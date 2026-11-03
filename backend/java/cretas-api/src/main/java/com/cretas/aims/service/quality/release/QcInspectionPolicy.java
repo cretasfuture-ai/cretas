@@ -50,7 +50,8 @@ public class QcInspectionPolicy {
 
     private boolean hasOpenDeviation(String factoryId, OutputRef ref) {
         return deviationLookup != null
-                && deviationLookup.hasOpen(factoryId, ref.batchNumbers(), ref.planId(), ref.productionBatchId());
+                && deviationLookup.hasOpen(factoryId, ref.batchNumbers(), ref.planId(), ref.productionBatchId(),
+                        ref.processOrder());
     }
 
     /**
@@ -61,9 +62,17 @@ public class QcInspectionPolicy {
      * @param batchNumbers  这次产出所属的报工批次号 (生产批次号 / 工序批次号), 供 CCP 偏离判定
      * @param planId        所属生产计划 (可空)
      * @param productionBatchId 所属生产批次 id (可空; 有值时由策略自己补出批次号与计划)
+     * @param processOrder  产出在第几道 (可空; 空 = 由生产批次推, 推不出就不分道) ——
+     *                      CCP 偏离只管出事那一批及其下游, 见 {@code CcpDeviationScope}
      */
     public record OutputRef(String productTypeId, String productCode,
-                            Collection<String> batchNumbers, String planId, Long productionBatchId) {
+                            Collection<String> batchNumbers, String planId, Long productionBatchId,
+                            Integer processOrder) {
+        public OutputRef(String productTypeId, String productCode,
+                         Collection<String> batchNumbers, String planId, Long productionBatchId) {
+            this(productTypeId, productCode, batchNumbers, planId, productionBatchId, null);
+        }
+
         public static OutputRef ofProduct(String productTypeId) {
             return new OutputRef(productTypeId, null, List.of(), null, null);
         }

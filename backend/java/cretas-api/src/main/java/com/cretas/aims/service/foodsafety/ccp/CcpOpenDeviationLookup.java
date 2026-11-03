@@ -18,13 +18,11 @@ import java.util.Set;
 /**
  * 缺口 13 —— 「这一批有没有未处理的 CCP 偏离」的<b>唯一判定口径</b>。
  *
- * <h2>口径: 批次号 或 同一生产计划</h2>
- * 一条偏离挡住:
- * <ul>
- *   <li>批次号命中的 —— 报工的生产批号 (App: 任务所在批次; web: 本行的 CLK-W/CLK-B 号或纯库存道锚号);</li>
- *   <li>同一生产计划的全部产出 —— 偏离发生在卤煮那一道, 下游包装出来的成品一样不能放 (整条链共用一个计划)。</li>
- * </ul>
- * 宁可多挡同计划里没出事的那几道, 也不让出事那一道的料从下游溜出去 —— 解除只需要「处理偏离」一步。
+ * <h2>口径: 这一批 + 它的下游 (Steve 2026-11-03)</h2>
+ * 先按「批次号命中 或 同一生产计划」找出候选偏离, 再逐条问 {@link CcpDeviationScope.Scope#covers}:
+ * 产出在偏离那一道之后且工艺图上走得到 / 就是出事的这一批 → 挡; 更早的道 → 不挡
+ * (以前同计划一律挡, 连偏离之前就产出的上游料也被扣)。不知道在哪一道的仍然挡 (宁可多挡)。
+ * 条数按偏离记录去重 (以前同一条既命中批号又命中计划会数两次, 放行页显示「2 条未处理」而实际 1 条)。
  *
  * <p>用在三处 (⛔ 不在别处再写一遍): 质检放行前的拦截 ({@link QcReleaseBlocker})、
  * 产出入账时要不要扣成待检 ({@code QcInspectionPolicy})、出货时的 HACCP 放行闸
@@ -44,6 +42,14 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.SemiFinishedInventoryRepository semiRepo;
 
+    /** 偏离管到哪儿。required=false: 不注入 (旧单测) = 同计划全挡, 即旧口径。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CcpDeviationScope scope;
+
+    public void setScope(CcpDeviationScope scope) {
+        this.scope = scope;
+    }
+
     /** 测试 / 装配用。 */
     public void setSemiRepo(com.cretas.aims.repository.SemiFinishedInventoryRepository semiRepo) {
         this.semiRepo = semiRepo;
@@ -54,28 +60,24 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
         return r != null && r.isOpenDeviation();
     }
 
-    /** 未处理偏离条数: 批次号集合 ∪ 生产计划。 */
+    /** 未处理偏离条数 (不分道): 批次号集合 ∪ 生产计划, 按记录去重。 */
     public long countOpen(String factoryId, Collection<String> batchNumbers, String planId) {
         if (factoryId == null) {
             return 0L;
         }
-        long n = 0L;
-        Set<String> nos = clean(batchNumbers);
-        if (!nos.isEmpty()) {
-            n += recordRepo.countOpenDeviationsByBatchNumbers(factoryId, nos);
-        }
-        if (planId != null && !planId.isBlank()) {
-            // 同一条既命中批号又命中计划会被数两次 —— 这里只关心「是否 > 0」与给人看的大致条数,
-            // 精确条数在 CCP 记录页按批次列出。
-            n += recordRepo.countOpenDeviationsByPlanIds(factoryId, Set.of(planId));
-        }
-        return n;
+        return candidates(factoryId, clean(batchNumbers),
+                planId == null || planId.isBlank() ? Set.of() : Set.of(planId), false).size();
     }
 
-    /** 产出入账时: 这次产出所属的批次/计划有没有未处理偏离。 */
-    public boolean hasOpen(String factoryId, Collection<String> batchNumbers, String planId, Long productionBatchId) {
+    /** 产出入账时: 这次产出 (在第 processOrder 道; null = 由生产批次推, 推不出 = 不分道) 有没有归它管的未处理偏离。 */
+    public boolean hasOpen(String factoryId, Collection<String> batchNumbers, String planId, Long productionBatchId,
+                           Integer processOrder) {
         Set<String> nos = clean(batchNumbers);
         String plan = planId;
+        Integer order = processOrder;
+        if (order == null && scope != null) {
+            order = scope.orderOfProductionBatch(factoryId, productionBatchId);
+        }
         if (productionBatchId != null) {
             ProductionBatch pb = productionBatchRepo.findByIdAndFactoryId(productionBatchId, factoryId).orElse(null);
             if (pb != null) {
@@ -87,10 +89,12 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
                 }
             }
         }
-        if (countOpen(factoryId, nos, plan) > 0) {
-            return true;
+        if (factoryId == null) {
+            return false;
         }
-        return countOpenByAnchors(factoryId, nos) > 0;
+        Set<Long> pbIds = productionBatchId == null ? Set.of() : Set.of(productionBatchId);
+        return countCovering(factoryId, candidates(factoryId, nos,
+                plan == null || plan.isBlank() ? Set.of() : Set.of(plan), true), order, pbIds, nos) > 0;
     }
 
     // ==================== QcReleaseBlocker ====================
@@ -126,11 +130,8 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
                 }
             }
         }
-        long n = countOpen(factoryId, nos, null) + countOpenByAnchors(factoryId, nos);
-        if (!planIds.isEmpty()) {
-            n += recordRepo.countOpenDeviationsByPlanIds(factoryId, planIds);
-        }
-        return n;
+        return countCovering(factoryId, candidates(factoryId, nos, planIds, true),
+                semi.getProcessOrder(), pbIds, nos);
     }
 
     @Override
@@ -153,9 +154,13 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
                 planId = pb.getProductionPlanId();
             }
         }
-        return countOpen(factoryId, nos, planId);
+        Integer order = scope == null ? null : scope.orderOfProductionBatch(factoryId, pbId);
+        return countCovering(factoryId, candidates(factoryId, nos,
+                        planId == null || planId.isBlank() ? Set.of() : Set.of(planId), false),
+                order, pbId == null ? Set.of() : Set.of(pbId), nos);
     }
 
+    /** 成品批次是整条链的终点 ⇒ 同计划 / 同批号的偏离都算它的上游, 不分道。 */
     @Override
     public long openDeviationsForFinishedGoods(String factoryId, FinishedGoodsBatch batch) {
         if (batch == null) {
@@ -167,18 +172,40 @@ public class CcpOpenDeviationLookup implements QcReleaseBlocker {
 
     // ==================== 内部 ====================
 
-    /** 锚号 CLK-SEMI-<计划前8位>-… ⇒ 按计划 id 前缀数。 */
-    private long countOpenByAnchors(String factoryId, Set<String> nos) {
-        long n = 0L;
-        for (String no : nos) {
-            String prefix = planPrefixOfAnchor(no);
-            if (prefix != null) {
-                // 第三轮审查 L-1: 前缀里的 % _ 先转义 (查询带 ESCAPE)
-                n += recordRepo.countOpenDeviationsByPlanIdPrefix(factoryId,
-                        com.cretas.aims.util.SqlLikeEscaper.escape(prefix));
+    /**
+     * 候选未处理偏离 (按记录 id 去重): 批号命中 ∪ 计划命中 ∪ (withAnchors) 锚号 CLK-SEMI-<计划前8位>-… 按计划 id 前缀。
+     */
+    private java.util.List<HaccpMonitoringRecord> candidates(String factoryId, Set<String> nos,
+                                                             Collection<String> planIds, boolean withAnchors) {
+        java.util.Map<Object, HaccpMonitoringRecord> out = new java.util.LinkedHashMap<>();
+        java.util.function.Consumer<java.util.List<HaccpMonitoringRecord>> add = rs -> rs.forEach(
+                r -> out.putIfAbsent(r.getId() != null ? r.getId() : new Object(), r));
+        if (!nos.isEmpty()) {
+            add.accept(recordRepo.findOpenDeviationsByBatchNumbers(factoryId, nos));
+        }
+        if (planIds != null && !planIds.isEmpty()) {
+            add.accept(recordRepo.findOpenDeviationsByPlanIds(factoryId, planIds));
+        }
+        if (withAnchors) {
+            for (String no : nos) {
+                String prefix = planPrefixOfAnchor(no);
+                if (prefix != null) {
+                    // 第三轮审查 L-1: 前缀里的 % _ 先转义 (查询带 ESCAPE)
+                    add.accept(recordRepo.findOpenDeviationsByPlanIdPrefix(factoryId,
+                            com.cretas.aims.util.SqlLikeEscaper.escape(prefix)));
+                }
             }
         }
-        return n;
+        return new java.util.ArrayList<>(out.values());
+    }
+
+    /** 候选里归这笔产出管的条数 (判据唯一: {@link CcpDeviationScope.Scope#covers})。 */
+    private long countCovering(String factoryId, java.util.List<HaccpMonitoringRecord> records, Integer itemOrder,
+                               Collection<Long> itemBatchIds, Collection<String> itemBatchNos) {
+        return records.stream()
+                .filter(r -> (scope == null ? CcpDeviationScope.Scope.WHOLE_PLAN : scope.of(factoryId, r))
+                        .covers(itemOrder, itemBatchIds, itemBatchNos))
+                .count();
     }
 
     public static String planPrefixOfAnchor(String batchNo) {

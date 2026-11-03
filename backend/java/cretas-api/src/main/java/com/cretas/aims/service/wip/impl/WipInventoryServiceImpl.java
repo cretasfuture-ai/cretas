@@ -206,7 +206,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                                                       String productCode, String rowBatchNo) {
         return new QcInspectionPolicy.OutputRef(productTypeId, productCode,
                 QcInspectionPolicy.batchNumbers(rowBatchNo), null,
-                task == null ? null : task.getProductionBatchId());
+                task == null ? null : task.getProductionBatchId(),
+                task == null ? null : task.getProcessOrder());
     }
 
     @Override
@@ -1118,7 +1119,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         applyMovingAverageIn(sfi, inQty, inUnitCost, totalCost, unit, materialBatchRefs);
         // 质检放行: 逐道录入的产出产品就是 productTypeId; 锚 = 工序批次号 (CCP 偏离按它和计划判)。
         BigDecimal held = applyInspectionHold(sfi, new QcInspectionPolicy.OutputRef(productTypeId, null,
-                QcInspectionPolicy.batchNumbers(intermediateBatchNo), null, null), inQty);
+                QcInspectionPolicy.batchNumbers(intermediateBatchNo), null, null, processOrder), inQty);
         wipRepo.save(sfi);
         // 分笔账: 有凭据才能在撤销时认出是这一笔; 没有凭据 (小结等旧调用) 撤销时一律不解除 (保守)
         recordHoldLot(sfi, held, null, qcHoldRef, null);   // 逐道录入锚是单计划行, 计划看锚号前缀

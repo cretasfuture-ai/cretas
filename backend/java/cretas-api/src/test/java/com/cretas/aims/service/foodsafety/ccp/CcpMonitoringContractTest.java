@@ -255,7 +255,7 @@ class CcpMonitoringContractTest {
         assertThat(res.deviationCount()).isZero();
         assertThat(res.records()).hasSize(2).allSatisfy(v -> assertThat(v.result()).isEqualTo("OK"));
         assertThat(wipOf(row).getStatus()).isEqualTo(MaterialBatchStatus.AVAILABLE);
-        assertThat(recordRepo.countOpenDeviationsByPlanIds(FACTORY_ID, List.of(planId))).isZero();
+        assertThat(recordRepo.findOpenDeviationsByPlanIds(FACTORY_ID, List.of(planId))).isEmpty();
     }
 
     @Test

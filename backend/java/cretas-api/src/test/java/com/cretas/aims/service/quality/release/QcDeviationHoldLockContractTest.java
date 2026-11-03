@@ -51,6 +51,9 @@ class QcDeviationHoldLockContractTest {
     @Mock private MaterialBatchRepository materialBatchRepo;
     @Mock private FinishedGoodsBatchRepository fgRepo;
     @Mock private ProductionBatchRepository productionBatchRepo;
+    @Mock private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository taskRepo;
+    @Mock private com.cretas.aims.repository.workflow.WorkflowTaskPortRepository portRepo;
+    @Mock private com.cretas.aims.repository.ProcessSheetRowRepository sheetRowRepo;
 
     private QcDeviationHold hold;
 
@@ -65,7 +68,9 @@ class QcDeviationHoldLockContractTest {
 
     @BeforeEach
     void setUp() {
-        hold = new QcDeviationHold(semiRepo, materialBatchRepo, fgRepo, productionBatchRepo);
+        hold = new QcDeviationHold(semiRepo, materialBatchRepo, fgRepo, productionBatchRepo,
+                new com.cretas.aims.service.foodsafety.ccp.CcpDeviationScope(
+                        productionBatchRepo, taskRepo, portRepo, sheetRowRepo));
         ProductionBatch pb = new ProductionBatch();
         pb.setId(11L);
         pb.setFactoryId(F);
@@ -93,7 +98,7 @@ class QcDeviationHoldLockContractTest {
                         semi(3L, "0", SemiFinishedInventory.Status.AVAILABLE, null, null)));
         when(semiRepo.lockForDeviationHold(eq(F), anyCollection())).thenReturn(List.of(fresh, depleted, alreadyHeld));
 
-        QcDeviationHold.HoldResult r = hold.holdForDeviation(F, "PB-11", 11L, "PLAN-QDH");
+        QcDeviationHold.HoldResult r = hold.holdForDeviation(F, "PB-11", 11L, "PLAN-QDH", null);
         System.out.println("HOLD semi=" + r.semiRows() + " fresh.pending=" + fresh.getInspectionPendingQuantity()
                 + " fresh.consumed=" + fresh.getConsumedQuantity());
 
@@ -126,7 +131,7 @@ class QcDeviationHoldLockContractTest {
         fgGone.setStatus(FinishedGoodsBatch.Status.DEPLETED);
         when(fgRepo.lockForDeviationHold(eq(F), anyCollection(), anyCollection())).thenReturn(List.of(fgOk, fgGone));
 
-        QcDeviationHold.HoldResult r = hold.holdForDeviation(F, "PB-11", 11L, "PLAN-QDH");
+        QcDeviationHold.HoldResult r = hold.holdForDeviation(F, "PB-11", 11L, "PLAN-QDH", null);
 
         assertThat(r.wipBatches()).isEqualTo(1);
         assertThat(r.finishedGoodsBatches()).isEqualTo(1);

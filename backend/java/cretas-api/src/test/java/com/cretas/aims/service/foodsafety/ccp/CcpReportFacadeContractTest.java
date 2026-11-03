@@ -116,7 +116,7 @@ class CcpReportFacadeContractTest {
         pb.setBatchNumber("PB-11");
         pb.setProductionPlanId("PLAN-1");
         when(productionBatchRepo.findByIdAndFactoryId(BATCH_ID, F)).thenReturn(Optional.of(pb));
-        when(deviationHold.holdForDeviation(any(), any(), any(), any()))
+        when(deviationHold.holdForDeviation(any(), any(), any(), any(), any()))
                 .thenReturn(new QcDeviationHold.HoldResult(0, 1, 0));
     }
 
@@ -177,7 +177,7 @@ class CcpReportFacadeContractTest {
             @SuppressWarnings("unchecked")
             Map<String, Object> ccp = (Map<String, Object>) res.get("ccp");
             assertThat(ccp.get("deviationCount")).isEqualTo(0);
-            verify(deviationHold, never()).holdForDeviation(any(), any(), any(), any());
+            verify(deviationHold, never()).holdForDeviation(any(), any(), any(), any(), any());
         }
 
         @Test
@@ -188,7 +188,7 @@ class CcpReportFacadeContractTest {
             Map<String, Object> res = facade.submitYieldReport(F, BATCH_ID, 9L, "工人", output(List.of(reading("70"))));
             InOrder order = inOrder(yieldReportService, deviationHold);
             order.verify(yieldReportService).submitReport(eq(F), eq(BATCH_ID), eq(9L), any());
-            order.verify(deviationHold).holdForDeviation(F, "PB-11", BATCH_ID, "PLAN-1");
+            order.verify(deviationHold).holdForDeviation(F, "PB-11", BATCH_ID, "PLAN-1", 2);
             @SuppressWarnings("unchecked")
             Map<String, Object> ccp = (Map<String, Object>) res.get("ccp");
             assertThat(ccp.get("deviationCount")).isEqualTo(1);
@@ -305,7 +305,7 @@ class CcpReportFacadeContractTest {
             assertThat(saved).hasSize(2);
             assertThat(saved.get(0).getReportRef()).isNotEqualTo(saved.get(1).getReportRef());
             assertThat(saved.get(1).isDeviation()).isTrue();
-            verify(deviationHold).holdForDeviation(F, "PB-11", BATCH_ID, "PLAN-1");
+            verify(deviationHold).holdForDeviation(F, "PB-11", BATCH_ID, "PLAN-1", 2);
         }
 
         @Test

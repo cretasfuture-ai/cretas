@@ -266,7 +266,7 @@ class QcHoldLotsContractTest {
         @DisplayName("H2 余额 100 全部待检, 更正到 120 (偏离仍在) → 多出的 20 也进待检, 可领 0")
         void correctionIncreaseHoldsTheDelta() {
             SemiFinishedInventory r = heldRow(701L);
-            when(deviationLookup.hasOpen(eq(F), anyCollection(), any(), any())).thenReturn(true);
+            when(deviationLookup.hasOpen(eq(F), anyCollection(), any(), any(), any())).thenReturn(true);
             service.correctApprovedOutputQuantity(F, report(701L), task(), new BigDecimal("100"),
                     new BigDecimal("120"), "corr-1", 7L);
             show("H2-up", r);

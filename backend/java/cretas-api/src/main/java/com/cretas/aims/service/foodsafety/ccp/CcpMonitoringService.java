@@ -325,7 +325,7 @@ public class CcpMonitoringService {
         // 4. 有偏离: 已存在的产出立刻扣成待检
         int held = 0;
         if (deviations > 0) {
-            held = deviationHold.holdForDeviation(factoryId, batchNumber, pbId, planId).total();
+            held = deviationHold.holdForDeviation(factoryId, batchNumber, pbId, planId, cmd.processOrder()).total();
         }
         String message = deviations == 0
                 ? "CCP 已记录，全部在限值内"

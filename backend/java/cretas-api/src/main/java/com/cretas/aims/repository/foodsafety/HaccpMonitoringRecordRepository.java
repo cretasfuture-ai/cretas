@@ -31,26 +31,26 @@ public interface HaccpMonitoringRecordRepository extends JpaRepository<HaccpMoni
 
     // ==================== 缺口 13 ====================
 
-    /** 未处理偏离条数: 按批次号。 */
-    @Query("SELECT COUNT(r) FROM HaccpMonitoringRecord r WHERE r.factoryId = :factoryId " +
+    /** 未处理偏离: 按批次号。 */
+    @Query("SELECT r FROM HaccpMonitoringRecord r WHERE r.factoryId = :factoryId " +
             "AND r.isDeviation = true AND r.deviationHandledAt IS NULL AND r.batchNumber IN :batchNumbers")
-    long countOpenDeviationsByBatchNumbers(@Param("factoryId") String factoryId,
+    List<HaccpMonitoringRecord> findOpenDeviationsByBatchNumbers(@Param("factoryId") String factoryId,
                                            @Param("batchNumbers") Collection<String> batchNumbers);
 
-    /** 未处理偏离条数: 按生产计划。 */
-    @Query("SELECT COUNT(r) FROM HaccpMonitoringRecord r WHERE r.factoryId = :factoryId " +
+    /** 未处理偏离: 按生产计划。 */
+    @Query("SELECT r FROM HaccpMonitoringRecord r WHERE r.factoryId = :factoryId " +
             "AND r.isDeviation = true AND r.deviationHandledAt IS NULL AND r.productionPlanId IN :planIds")
-    long countOpenDeviationsByPlanIds(@Param("factoryId") String factoryId,
+    List<HaccpMonitoringRecord> findOpenDeviationsByPlanIds(@Param("factoryId") String factoryId,
                                       @Param("planIds") Collection<String> planIds);
 
     /**
-     * 未处理偏离条数: 按计划 id 前缀 —— 逐道录入的常驻半成品锚 {@code CLK-SEMI-<计划前8位>-<产品前8位>}
+     * 未处理偏离: 按计划 id 前缀 —— 逐道录入的常驻半成品锚 {@code CLK-SEMI-<计划前8位>-<产品前8位>}
      * 只带得出计划 id 的前 8 位。
      */
-    @Query("SELECT COUNT(r) FROM HaccpMonitoringRecord r WHERE r.factoryId = :factoryId " +
+    @Query("SELECT r FROM HaccpMonitoringRecord r WHERE r.factoryId = :factoryId " +
             "AND r.isDeviation = true AND r.deviationHandledAt IS NULL " +
             "AND r.productionPlanId LIKE CONCAT(:planIdPrefix, '%') ESCAPE '\\'")   // 调用方先转义 (第三轮审查 L-1)
-    long countOpenDeviationsByPlanIdPrefix(@Param("factoryId") String factoryId,
+    List<HaccpMonitoringRecord> findOpenDeviationsByPlanIdPrefix(@Param("factoryId") String factoryId,
                                            @Param("planIdPrefix") String planIdPrefix);
 
     /** 批次 CCP 记录 (导出 / 查看): 批次号命中 或 同一生产计划, 按时间正序。 */
