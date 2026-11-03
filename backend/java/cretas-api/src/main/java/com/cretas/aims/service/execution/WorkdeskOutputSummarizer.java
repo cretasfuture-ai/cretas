@@ -523,7 +523,8 @@ public class WorkdeskOutputSummarizer {
             String intentName = response.getIntentName() != null
                     ? response.getIntentName() : "工作台";
             // 工艺保密系统约束 (有保密产品的工厂): 保密产品的数据只用于回答当前用户, 不写进可共享 / 复用的内容
-            String systemPrompt = buildSystemPrompt(intentName) + (factoryId == null ? "" : llmCostScope.harnessFor(factoryId));
+            // 跨厂约束一律带 (不看开关); 工艺保密那一句由 harnessFor 按该厂的生效保密产品决定
+            String systemPrompt = buildSystemPrompt(intentName) + llmCostScope.harnessFor(factoryId);
             String userInput = "以下是 " + intentName + " 编排执行的工具返回数据 (JSON), 请按 system 提示输出摘要:\n\n"
                     + payloadJson;
 
