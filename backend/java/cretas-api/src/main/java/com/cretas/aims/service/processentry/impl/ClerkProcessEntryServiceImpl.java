@@ -134,6 +134,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.quality.release.QcInspectionPolicy qcInspectionPolicy;
 
+    /**
+     * S4-08 缺料开工闸: 逐道录入把待处理计划翻成生产中, 等于开工 —— 与 startProduction 过同一道闸。
+     * 同上字段注入 required=false (既有按位置 new 的单测不受影响); 闸本身默认关 (工厂开关)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+
     /** 在制批次 (逐道录入 CLK-W) 这次产出要不要扣成待检。 */
     private boolean holdWipOutput(String factoryId, ProductionBatch batch, String outputProductId) {
         if (qcInspectionPolicy == null) {
@@ -271,6 +278,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     be.isFinished() ? null
                             : requireOutputMaterialIdentity(be.getProductTypeId(), be.getClientBatchKey()),
                     operatorId);
+            ctx.setForceStartReason(req.getForceStartReason());
 
             MaterializedBatch mat = materializeBatch(ctx, be.getSteps(), edges, warnings);
 
@@ -659,6 +667,11 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             planRepository.findByIdAndFactoryId(ctx.getPlanId(), ctx.getFactoryId())
                     .filter(p -> p.getStatus() == com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING)
                     .ifPresent(p -> {
+                        // S4-08: 这里也会把计划翻成生产中, 所以与开工入口过同一道缺料闸 (开关默认关 = N1);
+                        //    拦下时整次录入回滚, 带原因放行时原因记入缺料实例处理记录。
+                        if (shortageStartGate != null) {
+                            shortageStartGate.check(ctx.getFactoryId(), p, ctx.getForceStartReason(), ctx.getUserId());
+                        }
                         p.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS);
                         if (p.getStartTime() == null) {
                             p.setStartTime(LocalDateTime.now());

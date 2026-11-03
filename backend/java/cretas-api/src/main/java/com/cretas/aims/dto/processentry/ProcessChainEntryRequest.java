@@ -19,6 +19,12 @@ public class ProcessChainEntryRequest {
     @NotNull
     private List<BatchEntry> batches;
 
+    /**
+     * S4-08 (可空): 工厂开了「缺料时拦开工」、计划关联的缺料又未解决时, 这次录入会把计划翻成生产中 ——
+     * 带原因才放行, 原因记入缺料实例的处理记录。
+     */
+    private String forceStartReason;
+
     @Data
     public static class BatchEntry {
         /** 客户端分配的链内引用键(混锅来源用它指上游), 如 "焯水0613"。 */

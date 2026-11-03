@@ -242,4 +242,107 @@ class ClerkProcessEntryPlanStatusSyncTest {
         // 状态 sync 分支只对 PENDING 生效, 已 IN_PROGRESS → planRepository.save(plan) 不应被本 sync 逻辑调用
         verify(planRepository, never()).save(plan);
     }
+
+    // ==================== S4-08 缺料开工闸也守着逐道录入这条「开工」路径 ====================
+
+    private final java.util.List<com.cretas.aims.entity.shortage.ShortageCaseEvent> caseEvents = new java.util.ArrayList<>();
+    private com.cretas.aims.repository.shortage.ShortageCaseEventRepository caseEventRepo;
+
+    /** 真实的 ShortageStartGate, 只有仓库是桩: 计划所属订单 SO-1 有一个未解决的缺料实例。 */
+    private void realGate(Boolean switchOn) throws Exception {
+        var settings = org.mockito.Mockito.mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+        var cases = org.mockito.Mockito.mock(com.cretas.aims.repository.shortage.ShortageCaseRepository.class);
+        var lines = org.mockito.Mockito.mock(com.cretas.aims.repository.shortage.ShortageCaseLineRepository.class);
+        caseEventRepo = org.mockito.Mockito.mock(com.cretas.aims.repository.shortage.ShortageCaseEventRepository.class);
+        when(settings.findBlockStartOnOpenShortageByFactoryId(FACTORY)).thenReturn(switchOn);
+        var c = new com.cretas.aims.entity.shortage.ShortageCase();
+        c.setId("CASE-1");
+        c.setFactoryId(FACTORY);
+        c.setStage(com.cretas.aims.entity.shortage.ShortageCase.Stage.DETECTED);
+        when(cases.findOpenForUpdate(FACTORY, com.cretas.aims.entity.shortage.ShortageCase.SourceType.SALES_ORDER, "SO-1"))
+                .thenReturn(Optional.of(c));
+        var gap = new com.cretas.aims.entity.shortage.ShortageCaseLine();
+        gap.setMaterialTypeId("MT-PORK");
+        gap.setMaterialName("猪肉");
+        gap.setUnit("kg");
+        gap.setGapQty(new BigDecimal("30"));
+        when(lines.findByCaseIdOrderByIdAsc("CASE-1")).thenReturn(List.of(gap));
+        when(caseEventRepo.save(any(com.cretas.aims.entity.shortage.ShortageCaseEvent.class))).thenAnswer(inv -> {
+            caseEvents.add(inv.getArgument(0));
+            return inv.getArgument(0);
+        });
+        when(caseEventRepo.findByCaseIdOrderByIdAsc("CASE-1")).thenAnswer(inv -> List.copyOf(caseEvents));
+        var f = ClerkProcessEntryServiceImpl.class.getDeclaredField("shortageStartGate");
+        f.setAccessible(true);
+        f.set(service, new com.cretas.aims.service.shortage.ShortageStartGate(settings, cases, lines, caseEventRepo));
+    }
+
+    private ProductionPlan orderPlanReadyToRecord(String key, String rawId) {
+        stubNoIdempotency(key);
+        ProductionPlan plan = pendingPlan();
+        plan.setSourceOrderId("SO-1");
+        plan.setPlanNumber("PP-NO-1");
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(plan));
+        when(planRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+        stubWarehouse();
+        stubBatchSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+        when(materialBatchRepo.findByIdAndFactoryId(rawId, FACTORY)).thenReturn(Optional.of(rawMb(rawId, new BigDecimal("10"))));
+        return plan;
+    }
+
+    private List<BatchEntry> oneFinished(String key, String rawId) {
+        return List.of(finishedBatch(key, "PT-PRODUCT", List.of(rawStep(1, "100", "80", List.of(rawInput(rawId, "100"))))));
+    }
+
+    @Test
+    @DisplayName("S4-08 开关开 + 缺料未解决: 逐道录入同样 409 SHORTAGE_CASE_OPEN, 计划不翻转, 批次不落库")
+    void switchOn_clerkEntryIsRefusedByTheShortageGate() throws Exception {
+        realGate(true);
+        ProductionPlan plan = orderPlanReadyToRecord("GATE-KEY-1", "RAW-G1");
+
+        com.cretas.aims.exception.BusinessException e = org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> service.recordChain(FACTORY, PLAN_ID, req("GATE-KEY-1", oneFinished("FINAL", "RAW-G1")), OPERATOR_ID));
+
+        assertThat(e.getCode()).isEqualTo(409);
+        assertThat(e.getErrorCode()).isEqualTo(com.cretas.aims.service.shortage.ShortageStartGate.CODE);
+        assertThat(e.getMessage()).contains("猪肉 缺 30");
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.PENDING);
+        verify(planRepository, org.mockito.Mockito.never()).save(plan);
+        assertThat(caseEvents).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S4-08 对照: 开关关 (N1 默认) 时, 同样的缺料下逐道录入照常把计划翻成生产中")
+    void switchOff_clerkEntryStillStartsThePlan() throws Exception {
+        realGate(false);
+        ProductionPlan plan = orderPlanReadyToRecord("GATE-KEY-2", "RAW-G2");
+
+        service.recordChain(FACTORY, PLAN_ID, req("GATE-KEY-2", oneFinished("FINAL", "RAW-G2")), OPERATOR_ID);
+
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.IN_PROGRESS);
+        assertThat(caseEvents).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S4-08 开关开 + 录入带原因: 照常开工, 原因记进缺料实例处理记录且读得回来")
+    void switchOn_withReason_clerkEntryStartsAndTheReasonIsReadBack() throws Exception {
+        realGate(true);
+        ProductionPlan plan = orderPlanReadyToRecord("GATE-KEY-3", "RAW-G3");
+        ProcessChainEntryRequest r = req("GATE-KEY-3", oneFinished("FINAL", "RAW-G3"));
+        r.setForceStartReason("补录昨天已经做完的批次");
+
+        service.recordChain(FACTORY, PLAN_ID, r, OPERATOR_ID);
+
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.IN_PROGRESS);
+        var trail = caseEventRepo.findByCaseIdOrderByIdAsc("CASE-1");
+        assertThat(trail).singleElement().satisfies(ev -> {
+            assertThat(ev.getTriggerReason()).isEqualTo("FORCED_START");
+            assertThat(ev.getDetail()).contains("PP-NO-1").contains("补录昨天已经做完的批次");
+            assertThat(ev.getActorId()).isEqualTo(OPERATOR_ID);
+        });
+    }
 }

@@ -44,4 +44,17 @@ public class MaterializeContext {
      */
     private String rawMaterialTypeId;
     private Long userId;
+    /**
+     * S4-08: 这次物化会把待处理的计划翻成生产中时, 若工厂开了「缺料时拦开工」且缺料未解决,
+     * 带原因才能放行 (原因记入缺料实例处理记录)。可空; 只有文员逐道录入的请求会带。
+     */
+    private String forceStartReason;
+
+    /** 既有 10 参调用点不变 (forceStartReason 为 null)。 */
+    public MaterializeContext(String factoryId, String planId, String productTypeId, String recipeProductTypeId,
+                              String batchNumber, boolean finished, BigDecimal laborRate, String warehouseId,
+                              String rawMaterialTypeId, Long userId) {
+        this(factoryId, planId, productTypeId, recipeProductTypeId, batchNumber, finished, laborRate, warehouseId,
+                rawMaterialTypeId, userId, null);
+    }
 }
