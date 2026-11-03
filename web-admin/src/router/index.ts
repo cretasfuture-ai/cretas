@@ -1730,8 +1730,10 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             path: 'process-secret',
             name: 'SystemProcessSecret',
             component: () => import('@/views/system/process-secret/index.vue'),
+            // 工厂级保密配置 (2026-11-03): 本厂「工艺保密」不是明确开启 (=== true) 时, 直接访问也进不来
+            // (守卫见 guards.ts secrecyFeature; 后端同样返回「本厂未开启工艺保密」)
             meta: { requiresAuth: true, title: '工艺保密', module: 'system',
-                    modulesAny: ['system', 'production', 'rd'] }
+                    modulesAny: ['system', 'production', 'rd'], secrecyFeature: 'PROCESS_SECRET' }
           },
           {
             // 隐私条款第十一条: 工厂可查看平台人员访问记录。后端 PlatformDataAccessLogController

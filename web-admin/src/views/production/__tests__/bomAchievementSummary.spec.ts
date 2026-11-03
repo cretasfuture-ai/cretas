@@ -33,6 +33,19 @@ describe('BOM 达成率汇总遇到工艺保密隐藏的实际量', () => {
     expect(toMaterialDetail({ ...beef, actualQty: 110 })).toMatchObject({ actual: 110, variance: -5 });
   });
 
+  it('没有保密标记的 null 是「没有数」: 不显示已保密, 也不按 0 加 (工艺保密可按工厂关掉)', () => {
+    const unknown = { materialTypeName: '桂皮', plannedQty: 0.1725, actualQty: null, unit: 'kg' };
+    expect(isSecretHidden(unknown)).toBe(false);
+    const summary = summarizeBatch([beef, unknown]);
+    expect(summary.secretHidden).toBe(false);
+    expect(summary.actualTotal).toBeNull();
+    expect(summary.achievementRate).toBeUndefined();
+    expect(toMaterialDetail(unknown)).toMatchObject({ actual: null, variance: null, secretHidden: false });
+    expect(toMaterialDetail(cinnamon)).toMatchObject({ secretHidden: true });
+    // 标记只隐藏了别的字段: 实际量不算被隐藏
+    expect(isSecretHidden({ ...beef, processSecret: { visibility: 'TOTALS_ONLY', hiddenFields: ['standardUsage'] } })).toBe(false);
+  });
+
   it('缺字段的旧形状不算隐藏 (仍按 0)', () => {
     expect(isSecretHidden({ plannedQty: 3 })).toBe(false);
     expect(toMaterialDetail({ plannedQty: 3 })).toMatchObject({ actual: 0, variance: -3 });
