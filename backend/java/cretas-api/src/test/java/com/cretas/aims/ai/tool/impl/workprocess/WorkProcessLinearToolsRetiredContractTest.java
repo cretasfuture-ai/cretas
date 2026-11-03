@@ -25,7 +25,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("旧线性工序绑定 AI 工具已停用")
-class WorkProcessLinearToolsRetiredTest {
+class WorkProcessLinearToolsRetiredContractTest {
 
     @Mock private ProductWorkProcessRepository productWorkProcessRepository;
     @Mock private ProductWorkProcessService productWorkProcessService;

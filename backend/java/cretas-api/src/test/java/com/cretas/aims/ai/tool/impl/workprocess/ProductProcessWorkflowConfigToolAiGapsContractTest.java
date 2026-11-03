@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 缺口 20: AI 画布补丁路能带上 主料份额 / 回料规则 / 副产 / CCP 控制点, 且都写画布节点自己的 data。
  * 每条正例配一个阴性对照 —— 只测"放行"的闸对"约束根本没生效"完全沉默。
  */
-class ProductProcessWorkflowConfigToolAiGapsTest {
+class ProductProcessWorkflowConfigToolAiGapsContractTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private ToolExecutor tool;

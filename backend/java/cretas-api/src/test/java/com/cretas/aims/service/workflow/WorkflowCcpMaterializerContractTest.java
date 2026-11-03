@@ -20,7 +20,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class WorkflowCcpMaterializerTest {
+class WorkflowCcpMaterializerContractTest {
 
     private final HaccpCheckpointRepository repository = mock(HaccpCheckpointRepository.class);
     private final WorkflowCcpMaterializer materializer = new WorkflowCcpMaterializer(repository);
