@@ -113,6 +113,23 @@ public class ProcessSecretAccessService {
                 .collect(Collectors.toUnmodifiableSet());
     }
 
+    /**
+     * 库里登记了保密策略、但因该厂工艺保密 (a) / 客户侧保管 (e) 关着而<b>不生效</b>的产品。与
+     * {@link #protectedProductTypeIds} 合起来就是全部策略产品 —— 只给训练过滤 (d) 的名单用 (Steve 2026-11-03 Q1=A:
+     * 训练剔除保密产品名只看 d, 不看 a)。⛔ 不用于「谁能看配方」。
+     */
+    public Set<String> switchedOffPolicyProductTypeIds(String factoryId) {
+        if (factoryId == null || factoryId.isBlank()) return Set.of();
+        List<PolicyEntry> policies = policies(factoryId);
+        if (policies.isEmpty()) return Set.of();
+        boolean processSecret = secrecy.isOn(factoryId, SecrecyItem.PROCESS_SECRET);
+        boolean customerHeld = secrecy.isOn(factoryId, SecrecyItem.CUSTOMER_HELD);
+        return policies.stream()
+                .filter(p -> effectiveMode(p.storageMode(), processSecret, customerHeld) == null)
+                .map(PolicyEntry::productTypeId)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
     private List<PolicyEntry> policies(String factoryId) {
         long now = System.currentTimeMillis();
         CachedSet cached = protectedByFactory.get(factoryId);

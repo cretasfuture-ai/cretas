@@ -151,21 +151,16 @@ public class ProcessSecretController {
 
     /**
      * 本控制器每个接口之前都先跑 (Spring 对 {@code @ModelAttribute} 方法的约定)。按路径上的工厂判:
-     * <ul>
-     *   <li>策略 / 授权 / 审计接口: 「工艺保密」(a) 关 → 409 「本厂未开启工艺保密」。库里的策略和授权不动,
-     *       重新开启后原样生效。</li>
-     *   <li>客户侧工艺包接口 (B 档): a 或「客户侧保管」(e) 任一开着就放行 (e 与 a 无关); 具体是否收由
-     *       {@link ProcessSecretExternalService} 按 e 判。</li>
-     * </ul>
+     * 「工艺保密」(a) 或「客户侧保管」(e) 任一开着就放行 (Steve 2026-11-03 Q2=A: e 开、a 关时也要能配置 B 档产品);
+     * 两项都关 → 409 「本厂未开启工艺保密」。库里的策略和授权不动, 重新开启后原样生效。
+     * 客户侧工艺包是否登记 / 接收由 {@link ProcessSecretExternalService} 按 e 判。
      */
     @org.springframework.web.bind.annotation.ModelAttribute
-    void requireSecrecyEnabled(@PathVariable String factoryId, HttpServletRequest request) {
-        boolean processSecret = secrecyConfig.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.PROCESS_SECRET);
-        if (processSecret) return;
-        Object pattern = request.getAttribute(org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
-        String route = pattern == null ? request.getRequestURI() : pattern.toString();
-        boolean external = route != null && (route.contains("/external-packages") || route.contains("/external-results"));
-        if (external && secrecyConfig.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.CUSTOMER_HELD)) return;
+    void requireSecrecyEnabled(@PathVariable String factoryId) {
+        if (secrecyConfig.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.PROCESS_SECRET)
+                || secrecyConfig.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.CUSTOMER_HELD)) {
+            return;
+        }
         throw new BusinessException(409, NOT_ENABLED_MESSAGE).withHint("工艺保密由平台在「工厂管理」里按工厂开启");
     }
 }

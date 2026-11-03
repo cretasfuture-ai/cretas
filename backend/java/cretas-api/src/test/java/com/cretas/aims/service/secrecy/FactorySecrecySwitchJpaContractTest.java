@@ -276,6 +276,33 @@ class FactorySecrecySwitchJpaContractTest {
         assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).isTrue();
     }
 
+    /** Q1=A (Steve 2026-11-03): 训练剔除保密产品名只看 d —— a 关、d 开照样剔; a 关、d 关不剔。 */
+    @Test
+    void trainingNameFilteringFollowsTheTrainingFilterOnlyNotProcessSecret() {
+        set(F, SecrecyItem.PROCESS_SECRET, false);
+        set(F, SecrecyItem.TRAINING_FILTER, true);
+        assertThat(accessService.protectedProductTypeIds(F)).as("前提: a 关, 没有生效的 A 档保密产品").doesNotContain(SECRET);
+        assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).as("a 关、d 开: 照样剔").isTrue();
+        assertThat(sampleFilter.allFactoriesProtectedNames()).as("全厂并集也在").contains("SW保密卤牛肉");
+        assertThat(com.cretas.aims.service.consent.LearningContentRules.factoryLearnable(storableConsent(), sampleFilter,
+                F, "SW保密卤牛肉卖了多少")).as("学习入口同样不学").isFalse();
+        // 出外脱敏的名单仍按生效中的保密产品 (c 的事, 不在 Q1 里)
+        assertThat(sampleFilter.protectedProductNames(F)).doesNotContain("SW保密卤牛肉");
+
+        set(F, SecrecyItem.TRAINING_FILTER, false);
+        assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).as("a 关、d 关: 不剔").isFalse();
+        assertThat(sampleFilter.allFactoriesProtectedNames()).doesNotContain("SW保密卤牛肉");
+        assertThat(com.cretas.aims.service.consent.LearningContentRules.factoryLearnable(storableConsent(), sampleFilter,
+                F, "SW保密卤牛肉卖了多少")).isTrue();
+    }
+
+    private static com.cretas.aims.service.consent.TrainingConsentService storableConsent() {
+        com.cretas.aims.service.consent.TrainingConsentService consent =
+                mock(com.cretas.aims.service.consent.TrainingConsentService.class);
+        when(consent.status(anyString())).thenReturn(com.cretas.aims.service.consent.TrainingConsentService.Status.AUTHORIZED);
+        return consent;
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private void set(String factoryId, SecrecyItem item, Boolean enabled) {

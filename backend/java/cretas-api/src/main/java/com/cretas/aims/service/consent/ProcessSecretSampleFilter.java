@@ -43,12 +43,30 @@ public class ProcessSecretSampleFilter {
     }
 
     /**
-     * 文本是否提到本厂某个工艺保密产品 (训练 / 学习用)。该厂「训练数据过滤」(d) 关着时一律 false
-     * (训练授权是另一套, 由调用方照常判)。
+     * 文本是否提到本厂某个工艺保密产品 (训练 / 学习用)。只看该厂「训练数据过滤」(d) (Steve 2026-11-03 Q1=A):
+     * d 关 → 一律 false; d 开 → 按库里登记了保密策略的全部产品名判, 与工艺保密 (a) 开不开无关。
+     * 训练授权是另一套, 由调用方照常判。
      */
     public boolean mentionsProtectedProduct(String factoryId, String... texts) {
         if (trainingFilterOff(factoryId)) return false;
-        return mentionsAny(protectedProductNames(factoryId), texts);
+        return mentionsAny(trainingProductNames(factoryId), texts);
+    }
+
+    /**
+     * 训练 / 学习 / 写全局内容用的保密产品名: 库里登记了保密策略的全部产品 (生效中的 ∪ 因 a / e 关着而不生效的),
+     * 不看 a。出外脱敏用的 {@link #protectedProductNames} 仍按生效中的保密产品。
+     */
+    public Set<String> trainingProductNames(String factoryId) {
+        if (factoryId == null || factoryId.isBlank()) {
+            return Set.of();
+        }
+        Set<String> ids = new LinkedHashSet<>(accessService.protectedProductTypeIds(factoryId));
+        ids.addAll(accessService.switchedOffPolicyProductTypeIds(factoryId));
+        if (ids.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> key = Set.copyOf(ids);
+        return nameCache.get(new NameKey(factoryId, key), k -> loadNames(factoryId, key));
     }
 
     /** 单测直接 new 时当开启; Spring 下由 setter 注入 (没有这个 bean 的切片测试保持全开)。 */
@@ -129,11 +147,14 @@ public class ProcessSecretSampleFilter {
         return mentionsAny(allFactoriesProtectedNames(), texts);
     }
 
-    /** 所有工厂的工艺保密产品名 (并集; 一批写入取一次)。查库出错照样抛。 */
+    /**
+     * 所有工厂的工艺保密产品名 (并集; 一批写入取一次)。查库出错照样抛。
+     * 每次都算, 只剔除「训练数据过滤」(d) 关着的工厂; 每家的名字按 d 取 (不看 a, Q1=A)。
+     */
     public Set<String> allFactoriesProtectedNames() {
         Set<String> names = new LinkedHashSet<>();
         for (String factoryId : accessService.factoriesWithProtectedProducts()) {
-            names.addAll(protectedProductNames(factoryId));
+            names.addAll(trainingProductNames(factoryId));
         }
         return names;
     }

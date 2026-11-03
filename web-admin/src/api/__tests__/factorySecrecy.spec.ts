@@ -26,11 +26,13 @@ describe('工厂级保密配置 (feature-config 只读下发)', () => {
     expect(isSecrecyOn(null, 'PROCESS_SECRET')).toBe(false);
   });
 
-  it('hides the factory-side process-secret menu unless process secret is on', () => {
+  it('shows the factory-side process-secret menu when process secret OR customer-held is on (Q2=A)', () => {
     expect(secrecyHiddenMenuPaths({})).toContain('/system/process-secret');
-    expect(secrecyHiddenMenuPaths({ PROCESS_SECRET: false })).toContain('/system/process-secret');
+    expect(secrecyHiddenMenuPaths({ PROCESS_SECRET: false, CUSTOMER_HELD: false })).toContain('/system/process-secret');
     expect(secrecyHiddenMenuPaths({ PROCESS_SECRET: true })).not.toContain('/system/process-secret');
-    expect(SECRECY_GATED_PATHS['/system/process-secret']).toBe('PROCESS_SECRET');
+    // a 关、e 开: B 档产品要能配置
+    expect(secrecyHiddenMenuPaths({ PROCESS_SECRET: false, CUSTOMER_HELD: true })).not.toContain('/system/process-secret');
+    expect(SECRECY_GATED_PATHS['/system/process-secret']).toEqual(['PROCESS_SECRET', 'CUSTOMER_HELD']);
   });
 
   it('reads the generated items file (the Java enum is the single source)', () => {
@@ -48,8 +50,8 @@ describe('工厂级保密配置 (feature-config 只读下发)', () => {
     const router = readFileSync(resolve(process.cwd(), 'src/router/index.ts'), 'utf8');
     const guards = readFileSync(resolve(process.cwd(), 'src/router/guards.ts'), 'utf8');
     const sidebar = readFileSync(resolve(process.cwd(), 'src/components/layout/AppSidebar.vue'), 'utf8');
-    expect(router).toMatch(/path: 'process-secret'[\s\S]{0,600}secrecyFeature: 'PROCESS_SECRET'/);
-    expect(guards).toContain('isSecrecyOn(await getFactorySecrecyFlags(factoryId), secrecyFeature)');
+    expect(router).toMatch(/path: 'process-secret'[\s\S]{0,700}secrecyFeature: \['PROCESS_SECRET', 'CUSTOMER_HELD'\]/);
+    expect(guards).toContain('isAnySecrecyOn(await getFactorySecrecyFlags(factoryId), secrecyFeature)');
     expect(sidebar).toContain('secrecyHiddenMenuPaths(secrecyFlags)');
     // 读到 === true 之前就是隐藏的
     expect(sidebar).toContain('hiddenFactoryMenuPaths.value = secrecyHiddenMenuPaths({})');

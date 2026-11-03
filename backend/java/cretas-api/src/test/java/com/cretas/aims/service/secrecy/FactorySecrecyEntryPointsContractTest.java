@@ -109,6 +109,40 @@ class FactorySecrecyEntryPointsContractTest {
         assertThat(sent.getValue()).contains("张记食品有限公司", "13812345678").doesNotContain("[客户A]");
     }
 
+    /**
+     * 提示词约束 (a): 跨厂一句是隔离, 一律带; 工艺保密一句只在该厂工艺保密开着 (且有保密产品) 时带。
+     * 走真实入口: 工作台摘要发给模型的系统提示词。
+     */
+    @Test
+    void theCrossFactorySentenceIsAlwaysSentAndOnlyTheProcessSecretClauseFollowsItemA() {
+        DashScopeClient llm = mock(DashScopeClient.class);
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        when(llm.chatFast(system.capture(), anyString())).thenReturn("今日跟进: 张记食品有限公司 应收 12800 元。");
+        WorkdeskOutputSummarizer summarizer = summarizer(llm);
+        ProcessSecretPolicyRepository policies = mock(ProcessSecretPolicyRepository.class);
+        ProcessSecretPolicy policy = policy(ProcessSecretStorageMode.CLOUD_RESTRICTED);
+        when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(policy));
+        when(policies.findByFactoryIdAndProductTypeId(F, SECRET)).thenReturn(Optional.of(policy));
+        ProcessSecretAccessService access = new ProcessSecretAccessService(policies, mock(ProcessSecretGrantRepository.class),
+                mock(ProcessSecretAuditRecorder.class));
+        access.setFactorySecrecyConfig(config);
+        ReflectionTestUtils.setField(summarizer, "llmCostScope", new ProcessSecretLlmCostScope(
+                mock(com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions.class), access));
+
+        set(F, SecrecyItem.PROCESS_SECRET, true);
+        summarizer.apply(followup(), F);
+        assertThat(system.getValue()).contains(ProcessSecretLlmCostScope.CROSS_FACTORY_HARNESS,
+                ProcessSecretLlmCostScope.PROCESS_SECRET_CLAUSE);
+
+        set(F, SecrecyItem.PROCESS_SECRET, false);
+        access.invalidate(F);
+        summarizer.apply(followup(), F);
+        assertThat(system.getValue()).as("a 关: 跨厂约束照样发")
+                .contains(ProcessSecretLlmCostScope.CROSS_FACTORY_HARNESS)
+                .doesNotContain(ProcessSecretLlmCostScope.PROCESS_SECRET_CLAUSE);
+        assertThat(system.getAllValues()).hasSize(2);   // 两次都真的发了 (否则上面的读数无意义)
+    }
+
     @Test
     void anUnknownEgressFactoryIsStillRefusedWithRedactionOffEverywhere() {
         set(F, SecrecyItem.EGRESS_REDACTION, false);
@@ -219,15 +253,24 @@ class FactorySecrecyEntryPointsContractTest {
                 .rootCause().hasMessage(ProcessSecretController.NOT_ENABLED_MESSAGE);
         org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
         verify(policyService, never()).listPolicies(any(), anyString());
-        // B 档接口: e 开着就放行 (与 a 无关)
+        assertThatThrownBy(() -> mvc.perform(get("/api/mobile/" + F + "/process-secrets/external-packages")
+                .param("productTypeId", SECRET).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, owner)))
+                .hasRootCauseInstanceOf(BusinessException.class);
+        org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+
+        // Q2=A: a 关、e 开 —— 策略接口和 B 档接口都要能用 (配置 B 档产品)
         set(F, SecrecyItem.CUSTOMER_HELD, true);
+        mvc.perform(get("/api/mobile/" + F + "/process-secrets/policies")
+                .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, owner)).andExpect(status().isOk());
         mvc.perform(get("/api/mobile/" + F + "/process-secrets/external-packages").param("productTypeId", SECRET)
                 .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, owner)).andExpect(status().isOk());
+        verify(policyService).listPolicies(owner, F);
 
+        set(F, SecrecyItem.CUSTOMER_HELD, false);
         set(F, SecrecyItem.PROCESS_SECRET, true);
         mvc.perform(get("/api/mobile/" + F + "/process-secrets/policies")
                 .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, owner)).andExpect(status().isOk());
-        verify(policyService).listPolicies(owner, F);
+        verify(policyService, org.mockito.Mockito.times(2)).listPolicies(owner, F);
     }
 
     @Test

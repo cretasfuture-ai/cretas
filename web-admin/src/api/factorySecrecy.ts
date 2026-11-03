@@ -36,9 +36,14 @@ export const SECRECY_ITEMS: readonly SecrecyItemMeta[] = (secrecyItemsFile as { 
 
 export const SECRECY_MODULE_ID = 'secrecy';
 
-/** 工厂端菜单 / 路由依赖的项: 页面路径 → 必须 `=== true` 的项。 */
-export const SECRECY_GATED_PATHS: Readonly<Record<string, SecrecyCode>> = {
-  '/system/process-secret': 'PROCESS_SECRET',
+/**
+ * 工厂端菜单 / 路由依赖的项: 页面路径 → 其中**任一项** `=== true` 就显示。
+ * 工艺保密设置页: 工艺保密 (a) 或客户侧保管 (e) 开着就显示 (Steve 2026-11-03 Q2=A: e 开、a 关时也要能配置 B 档产品)。
+ */
+export const PROCESS_SECRET_PAGE_ITEMS: readonly SecrecyCode[] = ['PROCESS_SECRET', 'CUSTOMER_HELD'];
+
+export const SECRECY_GATED_PATHS: Readonly<Record<string, readonly SecrecyCode[]>> = {
+  '/system/process-secret': PROCESS_SECRET_PAGE_ITEMS,
 };
 
 export type SecrecyFlags = Partial<Record<SecrecyCode, boolean>>;
@@ -63,10 +68,15 @@ export function isSecrecyOn(flags: SecrecyFlags | null | undefined, code: Secrec
   return flags?.[code] === true;
 }
 
+/** 任一项明确是 true。 */
+export function isAnySecrecyOn(flags: SecrecyFlags | null | undefined, codes: readonly SecrecyCode[]): boolean {
+  return codes.some((code) => isSecrecyOn(flags, code));
+}
+
 /** 因保密配置要隐藏的工厂端菜单路径。 */
 export function secrecyHiddenMenuPaths(flags: SecrecyFlags): string[] {
   return Object.entries(SECRECY_GATED_PATHS)
-    .filter(([, code]) => !isSecrecyOn(flags, code))
+    .filter(([, codes]) => !isAnySecrecyOn(flags, codes))
     .map(([path]) => path);
 }
 
