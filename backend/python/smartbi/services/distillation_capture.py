@@ -125,7 +125,9 @@ async def _maybe_expire_held_rows(pool) -> None:
     except asyncio.TimeoutError:
         # pool busy / slow delete: skip, try again shortly instead of an hour later
         _LAST_EXPIRY["at"] = now - EXPIRY_INTERVAL_S + EXPIRY_RETRY_S
-        logger.info("[distill] held-row expiry skipped (pool busy), retried in %.0fs", EXPIRY_RETRY_S)
+        # a warning, so a sweep that keeps timing out (raw text not being expired) is visible
+        logger.warning("[distill] held-row expiry timed out after %.1fs (pool busy / slow delete), "
+                       "retried in %.0fs", EXPIRY_TIMEOUT_S, EXPIRY_RETRY_S)
     except Exception as e:  # noqa: BLE001 - housekeeping never blocks a capture
         logger.warning("[distill] held-row expiry failed (retried next interval): %s", e)
 

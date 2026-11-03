@@ -710,7 +710,7 @@ class _FirstAcquireHangsPool(_RecordingPool):
         return _Hang()
 
 
-async def test_a_busy_pool_never_holds_a_capture_up(monkeypatch):
+async def test_a_busy_pool_never_holds_a_capture_up(monkeypatch, caplog):
     """Review round 4, item 3: the hourly sweep is bounded by a short timeout; the capture still
     happens promptly and the sweep is retried soon instead of an hour later."""
     import time as _time
@@ -722,7 +722,11 @@ async def test_a_busy_pool_never_holds_a_capture_up(monkeypatch):
     monkeypatch.setattr(dc, "EXPIRY_TIMEOUT_S", 0.2)
     sink: list = []
     start = _time.monotonic()
+    import logging as _logging
+    caplog.set_level(_logging.WARNING, logger="smartbi.services.distillation_capture")
     await _capture(_FirstAcquireHangsPool(sink), factory_id="F006", input_text="今天产量多少")
+    # review round 5: a sweep that times out is a WARNING (a stuck expiry must be visible)
+    assert any(r.levelno == _logging.WARNING and "held-row expiry timed out" in r.getMessage() for r in caplog.records)
     assert _time.monotonic() - start < 5                        # not the 30 s the pool would take
     assert len(sink) == 1                                       # the capture itself went through
     due_in = dc._LAST_EXPIRY["at"] + dc.EXPIRY_INTERVAL_S - _time.monotonic()
@@ -802,6 +806,50 @@ async def test_held_rows_on_real_postgres_leave_no_raw_text_behind():
                                    " FROM smart_bi_distillation_samples")
         for raw in ("秘制牛肉干", "RAW-CLEAN", "RAW-OLD", "RAW-OUT"):
             assert raw not in dump, raw
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        await conn.close()
+
+
+async def test_the_expiry_delete_can_use_the_partial_index_on_real_postgres():
+    """Review round 5: smartbi migration V20261104_01 adds a partial index on the hold marker; the
+    sweep's DELETE (and the re-judge fetch) match its predicate. With sequential scans disabled the
+    planner must pick it — if the predicate drifted from the SQL, it could not."""
+    import os
+    import uuid
+    from pathlib import Path
+
+    import pytest
+
+    dsn = os.getenv("SMARTBI_PG_DSN")
+    if not dsn:
+        if os.getenv("CI"):
+            pytest.fail("SMARTBI_PG_DSN is required on CI")
+        pytest.skip("no local PostgreSQL")
+    asyncpg = pytest.importorskip("asyncpg")
+    from smartbi.services.process_secret_names import _EXPIRE_SQL, _HELD_ROWS_SQL
+    from smartbi.services.training_consent import RECHECK_KEY
+
+    migration = (Path(__file__).resolve().parents[1] / "smartbi" / "database" / "migrations"
+                 / "V20261104_01__distillation_secrecy_recheck_index.sql").read_text(encoding="utf-8")
+    conn = await asyncpg.connect(dsn)
+    schema = "idx_" + uuid.uuid4().hex[:10]
+    try:
+        await conn.execute(f"CREATE SCHEMA {schema}")
+        await conn.execute(f"SET search_path TO {schema}")
+        await conn.execute("""CREATE TABLE smart_bi_distillation_samples (
+            id BIGSERIAL PRIMARY KEY, factory_id VARCHAR(64), input_text TEXT, teacher_output TEXT,
+            metadata JSONB, created_at TIMESTAMP DEFAULT now())""")
+        await conn.execute(migration)
+        await conn.execute(migration)                                    # idempotent (IF NOT EXISTS)
+        await conn.execute("SET enable_seqscan = off")
+        async with conn.transaction():
+            plan = "\n".join(r[0] for r in await conn.fetch(
+                "EXPLAIN " + _EXPIRE_SQL.format(key=RECHECK_KEY), 7))
+            assert "idx_distill_samples_secrecy_recheck_created" in plan, plan
+            plan = "\n".join(r[0] for r in await conn.fetch(
+                "EXPLAIN " + _HELD_ROWS_SQL.format(key=RECHECK_KEY), 100))
+            assert "idx_distill_samples_secrecy_recheck_created" in plan, plan
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await conn.close()
