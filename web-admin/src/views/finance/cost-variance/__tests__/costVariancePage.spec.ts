@@ -41,8 +41,8 @@ beforeEach(() => {
     ],
     allocationMethods: [{ processCode: 'SPLIT', processOrder: 2, basis: 'FIXED_RATIO', basisLabel: '固定比例 (工艺版本)',
       outputs: [
-        { productTypeId: 'A', productName: '牛腱', batchNumber: 'B1', ratio: 80, workflowFixedCostShare: 80, allocatedCost: 800 },
-        { productTypeId: 'B', productName: '牛杂', batchNumber: 'B2', ratio: 20, workflowFixedCostShare: 20, allocatedCost: 200 },
+        { productTypeId: 'A', productName: '牛腱', batchNumber: 'B1', costAllocationRatio: 80, workflowFixedCostShare: 80, allocatedCost: 800 },
+        { productTypeId: 'B', productName: '牛杂', batchNumber: 'B2', costAllocationRatio: 20, workflowFixedCostShare: 20, allocatedCost: 200 },
       ] }],
   } });
 });

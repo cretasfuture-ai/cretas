@@ -132,8 +132,8 @@ public class PlanCostVarianceDTO {
         private String productTypeId;
         private String productName;
         private String batchNumber;
-        private BigDecimal ratio;
-        /** 工艺版本上的固定份额; 与 ratio 不同 = 报工时改过。 */
+        private BigDecimal costAllocationRatio;
+        /** 工艺版本上的固定份额; 与 costAllocationRatio 不同 = 报工时改过。 */
         private BigDecimal workflowFixedCostShare;
         private BigDecimal allocatedCost;
     }

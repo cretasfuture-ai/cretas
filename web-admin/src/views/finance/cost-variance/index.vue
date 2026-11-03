@@ -325,9 +325,9 @@ onMounted(load);
             <el-table-column label="各产出" min-width="380">
               <template #default="{ row }">
                 <div v-for="o in row.outputs" :key="`${o.batchNumber}:${o.productTypeId}`" class="alloc-output">
-                  {{ o.productName || o.productTypeId }}：{{ o.ratio == null ? '—' : `${Number(o.ratio).toFixed(2)}%` }}
+                  {{ o.productName || o.productTypeId }}：{{ o.costAllocationRatio == null ? '—' : `${Number(o.costAllocationRatio).toFixed(2)}%` }}
                   <template v-if="o.allocatedCost != null && !detail.priceMasked">（{{ money(o.allocatedCost) }}）</template>
-                  <span v-if="o.workflowFixedCostShare != null && o.ratio != null && Math.abs(Number(o.ratio) - Number(o.workflowFixedCostShare)) > 0.01" class="sub">
+                  <span v-if="o.workflowFixedCostShare != null && o.costAllocationRatio != null && Math.abs(Number(o.costAllocationRatio) - Number(o.workflowFixedCostShare)) > 0.01" class="sub">
                     工艺固定 {{ o.workflowFixedCostShare }}%，报工时改过
                   </span>
                 </div>

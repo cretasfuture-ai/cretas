@@ -149,7 +149,9 @@ class ProcessSecretDataLayerContractTest {
     static final Map<String, String> UNTRACKED_ENTITY_LEDGER = Map.of(
             "entity/restaurant/Recipe.java", "餐饮线已废弃 (Steve 2026-10-08), 不纳入工艺保密",
             "entity/WorkProcess.java", "全厂工序目录的出成率上下限, 不属于某个产品; 保密按产品判定, 产品工序链见 ProductWorkProcess",
-            "entity/workprocess/WorkProcessDraft.java", "同上: 工序目录草稿");
+            "entity/workprocess/WorkProcessDraft.java", "同上: 工序目录草稿",
+            "entity/production/PlanStandardCostLine.java",
+            "计划标准成本快照只由 PlanCostVarianceService 读: 单计划明细对保密产品无权调用者 403, 期间报表剔除其计划且不带明细行");
 
     /** 直接用 SQL 读配方表 (Hibernate PostLoad 看不到) 的类。 */
     static final Map<String, String> DIRECT_SQL_LEDGER = Map.ofEntries(

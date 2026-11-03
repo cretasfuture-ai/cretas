@@ -357,7 +357,7 @@ public class PlanCostVarianceService {
                     .productTypeId(p.path("productTypeId").asText(null))
                     .productName(productName(factoryId, p.path("productTypeId").asText(null)))
                     .batchNumber(row.getBatchNumber())
-                    .ratio(decimal(p, "costAllocationRatio"))
+                    .costAllocationRatio(decimal(p, "costAllocationRatio"))
                     .workflowFixedCostShare(fixed)
                     .allocatedCost(decimal(p, "allocatedCost"))
                     .build());

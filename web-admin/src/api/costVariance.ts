@@ -36,7 +36,7 @@ export interface AllocationOutput {
   productTypeId: string | null;
   productName: string | null;
   batchNumber: string | null;
-  ratio: number | null;
+  costAllocationRatio: number | null;
   workflowFixedCostShare: number | null;
   allocatedCost: number | null;
 }
