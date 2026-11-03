@@ -122,14 +122,12 @@ public class AlertListTool extends AbstractBusinessTool {
         pageRequest.setSize(size);
 
         // 调用服务获取数据
-        PageResponse<EquipmentAlertDTO> pageResponse = equipmentAlertsService.getAlertList(
-                factoryId, pageRequest, keyword, level, status);
+        // 设备条件交给数据库在分页之前过滤, 总数是筛过的 (以前在这一页里筛, 总数还是全厂的)
+        PageResponse<EquipmentAlertDTO> pageResponse = equipmentId != null
+                ? equipmentAlertsService.getAlertList(factoryId, pageRequest, keyword, level, status, equipmentId)
+                : equipmentAlertsService.getAlertList(factoryId, pageRequest, keyword, level, status);
 
-        // 如果指定了equipmentId，需要在结果中过滤
         List<EquipmentAlertDTO> content = pageResponse.getContent();
-        if (equipmentId != null && content != null) {
-            content = filterByEquipmentId(content, equipmentId);
-        }
 
         // 构建返回结果
         Map<String, Object> result = buildPageResult(
@@ -151,19 +149,6 @@ public class AlertListTool extends AbstractBusinessTool {
                 pageResponse.getTotalElements(), page);
 
         return result;
-    }
-
-    /**
-     * 按设备ID过滤告警列表
-     */
-    private List<EquipmentAlertDTO> filterByEquipmentId(List<EquipmentAlertDTO> alerts, Long equipmentId) {
-        List<EquipmentAlertDTO> filtered = new ArrayList<>();
-        for (EquipmentAlertDTO alert : alerts) {
-            if (alert.getEquipmentId() != null && alert.getEquipmentId().equals(equipmentId)) {
-                filtered.add(alert);
-            }
-        }
-        return filtered;
     }
 
     /** spec §8.2 只读查询, 无副作用 */

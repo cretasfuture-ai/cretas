@@ -543,7 +543,13 @@ public class ToolDispatchService {
                     }
 
                     long startTime = System.currentTimeMillis();
-                    resultJson = tool.execute(toolCall, context);
+                    // 价格字段按调用者的权限配置隐藏, 与 Gateway 路径 / REST 列表同一口径 (S5-12):
+                    // 直调分支以前不设价格上下文, 工具序列化出来的采购价对无采购价权限的角色也照样带着
+                    // (响应层的 Map 剥离只认价格容器路径, 不认 content 里的实体字段)。
+                    try (com.cretas.aims.security.PriceSensitiveContext.Scope ignored =
+                                 priceScopeFor(userId)) {
+                        resultJson = tool.execute(toolCall, context);
+                    }
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
                     boolean toolSucceeded = isToolResultSuccessful(resultJson);
@@ -1348,6 +1354,9 @@ public class ToolDispatchService {
                 status = "NEED_MORE_INFO";
             } else if (Boolean.TRUE.equals(success)) {
                 status = "SUCCESS";
+            } else if (Integer.valueOf(403).equals(result.get("errorCode"))) {
+                // 工具里抛的 403 (如待财审的行级拦截): 与 RBAC 拒绝同一个状态, 不再降成笼统的 FAILED / 400
+                status = "PERMISSION_DENIED";
             } else {
                 status = "FAILED";
             }
@@ -1602,6 +1611,40 @@ public class ToolDispatchService {
                     request.getUserInput(), e.toString());
             return null;
         }
+    }
+
+    @org.springframework.context.annotation.Lazy
+    @Autowired(required = false)
+    private com.cretas.aims.repository.UserRepository priceUserRepository;
+
+    @org.springframework.context.annotation.Lazy
+    @Autowired(required = false)
+    private com.cretas.aims.service.PermissionService pricePermissionService;
+
+    /**
+     * 直调分支执行工具时的价格可见性: 与 Gateway (ToolPrincipalPolicy) 同三项 ——
+     * 默认价格权限、采购价 (按权限配置, S5-12)、采购或财务价。用户查不到 ⇒ 全部隐藏 (fail closed)。
+     * 两个依赖没装配 (切片测试) 时不改上下文。
+     */
+    com.cretas.aims.security.PriceSensitiveContext.Scope priceScopeFor(Long userId) {
+        if (priceUserRepository == null || pricePermissionService == null) {
+            return () -> { };
+        }
+        java.util.Set<String> hidden = new java.util.HashSet<>();
+        com.cretas.aims.entity.User user = userId == null ? null : priceUserRepository.findById(userId).orElse(null);
+        com.cretas.aims.security.PriceVisibility visibility =
+                new com.cretas.aims.security.PriceVisibility(pricePermissionService);
+        if (user == null || !pricePermissionService.hasPermission(user,
+                com.cretas.aims.security.PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION)) {
+            hidden.add(com.cretas.aims.security.PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION);
+        }
+        if (user == null || !visibility.canView(user, com.cretas.aims.security.PriceSensitive.PURCHASE)) {
+            hidden.add(com.cretas.aims.security.PriceSensitive.PURCHASE);
+        }
+        if (user == null || !visibility.canView(user, com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE)) {
+            hidden.add(com.cretas.aims.security.PriceSensitive.PURCHASE_OR_FINANCE);
+        }
+        return com.cretas.aims.security.PriceSensitiveContext.scopedSpecs(hidden);
     }
 
     /** 工具 schema 顶层开关: 只有可选参数的工具要不要在执行前让大模型抽可选参数 (默认不抽)。 */

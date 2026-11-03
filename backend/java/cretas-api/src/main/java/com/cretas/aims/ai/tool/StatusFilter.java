@@ -176,6 +176,7 @@ public final class StatusFilter {
      * @return 点名筛选条件的回复; 不是「按状态筛过且为空」时为 null (照常走各意图的格式化)
      */
     public static String emptyFilteredReply(Object resultData) {
+        resultData = TimeRangeFilter.toolResultOf(resultData);
         if (!(resultData instanceof Map<?, ?> data)) {
             return null;
         }

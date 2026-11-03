@@ -24,7 +24,7 @@ class DataScopeServiceCoverageContractTest {
     private static final Map<String, String> EXPECTED_METHODS = expectedMethods();
 
     @Test
-    void exactlySeventeenReviewedServiceMethodsAreDataScoped() throws IOException {
+    void exactlyEighteenReviewedServiceMethodsAreDataScoped() throws IOException {
         Map<String, Integer> annotationCounts = new LinkedHashMap<>();
 
         try (var paths = Files.walk(SERVICES)) {
@@ -47,7 +47,7 @@ class DataScopeServiceCoverageContractTest {
                 expectedCounts.merge(key.substring(0, key.indexOf('#')), 1, Integer::sum));
         assertThat(annotationCounts).isEqualTo(expectedCounts);
         assertThat(annotationCounts.values()).containsOnly(1, 2, 9);
-        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(17);
+        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(18);
 
         EXPECTED_METHODS.forEach((methodKey, ignored) -> {
             try {
@@ -93,6 +93,10 @@ class DataScopeServiceCoverageContractTest {
         expected.put("impl/MaterialBatchServiceImpl.java#getExpiredBatches", "expired");
         expected.put("impl/QualityReturnOrderServiceImpl.java#list", "list");
         expected.put("inventory/impl/PurchaseServiceImpl.java#getPurchaseOrders", "getPurchaseOrders");
+        // Reviewed (S6 2026-11-03): the status list behind purchase_order_list and the REST status endpoint. Same
+        // created_by chain as getPurchaseOrders (SELF -> own, SELF_AND_BELOW / DEPT_AND_BELOW -> resolved chain,
+        // empty -> own, otherwise unscoped). Before this the status path applied no DataScope.
+        expected.put("inventory/impl/PurchaseServiceImpl.java#getPurchaseOrdersByStatus", "getPurchaseOrdersByStatus");
         expected.put("inventory/impl/ReturnOrderServiceImpl.java#getReturnOrders", "getReturnOrders");
         expected.put("inventory/impl/SalesServiceImpl.java#getSalesOrders", "getSalesOrders");
         // Reviewed (S6 2026-11-03): the status / order-date filtered list that order_list, order_query and the
