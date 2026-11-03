@@ -336,7 +336,7 @@ async def _plans_for(client: httpx.AsyncClient, account: str, model: str,
 
 def compare_main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="aliyun_c/glm-4.6",
+    ap.add_argument("--ref", default="aliyun_a/glm-4.6",
                     help="参照模型 (电池上已知好用的那个)")
     ap.add_argument("--candidates", default="", help="逗号分隔 account/model")
     ap.add_argument("--slot", default="review")

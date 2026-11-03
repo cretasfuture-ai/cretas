@@ -42,7 +42,6 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
     #    下面挑中别家时会因为空 key 被 `if not api_key: continue` **静默跳过**,
     #    报错是「All providers exhausted」而不是「key 没设」。
     # 2026-10-07: aistore/deepseek/zhipu 清出注册表, 在册的只剩阿里云三个逻辑账号。
-    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
     monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
     monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
     monkeypatch.setattr(

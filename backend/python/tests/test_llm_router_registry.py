@@ -63,13 +63,12 @@ _FROZEN_REGISTRY = {
     ("aliyun_a_vl", "deepseek-v4.1-flash"): None,
     # ── VL (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────────────────
     # ⚠️ 这里的 None 语义是**到期日未知**(不是「永不过期」)。
-    # 计费安全不靠日期: aliyun_c 的「免费额度用完即停」是开着的, 证据与 08-09
+    # 计费安全不靠日期: aliyun_a/b 的「免费额度用完即停」是开着的, 证据与 08-09
     # 给 aliyun_b 定性时同源 —— 同一把 key 当天对其它 VL SKU 一律返回
     # 403 AllocationQuota.FreeTierOnly, 而 403-而-非-计费-200 只有在用完即停
     # 已开启时才可能出现。
-    # 三账号轮转同一个模型; 实测带图延迟 c 4.8s / a 6.2s / b 10.6s(链序即按此排)。
-    # 2026-10-07 起这三条也是**全部文本槽的唯一候选**; b 当天 403 quota(保留, 已报 owner)。
-    ("aliyun_c_vl", "qwen3.8-flash"): None,
+    # 两账号轮转同一个模型; 实测带图延迟 a 6.2s / b 10.6s(链序即按此排)。
+    # 2026-11-03 Steve 裁定 aliyun_c 整体下线(原 c_vl 4.8s 排首位), 已从表里删除。
     ("aliyun_a_vl", "qwen3.8-flash"): None,
     ("aliyun_b_vl", "qwen3.8-flash"): None,
     # 可选备胎(`LLM_VL_MODEL=qwen3.7-flash` 切过去; 它只在 aliyun_a 上验过)。
@@ -151,7 +150,7 @@ def test_absolute_last_mechanism_still_sinks_its_members(monkeypatch):
 
 #: 人写的「我们自己的阿里云逻辑账号」名单 —— 与 llm_router 的 `_ALIYUN_ACCOUNTS`
 #: **来源不同**(那张表还含 aliyun_a/b/c 等早已退役的名字), 不是恒真式。
-_OUR_ALIYUN_ACCOUNTS = frozenset({"aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl"})
+_OUR_ALIYUN_ACCOUNTS = frozenset({"aliyun_a_vl", "aliyun_b_vl"})
 
 
 #: 2026-11-03 Steve 追加裁定: 自有机器上的本地模型(加拿大 Mac mini)也算「我们自己的」。
@@ -172,7 +171,7 @@ def test_only_our_aliyun_accounts_remain_after_the_2026_10_07_ruling():
     DEFAULT_CHAIN(本文件声明的「账号清单唯一来源」)。
     """
     # 阴性对照: 判定函数必须**判得出**一个非阿里云条目, 否则下面全绿没有意义。
-    assert _non_aliyun([("zhipu", "glm-4.5-air"), ("aliyun_c_vl", "x")]) == [
+    assert _non_aliyun([("zhipu", "glm-4.5-air"), ("aliyun_a_vl", "x")]) == [
         ("zhipu", "glm-4.5-air")]
     assert _non_aliyun(llm_router._SAFE_MODELS) == []
     assert _non_aliyun(llm_router._MINIMAL_SAFE_SET) == []
@@ -230,10 +229,10 @@ def test_removed_channel_cannot_be_revived_by_env_alone(monkeypatch, account, ke
     assert calls == [], f"已删通道居然发出了请求: {calls}"
 
     # 必然读数: 在册账号走同一条路必须真的发请求并拿到答案。
-    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
+    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
     llm_router._CB_FAILURES.clear()
     llm_router._QUOTA_EXHAUSTED_UNTIL.clear()
-    got = asyncio.run(llm_router.call_chain(llm_router.SLOT.CHAT, payload, chain=["aliyun_c_vl"]))
+    got = asyncio.run(llm_router.call_chain(llm_router.SLOT.CHAT, payload, chain=["aliyun_a_vl"]))
     assert calls and calls[0][1] == "qwen3.8-flash", f"阳性对照没发出请求: {calls}"
     assert got["choices"][0]["message"]["content"] == "在册账号正常返回"
 
@@ -293,3 +292,34 @@ def test_registry_audit_date_is_not_stale():
     每天都发, 没人处理。红灯拦得住, 告警拦不住。
     """
     assert not llm_router._registry_stale(llm_router._today())
+
+
+def test_aliyun_c_is_gone_from_registry_chains_and_provider_config(monkeypatch):
+    """2026-11-03 Steve 裁定「我们不用 aliyun_c 了」: 下线要在每一层都成立。
+
+    阴性: 注册表 / 超龄最小集 / DEFAULT_CHAIN / 每个槽的实际链里都没有 aliyun_c*;
+    连 env 里还留着 LLM_ALIYUN_C_API_KEY 也读不到 —— 点名 aliyun_c_vl 只会 no_candidates。
+    阳性对照: 同样的调用换成在册的 aliyun_a_vl, 同一条路必须真发请求(见上一条用例)。
+    """
+    def _c(pairs):
+        return [p for p in pairs if str(p[0]).startswith("aliyun_c")]
+
+    assert _c(llm_router._SAFE_MODELS) == []
+    assert _c(llm_router._MINIMAL_SAFE_SET) == []
+    assert not [a for a in llm_router.DEFAULT_CHAIN if a.startswith("aliyun_c")]
+    for slot, chain in llm_router.SLOT_MODELS.items():
+        assert _c(chain) == [], slot
+    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "key_c_fake")
+    calls = []
+
+    class _Client:
+        async def post(self, url, headers=None, json=None, timeout=None):
+            calls.append(url)
+            raise AssertionError("aliyun_c 居然发出了请求")
+
+    monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: _Client())
+    payload = {"messages": [{"role": "user", "content": "hi"}]}
+    with pytest.raises(llm_router.LLMChainExhausted) as ei:
+        asyncio.run(llm_router.call_chain(llm_router.SLOT.CHAT, payload, chain=["aliyun_c_vl"]))
+    assert "no_candidates" in str(ei.value), str(ei.value)
+    assert calls == []
