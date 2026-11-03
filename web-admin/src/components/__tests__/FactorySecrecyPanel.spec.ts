@@ -70,6 +70,8 @@ describe('FactorySecrecyPanel (平台「工厂管理 → 保密设置」)', () =
     }
     // b 的说明写清只在工艺保密开着时起作用
     expect(wrapper.find('[data-testid="secrecy-item-PLATFORM_RECIPE_BLOCK"]').text()).toContain('只在「工艺保密」开启时起作用');
+    // Steve 2026-11-04: b 关 = 平台可看、可编辑、可做 AI 分析
+    expect(wrapper.find('[data-testid="secrecy-item-PLATFORM_RECIPE_BLOCK"]').text()).toContain('可查看、编辑配方和成本，可做 AI 分析');
     // f 是三态
     expect(wrapper.find('[data-testid="secrecy-item-AI_SECRECY_AUDIT"] el-radio-group-stub').exists()).toBe(true);
   });

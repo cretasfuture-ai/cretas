@@ -23,7 +23,7 @@ public enum SecrecyItem {
                     + "「工艺保密」设置页会隐藏。已经设好的保密产品和授权会保留，重新开启后恢复生效。"),
 
     PLATFORM_RECIPE_BLOCK("b", "平台看不到配方", Default.OFF, false, true, false, null, "PROCESS_SECRET",
-            "关闭后，平台人员可以查看本厂的配方和成本，也可以对本厂做 AI 分析（仍须指明是哪家工厂）。"
+            "关闭后，平台人员可查看、编辑配方和成本，可做 AI 分析（仍须指明是哪家工厂；每一次查看、编辑都记入保密访问记录）。"
                     + "只在「工艺保密」开启时起作用：工艺保密关闭时，本厂配方本来就不遮挡，这一项不起作用。"),
 
     EGRESS_REDACTION("c", "出外脱敏", Default.OFF, false, true, false, null, null,

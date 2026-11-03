@@ -62,10 +62,6 @@ public class ProcessSecretAccessService {
 
     public enum Outcome { NOT_PROTECTED, ALLOW, DENY }
 
-    /** 「平台看不到配方」(b) 关时平台账号无需授权就能做的动作: 只有看 (完整查看 / 导出)。 */
-    static final java.util.Set<ProcessSecretAction> PLATFORM_VIEW_ACTIONS =
-            java.util.EnumSet.of(ProcessSecretAction.VIEW_FULL, ProcessSecretAction.EXPORT);
-
     public record Decision(Outcome outcome, ProcessSecretStorageMode storageMode, String reason) {
         public boolean permitted() {
             return outcome != Outcome.DENY;
@@ -87,20 +83,47 @@ public class ProcessSecretAccessService {
     private final ProcessSecretPolicyRepository policyRepository;
     private final ProcessSecretGrantRepository grantRepository;
     private final ProcessSecretAuditRecorder auditRecorder;
-    private final Map<String, CachedSet> protectedByFactory = new ConcurrentHashMap<>();
-    /** 每家工厂的失效代数 (invalidate 时 +1): 防止「提交前读到旧值、提交后才写回缓存」的读者把旧名单放回去。 */
+    /**
+     * 名单缓存: 写入后 {@link #PROTECTED_SET_TTL} 过期并被清掉 (Caffeine), 不会因为查了一个不存在的工厂编号就留下一条
+     * 永久条目; 总量另有上限。
+     */
+    private final com.github.benmanes.caffeine.cache.Cache<String, CachedSet> protectedByFactory;
+    /**
+     * 每家工厂的失效代数 (invalidate 时 +1): 防止「提交前读到旧值、提交后才写回缓存」的读者把旧名单放回去。
+     * 只有 {@link #bump} 建条目 (只在真实写策略 / 写配置时发生); 读一律 {@code get}, 没有条目按 0。
+     */
     private final Map<String, java.util.concurrent.atomic.AtomicLong> generations = new ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicLong globalGeneration = new java.util.concurrent.atomic.AtomicLong();
     private volatile CachedFlag noPolicyAnywhere;
     /** 单测直接 new 时每一项都当开启 (= 配置化之前的行为); Spring 下由 setter 注入真实实例 (没有这个 bean 的切片测试保持全开)。 */
     private FactorySecrecyConfig secrecy = FactorySecrecyConfig.allOn();
 
+    @Autowired
     public ProcessSecretAccessService(ProcessSecretPolicyRepository policyRepository,
                                       ProcessSecretGrantRepository grantRepository,
                                       ProcessSecretAuditRecorder auditRecorder) {
+        this(policyRepository, grantRepository, auditRecorder, com.github.benmanes.caffeine.cache.Ticker.systemTicker());
+    }
+
+    /** 测试用: 可控的时钟 (验证名单缓存条目会过期清掉)。 */
+    ProcessSecretAccessService(ProcessSecretPolicyRepository policyRepository,
+                               ProcessSecretGrantRepository grantRepository,
+                               ProcessSecretAuditRecorder auditRecorder,
+                               com.github.benmanes.caffeine.cache.Ticker ticker) {
         this.policyRepository = policyRepository;
         this.grantRepository = grantRepository;
         this.auditRecorder = auditRecorder;
+        this.protectedByFactory = com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
+                .expireAfterWrite(PROTECTED_SET_TTL)
+                .maximumSize(10_000)
+                .ticker(ticker)
+                .build();
+    }
+
+    /** 测试用: 清掉过期条目后还剩多少条名单缓存。 */
+    long cachedFactoryCount() {
+        protectedByFactory.cleanUp();
+        return protectedByFactory.estimatedSize();
     }
 
     @Autowired(required = false)
@@ -142,13 +165,14 @@ public class ProcessSecretAccessService {
     }
 
     private long generation(String factoryId) {
-        return generations.computeIfAbsent(factoryId, k -> new java.util.concurrent.atomic.AtomicLong()).get();
+        java.util.concurrent.atomic.AtomicLong generation = generations.get(factoryId);
+        return generation == null ? 0L : generation.get();
     }
 
     private List<PolicyEntry> policies(String factoryId) {
         long now = System.currentTimeMillis();
         long generation = generation(factoryId);
-        CachedSet cached = protectedByFactory.get(factoryId);
+        CachedSet cached = protectedByFactory.getIfPresent(factoryId);
         if (cached != null && cached.generation() == generation
                 && now - cached.loadedAtMillis() < PROTECTED_SET_TTL.toMillis()) {
             return cached.policies();
@@ -274,7 +298,7 @@ public class ProcessSecretAccessService {
     private void bump(String factoryId) {
         generations.computeIfAbsent(factoryId, k -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
         globalGeneration.incrementAndGet();
-        protectedByFactory.remove(factoryId);
+        protectedByFactory.invalidate(factoryId);
     }
 
     public Decision decide(AuthenticatedActor actor, String factoryId, String productTypeId, ProcessSecretAction action) {
@@ -299,8 +323,9 @@ public class ProcessSecretAccessService {
         if (mode == ProcessSecretStorageMode.CUSTOMER_HELD) {
             return new Decision(Outcome.DENY, mode, "该产品核心工艺由客户侧保存，云端不提供也不接收完整工艺");
         }
-        // b 关只放开「看」(完整查看 / 导出); 编辑等写动作照旧要授权 (审查: b 的说明只承诺看配方与成本、做 AI 分析)
-        if (PLATFORM_VIEW_ACTIONS.contains(action) && platformSeesFull(actor, factoryId)) {
+        // Steve 2026-11-04: b 关时平台账号对该厂保密产品的所有动作 (看 / 导出 / 编辑) 都放行;
+        // 放行同样是「受保护产品的判定」, 经 require / filterPermitted / RecipeGuard 每次都写 ALLOW 审计 (写不进去按拒绝)
+        if (platformSeesFull(actor, factoryId)) {
             return new Decision(Outcome.ALLOW, mode, "本厂未开启「平台看不到配方」");
         }
         if (isOwner(actor, factoryId, policy)) {
