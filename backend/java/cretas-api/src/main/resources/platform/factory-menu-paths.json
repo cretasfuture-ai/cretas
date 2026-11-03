@@ -93,6 +93,7 @@
   ],
   "quality": [
     "/quality/ccp",
+    "/quality/cold-chain",
     "/quality/defects",
     "/quality/disposals",
     "/quality/disposition",
