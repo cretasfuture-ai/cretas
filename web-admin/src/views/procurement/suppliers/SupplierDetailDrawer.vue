@@ -34,6 +34,7 @@
     </template>
 
     <SupplyImpactDialog
+      v-if="impactVisible"
       v-model="impactVisible"
       :factory-id="factoryId"
       :target="{ supplierId: detail?.id }"

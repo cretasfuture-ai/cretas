@@ -1714,6 +1714,7 @@ function handleSizeChange(size: number) {
     </el-card>
 
     <SupplyImpactDialog
+      v-if="impactVisible"
       v-model="impactVisible"
       :factory-id="factoryId"
       :target="{ materialTypeId: impactTarget?.id }"

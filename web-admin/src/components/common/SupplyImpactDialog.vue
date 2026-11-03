@@ -227,7 +227,7 @@ watch(() => props.modelValue, (open) => {
     price.value = null;
     void run();
   }
-});
+}, { immediate: true });
 </script>
 
 <style scoped>
