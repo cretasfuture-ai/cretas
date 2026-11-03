@@ -278,7 +278,16 @@ public class SlotFillingServiceImpl implements SlotFillingService {
             boolean anyRequiredMissing = stillMissing.stream().anyMatch(RequiredSlot::isRequired);
             boolean noSlotExtracted = stillMissing.size() == slots.size();
             if (!stillMissing.isEmpty() && (anyRequiredMissing || noSlotExtracted)) {
-                Map<String, Object> llmExtracted = llmExtractMissingSlots(userInput, stillMissing);
+                Map<String, String> types = new HashMap<>();
+                stillMissing.forEach(s -> types.put(s.getName(), s.getType()));
+                // 与 ToolDispatchService 同一条出处校验: 原话里没有的数 / 不是原话的备注不收
+                com.cretas.aims.service.execution.LlmParameterGrounding.Result grounded =
+                        com.cretas.aims.service.execution.LlmParameterGrounding.groundSlots(
+                                llmExtractMissingSlots(userInput, stillMissing), extracted, userInput, types);
+                if (!grounded.dropped().isEmpty()) {
+                    log.info("填槽 LLM 抽参未落地, 已丢弃: {}", grounded.dropped());
+                }
+                Map<String, Object> llmExtracted = grounded.accepted();
                 for (Map.Entry<String, Object> e : llmExtracted.entrySet()) {
                     if (!extracted.containsKey(e.getKey()) && e.getValue() != null) {
                         extracted.put(e.getKey(), e.getValue());

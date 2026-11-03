@@ -35,7 +35,9 @@ class ShortageRescheduleControllerContractTest {
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.standaloneSetup(new ShortageRescheduleController(service,
-                        mock(RescheduleProposalRepository.class), mock(ShortageCaseRepository.class)))
+                        mock(RescheduleProposalRepository.class), mock(ShortageCaseRepository.class),
+                        mock(com.cretas.aims.repository.shortage.ShortageCaseActionRepository.class),
+                        OutcomeCheckStubs.unknown()))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
         RescheduleProposal p = new RescheduleProposal();
