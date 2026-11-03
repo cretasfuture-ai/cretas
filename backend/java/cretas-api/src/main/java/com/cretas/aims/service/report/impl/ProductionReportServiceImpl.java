@@ -1385,13 +1385,37 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     // 工艺保密: 结果按调用者裁剪 ⇒ 共享缓存键带调用者保密档位 (本厂没有保密产品时档位为空串)
     @Cacheable(value = "costVarianceReport", key = "#factoryId + '_' + #startDate + '_' + #endDate + '_' + @processSecretLlmCostScope.accessTier(#factoryId)", unless = "#result == null")
     public CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate) {
-        log.info("获取成本差异报表: factoryId={}, startDate={}, endDate={}", factoryId, startDate, endDate);
+        return buildCostVarianceReport(factoryId, startDate, endDate, null);
+    }
+
+    /**
+     * 只看一个产品 (AI 工具 report_cost_variance 按产品查): 只从数据库读这个产品的批次。
+     * ⛔ 不取全厂再筛: 读到的每个批次都会记进工艺保密读数 (ProcessSecretReadTracker), 别的保密产品的批次
+     * 被读到、却不在输出里, 出口会把整份按受限处理, 非保密产品的成本也被遮 (2026-11-03 清点 A5)。
+     * 本产品的批次照常打标 —— 保密产品的读数照样进 AI 访问审计; 与保密产品同计划的兄弟产出照样按计划遮。
+     * 不缓存: 缓存命中时不读库, 审计就记不到这次读了保密产品。
+     */
+    @Override
+    public CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate,
+                                                       String productTypeId) {
+        if (productTypeId == null || productTypeId.isBlank()) {
+            return getCostVarianceReport(factoryId, startDate, endDate);
+        }
+        return buildCostVarianceReport(factoryId, startDate, endDate, productTypeId);
+    }
+
+    private CostVarianceReportDTO buildCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate,
+                                                          String productTypeId) {
+        log.info("获取成本差异报表: factoryId={}, startDate={}, endDate={}, productTypeId={}",
+                factoryId, startDate, endDate, productTypeId);
 
         LocalDateTime startTime = startDate.atStartOfDay();
         LocalDateTime endTime = endDate.plusDays(1).atStartOfDay();
 
-        List<ProductionBatch> batches = productionBatchRepository.findByFactoryIdAndCreatedAtBetween(
-                factoryId, startTime, endTime);
+        List<ProductionBatch> batches = productTypeId == null
+                ? productionBatchRepository.findByFactoryIdAndCreatedAtBetween(factoryId, startTime, endTime)
+                : productionBatchRepository.findByFactoryIdAndProductTypeIdAndCreatedAtBetween(
+                        factoryId, productTypeId, startTime, endTime);
 
         BigDecimal totalActualCost = BigDecimal.ZERO;
         int batchCount = batches.size();

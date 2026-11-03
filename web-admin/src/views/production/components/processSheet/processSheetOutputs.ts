@@ -107,6 +107,8 @@ export interface MultiOutputLine {
   byproductUnitPrice: number | null;
   /** 仅产出维度无法统一时显示并提交，值域 (0, 100]。 */
   costAllocationRatio: number | null;
+  /** 工艺版本上的固定比例份额(%); 本工序按重量时为 null。用来提示「已改动工艺比例」。 */
+  workflowFixedCostShare?: number | null;
   /** 保存后系统生成的产出批次号 (重载回显); 未保存为 null。 */
   batchNumber: string | null;
 }

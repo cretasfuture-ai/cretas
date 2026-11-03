@@ -67,7 +67,7 @@ public class ReportedOutputCostAllocationService {
             String basis = text(payload, "costAllocationBasis");
             if (allocatedCost == null || allocatedCost.signum() < 0
                     || ratio == null || ratio.signum() <= 0
-                    || !Set.of("MASS", "QUANTITY", "EXPLICIT_RATIO").contains(basis)
+                    || !Set.of("MASS", "QUANTITY", "EXPLICIT_RATIO", "FIXED_RATIO").contains(basis)
                     || !matchesBatchCost(factoryId, planId, row, allocatedCost)) {
                 throw unavailable("报工产出成本分摊凭证无效");
             }

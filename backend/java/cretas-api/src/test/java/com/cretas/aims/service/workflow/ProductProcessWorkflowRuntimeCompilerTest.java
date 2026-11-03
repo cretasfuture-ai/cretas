@@ -283,6 +283,62 @@ class ProductProcessWorkflowRuntimeCompilerTest {
                 .toList());
     }
 
+    /** 食品 DAG 缺口 10: 联产工序选「固定比例」, 份额随工艺版本冻结进运行时端口。 */
+    @Test
+    void compilesFixedRatioCostSharesOntoOutputPortsOnly() {
+        ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
+        processData(definition, "mix").put("costAllocationMethod", "FIXED_RATIO");
+        processPorts(definition, "mix").forEach(port -> {
+            if ("out-main".equals(port.get("id"))) port.put("fixedCostShare", 80);
+            if ("out-side".equals(port.get("id"))) port.put("fixedCostShare", 20);
+            if ("in-a".equals(port.get("id"))) port.put("fixedCostShare", 50); // 投入端口上的残留值不进运行时
+        });
+
+        Map<String, BigDecimal> shares = new java.util.LinkedHashMap<>();
+        compiler.compile(definition).portsFor("mix")
+                .forEach(port -> shares.put(port.workflowPortId(), port.fixedCostShare()));
+        assertEquals(0, new BigDecimal("80").compareTo(shares.get("out-main")));
+        assertEquals(0, new BigDecimal("20").compareTo(shares.get("out-side")));
+        assertEquals(null, shares.get("in-a"));
+        assertEquals(null, shares.get("in-b"));
+    }
+
+    @Test
+    void fixedRatioSharesMustTotalHundredAndCoverEveryOutput() {
+        ProductProcessWorkflowDTO notHundred = multiInputOutputWorkflow();
+        processData(notHundred, "mix").put("costAllocationMethod", "FIXED_RATIO");
+        processPorts(notHundred, "mix").forEach(port -> {
+            if ("out-main".equals(port.get("id"))) port.put("fixedCostShare", 80);
+            if ("out-side".equals(port.get("id"))) port.put("fixedCostShare", 30);
+        });
+        com.cretas.aims.exception.BusinessException total = org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class, () -> compiler.compile(notHundred));
+        org.junit.jupiter.api.Assertions.assertTrue(total.getMessage().contains("must total 100, got 110"),
+                total.getMessage());
+
+        ProductProcessWorkflowDTO missing = multiInputOutputWorkflow();
+        processData(missing, "mix").put("costAllocationMethod", "FIXED_RATIO");
+        processPorts(missing, "mix").forEach(port -> {
+            if ("out-main".equals(port.get("id"))) port.put("fixedCostShare", 100);
+        });
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class, () -> compiler.compile(missing));
+
+        ProductProcessWorkflowDTO unknownMethod = multiInputOutputWorkflow();
+        processData(unknownMethod, "mix").put("costAllocationMethod", "SALES_VALUE");
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class, () -> compiler.compile(unknownMethod));
+    }
+
+    @Test
+    void weightMethodIgnoresLeftoverFixedShares() {
+        ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
+        processData(definition, "mix").put("costAllocationMethod", "WEIGHT");
+        processPorts(definition, "mix").forEach(port -> port.put("fixedCostShare", 70));
+        compiler.compile(definition).portsFor("mix")
+                .forEach(port -> assertEquals(null, port.fixedCostShare(), port.workflowPortId()));
+    }
+
     @Test
     void compilesSelectionGroupsIntoEveryPortSnapshot() {
         ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
