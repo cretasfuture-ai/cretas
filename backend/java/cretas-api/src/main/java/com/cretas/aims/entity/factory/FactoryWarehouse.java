@@ -32,10 +32,10 @@ import org.hibernate.annotations.Where;
         indexes = {
                 @Index(name = "idx_fw_factory", columnList = "factory_id"),
                 @Index(name = "idx_fw_factory_type", columnList = "factory_id,type"),
-        },
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uk_fw_factory_code", columnNames = {"factory_id", "code"})
         }
+        // (factory_id, code) 唯一只管活行: 部分唯一索引 uk_fw_factory_code ... WHERE deleted_at IS NULL,
+        // 只在迁移里 (V20261103_173)。⛔ 不要在这里写回 @UniqueConstraint —— H2 会据此建全量键,
+        // 软删后同编码重建在测试里就撞, 而 prod 不撞 (D-R2-01)。
 )
 @Where(clause = "deleted_at IS NULL")
 public class FactoryWarehouse extends BaseEntity {

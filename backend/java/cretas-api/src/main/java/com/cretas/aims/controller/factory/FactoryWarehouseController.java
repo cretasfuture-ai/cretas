@@ -57,16 +57,18 @@ public class FactoryWarehouseController {
             @PathVariable @NotBlank String factoryId,
             @Valid @RequestBody CreateWarehouseRequest req) {
 
-        // 幂等防呆：同工厂 code 唯一
-        repository.findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, req.getCode())
+        // 幂等防呆：同工厂活行 code 唯一（软删的仓库不占编码，可以按原编码重建）。
+        // 用落库时的同一个值去查：查原值、存 trim 后的值时，" WH-LOG" 会绕过这里撞上 DB 唯一索引变成 500。
+        String code = req.getCode().trim();
+        repository.findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, code)
                 .ifPresent(existing -> {
-                    throw new BusinessException(409, "仓库 " + req.getCode() + " 已存在，id=" + existing.getId())
+                    throw new BusinessException(409, "仓库 " + code + " 已存在，id=" + existing.getId())
                             .withCode("WAREHOUSE_CODE_DUPLICATE");
                 });
 
         FactoryWarehouse w = new FactoryWarehouse();
         w.setFactoryId(factoryId);
-        w.setCode(req.getCode().trim());
+        w.setCode(code);
         w.setName(req.getName().trim());
         w.setType(req.getType());
         w.setIsActive(req.getIsActive() != null ? req.getIsActive() : Boolean.TRUE);
@@ -143,7 +145,7 @@ public class FactoryWarehouseController {
 
         for (WarehouseSpec spec : specs) {
             boolean exists = repository
-                    .findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, spec.getCode())
+                    .findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, spec.getCode().trim())
                     .isPresent();
             if (exists) {
                 skipped++;
