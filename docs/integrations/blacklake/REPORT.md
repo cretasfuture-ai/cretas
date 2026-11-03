@@ -2,6 +2,8 @@
 
 日期：2026-11-03。来源为用户提供并确认属于六膳门的黑湖正式账号；目的为本机全新 BLACKLAKE_POC_TEST 隔离测试租户。没有绑定既有 Cretas 工厂，没有生产 Cretas 写入、迁移或发布，没有黑湖业务写请求。
 
+交付：实现 commit 694dcab7ad 已推送，[草稿 PR #1390](https://github.com/cretasfuture-ai/cretas/pull/1390)。未合并；本地测试不代表 CI 已完成。此后只更新文档时，复用已冻结源码的测试证据。
+
 数据期间：2026-10-27 00:00:00 至 2026-11-03 00:00:00，Asia/Shanghai；BI 使用左闭右开区间。工程 Base SHA：090f5f7140380e2a2f3a67295fef7bde615f0716。验证内容哈希及最终测试结果见 VALIDATION.json。
 
 ## 接口验证
