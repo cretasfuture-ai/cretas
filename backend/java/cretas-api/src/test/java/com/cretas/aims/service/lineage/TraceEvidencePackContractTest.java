@@ -260,6 +260,36 @@ class TraceEvidencePackContractTest {
     }
 
     @Test
+    @DisplayName("🔴 原料批没有供应商 (客供料) ⇒ 不炸, 无证就报缺 (prod 11-03 F006 酱牛肉 500 的回归)")
+    void rawWithoutSupplierDoesNotCrash() {
+        raw.setSupplierId(null);
+        raw.setQualityCertificate(null);
+
+        TraceEvidencePackService.Pack p = pack();
+
+        assertThat(p.rawMaterials()).singleElement().satisfies(r -> {
+            assertThat(r.supplierName()).isNull();
+            assertThat(r.supplierQualifications()).isEmpty();
+        });
+        assertThat(p.missingEvidence()).extracting(TraceEvidencePackService.MissingEvidence::kind)
+                .containsExactly(TraceEvidencePackService.RAW_CERTIFICATE_MISSING);
+    }
+
+    @Test
+    @DisplayName("CCP 记录上没有 checkpointId ⇒ 不炸, 那一行 CCP 编码留空")
+    void ccpRecordWithoutCheckpointDoesNotCrash() {
+        ccpRecords.clear();
+        HaccpMonitoringRecord orphan = ccp(false, null);
+        orphan.setCheckpointId(null);
+        ccpRecords.add(orphan);
+
+        TraceEvidencePackService.Pack p = pack();
+
+        assertThat(p.ccpRecords()).singleElement()
+                .extracting(TraceEvidencePackService.CcpRecord::checkpointCode).isNull();
+    }
+
+    @Test
     @DisplayName("批号不存在 ⇒ 404, 不给空包")
     void unknownBatchIs404() {
         assertThatThrownBy(() -> service.buildByBatchNumber(FACTORY, "NOPE"))
