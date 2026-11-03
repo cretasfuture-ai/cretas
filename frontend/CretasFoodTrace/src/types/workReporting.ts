@@ -15,6 +15,8 @@ export interface WorkReportSubmitRequest {
   processCategory?: string;
   productName?: string;
   outputQuantity?: number;
+  /** 产量的计量单位 (批次单位); 不传 = 服务端按批次单位处理并在响应 unitAssumed 标出 */
+  unit?: string;
   goodQuantity?: number;
   defectQuantity?: number;
   totalWorkMinutes?: number;

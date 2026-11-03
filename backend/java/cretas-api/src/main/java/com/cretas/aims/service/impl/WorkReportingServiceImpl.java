@@ -15,6 +15,11 @@ import com.cretas.aims.repository.BatchWorkSessionRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitConversionContext;
+import com.cretas.aims.service.unit.UnitConversionResult;
+import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.unit.UnitUsageScene;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -25,6 +30,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -39,6 +45,7 @@ public class WorkReportingServiceImpl {
     private final ProductionBatchRepository productionBatchRepository;
     private final UserRepository userRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final UnitContractService unitContractService;
 
     /**
      * 提交报工
@@ -78,6 +85,19 @@ public class WorkReportingServiceImpl {
         // 跨租户校验 (edge-case 审计 2026-06-24 抓): batchId 须属于当前工厂, 否则别厂 batchId 会被
         // 接受并持久化一条跨租户关联的报工行 + 返 200 (虽 updateBatchActualQuantity 有 findByIdAndFactoryId
         // 防住别厂批次产量被改, 但仍产生垃圾行+误导成功)。提前校验 → 404, 与项目跨租户红线一致。
+        // 产量单位: 手填单位必须是系统认得的单位, 认不出直接拒绝 (不猜); 没带单位 = 老客户端, 按批次单位处理并标出
+        String requestedUnit = null;
+        if (request.getUnit() != null && !request.getUnit().isBlank()) {
+            UnitNormalizationResult norm = unitContractService.normalize(factoryId, request.getUnit());
+            if (norm == null || !norm.recognized()) {
+                throw new BusinessException(400, "不认识的计量单位: " + request.getUnit())
+                        .withHint("请从单位列表里选择, 或先在单位管理里登记该单位").withHintTarget("unit");
+            }
+            requestedUnit = unitContractService.storageUnit(factoryId, request.getUnit());
+        }
+        BigDecimal batchOutput = request.getOutputQuantity();
+        String batchUnit = null;
+        boolean unitAssumed = requestedUnit == null;
         if (request.getBatchId() != null) {
             com.cretas.aims.entity.ProductionBatch reportBatch = productionBatchRepository
                     .findByIdAndFactoryId(request.getBatchId(), factoryId)
@@ -95,6 +115,10 @@ public class WorkReportingServiceImpl {
                         .withHint("已完工/已取消的批次不能再报工");
             }
             // null status = 旧数据/迁移遗留 (status 列历史未设), 放行交下游处理, 与 YieldReport 向后兼容口径一致。
+            batchUnit = reportBatch.getUnit();
+            if (request.getOutputQuantity() != null && !unitAssumed && batchUnit != null && !batchUnit.isBlank()) {
+                batchOutput = toBatchUnit(factoryId, reportBatch, request.getOutputQuantity(), requestedUnit, batchUnit);
+            }
         }
 
         // 单元B (F006 REQ-17): 防重提交改为 5 分钟窗口 — 只拦 double-click, 不再封锁同日累加。
@@ -150,10 +174,13 @@ public class WorkReportingServiceImpl {
 
         // 如果关联批次且有产量，更新批次实际产量
         if (request.getBatchId() != null && request.getOutputQuantity() != null) {
-            updateBatchActualQuantity(factoryId, request.getBatchId(), request.getOutputQuantity());
+            updateBatchActualQuantity(factoryId, request.getBatchId(), batchOutput);
         }
 
-        return toResponse(report);
+        WorkReportResponse response = toResponse(report);
+        response.setUnit(batchUnit != null ? batchUnit : requestedUnit);
+        response.setUnitAssumed(unitAssumed && request.getOutputQuantity() != null);
+        return response;
     }
 
     /**
@@ -373,6 +400,20 @@ public class WorkReportingServiceImpl {
     }
 
     // --- private helpers ---
+
+    /** 把报工产量换成批次单位; 换不了就拒绝 (不猜, 不原样累加)。 */
+    private BigDecimal toBatchUnit(String factoryId, ProductionBatch batch, BigDecimal quantity,
+                                   String fromUnit, String batchUnit) {
+        UnitConversionResult result = unitContractService.convert(quantity, new UnitConversionContext(
+                factoryId, batch.getProductTypeId(), fromUnit, batchUnit, LocalDateTime.now(),
+                UnitUsageScene.PRODUCTION, 6, RoundingMode.HALF_UP));
+        if (result == null || !result.succeeded()) {
+            String why = result == null || result.message() == null ? "" : " (" + result.message() + ")";
+            throw new BusinessException(400, "报工单位「" + fromUnit + "」无法换算成批次单位「" + batchUnit + "」" + why)
+                    .withHint("请改用批次单位「" + batchUnit + "」报工, 或先登记两个单位之间的换算").withHintTarget("unit");
+        }
+        return result.quantity();
+    }
 
     private void updateBatchActualQuantity(String factoryId, Long batchId, BigDecimal outputQuantity) {
         try {

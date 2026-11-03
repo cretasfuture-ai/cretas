@@ -38,6 +38,11 @@ public class WorkReportResponse {
     private Integer totalWorkers;
     private BigDecimal operationVolume;
 
+    /** 本次产量按哪个单位累计进批次 (批次单位) */
+    private String unit;
+    /** true = 请求没带单位, 系统按批次单位处理 (老客户端) */
+    private Boolean unitAssumed;
+
     private List<Map<String, Object>> hourEntries;
     private List<Map<String, Object>> nonProductionEntries;
 

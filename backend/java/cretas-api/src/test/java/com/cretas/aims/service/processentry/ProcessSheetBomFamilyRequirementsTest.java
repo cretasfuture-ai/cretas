@@ -188,6 +188,66 @@ class ProcessSheetBomFamilyRequirementsTest {
                         org.assertj.core.groups.Tuple.tuple("SPICE", new BigDecimal("0.2")));
     }
 
+    /** 缺口21: 投入单位「只」以前被算成 0kg, 调料被静默跳过 (成本偏低)。 */
+    private void stubSeasonedProcessWithInputUnit(String inputUnit) {
+        stubPinnedFamily(recipe("BOM-A", "SKU-A", "只"));
+        stubLegacyProcess("SKU-A");
+        when(seasoningRepository.findByRecipeIdAndWorkProcessIdOrderBySeqAsc("BOM-A", "WP-1"))
+                .thenReturn(List.of(seasoning(101L, "BOM-A", "SALT", "食盐", "10", "SHARED")));
+    }
+
+    private ProcessSheetRowRequest pieceInputRequest() {
+        ProcessSheetRowRequest request = new ProcessSheetRowRequest();
+        request.setProductTypeId("SKU-A");
+        request.setProcessOrder(1);
+        request.setInputQuantity(new BigDecimal("4"));
+        request.setInputUnit("只");
+        request.setOutputs(List.of(output("SKU-A", "只", "4")));
+        return request;
+    }
+
+    @Test
+    void seasoningIsDeductedWhenInputUnitIsConvertibleToKg() throws Throwable {
+        stubSeasonedProcessWithInputUnit("只");
+        com.cretas.aims.service.unit.UnitContractService units =
+                mock(com.cretas.aims.service.unit.UnitContractService.class);
+        when(units.convert(org.mockito.ArgumentMatchers.any(BigDecimal.class),
+                org.mockito.ArgumentMatchers.any(com.cretas.aims.service.unit.UnitConversionContext.class)))
+                .thenReturn(new com.cretas.aims.service.unit.UnitConversionResult(
+                        com.cretas.aims.service.unit.UnitConversionStatus.CONVERTED,
+                        new BigDecimal("2"), "只", "kg", List.of(), null, null, null));
+        ReflectionTestUtils.setField(service, "unitContractService", units);
+
+        assertThat(requirements(pieceInputRequest())).filteredOn(r -> "SEASONING".equals(r.sourceType()))
+                .extracting(ProductionStockAllocationService.AutomaticRequirement::materialTypeId,
+                        ProductionStockAllocationService.AutomaticRequirement::quantity)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("SALT", new BigDecimal("0.02")));
+    }
+
+    @Test
+    void seasoningFailsLoudlyWhenInputUnitCannotBecomeKg() {
+        stubSeasonedProcessWithInputUnit("只");
+        com.cretas.aims.service.unit.UnitContractService units =
+                mock(com.cretas.aims.service.unit.UnitContractService.class);
+        when(units.convert(org.mockito.ArgumentMatchers.any(BigDecimal.class),
+                org.mockito.ArgumentMatchers.any(com.cretas.aims.service.unit.UnitConversionContext.class)))
+                .thenReturn(new com.cretas.aims.service.unit.UnitConversionResult(
+                        com.cretas.aims.service.unit.UnitConversionStatus.PRODUCT_CONVERSION_MISSING,
+                        null, "只", "kg", List.of(), null, null, "缺少产品单重"));
+        ReflectionTestUtils.setField(service, "unitContractService", units);
+
+        Throwable error = assertThrows(Throwable.class, () -> requirements(pieceInputRequest()));
+        assertThat(error).isInstanceOf(BusinessException.class);
+        assertThat(((BusinessException) error).getMessage()).contains("无法换算成千克");
+    }
+
+    @Test
+    void seasoningFailsLoudlyWithoutAnyUnitContractToConvertWith() {
+        stubSeasonedProcessWithInputUnit("只");
+        Throwable error = assertThrows(Throwable.class, () -> requirements(pieceInputRequest()));
+        assertThat(error).isInstanceOf(BusinessException.class);
+    }
+
     /**
      * 客户 2026-07-31 现场: 「成品报工单位与计划固定 BOM 的产出单位不一致 —— 报工单位 袋, BOM 单位 bag」。
      *
