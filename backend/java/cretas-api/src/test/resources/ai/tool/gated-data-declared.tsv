@@ -60,14 +60,14 @@ equipment_status_query	CODES	equipment:read
 equipment_status_update	CODES	equipment:read_write
 equipment_stop	CODES	equipment:read_write
 expense_request_query	CODES	hr:read_write
-finance_dupont	CODES	finance:read,finance:read_write,procurement:price:view
+finance_dupont	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
 finance_invoice_status	CODES	finance:read,finance:read_write,sales:read,sales:read_write
-finance_liquidity	CODES	finance:read,finance:read_write,procurement:price:view
+finance_liquidity	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
 finance_payment_record	CODES	finance:read_write,sales:read_write
-finance_roa	CODES	finance:read,finance:read_write,procurement:price:view
-finance_roe	CODES	finance:read,finance:read_write,procurement:price:view
-finance_solvency	CODES	finance:read,finance:read_write,procurement:price:view
-finance_stats	CODES	finance:read,finance:read_write,procurement:price:view
+finance_roa	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
+finance_roe	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
+finance_solvency	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
+finance_stats	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
 food_sample_create	CODES	quality:read_write
 food_sample_dispose	CODES	quality:read_write
 food_sample_query_pending_dispose	CODES	quality:read,quality:read_write
@@ -106,7 +106,7 @@ order_list	CODES	finance:read,sales:read,sales:read_write
 order_query	CODES	finance:read,sales:read,sales:read_write
 order_today	CODES	finance:read,procurement:read,sales:read,sales:read_write
 overtime_request_query	CODES	hr:read_write
-payment_status	CODES	finance:read,finance:read_write,procurement:price:view
+payment_status	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
 pda_scan_task_generate	CODES	inventory:write,warehouse:read_write
 period_status_query	CODES	finance:read,finance:read_write
 permission_audit	CODES	system:audit
@@ -141,18 +141,18 @@ report_cost_trend_analysis	CODES	analytics:read_write
 report_cost_variance	CODES	finance:read,finance:read_write,procurement:price:view
 report_dashboard_overview	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 report_efficiency	CODES	finance:read,finance:read_write,procurement:price:view
-report_finance	CODES	finance:read,finance:read_write,procurement:price:view
-report_finance_ratio	CODES	finance:read,finance:read_write,procurement:price:view
+report_finance	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
+report_finance_ratio	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
 report_inventory	CODES	finance:read,finance:read_write,procurement:price:view
 report_kpi	CODES	finance:read,finance:read_write,procurement:price:view
 report_mrp_calculation	CODES	finance:read,finance:read_write,procurement:price:view
 report_oee	CODES	finance:read,finance:read_write,procurement:price:view
-report_payment_status	CODES	finance:read,finance:read_write,procurement:price:view
+report_payment_status	CODES	finance:read,finance:read_write,procurement:price:view	ALSO:analytics:read,analytics:read_write
 report_production	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 report_production_weekly_comparison	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 report_quality	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 report_sales	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
-report_sku_gross_margin	CODES	procurement:price:view
+report_sku_gross_margin	CODES	finance:read,finance:read_write
 report_trends	CODES	finance:read,finance:read_write,procurement:price:view
 report_workshop_daily	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 restaurant_arap_payable_query	CODES	finance:read,finance:read_write

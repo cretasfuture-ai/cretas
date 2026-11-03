@@ -214,6 +214,13 @@ public class ReportFinanceTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getAlsoRequiredPermissions() {
-        return java.util.Set.of("analytics:read", "analytics:read_write");
+        return FINANCE_REPORT_SURFACE;
     }
+
+    /**
+     * 财务报表数据 (ReportService#getFinanceReport) 在 App 里出现的模块: 经营分析。读这份数据的工具都另需它,
+     * 与 GET /reports/finance 的 alsoAny 同一组 (GatedDataToolAiPathPermissionTest 按接口推出并比对)。
+     */
+    public static final java.util.Set<String> FINANCE_REPORT_SURFACE =
+            java.util.Set.of("analytics:read", "analytics:read_write");
 }

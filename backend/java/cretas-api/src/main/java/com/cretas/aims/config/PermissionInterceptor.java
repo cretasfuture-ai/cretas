@@ -93,6 +93,13 @@ public class PermissionInterceptor implements HandlerInterceptor {
             return false;
         }
 
+        // 另一组「且」要求 (任一即可), 文案按这一组的模块写
+        String[] alsoAny = annotation.alsoAny();
+        if (alsoAny.length > 0 && !permissionService.hasAnyPermission(user, alsoAny)) {
+            sendPermissionDenied(response, user, alsoAny, annotation);
+            return false;
+        }
+
         return true;
     }
 
