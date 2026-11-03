@@ -44,7 +44,8 @@ public final class LearningContentRules {
                 log.info("原话提到本厂工艺保密产品, 不学: factory={}", factoryId);
                 return false;
             }
-            return !TrainingSampleRules.utteranceHasBlockedContent(text);
+            // 「训练数据过滤」(d) 关着的工厂不按配方参数 / 客户 / 人名关键词拦 (训练授权上面已判)
+            return filter.trainingFilterOff(factoryId) || !TrainingSampleRules.utteranceHasBlockedContent(text);
         } catch (RuntimeException e) {
             log.warn("学习前的保密 / 授权判断失败, 不学: factory={}, error={}", factoryId, e.getClass().getSimpleName());
             return false;

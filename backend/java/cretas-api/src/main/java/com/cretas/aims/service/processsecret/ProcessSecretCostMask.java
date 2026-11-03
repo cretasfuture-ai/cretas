@@ -90,8 +90,11 @@ public class ProcessSecretCostMask {
      * (与 {@link ProcessSecretPayloadScrubber} 的「无权」档一致)。本厂账号只遮金额。
      */
     public boolean quantitiesHidden(String factoryId) {
-        return ProcessSecretPayloadScrubber.degradedLevel(AuthenticatedActor.fromCurrentExecution().orElse(null),
-                factoryId) == ProcessSecretPayloadScrubber.Level.NONE;
+        // 按该厂开关: 「平台看不到配方」(b) 关着时平台账号连数量也能看
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentExecution().orElse(null);
+        ProcessSecretPayloadScrubber.Level level = accessService.degradedLevel(actor, factoryId);
+        if (level == null) level = ProcessSecretPayloadScrubber.degradedLevel(actor, factoryId);
+        return level == ProcessSecretPayloadScrubber.Level.NONE;
     }
 
     /**

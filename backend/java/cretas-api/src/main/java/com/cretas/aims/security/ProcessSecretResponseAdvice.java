@@ -123,7 +123,9 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                 // 本次读过的工艺内容所属工厂也算 (路径上没有 factoryId 的平台接口, 独立审查 #12)
                 || ProcessSecretReadTracker.reads().stream().anyMatch(read -> read.factoryId() != null
                         && !accessService.protectedProductTypeIds(read.factoryId()).isEmpty());
-        if (!anyProtected) {
+        // 工厂级保密配置按每一行的工厂判: 工厂账号的输出只含本厂行 (跨厂隔离闸保证), 快路径照旧;
+        // 平台账号的输出可能含多家工厂的行, 交给 scrubber 逐行按行的工厂判 (不因路径工厂没开保密整份跳过)
+        if (!anyProtected && !actor.isPlatformAdmin()) {
             return body;
         }
         Object payload = body instanceof ApiResponse<?> api ? api.getData() : body;

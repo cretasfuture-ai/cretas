@@ -81,6 +81,24 @@ public class ProcessSecretExternalService {
         this.unitContractService = unitContractService;
     }
 
+    /** 单测直接 new 时当开启; Spring 下由 setter 注入 (没有这个 bean 的切片测试保持全开)。 */
+    private com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy =
+            com.cretas.aims.service.secrecy.FactorySecrecyConfig.allOn();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFactorySecrecyConfig(com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy) {
+        this.secrecy = secrecy;
+    }
+
+    /**
+     * 该产品此刻是否按 B 档 (客户侧保管) 处理: 策略是 CUSTOMER_HELD、且该厂「客户侧保管」(e) 开着。
+     * e 与工艺保密 (a) 无关 (Steve 2026-11-03)。e 关时这些产品恢复云端收发完整工艺, 不再登记工艺包 / 接收客户侧结果。
+     */
+    boolean customerHeldInEffect(String factoryId, ProcessSecretPolicy policy) {
+        return policy != null && policy.getStorageMode() == ProcessSecretStorageMode.CUSTOMER_HELD
+                && secrecy.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.CUSTOMER_HELD);
+    }
+
     public record PackageRequest(String productTypeId, String packageRef, String packageVersion,
                                  String outputUnit, String executorPublicKey) { }
 
@@ -108,6 +126,9 @@ public class ProcessSecretExternalService {
         policyService.requireOwner(actor, factoryId, policy);
         if (policy.getStorageMode() != ProcessSecretStorageMode.CUSTOMER_HELD) {
             throw new BusinessException(409, "只有「核心工艺不入云」的产品才能登记客户侧工艺包").withHint("先在保密设置里把该产品切换为「核心工艺不入云」，再登记工艺包");
+        }
+        if (!customerHeldInEffect(factoryId, policy)) {
+            throw new BusinessException(409, "本厂未开启「客户侧保管」，不登记客户侧工艺包").withHint("由平台在「工厂管理」里开启「客户侧保管」后再登记");
         }
         requireRef(request.packageRef(), "packageRef");
         requireRef(request.packageVersion(), "packageVersion");
@@ -180,8 +201,9 @@ public class ProcessSecretExternalService {
             throw new BusinessException(409, "工艺包版本已停用").withHint("请执行端改用当前有效的工艺包版本");
         }
         // 产品已不再是「客户侧保存」(改回 A 档或关闭保密) 时, 旧包的结果一律不收
+        // 「客户侧保管」(e) 关着时同样不收 (按该厂判)
         boolean stillCustomerHeld = policyRepository.findByFactoryIdAndProductTypeId(factoryId, pkg.getProductTypeId())
-                .map(p -> p.getStorageMode() == ProcessSecretStorageMode.CUSTOMER_HELD).orElse(false);
+                .map(p -> customerHeldInEffect(factoryId, p)).orElse(false);
         if (!stillCustomerHeld) {
             throw new BusinessException(409, "该产品已不是「核心工艺不入云」模式，不再接收客户侧结果").withHint("如需继续接收，请保密负责人把产品切回「核心工艺不入云」");
         }

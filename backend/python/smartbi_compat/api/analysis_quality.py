@@ -816,7 +816,10 @@ async def _factory_quality_dispatch(
 
     now_iso = _java_isoformat(datetime.now())
     summary = _calculate_factory_quality_summary(rows)
-    # 工艺保密: no resolver (internal call, no caller identity) = fail closed.
+    # 工艺保密: no resolver (internal call, no caller identity) = fail closed —
+    # unless the factory has no product-level secrecy in effect (a and e both off; see CostScopeResolver).
+    if cost_resolver is None and factory_id:
+        cost_resolver = process_secret.CostScopeResolver(None, factory_id)
     if cost_resolver is None:
         scope = process_secret.unavailable(process_secret.REASON_NOT_RUN)
     else:

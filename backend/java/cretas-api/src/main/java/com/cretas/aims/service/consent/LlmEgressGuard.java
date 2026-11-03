@@ -18,6 +18,10 @@ import java.util.Set;
  *
  * <p>日志格式固定 {@code LLM egress [site]: redacted N name(s), dropped M field(s)} /
  * {@code LLM egress [site]: refused (原因), not sending}, 原因只有类别、不含原始值。
+ *
+ * <p><b>出外脱敏 (c, 工厂级配置)</b>: 只有「外发工厂已知、且该厂 c 关着」才原样发出
+ * ({@code LLM egress [site]: passthrough (redaction off for factory)})。工厂不明照旧拒发, {@link #analysing} 的
+ * 工厂绑定照旧生效; 读不到配置按开启 (照常脱敏)。⛔ 不要在这里以外的地方判 c。</p>
  */
 @Slf4j
 @Component
@@ -25,11 +29,38 @@ public class LlmEgressGuard {
 
     private final ObjectMapper objectMapper;
     private final ProcessSecretSampleFilter processSecretSampleFilter;
+    /** 单测直接 new / {@link #standalone()} 时当开启 (照常脱敏); Spring 下由 setter 注入 (没有这个 bean 的切片测试保持全开)。 */
+    private com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy =
+            com.cretas.aims.service.secrecy.FactorySecrecyConfig.allOn();
 
     @Autowired
     public LlmEgressGuard(ObjectMapper objectMapper, ProcessSecretSampleFilter processSecretSampleFilter) {
         this.objectMapper = objectMapper;
         this.processSecretSampleFilter = processSecretSampleFilter;
+    }
+
+    @Autowired(required = false)
+    public void setFactorySecrecyConfig(com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy) {
+        this.secrecy = secrecy;
+    }
+
+    /**
+     * 这次外发能否原样发出: 外发工厂已知 (显式 / {@link #analysing} / 登录身份, 平台账号不按 token 猜)
+     * 且该厂「出外脱敏」(c) 关着。工厂不明 → false (后面照常走脱敏, 由 {@link #protectedNames} 拒发)。
+     */
+    boolean redactionOff(String factoryId) {
+        String factory = egressFactory(factoryId);
+        return factory != null
+                && !secrecy.isOn(factory, com.cretas.aims.service.secrecy.SecrecyItem.EGRESS_REDACTION);
+    }
+
+    private LlmEgressRedactor.Result passThrough(String site, Object data, List<String> texts, boolean recordOnly) {
+        LlmEgressRedactor.Result r = LlmEgressRedactor.passThrough(objectMapper, data, texts, recordOnly);
+        if (!r.refused()) {
+            log.info("LLM egress [{}]: passthrough (redaction off for factory)", site);
+            return r;
+        }
+        return logged(site, r);
     }
 
     /** 没有 Spring 容器时 (单测直接 new 被测类) 的默认实例: 不查保密产品名, 其余照常脱敏。 */
@@ -42,6 +73,7 @@ public class LlmEgressGuard {
     /** 结构化结果 (查询记录 / 工具输出)。 */
     public LlmEgressRedactor.Result structured(String site, String factoryId, Object data) {
         try {
+            if (redactionOff(factoryId)) return passThrough(site, data, List.of(), false);
             LlmEgressRedactor.Result r = new LlmEgressRedactor(objectMapper).redact(data, protectedNames(factoryId));
             return logged(site, r);
         } catch (RuntimeException e) {
@@ -57,6 +89,7 @@ public class LlmEgressGuard {
     public LlmEgressRedactor.Result texts(String site, String factoryId,
                                           Map<String, LlmEgressRedactor.Party> knownParties, List<String> texts) {
         try {
+            if (redactionOff(factoryId)) return passThrough(site, null, texts, false);
             LlmEgressRedactor.Result r = new LlmEgressRedactor(objectMapper)
                     .redactTexts(texts, knownParties, protectedNames(factoryId), true);
             return logged(site, r);
@@ -78,6 +111,7 @@ public class LlmEgressGuard {
                                                     Map<String, LlmEgressRedactor.Party> knownParties,
                                                     List<String> texts) {
         try {
+            if (redactionOff(factoryId)) return passThrough(site, record, texts, true);
             LlmEgressRedactor.Result r = new LlmEgressRedactor(objectMapper)
                     .redactTextsWithRecord(record, texts, knownParties, protectedNames(factoryId));
             return logged(site, r);
@@ -90,6 +124,7 @@ public class LlmEgressGuard {
     public LlmEgressRedactor.Result combined(String site, String factoryId, Object data,
                                              Map<String, LlmEgressRedactor.Party> knownParties, List<String> texts) {
         try {
+            if (redactionOff(factoryId)) return passThrough(site, data, texts, false);
             LlmEgressRedactor.Result r = new LlmEgressRedactor(objectMapper)
                     .redact(data, texts, knownParties, protectedNames(factoryId), true);
             return logged(site, r);
@@ -111,6 +146,8 @@ public class LlmEgressGuard {
      */
     public LlmEgressRedactor.Result utterance(String site, String... texts) {
         try {
+            // 出外脱敏 (c) 关着的已知工厂: 号码也原样发; 工厂不明照旧只抹号码 (这条路本来就不因没有工厂而拒绝)
+            if (redactionOff(null)) return passThrough(site, null, Arrays.asList(texts), false);
             // 已知例外 (Steve 2026-10-29): 意图识别保留原名, 保密产品名单故意为空 —— 见上方 javadoc
             LlmEgressRedactor.Result r = new LlmEgressRedactor(objectMapper)
                     .redactTexts(Arrays.asList(texts), Map.of(), Set.of(), false);

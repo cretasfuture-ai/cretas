@@ -42,9 +42,36 @@ public class ProcessSecretSampleFilter {
         this.productTypeRepository = productTypeRepository;
     }
 
-    /** 文本是否提到本厂某个工艺保密产品。 */
+    /**
+     * 文本是否提到本厂某个工艺保密产品 (训练 / 学习用)。该厂「训练数据过滤」(d) 关着时一律 false
+     * (训练授权是另一套, 由调用方照常判)。
+     */
     public boolean mentionsProtectedProduct(String factoryId, String... texts) {
+        if (trainingFilterOff(factoryId)) return false;
         return mentionsAny(protectedProductNames(factoryId), texts);
+    }
+
+    /** 单测直接 new 时当开启; Spring 下由 setter 注入 (没有这个 bean 的切片测试保持全开)。 */
+    private com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy =
+            com.cretas.aims.service.secrecy.FactorySecrecyConfig.allOn();
+
+    @Autowired(required = false)
+    public void setFactorySecrecyConfig(com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy) {
+        this.secrecy = secrecy;
+    }
+
+    /**
+     * 该厂「训练数据过滤」(d) 是否<b>关着</b> (按样本所属的工厂; 工厂不明 / 读不到 → 开着 → false)。关着时不按保密产品名
+     * 和配方参数 / 客户 / 人名关键词剔除该厂的训练样本; 训练授权 (同意 / 撤回) 不受影响。
+     * 问「关着吗」而不是「开着吗」: 被 mock 的默认 false 落在过滤照常生效那一边。
+     */
+    public boolean trainingFilterOff(String factoryId) {
+        return !secrecy.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.TRAINING_FILTER);
+    }
+
+    /** 平台改了保密配置后清名单缓存 (名单本身不看开关, 清掉只是不留旧状态窗口)。 */
+    public void invalidateNameCache() {
+        nameCache.invalidateAll();
     }
 
     /** 收训练样本前的保密判断结果。只有 {@link #CLEAR} 才能存。 */

@@ -3,8 +3,8 @@ package com.cretas.aims.service.execution;
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.grounding.FactoryNumberProvenance;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
+import com.cretas.aims.service.consent.LlmEgressGuard;
 import com.cretas.aims.service.consent.LlmEgressRedactor;
-import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -63,9 +63,12 @@ public class WorkdeskOutputSummarizer {
     @Autowired(required = false)
     private FactoryNumberProvenance numberProvenance = new FactoryNumberProvenance();
 
-    /** 工艺保密产品名, 用于发给模型前把它们换成代号。测试里两参构造时为 null (视为本厂没有保密产品)。 */
+    /**
+     * 外发统一入口 (保密产品名换代号、出外脱敏开关 c、工厂不明拒发都在里面)。以前这里自己 new 脱敏器,
+     * 绕开了 guard (工厂级保密配置 c 接不到); 测试里两参构造时用不查保密产品名的默认实例。
+     */
     @Autowired(required = false)
-    private ProcessSecretSampleFilter processSecretSampleFilter;
+    private LlmEgressGuard egressGuard = LlmEgressGuard.standalone();
 
     static final String PROVENANCE_SITE = "workdesk-summarizer";
     static final String LLM_UNAVAILABLE_HEADER = " 数据摘要 (LLM 暂不可用, 显示结构化结果):";
@@ -487,8 +490,8 @@ public class WorkdeskOutputSummarizer {
 
     /**
      * Call LLM to summarize resultData into a Chinese natural-language summary.
-     * 发出前先经 {@link LlmEgressRedactor} 脱敏; 脱敏不了、或查保密产品名出错, 就不发。
-     * factoryId 为 null (没有工厂上下文) 时没有「本厂保密产品」可查, 只做通用脱敏。
+     * 发出前先经 {@link LlmEgressGuard#structured} 脱敏; 脱敏不了、查保密产品名出错、或不知道是哪家工厂, 就不发。
+     * 该厂「出外脱敏」(c) 关着时由 guard 原样放行。
      */
     private Attempt tryLlmSummarize(Object resultData, IntentExecuteResponse response, String factoryId) {
         if (resultData == null) {
@@ -496,9 +499,7 @@ public class WorkdeskOutputSummarizer {
         }
         LlmEgressRedactor.Result redacted;
         try {
-            Set<String> protectedNames = processSecretSampleFilter == null || factoryId == null
-                    ? Set.of() : processSecretSampleFilter.protectedProductNames(factoryId);
-            redacted = new LlmEgressRedactor(objectMapper).redact(stripUnderscoreKeys(resultData), protectedNames);
+            redacted = egressGuard.structured(PROVENANCE_SITE, factoryId, stripUnderscoreKeys(resultData));
         } catch (Exception e) {
             log.warn("WorkdeskOutputSummarizer: redaction failed ({}), not sending to LLM", e.getClass().getSimpleName());
             return Attempt.REFUSED;

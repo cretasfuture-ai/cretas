@@ -14,6 +14,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
+from common import factory_secrecy
 from smartbi import config
 from . import details
 from .newstock_buckets import CONTRACT_KEY, prepare_rows as prepare_stock_rows
@@ -386,9 +387,12 @@ async def _load_impl(context_id: Any, owner: Any, auth_request: Any = None):
     if not column_values:
         column_values = list(prices)
     manufacturing_price = any(cost_authorization.is_manufacturing_cost_column(c) for c in column_values)
-    if manufacturing_price and cost_guard is None:
+    # 工厂级保密配置: 该厂「工艺保密」(a) 与「客户侧保管」(e) 都关着 = 没有生效的产品级保密, 旧快照 / 成本授权证明
+    # 不再要求 (读不到配置按开启, 照旧要求)
+    secrecy_inert = await factory_secrecy.process_secret_inert(trusted[0])
+    if manufacturing_price and cost_guard is None and not secrecy_inert:
         raise details.DetailError(403, "旧详情快照缺少成本授权证明，请重新分析")
-    if cost_guard is not None:
+    if cost_guard is not None and not secrecy_inert:
         if auth_request is None:
             raise details.DetailError(403, "当前请求缺少成本授权")
         guard_ids = cost_guard.get("productIds", [])

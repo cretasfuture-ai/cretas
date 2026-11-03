@@ -46,7 +46,8 @@ import static org.mockito.Mockito.when;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EntityScan("com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-@Import({FactoryFeatureMenuWriteLock.class, PlatformFactoryMenuService.class, FeatureConfigController.class, ModuleSwitchService.class})
+@Import({FactoryFeatureMenuWriteLock.class, PlatformFactoryMenuService.class, FeatureConfigController.class, ModuleSwitchService.class,
+        com.cretas.aims.service.secrecy.FactorySecrecyConfig.class})
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
 class PlatformFactoryMenuConcurrencyPostgresContractTest {
