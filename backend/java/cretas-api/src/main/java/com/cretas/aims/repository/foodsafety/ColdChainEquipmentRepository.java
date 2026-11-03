@@ -27,4 +27,16 @@ public interface ColdChainEquipmentRepository extends JpaRepository<ColdChainEqu
 
     /** 唯一性 check (R4 幂等). */
     boolean existsByFactoryIdAndEquipmentCode(String factoryId, String equipmentCode);
+
+    /** 缺口 15: 换库位时锁住设备行, 两个并发的「换库」不会各开一条新时段。 */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT e FROM ColdChainEquipment e WHERE e.id = :id AND e.factoryId = :factoryId")
+    Optional<ColdChainEquipment> findByIdAndFactoryIdForUpdate(
+            @org.springframework.data.repository.query.Param("id") Long id,
+            @org.springframework.data.repository.query.Param("factoryId") String factoryId);
+
+    Optional<ColdChainEquipment> findByIdAndFactoryId(Long id, String factoryId);
+
+    List<ColdChainEquipment> findByFactoryIdOrderByEquipmentCodeAsc(String factoryId);
 }
