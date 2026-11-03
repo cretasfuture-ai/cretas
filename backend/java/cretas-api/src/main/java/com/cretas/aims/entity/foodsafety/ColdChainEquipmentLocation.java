@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.time.LocalDateTime;
@@ -28,6 +29,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "cold_chain_equipment_locations")
 @Where(clause = "deleted_at IS NULL")
+@SQLDelete(sql = "UPDATE cold_chain_equipment_locations SET deleted_at = NOW() WHERE id = ?")
 public class ColdChainEquipmentLocation extends BaseEntity {
 
     @Id

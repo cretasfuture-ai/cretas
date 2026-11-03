@@ -10,14 +10,13 @@ import com.cretas.aims.entity.foodsafety.ColdChainEquipment;
 import com.cretas.aims.entity.foodsafety.ColdChainEquipmentLocation;
 import com.cretas.aims.entity.foodsafety.ColdChainExcursionHold;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
-import com.cretas.aims.entity.inventory.WarehouseTransferMovement;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.foodsafety.ColdChainAlertRepository;
-import com.cretas.aims.repository.foodsafety.ColdChainBatchStayRepository;
+import com.cretas.aims.repository.foodsafety.ColdChainBatchStayQueries;
 import com.cretas.aims.repository.foodsafety.ColdChainEquipmentLocationRepository;
 import com.cretas.aims.repository.foodsafety.ColdChainEquipmentRepository;
 import com.cretas.aims.repository.foodsafety.ColdChainExcursionHoldRepository;
@@ -91,7 +90,7 @@ public class ColdChainBatchExposureService {
     private final ColdChainAlertRepository alertRepo;
     private final ColdChainTempReadingRepository readingRepo;
     private final ColdChainExcursionHoldRepository holdRepo;
-    private final ColdChainBatchStayRepository stayRepo;
+    private final ColdChainBatchStayQueries stayRepo;
     private final FactoryWarehouseRepository warehouseRepo;
     private final MaterialBatchRepository materialBatchRepo;
     private final FinishedGoodsBatchRepository finishedGoodsRepo;
@@ -264,9 +263,10 @@ public class ColdChainBatchExposureService {
         Excursion ex = ColdChainExposureCalculator.excursionAround(readings, eq.getTargetTempMin(),
                         eq.getTargetTempMax(), alert.getAlertTime())
                 .orElseThrow(() -> new BusinessException(409,
-                        "这条告警前后的温度读数里找不到超出 " + eq.getTargetTempMin() + "~" + eq.getTargetTempMax()
-                                + eq.getUnit() + " 的读数，算不出超温时段，也就列不出受影响批次")
-                        .withCode(CODE_NO_EXCURSION));
+                        "这条告警前后的温度读数里找不到超出目标区间 " + eq.getTargetTempMin() + "~" + eq.getTargetTempMax()
+                                + " 的读数，算不出超温时段，也就列不出受影响批次")
+                        .withCode(CODE_NO_EXCURSION)
+                        .withHint("请检查这台设备的温度读数是否已上传，或确认告警是否为误报"));
 
         List<LocationSpan> spans = locationRepo.findByFactoryIdAndEquipmentIdOrderByEffectiveFromAsc(factoryId, eq.getId())
                 .stream().map(l -> new LocationSpan(l.getWarehouseId(), l.getEffectiveFrom(), l.getEffectiveTo())).toList();
@@ -383,7 +383,8 @@ public class ColdChainBatchExposureService {
             AffectedBatch row = affected.get(key(t.targetType(), t.targetId()));
             if (row == null) {
                 throw new BusinessException(409, "批次 " + t.targetId() + " 不在这条告警的受影响批次里，不能从这里转质检")
-                        .withCode(CODE_NOT_AFFECTED);
+                        .withCode(CODE_NOT_AFFECTED)
+                        .withHint("请刷新受影响批次表后重新勾选；其他批次请到「质检记录」处理");
             }
             if (heldAlready.contains(key(t.targetType(), t.targetId()))) {
                 out.add(new HoldOutcome(t.targetType(), t.targetId(), row.batchNumber(), "ALREADY_HELD", "这条告警已经把它转过质检"));
@@ -511,7 +512,7 @@ public class ColdChainBatchExposureService {
         if (mbs.isEmpty()) return out;
         Set<String> ids = mbs.stream().map(MaterialBatch::getId).collect(Collectors.toSet());
         merge(out, stayRepo.lastConsumptionAt(factoryId, ids));
-        merge(out, stayRepo.lastTransferDispatchAt(factoryId, WarehouseTransferMovement.Kind.DISPATCH, ids));
+        merge(out, stayRepo.lastTransferDispatchAt(factoryId, ids));
         return out;
     }
 

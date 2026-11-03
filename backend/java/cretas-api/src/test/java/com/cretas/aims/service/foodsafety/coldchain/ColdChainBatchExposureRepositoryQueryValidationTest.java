@@ -13,7 +13,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.repository.foodsafety.ColdChainAlertRepository;
-import com.cretas.aims.repository.foodsafety.ColdChainBatchStayRepository;
+import com.cretas.aims.repository.foodsafety.ColdChainBatchStayQueries;
 import com.cretas.aims.repository.foodsafety.ColdChainEquipmentLocationRepository;
 import com.cretas.aims.repository.foodsafety.ColdChainEquipmentRepository;
 import com.cretas.aims.repository.foodsafety.ColdChainExcursionHoldRepository;
@@ -68,6 +68,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
+@org.springframework.context.annotation.Import(ColdChainBatchStayQueries.class)
 @DisplayName("温度关联批次: 超温 02:00–05:00 → 受影响批次 / 暴露时长 / 转质检")
 class ColdChainBatchExposureRepositoryQueryValidationTest {
 
@@ -80,7 +81,7 @@ class ColdChainBatchExposureRepositoryQueryValidationTest {
     @Autowired private ColdChainAlertRepository alertRepo;
     @Autowired private ColdChainTempReadingRepository readingRepo;
     @Autowired private ColdChainExcursionHoldRepository holdRepo;
-    @Autowired private ColdChainBatchStayRepository stayRepo;
+    @Autowired private ColdChainBatchStayQueries stayRepo;
     @Autowired private FactoryWarehouseRepository warehouseRepo;
     @Autowired private MaterialBatchRepository materialBatchRepo;
     @Autowired private FinishedGoodsBatchRepository finishedGoodsRepo;

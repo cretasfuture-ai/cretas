@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -23,6 +24,7 @@ import org.hibernate.annotations.Where;
 @Entity
 @Table(name = "cold_chain_excursion_holds")
 @Where(clause = "deleted_at IS NULL")
+@SQLDelete(sql = "UPDATE cold_chain_excursion_holds SET deleted_at = NOW() WHERE id = ?")
 public class ColdChainExcursionHold extends BaseEntity {
 
     public static final class TargetType {
