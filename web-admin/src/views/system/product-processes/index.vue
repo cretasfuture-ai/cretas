@@ -13,12 +13,11 @@ import {
   deleteProductWorkProcess,
   batchSortProductWorkProcesses,
   updateProductWorkProcess,
-  updateWorkProcess,
   getProductWorkProcessRecommendation,
   type WorkProcessItem,
   type ProductWorkProcessItem,
   type RecommendedWorkProcess,
-  type ProcessSheetCustomFieldDef
+  type CustomFieldsTarget
 } from '@/api/processProduction';
 import { getOperatorUsers } from '@/api/factory';
 import {
@@ -26,6 +25,7 @@ import {
   type WorkflowOutputDirectoryEntry
 } from '@/api/productionPlan';
 import ProductProcessWorkflowEditor from './workflow/ProductProcessWorkflowEditor.vue';
+import WorkProcessCustomFieldsDialog from '../work-processes/WorkProcessCustomFieldsDialog.vue';
 import { usePinyinFilter } from './workflow/pinyinInitials';
 import { isRawMaterialOption } from './workflow/rawMaterialCatalog';
 import { canWriteProductProcess } from '../products/productWriteGates';
@@ -1132,90 +1132,28 @@ async function saveCostConfig() {
   }
 }
 
-// ───── G2 工序自定义字段 (config-driven 逐工序电子表格自定义列, 如 波美度/添加剂量/备注) ─────
+// ───── G2 工序自定义字段 (config-driven 逐工序电子表格自定义列, 如 波美度/添加剂量/备注 + 工艺标准) ─────
 // 注意: 编辑的是 WorkProcess.customFieldSchema (共享工序目录字段, 见 WorkProcess.java), 不是
 // 本页其它开关那样的 ProductWorkProcess 链接行字段 —— 因此不走 pendingOps/草稿-保存 流程,
-// 而是直接调 updateWorkProcess(workProcessId, ...) 立即持久化 (与 handleSave 的批量提交解耦)。
+// 弹窗保存即直接 PUT /work-processes/{id} (与 handleSave 的批量提交解耦)。
 // 影响范围: 改动会作用于该 workProcessId 在**所有**产品上的自定义字段列 (工序是跨产品共享的目录项)。
+// 与「工序目录」页共用同一个弹窗: 本页原先自带一份只回写 key/label/type/enabled 的编辑框,
+// 加了工艺标准 (单位/标准值/上下限) 之后在这里保存会把它们静默抹掉, 所以只留一份。
 const customFieldDialogVisible = ref(false);
-const customFieldSaving = ref(false);
-const customFieldEditWorkProcessId = ref('');
-const customFieldEditName = ref('');
-// WorkProcess 更新 DTO 上 processName @NotBlank (必填), 保存自定义字段的 PUT /work-processes/{id}
-// 必须带上该工序已有的 processName, 否则后端 400 "工序名称不能为空" —— 自定义字段根本存不上。
-// processCategory/unit 仅 @Size (可空), 但一并回传已有值 (partial update no-op 覆盖), 与后端
-// update() 语义对齐, 也防将来新增必填字段再次踩坑。均取自 item 的 join 只读字段 (server 行必有)。
-const customFieldEditProcessName = ref('');
-const customFieldEditProcessCategory = ref<string | undefined>(undefined);
-const customFieldEditUnit = ref<string | undefined>(undefined);
-const customFieldForm = ref<ProcessSheetCustomFieldDef[]>([]);
+const customFieldTarget = ref<CustomFieldsTarget | null>(null);
 
-function openCustomFieldConfig(item: any) {
-  customFieldEditWorkProcessId.value = item.workProcessId || '';
-  customFieldEditName.value = item.processName || item.workProcessId;
-  // 捕获该工序已有的必填/身份字段 (随 PUT 一并回传, 满足 WorkProcessDTO @NotBlank processName)
-  customFieldEditProcessName.value = item.processName || '';
-  customFieldEditProcessCategory.value = item.processCategory ?? undefined;
-  customFieldEditUnit.value = item.defaultUnit ?? undefined;
-  customFieldForm.value = Array.isArray(item.customFieldSchema)
-    ? item.customFieldSchema.map((f: any) => ({
-        key: f.key ?? '',
-        label: f.label ?? '',
-        type: (f.type === 'text' || f.type === 'date') ? f.type : 'number',
-        enabled: f.enabled !== false,
-      }))
-    : [];
+function openCustomFieldConfig(item: ProductWorkProcessItem) {
+  customFieldTarget.value = {
+    id: item.workProcessId,
+    processName: item.processName,
+    processCategory: item.processCategory,
+    customFieldSchema: item.customFieldSchema ?? null,
+  };
   customFieldDialogVisible.value = true;
 }
-function addCustomFieldRow() {
-  customFieldForm.value.push({ key: '', label: '', type: 'number', enabled: true });
-}
-function removeCustomFieldRow(i: number) {
-  customFieldForm.value.splice(i, 1);
-}
 
-async function saveCustomFieldConfig() {
-  if (!customFieldEditWorkProcessId.value) return;
-  // 防呆: key/label 必填 + key 唯一 才允许保存 —— 否则存进 schema 会产生前端无法渲染
-  // (缺 label) 或后端校验白名单里出现两个同 key (歧义) 的坏配置。
-  const rows = customFieldForm.value;
-  if (rows.some((r) => !r.key.trim() || !r.label.trim())) {
-    ElMessage.error('每个自定义字段必须填写 key 和显示名称');
-    return;
-  }
-  const keys = rows.map((r) => r.key.trim());
-  if (new Set(keys).size !== keys.length) {
-    ElMessage.error('自定义字段 key 不能重复');
-    return;
-  }
-  // WorkProcess 更新 DTO processName @NotBlank — 必须回传已有工序名, 否则后端 400。
-  // 防呆: 拿不到已有工序名 (理论上不会, server 行都有 join processName) 时明确报错而非发坏请求。
-  const existingProcessName = customFieldEditProcessName.value.trim();
-  if (!existingProcessName) {
-    ElMessage.error('无法获取该工序名称，请刷新页面后重试');
-    return;
-  }
-  customFieldSaving.value = true;
-  try {
-    // 随 customFieldSchema 一并回传该工序已有的 processName (必填) + processCategory/unit (可空,
-    // partial update 语义下等于 no-op 覆盖), 满足 WorkProcessDTO @Valid 校验, 不改动其它字段。
-    const payload: Partial<WorkProcessItem> & { customFieldSchema: ProcessSheetCustomFieldDef[] } = {
-      processName: existingProcessName,
-      customFieldSchema: rows.map((r) => ({
-        key: r.key.trim(), label: r.label.trim(), type: r.type, enabled: r.enabled,
-      })),
-    };
-    if (customFieldEditProcessCategory.value != null) payload.processCategory = customFieldEditProcessCategory.value;
-    if (customFieldEditUnit.value != null) payload.unit = customFieldEditUnit.value;
-    await updateWorkProcess(factoryId.value, customFieldEditWorkProcessId.value, payload);
-    ElMessage.success('自定义字段已保存（逐工序录入将显示新增列）');
-    customFieldDialogVisible.value = false;
-    await loadLinkedProcesses(); // 重新拉取 join 后的 customFieldSchema
-  } catch (e) {
-    handleCatchError(e, '保存自定义字段失败');
-  } finally {
-    customFieldSaving.value = false;
-  }
+async function onCustomFieldsSaved() {
+  await loadLinkedProcesses(); // 重新拉取 join 后的 customFieldSchema
 }
 </script>
 
@@ -1658,27 +1596,14 @@ async function saveCustomFieldConfig() {
       </template>
     </el-dialog>
 
-    <!-- G2 工序自定义字段 dialog (config-driven 逐工序电子表格自定义列) -->
-    <el-dialog v-model="customFieldDialogVisible" :title="`自定义字段 — ${customFieldEditName}`" width="620px">
-      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px"
-        title="为该工序增加自定义录入列 (如波美度/添加剂量/备注)。逐工序电子表格录入时会显示对应输入框; 停用后列隐藏, 已录历史值不丢失。工序为跨产品共享目录, 改动对所有使用该工序的产品生效。" />
-      <div v-for="(row, i) in customFieldForm" :key="i" style="display:flex; gap:8px; margin-bottom:8px; align-items:center">
-        <el-input v-model="row.key" placeholder="字段 key (英文, 如 baume)" style="width:170px" />
-        <el-input v-model="row.label" placeholder="显示名称 (如 波美度)" style="width:150px" />
-        <el-select v-model="row.type" style="width:100px">
-          <el-option label="数字" value="number" />
-          <el-option label="文本" value="text" />
-          <el-option label="日期" value="date" />
-        </el-select>
-        <el-switch v-model="row.enabled" inline-prompt active-text="启用" inactive-text="停用" />
-        <el-button text type="danger" @click="removeCustomFieldRow(i)">删</el-button>
-      </div>
-      <el-button text type="primary" @click="addCustomFieldRow">+ 添加字段</el-button>
-      <template #footer>
-        <el-button @click="customFieldDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="customFieldSaving" @click="saveCustomFieldConfig">保存</el-button>
-      </template>
-    </el-dialog>
+    <!-- G2 工序自定义字段 dialog (与工序目录页同一个组件) -->
+    <WorkProcessCustomFieldsDialog
+      v-model="customFieldDialogVisible"
+      :factory-id="factoryId"
+      :work-process="customFieldTarget"
+      :can-write="canWrite"
+      @saved="onCustomFieldsSaved"
+    />
 
     <!-- 从产品复制工序链 dialog -->
     <el-dialog

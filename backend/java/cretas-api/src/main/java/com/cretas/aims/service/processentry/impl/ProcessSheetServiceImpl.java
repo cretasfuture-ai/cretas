@@ -11,6 +11,7 @@ import com.cretas.aims.dto.processentry.ProcessSheetRowResult;
 import com.cretas.aims.dto.processentry.ProcessSheetRowView;
 import com.cretas.aims.dto.processentry.ResolvedEdge;
 import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
+import com.cretas.aims.entity.workprocess.ProcessParamCheck;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
@@ -1221,7 +1222,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
 
         // 5. 映射单个 StepEntry
-        StepEntry step = buildStepEntry(factoryId, req);
+        StepEntry step = buildStepEntry(factoryId, req, workflowConfig);
 
         // 7. 物化
         MaterializeContext ctx = new MaterializeContext(
@@ -1916,7 +1917,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
         // 成品不建 WIP → 无需 material_type_id; 半成品 identity 必须来自本道产出快照。
         String outputMaterialIdentity = one.isFinished() ? null : resolveOutputMaterialIdentity(one);
-        StepEntry step = buildStepEntry(factoryId, one);
+        StepEntry step = buildStepEntry(factoryId, one, workflowConfig);
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
                 planId,
@@ -2784,7 +2785,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
             // DRAFT → 物化: legacy 计划新建批次；Workflow 成品道复用计划已有运行批次。
             String outputMaterialIdentity = resolveOutputMaterialIdentity(req);
-            StepEntry step = buildStepEntry(factoryId, req);
+            StepEntry step = buildStepEntry(factoryId, req, workflowConfig);
             MaterializeContext ctx = new MaterializeContext(
                     factoryId,
                     planId,
@@ -2841,7 +2842,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         consumptionRepo.softDeleteByFactoryIdAndProductionBatchId(factoryId, existing.getBatchId());
         reportRepo.softDeleteByFactoryIdAndBatchId(factoryId, existing.getBatchId());
         String outputMaterialIdentity = resolveOutputMaterialIdentity(req);
-        StepEntry step = buildStepEntry(factoryId, req);
+        StepEntry step = buildStepEntry(factoryId, req, workflowConfig);
         MaterializeContext ctx = new MaterializeContext(
                 factoryId,
                 planId,
@@ -5242,7 +5243,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .orElse(fallback);
     }
 
-    private StepEntry buildStepEntry(String factoryId, ProcessSheetRowRequest req) {
+    private StepEntry buildStepEntry(String factoryId, ProcessSheetRowRequest req,
+                                     WorkflowClerkSheetConfigDTO workflowConfig) {
         StepEntry st = new StepEntry();
         st.setProcessOrder(req.getProcessOrder());
         // 解析真实工序名: req 未带时(前端不传)按 productTypeId+order 反查 product-work-process,
@@ -5290,7 +5292,47 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         st.setPackagingDetail(req.getPackagingDetail());
         // G2: 透传自定义字段值 → materializeBatch 写 YIELD 报工 (命名空间并入 ProductionReport.customFields)
         st.setCustomFields(req.getCustomFields());
+        // 工艺标准参数快照: 按与录入页同一份 schema 判 (Workflow 计划取该道工序描述, legacy 取产品工序链)。
+        if (req.getCustomFields() != null && !req.getCustomFields().isEmpty()) {
+            st.setParamChecks(ProcessParamCheck.evaluate(
+                    resolveCustomFieldSchema(factoryId, req, workflowConfig), req.getCustomFields()));
+        }
         return st;
+    }
+
+    /**
+     * 本道工序的 customFieldSchema —— 与录入页拿到的是同一份:
+     * Workflow 计划取 {@code WorkflowClerkSheetConfigDTO.ProcessDescriptor.customFieldSchema}
+     * (按 processOrder 定位; 同序号对上多道工序时不猜, 返回 null), legacy 计划按产品工序链反查 WorkProcess。
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> resolveCustomFieldSchema(String factoryId, ProcessSheetRowRequest req,
+                                                               WorkflowClerkSheetConfigDTO workflowConfig) {
+        if (req.getProcessOrder() == null) {
+            return null;
+        }
+        if (workflowConfig != null && workflowConfig.getProcesses() != null) {
+            List<WorkflowClerkSheetConfigDTO.ProcessDescriptor> matches = workflowConfig.getProcesses().stream()
+                    .filter(p -> req.getProcessOrder().equals(p.getProcessOrder()))
+                    .toList();
+            if (matches.size() > 1 && req.getWorkflowPortId() != null) {
+                // 并行分支同序号: 用本行产出端口区分 (端口 id 在整张图里唯一)。
+                matches = matches.stream()
+                        .filter(p -> p.getOutputs() != null && p.getOutputs().stream()
+                                .anyMatch(o -> req.getWorkflowPortId().equals(o.getWorkflowPortId())))
+                        .toList();
+            }
+            if (matches.size() != 1) {
+                return null;
+            }
+            Object schema = matches.get(0).getCustomFieldSchema();
+            return schema instanceof List<?> list ? (List<Map<String, Object>>) list : null;
+        }
+        if (req.getProductTypeId() == null) {
+            return null;
+        }
+        WorkProcess wp = resolveWorkProcess(factoryId, req.getProductTypeId(), req.getProcessOrder());
+        return wp == null ? null : wp.getCustomFieldSchema();
     }
 
     // ─────────────────────────────────────────────────────────────

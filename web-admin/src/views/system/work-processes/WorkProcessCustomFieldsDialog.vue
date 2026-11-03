@@ -4,8 +4,10 @@ import { ElMessage } from 'element-plus';
 import {
   updateWorkProcess,
   type ProcessSheetCustomFieldDef,
+  type CustomFieldsTarget,
   type WorkProcessItem,
 } from '@/api/processProduction';
+import { parseParamStandard } from '@/utils/processParamCheck';
 
 type CustomFieldType = ProcessSheetCustomFieldDef['type'];
 type DraftFieldType = CustomFieldType | '';
@@ -15,12 +17,22 @@ interface DraftField {
   label: string;
   type: DraftFieldType;
   enabled: boolean;
+  /** 工艺标准参数 (只对数字字段): 输入框原样字符串, 保存时再解析校验。 */
+  unit: string;
+  standardValue: string;
+  min: string;
+  max: string;
+}
+
+function numText(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
 }
 
 const props = withDefaults(defineProps<{
   modelValue: boolean;
   factoryId: string;
-  workProcess: WorkProcessItem | null;
+  /** 只用到这四个字段 —— 产品工序页拿到的是 join 行而不是完整工序目录项, 也能直接复用本弹窗。 */
+  workProcess: CustomFieldsTarget | null;
   canWrite: boolean;
 }>(), {
   canWrite: false,
@@ -55,6 +67,10 @@ function readField(value: ProcessSheetCustomFieldDef | null | undefined): DraftF
     // An unsupported server value stays visibly invalid; it must never become number by default.
     type: isCustomFieldType(source?.type) ? source.type : '',
     enabled: source?.enabled !== false,
+    unit: typeof source?.unit === 'string' ? source.unit : '',
+    standardValue: numText(source?.standardValue),
+    min: numText(source?.min),
+    max: numText(source?.max),
   };
 }
 
@@ -83,7 +99,9 @@ watch(() => props.canWrite, (canWrite) => {
 function addField(): void {
   if (!props.canWrite || saving.value) return;
   validationError.value = '';
-  fields.value.push({ key: '', label: '', type: 'text', enabled: true });
+  fields.value.push({
+    key: '', label: '', type: 'text', enabled: true, unit: '', standardValue: '', min: '', max: '',
+  });
 }
 
 function removeField(index: number): void {
@@ -93,12 +111,21 @@ function removeField(index: number): void {
 }
 
 function validateFields(): ProcessSheetCustomFieldDef[] | null {
-  const schema = fields.value.map(field => ({
-    key: field.key.trim(),
-    label: field.label.trim(),
-    type: field.type,
-    enabled: field.enabled,
-  }));
+  const schema: Array<Omit<ProcessSheetCustomFieldDef, 'type'> & { type: DraftFieldType }> = [];
+  for (const [index, field] of fields.value.entries()) {
+    const standard = parseParamStandard(field);
+    if (standard.error) {
+      validationError.value = `第 ${index + 1} 个字段「${field.label.trim() || field.key.trim()}」：${standard.error}`;
+      return null;
+    }
+    schema.push({
+      key: field.key.trim(),
+      label: field.label.trim(),
+      type: field.type,
+      enabled: field.enabled,
+      ...standard.value,
+    });
+  }
   const invalidIndex = schema.findIndex(field => !field.key || !field.label);
   if (invalidIndex >= 0) {
     validationError.value = `第 ${invalidIndex + 1} 个字段必须填写 key 和显示名称`;
@@ -116,7 +143,7 @@ function validateFields(): ProcessSheetCustomFieldDef[] | null {
   return schema as ProcessSheetCustomFieldDef[];
 }
 
-function buildPayload(row: WorkProcessItem, schema: ProcessSheetCustomFieldDef[]): Partial<WorkProcessItem> {
+function buildPayload(row: CustomFieldsTarget, schema: ProcessSheetCustomFieldDef[]): Partial<WorkProcessItem> {
   return {
     processName: row.processName,
     processCategory: row.processCategory,
@@ -181,8 +208,12 @@ async function save(): Promise<void> {
       :title="validationError"
       data-testid="custom-fields-error"
     />
+    <div class="custom-fields-tip">
+      数字字段可以填工艺标准（单位、标准值、上下限）。录入时会显示标准，超出上下限标红，正式报工前需要确认。
+    </div>
     <div v-if="fields.length === 0" class="custom-fields-empty">尚未配置自定义字段</div>
-    <div v-for="(field, index) in fields" :key="index" class="custom-field-row">
+    <div v-for="(field, index) in fields" :key="index" class="custom-field-item">
+    <div class="custom-field-row">
       <el-input
         v-model="field.key"
         :disabled="!canWrite || saving"
@@ -216,6 +247,37 @@ async function save(): Promise<void> {
         @click="removeField(index)"
       >删除</el-button>
     </div>
+    <div v-if="field.type === 'number'" class="custom-field-standard">
+      <span class="custom-field-standard-title">工艺标准</span>
+      <el-input
+        v-model="field.unit"
+        :disabled="!canWrite || saving"
+        placeholder="单位，如 ℃"
+        :data-testid="`custom-field-unit-${index}`"
+      />
+      <el-input
+        v-model="field.standardValue"
+        :disabled="!canWrite || saving"
+        placeholder="标准值"
+        inputmode="decimal"
+        :data-testid="`custom-field-standard-${index}`"
+      />
+      <el-input
+        v-model="field.min"
+        :disabled="!canWrite || saving"
+        placeholder="下限"
+        inputmode="decimal"
+        :data-testid="`custom-field-min-${index}`"
+      />
+      <el-input
+        v-model="field.max"
+        :disabled="!canWrite || saving"
+        placeholder="上限"
+        inputmode="decimal"
+        :data-testid="`custom-field-max-${index}`"
+      />
+    </div>
+    </div>
     <el-button
       type="primary"
       plain
@@ -240,5 +302,9 @@ async function save(): Promise<void> {
 .custom-fields-context { display: flex; gap: 16px; margin-bottom: 16px; color: var(--el-text-color-primary); }
 .custom-fields-id { color: var(--el-text-color-secondary); }
 .custom-fields-empty { padding: 20px 0; color: var(--el-text-color-secondary); text-align: center; }
-.custom-field-row { display: grid; grid-template-columns: 1fr 1fr 130px 60px 56px; gap: 8px; align-items: center; margin-bottom: 12px; }
+.custom-fields-tip { margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px; }
+.custom-field-item { margin-bottom: 12px; }
+.custom-field-row { display: grid; grid-template-columns: 1fr 1fr 130px 60px 56px; gap: 8px; align-items: center; }
+.custom-field-standard { display: grid; grid-template-columns: 64px 1fr 1fr 1fr 1fr; gap: 8px; align-items: center; margin-top: 6px; padding-left: 12px; }
+.custom-field-standard-title { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

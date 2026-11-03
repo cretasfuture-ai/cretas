@@ -62,6 +62,7 @@ import { isProcessSecretHidden } from '@/utils/processSecretField';
 import { loadHeldBatchNumbers } from '@/api/qcRelease';
 import type { CcpReading } from '@/api/ccp';
 import CcpEntryDialog from './CcpEntryDialog.vue';
+import { checkParam, collectParamDeviations, formatParamStandard } from '@/utils/processParamCheck';
 
 type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
 
@@ -253,6 +254,17 @@ const enabledCustomFields = computed(() =>
 const customFieldCols = computed<ColDef[]>(() =>
   enabledCustomFields.value.map((f) => ({ key: f.key, label: f.label, type: f.type })),
 );
+/** 工艺标准参数: 按 key 找回完整字段定义 (单位/标准值/上下限), 供录入格下方提示与超范围标红。 */
+const customFieldDefByKey = computed(() => new Map(enabledCustomFields.value.map((f) => [f.key, f])));
+function paramStandardText(key: string): string {
+  const def = customFieldDefByKey.value.get(key);
+  return def ? formatParamStandard(def) : '';
+}
+function paramOutOfRange(row: SheetRow, key: string): 'LOW' | 'HIGH' | null {
+  const def = customFieldDefByKey.value.get(key);
+  const status = def ? checkParam(def, row.fields[key]) : null;
+  return status === 'LOW' || status === 'HIGH' ? status : null;
+}
 /** A: 自定义字段列 key 集合 (O(1) 判定, 供列头 `?` info 提示区分自定义列 vs archetype/generic 列)。 */
 const customFieldKeySet = computed(() => new Set(customFieldCols.value.map((c) => c.key)));
 function isCustomFieldCol(key: string): boolean {
@@ -2526,6 +2538,27 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
       ccpReadings = (await ccpDialogRef.value?.collect(checkpoints, label)) ?? null;
       if (!ccpReadings) return;   // 取消 = 不报工
     }
+    // 工艺标准参数: 超出上下限照样能报 (记录的是实际发生的事), 但必须先看到并确认;
+    // 后端按同一判据把当时的标准和判定快照进报工 (ProcessParamCheck)。
+    const deviations = collectParamDeviations(enabledCustomFields.value, row.fields);
+    if (deviations.length > 0) {
+      try {
+        await ElMessageBox.confirm(
+          ['以下工艺参数超出标准范围：', ...deviations.map((d) => `· ${d.text}`), '',
+            '确认按实际值报工吗？超标会随报工记录下来。'].join('\n'),
+          '工艺参数超出标准',
+          {
+            confirmButtonText: '按实际值报工',
+            cancelButtonText: '返回修改',
+            type: 'warning',
+            distinguishCancelAndClose: true,
+            customStyle: { whiteSpace: 'pre-line' },
+          },
+        );
+      } catch {
+        return;
+      }
+    }
     if (isPortOutputMode.value) {
       try {
         await ElMessageBox.confirm(formalSubmitSummary(row), '确认正式报工', {
@@ -3931,6 +3964,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 controls-position="right"
                 :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
                 style="width:160px" size="small" />
+              <div
+                v-if="isCustomFieldCol(col.key) && paramStandardText(col.key)"
+                class="sp-param-hint"
+                :class="{ 'sp-param-hint-bad': paramOutOfRange(row, col.key) }"
+                :data-testid="`custom-field-standard-${col.key}`">
+                <template v-if="paramOutOfRange(row, col.key)">
+                  {{ paramOutOfRange(row, col.key) === 'HIGH' ? '偏高' : '偏低' }} ·
+                </template>
+                {{ paramStandardText(col.key) }}
+              </div>
 
               <el-date-picker
                 v-else-if="col.type === 'date'"
@@ -4540,6 +4583,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     controls-position="right"
                     :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
                     style="width:110px" size="small" />
+                  <div
+                    v-if="col.type === 'number' && isCustomFieldCol(col.key) && paramStandardText(col.key)"
+                    class="sp-param-hint"
+                    :class="{ 'sp-param-hint-bad': paramOutOfRange(row, col.key) }"
+                    :data-testid="`custom-field-standard-${col.key}`">
+                    <template v-if="paramOutOfRange(row, col.key)">
+                      {{ paramOutOfRange(row, col.key) === 'HIGH' ? '偏高' : '偏低' }} ·
+                    </template>
+                    {{ paramStandardText(col.key) }}
+                  </div>
 
                   <!-- date picker (single) -->
                   <el-date-picker
@@ -5315,6 +5368,17 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 }
 
 /* A: 自定义字段列头 `?` info 图标 (轻提示, 不抢占空间) */
+.sp-param-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+.sp-param-hint-bad {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
 .sp-th-custom-hint {
   font-size: 12px;
   color: #c0c4cc;

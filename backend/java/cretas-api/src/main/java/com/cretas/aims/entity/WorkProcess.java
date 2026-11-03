@@ -137,6 +137,8 @@ public class WorkProcess extends BaseEntity {
     /**
      * G2 自定义字段 schema (config-driven 逐工序电子表格自定义列, 如 波美度/添加剂量/备注)。
      * 格式: [{"key":"baume","label":"波美度","type":"number","enabled":true}, ...]。
+     * 数字字段可带工艺标准: {"unit":"℃","standardValue":155,"min":150,"max":160}
+     * (形状规则见 WorkProcessCustomFieldSchema, 报工比对与快照见 ProcessParamCheck)。
      * null = 本工序未开启自定义字段 (逐工序录入不接受任何自定义 key, 保存时校验层拒绝)。
      */
     @Type(JsonType.class)
