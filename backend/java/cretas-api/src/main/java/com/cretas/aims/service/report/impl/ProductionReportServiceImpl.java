@@ -1476,7 +1476,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal priceVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getPriceVariance) : null;
         BigDecimal usageVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getUsageVariance) : null;
         BigDecimal substituteVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getSubstituteVariance) : null;
-        BigDecimal laborVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getLaborVariance) : null;
+        BigDecimal laborVariance = sumOrNull(comparedPlans, PlanCostVarianceDTO::getLaborVariance);
         int partialPlans = (int) comparedPlans.stream().filter(p -> p.getIncomparableItemCount() > 0).count();
         String reportReason = !anyComparable
                 ? (planVariances.isEmpty() ? CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON
@@ -1521,7 +1521,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 BigDecimal prodMaterialVar = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getPriceVariance)
                         .add(sumOf(productPlans, PlanCostVarianceDTO::getUsageVariance))
                         .add(sumOf(productPlans, PlanCostVarianceDTO::getSubstituteVariance)) : null;
-                BigDecimal prodLaborVar = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getLaborVariance) : null;
+                BigDecimal prodLaborVar = sumOrNull(productPlans, PlanCostVarianceDTO::getLaborVariance);
                 BigDecimal bomUnit = productComparable && prodOutput.signum() > 0
                         ? prodStd.divide(prodOutput, 4, RoundingMode.HALF_UP) : null;
 
@@ -1589,6 +1589,12 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private static BigDecimal sumOf(List<PlanCostVarianceDTO> plans,
                                     java.util.function.Function<PlanCostVarianceDTO, BigDecimal> field) {
         return plans.stream().map(field).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /** 一个都没算出来 → null (人工差: 没有任何计划的人工可比时, ⛔ 不报 ¥0)。 */
+    private static BigDecimal sumOrNull(List<PlanCostVarianceDTO> plans,
+                                        java.util.function.Function<PlanCostVarianceDTO, BigDecimal> field) {
+        return plans.stream().map(field).anyMatch(java.util.Objects::nonNull) ? sumOf(plans, field) : null;
     }
 
     /** 差异原因: 由实际算出的分项拼成 (⛔ 不再按 60/30/10 编)。 */

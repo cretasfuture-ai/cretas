@@ -242,7 +242,9 @@ public class PlanCostVarianceService {
             return;
         }
         String unit = mb != null && mb.getQuantityUnit() != null ? mb.getQuantityUnit() : materialUnit(factoryId, materialTypeId);
-        BigDecimal price = c.getUnitPrice() != null ? c.getUnitPrice() : mb == null ? null : mb.getUnitPrice();
+        // 有没有价看领用的那个批次 (与成本内核 actualPriceKnown 同一判据): 批次没单价时领用记录上的 0 不是真价
+        boolean priceKnown = mb == null ? c.getUnitPrice() != null : mb.getUnitPrice() != null;
+        BigDecimal price = !priceKnown ? null : c.getUnitPrice() != null ? c.getUnitPrice() : mb.getUnitPrice();
         BigDecimal quantity = c.getQuantity().multiply(factor);
         MutableUsage usage = agg.computeIfAbsent(materialTypeId, id -> new MutableUsage(id, unit));
         BigDecimal qty = usage.unit == null ? null : convert(quantity, unit, usage.unit);

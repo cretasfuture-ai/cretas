@@ -71,6 +71,11 @@ class PlanCostVarianceServiceContractTest {
         return mb;
     }
 
+    private static MaterialBatch priced(MaterialBatch mb, String unitPrice) {
+        mb.setUnitPrice(new BigDecimal(unitPrice));
+        return mb;
+    }
+
     @Test
     void tracesWipConsumptionBackToRawLeavesProportionally() {
         ProductionBatch finalStep = new ProductionBatch();
@@ -87,7 +92,7 @@ class PlanCostVarianceServiceContractTest {
         when(consumptions.findByProductionBatchIdAndFactoryId(99L, "F006")).thenReturn(List.of(
                 consumption(3, "BEEF-LOT", "BEEF", "120", "10.00")));
         when(materialBatches.findByIdAndFactoryId("BEEF-LOT", "F006")).thenReturn(Optional.of(
-                materialBatch("BEEF-LOT", "BEEF", "PURCHASE", null, null, InventoryOwnership.COMPANY_OWNED)));
+                priced(materialBatch("BEEF-LOT", "BEEF", "PURCHASE", null, null, InventoryOwnership.COMPANY_OWNED), "10.00")));
         when(materials.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
 
         PlanCostVarianceService.ActualSide actual = service.actualUsage("F006", "PLAN", List.of(finalStep));
@@ -97,6 +102,23 @@ class PlanCostVarianceServiceContractTest {
         assertThat(beef.quantity()).as("50/100 × 120").isEqualByComparingTo("60");
         assertThat(beef.amount()).isEqualByComparingTo("600");
         assertThat(actual.customerSupplied()).as("客供料不计我方成本").isEqualTo(1);
+    }
+
+    @Test
+    void unpricedLotMakesTheActualAmountUnknownEvenIfTheConsumptionSaysZero() {
+        // F006 实测 (QA 猪大骨): 批次没有单价, 领用记录上写的是 0 —— 那不是真价, 实际金额是「不知道」
+        ProductionBatch batch = new ProductionBatch();
+        batch.setId(5L);
+        when(consumptions.findByProductionBatchIdAndFactoryId(5L, "F006")).thenReturn(List.of(
+                consumption(1, "BONE-LOT", "BONE", "5", "0")));
+        when(materialBatches.findByIdAndFactoryId("BONE-LOT", "F006")).thenReturn(Optional.of(
+                materialBatch("BONE-LOT", "BONE", "PURCHASE", null, null, InventoryOwnership.COMPANY_OWNED)));
+        when(materials.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
+
+        PlanCostVarianceService.ActualSide actual = service.actualUsage("F006", "PLAN", List.of(batch));
+
+        assertThat(actual.byMaterial().get("BONE").quantity()).isEqualByComparingTo("5");
+        assertThat(actual.byMaterial().get("BONE").amount()).as("⛔ 不是 ¥0").isNull();
     }
 
     @Test
@@ -110,7 +132,7 @@ class PlanCostVarianceServiceContractTest {
         when(consumptions.findByProductionBatchIdAndFactoryId(8L, "F006")).thenReturn(List.of(
                 consumption(2, "WIP", "WIP-TYPE", "80", null)));
         when(materialBatches.findByIdAndFactoryId("BEEF-LOT", "F006")).thenReturn(Optional.of(
-                materialBatch("BEEF-LOT", "BEEF", "PURCHASE", null, null, InventoryOwnership.COMPANY_OWNED)));
+                priced(materialBatch("BEEF-LOT", "BEEF", "PURCHASE", null, null, InventoryOwnership.COMPANY_OWNED), "10.00")));
         when(materialBatches.findByIdAndFactoryId("WIP", "F006")).thenReturn(Optional.of(
                 materialBatch("WIP", "WIP-TYPE", "PRODUCTION_BATCH", "7", "80", InventoryOwnership.COMPANY_OWNED)));
         when(materials.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());

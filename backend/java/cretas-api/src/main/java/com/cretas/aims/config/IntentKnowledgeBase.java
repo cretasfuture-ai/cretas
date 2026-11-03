@@ -3046,6 +3046,19 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("成本这块控制得怎么样", "COST_QUERY");
         phraseToIntentMapping.put("本月成本花了多少", "COST_QUERY");
         phraseToIntentMapping.put("成本跟预算比怎么样", "COST_QUERY");
+
+        // 成本差异 (BOM 理论成本 vs 实际成本) 走只读的成本差异意图。COST_QUERY 会生成并保存 AI 成本分析报告 (写),
+        // 咨询页里被写闸拦下, 成本差异的问题以前全落到它上面走不通 (S6 复测 #1394)。
+        phraseToIntentMapping.put("成本差异", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("成本差异分析", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("成本差异报表", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("实际成本和计划成本差异", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("实际成本与计划成本差异", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("计划成本和实际成本", "REPORT_COST_VARIANCE");
+        // 成本率 = 成本 / 售价 = 1 - 毛利率。成本差异工具不算成本率 (成本结构占比字段恒为空), 按产品给收入、成本、
+        // 毛利率的是 SKU 毛利率 (只读)。
+        phraseToIntentMapping.put("成本率分析", "SKU_GROSS_MARGIN");
+        phraseToIntentMapping.put("成本率", "SKU_GROSS_MARGIN");
         phraseToIntentMapping.put("哪块成本最高", "COST_QUERY");
         phraseToIntentMapping.put("人工成本多少", "COST_QUERY");
         phraseToIntentMapping.put("人工成本", "COST_QUERY");

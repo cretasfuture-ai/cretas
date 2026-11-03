@@ -148,8 +148,9 @@ class PlanCostVarianceCalculatorContractTest {
         assertThat(r.substituteVariance()).isEqualByComparingTo("-90");
         assertThat(r.usageVariance()).isEqualByComparingTo("50");
         assertThat(r.totalVariance()).isEqualByComparingTo("8");
-        assertThat(r.priceVariance().add(r.substituteVariance()).add(r.usageVariance()).add(r.laborVariance()))
-                .as("分项之和 = 实际 − 标准").isEqualByComparingTo(r.totalVariance());
+        assertThat(r.priceVariance().add(r.substituteVariance()).add(r.usageVariance()))
+                .as("分项之和 = 实际 − 标准 (本例无标准人工, 人工差为 null 不参与)").isEqualByComparingTo(r.totalVariance());
+        assertThat(r.laborVariance()).as("人工无法比较时人工差是 null, 不是 0").isNull();
         assertThat(line(r, "PORK").getSubstituteVariance()).isEqualByComparingTo("-90");
     }
 
@@ -168,7 +169,7 @@ class PlanCostVarianceCalculatorContractTest {
                 List.of(used("BEEF", "100", "kg", "1000")), "80", "80", "200");
         PlanCostVarianceDTO.Line laborLine = r.lines().stream().filter(l -> "LABOR".equals(l.getLineType())).findFirst().orElseThrow();
         assertThat(laborLine.getStatus()).isEqualTo(PlanCostVarianceDTO.STATUS_INCOMPARABLE);
-        assertThat(r.laborVariance()).isEqualByComparingTo("0");
+        assertThat(r.laborVariance()).as("⛔ 不是 ¥0.00").isNull();
         assertThat(r.actualCost()).as("人工不可比时实际人工不进合计").isEqualByComparingTo("1000");
     }
 
