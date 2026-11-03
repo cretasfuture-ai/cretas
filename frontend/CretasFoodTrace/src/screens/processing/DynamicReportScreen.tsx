@@ -30,6 +30,8 @@ interface ActiveBatch {
   productName: string;
   status: string;
   isCheckedIn?: boolean;
+  /** 批次计量单位, 报工产量按它计 */
+  unit?: string;
 }
 
 export default function DynamicReportScreen() {
@@ -161,6 +163,7 @@ export default function DynamicReportScreen() {
           batchNumber: b.batchNumber,
           productName: b.productType || '',
           status: b.status,
+          unit: b.unit,
         }));
 
         // Feature 6: Check user's today checkins to highlight/auto-select
@@ -377,6 +380,7 @@ export default function DynamicReportScreen() {
       processCategory: isProgress ? processCategory : undefined,
       productName: !isProgress ? productName : undefined,
       outputQuantity: outputQuantity ? parseFloat(outputQuantity) : undefined,
+      unit: outputQuantity ? selectedBatch?.unit : undefined,
       goodQuantity: goodQuantity ? parseFloat(goodQuantity) : undefined,
       defectQuantity: defectQuantity ? parseFloat(defectQuantity) : undefined,
       operationVolume: operationVolume ? parseFloat(operationVolume) : undefined,
@@ -578,7 +582,7 @@ export default function DynamicReportScreen() {
           {/* Feature 2: Output Quantity with auto-calc */}
           {isProgress && isFieldVisible('quantity') && (
             <View style={styles.fieldGroup}>
-              <Text style={styles.label}>产品数量</Text>
+              <Text style={styles.label}>{selectedBatch?.unit ? `产品数量（${selectedBatch.unit}）` : '产品数量'}</Text>
               <TextInput
                 style={styles.input}
                 placeholder="输入数量"

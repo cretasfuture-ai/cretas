@@ -686,7 +686,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         plan.getSelectedWorkflowId() != null,
                         req);
         if (!seasoningItems.isEmpty()) {
-            BigDecimal inputKg = reportingMassToKg(req.getInputQuantity(), requestInputUnit(req));
+            BigDecimal inputKg = seasoningBasisKg(factoryId, req);
             List<BigDecimal> potRawKgs = req.getPotRawKgs() == null || req.getPotRawKgs().isEmpty()
                     ? (inputKg.signum() > 0 ? List.of(inputKg) : List.of())
                     : req.getPotRawKgs();
@@ -958,6 +958,35 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             case "g" -> quantity.movePointLeft(3);
             default -> BigDecimal.ZERO;
         };
+    }
+
+    /**
+     * 调料用量的投入基数(kg)。kg/g 直接算; 其它单位(只/个/袋…)走 UnitContractService 换算;
+     * 换不了就抛错 ——「该工序配了调料却把投入当 0 kg」会静默少扣调料、成本偏低, 不允许。
+     * 本方法只在该工序确有调料配置时被调用。
+     */
+    private BigDecimal seasoningBasisKg(String factoryId, ProcessSheetRowRequest req) {
+        BigDecimal quantity = req.getInputQuantity();
+        if (quantity == null || quantity.signum() <= 0) return BigDecimal.ZERO;
+        String unit = requestInputUnit(req);
+        BigDecimal kg = reportingMassToKg(quantity, unit);
+        if (kg.signum() > 0) return kg;
+        String why = "";
+        if (unitContractService != null) {
+            com.cretas.aims.service.unit.UnitConversionResult result = unitContractService.convert(quantity,
+                    new com.cretas.aims.service.unit.UnitConversionContext(factoryId, req.getProductTypeId(), unit, "kg",
+                            java.time.LocalDateTime.now(), com.cretas.aims.service.unit.UnitUsageScene.PRODUCTION,
+                            6, RoundingMode.HALF_UP));
+            if (result != null && result.succeeded() && result.quantity() != null && result.quantity().signum() > 0) {
+                return result.quantity();
+            }
+            if (result != null && result.message() != null) why = " (" + result.message() + ")";
+        }
+        throw new BusinessException(409, "投入单位「" + com.cretas.aims.service.unit.UnitDisplayNames.display(unit) + "」无法换算成千克, 不能计算调料用量" + why)
+                .withCode("SEASONING_BASIS_UNIT_NOT_CONVERTIBLE")
+                .withHint("该工序配置了调料(按每千克原料计): 请改用千克/克填写投入, 或在单位换算里登记「" + com.cretas.aims.service.unit.UnitDisplayNames.display(unit)
+                        + "」与千克的换算(或产品单重)后重试")
+                .withSeverity("BLOCKING");
     }
 
     /**
