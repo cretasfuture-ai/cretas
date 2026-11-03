@@ -339,6 +339,12 @@ function gridStyle(): Record<string, string> {
           -->
           <div class="sp-io-detail-fields">
             <label v-if="showCostAllocation" data-testid="cost-allocation-ratio">成本分摊比例(%)
+              <span
+                v-if="view.line.workflowFixedCostShare != null"
+                class="sp-io-weight-hint"
+                data-testid="cost-allocation-workflow-share"
+              >工艺固定 {{ view.line.workflowFixedCostShare }}%{{ view.line.costAllocationRatio != null
+                && Math.abs(view.line.costAllocationRatio - view.line.workflowFixedCostShare) > 0.01 ? '（已改，会留记录）' : '' }}</span>
               <el-input-number
                 v-model="view.line.costAllocationRatio"
                 :min="0"

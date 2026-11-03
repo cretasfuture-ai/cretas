@@ -54,6 +54,11 @@ public class WorkflowClerkSheetConfigDTO {
          */
         private List<PortDescriptor> outputs;
         /**
+         * 本工序多产出的成本分摊方法 (随工艺版本冻结): WEIGHT = 按重量 (默认, 报工期 MASS → QUANTITY);
+         * FIXED_RATIO = 按各 output 端口的 {@code fixedCostShare}。
+         */
+        private String costAllocationMethod;
+        /**
          * 缺口 04: 按工艺图这一道能不能正式报 (上游产出的料到了就是 true)。与正式录入时后端拦截
          * 用的是同一份判定 (WorkflowStepUnlockGuard)。{@code null} = 没算, 前端退回旧的「上一道已提交」规则。
          */
@@ -125,5 +130,10 @@ public class WorkflowClerkSheetConfigDTO {
          * 报工表/领料单用它做「填一个原料, 其余按份额自动跳」(owner 2026-09-02: 30 吨 ⇒ 70 吨)。
          */
         private BigDecimal inputShareRatio;
+        /**
+         * 仅 output 端口有意义: 工艺版本上「固定比例」分摊的份额(%)。null = 按重量。
+         * 报工页多产出时自动带进「成本分摊比例」, 仍可改 (后端记下原份额)。
+         */
+        private BigDecimal fixedCostShare;
     }
 }

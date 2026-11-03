@@ -111,6 +111,13 @@ public class WorkflowTaskPort extends BaseEntity {
     @Column(name = "input_share_ratio", precision = 9, scale = 4)
     private BigDecimal inputShareRatio;
 
+    /**
+     * 固定比例成本分摊份额(%), 冻结自画布 OUTPUT 端口的 fixedCostShare (工序选「固定比例」时才有)。
+     * null = 本工序按重量分摊 (默认)。报工时自动带出, 仍可改, 改了记 EXPLICIT_RATIO + 原份额。
+     */
+    @Column(name = "fixed_cost_share", precision = 9, scale = 4)
+    private BigDecimal fixedCostShare;
+
     @Column(name = "quantity_mode", length = 24)
     private String quantityMode;
 

@@ -344,6 +344,9 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                         .toList())
                 .output(primaryOutput(outputDescriptors)) // 向后兼容单产出 FE
                 .outputs(outputDescriptors)
+                .costAllocationMethod(outputDescriptors.stream().anyMatch(port -> port.getFixedCostShare() != null)
+                        ? com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler.COST_ALLOCATION_FIXED_RATIO
+                        : com.cretas.aims.service.workflow.ProductProcessWorkflowRuntimeCompiler.COST_ALLOCATION_WEIGHT)
                 .build();
     }
 
@@ -418,6 +421,8 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .gramsPerUnit(port.getNetWeightGramsSnapshot())
                 .required(port.getRequired())
                 .inputShareRatio(port.getInputShareRatio())
+                .fixedCostShare(WorkflowTaskPort.Direction.OUTPUT.equals(port.getDirection())
+                        ? port.getFixedCostShare() : null)
                 .selectionGroupId(port.getSelectionGroupId())
                 .selectionGroupLabel(port.getSelectionGroupLabel())
                 .selectionGroupMode(port.getSelectionGroupMode())

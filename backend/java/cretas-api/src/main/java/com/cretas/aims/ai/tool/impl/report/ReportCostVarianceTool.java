@@ -122,16 +122,10 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             startDate = calculateStartDate(period, endDate);
         }
 
-        // 调用服务获取成本差异报表数据
-        CostVarianceReportDTO costVarianceData = reportService.getCostVarianceReport(factoryId, startDate, endDate);
-
-        // 如果指定了产品类型ID，过滤数据
-        if (productTypeId != null && costVarianceData.getProductVariances() != null) {
-            List<CostVarianceReportDTO.ProductCostVariance> filteredProducts = costVarianceData.getProductVariances().stream()
-                    .filter(p -> productTypeId.equals(p.getProductTypeId()))
-                    .toList();
-            costVarianceData.setProductVariances(filteredProducts);
-        }
+        // 指定了产品时只读这个产品的批次 (⛔ 不取全厂再筛: 别的保密产品的批次被读到, 出口会把整份遮掉; 清点 A5)
+        CostVarianceReportDTO costVarianceData = productTypeId != null
+                ? reportService.getCostVarianceReport(factoryId, startDate, endDate, productTypeId)
+                : reportService.getCostVarianceReport(factoryId, startDate, endDate);
 
         // 如果指定了差异阈值，过滤异常产品
         if (varianceThreshold != null && costVarianceData.getProductVariances() != null) {
@@ -165,8 +159,10 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                     "成本差异无法比较：缺少独立标准成本，本期不给出差异金额与差异率。");
             if (costVarianceData.getTotalActualCost() != null) {
                 // 工艺保密: 报表服务已按调用者只算他能看的批次并给出说明 (processSecretNote) —— 照写合计并带上说明;
-                // 调用者对本厂某个保密产品无权、而数据没带说明 (未按调用者裁剪过, 例如旧缓存) 时不写这个总数 (fail-closed)
-                if (!llmCostScope.forCurrentCaller(factoryId).isEmpty() && costVarianceData.getProcessSecretNote() == null) {
+                // 调用者对本厂某个保密产品无权、而数据没带说明 (未按调用者裁剪过, 例如旧缓存) 时不写这个总数 (fail-closed)。
+                // 按产品查的报表不走缓存、每次按调用者现算, 没带说明就是这个产品的批次一个都没被隐藏 —— 照写它自己的合计
+                if (productTypeId == null && !llmCostScope.forCurrentCaller(factoryId).isEmpty()
+                        && costVarianceData.getProcessSecretNote() == null) {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
                             .append(" 批次数 ").append(costVarianceData.getBatchCount())
                             .append("；实际总成本含工艺保密产品，不提供给 AI。");

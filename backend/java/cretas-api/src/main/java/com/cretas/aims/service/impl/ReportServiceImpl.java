@@ -268,6 +268,12 @@ public class ReportServiceImpl implements ReportService {
     }
 
     @Override
+    public CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate,
+                                                       String productTypeId) {
+        return productionReportService.getCostVarianceReport(factoryId, startDate, endDate, productTypeId);
+    }
+
+    @Override
     public KpiMetricsDTO getKpiMetricsDTO(String factoryId, LocalDate date) {
         return productionReportService.getKpiMetricsDTO(factoryId, date);
     }
