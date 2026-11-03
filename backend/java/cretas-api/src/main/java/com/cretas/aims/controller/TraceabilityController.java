@@ -4,6 +4,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.Label;
+import com.cretas.aims.entity.lineage.LineageEdgeOutboxEntry;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.repository.LabelRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -44,6 +45,8 @@ public class TraceabilityController {
     private final TraceabilityService traceabilityService;
     private final ProductionBatchRepository productionBatchRepository;
     private final LabelRepository labelRepository;
+    private final com.cretas.aims.repository.lineage.LineageEdgeOutboxRepository lineageEdgeOutboxRepository;
+    private final com.cretas.aims.service.lineage.LineageEdgeOutboxReconciler lineageEdgeOutboxReconciler;
 
     /**
      * 获取溯源记录列表
@@ -214,6 +217,32 @@ public class TraceabilityController {
                 factoryId, batchType, batchId, maxDepth);
         return ApiResponse.success(traceabilityService.getImpact(
                 factoryId, batchType, batchId, maxDepth == null ? 0 : maxDepth));
+    }
+
+    /**
+     * 追溯关系补写积压 —— 「追溯写失败怎么办」的读数（2026-11-03，食品 DAG 缺口 02）。
+     *
+     * <p>pending = 还在等补写的边，dead = 连续失败到上限、停止自动补写的边（仍算积压，要人处理）。
+     * 两个都是 0 且 lastSweepAt 不为 null，才说明「写失败的都补上了」。
+     */
+    @GetMapping("/api/mobile/{factoryId}/traceability/lineage-write-backlog")
+    @Operation(summary = "追溯关系补写积压",
+            description = "批次血缘边写失败后进入补写台账自动重试；这里返回本工厂还没补上的条数、最老一条的登记时间、补写器最近一轮的时间。")
+    public ApiResponse<Map<String, Object>> getLineageWriteBacklog(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006", required = true) String factoryId) {
+        long pending = lineageEdgeOutboxRepository.countByFactoryIdAndStatus(factoryId, LineageEdgeOutboxEntry.STATUS_PENDING);
+        long dead = lineageEdgeOutboxRepository.countByFactoryIdAndStatus(factoryId, LineageEdgeOutboxEntry.STATUS_DEAD);
+        java.time.LocalDateTime oldest = lineageEdgeOutboxRepository
+                .findFirstByFactoryIdAndStatusOrderByCreatedAtAsc(factoryId, LineageEdgeOutboxEntry.STATUS_PENDING)
+                .map(LineageEdgeOutboxEntry::getCreatedAt).orElse(null);
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("factoryId", factoryId);
+        data.put("pending", pending);
+        data.put("dead", dead);
+        data.put("oldestPendingCreatedAt", oldest);
+        // 多槽部署时补写器只在拿到锁的那个槽跑, 本槽没跑过是 null —— 不代表补写器没在工作
+        data.put("lastSweepAtThisInstance", lineageEdgeOutboxReconciler.lastSweepAt());
+        return ApiResponse.success(data);
     }
 
     /**
