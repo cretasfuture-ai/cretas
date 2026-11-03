@@ -181,7 +181,7 @@ class ProcessSecretFilterRulesSharedContractTest {
             when(directory.findProtectedProductRows(org.mockito.ArgumentMatchers.eq(e.getKey()), any())).thenReturn(rowsOut);
             when(directory.findPolicyAliases(e.getKey())).thenReturn(aliases);
         }
-        when(access.factoriesWithProtectedProducts()).thenReturn(Set.copyOf(byFactory.keySet()));
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.copyOf(byFactory.keySet()));
         ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, repo, directory);
 
         List<String> bad = new ArrayList<>();
@@ -199,7 +199,7 @@ class ProcessSecretFilterRulesSharedContractTest {
         }
         assertThat(bad).isEmpty();
         // the union WOULD hit: the no-factory case is not vacuous
-        assertThat(ProcessSecretTerms.mentionsAny(filter.allFactoriesTrainingTerms(), "398礼盒今天发了多少")).isTrue();
+        assertThat(ProcessSecretTerms.mentionsAny(filter.allFactoriesPolicyTermsForSharedContent(), "398礼盒今天发了多少")).isTrue();
     }
 
     @Test

@@ -28,17 +28,17 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 隐私条款第六条: 工艺保密产品的数据不用于训练; Steve 2026-10-24: 具体人名 / 客户名不进训练样本。
  *
- * <p>两套名单, 用途分开:
+ * <p>三套名单, 用途分开:
  * <ul>
- *   <li><b>训练样本 / 学习</b> ({@link #checkTrainingSample}, {@link #trainingLists}, {@link #checkGlobalContent}):
+ *   <li><b>本厂训练样本 / 学习</b> ({@link #checkTrainingSample}, {@link #trainingLists}; 按样本所属工厂的 d):
  *       本厂「名单」= 保密产品的全名 / 编码 / ID ({@link ProcessSecretTerms}: 纯数字名与品类词不收,
  *       编码按边界匹配) + 本厂人员姓名 + 本厂客户名称 (精确匹配)。与 Python
  *       {@code smartbi/services/process_secret_names.py} 同一规则 (Steve 2026-10-29 选 A)。</li>
- *   <li><b>从训练样本学来的全局内容</b> ({@link #checkGlobalContent}, {@link #allFactoriesTrainingTerms},
- *       {@link #allFactoriesProtectedNames}): 所有工厂的并集每次都算, 只剔「训练数据过滤」(d) 关着的工厂 (Steve Q1)。</li>
- *   <li><b>共享配置写入闸</b> (平台级意图、晋升 / 回滚: {@link #allFactoriesPolicyProductNamesForSharedContent},
- *       {@link #mentionsAnyFactoryPolicyProductForSharedContent}): 所有工厂登记了保密策略的全部产品名,
- *       <b>不看任何保密开关</b> —— 跨厂保护不受开关影响 (第四轮复审第 1 条)。</li>
+ *   <li><b>写给所有工厂的共享内容</b> —— 全局人工说法 / 种子 ({@link #checkSharedContent},
+ *       {@link #allFactoriesPolicyTermsForSharedContentOrNull}), 共享短语表 / 全局知识, 平台级意图与晋升 / 回滚
+ *       ({@link #allFactoriesPolicyProductNamesForSharedContent}, {@link #mentionsAnyFactoryPolicyProductForSharedContent}):
+ *       所有工厂登记了保密策略的全部产品 (含已软删除的), <b>不看任何保密开关 (a–f)</b> —— 跨厂保护不受开关影响
+ *       (第四 / 五轮复审)。按 d 剔工厂的全厂并集已没有调用方, 删掉了 (d 只按样本所属工厂判, 见 {@link #trainingFilterOff})。</li>
  *   <li><b>外发脱敏</b> ({@link #protectedProductNames}, {@link #mentionsAny}): 本厂生效中的保密产品名。</li>
  * </ul>
  */
@@ -212,15 +212,15 @@ public class ProcessSecretSampleFilter {
     }
 
     /**
-     * 写<b>全局</b> (所有工厂共享) 的说法 / 知识前用 (系统学习的全局写入、种子): 内容提到任何一家工厂的
+     * 写<b>共享内容</b> (所有工厂都用得到的全局人工说法 / 种子、共享短语表、全局知识) 前用: 内容提到任何一家工厂的
      * 保密词 → {@link SampleVerdict#PROTECTED}; 查不出来 → {@link SampleVerdict#UNVERIFIED} (不写)。
+     * <b>不看任何保密开关</b> (某厂关了 d 甚至全关, 它的保密词照样不能进共享内容; 第五轮复审)。
      * 与 {@link #checkTrainingSample} 一样挂起调用方事务, 查库失败不把调用方事务标成只能回滚。
-     * 全局内容对每家工厂可见, 所以这里用所有工厂保密词的并集 (这是「写全局」本身的含义, 不是「样本没有工厂」)。
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    public SampleVerdict checkGlobalContent(String kind, String... texts) {
+    public SampleVerdict checkSharedContent(String kind, String... texts) {
         try {
-            return ProcessSecretTerms.mentionsAny(allFactoriesTrainingTerms(), texts)
+            return ProcessSecretTerms.mentionsAny(allFactoriesPolicyTermsForSharedContent(), texts)
                     ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
         } catch (RuntimeException e) {
             log.warn("全局写入前的保密词查询失败, 不写: kind={}, reason={}", kind, e.getClass().getSimpleName());
@@ -232,13 +232,13 @@ public class ProcessSecretSampleFilter {
     }
 
     /**
-     * 一批全局写入 (种子) 先取一次所有工厂的训练保密词; 查库失败返回 null (调用方改逐条判), 不抛。
+     * 一批共享写入 (种子) 先取一次所有工厂的保密词 (不看开关); 查库失败返回 null (调用方改逐条判), 不抛。
      * 挂起调用方事务, 查库失败不把调用方事务标成只能回滚。
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    public Set<String> allFactoriesTrainingTermsOrNull() {
+    public Set<String> allFactoriesPolicyTermsForSharedContentOrNull() {
         try {
-            return Set.copyOf(allFactoriesTrainingTerms());
+            return Set.copyOf(allFactoriesPolicyTermsForSharedContent());
         } catch (RuntimeException e) {
             log.warn("全厂训练保密词查询失败: {}", e.getClass().getSimpleName());
             return null;
@@ -246,12 +246,12 @@ public class ProcessSecretSampleFilter {
     }
 
     /**
-     * 所有工厂的训练保密词 (并集, 只给写全局用)。查库出错照样抛。每次都算, 只剔除「训练数据过滤」(d) 关着的工厂
-     * ({@code factoriesWithProtectedProducts} 已按每家自己的 d 剔除); 每家的词按 d 取 (不看 a, Q1=A)。
+     * 所有工厂的保密词 (全名 / 编码 / ID / 专属别名; 并集, 只给写共享内容用), 每次都算, <b>不看任何保密开关</b>:
+     * 登记了保密策略的每一家工厂 ({@code factoriesWithPolicyProducts}), 每家的全部策略产品 (含已软删除的)。查库出错照样抛。
      */
-    public Set<String> allFactoriesTrainingTerms() {
+    public Set<String> allFactoriesPolicyTermsForSharedContent() {
         Set<String> terms = new LinkedHashSet<>();
-        for (String factoryId : accessService.factoriesWithProtectedProducts()) {
+        for (String factoryId : accessService.factoriesWithPolicyProducts()) {
             terms.addAll(trainingLists(factoryId).terms());
         }
         return terms;
@@ -314,24 +314,23 @@ public class ProcessSecretSampleFilter {
         return mentionsAny(allFactoriesPolicyProductNamesForSharedContent(), texts);
     }
 
-    /** 所有工厂登记了保密策略的全部产品名 (并集, 每次都算), 不看任何保密开关 (a–f)。查库出错照样抛。 */
+    /**
+     * 所有工厂登记了保密策略的全部产品名 (并集, 每次都算), 不看任何保密开关 (a–f), <b>含已软删除的保密产品</b>
+     * (原生查询, 与训练名单同一个; 第五轮复审: {@code findAllById} 会被软删除过滤掉)。查库出错照样抛。
+     */
     public Set<String> allFactoriesPolicyProductNamesForSharedContent() {
         Set<String> names = new LinkedHashSet<>();
         for (String factoryId : accessService.factoriesWithPolicyProducts()) {
-            names.addAll(trainingProductNames(factoryId));       // 全部策略产品 (生效中的 ∪ 因 a / e 不生效的)
-        }
-        return names;
-    }
-
-    /**
-     * 所有工厂的工艺保密产品名 (并集; 一批写入取一次), <b>只给从训练样本学来的全局内容</b> —— 每次都算, 只剔除
-     * 「训练数据过滤」(d) 关着的工厂; 每家的名字按 d 取 (不看 a, Q1=A)。⛔ 共享配置 (平台级意图) 用
-     * {@link #allFactoriesPolicyProductNamesForSharedContent}: 那里任何开关都不能削弱跨厂保护。查库出错照样抛。
-     */
-    public Set<String> allFactoriesProtectedNames() {
-        Set<String> names = new LinkedHashSet<>();
-        for (String factoryId : accessService.factoriesWithProtectedProducts()) {
-            names.addAll(trainingProductNames(factoryId));
+            Set<String> ids = trainingPolicyProductIds(factoryId);   // 全部策略产品 (生效中的 ∪ 因 a / e 不生效的)
+            if (ids.isEmpty()) {
+                continue;
+            }
+            for (Object[] r : directoryRepository.findProtectedProductRows(factoryId, ids)) {
+                String name = str(r[2]);
+                if (name != null && name.strip().length() >= MIN_NAME_LENGTH) {
+                    names.add(name.strip());
+                }
+            }
         }
         return names;
     }

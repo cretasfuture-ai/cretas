@@ -97,7 +97,7 @@ class ProcessSecretNameCacheContractTest {
     }
 
     @Test
-    void factoriesWithProtectedProductsReadsEveryPolicyRow() {
+    void factoriesWithPolicyProductsReadsEveryPolicyRow() {
         com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository policies =
                 mock(com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository.class);
         when(policies.findAll()).thenReturn(List.of(
@@ -107,6 +107,6 @@ class ProcessSecretNameCacheContractTest {
         ProcessSecretAccessService real = new ProcessSecretAccessService(policies,
                 mock(com.cretas.aims.repository.processsecret.ProcessSecretGrantRepository.class),
                 mock(com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder.class));
-        assertThat(real.factoriesWithProtectedProducts()).containsExactlyInAnyOrder("F006", "F007");
+        assertThat(real.factoriesWithPolicyProducts()).containsExactlyInAnyOrder("F006", "F007");
     }
 }

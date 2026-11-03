@@ -260,33 +260,36 @@ class FactorySecrecySwitchJpaContractTest {
                 .as("e 关、a 开: B 档退回 A 档, 负责人看得到").isEqualByComparingTo("55.5555");
     }
 
-    // ------------------------------------------------------------------ d (全厂并集)
+    // ------------------------------------------------------------------ 全厂并集 (共享内容) 与 d
 
+    /**
+     * 写给所有工厂的共享内容 (平台级意图、全局说法、共享短语表) 比对的全厂并集每次都算, <b>不看任何开关</b>
+     * (第四 / 五轮复审: 跨厂保护不受开关影响; 原来按 d 剔工厂的并集已删); d 只管本厂的训练样本。
+     */
     @Test
-    void theAllFactoriesUnionIsAlwaysComputedAndDropsOnlyFactoriesWhoseTrainingFilterIsOff() {
+    void theAllFactoriesUnionIsAlwaysComputedAndIgnoresEverySwitch() {
         set(F, SecrecyItem.PROCESS_SECRET, true);
         set(G, SecrecyItem.PROCESS_SECRET, true);
         set(F, SecrecyItem.TRAINING_FILTER, false);
         set(G, SecrecyItem.TRAINING_FILTER, true);
-        // 写入方是 F (d 关): 并集照算, G 的保密名在里面
-        assertThat(sampleFilter.allFactoriesProtectedNames()).contains("SW乙厂秘制酱").doesNotContain("SW保密卤牛肉");
+        // 共享内容的并集不看开关: d 关的 F 也在
         assertThat(sampleFilter.mentionsAnyFactoryPolicyProductForSharedContent("给我看看SW乙厂秘制酱")).isTrue();
-        // 共享配置的并集不看开关: d 关的 F 也在 (第四轮复审第 1 条)
         assertThat(sampleFilter.allFactoriesPolicyProductNamesForSharedContent()).contains("SW乙厂秘制酱", "SW保密卤牛肉");
         // 本厂 (d 关) 不按保密名剔训练样本; G (d 开) 照剔
         assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).isFalse();
         assertThat(sampleFilter.mentionsProtectedProduct(G, "SW乙厂秘制酱卖了多少")).isTrue();
-        // #1377 的训练名单路径 (收样本 / 学习 / 写全局) 同一口径: 全局写入的并集照算、只剔 d 关的 F
-        assertThat(inTx().checkGlobalContent("t", "给我看看SW乙厂秘制酱")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
-        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesTrainingTerms(), "SW乙厂秘制酱")).isTrue();
-        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesTrainingTerms(), "SW保密卤牛肉")).isFalse();
+        // 全局说法 / 共享短语表的保密词并集同样不看开关 (d 关的 F 也在); 本厂训练样本按各自的 d
+        assertThat(inTx().checkSharedContent("t", "给我看看SW乙厂秘制酱")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
+        assertThat(inTx().checkSharedContent("t", "给我看看SW保密卤牛肉")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
+        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesPolicyTermsForSharedContent(), "SW乙厂秘制酱")).isTrue();
+        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesPolicyTermsForSharedContent(), "SW保密卤牛肉")).isTrue();
         assertThat(inTx().checkTrainingSample("t", F, "SW保密卤牛肉卖了多少")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
         assertThat(inTx().checkTrainingSample("t", G, "SW乙厂秘制酱卖了多少")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
 
         set(F, SecrecyItem.TRAINING_FILTER, true);
-        assertThat(sampleFilter.allFactoriesProtectedNames()).contains("SW乙厂秘制酱", "SW保密卤牛肉");
+        assertThat(sampleFilter.allFactoriesPolicyProductNamesForSharedContent()).contains("SW乙厂秘制酱", "SW保密卤牛肉");
         assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).isTrue();
-        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesTrainingTerms(), "SW保密卤牛肉")).isTrue();
+        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesPolicyTermsForSharedContent(), "SW保密卤牛肉")).isTrue();
         assertThat(inTx().checkTrainingSample("t", F, "SW保密卤牛肉卖了多少")).isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
     }
 
@@ -317,8 +320,30 @@ class FactorySecrecySwitchJpaContractTest {
         plain.setIntentCode("SW_SHARED_PLAIN");
         plain.setKeywords("[\"今天产量\"]");
         guard.requireNoProtectedNames(plain);
-        // 训练学来的全局内容仍按 d (Steve Q1): d 关的 G 不在那份里
-        assertThat(sampleFilter.allFactoriesProtectedNames()).doesNotContain("SW乙厂秘制酱");
+
+        // 第五轮复审: 全局人工说法 (每家工厂都匹配得到) 同样不看开关 —— 提到 G 的保密名的那条不写, 无关的照写
+        com.cretas.aims.repository.learning.LearnedExpressionRepository repo =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.learning.LearnedExpressionRepository.class);
+        org.mockito.Mockito.when(repo.findOneByHashAndFactory(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any())).thenReturn(java.util.Optional.empty());
+        org.mockito.Mockito.when(repo.save(org.mockito.ArgumentMatchers.any(
+                com.cretas.aims.entity.learning.LearnedExpression.class))).thenAnswer(i -> i.getArgument(0));
+        com.cretas.aims.service.impl.ExpressionLearningServiceImpl expressions =
+                new com.cretas.aims.service.impl.ExpressionLearningServiceImpl(repo, null, null, null, null,
+                        storableConsent(), inTx());
+        assertThat(expressions.learnExpressions("*", "PRODUCTION_QUERY", java.util.List.of("SW乙厂秘制酱产量", "今天产量"),
+                1.0, com.cretas.aims.entity.learning.LearnedExpression.SourceType.MANUAL))
+                .as("全局人工说法: 提到 G 的保密名的不写").isEqualTo(1);
+        // 共享短语表 (学习建议) 同样不看开关: F 的建议提到 G 的保密名 → 不能应用
+        com.cretas.aims.service.impl.ActiveLearningServiceImpl active = org.mockito.Mockito.mock(
+                com.cretas.aims.service.impl.ActiveLearningServiceImpl.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+        org.springframework.test.util.ReflectionTestUtils.setField(active, "processSecretSampleFilter", inTx());
+        org.springframework.test.util.ReflectionTestUtils.setField(active, "trainingConsentService", storableConsent());
+        String refused = org.springframework.test.util.ReflectionTestUtils.invokeMethod(active, "suggestionNotApplicable",
+                F, "SW乙厂秘制酱怎么卖");
+        assertThat(refused).as("共享短语建议").contains("shared phrase table");
+        assertThat((String) org.springframework.test.util.ReflectionTestUtils.invokeMethod(active, "suggestionNotApplicable",
+                F, "今天卖了多少")).as("对照: 无关的建议照常").isNull();
     }
 
     /**
@@ -370,6 +395,24 @@ class FactorySecrecySwitchJpaContractTest {
     @Autowired com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard recipeGuard;
     @Autowired com.cretas.aims.repository.processsecret.ProcessSecretAccessEventRepository accessEvents;
 
+    /**
+     * 第五轮复审: 共享内容的全厂并集含<b>已软删除</b>的保密产品 (原生查询, 与训练名单同一个) —— 产品软删除了,
+     * 历史数据里的名字仍是保密的, 不能因此写进平台级意图 / 全局说法 ({@code findAllById} 会被软删除过滤掉)。
+     */
+    @Test
+    void theSharedUnionKeepsSoftDeletedProtectedProducts() {
+        entityManager.flush();
+        entityManager.createNativeQuery("UPDATE product_types SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id")
+                .setParameter("id", G_SECRET).executeUpdate();
+        entityManager.clear();
+        sampleFilter.invalidateNameCache();     // 名字缓存 10 秒: 别的测试先读过 G 的名字, 不清就测不出软删除那条路径
+        assertThat(productTypes.findById(G_SECRET)).as("前提: 实体查询已看不到它").isEmpty();
+        assertThat(sampleFilter.allFactoriesPolicyProductNamesForSharedContent()).contains("SW乙厂秘制酱");
+        assertThat(sampleFilter.mentionsAnyFactoryPolicyProductForSharedContent("给我看看SW乙厂秘制酱")).isTrue();
+        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(
+                inTx().allFactoriesPolicyTermsForSharedContent(), "SW乙厂秘制酱")).isTrue();
+    }
+
     /** Q1=A (Steve 2026-11-03): 训练剔除保密产品名只看 d —— a 关、d 开照样剔; a 关、d 关不剔。 */
     @Test
     void trainingNameFilteringFollowsTheTrainingFilterOnlyNotProcessSecret() {
@@ -377,11 +420,11 @@ class FactorySecrecySwitchJpaContractTest {
         set(F, SecrecyItem.TRAINING_FILTER, true);
         assertThat(accessService.protectedProductTypeIds(F)).as("前提: a 关, 没有生效的 A 档保密产品").doesNotContain(SECRET);
         assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).as("a 关、d 开: 照样剔").isTrue();
-        assertThat(sampleFilter.allFactoriesProtectedNames()).as("全厂并集也在").contains("SW保密卤牛肉");
+        assertThat(sampleFilter.allFactoriesPolicyProductNamesForSharedContent()).as("共享内容的全厂并集也在").contains("SW保密卤牛肉");
         // #1377 的收样本判断 (保密词 + 人员 + 客户) 与训练并集同一口径: a 关、d 开照样拦
         assertThat(inTx().checkTrainingSample("t", F, "SW保密卤牛肉卖了多少")).as("收样本: a 关、d 开 照样拦")
                 .isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
-        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesTrainingTerms(), "SW保密卤牛肉")).isTrue();
+        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesPolicyTermsForSharedContent(), "SW保密卤牛肉")).isTrue();
         assertThat(com.cretas.aims.service.consent.LearningContentRules.factoryLearnable(storableConsent(), inTx(),
                 F, "SW保密卤牛肉卖了多少")).as("学习入口同样不学").isFalse();
         // 出外脱敏的名单仍按生效中的保密产品 (c 的事, 不在 Q1 里)
@@ -389,12 +432,13 @@ class FactorySecrecySwitchJpaContractTest {
 
         set(F, SecrecyItem.TRAINING_FILTER, false);
         assertThat(sampleFilter.mentionsProtectedProduct(F, "SW保密卤牛肉卖了多少")).as("a 关、d 关: 不剔").isFalse();
-        assertThat(sampleFilter.allFactoriesProtectedNames()).doesNotContain("SW保密卤牛肉");
+        // 共享内容的全厂并集不看 d (跨厂保护), 只有本厂训练样本按 d 放行
+        assertThat(sampleFilter.allFactoriesPolicyProductNamesForSharedContent()).contains("SW保密卤牛肉");
         assertThat(com.cretas.aims.service.consent.LearningContentRules.factoryLearnable(storableConsent(), inTx(),
                 F, "SW保密卤牛肉卖了多少")).isTrue();
         assertThat(inTx().checkTrainingSample("t", F, "SW保密卤牛肉卖了多少")).as("收样本: d 关 不拦")
                 .isEqualTo(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
-        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesTrainingTerms(), "SW保密卤牛肉")).isFalse();
+        assertThat(com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(sampleFilter.allFactoriesPolicyTermsForSharedContent(), "SW保密卤牛肉")).isTrue();
     }
 
     /**

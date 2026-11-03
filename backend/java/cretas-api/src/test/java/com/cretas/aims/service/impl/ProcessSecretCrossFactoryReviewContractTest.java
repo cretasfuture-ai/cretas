@@ -76,8 +76,7 @@ class ProcessSecretCrossFactoryReviewContractTest {
     void setUp() {
         access = mock(ProcessSecretAccessService.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
-        when(access.factoriesWithProtectedProducts()).thenReturn(Set.of(FA));
-        // 共享配置 (平台级意图 / 晋升 / 回滚) 的并集不看开关 (第四轮复审第 1 条)
+        // 写给所有工厂的共享内容 (平台级意图 / 晋升 / 回滚 / 全局说法 / 共享短语表) 的并集不看开关 (第四 / 五轮复审)
         when(access.factoriesWithPolicyProducts()).thenReturn(Set.of(FA));
         when(access.protectedProductTypeIds(FA)).thenReturn(Set.of("pA"));
         ProductType p = new ProductType();
@@ -398,6 +397,6 @@ class ProcessSecretCrossFactoryReviewContractTest {
                 List.of("今天产量", "本周产量", SECRET + "产量", "本月产量"), 1.0, LearnedExpression.SourceType.MANUAL);
 
         assertThat(n).isEqualTo(3);
-        verify(access, org.mockito.Mockito.times(1)).factoriesWithProtectedProducts();
+        verify(access, org.mockito.Mockito.times(1)).factoriesWithPolicyProducts();
     }
 }

@@ -104,7 +104,7 @@ class LearningSecrecyCheckOutsideTransactionContractTest {
 
         @Override
         @Transactional(readOnly = true)
-        public Set<String> factoriesWithProtectedProducts() {
+        public Set<String> factoriesWithPolicyProducts() {
             openAtLookup.set(ds.open.get());
             if (fail.get()) {
                 throw new DataAccessResourceFailureException("connection reset");

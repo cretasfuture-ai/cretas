@@ -54,7 +54,7 @@ class ExpressionLearningProcessSecretContractTest {
 
         access = mock(ProcessSecretAccessService.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
-        when(access.factoriesWithProtectedProducts()).thenReturn(Set.of(FA));
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.of(FA));
         when(access.protectedProductTypeIds(FA)).thenReturn(Set.of("pA"));
         ProductType p = new ProductType();
         p.setId("pA");

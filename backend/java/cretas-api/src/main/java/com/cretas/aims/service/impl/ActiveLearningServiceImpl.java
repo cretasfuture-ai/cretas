@@ -562,8 +562,9 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     }
 
     /**
-     * 文本提到任何一家工厂的保密词, 或无法判断 → true (调用方据此不写全局)。走过滤器挂起调用方事务的
-     * {@code checkGlobalContent}: 查库失败不把调用方事务标成只能回滚 (待办第 8 条)。
+     * 文本提到任何一家工厂的保密词, 或无法判断 → true (调用方据此不写全局 / 共享短语表)。走过滤器挂起调用方事务的
+     * {@code checkSharedContent}: 所有工厂的保密词、不看任何保密开关 (第五轮复审); 查库失败不把调用方事务标成只能回滚
+     * (待办第 8 条)。
      */
     boolean namesAnyProtectedProduct(String text) {
         if (text == null || text.isBlank()) {
@@ -572,7 +573,7 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         if (processSecretSampleFilter == null) {
             return true;
         }
-        return processSecretSampleFilter.checkGlobalContent("global_knowledge", text, text.toLowerCase().trim())
+        return processSecretSampleFilter.checkSharedContent("global_knowledge", text, text.toLowerCase().trim())
                 != com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR;
     }
 

@@ -182,7 +182,8 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
      *   <li>本厂: {@link LearningContentRules#factoryLearnable} (与 {@link #recordSample} 同一套规则)。</li>
      * </ul>
      * 判断所需的服务没有注入、或查询出错, 一律不学 (fail-closed)。查询都走过滤器挂起本事务的方法
-     * ({@code checkGlobalContent} / {@code allFactoriesTrainingTermsOrNull}), 查库失败不会把本方法所在的事务
+     * ({@code checkSharedContent} / {@code allFactoriesPolicyTermsForSharedContentOrNull}; 全局说法每家工厂都匹配得到,
+     * 所以比对所有工厂的保密词、不看任何保密开关 —— 第五轮复审), 查库失败不会把本方法所在的事务
      * 标成只能回滚 (待办第 8 条)。
      *
      * @param globalTerms 一批全局写入预先取好的全厂保密词; null = 这一条现查 (种子逐条)
@@ -203,7 +204,7 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         }
         boolean clear = globalTerms != null
                 ? !com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(globalTerms, expression)
-                : processSecretSampleFilter.checkGlobalContent("global_expression", expression)
+                : processSecretSampleFilter.checkSharedContent("global_expression", expression)
                         == ProcessSecretSampleFilter.SampleVerdict.CLEAR;
         if (!clear) {
             log.warn("全局说法提到工艺保密词 (或无法判断), 不写: source={}", sourceType);
@@ -343,7 +344,7 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
                 log.warn("全局说法批量写入: 保密词判断未注入, 整批不写");
                 return 0;
             }
-            globalTerms = processSecretSampleFilter.allFactoriesTrainingTermsOrNull();
+            globalTerms = processSecretSampleFilter.allFactoriesPolicyTermsForSharedContentOrNull();
             if (globalTerms == null) {
                 log.warn("全局说法批量写入: 全厂保密词整批查询失败, 改为逐条判断 ({} 条)", expressions.size());
             }
