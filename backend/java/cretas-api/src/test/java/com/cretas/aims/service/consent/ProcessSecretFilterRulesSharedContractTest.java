@@ -82,6 +82,19 @@ class ProcessSecretFilterRulesSharedContractTest {
 
     static final Path WORDS = Path.of("..", "..", "python", "common", "training_rule_words.json");
 
+    /**
+     * Second review: a jar without the word file must fail closed with a RUNTIME exception (the filter's
+     * {@code catch (RuntimeException)} then holds / drops the sample), never an Error from class initialisation.
+     */
+    @Test
+    void aMissingWordFileFailsClosedWithARuntimeException() {
+        assertThat(TrainingValueRules.loadWords("process-secret/no_such_words.json")).isNull();     // no throw
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> TrainingValueRules.requireWords(null))
+                .isInstanceOf(IllegalStateException.class);
+        TrainingValueRules.requireWords();                                         // the real jar has it
+        assertThat(TrainingValueRules.WORDS).isNotNull();
+    }
+
     /** Q4: the word lists exist once; the jar carries a byte-identical copy of the Python file (pom copy-resources). */
     @Test
     void wordListsComeFromTheOneSharedFile() throws Exception {

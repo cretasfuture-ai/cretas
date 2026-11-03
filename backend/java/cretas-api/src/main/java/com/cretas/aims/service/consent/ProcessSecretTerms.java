@@ -38,6 +38,16 @@ public final class ProcessSecretTerms {
      */
     public static final List<String> CATEGORY_WORDS = TrainingValueRules.strings("category_words", false);
 
+    /** 品类词 (已折叠)。只认这份词表 —— 复审第二轮: 不从保密产品的品类字段派生, 否则名字收不收取决于数据。 */
+    static final Set<String> GENERIC_WORDS = genericWords();
+
+    /**
+     * 保密产品的「全名」本身就是品类词 (产品就叫「牛腱」) 时还收不收: Steve 2026-11-03 选 B = 不收 (只靠编码 / ID / 工艺数值规则); 值在
+     * {@code training_rule_words.json} 的 {@code full_name_category_word_matches} (与 Python 同一行)。
+     */
+    static final boolean FULL_NAME_CATEGORY_WORD_MATCHES = TrainingValueRules.WORDS != null
+            && TrainingValueRules.WORDS.path("full_name_category_word_matches").asBoolean(false);
+
     /** 纯数字 (允许中间夹空白 / 点 / 横线 / 下划线 / 斜杠): 398、2024-01、１２３。 */
     private static final Pattern PURE_NUMERIC = Pattern.compile("[0-9０-９ \\t.\\-_/\\u3000]+");
 
@@ -77,19 +87,48 @@ public final class ProcessSecretTerms {
         }
     }
 
-    private static Set<String> genericWords(Collection<Product> products) {
+    private static Set<String> genericWords() {
         Set<String> words = new LinkedHashSet<>();
         for (String w : CATEGORY_WORDS) {
-            words.add(fold(w));
-        }
-        for (Product p : products) {
-            for (String v : new String[]{p.category(), p.productCategory()}) {
-                if (v != null && !v.isBlank()) {
-                    words.add(fold(v.strip()));
-                }
+            String f = fold(w);
+            if (!f.isEmpty()) {
+                words.add(f);
             }
         }
-        return words;
+        return Set.copyOf(words);
+    }
+
+    /**
+     * 登记别名时不收的原因; 能用返回 null。少于 2 个字 / 纯数字 / 品类词的别名匹配器会悄悄丢掉,
+     * 所以登记入口直接拒绝 (复审第二轮: 不能 PUT 回 200 却没生效)。
+     */
+    public static String unusableAliasReason(String alias) {
+        TrainingValueRules.requireWords();
+        String t = alias == null ? "" : fold(alias.strip());
+        if (t.length() < MIN_TERM_LENGTH) {
+            return "少于 " + MIN_TERM_LENGTH + " 个字";
+        }
+        if (PURE_NUMERIC.matcher(t).matches()) {
+            return "是纯数字 (批次号、数量里到处都是)";
+        }
+        if (GENERIC_WORDS.contains(t)) {
+            return "是品类词 (说的是一类东西, 不是这个产品)";
+        }
+        return null;
+    }
+
+    /**
+     * 产品全名是品类词, 且按 Steve 2026-11-03 选 B 训练过滤不按这个名字拦 (只靠编码 / ID / 工艺数值规则) ——
+     * 保密负责人保存策略时要看到提示。
+     */
+    public static boolean fullNameNotMatchedAsCategoryWord(String name) {
+        return !FULL_NAME_CATEGORY_WORD_MATCHES && isCategoryWord(name);
+    }
+
+    /** {@code raw} (去首尾空白、折叠后) 是词表里的品类词。 */
+    public static boolean isCategoryWord(String raw) {
+        TrainingValueRules.requireWords();
+        return raw != null && GENERIC_WORDS.contains(fold(raw.strip()));
     }
 
     /**
@@ -97,11 +136,13 @@ public final class ProcessSecretTerms {
      * (别名目前没有登记载体, 生产上恒为空 —— 见 PR 待决问题)。
      */
     public static Set<String> secretTerms(Collection<Product> products, Collection<String> aliases) {
-        Set<String> generic = genericWords(products);
+        TrainingValueRules.requireWords();       // 词表读不到: 抛运行时异常, 过滤器按名单查询失败处理 (挂起 / 不存)
         Set<String> out = new LinkedHashSet<>();
         for (Product p : products) {
-            for (String v : new String[]{p.name(), p.code(), p.id()}) {
-                String term = usableTerm(v, generic);
+            String[] values = {p.name(), p.code(), p.id()};
+            for (int k = 0; k < values.length; k++) {
+                boolean exempt = k == 0 && FULL_NAME_CATEGORY_WORD_MATCHES;
+                String term = usableTerm(values[k], exempt ? Set.of() : GENERIC_WORDS);
                 if (term != null) {
                     out.add(term);
                 }
@@ -109,7 +150,7 @@ public final class ProcessSecretTerms {
         }
         if (aliases != null) {
             for (String a : aliases) {
-                String term = usableTerm(a, generic);
+                String term = usableTerm(a, GENERIC_WORDS);
                 if (term != null) {
                     out.add(term);
                 }

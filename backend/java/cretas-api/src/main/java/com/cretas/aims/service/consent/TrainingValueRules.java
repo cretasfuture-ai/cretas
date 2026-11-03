@@ -24,21 +24,30 @@ import java.util.stream.Collectors;
  * ({@code copy-training-rule-words}) 拷进 jar 的 {@code process-secret/training_rule_words.json}。
  *
  * <ul>
- *   <li>数值: 阿拉伯 / 全角数字 (贴着字母的也算: pH4、4.2pH、30min), 中文数字 (一百二十一、三十、三比一;
- *       两个字以上, 或后面跟单位; 「一下」「一起」「半成品」这类常用词不算);</li>
+ *   <li>数值: 阿拉伯 / 全角数字 (贴着字母的也算: pH4、4.2pH、30min), 中文数字 (一百二十一、三十、三比一、万分之五,
+ *       含大写 壹贰叁; 两个字以上, 或后面跟单位; 「一下」「一起」「半成品」这类常用词不算, 但它其实是数值的一部分时照算:
+ *       「十分钟」「万分之五」);</li>
  *   <li>距离: 同一条记录里、相距不超过 {@value #WINDOW} 个字; 窗口里编号 / 日期 / 时刻都算数值, 只有每行开头的
  *       列表序号不算;</li>
- *   <li>记录: 一句话; 列表项连同缩进续行; 整张表 (表头列是工艺词、数据行同列有数值); 冒号结尾的工艺词标题行连同其下列表;</li>
+ *   <li>记录: 一句话; 列表项连同缩进续行; 整张表 (表头列是工艺词、数据行同列有数值); 含工艺词的标题 (冒号结尾或
+ *       Markdown {@code #} 标题) 连同其下内容 (紧跟的第一行、之后的列表 / 缩进行 / 冒号小标题, 可隔空行, 到下一个
+ *       {@code #} 标题或下一段正文为止); 判断前统一换行并去掉 Markdown 加粗;</li>
  *   <li>条件词 (温度 / 时间 / 压力 / 转速 / 浓度): 后面 {@value #WINDOW} 个字内出现「数值 + 单位」才算。</li>
  * </ul>
  * 位置按 Unicode 码点计: 判断前把补充平面字符 (如 emoji) 换成一个 BMP 字符, UTF-16 下标就等于码点下标。
  */
 public final class TrainingValueRules {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(TrainingValueRules.class);
     static final int WINDOW = 12;
     static final String WORDS_RESOURCE = "process-secret/training_rule_words.json";
 
-    static final JsonNode WORDS = loadWords();
+    /**
+     * 词表。读不到 (jar 里缺了这个文件) 时为 null, ⛔ 不在类初始化时抛 —— 那会变成
+     * {@code ExceptionInInitializerError}, 调用方的 {@code catch (RuntimeException)} 接不住。
+     * 改为每个入口先 {@link #requireWords()}: 抛 {@link IllegalStateException}, 过滤器按「名单查不出来」挂起 / 不存。
+     */
+    static final JsonNode WORDS = loadWords(WORDS_RESOURCE);
 
     public static final List<String> CONDITIONAL_MARKERS = strings("conditional_markers", false);
     static final List<String> VALUE_UNITS = strings("value_units", true);
@@ -46,9 +55,12 @@ public final class TrainingValueRules {
     static final List<String> CN_STOP_PHRASES = strings("cn_stop_phrases", true);
     static final List<String> GLUED_UNIT_PREFIXES = strings("glued_unit_prefixes", true);
 
-    static final String CN = "零〇一二三四五六七八九十百千万两半";
+    /** 中文数字, 含大写 (财务写法 壹贰叁 …, 复审第二轮 B1)。 */
+    static final String CN = "零〇一二三四五六七八九十百千万两半壹贰叁肆伍陆柒捌玖拾佰仟萬貳參陸";
     static final String CN_NUM = "[" + CN + "]+(?:点[" + CN + "]+)?";
     static final Pattern CN_RATIO = Pattern.compile(CN_NUM + "比" + CN_NUM);
+    /** 分数: 万分之五、百分之三 (自带单位: 条件词后面不必再跟单位)。 */
+    static final Pattern CN_FRACTION = Pattern.compile(CN_NUM + "分之" + CN_NUM);
     static final Pattern CN_NUM_PATTERN = Pattern.compile(CN_NUM);
     static final Pattern DIGIT_NUM = Pattern.compile("[0-9０-９]+(?:[.．][0-9０-９]+)?");
     static final Pattern LINE_ORDINAL = Pattern.compile(
@@ -57,7 +69,9 @@ public final class TrainingValueRules {
     static final Pattern SENTENCE_SPLIT = Pattern.compile("[。！？!?；;]");
     static final Pattern LIST_LINE = Pattern.compile("^(?:[-*•]|[0-9]{1,3}[.、)）]|[一二三四五六七八九十]{1,3}、)");
     static final Pattern SEPARATOR_CELL = Pattern.compile("^[ \\t:：\\-—]*$");
-    static final Pattern NUMBER = Pattern.compile("(?<![A-Za-z0-9_.<])\\d+(?:\\.\\d+)?");
+    /** 全角数字也遮, 「<5」里的 5 也遮 (复审第二轮 B1); 编号 (F006 / Ｆ００６ / V2) 照旧保留。 */
+    static final Pattern NUMBER = Pattern.compile("(?<![A-Za-z0-9Ａ-Ｚａ-ｚ０-９_.．])[0-9０-９]+(?:[.．][0-9０-９]+)?");
+    static final Pattern EMPHASIS = Pattern.compile("\\*\\*|__");
     static final Pattern GLUED = Pattern.compile("(?<![A-Za-z])("
             + GLUED_UNIT_PREFIXES.stream().map(Pattern::quote).collect(Collectors.joining("|"))
             + ")([0-9]+(?:\\.[0-9]+)?)");
@@ -66,19 +80,38 @@ public final class TrainingValueRules {
     private TrainingValueRules() {
     }
 
-    private static JsonNode loadWords() {
-        try (InputStream in = TrainingValueRules.class.getClassLoader().getResourceAsStream(WORDS_RESOURCE)) {
+    /** 读不到 / 读不了返回 null (只记一条 ERROR), 不抛。 */
+    static JsonNode loadWords(String resource) {
+        try (InputStream in = TrainingValueRules.class.getClassLoader().getResourceAsStream(resource)) {
             if (in == null) {
-                throw new IllegalStateException(WORDS_RESOURCE + " missing from the classpath (pom copy-training-rule-words)");
+                LOG.error("{} missing from the classpath (pom copy-training-rule-words): training-sample rules fail closed",
+                        resource);
+                return null;
             }
             return new ObjectMapper().readTree(in);
-        } catch (IOException e) {
-            throw new IllegalStateException("cannot read " + WORDS_RESOURCE, e);
+        } catch (IOException | RuntimeException e) {
+            LOG.error("cannot read {}: training-sample rules fail closed ({})", resource, e.getClass().getSimpleName());
+            return null;
         }
     }
 
+    /** 词表读不到时抛 {@link IllegalStateException} (运行时异常: 过滤器按名单查询失败处理, 挂起 / 不存)。 */
+    static void requireWords() {
+        requireWords(WORDS);
+    }
+
+    static void requireWords(JsonNode words) {
+        if (words == null) {
+            throw new IllegalStateException(WORDS_RESOURCE + " unavailable: training-sample rules cannot judge");
+        }
+    }
+
+    /** 词表某一项; 词表读不到时返回空表 (各入口另有 {@link #requireWords()} 把关)。 */
     static List<String> strings(String key, boolean longestFirst) {
         List<String> out = new ArrayList<>();
+        if (WORDS == null || WORDS.get(key) == null) {
+            return List.of();
+        }
         WORDS.get(key).forEach(n -> out.add(n.asText()));
         if (longestFirst) {
             out.sort(Comparator.comparingInt(String::length).reversed());   // stable, like Python sorted()
@@ -100,13 +133,45 @@ public final class TrainingValueRules {
         return s.substring(0, start) + " ".repeat(end - start) + s.substring(end);
     }
 
+    private static int leadingCn(String phrase) {
+        int k = 0;
+        while (k < phrase.length() && CN.indexOf(phrase.charAt(k)) >= 0) {
+            k++;
+        }
+        return k;
+    }
+
+    /**
+     * 常用词其实是数值的一部分时不抹掉 (复审第二轮 B1): 前面紧挨着中文数字 (「三十分钟」里的「十分」)、
+     * 词头的数字后面跟着单位 (「十分钟」= 十 + 分钟)、或在分数里 (「万分之五」)。
+     */
+    private static boolean keepsStopPhrase(String s, int i, String phrase, List<int[]> fractions) {
+        if (i > 0 && CN.indexOf(s.charAt(i - 1)) >= 0) {
+            return true;
+        }
+        int k = leadingCn(phrase);
+        if (k > 0 && startsWithAny(s, i + k, VALUE_UNITS)) {
+            return true;
+        }
+        for (int[] f : fractions) {
+            if (f[0] <= i && i < f[1]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static String prepared(String text) {
         String s = text;
+        List<int[]> fractions = new ArrayList<>();
+        Matcher fm = CN_FRACTION.matcher(text);
+        while (fm.find()) {
+            fractions.add(new int[]{fm.start(), fm.end()});
+        }
         for (String phrase : CN_STOP_PHRASES) {
             int i = s.indexOf(phrase);
             while (i >= 0) {
-                // 前面紧挨着中文数字时不是那个常用词 (「三十分钟」里的「十分」、「三万一」里的「万一」)
-                if (i == 0 || CN.indexOf(s.charAt(i - 1)) < 0) {
+                if (!keepsStopPhrase(s, i, phrase, fractions)) {
                     s = blank(s, i, i + phrase.length());
                 }
                 i = s.indexOf(phrase, i + phrase.length());
@@ -151,6 +216,10 @@ public final class TrainingValueRules {
         while (r.find()) {
             ratio.add(new int[]{r.start(), r.end()});
         }
+        Matcher fr = CN_FRACTION.matcher(s);
+        while (fr.find()) {
+            ratio.add(new int[]{fr.start(), fr.end()});
+        }
         spans.addAll(ratio);
         Matcher c = CN_NUM_PATTERN.matcher(s);
         outer:
@@ -188,7 +257,8 @@ public final class TrainingValueRules {
                 int j = i + m.length();
                 spans = spans == null ? valueSpans(s, false) : spans;
                 for (int[] sp : spans) {
-                    if (j <= sp[0] && sp[0] < j + WINDOW && startsWithAny(s, sp[1], VALUE_UNITS)) {
+                    if (j <= sp[0] && sp[0] < j + WINDOW
+                            && (startsWithAny(s, sp[1], VALUE_UNITS) || s.substring(sp[0], sp[1]).contains("分之"))) {
                         return true;
                     }
                 }
@@ -220,13 +290,34 @@ public final class TrainingValueRules {
         return SPACE.indexOf(line.charAt(0)) >= 0 || LIST_LINE.matcher(strip(line)).find();
     }
 
-    private static boolean isHeading(String line, Collection<String> words) {
+    /** 换行统一成 \n, 去掉 Markdown 加粗 ({@code **} / {@code __}) (复审第二轮 N1)。 */
+    static String normalize(String text) {
+        return EMPHASIS.matcher(text.replace("\r\n", "\n").replace("\r", "\n")).replaceAll("");
+    }
+
+    /** 标题行去掉 Markdown 的 # 之后的文字; [1] 为 "#" 表示是 Markdown 标题。 */
+    private static String[] headingCore(String line) {
         String t = strip(line);
-        if (t.isEmpty()) {
-            return false;
+        if (t.startsWith("#")) {
+            int k = 0;
+            while (k < t.length() && t.charAt(k) == '#') {
+                k++;
+            }
+            return new String[]{strip(t.substring(k)), "#"};
         }
+        return new String[]{t, ""};
+    }
+
+    private static boolean endsWithColon(String t) {
         char last = t.charAt(t.length() - 1);
-        if (last != '：' && last != ':') {
+        return last == '：' || last == ':';
+    }
+
+    /** 含工艺词的标题: Markdown 标题 ({@code ### 配方}) 或冒号结尾的行。 */
+    private static boolean isHeading(String line, Collection<String> words) {
+        String[] core = headingCore(line);
+        String t = core[0];
+        if (t.isEmpty() || (core[1].isEmpty() && !endsWithColon(t))) {
             return false;
         }
         for (String w : words) {
@@ -235,6 +326,35 @@ public final class TrainingValueRules {
             }
         }
         return false;
+    }
+
+    /**
+     * 标题下内容的结尾 (不含) (复审第二轮 N1): 标题后第一行非空行一定算; 之后列表 / 缩进行 / 冒号小标题, 可隔空行;
+     * 到下一个 Markdown 标题或下一段正文为止。
+     */
+    private static int headingEnd(List<String> lines, int i) {
+        int j = i + 1;
+        int end = j;
+        boolean first = true;
+        while (j < lines.size()) {
+            String line = lines.get(j);
+            String[] core = headingCore(line);
+            if (core[0].isEmpty()) {
+                j++;
+                continue;
+            }
+            if (!core[1].isEmpty()) {
+                break;
+            }
+            if (first || isListOrIndented(line) || endsWithColon(core[0])) {
+                j++;
+                end = j;
+                first = false;
+                continue;
+            }
+            break;
+        }
+        return end;
     }
 
     static List<String> cells(String line) {
@@ -286,7 +406,8 @@ public final class TrainingValueRules {
         if (text == null || text.isEmpty()) {
             return false;
         }
-        List<String> lines = Arrays.asList(bmp(text).split("\n", -1));
+        requireWords();
+        List<String> lines = Arrays.asList(normalize(bmp(text)).split("\n", -1));
         List<String> headingWords = new ArrayList<>(markers);
         headingWords.addAll(conditional);
         int i = 0;
@@ -305,9 +426,7 @@ public final class TrainingValueRules {
             }
             int j = i + 1;
             if (isHeading(line, headingWords)) {
-                while (j < lines.size() && isListOrIndented(lines.get(j))) {
-                    j++;
-                }
+                j = headingEnd(lines, i);
                 String body = String.join("\n", lines.subList(i + 1, j));
                 if (!body.isEmpty() && !valueSpans(body, false).isEmpty()) {
                     return true;
@@ -330,6 +449,7 @@ public final class TrainingValueRules {
 
     /** 每个数值换成 {@code <数值>}: 阿拉伯数字 (F006 / V2 / B12 这类编号保留)、贴在单位后面的数字 (pH4)、中文数字。 */
     public static String maskValues(String text) {
+        requireWords();
         String out = GLUED.matcher(text).replaceAll(mr -> Matcher.quoteReplacement(mr.group(1) + "<数值>"));
         out = NUMBER.matcher(out).replaceAll("<数值>");
         List<int[]> spans = valueSpans(out, true);

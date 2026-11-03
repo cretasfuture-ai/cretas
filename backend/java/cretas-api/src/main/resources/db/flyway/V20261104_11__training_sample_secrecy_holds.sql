@@ -4,14 +4,16 @@
 -- (工艺保密词 + 人员姓名 + 客户名称) 查不出来, 就按「上次成功的名单」判; 判下来没问题的样本不直接进
 -- 样本表, 先放在这里, 由定时重判 (TrainingSampleHoldRejudger) 按当前名单再判一次:
 --   * 过了 → 删掉挂起行, 再走原来的收样本入口写进样本表 (授权 / 脱敏照常处理);
---   * 提到保密词 / 本厂人名客户名 → 标记 REJECTED 并保留, 留给人工复核, 不删 (Q5);
+--   * 提到保密词 / 本厂人名客户名 → 标记 REJECTED 并保留 (原因 + 时间), 留给人工复核, 不删 (Q5);
+--     原话原文当场丢掉 (复审第二轮第 1 条: payload 换成 {"raw_text_dropped":true}, ck_tssh_rejected_no_raw 钉住);
 --   * 一直判断不了 → 超过保留期 (默认 7 天) 删掉。
 --
 -- 单独一张表而不是给两张样本表加状态列: 样本表的读者很多 (关键词学习、合成数据、反馈 …), 加状态列就得
 -- 每个读者都记得过滤, 漏一个就把没判完的样本用掉; 放在这张表里, 除了重判任务没有人读它。
 --
 -- payload: 重判用的**原话原文** (JSON; 复审 N3: 存脱敏后的文本会把数字编号、被换成占位符的名字藏起来,
--- 重判就漏了)。所以这张表含原话, 已在撤回手册的删除清单里 (docs/security/training-withdrawal-runbook.md)。
+-- 重判就漏了)。所以待判 (PENDING) 的行含原话: 放行 / 过期即删, 随工厂删除一起删 (factory_id 是租户列),
+-- 也在撤回手册的删除清单里 (docs/security/training-withdrawal-runbook.md)。
 
 CREATE TABLE IF NOT EXISTS training_sample_secrecy_holds (
     id                  BIGSERIAL    PRIMARY KEY,
@@ -27,6 +29,7 @@ CREATE TABLE IF NOT EXISTS training_sample_secrecy_holds (
     CONSTRAINT ck_tssh_kind CHECK (sample_kind IN ('INTENT', 'ACTIVE_LEARNING')),
     CONSTRAINT ck_tssh_review_status CHECK (review_status IN ('PENDING', 'REJECTED')),
     CONSTRAINT ck_tssh_rejected CHECK ((review_status = 'REJECTED') = (rejected_at IS NOT NULL)),
+    CONSTRAINT ck_tssh_rejected_no_raw CHECK (review_status <> 'REJECTED' OR payload = '{"raw_text_dropped":true}'),
     CONSTRAINT ck_tssh_attempts CHECK (attempts >= 0),
     CONSTRAINT ck_tssh_factory CHECK (btrim(factory_id) <> '')
 );

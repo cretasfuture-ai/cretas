@@ -28,7 +28,8 @@ import java.util.List;
  *   <li>名单查得出、没提到保密词 / 人员 / 客户 → <b>先删挂起行</b>, 再走原来的收样本入口 ({@code recordSample} /
  *       {@code collectSample}: 内容规则、训练授权、脱敏、名单都照常再走一遍) 写进样本表。先删再写: 写失败最多丢这一条,
  *       不会每轮重复写同一条 (N4b);</li>
- *   <li>提到了 → 标 REJECTED 并保留, 留给人工复核, 不删 (Q5); 之后不再取它;</li>
+ *   <li>提到了 → 标 REJECTED 并保留 (原因 + 时间), 留给人工复核, 不删 (Q5); 原话原文当场丢掉
+ *       (复审第二轮第 1 条); 之后不再取它;</li>
  *   <li>还是判断不了、或挂起行本身读不出来 → 记一次尝试 (排到队尾, N4c); 挂起超过保留期
  *       ({@code cretas.training.secrecy-hold.max-age}, 默认 7 天) 的删掉 —— 读不出来的行同样到期删 (N4a)。</li>
  * </ul>
@@ -125,6 +126,7 @@ public class TrainingSampleHoldRejudger {
                 }
                 case PROTECTED -> {
                     h.setReviewStatus(TrainingSampleSecrecyHold.ReviewStatus.REJECTED);
+                    h.setPayload(TrainingSampleSecrecyHold.DROPPED_PAYLOAD);   // 原文不留 (复审第二轮第 1 条)
                     h.setRejectReason("names_factory_list");
                     h.setRejectedAt(now);
                     h.setLastAttemptAt(now);

@@ -503,6 +503,34 @@
             <!-- 训练样本过滤规则的词表只有一份 (backend/python/common/training_rule_words.json, Steve 2026-11-03 Q4):
                  构建时拷进 jar 的 process-secret/, Java TrainingValueRules / ProcessSecretTerms 从类路径读, Python 读原文件。
                  用 copy-resources 追加, 不覆盖父 POM 的 <resources> (application*.yml 的过滤配置不受影响)。 -->
+            <!-- copy-resources 找不到文件时什么也不拷、也不报错 —— jar 里就少了词表 (训练过滤复审第二轮)。
+                 这里在 validate 阶段就要求文件存在: 跳过测试的打包 (-DskipTests / 部署构建) 也会失败。
+                 ⛔ 不用 enforcer 的 requireFilesExist: 它拿绝对路径和规范路径比大小写, 路径里有 .. 就恒判「不存在」。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>require-training-rule-words</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <fail message="backend/python/common/training_rule_words.json is missing: the training-sample filter word list is copied into the jar from there (copy-training-rule-words).">
+                                    <condition>
+                                        <not>
+                                            <available file="${project.basedir}/../../python/common/training_rule_words.json" type="file"/>
+                                        </not>
+                                    </condition>
+                                </fail>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>

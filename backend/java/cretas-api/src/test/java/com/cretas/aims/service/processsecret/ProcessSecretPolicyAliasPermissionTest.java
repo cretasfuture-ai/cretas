@@ -159,6 +159,18 @@ class ProcessSecretPolicyAliasPermissionTest {
     }
 
     @Test
+    void aliasesTheMatcherWouldSilentlyDropAreRejected() {
+        // second review: a category-word / pure-numeric / one-character alias used to return 200 and do nothing
+        ProcessSecretPolicy p = existing("[\"旧别名\"]");
+        for (String bad : List.of("鸭脖", "牛腱", "20251103", "肘")) {
+            assertCode(400, () -> service.upsertPolicy(actor(OWNER, "factory_super_admin"), F, P,
+                    ProcessSecretStorageMode.CLOUD_RESTRICTED, OWNER, 4L, List.of("五香虎皮猪肘", bad)));
+        }
+        assertThat(p.getAliases()).isEqualTo("[\"旧别名\"]");
+        assertThat(p.getPolicyVersion()).isEqualTo(4L);
+    }
+
+    @Test
     void theOnlyHttpWayToWriteAliasesIsThePolicyUpsert() {
         // no new write endpoint: the controller's only methods taking aliases are the existing PUT /policies/{id}
         int carriers = 0;

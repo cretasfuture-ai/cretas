@@ -65,9 +65,23 @@ public class ProcessSecretPolicyService {
     }
 
     /** {@code aliases}: 只给保密负责人看 (别名本身就是保密名), 其他人为 null。 */
+    /** {@code warnings}: 保存时给保存人的提示 (不是拒绝; 列表、读取时恒为空)。 */
     public record PolicyView(String productTypeId, ProcessSecretStorageMode storageMode, Long ownerUserId,
                              Long policyVersion, boolean currentUserIsOwner, LocalDateTime updatedAt,
-                             List<String> aliases) { }
+                             List<String> aliases, List<String> warnings) { }
+
+    /**
+     * 产品全名是通用品类词时 (产品就叫「牛腱」), 训练过滤不按名字拦 (Steve 2026-11-03 选 B) —— 保存策略时提示负责人。
+     */
+    public static final String CATEGORY_NAME_WARNING = "该名称为通用品类词，训练过滤不按名字拦截，仅按编码/工艺数值保护";
+
+    private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
+
+    /** 只用来查产品全名给保存提示; 可选注入 (不改构造器)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setProductTypeRepository(com.cretas.aims.repository.ProductTypeRepository productTypeRepository) {
+        this.productTypeRepository = productTypeRepository;
+    }
 
     static final int MAX_ALIASES = 20;
     static final int MAX_ALIAS_LENGTH = 100;
@@ -150,7 +164,24 @@ public class ProcessSecretPolicyService {
                     + (aliases == null ? "" : " aliases " + aliasesBefore + "->" + aliasCount(aliasesJson)));
         }
         accessService.invalidate(factoryId);
-        return view(actor, factoryId, policy);
+        PolicyView v = view(actor, factoryId, policy);
+        return new PolicyView(v.productTypeId(), v.storageMode(), v.ownerUserId(), v.policyVersion(),
+                v.currentUserIsOwner(), v.updatedAt(), v.aliases(), saveWarnings(factoryId, productTypeId));
+    }
+
+    /**
+     * 保存后的提示。⛔ 不在这里 catch 查询异常: 同一事务里吞掉仓库调用的失败会把事务标成 rollback-only
+     * (过滤规则第 8 条的坑) —— 查不出来就让整个保存失败。
+     */
+    private List<String> saveWarnings(String factoryId, String productTypeId) {
+        if (productTypeRepository == null) {
+            return List.of();
+        }
+        return productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                .map(com.cretas.aims.entity.ProductType::getName)
+                .filter(com.cretas.aims.service.consent.ProcessSecretTerms::fullNameNotMatchedAsCategoryWord)
+                .map(n -> List.of(CATEGORY_NAME_WARNING))
+                .orElse(List.of());
     }
 
     /** 关闭保密: 产品恢复改造前的可见性。只有负责人可做, 所有授权同时撤销。 */
@@ -304,7 +335,8 @@ public class ProcessSecretPolicyService {
         boolean owner = ProcessSecretAccessService.isOwner(actor, factoryId, p);
         return new PolicyView(p.getProductTypeId(), p.getStorageMode(), p.getOwnerUserId(), p.getPolicyVersion(),
                 owner, p.getUpdatedAt(),
-                owner ? com.cretas.aims.service.consent.ProcessSecretTerms.policyAliases(p.getAliases()) : null);
+                owner ? com.cretas.aims.service.consent.ProcessSecretTerms.policyAliases(p.getAliases()) : null,
+                List.of());
     }
 
     /** 别名规范化: 去首尾空白、去空、去重 (保持顺序); 太多 / 太长 → 400。审计只记个数, 不记别名本身。 */
@@ -317,6 +349,12 @@ public class ProcessSecretPolicyService {
             String t = a.strip();
             if (t.length() > MAX_ALIAS_LENGTH) {
                 throw new BusinessException(400, "别名不能超过 " + MAX_ALIAS_LENGTH + " 个字");
+            }
+            String unusable = com.cretas.aims.service.consent.ProcessSecretTerms.unusableAliasReason(t);
+            if (unusable != null) {
+                // 匹配器会悄悄丢掉这类别名 —— 直接拒绝, ⛔ 不回 200 却没生效 (复审第二轮)
+                throw new BusinessException(400, "别名「" + t + "」" + unusable + "，登记了也不会生效")
+                        .withHint("换成这个产品专属的叫法 (全名、简称、内部代号)");
             }
             clean.add(t);
         }

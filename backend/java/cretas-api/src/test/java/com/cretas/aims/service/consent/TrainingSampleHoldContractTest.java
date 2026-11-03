@@ -220,6 +220,10 @@ class TrainingSampleHoldContractTest {
             assertThat(named.getReviewStatus()).isEqualTo(TrainingSampleSecrecyHold.ReviewStatus.REJECTED);
             assertThat(named.getRejectedAt()).isEqualTo(LocalDateTime.of(2026, 11, 3, 8, 0));
             assertThat(alNamed.getReviewStatus()).isEqualTo(TrainingSampleSecrecyHold.ReviewStatus.REJECTED);
+            // second review, item 1: the raw text is dropped on rejection; reason and time stay
+            assertThat(named.getPayload()).isEqualTo(TrainingSampleSecrecyHold.DROPPED_PAYLOAD);
+            assertThat(alNamed.getPayload()).isEqualTo(TrainingSampleSecrecyHold.DROPPED_PAYLOAD);
+            assertThat(named.getRejectReason()).isEqualTo("names_factory_list");
             verify(holds).save(named);
             verify(holds).save(alNamed);
             verifyNoInteractions(active);

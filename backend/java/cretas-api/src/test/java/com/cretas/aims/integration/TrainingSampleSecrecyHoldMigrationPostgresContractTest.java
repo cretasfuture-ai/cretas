@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * 本 PR 的两个迁移在真 PG 上 (实体与迁移建出来的表<b>逐列一致</b>, Hibernate schema validate 只扫对应实体):
  * <ul>
- *   <li>V20261104_11 训练样本挂起表: 样本类别 / 复核状态只认登记值, REJECTED 必须带时间, 工厂不能空白, 尝试次数不能为负;</li>
+ *   <li>V20261104_11 训练样本挂起表: 样本类别 / 复核状态只认登记值, REJECTED 必须带时间且不留原文, 工厂不能空白, 尝试次数不能为负;</li>
  *   <li>V20261104_12 保密策略的专属别名列 (Q1): 只收 JSON 数组; 实体 {@link ProcessSecretPolicy} 与
  *       V20261103_72 + V20261104_12 建出的表一致。</li>
  * </ul>
@@ -60,7 +60,12 @@ class TrainingSampleSecrecyHoldMigrationPostgresContractTest {
 
             // ---- holds ----
             assertDoesNotThrow(() -> statement.execute(ROW + "('INTENT', 'F006', '{}', 'PENDING', NULL, 0, now())"));
-            assertDoesNotThrow(() -> statement.execute(ROW + "('ACTIVE_LEARNING', 'F006', '{}', 'REJECTED', now(), 1, now())"));
+            assertDoesNotThrow(() -> statement.execute(ROW + "('ACTIVE_LEARNING', 'F006', '"
+                    + TrainingSampleSecrecyHold.DROPPED_PAYLOAD + "', 'REJECTED', now(), 1, now())"));
+            // second review, item 1: a REJECTED row keeps no raw text (ck_tssh_rejected_no_raw)
+            assertThrows(SQLException.class, () -> statement.execute(ROW
+                            + "('INTENT', 'F006', '{\"userInput\":\"398礼盒的配方改一下\"}', 'REJECTED', now(), 1, now())"),
+                    "rejected row still carrying the raw text");
             assertThrows(SQLException.class, () -> statement.execute(ROW + "('GUESS', 'F006', '{}', 'PENDING', NULL, 0, now())"),
                     "unknown sample kind");
             assertThrows(SQLException.class, () -> statement.execute(ROW + "('INTENT', 'F006', '{}', 'DELETED', NULL, 0, now())"),
