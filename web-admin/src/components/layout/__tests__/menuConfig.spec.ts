@@ -331,6 +331,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     // 不在合并范围内 (owner 拍板的合并表未列它), 仍是独立菜单项。
     expect(descendantPaths('/production')).toEqual(expect.arrayContaining([
       '/production/analysis-query',
+      '/production/cost-variance',
       '/production-analytics/cost-summary',
     ]));
     const smartBiPaths = descendantPaths('/smart-bi');
@@ -457,6 +458,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/finance/voucher-export',
       '/finance/voucher-template',
       '/finance/sku-margin',
+      '/finance/cost-variance',
       '/finance/gross-margin-redline',
       '/finance/accounting-period',
     ]);

@@ -413,6 +413,20 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private com.cretas.aims.service.production.ReportedOutputCostAllocationService reportedOutputCostAllocationService;
 
     /**
+     * 食品 DAG 缺口 09: 开计划时写标准成本快照 (锁定配方标准用量 × 此刻物料单价), 提交后写, 不拦开计划。
+     * 调用点登记 (硬约束 8): createProductionPlan / copyProductionPlan / createSecondaryPlan /
+     * applyCurrentAuthorityToPlan (已有快照不重写)。createDraftProductionPlan 经 createProductionPlan。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.PlanStandardCostSnapshotService planStandardCostSnapshotService;
+
+    private void captureStandardCostSnapshot(String factoryId, ProductionPlan plan) {
+        if (planStandardCostSnapshotService != null) {
+            planStandardCostSnapshotService.captureAfterCommit(factoryId, plan);
+        }
+    }
+
+    /**
      * 生产仓占用的释放 (释放路径 3/3: <b>结单扣减</b>) + 「这批料被谁占着」的归属查询。
      *
      * <p>⚠️ 释放<b>只能</b>发生在结单三道闸之前, 也就是 {@link #settleProduction} 内部:
@@ -752,6 +766,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 否则两处口径迟早分叉(本仓最常见的缺陷形态)。
         applyPlanUnitAuthority(plan, authority);
         ProductionPlan saved = productionPlanRepository.save(plan);
+        captureStandardCostSnapshot(factoryId, saved);
         // 只改计划指针是骗人的: 批次自己存了一份权威(DB 触发器**只在 INSERT 时**从计划复制),
         //    报工读的运行时实例又是按批次那份编译并冻结的。三样一起搬, 否则界面说换了、
         //    操作工报的还是旧工艺(2026-08-09 真机实测 PLAN-1786184738975)。
@@ -2360,6 +2375,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         applyPlanUnitAuthority(plan, planUnitAuthority);
 
         plan = productionPlanRepository.save(plan);
+        captureStandardCostSnapshot(factoryId, plan);
 
         // Sprint 3 Track-F (C-LINKARRAY-1): unified BusinessLink double-write.
         // ProductionPlan.sourceOrderId stays for backward compat; new code reads via
@@ -3093,6 +3109,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // / isForceInserted / requiresApproval (默认值已 OK)
 
         newPlan = productionPlanRepository.save(newPlan);
+        captureStandardCostSnapshot(factoryId, newPlan);
 
         log.info("复制生产计划: source={}({}) → new={}({})",
                 sourcePlanId, source.getPlanNumber(),
@@ -9976,6 +9993,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         plan = productionPlanRepository.save(plan);
+        captureStandardCostSnapshot(factoryId, plan);
 
         log.info("SP2 创建二次加工计划: planId={}, wipId={}, quantity={}, factoryId={}",
                 plan.getId(), wipId, quantity, factoryId);

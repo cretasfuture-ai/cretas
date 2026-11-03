@@ -76,7 +76,9 @@ public class ProcessSecretPayloadScrubber {
             // 工艺图节点的投入 → 产出换算规则 (画布配置工具)
             "conversionRule",
             // 换料影响: 配方成本差额 ÷ 单价差 = 该料的单位用量
-            "oldRecipeMaterialCost", "newRecipeMaterialCost", "costDelta");
+            "oldRecipeMaterialCost", "newRecipeMaterialCost", "costDelta",
+            // 计划标准成本快照 (缺口 09): 锁定配方的出成率与标准用量系数
+            "rawYieldRate", "standardRate");
 
     /*
      * 实测出成 / 损耗 / 超投 / 实际配比份额 (Steve 2026-10-26 第三问 = A「单批可看、汇总不给」):

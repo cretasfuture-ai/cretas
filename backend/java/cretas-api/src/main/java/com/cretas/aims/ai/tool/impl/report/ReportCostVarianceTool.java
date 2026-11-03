@@ -40,7 +40,8 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "获取成本差异分析报表，包含BOM理论成本与实际成本对比、差异分析、成本异常检测。" +
+        return "获取成本差异分析报表：标准成本 = 计划锁定配方的标准用量 × 开计划时物料单价快照，" +
+                "与实际成本对比，差异拆成价格差、用量差、替代料差、人工差；缺单价或缺快照的项说无法比较。" +
                 "适用场景：成本控制、BOM优化、降本增效分析。";
     }
 
@@ -155,8 +156,10 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                 && costVarianceData.getTotalVarianceRate() != null;
         result.put("comparable", comparable);
         if (!comparable) {
-            StringBuilder msg = new StringBuilder(
-                    "成本差异无法比较：缺少独立标准成本，本期不给出差异金额与差异率。");
+            String why = costVarianceData.getComparabilityReason() == null
+                    ? CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON : costVarianceData.getComparabilityReason();
+            StringBuilder msg = new StringBuilder("成本差异无法比较：").append(why)
+                    .append("。本期不给出差异金额与差异率。");
             if (costVarianceData.getTotalActualCost() != null) {
                 // 工艺保密: 报表服务已按调用者只算他能看的批次并给出说明 (processSecretNote) —— 照写合计并带上说明;
                 // 调用者对本厂某个保密产品无权、而数据没带说明 (未按调用者裁剪过, 例如旧缓存) 时不写这个总数 (fail-closed)。
@@ -174,6 +177,23 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                 }
             }
             result.put("message", msg.toString());
+        } else {
+            // 可比: 把口径与分项一起交给模型, ⛔ 不让它自己拆「材料/人工」比例
+            StringBuilder sum = new StringBuilder(CostVarianceReportDTO.STANDARD_COST_BASIS).append("。")
+                    .append(startDate).append(" ~ ").append(endDate)
+                    .append(" 可比部分: 标准成本 ¥").append(plain(costVarianceData.getTotalBomCost()))
+                    .append("，差异 ¥").append(plain(costVarianceData.getTotalVariance()))
+                    .append(" (").append(plain(costVarianceData.getTotalVarianceRate())).append("%)")
+                    .append("，其中价格差 ¥").append(plain(costVarianceData.getPriceVariance()))
+                    .append("、用量差 ¥").append(plain(costVarianceData.getUsageVariance()))
+                    .append("、替代料差 ¥").append(plain(costVarianceData.getSubstituteVariance()))
+                    .append("、人工差 ¥").append(plain(costVarianceData.getLaborVariance())).append("。");
+            if (costVarianceData.getComparabilityReason() != null) {
+                sum.append(costVarianceData.getComparabilityReason()).append("。");
+            }
+            sum.append("回料差异本期不单列。");
+            if (costVarianceData.getProcessSecretNote() != null) sum.append(costVarianceData.getProcessSecretNote());
+            result.put("summary", sum.toString());
         }
 
         // 添加查询条件摘要
@@ -188,6 +208,10 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         log.info("成本差异报表查询完成 - 工厂ID: {}, 日期范围: {} ~ {}", factoryId, startDate, endDate);
 
         return result;
+    }
+
+    private static String plain(java.math.BigDecimal value) {
+        return value == null ? "无法比较" : value.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     /**
