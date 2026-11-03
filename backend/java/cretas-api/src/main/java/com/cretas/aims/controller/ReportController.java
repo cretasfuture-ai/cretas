@@ -40,6 +40,9 @@ public class ReportController {
 
     private final ReportService reportService;
     private final PriceMaskResolver priceMaskResolver;
+    private final com.cretas.aims.service.production.PlanCostVarianceService planCostVarianceService;
+    private final com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
+    private final com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope processSecretLlmCostScope;
 
     /**
      * 运营 Dashboard 端点的方法级权限集 (OR / hasAnyPermission).
@@ -528,6 +531,27 @@ public class ReportController {
 
         CostVarianceReportDTO report = reportService.getCostVarianceReport(factoryId, startDate, endDate);
         return ApiResponse.success(report);
+    }
+
+    /**
+     * 单张生产计划的成本差异明细 (食品 DAG 缺口 09): 标准 = 锁定配方标准用量 × 开计划时单价快照,
+     * 逐项拆价格差 / 用量差 / 替代料差 / 人工差, 缺价的项写「无法比较」; 附多产出成本分摊方法 (缺口 10)。
+     * 无采购价查看权限时单价与逐项金额脱敏; 工艺保密产品对无授权调用者 403。
+     */
+    @GetMapping("/cost-variance/plans/{planId}")
+    @Operation(summary = "单计划成本差异明细", description = "开计划时标准成本快照 vs 实际, 价格差/用量差/替代料差/人工差")
+    public ApiResponse<com.cretas.aims.dto.report.PlanCostVarianceDTO> getPlanCostVariance(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "生产计划ID") String planId,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404, "生产计划不存在: " + planId));
+        if (processSecretLlmCostScope.isProtectedBatch(factoryId, plan.getProductTypeId(), planId)) {
+            throw new com.cretas.aims.exception.BusinessException(403, "该计划的产品工艺保密, 你没有查看其成本明细的授权")
+                    .withCode("PROCESS_SECRET_COST_HIDDEN");
+        }
+        boolean maskPrice = priceMaskResolver.shouldMaskPrice(authorization);
+        return ApiResponse.success(planCostVarianceService.computeForPlan(factoryId, planId, maskPrice));
     }
 
     /**

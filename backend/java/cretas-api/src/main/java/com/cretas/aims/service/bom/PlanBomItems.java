@@ -121,6 +121,18 @@ public final class PlanBomItems {
         return recipeIds;
     }
 
+    /**
+     * 只看计划<b>钉住</b>的配方版本 (不试产品 current BOM)。标准成本快照用它 (食品 DAG 缺口 09):
+     * 标准用量必须来自计划锁定的版本, ⛔ 不能是之后被激活的当前版本。
+     */
+    public static List<BomRecipeItem> pinnedOnly(String factoryId, ProductionPlan plan,
+                                                 BomRecipeItemRepository itemRepository) {
+        if (plan == null || itemRepository == null) {
+            return List.of();
+        }
+        return fromPinnedRecipes(factoryId, plan, itemRepository);
+    }
+
     private static List<BomRecipeItem> fromPinnedRecipes(String factoryId, ProductionPlan plan,
                                                          BomRecipeItemRepository itemRepository) {
         Set<String> recipeIds = pinnedRecipeIds(plan);
