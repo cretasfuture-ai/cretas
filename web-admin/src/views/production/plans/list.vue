@@ -1906,8 +1906,11 @@ async function handleStart(row: TableRow) {
   }
 }
 
-async function forceStart(row: TableRow) {
-  let reason: string;
+/**
+ * S4-08 强制开工原因。开工 / 转批次 / 逐道录入 (都会让待处理计划开工) 被 SHORTAGE_CASE_OPEN 拦下时共用;
+ * 用户放弃返回 null。
+ */
+async function askForceStartReason(): Promise<string | null> {
   try {
     const r = await ElMessageBox.prompt(
       '这个计划关联的缺料还没解决。确需先开工，请写明原因（会记入「缺料异常」的处理记录）。',
@@ -1919,10 +1922,31 @@ async function forceStart(row: TableRow) {
         type: 'warning',
       },
     );
-    reason = (r as { value: string }).value.trim();
+    return (r as { value: string }).value.trim();
   } catch {
-    return; // 用户放弃
+    return null;
   }
+}
+
+/**
+ * 转批次 = 待处理计划开工, 同样会被「缺料时拦开工」拦下 (2026-11-03 验收 D-S410-01)。
+ * 拦下时问原因并带原因重试一次; 用户放弃返回 null, 其它错误照常抛出 (拦截器已提示)。
+ */
+async function postCreateBatch(row: TableRow) {
+  const url = `/${factoryId.value}/production-plans/${row.id}/create-batch`;
+  try {
+    return await post(url);
+  } catch (error: any) {
+    if (error?.code !== 'SHORTAGE_CASE_OPEN') throw error;
+    const reason = await askForceStartReason();
+    if (!reason) return null;
+    return await post(url, { forceStartReason: reason });
+  }
+}
+
+async function forceStart(row: TableRow) {
+  const reason = await askForceStartReason();
+  if (!reason) return; // 用户放弃
   actionLoading.value = true;
   try {
     const response = await post(`/${factoryId.value}/production-plans/${row.id}/start`, { forceStartReason: reason });
@@ -1974,7 +1998,8 @@ async function openProcessEntry(row: any) {
         `/${factoryId.value}/product-process-workflows/${row.productTypeId}/activation`);
       if (act.success && act.data && act.data.enabled === true) {
         // 后端幂等: 已有批次时直接返回既有批次(不报错), 所以这里每次调用都是安全的。
-        const br = await post(`/${factoryId.value}/production-plans/${row.id}/create-batch`);
+        const br = await postCreateBatch(row);
+        if (br === null) return; // 缺料未解决且用户放弃强制开工: 不开抽屉
         if (br.success) {
           row.status = 'IN_PROGRESS';
           loadData();
@@ -3797,7 +3822,8 @@ async function handleCreateBatch(row: TableRow) {
       { type: 'warning', confirmButtonText: '确认转换', cancelButtonText: '取消' }
     );
     actionLoading.value = true;
-    const response = await post(`/${factoryId.value}/production-plans/${row.id}/create-batch`);
+    const response = await postCreateBatch(row);
+    if (response === null) return; // 缺料未解决且用户放弃强制开工
     if (response.success) {
       const batch = response.data;
       ElMessage.success(`批次创建成功！批次号: ${batch?.batchNumber || ''}`);

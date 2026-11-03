@@ -29,10 +29,12 @@ const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 /** S5-12: 采购金额按配置的采购读权限显示, 与后端采购价口径一致。 */
 const canViewPurchasePrice = computed(() => permissionStore.canViewPurchasePrice);
+/** 采购单列表只给有采购读权限的角色 (后端 GET /purchase/orders 不带 salesOrderId 时同一口径, 否则 403)。 */
+const canReadPurchaseOrders = computed(() => permissionStore.canAccess('procurement'));
 
 // ---------- state ----------
 const loading = ref(false);
-const activeTab = ref('purchase');
+const activeTab = ref(canReadPurchaseOrders.value ? 'purchase' : 'receive');
 const dateRange = ref<[string, string] | null>(null);
 
 // Sankey chart
@@ -124,9 +126,11 @@ async function loadAllData() {
     const silentCfg = { params: { ...params, size: 10 }, _silent: true };
 
     const [purchaseRes, materialRes, batchRes, salesRes] = await Promise.allSettled([
-      get<{ content: PurchaseOrder[]; totalElements: number }>(
-        `/${factoryId.value}/purchase/orders`, silentCfg
-      ),
+      canReadPurchaseOrders.value
+        ? get<{ content: PurchaseOrder[]; totalElements: number }>(
+          `/${factoryId.value}/purchase/orders`, silentCfg
+        )
+        : Promise.reject(new Error('no procurement read')),
       get<{ content: MaterialBatch[]; totalElements: number }>(
         `/${factoryId.value}/material-batches`, silentCfg
       ),
@@ -435,7 +439,7 @@ function salesStatusText(status: unknown): string {
       <div class="detail-section">
         <el-tabs v-model="activeTab">
           <!-- 采购 -->
-          <el-tab-pane label="采购订单" name="purchase">
+          <el-tab-pane v-if="canReadPurchaseOrders" label="采购订单" name="purchase">
             <el-table
               :data="purchaseOrders"
               v-loading="loading"

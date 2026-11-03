@@ -1184,10 +1184,17 @@ public class ProductionPlanController {
     @Operation(summary = "从计划创建批次")
     public ApiResponse<ProductionBatch> createBatchFromPlan(
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotNull String planId) {
+            @PathVariable @NotNull String planId,
+            @RequestBody(required = false) StartProductionRequest request,
+            jakarta.servlet.http.HttpServletRequest http) {
 
-        log.info("从计划创建批次: factoryId={}, planId={}", factoryId, planId);
-        ProductionBatch batch = productionPlanService.createBatchFromPlan(factoryId, planId);
+        // 转批次会让待处理计划开工: 与开工入口一样, 可带强制开工原因 (S4-08); 操作人取已认证身份
+        String forceStartReason = request == null ? null : request.getForceStartReason();
+        Long operatorId = com.cretas.aims.security.AuthenticatedActor.current(http)
+                .filter(a -> !a.isPlatformAdmin()).map(com.cretas.aims.security.AuthenticatedActor::id).orElse(null);
+        log.info("从计划创建批次: factoryId={}, planId={}, forced={}", factoryId, planId,
+                forceStartReason != null && !forceStartReason.isBlank());
+        ProductionBatch batch = productionPlanService.createBatchFromPlan(factoryId, planId, operatorId, forceStartReason);
         return ApiResponse.success("批次创建成功", batch);
     }
 

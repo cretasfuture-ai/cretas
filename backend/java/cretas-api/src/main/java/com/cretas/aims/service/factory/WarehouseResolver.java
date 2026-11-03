@@ -56,10 +56,11 @@ public class WarehouseResolver {
         return factoryWarehouseRepository
                 .findByFactoryIdAndCodeAndDeletedAtIsNull(factoryId, code)
                 .map(FactoryWarehouse::getId)
-                .orElseThrow(() -> new BusinessException(500,
-                        String.format("Factory [%s] 缺少 warehouse seed [%s] — 数据库 seed 异常 (V20260411_03 未跑?)",
-                                factoryId, code))
-                        .withHint("请联系运维检查 factory_warehouses 表是否有该工厂的双仓 seed"));
+                .orElseThrow(() -> new BusinessException(409,
+                        String.format("工厂 %s 还没有建「%s」仓库, 无法确定库存从哪个仓取", factoryId, code))
+                        .withCode("WAREHOUSE_NOT_CONFIGURED")
+                        .withHint("请在「仓储管理 → 仓储空间」里建好该仓库 (或在工厂配置里指定默认仓) 后重试")
+                        .withHintTarget(code));
     }
 
     /**

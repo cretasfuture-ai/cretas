@@ -88,6 +88,24 @@ class ProductionPickingWarehousesContractTest {
         assertThat(resolver.productionPickingWarehouseIds("F1")).doesNotContain("raw").contains("log");
     }
 
+    /**
+     * 2026-11-03 验收 O-3: 工厂没建车间仓 / 物流仓时, 缺料分析曾直接 500。缺仓库是用户能补的配置问题 ⇒
+     * 409 + 错误码 + 去哪补的提示, ⛔ 不是 500。
+     */
+    @Test
+    void aFactoryWithoutTheDefaultWarehouseGetsAClear409NotA500() {
+        byId.remove("wks");
+        byId.remove("log");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> resolver.productionPickingWarehouseIds("F1"))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("WAREHOUSE_NOT_CONFIGURED");
+                    assertThat(e.getMessage()).contains("F1").contains("WH-WKS");
+                    assertThat(e.getActionHint()).contains("仓储空间");
+                });
+    }
+
     private void configure(WarehouseDefaultPurpose purpose, String warehouseId) {
         FactoryWarehouseDefault d = new FactoryWarehouseDefault();
         d.setWarehouseId(warehouseId);
