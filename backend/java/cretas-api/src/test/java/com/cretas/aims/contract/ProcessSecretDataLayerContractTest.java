@@ -124,7 +124,9 @@ class ProcessSecretDataLayerContractTest {
             "utilizationPercent", "utilizationRate", "variancePct", "varianceRate", "varianceThresholdPct",
             "waterUsage", "weightLoadRate", "weightPerUnit", "yieldRawDenominator", "yoyRate",
             // 核价单比价基准: 物料档案的采购税率 (增值税百分比), 与配方用量 / 配比无关
-            "referenceTaxRate");
+            "referenceTaxRate",
+            // 物料平衡表 (缺口 #07): 工厂级黄/红阈值与「未解释差额占投入」的实测结果, 不是配方比例
+            "warnPct", "redPct", "unexplainedPct");
 
     /** 被数据层打标的实体: 读到即记录 (见 ProcessSecretReadTracker.readsOf)。 */
     static final List<Class<?>> TRACKED_ENTITIES = List.of(
@@ -247,7 +249,9 @@ class ProcessSecretDataLayerContractTest {
             // 工作流节点配置 schema 里的参数名 (允许超额百分比 / 质检抽样率), 不是配方
             "maxExceedPercent", "samplingRate",
             // APS 按天排: 某天这个计划占当天产线产能的比例, 是排程量, 不是配方
-            "shareOfDay");
+            "shareOfDay",
+            // 物料平衡阈值 (缺口 #07), 厂级配置数, 不是配方
+            "warnPct", "redPct");
 
     @Test
     void everyRatioLikeMapKeyIsClassified() throws IOException {
