@@ -1418,6 +1418,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: { requiresAuth: true, title: 'SKU毛利率分析', module: 'finance',
                     modulesAll: ['finance', 'production'] }
           },
+          // 食品 DAG 缺口 09/10: 成本差异 (开计划时标准成本快照 vs 实际, 价格差/用量差/替代料差/人工差 + 多产出分摊方法)
+          {
+            path: 'cost-variance',
+            name: 'FinanceCostVariance',
+            component: () => import('@/views/finance/cost-variance/index.vue'),
+            meta: { requiresAuth: true, title: '成本差异', module: 'finance' }
+          },
           // SP5 W6: 毛利红线配置 (目标毛利率管理, 财务/超管可配, #693 报价红线读它)
           {
             path: 'gross-margin-redline',

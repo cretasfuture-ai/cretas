@@ -442,6 +442,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '会计凭证',
       '会计凭证',
       '财务分析',
+      '财务分析',
       '财务配置',
     ]);
     expect(childPaths('/finance')).toEqual([
@@ -457,6 +458,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/finance/voucher-export',
       '/finance/voucher-template',
       '/finance/sku-margin',
+      '/finance/cost-variance',
       '/finance/gross-margin-redline',
       '/finance/accounting-period',
     ]);
