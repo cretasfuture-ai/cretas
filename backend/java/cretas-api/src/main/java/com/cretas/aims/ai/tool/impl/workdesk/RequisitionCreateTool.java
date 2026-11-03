@@ -217,7 +217,11 @@ public class RequisitionCreateTool extends AbstractBusinessTool {
                 "草稿创建后需提审 → 主管审批 → APPROVED 状态可转 PO");
         result.put("nextActionUrl", "/inventory/purchase-requisitions");
 
-        String budgetStr = estimatedBudget != null
+        // 文字与上面的 estimatedUnitPrice / estimatedBudget 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        boolean showBudget = replyShowsAmount(context, "estimatedUnitPrice")
+                && replyShowsAmount(context, "estimatedBudget");
+        String budgetStr = !showBudget ? "预算按权限不显示"
+                : estimatedBudget != null
                 ? String.format("预算 ¥%s (按 ¥%s/单位 × %s)",
                         estimatedBudget.toPlainString(),
                         estimatedUnitPrice.toPlainString(),

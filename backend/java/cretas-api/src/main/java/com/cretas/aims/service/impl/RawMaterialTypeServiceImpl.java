@@ -71,6 +71,10 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
     @Autowired
     private UnitContractService unitContractService;
 
+    /** 别名 / 合并。可选注入: 窄单测不装它时, 别名相关的校验与展示整体跳过。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.material.MaterialAliasMergeService aliasMergeService;
+
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -154,6 +158,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         String normalizedName = normalizeRequiredName(dto.getName());
         if (materialTypeRepository.existsByFactoryIdAndNormalizedName(factoryId, normalizedName)) {
             throw duplicateMaterialName(normalizedName);
+        }
+        if (aliasMergeService != null) {
+            aliasMergeService.ensureNameNotAnAlias(factoryId, normalizedName, null);
         }
         dto.setName(normalizedName);
         dto.setUnit(normalizeInventoryUnit(factoryId, dto.getUnit()));
@@ -321,6 +328,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                     factoryId, normalizedName, id)) {
                 throw duplicateMaterialName(normalizedName);
             }
+            if (aliasMergeService != null && !normalizedName.equals(materialType.getName())) {
+                aliasMergeService.ensureNameNotAnAlias(factoryId, normalizedName, id);
+            }
             materialType.setName(normalizedName);
         }
         if (dto.getUnit() != null) materialType.setUnit(normalizeInventoryUnit(factoryId, dto.getUnit()));
@@ -333,7 +343,12 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         if (dto.getMinStock() != null) materialType.setMinStock(dto.getMinStock());
         if (dto.getMaxStock() != null) materialType.setMaxStock(dto.getMaxStock());
         if (dto.getNotes() != null) materialType.setNotes(dto.getNotes());
-        if (dto.getIsActive() != null) materialType.setIsActive(dto.getIsActive());
+        if (dto.getIsActive() != null) {
+            if (Boolean.TRUE.equals(dto.getIsActive())) {
+                ensureNotMerged(materialType);
+            }
+            materialType.setIsActive(dto.getIsActive());
+        }
         // 🔴 2026-08-11: 这一行以前**不存在** —— createMaterialType 写 isByproduct,
         // updateMaterialType 却漏了, 于是物料档案里那个「这是副产（生产产出，无采购来源）」
         // 开关**只有新建时才生效, 编辑已有物料点了不写库**。
@@ -578,6 +593,37 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         };
     }
 
+    /** 已合并的重复物料不能再启用 —— 启用回来就又多出一个重复物料。 */
+    private void ensureNotMerged(RawMaterialType materialType) {
+        if (materialType.getMergedIntoId() != null) {
+            throw new BusinessException(409, "「" + materialType.getName() + "」已合并到别的物料，不能再启用")
+                    .withHint("请直接使用合并后的主物料")
+                    .withHintTarget("isActive");
+        }
+    }
+
+    /** 给一页物料补上别名和合并去向 (一页一次查询, 不逐行查)。 */
+    private List<RawMaterialTypeDTO> withAliases(String factoryId, List<RawMaterialTypeDTO> dtos) {
+        if (aliasMergeService == null || dtos == null || dtos.isEmpty()) {
+            return dtos;
+        }
+        Map<String, List<String>> aliases = aliasMergeService.aliasesByMaterial(factoryId,
+                dtos.stream().map(RawMaterialTypeDTO::getId).filter(Objects::nonNull).toList());
+        Set<String> masterIds = dtos.stream().map(RawMaterialTypeDTO::getMergedIntoId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<String, String> masterNames = masterIds.isEmpty() ? Map.of()
+                : materialTypeRepository.findByIdIn(masterIds).stream()
+                        .filter(m -> factoryId.equals(m.getFactoryId()))
+                        .collect(Collectors.toMap(RawMaterialType::getId, RawMaterialType::getName, (a, b) -> a));
+        for (RawMaterialTypeDTO dto : dtos) {
+            dto.setAliases(aliases.getOrDefault(dto.getId(), List.of()));
+            if (dto.getMergedIntoId() != null) {
+                dto.setMergedIntoName(masterNames.get(dto.getMergedIntoId()));
+            }
+        }
+        return dtos;
+    }
+
     private BusinessException duplicateMaterialName(String name) {
         return new BusinessException(409, "原料类型名称已存在: " + name)
                 .withHint("同一工厂内原料类型名称不能重复，请修改名称")
@@ -642,6 +688,10 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         }
 
         try {
+            if (aliasMergeService != null) {
+                // 别名只是检索入口; 物料删了, 留着它会挡住同名的新建档
+                aliasMergeService.removeAllAliases(factoryId, id);
+            }
             materialTypeRepository.delete(materialType);
             log.info("原材料类型删除成功: id={}", id);
         } catch (Exception e) {
@@ -667,7 +717,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                     .withHint("当前原材料类型不属于该工厂, 无法查看");
         }
 
-        RawMaterialTypeDTO dto = convertToDTO(materialType);
+        RawMaterialTypeDTO dto = withAliases(factoryId, new ArrayList<>(List.of(convertToDTO(materialType)))).get(0);
 
         // C-6 Canvas Reactive Default (2026-05-09): enrich with packaging hierarchy fields
         // for the by-id endpoint only (frontend ReferenceSelector projectFields fetchById path).
@@ -695,9 +745,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
 
         Page<RawMaterialType> page = materialTypeRepository.findByFactoryId(factoryId, pageable);
 
-        List<RawMaterialTypeDTO> dtos = page.getContent().stream()
+        List<RawMaterialTypeDTO> dtos = withAliases(factoryId, page.getContent().stream()
                 .map(this::convertToDTO)
-                .collect(Collectors.toList());
+                .collect(Collectors.toList()));
 
         return PageResponse.of(
                 dtos,
@@ -715,7 +765,8 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 pageRequest.getPage() - 1, pageRequest.getSize(), Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<RawMaterialType> page = materialTypeRepository.filterBySegmentPrefixAndKeyword(
                 factoryId, classificationId, normalizedKeyword, pageable);
-        List<RawMaterialTypeDTO> dtos = page.getContent().stream().map(this::convertToDTO).toList();
+        List<RawMaterialTypeDTO> dtos = withAliases(factoryId,
+                page.getContent().stream().map(this::convertToDTO).collect(Collectors.toList()));
         return PageResponse.of(dtos, pageRequest.getPage(), pageRequest.getSize(), page.getTotalElements());
     }
 
@@ -744,9 +795,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         Page<RawMaterialType> page = materialTypeRepository.findByFactoryIdAndCategoryIgnoreCase(
                 factoryId, materialKind, pageable);
 
-        List<RawMaterialTypeDTO> dtos = page.getContent().stream()
+        List<RawMaterialTypeDTO> dtos = withAliases(factoryId, page.getContent().stream()
                 .map(this::convertToDTO)
-                .collect(Collectors.toList());
+                .collect(Collectors.toList()));
 
         return PageResponse.of(dtos, pageRequest.getPage(), pageRequest.getSize(), page.getTotalElements());
     }
@@ -759,9 +810,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         log.info("获取激活的原材料类型: factoryId={}", factoryId);
 
         List<RawMaterialType> materialTypes = materialTypeRepository.findByFactoryIdAndIsActive(factoryId, true);
-        return materialTypes.stream()
+        return withAliases(factoryId, materialTypes.stream()
                 .map(this::convertToDTO)
-                .collect(Collectors.toList());
+                .collect(Collectors.toList()));
     }
 
     @Override
@@ -811,9 +862,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
         Page<RawMaterialType> page = materialTypeRepository.searchMaterialTypes(factoryId,
             com.cretas.aims.util.SqlLikeEscaper.escape(keyword), pageable);
 
-        List<RawMaterialTypeDTO> dtos = page.getContent().stream()
+        List<RawMaterialTypeDTO> dtos = withAliases(factoryId, page.getContent().stream()
                 .map(this::convertToDTO)
-                .collect(Collectors.toList());
+                .collect(Collectors.toList()));
 
         return PageResponse.of(
                 dtos,
@@ -860,6 +911,9 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                         .withHint("批量操作中包含其他工厂的原材料类型, 请重新选择");
             }
 
+            if (Boolean.TRUE.equals(isActive)) {
+                ensureNotMerged(materialType);
+            }
             materialType.setIsActive(isActive);
             materialType.setUpdatedAt(LocalDateTime.now());
             materialTypeRepository.save(materialType);
@@ -906,6 +960,7 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                 .minStock(materialType.getMinStock())
                 .maxStock(materialType.getMaxStock())
                 .isActive(materialType.getIsActive())
+                .mergedIntoId(materialType.getMergedIntoId())
                 .notes(materialType.getNotes())
                 .createdBy(materialType.getCreatedBy())
                 .createdAt(materialType.getCreatedAt())
@@ -1288,12 +1343,23 @@ public class RawMaterialTypeServiceImpl implements RawMaterialTypeService {
                     factoryId, keyword.substring(0, Math.min(2, keyword.length())), categoryFilter, top3);
         }
 
+        // 输入的是某个物料的别名 (配方单上的叫法): 直接把那个物料当首选, 置信度按精确命中算
+        RawMaterialType aliasHit = aliasMergeService == null ? null
+                : aliasMergeService.resolveByName(factoryId, keyword).orElse(null);
+        if (aliasHit != null) {
+            List<RawMaterialType> reordered = new ArrayList<>(matches);
+            reordered.removeIf(candidate -> candidate.getId().equals(aliasHit.getId()));
+            reordered.add(0, aliasHit);
+            matches = reordered;
+        }
+
         if (matches.isEmpty()) {
             return MaterialSuggestDTO.builder().build();
         }
 
         RawMaterialType match = matches.get(0);
-        boolean exactName = normalizeSuggestionName(match.getName()).equals(normalizeSuggestionName(keyword));
+        boolean exactName = aliasHit != null
+                || normalizeSuggestionName(match.getName()).equals(normalizeSuggestionName(keyword));
         String confidence = exactName ? "HIGH" : "MEDIUM";
         List<MaterialTaxonomyCandidateDTO> taxonomyCandidates = matches.stream()
                 .map(candidate -> taxonomyCandidate(factoryId, keyword, candidate))

@@ -1024,11 +1024,12 @@ public class IntentExecutionOrchestrator {
             response = enrichWithClarificationQuestions(response, request, intent, factoryId, userId);
         }
 
-        // 6.8. 结果格式化
-        applyResultFormatting(response);
+        // 6.8. 结果格式化 (先换成这个人看得到的那一份数据)
+        boolean priceMasked = applyCallerPriceView(response, userId);
+        applyResultFormatting(response, userId);
 
         // 6.9. formattedText 兜底
-        applyFormattedTextFallback(factoryId, response);
+        applyFormattedTextFallback(factoryId, response, priceMasked);
 
         // 6.95. P1 读写分块: 终点统一补 aiMode (前端据此选卡片形态)
         applyAiModeStamp(response, intent, toolName);
@@ -1227,8 +1228,9 @@ public class IntentExecutionOrchestrator {
             response = enrichWithClarificationQuestions(response, request, intent, factoryId, userId);
         }
 
-        applyResultFormatting(response);
-        applyFormattedTextFallback(factoryId, response);
+        boolean priceMasked = applyCallerPriceView(response, userId);
+        applyResultFormatting(response, userId);
+        applyFormattedTextFallback(factoryId, response, priceMasked);
 
         // P1 读写分块: 显式意图路径同样终点补 aiMode
         applyAiModeStamp(response, intent, toolName);
@@ -4409,18 +4411,19 @@ public class IntentExecutionOrchestrator {
         if ("NEED_MORE_INFO".equals(finished.getStatus())) {
             finished = enrichWithClarificationQuestions(finished, request, intent, factoryId, userId);
         }
-        applyResultFormatting(finished);
-        applyFormattedTextFallback(factoryId, finished);
+        boolean priceMasked = applyCallerPriceView(finished, userId);
+        applyResultFormatting(finished, userId);
+        applyFormattedTextFallback(factoryId, finished, priceMasked);
         applyAiModeStamp(finished, intent, intent.getToolName());
         return finished;
     }
 
-    private void applyResultFormatting(IntentExecuteResponse response) {
+    private void applyResultFormatting(IntentExecuteResponse response, Long userId) {
         String status = response.getStatus();
         boolean isSuccessStatus = "SUCCESS".equals(status) || "COMPLETED".equals(status);
         if (resultFormatterService != null && isSuccessStatus && response.getResultData() != null) {
             try {
-                resultFormatterService.formatAndSet(response);
+                resultFormatterService.formatAndSet(response, userId);
             } catch (Exception e) {
                 log.debug("结果格式化失败（非致命）: {}", e.getMessage());
             }
@@ -4451,7 +4454,31 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    private void applyFormattedTextFallback(String factoryId, IntentExecuteResponse response) {
+    /** 价格 / 财务可见性的唯一判定 (与 HTTP 响应层同一个); 没装配时不让模型看结果数据。 */
+    @Autowired(required = false)
+    private com.cretas.aims.security.PriceFieldResponseAdvice priceView;
+
+    /**
+     * 把 resultData 换成这个人看得到的那一份 (ERP-S6-LLM-PROMPT-PRICE-LEAK): 之后的格式化、交给模型写的摘要、无模型兜底、
+     * 对话记忆、缓存都只碰得到遮过的数据 —— 模型看不到的数, 写不进回复。
+     * 线上 (acc-s6, F006): 生产 / 销售 / 采购主管问「查看财务报表」, 字段已遮, 摘要模型却拿原始结果写出
+     * 「总成本合计 3.00 元, 设备成本 2.00 元…总利润 -3.00 元」。
+     *
+     * @return true = 数据已按这个人遮过 (或本来就没有数据); false = 判定组件没装配, 后面不许把数据交给模型
+     */
+    private boolean applyCallerPriceView(IntentExecuteResponse response, Long userId) {
+        if (response == null || response.getResultData() == null) {
+            return true;
+        }
+        if (priceView == null) {
+            log.warn("价格可见性组件未装配: 结果数据不交给摘要模型 (fail closed)");
+            return false;
+        }
+        response.setResultData(priceView.maskedViewFor(response.getResultData(), userId));
+        return true;
+    }
+
+    private void applyFormattedTextFallback(String factoryId, IntentExecuteResponse response, boolean priceMasked) {
         sanitizeInternalReasoningLeak(response);
         String currentFT = response.getFormattedText();
         String msg = response.getMessage();
@@ -4487,7 +4514,7 @@ public class IntentExecutionOrchestrator {
         // raw JSON dumps (5989-char sales-owner case), and bare templates ("包含 N 项数据指标").
         // Pipes through DashScopeClient.chatFast() for Chinese natural-language summary.
         // Opt-out via cretas.ai.workdesk-summarizer.enabled=false.
-        if (workdeskOutputSummarizer != null) {
+        if (workdeskOutputSummarizer != null && priceMasked) {
             try {
                 workdeskOutputSummarizer.apply(response, factoryId);
             } catch (Exception e) {
@@ -4846,6 +4873,12 @@ public class IntentExecutionOrchestrator {
 
     private String getPrecomputedAnalysisContext(String factoryId) {
         if (factoryId == null || factoryId.isEmpty()) return null;
+        // 存档的日报 / 周报是整段文字 (含营收、成本、利润), 逐字段遮不了: 只给看得到经营财务数字的人 (ERP-S6-LLM-PROMPT-PRICE-LEAK)
+        Long caller = com.cretas.aims.utils.SecurityUtils.currentUserId();
+        if (priceView == null || !priceView.seesFinanceFigures(caller)) {
+            log.info("[price] 当前账号看不到经营财务数字, 存档报告不拼进咨询提示词: factoryId={}, userId={}", factoryId, caller);
+            return null;
+        }
         try {
             if (!llmCostScope.forCurrentCaller(factoryId).isEmpty()) {
                 log.info("[process-secret] 当前账号无权查看本厂部分保密产品, 存档报告不拼进咨询提示词: factoryId={}", factoryId);

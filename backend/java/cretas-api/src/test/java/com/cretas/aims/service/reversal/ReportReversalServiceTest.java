@@ -417,10 +417,12 @@ class ReportReversalServiceTest {
             when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
             when(fgbRepo.existsShippedByFactoryIdAndProductionPlanId(anyString(), anyString())).thenReturn(false);
 
+            // 旧版撤回是审批后真执行过的 (prod log 22/23/24: approved_by=1552)
             ReportReversalLog existing = ReportReversalLog.builder()
                     .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
                     .status(ReportReversalLog.ReversalStatus.DONE)
                     .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .approvedBy(1552L).approvedAt(LocalDateTime.of(2026, 10, 28, 10, 0))
                     .build();
             when(reversalLogRepo.findByBatchIdAndReversalScopeAndDeletedAtIsNull(
                     BATCH_ID, ReportReversalLog.ReversalScope.WHOLE_ORDER))
@@ -441,6 +443,45 @@ class ReportReversalServiceTest {
             verify(processSheetRowRepository).saveAll(List.of(row));
             verify(reportRepo, never()).save(any());
             verify(txnRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("G3: 无报工 no-op 记成的 DONE, 批次却有已入账录入行 → 重新打开等审批, ⛔ 不只软删行")
+        void g3_noOpDoneWithLiveProcessRows_isReopenedNotRepaired() {
+            // prod F006 log 29 (batch 11041): 逐道报工批次 0 条 production_reports, 1 行已入账录入行,
+            // 旧逻辑直接 DONE —— 领用没冲, 上游在制品批永远被「已被下道工序领用」拦住。
+            when(txnRepo.existsDownstreamConsumed(anyString(), anyString())).thenReturn(false);
+            ProductionBatch batch = new ProductionBatch();
+            batch.setProductionPlanId("plan-001");
+            when(batchRepo.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+            when(fgbRepo.existsShippedByFactoryIdAndProductionPlanId(anyString(), anyString())).thenReturn(false);
+
+            ReportReversalLog bogus = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .status(ReportReversalLog.ReversalStatus.DONE)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .reason("QA")
+                    .build();
+            when(reversalLogRepo.findByBatchIdAndReversalScopeAndDeletedAtIsNull(
+                    BATCH_ID, ReportReversalLog.ReversalScope.WHOLE_ORDER))
+                    .thenReturn(Optional.of(bogus));
+            when(reversalLogRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            ProcessSheetRow row = new ProcessSheetRow();
+            row.setId(89L);
+            row.setFactoryId(FACTORY_ID);
+            row.setBatchId(BATCH_ID);
+            when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, "plan-001"))
+                    .thenReturn(List.of(row));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID)).thenReturn(List.of());
+
+            ReportReversalLog result = service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "retry");
+
+            assertThat(result.getId()).isEqualTo(LOG_ID);
+            assertThat(result.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.PENDING);
+            assertThat(result.getReason()).startsWith("QA | ").contains("重新提交审批");
+            // 阴性对照: 不把行藏起来 (那正是「库存一笔没冲却看不到行」的旧修复路径)
+            assertThat(row.getDeletedAt()).isNull();
+            verify(processSheetRowRepository, never()).saveAll(any());
         }
 
         @Test
@@ -503,6 +544,55 @@ class ReportReversalServiceTest {
             // executeReversal should have been called (save will be called for setting DONE)
             ArgumentCaptor<ReportReversalLog> captor = ArgumentCaptor.forClass(ReportReversalLog.class);
             verify(reversalLogRepo, atLeastOnce()).save(captor.capture());
+        }
+
+        @Test
+        @DisplayName("逐道报工批次: 0 条报工但有已入账录入行 → PENDING 等审批, ⛔ 不是 no-op DONE")
+        void processRowsOnly_createsPending_notNoOpDone() {
+            ProductionBatch batch = new ProductionBatch();
+            batch.setProductionPlanId("plan-001");
+            setupPassingGuards(batch);
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID)).thenReturn(Collections.emptyList());
+            ProcessSheetRow row = new ProcessSheetRow();
+            row.setId(90L);
+            row.setFactoryId(FACTORY_ID);
+            row.setBatchId(BATCH_ID);
+            when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, "plan-001"))
+                    .thenReturn(List.of(row));
+            when(reversalLogRepo.save(any())).thenAnswer(inv -> {
+                ReportReversalLog l = inv.getArgument(0);
+                l.setId(LOG_ID);
+                return l;
+            });
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.empty());
+
+            ReportReversalLog result = service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "clerk");
+
+            assertThat(result.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.PENDING);
+            assertThat(result.getFastPath()).isFalse();
+            // 审批前不动任何东西
+            assertThat(row.getDeletedAt()).isNull();
+            verify(processSheetRowRepository, never()).saveAll(any());
+        }
+
+        @Test
+        @DisplayName("阳性对照: 0 条报工且没有录入行 → 仍是 no-op DONE")
+        void noReportsNoRows_stillNoOpDone() {
+            ProductionBatch batch = new ProductionBatch();
+            batch.setProductionPlanId("plan-001");
+            setupPassingGuards(batch);
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID)).thenReturn(Collections.emptyList());
+            when(processSheetRowRepository.findByFactoryIdAndPlanId(FACTORY_ID, "plan-001")).thenReturn(List.of());
+            when(reversalLogRepo.save(any())).thenAnswer(inv -> {
+                ReportReversalLog l = inv.getArgument(0);
+                l.setId(LOG_ID);
+                return l;
+            });
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.empty());
+
+            ReportReversalLog result = service.submitReversal(FACTORY_ID, BATCH_ID, SUBMITTED_BY, "empty");
+
+            assertThat(result.getStatus()).isEqualTo(ReportReversalLog.ReversalStatus.DONE);
         }
 
         @Test

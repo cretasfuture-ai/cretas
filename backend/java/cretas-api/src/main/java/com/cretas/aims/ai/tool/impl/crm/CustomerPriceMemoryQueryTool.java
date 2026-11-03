@@ -139,11 +139,14 @@ public class CustomerPriceMemoryQueryTool extends AbstractBusinessTool {
         data.put("orderDate", row.getOrderDate().toString());
         data.put("hasHistory", true);
 
+        // 文字与 unitPrice 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        String priceText = replyShowsAmount(context, "unitPrice")
+                ? "单价 ¥" + row.getUnitPrice().toPlainString() : "单价按权限不显示";
         return buildSimpleResult(
-                String.format("客户 %s 上次购 %s 单价 ¥%s (订单 %s, %s)",
+                String.format("客户 %s 上次购 %s %s (订单 %s, %s)",
                         customer.getName(),
                         productName,
-                        row.getUnitPrice().toPlainString(),
+                        priceText,
                         row.getSourceOrderNumber() != null ? row.getSourceOrderNumber() : row.getSourceSalesOrderId(),
                         row.getOrderDate()),
                 data);

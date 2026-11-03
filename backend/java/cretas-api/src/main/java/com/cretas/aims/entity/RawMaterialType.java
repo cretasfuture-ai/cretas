@@ -365,6 +365,25 @@ public class RawMaterialType extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    // ========== 重复物料合并 ==========
+
+    /**
+     * 合并去向: 非空 = 本物料是重复物料、已合并到这个主物料。
+     * <p>合并后停用且不能再启用; 历史批次 / 单据仍指向本行, 一行不动。
+     * 本物料的名称在合并时自动成为主物料的别名 (见 {@code RawMaterialTypeAlias})。</p>
+     */
+    @Column(name = "merged_into_id", length = 191)
+    private String mergedIntoId;
+
+    @Column(name = "merged_at")
+    private java.time.LocalDateTime mergedAt;
+
+    @Column(name = "merged_by", length = 100)
+    private String mergedBy;
+
+    @Column(name = "merge_reason", length = 500)
+    private String mergeReason;
+
     /**
      * 创建者ID
      * <p>外键关联 users 表，记录创建此原材料类型的用户</p>

@@ -54,7 +54,7 @@ class RawMaterialTypeRoleGateMvcTest {
     @BeforeEach
     void setUp() {
         RawMaterialTypeController controller =
-                new RawMaterialTypeController(materialTypeService, mobileService, supplierService);
+                new RawMaterialTypeController(materialTypeService, mobileService, supplierService, null);
         this.mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(new RequireRoleInterceptor(new ObjectMapper()))
                 .build();

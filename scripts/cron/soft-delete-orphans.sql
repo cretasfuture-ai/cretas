@@ -1,4 +1,4 @@
--- generated-from 8dcf816b5cb4 2026-11-03 10:47:00Z
+-- generated-from af43dae8130e-dirty 2026-11-03 11:01:28Z
 -- 关联 62 对 = 注解扫描 60 + 手工登记新增 2
 -- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。
 --

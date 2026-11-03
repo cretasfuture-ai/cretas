@@ -264,7 +264,8 @@ public class AIPublicDemoController {
             response.setSessionId(sessionId);  // 确保响应包含会话ID
 
             // 格式化结果为自然语言文本
-            resultFormatterService.formatAndSet(response);
+            // 公开演示没有登录用户: 按「全部不可见」渲染文字 (fail closed, 与对话同一个价格判定)
+            resultFormatterService.formatAndSet(response, null);
 
             log.info("AI演示执行成功: intentCode={}, sessionId={}", matchedIntent.getIntentCode(), sessionId);
 

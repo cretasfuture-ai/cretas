@@ -207,7 +207,10 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
         }
 
         String message;
-        if (missingCostData) {
+        if (!replyShowsAmounts(context, "totalRevenue", "totalCost", "grossProfit", "operatingProfit", "netProfit")) {
+            // 文字与利润表各金额字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+            message = String.format("%s 利润表已查到 (金额按权限不显示)", periodLabel);
+        } else if (missingCostData) {
             message = String.format(
                     "%s 利润表: 营业收入 ¥%s；%s。请先补录或同步成本凭证后再查询毛利率和利润",
                     periodLabel, dto.getTotalRevenue(), marginStatusMessage);

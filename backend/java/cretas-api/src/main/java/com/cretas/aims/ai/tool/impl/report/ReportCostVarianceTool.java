@@ -150,6 +150,9 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
 
         result.put("generatedAt", LocalDate.now().format(DateTimeFormatter.ISO_DATE));
         result.put("data", costVarianceData);
+        // 与 GET /reports/cost-variance 同一份 DTO、同一个门槛 (finance:read / finance:read_write / procurement:price:view):
+        // REST 上过了门槛就看得到成本, 对话里字段与文字也一样 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        sameVisibilityAsRest(costVarianceData);
 
         // 不可比较时明说「无法比较」, ⛔ 不让模型从 null 字段里自己编一个差异率。
         boolean comparable = !Boolean.FALSE.equals(costVarianceData.getComparable())

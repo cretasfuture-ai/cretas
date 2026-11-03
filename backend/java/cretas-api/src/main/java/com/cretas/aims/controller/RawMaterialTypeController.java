@@ -8,12 +8,14 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.ByproductMarkRequest;
 import com.cretas.aims.dto.material.MaterialCodePreviewDTO;
+import com.cretas.aims.dto.material.MaterialMergeDTO;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.dto.supplier.SupplierDTO;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.RawMaterialTypeService;
 import com.cretas.aims.service.SupplierService;
+import com.cretas.aims.service.material.MaterialAliasMergeService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
@@ -47,6 +49,7 @@ public class RawMaterialTypeController {
     private final RawMaterialTypeService materialTypeService;
     private final MobileService mobileService;
     private final SupplierService supplierService;
+    private final MaterialAliasMergeService aliasMergeService;
 
     /**
      * 创建原材料类型
@@ -410,5 +413,53 @@ public class RawMaterialTypeController {
         log.info("SP8按编码前缀搜索: factoryId={}, q={}", factoryId, ErrorSanitizer.sanitize(q));
         List<RawMaterialTypeDTO> results = materialTypeService.searchByCodePrefix(factoryId, q);
         return ApiResponse.success(results);
+    }
+
+    // ========== 别名与重复物料合并 (新工厂复盘: 配方名称对不上 / 同类品牌要整合) ==========
+
+    @GetMapping("/{id}/aliases")
+    @Operation(summary = "物料别名列表")
+    public ApiResponse<List<MaterialMergeDTO.AliasItem>> listAliases(
+            @PathVariable String factoryId, @PathVariable String id) {
+        return ApiResponse.success(aliasMergeService.listAliases(factoryId, id));
+    }
+
+    /** 写权限与 PUT /{id} 一致: 别名是物料字典的一部分, 只让仓储主管改。 */
+    @RequirePermission({"production:read_write", "warehouse:read_write"})
+    @PostMapping("/{id}/aliases")
+    @Operation(summary = "添加物料别名", description = "配方单 / 供应商单据上的叫法; 同一工厂内别名唯一, 也不能与其它物料名称相同")
+    @RequireRole({"warehouse_manager", "factory_super_admin"})
+    public ApiResponse<MaterialMergeDTO.AliasItem> addAlias(
+            @PathVariable String factoryId, @PathVariable String id,
+            @RequestBody @Valid MaterialMergeDTO.AliasRequest request) {
+        return ApiResponse.success(aliasMergeService.addAlias(factoryId, id, request.getAlias()));
+    }
+
+    @RequirePermission({"production:read_write", "warehouse:read_write"})
+    @DeleteMapping("/{id}/aliases/{aliasId}")
+    @Operation(summary = "删除物料别名")
+    @RequireRole({"warehouse_manager", "factory_super_admin"})
+    public ApiResponse<Void> removeAlias(
+            @PathVariable String factoryId, @PathVariable String id, @PathVariable String aliasId) {
+        aliasMergeService.removeAlias(factoryId, id, aliasId);
+        return ApiResponse.success();
+    }
+
+    /** 合并前预检: 列出挡住合并的引用 (库存 / 配方 / 工艺图 / 供应商 / 在途采购) 和不挡但要知道的差异。 */
+    @GetMapping("/{id}/merge-check")
+    @Operation(summary = "合并重复物料预检")
+    public ApiResponse<MaterialMergeDTO.MergeCheck> checkMerge(
+            @PathVariable String factoryId, @PathVariable String id, @RequestParam String masterId) {
+        return ApiResponse.success(aliasMergeService.checkMerge(factoryId, id, masterId));
+    }
+
+    @RequirePermission({"production:read_write", "warehouse:read_write"})
+    @PostMapping("/{id}/merge")
+    @Operation(summary = "把重复物料合并到主物料", description = "被合并物料停用, 名字变成主物料的别名; 历史单据不动; 有引用或库存时 409")
+    @RequireRole({"warehouse_manager", "factory_super_admin"})
+    public ApiResponse<MaterialMergeDTO.MergeResult> merge(
+            @PathVariable String factoryId, @PathVariable String id,
+            @RequestBody @Valid MaterialMergeDTO.MergeRequest request) {
+        return ApiResponse.success(aliasMergeService.merge(factoryId, id, request));
     }
 }

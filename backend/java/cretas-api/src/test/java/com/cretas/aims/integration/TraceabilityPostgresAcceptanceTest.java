@@ -58,6 +58,7 @@ class TraceabilityPostgresAcceptanceTest {
     @Import({TraceabilityController.class, TraceabilityServiceImpl.class, LineageGraphAssembler.class,
             com.cretas.aims.service.lineage.LineageEdgeOutboxReconciler.class,
             com.cretas.aims.service.lineage.LineageEdgeOutbox.class, com.cretas.aims.service.lineage.LineageEdgeWriter.class,
+            com.cretas.aims.service.lineage.TraceEvidencePackService.class,
             IndicatorController.class, IndicatorQueryServiceImpl.class, IndicatorComputationStrategyRegistry.class,
             FactoryQualityRejectRateStrategy.class})
     static class Runtime { }
