@@ -103,8 +103,6 @@ def _guess_provider(host: str, authorization_header: Optional[str] = None) -> st
         if authorization_header:
             import os
             key = authorization_header.replace("Bearer ", "").strip()
-            if key and key == os.getenv("LLM_ALIYUN_C_API_KEY", "___unset_c___"):
-                return "aliyun_c"
             if key and key == os.getenv("LLM_ALIYUN_B_API_KEY", "___unset_b___"):
                 return "aliyun_b"
             if key and (key == os.getenv("LLM_ALIYUN_A_API_KEY", "___unset_a___") or

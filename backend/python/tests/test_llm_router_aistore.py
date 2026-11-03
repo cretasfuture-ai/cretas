@@ -17,7 +17,7 @@
      那样写会「一个都没扫到」(闸空转)。⇒ 改成**每个槽 × 登记表里每个型号**直接
      打 `_apply_slot_params`, 不再依赖链成员。
   2. 2xx-带-error-体 的回退(call_chain 与 call_chain_stream)—— 与账号无关的机制,
-     原来借 aistore→deepseek 两跳来测, 现在借在册的 aliyun_c_vl→aliyun_a_vl。
+     原来借 aistore→deepseek 两跳来测, 现在借在册的 aliyun_a_vl→aliyun_b_vl。
 """
 
 from __future__ import annotations
@@ -115,14 +115,14 @@ def test_aistore_thinking_switch_is_keyed_by_the_exact_model_string():
 
 # ── 2xx + error 体的回退: 与账号无关的机制, 用在册的两个阿里云账号来测 ──────────
 _TWO_HOPS = [
-    ("aliyun_c_vl", "qwen3.8-flash"),
     ("aliyun_a_vl", "qwen3.8-flash"),
+    ("aliyun_b_vl", "qwen3.8-flash"),
 ]
 
 
 def _patch_two_hops(monkeypatch):
-    monkeypatch.setenv("LLM_ALIYUN_C_API_KEY", "fake-c")
     monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "fake-a")
+    monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "fake-b")
     monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 10, 7))
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, list(_TWO_HOPS))
 

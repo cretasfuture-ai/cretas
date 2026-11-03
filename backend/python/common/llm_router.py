@@ -10,8 +10,8 @@ retains its separate LLM_WAREHOUSE_V41_ENABLED=1 gate.
 
 ⚠️ 2026-10-07: `aistore` / `deepseek` / `zhipu` 三类账号已整体清出(Steve 复审裁定
 「清掉死通道, 大模型后备只留我们自己的阿里云账号」, 见 `_REGISTRY_AUDIT_DATE` 上方)。
-今天在册的只有 aliyun_c_vl / aliyun_a_vl / aliyun_b_vl 三个逻辑账号; 文本槽的链
-全部来自 `_TEXT_TAIL`(三账号轮转 qwen3.8-flash)。下面 09-15 那段是当时的订正, 存档。
+今天在册的只有 aliyun_a_vl / aliyun_b_vl 两个云账号(2026-11-03 aliyun_c 下线, Steve 裁定)加
+自有机器上的 local_canada; 文本槽的链全部来自 `_TEXT_TAIL`。下面 09-15 那段是当时的订正, 存档。
 
 ⚠️ 2026-09-15 订正: 上面原文写的是「≥10 个模型横跨 aliyun_c → aliyun_b →
 aliyun_a → zhipu」。那条链**早就不存在了** —— `_provider_config` 里的通用文本
@@ -166,6 +166,8 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 #   · 活: aliyun_a_vl qwen3.8-flash / qwen3.7-flash / deepseek-v4.1-flash(仓库专用)
 #   · 🔴 新: aliyun_c_vl qwen3.8-flash 由 10-07 的 ok 200 变成 **400 Arrearage(账号欠费)** ——
 #     不是额度, 是 aliyun_c 账号本身欠费; 链上表现是一跳 400 → 下一跳, 不计费。报 owner。
+#   🔴 2026-11-03 Steve 裁定「我们不用 aliyun_c 了」: aliyun_c_vl 从注册表 / 全部链 / 探针整体下线,
+#     链为 aliyun_a_vl → aliyun_b_vl → local_canada。.env.prod 的 LLM_ALIYUN_C_* 已注释, 代码不再读。
 #   · 10-07 起仍 403 FreeTierOnly 的 4 条原样保留(aliyun_b_vl qwen3.8-flash, aliyun_a_vl
 #     kimi-k3 / qwen3.8-27b / qwen3.8-max-0902), 仍待 owner 裁定。
 # ⇒ 当前文本槽实际只剩 aliyun_a 一个账号能出内容; a 也耗尽时 call_chain 抛 LLMChainExhausted。
@@ -178,7 +180,6 @@ _REGISTRY_AUDIT_DATE = datetime.date(2026, 11, 3)  # 11-03 复审: 0 删 0 增, 
 #: ⇒ 推日期必须同时换上新一轮的逐条读数, 「只推日期过闸」在结构上做不到不留痕。
 _REGISTRY_AUDIT_PROBE_DATE = datetime.date(2026, 11, 3)
 _REGISTRY_AUDIT_PROBE: Dict[Tuple[str, str], str] = {
-    ("aliyun_c_vl", "qwen3.8-flash"): "error 400 Arrearage(账号欠费) —— 10-07 为 ok 200, 保留, 报 owner 裁定",
     ("aliyun_a_vl", "qwen3.8-flash"): "ok 200",
     ("aliyun_a_vl", "qwen3.7-flash"): "ok 200",
     ("aliyun_a_vl", "deepseek-v4.1-flash"): "ok 200 (仓库专用, 需 LLM_WAREHOUSE_V41_ENABLED=1)",
@@ -211,7 +212,6 @@ _FAR_FUTURE = datetime.date(2099, 1, 1)  # tencent/zhipu + missing dates sort la
 _BULK_EXPIRY: Dict[str, datetime.date] = {
     "aliyun_a": datetime.date(2026, 7, 16),
     "aliyun_b": datetime.date(2026, 7, 16),
-    "aliyun_c": datetime.date(2026, 8, 13),
 }
 
 _d = datetime.date
@@ -247,11 +247,6 @@ _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
     # 按现有 NEXT 语义切下一个账号, 拿到的是**另一份**额度而不是同一份。
     # ⚠️ 延迟逐账号量(同一个模型在不同账号上可以差一个数量级 —— 本文件
     #    REASONING 槽那条 66.9s 的注释就是这么来的), 所以三条各记各的:
-    ("aliyun_c_vl", "qwen3.8-flash"):
-        "2026-09-15 prod 探针: 带图 HTTP 200, **4.8s**。两张样张均返回合规 JSON —— "
-        "EAR_TAG {\"tagNumber\":\"1180245\",\"confidence\":1.0}; "
-        "MEAT_CUT {\"cut\":\"Ribeye\",\"marblingScore\":3,\"foreignObjectSuspected\":false,"
-        "\"contaminationSuspected\":false,\"confidence\":0.9}。usage≈1200 tokens。最快 ⇒ 排链头。",
     ("aliyun_a_vl", "qwen3.8-flash"):
         "2026-09-15 prod 探针: 带图 HTTP 200, **6.2s**。第二顺位。",
     ("aliyun_b_vl", "qwen3.8-flash"):
@@ -279,9 +274,6 @@ _LOGPROB_VERIFIED: Dict[Tuple[str, str], str] = {
         "2026-10-02 prod 探针 5/5 HTTP 200, logprobs 5/5, 首 token 是正确选项字母; "
         "中位 0.38s / 最慢 0.67s。离线评测 2,000+ 次同形调用: 偶发缺 logprobs 约 1/700, "
         "同请求重试即恢复 ⇒ 调用方必须校验 logprobs 并重试/换下一跳。链头。",
-    ("aliyun_c_vl", "qwen3.8-flash"):
-        "2026-10-02 prod 探针 5/5 HTTP 200, logprobs 5/5, 首 token 正确; "
-        "中位 0.73s 但最慢 **11.86s** —— 长尾重(离线评测 p95 6-9s)。只作链头失败后的备胎。",
     ("aliyun_a_vl", "qwen3.8-flash"):
         "2026-10-02 prod 探针 5/5 HTTP 200, logprobs 5/5, 首 token 正确; 中位 1.28s / 最慢 2.47s。",
     # ⛔ 同日探针**不收**的组合(都是 403 Free quota exhausted, 不是能力问题):
@@ -292,14 +284,13 @@ _LOGPROB_VERIFIED: Dict[Tuple[str, str], str] = {
 _LOGPROB_ORDER: List[Tuple[str, str]] = [
     ("aliyun_a_vl", "qwen3.7-flash"),
     ("aliyun_a_vl", "qwen3.8-flash"),
-    ("aliyun_c_vl", "qwen3.8-flash"),
 ]
 
 # VL 槽位的账号顺序与模型**可配**(Steve 2026-09-15): 换模型/调顺序 =
 # 改 `.env.prod` 一行 + 重启, ⛔ 不用改代码、不用重新发版。
 #
 #   LLM_VL_MODEL     缺省 qwen3.8-flash
-#   LLM_VL_ACCOUNTS  缺省 aliyun_c_vl,aliyun_a_vl,aliyun_b_vl   (逗号分隔, 即 c→a→b)
+#   LLM_VL_ACCOUNTS  缺省 aliyun_a_vl,aliyun_b_vl   (逗号分隔, 即 a→b; 2026-11-03 起 aliyun_c 下线)
 #
 # 🔴 但 env **只能在上面那张登记表里挑**, ⛔ 不能凭空注入一个 (账号, 模型):
 #    本文件顶部写着 `_SAFE_MODELS` 是**唯一**的计费护栏("The router REFUSES any
@@ -307,7 +298,7 @@ _LOGPROB_ORDER: List[Tuple[str, str]] = [
 #    那道护栏当场变成摆设 —— 一个写错的 `LLM_VL_MODEL` 就可能指向付费 SKU。
 # ⇒ 没有任何组合选得中时, VL 池**留空**并 ERROR 日志点名,
 #   表现是「VL 无候选」这条**明确失败**路径, ⛔ 不是静默降级。
-_VL_DEFAULT_ACCOUNTS = "aliyun_c_vl,aliyun_a_vl,aliyun_b_vl"
+_VL_DEFAULT_ACCOUNTS = "aliyun_a_vl,aliyun_b_vl"
 _VL_ACCOUNTS: List[str] = [
     a.strip() for a in
     ((os.getenv("LLM_VL_ACCOUNTS") or "").strip() or _VL_DEFAULT_ACCOUNTS).split(",")
@@ -377,7 +368,6 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     #
     # ⚠️ 这两条都在这里, 是因为 env 只能**在已登记的候选里挑**(见 `_vl_pool`):
     #    白名单必须先有它, env 才选得到它。⛔ 反过来不行。
-    ("aliyun_c_vl", "qwen3.8-flash"): None,
     ("aliyun_a_vl", "qwen3.8-flash"): None,
     ("aliyun_b_vl", "qwen3.8-flash"): None,
     ("aliyun_a_vl", "qwen3.7-flash"): None,
@@ -558,7 +548,6 @@ _MINIMAL_SAFE_SET: frozenset = frozenset({
     # 于是「接上了 VL」和「没接上」在行为上一模一样(都是 VL 无候选 → 500)。
     # ⚠️ 两条都登记是因为 env 可以在它们之间切(见 `_vl_pool`), 而**被切到的那条
     #    必须当场可用** —— 让「切过去之后要等 21 天重审才生效」这种事不可能发生。
-    ("aliyun_c_vl", "qwen3.8-flash"),
     ("aliyun_a_vl", "qwen3.8-flash"),
     ("aliyun_b_vl", "qwen3.8-flash"),
     ("aliyun_a_vl", "qwen3.7-flash"),
@@ -651,7 +640,6 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
     ("aliyun_a", "qwen3.7-max-preview"): (1.0, 8.7),
     ("aliyun_a", "kimi-k2.7-code"): (1.0, 10.3),
     ("aliyun_b", "kimi-k2.7-code"): (1.0, 13.6),
-    ("aliyun_c", "kimi-k2.7-code"): (1.0, 13.6),
     ("tencent", "mimo-v2.5-pro"): (1.0, 24.7),
     ("ark", "doubao-seed-2-0-pro-260215"): (1.0, 45.5),
     # ── 0/6 全 http400 —— 不是慢, 是生产管线直接被拒。达标线 0.5 之下 → 沉底 ──
@@ -692,18 +680,13 @@ _PLAN_SCHEMA_VIOLATIONS: Dict[Tuple[str, str], int] = {
     ("aliyun_a", "qwen3.7-flash"): 0,
     ("aliyun_a", "qwen3.8-max"): 0,
     ("aliyun_b", "qwen3.8-max"): 0,
-    ("aliyun_c", "qwen3.8-max"): 0,
     ("aliyun_b", "qwen3.7-max-2026-05-17"): 0,
-    ("aliyun_c", "qwen3.7-max-2026-05-17"): 0,
-    ("aliyun_c", "qwen3.7-max-2026-05-20"): 0,
     ("aliyun_a", "kimi-k2.7-code"): 0,
-    ("aliyun_c", "kimi-k2.7-code"): 0,
     ("aliyun_a", "deepseek-v4-flash-0731"): 1,   # 编 "tomorrow"
     ("aliyun_b", "deepseek-v4-flash-0731"): 1,   # 编 "tomorrow"
     ("aliyun_a", "qwen3.7-flash-2026-07-15"): 1, # 编 "tomorrow"
     ("aliyun_a", "qwen3.7-max-2026-05-17"): 1,   # 编 "next_week"
     ("aliyun_b", "kimi-k2.7-code"): 1,           # 编 "next_week"
-    ("aliyun_c", "qwen3.6-plus-2026-04-02"): 2,  # 编 "yesterday" + "tomorrow"
 }
 
 
@@ -1362,7 +1345,6 @@ _TEXT_TAIL: List[Tuple[str, str]] = [
     #    豁免 registry_stale。它是通用模型(带图不带图都吃), 所以把三账号放进文本地板:
     #    排在 zhipu 之前、所有到期日非 None 的 aliyun 条目之后(expiry None → _FAR_FUTURE)。
     #    ⛔ 这是地板不是头: 等 owner 换了 deepseek 的 key、aistore 续了期, 它们自然排回前面。
-    ("aliyun_c_vl", "qwen3.8-flash"),
     ("aliyun_a_vl", "qwen3.8-flash"),
     ("aliyun_b_vl", "qwen3.8-flash"),
     # 🔴 2026-10-07: 上面三条从「地板」变成了文本槽的**全部**候选 ——
@@ -1642,12 +1624,12 @@ SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {s: _build_chain(s) for s in SL
 # in the prompt + no max_tokens (truncation = parse fail).
 # ═══════════════════════════════════════════════════════════════════════════
 _ALIYUN_ACCOUNTS: frozenset = frozenset({
-    "aliyun_a", "aliyun_b", "aliyun_c", "aliyun_a_deepseek",
+    "aliyun_a", "aliyun_b", "aliyun_a_deepseek",
     # 🔴 2026-09-15: VL 三账号(#793 新增)漏登 ⇒ `_apply_slot_params` 对 SLOT.VL
     #    从不下发 enable_thinking=false —— qwen3.8-flash 默认开思考, 真机拍耳标
     #    实测 389–1048 个 reasoning token, 6–14s, 尾部 >30s 撞三次超时 → 502。
     #    同图关思考 2.6–4.2s。形态 B: 槽 profile 写了「关」, 账号表没接上。
-    "aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl",
+    "aliyun_a_vl", "aliyun_b_vl",
 })
 
 _SLOT_PARAMS: Dict[SLOT, Dict[str, Any]] = {
@@ -1997,36 +1979,12 @@ def _provider_config(account: str) -> Tuple[str, str]:
         #    ⚠️ smartbi/config.py 里还有 kb_chat_provider="deepseek" 等 4 个字段, 2026-10-07
         #       `git grep kb_chat_` 只命中定义本身、无任何读取方 —— 死配置, 不在本次范围。
         #
-        # ── aliyun_c_vl (2026-09-15, OPS-VL-SLOT-QWEN38-FLASH-20260915) ──────
-        #
-        # ⚠️ 下面「只服务视觉槽」一段是 09-15 当时的设计; 同日晚些时候三个 `_vl` 账号
-        #    就因文本链死透被放进了 `_TEXT_TAIL`, 2026-10-07 起更是文本槽的**全部**候选。
-        # 🔴 **只服务视觉槽**, 名字里的 `_vl` 就是那道结构闸: 它不出现在
-        #    任何文本 `_SLOT_POOLS` 条目里, 所以「aliyun 悄悄回到 chat/review」
-        #    这件事**在结构上做不到**, 不靠谁记得。
-        #    (同一个做法本文件已有先例: `aliyun_a_deepseek` —— 同端点同 key,
-        #     靠一个独立的逻辑账号名把某一类 SKU 隔离在特定槽里。)
-        #
-        # 账号: DashScope bailian **aliyun_c**。2026-09-15 用 sha256(只比哈希、
-        # 不打印明文)确认 `LLM_ALIYUN_C_API_KEY` 与 Java 侧那把
-        # `CRETAS_AI_DASHSCOPE_API_KEY` **是同一把** —— 这一条是本次改动的**唯一
-        # 载荷**: 免费额度按**账号**算, 挑错账号的表现是 403 而不是报错,
-        # 与「这个模型不可用」完全同形。
-        #
-        # ⛔ 与 aistore / deepseek 同一条纪律: **不 fallback 到 `LLM_API_KEY`
-        #    或任何别的 key**。写成 `os.getenv(..., "")`。把一个不相干的凭证
-        #    发给这个 provider 是计费事故, 不是便利。
         # 2026-11-03 本地兜底: 加拿大 Mac mini 上的 ollama, 经 47 本机回环 11437 的反向隧道,
         # 前面是 bearer 鉴权代理(只放行 qwen3:8b)。⛔ key 只读 LLM_LOCAL_CANADA_API_KEY,
         # 不 fallback 到任何别的 key(同 aistore/deepseek 纪律)。没配 ⇒ empty_api_key, 不发请求。
         "local_canada": (
             os.getenv("LLM_LOCAL_CANADA_BASE_URL", "http://127.0.0.1:11437/v1"),
             os.getenv("LLM_LOCAL_CANADA_API_KEY", ""),
-        ),
-        "aliyun_c_vl": (
-            os.getenv("LLM_ALIYUN_C_BASE_URL",
-                      "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            os.getenv("LLM_ALIYUN_C_API_KEY", ""),
         ),
         # aliyun_a 的视觉分身 —— 服务 vl 和 warehouse_vl 两个视觉槽。
         # ⚠️ 逻辑账号名刻意带 `_vl` 后缀而不是直接复用 `aliyun_a`:
@@ -2119,7 +2077,7 @@ DEFAULT_CHAIN: List[str] = [
     #    什么, 而**删机制的账是在重新要用的时候才结的**: #580 删 deepseek
     #    时注释写「entire removal was 1 file」, 这次加回来才发现少了
     #    thinking 注入那一半, 差点 DOA。
-    "aliyun_c_vl", "aliyun_a_vl", "aliyun_b_vl",
+    "aliyun_a_vl", "aliyun_b_vl",
     # 2026-11-03: 自有机器上的本地模型兜底(Steve 裁定), 见 `_TEXT_TAIL`。
     "local_canada",
 ]

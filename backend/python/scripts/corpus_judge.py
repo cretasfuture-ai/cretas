@@ -23,7 +23,7 @@ Cross-family judging (--cross-family):
     break the self-eval loop where teacher and judge share the same hallucination
     blind spots.  Family resolution:
         qwen    → uses SLOT.REVIEW chain filtered to accounts where the HEAD model
-                  family is qwen (aliyun_c/b/a)   ← default, original behaviour
+                  family is qwen (aliyun_b/a)   ← default, original behaviour
         glm     → filters chain to 'zhipu' account (GLM-family)
         deepseek→ filters chain to 'tencent' or 'aliyun_a_deepseek' account
     Demote rule: if cross-family overall < 4 OR cross-family factuality < 4
@@ -55,7 +55,7 @@ Usage:
 Environment variables (real run):
     SMARTBI_PROD_DSN   — asyncpg DSN e.g. postgresql://user:pass@host/smartbi_prod_db
                          Falls back to settings.postgres_url (smartbi_db).
-    LLM_API_KEY / DASHSCOPE_API_KEY / LLM_ALIYUN_C_API_KEY etc.
+    LLM_API_KEY / DASHSCOPE_API_KEY / LLM_ALIYUN_A_API_KEY etc.
                        — passed through common.llm_router.call_chain (SLOT.REVIEW).
 """
 from __future__ import annotations
@@ -337,7 +337,7 @@ _CLAIMS_PINNED_SOURCES: frozenset = frozenset({"chart_insight"})
 #   deepseek → tencent (deepseek-v4-pro, free on TokenHub) +
 #              aliyun_a_deepseek (DashScope-hosted deepseek, own free pool)
 _FAMILY_ACCOUNTS: Dict[str, List[str]] = {
-    "qwen": ["aliyun_c", "aliyun_b", "aliyun_a"],
+    "qwen": ["aliyun_b", "aliyun_a"],
     "glm": ["zhipu"],
     "deepseek": ["tencent"],  # aliyun_a_deepseek 移除: A 的 deepseek-v4-pro 是 "- -" 付费
     # nonqwen = MULTI-account non-qwen chain so the router's deep fallback actually

@@ -7,7 +7,7 @@ latency (3 runs, median), output token count, and a short content preview
 so a human can rank quality.
 
 Usage:
-    LLM_ALIYUN_C_API_KEY=sk-xxx python scripts/benchmark-llm-account.py [aliyun_c]
+    LLM_ALIYUN_A_API_KEY=sk-xxx python scripts/benchmark-llm-account.py [aliyun_a]
 
 Output: stdout markdown table per SLOT.
 """
@@ -18,7 +18,7 @@ import json
 import statistics
 import httpx
 
-account = sys.argv[1] if len(sys.argv) > 1 else "aliyun_c"
+account = sys.argv[1] if len(sys.argv) > 1 else "aliyun_a"
 env_var = f"LLM_{account.upper()}_API_KEY"
 api_key = os.environ.get(env_var, "")
 if not api_key:

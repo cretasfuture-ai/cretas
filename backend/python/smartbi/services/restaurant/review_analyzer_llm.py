@@ -106,8 +106,7 @@ class LlmReviewAnalyzer:
         # 即视为可用; 否则退回 regex 分析。沿用 DASHSCOPE_API_KEY / settings.llm_api_key
         # 作为可用性信号 (与 call_chain 的 aliyun 账号 key 同源)。
         self._llm_available = bool(
-            os.environ.get("LLM_ALIYUN_C_API_KEY")
-            or os.environ.get("LLM_ALIYUN_B_API_KEY")
+            os.environ.get("LLM_ALIYUN_B_API_KEY")
             or os.environ.get("LLM_ALIYUN_A_API_KEY")
             or os.environ.get("DASHSCOPE_API_KEY")
             or cfg.llm_api_key
