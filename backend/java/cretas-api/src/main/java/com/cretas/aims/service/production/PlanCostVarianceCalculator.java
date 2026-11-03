@@ -311,6 +311,18 @@ public final class PlanCostVarianceCalculator {
         return new Group(lines, fully, stdAmount, actualAmount, priceVar, usageVar, substVar);
     }
 
+    /** 影响分析复用: 一行快照在给定产出下的标准用量 (单位 = 该行单价单位); 算不出时 reason 说明原因, 不猜。 */
+    public record PlanQty(BigDecimal quantity, String reason) {
+    }
+
+    public static PlanQty planStandardQuantity(List<PlanStandardCostLine> lines, PlanStandardCostLine line,
+                                               BigDecimal outputKg, BigDecimal outputQty, boolean multiOutput,
+                                               UnitConverter converter) {
+        Inputs in = new Inputs(lines, Map.of(), outputKg, outputQty, null, multiOutput, converter);
+        StandardQty q = standardQuantity(in, line, standardRawInputKg(in, new ArrayList<>()), rawShares(lines));
+        return new PlanQty(q.quantity(), q.reason());
+    }
+
     private record StandardQty(BigDecimal quantity, String reason) {
     }
 
