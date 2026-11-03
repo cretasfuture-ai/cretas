@@ -234,6 +234,15 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                     ").*"
     );
 
+    /**
+     * 名字里带金额词、但本身不是钱的键: 换算系数 / 比例 / 倍数 (如 PO 明细的 {@code quantityToPriceFactor} ——
+     * 数量到计价单位的换算系数, 含 "Price" 却是个无量纲的数)。Rule 2b 只该剥真正的金额, 这些不剥
+     * (S6 #1376 复测: 采购主管在对话里看到它为 null, web 与超管为 1)。
+     */
+    private static final Pattern NON_MONEY_KEY_REGEX = Pattern.compile(
+            "(?i).*(factor|ratio|coefficient|multiplier|系数|比例|换算|倍数).*"
+    );
+
     /** Path segments where dynamic Map keys (e.g. department name) are the column header for numeric price data. */
     private static final Pattern DYNAMIC_KEY_PRICE_CONTAINER_REGEX = Pattern.compile(
             "(?i)^(trendComparison|trendChart|crosstab|pivot)$"
@@ -721,7 +730,8 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                 //   operator (both=N) → finance columns masked (this branch fires)
                 if (!canViewFinance
                         && value instanceof Number
-                        && FINANCE_COLUMN_KEY_REGEX.matcher(key).matches()) {
+                        && FINANCE_COLUMN_KEY_REGEX.matcher(key).matches()
+                        && !NON_MONEY_KEY_REGEX.matcher(key).matches()) {
                     trySetEntryNull((Map.Entry<Object, Object>) entry, "FINANCE_COLUMN_KEY numeric leaf");
                     continue;
                 }
