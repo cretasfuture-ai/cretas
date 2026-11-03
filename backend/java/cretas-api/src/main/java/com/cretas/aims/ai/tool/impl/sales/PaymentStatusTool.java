@@ -80,4 +80,10 @@ public class PaymentStatusTool extends AbstractBusinessTool {
     public java.util.Set<String> getRequiredPermissions() {
         return java.util.Set.of("finance:read", "finance:read_write", "procurement:price:view");
     }
+
+    /** 读的是 GET /reports/finance 同一份数据: 另需经营分析模块, 与接口 / App 同口径。 */
+    @Override
+    public java.util.Set<String> getAlsoRequiredPermissions() {
+        return com.cretas.aims.ai.tool.impl.report.ReportFinanceTool.FINANCE_REPORT_SURFACE;
+    }
 }

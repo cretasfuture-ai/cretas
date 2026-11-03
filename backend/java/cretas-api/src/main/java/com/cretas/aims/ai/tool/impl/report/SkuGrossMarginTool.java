@@ -435,12 +435,11 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     }
 
     /**
-     * 价格/成本数据门: 与 App 里同一份数据的入口同口径 ("AI 能做的 = App 能做的")。
-     * 销售毛利报表 (Python {@code /sales-preset/gross-margin}) 只对 PRICE_VIEW_ROLES 开放, web-admin
-     * finance/sku-margin 页用 {@code canViewPrice} (同一份白名单) 整页收起; 这份白名单在 Java 侧
-     * 的权限码就是 {@code procurement:price:view} ({@code PermissionServiceImpl.PRICE_VIEW_ROLES}),
-     * 中央 {@link com.cretas.aims.ai.tool.ToolRbacEnforcer} 在每条执行路径上按它判定 (fail-closed)。
-     * 本工具返回售价/收入/成本/毛利, 所以没有这个码的角色拿到的是拒绝, 不是数字。
+     * 与 App 里同一份数据的入口同口径 ("AI 能做的 = App 能做的"): web 的 SKU 毛利视图
+     * (finance/report/shipment-sku-margin → {@code GET /finance/report/shipment-sku-margin}, FinanceReportController
+     * 类门 {@code finance:read | finance:read_write}) 对没有财务模块的角色整页 403。组织者裁定 2026-11-03
+     * (acc-s6 s610k): web 拒整份, 对话就拒整个工具 —— 以前按 procurement:price:view 放行, 销售 / 生产 / 采购主管
+     * 拿到了金额已遮、但毛利率仍在的部分答案。中央 {@link com.cretas.aims.ai.tool.ToolRbacEnforcer} 判定 (fail-closed)。
      */
     @Override
     public boolean requiresPermission() {
@@ -449,7 +448,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     @Override
     public Set<String> getRequiredPermissions() {
-        return Set.of("procurement:price:view");
+        return Set.of("finance:read", "finance:read_write");
     }
 
     /** spec §8.2 只读查询, 无副作用 */

@@ -20,6 +20,7 @@ import { useAuthStore } from '../../store/authStore';
 import { getFactoryId } from '../../types/auth';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
+import { hasModulePermission } from '../../utils/permissionHelper';
 
 // 创建AIReportList专用logger
 const aiReportListLogger = logger.createContextLogger('AIReportList');
@@ -42,6 +43,8 @@ type AIReportListScreenProps = ProcessingScreenProps<'AIReportList'>;
 export default function AIReportListScreen() {
   const navigation = useNavigation<AIReportListScreenProps['navigation']>();
   const { user } = useAuthStore();
+  // 生成新报告进的是时段成本分析, 它读 GET /reports/finance (要经营分析模块): 没有就不放入口, 免得点进去 403
+  const canSeeFinanceReport = hasModulePermission(user, 'analytics', 'read');
   const factoryId = getFactoryId(user);
   const { t } = useTranslation('processing');
 
@@ -385,13 +388,15 @@ export default function AIReportListScreen() {
       )}
 
       {/* 浮动按钮 - 生成新报告 */}
-      <FAB
-        icon="plus"
-        label={t('aiReports.fab')}
-        style={styles.fab}
-        onPress={() => navigation.navigate('TimeRangeCostAnalysis' as never)}
-        color="#FFFFFF"
-      />
+      {canSeeFinanceReport && (
+        <FAB
+          icon="plus"
+          label={t('aiReports.fab')}
+          style={styles.fab}
+          onPress={() => navigation.navigate('TimeRangeCostAnalysis' as never)}
+          color="#FFFFFF"
+        />
+      )}
     </View>
   );
 }
