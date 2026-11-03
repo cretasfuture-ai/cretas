@@ -70,8 +70,8 @@
     "/procurement/requisitions",
     "/procurement/requisitions/my",
     "/procurement/requisitions/pending-approval",
+    "/procurement/shortage-cases",
     "/procurement/suppliers",
-    "/production/shortage-cases",
     "/restaurant/purchase-plan",
     "/workdesk/purchaser"
   ],
@@ -92,7 +92,6 @@
     "/workdesk/production-manager"
   ],
   "quality": [
-    "/production/shortage-cases",
     "/quality/ccp",
     "/quality/defects",
     "/quality/disposals",
@@ -102,6 +101,7 @@
     "/quality/recalls",
     "/quality/release",
     "/quality/returns",
+    "/quality/shortage-cases",
     "/quality/standards",
     "/quality/vision-training",
     "/workdesk/quality-chief",
@@ -145,12 +145,12 @@
     "/restaurant/procurement"
   ],
   "sales": [
-    "/production/shortage-cases",
     "/sales/customers",
     "/sales/orders",
     "/sales/payment-requests",
     "/sales/returns",
     "/sales/shipments",
+    "/sales/shortage-cases",
     "/sales/vehicles",
     "/workdesk/sales-owner"
   ],
