@@ -6,6 +6,8 @@ import ch.qos.logback.core.read.ListAppender;
 import com.cretas.aims.entity.lineage.BatchLineageEdge;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.repository.lineage.LineageEdgeOutboxRepository;
+import com.cretas.aims.entity.lineage.LineageEdgeOutboxEntry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -77,7 +79,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 @EntityScan(basePackageClasses = {com.cretas.aims.entity.lineage.BatchLineageEdge.class,
         com.cretas.aims.entity.BaseEntity.class})
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository.lineage")
-@Import({LineageEdgeRecorder.class, LineageEdgeWriter.class, FinishedBatchProductionAligner.class,
+@Import({LineageEdgeRecorder.class, LineageEdgeWriter.class, FinishedBatchProductionAligner.class, LineageEdgeOutbox.class,
         LineageEdgeRecorderTransactionContractTest.Stubs.class})
 // 每个用例自己控事务边界 —— 测试方法本身绝不能开事务，否则就测不到「调用方提交/回滚」这件事。
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -97,6 +99,7 @@ class LineageEdgeRecorderTransactionContractTest {
 
     @Autowired private LineageEdgeRecorder recorder;
     @Autowired private BatchLineageEdgeRepository edgeRepository;
+    @Autowired private LineageEdgeOutboxRepository outboxRepository;
     @Autowired private PlatformTransactionManager transactionManager;
     @jakarta.persistence.PersistenceContext private jakarta.persistence.EntityManager entityManager;
 
@@ -112,6 +115,8 @@ class LineageEdgeRecorderTransactionContractTest {
         //    不是产品路径；产品里那道禁删守卫必须保持有效。
         tx.executeWithoutResult(status ->
                 entityManager.createQuery("DELETE FROM BatchLineageEdge").executeUpdate());
+        tx.executeWithoutResult(status ->
+                entityManager.createQuery("DELETE FROM LineageEdgeOutboxEntry").executeUpdate());
         writerLogger = (Logger) LoggerFactory.getLogger(LineageEdgeWriter.class);
         appender = new ListAppender<>();
         appender.start();
@@ -136,6 +141,12 @@ class LineageEdgeRecorderTransactionContractTest {
         // 而 execute() 返回时 afterCommit 已经跑完 —— 边真的在库里。
         assertThat(edgeRepository.findAll()).hasSize(1);
         assertThat(edgeRepository.findAll().get(0).getSourceId()).isEqualTo("mb-commit");
+        // 补写台账: 与业务同事务登记, 提交后即时写成 ⇒ 当场结成 DONE (食品 DAG 缺口 02)
+        assertThat(outboxRepository.findAll()).singleElement().satisfies(e -> {
+            assertThat(e.getStatus()).isEqualTo(LineageEdgeOutboxEntry.STATUS_DONE);
+            assertThat(e.getResolvedOutcome()).isEqualTo("INSERTED");
+            assertThat(e.getRefKey()).isEqualTo("consumption:1");
+        });
     }
 
     @Test
@@ -150,6 +161,9 @@ class LineageEdgeRecorderTransactionContractTest {
 
         assertThat(edgeRepository.findAll())
                 .as("调用方回滚了, 这条边描述的事实从未发生 —— 它一旦落库就再也删不掉")
+                .isEmpty();
+        assertThat(outboxRepository.findAll())
+                .as("台账行与业务同事务 —— 回滚后不能留一行让补写器补出假边")
                 .isEmpty();
     }
 
@@ -167,6 +181,8 @@ class LineageEdgeRecorderTransactionContractTest {
                 .doesNotThrowAnyException();
 
         assertThat(edgeRepository.findAll()).isEmpty();
+        // 台账与边同列宽: 永远写不进去的边不登记 —— 否则台账行会在提交时撞列宽, 把业务一起回滚
+        assertThat(outboxRepository.findAll()).isEmpty();
         // 「必发生」的那半：fail-soft ≠ 静默。失败必须在日志里留下痕迹，
         // 否则「0 行」和「压根没跑」分不开。
         assertThat(warnMessages())

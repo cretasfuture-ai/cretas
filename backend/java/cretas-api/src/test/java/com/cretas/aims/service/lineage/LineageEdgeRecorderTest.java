@@ -49,7 +49,7 @@ class LineageEdgeRecorderTest {
      */
     private LineageEdgeRecorder newRecorder() {
         return new LineageEdgeRecorder(new LineageEdgeWriter(edgeRepository),
-                new FinishedBatchProductionAligner(productionBatchRepository));
+                new FinishedBatchProductionAligner(productionBatchRepository), org.mockito.Mockito.mock(LineageEdgeOutbox.class));
     }
 
     /** 让 repo 表现得像真库：save 进去的边下次 findMatchingEdges 能查到。 */

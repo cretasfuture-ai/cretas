@@ -3,6 +3,7 @@ package com.cretas.aims.service.validation;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
+import com.cretas.aims.service.workflow.WorkflowPendingConfirmations;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -120,6 +121,14 @@ public class ProductProcessWorkflowValidator {
 
     public void validateForPublish(ProductProcessWorkflowDTO definition) {
         validateStructureComplete(definition);
+        // AI 配工艺留给人补的项(CCP 限值/单位、说不清的份额与回料比例): 补齐前不能发布。
+        List<String> pending = WorkflowPendingConfirmations.blockers(definition);
+        if (!pending.isEmpty()) {
+            throw new BusinessException(409, "还有 " + pending.size() + " 项待确认，补齐后才能发布：" + String.join("；", pending))
+                    .withCode("PRODUCT_PROCESS_WORKFLOW_PENDING_CONFIRMATION")
+                    .withHint("请在画布上点开带「待确认」标记的工序，补齐后再发布")
+                    .withSeverity("warning");
+        }
     }
 
     /**
