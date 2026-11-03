@@ -61,6 +61,7 @@ public final class PlanCostVarianceCalculator {
     /** 结果: 行明细 + 只含完全可比组的合计。 */
     public record Result(List<PlanCostVarianceDTO.Line> lines, BigDecimal standardCost, BigDecimal actualCost,
                          BigDecimal priceVariance, BigDecimal usageVariance, BigDecimal substituteVariance,
+                         /** null = 人工无法比较 (没有标准人工 / 成品折不出 kg / 实际人工未知)。 */
                          BigDecimal laborVariance, int comparableCount, int incomparableCount, List<String> notes) {
         public boolean comparable() {
             return comparableCount > 0;
@@ -160,7 +161,8 @@ public final class PlanCostVarianceCalculator {
         if (in.actualLaborCost() == null) {
             laborReasons.add("实际人工成本未知");
         }
-        if (laborReasons.isEmpty()) {
+        boolean laborComparable = laborReasons.isEmpty();
+        if (laborComparable) {
             BigDecimal stdLabor = in.outputKg().multiply(laborLine.getUnitPrice());
             BigDecimal var = in.actualLaborCost().subtract(stdLabor);
             laborOut.setStandardQuantity(scale(in.outputKg(), QTY));
@@ -179,7 +181,8 @@ public final class PlanCostVarianceCalculator {
         out.add(laborOut);
 
         return new Result(out, scale(std, MONEY), scale(act, MONEY), scale(price, MONEY), scale(usage, MONEY),
-                scale(subst, MONEY), scale(labor, MONEY), comparable, incomparable, notes);
+                // 人工不可比 → 人工差是 null (⛔ 不是 0: 「人工差 ¥0.00」读起来是「人工和标准一样」)
+                scale(subst, MONEY), laborComparable ? scale(labor, MONEY) : null, comparable, incomparable, notes);
     }
 
     private record Group(List<PlanCostVarianceDTO.Line> lines, boolean fullyComparable, BigDecimal standardAmount,
