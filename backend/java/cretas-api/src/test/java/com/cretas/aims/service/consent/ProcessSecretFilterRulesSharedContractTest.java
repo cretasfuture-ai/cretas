@@ -95,6 +95,19 @@ class ProcessSecretFilterRulesSharedContractTest {
         assertThat(TrainingValueRules.WORDS).isNotNull();
     }
 
+    /** Review round 3, item 2: the word-file switch is a strict JSON boolean (a string "false" must not pass). */
+    @Test
+    void wordFileSwitchIsAStrictJsonBoolean() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        assertThat(ProcessSecretTerms.strictBoolean(om.readTree("{\"k\":true}"), "k")).isTrue();
+        assertThat(ProcessSecretTerms.strictBoolean(om.readTree("{\"k\":false}"), "k")).isFalse();
+        for (String bad : List.of("{\"k\":\"false\"}", "{\"k\":\"true\"}", "{\"k\":0}", "{\"k\":1}",
+                "{\"k\":null}", "{}")) {
+            assertThat(ProcessSecretTerms.strictBoolean(om.readTree(bad), "k")).as(bad).isNull();
+        }
+        assertThat(ProcessSecretTerms.fullNameCategoryWordMatches()).isFalse();      // Steve 2026-11-03 chose B
+    }
+
     /** Q4: the word lists exist once; the jar carries a byte-identical copy of the Python file (pom copy-resources). */
     @Test
     void wordListsComeFromTheOneSharedFile() throws Exception {

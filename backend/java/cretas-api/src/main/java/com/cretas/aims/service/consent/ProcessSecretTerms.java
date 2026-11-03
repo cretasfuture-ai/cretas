@@ -30,6 +30,8 @@ import java.util.regex.Pattern;
  */
 public final class ProcessSecretTerms {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(ProcessSecretTerms.class);
+
     static final int MIN_TERM_LENGTH = 2;
 
     /**
@@ -45,8 +47,34 @@ public final class ProcessSecretTerms {
      * 保密产品的「全名」本身就是品类词 (产品就叫「牛腱」) 时还收不收: Steve 2026-11-03 选 B = 不收 (只靠编码 / ID / 工艺数值规则); 值在
      * {@code training_rule_words.json} 的 {@code full_name_category_word_matches} (与 Python 同一行)。
      */
-    static final boolean FULL_NAME_CATEGORY_WORD_MATCHES = TrainingValueRules.WORDS != null
-            && TrainingValueRules.WORDS.path("full_name_category_word_matches").asBoolean(false);
+    static final Boolean FULL_NAME_CATEGORY_WORD_MATCHES = strictBoolean(TrainingValueRules.WORDS,
+            "full_name_category_word_matches");
+
+
+    /**
+     * 词表开关只认 JSON 布尔 (true / false); 字符串 "false"、0、null、缺失一律返回 null 并记 ERROR
+     * (第三次复审第 2 条: Python 的 bool("false") 是 True, 两边会悄悄不一致)。不在类初始化时抛 (那会变成 Error)。
+     */
+    static Boolean strictBoolean(com.fasterxml.jackson.databind.JsonNode words, String key) {
+        if (words == null) {
+            return null;
+        }
+        com.fasterxml.jackson.databind.JsonNode n = words.get(key);
+        if (n == null || !n.isBoolean()) {
+            LOG.error("training_rule_words.json: {} must be a JSON boolean (true / false), got {}", key, n);
+            return null;
+        }
+        return n.booleanValue();
+    }
+
+    /** 开关值; 词表里不是 JSON 布尔时抛 {@link IllegalStateException} (过滤器按名单查询失败处理: 挂起 / 不存)。 */
+    static boolean fullNameCategoryWordMatches() {
+        if (FULL_NAME_CATEGORY_WORD_MATCHES == null) {
+            throw new IllegalStateException(
+                    "training_rule_words.json: full_name_category_word_matches must be a JSON boolean (true / false)");
+        }
+        return FULL_NAME_CATEGORY_WORD_MATCHES;
+    }
 
     /** 纯数字 (允许中间夹空白 / 点 / 横线 / 下划线 / 斜杠): 398、2024-01、１２３。 */
     private static final Pattern PURE_NUMERIC = Pattern.compile("[0-9０-９ \\t.\\-_/\\u3000]+");
@@ -122,7 +150,7 @@ public final class ProcessSecretTerms {
      * 保密负责人保存策略时要看到提示。
      */
     public static boolean fullNameNotMatchedAsCategoryWord(String name) {
-        return !FULL_NAME_CATEGORY_WORD_MATCHES && isCategoryWord(name);
+        return !fullNameCategoryWordMatches() && isCategoryWord(name);
     }
 
     /** {@code raw} (去首尾空白、折叠后) 是词表里的品类词。 */
@@ -137,11 +165,12 @@ public final class ProcessSecretTerms {
      */
     public static Set<String> secretTerms(Collection<Product> products, Collection<String> aliases) {
         TrainingValueRules.requireWords();       // 词表读不到: 抛运行时异常, 过滤器按名单查询失败处理 (挂起 / 不存)
+        boolean fullNameMatches = fullNameCategoryWordMatches();
         Set<String> out = new LinkedHashSet<>();
         for (Product p : products) {
             String[] values = {p.name(), p.code(), p.id()};
             for (int k = 0; k < values.length; k++) {
-                boolean exempt = k == 0 && FULL_NAME_CATEGORY_WORD_MATCHES;
+                boolean exempt = k == 0 && fullNameMatches;
                 String term = usableTerm(values[k], exempt ? Set.of() : GENERIC_WORDS);
                 if (term != null) {
                     out.add(term);

@@ -328,6 +328,16 @@ public final class TrainingValueRules {
         return false;
     }
 
+    /** 有「数值 + 单位」({@link #VALUE_UNITS}), 或分数 (自带单位)。 */
+    static boolean hasUnitValue(String s) {
+        for (int[] sp : valueSpans(s, false)) {
+            if (startsWithAny(s, sp[1], VALUE_UNITS) || s.substring(sp[0], sp[1]).contains("分之")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * 标题下内容的结尾 (不含) (复审第二轮 N1): 标题后第一行非空行一定算; 之后列表 / 缩进行 / 冒号小标题, 可隔空行;
      * 到下一个 Markdown 标题或下一段正文为止。
@@ -410,6 +420,12 @@ public final class TrainingValueRules {
         List<String> lines = Arrays.asList(normalize(bmp(text)).split("\n", -1));
         List<String> headingWords = new ArrayList<>(markers);
         headingWords.addAll(conditional);
+        List<String> strongWords = new ArrayList<>();
+        for (String m : markers) {
+            if (!conditional.contains(m)) {
+                strongWords.add(m);
+            }
+        }
         int i = 0;
         while (i < lines.size()) {
             String line = lines.get(i);
@@ -428,7 +444,10 @@ public final class TrainingValueRules {
             if (isHeading(line, headingWords)) {
                 j = headingEnd(lines, i);
                 String body = String.join("\n", lines.subList(i + 1, j));
-                if (!body.isEmpty() && !valueSpans(body, false).isEmpty()) {
+                // 标题里只有条件词 (「统计时间：」「### 交货时间」) 时是泛泛的内容: 里面要有「数值 + 单位」才拦
+                // (第三次复审第 1 条); 配方 / 配比 / 滚揉 / 杀菌温度这类真工艺词照旧, 有数值就拦
+                boolean strong = isHeading(line, strongWords);
+                if (!body.isEmpty() && (strong ? !valueSpans(body, false).isEmpty() : hasUnitValue(body))) {
                     return true;
                 }
             } else {

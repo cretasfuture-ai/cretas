@@ -151,6 +151,9 @@ class FactoryErasurePostgresContractTest {
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples WHERE factory_id = '" + FA + "'")).isZero();
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples WHERE factory_id IS NULL AND input_text = 'A-DESENSITIZED'")).isEqualTo(1);
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples WHERE input_text = 'A-RAW'")).isZero();
+        // the other factory's sample is untouched (review round 3, item 4)
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples"
+                + " WHERE input_text = 'B-RAW' AND factory_id = '" + FB + "' AND metadata = '{}'::jsonb")).isEqualTo(1);
         assertThat(receipt.smartbi().trainingSamplesRetained()).isEqualTo(1);
         // second review, item 1: held / rejected rows are never kept by the erasure, whatever their stamp;
         // no raw text of the factory survives in either database
