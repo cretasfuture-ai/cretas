@@ -47,6 +47,7 @@ public class TraceabilityController {
     private final LabelRepository labelRepository;
     private final com.cretas.aims.repository.lineage.LineageEdgeOutboxRepository lineageEdgeOutboxRepository;
     private final com.cretas.aims.service.lineage.LineageEdgeOutboxReconciler lineageEdgeOutboxReconciler;
+    private final com.cretas.aims.service.lineage.TraceEvidencePackService traceEvidencePackService;
 
     /**
      * 获取溯源记录列表
@@ -243,6 +244,37 @@ public class TraceabilityController {
         // 多槽部署时补写器只在拿到锁的那个槽跑, 本槽没跑过是 null —— 不代表补写器没在工作
         data.put("lastSweepAtThisInstance", lineageEdgeOutboxReconciler.lastSweepAt());
         return ApiResponse.success(data);
+    }
+
+    /**
+     * 验厂证据包（JSON）—— 一个成品批 / 生产批的原料来源与合格证明、投料、质检放行、CCP、发货，
+     * 以及「缺哪一段证据」（食品 DAG 缺口 02）。内部接口，权限同完整溯源。
+     */
+    @GetMapping("/api/mobile/{factoryId}/traceability/evidence-pack/{batchNumber}")
+    @Operation(summary = "验厂证据包",
+            description = "按成品批号（或生产批号）一次拿齐原料来源与合格证明、投料、质检放行、CCP 监控、发货，"
+                    + "status=READY 表示证据齐全，GAPS 时 missingEvidence 逐项列出缺口。")
+    public ApiResponse<com.cretas.aims.service.lineage.TraceEvidencePackService.Pack> getEvidencePack(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006", required = true) String factoryId,
+            @PathVariable @Parameter(description = "成品批号或生产批号", required = true) String batchNumber) {
+        return ApiResponse.success(traceEvidencePackService.buildByBatchNumber(factoryId, batchNumber));
+    }
+
+    /** 验厂证据包下载：同一份数据写成 CSV 压缩包（每段一个文件，Excel 直接打开）。 */
+    @GetMapping("/api/mobile/{factoryId}/traceability/evidence-pack/{batchNumber}/export")
+    @Operation(summary = "下载验厂证据包", description = "ZIP，内含 概要 / 原料来源与合格证明 / 投料与产出 / 质检放行 / CCP监控 / 发货 六个 CSV")
+    public ResponseEntity<byte[]> exportEvidencePack(
+            @PathVariable @Parameter(description = "工厂ID", example = "F006", required = true) String factoryId,
+            @PathVariable @Parameter(description = "成品批号或生产批号", required = true) String batchNumber) {
+        var pack = traceEvidencePackService.buildByBatchNumber(factoryId, batchNumber);
+        byte[] zip = traceEvidencePackService.toZip(pack);
+        String fileName = java.net.URLEncoder.encode("验厂证据包-" + pack.rootBatchNumber() + ".zip",
+                java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename*=UTF-8''" + fileName)
+                .contentType(org.springframework.http.MediaType.parseMediaType("application/zip"))
+                .body(zip);
     }
 
     /**
