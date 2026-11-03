@@ -411,13 +411,25 @@ log "INFO" "[3c2/5] 校验 cron 入口引用的 CLI 都已落到服务器..."
 # 不提前关管道, 所以它本身没有 SIGPIPE 陷阱; 但让它待在名单外, 等于要求每个
 # 读闸的人先自己判一遍"这个 grep 会不会提前退出", 而那正是当初漏掉的那一步。
 # ⇒ 让代码去迁就闸, ⛔ 不是把闸改宽。语义逐字不变(cat 拼接 == grep -h 多文件)。
+#
+# ⚠️ grep 没命中时退出码是 1, 在 set -eo pipefail 下会让整个部署**无日志地**
+# exit 1 (#1322 删掉 restaurant-ai-eval.sh 里最后一处 scripts/*.py 引用后,
+# 每次 Python 发布都死在这一步)。⇒ 1 = 没有引用, 照常走下面「跳过」分支;
+# ≥2 = 入口文件缺失/读不了, 明确报错停下。
+# >>> CRON_CLI_EXTRACT
+_cron_grep_rc=0
 _cron_referenced_clis="$(
-    grep -hoE '(\$CODEDIR/|[[:space:]"'"'"'=])scripts/[A-Za-z0-9_.-]+\.py' \
+    { grep -hoE '(\$CODEDIR/|[[:space:]"'"'"'=])scripts/[A-Za-z0-9_.-]+\.py' \
         "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
         "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
-        "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" 2>/dev/null \
+        "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" || { _r=$?; [ "$_r" -eq 1 ] || exit "$_r"; }; } \
     | sed -E 's#^(\$CODEDIR/|.)##' | sort -u
-)"
+)" || _cron_grep_rc=$?
+if [ "$_cron_grep_rc" -ne 0 ]; then
+    log "ERROR" "读 cron 入口文件失败 (rc=$_cron_grep_rc), 无法校验它们引用的 CLI"
+    exit 1
+fi
+# <<< CRON_CLI_EXTRACT
 if [ -z "$_cron_referenced_clis" ]; then
     log "INFO" "  cron 入口没有引用任何 .py CLI，跳过。"
 else
