@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("工艺标准参数: schema 形状校验 + 报工值比对")
-class ProcessParamStandardsTest {
+class ProcessParamStandardsContractTest {
 
     private static Map<String, Object> field(String key, String type, Object... kv) {
         Map<String, Object> f = new LinkedHashMap<>();
