@@ -40,6 +40,12 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
      * 所以画布上带 isByproduct 标记的产出节点要查这里, 而不是 product_types。
      */
     List<RawMaterialType> findByIdIn(Collection<String> ids);
+
+    /** 合并重复物料时锁住主物料和被合并物料两行 (按 id 排序加锁, 避免两个合并请求互相等待)。 */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId AND r.id IN :ids ORDER BY r.id")
+    List<RawMaterialType> lockByFactoryIdAndIdIn(@Param("factoryId") String factoryId,
+                                                 @Param("ids") Collection<String> ids);
      /**
      * 查找工厂的所有原材料类型
       */
@@ -65,7 +71,9 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
            "    WHERE leaf.parentId IN (SELECT child.id FROM MaterialCodeSegment child WHERE child.parentId = :classificationId))) " +
            "AND (CAST(:keyword AS string) IS NULL OR LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
            "OR LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) " +
-           "OR LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%'))) ")
+           "OR LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+           "OR r.id IN (SELECT a.materialTypeId FROM RawMaterialTypeAlias a WHERE a.factoryId = :factoryId " +
+           "    AND LOWER(a.alias) LIKE LOWER(CONCAT('%', :keyword, '%')))) ")
     Page<RawMaterialType> filterBySegmentPrefixAndKeyword(
             @Param("factoryId") String factoryId,
             @Param("classificationId") Long classificationId,
@@ -91,7 +99,9 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId AND " +
            "(LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
-           "LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')")
+           "LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+           "r.id IN (SELECT a.materialTypeId FROM RawMaterialTypeAlias a WHERE a.factoryId = :factoryId " +
+           "    AND LOWER(a.alias) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'))")
     Page<RawMaterialType> searchMaterialTypes(@Param("factoryId") String factoryId,
                                               @Param("keyword") String keyword,
                                               Pageable pageable);
@@ -102,7 +112,9 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId AND r.isActive = true AND " +
            "(LOWER(r.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
            "LOWER(r.code) LIKE LOWER(CONCAT(:keyword, '%')) ESCAPE '\\' OR " +
-           "LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')")
+           "LOWER(r.category) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+           "r.id IN (SELECT a.materialTypeId FROM RawMaterialTypeAlias a WHERE a.factoryId = :factoryId " +
+           "    AND LOWER(a.alias) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'))")
     Page<RawMaterialType> searchActiveMaterialTypes(@Param("factoryId") String factoryId,
                                                     @Param("keyword") String keyword,
                                                     Pageable pageable);
