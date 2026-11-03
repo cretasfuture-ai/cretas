@@ -1,0 +1,73 @@
+// Local-only live SmartBI UI acceptance; no mocked data or authentication.
+import { chromium } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import assert from 'node:assert/strict';
+
+const base = 'http://127.0.0.1:5178';
+const root = resolve(import.meta.dirname, '../..');
+const privateDir = join(process.env.LOCALAPPDATA, 'Cretas', 'Blacklake', 'validation');
+mkdirSync(privateDir, { recursive: true });
+const script = "import json,os;from pathlib import Path;from blacklake.secrets import load_local_secret;d=Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake';s=load_local_secret(d/'smartbi-test.dpapi');a=load_local_secret(d/'smartbi-analysis.dpapi');p=sorted([r for r in a['cost']['projects'] if r['unitCostAvailable']],key=lambda r:r['materialLines'],reverse=True)[0];print(json.dumps({'username':s['username'],'password':s['password'],'validProjectCode':p['projectCode']}))";
+const credentials = JSON.parse(execFileSync('python', ['-c', script], { cwd: join(root, 'backend/python'), encoding: 'utf8' }));
+const browser = await chromium.launch({ headless: false });
+const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
+const page = await context.newPage();
+const errors = [], httpFailures = [], writes = [];
+page.on('pageerror', e => errors.push(e.message));
+page.on('console', e => { if (e.type() === 'error') errors.push(e.text()); });
+page.on('response', r => { if (r.status() >= 400) httpFailures.push({ path: new URL(r.url()).pathname, status: r.status() }); });
+await context.route('**/api/**', async route => {
+  const request = route.request(), url = new URL(request.url());
+  if (!['127.0.0.1', 'localhost'].includes(url.hostname)) return route.abort();
+  if (['POST','PUT','PATCH','DELETE'].includes(request.method()) && !url.pathname.startsWith('/api/mobile/auth/')) {
+    writes.push({ method: request.method(), path: url.pathname });
+    return route.abort();
+  }
+  return route.continue();
+});
+const report = { success: false, pageErrors: errors, httpFailures, blockedMutationAttempts: writes, actualBusinessWrites: 0 };
+try {
+  await page.goto(`${base}/blacklake-smartbi.html`);
+  await page.getByPlaceholder('请输入测试账号').fill(credentials.username);
+  await page.getByPlaceholder('请输入密码').fill(credentials.password);
+  await page.getByRole('button', { name: /登.*录/ }).click();
+  await page.getByText('逐工单成本链路', { exact: true }).waitFor({ timeout: 60000 });
+  await page.locator('[data-testid="cost-projects"] .el-table__body-wrapper tbody tr').first().waitFor();
+  await page.screenshot({ path: join(privateDir, 'smartbi-cost.png'), fullPage: true });
+  await page.getByLabel('搜索工单或产品', { exact: true }).fill(credentials.validProjectCode);
+  await page.getByRole('button', { name: '查看链路', exact: true }).first().click();
+  await page.getByText('实际领料与退料明细', { exact: true }).waitFor();
+  assert((await page.locator('.el-drawer').innerText()).includes(credentials.validProjectCode));
+  await page.waitForTimeout(450);
+  await page.locator('.el-drawer').screenshot({ path: join(privateDir, 'smartbi-cost-chain.png'), animations: 'disabled' });
+  await page.locator('.el-drawer__close-btn').click();
+  await page.getByLabel('搜索工单或产品', { exact: true }).clear();
+  await page.getByRole('tab', { name: '生产与工序' }).click();
+  await page.locator('canvas').first().waitFor();
+  await page.waitForTimeout(1200);
+  assert((await page.locator('canvas').count()) >= 2);
+  await page.screenshot({ path: join(privateDir, 'smartbi-production.png'), fullPage: true });
+  await page.getByRole('tab', { name: '库存与仓库' }).click();
+  await page.getByText(/2072 个产品与仓库组合/).waitFor();
+  await page.screenshot({ path: join(privateDir, 'smartbi-inventory.png'), fullPage: true });
+  await page.getByRole('tab', { name: '数据覆盖与口径' }).click();
+  await page.getByText('数据集已接入 13 类资料', { exact: true }).waitFor();
+  assert((await page.locator('.el-tab-pane:not([style*="display: none"]) tbody tr').count()) === 13);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('tab', { name: '原料 → 成品成本' }).click();
+  await page.screenshot({ path: join(privateDir, 'smartbi-mobile.png'), fullPage: true });
+  report.documentOverflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2);
+  assert.equal(report.documentOverflow, false);
+  assert.equal(writes.length, 0);
+  report.success = errors.length === 0 && httpFailures.length === 0;
+} catch (e) {
+  report.error = e.message;
+  await page.screenshot({ path: join(privateDir, 'smartbi-ui-failure.png'), fullPage: true });
+} finally {
+  writeFileSync(join(privateDir, 'smartbi-ui.json'), JSON.stringify(report, null, 2));
+  console.log(JSON.stringify({ success: report.success, pageErrors: errors.length, httpFailures, blockedMutations: writes.length, failure: report.error || null }));
+  await browser.close();
+}
+process.exitCode = report.success ? 0 : 1;

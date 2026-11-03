@@ -410,3 +410,52 @@ def test_full_offline_context_never_loads_source_account_or_cache(monkeypatch):
     _, scope = module.offline_context()
     assert scope.source_factory_id == "synthetic"
     assert loaded == ["source-binding.dpapi", "test-database.dpapi"]
+
+
+def test_smartbi_real_postgres_import_hash_and_tenant_isolation(store, database):
+    import psycopg2
+    from psycopg2 import sql
+    from psycopg2.extras import Json
+    from blacklake.smartbi_store import read
+    from blacklake.full_archive import digest
+    admin=psycopg2.connect(**database[0])
+    run_id=str(uuid.uuid4())
+    metadata={'source_totals':{'project':1},'finished_at':'2026-11-03T09:21:49+00:00',
+              'run_id':run_id,'stock_pairs_not_returned':2}
+    payload={'id':1,'projectCode':'SYNTHETIC','status':'0','projectUnit':'kg'}
+    with admin:
+        with admin.cursor() as cur:
+            cur.execute((Path(__file__).parents[1]/'blacklake/migrations/003_smartbi_dataset.sql').read_text())
+            cur.execute(sql.SQL('ALTER ROLE {} NOINHERIT').format(sql.Identifier(database[1])))
+            cur.execute(sql.SQL('GRANT USAGE ON SCHEMA blacklake_bi TO {}').format(sql.Identifier(database[1])))
+            cur.execute(sql.SQL('GRANT SELECT ON ALL TABLES IN SCHEMA blacklake_bi TO {}').format(sql.Identifier(database[1])))
+            cur.execute('INSERT INTO blacklake_bi.dataset(tenant_id,source_factory_id,run_id,metadata) VALUES(%s,%s,%s,%s)',(*store.scope,run_id,Json(metadata)))
+            cur.execute('INSERT INTO blacklake_bi.record VALUES(%s,%s,%s,%s,%s,%s,%s)',(*store.scope,run_id,'project','1',digest(payload),Json(payload)))
+    from psycopg2.extensions import make_dsn
+    settings={'dsn':make_dsn(**dict(database[0],user=database[1],password=database[2])),
+              'tenant_id':store.scope[0],'source_factory_id':store.scope[1],'run_id':run_id}
+    result=read(settings)
+    assert result['production']['projectCount']==1
+    assert result['cost']['projects'][0]['materialCost'] is None
+    from blacklake.bi_readiness import validate
+    for permission,grantee in [('SELECT','PUBLIC'),('INSERT',database[1])]:
+        with admin:
+            with admin.cursor() as cur:
+                cur.execute(sql.SQL('GRANT {} ON blacklake_bi.record TO {}').format(sql.SQL(permission),sql.Identifier(grantee) if grantee!='PUBLIC' else sql.SQL('PUBLIC')))
+        with pytest.raises(RuntimeError,match='EXTRA_GRANTEE|GRANTS_UNSAFE'):
+            read(settings)
+        with admin:
+            with admin.cursor() as cur:
+                cur.execute(sql.SQL('REVOKE {} ON blacklake_bi.record FROM {}').format(sql.SQL(permission),sql.Identifier(grantee) if grantee!='PUBLIC' else sql.SQL('PUBLIC')))
+    with pytest.raises(RuntimeError,match='DATASET_NOT_FOUND'):
+        read(dict(settings,tenant_id='foreign'))
+    with store.transaction() as cur:
+        cur.execute('SELECT count(*) FROM blacklake_bi.record')
+        assert cur.fetchone()[0]==1
+        with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+            cur.execute('DELETE FROM blacklake_bi.record')
+    with admin:
+        with admin.cursor() as cur:
+            cur.execute("UPDATE blacklake_bi.record SET payload=payload||'{\"planAmount\":999}'::jsonb")
+    with pytest.raises(RuntimeError,match='INTEGRITY_FAILED'): read(settings)
+    admin.close()

@@ -70,6 +70,7 @@ export const financeManagerMenu: MenuItem[] = [
 ];
 
 const rawMenuConfig: MenuItem[] = [
+  ...(import.meta.env.VITE_BLACKLAKE_SMARTBI === 'true' ? [{ path: '/smart-bi/blacklake', title: '黑湖成本分析', icon: 'DataAnalysis', module: 'analytics' as const, roles: ['factory_super_admin'] }] : []),
   { path: '/analytics/ai-reports', title: 'AI经营报告', icon: 'Document', module: 'analytics', roles: ['factory_super_admin', 'finance_manager'], hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] },
   { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard', hideForFactoryTypes: ['LOGISTICS'] },
   // 🔴 2026-08-07: 这一项此前**只有路由没有菜单入口** —— `router/index.ts` 里

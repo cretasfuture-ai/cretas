@@ -1,6 +1,6 @@
 # 黑湖只读连接器：测试环境 PoC
 
-本轮将黑湖正式环境的只读查询接入本机隔离测试库，不改 Cretas 现有生产表，不注册 FastAPI 路由，不自动启动定时任务。模块位于 `backend/python/blacklake`，现有 Java、SmartBI、Vue 和 RN 未改动。
+连接器将黑湖正式环境的只读查询接入本机隔离测试库，不改 Cretas 现有生产表，不自动启动定时任务。后续已把13类历史数据接入本机 SmartBI 测试库，并注册显式配置后才可用的分析API和Vue页面；原料到成品成本结果、独立测试入口及常规外壳未通过项见 [SMARTBI-REPORT.md](SMARTBI-REPORT.md)。Java与RN源码未改动。
 
 ## 安装与配置
 

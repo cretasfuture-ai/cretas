@@ -1,0 +1,149 @@
+{
+  "slice": "SmartBI test integration and raw-material-to-finished recognized direct cost",
+  "base_commit": "e77a83f02dcc9045638a9cb16c5a6c6d8bc1a0cb",
+  "recorded_at": "2026-11-03T10:33:19.127255+00:00",
+  "environment": {
+    "destination": "local WSL smartbi_testenv / blacklake_bi",
+    "tenant": "BLACKLAKE_POC_TEST",
+    "api_port": 8093,
+    "web_port": 5178,
+    "source_snapshot": "2026-11-03T09:21:49.302723+00:00",
+    "production_deployment": false,
+    "continuous_source_sync": false
+  },
+  "tests": {
+    "command": "python -m blacklake.test_local",
+    "exit_code": 0,
+    "passed": 102,
+    "skipped": 0,
+    "postgres_auth": "SCRAM",
+    "redis": "password protected"
+  },
+  "api": {
+    "success": true,
+    "records": 1879,
+    "api_authorized": true,
+    "unauthenticated_denied": true,
+    "cross_factory_denied": true,
+    "viewer_cost_denied": true,
+    "mutation_method_denied": true,
+    "database_unscoped_and_foreign_rows": 0,
+    "reader_write_privileges": false,
+    "findings": [
+      "可见工单109张，已完工91张；数量比较保留产品与单位。",
+      "生产领退料已关联143行，未关联2行；金额有值143行，其中源端零值74行。",
+      "人工累计工资有值301/301个任务；不叠加报工预计工资。",
+      "可展示单位可识别直接成本16/109张工单；其余逐单显示阻断原因。"
+    ],
+    "unit_cost_available": 16,
+    "status_matrix": {
+      "authorized": 200,
+      "unauthenticated": 401,
+      "foreign_factory": 403,
+      "viewer": 403,
+      "mutation_method": 405
+    },
+    "command": "python -m blacklake.smartbi_acceptance",
+    "exit_code": 0,
+    "rls_rows": {
+      "unscoped": 0,
+      "foreign_tenant": 0,
+      "foreign_source_factory": 0
+    },
+    "raw_payload_hash_mismatches": 0
+  },
+  "import": {
+    "records": 1879,
+    "source_target_payload_and_hash_mismatches": 0,
+    "metadata_mismatch": false,
+    "reader_login_verified": true,
+    "java_test_login_verified": true,
+    "production_writes": 0
+  },
+  "cost": {
+    "projects": 109,
+    "completed": 91,
+    "unit_cost_available": 16,
+    "linked_material_lines": 143,
+    "source_zero_material_amount_lines": 74,
+    "unlinked_material_lines": 2,
+    "unlinked_candidate_projects": 0,
+    "full_manufacturing_cost": null,
+    "gross_profit": null,
+    "currency": "not_returned_by_source"
+  },
+  "frontend": {
+    "typecheck": {
+      "command": "node --max-old-space-size=8192 node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.app.json",
+      "exit_code": 0
+    },
+    "build": {
+      "command": "node --max-old-space-size=8192 node_modules/vite/bin/vite.js build --mode blacklake",
+      "exit_code": 0
+    },
+    "ui": {
+      "success": true,
+      "pageErrors": [],
+      "httpFailures": [],
+      "blockedMutationAttempts": [],
+      "actualBusinessWrites": 0,
+      "documentOverflow": false,
+      "command": "node scripts/blacklake-acceptance.mjs",
+      "exit_code": 0
+    },
+    "review_window_ready": {
+      "ready": true,
+      "url": "http://127.0.0.1:5178/blacklake-smartbi.html",
+      "factory": "BLACKLAKE_POC_TEST"
+    },
+    "regular_shell": {
+      "passed": false,
+      "reason": "Old shared test Java lacks permissions/current; original HTTP404 evidence retained privately"
+    }
+  },
+  "security": {
+    "changed_files_actual_credential_hits": 0,
+    "historical_tool_output_sensitive_fields_incident": true,
+    "shared_keys_rotated": false,
+    "personnel_names_exposed_by_analysis_api": false
+  },
+  "checks": {
+    "python_ast": "passed",
+    "source_hashes": {
+      "backend/python/blacklake/Open-SmartBI.ps1": "a36498f7abc0c8aa235904903c572249e6bc5ee17591b5931373746e72817dcb",
+      "backend/python/blacklake/analytics.py": "f036fee4bd4cd8e08c2b785dfc2fd48a50f888556f1a2968df742299e71513a8",
+      "backend/python/blacklake/bi_readiness.py": "18a6b62474c42b18a9dda5a245ab164e4f23bf4f4145c57b58708de92d8d05e3",
+      "backend/python/blacklake/migrations/003_smartbi_dataset.sql": "fd84b3be088b3cbc2328a102ed75b2103d5a857c244784fc972d02a65602db36",
+      "backend/python/blacklake/smartbi_acceptance.py": "b7a4f0a0f133b4eb2b9d9244fac2290c12e37a0a76bffc64c827c8c9e87de52e",
+      "backend/python/blacklake/smartbi_api.py": "4b3e95067f565a8fd5fc703e0592a328d91b2c4eb09c29708f3bf22c5382bf2e",
+      "backend/python/blacklake/smartbi_app.py": "b46ebc5e0eb3083b69a13932ae905e961216b85125d796c226344989c06dc55e",
+      "backend/python/blacklake/smartbi_prepare.py": "cf837323cfb34572d5d55de53ca8bf3a6b45c56ed2dcc1e4144f0dc08597ce70",
+      "backend/python/blacklake/smartbi_store.py": "1686c20a4a99e838935c91751c868607a0f763cd74923cc997b3b6473ecff82b",
+      "backend/python/blacklake/smartbi_testenv_admin.py": "4e12d5caa23239f97c1e0d8f7aaaa9065c207cad12f799162cdc414a3933528f",
+      "backend/python/blacklake/test_local.py": "a0ce674fd5f967e158bd65ae80a4454a279a990e181d7f05731543112f26855f",
+      "backend/python/blacklake/testenv_inspect.py": "65abe364e326306d62801ce07dbb12d6c458b8717838effeb9f759313d378e65",
+      "backend/python/main.py": "6fab01159784291602f9df43ef9bbd2c64a57e8a78a971d863c39d789ea083a1",
+      "backend/python/smartbi/api/blacklake.py": "670e309d666e6432a908672681bb5b0daa8e97c7076f346f44df7863d4ae2c1b",
+      "backend/python/tests/test_blacklake_analytics.py": "7e27e3971106fcb8c846fb096ea171473712dee70e1fa8f65e3107b5f5ea838e",
+      "backend/python/tests/test_blacklake_storage.py": "4417b319b0c731635b09de878184dcb8d545388c27f9c33273b344e2cd1ede8a",
+      "web-admin/blacklake-smartbi.html": "1375cea3284dca54f4b64e18e7fb7c8ff5fbbe5abd8c733df76c8ad16e51966e",
+      "web-admin/scripts/blacklake-acceptance.mjs": "0932e06b10a57f1370e3434f2050ec89653d956d722a47cdfaea2679beaee548",
+      "web-admin/scripts/blacklake-review.mjs": "25f2350c60dac8036614095fcba8156f76c2d56456356ce98d4eb45b8230d218",
+      "web-admin/src/api/smartbi/blacklake.ts": "df0e50228ae06e5ed92380a69bc9caa66eeaa31f12e5606ff97faed10dae52c2",
+      "web-admin/src/blacklake-main.ts": "d454a157193a35878755e3cd85270bba51d6669642adee35b9de67d25a697b04",
+      "web-admin/src/components/layout/menuConfig.ts": "bf281beff0fb14326cd8e0ed593f0140dcf675e5c11f33306cad331603a5d3f7",
+      "web-admin/src/router/modules/smartbi.ts": "a64fe5a130d1ce782ed9e01d03571adb82be60dd4354fa201971ed24c77fc71b",
+      "web-admin/src/views/smart-bi/BlacklakeAnalysis.vue": "4160fa22a31cd7b9fdf161848346d8971e46ad80abe47fcb2ff90328ae71a9a9",
+      "web-admin/src/views/smart-bi/BlacklakeTestEntry.vue": "b0373a941270263987766fb188639017df181730fd5c06a103b1f438a6bde887",
+      "web-admin/vite.config.ts": "e3e8ebc9c52af95a01cd2bb5aa92456a5cba669d8adcaca3a2de0ac6d20aa258",
+      "backend/python/blacklake/requirements.txt": "ba8176182b4867d893eb76fdedefbac7c82a3780359842b7c41aea35a9dd1df4"
+    }
+  },
+  "limitations": [
+    "API-visible nontransactional history only",
+    "Not a complete manufacturing cost or profit calculation",
+    "Currency and zero/near-zero source valuation need business verification",
+    "Historical source omissions remain unresolved",
+    "Regular shared application shell acceptance still failed; independent SmartBI test entry passed"
+  ]
+}
