@@ -75,7 +75,7 @@ class SemiFinishedLineageGapsTest {
                 .thenReturn(Optional.empty());
         when(taskRepository.findByFactoryIdAndId(anyString(), any())).thenReturn(Optional.empty());
         recorder = new LineageEdgeRecorder(new LineageEdgeWriter(edgeRepository),
-                new FinishedBatchProductionAligner(productionBatchRepository));
+                new FinishedBatchProductionAligner(productionBatchRepository), org.mockito.Mockito.mock(LineageEdgeOutbox.class));
     }
 
     // ─────────────────────────────────────────────────────────────

@@ -110,7 +110,8 @@ class ClerkChainLineageConnectivityTest {
     void wire() {
         ReflectionTestUtils.setField(service, "objectMapper", new ObjectMapper());
         ReflectionTestUtils.setField(service, "lineageEdgeRecorder", new LineageEdgeRecorder(
-                new LineageEdgeWriter(edgeRepository), new FinishedBatchProductionAligner(org.mockito.Mockito.mock(ProductionBatchRepository.class))));
+                new LineageEdgeWriter(edgeRepository), new FinishedBatchProductionAligner(org.mockito.Mockito.mock(ProductionBatchRepository.class)),
+                org.mockito.Mockito.mock(com.cretas.aims.service.lineage.LineageEdgeOutbox.class)));
 
         when(edgeRepository.findMatchingEdges(anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString()))
