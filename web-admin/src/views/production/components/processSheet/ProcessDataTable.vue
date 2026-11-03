@@ -330,6 +330,8 @@ const isSingleSource = computed(() => supportsUpstreamSources.value && !isMultiS
 // -------------------------------------------------------------------------
 /** 本工序 workflow 计划产出端口 (null = 无 workflow 上下文, 或该 workflow 任务无产出端口)。 */
 const workflowOutput = computed(() => props.workflowContext?.output ?? null);
+/** 本工序在工艺版本上选了「固定比例」分摊 (食品 DAG 缺口 10)。 */
+const fixedRatioAllocation = computed(() => props.workflowContext?.costAllocationMethod === 'FIXED_RATIO');
 /** 本工序 workflow 声明的原料类型 (仅 RAW_MATERIAL kind, 供领料 picker 旁提示"需要哪些原料")。 */
 /**
  * 主原料份额推算(owner 2026-09-02): 操作员填了任一原料的投入量, 其余**已选用**且带份额的原料
@@ -949,7 +951,9 @@ function initMultiOutputs(): MultiOutputLine[] {
     byproductQuantity: null,
     byproductUnit: byproductReportingUnit.value,
     byproductUnitPrice: null,
-    costAllocationRatio: null,
+    // 工艺版本选了固定比例 → 报工时自动带出 (仍可改, 后端改了留记录)
+    costAllocationRatio: fixedRatioAllocation.value ? (p.fixedCostShare ?? null) : null,
+    workflowFixedCostShare: fixedRatioAllocation.value ? (p.fixedCostShare ?? null) : null,
     batchNumber: null,
   }));
 }
@@ -1279,7 +1283,10 @@ function buildDisplayRows(views: ProcessSheetRowView[]): SheetRow[] {
     const row = hydrateRow({ ...first, clientRowId: base });
     const savedOutputs = sorted.map(multiOutputLineFromView);
     const savedByPort = new Map(savedOutputs.map((line) => [line.workflowPortId, line]));
-    row.multiOutputs = initMultiOutputs().map((line) => savedByPort.get(line.workflowPortId) ?? line);
+    row.multiOutputs = initMultiOutputs().map((line) => {
+      const saved = savedByPort.get(line.workflowPortId);
+      return saved ? { ...saved, workflowFixedCostShare: line.workflowFixedCostShare ?? null } : line;
+    });
     savedOutputs.forEach((line) => {
       if (!row.multiOutputs.some((candidate) => candidate.workflowPortId === line.workflowPortId)) {
         row.multiOutputs.push(line);
@@ -1526,7 +1533,7 @@ function formalSubmitBlockedReason(row: SheetRow): string | null {
   }
   const blendBlocked = blendReasonBlockedReason(blendEvaluation(row), row.blendReason, row.blendNote);
   if (blendBlocked) return blendBlocked;
-  if (requiresManualCostAllocation(row)) {
+  if (requiresManualCostAllocation(row) && !usesUnchangedFixedRatio(row)) {
     const activeOutputs = row.multiOutputs.filter((output) => output.selected && output.quantity != null && output.quantity > 0);
     if (activeOutputs.some((output) => output.costAllocationRatio == null || output.costAllocationRatio <= 0)) {
       return '产出单位无法统一折算，请填写每项大于 0 的成本分摊比例';
@@ -1790,9 +1797,19 @@ function canConvertOutputToKg(line: MultiOutputLine): boolean {
   return unit === 'kg' || unit === 'g' || (line.gramsPerUnit != null && line.gramsPerUnit > 0);
 }
 
+/** 每个已报产出的比例仍是工艺上的固定份额 (只报了部分产出时后端在已报产出间归一, 不要求合计 100)。 */
+function usesUnchangedFixedRatio(row: SheetRow): boolean {
+  const active = row.multiOutputs.filter((o) => o.selected && o.quantity != null && o.quantity > 0);
+  return fixedRatioAllocation.value && active.length > 0 && active.every((o) =>
+    o.workflowFixedCostShare != null && o.costAllocationRatio != null
+      && Math.abs(o.costAllocationRatio - o.workflowFixedCostShare) <= 0.01);
+}
+
 function requiresManualCostAllocation(row: SheetRow): boolean {
   const selectedOutputs = row.multiOutputs.filter((line) => line.selected);
   if (selectedOutputs.length <= 1) return false;
+  // 固定比例: 比例框常显 (带出工艺份额, 可改)
+  if (fixedRatioAllocation.value) return true;
   if (selectedOutputs.every(canConvertOutputToKg)) return false;
   const dimensions = new Set(selectedOutputs.map((line) => {
     const unit = normalizedReportingUnit(line.unit);
