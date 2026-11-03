@@ -46,7 +46,8 @@ public class ShortageOutcomeCheckService {
         ShortageCase c = caseRepository.findByIdAndFactoryId(caseId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "缺料实例不存在或不属于本厂"));
         if (c.getSourceType() != ShortageCase.SourceType.SALES_ORDER) {
-            throw new BusinessException(409, "只有来自销售订单的缺料实例能核对交期");
+            throw new BusinessException(409, "只有来自销售订单的缺料实例能核对交期")
+                    .withHint("其它来源的缺料请到「生产排程」核对完工时间");
         }
         var order = salesOrderRepository.findById(c.getSourceId())
                 .filter(o -> factoryId.equals(o.getFactoryId()))
