@@ -52,6 +52,10 @@ class ProcessSecretToolTextTest {
         ProductionBatchRepository batchRepository = mock(ProductionBatchRepository.class);
         when(batchRepository.findByFactoryIdAndCreatedAtBetween(eq(FACTORY), any(), any())).thenReturn(batches);
         when(batchRepository.findByFactoryIdAndCreatedAtAfter(eq(FACTORY), any())).thenReturn(batches);
+        // 单产品成本上下文按产品取批次 (不再取全厂再筛)
+        when(batchRepository.findByFactoryIdAndProductTypeIdAndCreatedAtAfter(eq(FACTORY), any(), any()))
+                .thenAnswer(inv -> batches.stream()
+                        .filter(b -> inv.getArgument(1, String.class).equals(b.getProductTypeId())).toList());
         ProductTypeRepository productTypes = mock(ProductTypeRepository.class);
         AIContextServiceImpl contexts = new AIContextServiceImpl(bom, reports, batchRepository, productTypes, scope);
         ReportBomCostTool tool = new ReportBomCostTool();

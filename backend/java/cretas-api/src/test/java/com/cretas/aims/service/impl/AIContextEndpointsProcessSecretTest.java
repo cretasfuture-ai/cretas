@@ -52,6 +52,9 @@ class AIContextEndpointsProcessSecretTest {
         ProductionBatchRepository batchRepository = mock(ProductionBatchRepository.class);
         when(batchRepository.findByFactoryIdAndCreatedAtBetween(eq(FACTORY), any(), any())).thenReturn(batches);
         when(batchRepository.findByFactoryIdAndCreatedAtAfter(eq(FACTORY), any())).thenReturn(batches);
+        when(batchRepository.findByFactoryIdAndProductTypeIdAndCreatedAtAfter(eq(FACTORY), anyString(), any()))
+                .thenAnswer(inv -> batches.stream()
+                        .filter(b -> inv.getArgument(1, String.class).equals(b.getProductTypeId())).toList());
         ProductTypeRepository productTypes = mock(ProductTypeRepository.class);
         when(productTypes.findByFactoryId(FACTORY)).thenReturn(List.of());
         when(productTypes.findById(anyString())).thenReturn(Optional.empty());

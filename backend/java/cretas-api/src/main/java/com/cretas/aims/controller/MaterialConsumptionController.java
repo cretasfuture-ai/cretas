@@ -266,18 +266,24 @@ public class MaterialConsumptionController {
 
         List<MaterialConsumption> consumptions;
 
-        if (startDate != null && endDate != null) {
+        if (productionBatchId != null) {
+            // 指定批次时只取这一批: 取全厂再筛, 别的保密产品的消耗记录会被记进工艺保密读数,
+            // 出口把这一批 (哪怕不保密) 的统计整份按受限处理
+            consumptions = consumptionRepository.findByProductionBatchIdAndFactoryId(productionBatchId, factoryId);
+            if (startDate != null && endDate != null) {
+                LocalDateTime startTime = startDate.atStartOfDay();
+                LocalDateTime endTime = endDate.atTime(LocalTime.MAX);
+                consumptions = consumptions.stream()
+                        .filter(c -> c.getConsumptionTime() != null
+                                && !c.getConsumptionTime().isBefore(startTime) && !c.getConsumptionTime().isAfter(endTime))
+                        .collect(Collectors.toList());
+            }
+        } else if (startDate != null && endDate != null) {
             LocalDateTime startTime = startDate.atStartOfDay();
             LocalDateTime endTime = endDate.atTime(LocalTime.MAX);
             consumptions = consumptionRepository.findByTimeRange(factoryId, startTime, endTime);
         } else {
             consumptions = consumptionRepository.findByFactoryId(factoryId);
-        }
-
-        if (productionBatchId != null) {
-            consumptions = consumptions.stream()
-                    .filter(c -> productionBatchId.equals(c.getProductionBatchId()))
-                    .collect(Collectors.toList());
         }
 
         // 计算统计

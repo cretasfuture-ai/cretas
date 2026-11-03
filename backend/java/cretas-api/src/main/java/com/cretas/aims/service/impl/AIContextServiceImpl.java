@@ -339,11 +339,11 @@ public class AIContextServiceImpl implements AIContextService {
         // 3. 获取最近批次
         // 使用时间范围查询代替，获取最近3个月的数据
         LocalDateTime threeMonthsAgo = LocalDateTime.now().minusMonths(3);
-        List<ProductionBatch> allBatches = productionBatchRepository.findByFactoryIdAndCreatedAtAfter(
-                factoryId, threeMonthsAgo);
+        // 只取本产品的批次: 取全厂会把别的保密产品的批次记进工艺保密读数, 整份成本上下文被遮 (见仓库方法注释)
+        List<ProductionBatch> allBatches = productionBatchRepository.findByFactoryIdAndProductTypeIdAndCreatedAtAfter(
+                factoryId, productTypeId, threeMonthsAgo);
 
         List<ProductionBatch> productBatches = allBatches.stream()
-                .filter(b -> productTypeId.equals(b.getProductTypeId()))
                 .sorted(Comparator.comparing(ProductionBatch::getCreatedAt).reversed())
                 .limit(recentBatchCount)
                 .collect(Collectors.toList());
