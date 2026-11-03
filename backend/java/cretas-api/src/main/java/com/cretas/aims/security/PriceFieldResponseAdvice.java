@@ -234,6 +234,20 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                     ").*"
     );
 
+    /**
+     * 名字里带金额词、但本身不是钱的**单位换算系数** (如 PO 明细的 {@code quantityToPriceFactor} ——
+     * 数量到计价单位的换算系数, 含 "Price" 却是个无量纲的数)。Rule 2b 只该剥真正的金额, 这些不剥
+     * (S6 #1376 复测: 采购主管在对话里看到它为 null, web 与超管为 1)。
+     *
+     * <p>⛔ 只认换算系数这一种形状, 不认裸的 ratio / 比例 / factor / multiplier:
+     * costRatio、foodCostRatio、laborCostRatio、毛利比例 这类成本率 / 利润率正是 Rule 2b 要对非财务角色藏起来的。
+     * 全仓扫描 (Java 字段 / 字符串键 / Python 与 SmartBI 键 / SQL 别名) 命中金额词的键里, 本式只放过 quantityToPriceFactor
+     * (及其列名 quantity_to_price_factor); 旧的宽式会放过 117 个, 含上面这些。
+     */
+    private static final Pattern NON_MONEY_KEY_REGEX = Pattern.compile(
+            "(?i)^(.*ToPriceFactor|.*_to_price_factor|.*ConversionFactor|.*_conversion_factor|.*换算系数)$"
+    );
+
     /** Path segments where dynamic Map keys (e.g. department name) are the column header for numeric price data. */
     private static final Pattern DYNAMIC_KEY_PRICE_CONTAINER_REGEX = Pattern.compile(
             "(?i)^(trendComparison|trendChart|crosstab|pivot)$"
@@ -721,7 +735,8 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                 //   operator (both=N) → finance columns masked (this branch fires)
                 if (!canViewFinance
                         && value instanceof Number
-                        && FINANCE_COLUMN_KEY_REGEX.matcher(key).matches()) {
+                        && FINANCE_COLUMN_KEY_REGEX.matcher(key).matches()
+                        && !NON_MONEY_KEY_REGEX.matcher(key).matches()) {
                     trySetEntryNull((Map.Entry<Object, Object>) entry, "FINANCE_COLUMN_KEY numeric leaf");
                     continue;
                 }

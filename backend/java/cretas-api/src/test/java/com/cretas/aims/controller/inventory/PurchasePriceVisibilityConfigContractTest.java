@@ -264,7 +264,7 @@ class PurchasePriceVisibilityConfigContractTest {
             assertThat(poListAmountOrForbidden(role)).as("PO list role=%s", role).isIn(null, "403");
             assertThat(poDetailUnitPriceOrForbidden(role)).as("PO detail role=%s", role).isIn(null, "403");
         }
-        assertThat(poListAmountOrForbidden(SALES)).isNull();
+        assertThat(poListAmountOrForbidden(SALES)).isEqualTo("403");   // 不带 salesOrderId 的全厂列表要采购读 (只有销售读 = 403)
         assertThat(poDetailUnitPriceOrForbidden(SALES)).isEqualTo("403");
     }
 
@@ -294,7 +294,7 @@ class PurchasePriceVisibilityConfigContractTest {
     @Test
     void changingTheRoleConfig_flipsVisibilityOnEverySurface() throws Exception {
         assertThat(supplierPrice(SALES)).isNull();
-        assertThat(poListAmountOrForbidden(SALES)).isNull();
+        assertThat(poListAmountOrForbidden(SALES)).isEqualTo("403");   // 不带 salesOrderId 的全厂列表要采购读 (只有销售读 = 403)
 
         grant("sales_manager", "procurement", "r");
         assertThat(supplierPrice(SALES)).isEqualTo("20.00");
@@ -303,7 +303,7 @@ class PurchasePriceVisibilityConfigContractTest {
 
         grant("sales_manager", "procurement", "-");
         assertThat(supplierPrice(SALES)).isNull();
-        assertThat(poListAmountOrForbidden(SALES)).isNull();
+        assertThat(poListAmountOrForbidden(SALES)).isEqualTo("403");   // 不带 salesOrderId 的全厂列表要采购读 (只有销售读 = 403)
 
         // 反方向: 仓管不在旧名单里, 配置给了采购读就能看
         grant("warehouse_manager", "procurement", "r");
