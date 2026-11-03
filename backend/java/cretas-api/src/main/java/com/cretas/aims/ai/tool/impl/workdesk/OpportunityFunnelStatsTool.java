@@ -132,13 +132,16 @@ public class OpportunityFunnelStatsTool extends AbstractBusinessTool {
         data.put("activeExpected", activeExpected.setScale(2, RoundingMode.HALF_UP));
         data.put("actionHint", "/crm/opportunity/funnel");
 
-        String message = String.format(
+        // 文字与 activeValue / activeExpected / totalValue 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        String message = replyShowsAmounts(context, "activeValue", "activeExpected", "totalValue")
+                ? String.format(
                 "🎯 商机漏斗: 活跃 %d 个 (¥%s 预估 / ¥%s 加权), 全部 %d 个 (¥%s 预估)",
                 activeCount,
                 activeValue.setScale(2, RoundingMode.HALF_UP),
                 activeExpected.setScale(2, RoundingMode.HALF_UP),
                 totalCount,
-                totalValue.setScale(2, RoundingMode.HALF_UP));
+                totalValue.setScale(2, RoundingMode.HALF_UP))
+                : String.format("🎯 商机漏斗: 活跃 %d 个, 全部 %d 个 (金额按权限不显示)", activeCount, totalCount);
         return buildSimpleResult(message, data);
     }
 

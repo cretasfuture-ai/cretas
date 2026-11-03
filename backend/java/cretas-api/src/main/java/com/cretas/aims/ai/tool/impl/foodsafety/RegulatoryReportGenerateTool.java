@@ -134,8 +134,10 @@ public class RegulatoryReportGenerateTool extends AbstractBusinessTool {
                 ? event.getTriggerTime().format(DATE_FMT) : "-").append(" |\n");
         md.append("| 触发人 (userId) | ").append(event.getTriggeredByUserId()).append(" |\n");
         md.append("| 当前状态 | ").append(event.getStatus()).append(" |\n");
-        md.append("| 预估损失 | ¥").append(event.getEstimatedLoss() != null
-                ? event.getEstimatedLoss() : "-").append(" |\n\n");
+        // 报告正文里的金额按 estimatedLoss 字段的可见性写 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        md.append("| 预估损失 | ").append(event.getEstimatedLoss() == null ? "-"
+                : replyShowsAmount(context, "estimatedLoss") ? "¥" + event.getEstimatedLoss() : "按权限不显示")
+                .append(" |\n\n");
 
         md.append("## 二、触发原因\n\n");
         md.append(event.getTriggerReason()).append("\n\n");

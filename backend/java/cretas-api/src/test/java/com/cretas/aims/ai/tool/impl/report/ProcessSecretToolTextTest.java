@@ -165,7 +165,7 @@ class ProcessSecretToolTextTest {
         when(query.fetch(eq(FACTORY), any(), any())).thenReturn(OperatingReportGrossMarginQuery.payload(rows, false));
         ProductTypeRepository types = mock(ProductTypeRepository.class);
         when(types.findByFactoryIdAndIsActiveTrue(FACTORY)).thenReturn(List.of());
-        SkuGrossMarginTool tool = new SkuGrossMarginTool();
+        SkuGrossMarginTool tool = com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(new SkuGrossMarginTool());
         ReflectionTestUtils.setField(tool, "realizedQuery", query);
         ReflectionTestUtils.setField(tool, "productTypeRepository", types);
         ReflectionTestUtils.setField(tool, "llmCostScope", scope);
@@ -200,7 +200,7 @@ class ProcessSecretToolTextTest {
         ReportService reports = mock(ReportService.class);
         when(reports.getCostVarianceReport(eq(FACTORY), any(), any())).thenReturn(CostVarianceReportDTO.builder()
                 .comparable(false).totalActualCost(new BigDecimal("13333.33")).batchCount(3).build());
-        ReportCostVarianceTool tool = new ReportCostVarianceTool();
+        ReportCostVarianceTool tool = com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(new ReportCostVarianceTool());
         ReflectionTestUtils.setField(tool, "reportService", reports);
         ReflectionTestUtils.setField(tool, "llmCostScope", scope);
         return (String) tool.doExecute(FACTORY, new HashMap<>(), Map.of()).get("message");
@@ -221,7 +221,7 @@ class ProcessSecretToolTextTest {
         when(reports.getCostVarianceReport(eq(FACTORY), any(), any())).thenReturn(CostVarianceReportDTO.builder()
                 .comparable(false).totalActualCost(new BigDecimal("5555.56")).batchCount(3)
                 .processSecretNote(ProcessSecretLlmCostScope.note(1)).build());
-        ReportCostVarianceTool tool = new ReportCostVarianceTool();
+        ReportCostVarianceTool tool = com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(new ReportCostVarianceTool());
         ReflectionTestUtils.setField(tool, "reportService", reports);
         ReflectionTestUtils.setField(tool, "llmCostScope", protectedScope());
 
@@ -293,7 +293,7 @@ class ProcessSecretToolTextTest {
         when(query.fetch(eq(FACTORY), any(), any())).thenReturn(OperatingReportGrossMarginQuery.payload(rows, false));
         ProductTypeRepository types = mock(ProductTypeRepository.class);
         when(types.findByFactoryIdAndIsActiveTrue(FACTORY)).thenReturn(List.of());
-        SkuGrossMarginTool tool = new SkuGrossMarginTool();
+        SkuGrossMarginTool tool = com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(new SkuGrossMarginTool());
         ReflectionTestUtils.setField(tool, "realizedQuery", query);
         ReflectionTestUtils.setField(tool, "productTypeRepository", types);
         ReflectionTestUtils.setField(tool, "llmCostScope", scope);

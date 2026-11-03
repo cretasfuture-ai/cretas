@@ -1262,7 +1262,7 @@ public class SseStreamingService {
         boolean isSuccessStatus = "SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus());
         if (resultFormatterService != null && isSuccessStatus && response.getResultData() != null) {
             try {
-                resultFormatterService.formatAndSet(response);
+                resultFormatterService.formatAndSet(response, userId);
             } catch (Exception e) {
                 log.warn("[SSE] 结果格式化异常: {}", e.getMessage());
             }
@@ -2180,12 +2180,32 @@ public class SseStreamingService {
             lastStreamedResult.putIfAbsent(emitter, IntentExecuteResponse.builder().status("FAILED").build());
         }
         try {
-            String json = objectMapper.writeValueAsString(data);
+            String json = objectMapper.writeValueAsString(priceMaskedWire(eventName, data));
             emitter.send(SseEmitter.event().name(eventName).data(json));
         } catch (JsonProcessingException e) {
             log.warn("序列化 SSE 事件数据失败: {}", e.getMessage());
             throw new IOException("Failed to serialize SSE event data", e);
         }
+    }
+
+    /** 价格 / 财务可见性的唯一判定 (与 HTTP 响应层同一个); 切片测试里可能没有。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.PriceFieldResponseAdvice priceView;
+
+    /**
+     * SSE 不经过 HTTP 响应层的 PriceFieldResponseAdvice, 推送的 result 要自己按看的人遮蔽:
+     * resultData 换成该用户看得到的那一份 (同一个判定, 作用在副本上, 原对象不动)。看的人取流的可信作用域;
+     * 取不到 ⇒ 按全部不可见 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)。
+     */
+    private Object priceMaskedWire(String eventName, Object data) {
+        if (priceView == null || !"result".equals(eventName)
+                || !(data instanceof IntentExecuteResponse response) || response.getResultData() == null) {
+            return data;
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode tree = objectMapper.valueToTree(response);
+        tree.set("resultData", objectMapper.valueToTree(
+                priceView.maskedViewFor(response.getResultData(), SecurityUtils.currentUserId())));
+        return tree;
     }
 
     /** S6-07: streamed runs (the app's AI chat) leave the same trace as facade runs; never throws. */
