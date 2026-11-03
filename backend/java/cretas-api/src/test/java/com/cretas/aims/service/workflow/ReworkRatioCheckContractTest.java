@@ -23,7 +23,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 @DisplayName("缺口 03 回料比例上限: 超限必须填原因, 没设不拦")
-class ReworkRatioCheckTest {
+class ReworkRatioCheckContractTest {
 
     private static final String F = "F006";
     private SemiFinishedInventoryRepository sfi;
