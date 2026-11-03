@@ -56,6 +56,8 @@ class TraceabilityPostgresAcceptanceTest {
     @EntityScan("com.cretas.aims.entity")
     @EnableJpaRepositories("com.cretas.aims.repository")
     @Import({TraceabilityController.class, TraceabilityServiceImpl.class, LineageGraphAssembler.class,
+            com.cretas.aims.service.lineage.LineageEdgeOutboxReconciler.class,
+            com.cretas.aims.service.lineage.LineageEdgeOutbox.class, com.cretas.aims.service.lineage.LineageEdgeWriter.class,
             IndicatorController.class, IndicatorQueryServiceImpl.class, IndicatorComputationStrategyRegistry.class,
             FactoryQualityRejectRateStrategy.class})
     static class Runtime { }

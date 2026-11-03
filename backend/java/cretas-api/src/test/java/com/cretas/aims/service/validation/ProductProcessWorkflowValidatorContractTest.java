@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class ProductProcessWorkflowValidatorTest {
+class ProductProcessWorkflowValidatorContractTest {
 
     private final ProductProcessWorkflowValidator validator = new ProductProcessWorkflowValidator();
 
@@ -219,6 +219,71 @@ class ProductProcessWorkflowValidatorTest {
                 () -> validator.validateForDraft(definition));
 
         assertEquals("PRODUCT_PROCESS_WORKFLOW_SUBSTITUTE_INVALID", error.getErrorCode());
+    }
+
+    // ───────── 缺口 20: AI 留给人补的「待确认」项, 补齐前不能发布 ─────────
+
+    private ProductProcessWorkflowDTO.Node firstProcess(ProductProcessWorkflowDTO definition) {
+        return definition.getNodes().stream()
+                .filter(n -> "PROCESS".equals(n.getKind())).findFirst().orElseThrow();
+    }
+
+    private Map<String, Object> ccp(Object min, Object max, Object unit) {
+        Map<String, Object> point = new LinkedHashMap<>();
+        point.put("id", "ccp-1");
+        point.put("name", "中心温度");
+        point.put("hazardType", "BIOLOGICAL");
+        point.put("criticalLimitMin", min);
+        point.put("criticalLimitMax", max);
+        point.put("unit", unit);
+        return point;
+    }
+
+    @Test
+    void publishBlockedWhileCcpLimitsArePending() {
+        ProductProcessWorkflowDTO definition = validPublishDefinition();
+        // 阳性对照: 没有任何待确认项时同一张图能发布, 否则下面的"被拦"可能是别的原因
+        assertDoesNotThrow(() -> validator.validateForPublish(definition));
+
+        firstProcess(definition).getData().put("ccpPoints", List.of(ccp(null, null, null)));
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> validator.validateForPublish(definition));
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_PENDING_CONFIRMATION", error.getErrorCode());
+        assertTrue(error.getMessage().contains("中心温度"), error.getMessage());
+        assertTrue(error.getMessage().contains("下限待确认"), error.getMessage());
+        assertTrue(error.getMessage().contains("单位待确认"), error.getMessage());
+        // 草稿照常可存: 待确认不挡保存, 只挡发布
+        assertDoesNotThrow(() -> validator.validateForDraft(definition));
+    }
+
+    @Test
+    void publishAllowedOnceHumanFillsCcpLimits() {
+        ProductProcessWorkflowDTO definition = validPublishDefinition();
+        firstProcess(definition).getData().put("ccpPoints", List.of(ccp(75, 95, "℃")));
+        assertDoesNotThrow(() -> validator.validateForPublish(definition));
+    }
+
+    @Test
+    void publishBlockedWhenCcpLimitsContradict() {
+        ProductProcessWorkflowDTO definition = validPublishDefinition();
+        firstProcess(definition).getData().put("ccpPoints", List.of(ccp(95, 75, "℃")));
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> validator.validateForPublish(definition));
+        assertTrue(error.getMessage().contains("下限大于上限"), error.getMessage());
+    }
+
+    @Test
+    void publishBlockedByExplicitPendingConfirmationUntilCleared() {
+        ProductProcessWorkflowDTO definition = validPublishDefinition();
+        firstProcess(definition).getData().put("pendingConfirmations",
+                List.of(Map.of("code", "SHARE", "label", "主料份额 3:7 是 AI 按口述推的，待核对")));
+        BusinessException error = assertThrows(
+                BusinessException.class, () -> validator.validateForPublish(definition));
+        assertEquals("PRODUCT_PROCESS_WORKFLOW_PENDING_CONFIRMATION", error.getErrorCode());
+        assertTrue(error.getMessage().contains("主料份额"), error.getMessage());
+
+        firstProcess(definition).getData().put("pendingConfirmations", List.of());
+        assertDoesNotThrow(() -> validator.validateForPublish(definition));
     }
 
     private ProductProcessWorkflowDTO.Node node(ProductProcessWorkflowDTO definition, String id) {

@@ -618,6 +618,11 @@ export interface WorkflowPortDescriptor {
   /** 仅 input 端口有意义: 主原料份额(%)。报工表/领料单据此「填一个原料, 其余按份额自动跳」。 */
   inputShareRatio?: number | null;
   /**
+   * 仅 output 端口有意义: 工艺版本上「固定比例」成本分摊份额(%)。null = 按重量。
+   * 报工页多产出时自动带进「成本分摊比例」, 仍可改 (后端记下原份额, 食品 DAG 缺口 10)。
+   */
+  fixedCostShare?: number | null;
+  /**
    * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**回料**。
    *
    * ⚠️ 2026-09-01 发现: 后端 `PortDescriptor.rework` **一直在发**, 而这份 TS 镜像
@@ -663,6 +668,8 @@ export interface WorkflowProcessDescriptor {
    * 录入 N 条产出 (产品只读=端口 SKU, 只填数量) —— 这是"是否多产出"的唯一判据, 不是 toggle。
    */
   outputs: WorkflowPortDescriptor[];
+  /** 本工序多产出的成本分摊方法 (随工艺版本冻结): WEIGHT 按重量 / FIXED_RATIO 固定比例。旧后端缺省 = 按重量。 */
+  costAllocationMethod?: 'WEIGHT' | 'FIXED_RATIO' | null;
   /**
    * 缺口 04: 按工艺图这一道能不能正式报 (上游产出的料到了就是 true)。与正式录入时后端拦截
    * 同一份判定。`null`/缺省 = 后端没算, 退回旧的「上一道已正式报工」规则。

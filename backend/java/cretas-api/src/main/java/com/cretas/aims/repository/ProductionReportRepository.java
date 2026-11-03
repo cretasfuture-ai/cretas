@@ -467,6 +467,59 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     // ==================== 单元2: 厂级工序聚合 ====================
 
     /**
+     * 缺口 #07 物料平衡表: 逐条 YIELD 报工 (按计划 / 工序 / 任务归属), 由 service 按任务汇合后交
+     * MaterialBalanceCalculator。筛选与保密排除同 {@link #aggregateYieldByProcess}。
+     */
+    @Query(value = """
+        SELECT
+            pr.id AS report_id,
+            pr.work_process_task_id AS task_id,
+            wpt.process_order AS process_order,
+            wp.id AS process_id,
+            wp.process_name AS process_name,
+            wp.unit AS wp_unit,
+            wp.output_unit AS wp_output_unit,
+            pb.id AS batch_id,
+            pb.batch_number AS batch_number,
+            pp.id AS plan_id,
+            pp.plan_number AS plan_number,
+            pp.product_type_id AS product_type_id,
+            ptp.name AS product_name,
+            pr.report_date AS report_date,
+            pr.input_quantity AS input_quantity,
+            pr.input_unit AS input_unit,
+            pr.output_quantity AS output_quantity,
+            pr.output_unit AS output_unit,
+            pr.waste_quantity AS waste_quantity,
+            pr.sample_retain_quantity AS sample_retain_quantity,
+            CAST(pr.byproducts AS text) AS byproducts_json
+        FROM production_reports pr
+        JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id AND wpt.deleted_at IS NULL
+        JOIN work_processes wp ON wpt.work_process_id = wp.id AND wp.deleted_at IS NULL
+        LEFT JOIN production_batches pb ON pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
+        LEFT JOIN production_plans pp ON pp.id = pb.production_plan_id
+        LEFT JOIN product_types ptp ON ptp.id = pp.product_type_id
+        WHERE pr.factory_id = :factoryId
+          AND wpt.factory_id = :factoryId
+          AND pr.report_type = 'YIELD'
+          AND pr.deleted_at IS NULL
+          AND pr.report_date BETWEEN :startDate AND :endDate
+          AND (:planId = '' OR pb.production_plan_id = :planId)
+          AND (wpt.product_type_id IS NULL OR wpt.product_type_id NOT IN (:excludedProductTypeIds))
+          AND NOT EXISTS (SELECT 1 FROM production_batches xb
+                          WHERE xb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
+                            AND xb.production_plan_id IN (:excludedPlanIds))
+        ORDER BY pp.plan_number, wpt.process_order, pr.id
+        """, nativeQuery = true)
+    List<Map<String, Object>> findYieldReportsForBalance(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate,
+            @Param("planId") String planId,
+            @Param("excludedProductTypeIds") java.util.Collection<String> excludedProductTypeIds,
+            @Param("excludedPlanIds") java.util.Collection<String> excludedPlanIds);
+
+    /**
      * audit 单元2: 厂级按工序聚合 YIELD 报工投入/产出. native (沿用 analytics 投影惯例).
      * 单位取工序标准 wp.unit/wp.output_unit (audit SQL-2). 可空参数由 service 转 sentinel
      * (audit SQL-1: 永不传 null, 避 PG 类型推断失败).

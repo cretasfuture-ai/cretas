@@ -370,6 +370,12 @@ public interface ProductionPlanService {
     ProductionBatch createBatchFromPlan(String factoryId, String planId);
 
     /**
+     * 转批次 = 待处理计划开工 (计划翻成生产中)。工厂开了「缺料时拦开工」(S4-08) 且计划关联的缺料未解决时,
+     * 必须带 {@code forceStartReason}, 原因记入缺料实例处理记录; 开关关着时与两参版本完全一样。
+     */
+    ProductionBatch createBatchFromPlan(String factoryId, String planId, Long operatorId, String forceStartReason);
+
+    /**
      * SP2 二次加工: 基于 WIP 半成品创建二次加工计划。
      *
      * <p>区别于普通计划:

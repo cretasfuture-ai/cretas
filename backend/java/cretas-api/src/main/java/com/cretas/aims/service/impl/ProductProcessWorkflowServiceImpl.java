@@ -73,6 +73,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.WorkflowCcpMaterializer ccpMaterializer;
+
     @Override
     @Transactional(readOnly = true)
     public Optional<ProductProcessWorkflowDTO> getEditorDefinition(
@@ -558,6 +561,10 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             catalogValidator.validateForPublish(factoryId, productTypeId, definition);
         }
         bomWorkflowRevisionService.requireActiveBomPinsRevision(factoryId, productTypeId, revision);
+        // 画布工序上的 CCP 控制点 → 台账(待确认已在 validateForPublish 拦住, 到这里限值一定齐全)
+        if (ccpMaterializer != null) {
+            ccpMaterializer.materialize(factoryId, productTypeId, definition);
+        }
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         draft.setUnitReviewRequired(false);
         draft.setLastPublishIdempotencyKey(

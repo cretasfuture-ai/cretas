@@ -63,7 +63,7 @@ class LineageBackfillServiceTest {
             return e;
         });
         LineageEdgeRecorder recorder = new LineageEdgeRecorder(new LineageEdgeWriter(edgeRepository),
-                new FinishedBatchProductionAligner(productionBatchRepository));
+                new FinishedBatchProductionAligner(productionBatchRepository), org.mockito.Mockito.mock(LineageEdgeOutbox.class));
         LineageBackfillService service = new LineageBackfillService(recorder);
         ReflectionTestUtils.setField(service, "entityManager", entityManager);
         return service;

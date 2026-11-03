@@ -101,6 +101,13 @@ public interface ProductionReportService {
 
     CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate);
 
+    /**
+     * 只看一个产品的成本差异: 只从数据库读这个产品的批次 (合计、批次数也只算它)。
+     * {@code productTypeId} 为空时等同全厂报表。
+     */
+    CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate,
+                                                String productTypeId);
+
     KpiMetricsDTO getKpiMetricsDTO(String factoryId, LocalDate date);
 
     Map<String, Object> getCapacityUtilizationReport(String factoryId, LocalDate startDate, LocalDate endDate);

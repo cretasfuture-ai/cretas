@@ -93,6 +93,9 @@ public class ProductTypeDTO {
             + "回料可投入 ⟺ 来源.level <= 目标.level。null=未配置, 不参与判定(放行并标记)")
     private Integer reworkPurityLevel;
 
+    @Schema(description = "回料比例上限(%, 0<x<=100): 一道工序回料投入/主料投入超过它必须填原因才能正式提交。null=没设不拦; 更新时传 0=清除")
+    private BigDecimal maxReworkRatioPercent;
+
     @Schema(description = "这个产品收不收回料。false(汉堡排)=任何来源的回料都不可投入, 与等级是否配置无关; null/true=收")
     private Boolean acceptsRework;
 

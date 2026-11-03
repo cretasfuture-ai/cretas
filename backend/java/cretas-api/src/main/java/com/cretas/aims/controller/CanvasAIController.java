@@ -159,7 +159,13 @@ public class CanvasAIController {
                   "processCategory": "<optional: 熟制/注射/切配/... — the work process category>",
                   "outputs": [
                     { "kind": "SEMI_FINISHED"|"FINISHED_GOOD", "name": "<output product name>",
-                      "unit": "<kg/盒/只/...>", "byproduct": false }
+                      "unit": "<kg/盒/只/...>", "byproduct": false, "rework": false }
+                  ],
+                  "inputShares": [ { "name": "<input raw material name>", "percent": <number 0-100 or null> } ],
+                  "reworkSources": [ { "output": "<name of a rework output in this spec>", "inputRatioPercent": <0-100 or null> } ],
+                  "ccps": [
+                    { "name": "<CCP name, e.g. 中心温度>", "hazardType": "BIOLOGICAL"|"CHEMICAL"|"PHYSICAL"|null,
+                      "criticalLimitMin": <number or null>, "criticalLimitMax": <number or null>, "unit": "<℃/min/...>"|null }
                   ],
                   "seasonings": [
                     { "name": "<seasoning/auxiliary material name>", "dosagePerKgG": <grams per kg of input>,
@@ -182,6 +188,15 @@ public class CanvasAIController {
             - use the user's own wording for process/output/material names. Keep it minimal, valid JSON only.
             - "byproduct": true marks an output as 副产 (a by-product such as 鸡架/骨头/肥油 that is
               warehoused but is not the main product). Quantity is entered at reporting time, never here.
+            - "inputShares" (optional) = 主料份额: when the user gives a ratio between this step's input raw
+              materials (e.g. "牛肉猪肉 3:7"), put BOTH materials in the step's inputs (the first one may be
+              rawMaterials[0]) and give percent 30 / 70 (relative amounts, need not sum to 100).
+            - an output the user calls 边角料/碎料 that is a by-product to warehouse = "byproduct": true.
+              An output the user says goes back into production (回料) = "rework": true, and the process that takes
+              it back lists it in "reworkSources" with inputRatioPercent (percent of that process's main input).
+            - "ccps" (optional) = 关键控制点 on this step (e.g. "卤制要测中心温度" → {"name":"中心温度"}).
+              ⚠️ NEVER invent limits, units or hazard types the user did not say. Use null for anything not
+              stated — the frontend marks null fields 待确认 and a person must fill them before publishing.
             - "seasonings" (optional) = 调料/辅料 INPUT amounts for this step. dosagePerKgG MUST be > 0.
             - "subsequentPotRatio" (0-100) is ONLY meaningful on 熟制 steps; "injectionAmount" (> 0) is
               ONLY meaningful on 注射 steps. Do NOT emit them on other步骤 —— the frontend rejects

@@ -20,6 +20,8 @@ const labels: Record<string, string> = {
   reworkPolicy: '回料策略', sources: '回料来源', inputRatioPercent: '投入比例', expression: '换算表达式',
   inputs: '额外原料投入', seasonings: '辅料 / 调料投入', dosagePerKgG: '每 kg 投入克数',
   subsequentPotRatio: '后续锅比例', injectionAmount: '注射量',
+  inputShares: '主料份额', percent: '份额 %', reworkSources: '回料来源', output: '回料产出', rework: '是否回料',
+  ccps: '控制点', hazardType: '危害类型', criticalLimitMin: '下限', criticalLimitMax: '上限',
 };
 const owns = (value: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(value, key);
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);

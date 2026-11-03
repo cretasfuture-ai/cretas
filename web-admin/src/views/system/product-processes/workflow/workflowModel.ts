@@ -491,10 +491,12 @@ const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
   'ports', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
   'allowFinishedGoodsSource', 'reportingSelectionMode', 'reworkPolicy',
+  // 缺口 20: AI 说不清、留给人补的项, 与发布闸(后端 WorkflowPendingConfirmations)同一份数据
+  'ccpPoints', 'pendingConfirmations',
 ]);
 const portKeys = new Set([
   'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
-  'conversionRefId', 'conversionVersion', 'ordinal',
+  'conversionRefId', 'conversionVersion', 'ordinal', 'inputShareRatio',
 ]);
 /**
  * 🔴 这张表和下面的 {@link isAllowedFieldValue} 是**同一道闸的两个承载点** ——
@@ -680,6 +682,7 @@ function isProcessPort(value: unknown): boolean {
     && optionalString(value.skuId)
     && optionalNullableString(value.conversionRefId)
     && optionalNullableInteger(value.conversionVersion)
+    && optionalNullableFiniteNumber(value.inputShareRatio)
     && (value.materialKind === undefined
       || (typeof value.materialKind === 'string' && materialNodeKinds.has(value.materialKind)));
 }

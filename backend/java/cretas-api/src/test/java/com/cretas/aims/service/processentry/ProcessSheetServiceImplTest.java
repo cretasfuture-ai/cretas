@@ -652,6 +652,65 @@ class ProcessSheetServiceImplTest {
                 });
     }
 
+    private ProcessSheetRowRequest reworkRatioReq(String rowId, String reworkBatchNo, String reworkKg) {
+        ProcessSheetRowRequest req = baseReq(rowId, "qidiao", 2, "1");
+        req.setFinished(true);
+        req.setProcessDate(LocalDate.of(2026, 7, 20));
+        req.setInputQuantity(new BigDecimal("10"));
+        UpstreamRef rework = upstreamRef(reworkBatchNo, reworkKg);
+        rework.setSemiFinished(true);
+        req.setUpstreamSources(List.of(rework));
+        return req;
+    }
+
+    private void setMaxReworkRatio(String percent) {
+        ProductType pt = productTypeRepo.findById(PRODUCT_TYPE_ID).orElseThrow();
+        pt.setMaxReworkRatioPercent(percent == null ? null : new BigDecimal(percent));
+        productTypeRepo.save(pt);
+    }
+
+    @Test
+    @DisplayName("缺口03: 设了回料上限, 超限不填原因 => 409 且回料库存一克没动")
+    void submitRow_reworkOverLimitWithoutReason_isRejectedAndStockUntouched() {
+        String batchNo = "CLK-SEMI-REWORK-CAP-1";
+        seedReworkSfi(batchNo, "5");
+        setMaxReworkRatio("10"); // 回料 5 / 主料 5 = 100% > 10%
+        assertThatThrownBy(() -> processSheetService.submitRow(
+                FACTORY_ID, planId, reworkRatioReq("row-cap-1", batchNo, "5"), operatorId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo(com.cretas.aims.service.workflow.ReworkRatioCheck.ERROR_CODE));
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, batchNo)
+                .orElseThrow().getAvailableQuantity()).isEqualByComparingTo("5");
+    }
+
+    @Test
+    @DisplayName("缺口03: 超限填了原因 => 放行, 原因/占比随行留痕, 回料已扣")
+    void submitRow_reworkOverLimitWithReason_passesAndIsRecorded() {
+        String batchNo = "CLK-SEMI-REWORK-CAP-2";
+        seedReworkSfi(batchNo, "5");
+        setMaxReworkRatio("10");
+        ProcessSheetRowRequest req = reworkRatioReq("row-cap-2", batchNo, "5");
+        req.setReworkRatio(com.cretas.aims.dto.workflow.ReworkRatioDeviation.builder().reason("主料不足").build());
+        processSheetService.submitRow(FACTORY_ID, planId, req, operatorId);
+        ProcessSheetRow persisted = rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                FACTORY_ID, planId, "qidiao", "row-cap-2").orElseThrow();
+        assertThat(persisted.getRowPayload()).contains("reworkRatio").contains("OVER_WITH_REASON").contains("主料不足");
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, batchNo)
+                .orElseThrow().getAvailableQuantity()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("缺口03: 没设回料上限 => 不拦")
+    void submitRow_noReworkLimit_doesNotBlock() {
+        String batchNo = "CLK-SEMI-REWORK-CAP-3";
+        seedReworkSfi(batchNo, "5");
+        setMaxReworkRatio(null);
+        processSheetService.submitRow(FACTORY_ID, planId, reworkRatioReq("row-cap-3", batchNo, "5"), operatorId);
+        assertThat(sfiRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY_ID, batchNo)
+                .orElseThrow().getAvailableQuantity()).isEqualByComparingTo("0");
+    }
+
     @Test
     @DisplayName("血缘: 正式报工扣回料之后写 回料来源 → 本行物化生产批 的 WIP_CONSUME (量 = 实际扣减量)")
     void submitRow_reworkSfi_writesWipConsumeLineageToTheMaterializedBatch() {

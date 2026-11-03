@@ -61,6 +61,86 @@ const kpi = computed(() => {
   };
 });
 
+// ---------- 物料平衡表 (缺口 #07) ----------
+interface BalanceRow {
+  processName: string;
+  processOrder: number | null;
+  level: 'BALANCED' | 'WARN' | 'RED' | 'UNIT_INCOMPARABLE' | 'NO_INPUT';
+  unit: string | null;
+  input: number | null;
+  output: number | null;
+  byproducts: number | null;
+  confirmedLoss: number | null;
+  unexplained: number | null;
+  unexplainedPct: number | null;
+  taskCount: number;
+  note: string | null;
+}
+interface BalancePlan {
+  planId: string | null;
+  planNumber: string | null;
+  productName: string | null;
+  batchNumbers: string[];
+  rows: BalanceRow[];
+}
+interface BalanceTable {
+  warnPct: number;
+  redPct: number;
+  plans: BalancePlan[];
+}
+
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+const activeTab = ref<'summary' | 'balance'>('summary');
+const balanceLoading = ref(false);
+const balanceDate = ref<string>(localToday());
+const balance = ref<BalanceTable>({ warnPct: 5, redPct: 15, plans: [] });
+
+async function loadBalance() {
+  if (!factoryId.value || !balanceDate.value) return;
+  balanceLoading.value = true;
+  try {
+    const response = await get<BalanceTable>(
+      `/${factoryId.value}/production/yield/material-balance`,
+      { params: { startDate: balanceDate.value, endDate: balanceDate.value } }
+    );
+    balance.value = response.success && response.data ? response.data : { warnPct: 5, redPct: 15, plans: [] };
+  } catch (error: unknown) {
+    // request.ts 拦截器已弹 sticky 错误; 这里不吞成"没数据"的假象, 清空并保留控制台
+    console.error('加载物料平衡表失败:', error);
+    balance.value = { warnPct: 5, redPct: 15, plans: [] };
+  } finally {
+    balanceLoading.value = false;
+  }
+}
+
+function balanceTagType(level: BalanceRow['level']): string {
+  if (level === 'BALANCED') return 'success';
+  if (level === 'WARN') return 'warning';
+  if (level === 'RED') return 'danger';
+  return 'info';
+}
+
+function balanceLabel(row: BalanceRow): string {
+  if (row.level === 'BALANCED') return '已对平';
+  if (row.level === 'WARN') return '差额偏大';
+  if (row.level === 'RED') return '差额过大';
+  if (row.level === 'UNIT_INCOMPARABLE') return '单位不可比';
+  return '未登记投入';
+}
+
+function fmtQty(v: number | null, unit: string | null): string {
+  return v == null ? '—' : `${v} ${unit ?? ''}`.trim();
+}
+
+function onTabChange(name: string | number) {
+  if (name === 'balance') loadBalance();
+}
+
 // ---------- load ----------
 onMounted(() => {
   loadProductTypes();
@@ -176,6 +256,8 @@ function handleReset() {
         </div>
       </template>
 
+      <el-tabs v-model="activeTab" @tab-change="onTabChange">
+      <el-tab-pane label="工序汇总" name="summary">
       <!-- KPI Row -->
       <div class="kpi-row">
         <el-card shadow="hover" class="kpi-card">
@@ -279,6 +361,65 @@ function handleReset() {
           &lt;80% 需改进
         </span>
       </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="物料平衡表" name="balance">
+        <div class="search-bar">
+          <el-date-picker
+            v-model="balanceDate"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="报工日期"
+            :clearable="false"
+            data-testid="balance-date"
+            @change="loadBalance"
+          />
+          <el-button type="primary" :icon="Refresh" @click="loadBalance">刷新</el-button>
+          <span class="balance-hint">
+            投入 = 主产出 + 副产 + 已确认损耗(含留样) + 未解释差额;
+            未解释差额占投入 &gt;{{ balance.warnPct }}% 标黄, &gt;{{ balance.redPct }}% 标红
+          </span>
+        </div>
+        <div v-loading="balanceLoading" data-testid="balance-tables">
+          <el-empty v-if="!balanceLoading && balance.plans.length === 0"
+            description="这一天没有工序报工 — 换个日期试试" />
+          <div v-for="plan in balance.plans" :key="plan.planId ?? 'none'" class="balance-plan">
+            <div class="balance-plan-title">
+              {{ plan.productName ?? '未关联产品' }}
+              <span class="balance-plan-sub">计划 {{ plan.planNumber ?? '—' }} · 批次 {{ plan.batchNumbers.join('、') || '—' }}</span>
+            </div>
+            <el-table :data="plan.rows" border stripe style="width: 100%">
+              <el-table-column prop="processName" label="工序" min-width="120" />
+              <el-table-column label="投入" width="120" align="right">
+                <template #default="{ row }">{{ fmtQty(row.input, row.unit) }}</template>
+              </el-table-column>
+              <el-table-column label="主产出" width="120" align="right">
+                <template #default="{ row }">{{ fmtQty(row.output, row.unit) }}</template>
+              </el-table-column>
+              <el-table-column label="副产" width="110" align="right">
+                <template #default="{ row }">{{ fmtQty(row.byproducts, row.unit) }}</template>
+              </el-table-column>
+              <el-table-column label="已确认损耗" width="120" align="right">
+                <template #default="{ row }">{{ fmtQty(row.confirmedLoss, row.unit) }}</template>
+              </el-table-column>
+              <el-table-column label="未解释差额" width="130" align="right">
+                <template #default="{ row }">{{ fmtQty(row.unexplained, row.unit) }}</template>
+              </el-table-column>
+              <el-table-column label="占投入" width="90" align="center">
+                <template #default="{ row }">{{ row.unexplainedPct == null ? '—' : row.unexplainedPct + '%' }}</template>
+              </el-table-column>
+              <el-table-column label="状态" min-width="150" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="balanceTagType(row.level)" size="small" effect="light"
+                    :data-testid="'balance-level-' + row.level">{{ balanceLabel(row) }}</el-tag>
+                  <div v-if="row.note" class="balance-note">{{ row.note }}</div>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </el-tab-pane>
+      </el-tabs>
     </el-card>
   </div>
 </template>
@@ -399,6 +540,33 @@ function handleReset() {
     &.warning { background-color: #E6A23C; }
     &.danger { background-color: #F56C6C; }
   }
+}
+
+.balance-hint {
+  font-size: 12px;
+  color: #909399;
+  align-self: center;
+}
+
+.balance-plan {
+  margin-bottom: 20px;
+
+  .balance-plan-title {
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .balance-plan-sub {
+    margin-left: 12px;
+    font-weight: 400;
+    font-size: 12px;
+    color: #909399;
+  }
+}
+
+.balance-note {
+  font-size: 12px;
+  color: #909399;
 }
 
 @media (max-width: 768px) {
