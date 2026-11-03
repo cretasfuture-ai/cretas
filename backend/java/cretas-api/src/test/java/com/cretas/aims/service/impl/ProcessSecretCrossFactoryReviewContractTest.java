@@ -77,6 +77,8 @@ class ProcessSecretCrossFactoryReviewContractTest {
         access = mock(ProcessSecretAccessService.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
         when(access.factoriesWithProtectedProducts()).thenReturn(Set.of(FA));
+        // 共享配置 (平台级意图 / 晋升 / 回滚) 的并集不看开关 (第四轮复审第 1 条)
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.of(FA));
         when(access.protectedProductTypeIds(FA)).thenReturn(Set.of("pA"));
         ProductType p = new ProductType();
         p.setId("pA");

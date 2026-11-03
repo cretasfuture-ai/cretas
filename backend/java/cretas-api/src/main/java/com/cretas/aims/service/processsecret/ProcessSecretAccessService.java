@@ -193,7 +193,21 @@ public class ProcessSecretAccessService {
     }
 
     /**
-     * 有任一工艺保密产品、且训练数据过滤 (d) 开着的工厂 (每次现查, 不缓存)。只给「写全局共享内容」这种低频路径用:
+     * 库里登记了任一保密策略的全部工厂 (每次现查, 不缓存), <b>不看任何保密开关 (a–f)</b>。只给「写所有工厂都看得到的共享配置」
+     * (平台级意图、意图晋升 / 回滚) 用: 那是跨厂保护, Steve 的规矩是任何开关都不能削弱跨厂保护
+     * (第四轮复审第 1 条: 以前共享配置走了下面按 d 剔除的那份, 某厂关了 d 它的保密名就能写进平台级意图)。
+     * 查库出错照样抛给调用方, 调用方据此不写。
+     */
+    public Set<String> factoriesWithPolicyProducts() {
+        return policyRepository.findAll().stream()
+                .map(ProcessSecretPolicy::getFactoryId)
+                .filter(f -> f != null && !f.isBlank())
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * 有任一工艺保密产品、且训练数据过滤 (d) 开着的工厂 (每次现查, 不缓存)。只给「从训练样本学来的全局内容」
+     * (全局说法 / 知识) 用 —— ⛔ 不给共享配置 (平台级意图), 那里用 {@link #factoriesWithPolicyProducts}:
      * 写进全局的东西所有工厂都看得到, 要对每一家工厂的保密产品名都查一遍 (Steve 2026-10-29)。
      * ⛔ 并集每次都算, 只剔除 d 关闭的工厂 —— 不按写入者那一家的开关短路 (否则别厂的保密名会进全局行)。
      * 查库出错照样抛给调用方, 调用方据此不写全局; 开关读不到按开启 (不剔除)。

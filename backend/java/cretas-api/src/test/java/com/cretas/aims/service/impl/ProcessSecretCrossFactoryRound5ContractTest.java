@@ -61,6 +61,8 @@ class ProcessSecretCrossFactoryRound5ContractTest {
         access = mock(ProcessSecretAccessService.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
         when(access.factoriesWithProtectedProducts()).thenReturn(Set.of(FA));
+        // 共享配置 (平台级意图 / 晋升 / 回滚) 的并集不看开关 (第四轮复审第 1 条)
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.of(FA));
         when(access.protectedProductTypeIds(FA)).thenReturn(Set.of("pA"));
         ProductType p = new ProductType();
         p.setId("pA");
@@ -135,10 +137,10 @@ class ProcessSecretCrossFactoryRound5ContractTest {
         when(intents.findById("p3")).thenReturn(Optional.of(plain2));
 
         service.rollbackFactoryToLastVersion(null, 1L, "admin", "r");
-        verify(access, Mockito.times(1)).factoriesWithProtectedProducts();   // 一批只查一次
+        verify(access, Mockito.times(1)).factoriesWithPolicyProducts();   // 一批只查一次
 
         // 查不到名单: 503, 一行都没动
-        when(access.factoriesWithProtectedProducts()).thenThrow(new IllegalStateException("db down"));
+        when(access.factoriesWithPolicyProducts()).thenThrow(new IllegalStateException("db down"));
         AIIntentConfig fresh = platformRow("p4", "PLAIN_CODE_3", "[\"产量\"]", "[\"出货\"]");
         when(intents.findGlobalIntents()).thenReturn(List.of(fresh));
         when(intents.findById("p4")).thenReturn(Optional.of(fresh));

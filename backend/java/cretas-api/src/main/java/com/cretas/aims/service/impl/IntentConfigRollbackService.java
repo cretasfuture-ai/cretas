@@ -264,7 +264,7 @@ public class IntentConfigRollbackService {
             if (intentConfigWriteGuard == null) {
                 throw new com.cretas.aims.exception.BusinessException(503, "暂时无法核对工艺保密产品, 未回滚");
             }
-            allFactoryNames = intentConfigWriteGuard.allFactoriesProtectedNames();
+            allFactoryNames = intentConfigWriteGuard.allFactoriesPolicyProductNamesForSharedContent();
         }
 
         int success = 0;

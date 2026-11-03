@@ -126,7 +126,8 @@ public class IntentConfigWriteGuard {
     public void requireNoProtectedNames(AIIntentConfig intent) {
         boolean mentions;
         try {
-            mentions = processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(textFields(intent));
+            // 跨厂保护: 所有工厂的全部策略产品, 不看任何保密开关 (第四轮复审第 1 条)
+            mentions = processSecretSampleFilter.mentionsAnyFactoryPolicyProductForSharedContent(textFields(intent));
         } catch (RuntimeException e) {
             log.warn("平台级意图写入前的保密产品检查失败, 不写: intent={}", intent.getIntentCode());
             throw new BusinessException(503, "暂时无法核对工艺保密产品, 未保存, 请稍后重试");
@@ -141,9 +142,9 @@ public class IntentConfigWriteGuard {
      * 一批平台级写入 (批量回滚) 先取一次全厂保密产品名; 取不到 → 503, 调用方在动任何一行之前整批失败
      * (复审 M1, 2026-10-29: 循环里逐行查库, 查库异常会把外层事务标成只能回滚, 前面成功的也一起撤销、报 500)。
      */
-    public java.util.Set<String> allFactoriesProtectedNames() {
+    public java.util.Set<String> allFactoriesPolicyProductNamesForSharedContent() {
         try {
-            return java.util.Set.copyOf(processSecretSampleFilter.allFactoriesProtectedNames());
+            return java.util.Set.copyOf(processSecretSampleFilter.allFactoriesPolicyProductNamesForSharedContent());
         } catch (RuntimeException e) {
             log.warn("批量写平台级意图前的保密产品名查询失败, 整批不做");
             throw new BusinessException(503, "暂时无法核对工艺保密产品, 未回滚, 请稍后重试");

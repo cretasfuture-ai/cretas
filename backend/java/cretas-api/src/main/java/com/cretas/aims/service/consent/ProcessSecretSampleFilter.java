@@ -34,8 +34,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *       本厂「名单」= 保密产品的全名 / 编码 / ID ({@link ProcessSecretTerms}: 纯数字名与品类词不收,
  *       编码按边界匹配) + 本厂人员姓名 + 本厂客户名称 (精确匹配)。与 Python
  *       {@code smartbi/services/process_secret_names.py} 同一规则 (Steve 2026-10-29 选 A)。</li>
- *   <li><b>外发脱敏 / 配置写入闸</b> ({@link #protectedProductNames}, {@link #mentionsAnyFactoryProtectedProduct},
- *       {@link #allFactoriesProtectedNames}, {@link #mentionsAny}): 仍按保密产品名 (不在本次改动范围)。</li>
+ *   <li><b>从训练样本学来的全局内容</b> ({@link #checkGlobalContent}, {@link #allFactoriesTrainingTerms},
+ *       {@link #allFactoriesProtectedNames}): 所有工厂的并集每次都算, 只剔「训练数据过滤」(d) 关着的工厂 (Steve Q1)。</li>
+ *   <li><b>共享配置写入闸</b> (平台级意图、晋升 / 回滚: {@link #allFactoriesPolicyProductNamesForSharedContent},
+ *       {@link #mentionsAnyFactoryPolicyProductForSharedContent}): 所有工厂登记了保密策略的全部产品名,
+ *       <b>不看任何保密开关</b> —— 跨厂保护不受开关影响 (第四轮复审第 1 条)。</li>
+ *   <li><b>外发脱敏</b> ({@link #protectedProductNames}, {@link #mentionsAny}): 本厂生效中的保密产品名。</li>
  * </ul>
  */
 @Component
@@ -301,18 +305,28 @@ public class ProcessSecretSampleFilter {
     private final Map<String, TrainingLists> lastGoodLists = new ConcurrentHashMap<>();
 
     /**
-     * 文本是否提到<b>任何一家</b>工厂的工艺保密产品。写全局 (所有工厂共享) 的说法 / 知识前用:
-     * 全局内容对每家工厂可见, 只查写入方自己那家不够 (Steve 2026-10-29: 保密内容不出本厂)。
-     * 查库出错照样抛, 调用方据此不写全局。一批写入 (种子、批量学习) 先取一次 {@link #allFactoriesProtectedNames()}
-     * 再用 {@link #mentionsAny} 逐条比对, 不要逐条查库。
+     * 文本是否提到<b>任何一家</b>工厂登记了保密策略的产品名 —— 写<b>共享配置</b> (平台级意图、意图晋升 / 回滚) 前用:
+     * 共享配置对每家工厂可见 (Steve 2026-10-29: 保密内容不出本厂)。<b>不看任何保密开关</b>: 跨厂保护不受开关影响
+     * (第四轮复审第 1 条)。查库出错照样抛, 调用方据此不写。一批写入先取一次
+     * {@link #allFactoriesPolicyProductNamesForSharedContent()} 再用 {@link #mentionsAny} 逐条比对。
      */
-    public boolean mentionsAnyFactoryProtectedProduct(String... texts) {
-        return mentionsAny(allFactoriesProtectedNames(), texts);
+    public boolean mentionsAnyFactoryPolicyProductForSharedContent(String... texts) {
+        return mentionsAny(allFactoriesPolicyProductNamesForSharedContent(), texts);
+    }
+
+    /** 所有工厂登记了保密策略的全部产品名 (并集, 每次都算), 不看任何保密开关 (a–f)。查库出错照样抛。 */
+    public Set<String> allFactoriesPolicyProductNamesForSharedContent() {
+        Set<String> names = new LinkedHashSet<>();
+        for (String factoryId : accessService.factoriesWithPolicyProducts()) {
+            names.addAll(trainingProductNames(factoryId));       // 全部策略产品 (生效中的 ∪ 因 a / e 不生效的)
+        }
+        return names;
     }
 
     /**
-     * 所有工厂的工艺保密产品名 (并集; 一批写入取一次)。查库出错照样抛。
-     * 每次都算, 只剔除「训练数据过滤」(d) 关着的工厂; 每家的名字按 d 取 (不看 a, Q1=A)。
+     * 所有工厂的工艺保密产品名 (并集; 一批写入取一次), <b>只给从训练样本学来的全局内容</b> —— 每次都算, 只剔除
+     * 「训练数据过滤」(d) 关着的工厂; 每家的名字按 d 取 (不看 a, Q1=A)。⛔ 共享配置 (平台级意图) 用
+     * {@link #allFactoriesPolicyProductNamesForSharedContent}: 那里任何开关都不能削弱跨厂保护。查库出错照样抛。
      */
     public Set<String> allFactoriesProtectedNames() {
         Set<String> names = new LinkedHashSet<>();

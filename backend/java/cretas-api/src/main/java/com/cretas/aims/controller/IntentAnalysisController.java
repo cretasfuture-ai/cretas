@@ -996,7 +996,8 @@ public class IntentAnalysisController {
                 intent.getExamples(), intent.getFollowUpQuestions()};
         boolean mentions;
         try {
-            mentions = processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(texts);
+            // 跨厂保护: 所有工厂的全部策略产品, 不看任何保密开关 (第四轮复审第 1 条)
+            mentions = processSecretSampleFilter.mentionsAnyFactoryPolicyProductForSharedContent(texts);
         } catch (RuntimeException e) {
             log.warn("晋升前的保密产品检查失败, 不晋升: intent={}", intent.getIntentCode());
             throw new BusinessException(503, "暂时无法核对工艺保密产品, 未晋升, 请稍后重试");

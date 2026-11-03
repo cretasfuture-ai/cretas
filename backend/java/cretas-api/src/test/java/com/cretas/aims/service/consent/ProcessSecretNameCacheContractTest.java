@@ -86,14 +86,14 @@ class ProcessSecretNameCacheContractTest {
         verify(products, times(2)).findAllById(anyIterable());
     }
 
-    /** 写全局内容前用 (Steve 2026-10-29): 查每一家有保密策略的工厂, 不只写入方自己那家。 */
+    /** 写共享配置前用 (Steve 2026-10-29): 查每一家有保密策略的工厂, 不只写入方自己那家; 不看任何保密开关。 */
     @Test
     void anyFactoryCheckCoversEveryFactoryThatHasAPolicy() {
-        when(access.factoriesWithProtectedProducts()).thenReturn(Set.of("F007", "F006"));
-        assertThat(filter.mentionsAnyFactoryProtectedProduct("秘制酱牛肉多少钱")).isTrue();
-        assertThat(filter.mentionsAnyFactoryProtectedProduct("普通牛肉多少钱")).isFalse();
-        when(access.factoriesWithProtectedProducts()).thenReturn(Set.of());
-        assertThat(filter.mentionsAnyFactoryProtectedProduct("秘制酱牛肉多少钱")).isFalse();
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.of("F007", "F006"));
+        assertThat(filter.mentionsAnyFactoryPolicyProductForSharedContent("秘制酱牛肉多少钱")).isTrue();
+        assertThat(filter.mentionsAnyFactoryPolicyProductForSharedContent("普通牛肉多少钱")).isFalse();
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.of());
+        assertThat(filter.mentionsAnyFactoryPolicyProductForSharedContent("秘制酱牛肉多少钱")).isFalse();
     }
 
     @Test

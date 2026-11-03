@@ -420,12 +420,9 @@ public final class TrainingValueRules {
         List<String> lines = Arrays.asList(normalize(bmp(text)).split("\n", -1));
         List<String> headingWords = new ArrayList<>(markers);
         headingWords.addAll(conditional);
-        List<String> strongWords = new ArrayList<>();
-        for (String m : markers) {
-            if (!conditional.contains(m)) {
-                strongWords.add(m);
-            }
-        }
+        // 标题里有任一工艺词 (含同时是条件词的 转速 / 浓度) 就是工艺标题; 只有不在工艺词表里的条件词 (时间 / 温度 / 压力)
+        // 才是泛泛的标题 (第四轮复审第 2 条)
+        List<String> strongWords = new ArrayList<>(markers);
         int i = 0;
         while (i < lines.size()) {
             String line = lines.get(i);
@@ -444,8 +441,8 @@ public final class TrainingValueRules {
             if (isHeading(line, headingWords)) {
                 j = headingEnd(lines, i);
                 String body = String.join("\n", lines.subList(i + 1, j));
-                // 标题里只有条件词 (「统计时间：」「### 交货时间」) 时是泛泛的内容: 里面要有「数值 + 单位」才拦
-                // (第三次复审第 1 条); 配方 / 配比 / 滚揉 / 杀菌温度这类真工艺词照旧, 有数值就拦
+                // 标题里只有不在工艺词表里的条件词 (「统计时间：」「### 交货时间」) 时是泛泛的内容: 里面要有「数值 + 单位」
+                // 才拦 (第三次复审第 1 条); 有任一工艺词 (配方 / 滚揉 / 杀菌温度 / 转速 / 浓度) 照旧, 有数值就拦
                 boolean strong = isHeading(line, strongWords);
                 if (!body.isEmpty() && (strong ? !valueSpans(body, false).isEmpty() : hasUnitValue(body))) {
                     return true;
