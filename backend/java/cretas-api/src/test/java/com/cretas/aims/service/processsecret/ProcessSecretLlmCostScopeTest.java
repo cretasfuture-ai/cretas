@@ -208,9 +208,12 @@ class ProcessSecretLlmCostScopeTest {
     }
 
     @Test
-    void harnessInstructionOnlyInFactoriesWithProtectedProducts() {
-        assertThat(protectedScope().harnessFor(FACTORY)).isEqualTo(ProcessSecretLlmCostScope.HARNESS_INSTRUCTION);
-        assertThat(unprotectedScope().harnessFor(FACTORY)).isEmpty();
+    void processSecretClauseOnlyInFactoriesWithProtectedProductsCrossFactorySentenceAlways() {
+        assertThat(protectedScope().harnessFor(FACTORY)).isEqualTo(ProcessSecretLlmCostScope.HARNESS_INSTRUCTION)
+                .contains(ProcessSecretLlmCostScope.CROSS_FACTORY_HARNESS, ProcessSecretLlmCostScope.PROCESS_SECRET_CLAUSE);
+        // 跨厂约束是隔离, 不看保密: 没有保密产品的工厂照样带跨厂一句, 只是没有工艺保密那一句 (2026-11-03)
+        assertThat(unprotectedScope().harnessFor(FACTORY)).isEqualTo(ProcessSecretLlmCostScope.CROSS_FACTORY_HARNESS)
+                .doesNotContain(ProcessSecretLlmCostScope.PROCESS_SECRET_CLAUSE);
     }
 
     @Test

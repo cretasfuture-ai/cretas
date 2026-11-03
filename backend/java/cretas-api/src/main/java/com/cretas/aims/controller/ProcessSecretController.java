@@ -135,4 +135,32 @@ public class ProcessSecretController {
         return AuthenticatedActor.current(request)
                 .orElseThrow(() -> new BusinessException(401, "无法获取已认证操作者"));
     }
+
+    // ------------------------------------------------------------------ 工厂级保密配置
+
+    public static final String NOT_ENABLED_MESSAGE = "本厂未开启工艺保密";
+
+    /** 单测直接 new 时当开启; Spring 下由 setter 注入 (字段注入放在类尾, 不动构造器)。 */
+    private com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecyConfig =
+            com.cretas.aims.service.secrecy.FactorySecrecyConfig.allOn();
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setFactorySecrecyConfig(com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecyConfig) {
+        this.secrecyConfig = secrecyConfig;
+    }
+
+    /**
+     * 本控制器每个接口之前都先跑 (Spring 对 {@code @ModelAttribute} 方法的约定)。按路径上的工厂判:
+     * 「工艺保密」(a) 或「客户侧保管」(e) 任一开着就放行 (Steve 2026-11-03 Q2=A: e 开、a 关时也要能配置 B 档产品);
+     * 两项都关 → 409 「本厂未开启工艺保密」。库里的策略和授权不动, 重新开启后原样生效。
+     * 客户侧工艺包是否登记 / 接收由 {@link ProcessSecretExternalService} 按 e 判。
+     */
+    @org.springframework.web.bind.annotation.ModelAttribute
+    void requireSecrecyEnabled(@PathVariable String factoryId) {
+        if (secrecyConfig.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.PROCESS_SECRET)
+                || secrecyConfig.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.CUSTOMER_HELD)) {
+            return;
+        }
+        throw new BusinessException(409, NOT_ENABLED_MESSAGE).withHint("工艺保密由平台在「工厂管理」里按工厂开启");
+    }
 }

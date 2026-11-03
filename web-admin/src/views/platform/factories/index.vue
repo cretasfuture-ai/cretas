@@ -14,6 +14,7 @@ import {
 } from '@/api/platformFactoryMenus';
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
 import FactoryAccessPanel from '@/components/FactoryAccessPanel.vue';
+import FactorySecrecyPanel from '@/components/FactorySecrecyPanel.vue';
 
 const router = useRouter();
 const factoryView = usePlatformFactoryContextStore();
@@ -26,7 +27,7 @@ const savingModule = ref<string | null>(null);
 let menuLoadSequence = 0;
 const search = ref('');
 const errorMessage = ref('');
-const activeTab = ref<'activation' | 'roles' | 'employees' | 'menu'>('menu');
+const activeTab = ref<'activation' | 'roles' | 'employees' | 'secrecy' | 'menu'>('menu');
 const accessSaving = ref(false);
 
 const filteredFactories = computed(() => {
@@ -131,7 +132,7 @@ onMounted(() => { void loadFactories(); });
     <div class="page-header">
       <div>
         <h2>工厂管理</h2>
-        <p>选择工厂，统一调整功能开通、岗位权限、员工授权和菜单显示。</p>
+        <p>选择工厂，统一调整功能开通、岗位权限、员工授权、保密设置和菜单显示。</p>
       </div>
       <el-button v-if="factoryView.isViewingFactory" type="primary" plain @click="returnToPlatform">
         返回平台
@@ -180,6 +181,9 @@ onMounted(() => { void loadFactories(); });
           </el-tab-pane>
           <el-tab-pane label="员工授权" name="employees" :disabled="accessSaving">
             <FactoryAccessPanel v-if="activeTab === 'employees'" :factory-id="selectedFactoryId" active-tab="employees" @writing-change="accessSaving = $event" />
+          </el-tab-pane>
+          <el-tab-pane label="保密设置" name="secrecy" :disabled="accessSaving">
+            <FactorySecrecyPanel v-if="activeTab === 'secrecy'" :factory-id="selectedFactoryId" @writing-change="accessSaving = $event" />
           </el-tab-pane>
           <el-tab-pane label="菜单显示" name="menu" :disabled="accessSaving">
             <el-skeleton v-if="loadingConfig" :rows="8" animated />

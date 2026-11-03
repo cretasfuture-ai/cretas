@@ -21,7 +21,7 @@ import { useAuthStore } from '../../store/authStore';
 import { getFactoryId } from '../../types/auth';
 import { ManagementStackParamList } from '../../types/navigation';
 import { logger } from '../../utils/logger';
-import { PROCESS_SECRET_LABEL } from '../../utils/processSecretField';
+import { PROCESS_SECRET_LABEL, isProcessSecretHidden } from '../../utils/processSecretField';
 
 // 创建ConversionRate专用logger
 const conversionLogger = logger.createContextLogger('ConversionRate');
@@ -49,6 +49,8 @@ interface MaterialWithStats extends MaterialType {
   configuredCount: number;
   avgConversionRate?: number;
   avgWastageRate?: number;
+  /** 后端带了工艺保密标记、隐藏了转换率 (只看标记; 值为 null 不等于被隐藏) */
+  conversionRateSecret: boolean;
 }
 
 /**
@@ -124,7 +126,10 @@ export default function ConversionRateScreen() {
         let avgConversionRate: number | undefined;
         let avgWastageRate: number | undefined;
 
-        // 工艺保密: 隐藏的转换率是 null, 不能按 0 算进平均; 全部隐藏时显示「已保密」
+        // 工艺保密: 隐藏的转换率是 null, 不能按 0 算进平均; 全部隐藏时显示「已保密」。
+        // 「已保密」只看后端的保密标记 (工艺保密可按工厂关掉, 没标记的 null 是「没有数」, 显示「—」)
+        const conversionRateSecret = materialConversions.some(
+          (c) => c.conversionRate == null && isProcessSecretHidden(c, 'conversionRate'));
         const visibleRates = materialConversions.filter((c) => c.conversionRate != null);
         if (visibleRates.length > 0) {
           avgConversionRate = visibleRates.reduce((sum, c) => sum + (c.conversionRate ?? 0), 0) / visibleRates.length;
@@ -139,6 +144,7 @@ export default function ConversionRateScreen() {
           configuredCount,
           avgConversionRate,
           avgWastageRate,
+          conversionRateSecret,
         };
       });
 
@@ -239,9 +245,9 @@ export default function ConversionRateScreen() {
               <>
                 <View style={styles.statItem}>
                   <Text style={styles.statValue}>
-                    {item.avgConversionRate == null
-                      ? PROCESS_SECRET_LABEL
-                      : `${Number(item.avgConversionRate).toFixed(1)}%`}
+                    {item.avgConversionRate != null
+                      ? `${Number(item.avgConversionRate).toFixed(1)}%`
+                      : item.conversionRateSecret ? PROCESS_SECRET_LABEL : '—'}
                   </Text>
                   <Text style={styles.statLabel}>{t('conversionRate.avgConversionRate')}</Text>
                 </View>

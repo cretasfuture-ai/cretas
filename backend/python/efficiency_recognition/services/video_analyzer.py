@@ -222,11 +222,18 @@ class VideoEfficiencyAnalyzer:
         # awaiting it up the whole chain. Left direct for now; efficiency VL
         # (offline video analysis) can be migrated to call_chain separately.
         # 提示词里的工厂类型 / 工序提示来自请求: 自建客户端不经出境口, 在这里按同一套规则脱敏, 脱敏不了就不发
-        from common.llm_egress_text import redact_texts
-        egress = redact_texts([prompt])
-        if egress.refused:
-            return EfficiencySnapshot(notes=f"未发送: {egress.refusal}")
-        prompt = egress.texts[0]
+        # 工厂级保密配置: 外发工厂已知且该厂「出外脱敏」(c) 关着才原样发。同步客户端不查库, 只看配置缓存
+        # (5 秒内读到过「关」才放行; 没读过 / 过期 / 工厂不明一律照常脱敏)
+        from common import factory_secrecy
+        from common.llm_client import _egress_factory
+        factory_id = _egress_factory()
+        if not (factory_id and not factory_secrecy.cached_is_on(
+                factory_id, factory_secrecy.EGRESS_REDACTION, max_age=factory_secrecy.EGRESS_MAX_AGE_S)):
+            from common.llm_egress_text import redact_texts
+            egress = redact_texts([prompt])
+            if egress.refused:
+                return EfficiencySnapshot(notes=f"未发送: {egress.refusal}")
+            prompt = egress.texts[0]
 
         try:
             response = self.client.post(
