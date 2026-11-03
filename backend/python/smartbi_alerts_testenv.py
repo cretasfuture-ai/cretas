@@ -108,7 +108,7 @@ def create_app():
     config=load_local_secret(directory()/'testenv.dpapi')
     os.environ.update(POSTGRES_ENABLED='true',POSTGRES_HOST=config['db_host'],POSTGRES_PORT=str(config['db_port']),POSTGRES_DB=config['database'],
                       POSTGRES_USER=config['db_user'],POSTGRES_PASSWORD=config['db_password'],JWT_SECRET=config['jwt_secret'],
-                      JAVA_API_BASE_URL='http://127.0.0.1:11010',SMARTBI_ALERT_AI_TRANSPORT='ssh',SMARTBI_ALERT_AI_SSH_HOST='canada-mini',
+                      JAVA_API_BASE_URL='http://127.0.0.1:11210',SMARTBI_ALERT_AI_TRANSPORT='ssh',SMARTBI_ALERT_AI_SSH_HOST='canada-mini',
                       SMARTBI_ALERT_AI_MODEL='qwen3.8:27b',SMARTBI_ALERT_AI_STATE_FILE=str(directory()/'local-ai-state.sqlite3'))
     from fastapi import FastAPI,HTTPException
     from fastapi.responses import JSONResponse

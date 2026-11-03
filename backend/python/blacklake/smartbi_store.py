@@ -69,12 +69,16 @@ def read(value):
         from smartbi.services.cost_data_alerts import evaluate
         from .cost_review import review
         analysis['costAlerts']=evaluate(analysis['cost']['projects'],scope=digest(scope[:2]),run_id=scope[2])
-        from .local_cost_ai import attach
+        # A former 8B review is historical evidence, not the selected runtime.
+        # Only attach a current, fully validated shared 27B review.
         if os.environ.get('LOCALAPPDATA'):
-            attach(analysis['costAlerts'],Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/cost-local-ai.dpapi')
+            from .section_review import attach
+            attach(analysis['costAlerts'], Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/cost-common-ai.dpapi')
         analysis['eligibleCostReview']=review(analysis)
         # Common machine contract, preserving the existing Blacklake API key.
         analysis['dataAlerts']=analysis['costAlerts']
+        from .section_insights import build as build_sections
+        analysis['sectionInsights']=build_sections(analysis)
         return analysis
     finally:
         connection.close()

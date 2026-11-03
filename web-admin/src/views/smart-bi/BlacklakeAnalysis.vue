@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { getBlacklakeAnalysis, type BlacklakeAnalysis, type CostProject } from '@/api/smartbi/blacklake';
+import { getBlacklakeAnalysis, type BlacklakeAnalysis, type CostProject, type SectionInsightReport } from '@/api/smartbi/blacklake';
 import DynamicChartRenderer from '@/components/smartbi/DynamicChartRenderer.vue';
+import SectionInsight from '@/components/smartbi/SectionInsight.vue';
 import BlacklakeCostIntelligence from './BlacklakeCostIntelligence.vue';
 import BlacklakeCostAlerts from './BlacklakeCostAlerts.vue';
 import type { DynamicChartConfig } from '@/types/smartbi';
@@ -12,6 +13,7 @@ const error = ref('');
 const tab = ref('cost');
 const search = ref('');
 const issuesOnly = ref(false);
+const eligibleOnly = ref(true);
 const selected = ref<CostProject | null>(null);
 const verifiedReferences = computed(() => selected.value ? data.value?.costIntelligence.verifiedMaterialReferences[selected.value.projectCode] || [] : []);
 const unit = ref('');
@@ -19,12 +21,15 @@ const inventoryUnit = ref('');
 const fmt = (value: number | null | undefined, digits = 2) => value == null ? '未提供' : value.toLocaleString('zh-CN', { maximumFractionDigits: digits });
 const statusName = (value: string) => ({ '0': '未开始', '10': '进行中', '20': '已完工', '30': '已取消' }[value] || `状态 ${value}`);
 const filtered = computed(() => (data.value?.cost.projects || []).filter(p =>
+  (!eligibleOnly.value || p.unitCostAvailable) &&
   (!issuesOnly.value || p.issues.length > 0) && `${p.projectCode} ${p.product}`.toLowerCase().includes(search.value.toLowerCase())));
 const units = computed(() => [...new Set(data.value?.production.planActual.map(p => p.unit).filter(Boolean) || [])]);
 const inventoryUnits = computed(() => [...new Set(data.value?.inventory.records.map(p => p.unit).filter(Boolean) || [])]);
 const planRows = computed(() => (data.value?.production.planActual || []).filter(p => p.unit === unit.value));
 const stockRows = computed(() => (data.value?.inventory.records || []).filter(p => p.unit === inventoryUnit.value));
 const stockTotals = computed(() => (data.value?.inventory.byWarehouseUnit || []).filter(p => p.unit === inventoryUnit.value));
+const sectionInsights = computed<SectionInsightReport[]>(() => data.value?.sectionInsights || []);
+const insightFor = (sectionId: string) => sectionInsights.value.find(report => report.sectionId === sectionId);
 const chart = (names: string[], series: { name: string; data: (number | null)[] }[], axis: string): DynamicChartConfig => ({
   chartType: 'bar', xAxis: { type: 'category', data: names }, yAxis: [{ type: 'value', name: axis }],
   series: series.map(s => ({ ...s, type: 'bar', yAxisIndex: 0 })),
@@ -70,9 +75,8 @@ onMounted(load);
       </section>
       <el-tabs v-model="tab">
         <el-tab-pane label="原料 → 成品成本" name="cost">
-          <BlacklakeCostIntelligence :intelligence="data.costIntelligence" />
           <el-card shadow="never">
-            <div class="section-heading"><h3>逐工单成本链路</h3><div class="filters"><el-input v-model="search" placeholder="搜索工单或产品" clearable aria-label="搜索工单或产品" /><el-checkbox v-model="issuesOnly">仅看待核对</el-checkbox></div></div>
+            <div class="section-heading"><h3>逐工单成本链路</h3><div class="filters"><el-input v-model="search" placeholder="搜索工单或产品" clearable aria-label="搜索工单或产品" /><el-checkbox v-model="eligibleOnly">仅看可核算工单</el-checkbox><el-checkbox v-model="issuesOnly">仅看待核对</el-checkbox></div></div>
             <p class="note">金额按来源币种展示（接口未返回币种，待业务核实）。材料净额 = 领料成本 − 退料成本；人工只取任务累计工资，不叠加报工估算。未核实工单不展示单位成本。</p>
             <el-table :data="filtered" stripe height="480" @row-click="selected = $event" data-testid="cost-projects">
               <el-table-column prop="projectCode" label="工单" width="155" fixed />
@@ -85,9 +89,24 @@ onMounted(load);
               <el-table-column label="核对状态" min-width="185"><template #default="{ row }"><el-tag :type="row.issues.length ? 'warning' : 'success'">{{ row.issues.length ? `${row.issues.length} 项待核对` : '来源字段具备' }}</el-tag></template></el-table-column>
               <el-table-column label="链路" width="95" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="selected = row">查看链路</el-button></template></el-table-column>
             </el-table>
+            <SectionInsight v-if="insightFor('finished')" :report="insightFor('finished')!" />
+          </el-card>
+          <BlacklakeCostIntelligence :intelligence="data.costIntelligence" />
+          <SectionInsight v-if="insightFor('product_cost')" :report="insightFor('product_cost')!" />
+          <el-card shadow="never" class="section-card"><h3>加工人工 · 可核算工单</h3>
+            <p class="note">单独查看人工贡献，不与报工估算工资重复累加。</p>
+            <el-table :data="data.eligibleCostReview?.projects || []" height="300" stripe data-testid="cost-labor">
+              <el-table-column prop="projectCode" label="工单" min-width="150" />
+              <el-table-column prop="product" label="产品" min-width="160" />
+              <el-table-column label="累计人工"><template #default="{ row }">{{ fmt(row.laborCost) }}</template></el-table-column>
+              <el-table-column label="单位成品人工"><template #default="{ row }">{{ fmt(row.laborPerFinished, 4) }} / {{ row.unit }}</template></el-table-column>
+              <el-table-column label="人工占比"><template #default="{ row }">{{ row.laborShare == null ? '待核' : `${fmt(row.laborShare * 100)}%` }}</template></el-table-column>
+            </el-table>
+            <SectionInsight v-if="insightFor('labor')" :report="insightFor('labor')!" />
           </el-card>
           <el-card shadow="never" class="section-card"><h3>全历史原料净消耗（已关联工单）</h3><p class="note">按物料与来源单位保留；不混加不同单位。未关联领退料未计入下表。</p>
             <el-table :data="data.cost.materials" height="340" stripe><el-table-column prop="material" label="原料" min-width="190" /><el-table-column prop="unit" label="单位" width="85" /><el-table-column label="净消耗"><template #default="{ row }">{{ fmt(row.netConsumption) }}</template></el-table-column><el-table-column label="已识别净额"><template #default="{ row }">{{ fmt(row.recognizedCost) }}</template></el-table-column><el-table-column prop="lines" label="领退料行数" /></el-table>
+            <SectionInsight v-if="insightFor('material')" :report="insightFor('material')!" />
           </el-card>
         </el-tab-pane>
         <el-tab-pane label="成本与数据异常" name="alerts">
@@ -100,13 +119,15 @@ onMounted(load);
         <el-tab-pane label="生产与工序" name="production">
           <div class="chart-grid"><el-card shadow="never"><div class="section-heading"><h3>计划与实际 · 前 15 个产品</h3><el-select v-model="unit" aria-label="生产数量单位"><el-option v-for="u in units" :key="u" :label="u" :value="u" /></el-select></div><DynamicChartRenderer :config="planChart" /></el-card><el-card shadow="never"><h3>工序累计工时 · 前 12 项</h3><p class="note">累计快照，用于定位需关注工序，不能据此认定效率或瓶颈原因。</p><DynamicChartRenderer :config="processChart" /></el-card></div>
           <el-card shadow="never" class="section-card"><h3>已审批报工质量 · 按产品 / 工序 / 单位</h3><el-table :data="data.production.quality" height="400" stripe><el-table-column prop="product" label="产品" min-width="180" /><el-table-column prop="process" label="工序" /><el-table-column prop="unit" label="单位" width="75" /><el-table-column label="良品数"><template #default="{ row }">{{ fmt(row.good) }}</template></el-table-column><el-table-column label="不良数"><template #default="{ row }">{{ fmt(row.defective) }}</template></el-table-column><el-table-column label="良品率"><template #default="{ row }">{{ row.goodRate == null ? '未提供' : `${fmt(row.goodRate * 100)}%` }}</template></el-table-column></el-table></el-card>
+          <SectionInsight v-if="insightFor('production')" :report="insightFor('production')!" />
         </el-tab-pane>
         <el-tab-pane label="库存与仓库" name="inventory">
           <el-alert type="info" :closable="false" :title="`已返回 ${data.inventory.records.length} 条余额；另有 ${data.inventory.pairsNotReturned} 个产品与仓库组合未返回，保持未知。`" />
-          <el-card shadow="never" class="section-card"><div class="section-heading"><h3>仓库余额 · 同单位比较</h3><el-select v-model="inventoryUnit" aria-label="库存数量单位"><el-option v-for="u in inventoryUnits" :key="u" :label="u" :value="u" /></el-select></div><DynamicChartRenderer :config="stockChart" /><el-table :data="stockRows" height="380" stripe><el-table-column prop="product" label="物料 / 产品" min-width="200" /><el-table-column prop="warehouse" label="仓库" /><el-table-column prop="unit" label="单位" /><el-table-column label="来源余额"><template #default="{ row }">{{ fmt(row.quantity) }}</template></el-table-column></el-table></el-card>
+          <el-card shadow="never" class="section-card"><div class="section-heading"><h3>仓库余额 · 同单位比较</h3><el-select v-model="inventoryUnit" aria-label="库存数量单位"><el-option v-for="u in inventoryUnits" :key="u" :label="u" :value="u" /></el-select></div><DynamicChartRenderer :config="stockChart" /><el-table :data="stockRows" height="380" stripe><el-table-column prop="product" label="物料 / 产品" min-width="200" /><el-table-column prop="warehouse" label="仓库" /><el-table-column prop="unit" label="单位" /><el-table-column label="来源余额"><template #default="{ row }">{{ fmt(row.quantity) }}</template></el-table-column></el-table><SectionInsight v-if="insightFor('inventory')" :report="insightFor('inventory')!" /></el-card>
         </el-tab-pane>
         <el-tab-pane label="数据覆盖与口径" name="coverage">
           <el-card shadow="never"><h3>数据集已接入 13 类资料</h3><el-table :data="data.catalog"><el-table-column label="资料"><template #default="{ row }">{{ coverageLabel[row.resource] || row.resource }}</template></el-table-column><el-table-column prop="count" label="条数" /></el-table><h3>分析发现</h3><ul><li v-for="item in data.findings" :key="item">{{ item }}</li></ul><h3>使用边界</h3><ul><li v-for="item in data.limitations" :key="item">{{ item }}</li></ul></el-card>
+          <SectionInsight v-if="insightFor('coverage')" :report="insightFor('coverage')!" />
         </el-tab-pane>
       </el-tabs>
       <el-drawer :model-value="!!selected" @close="selected = null" size="min(100%, 1080px)" title="原料 → 工序 → 成品 · 工单成本链路">

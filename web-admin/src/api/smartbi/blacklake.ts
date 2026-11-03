@@ -23,6 +23,7 @@ export interface CostProject {
   materialLinesDetail: MaterialLine[]; processes: ProcessLine[]; issues: string[]; unitCostAvailable: boolean;
 }
 export interface BlacklakeAnalysis {
+  sectionInsights?: SectionInsightReport[];
   costAlerts?: CostAlertReport;
   eligibleCostReview?: EligibleCostReview;
   costIntelligence: BlacklakeCostIntelligence;
@@ -36,6 +37,21 @@ export interface BlacklakeAnalysis {
     byWarehouseUnit: { warehouse: string; unit: string; quantity: number | null; records: number; missing: number }[]; pairsNotReturned: number; movementOrders: number; };
   cost: { projects: CostProject[]; materials: { materialCode: string; material: string; unit: string; netConsumption: number | null; recognizedCost: number | null; lines: number }[];
     linkedMaterialLines: number; unlinkedMaterialLines: number; excludedUnapprovedOrders: number; knownMaterialCostLines: number; sourceZeroCostLines: number; knownLaborTasks: number; unitCostAvailableProjects: number; fullManufacturingCost: null; grossProfit: null; };
+}
+
+export interface SectionInsightReport {
+  sectionId: string; title: string; summary: string; observations: string[]; calculation: string[];
+  hypotheses: string[]; limitations: string[]; nextSteps: string[]; suggestedQuestions: string[];
+  scope: { runId: string; projectId?: number }; evidenceRefs: string[];
+}
+export async function askBlacklakeSection(payload: {
+  section_id: string; question: string; run_id: string;
+  history?: { role: 'user' | 'assistant'; content: string }[];
+}): Promise<{ answer: string; sectionId: string; runId: string; engine: string; ai?: { status: string; model?: string; message?: string } }> {
+  const response = await pythonFetch<{ success: boolean; data: { answer: string; sectionId: string; runId: string; engine: string; ai?: { status: string; model?: string; message?: string } }; message: string }>(
+    '/api/smartbi/blacklake/sections/followup', { method: 'POST', body: JSON.stringify(payload), preserveResponseKeys: true, timeoutMs: 170000 });
+  if (!response.success) throw new Error(response.message);
+  return response.data;
 }
 
 export interface CostDataAlert {

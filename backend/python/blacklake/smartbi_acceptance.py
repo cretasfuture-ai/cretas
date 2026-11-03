@@ -15,7 +15,7 @@ def main():
     directory=Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake'
     settings=load_local_secret(directory/'smartbi-test.dpapi')
     with httpx.Client(timeout=60) as client:
-        response=client.post('http://127.0.0.1:11010/api/mobile/auth/unified-login',
+        response=client.post('http://127.0.0.1:11210/api/mobile/auth/unified-login',
                              json={'username':settings['username'],'password':settings['password']})
         result=response.json()
         save_local_secret(directory/'smartbi-test-login.dpapi',result)
@@ -39,7 +39,7 @@ def main():
         assert alerts['summary']['costEligible']==16 and alerts['summary']['costBlocked']==93
         assert review['eligibleProjects']==16 and len(review['projects'])==16
         assert alerts['ai']['status']=='complete'
-        assert alerts['ai']['model']=='qwen3:8b' and alerts['ai']['host']=='canada-mini'
+        assert alerts['ai']['model']=='qwen3.8:27b' and alerts['ai']['host']=='canada-mini'
         assert {str(p['projectId']) for a in alerts['items'] if a['blocksUnitCost'] for p in a['entityRefs']}=={str(p['projectId']) for p in analysis['cost']['projects'] if not p['unitCostAvailable']}
         assert alerts['summary']['byType']['PRODUCT_NAME_CONFLICT']==1
         assert alerts['summary']['byType']['UNIT_COST_SPREAD']==1

@@ -28,7 +28,7 @@ async function login() {
     const activationDelay = tokenActivationDelayMs(token);
     if (activationDelay) await new Promise(resolve => setTimeout(resolve, activationDelay));
     localStorage.setItem('cretas_access_token', token);
-    if (props.mode === 'shared-alerts') auth.setUser({
+    auth.setUser({
       id: Number(result.data.userId), username: result.data.username || username.value,
       email: '', isActive: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), userType: 'factory',
       factoryUser: { factoryId: result.data.factoryId, role: 'factory_super_admin', permissions: Array.isArray(result.data.permissions) ? result.data.permissions : [] },
@@ -39,7 +39,7 @@ async function login() {
   finally { busy.value = false; }
 }
 function logout() {
-  if (props.mode === 'shared-alerts') auth.clearAuth();
+  auth.clearAuth();
   localStorage.removeItem('cretas_access_token'); localStorage.removeItem(sessionKey);
   signedIn.value = false;
 }

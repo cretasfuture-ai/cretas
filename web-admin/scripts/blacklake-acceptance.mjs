@@ -50,7 +50,7 @@ try {
   await page.getByLabel('搜索工单或产品', { exact: true }).clear();
   await page.getByRole('tab', { name: '成本与数据异常', exact: true }).click();
   await page.getByTestId('cost-data-alerts').waitFor();
-  assert((await page.getByTestId('local-ai-state').innerText()).includes('canada-mini / qwen3:8b'));
+  assert((await page.getByTestId('local-ai-state').innerText()).includes('canada-mini / qwen3.8:27b'));
   assert.equal(await page.getByTestId('eligible-cost-review').locator('.el-table__body-wrapper tbody tr').count(),8);
   await page.locator('.el-select').filter({has:page.getByRole('combobox',{name:'异常类别',exact:true})}).locator('.el-select__wrapper').click();
   await page.getByRole('option',{name:'成本差异信号',exact:true}).click();
