@@ -20,6 +20,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -32,10 +33,17 @@ class PlanCostVarianceServiceContractTest {
     private final MaterialConsumptionRepository consumptions = mock(MaterialConsumptionRepository.class);
     private final MaterialBatchRepository materialBatches = mock(MaterialBatchRepository.class);
     private final RawMaterialTypeRepository materials = mock(RawMaterialTypeRepository.class);
+    private final UnitConversionService units = mock(UnitConversionService.class);
     private final PlanCostVarianceService service = new PlanCostVarianceService(
             mock(PlanStandardCostLineRepository.class), mock(ProductionPlanRepository.class),
             mock(ProductionBatchRepository.class), consumptions, materialBatches, materials,
-            mock(OrderCostBreakdownService.class), mock(UnitConversionService.class));
+            mock(OrderCostBreakdownService.class), units);
+
+    @org.junit.jupiter.api.BeforeEach
+    void sameUnitConvertsToItself() {
+        when(units.convert(org.mockito.ArgumentMatchers.any(), eq("kg"), eq("kg")))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+    }
 
     private static MaterialConsumption consumption(int id, String materialBatchId, String materialTypeId,
                                                    String qty, String unitPrice) {

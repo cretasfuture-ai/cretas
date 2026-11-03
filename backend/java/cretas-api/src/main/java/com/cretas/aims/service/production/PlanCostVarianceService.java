@@ -22,7 +22,6 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.production.PlanStandardCostLineRepository;
 import com.cretas.aims.service.UnitConversionService;
 import com.cretas.aims.service.bom.PlanBomItems;
-import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.service.yield.OrderCostBreakdownService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -39,7 +38,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -70,6 +68,9 @@ public class PlanCostVarianceService {
     private ProcessSheetRowRepository processSheetRowRepository;
     @Autowired(required = false)
     private ProductTypeRepository productTypeRepository;
+    /** 单位同一性问单位契约 (⛔ 不比字符串, BareUnitEqualityRatchet)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
 
     public PlanCostVarianceService(PlanStandardCostLineRepository lineRepository,
                                    ProductionPlanRepository planRepository,
@@ -122,7 +123,7 @@ public class PlanCostVarianceService {
         OrderCostBreakdownDTO breakdown = batches.isEmpty() ? null
                 : orderCostBreakdownService.computeByPlan(factoryId, plan.getId(), false);
         BigDecimal outputKg = breakdown == null ? null : breakdown.getConvertedOutputKg();
-        BigDecimal outputQty = outputQuantityInPlanUnit(plan, breakdown);
+        BigDecimal outputQty = outputQuantityInPlanUnit(factoryId, plan, breakdown);
         if (outputKg == null && outputQty != null) {
             outputKg = unitConversionService.toKg(outputQty, plan.getPlannedUnit());
         }
@@ -279,12 +280,12 @@ public class PlanCostVarianceService {
     }
 
     /** 产量 (计划单位): 计划实际产量优先, 否则成本核算的产出量 (单位与计划单位一致时)。 */
-    private BigDecimal outputQuantityInPlanUnit(ProductionPlan plan, OrderCostBreakdownDTO breakdown) {
+    private BigDecimal outputQuantityInPlanUnit(String factoryId, ProductionPlan plan, OrderCostBreakdownDTO breakdown) {
         if (plan.getActualQuantity() != null && plan.getActualQuantity().signum() > 0) {
             return plan.getActualQuantity();
         }
         if (breakdown != null && breakdown.getOutputQuantity() != null && breakdown.getOutputQuantity().signum() > 0
-                && Objects.equals(code(breakdown.getOutputUnit()), code(plan.getPlannedUnit()))) {
+                && sameUnit(factoryId, breakdown.getOutputUnit(), plan.getPlannedUnit())) {
             return breakdown.getOutputQuantity();
         }
         return null;
@@ -294,14 +295,18 @@ public class PlanCostVarianceService {
         if (quantity == null || from == null || to == null) {
             return null;
         }
-        if (Objects.equals(code(from), code(to))) {
-            return quantity;
+        BigDecimal converted = unitConversionService.convert(quantity, from, to);
+        if (converted == null && sameUnit(null, from, to)) {
+            return quantity; // 同一单位的不同写法 (盒 / box): 契约说同一个, 原量照用
         }
-        return unitConversionService.convert(quantity, from, to);
+        return converted;
     }
 
-    private static String code(String unit) {
-        return unit == null ? null : UnitContractServiceImpl.crossLanguageCode(unit);
+    private boolean sameUnit(String factoryId, String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        return unitContractService != null && unitContractService.areEquivalent(factoryId, left, right);
     }
 
     private String materialUnit(String factoryId, String materialTypeId) {
