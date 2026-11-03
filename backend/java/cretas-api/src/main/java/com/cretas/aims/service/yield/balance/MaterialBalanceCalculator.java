@@ -12,7 +12,7 @@ import java.util.List;
  * <p>三个调用方共用这一份, ⛔ 不许各抄一份公式:
  * App 报工 ({@code YieldReportServiceImpl} 的 balanceWarning)、web 逐道正式报工
  * ({@code ProcessSheetServiceImpl.materialBalanceWarnings})、web 平衡表 ({@code MaterialBalanceService})。
- * 钉住三路一致的测试: {@code MaterialBalanceParityTest}。</p>
+ * 钉住三路一致的测试: {@code MaterialBalanceParityContractTest}。</p>
  *
  * <p>单位: 只有质量 (kg/g, 换成 kg 比) 或<b>同一个</b>单位才能相加, 其余一律 {@link Level#UNIT_INCOMPARABLE},
  * ⛔ 不猜换算。已确认损耗 = 报工填的损耗量 + 留样 (都按产出单位记)。</p>

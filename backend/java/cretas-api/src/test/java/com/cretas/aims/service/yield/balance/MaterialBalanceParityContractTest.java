@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
  * 缺口 #07: App 报工路 / web 逐道报工路 / web 平衡表 三处必须给出同一个结论 (同一份 MaterialBalanceCalculator)。
  * web 逐道路的入口是 {@code ProcessSheetServiceImpl.materialBalanceWarnings}; 平衡表入口是 {@code MaterialBalanceService.build}。
  */
-class MaterialBalanceParityTest {
+class MaterialBalanceParityContractTest {
 
     private static BigDecimal d(String v) { return new BigDecimal(v); }
 

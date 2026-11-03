@@ -89,9 +89,15 @@ interface BalanceTable {
   plans: BalancePlan[];
 }
 
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 const activeTab = ref<'summary' | 'balance'>('summary');
 const balanceLoading = ref(false);
-const balanceDate = ref<string>(new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10));
+const balanceDate = ref<string>(localToday());
 const balance = ref<BalanceTable>({ warnPct: 5, redPct: 15, plans: [] });
 
 async function loadBalance() {
