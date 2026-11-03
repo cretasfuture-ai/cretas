@@ -1,4 +1,4 @@
--- V20261103_133__factory_block_start_on_open_shortage.sql
+-- V20261103_136__factory_block_start_on_open_shortage.sql
 --
 -- S4-08 缺料开工拦截 — 工厂级开关 (opt-in, 默认 OFF)。
 --

@@ -230,7 +230,7 @@ public class FactorySettings extends BaseEntity {
     private Boolean requireRequisitionBeforeReport = false;
 
     /**
-     * S4-08 缺料时拦开工 (V20261103_133, opt-in, 默认 false)。
+     * S4-08 缺料时拦开工 (V20261103_136, opt-in, 默认 false)。
      *
      * <p>false → 开工照旧, 缺料只预警 (六膳门 N1「开工无条件化」); true → 计划所属销售订单有未解决的缺料实例
      * 时拦开工, 可强制开工但必须写原因并记入缺料实例的处理记录 ({@code ShortageStartGate})。

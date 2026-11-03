@@ -1,4 +1,4 @@
--- generated-from cd15f500bea7 2026-11-02 17:32:59Z
+-- generated-from 136a818a813f 2026-11-03 04:08:12Z
 -- 关联 62 对 = 注解扫描 60 + 手工登记新增 2
 -- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。
 --

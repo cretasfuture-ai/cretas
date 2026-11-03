@@ -62,7 +62,7 @@ public interface FactorySettingsRepository extends JpaRepository<FactorySettings
     Boolean findRequireRequisitionBeforeReportByFactoryId(@Param("factoryId") String factoryId);
 
     /**
-     * 工厂级「缺料时拦开工」开关 (S4-08, V20261103_133)。无 settings 行时返回 null —— 调用方按 false 处理
+     * 工厂级「缺料时拦开工」开关 (S4-08, V20261103_136)。无 settings 行时返回 null —— 调用方按 false 处理
      * (开工照旧, 即六膳门 N1)。
      */
     @Query("SELECT f.blockStartOnOpenShortage FROM FactorySettings f WHERE f.factoryId = :factoryId")
