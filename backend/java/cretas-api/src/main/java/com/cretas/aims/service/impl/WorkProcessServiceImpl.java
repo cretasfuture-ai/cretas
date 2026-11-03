@@ -23,7 +23,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.security.core.context.SecurityContextHolder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -484,10 +483,9 @@ public class WorkProcessServiceImpl implements WorkProcessService {
     }
 
     private String currentOperator() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-        return authentication == null || authentication.getName() == null
-                ? "system"
-                : authentication.getName();
+        // 身份来自 request attribute; 非 HTTP 调用(定时/工具)无请求时记 system
+        String username = com.cretas.aims.utils.SecurityUtils.currentUsername();
+        return username == null || username.isBlank() ? "system" : username;
     }
 
     private WorkProcessDTO toDTO(WorkProcess entity) {
