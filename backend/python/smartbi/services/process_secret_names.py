@@ -42,6 +42,7 @@ from common.process_secret_terms import (  # noqa: F401
     fingerprint,
     mentions_any,
     secret_terms,
+    secret_terms_from_policy_rows,
 )
 
 _CACHE_SECONDS = 60.0
@@ -77,9 +78,10 @@ async def _pool_or_default(pool):
 def lists_from_rows(product_rows: Iterable[Mapping[str, Any]],
                     directory_rows: Iterable[Any]) -> FactoryLists:
     """Pure builder (shared case file runs it): product rows carry id / code /
-    name / category / product_category; directory rows are names."""
+    name / category / product_category and the policy's ``aliases`` (JSON array);
+    directory rows are names."""
     names = [r["name"] if isinstance(r, Mapping) else r for r in directory_rows]
-    return FactoryLists(terms=secret_terms(product_rows), directory=directory_names(names))
+    return FactoryLists(terms=secret_terms_from_policy_rows(product_rows), directory=directory_names(names))
 
 
 async def factory_lists(factory_id: str, pool=None) -> FactoryLists:
@@ -189,37 +191,63 @@ _HELD_ROWS_SQL = """
     ORDER BY id
     LIMIT $1
 """
+# released: the hold marker (and the raw text it carried) is dropped
 _RELEASE_SQL = """
     UPDATE smart_bi_distillation_samples SET metadata = metadata - '{key}'
     WHERE id = ANY($1::bigint[])
 """
-_DELETE_SQL = "DELETE FROM smart_bi_distillation_samples WHERE id = ANY($1::bigint[])"
+# rejected (Steve 2026-11-03 Q5, A): flagged and KEPT for manual review, never deleted;
+# usable_rows_sql / passes_training_rule exclude it
+_REJECT_SQL = """
+    UPDATE smart_bi_distillation_samples
+    SET metadata = (metadata - '{key}') || jsonb_build_object('{rejected}', $2::jsonb)
+    WHERE id = $1
+"""
+
+
+def held_raw_texts(row: Mapping[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """The texts a held row is re-judged on: the RAW capture text kept in the hold
+    marker (2026-11-03 review N3: a desensitized text hides names behind 产品A / <数值>);
+    rows stored raw carry ``True`` and are judged on the stored text."""
+    from smartbi.services.training_consent import RECHECK_KEY
+
+    marker = metadata_dict(row.get("metadata")).get(RECHECK_KEY)
+    if isinstance(marker, dict):
+        return marker.get("raw_input"), marker.get("raw_output")
+    return row.get("input_text"), row.get("teacher_output")
 
 
 async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists],
                             limit: int = 1000) -> Dict[str, int]:
     """Re-judge rows held at capture (``RECHECK_KEY``) against the CURRENT lists
     (``by_factory`` from :func:`all_factory_lists` — a failed lookup must abort
-    the caller first). Clean rows are released (flag removed, usable again);
-    rows that now name a secret term, person or customer are deleted — they
-    would not have been captured with good lists. (The content rule does not
-    depend on the lists and already ran on the raw text at capture.)
-    Returns ``{"released": n, "deleted": n}``."""
-    from smartbi.services.training_consent import RECHECK_KEY
+    the caller first), on the raw capture text. Clean rows are released (marker and
+    raw text removed, usable again). Rows that now name a secret term, person or
+    customer are flagged ``REJECTED_KEY`` and kept for manual review — never
+    deleted (Q5); they stay out of every export / training read.
+    Returns ``{"released": n, "rejected": n}``."""
+    from smartbi.services.training_consent import RECHECK_KEY, REJECTED_KEY
 
     async with smartbi_pool.acquire() as conn:
         rows = await conn.fetch(_HELD_ROWS_SQL.format(key=RECHECK_KEY), limit)
-    release, delete = [], []
+    release, reject = [], []
     for r in rows:
         lists = lists_for_row(r["factory_id"], by_factory)
-        bad = not r["factory_id"] or lists.names_any(r["input_text"], r["teacher_output"])
-        (delete if bad else release).append(r["id"])
+        raw_in, raw_out = held_raw_texts(r)
+        marker = metadata_dict(r["metadata"]).get(RECHECK_KEY)
+        if not r["factory_id"]:
+            reject.append((r["id"], {"reason": "no_factory", "hold": marker}))
+        elif lists.names_any(raw_in, raw_out):
+            reject.append((r["id"], {"reason": "names_factory_list", "hold": marker}))
+        else:
+            release.append(r["id"])
     async with smartbi_pool.acquire() as conn:
         if release:
             await conn.execute(_RELEASE_SQL.format(key=RECHECK_KEY), release)
-        if delete:
-            await conn.execute(_DELETE_SQL, delete)
-    return {"released": len(release), "deleted": len(delete)}
+        for row_id, detail in reject:
+            await conn.execute(_REJECT_SQL.format(key=RECHECK_KEY, rejected=REJECTED_KEY), row_id,
+                               json.dumps(detail, ensure_ascii=False))
+    return {"released": len(release), "rejected": len(reject)}
 
 
 def metadata_dict(raw: Any) -> Dict[str, Any]:

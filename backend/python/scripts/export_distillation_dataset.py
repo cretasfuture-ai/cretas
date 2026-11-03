@@ -64,6 +64,8 @@ from smartbi.services.process_secret_names import (  # noqa: E402
 from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
     DESENSITIZED_KEY,
     NON_TRAINING_BUSINESS_TYPES,
+    RECHECK_KEY,
+    REJECTED_KEY,
     SYNTHETIC_FACTORY_IDS,
     WITHDRAWN,
     fetch_consent_map,
@@ -152,23 +154,23 @@ def _is_synthetic(row: Dict[str, Any]) -> bool:
     return is_synthetic_factory(row.get("factory_id"))
 
 
+class ConsentUnreadable(RuntimeError):
+    """training_consent could not be read: the export stops (2026-11-03 review N7a)."""
+
+
 async def _load_consent(pool) -> Dict[str, str]:
     """Return {factory_id: consent_scope} from training_consent.
 
-    Missing factory = no row = default-deny ('none'). If the table does not
-    exist yet (migration not applied), returns {} → every real tenant is
-    treated as 'none' (still default-deny, never a fail-open).
+    Missing factory = no row = 'none'. An unreadable table (missing, permission,
+    connection) ABORTS the export: an empty map would read every withdrawn factory
+    as 'none' and export its desensitized rows (fail-open; review N7a).
     """
     try:
         async with pool.acquire() as conn:
             return await fetch_consent_map(conn)
-    except Exception as e:  # table absent / permission → treat as no consent
-        logger.warning(
-            "training_consent unreadable (%s) — treating ALL real tenants as "
-            "'none' (default-deny). Apply V20261001_01 migration if unexpected.",
-            e,
-        )
-        return {}
+    except Exception as e:
+        logger.error("training_consent unreadable (%s) — export aborted, nothing written", e)
+        raise ConsentUnreadable(f"training_consent unreadable: {type(e).__name__}: {e}") from e
 
 
 def _consent_of(row: Dict[str, Any], consent: Dict[str, str]) -> str:
@@ -238,7 +240,12 @@ def passes_training_rule(row: Dict[str, Any],
       none of its factory's process-secret terms (privacy clause 6; rows captured
       before the product was protected are caught here). Re-checked here with the
       current lists, so a row held at capture (``secrecy_recheck``) is re-judged."""
-    if not has_real_rule_version(_metadata(row)):
+    meta = _metadata(row)
+    if not has_real_rule_version(meta):
+        return False
+    # held at capture (waiting for re-judgement) or rejected by it (kept for manual
+    # review, Q5): never exported
+    if RECHECK_KEY in meta or REJECTED_KEY in meta:
         return False
     factory_id = row.get("factory_id")
     if not is_training_tenant(factory_id) or (row.get("business_type") or "") in NON_TRAINING_BUSINESS_TYPES:

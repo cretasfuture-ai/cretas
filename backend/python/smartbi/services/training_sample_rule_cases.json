@@ -156,7 +156,7 @@
     {
       "input": "本月工资总额",
       "answer": "人工成本 35 万",
-      "blocked": true
+      "blocked": false
     },
     {
       "input": "张记食品有限公司这个客户的回款情况",
@@ -217,6 +217,11 @@
       "directory": [
         "华联"
       ],
+      "blocked": true
+    },
+    {
+      "input": "本月工资总额 35 万",
+      "answer": "已统计",
       "blocked": true
     }
   ]

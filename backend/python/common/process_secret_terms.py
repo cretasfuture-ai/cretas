@@ -22,20 +22,20 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from typing import Any, FrozenSet, Iterable, Mapping, Optional
+from typing import Any, FrozenSet, Iterable, List, Mapping, Optional
 
 from common.process_secret_sql import java_strip
 
 MIN_TERM_LENGTH = 2
 
-# 品类词: 产品叫这个名字时不收 (它说的是一类东西, 不是这家工厂的那一个产品)。
-# 标出来的代理判据, 可替换; 另外每家工厂保密产品自己的 category / product_category 值也算品类词。
-CATEGORY_WORDS = (
-    "牛肉", "猪肉", "羊肉", "鸡肉", "鸭肉", "鹅肉", "鱼肉", "禽肉", "肉类", "肉制品",
-    "熟食", "卤味", "卤制品", "酱卤", "酱卤制品", "猪肘", "原切", "调理品", "预制菜",
-    "速冻", "冷冻", "冷鲜", "成品", "半成品", "原料", "辅料", "包材", "礼盒",
-)
+# 品类词: 产品 / 别名叫这个名字时不收 (它说的是一类东西, 不是这家工厂的那一个产品)。含单一部位与菜名
+# (牛腱、鸭脖、米饭 …, Steve 2026-11-03 Q4 选 A)。词表只有一份: common/training_rule_words.json,
+# Java 构建时把同一个文件打进 jar 读。另外每家工厂保密产品自己的 category / product_category 值也算品类词。
+from common.training_values import WORDS as _RULE_WORDS  # noqa: E402
+
+CATEGORY_WORDS = tuple(_RULE_WORDS["category_words"])
 
 # 纯数字 (允许中间夹空格 / 点 / 横线 / 下划线 / 斜杠): 398、2024-01、１２３
 _PURE_NUMERIC = re.compile(r"[0-9０-９ \t.\-_/　]+")
@@ -92,6 +92,26 @@ def secret_terms(products: Iterable[Mapping[str, Any]],
         if term:
             out.add(term)
     return frozenset(out)
+
+
+def policy_aliases(raw: Any) -> List[str]:
+    """``process_secret_policies.aliases`` (JSON array text, Flyway V20261104_12) -> list.
+    NULL / empty -> []. A malformed value raises: the caller's lookup fails (fail-closed)."""
+    if raw is None or raw == "":
+        return []
+    value = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(value, list):
+        raise ValueError("process_secret_policies.aliases must be a JSON array")
+    return [str(a) for a in value if a is not None]
+
+
+def secret_terms_from_policy_rows(rows: Iterable[Mapping[str, Any]]) -> FrozenSet[str]:
+    """Rows of ``PROTECTED_TERMS_SQL`` (product columns + the policy's ``aliases``)."""
+    rows = list(rows)
+    aliases: List[str] = []
+    for r in rows:
+        aliases += policy_aliases(r.get("aliases"))
+    return secret_terms(rows, aliases)
 
 
 def directory_names(names: Iterable[Optional[str]]) -> FrozenSet[str]:

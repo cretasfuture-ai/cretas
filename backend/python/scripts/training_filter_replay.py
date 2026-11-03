@@ -71,8 +71,8 @@ def explain_row(row: Mapping[str, Any], by_factory: Mapping[str, FactoryLists]) 
         reasons.append("process_value_in_input")
     if tc.process_word_with_value(a, tc.QA_ANSWER_PROCESS_MARKERS):
         reasons.append("process_value_in_answer")
-    if any(m in q or m in a for m in tc.PERSONNEL_MARKERS):
-        reasons.append("personnel")
+    if tc.has_word_with_value(q, tc.PERSONNEL_MARKERS) or tc.has_word_with_value(a, tc.PERSONNEL_MARKERS):
+        reasons.append("personnel_value")
     if lists.directory and (tc_mentions(lists.directory, q, a)):
         reasons.append("factory_person_or_customer")
     content_blocked = bool(reasons)
@@ -90,6 +90,8 @@ def explain_row(row: Mapping[str, Any], by_factory: Mapping[str, FactoryLists]) 
             reasons.append("no_real_rule_version")
         if meta.get(tc.RECHECK_KEY):
             reasons.append("held_for_rejudgement")
+        if meta.get(tc.REJECTED_KEY):
+            reasons.append("rejected_at_rejudgement")
     usable = synthetic or not reasons
     return {"id": row.get("id"), "factory_id": fid, "source": row.get("source"),
             "content_blocked": content_blocked, "usable": usable, "reasons": reasons}

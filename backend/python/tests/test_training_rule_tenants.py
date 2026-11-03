@@ -41,6 +41,8 @@ ROWS = [
     (13, "F006", "factory", {"training_rule": "2026-10-24", "desensitized": True}, True),  # control
     (14, "F006", "factory", {"training_rule": "2026-11-03"}, True),                        # control
     (15, "CATTLE_3701_001", None, {"training_rule": "2026-11-03"}, True),                  # control, NULL bucket
+    (16, "F006", "factory", {"training_rule": "2026-11-03",
+                             "secrecy_rejected": {"reason": "names_factory_list"}}, False),  # rejected, kept (Q5)
 ]
 
 
@@ -59,10 +61,13 @@ def test_export_rule_agrees_with_the_expected_verdicts():
     got = {i: passes_training_rule({"factory_id": f, "business_type": b, "metadata": m,
                                     "input_text": "本月营收多少", "teacher_output": "增长"}, {})
            for i, f, b, m, _ in ROWS}
-    # the held row passes the EXPORT (it re-judges with the current lists itself); every
-    # other verdict is the same as the SQL predicate's
-    expected = {i: (u or i == 11) for i, _f, _b, _m, u in ROWS}
+    # the export agrees with the SQL predicate on every row, held rows included (they wait for
+    # the re-judgement; rejected ones stay out for good — Q5)
+    expected = {i: u for i, _f, _b, _m, u in ROWS}
     assert got == expected
+    rejected = {"factory_id": "F006", "business_type": "factory", "input_text": "本月营收多少", "teacher_output": "增长",
+                "metadata": {"training_rule": "2026-11-03", "secrecy_rejected": {"reason": "names_factory_list"}}}
+    assert passes_training_rule(rejected, {}) is False
 
 
 def _dsn():
@@ -102,3 +107,37 @@ async def test_usable_rows_sql_on_postgres():
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await conn.close()
+
+
+# ---- review N7a: an unreadable training_consent aborts the export (never "nobody withdrew") ----
+
+class _BrokenConsentPool:
+    def acquire(self):
+        class _C:
+            async def fetch(self, sql, *args):
+                raise RuntimeError('relation "training_consent" does not exist')
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        return _C()
+
+
+async def test_export_aborts_when_training_consent_is_unreadable(tmp_path):
+    from scripts import export_distillation_dataset as export_mod
+
+    with pytest.raises(export_mod.ConsentUnreadable):
+        await export_mod._load_consent(_BrokenConsentPool())
+
+    class _Args:
+        factory = "F006"
+        out = str(tmp_path)
+        source = business_type = None
+        min_quality = 4
+
+    with pytest.raises(export_mod.ConsentUnreadable):
+        await export_mod._export_private(_Args(), _BrokenConsentPool())
+    assert list(tmp_path.iterdir()) == []          # nothing written

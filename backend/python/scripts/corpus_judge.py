@@ -463,9 +463,9 @@ async def _current_lists(pool):
     A failed lookup raises: the run aborts, never "nothing protected"."""
     lists = await all_factory_lists()
     counts = await rejudge_held_rows(pool, lists)
-    if counts["released"] or counts["deleted"]:
-        logger.warning("held rows re-judged against the current lists: released=%d deleted=%d",
-                       counts["released"], counts["deleted"])
+    if counts["released"] or counts["rejected"]:
+        logger.warning("held rows re-judged against the current lists: released=%d rejected (kept for review)=%d",
+                       counts["released"], counts["rejected"])
     return lists, terms_fingerprint(lists)
 
 

@@ -94,6 +94,10 @@ DESENSITIZED_KEY = "desensitized"
 # the row is held (excluded by usable_rows_sql) until re-judged against the
 # current lists (``smartbi.services.process_secret_names.rejudge_held_rows``).
 RECHECK_KEY = "secrecy_recheck"
+# Set by the re-judgement when a held row still names something on the current
+# lists (Steve 2026-11-03 Q5, A): the row is kept for manual review, never deleted,
+# and never used (usable_rows_sql / passes_training_rule exclude it).
+REJECTED_KEY = "secrecy_rejected"
 
 # Tenants whose rows never enter any training / labeling set: restaurant tenants
 # (餐饮废弃 2026-10-08; factories.type RESTAURANT / BRANCH on prod: MOCK_REST, and
@@ -155,47 +159,22 @@ from common.sample_text_rules import (  # noqa: F401  与 common.llm_egress_text
     _PERSON_RE,
 )
 
-# Numbers in short utterances. Identifiers like F006 / V2 / B12 are kept.
-_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.<])\d+(?:\.\d+)?", re.ASCII)
-
-# ---- "a process word with a concrete value" (Steve 2026-10-29, option A) ----
-# Keep every pattern below identical to TrainingSampleRules (Java); the shared
-# case file runs both sides.
-#
-# A record = one sentence, one table row or one list item: split at 。！？!?；; and
-# at a line break that is NOT followed by indentation (an indented line continues
-# the list item above it: "6. CLK-… - 盐葱横膈膜/滚揉\n   状态: … 良品率: 92.86%").
-_RECORD_SPLIT_RE = re.compile(r"[。！？!?；;]|\n(?![ \t　])")
-# Not a value: a leading list ordinal ("6. " / "### 3、"), identifiers that start
-# with a letter (F006, CLK-W-20260717-57628, PTF0060159), dates and clock times.
-_ORDINAL_RE = re.compile(r"^[ \t\r\n　]*(?:#+[ \t　]*)?(?:[-*•][ \t　]*)?(?:\*\*)?[0-9]{1,3}[.、)）](?![0-9])")
-_IDENTIFIER_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*")
-_DATE_TIME_RE = re.compile(
-    r"[0-9]{4}[-/.年][0-9]{1,2}(?:[-/.月][0-9]{1,2}日?)?"
-    r"|[0-9]{1,2}月[0-9]{1,2}日"
-    r"|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?")
-_DIGIT_RE = re.compile(r"[0-9０-９]")
-
-
-def has_concrete_number(record: Optional[str]) -> bool:
-    """Does this record carry a value (a digit left after removing the list
-    ordinal, identifiers, dates and times)?"""
-    if not record:
-        return False
-    s = _ORDINAL_RE.sub(" ", record, count=1)
-    s = _DATE_TIME_RE.sub(" ", s)
-    s = _IDENTIFIER_RE.sub(" ", s)
-    return bool(_DIGIT_RE.search(s))
+# ---- "a word with a concrete value" (Steve 2026-10-29 option A; 2026-11-03 Q2/Q3; review B1/N1) ----
+# The algorithm (records, 12-character window, Chinese numerals, units, tables,
+# heading + list) lives in common.training_values, identical to Java
+# TrainingValueRules; the shared case file runs both sides.
+from common.training_values import (  # noqa: E402
+    CONDITIONAL_MARKERS,
+    WINDOW,  # noqa: F401
+    has_word_with_value,
+    mask_values,
+)
 
 
 def process_word_with_value(text: Optional[str], markers: Tuple[str, ...]) -> bool:
-    """A marker and a concrete number in the same record."""
-    if not text:
-        return False
-    for record in _RECORD_SPLIT_RE.split(text):
-        if any(m in record for m in markers) and has_concrete_number(record):
-            return True
-    return False
+    """A process marker with a concrete value nearby (conditional markers 温度 / 时间 /
+    压力 / 转速 / 浓度 count when a value + unit follows)."""
+    return has_word_with_value(text, markers, CONDITIONAL_MARKERS)
 
 
 def _hit(text: Optional[str], markers: Tuple[str, ...]) -> bool:
@@ -223,7 +202,8 @@ def qa_has_blocked_content(input_text: Optional[str], answer: Optional[str], *,
     if (process_word_with_value(input_text, QA_INPUT_PROCESS_MARKERS)
             or process_word_with_value(answer, QA_ANSWER_PROCESS_MARKERS)):
         return True
-    if _hit(input_text, PERSONNEL_MARKERS) or _hit(answer, PERSONNEL_MARKERS):
+    # Q2 (Steve 2026-11-03, A): pay / attendance words block only with a value nearby, too
+    if has_word_with_value(input_text, PERSONNEL_MARKERS) or has_word_with_value(answer, PERSONNEL_MARKERS):
         return True
     return mentions_any(names, input_text, answer)
 
@@ -247,10 +227,11 @@ def remove_personal_identifiers(text: Optional[str]) -> Optional[str]:
 
 
 def mask_numbers(text: Optional[str]) -> Optional[str]:
-    """Desensitize a short utterance: identifiers removed, every number -> ``<数值>``."""
+    """Desensitize a short utterance: identifiers removed, every value -> ``<数值>``
+    (Arabic numbers, numbers glued after a unit such as pH4, Chinese-numeral values)."""
     if not text:
         return text
-    return _NUMBER_RE.sub("<数值>", remove_personal_identifiers(text) or "")
+    return mask_values(remove_personal_identifiers(text) or "")
 
 
 def keeps_raw(scope: str) -> bool:
@@ -277,7 +258,22 @@ def desensitize_utterance(scope: str, text: Optional[str], *,
 # Every factory's people + customers (cretas DB, no parameters): the finetune
 # gate (scripts/finetune/training_consent_gate.py, psycopg2) reads it through
 # this module so the SQL stays in one place.
-from common.process_secret_sql import ALL_FACTORY_DIRECTORY_SQL  # noqa: E402,F401
+from common.process_secret_sql import ALL_FACTORY_DIRECTORY_SQL, ALL_PROTECTED_TERMS_SQL  # noqa: E402,F401
+from common.process_secret_terms import mentions_any  # noqa: E402,F401  (finetune gate)
+
+
+def lists_by_factory(product_rows: Iterable[Mapping[str, Any]],
+                     directory_rows: Iterable[Any]) -> Dict[str, Tuple[FrozenSet[str], FrozenSet[str]]]:
+    """``{factory_id: (secret_terms, directory)}`` from rows of ALL_PROTECTED_TERMS_SQL /
+    ALL_FACTORY_DIRECTORY_SQL (the finetune gate's psycopg2 path)."""
+    from common.process_secret_terms import secret_terms_from_policy_rows
+
+    products: Dict[str, list] = {}
+    for p in product_rows:
+        products.setdefault(p["factory_id"], []).append(p)
+    names = directory_by_factory(directory_rows)
+    return {f: (secret_terms_from_policy_rows(products.get(f, ())), names.get(f, frozenset()))
+            for f in set(products) | set(names)}
 
 
 def directory_by_factory(rows: Iterable[Any]) -> Dict[str, FrozenSet[str]]:
@@ -337,7 +333,8 @@ def usable_rows_sql(column: str = "smart_bi_distillation_samples.factory_id",
             f" AND {column} IS NOT NULL AND {column} <> ''"
             f" AND {column} NOT IN ({excluded}) AND {prefixes}"
             f" AND COALESCE({business_type}, '') NOT IN ({buckets})"
-            f" AND NOT ({metadata} ? '{RECHECK_KEY}')")
+            f" AND NOT ({metadata} ? '{RECHECK_KEY}')"
+            f" AND NOT ({metadata} ? '{REJECTED_KEY}')")
     # The outer column MUST be table-qualified: an unqualified factory_id inside the
     # subquery would bind to training_consent itself and exclude every row as
     # soon as any factory withdrew.

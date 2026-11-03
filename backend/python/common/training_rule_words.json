@@ -1,0 +1,27 @@
+{
+  "_doc": "Training-sample filter word lists (Steve 2026-10-29 option A; Q4 2026-11-03). The ONE copy both languages read: Python common.process_secret_terms / smartbi.services.training_consent load this file; the Java build copies it into the jar (pom.xml maven-resources-plugin execution copy-training-rule-words -> classpath process-secret/training_rule_words.json) and ProcessSecretTerms / TrainingSampleRules load it. Edit here only.",
+  "category_words": [
+    "牛肉", "猪肉", "羊肉", "鸡肉", "鸭肉", "鹅肉", "鱼肉", "禽肉", "肉类", "肉制品",
+    "熟食", "卤味", "卤制品", "酱卤", "酱卤制品", "原切", "调理品", "预制菜",
+    "速冻", "冷冻", "冷鲜", "成品", "半成品", "原料", "辅料", "包材", "礼盒",
+    "猪肘", "猪蹄", "猪舌", "猪耳", "猪肚", "猪头肉", "排骨", "五花肉", "里脊",
+    "牛腱", "牛腱子", "牛腩", "牛柳", "牛尾", "牛霖", "上脑", "眼肉", "西冷", "板腱", "嫩肩", "前胸", "后胸", "臀肉", "碎肉", "腱子",
+    "羊排", "羊腿", "鸡腿", "鸡翅", "鸡爪", "鸭脖", "鸭翅", "鸭掌", "鸭舌", "鸭架", "鸭头",
+    "米饭", "面条", "馒头", "饺子", "包子", "面团", "鲈鱼", "罗氏虾", "娃娃菜", "酸梅汤"
+  ],
+  "conditional_markers": ["温度", "时间", "压力", "转速", "浓度"],
+  "value_units": [
+    "℃", "°C", "°", "%", "％", "‰", "min", "rpm", "MPa", "kPa", "Pa", "bar", "g/L", "mg/L", "g/kg", "mg/kg",
+    "kg", "mL", "ml", "h", "s", "g", "L",
+    "摄氏度", "度", "分钟", "小时", "秒", "转", "兆帕", "千帕", "公斤", "千克", "毫克", "毫升", "克", "升"
+  ],
+  "cn_units": [
+    "摄氏度", "度", "分钟", "分", "小时", "秒", "天", "千克", "公斤", "毫克", "毫升", "克", "斤", "两", "升", "吨",
+    "倍", "成", "份", "次", "遍", "转", "个", "箱", "袋", "包", "批", "锅", "%", "％", "‰", "℃"
+  ],
+  "cn_stop_phrases": [
+    "半成品", "一点点", "万一", "一些", "一样", "一起", "一定", "一般", "一直", "一下", "统一", "唯一", "一致",
+    "一切", "一旦", "十分", "千万", "一边", "一半", "万分", "一同", "一律", "一向", "一再", "一共"
+  ],
+  "glued_unit_prefixes": ["pH", "PH", "ph", "Ph", "Brix", "BRIX", "Bx", "BX", "ppm", "PPM"]
+}

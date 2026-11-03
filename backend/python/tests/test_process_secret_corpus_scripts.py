@@ -157,16 +157,24 @@ async def test_judge_rejudges_rows_excluded_under_an_older_list(monkeypatch):
 
 
 async def test_judge_rejudges_rows_held_at_capture_first(monkeypatch):
+    """Held rows are re-judged on the RAW text kept in the hold marker (review N3); a row that
+    still names the list is flagged and KEPT for manual review, never deleted (Q5)."""
     judge = importlib.import_module("scripts.corpus_judge")
     monkeypatch.setattr(judge, "all_factory_lists", _names)
-    held = [{"id": 11, "factory_id": "F_A", "input_text": "秘制牛肉干销量", "teacher_output": "x", "metadata": None},
-            {"id": 12, "factory_id": "F_A", "input_text": "普通牛肉干销量", "teacher_output": "x", "metadata": None}]
+    raw_hold = json.dumps({"secrecy_recheck": {"raw_input": "秘制牛肉干销量", "raw_output": "x"}})
+    held = [{"id": 11, "factory_id": "F_A", "input_text": "产品A销量", "teacher_output": "x", "metadata": raw_hold},
+            {"id": 12, "factory_id": "F_A", "input_text": "普通牛肉干销量", "teacher_output": "x",
+             "metadata": json.dumps({"secrecy_recheck": True})}]
     pool = _judge_pool(held=held)
     await judge.fetch_unjudged_rows(pool, 50)
     assert pool.fetched[0].count("secrecy_recheck") >= 1          # re-judged before the judge fetch
-    deleted = [a for s, a in pool.executed if s.startswith("DELETE FROM smart_bi_distillation_samples")]
-    released = [a for s, a in pool.executed if "metadata - 'secrecy_recheck'" in s]
-    assert deleted == [([11],)] and released == [([12],)]
+    assert not [s for s, _a in pool.executed if s.lstrip().startswith("DELETE")]   # never deleted
+    released = [a for s, a in pool.executed if s.strip().startswith("UPDATE") and "jsonb_build_object('secrecy_rejected'" not in s
+                and "metadata - 'secrecy_recheck'" in s]
+    rejected = [a for s, a in pool.executed if "jsonb_build_object('secrecy_rejected'" in s]
+    assert released == [([12],)]
+    assert [a[0] for a in rejected] == [11]                        # the desensitized text alone would have passed
+    assert json.loads(rejected[0][1])["reason"] == "names_factory_list"
 
 
 async def _empty():

@@ -278,7 +278,7 @@ async def test_process_content_with_a_value_is_never_stored_even_when_authorized
         ("数据：工序 1 清洗、工序 2 切配", "按顺序执行即可"),     # step order in input
         ("怎么提升出成率", "建议把腌制时间延长到 24 小时再滚揉"),  # detail in answer
         ("为什么最近返工率 12%", "主要是原料批次差"),             # problem handling + value
-        ("本月工资总额", "人工成本 35 万"),                      # per-person pay (word alone)
+        ("本月工资总额 35 万", "已统计"),                         # per-person pay with a value (Q2)
     ]
     for q, a in cases:
         await _capture(pool, factory_id="F_PRIV", input_text=q, teacher_output=a)
@@ -424,7 +424,11 @@ async def test_last_good_lists_fallback_stores_the_row_held(monkeypatch):
     await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="秘制牛肉干本月销量多少")
     await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="普通牛肉干本月销量多少")
     assert len(sink) == 1                                   # the stale list still blocks its own names
-    assert _meta(sink[0][1]).get(RECHECK_KEY) is True
+    # un-authorized factory: the row is stored desensitized, the hold marker keeps the RAW text
+    # for the re-judgement (review N3) — it is dropped again on release
+    assert _meta(sink[0][1]).get(RECHECK_KEY) == {
+        "raw_input": "普通牛肉干本月销量多少", "raw_output": "本月营收 128 万元，环比增长 8%"}
+    assert "128" not in sink[0][1][8]
 
 
 async def test_fresh_lists_do_not_hold_the_row(monkeypatch):
@@ -549,3 +553,78 @@ def test_export_rule_needs_a_real_rule_version_and_a_factory_tenant():
     # controls: both real versions pass for a factory tenant
     assert passes_training_rule(_export_row("F006"), {}) is True
     assert passes_training_rule(_export_row("F006", metadata={"training_rule": "2026-10-24"}), {}) is True
+
+
+
+async def test_authorized_held_row_keeps_no_extra_raw_copy(monkeypatch):
+    _patch_lists(monkeypatch, {"F_PRIV": _lists(products=["秘制牛肉干"])}, stale=True)
+    sink: list = []
+    await _capture(_RecordingPool(sink, {"F_PRIV": "private"}), factory_id="F_PRIV", input_text="今天产量多少")
+    assert _meta(sink[0][1]).get(RECHECK_KEY) is True       # the stored text is already raw
+
+
+# ---- review N7b: the same input captured for another factory never overwrites the row ----
+
+def test_upsert_only_updates_a_row_of_the_same_factory():
+    from smartbi.services import distillation_capture as dc
+
+    assert "WHERE smart_bi_distillation_samples.factory_id IS NOT DISTINCT FROM EXCLUDED.factory_id" in dc._INSERT_SQL
+
+
+async def test_cross_factory_conflict_is_counted_and_logged(caplog):
+    from smartbi.services import distillation_capture as dc
+
+    class _ConflictConn(_RecordingConn):
+        async def execute(self, sql, *args):
+            self._sink.append((sql, args))
+            return "INSERT 0 0"          # what PG returns when the conditional DO UPDATE skips
+
+    class _ConflictPool(_RecordingPool):
+        def acquire(self):
+            return _ConflictConn(self._sink, self._consent, self._consent_error)
+
+    before = dc.CROSS_FACTORY_CONFLICTS["count"]
+    sink: list = []
+    with caplog.at_level("WARNING", logger="smartbi.services.distillation_capture"):
+        await _capture(_ConflictPool(sink, {}), factory_id="F006")
+    assert dc.CROSS_FACTORY_CONFLICTS["count"] == before + 1
+    assert any("another factory" in r.getMessage() for r in caplog.records)
+
+
+async def test_upsert_conflict_on_real_postgres_keeps_the_first_factorys_row():
+    """N7b on a real PostgreSQL: factory B's capture of the same input does not touch A's row."""
+    import os
+    import uuid
+
+    import pytest
+
+    dsn = os.getenv("SMARTBI_PG_DSN")
+    if not dsn:
+        if os.getenv("CI"):
+            pytest.fail("SMARTBI_PG_DSN is required on CI")
+        pytest.skip("no local PostgreSQL")
+    asyncpg = pytest.importorskip("asyncpg")
+    from smartbi.services import distillation_capture as dc
+
+    conn = await asyncpg.connect(dsn)
+    schema = "n7b_" + uuid.uuid4().hex[:10]
+    try:
+        await conn.execute(f"CREATE SCHEMA {schema}")
+        await conn.execute(f"SET search_path TO {schema}")
+        await conn.execute("""CREATE TABLE smart_bi_distillation_samples (
+            id BIGSERIAL PRIMARY KEY, source VARCHAR(32), business_type VARCHAR(32) NOT NULL, factory_id VARCHAR(64),
+            task_type VARCHAR(32), template_codes TEXT, system_prompt TEXT, input_text TEXT NOT NULL,
+            teacher_model VARCHAR(64), teacher_output TEXT NOT NULL, input_hash VARCHAR(64) UNIQUE, quality INT,
+            metadata JSONB, created_at TIMESTAMP DEFAULT now())""")
+        args = ("chat_qa", "factory", "F_A", "qa", None, None, "同一个问题", None, "A 的答案", "h1", None, None)
+        assert await conn.execute(dc._INSERT_SQL, *args) == "INSERT 0 1"
+        status = await conn.execute(dc._INSERT_SQL, *(args[:2] + ("F_B",) + args[3:8] + ("B 的答案",) + args[9:]))
+        assert status == "INSERT 0 0"
+        row = await conn.fetchrow("SELECT factory_id, teacher_output FROM smart_bi_distillation_samples")
+        assert (row["factory_id"], row["teacher_output"]) == ("F_A", "A 的答案")
+        # control: the same factory still refreshes its own row
+        assert await conn.execute(dc._INSERT_SQL, *(args[:8] + ("A 的新答案",) + args[9:])) == "INSERT 0 1"
+        assert await conn.fetchval("SELECT teacher_output FROM smart_bi_distillation_samples") == "A 的新答案"
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        await conn.close()

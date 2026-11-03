@@ -176,7 +176,12 @@ _INSERT_SQL = """
         template_codes = EXCLUDED.template_codes,
         metadata       = EXCLUDED.metadata,
         created_at     = NOW()
+    WHERE smart_bi_distillation_samples.factory_id IS NOT DISTINCT FROM EXCLUDED.factory_id
 """
+# 2026-11-03 review N7b: the same input text captured for ANOTHER factory must not
+# overwrite this row (factory B's answer would be attributed to factory A's row).
+# The conditional DO UPDATE then writes nothing ("INSERT 0 0"); counted and logged.
+CROSS_FACTORY_CONFLICTS = {"count": 0}
 
 
 def compute_input_hash(input_text: str) -> str:
@@ -283,7 +288,11 @@ async def persist_distillation_sample(
             if not synthetic:
                 tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}
                 if held:
-                    tags[RECHECK_KEY] = True
+                    # re-judged later on the RAW text (review N3): a desensitized text
+                    # hides names behind 产品A / <数值>. The raw copy lives only in the
+                    # hold marker and is dropped on release.
+                    tags[RECHECK_KEY] = (True if keeps_raw(scope)
+                                         else {"raw_input": input_text, "raw_output": teacher_output})
                 if not keeps_raw(scope):
                     input_text, teacher_output = desensitize_for_training(
                         input_text, teacher_output)
@@ -295,7 +304,7 @@ async def persist_distillation_sample(
             metadata_json = (
                 json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
             )
-            await conn.execute(
+            status = await conn.execute(
                 _INSERT_SQL,
                 source,
                 (business_type or "unknown"),
@@ -310,6 +319,13 @@ async def persist_distillation_sample(
                 quality,
                 metadata_json,
             )
+            if isinstance(status, str) and status.strip().endswith(" 0"):
+                CROSS_FACTORY_CONFLICTS["count"] += 1
+                logger.warning(
+                    "[distill] same input already captured for another factory; row left as is "
+                    "(factory=%s, cross-factory conflicts so far=%d)",
+                    factory_id, CROSS_FACTORY_CONFLICTS["count"])
+                return
         logger.debug(
             "[distill] captured sample (source=%s, task_type=%s, "
             "business_type=%s, factory=%s)",

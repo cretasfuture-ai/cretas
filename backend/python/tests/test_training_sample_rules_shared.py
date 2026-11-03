@@ -94,10 +94,26 @@ def same_regex_text(pattern: str) -> str:
     return re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), pattern)
 
 
-def test_java_content_rule_patterns_match_python():
-    """The regex text is identical on both sides."""
-    src = _JAVA_RULES.read_text(encoding="utf-8")
-    pairs = {"RECORD_SPLIT": tc._RECORD_SPLIT_RE, "ORDINAL": tc._ORDINAL_RE,
-             "IDENTIFIER": tc._IDENTIFIER_RE, "DATE_TIME": tc._DATE_TIME_RE, "DIGIT": tc._DIGIT_RE}
+_JAVA_VALUES = _JAVA_RULES.parent / "TrainingValueRules.java"
+
+
+def _java_pattern_text(src: str, name: str) -> str:
+    m = re.search(rf"static final Pattern {name} = Pattern\.compile\(\s*(\"(?:[^\"\\]|\\.)*\"(?:\s*\+\s*\"(?:[^\"\\]|\\.)*\")*)", src)
+    assert m, name
+    literal = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1)))
+    return re.sub(r'\\(["\\])', r"\1", literal)
+
+
+def test_java_value_rule_patterns_match_python():
+    """The regex text of the value rule is identical on both sides (TrainingValueRules.java
+    vs common/training_values.py); the word lists come from the same JSON file."""
+    from common import training_values as tv
+
+    src = _JAVA_VALUES.read_text(encoding="utf-8")
+    pairs = {"DIGIT_NUM": tv.DIGIT_NUM_RE, "LINE_ORDINAL": tv.LINE_ORDINAL_RE, "SENTENCE_SPLIT": tv.SENTENCE_SPLIT_RE,
+             "LIST_LINE": tv._LIST_LINE_RE, "SEPARATOR_CELL": tv._SEPARATOR_CELL_RE, "NUMBER": tv._NUMBER_RE}
     for name, py in pairs.items():
-        assert same_regex_text(_java_pattern(src, name)) == same_regex_text(py.pattern), name
+        java = _java_pattern_text(src, name)
+        assert same_regex_text(java) == same_regex_text(py.pattern), (name, java, py.pattern)
+    assert 'static final String CN = "' + tv._CN + '";' in src
+    assert f"static final int WINDOW = {tv.WINDOW};" in src

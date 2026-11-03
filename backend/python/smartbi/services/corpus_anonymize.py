@@ -162,22 +162,32 @@ _GENERIC_NAME_WORDS = ("产品", "菜品", "工厂", "门店", "客户", "供应
 
 
 def _strip_leading_function_words(name: str) -> tuple:
-    """``(prefix, rest)``: 名字开头的虚词剥到 ``prefix`` 里。"""
+    """``(prefix, rest, ambiguous)``: 名字开头的虚词剥到 ``prefix`` 里。
+
+    ``ambiguous``: 剥掉的是可能属于名字本身的单字 (「和盛工厂」的「和」、「本味工厂」的「本」、
+    「向阳工厂」的「向」), 或分隔符前面什么都没有 —— 这种情况调用方把整段当名字换掉
+    (2026-11-03 复审 N5: 只换剩下的半个名字会把名字的一部分留在原文里)。"""
     prefix = ""
-    # 「XX的YY产品」「本工厂和其他产品」: 名字只可能在最后一个「的 / 和 / 与 / 及 / 或 / 、」之后
+    ambiguous = False
+    # 「XX的YY产品」「本工厂和其他产品」: 名字只可能在最后一个「的 / 和 / 与 / 及 / 或 / 、」之后;
+    # 分隔符前面不到 2 个字 (「和盛」) 时分不清它是不是名字的一部分
     cut = max(name.rfind(sep) for sep in _NAME_SEPARATORS)
     if cut >= 0:
+        if cut < 2:
+            ambiguous = True
         prefix, name = name[:cut + 1], name[cut + 1:]
     changed = True
     while changed and name:
         changed = False
         for w in _LEADING_FUNCTION_WORDS:
             if name.startswith(w):
+                if len(w) == 1:
+                    ambiguous = True
                 prefix += w
                 name = name[len(w):]
                 changed = True
                 break
-    return prefix, name
+    return prefix, name, ambiguous
 
 
 def _pseudonymize_entities(text: str, mapping: Dict[str, str]) -> str:
@@ -203,10 +213,13 @@ def _pseudonymize_entities(text: str, mapping: Dict[str, str]) -> str:
             raw_name = m.group("name")
             if not raw_name:
                 return m.group(0)
-            prefix, name = _strip_leading_function_words(raw_name)
-            # 剥完不剩名字 (「按产品」「分析以下工厂」「本工厂」) / 剩一个字 / 剩下的是泛称 → 不是名字
-            if len(name) < 2 or name in _GENERIC_NAME_WORDS:
+            prefix, name, ambiguous = _strip_leading_function_words(raw_name)
+            # 剥完不剩东西 (「按产品」「分析以下工厂」「本工厂」「其他产品」) → 全是虚词, 不是名字
+            if not name or name in _GENERIC_NAME_WORDS:
                 return m.group(0)
+            # 剥掉的可能是名字的一部分, 或剩下不到两个字 → 整段当名字换掉, 不留半个名字 (N5)
+            if ambiguous or len(name) < 2:
+                prefix, name = "", raw_name
             # "大客户 / 新客户 / 前十大客户" 是泛称不是名字 → 不动。
             if kind == "客户" and name.endswith(_GENERIC_CUSTOMER_WORDS):
                 return m.group(0)

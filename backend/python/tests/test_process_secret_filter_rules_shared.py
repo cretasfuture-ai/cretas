@@ -42,13 +42,29 @@ def _mismatches(checks, verdict):
     return [c["text"] for c in checks if verdict(c) != c["match"]]
 
 
-def test_category_words_are_one_list_on_both_sides():
-    data = _cases()
-    assert tuple(data["category_words"]) == pst.CATEGORY_WORDS
+_WORDS_FILE = _PY_ROOT / "common" / "training_rule_words.json"
+_POM = _PY_ROOT.parent / "java" / "cretas-api" / "pom.xml"
+
+
+def test_word_lists_live_in_one_file_both_languages_read():
+    """Q4 (Steve 2026-11-03, A): category words (incl. cuts / dish names) are kept in ONE
+    place. Python reads training_rule_words.json; the Java build copies the same file into
+    the jar and Java reads it from the classpath (no second copy in Java source)."""
+    words = json.loads(_WORDS_FILE.read_text(encoding="utf-8"))
+    assert tuple(words["category_words"]) == pst.CATEGORY_WORDS
+    assert {"牛腱", "鸭脖", "米饭", "猪肘", "牛肉"} <= set(pst.CATEGORY_WORDS)
     src = _JAVA_TERMS.read_text(encoding="utf-8")
-    block = re.search(r"CATEGORY_WORDS = List\.of\((.*?)\);", src, re.S)
-    assert block, "CATEGORY_WORDS not found in ProcessSecretTerms.java"
-    assert tuple(re.findall(r'"([^"]*)"', block.group(1))) == pst.CATEGORY_WORDS
+    assert 'TrainingValueRules.strings("category_words"' in src
+    assert '"牛肉"' not in src, "a second copy of the category words in Java source"
+    pom = _POM.read_text(encoding="utf-8")
+    assert "<include>training_rule_words.json</include>" in pom
+    assert "${project.basedir}/../../python/common" in pom
+
+
+def test_mask_cases():
+    cases = _cases()["mask_cases"]
+    bad = [(c["text"], tc.mask_numbers(c["text"])) for c in cases if tc.mask_numbers(c["text"]) != c["masked"]]
+    assert not bad, bad
 
 
 def test_pure_numeric_pattern_is_the_same_on_both_sides():
@@ -91,6 +107,8 @@ def test_row_cases_never_fall_back_to_every_factorys_lists():
     # the same text with no factory, matched against the union, WOULD hit: the case is not vacuous
     union = frozenset(t for lists in by_factory.values() for t in lists.terms)
     assert pst.mentions_any(union, "398礼盒今天发了多少")
+    # Q1: the aliases registered on F006's policy row were read by the loader (category alias dropped)
+    assert "五香虎皮猪肘" in by_factory["F006"].terms and "猪肘" not in by_factory["F006"].terms
 
 
 def test_directory_cases():

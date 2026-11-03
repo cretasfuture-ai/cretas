@@ -54,21 +54,59 @@ class _Conn:
         pass
 
 
+class _CretasCursor:
+    """The cretas DB as the gate reads it: protected products (with policy aliases) and the
+    people / customer directory, keyed by which SQL ran."""
+
+    def __init__(self, products, people):
+        self._products, self._people = products, people
+        self._rows, self.description = [], []
+
+    def execute(self, sql, params=None):
+        if "process_secret_policies" in sql:
+            cols = ["factory_id", "id", "code", "name", "category", "product_category", "aliases"]
+            self._rows = [tuple(p.get(c) for c in cols) for p in self._products]
+        else:
+            cols = ["factory_id", "name"]
+            self._rows = list(self._people)
+        self.description = [(c,) for c in cols]
+
+    def fetchall(self):
+        return self._rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _CretasConn:
+    def __init__(self, products=(), people=()):
+        self._products, self._people = list(products), list(people)
+
+    def cursor(self, *a, **kw):
+        return _CretasCursor(self._products, self._people)
+
+    def close(self):
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _fresh_cache(monkeypatch):
     gate.consent_map.cache_clear()
-    gate.directory_map.cache_clear()
-    # people / customer names come from the cretas DB: none by default (tests set their own)
-    monkeypatch.setattr(gate, "_connect_cretas", lambda: _Conn([]))
+    gate.factory_lists_map.cache_clear()
+    # factory lists come from the cretas DB: none by default (tests set their own)
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn())
     yield
     gate.consent_map.cache_clear()
-    gate.directory_map.cache_clear()
+    gate.factory_lists_map.cache_clear()
 
 
 def test_the_factorys_own_people_are_dropped_and_others_kept(monkeypatch):
     """2026-10-29 option A: names are matched exactly against each factory's own tables."""
     monkeypatch.setattr(gate, "_connect", lambda: _Conn([]))
-    monkeypatch.setattr(gate, "_connect_cretas", lambda: _Conn([("F006", "王五"), ("F007", "华联超市")]))
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn(people=[("F006", "王五"), ("F007", "华联超市")]))
     rows = [{"factory_id": "F006", "user_input": "操作员王五报工"},
             {"factory_id": "F007", "user_input": "操作员王五报工"},       # not F007's person -> kept
             {"factory_id": "F007", "user_input": "华联超市还欠多少"},
@@ -76,6 +114,28 @@ def test_the_factorys_own_people_are_dropped_and_others_kept(monkeypatch):
     kept = gate.apply_utterance_rule(rows, ("user_input",))
     assert [(r["factory_id"], r["user_input"]) for r in kept] == [
         ("F007", "操作员王五报工"), ("F006", "员工周报在哪看")]
+
+
+def test_process_secret_terms_tenants_and_missing_factories_are_dropped(monkeypatch):
+    """2026-11-03 review B2: the gate applies the same lists and tenant rules as capture/export."""
+    monkeypatch.setattr(gate, "_connect", lambda: _Conn([]))
+    products = [{"factory_id": "F006", "id": "PT_F006_LSM_61a43292299498bb", "code": "PTSHHPSKGYLYXGS0124",
+                 "name": "398礼盒", "category": "原切", "product_category": None,
+                 "aliases": "[\"六膳门礼盒\"]"}]
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn(products=products))
+    rows = [{"factory_id": "F006", "user_input": "398礼盒的配方改一下"},     # secret full name -> out
+            {"factory_id": "F006", "user_input": "六膳门礼盒发了多少"},       # registered alias -> out
+            {"factory_id": "F006", "user_input": "PTSHHPSKGYLYXGS0124 库存"},  # code -> out
+            {"factory_id": "MOCK_REST", "user_input": "今天卖了多少"},        # restaurant tenant -> out
+            {"factory_id": "QATEST_1021_001", "user_input": "今天卖了多少"},  # test tenant -> out
+            {"factory_id": None, "user_input": "今天卖了多少"},               # no factory -> out
+            {"factory_id": "", "user_input": "今天卖了多少"},
+            {"factory_id": "F006", "user_input": "398礼盒今天发了多少"},      # name check alone (no process word) -> out
+            {"factory_id": "F007", "user_input": "398礼盒今天发了多少"},      # not F007's product -> kept
+            {"factory_id": "F006", "user_input": "批次 398 今天完工了吗"}]   # pure-numeric name not collected -> kept
+    kept = gate.apply_utterance_rule(rows, ("user_input",))
+    assert [(r["factory_id"], r["user_input"]) for r in kept] == [
+        ("F007", "<数值>礼盒今天发了多少"), ("F006", "批次 <数值> 今天完工了吗")]
 
 
 def test_unreadable_names_stop_the_script(monkeypatch):
@@ -86,7 +146,7 @@ def test_unreadable_names_stop_the_script(monkeypatch):
     monkeypatch.setattr(gate, "_connect_cretas", boom)
     with pytest.raises(SystemExit) as e:
         gate.apply_utterance_rule(ROWS[:1], ("user_input",))
-    assert "people / customer names unreadable" in str(e.value)
+    assert "factory lists" in str(e.value) and "unreadable" in str(e.value)
 
 
 ROWS = [
@@ -94,7 +154,7 @@ ROWS = [
     {"factory_id": "F006", "user_input": "今天入库 350 箱，联系 13812345678"},
     {"factory_id": "F006", "user_input": "这个产品配方里盐放 3 克"},      # parameter + value
     {"factory_id": "F_PRIV", "user_input": "杀菌温度调到 121 度"},
-    {"factory_id": None, "user_input": "我们腌制和滚揉一起做 2 次"},
+    {"factory_id": "F006", "user_input": "我们腌制和滚揉一起做 2 次"},
 ]
 
 
