@@ -6,6 +6,7 @@ import com.cretas.aims.entity.auth.UserMenuPermission;
 import com.cretas.aims.entity.enums.FactoryUserRole;
 import com.cretas.aims.service.auth.UserMenuPermissionService;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -103,12 +104,12 @@ public class UserMenuPermissionController {
         return ResponseEntity.ok(ApiResponse.successMessage("已清除"));
     }
 
+    /** 操作人取自 JwtAuthInterceptor 写入的 request attribute (本项目不填充 SecurityContextHolder)。 */
     private String currentOperator() {
-        try {
-            return org.springframework.security.core.context.SecurityContextHolder
-                    .getContext().getAuthentication().getName();
-        } catch (Exception e) {
-            return "system";
+        String username = SecurityUtils.currentUsername();
+        if (username == null || username.isBlank()) {
+            throw new BusinessException(401, "未登录 — 无法确定操作人");
         }
+        return username;
     }
 }
