@@ -982,9 +982,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             }
             if (result != null && result.message() != null) why = " (" + result.message() + ")";
         }
-        throw new BusinessException(409, "投入单位「" + unit + "」无法换算成千克, 不能计算调料用量" + why)
+        throw new BusinessException(409, "投入单位「" + com.cretas.aims.service.unit.UnitDisplayNames.display(unit) + "」无法换算成千克, 不能计算调料用量" + why)
                 .withCode("SEASONING_BASIS_UNIT_NOT_CONVERTIBLE")
-                .withHint("该工序配置了调料(按每千克原料计): 请改用千克/克填写投入, 或在单位换算里登记「" + unit
+                .withHint("该工序配置了调料(按每千克原料计): 请改用千克/克填写投入, 或在单位换算里登记「" + com.cretas.aims.service.unit.UnitDisplayNames.display(unit)
                         + "」与千克的换算(或产品单重)后重试")
                 .withSeverity("BLOCKING");
     }

@@ -90,7 +90,7 @@ public class WorkReportingServiceImpl {
         if (request.getUnit() != null && !request.getUnit().isBlank()) {
             UnitNormalizationResult norm = unitContractService.normalize(factoryId, request.getUnit());
             if (norm == null || !norm.recognized()) {
-                throw new BusinessException(400, "不认识的计量单位: " + request.getUnit())
+                throw new BusinessException(400, "不认识的计量单位: " + com.cretas.aims.service.unit.UnitDisplayNames.display(request.getUnit()))
                         .withHint("请从单位列表里选择, 或先在单位管理里登记该单位").withHintTarget("unit");
             }
             requestedUnit = unitContractService.storageUnit(factoryId, request.getUnit());
@@ -409,8 +409,8 @@ public class WorkReportingServiceImpl {
                 UnitUsageScene.PRODUCTION, 6, RoundingMode.HALF_UP));
         if (result == null || !result.succeeded()) {
             String why = result == null || result.message() == null ? "" : " (" + result.message() + ")";
-            throw new BusinessException(400, "报工单位「" + fromUnit + "」无法换算成批次单位「" + batchUnit + "」" + why)
-                    .withHint("请改用批次单位「" + batchUnit + "」报工, 或先登记两个单位之间的换算").withHintTarget("unit");
+            throw new BusinessException(400, "报工单位「" + com.cretas.aims.service.unit.UnitDisplayNames.display(fromUnit) + "」无法换算成批次单位「" + com.cretas.aims.service.unit.UnitDisplayNames.display(batchUnit) + "」" + why)
+                    .withHint("请改用批次单位「" + com.cretas.aims.service.unit.UnitDisplayNames.display(batchUnit) + "」报工, 或先登记两个单位之间的换算").withHintTarget("unit");
         }
         return result.quantity();
     }
