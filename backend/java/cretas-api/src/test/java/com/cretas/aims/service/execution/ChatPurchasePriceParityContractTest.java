@@ -170,6 +170,21 @@ class ChatPurchasePriceParityContractTest {
         assertThat(chatSeesTotalAmount("procurement_manager")).isTrue();
     }
 
+    /**
+     * 换算系数不是钱 (S6 #1376 复测): PO 明细的 quantityToPriceFactor 名字里带 "Price", 以前被 Rule 2b
+     * 当成金额剥掉 —— 采购主管对话里为 null, web 与超管为 1。每个角色, 对话 == REST, 且都看得到这个数。
+     */
+    @ParameterizedTest(name = "{0}: quantityToPriceFactor 对话 == REST")
+    @ValueSource(strings = {"factory_super_admin", "procurement_manager", "finance_manager",
+            "sales_manager", "warehouse_manager", "viewer"})
+    void theQuantityToPriceFactorIsNotMaskedAsMoney(String role) throws Exception {
+        JsonNode rest = restPo(role).at("/items/0/quantityToPriceFactor");
+        JsonNode chat = chatPo(role).at("/items/0/quantityToPriceFactor");
+        assertThat(chat.isMissingNode()).as("chat payload has the field").isFalse();
+        assertThat(chat.toString()).as("role=%s chat vs REST", role).isEqualTo(rest.toString());
+        assertThat(chat.decimalValue()).as("role=%s", role).isEqualByComparingTo("2");
+    }
+
     /** 阴性对照: 没有采购价权限 (配置里 procurement「-」) 的角色在对话里仍拿不到。 */
     @Test
     void aRoleWithoutThePurchasePricePermissionStillGetsNull() throws Exception {
@@ -180,26 +195,32 @@ class ChatPurchasePriceParityContractTest {
     // ------------------------------------------------------------------ the two paths
 
     private Boolean restSeesTotalAmount(String role) throws Exception {
+        return !restPo(role).at("/totalAmount").isNull();
+    }
+
+    private Boolean chatSeesTotalAmount(String role) throws Exception {
+        JsonNode amount = chatPo(role).at("/totalAmount");
+        assertThat(amount.isMissingNode()).as("chat payload has the field").isFalse();
+        return !amount.isNull();
+    }
+
+    private JsonNode restPo(String role) throws Exception {
         try {
             Object body = ApiResponse.success(PageResponse.of(List.of(order()), 1, 10, 1L));
-            JsonNode json = writeThroughAdvice(body, role);
-            return !json.at("/data/content/0/totalAmount").isNull();
+            return writeThroughAdvice(body, role).at("/data/content/0");
         } finally {
             PriceSensitiveContext.clear();
         }
     }
 
-    private Boolean chatSeesTotalAmount(String role) throws Exception {
+    private JsonNode chatPo(String role) throws Exception {
         try {
             AIIntentConfig intent = AIIntentConfig.builder().intentCode("PURCHASE_ORDER_LIST")
                     .intentCategory("PROCUREMENT").intentName("采购订单查询").toolName("purchase_order_list").build();
             IntentExecuteResponse response = dispatch.executeWithTool(tool, F,
                     IntentExecuteRequest.builder().userInput("查询采购单").build(), intent, idOf.get(role), role, null);
             assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
-            JsonNode json = writeThroughAdvice(ApiResponse.success(response), role);
-            JsonNode amount = json.at("/data/resultData/content/0/totalAmount");
-            assertThat(amount.isMissingNode()).as("chat payload has the field").isFalse();
-            return !amount.isNull();
+            return writeThroughAdvice(ApiResponse.success(response), role).at("/data/resultData/content/0");
         } finally {
             PriceSensitiveContext.clear();
         }
@@ -223,6 +244,13 @@ class ChatPurchasePriceParityContractTest {
         o.setStatus(PurchaseOrderStatus.COMPLETED);
         o.setTotalAmount(new BigDecimal("36.00"));
         o.setTaxAmount(new BigDecimal("4.68"));
+        com.cretas.aims.entity.inventory.PurchaseOrderItem item = new com.cretas.aims.entity.inventory.PurchaseOrderItem();
+        item.setMaterialTypeId("MT-1");
+        item.setQuantity(new BigDecimal("12"));
+        item.setUnit("kg");
+        item.setPriceUnit("箱");
+        item.setQuantityToPriceFactor(new BigDecimal("2"));
+        o.getItems().add(item);
         return o;
     }
 }
