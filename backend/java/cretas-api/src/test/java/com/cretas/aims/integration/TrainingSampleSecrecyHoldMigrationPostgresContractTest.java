@@ -22,18 +22,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * 本 PR 的两个迁移在真 PG 上 (实体与迁移建出来的表<b>逐列一致</b>, Hibernate schema validate 只扫对应实体):
  * <ul>
- *   <li>V20261104_11 训练样本挂起表: 样本类别 / 复核状态只认登记值, REJECTED 必须带时间且不留原文, 工厂不能空白, 尝试次数不能为负;</li>
- *   <li>V20261104_12 保密策略的专属别名列 (Q1): 只收 JSON 数组; 实体 {@link ProcessSecretPolicy} 与
- *       V20261103_72 + V20261104_12 建出的表一致。</li>
+ *   <li>V20261104_22 训练样本挂起表: 样本类别 / 复核状态只认登记值, REJECTED 必须带时间且不留原文, 工厂不能空白, 尝试次数不能为负;</li>
+ *   <li>V20261104_23 保密策略的专属别名列 (Q1): 只收 JSON 数组; 实体 {@link ProcessSecretPolicy} 与
+ *       V20261103_72 + V20261104_23 建出的表一致。</li>
  * </ul>
  * 阴性对照: 把迁移里的一列改名后, 同一个 validate 必须失败 (证明 validate 真在比列)。
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class TrainingSampleSecrecyHoldMigrationPostgresContractTest {
 
-    private static final String HOLDS = "db/flyway/V20261104_11__training_sample_secrecy_holds.sql";
+    private static final String HOLDS = "db/flyway/V20261104_22__training_sample_secrecy_holds.sql";
     private static final String POLICIES = "db/flyway/V20261103_72__process_secret_access.sql";
-    private static final String ALIASES = "db/flyway/V20261104_12__process_secret_policy_aliases.sql";
+    private static final String ALIASES = "db/flyway/V20261104_23__process_secret_policy_aliases.sql";
     private static final String ROW = "INSERT INTO training_sample_secrecy_holds (sample_kind, factory_id, payload,"
             + " review_status, rejected_at, attempts, created_at) VALUES ";
     private static final String POLICY = "INSERT INTO process_secret_policies (factory_id, product_type_id, storage_mode,"

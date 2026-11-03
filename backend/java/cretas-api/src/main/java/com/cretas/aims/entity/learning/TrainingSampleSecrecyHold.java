@@ -16,7 +16,7 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 /**
- * 挂起待重判的训练样本 (Flyway V20261104_11): 本厂名单查不出来、按上次成功的名单判下来没问题的样本,
+ * 挂起待重判的训练样本 (Flyway V20261104_22): 本厂名单查不出来、按上次成功的名单判下来没问题的样本,
  * 先放这里, 定时按当前名单重判: 过了才写进样本表 (挂起行删除); 提到名单里的词 → REJECTED, 保留给人工复核 (Q5)。
  * {@code payload} 是原话原文 (复审 N3)。除了重判任务没有人读它; 标 REJECTED 时当场换成 {@link #DROPPED_PAYLOAD}
  * (复审第二轮第 1 条: 原文不随复核行永久留着; 迁移里的 ck_tssh_rejected_no_raw 钉住)。

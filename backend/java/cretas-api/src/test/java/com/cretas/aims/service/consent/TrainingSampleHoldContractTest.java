@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * 过滤规则待办第 2 / 9 条 + Steve 2026-11-03 Q5 + 安全复审 N3/N4: 本厂名单查不出来时按<b>上次成功的名单</b>判,
- * 判过的样本以<b>原文</b>挂起 (training_sample_secrecy_holds, Flyway V20261104_11), {@link TrainingSampleHoldRejudger}
+ * 判过的样本以<b>原文</b>挂起 (training_sample_secrecy_holds, Flyway V20261104_22), {@link TrainingSampleHoldRejudger}
  * 按当前名单重判: 过了先删挂起行再走原收样本入口; 仍提到名单 → REJECTED 保留给人工复核 (不删); 读不出来的到期删。
  */
 class TrainingSampleHoldContractTest {

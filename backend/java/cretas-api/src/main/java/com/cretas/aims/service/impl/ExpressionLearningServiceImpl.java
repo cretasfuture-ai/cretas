@@ -610,7 +610,10 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
             return null;
         }
         boolean authorized = status == TrainingConsentService.Status.AUTHORIZED;
-        String textToStore = TrainingSampleRules.textToStore(userInput.trim(), authorized);
+        // 该厂「训练数据过滤」(d) 关着 (#1400): 不按配方参数 / 客户 / 人名关键词拦, 未授权照旧脱敏数字
+        String textToStore = processSecretSampleFilter.trainingFilterOff(factoryId)
+                ? (authorized ? userInput.trim() : TrainingSampleRules.maskNumbers(userInput.trim()))
+                : TrainingSampleRules.textToStore(userInput.trim(), authorized);
         if (textToStore == null) {
             return null;
         }

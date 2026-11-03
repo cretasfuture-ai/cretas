@@ -44,7 +44,8 @@ public final class LearningContentRules {
             log.warn("训练授权 / 保密产品判断未注入, 不学: factory={}", factoryId);
             return false;
         }
-        if (TrainingSampleRules.utteranceHasBlockedContent(text)) {
+        // 该厂「训练数据过滤」(d) 关着: 不按配方参数 / 客户 / 人名关键词拦 (#1400; 训练授权下面照常判)
+        if (!filter.trainingFilterOff(factoryId) && TrainingSampleRules.utteranceHasBlockedContent(text)) {
             return false;
         }
         try {

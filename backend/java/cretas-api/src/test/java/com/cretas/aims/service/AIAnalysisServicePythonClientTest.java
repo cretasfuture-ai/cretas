@@ -81,7 +81,9 @@ class AIAnalysisServicePythonClientTest {
                 ArgumentCaptor.forClass(PythonGeneralAnalysisRequest.class);
         verify(pythonClient).analyzeGeneral(
                 eq("FACTORY-COST"), eq("42"), requestCaptor.capture());
-        assertEquals("analyze this batch", requestCaptor.getValue().getMessage());
+        // 跨厂约束一律带在前面 (2026-11-03: 隔离, 不看保密开关; 本厂没有保密产品时只带这一句), 用户原话在最后
+        assertEquals(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.CROSS_FACTORY_HARNESS
+                + "\n\nanalyze this batch", requestCaptor.getValue().getMessage());
         assertEquals(Boolean.FALSE, requestCaptor.getValue().getAllowTenantDataFallback());
     }
 

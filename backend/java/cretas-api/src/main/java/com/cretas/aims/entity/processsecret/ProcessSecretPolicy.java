@@ -68,7 +68,7 @@ public class ProcessSecretPolicy {
     private LocalDateTime updatedAt;
 
     /**
-     * 专属别名 (JSON 字符串数组; Flyway V20261104_12, Steve 2026-11-03 Q1)。训练样本过滤与全名同样匹配。
+     * 专属别名 (JSON 字符串数组; Flyway V20261104_23, Steve 2026-11-03 Q1)。训练样本过滤与全名同样匹配。
      * 只经 {@code ProcessSecretPolicyService.upsertPolicy} 写 (与改策略同一道权限)。
      */
     @Column(name = "aliases", columnDefinition = "TEXT")

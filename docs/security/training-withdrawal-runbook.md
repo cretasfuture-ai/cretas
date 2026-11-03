@@ -62,7 +62,7 @@ sudo -u postgres psql -d cretas_prod_db -tA -c \
    UNION ALL SELECT 'conversation_memory', count(*) FROM conversation_memory WHERE factory_id = '<factory_id>'"
 ```
 
-`training_sample_secrecy_holds`（Flyway V20261104_11）放的是「名单一时查不出来、等重判」的样本，存的是**原话原文**（没脱敏）：
+`training_sample_secrecy_holds`（Flyway V20261104_22）放的是「名单一时查不出来、等重判」的样本，存的是**原话原文**（没脱敏）：
 待判（PENDING）的行，放行或过保留期（默认 7 天）就删；重判时提到了保密产品 / 人员 / 客户的行标 REJECTED **保留不删**（原文当场丢掉，只留原因和时间），
 留给人工复核，也不会进训练。撤回标记设上以后，重判任务放行前会再查一次授权，撤回的不会再写进样本表；
 表里剩下的（PENDING 和 REJECTED 都算）仍要按本节删掉。

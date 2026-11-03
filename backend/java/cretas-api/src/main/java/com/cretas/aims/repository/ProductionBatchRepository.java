@@ -377,17 +377,30 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     long countByStatus(ProductionBatchStatus status);
 
     /**
-     * 跨工厂批次总数, 不含工艺保密产品的批次 (隐私条款第六条: 保密产品不纳入跨客户统计)。
+     * 平台统计里要排除的保密产品 (与 ProcessSecretAccessService.hiddenFromPlatform 同一口径, 按该批次所属工厂的开关):
+     * B 档且「客户侧保管」(e) 开着, 或「工艺保密」(a) 与「平台看不到配方」(b) 都开着。没有配置行 = 关。
      */
-    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE NOT EXISTS (SELECT 1 FROM ProcessSecretPolicy p "
-            + "WHERE p.factoryId = b.factoryId AND p.productTypeId = b.productTypeId)")
+    String HIDDEN_FROM_PLATFORM_POLICY = "SELECT 1 FROM ProcessSecretPolicy p "
+            + "WHERE p.factoryId = b.factoryId AND p.productTypeId = b.productTypeId AND ("
+            + "(p.storageMode = com.cretas.aims.entity.processsecret.ProcessSecretStorageMode.CUSTOMER_HELD "
+            + "AND EXISTS (SELECT 1 FROM FactorySecrecySetting se WHERE se.factoryId = p.factoryId "
+            + "AND se.itemCode = 'CUSTOMER_HELD' AND se.enabled = true)) "
+            + "OR (EXISTS (SELECT 1 FROM FactorySecrecySetting sa WHERE sa.factoryId = p.factoryId "
+            + "AND sa.itemCode = 'PROCESS_SECRET' AND sa.enabled = true) "
+            + "AND EXISTS (SELECT 1 FROM FactorySecrecySetting sb WHERE sb.factoryId = p.factoryId "
+            + "AND sb.itemCode = 'PLATFORM_RECIPE_BLOCK' AND sb.enabled = true)))";
+
+    /**
+     * 跨工厂批次总数, 不含平台看不到的保密产品的批次 (隐私条款第六条: 保密产品不纳入跨客户统计)。
+     */
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE NOT EXISTS (" + HIDDEN_FROM_PLATFORM_POLICY + ")")
     long countExcludingProcessSecretProducts();
 
     /**
-     * 跨工厂某状态批次数, 不含工艺保密产品的批次 (隐私条款第六条)。
+     * 跨工厂某状态批次数, 不含平台看不到的保密产品的批次 (隐私条款第六条)。
      */
     @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE b.status = :status AND NOT EXISTS ("
-            + "SELECT 1 FROM ProcessSecretPolicy p WHERE p.factoryId = b.factoryId AND p.productTypeId = b.productTypeId)")
+            + HIDDEN_FROM_PLATFORM_POLICY + ")")
     long countByStatusExcludingProcessSecretProducts(@Param("status") ProductionBatchStatus status);
 
     /**

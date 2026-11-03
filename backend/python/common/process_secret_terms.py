@@ -105,7 +105,7 @@ def secret_terms(products: Iterable[Mapping[str, Any]],
 
 
 def policy_aliases(raw: Any) -> List[str]:
-    """``process_secret_policies.aliases`` (JSON array text, Flyway V20261104_12) -> list.
+    """``process_secret_policies.aliases`` (JSON array text, Flyway V20261104_23) -> list.
     NULL / empty -> []. A malformed value raises: the caller's lookup fails (fail-closed)."""
     if raw is None or raw == "":
         return []

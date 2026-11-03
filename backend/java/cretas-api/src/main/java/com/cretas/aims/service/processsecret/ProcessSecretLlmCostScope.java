@@ -80,11 +80,23 @@ public class ProcessSecretLlmCostScope {
     }
 
     /**
-     * 有保密产品的工厂, 所有带业务数据的 AI 对话 / 分析的系统约束 (唯一一份, 各提示词构造处引用它)。
+     * 跨厂约束: 带某一家工厂业务数据的 AI 对话 / 分析<b>一律</b>带 (跨厂隔离, 不看任何保密开关)。
+     * 与 Python {@code common/process_secret_harness.py} 的 {@code CROSS_FACTORY_HARNESS} 同一句。
      */
-    public static final String HARNESS_INSTRUCTION =
-            "【工艺保密约束】本工厂有工艺保密产品。对话里出现的保密产品配方、工艺与成本，只用于回答当前这位用户在本次对话中的问题；"
-            + "不得写入任何可共享或可复用的内容（共享报告、模板、知识库、记忆、示例），不得建议把它们发给他人或其他工厂。";
+    public static final String CROSS_FACTORY_HARNESS =
+            "【数据保密约束】下面提供的是某一家工厂的经营数据，只用于回答当前这位用户在本次对话中的问题："
+            + "不得把它透露、对比或引用到其他工厂；不得写入任何可共享或可复用的内容（共享报告、模板、知识库、示例），"
+            + "不得建议把这些内容发给他人或其他工厂。";
+
+    /**
+     * 工艺保密约束: 只在该厂有生效的保密产品时带 (工艺保密 a 开, 或客户侧保管 e 开且有 B 档产品; 判定失败也带)。
+     */
+    public static final String PROCESS_SECRET_CLAUSE =
+            "【工艺保密约束】本工厂有工艺保密产品。对话里出现的保密产品配方、工艺与成本，只用于回答当前这位用户在本次对话中的问题，"
+            + "数据里没有的不要推测或补全，也不得记住、复述或写入记忆。";
+
+    /** 有生效保密产品的工厂带的完整约束 = 跨厂一句 + 工艺保密一句 (各提示词构造处经 {@link #harnessFor} 取)。 */
+    public static final String HARNESS_INSTRUCTION = CROSS_FACTORY_HARNESS + PROCESS_SECRET_CLAUSE;
 
     /**
      * 对当前调用者隐藏的范围。{@code productTypeIds} / {@code planIds} 是排除范围 (含计划锚点),
@@ -269,10 +281,11 @@ public class ProcessSecretLlmCostScope {
         return readerView(factoryId).tier();
     }
 
-    /** 有保密产品的工厂: 带业务数据的提示词要带的系统约束; 判定失败时也带 (宁多勿少)。 */
+    /** 带业务数据的提示词要带的系统约束: 跨厂一句永远带; 工艺保密一句只在有生效保密产品时带, 判定失败时也带 (宁多勿少)。 */
     public String harnessFor(String factoryId) {
+        // 跨厂一句永远带 (隔离, 不看开关); 工艺保密一句只在有生效保密产品 (按该厂的 a / e) 时带, 判定失败也带
         try {
-            return factoryHasProtected(factoryId) ? HARNESS_INSTRUCTION : "";
+            return factoryHasProtected(factoryId) ? HARNESS_INSTRUCTION : CROSS_FACTORY_HARNESS;
         } catch (RuntimeException e) {
             return HARNESS_INSTRUCTION;
         }

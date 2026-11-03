@@ -199,7 +199,8 @@ public class ProcessSecretPayloadScrubber {
                          Set<ProcessSecretReadTracker.Read> reads, String resourceRef, boolean aggregateView) {
         if (tree == null || !(tree.isObject() || tree.isArray())) return false;
         Run run = new Run(actor, requestFactory, resourceRef, aggregateView);
-        if (!run.anyProtection(reads)) return false;
+        // 工厂级保密配置按每一行的工厂判 (protectedIn): 本次请求的工厂没开保密, 输出里别家工厂的行照样要看
+        if (!run.anyProtection(reads) && !run.anyRowFactoryProtected(tree)) return false;
         run.resolveReads(reads);
         // 第一遍: 输出里出现了哪些产品归属
         run.restrictedInOutput = run.collectAttributions(tree, null);
@@ -282,8 +283,20 @@ public class ProcessSecretPayloadScrubber {
             return false;
         }
 
+        /** 输出里出现的每个 {@code factoryId} (行的工厂) 是否有生效的保密产品 —— 不按请求工厂整份跳过。 */
+        boolean anyRowFactoryProtected(JsonNode tree) {
+            for (String factory : new LinkedHashSet<>(tree.findValuesAsText("factoryId"))) {
+                if (factory != null && !factory.isBlank() && !protectedIn(factory).isEmpty()) return true;
+            }
+            return false;
+        }
+
         Level level(Key key) {
-            if (key.productTypeId() == null) return degradedLevel(actor, key.factoryId());
+            // 归属不清: 按该行工厂的开关 (b: 平台看不到配方关着时平台看 FULL)
+            if (key.productTypeId() == null) {
+                Level byFactory = accessService.degradedLevel(actor, key.factoryId());
+                return byFactory != null ? byFactory : degradedLevel(actor, key.factoryId());
+            }
             if (!protectedIn(key.factoryId()).contains(key.productTypeId())) return Level.FULL;
             return levels.computeIfAbsent(key, k -> levelOf(actor, k.factoryId(), k.productTypeId()));
         }

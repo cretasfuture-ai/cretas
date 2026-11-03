@@ -92,6 +92,16 @@ class LearningSecrecyCheckOutsideTransactionContractTest {
             return Set.of();
         }
 
+        /** #1400: 训练名单取全部策略产品 = protectedProductTypeIds ∪ 这一半; 与上面同一个开关。 */
+        @Override
+        @Transactional(readOnly = true)
+        public Set<String> switchedOffPolicyProductTypeIds(String factoryId) {
+            if (fail.get()) {
+                throw new DataAccessResourceFailureException("connection reset");
+            }
+            return Set.of();
+        }
+
         @Override
         @Transactional(readOnly = true)
         public Set<String> factoriesWithProtectedProducts() {

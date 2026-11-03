@@ -13,7 +13,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 
 /**
- * 「挂起待重判」的训练样本 (Flyway V20261104_11, 待办第 2 / 9 条) 的写入口。
+ * 「挂起待重判」的训练样本 (Flyway V20261104_22, 待办第 2 / 9 条) 的写入口。
  *
  * <p>{@link ProcessSecretSampleFilter#checkTrainingSample} 返回 {@code HELD} (本厂名单这次查不出来, 按上次成功的名单
  * 判下来没问题) 时, 收样本的入口把「将要写进样本表的那一条」交到这里; {@link TrainingSampleHoldRejudger}

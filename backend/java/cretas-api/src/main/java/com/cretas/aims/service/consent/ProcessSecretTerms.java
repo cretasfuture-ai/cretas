@@ -191,7 +191,7 @@ public final class ProcessSecretTerms {
     private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
 
     /**
-     * {@code process_secret_policies.aliases} (JSON 数组文本, Flyway V20261104_12) → 列表; NULL / 空 → 空。
+     * {@code process_secret_policies.aliases} (JSON 数组文本, Flyway V20261104_23) → 列表; NULL / 空 → 空。
      * 格式不对就抛 (调用方的名单查询失败 → fail-closed), 与 Python {@code policy_aliases} 一致。
      */
     public static List<String> policyAliases(String raw) {

@@ -8,6 +8,7 @@ import type { User } from '@/types/auth';
 import { isDemoFactoryId, resolveLogisticsDemoRoute } from '@/views/demo/demoRoute';
 import { getFactoryAssemblyEnabled, isFactoryAssemblyPlatformUser } from '@/api/factoryAssemblyCapabilities';
 import { platformWorkspacePaths } from '@/components/layout/menuConfig';
+import { getFactorySecrecyFlags, isAnySecrecyOn, type SecrecyCode } from '@/api/factorySecrecy';
 
 export function isPlatformWorkspaceRoute(path: string): boolean {
   return platformWorkspacePaths.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
@@ -208,6 +209,18 @@ export function setupRouterGuards(router: Router) {
       // 跳转到 Mobile 专属提示页面
       next({ path: '/mobile-only', query: { role: blockedRole } });
       return;
+    }
+
+    // 工厂级保密配置 (平台设置, 只读): 依赖保密配置的页面 (工艺保密) 只在所列任一项明确开启 (=== true) 时可进;
+    // 读不到 / 没有这一行一律当没开。平台进入工厂只读查看时按被查看的工厂判。
+    const secrecyFeature = to.meta.secrecyFeature as readonly SecrecyCode[] | undefined;
+    if (secrecyFeature?.length) {
+      const { usePlatformFactoryContextStore } = await import('@/store/modules/platformFactoryContext');
+      const factoryId = usePlatformFactoryContextStore().factoryId || authStore.factoryId;
+      if (!isAnySecrecyOn(await getFactorySecrecyFlags(factoryId), secrecyFeature)) {
+        next('/404');
+        return;
+      }
     }
 
     // Assembly is platform-only and backend-controlled. Direct URLs stay

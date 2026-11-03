@@ -57,6 +57,66 @@ public class ProcessSecretSampleFilter {
         this.directoryRepository = directoryRepository;
     }
 
+    /**
+     * 文本是否提到本厂某个工艺保密产品 (训练 / 学习用)。只看该厂「训练数据过滤」(d) (Steve 2026-11-03 Q1=A):
+     * d 关 → 一律 false; d 开 → 按库里登记了保密策略的全部产品名判, 与工艺保密 (a) 开不开无关。
+     * 训练授权是另一套, 由调用方照常判。
+     */
+    public boolean mentionsProtectedProduct(String factoryId, String... texts) {
+        if (trainingFilterOff(factoryId)) return false;
+        return mentionsAny(trainingProductNames(factoryId), texts);
+    }
+
+    /**
+     * 训练 / 学习 / 写全局内容用的保密产品名: 库里登记了保密策略的全部产品 (生效中的 ∪ 因 a / e 关着而不生效的),
+     * 不看 a。出外脱敏用的 {@link #protectedProductNames} 仍按生效中的保密产品。
+     */
+    public Set<String> trainingProductNames(String factoryId) {
+        if (factoryId == null || factoryId.isBlank()) {
+            return Set.of();
+        }
+        Set<String> ids = trainingPolicyProductIds(factoryId);
+        if (ids.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> key = Set.copyOf(ids);
+        return nameCache.get(new NameKey(factoryId, key), k -> loadNames(factoryId, key));
+    }
+
+    /** 单测直接 new 时当开启; Spring 下由 setter 注入 (没有这个 bean 的切片测试保持全开)。 */
+    private com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy =
+            com.cretas.aims.service.secrecy.FactorySecrecyConfig.allOn();
+
+    @Autowired(required = false)
+    public void setFactorySecrecyConfig(com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy) {
+        this.secrecy = secrecy;
+    }
+
+    /**
+     * 该厂「训练数据过滤」(d) 是否<b>关着</b> (按样本所属的工厂; 工厂不明 / 读不到 → 开着 → false)。关着时不按保密产品名
+     * 和配方参数 / 客户 / 人名关键词剔除该厂的训练样本; 训练授权 (同意 / 撤回) 不受影响。
+     * 问「关着吗」而不是「开着吗」: 被 mock 的默认 false 落在过滤照常生效那一边。
+     */
+    public boolean trainingFilterOff(String factoryId) {
+        return !secrecy.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.TRAINING_FILTER);
+    }
+
+    /**
+     * 训练过滤 (d) 用的保密产品: 库里登记了保密策略的全部产品 = 生效中的 ({@code protectedProductTypeIds}) ∪ 因 a / e
+     * 关着而不生效的 ({@code switchedOffPolicyProductTypeIds}) —— 不看 a (Steve 2026-11-03 Q1=A)。
+     */
+    Set<String> trainingPolicyProductIds(String factoryId) {
+        Set<String> ids = new LinkedHashSet<>(accessService.protectedProductTypeIds(factoryId));
+        ids.addAll(accessService.switchedOffPolicyProductTypeIds(factoryId));
+        return ids;
+    }
+
+    /** 平台改了保密配置后清名单缓存 (名单本身不看开关, 清掉只是不留旧状态窗口; 训练名单缓存一并清)。 */
+    public void invalidateNameCache() {
+        nameCache.invalidateAll();
+        listsCache.invalidateAll();
+    }
+
     /** 收训练样本前的判断结果。只有 {@link #CLEAR} 才能直接存。 */
     public enum SampleVerdict {
         /** 没提到本厂保密词 / 人员 / 客户 */
@@ -119,6 +179,11 @@ public class ProcessSecretSampleFilter {
         if (factoryId == null || factoryId.isBlank()) {
             return SampleVerdict.UNVERIFIED;     // 没有工厂就没有可比的名单 (不用所有工厂的并集)
         }
+        if (trainingFilterOff(factoryId)) {
+            // 该厂「训练数据过滤」(d) 关着 (#1400; 按样本所属的工厂; 开关读不到按开着): 不按保密产品名 / 人员 / 客户拦。
+            // 训练授权 (同意 / 撤回) 由调用方照常判
+            return SampleVerdict.CLEAR;
+        }
         try {
             TrainingLists lists = trainingLists(factoryId);
             return names(lists, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
@@ -176,7 +241,10 @@ public class ProcessSecretSampleFilter {
         }
     }
 
-    /** 所有工厂的训练保密词 (并集, 只给写全局用)。查库出错照样抛。 */
+    /**
+     * 所有工厂的训练保密词 (并集, 只给写全局用)。查库出错照样抛。每次都算, 只剔除「训练数据过滤」(d) 关着的工厂
+     * ({@code factoriesWithProtectedProducts} 已按每家自己的 d 剔除); 每家的词按 d 取 (不看 a, Q1=A)。
+     */
     public Set<String> allFactoriesTrainingTerms() {
         Set<String> terms = new LinkedHashSet<>();
         for (String factoryId : accessService.factoriesWithProtectedProducts()) {
@@ -186,14 +254,15 @@ public class ProcessSecretSampleFilter {
     }
 
     /**
-     * 本厂训练样本名单 (保密词 + 人员 + 客户)。按「工厂 + 当前保密产品集合」缓存 10 秒, 每次成功都记为
+     * 本厂训练样本名单 (保密词 + 人员 + 客户)。保密产品取库里登记了保密策略的全部产品 (与 a / e 开不开无关, 只看 d,
+     * 由调用方 / {@link #check} 判 d)。按「工厂 + 当前保密产品集合」缓存 10 秒, 每次成功都记为
      * 「上次成功的名单」。查库失败照样抛 (不缓存)。
      */
     public TrainingLists trainingLists(String factoryId) {
         if (factoryId == null || factoryId.isBlank()) {
             return TrainingLists.EMPTY;
         }
-        Set<String> protectedIds = accessService.protectedProductTypeIds(factoryId);
+        Set<String> protectedIds = trainingPolicyProductIds(factoryId);     // 不看 a / e (Q1=A)
         TrainingLists lists = listsCache.get(new NameKey(factoryId, Set.copyOf(protectedIds)),
                 key -> loadTrainingLists(factoryId, protectedIds));
         lastGoodLists.put(factoryId, lists);
@@ -241,11 +310,14 @@ public class ProcessSecretSampleFilter {
         return mentionsAny(allFactoriesProtectedNames(), texts);
     }
 
-    /** 所有工厂的工艺保密产品名 (并集; 一批写入取一次)。查库出错照样抛。 */
+    /**
+     * 所有工厂的工艺保密产品名 (并集; 一批写入取一次)。查库出错照样抛。
+     * 每次都算, 只剔除「训练数据过滤」(d) 关着的工厂; 每家的名字按 d 取 (不看 a, Q1=A)。
+     */
     public Set<String> allFactoriesProtectedNames() {
         Set<String> names = new LinkedHashSet<>();
         for (String factoryId : accessService.factoriesWithProtectedProducts()) {
-            names.addAll(protectedProductNames(factoryId));
+            names.addAll(trainingProductNames(factoryId));
         }
         return names;
     }

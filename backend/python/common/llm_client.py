@@ -79,8 +79,19 @@ class _RedactingLLMClient:
             _egress_tokens.set({})
             return json_payload, {}
         try:
-            from common.llm_redactor import redact_payload_for_egress
+            from common.llm_redactor import RedactionMeta, redact_payload_for_egress
             from common.llm_metrics import set_egress_redaction_meta
+            # 工厂级保密配置 (按外发工厂判; 工厂不明 / 读不到配置 = 开启, 照常脱敏 / 照常带约束)
+            factory_id = _egress_factory()
+            if factory_id and not await _process_secret_clause_needed(factory_id):
+                from common.process_secret_harness import without_process_secret_clause
+                json_payload = without_process_secret_clause(json_payload)
+            if factory_id and not await _egress_redaction_on(factory_id):
+                # 出外脱敏 (c) 关着、且工厂已知: 原样发出 (不换代号, 也就不用还原)
+                logger.info("[egress] passthrough: redaction off for factory %s", factory_id)
+                set_egress_redaction_meta(RedactionMeta())
+                _egress_tokens.set({})
+                return json_payload, {}
             redacted, meta = redact_payload_for_egress(json_payload, await _names_for_this_request())
             set_egress_redaction_meta(meta)
             _egress_tokens.set(meta.egress_tokens)
@@ -183,6 +194,18 @@ async def _protected_names_for_egress() -> list:
 
 
 _PROTECTED_NAMES_TIMEOUT_S = 5.0
+
+
+async def _egress_redaction_on(factory_id: str) -> bool:
+    """该厂「出外脱敏」(c) 是否开着 (缓存不超过 5 秒; 读不到 = 开)。只在工厂已知时问 —— 工厂不明照旧拒发。"""
+    from common import factory_secrecy
+    return await factory_secrecy.egress_redaction_on(factory_id)
+
+
+async def _process_secret_clause_needed(factory_id: str) -> bool:
+    """系统约束里「工艺保密产品」那一句要不要带: 该厂 a 或 e 开着就带 (读不到 = 带)。跨厂那一句永远带。"""
+    from common import factory_secrecy
+    return not await factory_secrecy.process_secret_inert(factory_id)
 
 
 async def _names_for_this_request() -> list:

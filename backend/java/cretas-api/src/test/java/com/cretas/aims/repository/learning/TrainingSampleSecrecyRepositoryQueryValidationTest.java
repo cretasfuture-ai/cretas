@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>{@link FactoryNameDirectoryRepository}: 本厂人员 + 客户 / 供应商联系人 (N6); 保密产品原始行<b>含已软删除的产品</b>
  *       (N2: {@code findAllById} 会被 {@code @Where} 过滤掉); 保密策略上登记的别名 (Q1)。全部只取本厂。</li>
  * </ul>
- * 实体与迁移 (V20261104_11 / V20261104_12) 的列一致由 {@code TrainingSampleSecrecyHoldMigrationPostgresContractTest} 在真 PG 上校验。
+ * 实体与迁移 (V20261104_22 / V20261104_23) 的列一致由 {@code TrainingSampleSecrecyHoldMigrationPostgresContractTest} 在真 PG 上校验。
  */
 @DataJpaTest(showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)

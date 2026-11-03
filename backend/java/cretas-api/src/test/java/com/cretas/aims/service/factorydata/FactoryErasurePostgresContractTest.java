@@ -545,7 +545,7 @@ class FactoryErasurePostgresContractTest {
         base.main = main;
         base.smartbi = smartbiAdmin;
         base.seedCleanTenants();
-        // Java side: held intent samples keep the raw text until judged (V20261104_11); a tenant table, so erased
+        // Java side: held intent samples keep the raw text until judged (V20261104_22); a tenant table, so erased
         exec(main, "SET search_path = " + schema + ";"
                 + "CREATE TABLE training_sample_secrecy_holds (id bigint PRIMARY KEY, factory_id varchar(50) NOT NULL,"
                 + " payload text NOT NULL);"

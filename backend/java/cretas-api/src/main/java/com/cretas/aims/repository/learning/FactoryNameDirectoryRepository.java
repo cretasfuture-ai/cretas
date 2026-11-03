@@ -38,7 +38,7 @@ public interface FactoryNameDirectoryRepository extends Repository<Customer, Str
             nativeQuery = true)
     List<Object[]> findProtectedProductRows(@Param("factoryId") String factoryId, @Param("ids") Collection<String> ids);
 
-    /** 本厂保密策略上登记的专属别名 (每行一个 JSON 数组; Flyway V20261104_12)。 */
+    /** 本厂保密策略上登记的专属别名 (每行一个 JSON 数组; Flyway V20261104_23)。 */
     @Query(value = "SELECT p.aliases FROM process_secret_policies p"
             + " JOIN product_types pt ON CAST(pt.id AS VARCHAR(100)) = p.product_type_id AND pt.factory_id = p.factory_id"
             + " WHERE p.factory_id = :factoryId AND p.aliases IS NOT NULL",

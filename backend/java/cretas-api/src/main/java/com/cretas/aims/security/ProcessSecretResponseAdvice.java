@@ -123,7 +123,10 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                 // 本次读过的工艺内容所属工厂也算 (路径上没有 factoryId 的平台接口, 独立审查 #12)
                 || ProcessSecretReadTracker.reads().stream().anyMatch(read -> read.factoryId() != null
                         && !accessService.protectedProductTypeIds(read.factoryId()).isEmpty());
-        if (!anyProtected) {
+        // 工厂级保密配置按每一行的工厂判 (审查 #4): 路径 / 身份 / 读数的工厂都没有生效保密时, 输出里仍可能有别家工厂的行,
+        // 交给 scrubber 逐行按行的工厂判 (anyRowFactoryProtected)。只有「库里任何工厂都没有保密策略」才整份跳过 ——
+        // 那时没有任何行可能受保护 (该判断带缓存, 改策略时随 invalidate 失效)。
+        if (!anyProtected && accessService.noProcessSecretPolicyAnywhere()) {
             return body;
         }
         Object payload = body instanceof ApiResponse<?> api ? api.getData() : body;

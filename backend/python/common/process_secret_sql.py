@@ -39,7 +39,7 @@ ALL_PROTECTED_TERMS_SQL = """
     JOIN product_types pt ON pt.id::text = p.product_type_id AND pt.factory_id = p.factory_id
 """
 # 保密产品: 含已软删除的产品 (fail-closed; 2026-11-03 复审 N2, Java 侧同一口径)。
-# 别名 aliases: 保密负责人在保密设置里登记 (Flyway V20261104_12, JSON 数组)。
+# 别名 aliases: 保密负责人在保密设置里登记 (Flyway V20261104_23, JSON 数组)。
 #
 # 人员 / 客户: 含已软删除的行 (离职员工、停用客户的名字照样是本厂的人和客户); 客户 / 供应商的
 # 联系人也算本厂名单里的人名 (复审 N6)。与 Java FactoryNameDirectoryRepository 同一口径。
