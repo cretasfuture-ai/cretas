@@ -1884,7 +1884,7 @@ async function handleStart(row: TableRow) {
   try {
     await ElMessageBox.confirm('确定开始此生产计划?', '提示', { type: 'warning' });
     actionLoading.value = true;
-    const response = await post(`/${factoryId.value}/production-plans/${row.id}/start`);
+    const response = await post(`/${factoryId.value}/production-plans/${row.id}/start`, undefined, SHORTAGE_HANDLED);
     if (response.success) {
       ElMessage.success('已开始生产');
       loadData();
@@ -1892,10 +1892,10 @@ async function handleStart(row: TableRow) {
       ElMessage.error(response.message || '操作失败');
     }
   } catch (error: any) {
-    // S4-08: 工厂开了「缺料时拦开工」, 后端以 SHORTAGE_CASE_OPEN 拦下 —— 拦截器已弹出缺什么、去哪处理;
-    // 这里再给一次「填写原因后强制开工」的机会, 原因记进缺料异常的处理记录。
+    // S4-08: 工厂开了「缺料时拦开工」, 后端以 SHORTAGE_CASE_OPEN 拦下 —— 由强制开工对话框一处说明缺什么,
+    // 并给一次「填写原因后强制开工」的机会, 原因记进缺料异常的处理记录。
     if (error?.code === 'SHORTAGE_CASE_OPEN') {
-      await forceStart(row);
+      await forceStart(row, error.message);
       return;
     }
     // Interceptor already shows specific sticky toast for ApiError (request.ts).
@@ -1907,13 +1907,20 @@ async function handleStart(row: TableRow) {
 }
 
 /**
- * S4-08 强制开工原因。开工 / 转批次 / 逐道录入 (都会让待处理计划开工) 被 SHORTAGE_CASE_OPEN 拦下时共用;
- * 用户放弃返回 null。
+ * 开工 / 转批次第一次请求带上它: SHORTAGE_CASE_OPEN 由下面的强制开工对话框接手, 拦截器不再同时弹一条
+ * 「操作被拒绝」(2026-11-03 验收: 两个提示叠在一起)。其它错误照常由拦截器提示。
  */
-async function askForceStartReason(): Promise<string | null> {
+const SHORTAGE_HANDLED = { _handledErrorCodes: ['SHORTAGE_CASE_OPEN'] };
+
+/**
+ * S4-08 强制开工原因。开工 / 转批次 / 逐道录入 (都会让待处理计划开工) 被 SHORTAGE_CASE_OPEN 拦下时共用;
+ * detail 是后端说明缺什么的那句话 (拦截器不再弹它, 由这里展示)。用户放弃返回 null。
+ */
+async function askForceStartReason(detail?: string): Promise<string | null> {
   try {
     const r = await ElMessageBox.prompt(
-      '这个计划关联的缺料还没解决。确需先开工，请写明原因（会记入「缺料异常」的处理记录）。',
+      (detail ? `${detail}\n\n` : '')
+        + '这个计划关联的缺料还没解决。确需先开工，请写明原因（会记入「缺料异常」的处理记录）。',
       '缺料未解决，强制开工',
       {
         inputValidator: (v: string) => (v && v.trim().length > 0) || '原因不能为空',
@@ -1935,17 +1942,17 @@ async function askForceStartReason(): Promise<string | null> {
 async function postCreateBatch(row: TableRow) {
   const url = `/${factoryId.value}/production-plans/${row.id}/create-batch`;
   try {
-    return await post(url);
+    return await post(url, undefined, SHORTAGE_HANDLED);
   } catch (error: any) {
     if (error?.code !== 'SHORTAGE_CASE_OPEN') throw error;
-    const reason = await askForceStartReason();
+    const reason = await askForceStartReason(error.message);
     if (!reason) return null;
     return await post(url, { forceStartReason: reason });
   }
 }
 
-async function forceStart(row: TableRow) {
-  const reason = await askForceStartReason();
+async function forceStart(row: TableRow, detail?: string) {
+  const reason = await askForceStartReason(detail);
   if (!reason) return; // 用户放弃
   actionLoading.value = true;
   try {
