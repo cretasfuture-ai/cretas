@@ -412,7 +412,7 @@ def test_full_offline_context_never_loads_source_account_or_cache(monkeypatch):
     assert loaded == ["source-binding.dpapi", "test-database.dpapi"]
 
 
-def test_smartbi_real_postgres_import_hash_and_tenant_isolation(store, database):
+def test_smartbi_real_postgres_import_hash_and_tenant_isolation(store, database, monkeypatch):
     import psycopg2
     from psycopg2 import sql
     from psycopg2.extras import Json
@@ -437,6 +437,20 @@ def test_smartbi_real_postgres_import_hash_and_tenant_isolation(store, database)
     result=read(settings)
     assert result['production']['projectCount']==1
     assert result['cost']['projects'][0]['materialCost'] is None
+    from blacklake.gap_evidence import EVIDENCE_SCHEMA
+    import blacklake.smartbi_store as reader
+    evidence={'schema':EVIDENCE_SCHEMA,'status':'complete','negativeControlVerified':True,
+              'tenantId':store.scope[0],'sourceFactoryId':store.scope[1],'runId':run_id,
+              'snapshotFingerprint':digest([('project','1',digest(payload))]),'verifiedMaterialParents':[]}
+    with monkeypatch.context() as patch:
+        patch.setattr(reader,'load_local_secret',lambda _:evidence)
+        with_file=dict(settings,gap_evidence_file='synthetic-protected-evidence')
+        assert read(with_file)['costIntelligence']['gapEvidence']['status']=='complete'
+        evidence['sourceFactoryId']='foreign'
+        scoped=read(with_file)['costIntelligence']
+        assert scoped['gapEvidence']['status']=='scope_or_snapshot_mismatch' and scoped['verifiedMaterialReferences']=={}
+        evidence['sourceFactoryId']=store.scope[1];evidence['status']='incomplete'
+        assert read(with_file)['costIntelligence']['verifiedMaterialReferences']=={}
     from blacklake.bi_readiness import validate
     for permission,grantee in [('SELECT','PUBLIC'),('INSERT',database[1])]:
         with admin:

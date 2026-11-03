@@ -35,6 +35,10 @@ try {
   await page.getByRole('button', { name: /登.*录/ }).click();
   await page.getByText('逐工单成本链路', { exact: true }).waitFor({ timeout: 60000 });
   await page.locator('[data-testid="cost-projects"] .el-table__body-wrapper tbody tr').first().waitFor();
+  await page.getByText('同产品工单 · 成本差异追溯', { exact: true }).waitFor();
+  await page.locator('[data-testid="cost-bridge-materials"] tbody tr').first().waitFor();
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: join(privateDir, 'smartbi-cost-intelligence.png'), fullPage: true });
   await page.screenshot({ path: join(privateDir, 'smartbi-cost.png'), fullPage: true });
   await page.getByLabel('搜索工单或产品', { exact: true }).fill(credentials.validProjectCode);
   await page.getByRole('button', { name: '查看链路', exact: true }).first().click();
@@ -44,10 +48,14 @@ try {
   await page.locator('.el-drawer').screenshot({ path: join(privateDir, 'smartbi-cost-chain.png'), animations: 'disabled' });
   await page.locator('.el-drawer__close-btn').click();
   await page.getByLabel('搜索工单或产品', { exact: true }).clear();
+  await page.getByRole('tab', { name: '关联与估值补查' }).click();
+  await page.getByText('225 条用料记录的父级查询已交叉核实', { exact: true }).waitFor();
+  await page.getByText('未闭合的关联排查', { exact: true }).waitFor();
+  await page.screenshot({ path: join(privateDir, 'smartbi-gap-evidence.png'), fullPage: true });
   await page.getByRole('tab', { name: '生产与工序' }).click();
-  await page.locator('canvas').first().waitFor();
+  await page.locator('canvas:visible').first().waitFor();
   await page.waitForTimeout(1200);
-  assert((await page.locator('canvas').count()) >= 2);
+  assert((await page.locator('canvas:visible').count()) >= 2);
   await page.screenshot({ path: join(privateDir, 'smartbi-production.png'), fullPage: true });
   await page.getByRole('tab', { name: '库存与仓库' }).click();
   await page.getByText(/2072 个产品与仓库组合/).waitFor();

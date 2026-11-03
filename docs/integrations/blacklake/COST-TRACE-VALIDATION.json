@@ -1,0 +1,172 @@
+{
+  "slice": "SmartBI native cost comparisons and source gap investigation",
+  "base_commit": "56a39807cdc339481c954ca6c06f828d14967550",
+  "recorded_at": "2026-11-03T11:39:39.551800+00:00",
+  "environment": {
+    "test_tenant": "BLACKLAKE_POC_TEST",
+    "dataset_records": 1879,
+    "snapshot_changed": false,
+    "api_port": 8093,
+    "web_port": 5178,
+    "production_deployment": false,
+    "source_business_mutations": 0
+  },
+  "tests": {
+    "connector_and_analysis": {
+      "command": "python -m blacklake.test_local",
+      "exit_code": 0,
+      "passed": 142,
+      "skipped": 0,
+      "postgres": "real SCRAM",
+      "redis": "password protected"
+    },
+    "shared_smartbi": {
+      "command": "python -m pytest smartbi/services/factory_charts/test_contract.py smartbi/services/factory_charts/test_conversation.py -q -o addopts=",
+      "exit_code": 0,
+      "passed": 72,
+      "skipped": 0
+    },
+    "frontend_token_activation": {
+      "command": "node node_modules/vitest/vitest.mjs run src/views/smart-bi/__tests__/blacklakeSession.spec.ts",
+      "exit_code": 0,
+      "passed": 8
+    }
+  },
+  "native_smartbi": {
+    "implementation": "Cretas SmartBI Series / series_candidate / facts_for / render_answer",
+    "candidates": 8,
+    "comparable_products": 3,
+    "unit_cost_available_projects": 16,
+    "bridge_max_reconciliation_error": 1e-26,
+    "unproven_price_not_used_in_actual_cost": true,
+    "currency_verified": false
+  },
+  "gap_evidence": {
+    "schema": "blacklake-gap-evidence/1",
+    "status": "complete",
+    "checked_at": "2026-11-03T11:07:05.351684+00:00",
+    "negative_control_verified": true,
+    "snapshot_fingerprint": "ee9d927d8c9754d0c67d6c66f232e7ba885c319fffec00fcbaa6331b3269be70",
+    "summary": {
+      "materialsQueryVerified": 225,
+      "materialProjectsChecked": 109,
+      "materialProjectsExpected": 109,
+      "failedProjects": 0,
+      "unlinkedStillMissing": 2,
+      "zeroAmountsReconfirmed": 74,
+      "zeroAmountRowsChangedOrMissing": 0,
+      "productsWithHistoricalPriceReferences": 0,
+      "priceReferenceRows": 0,
+      "productsWithCurrentPriceClues": 2,
+      "currentPriceUnitMismatches": 0,
+      "zeroMovementUnitPrices": 74,
+      "movementUnitPriceMissing": 0,
+      "movementUnitPriceChanged": 0,
+      "freshStockOrders": 336,
+      "sourceBusinessMutations": 0
+    },
+    "source_fields_fabricated": false,
+    "freefield_known_project_code_matches": 0,
+    "historical_costs_backfilled": false
+  },
+  "api": {
+    "success": true,
+    "records": 1879,
+    "api_authorized": true,
+    "unauthenticated_denied": true,
+    "cross_factory_denied": true,
+    "viewer_cost_denied": true,
+    "mutation_method_denied": true,
+    "database_unscoped_and_foreign_rows": 0,
+    "reader_write_privileges": false,
+    "findings": [
+      "可见工单109张，已完工91张；数量比较保留产品与单位。",
+      "生产领退料已关联143行，未关联2行；金额有值143行，其中源端零值74行。",
+      "人工累计工资有值301/301个任务；不叠加报工预计工资。",
+      "可展示单位可识别直接成本16/109张工单；其余逐单显示阻断原因。"
+    ],
+    "unit_cost_available": 16,
+    "smartbi_candidates": 8,
+    "comparable_products": 3,
+    "verified_material_query_rows": 225,
+    "source_zero_rows_reconfirmed": 74,
+    "cost_bridge_reconciliation_passed": true,
+    "future_issued_and_expired_tokens_denied": true,
+    "exit_code": 0,
+    "status_matrix": {
+      "authorized": 200,
+      "unauthenticated": 401,
+      "foreign_factory": 403,
+      "viewer": 403,
+      "mutation_method": 405,
+      "future_iat": 401,
+      "expired": 401
+    },
+    "rls_rows": {
+      "unscoped": 0,
+      "foreign_tenant": 0,
+      "foreign_source_factory": 0
+    }
+  },
+  "frontend": {
+    "typecheck": {
+      "command": "node --max-old-space-size=8192 node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.app.json",
+      "exit_code": 0
+    },
+    "build": {
+      "command": "node --max-old-space-size=8192 node_modules/vite/bin/vite.js build --mode blacklake",
+      "exit_code": 0,
+      "entry_sha256": "aab040783d3a0e0cc22c868f85b9a03a662edf66f67b090e2fec9611d97c98d2"
+    },
+    "ui": {
+      "success": true,
+      "pageErrors": [],
+      "httpFailures": [],
+      "blockedMutationAttempts": [],
+      "actualBusinessWrites": 0,
+      "documentOverflow": false,
+      "command": "node scripts/blacklake-acceptance.mjs",
+      "exit_code": 0
+    },
+    "historical_failures_retained": [
+      "hidden canvas locator tool failure",
+      "fresh token iat ahead of local clock",
+      "old regular application shell permissions/current 404"
+    ],
+    "server_jwt_checks_relaxed": false,
+    "test_client_max_wait_ms": 5000
+  },
+  "source_sha256": {
+    "backend/python/blacklake/gap_evidence.py": "b122961f85ecc7c62eab1461057b5ca40f8c9813777c444345a47c54f22e4e43",
+    "backend/python/blacklake/gap_inspect.py": "3ad4c50d3180a079cc2d6071b6ab8cb5b15d386ddc499733585aa3ab2e9c3037",
+    "backend/python/blacklake/gap_probe.py": "6ebb157fce726342d38eee06807ad83ad974b56d96869001108dbec3e50755cc",
+    "backend/python/blacklake/intelligence.py": "d1e5e290da66f2d85cd57950369d4d80b728bf7c78d8238d85c13ade5513e89c",
+    "backend/python/blacklake/smartbi_acceptance.py": "dea994b81ee4e261f4dae33220101607ffefeedb2ef49c0cd1f87ce8fb70828c",
+    "backend/python/blacklake/smartbi_store.py": "fa98348dd70398e3a5b332ba268ed6f48978716866e3cbc180c82daea8ba6512",
+    "backend/python/blacklake/test_local.py": "c8a937a284bd1a4ce81fef6012a9d3dc5fe2392ed370b0f1e276092229f0fd1e",
+    "backend/python/tests/test_blacklake_intelligence.py": "e02a9dca92190a985d35baa8484d1f1c12a392de1cd34648ffeed03e2096774c",
+    "backend/python/tests/test_blacklake_storage.py": "7f5016561292488a3373418f3af72e374529c0d573779ea26423c1dfffad72ec",
+    "web-admin/scripts/blacklake-acceptance.mjs": "bbcf64502c2215dfaa979dc10c5c4a7eb6682e140c0d66a174db443057b3e1fd",
+    "web-admin/scripts/blacklake-doc-check.mjs": "f4460288ab8eaa9255d518d931f3a52072241a269811e3fea508a9623bd30620",
+    "web-admin/src/api/smartbi/blacklake.ts": "60ad3c070d1af4c8cd31023cb8036882cc45858e87111739aabb27cb6020d60f",
+    "web-admin/src/views/smart-bi/BlacklakeAnalysis.vue": "abc681c94deba2d8eac58f58171cc6582e3ccd01aa55fa73f462a869fd17547d",
+    "web-admin/src/views/smart-bi/BlacklakeCostIntelligence.vue": "fcda0674d86b2854960240f0e89c32963bbaf16ff90cdc36a9e49a1f859d697b",
+    "web-admin/src/views/smart-bi/BlacklakeTestEntry.vue": "a7f199d711ae60d0c7a7f405f24c6c344d3be44f29ac8e324cb1c100f27ea7ae",
+    "web-admin/src/views/smart-bi/__tests__/blacklakeSession.spec.ts": "e6615191fa2d9e9033fcda776d70fc182228902a712551125010466ed0dd2ec9",
+    "web-admin/src/views/smart-bi/blacklakeSession.ts": "02ba01a3bdc25058e54a987e382eb2c6d2978d5a8925dcbc5c915cf9ba039089"
+  },
+  "reused_module_sha256": {
+    "backend/python/smartbi/services/factory_charts/metrics.py": "334ea3b989765fcab84ddc037276c77f4564cc294bfebd02d2b393d8bc991030",
+    "backend/python/smartbi/services/factory_charts/engine.py": "4b04405960c84c92f9e72dd29397a5e8434de0071aaec0761b85d8377a9cfe4d",
+    "backend/python/smartbi/services/factory_charts/conversation.py": "bf1ef431db8b85bead9e1607f37c2e07adb2cfd9efc99099c5b86083ea05694e"
+  },
+  "actual_credential_scan_hits": 0,
+  "limitations": [
+    "Historical source snapshot retained; new4orders are gap evidence only",
+    "No complete manufacturing cost or margin",
+    "No standard BOM consumption variance without verified unit/loss basis",
+    "Current moving average price is not historical movement cost",
+    "Regular shared shell still not accepted; independent local test entry passed",
+    "Algebraic variance decomposition does not prove operational causes"
+  ]
+}

@@ -1,4 +1,17 @@
 import { pythonFetch } from './common';
+import type { FactoryRecommendation } from './factory-charts';
+
+export interface CostBridgeMaterial { material: string; materialCode: string; unit: string; baselineUsage: number | null; comparisonUsage: number | null; baselineContribution: number; comparisonContribution: number; delta: number; usageEffect: number | null; priceEffect: number | null; basis: string; }
+export interface CostComparison { productCode: string; product: string; unit: string; eligibleProjects: number; visibleProjects: number; weightedUnitCost: number; minimum: number; maximum: number; candidateId: string;
+  bridge: { baselineProject: string; comparisonProject: string; unit: string; delta: number; materialDelta: number; laborDelta: number; reconciliationDifference: number; materials: CostBridgeMaterial[]; selection: string; limitations: string[] } | null; }
+export interface BlacklakeCostIntelligence {
+  engine: string; recommendations: FactoryRecommendation[]; comparisons: CostComparison[]; answer: string; limitations: string[];
+  worklist: { issue: string; projects: number }[];
+  verifiedMaterialReferences: Record<string, { materialCode: string; sourceUnitQty: number | string | null; feedProcessCode: string; basis: string }[]>;
+  gapEvidence: { status?: string; checkedAt?: string; negativeControlVerified?: boolean; summary?: Record<string, number>;
+    unresolvedLinks?: { orderCode: string; material: string; materialCode: string; status: string; action: string }[];
+    currentPriceClues?: { materialCode: string; material: string; unit: string; price: number; date: string; usage: string }[]; };
+}
 
 export interface MaterialLine { material: string; materialCode: string; unit: string; netConsumption: number | null; recognizedCost: number | null; unitPrice: number | null; orderCode: string; date: string; bizType: string; }
 export interface ProcessLine { process: string; status: string; good: number | null; hours: number | null; laborCost: number | null; }
@@ -10,6 +23,7 @@ export interface CostProject {
   materialLinesDetail: MaterialLine[]; processes: ProcessLine[]; issues: string[]; unitCostAvailable: boolean;
 }
 export interface BlacklakeAnalysis {
+  costIntelligence: BlacklakeCostIntelligence;
   factoryName: string; snapshotAt: string; runId: string; coverageComplete: boolean;
   catalog: { resource: string; count: number }[]; findings: string[]; limitations: string[];
   production: { projectCount: number; taskCount: number; outputCount: number; completionRate: number | null; statuses: Record<string, number>;

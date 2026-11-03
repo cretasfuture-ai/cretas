@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import BlacklakeAnalysis from './BlacklakeAnalysis.vue';
+import { tokenActivationDelayMs } from './blacklakeSession';
 
 const signedIn = ref(!!localStorage.getItem('blacklake_test_signed_in'));
 const username = ref('');
@@ -18,6 +19,8 @@ async function login() {
     }
     const token = result.data.accessToken || result.data.token;
     if (!token) throw new Error('登录未返回有效会话');
+    const activationDelay = tokenActivationDelayMs(token);
+    if (activationDelay) await new Promise(resolve => setTimeout(resolve, activationDelay));
     localStorage.setItem('cretas_access_token', token);
     localStorage.setItem('blacklake_test_signed_in', 'true');
     password.value = ''; signedIn.value = true;

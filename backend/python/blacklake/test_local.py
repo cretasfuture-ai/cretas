@@ -32,7 +32,7 @@ def main():
     log_path = evidence / "pytest-final.log"
     with log_path.open("w", encoding="utf-8") as log:
         completed = subprocess.run([
-            sys.executable, "-m", "pytest", "tests/test_blacklake_connector.py", "tests/test_blacklake_storage.py", "tests/test_blacklake_analytics.py",
+            sys.executable, "-m", "pytest", "tests/test_blacklake_connector.py", "tests/test_blacklake_storage.py", "tests/test_blacklake_analytics.py", "tests/test_blacklake_intelligence.py",
             "-q", "-o", "addopts=", "--junitxml=" + str(evidence / "pytest-final.xml")],
             cwd=root, env=environment, stdout=log, stderr=subprocess.STDOUT)
     print(json.dumps({"exit_code": completed.returncode, "database_auth": "SCRAM",

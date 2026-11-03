@@ -26,3 +26,11 @@
 - 最终102测试0skip（SCRAM PG/受保护Redis）、vue-tsc和测试构建exit0、API鉴权/RLS/最小权限、真实UI各页/链路/窄屏通过，业务写入0。独立风险终审无阻断；27源码哈希见SMARTBI-VALIDATION.json，说明见SMARTBI-REPORT.md。
 - 旧Java常规外壳权限端点404原始FAIL保留；独立测试入口通过不代表该外壳通过。非完整制造成本/毛利、币种待核、源遗漏仍未解决。持续同步、生产部署与业务签收未执行。
 - 配置读取敏感输出事件已披露；本批Git文件实际凭据扫描0，未擅自轮换共享密钥。原始敏感数据与审阅浏览器资料仅在本机仓库外。
+
+## SmartBI 成本差异与来源补查切片
+
+- 切片Base56a39807；复用真实Series/series_candidate/facts_for/render_answer，8SKU候选、3同产品同单位成本桥，材料/人工/价量项代数对账残差约1e-26；不能据此证明业务原因。
+- 正式只读补查109工单ID/编号双查询核实225材料引用，与原归档一致；负控1014与scope/run/整快照/请求摘要/时间绑定。2行缺关联源指针/备注/自定义字段仍无工单证据，74源金额/单价仍0；2物料当前均价仅线索，不改实际成本；新4单不混原1879快照。
+- 最终142分析/集成、72现有SmartBI、8客户端测试及typecheck/build/API/UI均通过。API未来iat与过期token仍401；只在测试客户端最多等待5秒生效。真实PG evidence跨tenant/source/run/指纹/不完整/schema负测覆盖；独立风险复核无剩余阻断。
+- 17切片源码及3复用模块hash、命令退出码、动态结果见COST-TRACE-VALIDATION.json；报告COST-TRACE-REPORT.md。原隐藏canvas定位与clock skew失败保留，修复后UI0error/HTTP/mutation。
+- 仍16/109单位可识别直接成本、币种未知、非完整制造成本/毛利/标准BOM差异。常规外壳旧404仍未验收；仅本机独立测试入口，无生产写入/部署/迁移/连续同步。PR#1390保持草稿review，scope未释放。
