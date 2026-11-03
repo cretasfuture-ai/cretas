@@ -7,8 +7,9 @@
 名单里有三类:
 
 - 工艺保密产品的「保密词」: 只认全名 / 编码 / 产品 ID / 登记过的专属别名 (``secret_terms``)。
-  纯数字的名字 (F006 有个产品叫 ``398``, 批次号里到处是 398) 与品类词 (牛肉、酱卤 …,
-  以及这些保密产品自己的品类字段值) 不收;
+  纯数字的名字 (F006 有个产品叫 ``398``, 批次号里到处是 398) 与品类词 (牛肉、酱卤 …, 只认
+  ``common/training_rule_words.json`` 里那一份词表 —— 复审第二轮: 不再把保密产品自己的品类字段值
+  算进来, 否则一个产品的名字收不收取决于数据) 不收;
 - 本厂人员姓名 (``users.full_name``);
 - 本厂客户名称 (``customers.name``)。
 
@@ -32,10 +33,12 @@ MIN_TERM_LENGTH = 2
 
 # 品类词: 产品 / 别名叫这个名字时不收 (它说的是一类东西, 不是这家工厂的那一个产品)。含单一部位与菜名
 # (牛腱、鸭脖、米饭 …, Steve 2026-11-03 Q4 选 A)。词表只有一份: common/training_rule_words.json,
-# Java 构建时把同一个文件打进 jar 读。另外每家工厂保密产品自己的 category / product_category 值也算品类词。
+# Java 构建时把同一个文件打进 jar 读。只认这份词表 (复审第二轮: 不从产品的品类字段派生)。
 from common.training_values import WORDS as _RULE_WORDS  # noqa: E402
 
 CATEGORY_WORDS = tuple(_RULE_WORDS["category_words"])
+# 保密产品的「全名」本身就是品类词 (产品就叫「牛腱」) 时还收不收: Steve 2026-11-03 选 B = 不收 (只靠编码 / ID / 工艺数值规则), 词表文件里一行改
+FULL_NAME_CATEGORY_WORD_MATCHES: bool = bool(_RULE_WORDS["full_name_category_word_matches"])
 
 # 纯数字 (允许中间夹空格 / 点 / 横线 / 下划线 / 斜杠): 398、2024-01、１２３
 _PURE_NUMERIC = re.compile(r"[0-9０-９ \t.\-_/　]+")
@@ -63,14 +66,12 @@ def usable_term(raw: Optional[str], generic: FrozenSet[str] = frozenset()) -> Op
     return term
 
 
-def _generic_words(products: Iterable[Mapping[str, Any]]) -> FrozenSet[str]:
-    words = {fold(w) for w in CATEGORY_WORDS}
-    for p in products:
-        for key in ("category", "product_category"):
-            value = p.get(key)
-            if value:
-                words.add(fold(java_strip(str(value))))
-    return frozenset(w for w in words if w)
+GENERIC_WORDS: FrozenSet[str] = frozenset(w for w in (fold(c) for c in CATEGORY_WORDS) if w)
+
+
+def is_category_word(raw: Optional[str]) -> bool:
+    """``raw`` (stripped, ASCII-folded) is one of the curated category words."""
+    return raw is not None and fold(java_strip(str(raw))) in GENERIC_WORDS
 
 
 def secret_terms(products: Iterable[Mapping[str, Any]],
@@ -78,17 +79,16 @@ def secret_terms(products: Iterable[Mapping[str, Any]],
     """一家工厂的保密词: 每个保密产品的全名 / 编码 / ID, 加上登记过的专属别名。
 
     ``products`` 每项带 ``id`` / ``code`` / ``name`` / ``category`` / ``product_category``
-    (缺的键当没有)。别名目前没有登记载体, 生产上恒为空 (见 PR 待决问题)。"""
-    products = list(products)
-    generic = _generic_words(products)
+    (缺的键当没有; 品类字段不再参与判断)。别名来自 ``process_secret_policies.aliases``。"""
     out = set()
     for p in products:
         for key in ("name", "code", "id"):
-            term = usable_term(p.get(key), generic)
+            exempt = key == "name" and FULL_NAME_CATEGORY_WORD_MATCHES
+            term = usable_term(p.get(key), frozenset() if exempt else GENERIC_WORDS)
             if term:
                 out.add(term)
     for alias in aliases:
-        term = usable_term(alias, generic)
+        term = usable_term(alias, GENERIC_WORDS)
         if term:
             out.add(term)
     return frozenset(out)

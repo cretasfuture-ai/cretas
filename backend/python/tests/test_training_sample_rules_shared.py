@@ -111,9 +111,11 @@ def test_java_value_rule_patterns_match_python():
 
     src = _JAVA_VALUES.read_text(encoding="utf-8")
     pairs = {"DIGIT_NUM": tv.DIGIT_NUM_RE, "LINE_ORDINAL": tv.LINE_ORDINAL_RE, "SENTENCE_SPLIT": tv.SENTENCE_SPLIT_RE,
-             "LIST_LINE": tv._LIST_LINE_RE, "SEPARATOR_CELL": tv._SEPARATOR_CELL_RE, "NUMBER": tv._NUMBER_RE}
+             "LIST_LINE": tv._LIST_LINE_RE, "SEPARATOR_CELL": tv._SEPARATOR_CELL_RE, "NUMBER": tv._NUMBER_RE,
+             "EMPHASIS": tv._EMPHASIS_RE}
     for name, py in pairs.items():
         java = _java_pattern_text(src, name)
         assert same_regex_text(java) == same_regex_text(py.pattern), (name, java, py.pattern)
     assert 'static final String CN = "' + tv._CN + '";' in src
     assert f"static final int WINDOW = {tv.WINDOW};" in src
+    assert 'Pattern.compile(CN_NUM + "分之" + CN_NUM)' in src and "分之" in tv.CN_FRACTION_RE.pattern

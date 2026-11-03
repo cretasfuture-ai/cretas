@@ -31,6 +31,9 @@ class _RecordingConn:
         return self._consent.get(args[0])
 
     async def execute(self, sql, *args):
+        if sql.lstrip().startswith("DELETE FROM smart_bi_distillation_samples"):
+            EXPIRY_CALLS.append((sql, args))       # held-row expiry sweep (its own tests below)
+            return "DELETE 0"
         self._sink.append((sql, args))
         return "INSERT 0 1"
 
@@ -39,6 +42,9 @@ class _RecordingConn:
 
     async def __aexit__(self, *a):
         return False
+
+
+EXPIRY_CALLS: list = []
 
 
 class _RecordingPool:
@@ -429,6 +435,10 @@ async def test_last_good_lists_fallback_stores_the_row_held(monkeypatch):
     assert _meta(sink[0][1]).get(RECHECK_KEY) == {
         "raw_input": "普通牛肉干本月销量多少", "raw_output": "本月营收 128 万元，环比增长 8%"}
     assert "128" not in sink[0][1][8]
+    # second review, item 1: a row still carrying raw text is not stamped desensitized (factory
+    # erasure keeps desensitized rows); the release adds the stamp once the raw copy is gone
+    from smartbi.services.training_consent import DESENSITIZED_KEY
+    assert DESENSITIZED_KEY not in _meta(sink[0][1])
 
 
 async def test_fresh_lists_do_not_hold_the_row(monkeypatch):
@@ -625,6 +635,106 @@ async def test_upsert_conflict_on_real_postgres_keeps_the_first_factorys_row():
         # control: the same factory still refreshes its own row
         assert await conn.execute(dc._INSERT_SQL, *(args[:8] + ("A 的新答案",) + args[9:])) == "INSERT 0 1"
         assert await conn.fetchval("SELECT teacher_output FROM smart_bi_distillation_samples") == "A 的新答案"
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        await conn.close()
+
+
+# ---- second review, item 1: held rows expire, and no raw text survives a judgement ----
+
+async def test_capture_runs_the_held_row_expiry_at_most_once_per_interval(monkeypatch):
+    """The re-judge only runs from corpus_judge; the capture path (which always runs) sweeps
+    held rows past the retention, at most once per interval, and a failing sweep never blocks."""
+    from smartbi.services import distillation_capture as dc
+
+    _patch_lists(monkeypatch, {"F006": _lists()})
+    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
+    EXPIRY_CALLS.clear()
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天产量多少")
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天销量多少")
+    assert len(sink) == 2
+    assert len(EXPIRY_CALLS) == 1                                    # throttled
+    sql, args = EXPIRY_CALLS[0]
+    assert "metadata ? 'secrecy_recheck'" in sql and args == (7,)
+    monkeypatch.setitem(dc._LAST_EXPIRY, "at", dc._LAST_EXPIRY["at"] - dc.EXPIRY_INTERVAL_S - 1)
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天入库多少")
+    assert len(EXPIRY_CALLS) == 2
+
+
+def test_python_hold_retention_equals_the_java_default():
+    from pathlib import Path
+
+    from smartbi.services.process_secret_names import HOLD_MAX_AGE_DAYS
+
+    java = (Path(__file__).resolve().parents[2] / "java" / "cretas-api" / "src" / "main" / "java" / "com" / "cretas"
+            / "aims" / "service" / "consent" / "TrainingSampleHoldRejudger.java").read_text(encoding="utf-8")
+    assert f"cretas.training.secrecy-hold.max-age:P{HOLD_MAX_AGE_DAYS}D" in java
+
+
+class _OneConnPool:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        conn = self._conn
+
+        class _Ctx:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *a):
+                return False
+        return _Ctx()
+
+
+async def test_held_rows_on_real_postgres_leave_no_raw_text_behind():
+    """Capture -> re-judge -> expiry on a real PostgreSQL: the rejected row keeps reason / list
+    version / time only, the released row loses the raw copy and gains the desensitized stamp,
+    the expired row is gone. Nowhere does the raw text survive."""
+    import os
+    import uuid
+
+    import pytest
+
+    dsn = os.getenv("SMARTBI_PG_DSN")
+    if not dsn:
+        if os.getenv("CI"):
+            pytest.fail("SMARTBI_PG_DSN is required on CI")
+        pytest.skip("no local PostgreSQL")
+    asyncpg = pytest.importorskip("asyncpg")
+    from smartbi.services.process_secret_names import rejudge_held_rows
+
+    conn = await asyncpg.connect(dsn)
+    schema = "hold_" + uuid.uuid4().hex[:10]
+    try:
+        await conn.execute(f"CREATE SCHEMA {schema}")
+        await conn.execute(f"SET search_path TO {schema}")
+        await conn.execute("""CREATE TABLE smart_bi_distillation_samples (
+            id BIGSERIAL PRIMARY KEY, factory_id VARCHAR(64), input_text TEXT NOT NULL,
+            teacher_output TEXT NOT NULL, metadata JSONB, created_at TIMESTAMP DEFAULT now())""")
+
+        def held(raw_in):
+            return _json.dumps({"training_rule": "2026-11-03",
+                                "secrecy_recheck": {"raw_input": raw_in, "raw_output": "RAW-OUT"}}, ensure_ascii=False)
+        await conn.execute(
+            "INSERT INTO smart_bi_distillation_samples (id, factory_id, input_text, teacher_output, metadata, created_at)"
+            " VALUES (1, 'F_A', '产品A销量', 'x', $1::jsonb, now()),"
+            "        (2, 'F_A', '普通牛肉干销量', 'x', $2::jsonb, now()),"
+            "        (3, 'F_A', '旧的', 'x', $3::jsonb, now() - interval '8 days')",
+            held("秘制牛肉干销量"), held("RAW-CLEAN 普通牛肉干销量"), held("RAW-OLD 秘制牛肉干"))
+        out = await rejudge_held_rows(_OneConnPool(conn), {"F_A": _lists(products=["秘制牛肉干"])})
+        assert out == {"released": 1, "rejected": 1, "expired": 1}
+        rows = {r["id"]: _json.loads(r["metadata"]) for r in
+                await conn.fetch("SELECT id, metadata FROM smart_bi_distillation_samples ORDER BY id")}
+        assert sorted(rows) == [1, 2]                                    # 3 expired with its raw copy
+        assert set(rows[1]["secrecy_rejected"]) == {"reason", "lists", "at"}
+        assert "secrecy_recheck" not in rows[1] and "desensitized" not in rows[1]
+        assert rows[2] == {"training_rule": "2026-11-03", "desensitized": True}
+        dump = await conn.fetchval("SELECT string_agg(metadata::text || input_text || teacher_output, '|')"
+                                   " FROM smart_bi_distillation_samples")
+        for raw in ("秘制牛肉干", "RAW-CLEAN", "RAW-OLD", "RAW-OUT"):
+            assert raw not in dump, raw
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await conn.close()

@@ -9,6 +9,8 @@
     "羊排", "羊腿", "鸡腿", "鸡翅", "鸡爪", "鸭脖", "鸭翅", "鸭掌", "鸭舌", "鸭架", "鸭头",
     "米饭", "面条", "馒头", "饺子", "包子", "面团", "鲈鱼", "罗氏虾", "娃娃菜", "酸梅汤"
   ],
+  "_full_name_category_word_matches_doc": "Steve 2026-11-03 chose B: a protected product whose FULL NAME is itself a category word (a product literally named 牛腱) is NOT matched by that name; only its code, its ID and the process-word + value rule protect it. The owner is warned when saving the policy (ProcessSecretPolicyService). One-line change; both languages read it.",
+  "full_name_category_word_matches": false,
   "conditional_markers": ["温度", "时间", "压力", "转速", "浓度"],
   "value_units": [
     "℃", "°C", "°", "%", "％", "‰", "min", "rpm", "MPa", "kPa", "Pa", "bar", "g/L", "mg/L", "g/kg", "mg/kg",

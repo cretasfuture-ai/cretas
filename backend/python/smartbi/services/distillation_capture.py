@@ -68,10 +68,11 @@ import hashlib
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from smartbi.services.corpus_anonymize import desensitize_for_training
-from smartbi.services.process_secret_names import factory_lists_or_last_good
+from smartbi.services.process_secret_names import expire_held_rows, factory_lists_or_last_good
 from smartbi.services.training_consent import (
     DESENSITIZED_KEY,
     RECHECK_KEY,
@@ -90,6 +91,27 @@ logger = logging.getLogger(__name__)
 # Same env kill-switch the materializer used — set to "0" to disable all
 # distillation capture without a redeploy.
 _CAPTURE_ENV = "SMARTBI_DISTILL_CAPTURE"
+
+# Held rows past the retention are swept from the capture path (second review: the
+# re-judge only runs from corpus_judge, so without this a held row and its raw copy
+# could stay forever). At most once per EXPIRY_INTERVAL_S per process.
+EXPIRY_INTERVAL_S = 3600.0
+_LAST_EXPIRY = {"at": None}
+
+
+async def _maybe_expire_held_rows(conn) -> None:
+    now = time.monotonic()
+    last = _LAST_EXPIRY["at"]
+    if last is not None and now - last < EXPIRY_INTERVAL_S:
+        return
+    _LAST_EXPIRY["at"] = now
+    try:
+        n = await expire_held_rows(conn)
+        if n:
+            logger.info("[distill] deleted %d held rows past the retention", n)
+    except Exception as e:  # noqa: BLE001 - housekeeping never blocks a capture
+        logger.warning("[distill] held-row expiry failed (retried next interval): %s", e)
+
 
 # (reason, factory) pairs already logged — "log once" per process so a busy
 # un-consented tenant does not flood the log.
@@ -287,17 +309,23 @@ async def persist_distillation_sample(
                 return
             if not synthetic:
                 tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}
+                carries_raw = held and not keeps_raw(scope)
                 if held:
                     # re-judged later on the RAW text (review N3): a desensitized text
                     # hides names behind 产品A / <数值>. The raw copy lives only in the
-                    # hold marker and is dropped on release.
+                    # hold marker; release drops it, rejection never copies it, the
+                    # expiry sweep deletes the row (second review, item 1).
                     tags[RECHECK_KEY] = (True if keeps_raw(scope)
                                          else {"raw_input": input_text, "raw_output": teacher_output})
                 if not keeps_raw(scope):
                     input_text, teacher_output = desensitize_for_training(
                         input_text, teacher_output)
                     metadata = _desensitize_metadata(metadata)
-                    tags[DESENSITIZED_KEY] = True
+                    # a row still carrying raw text is NOT "desensitized": factory erasure
+                    # keeps desensitized rows, so the stamp waits for the release
+                    # (process_secret_names._RELEASE_SQL adds it when the raw copy goes)
+                    if not carries_raw:
+                        tags[DESENSITIZED_KEY] = True
                 metadata = {**(metadata or {}), **tags}
             input_hash = compute_input_hash(input_text)
             codes_str = ",".join(template_codes) if template_codes else None
@@ -326,6 +354,7 @@ async def persist_distillation_sample(
                     "(factory=%s, cross-factory conflicts so far=%d)",
                     factory_id, CROSS_FACTORY_CONFLICTS["count"])
                 return
+            await _maybe_expire_held_rows(conn)
         logger.debug(
             "[distill] captured sample (source=%s, task_type=%s, "
             "business_type=%s, factory=%s)",

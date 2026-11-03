@@ -191,18 +191,43 @@ _HELD_ROWS_SQL = """
     ORDER BY id
     LIMIT $1
 """
-# released: the hold marker (and the raw text it carried) is dropped
+# released: the hold marker (and the raw text it carried) is dropped. A marker that
+# carried raw text means the stored text was desensitized at capture: only now, with the
+# raw copy gone, is the row stamped desensitized (factory erasure keeps such rows).
 _RELEASE_SQL = """
-    UPDATE smart_bi_distillation_samples SET metadata = metadata - '{key}'
+    UPDATE smart_bi_distillation_samples
+    SET metadata = (metadata - '{key}')
+        || CASE WHEN jsonb_typeof(metadata -> '{key}') = 'object'
+                THEN jsonb_build_object('{desensitized}', true) ELSE '{{}}'::jsonb END
     WHERE id = ANY($1::bigint[])
 """
 # rejected (Steve 2026-11-03 Q5, A): flagged and KEPT for manual review, never deleted;
-# usable_rows_sql / passes_training_rule exclude it
+# usable_rows_sql / passes_training_rule exclude it. Only the reason, the list version and
+# the time are kept — never the raw text of the hold marker (second review, item 1).
 _REJECT_SQL = """
     UPDATE smart_bi_distillation_samples
     SET metadata = (metadata - '{key}') || jsonb_build_object('{rejected}', $2::jsonb)
     WHERE id = $1
 """
+# Held rows that could not be judged within the retention are deleted, raw copy and all
+# (second review: the Python hold had no expiry). Same retention as the Java hold table
+# (cretas.training.secrecy-hold.max-age, P7D); test_process_secret_corpus_scripts pins both.
+HOLD_MAX_AGE_DAYS = 7
+_EXPIRE_SQL = """
+    DELETE FROM smart_bi_distillation_samples
+    WHERE metadata ? '{key}' AND created_at < NOW() - make_interval(days => $1)
+"""
+
+
+async def expire_held_rows(conn, max_age_days: int = HOLD_MAX_AGE_DAYS) -> int:
+    """Delete held rows older than the retention; returns how many."""
+    from smartbi.services.training_consent import RECHECK_KEY
+
+    status = await conn.execute(_EXPIRE_SQL.format(key=RECHECK_KEY), max_age_days)
+    try:
+        return int(str(status).split()[-1])
+    except (ValueError, IndexError):
+        return 0
 
 
 def held_raw_texts(row: Mapping[str, Any]) -> Tuple[Optional[str], Optional[str]]:
@@ -224,30 +249,36 @@ async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists]
     the caller first), on the raw capture text. Clean rows are released (marker and
     raw text removed, usable again). Rows that now name a secret term, person or
     customer are flagged ``REJECTED_KEY`` and kept for manual review — never
-    deleted (Q5); they stay out of every export / training read.
-    Returns ``{"released": n, "rejected": n}``."""
-    from smartbi.services.training_consent import RECHECK_KEY, REJECTED_KEY
+    deleted (Q5); they stay out of every export / training read, and keep only
+    the reason, the list version and the time (no raw text). Held rows past the
+    retention are deleted first.
+    Returns ``{"released": n, "rejected": n, "expired": n}``."""
+    from datetime import datetime, timezone
+
+    from smartbi.services.training_consent import DESENSITIZED_KEY, RECHECK_KEY, REJECTED_KEY
 
     async with smartbi_pool.acquire() as conn:
+        expired = await expire_held_rows(conn)
         rows = await conn.fetch(_HELD_ROWS_SQL.format(key=RECHECK_KEY), limit)
     release, reject = [], []
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for r in rows:
         lists = lists_for_row(r["factory_id"], by_factory)
         raw_in, raw_out = held_raw_texts(r)
-        marker = metadata_dict(r["metadata"]).get(RECHECK_KEY)
+        version = terms_fingerprint({r["factory_id"] or "": lists})
         if not r["factory_id"]:
-            reject.append((r["id"], {"reason": "no_factory", "hold": marker}))
+            reject.append((r["id"], {"reason": "no_factory", "lists": version, "at": now}))
         elif lists.names_any(raw_in, raw_out):
-            reject.append((r["id"], {"reason": "names_factory_list", "hold": marker}))
+            reject.append((r["id"], {"reason": "names_factory_list", "lists": version, "at": now}))
         else:
             release.append(r["id"])
     async with smartbi_pool.acquire() as conn:
         if release:
-            await conn.execute(_RELEASE_SQL.format(key=RECHECK_KEY), release)
+            await conn.execute(_RELEASE_SQL.format(key=RECHECK_KEY, desensitized=DESENSITIZED_KEY), release)
         for row_id, detail in reject:
             await conn.execute(_REJECT_SQL.format(key=RECHECK_KEY, rejected=REJECTED_KEY), row_id,
                                json.dumps(detail, ensure_ascii=False))
-    return {"released": len(release), "rejected": len(reject)}
+    return {"released": len(release), "rejected": len(reject), "expired": expired}
 
 
 def metadata_dict(raw: Any) -> Dict[str, Any]:

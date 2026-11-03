@@ -25,8 +25,9 @@ Customer wording: docs sent to the website session the same day.
         number (``process_word_with_value``). The word alone ("杀菌温度一般设多少",
         "建议优化卤制工序") no longer blocks: the secret is the value / the
         factory's own step order ("腌制 24 小时再滚揉", "滚揉 … 良品率 92.86%");
-      - per-person pay / attendance in Q&A (``PERSONNEL_MARKERS``; still the
-        word alone — not covered by option A);
+      - per-person pay / attendance in Q&A (``PERSONNEL_MARKERS``) WITH a
+        concrete value, same rule as the process words (Steve 2026-11-03 Q2, A:
+        "本月工资总额" alone passes, "本月工资总额 35 万" is blocked);
       - a person or customer of THAT factory, matched exactly against its own
         ``users.full_name`` / ``customers.name`` (``directory``, loaded by
         ``smartbi.services.process_secret_names``). The old regex guess

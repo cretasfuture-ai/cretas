@@ -168,13 +168,24 @@ async def test_judge_rejudges_rows_held_at_capture_first(monkeypatch):
     pool = _judge_pool(held=held)
     await judge.fetch_unjudged_rows(pool, 50)
     assert pool.fetched[0].count("secrecy_recheck") >= 1          # re-judged before the judge fetch
-    assert not [s for s, _a in pool.executed if s.lstrip().startswith("DELETE")]   # never deleted
+    deletes = [(s, a) for s, a in pool.executed if s.lstrip().startswith("DELETE")]
+    # the only DELETE is the retention sweep (by age, not these rows): a judged row is never deleted
+    assert all("created_at < NOW() - make_interval(days => $1)" in s and a == (7,) for s, a in deletes), deletes
     released = [a for s, a in pool.executed if s.strip().startswith("UPDATE") and "jsonb_build_object('secrecy_rejected'" not in s
                 and "metadata - 'secrecy_recheck'" in s]
     rejected = [a for s, a in pool.executed if "jsonb_build_object('secrecy_rejected'" in s]
     assert released == [([12],)]
     assert [a[0] for a in rejected] == [11]                        # the desensitized text alone would have passed
-    assert json.loads(rejected[0][1])["reason"] == "names_factory_list"
+    detail = json.loads(rejected[0][1])
+    assert detail["reason"] == "names_factory_list"
+    # second review, item 1: the rejection keeps the reason, the list version and the time — never
+    # the raw text of the hold marker
+    assert set(detail) == {"reason", "lists", "at"}
+    assert "秘制牛肉干" not in rejected[0][1]
+    # the release adds the desensitized stamp only now that the raw copy is gone
+    release_sql = [s for s, a in pool.executed if a == ([12],)][0]
+    assert "jsonb_typeof(metadata -> 'secrecy_recheck') = 'object'" in release_sql
+    assert "jsonb_build_object('desensitized', true)" in release_sql
 
 
 async def _empty():

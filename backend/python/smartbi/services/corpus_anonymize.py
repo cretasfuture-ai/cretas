@@ -121,10 +121,16 @@ def _bucket_amounts_in_text(text: str) -> str:
 # 识别"〈名字〉+类别词"或"类别词:〈名字〉"等中文实体命名习惯。
 # 我们捕获实体**修饰名**部分, 用占位符替换该名, 保留类别词让句子仍通顺。
 _ENTITY_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
+    # 公司 (2026-11-03 复审第二轮 N5): "XX有限公司" / "XX股份有限公司" / "XX集团" —— 只认这些后缀,
+    # 光一个「公司」太常见 (「我们公司」「公司客户」), 不认。放最前: 先整段换掉, 后面的供应商 / 客户规则不再拆它。
+    ("公司", re.compile(r"(?P<name>[一-龥A-Za-z0-9]{1,12}?)(?P<kind>股份有限公司|有限责任公司|有限公司|集团)")),
+    # 供应商 / 供货方 (N5): "供应商：XX" / "供货方：XX" / "供应商「XX」" (只认显式分隔)
+    ("供应商", re.compile(r"(?P<kind>供应商|供货商|供货方)(?:名称|名)?\s*[:：]\s*(?P<name>[一-龥A-Za-z0-9]{2,12})")),
+    ("供应商", re.compile(r"(?P<kind>供应商|供货商|供货方)\s*[「“\"『](?P<name>[^」”\"』]{1,12})[」”\"』]")),
     # 门店 / 店: "XX店" / "XX门店" / "XX分店"
     ("门店", re.compile(r"(?P<name>[一-龥A-Za-z0-9]{1,12}?)(?P<kind>门店|分店|店)")),
-    # 供应商: "XX供应商" / "供应商XX"
-    ("供应商", re.compile(r"(?P<name>[一-龥A-Za-z0-9]{1,12}?)(?P<kind>供应商)")),
+    # 供应商: "XX供应商" / "XX供货商"
+    ("供应商", re.compile(r"(?P<name>[一-龥A-Za-z0-9]{1,12}?)(?P<kind>供应商|供货商)")),
     # 菜品 / 产品: "XX菜品" / "XX产品" (放在门店之后, 避免吞并)
     ("菜品", re.compile(r"(?P<name>[一-龥A-Za-z0-9]{1,12}?)(?P<kind>菜品|产品)")),
     # 工厂: "XX工厂"
@@ -157,6 +163,17 @@ _LEADING_FUNCTION_WORDS = (
     "哪个", "哪些", "哪", "从", "在", "把", "给", "向", "为", "是",
 )
 _NAME_SEPARATORS = ("的", "和", "与", "及", "或", "、")
+# 「和」常常就是名字的一部分 (和盛、大东和盛达): 切在「和」上时把它前面最多这么多个字也算进名字
+# (N5: 「大东和盛达工厂」不能变成「大东和工厂A」)。代价: 「上个月和盛牛业工厂」会多换掉「个月」两个字。
+_HE_LOOKBACK = 3
+# 名字连着的汉字 / 字母数字超过正则的 12 个字时, 往外延伸到整串 (N5: 长名字不能把开头留在原文里),
+# 最多延伸到这么长 —— 再长就是一整句话了。
+_MAX_NAME_RUN = 30
+_NAME_CHAR_RE = re.compile(r"[一-龥A-Za-z0-9]")
+# 已经换好的占位符 (公司A / 供应商B / 门店12): 后面的规则不再把它当名字换一遍
+# 数量说法不是名字: 「两个门店」「三家工厂」「几个产品」「12 个客户」
+_QUANTITY_RE = re.compile(r"[0-9一二三四五六七八九十百千两几多每某]+[个家间座所位名条种类批款]?")
+_PLACEHOLDER_RE = re.compile(r"(公司|供应商|门店|产品|菜品|工厂|客户)([A-Z]|[0-9]+)")
 # 剥完之后整个剩下的就是泛称时也不是名字 (「其他产品」「同类工厂」)。
 _GENERIC_NAME_WORDS = ("产品", "菜品", "工厂", "门店", "客户", "供应商", "单品", "品类", "类别")
 
@@ -175,7 +192,12 @@ def _strip_leading_function_words(name: str) -> tuple:
     if cut >= 0:
         if cut < 2:
             ambiguous = True
-        prefix, name = name[:cut + 1], name[cut + 1:]
+        head, tail = name[:cut + 1], name[cut + 1:]
+        if name[cut] == "和" and not ambiguous and _names_something(tail):
+            # 「和」可能是名字里的字: 把它前面最多 _HE_LOOKBACK 个字一起算进名字 (N5)
+            keep = max(0, cut - _HE_LOOKBACK)
+            head, tail = name[:keep], name[keep:]
+        prefix, name = head, tail
     changed = True
     while changed and name:
         changed = False
@@ -188,6 +210,42 @@ def _strip_leading_function_words(name: str) -> tuple:
                 changed = True
                 break
     return prefix, name, ambiguous
+
+
+def _names_something(tail: str) -> bool:
+    """``tail`` with its leading function words stripped is a possible name (not empty, not generic)."""
+    changed = True
+    while changed and tail:
+        changed = False
+        for w in _LEADING_FUNCTION_WORDS:
+            if tail.startswith(w):
+                tail = tail[len(w):]
+                changed = True
+                break
+    return bool(tail) and tail not in _GENERIC_NAME_WORDS and not _QUANTITY_RE.fullmatch(tail)
+
+
+def _sub_whole_names(pat: "re.Pattern[str]", repl, text: str) -> str:
+    """``pat.sub`` that hands ``repl`` the WHOLE name: when the regex's name group (at most 12
+    characters) starts or ends in the middle of a run of name characters, the run is taken in up
+    to ``_MAX_NAME_RUN`` characters (N5: 「华东区冷链物流配送中心第三分拣加工工厂」 must not keep
+    「华东区冷链」). ``repl(match, lead, trail)`` returns the text for ``lead + match + trail``."""
+    out: List[str] = []
+    last = 0
+    for m in pat.finditer(text):
+        start, end = m.start(), m.end()
+        if m.start("name") == start:          # name before the kind word: extend leftwards
+            while (start > last and m.end("name") - start < _MAX_NAME_RUN
+                   and _NAME_CHAR_RE.match(text[start - 1])):
+                start -= 1
+        elif m.end("name") == end:            # kind word before the name: extend rightwards
+            while end < len(text) and end - m.start("name") < _MAX_NAME_RUN and _NAME_CHAR_RE.match(text[end]):
+                end += 1
+        out.append(text[last:start])
+        out.append(repl(m, text[start:m.start()], text[m.end():end]))
+        last = end
+    out.append(text[last:])
+    return "".join(out)
 
 
 def _pseudonymize_entities(text: str, mapping: Dict[str, str]) -> str:
@@ -209,27 +267,28 @@ def _pseudonymize_entities(text: str, mapping: Dict[str, str]) -> str:
 
     result = text
     for kind, pat in _ENTITY_PATTERNS:
-        def _repl(m: "re.Match[str]") -> str:
-            raw_name = m.group("name")
-            if not raw_name:
-                return m.group(0)
+        def _repl(m: "re.Match[str]", lead: str, trail: str) -> str:
+            original = lead + m.group(0) + trail
+            raw_name = lead + (m.group("name") or "") + trail
+            if not raw_name or _PLACEHOLDER_RE.fullmatch(raw_name):
+                return original
             prefix, name, ambiguous = _strip_leading_function_words(raw_name)
             # 剥完不剩东西 (「按产品」「分析以下工厂」「本工厂」「其他产品」) → 全是虚词, 不是名字
-            if not name or name in _GENERIC_NAME_WORDS:
-                return m.group(0)
+            if not name or name in _GENERIC_NAME_WORDS or _QUANTITY_RE.fullmatch(name):
+                return original
             # 剥掉的可能是名字的一部分, 或剩下不到两个字 → 整段当名字换掉, 不留半个名字 (N5)
             if ambiguous or len(name) < 2:
                 prefix, name = "", raw_name
             # "大客户 / 新客户 / 前十大客户" 是泛称不是名字 → 不动。
             if kind == "客户" and name.endswith(_GENERIC_CUSTOMER_WORDS):
-                return m.group(0)
+                return original
             # 占位符的类别词跟原文走: 产品就是产品, 菜品才是菜品
             label = m.group("kind") if m.group("kind") in ("产品", "菜品") else kind
             key = f"{label}:{name}"
             if key not in mapping:
                 mapping[key] = _next_placeholder(label)
             return prefix + mapping[key]
-        result = pat.sub(_repl, result)
+        result = _sub_whole_names(pat, _repl, result)
     return result
 
 

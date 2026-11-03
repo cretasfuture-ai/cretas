@@ -7,12 +7,15 @@
 一个词 (工艺 / 配方 / 人员薪酬词) 只有和**具体数值**一起出现才拦:
 
 * 数值: 阿拉伯 / 全角数字 (贴着字母的也算: pH4、4.2pH、30min), 中文数字 (一百二十一、三十、
-  一点五、三比一 / 一比二十; 两个字以上, 或后面跟单位 —— 「一下」「一起」「半成品」这类常用词不算);
+  一点五、三比一 / 一比二十、万分之五, 含大写 壹贰叁; 两个字以上, 或后面跟单位 —— 「一下」「一起」
+  「半成品」这类常用词不算, 但常用词其实是数值的一部分时照算: 「十分钟」「万分之五」);
 * 距离: 数值与词在同一条记录里, 且相距不超过 12 个字 (``WINDOW``); 窗口里什么都不剥
   (编号、日期、时刻都算数值: 「配比 1:20」「转速 1500.5」不会被当成时刻 / 日期放过), 只有每行
   开头的列表序号 (「6. 」「一、」) 不算;
 * 记录: 一句话; 一个列表项连同缩进的续行; 表格整张 (表头某列是工艺词, 数据行同一列有数值就拦);
-  以工艺词开头、冒号结尾的标题行连同它下面的列表 (标题下列表里有数值就拦, 不受 12 字限制);
+  含工艺词的标题 (冒号结尾, 或 Markdown ``#`` 标题) 连同它下面的内容: 紧跟的第一行、之后的列表 /
+  缩进行 / 冒号小标题, 可隔空行, 到下一个 ``#`` 标题或下一段正文为止 (里面有数值就拦, 不受 12 字限制);
+  判断前统一换行 (\r\n) 并去掉 Markdown 加粗 (``**`` / ``__``);
 * 条件词: 温度 / 时间 / 压力 / 转速 / 浓度 后面 12 个字内出现「数值 + 单位」(121℃、30 分钟、0.2MPa) 才算。
 
 位置一律按 Unicode 码点计 (Java 侧同样换算), 两边才一致。纯函数, 只依赖标准库。
@@ -36,9 +39,12 @@ CN_UNITS: Tuple[str, ...] = tuple(sorted(WORDS["cn_units"], key=len, reverse=Tru
 CN_STOP_PHRASES: Tuple[str, ...] = tuple(sorted(WORDS["cn_stop_phrases"], key=len, reverse=True))
 GLUED_UNIT_PREFIXES: Tuple[str, ...] = tuple(sorted(WORDS["glued_unit_prefixes"], key=len, reverse=True))
 
-_CN = "零〇一二三四五六七八九十百千万两半"
+# 中文数字含大写 (财务写法 壹贰叁 …, 复审第二轮 B1)
+_CN = "零〇一二三四五六七八九十百千万两半壹贰叁肆伍陆柒捌玖拾佰仟萬貳參陸"
 _CN_NUM = f"[{_CN}]+(?:点[{_CN}]+)?"
 CN_RATIO_RE = re.compile(f"{_CN_NUM}比{_CN_NUM}")
+# 分数: 万分之五、百分之三、千分之二 (自带单位: 条件词后面不必再跟单位)
+CN_FRACTION_RE = re.compile(f"{_CN_NUM}分之{_CN_NUM}")
 CN_NUM_RE = re.compile(_CN_NUM)
 DIGIT_NUM_RE = re.compile(r"[0-9０-９]+(?:[.．][0-9０-９]+)?")
 # 每行开头的列表序号 (不算数值): 「6. 」「### 3、」「- 2) 」「一、」
@@ -55,14 +61,33 @@ def _blank(s: str, start: int, end: int) -> str:
     return s[:start] + " " * (end - start) + s[end:]
 
 
+def _leading_cn(phrase: str) -> int:
+    k = 0
+    while k < len(phrase) and phrase[k] in _CN:
+        k += 1
+    return k
+
+
+def _keeps_stop_phrase(s: str, i: int, phrase: str, fractions: Sequence[Tuple[int, int]]) -> bool:
+    """A stop phrase that is really part of a value is not blanked (复审第二轮 B1): preceded by a
+    Chinese numeral (「三十分钟」里的「十分」、「三万一」里的「万一」), its numeral head followed by a
+    unit (「十分钟」= 十 + 分钟), or inside a fraction (「万分之五」)."""
+    if i > 0 and s[i - 1] in _CN:
+        return True
+    k = _leading_cn(phrase)
+    if k and _starts_with_any(s, i + k, VALUE_UNITS):
+        return True
+    return any(a <= i < b for a, b in fractions)
+
+
 def _prepared(text: str) -> str:
     """Stop phrases and line-leading ordinals blanked out (same length, positions kept)."""
     s = text
+    fractions = [(m.start(), m.end()) for m in CN_FRACTION_RE.finditer(text)]
     for phrase in CN_STOP_PHRASES:
         i = s.find(phrase)
         while i >= 0:
-            # 前面紧挨着中文数字时不是那个常用词 (「三十分钟」里的「十分」、「三万一」里的「万一」)
-            if i == 0 or s[i - 1] not in _CN:
+            if not _keeps_stop_phrase(s, i, phrase, fractions):
                 s = _blank(s, i, i + len(phrase))
             i = s.find(phrase, i + len(phrase))
     for m in list(LINE_ORDINAL_RE.finditer(s)):
@@ -84,6 +109,7 @@ def value_spans(text: str, *, cn_only: bool = False) -> List[Tuple[int, int]]:
     if not cn_only:
         spans += [(m.start(), m.end()) for m in DIGIT_NUM_RE.finditer(s)]
     ratio = [(m.start(), m.end()) for m in CN_RATIO_RE.finditer(s)]
+    ratio += [(m.start(), m.end()) for m in CN_FRACTION_RE.finditer(s)]
     spans += ratio
     for m in CN_NUM_RE.finditer(s):
         if any(a <= m.start() < b for a, b in ratio):
@@ -114,7 +140,8 @@ def window_hit(s: str, markers: Sequence[str], conditional: Sequence[str] = ()) 
     for c in conditional:
         for _i, j in _occurrences(s, c):
             spans = value_spans(s) if spans is None else spans
-            if any(j <= a < j + WINDOW and _starts_with_any(s, b, VALUE_UNITS) for a, b in spans):
+            if any(j <= a < j + WINDOW and (_starts_with_any(s, b, VALUE_UNITS) or "分之" in s[a:b])
+                   for a, b in spans):
                 return True
     return False
 
@@ -129,9 +156,50 @@ def _is_list_or_indented(line: str) -> bool:
     return line[0] in _SPACE or bool(_LIST_LINE_RE.match(line.strip(_SPACE)))
 
 
-def _is_heading(line: str, words: Sequence[str]) -> bool:
+_EMPHASIS_RE = re.compile(r"\*\*|__")
+
+
+def _normalize(text: str) -> str:
+    """CRLF / CR -> LF; Markdown emphasis markers (``**`` / ``__``) dropped (复审第二轮 N1)."""
+    return _EMPHASIS_RE.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
+
+
+def _heading_core(line: str) -> Tuple[str, bool]:
     t = line.strip(_SPACE)
-    return bool(t) and t[-1] in "：:" and any(w in t for w in words)
+    if t.startswith("#"):
+        return t.lstrip("#").strip(_SPACE), True
+    return t, False
+
+
+def _is_heading(line: str, words: Sequence[str]) -> bool:
+    """A process-word heading: a Markdown heading (``### 配方``) or a line ending in a colon."""
+    t, markdown = _heading_core(line)
+    return bool(t) and (markdown or t[-1] in "：:") and any(w in t for w in words)
+
+
+def _heading_end(lines: List[str], i: int) -> int:
+    """End (exclusive) of the block under the heading at ``i`` (复审第二轮 N1): the first non-blank
+    line after it always belongs to it; after that list / indented lines and colon-ended
+    sub-headings, across blank lines. It stops at the next Markdown heading or at a further
+    plain paragraph."""
+    j = i + 1
+    end = j
+    first = True
+    while j < len(lines):
+        line = lines[j]
+        t, markdown = _heading_core(line)
+        if not t:
+            j += 1
+            continue
+        if markdown:
+            break
+        if first or _is_list_or_indented(line) or t[-1] in "：:":
+            j += 1
+            end = j
+            first = False
+            continue
+        break
+    return end
 
 
 def _cells(line: str) -> List[str]:
@@ -160,7 +228,7 @@ def has_word_with_value(text: Optional[str], markers: Sequence[str], conditional
     """The rule: see the module docstring."""
     if not text:
         return False
-    lines = text.split("\n")
+    lines = _normalize(text).split("\n")
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -174,8 +242,7 @@ def has_word_with_value(text: Optional[str], markers: Sequence[str], conditional
             continue
         j = i + 1
         if _is_heading(line, tuple(markers) + tuple(conditional)):
-            while j < len(lines) and _is_list_or_indented(lines[j]):
-                j += 1
+            j = _heading_end(lines, i)
             body = "\n".join(lines[i + 1:j])
             if body and value_spans(body):
                 return True
@@ -191,7 +258,8 @@ def has_word_with_value(text: Optional[str], markers: Sequence[str], conditional
 
 
 _GLUED_RE = re.compile("(?<![A-Za-z])(" + "|".join(re.escape(p) for p in GLUED_UNIT_PREFIXES) + r")([0-9]+(?:\.[0-9]+)?)")
-_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.<])\d+(?:\.\d+)?", re.ASCII)
+# 全角数字也遮, 「<5」里的 5 也遮 (复审第二轮 B1); 编号 (F006 / Ｆ００６ / V2) 照旧保留
+_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9Ａ-Ｚａ-ｚ０-９_.．])[0-9０-９]+(?:[.．][0-9０-９]+)?")
 
 
 def mask_values(text: str) -> str:

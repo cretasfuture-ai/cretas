@@ -62,9 +62,9 @@
       "stored": "打款到 <卡号>"
     },
     {
-      "text": "全角数字１２３保持不变",
+      "text": "全角数字１２３也遮 (second review B1: full-width digits are values)",
       "authorized": false,
-      "stored": "全角数字１２３保持不变"
+      "stored": "全角数字<数值>也遮 (second review B1: full-width digits are values)"
     },
     {
       "text": "身份证 110101199003071234 手机 13812345678 登记一下",
