@@ -567,9 +567,10 @@ public class ConversionServiceImpl implements ConversionService {
         SuggestedConversion result = new SuggestedConversion();
 
         // 1. 查询该工厂所有已完成的生产批次（指定产品类型）
-        List<ProductionBatch> completedBatches = productionBatchRepository.findByFactoryId(factoryId).stream()
-                .filter(batch -> batch.getStatus() == ProductionBatchStatus.COMPLETED)
-                .filter(batch -> productTypeId.equals(batch.getProductTypeId()))
+        // 只取本产品: 取全厂再筛会把别的保密产品的批次记进工艺保密读数, 出口把整份建议按受限处理
+        List<ProductionBatch> completedBatches = productionBatchRepository
+                .findByFactoryIdAndProductTypeIdAndStatus(factoryId, productTypeId, ProductionBatchStatus.COMPLETED)
+                .stream()
                 .filter(batch -> batch.getActualQuantity() != null && batch.getActualQuantity().compareTo(BigDecimal.ZERO) > 0)
                 .collect(Collectors.toList());
 

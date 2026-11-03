@@ -168,6 +168,8 @@ export interface FactorySettings {
   enableAttendance?: boolean
   skipProcessReportingDefault?: boolean
   requireRequisitionBeforeReport?: boolean
+  /** S4-08 缺料时拦开工 (默认 false = 开工照旧) */
+  blockStartOnOpenShortage?: boolean
   allowSelfRegistration?: boolean
   requireAdminApproval?: boolean
   defaultUserRole?: string

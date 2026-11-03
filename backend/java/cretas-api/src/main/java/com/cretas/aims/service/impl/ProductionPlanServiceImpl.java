@@ -293,6 +293,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired(required = false)
     private ProductProcessWorkflowRepository productProcessWorkflowRepository;
 
+    /** S4-08 开工前的缺料闸 (工厂开关默认关). required=false 兼容单测. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+
     /** 以销定产批量建计划: 取产品工序名拼 processName (镜像前端 loadBomProcesses). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.ProductWorkProcessService productWorkProcessService;
@@ -3278,6 +3282,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public ProductionPlanDTO startProduction(String factoryId, String planId, Long operatorId) {
+        return startProduction(factoryId, planId, operatorId, null);
+    }
+
+    @Override
+    @Transactional
+    public ProductionPlanDTO startProduction(String factoryId, String planId, Long operatorId, String forceStartReason) {
         // R6 (2026-06-14): 悲观写锁取计划, 并发双击/重试串行化。第二个请求拿锁后看到已 IN_PROGRESS → 409。
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
@@ -3300,6 +3310,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //    把 SSOP 未完成变成硬拦与它直接相反, 是需要单独拍板的另一件事。
         //    这里补的只是台账: 让月报的「月内阻产事件」有真实数据(此前那张表有读无写)。
         recordSsopBlockingGateIfAny(factoryId, planId);
+
+        // S4-08: 工厂开了「缺料时拦开工」才生效 (默认关 = N1 开工无条件化, Owner 2026-11-03 按工厂开关);
+        //    开了且计划关联的缺料未解决 ⇒ 409, 带原因可强制开工 (原因记入缺料实例处理记录)。
+        if (shortageStartGate != null) {
+            shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
+        }
 
         // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
         // 注: 在事务内执行, 扣减失败直接抛出异常回滚整个 startProduction (fail-closed, 无 fail-soft)

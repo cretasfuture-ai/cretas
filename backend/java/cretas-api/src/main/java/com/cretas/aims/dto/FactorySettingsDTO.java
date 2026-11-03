@@ -134,6 +134,17 @@ public class FactorySettingsDTO {
         this.requireRequisitionBeforeReportSpecified = true;
     }
 
+    @Schema(description = "缺料时拦开工 (S4-08, opt-in, false=开工照旧/N1)", example = "false")
+    private Boolean blockStartOnOpenShortage;
+
+    @JsonIgnore
+    private boolean blockStartOnOpenShortageSpecified;
+
+    public void setBlockStartOnOpenShortage(Boolean blockStartOnOpenShortage) {
+        this.blockStartOnOpenShortage = blockStartOnOpenShortage;
+        this.blockStartOnOpenShortageSpecified = true;
+    }
+
     @Schema(description = "最后修改时间")
     private LocalDateTime lastModifiedAt;
 

@@ -298,6 +298,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'shortage-cases',
             name: 'ProductionShortageCases',
             component: () => import('@/views/production/shortage-cases/index.vue'),
+            // 采购 / 质量 / 销售各有自己的一条 (/procurement|quality|sales/shortage-cases), 面包屑跟着各自的组
             meta: { requiresAuth: true, title: '缺料异常', module: 'production' }
           },
           // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 生产看板 hub ——
@@ -762,6 +763,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             }
           },
           {
+            // S4 缺料异常: 与 /production/shortage-cases 同一页面; 各组各开一条, 面包屑就是「质量管理」(Owner 2026-11-03)
+            path: 'shortage-cases',
+            name: 'QualityShortageCases',
+            component: () => import('@/views/production/shortage-cases/index.vue'),
+            meta: { requiresAuth: true, title: '缺料异常', module: 'quality' }
+          },
+          {
             path: 'disposals',
             name: 'QualityDisposals',
             component: () => import('@/views/quality/disposals/list.vue'),
@@ -814,6 +822,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
         redirect: '/procurement/orders',
         meta: { requiresAuth: true, title: '采购管理', icon: 'ShoppingCart', module: 'procurement' },
         children: [
+          {
+            // S4 缺料异常: 与 /production/shortage-cases 同一页面; 各组各开一条, 面包屑就是「采购管理」(Owner 2026-11-03)
+            path: 'shortage-cases',
+            name: 'ProcurementShortageCases',
+            component: () => import('@/views/production/shortage-cases/index.vue'),
+            meta: { requiresAuth: true, title: '缺料异常', module: 'procurement' }
+          },
           {
             path: 'orders',
             name: 'ProcurementOrders',
@@ -961,6 +976,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
         redirect: '/sales/orders',
         meta: { requiresAuth: true, title: '销售管理', icon: 'Goods', module: 'sales' },
         children: [
+          {
+            // S4 缺料异常: 与 /production/shortage-cases 同一页面; 各组各开一条, 面包屑就是「销售管理」(Owner 2026-11-03)
+            path: 'shortage-cases',
+            name: 'SalesShortageCases',
+            component: () => import('@/views/production/shortage-cases/index.vue'),
+            meta: { requiresAuth: true, title: '缺料异常', module: 'sales' }
+          },
           {
             path: 'orders',
             name: 'SalesOrders',

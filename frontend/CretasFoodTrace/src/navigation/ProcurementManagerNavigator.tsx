@@ -24,6 +24,7 @@ import ProcurementDeliveryConfirmScreen from "../screens/restaurant/procurement/
 import SupplierDeliveryDetailScreen from "../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
 import SupplierDeliveryListScreen from "../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
 import PurchaseExceptionListScreen from "../screens/factory-admin/inventory/PurchaseExceptionListScreen";
+import ShortageCasesScreen from "../screens/shared/ShortageCasesScreen";
 
 // 供应商管理
 import SupplierManagementScreen from "../screens/management/SupplierManagementScreen";
@@ -55,6 +56,7 @@ function PurchaseStackNavigator() {
       <PurchaseStack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} />
       <PurchaseStack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} />
       <PurchaseStack.Screen name="PurchaseExceptionList" component={PurchaseExceptionListScreen} />
+      <PurchaseStack.Screen name="ShortageCases" component={ShortageCasesScreen} />
     </PurchaseStack.Navigator>
   );
 }

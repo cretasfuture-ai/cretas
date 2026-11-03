@@ -179,6 +179,10 @@
       "name": "采购异常",
       "description": "短交、质量、价格异常"
     },
+    "shortageCases": {
+      "name": "缺料异常",
+      "description": "订单缺什么料、还缺多少"
+    },
     "todoApprovals": {
       "name": "待办审批",
       "description": "大额单据审批"

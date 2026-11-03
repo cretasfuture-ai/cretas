@@ -203,6 +203,17 @@ export const SALES_HOME_MODULES: HomeModuleSpec[] = [
     route: 'SMSalesTab',
     nestedScreen: 'ReturnOrderList',
   },
+  {
+    // S4 缺料异常: 销售看订单缺什么料、到哪一步了 (只读)
+    id: 'shortageCases',
+    nameKey: 'modules.shortageCases.name',
+    descriptionKey: 'modules.shortageCases.description',
+    icon: 'alert-circle-outline',
+    color: '#E65100',
+    requiredPermissions: ['sales:read'],
+    route: 'SMSalesTab',
+    nestedScreen: 'ShortageCases',
+  },
 ];
 
 /** ProcurementManagerNavigator —— 路由取自 `ProcurementManagerNavigator.tsx`。 */
@@ -247,6 +258,17 @@ export const PROCUREMENT_HOME_MODULES: HomeModuleSpec[] = [
     requiredPermissions: ['procurement:read'],
     route: 'PMPurchaseTab',
     nestedScreen: 'PurchaseExceptionList',
+  },
+  {
+    // S4 缺料异常: 采购看缺口、按当前库存重新核对; 生成采购草稿在网页做
+    id: 'shortageCases',
+    nameKey: 'modules.shortageCases.name',
+    descriptionKey: 'modules.shortageCases.description',
+    icon: 'alert-circle-outline',
+    color: '#E65100',
+    requiredPermissions: ['procurement:read'],
+    route: 'PMPurchaseTab',
+    nestedScreen: 'ShortageCases',
   },
   {
     id: 'priceList',

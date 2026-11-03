@@ -574,6 +574,7 @@ public class CanvasFactoryConfigController {
                             "currency", "CNY",
                             "skipProcessReportingDefault", false,
                             "requireRequisitionBeforeReport", false,
+                            "blockStartOnOpenShortage", false,
                             "version", 0));
         }
         return ApiResponse.success("操作成功", serializeFactorySettings(opt.get()));
@@ -636,6 +637,10 @@ public class CanvasFactoryConfigController {
         if (body.containsKey("requireRequisitionBeforeReport")) {
             settings.setRequireRequisitionBeforeReport(
                     booleanField(body, "requireRequisitionBeforeReport", false));
+        }
+        // S4-08 缺料时拦开工 (默认关 = 六膳门 N1)
+        if (body.containsKey("blockStartOnOpenShortage")) {
+            settings.setBlockStartOnOpenShortage(booleanField(body, "blockStartOnOpenShortage", false));
         }
         if (body.containsKey("defaultUserRole")) {
             settings.setDefaultUserRole(stringField(body, "defaultUserRole"));
@@ -792,6 +797,7 @@ public class CanvasFactoryConfigController {
         m.put("requireAdminApproval", s.getRequireAdminApproval());
         m.put("skipProcessReportingDefault", s.getSkipProcessReportingDefault());
         m.put("requireRequisitionBeforeReport", s.getRequireRequisitionBeforeReport());
+        m.put("blockStartOnOpenShortage", s.getBlockStartOnOpenShortage());
         m.put("defaultUserRole", s.getDefaultUserRole());
         m.put("lastModifiedAt", s.getLastModifiedAt());
         m.put("version", s.getVersion());

@@ -405,6 +405,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/procurement/requisitions',
       '/procurement/orders',
       '/procurement/ai-purchase',
+      '/procurement/shortage-cases',
       '/procurement/suppliers',
       '/procurement/price-lists',
     ]);
@@ -422,6 +423,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(childPaths('/sales')).toEqual([
       '/sales/orders',
       '/sales/customers',
+      '/sales/shortage-cases',
       '/sales/shipments',
       '/sales/returns',
       '/sales/payment-requests',

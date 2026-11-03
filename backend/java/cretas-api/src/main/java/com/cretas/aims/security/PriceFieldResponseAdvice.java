@@ -290,6 +290,9 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
     private static final ThreadLocal<java.util.function.Predicate<String>> FIELD_VISIBILITY = new ThreadLocal<>();
 
     /** advice 自己会去问的口径: 默认名单口径 + 采购 + 采购或财务。 */
+    /** 遍历中当前所在的「按口径放行」结果子树的键 (见 walkMapForKeyPatternStripping)。 */
+    private static final ThreadLocal<java.util.Set<String>> APPROVED_SCOPE = new ThreadLocal<>();
+
     private static final List<String> KNOWN_SPECS = List.of(
             PRICE_VIEW_PERMISSION, PriceSensitive.PURCHASE, PriceSensitive.PURCHASE_OR_FINANCE);
 
@@ -676,6 +679,15 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         boolean inAIInsight = !canViewPrices && pathContainsAIInsight(pathStack);
         boolean inDynamicContainer = !canViewPrices && pathContainsDynamicPriceContainer(pathStack);
 
+        // 这一份 Map (按身份) 是对话直调工具按 @PriceSensitive 口径序列化出来的结果时, 其中「按口径判定可见」的
+        // 价格属性不再按键名剥 —— 与 REST 类型化响应同一个判定 (ERP-S6-PO-PRICE-OVERMASK-001)。只放行记下的那些键,
+        // 子树里其余键照常走下面的规则。
+        java.util.Set<String> ownApproved = PriceSensitiveContext.approvedKeys(rawMap);
+        java.util.Set<String> outerApproved = APPROVED_SCOPE.get();
+        if (ownApproved != null) {
+            APPROVED_SCOPE.set(ownApproved);
+        }
+        try {
         // Iterate via entrySet so we can mutate values in-place.
         for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
             String key = entry.getKey() == null ? "" : String.valueOf(entry.getKey());
@@ -683,6 +695,10 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
 
             pathStack.push(key);
             try {
+                java.util.Set<String> approved = APPROVED_SCOPE.get();
+                if (approved != null && approved.contains(key) && isLeafScalar(value)) {
+                    continue;
+                }
                 // Rule 1 — keys that are always price-data regardless of path
                 // (formattedValue is Cretas-specific naming, never non-monetary).
                 // Guarded by canViewPrices — procurement price holders see these.
@@ -731,6 +747,11 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
                 stripPriceFields(value, visited, pathStack, canViewPrices, canViewFinance);
             } finally {
                 pathStack.pop();
+            }
+        }
+        } finally {
+            if (ownApproved != null) {
+                if (outerApproved == null) APPROVED_SCOPE.remove(); else APPROVED_SCOPE.set(outerApproved);
             }
         }
     }

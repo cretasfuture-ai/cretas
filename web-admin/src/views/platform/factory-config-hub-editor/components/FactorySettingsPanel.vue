@@ -101,6 +101,14 @@
           </el-text>
         </div>
       </el-form-item>
+      <el-form-item label="缺料时拦开工">
+        <div class="reporting-mode-setting">
+          <el-switch v-model="form.blockStartOnOpenShortage" />
+          <el-text type="info" size="small">
+            开启=计划所属订单的缺料还没解决时不能开工；确需开工要填写原因，原因记入「缺料异常」的处理记录。关闭（默认）=开工照旧，缺料只提示不拦（六膳门现行做法）。
+          </el-text>
+        </div>
+      </el-form-item>
 
       <el-form-item>
         <el-button type="primary" :loading="saving" @click="onSave">保存设置</el-button>
@@ -140,6 +148,7 @@ const form = reactive<FactorySettings>({
   enableAttendance: true,
   skipProcessReportingDefault: false,
   requireRequisitionBeforeReport: false,
+  blockStartOnOpenShortage: false,
   allowSelfRegistration: false,
   requireAdminApproval: true,
   defaultUserRole: 'viewer',

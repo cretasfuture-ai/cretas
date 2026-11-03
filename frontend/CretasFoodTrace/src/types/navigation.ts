@@ -522,6 +522,8 @@ export type FAManagementStackParamList = {
   CashierPaymentList: undefined;
   /** SP6 Tier1 #36 — 采购异常决策列表 */
   PurchaseExceptionList: undefined;
+  /** S4 缺料异常 (只读 + 重新核对) */
+  ShortageCases: undefined;
   RdRequestCreate: undefined;
   ReturnOrderList: undefined;
   ReturnOrderDetail: { returnId: string };

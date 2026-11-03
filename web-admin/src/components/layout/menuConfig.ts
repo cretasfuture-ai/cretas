@@ -346,6 +346,8 @@ const rawMenuConfig: MenuItem[] = [
         roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin'],
       },
       { path: '/quality/disposals', title: '废弃处理', icon: '', module: 'quality' },
+      // S4 缺料异常: 质检放行会减少缺口, 质检也要能看; 与生产组同一页面, 本组自己的路由 (面包屑=质量管理)
+      { path: '/quality/shortage-cases', title: '缺料异常', icon: '', module: 'quality' },
       { path: '/quality/standards', title: '质检标准', icon: '', module: 'quality', groupLabel: '质量配置' }
     ]
   },
@@ -364,6 +366,8 @@ const rawMenuConfig: MenuItem[] = [
         roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'permission_admin'] },
       { path: '/procurement/orders', title: '采购订单', icon: '', module: 'procurement', groupLabel: '采购执行' },
       { path: '/procurement/ai-purchase', title: 'AI受控采购', icon: '', module: 'procurement' },
+      // S4 缺料异常: 采购交接 (采购草稿) 在这里做, 与生产组同一页面, 本组自己的路由 (面包屑=采购管理)
+      { path: '/procurement/shortage-cases', title: '缺料异常', icon: '', module: 'procurement' },
       { path: '/procurement/suppliers', title: '供应商管理', icon: '', module: 'procurement', groupLabel: '供应商与价格' },
       { path: '/procurement/price-lists', title: '价格表管理', icon: '', module: 'procurement' }
     ]
@@ -376,6 +380,8 @@ const rawMenuConfig: MenuItem[] = [
       // 成品/库存归仓储管理口径; 路由 /sales/finished-goods 保留 (深链可达), 仅撤销售侧入口。
       // Apr 24 UX: /sales/shipments 等 manufacturing-only 概念对餐饮隐藏 (无批次/发货)。
       { path: '/sales/customers', title: '客户管理', icon: '', module: 'sales' },
+      // S4 缺料异常: 销售看订单为什么还没排上 / 交期会不会延误, 与生产组同一页面, 本组自己的路由 (面包屑=销售管理)
+      { path: '/sales/shortage-cases', title: '缺料异常', icon: '', module: 'sales' },
       { path: '/sales/shipments', title: '出货记录', icon: '', module: 'sales',
         hideForFactoryTypes: ['RESTAURANT'] },
       // T-RTA fix (audit B2 BLOCKER 2026-05-13): /sales/returns route was added by

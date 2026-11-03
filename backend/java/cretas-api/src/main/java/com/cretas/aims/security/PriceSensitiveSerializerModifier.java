@@ -122,6 +122,7 @@ public class PriceSensitiveSerializerModifier extends BeanSerializerModifier {
                 return;
             }
             // Permission granted — fall through to default behavior (invoke getter).
+            PriceSensitiveContext.recordVisible(getName());
             super.serializeAsField(bean, gen, prov);
         }
 

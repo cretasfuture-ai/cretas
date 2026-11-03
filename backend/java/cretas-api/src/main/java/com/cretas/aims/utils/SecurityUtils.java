@@ -1,7 +1,5 @@
 package com.cretas.aims.utils;
 
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 /**
  * 安全工具类
  *
@@ -137,76 +135,24 @@ public class SecurityUtils {
     }
 
     /**
-     * 获取当前用户ID
-     *
-     * @return 用户ID
+     * 获取 token 里的角色码，来源同 {@link #currentUserId()}（request attribute {@code role}）。
      */
-    /** @deprecated 本项目从不填充 SecurityContextHolder，此方法恒返回 null。改用 {@link #currentUserId()}。 */
-    @Deprecated
-    public static Long getCurrentUserId() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated()) {
-            return null;
-        }
-        Object principal = authentication.getPrincipal();
-        if (principal instanceof Long) {
-            return (Long) principal;
-        }
-        if (principal instanceof Integer) {
-            return ((Integer) principal).longValue();
-        }
-        // 如果是字符串，尝试解析为长整数
-        if (principal instanceof String) {
-            try {
-                return Long.parseLong((String) principal);
-            } catch (NumberFormatException e) {
-                return null;
-            }
-        }
-        return null;
+    public static String currentRole() {
+        Object raw = currentRequestAttribute("role");
+        return raw instanceof String s && !s.isBlank() ? s : null;
     }
 
     /**
-     * 获取当前用户名
-     *
-     * @return 用户名
-     */
-    public static String getCurrentUsername() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated()) {
-            return null;
-        }
-        return authentication.getName();
-    }
-
-    /**
-     * 检查当前用户是否有指定角色
-     *
-     * @param role 角色名
-     * @return 是否有该角色
+     * 当前请求的角色是否为指定角色。身份来源是 JwtAuthInterceptor 写的 request attribute
+     * {@code role}（小写角色码，如 {@code factory_super_admin}），比较忽略大小写与 {@code ROLE_} 前缀。
+     * 无请求 / 无角色 / 入参为空一律 false。
      */
     public static boolean hasRole(String role) {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null) {
+        String current = currentRole();
+        if (current == null || role == null || role.isBlank()) {
             return false;
         }
-        return authentication.getAuthorities().stream()
-                .anyMatch(auth -> auth.getAuthority().equals("ROLE_" + role) ||
-                                auth.getAuthority().equals(role));
-    }
-
-    /**
-     * 检查当前用户是否有指定权限
-     *
-     * @param permission 权限名
-     * @return 是否有该权限
-     */
-    public static boolean hasPermission(String permission) {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null) {
-            return false;
-        }
-        return authentication.getAuthorities().stream()
-                .anyMatch(auth -> auth.getAuthority().equals(permission));
+        String wanted = role.startsWith("ROLE_") ? role.substring(5) : role;
+        return current.equalsIgnoreCase(wanted);
     }
 }

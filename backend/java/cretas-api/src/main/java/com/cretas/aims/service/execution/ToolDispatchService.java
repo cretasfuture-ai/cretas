@@ -525,6 +525,8 @@ public class ToolDispatchService {
             // 5. 执行 Tool（带自动重试）
             final int MAX_RETRIES = 3;
             String resultJson = null;
+            // 工具里按口径判定为可见、已写出的价格属性 (响应层对这一份结果不再按键名剥, 见 PriceSensitiveContext)
+            java.util.Set<String> visiblePriceKeys = java.util.Set.of();
             Exception lastException = null;
             int retryCount = 0;
             long totalExecutionTime = 0;
@@ -548,7 +550,12 @@ public class ToolDispatchService {
                     // (响应层的 Map 剥离只认价格容器路径, 不认 content 里的实体字段)。
                     try (com.cretas.aims.security.PriceSensitiveContext.Scope ignored =
                                  priceScopeFor(userId)) {
-                        resultJson = tool.execute(toolCall, context);
+                        com.cretas.aims.security.PriceSensitiveContext.startRecordingVisible();
+                        try {
+                            resultJson = tool.execute(toolCall, context);
+                        } finally {
+                            visiblePriceKeys = com.cretas.aims.security.PriceSensitiveContext.stopRecordingVisible();
+                        }
                     }
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
@@ -788,6 +795,7 @@ public class ToolDispatchService {
 
             // 6. 解析 Tool 结果
             IntentExecuteResponse response = parseToolResultToResponse(resultJson, intent);
+            com.cretas.aims.security.PriceSensitiveContext.approveKeys(response.getResultData(), visiblePriceKeys);
 
             // 统一填充 metadata.toolName (P5.6) - 下游 SmartBI chat 适配器读取此字段
             if (response != null) {

@@ -74,19 +74,24 @@ class SecurityUtilsCurrentUserIdTest {
     }
 
     @Test
-    @DisplayName("🔴 对照: 旧的 getCurrentUserId() 即使身份已就位也仍是 null —— 这就是那次 401")
-    void deprecatedVariantStaysNullEvenWhenIdentityIsPresent() {
-        bindRequest().setAttribute("userId", 42L);
+    @DisplayName("旧的 SecurityContextHolder 取法已删除: getCurrentUserId/getCurrentUsername/hasPermission 不再存在")
+    void securityContextBasedAccessorsAreGone() {
+        java.util.List<String> names = java.util.Arrays.stream(SecurityUtils.class.getDeclaredMethods())
+                .map(java.lang.reflect.Method::getName).toList();
+        org.assertj.core.api.Assertions.assertThat(names)
+                .doesNotContain("getCurrentUserId", "getCurrentUsername", "hasPermission");
+    }
 
-        // 身份确实在请求里
-        assertThat(SecurityUtils.currentUserId()).isEqualTo(42L);
-        // 而走 SecurityContextHolder 的那个取法看不见它
-        @SuppressWarnings("deprecation")
-        Long viaSecurityContext = SecurityUtils.getCurrentUserId();
-        assertThat(viaSecurityContext)
-                .as("本项目不填充 SecurityContextHolder; 若这一条变红, 说明取法变了, "
-                        + "请重新评估 46 个仍在用 getCurrentUserId() 的调用点")
-                .isNull();
+    @Test
+    @DisplayName("hasRole 读 request attribute role: 忽略大小写与 ROLE_ 前缀; 无请求/无角色 false")
+    void hasRoleReadsRequestAttribute() {
+        org.assertj.core.api.Assertions.assertThat(SecurityUtils.hasRole("factory_super_admin")).isFalse();
+        bindRequest().setAttribute("role", "factory_super_admin");
+        org.assertj.core.api.Assertions.assertThat(SecurityUtils.currentRole()).isEqualTo("factory_super_admin");
+        org.assertj.core.api.Assertions.assertThat(SecurityUtils.hasRole("FACTORY_SUPER_ADMIN")).isTrue();
+        org.assertj.core.api.Assertions.assertThat(SecurityUtils.hasRole("ROLE_factory_super_admin")).isTrue();
+        org.assertj.core.api.Assertions.assertThat(SecurityUtils.hasRole("operator")).isFalse();
+        org.assertj.core.api.Assertions.assertThat(SecurityUtils.hasRole(null)).isFalse();
     }
 
     @Test

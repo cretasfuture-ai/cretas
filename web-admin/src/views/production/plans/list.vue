@@ -1892,9 +1892,48 @@ async function handleStart(row: TableRow) {
       ElMessage.error(response.message || '操作失败');
     }
   } catch (error: any) {
+    // S4-08: 工厂开了「缺料时拦开工」, 后端以 SHORTAGE_CASE_OPEN 拦下 —— 拦截器已弹出缺什么、去哪处理;
+    // 这里再给一次「填写原因后强制开工」的机会, 原因记进缺料异常的处理记录。
+    if (error?.code === 'SHORTAGE_CASE_OPEN') {
+      await forceStart(row);
+      return;
+    }
     // Interceptor already shows specific sticky toast for ApiError (request.ts).
     // Retained catch to prevent uncaught; log for debug.
     if (error !== 'cancel') console.error('[提交失败]', error);
+  } finally {
+    actionLoading.value = false;
+  }
+}
+
+async function forceStart(row: TableRow) {
+  let reason: string;
+  try {
+    const r = await ElMessageBox.prompt(
+      '这个计划关联的缺料还没解决。确需先开工，请写明原因（会记入「缺料异常」的处理记录）。',
+      '缺料未解决，强制开工',
+      {
+        inputValidator: (v: string) => (v && v.trim().length > 0) || '原因不能为空',
+        confirmButtonText: '强制开工',
+        cancelButtonText: '先不开工',
+        type: 'warning',
+      },
+    );
+    reason = (r as { value: string }).value.trim();
+  } catch {
+    return; // 用户放弃
+  }
+  actionLoading.value = true;
+  try {
+    const response = await post(`/${factoryId.value}/production-plans/${row.id}/start`, { forceStartReason: reason });
+    if (response.success) {
+      ElMessage.success('已强制开始生产，原因已记入缺料异常');
+      loadData();
+    } else {
+      ElMessage.error(response.message || '操作失败');
+    }
+  } catch (error: any) {
+    if (error !== 'cancel') console.error('[强制开工失败]', error);
   } finally {
     actionLoading.value = false;
   }
