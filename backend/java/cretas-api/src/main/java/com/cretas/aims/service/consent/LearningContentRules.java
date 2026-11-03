@@ -26,7 +26,15 @@ public final class LearningContentRules {
         return factoryId == null || factoryId.isBlank() || "*".equals(factoryId.trim());
     }
 
-    /** 这段原话能不能学进本厂 (全局一律不行, 全局写入走人工预置 + 全厂保密名单检查)。 */
+    /**
+     * 这段原话能不能学进本厂 (全局一律不行, 全局写入走人工预置 + 全厂保密名单检查)。
+     *
+     * <p>本厂名单 (保密词 + 人员 + 客户) 走 {@link ProcessSecretSampleFilter#checkTrainingSample}: 它挂起调用方事务查库,
+     * 查库失败不会把调用方 (learnKeywords / learnExpression 等 {@code @Transactional} 方法) 的事务标成只能回滚
+     * (2026-10-29 待办第 8 条: 以前在事务里 catch 名单查询的异常, 提交时抛 {@code UnexpectedRollbackException})。
+     * 只有 {@link ProcessSecretSampleFilter.SampleVerdict#CLEAR} 才学 —— 学到的东西立即生效, 没有「挂起」可放,
+     * 所以按上次成功名单判过的 (HELD) 也不学。
+     */
     public static boolean factoryLearnable(TrainingConsentService consent, ProcessSecretSampleFilter filter,
                                            String factoryId, String text) {
         if (isGlobalFactory(factoryId) || text == null || text.isBlank()) {
@@ -36,19 +44,24 @@ public final class LearningContentRules {
             log.warn("训练授权 / 保密产品判断未注入, 不学: factory={}", factoryId);
             return false;
         }
-        try {
-            if (!consent.status(factoryId).storable()) {
-                return false;
-            }
-            if (filter.mentionsProtectedProduct(factoryId, text)) {
-                log.info("原话提到本厂工艺保密产品, 不学: factory={}", factoryId);
-                return false;
-            }
-            return !TrainingSampleRules.utteranceHasBlockedContent(text);
-        } catch (RuntimeException e) {
-            log.warn("学习前的保密 / 授权判断失败, 不学: factory={}, error={}", factoryId, e.getClass().getSimpleName());
+        if (TrainingSampleRules.utteranceHasBlockedContent(text)) {
             return false;
         }
+        try {
+            if (!consent.status(factoryId).storable()) {      // status() 自己吞掉查询错误, 判为不可存
+                return false;
+            }
+        } catch (RuntimeException e) {
+            log.warn("学习前的授权判断失败, 不学: factory={}, error={}", factoryId, e.getClass().getSimpleName());
+            return false;
+        }
+        ProcessSecretSampleFilter.SampleVerdict verdict = filter.checkTrainingSample("learning", factoryId, text);
+        if (verdict != ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
+            log.info("原话提到本厂保密词 / 人员 / 客户, 或本厂名单判断不了, 不学: factory={}, verdict={}",
+                    factoryId, verdict);
+            return false;
+        }
+        return true;
     }
 
     /** 系统学来的全局行 (全局且不是 MANUAL): 不给任何工厂用。 */

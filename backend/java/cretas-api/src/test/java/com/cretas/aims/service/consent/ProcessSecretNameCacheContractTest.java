@@ -40,7 +40,8 @@ class ProcessSecretNameCacheContractTest {
     void setUp() {
         access = mock(ProcessSecretAccessService.class);
         products = mock(ProductTypeRepository.class);
-        filter = new ProcessSecretSampleFilter(access, products);
+        filter = new ProcessSecretSampleFilter(access, products,
+                org.mockito.Mockito.mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class));
         when(access.protectedProductTypeIds("F006")).thenReturn(Set.of("p1"));
         when(products.findAllById(Set.of("p1"))).thenReturn(List.of(product("p1", "F006", "秘制酱牛肉")));
     }

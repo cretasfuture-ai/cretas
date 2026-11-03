@@ -86,7 +86,8 @@ class IntentPipelineSampleCaptureFailureContractTest {
     static final class Rig {
         final ProcessSecretAccessService access = mock(ProcessSecretAccessService.class);
         final ProductTypeRepository products = mock(ProductTypeRepository.class);
-        final ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products);
+        final ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products,
+                org.mockito.Mockito.mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class));
         final TrainingSampleRepository sampleRepository = mock(TrainingSampleRepository.class);
         final TrainingConsentService consent = mock(TrainingConsentService.class);
         final ExpressionLearningService els;

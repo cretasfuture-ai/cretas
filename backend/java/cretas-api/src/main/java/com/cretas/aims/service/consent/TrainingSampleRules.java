@@ -4,18 +4,23 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * 意图对应 (用户原话 → 意图) 进训练样本表之前的规则 —— Steve 2026-10-24 拍板。
+ * 意图对应 (用户原话 → 意图) 进训练样本表之前的内容规则 —— Steve 2026-10-24 拍板, 2026-10-29 选 A 改。
  *
  * <ul>
- *   <li>原话里有配方 / 工艺参数类内容 ({@link #PARAMETER_MARKERS}): 任何工厂都不存, 授权也不存;</li>
+ *   <li>配方 / 工艺参数类词 ({@link #PARAMETER_MARKERS}) <b>和具体数值在同一句 / 同一条记录里</b>:
+ *       任何工厂都不存, 授权也不存 ({@link #processWordWithValue})。词单独出现 (「杀菌温度一般设多少」)
+ *       不拦 —— 保密的是数值;</li>
  *   <li>其余原话默认存, 用来学「听懂」; 未授权工厂的原话把数字、手机号、身份证号、银行卡号换成占位符;
  *       已授权 (training_consent = private / shared_anon) 原样存。</li>
  * </ul>
- * 工序词 (腌制、滚揉 …) 在原话里允许 —— 意图模型学的是说法, 不生成建议。
+ * 工序词 (腌制、滚揉 …) 在原话里允许 —— 意图模型学的是说法, 不生成建议。人名 / 客户名不在这里猜:
+ * 按本厂人员表 / 客户表精确匹配, 由 {@link ProcessSecretSampleFilter#checkTrainingSample} 判
+ * (它手里有本厂名单)。
  *
  * <p>与 Python {@code backend/python/smartbi/services/training_consent.py} 的
- * {@code PARAMETER_MARKERS} / {@code mask_numbers} 必须一致: 两边都跑
- * {@code training_sample_rule_cases.json}, Python 测试还会比对本文件里的词表。
+ * {@code PARAMETER_MARKERS} / {@code process_word_with_value} / {@code mask_numbers} 必须一致: 两边都跑
+ * {@code training_sample_rule_cases.json} 和 {@code process_secret_filter_rule_cases.json},
+ * Python 测试还会比对本文件里的词表。
  */
 public final class TrainingSampleRules {
 
@@ -37,10 +42,6 @@ public final class TrainingSampleRules {
     static final String PERSON_ROLE = "(?:联系人|负责人|经办人|业务员|销售员|司机|操作员|质检员|审核人|审批人|签收人|"
             + "收货人|制单人|姓名|员工|工人|班长|组长|主管|仓管员?)";
     static final Pattern ORG_NAME = Pattern.compile("[" + HAN + "A-Za-z0-9]{2,12}" + ORG_SUFFIX);
-    static final Pattern CUSTOMER_NAMED = Pattern.compile(
-            "客户(?:名称|名)?\\s*[:：]\\s*[" + HAN + "A-Za-z0-9]{2,}"
-            + "|客户\\s*[「“\"『][^」”\"』]{2,}[」”\"』]"
-            + "|[「“\"『][^」”\"』]{2,}[」”\"』]\\s*客户");
     /** 空白: ASCII 空白再加全角空格 (中文输入里「联系人　王五」很常见, 只认 ASCII 会整段漏掉)。 */
     static final String GAP = "[\\s\\u3000]";
     static final Pattern PERSON = Pattern.compile(
@@ -59,30 +60,56 @@ public final class TrainingSampleRules {
     private TrainingSampleRules() {
     }
 
-    /** 原话含配方 / 工艺参数类内容、具体客户名或人名 → 任何工厂都不进训练样本。 */
-    public static boolean utteranceHasBlockedContent(String text) {
+    // ---- 「工艺词 + 具体数值」(与 Python training_consent 的同名正则逐字相同, 共用用例文件) ----
+    /** 一条记录 = 一句 / 一行表格 / 一个列表项: 在句末标点处切, 在「后面不是缩进」的换行处切。 */
+    static final Pattern RECORD_SPLIT = Pattern.compile("[。！？!?；;]|\\n(?![ \\t\\u3000])");
+    /** 不算数值: 开头的列表序号、字母开头的编号 (F006 / CLK-W-20260717-57628)、日期和时刻。 */
+    static final Pattern ORDINAL = Pattern.compile(
+            "^[ \\t\\r\\n\\u3000]*(?:#+[ \\t\\u3000]*)?(?:[-*•][ \\t\\u3000]*)?(?:\\*\\*)?[0-9]{1,3}[.、)）](?![0-9])");
+    static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*");
+    static final Pattern DATE_TIME = Pattern.compile(
+            "[0-9]{4}[-/.年][0-9]{1,2}(?:[-/.月][0-9]{1,2}日?)?"
+            + "|[0-9]{1,2}月[0-9]{1,2}日"
+            + "|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?");
+    static final Pattern DIGIT = Pattern.compile("[0-9０-９]");
+
+    /** 这条记录带数值吗 (去掉列表序号、编号、日期时刻之后还剩数字)。 */
+    static boolean hasConcreteNumber(String record) {
+        if (record == null || record.isEmpty()) {
+            return false;
+        }
+        String s = ORDINAL.matcher(record).replaceFirst(" ");
+        s = DATE_TIME.matcher(s).replaceAll(" ");
+        s = IDENTIFIER.matcher(s).replaceAll(" ");
+        return DIGIT.matcher(s).find();
+    }
+
+    /** 词表里的词和具体数值出现在同一条记录里。 */
+    static boolean processWordWithValue(String text, List<String> markers) {
         if (text == null || text.isEmpty()) {
             return false;
         }
-        for (String marker : PARAMETER_MARKERS) {
-            if (text.contains(marker)) {
+        for (String record : RECORD_SPLIT.split(text, -1)) {
+            boolean hasMarker = false;
+            for (String m : markers) {
+                if (record.contains(m)) {
+                    hasMarker = true;
+                    break;
+                }
+            }
+            if (hasMarker && hasConcreteNumber(record)) {
                 return true;
             }
         }
-        return mentionsSpecificCustomer(text) || mentionsPersonName(text);
+        return false;
     }
 
-    /** 「客户」加具体名称 (公司类名称、客户：XX、带引号的名字)。 */
-    static boolean mentionsSpecificCustomer(String text) {
-        if (text == null || !text.contains("客户")) {
-            return false;
-        }
-        return CUSTOMER_NAMED.matcher(text).find() || ORG_NAME.matcher(text).find();
-    }
-
-    /** 岗位 / 称谓 / 联系语境里的人名 (操作员：王五、李经理、联系张三)。 */
-    static boolean mentionsPersonName(String text) {
-        return text != null && PERSON.matcher(text).find();
+    /**
+     * 原话的内容规则: 配方 / 工艺参数词带具体数值 → 任何工厂都不进训练样本。
+     * (人名 / 客户名 / 保密产品名由 {@link ProcessSecretSampleFilter#checkTrainingSample} 按本厂名单判。)
+     */
+    public static boolean utteranceHasBlockedContent(String text) {
+        return processWordWithValue(text, PARAMETER_MARKERS);
     }
 
     /** 未授权工厂原话的脱敏: 证件号 / 卡号 / 手机号 → 占位符, 其余数字 → {@code <数值>}。 */

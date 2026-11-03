@@ -68,7 +68,8 @@ class ProcessSecretCrossFactoryRound5ContractTest {
         p.setName(SECRET);
         when(products.findAllById(Set.of("pA"))).thenReturn(List.of(p));
         intents = mock(AIIntentConfigRepository.class);
-        guard = new IntentConfigWriteGuard(intents, new ProcessSecretSampleFilter(access, products));
+        guard = new IntentConfigWriteGuard(intents, new ProcessSecretSampleFilter(access, products,
+                org.mockito.Mockito.mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class)));
     }
 
     @AfterEach

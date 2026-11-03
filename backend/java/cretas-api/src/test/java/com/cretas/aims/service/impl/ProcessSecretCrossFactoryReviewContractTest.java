@@ -83,7 +83,8 @@ class ProcessSecretCrossFactoryReviewContractTest {
         p.setFactoryId(FA);
         p.setName(SECRET);
         when(products.findAllById(Set.of("pA"))).thenReturn(List.of(p));
-        filter = new ProcessSecretSampleFilter(access, products);
+        filter = new ProcessSecretSampleFilter(access, products,
+                org.mockito.Mockito.mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class));
         consent = mock(TrainingConsentService.class);
         when(consent.status(anyString())).thenReturn(TrainingConsentService.Status.AUTHORIZED);
     }
