@@ -65,7 +65,7 @@ public class LineageEdgeOutboxEntry {
     @Column(name = "operator_id")
     private Long operatorId;
 
-    @Column(name = "ref_key", length = 255)
+    @Column(name = "ref_key", columnDefinition = "text")
     private String refKey;
 
     @Type(JsonBinaryType.class)

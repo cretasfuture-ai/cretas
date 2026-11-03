@@ -53,7 +53,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("LineageGraphAssembler — 完整性: 断链 / 截断 / 查不到")
-class LineageCompletenessTest {
+class LineageCompletenessContractTest {
 
     private static final String FACTORY = "F006";
 

@@ -47,17 +47,53 @@ public class LineageEdgeOutbox {
      * <p>⚠️ 这是一次普通 INSERT，与业务行同库同事务 —— 它要是写不进去，业务那几行也写不进去；
      * 「审计边写不进去不拖挂业务」的承诺由提交<b>之后</b>的写边兑现，不由这里。
      *
-     * @return 台账行 id，提交后用它结账
+     * <p>🔴 所以登记前先按列宽校验：台账行与边同列同宽，一条<b>永远写不进去</b>的边（例如 factoryId
+     * 超过 50 字符）登记进来，会在业务提交时撞列宽、把整单业务一起回滚 —— 那就把「审计旁路」变成了
+     * 业务的新故障点。这种边不登记（返回 null，留 warn），提交后的即时写入照样失败、照样留 warn。
+     * 剩下能让这里失败的只有库本身不可用，那时业务那几行也写不进去。
+     *
+     * @return 台账行 id，提交后用它结账；入参写不进台账时为 null
      */
     public String enqueue(BatchLineageEdge edge, String refKey) {
+        String misfit = misfit(edge);
+        if (misfit != null) {
+            log.warn("[lineage-outbox] 这条边按列宽永远写不进去, 不登记补写 (不拖垮业务): {} edge={} {}:{} → {}:{}",
+                    misfit, edge.getEdgeType(), edge.getSourceType(), edge.getSourceId(),
+                    edge.getTargetType(), edge.getTargetId());
+            return null;
+        }
         LineageEdgeOutboxEntry entry = fromEdge(edge, refKey);
         repository.save(entry);
         return entry.getId();
     }
 
+    /** 与 {@code lineage_edge_outbox} / {@code batch_lineage_edges} 的列宽同口径；都放得下返回 null。 */
+    static String misfit(BatchLineageEdge edge) {
+        if (tooLong(edge.getFactoryId(), 50)) {
+            return "factory_id>50";
+        }
+        if (tooLong(edge.getEdgeType(), 30) || tooLong(edge.getSourceType(), 30) || tooLong(edge.getTargetType(), 30)) {
+            return "type>30";
+        }
+        if (tooLong(edge.getSourceId(), 191) || tooLong(edge.getTargetId(), 191)) {
+            return "id>191";
+        }
+        if (tooLong(edge.getUnit(), 20)) {
+            return "unit>20";
+        }
+        return null;
+    }
+
+    private static boolean tooLong(String s, int max) {
+        return s != null && s.length() > max;
+    }
+
     /** 无事务直调写失败时补登一行（独立事务）。登记本身失败只能留日志 —— 那是库整体不可用。 */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void enqueueFailedInNewTransaction(BatchLineageEdge edge, String refKey, String error) {
+        if (misfit(edge) != null) {
+            return;   // 永远写不进去的边, 补写也没用 (writer 已 warn)
+        }
         LineageEdgeOutboxEntry entry = fromEdge(edge, refKey);
         entry.setAttempts(1);
         entry.setLastError(truncate(error));

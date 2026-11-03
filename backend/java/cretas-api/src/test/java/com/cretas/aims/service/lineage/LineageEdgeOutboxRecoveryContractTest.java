@@ -39,7 +39,7 @@ import static org.mockito.Mockito.when;
  * 「库写不进去」由边表的 {@code saveAndFlush} 抛 {@link DataAccessResourceFailureException} 模拟。
  */
 @DisplayName("血缘边补写台账 — 写失败的边被补上")
-class LineageEdgeOutboxRecoveryTest {
+class LineageEdgeOutboxRecoveryContractTest {
 
     private static final String FACTORY = "F006";
 

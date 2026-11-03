@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS lineage_edge_outbox (
     unit             VARCHAR(20),
     event_time       TIMESTAMP,
     operator_id      BIGINT,
-    ref_key          VARCHAR(255),
+    ref_key          TEXT,
     meta             JSONB,
     status           VARCHAR(16)   NOT NULL DEFAULT 'PENDING',
     attempts         INTEGER       NOT NULL DEFAULT 0,

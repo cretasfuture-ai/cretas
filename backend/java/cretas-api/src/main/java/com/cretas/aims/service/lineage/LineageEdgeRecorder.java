@@ -388,6 +388,9 @@ public class LineageEdgeRecorder {
                                                     + "edge={} {}:{} → {}:{} refKey={}",
                                             outboxId, edgeType, sourceType, sourceId, targetType, targetId, refKey, e);
                                 }
+                                if (outboxId == null) {
+                                    return;   // 没登记进台账 (按列宽永远写不进去), 已 warn
+                                }
                                 try {
                                     outbox.settle(outboxId, outcome, error);
                                 } catch (Exception e) {
