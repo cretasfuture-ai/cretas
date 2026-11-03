@@ -12,6 +12,7 @@ import { processingApiClient, ProcessingBatch } from '../../services/api/process
 import { handleError } from '../../utils/errorHandler';
 import { logger } from '../../utils/logger';
 import { useTranslation } from 'react-i18next';
+import { hasModulePermission } from '../../utils/permissionHelper';
 
 // 创建ProcessingDashboard专用logger
 const dashboardLogger = logger.createContextLogger('ProcessingDashboard');
@@ -72,6 +73,8 @@ export default function ProcessingDashboard() {
 
   // 权限控制 - 简化逻辑
   const userType = user?.userType || 'factory';
+  // 时段成本分析读 GET /reports/finance: 接口要经营分析 (analytics) 模块, 没有就不放入口 (否则点进去是 403)
+  const canSeeFinanceReport = hasModulePermission(user, 'analytics', 'read');
   const isPlatformAdmin = userType === 'platform';
   const canOperate = !isPlatformAdmin;  // 只要不是平台管理员就能操作
 
@@ -500,14 +503,16 @@ export default function ProcessingDashboard() {
                   {t('dashboard.aiAnalysis.costComparison')}
                 </Button>
               )}
-              <Button
-                mode="outlined"
-                icon="calendar-range"
-                onPress={() => navigation.navigate('TimeRangeCostAnalysis')}
-                style={styles.actionButton}
-              >
-                {t('dashboard.aiAnalysis.timeRangeAnalysis')}
-              </Button>
+              {canSeeFinanceReport && (
+                <Button
+                  mode="outlined"
+                  icon="calendar-range"
+                  onPress={() => navigation.navigate('TimeRangeCostAnalysis')}
+                  style={styles.actionButton}
+                >
+                  {t('dashboard.aiAnalysis.timeRangeAnalysis')}
+                </Button>
+              )}
             </View>
           </Card.Content>
         </Card>
@@ -572,17 +577,19 @@ export default function ProcessingDashboard() {
             >
               {t('dashboard.costDialog.byBatch')}
             </Button>
-            <Button
-              mode="contained"
-              icon="calendar-range"
-              onPress={() => {
-                setCostAnalysisDialogVisible(false);
-                navigation.navigate('TimeRangeCostAnalysis');
-              }}
-              style={styles.dialogButton}
-            >
-              {t('dashboard.costDialog.byTimeRange')}
-            </Button>
+            {canSeeFinanceReport && (
+              <Button
+                mode="contained"
+                icon="calendar-range"
+                onPress={() => {
+                  setCostAnalysisDialogVisible(false);
+                  navigation.navigate('TimeRangeCostAnalysis');
+                }}
+                style={styles.dialogButton}
+              >
+                {t('dashboard.costDialog.byTimeRange')}
+              </Button>
+            )}
           </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setCostAnalysisDialogVisible(false)}>

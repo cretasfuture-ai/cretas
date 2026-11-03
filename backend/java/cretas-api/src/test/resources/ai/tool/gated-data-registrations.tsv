@@ -22,5 +22,5 @@ additive_compliance_check_quality	RULED	CODES:quality:read,quality:read_write �
 additive_bom_compliance_check	RULED	CODES:quality:read,quality:read_write 组织者裁定 2026-11-03: 添加剂限量属质检工作, 质检读
 ssop_production_gate_check	RULED	CODES:quality:read,quality:read_write,production:read,production:read_write 组织者裁定 2026-11-03: SSOP 属质检, 开工前检查另让生产读 (车间主任、班组长) 看得到
 purchase_statistics	RULED	CODES:procurement:read #1305 (S5-12) 裁定: 采购统计含采购金额, 门 = 配置的采购读; 金额另按 canViewPurchasePrices 脱敏
-report_sku_gross_margin	RULED	CODES:procurement:price:view 既有裁定: SKU 毛利用的是 App 里同一个价格查看权限 (SkuGrossMarginToolTest 钉着)
+report_sku_gross_margin	RULED	CODES:finance:read,finance:read_write 组织者裁定 2026-11-03 (acc-s6 s610k): 与 web SKU 毛利视图 GET /finance/report/shipment-sku-margin (FinanceReportController 类门) 同口径, web 拒整份则对话拒整个工具
 online_staff_count	RULED	CODES:production:read,dashboard:read 组织者裁定 2026-11-03: 只是在岗人数, 按生产/看板读, 不按 hr

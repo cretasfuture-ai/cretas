@@ -244,6 +244,10 @@ public class GatedDataToolAiPathPermissionTest {
             if (requiredRoles != null && !requiredRoles.isEmpty()) {
                 actual += "|REQ_ROLES:" + String.join(",", new TreeSet<>(requiredRoles));
             }
+            Set<String> also = tool.getAlsoRequiredPermissions();
+            if (also != null && !also.isEmpty()) {
+                actual += "|ALSO:" + String.join(",", new TreeSet<>(also));
+            }
             assertThat(actual).as(entry.getKey()).isEqualTo(entry.getValue());
         }
     }
@@ -339,7 +343,12 @@ public class GatedDataToolAiPathPermissionTest {
     }
 
     /** One thing a tool reads that only some callers may read: who the direct API admits to it. */
-    record Requirement(String data, Set<String> codes, Set<String> roles) { }
+    /** {@code also}: 接口 {@code @RequirePermission(alsoAny)} 的「且」一组 (空 = 没有)。 */
+    record Requirement(String data, Set<String> codes, Set<String> roles, Set<String> also) {
+        Requirement(String data, Set<String> codes, Set<String> roles) {
+            this(data, codes, roles, Set.of());
+        }
+    }
 
     /** @return null when classified, otherwise what is wrong */
     private static String classify(String tool, ToolExecutor instance) {
@@ -407,6 +416,8 @@ public class GatedDataToolAiPathPermissionTest {
             roles.retainAll(allowed);
         }
         if (!codes.isEmpty()) roles.retainAll(rolesHoldingAny(codes));
+        Set<String> also = instance.getAlsoRequiredPermissions();
+        if (also != null && !also.isEmpty()) roles.retainAll(rolesHoldingAny(also));
         Set<String> requiredRoles = instance.getRequiredRoles();
         if (requiredRoles != null && !requiredRoles.isEmpty()) {
             roles = new TreeSet<>(roles);
@@ -422,6 +433,7 @@ public class GatedDataToolAiPathPermissionTest {
         Set<String> roles = new TreeSet<>(r.roles());
         if (!r.roles().isEmpty()) roles.addAll(PLATFORM_ADMIN_ROLES);
         if (!r.codes().isEmpty()) roles.addAll(rolesHoldingAny(r.codes()));
+        if (!r.also().isEmpty()) roles.retainAll(rolesHoldingAny(r.also()));
         return roles;
     }
 
@@ -486,12 +498,17 @@ public class GatedDataToolAiPathPermissionTest {
     private static Requirement requirementOf(String data, List<GatedDataScan.Endpoint> endpoints) {
         Set<String> codes = new TreeSet<>();
         Set<String> roles = new TreeSet<>();
+        Set<String> also = new TreeSet<>();
+        boolean everyEndpointHasAlso = !endpoints.isEmpty();
         for (GatedDataScan.Endpoint e : endpoints) {
             // A requireAll endpoint admits only holders of all its codes: no single code of it admits anyone.
             if (!(e.requireAll() && e.codes().size() > 1)) codes.addAll(e.codes());
             roles.addAll(e.roles());
+            also.addAll(e.alsoAny());
+            everyEndpointHasAlso &= !e.alsoAny().isEmpty();
         }
-        return new Requirement(data, codes, roles);
+        // 只有每个接口都带「且」一组时, 这份数据才对所有入口都要它 (有一个入口不要, 就以最松的那个为准)
+        return new Requirement(data, codes, roles, everyEndpointHasAlso ? also : Set.of());
     }
 
     private static boolean reachesSafely(String handler, java.util.function.Predicate<String> owner) {

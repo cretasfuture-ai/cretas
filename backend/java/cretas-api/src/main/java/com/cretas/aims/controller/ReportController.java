@@ -252,6 +252,11 @@ public class ReportController {
      */
     @GetMapping("/finance")
     @Operation(summary = "获取财务报表", description = "获取指定日期范围的财务报表，默认近30天")
+    // 应收 / 应付 / 客户预收 / 收入 / 成本: App 里只在「经营分析」页 (web 路由 module=analytics, 卡片「往来余额」;
+    // RN 只在老板 / 厂长报表与处理看板的时段成本分析) 出现。没有经营分析模块的角色在 App 里看不到它, 接口也不给
+    // (生产 / 销售 / 采购主管 analytics「-」, 以前凭 procurement:price:view 拿到整份)。与 AI 工具 report_finance 同一组门槛。
+    @RequirePermission(value = {"finance:read", "finance:read_write", "procurement:price:view"},
+            alsoAny = {"analytics:read", "analytics:read_write"})
     public ApiResponse<Map<String, Object>> getFinanceReport(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)

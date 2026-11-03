@@ -2935,7 +2935,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: true
-    requiredPermissions: ["procurement:price:view"]
+    requiredPermissions: ["finance:read", "finance:read_write"]
     version: "1.0.0"
     domainTags: ["report"]
     overrideFlags:
