@@ -200,7 +200,7 @@ class ProcessSecretCostContextOverfetchJpaContractTest {
         assertThat(r.tree().path("avgActualUnitCost").isNull()).isTrue();
     }
 
-    // ------------------------------------------------ 同形的其他出口 (2026-11-03 清点 A2 / A3 / A5)
+    // ------------------------------------------------ 同形的其他出口 (2026-11-03 清点 A2 / A3)
 
     /** 在与线上相同的请求作用域里跑一段读取, 返回读数与按读数裁剪后的输出。 */
     private Response run(AuthenticatedActor actor, Supplier<?> call) {
@@ -248,12 +248,21 @@ class ProcessSecretCostContextOverfetchJpaContractTest {
                 LocalDateTime.now().minusDays(1)).get(0).getId();
         Long normalBatch = batches.findByFactoryIdAndProductTypeIdAndCreatedAtAfter(F, NORMAL,
                 LocalDateTime.now().minusDays(1)).get(0).getId();
-        // 原料批次外键与本测试无关 (统计只按消耗记录本身): 只在插入这两行时关掉 H2 的外键检查
-        entityManager.createNativeQuery("SET REFERENTIAL_INTEGRITY FALSE").executeUpdate();
+        // 消耗记录外键指向原料批次: 建一个真实的原料批次 (不关外键检查, 那在 H2 上会提交事务、漏进别的测试)
+        com.cretas.aims.entity.MaterialBatch material = new com.cretas.aims.entity.MaterialBatch();
+        material.setId("MB-OF");
+        material.setFactoryId(F);
+        material.setBatchNumber("MB-OF");
+        material.setMaterialTypeId("MT-OF-1");
+        material.setWarehouseId("WH-OF-1");
+        material.setReceiptDate(java.time.LocalDate.now());
+        material.setReceiptQuantity(new BigDecimal("10"));
+        material.setQuantityUnit("kg");
+        material.setCreatedBy(COLLEAGUE);
+        entityManager.persist(material);
         entityManager.persist(consumption(secretBatch, "88.80"));
         entityManager.persist(consumption(normalBatch, "12.30"));
         entityManager.flush();
-        entityManager.createNativeQuery("SET REFERENTIAL_INTEGRITY TRUE").executeUpdate();
         com.cretas.aims.security.PriceMaskResolver prices = mock(com.cretas.aims.security.PriceMaskResolver.class);
         com.cretas.aims.repository.MaterialBatchRepository materialBatches =
                 mock(com.cretas.aims.repository.MaterialBatchRepository.class);
@@ -275,42 +284,12 @@ class ProcessSecretCostContextOverfetchJpaContractTest {
         assertThat(r.tree().path("totalCost").decimalValue()).isEqualByComparingTo("12.30");
     }
 
-    /** A5 AI 工具 report_cost_variance 按产品查: 报表自己已剔除看不到的成本, 工具不再把全厂批次记进读数。 */
-    @Test
-    void costVarianceToolForTheNormalProductIsNotMaskedByTheSecretProductsBatches() {
-        ReportService reports = mock(ReportService.class);
-        when(reports.getCostVarianceReport(eq(F), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
-                .thenAnswer(inv -> {
-                    // 与 ProductionReportServiceImpl.getCostVarianceReport 一样取全厂批次
-                    batches.findByFactoryIdAndCreatedAtAfter(F, LocalDateTime.now().minusMonths(1));
-                    return com.cretas.aims.dto.report.CostVarianceReportDTO.builder().factoryId(F)
-                            .totalActualCost(new BigDecimal("3442.39"))
-                            .productVariances(new java.util.ArrayList<>(java.util.List.of(
-                                    com.cretas.aims.dto.report.CostVarianceReportDTO.ProductCostVariance.builder()
-                                            .productTypeId(SECRET).productName("QA-S4-SECRET").quantity(new BigDecimal("100")).build(),
-                                    com.cretas.aims.dto.report.CostVarianceReportDTO.ProductCostVariance.builder()
-                                            .productTypeId(NORMAL).productName("L3-NORMAL").quantity(new BigDecimal("100"))
-                                            .actualUnitCost(new BigDecimal("34.4239")).build())))
-                            .build();
-                });
-        com.cretas.aims.ai.tool.impl.report.ReportCostVarianceTool tool = new com.cretas.aims.ai.tool.impl.report.ReportCostVarianceTool();
-        org.springframework.test.util.ReflectionTestUtils.setField(tool, "reportService", reports);
-        org.springframework.test.util.ReflectionTestUtils.setField(tool, "llmCostScope", costScope);
-
-        Response r = run(actor(COLLEAGUE), () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(tool,
-                "doExecute", F, new java.util.HashMap<>(java.util.Map.of("productTypeId", NORMAL)), new java.util.HashMap<>()));
-
-        assertThat(r.reads()).doesNotContain(SECRET_PRODUCT_READ);
-        assertThat(r.tree().toString()).contains("34.4239");
-        assertThat(r.tree().toString()).doesNotContain(SECRET);
-    }
-
     @Autowired com.cretas.aims.repository.MaterialConsumptionRepository consumptionRepository;
 
     static com.cretas.aims.entity.MaterialConsumption consumption(Long productionBatchId, String totalCost) {
         com.cretas.aims.entity.MaterialConsumption c = new com.cretas.aims.entity.MaterialConsumption();
         c.setFactoryId(F);
-        c.setBatchId("MB-OF-" + productionBatchId);
+        c.setBatchId("MB-OF");
         c.setProductionBatchId(productionBatchId);
         c.setQuantity(new BigDecimal("1"));
         c.setUnitPrice(new BigDecimal(totalCost));

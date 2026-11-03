@@ -604,7 +604,9 @@ public class ProcessSecretPayloadScrubber {
                 } else if (QUANTITY_FIELDS.contains(name)) quantityFields.add(name);
                 else if (value.isNumber() && !isIdentifierLike(name)) otherNumbers.add(name);
             }
-            if (ratioFields.isEmpty() && quantityFields.isEmpty() && otherNumbers.isEmpty()) return;
+            // 成本缺项里的 BOM 标识要单独处理: 金额都已为空 (例如价格被遮) 的行也要走到下面去掉它 (独立审查)
+            if (ratioFields.isEmpty() && quantityFields.isEmpty() && otherNumbers.isEmpty()
+                    && !(object.get(MISSING_COST_ITEMS) instanceof ArrayNode)) return;
 
             Level level;
             Key auditKey;

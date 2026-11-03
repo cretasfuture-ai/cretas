@@ -486,6 +486,13 @@ class ProcessSecretPayloadScrubberTest {
         scrubber.scrub(owner, user(OWNER), F, reads(ProcessSecretReadTracker.Kind.PRODUCT, SECRET),
                 "GET /order-cost-summary", false);
         assertThat(owner.at("/rows/0/missingCostItems/0").asText()).isEqualTo("PINNED_BOM_SNAPSHOT_MISSING:r-secret:v3");
+
+        // 金额都已为空 (价格被遮) 的行同样去掉 BOM 标识 (独立审查: 原先这种行在「没有数字字段」处提前返回)
+        JsonNode noNumbers = tree("{'rows':[{'productTypeId':'P17','totalCost':null,"
+                + "'missingCostItems':['PINNED_BOM_ITEMS_MISSING:r-secret:v3']}]}");
+        scrubber.scrub(noNumbers, user(5), F, reads(ProcessSecretReadTracker.Kind.PRODUCT, SECRET),
+                "GET /order-cost-summary", false);
+        assertThat(noNumbers.at("/rows/0/missingCostItems/0").asText()).isEqualTo("PINNED_BOM_ITEMS_MISSING");
     }
 
     @Test
