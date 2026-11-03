@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-class ProcessSheetBomFamilyRequirementsTest {
+class ProcessSheetBomFamilyRequirementsContractTest {
 
     @Test
     void explicitPositivePackagingAtTheExactBomPortIsNotAutomaticallyAllocatedAgain() throws Throwable {

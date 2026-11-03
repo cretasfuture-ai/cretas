@@ -1091,7 +1091,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/Clerk
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/FactoryOnHandCaliberTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/LaborRateConfigTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/PackagedBatchStockVisibilityTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetBomFamilyRequirementsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetByproductMaterializationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetConfiguredUnitsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetCustomFieldValidationTest.java
