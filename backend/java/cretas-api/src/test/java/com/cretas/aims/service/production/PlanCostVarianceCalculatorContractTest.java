@@ -186,6 +186,24 @@ class PlanCostVarianceCalculatorContractTest {
     }
 
     @Test
+    void recipeItemWithoutAnyConsumptionRecordIsIncomparableNotASaving() {
+        // 调料配方 10 g/kg, 本计划没有逐料领用记录 (常见: 按配比估算) —— ⛔ 不能算成「用了 0, 节约 ¥10」
+        PlanStandardCostLine salt = PlanStandardCostLine.builder().lineType(PlanStandardCostLine.TYPE_MATERIAL)
+                .materialTypeId("SALT").materialCategory("SEASONING")
+                .standardBasis(PlanStandardCostLine.BASIS_PER_RAW_INPUT_KG).standardRate(new BigDecimal("0.01"))
+                .rawYieldRate(new BigDecimal("80")).unitPrice(new BigDecimal("10")).priceUnit("kg").build();
+        PlanCostVarianceCalculator.Result r = run(List.of(raw("BEEF", "10", "80"), salt),
+                List.of(used("BEEF", "100", "kg", "1000")), "80", "80", null);
+        PlanCostVarianceDTO.Line saltLine = line(r, "SALT");
+        assertThat(saltLine.getStandardQuantity()).isEqualByComparingTo("1");
+        assertThat(saltLine.getUsageVariance()).isNull();
+        assertThat(saltLine.getStatus()).isEqualTo(PlanCostVarianceDTO.STATUS_INCOMPARABLE);
+        assertThat(saltLine.getReasons()).contains("本计划没有这项的实际领用记录");
+        assertThat(r.usageVariance()).isEqualByComparingTo("0");
+        assertThat(r.standardCost()).isEqualByComparingTo("1000");
+    }
+
+    @Test
     void unplannedMaterialIsListedAsIncomparable() {
         PlanCostVarianceCalculator.Result r = run(List.of(raw("BEEF", "10", "80")),
                 List.of(used("BEEF", "100", "kg", "1000"), used("SALT", "2", "kg", "6")), "80", "80", null);

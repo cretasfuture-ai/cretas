@@ -197,6 +197,8 @@ public final class PlanCostVarianceCalculator {
         boolean groupQtyKnown = true;
         BigDecimal spP = primary.getUnitPrice();
 
+        boolean anySubstituteUsed = substitutes.stream()
+                .anyMatch(sub -> in.actualByMaterial().containsKey(sub.getMaterialTypeId()));
         List<PlanStandardCostLine> members = new ArrayList<>();
         members.add(primary);
         members.addAll(substitutes);
@@ -220,8 +222,12 @@ public final class PlanCostVarianceCalculator {
                 reasons.add("开计划时物料档案没有单价");
             }
             BigDecimal aq;
-            if (actual == null) {
-                aq = BigDecimal.ZERO; // 配方里有、本计划一点没领: 0 是事实 (用量差 = −标准用量 × 单价)
+            if (actual == null && anySubstituteUsed) {
+                aq = BigDecimal.ZERO; // 主料一点没领、全用替代料顶: 主料 0 是事实
+            } else if (actual == null) {
+                // 没有领用记录 ≠ 用了 0 (调料常按配比估算、不逐料记): 不知道就说不知道, ⛔ 不当 0 算出「节约」
+                aq = null;
+                reasons.add("本计划没有这项的实际领用记录");
             } else if (actual.unitMixed() || actual.quantity() == null) {
                 aq = null;
                 reasons.add("领用记录单位不一致, 数量合不起来");
@@ -232,7 +238,7 @@ public final class PlanCostVarianceCalculator {
                     reasons.add("领用单位 " + actual.unit() + " 换算不到单价单位 " + member.getPriceUnit());
                 }
             }
-            BigDecimal amount = actual == null ? BigDecimal.ZERO : actual.amount();
+            BigDecimal amount = actual == null ? (aq == null ? null : BigDecimal.ZERO) : actual.amount();
             if (actual != null && amount == null) {
                 reasons.add("有领用批次没有实际单价");
             }

@@ -56,7 +56,6 @@ public class PlanCostVarianceService {
 
     static final String RECOVERED_MATERIAL_NOTE = "回料 (半成品回投) 的差异本期不单列, 不在比较范围内";
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final Set<String> INTERNAL_SOURCE_DOC_TYPES = Set.of("PRODUCTION_BATCH", "BYPRODUCT");
 
     private final PlanStandardCostLineRepository lineRepository;
     private final ProductionPlanRepository planRepository;
@@ -176,58 +175,94 @@ public class PlanCostVarianceService {
     record ActualSide(Map<String, PlanCostVarianceCalculator.ActualUsage> byMaterial, int customerSupplied) {
     }
 
-    /** 本计划各批次的领用, 按物料汇总 (单位折到第一笔的单位; 折不过去标 unitMixed)。 */
+    /**
+     * 本计划的实际领用, 按物料汇总 (单位折到第一笔的单位; 折不过去标 unitMixed)。
+     *
+     * <p>与成本内核 {@code OrderCostBreakdownService#traceCost} 同一种走法: 从本计划各批次的领用出发,
+     * 领的若是<b>本厂产出的在制品</b> ({@code source_doc_type=PRODUCTION_BATCH}), 就沿它的来源批次往上追到原料叶子,
+     * 按「本次领用量 ÷ 那批在制品入库量」折算 —— 否则逐道报工的计划只看得到最后一道领的在制品, 看不到真正用的原料。
+     * 来源批次本身也是本计划的批次时不再往上追 (它自己的领用已经直接算过, 防双计)。</p>
+     */
     ActualSide actualUsage(String factoryId, String planId, List<ProductionBatch> batches) {
-        Map<Integer, MaterialConsumption> consumptions = new LinkedHashMap<>();
-        for (ProductionBatch batch : batches) {
-            for (MaterialConsumption c : consumptionRepository.findByProductionBatchIdAndFactoryId(batch.getId(), factoryId)) {
-                consumptions.putIfAbsent(c.getId(), c);
-            }
-        }
-        for (MaterialConsumption c : consumptionRepository.findByProductionPlanId(planId)) {
-            if (factoryId.equals(c.getFactoryId())) {
-                consumptions.putIfAbsent(c.getId(), c);
-            }
-        }
+        Set<Long> planBatchIds = new HashSet<>();
+        batches.forEach(b -> planBatchIds.add(b.getId()));
         Map<String, MutableUsage> agg = new LinkedHashMap<>();
         Set<String> customerSupplied = new HashSet<>();
-        for (MaterialConsumption c : consumptions.values()) {
-            if (c.getQuantity() == null || c.getQuantity().signum() == 0) {
-                continue;
-            }
-            MaterialBatch mb = c.getBatchId() == null ? null
-                    : materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
-            if (mb != null && mb.getSourceDocType() != null && INTERNAL_SOURCE_DOC_TYPES.contains(mb.getSourceDocType())) {
-                continue; // 本厂产出的在制品/副产再投入: 内部转移, 不是采购来的料
-            }
-            if (mb != null && mb.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
-                customerSupplied.add(mb.getBatchNumber());
-                continue; // 客供料不计我方成本 (owner 2026-09-04 口径 a), 不参与比较
-            }
-            String materialTypeId = c.getMaterialTypeId() != null ? c.getMaterialTypeId()
-                    : mb == null ? null : mb.getMaterialTypeId();
-            if (materialTypeId == null) {
-                continue;
-            }
-            String unit = mb != null && mb.getQuantityUnit() != null ? mb.getQuantityUnit() : materialUnit(factoryId, materialTypeId);
-            BigDecimal price = c.getUnitPrice() != null ? c.getUnitPrice() : mb == null ? null : mb.getUnitPrice();
-            MutableUsage usage = agg.computeIfAbsent(materialTypeId, id -> new MutableUsage(id, unit));
-            BigDecimal qty = usage.unit == null ? null : convert(c.getQuantity(), unit, usage.unit);
-            if (qty == null) {
-                usage.unitMixed = true;
-            } else {
-                usage.quantity = usage.quantity.add(qty);
-            }
-            if (price == null || usage.amount == null) {
-                usage.amount = null;
-            } else {
-                usage.amount = usage.amount.add(c.getQuantity().multiply(price));
+        for (ProductionBatch batch : batches) {
+            for (MaterialConsumption c : consumptionRepository.findByProductionBatchIdAndFactoryId(batch.getId(), factoryId)) {
+                collect(factoryId, c, BigDecimal.ONE, planBatchIds, new HashSet<>(), 0, agg, customerSupplied);
             }
         }
         Map<String, PlanCostVarianceCalculator.ActualUsage> out = new LinkedHashMap<>();
         agg.values().forEach(u -> out.put(u.materialTypeId, new PlanCostVarianceCalculator.ActualUsage(
                 u.materialTypeId, materialName(factoryId, u.materialTypeId), u.quantity, u.unit, u.amount, u.unitMixed)));
         return new ActualSide(out, customerSupplied.size());
+    }
+
+    private static final int MAX_DEPTH = 10;
+
+    private void collect(String factoryId, MaterialConsumption c, BigDecimal factor, Set<Long> planBatchIds,
+                         Set<Long> path, int depth, Map<String, MutableUsage> agg, Set<String> customerSupplied) {
+        if (c.getQuantity() == null || c.getQuantity().signum() == 0) {
+            return;
+        }
+        MaterialBatch mb = c.getBatchId() == null ? null
+                : materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
+        if (mb != null && "BYPRODUCT".equalsIgnoreCase(mb.getSourceDocType())) {
+            return; // 副产再投入: 内部转移
+        }
+        if (mb != null && "PRODUCTION_BATCH".equalsIgnoreCase(mb.getSourceDocType())) {
+            Long upstream = parseLong(mb.getSourceDocId());
+            if (upstream == null || planBatchIds.contains(upstream)) {
+                return; // 本计划自己的上一道: 那一道的领用已直接计入
+            }
+            if (depth < MAX_DEPTH && path.add(upstream)) {
+                List<MaterialConsumption> ups = consumptionRepository.findByProductionBatchIdAndFactoryId(upstream, factoryId);
+                if (!ups.isEmpty()) {
+                    BigDecimal receipt = mb.getReceiptQuantity();
+                    BigDecimal share = receipt != null && receipt.signum() > 0
+                            ? c.getQuantity().divide(receipt, 12, RoundingMode.HALF_UP) : BigDecimal.ONE;
+                    for (MaterialConsumption u : ups) {
+                        collect(factoryId, u, factor.multiply(share), planBatchIds, path, depth + 1, agg, customerSupplied);
+                    }
+                    path.remove(upstream);
+                    return;
+                }
+                path.remove(upstream);
+            }
+        }
+        if (mb != null && mb.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
+            customerSupplied.add(mb.getBatchNumber());
+            return; // 客供料不计我方成本 (owner 2026-09-04 口径 a), 不参与比较
+        }
+        String materialTypeId = c.getMaterialTypeId() != null ? c.getMaterialTypeId()
+                : mb == null ? null : mb.getMaterialTypeId();
+        if (materialTypeId == null) {
+            return;
+        }
+        String unit = mb != null && mb.getQuantityUnit() != null ? mb.getQuantityUnit() : materialUnit(factoryId, materialTypeId);
+        BigDecimal price = c.getUnitPrice() != null ? c.getUnitPrice() : mb == null ? null : mb.getUnitPrice();
+        BigDecimal quantity = c.getQuantity().multiply(factor);
+        MutableUsage usage = agg.computeIfAbsent(materialTypeId, id -> new MutableUsage(id, unit));
+        BigDecimal qty = usage.unit == null ? null : convert(quantity, unit, usage.unit);
+        if (qty == null) {
+            usage.unitMixed = true;
+        } else {
+            usage.quantity = usage.quantity.add(qty);
+        }
+        if (price == null || usage.amount == null) {
+            usage.amount = null;
+        } else {
+            usage.amount = usage.amount.add(quantity.multiply(price));
+        }
+    }
+
+    private static Long parseLong(String value) {
+        try {
+            return value == null ? null : Long.valueOf(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static final class MutableUsage {
