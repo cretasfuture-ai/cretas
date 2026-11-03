@@ -63,10 +63,10 @@ sudo -u postgres psql -d cretas_prod_db -tA -c \
 ```
 
 `training_sample_secrecy_holds`（Flyway V20261104_11）放的是「名单一时查不出来、等重判」的样本，存的是**原话原文**（没脱敏）：
-待判（PENDING）的行，放行或过保留期（默认 7 天）就删；重判时提到了保密产品 / 人员 / 客户的行标 REJECTED **保留不删**，
+待判（PENDING）的行，放行或过保留期（默认 7 天）就删；重判时提到了保密产品 / 人员 / 客户的行标 REJECTED **保留不删**（原文当场丢掉，只留原因和时间），
 留给人工复核，也不会进训练。撤回标记设上以后，重判任务放行前会再查一次授权，撤回的不会再写进样本表；
 表里剩下的（PENDING 和 REJECTED 都算）仍要按本节删掉。
-SmartBI 蒸馏样本里重判没过的行同理：带 `secrecy_rejected` 标记保留、导出和训练都排除，撤回时随 `smart_bi_distillation_samples` 一起删。
+SmartBI 蒸馏样本里重判没过的行同理：带 `secrecy_rejected` 标记保留（只记原因、名单版本、时间，不带原文）、导出和训练都排除，撤回时随 `smart_bi_distillation_samples` 一起删；挂起行（`secrecy_recheck`，标记里带原文）过 7 天由采集路径顺手删掉。
 
 另外确认两件事并记入工单：
 - 该厂有没有专属模型（目前平台没有任何专属模型；如有，记录模型名和版本）。
