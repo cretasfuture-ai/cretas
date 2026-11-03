@@ -15,7 +15,8 @@
 * 记录: 一句话; 一个列表项连同缩进的续行; 表格整张 (表头某列是工艺词, 数据行同一列有数值就拦);
   含工艺词的标题 (冒号结尾, 或 Markdown ``#`` 标题) 连同它下面的内容: 紧跟的第一行、之后的列表 /
   缩进行 / 冒号小标题, 可隔空行, 到下一个 ``#`` 标题或下一段正文为止 (里面有数值就拦, 不受 12 字限制;
-  标题里只有条件词 (「统计时间：」「### 交货时间」) 时, 里面要有「数值 + 单位」才拦);
+  标题里只有不在工艺词表里的条件词 (「统计时间：」「### 交货时间」) 时, 里面要有「数值 + 单位」才拦;
+  工艺词表里本来就有的 (转速 / 浓度) 照工艺词算);
   判断前统一换行 (\r\n) 并去掉 Markdown 加粗 (``**`` / ``__``);
 * 条件词: 温度 / 时间 / 压力 / 转速 / 浓度 后面 12 个字内出现「数值 + 单位」(121℃、30 分钟、0.2MPa) 才算。
 
@@ -250,9 +251,11 @@ def has_word_with_value(text: Optional[str], markers: Sequence[str], conditional
         if _is_heading(line, tuple(markers) + tuple(conditional)):
             j = _heading_end(lines, i)
             body = "\n".join(lines[i + 1:j])
-            # a heading named only by a bare conditional word (「统计时间：」「### 交货时间」) is generic:
-            # its body needs a value WITH a unit, like the inline rule (review round 3, item 1)
-            strong = _is_heading(line, tuple(m for m in markers if m not in conditional))
+            # a heading named only by a bare conditional word that is NOT a marker (「统计时间：」「### 交货时间」)
+            # is generic: its body needs a value WITH a unit, like the inline rule (review round 3, item 1).
+            # Any marker makes it strong — including markers that are also conditional words (转速 / 浓度:
+            # 「转速：\n1500」 is a parameter, review round 4, item 2)
+            strong = _is_heading(line, tuple(markers))
             if body and (value_spans(body) if strong else _has_unit_value(body)):
                 return True
         else:

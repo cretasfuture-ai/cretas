@@ -64,6 +64,7 @@ un-authorized factories miss the cache and call the LLM.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -95,10 +96,20 @@ _CAPTURE_ENV = "SMARTBI_DISTILL_CAPTURE"
 # Held rows past the retention are swept from the capture path (second review: the
 # re-judge only runs from corpus_judge, so without this a held row and its raw copy
 # could stay forever). It runs at the top of EVERY capture call — skipped / refused /
-# disabled captures included (review round 3, item 3) — at most once per
-# EXPIRY_INTERVAL_S per process, on its own connection; it never blocks or fails a capture.
+# disabled captures included (review round 3, item 3): with capture switched off nothing else
+# would ever expire the held rows and their raw text — at most once per EXPIRY_INTERVAL_S per
+# process, on its own connection, bounded by EXPIRY_TIMEOUT_S (review round 4, item 3: an
+# exhausted pool must not hold a capture call up); a timed-out sweep is retried after
+# EXPIRY_RETRY_S. It never blocks for longer or fails a capture.
 EXPIRY_INTERVAL_S = 3600.0
+EXPIRY_TIMEOUT_S = 2.0
+EXPIRY_RETRY_S = 60.0
 _LAST_EXPIRY = {"at": None}
+
+
+async def _expire_on_own_connection(pool) -> int:
+    async with pool.acquire() as conn:
+        return await expire_held_rows(conn)
 
 
 async def _maybe_expire_held_rows(pool) -> None:
@@ -108,10 +119,13 @@ async def _maybe_expire_held_rows(pool) -> None:
         return
     _LAST_EXPIRY["at"] = now
     try:
-        async with pool.acquire() as conn:
-            n = await expire_held_rows(conn)
+        n = await asyncio.wait_for(_expire_on_own_connection(pool), timeout=EXPIRY_TIMEOUT_S)
         if n:
             logger.info("[distill] deleted %d held rows past the retention", n)
+    except asyncio.TimeoutError:
+        # pool busy / slow delete: skip, try again shortly instead of an hour later
+        _LAST_EXPIRY["at"] = now - EXPIRY_INTERVAL_S + EXPIRY_RETRY_S
+        logger.info("[distill] held-row expiry skipped (pool busy), retried in %.0fs", EXPIRY_RETRY_S)
     except Exception as e:  # noqa: BLE001 - housekeeping never blocks a capture
         logger.warning("[distill] held-row expiry failed (retried next interval): %s", e)
 

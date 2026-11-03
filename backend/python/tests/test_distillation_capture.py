@@ -687,6 +687,48 @@ async def test_the_expiry_sweep_also_runs_on_captures_that_return_early(monkeypa
     await _capture(_ExplodingPool(), factory_id="F006")
 
 
+
+class _FirstAcquireHangsPool(_RecordingPool):
+    """The first acquire (the expiry sweep's) waits like an exhausted pool; later ones work."""
+
+    def __init__(self, sink):
+        super().__init__(sink, {})
+        self.calls = 0
+
+    def acquire(self):
+        self.calls += 1
+        if self.calls > 1:
+            return super().acquire()
+
+        class _Hang:
+            async def __aenter__(self):
+                import asyncio
+                await asyncio.sleep(30)
+
+            async def __aexit__(self, *a):
+                return False
+        return _Hang()
+
+
+async def test_a_busy_pool_never_holds_a_capture_up(monkeypatch):
+    """Review round 4, item 3: the hourly sweep is bounded by a short timeout; the capture still
+    happens promptly and the sweep is retried soon instead of an hour later."""
+    import time as _time
+
+    from smartbi.services import distillation_capture as dc
+
+    _patch_lists(monkeypatch, {"F006": _lists()})
+    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
+    monkeypatch.setattr(dc, "EXPIRY_TIMEOUT_S", 0.2)
+    sink: list = []
+    start = _time.monotonic()
+    await _capture(_FirstAcquireHangsPool(sink), factory_id="F006", input_text="今天产量多少")
+    assert _time.monotonic() - start < 5                        # not the 30 s the pool would take
+    assert len(sink) == 1                                       # the capture itself went through
+    due_in = dc._LAST_EXPIRY["at"] + dc.EXPIRY_INTERVAL_S - _time.monotonic()
+    assert 0 < due_in <= dc.EXPIRY_RETRY_S                      # retried soon, not an hour later
+
+
 def test_python_hold_retention_equals_the_java_default():
     from pathlib import Path
 
