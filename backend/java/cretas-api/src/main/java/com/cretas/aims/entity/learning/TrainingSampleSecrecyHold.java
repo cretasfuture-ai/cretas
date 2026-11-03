@@ -17,11 +17,12 @@ import java.time.LocalDateTime;
 
 /**
  * 挂起待重判的训练样本 (Flyway V20261104_11): 本厂名单查不出来、按上次成功的名单判下来没问题的样本,
- * 先放这里, 定时按当前名单重判后才写进样本表。除了重判任务没有人读它。
+ * 先放这里, 定时按当前名单重判: 过了才写进样本表 (挂起行删除); 提到名单里的词 → REJECTED, 保留给人工复核 (Q5)。
+ * {@code payload} 是原话原文 (复审 N3)。除了重判任务没有人读它。
  */
 @Entity
 @Table(name = "training_sample_secrecy_holds", indexes = {
-        @Index(name = "idx_tssh_created", columnList = "created_at, id"),
+        @Index(name = "idx_tssh_pending", columnList = "review_status, last_attempt_at, created_at, id"),
         @Index(name = "idx_tssh_factory", columnList = "factory_id")
 })
 @Getter
@@ -31,6 +32,9 @@ public class TrainingSampleSecrecyHold {
 
     /** 样本类别: 意图样本 (ai_training_samples) / 低置信样本 (active_learning_samples)。 */
     public enum Kind { INTENT, ACTIVE_LEARNING }
+
+    /** PENDING = 等重判; REJECTED = 重判仍提到名单里的词, 留给人工复核 (不删, 不放行)。 */
+    public enum ReviewStatus { PENDING, REJECTED }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -43,12 +47,19 @@ public class TrainingSampleSecrecyHold {
     @Column(name = "factory_id", nullable = false, length = 50)
     private String factoryId;
 
-    /** 将要写进样本表的内容 (JSON; 已过内容规则, 未授权工厂已脱敏)。 */
+    /** 重判用的原话原文 (JSON)。 */
     @Column(name = "payload", nullable = false, columnDefinition = "TEXT")
     private String payload;
 
-    @Column(name = "authorized_at_hold", nullable = false)
-    private boolean authorizedAtHold;
+    @Enumerated(EnumType.STRING)
+    @Column(name = "review_status", nullable = false, length = 20)
+    private ReviewStatus reviewStatus = ReviewStatus.PENDING;
+
+    @Column(name = "reject_reason", length = 40)
+    private String rejectReason;
+
+    @Column(name = "rejected_at")
+    private LocalDateTime rejectedAt;
 
     @Column(name = "attempts", nullable = false)
     private int attempts;
@@ -59,13 +70,12 @@ public class TrainingSampleSecrecyHold {
     @Column(name = "last_attempt_at")
     private LocalDateTime lastAttemptAt;
 
-    public static TrainingSampleSecrecyHold of(Kind kind, String factoryId, String payload,
-                                               boolean authorized, LocalDateTime now) {
+    public static TrainingSampleSecrecyHold of(Kind kind, String factoryId, String payload, LocalDateTime now) {
         TrainingSampleSecrecyHold h = new TrainingSampleSecrecyHold();
         h.setSampleKind(kind);
         h.setFactoryId(factoryId);
         h.setPayload(payload);
-        h.setAuthorizedAtHold(authorized);
+        h.setReviewStatus(ReviewStatus.PENDING);
         h.setAttempts(0);
         h.setCreatedAt(now);
         return h;

@@ -201,19 +201,26 @@ public class ProcessSecretSampleFilter {
     }
 
     private TrainingLists loadTrainingLists(String factoryId, Set<String> protectedIds) {
+        // 原生查询: 含已软删除的保密产品 (复审 N2; findAllById 会被 @Where 过滤掉), 与 Python 同一口径
         List<ProcessSecretTerms.Product> products = new ArrayList<>();
+        List<String> aliases = new ArrayList<>();
         if (!protectedIds.isEmpty()) {
-            for (ProductType p : productTypeRepository.findAllById(protectedIds)) {
-                if (factoryId.equals(p.getFactoryId())) {
-                    products.add(ProcessSecretTerms.Product.of(p));
-                }
+            for (Object[] r : directoryRepository.findProtectedProductRows(factoryId, protectedIds)) {
+                products.add(new ProcessSecretTerms.Product(str(r[0]), str(r[1]), str(r[2]), str(r[3]), str(r[4])));
+            }
+            // 专属别名: 保密负责人在保密设置里登记 (Steve 2026-11-03 Q1)
+            for (String raw : directoryRepository.findPolicyAliases(factoryId)) {
+                aliases.addAll(ProcessSecretTerms.policyAliases(raw));
             }
         }
         List<String> names = new ArrayList<>(directoryRepository.findPeopleNames(factoryId));
         names.addAll(directoryRepository.findCustomerNames(factoryId));
-        // 专属别名: 目前没有登记载体 (待决问题), 恒为空
-        return new TrainingLists(ProcessSecretTerms.secretTerms(products, List.of()),
+        return new TrainingLists(ProcessSecretTerms.secretTerms(products, aliases),
                 ProcessSecretTerms.directoryNames(names));
+    }
+
+    private static String str(Object o) {
+        return o == null ? null : o.toString();
     }
 
     private final Cache<NameKey, TrainingLists> listsCache = Caffeine.newBuilder()

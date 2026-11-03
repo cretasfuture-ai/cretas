@@ -64,8 +64,14 @@ public class ProcessSecretPolicyService {
         this.packageRepository = packageRepository;
     }
 
+    /** {@code aliases}: 只给保密负责人看 (别名本身就是保密名), 其他人为 null。 */
     public record PolicyView(String productTypeId, ProcessSecretStorageMode storageMode, Long ownerUserId,
-                             Long policyVersion, boolean currentUserIsOwner, LocalDateTime updatedAt) { }
+                             Long policyVersion, boolean currentUserIsOwner, LocalDateTime updatedAt,
+                             List<String> aliases) { }
+
+    static final int MAX_ALIASES = 20;
+    static final int MAX_ALIAS_LENGTH = 100;
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
 
     /** {@code expiresAt} 必须带时区 (如 {@code 2026-10-23T18:00:00+08:00}); 统一折算到北京时间存储。 */
     public record GrantRequest(ProcessSecretGranteeType granteeType, Long granteeId, boolean canViewFull,
@@ -87,7 +93,19 @@ public class ProcessSecretPolicyService {
     @Transactional
     public PolicyView upsertPolicy(AuthenticatedActor actor, String factoryId, String productTypeId,
                                    ProcessSecretStorageMode mode, Long ownerUserId, Long expectedPolicyVersion) {
+        return upsertPolicy(actor, factoryId, productTypeId, mode, ownerUserId, expectedPolicyVersion, null);
+    }
+
+    /**
+     * 同上, 并可设专属别名 (Steve 2026-11-03 Q1): {@code aliases == null} = 不改; 非 null = 整体替换 (空列表 = 清空)。
+     * 别名只走这一条写路径, 权限与改策略完全相同 (首次启用 = 工厂总监, 之后 = 保密负责人 + 版本号), 不另开入口。
+     */
+    @Transactional
+    public PolicyView upsertPolicy(AuthenticatedActor actor, String factoryId, String productTypeId,
+                                   ProcessSecretStorageMode mode, Long ownerUserId, Long expectedPolicyVersion,
+                                   List<String> aliases) {
         requireText(productTypeId, "productTypeId");
+        String aliasesJson = aliases == null ? null : aliasesJson(aliases);
         if (mode == null) throw new BusinessException(400, "storageMode 不能为空");
         if (ownerUserId == null) throw new BusinessException(400, "必须指定保密负责人 ownerUserId");
         requireActiveFactoryUser(ownerUserId, factoryId, "保密负责人");
@@ -99,19 +117,25 @@ public class ProcessSecretPolicyService {
                 policy = policyRepository.saveAndFlush(ProcessSecretPolicy.builder()
                         .factoryId(factoryId).productTypeId(productTypeId)
                         .storageMode(mode).ownerUserId(ownerUserId).createdBy(actor.id())
+                        .aliases(aliasesJson)
                         .build());
             } catch (org.springframework.dao.DataIntegrityViolationException e) {
                 // 并发首次启用: 另一请求已建好策略 (审计在落库成功之后才写, 不会留下假 ALLOW)
                 throw new BusinessException(409, "该产品刚被设置了保密策略，请刷新后重试").withHint("刷新保密设置列表后再操作");
             }
-            audit(factoryId, productTypeId, actor, "ENABLE " + mode + " owner=" + ownerUserId);
+            audit(factoryId, productTypeId, actor, "ENABLE " + mode + " owner=" + ownerUserId
+                    + (aliases == null ? "" : " aliases=" + aliasCount(aliasesJson)));
         } else {
             requireOwner(actor, factoryId, policy);
             requireVersion(policy, expectedPolicyVersion);
             ProcessSecretStorageMode before = policy.getStorageMode();
             Long ownerBefore = policy.getOwnerUserId();
+            int aliasesBefore = aliasCount(policy.getAliases());
             policy.setStorageMode(mode);
             policy.setOwnerUserId(ownerUserId);
+            if (aliases != null) {
+                policy.setAliases(aliasesJson);
+            }
             policy.setPolicyVersion(policy.getPolicyVersion() + 1);
             policyRepository.save(policy);
             if (mode == ProcessSecretStorageMode.CUSTOMER_HELD && before != mode) {
@@ -122,7 +146,8 @@ public class ProcessSecretPolicyService {
                 packageRepository.retireAllForProduct(factoryId, productTypeId);
             }
             audit(factoryId, productTypeId, actor, "UPDATE " + before + "->" + mode
-                    + " owner " + ownerBefore + "->" + ownerUserId);
+                    + " owner " + ownerBefore + "->" + ownerUserId
+                    + (aliases == null ? "" : " aliases " + aliasesBefore + "->" + aliasCount(aliasesJson)));
         }
         accessService.invalidate(factoryId);
         return view(actor, factoryId, policy);
@@ -276,8 +301,40 @@ public class ProcessSecretPolicyService {
     }
 
     private PolicyView view(AuthenticatedActor actor, String factoryId, ProcessSecretPolicy p) {
+        boolean owner = ProcessSecretAccessService.isOwner(actor, factoryId, p);
         return new PolicyView(p.getProductTypeId(), p.getStorageMode(), p.getOwnerUserId(), p.getPolicyVersion(),
-                ProcessSecretAccessService.isOwner(actor, factoryId, p), p.getUpdatedAt());
+                owner, p.getUpdatedAt(),
+                owner ? com.cretas.aims.service.consent.ProcessSecretTerms.policyAliases(p.getAliases()) : null);
+    }
+
+    /** 别名规范化: 去首尾空白、去空、去重 (保持顺序); 太多 / 太长 → 400。审计只记个数, 不记别名本身。 */
+    static String aliasesJson(List<String> aliases) {
+        java.util.LinkedHashSet<String> clean = new java.util.LinkedHashSet<>();
+        for (String a : aliases) {
+            if (a == null || a.strip().isEmpty()) {
+                continue;
+            }
+            String t = a.strip();
+            if (t.length() > MAX_ALIAS_LENGTH) {
+                throw new BusinessException(400, "别名不能超过 " + MAX_ALIAS_LENGTH + " 个字");
+            }
+            clean.add(t);
+        }
+        if (clean.size() > MAX_ALIASES) {
+            throw new BusinessException(400, "一个产品最多登记 " + MAX_ALIASES + " 个别名");
+        }
+        if (clean.isEmpty()) {
+            return null;
+        }
+        try {
+            return JSON.writeValueAsString(List.copyOf(clean));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static int aliasCount(String json) {
+        return com.cretas.aims.service.consent.ProcessSecretTerms.policyAliases(json).size();
     }
 
     private void audit(String factoryId, String productTypeId, AuthenticatedActor actor, String what) {

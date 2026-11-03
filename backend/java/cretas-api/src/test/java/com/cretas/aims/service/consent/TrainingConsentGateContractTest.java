@@ -83,7 +83,7 @@ class TrainingConsentGateContractTest {
         com.cretas.aims.repository.ProductTypeRepository products =
                 org.mockito.Mockito.mock(com.cretas.aims.repository.ProductTypeRepository.class);
         ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products,
-                org.mockito.Mockito.mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class));
+                com.cretas.aims.service.consent.TrainingListTestSupport.directoryBackedBy(products));
 
         com.cretas.aims.entity.ProductType product(String id, String factoryId, String name) {
             com.cretas.aims.entity.ProductType p = new com.cretas.aims.entity.ProductType();

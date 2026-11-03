@@ -62,7 +62,7 @@ class ExpressionLearningProcessSecretContractTest {
         p.setName(SECRET);
         when(products.findAllById(Set.of("pA"))).thenReturn(List.of(p));
         ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products,
-                org.mockito.Mockito.mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class));
+                com.cretas.aims.service.consent.TrainingListTestSupport.directoryBackedBy(products));
 
         service = new ExpressionLearningServiceImpl(repo, null, null, null, null, consent, filter);
         ReflectionTestUtils.setField(service, "self", mock(ExpressionLearningService.class));

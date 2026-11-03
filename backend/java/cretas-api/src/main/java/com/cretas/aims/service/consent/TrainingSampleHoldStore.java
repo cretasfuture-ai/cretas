@@ -24,12 +24,12 @@ public class TrainingSampleHoldStore {
 
     private static final Logger log = LoggerFactory.getLogger(TrainingSampleHoldStore.class);
 
-    /** 意图样本 (ai_training_samples) 的待写内容; {@code userInput} 已按授权脱敏。 */
+    /** 意图样本 (ai_training_samples) 的原话原文 (复审 N3: 重判用原文; 放行时由 recordSample 照常脱敏)。 */
     public record IntentSample(String userInput, String intentCode, String matchMethod, double confidence,
                                String sessionId) {
     }
 
-    /** 低置信样本 (active_learning_samples) 的待写内容; 文本已按授权脱敏。 */
+    /** 低置信样本 (active_learning_samples) 的原文 (放行时由 collectSample 照常脱敏)。 */
     public record ActiveLearningSampleData(Long userId, String userInput, String normalizedInput,
                                            String matchedIntentCode, BigDecimal confidenceScore,
                                            String matchMethod, String topCandidates, String matchedKeywords,
@@ -51,18 +51,18 @@ public class TrainingSampleHoldStore {
         this.clock = clock;
     }
 
-    public boolean holdIntent(String factoryId, IntentSample sample, boolean authorized) {
-        return hold(TrainingSampleSecrecyHold.Kind.INTENT, factoryId, sample, authorized);
+    public boolean holdIntent(String factoryId, IntentSample sample) {
+        return hold(TrainingSampleSecrecyHold.Kind.INTENT, factoryId, sample);
     }
 
-    public boolean holdActiveLearning(String factoryId, ActiveLearningSampleData sample, boolean authorized) {
-        return hold(TrainingSampleSecrecyHold.Kind.ACTIVE_LEARNING, factoryId, sample, authorized);
+    public boolean holdActiveLearning(String factoryId, ActiveLearningSampleData sample) {
+        return hold(TrainingSampleSecrecyHold.Kind.ACTIVE_LEARNING, factoryId, sample);
     }
 
-    private boolean hold(TrainingSampleSecrecyHold.Kind kind, String factoryId, Object sample, boolean authorized) {
+    private boolean hold(TrainingSampleSecrecyHold.Kind kind, String factoryId, Object sample) {
         try {
             repository.save(TrainingSampleSecrecyHold.of(kind, factoryId, JSON.writeValueAsString(sample),
-                    authorized, LocalDateTime.now(clock)));
+                    LocalDateTime.now(clock)));
             return true;
         } catch (JsonProcessingException | RuntimeException e) {
             log.warn("训练样本挂起失败, 本条不存: kind={}, factory={}, reason={}",

@@ -32,11 +32,11 @@ public final class ProcessSecretTerms {
 
     static final int MIN_TERM_LENGTH = 2;
 
-    /** 品类词 (与 Python CATEGORY_WORDS 逐项相同; 标出来的代理判据, 可替换)。 */
-    public static final List<String> CATEGORY_WORDS = List.of(
-            "牛肉", "猪肉", "羊肉", "鸡肉", "鸭肉", "鹅肉", "鱼肉", "禽肉", "肉类", "肉制品",
-            "熟食", "卤味", "卤制品", "酱卤", "酱卤制品", "猪肘", "原切", "调理品", "预制菜",
-            "速冻", "冷冻", "冷鲜", "成品", "半成品", "原料", "辅料", "包材", "礼盒");
+    /**
+     * 品类词 (含单一部位与菜名: 牛腱、鸭脖、米饭 …, Steve 2026-11-03 Q4 选 A)。只有一份:
+     * {@code backend/python/common/training_rule_words.json}, 构建时拷进 jar, 与 Python 读同一个文件。
+     */
+    public static final List<String> CATEGORY_WORDS = TrainingValueRules.strings("category_words", false);
 
     /** 纯数字 (允许中间夹空白 / 点 / 横线 / 下划线 / 斜杠): 398、2024-01、１２３。 */
     private static final Pattern PURE_NUMERIC = Pattern.compile("[0-9０-９ \\t.\\-_/\\u3000]+");
@@ -116,6 +116,33 @@ public final class ProcessSecretTerms {
             }
         }
         return Set.copyOf(out);
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * {@code process_secret_policies.aliases} (JSON 数组文本, Flyway V20261104_12) → 列表; NULL / 空 → 空。
+     * 格式不对就抛 (调用方的名单查询失败 → fail-closed), 与 Python {@code policy_aliases} 一致。
+     */
+    public static List<String> policyAliases(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = JSON.readTree(raw);
+            if (!node.isArray()) {
+                throw new IllegalStateException("process_secret_policies.aliases must be a JSON array");
+            }
+            List<String> out = new ArrayList<>();
+            node.forEach(n -> {
+                if (!n.isNull()) {
+                    out.add(n.asText());
+                }
+            });
+            return out;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("process_secret_policies.aliases is not valid JSON", e);
+        }
     }
 
     /** 人员姓名 / 客户名称: 去首尾空白、太短 / 纯数字的不收 (不套品类词)。 */

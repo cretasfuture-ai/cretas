@@ -500,6 +500,34 @@
         </extensions>
 
         <plugins>
+            <!-- 训练样本过滤规则的词表只有一份 (backend/python/common/training_rule_words.json, Steve 2026-11-03 Q4):
+                 构建时拷进 jar 的 process-secret/, Java TrainingValueRules / ProcessSecretTerms 从类路径读, Python 读原文件。
+                 用 copy-resources 追加, 不覆盖父 POM 的 <resources> (application*.yml 的过滤配置不受影响)。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-training-rule-words</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/process-secret</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/../../python/common</directory>
+                                    <includes>
+                                        <include>training_rule_words.json</include>
+                                    </includes>
+                                    <filtering>false</filtering>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <!-- Protobuf Maven Plugin for gRPC -->
             <plugin>
                 <groupId>org.xolstice.maven.plugins</groupId>

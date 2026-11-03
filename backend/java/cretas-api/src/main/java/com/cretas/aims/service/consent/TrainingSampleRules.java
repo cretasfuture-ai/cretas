@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
  *
  * <ul>
  *   <li>配方 / 工艺参数类词 ({@link #PARAMETER_MARKERS}) <b>和具体数值在同一句 / 同一条记录里</b>:
- *       任何工厂都不存, 授权也不存 ({@link #processWordWithValue})。词单独出现 (「杀菌温度一般设多少」)
+ *       任何工厂都不存, 授权也不存 ({@link TrainingValueRules#hasWordWithValue}, 12 字窗口)。词单独出现 (「杀菌温度一般设多少」)
  *       不拦 —— 保密的是数值;</li>
  *   <li>其余原话默认存, 用来学「听懂」; 未授权工厂的原话把数字、手机号、身份证号、银行卡号换成占位符;
  *       已授权 (training_consent = private / shared_anon) 原样存。</li>
@@ -54,54 +54,7 @@ public final class TrainingSampleRules {
     static final Pattern ID_CARD = Pattern.compile("(?<![0-9A-Za-z])\\d{17}[\\dXx](?![0-9A-Za-z])");
     static final Pattern BANK_CARD = Pattern.compile("(?<![0-9A-Za-z])\\d{16,19}(?![0-9A-Za-z])");
     static final Pattern PHONE = Pattern.compile("(?<![0-9A-Za-z])1[3-9]\\d{9}(?![0-9A-Za-z])");
-    /** 数字; F006 / V2 / B12 这类编号保留。 */
-    private static final Pattern NUMBER = Pattern.compile("(?<![A-Za-z0-9_.<])\\d+(?:\\.\\d+)?");
-
     private TrainingSampleRules() {
-    }
-
-    // ---- 「工艺词 + 具体数值」(与 Python training_consent 的同名正则逐字相同, 共用用例文件) ----
-    /** 一条记录 = 一句 / 一行表格 / 一个列表项: 在句末标点处切, 在「后面不是缩进」的换行处切。 */
-    static final Pattern RECORD_SPLIT = Pattern.compile("[。！？!?；;]|\\n(?![ \\t\\u3000])");
-    /** 不算数值: 开头的列表序号、字母开头的编号 (F006 / CLK-W-20260717-57628)、日期和时刻。 */
-    static final Pattern ORDINAL = Pattern.compile(
-            "^[ \\t\\r\\n\\u3000]*(?:#+[ \\t\\u3000]*)?(?:[-*•][ \\t\\u3000]*)?(?:\\*\\*)?[0-9]{1,3}[.、)）](?![0-9])");
-    static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*");
-    static final Pattern DATE_TIME = Pattern.compile(
-            "[0-9]{4}[-/.年][0-9]{1,2}(?:[-/.月][0-9]{1,2}日?)?"
-            + "|[0-9]{1,2}月[0-9]{1,2}日"
-            + "|[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?");
-    static final Pattern DIGIT = Pattern.compile("[0-9０-９]");
-
-    /** 这条记录带数值吗 (去掉列表序号、编号、日期时刻之后还剩数字)。 */
-    static boolean hasConcreteNumber(String record) {
-        if (record == null || record.isEmpty()) {
-            return false;
-        }
-        String s = ORDINAL.matcher(record).replaceFirst(" ");
-        s = DATE_TIME.matcher(s).replaceAll(" ");
-        s = IDENTIFIER.matcher(s).replaceAll(" ");
-        return DIGIT.matcher(s).find();
-    }
-
-    /** 词表里的词和具体数值出现在同一条记录里。 */
-    static boolean processWordWithValue(String text, List<String> markers) {
-        if (text == null || text.isEmpty()) {
-            return false;
-        }
-        for (String record : RECORD_SPLIT.split(text, -1)) {
-            boolean hasMarker = false;
-            for (String m : markers) {
-                if (record.contains(m)) {
-                    hasMarker = true;
-                    break;
-                }
-            }
-            if (hasMarker && hasConcreteNumber(record)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**
@@ -109,10 +62,10 @@ public final class TrainingSampleRules {
      * (人名 / 客户名 / 保密产品名由 {@link ProcessSecretSampleFilter#checkTrainingSample} 按本厂名单判。)
      */
     public static boolean utteranceHasBlockedContent(String text) {
-        return processWordWithValue(text, PARAMETER_MARKERS);
+        return TrainingValueRules.hasWordWithValue(text, PARAMETER_MARKERS, TrainingValueRules.CONDITIONAL_MARKERS);
     }
 
-    /** 未授权工厂原话的脱敏: 证件号 / 卡号 / 手机号 → 占位符, 其余数字 → {@code <数值>}。 */
+    /** 未授权工厂原话的脱敏: 证件号 / 卡号 / 手机号 → 占位符, 其余数值 (含中文数字、pH4 这类贴着单位的) → {@code <数值>}。 */
     public static String maskNumbers(String text) {
         if (text == null || text.isEmpty()) {
             return text;
@@ -120,7 +73,7 @@ public final class TrainingSampleRules {
         String out = ID_CARD.matcher(text).replaceAll("<证件号>");
         out = BANK_CARD.matcher(out).replaceAll("<卡号>");
         out = PHONE.matcher(out).replaceAll("<电话>");
-        return NUMBER.matcher(out).replaceAll("<数值>");
+        return TrainingValueRules.maskValues(out);
     }
 
     /**

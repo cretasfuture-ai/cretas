@@ -1,6 +1,5 @@
 package com.cretas.aims.service.consent;
 
-import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.learning.FactoryNameDirectoryRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
@@ -81,9 +80,32 @@ class ProcessSecretFilterRulesSharedContractTest {
         return bad;
     }
 
+    static final Path WORDS = Path.of("..", "..", "python", "common", "training_rule_words.json");
+
+    /** Q4: the word lists exist once; the jar carries a byte-identical copy of the Python file (pom copy-resources). */
     @Test
-    void categoryWordsAreTheSharedList() {
-        assertThat(ProcessSecretTerms.CATEGORY_WORDS).containsExactlyElementsOf(strings(cases.get("category_words")));
+    void wordListsComeFromTheOneSharedFile() throws Exception {
+        JsonNode source = new ObjectMapper().readTree(Files.readString(WORDS, StandardCharsets.UTF_8));
+        assertThat(TrainingValueRules.WORDS).isEqualTo(source);
+        assertThat(ProcessSecretTerms.CATEGORY_WORDS).containsExactlyElementsOf(strings(source.get("category_words")));
+        assertThat(ProcessSecretTerms.CATEGORY_WORDS).contains("牛腱", "鸭脖", "米饭");
+        try (var in = getClass().getClassLoader().getResourceAsStream(TrainingValueRules.WORDS_RESOURCE)) {
+            assertThat(in).as("classpath copy").isNotNull();
+            assertThat(new String(in.readAllBytes(), StandardCharsets.UTF_8))
+                    .isEqualTo(Files.readString(WORDS, StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void maskCases() {
+        List<String> bad = new ArrayList<>();
+        for (JsonNode c : cases.get("mask_cases")) {
+            String got = TrainingSampleRules.maskNumbers(c.get("text").asText());
+            if (!got.equals(c.get("masked").asText())) {
+                bad.add(c.get("text").asText() + " -> " + got);
+            }
+        }
+        assertThat(bad).isEmpty();
     }
 
     @Test
@@ -116,27 +138,24 @@ class ProcessSecretFilterRulesSharedContractTest {
         FactoryNameDirectoryRepository directory = mock(FactoryNameDirectoryRepository.class);
         Map<String, JsonNode> byFactory = new java.util.LinkedHashMap<>();
         rows.get("products_by_factory").fields().forEachRemaining(e -> byFactory.put(e.getKey(), e.getValue()));
-        List<ProductType> all = new ArrayList<>();
+        // the loader's raw rows exactly as the native queries return them (product columns; the policy's aliases JSON)
         for (Map.Entry<String, JsonNode> e : byFactory.entrySet()) {
             Set<String> ids = new HashSet<>();
-            for (ProcessSecretTerms.Product p : products(e.getValue())) {
-                ProductType pt = new ProductType();
-                pt.setId(p.id());
-                pt.setFactoryId(e.getKey());
-                pt.setCode(p.code());
-                pt.setName(p.name());
-                pt.setCategory(p.category());
-                all.add(pt);
-                ids.add(p.id());
+            List<Object[]> rowsOut = new ArrayList<>();
+            List<String> aliases = new ArrayList<>();
+            for (JsonNode p : e.getValue()) {
+                ids.add(text(p, "id"));
+                rowsOut.add(new Object[]{text(p, "id"), text(p, "code"), text(p, "name"), text(p, "category"),
+                        text(p, "product_category")});
+                if (text(p, "aliases") != null) {
+                    aliases.add(text(p, "aliases"));
+                }
             }
             when(access.protectedProductTypeIds(e.getKey())).thenReturn(ids);
+            when(directory.findProtectedProductRows(org.mockito.ArgumentMatchers.eq(e.getKey()), any())).thenReturn(rowsOut);
+            when(directory.findPolicyAliases(e.getKey())).thenReturn(aliases);
         }
         when(access.factoriesWithProtectedProducts()).thenReturn(Set.copyOf(byFactory.keySet()));
-        when(repo.findAllById(any())).thenAnswer(inv -> {
-            Set<String> wanted = new HashSet<>();
-            ((Iterable<?>) inv.getArgument(0)).forEach(id -> wanted.add((String) id));
-            return all.stream().filter(p -> wanted.contains(p.getId())).toList();
-        });
         ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, repo, directory);
 
         List<String> bad = new ArrayList<>();

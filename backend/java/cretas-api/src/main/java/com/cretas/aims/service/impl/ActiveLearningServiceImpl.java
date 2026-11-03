@@ -112,22 +112,22 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict verdict =
                 processSecretSampleFilter.checkTrainingSample("active_learning", factoryId,
                         userInput, normalizedInput, matchedKeywords, topCandidates);
-        boolean authorized = status == TrainingConsentService.Status.AUTHORIZED;
-        if (!authorized) {
-            userInput = TrainingSampleRules.maskNumbers(userInput);
-            normalizedInput = TrainingSampleRules.maskNumbers(normalizedInput);
-            matchedKeywords = TrainingSampleRules.maskNumbers(matchedKeywords);
-        }
         if (verdict == com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.HELD) {
             if (holdStore != null) {
+                // 原文 (复审 N3): 重判用原文; 放行时本方法再按当时的授权脱敏
                 holdStore.holdActiveLearning(factoryId, new TrainingSampleHoldStore.ActiveLearningSampleData(
                         userId, userInput, normalizedInput, matchedIntentCode, confidenceScore, matchMethod,
-                        topCandidates, matchedKeywords, sourceRecordId), authorized);
+                        topCandidates, matchedKeywords, sourceRecordId));
             }
             return null;
         }
         if (verdict != com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
             return null;
+        }
+        if (status != TrainingConsentService.Status.AUTHORIZED) {
+            userInput = TrainingSampleRules.maskNumbers(userInput);
+            normalizedInput = TrainingSampleRules.maskNumbers(normalizedInput);
+            matchedKeywords = TrainingSampleRules.maskNumbers(matchedKeywords);
         }
 
         // Check if already collected

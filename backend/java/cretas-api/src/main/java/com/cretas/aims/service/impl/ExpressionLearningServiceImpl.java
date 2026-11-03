@@ -620,8 +620,9 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
                 processSecretSampleFilter.checkTrainingSample("intent", factoryId, userInput);
         if (verdict == ProcessSecretSampleFilter.SampleVerdict.HELD) {
             if (holdStore != null) {
-                holdStore.holdIntent(factoryId, new TrainingSampleHoldStore.IntentSample(textToStore, intentCode,
-                        method == null ? null : method.name(), confidence, sessionId), authorized);
+                // 原话原文 (复审 N3): 重判用原文; 放行时 recordSample 再按当时的授权脱敏
+                holdStore.holdIntent(factoryId, new TrainingSampleHoldStore.IntentSample(userInput.trim(), intentCode,
+                        method == null ? null : method.name(), confidence, sessionId));
             }
             return null;
         }
