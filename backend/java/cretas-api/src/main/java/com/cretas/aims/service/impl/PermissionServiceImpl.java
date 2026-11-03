@@ -463,6 +463,19 @@ public class PermissionServiceImpl implements PermissionService {
      * <p>白名单: factory_super_admin / platform_admin (兜底) / procurement_manager (流程发起方) /
      * finance_manager (审核执行方) / dispatcher (协调). 其余一律不可见.
      */
+    private static final Set<FactoryUserRole> FINANCE_REVIEW_VIEW_ROLES = Set.of(
+            FactoryUserRole.factory_super_admin,
+            FactoryUserRole.platform_admin,
+            FactoryUserRole.procurement_manager,
+            FactoryUserRole.finance_manager,
+            FactoryUserRole.dispatcher,
+            // 餐饮老板需查看财务待审采购单 (采购金额审批)
+            FactoryUserRole.restaurant_owner,
+            // 向后兼容
+            FactoryUserRole.permission_admin,
+            FactoryUserRole.department_admin
+    );
+
     /**
      * 角色码能否查看「待财务审核」的销售单 / 采购单 —— 与 {@link #FINANCE_REVIEW_VIEW_PERMISSION} 同一份白名单。
      * 给不经过 controller 的入口 (AI 工具) 用: controller 的这道二次拦截在工具路径上不运行。
@@ -477,19 +490,6 @@ public class PermissionServiceImpl implements PermissionService {
             return false;
         }
     }
-
-    private static final Set<FactoryUserRole> FINANCE_REVIEW_VIEW_ROLES = Set.of(
-            FactoryUserRole.factory_super_admin,
-            FactoryUserRole.platform_admin,
-            FactoryUserRole.procurement_manager,
-            FactoryUserRole.finance_manager,
-            FactoryUserRole.dispatcher,
-            // 餐饮老板需查看财务待审采购单 (采购金额审批)
-            FactoryUserRole.restaurant_owner,
-            // 向后兼容
-            FactoryUserRole.permission_admin,
-            FactoryUserRole.department_admin
-    );
 
     /** 财务待审采购单查看权限代码 (Issue #736). */
     public static final String FINANCE_REVIEW_VIEW_PERMISSION = "procurement:finance_review:view";

@@ -102,6 +102,41 @@ public class DynamicToolSelectionService {
     @Autowired(required = false)
     private com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate tieredIntentDelegate;
 
+    /**
+     * 走 Skill 的意图 (tool_name 为空, 如 REPORT_INVENTORY) 以前给工具的参数是空的: 用户说的时间、状态都到不了
+     * (S6 验收: 「上个月的库存」回今天的报表、没有「不能按时间筛选」提示)。这里与 ToolDispatchService 同口径补上:
+     * 用户原话 (StatusFilter 认状态用) + 规则预处理出的时间 (startDate/endDate + TimeRangeFilter.SAID)。
+     * 只跑规则, 不调大模型; 预处理不可用或失败时只带原话。
+     */
+    @org.springframework.context.annotation.Lazy
+    @Autowired(required = false)
+    private com.cretas.aims.service.QueryPreprocessorService queryPreprocessorService;
+
+    Map<String, Object> sentenceParams(String userQuery) {
+        Map<String, Object> params = new HashMap<>();
+        if (userQuery == null || userQuery.isBlank()) {
+            return params;
+        }
+        params.put("userInput", userQuery);
+        if (queryPreprocessorService == null) {
+            return params;
+        }
+        try {
+            com.cretas.aims.dto.ai.PreprocessedQuery pq = queryPreprocessorService.preprocessRulesOnly(userQuery);
+            com.cretas.aims.config.TimeNormalizationRules.TimeRange range = pq == null ? null : pq.getPrimaryTimeRange();
+            if (range != null && range.isValid()) {
+                String from = range.getStart().toLocalDate().toString();
+                String to = range.getEnd().toLocalDate().toString();
+                params.put("startDate", from);
+                params.put("endDate", to);
+                params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID, from + "~" + to);
+            }
+        } catch (RuntimeException e) {
+            log.warn("Skill 路由的规则预处理失败, 本次不补时间参数: input='{}', error={}", userQuery, e.toString());
+        }
+        return params;
+    }
+
     // ==================== 公开方法 ====================
 
     /**
@@ -374,7 +409,7 @@ public class DynamicToolSelectionService {
                     .userId(userId != null ? userId.toString() : null)
                     .userRole(userRole)
                     .userQuery(userQuery)
-                    .extractedParams(new HashMap<>())
+                    .extractedParams(sentenceParams(userQuery))
                     .build();
 
             SkillResult skillResult = skillRouterService.executeSkill(bestMatch.getName(), skillContext);
@@ -499,7 +534,7 @@ public class DynamicToolSelectionService {
                     .userId(userId != null ? userId.toString() : null)
                     .userRole(userRole)
                     .userQuery(userQuery)
-                    .extractedParams(new HashMap<>())
+                    .extractedParams(sentenceParams(userQuery))
                     .build();
 
             SkillResult skillResult = skillRouterService.executeSkill(skillName, skillContext);

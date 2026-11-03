@@ -102,6 +102,26 @@ public abstract class AbstractTool implements ToolExecutor {
      * @param message 错误消息（应为用户友好消息，不含敏感信息）
      * @return JSON 字符串
      */
+    /** 同 {@link #buildErrorResult(String)}, 另带业务码 (BusinessException#getCode), 供调用方区分权限拒绝。 */
+    protected String buildErrorResult(String message, Integer errorCode) {
+        // 先走 buildErrorResult(String): 工具可能覆写它给出自己的结果形状 (如供应商比价的 FORBIDDEN / 暂不可用),
+        // 这里只在它没写 errorCode 时补上数字业务码, 不改别的字段。
+        String base = buildErrorResult(message);
+        if (errorCode == null) {
+            return base;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(base);
+            if (node instanceof com.fasterxml.jackson.databind.node.ObjectNode object && !object.has("errorCode")) {
+                object.put("errorCode", errorCode);
+                return objectMapper.writeValueAsString(object);
+            }
+        } catch (Exception e) {
+            log.warn("错误结果补业务码失败, 原样返回: {}", e.getMessage());
+        }
+        return base;
+    }
+
     protected String buildErrorResult(String message) {
         try {
             Map<String, Object> result = new HashMap<>();

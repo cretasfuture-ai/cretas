@@ -76,6 +76,7 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             String factoryId = getFactoryId(context);
             // 1.5 用户在对话里说的状态 → status (工具在 schema 里声明了状态词表时; 见 StatusFilter)
             StatusFilter.apply(getParametersSchema(), params);
+            TimeRangeFilter.prepare(getParametersSchema(), params);
 
             // 2. 校验必需参数
             List<String> missingParams = validateRequiredParams(params);
@@ -109,7 +110,8 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             // BusinessException 消息本就面向用户(GlobalExceptionHandler 也直接展示), 不脱敏,
             // 让工具的友好提示(如"找不到原料 X"/"匹配到多条")透传给用户, 而非笼统"操作执行失败"。
             log.warn("业务规则: {}", e.getMessage());
-            return buildErrorResult(e.getMessage());
+            // 带上业务码: 403 (权限) 要在对话里报成 PERMISSION_DENIED, 不是笼统的失败
+            return buildErrorResult(e.getMessage(), e.getCode());
         } catch (Exception e) {
             logExecutionFailure(toolCall, e);
             // 脱敏处理：不暴露具体异常信息
@@ -269,6 +271,7 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             Map<String, Object> params = parseArguments(toolCall);
             String factoryId = getFactoryId(context);
             StatusFilter.apply(getParametersSchema(), params);
+            TimeRangeFilter.prepare(getParametersSchema(), params);
 
             List<String> missingParams = previewMissingParameters(params);
             if (!missingParams.isEmpty()) {
@@ -288,7 +291,7 @@ public abstract class AbstractBusinessTool extends AbstractTool {
         } catch (com.cretas.aims.exception.BusinessException e) {
             // 同 execute(): BusinessException 友好提示透传, 不脱敏
             log.warn("业务规则(预览): {}", e.getMessage());
-            return buildErrorResult(e.getMessage());
+            return buildErrorResult(e.getMessage(), e.getCode());
         } catch (Exception e) {
             logExecutionFailure(toolCall, e);
             return buildSanitizedErrorResult(e);

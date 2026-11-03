@@ -24,6 +24,13 @@ public interface EquipmentAlertsService {
                                                   String keyword, String severity, String status);
 
     /**
+     * 同上, 另按设备过滤 (equipmentId 为 null 时不限)。设备条件在数据库里、分页之前生效, 总数是筛过的 ——
+     * 以前 alert_list / alert_by_equipment 在查回的这一页里按设备筛, 总数仍是全厂的。
+     */
+    PageResponse<EquipmentAlertDTO> getAlertList(String factoryId, PageRequest pageRequest,
+                                                  String keyword, String severity, String status, Long equipmentId);
+
+    /**
      * 获取告警统计
      */
     Map<String, Object> getAlertStatistics(String factoryId);

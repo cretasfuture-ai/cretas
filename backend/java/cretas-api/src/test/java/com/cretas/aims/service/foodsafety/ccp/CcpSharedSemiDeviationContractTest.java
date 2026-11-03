@@ -2,6 +2,7 @@ package com.cretas.aims.service.foodsafety.ccp;
 
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.SemiFinishedInventory;
+import com.cretas.aims.entity.foodsafety.HaccpMonitoringRecord;
 import com.cretas.aims.entity.quality.QcReleaseRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -89,11 +90,13 @@ class CcpSharedSemiDeviationContractTest {
         when(productionBatchRepo.findByIdAndFactoryId(101L, F)).thenReturn(Optional.of(pb(101L, "PB-101", "P1")));
         when(productionBatchRepo.findByIdAndFactoryId(202L, F)).thenReturn(Optional.of(pb(202L, "PB-202", "P2")));
         // 只有计划 P2 有未处理偏离; 批号维度无偏离
-        when(recordRepo.countOpenDeviationsByBatchNumbers(eq(F), anyCollection())).thenReturn(0L);
-        when(recordRepo.countOpenDeviationsByPlanIdPrefix(eq(F), anyString())).thenReturn(0L);
-        when(recordRepo.countOpenDeviationsByPlanIds(eq(F), anyCollection())).thenAnswer(inv -> {
+        when(recordRepo.findOpenDeviationsByBatchNumbers(eq(F), anyCollection())).thenReturn(List.of());
+        when(recordRepo.findOpenDeviationsByPlanIdPrefix(eq(F), anyString())).thenReturn(List.of());
+        HaccpMonitoringRecord p2Deviation = HaccpMonitoringRecord.builder().id(900L).factoryId(F)
+                .batchNumber("PB-202").productionPlanId("P2").isDeviation(true).build();
+        when(recordRepo.findOpenDeviationsByPlanIds(eq(F), anyCollection())).thenAnswer(inv -> {
             Collection<?> plans = inv.getArgument(1);
-            return plans.contains("P2") ? 1L : 0L;
+            return plans.contains("P2") ? List.of(p2Deviation) : List.of();
         });
         when(releaseRecordRepo.save(any(QcReleaseRecord.class))).thenAnswer(inv -> inv.getArgument(0));
     }

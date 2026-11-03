@@ -125,7 +125,8 @@ class DateFilterChatEntryContractTest {
         OrderListTool tool = withMapper(new OrderListTool(sales));
 
         IntentExecuteResponse refused = run(tool, "ORDER_LIST", "CRM", "查询待财务审核的销售订单", true, "viewer");
-        assertThat(refused.getStatus()).isNotEqualTo("SUCCESS");
+        // 工具里的 403 与 RBAC 拒绝同一个状态 (以前降成 FAILED, 对话里是业务码 400)
+        assertThat(refused.getStatus()).isEqualTo("PERMISSION_DENIED");
         assertThat(String.valueOf(refused.getMessage())).contains("无权查看待财审销售单");
         verifyNoInteractions(sales);
 

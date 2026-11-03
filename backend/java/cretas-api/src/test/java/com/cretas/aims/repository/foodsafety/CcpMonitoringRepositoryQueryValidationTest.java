@@ -81,18 +81,18 @@ class CcpMonitoringRepositoryQueryValidationTest {
         rec("F-OTHER", "B-1", "plan-aaaa1111-x", true, false, t); // 别厂
         em.clear();
 
-        assertThat(recordRepo.countOpenDeviationsByBatchNumbers(F, Set.of("B-1"))).isEqualTo(1);
-        assertThat(recordRepo.countOpenDeviationsByBatchNumbers(F, Set.of("B-1", "B-2"))).isEqualTo(2);
-        assertThat(recordRepo.countOpenDeviationsByPlanIds(F, Set.of("plan-aaaa1111-x"))).isEqualTo(1);
-        assertThat(recordRepo.countOpenDeviationsByPlanIdPrefix(F, "plan-bbb")).isEqualTo(1);
-        assertThat(recordRepo.countOpenDeviationsByPlanIdPrefix(F, "zzz")).isZero();
+        assertThat(recordRepo.findOpenDeviationsByBatchNumbers(F, Set.of("B-1"))).hasSize(1);
+        assertThat(recordRepo.findOpenDeviationsByBatchNumbers(F, Set.of("B-1", "B-2"))).hasSize(2);
+        assertThat(recordRepo.findOpenDeviationsByPlanIds(F, Set.of("plan-aaaa1111-x"))).hasSize(1);
+        assertThat(recordRepo.findOpenDeviationsByPlanIdPrefix(F, "plan-bbb")).hasSize(1);
+        assertThat(recordRepo.findOpenDeviationsByPlanIdPrefix(F, "zzz")).isEmpty();
         // 第三轮审查 L-1: 前缀里的 _ 按字面量匹配 (调用方转义 + ESCAPE); 不转义时 _ 是通配符 (阴性对照)
         rec(F, "B-3", "plan_x-1", true, false, t);
         rec(F, "B-4", "planAx-2", true, false, t);
         em.clear();
-        assertThat(recordRepo.countOpenDeviationsByPlanIdPrefix(F,
-                com.cretas.aims.util.SqlLikeEscaper.escape("plan_x"))).isEqualTo(1);
-        assertThat(recordRepo.countOpenDeviationsByPlanIdPrefix(F, "plan_x")).isEqualTo(2);
+        assertThat(recordRepo.findOpenDeviationsByPlanIdPrefix(F,
+                com.cretas.aims.util.SqlLikeEscaper.escape("plan_x"))).hasSize(1);
+        assertThat(recordRepo.findOpenDeviationsByPlanIdPrefix(F, "plan_x")).hasSize(2);
     }
 
     @Test
