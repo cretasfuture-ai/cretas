@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
  * prod F006 2026-10-06 原形: 用户只回「1827」, LLM 同时给出产量 0 和一句自言自语的备注。
  * 入口: 真实的 startParameterCollection → continueConversation, 只桩 LLM 与仓库。
  */
-class ConversationSlotAnswerGroundingTest {
+class ConversationSlotAnswerGroundingContractTest {
 
     private static final String FACTORY_ID = "F006";
     private static final Long USER_ID = 7L;
