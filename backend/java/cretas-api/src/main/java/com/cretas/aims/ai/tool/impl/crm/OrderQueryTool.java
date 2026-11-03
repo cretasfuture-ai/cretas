@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.crm;
 
+import com.cretas.aims.ai.tool.FinanceReviewStatusGuard;
 import com.cretas.aims.ai.tool.StatusFilter;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.common.PageResponse;
@@ -107,7 +108,10 @@ public class OrderQueryTool extends AbstractBusinessTool {
             } catch (IllegalArgumentException exception) {
                 throw new IllegalArgumentException("不支持的销售订单状态: " + statusValue);
             }
-            orders = salesService.getSalesOrdersByStatus(factoryId, status, page, size);
+            // 待财务审核: 与 SalesController 同一道二次拦截 (#736)
+            FinanceReviewStatusGuard.check(statusValue, getUserRole(context), "销售单");
+            // 按 DataScope 收窄 (getSalesOrdersByStatus 不收窄: SELF 角色会看到全厂这个状态的订单)
+            orders = salesService.getSalesOrdersFiltered(factoryId, status, null, null, page, size);
         }
         result.put("orders", orders.getContent());
         result.put("total", orders.getTotalElements());

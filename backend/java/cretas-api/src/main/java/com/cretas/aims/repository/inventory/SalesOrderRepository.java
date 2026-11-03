@@ -122,6 +122,43 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
 
     Page<SalesOrder> findByFactoryIdInOrderByCreatedAtDesc(List<String> factoryIds, Pageable pageable);
 
+    /**
+     * 销售订单列表的条件筛选 (状态 / 订单日期 / DataScope), 全部在分页之前由数据库过滤 (S6 验收 2026-11-03:
+     * 「查询上个月的销售订单」返回全部 538 条; 状态那条路径还绕过了 DataScope)。
+     *
+     * <p>每个条件可选 (null = 不限)。⛔ 不用 {@code CAST(:x AS string) IS NULL}: null 的 LocalDate / 枚举
+     * 在 PostgreSQL 上绑不出类型 (#1357 实测「Unknown Types value.」), 所以拆成布尔标志 + 永远非空的值。
+     *
+     * @param createdByList DataScope 可见的创建人; null = 不限 (ALL)
+     */
+    default Page<SalesOrder> searchFiltered(String factoryId, Collection<Long> createdByList, SalesOrderStatus status,
+                                            LocalDate orderDateFrom, LocalDate orderDateTo, Pageable pageable) {
+        return searchFilteredBound(factoryId,
+                createdByList != null, createdByList != null && !createdByList.isEmpty() ? createdByList : List.of(-1L),
+                status != null, status != null ? status : SalesOrderStatus.DRAFT,
+                orderDateFrom != null, orderDateFrom != null ? orderDateFrom : LocalDate.of(1970, 1, 1),
+                orderDateTo != null, orderDateTo != null ? orderDateTo : LocalDate.of(9999, 12, 31),
+                pageable);
+    }
+
+    /** 只由 {@link #searchFiltered} 调用: 值参数都非空, 是否生效看布尔标志。 */
+    @Query("SELECT so FROM SalesOrder so WHERE so.factoryId = :factoryId " +
+            "AND (:scoped = false OR so.createdBy IN :createdByList) " +
+            "AND (:byStatus = false OR so.status = :status) " +
+            "AND (:byFrom = false OR so.orderDate >= :orderDateFrom) " +
+            "AND (:byTo = false OR so.orderDate <= :orderDateTo) " +
+            "ORDER BY so.createdAt DESC")
+    Page<SalesOrder> searchFilteredBound(@Param("factoryId") String factoryId,
+                                         @Param("scoped") boolean scoped,
+                                         @Param("createdByList") Collection<Long> createdByList,
+                                         @Param("byStatus") boolean byStatus,
+                                         @Param("status") SalesOrderStatus status,
+                                         @Param("byFrom") boolean byFrom,
+                                         @Param("orderDateFrom") LocalDate orderDateFrom,
+                                         @Param("byTo") boolean byTo,
+                                         @Param("orderDateTo") LocalDate orderDateTo,
+                                         Pageable pageable);
+
     @Query("SELECT COUNT(so) FROM SalesOrder so WHERE so.factoryId = :factoryId AND so.orderDate = :date")
     long countByFactoryIdAndDate(@Param("factoryId") String factoryId, @Param("date") LocalDate date);
 

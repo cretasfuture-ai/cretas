@@ -34,6 +34,14 @@ public interface SalesService {
 
     PageResponse<SalesOrder> getSalesOrdersByStatus(String factoryId, SalesOrderStatus status, int page, int size);
 
+    /**
+     * 按状态 / 订单日期筛选的销售订单列表 (每个条件可选, null = 不限), 在分页之前由数据库过滤, 并按 DataScope 收窄。
+     * AI 工具 order_list / order_query 走这里 —— {@link #getSalesOrdersByStatus} 不按 DataScope 收窄。
+     */
+    PageResponse<SalesOrder> getSalesOrdersFiltered(String factoryId, SalesOrderStatus status,
+                                                    java.time.LocalDate orderDateFrom, java.time.LocalDate orderDateTo,
+                                                    int page, int size);
+
     SalesOrder confirmOrder(String factoryId, String orderId, Long initiatorUserId);
 
     /** 提交财务审核: CONFIRMED -> PENDING_FINANCE_REVIEW */

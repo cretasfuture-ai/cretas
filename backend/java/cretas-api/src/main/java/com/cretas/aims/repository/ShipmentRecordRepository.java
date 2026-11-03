@@ -39,6 +39,40 @@ public interface ShipmentRecordRepository extends JpaRepository<ShipmentRecord, 
             java.math.BigDecimal quantity, Long recordedBy, java.time.LocalDateTime cutoff);
 
     /**
+     * 出货记录列表的条件筛选 (客户 / 状态 / 出货日期), 全部在分页之前由数据库过滤 (S6 验收 2026-11-03:
+     * 「上个月的出货记录」不按日期筛; 以前日期一条路径、状态一条路径、客户一条路径, 同时给就静默丢掉其余条件)。
+     * 每个条件可选, 用布尔标志 + 永远非空的值 (null 的 LocalDate 在 PG 上绑不出类型, 见 #1357)。
+     */
+    default Page<ShipmentRecord> searchFiltered(String factoryId, String customerId, String status,
+                                                java.time.LocalDate shipmentDateFrom,
+                                                java.time.LocalDate shipmentDateTo, Pageable pageable) {
+        return searchFilteredBound(factoryId,
+                customerId != null, customerId != null ? customerId : "",
+                status != null, status != null ? status : "",
+                shipmentDateFrom != null, shipmentDateFrom != null ? shipmentDateFrom : java.time.LocalDate.of(1970, 1, 1),
+                shipmentDateTo != null, shipmentDateTo != null ? shipmentDateTo : java.time.LocalDate.of(9999, 12, 31),
+                pageable);
+    }
+
+    /** 只由 {@link #searchFiltered} 调用: 值参数都非空, 是否生效看布尔标志。 */
+    @Query("SELECT s FROM ShipmentRecord s WHERE s.factoryId = :factoryId " +
+           "AND (:byCustomer = false OR s.customerId = :customerId) " +
+           "AND (:byStatus = false OR s.status = :status) " +
+           "AND (:byFrom = false OR s.shipmentDate >= :shipmentDateFrom) " +
+           "AND (:byTo = false OR s.shipmentDate <= :shipmentDateTo) " +
+           "ORDER BY s.shipmentDate DESC")
+    Page<ShipmentRecord> searchFilteredBound(@Param("factoryId") String factoryId,
+                                             @Param("byCustomer") boolean byCustomer,
+                                             @Param("customerId") String customerId,
+                                             @Param("byStatus") boolean byStatus,
+                                             @Param("status") String status,
+                                             @Param("byFrom") boolean byFrom,
+                                             @Param("shipmentDateFrom") java.time.LocalDate shipmentDateFrom,
+                                             @Param("byTo") boolean byTo,
+                                             @Param("shipmentDateTo") java.time.LocalDate shipmentDateTo,
+                                             Pageable pageable);
+
+    /**
      * 根据工厂ID和状态查询出货记录
      */
     Page<ShipmentRecord> findByFactoryIdAndStatusOrderByShipmentDateDesc(

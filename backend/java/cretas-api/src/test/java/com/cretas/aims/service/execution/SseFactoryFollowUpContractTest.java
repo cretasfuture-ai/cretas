@@ -60,7 +60,7 @@ class SseFactoryFollowUpContractTest {
             assertThat(codes(event.path("followUps"))).containsExactly("RECEIVE_QUALITY_CHECK_TODAY", "QUALITY_STATS");
             assertThat(codes(event.path("followUps"))).doesNotContain("MATERIAL_TODAY_RECEIVING_QUERY", "MATERIAL_BATCH_QUERY");
             h.assertExecutableReads(event.path("followUps"));
-            verify(h.inspections).findByFactoryId(eq("F006"), any(Pageable.class));
+            verify(h.inspections).searchFiltered(eq("F006"), any(), any(), any(), any(), any(), any(Pageable.class));
         }
     }
 
@@ -161,7 +161,7 @@ class SseFactoryFollowUpContractTest {
                     new DataScopeResolver(users, mock(RoleDefinitionRepository.class)));
             MaterialBatchQueryTool inventory = new MaterialBatchQueryTool();
             ReflectionTestUtils.setField(inventory, "materialBatchService", materialService);
-            when(inspections.findByFactoryId(eq("F006"), any(Pageable.class))).thenReturn(Page.empty());
+            when(inspections.searchFiltered(eq("F006"), any(), any(), any(), any(), any(), any(Pageable.class))).thenReturn(Page.empty());
             QualityInspection own = new QualityInspection(); own.setId("Q-D"); own.setFactoryId("F006"); own.setInspectorId(7L);
             when(inspections.findById("Q-D")).thenReturn(Optional.of(own));
             when(defects.save(any(QualityDefect.class))).thenAnswer(call -> {

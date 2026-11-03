@@ -486,7 +486,8 @@ public class SalesController {
                 throw new BusinessException(403, "无权查看待财审销售单");
             }
         }
-        PageResponse<SalesOrder> result = salesService.getSalesOrdersByStatus(factoryId, status, page, size);
+        // 与 AI 工具同一个方法: 状态在数据库里过滤并按 DataScope 收窄 (以前这个接口不收窄, SELF 角色看到全厂该状态的单)
+        PageResponse<SalesOrder> result = salesService.getSalesOrdersFiltered(factoryId, status, null, null, page, size);
         return ApiResponse.success("查询成功", result);
     }
 
