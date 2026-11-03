@@ -31,6 +31,10 @@ import java.util.Map;
  * 但 fail-soft ≠ 静默：每一次「没写成」都通过 {@link LineageRecordOutcome} 返回一个**可计数**的
  * 读数，回填命令据此报「新增 N / 已存在 M / 跳过 K / 对不齐 A / 失败 F」。
  *
+ * <p>2026-11-03 起写失败也不再只留日志：每条边先进 {@link LineageEdgeOutbox} 补写台账，
+ * 写失败的由 {@link LineageEdgeOutboxReconciler} 按退避重试，积压读数见
+ * {@code GET /api/mobile/{factoryId}/traceability/lineage-write-backlog}。
+ *
  * <h2>幂等键</h2>
  *
  * <p>键是 {@code (factoryId, edgeType, sourceType+sourceId, targetType+targetId, meta.refKey)}。
@@ -118,6 +122,8 @@ public class LineageEdgeRecorder {
      */
     private final LineageEdgeWriter edgeWriter;
     private final FinishedBatchProductionAligner productionAligner;
+    /** 补写台账：写失败的边留在这里等 {@link LineageEdgeOutboxReconciler} 补上。 */
+    private final LineageEdgeOutbox outbox;
 
     /**
      * 原料批次 → 生产批次（投料）。
@@ -360,6 +366,11 @@ public class LineageEdgeRecorder {
         }
         try {
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                // 🔴 2026-11-03 (食品 DAG 缺口 02): 先在业务事务里登记补写台账, 再挂 afterCommit。
+                //    原来只有 afterCommit, 写失败 / 进程在「已提交、未写边」之间退出 ⇒ 边永久丢失,
+                //    只剩一条 WARN。现在失败的那条留在台账里 PENDING, 由 LineageEdgeOutboxReconciler 补上。
+                //    台账行与业务同事务 ⇒ 业务回滚就没有它, 补写器不会补出假边。
+                String outboxId = outbox.enqueue(edge, refKey);
                 TransactionSynchronizationManager.registerSynchronization(
                         new TransactionSynchronization() {
                             @Override
@@ -367,18 +378,31 @@ public class LineageEdgeRecorder {
                                 // 整体 try/catch: afterCommit 里抛异常会被 Spring 往上抛,
                                 // 而此时业务事务已经提交 —— 让它冒出去只会把一个已经成功的
                                 // 请求变成 500。fail-soft 的语义在这里才真正兑现。
+                                LineageRecordOutcome outcome = LineageRecordOutcome.FAILED;
+                                String error = null;
                                 try {
-                                    edgeWriter.writeInNewTransaction(edge, refKey);
+                                    outcome = edgeWriter.writeInNewTransaction(edge, refKey);
                                 } catch (Exception e) {
-                                    log.warn("[lineage] afterCommit 写边失败 (fail-soft, 业务已提交): "
+                                    error = e.toString();
+                                    log.warn("[lineage] afterCommit 写边失败 (业务已提交, 已留补写台账 {}): "
                                                     + "edge={} {}:{} → {}:{} refKey={}",
-                                            edgeType, sourceType, sourceId, targetType, targetId, refKey, e);
+                                            outboxId, edgeType, sourceType, sourceId, targetType, targetId, refKey, e);
+                                }
+                                try {
+                                    outbox.settle(outboxId, outcome, error);
+                                } catch (Exception e) {
+                                    // 结账失败 ⇒ 台账行留 PENDING, 补写器之后按幂等键判「已存在」再结掉, 不丢也不重。
+                                    log.warn("[lineage-outbox] 结账失败, 留给补写器: id={} outcome={}", outboxId, outcome, e);
                                 }
                             }
                         });
                 return LineageRecordOutcome.SCHEDULED;
             }
-            return edgeWriter.writeInNewTransaction(edge, refKey);
+            LineageRecordOutcome outcome = edgeWriter.writeInNewTransaction(edge, refKey);
+            if (outcome == LineageRecordOutcome.FAILED) {
+                outbox.enqueueFailedInNewTransaction(edge, refKey, "sync write failed");
+            }
+            return outcome;
         } catch (Exception e) {
             log.warn("[lineage] 边登记失败 (fail-soft, 不阻塞业务): edge={} {}:{} → {}:{} qty={} refKey={}",
                     edgeType, sourceType, sourceId, targetType, targetId, quantity, refKey, e);

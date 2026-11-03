@@ -179,6 +179,68 @@ public class TraceabilityDTO {
          * <p>没有任何带个体的原料时为 0（不是 null）—— 0 是一个确定的读数。
          */
         private Integer sourceIndividualCount;
+        /**
+         * 这次查询结果完不完整（2026-11-03，食品 DAG 缺口 02）。
+         *
+         * <p>内部视图必给；公开视图为 null（消费者页不出这一块）。
+         */
+        private LineageCompleteness completeness;
+    }
+
+    /**
+     * 血缘查询结果的完整性 —— 「完整」还是「缺哪一段」。
+     *
+     * <p>{@code status=COMPLETE} 的判据：上游每个叶子都是外购/客供原料批（不是中间工序产出、
+     * 不是生产批 / 成品批 / 出货单），没有节点查不到，没有节点卡在跳数上限上还有更上游的边。
+     * 任何一条不满足就是 {@code INCOMPLETE}，并在 {@code gaps} 里逐个指出是哪个节点、缺什么。
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class LineageCompleteness {
+        public static final String COMPLETE = "COMPLETE";
+        public static final String INCOMPLETE = "INCOMPLETE";
+
+        /** COMPLETE / INCOMPLETE */
+        private String status;
+        /** 一句话结论，直接给人看。 */
+        private String summary;
+        /** 是否在跳数上限处截断（上限处的节点还有更远的边没取回来）。 */
+        private Boolean truncated;
+        /** 截断发生的跳数（= 本次 maxDepth）；没截断为 null。 */
+        private Integer truncatedAtDepth;
+        /** 断链 / 查不到 / 截断的节点，逐个列出。完整时为空列表。 */
+        private List<LineageGap> gaps;
+        /**
+         * 链上节点还有多少条边在补写台账里没结掉（PENDING / DEAD）。
+         * 非 0 时缺口可能只是「还没补上」；null = 这次没量（台账不可用）。
+         */
+        private Long pendingEdgeWrites;
+    }
+
+    /** 一个缺口：哪个节点、缺什么。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class LineageGap {
+        /** 缺上游 */
+        public static final String MISSING_UPSTREAM = "MISSING_UPSTREAM";
+        /** 节点实体查不到（软删 / 不存在），判不了它的上游 */
+        public static final String NODE_UNRESOLVED = "NODE_UNRESOLVED";
+        /** 在跳数上限处还有更上游 / 更下游的边 */
+        public static final String DEPTH_TRUNCATED = "DEPTH_TRUNCATED";
+
+        private String kind;
+        private String nodeType;
+        private String nodeId;
+        private String batchNumber;
+        /** 离查询起点几跳（起点本身为 0）。 */
+        private Integer depth;
+        /** UPSTREAM / DOWNSTREAM */
+        private String direction;
+        private String reason;
     }
 
     /**
@@ -207,6 +269,8 @@ public class TraceabilityDTO {
         private List<com.cretas.aims.service.pot.PotTraceService.BatchPotScope> potScopes;
         /** 按锅收窄没算成时的原因 (此时 potScopes 为 null; 批次级三组照常有效)。 */
         private String potScopesError;
+        /** 下游影响面是否完整（跳数上限截断 / 节点查不到）。见 {@link LineageCompleteness}。 */
+        private LineageCompleteness completeness;
     }
 
     /**

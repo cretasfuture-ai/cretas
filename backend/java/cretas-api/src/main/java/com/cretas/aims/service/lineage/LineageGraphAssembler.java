@@ -79,6 +79,12 @@ public class LineageGraphAssembler {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.pot.PotTraceService potTraceService;
     /**
+     * 补写台账（可选注入, 同上）：完整性标记里报「链上还有几条边在补写」。
+     * 没注入时 {@code pendingEdgeWrites=null}（没量）, ⛔ 不报 0。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.lineage.LineageEdgeOutboxRepository outboxRepository;
+    /**
      * 缺省跳数 = 上限。召回「漏一个成品」是食品安全事故，溯源「看不到首道原料」等于没溯源，
      * 所以没有「先给个浅的」这一档；调用方真想看浅的就显式传。
      */
@@ -173,7 +179,7 @@ public class LineageGraphAssembler {
             }
         }
 
-        NodeResolver resolver = resolveNodes(factoryId, ancestorRows, descendantRows, desensitize);
+        NodeResolver resolver = resolveNodes(factoryId, rootType, rootId, ancestorRows, descendantRows, desensitize);
         if (desensitize) {
             // 脱敏视图 = 公开视图: 只给原料, 不给中间工序 (Steve 2026-10-25)。
             return publicRawMaterialView(factoryId, rootType, ancestorRows, resolver);
@@ -193,6 +199,16 @@ public class LineageGraphAssembler {
         // ⚠️ 按**真实个体 id** 去重, 不是按节点上那个（公开侧已被遮过的）耳标号 ——
         //    末 4 位相同的两头牛会被数成一头, 而「来自几头牛」少报一头就是假话。
         int individualCount = countDistinctIndividuals(ancestorRows, resolver);
+        List<TraceabilityDTO.LineageGap> gaps = findGaps(factoryId, rootType, rootId, ancestorRows,
+                includeDescendants ? descendantRows : List.of(), depthCap, resolver);
+        Set<String> nodeIds = new LinkedHashSet<>();
+        nodeIds.add(rootId);
+        ancestorRows.forEach(r -> nodeIds.add(r.getAncestorId()));
+        if (includeDescendants) {
+            descendantRows.forEach(r -> nodeIds.add(r.getDescendantId()));
+        }
+        TraceabilityDTO.LineageCompleteness completeness = summarize(gaps, depthCap,
+                countPendingWrites(factoryId, nodeIds), countRawLeaves(ancestorRows, resolver));
         return new PublicLineage(TraceabilityDTO.LineageSection.builder()
                 .rootType(rootType)
                 .rootId(rootId)
@@ -201,7 +217,220 @@ public class LineageGraphAssembler {
                 .maxDepth(depthCap)
                 .nodeCount(nodeCount)
                 .sourceIndividualCount(individualCount)
+                .completeness(completeness)
                 .build(), List.of());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 完整性（2026-11-03，食品 DAG 缺口 02）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** 一个待判定的节点（类型 / id / 离起点的最近跳数）。 */
+    private record NodeRef(String type, String id, int depth) {
+        String key() {
+            return type + "#" + id;
+        }
+    }
+
+    /**
+     * 找出这次结果里的缺口。
+     *
+     * <ul>
+     *   <li><b>缺上游</b>（{@link TraceabilityDTO.LineageGap#MISSING_UPSTREAM}）：上游链上（含起点）一个节点
+     *       没有任何入边，而它<b>应当</b>有 —— 生产批 / 成品批 / 出货单一定是从别的东西来的；
+     *       物料批里只有外购 / 客供原料（{@link #isRawMaterialForPublic}）可以是链的起点，
+     *       中间工序产出的在制批、副产批没有入边就是断链。</li>
+     *   <li><b>截断</b>（{@link TraceabilityDTO.LineageGap#DEPTH_TRUNCATED}）：节点正好落在跳数上限上，
+     *       而它还有更远的边 —— 这次没取回来，⛔ 不能当成「到头了」。</li>
+     *   <li><b>查不到</b>（{@link TraceabilityDTO.LineageGap#NODE_UNRESOLVED}）：边在、节点实体不在（软删 / 脏 id），
+     *       判不了它是不是原料、该不该有上游。</li>
+     * </ul>
+     *
+     * <p>自环边（同批工序间领用）不算入边：它证明不了「这批是从别处来的」。
+     * 最多 2 次批量查边（入边 / 上限处的出边），不 N+1。
+     */
+    private List<TraceabilityDTO.LineageGap> findGaps(String factoryId, String rootType, String rootId,
+                                                      List<BatchLineageClosure> ancestorRows,
+                                                      List<BatchLineageClosure> descendantRows,
+                                                      int depthCap, NodeResolver resolver) {
+        List<TraceabilityDTO.LineageGap> gaps = new ArrayList<>();
+
+        Map<String, NodeRef> upstream = new LinkedHashMap<>();
+        NodeRef root = new NodeRef(rootType, rootId, 0);
+        upstream.put(root.key(), root);
+        ancestorRows.stream()
+                .sorted(Comparator.comparing(BatchLineageClosure::getDepth))
+                .forEach(r -> {
+                    NodeRef n = new NodeRef(r.getAncestorType(), r.getAncestorId(), r.getDepth());
+                    upstream.putIfAbsent(n.key(), n);
+                });
+        Set<String> upstreamIds = upstream.values().stream().map(NodeRef::id).filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<BatchLineageEdge> incoming = upstreamIds.isEmpty()
+                ? List.of() : edgeRepository.findByFactoryIdAndTargetIdIn(factoryId, upstreamIds);
+        Set<String> hasIncoming = (incoming == null ? List.<BatchLineageEdge>of() : incoming).stream()
+                .filter(e -> !isSameNode(e.getSourceType(), e.getSourceId(), e.getTargetType(), e.getTargetId()))
+                .map(e -> e.getTargetType() + "#" + e.getTargetId())
+                .collect(Collectors.toSet());
+
+        for (NodeRef n : upstream.values()) {
+            TraceabilityDTO.LineageNode node = resolver.toNode(n.type(), n.id(), null);
+            if (!Boolean.TRUE.equals(node.getResolved())) {
+                gaps.add(gap(TraceabilityDTO.LineageGap.NODE_UNRESOLVED, n, null, DIRECTION_UPSTREAM,
+                        "节点查不到（已删除或不存在），无法判断它的来源"));
+            } else if (!hasIncoming.contains(n.key())) {
+                if (expectsUpstream(n, resolver)) {
+                    gaps.add(gap(TraceabilityDTO.LineageGap.MISSING_UPSTREAM, n, node.getBatchNumber(),
+                            DIRECTION_UPSTREAM, missingUpstreamReason(n.type())));
+                }
+            } else if (n.depth() >= depthCap) {
+                gaps.add(gap(TraceabilityDTO.LineageGap.DEPTH_TRUNCATED, n, node.getBatchNumber(),
+                        DIRECTION_UPSTREAM, "已到 " + depthCap + " 跳上限，更上游还有记录没有取回"));
+            }
+        }
+
+        if (!descendantRows.isEmpty()) {
+            Map<String, NodeRef> downstream = new LinkedHashMap<>();
+            descendantRows.stream()
+                    .sorted(Comparator.comparing(BatchLineageClosure::getDepth))
+                    .forEach(r -> {
+                        NodeRef n = new NodeRef(r.getDescendantType(), r.getDescendantId(), r.getDepth());
+                        downstream.putIfAbsent(n.key(), n);
+                    });
+            Set<String> atCap = downstream.values().stream().filter(n -> n.depth() >= depthCap)
+                    .map(NodeRef::id).filter(Objects::nonNull)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            List<BatchLineageEdge> outgoing = atCap.isEmpty()
+                    ? List.of() : edgeRepository.findByFactoryIdAndSourceIdIn(factoryId, atCap);
+            Set<String> hasOutgoing = (outgoing == null ? List.<BatchLineageEdge>of() : outgoing).stream()
+                    .filter(e -> !isSameNode(e.getSourceType(), e.getSourceId(), e.getTargetType(), e.getTargetId()))
+                    .map(e -> e.getSourceType() + "#" + e.getSourceId())
+                    .collect(Collectors.toSet());
+            for (NodeRef n : downstream.values()) {
+                TraceabilityDTO.LineageNode node = resolver.toNode(n.type(), n.id(), null);
+                if (!Boolean.TRUE.equals(node.getResolved())) {
+                    gaps.add(gap(TraceabilityDTO.LineageGap.NODE_UNRESOLVED, n, null, DIRECTION_DOWNSTREAM,
+                            "节点查不到（已删除或不存在）"));
+                } else if (n.depth() >= depthCap && hasOutgoing.contains(n.key())) {
+                    gaps.add(gap(TraceabilityDTO.LineageGap.DEPTH_TRUNCATED, n, node.getBatchNumber(),
+                            DIRECTION_DOWNSTREAM, "已到 " + depthCap + " 跳上限，更下游还有记录没有取回"));
+                }
+            }
+        }
+        return gaps;
+    }
+
+    static final String DIRECTION_UPSTREAM = "UPSTREAM";
+    static final String DIRECTION_DOWNSTREAM = "DOWNSTREAM";
+
+    /** 没有入边时，这个节点该不该有上游。 */
+    private static boolean expectsUpstream(NodeRef n, NodeResolver resolver) {
+        if (LineageEdgeRecorder.NODE_MATERIAL_BATCH.equals(n.type())) {
+            // 外购 / 客供原料是链的合法起点; 工序产出的在制批、副产批不是。
+            return !isRawMaterialForPublic(resolver.materials().get(n.id()));
+        }
+        // 生产批 / 成品批 / 出货单: 一定是从别的东西来的。
+        return true;
+    }
+
+    private static String missingUpstreamReason(String type) {
+        if (LineageEdgeRecorder.NODE_PRODUCTION_BATCH.equals(type)) {
+            return "生产批次没有任何投料记录（缺原料 / 上道工序）";
+        }
+        if (LineageEdgeRecorder.NODE_FINISHED_BATCH.equals(type)) {
+            return "成品批次没有关联到产出它的生产批次";
+        }
+        if (LineageEdgeRecorder.NODE_SHIPMENT_RECORD.equals(type)) {
+            return "出货单没有关联到成品批次";
+        }
+        if (LineageEdgeRecorder.NODE_MATERIAL_BATCH.equals(type)) {
+            return "工序产出的在制 / 副产批没有关联到产出它的生产批次";
+        }
+        return "缺少上游记录";
+    }
+
+    private static TraceabilityDTO.LineageGap gap(String kind, NodeRef n, String batchNumber,
+                                                  String direction, String reason) {
+        return TraceabilityDTO.LineageGap.builder()
+                .kind(kind)
+                .nodeType(n.type())
+                .nodeId(n.id())
+                .batchNumber(batchNumber)
+                .depth(n.depth())
+                .direction(direction)
+                .reason(reason)
+                .build();
+    }
+
+    /** 上游链上作为合法起点的原料批数（完整时的那句「追到 N 个原料批」）。 */
+    private static int countRawLeaves(List<BatchLineageClosure> ancestorRows, NodeResolver resolver) {
+        return (int) ancestorRows.stream()
+                .filter(r -> LineageEdgeRecorder.NODE_MATERIAL_BATCH.equals(r.getAncestorType()))
+                .map(BatchLineageClosure::getAncestorId)
+                .distinct()
+                .map(id -> resolver.materials().get(id))
+                .filter(LineageGraphAssembler::isRawMaterialForPublic)
+                .count();
+    }
+
+    /** 链上节点还有几条边没结掉；台账不可用 ⇒ null（没量）。 */
+    private Long countPendingWrites(String factoryId, Set<String> nodeIds) {
+        if (outboxRepository == null || nodeIds.isEmpty()) {
+            return null;
+        }
+        try {
+            return outboxRepository.countOpenTargeting(factoryId, nodeIds);
+        } catch (RuntimeException e) {
+            log.warn("[lineage] 补写台账计数失败, 本次完整性不带 pendingEdgeWrites: factory={}", factoryId, e);
+            return null;
+        }
+    }
+
+    /** 由缺口算出结论。⛔ 结论只由 gaps 算, 不另写一份判定。 */
+    static TraceabilityDTO.LineageCompleteness summarize(List<TraceabilityDTO.LineageGap> gaps, int depthCap,
+                                                         Long pendingWrites, int rawLeaves) {
+        List<TraceabilityDTO.LineageGap> sorted = gaps.stream()
+                .sorted(Comparator.comparing(TraceabilityDTO.LineageGap::getDepth,
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        boolean truncated = sorted.stream()
+                .anyMatch(g -> TraceabilityDTO.LineageGap.DEPTH_TRUNCATED.equals(g.getKind()));
+        String pendingNote = pendingWrites != null && pendingWrites > 0
+                ? "；另有 " + pendingWrites + " 条关系正在补写" : "";
+        if (sorted.isEmpty()) {
+            return TraceabilityDTO.LineageCompleteness.builder()
+                    .status(TraceabilityDTO.LineageCompleteness.COMPLETE)
+                    .summary("完整：上游追到 " + rawLeaves + " 个原料批，没有断链" + pendingNote)
+                    .truncated(false)
+                    .gaps(List.of())
+                    .pendingEdgeWrites(pendingWrites)
+                    .build();
+        }
+        List<TraceabilityDTO.LineageGap> missing = sorted.stream()
+                .filter(g -> TraceabilityDTO.LineageGap.MISSING_UPSTREAM.equals(g.getKind())).toList();
+        long unresolved = sorted.stream()
+                .filter(g -> TraceabilityDTO.LineageGap.NODE_UNRESOLVED.equals(g.getKind())).count();
+        List<String> parts = new ArrayList<>();
+        if (!missing.isEmpty()) {
+            TraceabilityDTO.LineageGap first = missing.get(0);
+            String label = first.getBatchNumber() != null
+                    ? first.getBatchNumber() : first.getNodeType() + ":" + first.getNodeId();
+            parts.add("缺上游 " + missing.size() + " 处（如 " + label + "）");
+        }
+        if (unresolved > 0) {
+            parts.add(unresolved + " 个节点查不到");
+        }
+        if (truncated) {
+            parts.add("超过 " + depthCap + " 跳被截断");
+        }
+        return TraceabilityDTO.LineageCompleteness.builder()
+                .status(TraceabilityDTO.LineageCompleteness.INCOMPLETE)
+                .summary("不完整：" + String.join("，", parts) + pendingNote)
+                .truncated(truncated)
+                .truncatedAtDepth(truncated ? depthCap : null)
+                .gaps(sorted)
+                .pendingEdgeWrites(pendingWrites)
+                .build();
     }
 
     /**
@@ -349,7 +578,28 @@ public class LineageGraphAssembler {
                 .shipmentCount(shipments.size())
                 .maxDepth(clampDepth(maxDepth))
                 .queryTime(java.time.LocalDateTime.now())
+                .completeness(downstreamOnly(section.getCompleteness(), clampDepth(maxDepth)))
                 .build();
+    }
+
+    /**
+     * 召回只关心下游：上游断链不影响「这批流向了哪里」, 所以只留 DOWNSTREAM 缺口重算结论。
+     */
+    private static TraceabilityDTO.LineageCompleteness downstreamOnly(TraceabilityDTO.LineageCompleteness full,
+                                                                      int depthCap) {
+        if (full == null) {
+            return null;
+        }
+        List<TraceabilityDTO.LineageGap> down = full.getGaps() == null ? List.of() : full.getGaps().stream()
+                .filter(g -> DIRECTION_DOWNSTREAM.equals(g.getDirection()))
+                .toList();
+        TraceabilityDTO.LineageCompleteness c = summarize(down, depthCap, full.getPendingEdgeWrites(), 0);
+        if (down.isEmpty()) {
+            Long pending = full.getPendingEdgeWrites();
+            c.setSummary("完整：下游没有截断或查不到的节点"
+                    + (pending != null && pending > 0 ? "；另有 " + pending + " 条关系正在补写" : ""));
+        }
+        return c;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -502,9 +752,14 @@ public class LineageGraphAssembler {
     // 节点名称解析（批量，不 N+1）
     // ─────────────────────────────────────────────────────────────────────────
 
-    private NodeResolver resolveNodes(String factoryId, List<BatchLineageClosure> ancestorRows,
+    private NodeResolver resolveNodes(String factoryId, String rootType, String rootId,
+                                      List<BatchLineageClosure> ancestorRows,
                                       List<BatchLineageClosure> descendantRows, boolean desensitize) {
         Map<String, Set<String>> idsByType = new HashMap<>();
+        // 起点本身也解析: 完整性要判「起点有没有该有的上游」, 得先知道它是不是原料。
+        if (rootType != null && rootId != null) {
+            idsByType.computeIfAbsent(rootType, t -> new LinkedHashSet<>()).add(rootId);
+        }
         ancestorRows.forEach(r -> idsByType
                 .computeIfAbsent(r.getAncestorType(), t -> new LinkedHashSet<>())
                 .add(r.getAncestorId()));
