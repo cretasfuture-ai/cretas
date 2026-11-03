@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope backend/python/blacklake、test_blacklake_*、docs/integrations/blacklake；PR#1390 draft；93张分类及44次只读复查完成，逐单/74材料/数量/人工清单本机交付；92测试通过。未回填估值、不部署；财务与业务核对待工厂。
+- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope blacklake、test_blacklake_*、smartbi/services/cost_data_alerts.py、Web黑湖页/API/测试、docs/integrations/blacklake；PR#1390 draft；16张分析/143提醒/本地qwen3:8b完成；178后端+9前端、类型构建/API/RLS/UI通过；不生产写入，业务归集待工厂核对。
 
 
 

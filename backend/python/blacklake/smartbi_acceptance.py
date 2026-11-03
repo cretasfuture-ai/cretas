@@ -35,6 +35,17 @@ def main():
         if response.status_code!=200:
             raise RuntimeError('SMARTBI_AUTHENTICATED_API_FAILED')
         analysis=response.json()['data']
+        alerts=analysis['costAlerts'];review=analysis['eligibleCostReview']
+        assert alerts['summary']['costEligible']==16 and alerts['summary']['costBlocked']==93
+        assert review['eligibleProjects']==16 and len(review['projects'])==16
+        assert alerts['ai']['status']=='complete'
+        assert alerts['ai']['model']=='qwen3:8b' and alerts['ai']['host']=='canada-mini'
+        assert {str(p['projectId']) for a in alerts['items'] if a['blocksUnitCost'] for p in a['entityRefs']}=={str(p['projectId']) for p in analysis['cost']['projects'] if not p['unitCostAvailable']}
+        assert alerts['summary']['byType']['PRODUCT_NAME_CONFLICT']==1
+        assert alerts['summary']['byType']['UNIT_COST_SPREAD']==1
+        assert alerts['summary']['byType']['INPUT_ONLY_CONSUMABLES']==1
+        for project in review['projects']:
+            assert abs(sum(r['costPerFinished'] for r in project['components'])+project['laborPerFinished']-project['unitIdentifiedDirectCost'])<1e-8
         assert sum(r['count'] for r in analysis['catalog'])==1879
         assert analysis['production']['projectCount']==109
         assert analysis['cost']['fullManufacturingCost'] is None
@@ -82,6 +93,8 @@ def main():
             'smartbi_candidates':8,'comparable_products':3,'verified_material_query_rows':225,
             'source_zero_rows_reconfirmed':74,'cost_bridge_reconciliation_passed':True,
             'future_issued_and_expired_tokens_denied':True}
+    report.update(cost_alerts=alerts['summary'],local_ai_status=alerts['ai']['status'],local_ai_reviews=len(alerts['ai']['reviews']),
+                  eligible_review_reconciled=16,blocked_project_alert_coverage=93)
     save_local_secret(directory/'smartbi-acceptance.dpapi',report)
     print(json.dumps(report,ensure_ascii=False))
 

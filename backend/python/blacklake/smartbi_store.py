@@ -1,6 +1,7 @@
 """Read-only SmartBI dataset reader, isolated from source credentials and source API."""
 from collections import Counter, defaultdict
 from pathlib import Path
+import os
 
 import psycopg2
 from psycopg2.extensions import parse_dsn
@@ -65,6 +66,13 @@ def read(value):
             evidence=bind_evidence(value,records,evidence)
         analysis=build(data,metadata)
         analysis['costIntelligence']=enrich(analysis,data,metadata,evidence)
+        from smartbi.services.cost_data_alerts import evaluate
+        from .cost_review import review
+        analysis['costAlerts']=evaluate(analysis['cost']['projects'],scope=digest(scope[:2]),run_id=scope[2])
+        from .local_cost_ai import attach
+        if os.environ.get('LOCALAPPDATA'):
+            attach(analysis['costAlerts'],Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/cost-local-ai.dpapi')
+        analysis['eligibleCostReview']=review(analysis)
         return analysis
     finally:
         connection.close()

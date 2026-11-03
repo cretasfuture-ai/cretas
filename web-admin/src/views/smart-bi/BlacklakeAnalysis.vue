@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { getBlacklakeAnalysis, type BlacklakeAnalysis, type CostProject } from '@/api/smartbi/blacklake';
 import DynamicChartRenderer from '@/components/smartbi/DynamicChartRenderer.vue';
 import BlacklakeCostIntelligence from './BlacklakeCostIntelligence.vue';
+import BlacklakeCostAlerts from './BlacklakeCostAlerts.vue';
 import type { DynamicChartConfig } from '@/types/smartbi';
 
 const data = ref<BlacklakeAnalysis | null>(null);
@@ -88,6 +89,10 @@ onMounted(load);
           <el-card shadow="never" class="section-card"><h3>全历史原料净消耗（已关联工单）</h3><p class="note">按物料与来源单位保留；不混加不同单位。未关联领退料未计入下表。</p>
             <el-table :data="data.cost.materials" height="340" stripe><el-table-column prop="material" label="原料" min-width="190" /><el-table-column prop="unit" label="单位" width="85" /><el-table-column label="净消耗"><template #default="{ row }">{{ fmt(row.netConsumption) }}</template></el-table-column><el-table-column label="已识别净额"><template #default="{ row }">{{ fmt(row.recognizedCost) }}</template></el-table-column><el-table-column prop="lines" label="领退料行数" /></el-table>
           </el-card>
+        </el-tab-pane>
+        <el-tab-pane label="成本与数据异常" name="alerts">
+          <BlacklakeCostAlerts v-if="data.costAlerts && data.eligibleCostReview" :alerts="data.costAlerts" :review="data.eligibleCostReview" />
+          <el-alert v-else type="warning" :closable="false" title="异常分析结果未返回，请核对分析服务。" />
         </el-tab-pane>
         <el-tab-pane label="关联与估值补查" name="gaps">
           <BlacklakeCostIntelligence :intelligence="data.costIntelligence" mode="gaps" />
