@@ -686,6 +686,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         if (definition != null) {
             dto.setProcessName(definition.getProcessName());
             dto.setProcessCategory(definition.getProcessCategory());
+            dto.setCustomFieldSchema(definition.getCustomFieldSchema());
             dto.setStandardYieldMin(definition.getStandardYieldMin());
             dto.setStandardYieldMax(definition.getStandardYieldMax());
             dto.setOutputUnit(resolveLegacyOutputUnit(task, definition));

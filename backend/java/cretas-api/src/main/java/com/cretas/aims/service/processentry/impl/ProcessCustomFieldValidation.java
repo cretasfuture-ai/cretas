@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
  * ({@link ClerkProcessEntryServiceImpl#recordChain}) 复用同一判据, 避免 chain 路径
  * 校验旁路 (F3: 任意 key 静默接受, 违背诚实-400 契约)。
  */
-final class ProcessCustomFieldValidation {
+public final class ProcessCustomFieldValidation {
 
     private ProcessCustomFieldValidation() {
     }
@@ -32,7 +32,7 @@ final class ProcessCustomFieldValidation {
      * 字段被 admin 禁用 (enabled=false) 后仍在 schema 里, 因此该行历史存的禁用键再次提交时
      * 不会被误挡成 400 —— 只挡真正未知 (从未在 schema 声明过) 的 key。
      */
-    static void checkKeys(List<Map<String, Object>> schema, Set<String> submittedKeys, String processName) {
+    public static void checkKeys(List<Map<String, Object>> schema, Set<String> submittedKeys, String processName) {
         if (schema == null || submittedKeys == null || submittedKeys.isEmpty()) {
             return;
         }
