@@ -157,3 +157,87 @@ describe('ProcessDataTable custom field editors', () => {
     expect(textInput.element.value).toBe('OEE-LOCKED');
   });
 });
+
+describe('ProcessDataTable process standards on custom number fields', () => {
+  const standardSchema = [
+    { key: 'oil_temp', label: '油温', type: 'number' as const, enabled: true, unit: '℃', standardValue: 155, min: 150, max: 160 },
+  ];
+
+  function mountWithStandards(viewMode: 'card' | 'grid') {
+    return mount(ProcessDataTable, {
+      props: {
+        factoryId: 'F006', planId: 'PLAN-1', processCode: 'qidiao', processOrder: 2,
+        processLabel: '冷冻', productTypeId: 'SKU-1', inputUnit: 'kg', outputUnit: '盒',
+        isFirstProcess: false, upstreamItems: availableUpstream, ownInventoryItems: [], initialRows: [],
+        viewMode, workflowContext, customFieldSchema: standardSchema,
+      },
+      global: { plugins: [ElementPlus], stubs: { teleport: true, transition: false } },
+    });
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    submitRow.mockReset();
+    submitRow.mockResolvedValue({ success: true, data: { batchNumber: 'FG-1', submissionStatus: 'SUBMITTED', materialized: true } });
+  });
+
+  it('shows the standard under the input and marks an out-of-range value', async () => {
+    for (const mode of ['card', 'grid'] as const) {
+      const wrapper = mountWithStandards(mode);
+      await flushPromises();
+      await addRow(wrapper as ReturnType<typeof mountTable>);
+      const hint = () => wrapper.find('[data-testid="custom-field-standard-oil_temp"]');
+      expect(hint().text()).toBe('标准 155℃，范围 150–160℃');
+      expect(hint().classes()).not.toContain('sp-param-hint-bad');
+
+      await wrapper.find('[data-testid="custom-field-oil_temp"] input').setValue('165');
+      await flushPromises();
+      expect(hint().text()).toContain('偏高');
+      expect(hint().classes()).toContain('sp-param-hint-bad');
+    }
+  });
+
+  it('asks for confirmation before a formal submit with an out-of-range value, and cancel keeps it unsubmitted', async () => {
+    const titles: string[] = [];
+    let rejectStandards = true;
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation(((message: string, title: string) => {
+      titles.push(title);
+      if (title === '工艺参数超出标准' && rejectStandards) {
+        expect(message).toContain('油温 165℃，高于标准 155℃，范围 150–160℃');
+        return Promise.reject('cancel');
+      }
+      return Promise.resolve('confirm');
+    }) as unknown as typeof ElMessageBox.confirm);
+
+    const wrapper = mountWithStandards('grid');
+    await flushPromises();
+    await addRow(wrapper as ReturnType<typeof mountTable>);
+    await wrapper.find('[data-testid="custom-field-oil_temp"] input').setValue('165');
+    await setPrimaryOutput(wrapper as ReturnType<typeof mountTable>, 50);
+    const submit = () => wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');
+
+    await submit();
+    await flushPromises();
+    expect(titles).toContain('工艺参数超出标准');
+    expect(submitRow).not.toHaveBeenCalled();
+
+    rejectStandards = false;
+    await submit();
+    await flushPromises();
+    expect(submitRow).toHaveBeenCalledTimes(1);
+    expect(submitRow.mock.calls[0][2].customFields).toEqual({ oil_temp: 165 });
+  });
+
+  it('does not ask when every value is within range', async () => {
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm');
+    const wrapper = mountWithStandards('grid');
+    await flushPromises();
+    await addRow(wrapper as ReturnType<typeof mountTable>);
+    await wrapper.find('[data-testid="custom-field-oil_temp"] input').setValue('155');
+    await setPrimaryOutput(wrapper as ReturnType<typeof mountTable>, 50);
+    await wrapper.findAll('button').find((item) => item.text().includes('正式报工'))!.trigger('click');
+    await flushPromises();
+    expect(confirm.mock.calls.map((call) => call[1])).not.toContain('工艺参数超出标准');
+    expect(submitRow).toHaveBeenCalledTimes(1);
+  });
+});

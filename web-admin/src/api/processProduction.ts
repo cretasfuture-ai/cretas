@@ -319,7 +319,15 @@ export interface ProcessSheetCustomFieldDef {
   label: string;
   type: 'number' | 'text' | 'date';
   enabled: boolean;
+  /** 工艺标准参数 (只对 number 字段): 单位、标准值、下限、上限; 后端 ProcessParamCheck 按上下限判定。 */
+  unit?: string | null;
+  standardValue?: number | null;
+  min?: number | null;
+  max?: number | null;
 }
+
+/** 自定义字段弹窗只用到的工序字段 (工序目录项与产品工序 join 行都能给出)。 */
+export type CustomFieldsTarget = Pick<WorkProcessItem, 'id' | 'processName' | 'processCategory' | 'customFieldSchema'>;
 
 export interface ProductWorkProcessItem {
   id: number;

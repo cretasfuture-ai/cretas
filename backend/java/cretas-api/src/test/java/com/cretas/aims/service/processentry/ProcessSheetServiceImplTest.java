@@ -1791,4 +1791,83 @@ class ProcessSheetServiceImplTest {
         item.setPerPortion(false);
         return item;
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // 工艺标准参数 (customFieldSchema 上的 standardValue/min/max): 报工落库时写快照
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("工艺标准参数: 超上限/范围内两项都按当时的标准快照写进 YIELD 报工 customFields.paramChecks")
+    void saveRow_customFieldStandards_snapshotParamChecksIntoYieldReport() {
+        com.cretas.aims.entity.WorkProcess wp = new com.cretas.aims.entity.WorkProcess();
+        wp.setId("PSF-WP-PARAM-" + UUID.randomUUID().toString().substring(0, 8));
+        wp.setFactoryId(FACTORY_ID);
+        wp.setProcessName("炒制");
+        wp.setProcessCategory("加工");
+        wp.setUnit("kg");
+        wp.setDefaultOutputMaterialKind(com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind.SEMI_FINISHED);
+        java.util.Map<String, Object> oilTemp = new java.util.LinkedHashMap<>();
+        oilTemp.put("key", "oilTemp");
+        oilTemp.put("label", "油温");
+        oilTemp.put("type", "number");
+        oilTemp.put("enabled", true);
+        oilTemp.put("unit", "℃");
+        oilTemp.put("standardValue", 155);
+        oilTemp.put("min", 150);
+        oilTemp.put("max", 160);
+        java.util.Map<String, Object> minutes = new java.util.LinkedHashMap<>();
+        minutes.put("key", "fryMinutes");
+        minutes.put("label", "炒制时间");
+        minutes.put("type", "number");
+        minutes.put("enabled", true);
+        minutes.put("unit", "min");
+        minutes.put("min", 20);
+        minutes.put("max", 30);
+        wp.setCustomFieldSchema(List.of(oilTemp, minutes));
+        workProcessRepoForReversal.saveAndFlush(wp);
+        com.cretas.aims.entity.ProductWorkProcess pwp = new com.cretas.aims.entity.ProductWorkProcess();
+        pwp.setFactoryId(FACTORY_ID);
+        pwp.setProductTypeId(PRODUCT_TYPE_ID);
+        pwp.setWorkProcessId(wp.getId());
+        pwp.setProcessOrder(1);
+        pwp.setReportingRequired(true);
+        pwp.setAllowSemiFinishedInjection(true);
+        pwp.setAllowMultipleUpstreamSources(true);
+        pwp.setAllowFinishedGoodsSource(false);
+        productWorkProcessRepoForReversal.saveAndFlush(pwp);
+
+        ProcessSheetRowRequest req = baseReq("row-param-1", "xiuyou", 1, "80");
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
+        java.util.Map<String, Object> values = new java.util.LinkedHashMap<>();
+        values.put("oilTemp", new BigDecimal("165"));
+        values.put("fryMinutes", new BigDecimal("25"));
+        req.setCustomFields(values);
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+        assertThat(result.isMaterialized()).isTrue();
+
+        List<ProductionReport> reports = reportRepo.findYieldReportsByBatch(FACTORY_ID, result.getBatchId());
+        // 阳性读数: 这一行一定会写 YIELD 报工 (有自定义字段值 ⇒ 至少一条辅助报工)
+        assertThat(reports).as("本行必写 YIELD 报工").isNotEmpty();
+        @SuppressWarnings("unchecked")
+        List<java.util.Map<String, Object>> checks = reports.stream()
+                .map(ProductionReport::getCustomFields)
+                .filter(cf -> cf != null && cf.get("paramChecks") != null)
+                .map(cf -> (List<java.util.Map<String, Object>>) cf.get("paramChecks"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("YIELD 报工里没有 paramChecks 快照"));
+
+        assertThat(checks).hasSize(2);
+        java.util.Map<String, Object> oil = checks.stream()
+                .filter(c -> "oilTemp".equals(c.get("key"))).findFirst().orElseThrow();
+        assertThat(oil.get("status")).isEqualTo("HIGH");
+        assertThat(new BigDecimal(String.valueOf(oil.get("value")))).isEqualByComparingTo("165");
+        assertThat(new BigDecimal(String.valueOf(oil.get("max")))).isEqualByComparingTo("160");
+        assertThat(new BigDecimal(String.valueOf(oil.get("standardValue")))).isEqualByComparingTo("155");
+        assertThat(oil.get("unit")).isEqualTo("℃");
+        java.util.Map<String, Object> fry = checks.stream()
+                .filter(c -> "fryMinutes".equals(c.get("key"))).findFirst().orElseThrow();
+        assertThat(fry.get("status")).isEqualTo("OK");
+    }
 }

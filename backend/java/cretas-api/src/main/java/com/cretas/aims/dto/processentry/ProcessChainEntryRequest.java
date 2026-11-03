@@ -86,6 +86,13 @@ public class ProcessChainEntryRequest {
          * (见 ClerkProcessEntryServiceImpl#processEntryCustomFields), 不覆盖既有内部记账 key。
          */
         private java.util.Map<String, Object> customFields;
+        /**
+         * 工艺标准参数比对快照 ({@link com.cretas.aims.entity.workprocess.ProcessParamCheck#evaluate})。
+         * <b>只由服务端按工序配置算出</b>, 客户端传了也忽略 (@JsonIgnore) —— 判定不能由提交方自报。
+         * 随 YIELD 报工写进 ProductionReport.customFields.paramChecks。
+         */
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        private java.util.List<java.util.Map<String, Object>> paramChecks;
     }
 
     @Data
