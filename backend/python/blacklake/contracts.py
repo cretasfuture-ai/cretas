@@ -21,6 +21,9 @@ ENDPOINTS = {
     "materials": "/api/dytin/external/projectMaterials/queryList2",
     "stock_order": "/api/dytin/external/stock/order/queryList3",
     "stock": "/api/dytin/external/stock/queryStockInfoDetail",
+    "warehouse": "/api/dytin/external/warehouse/queryList",
+    "unit": "/api/dytin/external/unit/queryList2",
+    "bom": "/api/dytin/external/materials/queryList",
 }
 LOGIN = "/api/user/v1/users/_login"
 

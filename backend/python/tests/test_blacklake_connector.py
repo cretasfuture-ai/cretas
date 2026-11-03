@@ -214,7 +214,7 @@ def test_unverified_contract_and_unapproved_origin(tmp_path):
     with pytest.raises(BlacklakeError, match="TIMEZONE"):
         timestamp("2026-10-31T00:00:00")
     assert set(ENDPOINTS) == {"project", "project_expand", "task", "output", "product", "process",
-                             "routing", "materials", "stock_order", "stock"}
+                             "routing", "materials", "stock_order", "stock", "warehouse", "unit", "bom"}
 
 
 def test_documented_nested_pagination_does_not_mutate_request():

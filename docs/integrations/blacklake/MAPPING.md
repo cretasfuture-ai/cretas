@@ -54,3 +54,6 @@ source_factory_id 取成功 HTTPS 登录签发 Token 中的 orgId；任务另核
 - 原始缺失、未审批、无法关联、未知单位分别披露；不让 AI 补数。完整制造成本和毛利固定缺失，P2 AI 尚未接入。
 
 默认 CLI 指标不打印工资或外部 ID。完整 PoC 指标保存在本机 DPAPI 报告中；tracked 联调报告只留计数和覆盖率。
+# 历史归档补充
+
+`full_contract.json` 保存历史归档的逐对象路径，不替代七天 BI 口径。产品/工序以 id、路线以 processRoutingCode、仓库以 simpleVO.id、单位及 BOM 以 id、余额以 productId+warehouseId 建键。工单用料保留请求父上下文且缺少返回父 ID 时标记未验证；当前工序按请求工单包装原始数组，不制造来源工单标识。详情和数量见 FULL-REPORT.md。

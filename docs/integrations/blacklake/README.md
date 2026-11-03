@@ -48,7 +48,7 @@ $env:BLACKLAKE_SECRET_FILE = Join-Path $env:LOCALAPPDATA 'Cretas/Blacklake/accou
 
 ## 运行与恢复
 
-`verified_contract.json` 是本工厂本次真实联调验证过的四个对象配置；其余六个查询有客户端白名单，但尚无验证过的分页/映射配置。新工厂必须重新确认身份、时区和字段，不应直接宣称复用即验收。
+`verified_contract.json` 是七天 BI 同步的四个对象配置。后续历史归档使用 `full_contract.json`，已验证原十类查询并补充仓库、单位、BOM 三个只读接口；结果与边界见 [FULL-REPORT.md](FULL-REPORT.md)。新工厂必须重新确认身份、时区和字段，不应直接宣称复用即验收。
 
 ```powershell
 python -m blacklake probe --contract blacklake/verified_contract.json --resource project --request-file C:/private/query.json

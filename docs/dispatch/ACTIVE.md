@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope backend/python/blacklake、test_blacklake_*、docs/integrations/blacklake；草稿PR#1390，六膳门正式源只读→隔离测试库，49测试零skip、829记录/3936数值零差异；未合并/部署，见archive/2026-11-03-blacklake-readonly.md。
+- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope backend/python/blacklake、test_blacklake_*、docs/integrations/blacklake；草稿PR#1390；账号可见历史13类1879条/回执，63测试0跳过、7984字段0差异；仅六膳门正式源只读→隔离测试库；完整性缺口见FULL-REPORT。
 
 
 

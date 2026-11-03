@@ -242,3 +242,171 @@ def test_real_redis_lock_token_and_atomic_limits():
         if keys:
             r.delete(*keys)
         r.close()
+
+
+@pytest.fixture
+def full_archive(store, database):
+    import psycopg2
+    from psycopg2 import sql
+    from blacklake.full_archive import Archive
+    admin = psycopg2.connect(**database[0])
+    with admin:
+        with admin.cursor() as cur:
+            cur.execute("SELECT to_regclass('blacklake.full_snapshot')")
+            if cur.fetchone()[0] is None:
+                cur.execute((Path(__file__).parents[1] / "blacklake/migrations/002_full_snapshot.sql").read_text())
+            cur.execute(sql.SQL("GRANT SELECT,INSERT,UPDATE ON blacklake.full_snapshot TO {}").format(sql.Identifier(database[1])))
+    admin.close()
+
+    class Client:
+        settings = store.settings
+        coordination = Coordination()
+        factory_verified = True
+        rows = [{"id": 1, "name": "synthetic", "org": "factory-test"}]
+        calls = 0
+
+        def query(self, resource, body):
+            self.calls += 1
+            return {"data": self.rows}
+
+    profile = {"product": {"paged": False, "items": "data", "keys": ["id"],
+                           "factory": "org", "fields": {"name": "name"}}}
+    return Archive(Client(), store, profile, str(uuid.uuid4()))
+
+
+def test_full_archive_nullable_source_time_atomic_receipt_and_resume(full_archive):
+    first = full_archive.ingest("product", {})
+    assert first == {"resource": "product", "count": 1, "reused": False}
+    assert full_archive.ingest("product", {})["reused"] is True
+    assert full_archive.client.calls == 1
+    audit = full_archive.audit()
+    assert audit["records"] == 1 and audit["raw_hash_mismatches"] == 0
+    with full_archive.store.transaction() as cur:
+        cur.execute("SELECT source_updated_at,normalized FROM blacklake.full_snapshot")
+        value, normalized = cur.fetchone()
+        assert value is None and normalized["source_timestamp_available"] is False
+        cur.execute("SELECT set_config('blacklake.source_factory_id','foreign',true)")
+        cur.execute("SELECT count(*) FROM blacklake.full_snapshot")
+        assert cur.fetchone()[0] == 0
+
+
+def test_full_archive_cross_factory_and_parent_scope_roll_back(full_archive):
+    full_archive.client.rows = [{"id": 1, "org": "factory-test"}, {"id": 2, "org": "foreign"}]
+    with pytest.raises(BlacklakeError, match="FACTORY_MISMATCH"):
+        full_archive.ingest("product", {})
+    assert full_archive.audit()["records"] == 0
+    full_archive.client.rows = [{"id": 1, "org": "factory-test"}]
+    with pytest.raises(BlacklakeError, match="PARENT_SCOPE_MISMATCH"):
+        full_archive.ingest("product", {}, membership=lambda row: row["id"] == 999)
+    assert full_archive.audit()["records"] == 0
+
+
+def test_full_archive_rejects_duplicate_or_mutated_source_across_partitions(full_archive):
+    full_archive.ingest("product", {"partition": 1})
+    with pytest.raises(BlacklakeError, match="DUPLICATE_ACROSS_PARTITIONS"):
+        full_archive.ingest("product", {"partition": 2})
+    full_archive.client.rows = [{"id": 1, "org": "factory-test", "name": "changed"}]
+    with pytest.raises(BlacklakeError, match="SOURCE_CHANGED_DURING_SCAN"):
+        full_archive.ingest("product", {"partition": 3})
+    assert full_archive.audit()["records"] == 1
+
+
+def test_full_archive_duplicate_rows_in_one_partition_roll_back(full_archive):
+    full_archive.client.rows *= 2
+    with pytest.raises(BlacklakeError, match="FULL_DUPLICATE_ID"):
+        full_archive.ingest("product", {})
+    assert full_archive.audit()["records"] == 0
+
+
+def test_full_archive_preserves_unresolved_current_process(full_archive):
+    full_archive.contract["project_expand"] = {"paged": False, "items": "data", "wrap_parent_response": True,
+                                                "keys": ["requested_project_id"], "fields": {"resolved": "identity_resolved"}}
+    full_archive.client.rows = [{"projectId": None, "currentProcessId": None}]
+    full_archive.ingest("project_expand", {"projectIds": [10]})
+    raw = full_archive.raw_rows("project_expand")
+    assert raw[0]["identity_resolved"] is False and raw[0]["response"][0]["projectId"] is None
+
+
+def test_full_archive_materials_cannot_clone_ids_under_different_parents(full_archive):
+    full_archive.contract["materials"] = {"paged": False, "items": "data", "keys": ["id"], "fields": {"id": "id"}}
+    full_archive.ingest("materials", {"projectId": 10}, context=(10,))
+    with pytest.raises(BlacklakeError, match="MATERIAL_ID_REPEATED_ACROSS_PARENTS"):
+        full_archive.ingest("materials", {"projectId": 20}, context=(20,))
+    with full_archive.store.transaction() as cur:
+        cur.execute("SELECT normalized FROM blacklake.full_snapshot")
+        assert cur.fetchone()[0]["parent_scope_verified"] is False
+
+
+def test_full_archive_materials_rejects_wrong_returned_parent(full_archive):
+    full_archive.contract["materials"] = {"paged": False, "items": "data", "keys": ["id"], "fields": {"id": "id"}}
+    full_archive.client.rows = [{"id": 1, "projectId": 20}]
+    with pytest.raises(BlacklakeError, match="PARENT_SCOPE_MISMATCH"):
+        full_archive.ingest("materials", {"projectId": 10}, context=(10,))
+
+
+def test_full_archive_schema_contract_checks_primary_key_and_policy(full_archive):
+    from blacklake.readiness import validate_archive_schema
+    with full_archive.store.transaction() as cur:
+        validate_archive_schema(cur)
+
+
+def test_full_archive_validation_version_changes_receipt_identity(full_archive, monkeypatch):
+    import blacklake.full_archive as module
+    before = full_archive.partition_id("product", {}, ())
+    monkeypatch.setattr(module, "ARCHIVE_VALIDATION_VERSION", module.ARCHIVE_VALIDATION_VERSION + 1)
+    assert full_archive.partition_id("product", {}, ()) != before
+
+
+@pytest.mark.parametrize("case", ["different_run", "unfinished", "missing_row"])
+def test_full_offline_verification_rejects_wrong_or_partial_run(case):
+    from blacklake.full_verify import validate_retained_run
+    run = {"run_id": "one", "run_finished": True}
+    report = {"run_id": "one", "source_totals": {"product": 2}}
+    audit = {"records": 2, "counts": {"product": 2}}
+    if case == "different_run":
+        report["run_id"] = "old"
+    elif case == "unfinished":
+        run["run_finished"] = False
+    else:
+        audit = {"records": 1, "counts": {"product": 1}}
+    with pytest.raises(BlacklakeError):
+        validate_retained_run(run, report, audit)
+
+
+def test_full_archive_schema_rejects_truncate_grant(full_archive, database):
+    import psycopg2
+    from psycopg2 import sql
+    from blacklake.readiness import validate_archive_schema
+    admin = psycopg2.connect(**database[0])
+    try:
+        with admin:
+            with admin.cursor() as cur:
+                cur.execute(sql.SQL("GRANT TRUNCATE ON blacklake.full_snapshot TO {}").format(sql.Identifier(database[1])))
+        with full_archive.store.transaction() as cur:
+            with pytest.raises(BlacklakeError, match="EXCESS_PRIVILEGES"):
+                validate_archive_schema(cur)
+    finally:
+        with admin:
+            with admin.cursor() as cur:
+                cur.execute(sql.SQL("REVOKE TRUNCATE ON blacklake.full_snapshot FROM {}").format(sql.Identifier(database[1])))
+        admin.close()
+
+
+def test_full_offline_context_never_loads_source_account_or_cache(monkeypatch):
+    import blacklake.full_verify as module
+    loaded = []
+
+    def load(path):
+        loaded.append(path.name)
+        if path.name == "source-binding.dpapi":
+            return {"owner_confirmed": True, "expected_org_id": "synthetic"}
+        assert path.name == "test-database.dpapi"
+        return {"runtime_dsn": "synthetic"}
+
+    monkeypatch.setattr(module, "load_local_secret", load)
+    monkeypatch.setattr(module, "database_ready", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.psycopg2, "connect", lambda dsn: object())
+    monkeypatch.setattr(module, "PostgresStore", lambda connection, settings: settings)
+    _, scope = module.offline_context()
+    assert scope.source_factory_id == "synthetic"
+    assert loaded == ["source-binding.dpapi", "test-database.dpapi"]

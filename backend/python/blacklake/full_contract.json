@@ -1,0 +1,15 @@
+{
+  "project": {"paged":true,"items":"data","total":"page.total","keys":["id"],"updated":"updateTime","empty_null":false,"fields":{"id":"id","code":"projectCode","status":"status","product_code":"productCode","created_at":"createTime"}},
+  "task": {"paged":true,"items":"data","total":"page.total","keys":["id"],"updated":"updatedAt","factory":"orgId","empty_null":false,"fields":{"id":"id","project_id":"projectId","process_id":"processId","product_code":"productCode"}},
+  "output": {"paged":true,"items":"data","total":"page.total","keys":["id"],"updated":"updatedAt","empty_null":true,"fields":{"id":"id","project_id":"projectId","task_id":"taskId","process_id":"processId","product_code":"productCode"}},
+  "stock_order": {"paged":true,"items":"data.data","total":"data.total","keys":["id"],"updated":"updatedAt","empty_null":false,"fields":{"id":"id","direction":"orderType","order_no":"orderNo","biz_at":"bizAt","details":"orderDetails"}},
+  "product": {"paged":true,"items":"data.data","total":"data.total","keys":["id"],"updated":"updatedAt","empty_null":false,"fields":{"id":"id","code":"productCode","name":"productName","unit":"unit"}},
+  "process": {"paged":true,"items":"data.data","total":"data.total","keys":["id"],"updated":"updatedAt","empty_null":false,"fields":{"id":"id","code":"code","name":"name"}},
+  "routing": {"paged":true,"items":"data.data","total":"data.total","keys":["processRoutingCode"],"updated":"updatedAt","empty_null":false,"fields":{"code":"processRoutingCode","name":"processRoutingName","steps":"processRoutingSteps"}},
+  "warehouse": {"paged":true,"items":"data.data","total":"data.total","keys":["simpleVO.id"],"updated":"simpleVO.updatedAt","empty_null":false,"fields":{"id":"simpleVO.id","code":"simpleVO.code","name":"simpleVO.name","status":"simpleVO.status"}},
+  "unit": {"paged":true,"items":"data.data","total":"data.total","keys":["id"],"updated":"updatedAt","factory":"orgId","empty_null":false,"fields":{"id":"id","name":"name","decimal_length":"decimalLength","rounding_mode":"roundingMode"}},
+  "bom": {"paged":true,"items":"data.data","total":"data.total","keys":["id"],"updated":"updatedAt","empty_null":false,"fields":{"id":"id","parent_product_code":"lastProductCode","child_product_code":"nextProductCode","unit_qty":"unitQty","parent_base_qty":"parentBaseQty","loss_rate":"lossRate"}},
+  "materials": {"paged":false,"items":"data","keys":["id"],"updated":"updatedAt","empty_null":false,"fields":{"id":"id","product_code":"productCode","unit_qty":"unitQty"}},
+  "project_expand": {"paged":false,"items":"data","wrap_parent_response":true,"keys":["requested_project_id"],"empty_null":false,"fields":{"requested_project_id":"requested_project_id","response":"response","identity_resolved":"identity_resolved"}},
+  "stock": {"paged":false,"items":"data","keys":["productId","warehouseId"],"empty_null":false,"fields":{"product_id":"productId","warehouse_id":"warehouseId","quantity":"qtyInWarehouse","unit":"unitName"}}
+}
