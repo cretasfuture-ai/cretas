@@ -1033,14 +1033,42 @@ public class ConversationServiceImpl implements ConversationService {
             String response = masked.restoreJsonText(
                     dashScopeClient.chat(systemPrompt, "用户输入: " + masked.text(0)));
 
-            // 解析 LLM 响应
-            return parseParameterExtractionResponse(response, uncollectedParams);
+            // 解析 LLM 响应, 再过出处校验: 没在原话里出现的数 / 不是原话的备注丢掉, 槽位保持未收集继续追问
+            return groundExtraction(parseParameterExtractionResponse(response, uncollectedParams),
+                    uncollectedParams, session, userReply);
 
         } catch (Exception e) {
             log.error("LLM 参数提取失败: {}", e.getMessage(), e);
             // 降级到简单提取
             return extractParametersSimple(uncollectedParams, userReply);
         }
+    }
+
+    /** LLM 抽出的追问答案过 {@link com.cretas.aims.service.execution.LlmParameterGrounding}, 已收集的参数算上下文。 */
+    private LlmParameterExtractionResult groundExtraction(LlmParameterExtractionResult raw,
+                                                         List<ConversationSession.RequiredParameter> uncollected,
+                                                         ConversationSession session, String userReply) {
+        if (raw == null || raw.getExtractedParams() == null || raw.getExtractedParams().isEmpty()) {
+            return raw;
+        }
+        Map<String, String> types = new HashMap<>();
+        for (ConversationSession.RequiredParameter p : uncollected) {
+            types.put(p.getName(), p.getType());
+        }
+        Map<String, Object> existing = session.getCollectedParameters() != null
+                ? new HashMap<>(session.getCollectedParameters()) : new HashMap<>();
+        com.cretas.aims.service.execution.LlmParameterGrounding.Result grounded =
+                com.cretas.aims.service.execution.LlmParameterGrounding.groundSlots(
+                        raw.getExtractedParams(), existing, userReply, types);
+        Map<String, String> kept = new HashMap<>();
+        grounded.accepted().forEach((k, v) -> {
+            if (v != null) kept.put(k, String.valueOf(v));
+        });
+        if (!grounded.dropped().isEmpty()) {
+            log.info("追问抽参未落地, 已丢弃: session={}, dropped={}", session.getSessionId(), grounded.dropped());
+        }
+        raw.setExtractedParams(kept);
+        return raw;
     }
 
     /**
