@@ -252,6 +252,85 @@
       >{{ pair.label }}</button>
     </div>
 
+    <!--
+      缺口 20: CCP 控制点 + AI 说不清的「待确认」项。数据就在本工序节点 data 里(ccpPoints / pendingConfirmations),
+      和份额、回料规则同一份 nodesJson。补齐前不能发布(后端 409 + 发布按钮前置提示)。
+      控制点的待确认是**结构判据**: 限值/单位/危害类型填上, 红框就自己消失, 没有第二个开关。
+    -->
+    <section
+      v-if="ccpList.length > 0 || pendingList.length > 0"
+      class="pending-section nodrag"
+      :class="{ 'has-pending': pendingTotal > 0 }"
+      data-testid="pending-section"
+    >
+      <div class="section-title">
+        <span class="section-label">控制点（CCP）与待确认</span>
+        <span v-if="pendingTotal > 0" class="pending-badge" data-testid="pending-badge">待确认 {{ pendingTotal }}</span>
+        <span v-else class="pending-ok" data-testid="pending-ok">已齐全</span>
+      </div>
+      <div v-for="(point, index) in ccpList" :key="point.id || index" class="ccp-row" data-testid="ccp-row">
+        <div class="ccp-name">{{ point.name }}</div>
+        <select
+          class="ccp-field"
+          :class="{ 'is-missing': ccpMissingFields(point).includes('hazard') }"
+          :value="point.hazardType ?? ''"
+          :disabled="!canWrite"
+          data-testid="ccp-hazard"
+          aria-label="危害类型"
+          @change="onCcpHazard(index, $event)"
+        >
+          <option value="">危害类型 待确认</option>
+          <option v-for="type in CCP_HAZARD_TYPES" :key="type" :value="type">{{ CCP_HAZARD_LABELS[type] }}</option>
+        </select>
+        <input
+          class="ccp-field ccp-num"
+          :class="{ 'is-missing': ccpMissingFields(point).includes('min') }"
+          type="text"
+          inputmode="decimal"
+          :value="point.criticalLimitMin ?? ''"
+          :disabled="!canWrite"
+          placeholder="下限 待确认"
+          data-testid="ccp-min"
+          aria-label="下限"
+          @change="onCcpNumber(index, 'criticalLimitMin', $event)"
+        />
+        <input
+          class="ccp-field ccp-num"
+          :class="{ 'is-missing': ccpMissingFields(point).includes('max') }"
+          type="text"
+          inputmode="decimal"
+          :value="point.criticalLimitMax ?? ''"
+          :disabled="!canWrite"
+          placeholder="上限 待确认"
+          data-testid="ccp-max"
+          aria-label="上限"
+          @change="onCcpNumber(index, 'criticalLimitMax', $event)"
+        />
+        <input
+          class="ccp-field ccp-unit"
+          :class="{ 'is-missing': ccpMissingFields(point).includes('unit') }"
+          type="text"
+          :value="point.unit ?? ''"
+          :disabled="!canWrite"
+          placeholder="单位 待确认"
+          data-testid="ccp-unit"
+          aria-label="单位"
+          @change="onCcpUnit(index, $event)"
+        />
+        <div v-if="ccpLimitsContradict(point)" class="ccp-error" data-testid="ccp-contradict">下限不能大于上限</div>
+      </div>
+      <div v-for="item in pendingList" :key="item.code" class="pending-row" data-testid="pending-row">
+        <span class="pending-text">{{ item.label }}</span>
+        <button
+          v-if="canWrite"
+          type="button"
+          class="pending-confirm nodrag"
+          data-testid="pending-confirm"
+          @click.stop="confirmPending(item.code)"
+        >已核对</button>
+      </div>
+    </section>
+
     <div class="reporting-row nodrag">
       <span>本道是否报工</span>
       <el-switch
@@ -274,6 +353,17 @@ import { AUX_OVERLAY_TARGET_HANDLE } from './bomOverlay';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import { workflowDisplayUnit, workflowSkuSpecificationEquation } from './workflowUnits';
 import { shareSumWarning } from './workflowInputShare';
+import {
+  CCP_HAZARD_LABELS,
+  CCP_HAZARD_TYPES,
+  ccpLimitsContradict,
+  ccpMissingFields,
+  ccpPointsOf,
+  pendingConfirmationsOf,
+  pendingCountOfProcess,
+  type CcpHazardType,
+  type WorkflowCcpPoint,
+} from './workflowPendingConfirmations';
 import type { ProcessNodeData } from './types';
 
 const props = withDefaults(defineProps<{
@@ -351,6 +441,35 @@ function setInputShare(portId: string, value: number | undefined): void {
   });
 }
 const outputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'OUTPUT'));
+
+// ── 缺口 20: CCP 控制点与待确认 ─────────────────────────────────────────
+const ccpList = computed(() => ccpPointsOf(props.data as unknown as Record<string, unknown>));
+const pendingList = computed(() => pendingConfirmationsOf(props.data as unknown as Record<string, unknown>));
+const pendingTotal = computed(() => pendingCountOfProcess(props.data as unknown as Record<string, unknown>));
+function patchCcp(index: number, patch: Partial<WorkflowCcpPoint>): void {
+  const next = ccpList.value.map((point, i) => (i === index ? { ...point, ...patch } : point));
+  emit('update', { ccpPoints: next } as Partial<ProcessNodeData>);
+}
+function onCcpHazard(index: number, event: Event): void {
+  const value = String((event.target as HTMLSelectElement | null)?.value ?? '');
+  patchCcp(index, { hazardType: (CCP_HAZARD_TYPES as readonly string[]).includes(value) ? (value as CcpHazardType) : null });
+}
+function onCcpNumber(index: number, key: 'criticalLimitMin' | 'criticalLimitMax', event: Event): void {
+  const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
+  const parsed = raw === '' ? Number.NaN : Number(raw);
+  // 空或非数 = 回到「待确认」(⛔ 不夹逼成 0: 0 ℃ 是个真实限值, 会让一个没填的限值悄悄变成"已填")
+  patchCcp(index, { [key]: Number.isFinite(parsed) ? parsed : null });
+}
+function onCcpUnit(index: number, event: Event): void {
+  const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
+  patchCcp(index, { unit: raw || null });
+}
+/** 人核对过某个「说不清」项后移除它。⛔ 只移除这一项, 其余待确认原样。 */
+function confirmPending(code: string): void {
+  emit('update', {
+    pendingConfirmations: pendingList.value.filter((item) => item.code !== code),
+  } as Partial<ProcessNodeData>);
+}
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const unitRelationshipSummary = computed(() => {
   const inputUnits = [...new Set(inputPorts.value.map((port) => unitLabel(port.unit)).filter(Boolean))];
@@ -417,6 +536,20 @@ function handleStyle(index: number, count: number): Record<string, string> {
 }
 .share-input:focus { outline: none; border-color: #409eff; }
 .share-warning { margin: 2px 0 4px; color: #b7791f; font-size: 11px; }
+.pending-section { margin: 6px 0; padding: 6px 8px; border: 1px solid #dfe6ee; border-radius: 6px; background: #fbfcfe; }
+.pending-section.has-pending { border-color: #e6a23c; background: #fffaf0; }
+.pending-badge { color: #b7791f; font-size: 12px; font-weight: 600; }
+.pending-ok { color: #3a8a4f; font-size: 12px; }
+.ccp-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 4px 0; }
+.ccp-name { flex: 1 0 100%; font-size: 12px; font-weight: 600; color: #34465c; }
+.ccp-field { height: 24px; padding: 0 6px; border: 1px solid #cfd8e3; border-radius: 4px; font-size: 12px; background: #fff; }
+.ccp-field.is-missing { border-color: #e6a23c; background: #fff7e6; }
+.ccp-num { width: 72px; }
+.ccp-unit { width: 56px; }
+.ccp-error { flex: 1 0 100%; color: #c0392b; font-size: 11px; }
+.pending-row { display: flex; gap: 6px; align-items: center; margin: 3px 0; font-size: 12px; color: #8a5a00; }
+.pending-text { flex: 1; line-height: 1.4; }
+.pending-confirm { border: 1px solid #1b65a8; color: #1b65a8; background: #fff; border-radius: 4px; padding: 1px 8px; font-size: 12px; cursor: pointer; }
 .special-output-hint { color: #8a94a6; font-size: 11px; }
 
 /* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */
