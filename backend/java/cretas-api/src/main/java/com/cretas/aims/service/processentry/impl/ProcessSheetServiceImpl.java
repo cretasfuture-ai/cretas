@@ -430,7 +430,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         inputAllocations.addAll(reworkAllocations);
         result.setInputAllocations(List.copyOf(inputAllocations));
         result.setReworkAutoDeductions(reworkAuto.lines());
-        List<String> balance = materialBalanceWarnings(req);
+        List<String> balance = materialBalanceWarnings(req,
+                balanceThresholds == null
+                        ? com.cretas.aims.service.yield.balance.MaterialBalanceCalculator.Thresholds.DEFAULT
+                        : balanceThresholds.forFactory(factoryId));
         if (!reworkAuto.warnings().isEmpty() || !balance.isEmpty()) {
             List<String> merged = new ArrayList<>();
             if (result.getWarnings() != null) {
@@ -4888,8 +4891,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         return firstNonBlank(req.getInputUnit(), req.getUnit(), "kg");
     }
 
-    /** 物料平衡提示阈值, 与 App 报工 (YieldReportServiceImpl.BALANCE_WARN_THRESHOLD) 同一口径。 */
-    static final BigDecimal BALANCE_WARN_THRESHOLD = new BigDecimal("0.15");
+    @Autowired(required = false)
+    private com.cretas.aims.service.yield.balance.MaterialBalanceThresholdProvider balanceThresholds;
+
+    static List<String> materialBalanceWarnings(ProcessSheetRowRequest req) {
+        return materialBalanceWarnings(req, com.cretas.aims.service.yield.balance.MaterialBalanceCalculator.Thresholds.DEFAULT);
+    }
 
     /**
      * 能力核查缺口「web 路无物料平衡校验」(2026-10-24 核查; App 路一直有 15% 提示)。正式报工后追加提示, ⛔ 不拦:
@@ -4899,7 +4906,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
      * </ul>
      * 单位不可比 (非 kg/g 且投入产出单位不同) 时不算偏差 —— 算不出就不说, ⛔ 不拿换算猜。
      */
-    static List<String> materialBalanceWarnings(ProcessSheetRowRequest req) {
+    public static List<String> materialBalanceWarnings(ProcessSheetRowRequest req,
+            com.cretas.aims.service.yield.balance.MaterialBalanceCalculator.Thresholds thresholds) {
         List<String> out = new ArrayList<>();
         BigDecimal output = req.getOutputs() != null && !req.getOutputs().isEmpty() ? null : req.getOutputQuantity();
         String outputUnit = normalizeReportingUnit(firstNonBlank(req.getOutputUnit(), req.getUnit(), "kg"));
@@ -4930,31 +4938,24 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
             return out;
         }
         String inputUnit = normalizeReportingUnit(requestInputUnit(req));
-        BigDecimal byproducts = BigDecimal.ZERO;
+        // 公式只在 MaterialBalanceCalculator 一份 (App 报工 / 本路 / 平衡表共用); 单位换不了就不说, 不猜
+        List<com.cretas.aims.service.yield.balance.MaterialBalanceCalculator.Qty> byproducts = new ArrayList<>();
         if (req.getByproducts() != null) {
             for (com.cretas.aims.dto.processentry.ProcessChainEntryRequest.Byproduct b : req.getByproducts()) {
-                if (b == null || b.getQuantity() == null) continue;
-                String bu = normalizeReportingUnit(firstNonBlank(b.getUnit(), outputUnit));
-                if (!bu.equals(outputUnit)) return out; // 副产单位与产出不同: 不可比
-                byproducts = byproducts.add(b.getQuantity());
+                if (b != null) {
+                    byproducts.add(new com.cretas.aims.service.yield.balance.MaterialBalanceCalculator.Qty(
+                            b.getQuantity(), firstNonBlank(b.getUnit(), outputUnit)));
+                }
             }
         }
         BigDecimal sample = req.getSampleRetainQuantity() == null
-                ? BigDecimal.ZERO : new BigDecimal(req.getSampleRetainQuantity());
-        BigDecimal in = toKgIfMass(input, inputUnit);
-        BigDecimal used = toKgIfMass(output.add(byproducts).add(sample), outputUnit);
-        boolean comparable = reportingUnitsComparable(inputUnit, outputUnit);
-        if (!comparable) {
-            return out;
-        }
-        BigDecimal deviation = in.subtract(used).abs().divide(in, 6, RoundingMode.HALF_UP);
-        if (deviation.compareTo(BALANCE_WARN_THRESHOLD) > 0) {
-            out.add(String.format("物料平衡偏差 %s%% (投入 %s%s, 产出 %s%s, 副产物 %s, 留样 %s) — 请核对, 系统不阻塞",
-                    deviation.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP).toPlainString(),
-                    input.stripTrailingZeros().toPlainString(), inputUnit,
-                    output.stripTrailingZeros().toPlainString(), outputUnit,
-                    byproducts.stripTrailingZeros().toPlainString(),
-                    sample.stripTrailingZeros().toPlainString()));
+                ? null : new BigDecimal(req.getSampleRetainQuantity());
+        com.cretas.aims.service.yield.balance.MaterialBalanceCalculator.Result r =
+                com.cretas.aims.service.yield.balance.MaterialBalanceCalculator.compute(
+                        input, inputUnit, output, outputUnit, byproducts, null, sample, thresholds);
+        String text = com.cretas.aims.service.yield.balance.MaterialBalanceCalculator.warningText(r, inputUnit);
+        if (text != null) {
+            out.add(text);
         }
         return out;
     }

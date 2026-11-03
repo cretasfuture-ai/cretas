@@ -106,7 +106,7 @@ public class ProcessSecretPayloadScrubber {
             "production-analytics", "indicators", "canvas-indicators", "dashboard", "reports", "finance",
             "wastage-reports", "restaurant-dashboard");
     public static final Set<String> AGGREGATE_ANY_SEGMENTS = Set.of(
-            "kpi", "statistics", "analytics", "trend", "daily-trend", "by-process", "by-product");
+            "kpi", "statistics", "analytics", "trend", "daily-trend", "by-process", "by-product", "material-balance");
 
     /** 订单成本缺项 (OrderCostSummaryRowDTO / OrderCostBreakdownDTO): 形如 {@code 代码:明细}。 */
     static final String MISSING_COST_ITEMS = "missingCostItems";

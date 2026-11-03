@@ -67,6 +67,16 @@ public interface FactorySettingsRepository extends JpaRepository<FactorySettings
      */
     @Query("SELECT f.blockStartOnOpenShortage FROM FactorySettings f WHERE f.factoryId = :factoryId")
     Boolean findBlockStartOnOpenShortageByFactoryId(@Param("factoryId") String factoryId);
+    /** 物料平衡阈值 [warn%, red%] (V20261103_140)。无 settings 行 → 空, 调用方用默认 5/15。 */
+    @Query("SELECT f.materialBalanceWarnPct, f.materialBalanceRedPct FROM FactorySettings f WHERE f.factoryId = :factoryId")
+    java.util.List<Object[]> findMaterialBalanceThresholdsByFactoryId(@Param("factoryId") String factoryId);
+
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE FactorySettings f SET f.materialBalanceWarnPct = :warn, f.materialBalanceRedPct = :red WHERE f.factoryId = :factoryId")
+    int updateMaterialBalanceThresholds(@Param("factoryId") String factoryId, @Param("warn") java.math.BigDecimal warn,
+                                        @Param("red") java.math.BigDecimal red);
+
      /**
      * 更新AI每周配额（仅平台管理员可用）
       */
