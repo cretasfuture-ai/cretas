@@ -68,6 +68,7 @@ const REASON_LABEL: Record<string, string> = {
   PURCHASE_DRAFT_CREATED: '生成采购草稿',
   RESCHEDULE_PROPOSED: '生成重排方案',
   RESCHEDULE_APPLIED: '应用重排',
+  FORCED_START: '缺料未解决时强制开工',
   DECISION_CANCEL: '取消',
   DECISION_MANUAL: '转人工',
   DECISION_CLOSE: '关闭',
