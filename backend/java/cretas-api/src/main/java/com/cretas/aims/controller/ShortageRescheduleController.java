@@ -34,6 +34,8 @@ public class ShortageRescheduleController {
     private final ShortageRescheduleService rescheduleService;
     private final RescheduleProposalRepository proposalRepository;
     private final ShortageCaseRepository caseRepository;
+    private final com.cretas.aims.repository.shortage.ShortageCaseActionRepository actionRepository;
+    private final com.cretas.aims.service.shortage.ShortageOutcomeCheckService outcomeChecks;
 
     @Data
     public static class ApplyRequest {
@@ -84,8 +86,16 @@ public class ShortageRescheduleController {
     public ApiResponse<ProposalView> apply(@PathVariable String factoryId, @PathVariable String caseId,
                                            @PathVariable String proposalId, @Valid @RequestBody ApplyRequest request,
                                            HttpServletRequest http) {
-        RescheduleProposal p = rescheduleService.apply(factoryId, caseId, proposalId, request.getCandidateKey(),
-                ShortageCaseActionController.actor(http, factoryId));
-        return ApiResponse.success("排程已调整", ProposalView.of(p));
+        var actor = ShortageCaseActionController.actor(http, factoryId);
+        RescheduleProposal p = rescheduleService.apply(factoryId, caseId, proposalId, request.getCandidateKey(), actor);
+        // 执行后核对: 按台账这一行 (result_ref = 方案 id) 核对交期与缺口, 结论写回实例, 不默认成功
+        Long actionId = actionRepository.findByCaseIdOrderByIdAsc(caseId).stream()
+                .filter(a -> a.getActionType() == com.cretas.aims.entity.shortage.ShortageCaseAction.ActionType.RESCHEDULE_APPLIED
+                        && p.getId().equals(a.getResultRef()))
+                .map(com.cretas.aims.entity.shortage.ShortageCaseAction::getId)
+                .reduce((x, y) -> y).orElse(null);
+        var chk = outcomeChecks.check(factoryId, caseId,
+                com.cretas.aims.entity.shortage.ShortageCaseOutcomeCheck.Trigger.RESCHEDULE_APPLIED, actionId, actor);
+        return ApiResponse.success("排程已调整; 核对结果: " + chk.getDetail(), ProposalView.of(p));
     }
 }
