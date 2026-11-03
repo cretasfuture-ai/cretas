@@ -130,6 +130,21 @@
           >+ 产出 Cell（分流）</el-button>
         </span>
       </div>
+      <!-- 食品 DAG 缺口 10: 多产出才谈得上分摊。按重量 = 现状(默认); 固定比例随工艺版本冻结, 报工时自动带出。 -->
+      <div v-if="outputPorts.length > 1" class="cost-allocation-row" data-testid="cost-allocation-method">
+        <span class="cost-allocation-label">成本分摊</span>
+        <select
+          class="nodrag cost-allocation-select"
+          :value="costAllocationMethod"
+          :disabled="!canWrite"
+          aria-label="成本分摊方式"
+          data-testid="cost-allocation-method-select"
+          @change="onCostAllocationMethod($event)"
+        >
+          <option value="WEIGHT">按重量</option>
+          <option value="FIXED_RATIO">固定比例</option>
+        </select>
+      </div>
       <div v-for="port in outputPorts" :key="port.id" class="output-entry">
         <div class="port-row output-row">
           <WorkflowSkuPicker
@@ -143,6 +158,18 @@
             @change="(skuId) => emit('selectOutput', port.id, skuId)"
           />
           <span class="unit-chip" data-testid="output-unit-chip">{{ unitLabel(port.unit) }}</span>
+          <input
+            v-if="fixedRatioActive"
+            class="nodrag share-input"
+            type="text"
+            inputmode="decimal"
+            :value="port.fixedCostShare ?? ''"
+            :disabled="!canWrite"
+            placeholder="占比%"
+            data-testid="output-fixed-cost-share"
+            :aria-label="`${port.materialName || '产出'} 成本占比%`"
+            @change="onFixedShareInput(port.id, $event)"
+          />
           <!--
             🔴 2026-09-03 客户实拍:「点了加号之后这个就没途径删掉了」。
             产出 Cell 本体是画布上另一个物料节点(addOutputToProcess 建在 x+480 处),
@@ -162,6 +189,7 @@
           >✕</button>
         </div>
       </div>
+      <div v-if="fixedRatioWarning" class="share-warning" data-testid="fixed-cost-share-warning">{{ fixedRatioWarning }}</div>
     </section>
 
     <section class="unit-rule-section">
@@ -352,7 +380,7 @@ import { Handle, Position } from '@vue-flow/core';
 import { AUX_OVERLAY_TARGET_HANDLE } from './bomOverlay';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import { workflowDisplayUnit, workflowSkuSpecificationEquation } from './workflowUnits';
-import { shareSumWarning } from './workflowInputShare';
+import { fixedCostShareWarning, shareSumWarning } from './workflowInputShare';
 import {
   CCP_HAZARD_LABELS,
   CCP_HAZARD_TYPES,
@@ -470,6 +498,23 @@ function confirmPending(code: string): void {
     pendingConfirmations: pendingList.value.filter((item) => item.code !== code),
   } as Partial<ProcessNodeData>);
 }
+const costAllocationMethod = computed(() => (props.data.costAllocationMethod === 'FIXED_RATIO' ? 'FIXED_RATIO' : 'WEIGHT'));
+const fixedRatioActive = computed(() => outputPorts.value.length > 1 && costAllocationMethod.value === 'FIXED_RATIO');
+const fixedRatioWarning = computed(() =>
+  fixedRatioActive.value ? fixedCostShareWarning(outputPorts.value.map((p) => p.fixedCostShare)) : null);
+function onCostAllocationMethod(event: Event): void {
+  const value = String((event.target as HTMLSelectElement | null)?.value ?? '');
+  emit('update', { costAllocationMethod: value === 'FIXED_RATIO' ? 'FIXED_RATIO' : 'WEIGHT' });
+}
+function onFixedShareInput(portId: string, event: Event): void {
+  const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
+  const parsed = raw === '' ? Number.NaN : Number(raw);
+  // 非数/超界当作没填 (⛔ 不夹逼), 发布时由后端按「合计 100」拦
+  const next = Number.isFinite(parsed) && parsed > 0 && parsed <= 100 ? parsed : null;
+  emit('update', {
+    ports: props.data.ports.map((port) => (port.id === portId ? { ...port, fixedCostShare: next } : port)),
+  });
+}
 const primaryOutput = computed(() => [...outputPorts.value].sort((a, b) => a.ordinal - b.ordinal)[0]);
 const unitRelationshipSummary = computed(() => {
   const inputUnits = [...new Set(inputPorts.value.map((port) => unitLabel(port.unit)).filter(Boolean))];
@@ -550,6 +595,8 @@ function handleStyle(index: number, count: number): Record<string, string> {
 .pending-row { display: flex; gap: 6px; align-items: center; margin: 3px 0; font-size: 12px; color: #8a5a00; }
 .pending-text { flex: 1; line-height: 1.4; }
 .pending-confirm { border: 1px solid #1b65a8; color: #1b65a8; background: #fff; border-radius: 4px; padding: 1px 8px; font-size: 12px; cursor: pointer; }
+.cost-allocation-row { display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; font-size: 12px; color: #606266; }
+.cost-allocation-select { height: 22px; font-size: 12px; border: 1px solid #dcdfe6; border-radius: 4px; padding: 0 4px; background: #fff; }
 .special-output-hint { color: #8a94a6; font-size: 11px; }
 
 /* #8 拖拽连线视觉: 灰化非法目标 / 高亮合法目标 / handle 悬停显现. 仅 opacity/transform. */

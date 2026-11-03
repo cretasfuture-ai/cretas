@@ -128,8 +128,13 @@ public class ProcessSheetRowRequest {
     private BigDecimal costAllocationRatio;
     /** 多产出合成行的已分摊总成本；由后端计算，成本未知时为 null。 */
     private BigDecimal allocatedCost;
-    /** QUANTITY / MASS / EXPLICIT_RATIO；由后端记录用于审计。 */
+    /** QUANTITY / MASS / EXPLICIT_RATIO / FIXED_RATIO（+BYPRODUCT_NRV）；由后端记录用于审计。 */
     private String costAllocationBasis;
+    /**
+     * 工艺版本上本产出的固定比例份额（%）；本工序按重量分摊时为 null。由后端写入：
+     * 与 {@code costAllocationBasis = EXPLICIT_RATIO} 同时出现 = 报工时手改了工艺上的固定比例（留痕）。
+     */
+    private BigDecimal workflowFixedCostShare;
     /** 人时合计（Σ 时长×人数）；由后端按 laborSegments 计算。 */
     private BigDecimal totalLaborHours;
 

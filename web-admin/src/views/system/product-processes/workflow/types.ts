@@ -111,6 +111,11 @@ export interface ProcessPort {
    * null = 该入口不参与推算(领料仍按实际领用)。⛔ 不是投入量, 也不是 standardQuantity。
    */
   inputShareRatio?: number | null;
+  /**
+   * 固定比例成本分摊份额(%), 仅 OUTPUT 端口, 且只在工序 costAllocationMethod = 'FIXED_RATIO' 时生效
+   * (食品 DAG 缺口 10, Steve 2026-11-03)。合计必须 100, 发布时后端编译器校验。
+   */
+  fixedCostShare?: number | null;
   ordinal: number;
 }
 
@@ -163,6 +168,11 @@ export interface ProcessNodeData extends Record<string, unknown> {
   processName: string;
   /** New drafts use actual report selections; legacy snapshots may omit this marker. */
   reportingSelectionMode?: 'ACTUAL_IO';
+  /**
+   * 多产出工序的成本分摊方法, 随工艺版本冻结: 缺省/WEIGHT = 按重量(现状); FIXED_RATIO = 按各产出
+   * fixedCostShare。⛔ 不做按售价比例。报工时自动带出, 仍可改(改了后端留记录)。
+   */
+  costAllocationMethod?: 'WEIGHT' | 'FIXED_RATIO';
   inputUnit: string;
   outputUnit: string;
   ports: ProcessPort[];

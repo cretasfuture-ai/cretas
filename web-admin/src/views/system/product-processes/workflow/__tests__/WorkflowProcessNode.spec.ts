@@ -411,4 +411,46 @@ describe('WorkflowProcessNode 主原料份额 (owner 2026-09-02 走 (a))', () =>
     const wrapper = mountNode();
     expect(wrapper.findAll('[data-testid="input-share"]').length).toBe(0);
   });
+  describe('食品 DAG 缺口 10: 联产工序的成本分摊方式', () => {
+    const twoOutputs = (method?: 'WEIGHT' | 'FIXED_RATIO', shares: Array<number | null> = [null, null]): ProcessNodeData => ({
+      ...processData,
+      costAllocationMethod: method,
+      ports: [
+        processData.ports[0],
+        { id: 'out-a', direction: 'OUTPUT', materialNodeId: 'm-a', unit: 'kg', ordinal: 0, fixedCostShare: shares[0] },
+        { id: 'out-b', direction: 'OUTPUT', materialNodeId: 'm-b', unit: 'kg', ordinal: 1, fixedCostShare: shares[1] },
+      ],
+    });
+
+    it('单产出没有分摊方式可选', () => {
+      expect(mountNode().find('[data-testid="cost-allocation-method"]').exists()).toBe(false);
+    });
+
+    it('多产出默认按重量, 不出现占比输入', () => {
+      const wrapper = mountNode(true, twoOutputs());
+      const select = wrapper.get<HTMLSelectElement>('[data-testid="cost-allocation-method-select"]');
+      expect(select.element.value).toBe('WEIGHT');
+      expect(wrapper.findAll('[data-testid="output-fixed-cost-share"]').length).toBe(0);
+    });
+
+    it('选固定比例 → 回写 costAllocationMethod', async () => {
+      const wrapper = mountNode(true, twoOutputs());
+      await wrapper.get('[data-testid="cost-allocation-method-select"]').setValue('FIXED_RATIO');
+      expect(wrapper.emitted('update')?.at(-1)).toEqual([{ costAllocationMethod: 'FIXED_RATIO' }]);
+    });
+
+    it('固定比例下每个产出一个占比输入, 合计不是 100 时提示, 80/20 不提示', async () => {
+      const bad = mountNode(true, twoOutputs('FIXED_RATIO', [80, 30]));
+      expect(bad.findAll('[data-testid="output-fixed-cost-share"]').length).toBe(2);
+      expect(bad.get('[data-testid="fixed-cost-share-warning"]').text()).toContain('110');
+      const ok = mountNode(true, twoOutputs('FIXED_RATIO', [80, 20]));
+      expect(ok.find('[data-testid="fixed-cost-share-warning"]').exists()).toBe(false);
+      const input = ok.findAll('[data-testid="output-fixed-cost-share"]')[1];
+      await input.setValue('25');
+      await input.trigger('change');
+      const patch = ok.emitted('update')?.at(-1)?.[0] as Partial<ProcessNodeData>;
+      expect(patch.ports?.find((p: ProcessPort) => p.id === 'out-b')?.fixedCostShare).toBe(25);
+      expect(patch.ports?.find((p: ProcessPort) => p.id === 'out-a')?.fixedCostShare).toBe(80);
+    });
+  });
 });
