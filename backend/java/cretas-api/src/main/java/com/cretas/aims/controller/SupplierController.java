@@ -334,6 +334,9 @@ public class SupplierController {
     /**
      * 导出供应商列表
      */
+    // S2-09 (2026-11-03, organizer 裁定): 列表/详情读保持开放 (#318: 别的流程里的供应商选择器依赖它),
+    // 但整表导出是批量外带, 走与写操作同一套模块闸的「读」级 —— 没有采购 / 财务模块的角色 (销售经理、车间主任) 拿不到。
+    @RequirePermission({"procurement:read", "procurement:read_write", "finance:read", "finance:read_write"})
     @GetMapping("/export")
     @Operation(summary = "导出供应商列表",
             description = "将工厂所有供应商信息导出为Excel文件。"
