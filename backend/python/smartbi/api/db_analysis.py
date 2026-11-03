@@ -54,6 +54,7 @@ class DashboardResponse(BaseModel):
     charts: List[Dict[str, Any]] = []
     insights: List[str] = []
     fieldDefinitions: List[Dict[str, Any]] = []
+    dataAlerts: Optional[Dict[str, Any]] = None
 
 
 class FieldDefinition(BaseModel):
@@ -123,12 +124,8 @@ async def analyze_from_db(request: AnalyzeRequest, http_request: Request):
 
             # Get upload metadata
             upload = upload_repo.get_by_id(request.upload_id)
-            if not upload:
-                return DashboardResponse(
-                    success=False,
-                    uploadId=request.upload_id,
-                    insights=["Upload not found"]
-                )
+            if not upload or upload.factory_id != request.factory_id:
+                raise HTTPException(404, 'upload not found')
 
             # Get field definitions
             fields = field_repo.get_by_upload_id(request.upload_id)
@@ -137,12 +134,24 @@ async def analyze_from_db(request: AnalyzeRequest, http_request: Request):
 
             # Get data
             data = data_repo.get_by_upload_id(request.factory_id, request.upload_id)
+            from smartbi.services.dataset_alerts import analyze_dataset
+            from smartbi.services.alert_datasets import for_request
+            domain=str(upload.detected_table_type or '').lower()
+            kind='production_cost' if domain in ('production','production_cost','work_order','生产工单','工单成本') else 'generic'
+            source_type='finance' if 'finance' in domain or '财务' in domain else 'sales' if 'sales' in domain or '销售' in domain else 'database'
+            alerts=analyze_dataset(data,factory_id=request.factory_id,source_type=source_type,
+                                   source_id='upload:'+str(request.upload_id),columns=[f.to_dict() for f in fields],dataset_kind=kind)
+            alerts=await for_request(alerts,http_request,stored=True)
+            if alerts.get('analysisStatus')=='restricted':
+                return DashboardResponse(success=False,uploadId=request.upload_id,insights=['数据范围授权尚未确认，未生成指标'],dataAlerts=alerts)
+            if alerts['summary']['byType'].get('NUMERIC_FIELD_INVALID'):
+                return DashboardResponse(success=False,uploadId=request.upload_id,insights=['存在非法数字格式，未生成可能误导的指标，请先核对数据提醒'],dataAlerts=alerts)
             if not data:
                 return DashboardResponse(
                     success=False,
                     uploadId=request.upload_id,
                     tableType=upload.detected_table_type,
-                    insights=["No data found"]
+                    insights=["No data found"],dataAlerts=alerts
                 )
 
             # Generate KPIs
@@ -208,9 +217,12 @@ async def analyze_from_db(request: AnalyzeRequest, http_request: Request):
                 kpiCards=kpis,
                 charts=charts,
                 insights=insights,
-                fieldDefinitions=[f.to_dict() for f in fields]
+                fieldDefinitions=[f.to_dict() for f in fields],
+                dataAlerts=alerts
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Analysis failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="处理失败，请稍后重试")

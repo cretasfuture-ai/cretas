@@ -66,6 +66,7 @@ def validate_response(value,facts):
             raise ValueError('LOCAL_AI_UNSUPPORTED_CLAIM')
         seen.add(item['alertId']);result.append({**item,'suggestion':CHECKS[item['check']]})
         if item['check'] not in allowed[item['alertId']]:raise ValueError('LOCAL_AI_ACTION_TYPE_MISMATCH')
+    if seen!=set(allowed):raise ValueError('LOCAL_AI_REVIEW_INCOMPLETE')
     return result
 
 def attach(alerts,path):

@@ -25,3 +25,16 @@ def analysis(request: Request):
     except Exception:
         raise HTTPException(503,'黑湖测试数据集读取或一致性验证失败') from None
     return {'success':True,'data':data,'message':'六膳门账号可见历史 · 只读分析'}
+
+
+@router.post('/alerts/local-review')
+async def local_review(request:Request):
+    path=os.environ.get('BLACKLAKE_SMARTBI_CONFIG')
+    if not path:raise HTTPException(404,'黑湖测试数据集尚未启用')
+    configured=settings(path);authorize(request,configured)
+    import asyncio
+    from smartbi.services.alert_local_ai import enrich
+    try:data=await asyncio.to_thread(read,configured)
+    except Exception:raise HTTPException(503,'黑湖测试数据集读取或一致性验证失败') from None
+    report=await enrich(data['dataAlerts'],getattr(request.state,'user_id',None))
+    return {'success':True,'data':report,'message':'共用本地AI核对，未改写源数据和成本'}

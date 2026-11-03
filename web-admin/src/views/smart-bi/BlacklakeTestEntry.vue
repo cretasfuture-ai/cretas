@@ -1,9 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue';
+import { defineAsyncComponent } from 'vue';
+import { useAuthStore } from '@/store/modules/auth';
 import BlacklakeAnalysis from './BlacklakeAnalysis.vue';
 import { tokenActivationDelayMs } from './blacklakeSession';
 
-const signedIn = ref(!!localStorage.getItem('blacklake_test_signed_in'));
+const props = withDefaults(defineProps<{ mode?: 'blacklake' | 'shared-alerts' }>(), { mode: 'blacklake' });
+const SharedAlertsTestView = defineAsyncComponent(() => import('./SharedAlertsTestView.vue'));
+const sessionKey = props.mode === 'shared-alerts' ? 'smartbi_shared_test_signed_in' : 'blacklake_test_signed_in';
+const auth = useAuthStore();
+const signedIn = ref(!!localStorage.getItem(sessionKey));
 const username = ref('');
 const password = ref('');
 const busy = ref(false);
@@ -22,23 +28,30 @@ async function login() {
     const activationDelay = tokenActivationDelayMs(token);
     if (activationDelay) await new Promise(resolve => setTimeout(resolve, activationDelay));
     localStorage.setItem('cretas_access_token', token);
-    localStorage.setItem('blacklake_test_signed_in', 'true');
+    if (props.mode === 'shared-alerts') auth.setUser({
+      id: Number(result.data.userId), username: result.data.username || username.value,
+      email: '', isActive: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), userType: 'factory',
+      factoryUser: { factoryId: result.data.factoryId, role: 'factory_super_admin', permissions: Array.isArray(result.data.permissions) ? result.data.permissions : [] },
+    });
+    localStorage.setItem(sessionKey, 'true');
     password.value = ''; signedIn.value = true;
   } catch (e) { error.value = e instanceof Error ? e.message : '登录失败'; }
   finally { busy.value = false; }
 }
 function logout() {
-  localStorage.removeItem('cretas_access_token'); localStorage.removeItem('blacklake_test_signed_in');
+  if (props.mode === 'shared-alerts') auth.clearAuth();
+  localStorage.removeItem('cretas_access_token'); localStorage.removeItem(sessionKey);
   signedIn.value = false;
 }
 </script>
 
 <template>
   <div class="test-shell">
-    <header class="topbar"><strong>Cretas <span>SmartBI</span></strong><div>六膳门 · 隔离测试环境 <el-button v-if="signedIn" @click="logout" text>退出分析</el-button></div></header>
-    <BlacklakeAnalysis v-if="signedIn" />
+    <header class="topbar"><strong>Cretas <span>SmartBI</span></strong><div>{{ mode === 'shared-alerts' ? '合成数据 · 多来源隔离测试' : '六膳门 · 隔离测试环境' }} <el-button v-if="signedIn" @click="logout" text>退出分析</el-button></div></header>
+    <SharedAlertsTestView v-if="signedIn && mode === 'shared-alerts'" />
+    <BlacklakeAnalysis v-else-if="signedIn" />
     <el-card v-else class="login-card" shadow="never">
-      <h1>六膳门生产成本分析</h1><p>使用 Cretas 独立测试账号登录。此处不使用黑湖账号。</p>
+      <h1>{{ mode === 'shared-alerts' ? 'SmartBI 多来源异常分析' : '六膳门生产成本分析' }}</h1><p>使用 Cretas 独立测试账号登录。此处不使用黑湖账号。</p>
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
       <el-form @submit.prevent="login" label-position="top">
         <el-form-item label="测试账号"><el-input v-model="username" placeholder="请输入测试账号" autocomplete="username" /></el-form-item>

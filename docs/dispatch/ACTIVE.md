@@ -7,7 +7,8 @@
 
 ## 在飞任务
 
-- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope blacklake、test_blacklake_*、smartbi/services/cost_data_alerts.py、Web黑湖页/API/测试、docs/integrations/blacklake；PR#1390 draft；16张分析/143提醒/本地qwen3:8b完成；178后端+9前端、类型构建/API/RLS/UI通过；不生产写入，业务归集待工厂核对。
+- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope SmartBI通用alerts API/service/Web/Excel及DB接线、main注册、blacklake兼容、tests、docs；PR#1390 draft；257后端/17前端测试、API/浏览器/27B通过；完整成本授权验收待补；不生产部署/写入。
+- SMARTBI-DATASET-ALERTS-20261103 — review — Owner Codex/root — Base 907c3fc790 — Scope backend/python/smartbi/services/dataset_alerts.py、backend/python/tests/test_smartbi_dataset_alerts.py；执行者回执见archive/2026-11-03-shared-alerts.md；18单测通过并纳入257测试；尚未合并。
 
 
 

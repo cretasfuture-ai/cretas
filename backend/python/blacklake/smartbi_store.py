@@ -73,6 +73,8 @@ def read(value):
         if os.environ.get('LOCALAPPDATA'):
             attach(analysis['costAlerts'],Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/cost-local-ai.dpapi')
         analysis['eligibleCostReview']=review(analysis)
+        # Common machine contract, preserving the existing Blacklake API key.
+        analysis['dataAlerts']=analysis['costAlerts']
         return analysis
     finally:
         connection.close()

@@ -65,7 +65,7 @@ export default defineConfig(({ mode }) => {
         },
       },
       rollupOptions: {
-        input: mode === 'blacklake' ? { main: resolve(__dirname, 'index.html'), blacklake: resolve(__dirname, 'blacklake-smartbi.html') } : undefined,
+        input: ['blacklake', 'smartbi-alerts'].includes(mode) ? { main: resolve(__dirname, 'index.html'), blacklake: resolve(__dirname, 'blacklake-smartbi.html'), dataAlerts: resolve(__dirname, 'smartbi-data-alerts.html') } : undefined,
         output: {
           // 注意: 不要拆 element-plus / vue / pinia / vue-router (会 TDZ)
           // UX Round 6: 只拆独立重包 + icons (纯 SVG, 无循环依赖)

@@ -77,7 +77,7 @@ def test_missing_identity_or_different_process_names_suppress_spread(source):
 
 def test_ai_cannot_add_facts_or_select_unknown_alert(source):
     facts=request_facts(alerts(source));id=facts[0]['alertId']
-    result=validate_response({'reviews':[{'alertId':id,'check':'CHECK_COMPARABILITY','priority':'high'}]},facts)
+    result=validate_response({'reviews':[{'alertId':id,'check':'CHECK_COMPARABILITY','priority':'high'}]},facts[:1])
     assert result[0]['suggestion']
     for item in [{'alertId':'invented','check':'CHECK_PAYROLL','priority':'high'},
                  {'alertId':id,'check':'INVENT_CAUSE','priority':'high'},

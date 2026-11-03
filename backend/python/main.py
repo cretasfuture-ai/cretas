@@ -1685,6 +1685,8 @@ else:
 # Database analysis endpoints (PostgreSQL)
 # Note: db_analysis.router already has /api/smartbi/analysis/db prefix
 app.include_router(db_analysis.router, tags=["Database Analysis"])
+from smartbi.api import data_alerts as smartbi_data_alerts
+app.include_router(smartbi_data_alerts.router)
 
 # =====================================================
 # Efficiency Recognition API Routes (optional)
