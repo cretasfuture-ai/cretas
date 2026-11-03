@@ -48,7 +48,7 @@ import static org.mockito.Mockito.when;
 /**
  * 断供 / 质量 / 涨价三种事件的回归。阳性: 用了该原料的计划/订单出现; 阴性: 不相关产品不出现。
  */
-class SupplyImpactServiceTest {
+class SupplyImpactContractTest {
 
     private static final String F = "F-T";
     private final SupplierRepository supplierRepo = mock(SupplierRepository.class);
