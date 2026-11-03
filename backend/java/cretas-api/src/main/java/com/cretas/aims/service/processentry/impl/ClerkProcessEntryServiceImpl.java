@@ -10,6 +10,7 @@ import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry;
 import com.cretas.aims.dto.processentry.ProcessChainEntryRequest.UpstreamSource;
 import com.cretas.aims.dto.processentry.ProcessChainEntryResult;
 import com.cretas.aims.dto.processentry.ResolvedEdge;
+import com.cretas.aims.entity.workprocess.ProcessParamCheck;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProcessEntryIdempotency;
@@ -1121,6 +1122,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             return;
         }
         ProcessCustomFieldValidation.checkKeys(wp.getCustomFieldSchema(), cf.keySet(), wp.getProcessName());
+        st.setParamChecks(ProcessParamCheck.evaluate(wp.getCustomFieldSchema(), cf));
     }
 
     /** 将 ProcessChainEntryRequest.Byproduct 列表转换为 jsonb-ready Map 列表 (mirror YieldReportServiceImpl). */
@@ -1141,6 +1143,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // 也让"哪些是内部记账 / 哪些是用户填的"混在一起不可辨识。
         if (st.getCustomFields() != null && !st.getCustomFields().isEmpty()) {
             fields.put("clerkCustomFields", st.getCustomFields());
+        }
+        // 工艺标准参数快照 (当时的标准值/上下限 + 判定), 只有配了上下限且填了值才有。
+        if (st.getParamChecks() != null && !st.getParamChecks().isEmpty()) {
+            fields.put("paramChecks", st.getParamChecks());
         }
         return fields;
     }

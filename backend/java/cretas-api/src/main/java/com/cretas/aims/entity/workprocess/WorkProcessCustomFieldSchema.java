@@ -2,6 +2,7 @@ package com.cretas.aims.entity.workprocess;
 
 import com.cretas.aims.exception.BusinessException;
 
+import java.math.BigDecimal;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -36,8 +37,20 @@ public final class WorkProcessCustomFieldSchema {
     /** 自定义字段允许的值类型 —— 与前端 {@code ProcessSheetCustomFieldDef.type} 逐字一致。 */
     public static final Set<String> TYPES = Set.of("number", "text", "date");
 
-    /** 一条字段定义允许出现的键 —— 多一个键就是拼错, 而拼错的键会静默地什么都不做。 */
-    public static final Set<String> ENTRY_KEYS = Set.of("key", "label", "type", "enabled");
+    /**
+     * 一条字段定义允许出现的键 —— 多一个键就是拼错, 而拼错的键会静默地什么都不做。
+     *
+     * <p>{@code unit / standardValue / min / max} 是工艺标准参数 (油温、炒制时间、绞碎孔径、水分…),
+     * 只允许挂在 {@code type=number} 的字段上; 报工时按 {@link ProcessParamCheck} 比对实际值。
+     */
+    public static final Set<String> ENTRY_KEYS = Set.of(
+            "key", "label", "type", "enabled", "unit", "standardValue", "min", "max");
+
+    /** 工艺标准参数键 —— 只对数字字段有意义。 */
+    public static final Set<String> STANDARD_KEYS = Set.of("unit", "standardValue", "min", "max");
+
+    /** 单位最长字符数 (℃、min、mm、%、kg 之类, 给出余量)。 */
+    public static final int UNIT_MAX_LENGTH = 20;
 
     /** 一条不合规, 带上给前端定位用的 hintTarget。 */
     public record Problem(String hintTarget, String message) {
@@ -110,6 +123,51 @@ public final class WorkProcessCustomFieldSchema {
                         + " —— 可用的只有 " + ENTRY_KEYS.stream().sorted().toList()
                         + "(拼错的属性会被静默忽略, 所以这里直接拒绝)");
             }
+            Problem standardProblem = standardProblem(field, at, key, type);
+            if (standardProblem != null) {
+                return standardProblem;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 工艺标准参数的形状: 只挂数字字段、值必须是数字、下限 ≤ 上限、标准值落在范围内。
+     *
+     * <p>{@code null} 等同未填 (前端清空输入框会发 null)。
+     */
+    private static Problem standardProblem(Map<String, Object> field, String at, String key, String type) {
+        boolean hasStandard = STANDARD_KEYS.stream().anyMatch(k -> field.get(k) != null);
+        if (!hasStandard) {
+            return null;
+        }
+        if (!"number".equals(type)) {
+            return new Problem("type", at + "「" + key + "」是" + type
+                    + "字段, 不能设置单位/标准值/上下限 —— 工艺标准只对数字字段有意义");
+        }
+        Object unit = field.get("unit");
+        if (unit != null && (!(unit instanceof String s) || s.trim().length() > UNIT_MAX_LENGTH)) {
+            return new Problem("unit", at + "「" + key + "」的单位必须是不超过 "
+                    + UNIT_MAX_LENGTH + " 个字的文字");
+        }
+        BigDecimal standard;
+        BigDecimal min;
+        BigDecimal max;
+        try {
+            standard = ProcessParamCheck.decimalOrNull(field.get("standardValue"));
+            min = ProcessParamCheck.decimalOrNull(field.get("min"));
+            max = ProcessParamCheck.decimalOrNull(field.get("max"));
+        } catch (IllegalArgumentException e) {
+            return new Problem("customFieldSchema", at + "「" + key + "」的标准值和上下限必须是数字");
+        }
+        if (min != null && max != null && min.compareTo(max) > 0) {
+            return new Problem("min", at + "「" + key + "」的下限 " + min.toPlainString()
+                    + " 大于上限 " + max.toPlainString());
+        }
+        if (standard != null && ((min != null && standard.compareTo(min) < 0)
+                || (max != null && standard.compareTo(max) > 0))) {
+            return new Problem("standardValue", at + "「" + key + "」的标准值 "
+                    + standard.toPlainString() + " 不在上下限范围内");
         }
         return null;
     }

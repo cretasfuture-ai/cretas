@@ -216,6 +216,54 @@ describe('WorkProcessCustomFieldsDialog', () => {
     expect(wrapper.emitted('saved')).toBeUndefined();
   });
 
+  it('saves process standards on number fields and keeps existing standards on an unrelated re-save', async () => {
+    const withStandard: WorkProcessItem = {
+      ...processRow,
+      customFieldSchema: [
+        { key: 'oil_temp', label: '油温', type: 'number', enabled: true, unit: '℃', standardValue: 155, min: 150, max: 160 },
+      ],
+    };
+    const wrapper = mountDialog({ workProcess: withStandard });
+    // 已有标准回显到输入框
+    expect((wrapper.find('[data-testid="custom-field-max-0"]').element as HTMLInputElement).value).toBe('160');
+    await wrapper.find('[data-testid="custom-field-add"]').trigger('click');
+    await wrapper.find('[data-testid="custom-field-key-1"]').setValue('moisture');
+    await wrapper.find('[data-testid="custom-field-label-1"]').setValue('水分');
+    await wrapper.find('[data-testid="custom-field-type-1"]').setValue('number');
+    await wrapper.find('[data-testid="custom-field-unit-1"]').setValue(' % ');
+    await wrapper.find('[data-testid="custom-field-max-1"]').setValue('12.5');
+    await wrapper.find('[data-testid="custom-field-save"]').trigger('click');
+    await flushPromises();
+
+    expect(api.updateWorkProcess).toHaveBeenCalledWith('F006', 'WP-42', {
+      processName: '灌装', processCategory: '包装',
+      customFieldSchema: [
+        { key: 'oil_temp', label: '油温', type: 'number', enabled: true, unit: '℃', standardValue: 155, min: 150, max: 160 },
+        { key: 'moisture', label: '水分', type: 'number', enabled: true, unit: '%', max: 12.5 },
+      ],
+    });
+  });
+
+  it('blocks a lower bound above the upper bound and drops standards when the field becomes text', async () => {
+    const wrapper = mountDialog({
+      workProcess: { ...processRow, customFieldSchema: [{ key: 't', label: '温度', type: 'number', enabled: true }] },
+    });
+    await wrapper.find('[data-testid="custom-field-min-0"]').setValue('160');
+    await wrapper.find('[data-testid="custom-field-max-0"]').setValue('150');
+    await wrapper.find('[data-testid="custom-field-save"]').trigger('click');
+    await flushPromises();
+    expect(api.updateWorkProcess).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="custom-fields-error"]').text()).toContain('下限不能大于上限');
+
+    await wrapper.find('[data-testid="custom-field-type-0"]').setValue('text');
+    expect(wrapper.find('[data-testid="custom-field-min-0"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="custom-field-save"]').trigger('click');
+    await flushPromises();
+    expect(api.updateWorkProcess).toHaveBeenCalledWith('F006', 'WP-42', expect.objectContaining({
+      customFieldSchema: [{ key: 't', label: '温度', type: 'text', enabled: true }],
+    }));
+  });
+
   it('disables the editor and save action without write permission', () => {
     const wrapper = mountDialog({ canWrite: false });
     expect(wrapper.find('[data-testid="custom-field-key-0"]').attributes('disabled')).toBeDefined();
