@@ -149,7 +149,8 @@ class ProcessSecretCostVarianceToolOverfetchJpaContractTest {
         when(reports.getCostVarianceReport(eq(F), any(), any(), anyString())).thenAnswer(inv ->
                 production.getCostVarianceReport(F, inv.getArgument(1), inv.getArgument(2), inv.getArgument(3)));
 
-        ReportCostVarianceTool target = new ReportCostVarianceTool();
+        // 测的是工艺保密的过取, 调用者看得到成本金额 (价格可见性另由 ChatReplyPriceTextContractTest 覆盖)
+        ReportCostVarianceTool target = com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(new ReportCostVarianceTool());
         ReflectionTestUtils.setField(target, "reportService", reports);
         ReflectionTestUtils.setField(target, "llmCostScope", costScope);
         ReflectionTestUtils.setField(target, "objectMapper", mapper);
