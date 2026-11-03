@@ -40,6 +40,8 @@ class ReplyTextPriceSweepContractTest {
     enum Verdict {
         /** 文字里的金额按同名字段的可见性写 (AbstractTool.replyShowsAmount / replyShowsPriceSpec)。 */
         CHECKED,
+        /** 返回与 REST 端点同一份类型化 DTO、门槛相同: 字段与文字按 REST 口径 (登记的标识必须仍在文件里)。 */
+        SAME_AS_REST,
         /** 工具内自带价格权限判定 (登记的判定标识必须仍在文件里)。 */
         OWN_GATE,
         /** 金额由上游 (Python gold 服务按 X-User-Role) 剥掉后才到这里; 本 PR 未逐字段核对。 */
@@ -67,7 +69,7 @@ class ReplyTextPriceSweepContractTest {
         reviewed("hr/ExpenseRequestQueryTool.java", Verdict.CHECKED, "total / 类别 / amount");
         reviewed("pricing/PricingTestCalculateTool.java", Verdict.CHECKED, "originalPrice / finalPrice / totalDiscount");
         reviewed("purchase/ProcurementOrderCreateTool.java", Verdict.CHECKED, "estimatedUnitPrice / estimatedBudget");
-        reviewed("report/ReportCostVarianceTool.java", Verdict.CHECKED, "totalActualCost");
+        reviewed("report/ReportCostVarianceTool.java", Verdict.SAME_AS_REST, "sameVisibilityAsRest(");
         reviewed("report/SkuGrossMarginTool.java", Verdict.CHECKED, "revenue / cost / price / unitCost");
         reviewed("workdesk/AccountsReceivableAgingTool.java", Verdict.CHECKED, "totalAmount / highRiskAmount");
         reviewed("workdesk/BalanceSheetQueryTool.java", Verdict.CHECKED, "totalAssets / totalLiabilities / totalEquity");
@@ -137,7 +139,7 @@ class ReplyTextPriceSweepContractTest {
                 case CHECKED -> {
                     if (!CHECK_CALL.matcher(src).find()) missing.put(e.getKey(), "no replyShowsAmount/PriceSpec call");
                 }
-                case OWN_GATE -> {
+                case OWN_GATE, SAME_AS_REST -> {
                     if (!src.contains(e.getValue().note())) missing.put(e.getKey(), "gate token gone: " + e.getValue().note());
                 }
                 default -> { }

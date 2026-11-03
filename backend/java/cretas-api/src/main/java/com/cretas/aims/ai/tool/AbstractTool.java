@@ -38,6 +38,33 @@ public abstract class AbstractTool implements ToolExecutor {
         return priceView != null && priceView.showsKey(getUserId(context), key);
     }
 
+    /**
+     * 本工具返回的是与某个 REST 端点<b>同一份类型化 DTO</b>, 且工具门槛与那个端点相同时调用。
+     * REST 对类型化响应只按 @PriceSensitive 口径遮, 不按键名规则 (Rule 1 / 2 / 2b) 遮; 对话里这份 DTO 变成 Map,
+     * 键名规则会把 REST 上看得到的成本也剥掉 (ERP-S6-MSG-TEXT-PRICE-LEAK-001 复测: 部门管理员 REST 看得到
+     * 成本差异的实际总成本, 对话里为 null)。这里把这份 DTO 写出的属性名登记为「按口径可见」, 对话与 REST 一致;
+     * 其中的 @PriceSensitive 属性照旧在序列化时按调用者口径处理。
+     */
+    protected void sameVisibilityAsRest(Object typedBody) {
+        if (typedBody == null || objectMapper == null) {
+            return;
+        }
+        java.util.Set<String> names = new java.util.HashSet<>();
+        collectFieldNames(objectMapper.valueToTree(typedBody), names);
+        com.cretas.aims.security.PriceSensitiveContext.recordVisibleKeys(names);
+    }
+
+    private static void collectFieldNames(com.fasterxml.jackson.databind.JsonNode node, java.util.Set<String> names) {
+        if (node.isObject()) {
+            node.fields().forEachRemaining(e -> {
+                names.add(e.getKey());
+                collectFieldNames(e.getValue(), names);
+            });
+        } else if (node.isArray()) {
+            node.forEach(child -> collectFieldNames(child, names));
+        }
+    }
+
     /** 同上, 多个键: 全部看得到才算看得到 (一句话里的几个金额同进同出)。 */
     protected boolean replyShowsAmounts(Map<String, Object> context, String... keys) {
         for (String key : keys) {
