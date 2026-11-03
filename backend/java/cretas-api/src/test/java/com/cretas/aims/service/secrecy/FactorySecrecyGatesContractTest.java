@@ -38,8 +38,12 @@ class FactorySecrecyGatesContractTest {
 
     /** Java 里直接碰保密数据源的写法。 */
     static final Pattern JAVA_SOURCE = Pattern.compile(
-            "ProcessSecretPolicyRepository|ProcessSecretGrantRepository|process_secret_policies|process_secret_grants"
-                    + "|FROM\\s+ProcessSecretPolicy\\b|FROM\\s+ProcessSecretGrant\\b"
+            "ProcessSecretPolicyRepository|ProcessSecretGrantRepository"
+                    // 表名 (原生 SQL, 不分大小写)
+                    + "|(?i:process_secret_policies|process_secret_grants)"
+                    // 实体类名本身: JPQL FROM (不分大小写)、em.find(X.class)、Criteria / Specification / Root<X>
+                    // (按整词认, ProcessSecretPolicyService 之类的长名字不算这一条; 审查跟进 2d)
+                    + "|\\bProcessSecret(?:Policy|Grant)\\b|(?i:\\bfrom\\s+processsecret(?:policy|grant)\\b)"
                     + "|new\\s+LlmEgressRedactor\\s*\\(|LlmEgressRedactor\\s*::\\s*new|LlmEgressRedactor\\s*\\.\\s*passThrough"
                     // 经保密策略服务读 (审查 #6: 绕开仓库直接拿策略)
                     + "|\\bProcessSecretPolicyService\\b"
@@ -83,7 +87,9 @@ class FactorySecrecyGatesContractTest {
             "process_secret_policies|process_secret_grants|factory_secrecy_settings"
                     // common/llm_redactor.py 与 common/llm_egress_text.py 里的每一个脱敏函数 (按名字认, 不要求后面跟括号:
                     // import / 别名 / getattr 字符串都算; 审查 #6)
-                    + "|\\bredact_(?:text|texts|dict|payload|payload_for_egress)\\b|_protected_names_for_egress");
+                    + "|\\bredact_(?:text|texts|dict|payload|payload_for_egress)\\b|_protected_names_for_egress"
+                    // 保密产品名 SQL 常量 (common/process_secret_sql.py; 审查跟进 2d)
+                    + "|\\b(?:ALL_FACTORIES_|ALL_)?PROTECTED_NAMES_SQL\\b");
 
     static final Map<String, Set<String>> PYTHON_ATTACHMENTS = new TreeMap<>(Map.ofEntries(
             Map.entry("common/factory_secrecy.py", Set.of("CONFIG")),
@@ -119,19 +125,79 @@ class FactorySecrecyGatesContractTest {
 
     // ------------------------------------------------------------------ 挂靠闸
 
+    /**
+     * 已知会由在途 PR 新增的读取点: 文件还不在代码树里时预先登记归属项。<b>有效期到文件落地为止</b> ——
+     * 路径一旦存在, 闸就红, 直到把它挪进上面的正式清单 (挪过去之后「登记了却不读」的检查才对它生效)。
+     * PR #1377 (训练数据过滤 d) 的四条已随它落地并挪进正式清单, 目前没有在途登记。
+     */
+    static final Map<String, Set<String>> JAVA_PENDING = new TreeMap<>();
+    static final Map<String, Set<String>> PYTHON_PENDING = new TreeMap<>();
+
     @Test
     void everyJavaClassReadingASecrecySourceIsAttachedToAnItem() throws IOException {
         Map<String, Set<String>> found = scan(JAVA_MAIN, ".java", JAVA_SOURCE, FactorySecrecyGatesContractTest::stripJavaComments);
-        assertThat(found.keySet()).as("直接读保密数据源的 Java 类 (新增的要登记归属项; 不再读的要删掉)")
-                .isEqualTo(JAVA_ATTACHMENTS.keySet());
-        assertItemsAreKnown(JAVA_ATTACHMENTS);
+        assertAttached(JAVA_MAIN, found, JAVA_ATTACHMENTS, JAVA_PENDING, "直接读保密数据源的 Java 类");
     }
 
     @Test
     void everyPythonModuleReadingASecrecySourceIsAttachedToAnItem() throws IOException {
         Map<String, Set<String>> found = scan(PYTHON_ROOT, ".py", PYTHON_SOURCE, FactorySecrecyGatesContractTest::stripPythonComments);
-        assertThat(found.keySet()).as("直接读保密数据源的 Python 模块 (测试除外)").isEqualTo(PYTHON_ATTACHMENTS.keySet());
-        assertItemsAreKnown(PYTHON_ATTACHMENTS);
+        assertAttached(PYTHON_ROOT, found, PYTHON_ATTACHMENTS, PYTHON_PENDING, "直接读保密数据源的 Python 模块 (测试除外)");
+    }
+
+    /**
+     * 读到的必须都在正式登记里; 正式登记必须都还在读 (清单不许过期); 在途登记的路径一旦出现在代码树里就红,
+     * 直到挪进正式登记 (在途豁免只到文件落地为止)。
+     */
+    static void assertAttached(Path root, Map<String, Set<String>> found, Map<String, Set<String>> registered,
+                               Map<String, Set<String>> pending, String what) {
+        assertThat(landedPending(root, pending))
+                .as(what + ": 在途登记的路径已经进了代码树 —— move this path into the registered list (挪进正式登记清单)")
+                .isEmpty();
+        Set<String> unregistered = new TreeSet<>(found.keySet());
+        unregistered.removeAll(registered.keySet());
+        assertThat(unregistered).as(what + ": 新出现、没登记归属项的").isEmpty();
+        Set<String> stale = new TreeSet<>(registered.keySet());
+        stale.removeAll(found.keySet());
+        assertThat(stale).as(what + ": 登记了却已经不读的 (请删掉)").isEmpty();
+        assertItemsAreKnown(registered);
+        assertItemsAreKnown(pending);
+    }
+
+    /** 在途登记里已经存在于代码树的路径。 */
+    static Set<String> landedPending(Path root, Map<String, Set<String>> pending) {
+        Set<String> landed = new TreeSet<>();
+        for (String rel : pending.keySet()) {
+            if (Files.exists(root.resolve(rel))) landed.add(rel);
+        }
+        return landed;
+    }
+
+    /** 在途豁免会过期: 路径落地后闸红, 提示挪进正式清单; 挪进去之后转绿。 */
+    @Test
+    void aPendingPathThatLandedMustBeMovedIntoTheRegisteredList(@org.junit.jupiter.api.io.TempDir Path tree)
+            throws IOException {
+        Map<String, Set<String>> pending = Map.of("common/landed.py", Set.of("TRAINING_FILTER"),
+                "common/not_yet.py", Set.of("TRAINING_FILTER"));
+        Map<String, Set<String>> registered = Map.of("common/old.py", Set.of("PROCESS_SECRET"));
+        Map<String, Set<String>> found = new TreeMap<>(Map.of("common/old.py", Set.of("process_secret_policies")));
+        Files.createDirectories(tree.resolve("common"));
+        Files.writeString(tree.resolve("common/old.py"), "SQL = 'select 1 from process_secret_policies'");
+        // 还没落地: 豁免有效
+        assertAttached(tree, found, registered, pending, "t");
+
+        Files.writeString(tree.resolve("common/landed.py"), "SQL = 'select 1 from process_secret_policies'");
+        found.put("common/landed.py", Set.of("process_secret_policies"));
+        assertThat(landedPending(tree, pending)).containsExactly("common/landed.py");
+        assertThatThrownBy(() -> assertAttached(tree, found, registered, pending, "t"))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("move this path into the registered list")
+                .hasMessageContaining("common/landed.py");
+
+        // 挪进正式清单 (并从在途里删掉) 后转绿
+        Map<String, Set<String>> moved = new TreeMap<>(registered);
+        moved.put("common/landed.py", Set.of("TRAINING_FILTER"));
+        assertAttached(tree, found, moved, Map.of("common/not_yet.py", Set.of("TRAINING_FILTER")), "t");
     }
 
     @Test
@@ -156,6 +222,26 @@ class FactorySecrecyGatesContractTest {
         assertThat(PYTHON_SOURCE.matcher("unredact_textual = 1").find()).as("名字的一部分不算").isFalse();
         assertThat(PYTHON_SOURCE.matcher(stripPythonComments("rows = await conn.fetch('SELECT * FROM process_secret_policies')")).find()).isTrue();
         assertThat(PYTHON_SOURCE.matcher(stripPythonComments("# process_secret_policies")).find()).isFalse();
+        // 审查跟进 2d: 实体类名 (JPQL / em.find / Criteria / Specification)、大写表名、保密名 SQL 常量
+        for (String java : List.of("@Query(\"select p from ProcessSecretPolicy p\")",
+                "@Query(\"SELECT g FROM processsecretgrant g\")",
+                "ProcessSecretPolicy p = em.find(ProcessSecretPolicy.class, id);",
+                "CriteriaQuery<ProcessSecretGrant> q = cb.createQuery(ProcessSecretGrant.class);",
+                "Specification<ProcessSecretPolicy> spec = (root, q, cb) -> cb.equal(root.get(\"factoryId\"), f);",
+                "jdbc.queryForList(\"SELECT * FROM PROCESS_SECRET_POLICIES\")")) {
+            assertThat(JAVA_SOURCE.matcher(stripJavaComments(java)).find()).as(java).isTrue();
+        }
+        for (String java : List.of("ProcessSecretPolicyView view;", "class ProcessSecretGrantsPanel {}",
+                "// em.find(ProcessSecretPolicy.class, id)", "/* FROM ProcessSecretGrant g */")) {
+            assertThat(JAVA_SOURCE.matcher(stripJavaComments(java)).find()).as(java).isFalse();
+        }
+        for (String python : List.of("from common.process_secret_sql import PROTECTED_NAMES_SQL",
+                "rows = await conn.fetch(ALL_FACTORIES_PROTECTED_NAMES_SQL)", "q = sql.ALL_PROTECTED_NAMES_SQL")) {
+            assertThat(PYTHON_SOURCE.matcher(stripPythonComments(python)).find()).as(python).isTrue();
+        }
+        for (String python : List.of("# PROTECTED_NAMES_SQL", "MY_PROTECTED_NAMES_SQL_V2 = 1")) {
+            assertThat(PYTHON_SOURCE.matcher(stripPythonComments(python)).find()).as(python).isFalse();
+        }
         assertThatThrownBy(() -> assertItemsAreKnown(Map.of("x", Set.of("NOT_AN_ITEM")))).isInstanceOf(AssertionError.class);
     }
 

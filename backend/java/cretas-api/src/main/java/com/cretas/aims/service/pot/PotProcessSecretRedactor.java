@@ -66,8 +66,9 @@ public class PotProcessSecretRedactor {
             }
             boolean allowed = products.stream()
                     .filter(protectedProducts::contains)
+                    // 平台账号的放行每次 (每个产品每次调用一条) 记一条完整查看
                     .allMatch(p -> permittedByProduct.computeIfAbsent(p, k ->
-                            accessService.decide(actor, factoryId, k, ProcessSecretAction.VIEW_FULL).permitted()));
+                            accessService.permitsViewFull(actor, factoryId, k, "pot batch detail " + k)));
             if (allowed) {
                 restricted.remove(batch.getId());
             }

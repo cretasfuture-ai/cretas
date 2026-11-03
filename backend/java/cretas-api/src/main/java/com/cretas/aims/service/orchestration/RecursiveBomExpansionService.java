@@ -188,9 +188,10 @@ public class RecursiveBomExpansionService {
         }
 
         // 工艺保密: 子层的受保护半成品, 无权者只看到「受限」节点, 不展开它的配方 (根节点由接口拦截器判定)
-        if (level > 0 && !processSecretAccessService.decide(
+        // 平台账号的放行每次记一条完整查看 (permitsViewFull)
+        if (level > 0 && !processSecretAccessService.permitsViewFull(
                 com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().orElse(null), factoryId, typeId,
-                com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL).permitted()) {
+                "bom tree expand child " + typeId)) {
             return BomTreeNode.builder()
                     .level(level)
                     .typeId(typeId)

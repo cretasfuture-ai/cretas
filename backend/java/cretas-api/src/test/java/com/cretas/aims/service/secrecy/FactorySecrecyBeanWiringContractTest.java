@@ -82,6 +82,9 @@ class FactorySecrecyBeanWiringContractTest {
             FactorySecrecyConfig config = context.getBean(FactorySecrecyConfig.class);
             assertThat(config).isNotSameAs(FactorySecrecyConfig.allOn());
             assertThat(ReflectionTestUtils.getField(config, "readTx")).as("读配置有自己的只读事务").isNotNull();
+            // 审查跟进 2c: 工厂存在性检查要拿到容器里的工厂表; 拿不到 (null) 时不存在的工厂编号会按「没有配置行 = 关」处理
+            assertThat(ReflectionTestUtils.getField(config, "factories")).as("工厂表接上了")
+                    .isNotNull().isSameAs(context.getBean(FactoryRepository.class));
             for (Class<?> wired : new Class<?>[]{ProcessSecretAccessService.class, ProcessSecretSampleFilter.class,
                     LlmEgressGuard.class, ProcessSecretAiAccessAudit.class, ProcessSecretExternalService.class}) {
                 assertThat(ReflectionTestUtils.getField(context.getBean(wired), "secrecy"))
