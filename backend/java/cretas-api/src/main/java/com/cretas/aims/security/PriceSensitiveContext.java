@@ -119,5 +119,57 @@ public final class PriceSensitiveContext {
     public static void clear() {
         HIDE_PRICES.remove();
         HIDDEN_SPECS.remove();
+        RECORDED_VISIBLE.remove();
+        APPROVED_PAYLOADS.remove();
+    }
+
+    // ------------------------------------------------------------------ 按口径放行的键 (ERP-S6-PO-PRICE-OVERMASK-001)
+    //
+    // 对话直调工具时, 结果在工具里按口径序列化 (@PriceSensitive + 上面的 scopedSpecs) 后变成 Map 交给响应层;
+    // 响应层对 Map 只能按键名猜 (Rule 2b: 无 finance:read 时剥所有像金额的数字键) —— 采购主管 (procurement rw,
+    // finance -) 在对话里看不到采购单金额, 而 REST 的类型化列表看得到。这里记下「按口径判定为可见、已经写出」的
+    // @PriceSensitive 属性名, 并把它们绑定到那一份结果对象 (按身份), 响应层只对这一份里的这些键不再按键名剥。
+
+    private static final ThreadLocal<java.util.Set<String>> RECORDED_VISIBLE = new ThreadLocal<>();
+    private static final ThreadLocal<java.util.IdentityHashMap<Object, java.util.Set<String>>> APPROVED_PAYLOADS =
+            new ThreadLocal<>();
+
+    /** 开始记录本线程里按口径判定为可见、被写出的 @PriceSensitive 属性名。 */
+    public static void startRecordingVisible() {
+        RECORDED_VISIBLE.set(new java.util.HashSet<>());
+    }
+
+    /** 结束记录, 返回记下的属性名 (没在记录时为空集)。 */
+    public static java.util.Set<String> stopRecordingVisible() {
+        java.util.Set<String> recorded = RECORDED_VISIBLE.get();
+        RECORDED_VISIBLE.remove();
+        return recorded == null ? java.util.Set.of() : java.util.Set.copyOf(recorded);
+    }
+
+    /** 序列化器写出一个可见的 @PriceSensitive 属性时调用。 */
+    static void recordVisible(String propertyName) {
+        java.util.Set<String> recorded = RECORDED_VISIBLE.get();
+        if (recorded != null && propertyName != null) {
+            recorded.add(propertyName);
+        }
+    }
+
+    /** 把按口径放行的属性名绑定到这一份结果对象 (按身份, 不按内容)。 */
+    public static void approveKeys(Object payload, java.util.Set<String> keys) {
+        if (payload == null || keys == null || keys.isEmpty()) {
+            return;
+        }
+        java.util.IdentityHashMap<Object, java.util.Set<String>> approved = APPROVED_PAYLOADS.get();
+        if (approved == null) {
+            approved = new java.util.IdentityHashMap<>();
+            APPROVED_PAYLOADS.set(approved);
+        }
+        approved.put(payload, java.util.Set.copyOf(keys));
+    }
+
+    /** 这一份对象 (按身份) 上按口径放行的属性名; 没有为 null。 */
+    public static java.util.Set<String> approvedKeys(Object payload) {
+        java.util.IdentityHashMap<Object, java.util.Set<String>> approved = APPROVED_PAYLOADS.get();
+        return approved == null || payload == null ? null : approved.get(payload);
     }
 }
