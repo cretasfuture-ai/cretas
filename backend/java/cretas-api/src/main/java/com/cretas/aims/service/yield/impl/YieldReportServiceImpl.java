@@ -1,6 +1,8 @@
 package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.FactorySettingsDTO;
+import com.cretas.aims.service.yield.balance.MaterialBalanceCalculator;
+import com.cretas.aims.service.yield.balance.MaterialBalanceThresholdProvider;
 import com.cretas.aims.dto.yield.BatchYieldDTO;
 import com.cretas.aims.dto.yield.CostReconcileResult;
 import com.cretas.aims.dto.yield.MaterialBatchRef;
@@ -85,8 +87,6 @@ public class YieldReportServiceImpl implements YieldReportService {
     private static final String YIELD = "YIELD";
     private static final BigDecimal DEFAULT_TOLERANCE = new BigDecimal("0.30");
     private static final BigDecimal BD_60 = BigDecimal.valueOf(60);
-    /** 守恒软校验阈值: |balance| / input > 15% → 告警 (非阻塞) */
-    private static final BigDecimal BALANCE_WARN_THRESHOLD = new BigDecimal("0.15");
 
     private record BatchCloseReadiness(
             boolean ready,
@@ -657,7 +657,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         // legacy: 同一报工带 input+output, 直接校验。
         // F2 OUTPUT 阶段: 聚合该 task 所有 INPUT 报工的 Σ inputQuantity 对比本次产出 (跨阶段守恒)。
         if (isLegacy) {
-            String balanceWarning = computeBalanceWarning(req);
+            String balanceWarning = computeBalanceWarning(factoryId, req);
             if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
         } else if (isOutput) {
             // F2: Σ 该 task 历史 INPUT 报工的 inputQuantity (含本次 save 前的存量)
@@ -673,7 +673,7 @@ public class YieldReportServiceImpl implements YieldReportService {
                     .filter(Objects::nonNull)
                     .findFirst().orElse(null);
             String balanceWarning = computeBalanceWarningForOutput(
-                    sumInput, effOutput, sumInputUnit, effOutputUnit,
+                    factoryId, sumInput, effOutput, sumInputUnit, effOutputUnit,
                     effByproducts, effWaste, effSampleRetain);
             if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
         }
@@ -1344,45 +1344,41 @@ public class YieldReportServiceImpl implements YieldReportService {
      *
      * <p>per fool-proof 4 位一体: 含具体数字 + next-action ("请核对, 系统不阻塞")。</p>
      */
-    private String computeBalanceWarning(YieldReportRequest req) {
-        BigDecimal input = req.getInputQuantity();
-        BigDecimal output = req.getOutputQuantity();
-        if (input == null || input.compareTo(BigDecimal.ZERO) <= 0) return null;
-        // 单位可比性: inputUnit == outputUnit (跨单位无法守恒比较)
-        String inUnit = req.getInputUnit();
-        String outUnit = req.getOutputUnit();
-        if (inUnit == null || !inUnit.equals(outUnit)) return null;
+    private String computeBalanceWarning(String factoryId, YieldReportRequest req) {
+        return balanceWarningText(factoryId, req.getInputQuantity(), req.getInputUnit(), req.getOutputQuantity(),
+                req.getOutputUnit(), req.getByproducts(), req.getWasteQuantity(), req.getSampleRetainQuantity());
+    }
 
-        BigDecimal byproductSum = BigDecimal.ZERO;
-        if (req.getByproducts() != null) {
-            for (YieldReportRequest.Byproduct b : req.getByproducts()) {
-                if (b != null && b.getQuantity() != null) byproductSum = byproductSum.add(b.getQuantity());
+    /**
+     * 缺口 #07: 公式只在 {@link MaterialBalanceCalculator} 一份, App 报工 / web 逐道报工 / web 平衡表共用。
+     * 这里只负责把 App 的请求形状翻成它的入参; 超过本厂红色阈值 (默认 15%) 才出声, 系统不阻塞。
+     */
+    private String balanceWarningText(String factoryId, BigDecimal input, String inUnit, BigDecimal output,
+                                      String outUnit, List<YieldReportRequest.Byproduct> byproducts,
+                                      BigDecimal waste, Integer sample) {
+        if (input == null || input.compareTo(BigDecimal.ZERO) <= 0) return null;
+        // 旧口径: App 报工没填输出单位 = 单位不可比不告警 (保持原行为, 不把缺失当同单位)
+        if (inUnit == null || outUnit == null) return null;
+        List<MaterialBalanceCalculator.Qty> byp = new java.util.ArrayList<>();
+        if (byproducts != null) {
+            for (YieldReportRequest.Byproduct b : byproducts) {
+                if (b != null) byp.add(new MaterialBalanceCalculator.Qty(b.getQuantity(), b.getUnit()));
             }
         }
-        BigDecimal waste = req.getWasteQuantity() == null ? BigDecimal.ZERO : req.getWasteQuantity();
-        // F3: 留样也消耗投入物料, 必须减去 (Integer → kg 同单位处理, null 视 0)
-        BigDecimal sample = req.getSampleRetainQuantity() == null
-                ? BigDecimal.ZERO : new BigDecimal(req.getSampleRetainQuantity());
-        BigDecimal balance = input.subtract(nz(output)).subtract(byproductSum).subtract(waste)
-                .subtract(sample);
-
-        BigDecimal deviation = balance.abs().divide(input, 6, RoundingMode.HALF_UP);
-        if (deviation.compareTo(BALANCE_WARN_THRESHOLD) <= 0) return null;
-
-        return String.format(
-                "物料平衡偏差 %.0f%% (投入 %s, 产出 %s, 副产物 %s, 损耗 %s, 留样 %s) — 请核对, 系统不阻塞",
-                deviation.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP),
-                input.stripTrailingZeros().toPlainString(),
-                nz(output).stripTrailingZeros().toPlainString(),
-                byproductSum.stripTrailingZeros().toPlainString(),
-                waste.stripTrailingZeros().toPlainString(),
-                sample.stripTrailingZeros().toPlainString());
+        MaterialBalanceCalculator.Thresholds t = balanceThresholds == null
+                ? MaterialBalanceCalculator.Thresholds.DEFAULT : balanceThresholds.forFactory(factoryId);
+        MaterialBalanceCalculator.Result r = MaterialBalanceCalculator.compute(input, inUnit, output, outUnit,
+                byp, waste, sample == null ? null : new BigDecimal(sample), t);
+        return MaterialBalanceCalculator.warningText(r, inUnit);
     }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MaterialBalanceThresholdProvider balanceThresholds;
 
     /**
      * F2 三阶段 OUTPUT 守恒软校验: 使用跨报工汇聚的投入量 (Σ INPUT 报工) 与本次 OUTPUT 产出比对。
      *
-     * <p>参数语义与 {@link #computeBalanceWarning(YieldReportRequest)} 相同, 但 input/output/unit
+     * <p>参数语义与 {@link #computeBalanceWarning(String, YieldReportRequest)} 相同, 但 input/output/unit
      * 均为调用方计算后的聚合值 (不来自单一 req 对象)。</p>
      *
      * @param totalInput   该 task 历史所有 INPUT 报工 Σ inputQuantity (跨阶段汇聚)
@@ -1393,35 +1389,12 @@ public class YieldReportServiceImpl implements YieldReportService {
      * @param wasteQty     损耗 (来自 OUTPUT 报工)
      * @param sampleRetain 留样件数 (来自 OUTPUT 报工)
      */
-    private String computeBalanceWarningForOutput(BigDecimal totalInput, BigDecimal totalOutput,
+    private String computeBalanceWarningForOutput(String factoryId, BigDecimal totalInput, BigDecimal totalOutput,
                                                   String inUnit, String outUnit,
                                                   List<YieldReportRequest.Byproduct> byproducts,
                                                   BigDecimal wasteQty, Integer sampleRetain) {
-        if (totalInput == null || totalInput.compareTo(BigDecimal.ZERO) <= 0) return null;
-        if (inUnit == null || !inUnit.equals(outUnit)) return null;  // 跨单位不可比
-
-        BigDecimal byproductSum = BigDecimal.ZERO;
-        if (byproducts != null) {
-            for (YieldReportRequest.Byproduct b : byproducts) {
-                if (b != null && b.getQuantity() != null) byproductSum = byproductSum.add(b.getQuantity());
-            }
-        }
-        BigDecimal waste = wasteQty == null ? BigDecimal.ZERO : wasteQty;
-        BigDecimal sample = sampleRetain == null ? BigDecimal.ZERO : new BigDecimal(sampleRetain);
-        BigDecimal balance = totalInput.subtract(nz(totalOutput)).subtract(byproductSum)
-                .subtract(waste).subtract(sample);
-
-        BigDecimal deviation = balance.abs().divide(totalInput, 6, RoundingMode.HALF_UP);
-        if (deviation.compareTo(BALANCE_WARN_THRESHOLD) <= 0) return null;
-
-        return String.format(
-                "物料平衡偏差 %.0f%% (投入 %s, 产出 %s, 副产物 %s, 损耗 %s, 留样 %s) — 请核对, 系统不阻塞",
-                deviation.multiply(BigDecimal.valueOf(100)).setScale(0, RoundingMode.HALF_UP),
-                totalInput.stripTrailingZeros().toPlainString(),
-                nz(totalOutput).stripTrailingZeros().toPlainString(),
-                byproductSum.stripTrailingZeros().toPlainString(),
-                waste.stripTrailingZeros().toPlainString(),
-                sample.stripTrailingZeros().toPlainString());
+        return balanceWarningText(factoryId, totalInput, inUnit, totalOutput, outUnit, byproducts, wasteQty,
+                sampleRetain);
     }
 
     /**
