@@ -48,6 +48,13 @@ public class EquipmentAlertsServiceImpl implements EquipmentAlertsService {
     @Override
     public PageResponse<EquipmentAlertDTO> getAlertList(String factoryId, PageRequest pageRequest,
                                                         String keyword, String severity, String status) {
+        return getAlertList(factoryId, pageRequest, keyword, severity, status, null);
+    }
+
+    @Override
+    public PageResponse<EquipmentAlertDTO> getAlertList(String factoryId, PageRequest pageRequest,
+                                                        String keyword, String severity, String status,
+                                                        Long equipmentId) {
         log.info("查询告警列表: factoryId={}, keyword={}, severity={}, status={}",
                 factoryId, keyword, severity, status);
 
@@ -71,6 +78,10 @@ public class EquipmentAlertsServiceImpl implements EquipmentAlertsService {
                     AlertStatus alertStatus = AlertStatus.valueOf(status);
                     predicates.add(cb.equal(root.get("status"), alertStatus));
                 } catch (IllegalArgumentException ignored) {}
+            }
+
+            if (equipmentId != null) {
+                predicates.add(cb.equal(root.get("equipmentId"), equipmentId));
             }
 
             return cb.and(predicates.toArray(new Predicate[0]));

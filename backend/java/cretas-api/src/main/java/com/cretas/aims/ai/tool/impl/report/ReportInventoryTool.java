@@ -80,6 +80,10 @@ public class ReportInventoryTool extends AbstractBusinessTool {
         category.put("enum", Arrays.asList("RAW_MATERIAL", "SEMI_FINISHED", "FINISHED", "PACKAGING", "ALL"));
         properties.put("category", category);
 
+        // 库存报表是当前时点的快照 (服务按当前库存汇总, 日期只影响临期窗口): 不能按过去的时间查。
+        // 声明 none: 用户说的时间 (「上个月的库存」) 不再被当成「报表日期」标在今天的快照上, 回复说明 (TimeRangeFilter)
+        schema.put(com.cretas.aims.ai.tool.TimeRangeFilter.MODE, "none");
+        schema.put(com.cretas.aims.ai.tool.TimeRangeFilter.NOTICE, "库存报表是当前时点的库存, 不能按过去的时间查, 下面是今天的库存");
         schema.put("properties", properties);
         schema.put("required", Collections.emptyList());
 

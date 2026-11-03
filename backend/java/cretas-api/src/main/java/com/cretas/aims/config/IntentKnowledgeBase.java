@@ -3747,8 +3747,8 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("产品属性", "MATERIAL_BATCH_QUERY");
         phraseToIntentMapping.put("修改仓库配置", "REPORT_INVENTORY");
         phraseToIntentMapping.put("仓库配置", "REPORT_INVENTORY");
-        phraseToIntentMapping.put("更新采购价格", "ORDER_LIST");
-        phraseToIntentMapping.put("采购价格", "ORDER_LIST");
+        // 采购问题不再短路到 ORDER_LIST (只查销售订单): 用销售数据回答采购问题是错数据, 交给决策层 / 澄清出口 (organizer 裁定 2026-11-03) 「更新采购价格」
+        // 采购问题不再短路到 ORDER_LIST (只查销售订单): 用销售数据回答采购问题是错数据, 交给决策层 / 澄清出口 (organizer 裁定 2026-11-03) 「采购价格」
         phraseToIntentMapping.put("修改工单进度", "PROCESSING_BATCH_LIST");
         phraseToIntentMapping.put("工单进度", "PROCESSING_BATCH_LIST");
         phraseToIntentMapping.put("更新维护周期", "EQUIPMENT_MAINTENANCE");
@@ -4963,8 +4963,8 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("原料不够", "MATERIAL_LOW_STOCK_ALERT");    // v26-P3: 4-char for "原料不够了，需要采购" (10 chars)
         phraseToIntentMapping.put("库存少于", "MATERIAL_LOW_STOCK_ALERT");    // v26-N1: "库存少于100公斤的原料"
         phraseToIntentMapping.put("到了没", "ORDER_LIST");                    // v26: fixed PROCUREMENT_LIST→ORDER_LIST (doesn't exist in DB)
-        phraseToIntentMapping.put("采购了多少", "ORDER_LIST");                // v26: fixed PROCUREMENT_STATS→ORDER_LIST
-        phraseToIntentMapping.put("需要采购", "ORDER_LIST");                  // v26: fixed PROCUREMENT_LIST→ORDER_LIST
+        // 采购问题不再短路到 ORDER_LIST (只查销售订单): 用销售数据回答采购问题是错数据, 交给决策层 / 澄清出口 (organizer 裁定 2026-11-03) 「采购了多少」
+        // 采购问题不再短路到 ORDER_LIST (只查销售订单): 用销售数据回答采购问题是错数据, 交给决策层 / 澄清出口 (organizer 裁定 2026-11-03) 「需要采购」
         phraseToIntentMapping.put("人手够不够", "ATTENDANCE_STATS");          // P4: "车间人手够不够"
         phraseToIntentMapping.put("在干活", "ATTENDANCE_TODAY");              // P4: short (3 chars, isShortInput only)
         phraseToIntentMapping.put("人在干活", "ATTENDANCE_TODAY");            // v26-P4: 4-char for "今天几个人在干活" (8 chars)
@@ -5017,7 +5017,7 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("设备运行效率", "EQUIPMENT_STATS");          // I1: 5-char override beats "设备运行"(4)
         phraseToIntentMapping.put("恢复暂停", "PROCESSING_BATCH_RESUME");     // H8: "恢复暂停的批次" — classifier mapped to PAUSE, need RESUME
         phraseToIntentMapping.put("驳回采购申请", "ORDER_UPDATE");            // R3: 6-char explicit override — beats "采购申请"(4)→ORDER_NEW
-        phraseToIntentMapping.put("猪肉到了", "ORDER_LIST");                  // P3: "采购的猪肉到了没" — food entity + 到了没, need 4-char phrase
+        // 采购问题不再短路到 ORDER_LIST (只查销售订单): 用销售数据回答采购问题是错数据, 交给决策层 / 澄清出口 (organizer 裁定 2026-11-03) 「猪肉到了」
         phraseToIntentMapping.put("撤销操作", "ORDER_UPDATE");                // R2: "撤销刚才的操作" — "刚才的"打断，but "撤销操作" not substring either
         phraseToIntentMapping.put("撤销刚才", "ORDER_UPDATE");                // R2: "撤销刚才的操作" — 4-char that IS a substring
         phraseToIntentMapping.put("批次的详情", "PROCESSING_BATCH_DETAIL");   // N2: "批次PC-2024-001的详情" → stripped to "批次的详情"

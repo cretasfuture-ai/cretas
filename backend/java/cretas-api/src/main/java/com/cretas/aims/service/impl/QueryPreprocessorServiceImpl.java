@@ -248,6 +248,7 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
             // 1.3 时间表达归一化
             TimeNormalizationRules.NormalizationResult timeResult =
                     timeNormalizationRules.extractAndReplace(processedText, now);
+            timeResult = timeFromOriginalIfRewrittenAway(timeResult, input, now);
             if (timeResult.hasTimeRange()) {
                 processedText = timeResult.getProcessedText();
                 extractedTimeRanges = timeResult.getExtractedRanges();
@@ -363,6 +364,24 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
         }
     }
 
+    /**
+     * 口语标准化可能把整句改写掉、连同里面的时间一起 (S6 验收 2026-11-03: 「上个月的库存」被改写成「查询库存数量」,
+     * 「上个月」随之消失, 下游拿到的就是今天的报表)。改写后的文本里找不到时间、原话里有时, 时间范围取自原话;
+     * 改写后的文本保持不变 (不把时间塞回去, 免得打乱改写的意图词)。
+     */
+    private TimeNormalizationRules.NormalizationResult timeFromOriginalIfRewrittenAway(
+            TimeNormalizationRules.NormalizationResult rewritten, String original, LocalDateTime now) {
+        if (rewritten.hasTimeRange() || original == null || original.isBlank()) {
+            return rewritten;
+        }
+        TimeNormalizationRules.NormalizationResult fromOriginal = timeNormalizationRules.extractAndReplace(original, now);
+        if (!fromOriginal.hasTimeRange()) {
+            return rewritten;
+        }
+        return new TimeNormalizationRules.NormalizationResult(
+                rewritten.getProcessedText(), fromOriginal.getExtractedRanges());
+    }
+
     @Override
     public PreprocessedQuery preprocessRulesOnly(String input) {
         if (input == null || input.trim().isEmpty()) {
@@ -394,6 +413,7 @@ public class QueryPreprocessorServiceImpl implements QueryPreprocessorService {
         // 时间归一化
         TimeNormalizationRules.NormalizationResult timeResult =
                 timeNormalizationRules.extractAndReplace(processedText, now);
+        timeResult = timeFromOriginalIfRewrittenAway(timeResult, input, now);
         if (timeResult.hasTimeRange()) {
             processedText = timeResult.getProcessedText();
         }

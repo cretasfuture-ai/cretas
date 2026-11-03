@@ -26,6 +26,13 @@ public final class TimeRangeFilter {
     public static final String APPLIED = "appliedTimeRange";
     /** 结果标记: 用户说了时间, 但这个工具不能按时间筛 {from, to}。 */
     public static final String NOT_APPLIED = "timeRangeNotApplied";
+    /**
+     * schema 顶层: {@code "none"} = 声明了 startDate/endDate 但并不按它们过滤 (如库存报表是当前时点快照)。
+     * 这样的工具收到句子里的时间时, 时间参数被拿掉, 回复说明不能按时间查 —— ⛔ 不把快照标成「上个月」。
+     */
+    public static final String MODE = "x-time-range";
+    /** schema 顶层: 不能按时间查时的说明 (替换通用措辞), 如「库存报表是当前时点的库存, 不能按过去的时间查」。 */
+    public static final String NOTICE = "x-time-range-notice";
 
     private TimeRangeFilter() {
     }
@@ -53,8 +60,27 @@ public final class TimeRangeFilter {
 
     /** 工具 schema 里同时声明了 startDate 与 endDate 属性 = 它支持按时间过滤。 */
     public static boolean supported(Map<String, Object> parametersSchema) {
-        return parametersSchema != null && parametersSchema.get("properties") instanceof Map<?, ?> props
+        if (parametersSchema == null || "none".equals(parametersSchema.get(MODE))) {
+            return false;
+        }
+        return parametersSchema.get("properties") instanceof Map<?, ?> props
                 && props.containsKey("startDate") && props.containsKey("endDate");
+    }
+
+    /**
+     * 执行前调用: 句子里的时间遇到不按时间过滤的工具, 把这对时间参数拿掉 (只拿掉来自句子的那一对,
+     * 显式传入的不动), 免得工具把它当成别的意思用 (库存报表会把 endDate 当「报表日期」标在当前快照上)。
+     */
+    public static void prepare(Map<String, Object> parametersSchema, Map<String, Object> params) {
+        if (params == null || !(params.get(SAID) instanceof String said) || supported(parametersSchema)) {
+            return;
+        }
+        String[] range = said.split("~", 2);
+        if (range.length == 2 && range[0].equals(String.valueOf(params.get("startDate")))
+                && range[1].equals(String.valueOf(params.get("endDate")))) {
+            params.remove("startDate");
+            params.remove("endDate");
+        }
     }
 
     /** 执行后调用: 句子里说了时间时, 在结果上记下用没用上。返回带标记的副本。 */
@@ -65,13 +91,40 @@ public final class TimeRangeFilter {
         }
         String[] range = said.split("~", 2);
         Map<String, Object> out = new LinkedHashMap<>(result);
-        out.put(supported(parametersSchema) ? APPLIED : NOT_APPLIED, Map.of("from", range[0], "to", range[1]));
+        if (supported(parametersSchema)) {
+            out.put(APPLIED, Map.of("from", range[0], "to", range[1]));
+        } else {
+            Map<String, Object> notApplied = new LinkedHashMap<>(Map.of("from", range[0], "to", range[1]));
+            if (parametersSchema != null && parametersSchema.get(NOTICE) instanceof String custom) {
+                notApplied.put("notice", custom);
+            }
+            out.put(NOT_APPLIED, notApplied);
+        }
         return out;
+    }
+
+    /**
+     * 工具结果本身: 走 Skill 的意图把单个工具的结果包成 {toolName: result, _toolCount: 1, ...},
+     * 标记在里面一层 —— 取出那一层, 别的形状原样返回。
+     */
+    public static Object toolResultOf(Object resultData) {
+        if (resultData instanceof Map<?, ?> data && data.get("_toolCount") instanceof Number n && n.intValue() == 1) {
+            for (Map.Entry<?, ?> e : data.entrySet()) {
+                if (!String.valueOf(e.getKey()).startsWith("_") && e.getValue() instanceof Map<?, ?> inner) {
+                    return inner;
+                }
+            }
+        }
+        return resultData;
     }
 
     /** 回复前缀: 说了时间但没用上时必须说出来; 其余情况为 null。 */
     public static String notAppliedNotice(Object resultData) {
+        resultData = toolResultOf(resultData);
         if (resultData instanceof Map<?, ?> data && data.get(NOT_APPLIED) instanceof Map<?, ?> r) {
+            if (r.get("notice") instanceof String custom) {
+                return "注意：" + custom + "（你说的是 " + r.get("from") + " 至 " + r.get("to") + "）。";
+            }
             return "注意：这个查询不能按时间筛选（你说的是 " + r.get("from") + " 至 " + r.get("to")
                     + "），下面是不限时间的结果。";
         }
@@ -80,6 +133,7 @@ public final class TimeRangeFilter {
 
     /** 按时间筛过时的条件描述, 供「0 条」回复点名; 没筛时为 null。 */
     public static String appliedLabel(Object resultData) {
+        resultData = toolResultOf(resultData);
         if (resultData instanceof Map<?, ?> data && data.get(APPLIED) instanceof Map<?, ?> r) {
             return r.get("from") + " 至 " + r.get("to");
         }

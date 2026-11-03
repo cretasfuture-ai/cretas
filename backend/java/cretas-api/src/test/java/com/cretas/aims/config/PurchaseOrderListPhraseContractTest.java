@@ -36,13 +36,23 @@ class PurchaseOrderListPhraseContractTest {
         assertThat(knowledge.matchPhrase(input, "FACTORY")).contains("ORDER_LIST");
     }
 
-    /** 同因扫描: 短语表里不许再有「指向 ORDER_LIST 的采购订单 / 采购单」短语。 */
+    /**
+     * 不是「列采购单」的采购问题 (采购价格 / 采购了多少 / 需要采购 / 采购的猪肉到了没) 以前也短路到 ORDER_LIST,
+     * 答的是销售订单 —— 错数据。现在不短路: 交给决策层或澄清出口, 只要求不再落到销售订单列表 (organizer 裁定 2026-11-03)。
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"采购价格是多少", "更新采购价格", "这个月采购了多少", "还需要采购哪些原料", "采购的猪肉到了没"})
+    void otherPurchaseQuestionsNoLongerShortCircuitToSalesOrders(String input) {
+        assertThat(knowledge.matchPhrase(input, "FACTORY")).isNotEqualTo(java.util.Optional.of("ORDER_LIST"));
+    }
+
+    /** 同因扫描: 短语表里不许再有任何指向 ORDER_LIST (只查销售订单) 的「采购」短语。 */
     @Test
     void noPurchaseOrderPhraseStillPointsAtTheSalesOrderList() {
         Map<String, String> phrases = knowledge.getPhraseToIntentMapping();
         assertThat(phrases.entrySet())
                 .filteredOn(e -> "ORDER_LIST".equals(e.getValue()))
                 .extracting(Map.Entry::getKey)
-                .noneMatch(p -> p.contains("采购订单") || p.contains("采购单") || p.toLowerCase().contains("purchase"));
+                .noneMatch(p -> p.contains("采购") || p.toLowerCase().contains("purchase"));
     }
 }

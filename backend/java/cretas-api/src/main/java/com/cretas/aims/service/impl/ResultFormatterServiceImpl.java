@@ -36,6 +36,18 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         Map<String, Object> data = new java.util.LinkedHashMap<>();
         ((Map<?, ?>) response.getResultData()).forEach((k, v) -> data.put(String.valueOf(k), v));
         data.remove(com.cretas.aims.ai.tool.TimeRangeFilter.NOT_APPLIED);
+        // Skill 包了一层 ({toolName: result, _toolCount: 1}): 标记在里面, 那一层也要去掉, 否则会再进一次前缀分支
+        Object inner = com.cretas.aims.ai.tool.TimeRangeFilter.toolResultOf(response.getResultData());
+        if (inner != response.getResultData() && inner instanceof Map<?, ?> innerMap) {
+            for (Map.Entry<String, Object> e : data.entrySet()) {
+                if (e.getValue() == innerMap) {
+                    Map<String, Object> stripped = new java.util.LinkedHashMap<>();
+                    innerMap.forEach((k, v) -> stripped.put(String.valueOf(k), v));
+                    stripped.remove(com.cretas.aims.ai.tool.TimeRangeFilter.NOT_APPLIED);
+                    e.setValue(stripped);
+                }
+            }
+        }
         return format(IntentExecuteResponse.builder()
                 .intentCode(response.getIntentCode())
                 .intentCategory(response.getIntentCategory())

@@ -596,9 +596,26 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
+    @DataScope("created_by")
     public PageResponse<PurchaseOrder> getPurchaseOrdersByStatus(String factoryId, PurchaseOrderStatus status, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size);
-        Page<PurchaseOrder> result = purchaseOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, pageRequest);
+        // 与 getPurchaseOrders 同一套 DataScope 口径 (以前状态这条路径不收窄: SELF 角色看到全厂这个状态的采购单;
+        // 对话里说的状态会走到这里, S6 2026-11-03)。SELF -> 自己; SELF_AND_BELOW / DEPT_AND_BELOW -> 链; 其余不限。
+        DataScopeContext dsCtx = DataScopeContext.current();
+        Page<PurchaseOrder> result;
+        if (dsCtx != null && dsCtx.isFiltered() && dsCtx.getUserId() != null
+                && (dsCtx.getScope() == com.cretas.aims.entity.enums.DataScope.SELF
+                    || dsCtx.getScope() == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                    || dsCtx.getScope() == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW)) {
+            List<Long> chain = dsCtx.getScope() == com.cretas.aims.entity.enums.DataScope.SELF
+                    ? List.of(dsCtx.getUserId())
+                    : (dataScopeResolver != null ? dataScopeResolver.resolveCreatedByChain(dsCtx) : List.of(dsCtx.getUserId()));
+            if (chain == null || chain.isEmpty()) chain = List.of(dsCtx.getUserId());
+            result = purchaseOrderRepository.findByFactoryIdAndStatusAndCreatedByInOrderByCreatedAtDesc(
+                    factoryId, status, chain, pageRequest);
+        } else {
+            result = purchaseOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, pageRequest);
+        }
         hydrateSalesOrderNumbers(result.getContent());
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }

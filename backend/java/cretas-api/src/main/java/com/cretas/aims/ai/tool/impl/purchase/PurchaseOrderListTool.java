@@ -79,9 +79,10 @@ public class PurchaseOrderListTool extends AbstractBusinessTool {
         PageResponse<PurchaseOrder> result;
         if (statusStr != null && !statusStr.trim().isEmpty()) {
             PurchaseOrderStatus status = PurchaseOrderStatus.valueOf(statusStr);
-            result = purchaseService.getPurchaseOrdersByStatus(factoryId, status, page - 1, size);
+            // 服务的 page 从 1 开始 (与 PurchaseController 一样直接传): 以前这里先减 1、服务里再减 1, 每次都 400
+            result = purchaseService.getPurchaseOrdersByStatus(factoryId, status, page, size);
         } else {
-            result = purchaseService.getPurchaseOrders(factoryId, page - 1, size);
+            result = purchaseService.getPurchaseOrders(factoryId, page, size);
         }
 
         return buildPageResult(
