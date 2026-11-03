@@ -171,6 +171,13 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             LocalDateTime endDate);
 
     /**
+     * 某产品在时间范围内的批次。只看一个产品时用它, ⛔ 不要先取全厂再在内存里筛 (理由见
+     * {@link #findByFactoryIdAndProductTypeIdAndCreatedAtAfter}: 别的保密产品的批次被读到, 整份输出会被遮)。
+     */
+    java.util.List<ProductionBatch> findByFactoryIdAndProductTypeIdAndCreatedAtBetween(
+            String factoryId, String productTypeId, LocalDateTime startDate, LocalDateTime endDate);
+
+    /**
      * 统计某时间后的批次数 (排除 CLERK_WIP 内部工件批次).
      * SP-D Fix 1a: CLERK_WIP 批次不应计入今日批次数等仪表盘指标.
      */

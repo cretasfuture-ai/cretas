@@ -28,6 +28,19 @@ export function deriveByShare(lines: ShareLine[], changedId: string, changedQty:
   return out;
 }
 
+/**
+ * 固定比例成本分摊的画布提示: 每个产出都要填大于 0 的份额且合计 100% (发布时后端同口径拦截)。
+ * 返回 null = 可以发布。
+ */
+export function fixedCostShareWarning(shares: Array<number | null | undefined>): string | null {
+  if (shares.some((s) => s == null || !Number.isFinite(s) || !(s > 0))) {
+    return '固定比例：每个产出都要填大于 0 的占比';
+  }
+  const sum = (shares as number[]).reduce((a, b) => a + b, 0);
+  if (Math.abs(sum - 100) > 0.01) return `固定比例合计 ${Number(sum.toFixed(2))}%，必须是 100%`;
+  return null;
+}
+
 /** 画布软提示: 已填份额之和 ≠ 100 时给一句话; 没填或只填一个不提示(相对量本来就不要求和为 100)。 */
 export function shareSumWarning(shares: Array<number | null | undefined>): string | null {
   const filled = shares.filter((s): s is number => s != null && Number.isFinite(s));

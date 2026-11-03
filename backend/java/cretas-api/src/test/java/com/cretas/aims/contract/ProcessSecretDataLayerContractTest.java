@@ -77,6 +77,7 @@ class ProcessSecretDataLayerContractTest {
      * 将来新加的配方字段一起吞掉。
      */
     static final Set<String> NOT_RECIPE_FIELDS = Set.of(
+            "maxReworkRatioPercent", "limitPercent", "actualPercent", // 缺口03: 回料占比上限/实际占比 (阈值与实测, 不是配方份额)
             "acceptanceRate", "accuracyRate", "achievementRate", "achievementRatePct", "activationRate",
             "actualAuxCostPerUnit", "actualCostPerUnit", "actualDurationHours", "actualEquipmentCostRatio",
             "actualLaborCostPerKg", "actualLaborCostRatio", "actualMaterialCostRatio", "actualOtherCostRatio",
@@ -88,7 +89,7 @@ class ProcessSecretDataLayerContractTest {
             "changePercentage", "changeRate", "changeoverRatio", "changeoverTimeRatio", "commissionRate",
             "commissionRatePct", "completionRate", "concentrationMax", "concentrationMin", "concentrationTarget",
             "contributionRate", "conversionFactor", "conversionFactorSnapshot", "conversionScore",
-            "cookingFullCostPerKg", "costAllocationRatio", "costSharePct", "costVariancePct", "costVarianceRate",
+            "cookingFullCostPerKg", "costAllocationRatio", "fixedCostShare", "workflowFixedCostShare", "costSharePct", "costVariancePct", "costVarianceRate",
             "cpuUsage", "customerComplaintRate", "defaultSamplePercentage", "defaultTaxRate", "defectRate",
             "deltaPercent", "departmentAvgRate", "deviationPercent", "deviceUtilizationRate", "discountRate",
             "diskUsage", "dominantIntentRatio", "dominantProcessRatio", "dominantRatio", "drawnRatio",

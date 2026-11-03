@@ -27,6 +27,17 @@ public class ProductProcessWorkflowRuntimeCompiler {
     private static final Set<String> QUANTITY_MODES = Set.of("AUTO_CONVERT", "FIXED_RATIO");
     private static final Set<String> SELECTION_GROUP_MODES = Set.of(
             "ALL_REQUIRED", "EXACTLY_ONE", "AT_LEAST_ONE", "OPTIONAL");
+    /**
+     * 联产工序的成本分摊方法 (Steve 2026-11-03 裁定, 食品 DAG 缺口 10): 只有「按重量」(默认, 即报工期
+     * MASS → QUANTITY 的现状) 和「固定比例」(各产出端口 {@code fixedCostShare}, 合计必须 100%)。
+     * ⛔ 不做按售价比例。随工艺版本冻结: 画布 → 修订 nodesJson → 运行时 workflow_task_ports.fixed_cost_share。
+     */
+    public static final String COST_ALLOCATION_WEIGHT = "WEIGHT";
+    public static final String COST_ALLOCATION_FIXED_RATIO = "FIXED_RATIO";
+    private static final Set<String> COST_ALLOCATION_METHODS =
+            Set.of(COST_ALLOCATION_WEIGHT, COST_ALLOCATION_FIXED_RATIO);
+    private static final BigDecimal FIXED_SHARE_TOTAL = new BigDecimal("100");
+    private static final BigDecimal FIXED_SHARE_TOLERANCE = new BigDecimal("0.01");
 
     private final ObjectMapper objectMapper;
     private final ProductProcessWorkflowValidator validator;
@@ -150,7 +161,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
         Boolean reportingRequired = optionalBoolean(data.get("reportingRequired"), nodeId,
                 "data.reportingRequired");
         ConversionRule conversionRule = parseConversionRule(data.get("conversionRule"), nodeId);
-        List<DeclaredPort> ports = parsePorts(data.get("ports"), nodeId);
+        List<DeclaredPort> ports = applyCostAllocationMethod(
+                parsePorts(data.get("ports"), nodeId), data.get("costAllocationMethod"), nodeId);
         List<DeclaredPortGroup> portGroups = parsePortGroups(data.get("portGroups"), ports, nodeId);
         return new ProcessNodeData(
                 workProcessId,
@@ -212,9 +224,48 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     optionalQuantityMode(
                             port.get("quantityMode"), nodeId, path + ".quantityMode"),
                     optionalPercent(
-                            port.get("inputShareRatio"), nodeId, path + ".inputShareRatio")));
+                            port.get("inputShareRatio"), nodeId, path + ".inputShareRatio"),
+                    optionalPercent(
+                            port.get("fixedCostShare"), nodeId, path + ".fixedCostShare")));
         }
         return List.copyOf(ports);
+    }
+
+    /**
+     * 固定比例: 本工序<b>每个</b> OUTPUT 端口都要有大于 0 的份额, 合计 100% (容差 0.01), 且至少两个产出
+     * (单产出谈不上分摊)。按重量 / 没写: 端口上残留的份额一律不编译进运行时 (画布切回「按重量」时
+     * 不必逐个清空), 报工照旧 MASS → QUANTITY。
+     */
+    private List<DeclaredPort> applyCostAllocationMethod(List<DeclaredPort> ports, Object rawMethod, String nodeId) {
+        String method = optionalString(rawMethod, nodeId, "data.costAllocationMethod");
+        if (method != null && !COST_ALLOCATION_METHODS.contains(method)) {
+            throw runtimeInvalid(nodeId, "data.costAllocationMethod", "must be WEIGHT or FIXED_RATIO");
+        }
+        if (!COST_ALLOCATION_FIXED_RATIO.equals(method)) {
+            return ports.stream().map(port -> port.fixedCostShare() == null ? port : port.withFixedCostShare(null))
+                    .toList();
+        }
+        List<DeclaredPort> outputs = ports.stream().filter(port -> "OUTPUT".equals(port.direction())).toList();
+        if (outputs.size() < 2) {
+            throw runtimeInvalid(nodeId, "data.costAllocationMethod",
+                    "FIXED_RATIO requires at least two output ports");
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        for (DeclaredPort output : outputs) {
+            if (output.fixedCostShare() == null || output.fixedCostShare().signum() <= 0) {
+                throw runtimeInvalid(nodeId, "data.ports[" + output.id() + "].fixedCostShare",
+                        "FIXED_RATIO requires every output port to have a share greater than 0");
+            }
+            total = total.add(output.fixedCostShare());
+        }
+        if (total.subtract(FIXED_SHARE_TOTAL).abs().compareTo(FIXED_SHARE_TOLERANCE) > 0) {
+            throw runtimeInvalid(nodeId, "data.ports.fixedCostShare",
+                    "FIXED_RATIO shares must total 100, got " + total.stripTrailingZeros().toPlainString());
+        }
+        return ports.stream()
+                .map(port -> "OUTPUT".equals(port.direction()) || port.fixedCostShare() == null
+                        ? port : port.withFixedCostShare(null))
+                .toList();
     }
 
     private List<DeclaredPortGroup> parsePortGroups(
@@ -539,7 +590,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     selectionGroup == null ? null : selectionGroup.mode(),
                     selectionGroup == null ? null : selectionGroup.minSelections(),
                     selectionGroup == null ? null : selectionGroup.maxSelections(),
-                    declaredPort.inputShareRatio()));
+                    declaredPort.inputShareRatio(),
+                    declaredPort.fixedCostShare()));
         }
     }
 
@@ -713,7 +765,14 @@ public class ProductProcessWorkflowRuntimeCompiler {
             BigDecimal standardQuantity,
             String quantityMode,
             /** 主原料在本工序投入端口间的相对份额(%)。null = 不参与推算。owner 2026-09-02 裁定走 (a): 配比进画布端口。 */
-            BigDecimal inputShareRatio) {
+            BigDecimal inputShareRatio,
+            /** 固定比例分摊下本产出端口的成本份额(%); 按重量时恒为 null (见 applyCostAllocationMethod)。 */
+            BigDecimal fixedCostShare) {
+
+        DeclaredPort withFixedCostShare(BigDecimal share) {
+            return new DeclaredPort(id, direction, materialNodeId, unit, conversionRefId, conversionVersion,
+                    ordinal, standardQuantity, quantityMode, inputShareRatio, share);
+        }
     }
 
     private record DeclaredPortGroup(

@@ -114,18 +114,56 @@ public class PurchaseController {
     //   却只允许 procurement ⇒ sales_manager 打开销售订单详情的关联采购 tab 必 403。
     //   ▎与 /finance/*/by-sales-order 同一形状: 为某个消费方建的端点, 没给那个消费方权限。
     // ⛔ 只给 read —— 建采购单仍然只有采购能做。
+    // 🔴 2026-11-03: sales:read **只在带 salesOrderId 时**算数。之前不带也放行, 销售角色(采购模块 '-')
+    //   能读全厂采购单列表, 而 AI 对话按 App 权限拒绝了同一个列表 (#932 要求两边一致)。
+    //   不带 salesOrderId 要采购读权限; 带了也只返回调用者本厂、且在其数据范围内那张销售单关联的采购单。
     @GetMapping("/orders")
-    @Operation(summary = "采购订单列表", description = "支持可选 salesOrderId 过滤 (W-12 fix: SO 详情页'关联采购' tab 依赖)")
+    @Operation(summary = "采购订单列表", description = "支持可选 salesOrderId 过滤 (W-12 fix: SO 详情页'关联采购' tab 依赖); 只有销售读权限时必须带 salesOrderId")
     @RequirePermission({"procurement:read_write", "procurement:read", "sales:read"})
     public ApiResponse<PageResponse<PurchaseOrder>> listOrders(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(required = false) String salesOrderId,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int page,
-            @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页大小必须大于0") int size) {
-        PageResponse<PurchaseOrder> result = (salesOrderId != null && !salesOrderId.isBlank())
+            @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页大小必须大于0") int size,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        boolean bySalesOrder = salesOrderId != null && !salesOrderId.isBlank();
+        User caller = requestUser(httpRequest);
+        boolean procurementRead = caller != null
+                && permissionService.hasAnyPermission(caller, "procurement:read_write", "procurement:read");
+        if (!procurementRead) {
+            if (!bySalesOrder) {
+                throw new BusinessException(403, "当前角色没有采购模块读权限，不能查看采购单列表")
+                        .withHint("销售角色只能在销售订单详情的「关联采购」里查看该订单关联的采购单");
+            }
+            if (!salesOrderVisibleTo(caller, factoryId, salesOrderId)) {
+                return ApiResponse.success("查询成功", PageResponse.of(List.of(), page, size, 0L));
+            }
+        }
+        PageResponse<PurchaseOrder> result = bySalesOrder
                 ? purchaseService.getPurchaseOrdersBySalesOrder(factoryId, salesOrderId, page, size)
                 : purchaseService.getPurchaseOrders(factoryId, page, size);
         return ApiResponse.success("查询成功", result);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.inventory.SalesOrderRepository salesOrderRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.DataScopeResolver dataScopeResolver;
+
+    /** 销售单在调用者本厂, 且在其数据范围 (created_by 链) 内; 组件缺失一律不算 (fail closed)。 */
+    private boolean salesOrderVisibleTo(User caller, String factoryId, String salesOrderId) {
+        if (caller == null || salesOrderRepository == null || dataScopeResolver == null
+                || !java.util.Objects.equals(caller.getFactoryId(), factoryId)) {
+            return false;
+        }
+        var order = salesOrderRepository.findByIdAndFactoryId(salesOrderId, factoryId).orElse(null);
+        if (order == null) {
+            return false;
+        }
+        var scope = dataScopeResolver.resolve(caller.getId());
+        return scope != null && (!scope.isFiltered()
+                || dataScopeResolver.resolveCreatedByChain(scope).contains(order.getCreatedBy()));
     }
 
     @GetMapping("/orders/by-status")

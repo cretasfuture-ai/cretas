@@ -229,6 +229,10 @@ public interface ReportService {
      */
     CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate);
 
+    /** 只看一个产品的成本差异 (只读这个产品的批次); {@code productTypeId} 为空时等同全厂报表。 */
+    CostVarianceReportDTO getCostVarianceReport(String factoryId, LocalDate startDate, LocalDate endDate,
+                                                String productTypeId);
+
     /**
      * 获取完整 KPI 指标集
      *

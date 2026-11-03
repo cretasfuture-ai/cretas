@@ -9636,6 +9636,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public ProductionBatch createBatchFromPlan(String factoryId, String planId) {
+        return createBatchFromPlan(factoryId, planId, null, null);
+    }
+
+    @Override
+    @Transactional
+    public ProductionBatch createBatchFromPlan(String factoryId, String planId, Long operatorId, String forceStartReason) {
         // R6 (2026-06-14): 悲观写锁取计划, 防 RN 双击/重试并发双建批次。
         // 第二个请求拿锁后看到计划已 IN_PROGRESS → 状态校验抛 409, 幂等拒绝。
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
@@ -9685,6 +9691,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
 
+        // S4-08: 到这里计划一定是待处理, 转批次会把它翻成生产中 = 开工 —— 与 startProduction 过同一道缺料闸
+        //    (2026-11-03 验收 D-S410-01: 网页「逐道录入」「下发 APP 报工」都先调 create-batch, 曾绕过闸)。
+        //    startProduction 不经过这里 (它直接调 materializeBatchForPlan), 所以同一次开工不会被记两次。
+        if (shortageStartGate != null) {
+            shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
+        }
         return materializeBatchForPlan(factoryId, plan);
     }
 
