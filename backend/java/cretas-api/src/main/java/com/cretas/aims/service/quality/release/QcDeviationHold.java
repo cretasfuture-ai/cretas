@@ -9,6 +9,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.service.foodsafety.ccp.CcpDeviationScope;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -23,7 +24,8 @@ import java.util.Set;
  * 缺口 13 → 缺口 11 的连接: CCP 偏离一出现, 把<b>已经存在</b>的相关产出立刻扣成待检。
  *
  * <p>另一半 (偏离之后才入账的产出) 由 {@link QcInspectionPolicy} 在入账时按同一口径扣。
- * 口径与挡放行完全一致 (批次号 或 同一生产计划, 见 {@code CcpOpenDeviationLookup}):
+ * 口径与挡放行完全一致: 先按「批次号 或 同一生产计划」找候选, 再只留<b>出事这一批 + 工艺图下游</b>的
+ * ({@link CcpDeviationScope.Scope#covers}, Steve 2026-11-03; 以前同计划全扣, 连偏离之前产出的上游也扣):
  * <ul>
  *   <li>半成品库行: 这些生产批次建的行 / 这些批次的报工入过的行 (App 半成品行按产品码跨批次累加) /
  *       批号命中的行 / 该计划的逐道录入锚行;</li>
@@ -41,6 +43,7 @@ public class QcDeviationHold {
     private final MaterialBatchRepository materialBatchRepo;
     private final FinishedGoodsBatchRepository finishedGoodsRepo;
     private final ProductionBatchRepository productionBatchRepo;
+    private final CcpDeviationScope deviationScope;
 
     /** 扣了多少 (给录入人看的回执)。 */
     public record HoldResult(int semiRows, int wipBatches, int finishedGoodsBatches) {
@@ -49,7 +52,12 @@ public class QcDeviationHold {
         }
     }
 
-    public HoldResult holdForDeviation(String factoryId, String batchNumber, Long productionBatchId, String planId) {
+    /**
+     * @param processOrder 偏离在第几道 (null = 不知道 ⇒ 同计划全扣, 旧口径)
+     */
+    public HoldResult holdForDeviation(String factoryId, String batchNumber, Long productionBatchId, String planId,
+                                       Integer processOrder) {
+        CcpDeviationScope.Scope scope = deviationScope.of(factoryId, planId, processOrder, productionBatchId, batchNumber);
         Set<String> batchNumbers = new LinkedHashSet<>();
         if (batchNumber != null && !batchNumber.isBlank()) {
             batchNumbers.add(batchNumber);
@@ -58,12 +66,18 @@ public class QcDeviationHold {
         if (productionBatchId != null) {
             pbIds.add(productionBatchId);
         }
+        // 在制批次按它所在的道筛 (逐道录入的 CLK-W 一道一批); App 整计划批次 (推不出道) 留着, 它的半成品行下面按行上的道筛
+        Set<Long> wipPbIds = new LinkedHashSet<>(pbIds);
         if (planId != null && !planId.isBlank()) {
             for (ProductionBatch pb : productionBatchRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
                     factoryId, planId)) {
                 pbIds.add(pb.getId());
                 if (pb.getBatchNumber() != null) {
                     batchNumbers.add(pb.getBatchNumber());
+                }
+                if (scope.covers(deviationScope.orderOfProductionBatch(factoryId, pb.getId()),
+                        Set.of(pb.getId()), pb.getBatchNumber() == null ? Set.of() : Set.of(pb.getBatchNumber()))) {
+                    wipPbIds.add(pb.getId());
                 }
             }
         }
@@ -81,9 +95,23 @@ public class QcDeviationHold {
                         batchNumbers.isEmpty() ? Set.of("#NO-BATCH#") : batchNumbers, anchorPrefix)
                 .forEach(s -> semiIds.add(s.getId()));
         semiIds.remove(null);
+        // App 半成品行按产品码跨批次累加, 行上 batchId 只是建行批次 ⇒ 出事批次入过账的行也算「这一批」的
+        Set<Long> postedByOwnBatch = productionBatchId == null ? Set.of()
+                : new java.util.HashSet<>(semiRepo.findSemiIdsPostedByProductionBatches(factoryId, Set.of(productionBatchId)));
         int semiHeld = 0;
         for (SemiFinishedInventory s : semiIds.isEmpty() ? List.<SemiFinishedInventory>of()
                 : semiRepo.lockForDeviationHold(factoryId, semiIds)) {
+            Set<Long> rowBatchIds = new LinkedHashSet<>();
+            if (s.getBatchId() != null) {
+                rowBatchIds.add(s.getBatchId());
+            }
+            if (postedByOwnBatch.contains(s.getId())) {
+                rowBatchIds.add(productionBatchId);
+            }
+            Set<String> rowNos = s.getIntermediateBatchNo() == null ? Set.of() : Set.of(s.getIntermediateBatchNo());
+            if (!scope.covers(s.getProcessOrder(), rowBatchIds, rowNos)) {
+                continue;   // 更早的道 / 同一道的别的批次: 偏离之前就产出了, 不扣
+            }
             if (holdWholeBalance(s)) {
                 semiRepo.save(s);
                 semiHeld++;
@@ -92,9 +120,9 @@ public class QcDeviationHold {
 
         // ── 在制批次: 该计划全部生产批次 (含 CLERK_WIP) 物化出来的, 只动 AVAILABLE ──
         int wipHeld = 0;
-        if (!pbIds.isEmpty()) {
+        if (!wipPbIds.isEmpty()) {
             for (MaterialBatch mb : materialBatchRepo.lockWipBatchesForDeviationHold(
-                    factoryId, pbIds.stream().map(String::valueOf).toList())) {
+                    factoryId, wipPbIds.stream().map(String::valueOf).toList())) {
                 if (mb.getStatus() == MaterialBatchStatus.AVAILABLE) {
                     mb.setStatus(MaterialBatchStatus.INSPECTING);
                     materialBatchRepo.save(mb);
@@ -103,7 +131,7 @@ public class QcDeviationHold {
             }
         }
 
-        // ── 成品批次: 批号命中或同一计划, 只动 AVAILABLE ──
+        // ── 成品批次: 批号命中或同一计划, 只动 AVAILABLE (整条链的终点 ⇒ 一律算下游) ──
         int fgHeld = 0;
         for (FinishedGoodsBatch fg : finishedGoodsRepo.lockForDeviationHold(factoryId,
                 batchNumbers.isEmpty() ? Set.of("#NO-BATCH#") : batchNumbers,
@@ -115,8 +143,9 @@ public class QcDeviationHold {
             }
         }
         HoldResult result = new HoldResult(semiHeld, wipHeld, fgHeld);
-        log.warn("[CCP偏离扣留] factory={} batch={} pb={} plan={} → 半成品 {} / 在制 {} / 成品 {} 转待检",
-                factoryId, batchNumber, productionBatchId, planId, semiHeld, wipHeld, fgHeld);
+        log.warn("[CCP偏离扣留] factory={} batch={} pb={} plan={} 第{}道 下游{} → 半成品 {} / 在制 {} / 成品 {} 转待检",
+                factoryId, batchNumber, productionBatchId, planId, processOrder, scope.downstream(),
+                semiHeld, wipHeld, fgHeld);
         return result;
     }
 
