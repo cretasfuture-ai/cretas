@@ -43,6 +43,7 @@ class IncomeStatementQueryToolTest {
     @BeforeEach
     void setUp() throws Exception {
         injectField(tool, "objectMapper", objectMapper);
+        com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(tool);
     }
 
     @Test

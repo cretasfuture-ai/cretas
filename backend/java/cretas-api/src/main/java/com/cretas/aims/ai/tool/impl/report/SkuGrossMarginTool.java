@@ -169,7 +169,8 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         int total = items.size();
         List<Map<String, Object>> shown = total > MAX_ITEMS ? new ArrayList<>(items.subList(0, MAX_ITEMS)) : items;
 
-        return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret),
+        return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret,
+                        replyShowsAmounts(context, "revenue", "cost", "price", "unitCost")),
                 resultData(shown, total, start, end, defaultPeriod));
     }
 
@@ -321,6 +322,24 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     // ==================== 文案 ====================
 
     private String buildMessage(List<Map<String, Object>> shown, int total, LocalDate start, LocalDate end,
+                                boolean defaultPeriod, com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret,
+                                boolean showAmounts) {
+        this.showAmounts.set(showAmounts);
+        try {
+            return buildMessageText(shown, total, start, end, defaultPeriod, secret);
+        } finally {
+            this.showAmounts.remove();
+        }
+    }
+
+    /** 文字里的收入 / 成本 / 目录价 / 单位成本与 revenue / cost / price / unitCost 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001) */
+    private final ThreadLocal<Boolean> showAmounts = new ThreadLocal<>();
+
+    private String moneyText(Object amount) {
+        return Boolean.TRUE.equals(showAmounts.get()) ? "¥" + amount : "(按权限不显示)";
+    }
+
+    private String buildMessageText(List<Map<String, Object>> shown, int total, LocalDate start, LocalDate end,
                                 boolean defaultPeriod, com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret) {
         StringBuilder sb = new StringBuilder();
         sb.append("SKU 毛利率共 ").append(total).append(" 个产品，两种口径分开给，不要混着看。")
@@ -349,8 +368,8 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         String status = (String) r.get("status");
         if ("OK".equals(status)) {
             StringBuilder sb = new StringBuilder();
-            sb.append(r.get("marginRate")).append("%（已回填成本明细的收入 ¥").append(r.get("revenue"))
-              .append("，成本 ¥").append(r.get("cost")).append("，成本覆盖 ").append(r.get("costCoverage")).append("% 的收入）");
+            sb.append(r.get("marginRate")).append("%（已回填成本明细的收入 ").append(moneyText(r.get("revenue")))
+              .append("，成本 ").append(moneyText(r.get("cost"))).append("，成本覆盖 ").append(r.get("costCoverage")).append("% 的收入）");
             if (r.get("note") != null) sb.append("。").append(r.get("note"));
             return sb.toString();
         }
@@ -361,12 +380,12 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     private String catalogText(Map<String, Object> c) {
         if ("OK".equals(c.get("status"))) {
-            return c.get("marginRate") + "%（目录价 ¥" + c.get("price") + "，最近批次 " + c.get("costBatchNumber")
-                    + " 单位成本 ¥" + c.get("unitCost") + "）";
+            return c.get("marginRate") + "%（目录价 " + moneyText(c.get("price")) + "，最近批次 " + c.get("costBatchNumber")
+                    + " 单位成本 " + moneyText(c.get("unitCost")) + "）";
         }
         StringBuilder sb = new StringBuilder((String) c.get("reason"));
-        if (c.get("price") != null) sb.append("（目录价 ¥").append(c.get("price")).append("）");
-        if (c.get("unitCost") != null) sb.append("（最近批次单位成本 ¥").append(c.get("unitCost")).append("）");
+        if (c.get("price") != null) sb.append("（目录价 ").append(moneyText(c.get("price"))).append("）");
+        if (c.get("unitCost") != null) sb.append("（最近批次单位成本 ").append(moneyText(c.get("unitCost"))).append("）");
         return sb.toString();
     }
 

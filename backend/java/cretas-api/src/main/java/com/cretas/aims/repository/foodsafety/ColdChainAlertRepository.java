@@ -30,4 +30,7 @@ public interface ColdChainAlertRepository extends JpaRepository<ColdChainAlert, 
     /** 工厂月报 — 时间窗口内全部报警. */
     List<ColdChainAlert> findByFactoryIdAndAlertTimeBetweenOrderByAlertTimeDesc(
             String factoryId, LocalDateTime start, LocalDateTime end);
+
+    /** 缺口 15: 告警详情 (按工厂取, 跨厂 id 返回空)。 */
+    java.util.Optional<ColdChainAlert> findByIdAndFactoryId(Long id, String factoryId);
 }

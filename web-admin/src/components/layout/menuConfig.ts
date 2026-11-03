@@ -278,6 +278,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/production/analysis-query', title: '生产分析', icon: '', module: 'production',
         groupLabel: '生产分析' },
       // 不在本轮合并范围内 (owner 拍板的合并表未列它) —— 保持独立菜单项。
+      // 食品 DAG 缺口 09: 与财务管理 → 成本差异同一页, 生产经理从这里进
+      { path: '/production/cost-variance', title: '成本差异', icon: '', module: 'production' },
       { path: '/production-analytics/cost-summary', title: '成本汇总', icon: '', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
     ]
@@ -330,6 +332,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/quality/release', title: '质检放行', icon: '', module: 'quality' },
       // 缺口 13: 报工录 CCP, 超限偏离在这里处理; 按批次导出 CCP 记录
       { path: '/quality/ccp', title: 'CCP 监控记录', icon: '', module: 'quality' },
+      // 缺口 15: 冷链超温告警 → 受影响批次 (暴露时长) → 一键转质检
+      { path: '/quality/cold-chain', title: '冷链超温批次', icon: '', module: 'quality' },
       { path: '/quality/label-qc', title: '包装标签拍检', icon: '', module: 'quality' },
       { path: '/quality/vision-training', title: '视觉质检训练', icon: '', module: 'quality',
         roles: ['factory_super_admin', 'quality_manager'] },
@@ -459,6 +463,8 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/finance/voucher-template', title: '凭证模板', icon: '', module: 'finance', groupLabel: '会计凭证',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager'] },
       { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance', groupLabel: '财务分析' },
+      // 食品 DAG 缺口 09: 成本差异 (标准 = 锁定配方用量 × 开计划时单价快照, 拆价格差/用量差/替代料差/人工差)
+      { path: '/finance/cost-variance', title: '成本差异', icon: '', module: 'finance' },
       { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance', groupLabel: '财务配置' },
       { path: '/finance/accounting-period', title: '会计期间', icon: '', module: 'finance' }
     ]

@@ -98,13 +98,17 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
         data.put("highRiskCount", highRiskCount);
         data.put("actionHint", "/finance/ar-ap?tab=aging&type=CUSTOMER");
 
+        // 文字与 totalAmount / highRiskAmount 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        boolean showAmounts = replyShowsAmounts(context, "totalAmount", "highRiskAmount");
         String warning = highRiskCount > 0
-                ? String.format(" 警告: 60+ 天高风险 %d 客户共 ¥%s, 建议立即催收",
-                        highRiskCount, highRiskAmount)
+                ? String.format(" 警告: 60+ 天高风险 %d 客户%s, 建议立即催收",
+                        highRiskCount, showAmounts ? "共 ¥" + highRiskAmount : "")
                 : "";
         // Sprint 12: emoji-free (B-end emoji=0) + ≥80-char message.
         StringBuilder msg = new StringBuilder();
-        msg.append(String.format("本月应收账龄汇总: 共 %d 客户 / ¥%s 待收", totalCount, totalAmount));
+        msg.append(showAmounts
+                ? String.format("本月应收账龄汇总: 共 %d 客户 / ¥%s 待收", totalCount, totalAmount)
+                : String.format("本月应收账龄汇总: 共 %d 客户待收 (金额按权限不显示)", totalCount));
         if (totalCount == 0) {
             msg.append(". 当前没有应收账款待催收记录, 建议: 1. 检查本月销售出库已开票数量; 2. 复核客户对账单生成情况; 3. 联系销售确认收款节点。");
         } else {

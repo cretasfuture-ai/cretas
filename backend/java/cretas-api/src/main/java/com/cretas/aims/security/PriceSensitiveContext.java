@@ -146,6 +146,17 @@ public final class PriceSensitiveContext {
         return recorded == null ? java.util.Set.of() : java.util.Set.copyOf(recorded);
     }
 
+    /**
+     * 工具登记「与 REST 同一份类型化 DTO、按 REST 口径可见」的属性名 (见 AbstractTool#sameVisibilityAsRest)。
+     * 只在记录期间生效 (对话直调工具时), 与 @PriceSensitive 记下的属性一样绑定到这一份结果。
+     */
+    public static void recordVisibleKeys(java.util.Collection<String> propertyNames) {
+        java.util.Set<String> recorded = RECORDED_VISIBLE.get();
+        if (recorded != null && propertyNames != null) {
+            recorded.addAll(propertyNames);
+        }
+    }
+
     /** 序列化器写出一个可见的 @PriceSensitive 属性时调用。 */
     static void recordVisible(String propertyName) {
         java.util.Set<String> recorded = RECORDED_VISIBLE.get();

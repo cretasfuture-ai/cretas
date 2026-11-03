@@ -44,6 +44,9 @@ import { handleCatchError } from '@/utils/errorToast';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
+import MaterialAliasDialog from './MaterialAliasDialog.vue';
+import MaterialMergeDialog from './MaterialMergeDialog.vue';
+import type { RawMaterialTypeRow } from '@/api/materialAliasMerge';
 import { packagingProblemSummary, splitPackagingRules } from './packagingRuleDraft';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import type { TableRow } from '@/types/api';
@@ -1458,6 +1461,22 @@ async function deactivateMaterialRelation(row: SupplierMaterialRelation): Promis
   ElMessage.success('供应关系已停用');
 }
 
+// ==================== 别名 / 合并重复物料 ====================
+const aliasDialogVisible = ref(false);
+const aliasTarget = ref<RawMaterialTypeRow | null>(null);
+const mergeDialogVisible = ref(false);
+const mergeTarget = ref<RawMaterialTypeRow | null>(null);
+
+function openAliasDialog(row: TableRow): void {
+  aliasTarget.value = row as RawMaterialTypeRow;
+  aliasDialogVisible.value = true;
+}
+
+function openMergeDialog(row: TableRow): void {
+  mergeTarget.value = row as RawMaterialTypeRow;
+  mergeDialogVisible.value = true;
+}
+
 async function handleDelete(row: TableRow) {
   try {
     await ElMessageBox.confirm(
@@ -1604,7 +1623,17 @@ function handleSizeChange(size: number) {
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="name" label="原料名称" min-width="180" />
+        <el-table-column label="原料名称" min-width="200">
+          <template #default="{ row }">
+            <div>{{ row.name }}</div>
+            <div v-if="Array.isArray(row.aliases) && row.aliases.length" class="alias-line" data-test="alias-line">
+              别名：{{ row.aliases.join('、') }}
+            </div>
+            <el-tag v-if="row.mergedIntoId" size="small" type="info" data-test="merged-tag">
+              已合并到「{{ row.mergedIntoName || row.mergedIntoId }}」
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="category" label="类别" width="120" />
         <el-table-column prop="unit" label="单位" width="80">
           <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
@@ -1621,12 +1650,29 @@ function handleSizeChange(size: number) {
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="360" fixed="right">
           <template #default="{ row }">
             <!-- Issue #779: 反查供应商入口 -->
             <el-button link type="primary" :icon="View" @click="openSuppliersForMaterial(row)">供应商</el-button>
+            <!-- 别名 / 合并: 与编辑同一道写门禁; 已合并的行不再允许编辑 / 合并 / 加别名 -->
             <el-button
-              v-if="canWrite"
+              v-if="canWrite && !row.mergedIntoId"
+              link
+              type="primary"
+              :disabled="!canManageMaterialTypeDictionary"
+              data-test="row-alias"
+              @click="openAliasDialog(row)"
+            >别名</el-button>
+            <el-button
+              v-if="canWrite && !row.mergedIntoId"
+              link
+              type="warning"
+              :disabled="!canManageMaterialTypeDictionary"
+              data-test="row-merge"
+              @click="openMergeDialog(row)"
+            >合并到…</el-button>
+            <el-button
+              v-if="canWrite && !row.mergedIntoId"
               link
               type="primary"
               :icon="Edit"
@@ -1656,6 +1702,19 @@ function handleSizeChange(size: number) {
         @size-change="handleSizeChange"
       />
     </el-card>
+
+    <MaterialAliasDialog
+      v-model="aliasDialogVisible"
+      :factory-id="factoryId"
+      :material="aliasTarget"
+      @changed="loadData"
+    />
+    <MaterialMergeDialog
+      v-model="mergeDialogVisible"
+      :factory-id="factoryId"
+      :material="mergeTarget"
+      @merged="loadData"
+    />
 
     <!-- ==================== T159-A: Create / Edit Dialog ==================== -->
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="660px" destroy-on-close>
@@ -2195,6 +2254,7 @@ function handleSizeChange(size: number) {
 .page-title { font-size: 18px; font-weight: 600; }
 .data-count { font-size: 13px; color: #909399; }
 .write-role-hint { font-size: 13px; color: #909399; margin-right: 8px; }
+.alias-line { font-size: 12px; color: #909399; }
 .search-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .supplier-relation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; color: #606266; font-size: 13px; }
 .divider-title { font-size: 14px; color: #606266; font-weight: 500; }

@@ -188,12 +188,14 @@ public class ApprovalPendingQueryTool extends AbstractBusinessTool {
 
         // 5. 构造每行 item
         List<Map<String, Object>> items = new ArrayList<>();
+        // 采购单金额与采购单列表同一个口径 (配置的采购读, S5-12): 看不到就不写进摘要 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        boolean showPoAmount = replyShowsPriceSpec(context, com.cretas.aims.security.PriceSensitive.PURCHASE);
         for (ApprovalWorkflowInstance inst : instances.getContent()) {
             Map<String, Object> item = new HashMap<>();
             item.put("instanceId", inst.getId());
             item.put("moduleCode", inst.getModuleCode());
             item.put("businessEntityId", inst.getBusinessEntityId());
-            item.put("businessSummary", buildBusinessSummary(inst, poById));
+            item.put("businessSummary", buildBusinessSummary(inst, poById, showPoAmount));
 
             // currentNode
             if (inst.getCurrentNodeIds() != null && !inst.getCurrentNodeIds().isEmpty()) {
@@ -266,7 +268,8 @@ public class ApprovalPendingQueryTool extends AbstractBusinessTool {
     // ==================== helpers ====================
 
     private String buildBusinessSummary(ApprovalWorkflowInstance inst,
-                                        Map<String, PurchaseOrder> poById) {
+                                        Map<String, PurchaseOrder> poById,
+                                        boolean showPoAmount) {
         String moduleCode = inst.getModuleCode();
         String bizId = inst.getBusinessEntityId();
         if ("PURCHASE_ORDER".equals(moduleCode)) {
@@ -274,7 +277,7 @@ public class ApprovalPendingQueryTool extends AbstractBusinessTool {
             if (po != null) {
                 StringBuilder sb = new StringBuilder();
                 sb.append(po.getOrderNumber() != null ? po.getOrderNumber() : bizId);
-                if (po.getTotalAmount() != null
+                if (showPoAmount && po.getTotalAmount() != null
                         && po.getTotalAmount().compareTo(BigDecimal.ZERO) > 0) {
                     sb.append(" ¥").append(po.getTotalAmount().toPlainString());
                 }

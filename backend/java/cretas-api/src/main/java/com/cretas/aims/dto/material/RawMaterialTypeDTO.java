@@ -86,6 +86,17 @@ public class RawMaterialTypeDTO {
     private BigDecimal maxStock;
     private Boolean isActive;
 
+    /** 别名 (配方单 / 供应商单据上的叫法)。只读: 增删走 /{id}/aliases。 */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    private java.util.List<String> aliases;
+
+    /** 非空 = 已合并到这个主物料 (只读)。 */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    private String mergedIntoId;
+
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    private String mergedIntoName;
+
     @JsonProperty("notes")
     @JsonAlias("description")  // 支持前端发送 description
     private String notes;

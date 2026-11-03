@@ -1025,7 +1025,7 @@ public class IntentExecutionOrchestrator {
         }
 
         // 6.8. 结果格式化
-        applyResultFormatting(response);
+        applyResultFormatting(response, userId);
 
         // 6.9. formattedText 兜底
         applyFormattedTextFallback(factoryId, response);
@@ -1227,7 +1227,7 @@ public class IntentExecutionOrchestrator {
             response = enrichWithClarificationQuestions(response, request, intent, factoryId, userId);
         }
 
-        applyResultFormatting(response);
+        applyResultFormatting(response, userId);
         applyFormattedTextFallback(factoryId, response);
 
         // P1 读写分块: 显式意图路径同样终点补 aiMode
@@ -4409,18 +4409,18 @@ public class IntentExecutionOrchestrator {
         if ("NEED_MORE_INFO".equals(finished.getStatus())) {
             finished = enrichWithClarificationQuestions(finished, request, intent, factoryId, userId);
         }
-        applyResultFormatting(finished);
+        applyResultFormatting(finished, userId);
         applyFormattedTextFallback(factoryId, finished);
         applyAiModeStamp(finished, intent, intent.getToolName());
         return finished;
     }
 
-    private void applyResultFormatting(IntentExecuteResponse response) {
+    private void applyResultFormatting(IntentExecuteResponse response, Long userId) {
         String status = response.getStatus();
         boolean isSuccessStatus = "SUCCESS".equals(status) || "COMPLETED".equals(status);
         if (resultFormatterService != null && isSuccessStatus && response.getResultData() != null) {
             try {
-                resultFormatterService.formatAndSet(response);
+                resultFormatterService.formatAndSet(response, userId);
             } catch (Exception e) {
                 log.debug("结果格式化失败（非致命）: {}", e.getMessage());
             }

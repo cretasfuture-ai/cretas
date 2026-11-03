@@ -102,3 +102,19 @@ describe('listPendingItems / 补齐前不能发布', () => {
     expect(pendingCountOfProcess(data)).toBe(4);
   });
 });
+
+describe('编译器: 一开始就混投的入口原料不丢 (rawMaterials[1..] → 第一道工序额外投入)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  const EDITOR = readFileSync(resolve(__dirname, '../ProductProcessWorkflowEditor.vue'), 'utf-8');
+
+  it('只认 rawMaterials[0] 会把「牛肉猪肉 3:7」里的猪肉连同份额一起丢掉', () => {
+    expect(EDITOR).toMatch(/const entryExtras = \(Array\.isArray\(spec\.rawMaterials\)/);
+    expect(EDITOR).toMatch(/steps\[0\] = \{\s*\.\.\.first,\s*inputs: \[/);
+  });
+
+  it('份额按投入原料名落到 INPUT 端口 inputShareRatio, 不认识的名字说出来而不是静默', () => {
+    expect(EDITOR).toMatch(/\{ \.\.\.p, inputShareRatio: shareByPort\.get\(p\.id\)! \}/);
+    expect(EDITOR).toMatch(/不是本工序的投入原料，已忽略/);
+  });
+});

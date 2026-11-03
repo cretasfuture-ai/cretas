@@ -118,10 +118,14 @@ public class PricingTestCalculateTool extends AbstractBusinessTool {
         data.put("appliedStrategies", flattenApplied(result.getAppliedStrategies()));
         data.put("warnings", result.getWarnings() != null ? result.getWarnings() : new ArrayList<>());
 
+        // 文字与 originalPrice / finalPrice / totalDiscount 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        String priceText = replyShowsAmounts(context, "originalPrice", "finalPrice", "totalDiscount")
+                ? String.format("原价 ¥%s → 终价 ¥%s (折扣 ¥%s)",
+                        result.getOriginalPrice(), result.getFinalPrice(), result.getTotalDiscount())
+                : "价格按权限不显示";
         return buildSimpleResult(
-                String.format("模拟价格: 商品 %s × %d, 原价 ¥%s → 终价 ¥%s (折扣 ¥%s)%s",
-                        productId, req.getQuantity(),
-                        result.getOriginalPrice(), result.getFinalPrice(), result.getTotalDiscount(),
+                String.format("模拟价格: 商品 %s × %d, %s%s",
+                        productId, req.getQuantity(), priceText,
                         (result.getWarnings() != null && !result.getWarnings().isEmpty())
                                 ? " — 注意: " + String.join("; ", result.getWarnings())
                                 : ""),

@@ -26,6 +26,60 @@ public abstract class AbstractTool implements ToolExecutor {
     @Autowired
     protected ObjectMapper objectMapper;
 
+    /** 价格 / 财务可见性的唯一判定 (与 HTTP 响应层同一个)。没装配时一律按看不到 (fail closed)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.security.PriceFieldResponseAdvice priceView;
+
+    /**
+     * 金额要写进回复文字 (message / summary) 之前问: 这个值以 {@code key} 放在本工具结果 Map 里时, 调用者看得到吗?
+     * 与字段同一套规则 —— 字段里被遮的金额, 文字里也不能出现 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)。
+     */
+    protected boolean replyShowsAmount(Map<String, Object> context, String key) {
+        return priceView != null && priceView.showsKey(getUserId(context), key);
+    }
+
+    /**
+     * 本工具返回的是与某个 REST 端点<b>同一份类型化 DTO</b>, 且工具门槛与那个端点相同时调用。
+     * REST 对类型化响应只按 @PriceSensitive 口径遮, 不按键名规则 (Rule 1 / 2 / 2b) 遮; 对话里这份 DTO 变成 Map,
+     * 键名规则会把 REST 上看得到的成本也剥掉 (ERP-S6-MSG-TEXT-PRICE-LEAK-001 复测: 部门管理员 REST 看得到
+     * 成本差异的实际总成本, 对话里为 null)。这里把这份 DTO 写出的属性名登记为「按口径可见」, 对话与 REST 一致;
+     * 其中的 @PriceSensitive 属性照旧在序列化时按调用者口径处理。
+     */
+    protected void sameVisibilityAsRest(Object typedBody) {
+        if (typedBody == null || objectMapper == null) {
+            return;
+        }
+        java.util.Set<String> names = new java.util.HashSet<>();
+        collectFieldNames(objectMapper.valueToTree(typedBody), names);
+        com.cretas.aims.security.PriceSensitiveContext.recordVisibleKeys(names);
+    }
+
+    private static void collectFieldNames(com.fasterxml.jackson.databind.JsonNode node, java.util.Set<String> names) {
+        if (node.isObject()) {
+            node.fields().forEachRemaining(e -> {
+                names.add(e.getKey());
+                collectFieldNames(e.getValue(), names);
+            });
+        } else if (node.isArray()) {
+            node.forEach(child -> collectFieldNames(child, names));
+        }
+    }
+
+    /** 同上, 多个键: 全部看得到才算看得到 (一句话里的几个金额同进同出)。 */
+    protected boolean replyShowsAmounts(Map<String, Object> context, String... keys) {
+        for (String key : keys) {
+            if (!replyShowsAmount(context, key)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 同上, 按价格口径 (类型化字段 @PriceSensitive 的口径, 如 {@code PriceSensitive.PURCHASE}) 判定。 */
+    protected boolean replyShowsPriceSpec(Map<String, Object> context, String spec) {
+        return priceView != null && priceView.showsSpec(getUserId(context), spec);
+    }
+
     /**
      * 解析工具调用参数为 Map
      *

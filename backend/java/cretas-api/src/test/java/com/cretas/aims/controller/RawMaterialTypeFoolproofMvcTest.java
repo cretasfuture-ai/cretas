@@ -72,7 +72,7 @@ class RawMaterialTypeFoolproofMvcTest {
     @BeforeEach
     void setUp() {
         RawMaterialTypeController controller =
-                new RawMaterialTypeController(materialTypeService, mobileService, supplierService);
+                new RawMaterialTypeController(materialTypeService, mobileService, supplierService, null);
 
         // 复刻 prod 的 @RequestBody ObjectMapper: 应用全局枚举空串→null coercion customizer
         // 到 Jackson2ObjectMapperBuilder 后 build。这是 MVC 真正用来反序列化请求体的那个 mapper。

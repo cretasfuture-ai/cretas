@@ -150,13 +150,18 @@ public class WageCostSummaryTool extends AbstractBusinessTool {
         data.put("modeSummary", modeSummary);
         data.put("actionHint", "/hr/salaries?year=" + year + "&month=" + month);
 
-        String message = String.format(
+        // 文字与 totalAmount / totalPieceRate / totalHourly / totalOvertime 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
+        boolean showAmounts = replyShowsAmount(context, "totalAmount") && replyShowsAmount(context, "totalPieceRate")
+                && replyShowsAmount(context, "totalHourly") && replyShowsAmount(context, "totalOvertime");
+        String message = showAmounts
+                ? String.format(
                 "%d-%02d 工资成本汇总: 共 %d 员工, 总金额 ¥%s (按件 ¥%s + 按时 ¥%s + 加班 ¥%s)",
                 year, month, all.size(),
                 grandTotal.setScale(2, RoundingMode.HALF_UP),
                 totalPieceRate.setScale(2, RoundingMode.HALF_UP),
                 totalHourly.setScale(2, RoundingMode.HALF_UP),
-                totalOvertime.setScale(2, RoundingMode.HALF_UP));
+                totalOvertime.setScale(2, RoundingMode.HALF_UP))
+                : String.format("%d-%02d 工资成本汇总: 共 %d 员工 (金额按权限不显示)", year, month, all.size());
         return buildSimpleResult(message, data);
     }
 

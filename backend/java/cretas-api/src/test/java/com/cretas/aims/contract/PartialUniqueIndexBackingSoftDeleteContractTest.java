@@ -186,6 +186,11 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         //    ⇒ **读起来完全像软删、而 delete() 是物理删**（R68 里最有欺骗性的那个组合）。
         //    本票只补索引，⛔ 不代表这两张表已经软删了；它们仍在 R68 待办里。
         // uk_sm_published 不在这里 —— 见 NOT_COVERED_BY_THIS_GATE。
+
+        // ── 验收 D-R2-01（V20261103_173）──────────────────────────────────────────────────
+        // prod 上原是 UNIQUE CONSTRAINT (factory_id, code)，把软删行也算进去：软删 WH-LOG 后再建 WH-LOG
+        // 被 DB 拒。约束摘掉、建同名部分索引；实体的 @UniqueConstraint 一并摘掉（H2 建不出部分索引）。
+        reg("uk_fw_factory_code", "factory_warehouses 工厂内仓库编码唯一（活行）");
     }
 
 

@@ -3,6 +3,7 @@ package com.cretas.aims.service.report.impl;
 import com.cretas.aims.dto.report.CostVarianceReportDTO;
 import com.cretas.aims.dto.report.KpiMetricsDTO;
 import com.cretas.aims.dto.report.OeeReportDTO;
+import com.cretas.aims.dto.report.PlanCostVarianceDTO;
 import com.cretas.aims.dto.report.ProductionByProductDTO;
 import com.cretas.aims.entity.FactoryEquipment;
 import com.cretas.aims.entity.MaterialBatch;
@@ -68,6 +69,10 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private final SalesOrderRepository salesOrderRepository;
     private final ProductionLineRepository productionLineRepository;
     private final FactorySettingsRepository factorySettingsRepository;
+
+    /** 食品 DAG 缺口 09: 逐计划的标准成本差异 (开计划时快照)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.PlanCostVarianceService planCostVarianceService;
 
     /** 工艺保密: 发给 AI 的成本合计不含当前账号无权查看的保密产品 (Steve 10-29); 字段注入, 单测按构造器装配时用「没有保密产品」的默认实例。 */
     @org.springframework.beans.factory.annotation.Autowired
@@ -1439,21 +1444,47 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             }
         }
 
-        // 🔴 标准成本(BOM 理论成本)【没有独立来源】 ⇒ 差异与差异率【不可比较】, 一律 null。
-        //
-        //    原来: 有实际成本时 BOM 成本 = 实际 × 0.95, 没有时 = 实际产量 × 10;
-        //    于是差异率恒约 5.26% (= 1/0.95 - 1), 标准跟着实际同比涨落, 读不出任何成本控制信息;
-        //    产品级「差异原因」再按 60/30/10 固定切成 材料/人工/制造费用 —— 同样是编的。
-        //
-        //    ⛔ 不拿 StandardCostServiceImpl 的「当前配方」去算历史批次: 批次投产时锁定的配方
-        //       版本未必是当前版本, 用当前版本算出来的「差异」混进了配方变更, 一样是假的。
-        //    ⇒ 版本化标准成本落地之前, comparable=false, 由前端 / AI 明说「无法比较」。
-        //
-        //    ⚠️ 差异率为 null 时 KpiMetricsDTO.calculateOverallScore 把成本这一维排除出加权
-        //       (weight 不增) —— 既不加分, 也不按 0 记 (见 getKpiMetricsDTO)。
-        BigDecimal totalBomCost = null;
-        BigDecimal totalVariance = null;
-        BigDecimal varianceRate = null;
+        // 食品 DAG 缺口 09 (Steve 2026-11-03): 标准成本 = 计划锁定配方的标准用量 × 开计划时物料单价快照,
+        //    逐计划算 (PlanCostVarianceService), 这里只汇总。合计只含「能完整比较」的部分 ——
+        //    无快照 / 快照缺价 / 没产出的那些如实说无法比较, ⛔ 不按 0 计入, 也 ⛔ 不回到「实际 × 0.95」。
+        //    ⚠️ 差异率为 null 时 KpiMetricsDTO.calculateOverallScore 把成本这一维排除出加权 (见 getKpiMetricsDTO)。
+        Map<String, PlanCostVarianceDTO> planVariances = new LinkedHashMap<>();
+        if (planCostVarianceService != null) {
+            for (ProductionBatch batch : batches) {
+                String planId = batch.getProductionPlanId();
+                if (planId == null || planVariances.containsKey(planId)
+                        || hidden.coversBatch(batch.getProductTypeId(), planId)) {
+                    continue;
+                }
+                try {
+                    PlanCostVarianceDTO pv = planCostVarianceService.computeForPlan(factoryId, planId, false);
+                    pv.setLines(new ArrayList<>()); // 期间报表只给摘要, 明细走单计划接口
+                    planVariances.put(planId, pv);
+                } catch (RuntimeException e) {
+                    log.warn("计划 {} 成本差异算不出, 记为无法比较: {}", planId, e.getMessage());
+                }
+            }
+        }
+        List<PlanCostVarianceDTO> comparedPlans = planVariances.values().stream()
+                .filter(PlanCostVarianceDTO::isComparable).toList();
+        boolean anyComparable = !comparedPlans.isEmpty();
+        BigDecimal totalBomCost = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getStandardCost) : null;
+        BigDecimal comparedActual = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getActualCost) : null;
+        BigDecimal totalVariance = anyComparable ? comparedActual.subtract(totalBomCost) : null;
+        BigDecimal varianceRate = anyComparable && totalBomCost.signum() > 0
+                ? totalVariance.multiply(new BigDecimal("100")).divide(totalBomCost, 2, RoundingMode.HALF_UP) : null;
+        BigDecimal priceVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getPriceVariance) : null;
+        BigDecimal usageVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getUsageVariance) : null;
+        BigDecimal substituteVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getSubstituteVariance) : null;
+        BigDecimal laborVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getLaborVariance) : null;
+        int partialPlans = (int) comparedPlans.stream().filter(p -> p.getIncomparableItemCount() > 0).count();
+        String reportReason = !anyComparable
+                ? (planVariances.isEmpty() ? CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON
+                        : "所选期间的计划都无法比较 (无标准成本快照 / 快照缺单价 / 还没产出), 见各计划原因")
+                : partialPlans > 0 || comparedPlans.size() < planVariances.size()
+                        ? "合计只含能完整比较的部分: " + (planVariances.size() - comparedPlans.size()) + " 个计划无法比较, "
+                                + partialPlans + " 个计划有部分项无法比较"
+                        : null;
 
         List<CostVarianceReportDTO.ProductCostVariance> productVariances = new ArrayList<>();
         for (Map.Entry<String, List<ProductionBatch>> entry : productBatches.entrySet()) {
@@ -1479,20 +1510,37 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 BigDecimal unitActualCost = visibleQuantity.compareTo(BigDecimal.ZERO) > 0 ?
                         prodActualCost.divide(visibleQuantity, 4, RoundingMode.HALF_UP) : null;
 
+                // 这个产品的可比计划 (计划主产品 = 本产品)
+                List<PlanCostVarianceDTO> productPlans = comparedPlans.stream()
+                        .filter(pv -> entry.getKey().equals(pv.getProductTypeId())).toList();
+                boolean productComparable = !productPlans.isEmpty();
+                BigDecimal prodStd = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getStandardCost) : null;
+                BigDecimal prodVar = productComparable
+                        ? sumOf(productPlans, PlanCostVarianceDTO::getActualCost).subtract(prodStd) : null;
+                BigDecimal prodOutput = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getOutputQuantity) : null;
+                BigDecimal prodMaterialVar = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getPriceVariance)
+                        .add(sumOf(productPlans, PlanCostVarianceDTO::getUsageVariance))
+                        .add(sumOf(productPlans, PlanCostVarianceDTO::getSubstituteVariance)) : null;
+                BigDecimal prodLaborVar = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getLaborVariance) : null;
+                BigDecimal bomUnit = productComparable && prodOutput.signum() > 0
+                        ? prodStd.divide(prodOutput, 4, RoundingMode.HALF_UP) : null;
+
                 productVariances.add(CostVarianceReportDTO.ProductCostVariance.builder()
                         .productTypeId(entry.getKey())
                         .productName(firstBatch.getProductName() != null ? firstBatch.getProductName() : "未知产品")
                         .quantity(prodQuantity)
-                        .bomUnitCost(null)
+                        .bomUnitCost(bomUnit)
                         .actualUnitCost(scaleOrNull(unitActualCost))
-                        .unitVariance(null)
-                        .varianceRate(null)
-                        .totalVariance(null)
+                        .unitVariance(bomUnit == null ? null : prodVar.divide(prodOutput, 4, RoundingMode.HALF_UP))
+                        .varianceRate(productComparable && prodStd.signum() > 0
+                                ? prodVar.multiply(new BigDecimal("100")).divide(prodStd, 2, RoundingMode.HALF_UP) : null)
+                        .totalVariance(scaleOrNull(prodVar))
                         .batchCount(productBatchList.size())
-                        // ⛔ 原来按 60/30/10 把差异切成材料/人工/制造费用, 那是编的原因。
-                        .varianceReason(null)
-                        .comparable(false)
-                        .comparabilityReason(CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON)
+                        .varianceReason(productComparable ? varianceReasonOf(productPlans) : null)
+                        .materialVariance(scaleOrNull(prodMaterialVar))
+                        .laborVariance(scaleOrNull(prodLaborVar))
+                        .comparable(productComparable)
+                        .comparabilityReason(productComparable ? null : productIncomparableReason(entry.getKey(), planVariances))
                         .build());
             }
         }
@@ -1507,13 +1555,23 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .factoryId(factoryId)
                 .startDate(startDate)
                 .endDate(endDate)
-                .comparable(false)
-                .comparabilityReason(CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON)
-                .totalBomCost(totalBomCost)
+                .comparable(anyComparable)
+                .comparabilityReason(reportReason)
+                .standardCostBasis(CostVarianceReportDTO.STANDARD_COST_BASIS)
+                .totalBomCost(scaleOrNull(totalBomCost))
                 .totalActualCost(totalActualCost.setScale(2, RoundingMode.HALF_UP))
-                .totalVariance(totalVariance)
+                .totalVariance(scaleOrNull(totalVariance))
                 .totalVarianceRate(scaleOrNull(varianceRate))
                 .varianceStatus(CostVarianceReportDTO.calculateStatus(varianceRate))
+                .priceVariance(scaleOrNull(priceVariance))
+                .usageVariance(scaleOrNull(usageVariance))
+                .substituteVariance(scaleOrNull(substituteVariance))
+                .materialVariance(anyComparable ? scaleOrNull(priceVariance.add(usageVariance).add(substituteVariance)) : null)
+                .laborVariance(scaleOrNull(laborVariance))
+                .overheadVariance(null)
+                .comparedPlanCount(comparedPlans.size())
+                .incomparablePlanCount(planVariances.size() - comparedPlans.size())
+                .planVariances(new ArrayList<>(planVariances.values()))
                 .productCount(productBatches.size())
                 .batchCount(batchCount)
                 // ⛔ 原来是三个无条件写死的常量(60/25/15, 恰好合计 100)。它们看起来像一次
@@ -1526,6 +1584,36 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .anomalyProducts(anomalyProducts)
                 .processSecretNote(hiddenBatches > 0 ? com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.note(hiddenProducts.size()) : null)
                 .build();
+    }
+
+    private static BigDecimal sumOf(List<PlanCostVarianceDTO> plans,
+                                    java.util.function.Function<PlanCostVarianceDTO, BigDecimal> field) {
+        return plans.stream().map(field).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /** 差异原因: 由实际算出的分项拼成 (⛔ 不再按 60/30/10 编)。 */
+    static String varianceReasonOf(List<PlanCostVarianceDTO> plans) {
+        List<String> parts = new ArrayList<>();
+        appendVariancePart(parts, "价格差", sumOf(plans, PlanCostVarianceDTO::getPriceVariance));
+        appendVariancePart(parts, "用量差", sumOf(plans, PlanCostVarianceDTO::getUsageVariance));
+        appendVariancePart(parts, "替代料差", sumOf(plans, PlanCostVarianceDTO::getSubstituteVariance));
+        appendVariancePart(parts, "人工差", sumOf(plans, PlanCostVarianceDTO::getLaborVariance));
+        return parts.isEmpty() ? "成本与标准一致" : String.join(", ", parts);
+    }
+
+    private static void appendVariancePart(List<String> parts, String label, BigDecimal value) {
+        if (value != null && value.abs().compareTo(new BigDecimal("0.005")) >= 0) {
+            parts.add(label + (value.signum() > 0 ? " +¥" : " −¥") + value.abs().setScale(2, RoundingMode.HALF_UP).toPlainString());
+        }
+    }
+
+    private static String productIncomparableReason(String productTypeId, Map<String, PlanCostVarianceDTO> plans) {
+        return plans.values().stream()
+                .filter(pv -> productTypeId.equals(pv.getProductTypeId()))
+                .map(PlanCostVarianceDTO::getComparabilityReason)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON);
     }
 
     @Override

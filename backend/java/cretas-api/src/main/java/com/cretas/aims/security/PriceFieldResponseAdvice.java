@@ -419,23 +419,11 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
         String requestRemap = requestAttribute(request, PriceScope.PURCHASE_REMAP_ATTRIBUTE);
         String purchaseSpec = requestRemap != null ? requestRemap
                 : scope != null && !scope.purchase().isBlank() ? scope.purchase() : PriceSensitive.PURCHASE;
-        PriceVisibility pv = visibility();
-        Map<String, Boolean> specCache = new java.util.HashMap<>();
-        java.util.function.Predicate<String> visible = spec -> specCache.computeIfAbsent(
-                spec == null || PRICE_VIEW_PERMISSION.equals(spec) ? defaultSpec
-                        : PriceSensitive.PURCHASE.equals(spec) ? purchaseSpec : spec,
-                s -> pv.canView(currentUser, s));
-        boolean canViewPrices = visible.test(PRICE_VIEW_PERMISSION);
-        List<String> hiddenSpecs = KNOWN_SPECS.stream().filter(s -> !visible.test(s)).toList();
-
-        boolean canViewFinance;
-        try {
-            canViewFinance = permissionService.hasPermission(currentUser, FINANCE_READ_PERMISSION);
-        } catch (Exception e) {
-            log.warn("PriceFieldResponseAdvice: permission check failed for userId={} (finance), defaulting fail-CLOSED (strip): {}",
-                    currentUser.getId(), e.getMessage());
-            canViewFinance = false;
-        }
+        MaskDecision decision = decide(currentUser, defaultSpec, purchaseSpec);
+        java.util.function.Predicate<String> visible = decision.visible();
+        boolean canViewPrices = decision.canViewPrices();
+        List<String> hiddenSpecs = decision.hiddenSpecs();
+        boolean canViewFinance = decision.canViewFinance();
 
         // Full access — skip all stripping.
         if (hiddenSpecs.isEmpty() && canViewFinance) {
@@ -468,6 +456,165 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             PriceSensitiveContext.hideOnly(new java.util.HashSet<>(hiddenSpecs));
         }
         return bodyToStrip;
+    }
+
+    /** 一个用户对本次响应的价格可见性: 每个口径一次 PriceVisibility (唯一判定点) + 财务读; 失败按不可见。 */
+    private record MaskDecision(java.util.function.Predicate<String> visible, boolean canViewPrices,
+                                List<String> hiddenSpecs, boolean canViewFinance) {
+        boolean seesEverything() {
+            return hiddenSpecs.isEmpty() && canViewFinance;
+        }
+    }
+
+    private MaskDecision decide(User currentUser, String defaultSpec, String purchaseSpec) {
+        PriceVisibility pv = visibility();
+        Map<String, Boolean> specCache = new java.util.HashMap<>();
+        java.util.function.Predicate<String> visible = spec -> specCache.computeIfAbsent(
+                spec == null || PRICE_VIEW_PERMISSION.equals(spec) ? defaultSpec
+                        : PriceSensitive.PURCHASE.equals(spec) ? purchaseSpec : spec,
+                s -> pv.canView(currentUser, s));
+        boolean canViewPrices = visible.test(PRICE_VIEW_PERMISSION);
+        List<String> hiddenSpecs = KNOWN_SPECS.stream().filter(s -> !visible.test(s)).toList();
+
+        boolean canViewFinance;
+        try {
+            canViewFinance = permissionService.hasPermission(currentUser, FINANCE_READ_PERMISSION);
+        } catch (Exception e) {
+            log.warn("PriceFieldResponseAdvice: permission check failed for userId={} (finance), defaulting fail-CLOSED (strip): {}",
+                    currentUser.getId(), e.getMessage());
+            canViewFinance = false;
+        }
+        return new MaskDecision(visible, canViewPrices, hiddenSpecs, canViewFinance);
+    }
+
+    @Autowired(required = false)
+    private com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    /**
+     * 这个用户能看到的那一份结果数据 —— 与 HTTP 响应层同一个判定 ({@link #decide}) 和同一套剥离规则, 但作用在
+     * <b>副本</b>上, 不动原对象。给「把结果写成文字」的地方用 (对话回复的 formattedText、SSE 推送的 result):
+     * 文字必须从这一份渲染, 字段里看不到的金额文字里也就不会出现 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)。
+     *
+     * <p>Map / List 逐层复制; 工程内的类型化对象按 Jackson 序列化成 Map (在该用户的价格口径下, 与线上 JSON 相同),
+     * 按口径可见的 @PriceSensitive 属性照 #1376 记下并放行; 原对象上的按口径放行也带到副本。
+     * 用户查不到 / userId 为空 ⇒ 全部按不可见剥 (fail closed)。看得到全部的用户原样返回。
+     */
+    public Object maskedViewFor(Object data, Long userId) {
+        if (data == null) {
+            return null;
+        }
+        User user = null;
+        if (userId != null) {
+            try {
+                user = userRepository.findById(userId).orElse(null);
+            } catch (Exception e) {
+                log.warn("PriceFieldResponseAdvice.maskedViewFor: user lookup failed for userId={}, masking: {}",
+                        userId, e.getMessage());
+            }
+        }
+        MaskDecision decision = user == null ? null
+                : decide(user, PRICE_VIEW_PERMISSION, PriceSensitive.PURCHASE);
+        if (decision != null && decision.seesEverything()) {
+            return data;
+        }
+        java.util.Set<String> hidden = decision == null ? new java.util.HashSet<>(KNOWN_SPECS)
+                : new java.util.HashSet<>(decision.hiddenSpecs());
+        Object copy = copyForView(data, hidden, new IdentityHashMap<>());
+        if (decision != null) {
+            FIELD_VISIBILITY.set(decision.visible());
+        }
+        try {
+            stripPriceFields(copy, new IdentityHashMap<>(), new ArrayDeque<>(),
+                    decision != null && decision.canViewPrices(), decision != null && decision.canViewFinance());
+        } finally {
+            FIELD_VISIBILITY.remove();
+        }
+        return copy;
+    }
+
+    /**
+     * 工具把金额写进回复文字前问这一句: 这个值若以 {@code key} 放在结果 Map 里, 这个用户看得到吗?
+     * 与字段同一套键名规则 (Rule 1 / 2 / 2b), 所以文字与字段同进同出。用户为空 / 查不到 ⇒ false。
+     */
+    public boolean showsKey(Long userId, String key) {
+        Map<String, Object> probe = new LinkedHashMap<>();
+        probe.put(key, java.math.BigDecimal.ONE);
+        Object view = maskedViewFor(probe, userId);
+        return view instanceof Map<?, ?> m && m.get(key) != null;
+    }
+
+    /**
+     * 按价格口径 ({@link PriceSensitive#PURCHASE} 等, 即类型化字段 @PriceSensitive 的口径) 问这个用户看不看得到。
+     * 与 REST 类型化响应同一个判定点 ({@link PriceVisibility})。用户为空 / 查不到 / 判定异常 ⇒ false。
+     */
+    public boolean showsSpec(Long userId, String spec) {
+        if (userId == null) {
+            return false;
+        }
+        try {
+            User user = userRepository.findById(userId).orElse(null);
+            return user != null && visibility().canView(user, spec);
+        } catch (Exception e) {
+            log.warn("PriceFieldResponseAdvice.showsSpec failed for userId={} spec={}, hiding: {}", userId, spec, e.getMessage());
+            return false;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object copyForView(Object value, java.util.Set<String> hiddenSpecs, IdentityHashMap<Object, Object> copies) {
+        if (value == null || isJdkLeaf(value)) {
+            return value;
+        }
+        Object done = copies.get(value);
+        if (done != null) {
+            return done;
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<Object, Object> copy = new java.util.LinkedHashMap<>();
+            copies.put(value, copy);
+            map.forEach((k, v) -> copy.put(k, copyForView(v, hiddenSpecs, copies)));
+            PriceSensitiveContext.approveKeys(copy, PriceSensitiveContext.approvedKeys(value));
+            return copy;
+        }
+        if (value instanceof Collection<?> collection) {
+            List<Object> copy = new java.util.ArrayList<>(collection.size());
+            copies.put(value, copy);
+            collection.forEach(v -> copy.add(copyForView(v, hiddenSpecs, copies)));
+            return copy;
+        }
+        if (value.getClass().isArray() && !value.getClass().getComponentType().isPrimitive()) {
+            List<Object> copy = new java.util.ArrayList<>();
+            copies.put(value, copy);
+            for (Object v : (Object[]) value) {
+                copy.add(copyForView(v, hiddenSpecs, copies));
+            }
+            return copy;
+        }
+        if (objectMapper != null && value.getClass().getName().startsWith(PROJECT_PACKAGE)) {
+            // 在该用户的口径下序列化 (= 线上 JSON), 并记下按口径可见的 @PriceSensitive 属性 (#1376 同一机制)
+            Object converted;
+            java.util.Set<String> visibleKeys;
+            try (PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scopedSpecs(hiddenSpecs)) {
+                PriceSensitiveContext.startRecordingVisible();
+                try {
+                    converted = objectMapper.convertValue(value, Object.class);
+                } finally {
+                    visibleKeys = PriceSensitiveContext.stopRecordingVisible();
+                }
+            }
+            Object copy = copyForView(converted, hiddenSpecs, copies);
+            PriceSensitiveContext.approveKeys(copy, visibleKeys);
+            copies.put(value, copy);
+            return copy;
+        }
+        return value;
+    }
+
+    private static boolean isJdkLeaf(Object value) {
+        return value instanceof CharSequence || value instanceof Number || value instanceof Boolean
+                || value instanceof Character || value instanceof Enum<?>
+                || value instanceof java.time.temporal.Temporal || value instanceof java.util.Date
+                || value instanceof java.util.UUID;
     }
 
     /**

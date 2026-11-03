@@ -413,6 +413,14 @@ const businessRoutes: RouteRecordRaw[] = [
             redirect: (to) => buildProductionAnalysisRedirect(to, 'process-io'),
             meta: { requiresAuth: true, title: '工序投入产出对比', module: 'production' }
           },
+          // 食品 DAG 缺口 09: 同一张成本差异页, 生产管理侧入口 (财务侧见 /finance/cost-variance)。
+          // 只挂在财务下会让管现场成本的生产经理 403 (F006 production_manager 实测, 后端接口本身对它放行)。
+          {
+            path: 'cost-variance',
+            name: 'ProductionCostVariance',
+            component: () => import('@/views/finance/cost-variance/index.vue'),
+            meta: { requiresAuth: true, title: '成本差异', module: 'production' }
+          },
           {
             path: 'analysis-query',
             name: 'ProductionAnalysisQuery',
@@ -732,6 +740,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             name: 'QualityRelease',
             component: () => import('@/views/quality/release/index.vue'),
             meta: { requiresAuth: true, title: '质检放行', module: 'quality' }
+          },
+          // 缺口 15: 冷链超温 → 受影响批次 → 转质检
+          {
+            path: 'cold-chain',
+            name: 'QualityColdChain',
+            component: () => import('@/views/quality/cold-chain/index.vue'),
+            meta: { requiresAuth: true, title: '冷链超温批次', module: 'quality' }
           },
           // 缺口 13: CCP 监控记录 (偏离处理 / 按批次导出)
           {
@@ -1410,6 +1425,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             // ⛔ 不改 module 为 production —— 那会把它暴露给没有 finance 的生产角色。
             meta: { requiresAuth: true, title: 'SKU毛利率分析', module: 'finance',
                     modulesAll: ['finance', 'production'] }
+          },
+          // 食品 DAG 缺口 09/10: 成本差异 (开计划时标准成本快照 vs 实际, 价格差/用量差/替代料差/人工差 + 多产出分摊方法)
+          {
+            path: 'cost-variance',
+            name: 'FinanceCostVariance',
+            component: () => import('@/views/finance/cost-variance/index.vue'),
+            meta: { requiresAuth: true, title: '成本差异', module: 'finance' }
           },
           // SP5 W6: 毛利红线配置 (目标毛利率管理, 财务/超管可配, #693 报价红线读它)
           {

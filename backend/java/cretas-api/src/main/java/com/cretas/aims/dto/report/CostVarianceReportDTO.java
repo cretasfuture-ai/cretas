@@ -33,6 +33,13 @@ public class CostVarianceReportDTO {
     public static final String NO_INDEPENDENT_STANDARD_REASON = "缺少独立标准成本，无法比较";
 
     /**
+     * 口径说明 (食品 DAG 缺口 09, Steve 2026-11-03): 标准成本 = 计划锁定配方版本的标准用量 × 开计划那一刻的
+     * 物料单价快照; 差异拆成价格差 / 用量差 / 替代料差 / 人工差。合计只含能完整比较的部分。
+     */
+    public static final String STANDARD_COST_BASIS =
+            "标准成本 = 计划锁定配方的标准用量 × 开计划时物料单价快照；合计只含能完整比较的部分";
+
+    /**
      * 可比性：只有存在<b>独立于实际成本</b>的标准成本时为 true。
      *
      * <p>🔴 原实现拿「实际成本 × 0.95」当 BOM 标准成本，于是差异率恒约 5.26%，
@@ -45,9 +52,25 @@ public class CostVarianceReportDTO {
     private Boolean comparable;
 
     /**
-     * 不可比较的原因（{@link #comparable} 为 false 时非空）
+     * 不可比较的原因（{@link #comparable} 为 false 时非空; 部分可比时说明有几项未计入）
      */
     private String comparabilityReason;
+
+    /** 标准成本口径说明 (见 {@link #STANDARD_COST_BASIS})。 */
+    private String standardCostBasis;
+
+    /** 价格差: 同样的料按实际单价比开计划时快照单价多 / 少花的钱。 */
+    private BigDecimal priceVariance;
+    /** 用量差: 比锁定配方标准用量多用 / 少用, 按快照单价计。 */
+    private BigDecimal usageVariance;
+    /** 替代料差: 用替代料顶主料, 按开计划时两者的价差计。 */
+    private BigDecimal substituteVariance;
+    /** 有可比部分的计划数。 */
+    private Integer comparedPlanCount;
+    /** 完全无法比较的计划数 (无快照 / 缺单价 / 未产出等, 原因见 planVariances)。 */
+    private Integer incomparablePlanCount;
+    /** 期间内各计划的差异摘要 (不含逐项明细, 明细走 /reports/cost-variance/plans/{planId})。 */
+    private List<PlanCostVarianceDTO> planVariances;
 
     /**
      * 工艺保密: 当前调用者无权查看部分保密产品时, 实际成本合计只算他能看的批次, 这里是「不含 N 个保密产品」的说明;

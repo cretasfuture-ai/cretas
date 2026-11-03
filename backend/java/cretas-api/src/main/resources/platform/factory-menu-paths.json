@@ -40,6 +40,7 @@
     "/finance/accounting-period",
     "/finance/adjustments",
     "/finance/ar-ap",
+    "/finance/cost-variance",
     "/finance/costs",
     "/finance/gross-margin-redline",
     "/finance/invoices",
@@ -81,6 +82,7 @@
     "/production/approval",
     "/production/batches",
     "/production/bom/ecns",
+    "/production/cost-variance",
     "/production/kanban",
     "/production/material-flow",
     "/production/plans",
@@ -93,6 +95,7 @@
   ],
   "quality": [
     "/quality/ccp",
+    "/quality/cold-chain",
     "/quality/defects",
     "/quality/disposals",
     "/quality/disposition",
