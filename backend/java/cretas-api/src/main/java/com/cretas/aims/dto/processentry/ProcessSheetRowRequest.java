@@ -172,6 +172,12 @@ public class ProcessSheetRowRequest {
      */
     private com.cretas.aims.dto.workflow.BlendRatioDeviation blendRatio;
 
+    /**
+     * 缺口 03 回料比例上限: 客户端只填 reason/note (超限时必填); 其余由 ReworkRatioCheck 在正式提交时计算并覆盖,
+     * 随 row_payload 落库留痕。
+     */
+    private com.cretas.aims.dto.workflow.ReworkRatioDeviation reworkRatio;
+
     /** 原料领料行: 消耗的原料 MaterialBatch + 投料量。 */
     @Data
     public static class RawInput {
