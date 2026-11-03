@@ -41,11 +41,19 @@ _spec.loader.exec_module(export_mod)
 
 @pytest.fixture(autouse=True)
 def _no_protected_products(monkeypatch):
-    """The export reads process-secret product names from the Cretas database;
-    unit tests have none (tests about the rule set their own names)."""
+    """The export reads the factories' lists (process-secret terms, people,
+    customers) from the Cretas database; unit tests have none (tests about the
+    rule set their own)."""
     async def _none_map(*_a, **_k):
         return {}
-    monkeypatch.setattr(export_mod, "all_protected_product_names", _none_map)
+    monkeypatch.setattr(export_mod, "all_factory_lists", _none_map)
+
+
+def _lists(names_by_factory):
+    """{factory: [product name, ...]} -> {factory: FactoryLists}."""
+    from smartbi.services.process_secret_names import lists_from_rows
+    return {f: lists_from_rows([{"name": n} for n in names], ())
+            for f, names in names_by_factory.items()}
 
 
 # ===========================================================================
@@ -139,7 +147,7 @@ RULE = {"training_rule": "2026-10-24"}
 
 
 def _row(factory_id, *, metadata=None, input_text="问题X", teacher_output="答案Y",
-         business_type="restaurant", system_prompt=None, rule=True):
+         business_type="factory", system_prompt=None, rule=True):
     """Real-tenant rows carry the capture-time rule tag unless rule=False."""
     real = factory_id and factory_id not in ("SEED_R", "SEED_F")
     if rule and real:
@@ -172,21 +180,21 @@ class TestSharedGating:
     def test_metadata_never_makes_a_factoryless_row_synthetic(self):
         # Only the sentinel factory id makes a row synthetic (2026-10-29 review):
         # metadata is caller-supplied, so a factory-less row tagged synthetic_seed /
-        # seeded still has to pass the training rule, incl. the any-factory
-        # process-secret name check.
-        protected = {"F001": frozenset({"秘制牛肉干"})}
+        # seeded is still a real row — and a real row without a factory is never
+        # exported (2026-10-29 option A: it cannot be matched against any factory's
+        # lists, and the union of every factory's lists is no longer used).
+        lists = _lists({"F001": ["秘制牛肉干"]})
         tagged = {"source_kind": "synthetic_seed", "seeded": True}
         rows = [
             _row(None, metadata=tagged),                                       # no rule tag -> out
             _row(None, metadata={**RULE, **tagged, "desensitized": True},
-                 input_text="秘制牛肉干本月销量"),                                  # names F001's -> out
-            _row(None, metadata={**RULE, **tagged, "desensitized": True}),     # control -> in
+                 input_text="秘制牛肉干本月销量"),                                  # no factory -> out
+            _row(None, metadata={**RULE, **tagged, "desensitized": True}),     # no factory -> out
             _row("SEED_R", input_text="秘制牛肉干本月销量"),                     # sentinel -> synthetic
         ]
         assert [export_mod._is_synthetic(r) for r in rows] == [False, False, False, True]
-        gated = export_mod.gate_shared_rows(rows, consent={}, protected_names=protected)
-        assert [(g["row"]["factory_id"], g["consent_class"]) for g in gated] == [
-            (None, "desensitized"), ("SEED_R", "synthetic")]
+        gated = export_mod.gate_shared_rows(rows, consent={}, factory_lists=lists)
+        assert [(g["row"]["factory_id"], g["consent_class"]) for g in gated] == [("SEED_R", "synthetic")]
 
     def test_real_tenant_row_is_never_synthetic_by_metadata(self):
         # metadata is caller-supplied; a row tagged with a real tenant stays that
@@ -231,10 +239,14 @@ class TestSharedGating:
         assert export_mod.gate_shared_rows(rows, consent={"F001": "shared_anon"}) == []
 
     def test_process_content_is_excluded_even_for_shared_anon(self):
-        rows = [_row("F001", input_text="产品配方表如下", teacher_output="已读取"),
+        # a process word WITH a value (2026-10-29 option A) is out for every factory
+        rows = [_row("F001", input_text="产品配方表如下：盐 3%、糖 5%", teacher_output="已读取"),
                 _row("F001", input_text="怎么提升出成率", teacher_output="把腌制时间延长到 24 小时"),
-                _row("F002", metadata={"desensitized": True}, input_text="为什么返工多")]
+                _row("F002", metadata={"desensitized": True}, input_text="返工 3 次是什么原因")]
         assert export_mod.gate_shared_rows(rows, consent={"F001": "shared_anon"}) == []
+        # control: the same words without a value are not blocked
+        words_only = [_row("F002", metadata={"desensitized": True}, input_text="为什么返工多")]
+        assert len(export_mod.gate_shared_rows(words_only, consent={})) == 1
 
     def test_mixed_population(self):
         rows = [
@@ -327,7 +339,7 @@ async def test_private_export_raw_when_consented(tmp_path):
 async def test_private_export_skips_process_content_and_pre_rule_rows(tmp_path):
     consent = [{"factory_id": "F001", "consent_scope": "private"}]
     samples = [_row("F001", input_text="本月营收多少", teacher_output="128 万"),
-               _row("F001", input_text="产品配方表如下", teacher_output="已读取"),
+               _row("F001", input_text="产品配方表如下：盐 3%", teacher_output="已读取"),
                _row("F001", input_text="上月库存", teacher_output="350 箱", rule=False)]
     conn = _FakeConn(consent_rows=consent, sample_rows=samples)
     await export_mod._export_private(_Args(factory="F001", out=str(tmp_path)), _FakePool(conn))
@@ -411,7 +423,7 @@ def test_effective_scope_sql_reads_withdrawal():
     assert "WHEN withdrawn_at IS NOT NULL THEN 'withdrawn'" in tc.SELECT_SCOPE_SQL
     assert "WHEN withdrawn_at IS NOT NULL THEN 'withdrawn'" in tc.SELECT_ALL_SQL
     assert tc.normalize_scope("withdrawn") == "withdrawn"
-    assert tc.desensitize_utterance("withdrawn", "库存多少") == (False, None)
+    assert tc.desensitize_utterance("withdrawn", "库存多少", directory=()) == (False, None)
 
 
 def test_registration_requires_a_contract_and_withdraw_is_exclusive():
@@ -437,11 +449,11 @@ def test_migration_enforces_contract_and_adds_withdrawal_columns():
 
 
 def test_rows_naming_a_process_secret_product_are_not_exported():
-    protected = {"F001": frozenset({"秘制牛肉干"})}
+    lists = _lists({"F001": ["秘制牛肉干"]})
     rows = [_row("F001", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量"),
             _row("F001", metadata={"desensitized": True}, input_text="普通牛肉干本月销量"),
             _row("F002", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量")]
-    gated = export_mod.gate_shared_rows(rows, consent={}, protected_names=protected)
+    gated = export_mod.gate_shared_rows(rows, consent={}, factory_lists=lists)
     # F001's protected product is out; the same name in F002 is not F002's protected product
     assert [(g["row"]["factory_id"], g["row"]["input_text"]) for g in gated] == [
         ("F001", "普通牛肉干本月销量"), ("F002", "秘制牛肉干本月销量")]

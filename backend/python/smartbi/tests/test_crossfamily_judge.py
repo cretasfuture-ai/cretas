@@ -232,7 +232,7 @@ class TestClaimsPinnedExclusion:
 
         await fetch_crossfamily_rows(mock_pool, limit=50)
 
-        mock_conn.fetch.assert_called_once()
+        assert mock_conn.fetch.call_count == 2   # held-row re-judge (2026-10-29), then the judge fetch
         sql_arg = mock_conn.fetch.call_args.args[0]
         # The SQL must filter out claims-pinned sources
         assert "NOT IN" in sql_arg or "not in" in sql_arg.lower()

@@ -25,6 +25,33 @@ ALL_FACTORIES_PROTECTED_NAMES_SQL = """
 """
 
 
+# ---- 训练样本的本厂名单 (common.process_secret_terms; Steve 2026-10-29 选 A) ----
+# 外发脱敏不用这几条 (仍按上面的产品名)。名单 = 保密产品的全名 / 编码 / ID + 本厂人员姓名 + 本厂客户名称。
+PROTECTED_TERMS_SQL = """
+    SELECT DISTINCT pt.id::text AS id, pt.code, pt.name, pt.category, pt.product_category
+    FROM process_secret_policies p
+    JOIN product_types pt ON pt.id::text = p.product_type_id AND pt.factory_id = p.factory_id
+    WHERE p.factory_id = $1
+"""
+ALL_PROTECTED_TERMS_SQL = """
+    SELECT DISTINCT p.factory_id, pt.id::text AS id, pt.code, pt.name, pt.category, pt.product_category
+    FROM process_secret_policies p
+    JOIN product_types pt ON pt.id::text = p.product_type_id AND pt.factory_id = p.factory_id
+"""
+# 人员 / 客户: 含已软删除的行 (离职员工、停用客户的名字照样是本厂的人和客户)。与 Java
+# FactoryNameDirectoryRepository 的两条原生查询同一口径。
+FACTORY_DIRECTORY_SQL = """
+    SELECT full_name AS name FROM users WHERE factory_id = $1 AND full_name IS NOT NULL
+    UNION
+    SELECT name FROM customers WHERE factory_id = $1 AND name IS NOT NULL
+"""
+ALL_FACTORY_DIRECTORY_SQL = """
+    SELECT factory_id, full_name AS name FROM users WHERE full_name IS NOT NULL AND factory_id IS NOT NULL
+    UNION
+    SELECT factory_id, name FROM customers WHERE name IS NOT NULL AND factory_id IS NOT NULL
+"""
+
+
 _JAVA_TRIM = "".join(chr(c) for c in range(33))
 
 

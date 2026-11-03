@@ -55,17 +55,45 @@ class _Conn:
 
 
 @pytest.fixture(autouse=True)
-def _fresh_cache():
+def _fresh_cache(monkeypatch):
     gate.consent_map.cache_clear()
+    gate.directory_map.cache_clear()
+    # people / customer names come from the cretas DB: none by default (tests set their own)
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _Conn([]))
     yield
     gate.consent_map.cache_clear()
+    gate.directory_map.cache_clear()
+
+
+def test_the_factorys_own_people_are_dropped_and_others_kept(monkeypatch):
+    """2026-10-29 option A: names are matched exactly against each factory's own tables."""
+    monkeypatch.setattr(gate, "_connect", lambda: _Conn([]))
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _Conn([("F006", "王五"), ("F007", "华联超市")]))
+    rows = [{"factory_id": "F006", "user_input": "操作员王五报工"},
+            {"factory_id": "F007", "user_input": "操作员王五报工"},       # not F007's person -> kept
+            {"factory_id": "F007", "user_input": "华联超市还欠多少"},
+            {"factory_id": "F006", "user_input": "员工周报在哪看"}]         # names nobody -> kept
+    kept = gate.apply_utterance_rule(rows, ("user_input",))
+    assert [(r["factory_id"], r["user_input"]) for r in kept] == [
+        ("F007", "操作员王五报工"), ("F006", "员工周报在哪看")]
+
+
+def test_unreadable_names_stop_the_script(monkeypatch):
+    def boom():
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(gate, "_connect", lambda: _Conn([]))
+    monkeypatch.setattr(gate, "_connect_cretas", boom)
+    with pytest.raises(SystemExit) as e:
+        gate.apply_utterance_rule(ROWS[:1], ("user_input",))
+    assert "people / customer names unreadable" in str(e.value)
 
 
 ROWS = [
     {"factory_id": "F_PRIV", "user_input": "今天入库 350 箱"},
     {"factory_id": "F006", "user_input": "今天入库 350 箱，联系 13812345678"},
-    {"factory_id": "F006", "user_input": "这个产品配方里盐放多少"},
-    {"factory_id": "F_PRIV", "user_input": "杀菌温度调到多少"},
+    {"factory_id": "F006", "user_input": "这个产品配方里盐放 3 克"},      # parameter + value
+    {"factory_id": "F_PRIV", "user_input": "杀菌温度调到 121 度"},
     {"factory_id": None, "user_input": "我们腌制和滚揉一起做 2 次"},
 ]
 

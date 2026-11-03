@@ -26,19 +26,28 @@ near-duplicate samples. This matches the materializer exactly (its
 ``sha256(prompt)`` where ``prompt == input_text`` — so the hash MUST stay
 ``sha256(input_text)`` or that cache would silently miss).
 
-Training rule (owner, 2026-10-24; see ``training_consent`` for the full text):
-  * a sample whose input (question + the data the model was given) touches
-    process parameters / structure / problem handling or per-person pay, or
-    whose answer names a specific one, is NOT written — for every factory,
-    authorized or not (``qa_has_blocked_content``);
+Training rule (owner, 2026-10-24 / 2026-10-29 option A; see ``training_consent``):
+  * a real sample needs a factory: with none we cannot tell whose lists to
+    match it against (the old fallback — every factory's names — blocked rows
+    for naming another factory's product), so it is NOT written. Inside a
+    request the factory comes from the authenticated tenant; background jobs
+    pass the factory of the record they are working on;
+  * restaurant / test / backup tenants (``is_training_tenant``) are not written;
+  * a sample with a process word plus a concrete value, per-person pay, or one
+    of the factory's people / customers is NOT written — authorized or not
+    (``qa_has_blocked_content``);
+  * a sample naming one of the factory's process-secret terms is NOT written.
+    If the factory's lists cannot be read, the last lists that loaded for it
+    are used and the row is written HELD (``metadata.secrecy_recheck``; every
+    corpus reader skips it until ``rejudge_held_rows`` re-checks it). No lists
+    ever loaded -> not written;
   * otherwise a factory with ``training_consent`` 'private' / 'shared_anon' is
     stored as-is, a withdrawn factory or an unreadable consent row is not
-    stored at all, and everyone else (no row, 'none', no factory)
-    is stored desensitized (``desensitize_for_training``: generic name
-    placeholders, phone / ID / bank numbers removed, every number -> <数值>),
-    tagged ``metadata.desensitized``;
-  * every real sample written is tagged ``metadata.training_rule`` (the corpus
-    scripts only read tagged rows); synthetic seed tenants are stored as-is.
+    stored at all, and everyone else (no row, 'none') is stored desensitized
+    (``desensitize_for_training``: generic name placeholders, phone / ID / bank
+    numbers removed, every number -> <数值>), tagged ``metadata.desensitized``;
+  * every real sample written is tagged ``metadata.training_rule`` with the
+    rule version; synthetic seed tenants are stored as-is.
 Skips are logged once per (reason, factory).
 Inside a request the factory is the authenticated one from
 ``smartbi.tenant_ctx`` (set by auth_middleware from the JWT or the
@@ -62,18 +71,15 @@ import os
 from typing import Any, Dict, List, Optional
 
 from smartbi.services.corpus_anonymize import desensitize_for_training
-from smartbi.services.process_secret_names import (
-    all_protected_product_names,
-    any_factory_names,
-    mentions_any,
-    protected_product_names,
-)
+from smartbi.services.process_secret_names import factory_lists_or_last_good
 from smartbi.services.training_consent import (
     DESENSITIZED_KEY,
+    RECHECK_KEY,
     RULE_KEY,
     RULE_VERSION,
     fetch_consent_scope,
     is_synthetic_factory,
+    is_training_tenant,
     is_withdrawn,
     keeps_raw,
     qa_has_blocked_content,
@@ -235,25 +241,29 @@ async def persist_distillation_sample(
     if not ok:
         return
     synthetic = is_synthetic_factory(factory_id)
-    if not synthetic and qa_has_blocked_content(input_text, teacher_output):
-        _log_skip_once("process / personnel content is never used for training",
-                       factory_id, f"source={source}")
-        return
+    held = False
     if not synthetic:
-        # privacy clause 6: a sample naming one of the factory's process-secret
-        # products is not used for training. With no factory we cannot tell
-        # whose product it names, so the process-secret products of ANY factory
-        # count. Looked up (Cretas main DB) before taking a capture connection.
+        if not factory_id:
+            _log_skip_once("sample has no factory (cannot be matched against any factory's lists)",
+                           None, f"source={source}")
+            return
+        if not is_training_tenant(factory_id) or (business_type or "") == "restaurant":
+            _log_skip_once("restaurant / test tenant is never used for training", factory_id)
+            return
+        # The factory's lists (process-secret terms, people, customers) come from
+        # the Cretas main DB, looked up before taking a capture connection. A
+        # failed lookup falls back to the last good lists and holds the row.
         try:
-            if factory_id:
-                names = await protected_product_names(factory_id)
-            else:
-                names = any_factory_names(await all_protected_product_names())
+            lists, held = await factory_lists_or_last_good(factory_id)
         except Exception as e:
-            _log_skip_once("process-secret product lookup failed, sample not stored",
+            _log_skip_once("factory lists lookup failed (none loaded before), sample not stored",
                            factory_id, f"({type(e).__name__}: {e})")
             return
-        if mentions_any(names, input_text, teacher_output):
+        if qa_has_blocked_content(input_text, teacher_output, directory=lists.directory):
+            _log_skip_once("process value / personnel / named person or customer is never used "
+                           "for training", factory_id, f"source={source}")
+            return
+        if lists.names_any(input_text, teacher_output):
             _log_skip_once("sample names a process-secret product", factory_id)
             return
     try:
@@ -272,6 +282,8 @@ async def persist_distillation_sample(
                 return
             if not synthetic:
                 tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}
+                if held:
+                    tags[RECHECK_KEY] = True
                 if not keeps_raw(scope):
                     input_text, teacher_output = desensitize_for_training(
                         input_text, teacher_output)

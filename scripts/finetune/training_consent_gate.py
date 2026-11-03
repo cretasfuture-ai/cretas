@@ -60,6 +60,42 @@ def _connect():
     )
 
 
+def _connect_cretas():
+    """The cretas main database (the one these scripts read): people / customers."""
+    import psycopg2
+
+    return psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        dbname=os.getenv("POSTGRES_DB", "cretas_db"),
+        user=os.getenv("POSTGRES_USER", "cretas_user"),
+        password=os.getenv("POSTGRES_PASSWORD", ""),
+        connect_timeout=10,
+    )
+
+
+@lru_cache(maxsize=1)
+def directory_map() -> Dict[str, frozenset]:
+    """``{factory_id: people + customer names}`` (Steve 2026-10-29 option A: names
+    are matched exactly against the factory's own tables). Unreadable -> SystemExit:
+    without the names a person's name could leave in a training file / to an LLM."""
+    try:
+        conn = _connect_cretas()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(rules().ALL_FACTORY_DIRECTORY_SQL)
+                names = rules().directory_by_factory(cur.fetchall())
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001
+        raise SystemExit(
+            f"factory people / customer names unreadable ({type(e).__name__}: {e}) — refusing "
+            "to read factory data. Set POSTGRES_* to the cretas database."
+        ) from e
+    logger.info("factory name directories: %d factories", len(names))
+    return names
+
+
 @lru_cache(maxsize=1)
 def consent_map() -> Dict[str, str]:
     """``{factory_id: scope}`` (withdrawn factories read as 'withdrawn'); unreadable -> SystemExit."""
@@ -92,9 +128,10 @@ def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List
     dropped = 0
     for row in rows:
         scope = r.scope_from_map(consent_map(), row.get("factory_id"))
+        directory = directory_map().get(row.get("factory_id") or "", frozenset())
         out = dict(row)
         for key in keys:
-            keep, text = r.desensitize_utterance(scope, row.get(key))
+            keep, text = r.desensitize_utterance(scope, row.get(key), directory=directory)
             if not keep:
                 break
             out[key] = text

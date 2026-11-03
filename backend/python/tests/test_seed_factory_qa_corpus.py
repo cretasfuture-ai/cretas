@@ -43,7 +43,7 @@ def test_seeds_and_inputs_have_no_restaurant_words_or_blocked_content():
         for w in sf.RESTAURANT_WORDS:
             assert w not in s.input_text, (w, s.input_text)
         # 输入端已经过现行训练规则; 否则每条都会被丢
-        assert not qa_has_blocked_content(s.input_text, "")
+        assert not qa_has_blocked_content(s.input_text, "", directory=())
 
 
 def test_build_is_deterministic():
@@ -81,7 +81,7 @@ def test_gate_rejects_restaurant_word():
 
 def test_gate_rejects_blocked_process_content():
     s = _one()
-    assert sf.check_answer(s, "可以关注杀菌温度对销售额的影响，持续观察。") == "training_rule"
+    assert sf.check_answer(s, "建议把杀菌温度调到 121 度再看销售额。") == "training_rule"
 
 
 def test_gate_rejects_unknown_entity_name():

@@ -74,27 +74,35 @@ class ExpressionLearner:
     factory_id 为 NULL 的记录会写成 NULL 工厂的 SEMANTIC_HIGH 行, 被每家工厂检索到); 训练授权撤回 /
     查不到、提到本厂工艺保密产品、配方参数 / 客户 / 人名的原话不学 (``learning_rules.factory_learnable``)。"""
 
-    def __init__(self, pool, *, consent_scope=None, protected_names=None):
+    def __init__(self, pool, *, consent_scope=None, factory_lists=None):
         from ai.learning import learning_rules
 
         self.pool = pool
         self._consent_scope = consent_scope or learning_rules.default_consent_scope
-        self._protected_names = protected_names or learning_rules.default_protected_names
+        self._factory_lists = factory_lists or learning_rules.default_factory_lists
+        # 判断不了 (授权 / 名单查询出错) 的行下一轮续读 (待办第 2 条「学习任务续读」)
+        self.retry = learning_rules.RetryQueue()
 
     async def run_once(self, min_confidence: float = 0.95) -> int:
         """Returns number of new expressions inserted (best-effort, ON CONFLICT skips dup).
         0 on error or empty.
         """
-        from ai.learning.learning_rules import factory_learnable
+        from ai.learning.learning_rules import Verdict, judge
 
         count = 0
         try:
             async with self.pool.acquire() as conn:
-                rows = await conn.fetch(READ_SQL, min_confidence)
+                fetched = [dict(r) for r in await conn.fetch(READ_SQL, min_confidence)]
+                rows = list({(r["factory_id"], r["intent_code"], r["query"]): r
+                             for r in self.retry.drain() + fetched}.values())
                 for row in rows:
-                    if not await factory_learnable(row["factory_id"], row["query"],
-                                                   consent_scope=self._consent_scope,
-                                                   protected_names=self._protected_names):
+                    verdict = await judge(row["factory_id"], row["query"],
+                                          consent_scope=self._consent_scope,
+                                          factory_lists=self._factory_lists)
+                    if verdict is Verdict.RETRY:
+                        self.retry.add((row["factory_id"], row["intent_code"], row["query"]), row)
+                        continue
+                    if verdict is not Verdict.LEARN:
                         continue
                     vec = await get_embedding(row["query"])
                     if vec is None:
@@ -105,7 +113,7 @@ class ExpressionLearner:
                     expr_hash = _compute_expression_hash(row["query"])
                     vec_text = vec_to_pgvector_text(vec)
                     # 激活规则与 Java 分层写入一致: >= 0.90 激活, 否则挂起等重提议 (复审 L6)
-                    confidence = row.get("confidence") if hasattr(row, "get") else row["confidence"]
+                    confidence = row.get("confidence")
                     active = confidence is not None and float(confidence) >= HIGH_CONF_THRESHOLD
                     await conn.execute(
                         INSERT_SQL,

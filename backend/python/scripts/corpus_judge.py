@@ -65,6 +65,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -88,12 +89,17 @@ logger = logging.getLogger("corpus_judge")
 # Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
 # 2026-10-24 training rule at capture are read / labeled / sent out here.
 from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
-# Privacy clause 6: rows naming a process-secret product (own factory's, or ANY
-# factory's for rows with no factory) are never sent to the judge LLM. A failed
-# name lookup propagates and aborts the run.
+# Privacy clause 6: rows naming one of their factory's process-secret terms are
+# never sent to the judge LLM (rows with no factory are not read at all). The
+# CURRENT lists are applied on every run ("judge 每次按当前名单重判"): an exclusion
+# flag records the list fingerprint it was made under, and a row flagged under a
+# different list is fetched and judged again. Rows held at capture
+# (secrecy_recheck) are re-judged first. A failed lookup aborts the run.
 from smartbi.services.process_secret_names import (  # noqa: E402
-    all_protected_product_names,
+    all_factory_lists,
     drop_rows_naming_protected_products,
+    rejudge_held_rows,
+    terms_fingerprint,
 )
 
 _USABLE_ROWS = usable_rows_sql()
@@ -395,7 +401,7 @@ _FETCH_SQL = """
     WHERE quality = 3
       AND """ + _USABLE_ROWS + """
       AND (metadata IS NULL OR NOT (metadata ? 'judge'))
-      AND (metadata IS NULL OR NOT (metadata ? 'process_secret_excluded'))
+      {fingerprint_clause}
     {source_clause}
     ORDER BY id
     LIMIT $1
@@ -417,37 +423,86 @@ _CROSSFAMILY_FETCH_SQL = """
       AND """ + _USABLE_ROWS + """
       AND source NOT IN ({sources_placeholder})
       AND (metadata IS NULL OR NOT (metadata ? 'judge_crossfamily'))
-      AND (metadata IS NULL OR NOT (metadata ? 'process_secret_excluded'))
+      {fingerprint_clause}
     ORDER BY id
     LIMIT $1
 """
 
-# Rows naming a process-secret product are flagged once so later runs do not
-# refetch them forever (the batch would silently shrink to "judged 0").
+# Rows naming a process-secret term are flagged so later runs do not refetch
+# them forever (the batch would silently shrink to "judged 0") — but only for
+# as long as the list is the same: the flag records the list fingerprint, and a
+# row flagged under another list is fetched and re-judged (the product may have
+# stopped being secret, or the old matcher may have hit a batch number).
 PROCESS_SECRET_FLAG = "process_secret_excluded"
+PROCESS_SECRET_LIST_KEY = "process_secret_list"
 _MARK_PROCESS_SECRET_SQL = """
     UPDATE smart_bi_distillation_samples
-    SET metadata = COALESCE(metadata, '{}'::jsonb) || '{"process_secret_excluded": true}'::jsonb
+    SET metadata = COALESCE(metadata, '{}'::jsonb)
+                   || jsonb_build_object('process_secret_excluded', true, 'process_secret_list', $2::text)
     WHERE id = ANY($1::bigint[])
 """
+_UNMARK_PROCESS_SECRET_SQL = """
+    UPDATE smart_bi_distillation_samples
+    SET metadata = metadata - 'process_secret_excluded' - 'process_secret_list'
+    WHERE id = ANY($1::bigint[])
+"""
+_FINGERPRINT_RE = re.compile(r"[0-9a-f]{16}")
 
 
-async def _drop_process_secret_rows(pool, rows, label: str) -> List[Any]:
-    """Drop rows naming a process-secret product (privacy clause 6), flag them
-    with metadata.process_secret_excluded=true and log how many. A failed name
-    lookup raises: the run aborts, never "nothing protected"."""
-    kept = drop_rows_naming_protected_products(rows, await all_protected_product_names())
+def _fingerprint_clause(fp: str) -> str:
+    """Skip rows excluded under THIS list only (fp is our own hex digest; checked
+    before it is inlined)."""
+    if not _FINGERPRINT_RE.fullmatch(fp):
+        raise ValueError(f"bad list fingerprint {fp!r}")
+    return ("AND (metadata IS NULL OR NOT (metadata ? 'process_secret_excluded')"
+            f" OR (metadata ->> 'process_secret_list') IS DISTINCT FROM '{fp}')")
+
+
+async def _current_lists(pool):
+    """Current lists + fingerprint; held rows are re-judged against them first.
+    A failed lookup raises: the run aborts, never "nothing protected"."""
+    lists = await all_factory_lists()
+    counts = await rejudge_held_rows(pool, lists)
+    if counts["released"] or counts["deleted"]:
+        logger.warning("held rows re-judged against the current lists: released=%d deleted=%d",
+                       counts["released"], counts["deleted"])
+    return lists, terms_fingerprint(lists)
+
+
+async def _drop_process_secret_rows(pool, rows, label: str, lists, fp: str) -> List[Any]:
+    """Drop rows naming a process-secret term (privacy clause 6), flag them with
+    the current list fingerprint and log how many; un-flag rows that were
+    excluded under an older list and now pass."""
+    kept = drop_rows_naming_protected_products(rows, lists)
     kept_ids = {r["id"] for r in kept}
     excluded = [r["id"] for r in rows if r["id"] not in kept_ids]
-    if excluded:
+    released = [r["id"] for r in kept if PROCESS_SECRET_FLAG in _metadata_dict(r.get("metadata"))]
+    if excluded or released:
         async with pool.acquire() as conn:
-            await conn.execute(_MARK_PROCESS_SECRET_SQL, excluded)
+            if excluded:
+                await conn.execute(_MARK_PROCESS_SECRET_SQL, excluded, fp)
+            if released:
+                await conn.execute(_UNMARK_PROCESS_SECRET_SQL, released)
+    if excluded:
         logger.warning(
             "%s: excluded %d row(s) naming a process-secret product (not sent to the "
-            "judge; flagged %s=true so later runs skip them): ids=%s",
-            label, len(excluded), PROCESS_SECRET_FLAG, excluded[:50],
+            "judge; flagged %s with list %s so later runs skip them until the list "
+            "changes): ids=%s",
+            label, len(excluded), PROCESS_SECRET_FLAG, fp, excluded[:50],
         )
+    if released:
+        logger.warning("%s: %d row(s) excluded under an older list pass the current one "
+                       "(flag removed): ids=%s", label, len(released), released[:50])
     return kept
+
+
+def _metadata_dict(raw) -> Dict[str, Any]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 async def _make_pool(dsn: Optional[str]):
@@ -485,15 +540,16 @@ async def fetch_unjudged_rows(
     if pool is None:
         return []
 
+    lists, fp = await _current_lists(pool)
     source_clause = "AND source = $2" if source else ""
-    sql = _FETCH_SQL.format(source_clause=source_clause)
+    sql = _FETCH_SQL.format(source_clause=source_clause, fingerprint_clause=_fingerprint_clause(fp))
 
     async with pool.acquire() as conn:
         if source:
             rows = await conn.fetch(sql, limit, source)
         else:
             rows = await conn.fetch(sql, limit)
-    rows = await _drop_process_secret_rows(pool, rows, "judge")
+    rows = await _drop_process_secret_rows(pool, rows, "judge", lists, fp)
 
     result = []
     for row in rows:
@@ -537,10 +593,12 @@ async def fetch_crossfamily_rows(
     if pool is None:
         return []
 
+    lists, fp = await _current_lists(pool)
     # Build the NOT IN list for claims-pinned sources
     pinned = list(_CLAIMS_PINNED_SOURCES)
     placeholders = ", ".join(f"${i + 2}" for i in range(len(pinned)))
-    sql = _CROSSFAMILY_FETCH_SQL.format(sources_placeholder=placeholders)
+    sql = _CROSSFAMILY_FETCH_SQL.format(sources_placeholder=placeholders,
+                                        fingerprint_clause=_fingerprint_clause(fp))
 
     # Add optional source filter
     source_clause_offset = len(pinned) + 2
@@ -552,7 +610,7 @@ async def fetch_crossfamily_rows(
         if source:
             params.append(source)
         rows = await conn.fetch(sql, *params)
-    rows = await _drop_process_secret_rows(pool, rows, "cross-family judge")
+    rows = await _drop_process_secret_rows(pool, rows, "cross-family judge", lists, fp)
 
     return [
         {

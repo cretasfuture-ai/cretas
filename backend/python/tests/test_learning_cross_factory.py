@@ -8,7 +8,7 @@ import pytest
 
 from ai.learning import expression_learner as el
 from ai.learning import keyword_learner as kl
-from ai.learning.learning_rules import factory_learnable, is_global_factory
+from ai.learning.learning_rules import RetryQueue, Verdict, factory_learnable, is_global_factory, judge
 from ai.rag import retrieval
 
 SECRET = "秘制酱牛肉"
@@ -69,9 +69,16 @@ def _consent(scopes):
     return lookup
 
 
-def _names(by_factory):
+def _names(by_factory, directory=None):
+    """{factory: {product name}} (+ {factory: [person / customer]}) -> a FactoryLists lookup;
+    a value that is an Exception is raised (the lookup failed)."""
+    from smartbi.services.process_secret_names import lists_from_rows
+
     async def lookup(factory_id):
-        return by_factory.get(factory_id, frozenset())
+        value = by_factory.get(factory_id, frozenset())
+        if isinstance(value, Exception):
+            raise value
+        return lists_from_rows([{"name": n} for n in value], (directory or {}).get(factory_id, ()))
     return lookup
 
 
@@ -89,7 +96,7 @@ def test_global_factory_values(factory):
 
 async def test_factory_learnable_rules():
     async def ok(f, t):
-        return await factory_learnable(f, t, consent_scope=CONSENT, protected_names=NAMES)
+        return await factory_learnable(f, t, consent_scope=CONSENT, factory_lists=NAMES)
 
     assert await ok("FA", "今天产量多少")                 # 阴性对照
     assert not await ok("FA", SECRET + "今天产量多少")      # 本厂保密产品
@@ -97,7 +104,32 @@ async def test_factory_learnable_rules():
     assert not await ok(None, "今天产量多少")               # 全局
     assert not await ok("F_GONE", "今天产量多少")           # 撤回
     assert not await ok("F_ERR", "今天产量多少")            # 查不到授权 → 不学
-    assert not await ok("FA", "这个产品配方里盐放多少")      # 配方参数
+    assert not await ok("FA", "这个产品配方里盐放 3 克")     # 配方参数带数值
+    assert await ok("FA", "这个产品配方里盐放多少")          # 2026-10-29 选 A: 只有词, 不拦
+
+
+async def test_people_and_customers_are_matched_against_the_factorys_own_tables():
+    lists = _names({}, directory={"FA": ["王五", "华联超市"]})
+
+    async def verdict(f, t):
+        return await judge(f, t, consent_scope=CONSENT, factory_lists=lists)
+
+    assert await verdict("FA", "操作员王五报工") is Verdict.SKIP
+    assert await verdict("FA", "华联超市还欠多少") is Verdict.SKIP
+    assert await verdict("FB", "操作员王五报工") is Verdict.LEARN       # not FB's person
+    assert await verdict("FA", "员工周报在哪看") is Verdict.LEARN        # names nobody
+
+
+async def test_a_failed_lookup_is_retry_not_skip():
+    lists = _names({"F_DOWN": RuntimeError("cretas db down"), "FA": frozenset({SECRET})})
+
+    async def verdict(f, t):
+        return await judge(f, t, consent_scope=CONSENT, factory_lists=lists)
+
+    assert await verdict("F_DOWN", "今天产量多少") is Verdict.RETRY
+    assert await verdict("F_ERR", "今天产量多少") is Verdict.RETRY     # consent lookup failed
+    assert await verdict("FA", SECRET + "产量") is Verdict.SKIP          # control: a real "no"
+    assert await verdict("FA", "今天产量多少") is Verdict.LEARN
 
 
 # ------------------------------------------------------------------ H2 ExpressionLearner
@@ -117,7 +149,7 @@ async def test_expression_learner_writes_only_own_factory_learnable_rows(fake_em
         {"query": "今天产量多少", "intent_code": "PRODUCTION_QUERY", "factory_id": None, "confidence": 0.97},
         {"query": "库存多少", "intent_code": "INVENTORY_QUERY", "factory_id": "F_GONE", "confidence": 0.97},
     ])
-    learner = el.ExpressionLearner(pool, consent_scope=CONSENT, protected_names=NAMES)
+    learner = el.ExpressionLearner(pool, consent_scope=CONSENT, factory_lists=NAMES)
 
     assert await learner.run_once() == 1
     assert len(pool.conn.executed) == 1
@@ -134,7 +166,7 @@ async def test_expression_learner_matches_java_hash_and_activation(fake_embeddin
         {"query": "  Check SKU 库存 ", "intent_code": "INVENTORY_QUERY", "factory_id": "FA", "confidence": 0.97},
         {"query": "查一下 SKU 出货", "intent_code": "SHIPMENT_QUERY", "factory_id": "FA", "confidence": 0.85},
     ])
-    learner = el.ExpressionLearner(pool, consent_scope=CONSENT, protected_names=NAMES)
+    learner = el.ExpressionLearner(pool, consent_scope=CONSENT, factory_lists=NAMES)
 
     assert await learner.run_once(min_confidence=0.8) == 2
     (_, high), (_, low) = pool.conn.executed
@@ -152,7 +184,7 @@ async def test_keyword_learner_groups_by_factory_and_updates_only_own_rows():
         {"query": SECRET + "出货", "intent_code": "SHIPMENT_QUERY", "factory_id": "FA", "confidence": 0.95},
         {"query": "发货进度", "intent_code": "SHIPMENT_QUERY", "factory_id": None, "confidence": 0.95},
     ], intent_rows={("FA", "SHIPMENT_QUERY"): "[]", ("FB", "SHIPMENT_QUERY"): "[]"})
-    learner = kl.KeywordLearner(pool, existing_keywords={}, consent_scope=CONSENT, protected_names=NAMES)
+    learner = kl.KeywordLearner(pool, existing_keywords={}, consent_scope=CONSENT, factory_lists=NAMES)
 
     learned = await learner.run_once()
 
@@ -198,7 +230,7 @@ async def test_keyword_learner_reads_own_row_and_respects_auto_learn_switch():
                  auto_learn={"F_OFF": False})
     # 启动快照里同一意图代码有别厂的词: 不应影响 FA 的新词判断 (以本厂行为准)
     learner = kl.KeywordLearner(pool, existing_keywords={"SHIPMENT_QUERY": ["情况"]},
-                                consent_scope=CONSENT, protected_names=NAMES)
+                                consent_scope=CONSENT, factory_lists=NAMES)
 
     learned = await learner.run_once()
 
@@ -206,3 +238,54 @@ async def test_keyword_learner_reads_own_row_and_respects_auto_learn_switch():
     assert "情况" in learned[("FA", "SHIPMENT_QUERY")]           # 本厂行只有「出货」, 快照里的别厂词不算
     assert "出货" not in learned[("FA", "SHIPMENT_QUERY")]
     assert {args[2] for _, args in pool.conn.executed} == {"FA"}
+
+
+# ------------------------------------------------------------------ 待办第 2 条: 学习任务续读
+
+async def test_expression_learner_re_reads_rows_it_could_not_judge(fake_embedding):
+    """A row whose lists lookup failed is not dropped: the next run judges it again,
+    even after it left the 1-hour read window."""
+    state = {"down": True}
+    from smartbi.services.process_secret_names import lists_from_rows
+
+    async def flaky(factory_id):
+        if state["down"]:
+            raise RuntimeError("cretas db down")
+        return lists_from_rows((), ())
+
+    row = {"query": "今天产量多少", "intent_code": "PRODUCTION_QUERY", "factory_id": "FA", "confidence": 0.97}
+    pool = _Pool([row])
+    learner = el.ExpressionLearner(pool, consent_scope=CONSENT, factory_lists=flaky)
+    assert await learner.run_once() == 0 and len(learner.retry) == 1
+    pool.conn.rows = []                      # the row left the read window
+    state["down"] = False
+    assert await learner.run_once() == 1     # judged again from the retry queue
+    assert len(learner.retry) == 0 and pool.conn.executed[0][1][4] == "FA"
+
+
+async def test_keyword_learner_re_reads_rows_it_could_not_judge():
+    state = {"down": True}
+    from smartbi.services.process_secret_names import lists_from_rows
+
+    async def flaky(factory_id):
+        if state["down"]:
+            raise RuntimeError("cretas db down")
+        return lists_from_rows((), ())
+
+    pool = _Pool([{"query": "出货情况", "intent_code": "SHIPMENT_QUERY", "factory_id": "FA", "confidence": 0.95}],
+                 intent_rows={("FA", "SHIPMENT_QUERY"): "[]"})
+    learner = kl.KeywordLearner(pool, existing_keywords={}, consent_scope=CONSENT, factory_lists=flaky)
+    assert await learner.run_once() == {} and len(learner.retry) == 1
+    pool.conn.rows = []
+    state["down"] = False
+    assert set(await learner.run_once()) == {("FA", "SHIPMENT_QUERY")}
+    assert len(learner.retry) == 0
+
+
+def test_retry_queue_is_bounded_and_says_so(caplog):
+    q = RetryQueue(limit=2)
+    with caplog.at_level("WARNING", logger="ai.learning.learning_rules"):
+        for i in range(3):
+            q.add(i, {"i": i})
+    assert [r["i"] for r in q.drain()] == [1, 2]
+    assert any("retry queue full" in r.getMessage() for r in caplog.records)

@@ -509,7 +509,8 @@ def check_answer(sample: Sample, answer: str) -> Optional[str]:
             return "restaurant_word"
     if any(t in answer for t in ("合成", "模拟", "示例", "**", "##")):
         return "meta_leak"
-    if qa_has_blocked_content(sample.input_text, answer):
+    # synthetic seed tenant: it has no people / customers of its own to match
+    if qa_has_blocked_content(sample.input_text, answer, directory=()):
         return "training_rule"
     # 名称: 回答里出现的产品/原料/供应商/岗位名必须来自合成数据
     for n in _NAME_RE.findall(answer):
