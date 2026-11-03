@@ -298,7 +298,9 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'shortage-cases',
             name: 'ProductionShortageCases',
             component: () => import('@/views/production/shortage-cases/index.vue'),
-            meta: { requiresAuth: true, title: '缺料异常', module: 'production' }
+            // 采购 / 质检 / 销售 / 仓库也要能进 (与后端读接口的权限口径一致), 只需其中之一
+            meta: { requiresAuth: true, title: '缺料异常', module: 'production',
+              modulesAny: ['production', 'procurement', 'quality', 'sales', 'warehouse'] }
           },
           // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 生产看板 hub ——
           // 合并未完成计划队列/备货看板/交货预警 3 个视角为一个入口 (el-tabs), 见

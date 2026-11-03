@@ -156,6 +156,12 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     // ⚠️ 空表意味着下面「登记项必须确实还在漂」那条阳性对照**一条都跑不到**。
     //    没有别的对照的话, 这道闸在「0 条漂移」的日子里和一个恒真式长得一模一样 ——
     //    所以测试体里另外补了两组构造输入的阳性对照。⛔ 别把它们删了。
+    //
+    // 2026-11-03 S4 L1 切片 4: 「缺料异常」是生产 / 采购 / 质量 / 销售共用的一个页面, 路由只能挂一个
+    // 面包屑上级 (生产管理)。从采购 / 质量 / 销售组进来、又没有生产权限的人, 在侧边栏里找不到「生产管理」。
+    // 登记待 owner 定: 是保持共用一页 (现状), 还是给各组各开一条带自己面包屑的路由。
+    '/production/shortage-cases':
+      '共用页面, 采购/质量/销售组也有入口; 面包屑只能写一个上级 (生产管理), 待 owner 定是否分路由',
   };
 
   it('全表: 面包屑渲染出来的上一级, 必须是用户在侧边栏里找得到的名字', () => {
@@ -405,6 +411,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/procurement/requisitions',
       '/procurement/orders',
       '/procurement/ai-purchase',
+      '/production/shortage-cases',
       '/procurement/suppliers',
       '/procurement/price-lists',
     ]);
@@ -422,6 +429,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(childPaths('/sales')).toEqual([
       '/sales/orders',
       '/sales/customers',
+      '/production/shortage-cases',
       '/sales/shipments',
       '/sales/returns',
       '/sales/payment-requests',
