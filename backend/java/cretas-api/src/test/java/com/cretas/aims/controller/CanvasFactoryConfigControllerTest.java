@@ -395,6 +395,7 @@ class CanvasFactoryConfigControllerTest {
         assertEquals("zh-CN", resp.getData().get("language"));
         assertEquals(false, resp.getData().get("skipProcessReportingDefault"));
         assertEquals(false, resp.getData().get("requireRequisitionBeforeReport"));
+        assertEquals(false, resp.getData().get("blockStartOnOpenShortage"));
     }
 
     @Test

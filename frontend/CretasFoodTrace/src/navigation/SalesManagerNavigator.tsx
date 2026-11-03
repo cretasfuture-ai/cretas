@@ -21,6 +21,7 @@ import ReturnOrderListScreen from "../screens/factory-admin/inventory/ReturnOrde
 import ReturnOrderDetailScreen from "../screens/factory-admin/inventory/ReturnOrderDetailScreen";
 import PriceListScreen from "../screens/factory-admin/inventory/PriceListScreen";
 import ArApOverviewScreen from "../screens/factory-admin/inventory/ArApOverviewScreen";
+import ShortageCasesScreen from "../screens/shared/ShortageCasesScreen";
 
 // 客户管理
 import CustomerManagementScreen from "../screens/management/CustomerManagementScreen";
@@ -49,6 +50,7 @@ function SalesStackNavigator() {
       <SalesStack.Screen name="ReturnOrderDetail" component={ReturnOrderDetailScreen} />
       <SalesStack.Screen name="PriceList" component={PriceListScreen} />
       <SalesStack.Screen name="ArApOverview" component={ArApOverviewScreen} />
+      <SalesStack.Screen name="ShortageCases" component={ShortageCasesScreen} />
     </SalesStack.Navigator>
   );
 }

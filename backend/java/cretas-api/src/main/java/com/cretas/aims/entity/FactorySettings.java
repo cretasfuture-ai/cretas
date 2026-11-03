@@ -229,6 +229,16 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private Boolean requireRequisitionBeforeReport = false;
 
+    /**
+     * S4-08 缺料时拦开工 (V20261103_136, opt-in, 默认 false)。
+     *
+     * <p>false → 开工照旧, 缺料只预警 (六膳门 N1「开工无条件化」); true → 计划所属销售订单有未解决的缺料实例
+     * 时拦开工, 可强制开工但必须写原因并记入缺料实例的处理记录 ({@code ShortageStartGate})。
+     */
+    @Column(name = "block_start_on_open_shortage")
+    @Builder.Default
+    private Boolean blockStartOnOpenShortage = false;
+
     // ==================== 审计字段 ====================
     /**
      * 创建人ID
