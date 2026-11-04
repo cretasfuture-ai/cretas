@@ -1,5 +1,5 @@
 """Reusable, reviewable business-analysis curriculum; never factory-specific answers."""
-VERSION='manufacturing-analyst/2026-11-04.5'
+VERSION='manufacturing-analyst/2026-11-04.6'
 
 SECTIONS={
     'coverage':'核算覆盖与数据缺口','material':'原料投入与材料成本','labor':'加工人工',

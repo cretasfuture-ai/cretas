@@ -43,6 +43,7 @@ def peer_basis(high,low):
     if not upper or not lower or lower[0]<=0 or lower[1]<=0:return None
     return {'inputQuantityChange':float(upper[0]/lower[0]-1),
             'inputValuationChange':float(upper[1]/lower[1]-1),
+            'kgMaterialCostPerFinishedChange':float((upper[0]*upper[1])/(lower[0]*lower[1])-1),
             'inputKindsChanged':int(upper[2]!=lower[2]),
             'highQuantityPerFinished':upper[0],'lowQuantityPerFinished':lower[0],
             'highValuationPerKg':upper[1],'lowValuationPerKg':lower[1]}
@@ -69,8 +70,8 @@ def second_pass_facts(projects):
             basis=peer_basis(high,low)
             if basis:
                 facts.append({'section':'product_cost','kind':'material_quantity_valuation_split',
-                    'text':f"{name}：{high['projectCode']} 对比 {low['projectCode']}，每{unit}成品的账面公斤投入变化 {basis['inputQuantityChange']*100:,.2f}%，领料折算值变化 {basis['inputValuationChange']*100:,.2f}%；材料组合{'不同' if basis['inputKindsChanged'] else '相同'}。折算值不是采购价，不能直接认定涨价或超耗。",
-                    'values':{k:basis[k] for k in ('inputQuantityChange','inputValuationChange','inputKindsChanged')},
+                    'text':f"{name}：{high['projectCode']} 对比 {low['projectCode']}，每{unit}成品的账面公斤投入变化 {basis['inputQuantityChange']*100:,.2f}%，领料折算值变化 {basis['inputValuationChange']*100:,.2f}%；按公斤计量材料的每{unit}账面净额变化 {basis['kgMaterialCostPerFinishedChange']*100:,.2f}%，不含非公斤材料。材料组合{'不同' if basis['inputKindsChanged'] else '相同'}。折算值不是采购价，不能直接认定涨价或超耗。",
+                    'values':{k:basis[k] for k in ('inputQuantityChange','inputValuationChange','inputKindsChanged','kgMaterialCostPerFinishedChange')},
                     'hazards':['MATERIAL_MIX'] if basis['inputKindsChanged'] else [],
                     'refs':[{'projectId':p['projectId'],'projectCode':p['projectCode']} for p in (high,low)]})
         masses=[_mass(p) for p in group]

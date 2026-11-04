@@ -75,6 +75,22 @@ def test_generic_nonproduction_table_is_not_forced_into_manufacturing_cost():
     assert pack['sectionIds']==['coverage'] and not pack['isCostDataset']
     assert 'MISSING_COST' not in pack['requiredConsiderations']['coverage']
     assert prompt['curriculum']['coverage']['indicator']=='扫描覆盖与数据质量'
+    assert set(prompt['statisticDefinitions'])=={'alertCount'}
+    assert set(prompt['secondPassReviewDirections'])=={'coverage'}
+    assert '工资' not in str(prompt['secondPassReviewDirections'])
+
+
+def test_distilled_methods_define_flags_ratios_and_inventory_scope():
+    from smartbi.services.analysis_methods import STATISTIC_DEFINITIONS,REVIEW_DIRECTIONS
+    report=sample_report();pack=build(report)
+    prompt=json.loads(analyst.payload_for(pack,provider.facts_for(report),'qwen3.8:27b')['messages'][1]['content'])
+    assert '已经是单位估值变化' in prompt['statisticDefinitions']['inputValuationChange']
+    assert '布尔标记' in prompt['statisticDefinitions']['inputKindsChanged']
+    assert '不是总金额排名' in prompt['statisticDefinitions']['sameUnitAmountRank']
+    assert '业务日期' in prompt['statisticDefinitions']['movementOrders/balanceRows']
+    assert set(prompt['secondPassReviewDirections'])==set(pack['sectionIds'])
+    assert '六膳门' not in str(STATISTIC_DEFINITIONS)+str(REVIEW_DIRECTIONS)
+    assert 'GD2026' not in str(STATISTIC_DEFINITIONS)+str(REVIEW_DIRECTIONS)
 
 
 def test_negated_impact_is_not_confused_with_asserting_understated_cost():

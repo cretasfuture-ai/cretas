@@ -1,5 +1,7 @@
 # 黑湖只读连接器：测试环境 PoC
 
+本地分析蒸馏：[Claude 教师实验](CLAUDE-TEACHER-EXPERIMENT.md) · [结果与费用](CLAUDE-TEACHER-REPORT.md)。
+
 最新切片：[成本差异追溯与来源补查](COST-TRACE-REPORT.md)，已复用现有SmartBI候选与事实生成模块，并核实225条用料父级查询；142连接器/分析测试与72现有SmartBI测试通过，最终UI/构建证据见对应JSON。
 
 连接器将黑湖正式环境的只读查询接入本机隔离测试库，不改 Cretas 现有生产表，不自动启动定时任务。后续已把13类历史数据接入本机 SmartBI 测试库，并注册显式配置后才可用的分析API和Vue页面；原料到成品成本结果、独立测试入口及常规外壳未通过项见 [SMARTBI-REPORT.md](SMARTBI-REPORT.md)。Java与RN源码未改动。

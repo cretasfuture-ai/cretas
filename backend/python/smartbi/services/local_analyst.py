@@ -57,7 +57,10 @@ def _asserted(pattern,text):
 def payload_for(pack,review_facts,model,repair=None):
     from .alert_local_ai import CHECKS
     from .analysis_distillation import EXAMPLES
+    from .analysis_methods import definitions_for,directions_for
     data={'profileVersion':VERSION,'curriculum':_curriculum(pack),
+          'statisticDefinitions':definitions_for(pack),
+          'secondPassReviewDirections':directions_for(pack),
           'scopeGuard':'只解释一般数据范围与质量，不要求补工单、材料或工资' if not pack.get('isCostDataset',True) else '只分析当前生产工单证据，不扩展到未经授权的来源',
           'distilledSecondPassExamples':EXAMPLES,
           'facts':pack['facts'],'requiredConsiderations':pack['requiredConsiderations'],

@@ -16,6 +16,7 @@ def test_second_pass_distinguishes_less_material_from_higher_carry_in_value():
     result=peer_basis(high,low)
     assert result['inputQuantityChange']==-0.1
     assert result['inputValuationChange']==1
+    assert result['kgMaterialCostPerFinishedChange']==0.8
     assert result['inputKindsChanged']==1
     fact=next(f for f in second_pass_facts([high,low]) if f['kind']=='material_quantity_valuation_split')
     assert 'MATERIAL_MIX' in fact['hazards'] and '不是采购价' in fact['text']
