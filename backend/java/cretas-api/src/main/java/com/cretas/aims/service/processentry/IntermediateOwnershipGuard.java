@@ -6,6 +6,9 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -243,7 +246,8 @@ public class IntermediateOwnershipGuard {
                 .withCode(CODE_CROSS_OWNER)
                 .withSeverity("BLOCKING")
                 .withHint("代工客户的半成品只能用于同一客户的计划; 请改选本计划自己的半成品批次")
-                .withHintTarget(hintTarget);
+                .withHintTarget(hintTarget)
+                    .withDiagnosis(GateDiagnosis.of(GateId.INTERMEDIATE_OWNERSHIP, CODE_CROSS_OWNER, "BATCH", what).cause(describe(material, customerName(factoryId, material)) + "的料 → " + describe(consumer, customerName(factoryId, consumer)) + "的计划").resolve("换用与本计划同一客户 (或同为本厂自有) 的半成品批次: " + describe(consumer, customerName(factoryId, consumer)), null).build());
     }
 
     private String customerName(String factoryId, Owner owner) {

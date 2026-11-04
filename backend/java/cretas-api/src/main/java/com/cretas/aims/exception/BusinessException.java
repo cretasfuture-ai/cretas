@@ -33,6 +33,8 @@ public class BusinessException extends RuntimeException {
      * and applies pulse ring for 5s as visual breadcrumb.
      */
     private String hintTarget;
+    /** 结构化拒绝原因 (被哪道闸拦、哪个对象、缺多少、怎么解开); 一处拒绝涉及多道闸时全部列出。 */
+    private java.util.List<com.cretas.aims.service.gate.GateDiagnosis> diagnoses = java.util.List.of();
 
     public BusinessException(String message) {
         super(message);
@@ -81,6 +83,15 @@ public class BusinessException extends RuntimeException {
 
     public BusinessException withHintTarget(String hintTarget) {
         this.hintTarget = hintTarget;
+        return this;
+    }
+
+    public java.util.List<com.cretas.aims.service.gate.GateDiagnosis> getDiagnoses() { return diagnoses; }
+
+    public BusinessException withDiagnosis(com.cretas.aims.service.gate.GateDiagnosis... d) {
+        java.util.List<com.cretas.aims.service.gate.GateDiagnosis> all = new java.util.ArrayList<>(diagnoses);
+        all.addAll(java.util.Arrays.asList(d));
+        this.diagnoses = java.util.List.copyOf(all);
         return this;
     }
 }

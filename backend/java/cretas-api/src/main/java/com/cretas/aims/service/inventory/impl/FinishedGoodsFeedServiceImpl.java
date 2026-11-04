@@ -8,6 +8,9 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
@@ -189,7 +192,8 @@ public class FinishedGoodsFeedServiceImpl implements FinishedGoodsFeedService {
                     .withCode("FG_INSUFFICIENT")
                     .withHint("请减少投料量或选择其他成品批次")
                     .withSeverity("BLOCKING")
-                    .withHintTarget(batchNumber);
+                    .withHintTarget(batchNumber)
+                    .withDiagnosis(GateDiagnosis.of(GateId.INSUFFICIENT_BALANCE, "FG_INSUFFICIENT", "FG_BATCH", batchNumber).qty(deductQty, available).unit(u).resolve("减少投料量, 或改选其他成品批次", null).build());
         }
 
         // 🔴 扣减口径 = 减 producedQuantity (对齐报损 SCRAP, 绝不动 shippedQuantity → 不虚增发货/销售/COGS)。
