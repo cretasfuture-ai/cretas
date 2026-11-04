@@ -414,7 +414,7 @@ a.connect({wsEndpoint:'ws://localhost:9420'}).then(async mp => {
 # 环境检查
 node --version                    # >= 18
 netstat -ano | findstr 9420       # 端口活跃
-curl -s http://139.196.165.140:8080/actuator/health  # 后端健康
+# 后端：mall Java 已停用（2026-07-26 起），此项无可检查目标
 ```
 
 ### `run` 命令
@@ -463,7 +463,7 @@ node run-e2e.js merchant # 仅商家
 | MINIPROGRAM_DIR | `MallCenter/mall_miniprogram` |
 | DEVTOOLS_PORT | `9420` |
 | WS_ENDPOINT | `ws://localhost:9420` |
-| BACKEND_URL | `http://139.196.165.140:8080` |
+| BACKEND_URL | 无。已停用：2026-07-26 起 Java 已停，centerapi 返回 410，47:8080 与 139:8080 无服务；匿名路由和 Druid 修好前不得重启 |
 | 测试脚本目录 | `tests/e2e-miniprogram/` |
 | 截图输出 | `tests/e2e-miniprogram/screenshots/` |
 | 结果 JSON | `tests/e2e-miniprogram/results.json` |
