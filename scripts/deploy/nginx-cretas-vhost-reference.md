@@ -137,3 +137,11 @@ curl -s -o /dev/null -w "%{http_code}\n" https://www.cretaceousfuture.com/api/mo
 - `scripts/deploy/nginx-scanner-blocklist.conf` — scanner blocklist snapshot (Phase 2 of error-log-hygiene)
 - `scripts/deploy/deploy-backend.sh` — blue-green orchestration that manages `_upstream_cretas.conf`
 - `docs/superpowers/plans/2026-04-11-nginx-upstream-migration-audit.md` — parent plan
+
+## Word gate (added 2026-11-04, review around 2026-11-11)
+
+A stop-gap in front of the Java gate. `/api/mobile/{word}/...` needs a credential at the gateway unless the path is a known anonymous route; `/api/mobile/public/` is closed except `share`. Repo copy: `ops/nginx-vhosts-139/_cretas_word_gate_map.conf`; the second line of `block-ambiguous-path.conf` applies it, so every server block that includes the snippet gets it.
+
+nginx cannot verify a token. This stops requests with no credential, not one with a forged header: the Java gate is what refuses those. Removing this rule does not open anything the Java gate covers.
+
+Remove it: delete the map file and the second line of the snippet, then `nginx -t` and `nginx -s reload`.

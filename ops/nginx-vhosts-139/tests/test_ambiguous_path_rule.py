@@ -14,6 +14,45 @@ def rule():
     return re.compile(pattern, re.IGNORECASE)
 
 
+def word_gate():
+    """The $uri map in order, as nginx reads it: the first match wins."""
+    text = (ROOT / '_cretas_word_gate_map.conf').read_text(encoding='utf-8')
+    block = text[text.index('map $uri $cretas_word_path'):]
+    block = block[:block.index('}\n')]
+    return [(re.compile(p), int(v)) for p, v in re.findall(r'"~(\^[^"]+)" (\d);', block)]
+
+
+def word_class(path):
+    return next((value for pattern, value in word_gate() if pattern.search(path)), 0)
+
+
+class WordGateTest(unittest.TestCase):
+    def test_anonymous_routes_stay_open(self):
+        for path in ('/api/mobile/health', '/api/mobile/auth/unified-login', '/api/mobile/auth/refresh',
+                     '/api/mobile/public/share/abc', '/api/mobile/activation/activate',
+                     '/api/mobile/system/release-notes', '/api/mobile/voice/recognize',
+                     '/api/mobile/workflow/node-schemas', '/api/mobile/workflow/node-schemas/by-category/x',
+                     '/api/mobile/scale-protocols/brands', '/api/mobile/F001/orders', '/api/public/trace/x'):
+            with self.subTest(path=path):
+                self.assertEqual(word_class(path), 0)
+
+    def test_a_word_in_the_factory_position_needs_a_credential(self):
+        for path in ('/api/mobile/dashboard/F002', '/api/mobile/system/shipments/1', '/api/mobile/voice/shipments/1',
+                     '/api/mobile/auth/shipments/1', '/api/mobile/admin/x', '/api/mobile/smartbi-config/thresholds',
+                     '/api/mobile/scheduled-tasks', '/api/mobile/edge/upload'):
+            with self.subTest(path=path):
+                self.assertEqual(word_class(path), 1)
+
+    def test_public_is_closed_except_share(self):
+        self.assertEqual(word_class('/api/mobile/public/shipments/1'), 2)
+        self.assertEqual(word_class('/api/mobile/public/share/a/b'), 2)
+
+    def test_the_gate_reads_web_cookies_as_well_as_the_bearer_header(self):
+        text = (ROOT / '_cretas_word_gate_map.conf').read_text(encoding='utf-8')
+        self.assertIn('$cookie_cretas_access_token', text)
+        self.assertIn('$cookie_cretas_web_session', text)
+
+
 class AmbiguousPathRuleTest(unittest.TestCase):
     def test_refuses_semicolons_and_needless_escapes_in_the_path(self):
         for uri in ('/api;x=1/mobile/F001/x', '/api/mobile;x=1/F001/x', '/api/%70latform/blueprints',
@@ -30,7 +69,9 @@ class AmbiguousPathRuleTest(unittest.TestCase):
 
     def test_snippet_refuses_on_the_map_variable(self):
         snippet = (ROOT / 'block-ambiguous-path.conf').read_text(encoding='utf-8')
-        self.assertEqual(snippet.strip(), 'if ($cretas_ambiguous_path) { return 400; }')
+        lines = snippet.strip().splitlines()
+        self.assertEqual(lines[0], 'if ($cretas_ambiguous_path) { return 400; }')
+        self.assertTrue(lines[1].startswith('if ($cretas_word_denied) { return 401 '))
 
     def test_each_mirrored_vhost_includes_it_right_after_its_serving_server_name(self):
         for name in MIRRORED_VHOSTS:
