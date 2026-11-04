@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS process_time_limit_events (
     unit                  VARCHAR(20),
     covered_until         TIMESTAMP     NOT NULL,
     recheck_valid_minutes INTEGER,
-    status                VARCHAR(16)   NOT NULL DEFAULT 'OPEN'
+    status                VARCHAR(16)   NOT NULL
         CHECK (status IN ('OPEN', 'RELEASED', 'REJECTED')),
     conclusion            TEXT,
     decided_by            BIGINT,
