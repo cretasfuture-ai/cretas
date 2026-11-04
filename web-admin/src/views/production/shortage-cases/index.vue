@@ -35,6 +35,9 @@ const factoryId = computed(() => authStore.factoryId || '');
 const canPurchase = computed(() => permissionStore.canWrite('procurement'));
 const canDecide = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production'));
 const canReschedule = computed(() => permissionStore.canWrite('production') || permissionStore.canWrite('scheduling'));
+// 与后端 POST /{caseId}/refresh 的 @RequirePermission 同一份口径: 没写权限的角色点了只会 403
+const canRefreshCase = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production')
+  || permissionStore.canWrite('warehouse') || permissionStore.canWrite('quality'));
 
 const STAGE_LABEL: Record<ShortageCaseStage, string> = {
   DETECTED: '待处理',
@@ -68,6 +71,7 @@ const REASON_LABEL: Record<string, string> = {
   SO_FINANCE_APPROVED: '订单财务审核通过',
   MATERIAL_RECEIVED: '物料入库',
   MATERIAL_BATCH_RELEASED: '质检放行',
+  PURCHASE_ORDER_SUPPLY_CHANGED: '采购单状态变化',
   MANUAL_REFRESH: '手动核对',
   PURCHASE_DRAFT_CREATED: '生成采购草稿',
   RESCHEDULE_PROPOSED: '生成重排方案',
@@ -406,7 +410,7 @@ onMounted(load);
 
           <div class="section-head">
             <h4>缺口</h4>
-            <el-button size="small" :icon="Refresh" :loading="refreshing" @click="refreshCase">按当前库存重新核对</el-button>
+            <el-button v-if="canRefreshCase && isOpen" size="small" :icon="Refresh" :loading="refreshing" @click="refreshCase">按当前库存重新核对</el-button>
           </div>
           <el-table :data="detail.lines" size="small" border>
             <el-table-column label="物料" min-width="120">
