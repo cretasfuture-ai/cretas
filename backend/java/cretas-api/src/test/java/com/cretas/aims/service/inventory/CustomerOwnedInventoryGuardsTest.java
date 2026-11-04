@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @DisplayName("客户专属库存生产与销售归属门禁")
@@ -66,8 +67,12 @@ class CustomerOwnedInventoryGuardsTest {
 
         assertDoesNotThrow(() -> SalesFinishedGoodsOwnershipGuard
                 .assertBatchAllowed(order, batch, true, "finishedGoodsBatchId"));
-        assertThrows(BusinessException.class, () -> SalesFinishedGoodsOwnershipGuard
+        BusinessException rejected = assertThrows(BusinessException.class, () -> SalesFinishedGoodsOwnershipGuard
                 .assertBatchAllowed(order, batch, false, "finishedGoodsBatchId"));
+        // 诊断来自成品归属闸 (归因)
+        assertEquals(1, rejected.getDiagnoses().size());
+        assertEquals(com.cretas.aims.service.gate.GateId.SALES_FG_OWNERSHIP, rejected.getDiagnoses().get(0).gate());
+        assertFalse(rejected.getDiagnoses().get(0).howToResolve().isBlank());
     }
 
     // ==================== 2026-09-02: 来料加工辅料/包材可用工厂自有库存 (owner 裁定) ====================
@@ -119,6 +124,10 @@ class CustomerOwnedInventoryGuardsTest {
         BusinessException error = assertThrows(BusinessException.class, () -> ProductionInventoryOwnershipGuard
                 .assertMaterialBatchAllowed(plan, otherCustomerRaw, MaterialMainCategory.RAW, "materialBatchId"));
         assertEquals("CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH", error.getErrorCode());
+        // 诊断来自原料归属闸 (归因), 带怎么解开
+        assertEquals(1, error.getDiagnoses().size());
+        assertEquals(com.cretas.aims.service.gate.GateId.MATERIAL_OWNERSHIP, error.getDiagnoses().get(0).gate());
+        assertFalse(error.getDiagnoses().get(0).howToResolve().isBlank());
 
         // 同一场景换成工厂自有批次: RAW 不在 isCompanyStockEligibleCategory 白名单里, 仍必须被拒。
         MaterialBatch companyOwnedRaw = new MaterialBatch();

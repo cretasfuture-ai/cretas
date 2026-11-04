@@ -98,7 +98,29 @@ public class GateDiagnoseBatchTool extends AbstractBusinessTool {
         result.put("gateDiagnoses", found);
         result.put("message", found.isEmpty()
                 ? "批次 " + batchNumber + " 没有被任何批次层面的闸拦住; 若仍被拒绝, 可能是计划/订单层面的限制 (客户归属、缺料开工、上游工序), 请告知具体计划或订单"
-                : "批次 " + batchNumber + " 被 " + found.size() + " 道闸拦住, 解开方式见 gateDiagnoses (需用户自己到对应页面操作)");
+                : describe(batchNumber, found));
         return result;
+    }
+
+    /** 面向仓管员的说法: 被哪道闸拦、为什么、怎么解开; 解开动作由用户自己去做, 这里不执行。 */
+    static String describe(String batchNumber, List<GateDiagnosis> found) {
+        StringBuilder sb = new StringBuilder("批次 ").append(batchNumber)
+                .append(" 被 ").append(found.size()).append(" 道闸拦住:");
+        int i = 1;
+        for (GateDiagnosis d : found) {
+            sb.append("\n").append(i++).append(". 「").append(d.gateLabel()).append("」");
+            if (d.cause() != null && !d.cause().isBlank()) {
+                sb.append(" ").append(d.cause());
+            }
+            if (d.shortBy() != null && d.shortBy().signum() > 0) {
+                String u = d.unit() == null ? "" : d.unit();
+                sb.append("，要 ").append(d.required().stripTrailingZeros().toPlainString()).append(u)
+                        .append("，可用 ").append(d.available().stripTrailingZeros().toPlainString()).append(u)
+                        .append("，缺 ").append(d.shortBy().stripTrailingZeros().toPlainString()).append(u);
+            }
+            sb.append("。怎么解开：").append(d.howToResolve());
+        }
+        sb.append("\n以上需要您自己到对应页面操作，我不会代替您执行放行或处置。");
+        return sb.toString();
     }
 }

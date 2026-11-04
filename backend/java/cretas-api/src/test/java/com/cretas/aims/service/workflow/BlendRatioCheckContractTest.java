@@ -115,6 +115,11 @@ class BlendRatioCheckContractTest {
                         assertThat(e.getMessage()).contains("猪肉").contains("配方 30%").contains("实际 41.7%")
                                 .contains("+11.7").contains("±2");
                         assertThat(e.getActionHint()).contains("偏差原因");
+                        // 诊断来自配比闸 (归因), 带怎么解开
+                        assertThat(e.getDiagnoses()).hasSize(1);
+                        assertThat(e.getDiagnoses().get(0).gate())
+                                .isEqualTo(com.cretas.aims.service.gate.GateId.BLEND_RATIO);
+                        assertThat(e.getDiagnoses().get(0).howToResolve()).contains("偏差原因");
                     });
             // 空白原因 = 没原因
             assertThatThrownBy(() -> BlendRatioCheck.enforce(eval, reason("  ", null)))
