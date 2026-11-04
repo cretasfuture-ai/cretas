@@ -47,6 +47,11 @@ class WordGateTest(unittest.TestCase):
         self.assertEqual(word_class('/api/mobile/public/shipments/1'), 2)
         self.assertEqual(word_class('/api/mobile/public/share/a/b'), 2)
 
+    def test_password_recovery_is_closed_until_tokens_carry_a_purpose(self):
+        for name in ('forgot-password', 'send-verification-code', 'verify-reset-code'):
+            with self.subTest(name=name):
+                self.assertEqual(word_class('/api/mobile/auth/' + name), 2)
+
     def test_the_gate_reads_web_cookies_as_well_as_the_bearer_header(self):
         text = (ROOT / '_cretas_word_gate_map.conf').read_text(encoding='utf-8')
         self.assertIn('$cookie_cretas_access_token', text)
