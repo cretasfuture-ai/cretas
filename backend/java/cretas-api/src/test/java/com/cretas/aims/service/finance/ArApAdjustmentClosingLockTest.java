@@ -53,14 +53,16 @@ class ArApAdjustmentClosingLockTest {
 
     @Test
     void recordAdjustment_closedPeriodRejectedBeforePendingWrite() {
+        // recordAdjustment 按当天入账, 期间要跟着当前月份走, 写死月份过了月底就红
+        LocalDate today = LocalDate.now();
         doThrow(new BusinessException(409, "期间已结账"))
-                .when(accountingPeriodService).assertOpen("F006", 2026, 10);
+                .when(accountingPeriodService).assertOpen("F006", today.getYear(), today.getMonthValue());
 
         assertThatThrownBy(() -> service.recordAdjustment("F006", CounterpartyType.CUSTOMER,
                 "C-1", new BigDecimal("-10"), 11L, "test"))
                 .isInstanceOf(BusinessException.class);
 
-        verify(accountingPeriodService).assertOpen("F006", 2026, 10);
+        verify(accountingPeriodService).assertOpen("F006", today.getYear(), today.getMonthValue());
         verify(transactionRepository, never()).save(any());
     }
 
