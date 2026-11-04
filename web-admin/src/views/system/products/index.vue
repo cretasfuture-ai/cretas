@@ -27,6 +27,7 @@ import { showSingletonNotification } from '@/utils/singletonNotification';
 import { isCurrentCategorySuggestion, reconcilePackagingSpecs } from './productDialogState';
 import { setProductDailyCapacity } from '@/api/scheduling';
 import { dailyCapacityBlockReason, saveDailyCapacityIfChanged } from './productDailyCapacity';
+import { reworkRatioBlockReason, reworkRatioRequestValue } from './productReworkRatio';
 
 // T137: 转换数 placeholder 动态显示实际单位名 ("1 筐 = ? 盒 填 20")
 const conversionPlaceholder = computed(() => {
@@ -158,6 +159,8 @@ interface ProductType {
   taxRate?: 'TAX_9' | 'TAX_13' | null;
   /** 缺口 11 质检放行: 需检 —— 产出默认待检, 放行后才能被下道领用 / 分配发货 */
   inspectionRequired?: boolean;
+  /** 缺口 03 回料比例上限 (%): 空 = 不设上限 = 不拦 */
+  maxReworkRatioPercent?: number | null;
   [key: string]: unknown;
 }
 
@@ -326,6 +329,7 @@ const NET_CONTENT_UNIT_OPTIONS: Array<{ value: NetContentUnit; label: string }> 
 ];
 const netContentAmount = ref<number | null>(null);
 // APS v2 日产能 (一天能做多少): 单独接口保存, 不夹在产品通用更新里
+const maxReworkRatio = ref<number | null>(null); // 缺口 03 回料比例上限 (%), 空 = 不拦
 const dailyCapacityAmount = ref<number | null>(null);
 const dailyCapacityUnit = ref('');
 const dailyCapacityOriginal = ref<{ quantity: number | null; unit: string }>({ quantity: null, unit: '' });
@@ -942,6 +946,7 @@ function resetForm() {
   formData.targetGrossMargin = null;
   formData.targetGrossMarginPercent = null;
   formData.inspectionRequired = false;
+  maxReworkRatio.value = null;
   dailyCapacityAmount.value = null;
   dailyCapacityUnit.value = '';
   dailyCapacityOriginal.value = { quantity: null, unit: '' };
@@ -990,6 +995,7 @@ async function handleEdit(row: ProductType) {
     );
     formData.standardCost = product.standardCost ?? null;
     formData.inspectionRequired = product.inspectionRequired === true;
+    maxReworkRatio.value = product.maxReworkRatioPercent != null ? Number(product.maxReworkRatioPercent) : null;
     dailyCapacityAmount.value = product.dailyCapacity != null ? Number(product.dailyCapacity) : null;
     dailyCapacityUnit.value = String(product.dailyCapacityUnit || '');
     dailyCapacityOriginal.value = { quantity: dailyCapacityAmount.value, unit: dailyCapacityUnit.value };
@@ -1095,6 +1101,11 @@ async function handleSubmit() {
       ElMessage.warning(capacityBlock);
       return;
     }
+    const reworkBlock = reworkRatioBlockReason(maxReworkRatio.value);
+    if (reworkBlock) {
+      ElMessage.warning(reworkBlock);
+      return;
+    }
     submitting.value = true;
 
     const submittedPackagingSpecs = packagingSpecs.value
@@ -1134,6 +1145,8 @@ async function handleSubmit() {
       packagingSpecs: submittedPackagingSpecs,
       // 质检放行: 显式发 true/false (后端 null = 不改, 编辑时关掉开关必须真的关掉)
       inspectionRequired: formData.inspectionRequired === true,
+      // 回料比例上限: 空发 0 = 清除 (后端 null = 不改, 编辑时清空必须真的清掉)
+      maxReworkRatioPercent: reworkRatioRequestValue(maxReworkRatio.value),
       ...(!isSemiFinishedSku.value ? {
         netContentQuantity: Number(netContentAmount.value),
         netContentUnit: netContentUnit.value,
@@ -2053,6 +2066,28 @@ watch(aiProductDialogVisible, (visible) => {
           <el-switch v-model="formData.inspectionRequired" active-text="需检" inactive-text="不需检"
             data-testid="product-inspection-required" />
           <div class="form-tip">{{ inspectionRequiredTip }}</div>
+        </el-form-item>
+
+        <el-form-item label="回料上限">
+          <div class="daily-capacity-row">
+            <span>回料最多占主料</span>
+            <el-input-number
+              v-model="maxReworkRatio"
+              :min="0.01"
+              :max="100"
+              :precision="2"
+              :controls="false"
+              placeholder="留空不限制"
+              data-testid="product-max-rework-ratio"
+            />
+            <span>%</span>
+          </div>
+          <div class="form-tip">
+            报工时回料占比超过这个数，要选原因才能提交，原因会随报工记录下来。留空就不限制。
+          </div>
+          <div v-if="reworkRatioBlockReason(maxReworkRatio)" class="form-tip warning-tip">
+            {{ reworkRatioBlockReason(maxReworkRatio) }}
+          </div>
         </el-form-item>
 
         <el-form-item label="日产能">
