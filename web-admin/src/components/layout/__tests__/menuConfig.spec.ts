@@ -332,6 +332,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     expect(descendantPaths('/production')).toEqual(expect.arrayContaining([
       '/production/analysis-query',
       '/production/cost-variance',
+      '/production/cost-deviation-cases',
       '/production-analytics/cost-summary',
     ]));
     const smartBiPaths = descendantPaths('/smart-bi');
@@ -459,6 +460,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/finance/voucher-template',
       '/finance/sku-margin',
       '/finance/cost-variance',
+      '/finance/cost-deviation-cases',
       '/finance/gross-margin-redline',
       '/finance/accounting-period',
     ]);

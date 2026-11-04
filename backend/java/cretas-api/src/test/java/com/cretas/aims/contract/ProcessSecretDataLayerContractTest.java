@@ -78,6 +78,7 @@ class ProcessSecretDataLayerContractTest {
      */
     static final Set<String> NOT_RECIPE_FIELDS = Set.of(
             "percent", // 影响分析: 用户输入的原料涨价假设百分比, 不是配方份额
+            "metricPct", "thresholdPct", // 成本损耗异常: 差异率读数与告警阈值, 不是配方份额
             "maxReworkRatioPercent", "limitPercent", "actualPercent", // 缺口03: 回料占比上限/实际占比 (阈值与实测, 不是配方份额)
             "acceptanceRate", "accuracyRate", "achievementRate", "achievementRatePct", "activationRate",
             "actualAuxCostPerUnit", "actualCostPerUnit", "actualDurationHours", "actualEquipmentCostRatio",
