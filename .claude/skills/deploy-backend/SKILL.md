@@ -29,9 +29,9 @@ prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因和 GitHub 不�
 2. 两个阶段的 `--tests` 选择器完全一致。
 3. 本机 `~/.cache/cretas/java-deploy/current/release-jar.manifest` 没被别的树的 build 覆盖。并发发布线各用各的 `CRETAS_JAVA_RELEASE_MANIFEST`。
 
-判据：`DEPLOY_EXIT=0` 且日志里 `RELEASE_FINAL_STATUS` 恰好 1 次。不出现就是失败：收尾 printf 在 `set -e` 下会被掐掉，后台任务通知里的 exit code 也不可信。
+判据：`DEPLOY_EXIT=0` 且日志里 `RELEASE_FINAL_STATUS` 恰好 1 次，值是 `deployed` 或 `no-op`。失败时入口也会打 `RELEASE_FINAL_STATUS=failed`，所以出现不等于成功；完全不出现同样是失败（进程被杀或参数错误）。后台任务通知里的 exit code 不可信。
 
-- 被 exact-main 闸拒绝是静默的：BUILD SUCCESS、测试全绿，然后戛然而止，回执 `deploy_mode=none`。处理是 `git fetch && git checkout --detach origin/main` 后重跑。
+- 回退构建期间 main 前进：入口自动前进到新 main 并重新执行（最多 `CRETAS_RELEASE_DRIFT_RETRIES` 次，默认 2）。超出预算或本次提交不在新 main 里时打 `ERROR` 和 `RELEASE_FINAL_STATUS=failed`，回执 `deploy_mode=none`；处理是 `git fetch && git checkout --detach origin/main` 后重跑。manifest 校验失败的原因看 `JAVA_MANIFEST_INVALID` / `WEB_MANIFEST_INVALID reason=` 那一行。
 - 回执里 `build="reused"` / `java_build=0` / `build_count=0` 是正常成功。deploy 阶段的 validate 不比对测试选择器，要审计选择器看 manifest 的 `target_tests`。
 
 部署后按 `.claude/rules/execution-and-verification.md` 与 measurement-and-wiring 硬约束 2：入口已运行 `verify-release.sh` 并记录真实 upstream / systemd / 直连健康 / Web 四方哈希，完整成功回执覆盖的项不重复手查或 grep。组件未覆盖、回执缺失/失败或状态改变时，用 `./scripts/deploy/verify-release.sh --target backend|web-admin|all --env prod` 补缺失证据。业务路径仅在当前任务授权和完成条件要求时真跑，不能用服务健康代替业务/UI 验收；纯 Python 仍需其专用发布与验证入口。

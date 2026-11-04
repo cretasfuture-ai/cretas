@@ -186,6 +186,46 @@ release_manifest_validate() {
     return 0
 }
 
+# 只读诊断: release_manifest_validate 那几十处 `|| return 1` 全部无声, 失败后由 CLI 调这里
+# 说出原因。不改变校验结果, 也不进 source 本文件的调用方。
+release_manifest_validate_failure_reason() {
+    local manifest=$1
+    local repo_root=$2
+    local head_sha origin_sha validation_ref recorded_tree current_tree manifest_dir jar_path recorded_sha
+
+    [ -f "$manifest" ] || { printf 'manifest_missing path=%s\n' "$manifest"; return 0; }
+    if [ "${SKIP_GIT_CHECK:-}" != "1" ]; then
+        head_sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)
+        origin_sha=$(git -C "$repo_root" rev-parse origin/main 2>/dev/null || true)
+        if [ "$head_sha" != "$origin_sha" ]; then
+            printf 'head_not_origin_main HEAD=%s origin/main=%s\n' "$head_sha" "$origin_sha"
+            return 0
+        fi
+    fi
+    release_manifest_require_clean_worktree "$repo_root" \
+        || { printf 'worktree_dirty\n'; return 0; }
+    validation_ref=$(release_manifest_validation_ref "$repo_root" 2>/dev/null) \
+        || { printf 'offline_head_not_detached_local_main\n'; return 0; }
+
+    recorded_tree=$(release_manifest_field "$manifest" backend_tree 2>/dev/null || true)
+    current_tree=$(git -C "$repo_root" rev-parse "$validation_ref:$RELEASE_BACKEND_PATH" 2>/dev/null || true)
+    if [ "$recorded_tree" != "$current_tree" ]; then
+        printf 'backend_tree_mismatch manifest=%s current=%s\n' "$recorded_tree" "$current_tree"
+        return 0
+    fi
+    manifest_dir=$(cd "$(dirname "$manifest")" 2>/dev/null && pwd || true)
+    jar_path="$manifest_dir/$RELEASE_JAR_NAME"
+    release_manifest_verify_jar "$jar_path" \
+        || { printf 'jar_missing_or_corrupt path=%s\n' "$jar_path"; return 0; }
+    recorded_sha=$(release_manifest_field "$manifest" jar_sha256 2>/dev/null || true)
+    if [ "$(printf '%s' "$recorded_sha" | tr '[:upper:]' '[:lower:]')" != \
+        "$(sha256sum "$jar_path" 2>/dev/null | awk '{print tolower($1)}')" ]; then
+        printf 'jar_sha256_mismatch path=%s\n' "$jar_path"
+        return 0
+    fi
+    printf 'manifest_fields_invalid path=%s\n' "$manifest"
+}
+
 release_manifest_java_property() {
     local property=$1
     local java_cmd=java
@@ -416,7 +456,13 @@ release_manifest_main() {
 
     case "$command" in
         build) release_manifest_build "$repo_root" "$tests" "$manifest" ;;
-        validate) release_manifest_validate "$manifest" "$repo_root" "$destination" ;;
+        validate)
+            release_manifest_validate "$manifest" "$repo_root" "$destination" || {
+                printf 'JAVA_MANIFEST_INVALID reason=%s\n' \
+                    "$(release_manifest_validate_failure_reason "$manifest" "$repo_root")" >&2
+                return 1
+            }
+            ;;
         *) release_manifest_usage >&2; return 2 ;;
     esac
 }
