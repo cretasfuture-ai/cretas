@@ -199,4 +199,22 @@ class ShortageCaseRepositoryQueryValidationTest {
         i.setUnitPrice(BigDecimal.ONE);
         em.persist(i);
     }
+
+    /** 缺料页和交付风险页各看各的来源; 已结束的风险实例能被找回, 用来判断要不要重开。 */
+    @org.junit.jupiter.api.Test
+    void listsAreSplitBySourceAndClosedRiskIsFound() {
+        ShortageCase shortage = newCase("F-SRC", "SO-A", false);
+        ShortageCase risk = newCase("F-SRC", "SO-B", true);
+        risk.setSourceType(ShortageCase.SourceType.DELIVERY_RISK);
+        cases.saveAndFlush(risk);
+        var page = org.springframework.data.domain.PageRequest.of(0, 10);
+
+        assertThat(cases.findForFactory("F-SRC", false, page).getContent()).extracting(ShortageCase::getId)
+                .containsExactly(shortage.getId());
+        assertThat(cases.findForFactoryBySource("F-SRC", ShortageCase.SourceType.DELIVERY_RISK, false, page).getContent())
+                .extracting(ShortageCase::getId).containsExactly(risk.getId());
+        assertThat(cases.findForFactoryBySource("F-SRC", ShortageCase.SourceType.DELIVERY_RISK, true, page).getContent()).isEmpty();
+        assertThat(cases.findFirstByFactoryIdAndSourceTypeAndSourceIdAndClosedAtIsNotNullOrderByClosedAtDesc(
+                "F-SRC", ShortageCase.SourceType.DELIVERY_RISK, "SO-B")).isPresent();
+    }
 }

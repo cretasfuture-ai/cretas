@@ -16,7 +16,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 判定口径: 风险要有信号, 缺事实是未知, 没有依据不算正常。 */
-class DeliveryRiskEvaluatorTest {
+class DeliveryRiskEvaluatorContractTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 11, 4);
 
