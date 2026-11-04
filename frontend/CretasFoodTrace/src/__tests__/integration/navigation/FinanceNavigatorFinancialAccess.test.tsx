@@ -35,6 +35,7 @@ jest.mock('@react-navigation/bottom-tabs', () => ({ createBottomTabNavigator: mo
 jest.mock('@react-navigation/native-stack', () => ({ createNativeStackNavigator: mockCreateNavigator }));
 jest.mock('../../../hooks/useMyTodos', () => ({ useMyTodoCount: () => ({ count: 0 }) }));
 jest.mock('../../../navigation/OperatingReportStackNavigator', () => () => null);
+jest.mock('../../../navigation/AnalyticsReportStackNavigator', () => () => null);
 jest.mock('../../../navigation/OATodoStackNavigator', () => () => null);
 jest.mock('../../../navigation/ProfileStackNavigator', () => () => null);
 jest.mock('../../../screens/factory-admin/finance/CashierPaymentListScreen', () => () => null);
