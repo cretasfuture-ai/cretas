@@ -31,8 +31,8 @@ so no dedup needed here. NO RLS on the table → reads all factories cross-busin
     导出时按当前名单再查一次, 命中排除, 授权与否: 人员薪酬 / 本厂人员客户 (隐私, 不看任何开关);
     该厂「训练数据过滤」(d) 开着时再查工艺词 + 具体数值和本厂保密词 (按行所属工厂, 读不到按开着)。
   - SHARED 导出 (默认, 按 business_type 分桶):
-      * 这份数据跨工厂: 真实行提到本厂保密词一律排除, 不看 d 也不看任何开关
-        (process_secret_names.row_names_own_terms_for_shared_content)。
+      * 这份数据跨工厂: 真实行提到本厂保密词、带工艺词 + 具体数值一律排除, 不看 d 也不看任何开关
+        (process_secret_names.row_holds_own_secrets_for_shared_content)。
       * 合成行 (只认 SEED_R/SEED_F 哨兵工厂; metadata.source_kind / seeded 由调用方写入,
         不算合成) → 收入。
       * metadata.desensitized 行 (未授权工厂, 采集时已脱敏) → 收入。
@@ -62,7 +62,7 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
 from smartbi.services.process_secret_names import (  # noqa: E402
     all_factory_lists,
     lists_for_row,
-    row_names_own_terms_for_shared_content,
+    row_holds_own_secrets_for_shared_content,
 )
 from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
     DESENSITIZED_KEY,
@@ -269,8 +269,8 @@ def gate_shared_rows(
     """Gate rows for the SHARED (cross-tenant) export.
 
     Synthetic -> raw. Real rows must pass the training rule and, because this set crosses
-    factories, name none of their own factory's process-secret terms whatever any setting says
-    (``row_names_own_terms_for_shared_content``); then desensitized rows -> as stored, shared_anon
+    factories, hold neither their own factory's process-secret terms nor a process value whatever
+    any setting says (``row_holds_own_secrets_for_shared_content``); then desensitized rows -> as stored, shared_anon
     raw rows -> anonymized, private raw rows -> excluded (own model only).
 
     Returned items: {"row", "input_text", "teacher_output", "consent_class"}.
@@ -285,7 +285,7 @@ def gate_shared_rows(
             continue
         if not passes_training_rule(r, factory_lists):
             continue
-        if row_names_own_terms_for_shared_content(r, factory_lists):
+        if row_holds_own_secrets_for_shared_content(r, factory_lists):
             continue
         if _consent_of(r, consent) == WITHDRAWN:
             continue  # withdrawn factories leave every model update (clause 10)

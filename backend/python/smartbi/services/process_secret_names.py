@@ -24,10 +24,11 @@ so capture, export, the corpus scripts and the learners all follow it. It is rea
 call, not cached with the lists, through ``common.factory_secrecy.is_on`` (10 seconds, and a
 read error or an unknown factory counts as ON). A factory with no lists at all is not in the
 map and reads as ON. What crosses factories does not follow d:
-:func:`row_names_own_terms_for_shared_content` for the shared export, and the finetune gate
-(``scripts/finetune/training_consent_gate.py``, one model for every factory) reads no switch at
-all. ``FactoryLists.terms`` itself never changes with d, so anything built from it stays
-independent of every switch.
+:func:`cannot_be_shared` for the shared export and for every row capture is about to mask (a
+masked row's only destination is the shared set, and masking would hide what has to be checked),
+and the finetune gate (``scripts/finetune/training_consent_gate.py``, one model for every factory)
+reads no switch at all. ``FactoryLists.terms`` itself never changes with d, so anything built from
+it stays independent of every switch.
 
 The lists live in the Cretas main database; this module reads them through
 ``get_cretas_pool``. Lookup errors propagate, EXCEPT through
@@ -198,8 +199,8 @@ def lists_for_row(factory_id: Optional[str],
 
 def terms_fingerprint(by_factory: Optional[Mapping[str, FactoryLists]]) -> str:
     """Fingerprint of the terms each factory filters now (corpus_judge records it on rows it
-    excluded, and re-judges rows excluded under a different list). Item d counts: switching it
-    changes what is filtered, so the rows excluded before are looked at again."""
+    excluded, and re-judges rows excluded under a different list). Switching item d changes it
+    only for a factory that has terms: elsewhere rows excluded for a process value stay excluded."""
     return fingerprint(f"{f}\t{t}" for f, lists in (by_factory or {}).items() for t in lists.filtered_terms)
 
 
@@ -215,16 +216,25 @@ def row_names_protected_product(row: Mapping[str, Any],
     return mentions_any(lists.filtered_terms, *(row.get(f) for f in fields))
 
 
-def row_names_own_terms_for_shared_content(row: Mapping[str, Any],
-                                           by_factory: Optional[Mapping[str, FactoryLists]],
-                                           fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> bool:
-    """For content that crosses factories (the shared export): the row names one of its own
-    factory's terms. Reads ``terms``, never ``training_filter_on``: no secrecy setting opens this,
-    as in Java ProcessSecretSampleFilter.checkSharedContent (a factory with d off, or with
-    everything off, still keeps its terms out of what other factories get).
-    The row's OWN factory only, on purpose: another factory's product with the same name is not
-    secret there (see the module doc on the union of every factory's lists)."""
-    return mentions_any(lists_for_row(row.get("factory_id"), by_factory).terms, *(row.get(f) for f in fields))
+def cannot_be_shared(lists: FactoryLists, input_text: Optional[str], answer: Optional[str]) -> bool:
+    """What item d may let into the factory's own data but never across factories: one of its
+    process-secret terms, or a process word with a value. Reads ``terms``, never
+    ``training_filter_on``: no secrecy setting opens this, as in Java
+    ProcessSecretSampleFilter.checkSharedContent (a factory with d off, or with everything off,
+    still keeps these out of what other factories get). Needs the RAW text: masking turns
+    老卤牛肉2号 into 老卤牛肉<数值>号 and 盐放 3 克 into 盐放 <数值> 克, and neither matches afterwards."""
+    from smartbi.services.training_consent import qa_process_value
+
+    return mentions_any(lists.terms, input_text, answer) or qa_process_value(input_text, answer)
+
+
+def row_holds_own_secrets_for_shared_content(row: Mapping[str, Any],
+                                             by_factory: Optional[Mapping[str, FactoryLists]]) -> bool:
+    """For the shared export: :func:`cannot_be_shared` on the row, by its OWN factory only, on
+    purpose: another factory's product with the same name is not secret there (see the module doc
+    on the union of every factory's lists)."""
+    return cannot_be_shared(lists_for_row(row.get("factory_id"), by_factory),
+                            row.get("input_text"), row.get("teacher_output"))
 
 
 def row_has_process_value(row: Mapping[str, Any],
@@ -346,7 +356,8 @@ async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists]
     the caller first), on the raw capture text. Clean rows are released (marker and
     raw text removed, usable again). Rows that now name a person or customer, hold a pay value
     or, while the factory's item d is on, name a secret term or hold a process value are
-    flagged ``REJECTED_KEY`` and kept for manual review — never
+    flagged ``REJECTED_KEY`` and kept for manual review, and so are rows whose stored text is
+    masked and that fail :func:`cannot_be_shared` whatever d says — never
     deleted (Q5); they stay out of every export / training read, and keep only
     the reason, the list version and the time (no raw text). Held rows past the
     retention are deleted first.
@@ -376,6 +387,9 @@ async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists]
         elif qa_has_blocked_content(raw_in, raw_out, directory=lists.directory,
                                     training_filter_on=lists.training_filter_on):
             reject.append((r["id"], {"reason": "blocked_content", "lists": version, "at": now}))
+        elif (isinstance(metadata_dict(r["metadata"]).get(RECHECK_KEY), dict)
+              and cannot_be_shared(lists, raw_in, raw_out)):
+            reject.append((r["id"], {"reason": "masked_not_shareable", "lists": version, "at": now}))
         else:
             release.append(r["id"])
     async with smartbi_pool.acquire() as conn:

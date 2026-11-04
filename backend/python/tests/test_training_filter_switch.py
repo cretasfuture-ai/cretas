@@ -30,6 +30,7 @@ from tests.test_process_secret_corpus_scripts import _Pool, _judge_pool
 
 F = "F_D"
 PRODUCT = "秘制牛肉干"
+NUMBERED_PRODUCT = "老卤牛肉2号"      # masking turns it into 老卤牛肉<数值>号: an exact match misses it
 ANSWER = "增长 8%"
 
 SAMPLES = {
@@ -66,6 +67,8 @@ class _Cretas:
                     raise RuntimeError("cretas db down")
                 if "process_secret_policies" in sql:
                     return [{"factory_id": F, "id": "p1", "code": "C-1", "name": PRODUCT, "category": None,
+                             "product_category": None, "aliases": None},
+                            {"factory_id": F, "id": "p2", "code": "C-2", "name": NUMBERED_PRODUCT, "category": None,
                              "product_category": None, "aliases": None}]
                 return [{"factory_id": F, "name": "王五"}, {"factory_id": F, "name": "华联超市"}]
 
@@ -196,11 +199,24 @@ async def test_with_the_filter_off_an_unauthorized_factory_still_stores_masked_n
     """d gates what is dropped, not desensitization: consent still decides that."""
     world.set("default_no_row")
     pool = _SmartbiPool("none")
-    await _capture(pool, SAMPLES["process"])
+    await _capture(pool, "本月产量 300 箱")
     assert len(pool.stored) == 1
     stored = pool.stored[0][6]
-    assert "3 克" not in stored and "<数值>" in stored
+    assert "300" not in stored and "<数值>" in stored
     assert json.loads(pool.stored[0][11])["desensitized"] is True
+
+
+@pytest.mark.parametrize("state", STATES)
+@pytest.mark.parametrize("text", [SAMPLES["product"], NUMBERED_PRODUCT + "本月销量多少", SAMPLES["process"],
+                                  "杀菌温度T121℃，保温 30 分钟"])
+async def test_a_sample_about_to_be_masked_keeps_the_full_rule(world, state, text):
+    """A masked row can only reach the shared set, and after masking nothing can see what it held:
+    老卤牛肉<数值>号 matches no term, 盐放 <数值> 克 holds no value, and 杀菌温度T121℃ keeps its number.
+    So capture judges the raw text here, whatever d says, and turning d on later has nothing to miss."""
+    world.set(state)
+    pool = _SmartbiPool("none")
+    await _capture(pool, text)
+    assert pool.stored == []
 
 
 async def test_a_failed_lookup_held_on_the_last_good_lists_still_splits_on_d(world):
@@ -241,10 +257,11 @@ async def test_private_export(world, state, tmp_path):
 @pytest.mark.parametrize("state", STATES)
 async def test_the_shared_export_never_takes_a_factorys_own_terms(world, state):
     """Crosses factories, so no switch opens it (Java checkSharedContent): with d off the product
-    stays out of the shared set while the same row goes into the factory's own model above."""
+    and the process value stay out of the shared set while the same rows go into the factory's own
+    model above. Same verdict as the finetune gate, the other way into a shared model."""
     world.set(state)
     gated = export_mod.gate_shared_rows([_row(k) for k in SAMPLES], {}, await psn.all_factory_lists())
-    assert _kinds(g["row"]["id"] for g in gated) == kept(state) - {"product"}
+    assert _kinds(g["row"]["id"] for g in gated) == {"plain"}
 
 
 async def test_the_shared_export_compares_a_row_with_its_own_factory_only(world):
@@ -420,9 +437,10 @@ async def test_a_failed_list_lookup_is_retry_with_the_filter_off(world):
 
 @pytest.mark.parametrize("state", STATES)
 async def test_held_rows_are_rejudged_by_the_current_switch(world, state):
+    """Rows stored raw, so the marker is True and the stored text is what gets judged."""
     world.set(state)
-    held = [{"id": list(SAMPLES).index(k), "factory_id": F, "input_text": "产品A", "teacher_output": ANSWER,
-             "metadata": json.dumps({"secrecy_recheck": {"raw_input": text, "raw_output": ANSWER}})}
+    held = [{"id": list(SAMPLES).index(k), "factory_id": F, "input_text": text, "teacher_output": ANSWER,
+             "metadata": json.dumps({"secrecy_recheck": True})}
             for k, text in SAMPLES.items()]
     pool = _Pool({"WHERE metadata ? 'secrecy_recheck'": held})
     counts = await psn.rejudge_held_rows(pool, await psn.all_factory_lists())
@@ -432,6 +450,21 @@ async def test_held_rows_are_rejudged_by_the_current_switch(world, state):
     reasons = {list(SAMPLES)[a[0]]: json.loads(a[1])["reason"] for a in rejected}
     assert reasons["person"] == "names_factory_list" and reasons["pay"] == "blocked_content"
     assert all(SAMPLES[k] not in a[1] for k in SAMPLES for a in rejected)   # the reason, never the text
+
+
+@pytest.mark.parametrize("state", STATES)
+async def test_a_held_row_that_will_stay_masked_keeps_the_full_rule(world, state):
+    """The raw copy goes at release, so this is the last look at it: same rule as capture of a
+    masked row, whatever d says."""
+    world.set(state)
+    held = [{"id": list(SAMPLES).index(k), "factory_id": F, "input_text": "产品A", "teacher_output": ANSWER,
+             "metadata": json.dumps({"secrecy_recheck": {"raw_input": text, "raw_output": ANSWER}})}
+            for k, text in SAMPLES.items()]
+    pool = _Pool({"WHERE metadata ? 'secrecy_recheck'": held})
+    counts = await psn.rejudge_held_rows(pool, await psn.all_factory_lists())
+    assert counts["released"] == 1
+    rejected = [a for s, a in pool.executed if "jsonb_build_object('secrecy_rejected'" in s]
+    assert _kinds(a[0] for a in rejected) == set(SAMPLES) - {"plain"}
 
 
 # ------------------------------------------------------------------ the switch itself

@@ -38,9 +38,10 @@ Customer wording: docs sent to the website session the same day.
         "建议优化卤制工序") no longer blocks: the secret is the value / the
         factory's own step order ("腌制 24 小时再滚揉", "滚揉 … 良品率 92.86%");
       - the factory's protected product terms (``FactoryLists.terms``).
-    What crosses factories does not follow d: the shared export keeps checking the terms
-    (``process_secret_names.row_names_own_terms_for_shared_content``), and the finetune gate,
-    whose output is one model for every factory, keeps the whole rule and reads no switch.
+    What crosses factories does not follow d: the shared export and capture of any sample
+    that will be masked keep both checks (``process_secret_names.cannot_be_shared``), and the
+    finetune gate, whose output is one model for every factory, keeps the whole rule and reads
+    no switch. So d only changes what a factory keeps raw for its own use.
     A hit drops the whole sample; masking is no substitute (商业秘密保护规定
     第五至七、十一至十二条: protection is not limited to numbers).
 

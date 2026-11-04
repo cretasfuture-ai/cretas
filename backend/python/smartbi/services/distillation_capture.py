@@ -38,7 +38,9 @@ Training rule (owner, 2026-10-24 / 2026-10-29 option A; see ``training_consent``
     (``qa_has_blocked_content``);
   * while the factory's training filter (item d, read with its lists: default off, a read
     error counts as on) is on, a sample with a process word plus a concrete value or
-    naming one of its process-secret terms is NOT written either.
+    naming one of its process-secret terms is NOT written either. A sample about to be
+    masked is held to that whatever d says: it can only reach the shared set, which no setting
+    opens, and after masking neither check can see it (``cannot_be_shared``).
     If the factory's lists cannot be read, the last lists that loaded for it
     are used and the row is written HELD (``metadata.secrecy_recheck``; every
     corpus reader skips it until ``rejudge_held_rows`` re-checks it). No lists
@@ -75,7 +77,11 @@ import time
 from typing import Any, Dict, List, Optional
 
 from smartbi.services.corpus_anonymize import desensitize_for_training
-from smartbi.services.process_secret_names import expire_held_rows, factory_lists_or_last_good
+from smartbi.services.process_secret_names import (
+    cannot_be_shared,
+    expire_held_rows,
+    factory_lists_or_last_good,
+)
 from smartbi.services.training_consent import (
     DESENSITIZED_KEY,
     RECHECK_KEY,
@@ -331,6 +337,10 @@ async def persist_distillation_sample(
                     return
             if is_withdrawn(scope):
                 _log_skip_once("factory withdrew from training", factory_id)
+                return
+            if not synthetic and not keeps_raw(scope) and cannot_be_shared(lists, input_text, teacher_output):
+                _log_skip_once("masked sample would carry a process-secret product or process value "
+                               "into the shared set", factory_id, f"source={source}")
                 return
             if not synthetic:
                 tags: Dict[str, Any] = {RULE_KEY: RULE_VERSION}

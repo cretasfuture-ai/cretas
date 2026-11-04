@@ -172,7 +172,8 @@ def test_the_always_on_checks_cannot_reach_the_training_filter():
     root = Path(__file__).resolve().parents[1]
     always_on = [(root / "smartbi/services/training_consent.py", "pay_word_with_value"),
                  (root / "smartbi/services/process_secret_names.py", "row_has_private_content"),
-                 (root / "smartbi/services/process_secret_names.py", "row_names_own_terms_for_shared_content")]
+                 (root / "smartbi/services/process_secret_names.py", "cannot_be_shared"),
+                 (root / "smartbi/services/process_secret_names.py", "row_holds_own_secrets_for_shared_content")]
     for path, name in always_on:
         body = _function_source(path, name).split('"""')[-1]    # the code, not its docstring
         assert not re.search(r"training_filter_on|filtered_terms|factory_secrecy|TRAINING_FILTER", body), name
