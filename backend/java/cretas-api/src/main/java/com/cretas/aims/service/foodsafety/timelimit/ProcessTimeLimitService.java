@@ -1175,6 +1175,9 @@ public class ProcessTimeLimitService {
     }
 
     private static String duration(long minutes) {
+        if (minutes <= 0) {
+            return "不到 1 分钟";   // 刚过期: 「已超时 0 分钟」读起来像没超时
+        }
         long hours = minutes / 60;
         long rest = minutes % 60;
         if (hours == 0) {
