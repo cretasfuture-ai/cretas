@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -42,7 +43,9 @@ import java.util.function.Predicate;
  * <p>每批在制一行半成品库记录 ({@link #anchor}), 行上的 {@code materialBatchRefs} 记着来源生产批次,
  * 从这行往回追溯才接得上。入库明细存在结单上 ({@code semiStockingDetail}), 整单撤回照着它把两边都还回去。
  *
- * <p>入库单位成本传 null: 这批料的成本已经算在本计划成品头上, 这里再记一份就是同一笔成本两处各算一次。
+ * <p>成本随货走 (Owner 2026-11-04): 转走的量按在制批次单价带走成本, 记在入库明细上,
+ * {@code OrderCostBreakdownService} 从本计划总成本里扣掉这笔, 账不重复; 下游用这批半成品返工时成本算得出来。
+ * 单价未知就保持未知 (⛔ 不当 0): 半成品成本为空, 成品那边也算不准, 本计划成本标记不完整。
  */
 @Service
 @RequiredArgsConstructor
@@ -59,7 +62,7 @@ public class SettlementSemiStockingService {
 
     /** 一批在制里转走的量: {@code quantity} 是半成品单位, {@code storageQuantity} 是在制批次的库存单位。 */
     public record Slice(Long productionBatchId, String batchNumber, String materialBatchId,
-                        BigDecimal quantity, BigDecimal storageQuantity) {
+                        BigDecimal quantity, BigDecimal storageQuantity, BigDecimal feedUnitCost) {
     }
 
     /** 校验通过的入库方案; {@code slices} 的数量合计 = {@code quantity}。 */
@@ -67,9 +70,9 @@ public class SettlementSemiStockingService {
                            BigDecimal quantity, List<Slice> slices) {
     }
 
-    /** 落在结单上的一条入库明细, 整单撤回照着还。 */
+    /** 落在结单上的一条入库明细, 整单撤回照着还。{@code transferredCost} 为 null = 成本未知。 */
     public record StockedSlice(String anchor, Long productionBatchId, String materialBatchId,
-                               BigDecimal quantity, BigDecimal storageQuantity) {
+                               BigDecimal quantity, BigDecimal storageQuantity, BigDecimal transferredCost) {
     }
 
     /** 半成品库的行号: 每次结单、每批在制各一行, 这样一行只有一个来源批。 */
@@ -140,7 +143,8 @@ public class SettlementSemiStockingService {
             BigDecimal left = convert(factoryId, storageLeft, wip.getQuantityUnit(), rowUnit);
             productTypes.add(producer.request().getProductTypeId());
             units.add(unitContractService.storageUnit(factoryId, rowUnit));
-            leftovers.add(new Slice(row.getBatchId(), row.getBatchNumber(), wip.getId(), left, storageLeft));
+            leftovers.add(new Slice(row.getBatchId(), row.getBatchNumber(), wip.getId(), left, storageLeft,
+                    stockFeedUnitCost(factoryId, producer.request())));
             totalLeftover = totalLeftover.add(left);
             unit = unit == null ? rowUnit : unit;
             processOrder = processOrder == null ? row.getProcessOrder() : processOrder;
@@ -176,7 +180,7 @@ public class SettlementSemiStockingService {
             BigDecimal storageTake = take.compareTo(leftover.quantity()) == 0 ? leftover.storageQuantity()
                     : convert(factoryId, take, unit, storageUnitOf(leftover, factoryId));
             slices.add(new Slice(leftover.productionBatchId(), leftover.batchNumber(), leftover.materialBatchId(),
-                    take, storageTake));
+                    take, storageTake, leftover.feedUnitCost()));
             remaining = remaining.subtract(take);
         }
         return new Stocking(productTypes.iterator().next(), unit, processOrder, quantity, slices);
@@ -215,16 +219,55 @@ public class SettlementSemiStockingService {
             ref.put("materialBatchId", slice.materialBatchId());
             ref.put("productionBatchId", slice.productionBatchId());
             ref.put("quantity", slice.quantity());
+            BigDecimal unitCost = semiUnitCost(wip, slice);
             wipInventoryService.postClerkOutput(factoryId, anchor, stocking.productTypeId(), slice.quantity(),
-                    stocking.unit(), null, List.of(ref), stocking.processOrder());
+                    stocking.unit(), unitCost, List.of(ref), stocking.processOrder());
             stocked.add(new StockedSlice(anchor, slice.productionBatchId(), slice.materialBatchId(),
-                    slice.quantity(), slice.storageQuantity()));
+                    slice.quantity(), slice.storageQuantity(),
+                    unitCost == null ? null : unitCost.multiply(slice.quantity())));
         }
         try {
             return DETAIL_MAPPER.writeValueAsString(stocked);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("半成品入库明细无法写入结单", e);
         }
+    }
+
+    /**
+     * 这批半成品的单位成本 (半成品单位)。在制批次单价已含本道及上游在制的成本, 但不含常驻库存投料
+     * (见 InterimSettleServiceImpl 的说明), 那部分单独按产出摊。任一项未知 ⇒ null。
+     */
+    private static BigDecimal semiUnitCost(MaterialBatch wip, Slice slice) {
+        if (wip.getUnitPrice() == null || slice.feedUnitCost() == null) {
+            return null;
+        }
+        return wip.getUnitPrice().multiply(slice.storageQuantity())
+                .divide(slice.quantity(), 6, RoundingMode.HALF_UP)
+                .add(slice.feedUnitCost())
+                .setScale(6, RoundingMode.HALF_UP);
+    }
+
+    /** 这一道吃的常驻库存投料摊到每单位产出上是多少; 没有投料是 0, 算不出来是 null。 */
+    private BigDecimal stockFeedUnitCost(String factoryId, ProcessSheetRowRequest req) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (ProcessSheetRowRequest.UpstreamRef ref
+                : req.getUpstreamSources() == null ? List.<ProcessSheetRowRequest.UpstreamRef>of()
+                        : req.getUpstreamSources()) {
+            if (ref.isFinishedGoods()) {
+                return null;
+            }
+            if (!ref.isSemiFinished() || !positive(ref.getFeedQuantityKg())) {
+                continue;
+            }
+            BigDecimal quantity = wipInventoryService.resolveSemiFeedQtyInSourceUnit(
+                    factoryId, ref.getSourceBatchNumber(), ref.getFeedQuantityKg());
+            BigDecimal unitCost = wipInventoryService.getSemiUnitCost(factoryId, ref.getSourceBatchNumber());
+            if (quantity == null || unitCost == null) {
+                return null;
+            }
+            total = total.add(quantity.multiply(unitCost));
+        }
+        return total.divide(req.getOutputQuantity(), 6, RoundingMode.HALF_UP);
     }
 
     /** 在制批次还剩多少 (库存单位)。消耗记录含别的计划领的料; 已过账的消耗同时在 used 里, 取大的那个不重复减。 */

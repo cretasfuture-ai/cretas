@@ -14,6 +14,21 @@ function buttonGate(label: string): string {
   return line;
 }
 
+const router = readFileSync(resolve(__dirname, '../../../../router/index.ts'), 'utf8');
+const menu = readFileSync(resolve(__dirname, '../../../../components/layout/menuConfig.ts'), 'utf8');
+
+describe('仓管的领料单入口', () => {
+  it('仓储菜单有领料单, 权限归 warehouse', () => {
+    expect(menu).toContain("{ path: '/warehouse/material-requisitions', title: '领料单', icon: '', module: 'warehouse' }");
+  });
+
+  it('路由指向领料单页本身, 不带退料记录那半', () => {
+    const route = router.slice(router.indexOf("name: 'WarehouseMaterialRequisitions'"));
+    expect(route.slice(0, 200)).toContain("views/factory/material-requisitions/list.vue");
+    expect(route.slice(0, 200)).toContain("module: 'warehouse'");
+  });
+});
+
 describe('领料单按钮权限', () => {
   it('显式判断 production 或 warehouse 写权限', () => {
     expect(source).toContain("permissionStore.canWrite('production') || permissionStore.canWrite('warehouse')");

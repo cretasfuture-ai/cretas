@@ -320,6 +320,28 @@ class SecondaryReworkFeedContractTest {
     // ==================== 记账 ====================
 
     @Test
+    @DisplayName("takeHold 开工占用; 同一计划再来一次不重扣 (/start 和逐道录入先后到)")
+    void takeHoldIsOncePerPlan() {
+        feed.takeHold(F, plan, 7L);
+        assertStock("0.6", "0.4");
+
+        feed.takeHold(F, plan, 7L);
+
+        assertStock("0.6", "0.4");
+        assertThat(feed.heldQuantity(F, source())).isEqualByComparingTo("0.6");
+    }
+
+    @Test
+    @DisplayName("takeHold 只管返工计划: 普通计划不动库存")
+    void takeHoldIgnoresOrdinaryPlans() {
+        plan.setPlanSourceType("NORMAL");
+
+        feed.takeHold(F, plan, 7L);
+
+        assertStock("0", "1.0");
+    }
+
+    @Test
     @DisplayName("开工占用: 库存 1/0.6/0.4, 流水带计划号, 占用余额 0.6")
     void startHoldsTheSource() {
         start();
@@ -429,7 +451,7 @@ class SecondaryReworkFeedContractTest {
     }
 
     @Test
-    @DisplayName("/create-batch 开工没有占用: 取消不还, 报工按普通领用扣库存")
+    @DisplayName("上线前从 /create-batch 开工的计划没有占用: 取消不还, 报工按普通领用扣库存")
     void withoutHoldNothingIsReturnedAndStockIsDrawnNormally() {
         assertThat(feed.heldQuantity(F, source())).isEqualByComparingTo("0");
         assertThat(feed.release(F, source(), null, 7L)).isEqualByComparingTo("0");

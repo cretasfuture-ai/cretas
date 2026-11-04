@@ -336,23 +336,32 @@ class ProductionStartEntryPointsConvergeContractTest {
     }
 
     @Test
-    @DisplayName("WIP 扣减刻意留在 startProduction —— 下沉会让逐工序录入二次扣减")
-    void wipDeductionStaysOutOfCreateBatch() throws IOException {
+    @DisplayName("所有开工入口都占用来源半成品 (Owner 2026-11-04), 且都在建批次之后 —— 结单先还占用再按实际扣, 不会重扣")
+    void everyStartEntryTakesTheHoldAfterTheBatchExists() throws IOException {
         String src = source();
-        String deduct = "deductForSecondaryPlan(";
+        String hold = "holdSecondarySource(factoryId, plan, operatorId)";
+        String materialize = "materializeBatchForPlan(factoryId, plan)";
 
-        assertThat(methodBodies(src, START_SIGNATURE).stream().filter(b -> b.contains(deduct)).count())
-                .as("找不到 WIP 扣减调用 —— 它必须在某个 startProduction 重载里")
-                .isGreaterThanOrEqualTo(1);
-
-        for (String signature : List.of(CREATE_BATCH_SIGNATURE, MATERIALIZE_SIGNATURE)) {
-            for (String body : methodBodies(src, signature)) {
-                assertThat(body)
-                        .as("扣减不能挪进 " + signature + " —— 逐工序录入(ClerkProcessEntryServiceImpl)"
-                                + "已按 edges 精确扣过一次, 两处都扣就是幽灵超扣")
-                        .doesNotContain(deduct);
-            }
+        for (String signature : List.of(START_SIGNATURE, CREATE_BATCH_SIGNATURE)) {
+            assertThat(methodBodies(src, signature).stream()
+                    .filter(body -> body.contains(hold)
+                            && body.indexOf(materialize) >= 0 && body.indexOf(materialize) < body.indexOf(hold))
+                    .count())
+                    .as(signature + " 必须先建批次再占用: 接不住的计划要在扣库存之前拦下")
+                    .isGreaterThanOrEqualTo(1);
         }
+        for (String body : methodBodies(src, MATERIALIZE_SIGNATURE)) {
+            assertThat(body).as("占用不进建批次本身, 否则批次建到一半就扣了库存").doesNotContain("holdSecondarySource(");
+        }
+    }
+
+    @Test
+    @DisplayName("逐道录入把计划翻成生产中也是开工: 同样占用")
+    void clerkEntryTakesTheHoldToo() throws IOException {
+        String src = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/com/cretas/aims/service/processentry/impl/ClerkProcessEntryServiceImpl.java"));
+
+        assertThat(src).contains("secondaryPlanFeedService.takeHold(ctx.getFactoryId(), p, ctx.getUserId())");
     }
 
     @Test

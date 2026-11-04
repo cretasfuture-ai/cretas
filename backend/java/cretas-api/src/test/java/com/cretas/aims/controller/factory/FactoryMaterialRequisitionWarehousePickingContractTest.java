@@ -107,7 +107,7 @@ class FactoryMaterialRequisitionWarehousePickingContractTest {
     }
 
     @Test
-    @DisplayName("阴性: 只放这三个 —— 仓管生成 / 签收 / 关单 / 取消 / 查列表仍被 production_plan 挡成 403")
+    @DisplayName("阴性: 其余接口不放 —— 仓管生成 / 签收 / 关单 / 取消 / 按计划查仍被 production_plan 挡成 403")
     void warehouseUserStaysBlockedEverywhereElse() throws Exception {
         List<MockHttpServletRequestBuilder> others = List.of(
                 post(BASE + "/generate").contentType(MediaType.APPLICATION_JSON)
@@ -115,12 +115,31 @@ class FactoryMaterialRequisitionWarehousePickingContractTest {
                 put(BASE + "/MR-1/receive"),
                 put(BASE + "/MR-1/close").contentType(MediaType.APPLICATION_JSON).content("{}"),
                 put(BASE + "/MR-1/cancel").contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"x\"}"),
-                get(BASE),
-                get(BASE + "/MR-1"),
                 get(BASE + "/by-plan/P-1"));
         for (MockHttpServletRequestBuilder other : others) {
             mockMvc.perform(asUser(other)).andExpect(status().isForbidden());
         }
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    @DisplayName("阳性: 没有 production_plan 的仓管能看领料单列表和详情")
+    void warehouseUserCanReadListAndDetail() throws Exception {
+        when(service.list(any(), any(), any())).thenReturn(new org.springframework.data.domain.PageImpl<>(
+                List.of(), org.springframework.data.domain.PageRequest.of(0, 20), 0));
+        when(service.getById("F006", "MR-1")).thenReturn(new FactoryMaterialRequisition());
+
+        mockMvc.perform(asUser(get(BASE))).andExpect(status().isOk());
+        mockMvc.perform(asUser(get(BASE + "/MR-1"))).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("阴性: 显式 DENY production_plan 的账号, 列表和详情也看不了")
+    void explicitDenyBlocksReadsToo() throws Exception {
+        when(moduleAccess.isExplicitlyDenied(user, "production_plan")).thenReturn(true);
+
+        mockMvc.perform(asUser(get(BASE))).andExpect(status().isForbidden());
+        mockMvc.perform(asUser(get(BASE + "/MR-1"))).andExpect(status().isForbidden());
         verifyNoInteractions(service);
     }
 

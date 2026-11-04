@@ -210,6 +210,7 @@
   "warehouse": [
     "/warehouse/inventory-query",
     "/warehouse/material-price-trend",
+    "/warehouse/material-requisitions",
     "/warehouse/material-segments",
     "/warehouse/material-types",
     "/warehouse/materials",

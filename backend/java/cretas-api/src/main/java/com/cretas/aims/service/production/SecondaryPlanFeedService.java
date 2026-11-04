@@ -19,6 +19,7 @@ import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -48,7 +49,7 @@ import java.util.stream.Collectors;
  * 真正的消耗走既有路径 —— App 报工过账时 / 结单时 —— 才有报工号、血缘和成本。所以在消耗发生的那一刻
  * 先把对应的占用还回来 ({@link #release}), 再走原来的扣减。这样同一批料不会扣两次,
  * 撤回报工只还到库存, 没用完的占用在结单或取消时全部还回。
- * 占用还剩多少看流水 ({@link #heldQuantity}), ⛔ 不按计划量推算: /create-batch 开工的计划根本没有占用。
+ * 占用还剩多少看流水 ({@link #heldQuantity}), ⛔ 不按计划量推算: 这个规则上线前从 /create-batch 开工的计划没有占用。
  *
  * <h3>并发</h3>
  * 报工和取消 / 结单都先锁计划再锁来源行 (同一顺序, 不互相死锁): 拿到计划锁之后再读状态,
@@ -205,6 +206,27 @@ public class SecondaryPlanFeedService {
                 .mapToInt(WorkProcessTask::getProcessOrder)
                 .min()
                 .orElse(Integer.MIN_VALUE);
+    }
+
+    /**
+     * 开工占用: 所有开工入口都走这里 (/start、/create-batch、逐道录入翻状态)。
+     * 同一计划只占一次: 流水里有过本计划的占用就不再扣。
+     */
+    public void takeHold(String factoryId, ProductionPlan plan, Long operatorId) {
+        if (!"SECONDARY".equals(plan.getPlanSourceType()) || plan.getSecondarySourceWipId() == null) {
+            return;
+        }
+        Long wipId = plan.getSecondarySourceWipId();
+        String deduct = deductRef(wipId, plan.getId());
+        boolean alreadyHeld = txnRepository.findBySemiFinishedIdOrderByCreatedAtAsc(wipId).stream()
+                .anyMatch(txn -> deduct.equals(txn.getSourceRef()));
+        if (alreadyHeld) {
+            return;
+        }
+        wipInventoryService.deductForSecondaryPlan(wipId,
+                plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : BigDecimal.ZERO,
+                factoryId, operatorId, IntermediateOwnershipGuard.ofPlan(plan), plan.getId());
+        log.info("SP2 二次加工开工占用: planId={}, wipId={}", plan.getId(), wipId);
     }
 
     /** 本计划在来源行上还占着多少 (开工扣下、还没转成消耗或还回去的量)。只认带本计划号的流水。 */

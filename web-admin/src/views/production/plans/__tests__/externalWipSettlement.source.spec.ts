@@ -29,7 +29,6 @@ describe('clean settlement external WIP contract', () => {
 
   it('requires a reason and production write access for a manual override', () => {
     expect(source).toContain('manualOverrideReason: settlementManualReason.value');
-    expect(source).toContain("permissionStore.canWrite('production')) return '人工补录结单需要生产写权限");
     expect(source).toContain("return settlementManualReason.value ? '' : '请选择人工补录原因'");
     expect(source).toContain('? !firstWipLineError.value && !settlementManualBlockedReason.value');
   });

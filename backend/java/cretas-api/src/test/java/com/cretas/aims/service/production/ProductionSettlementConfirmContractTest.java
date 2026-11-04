@@ -57,7 +57,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -140,6 +139,7 @@ class ProductionSettlementConfirmContractTest {
         wipBatch.setReceiptQuantity(new BigDecimal("0.9"));
         wipBatch.setUsedQuantity(BigDecimal.ZERO);
         wipBatch.setQuantityUnit("kg");
+        wipBatch.setUnitPrice(new BigDecimal("20"));
 
         when(planRepository.findByIdForUpdate(PLAN)).thenReturn(Optional.of(plan));
         when(planRepository.findByIdAndFactoryId(PLAN, FACTORY)).thenReturn(Optional.of(plan));
@@ -271,7 +271,9 @@ class ProductionSettlementConfirmContractTest {
         assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.COMPLETED);
         assertThat(response.getActualSemiFinishedQuantity()).isEqualByComparingTo("0.4");
         verify(wipInventoryService).postClerkOutput(eq(FACTORY), anyString(), eq("SEMI-1"),
-                eq(new BigDecimal("0.4")), eq("kg"), isNull(), anyList(), eq(1));
+                eq(new BigDecimal("0.4")), eq("kg"),
+                org.mockito.ArgumentMatchers.argThat(cost -> cost.compareTo(new BigDecimal("20")) == 0),
+                anyList(), eq(1));
         // 下道投的 0.5 + 转走的 0.4 = 收到的 0.9, 在制批次见底
         assertThat(wipBatch.getUsedQuantity()).isEqualByComparingTo("0.9");
         assertThat(wipBatch.getCurrentQuantity()).isEqualByComparingTo("0");
@@ -389,6 +391,20 @@ class ProductionSettlementConfirmContractTest {
     }
 
     @Test
+    @DisplayName("上限也按换算后算: 剩 400g, 填 0.5kg 要拒绝")
+    void leftoverLimitIsConvertedToo() {
+        wipBatch.setReceiptQuantity(new BigDecimal("900"));
+        wipBatch.setQuantityUnit("g");
+        consumptions.clear();
+        consumptions.add(consumption("500"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY, PLAN, request(false, "0.5").build(), 10L));
+
+        assertThat(ex.getErrorCode()).isEqualTo("SETTLEMENT_SEMI_EXCEEDS_LEFTOVER");
+    }
+
+    @Test
     @DisplayName("单位没有换算关系: 拒绝, 不当成相等")
     void unconvertibleUnitIsRejected() {
         wipBatch.setQuantityUnit("盒");
@@ -413,10 +429,48 @@ class ProductionSettlementConfirmContractTest {
                 .thenReturn(List.of(row(semi, WIP_BATCH_ID, WIP_BATCH_NO)));
 
         ProductionSettlementResponse response = service.settleProduction(FACTORY, PLAN,
+                request(true, "0.4").actualFinishedQuantity(BigDecimal.ZERO).build(), 10L);
+
+        assertThat(response.getActualSemiFinishedQuantity()).isEqualByComparingTo("0.4");
+        assertThat(response.getActualFinishedQuantity()).as("半成品行不算成品").isEqualByComparingTo("0");
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.COMPLETED);
+    }
+
+    @Test
+    @DisplayName("半成品全被下道投掉、下道还没产出: 没有终端行也能按半成品量结单")
+    void semiOnlyPlanWithoutTerminalRowCanSettle() throws Exception {
+        ProcessSheetRowRequest semi = new ProcessSheetRowRequest();
+        semi.setClientRowId("semi");
+        semi.setProcessCode("cure");
+        semi.setProcessOrder(1);
+        semi.setProductTypeId("SEMI-1");
+        semi.setOutputQuantity(new BigDecimal("0.9"));
+        semi.setUnit("kg");
+        ProcessSheetRowRequest next = new ProcessSheetRowRequest();
+        next.setClientRowId("next");
+        next.setProcessCode("form");
+        next.setProcessOrder(2);
+        next.setProductTypeId("SEMI-2");
+        ProcessSheetRowRequest.UpstreamRef feed = new ProcessSheetRowRequest.UpstreamRef();
+        feed.setSourceBatchNumber(WIP_BATCH_NO);
+        feed.setFeedQuantityKg(new BigDecimal("0.5"));
+        next.setUpstreamSources(List.of(feed));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN))
+                .thenReturn(List.of(row(semi, WIP_BATCH_ID, WIP_BATCH_NO), row(next, 502L, "CLK-W-2")));
+
+        ProductionSettlementResponse response = service.settleProduction(FACTORY, PLAN,
                 request(true, "0.4").actualFinishedQuantity(null).build(), 10L);
 
         assertThat(response.getActualSemiFinishedQuantity()).isEqualByComparingTo("0.4");
-        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.COMPLETED);
+    }
+
+    @Test
+    @DisplayName("有成品行的计划不受影响: 传了半成品量, 成品量仍按报工")
+    void planWithFinishedRowKeepsItsFinishedOutput() {
+        ProductionSettlementResponse response =
+                service.settleProduction(FACTORY, PLAN, request(true, "0.4").build(), 10L);
+
+        assertThat(response.getActualFinishedQuantity()).isEqualByComparingTo("5");
     }
 
     @Test
@@ -425,11 +479,11 @@ class ProductionSettlementConfirmContractTest {
         plan.setWorkflowSelectionMode(com.cretas.aims.entity.ProductionBatch.WorkflowSelectionMode.WORKFLOW);
         plan.setSelectedWorkflowId(44L);
         plan.setSkipProcessReporting(true);
-        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN)).thenReturn(List.of());
 
-        assertThrows(BusinessException.class, () -> service.settleProduction(FACTORY, PLAN,
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.settleProduction(FACTORY, PLAN,
                 request(true, "0.4").actualFinishedQuantity(null).build(), 10L));
 
+        assertThat(ex.getErrorCode()).isEqualTo("PRODUCTION_SETTLEMENT_BLOCKED");
         verify(settlementRepository, never()).save(any());
     }
 
@@ -548,5 +602,57 @@ class ProductionSettlementConfirmContractTest {
         ProductionSettlementRequest matching = manualSemi("100");
         matching.setConfirm(false);
         assertThat(service.settleProduction(FACTORY, PLAN, matching, 10L).getSettled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("成本随货走: 0.4kg × 单价 20 = 8 记在入库明细上, 半成品单价 20")
+    void costFollowsTheStockedSemi() {
+        service.settleProduction(FACTORY, PLAN, request(true, "0.4").build(), 10L);
+
+        var detail = SettlementSemiStockingService.parseDetail(capture().saved().getSemiStockingDetail());
+        assertThat(detail.get(0).transferredCost()).isEqualByComparingTo("8");
+    }
+
+    @Test
+    @DisplayName("单位不同也按库存单位算成本: 400g × 0.02/g = 8, 半成品单价 20/kg")
+    void costIsComputedInStorageUnit() {
+        wipBatch.setReceiptQuantity(new BigDecimal("900"));
+        wipBatch.setQuantityUnit("g");
+        wipBatch.setUnitPrice(new BigDecimal("0.02"));
+        consumptions.clear();
+        consumptions.add(consumption("500"));
+
+        service.settleProduction(FACTORY, PLAN, request(true, "0.4").build(), 10L);
+
+        var detail = SettlementSemiStockingService.parseDetail(capture().saved().getSemiStockingDetail());
+        assertThat(detail.get(0).transferredCost()).isEqualByComparingTo("8");
+    }
+
+    @Test
+    @DisplayName("单价未知: 成本保持未知, 不编 0 —— 入库单价 null, 明细里划转成本也是 null")
+    void unknownCostStaysUnknown() {
+        wipBatch.setUnitPrice(null);
+
+        service.settleProduction(FACTORY, PLAN, request(true, "0.4").build(), 10L);
+
+        verify(wipInventoryService).postClerkOutput(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.isNull(), any(), any());
+        var detail = SettlementSemiStockingService.parseDetail(capture().saved().getSemiStockingDetail());
+        assertThat(detail.get(0).transferredCost()).isNull();
+    }
+
+    @Test
+    @DisplayName("分摊产出成本之前, 入库明细已经落到结单上")
+    void stockingHappensBeforeOutputCostAllocation() {
+        String source;
+        try {
+            source = java.nio.file.Files.readString(java.nio.file.Path.of(
+                    "src/main/java/com/cretas/aims/service/impl/ProductionPlanServiceImpl.java"));
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+        assertThat(source.indexOf("settlementSemiStockingService.stock(factoryId, plan, semiStocking"))
+                .isGreaterThan(0)
+                .isLessThan(source.indexOf("persistWorkflowSettlementOutputs(factoryId, plan, settlement, effectiveRequest);"));
     }
 }

@@ -119,6 +119,7 @@ class SecondaryHoldPostgresContractTest {
     @MockBean ProductFamilyResolver familyResolver;
     @MockBean UnitContractService unitContractService;
     @MockBean IntermediateOwnershipGuard ownershipGuard;
+    @MockBean com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
 
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
@@ -370,6 +371,7 @@ class SecondaryHoldPostgresContractTest {
             batch.setWarehouseId("WH");
             batch.setReceiptQuantity(new BigDecimal("0.9"));
             batch.setQuantityUnit("kg");
+            batch.setUnitPrice(new BigDecimal("20"));
             batch.setCreatedBy(7L);
             batch.setSourceDocType("PRODUCTION_BATCH");
             batch.setSourceDocId("999");
@@ -400,7 +402,7 @@ class SecondaryHoldPostgresContractTest {
         ProductionPlan plan = tx.execute(state -> plans.findById(f.planId()).orElseThrow());
         var plan0 = new SettlementSemiStockingService.Stocking("SEMI-1", "kg", 1, new BigDecimal("0.3"),
                 List.of(new SettlementSemiStockingService.Slice(999L, "CLK-W-1", materialBatchId,
-                        new BigDecimal("0.3"), new BigDecimal("0.3"))));
+                        new BigDecimal("0.3"), new BigDecimal("0.3"), BigDecimal.ZERO)));
         ProductionSettlement settlement = new ProductionSettlement();
         settlement.setId(UUID.randomUUID().toString());
 
@@ -411,6 +413,8 @@ class SecondaryHoldPostgresContractTest {
                 BigDecimal.class, materialBatchId)).isEqualByComparingTo("0.3");
         assertThat(jdbc.queryForObject("select produced_quantity from semi_finished_inventory where intermediate_batch_no = ?",
                 BigDecimal.class, anchor)).isEqualByComparingTo("0.3");
+        assertThat(jdbc.queryForObject("select accumulated_cost from semi_finished_inventory where intermediate_batch_no = ?",
+                BigDecimal.class, anchor)).as("成本随货走: 0.3 × 20").isEqualByComparingTo("6");
 
         ReportReversalServiceImpl reversal = reversalService();
         tx.executeWithoutResult(state -> ReflectionTestUtils.invokeMethod(
@@ -420,5 +424,39 @@ class SecondaryHoldPostgresContractTest {
                 BigDecimal.class, materialBatchId)).as("在制批次还回").isEqualByComparingTo("0");
         assertThat(jdbc.queryForObject("select produced_quantity from semi_finished_inventory where intermediate_batch_no = ?",
                 BigDecimal.class, anchor)).as("半成品库退出").isEqualByComparingTo("0");
+        assertThat(jdbc.queryForObject("select accumulated_cost from semi_finished_inventory where intermediate_batch_no = ?",
+                BigDecimal.class, anchor)).as("成本一起退回").isEqualByComparingTo("0");
+    }
+
+    @Test
+    void createBatchTakesTheSameHoldAndCancelReturnsIt() {
+        Fixture f = fixture(ProductionPlanStatus.IN_PROGRESS);
+        tx.executeWithoutResult(state -> {
+            // 这份 fixture 的占用先还掉, 计划退回待处理, 再走 /create-batch 开工
+            ProductionPlan plan = plans.findById(f.planId()).orElseThrow();
+            feed.release(F, feed.forPlan(F, plan).orElseThrow(), null, 7L);
+        });
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        ProductionPlan fresh = tx.execute(state -> {
+            ProductionPlan plan = new ProductionPlan();
+            plan.setId("PLAN-CB-" + suffix);
+            plan.setFactoryId(F);
+            plan.setPlanNumber("SEC-CB-" + suffix);
+            plan.setProductTypeId("FG-1");
+            plan.setPlannedQuantity(new BigDecimal("0.6"));
+            plan.setPlannedUnit("kg");
+            plan.setStatus(ProductionPlanStatus.PENDING);
+            plan.setCreatedBy(7L);
+            plan.setPlanSourceType("SECONDARY");
+            plan.setSecondarySourceWipId(f.wipId());
+            return plans.save(plan);
+        });
+        when(workProcessTaskService.spawnTasks(any(), any(), any(), any(), any(), any())).thenReturn(List.of());
+
+        planService.createBatchFromPlan(F, fresh.getId(), 7L, null);
+        assertThat(consumed(f)).as("开工就占用").isEqualByComparingTo("0.6");
+
+        planService.cancelProductionPlan(F, fresh.getId(), "不做了", 7L);
+        assertThat(consumed(f)).as("取消全部还回").isEqualByComparingTo("0");
     }
 }

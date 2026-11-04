@@ -2046,7 +2046,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     /**
-     * 结单转进半成品库的量随撤回退出来 (D-S315-02), 两边都还: 半成品库减回去, 在制批次的已用量也减回去 ——
+     * 结单转进半成品库的量随撤回退出来 (D-S315-02), 两边都还: 半成品库连成本减回去, 在制批次的已用量也减回去
+     * (成本回到计划上不用单独做: 结单软删后 OrderCostBreakdownService 就不再扣这笔) ——
      * 否则这批料在两边都没了, 重新结单还会再扣一次。半成品已被领走时 reverseClerkOutput 拒绝, 整体回滚。
      *
      * <p>撤回只撤一道 (见 {@link #rowsOfReversedStep}), 结单却是整单还原, 所以大多数切片的在制批次都还在。
@@ -2064,7 +2065,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     .withCode("SETTLEMENT_SEMI_STOCKING_UNAVAILABLE");
         }
         for (var slice : slices) {
-            wipInventoryService.reverseClerkOutput(factoryId, slice.anchor(), slice.quantity(), null, operatorId);
+            wipInventoryService.reverseClerkOutput(factoryId, slice.anchor(), slice.quantity(),
+                    slice.transferredCost(), operatorId);
             if (Objects.equals(slice.productionBatchId(), reversedBatchId)) {
                 continue;
             }

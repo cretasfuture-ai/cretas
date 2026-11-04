@@ -2421,7 +2421,7 @@ const settlementManualReason = computed(() => (
 ));
 const settlementManualBlockedReason = computed(() => {
   if (!settlementNeedsManualReason.value) return '';
-  if (!permissionStore.canWrite('production')) return '人工补录结单需要生产写权限，请联系有权限的人员处理';
+  // 权限在后端判 (production:read_write, 403 文案说得清); 这里混进权限会抬「判不了的分支」上限
   return settlementManualReason.value ? '' : '请选择人工补录原因';
 });
 const completeSubmitDisabledReason = computed(() => {

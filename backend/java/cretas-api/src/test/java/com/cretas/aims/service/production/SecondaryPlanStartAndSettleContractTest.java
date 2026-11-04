@@ -25,7 +25,6 @@ import com.cretas.aims.repository.inventory.SalesOrderItemRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
 import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
-import com.cretas.aims.service.processentry.IntermediateOwnershipGuard;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.workprocess.WorkProcessTaskService;
 import com.cretas.aims.utils.ExcelUtil;
@@ -155,7 +154,7 @@ class SecondaryPlanStartAndSettleContractTest {
 
         assertThat(ex.getErrorCode()).isEqualTo("SECONDARY_SOURCE_NOT_ACCEPTED");
         verify(feed).assertAcceptedBy(eq(F), eq(plan), eq(500L));
-        verify(wipInventoryService, never()).deductForSecondaryPlan(any(), any(), any(), any(), any(), any());
+        verify(feed, never()).takeHold(any(), any(), any());
     }
 
     @Test
@@ -163,10 +162,19 @@ class SecondaryPlanStartAndSettleContractTest {
     void startChecksThenDeducts() {
         service.startProduction(F, PLAN, 7L);
 
-        InOrder order = Mockito.inOrder(feed, wipInventoryService);
+        InOrder order = Mockito.inOrder(feed);
         order.verify(feed).assertAcceptedBy(eq(F), eq(plan), eq(500L));
-        order.verify(wipInventoryService).deductForSecondaryPlan(WIP_ID, new BigDecimal("0.6"), F, 7L,
-                IntermediateOwnershipGuard.ofPlan(plan), PLAN);
+        order.verify(feed).takeHold(F, plan, 7L);
+    }
+
+    @Test
+    @DisplayName("/create-batch 开工同样占用, 也是先判接料再占用")
+    void createBatchChecksThenHolds() {
+        service.createBatchFromPlan(F, PLAN, 7L, null);
+
+        InOrder order = Mockito.inOrder(feed);
+        order.verify(feed).assertAcceptedBy(eq(F), eq(plan), eq(500L));
+        order.verify(feed).takeHold(F, plan, 7L);
     }
 
     @Test
@@ -178,6 +186,7 @@ class SecondaryPlanStartAndSettleContractTest {
                 () -> service.createBatchFromPlan(F, PLAN));
 
         assertThat(ex.getErrorCode()).isEqualTo("SECONDARY_SOURCE_NOT_ACCEPTED");
+        verify(feed, never()).takeHold(any(), any(), any());
     }
 
     @Test
@@ -189,6 +198,7 @@ class SecondaryPlanStartAndSettleContractTest {
         service.startProduction(F, PLAN, 7L);
 
         verify(feed, never()).assertAcceptedBy(any(), any(), any());
+        verify(feed, never()).takeHold(any(), any(), any());
     }
 
     @Test
@@ -228,6 +238,22 @@ class SecondaryPlanStartAndSettleContractTest {
         assertThat(ex.getErrorCode()).isEqualTo("PLAN_HAS_PRODUCTION_DATA");
         verify(feed, never()).closeHold(any(), any(), any());
         assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.IN_PROGRESS);
+    }
+
+    @Test
+    @DisplayName("取消: 没有报工但已有消耗记录 → 同样走报工撤回, 不全额还占用")
+    void cancelWithConsumptionButNoReportIsRejected() {
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, PLAN)).thenReturn(List.of());
+        var consumption = new com.cretas.aims.entity.MaterialConsumption();
+        consumption.setFactoryId(F);
+        when(materialConsumptionRepository.findByProductionPlanId(PLAN)).thenReturn(List.of(consumption));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.cancelProductionPlan(F, PLAN, "不做了"));
+
+        assertThat(ex.getErrorCode()).isEqualTo("PLAN_HAS_PRODUCTION_DATA");
+        verify(feed, never()).closeHold(any(), any(), any());
     }
 
     @Test

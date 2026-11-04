@@ -168,7 +168,8 @@ class SecondaryFeedEntryWiringContractTest {
         settlement.setId("settlement-1");
         settlement.setActualSemiFinishedQuantity(new BigDecimal("30"));
         settlement.setSemiStockingDetail("[{\"anchor\":\"CLK-SEMI-1\",\"productionBatchId\":" + fromBatch
-                + ",\"materialBatchId\":\"MB-W\",\"quantity\":30,\"storageQuantity\":30000}]");
+                + ",\"materialBatchId\":\"MB-W\",\"quantity\":30,\"storageQuantity\":30000,"
+                + "\"transferredCost\":600}]");
         return settlement;
     }
 
@@ -198,7 +199,8 @@ class SecondaryFeedEntryWiringContractTest {
         ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking",
                 F, stockedSettlement(501L), 999L, 7L);
 
-        verify(fixture.wip()).reverseClerkOutput(F, "CLK-SEMI-1", new BigDecimal("30"), null, 7L);
+        // 成本一起退: reverseClerkOutput 带着当时划走的金额
+        verify(fixture.wip()).reverseClerkOutput(F, "CLK-SEMI-1", new BigDecimal("30"), new BigDecimal("600"), 7L);
         assertThat(fixture.batch().getUsedQuantity()).isEqualByComparingTo("60000");
     }
 
@@ -210,7 +212,7 @@ class SecondaryFeedEntryWiringContractTest {
         ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking",
                 F, stockedSettlement(501L), 501L, 7L);
 
-        verify(fixture.wip()).reverseClerkOutput(F, "CLK-SEMI-1", new BigDecimal("30"), null, 7L);
+        verify(fixture.wip()).reverseClerkOutput(F, "CLK-SEMI-1", new BigDecimal("30"), new BigDecimal("600"), 7L);
         assertThat(fixture.batch().getUsedQuantity()).isEqualByComparingTo("90000");
     }
 
