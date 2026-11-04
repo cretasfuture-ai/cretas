@@ -2817,9 +2817,10 @@ const YieldStepReportScreen: React.FC = () => {
         <Text style={styles.batchProcess}>
           {batchNumber}  ·  {currentTask?.processName ?? `第 ${currentTask?.processOrder} 道`}
         </Text>
-        {/* 工序 SOP: 本道挂了文件才出现「查看 SOP（N）」; 哨兵任务 (无真实工序) 不请求 */}
+        {/* 工序 SOP: 本道挂了文件才出现「查看 SOP（N）」。哨兵批次走各自的早返回屏、到不了这里;
+            组件对哨兵 id (__XXX__) 也自己拒绝请求, 两层都不依赖这一处 */}
         <ProcessSopEntry
-          workProcessId={isSentinelBatch ? null : currentTask?.workProcessId}
+          workProcessId={currentTask?.workProcessId}
           processName={currentTask?.processName}
         />
         {plannedOutput != null ? (

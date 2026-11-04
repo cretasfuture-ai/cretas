@@ -84,7 +84,8 @@ public class AttachmentController {
             "work_report:read", "work_report:read_write",
             "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
-            "system:read", "system:read_write"
+            "system:read", "system:read_write",
+            "equipment:read", "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<List<Attachment>>> listByEntity(
             @PathVariable String factoryId,
@@ -110,7 +111,8 @@ public class AttachmentController {
             "work_report:read", "work_report:read_write",
             "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
-            "system:read", "system:read_write"
+            "system:read", "system:read_write",
+            "equipment:read", "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<Attachment>> getById(
             @PathVariable String factoryId,
@@ -135,7 +137,8 @@ public class AttachmentController {
             "work_report:read", "work_report:read_write",
             "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
-            "system:read", "system:read_write"
+            "system:read", "system:read_write",
+            "equipment:read", "equipment:read_write"
     })
     public ResponseEntity<Void> download(
             @PathVariable String factoryId,
@@ -162,7 +165,8 @@ public class AttachmentController {
             "work_report:read", "work_report:read_write",
             "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
-            "system:read", "system:read_write"
+            "system:read", "system:read_write",
+            "equipment:read", "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<Map<String, String>>> downloadUrl(
             @PathVariable String factoryId, @PathVariable String id, HttpServletRequest request) {
@@ -187,14 +191,23 @@ public class AttachmentController {
             "work_report:read_write",
             "restaurant:read_write",
             "rd:read_write",
-            "system:read_write"
+            "system:read_write",
+            "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<UploadUrlResponse>> generateUploadUrl(
             @PathVariable String factoryId,
-            @Valid @RequestBody UploadUrlRequest req) {
-        // Content-type whitelist + size hint check (BEFORE signed URL issue —
-        // refuses oversize / executable uploads at the OSS boundary).
-        permissionResolver.validateUploadRequest(req.getFileType(), req.getFileSize());
+            @Valid @RequestBody UploadUrlRequest req,
+            HttpServletRequest request) {
+        if (AttachmentPermissionResolver.isSopType(req.getEntityType())) {
+            // 工序 / 设备 SOP: 发签名 URL 之前就校验写权限、目标归属本厂、文件类型 (仅 PDF / 常见图片)。
+            permissionResolver.requireWrite(permissionResolver.resolveCurrentUser(request), req.getEntityType());
+            attachmentService.validateSopTarget(factoryId, req.getEntityType(), req.getEntityId(), true);
+            permissionResolver.validateSopUpload(req.getFileType(), req.getFileSize());
+        } else {
+            // Content-type whitelist + size hint check (BEFORE signed URL issue —
+            // refuses oversize / executable uploads at the OSS boundary).
+            permissionResolver.validateUploadRequest(req.getFileType(), req.getFileSize());
+        }
         String putUrl = attachmentService.generateUploadUrl(factoryId, req.getFileName(), req.getFileType());
         String fileUrl = AttachmentServiceImpl.stripQuery(putUrl);
         return ResponseEntity.ok(ApiResponse.success(new UploadUrlResponse(putUrl, fileUrl)));
@@ -214,7 +227,8 @@ public class AttachmentController {
             "work_report:read_write",
             "restaurant:read_write",
             "rd:read_write",
-            "system:read_write"
+            "system:read_write",
+            "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<Attachment>> register(
             @PathVariable String factoryId,
@@ -222,13 +236,17 @@ public class AttachmentController {
             HttpServletRequest request) {
         User currentUser = permissionResolver.resolveCurrentUser(request);
         permissionResolver.requireWrite(currentUser, req.getEntityType());
-        if (req.getFileSize() != null && req.getFileSize() > AttachmentPermissionResolver.MAX_UPLOAD_SIZE_BYTES) {
-            throw new BusinessException(400, "文件超出 10MB 上限");
-        }
-        if (req.getFileType() != null
-                && !AttachmentPermissionResolver.ALLOWED_CONTENT_TYPES.contains(req.getFileType().toLowerCase())) {
-            throw new BusinessException(400,
-                    "不支持的文件类型: " + req.getFileType() + " — 仅允许 pdf / image / xlsx / docx / mp4");
+        if (AttachmentPermissionResolver.isSopType(req.getEntityType())) {
+            permissionResolver.validateSopUpload(req.getFileType(), req.getFileSize());
+        } else {
+            if (req.getFileSize() != null && req.getFileSize() > AttachmentPermissionResolver.MAX_UPLOAD_SIZE_BYTES) {
+                throw new BusinessException(400, "文件超出 10MB 上限");
+            }
+            if (req.getFileType() != null
+                    && !AttachmentPermissionResolver.ALLOWED_CONTENT_TYPES.contains(req.getFileType().toLowerCase())) {
+                throw new BusinessException(400,
+                        "不支持的文件类型: " + req.getFileType() + " — 仅允许 pdf / image / xlsx / docx / mp4");
+            }
         }
         Long userId = currentUser.getId();
         Attachment saved = attachmentService.register(factoryId, req, userId);
@@ -249,7 +267,8 @@ public class AttachmentController {
             "work_report:read_write",
             "restaurant:read_write",
             "rd:read_write",
-            "system:read_write"
+            "system:read_write",
+            "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<Attachment>> update(
             @PathVariable String factoryId,
@@ -282,12 +301,21 @@ public class AttachmentController {
             "work_report:read_write",
             "restaurant:read_write",
             "rd:read_write",
-            "system:read_write"
+            "system:read_write",
+            "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<Void>> softDelete(
             @PathVariable String factoryId,
             @PathVariable String id,
             HttpServletRequest request) {
+        Attachment existing = attachmentService.getById(factoryId, id);
+        if (AttachmentPermissionResolver.isSopType(existing.getEntityType())) {
+            // SOP 是车间要照着做的标准: 删除按「管理 SOP」的写权限判 (车间主任能删别人传的旧版), 而不是「上传者本人」。
+            User currentUser = permissionResolver.resolveCurrentUser(request);
+            permissionResolver.requireWrite(currentUser, existing.getEntityType());
+            attachmentService.softDeleteSop(factoryId, id, currentUser.getId());
+            return ResponseEntity.ok(ApiResponse.successMessage("删除成功"));
+        }
         Long userId = currentUserId(request);
         attachmentService.softDelete(factoryId, id, userId);
         return ResponseEntity.ok(ApiResponse.successMessage("删除成功"));
@@ -307,7 +335,8 @@ public class AttachmentController {
             "work_report:read", "work_report:read_write",
             "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
-            "system:read", "system:read_write"
+            "system:read", "system:read_write",
+            "equipment:read", "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<Map<String, Long>>> batchCount(
             @PathVariable String factoryId,
@@ -347,7 +376,8 @@ public class AttachmentController {
             "work_report:read", "work_report:read_write",
             "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
-            "system:read", "system:read_write"
+            "system:read", "system:read_write",
+            "equipment:read", "equipment:read_write"
     })
     public ResponseEntity<ApiResponse<List<LinkChipCountsDTO>>> batch3ChipCounts(
             @PathVariable String factoryId,
@@ -422,6 +452,9 @@ public class AttachmentController {
         /** Optional declared size hint — when provided, must be ≤ 10 MB. */
         @Min(1)
         private Long fileSize;
+        /** 可选: 上传的是工序 / 设备 SOP 时带上, 发签名 URL 前就校验目标归属本厂与写权限。 */
+        private EntityType entityType;
+        private String entityId;
     }
 
     @Data

@@ -125,7 +125,7 @@ class AttachmentControllerTest {
         req.setFileType("image/jpeg");
 
         ResponseEntity<ApiResponse<UploadUrlResponse>> resp =
-                controller.generateUploadUrl(FACTORY_ID, req);
+                controller.generateUploadUrl(FACTORY_ID, req, request);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         UploadUrlResponse data = resp.getBody().getData();
@@ -192,6 +192,11 @@ class AttachmentControllerTest {
     @Test
     @DisplayName("✅ DELETE /attachments/{id} 软删, 返成功消息")
     void softDelete_returnsSuccessMessage() {
+        Attachment existing = new Attachment();
+        existing.setId(ATT_ID);
+        existing.setEntityType(EntityType.PURCHASE_ORDER);
+        when(attachmentService.getById(FACTORY_ID, ATT_ID)).thenReturn(existing);
+
         ResponseEntity<ApiResponse<Void>> resp = controller.softDelete(FACTORY_ID, ATT_ID, request);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());

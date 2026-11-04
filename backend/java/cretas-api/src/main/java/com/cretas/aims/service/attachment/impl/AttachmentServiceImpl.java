@@ -11,10 +11,13 @@ import com.cretas.aims.entity.Attachment.FileCategory;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
+import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderSuppliedMaterialRequirementRepository;
+import com.cretas.aims.security.AttachmentPermissionResolver;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.AttachmentService;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
@@ -80,6 +83,13 @@ public class AttachmentServiceImpl implements AttachmentService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderSuppliedMaterialRequirementRepository suppliedMaterialRequirementRepository;
+
+    /** 工序 / 设备 SOP 的归属校验用; 单测直接 new 本类时为 null, SOP 路径会 503 而不是放行. */
+    @Autowired(required = false)
+    private WorkProcessRepository workProcessRepository;
+
+    @Autowired(required = false)
+    private EquipmentRepository equipmentRepository;
 
     /** OSS 直接客户端 — pre-signed PUT 用; {@code aliyun.oss.enabled=false} 时为 null. */
     @Autowired(required = false)
@@ -152,6 +162,12 @@ public class AttachmentServiceImpl implements AttachmentService {
     }
 
     private void validateEntityBinding(String factoryId, RegisterAttachmentRequest req) {
+        if (AttachmentPermissionResolver.isSopType(req.getEntityType())) {
+            validateSopTarget(factoryId, req.getEntityType(), req.getEntityId(), true);
+            requireSopFileType(req.getFileType());
+            requireOwnFactoryObject(factoryId, req.getFileUrl());
+            return;
+        }
         if (EntityType.CUSTOMER_SUPPLIED_RECEIPT == req.getEntityType()) {
             if (suppliedMaterialRequirementRepository == null) {
                 throw new BusinessException(503, "客供料任务归属校验服务暂不可用，附件未绑定");
@@ -185,6 +201,99 @@ public class AttachmentServiceImpl implements AttachmentService {
                 factoryId, EntityType.PURCHASE_ORDER, req.getEntityId());
         if (count >= 10) {
             throw new BusinessException(400, "单张采购订单最多允许10个附件");
+        }
+    }
+
+    // ==================== 工序 / 设备 SOP ====================
+
+    @Override
+    @Transactional(readOnly = true)
+    public void validateSopTarget(String factoryId, EntityType type, String entityId, boolean requireExists) {
+        if (!AttachmentPermissionResolver.isSopType(type)) {
+            throw new BusinessException(400, "不是工序或设备 SOP 类型: " + type);
+        }
+        if (entityId == null || entityId.isBlank()) {
+            throw new BusinessException(400, "SOP 所属的" + (type == EntityType.WORK_PROCESS ? "工序" : "设备") + "必填");
+        }
+        if (type == EntityType.WORK_PROCESS) {
+            if (workProcessRepository == null) {
+                throw new BusinessException(503, "工序归属校验服务暂不可用，SOP 未保存");
+            }
+            var process = workProcessRepository.findById(entityId).orElse(null);
+            if (process == null) {
+                if (requireExists) {
+                    throw new BusinessException(404, "工序不存在，SOP 不能绑定到临时或伪造ID");
+                }
+                return;
+            }
+            if (!factoryId.equals(process.getFactoryId())) {
+                throw new BusinessException(403, "该工序不属于当前工厂，跨厂操作 SOP 被拒绝");
+            }
+            return;
+        }
+        if (equipmentRepository == null) {
+            throw new BusinessException(503, "设备归属校验服务暂不可用，SOP 未保存");
+        }
+        Long equipmentId;
+        try {
+            equipmentId = Long.valueOf(entityId.trim());
+        } catch (NumberFormatException e) {
+            throw new BusinessException(400, "设备编号格式不正确: " + entityId);
+        }
+        var equipment = equipmentRepository.findById(equipmentId).orElse(null);
+        if (equipment == null) {
+            if (requireExists) {
+                throw new BusinessException(404, "设备不存在，SOP 不能绑定到临时或伪造ID");
+            }
+            return;
+        }
+        if (!factoryId.equals(equipment.getFactoryId())) {
+            throw new BusinessException(403, "该设备不属于当前工厂，跨厂操作 SOP 被拒绝");
+        }
+    }
+
+    @Override
+    @Transactional
+    public void softDeleteSop(String factoryId, String id, Long userId) {
+        if (userId == null) {
+            throw new BusinessException(401, "未登录 — 无法删除附件");
+        }
+        Attachment a = getById(factoryId, id);
+        if (!AttachmentPermissionResolver.isSopType(a.getEntityType())) {
+            throw new BusinessException(400, "该附件不是工序或设备 SOP");
+        }
+        validateSopTarget(factoryId, a.getEntityType(), a.getEntityId(), false);
+        a.softDelete();
+        attachmentRepository.save(a);
+        log.info("SOP 软删: factory={} id={} entityType={} entityId={} byUser={}",
+                factoryId, id, a.getEntityType(), a.getEntityId(), userId);
+    }
+
+    private void requireSopFileType(String fileType) {
+        if (fileType == null || !AttachmentPermissionResolver.SOP_ALLOWED_CONTENT_TYPES
+                .contains(fileType.toLowerCase())) {
+            throw new BusinessException(400, "SOP 文件只支持 PDF 或图片 (jpg / png / webp / gif), 当前类型: " + fileType);
+        }
+    }
+
+    /**
+     * fileUrl 由客户端在直传后回填, 下载时服务端会替它签名 —— 所以必须证明它落在本厂的上传目录
+     * ({@code <media 前缀>/<factoryId>/attachments/...}), 否则任何人可以把别的工厂的对象地址注册成自己的 SOP 再下载。
+     */
+    private void requireOwnFactoryObject(String factoryId, String fileUrl) {
+        String mediaPrefix = ossConfig.getMediaUrlPrefix();
+        if (mediaPrefix == null || mediaPrefix.isBlank()) {
+            throw new BusinessException(503, "OSS 地址未配置，SOP 未保存");
+        }
+        String ownDir = mediaPrefix + "/" + factoryId + "/attachments/";
+        String normalized;
+        try {
+            normalized = fileUrl == null ? "" : URI.create(fileUrl.trim()).normalize().toString();
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(400, "文件地址格式不正确，SOP 未保存");
+        }
+        if (!normalized.startsWith(ownDir) || normalized.contains("..")) {
+            throw new BusinessException(403, "文件地址不在本厂的上传目录内，SOP 未保存");
         }
     }
 

@@ -141,6 +141,10 @@ public class Attachment extends BaseEntity {
         /** Sprint 6 W2-C-2 — 通话记录录音附件 (CallRecord audio 文件挂载到附件中心). */
         CALL_RECORD,
         PRODUCTION_REPORT,
+        /** 工序 SOP 文件 (entity_id = work_processes.id, 字符串主键). */
+        WORK_PROCESS,
+        /** 设备 SOP 文件 (entity_id = factory_equipment.id 的十进制字符串). */
+        EQUIPMENT,
         GENERIC
     }
 

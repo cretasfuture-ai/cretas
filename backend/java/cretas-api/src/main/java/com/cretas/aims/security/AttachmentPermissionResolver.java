@@ -57,6 +57,39 @@ public class AttachmentPermissionResolver {
     public static final long MAX_UPLOAD_SIZE_BYTES = 10L * 1024L * 1024L;
 
     /**
+     * SOP 文件 (工序 / 设备) 只收 PDF 与常见图片: 比通用白名单窄, 不收 xlsx / docx / mp4。
+     * 车间现场要的是「点开就能看」, 办公文档与视频在手机上打不开或太大。
+     */
+    public static final Set<String> SOP_ALLOWED_CONTENT_TYPES = Set.of(
+            "application/pdf",
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/gif",
+            "image/webp"
+    );
+
+    /**
+     * 工序 SOP 的写入口角色白名单 (在 {@code production:read_write} 之外再「且」一层)。
+     *
+     * <p>为什么不只看 {@code production:read_write}: 该权限码 9 个角色都有 (含 operator / yield_operator /
+     * group_leader), 而 SOP 是操作员要照着做的标准, 谁都能换等于没有标准。读口不受此限
+     * (operator 要在报工页查看)。设备 SOP 不需要这一层: {@code equipment:read_write} 本身只有设备管理员与超管。
+     * 要放开给别的角色, 在这里加一行即可。
+     */
+    private static final Set<FactoryUserRole> WORK_PROCESS_SOP_WRITE_ROLES = Set.of(
+            FactoryUserRole.factory_super_admin,
+            FactoryUserRole.platform_admin,
+            FactoryUserRole.production_manager,
+            FactoryUserRole.workshop_supervisor
+    );
+
+    /** 工序 / 设备 SOP: 目标归属校验、文件类型收窄、写入口收紧都只对这两种类型生效。 */
+    public static boolean isSopType(EntityType type) {
+        return type == EntityType.WORK_PROCESS || type == EntityType.EQUIPMENT;
+    }
+
+    /**
      * EntityType → module mapping. Each entity inherits the read/read_write
      * permission of its owning module ({@code module:read} for views,
      * {@code module:read_write} for mutations).
@@ -73,6 +106,8 @@ public class AttachmentPermissionResolver {
         m.put(EntityType.QUALITY_CHECK, "quality");
         m.put(EntityType.PRODUCTION_BATCH, "production");
         m.put(EntityType.PRODUCTION_REPORT, "production");
+        m.put(EntityType.WORK_PROCESS, "production");
+        m.put(EntityType.EQUIPMENT, "equipment");
         m.put(EntityType.PAYMENT_VOUCHER, "finance");
         m.put(EntityType.INVOICE, "finance");
         m.put(EntityType.RD_SAMPLE, "rd");
@@ -151,6 +186,21 @@ public class AttachmentPermissionResolver {
         }
     }
 
+    /** SOP 上传校验: 比 {@link #validateUploadRequest} 更窄 (仅 PDF / 常见图片), 大小上限相同。 */
+    public void validateSopUpload(String contentType, Long declaredFileSize) {
+        if (contentType == null || contentType.isBlank()) {
+            throw new BusinessException(400, "fileType (Content-Type) 必填");
+        }
+        if (!SOP_ALLOWED_CONTENT_TYPES.contains(contentType.toLowerCase())) {
+            throw new BusinessException(400,
+                    "SOP 文件只支持 PDF 或图片 (jpg / png / webp / gif), 当前类型: " + contentType);
+        }
+        if (declaredFileSize != null && declaredFileSize > MAX_UPLOAD_SIZE_BYTES) {
+            throw new BusinessException(400,
+                    "文件超出 10MB 上限 (声明 " + declaredFileSize + " bytes)");
+        }
+    }
+
     private void require(User user, EntityType entityType, boolean write) {
         if (user == null) {
             throw new BusinessException(401, "未登录 — 无法访问附件");
@@ -160,6 +210,12 @@ public class AttachmentPermissionResolver {
         }
         if (isAdmin(user)) {
             return;
+        }
+        if (write && entityType == EntityType.WORK_PROCESS
+                && (user.getRoleEnum() == null || !WORK_PROCESS_SOP_WRITE_ROLES.contains(user.getRoleEnum()))) {
+            String roleLabel = user.getRoleEnum() == null ? "未知角色" : user.getRoleEnum().getDisplayName();
+            throw new BusinessException(403,
+                    "您的角色 [" + roleLabel + "] 无权管理工序 SOP — 仅工厂管理员、生产经理、车间主任可上传或删除");
         }
         String module = ENTITY_MODULE.get(entityType);
         if (module == null) {

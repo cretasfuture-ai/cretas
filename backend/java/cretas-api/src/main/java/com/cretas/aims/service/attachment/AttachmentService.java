@@ -90,6 +90,24 @@ public interface AttachmentService {
     void softDelete(String factoryId, String id, Long userId);
 
     /**
+     * 工序 / 设备 SOP 的删除: 调用方 (controller) 已按实体类型校验过「管理 SOP」的写权限,
+     * 所以这里不再要求「上传者本人或管理员」(车间主任要能删别人传的旧版本)。
+     * 仍然校验: 附件属于 factoryId, 且目标工序 / 设备若还存在则必须属于 factoryId。
+     *
+     * @throws com.cretas.aims.exception.BusinessException 400 if 不是 SOP 类型 / 403 if 目标跨厂 / 404 if not found
+     */
+    void softDeleteSop(String factoryId, String id, Long userId);
+
+    /**
+     * 校验 SOP 的目标 (工序 / 设备) 属于 factoryId。上传前取签名 URL、注册元数据、删除都走这一处。
+     *
+     * @param requireExists true = 目标不存在即 404 (上传 / 注册); false = 目标已被删除时放行
+     *                      (删除孤儿 SOP), 但目标存在且属于别的工厂时仍然 403
+     * @throws com.cretas.aims.exception.BusinessException 400 / 403 跨厂 / 404
+     */
+    void validateSopTarget(String factoryId, EntityType type, String entityId, boolean requireExists);
+
+    /**
      * 更新 — 仅允许改 {@code description} / {@code businessTag} / {@code fileCategory}.
      * 不允许改 fileUrl / entityType / entityId / uploadedBy.
      *

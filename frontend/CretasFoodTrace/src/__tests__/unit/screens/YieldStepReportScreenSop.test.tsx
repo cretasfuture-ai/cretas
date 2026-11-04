@@ -396,7 +396,7 @@ describe('YieldStepReportScreen — 工序 SOP 入口', () => {
     expect(screen.queryByText(/查看 SOP/)).toBeNull();
   });
 
-  it('哨兵任务 (__MATERIAL_INPUT__) 不请求 SOP, 也没有入口 —— 同一屏换成真实工序就请求 (阳性对照在上一条)', async () => {
+  it('哨兵批次的领料屏 (__MATERIAL_INPUT__) 不请求 SOP、没有入口 (有人把入口加进哨兵屏就会红; 阳性对照在第一条)', async () => {
     mockSopList.mockResolvedValue([sopFile('A1', 'x.pdf')]);
     await renderScreen(buildTask({ workProcessId: '__MATERIAL_INPUT__' }));
     expect(mockSopList).not.toHaveBeenCalled();
