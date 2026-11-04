@@ -27,7 +27,8 @@ import java.time.LocalDateTime;
  * ({@link PlatformAiAnalysisGrantService})、关停的工厂不给、每次使用都留痕。
  *
  * <p>顺序不能调: 身份与授权 → 工厂存在 → 工厂开着 → 同步留痕 (写不进去就拒绝) → 打开只属于这次分析的读取作用域
- * ({@link ProcessSecretPlatformAiScope}) 和外发绑定 → 分析。留痕在取数之前: 没有记录就不碰这家工厂的数据。
+ * ({@link ProcessSecretPlatformAiScope}) 和外发绑定 → 逐个记下可读的保密产品 → 取数和分析。
+ * 留痕都在取数之前: 没有记录就不碰这家工厂的数据。保密产品名单来自保密策略, 不依赖批次, 所以能排在读批次之前。
  *
  * <p>出外脱敏 (c) 不归这里管: 它决定什么内容能发给外部模型, 不决定谁能读, 由 {@link LlmEgressGuard} 按点名的工厂判。
  *
@@ -61,6 +62,7 @@ public class PlatformFactoryAiAnalysisService {
         LocalDateTime end = body.getEndDate().atTime(23, 59, 59);
         try (LlmEgressGuard.AnalysedFactoryScope egress = LlmEgressGuard.analysing(factoryId);
              ProcessSecretPlatformAiScope read = ProcessSecretPlatformAiScope.open(actor, factoryId)) {
+            access.recordPlatformAiReads(actor, factoryId);
             // 不打标: 这次的输出已经按入口裁过了, 打了标响应裁剪会把数字字段藏掉, 还写一条「平台被拒」的假记录
             return ProcessSecretReadTracker.untracked(() -> analysis.analyzeTimeRangeForPlatform(
                     factoryId, start, end, body.getDimension(), body.getQuestion()));
@@ -76,7 +78,8 @@ public class PlatformFactoryAiAnalysisService {
     }
 
     private void recordUse(AuthenticatedActor actor, String factoryId, LocalDate startDate, LocalDate endDate) {
-        String reason = "平台 AI 成本分析 " + startDate + "~" + endDate;
+        // 提示词除了这个时间段, 还带最近 30 天的预计算生产统计, 留痕要照实写。⛔ 不写问题原文
+        String reason = "平台 AI 成本分析 " + startDate + "~" + endDate + "，并含最近 30 天生产统计";
         if (!access.audit(factoryId, null, actor, ProcessSecretAction.AI_ACCESS, "ALLOW", reason, AUDIT_RESOURCE)) {
             log.error("[platform-ai-analysis] audit write failed, refusing analysis for factory {}", factoryId);
             throw new BusinessException(403, AUDIT_UNAVAILABLE_MESSAGE);

@@ -70,16 +70,19 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 
 | 项 | 规则 | 代码位置 |
 |---|---|---|
-| 谁能用 | 库里有效的平台超级管理员本人；其余平台账号要由超级管理员开通（开给一个平台角色或一个平台账号）。每次现查库，撤销下一次调用就生效。未开通 403 | `PlatformAiAnalysisGrantService.requireEntry`；授权接口 `/api/platform/ai-analysis/grants`（列表 / 开通 / `revoke`，只给库里有效的超级管理员，必须写理由）；表 `platform_ai_analysis_grants`，只追加的留痕表 `platform_ai_analysis_grant_audit`（V20261104_25） |
+| 谁能用 | 库里有效的平台超级管理员本人；其余平台账号要由超级管理员开通（开给一个平台角色或一个平台账号，超级管理员的账号不能开通）。每次现查库，撤销下一次调用就生效。未开通 403。账号授权在账号改角色后保留，直到撤销；角色授权跟着库里当前的角色走。并发重复开通只留一行一条留痕，后到的 409 | `PlatformAiAnalysisGrantService.requireEntry`；授权接口 `/api/platform/ai-analysis/grants`（列表 / 开通 / `revoke`，只给库里有效的超级管理员，必须写理由）；表 `platform_ai_analysis_grants`，只追加的留痕表 `platform_ai_analysis_grant_audit`（V20261104_25） |
 | a / b | **不读**。配置怎么设都能用（`FactorySecrecyGatesContractTest` 把入口服务列为不许引用保密配置的类） | `PlatformFactoryAiAnalysisService` |
 | 保密产品 | a、b 都开时也读得到。放行只在 `ProcessSecretPlatformAiScope` 里成立：入口打开、绑当前线程 + 一个平台账号 + 一家工厂、分析结束或抛异常就关。它只被 `ProcessSecretAccessService.permitsPlatformAiRead` 读，⛔ `decide` / `permitsViewFull` / `platformSeesFull` / `hiddenFromPlatform` 都不看它，同一账号走既有配方 / 成本 / 分析接口照旧被挡 | `ProcessSecretLlmCostScope.fullView` |
-| 客户侧保管（e 开的 B 档） | 云端没有完整工艺，读不到：这些批次不进提示词，响应 `data.notice` 明说；全部批次都是 B 档时 403，不调模型 | `AIEnterpriseService.analyzeTimeRangeForPlatform` |
-| 留痕 | 每次使用一条 `AI_ACCESS` / `ALLOW`、`resource_ref=ai:platform-analysis`、产品为空，在取数之前同步写，写不进去 403；本次可读范围内每个保密产品再记一条（带产品），写不进去同样在调模型之前 403。⛔ 不存问题原文 | `PlatformFactoryAiAnalysisService.recordUse`、`permitsPlatformAiRead` |
+| 客户侧保管（e 开的 B 档） | 云端没有完整工艺，成本和工艺读不到：时间段内这些批次和同计划批次不进提示词；近 30 天生产统计里这些产品的**名称和产量仍然发出**，成本列是「保密」。响应 `data.notice` 按实际发出的内容分别说明（产品只在 30 天统计里出现、时间段内没有批次时也说）。全部批次都是 B 档时 403，不调模型 | `AIEnterpriseService.platformNotice` |
+| 数据不全 | 时间段内超过 50 个批次时只取前 50 个、取成本失败的批次被丢掉：`data.notice` 和提示词都写明数量；全部失败时 503，不调模型 | `ProcessingService.getTimeRangeBatchesWithCounts`（老方法行为不变） |
+| 留痕 | 每次使用一条 `AI_ACCESS` / `ALLOW`、`resource_ref=ai:platform-analysis`、产品为空，原因写明时间段「并含最近 30 天生产统计」，同步写，写不进去 403；本次可读范围内每个保密产品再记一条（带产品），写不进去同样 403。两种记录都在读批次之前写完。⛔ 不存问题原文 | `PlatformFactoryAiAnalysisService.recordUse`、`ProcessSecretAccessService.recordPlatformAiReads` |
 | 出外脱敏（c） | **仍然生效**，按点名的工厂判：c 管什么能发给外部模型，不管谁能读。c 开时保密产品名换代号发出，回答里换回 | `LlmEgressGuard` |
 | 工厂关停 | 拒绝（`is_active=false`）。擦除的前提是先关停，擦除中的工厂也落在这里 | `PlatformFactoryAiAnalysisService.requireOpen` |
-| 配额 / 共享结果 | 不扣工厂配额，不写 `AIAnalysisResult`（工厂用户读不到平台问出来的回答）；`X-User-Id` 不传，Python 不写对话记忆 | `AIEnterpriseService.analyzeTimeRangeForPlatform` |
+| 配额 / 共享结果 | 不扣工厂配额，不写 `AIAnalysisResult`（工厂用户读不到平台问出来的回答） | `AIEnterpriseService.analyzeTimeRangeForPlatform` |
+| Python 侧留存 | Java 带 `X-No-Training-Capture: 1`（只有这个入口带，只认内部调用）：不写 `smart_bi_distillation_samples`，不读不写内存响应缓存。不传 `X-User-Id`，不写对话记忆。**仍然会写**：`smart_bi_llm_usage`（token 数、模型、工厂）和外发审计记录（提示词长度和 sha256），都不含正文。Python 日志不打这条路的提示词 | `PythonSmartBIClient.analyzeGeneralWithoutCapture`、`smartbi/api/chat.py` `_no_capture_requested` |
+| DashScope 直连通道 | 开了 `costAnalysis` 迁移开关时走 `/api/llm/chat`，这个接口不写训练样本，也不带 `X-Factory-Id`；正文已在 Java 侧按点名的工厂脱敏 | `AIAnalysisService.analyzeCostDirect` |
 
-「本次可读范围内每个保密产品」的口径：判定时本厂全部生效的 A 档保密产品各记一条，而不是只记这个时间段里实际有批次的产品 —— 提示词还会带最近 30 天的预计算生产统计，这里拿不到精确的逐产品名单，按审计宁可多记。
+「本次可读范围内每个保密产品」的口径：本厂全部生效的 A 档保密产品各记一条，而不是只记实际发出的产品。名单来自保密策略、不依赖批次，所以能排在读批次之前；代价是这次没有批次的产品也会记一条。
 
 响应裁剪：这段读取走 `ProcessSecretReadTracker.untracked`，否则 `ProcessSecretPayloadScrubber` 会按「平台读了受限产品」把响应里的数字字段藏掉，并写一条 `VIEW_FULL` / `DENY`，与实际发生的事相反。分析正文是文本，裁剪器本来也不碰。`ProcessSecretToolOutputAspect` 只包 AI 工具调用，这条路不经过工具。
 
@@ -168,5 +171,5 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 `docs/website/data-security-claims.md` 是官网承诺台账，由官网会话维护，本文件不改它。需要官网会话更新：
 
 - `C4-assistant-redact`（工厂 AI 助手发给模型前替换名称）：补一句「意图识别保留原名」的例外，或在页面上限定为「分析 / 对话内容」。
-- `C4-assistant-redact` 内部口径与 b 的说明（2026-11-04）：「平台人员拿到的数据已经去掉保密产品的成本」对平台授权 AI 分析入口不再成立；`platform/data-security.html` 里「平台看不到配方」的说明要按新含义改。
+- `C4-assistant-redact` 内部口径与 b 的说明（2026-11-04）：「平台人员拿到的数据已经去掉保密产品的成本」对平台授权 AI 分析入口不再成立。要按新含义改的页面：`platform/data-security.html`（第 261、274、297、311 行附近）、`platform/privacy.html`（第 288–289 行附近）。
 - `C1-no-cross-learning`：可以补上本次的证据（全局说法只收人工预置且查全厂保密产品名；关键词只写本厂意图行；Python 学习按工厂分组；读出口不用系统学来的全局行；跨厂知识晋升已关）。存量清理未做，见上「已知缺口」。

@@ -491,6 +491,17 @@ public class ProcessSecretAccessService {
         return true;
     }
 
+    /**
+     * 在读批次之前把这次分析可读的保密产品逐个记下 (名单来自保密策略, 不依赖批次)。
+     * 口径是「本次可读范围」: 提示词还带最近 30 天的统计, 这里拿不到精确的逐产品名单, 按审计宁可多记。
+     * 必须在作用域里调用; 作用域外什么也不记。
+     */
+    public void recordPlatformAiReads(AuthenticatedActor actor, String factoryId) {
+        for (String productTypeId : protectedProductTypeIds(factoryId)) {
+            permitsPlatformAiRead(actor, factoryId, productTypeId);
+        }
+    }
+
     /** 写审计; 失败只返回 false (不吞掉判定), 由调用方决定是否 fail-closed。 */
     public boolean audit(String factoryId, String productTypeId, AuthenticatedActor actor,
                          ProcessSecretAction action, String decision, String reason, String resourceRef) {

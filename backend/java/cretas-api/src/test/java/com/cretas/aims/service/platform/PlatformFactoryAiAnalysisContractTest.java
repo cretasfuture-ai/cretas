@@ -18,6 +18,7 @@ import com.cretas.aims.controller.BomRecipeController;
 import com.cretas.aims.controller.platform.PlatformAiAnalysisGrantController;
 import com.cretas.aims.controller.platform.PlatformFactoryAiAnalysisController;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
+import com.cretas.aims.dto.report.ProductionByProductDTO;
 import com.cretas.aims.dto.python.PythonGeneralAnalysisRequest;
 import com.cretas.aims.entity.AIQuotaUsage;
 import com.cretas.aims.entity.Factory;
@@ -32,6 +33,7 @@ import com.cretas.aims.entity.audit.PlatformDataAccessLog;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.enums.PlatformRole;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.Status;
 import com.cretas.aims.entity.platform.PlatformAiAnalysisGrant;
 import com.cretas.aims.entity.platform.PlatformAiAnalysisGrantAudit;
@@ -71,6 +73,7 @@ import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.AIEnterpriseService;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.ReportService;
 import com.cretas.aims.service.TokenBlacklistService;
 import com.cretas.aims.service.bom.BomCopyService;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
@@ -78,6 +81,7 @@ import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
 import com.cretas.aims.service.consent.LlmEgressGuard;
 import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
+import com.cretas.aims.service.impl.AIContextServiceImpl;
 import com.cretas.aims.service.impl.ProcessingServiceImpl;
 import com.cretas.aims.service.mobile.WebLoginSessionService;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
@@ -86,6 +90,7 @@ import com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit;
 import com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder;
 import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
 import com.cretas.aims.service.processsecret.ProcessSecretTestHooks;
+import com.cretas.aims.service.report.impl.ProductionReportServiceImpl;
 import com.cretas.aims.service.secrecy.FactorySecrecyConfig;
 import com.cretas.aims.service.secrecy.SecrecyItem;
 import com.cretas.aims.utils.JwtUtil;
@@ -127,6 +132,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -135,6 +141,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -146,6 +153,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -187,6 +195,18 @@ class PlatformFactoryAiAnalysisContractTest {
     static final String SECRET_PRODUCT = "秘制酱牛肉";
     static final String HELD_PRODUCT = "客户保管酱料";
     static final String SECRET_RECIPE_LINE = "秘方香料";
+    /** 批次放在这一天; 请求的时间段包住它, 且都在最近 30 天里。 */
+    static final LocalDate RANGE_START = LocalDate.now().minusDays(20);
+    static final LocalDate RANGE_END = LocalDate.now().minusDays(10);
+    static final LocalDateTime IN_RANGE = LocalDate.now().minusDays(15).atTime(8, 0);
+    static final LocalDateTime RECENT_ONLY = LocalDate.now().minusDays(3).atTime(8, 0);
+    /** 98 kg 总成本 7777 → 单位成本 79.3571: 这个读数只可能来自 30 天统计的实际成本列。 */
+    static final String SECRET_UNIT_COST = "¥79.3571";
+    static final String HELD_UNIT_COST = "¥56.6837";
+    static final String SECRET_ROW_WITHHELD = "| " + "秘制酱牛肉" + " | 98 kg | 保密 | 保密 |";
+    static final String HELD_ROW_WITHHELD = "| " + "客户保管酱料" + " | 98 kg | 保密 | 保密 |";
+    static final String HELD_RANGE_NOTICE = "说明：该时间段内 1 个客户侧保管产品的批次无法读取（核心工艺不在云端），这些批次和同计划的批次未计入。";
+    static final String HELD_CONTEXT_NOTICE = "说明：近 30 天生产统计里有 1 个客户侧保管产品的成本和工艺无法读取，未计入；这些产品的名称和产量仍在统计里。";
     static final AuthenticatedActor PLATFORM_ACTOR =
             new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, ADMIN, "PLATFORM", "super_admin");
 
@@ -199,6 +219,7 @@ class PlatformFactoryAiAnalysisContractTest {
     final Map<String, Factory> factoryRows = new HashMap<>();
     final Map<Long, PlatformAdmin> adminRows = new HashMap<>();
     final Map<String, List<ProductionBatch>> batchRows = new HashMap<>();
+    final Set<Long> brokenBatches = new java.util.HashSet<>();
     final Map<String, ProductType> productTypes = new HashMap<>();
     final Map<String, PlatformAiAnalysisGrant> grantRows = new LinkedHashMap<>();
     final List<PlatformAiAnalysisGrantAudit> grantAudit = new ArrayList<>();
@@ -228,6 +249,7 @@ class PlatformFactoryAiAnalysisContractTest {
     AIAnalysisService basicAi;
     ProcessingServiceImpl processing;
     AIEnterpriseService enterprise;
+    AIContextServiceImpl aiContext;
     ProductionBatchRepository batches;
     PythonSmartBIClient python;
     MockWebServer server;
@@ -284,6 +306,10 @@ class PlatformFactoryAiAnalysisContractTest {
         ReflectionTestUtils.setField(basicAi, "aiAccessAudit", aiAudit);
 
         processing = realProcessingService();
+        aiContext = new AIContextServiceImpl(mock(com.cretas.aims.service.BomService.class), realProductionReport(), batches,
+                productTypeRepository, costScope);
+        ReflectionTestUtils.setField(aiContext, "aiAccessAudit", aiAudit);
+        ReflectionTestUtils.setField(basicAi, "aiContextService", aiContext);
         enterprise = new AIEnterpriseService();
         ReflectionTestUtils.setField(enterprise, "basicAIService", basicAi);
         ReflectionTestUtils.setField(enterprise, "processingService", processing);
@@ -361,13 +387,14 @@ class PlatformFactoryAiAnalysisContractTest {
         assertThat(row.action()).isEqualTo(ProcessSecretAction.AI_ACCESS);
         assertThat(row.decision()).isEqualTo("ALLOW");
         assertThat(row.resourceRef()).isEqualTo("ai:platform-analysis");
-        assertThat(row.reason()).contains("2026-10-01", "2026-10-31").doesNotContain("来料", PHONE, SUPPLIER);
+        assertThat(row.reason()).contains(RANGE_START.toString(), RANGE_END.toString(), "最近 30 天")
+                .doesNotContain("来料", PHONE, SUPPLIER);
 
         InOrder order = inOrder(recorder, batches, python);
         order.verify(recorder).record(eq(F1), any(), any(), eq(ProcessSecretAction.AI_ACCESS), eq("ALLOW"), anyString(),
                 eq("ai:platform-analysis"));
-        order.verify(batches).findByFactoryIdAndCreatedAtBetween(eq(F1), any(), any());
-        order.verify(python).analyzeGeneral(eq(F1), any(), any(PythonGeneralAnalysisRequest.class));
+        order.verify(batches, atLeastOnce()).findByFactoryIdAndCreatedAtBetween(eq(F1), any(), any());
+        order.verify(python).analyzeGeneralWithoutCapture(eq(F1), any(PythonGeneralAnalysisRequest.class));
         assertThat(server.getRequestCount()).isEqualTo(1);
     }
 
@@ -423,7 +450,7 @@ class PlatformFactoryAiAnalysisContractTest {
                 .andExpect(jsonPath("$.data.quotaConsumed").value(0))
                 .andExpect(jsonPath("$.data.processingTimeMs").isNumber());
 
-        assertThat(sentBody()).contains(SECRET_PRODUCT, PLAIN_PRODUCT);
+        assertThat(sentBody()).contains(SECRET_PRODUCT, PLAIN_PRODUCT, SECRET_UNIT_COST).doesNotContain(SECRET_ROW_WITHHELD);
         assertThat(audit.get(0).productTypeId()).as("入口那一条排在最前").isNull();
         assertThat(audit).filteredOn(r -> "ai:platform-analysis".equals(r.resourceRef()))
                 .extracting(AuditRow::productTypeId, AuditRow::action, AuditRow::decision)
@@ -434,10 +461,12 @@ class PlatformFactoryAiAnalysisContractTest {
         assertThat(audit).filteredOn(r -> r.action() == ProcessSecretAction.VIEW_FULL).isEmpty();
         assertThat(audit).allSatisfy(r -> assertThat(r.reason() + r.resourceRef()).doesNotContain(PHONE, "来料"));
 
-        InOrder order = inOrder(recorder, python);
+        // 保密产品的记录排在读批次之前: 名单来自保密策略, 不依赖批次
+        InOrder order = inOrder(recorder, batches, python);
         order.verify(recorder).record(eq(F1), eq("P-SECRET"), any(), eq(ProcessSecretAction.AI_ACCESS), eq("ALLOW"),
                 anyString(), eq("ai:platform-analysis"));
-        order.verify(python).analyzeGeneral(eq(F1), any(), any(PythonGeneralAnalysisRequest.class));
+        order.verify(batches, atLeastOnce()).findByFactoryIdAndCreatedAtBetween(eq(F1), any(), any());
+        order.verify(python).analyzeGeneralWithoutCapture(eq(F1), any(PythonGeneralAnalysisRequest.class));
     }
 
     @Test
@@ -450,7 +479,7 @@ class PlatformFactoryAiAnalysisContractTest {
         analyse(F1, superAdminToken()).andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("保密访问记录暂时写不进去，已暂停平台 AI 分析"));
-        assertNoModel();
+        assertNoDataAndNoModel();
     }
 
     /** B 档 (e 开) 云端没有完整工艺: 该行不进提示词, 其余照常分析, 响应里明说读不到; 请求里 Hibernate 读过它也不影响回答。 */
@@ -459,16 +488,17 @@ class PlatformFactoryAiAnalysisContractTest {
         protectEverything();
         set(F1, SecrecyItem.CUSTOMER_HELD, true);
         addPolicy(F1, "P-HELD", HELD_PRODUCT, ProcessSecretStorageMode.CUSTOMER_HELD);
-        addBatch(F1, 13L, "P-HELD", HELD_PRODUCT);
+        addBatch(F1, 13L, "P-HELD", HELD_PRODUCT).setTotalCost(new BigDecimal("5555"));
         addSecretProduct();
         answerWithAnalysis();
 
-        String notice = "说明：本次分析不含 1 个客户侧保管产品：这些产品的核心工艺不在云端，无法读取，与它们同计划的批次也一并未计入。";
         analyse(F1, superAdminToken()).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.analysis").value(ANSWER))
-                .andExpect(jsonPath("$.data.notice").value(notice));
+                .andExpect(jsonPath("$.data.notice").value(HELD_RANGE_NOTICE + HELD_CONTEXT_NOTICE));
 
-        assertThat(sentBody()).contains(PLAIN_PRODUCT, SECRET_PRODUCT, notice).doesNotContain(HELD_PRODUCT);
+        // 名称和产量在 30 天统计里还会发出 (说明也这么写), 成本不发
+        assertThat(sentBody()).contains(PLAIN_PRODUCT, SECRET_PRODUCT, SECRET_UNIT_COST, HELD_RANGE_NOTICE, HELD_ROW_WITHHELD)
+                .doesNotContain(HELD_UNIT_COST);
         assertThat(audit).extracting(AuditRow::productTypeId).doesNotContain("P-HELD");
     }
 
@@ -484,6 +514,101 @@ class PlatformFactoryAiAnalysisContractTest {
                 .andExpect(jsonPath("$.message").value("该时间段内的批次都是客户侧保管产品，核心工艺不在云端，无法读取，未发给 AI 分析"));
         assertNoModel();
         assertThat(audit).extracting(AuditRow::resourceRef).containsExactly("ai:platform-analysis");
+    }
+
+    /** 时间段里没有 B 档批次, 但最近 30 天有: 30 天统计扣掉了它的成本, 说明也要有, 且只说这一节。 */
+    @Test
+    void aCustomerHeldProductThatOnlyAppearsInTheLastThirtyDaysStillGetsANotice() throws Exception {
+        set(F1, SecrecyItem.CUSTOMER_HELD, true);
+        addPolicy(F1, "P-HELD", HELD_PRODUCT, ProcessSecretStorageMode.CUSTOMER_HELD);
+        ProductionBatch recent = addBatch(F1, 13L, "P-HELD", HELD_PRODUCT);
+        recent.setCreatedAt(RECENT_ONLY);
+        recent.setTotalCost(new BigDecimal("5555"));
+        answerWithAnalysis();
+
+        analyse(F1, superAdminToken()).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.notice").value(HELD_CONTEXT_NOTICE));
+
+        assertThat(sentBody()).contains(PLAIN_PRODUCT, HELD_ROW_WITHHELD).doesNotContain(HELD_UNIT_COST);
+    }
+
+    /** 30 天统计 (提示词里最大的数据来源) 在作用域里给实际成本, 在作用域外同一个调用照旧是保密。 */
+    @Test
+    void theThirtyDayContextShowsProtectedCostsOnlyInsideTheScope() throws Exception {
+        protectEverything();
+        addSecretProduct();
+        answerWithAnalysis();
+        analyse(F1, superAdminToken()).andExpect(status().isOk());
+        assertThat(sentBody()).as("入口").contains(SECRET_UNIT_COST).doesNotContain(SECRET_ROW_WITHHELD);
+
+        String outside;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(PLATFORM_ACTOR)) {
+            outside = aiContext.formatProductionContextForPrompt(aiContext.buildProductionContextForAi(
+                    F1, LocalDate.now().minusDays(30), LocalDate.now()));
+        }
+        assertThat(outside).as("作用域外").contains(SECRET_ROW_WITHHELD).doesNotContain(SECRET_UNIT_COST);
+    }
+
+    // ------------------------------------------------------------------ 数据不全要说
+
+    @Test
+    void moreThanFiftyBatchesIsToldToTheCallerAndTheModel() throws Exception {
+        for (long id = 100; id < 151; id++) addBatch(F1, id, "P-PLAIN", PLAIN_PRODUCT);
+        answerWithAnalysis();
+        String notice = "说明：该时间段共 52 个批次，超过上限，只取了其中 50 个。";
+        analyse(F1, superAdminToken()).andExpect(status().isOk()).andExpect(jsonPath("$.data.notice").value(notice));
+        assertThat(sentBody()).contains(notice);
+    }
+
+    @Test
+    void aBatchThatFailedToLoadIsToldToTheCallerAndTheModel() throws Exception {
+        addBatch(F1, 12L, "P-PLAIN", PLAIN_PRODUCT);
+        brokenBatches.add(12L);
+        answerWithAnalysis();
+        String notice = "说明：有 1 个批次取成本数据失败，未计入。";
+        analyse(F1, superAdminToken()).andExpect(status().isOk()).andExpect(jsonPath("$.data.notice").value(notice));
+        assertThat(sentBody()).contains(notice);
+    }
+
+    @Test
+    void everyBatchFailingToLoadIsAClearFailureNotNoData() throws Exception {
+        brokenBatches.add(11L);
+        analyse(F1, superAdminToken()).andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("该时间段内的批次成本数据都没有取到，未发给 AI 分析"));
+        assertNoModel();
+    }
+
+    /** 取数改成带计数之后, 老方法给别的调用方的结果不变: 仍是截断到 50、失败的丢掉。 */
+    @Test
+    void theSharedFetchKeepsItsBehaviourForOtherCallers() {
+        for (long id = 100; id < 151; id++) addBatch(F1, id, "P-PLAIN", PLAIN_PRODUCT);
+        brokenBatches.add(11L);
+        LocalDateTime from = RANGE_START.atStartOfDay();
+        LocalDateTime to = RANGE_END.atTime(23, 59, 59);
+        assertThat(processing.getTimeRangeBatchesCostAnalysis(F1, from, to)).hasSize(49);
+        var counted = processing.getTimeRangeBatchesWithCounts(F1, from, to);
+        assertThat(counted.rows()).hasSize(49);
+        assertThat(counted.found()).isEqualTo(52);
+        assertThat(counted.overLimit()).isEqualTo(2);
+        assertThat(counted.failed()).isEqualTo(1);
+    }
+
+    // ------------------------------------------------------------------ Python 侧不留存
+
+    /** 只有这个入口带不留存信号: 老成本分析照旧不带, Python 的默认采集不变。 */
+    @Test
+    void onlyTheEntrySendsTheNoCaptureSignal() throws Exception {
+        answerWithAnalysis();
+        analyse(F1, superAdminToken()).andExpect(status().isOk());
+        assertThat(server.takeRequest(1, TimeUnit.SECONDS).getHeader("X-No-Training-Capture")).isEqualTo("1");
+
+        answerWithAnalysis();
+        existing.perform(post("/api/mobile/" + F1 + "/ai/analysis/cost/time-range")
+                        .header("Authorization", "Bearer " + superAdminToken())
+                        .contentType(MediaType.APPLICATION_JSON).content(body("")))
+                .andExpect(status().isOk());
+        assertThat(server.takeRequest(1, TimeUnit.SECONDS).getHeader("X-No-Training-Capture")).isNull();
     }
 
     // ------------------------------------------------------------------ 放行只属于这个入口
@@ -554,7 +679,7 @@ class PlatformFactoryAiAnalysisContractTest {
             thread.start();
             seen.put("otherThread", other.get(5, TimeUnit.SECONDS));
             return inv.callRealMethod();
-        }).when(python).analyzeGeneral(anyString(), any(), any(PythonGeneralAnalysisRequest.class));
+        }).when(python).analyzeGeneralWithoutCapture(anyString(), any(PythonGeneralAnalysisRequest.class));
         answerWithAnalysis();
 
         analyse(F1, superAdminToken()).andExpect(status().isOk());
@@ -622,6 +747,17 @@ class PlatformFactoryAiAnalysisContractTest {
         assertThat(server.getRequestCount()).isEqualTo(1);
     }
 
+    /** 选定的行为: 账号授权在账号改角色后保留, 直到撤销 (超管账号本来开不了, 所以不会有人给自己留后门)。 */
+    @Test
+    void anAccountGrantStaysThroughARoleChangeUntilRevoked() throws Exception {
+        grant("ACCOUNT", String.valueOf(STAFF), "专人").andExpect(status().isOk());
+        adminRows.get(STAFF).setPlatformRole(PlatformRole.auditor);
+        answerWithAnalysis();
+        analyse(F1, jwt.generatePlatformToken(STAFF, "staff", "auditor")).andExpect(status().isOk());
+        revoke("ACCOUNT", String.valueOf(STAFF), "收回").andExpect(status().isOk());
+        analyse(F1, jwt.generatePlatformToken(STAFF, "staff", "auditor")).andExpect(status().isForbidden());
+    }
+
     /** 判定看库里的角色和状态: 旧令牌里写着超管、库里已降级的账号拿不到; 令牌里写的角色有授权、库里不是这个角色也拿不到。 */
     @Test
     void theGrantIsJudgedOnTheDatabaseRowNotTheToken() throws Exception {
@@ -671,7 +807,8 @@ class PlatformFactoryAiAnalysisContractTest {
     void aGrantAndARevokeEachWriteExactlyOneAuditRowAndNoChangeWritesNone() throws Exception {
         grant("ROLE", "auditor", "审计抽查").andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.grantee").value("auditor"));
-        grant("ROLE", "auditor", "再开一次").andExpect(status().isConflict());
+        grant("ROLE", "auditor", "再开一次").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.actionHint").value(PlatformAiAnalysisGrantService.ALREADY_GRANTED_HINT));
         revoke("ROLE", "auditor", "抽查结束").andExpect(status().isOk());
         revoke("ROLE", "auditor", "再撤一次").andExpect(status().isNotFound());
 
@@ -691,6 +828,8 @@ class PlatformFactoryAiAnalysisContractTest {
                 .andExpect(jsonPath("$.message").value("必须填写理由"));
         revoke("ROLE", "auditor", "").andExpect(status().isBadRequest());
         grant("ROLE", "super_admin", "没必要").andExpect(status().isBadRequest());
+        grant("ACCOUNT", String.valueOf(ADMIN), "超管给自己留一条").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("超级管理员不需要开通"));
         grant("ROLE", "nobody", "不存在的角色").andExpect(status().isBadRequest());
         grant("ACCOUNT", "999", "不存在的账号").andExpect(status().isNotFound());
         grant("ACCOUNT", "abc", "不是编号").andExpect(status().isBadRequest());
@@ -817,7 +956,7 @@ class PlatformFactoryAiAnalysisContractTest {
                         .contentType(MediaType.APPLICATION_JSON).content(body(",\"factoryId\":\"" + F2 + "\"")))
                 .andExpect(status().isOk());
 
-        verify(batches).findByFactoryIdAndCreatedAtBetween(eq(F1), any(), any());
+        verify(batches, atLeastOnce()).findByFactoryIdAndCreatedAtBetween(eq(F1), any(), any());
         verify(batches, never()).findByFactoryIdAndCreatedAtBetween(eq(F2), any(), any());
         RecordedRequest sent = server.takeRequest(1, TimeUnit.SECONDS);
         assertThat(sent.getHeader("X-Factory-Id")).isEqualTo(F1);
@@ -881,7 +1020,7 @@ class PlatformFactoryAiAnalysisContractTest {
         doAnswer(inv -> {
             deepExitResolved.set(!guard.structured("probe", null, Map.of("k", "v")).refused());
             return inv.callRealMethod();
-        }).when(python).analyzeGeneral(anyString(), any(), any(PythonGeneralAnalysisRequest.class));
+        }).when(python).analyzeGeneralWithoutCapture(anyString(), any(PythonGeneralAnalysisRequest.class));
         answerWithAnalysis();
         analyse(F1, superAdminToken()).andExpect(status().isOk());
         assertThat(deepExitResolved).as("分析期间深层出口认得点名的工厂").isTrue();
@@ -958,7 +1097,8 @@ class PlatformFactoryAiAnalysisContractTest {
         existing.perform(post("/api/mobile/" + F1 + "/ai/analysis/cost/time-range").header("Authorization", bearer)
                         .contentType(MediaType.APPLICATION_JSON).content(body("")))
                 .andExpect(status().isOk());
-        assertThat(sentBody()).as("老成本分析").contains(PLAIN_PRODUCT).doesNotContain(SECRET_PRODUCT);
+        // 老路由的提示词也走 30 天统计: 保密产品只剩名称和产量, 成本是「保密」
+        assertThat(sentBody()).as("老成本分析").contains(PLAIN_PRODUCT, SECRET_ROW_WITHHELD).doesNotContain(SECRET_UNIT_COST);
 
         assertThat(access.decide(PLATFORM_ACTOR, F1, "P-SECRET", ProcessSecretAction.VIEW_FULL).outcome())
                 .isEqualTo(ProcessSecretAccessService.Outcome.DENY);
@@ -979,7 +1119,7 @@ class PlatformFactoryAiAnalysisContractTest {
 
     void addSecretProduct() {
         addPolicy(F1, "P-SECRET", SECRET_PRODUCT, ProcessSecretStorageMode.CLOUD_RESTRICTED);
-        addBatch(F1, 12L, "P-SECRET", SECRET_PRODUCT);
+        addBatch(F1, 12L, "P-SECRET", SECRET_PRODUCT).setTotalCost(new BigDecimal("7777"));
     }
 
     void assertNothingHappened() throws IOException {
@@ -993,7 +1133,7 @@ class PlatformFactoryAiAnalysisContractTest {
     }
 
     void assertNoModel() throws IOException {
-        verify(python, never()).analyzeGeneral(any(), any(), any(PythonGeneralAnalysisRequest.class));
+        verify(python, never()).analyzeGeneralWithoutCapture(any(), any(PythonGeneralAnalysisRequest.class));
         verifyNoInteractions(pythonLlm);
         assertThat(server.getRequestCount()).isZero();
     }
@@ -1031,8 +1171,8 @@ class PlatformFactoryAiAnalysisContractTest {
     }
 
     static String body(String extra) {
-        return "{\"startDate\":\"2026-10-01\",\"endDate\":\"2026-10-31\",\"dimension\":\"overall\",\"question\":\""
-                + QUESTION + "\"" + extra + "}";
+        return "{\"startDate\":\"" + RANGE_START + "\",\"endDate\":\"" + RANGE_END
+                + "\",\"dimension\":\"overall\",\"question\":\"" + QUESTION + "\"" + extra + "}";
     }
 
     String superAdminToken() {
@@ -1083,7 +1223,7 @@ class PlatformFactoryAiAnalysisContractTest {
     }
 
     /** 批次实体 + 带供应商的消耗记录: 行由真实的 {@link ProcessingServiceImpl} 从这些实体拼出来。 */
-    void addBatch(String factory, long id, String productTypeId, String productName) {
+    ProductionBatch addBatch(String factory, long id, String productTypeId, String productName) {
         ProductionBatch batch = new ProductionBatch();
         batch.setId(id);
         batch.setFactoryId(factory);
@@ -1092,8 +1232,11 @@ class PlatformFactoryAiAnalysisContractTest {
         batch.setProductTypeId(productTypeId);
         batch.setPlannedQuantity(new BigDecimal("100"));
         batch.setActualQuantity(new BigDecimal("98"));
-        batch.setCreatedAt(LocalDateTime.of(2026, 10, 15, 8, 0));
+        batch.setUnit("kg");
+        batch.setStatus(ProductionBatchStatus.COMPLETED);
+        batch.setCreatedAt(IN_RANGE);
         batchRows.computeIfAbsent(factory, k -> new ArrayList<>()).add(batch);
+        return batch;
     }
 
     MaterialConsumption consumption() {
@@ -1162,13 +1305,16 @@ class PlatformFactoryAiAnalysisContractTest {
         ProcessingServiceImpl service = (ProcessingServiceImpl) constructor.newInstance(arguments);
         batches = (ProductionBatchRepository) ReflectionTestUtils.getField(service, "productionBatchRepository");
         when(batches.findByFactoryIdAndCreatedAtBetween(anyString(), any(), any())).thenAnswer(inv -> {
-            List<ProductionBatch> loaded = List.copyOf(batchRows.getOrDefault(inv.<String>getArgument(0), List.of()));
+            LocalDateTime from = inv.getArgument(1);
+            LocalDateTime to = inv.getArgument(2);
+            List<ProductionBatch> loaded = batchRows.getOrDefault(inv.<String>getArgument(0), List.of()).stream()
+                    .filter(b -> !b.getCreatedAt().isBefore(from) && !b.getCreatedAt().isAfter(to)).toList();
             loaded.forEach(ProcessSecretTestHooks::record);   // 生产上由 Hibernate PostLoad 打这个标
             return loaded;
         });
         when(batches.findByIdAndFactoryId(any(), anyString())).thenAnswer(inv -> batchRows
                 .getOrDefault(inv.<String>getArgument(1), List.of()).stream()
-                .filter(b -> b.getId().equals(inv.getArgument(0))).findFirst());
+                .filter(b -> b.getId().equals(inv.getArgument(0)) && !brokenBatches.contains(b.getId())).findFirst());
         MaterialConsumptionRepository consumptions =
                 (MaterialConsumptionRepository) ReflectionTestUtils.getField(service, "materialConsumptionRepository");
         when(consumptions.findByProductionBatchId(any())).thenAnswer(inv -> List.of(consumption()));
@@ -1176,6 +1322,37 @@ class PlatformFactoryAiAnalysisContractTest {
                 (QualityInspectionRepository) ReflectionTestUtils.getField(service, "qualityInspectionRepository");
         when(inspections.findByFactoryIdAndProductionBatchId(anyString(), any(), any())).thenReturn(Page.empty());
         return service;
+    }
+
+    /**
+     * 真实的按产品统计: 仓库桩只替 JPQL 做它做的事 (COMPLETED、时间窗、按产品聚合、Object[] 四列)。
+     * ReportService 是一层委托, 这里接到真实的 {@link ProductionReportServiceImpl}。
+     */
+    ReportService realProductionReport() throws Exception {
+        Constructor<?> constructor = ProductionReportServiceImpl.class.getConstructors()[0];
+        Object[] arguments = Arrays.stream(constructor.getParameterTypes()).map(t -> (Object) mock(t)).toArray();
+        ProductionReportServiceImpl report = (ProductionReportServiceImpl) constructor.newInstance(arguments);
+        ProductionBatchRepository reportBatches =
+                (ProductionBatchRepository) ReflectionTestUtils.getField(report, "productionBatchRepository");
+        when(reportBatches.findProductionByProduct(anyString(), any(), any())).thenAnswer(inv -> {
+            LocalDateTime from = inv.getArgument(1);
+            LocalDateTime to = inv.getArgument(2);
+            Map<String, Object[]> grouped = new LinkedHashMap<>();
+            for (ProductionBatch b : batchRows.getOrDefault(inv.<String>getArgument(0), List.of())) {
+                if (b.getStatus() != ProductionBatchStatus.COMPLETED || b.getCreatedAt().isBefore(from)
+                        || !b.getCreatedAt().isBefore(to)) continue;
+                Object[] row = grouped.computeIfAbsent(b.getProductTypeId(),
+                        k -> new Object[]{b.getProductTypeId(), b.getProductName(), BigDecimal.ZERO, b.getUnit()});
+                row[2] = ((BigDecimal) row[2]).add(b.getActualQuantity());
+            }
+            return new ArrayList<>(grouped.values());
+        });
+        ReportService reports = mock(ReportService.class);
+        when(reports.getProductionByProduct(anyString(), any(), any())).thenAnswer(inv -> {
+            List<ProductionByProductDTO> rows = report.getProductionByProduct(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2));
+            return rows;
+        });
+        return reports;
     }
 
     PythonSmartBIClient pythonClient() throws Exception {

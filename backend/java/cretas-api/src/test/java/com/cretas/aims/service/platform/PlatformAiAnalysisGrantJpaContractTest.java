@@ -49,6 +49,9 @@ class PlatformAiAnalysisGrantJpaContractTest {
     @Autowired PlatformAiAnalysisGrantAuditRepository audits;
     @Autowired PlatformAdminRepository admins;
     @Autowired JdbcTemplate jdbc;
+    @Autowired PlatformFactoryControlAuthority authority;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
+    org.springframework.transaction.support.TransactionTemplate tx;
 
     PlatformAdmin superAdmin;
     PlatformAdmin staff;
@@ -56,6 +59,7 @@ class PlatformAiAnalysisGrantJpaContractTest {
 
     @BeforeEach
     void seed() {
+        tx = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
         superAdmin = admins.saveAndFlush(admin(PlatformRole.super_admin));
         staff = admins.saveAndFlush(admin(PlatformRole.auditor));
         manager = new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, superAdmin.getId(), "PLATFORM", "super_admin");
@@ -63,7 +67,7 @@ class PlatformAiAnalysisGrantJpaContractTest {
 
     @AfterEach
     void cleanUp() {
-        grants.deleteAll();
+        jdbc.update("DELETE FROM platform_ai_analysis_grants");
         jdbc.update("DELETE FROM platform_ai_analysis_grant_audit");
         admins.deleteById(superAdmin.getId());
         admins.deleteById(staff.getId());
@@ -104,6 +108,105 @@ class PlatformAiAnalysisGrantJpaContractTest {
         assertThat(service.requireEntry(staffRequest()).id()).isEqualTo(staff.getId());
         assertThat(service.list(manager).grants()).singleElement()
                 .satisfies(g -> assertThat(g.grantedBy()).isEqualTo(superAdmin.getId()));
+    }
+
+    /**
+     * 并发开通的那个窗口: 查的时候还没有, 写的时候别人已经写了。后到的一方必须拿到 409, 不留痕,
+     * 也不改写已有行的开通人和理由 (默认的 save 会先查后 merge, 悄悄改掉)。这里用只在查询上说谎的仓库把窗口固定住。
+     */
+    @Test
+    void aGrantThatLosesTheRaceIsRefusedAndChangesNothing() {
+        PlatformAdmin second = admins.saveAndFlush(admin(PlatformRole.super_admin));
+        try {
+            AuthenticatedActor other = new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, second.getId(), "PLATFORM", "super_admin");
+            service.grant(manager, new PlatformAiAnalysisGrantService.GrantRequest("ROLE", "auditor", "先到的"));
+            PlatformAiAnalysisGrantRepository blind = (PlatformAiAnalysisGrantRepository) java.lang.reflect.Proxy.newProxyInstance(
+                    getClass().getClassLoader(), new Class<?>[]{PlatformAiAnalysisGrantRepository.class}, (proxy, method, args) -> {
+                        if (method.getName().equals("existsByGranteeTypeAndGranteeRef")) return false;
+                        try {
+                            return method.invoke(grants, args);
+                        } catch (java.lang.reflect.InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                    });
+            PlatformAiAnalysisGrantService racing = new PlatformAiAnalysisGrantService(blind, audits, admins, authority);
+            assertThatThrownBy(() -> tx.executeWithoutResult(s -> racing.grant(other,
+                    new PlatformAiAnalysisGrantService.GrantRequest("ROLE", "auditor", "后到的"))))
+                    .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                    .hasMessage(PlatformAiAnalysisGrantService.ALREADY_GRANTED_MESSAGE);
+
+            assertThat(grants.findAll()).singleElement().satisfies(row -> {
+                assertThat(row.getGrantedBy()).isEqualTo(superAdmin.getId());
+                assertThat(row.getReason()).isEqualTo("先到的");
+            });
+            assertThat(audits.findTop50ByOrderByChangedAtDescIdDesc()).singleElement()
+                    .satisfies(row -> assertThat(row.getReason()).isEqualTo("先到的"));
+        } finally {
+            jdbc.update("DELETE FROM platform_admins WHERE id = ?", second.getId());
+        }
+    }
+
+    /**
+     * 普通的重复开通在写之前就挡下: 撞主键那条路只留给并发窗口。两条路对外都是 409 且不留痕, 只有写入次数分得开,
+     * 所以这里数 saveAndFlush。第一次开通必须计到 1, 否则「重复时没写」这个读数说明不了什么。
+     */
+    @Test
+    void aPlainRepeatGrantIsRefusedBeforeAnyWriteIsTried() {
+        java.util.concurrent.atomic.AtomicInteger writes = new java.util.concurrent.atomic.AtomicInteger();
+        PlatformAiAnalysisGrantRepository counting = (PlatformAiAnalysisGrantRepository) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{PlatformAiAnalysisGrantRepository.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("saveAndFlush")) writes.incrementAndGet();
+                    try {
+                        return method.invoke(grants, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+        PlatformAiAnalysisGrantService counted = new PlatformAiAnalysisGrantService(counting, audits, admins, authority);
+
+        tx.executeWithoutResult(s -> counted.grant(manager,
+                new PlatformAiAnalysisGrantService.GrantRequest("ROLE", "auditor", "先到的")));
+        assertThat(writes).as("第一次开通确实经过这个计数").hasValue(1);
+
+        assertThatThrownBy(() -> tx.executeWithoutResult(s -> counted.grant(manager,
+                new PlatformAiAnalysisGrantService.GrantRequest("ROLE", "auditor", "再开一次"))))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                .hasMessage(PlatformAiAnalysisGrantService.ALREADY_GRANTED_MESSAGE);
+
+        assertThat(writes).as("重复开通没有去试写").hasValue(1);
+        assertThat(grants.findAll()).singleElement().satisfies(row -> assertThat(row.getReason()).isEqualTo("先到的"));
+        assertThat(audits.findTop50ByOrderByChangedAtDescIdDesc()).singleElement()
+                .satisfies(row -> assertThat(row.getReason()).isEqualTo("先到的"));
+    }
+
+    /** 真的并发: 8 个线程同时开通同一个角色, 恰好一行、一条留痕, 其余都是 409。 */
+    @Test
+    void concurrentDuplicateGrantsLeaveExactlyOneRowAndOneAuditRow() throws Exception {
+        int threads = 8;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Future<String>> results = new java.util.ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            int n = i;
+            results.add(pool.submit(() -> {
+                start.await();
+                try {
+                    service.grant(manager, new PlatformAiAnalysisGrantService.GrantRequest("ROLE", "auditor", "第 " + n + " 个"));
+                    return "OK";
+                } catch (com.cretas.aims.exception.BusinessException refused) {
+                    return refused.getCode() + ":" + refused.getMessage();
+                }
+            }));
+        }
+        start.countDown();
+        java.util.List<String> outcomes = new java.util.ArrayList<>();
+        for (var result : results) outcomes.add(result.get(30, java.util.concurrent.TimeUnit.SECONDS));
+        pool.shutdown();
+        assertThat(outcomes).filteredOn("OK"::equals).hasSize(1);
+        assertThat(outcomes).filteredOn(o -> !"OK".equals(o)).hasSize(threads - 1)
+                .allSatisfy(o -> assertThat(o).isEqualTo("409:" + PlatformAiAnalysisGrantService.ALREADY_GRANTED_MESSAGE));
+        assertThat(grants.findAll()).hasSize(1);
+        assertThat(audits.findTop50ByOrderByChangedAtDescIdDesc()).hasSize(1);
     }
 
     /** 留痕写不进去时授权一起回滚: 服务层的校验挡得住坏输入, 所以让表暂时不可写来造这个失败。 */

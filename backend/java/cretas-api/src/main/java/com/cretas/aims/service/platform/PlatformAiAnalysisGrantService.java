@@ -14,6 +14,7 @@ import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.security.PlatformFactoryViewReadPolicy;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,7 +28,9 @@ import java.util.List;
  * <ul>
  *   <li>判定 ({@link #requireEntry}) 每次现查库, ⛔ 不加缓存: 撤销下一次调用就生效, 账号停用同理;</li>
  *   <li>按库里的角色判, 不按令牌里的角色: 令牌最长活 24 小时, 被降级的人不能靠旧令牌用;</li>
- *   <li>开通 / 撤销与留痕在同一个事务里, 每次一行, 必须写理由; 没有变化 (已开通 / 本来没开通) 不写留痕。</li>
+ *   <li>开通 / 撤销与留痕在同一个事务里, 每次一行, 必须写理由; 没有变化 (已开通 / 本来没开通) 不写留痕;</li>
+ *   <li>超级管理员的账号不能开通 (本来就不需要, 也就不会有人给自己留一条降级后还在的授权);</li>
+ *   <li>账号授权在账号后来改角色时保留, 直到撤销; 角色授权跟着库里当前的角色走。</li>
  * </ul>
  */
 @Service
@@ -38,6 +41,8 @@ public class PlatformAiAnalysisGrantService {
     static final String NOT_GRANTED_MESSAGE = "该平台账号未开通 AI 分析入口，请联系平台超级管理员开通";
     static final String INACTIVE_MESSAGE = "仅当前有效的平台账号可使用 AI 分析入口";
     static final String NOT_MANAGER_MESSAGE = "仅当前有效的平台超级管理员可管理 AI 分析入口授权";
+    static final String ALREADY_GRANTED_MESSAGE = "该角色或账号已经开通";
+    static final String ALREADY_GRANTED_HINT = "不需要再开通；要改理由或开通人，先在授权列表里撤销这一条，再重新开通";
     private static final String IDENTITY_MESSAGE = "无法确认平台登录身份";
 
     public record GrantRequest(String granteeType, String grantee, String reason) { }
@@ -110,11 +115,17 @@ public class PlatformAiAnalysisGrantService {
         Grantee grantee = grantee(body);
         String reason = reason(body);
         if (grants.existsByGranteeTypeAndGranteeRef(grantee.type(), grantee.ref())) {
-            throw new BusinessException(409, "该角色或账号已经开通");
+            throw alreadyGranted();
         }
         LocalDateTime now = LocalDateTime.now();
-        PlatformAiAnalysisGrant saved = grants.saveAndFlush(PlatformAiAnalysisGrant.builder().granteeType(grantee.type())
-                .granteeRef(grantee.ref()).grantedBy(actor.id()).grantedAt(now).reason(reason).build());
+        PlatformAiAnalysisGrant saved;
+        try {
+            saved = grants.saveAndFlush(PlatformAiAnalysisGrant.builder().granteeType(grantee.type())
+                    .granteeRef(grantee.ref()).grantedBy(actor.id()).grantedAt(now).reason(reason).build());
+        } catch (DataIntegrityViolationException lostTheRace) {
+            // 上面查的时候还没有, 写的时候别人先写了: 只有一方成功, 另一方不留痕、不改已有的行
+            throw alreadyGranted();
+        }
         record(PlatformAiAnalysisGrantAudit.GRANT, grantee, actor, reason, now);
         return view(saved);
     }
@@ -128,6 +139,10 @@ public class PlatformAiAnalysisGrantService {
             throw new BusinessException(404, "该角色或账号没有开通");
         }
         record(PlatformAiAnalysisGrantAudit.REVOKE, grantee, actor, reason, LocalDateTime.now());
+    }
+
+    private static BusinessException alreadyGranted() {
+        return new BusinessException(409, ALREADY_GRANTED_MESSAGE).withHint(ALREADY_GRANTED_HINT);
     }
 
     private void record(String action, Grantee grantee, AuthenticatedActor actor, String reason, LocalDateTime at) {
@@ -159,8 +174,10 @@ public class PlatformAiAnalysisGrantService {
         if (!value.matches("[1-9][0-9]{0,18}")) {
             throw new BusinessException(400, "平台账号编号无效");
         }
-        if (admins.findById(Long.valueOf(value)).isEmpty()) {
-            throw new BusinessException(404, "平台账号不存在");
+        PlatformAdmin target = admins.findById(Long.valueOf(value))
+                .orElseThrow(() -> new BusinessException(404, "平台账号不存在"));
+        if (target.isSuperAdmin()) {
+            throw new BusinessException(400, "超级管理员不需要开通");
         }
         return value;
     }

@@ -242,6 +242,22 @@ public interface ProcessingService {
             java.time.LocalDateTime startDate,
             java.time.LocalDateTime endDate);
 
+    /**
+     * 时间范围批次成本数据, 连同这次没算进来的数量。
+     *
+     * @param rows 与 {@link #getTimeRangeBatchesCostAnalysis} 相同的行
+     * @param found 时间段内查到的批次数
+     * @param overLimit 超过上限没有取的批次数
+     * @param failed 取成本数据失败、被丢掉的批次数
+     */
+    record TimeRangeBatches(List<Map<String, Object>> rows, int found, int overLimit, int failed) { }
+
+    /** 与 {@link #getTimeRangeBatchesCostAnalysis} 同一份取数, 只是把截断和失败的数量也交给调用方。 */
+    TimeRangeBatches getTimeRangeBatchesWithCounts(
+            String factoryId,
+            java.time.LocalDateTime startDate,
+            java.time.LocalDateTime endDate);
+
     // ========== 批次对比分析 ==========
 
     /**

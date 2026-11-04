@@ -531,6 +531,9 @@ public class PythonSmartBIClient {
         }
     }
 
+    /** 这次请求的内容不留在 Python 侧 (训练样本、响应缓存); 只有内部调用带这个头才算数。 */
+    static final String NO_CAPTURE_HEADER = "X-No-Training-Capture";
+
     /**
      * Calls Python general analysis with trusted identities in headers only.
      * POST requests are never retried by {@link #executeWithRetry(Request, Class)}.
@@ -539,12 +542,26 @@ public class PythonSmartBIClient {
             String factoryId,
             String userId,
             PythonGeneralAnalysisRequest analysisRequest) throws IOException {
+        return analyzeGeneral(factoryId, userId, null, generalAnalysisCall(analysisRequest));
+    }
+
+    /**
+     * 平台授权 AI 分析入口专用 (Steve 2026-11-04): 提示词里有保密产品的成本, 这次的问答不能进训练语料,
+     * 也不留在响应缓存里。不传用户: 平台账号不是工厂用户, Python 不写对话记忆。
+     */
+    public PythonGeneralAnalysisResponse analyzeGeneralWithoutCapture(
+            String factoryId,
+            PythonGeneralAnalysisRequest analysisRequest) throws IOException {
+        return analyzeGeneral(factoryId, null, null, generalAnalysisCall(analysisRequest), true);
+    }
+
+    private static GeneralAnalysisCall generalAnalysisCall(PythonGeneralAnalysisRequest analysisRequest)
+            throws IOException {
         if (analysisRequest == null) {
             throw new IOException("Python SmartBI general analysis request is invalid");
         }
-        GeneralAnalysisCall call;
         try {
-            call = new GeneralAnalysisCall(
+            return new GeneralAnalysisCall(
                     analysisRequest.getMessage(),
                     null,
                     null,
@@ -555,7 +572,6 @@ public class PythonSmartBIClient {
         } catch (IllegalArgumentException invalidRequest) {
             throw new IOException("Python SmartBI general analysis request is invalid");
         }
-        return analyzeGeneral(factoryId, userId, null, call);
     }
 
     /**
@@ -567,6 +583,15 @@ public class PythonSmartBIClient {
             String userId,
             String userRole,
             GeneralAnalysisCall analysisRequest) throws IOException {
+        return analyzeGeneral(factoryId, userId, userRole, analysisRequest, false);
+    }
+
+    private PythonGeneralAnalysisResponse analyzeGeneral(
+            String factoryId,
+            String userId,
+            String userRole,
+            GeneralAnalysisCall analysisRequest,
+            boolean withoutCapture) throws IOException {
         if (analysisRequest == null) {
             throw new IOException("Python SmartBI general analysis request is invalid");
         }
@@ -595,6 +620,9 @@ public class PythonSmartBIClient {
             }
             if (trustedUserRole != null) {
                 builder.header("X-User-Role", trustedUserRole);
+            }
+            if (withoutCapture) {
+                builder.header(NO_CAPTURE_HEADER, "1");
             }
 
             PythonGeneralAnalysisResponse response = executeWithRetry(

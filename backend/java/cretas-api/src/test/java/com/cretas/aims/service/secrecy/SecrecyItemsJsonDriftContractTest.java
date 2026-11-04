@@ -78,9 +78,11 @@ class SecrecyItemsJsonDriftContractTest {
         // Steve 2026-11-04: b 开 = 平台人员不能看 / 改配方和成本, 但授权的平台 AI 入口不受影响、每次留痕;
         // 文案还要说清 b 只在工艺保密开着时起作用
         assertThat(SecrecyItem.PLATFORM_RECIPE_BLOCK.offEffect())
-                .contains("开启时，平台人员不能查看、编辑配方和成本")
+                .contains("开启时，平台人员不能自己查看、编辑配方和成本")
                 .contains("这一项不影响平台授权的 AI 分析入口")
+                .contains("包括保密产品的成本")
                 .contains("每次使用都记入保密访问记录")
+                .contains("平台超级管理员不需要授权，其他平台账号须经授权")
                 .contains("只在「工艺保密」开启时起作用");
         assertThat(json).contains("这一项不影响平台授权的 AI 分析入口");
         assertThat(SecrecyItem.CUSTOMER_HELD.offRequiresConfirmation()).isTrue();
