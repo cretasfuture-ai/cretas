@@ -16,4 +16,13 @@ import java.lang.annotation.*;
 public @interface RequireModule {
     /** 模块代码，如 "sales_order"、"bom" */
     String value();
+
+    /**
+     * 账号侧额外认可的模块: 账号没有 {@link #value()} 的权限时, 有这里任一模块的权限
+     * (且该模块在本厂已启用) 也放行。
+     *
+     * <p>⚠️ 只放宽「账号有没有这个模块」这一步。工厂开关仍只看 {@link #value()}:
+     * 关掉 production_plan 的工厂, 这些接口照样不通。
+     */
+    String[] alsoAllowModules() default {};
 }

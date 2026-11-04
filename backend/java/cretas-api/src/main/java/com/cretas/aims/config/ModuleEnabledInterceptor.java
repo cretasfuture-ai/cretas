@@ -85,12 +85,26 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
                     "账号 " + userLabel(user) + " 不属于工厂 " + factoryId + "，无法访问模块 " + moduleCode);
             return false;
         }
-        if (!userModuleAccessService.canAccessModule(user, moduleCode)) {
+        if (!canAccessAnyModule(user, factoryId, moduleCode, annotation.alsoAllowModules())) {
             sendUserModuleDenied(response, user, moduleCode,
                     "账号 " + userLabel(user) + " 缺少模块 " + moduleCode + " 的访问权限");
             return false;
         }
         return true;
+    }
+
+    /** 主模块有权限就放行; 否则看 {@code alsoAllowModules} 里本厂已启用且账号有权限的模块。 */
+    private boolean canAccessAnyModule(User user, String factoryId, String moduleCode, String[] alsoAllowModules) {
+        if (userModuleAccessService.canAccessModule(user, moduleCode)) {
+            return true;
+        }
+        for (String alternative : alsoAllowModules) {
+            if (configService.isModuleEnabled(factoryId, alternative)
+                    && userModuleAccessService.canAccessModule(user, alternative)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String extractFactoryId(String path) {
