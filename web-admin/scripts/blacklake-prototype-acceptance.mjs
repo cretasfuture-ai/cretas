@@ -1,12 +1,9 @@
 // Local test only: real data, real authority and Cretas follow-up metadata.
 import {chromium} from '@playwright/test';
-import {execFileSync} from 'node:child_process';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 import assert from 'node:assert/strict';
 const root=resolve(import.meta.dirname,'../..'),out=join(process.env.LOCALAPPDATA,'Cretas','Blacklake','outputs','prototype-20261104');mkdirSync(out,{recursive:true});
-const script="import json,os;from pathlib import Path;from blacklake.secrets import load_local_secret;s=load_local_secret(Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/smartbi-test.dpapi');print(json.dumps({k:s[k] for k in ('username','password')}))";
-const auth=JSON.parse(execFileSync('python',['-c',script],{cwd:join(root,'backend/python'),encoding:'utf8'}));
 const browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage();
 const errors=[],blocked=[],metadataPaths=new Set(),answers=[];
 let baseline,metadataWrites=0,stage='login';page.on('pageerror',e=>errors.push(e.message));
@@ -16,7 +13,7 @@ await context.route('**/*',route=>{
  if(!['127.0.0.1','localhost'].includes(url.hostname))return route.abort();
  if(['POST','PUT','PATCH','DELETE'].includes(req.method())){
    if(req.method()==='POST' && metadataPaths.has(path)){metadataWrites++;return route.continue();}
-   if(!['/api/mobile/auth/unified-login','/api/smartbi/blacklake/sections/followup'].includes(path)){blocked.push(path);return route.abort();}
+   if(!['/__blacklake/local-session','/api/mobile/auth/unified-login','/api/smartbi/blacklake/sections/followup'].includes(path)){blocked.push(path);return route.abort();}
  }return route.continue();
 });
 const nav=label=>page.getByRole('navigation',{name:'',exact:true}).getByRole('button',{name:label,exact:true});
@@ -32,9 +29,8 @@ async function ask(id){
 const result={success:false,prototype:'samples-v5',sourceBusinessWrites:0,blockedMutationAttempts:blocked,pageErrors:errors,sectionAnswers:answers};
 try{
  await page.goto('http://127.0.0.1:5178/blacklake-smartbi.html');
- await page.getByPlaceholder('请输入测试账号').fill(auth.username);await page.getByPlaceholder('请输入密码').fill(auth.password);
- await page.getByRole('button',{name:'登录分析',exact:true}).click();
  await page.getByRole('heading',{name:'成本核算概览',exact:true}).waitFor({timeout:90000});
+ assert.equal(await page.getByPlaceholder('请输入密码').count(),0);
  await page.getByTestId('cost-projects').locator('tbody tr').first().waitFor();
  assert.equal(await page.getByTestId('cost-projects').locator('.el-table__body-wrapper tbody tr').count(),16);
  assert.equal(await page.locator('.followup-panel:visible').count(),0);

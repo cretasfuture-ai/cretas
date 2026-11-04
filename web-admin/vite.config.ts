@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import ui from '@nuxt/ui/vite';
+import { blacklakeLocalPreview } from './tooling/blacklakeLocalPreview';
 import { resolve } from 'path';
 import { elementPlusTableResize, elementPlusTableResizePrebundle } from './tooling/elementPlusTableResize';
 import { elementPlusTableColumnResize, elementPlusTableColumnResizePrebundle } from './tooling/elementPlusTableColumnResize';
@@ -10,6 +11,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [elementPlusTableResize(), elementPlusTableColumnResize(), vue(),
+      ...(mode==='blacklake'?[blacklakeLocalPreview()]:[]),
       ...(['blacklake','smartbi-alerts'].includes(mode) ? [ui({colorMode:false,router:false,dts:false,
         icon:{clientBundle:{scan:true}},ui:{colors:{primary:'blue',neutral:'slate'}},
         experimental:{componentDetection:true}})] : [])],

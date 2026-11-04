@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import UApp from '@nuxt/ui/components/App.vue';
 import UButton from '@nuxt/ui/components/Button.vue';
 import UBadge from '@nuxt/ui/components/Badge.vue';
@@ -13,7 +13,7 @@ const props = withDefaults(defineProps<{ mode?: 'blacklake' | 'shared-alerts' }>
 const SharedAlertsTestView = defineAsyncComponent(() => import('./SharedAlertsTestView.vue'));
 const sessionKey = props.mode === 'shared-alerts' ? 'smartbi_shared_test_signed_in' : 'blacklake_test_signed_in';
 const auth = useAuthStore();
-const signedIn = ref(!!localStorage.getItem(sessionKey));
+const signedIn = ref(props.mode!=='blacklake' && !!localStorage.getItem(sessionKey));
 const username = ref('');
 const password = ref('');
 const busy = ref(false);
@@ -38,9 +38,12 @@ function navigate(id:string){activeView.value=id;mobileOpen.value=false;window.s
 async function login() {
   error.value = ''; busy.value = true;
   try {
-    const response = await fetch('/api/mobile/auth/unified-login', { method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: username.value, password: password.value }) });
+    const response = props.mode==='blacklake'
+      ? await fetch('/__blacklake/local-session',{method:'POST',headers:{'X-Cretas-Local-Preview':'1'}})
+      : await fetch('/api/mobile/auth/unified-login', { method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: username.value, password: password.value }) });
     const result = await response.json();
+    if(!response.ok || !result.success)throw new Error(result.message||'测试会话暂不可用，请稍后重新连接');
     if (!response.ok || !result.success || result.data?.factoryId !== 'BLACKLAKE_POC_TEST' || result.data?.role !== 'factory_super_admin') {
       throw new Error('请使用六膳门独立测试分析账号登录');
     }
@@ -59,6 +62,7 @@ async function login() {
   } catch (e) { error.value = e instanceof Error ? e.message : '登录失败'; }
   finally { busy.value = false; }
 }
+onMounted(()=>{if(props.mode==='blacklake')void login();});
 function logout() {
   auth.clearAuth();
   localStorage.removeItem('cretas_access_token'); localStorage.removeItem(sessionKey);
@@ -82,10 +86,16 @@ function logout() {
     <div class="prototype-main">
     <header class="topbar">
       <div class="header-start"><UButton v-if="signedIn && mode==='blacklake'" :icon="collapsed?'i-lucide-panel-left-open':'i-lucide-panel-left-close'" color="neutral" variant="ghost" :aria-label="collapsed?'展开导航':'收起导航'" @click="toggleNavigation" /><span v-if="signedIn && mode==='blacklake'" class="breadcrumb">SmartBI <span>/</span> {{ navigation.find(n=>n.id===activeView)?.label }}</span><strong v-else>Cretas <span>SmartBI</span></strong></div>
-      <div class="header-end"><UBadge color="primary" variant="soft">{{ mode === 'shared-alerts' ? '合成数据测试' : '六膳门 · 隔离测试' }}</UBadge><UButton v-if="signedIn" @click="logout" color="neutral" variant="ghost" size="sm">退出分析</UButton></div>
+      <div class="header-end"><UBadge color="primary" variant="soft">{{ mode === 'shared-alerts' ? '合成数据测试' : '六膳门 · 隔离测试' }}</UBadge><UButton v-if="signedIn" @click="mode==='blacklake'?login():logout()" color="neutral" variant="ghost" size="sm">{{ mode==='blacklake'?'重新连接':'退出分析' }}</UButton></div>
     </header>
     <SharedAlertsTestView v-if="signedIn && mode === 'shared-alerts'" />
     <BlacklakeAnalysis v-else-if="signedIn" v-model:active-view="activeView" />
+    <UCard v-else-if="mode==='blacklake'" class="login-card">
+      <h2>{{ busy?'正在连接六膳门分析…':'连接六膳门分析' }}</h2>
+      <p>使用本机测试会话自动进入。</p>
+      <el-alert v-if="error" type="error" :closable="false" :title="error" />
+      <UButton v-if="!busy" @click="login">重新连接</UButton>
+    </UCard>
     <UCard v-else class="login-card">
       <h1>{{ mode === 'shared-alerts' ? 'SmartBI 多来源异常分析' : '六膳门生产成本分析' }}</h1><p>使用 Cretas 独立测试账号登录。此处不使用黑湖账号。</p>
       <el-alert v-if="error" type="error" :closable="false" :title="error" />

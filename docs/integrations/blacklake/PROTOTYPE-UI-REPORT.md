@@ -48,3 +48,7 @@ Nuxt 原型页拆为 `BlacklakePrototypeAnalysis.vue`、`PrototypeSectionInsight
 入口仍为 `http://127.0.0.1:5178/blacklake-smartbi.html`。浏览器 JSON/截图保存在私有 `Blacklake/outputs/prototype-20261104`，构建和类型日志在 `SmartBIAlerts/prototype-*`，Python 日志为 `Blacklake/validation/pytest-prototype-final.*`。`node web-admin/scripts/blacklake-prototype-acceptance.mjs` 验证脚本只允许已读当前告警的本机跟进元数据写入，源业务写入保持 0。
 
 保留首次选择器误判、下拉框点击位置和等待刷新/菜单动画的仪器失败；修正的是验证定位及等待。构建准备曾因扫描/内存边界中止，最终设置 8GB Node 堆并限制 Tailwind 扫描源目录。依赖安装仍报告既有/传递依赖审计项，本次未自动执行 audit fix。CSS 的 legacy `@charset` 优化警告与构建结果分开记录，不能用构建通过替代视觉检查。
+
+## 本机直接进入
+
+按用户补充要求，六膳门本机测试入口已移除账号密码输入，打开时自动取得真实测试会话。代理只在 blacklake 开发服务器及固定 loopback 同源页面启用；凭据仍由本机服务从 DPAPI 读取，并向实际 Java 登录和成本授权接口验证，浏览器不接收密码、哈希或签名密钥。正式入口及分析接口的认证要求没有放宽。新增验证为 3 项 Python、17 项前端守卫/会话测试、类型检查及完整真实页面流程；实际外部 Origin/缺少预览请求头为 403，分析接口无 Bearer 仍为 401。

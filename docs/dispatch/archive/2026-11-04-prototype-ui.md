@@ -9,3 +9,10 @@
 - Original/target 1,879-record fingerprints remain equal. Metadata state does not change 16 eligible / 93 blocked or amounts. New follow-up writes are only Cretas private test metadata, with actor/revision/scope enforcement.
 - Independent review found production import leakage, stale refresh context and ambiguous visual identity. All fixed and reread with no remaining static blocker; actual final gates are separate evidence.
 - PR #1390 remains draft/unmerged. No production deployment, shared service update or Blacklake business writes. Full report and hashes: docs/integrations/blacklake/PROTOTYPE-UI-REPORT.md and PROTOTYPE-UI-VALIDATION.json.
+
+## Local preview without a password prompt
+
+- User explicitly requested removal of the account/password screen. The blacklake development entry now obtains a real test session through a local Vite-only broker, reads credentials from CurrentUser DPAPI in its server child, and validates signed token identity plus actual Java FULL cost authority. Password/hash/key/DSN are not returned to the browser. API authentication is unchanged.
+- Broker only runs in blacklake serve mode, loopback host/port 127.0.0.1:5178, exact POST path, matching Host/Origin, a custom preview header and same-origin fetch context; response is no-store. Wrong origin or absent header returned actual HTTP 403; unauthenticated analysis still returned actual 401.
+- Validation: 3 new Python tests, 17 frontend guard/session tests, Vue typecheck and full real prototype browser flow passed. A fresh browser context entered without password inputs; all seven conversations, follow-up persistence/reload, stale-context cleanup and 390px geometry passed. These targeted checks supplement the preceding 266/35 baseline; they are not a rerun of that full baseline.
+- This broker is dev-server-only, not a production login exemption. Source business writes remain 0; Cretas follow-up test metadata remains explicitly scoped.
