@@ -283,6 +283,42 @@ class ProductProcessWorkflowRuntimeCompilerTest {
                 .toList());
     }
 
+    /** 食品 DAG 缺口 14: 时限随工艺版本冻结进 INPUT 端口; 默认值补齐; 没配的端口为 null。 */
+    @Test
+    void compilesTimeLimitOntoInputPortOnly() {
+        ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
+        processPorts(definition, "mix").forEach(port -> {
+            if ("in-a".equals(port.get("id"))) {
+                port.put("timeLimit", Map.of("maxMinutes", 120, "startEvent", "RAW_RECEIVED"));
+            }
+        });
+        Map<String, Map<String, Object>> limits = new java.util.HashMap<>();
+        compiler.compile(definition).portsFor("mix")
+                .forEach(port -> limits.put(port.workflowPortId(), port.timeLimit()));
+        assertEquals(120, limits.get("in-a").get("maxMinutes"));
+        assertEquals("EARLIEST", limits.get("in-a").get("mixRule"));
+        assertEquals(null, limits.get("in-b"));
+    }
+
+    @Test
+    void rejectsTimeLimitOnOutputPortOrWithWrongStartEvent() {
+        ProductProcessWorkflowDTO onOutput = multiInputOutputWorkflow();
+        processPorts(onOutput, "mix").forEach(port -> {
+            if ("out-main".equals(port.get("id"))) {
+                port.put("timeLimit", Map.of("maxMinutes", 120, "startEvent", "OUTPUT_POSTED"));
+            }
+        });
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () -> compiler.compile(onOutput));
+
+        ProductProcessWorkflowDTO wrongStart = multiInputOutputWorkflow();
+        processPorts(wrongStart, "mix").forEach(port -> {
+            if ("in-a".equals(port.get("id"))) {
+                port.put("timeLimit", Map.of("maxMinutes", 120, "startEvent", "UPSTREAM_COMPLETED"));
+            }
+        });
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () -> compiler.compile(wrongStart));
+    }
+
     /** 食品 DAG 缺口 10: 联产工序选「固定比例」, 份额随工艺版本冻结进运行时端口。 */
     @Test
     void compilesFixedRatioCostSharesOntoOutputPortsOnly() {

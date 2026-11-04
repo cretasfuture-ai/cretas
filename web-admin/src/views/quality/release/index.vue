@@ -27,12 +27,15 @@ import {
   type QcReleaseDecision,
   type QcReleaseRecord,
 } from '@/api/qcRelease';
+import ProcessTimeoutEventsTab from './ProcessTimeoutEventsTab.vue';
 
 const authStore = useAuthStore();
 const router = useRouter();
 const factoryId = computed(() => authStore.factoryId || '');
 
-const activeTab = ref<'pending' | 'records'>('pending');
+const activeTab = ref<'pending' | 'records' | 'timeout'>('pending');
+const timeoutTabRef = ref<InstanceType<typeof ProcessTimeoutEventsTab> | null>(null);
+const timeoutCount = ref(0);
 const loading = ref(false);
 const loadError = ref<string | null>(null);
 const pending = ref<QcPendingItem[]>([]);
@@ -155,7 +158,7 @@ onMounted(() => {
           产品设置为「需检」、或批次有 CCP 偏离时，产出先进入待检：半成品待检时下道不能领用，成品待检时不能分配和发货。
         </p>
       </div>
-      <el-button :icon="Refresh" :loading="loading || recordsLoading" @click="loadPending(); loadRecords()">刷新</el-button>
+      <el-button :icon="Refresh" :loading="loading || recordsLoading" @click="loadPending(); loadRecords(); timeoutTabRef?.reload()">刷新</el-button>
     </div>
 
     <el-tabs v-model="activeTab">
@@ -220,6 +223,10 @@ onMounted(() => {
           </el-table-column>
           <el-table-column prop="releasedAt" label="放行时间" min-width="170" />
         </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane :label="`超时处置 (${timeoutCount})`" name="timeout">
+        <ProcessTimeoutEventsTab ref="timeoutTabRef" :factory-id="factoryId" @count="timeoutCount = $event" />
       </el-tab-pane>
     </el-tabs>
 

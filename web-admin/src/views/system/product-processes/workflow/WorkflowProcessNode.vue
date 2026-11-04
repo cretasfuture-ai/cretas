@@ -107,8 +107,20 @@
             @change="onShareInput(port.id, $event)"
           />
         </el-tooltip>
+        <span v-if="port.timeLimit" class="time-limit-badge" data-testid="time-limit-badge">{{ timeLimitBadge(port.timeLimit) }}</span>
       </div>
       <div v-if="inputShareWarning" class="share-warning" data-testid="input-share-warning">{{ inputShareWarning }}</div>
+      <!-- 食品 DAG 缺口 14: 时限挂在投入上, 字段多, 进抽屉配; 只读用户也能进去看。 -->
+      <div v-if="inputPorts.length > 0" class="cost-allocation-row" data-testid="time-limit-row">
+        <span class="cost-allocation-label">工序时限</span>
+        <span class="time-limit-summary" data-testid="time-limit-summary">{{ timeLimitSummary }}</span>
+        <button
+          type="button"
+          class="nodrag time-limit-config"
+          data-testid="time-limit-config"
+          @click.stop="emit('configureTimeLimit')"
+        >{{ canWrite ? '配置' : '查看' }}</button>
+      </div>
     </section>
 
     <section class="port-section output-section">
@@ -381,6 +393,7 @@ import { AUX_OVERLAY_TARGET_HANDLE } from './bomOverlay';
 import WorkflowSkuPicker, { type WorkflowSkuPickerOption } from './WorkflowSkuPicker.vue';
 import { workflowDisplayUnit, workflowSkuSpecificationEquation } from './workflowUnits';
 import { fixedCostShareWarning, shareSumWarning } from './workflowInputShare';
+import { timeLimitBadge } from './workflowTimeLimit';
 import {
   CCP_HAZARD_LABELS,
   CCP_HAZARD_TYPES,
@@ -434,6 +447,8 @@ const emit = defineEmits<{
   addSpecialOutput: [];
   /** 点 R 角标：钉住/取消这一对（只改高亮，⛔ 不写任何字段）。 */
   togglePair: [reworkNodeId: string];
+  /** 打开本工序的时限抽屉（缺口 14）。 */
+  configureTimeLimit: [];
   selectOutput: [portId: string, skuId: string];
   /**
    * 移除某个产出 Cell。画布层把 portId 换成它的 materialNodeId 再走 removeNode ——
@@ -455,6 +470,10 @@ function unitLabel(value: string | null | undefined): string {
 }
 const inputPorts = computed(() => props.data.ports.filter((port) => port.direction === 'INPUT'));
 const inputShareWarning = computed(() => shareSumWarning(inputPorts.value.map((p) => p.inputShareRatio)));
+const timeLimitSummary = computed(() => {
+  const limited = inputPorts.value.filter((port) => port.timeLimit).length;
+  return limited > 0 ? `已配 ${limited} / ${inputPorts.value.length}` : '不限时';
+});
 /** 只改这一条端口的份额, 其余端口原样; 通过统一的 update 出口回写(会进 nodesJson ⇒ 发布时成为新修订)。 */
 function onShareInput(portId: string, event: Event): void {
   const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
@@ -581,6 +600,16 @@ function handleStyle(index: number, count: number): Record<string, string> {
 }
 .share-input:focus { outline: none; border-color: #409eff; }
 .share-warning { margin: 2px 0 4px; color: #b7791f; font-size: 11px; }
+.time-limit-badge {
+  grid-column: 1 / -1; justify-self: start; padding: 0 6px; border-radius: 4px;
+  background: #fdf6ec; color: #b7791f; font-size: 11px; font-weight: 600;
+}
+.time-limit-summary { flex: 1; min-width: 0; color: #667085; }
+.time-limit-config {
+  padding: 1px 8px; border: 1px solid #b9d8f4; border-radius: 4px;
+  background: #fff; color: #1b65a8; font-size: 12px; cursor: pointer;
+}
+.time-limit-config:hover { border-color: #409eff; background: #eef6ff; }
 .pending-section { margin: 6px 0; padding: 6px 8px; border: 1px solid #dfe6ee; border-radius: 6px; background: #fbfcfe; }
 .pending-section.has-pending { border-color: #e6a23c; background: #fffaf0; }
 .pending-badge { color: #b7791f; font-size: 12px; font-weight: 600; }

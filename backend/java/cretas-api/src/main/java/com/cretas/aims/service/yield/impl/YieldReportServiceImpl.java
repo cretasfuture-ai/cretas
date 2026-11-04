@@ -130,6 +130,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private com.cretas.aims.service.processentry.IntermediateOwnershipGuard intermediateOwnershipGuard;
 
+    /** 工序间 / 投料时限 (缺口 14)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService processTimeLimitService;
+
     @Autowired(required = false)
     private BackdateWindowValidator backdateWindowValidator;
 
@@ -388,6 +392,10 @@ public class YieldReportServiceImpl implements YieldReportService {
             sourceWip = wipInventoryService.validateSourceWip(
                     factoryId, intermediateOwnershipGuard.ofProductionBatch(factoryId, batchId),
                     req.getSourceWipNo(), effSourceWipQuantity, effInputUnit, null);
+            // 缺口 14: 工序间时限 —— 报工这一刻就是投料; 审批过账时不再判, 否则合法投料会事后失败
+            if (processTimeLimitService != null) {
+                processTimeLimitService.assertSemiFeedForTask(factoryId, t, sourceWip, effSourceWipQuantity, workerId);
+            }
         }
 
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数

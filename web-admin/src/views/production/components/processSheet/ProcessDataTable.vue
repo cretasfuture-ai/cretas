@@ -33,6 +33,7 @@ import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
 import BlendRatioPanel from './BlendRatioPanel.vue';
+import ProcessTimeLimitPanel from './ProcessTimeLimitPanel.vue';
 import { evaluateBlend, blendReasonBlockedReason, type BlendEvaluation, type BlendLineInput } from './blendRatio';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
 import { boundOutputRoleOf, byproductEntryMode, isReworkLine, partitionOutputPorts } from './processSheetOutputs';
@@ -3460,6 +3461,8 @@ function rowIsDirty(row: SheetRow): boolean {
 
 const hasUnsavedRows = computed(() => rows.value.some(rowIsDirty));
 
+const timeLimitPanelRef = ref<InstanceType<typeof ProcessTimeLimitPanel> | null>(null);
+
 // -------------------------------------------------------------------------
 // Bug 1 修复 (fix/process-entry-cache-and-blend-cost, F006 现场走查): 半成品(SFI)/成品(FG)/
 // 原料批次余量是全局共享的常驻库存 (可被任意其它 process tab 选作投料来源), 但上面的 watch
@@ -3480,6 +3483,7 @@ function refreshSharedInventories() {
   if (showSfi.value) void loadSfiOptions();
   if (showFg.value) void loadFgOptions();
   void loadQcHeldBatches();
+  void timeLimitPanelRef.value?.reload();
 }
 
 defineExpose({ hasUnsavedRows, refreshSharedInventories });
@@ -3572,6 +3576,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
         ，然后重新创建生产计划。
       </div>
     </el-alert>
+
+    <!-- 缺口 14: 时限配在 workflow 工艺版本上, legacy 计划没有; 这道工序有状态才显示 -->
+    <ProcessTimeLimitPanel
+      v-if="workflowContext"
+      ref="timeLimitPanelRef"
+      :factory-id="factoryId"
+      :plan-id="planId"
+      :process-order="processOrder"
+      :input-ports="workflowContext.inputs ?? []"
+    />
 
     <!-- ====================================================================
          CARD LAYOUT

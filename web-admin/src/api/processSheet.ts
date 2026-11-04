@@ -628,6 +628,8 @@ export interface WorkflowPortDescriptor {
    * 报工页多产出时自动带进「成本分摊比例」, 仍可改 (后端记下原份额, 食品 DAG 缺口 10)。
    */
   fixedCostShare?: number | null;
+  /** 仅 input 端口有意义: 工艺版本上冻结的时限配置 (缺口 14)。null/缺省 = 不限时。 */
+  timeLimit?: import('./processTimeLimit').WorkflowPortTimeLimit | null;
   /**
    * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**回料**。
    *
