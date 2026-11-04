@@ -1065,6 +1065,85 @@ public class AIEnterpriseService {
         }
     }
 
+    static final String PLATFORM_NO_BATCHES_MESSAGE = "该时间段内没有批次数据，未发给 AI 分析";
+    static final String PLATFORM_ALL_CUSTOMER_HELD_MESSAGE = "该时间段内的批次都是客户侧保管产品，核心工艺不在云端，无法读取，未发给 AI 分析";
+    static final String PLATFORM_AI_UNAVAILABLE_MESSAGE = "AI服务暂时不可用，请稍后重试";
+
+    /**
+     * 平台专用入口的时间范围成本分析 (Steve 2026-11-04)。唯一调用方是
+     * {@code PlatformFactoryAiAnalysisService}: 谁能用、留痕都在那里判, 这里只取数和分析。
+     * 调用时它已经打开 {@code ProcessSecretPlatformAiScope}: 保密产品照常进数据, 只有客户侧保管 (B 档) 读不到。
+     *
+     * <p>⛔ 不要改走 {@link #analyzeTimeRangeCost}: 那条路扣工厂的配额, 并写一条 7 天的共享结果, 工厂用户能读到
+     * 平台问出来的回答。这里不碰配额、不读不写 {@link AIAnalysisResult}。
+     *
+     * <p>不开事务: 这段里有一次模型调用, 不占着数据库连接等模型。{@code userId} 固定传 null: 平台账号的 id 不在 users
+     * 表里, 传了就会被当成工厂用户写进 Python 的对话记忆。
+     *
+     * @throws BusinessException 没有批次 / 全部批次读不到 / 脱敏拒绝 / 模型不可用: 消息原样给调用者, 没有替代结果
+     */
+    public MobileDTO.AICostAnalysisResponse analyzeTimeRangeForPlatform(
+            String factoryId, LocalDateTime startDate, LocalDateTime endDate, String dimension, String question) {
+        long startTime = System.currentTimeMillis();
+
+        List<Map<String, Object>> fetched = processingService
+                .getTimeRangeBatchesCostAnalysis(factoryId, startDate, endDate);
+        if (fetched.isEmpty()) {
+            throw new BusinessException(404, PLATFORM_NO_BATCHES_MESSAGE);
+        }
+
+        // 作用域里只剩客户侧保管 (B 档) 读不到: 那些批次整行不发, 合计只在剩下的批次上累加, 响应里明说
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Rows secretRows =
+                llmCostScope.withoutProtectedBatches(factoryId, fetched);
+        List<Map<String, Object>> batches = secretRows.allowed();
+        if (batches.isEmpty()) {
+            throw new BusinessException(403, PLATFORM_ALL_CUSTOMER_HELD_MESSAGE);
+        }
+
+        String notice = secretRows.anyExcluded() ? platformUnreadableNotice(secretRows.excludedProducts()) : null;
+        String body = formatTimeRangePrompt(batches, startDate, endDate, dimension, question);
+        String prompt = notice == null ? body : notice + "\n\n" + body;
+        Map<String, Object> costData = new java.util.HashMap<>();
+        costData.put("timeRangeBatches", batches);
+        costData.put("startDate", startDate);
+        costData.put("endDate", endDate);
+        costData.put("dimension", dimension);
+
+        Map<String, Object> aiResult = basicAIService.analyzeCost(
+                factoryId, null, null, costData, null, prompt, true, 50);
+        if (aiResult == null || !Boolean.TRUE.equals(aiResult.get("success"))) {
+            throw platformAnalysisFailure(aiResult);
+        }
+        if (!(aiResult.get("aiAnalysis") instanceof String analysis) || analysis.isBlank()) {
+            throw new BusinessException(503, PLATFORM_AI_UNAVAILABLE_MESSAGE);
+        }
+
+        return MobileDTO.AICostAnalysisResponse.builder()
+                .success(true)
+                .analysis(analysis)
+                .notice(notice)
+                .sessionId((String) aiResult.get("sessionId"))
+                .processingTimeMs(System.currentTimeMillis() - startTime)
+                .cacheHit(false)
+                .quotaConsumed(0)
+                .build();
+    }
+
+    /** N 只数真正受保护的产品; 认不出是哪个 (N=0 但确有行被排除) 时不报数字。 */
+    private static String platformUnreadableNotice(int products) {
+        String which = products > 0 ? products + " 个客户侧保管产品" : "客户侧保管产品";
+        return "说明：本次分析不含 " + which + "：这些产品的核心工艺不在云端，无法读取，与它们同计划的批次也一并未计入。";
+    }
+
+    /** 保密 / 脱敏不让发是「不给」(403), 其余是模型这边的问题 (503); 消息都是成本分析汇合点给的那一句。 */
+    private static BusinessException platformAnalysisFailure(Map<String, Object> aiResult) {
+        Object error = aiResult == null ? null : aiResult.get("error");
+        String message = error instanceof String text && !text.isBlank() ? text : PLATFORM_AI_UNAVAILABLE_MESSAGE;
+        boolean refused = aiResult != null && (Boolean.TRUE.equals(aiResult.get("processSecret"))
+                || AIAnalysisService.EGRESS_REFUSED_MESSAGE.equals(message));
+        return new BusinessException(refused ? 403 : 503, message);
+    }
+
     /**
      * AI时间范围成本分析 - 流式响应版本 (SSE)
      *

@@ -116,6 +116,11 @@ class FactorySecrecyGatesContractTest {
             "com/cretas/aims/service/execution/TrustedExecutionContext.java",
             "com/cretas/aims/service/intent/IntentConfigWriteGuard.java",
             "com/cretas/aims/security/PlatformFactoryViewReadPolicy.java",
+            // 平台账号能否碰某家工厂的身份闸
+            "com/cretas/aims/service/platform/PlatformFactoryControlAuthority.java",
+            // 平台 AI 分析入口不读 a / b (Steve 2026-11-04): 配置怎么设都能用, 放行只看授权
+            "com/cretas/aims/service/platform/PlatformFactoryAiAnalysisService.java",
+            "com/cretas/aims/service/platform/PlatformAiAnalysisGrantService.java",
             "com/cretas/aims/security/BusinessRowScope.java",
             "com/cretas/aims/security/RoleDataScopeService.java",
             "com/cretas/aims/service/datacenter/impl/ExportExecutor.java",

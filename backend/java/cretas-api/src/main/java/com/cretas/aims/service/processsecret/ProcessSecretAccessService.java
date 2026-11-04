@@ -464,6 +464,32 @@ public class ProcessSecretAccessService {
         return recorded;
     }
 
+    /** 平台 AI 分析入口读保密产品时写的留痕 (与入口那一条同一个 resource_ref, 这一条带产品)。 */
+    static final String PLATFORM_AI_RESOURCE = "ai:platform-analysis";
+
+    /**
+     * 平台 AI 分析入口对受保护产品的读取 (Steve 2026-11-04)。只在当前线程的 {@link ProcessSecretPlatformAiScope}
+     * 覆盖这个账号和这家工厂时才可能为 true, 其余一律 false ——「谁能看」的判定 ({@link #decide} /
+     * {@link #permitsViewFull}) 不因此改变, 平台账号走别的接口结果不变。
+     *
+     * <p>客户侧保管 (B 档) 返回 false: 云端没有完整工艺。每个读到的产品记一条 AI_ACCESS (同一次分析只记一次);
+     * 记不进去就抛 403, 这次分析不往下走 (调用方在发给模型之前就会走到这里)。
+     */
+    public boolean permitsPlatformAiRead(AuthenticatedActor actor, String factoryId, String productTypeId) {
+        ProcessSecretPlatformAiScope scope = ProcessSecretPlatformAiScope.covering(actor, factoryId);
+        if (scope == null) return false;
+        Decision decision = decide(actor, factoryId, productTypeId, ProcessSecretAction.VIEW_FULL);
+        if (decision.storageMode() == ProcessSecretStorageMode.CUSTOMER_HELD) return false;
+        if (!decision.isProtected() || scope.alreadyRecorded(productTypeId)) return true;
+        if (!audit(factoryId, productTypeId, actor, ProcessSecretAction.AI_ACCESS, "ALLOW", "平台 AI 分析入口读取",
+                PLATFORM_AI_RESOURCE)) {
+            log.error("[process-secret] audit write failed, stopping platform AI read of {}/{}", factoryId, productTypeId);
+            throw new BusinessException(403, "保密访问记录暂时写不进去，已暂停平台 AI 分析");
+        }
+        scope.markRecorded(productTypeId);
+        return true;
+    }
+
     /** 写审计; 失败只返回 false (不吞掉判定), 由调用方决定是否 fail-closed。 */
     public boolean audit(String factoryId, String productTypeId, AuthenticatedActor actor,
                          ProcessSecretAction action, String decision, String reason, String resourceRef) {
