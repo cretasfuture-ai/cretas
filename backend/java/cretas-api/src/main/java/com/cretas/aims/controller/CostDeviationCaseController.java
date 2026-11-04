@@ -22,6 +22,7 @@ import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
 import com.cretas.aims.service.production.PlanCostVarianceService;
 import com.cretas.aims.service.shortage.CostDeviationCaseWriter;
 import com.cretas.aims.service.shortage.CostDeviationScanService;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.yield.balance.MaterialBalanceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -67,6 +68,7 @@ public class CostDeviationCaseController {
     private final CostDeviationCaseWriter writer;
     private final PriceMaskResolver priceMaskResolver;
     private final ProcessSecretLlmCostScope costScope;
+    private final UnitContractService unitContractService;
 
     public record CaseView(String id, String sourceType, String sourceLabel, String planId, String planNumber,
                            String productName, String stage, String stageLabel, String ownerRole, Long ownerUserId,
@@ -179,7 +181,7 @@ public class CostDeviationCaseController {
         }
         body.put("varianceEvidence", variance);
         body.put("balanceEvidence", balance);
-        body.put("impact", impact(d, variance, balance, batches.size(), mask));
+        body.put("impact", impact(factoryId, d, variance, balance, batches.size(), mask));
         body.put("verifyPath", verifyPath(c.getSourceType(), factoryId, d.getPlanId(), balance));
         body.put("events", eventRepository.findByCaseIdOrderByIdAsc(c.getId()).stream()
                 .map(ShortageCaseController.EventView::of).toList());
@@ -217,8 +219,8 @@ public class CostDeviationCaseController {
         return new BatchView(b.getBatchNumber(), b.getStatus() == null ? null : b.getStatus().name());
     }
 
-    private static Impact impact(CostDeviationCaseDetail d, PlanCostVarianceDTO v, MaterialBalanceTableDTO.PlanBlock b,
-                                 int batchCount, boolean mask) {
+    private Impact impact(String factoryId, CostDeviationCaseDetail d, PlanCostVarianceDTO v, MaterialBalanceTableDTO.PlanBlock b,
+                          int batchCount, boolean mask) {
         BigDecimal amount = mask ? null : d.getAmountVariance();
         String note = mask ? "无采购价查看权限, 金额已隐藏"
                 : amount == null ? "金额未知: 物料平衡只有数量, 没有单价口径" : null;
@@ -231,7 +233,7 @@ public class CostDeviationCaseController {
         if (b != null) {
             for (MaterialBalanceTableDTO.Row r : b.getRows()) {
                 if (r.getUnexplained() == null) continue;
-                if (qtyUnit != null && !qtyUnit.equals(r.getUnit())) { // 单位不同不相加
+                if (qtyUnit != null && !unitContractService.areEquivalent(factoryId, qtyUnit, r.getUnit())) { // 单位不同不相加
                     qty = null;
                     break;
                 }

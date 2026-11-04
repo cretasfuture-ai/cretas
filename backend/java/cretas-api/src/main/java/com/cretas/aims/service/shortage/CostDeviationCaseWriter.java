@@ -118,10 +118,10 @@ public class CostDeviationCaseWriter {
     public void startVerify(String factoryId, String caseId, ActorRef actor) {
         ShortageCase c = open(factoryId, caseId);
         if (c.getStage() != ShortageCase.Stage.DETECTED) {
-            throw new BusinessException(409, "这条异常已在核查中");
+            throw new BusinessException(409, "这条异常已在核查中").withHint("核查完在下方填写处理结果");
         }
         if (c.getOwnerUserId() == null) {
-            throw new BusinessException(409, "请先指定负责人, 再开始核查");
+            throw new BusinessException(409, "请先指定负责人, 再开始核查").withHint("在「负责人」处选人并点指定");
         }
         ShortageCase.Stage from = c.getStage();
         c.setStage(ShortageCase.Stage.EXECUTING);
@@ -133,7 +133,7 @@ public class CostDeviationCaseWriter {
     public void resolve(String factoryId, String caseId, CostDeviationCaseDetail.Resolution code, String note, ActorRef actor) {
         ShortageCase c = open(factoryId, caseId);
         if (c.getStage() != ShortageCase.Stage.EXECUTING) {
-            throw new BusinessException(409, "请先开始核查, 再填写处理结果");
+            throw new BusinessException(409, "请先开始核查, 再填写处理结果").withHint("指定负责人后点「开始核查」");
         }
         if (code == null || note == null || note.isBlank()) {
             throw new BusinessException(400, "处理结果和说明都要填写");
@@ -157,7 +157,8 @@ public class CostDeviationCaseWriter {
         ShortageCase c = caseRepository.findByIdAndFactoryIdAndSourceTypeIn(caseId, factoryId, SOURCES)
                 .orElseThrow(() -> new BusinessException(404, "异常不存在或不属于本厂"));
         if (c.getStage().isTerminal()) {
-            throw new BusinessException(409, "这条异常已结束 (" + c.getStage().label() + ")");
+            throw new BusinessException(409, "这条异常已结束 (" + c.getStage().label() + ")")
+                    .withHint("已结束的异常只能查看; 读数再变化时扫描会新建一条");
         }
         return c;
     }
