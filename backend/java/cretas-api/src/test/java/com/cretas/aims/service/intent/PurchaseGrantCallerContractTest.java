@@ -11,6 +11,7 @@ import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.execution.ToolPermissionChain;
 import com.cretas.aims.service.skill.SkillExecutor;
+import com.cretas.aims.dto.skill.SkillResult;
 import com.cretas.aims.service.skill.impl.SkillExecutorImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -98,7 +99,9 @@ class PurchaseGrantCallerContractTest {
         var args = mapper.readTree(call.getValue().getFunction().getArguments());
         assertThat(args.path("grantId").asText()).isEqualTo(GRANT);
         assertThat(args.path("expectedVersion").asLong()).isEqualTo(1L);
-        assertThat(args.size()).isEqualTo(13); // two task/CAS selectors + eleven bound identity aliases
+        // The deterministic Skill context also carries the original user query (used by
+        // read-only tools); task/CAS selectors and all server-bound identity aliases remain.
+        assertThat(args.size()).isEqualTo(14);
         for (String key : java.util.List.of("factoryId", "factory_id", "tenantId", "tenant_id")) assertThat(args.path(key).asText()).isEqualTo("F006");
         for (String key : java.util.List.of("userId", "user_id", "actorUserId", "actor_user_id")) assertThat(args.path(key).asLong()).isEqualTo(1698L);
         for (String key : java.util.List.of("userRole", "user_role", "role")) assertThat(args.path(key).asText()).isEqualTo("procurement_manager");
@@ -166,6 +169,38 @@ class PurchaseGrantCallerContractTest {
         assertThatThrownBy(() -> service.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.TOOL))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(503));
         verify(controlled, times(1)).executeLater("F006", GRANT, 1L);
+        verifyNoInteractions(audit);
+    }
+    @Test void failedSkillWrapperWithInnerSuccessRemainsOutcomeUnknown() {
+        SkillExecutor failingWrapper = mock(SkillExecutor.class);
+        Map<String, Object> innerSuccess = Map.of("success", true, "data", Map.of());
+        Map<String, Object> wrapperData = Map.of("success", false, "status", "FAILED",
+                "toolResults", Map.of(PurchaseGrantExecuteTool.NAME, innerSuccess));
+        when(failingWrapper.execute(any(), any())).thenReturn(SkillResult.builder()
+                .success(false).skillName("controlled-purchase-grant-execute").data(wrapperData).build());
+        var wrapperService = new PurchaseGrantCallerService(controlled, audit, provider(registry),
+                provider(failingWrapper), permissions, guard, mapper);
+
+        assertThatThrownBy(() -> wrapperService.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(503));
+        verify(controlled, never()).executeLater(any(), any(), any());
+        verifyNoInteractions(audit);
+    }
+    @Test void malformedFailedWrapperCannotInventAConfirmedRefusal() {
+        SkillExecutor failingWrapper = mock(SkillExecutor.class);
+        var wrapperService = new PurchaseGrantCallerService(controlled, audit, provider(registry),
+                provider(failingWrapper), permissions, guard, mapper);
+        for (Map<String, Object> inner : java.util.List.<Map<String, Object>>of(
+                Map.of("code", "PURCHASE_GRANT_REJECTED"),
+                Map.of("success", true, "code", "PURCHASE_GRANT_REJECTED"),
+                Map.of("success", "false", "code", "PURCHASE_GRANT_REJECTED"),
+                Map.of("success", false, "code", "PURCHASE_GRANT_OUTCOME_UNKNOWN"))) {
+            when(failingWrapper.execute(any(), any())).thenReturn(SkillResult.builder().success(false)
+                    .data(Map.of("toolResults", Map.of(PurchaseGrantExecuteTool.NAME, inner))).build());
+            assertThatThrownBy(() -> wrapperService.executeGrant("F006", GRANT, 1L, PurchaseGrantCallerService.Channel.SKILL))
+                    .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(503));
+        }
+        verify(controlled, never()).executeLater(any(), any(), any());
         verifyNoInteractions(audit);
     }
     @Test void auditUnavailableCannotBeReportedAsConfirmedAuditSuccess() {

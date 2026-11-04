@@ -36,6 +36,21 @@ import psycopg2.extras
 
 from training_consent_gate import apply_utterance_rule, drop_records_naming_protected_terms
 
+_REQUIRE_CANONICAL_CATALOG = False
+
+def normalize_catalog_label(label: str, *, require_canonical: Optional[bool] = None) -> str:
+    """Normalize the reviewed alias and fail closed for retired labels."""
+    try:
+        from ai.factory_catalog import normalize_training_label
+    except ModuleNotFoundError:
+        backend_python = Path(__file__).resolve().parents[2] / "backend" / "python"
+        if str(backend_python) not in sys.path:
+            sys.path.insert(0, str(backend_python))
+        from ai.factory_catalog import normalize_training_label
+    if require_canonical is None:
+        require_canonical = _REQUIRE_CANONICAL_CATALOG
+    return normalize_training_label(label, require_canonical=require_canonical)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -147,6 +162,7 @@ def load_zpd_data(zpd_path: Path) -> List[Dict]:
                 # not valid intent labels)
                 if label == "OOD":
                     continue
+                label = normalize_catalog_label(label)
                 records.append(
                     {
                         "text": text,
@@ -203,6 +219,7 @@ def fetch_shadow_disagreements(conn, since_days: int) -> List[Dict]:
         label = (row.get("shadow_intent_code") or "").strip()
         if not text or not label:
             continue
+        label = normalize_catalog_label(label)
 
         confidence = float(row["shadow_confidence"]) if row.get("shadow_confidence") else 0.5
         records.append(
@@ -257,6 +274,7 @@ def fetch_user_confirmed(conn, since_days: int) -> List[Dict]:
         label = (row.get("user_selected_intent") or row.get("matched_intent_code") or "").strip()
         if not label:
             continue
+        label = normalize_catalog_label(label)
 
         confidence = float(row["confidence_score"]) if row.get("confidence_score") else 0.8
         # User-confirmed records get a confidence boost
@@ -408,7 +426,11 @@ def main():
     parser.add_argument('--reviewed-flywheel-file', type=Path, help='Explicitly reviewed flywheel JSONL (optional)')
     parser.add_argument('--flywheel-labels-file', type=Path, help='Current live classifier label catalog')
     parser.add_argument('--flywheel-holdout-file', type=Path, help='Protected evaluation texts/groups; applied to ALL sources')
+    parser.add_argument('--strict-catalog', action='store_true',
+                        help='Reject unknown/inactive labels instead of preserving existing head labels')
     args = parser.parse_args()
+    global _REQUIRE_CANONICAL_CATALOG
+    _REQUIRE_CANONICAL_CATALOG = args.strict_catalog
     flywheel_args = (args.reviewed_flywheel_file, args.flywheel_labels_file, args.flywheel_holdout_file)
     if any(flywheel_args) and not all(flywheel_args):
         parser.error('All three flywheel file arguments are required together')

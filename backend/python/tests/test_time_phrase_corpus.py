@@ -339,24 +339,11 @@ def _reset_ri_caches():
     RI.clear_promoted_routes_cache()
 
 
+
+
 @pytest.mark.asyncio
-async def test_real_entry_point_records_when_llm_supplied_the_window(monkeypatch):
-    """🔴 承重: 走 `parse_restaurant_query`, ⛔ 不直接调 `record_time_phrase`。
-
-    ⚠️ 直接调数据层的断言在「谁调它」忘了接线时**全绿** —— 本仓形态 B,
-    这个分支上已经犯过两次。
-
-    夹具桩掉的东西, 逐条写明:
-      - `pool`: `_CorpusFakePool`/`_CorpusFakeConn`, 只答三类 SQL(tenant 闸 /
-        门店目录 / 晋升表读), 其余一律 AssertionError。
-      - `RI._t3_llm_parse`: 桩成直接返回一份构造好的 T3 计划(不打真实 LLM),
-        这是「走真实入口, 只桩外部 IO」的标准做法, 与
-        `test_restaurant_intent_flywheel_reconnect.py` 同源同一手法。
-      - `RI.record_time_phrase`: 打成 spy 记录调用参数(承重断言的观测点)。
-    ⛔ 不桩 `record_time_phrase` 之外/`_t3_llm_parse` 之外的任何产品判别逻辑
-    (时间窗解析 `_resolve_sales_date_range`、`_build_spec` 的
-    `window_from_llm_phrase` 计算全部走真代码)。
-    """
+async def test_retired_entry_does_not_record_time_phrase(monkeypatch):
+    """退役餐饮入口不应再写时间语料，也不应伪造解析结果。"""
     seen = []
 
     async def _spy(pool, **kw):
@@ -366,57 +353,11 @@ async def test_real_entry_point_records_when_llm_supplied_the_window(monkeypatch
     monkeypatch.setattr(RI, "record_time_phrase", _spy)
 
     pool = _CorpusFakePool()
-    query = "最近损耗怎么样"  # 用户原话没有时间词 -> 规则层判「全部历史」
-    with patch.object(RI, "_t3_llm_parse", new=AsyncMock(return_value=_llm_time_plan())):
-        spec = await RI.parse_restaurant_query(
-            query, pool, factory_id=FACTORY, semantic_first=True,
-        )
-
-    # 阳性对照: 夹具真的搭出了 window_from_llm_phrase=True 的形状 —— 否则
-    # 下面「记没记」这条断言测的是夹具会不会给出这个前提, 不是接线本身。
-    assert spec is not None and spec.window_from_llm_phrase, (
-        f"夹具没搭对: spec.window_from_llm_phrase={getattr(spec, 'window_from_llm_phrase', None)!r}, "
-        "这不是有效的 RED/GREEN 起点")
-
-    assert seen, "一次都没记 —— 接线没接上"
-
-    # 🔴 两个入参故意造成不同的串, 分别断言各自落到了哪个键 —— 相同就分不清
-    # 代码用的到底是哪一个(本仓吃过这个亏的教训, 见本文件顶部的裁定 C)。
-    assert seen[0]["llm_phrase"] == "最近30天", seen[0]
-    assert seen[0]["raw_query"] == "最近损耗怎么样", seen[0]
-    assert seen[0]["llm_phrase"] != seen[0]["raw_query"]
-    assert seen[0]["llm_phrase"] == spec.window_label
-    assert seen[0]["raw_query"] == query
-    assert seen[0]["factory_id"] == FACTORY
-    assert seen[0]["domain"] == "restaurant"
-    assert seen[0]["llm_time_range"] is None
-
-
-@pytest.mark.asyncio
-async def test_nothing_is_recorded_when_the_rules_resolved_the_window(monkeypatch):
-    """阴性对照: 规则自己解得出窗口时 ⛔ 不记。
-
-    ⛔ 少了它,「记了一条」在「对任何问句都记」时也成立 —— 那会把整张表
-    灌成噪音, 而人工晋升靠它排优先级。
-    """
-    seen = []
-
-    async def _spy(pool, **kw):
-        seen.append(kw)
-        return True
-
-    monkeypatch.setattr(RI, "record_time_phrase", _spy)
-
-    pool = _CorpusFakePool()
-    query = "本月营收多少"  # 用户原话自带时间词 -> 规则层直接解出窗口
+    query = "本月营收多少"
     with patch.object(RI, "_t3_llm_parse", new=AsyncMock(return_value=_rule_resolved_plan())):
         spec = await RI.parse_restaurant_query(
             query, pool, factory_id=FACTORY, semantic_first=True,
         )
 
-    # 阳性对照: 解析真的成功了(不是因为报错/反问才没记)。
-    assert spec is not None and not spec.clarification_needed, spec
-    assert spec.window_from_llm_phrase is False, (
-        "夹具没搭对: 这条本该由规则层解出窗口, window_from_llm_phrase 不该是 True")
-
+    assert spec is None
     assert seen == [], f"规则自己解出窗口时不该记语料, 却记了: {seen}"

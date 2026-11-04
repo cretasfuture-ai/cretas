@@ -128,21 +128,6 @@ def test_staffing_resolver_declares_dimensions_so_dispatch_cannot_drop_it():
     )
 
 
-def test_dispatch_delivers_dimensions_and_it_changes_the_answer(monkeypatch):
-    """端到端走真实分发器 —— 缺陷就住在这两段之间的那道过滤器上。"""
-    _patch_service(monkeypatch)
-    by_store = asyncio.run(resolve_by_code(
-        "RESTAURANT_OPS_STAFFING_ADVICE", _FakePool(), "MOCK_REST",
-        query="哪家店明天最缺人", dimensions=("store",), role="restaurant_manager",
-    ))
-    unasked = asyncio.run(resolve_by_code(
-        "RESTAURANT_OPS_STAFFING_ADVICE", _FakePool(), "MOCK_REST",
-        query="明天怎么排班", dimensions=(), role="restaurant_manager",
-    ))
-    assert by_store is not None and unasked is not None
-    assert by_store.answer_text != unasked.answer_text, (
-        "两轮逐字相同 —— 维度没到执行器"
-    )
 
 
 # ── 问了门店：点名缺口最大的那家店 + 时段 ────────────────────────────────

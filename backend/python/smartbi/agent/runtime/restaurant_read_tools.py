@@ -1122,12 +1122,10 @@ def build_restaurant_read_registry(
     *,
     today_factory: Callable[[], date] = date.today,
 ) -> ReadonlyToolRegistry:
+    # The restaurant AI Read Tool namespace is retired. Returning an empty
+    # registry makes all old runtime routes fail closed without importing or
+    # executing restaurant data adapters.
     registry = ReadonlyToolRegistry()
-    adapter = RestaurantReadToolAdapter(
-        sources or default_restaurant_sources(), today_factory=today_factory
-    )
-    for descriptor in restaurant_descriptors():
-        registry.register(descriptor, adapter.execute)
     return registry
 
 

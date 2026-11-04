@@ -21,17 +21,15 @@ class RuntimeToolPolicyLoaderTest {
     private final RuntimeToolPolicyLoader loader = new RuntimeToolPolicyLoader();
 
     @Test
-    void loadsAllElevenCompleteExplicitRuntimePolicies() {
+    void loadsAllNineCompleteExplicitRuntimePolicies() {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(11);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(9);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
                         "user_disable",
-                        "restaurant_dish_delete",
-                        "restaurant_owner_action_advisor",
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
@@ -49,7 +47,7 @@ class RuntimeToolPolicyLoaderTest {
             assertThat(policy.approvalPolicy())
                     .isEqualTo(ApprovalPolicy.NOT_REQUIRED);
         });
-        assertThat(manifest.policies().subList(0, 2)).allSatisfy(policy -> {
+        assertThat(manifest.policies().get(0)).satisfies(policy -> {
             assertThat(policy.version()).isEqualTo("2.0.0");
             assertThat(policy.confirmationPolicy())
                     .isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
@@ -57,12 +55,9 @@ class RuntimeToolPolicyLoaderTest {
                     .isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.AI_CHAT);
         });
-        // 2026-08-27: restaurant_dish_delete (index 1) 新增了真实的 doPreview() 实现 —— 安全改进
-        // (确认前先看变更预览), 不再与 user_disable (index 0) 共享 supportsPreview=false。拆开断言,
-        // 不是放宽: 两边都仍是显式核对过的值。
         assertThat(manifest.policies().get(0).supportsPreview()).isFalse();
         assertThat(manifest.policies().get(1).supportsPreview()).isTrue();
-        assertThat(manifest.policies().subList(3, 5)).allSatisfy(policy -> {
+        assertThat(manifest.policies().subList(1, 3)).allSatisfy(policy -> {
             assertThat(policy.version()).isEqualTo("1.0.0");
             assertThat(policy.supportsPreview()).isTrue();
             assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
@@ -70,7 +65,7 @@ class RuntimeToolPolicyLoaderTest {
             assertThat(policy.allowedSources())
                     .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });
-        assertThat(manifest.policies().subList(5, 6)).allSatisfy(policy -> {
+        assertThat(manifest.policies().subList(3, 4)).allSatisfy(policy -> {
             assertThat(policy.version()).isEqualTo("1.0.0");
             assertThat(policy.supportsPreview()).isTrue();
             assertThat(policy.confirmationPolicy())
@@ -80,7 +75,7 @@ class RuntimeToolPolicyLoaderTest {
             assertThat(policy.allowedSources())
                     .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });
-        assertThat(manifest.policies().subList(6, 9)).allSatisfy(policy -> {
+        assertThat(manifest.policies().subList(4, 7)).allSatisfy(policy -> {
             assertThat(policy.actionType()).isEqualTo(
                     com.cretas.aims.ai.tool.ToolExecutor.ActionType.READ);
             assertThat(policy.riskLevel()).isEqualTo(
@@ -110,22 +105,7 @@ class RuntimeToolPolicyLoaderTest {
                 .isEqualTo(DataClassification.RESTRICTED);
         assertThat(manifest.policies().get(1).dataClassification())
                 .isEqualTo(DataClassification.CONFIDENTIAL);
-        assertThat(manifest.policies().get(2)).satisfies(policy -> {
-            assertThat(policy.toolName()).isEqualTo("restaurant_owner_action_advisor");
-            assertThat(policy.version()).isEqualTo("2.0.0");
-            assertThat(policy.requiredPermissions()).containsExactly("analytics:read");
-            assertThat(policy.allowedRoles()).isEmpty();
-            assertThat(policy.allowedBusinessTypes())
-                    .containsExactlyInAnyOrder(FactoryType.RESTAURANT, FactoryType.BRANCH);
-            assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
-            assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);
-            assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.AI_CHAT);
-            assertThat(policy.dataClassification()).isEqualTo(DataClassification.CONFIDENTIAL);
-            assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.ALLOWLIST_ONLY);
-            assertThat(policy.egressPolicy().allowedDestinations())
-                    .containsExactly("python-smartbi.owner-action-chat.v1");
-        });
-        assertThat(manifest.policies().get(9)).satisfies(policy -> {
+        assertThat(manifest.policies().get(7)).satisfies(policy -> {
             assertThat(policy.toolName()).isEqualTo("smartbi_factory_analysis");
             assertThat(policy.implementationClass()).isEqualTo(
                     "com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisTool");
@@ -143,12 +123,20 @@ class RuntimeToolPolicyLoaderTest {
                     .containsExactly("python-smartbi.factory-chart-analysis.v1");
         });
         assertThat(manifest.policies())
-                .filteredOn(policy -> !policy.toolName().equals("restaurant_owner_action_advisor")
-                        && !policy.toolName().equals("smartbi_factory_analysis"))
+                .filteredOn(policy -> !policy.toolName().equals("smartbi_factory_analysis"))
                 .allSatisfy(policy -> {
                     assertThat(policy.egressPolicy().mode()).isEqualTo(EgressMode.DENY_ALL);
                     assertThat(policy.egressPolicy().allowedDestinations()).isEmpty();
                 });
+    }
+
+    @Test
+    void retiredRestaurantRuntimePoliciesAreClosedRatherThanAllowed() {
+        RuntimeToolPolicyManifest manifest = loader.loadDefault();
+        assertThat(manifest.policies())
+                .extracting(RuntimeToolPolicyEntry::toolName)
+                .noneMatch(name -> name.startsWith("restaurant_"));
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(9);
     }
 
     @Test

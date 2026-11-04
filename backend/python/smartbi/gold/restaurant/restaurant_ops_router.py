@@ -50,6 +50,11 @@ from smartbi.gold.restaurant.provenance import (
 
 logger = logging.getLogger(__name__)
 
+# All RESTAURANT_* AI resolver capability is retired. Gold business/ETL APIs
+# may still import this module for shared data helpers, but no AI dispatch may
+# reach a resolver or generic restaurant executor.
+RESTAURANT_AI_RETIRED = True
+
 
 # ─── 繁体输入：确定性词表同时收录繁体变体 ────────────────────────────────
 # 这些词表原本只有简体，繁体输入(港澳台用户 / 系统语言设为繁中 / 从繁体文档
@@ -786,6 +791,8 @@ def match_restaurant_ops(query: str) -> Optional[str]:
     Pure keyword match for <1ms routing. RAG-based fallback can live in
     chat.py's existing fallback chain.
     """
+    if RESTAURANT_AI_RETIRED:
+        return None
     if not query:
         return None
     q = query.strip()
@@ -967,6 +974,8 @@ def reconcile_restaurant_ops_code(
     period comparisons are the strongest case because serving an all-history
     trend there changes the user's requested dates.
     """
+    if RESTAURANT_AI_RETIRED:
+        return None
     matched = match_restaurant_ops(query)
     if not expected_code:
         return matched
@@ -11354,6 +11363,10 @@ _RESOLVERS = {
     "RESTAURANT_OPS_STAFFING_ADVICE": resolve_staffing_advice,
 }
 
+# Keep the legacy function bodies importable for non-AI data tooling, but do
+# not leave a callable AI dispatch table behind the catalog retirement.
+_RESOLVERS = {}
+
 
 def is_supported_restaurant_ops_code(code: Optional[str]) -> bool:
     """Return whether an internal caller supplied a known restaurant intent."""
@@ -11477,6 +11490,8 @@ async def resolve_by_code(
     names (unless it has a **kwargs catch-all). This keeps the dispatch
     backward-compatible: legacy resolvers silently ignore ``role``.
     """
+    if RESTAURANT_AI_RETIRED:
+        return None
     resolver = _RESOLVERS.get(code)
     if resolver is None:
         # ── 通用执行器并行路径 (2026-08-09) ──────────────────────────────

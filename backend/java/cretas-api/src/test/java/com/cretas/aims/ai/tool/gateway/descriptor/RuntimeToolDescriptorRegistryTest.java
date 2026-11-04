@@ -29,8 +29,6 @@ class RuntimeToolDescriptorRegistryTest {
         assertThat(registry.approvedToolNames())
                 .containsExactlyInAnyOrder(
                         "user_disable",
-                        "restaurant_dish_delete",
-                        "restaurant_owner_action_advisor",
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
@@ -48,21 +46,6 @@ class RuntimeToolDescriptorRegistryTest {
                     && descriptor.allowedRoles().isEmpty()).isFalse();
             assertThat(descriptor.allowedBusinessTypes()).isNotEmpty();
         }
-        assertThat(registry.findApproved("restaurant_owner_action_advisor").orElseThrow())
-                .satisfies(descriptor -> {
-                    assertThat(descriptor.version()).isEqualTo("2.0.0");
-                    assertThat(descriptor.allowedBusinessTypes())
-                            .containsExactlyInAnyOrder(
-                                    FactoryType.RESTAURANT, FactoryType.BRANCH);
-                    assertThat(descriptor.requiredPermissions()).containsExactly("analytics:read");
-                    assertThat(descriptor.allowedRoles()).isEmpty();
-                    assertThat(descriptor.allowedSources())
-                            .containsExactly(ToolExecutionSource.AI_CHAT);
-                    assertThat(descriptor.egressPolicy().mode())
-                            .isEqualTo(EgressMode.ALLOWLIST_ONLY);
-                    assertThat(descriptor.egressPolicy().allowedDestinations())
-                            .containsExactly("python-smartbi.owner-action-chat.v1");
-                });
         assertThat(registry.findApproved("smartbi_factory_analysis").orElseThrow())
                 .satisfies(descriptor -> {
                     assertThat(descriptor.version()).isEqualTo("1.0.0");
@@ -90,10 +73,11 @@ class RuntimeToolDescriptorRegistryTest {
                             .containsExactlyInAnyOrder("factory_super_admin", "permission_admin");
                 });
         assertThat(ToolDescriptorInventoryLoader.P0_TOOL_NAMES)
-                .filteredOn(toolName -> !registry.approvedToolNames().contains(toolName))
+                .filteredOn(toolName -> !toolName.startsWith("restaurant_")
+                        && !registry.approvedToolNames().contains(toolName))
                 // 18 → 17: bom_version_approve 随 9 个老式 BOM 写入工具退役。
                 // 这里数的是「P0 里尚未进入 approved 集合的」, 少一个工具就该少一个。
-                .hasSize(17)
+                .hasSize(12)
                 .allSatisfy(toolName -> assertThat(registry.findApproved(toolName)).isEmpty());
         assertThat(registry.findApproved("restaurant_sales_overview")).isEmpty();
         assertThat(registry.findApproved("does_not_exist")).isEmpty();
@@ -107,14 +91,14 @@ class RuntimeToolDescriptorRegistryTest {
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(inventory, missing))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must exactly match APPROVED inventory")
-                .hasMessageContaining("restaurant_dish_delete");
+                .hasMessageContaining("material_batch_query");
 
         RuntimeToolPolicyEntry first = manifest.policies().get(0);
         RuntimeToolPolicyEntry extraEntry = copy(first,
                 "com.example.UnapprovedTool", "unapproved_tool", first.version());
         List<RuntimeToolPolicyEntry> extraPolicies = new ArrayList<>(manifest.policies());
         extraPolicies.add(extraEntry);
-        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, 12, extraPolicies);
+        RuntimeToolPolicyManifest extra = new RuntimeToolPolicyManifest(1, extraPolicies.size(), extraPolicies);
         assertThatThrownBy(() -> new RuntimeToolDescriptorRegistry(inventory, extra))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unapproved=[unapproved_tool]");
@@ -122,7 +106,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry driftedEntry = copy(
                 first, first.implementationClass(), first.toolName(), "2.0.1");
         RuntimeToolPolicyManifest drifted = new RuntimeToolPolicyManifest(
-                1, 11, manifest.policies().stream()
+                1, manifest.policies().size(), manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? driftedEntry : policy)
                         .toList());
@@ -133,7 +117,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry sourceDrift = copy(
                 first, "com.example.UserDisableTool", first.toolName(), first.version());
         RuntimeToolPolicyManifest sourceDriftManifest = new RuntimeToolPolicyManifest(
-                1, 11, manifest.policies().stream()
+                1, manifest.policies().size(), manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? sourceDrift : policy)
                         .toList());
@@ -145,7 +129,7 @@ class RuntimeToolDescriptorRegistryTest {
         RuntimeToolPolicyEntry permissionDrift = copyWithPermissions(
                 first, Set.of("hr:read"));
         RuntimeToolPolicyManifest permissionDriftManifest = new RuntimeToolPolicyManifest(
-                1, 11, manifest.policies().stream()
+                1, manifest.policies().size(), manifest.policies().stream()
                         .map(policy -> policy.toolName().equals(first.toolName())
                                 ? permissionDrift : policy)
                         .toList());

@@ -447,45 +447,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[startup] template embedding warmer failed: {e}")
 
-    # 2026-07-07 restaurant intent tiered routing design section 3.3:
-    # populate restaurant_ops_router.SAMPLE_QUERIES into the SAME embedding
-    # index (they've existed since Plan C but were never actually embedded --
-    # this is the T2 vector tier's data source). Mirrors the populate_all
-    # gating above: leader-only, background task, idempotent re-run.
-    try:
-        from smartbi.services.template_embedding_index import (
-            count_embeddings as _count_restaurant_emb,
-            populate_restaurant_ops,
-        )
-        from smartbi.gold.restaurant.restaurant_ops_router import SAMPLE_QUERIES as _RESTAURANT_SAMPLES
-        from smartbi.gold.restaurant.restaurant_intent_promotion import merge_samples as _merge_restaurant_samples
-        from smartbi.config import get_pg_pool as _get_pool_restaurant_emb
-        _restaurant_emb_pool = await _get_pool_restaurant_emb()
-        if _restaurant_emb_pool is not None:
-            # Expected count must include the promotion ledger too (merge_samples),
-            # or a fresh promotion would never trip the "existing < expected"
-            # re-populate check below -- the newly-promoted queries would sit
-            # un-embedded until some UNRELATED sample count changed.
-            _restaurant_expected = sum(len(v) for v in _merge_restaurant_samples(_RESTAURANT_SAMPLES).values())
-            _restaurant_existing = await _count_restaurant_emb(
-                _restaurant_emb_pool, code_prefix="RESTAURANT_OPS_",
-            )
-            if _restaurant_existing == 0 or (
-                _restaurant_expected > 0 and _restaurant_existing < _restaurant_expected
-            ):
-                if _is_leader:
-                    logger.info(
-                        f"[startup] restaurant ops embedding index — "
-                        f"populating {_restaurant_expected} sample queries in background (leader)"
-                    )
-                    import asyncio as _asyncio_r
-                    _asyncio_r.create_task(populate_restaurant_ops(_restaurant_emb_pool))
-                else:
-                    logger.info(
-                        "[follower] restaurant ops embedding warmer skipped (leader will populate)"
-                    )
-    except Exception as e:
-        logger.warning(f"[startup] restaurant ops embedding warmer failed: {e}")
+    # Restaurant-specific AI sample embeddings are retired.  Keep the generic
+    # template embedding warmer above and the restaurant business ETL below;
+    # neither is allowed to register or refresh RESTAURANT_OPS_* AI samples.
 
     # Agent layer narrative_cache TTL pruner — hourly background task.
     # Gated on SMARTBI_AGENT_LAYER_ENABLED so disabled tenants don't touch the table.
@@ -1011,43 +975,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[startup] llm-cache pruner init failed: {e}")
 
-    # 2026-07-08: post-restart warmup. The heaviest read resolvers (STORE_MARGIN,
-    # GROSS_MARGIN) scan raw fact_pos_item and cold-start at ~12s on the FIRST call
-    # after a restart (cold PG shared_buffers); once warm they return ~0.5s. Fire a
-    # one-shot warmup for the showcase tenants so the first real user doesn't eat
-    # the cold-start. Leader-only: PG shared_buffers are server-side, so one warm
-    # benefits every worker. Fail-open, non-blocking (never delays boot/health).
+    # Restaurant resolver warmup is retired with the RESTAURANT_* AI namespace.
+    # Do not issue synthetic resolver calls during startup.
     _warmup_task = None
-    try:
-        import asyncio as _asyncio
-        from smartbi.config import get_pg_pool as _get_pg_pool_warm
-
-        async def _warmup_heavy_resolvers_once():
-            await _asyncio.sleep(30)  # let pool + service settle first
-            try:
-                from smartbi.gold.restaurant.restaurant_ops_router import resolve_by_code
-                from smartbi.tenant_ctx import set_factory_id
-                pool = await _get_pg_pool_warm()
-                if pool is None:
-                    return
-                warmed = 0
-                for fid in ("DEMO_REST", "DEMO_FACTORY"):
-                    set_factory_id(fid)
-                    for code in ("RESTAURANT_OPS_STORE_MARGIN", "RESTAURANT_OPS_GROSS_MARGIN"):
-                        try:
-                            await resolve_by_code(code, pool, fid, role="restaurant_owner", query="预热")
-                            warmed += 1
-                        except Exception as we:
-                            logger.debug(f"[warmup] {fid}/{code} skipped: {we}")
-                logger.info(f"[warmup] heavy POS resolvers pre-warmed ({warmed}) — cold-start eliminated")
-            except Exception as ex:
-                logger.warning(f"[warmup] heavy resolver warmup failed (fail-open): {ex}")
-
-        if _is_leader:
-            _warmup_task = _asyncio.create_task(_warmup_heavy_resolvers_once())
-            logger.info("[leader] heavy-resolver warmup armed")
-    except Exception as e:
-        logger.warning(f"[startup] warmup init failed: {e}")
 
     # Phase 2B-α (Apr 29 2026): AI intent matching orchestrator + snapshot.
     # Wires app.state.ai_orchestrator (3 matchers) so /api/ai/intent/match resolves
@@ -1816,7 +1746,6 @@ try:
     from smartbi_compat.api import analysis_drilldown
     from smartbi_compat.api import analysis_production
     from smartbi_compat.api import analysis_quality
-    from smartbi_compat.api import analysis_restaurant_ops
     from smartbi_compat.api import dashboard_composite
     app.include_router(smartbi_compat_analysis.router, tags=["SmartBI Compat: Analysis"])
     app.include_router(smartbi_compat_upload.router, tags=["SmartBI Compat: Upload"])
@@ -1830,7 +1759,6 @@ try:
     app.include_router(analysis_drilldown.router, tags=["SmartBI Compat: Analysis Drill-Down"])
     app.include_router(analysis_production.router, tags=["SmartBI Compat: Analysis Production"])
     app.include_router(analysis_quality.router, tags=["SmartBI Compat: Analysis Quality"])
-    app.include_router(analysis_restaurant_ops.router, tags=["SmartBI Compat: Analysis Restaurant Ops (Phase IIb)"])
     app.include_router(dashboard_composite.router, tags=["SmartBI Compat: Dashboard Composite (Tier 2 Pilot)"])
     from smartbi_compat.api import mapping_review as smartbi_compat_mapping_review
     app.include_router(smartbi_compat_mapping_review.router, tags=["SmartBI Compat: Mapping Review (Phase 0)"])

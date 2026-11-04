@@ -97,11 +97,6 @@ public class DynamicToolSelectionService {
     @org.springframework.context.annotation.Lazy
     private ClarificationCandidateService clarificationCandidateService;
 
-    // R14c: 餐饮租户 dynamic no-tool 死胡同出口 (误匹配 SYSTEM_HELP 等无候选工具
-    // 的意图, 如「你们能做什么」) 先问 Python tiered 路由再放弃。
-    @Autowired(required = false)
-    private com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate tieredIntentDelegate;
-
     /**
      * 走 Skill 的意图 (tool_name 为空, 如 REPORT_INVENTORY) 以前给工具的参数是空的: 用户说的时间、状态都到不了
      * (S6 验收: 「上个月的库存」回今天的报表、没有「不能按时间筛选」提示)。这里与 ToolDispatchService 同口径补上:
@@ -248,43 +243,10 @@ public class DynamicToolSelectionService {
         }
     }
 
-    /**
-     * R14c: 餐饮租户的 dynamic no-tool 出口先试 tiered 路由再回落死胡同提示。
-     */
+    /** Retired restaurant lane: use the ordinary catalog no-tool response. */
     private IntentExecuteResponse noToolResponseWithRestaurantFallback(AIIntentConfig intent,
                                                                        String factoryId,
                                                                        IntentExecuteRequest request) {
-        if (tieredIntentDelegate != null && isRestaurantTenant(factoryId)
-                && request != null && request.getUserInput() != null) {
-            try {
-                Map<String, Object> delegateParams = new HashMap<>();
-                delegateParams.put("userInput", request.getUserInput());
-                Map<String, Object> delegateContext = new HashMap<>();
-                delegateContext.put("request", request);
-                Map<String, Object> delegated = tieredIntentDelegate.tryDelegate(
-                        factoryId, delegateParams, delegateContext, "dynamic_no_tool");
-                if (delegated != null && delegated.get("message") != null) {
-                    String delegatedMessage = delegated.get("message").toString();
-                    Map<String, Object> delegatedData = new HashMap<>();
-                    delegatedData.put("charts", delegated.getOrDefault("charts", List.of()));
-                    delegatedData.put("kpis", delegated.getOrDefault("kpis", List.of()));
-                    delegatedData.put("source", "restaurant_ops_gold");
-                    log.info("[Branch:TieredDelegate] dynamic no-tool 出口被 tiered 路由接管: intentCode={}",
-                            intent != null ? intent.getIntentCode() : null);
-                    return IntentExecuteResponse.builder()
-                            .intentRecognized(true)
-                            .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
-                            .status("SUCCESS")
-                            .message(delegatedMessage)
-                            .formattedText(delegatedMessage)
-                            .resultData(delegatedData)
-                            .executedAt(LocalDateTime.now())
-                            .build();
-                }
-            } catch (Exception e) {
-                log.warn("[Branch:TieredDelegate] dynamic no-tool delegate 失败(回落原提示): {}", e.getMessage());
-            }
-        }
         return buildNoToolResponse(intent);
     }
 
@@ -382,27 +344,28 @@ public class DynamicToolSelectionService {
         if (skillRouterService == null || !skillRouterService.isSkillsEnabled()) {
             return null;
         }
+        com.cretas.aims.dto.skill.SkillDefinition selectedSkill = null;
         try {
-            var matchingSkills = skillRouterService.findMatchingSkills(userQuery);
+            var matchingSkills = skillRouterService.findMatchingSkills(userQuery, factoryId);
             if (matchingSkills.isEmpty()) {
                 return null;
             }
 
-            var bestMatch = matchingSkills.get(0);
-            double score = bestMatch.calculateMatchScore(userQuery);
+            selectedSkill = matchingSkills.get(0);
+            double score = selectedSkill.calculateMatchScore(userQuery);
             if (score < skillPreemptMinScore) {
                 log.info("Skill 匹配不够强, 不抢先 ({} < {}): skill={}",
-                        String.format("%.2f", score), skillPreemptMinScore, bestMatch.getName());
+                        String.format("%.2f", score), skillPreemptMinScore, selectedSkill.getName());
                 return null;
             }
-            Optional<String> blocked = skillPreemptionBlocker(bestMatch, factoryId, userId, userRole);
+            Optional<String> blocked = skillPreemptionBlocker(selectedSkill, factoryId, userId, userRole);
             if (blocked.isPresent()) {
                 log.info("Skill 不抢先 (当前角色不能使用其中的工具): skill={}, role={}, 原因={}",
-                        bestMatch.getName(), userRole, blocked.get());
+                        selectedSkill.getName(), userRole, blocked.get());
                 return null;
             }
 
-            log.info("Skill 匹配成功: skill={}, score={}", bestMatch.getName(), String.format("%.2f", score));
+            log.info("Skill 匹配成功: skill={}, score={}", selectedSkill.getName(), String.format("%.2f", score));
 
             com.cretas.aims.dto.skill.SkillContext skillContext = com.cretas.aims.dto.skill.SkillContext.builder()
                     .factoryId(factoryId)
@@ -412,7 +375,18 @@ public class DynamicToolSelectionService {
                     .extractedParams(sentenceParams(userQuery))
                     .build();
 
-            SkillResult skillResult = skillRouterService.executeSkill(bestMatch.getName(), skillContext);
+            SkillResult skillResult = skillRouterService.executeSkill(selectedSkill.getName(), skillContext);
+
+            if (skillResult == null) {
+                log.warn("Skill 执行未返回结果: skill={}", selectedSkill.getName());
+                return isCatalogSkill(selectedSkill.getName())
+                        ? buildSkillFailureResponse(
+                                com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(
+                                        selectedSkill.getName()),
+                                selectedSkill.getName(),
+                                null)
+                        : null;
+            }
 
             if (skillResult.isSuccess()) {
                 IntentExecuteResponse response = new IntentExecuteResponse();
@@ -433,9 +407,25 @@ public class DynamicToolSelectionService {
             }
 
             log.warn("Skill 执行失败: skill={}, message={}", skillResult.getSkillName(), skillResult.getMessage());
+            String selectedSkillName = selectedSkill.getName();
+            if (isCatalogSkill(selectedSkillName)) {
+                return buildSkillFailureResponse(
+                        com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(
+                                selectedSkillName),
+                        selectedSkillName,
+                        skillResult);
+            }
             return null;
         } catch (Exception e) {
             log.warn("Skill 路由异常，回退到后续路由: {}", e.getMessage());
+            if (selectedSkill != null && isCatalogSkill(selectedSkill.getName())) {
+                return buildSkillFailureResponse(
+                        com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(
+                                selectedSkill.getName()),
+                        selectedSkill.getName(),
+                        "Skill 执行异常: " + e.getMessage(),
+                        null);
+            }
             return null;
         }
     }
@@ -540,18 +530,22 @@ public class DynamicToolSelectionService {
             SkillResult skillResult = skillRouterService.executeSkill(skillName, skillContext);
             if (skillResult == null) {
                 log.warn("显式 Skill 路由: executeSkill 返回 null, skillName={}", skillName);
-                return null;
+                return isCatalogSkill(intent.getIntentCode(), skillName)
+                        ? buildSkillFailureResponse(intent, "Skill 执行未返回结果", null)
+                        : null;
             }
 
-            // SkillResult.success=false 且 message 是 "Skill not found" / "未找到Skill" — Skill 不存在,
-            // 返 null 让 caller 走 fallback 的下游 (动态选择 / buildNoToolResponse).
+            // A missing legacy Skill still falls through; catalog-owned Skills remain
+            // structured failures so the caller never loses the original tool payload.
             // Sprint 9 P0.2 fix (2026-05-22): SkillRouterServiceImpl.executeSkill 返英文 "Skill not found: xxx",
             // 原来的 `msg.contains("未找到")` 漏掉这一 case 导致 caller 把所有 skill 失败都当成 "skill 存在但执行失败".
             String msg = skillResult.getMessage();
             if (!skillResult.isSuccess() && msg != null
                     && (msg.contains("未找到") || msg.startsWith("Skill not found"))) {
                 log.warn("显式 Skill 路由: Skill 不存在 skillName={}, message={}", skillName, msg);
-                return null;
+                return isCatalogSkill(intent.getIntentCode(), skillName)
+                        ? buildSkillFailureResponse(intent, msg, skillResult)
+                        : null;
             }
 
             if (skillResult.isSuccess()) {
@@ -584,10 +578,14 @@ public class DynamicToolSelectionService {
             // so user sees "Skill 执行失败: [真实原因]" instead of generic "暂不支持 WORKDESK".
             log.warn("显式 Skill 路由: 执行失败 skill={}, message={}",
                     skillResult.getSkillName(), skillResult.getMessage());
-            return buildSkillFailureResponse(intent, skillResult.getMessage());
+            return isCatalogSkill(intent.getIntentCode(), skillName)
+                    ? buildSkillFailureResponse(intent, skillResult.getMessage(), skillResult)
+                    : null;
         } catch (Exception e) {
             log.warn("显式 Skill 路由异常 intentCode={}: {}", intent.getIntentCode(), e.getMessage());
-            return buildSkillFailureResponse(intent, "Skill 执行异常: " + e.getMessage());
+            return isCatalogSkill(intent.getIntentCode(), intentCodeToSkillName(intent.getIntentCode()))
+                    ? buildSkillFailureResponse(intent, "Skill 执行异常: " + e.getMessage(), null)
+                    : null;
         }
     }
 
@@ -597,20 +595,62 @@ public class DynamicToolSelectionService {
      * <p>Sprint 10.5 P0 #1 helper. Replaces previous "return null → buildNoToolResponse →
      * generic 暂不支持 WORKDESK" fall-through with explicit per-Skill error surface.
      */
-    private IntentExecuteResponse buildSkillFailureResponse(AIIntentConfig intent, String skillErrorMessage) {
+    private IntentExecuteResponse buildSkillFailureResponse(AIIntentConfig intent,
+                                                            String skillErrorMessage,
+                                                            SkillResult skillResult) {
+        return buildSkillFailureResponse(
+                intent.getIntentCode(), intent.getIntentName(), skillErrorMessage,
+                skillResult != null ? skillResult.getData() : null);
+    }
+
+    private IntentExecuteResponse buildSkillFailureResponse(String intentCode,
+                                                            String skillName,
+                                                            SkillResult skillResult) {
+        return buildSkillFailureResponse(intentCode, skillName,
+                skillResult != null ? skillResult.getMessage() : null,
+                skillResult != null ? skillResult.getData() : null);
+    }
+
+    private IntentExecuteResponse buildSkillFailureResponse(String intentCode,
+                                                            String intentName,
+                                                            String skillErrorMessage,
+                                                            Object data) {
+        Map<?, ?> dataMap = data instanceof Map<?, ?> map ? map : Map.of();
+        String dataMessage = dataMap.get("message") == null ? null : dataMap.get("message").toString();
         String reason = skillErrorMessage != null && !skillErrorMessage.isBlank()
-                ? skillErrorMessage : "未知错误";
-        String msg = "Skill 执行失败: " + reason;
-        return IntentExecuteResponse.builder()
+                ? skillErrorMessage
+                : (dataMessage != null && !dataMessage.isBlank() ? dataMessage : "未知错误");
+        boolean needMoreInfo = Boolean.TRUE.equals(dataMap.get("needMoreInfo"))
+                || "NEED_MORE_INFO".equalsIgnoreCase(String.valueOf(dataMap.get("status")))
+                || (dataMap.get("clarificationQuestions") instanceof java.util.Collection<?> questions
+                && !questions.isEmpty());
+        String status = needMoreInfo ? "NEED_MORE_INFO" : "FAILED";
+        IntentExecuteResponse.IntentExecuteResponseBuilder builder = IntentExecuteResponse.builder()
                 .intentRecognized(true)
-                .intentCode(intent.getIntentCode())
-                .intentName(intent.getIntentName())
-                .intentCategory(intent.getIntentCategory())
-                .status("FAILED")
-                .message(msg)
-                .formattedText(msg)
-                .executedAt(LocalDateTime.now())
-                .build();
+                .intentCode(intentCode)
+                .intentName(intentName)
+                .status(status)
+                .message(reason)
+                .formattedText(reason)
+                .resultData(data)
+                .executedAt(LocalDateTime.now());
+        Object questions = dataMap.get("clarificationQuestions");
+        if (questions instanceof java.util.Collection<?> values) {
+            builder.clarificationQuestions(values.stream().filter(java.util.Objects::nonNull)
+                    .map(Object::toString).toList());
+        }
+        return builder.build();
+    }
+
+    private boolean isCatalogSkill(String skillName) {
+        return com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(skillName) != null;
+    }
+
+    private boolean isCatalogSkill(String intentCode, String skillName) {
+        return isCatalogSkill(skillName)
+                || (intentCode != null
+                && java.util.Objects.equals(
+                skillName, com.cretas.aims.ai.catalog.FactoryIntentCatalog.skillName(intentCode)));
     }
 
     /**
@@ -626,7 +666,8 @@ public class DynamicToolSelectionService {
         if (intentCode == null || intentCode.isEmpty()) {
             return "";
         }
-        return intentCode.toLowerCase().replace('_', '-');
+        String configured = com.cretas.aims.ai.catalog.FactoryIntentCatalog.skillName(intentCode);
+        return configured != null ? configured : intentCode.toLowerCase().replace('_', '-');
     }
 
     /**

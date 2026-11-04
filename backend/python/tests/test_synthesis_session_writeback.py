@@ -44,7 +44,7 @@ class _FakeEngine:
         page_context=None,
         dimension_hints=None,
     ):
-        assert factory_id == "DEMO_REST"
+        assert factory_id == "F001"
         assert question
         assert window == (date(2026, 5, 1), date(2026, 6, 30))
         assert conversation_history is None
@@ -66,7 +66,7 @@ def synthesis_mocks(monkeypatch):
         return object()
 
     async def fake_resolve_window(pool, factory_id, start_date, end_date, *, question=None):
-        assert factory_id == "DEMO_REST"
+        assert factory_id == "F001"
         return date(2026, 5, 1), date(2026, 6, 30)
 
     class FakeChatSessionService:
@@ -100,7 +100,7 @@ def synthesis_mocks(monkeypatch):
 
 def _request(user_id=42):
     return SimpleNamespace(
-        state=SimpleNamespace(factory_id="DEMO_REST", user_id=user_id),
+        state=SimpleNamespace(factory_id="F001", user_id=user_id),
     )
 
 
@@ -115,7 +115,7 @@ async def test_comprehensive_writes_back_when_session_id_present(synthesis_mocks
     assert calls == [
         {
             "session_id": "sid-001",
-            "factory_id": "DEMO_REST",
+            "factory_id": "F001",
             "parent_query": "这两个月赚钱没",
             "parent_answer_summary": _FakeResponse.answer,
             "parent_template_code": "COMPREHENSIVE_SYNTHESIS",
@@ -123,7 +123,7 @@ async def test_comprehensive_writes_back_when_session_id_present(synthesis_mocks
         }
     ]
     assert lookup_calls == [
-        {"session_id": "sid-001", "factory_id": "DEMO_REST", "user_id": 42}
+        {"session_id": "sid-001", "factory_id": "F001", "user_id": 42}
     ]
 
 
@@ -175,7 +175,7 @@ async def test_writeback_skips_degraded_source(synthesis_mocks):
     await syn._write_conversation_turn(
         object(),
         "sid-degraded",
-        "DEMO_REST",
+        "F001",
         42,
         "question",
         "placeholder answer",
@@ -203,7 +203,7 @@ async def test_comprehensive_stream_writes_back_after_done_event(synthesis_mocks
     assert calls == [
         {
             "session_id": "sid-stream",
-            "factory_id": "DEMO_REST",
+            "factory_id": "F001",
             "parent_query": "哪家分店最拖后腿",
             "parent_answer_summary": _FakeResponse.answer,
             "parent_template_code": "COMPREHENSIVE_SYNTHESIS",
@@ -211,7 +211,7 @@ async def test_comprehensive_stream_writes_back_after_done_event(synthesis_mocks
         }
     ]
     assert lookup_calls == [
-        {"session_id": "sid-stream", "factory_id": "DEMO_REST", "user_id": 42}
+        {"session_id": "sid-stream", "factory_id": "F001", "user_id": 42}
     ]
 
 

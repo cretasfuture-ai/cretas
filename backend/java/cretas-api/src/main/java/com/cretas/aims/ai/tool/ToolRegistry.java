@@ -74,6 +74,11 @@ public class ToolRegistry {
                 continue;
             }
 
+            if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredTool(toolName)) {
+                log.info("退役的餐饮专属工具不再注册: {}", toolName);
+                continue;
+            }
+
             if (!executor.isEnabled()) {
                 log.info("⏸️  工具已禁用，跳过注册: {}", toolName);
                 continue;

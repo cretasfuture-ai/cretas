@@ -86,6 +86,7 @@ public class ToolPatternDiscoveryTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                              Map<String, Object> context) throws Exception {
+        com.cretas.aims.ai.catalog.PlatformGovernanceAccess.requireAdmin();
         int days = getInteger(params, "days") != null ? getInteger(params, "days") : 30;
         String analysisType = getString(params, "analysis_type");
         if (analysisType == null) analysisType = "recommend";
@@ -356,6 +357,6 @@ public class ToolPatternDiscoveryTool extends AbstractBusinessTool {
 
     @Override
     public boolean hasPermission(String userRole) {
-        return userRole != null && java.util.Set.of("factory_super_admin", "permission_admin").contains(userRole);
+        return com.cretas.aims.ai.catalog.PlatformGovernanceAccess.allowed();
     }
 }

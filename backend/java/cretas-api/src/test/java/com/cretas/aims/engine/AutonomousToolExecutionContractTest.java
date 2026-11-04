@@ -92,11 +92,11 @@ class AutonomousToolExecutionContractTest {
                 .hasMessageContaining("只能使用只读工具").hasMessageContaining("dictionary_add");
     }
 
-    @Test void accessModeComesFromTheFailClosedResolverIncludingTheMigrationSeed() {
+    @Test void retiredRestaurantSeedDoesNotAuthorizeAutonomousExecution() {
         ToolExecutor seededRead = mock(ToolExecutor.class);
         when(seededRead.getAccessMode()).thenReturn(AccessMode.WRITE);
         when(seededRead.getToolName()).thenReturn("restaurant_avg_ticket");
-        assertThat(AutonomousToolPolicy.rejection("restaurant_avg_ticket", seededRead, Map.of())).isNull();
+        assertThat(AutonomousToolPolicy.rejection("restaurant_avg_ticket", seededRead, Map.of())).contains("restaurant_avg_ticket");
         ToolExecutor defaultWrite = mock(ToolExecutor.class);
         when(defaultWrite.getAccessMode()).thenReturn(AccessMode.WRITE);
         when(defaultWrite.getToolName()).thenReturn("not_in_seed");

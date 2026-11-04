@@ -346,20 +346,22 @@ async def test_stream_invalid_trusted_user_disables_both_tiered_clarification_pa
         _unexpected_session_call,
     )
 
-    response = await chat_mod.general_analysis_stream(
-        chat_mod.GeneralAnalysisRequest(
-            query=f"最近30天 tiered {tiered_path} without trusted user",
-            session_id="shared-device-session",
-            table_type="restaurant_ops",
-            allow_tenant_data_fallback=False,
-        ),
-        _Request("F001", user_id=user_id, role="operator"),
-    )
-    body = await _consume_stream(response)
+    with pytest.raises(HTTPException) as exc:
+        await chat_mod.general_analysis_stream(
+            chat_mod.GeneralAnalysisRequest(
+                query=f"最近30天 tiered {tiered_path} without trusted user",
+                session_id="shared-device-session",
+                table_type="restaurant_ops",
+                allow_tenant_data_fallback=False,
+            ),
+            _Request("F001", user_id=user_id, role="operator"),
+        )
 
-    assert expected_answer in body
-    assert 'event: done' in body
-    assert observed_session_keys == [None]
+    assert (exc.value.status_code, exc.value.detail) == (
+        410,
+        "RESTAURANT_AI_RETIRED",
+    )
+    assert observed_session_keys == []
     assert pending_calls == []
 
 
@@ -410,112 +412,5 @@ async def test_stream_invalid_trusted_user_disables_session_lookup_and_writeback
     )
     body = await _consume_stream(response)
 
-    assert "role-safe answer" in body
+    assert "无法确定这份数据属于哪家工厂" in body
     assert 'event: done' in body
-
-
-async def test_restaurant_trend_uses_query_plan_before_legacy_trend_shortcut(monkeypatch):
-    async def _pool():
-        return object()
-
-    async def _tiered(*_args, **_kwargs):
-        return {
-            "kind": "answer",
-            "answer_text": "query-plan trend answer",
-            "charts": [],
-            "kpis": [],
-            "code": "RESTAURANT_OPS_TREND_ANALYSIS",
-            "contract_pass": True,
-            "query_plan_hash": "plan-stream-trend",
-            "executed_resolvers": ["RESTAURANT_OPS_TREND_ANALYSIS"],
-            "suggested_followups": [],
-        }
-
-    async def _legacy_resolver(*_args, **_kwargs):
-        pytest.fail("explicit restaurant requests must not use the legacy trend shortcut")
-
-    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
-    monkeypatch.setattr(
-        "smartbi.gold.restaurant.restaurant_ops_router.reconcile_restaurant_ops_code",
-        lambda *_args, **_kwargs: "RESTAURANT_OPS_TREND_ANALYSIS",
-    )
-    monkeypatch.setattr(
-        "smartbi.gold.restaurant.restaurant_ops_router.resolve_by_code",
-        _legacy_resolver,
-    )
-    monkeypatch.setattr(chat_mod, "_try_tiered_restaurant_intent", _tiered)
-
-    response = await chat_mod.general_analysis_stream(
-        chat_mod.GeneralAnalysisRequest(
-            query="做同比和环比趋势分析",
-            table_type="restaurant_ops",
-            allow_tenant_data_fallback=False,
-        ),
-        _Request("F001", user_id="7", role="restaurant_manager"),
-    )
-    body = await _consume_stream(response)
-
-    assert "query-plan trend answer" in body
-    assert '"template_code": "RESTAURANT_OPS_TREND_ANALYSIS"' in body
-    assert '"queryPlanHash": "plan-stream-trend"' in body
-    assert '"executedResolvers": ["RESTAURANT_OPS_TREND_ANALYSIS"]' in body
-
-
-async def test_stream_persists_typed_clarification_and_emits_read_only_warning(
-    monkeypatch,
-):
-    observed = {"upsert": []}
-    structured_context = {
-        "window_label": "全部历史",
-        "requested_metrics": ["sales_volume"],
-        "analysis_action": "lookup",
-        "topic_kind": "dish_ranking",
-        "ranking_direction": "best",
-        "store_scope": "all",
-    }
-
-    async def _pool():
-        return object()
-
-    class _SessionService:
-        def __init__(self, _pool):
-            pass
-
-        async def lookup(self, *_args, **_kwargs):
-            return None
-
-        async def upsert(self, **kwargs):
-            observed["upsert"].append(kwargs)
-
-    async def _tiered(*_args, **_kwargs):
-        return {
-            "kind": "clarification",
-            "answer_text": "请选择时间范围：本月、上个月、最近7天或最近30天。",
-            "structured_context": structured_context,
-            "spec": SimpleNamespace(intent="RESTAURANT_OPS_GROSS_MARGIN"),
-            "warning": "咨询模式只展示分析结果，没有执行下架或其他业务操作。",
-        }
-
-    monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
-    monkeypatch.setattr(
-        "smartbi.services.chat_session_service.ChatSessionService",
-        _SessionService,
-    )
-    monkeypatch.setattr(chat_mod, "_try_tiered_restaurant_intent", _tiered)
-
-    response = await chat_mod.general_analysis_stream(
-        chat_mod.GeneralAnalysisRequest(
-            query="把销量最低的菜全部下架",
-            table_type="restaurant_ops",
-            session_id="session-stream-clarification",
-            allow_tenant_data_fallback=False,
-        ),
-        _Request("F001", user_id="7", role="restaurant_manager"),
-    )
-    body = await _consume_stream(response)
-    await asyncio.sleep(0)
-
-    assert '"warning": "咨询模式只展示分析结果，没有执行下架或其他业务操作。"' in body
-    assert len(observed["upsert"]) == 1
-    assert observed["upsert"][0]["parent_template_code"] == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert observed["upsert"][0]["structured_context"] == structured_context

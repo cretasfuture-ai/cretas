@@ -176,56 +176,8 @@ class _CatalogueProbePool:
         return _Ctx()
 
 
-@pytest.mark.asyncio
-async def test_resolve_by_code_binds_catalogue_for_the_resolver(monkeypatch):
-    seen = {}
-
-    async def _probe(pool, factory_id, **kwargs):
-        seen["catalogue"] = R.current_dish_catalogue()
-        return "ok"
-
-    monkeypatch.setitem(R._RESOLVERS, "RESTAURANT_OPS_WASTAGE_TOP", _probe)
-    R._DISH_CATALOGUE_CACHE.pop("F_PROBE", None)
-
-    result = await R.resolve_by_code(
-        # role 是 2026-08-01 补的: WASTAGE_TOP 的答案整个是金额, 中央 RBAC 闸会在
-        # 分发**之前**短路无权限角色。本用例测的是目录绑定不是 RBAC, 所以给权限。
-        "RESTAURANT_OPS_WASTAGE_TOP", _CatalogueProbePool(), "F_PROBE",
-        role="restaurant_owner",
-    )
-
-    assert result == "ok"
-    assert seen["catalogue"] == frozenset({"米饭", "娃娃菜"}), (
-        "resolver 在分发期没拿到菜单目录, 内部菜名抽取会退回残差式启发法"
-    )
-    # 分发结束必须复位, 否则泄漏到同一 task 的后续代码(可能是另一个租户)。
-    assert R.current_dish_catalogue() is None
-    R._DISH_CATALOGUE_CACHE.pop("F_PROBE", None)
 
 
-@pytest.mark.asyncio
-async def test_resolve_by_code_still_dispatches_when_catalogue_unavailable(monkeypatch):
-    """目录加载失败不能挡住分发 —— 失败一律开放。"""
-    seen = {}
-
-    async def _probe(pool, factory_id, **kwargs):
-        seen["catalogue"] = R.current_dish_catalogue()
-        return "ok"
-
-    class _BoomPool:
-        def acquire(self):
-            raise RuntimeError("db down")
-
-    monkeypatch.setitem(R._RESOLVERS, "RESTAURANT_OPS_WASTAGE_TOP", _probe)
-    R._DISH_CATALOGUE_CACHE.pop("F_BOOM2", None)
-
-    result = await R.resolve_by_code(
-        "RESTAURANT_OPS_WASTAGE_TOP", _BoomPool(), "F_BOOM2",
-        role="restaurant_owner",   # 同上: 本用例测的不是 RBAC
-    )
-
-    assert result == "ok"
-    assert seen["catalogue"] is None
 
 
 @pytest.mark.asyncio

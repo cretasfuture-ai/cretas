@@ -312,89 +312,6 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
-        // 餐饮经营分析Skill — 营业额 + 菜品排名 + 客单价 + 高峰时段
-        registerWithSource(SkillDefinition.builder()
-                .name("restaurant-operations")
-                .displayName("餐饮经营分析")
-                .description("分析餐厅经营状况，包括营业额、菜品销量、客单价等")
-                .version("1.0.0")
-                .triggers(Arrays.asList("餐厅", "门店", "营业额", "菜品销量", "翻台率", "客单价"))
-                .tools(Arrays.asList("restaurant_daily_revenue", "restaurant_dish_sales_ranking", "restaurant_avg_ticket"))
-                .contextNeeded(Arrays.asList("factoryId"))
-                .promptTemplate("分析${factoryId}的餐饮经营情况，用户问题：${userQuery}")
-                .source("default")
-                .enabled(true)
-                .build());
-        count++;
-
-        // 餐饮损耗管理Skill — 损耗汇总 + 异常检测 + 过期预警 + 低库存
-        registerWithSource(SkillDefinition.builder()
-                .name("restaurant-wastage")
-                .displayName("餐饮损耗管理")
-                .description("管理餐饮损耗，包括损耗统计、异常检测和食材预警")
-                .version("1.0.0")
-                .triggers(Arrays.asList("损耗", "浪费", "报损", "废料", "食材过期", "食材库存"))
-                .tools(Arrays.asList("restaurant_wastage_summary", "restaurant_wastage_anomaly", "restaurant_ingredient_expiry_alert"))
-                .contextNeeded(Arrays.asList("factoryId"))
-                .promptTemplate("管理${factoryId}的餐饮损耗，用户问题：${userQuery}")
-                .source("default")
-                .enabled(true)
-                .build());
-        count++;
-
-        // Restaurant diagnostics skill (Phase 2: 深度诊断 — 11 tool 聚合)
-        registerWithSource(SkillDefinition.builder()
-                .name("restaurant-diagnostics")
-                .displayName("餐饮经营深度诊断")
-                .description("基于财务数据 + POS 销售 + 评论 + 会员, 给出 cost_rigidity / 对标 / " +
-                             "时段分析 / 长尾 SKU / 评论情感 / 储值健康 多维度诊断")
-                .version("1.0.0")
-                .triggers(Arrays.asList("经营诊断", "深度分析", "为什么亏损", "成本结构", "刚性", "毛利",
-                                        "对标", "行业基准", "评分下降", "储值卡", "单店诊断", "P&L"))
-                .tools(Arrays.asList(
-                        "restaurant_cost_rigidity_analysis",
-                        "restaurant_benchmark_alert",
-                        "restaurant_channel_margin",
-                        "restaurant_dining_heatmap",
-                        "restaurant_long_tail_sku",
-                        "restaurant_menu_normalization",
-                        "restaurant_review_analysis",
-                        "restaurant_member_rfm",
-                        "restaurant_stored_value",
-                        "restaurant_store_pnl_one_pager",
-                        "restaurant_bom_layer_status",
-                        "restaurant_menu_engineering",
-                        "restaurant_forecast"
-                ))
-                .contextNeeded(Arrays.asList("factoryId"))
-                .promptTemplate("对${factoryId}进行餐饮经营深度诊断，用户问题：${userQuery}")
-                .source("default")
-                .enabled(true)
-                .build());
-        count++;
-
-        // Restaurant chain analysis skill (Phase 2: 连锁级分析)
-        registerWithSource(SkillDefinition.builder()
-                .name("restaurant-chain-analysis")
-                .displayName("餐饮连锁分析")
-                .description("多店对比 + 门店异常检测 + 月度校准历史 + 同店同比 + 跨连锁对标, " +
-                             "适用于连锁品牌总部")
-                .version("1.0.0")
-                .triggers(Arrays.asList("连锁", "多店对比", "门店排名", "异常店", "同店同比",
-                                        "跨品牌", "集团诊断", "17家店"))
-                .tools(Arrays.asList(
-                        "restaurant_multi_store_comparison",
-                        "restaurant_calibration_history",
-                        "restaurant_temporal_comparison",
-                        "restaurant_cross_chain_benchmark"
-                ))
-                .contextNeeded(Arrays.asList("factoryId"))
-                .promptTemplate("分析${factoryId}的连锁餐饮状况，用户问题：${userQuery}")
-                .source("default")
-                .enabled(true)
-                .build());
-        count++;
-
         // 成本分析Skill — BOM成本 + 成本偏差 + 成本趋势
         registerWithSource(SkillDefinition.builder()
                 .name("cost-analysis")
@@ -641,64 +558,11 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
-        // ===== Skill 3: 食品安全召回闭环 (主 Skill 串 8 Tool) =====
-        // 用户说 "启动召回 X 批次" / "X 客户吃了拉肚子启动召回" → 完整 6 步召回流程
-        // step 1-4 顺序依赖, step 5 (freeze + notify + report) 并行, step 6 聚合损失
-        // 整体输出: 召回行动方案 + 4 个一键执行按钮
-        registerWithSource(SkillDefinition.builder()
-                .name("food-safety-recall")
-                .displayName("食品安全召回闭环")
-                .description("食品召回 6 步闭环编排 (Cretas vs 竞品差异化护城河) — " +
-                             "客户日期反查批次 → 完整追溯原料/影响客户 → HACCP 审计 → 添加剂合规复查 → " +
-                             "(并行: 冻结库存 preview + 通知客户 preview + 监管文件生成) → 损失预估. " +
-                             "1 分钟完成 HJ 30 分钟手工工作.")
-                .version("1.0.0")
-                .category("QUALITY")
-                .priority(40)
-                .triggers(java.util.Arrays.asList(
-                        "启动召回", "食品召回", "拉肚子", "客户投诉", "出问题",
-                        "召回 X 批次", "召回 B-", "召回流程", "食品安全事件",
-                        "需要召回", "客户中毒", "客户不舒服", "食源性"))
-                .tools(java.util.Arrays.asList(
-                        "batch_trace_by_customer_date",
-                        "batch_full_trace",
-                        "haccp_checkpoint_review",
-                        "additive_compliance_check",
-                        "inventory_freeze",
-                        "customer_notify_batch",
-                        "regulatory_report_generate",
-                        "recall_loss_estimate"))
-                .contextNeeded(java.util.Arrays.asList("factoryId", "userId"))
-                .promptTemplate(
-                        "你是食品安全召回助手, 基于客户投诉触发完整召回 SOP. 串 8 Tool 输出:\n\n" +
-                        "**追溯阶段** (step 1-4 顺序):\n" +
-                        "- batch_trace_by_customer_date: 按客户 + 投诉日期反查 root batch_number\n" +
-                        "- batch_full_trace: 完整追溯 (原料 + 供应商 + 影响客户列表)\n" +
-                        "- haccp_checkpoint_review: HACCP CCP 全记录 + deviation 偏离\n" +
-                        "- additive_compliance_check: GB 2760 添加剂合规复查\n\n" +
-                        "**行动阶段** (step 5 并行 — 3 个 preview 同时显):\n" +
-                        "- inventory_freeze (preview, BLOCKING): 冻结涉事批次库存\n" +
-                        "- customer_notify_batch (preview): 群发召回通知给影响客户\n" +
-                        "- regulatory_report_generate: 生成监管上报文件\n\n" +
-                        "**总结阶段** (step 6):\n" +
-                        "- recall_loss_estimate: 聚合冻结库存价值 + 退货 + 行政 + 品牌损失\n\n" +
-                        "**输出格式 (markdown)**:\n" +
-                        "🔍 **追溯**: 客户 X 在 YYYY-MM-DD 收到批次 [B-XXX], 涉及 N 家客户\n" +
-                        "🔬 **HACCP**: ✅ 通过 / 🚨 N 项 deviation (列出每项 + 建议)\n" +
-                        "🧪 **添加剂**: ✅ 全合规 / 🚨 N 项超 GB 2760 (列出)\n" +
-                        "📦 **影响**: N 家客户, M 笔出货, K 个批次\n" +
-                        "💰 **预估损失**: ¥X (冻结 + 退货 + 行政 + 品牌损失)\n\n" +
-                        "**🚨 召回行动方案 (4 个一键执行按钮)**:\n" +
-                        "[🔒 冻结库存 (N 批次)]  [📱 通知客户 (M 家)]  " +
-                        "[📄 生成监管文件]  [✅ 关闭召回事件]\n\n" +
-                        "末尾提示: '此召回基于 Cretas 食品溯源数据自动追溯, 1 分钟完成手工 30 分钟工作'\n\n" +
-                        "工厂 ID: ${factoryId}. 用户问题: ${userQuery}")
-                .source("default")
-                .enabled(true)
-                .build());
+        // Catalog-owned read-only recall assessment. All operational writes keep their own confirmation flows.
+        registerFactoryReadSkill("food-safety-recall", "食品安全召回评估",
+                Arrays.asList("召回评估", "食品召回", "召回影响", "召回损失"));
         count++;
 
-        // Sprint 9 P0.2 (2026-05-22) — 质量主管 Workdesk Skill 补全.
         // Skill: quality-chief-workdesk — 批次放行综合审查 编排.
         // 之前 V20260820_10 intent QUALITY_CHIEF_WORKDESK (tool_name=NULL) 没对应 Skill,
         // tryExplicitSkillRouteForIntent 找不到 skill → 用户看 "暂不支持此类型的意图执行: WORKDESK".
@@ -776,16 +640,39 @@ public class SkillRegistryImpl implements SkillRegistry {
                 .build());
         count++;
 
+        registerFactoryReadSkill("cold-chain-monitoring", "冷链温控监测",
+                Arrays.asList("冷链监测", "冷链温度", "冷链告警"));
+        registerFactoryReadSkill("food-sample-lifecycle", "食品留样状态与追溯",
+                Arrays.asList("留样管理", "留样生命周期", "留样待销毁", "留样追溯"));
+        registerFactoryReadSkill("ssop-daily-sanitation", "每日卫生执行核查",
+                Arrays.asList("每日清洁", "卫生执行", "清洁开工检查"));
+        count += 3;
+
         return count;
     }
 
     /**
      * Register a skill and track its source
      */
+    private void registerFactoryReadSkill(String name, String displayName, List<String> triggers) {
+        List<String> tools = com.cretas.aims.ai.catalog.FactoryIntentCatalog.requiredSkillTools(name);
+        if (tools == null || tools.isEmpty()) throw new IllegalStateException("Missing factory Skill contract: " + name);
+        registerWithSource(SkillDefinition.builder().name(name).displayName(displayName)
+                .description(displayName + "：只读联查，具体写操作必须单独预览并确认。")
+                .version("1.0.0").category("FACTORY").priority(40).triggers(triggers).tools(tools)
+                .contextNeeded(Arrays.asList("factoryId", "userId"))
+                .promptTemplate("仅根据各Tool实际返回解释当前工厂状态。缺实体或有歧义时澄清；缺数据不能视为零或通过。"
+                        + "不创建、销毁、冻结、外发通知或更改业务状态，不生成已完成操作的说法。"
+                        + "留样创建/销毁、召回冻结/通知等动作请转各自独立操作并确认。"
+                        + "工厂: ${factoryId}；问题: ${userQuery}")
+                .source("factory-catalog").enabled(true).build());
+    }
+
     private void registerWithSource(SkillDefinition skill) {
         if (skill == null || skill.getName() == null) {
             return;
         }
+        if (!com.cretas.aims.ai.catalog.FactoryIntentCatalog.isAllowedSkill(skill)) return;
         skillMap.put(skill.getName(), skill);
         log.debug("Registered skill from {}: {}", skill.getSource(), skill.getName());
     }
@@ -800,11 +687,16 @@ public class SkillRegistryImpl implements SkillRegistry {
         int loaded = 0;
 
         try {
-            List<SmartBiSkill> dbSkills = skillRepository.findByEnabledTrueOrderByPriorityAsc();
+            List<SmartBiSkill> dbSkills = skillRepository.findAll();
 
             for (SmartBiSkill dbSkill : dbSkills) {
                 try {
+                    if (!Boolean.TRUE.equals(dbSkill.getEnabled())) {
+                        skillMap.remove(dbSkill.getName());
+                        continue;
+                    }
                     SkillDefinition definition = convertFromEntity(dbSkill);
+                    if (!com.cretas.aims.ai.catalog.FactoryIntentCatalog.isAllowedSkill(definition)) continue;
                     skillMap.put(definition.getName(), definition);
                     loaded++;
                     log.debug("Loaded skill from database: {}", definition.getName());
@@ -814,6 +706,8 @@ public class SkillRegistryImpl implements SkillRegistry {
             }
         } catch (Exception e) {
             log.error("Failed to load skills from database", e);
+            // Do not revive catalog defaults when the authoritative disable state is unknown.
+            skillMap.keySet().removeIf(name -> com.cretas.aims.ai.catalog.FactoryIntentCatalog.requiredSkillTools(name) != null);
         }
 
         return loaded;
@@ -839,7 +733,7 @@ public class SkillRegistryImpl implements SkillRegistry {
             for (Resource resource : resources) {
                 try {
                     SkillDefinition definition = parseSkillDefinition(resource);
-                    if (definition != null) {
+                    if (definition != null && com.cretas.aims.ai.catalog.FactoryIntentCatalog.isAllowedSkill(definition)) {
                         skillMap.put(definition.getName(), definition);
                         loaded++;
                         log.debug("Loaded skill from file: {}", definition.getName());
@@ -1312,6 +1206,7 @@ public class SkillRegistryImpl implements SkillRegistry {
         }
 
         String skillName = skillDefinition.getName();
+        if (!com.cretas.aims.ai.catalog.FactoryIntentCatalog.isAllowedSkill(skillDefinition)) return;
         if (skillMap.containsKey(skillName)) {
             log.warn("Skill already exists, updating: {}", skillName);
         }
@@ -1597,6 +1492,6 @@ public class SkillRegistryImpl implements SkillRegistry {
                     .enabled(true).build();
         }
 
-        return base;
+        return com.cretas.aims.ai.catalog.FactoryIntentCatalog.isAllowedSkill(base) ? base : null;
     }
 }

@@ -50,44 +50,6 @@ import static org.mockito.Mockito.when;
 class SseStreamingServiceFactoryPackRouteTest {
 
     @Test
-    void disabledPolicyPreservesLegacyRestaurantRoute() throws Exception {
-        Harness harness = new Harness(false, FactoryType.RESTAURANT);
-        IntentExecuteResponse selected = restaurantResponse();
-        when(harness.restaurantSelector.select(
-                "REST-1", "分析本月毛利下降原因", "restaurant_owner"))
-                .thenReturn(Optional.of(selected));
-
-        IntentExecuteResponse result = harness.execute(
-                "REST-1",
-                IntentExecuteRequest.builder().userInput("分析本月毛利下降原因").build(),
-                "restaurant_owner");
-
-        assertThat(result).isSameAs(selected);
-        verify(harness.restaurantSelector).select(
-                "REST-1", "分析本月毛利下降原因", "restaurant_owner");
-        verifyNoInteractions(harness.factoryRepository);
-    }
-
-    @Test
-    void enabledPolicyDoesNotInterceptRestaurantRuntime() throws Exception {
-        Harness harness = new Harness(true, FactoryType.RESTAURANT);
-        IntentExecuteResponse selected = restaurantResponse();
-        when(harness.restaurantSelector.select(
-                "REST-1", "查看批次进度", "operator"))
-                .thenReturn(Optional.of(selected));
-
-        IntentExecuteResponse result = harness.execute(
-                "REST-1",
-                IntentExecuteRequest.builder().userInput("查看批次进度").build(),
-                "operator");
-
-        assertThat(result).isSameAs(selected);
-        verify(harness.restaurantSelector).select(
-                "REST-1", "查看批次进度", "operator");
-        verify(harness.factoryRepository, times(1)).findById("REST-1");
-    }
-
-    @Test
     void packExternalQueryFailsClosedBeforeEveryLegacyRoute() throws Exception {
         Harness harness = new Harness(true, FactoryType.FACTORY);
 
@@ -339,8 +301,6 @@ class SseStreamingServiceFactoryPackRouteTest {
             ReflectionTestUtils.setField(service, "factoryCapabilityPackRoutingPolicy", policy);
             ReflectionTestUtils.setField(service, "writeGuardService", writeGuardService);
             ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
-            ReflectionTestUtils.setField(
-                    service, "restaurantGrossMarginChatRouteSelector", restaurantSelector);
             doNothing().when(service).sendSseEvent(any(), anyString(), any());
         }
 

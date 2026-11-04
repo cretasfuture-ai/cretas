@@ -81,31 +81,9 @@ class ReplyTextPriceSweepContractTest {
         reviewed("workdesk/WageCostSummaryTool.java", Verdict.CHECKED, "totalAmount / totalPieceRate / totalHourly / totalOvertime");
         reviewed("workflow/ApprovalPendingQueryTool.java", Verdict.CHECKED, "PO 金额按 PriceSensitive.PURCHASE");
         // ── OWN_GATE: 工具自带判定 (note = 判定标识) ──
-        reviewed("restaurant/RestaurantWastageSummaryTool.java", Verdict.OWN_GATE, "canViewCost");
-        reviewed("restaurant/RestaurantDishCostQueryTool.java", Verdict.OWN_GATE, "canViewCost");
-        reviewed("restaurant/RestaurantDishCostAnalysisTool.java", Verdict.OWN_GATE, "canViewCost");
-        reviewed("restaurant/RestaurantRepCommissionQueryTool.java", Verdict.OWN_GATE, "canViewAmount");
-        // ── UPSTREAM_STRIPPED ──
-        reviewed("restaurant/gold/review/StoreReviewRevenueTool.java", Verdict.UPSTREAM_STRIPPED, "Python 按角色剥营收");
-        reviewed("restaurant/gold/RestaurantPeakMonthGoldTool.java", Verdict.UPSTREAM_STRIPPED, "fetchDailyTrend 带 X-User-Role");
-        reviewed("restaurant/gold/RestaurantRevenueTrendGoldTool.java", Verdict.UPSTREAM_STRIPPED, "fetchTrendBundle 带 X-User-Role");
-        reviewed("restaurant/gold/RestaurantDishBestsellerGoldTool.java", Verdict.UPSTREAM_STRIPPED, "fetchTopProducts 带 X-User-Role");
-        reviewed("restaurant/gold/RestaurantStaffRankingGoldTool.java", Verdict.UPSTREAM_STRIPPED, "fetchStaffRanking 带 X-User-Role");
-        reviewed("restaurant/gold/RestaurantWeekdayWeekendGoldTool.java", Verdict.UPSTREAM_STRIPPED, "fetchDailyTrend 带 X-User-Role");
-        reviewed("restaurant/gold/RestaurantStoreRevenueRankGoldTool.java", Verdict.UPSTREAM_STRIPPED, "fetchFinanceSummary 带 X-User-Role");
-        reviewed("restaurant/gold/RestaurantDiscountUsageGoldTool.java", Verdict.UPSTREAM_STRIPPED, "fetchDiscountBreakdown 带 X-User-Role");
         // ── NOT_PRICE_SENSITIVE ──
         reviewed("print/PrintTemplateCreateFromAITool.java", Verdict.NOT_PRICE_SENSITIVE, "给大模型的格式示例 ¥1,234.50, 不是数据");
         reviewed("rules/RuleTestEvaluateTool.java", Verdict.NOT_PRICE_SENSITIVE, "工具描述里的规则举例");
-        reviewed("restaurant/RestaurantDishCreateTool.java", Verdict.NOT_PRICE_SENSITIVE, "回显调用者刚输入的售价");
-        // ── FOLLOW_UP_RESTAURANT ──
-        for (String f : List.of("RestaurantArApPayableTool", "RestaurantAvgTicketTool", "RestaurantBestsellerQueryTool",
-                "RestaurantDailyRevenueTool", "RestaurantDishProductSalesRankingTool", "RestaurantDishSalesRankingTool",
-                "RestaurantDishUpdateTool", "RestaurantIngredientCostTrendTool", "RestaurantMarginAnalysisTool",
-                "RestaurantOrderStatisticsTool", "RestaurantRevenueTrendTool")) {
-            reviewed("restaurant/" + f + ".java", Verdict.FOLLOW_UP_RESTAURANT, "餐饮线废弃, 单独跟进");
-        }
-        reviewed("restaurant/diagnostic/RestaurantValueSummaryTool.java", Verdict.FOLLOW_UP_RESTAURANT, "餐饮线废弃, 单独跟进");
     }
 
     /** 非注释行里, 字符串字面量含 ¥ / 万元 / 以「元」结尾。 */
@@ -115,7 +93,8 @@ class ReplyTextPriceSweepContractTest {
     @Test
     void everyToolThatWritesMoneyIntoTextIsReviewed() throws IOException {
         Set<String> found = moneyTextFiles();
-        assertThat(found).as("扫描本身要有读数 (分母)").hasSizeGreaterThan(30);
+        // Dedicated restaurant implementations were removed; keep an exact non-vacuous denominator.
+        assertThat(found).as("工厂目录金额文本审计分母").hasSize(19);
 
         Set<String> unreviewed = new TreeSet<>(found);
         unreviewed.removeAll(REVIEWED.keySet());

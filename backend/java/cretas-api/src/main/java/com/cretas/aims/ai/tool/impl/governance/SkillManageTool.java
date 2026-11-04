@@ -29,13 +29,8 @@ import java.util.stream.Collectors;
  * - "搜索关于库存的skill"
  * - "有多少个工具注册了"
  *
- * ═══════════════════════════════════════════════════════════════════════════
- * factoryId 隔离豁免说明 (Whitelist — Audit 2026-04-07)
- * ───────────────────────────────────────────────────────────────────────────
- * 同 SkillComposeTool 说明：治理类元工具，操作全局 SmartBiSkill 实体。
- * 依赖上游 AIIntentConfig + 角色权限做隔离。SmartBiSkill factory 级隔离属
- * V3 P2 任务，届时本 Tool 需同步加 factoryId 过滤。
- * ═══════════════════════════════════════════════════════════════════════════
+ * 全局 SmartBiSkill 尚未按工厂隔离。所有预览、查询和写入仅允许服务端认证的
+ * 平台管理员；工厂角色或请求参数中的 role 不能授权全局治理操作。
  */
 @Slf4j
 @Component
@@ -103,6 +98,7 @@ public class SkillManageTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                              Map<String, Object> context) throws Exception {
+        com.cretas.aims.ai.catalog.PlatformGovernanceAccess.requireAdmin();
         String action = getString(params, "action");
         String query = getString(params, "query");
         if (action == null) action = "list_skills";
@@ -375,6 +371,6 @@ public class SkillManageTool extends AbstractBusinessTool {
 
     @Override
     public boolean hasPermission(String userRole) {
-        return userRole != null && java.util.Set.of("factory_super_admin", "permission_admin").contains(userRole);
+        return com.cretas.aims.ai.catalog.PlatformGovernanceAccess.allowed();
     }
 }

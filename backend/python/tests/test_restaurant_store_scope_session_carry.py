@@ -98,22 +98,6 @@ def test_named_scope_offers_all_stores_and_other_stores():
     assert not any("A店" in q and q.startswith("B店") for q in questions), questions
 
 
-def test_all_scope_offers_drilling_into_single_stores():
-    got = _suggested_followups({
-        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
-        "store_scope": "all",
-        "store_names": [],
-        "store_options": ["A店", "B店", "C店", "D店"],
-        "question_seed": "全部门店最近30天营收",
-    })
-    questions = [item["question"] for item in got]
-    assert not any(q == "全部门店" for q in questions), "已经是全部门店了"
-    # 2026-07-31: 同一条答案上现在还有换时间按钮(排在换门店前面), 所以这里只挑
-    # 门店那几颗看 —— 断言整个列表会把「换时间按钮存不存在」偷偷绑进这条用例。
-    # C店 被总盖 4 挤掉(2 颗换时间 + 2 颗换门店), 这是预期的取舍。
-    store_questions = [q for q in questions if q.endswith("最近30天营收")
-                       and not q.startswith("全部门店")]
-    assert store_questions == ["A店最近30天营收", "B店最近30天营收"], questions
 
 
 def test_no_question_seed_means_no_buttons():

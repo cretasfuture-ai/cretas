@@ -481,109 +481,14 @@ def test_approve_candidate_invalid_code_400():
     assert resp.status_code == 400
 
 
-def test_approve_candidate_delegates_to_apply_route_promotions(monkeypatch):
-    captured = {}
-
-    async def _fake_apply(pool, entries, *, domain, scope, source, reviewed_by):
-        captured.update(entries=entries, domain=domain, scope=scope, source=source, reviewed_by=reviewed_by)
-        return {"domain": domain, "scope": scope, "source": source,
-                "written": [{"query": entries[0]["query"], "normalized_phrase": "哪个菜卖得好", "intent": entries[0]["code"]}],
-                "skipped": []}
-
-    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
-    monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
-    import smartbi.config as cfg
-    monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
-
-    client = make_client(username="reviewer_zhang")
-    resp = client.post("/api/smartbi/flywheel/candidates/approve", json={
-        "domain": "restaurant", "query": "哪个菜卖得好", "code": "RESTAURANT_OPS_GROSS_MARGIN",
-    })
-    assert resp.status_code == 200
-    assert captured["domain"] == "restaurant"
-    assert captured["scope"] == "global"
-    assert captured["source"] == "flywheel"
-    assert captured["reviewed_by"] == "reviewer_zhang"
-    assert captured["entries"] == [{"query": "哪个菜卖得好", "code": "RESTAURANT_OPS_GROSS_MARGIN"}]
-    assert "plan" not in captured["entries"][0], "no explicit plan given -> must NOT fabricate one from agg_meta"
-
-    body = resp.json()["data"]
-    assert body["written"][0]["normalized_phrase"] == "哪个菜卖得好"
 
 
-def test_approve_candidate_passes_through_explicit_plan(monkeypatch):
-    captured = {}
-
-    async def _fake_apply(pool, entries, **kwargs):
-        captured["entries"] = entries
-        return {"domain": "restaurant", "scope": "global", "source": "flywheel",
-                "written": [{"query": entries[0]["query"], "normalized_phrase": "x", "intent": "RESTAURANT_OPS_GROSS_MARGIN"}],
-                "skipped": []}
-
-    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
-    monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
-    import smartbi.config as cfg
-    monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
-
-    plan = {"intent": "RESTAURANT_OPS_GROSS_MARGIN", "time_range": None}
-    client = make_client()
-    resp = client.post("/api/smartbi/flywheel/candidates/approve", json={
-        "domain": "restaurant", "query": "哪个菜卖得好", "code": "RESTAURANT_OPS_GROSS_MARGIN", "plan": plan,
-    })
-    assert resp.status_code == 200
-    assert captured["entries"][0]["plan"] == plan
 
 
-def test_approve_candidate_skipped_by_apply_route_promotions_returns_400(monkeypatch):
-    async def _fake_apply(pool, entries, **kwargs):
-        return {"domain": "restaurant", "scope": "global", "source": "flywheel",
-                "written": [], "skipped": [{"query": entries[0]["query"], "reason": "plan_contains_resolved_dates"}]}
-
-    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
-    monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
-    import smartbi.config as cfg
-    monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
-
-    client = make_client()
-    resp = client.post("/api/smartbi/flywheel/candidates/approve", json={
-        "domain": "restaurant", "query": "某问题", "code": "RESTAURANT_OPS_GROSS_MARGIN",
-    })
-    assert resp.status_code == 400
-    assert "plan_contains_resolved_dates" in resp.json()["detail"]
 
 
-def test_approve_candidate_undefined_table_returns_503(monkeypatch):
-    async def _fake_apply(pool, entries, **kwargs):
-        raise asyncpg.UndefinedTableError("no table")
-
-    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
-    monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
-    import smartbi.config as cfg
-    monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
-
-    client = make_client()
-    resp = client.post("/api/smartbi/flywheel/candidates/approve", json={
-        "domain": "restaurant", "query": "哪个菜卖得好", "code": "RESTAURANT_OPS_GROSS_MARGIN",
-    })
-    assert resp.status_code == 503
-    assert "ai_promoted_routes" in resp.json()["detail"]
 
 
-def test_approve_candidate_rls_violation_returns_403_not_500(monkeypatch):
-    async def _fake_apply(pool, entries, **kwargs):
-        raise asyncpg.exceptions.InsufficientPrivilegeError("new row violates row-level security policy")
-
-    import smartbi.gold.restaurant.restaurant_intent_promotion as promo
-    monkeypatch.setattr(promo, "apply_route_promotions", _fake_apply)
-    import smartbi.config as cfg
-    monkeypatch.setattr(cfg, "get_pg_pool", lambda: _async_ret(object()))
-
-    client = make_client()
-    resp = client.post("/api/smartbi/flywheel/candidates/approve", json={
-        "domain": "restaurant", "query": "哪个菜卖得好", "code": "RESTAURANT_OPS_GROSS_MARGIN",
-    })
-    assert resp.status_code == 403
-    assert resp.status_code != 500
 
 
 # ─── candidates/reject ──────────────────────────────────────────────────────

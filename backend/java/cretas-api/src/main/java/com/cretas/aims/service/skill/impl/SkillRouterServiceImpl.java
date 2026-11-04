@@ -88,7 +88,7 @@ public class SkillRouterServiceImpl implements SkillRouterService {
         }
 
         // 1. 查找匹配的Skills
-        List<SkillDefinition> matchingSkills = skillRegistry.findMatchingSkills(userQuery);
+        List<SkillDefinition> matchingSkills = findMatchingSkills(userQuery, factoryId);
 
         if (!matchingSkills.isEmpty()) {
             skillMatches.incrementAndGet();
@@ -109,7 +109,7 @@ public class SkillRouterServiceImpl implements SkillRouterService {
             }
 
             // 3. 执行Skill
-            SkillResult result = skillExecutor.execute(bestMatch, context);
+            SkillResult result = executeSkill(bestMatch.getName(), context);
 
             if (result.isSuccess()) {
                 skillSuccesses.incrementAndGet();
@@ -120,6 +120,8 @@ public class SkillRouterServiceImpl implements SkillRouterService {
                 return result;
             }
 
+            // A catalog Skill failure/clarification is authoritative, not permission to guess another tool.
+            if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(bestMatch.getName()) != null) return result;
             // 4. Skill执行失败，记录日志并fallback
             log.warn("Skill execution failed: name={}, message={}. Falling back to ToolRouter",
                     result.getSkillName(), result.getMessage());
@@ -137,8 +139,32 @@ public class SkillRouterServiceImpl implements SkillRouterService {
     }
 
     @Override
+    public List<SkillDefinition> findMatchingSkills(String userQuery, String factoryId) {
+        return skillRegistry.getSkillsForFactory(factoryId).stream()
+                .map(skill -> skillRegistry.getSkillForFactory(factoryId, skill.getName()))
+                .filter(java.util.Objects::nonNull).filter(SkillDefinition::isEnabled)
+                .filter(skill -> catalogIntentAvailable(factoryId, skill.getName()))
+                .filter(skill -> skill.calculateMatchScore(userQuery) >= minSkillConfidence)
+                .sorted(java.util.Comparator.comparingDouble((SkillDefinition skill) -> skill.calculateMatchScore(userQuery)).reversed())
+                .toList();
+    }
+
+    private boolean catalogIntentAvailable(String factoryId, String skillName) {
+        String code = com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(skillName);
+        if (code == null) return true;
+        if (factoryId == null || factoryId.isBlank()) return false;
+        return intentService.getIntentByCode(factoryId, code)
+                .filter(intent -> Boolean.TRUE.equals(intent.getIsActive()) && intent.getDeletedAt() == null)
+                .filter(intent -> intent.getFactoryId() == null || factoryId.equals(intent.getFactoryId()))
+                .isPresent();
+    }
+
+    @Override
     public SkillResult executeSkill(String skillName, SkillContext context) {
-        Optional<SkillDefinition> skillOpt = skillRegistry.getSkill(skillName);
+        Optional<SkillDefinition> skillOpt = Optional.ofNullable(
+                skillRegistry.getSkillForFactory(context.getFactoryId(), skillName))
+                .filter(SkillDefinition::isEnabled)
+                .filter(skill -> catalogIntentAvailable(context.getFactoryId(), skillName));
 
         if (skillOpt.isEmpty()) {
             return SkillResult.builder()

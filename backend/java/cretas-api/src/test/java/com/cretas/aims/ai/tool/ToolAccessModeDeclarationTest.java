@@ -203,7 +203,7 @@ class ToolAccessModeDeclarationTest {
     @DisplayName("存量全覆盖: 每个工具都有访问模式声明 (类内覆写 或 迁移种子表)")
     void everyToolDeclaresItsAccessMode() {
         List<ToolInfo> tools = scanRegisteredTools();
-        assertThat(tools).as("classpath 上应扫到大量工具, 扫不到说明包名或过滤器坏了").hasSizeGreaterThan(500);
+        assertThat(tools).as("classpath 上应扫到大量工具, 扫不到说明包名或过滤器坏了").hasSize(493);
 
         List<String> undeclared = new ArrayList<>();
         for (ToolInfo t : tools) {
@@ -259,71 +259,32 @@ class ToolAccessModeDeclarationTest {
         }
     }
 
-    /**
-     * {@code revenue_report_generate} 是全仓库<b>唯一</b>一条"声明 READ 而名称启发式判 WRITE"的例外
-     * (它的名字含 {@code _GENERATE} 后缀)。它之所以合法, 是因为 {@link WriteGuardService}
-     * 的 {@code NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS} 里有一条<b>显式写下的、有意为之的</b>豁免 ——
-     * 不是启发式猜出来的, 也不是回填时"拿不准"留下的。
-     *
-     * <p>本用例把两侧钉在一起: 任何一侧被改动而另一侧没跟上, 构建就红。没有这道锁, 这条 READ
-     * 就退化成一个"能被人顺手改掉的巧合" —— 而它恰好是唯一一条对抗写闸的例外, 必须是契约。
-     */
     @Test
-    @DisplayName("契约锁: revenue_report_generate 的 READ 声明必须与 WriteGuard 的显式豁免一致")
-    void revenueReportGenerateReadDeclarationStaysPinnedToTheExplicitExemption() {
+    @DisplayName("已审只读例外与实际写闸精确一致，不能授权未声明工具")
+    void reviewedReadExceptionsStayPinnedToWriteGuard() {
         WriteGuardService guard = new WriteGuardService();
-        final String tool = "revenue_report_generate";
-
-        // 1) WriteGuard 侧: 豁免必须还在 —— 若被移出 NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS, 这里先红
-        assertThat(guard.hasWriteSuffix(tool))
-                .as("WriteGuardService.NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS 里的 '%s' 豁免不见了。"
-                    + "豁免既然撤销, 声明侧也必须同步改成 WRITE (见 ToolAccessModeSeed)。", tool)
-                .isFalse();
-
-        // 2) 声明侧: 必须仍然是 READ —— 若被改成 WRITE, 说明有人反转了豁免却没动 WriteGuard
-        assertThat(ToolAccessModeSeed.PENDING_IN_CLASS_BACKFILL.get(tool))
-                .as("'%s' 的声明被改动了。它是唯一一条对抗启发式的 READ 例外, 依据是 WriteGuard 里的"
-                    + "显式豁免; 要改必须两侧一起改, 并在 PR 里说明为什么推翻原豁免决定。", tool)
-                .isEqualTo(AccessMode.READ);
-
-        // 3) 合起来: 该工具最终不被写闸拦截 (这正是豁免的目的)
-        ToolExecutor probe = new UndeclaredTool() {
-            @Override public String getToolName() { return tool; }
-            @Override public AccessMode getAccessMode() { return AccessMode.READ; }
-        };
-        assertThat(guard.isWriteTool(probe))
-                .as("豁免 + READ 声明 ⇒ 不进写确认闸").isFalse();
-
-        // 4) 唯一性: 除它以外, 不允许再出现"声明 READ 但启发式判 WRITE"的例外。
-        //    新增例外必须走 WriteGuard 的显式豁免名单, 并在这里登记。
-        assertThat(NON_DESTRUCTIVE_EXEMPTIONS)
-                .as("对抗启发式的 READ 例外只允许这一条; 新增请先在 WriteGuardService 里显式豁免")
-                .containsExactly(tool);
+        assertThat(org.springframework.test.util.ReflectionTestUtils.getField(
+                WriteGuardService.class, "NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS"))
+                .isEqualTo(Set.of("MONTHLY_FINANCIAL_CLOSE", "MATERIAL_REJECTION_REASON",
+                        "FOOD_SAMPLE_QUERY_PENDING_DISPOSE", "PASSWORD_RESET", "SYSTEM_PASSWORD_RESET"));
+        for (String name : List.of("MONTHLY_FINANCIAL_CLOSE", "MATERIAL_REJECTION_REASON",
+                "FOOD_SAMPLE_QUERY_PENDING_DISPOSE", "PASSWORD_RESET", "SYSTEM_PASSWORD_RESET")) {
+            assertThat(guard.hasWriteSuffix(name)).isFalse();
+            ToolExecutor read = new UndeclaredTool() {
+                @Override public String getToolName() { return name; }
+                @Override public AccessMode getAccessMode() { return AccessMode.READ; }
+            };
+            assertThat(guard.isWriteTool(read)).isFalse();
+            ToolExecutor undeclared = new UndeclaredTool() {
+                @Override public String getToolName() { return name; }
+            };
+            assertThat(guard.isWriteTool(undeclared)).isTrue();
+        }
     }
 
-    /** 与 {@code WriteGuardService.NON_DESTRUCTIVE_SUFFIX_EXCEPTIONS} 一一对应的登记簿。 */
-    private static final List<String> NON_DESTRUCTIVE_EXEMPTIONS = List.of("revenue_report_generate");
-
     @Test
-    @DisplayName("迁移种子表只覆盖餐饮包, 且只授予 READ")
-    void seedTableStaysScopedToRestaurantPackage() {
-        Set<String> seed = ToolAccessModeSeed.PENDING_IN_CLASS_BACKFILL.keySet();
-        assertThat(seed).isNotEmpty();
-
-        List<ToolInfo> tools = scanRegisteredTools();
-        Map<String, ToolInfo> byName = new LinkedHashMap<>();
-        for (ToolInfo t : tools) {
-            if (t.toolName() != null) {
-                byName.put(t.toolName(), t);
-            }
-        }
-        for (String name : seed) {
-            ToolInfo t = byName.get(name);
-            assertThat(t).as("种子表里的工具名 '%s' 在 classpath 上找不到 —— 工具被删/改名后请同步清理", name)
-                    .isNotNull();
-            assertThat(t.type().getName())
-                    .as("种子表是餐饮包禁改期的临时豁免, 不该扩散到其它包")
-                    .contains(".ai.tool.impl.restaurant.");
-        }
+    @DisplayName("退役餐饮工具不再保留访问模式种子豁免")
+    void retiredRestaurantSeedGrantsNoAccess() {
+        assertThat(ToolAccessModeSeed.PENDING_IN_CLASS_BACKFILL).isEmpty();
     }
 }

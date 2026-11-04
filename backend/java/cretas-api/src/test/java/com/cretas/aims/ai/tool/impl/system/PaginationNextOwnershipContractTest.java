@@ -61,6 +61,20 @@ class PaginationNextOwnershipContractTest {
     private Map<String,Object> trustedContext() {
         return Map.of("sessionId", "sid", "factoryId", "F006", "userId", 77L);
     }
+
+    @Test
+    void previousPageReusesOwnershipChecksAndActuallyDecrementsPage() throws Exception {
+        var memory = mock(ConversationMemoryService.class);
+        when(memory.getContext("sid")).thenReturn(ConversationContext.builder().factoryId("F006").userId(77L)
+                .recentMessages(List.of(savedQuery())).build());
+        var previous = new PaginationPreviousTool();
+        org.springframework.test.util.ReflectionTestUtils.setField(previous, "conversationMemoryService", memory);
+        var result = previous.doExecute("F006", Map.of(), trustedContext());
+        assertThat(result.get("nextPage")).isEqualTo(1);
+        assertThat(result.get("paginationParams")).isEqualTo(Map.of("page", 1, "size", 20,
+                "filters", Map.of("materialTypeId", "f006-material")));
+        assertThat(previous.getToolName()).isEqualTo("pagination_previous");
+    }
     private ConversationMessage savedQuery() {
         return ConversationMessage.builder().role(ConversationMessage.Role.ASSISTANT)
                 .metadata(Map.of("pagination", Map.of("intentCode", "MATERIAL_BATCH_QUERY", "page", 2,

@@ -7,6 +7,7 @@ import com.cretas.aims.exception.AuthorizationException;
 import com.cretas.aims.repository.LabelRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.service.LabelService;
+import com.cretas.aims.service.intent.catalog.TraceCodePolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -229,9 +230,9 @@ public class LabelServiceImpl implements LabelService {
 
     @Override
     public String generateTraceCode(String factoryId, String batchNumber) {
-        String dateStr = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        LocalDateTime now = LocalDateTime.now();
         String seq = String.format("%06d", (int) (Math.random() * 1000000));
-        return "TRACE-" + factoryId + "-" + dateStr + "-" + seq;
+        return TraceCodePolicy.format(factoryId, now.toLocalDate(), Integer.parseInt(seq));
     }
 
     // ========== SP4-T5: 物料批次标签生成 + 扫码查询 ==========

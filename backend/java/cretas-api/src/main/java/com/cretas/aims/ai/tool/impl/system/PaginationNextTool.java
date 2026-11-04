@@ -126,7 +126,12 @@ public class PaginationNextTool extends AbstractBusinessTool {
         Integer targetPage = getInteger(params, "targetPage");
         int currentPage = getInteger(pagination, "page", 0);
 
-        int nextPage = targetPage != null ? targetPage : currentPage + 1;
+        int nextPage = targetPage != null ? targetPage : defaultTargetPage(currentPage);
+        if (nextPage < 0) {
+            result.put("status", "PAGINATION_REFUSED");
+            result.put("message", "已经是第一页，无法继续向前翻页。");
+            return result;
+        }
 
         log.info("翻页: sessionId={}, lastIntent={}, currentPage={}, nextPage={}",
                 sessionId, lastIntentCode, currentPage, nextPage);
@@ -235,6 +240,10 @@ public class PaginationNextTool extends AbstractBusinessTool {
             }
         }
         return null;
+    }
+
+    protected int defaultTargetPage(int currentPage) {
+        return currentPage + 1;
     }
 
     /** spec §8.2 只读查询, 无副作用 */

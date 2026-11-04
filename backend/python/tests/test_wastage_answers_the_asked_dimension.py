@@ -158,27 +158,6 @@ def test_wastage_resolver_declares_dimensions_so_dispatch_cannot_drop_it():
     )
 
 
-@pytest.mark.asyncio
-async def test_dispatch_delivers_dimensions_and_it_changes_the_answer():
-    """端到端走真实分发器 —— 缺陷就住在这两段之间的那道过滤器上。
-
-    ⚠️ 只断言「参数到达了」不够：到达而没人用与没到达在用户侧是同一个症状。
-       所以这里断言的是**产出变了**。
-    """
-    by_store = await resolve_by_code(
-        "RESTAURANT_OPS_WASTAGE_TOP", _RecordingPool(_pool_conn()), "MOCK_REST",
-        days=30, query="哪家店最多", dimensions=("store",),
-        role="restaurant_manager",
-    )
-    by_ingredient = await resolve_by_code(
-        "RESTAURANT_OPS_WASTAGE_TOP", _RecordingPool(_pool_conn()), "MOCK_REST",
-        days=30, query="最近损耗怎么样", dimensions=("ingredient",),
-        role="restaurant_manager",
-    )
-    assert by_store is not None and by_ingredient is not None
-    assert by_store.answer_text != by_ingredient.answer_text, (
-        "两轮逐字相同 —— 这正是 prod 实测的 bd1d6675，维度没到执行器"
-    )
 
 
 # ── 问了门店：答案要按门店组织 ────────────────────────────────────────────

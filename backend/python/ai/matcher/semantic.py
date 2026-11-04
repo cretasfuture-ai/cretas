@@ -24,6 +24,7 @@ from typing import List
 from ai.config import default_config
 from ai.dto import CandidateIntentDto, MatchMethod
 from ai.embedding import get_embedding_cached, vec_to_pgvector_text
+from ai.factory_catalog import filter_runtime_rows
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class SemanticMatcher:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(SEMANTIC_SQL, vec_text, factoryId, businessType, self.top_k)
 
+        rows = filter_runtime_rows(rows)
         candidates = [
             CandidateIntentDto(
                 intentCode=r["intent_code"],

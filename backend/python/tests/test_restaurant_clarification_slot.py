@@ -104,15 +104,6 @@ def test_the_boundary_converter_is_the_only_place_that_knows_the_strings():
 #
 # 这正是本仓反复记的那条 ——「套件绿经常什么都没证明」, 这次落在我自己的重构上。
 
-def test_time_button_continuation_still_routes_after_the_refactor():
-    """时间按钮分支: 上一轮问的是时间, 本轮答一个时间按钮 → 路由回原 intent。"""
-    query = "哪个菜卖得好"
-    assert R._approved_exact_shape(query) is not None, "夹具失效: 该问句不再是已批准路由"
-
-    routed = R._approved_exact_continuation_route(
-        query, "最近30天", R.TIME_CLARIFICATION_QUESTION,
-    )
-    assert routed == "RESTAURANT_OPS_GROSS_MARGIN", routed
 
 
 def test_continuation_declines_when_there_was_no_clarification():

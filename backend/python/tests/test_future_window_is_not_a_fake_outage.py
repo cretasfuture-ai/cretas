@@ -201,38 +201,3 @@ def only_sentinel(monkeypatch):
     monkeypatch.setattr(
         R, "_RESOLVERS", {"RESTAURANT_OPS_SALES_SUMMARY": _sentinel})
     return _sentinel
-
-
-@pytest.mark.asyncio
-async def test_dispatch_short_circuits_a_future_window(only_sentinel):
-    """闸触发: ⛔ 一次库都不查（pool 传 None，查库就会炸）。"""
-    got = await resolve_by_code(
-        "RESTAURANT_OPS_SALES_SUMMARY", None, "MOCK_REST",
-        query="2026年8月25号到8月31号的营收是多少", role="restaurant_manager",
-        today=TODAY)
-    assert got is not _SENTINEL, "闸没拦住 —— 未来窗口被送进了 resolver"
-    assert got.meta.get("future_request") is True
-
-
-@pytest.mark.asyncio
-async def test_dispatch_does_not_fire_when_a_usable_window_exists(only_sentinel):
-    """阴性对照: 有可用窗口就**一步都不许短路**。
-
-    ▎这条是「正常过去窗口逐字不变」的**结构性**保证:
-      闸的第二个条件就是「手上没有可用窗口」，所以 C/D 组走不到它。
-    """
-    got = await resolve_by_code(
-        "RESTAURANT_OPS_SALES_SUMMARY", None, "MOCK_REST",
-        query="2026年8月1号到8月15号的营收是多少", role="restaurant_manager",
-        date_range=(datetime.date(2026, 8, 1), datetime.date(2026, 8, 15)))
-    assert got is _SENTINEL, "正常窗口被未来闸误伤了"
-
-
-@pytest.mark.asyncio
-async def test_dispatch_does_not_fire_on_a_relative_past_window(only_sentinel):
-    """阴性对照之二: 相对过去窗口同样不许被拦。"""
-    got = await resolve_by_code(
-        "RESTAURANT_OPS_SALES_SUMMARY", None, "MOCK_REST",
-        query="上周营收多少", role="restaurant_manager",
-        date_range=(datetime.date(2026, 8, 10), datetime.date(2026, 8, 16)))
-    assert got is _SENTINEL

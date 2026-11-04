@@ -26,9 +26,37 @@ public class CameraUnsubscribeTool extends AbstractBusinessTool {
     @Autowired
     private IsapiEventSubscriptionService subscriptionService;
 
+    @Autowired
+    private com.cretas.aims.service.isapi.IsapiDeviceService deviceService;
+
     @Override
     public String getToolName() {
         return "camera_unsubscribe";
+    }
+
+    @Override public ActionType getActionType() { return ActionType.WRITE; }
+    @Override public boolean supportsPreview() { return true; }
+    @Override public boolean requiresPermission() { return true; }
+    @Override public boolean hasPermission(String role) {
+        return role != null && Set.of("factory_super_admin", "permission_admin", "super_admin", "platform_admin", "developer").contains(role);
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        String deviceId = getString(params, "deviceId");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "PREVIEW");
+        result.put("action", "UNSUBSCRIBE");
+        if (deviceId != null && !deviceId.isBlank()) {
+            var device = deviceService.getDevice(factoryId, deviceId);
+            result.put("deviceId", device.getId());
+            result.put("deviceName", device.getDeviceName());
+        } else {
+            result.put("scope", "ALL_FACTORY_CAMERAS");
+        }
+        result.put("currentlySubscribedDeviceIds", subscriptionService.getActiveSubscriptionIds(factoryId));
+        result.put("message", "确认后才会取消摄像头告警订阅，本次预览未改变订阅。");
+        return result;
     }
 
     @Override
