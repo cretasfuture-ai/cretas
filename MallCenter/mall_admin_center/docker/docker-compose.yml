@@ -58,6 +58,7 @@ services:
       - "7500:7500"
     environment:
       - TZ=Asia/Shanghai
+      - MALL_DRUID_LOGIN_PASSWORD
     volumes:
       - ./joolun/logs:/home/joolun/logs
       - ./joolun/uploadPath:/home/joolun/uploadPath
