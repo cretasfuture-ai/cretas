@@ -595,4 +595,57 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
            "WHERE r.factoryId = :f AND r.batchId = :bId AND r.deletedAt IS NULL")
     int softDeleteByFactoryIdAndBatchId(@Param("f") String factoryId,
                                         @Param("bId") Long batchId);
+
+    /**
+     * 工艺参数偏离汇总: 取窗口内带「工艺参数判定快照」(custom_fields.paramChecks) 的 YIELD 报工。
+     *
+     * <p>⛔ 不在 SQL 里解 jsonb: custom_fields 以文本整段取回, 由服务层解析。理由: 解析要同时在 PG 与测试库 (H2) 上
+     * 得到同一个结果, 而 {@code ->>} / {@code jsonb_array_elements} 只有 PG 有; 预筛只用 LIKE (两边都支持,
+     * 只是缩小候选集, 精确判定在服务层)。所有条件参数化, 不拼字符串。
+     *
+     * <p>两条入口写同一形状, 但 web 工序表一道工序会写最多三条报工 (调料 / 人工 / 辅助) 且每条都带同一份快照,
+     * 去重由服务层按 (batch_id, processEntryStepKey) 做, 所以这里按 id 升序返回。
+     * 本厂过滤落在每一张被关联的表上 (报工 / 任务 / 批次 / 产品 / 用户), 不靠 id 不撞。
+     */
+    @Query(value = """
+        SELECT
+            pr.id AS report_id,
+            pr.batch_id AS batch_id,
+            pb.batch_number AS batch_number,
+            pb.production_plan_id AS plan_id,
+            COALESCE(pb.product_type_id, pr.product_type_id, wpt.product_type_id) AS product_type_id,
+            ptp.name AS product_name,
+            pr.report_date AS report_date,
+            pr.created_at AS created_at,
+            pr.worker_id AS worker_id,
+            pr.reporter_name AS reporter_name,
+            u.full_name AS worker_full_name,
+            u.username AS worker_username,
+            pr.process_order AS process_order,
+            wp.process_name AS work_process_name,
+            pr.process_category AS process_category,
+            CAST(pr.custom_fields AS text) AS custom_fields_json
+        FROM production_reports pr
+        LEFT JOIN work_process_tasks wpt ON pr.work_process_task_id = wpt.id
+            AND wpt.factory_id = :factoryId AND wpt.deleted_at IS NULL
+        LEFT JOIN work_processes wp ON wpt.work_process_id = wp.id
+            AND wp.factory_id = :factoryId AND wp.deleted_at IS NULL
+        LEFT JOIN production_batches pb ON pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
+            AND pb.factory_id = :factoryId AND pb.deleted_at IS NULL
+        LEFT JOIN product_types ptp ON ptp.id = COALESCE(pb.product_type_id, pr.product_type_id, wpt.product_type_id)
+            AND ptp.factory_id = :factoryId AND ptp.deleted_at IS NULL
+        LEFT JOIN users u ON u.id = pr.worker_id
+            AND u.factory_id = :factoryId AND u.deleted_at IS NULL
+        WHERE pr.factory_id = :factoryId
+          AND pr.report_type = 'YIELD'
+          AND pr.deleted_at IS NULL
+          AND pr.report_date BETWEEN :startDate AND :endDate
+          AND pr.custom_fields IS NOT NULL
+          AND CAST(pr.custom_fields AS text) LIKE '%"paramChecks"%'
+        ORDER BY pr.id ASC
+        """, nativeQuery = true)
+    List<Map<String, Object>> findParamCheckReports(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") java.time.LocalDate startDate,
+            @Param("endDate") java.time.LocalDate endDate);
 }
