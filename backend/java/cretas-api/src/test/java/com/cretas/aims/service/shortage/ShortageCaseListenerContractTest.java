@@ -2,6 +2,7 @@ package com.cretas.aims.service.shortage;
 
 import com.cretas.aims.event.MaterialBatchReleasedEvent;
 import com.cretas.aims.event.MaterialReceivedEvent;
+import com.cretas.aims.event.PurchaseOrderSupplyChangedEvent;
 import com.cretas.aims.event.SalesOrderFinanceApprovedEvent;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Propagation;
@@ -10,11 +11,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -40,6 +43,17 @@ class ShortageCaseListenerContractTest {
         assertThatCode(() -> listener.onSalesOrderFinanceApproved(
                 new SalesOrderFinanceApprovedEvent(this, "F1", "SO-1", 9L)))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> listener.onPurchaseOrderSupplyChanged(
+                new PurchaseOrderSupplyChangedEvent(this, "F1", "PO-1", Set.of("M1"))))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aPurchaseOrderSupplyChangeRefreshesEveryMaterialOnTheOrder() {
+        listener.onPurchaseOrderSupplyChanged(new PurchaseOrderSupplyChangedEvent(this, "F1", "PO-1", Set.of("M1", "M2")));
+
+        verify(service).refreshForMaterial("F1", "M1", ShortageCaseListener.REASON_PURCHASE_SUPPLY_CHANGED);
+        verify(service).refreshForMaterial("F1", "M2", ShortageCaseListener.REASON_PURCHASE_SUPPLY_CHANGED);
     }
 
     @Test
@@ -47,6 +61,7 @@ class ShortageCaseListenerContractTest {
         for (Method m : List.of(
                 ShortageCaseListener.class.getMethod("onMaterialBatchReleased", MaterialBatchReleasedEvent.class),
                 ShortageCaseListener.class.getMethod("onMaterialReceived", MaterialReceivedEvent.class),
+                ShortageCaseListener.class.getMethod("onPurchaseOrderSupplyChanged", PurchaseOrderSupplyChangedEvent.class),
                 ShortageCaseListener.class.getMethod("onSalesOrderFinanceApproved", SalesOrderFinanceApprovedEvent.class))) {
             assertThat(m.getAnnotation(Transactional.class)).as(m.getName()).isNull();
         }
