@@ -6,6 +6,9 @@ import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialSupplyMode;
 import com.cretas.aims.entity.material.MaterialMainCategory;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 
 import java.util.Objects;
 
@@ -73,7 +76,8 @@ public final class ProductionInventoryOwnershipGuard {
                         .withHint(inventoryProduction
                                 ? "请选择归属该客户且来源销售订单为空的原料批次"
                                 : "请使用该销售订单对应的客户来料批次")
-                        .withHintTarget(hintTarget);
+                        .withHintTarget(hintTarget)
+                    .withDiagnosis(GateDiagnosis.of(GateId.MATERIAL_OWNERSHIP, "CUSTOMER_SUPPLIED_MATERIAL_SCOPE_MISMATCH", "BATCH", batch.getBatchNumber()).resolve(inventoryProduction ? "改选归属该客户且尚未绑定销售订单的原料批次" : "改用该销售订单对应的客户来料批次", null).build());
             }
             return;
         }
@@ -82,7 +86,8 @@ public final class ProductionInventoryOwnershipGuard {
             throw new BusinessException(409, "工厂备料生产不能领用客户所有的库存")
                     .withCode("CUSTOMER_OWNED_MATERIAL_FORBIDDEN")
                     .withHint("请选择公司自有原料批次；客供料仅可用于其绑定的客户订单")
-                    .withHintTarget(hintTarget);
+                    .withHintTarget(hintTarget)
+                    .withDiagnosis(GateDiagnosis.of(GateId.MATERIAL_OWNERSHIP, "CUSTOMER_OWNED_MATERIAL_FORBIDDEN", "BATCH", batch.getBatchNumber()).resolve("批次 " + batch.getBatchNumber() + " 是客户所有的料, 工厂备料生产不能领; 改选公司自有原料批次", null).build());
         }
     }
 

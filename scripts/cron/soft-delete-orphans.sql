@@ -1,4 +1,4 @@
--- generated-from 0c56d4cb227a 2026-11-04 09:55:01Z
+-- generated-from 8863752c16aa 2026-11-04 12:30:45Z
 -- 关联 62 对 = 注解扫描 60 + 手工登记新增 2
 -- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。
 --

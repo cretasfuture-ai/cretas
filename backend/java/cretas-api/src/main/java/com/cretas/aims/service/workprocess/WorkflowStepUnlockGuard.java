@@ -7,6 +7,9 @@ import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
@@ -89,7 +92,8 @@ public class WorkflowStepUnlockGuard {
                     .withCode(ERROR_CODE)
                     .withHint("先让「" + String.join("」「", r.waitingFor())
                             + "」报一次产出（分批产出时报出第一批即可），再来报这一道；"
-                            + "如果这次不做那一道（例如半成品直接从库里领），先把它标记为跳过");
+                            + "如果这次不做那一道（例如半成品直接从库里领），先把它标记为跳过")
+                    .withDiagnosis(GateDiagnosis.of(GateId.WORKFLOW_UPSTREAM, ERROR_CODE, "WORKFLOW_STEP", String.join("、", r.waitingFor())).resolve("先让上游工序「" + String.join("」「", r.waitingFor()) + "」报一次产出; 若本次不做那一道, 先把它标记为跳过", null).build());
         }
     }
 

@@ -5,6 +5,9 @@ import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 
 import java.math.BigDecimal;
 
@@ -83,7 +86,9 @@ public final class QcInspectionGuard {
                     .withCode(SEMI_REJECTED)
                     .withHint("请改选其他合格批次；不合格品请按不良品流程处置")
                     .withSeverity("BLOCKING")
-                    .withHintTarget(hintTarget);
+                    .withHintTarget(hintTarget)
+                    .withDiagnosis(GateDiagnosis.of(GateId.SEMI_QC_REJECTED, SEMI_REJECTED, "SEMI_BATCH", sfi.getIntermediateBatchNo())
+                            .resolve("该批半成品质检不合格, 改选其他合格半成品批次; 不合格品按不良品流程处置", null).build());
         }
     }
 
@@ -100,7 +105,11 @@ public final class QcInspectionGuard {
                 .withHint("待检部分要等质检员在「" + RELEASE_PATH + "」放行后才能领；可以先少领（不超过 " + free
                         + "），或改选已放行的批次")
                 .withSeverity("BLOCKING")
-                .withHintTarget(hintTarget);
+                .withHintTarget(hintTarget)
+                .withDiagnosis(GateDiagnosis.of(GateId.SEMI_QC_PENDING, SEMI_PENDING, "SEMI_BATCH", sfi.getIntermediateBatchNo())
+                        .qty(quantity, sfi.drawableBalance()).unit(unit)
+                        .resolve("去「质检放行」页放行半成品批次 " + sfi.getIntermediateBatchNo() + " 的待检部分 (" + plain(pending) + unit
+                                + "); 或本次最多只领 " + free, GateRoutes.QC_RELEASE).build());
     }
 
     private static String plain(BigDecimal v) {
@@ -123,14 +132,18 @@ public final class QcInspectionGuard {
                     .withHint("上道产出的产品设置了「需检」或有未处理的 CCP 偏离。请质检员在「"
                             + RELEASE_PATH + "」放行后再投料，或先保存草稿")
                     .withSeverity("BLOCKING")
-                    .withHintTarget(hintTarget);
+                    .withHintTarget(hintTarget)
+                    .withDiagnosis(GateDiagnosis.of(GateId.WIP_QC, WIP_PENDING, "BATCH", sourceBatchNumber)
+                            .resolve("去「质检放行」页放行上游批次 " + sourceBatchNumber, GateRoutes.QC_RELEASE).build());
         }
         if (mb.getStatus() == MaterialBatchStatus.DEFECTIVE) {
             throw new BusinessException(409, "上游批次 " + sourceBatchNumber + " 质检不合格，不能投料")
                     .withCode(WIP_REJECTED)
                     .withHint("请改选其他合格批次；不合格品请按不良品流程处置")
                     .withSeverity("BLOCKING")
-                    .withHintTarget(hintTarget);
+                    .withHintTarget(hintTarget)
+                    .withDiagnosis(GateDiagnosis.of(GateId.WIP_QC, WIP_REJECTED, "BATCH", sourceBatchNumber)
+                            .resolve("上游批次 " + sourceBatchNumber + " 质检不合格, 改选其他合格批次; 不合格品按不良品流程处置", null).build());
         }
     }
 
@@ -148,6 +161,8 @@ public final class QcInspectionGuard {
                 .withHint("这批成品的产品设置了「需检」或有未处理的 CCP 偏离。请质检员在「"
                         + RELEASE_PATH + "」放行后再" + action + "，或改选已放行的批次")
                 .withSeverity("BLOCKING")
-                .withHintTarget(hintTarget);
+                .withHintTarget(hintTarget)
+                .withDiagnosis(GateDiagnosis.of(GateId.FG_QC_PENDING, FG_PENDING, "FG_BATCH", fg.getBatchNumber())
+                        .resolve("去「质检放行」页放行成品批次 " + fg.getBatchNumber() + ", 或改选已放行的批次", GateRoutes.QC_RELEASE).build());
     }
 }

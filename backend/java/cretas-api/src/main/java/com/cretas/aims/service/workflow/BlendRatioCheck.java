@@ -9,6 +9,9 @@ import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
@@ -402,7 +405,8 @@ public class BlendRatioCheck {
                     .withCode(ERROR_CODE)
                     .withHint("请先核对各主料投料量；确实按此配比投料的，在「配比核对」里选择偏差原因（选「其他」需写明）后再正式报工")
                     .withHintTarget("配比偏差原因")
-                    .withSeverity("BLOCKING");
+                    .withSeverity("BLOCKING")
+                    .withDiagnosis(GateDiagnosis.of(GateId.BLEND_RATIO, ERROR_CODE, "WORKFLOW_STEP", overText).resolve("核对各主料投料量; 确按此配比投的, 在「配比核对」选择偏差原因 (选「其他」需写明)", null).build());
         }
         if (!STANDARD_REASONS.contains(reason)) {
             throw new BusinessException(400, "配比偏差原因「" + reason + "」不在可选范围内")
@@ -416,7 +420,8 @@ public class BlendRatioCheck {
                     .withCode(ERROR_CODE)
                     .withHint("在「配比核对」的说明框里写明为什么按这个配比投料")
                     .withHintTarget("配比偏差原因")
-                    .withSeverity("BLOCKING");
+                    .withSeverity("BLOCKING")
+                    .withDiagnosis(GateDiagnosis.of(GateId.BLEND_RATIO, ERROR_CODE, "WORKFLOW_STEP", overText).resolve("核对各主料投料量; 确按此配比投的, 在「配比核对」选择偏差原因 (选「其他」需写明)", null).build());
         }
         if (note.length() > NOTE_MAX) {
             note = note.substring(0, NOTE_MAX);

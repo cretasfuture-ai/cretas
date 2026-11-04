@@ -43,3 +43,4 @@ ai-tool-catalog	INTERNAL	ToolMetadataRepository|ToolSimilarityService	-	工具�
 voice-requisition	INTERNAL	VoiceRequisitionParserService	-	把一句语音解析成领料单草稿字段, 不读业务数据
 business-links	NO_APP_PAGE	LinkArrayService	-	单据之间的互链 (编号对编号), 不含金额与客户明细; 与溯源全链同类, 溯源接口对所有工厂用户开放
 store-seats	NO_APP_PAGE	StoreSeatConfigRepository	-	门店座位配置: 餐饮专用 (餐饮线 2026-10-08 裁定废弃), 无 App 页面, 不是敏感经营数据
+gate-diagnosis	NO_APP_PAGE	GateDiagnosisService	-	批次被哪道闸拦的诊断 (闸名/批次号/可用量/解开方式), 与写路径拒绝是同一份诊断; 只含批次状态与数量, 无金额与客户明细; App 里等价信息就在被拒绝的操作提示上; Tool 自带仓储读权限

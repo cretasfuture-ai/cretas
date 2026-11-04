@@ -6,6 +6,9 @@ import com.cretas.aims.entity.shortage.ShortageCase.Stage;
 import com.cretas.aims.entity.shortage.ShortageCaseEvent;
 import com.cretas.aims.entity.shortage.ShortageCaseLine;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseEventRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseLineRepository;
@@ -64,7 +67,8 @@ public class ShortageStartGate {
                     .withCode(CODE)
                     .withHint("到「缺料异常」处理缺口; 确需先开工, 请填写强制开工原因后再开工")
                     .withHintTarget(c.getId())
-                    .withSeverity("BLOCKING");
+                    .withSeverity("BLOCKING")
+                    .withDiagnosis(GateDiagnosis.of(GateId.SHORTAGE_START, CODE, "PLAN", planLabel.toString()).cause(summary(gaps)).resolve("到「缺料异常」处理缺口 (采购/调拨/重排), 或填写强制开工原因后开工", GateRoutes.SHORTAGE).build());
         }
         ShortageCaseEvent e = new ShortageCaseEvent();
         e.setCaseId(c.getId());
