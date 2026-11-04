@@ -101,6 +101,28 @@ class PlatformAiAnalysisGrantJpaContractTest {
                 .extracting(PlatformAiAnalysisGrantAudit::getAction).containsExactlyInAnyOrder("GRANT", "REVOKE");
     }
 
+    /** 真实表上走一遍: 账号升成超管、账号行被删, 两条授权都撤得掉, 各一条留痕; 升上去的人再降回来也没有授权。 */
+    @Test
+    void grantsOfAPromotedAndADeletedAccountCanBeRevoked() {
+        PlatformAdmin gone = admins.saveAndFlush(admin(PlatformRole.auditor));
+        service.grant(manager, new PlatformAiAnalysisGrantService.GrantRequest("ACCOUNT", String.valueOf(staff.getId()), "专人"));
+        service.grant(manager, new PlatformAiAnalysisGrantService.GrantRequest("ACCOUNT", String.valueOf(gone.getId()), "专人"));
+        staff.setPlatformRole(PlatformRole.super_admin);
+        staff = admins.saveAndFlush(staff);
+        jdbc.update("DELETE FROM platform_admins WHERE id = ?", gone.getId());
+
+        service.revoke(manager, new PlatformAiAnalysisGrantService.GrantRequest("ACCOUNT", String.valueOf(staff.getId()), "升了超管"));
+        service.revoke(manager, new PlatformAiAnalysisGrantService.GrantRequest("ACCOUNT", String.valueOf(gone.getId()), "人走了"));
+
+        assertThat(grants.findAll()).isEmpty();
+        assertThat(audits.findTop50ByOrderByChangedAtDescIdDesc()).extracting(PlatformAiAnalysisGrantAudit::getAction)
+                .containsExactlyInAnyOrder("GRANT", "GRANT", "REVOKE", "REVOKE");
+
+        staff.setPlatformRole(PlatformRole.auditor);
+        staff = admins.saveAndFlush(staff);
+        assertThatThrownBy(() -> service.requireEntry(staffRequest())).hasMessage(PlatformAiAnalysisGrantService.NOT_GRANTED_MESSAGE);
+    }
+
     @Test
     void anAccountGrantIsStoredByAccountId() {
         service.grant(manager, new PlatformAiAnalysisGrantService.GrantRequest("ACCOUNT", String.valueOf(staff.getId()), "专人"));

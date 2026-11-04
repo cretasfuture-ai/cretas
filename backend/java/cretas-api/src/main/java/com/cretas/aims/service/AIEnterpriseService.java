@@ -1157,8 +1157,9 @@ public class AIEnterpriseService {
         if (withheld == 0) {
             return dataNotice.isEmpty() ? null : dataNotice;
         }
-        String context = "说明：近 30 天生产统计里有 " + withheld + " 个客户侧保管产品的成本和工艺无法读取，未计入；"
-                + "这些产品的名称和产量仍在统计里。";
+        // 这个数是成本被隐藏的产品行数, 不只是保密产品: 所以不说「N 个客户侧保管产品」, 把三种来源都写上
+        String context = "说明：近 30 天生产统计里有 " + withheld + " 个产品的成本和工艺无法读取"
+                + "（客户侧保管产品、与它们同计划的产品，或认不出的产品），未计入；这些产品的名称和产量仍在统计里。";
         return dataNotice.isEmpty() ? context : dataNotice + context;
     }
 

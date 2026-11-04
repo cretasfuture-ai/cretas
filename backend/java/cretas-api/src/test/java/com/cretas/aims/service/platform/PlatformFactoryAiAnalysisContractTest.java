@@ -27,6 +27,7 @@ import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.PlatformAdmin;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.audit.PlatformDataAccessLog;
@@ -206,7 +207,7 @@ class PlatformFactoryAiAnalysisContractTest {
     static final String SECRET_ROW_WITHHELD = "| " + "秘制酱牛肉" + " | 98 kg | 保密 | 保密 |";
     static final String HELD_ROW_WITHHELD = "| " + "客户保管酱料" + " | 98 kg | 保密 | 保密 |";
     static final String HELD_RANGE_NOTICE = "说明：该时间段内 1 个客户侧保管产品的批次无法读取（核心工艺不在云端），这些批次和同计划的批次未计入。";
-    static final String HELD_CONTEXT_NOTICE = "说明：近 30 天生产统计里有 1 个客户侧保管产品的成本和工艺无法读取，未计入；这些产品的名称和产量仍在统计里。";
+    static final String HELD_CONTEXT_NOTICE = contextNotice(1);
     static final AuthenticatedActor PLATFORM_ACTOR =
             new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, ADMIN, "PLATFORM", "super_admin");
 
@@ -237,6 +238,7 @@ class PlatformFactoryAiAnalysisContractTest {
     final AIQuotaConfigRepository quotaConfig = mock(AIQuotaConfigRepository.class);
     final AIAuditLogRepository aiAuditLog = mock(AIAuditLogRepository.class);
     final PlatformDataAccessLogWriter accessLog = mock(PlatformDataAccessLogWriter.class);
+    final ProductionPlanRepository planRepository = mock(ProductionPlanRepository.class);
     final PlatformAiAnalysisGrantRepository grantRepository = mock(PlatformAiAnalysisGrantRepository.class);
     final PlatformAiAnalysisGrantAuditRepository grantAuditRepository = mock(PlatformAiAnalysisGrantAuditRepository.class);
     final BomRecipeRepository recipeRepository = mock(BomRecipeRepository.class);
@@ -280,7 +282,7 @@ class PlatformFactoryAiAnalysisContractTest {
 
         access = accessService();
         costScope = new ProcessSecretLlmCostScope(new ProcessSecretAggregateExclusions(access,
-                mock(ProductionPlanRepository.class), mock(BomRecipeRepository.class)), access);
+                planRepository, mock(BomRecipeRepository.class)), access);
         ProcessSecretAiAccessAudit aiAudit = new ProcessSecretAiAccessAudit(access, costScope);
         aiAudit.setFactorySecrecyConfig(config);
 
@@ -532,6 +534,44 @@ class PlatformFactoryAiAnalysisContractTest {
         assertThat(sentBody()).contains(PLAIN_PRODUCT, HELD_ROW_WITHHELD).doesNotContain(HELD_UNIT_COST);
     }
 
+    /** 同计划的普通联产品成本也被隐藏, 但它不是保密产品: 说明的数字要把它算上, 不能只报 1。 */
+    @Test
+    void theThirtyDayNoticeCountsAPlainCoProductWithheldByItsPlan() throws Exception {
+        set(F1, SecrecyItem.CUSTOMER_HELD, true);
+        addPolicy(F1, "P-HELD", HELD_PRODUCT, ProcessSecretStorageMode.CUSTOMER_HELD);
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("PLAN-HELD");
+        plan.setProductTypeId("P-HELD");
+        when(planRepository.findByFactoryId(F1)).thenReturn(List.of(plan));
+        for (ProductionBatch batch : List.of(addBatch(F1, 13L, "P-HELD", HELD_PRODUCT), addBatch(F1, 14L, "P-CO", "同计划联产品"))) {
+            batch.setCreatedAt(RECENT_ONLY);
+            batch.setProductionPlanId("PLAN-HELD");
+            batch.setTotalCost(new BigDecimal("5555"));
+        }
+        answerWithAnalysis();
+
+        analyse(F1, superAdminToken()).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.notice").value(contextNotice(2)));
+
+        assertThat(sentBody()).contains(HELD_ROW_WITHHELD, "| 同计划联产品 | 98 kg | 保密 | 保密 |").doesNotContain(HELD_UNIT_COST);
+    }
+
+    /** 认不出产品的行有隐藏范围时成本照样不给, 背后却数不出保密产品: 按保密产品数报会是 0, 说明整句消失。 */
+    @Test
+    void theThirtyDayNoticeCountsARowWhoseProductIsUnknown() throws Exception {
+        set(F1, SecrecyItem.CUSTOMER_HELD, true);
+        addPolicy(F1, "P-HELD", HELD_PRODUCT, ProcessSecretStorageMode.CUSTOMER_HELD);
+        ProductionBatch unknown = addBatch(F1, 14L, null, "认不出的产品");
+        unknown.setCreatedAt(RECENT_ONLY);
+        unknown.setTotalCost(new BigDecimal("5555"));
+        answerWithAnalysis();
+
+        analyse(F1, superAdminToken()).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.notice").value(contextNotice(1)));
+
+        assertThat(sentBody()).contains("| 认不出的产品 | 98 kg | 保密 | 保密 |").doesNotContain(HELD_UNIT_COST);
+    }
+
     /** 30 天统计 (提示词里最大的数据来源) 在作用域里给实际成本, 在作用域外同一个调用照旧是保密。 */
     @Test
     void theThirtyDayContextShowsProtectedCostsOnlyInsideTheScope() throws Exception {
@@ -706,6 +746,30 @@ class PlatformFactoryAiAnalysisContractTest {
                 "service/processsecret/ProcessSecretLlmCostScope.java");
     }
 
+    /**
+     * 这几个方法绕开工厂配额和训练采集, 只该从入口走到: 文件清单挡新文件里的调用, 次数挡同一个文件里多出来的一处。
+     * 第三个是上一层: 只钉下面两个的话, 从别处调它一样绕开入口的授权和留痕。
+     */
+    @Test
+    void thePathsThatSkipQuotaAndCaptureEachHaveOneCaller() throws IOException {
+        assertThat(mainFilesMentioning("analyzeCostForPlatformEntry")).containsExactly(
+                "service/AIAnalysisService.java",
+                "service/AIEnterpriseService.java");
+        assertThat(mainFilesMentioning("analyzeGeneralWithoutCapture")).containsExactly(
+                "client/PythonSmartBIClient.java",
+                "service/AIAnalysisService.java");
+        assertThat(mainFilesMentioning("analyzeTimeRangeForPlatform")).containsExactly(
+                "service/AIEnterpriseService.java",
+                "service/platform/PlatformFactoryAiAnalysisService.java");
+        assertThat(mentionsIn("service/AIAnalysisService.java", "analyzeCostForPlatformEntry")).as("定义").isEqualTo(1);
+        assertThat(mentionsIn("service/AIEnterpriseService.java", "analyzeCostForPlatformEntry")).as("调用").isEqualTo(1);
+        assertThat(mentionsIn("client/PythonSmartBIClient.java", "analyzeGeneralWithoutCapture")).as("定义").isEqualTo(1);
+        assertThat(mentionsIn("service/AIAnalysisService.java", "analyzeGeneralWithoutCapture")).as("调用").isEqualTo(1);
+        assertThat(mentionsIn("service/AIEnterpriseService.java", "analyzeTimeRangeForPlatform")).as("定义").isEqualTo(1);
+        assertThat(mentionsIn("service/platform/PlatformFactoryAiAnalysisService.java", "analyzeTimeRangeForPlatform"))
+                .as("调用").isEqualTo(1);
+    }
+
     // ------------------------------------------------------------------ 授权
 
     @Test
@@ -747,7 +811,7 @@ class PlatformFactoryAiAnalysisContractTest {
         assertThat(server.getRequestCount()).isEqualTo(1);
     }
 
-    /** 选定的行为: 账号授权在账号改角色后保留, 直到撤销 (超管账号本来开不了, 所以不会有人给自己留后门)。 */
+    /** 选定的行为: 账号授权在账号改角色后保留, 直到撤销。 */
     @Test
     void anAccountGrantStaysThroughARoleChangeUntilRevoked() throws Exception {
         grant("ACCOUNT", String.valueOf(STAFF), "专人").andExpect(status().isOk());
@@ -756,6 +820,44 @@ class PlatformFactoryAiAnalysisContractTest {
         analyse(F1, jwt.generatePlatformToken(STAFF, "staff", "auditor")).andExpect(status().isOk());
         revoke("ACCOUNT", String.valueOf(STAFF), "收回").andExpect(status().isOk());
         analyse(F1, jwt.generatePlatformToken(STAFF, "staff", "auditor")).andExpect(status().isForbidden());
+    }
+
+    /** 账号升成超管后授权还在表里: 必须撤得掉, 否则他再被降级时授权就回来了。 */
+    @Test
+    void anAccountPromotedToSuperAdminCanBeRevokedAndNothingComesBackOnDemotion() throws Exception {
+        grant("ACCOUNT", String.valueOf(STAFF), "专人").andExpect(status().isOk());
+        adminRows.get(STAFF).setPlatformRole(PlatformRole.super_admin);
+
+        revoke("ACCOUNT", String.valueOf(STAFF), "升了超管, 收回").andExpect(status().isOk());
+
+        adminRows.get(STAFF).setPlatformRole(PlatformRole.auditor);
+        analyse(F1, jwt.generatePlatformToken(STAFF, "staff", "auditor")).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value(PlatformAiAnalysisGrantService.NOT_GRANTED_MESSAGE));
+        assertThat(grantRows).isEmpty();
+        assertThat(grantAudit).extracting(PlatformAiAnalysisGrantAudit::getAction).containsExactly("GRANT", "REVOKE");
+    }
+
+    @Test
+    void anAccountWhoseRowWasDeletedCanStillBeRevoked() throws Exception {
+        grant("ACCOUNT", String.valueOf(STAFF), "专人").andExpect(status().isOk());
+        adminRows.remove(STAFF);
+
+        revoke("ACCOUNT", String.valueOf(STAFF), "人走了, 收回").andExpect(status().isOk());
+
+        assertThat(grantRows).isEmpty();
+        assertThat(grantAudit).extracting(PlatformAiAnalysisGrantAudit::getAction).containsExactly("GRANT", "REVOKE");
+    }
+
+    /** 撤销只看格式: 格式不对 400; 格式对而表里没有 404, 不留痕。 */
+    @Test
+    void aRevokeChecksTheFormatAndNothingElse() throws Exception {
+        revoke("ACCOUNT", "abc", "不是编号").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("平台账号编号无效"));
+        revoke("ROLE", "  ", "空角色").andExpect(status().isBadRequest());
+        revoke("TEAM", "x", "不支持的类型").andExpect(status().isBadRequest());
+        revoke("ACCOUNT", "999", "没开通过的账号").andExpect(status().isNotFound());
+        revoke("ROLE", "nobody", "没开通过的角色").andExpect(status().isNotFound());
+        assertThat(grantAudit).isEmpty();
     }
 
     /** 判定看库里的角色和状态: 旧令牌里写着超管、库里已降级的账号拿不到; 令牌里写的角色有授权、库里不是这个角色也拿不到。 */
@@ -1406,6 +1508,18 @@ class PlatformFactoryAiAnalysisContractTest {
                 .setControllerAdvice(new GlobalExceptionHandler(), advice)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(webMapper))
                 .build();
+    }
+
+    static String contextNotice(int products) {
+        return "说明：近 30 天生产统计里有 " + products + " 个产品的成本和工艺无法读取"
+                + "（客户侧保管产品、与它们同计划的产品，或认不出的产品），未计入；这些产品的名称和产量仍在统计里。";
+    }
+
+    /** 这个词在这个主代码文件里出现几次 (去掉注释)。 */
+    static int mentionsIn(String file, String word) throws IOException {
+        String code = com.cretas.aims.service.secrecy.SecrecyGateTestHooks.stripJavaComments(
+                Files.readString(Path.of("src/main/java/com/cretas/aims").resolve(file), StandardCharsets.UTF_8));
+        return code.split(java.util.regex.Pattern.quote(word), -1).length - 1;
     }
 
     /** 主代码里出现这个词的文件 (去掉注释), 路径相对 com/cretas/aims。 */

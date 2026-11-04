@@ -70,10 +70,10 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 
 | 项 | 规则 | 代码位置 |
 |---|---|---|
-| 谁能用 | 库里有效的平台超级管理员本人；其余平台账号要由超级管理员开通（开给一个平台角色或一个平台账号，超级管理员的账号不能开通）。每次现查库，撤销下一次调用就生效。未开通 403。账号授权在账号改角色后保留，直到撤销；角色授权跟着库里当前的角色走。并发重复开通只留一行一条留痕，后到的 409 | `PlatformAiAnalysisGrantService.requireEntry`；授权接口 `/api/platform/ai-analysis/grants`（列表 / 开通 / `revoke`，只给库里有效的超级管理员，必须写理由）；表 `platform_ai_analysis_grants`，只追加的留痕表 `platform_ai_analysis_grant_audit`（V20261104_25） |
+| 谁能用 | 库里有效的平台超级管理员本人；其余平台账号要由超级管理员开通（开给一个平台角色或一个平台账号，超级管理员的账号不能开通）。每次现查库，撤销下一次调用就生效。未开通 403。账号授权在账号改角色后保留，直到撤销；角色授权跟着库里当前的角色走。超级管理员的账号不能开通只挡账号授权：超级管理员仍能开通一个角色，之后被降级到这个角色就能用。账号存在、是不是超级管理员只在开通时校验，撤销只看格式：账号后来升成超级管理员或行被删了也撤得掉，否则再被降级时授权就回来了。并发重复开通只留一行一条留痕，后到的 409 | `PlatformAiAnalysisGrantService.requireEntry`；授权接口 `/api/platform/ai-analysis/grants`（列表 / 开通 / `revoke`，只给库里有效的超级管理员，必须写理由）；表 `platform_ai_analysis_grants`，只追加的留痕表 `platform_ai_analysis_grant_audit`（V20261104_25） |
 | a / b | **不读**。配置怎么设都能用（`FactorySecrecyGatesContractTest` 把入口服务列为不许引用保密配置的类） | `PlatformFactoryAiAnalysisService` |
 | 保密产品 | a、b 都开时也读得到。放行只在 `ProcessSecretPlatformAiScope` 里成立：入口打开、绑当前线程 + 一个平台账号 + 一家工厂、分析结束或抛异常就关。它只被 `ProcessSecretAccessService.permitsPlatformAiRead` 读，⛔ `decide` / `permitsViewFull` / `platformSeesFull` / `hiddenFromPlatform` 都不看它，同一账号走既有配方 / 成本 / 分析接口照旧被挡 | `ProcessSecretLlmCostScope.fullView` |
-| 客户侧保管（e 开的 B 档） | 云端没有完整工艺，成本和工艺读不到：时间段内这些批次和同计划批次不进提示词；近 30 天生产统计里这些产品的**名称和产量仍然发出**，成本列是「保密」。响应 `data.notice` 按实际发出的内容分别说明（产品只在 30 天统计里出现、时间段内没有批次时也说）。全部批次都是 B 档时 403，不调模型 | `AIEnterpriseService.platformNotice` |
+| 客户侧保管（e 开的 B 档） | 云端没有完整工艺，成本和工艺读不到：时间段内这些批次和同计划批次不进提示词；近 30 天生产统计里这些产品的**名称和产量仍然发出**，成本列是「保密」。响应 `data.notice` 按实际发出的内容分别说明（产品只在 30 天统计里出现、时间段内没有批次时也说）；30 天这一句的数字是成本被隐藏的产品行数（`ProductionAIContext.costWithheldProductCount`），含同计划的普通联产品和认不出产品的行，不只是保密产品。全部批次都是 B 档时 403，不调模型 | `AIEnterpriseService.platformNotice` |
 | 数据不全 | 时间段内超过 50 个批次时只取前 50 个、取成本失败的批次被丢掉：`data.notice` 和提示词都写明数量；全部失败时 503，不调模型 | `ProcessingService.getTimeRangeBatchesWithCounts`（老方法行为不变） |
 | 留痕 | 每次使用一条 `AI_ACCESS` / `ALLOW`、`resource_ref=ai:platform-analysis`、产品为空，原因写明时间段「并含最近 30 天生产统计」，同步写，写不进去 403；本次可读范围内每个保密产品再记一条（带产品），写不进去同样 403。两种记录都在读批次之前写完。⛔ 不存问题原文 | `PlatformFactoryAiAnalysisService.recordUse`、`ProcessSecretAccessService.recordPlatformAiReads` |
 | 出外脱敏（c） | **仍然生效**，按点名的工厂判：c 管什么能发给外部模型，不管谁能读。c 开时保密产品名换代号发出，回答里换回 | `LlmEgressGuard` |

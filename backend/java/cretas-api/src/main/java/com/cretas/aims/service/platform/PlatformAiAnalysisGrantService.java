@@ -29,8 +29,11 @@ import java.util.List;
  *   <li>判定 ({@link #requireEntry}) 每次现查库, ⛔ 不加缓存: 撤销下一次调用就生效, 账号停用同理;</li>
  *   <li>按库里的角色判, 不按令牌里的角色: 令牌最长活 24 小时, 被降级的人不能靠旧令牌用;</li>
  *   <li>开通 / 撤销与留痕在同一个事务里, 每次一行, 必须写理由; 没有变化 (已开通 / 本来没开通) 不写留痕;</li>
- *   <li>超级管理员的账号不能开通 (本来就不需要, 也就不会有人给自己留一条降级后还在的授权);</li>
- *   <li>账号授权在账号后来改角色时保留, 直到撤销; 角色授权跟着库里当前的角色走。</li>
+ *   <li>超级管理员的账号不能开通 (本来就不需要)。这只挡账号授权: 超级管理员仍能开通一个角色, 之后被降级到这个角色就能用,
+ *       所以降级时要连角色授权一起看;</li>
+ *   <li>账号授权在账号后来改角色时保留, 直到撤销; 角色授权跟着库里当前的角色走;</li>
+ *   <li>存在与角色只在开通时校验, 撤销只看格式: 账号后来升成超级管理员或行被删了, 那条授权照样撤得掉,
+ *       否则它留在表里, 账号再被降级时授权就回来了。</li>
  * </ul>
  */
 @Service
@@ -112,7 +115,7 @@ public class PlatformAiAnalysisGrantService {
     @Transactional
     public GrantView grant(AuthenticatedActor actor, GrantRequest body) {
         requireManager(actor);
-        Grantee grantee = grantee(body);
+        Grantee grantee = grantable(body);
         String reason = reason(body);
         if (grants.existsByGranteeTypeAndGranteeRef(grantee.type(), grantee.ref())) {
             throw alreadyGranted();
@@ -133,7 +136,7 @@ public class PlatformAiAnalysisGrantService {
     @Transactional
     public void revoke(AuthenticatedActor actor, GrantRequest body) {
         requireManager(actor);
-        Grantee grantee = grantee(body);
+        Grantee grantee = parsed(body);
         String reason = reason(body);
         if (grants.revoke(grantee.type(), grantee.ref()) == 0) {
             throw new BusinessException(404, "该角色或账号没有开通");
@@ -151,35 +154,49 @@ public class PlatformAiAnalysisGrantService {
                 .reason(reason).changedAt(at).build());
     }
 
-    private Grantee grantee(GrantRequest body) {
+    /** 只看格式, 不查库: 撤销走这一步就够了, 表里没有这一行时由撤销本身给 404。 */
+    private static Grantee parsed(GrantRequest body) {
         if (body == null || body.granteeType() == null || body.grantee() == null) {
             throw new BusinessException(400, "必须指定开通给哪个平台角色或哪个平台账号");
         }
         String value = body.grantee().strip();
         return switch (body.granteeType().strip()) {
-            case PlatformAiAnalysisGrant.ROLE -> new Grantee(PlatformAiAnalysisGrant.ROLE, role(value));
-            case PlatformAiAnalysisGrant.ACCOUNT -> new Grantee(PlatformAiAnalysisGrant.ACCOUNT, account(value));
+            case PlatformAiAnalysisGrant.ROLE -> {
+                if (value.isEmpty()) throw new BusinessException(400, "必须指定开通给哪个平台角色或哪个平台账号");
+                yield new Grantee(PlatformAiAnalysisGrant.ROLE, value);
+            }
+            case PlatformAiAnalysisGrant.ACCOUNT -> {
+                if (!value.matches("[1-9][0-9]{0,18}")) throw new BusinessException(400, "平台账号编号无效");
+                yield new Grantee(PlatformAiAnalysisGrant.ACCOUNT, value);
+            }
             default -> throw new BusinessException(400, "授权对象类型只能是 ROLE 或 ACCOUNT");
         };
     }
 
-    private static String role(String value) {
+    /** 开通才查: 角色要是可开通的, 账号要存在且不是超级管理员。 */
+    private Grantee grantable(GrantRequest body) {
+        Grantee grantee = parsed(body);
+        if (PlatformAiAnalysisGrant.ROLE.equals(grantee.type())) {
+            requireGrantableRole(grantee.ref());
+        } else {
+            requireGrantableAccount(grantee.ref());
+        }
+        return grantee;
+    }
+
+    private static void requireGrantableRole(String value) {
         for (PlatformRole role : PlatformRole.values()) {
-            if (role != PlatformRole.super_admin && role.name().equals(value)) return value;
+            if (role != PlatformRole.super_admin && role.name().equals(value)) return;
         }
         throw new BusinessException(400, "不是可开通的平台角色（超级管理员不需要开通）");
     }
 
-    private String account(String value) {
-        if (!value.matches("[1-9][0-9]{0,18}")) {
-            throw new BusinessException(400, "平台账号编号无效");
-        }
+    private void requireGrantableAccount(String value) {
         PlatformAdmin target = admins.findById(Long.valueOf(value))
                 .orElseThrow(() -> new BusinessException(404, "平台账号不存在"));
         if (target.isSuperAdmin()) {
             throw new BusinessException(400, "超级管理员不需要开通");
         }
-        return value;
     }
 
     private static String reason(GrantRequest body) {

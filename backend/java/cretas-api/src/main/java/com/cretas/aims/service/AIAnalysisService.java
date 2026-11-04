@@ -486,8 +486,8 @@ public class AIAnalysisService {
                     factoryId, startDate, endDate);
 
             if (productionContext != null) {
-                if (platformRun != null && productionContext.getExcludedProtectedProductCount() != null) {
-                    platformRun.contextWithheldProducts = productionContext.getExcludedProtectedProductCount();
+                if (platformRun != null && productionContext.getCostWithheldProductCount() != null) {
+                    platformRun.contextWithheldProducts = productionContext.getCostWithheldProductCount();
                 }
                 String productionPrompt = aiContextService.formatProductionContextForPrompt(productionContext);
                 if (productionPrompt != null && !productionPrompt.isEmpty()) {
