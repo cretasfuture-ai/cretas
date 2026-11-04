@@ -31,6 +31,7 @@ import { isProcessSecretHidden } from '../../utils/processSecretField';
 import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
 import CcpReadingsSection from '../../components/processing/CcpReadingsSection';
 import ProcessParamsSection from '../../components/processing/ProcessParamsSection';
+import ProcessSopEntry from '../../components/processing/ProcessSopEntry';
 import {
   buildCustomFieldsRequest, collectParamDeviations, enabledParamDefs,
 } from '../../utils/processParamCheck';
@@ -2816,6 +2817,11 @@ const YieldStepReportScreen: React.FC = () => {
         <Text style={styles.batchProcess}>
           {batchNumber}  ·  {currentTask?.processName ?? `第 ${currentTask?.processOrder} 道`}
         </Text>
+        {/* 工序 SOP: 本道挂了文件才出现「查看 SOP（N）」; 哨兵任务 (无真实工序) 不请求 */}
+        <ProcessSopEntry
+          workProcessId={isSentinelBatch ? null : currentTask?.workProcessId}
+          processName={currentTask?.processName}
+        />
         {plannedOutput != null ? (
           <Text testID="yield-output-plan" style={styles.planned}>计划产出  {plannedOutput} {plannedOutputUnit}</Text>
         ) : null}

@@ -31,6 +31,8 @@ export type AttachmentEntityType =
   | 'ECN'
   | 'CALL_RECORD'
   | 'PRODUCTION_REPORT'
+  | 'WORK_PROCESS'
+  | 'EQUIPMENT'
   | 'GENERIC';
 
 export type AttachmentFileCategory =
@@ -147,8 +149,27 @@ export function getUploadUrl(
   fileName: string,
   fileType: string,
   factoryId?: string,
+  target?: { entityType: AttachmentEntityType; entityId: string; fileSize?: number },
 ): Promise<{ data: UploadUrlResponse }> {
-  return request.post(`${basePath(factoryId)}/upload-url`, { fileName, fileType });
+  // target 只在 SOP (工序/设备) 上传时带: 后端据此在发签名地址前就校验写权限、目标归属本厂、文件类型。
+  return request.post(`${basePath(factoryId)}/upload-url`, target ? { fileName, fileType, ...target } : { fileName, fileType });
+}
+
+/** 工序 / 设备 SOP: 后端只收 PDF 与常见图片, 上限 10MB (与 AttachmentPermissionResolver.SOP_* 一致). */
+export const SOP_ACCEPT = 'application/pdf,image/jpeg,image/png,image/webp,image/gif';
+export const SOP_MAX_BYTES = 10 * 1024 * 1024;
+const SOP_MIME = new Set(['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif']);
+export function isSopEntityType(t: AttachmentEntityType): boolean {
+  return t === 'WORK_PROCESS' || t === 'EQUIPMENT';
+}
+/** 选文件后、上传前的本地校验; 返回给人看的原因, 通过返回 null. */
+export function checkSopFile(file: { name: string; type: string; size: number }): string | null {
+  if (!SOP_MIME.has((file.type || '').toLowerCase())) {
+    return `「${file.name}」不是 PDF 或图片，SOP 只支持 PDF、jpg、png、webp、gif`;
+  }
+  if (file.size <= 0) return `「${file.name}」是空文件`;
+  if (file.size > SOP_MAX_BYTES) return `「${file.name}」超过 10MB，请压缩后再传`;
+  return null;
 }
 
 /** 5. 注册元数据 (OSS 直传完后). */
@@ -194,7 +215,10 @@ export async function uploadAndRegister(
   onProgress?: (percentage: number) => void,
 ): Promise<Attachment> {
   onProgress?.(2);
-  const urlResp = await getUploadUrl(file.name, file.type, factoryId);
+  const urlResp = await getUploadUrl(
+    file.name, file.type, factoryId,
+    isSopEntityType(entityType) ? { entityType, entityId, fileSize: file.size } : undefined,
+  );
   const { uploadUrl, fileUrl } = urlResp.data;
   await putFileWithProgress(uploadUrl, file, (percentage) => {
     onProgress?.(Math.min(90, 5 + Math.round(percentage * 0.85)));

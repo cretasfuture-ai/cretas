@@ -50,6 +50,8 @@ export type AttachmentEntityType =
   | 'ECN'
   | 'CALL_RECORD'
   | 'PRODUCTION_REPORT'
+  | 'WORK_PROCESS'
+  | 'EQUIPMENT'
   | 'GENERIC';
 
 export type AttachmentFileCategory =
@@ -135,6 +137,19 @@ class AttachmentApi {
   /** 3. 下载链接 — 后端 302 重定向到签名 URL. 这里直接返 endpoint, 调用方 fetch 自动跟随. */
   downloadUrl(id: string, factoryId?: string): string {
     return `${this.base(factoryId)}/${id}/download`;
+  }
+
+  /**
+   * 3b. 取一个刚签好的临时下载地址 (私有文件用; 地址会过期, 不要缓存或落盘).
+   * 对应 GET /attachments/{id}/download-url, 返回 { url }.
+   */
+  async getSignedDownloadUrl(id: string, factoryId?: string): Promise<string> {
+    const r = await apiClient.get<{ data?: { url?: string } }>(
+      `${this.base(factoryId)}/${encodeURIComponent(id)}/download-url`
+    );
+    const url = r.data?.url;
+    if (!url) throw new Error('没有拿到文件地址');
+    return url;
   }
 
   /** 4. 取 OSS pre-signed PUT URL — 5min. 返 { uploadUrl, fileUrl }. */

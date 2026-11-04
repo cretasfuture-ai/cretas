@@ -8,6 +8,8 @@ import { handleCatchError } from '@/utils/errorToast';
 import { formatDateTime } from '@/utils/dateFormat';
 import WorkProcessAIChatPanel from './WorkProcessAIChatPanel.vue';
 import WorkProcessCustomFieldsDialog from './WorkProcessCustomFieldsDialog.vue';
+import SopFilesDrawer from '@/components/attachment/SopFilesDrawer.vue';
+import { canManageProcessSop } from '@/components/attachment/sopPermissions';
 import {
   getWorkProcesses, createWorkProcess, updateWorkProcess,
   deleteWorkProcess, toggleWorkProcessStatus, getWorkProcessDuplicates,
@@ -28,6 +30,17 @@ const canWrite = computed(() => permissionStore.canWrite('system'));
 const canEditCustomFields = computed(() => Boolean(factoryId.value)
   && permissionStore.canWrite('production')
   && authStore.hasMinLevel(10));
+
+// SOP 文件: 谁进得了这个页面谁就能看；上传 / 删除只给 工厂总监 / 生产经理 / 车间主任 (与后端同口径)
+const canManageSop = computed(() => canManageProcessSop(authStore.currentRole, permissionStore.canWrite('production')));
+const sopDrawerVisible = ref(false);
+const sopRow = ref<WorkProcessItem | null>(null);
+
+function openSop(row: WorkProcessItem): void {
+  if (!row.id) return;
+  sopRow.value = row;
+  sopDrawerVisible.value = true;
+}
 
 const loading = ref(false);
 const allData = ref<WorkProcessItem[]>([]);
@@ -663,6 +676,17 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
             <el-button type="danger" text size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
+        <el-table-column label="SOP" width="90" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              type="primary"
+              text
+              size="small"
+              data-testid="work-process-sop-button"
+              @click="openSop(row)"
+            >SOP 文件</el-button>
+          </template>
+        </el-table-column>
         <el-table-column label="自定义字段" width="110" fixed="right" v-if="canEditCustomFields">
           <template #default="{ row }">
             <el-button
@@ -794,6 +818,16 @@ function normalizeSemiOutputCode(value?: string | null): string | null {
         <el-button type="primary" :loading="submitting" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
+
+    <SopFilesDrawer
+      v-if="sopRow"
+      v-model="sopDrawerVisible"
+      entity-type="WORK_PROCESS"
+      :entity-id="sopRow.id"
+      :target-name="sopRow.processName"
+      :can-write="canManageSop"
+      :factory-id="factoryId"
+    />
 
     <WorkProcessCustomFieldsDialog
       v-model="customFieldsDialogVisible"
