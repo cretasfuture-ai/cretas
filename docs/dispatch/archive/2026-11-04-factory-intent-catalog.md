@@ -87,3 +87,5 @@
 - 最新主线10daa82cc7新增只读GATE_DIAGNOSE_BATCH及V20261104_50。已合入并保留；原265条规范记录内容不变，仅新增此1条，当前266类（255 Tool路由、11 Skill路由、252唯一Tool名）。训练目录单独更新到training-catalog-final266；不修改旧头/权重/保护集。
 - 因生产out-of-order=false，当前目录迁移顺延为V20261104_51__factory_intent_catalog_retirement.sql；生成器、PostgreSQL17目录迁移与并发协议复验通过。新增266目录、Python封闭性/飞轮契约与最终Java封装日志分别为python-final266-contracts.log和java-final266-package.log。
 - 根回执final-verification-receipt.json保留按版本绑定的证据；最终完整PR门禁与合并事实以PR1449为准。Source冻结，主线scope仅在PR合入时释放；不部署、不运行生产迁移、不替换线上模型。
+
+- 最终库存单位语义补强：两个新比较helper改用UnitContract.storageUnit，保留只/个/件差异，kg/公斤仍等价；真实单位服务正反测试、赠品估值/计数单位重放冲突及相关57例全部通过（java-storage-unit-final.log，0失败/错误/跳过）。独立源审无新增P0/P1；不修改全局单位契约。CI前一候选完整Java日志7069通过、0失败/错误（222既有跳过），Python10378通过；作业总状态回写异常，逐步success与日志单独保存，不冒充作业总状态正常。

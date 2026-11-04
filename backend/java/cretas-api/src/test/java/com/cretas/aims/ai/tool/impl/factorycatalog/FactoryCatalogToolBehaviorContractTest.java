@@ -132,6 +132,44 @@ class FactoryCatalogToolBehaviorContractTest {
     }
 
     @Test
+    void allocationKeepsDistinctInventoryCountUnitsWithTheRealUnitContract() {
+        for (String[] pair : java.util.List.of(new String[]{"只", "件"}, new String[]{"个", "件"}, new String[]{"只", "个"})) {
+            var allocation = mock(SalesDeliveryBatchAllocationService.class);
+            var repository = mock(SalesDeliveryItemRepository.class);
+            var item = new SalesDeliveryItem();
+            item.setProductTypeId("PRODUCT-A"); item.setDeliveredQuantity(new BigDecimal("5"));
+            item.setUnit(pair[0]);
+            when(repository.findByIdAndDeliveryRecordFactoryId(12L, "F1")).thenReturn(Optional.of(item));
+            var tool = new TestAllocationTool(allocation, repository);
+            ReflectionTestUtils.setField(tool, "unitContractService",
+                    com.cretas.aims.service.unit.TestUnitContractFactory.contract());
+            assertThatThrownBy(() -> tool.invoke("F1", Map.of("deliveryItemId", "12", "allocationMode", "AUTO_FIFO",
+                    "productTypeId", "PRODUCT-A", "requiredQty", 5, "unit", pair[1]), Map.of()))
+                    .hasMessageContaining("单位或来源仓库与发货明细不一致");
+            verifyNoInteractions(allocation);
+        }
+    }
+
+    @Test
+    void allocationAcceptsMassAliasButPassesTheTrustedDeliveryUnit() {
+        var allocation = mock(SalesDeliveryBatchAllocationService.class);
+        var repository = mock(SalesDeliveryItemRepository.class);
+        var item = new SalesDeliveryItem();
+        item.setProductTypeId("PRODUCT-A"); item.setDeliveredQuantity(new BigDecimal("5"));
+        item.setUnit("kg"); item.setSourceWarehouseCode("WH-A");
+        when(repository.findByIdAndDeliveryRecordFactoryId(12L, "F1")).thenReturn(Optional.of(item));
+        when(allocation.autoAllocateFifo(eq("F1"), eq("12"), eq("PRODUCT-A"), any(), eq("kg"), eq("WH-A")))
+                .thenReturn(true);
+        var tool = new TestAllocationTool(allocation, repository);
+        ReflectionTestUtils.setField(tool, "unitContractService",
+                com.cretas.aims.service.unit.TestUnitContractFactory.contract());
+        var result = tool.invoke("F1", Map.of("deliveryItemId", "12", "allocationMode", "AUTO_FIFO",
+                "productTypeId", "PRODUCT-A", "requiredQty", 5, "unit", "公斤"), Map.of());
+        assertThat(result).containsEntry("status", "ALLOCATED");
+        verify(allocation).autoAllocateFifo(eq("F1"), eq("12"), eq("PRODUCT-A"), any(), eq("kg"), eq("WH-A"));
+    }
+
+    @Test
     void taxToolExecute_readsAutomaticInvoiceStatus() throws Exception {
         TaxGroupInvoiceTool tool = new TaxGroupInvoiceTool();
         tool.wire(new ObjectMapper());

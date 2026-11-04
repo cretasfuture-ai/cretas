@@ -195,18 +195,19 @@ class FreeGiftCostAtomicityRepositoryQueryValidationTest {
         }
     }
 
-    @Test
-    void zeroCostReplayCannotMisreportAPreviouslyValuedGiftAsFree() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"3,kg,kg", "0,只,件"})
+    void replayCannotChangeGiftValuationOrInventoryCountUnit(String oldPrice, String oldUnit, String requestedUnit) {
         var tx = new TransactionTemplate(transactions);
         assertThatThrownBy(() -> tx.execute(status -> {
             var owners = com.cretas.aims.testutil.FactoryCatalogJpaFixtures.seed(em);
             var material = new RawMaterialType(); material.setId("REPLAY-MAT"); material.setFactoryId("F006");
-            material.setCode("REPLAY-MAT"); material.setName("Replay material"); material.setUnit("kg");
+            material.setCode("REPLAY-MAT"); material.setName("Replay material"); material.setUnit(oldUnit);
             material.setCreatedBy(owners.first()); em.persist(material);
             var existing = new MaterialBatch(); existing.setId("VALUED-GIFT"); existing.setBatchNumber("VALUED-GIFT");
             existing.setFactoryId("F006"); existing.setMaterialTypeId(material.getId()); existing.setSupplierId("SUP-F006");
-            existing.setReceiptDate(LocalDate.now()); existing.setReceiptQuantity(BigDecimal.TEN); existing.setQuantityUnit("kg");
-            existing.setUnitPrice(new BigDecimal("3")); existing.setWeightPerUnit(BigDecimal.ONE);
+            existing.setReceiptDate(LocalDate.now()); existing.setReceiptQuantity(BigDecimal.TEN); existing.setQuantityUnit(oldUnit);
+            existing.setUnitPrice(new BigDecimal(oldPrice)); existing.setWeightPerUnit(BigDecimal.ONE);
             existing.setUsedQuantity(BigDecimal.ZERO); existing.setReservedQuantity(BigDecimal.ZERO);
             existing.setStatus(MaterialBatchStatus.AVAILABLE); existing.setWarehouseId("WH-TEST"); existing.setCreatedBy(owners.first());
             existing.setSourceDocType("FREE_GIFT"); existing.setSourceDocId("REPLAY-DOC"); existing.setSourceEventKey("REPLAY-DOC#line:1");
@@ -216,9 +217,11 @@ class FreeGiftCostAtomicityRepositoryQueryValidationTest {
                     mapper, mock(MaterialConsumptionRepository.class), mock(ProductionPlanBatchUsageRepository.class),
                     mock(ExcelUtil.class), mock(FuturePlanMatchingService.class));
             ReflectionTestUtils.setField(service, "supplierRepository", suppliers);
+            ReflectionTestUtils.setField(service, "unitContractService",
+                    com.cretas.aims.service.unit.TestUnitContractFactory.contract());
             var request = new CreateMaterialBatchRequest(); request.setMaterialTypeId(material.getId());
             request.setSupplierId("SUP-F006"); request.setReceiptDate(LocalDate.now()); request.setReceiptQuantity(BigDecimal.TEN);
-            request.setQuantityUnit("kg"); request.setWarehouseId("WH-TEST"); request.setTotalWeight(BigDecimal.TEN);
+            request.setQuantityUnit(requestedUnit); request.setWarehouseId("WH-TEST"); request.setTotalWeight(BigDecimal.TEN);
             request.setTotalValue(BigDecimal.ZERO); request.setUnitPrice(BigDecimal.ZERO); request.setSourceDocType("FREE_GIFT");
             request.setSourceDocId("REPLAY-DOC"); request.setSourceLineNo("1"); request.setNotes("synthetic gift retry");
             service.createMaterialBatch("F006", request, owners.first()); return null;

@@ -632,7 +632,11 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
     private boolean unitsEquivalent(String factoryId, String left, String right) {
         if (left == null || right == null) return left == right;
-        if (unitContractService != null) return unitContractService.areEquivalent(factoryId, left, right);
+        if (unitContractService != null) {
+            String leftStorage = unitContractService.storageUnit(factoryId, left);
+            String rightStorage = unitContractService.storageUnit(factoryId, right);
+            return leftStorage != null && !leftStorage.isBlank() && leftStorage.equals(rightStorage);
+        }
         return UnitContractServiceImpl.crossLanguageCode(left)
                 .equals(UnitContractServiceImpl.crossLanguageCode(right));
     }
