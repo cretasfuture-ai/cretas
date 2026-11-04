@@ -58,17 +58,17 @@ public class KeywordLearningServiceImpl implements KeywordLearningService {
                 .filter(c -> !Boolean.FALSE.equals(c.getIsActive()));
     }
 
-    /** 人工添加的关键词: 不按训练授权拦, 但仍不许是本厂工艺保密产品名; 判断不了就不加。 */
+    /**
+     * 人工添加的关键词: 不按训练授权拦, 但仍不许是本厂工艺保密词 (全名 / 编码 / ID); 判断不了就不加。
+     * 走 {@link ProcessSecretSampleFilter#checkProtectedTerms} (挂起本方法所在的事务查库): 以前在事务里
+     * catch 名单查询异常, 外层事务已被标成只能回滚, 提交时抛 UnexpectedRollbackException (待办第 8 条)。
+     */
     private boolean manualKeywordAllowed(String factoryId, String keyword) {
         if (processSecretSampleFilter == null) {
             return false;
         }
-        try {
-            return !processSecretSampleFilter.mentionsProtectedProduct(factoryId, keyword);
-        } catch (RuntimeException e) {
-            log.warn("关键词保密产品检查失败, 不加: factory={}", factoryId);
-            return false;
-        }
+        return processSecretSampleFilter.checkProtectedTerms("manual_keyword", factoryId, keyword)
+                == ProcessSecretSampleFilter.SampleVerdict.CLEAR;
     }
 
     /** 这段原话 / 关键词能不能学进本厂 (训练授权、本厂保密产品名、配方参数 / 客户 / 人名规则)。 */

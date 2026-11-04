@@ -2,6 +2,7 @@ package com.cretas.aims.service.consent;
 
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.learning.FactoryNameDirectoryRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -15,16 +16,31 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 隐私条款第六条: 工艺保密产品的数据不用于训练。训练样本不带产品编号, 所以按名称判断:
- * 原话 / 问答里出现该厂任一保密产品的名称, 整条不进训练样本。名称少于 2 个字的不参与匹配
- * (避免单字误伤)。与 Python {@code smartbi/services/process_secret_names.py} 同一规则。
+ * 隐私条款第六条: 工艺保密产品的数据不用于训练; Steve 2026-10-24: 具体人名 / 客户名不进训练样本。
+ *
+ * <p>三套名单, 用途分开:
+ * <ul>
+ *   <li><b>本厂训练样本 / 学习</b> ({@link #checkTrainingSample}, {@link #trainingLists}; 按样本所属工厂的 d):
+ *       本厂「名单」= 保密产品的全名 / 编码 / ID ({@link ProcessSecretTerms}: 纯数字名与品类词不收,
+ *       编码按边界匹配) + 本厂人员姓名 + 本厂客户名称 (精确匹配)。与 Python
+ *       {@code smartbi/services/process_secret_names.py} 同一规则 (Steve 2026-10-29 选 A)。</li>
+ *   <li><b>写给所有工厂的共享内容</b> —— 平台级意图与晋升 / 回滚、全局人工说法 / 种子、共享短语表 / 全局知识, 全部用
+ *       <b>同一份</b>并集 ({@link #checkSharedContent}, {@link #allFactoriesPolicyTermsForSharedContent},
+ *       {@link #allFactoriesPolicyTermsForSharedContentOrNull}): 所有工厂全部策略产品 (含已软删除的) 的全名 / 编码 / ID /
+ *       专属别名, 品类词不收; <b>不看任何保密开关 (a–f)</b> —— 跨厂保护不受开关影响
+ *       (第四 / 五轮复审)。按 d 剔工厂的全厂并集已没有调用方, 删掉了 (d 只按样本所属工厂判, 见 {@link #trainingFilterOff})。</li>
+ *   <li><b>外发脱敏</b> ({@link #protectedProductNames}, {@link #mentionsAny}): 本厂生效中的保密产品名。</li>
+ * </ul>
  */
 @Component
 public class ProcessSecretSampleFilter {
@@ -35,11 +51,14 @@ public class ProcessSecretSampleFilter {
 
     private final ProcessSecretAccessService accessService;
     private final ProductTypeRepository productTypeRepository;
+    private final FactoryNameDirectoryRepository directoryRepository;
 
     public ProcessSecretSampleFilter(ProcessSecretAccessService accessService,
-                                     ProductTypeRepository productTypeRepository) {
+                                     ProductTypeRepository productTypeRepository,
+                                     FactoryNameDirectoryRepository directoryRepository) {
         this.accessService = accessService;
         this.productTypeRepository = productTypeRepository;
+        this.directoryRepository = directoryRepository;
     }
 
     /**
@@ -60,8 +79,7 @@ public class ProcessSecretSampleFilter {
         if (factoryId == null || factoryId.isBlank()) {
             return Set.of();
         }
-        Set<String> ids = new LinkedHashSet<>(accessService.protectedProductTypeIds(factoryId));
-        ids.addAll(accessService.switchedOffPolicyProductTypeIds(factoryId));
+        Set<String> ids = trainingPolicyProductIds(factoryId);
         if (ids.isEmpty()) {
             return Set.of();
         }
@@ -80,56 +98,133 @@ public class ProcessSecretSampleFilter {
 
     /**
      * 该厂「训练数据过滤」(d) 是否<b>关着</b> (按样本所属的工厂; 工厂不明 / 读不到 → 开着 → false)。关着时不按保密产品名
-     * 和配方参数 / 客户 / 人名关键词剔除该厂的训练样本; 训练授权 (同意 / 撤回) 不受影响。
+     * 和「工艺词 + 数值」剔除该厂的训练样本; <b>人名 / 客户名照样剔除</b> (隐私, 不归任何开关管, Steve 2026-11-04);
+     * 训练授权 (同意 / 撤回) 不受影响。
      * 问「关着吗」而不是「开着吗」: 被 mock 的默认 false 落在过滤照常生效那一边。
      */
     public boolean trainingFilterOff(String factoryId) {
         return !secrecy.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.TRAINING_FILTER);
     }
 
-    /** 平台改了保密配置后清名单缓存 (名单本身不看开关, 清掉只是不留旧状态窗口)。 */
-    public void invalidateNameCache() {
-        nameCache.invalidateAll();
+    /**
+     * 训练过滤 (d) 用的保密产品: 库里登记了保密策略的全部产品 = 生效中的 ({@code protectedProductTypeIds}) ∪ 因 a / e
+     * 关着而不生效的 ({@code switchedOffPolicyProductTypeIds}) —— 不看 a (Steve 2026-11-03 Q1=A)。
+     */
+    Set<String> trainingPolicyProductIds(String factoryId) {
+        Set<String> ids = new LinkedHashSet<>(accessService.protectedProductTypeIds(factoryId));
+        ids.addAll(accessService.switchedOffPolicyProductTypeIds(factoryId));
+        return ids;
     }
 
-    /** 收训练样本前的保密判断结果。只有 {@link #CLEAR} 才能存。 */
+    /** 平台改了保密配置后清名单缓存 (名单本身不看开关, 清掉只是不留旧状态窗口; 训练名单缓存一并清)。 */
+    public void invalidateNameCache() {
+        nameCache.invalidateAll();
+        listsCache.invalidateAll();
+    }
+
+    /** 收训练样本前的判断结果。只有 {@link #CLEAR} 才能直接存。 */
     public enum SampleVerdict {
-        /** 没提到本厂保密产品 */
+        /** 没提到本厂保密词 / 人员 / 客户 */
         CLEAR,
-        /** 提到了本厂保密产品, 不存 */
+        /** 提到了, 不存 */
         PROTECTED,
-        /** 名单查不出来 (查库失败等), 判断不了 —— 这一条不存, 也不影响调用方的主流程 */
+        /**
+         * 本厂名单这次查不出来, 按<b>上次成功的名单</b>判下来没问题 —— 不直接存, 挂起待重判
+         * (调用方交给 {@code TrainingSampleHoldStore}); 也不影响调用方的主流程
+         */
+        HELD,
+        /** 名单查不出来、也没有上次成功的名单, 判断不了 —— 这一条不存, 也不影响调用方的主流程 */
         UNVERIFIED
     }
 
+    /** 一家工厂的训练样本名单 (都已折叠)。 */
+    public record TrainingLists(Set<String> terms, Set<String> directory) {
+        public static final TrainingLists EMPTY = new TrainingLists(Set.of(), Set.of());
+
+    }
+
     static final String METRIC_SAMPLE_UNVERIFIED = "cretas.training_sample.secrecy_unverified";
+    static final String METRIC_SAMPLE_HELD = "cretas.training_sample.secrecy_held";
 
     @Autowired(required = false)
     private MeterRegistry meterRegistry;
 
     /**
-     * 收训练样本 (意图识别样本、低置信样本) 时用: 名单查库失败只丢掉这一条样本, 不抛给调用方 ——
+     * 收训练样本 (意图识别样本、低置信样本) 和学习原话前用: 名单查库失败不抛给调用方 ——
      * 识别请求照常返回 (2026-10-29: 名单查失败曾让用户的意图识别直接报错)。
      *
      * <p>不在调用方事务里查: 查库出错时仓库层会把所在事务标成只能回滚, 调用方即使接住异常,
      * 提交时也会抛 {@code UnexpectedRollbackException}, 结果还是传进识别流程。挂起外层事务后,
      * 出错只回滚名单查询自己的那个事务。代价: 名单查询看不到调用方事务里尚未提交的写入 (例如同一事务里刚设的保密产品),
-     * 收样本这个用途可以接受; 外发出口仍用 {@link #mentionsProtectedProduct} (在调用方事务里查)。
-     * 另: 识别管线里「样本写不进也不影响识别」依赖识别管线外面没有再包一层 {@code @Transactional} (目前没有);
-     * 将来若有人在外面加事务, 样本保存失败会把那层事务标成只能回滚。
+     * 收样本这个用途可以接受。收样本的调用方应在开事务<b>之前</b>调它 (否则缓存未命中时一次收样本占两个连接)。
      *
-     * <p>判断不了的样本没有「待复核」状态可放 (训练样本表没有状态列, 低置信样本表的状态里没有待复判),
-     * 所以不存, 记一条 WARN (工厂 + 原因, 不带原话) 和计数 {@value #METRIC_SAMPLE_UNVERIFIED}。
+     * <p>名单查不出来时按上次成功的名单判 ({@link SampleVerdict#HELD}: 挂起待重判); 连上次成功的名单都没有
+     * ({@link SampleVerdict#UNVERIFIED}) 才丢。两种都记一条 WARN (工厂 + 原因, 不带原话) 和计数。
      *
      * @param kind 样本类别, 进日志和计数标签 (如 {@code intent} / {@code active_learning})
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public SampleVerdict checkTrainingSample(String kind, String factoryId, String... texts) {
+        return check(kind, factoryId, true, texts);
+    }
+
+    /**
+     * 只查本厂<b>保密词</b> (不含人员 / 客户) —— 人工添加关键词用: 不按训练授权拦, 也不拦人名客户名,
+     * 但不许是本厂保密产品的全名 / 编码 / ID。事务与失败处理同 {@link #checkTrainingSample}。
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public SampleVerdict checkProtectedTerms(String kind, String factoryId, String... texts) {
+        return check(kind, factoryId, false, texts);
+    }
+
+    private SampleVerdict check(String kind, String factoryId, boolean withDirectory, String... texts) {
+        if (factoryId == null || factoryId.isBlank()) {
+            return SampleVerdict.UNVERIFIED;     // 没有工厂就没有可比的名单 (不用所有工厂的并集)
+        }
+        // 「训练数据过滤」(d; 按样本所属的工厂, 开关读不到按开着) 只管<b>保密产品词</b>。人名 / 客户名是隐私不是保密:
+        // 训练、学习、蒸馏样本里一律剔除, 任何开关都不管 (Steve 2026-11-04) —— 下面 withDirectory 不许跟着 d 走。
+        // 名单查不出来时两者同样: 按上次成功的名单判, 否则挂起 / 不存, 绝不直接存。训练授权由调用方照常判
+        boolean withTerms = !trainingFilterOff(factoryId);
+        if (!withTerms && !withDirectory) {
+            return SampleVerdict.CLEAR;          // 只查保密词的入口 (人工关键词), d 又关着: 没有要查的
+        }
         try {
-            return mentionsProtectedProduct(factoryId, texts) ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
+            TrainingLists lists = trainingLists(factoryId);
+            return names(lists, withTerms, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
         } catch (RuntimeException e) {
-            log.warn("训练样本保密判断失败, 本条不存: kind={}, factory={}, reason={}",
+            TrainingLists last = lastGoodLists.get(factoryId);
+            SampleVerdict verdict = last == null ? SampleVerdict.UNVERIFIED
+                    : names(last, withTerms, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.HELD;
+            log.warn("训练样本名单查询失败, {}: kind={}, factory={}, reason={}",
+                    verdict == SampleVerdict.HELD ? "按上次成功的名单判过, 挂起待重判"
+                            : verdict == SampleVerdict.PROTECTED ? "上次成功的名单里有, 不存" : "没有上次成功的名单, 本条不存",
                     kind, factoryId, e.getClass().getSimpleName());
+            if (meterRegistry != null && verdict != SampleVerdict.PROTECTED) {
+                meterRegistry.counter(verdict == SampleVerdict.HELD ? METRIC_SAMPLE_HELD : METRIC_SAMPLE_UNVERIFIED,
+                        "kind", kind == null ? "unknown" : kind).increment();
+            }
+            return verdict;
+        }
+    }
+
+    private static boolean names(TrainingLists lists, boolean withTerms, boolean withDirectory, String... texts) {
+        return (withTerms && ProcessSecretTerms.mentionsAny(lists.terms(), texts))
+                || (withDirectory && ProcessSecretTerms.mentionsAny(lists.directory(), texts));
+    }
+
+    /**
+     * 写<b>共享内容</b> (所有工厂都用得到的全局人工说法 / 种子、共享短语表、全局知识) 前用: 内容提到任何一家工厂的
+     * 保密词 → {@link SampleVerdict#PROTECTED}; 查不出来 → {@link SampleVerdict#UNVERIFIED} (不写)。
+     * <b>不看任何保密开关</b> (某厂关了 d 甚至全关, 它的保密词照样不能进共享内容; 第五轮复审)。
+     * 与 {@link #checkTrainingSample} 一样挂起调用方事务, 查库失败不把调用方事务标成只能回滚。
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public SampleVerdict checkSharedContent(String kind, String... texts) {
+        try {
+            return ProcessSecretTerms.mentionsAny(allFactoriesPolicyTermsForSharedContent(), texts)
+                    ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
+        } catch (RuntimeException e) {
+            log.warn("全局写入前的保密词查询失败, 不写: kind={}, reason={}", kind, e.getClass().getSimpleName());
             if (meterRegistry != null) {
                 meterRegistry.counter(METRIC_SAMPLE_UNVERIFIED, "kind", kind == null ? "unknown" : kind).increment();
             }
@@ -138,26 +233,85 @@ public class ProcessSecretSampleFilter {
     }
 
     /**
-     * 文本是否提到<b>任何一家</b>工厂的工艺保密产品。写全局 (所有工厂共享) 的说法 / 知识前用:
-     * 全局内容对每家工厂可见, 只查写入方自己那家不够 (Steve 2026-10-29: 保密内容不出本厂)。
-     * 查库出错照样抛, 调用方据此不写全局。一批写入 (种子、批量学习) 先取一次 {@link #allFactoriesProtectedNames()}
-     * 再用 {@link #mentionsAny} 逐条比对, 不要逐条查库。
+     * 一批共享写入 (种子) 先取一次所有工厂的保密词 (不看开关); 查库失败返回 null (调用方改逐条判), 不抛。
+     * 挂起调用方事务, 查库失败不把调用方事务标成只能回滚。
      */
-    public boolean mentionsAnyFactoryProtectedProduct(String... texts) {
-        return mentionsAny(allFactoriesProtectedNames(), texts);
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public Set<String> allFactoriesPolicyTermsForSharedContentOrNull() {
+        try {
+            return Set.copyOf(allFactoriesPolicyTermsForSharedContent());
+        } catch (RuntimeException e) {
+            log.warn("全厂训练保密词查询失败: {}", e.getClass().getSimpleName());
+            return null;
+        }
     }
 
     /**
-     * 所有工厂的工艺保密产品名 (并集; 一批写入取一次)。查库出错照样抛。
-     * 每次都算, 只剔除「训练数据过滤」(d) 关着的工厂; 每家的名字按 d 取 (不看 a, Q1=A)。
+     * <b>唯一一份</b>共享内容并集 (第六轮: 平台级意图与全局说法 / 短语表 / 知识用同一份): 所有工厂的保密词 —— 全名 / 编码 /
+     * ID / 专属别名, 与训练同一套词规则 (纯数字名、品类词不收: 泛泛的词不因保密被拦) —— 每次都算, <b>不看任何保密开关</b>:
+     * 登记了保密策略的每一家工厂 ({@code factoriesWithPolicyProducts}), 每家的全部策略产品 (含已软删除的)。
+     * 只取保密词, 不查人员 / 客户。查库出错照样抛。
      */
-    public Set<String> allFactoriesProtectedNames() {
-        Set<String> names = new LinkedHashSet<>();
-        for (String factoryId : accessService.factoriesWithProtectedProducts()) {
-            names.addAll(trainingProductNames(factoryId));
+    public Set<String> allFactoriesPolicyTermsForSharedContent() {
+        Set<String> terms = new LinkedHashSet<>();
+        for (String factoryId : accessService.factoriesWithPolicyProducts()) {
+            terms.addAll(policyTerms(factoryId, trainingPolicyProductIds(factoryId)));
         }
-        return names;
+        return terms;
     }
+
+    /**
+     * 本厂训练样本名单 (保密词 + 人员 + 客户)。保密产品取库里登记了保密策略的全部产品 (与 a / e 开不开无关, 只看 d,
+     * 由调用方 / {@link #check} 判 d)。按「工厂 + 当前保密产品集合」缓存 10 秒, 每次成功都记为
+     * 「上次成功的名单」。查库失败照样抛 (不缓存)。
+     */
+    public TrainingLists trainingLists(String factoryId) {
+        if (factoryId == null || factoryId.isBlank()) {
+            return TrainingLists.EMPTY;
+        }
+        Set<String> protectedIds = trainingPolicyProductIds(factoryId);     // 不看 a / e (Q1=A)
+        TrainingLists lists = listsCache.get(new NameKey(factoryId, Set.copyOf(protectedIds)),
+                key -> loadTrainingLists(factoryId, protectedIds));
+        lastGoodLists.put(factoryId, lists);
+        return lists;
+    }
+
+    private TrainingLists loadTrainingLists(String factoryId, Set<String> protectedIds) {
+        List<String> names = new ArrayList<>(directoryRepository.findPeopleNames(factoryId));
+        names.addAll(directoryRepository.findCustomerNames(factoryId));
+        return new TrainingLists(policyTerms(factoryId, protectedIds), ProcessSecretTerms.directoryNames(names));
+    }
+
+    /**
+     * 一家工厂的保密词 (全名 / 编码 / ID / 专属别名; {@link ProcessSecretTerms} 的词规则)。训练名单与共享内容并集共用这一份。
+     * 原生查询: 含已软删除的保密产品 (复审 N2; findAllById 会被 @Where 过滤掉), 与 Python 同一口径。
+     */
+    private Set<String> policyTerms(String factoryId, Set<String> protectedIds) {
+        List<ProcessSecretTerms.Product> products = new ArrayList<>();
+        List<String> aliases = new ArrayList<>();
+        if (!protectedIds.isEmpty()) {
+            for (Object[] r : directoryRepository.findProtectedProductRows(factoryId, protectedIds)) {
+                products.add(new ProcessSecretTerms.Product(str(r[0]), str(r[1]), str(r[2]), str(r[3]), str(r[4])));
+            }
+            // 专属别名: 保密负责人在保密设置里登记 (Steve 2026-11-03 Q1)
+            for (String raw : directoryRepository.findPolicyAliases(factoryId)) {
+                aliases.addAll(ProcessSecretTerms.policyAliases(raw));
+            }
+        }
+        return ProcessSecretTerms.secretTerms(products, aliases);
+    }
+
+    private static String str(Object o) {
+        return o == null ? null : o.toString();
+    }
+
+    private final Cache<NameKey, TrainingLists> listsCache = Caffeine.newBuilder()
+            .expireAfterWrite(NAME_CACHE_TTL)
+            .maximumSize(1_000)
+            .build();
+
+    /** 每家工厂上次成功查到的名单 (名单查询失败时兜底; 只在内存里, 进程重启后要先成功查一次)。 */
+    private final Map<String, TrainingLists> lastGoodLists = new ConcurrentHashMap<>();
 
     /**
      * 名单里任一名字出现在任一文本里。字母不分大小写 (「SecretX」与「secretx」算同一个名字 —— 说法学习会把原话转小写),

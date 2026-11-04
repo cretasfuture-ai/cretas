@@ -58,7 +58,8 @@ class TrainingSampleSecrecyLookupFailureContractTest {
 
     final ProcessSecretAccessService access = mock(ProcessSecretAccessService.class);
     final ProductTypeRepository products = mock(ProductTypeRepository.class);
-    final ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products);
+    final ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products,
+                com.cretas.aims.service.consent.TrainingListTestSupport.directoryBackedBy(products));
     final SimpleMeterRegistry meters = new SimpleMeterRegistry();
     final ListAppender<ILoggingEvent> logs = new ListAppender<>();
     final Logger filterLogger = (Logger) LoggerFactory.getLogger(ProcessSecretSampleFilter.class);
@@ -131,10 +132,13 @@ class TrainingSampleSecrecyLookupFailureContractTest {
 
         @Test
         void otherCallersStillSeeTheException() {
-            // 外发出口靠「查不出来就抛」来拒绝外发: 只有收样本这一个入口吞异常, 原方法不变
+            // 外发出口靠「查不出来就抛」来拒绝外发: 只有收样本这一个入口吞异常, 外发用的名单方法不变
             lookupFails();
             org.assertj.core.api.Assertions.assertThatThrownBy(
-                    () -> filter.mentionsProtectedProduct(FACTORY, PLAIN_TEXT))
+                    () -> filter.protectedProductNames(FACTORY))
+                    .isInstanceOf(DataAccessResourceFailureException.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> filter.trainingLists(FACTORY))
                     .isInstanceOf(DataAccessResourceFailureException.class);
         }
     }

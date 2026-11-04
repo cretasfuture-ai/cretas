@@ -14,6 +14,7 @@ import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.consent.LearningContentRules;
 import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
 import com.cretas.aims.service.consent.TrainingConsentService;
+import com.cretas.aims.service.consent.TrainingSampleHoldStore;
 import com.cretas.aims.service.consent.TrainingSampleRules;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -61,6 +62,10 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     @Autowired(required = false)
     @Lazy
     private IntentConfigManagementService intentConfigService;
+
+    /** 挂起待重判的样本写这里 (必需: 没有它 HELD 的样本只能丢); 手工 new 出来的测试实例为 null。 */
+    @Autowired
+    private TrainingSampleHoldStore holdStore;
 
     // ========== 飞轮 v2 常量 ==========
 
@@ -173,15 +178,18 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
      *
      * <ul>
      *   <li>全局 (空 / "*"): 只收人工预置 (MANUAL) 的说法 —— 系统从某家工厂学来的说法不许变成全局;
-     *       并且不许提到<b>任何一家</b>工厂的保密产品名 (全局说法每家工厂都匹配得到)。</li>
+     *       并且不许提到<b>任何一家</b>工厂的保密词 (全名 / 编码 / ID; 全局说法每家工厂都匹配得到)。</li>
      *   <li>本厂: {@link LearningContentRules#factoryLearnable} (与 {@link #recordSample} 同一套规则)。</li>
      * </ul>
-     * 判断所需的服务没有注入、或查询出错, 一律不学 (fail-closed)。
+     * 判断所需的服务没有注入、或查询出错, 一律不学 (fail-closed)。查询都走过滤器挂起本事务的方法
+     * ({@code checkSharedContent} / {@code allFactoriesPolicyTermsForSharedContentOrNull}; 全局说法每家工厂都匹配得到,
+     * 所以比对所有工厂的保密词、不看任何保密开关 —— 第五轮复审), 查库失败不会把本方法所在的事务
+     * 标成只能回滚 (待办第 8 条)。
      *
-     * @param globalProtectedNames 一批全局写入预先取好的全厂保密产品名; null = 需要时现查
+     * @param globalTerms 一批全局写入预先取好的全厂保密词; null = 这一条现查 (种子逐条)
      */
     boolean learnable(String factoryId, String expression, LearnedExpression.SourceType sourceType,
-                      Set<String> globalProtectedNames) {
+                      Set<String> globalTerms) {
         if (!isGlobalFactory(factoryId)) {
             return LearningContentRules.factoryLearnable(trainingConsentService, processSecretSampleFilter,
                     factoryId, expression);
@@ -190,18 +198,18 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
             log.warn("拒绝把系统学到的说法写成全局: factory={}, source={}", factoryId, sourceType);
             return false;
         }
-        try {
-            Set<String> names = globalProtectedNames != null ? globalProtectedNames
-                    : processSecretSampleFilter == null ? null : processSecretSampleFilter.allFactoriesProtectedNames();
-            if (names == null || ProcessSecretSampleFilter.mentionsAny(names, expression)) {
-                log.warn("全局说法提到工艺保密产品 (或无法判断), 不写: source={}", sourceType);
-                return false;
-            }
-            return true;
-        } catch (RuntimeException e) {
-            log.warn("全局说法写入前的保密产品检查失败, 不写: error={}", e.getClass().getSimpleName());
+        if (processSecretSampleFilter == null) {
+            log.warn("全局说法: 保密词判断未注入, 不写: source={}", sourceType);
             return false;
         }
+        boolean clear = globalTerms != null
+                ? !com.cretas.aims.service.consent.ProcessSecretTerms.mentionsAny(globalTerms, expression)
+                : processSecretSampleFilter.checkSharedContent("global_expression", expression)
+                        == ProcessSecretSampleFilter.SampleVerdict.CLEAR;
+        if (!clear) {
+            log.warn("全局说法提到工艺保密词 (或无法判断), 不写: source={}", sourceType);
+        }
+        return clear;
     }
 
     /** 读出口: 系统学来的全局行不给任何工厂用 ({@link LearningContentRules#servable})。 */
@@ -327,23 +335,23 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
     public int learnExpressions(String factoryId, String intentCode,
                                  List<String> expressions, double confidence,
                                  LearnedExpression.SourceType sourceType) {
-        // 全局批量写入 (种子): 全厂保密产品名只查一次, 不逐条查库; 查不到就整批不写 (fail-closed)
-        Set<String> globalNames = null;
+        // 全局批量写入 (种子): 全厂保密词先整批查一次; 查不到就改成逐条查 (待办第 2 条「种子逐条」:
+        // 一次查库失败不再让整批种子全丢, 每条各自判, 判不了的那条不写)。
+        // 都走过滤器挂起本事务的方法, 查库失败不把本事务标成只能回滚 (待办第 8 条)。
+        Set<String> globalTerms = null;
         if (isGlobalFactory(factoryId) && sourceType == LearnedExpression.SourceType.MANUAL) {
             if (processSecretSampleFilter == null) {
-                log.warn("全局说法批量写入: 保密产品判断未注入, 整批不写");
+                log.warn("全局说法批量写入: 保密词判断未注入, 整批不写");
                 return 0;
             }
-            try {
-                globalNames = processSecretSampleFilter.allFactoriesProtectedNames();
-            } catch (RuntimeException e) {
-                log.warn("全局说法批量写入: 全厂保密产品名查询失败, 整批不写 ({})", e.getClass().getSimpleName());
-                return 0;
+            globalTerms = processSecretSampleFilter.allFactoriesPolicyTermsForSharedContentOrNull();
+            if (globalTerms == null) {
+                log.warn("全局说法批量写入: 全厂保密词整批查询失败, 改为逐条判断 ({} 条)", expressions.size());
             }
         }
         int count = 0;
         for (String expr : expressions) {
-            if (learnExpression(factoryId, intentCode, expr, confidence, sourceType, globalNames) != null) {
+            if (learnExpression(factoryId, intentCode, expr, confidence, sourceType, globalTerms) != null) {
                 count++;
             }
         }
@@ -585,32 +593,44 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
 
     // ========== 训练样本收集 ==========
 
+    /**
+     * 不开事务 (待办第 10 条): 训练授权、本厂名单都在写入<b>之前</b>判完, 写入只有一条 save (仓库自己的事务) ——
+     * 以前整个方法在事务里, 名单缓存未命中时挂起事务再查名单, 一次收样本占两个连接。
+     */
     @Override
-    @Transactional
     public TrainingSample recordSample(String factoryId, String userInput,
                                         String intentCode, TrainingSample.MatchMethod method,
                                         double confidence, String sessionId) {
         if (userInput == null || userInput.trim().isEmpty()) {
             return null;
         }
-        // 训练规则 (2026-10-24): 撤回 / 查不到的工厂不存; 配方、工艺参数、客户名、人名不存;
-        // 未授权工厂脱敏后存
+        // 训练规则 (2026-10-24 / 10-29 选 A): 撤回 / 查不到的工厂不存; 配方 / 工艺参数词、工资 / 考勤词带具体数值不存;
+        // 本厂人员 / 客户 / 保密词不存; 未授权工厂脱敏后存
         TrainingConsentService.Status status = trainingConsentService.status(factoryId);
         if (!status.storable()) {
             return null;
         }
-        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本。名单查不出来 (UNVERIFIED) 也不存,
-        // 且不抛 —— 这里在意图识别链路上, 一条样本收不了不能让用户的识别请求失败 (2026-10-29)
-        if (processSecretSampleFilter.checkTrainingSample("intent", factoryId, userInput)
-                != ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
+        boolean authorized = status == TrainingConsentService.Status.AUTHORIZED;
+        // 该厂「训练数据过滤」(d) 关着 (#1400): 不按「工艺词 + 数值」拦, 未授权照旧脱敏数字; 工资 / 考勤词 + 数值这里
+        // 照样拦, 人名 / 客户名下面 checkTrainingSample 照样拦 (隐私, 不归 d 管)
+        String textToStore = TrainingSampleRules.textToStore(userInput.trim(), authorized,
+                processSecretSampleFilter.trainingFilterOff(factoryId));
+        if (textToStore == null) {
             return null;
         }
-        boolean authorized = status == TrainingConsentService.Status.AUTHORIZED;
-        // 该厂「训练数据过滤」(d) 关着: 不按配方参数 / 客户 / 人名关键词拦, 未授权照旧脱敏数字
-        String textToStore = processSecretSampleFilter.trainingFilterOff(factoryId)
-                ? (authorized ? userInput.trim() : TrainingSampleRules.maskNumbers(userInput.trim()))
-                : TrainingSampleRules.textToStore(userInput.trim(), authorized);
-        if (textToStore == null) {
+        // 隐私条款第六条 + 本厂人员 / 客户: 名单查不出来时按上次成功的名单判, 判过的挂起待重判 (HELD);
+        // 连上次的都没有 (UNVERIFIED) 不存。都不抛 —— 这里在意图识别链路上, 一条样本收不了不能让识别请求失败
+        ProcessSecretSampleFilter.SampleVerdict verdict =
+                processSecretSampleFilter.checkTrainingSample("intent", factoryId, userInput);
+        if (verdict == ProcessSecretSampleFilter.SampleVerdict.HELD) {
+            if (holdStore != null) {
+                // 原话原文 (复审 N3): 重判用原文; 放行时 recordSample 再按当时的授权脱敏
+                holdStore.holdIntent(factoryId, new TrainingSampleHoldStore.IntentSample(userInput.trim(), intentCode,
+                        method == null ? null : method.name(), confidence, sessionId));
+            }
+            return null;
+        }
+        if (verdict != ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
             return null;
         }
 

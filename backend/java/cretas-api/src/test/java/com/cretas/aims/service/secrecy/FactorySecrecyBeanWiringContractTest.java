@@ -51,6 +51,9 @@ class FactorySecrecyBeanWiringContractTest {
             .withBean(ProcessSecretGrantRepository.class, () -> mock(ProcessSecretGrantRepository.class))
             .withBean(ProcessSecretAuditRecorder.class, () -> mock(ProcessSecretAuditRecorder.class))
             .withBean(ProductTypeRepository.class, () -> mock(ProductTypeRepository.class))
+            // #1377: 训练名单 (保密产品 / 别名 / 人员 / 客户) 的原生查询
+            .withBean(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class,
+                    () -> mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class))
             .withBean(ObjectMapper.class, ObjectMapper::new)
             .withBean(ProcessSecretLlmCostScope.class, ProcessSecretLlmCostScope::standalone)
             .withBean(ProcessSecretExternalPackageRepository.class, () -> mock(ProcessSecretExternalPackageRepository.class))

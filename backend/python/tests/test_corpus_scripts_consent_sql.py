@@ -18,7 +18,9 @@ from smartbi.services.training_consent import RULE_KEY, usable_rows_sql
 def test_predicate_admits_only_seed_tenants_and_rule_checked_rows():
     sql = usable_rows_sql()
     assert "'SEED_F', 'SEED_R'" in sql
-    assert f"metadata ? '{RULE_KEY}'" in sql
+    # a REAL rule version, not just the key (a drill row carries training_rule = "drill")
+    assert f"metadata ->> '{RULE_KEY}') IN ('2026-10-24', '2026-11-03')" in sql
+    assert f"metadata ? '{RULE_KEY}'" not in sql
     # authorization alone never admits an unchecked row; withdrawal always excludes one
     assert "consent_scope" not in sql
     assert ("NOT EXISTS (SELECT 1 FROM training_consent tw WHERE tw.factory_id = "

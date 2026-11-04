@@ -1,25 +1,35 @@
 {
-  "_doc": "Shared cases for the training-sample rules (Steve 2026-10-24). utterance_cases run in Python (training_consent.desensitize_utterance) AND Java (TrainingSampleRules.textToStore); stored=null means not stored. qa_cases run in Python only (training_consent.qa_has_blocked_content).",
+  "_doc": "Shared cases for the training-sample rules (Steve 2026-10-24; content rule changed 2026-10-29 option A: a recipe / parameter word blocks only together with a concrete value; people / customers are matched exactly against the factory's own tables — see process_secret_filter_rule_cases.json). utterance_cases run in Python (training_consent.desensitize_utterance with an empty directory) AND Java (TrainingSampleRules.textToStore); stored=null means not stored. qa_cases run in Python only (training_consent.qa_has_blocked_content, directory from the case, default empty).",
   "utterance_cases": [
     {
-      "text": "这个产品的配方里盐放多少",
-      "authorized": false,
-      "stored": null
-    },
-    {
-      "text": "这个产品的配方里盐放多少",
+      "text": "本月工资 8000 元",
       "authorized": true,
       "stored": null
     },
     {
+      "text": "本月工资总额",
+      "authorized": true,
+      "stored": "本月工资总额"
+    },
+    {
+      "text": "这个产品的配方里盐放多少",
+      "authorized": false,
+      "stored": "这个产品的配方里盐放多少"
+    },
+    {
+      "text": "这个产品的配方里盐放多少",
+      "authorized": true,
+      "stored": "这个产品的配方里盐放多少"
+    },
+    {
       "text": "杀菌温度一般设多少",
       "authorized": false,
-      "stored": null
+      "stored": "杀菌温度一般设多少"
     },
     {
       "text": "发酵终点 pH 控制在哪",
       "authorized": false,
-      "stored": null
+      "stored": "发酵终点 pH 控制在哪"
     },
     {
       "text": "我们腌制和滚揉一起做",
@@ -54,7 +64,7 @@
     {
       "text": "联系张三 13812345678 身份证 110101199003071234",
       "authorized": false,
-      "stored": null
+      "stored": "联系张三 <电话> 身份证 <证件号>"
     },
     {
       "text": "打款到 6222021234567890123",
@@ -62,9 +72,9 @@
       "stored": "打款到 <卡号>"
     },
     {
-      "text": "全角数字１２３保持不变",
+      "text": "全角数字１２３也遮 (second review B1: full-width digits are values)",
       "authorized": false,
-      "stored": "全角数字１２３保持不变"
+      "stored": "全角数字<数值>也遮 (second review B1: full-width digits are values)"
     },
     {
       "text": "身份证 110101199003071234 手机 13812345678 登记一下",
@@ -74,12 +84,12 @@
     {
       "text": "查一下张记食品有限公司这个客户的订单",
       "authorized": true,
-      "stored": null
+      "stored": "查一下张记食品有限公司这个客户的订单"
     },
     {
       "text": "客户：华联 还欠多少",
       "authorized": false,
-      "stored": null
+      "stored": "客户：华联 还欠多少"
     },
     {
       "text": "大客户这个月下了多少单",
@@ -89,12 +99,12 @@
     {
       "text": "操作员王五报工",
       "authorized": false,
-      "stored": null
+      "stored": "操作员王五报工"
     },
     {
       "text": "李经理要的报表",
       "authorized": true,
-      "stored": null
+      "stored": "李经理要的报表"
     },
     {
       "text": "联系方式在哪里改",
@@ -105,6 +115,16 @@
       "text": "怎么提高总产量",
       "authorized": false,
       "stored": "怎么提高总产量"
+    },
+    {
+      "text": "杀菌温度调到 121 度",
+      "authorized": false,
+      "stored": null
+    },
+    {
+      "text": "配方里盐放 3 克",
+      "authorized": true,
+      "stored": null
     }
   ],
   "qa_cases": [
@@ -136,27 +156,27 @@
     {
       "input": "产品配方表如下",
       "answer": "已读取",
-      "blocked": true
+      "blocked": false
     },
     {
       "input": "为什么返工多",
       "answer": "回料比例高",
-      "blocked": true
+      "blocked": false
     },
     {
       "input": "本月工资总额",
       "answer": "人工成本 35 万",
-      "blocked": true
+      "blocked": false
     },
     {
       "input": "张记食品有限公司这个客户的回款情况",
       "answer": "回款正常",
-      "blocked": true
+      "blocked": false
     },
     {
       "input": "客户：华联 欠款多少",
       "answer": "欠款 12 万元",
-      "blocked": true
+      "blocked": false
     },
     {
       "input": "大客户占比多少",
@@ -171,12 +191,12 @@
     {
       "input": "这批货谁签收的",
       "answer": "签收人：李四",
-      "blocked": true
+      "blocked": false
     },
     {
       "input": "王总要求加急",
       "answer": "已安排",
-      "blocked": true
+      "blocked": false
     },
     {
       "input": "怎么提高总产量",
@@ -187,6 +207,32 @@
       "input": "负责人于今日确认库存",
       "answer": "库存正常",
       "blocked": false
+    },
+    {
+      "input": "产品配方表如下：盐 3%、糖 5%",
+      "answer": "已读取",
+      "blocked": true
+    },
+    {
+      "input": "这批货谁签收的",
+      "answer": "签收人：李四",
+      "directory": [
+        "李四"
+      ],
+      "blocked": true
+    },
+    {
+      "input": "客户：华联 欠款多少",
+      "answer": "欠款 12 万元",
+      "directory": [
+        "华联"
+      ],
+      "blocked": true
+    },
+    {
+      "input": "本月工资总额 35 万",
+      "answer": "已统计",
+      "blocked": true
     }
   ]
 }

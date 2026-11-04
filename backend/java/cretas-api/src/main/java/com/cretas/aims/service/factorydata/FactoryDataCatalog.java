@@ -86,10 +86,15 @@ public final class FactoryDataCatalog {
      * (backend/python/smartbi/services/training_consent.py RULE_KEY / DESENSITIZED_KEY)。
      * 已授权工厂原样存的样本只有 training_rule 没有 desensitized, 属于原始记录, 删除。
      * Java 侧的意图样本 (ai_training_samples / active_learning_samples) 没有脱敏标记, 按业务数据删除。
+     *
+     * <p>挂起待重判 ({@code secrecy_recheck}, 标记里可能带原话原文) 与重判没过 ({@code secrecy_rejected}) 的行
+     * 一律不保留、随工厂删除 (训练过滤复审第二轮第 1 条: 否则原文在删厂之后还留着)。用 {@code -> ... IS NULL}
+     * 而不是 jsonb 的 {@code ?} 运算符: JDBC 会把 {@code ?} 当参数占位符。
      */
     private static final Map<String, String> TRAINING_RETAIN = Map.of(
             "smart_bi_distillation_samples",
-            "metadata ->> 'training_rule' IS NOT NULL AND metadata ->> 'desensitized' = 'true'");
+            "metadata ->> 'training_rule' IS NOT NULL AND metadata ->> 'desensitized' = 'true'"
+                    + " AND (metadata -> 'secrecy_recheck') IS NULL AND (metadata -> 'secrecy_rejected') IS NULL");
 
     /**
      * 按工厂备份的套餐 / 改动留痕 / 执行记录 (V20261103_91) 也是回执: 它们证明「这个厂的备份删干净了」,

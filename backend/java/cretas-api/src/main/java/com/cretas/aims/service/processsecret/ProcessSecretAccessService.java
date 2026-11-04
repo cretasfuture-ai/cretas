@@ -49,8 +49,9 @@ import java.util.stream.Collectors;
  *   <li>客户侧保管 (e) 与 a 无关: e 开着时 B 档产品照旧受保护 (即使 a 关); e 关时 B 档按 A 档处理 (a 也关则不保护)。</li>
  *   <li>平台看不到配方 (b) 只在 a 开时起作用: a 开、b 关时平台账号对该厂按 FULL 处理 (照样记审计),
  *       本厂无权账号照旧被遮。</li>
- *   <li>训练数据过滤 (d): {@link #factoriesWithProtectedProducts} (写全局共享内容时比对的全厂并集) 每次都算,
- *       只剔除 d 关闭的工厂。</li>
+ *   <li>训练数据过滤 (d) 不在这里判: 只按<b>样本所属的工厂</b>判 ({@code ProcessSecretSampleFilter.trainingFilterOff})。
+ *       写给所有工厂的共享内容用的全厂并集 {@link #factoriesWithPolicyProducts} <b>不看任何开关</b> —— 跨厂保护不受开关影响
+ *       (第四 / 五轮复审; 以前那份按 d 剔工厂的并集已删)。</li>
  * </ul>
  */
 @Service
@@ -217,17 +218,15 @@ public class ProcessSecretAccessService {
     }
 
     /**
-     * 有任一工艺保密产品、且训练数据过滤 (d) 开着的工厂 (每次现查, 不缓存)。只给「写全局共享内容」这种低频路径用:
-     * 写进全局的东西所有工厂都看得到, 要对每一家工厂的保密产品名都查一遍 (Steve 2026-10-29)。
-     * ⛔ 并集每次都算, 只剔除 d 关闭的工厂 —— 不按写入者那一家的开关短路 (否则别厂的保密名会进全局行)。
-     * 查库出错照样抛给调用方, 调用方据此不写全局; 开关读不到按开启 (不剔除)。
+     * 库里登记了任一保密策略的全部工厂 (每次现查, 不缓存), <b>不看任何保密开关 (a–f)</b>。给「写所有工厂都看得到的共享内容」
+     * (平台级意图、意图晋升 / 回滚、全局人工说法 / 种子、共享短语表 / 全局知识) 用: 那是跨厂保护, Steve 的规矩是任何开关都不能削弱跨厂保护
+     * (第四轮复审第 1 条: 以前共享配置走了下面按 d 剔除的那份, 某厂关了 d 它的保密名就能写进平台级意图)。
+     * 查库出错照样抛给调用方, 调用方据此不写。
      */
-    public Set<String> factoriesWithProtectedProducts() {
+    public Set<String> factoriesWithPolicyProducts() {
         return policyRepository.findAll().stream()
                 .map(ProcessSecretPolicy::getFactoryId)
                 .filter(f -> f != null && !f.isBlank())
-                .distinct()
-                .filter(f -> secrecy.isOn(f, SecrecyItem.TRAINING_FILTER))
                 .collect(Collectors.toUnmodifiableSet());
     }
 

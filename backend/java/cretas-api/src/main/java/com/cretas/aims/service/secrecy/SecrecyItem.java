@@ -31,7 +31,7 @@ public enum SecrecyItem {
                     + "不知道数据属于哪家工厂时，仍然不发。"),
 
     TRAINING_FILTER("d", "训练数据过滤", Default.OFF, false, false, false, null, null,
-            "关闭后，本厂的对话不再因为提到保密产品名、配方参数、客户名或人名而被排除在训练样本之外。"
+            "关闭后，保密产品名和工艺数值不再从训练样本中剔除；人名、客户名、工资考勤数字始终剔除，不受此项影响。"
                     + "能不能用于训练仍按本厂的训练授权（同意 / 撤回）决定。"),
 
     CUSTOMER_HELD("e", "客户侧保管（核心工艺不入云）", Default.OFF, false, true, true,

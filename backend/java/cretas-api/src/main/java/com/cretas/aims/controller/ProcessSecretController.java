@@ -41,7 +41,9 @@ public class ProcessSecretController {
         this.externalService = externalService;
     }
 
-    public record PolicyRequest(ProcessSecretStorageMode storageMode, Long ownerUserId, Long expectedPolicyVersion) { }
+    /** {@code aliases}: 专属别名 (可选; 不传 = 不改, 传空数组 = 清空), 与改策略同一道权限 (Steve 2026-11-03 Q1)。 */
+    public record PolicyRequest(ProcessSecretStorageMode storageMode, Long ownerUserId, Long expectedPolicyVersion,
+                                List<String> aliases) { }
 
     @GetMapping("/policies")
     @Operation(summary = "本厂已设保密的产品 (只含策略元信息)")
@@ -57,7 +59,7 @@ public class ProcessSecretController {
             @RequestBody PolicyRequest body, HttpServletRequest request) {
         if (body == null) throw new BusinessException(400, "请求体不能为空");
         return ApiResponse.success(policyService.upsertPolicy(actor(request), factoryId, productTypeId,
-                body.storageMode(), body.ownerUserId(), body.expectedPolicyVersion()));
+                body.storageMode(), body.ownerUserId(), body.expectedPolicyVersion(), body.aliases()));
     }
 
     @DeleteMapping("/policies/{productTypeId}")

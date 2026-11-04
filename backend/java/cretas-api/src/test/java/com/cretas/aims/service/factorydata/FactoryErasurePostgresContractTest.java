@@ -151,7 +151,20 @@ class FactoryErasurePostgresContractTest {
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples WHERE factory_id = '" + FA + "'")).isZero();
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples WHERE factory_id IS NULL AND input_text = 'A-DESENSITIZED'")).isEqualTo(1);
         assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples WHERE input_text = 'A-RAW'")).isZero();
+        // the other factory's sample is untouched (review round 3, item 4)
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples"
+                + " WHERE input_text = 'B-RAW' AND factory_id = '" + FB + "' AND metadata = '{}'::jsonb")).isEqualTo(1);
         assertThat(receipt.smartbi().trainingSamplesRetained()).isEqualTo(1);
+        // second review, item 1: held / rejected rows are never kept by the erasure, whatever their stamp;
+        // no raw text of the factory survives in either database
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples"
+                + " WHERE input_text IN ('A-HELD', 'A-REJECTED')")).isZero();
+        assertThat(count(smartbiAdmin, "SELECT count(*) FROM " + schema + ".smart_bi_distillation_samples"
+                + " WHERE metadata::text LIKE '%RAWSECRET%' OR input_text LIKE '%RAWSECRET%'")).isZero();
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".training_sample_secrecy_holds"
+                + " WHERE payload LIKE '%RAWSECRET%' OR factory_id = '" + FA + "'")).isZero();
+        assertThat(count(main, "SELECT count(*) FROM " + schema + ".training_sample_secrecy_holds"
+                + " WHERE factory_id = '" + FB + "'")).isEqualTo(1);
 
         // 口径 Q3: 审计挪进留存区, 只有四个字段, 6 个月后到期
         try (Connection c = main.getConnection(); Statement st = c.createStatement();
@@ -532,6 +545,12 @@ class FactoryErasurePostgresContractTest {
         base.main = main;
         base.smartbi = smartbiAdmin;
         base.seedCleanTenants();
+        // Java side: held intent samples keep the raw text until judged (V20261104_22); a tenant table, so erased
+        exec(main, "SET search_path = " + schema + ";"
+                + "CREATE TABLE training_sample_secrecy_holds (id bigint PRIMARY KEY, factory_id varchar(50) NOT NULL,"
+                + " payload text NOT NULL);"
+                + "INSERT INTO training_sample_secrecy_holds VALUES (1, '" + FA + "', '{\"userInput\":\"RAWSECRET-HOLD\"}'),"
+                + " (2, '" + FB + "', '{\"userInput\":\"B-HOLD\"}');");
         exec(main, "SET search_path = " + schema + ";"
                 + "INSERT INTO operation_logs (id, factory_id, user_id, username, module, action, entity_type, entity_id, old_value, ip_address, success, created_at)"
                 + " VALUES (1, '" + FA + "', 1, 'a_admin', 'sales', 'create', 'sales_order', '10', '{\"v\":\"SECRET-OLD-VALUE\"}', '10.0.0.1', true, now()),"
@@ -540,7 +559,13 @@ class FactoryErasurePostgresContractTest {
                 + "INSERT INTO smart_bi_distillation_samples (id, factory_id, input_text, metadata) VALUES"
                 + " (1, '" + FA + "', 'A-DESENSITIZED', '{\"training_rule\":\"2026-10-24\",\"desensitized\":true}'),"
                 + " (2, '" + FA + "', 'A-RAW', '{\"training_rule\":\"2026-10-24\"}'),"
-                + " (3, '" + FB + "', 'B-RAW', '{}');"
+                + " (3, '" + FB + "', 'B-RAW', '{}'),"
+                // shaped as the reviewed head (f1325735af) wrote them: a held row stamped desensitized while its
+                // marker carries the raw text, and a rejected row that copied the marker (second review, item 1)
+                + " (4, '" + FA + "', 'A-HELD', '{\"training_rule\":\"2026-11-03\",\"desensitized\":true,"
+                + "\"secrecy_recheck\":{\"raw_input\":\"RAWSECRET-398礼盒的配方\",\"raw_output\":\"RAWSECRET-OUT\"}}'),"
+                + " (5, '" + FA + "', 'A-REJECTED', '{\"training_rule\":\"2026-11-03\",\"desensitized\":true,"
+                + "\"secrecy_rejected\":{\"reason\":\"names_factory_list\",\"hold\":{\"raw_input\":\"RAWSECRET-IN\"}}}');"
                 + "INSERT INTO smart_bi_llm_egress_audit (id, created_at, call_site, provider, model, factory_id, status_code) VALUES"
                 + " (1, now(), 'chart_insight', 'dashscope', 'qwen', '" + FA + "', 200),"
                 + " (2, now(), 'chart_insight', 'dashscope', 'qwen', '" + FB + "', 200);"

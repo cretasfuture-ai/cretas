@@ -996,7 +996,13 @@ public class IntentAnalysisController {
                 intent.getExamples(), intent.getFollowUpQuestions()};
         boolean mentions;
         try {
-            mentions = processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(texts);
+            // 跨厂保护: 与全局说法 / 短语表同一份共享并集 (全名 / 编码 / ID / 别名), 不看任何保密开关 (第四 / 六轮复审)
+            com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict verdict =
+                    processSecretSampleFilter.checkSharedContent("intent_promotion", texts);
+            if (verdict == com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.UNVERIFIED) {
+                throw new IllegalStateException("shared-content secrecy check unavailable");
+            }
+            mentions = verdict != com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR;
         } catch (RuntimeException e) {
             log.warn("晋升前的保密产品检查失败, 不晋升: intent={}", intent.getIntentCode());
             throw new BusinessException(503, "暂时无法核对工艺保密产品, 未晋升, 请稍后重试");

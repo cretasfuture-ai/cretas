@@ -61,7 +61,9 @@ def test_stray_family_clamped_no_keyerror():
 
 import pytest  # noqa: E402
 
-_PROTECTED = {"F_A": frozenset({"秘制牛肉干"}), "F_B": frozenset({"祖传卤汁鸭"})}
+from smartbi.services.process_secret_names import lists_from_rows  # noqa: E402
+
+_PROTECTED = {"F_A": lists_from_rows([{"name": "秘制牛肉干"}], ()), "F_B": lists_from_rows([{"name": "祖传卤汁鸭"}], ())}
 
 
 def _sample(fid, query, answer="原因是原料涨价"):
@@ -72,10 +74,10 @@ def _sample(fid, query, answer="原因是原料涨价"):
 
 _SAMPLES = [
     _sample("F_A", "秘制牛肉干利润为什么下降"),                 # own factory's product -> hidden
-    _sample(None, "为什么上周退货变多", "祖传卤汁鸭退货最多"),     # no factory, F_B's product -> hidden
+    _sample(None, "为什么上周退货变多", "祖传卤汁鸭退货最多"),     # no factory -> hidden (cannot be checked)
     _sample("F006", "秘制牛肉干销量为什么下滑"),                 # not F006's product -> shown
-    _sample(None, "为什么毛利率下降"),                          # control, twice -> count 2
-    _sample(None, "为什么毛利率下降"),
+    _sample("F_C", "为什么毛利率下降"),                         # control, twice -> count 2
+    _sample("F_C", "为什么毛利率下降"),
 ]
 
 
@@ -115,7 +117,7 @@ async def test_report_hides_rows_naming_a_process_secret_product(monkeypatch, ca
 
     pool = _Pool(_SAMPLES)
     _patch_pool(monkeypatch, pool)
-    monkeypatch.setattr(mod, "all_protected_product_names", names)
+    monkeypatch.setattr(mod, "all_factory_lists", names)
     await mod._run(None, min_count=1)
     out = capsys.readouterr().out
     assert "training_rule" in pool.sql[0]                   # usable_rows_sql is applied
@@ -131,7 +133,7 @@ async def test_report_aborts_when_the_name_lookup_fails(monkeypatch, capsys):
         raise RuntimeError("cretas db unavailable")
 
     _patch_pool(monkeypatch, _Pool(_SAMPLES))
-    monkeypatch.setattr(mod, "all_protected_product_names", boom)
+    monkeypatch.setattr(mod, "all_factory_lists", boom)
     with pytest.raises(RuntimeError, match="cretas db unavailable"):
         await mod._run(None, min_count=1)
     assert "为什么毛利率下降" not in capsys.readouterr().out

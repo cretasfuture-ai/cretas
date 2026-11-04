@@ -21,6 +21,10 @@ export interface ProcessSecretPolicy {
   policyVersion: number;
   currentUserIsOwner: boolean;
   updatedAt?: string | null;
+  /** 专属别名 (只给负责人看; 别人为 null)。 */
+  aliases?: string[] | null;
+  /** 保存时的提示 (不是拒绝, 只在保存的响应里有), 页面必须显示。 */
+  warnings?: string[] | null;
 }
 
 export interface ProcessSecretGrant {

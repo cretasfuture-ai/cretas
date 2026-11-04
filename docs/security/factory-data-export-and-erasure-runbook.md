@@ -14,7 +14,7 @@
 | Q1 | 谁能发起 | **只走平台**：工厂总监书面申请（微信 / 邮件留底），平台核对身份后执行。总监自助导出放第二期 |
 | Q2 | 删除冷静期 | **7 天**：申请当天停用工厂、禁止登录；7 天内可撤销；第 8 天起才允许物理删除 |
 | Q3 | 审计 / 留痕 | **保留 6 个月**：删除时挪到单独的留存区，只留谁、何时、做了什么、对象编号，去掉内容字段，到期自动清除 |
-| Q4 | 训练样本 | **保留脱敏样本，删原始记录**：带 `training_rule` 且 `desensitized=true` 标记的样本保留，并**清空工厂编号**，与已删工厂断开；已授权工厂原样存的样本、没有标记的样本都算原始记录，删除 |
+| Q4 | 训练样本 | **保留脱敏样本，删原始记录**：带 `training_rule` 且 `desensitized=true` 标记的样本保留，并**清空工厂编号**，与已删工厂断开；已授权工厂原样存的样本、没有标记的样本都算原始记录，删除；挂起待重判（`secrecy_recheck`，可能带原文）与重判没过（`secrecy_rejected`）的行一律不保留、删除 |
 | Q5 | 导出格式 | **可选、可组合**：CSV / Excel / JSON 任选一种或多种，ZIP 打包；manifest（行数 + SHA256）与附件目录照常带上；Excel 超出行数或 sheet 名长度限制时自动拆分，并在 manifest 注明 |
 | Q6 | 临时备份 | **30 天保留期 + 每日自动清理**（先落清单再删）；删除工厂时同时清掉该厂在库内副本里的行。首次清理现存副本前，清单和计数先给 Steve 过目 |
 
@@ -47,7 +47,7 @@
 | 业务数据（默认） | 所有带租户列的表，以及它们顺外键找到的子表 | ✅ | ✅ | 承诺的主体 |
 | 工厂主记录 | `factories` 中 `id = 编号` 的那一行 | ✅ | ✅ 最后删 | 其他表都引用它 |
 | 审计 / 留痕 | `platform_data_access_log`、`operation_logs`、`tool_execution_audit_events`、`process_secret_access_events`、SmartBI `smart_bi_llm_egress_audit` | ✅ | 先把谁 / 何时 / 做了什么 / 对象编号写进留存区 `factory_erasure_audit_retention`，再删原表 | Q3；《网络安全法》第 21 条：网络日志留存不少于 6 个月 |
-| 训练样本 | SmartBI `smart_bi_distillation_samples` | ✅ | 脱敏样本（`training_rule` + `desensitized=true`）保留并清空工厂编号；其余删除 | Q4 |
+| 训练样本 | SmartBI `smart_bi_distillation_samples` | ✅ | 脱敏样本（`training_rule` + `desensitized=true`，且不带 `secrecy_recheck` / `secrecy_rejected`）保留并清空工厂编号；其余删除 | Q4 |
 | 库内副本 | `public` 里的 `backup_*` / `repair_backup_*` / `bak_*`，以及其他 schema 里带 `factory_id` 的表 | ⛔（不是业务数据） | ✅ 删该厂的行；账号没有权限的那几份随 30 天保留期过期（回执写明） | Q6 |
 | 凭证类列 | 任何表里名字含 `password` / `secret` / `token` / `api_key` / `credential` / `private_key` / `salt` 的列 | ⛔ 值替换成 `[已移除]` | 随行删 | 导出包会离开平台 |
 | 回执 | `factory_data_requests`、`factory_erasure_audit_retention` | ⛔ | ⛔ 保留 | 证明「删过了、删了多少」；只存编号、计数和时间 |

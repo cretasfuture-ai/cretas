@@ -148,7 +148,8 @@ class FactorySecrecyCrossFactoryNegativeContractTest {
         TrainingConsentService consent = mock(TrainingConsentService.class);
         when(consent.status(anyString())).thenReturn(TrainingConsentService.Status.AUTHORIZED);
         ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(mock(ProcessSecretAccessService.class),
-                mock(com.cretas.aims.repository.ProductTypeRepository.class));
+                mock(com.cretas.aims.repository.ProductTypeRepository.class),
+                mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class));
         filter.setFactorySecrecyConfig(config);
         for (String global2 : new String[]{null, "", "*"}) {
             assertThat(LearningContentRules.factoryLearnable(consent, filter, global2, "查一下今天的产量"))

@@ -9,7 +9,8 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <ul>
  *   <li>{@link #factoryLearnable}: 只写进<b>本厂</b>的东西。与训练样本 ({@code recordSample}) 同一套规则:
- *       撤回 / 查不到授权状态不学; 提到本厂工艺保密产品不学; 配方 / 工艺参数、具体客户名、人名不学。</li>
+ *       撤回 / 查不到授权状态不学; 提到本厂工艺保密产品不学; 配方 / 工艺参数、具体客户名、人名、
+ *       工资 / 考勤数值不学。</li>
  *   <li>{@link #isGlobalFactory}: 工厂字段为空、空白或 "*" 的行对所有工厂可见。</li>
  *   <li>{@link #servable}: 读出口 —— 系统学来的全局行 (不是人工预置 MANUAL) 来自某一家工厂, 不给任何工厂用。</li>
  * </ul>
@@ -26,7 +27,15 @@ public final class LearningContentRules {
         return factoryId == null || factoryId.isBlank() || "*".equals(factoryId.trim());
     }
 
-    /** 这段原话能不能学进本厂 (全局一律不行, 全局写入走人工预置 + 全厂保密名单检查)。 */
+    /**
+     * 这段原话能不能学进本厂 (全局一律不行, 全局写入走人工预置 + 全厂保密名单检查)。
+     *
+     * <p>本厂名单 (保密词 + 人员 + 客户) 走 {@link ProcessSecretSampleFilter#checkTrainingSample}: 它挂起调用方事务查库,
+     * 查库失败不会把调用方 (learnKeywords / learnExpression 等 {@code @Transactional} 方法) 的事务标成只能回滚
+     * (2026-10-29 待办第 8 条: 以前在事务里 catch 名单查询的异常, 提交时抛 {@code UnexpectedRollbackException})。
+     * 只有 {@link ProcessSecretSampleFilter.SampleVerdict#CLEAR} 才学 —— 学到的东西立即生效, 没有「挂起」可放,
+     * 所以按上次成功名单判过的 (HELD) 也不学。
+     */
     public static boolean factoryLearnable(TrainingConsentService consent, ProcessSecretSampleFilter filter,
                                            String factoryId, String text) {
         if (isGlobalFactory(factoryId) || text == null || text.isBlank()) {
@@ -36,20 +45,26 @@ public final class LearningContentRules {
             log.warn("训练授权 / 保密产品判断未注入, 不学: factory={}", factoryId);
             return false;
         }
-        try {
-            if (!consent.status(factoryId).storable()) {
-                return false;
-            }
-            if (filter.mentionsProtectedProduct(factoryId, text)) {
-                log.info("原话提到本厂工艺保密产品, 不学: factory={}", factoryId);
-                return false;
-            }
-            // 「训练数据过滤」(d) 关着的工厂不按配方参数 / 客户 / 人名关键词拦 (训练授权上面已判)
-            return filter.trainingFilterOff(factoryId) || !TrainingSampleRules.utteranceHasBlockedContent(text);
-        } catch (RuntimeException e) {
-            log.warn("学习前的保密 / 授权判断失败, 不学: factory={}, error={}", factoryId, e.getClass().getSimpleName());
+        // 该厂「训练数据过滤」(d) 关着: 不按「工艺词 + 数值」拦。工资 / 考勤词 + 数值这里照样拦, 人名 / 客户名下面
+        // checkTrainingSample 照样拦 (隐私, 不归 d 管)
+        if (TrainingSampleRules.utteranceBlocked(text, filter.trainingFilterOff(factoryId))) {
             return false;
         }
+        try {
+            if (!consent.status(factoryId).storable()) {      // status() 自己吞掉查询错误, 判为不可存
+                return false;
+            }
+        } catch (RuntimeException e) {
+            log.warn("学习前的授权判断失败, 不学: factory={}, error={}", factoryId, e.getClass().getSimpleName());
+            return false;
+        }
+        ProcessSecretSampleFilter.SampleVerdict verdict = filter.checkTrainingSample("learning", factoryId, text);
+        if (verdict != ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
+            log.info("原话提到本厂保密词 / 人员 / 客户, 或本厂名单判断不了, 不学: factory={}, verdict={}",
+                    factoryId, verdict);
+            return false;
+        }
+        return true;
     }
 
     /** 系统学来的全局行 (全局且不是 MANUAL): 不给任何工厂用。 */

@@ -253,7 +253,8 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
         "insights": {"top_n_by_dim": "门店 A 因核心商圈贡献过半; 建议复制选址。"},
     }, ensure_ascii=False))
 
-    await lm.generate_llm_insights(results, "restaurant", factory_id="RES_TEST_001")
+    # factory domain: restaurant rows are not training data (餐饮废弃, 2026-10-29 待办第 7 条)
+    await lm.generate_llm_insights(results, "factory", factory_id="RES_TEST_001")
 
     assert len(sink) == 1, "exactly one distillation row should be written"
     sql, args = sink[0]
@@ -263,7 +264,7 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
     #   task_type, template_codes, system_prompt, input_text, teacher_model,
     #   teacher_output, input_hash, quality, metadata
     assert args[0] == "materialization"
-    assert args[1] == "restaurant"
+    assert args[1] == "factory"
     assert args[2] == "RES_TEST_001"
     assert args[3] == "insights"
     assert "top_n_by_dim" in args[4]
@@ -296,11 +297,12 @@ async def test_distillation_desensitized_for_factory_without_training_consent(mo
         "insights": {"top_n_by_dim": "门店 A 因核心商圈贡献过半; 建议复制选址。"},
     }, ensure_ascii=False))
 
-    await lm.generate_llm_insights(results, "restaurant", factory_id="F_NO_CONSENT")
+    await lm.generate_llm_insights(results, "factory", factory_id="F_NO_CONSENT")
     assert len(sink) == 1, "un-authorized factory: stored desensitized"
     _, args = sink[0]
     meta = json.loads(args[11])
-    assert meta["desensitized"] is True and meta["training_rule"] == "2026-10-24"
+    from smartbi.services.training_consent import RULE_VERSION
+    assert meta["desensitized"] is True and meta["training_rule"] == RULE_VERSION
 
 
 @pytest.mark.asyncio
@@ -319,7 +321,8 @@ async def test_distillation_skipped_when_insight_carries_process_detail(monkeypa
         "insights": {"top_n_by_dim": "建议把腌制时间延长到 24 小时再滚揉以提升出成率。"},
     }, ensure_ascii=False))
 
-    await lm.generate_llm_insights(results, "restaurant", factory_id="RES_TEST_001")
+    # factory domain: restaurant rows are not training data (餐饮废弃, 2026-10-29 待办第 7 条)
+    await lm.generate_llm_insights(results, "factory", factory_id="RES_TEST_001")
     assert sink == [], "answer names a process detail → nothing captured"
 
 

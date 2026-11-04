@@ -60,6 +60,53 @@ def _connect():
     )
 
 
+def _connect_cretas():
+    """The cretas main database (the one these scripts read): people / customers."""
+    import psycopg2
+
+    return psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        dbname=os.getenv("POSTGRES_DB", "cretas_db"),
+        user=os.getenv("POSTGRES_USER", "cretas_user"),
+        password=os.getenv("POSTGRES_PASSWORD", ""),
+        connect_timeout=10,
+    )
+
+
+def _dict_rows(cur):
+    cols = [c[0] for c in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+@lru_cache(maxsize=1)
+def factory_lists_map() -> Dict[str, tuple]:
+    """``{factory_id: (secret_terms, directory)}`` from the cretas database: each factory's
+    process-secret terms (full name / code / id / registered aliases) and its people /
+    customers / contacts — the same lists capture and export use (2026-11-03 review B2).
+    Unreadable -> SystemExit: without them a secret product or a person's name could
+    leave in a training file / to an outside LLM. (A batch script has no "last good
+    lists" to fall back on, so the run stops instead of holding rows.)"""
+    try:
+        conn = _connect_cretas()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(rules().ALL_PROTECTED_TERMS_SQL)
+                products = _dict_rows(cur)
+                cur.execute(rules().ALL_FACTORY_DIRECTORY_SQL)
+                people = _dict_rows(cur)
+        finally:
+            conn.close()
+        lists = rules().lists_by_factory(products, people)
+    except Exception as e:  # noqa: BLE001
+        raise SystemExit(
+            f"factory lists (process-secret terms / people / customers) unreadable "
+            f"({type(e).__name__}: {e}) — refusing to read factory data. Set POSTGRES_* to the cretas database."
+        ) from e
+    logger.info("factory lists: %d factories", len(lists))
+    return lists
+
+
 @lru_cache(maxsize=1)
 def consent_map() -> Dict[str, str]:
     """``{factory_id: scope}`` (withdrawn factories read as 'withdrawn'); unreadable -> SystemExit."""
@@ -83,24 +130,39 @@ def consent_map() -> Dict[str, str]:
 def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List[Dict]:
     """Rows that may be used, with their text fields desensitized per factory.
 
-    A row is dropped when any of its text fields carries recipe / process-
-    parameter content. ``factory_id`` must be selected by the caller.
+    Same rules as capture / export (2026-11-03 review B2). A row is dropped when
+    it has no factory, belongs to a restaurant / test / backup tenant, names one
+    of its factory's process-secret terms, people or customers, or carries a
+    recipe / parameter word with a value. ``factory_id`` must be selected by the
+    caller.
     """
     r = rules()
     keys = tuple(text_keys)
     kept: List[Dict] = []
-    dropped = 0
+    dropped = {"no_factory": 0, "tenant": 0, "factory_list": 0, "content": 0}
     for row in rows:
-        scope = r.scope_from_map(consent_map(), row.get("factory_id"))
+        factory_id = row.get("factory_id") or ""
+        if not factory_id:
+            dropped["no_factory"] += 1
+            continue
+        if not r.is_training_tenant(factory_id):
+            dropped["tenant"] += 1
+            continue
+        terms, directory = factory_lists_map().get(factory_id, (frozenset(), frozenset()))
+        texts = [row.get(k) for k in keys]
+        if r.mentions_any(terms, *texts) or r.mentions_any(directory, *texts):
+            dropped["factory_list"] += 1
+            continue
+        scope = r.scope_from_map(consent_map(), factory_id)
         out = dict(row)
         for key in keys:
-            keep, text = r.desensitize_utterance(scope, row.get(key))
+            keep, text = r.desensitize_utterance(scope, row.get(key), directory=directory)
             if not keep:
                 break
             out[key] = text
         else:
             kept.append(out)
             continue
-        dropped += 1
-    logger.info("training rule: %d rows kept, %d dropped (process parameters)", len(kept), dropped)
+        dropped["content"] += 1
+    logger.info("training rule: %d rows kept, dropped %s", len(kept), dropped)
     return kept

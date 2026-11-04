@@ -73,6 +73,11 @@ class FactorySecrecyGatesContractTest {
                     Set.of("PROCESS_SECRET", "PLATFORM_RECIPE_BLOCK", "CUSTOMER_HELD")),
             // 出外脱敏的唯一入口
             Map.entry("com/cretas/aims/service/consent/LlmEgressGuard.java", Set.of("EGRESS_REDACTION")),
+            // 训练数据过滤 (d) 的名单 (#1377): 保密产品 (含已软删除) / 专属别名 / 人员 / 客户的原生查询;
+            // 是否生效由 ProcessSecretSampleFilter 按样本所属工厂的 d 判 (经 FactorySecrecyConfig)
+            Map.entry("com/cretas/aims/repository/learning/FactoryNameDirectoryRepository.java", Set.of("TRAINING_FILTER")),
+            // 训练名单的词规则: 解析保密策略上登记的专属别名 (#1377, Steve 2026-11-03 Q1)
+            Map.entry("com/cretas/aims/service/consent/ProcessSecretTerms.java", Set.of("TRAINING_FILTER")),
             // 配置本身
             Map.entry("com/cretas/aims/service/secrecy/FactorySecrecyConfig.java", Set.of("CONFIG")),
             Map.entry("com/cretas/aims/service/secrecy/FactorySecrecySettingsService.java", Set.of("CONFIG"))));
@@ -93,9 +98,11 @@ class FactorySecrecyGatesContractTest {
             Map.entry("common/llm_egress_text.py", Set.of("EGRESS_REDACTION")),
             Map.entry("food_kb/services/reranker.py", Set.of("EGRESS_REDACTION")),
             Map.entry("efficiency_recognition/services/video_analyzer.py", Set.of("EGRESS_REDACTION")),
-            // 以下两份在 #1377 里 (训练数据过滤 d 的 Python 接线留到 PR-2)
+            // 以下三份在 #1377 里 (训练数据过滤 d 的 Python 接线留到 PR-2): 名单 SQL 只在 process_secret_sql 一处
+            // (process_secret_names 经它取, 不再直接写 SQL); 别名解析; 离线重放工具的 --live-lists
             Map.entry("common/process_secret_sql.py", Set.of("TRAINING_FILTER", "EGRESS_REDACTION")),
-            Map.entry("smartbi/services/process_secret_names.py", Set.of("TRAINING_FILTER"))));
+            Map.entry("common/process_secret_terms.py", Set.of("TRAINING_FILTER")),
+            Map.entry("scripts/training_filter_replay.py", Set.of("TRAINING_FILTER"))));
 
     /** 跨厂隔离闸: 一律不读任何一项。 */
     static final List<String> JAVA_ISOLATION_GATES = List.of(
@@ -121,14 +128,10 @@ class FactorySecrecyGatesContractTest {
     /**
      * 已知会由在途 PR 新增的读取点: 文件还不在代码树里时预先登记归属项。<b>有效期到文件落地为止</b> ——
      * 路径一旦存在, 闸就红, 直到把它挪进上面的正式清单 (挪过去之后「登记了却不读」的检查才对它生效)。
-     * PR #1377 (claude/process-secret-filter-rules, 训练数据过滤 d) 合 main 时要把这四条挪进正式清单。
+     * PR #1377 (训练数据过滤 d) 的四条已随它落地并挪进正式清单, 目前没有在途登记。
      */
-    static final Map<String, Set<String>> JAVA_PENDING = new TreeMap<>(Map.ofEntries(
-            Map.entry("com/cretas/aims/repository/learning/FactoryNameDirectoryRepository.java", Set.of("TRAINING_FILTER")),
-            Map.entry("com/cretas/aims/service/consent/ProcessSecretTerms.java", Set.of("TRAINING_FILTER"))));
-    static final Map<String, Set<String>> PYTHON_PENDING = new TreeMap<>(Map.ofEntries(
-            Map.entry("common/process_secret_terms.py", Set.of("TRAINING_FILTER")),
-            Map.entry("scripts/training_filter_replay.py", Set.of("TRAINING_FILTER"))));
+    static final Map<String, Set<String>> JAVA_PENDING = new TreeMap<>();
+    static final Map<String, Set<String>> PYTHON_PENDING = new TreeMap<>();
 
     @Test
     void everyJavaClassReadingASecrecySourceIsAttachedToAnItem() throws IOException {

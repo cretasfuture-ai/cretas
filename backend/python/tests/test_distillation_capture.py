@@ -31,6 +31,9 @@ class _RecordingConn:
         return self._consent.get(args[0])
 
     async def execute(self, sql, *args):
+        if sql.lstrip().startswith("DELETE FROM smart_bi_distillation_samples"):
+            EXPIRY_CALLS.append((sql, args))       # held-row expiry sweep (its own tests below)
+            return "DELETE 0"
         self._sink.append((sql, args))
         return "INSERT 0 1"
 
@@ -39,6 +42,9 @@ class _RecordingConn:
 
     async def __aexit__(self, *a):
         return False
+
+
+EXPIRY_CALLS: list = []
 
 
 class _RecordingPool:
@@ -143,7 +149,7 @@ async def test_happy_path_inserts_expected_args(monkeypatch):
         task_type="insight",
         input_text="用户问：本月营收如何",
         teacher_output="本月营收稳健，建议...",
-        business_type="restaurant",
+        business_type="factory",
         factory_id="F_CONSENTED",
         system_prompt="你是分析师",
         teacher_model="qwen3-max",
@@ -158,7 +164,7 @@ async def test_happy_path_inserts_expected_args(monkeypatch):
     #   template_codes, system_prompt, input_text, teacher_model,
     #   teacher_output, input_hash, quality, metadata
     assert args[0] == "agent_insight"
-    assert args[1] == "restaurant"
+    assert args[1] == "factory"
     assert args[2] == "F_CONSENTED"
     assert args[3] == "insight"
     assert args[4] == "top_n_by_dim,monthly_trend"
@@ -201,12 +207,17 @@ async def test_no_template_codes_and_no_metadata_pass_none():
 
 
 
-# ---- training rule (owner, 2026-10-24) ----
-# Process parameters / structure / problem handling / per-person pay: never stored,
-# for any factory. Everything else is stored: authorized factories raw, everyone
-# else (no row, 'none', unknown scope, lookup error, no factory) desensitized.
+# ---- training rule (owner, 2026-10-24; content rule 2026-10-29 option A) ----
+# A process word with a concrete value / per-person pay / the factory's own people
+# and customers / its process-secret terms: never stored, for any factory.
+# Everything else is stored: authorized factories raw, everyone else ('none',
+# no row) desensitized. A sample without a factory, or of a restaurant / test
+# tenant, is not stored at all.
 
 import json as _json  # noqa: E402
+
+from smartbi.services.process_secret_names import FactoryLists, lists_from_rows  # noqa: E402
+from smartbi.services.training_consent import RECHECK_KEY, RULE_VERSION  # noqa: E402
 
 
 async def _capture(pool, **kw):
@@ -219,6 +230,24 @@ async def _capture(pool, **kw):
 
 def _meta(args):
     return _json.loads(args[11]) if args[11] else {}
+
+
+def _lists(products=(), directory=()):
+    return lists_from_rows([{"name": p} for p in products], directory)
+
+
+def _patch_lists(monkeypatch, by_factory=None, *, error=None, stale=False, calls=None):
+    """Stub the capture's lookup: ``by_factory`` = {factory: FactoryLists}."""
+    from smartbi.services import distillation_capture as dc
+
+    async def lookup(factory_id, *_a, **_k):
+        if calls is not None:
+            calls.append(factory_id)
+        if error is not None:
+            raise error
+        return (by_factory or {}).get(factory_id, FactoryLists()), stale
+
+    monkeypatch.setattr(dc, "factory_lists_or_last_good", lookup)
 
 
 async def test_unauthorized_factory_qa_is_stored_desensitized():
@@ -235,7 +264,7 @@ async def test_unauthorized_factory_qa_is_stored_desensitized():
     # every number masked (Steve 2026-10-24): margins / ratios are business secrets too
     assert args[8] == "工厂A本月营收 ¥<数值>，毛利率 <数值>%，环比增长 <数值>%"
     assert args[9] == compute_input_hash(args[6])                # hash of what is stored
-    assert _meta(args) == {"training_rule": "2026-10-24", "desensitized": True}
+    assert _meta(args) == {"training_rule": RULE_VERSION, "desensitized": True}
 
 
 async def test_authorized_factory_qa_is_stored_as_is():
@@ -244,23 +273,31 @@ async def test_authorized_factory_qa_is_stored_as_is():
     await _capture(pool, factory_id="F_PRIV", input_text="华东工厂本月营收多少")
     await _capture(pool, factory_id="F_SHARE", input_text="华北工厂本月营收多少")
     assert [a[6] for _, a in sink] == ["华东工厂本月营收多少", "华北工厂本月营收多少"]
-    assert all(_meta(a) == {"training_rule": "2026-10-24"} for _, a in sink)
+    assert all(_meta(a) == {"training_rule": RULE_VERSION} for _, a in sink)
 
 
-async def test_process_content_is_never_stored_even_when_authorized():
+async def test_process_content_with_a_value_is_never_stored_even_when_authorized():
     sink: list = []
     pool = _RecordingPool(sink, {"F_PRIV": "private"})
     cases = [
-        ("产品配方表如下：盐 2.5%", "已读取"),                  # parameter in input
-        ("数据：工序 1 清洗、工序 2 切配", "按顺序执行即可"),     # structure in input
+        ("产品配方表如下：盐 2.5%", "已读取"),                  # parameter + value in input
+        ("数据：工序 1 清洗、工序 2 切配", "按顺序执行即可"),     # step order in input
         ("怎么提升出成率", "建议把腌制时间延长到 24 小时再滚揉"),  # detail in answer
-        ("为什么最近返工多", "主要是原料批次差"),                # problem handling
-        ("本月工资总额", "人工成本 35 万"),                      # per-person pay
+        ("为什么最近返工率 12%", "主要是原料批次差"),             # problem handling + value
+        ("本月工资总额 35 万", "已统计"),                         # per-person pay with a value (Q2)
     ]
     for q, a in cases:
         await _capture(pool, factory_id="F_PRIV", input_text=q, teacher_output=a)
         await _capture(pool, factory_id="F006", input_text=q, teacher_output=a)
     assert sink == []
+
+
+async def test_process_words_without_a_value_are_stored():
+    # 2026-10-29 option A: the word alone no longer blocks (48.2% of Q&A were blocked)
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), factory_id="F006",
+                   input_text="为什么最近返工多", teacher_output="主要是原料批次差，建议复核卤制工序")
+    assert len(sink) == 1
 
 
 async def test_generic_process_words_in_the_answer_do_not_block():
@@ -280,16 +317,32 @@ async def test_consent_lookup_error_means_not_stored():
     assert sink == []
 
 
-async def test_sample_without_factory_is_stored_desensitized():
+async def test_sample_without_factory_is_not_stored_and_looks_nothing_up(monkeypatch):
+    # 2026-10-29: no factory -> no lists to match against (never the union of all factories)
+    calls: list = []
+    _patch_lists(monkeypatch, calls=calls)
     sink: list = []
     pool = _RecordingPool(sink, {}, consent_error=AssertionError("no factory -> no lookup"))
     await _capture(pool, input_text="华东工厂本月营收多少")
-    assert len(sink) == 1
-    _, args = sink[0]
-    assert args[2] is None and _meta(args).get("desensitized") is True
+    await _capture(pool, factory_id="", input_text="华东工厂本月营收多少")
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="华东工厂本月营收多少")  # control
+    assert [a[2] for _, a in sink] == ["F006"]
+    assert calls == ["F006"]
 
 
-async def test_synthetic_seed_tenants_are_stored_as_is_without_lookup():
+async def test_restaurant_and_test_tenants_are_not_stored(monkeypatch):
+    sink: list = []
+    pool = _RecordingPool(sink, {"MOCK_REST": "private"})
+    await _capture(pool, factory_id="MOCK_REST")
+    await _capture(pool, factory_id="QATEST_1021_001")
+    await _capture(pool, factory_id="F006BK")
+    await _capture(pool, factory_id="F006", business_type="restaurant")
+    await _capture(pool, factory_id="F006", business_type="factory")                # control
+    assert [(a[2], a[1]) for _, a in sink] == [("F006", "factory")]
+
+
+async def test_synthetic_seed_tenants_are_stored_as_is_without_lookup(monkeypatch):
+    _patch_lists(monkeypatch, error=AssertionError("must not look up lists"))
     sink: list = []
     pool = _RecordingPool(sink, {}, consent_error=AssertionError("must not look up"))
     await _capture(pool, factory_id="SEED_R", input_text="合成甲：产品配方表")
@@ -311,17 +364,26 @@ async def test_request_tenant_wins_and_a_different_factory_id_is_refused():
     assert [a[2] for _, a in sink] == ["F_CONSENTED"]
 
 
-async def test_specific_customer_or_person_name_is_never_stored():
-    # Steve 2026-10-24: 问答里出现「客户」且带具体名称、或出现人名 → 整条不存 (任何工厂)
+async def test_the_factorys_own_people_and_customers_are_never_stored(monkeypatch):
+    # Steve 2026-10-29 option A: names are matched exactly against the factory's own tables
+    _patch_lists(monkeypatch, {"F_PRIV": _lists(directory=["张记食品有限公司", "华联", "李四"])})
     sink: list = []
     pool = _RecordingPool(sink, {"F_PRIV": "private"})
     for q, a in [("张记食品有限公司这个客户回款怎么样", "回款正常"),
                  ("客户：华联 欠款多少", "欠款 12 万元"),
-                 ("这批货谁签收的", "签收人：李四"),
-                 ("王总要求加急，能排吗", "可以安排")]:
-        await _capture(pool, factory_id="F_PRIV", input_text=q, teacher_output=a)
-        await _capture(pool, factory_id="F006", input_text=q, teacher_output=a)
-    assert sink == []
+                 ("这批货谁签收的", "签收人：李四")]:
+        await _capture(pool, factory_id="F_PRIV", input_text=q, teacher_output=a)   # its own -> out
+        await _capture(pool, factory_id="F006", input_text=q, teacher_output=a)     # not F006's -> in
+    assert [a[2] for _, a in sink] == ["F006", "F006", "F006"]
+
+
+async def test_sentences_naming_nobody_are_stored(monkeypatch):
+    # the old regex blocked these (role word + surname / company suffix); they name nobody
+    _patch_lists(monkeypatch, {"F006": _lists(directory=["王五"])})
+    sink: list = []
+    for q in ["员工周报在哪看", "我们公司客户有哪些", "作为服务于贵公司的资深分析师"]:
+        await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text=q, teacher_output="好的")
+    assert len(sink) == 3
 
 
 async def test_generic_customer_words_are_stored():
@@ -340,14 +402,9 @@ async def test_withdrawn_factory_is_never_stored():
     assert [a[2] for _, a in sink] == ["F006"]
 
 
-async def test_sample_naming_a_process_secret_product_is_never_stored(monkeypatch):
+async def test_sample_naming_a_process_secret_term_is_never_stored(monkeypatch):
     # privacy clause 6: process-secret products are not used for training
-    from smartbi.services import distillation_capture as dc
-
-    async def names(factory_id, *_a, **_k):
-        return frozenset({"秘制牛肉干"}) if factory_id == "F_PRIV" else frozenset()
-
-    monkeypatch.setattr(dc, "protected_product_names", names)
+    _patch_lists(monkeypatch, {"F_PRIV": _lists(products=["秘制牛肉干"])})
     sink: list = []
     pool = _RecordingPool(sink, {"F_PRIV": "private"})
     await _capture(pool, factory_id="F_PRIV", input_text="秘制牛肉干本月销量多少")
@@ -358,82 +415,57 @@ async def test_sample_naming_a_process_secret_product_is_never_stored(monkeypatc
         ("F_PRIV", "普通牛肉干本月销量多少"), ("F006", "秘制牛肉干本月销量多少")]
 
 
-async def test_process_secret_lookup_failure_means_not_stored(monkeypatch):
-    from smartbi.services import distillation_capture as dc
-
-    async def boom(*_a, **_k):
-        raise RuntimeError("cretas db unavailable")
-
-    monkeypatch.setattr(dc, "protected_product_names", boom)
+async def test_lists_lookup_failure_without_last_good_lists_means_not_stored(monkeypatch):
+    _patch_lists(monkeypatch, error=RuntimeError("cretas db unavailable"))
     sink: list = []
     await _capture(_RecordingPool(sink, {"F_PRIV": "private"}), factory_id="F_PRIV")
     await _capture(_RecordingPool(sink, {}), factory_id="SEED_R")   # synthetic: no lookup, stored
     assert [a[2] for _, a in sink] == ["SEED_R"]
 
 
-# ---- samples with no factory: process-secret products of ANY factory count ----
-# (read-only prod probe 2026-10-29: NULL-factory samples were never checked)
-
-_ALL_PROTECTED = {"F_A": frozenset({"秘制牛肉干"}), "F_B": frozenset({"祖传卤汁鸭"})}
-
-
-async def test_no_factory_sample_naming_any_factorys_secret_product_is_not_stored(monkeypatch):
-    from smartbi.services import distillation_capture as dc
-
-    calls: list = []
-
-    async def all_names(*_a, **_k):
-        calls.append(1)
-        return _ALL_PROTECTED
-
-    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+async def test_last_good_lists_fallback_stores_the_row_held(monkeypatch):
+    # lookup failed, the last good lists were used: stored, but held for re-judgement
+    _patch_lists(monkeypatch, {"F006": _lists(products=["秘制牛肉干"])}, stale=True)
     sink: list = []
-    pool = _RecordingPool(sink, {}, consent_error=AssertionError("no factory -> no lookup"))
-    await _capture(pool, input_text="秘制牛肉干本月销量多少")         # factory A's, in input
-    await _capture(pool, teacher_output="祖传卤汁鸭本月销量增长")      # factory B's, in output
-    await _capture(pool, input_text="普通牛肉干本月销量多少")         # control: stored
-    assert len(calls) == 3          # the lookup really ran for every NULL-factory sample
-    assert [a[2] for _, a in sink] == [None]
-    assert "普通牛肉干" in sink[0][1][6]
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="秘制牛肉干本月销量多少")
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="普通牛肉干本月销量多少")
+    assert len(sink) == 1                                   # the stale list still blocks its own names
+    # un-authorized factory: the row is stored desensitized, the hold marker keeps the RAW text
+    # for the re-judgement (review N3) — it is dropped again on release
+    assert _meta(sink[0][1]).get(RECHECK_KEY) == {
+        "raw_input": "普通牛肉干本月销量多少", "raw_output": "本月营收 128 万元，环比增长 8%"}
+    assert "128" not in sink[0][1][8]
+    # second review, item 1: a row still carrying raw text is not stamped desensitized (factory
+    # erasure keeps desensitized rows); the release adds the stamp once the raw copy is gone
+    from smartbi.services.training_consent import DESENSITIZED_KEY
+    assert DESENSITIZED_KEY not in _meta(sink[0][1])
 
 
-async def test_empty_string_factory_is_checked_against_all_factories(monkeypatch):
-    from smartbi.services import distillation_capture as dc
-
-    async def all_names(*_a, **_k):
-        return _ALL_PROTECTED
-
-    async def own_names(*_a, **_k):
-        raise AssertionError("an empty factory id has no factory of its own")
-
-    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
-    monkeypatch.setattr(dc, "protected_product_names", own_names)
+async def test_fresh_lists_do_not_hold_the_row(monkeypatch):
+    _patch_lists(monkeypatch, {"F006": _lists(products=["秘制牛肉干"])}, stale=False)
     sink: list = []
-    pool = _RecordingPool(sink, {}, consent_error=AssertionError("no factory -> no lookup"))
-    await _capture(pool, factory_id="", input_text="秘制牛肉干本月销量多少")   # factory A's -> out
-    await _capture(pool, factory_id="", input_text="普通牛肉干本月销量多少")   # control -> stored
-    assert [a[2] for _, a in sink] == [None]
-    assert "普通牛肉干" in sink[0][1][6]
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="普通牛肉干本月销量多少")
+    assert RECHECK_KEY not in _meta(sink[0][1])
 
 
-async def test_process_secret_lookup_runs_before_a_capture_connection_is_taken(monkeypatch):
+async def test_lists_lookup_runs_before_a_capture_connection_is_taken(monkeypatch):
     from smartbi.services import distillation_capture as dc
 
     events: list = []
 
-    async def all_names(*_a, **_k):
+    async def lookup(factory_id, *_a, **_k):
         events.append("lookup")
-        return _ALL_PROTECTED
+        return _lists(products=["秘制牛肉干"]), False
 
     class _OrderPool(_RecordingPool):
         def acquire(self):
             events.append("acquire")
             return super().acquire()
 
-    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+    monkeypatch.setattr(dc, "factory_lists_or_last_good", lookup)
     sink: list = []
-    await _capture(_OrderPool(sink, {}), input_text="秘制牛肉干本月销量多少")
-    await _capture(_OrderPool(sink, {}), input_text="普通牛肉干本月销量多少")
+    await _capture(_OrderPool(sink, {}), factory_id="F006", input_text="秘制牛肉干本月销量多少")
+    await _capture(_OrderPool(sink, {}), factory_id="F006", input_text="普通牛肉干本月销量多少")
     assert events == ["lookup", "lookup", "acquire"]     # named sample never took a connection
     assert len(sink) == 1
 
@@ -467,54 +499,357 @@ async def test_desensitized_sample_does_not_keep_the_raw_question_in_metadata():
     assert "desensitized" not in raw
 
 
-async def test_no_factory_sample_metadata_query_is_desensitized():
-    sink: list = []
-    await _capture(_RecordingPool(sink, {}), input_text="华东工厂本月营收 2500000",
-                   metadata={"query": "华东工厂本月营收 2500000"})
-    meta = _meta(sink[0][1])
-    assert meta["desensitized"] is True and "华东" not in meta["query"] and "2500000" not in meta["query"]
-
-
-async def test_factory_sample_does_not_use_the_all_factories_names(monkeypatch):
-    # a factory's sample answers to its own factory's names only (unchanged)
-    from smartbi.services import distillation_capture as dc
-
-    async def all_names(*_a, **_k):
-        raise AssertionError("factory sample must not use the all-factories lookup")
-
-    monkeypatch.setattr(dc, "all_protected_product_names", all_names)
+async def test_capture_only_consults_the_samples_own_factory(monkeypatch):
+    calls: list = []
+    _patch_lists(monkeypatch, {"F_A": _lists(products=["秘制牛肉干"])}, calls=calls)
     sink: list = []
     await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="秘制牛肉干本月销量多少")
-    assert [a[2] for _, a in sink] == ["F006"]
+    assert calls == ["F006"] and [a[2] for _, a in sink] == ["F006"]
 
 
-async def test_no_factory_sample_is_not_stored_when_the_all_factories_lookup_fails(monkeypatch):
-    from smartbi.services import distillation_capture as dc
+# ---- export recheck (scripts/export_distillation_dataset.passes_training_rule) ----
 
-    async def boom(*_a, **_k):
-        raise RuntimeError("cretas db unavailable")
-
-    monkeypatch.setattr(dc, "all_protected_product_names", boom)
-    sink: list = []
-    await _capture(_RecordingPool(sink, {}), input_text="普通牛肉干本月销量多少")
-    await _capture(_RecordingPool(sink, {}), factory_id="SEED_R")   # control: synthetic, no lookup
-    assert [a[2] for _, a in sink] == ["SEED_R"]
+def _all_lists():
+    return {"F_A": _lists(products=["秘制牛肉干"]), "F_B": _lists(products=["祖传卤汁鸭"], directory=["王五"])}
 
 
 def _export_row(factory_id, **kw):
-    row = {"factory_id": factory_id, "input_text": "普通牛肉干本月销量多少",
-           "teacher_output": "本月销量增长",
-           "metadata": {"training_rule": "2026-10-24", "desensitized": True}}
+    row = {"factory_id": factory_id, "business_type": "factory",
+           "input_text": "普通牛肉干本月销量多少", "teacher_output": "本月销量增长",
+           "metadata": {"training_rule": RULE_VERSION, "desensitized": True}}
     row.update(kw)
     return row
 
 
-def test_export_rule_no_factory_row_naming_any_factorys_secret_product_fails():
+def test_export_rule_rows_without_a_factory_never_pass():
     from scripts.export_distillation_dataset import passes_training_rule
 
-    assert passes_training_rule(_export_row(None, input_text="秘制牛肉干本月销量"), _ALL_PROTECTED) is False
-    assert passes_training_rule(_export_row("", teacher_output="祖传卤汁鸭销量增长"), _ALL_PROTECTED) is False
-    assert passes_training_rule(_export_row(None), _ALL_PROTECTED) is True              # control
-    # a factory row still answers to its own factory's names only (unchanged)
-    assert passes_training_rule(_export_row("F006", input_text="秘制牛肉干本月销量"), _ALL_PROTECTED) is True
-    assert passes_training_rule(_export_row("F_A", input_text="秘制牛肉干本月销量"), _ALL_PROTECTED) is False
+    lists = _all_lists()
+    assert passes_training_rule(_export_row(None), lists) is False
+    assert passes_training_rule(_export_row(""), lists) is False
+    assert passes_training_rule(_export_row("F006"), lists) is True                    # control
+
+
+def test_export_rule_matches_each_row_against_its_own_factory_only():
+    from scripts.export_distillation_dataset import passes_training_rule
+
+    lists = _all_lists()
+    assert passes_training_rule(_export_row("F006", input_text="秘制牛肉干本月销量"), lists) is True
+    assert passes_training_rule(_export_row("F_A", input_text="秘制牛肉干本月销量"), lists) is False
+    assert passes_training_rule(_export_row("F_B", teacher_output="王五负责的那条线"), lists) is False
+    assert passes_training_rule(_export_row("F_A", teacher_output="王五负责的那条线"), lists) is True
+
+
+def test_export_rule_needs_a_real_rule_version_and_a_factory_tenant():
+    """Negative controls (2026-10-29 待办第 7 条): the drill row (prod id 16743 shape:
+    training_rule="drill", no factory) and a MOCK_REST row (restaurant tenant, a real
+    rule version) must not pass; the same F006 row with a real version does."""
+    from scripts.export_distillation_dataset import passes_training_rule
+
+    drill = {"factory_id": None, "business_type": "unknown", "input_text": "演练脱敏样本",
+             "teacher_output": "演练", "metadata": {"desensitized": "true", "training_rule": "drill"}}
+    drill_with_factory = dict(drill, factory_id="F006", business_type="factory")
+    mock_rest = _export_row("MOCK_REST", business_type="restaurant",
+                            metadata={"training_rule": "2026-10-24", "desensitized": True})
+    mock_rest_bucket_factory = _export_row("MOCK_REST", metadata={"training_rule": "2026-10-24"})
+    restaurant_bucket = _export_row("F006", business_type="restaurant")
+    assert passes_training_rule(drill, {}) is False
+    assert passes_training_rule(drill_with_factory, {}) is False          # "drill" is not a version
+    assert passes_training_rule(mock_rest, {}) is False
+    assert passes_training_rule(mock_rest_bucket_factory, {}) is False    # by tenant id alone
+    assert passes_training_rule(restaurant_bucket, {}) is False           # by bucket alone
+    assert passes_training_rule(_export_row("QATEST_1021_001"), {}) is False
+    assert passes_training_rule(_export_row("F006BK"), {}) is False
+    # controls: both real versions pass for a factory tenant
+    assert passes_training_rule(_export_row("F006"), {}) is True
+    assert passes_training_rule(_export_row("F006", metadata={"training_rule": "2026-10-24"}), {}) is True
+
+
+
+async def test_authorized_held_row_keeps_no_extra_raw_copy(monkeypatch):
+    _patch_lists(monkeypatch, {"F_PRIV": _lists(products=["秘制牛肉干"])}, stale=True)
+    sink: list = []
+    await _capture(_RecordingPool(sink, {"F_PRIV": "private"}), factory_id="F_PRIV", input_text="今天产量多少")
+    assert _meta(sink[0][1]).get(RECHECK_KEY) is True       # the stored text is already raw
+
+
+# ---- review N7b: the same input captured for another factory never overwrites the row ----
+
+def test_upsert_only_updates_a_row_of_the_same_factory():
+    from smartbi.services import distillation_capture as dc
+
+    assert "WHERE smart_bi_distillation_samples.factory_id IS NOT DISTINCT FROM EXCLUDED.factory_id" in dc._INSERT_SQL
+
+
+async def test_cross_factory_conflict_is_counted_and_logged(caplog):
+    from smartbi.services import distillation_capture as dc
+
+    class _ConflictConn(_RecordingConn):
+        async def execute(self, sql, *args):
+            self._sink.append((sql, args))
+            return "INSERT 0 0"          # what PG returns when the conditional DO UPDATE skips
+
+    class _ConflictPool(_RecordingPool):
+        def acquire(self):
+            return _ConflictConn(self._sink, self._consent, self._consent_error)
+
+    before = dc.CROSS_FACTORY_CONFLICTS["count"]
+    sink: list = []
+    with caplog.at_level("WARNING", logger="smartbi.services.distillation_capture"):
+        await _capture(_ConflictPool(sink, {}), factory_id="F006")
+    assert dc.CROSS_FACTORY_CONFLICTS["count"] == before + 1
+    assert any("another factory" in r.getMessage() for r in caplog.records)
+
+
+async def test_upsert_conflict_on_real_postgres_keeps_the_first_factorys_row():
+    """N7b on a real PostgreSQL: factory B's capture of the same input does not touch A's row."""
+    import os
+    import uuid
+
+    import pytest
+
+    dsn = os.getenv("SMARTBI_PG_DSN")
+    if not dsn:
+        if os.getenv("CI"):
+            pytest.fail("SMARTBI_PG_DSN is required on CI")
+        pytest.skip("no local PostgreSQL")
+    asyncpg = pytest.importorskip("asyncpg")
+    from smartbi.services import distillation_capture as dc
+
+    conn = await asyncpg.connect(dsn)
+    schema = "n7b_" + uuid.uuid4().hex[:10]
+    try:
+        await conn.execute(f"CREATE SCHEMA {schema}")
+        await conn.execute(f"SET search_path TO {schema}")
+        await conn.execute("""CREATE TABLE smart_bi_distillation_samples (
+            id BIGSERIAL PRIMARY KEY, source VARCHAR(32), business_type VARCHAR(32) NOT NULL, factory_id VARCHAR(64),
+            task_type VARCHAR(32), template_codes TEXT, system_prompt TEXT, input_text TEXT NOT NULL,
+            teacher_model VARCHAR(64), teacher_output TEXT NOT NULL, input_hash VARCHAR(64) UNIQUE, quality INT,
+            metadata JSONB, created_at TIMESTAMP DEFAULT now())""")
+        args = ("chat_qa", "factory", "F_A", "qa", None, None, "同一个问题", None, "A 的答案", "h1", None, None)
+        assert await conn.execute(dc._INSERT_SQL, *args) == "INSERT 0 1"
+        status = await conn.execute(dc._INSERT_SQL, *(args[:2] + ("F_B",) + args[3:8] + ("B 的答案",) + args[9:]))
+        assert status == "INSERT 0 0"
+        row = await conn.fetchrow("SELECT factory_id, teacher_output FROM smart_bi_distillation_samples")
+        assert (row["factory_id"], row["teacher_output"]) == ("F_A", "A 的答案")
+        # control: the same factory still refreshes its own row
+        assert await conn.execute(dc._INSERT_SQL, *(args[:8] + ("A 的新答案",) + args[9:])) == "INSERT 0 1"
+        assert await conn.fetchval("SELECT teacher_output FROM smart_bi_distillation_samples") == "A 的新答案"
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        await conn.close()
+
+
+# ---- second review, item 1: held rows expire, and no raw text survives a judgement ----
+
+async def test_capture_runs_the_held_row_expiry_at_most_once_per_interval(monkeypatch):
+    """The re-judge only runs from corpus_judge; the capture path (which always runs) sweeps
+    held rows past the retention, at most once per interval, and a failing sweep never blocks."""
+    from smartbi.services import distillation_capture as dc
+
+    _patch_lists(monkeypatch, {"F006": _lists()})
+    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
+    EXPIRY_CALLS.clear()
+    sink: list = []
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天产量多少")
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天销量多少")
+    assert len(sink) == 2
+    assert len(EXPIRY_CALLS) == 1                                    # throttled
+    sql, args = EXPIRY_CALLS[0]
+    assert "metadata ? 'secrecy_recheck'" in sql and args == (7,)
+    monkeypatch.setitem(dc._LAST_EXPIRY, "at", dc._LAST_EXPIRY["at"] - dc.EXPIRY_INTERVAL_S - 1)
+    await _capture(_RecordingPool(sink, {}), factory_id="F006", input_text="今天入库多少")
+    assert len(EXPIRY_CALLS) == 2
+
+
+
+async def test_the_expiry_sweep_also_runs_on_captures_that_return_early(monkeypatch):
+    """Review round 3, item 3: a factory whose captures are all skipped (no factory, a restaurant
+    tenant, capture switched off) must still get its held rows expired."""
+    from smartbi.services import distillation_capture as dc
+
+    for case in ("disabled", "no_factory", "restaurant"):
+        monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
+        EXPIRY_CALLS.clear()
+        sink: list = []
+        with monkeypatch.context() as m:
+            if case == "disabled":
+                m.setenv("SMARTBI_DISTILL_CAPTURE", "0")
+                await _capture(_RecordingPool(sink, {}), factory_id="F006")
+            elif case == "no_factory":
+                await _capture(_RecordingPool(sink, {}), factory_id=None)
+            else:
+                await _capture(_RecordingPool(sink, {}), factory_id="MOCK_REST")
+        assert sink == [], case                                          # nothing captured ...
+        assert len(EXPIRY_CALLS) == 1, case                              # ... but the sweep ran
+    # a sweep that cannot get a connection never raises out of the capture
+    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
+    await _capture(_ExplodingPool(), factory_id="F006")
+
+
+
+class _FirstAcquireHangsPool(_RecordingPool):
+    """The first acquire (the expiry sweep's) waits like an exhausted pool; later ones work."""
+
+    def __init__(self, sink):
+        super().__init__(sink, {})
+        self.calls = 0
+
+    def acquire(self):
+        self.calls += 1
+        if self.calls > 1:
+            return super().acquire()
+
+        class _Hang:
+            async def __aenter__(self):
+                import asyncio
+                await asyncio.sleep(30)
+
+            async def __aexit__(self, *a):
+                return False
+        return _Hang()
+
+
+async def test_a_busy_pool_never_holds_a_capture_up(monkeypatch, caplog):
+    """Review round 4, item 3: the hourly sweep is bounded by a short timeout; the capture still
+    happens promptly and the sweep is retried soon instead of an hour later."""
+    import time as _time
+
+    from smartbi.services import distillation_capture as dc
+
+    _patch_lists(monkeypatch, {"F006": _lists()})
+    monkeypatch.setitem(dc._LAST_EXPIRY, "at", None)
+    monkeypatch.setattr(dc, "EXPIRY_TIMEOUT_S", 0.2)
+    sink: list = []
+    start = _time.monotonic()
+    import logging as _logging
+    caplog.set_level(_logging.WARNING, logger="smartbi.services.distillation_capture")
+    await _capture(_FirstAcquireHangsPool(sink), factory_id="F006", input_text="今天产量多少")
+    # review round 5: a sweep that times out is a WARNING (a stuck expiry must be visible)
+    assert any(r.levelno == _logging.WARNING and "held-row expiry timed out" in r.getMessage() for r in caplog.records)
+    assert _time.monotonic() - start < 5                        # not the 30 s the pool would take
+    assert len(sink) == 1                                       # the capture itself went through
+    due_in = dc._LAST_EXPIRY["at"] + dc.EXPIRY_INTERVAL_S - _time.monotonic()
+    assert 0 < due_in <= dc.EXPIRY_RETRY_S                      # retried soon, not an hour later
+
+
+def test_python_hold_retention_equals_the_java_default():
+    from pathlib import Path
+
+    from smartbi.services.process_secret_names import HOLD_MAX_AGE_DAYS
+
+    java = (Path(__file__).resolve().parents[2] / "java" / "cretas-api" / "src" / "main" / "java" / "com" / "cretas"
+            / "aims" / "service" / "consent" / "TrainingSampleHoldRejudger.java").read_text(encoding="utf-8")
+    assert f"cretas.training.secrecy-hold.max-age:P{HOLD_MAX_AGE_DAYS}D" in java
+
+
+class _OneConnPool:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        conn = self._conn
+
+        class _Ctx:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *a):
+                return False
+        return _Ctx()
+
+
+async def test_held_rows_on_real_postgres_leave_no_raw_text_behind():
+    """Capture -> re-judge -> expiry on a real PostgreSQL: the rejected row keeps reason / list
+    version / time only, the released row loses the raw copy and gains the desensitized stamp,
+    the expired row is gone. Nowhere does the raw text survive."""
+    import os
+    import uuid
+
+    import pytest
+
+    dsn = os.getenv("SMARTBI_PG_DSN")
+    if not dsn:
+        if os.getenv("CI"):
+            pytest.fail("SMARTBI_PG_DSN is required on CI")
+        pytest.skip("no local PostgreSQL")
+    asyncpg = pytest.importorskip("asyncpg")
+    from smartbi.services.process_secret_names import rejudge_held_rows
+
+    conn = await asyncpg.connect(dsn)
+    schema = "hold_" + uuid.uuid4().hex[:10]
+    try:
+        await conn.execute(f"CREATE SCHEMA {schema}")
+        await conn.execute(f"SET search_path TO {schema}")
+        await conn.execute("""CREATE TABLE smart_bi_distillation_samples (
+            id BIGSERIAL PRIMARY KEY, factory_id VARCHAR(64), input_text TEXT NOT NULL,
+            teacher_output TEXT NOT NULL, metadata JSONB, created_at TIMESTAMP DEFAULT now())""")
+
+        def held(raw_in):
+            return _json.dumps({"training_rule": "2026-11-03",
+                                "secrecy_recheck": {"raw_input": raw_in, "raw_output": "RAW-OUT"}}, ensure_ascii=False)
+        await conn.execute(
+            "INSERT INTO smart_bi_distillation_samples (id, factory_id, input_text, teacher_output, metadata, created_at)"
+            " VALUES (1, 'F_A', '产品A销量', 'x', $1::jsonb, now()),"
+            "        (2, 'F_A', '普通牛肉干销量', 'x', $2::jsonb, now()),"
+            "        (3, 'F_A', '旧的', 'x', $3::jsonb, now() - interval '8 days')",
+            held("秘制牛肉干销量"), held("RAW-CLEAN 普通牛肉干销量"), held("RAW-OLD 秘制牛肉干"))
+        out = await rejudge_held_rows(_OneConnPool(conn), {"F_A": _lists(products=["秘制牛肉干"])})
+        assert out == {"released": 1, "rejected": 1, "expired": 1}
+        rows = {r["id"]: _json.loads(r["metadata"]) for r in
+                await conn.fetch("SELECT id, metadata FROM smart_bi_distillation_samples ORDER BY id")}
+        assert sorted(rows) == [1, 2]                                    # 3 expired with its raw copy
+        assert set(rows[1]["secrecy_rejected"]) == {"reason", "lists", "at"}
+        assert "secrecy_recheck" not in rows[1] and "desensitized" not in rows[1]
+        assert rows[2] == {"training_rule": "2026-11-03", "desensitized": True}
+        dump = await conn.fetchval("SELECT string_agg(metadata::text || input_text || teacher_output, '|')"
+                                   " FROM smart_bi_distillation_samples")
+        for raw in ("秘制牛肉干", "RAW-CLEAN", "RAW-OLD", "RAW-OUT"):
+            assert raw not in dump, raw
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        await conn.close()
+
+
+async def test_the_expiry_delete_can_use_the_partial_index_on_real_postgres():
+    """Review round 5: smartbi migration V20261104_01 adds a partial index on the hold marker; the
+    sweep's DELETE (and the re-judge fetch) match its predicate. With sequential scans disabled the
+    planner must pick it — if the predicate drifted from the SQL, it could not."""
+    import os
+    import uuid
+    from pathlib import Path
+
+    import pytest
+
+    dsn = os.getenv("SMARTBI_PG_DSN")
+    if not dsn:
+        if os.getenv("CI"):
+            pytest.fail("SMARTBI_PG_DSN is required on CI")
+        pytest.skip("no local PostgreSQL")
+    asyncpg = pytest.importorskip("asyncpg")
+    from smartbi.services.process_secret_names import _EXPIRE_SQL, _HELD_ROWS_SQL
+    from smartbi.services.training_consent import RECHECK_KEY
+
+    migration = (Path(__file__).resolve().parents[1] / "smartbi" / "database" / "migrations"
+                 / "V20261104_01__distillation_secrecy_recheck_index.sql").read_text(encoding="utf-8")
+    conn = await asyncpg.connect(dsn)
+    schema = "idx_" + uuid.uuid4().hex[:10]
+    try:
+        await conn.execute(f"CREATE SCHEMA {schema}")
+        await conn.execute(f"SET search_path TO {schema}")
+        await conn.execute("""CREATE TABLE smart_bi_distillation_samples (
+            id BIGSERIAL PRIMARY KEY, factory_id VARCHAR(64), input_text TEXT, teacher_output TEXT,
+            metadata JSONB, created_at TIMESTAMP DEFAULT now())""")
+        await conn.execute(migration)
+        await conn.execute(migration)                                    # idempotent (IF NOT EXISTS)
+        await conn.execute("SET enable_seqscan = off")
+        async with conn.transaction():
+            plan = "\n".join(r[0] for r in await conn.fetch(
+                "EXPLAIN " + _EXPIRE_SQL.format(key=RECHECK_KEY), 7))
+            assert "idx_distill_samples_secrecy_recheck_created" in plan, plan
+            plan = "\n".join(r[0] for r in await conn.fetch(
+                "EXPLAIN " + _HELD_ROWS_SQL.format(key=RECHECK_KEY), 100))
+            assert "idx_distill_samples_secrecy_recheck_created" in plan, plan
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        await conn.close()
