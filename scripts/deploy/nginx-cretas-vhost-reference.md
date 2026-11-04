@@ -60,6 +60,54 @@ location /api/mobile/ {
 | `web-admin` | `web-admin.conf` | N/A — proxies to Python not Cretas Java |
 | `centerapi.cretaceousfuture.com` | `java_logistics-admin.conf` | N/A — proxies to Mall admin not Cretas |
 
+## Ambiguous path rule (live since 2026-11-04)
+
+Java gates judge the raw URI while Spring routes on the decoded path, so a request path whose raw
+and routed forms can differ is refused at the gateway as well as in Java
+(`AmbiguousRequestPathFilter`). Repo copies: `ops/nginx-vhosts-139/_cretas_ambiguous_path_map.conf`
+and `ops/nginx-vhosts-139/block-ambiguous-path.conf`.
+
+```nginx
+# /www/server/panel/vhost/nginx/_cretas_ambiguous_path_map.conf
+# Loaded by the main config's vhost glob: no vhost names it, its location is its wiring.
+map $request_uri $cretas_ambiguous_path {
+    default 0;
+    "~*^[^?]*(;|%(3[0-9]|4[1-9a-f]|5[0-9a]|6[1-9a-f]|7[0-9a]|2[def]|5[cf]|7e))" 1;
+}
+
+# /www/server/nginx/conf/snippets/block-ambiguous-path.conf
+if ($cretas_ambiguous_path) { return 400; }
+```
+
+Every server block that serves traffic includes the snippet on the line after `server_name`:
+
+```nginx
+include /www/server/nginx/conf/snippets/block-ambiguous-path.conf;
+```
+
+| Vhost file on 139 | Serving block | Mirrored in `ops/nginx-vhosts-139/` |
+|---|---|---|
+| `admin.cretaceousfuture.com.conf` | 443 | yes |
+| `api.cretaceousfuture.com.conf` | 443 | yes |
+| `web-admin.conf` | 8086 | yes |
+| `test.cretaceousfuture.com.conf` | 443 | no, include is on 139 only |
+| `www.cretaceousfuture.com.conf` | 443 | no, include is on 139 only |
+| `aiassist.cretaceousfuture.com.conf` | 443 | no, include is on 139 only |
+| `ota.cretaceousfuture.com.conf` | 443 | no, include is on 139 only |
+
+The port 80 blocks only redirect and carry no include. A new vhost that proxies Cretas needs the
+include; a Baota regenerate can drop it, so re-check after one.
+
+The rule judges only the path part of `$request_uri`, so a query string is never refused. It covers
+escapes of letters, digits and `-._~\`, which no client needs. Encoded control bytes are not in it;
+Java refuses those.
+
+`%3B` passes this rule but does not reach Java as `%3B` everywhere. A URI-form `proxy_pass`
+(`proxy_pass http://cretas_backend/api/mobile/;`, used on the admin, web-admin and www vhosts) sends the
+normalised URI, which turns it into a real `;`, and Java then refuses it. `proxy_pass` without a URI
+(the api vhost) passes the raw form. So a value holding `;` cannot travel in a path through those three
+vhosts; put it in the query string or the body.
+
 ## Re-applying after a Baota regenerate
 
 If Baota regenerates `www.cretaceousfuture.com.conf` or a server rebuild
