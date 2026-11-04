@@ -14,7 +14,9 @@ any setting says. A sample naming one of ``terms`` is not, while the training fi
 (item d) of the factory that owns the sample is on. A sample with no
 factory is matched against NOTHING — never against the union of every factory's
 lists (that union blocked a no-factory row for naming another factory's 牛腱):
-capture refuses rows without a factory, and readers drop them
+capture refuses rows without a factory, and readers drop them. Content that crosses
+factories is the exception: a row OF a factory is checked against every factory's terms there
+(:func:`shared_content_lists`), as in Java ProcessSecretSampleFilter.checkSharedContent:
 (``row_names_protected_product`` is False for them, ``passes_training_rule`` and
 ``usable_rows_sql`` exclude them).
 
@@ -43,6 +45,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
 from common import factory_secrecy
@@ -231,24 +234,29 @@ def cannot_be_shared(lists: FactoryLists, input_text: Optional[str], answer: Opt
 VALUE_TOKEN = "<数值>"     # what mask_numbers writes in place of a value
 
 
-def _masked_terms(terms: Iterable[str]) -> List[str]:
+@lru_cache(maxsize=8)
+def _masked_terms(terms: FrozenSet[str]) -> Tuple[str, ...]:
     """Terms as a masked row holds them: 老卤牛肉2号 is 老卤牛肉<数值>号 there. A term that masking
     leaves almost nothing of has no such form: it would match any number."""
     from smartbi.services.training_consent import mask_numbers
 
     masked = (mask_numbers(t) or "" for t in terms)
-    return [m for m in masked if VALUE_TOKEN in m and len(m.replace(VALUE_TOKEN, "")) >= 2]
+    return tuple(m for m in masked if VALUE_TOKEN in m and len(m.replace(VALUE_TOKEN, "")) >= 2)
 
 
-def row_holds_own_secrets_for_shared_content(row: Mapping[str, Any],
-                                             by_factory: Optional[Mapping[str, FactoryLists]]) -> bool:
-    """For the shared export: :func:`cannot_be_shared` on the row, or one of its terms in masked
-    form (a row masked before the product was protected: capture could not refuse it then). By
-    the row's OWN factory only, on purpose: another factory's product with the same name is not
-    secret there (see the module doc on the union of every factory's lists)."""
-    lists = lists_for_row(row.get("factory_id"), by_factory)
+def shared_content_lists(by_factory: Optional[Mapping[str, FactoryLists]]) -> FactoryLists:
+    """Every factory's terms in one list, for what crosses factories (Steve 2026-11-04): a
+    co-packer's row can name its customer's protected product, and a same-named product of
+    another factory is dropped with it, which only costs a row. No setting is read."""
+    return FactoryLists(terms=frozenset(t for lists in (by_factory or {}).values() for t in lists.terms))
+
+
+def row_holds_secrets_for_shared_content(row: Mapping[str, Any], shared: FactoryLists) -> bool:
+    """For the shared export: :func:`cannot_be_shared` on the row, or a term in masked form (a row
+    masked before the product was protected: capture could not refuse it then). ``shared`` comes
+    from :func:`shared_content_lists`."""
     input_text, answer = row.get("input_text"), row.get("teacher_output")
-    return cannot_be_shared(lists, input_text, answer) or mentions_any(_masked_terms(lists.terms), input_text, answer)
+    return cannot_be_shared(shared, input_text, answer) or mentions_any(_masked_terms(shared.terms), input_text, answer)
 
 
 def row_has_process_value(row: Mapping[str, Any],

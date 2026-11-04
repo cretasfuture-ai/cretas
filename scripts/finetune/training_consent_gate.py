@@ -139,14 +139,16 @@ def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List
     """Rows that may be used, with their text fields desensitized per factory.
 
     Same rules as capture / export (2026-11-03 review B2). A row is dropped when
-    it has no factory, belongs to a restaurant / test / backup tenant, names one
-    of its factory's process-secret terms, people or customers, or carries a
+    it has no factory, belongs to a restaurant / test / backup tenant, names any
+    factory's process-secret terms (one model for every factory: Steve 2026-11-04)
+    or its own factory's people or customers, or carries a
     recipe / parameter word with a value. ``factory_id`` must be selected by the
     caller.
     """
     r = rules()
     keys = tuple(text_keys)
     kept: List[Dict] = []
+    every_factorys_terms = frozenset(t for terms, _ in factory_lists_map().values() for t in terms)
     dropped = {"no_factory": 0, "tenant": 0, "factory_list": 0, "content": 0}
     for row in rows:
         factory_id = row.get("factory_id") or ""
@@ -156,9 +158,9 @@ def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List
         if not r.is_training_tenant(factory_id):
             dropped["tenant"] += 1
             continue
-        terms, directory = factory_lists_map().get(factory_id, (frozenset(), frozenset()))
+        _, directory = factory_lists_map().get(factory_id, (frozenset(), frozenset()))
         texts = [row.get(k) for k in keys]
-        if r.mentions_any(terms, *texts) or r.mentions_any(directory, *texts):
+        if r.mentions_any(every_factorys_terms, *texts) or r.mentions_any(directory, *texts):
             dropped["factory_list"] += 1
             continue
         scope = r.scope_from_map(consent_map(), factory_id)

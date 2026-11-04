@@ -131,11 +131,12 @@ def test_process_secret_terms_tenants_and_missing_factories_are_dropped(monkeypa
             {"factory_id": None, "user_input": "今天卖了多少"},               # no factory -> out
             {"factory_id": "", "user_input": "今天卖了多少"},
             {"factory_id": "F006", "user_input": "398礼盒今天发了多少"},      # name check alone (no process word) -> out
-            {"factory_id": "F007", "user_input": "398礼盒今天发了多少"},      # not F007's product -> kept
+            {"factory_id": "F007", "user_input": "398礼盒今天发了多少"},      # one model for all: F006's product -> out
+            {"factory_id": "F007", "user_input": "今天发了多少礼盒"},         # nobody's term -> kept
             {"factory_id": "F006", "user_input": "批次 398 今天完工了吗"}]   # pure-numeric name not collected -> kept
     kept = gate.apply_utterance_rule(rows, ("user_input",))
     assert [(r["factory_id"], r["user_input"]) for r in kept] == [
-        ("F007", "<数值>礼盒今天发了多少"), ("F006", "批次 <数值> 今天完工了吗")]
+        ("F007", "今天发了多少礼盒"), ("F006", "批次 <数值> 今天完工了吗")]
 
 
 def test_no_secrecy_switch_opens_the_gate(monkeypatch):
