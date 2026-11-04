@@ -71,6 +71,7 @@ Synthetic seed corpus (factory ids SEED_R / SEED_F) belongs to no tenant.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any, Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
 
 CONSENT_SCOPES = ("none", "private", "shared_anon")
@@ -259,6 +260,17 @@ def mask_numbers(text: Optional[str]) -> Optional[str]:
     if not text:
         return text
     return mask_values(remove_personal_identifiers(text) or "")
+
+
+VALUE_TOKEN = "<数值>"     # what mask_numbers writes in place of a value
+
+
+@lru_cache(maxsize=8)
+def masked_terms(terms: FrozenSet[str]) -> Tuple[str, ...]:
+    """Terms as a masked text holds them: 老卤牛肉2号 is 老卤牛肉<数值>号 there. A term that masking
+    leaves almost nothing of has no such form: it would match any number."""
+    masked = (mask_numbers(t) or "" for t in terms)
+    return tuple(m for m in masked if VALUE_TOKEN in m and len(m.replace(VALUE_TOKEN, "")) >= 2)
 
 
 def keeps_raw(scope: str) -> bool:

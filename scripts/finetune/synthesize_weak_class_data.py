@@ -32,6 +32,8 @@ from typing import Dict, List, Optional, Tuple
 import psycopg2
 import requests
 
+from training_consent_gate import without_protected_terms
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -138,6 +140,10 @@ def fetch_intent_metadata(intent_codes: List[str]) -> Dict[str, dict]:
                             examples = []
                     except (json.JSONDecodeError, TypeError):
                         pass
+
+                # both go into the prompt to DashScope; learned keywords can hold a protected name
+                keywords = without_protected_terms(keywords)
+                examples = without_protected_terms(examples)
 
                 metadata[intent_code] = {
                     "intent_code": intent_code,

@@ -135,6 +135,36 @@ def consent_map() -> Dict[str, str]:
     return consent
 
 
+def every_factorys_terms() -> frozenset:
+    """Every factory's process-secret terms: what these scripts produce crosses factories."""
+    terms = frozenset(t for factory_terms, _ in factory_lists_map().values() for t in factory_terms)
+    logger.info("shared content check: %d terms", len(terms))
+    return terms
+
+
+def _names_a_term(terms: frozenset, text: object) -> bool:
+    """``text`` holds one of ``terms``, plain or masked. Anything but a string is refused."""
+    r = rules()
+    return not isinstance(text, str) or r.mentions_any(terms, text) or r.mentions_any(r.masked_terms(terms), text)
+
+
+def drop_records_naming_protected_terms(records: Iterable[Dict]) -> List[Dict]:
+    """For labeled records that carry no factory (``zpd_labeled`` / ``shadow_adjudicated`` files): they
+    may predate the product's protection or have passed under an older list, and the file they go
+    into trains the model every factory shares. Unreadable lists stop the run."""
+    terms = every_factorys_terms()
+    records = list(records)
+    kept = [rec for rec in records if not _names_a_term(terms, rec.get("text"))]
+    logger.info("shared content check: %d of %d records kept", len(kept), len(records))
+    return kept
+
+
+def without_protected_terms(texts: Iterable[object]) -> List[str]:
+    """``texts`` minus those holding any factory's term: for what goes into a prompt to an outside LLM."""
+    terms = every_factorys_terms()
+    return [t for t in texts if not _names_a_term(terms, t)]
+
+
 def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List[Dict]:
     """Rows that may be used, with their text fields desensitized per factory.
 
@@ -148,7 +178,7 @@ def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List
     r = rules()
     keys = tuple(text_keys)
     kept: List[Dict] = []
-    every_factorys_terms = frozenset(t for terms, _ in factory_lists_map().values() for t in terms)
+    shared_terms = every_factorys_terms()
     dropped = {"no_factory": 0, "tenant": 0, "factory_list": 0, "content": 0}
     for row in rows:
         factory_id = row.get("factory_id") or ""
@@ -160,7 +190,7 @@ def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List
             continue
         _, directory = factory_lists_map().get(factory_id, (frozenset(), frozenset()))
         texts = [row.get(k) for k in keys]
-        if r.mentions_any(every_factorys_terms, *texts) or r.mentions_any(directory, *texts):
+        if r.mentions_any(shared_terms, *texts) or r.mentions_any(directory, *texts):
             dropped["factory_list"] += 1
             continue
         scope = r.scope_from_map(consent_map(), factory_id)
