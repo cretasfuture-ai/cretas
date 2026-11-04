@@ -403,6 +403,7 @@
               :rework-pairs="reworkPairsOnProcess(slotProps.id)"
               :active-pair-label="activePairLabelOn(slotProps.id)"
               @toggle-pair="(reworkNodeId: string) => toggleReworkPairPin(slotProps.id, reworkNodeId)"
+              @configure-time-limit="openTimeLimitDrawer(slotProps.id)"
               :data="slotProps.data"
               :selected="slotProps.selected"
               :can-write="canEdit"
@@ -452,6 +453,16 @@
       v-model:visible="specialOutputChooserVisible"
       @choose="chooseSpecialOutput"
     />
+    <WorkflowTimeLimitConfigDrawer
+      v-if="timeLimitDrawerNodeId"
+      :visible="timeLimitDrawerVisible"
+      :can-write="canEdit"
+      :process-name="String((timeLimitDrawerNode?.data as Record<string, unknown>)?.processName || '')"
+      :ports="timeLimitDrawerPorts"
+      @update:visible="closeTimeLimitDrawer"
+      @save="saveTimeLimits"
+    />
+
     <WorkflowReworkConfigDrawer
       v-if="reworkDrawerNodeId"
       :visible="reworkDrawerVisible"
@@ -1153,6 +1164,9 @@ import WorkflowFusedStrip from './WorkflowFusedStrip.vue';
 import { CREATE_SKU_SENTINEL } from './WorkflowSkuPicker.vue';
 import WorkflowSpecialOutputChooser from './WorkflowSpecialOutputChooser.vue';
 import WorkflowReworkConfigDrawer from './WorkflowReworkConfigDrawer.vue';
+import WorkflowTimeLimitConfigDrawer from './WorkflowTimeLimitConfigDrawer.vue';
+import type { TimeLimitPortRow } from './workflowTimeLimit';
+import type { WorkflowPortTimeLimit } from '@/api/processTimeLimit';
 import { buildCcpPointsFromSpec, listPendingItems } from './workflowPendingConfirmations';
 import {
   FUSED_MATERIAL_OWNER_WIDTH,
@@ -5134,6 +5148,7 @@ function removeNode(nodeId: string): void {
     // 删掉的可能正是当前聚焦的那个 —— 不重算就会「全部淡化」= 白屏(§9)。
     applyFocusClasses();
     if (reworkDrawerNodeId.value === nodeId) closeReworkDrawer(false);
+    if (timeLimitDrawerNodeId.value === nodeId) closeTimeLimitDrawer(false);
     if (selectedNodeId.value === nodeId) selectedNodeId.value = '';
     if (!flowEdges.value.some((edge) => edge.id === selectedEdgeId.value)) clearEdgeSelection();
     clearPublishBindingError(nodeId);
@@ -5715,6 +5730,50 @@ const reworkUnitOptions = computed<string[]>(() => {
   const current = String((reworkDrawerNode.value?.data as MaterialNodeData | undefined)?.baseUnit || '');
   return [...new Set([...(current ? [current] : []), ...fromCatalog])];
 });
+
+// -- 工序时限抽屉(食品 DAG 缺口 14) ---------------------------------------
+const timeLimitDrawerVisible = ref(false);
+const timeLimitDrawerNodeId = ref<string | null>(null);
+const timeLimitDrawerNode = computed(() => (timeLimitDrawerNodeId.value
+  ? flowNodes.value.find((node) => node.id === timeLimitDrawerNodeId.value) ?? null
+  : null));
+const timeLimitDrawerPorts = computed<TimeLimitPortRow[]>(() => {
+  const data = timeLimitDrawerNode.value?.data as ProcessNodeData | undefined;
+  return (data?.ports ?? []).filter((port) => port.direction === 'INPUT').map((port) => {
+    // 新连的端口上还没有 materialKind / materialName, 以物料 Cell 为准
+    const material = flowNodes.value.find((node) => node.id === port.materialNodeId);
+    return {
+      portId: port.id,
+      materialName: String(material?.data?.name || port.materialName || ''),
+      raw: (nodeKind(material) || port.materialKind) === 'RAW_MATERIAL',
+      limit: port.timeLimit ?? null,
+    };
+  });
+});
+
+function openTimeLimitDrawer(processId: string): void {
+  timeLimitDrawerNodeId.value = processId;
+  timeLimitDrawerVisible.value = true;
+}
+
+function closeTimeLimitDrawer(visible: boolean): void {
+  timeLimitDrawerVisible.value = visible;
+  if (!visible) timeLimitDrawerNodeId.value = null;
+}
+
+function saveTimeLimits(limits: Record<string, WorkflowPortTimeLimit | null>): void {
+  const processId = timeLimitDrawerNodeId.value;
+  const data = timeLimitDrawerNode.value?.data as ProcessNodeData | undefined;
+  if (!processId || !data || !canEdit.value) return;
+  updateProcessData(processId, {
+    ports: data.ports.map((port) => {
+      if (!(port.id in limits)) return port;
+      const { timeLimit: _previous, ...rest } = port;
+      const next = limits[port.id];
+      return next ? { ...rest, timeLimit: next } : rest;
+    }),
+  });
+}
 
 // -- 回料配置抽屉(§8) ----------------------------------------------------
 const reworkDrawerVisible = ref(false);

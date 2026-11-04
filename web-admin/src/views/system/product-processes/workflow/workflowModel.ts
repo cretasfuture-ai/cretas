@@ -12,6 +12,7 @@ import type {
   WorkflowPosition,
   WorkflowValidationError,
 } from './types';
+import { isTimeLimitShape, timeLimitProblem } from './workflowTimeLimit';
 
 const GRID_SIZE = 16;
 const NODE_HORIZONTAL_GAP = 96;
@@ -497,6 +498,8 @@ const processDataKeys = new Set([
 const portKeys = new Set([
   'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
   'conversionRefId', 'conversionVersion', 'ordinal', 'inputShareRatio',
+  // 缺口 14: 没有它, 配过时限的图上任何 AI 补丁都会被判「端口不合法」
+  'timeLimit',
 ]);
 /**
  * 🔴 这张表和下面的 {@link isAllowedFieldValue} 是**同一道闸的两个承载点** ——
@@ -683,6 +686,7 @@ function isProcessPort(value: unknown): boolean {
     && optionalNullableString(value.conversionRefId)
     && optionalNullableInteger(value.conversionVersion)
     && optionalNullableFiniteNumber(value.inputShareRatio)
+    && (value.timeLimit === undefined || value.timeLimit === null || isTimeLimitShape(value.timeLimit))
     && (value.materialKind === undefined
       || (typeof value.materialKind === 'string' && materialNodeKinds.has(value.materialKind)));
 }
@@ -906,6 +910,18 @@ export function validateWorkflow(
           nodeId: node.id,
           message: `${data.processName} 的${port.direction === 'INPUT' ? '投入' : '产出'}端口未连接或缺少单位`,
         });
+      }
+      if (port.direction === 'INPUT' && port.timeLimit) {
+        const material = port.materialNodeId ? nodeById.get(port.materialNodeId) : undefined;
+        const raw = (material?.kind ?? port.materialKind) === 'RAW_MATERIAL';
+        const problem = timeLimitProblem(port.timeLimit, raw);
+        if (problem) {
+          errors.push({
+            code: 'TIME_LIMIT_INVALID',
+            nodeId: node.id,
+            message: `${data.processName}「${port.materialName || '投入'}」的时限：${problem}`,
+          });
+        }
       }
     });
   });

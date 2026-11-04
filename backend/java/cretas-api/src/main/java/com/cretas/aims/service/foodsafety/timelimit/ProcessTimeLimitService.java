@@ -157,7 +157,9 @@ public class ProcessTimeLimitService {
             BigDecimal drawableQuantity,
             String unit,
             boolean paused,
-            boolean perLot) {
+            boolean perLot,
+            /** 进行中的暂停登记 id: 页面刷新后也能结束暂停。 */
+            Long pauseMarkId) {
     }
 
     /** 处置请求。decision = RELEASED / REJECTED。 */
@@ -185,7 +187,7 @@ public class ProcessTimeLimitService {
     private record LotClock(LocalDateTime start, LocalDateTime deadline, BigDecimal quantity, boolean waived) {
     }
 
-    private record Evaluation(Source source, WorkflowTaskPort port, ProcessTimeLimitConfig config,
+    private record Evaluation(Source source, WorkflowTaskPort port, Long consumerBatchId, ProcessTimeLimitConfig config,
                               String processName, SourceStatus status, LocalDateTime coveredUntil,
                               LocalDateTime expiredStart, LocalDateTime expiredDeadline) {
     }
@@ -349,6 +351,7 @@ public class ProcessTimeLimitService {
                     .targetId(s.targetId())
                     .batchNumber(s.batchNumber())
                     .productTypeId(e.source().productTypeId())
+                    .productionBatchId(e.consumerBatchId())
                     .taskId(port.getTaskId())
                     .workflowPortId(port.getWorkflowPortId())
                     .processName(e.processName())
@@ -390,6 +393,10 @@ public class ProcessTimeLimitService {
 
     private List<SourceStatus> statusOf(String factoryId, Consumer consumer, Integer processOrder) {
         List<WorkflowTaskPort> limited = consumer.limited();
+        if (consumer.task() != null) {
+            limited = limited.stream()
+                    .filter(p -> Objects.equals(p.getTaskId(), consumer.task().getId())).toList();
+        }
         if (processOrder != null) {
             Set<Long> taskIds = tasksAtOrder(factoryId, limited, processOrder);
             limited = limited.stream().filter(p -> taskIds.contains(p.getTaskId())).toList();
@@ -631,12 +638,15 @@ public class ProcessTimeLimitService {
             LocalDateTime start = wholeBatchStart(factoryId, source, config, consumer, port);
             clocks = List.of(clock(start, config.maxMinutes(), source.balance(), config, pauses, releases, now));
         }
-        return summarize(source, port, config, processName, clocks, paused, startMissing, now);
+        Long pauseMarkId = paused ? openPauseMarkId(factoryId, source, config) : null;
+        return summarize(source, port, consumer.productionBatchId(), config, processName, clocks, paused,
+                pauseMarkId, startMissing, now);
     }
 
-    private Evaluation summarize(Source source, WorkflowTaskPort port, ProcessTimeLimitConfig config,
-                                 String processName, List<LotClock> clocks, boolean paused, boolean startMissing,
-                                 LocalDateTime now) {
+    private Evaluation summarize(Source source, WorkflowTaskPort port, Long consumerBatchId,
+                                 ProcessTimeLimitConfig config,
+                                 String processName, List<LotClock> clocks, boolean paused, Long pauseMarkId,
+                                 boolean startMissing, LocalDateTime now) {
         List<LotClock> active = clocks.stream().filter(c -> !c.waived() && c.start() != null)
                 .sorted(Comparator.comparing(LotClock::deadline)).toList();
         List<LotClock> overdue = active.stream().filter(c -> c.deadline().isBefore(now)).toList();
@@ -679,9 +689,9 @@ public class ProcessTimeLimitService {
         SourceStatus status = new SourceStatus(source.type(), source.id(), source.batchNumber(),
                 port.getWorkflowPortId(), processName, config.maxMinutes(), config.startEvent(), state,
                 clockShown == null ? null : clockShown.start(), clockShown == null ? null : clockShown.deadline(),
-                remaining, reason, balance, expired, drawable, source.unit(), paused, config.perLot());
+                remaining, reason, balance, expired, drawable, source.unit(), paused, config.perLot(), pauseMarkId);
         LotClock first = overdue.isEmpty() ? null : overdue.get(0);
-        return new Evaluation(source, port, config, processName, status, coveredUntil,
+        return new Evaluation(source, port, consumerBatchId, config, processName, status, coveredUntil,
                 first == null ? null : first.start(), first == null ? null : first.deadline());
     }
 
@@ -878,6 +888,19 @@ public class ProcessTimeLimitService {
             frontier = next;
         }
         return List.copyOf(seen.values());
+    }
+
+    /** 进行中的暂停 (原料可能登记在母批上, 按继承规则一起找)。 */
+    private Long openPauseMarkId(String factoryId, Source source, ProcessTimeLimitConfig config) {
+        boolean inherited = TargetType.RAW_MATERIAL_BATCH.equals(source.type()) && config.inheritsSplit();
+        List<String> ids = inherited
+                ? lineageChain(factoryId, source.material()).stream().map(MaterialBatch::getId).toList()
+                : List.of(source.id());
+        return markRepository.findByTargets(factoryId, source.type(), ids).stream()
+                .filter(m -> ProcessTimeMark.Kind.PAUSE.equals(m.getMarkKind()) && m.getEndedAt() == null)
+                .filter(m -> config.pauseCodes().contains(m.getMarkCode()))
+                .map(ProcessTimeMark::getId)
+                .findFirst().orElse(null);
     }
 
     private List<ProcessClock.Span> pausesOf(String factoryId, String type, List<String> ids,

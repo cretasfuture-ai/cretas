@@ -15,6 +15,7 @@ import MaterialBatchPicker, {
   MaterialBatchPickerValidation,
   MaterialBatchRef,
 } from '../../components/processing/MaterialBatchPicker';
+import RawTimeLimitNotice from '../../components/processing/RawTimeLimitNotice';
 import WipBatchPicker, {
   WipSelection, wipFreeQuantity, wipPendingQuantity, wipQcBlockReason,
 } from '../../components/processing/WipBatchPicker';
@@ -53,6 +54,7 @@ import {
   ProductionPlanMaterialAdvisory,
 } from '../../services/api/productionPlanApiClient';
 import { handleError } from '../../utils/errorHandler';
+import { backendActionHint } from '../../utils/processTimeLimit';
 import { useAuthStore } from '../../store/authStore';
 import { appAlert, AppDialogHost } from '../../components/ui/AppDialog';
 import { isAxiosError } from 'axios';
@@ -223,7 +225,7 @@ function friendlySubmitError(error: unknown, fallbackTitle = '提交失败'): { 
   if (isAxiosError(error)) {
     const status = error.response?.status;
     const backendMsg: string = (error.response?.data as { message?: string })?.message ?? '';
-    const hint: string = (error.response?.data as { hint?: string })?.hint ?? '';
+    const hint = backendActionHint(error.response?.data);
     if (!error.response) {
       // 纯网络错误 (timeout / offline / DNS)
       return {
@@ -2421,6 +2423,7 @@ const YieldStepReportScreen: React.FC = () => {
 
               {/* 领料批次选择器 */}
               {renderMaterialAdvisoryCard()}
+              <RawTimeLimitNotice taskId={currentTask?.id} />
               <MaterialBatchPicker
                 unit={unit}
                 productTypeId={productTypeId}
@@ -2969,6 +2972,7 @@ const YieldStepReportScreen: React.FC = () => {
               {isFirstStep || (!isFirstStep && !isSecondaryProcessing) ? (
                 <>
                 {renderMaterialAdvisoryCard()}
+                <RawTimeLimitNotice taskId={currentTask?.id} />
                 <MaterialBatchPicker
                   unit={unit}
                   productTypeId={productTypeId}
@@ -2999,6 +3003,7 @@ const YieldStepReportScreen: React.FC = () => {
               {needsWipPicker ? (
                 <WipBatchPicker
                   batchId={batchId}
+                  taskId={currentTask?.id}
                   selectedSourceWipNo={selectedWip?.sourceWipNo ?? null}
                   onChange={setSelectedWip}
                   onEmpty={() => setWipPickerConfirmedEmpty(true)}

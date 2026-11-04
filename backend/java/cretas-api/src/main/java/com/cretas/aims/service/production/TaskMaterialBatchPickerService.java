@@ -140,7 +140,7 @@ public class TaskMaterialBatchPickerService {
             }
             // 缺口 14: 投料时限。原料批次不是累加行, 超时就是整批, 不需要按量判
             if (processTimeLimitService != null) {
-                processTimeLimitService.assertRawFeedForTask(factoryId, task, batch, null, task.getAssignedTo());
+                processTimeLimitService.assertRawFeedForTask(factoryId, task, batch, null, SecurityUtils.currentUserId());
             }
             InputUnit inputPort = allowedTypes.get(batch.getMaterialTypeId());
             String portUnit = inputPort.code();
