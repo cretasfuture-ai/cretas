@@ -166,6 +166,12 @@ public class YieldReportRequest {
      */
     private com.cretas.aims.dto.workflow.BlendRatioDeviation blendRatio;
 
+    /**
+     * 工序自定义字段 / 工艺参数的实际值 (key 对应 WorkProcess.customFieldSchema)。只在产出报工 (OUTPUT / 旧式整合) 上收;
+     * 落 custom_fields.clerkCustomFields, 服务端按当时的标准生成 custom_fields.paramChecks 快照 (与 web 工序表同口径)。
+     */
+    private java.util.Map<String, Object> customFields;
+
     /** T161: per-photo annotation attached to each evidence image. */
     @Data
     public static class PhotoAnnotation {

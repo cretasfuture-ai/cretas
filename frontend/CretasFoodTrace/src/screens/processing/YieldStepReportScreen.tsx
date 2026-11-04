@@ -29,6 +29,10 @@ import {
 import { isProcessSecretHidden } from '../../utils/processSecretField';
 import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
 import CcpReadingsSection from '../../components/processing/CcpReadingsSection';
+import ProcessParamsSection from '../../components/processing/ProcessParamsSection';
+import {
+  buildCustomFieldsRequest, collectParamDeviations, enabledParamDefs,
+} from '../../utils/processParamCheck';
 import { buildCcpReadings, ccpSubmitBlockReason, CcpLoadStatus } from '../../components/processing/ccpReadings';
 import type { CcpStepCheckpoint } from '../../services/api/ccpApi';
 import {
@@ -786,6 +790,21 @@ const YieldStepReportScreen: React.FC = () => {
   }, [currentTask?.id]);
   const ccpBlockReason = ccpSubmitBlockReason(ccpStatus, ccpCheckpoints, ccpValues);
 
+  // ── 工艺参数 (docs/specs/app-process-params-entry.md): 只在产出报工 (OUTPUT) 用; 哨兵任务 (无真实工序) 不处理 ──
+  // 值按文本存 (输入中途「12.」也要保住); 随同一个 OUTPUT 请求发出, 不另发请求 (幂等键成功才轮换)。
+  // 「返回修改」只关弹窗、不碰这份 state; 换道 / 提交成功才清。
+  const [paramValues, setParamValues] = useState<Record<string, string>>({});
+  const handleParamChange = useCallback((key: string, text: string) => {
+    setParamValues((prev) => ({ ...prev, [key]: text }));
+  }, []);
+  useEffect(() => {
+    setParamValues({});
+  }, [currentTask?.id]);
+  const paramDefs = useMemo(
+    () => (isSentinelBatch || !currentTask?.workProcessId ? [] : enabledParamDefs(currentTask.customFieldSchema)),
+    [isSentinelBatch, currentTask],
+  );
+
   /** 完工出成请求里的 CCP 实测值 (本道没挂 CCP → undefined, 请求体不带这个字段)。 */
   const ccpReadingsForRequest = useCallback((): YieldReportRequest['ccpReadings'] => (
     currentTask?.workProcessId && ccpCheckpoints.length > 0
@@ -794,6 +813,7 @@ const YieldStepReportScreen: React.FC = () => {
   ), [currentTask, ccpCheckpoints, ccpValues]);
   /** 报工成功之后: 清掉本道填的 CCP 值; 后端回报有偏离 → 告诉操作员这批已转待检。 */
   const afterCcpReport = useCallback((ccp: YieldReportResult['ccp']) => {
+    setParamValues({});   // 产出报工成功: 这锅的工艺参数已随请求入账, 下一次从空白开始 (仅 OUTPUT 路径调用本函数)
     if (!ccp) return;
     setCcpValues({});
     if (ccp.deviationCount > 0) {
@@ -1733,6 +1753,12 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('证据上传中', '请等照片或视频上传完成再提交');
       return;
     }
+    // 工艺参数: 数字字段里填了非数字 → 不发这个值也不能悄悄吞掉, 挡下并说清是哪项
+    const paramBuild = buildCustomFieldsRequest(paramDefs, paramValues);
+    if (paramBuild.invalidLabels.length > 0) {
+      appAlert('工艺参数请填数字', `请把这几项改成数字，或清空不填：${paramBuild.invalidLabels.join('、')}`);
+      return;
+    }
     // CCP: 按钮已置灰 + 界面已写明缺什么 + 后端错误码兜底 (CCP_READING_MISSING)
     const output = parseFloat(outputQty);
     if (Number.isNaN(output) || output <= 0) {
@@ -1775,6 +1801,8 @@ const YieldStepReportScreen: React.FC = () => {
       ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
       // 缺口 13: CCP 实测值随产出一起提交 (后端同一事务落库; 缺值整笔拒绝, 产出不入账)
       ...(ccpReadingsForRequest() ? { ccpReadings: ccpReadingsForRequest() } : {}),
+      // 工艺参数: 只发填了的; 仅此一处 (OUTPUT) 带 customFields, INPUT / SEGMENT 请求体不含
+      ...(paramBuild.customFields ? { customFields: paramBuild.customFields } : {}),
     };
     setSubmitting(true);
     try {
@@ -1852,7 +1880,8 @@ const YieldStepReportScreen: React.FC = () => {
     }
   }, [currentTask, evidenceUploading, outputQty, byproducts, wasteQty, sampleRetainQty,
       outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
-      taskOptions, semiQtyByCode, buildPhotoAnnotations, ccpReadingsForRequest, afterCcpReport]);
+      taskOptions, semiQtyByCode, buildPhotoAnnotations, ccpReadingsForRequest, afterCcpReport,
+      paramDefs, paramValues]);
 
   // 同单未完结续报: 保存本次产出但不完工 (留单继续) — 无二次确认 (可改, 低门槛)。
   const handleSavePartialOutput = useCallback(() => {
@@ -1860,8 +1889,17 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('产出量异常', '产出量超过物理上限, 请核对 (疑似单位/数量错误)');
       return;
     }
+    // 留单续报本身不设确认 (低门槛), 但这次带的工艺参数超标时, 与完工出成同样要二次确认 —— 超标一样会入账
+    const paramDeviations = collectParamDeviations(paramDefs, paramValues);
+    if (paramDeviations.length > 0) {
+      appAlert('⚠️ 工艺参数超出标准', `工艺参数超出标准：\n${paramDeviations.map((d) => d.text).join('\n')}`, [
+        { text: '返回修改', style: 'cancel' },
+        { text: '按实际值保存', style: 'default', onPress: () => doSubmitOutput(false) },
+      ]);
+      return;
+    }
     doSubmitOutput(false);
-  }, [outputOverHardCap, doSubmitOutput]);
+  }, [outputOverHardCap, doSubmitOutput, paramDefs, paramValues]);
 
   // 完工二次确认 (Rule: 出成率锁定) — markComplete=true。
   // ⚠️ 不平衡判断前移到这里 (确认弹窗里), 而不是留给提交后的 balanceWarning —— 见
@@ -1880,6 +1918,12 @@ const YieldStepReportScreen: React.FC = () => {
       outUnit,
     );
     const header = `${productType || ''} ${currentTask?.processName ?? ''}`;
+    const paramBuild = buildCustomFieldsRequest(paramDefs, paramValues);
+    if (paramBuild.invalidLabels.length > 0) {
+      appAlert('工艺参数请填数字', `请把这几项改成数字，或清空不填：${paramBuild.invalidLabels.join('、')}`);
+      return;
+    }
+    const paramDeviations = collectParamDeviations(paramDefs, paramValues);
     const baseBody = '完工后本道出成率锁定, 确认要完工出成吗? (若还要继续产出, 请改用"保存, 稍后继续")';
     let title = '完工出成确认';
     let message = `${header}\n${baseBody}`;
@@ -1898,11 +1942,24 @@ const YieldStepReportScreen: React.FC = () => {
         `投入单位 ${imbalance.inputUnit} 与产出单位 ${imbalance.outputUnit} 不同, 完工后由后端按规格换算核对是否平衡。\n` +
         baseBody;
     }
+    if (paramDeviations.length > 0) {
+      // 超标不拦 (实际已经炒完了), 只列出来让他二次确认; 「返回修改」只关弹窗, 已填内容原样保留
+      title = '⚠️ 工艺参数超出标准 — 完工出成确认';
+      message =
+        `${header}\n工艺参数超出标准：\n${paramDeviations.map((d) => d.text).join('\n')}\n\n` +
+        message.slice(header.length + 1);
+      appAlert(title, message, [
+        { text: '返回修改', style: 'cancel' },
+        { text: '按实际值报工', style: 'default', onPress: () => doSubmitOutput(true) },
+      ]);
+      return;
+    }
     appAlert(title, message, [
       { text: '取消', style: 'cancel' },
       { text: '确认完工出成', style: 'default', onPress: () => doSubmitOutput(true) },
     ]);
-  }, [outputOverHardCap, productType, currentTask, doSubmitOutput, outputQty, currentStepYield, unit, outUnit]);
+  }, [outputOverHardCap, productType, currentTask, doSubmitOutput, outputQty, currentStepYield, unit, outUnit,
+      paramDefs, paramValues]);
 
   // ========================= 完成阶段: 下一道 =========================
   const goNextStep = useCallback(() => {
@@ -3403,6 +3460,16 @@ const YieldStepReportScreen: React.FC = () => {
               {ccpBlockReason && ccpCheckpoints.length > 0 ? (
                 <Text style={styles.ccpBlockText} testID="ccp-block-reason">{ccpBlockReason}</Text>
               ) : null}
+
+              {/* 工艺参数: 本道配了 enabled 参数才出现; 非必填, 超标不挡提交 (提交确认里列出) */}
+              <ProcessParamsSection
+                key={`params-${currentTask?.id ?? 'no-task'}`}
+                processName={currentTask?.processName}
+                schema={paramDefs}
+                values={paramValues}
+                onChangeValue={handleParamChange}
+                disabled={submitting}
+              />
 
               {/* 同单未完结续报: 留单继续 (保存本次产出, 不锁出成率) — 灰底次按钮 */}
               <NeoButton

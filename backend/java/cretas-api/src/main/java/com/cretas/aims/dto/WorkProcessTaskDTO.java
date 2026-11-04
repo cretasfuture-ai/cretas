@@ -100,6 +100,12 @@ public class WorkProcessTaskDTO {
     private String processName;
     private String processCategory;
 
+    /**
+     * 本道工序的自定义字段定义 (含工艺标准参数 unit/standardValue/min/max), 来自 WorkProcess.customFieldSchema。
+     * App 产出报工按它渲染参数卡并在提交前提示超标; 判定以服务端快照为准。null = 未配置。
+     */
+    private java.util.List<java.util.Map<String, Object>> customFieldSchema;
+
     /** T157: 产品名称 (list 路径 batch join 透出, 无 N+1; 给 RN 小组长跨批次选择屏分组用). null = 批次/产品已删除. */
     private String productTypeName;
 

@@ -25,6 +25,18 @@ export type WorkProcessTaskStatus =
   | 'SKIPPED'
   | 'CANCELLED';
 
+/** 工序配置的自定义/工艺参数字段 (mirror 后端 WorkProcess.customFieldSchema 项; 数字字段可带标准值与上下限)。 */
+export interface ProcessCustomFieldDef {
+  key: string;
+  label: string;
+  type: string;                     // 'number' | 'text' | ...
+  enabled?: boolean;
+  unit?: string | null;
+  standardValue?: number | null;
+  min?: number | null;
+  max?: number | null;
+}
+
 // ============ WorkProcessTaskDTO (mirror backend dto/WorkProcessTaskDTO.java:23-71 + Task 0 两字段) ============
 // 注: 后端 types/workProcess.ts 无此 interface (只有 WorkProcess/ProductWorkProcess), 故在此定义.
 export interface WorkProcessTask {
@@ -48,6 +60,8 @@ export interface WorkProcessTask {
   notes?: string | null;
   processName?: string | null;      // 工序名 (焯水/卤制..., join 提供, 选填) — 卡片头用
   processCategory?: string | null;
+  /** 工序配置的工艺参数定义 (报工页只显示 enabled 的; null/缺=本道没配)。 */
+  customFieldSchema?: ProcessCustomFieldDef[] | null;
   productTypeName?: string | null;  // T157: 产品名 (list 路径 join 透出; null=批次/产品已删除) — 跨批次选择屏分组用
   batchNumber?: string | null;      // T157: 批次号 (list 路径 join 透出; null=批次已删除)
   standardYieldMin?: number | null; // Task 0 透出: A7 标准出成率下限 (null=未配)
@@ -263,6 +277,11 @@ export interface YieldReportRequest {
    * 后端与产出同一事务落库; 缺一项整笔 400 (CCP_READING_MISSING), 产出不入账。
    */
   ccpReadings?: Array<{ checkpointId: number; measuredValue: number; notes?: string | null }>;
+  /**
+   * 产出报工的工艺参数实测值 (key = 工序 customFieldSchema 的 key; 数字发 number)。
+   * 只在 reportKind='OUTPUT' 有意义; 服务端校验 key 并留判定快照, 客户端判定只用于展示/确认。
+   */
+  customFields?: Record<string, number | string>;
   /**
    * G7 Wave 4 部分领用: 本道领用哪个上道 WIP (semi_finished_inventory.intermediate_batch_no)。
    * 非空 → 后端扣减该 WIP available_quantity (防呆 inputQuantity ≤ available);
