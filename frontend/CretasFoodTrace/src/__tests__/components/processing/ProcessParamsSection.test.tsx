@@ -47,6 +47,14 @@ describe('ProcessParamsSection', () => {
     },
   );
 
+  it('提示排在输入框上方: 键盘是 pan 模式, 框下面的内容填写时会被盖住 (小米真机实测)', () => {
+    render(<Harness schema={SCHEMA} />);
+    const tree = JSON.stringify(screen.toJSON());
+    const hintAt = tree.indexOf('process-param-hint-oilTemp');
+    expect(hintAt).toBeGreaterThan(-1);
+    expect(hintAt).toBeLessThan(tree.indexOf('process-param-input-oilTemp'));
+  });
+
   it('标题带工序名 + 副标题; 停用项不出现; 数字项常驻标准文案(灰)', () => {
     render(<Harness schema={SCHEMA} />);
     expect(screen.getByText('炒制 工艺参数')).toBeTruthy();
