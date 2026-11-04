@@ -28,6 +28,18 @@ def test_packaged_catalog_matches_java_source_snapshot():
     assert catalog.PACKAGED_CATALOG_PATH.read_bytes() == catalog.JAVA_CATALOG_PATH.read_bytes()
 
 
+def test_generated_migration_does_not_accidentally_open_a_flyway_placeholder():
+    root = Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location(
+        "factory_catalog_migration_generator", root / "scripts/ai/generate_factory_intent_migration.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rendered = module.render()
+    assert "${" not in rendered
+    assert "$factory_catalog$\n{" in rendered
+    assert module.TARGET.read_text(encoding="utf-8") == rendered
+
+
 def test_retired_and_restaurant_rows_are_rejected_but_custom_rows_survive():
     cat = catalog.load_catalog()
     retained = next(iter(cat["reclassified"]))
