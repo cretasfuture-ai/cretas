@@ -34,6 +34,10 @@ import java.util.Objects;
 @RequiredArgsConstructor
 public class QcInspectionPolicy {
 
+    /** 成品入库时查计划有没有不合格未解除的批次。未注入 (单测) ⇒ 不叠加这一层。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
+
     private final ProductTypeRepository productTypeRepository;
 
     /**
@@ -106,13 +110,25 @@ public class QcInspectionPolicy {
 
     /**
      * 成品入库路径共用: 在调用方原本要写的状态 ({@code baseStatus}, 通常 AVAILABLE) 之上叠加质检扣留。
-     * 只会把 AVAILABLE 改成 PENDING_INSPECTION, 其它状态原样返回。
+     * 计划里有不合格未解除的批次 ⇒ AVAILABLE / 待检 改 DEFECTIVE (D-S302-01: 否则先判不合格、后入库的
+     * 成品是可售的, 批次和成品分叉; 此前只有小结路径防了这个时序, 结单与实收路径没有)。
+     * 需检 / 有未处理偏离 ⇒ AVAILABLE 改 PENDING_INSPECTION。其它状态原样返回。
      */
     public String finishedGoodsStatusForOutput(String factoryId, String productTypeId, String planId,
                                                String baseStatus, String... batchNumbers) {
+        if (planQualityUncleared(factoryId, planId)
+                && (FinishedGoodsBatch.Status.AVAILABLE.equals(baseStatus)
+                        || FinishedGoodsBatch.Status.PENDING_INSPECTION.equals(baseStatus))) {
+            return FinishedGoodsBatch.Status.DEFECTIVE;
+        }
         boolean hold = shouldHoldFinished(factoryId,
                 new OutputRef(productTypeId, null, batchNumbers(batchNumbers), planId, null));
         return finishedGoodsStatusAfterOutput(baseStatus, hold);
+    }
+
+    private boolean planQualityUncleared(String factoryId, String planId) {
+        return productionBatchRepository != null && planId != null && !planId.isBlank()
+                && productionBatchRepository.countQcFailedInPlans(factoryId, java.util.Set.of(planId), "#NO-PREFIX#") > 0;
     }
 
     /** 产出产品: 按 id 优先, 其次按编码; 都找不到 ⇒ null (= 不需检, 存量行为)。 */

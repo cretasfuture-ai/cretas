@@ -4,6 +4,7 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.entity.enums.QualityStatus;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -30,9 +31,10 @@ import java.util.Objects;
  * <h3>批次解析 (只动 <b>本次质检</b> 隔离的批次, 不越权释放其他批次)</h3>
  * <ul>
  *   <li><b>成品</b> (镜像 #1229 反向): {@code QualityInspection.productionBatchId →
- *       ProductionBatch.productionPlanId → 该计划下同批号、同 SKU 的 DEFECTIVE FinishedGoodsBatch}。
- *       #1229 可能按计划隔离多个批次，放行只把本次质检对应批号和 SKU 的成品置回
- *       AVAILABLE (对称)。</li>
+ *       ProductionBatch.productionPlanId → 该计划下同 SKU 的 DEFECTIVE FinishedGoodsBatch}。
+ *       成品批号是 FG-{计划}-S{序号}-{产品} / FG-AUTO-…, 永远不等于生产批号 PB-…, 所以<b>不能</b>
+ *       按批号对: 此前那样写, 放行在真实数据上一个成品都翻不动 (D-S302-01)。成品表没有指向生产批次的
+ *       外键, 隔离按计划做, 解除也按计划做; 同计划还有不合格未解除的批次就继续隔离。</li>
  *   <li><b>原料</b> (仅当质检 material-scoped): {@code QualityInspection.materialBatchId →
  *       MaterialBatch}。</li>
  * </ul>
@@ -40,11 +42,16 @@ import java.util.Objects;
  * <h3>动作语义 (食品安全: 只有 RELEASE / CONDITIONAL_RELEASE 把批次放回可售)</h3>
  * <table border=1>
  *   <tr><th>动作</th><th>成品 (FG)</th><th>原料 (MaterialBatch)</th></tr>
- *   <tr><td>RELEASE / CONDITIONAL_RELEASE</td><td>DEFECTIVE → AVAILABLE</td><td>→ AVAILABLE</td></tr>
- *   <tr><td>SCRAP</td><td>保持 DEFECTIVE (FG 无 SCRAPPED 状态; 物理报废 + DisposalRecord
+ *   <tr><td>RELEASE / CONDITIONAL_RELEASE</td><td>DEFECTIVE → AVAILABLE (需检产品 → 待检)</td><td>→ AVAILABLE</td></tr>
+ *   <tr><td>SCRAP</td><td>可售 / 待检 → DEFECTIVE (FG 无 SCRAPPED 状态; 物理报废 + DisposalRecord
  *       走处置/报损 UI 人工流, 本服务不重复处理)</td><td>DEFECTIVE → SCRAPPED (终态)</td></tr>
- *   <tr><td>HOLD / SPECIAL_APPROVAL / REWORK</td><td>不动 (保持隔离)</td><td>不动</td></tr>
+ *   <tr><td>REWORK</td><td>可售 / 待检 → DEFECTIVE</td><td>不动</td></tr>
+ *   <tr><td>HOLD / SPECIAL_APPROVAL</td><td>不动 (保持隔离)</td><td>不动</td></tr>
  * </table>
+ *
+ * <h3>批次质量状态 (Owner 2026-11-04: 不合格批次只能走处置和复核改状态, 批次和成品不许分叉)</h3>
+ * 批次状态由这里写, 与成品翻转同一事务: RELEASE → PASSED, CONDITIONAL_RELEASE → PARTIAL_PASS,
+ * REWORK → REWORK_REQUIRED, SCRAP → SCRAPPED, HOLD / SPECIAL_APPROVAL 不动。
  *
  * <h3>审批门禁</h3>
  * 库存翻转只在<b>最终执行</b>时发生 —— 调用方 {@code QualityDispositionRuleServiceImpl.executeDisposition}
@@ -59,7 +66,9 @@ import java.util.Objects;
  *   <li>只解析<b>本次质检</b>关联的批次 (plan-scoped + material-scoped), 不越权释放兄弟批次。</li>
  * </ul>
  *
- * <p>销售退货使用独立 RTN 批号，不随原生产批次放行；同计划其他批号或 SKU 也不释放。
+ * <p>销售退货使用独立 RTN 批号，不随原生产批次放行；同计划其他 SKU 不释放, 质检放行时单独判了不合格的
+ * 成品批也不释放 —— 这几类留在隔离里, 数量写进 {@link InventoryDispositionResult#getFinishedGoodsHeld()}
+ * 如实告诉操作人。
  *
  * @since 2026-07-05 (feat/quality-disposition-inventory-bridge)
  */
@@ -130,6 +139,14 @@ public class QualityDispositionInventoryService {
     @Autowired
     private FactoryRecallService factoryRecallService;
 
+    /** 放行时认出「质检放行单独判了不合格」的成品批: 那是对这批货本身的结论, 处置批次不能把它洗掉。 */
+    @Autowired
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
+    /** 需检产品解除隔离后回待检, 走质检放行, 不直接可售。未注入 (单测) ⇒ 不叠加这一层。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.quality.release.QcInspectionPolicy qcInspectionPolicy;
+
     // ==================== 共享纯函数守卫 (ReleaseDecisionTool 复用, 防漂移) ====================
 
     /**
@@ -154,6 +171,41 @@ public class QualityDispositionInventoryService {
         return FlipDecision.FLIP;
     }
 
+    /** 这条质检对应的批次是否不合格未解除 (放行它要走复核, 不能直接执行)。 */
+    public boolean isAwaitingDisposition(QualityInspection inspection) {
+        ProductionBatch pb = loadBatch(inspection);
+        return pb != null && pb.getQualityStatus() != null && pb.getQualityStatus().isDispositionLocked();
+    }
+
+    private ProductionBatch loadBatch(QualityInspection inspection) {
+        if (productionBatchRepository == null || inspection == null || inspection.getProductionBatchId() == null) {
+            return null;
+        }
+        return productionBatchRepository.findById(inspection.getProductionBatchId())
+                .filter(pb -> Objects.equals(inspection.getFactoryId(), pb.getFactoryId()))
+                .orElse(null);
+    }
+
+    private String writeBatchStatus(ProductionBatch pb, QualityStatus target) {
+        if (pb == null) {
+            return null;
+        }
+        if (pb.getQualityStatus() != target) {
+            pb.setQualityStatus(target);
+            productionBatchRepository.save(pb);
+        }
+        return target.name();
+    }
+
+    /** 返工 / 报废: 批次已判定不能卖, 同计划还可售 / 待检的成品一起隔离, 否则批次和成品分叉。 */
+    private void quarantineFinishedGoods(ProductionBatch pb) {
+        if (pb == null || finishedGoodsBatchRepository == null) {
+            return;
+        }
+        FinishedGoodsQuarantine.quarantinePlan(finishedGoodsBatchRepository, pb.getFactoryId(),
+                pb.getProductionPlanId());
+    }
+
     // ==================== 桥接主入口 ====================
 
     /**
@@ -176,32 +228,52 @@ public class QualityDispositionInventoryService {
                 if (inspection.getProductionBatchId() != null && factoryRecallService != null) {
                     factoryRecallService.assertReleaseAllowed(inspection.getFactoryId(), inspection.getProductionBatchId());
                 }
-                int fg = flipFinishedGoods(inspection, FinishedGoodsBatch.Status.DEFECTIVE,
-                        FinishedGoodsBatch.Status.AVAILABLE);
+                ProductionBatch pb = loadBatch(inspection);
+                if (pb != null && pb.getQualityStatus() == QualityStatus.SCRAPPED) {
+                    throw new com.cretas.aims.exception.BusinessException(409, "批次已判报废，不能放行")
+                            .withCode("QUALITY_BATCH_SCRAPPED")
+                            .withHint("报废是终态；实物按废弃处理流程处理");
+                }
+                String batchStatus = writeBatchStatus(pb, action == DispositionAction.RELEASE
+                        ? QualityStatus.PASSED : QualityStatus.PARTIAL_PASS);
+                FinishedGoodsRelease fg = releaseFinishedGoods(inspection, pb);
                 FlipDecision mat = flipMaterial(inspection, MaterialBatchStatus.AVAILABLE);
                 InventoryDispositionResult r = InventoryDispositionResult.builder()
                         .action(action)
-                        .finishedGoodsReleased(fg)
+                        .finishedGoodsReleased(fg.released())
+                        .finishedGoodsHeld(fg.held())
+                        .batchQualityStatus(batchStatus)
                         .materialFlip(mat)
                         .build();
-                log.info("质检处置库存桥接 — {} inspectionId={} 放回可售: 成品 {} 个 DEFECTIVE→AVAILABLE, 原料={}",
-                        action, inspection.getId(), fg, mat);
+                log.info("质检处置库存桥接 — {} inspectionId={} 批次→{}, 成品解除隔离 {} 个, 仍隔离 {} 个, 原料={}",
+                        action, inspection.getId(), batchStatus, fg.released(), fg.held(), mat);
                 return r;
             }
             case SCRAP: {
-                // 成品无 SCRAPPED 状态 → 保持 DEFECTIVE (物理报废走处置/报损 UI 人工流, 不重复处理)。
+                // 成品无 SCRAPPED 状态 → DEFECTIVE (物理报废走处置/报损 UI 人工流, 不重复处理)。
                 // 原料 DEFECTIVE→SCRAPPED (真实终态)。二者都<b>不</b>放回 AVAILABLE。
+                ProductionBatch pb = loadBatch(inspection);
+                String batchStatus = writeBatchStatus(pb, QualityStatus.SCRAPPED);
+                quarantineFinishedGoods(pb);
                 FlipDecision mat = flipMaterial(inspection, MaterialBatchStatus.SCRAPPED);
-                log.info("质检处置库存桥接 — SCRAP inspectionId={} 原料报废={} (成品保持 DEFECTIVE, 物理报废走处置 UI)",
-                        inspection.getId(), mat);
+                log.info("质检处置库存桥接 — SCRAP inspectionId={} 批次→{}, 原料报废={} (物理报废走处置 UI)",
+                        inspection.getId(), batchStatus, mat);
                 return InventoryDispositionResult.builder()
                         .action(action)
+                        .batchQualityStatus(batchStatus)
                         .materialFlip(mat)
                         .build();
             }
+            case REWORK: {
+                ProductionBatch pb = loadBatch(inspection);
+                String batchStatus = writeBatchStatus(pb, QualityStatus.REWORK_REQUIRED);
+                quarantineFinishedGoods(pb);
+                log.info("质检处置库存桥接 — REWORK inspectionId={} 批次→{}", inspection.getId(), batchStatus);
+                return InventoryDispositionResult.builder().action(action).batchQualityStatus(batchStatus).build();
+            }
             default:
-                // HOLD / SPECIAL_APPROVAL / REWORK — 库存保持隔离 (DEFECTIVE), 不翻转。
-                log.debug("质检处置库存桥接 — {} inspectionId={} 无库存翻转 (保持隔离)", action, inspection.getId());
+                // HOLD / SPECIAL_APPROVAL — 还没有结论, 批次和库存都不动。
+                log.debug("质检处置库存桥接 — {} inspectionId={} 无状态变化", action, inspection.getId());
                 return InventoryDispositionResult.builder().action(action).build();
         }
     }
@@ -209,41 +281,66 @@ public class QualityDispositionInventoryService {
     // ==================== 成品 (FG) — 镜像 #1229 反向 ====================
 
     /**
-     * 把<b>本次质检</b>关联生产计划下、当前 {@code fromStatus} 的成品批次翻到 {@code toStatus}。
-     * 只解析本 inspection 的 productionBatchId → plan → plan 的成品批次 (不越权释放兄弟计划)。
-     * 幂等: 只翻 {@code fromStatus} 的, 已是 {@code toStatus} 的跳过。
+     * 解除<b>本次质检</b>所在计划的成品隔离。只动 DEFECTIVE, 已放出去的不重复翻。
+     * 留在隔离里的算进 held: 同计划另有批次不合格未解除 / 其他 SKU / 质检放行单独判了不合格。
+     * 销售退货子批次 (RTN) 是独立的货, 既不解除也不计数。
      */
-    private int flipFinishedGoods(QualityInspection inspection, String fromStatus, String toStatus) {
-        if (finishedGoodsBatchRepository == null || productionBatchRepository == null) {
-            return 0;
-        }
-        Long productionBatchId = inspection.getProductionBatchId();
-        if (productionBatchId == null) {
-            return 0;
-        }
-        ProductionBatch pb = productionBatchRepository.findById(productionBatchId).orElse(null);
-        if (pb == null || !Objects.equals(inspection.getFactoryId(), pb.getFactoryId())
-                || pb.getBatchNumber() == null || pb.getProductTypeId() == null) {
-            return 0;
+    private FinishedGoodsRelease releaseFinishedGoods(QualityInspection inspection, ProductionBatch pb) {
+        if (finishedGoodsBatchRepository == null || pb == null || pb.getProductTypeId() == null) {
+            return FinishedGoodsRelease.NONE;
         }
         String planId = pb.getProductionPlanId();
         if (planId == null || planId.isBlank()) {
-            return 0;
+            return FinishedGoodsRelease.NONE;
         }
-        var fgBatches = finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(inspection.getFactoryId(), planId);
-        int flipped = 0;
-        for (FinishedGoodsBatch fg : fgBatches) {
-            if (Objects.equals(inspection.getFactoryId(), fg.getFactoryId())
-                    && Objects.equals(pb.getBatchNumber(), fg.getBatchNumber())
-                    && Objects.equals(pb.getProductTypeId(), fg.getProductTypeId())
-                    && fromStatus.equals(fg.getStatus())) {
-                fg.setStatus(toStatus);
-                finishedGoodsBatchRepository.save(fg);
-                flipped++;
+        String factoryId = inspection.getFactoryId();
+        boolean siblingUncleared = productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId)
+                .stream()
+                .anyMatch(other -> !Objects.equals(other.getId(), pb.getId()) && other.getQualityStatus() != null
+                        && other.getQualityStatus().isDispositionLocked());
+        int released = 0;
+        int held = 0;
+        for (FinishedGoodsBatch fg : finishedGoodsBatchRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)) {
+            if (!Objects.equals(factoryId, fg.getFactoryId())
+                    || !FinishedGoodsBatch.Status.DEFECTIVE.equals(fg.getStatus()) || isReturnChild(fg)) {
+                continue;
             }
+            if (siblingUncleared || !Objects.equals(pb.getProductTypeId(), fg.getProductTypeId())
+                    || rejectedAtQcRelease(factoryId, fg)) {
+                held++;
+                continue;
+            }
+            fg.setStatus(statusAfterRelease(factoryId, planId, fg));
+            finishedGoodsBatchRepository.save(fg);
+            released++;
         }
-        return flipped;
+        return new FinishedGoodsRelease(released, held);
+    }
+
+    private static boolean isReturnChild(FinishedGoodsBatch fg) {
+        return fg.getReturnOrderItemId() != null
+                || (fg.getBatchNumber() != null && fg.getBatchNumber().startsWith("RTN-"));
+    }
+
+    private boolean rejectedAtQcRelease(String factoryId, FinishedGoodsBatch fg) {
+        var records = qcReleaseRecordRepository.findByTarget(factoryId,
+                com.cretas.aims.entity.quality.QcReleaseRecord.TargetType.FINISHED_GOODS, fg.getId());
+        return !records.isEmpty() && com.cretas.aims.entity.quality.QcReleaseRecord.Decision.REJECTED
+                .equals(records.get(0).getDecision());
+    }
+
+    /** 需检产品 / 有未处理偏离: 回待检让质检放行 (缺口 11/13), 处置不替代那一步。 */
+    private String statusAfterRelease(String factoryId, String planId, FinishedGoodsBatch fg) {
+        if (qcInspectionPolicy == null) {
+            return FinishedGoodsBatch.Status.AVAILABLE;
+        }
+        return qcInspectionPolicy.finishedGoodsStatusForOutput(factoryId, fg.getProductTypeId(), planId,
+                FinishedGoodsBatch.Status.AVAILABLE, fg.getBatchNumber());
+    }
+
+    private record FinishedGoodsRelease(int released, int held) {
+        private static final FinishedGoodsRelease NONE = new FinishedGoodsRelease(0, 0);
     }
 
     // ==================== 原料 (MaterialBatch) — 与 ReleaseDecisionTool 共用守卫 ====================
@@ -284,8 +381,12 @@ public class QualityDispositionInventoryService {
     @Builder
     public static class InventoryDispositionResult {
         private DispositionAction action;
-        /** 翻回 AVAILABLE 的成品批次数 (放行时)。 */
+        /** 解除隔离的成品批次数 (放行时)。 */
         private int finishedGoodsReleased;
+        /** 放行后仍留在隔离里的成品批次数 (见 releaseFinishedGoods), 操作人要看到它。 */
+        private int finishedGoodsHeld;
+        /** 这次处置写到批次上的质量状态; null = 没有批次或动作不改批次。 */
+        private String batchQualityStatus;
         /** 原料翻转判定 (material-scoped 时非 null)。 */
         private FlipDecision materialFlip;
     }

@@ -540,10 +540,14 @@ public class QualityDispositionController {
         } catch (IllegalArgumentException e) {
             throw new BusinessException(400, "无效的处置动作: " + request.getActionCode());
         }
-        if (!requestedAction.requiresApproval()) {
+        // 动作本身不用审批的「放行」, 落在不合格未解除的批次上一样要复核 (D-S302-01)
+        boolean unclearedRelease = requestedAction == DispositionAction.RELEASE
+                && qualityDispositionRuleService.isAwaitingDisposition(scopedInspection);
+        if (!requestedAction.requiresApproval() && !unclearedRelease) {
             throw new BusinessException(400, "该处置动作无需审批，请直接执行");
         }
-        String approvalLevel = requestedAction.getApprovalLevel();
+        String approvalLevel = unclearedRelease
+                ? DispositionAction.CONDITIONAL_RELEASE.getApprovalLevel() : requestedAction.getApprovalLevel();
 
         // 创建审计日志记录申请
         DecisionAuditLog auditLog = DecisionAuditLog.builder()

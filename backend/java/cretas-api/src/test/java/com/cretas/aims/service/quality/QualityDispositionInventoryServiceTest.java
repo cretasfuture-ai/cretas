@@ -52,6 +52,8 @@ class QualityDispositionInventoryServiceTest {
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock
     private FactoryRecallService factoryRecallService;
+    @Mock
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
 
     private QualityInspection inspection;
 
@@ -68,10 +70,10 @@ class QualityDispositionInventoryServiceTest {
 
     private FinishedGoodsBatch fg(String status) {
         FinishedGoodsBatch b = new FinishedGoodsBatch();
-        // Distinct IDs, while every fixture belongs to this exact production batch.
+        // 真实形状: 成品批号是 FG-…, 永远不等于生产批号 PB-…。
         b.setId("fg-" + (++fgSeq));
         b.setFactoryId(FACTORY_ID);
-        b.setBatchNumber("PB-100");
+        b.setBatchNumber("FG-P-1-S" + fgSeq + "-SKU-100");
         b.setProductTypeId("SKU-100");
         b.setStatus(status);
         return b;
@@ -107,22 +109,23 @@ class QualityDispositionInventoryServiceTest {
     }
 
     @Test
-    void releaseDoesNotUnfreezeAnotherBatchOrSkuSharingThePlan() {
+    void releaseDoesNotUnfreezeAnotherSkuOrReturnChildSharingThePlan() {
         wirePlan();
         FinishedGoodsBatch current = fg(FinishedGoodsBatch.Status.DEFECTIVE);
-        FinishedGoodsBatch sibling = fg(FinishedGoodsBatch.Status.DEFECTIVE);
-        sibling.setBatchNumber("OTHER-PB");
+        FinishedGoodsBatch returned = fg(FinishedGoodsBatch.Status.DEFECTIVE);
+        returned.setBatchNumber("RTN-R1-1");
         FinishedGoodsBatch otherSku = fg(FinishedGoodsBatch.Status.DEFECTIVE);
         otherSku.setProductTypeId("OTHER-SKU");
         when(finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
-                .thenReturn(List.of(current, sibling, otherSku));
+                .thenReturn(List.of(current, returned, otherSku));
 
         InventoryDispositionResult result = service.applyDisposition(inspection, DispositionAction.RELEASE);
 
         assertEquals(1, result.getFinishedGoodsReleased());
-        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, sibling.getStatus());
+        assertEquals(1, result.getFinishedGoodsHeld());
+        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, returned.getStatus());
         assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, otherSku.getStatus());
-        verify(finishedGoodsBatchRepository, never()).save(sibling);
+        verify(finishedGoodsBatchRepository, never()).save(returned);
         verify(finishedGoodsBatchRepository, never()).save(otherSku);
     }
 
@@ -196,6 +199,7 @@ class QualityDispositionInventoryServiceTest {
 
         InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE);
 
+        assertNull(r.getBatchQualityStatus());
         assertEquals(FlipDecision.FLIP, r.getMaterialFlip());
         assertEquals(MaterialBatchStatus.AVAILABLE, mb.getStatus());
         verify(materialBatchRepository).save(mb);
@@ -204,7 +208,7 @@ class QualityDispositionInventoryServiceTest {
     // ===================== SCRAP =====================
 
     @Test
-    @DisplayName("UT-DIB-04: SCRAP → 原料 DEFECTIVE→SCRAPPED, 成品保持 DEFECTIVE (不放回, 不翻)")
+    @DisplayName("UT-DIB-04: SCRAP → 原料 DEFECTIVE→SCRAPPED, 不解除任何隔离 (无生产批次时也不动成品)")
     void scrapMaterialToScrappedFinishedGoodsStaysDefective() {
         inspection.setMaterialBatchId(MATERIAL_BATCH_ID);
         MaterialBatch mb = new MaterialBatch();
@@ -213,6 +217,7 @@ class QualityDispositionInventoryServiceTest {
         mb.setStatus(MaterialBatchStatus.DEFECTIVE);
         when(materialBatchRepository.findByIdAndFactoryId(MATERIAL_BATCH_ID, FACTORY_ID))
                 .thenReturn(Optional.of(mb));
+        when(productionBatchRepository.findById(PRODUCTION_BATCH_ID)).thenReturn(Optional.empty());
 
         InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.SCRAP);
 
@@ -240,12 +245,13 @@ class QualityDispositionInventoryServiceTest {
     }
 
     @Test
-    @DisplayName("UT-DIB-06: REWORK → 无库存翻转 (不自动返回)")
-    void reworkNoFlip() {
+    @DisplayName("UT-DIB-06: REWORK → 不解除隔离, 不碰原料 (批次状态与成品隔离见 QualityBatchDispositionContractTest)")
+    void reworkReleasesNothing() {
+        when(productionBatchRepository.findById(PRODUCTION_BATCH_ID)).thenReturn(Optional.empty());
         InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.REWORK);
         assertEquals(0, r.getFinishedGoodsReleased());
         assertNull(r.getMaterialFlip());
-        verifyNoInteractions(materialBatchRepository, finishedGoodsBatchRepository, productionBatchRepository);
+        verifyNoInteractions(materialBatchRepository, finishedGoodsBatchRepository);
     }
 
     // ===================== 幂等 =====================

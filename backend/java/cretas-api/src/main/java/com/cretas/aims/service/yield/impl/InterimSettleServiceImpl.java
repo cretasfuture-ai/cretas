@@ -751,7 +751,7 @@ public class InterimSettleServiceImpl implements InterimSettleService {
         if (batchRepository == null || planId == null || planId.isBlank()) return false;
         try {
             return batchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId).stream()
-                    .anyMatch(b -> b.getQualityStatus() == QualityStatus.FAILED);
+                    .anyMatch(b -> b.getQualityStatus() != null && b.getQualityStatus().isDispositionLocked());
         } catch (Exception e) {
             log.warn("QC 生产门检查异常 (planId={}): {} — 按未失败处理 (反向时序由 QC 传播兜底)", planId, e.getMessage());
             return false;
