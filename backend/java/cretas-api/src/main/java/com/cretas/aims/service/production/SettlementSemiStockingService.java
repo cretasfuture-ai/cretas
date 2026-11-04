@@ -309,7 +309,9 @@ public class SettlementSemiStockingService {
         if ("g".equals(from) && "kg".equals(to)) {
             return quantity.movePointLeft(3);
         }
-        throw new BusinessException(409, "在制批次单位与半成品单位不一致, 无法换算: " + fromUnit + " / " + toUnit)
+        throw new BusinessException(409, "在制批次单位与半成品单位不一致, 无法换算: "
+                + com.cretas.aims.service.unit.UnitDisplayNames.display(fromUnit) + " / "
+                + com.cretas.aims.service.unit.UnitDisplayNames.display(toUnit))
                 .withCode("SETTLEMENT_SEMI_UNIT_MISMATCH")
                 .withHint("请核对该道工序的产出单位, 或把实际半成品量改为 0")
                 .withHintTarget("actualSemiFinishedQuantity");

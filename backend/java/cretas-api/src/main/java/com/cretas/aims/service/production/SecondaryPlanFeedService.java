@@ -409,11 +409,12 @@ public class SecondaryPlanFeedService {
     private void assertWithinPlan(Source source, BigDecimal alreadyFed, BigDecimal thisTime) {
         BigDecimal planned = nz(source.plannedQuantity());
         if (alreadyFed.add(thisTime).compareTo(planned) > 0) {
-            String unit = source.unit() == null ? "" : source.unit();
-            throw new BusinessException(409, "来源半成品超量: 本计划来源 " + plain(planned) + unit
-                    + ", 已报 " + plain(alreadyFed) + unit + ", 本次 " + plain(thisTime) + unit)
+            String shown = source.unit() == null ? ""
+                    : com.cretas.aims.service.unit.UnitDisplayNames.display(source.unit());
+            throw new BusinessException(409, "来源半成品超量: 本计划来源 " + plain(planned) + shown
+                    + ", 已报 " + plain(alreadyFed) + shown + ", 本次 " + plain(thisTime) + shown)
                     .withCode("SECONDARY_SOURCE_OVER_PLAN")
-                    .withHint("最多还能投 " + plain(planned.subtract(alreadyFed).max(BigDecimal.ZERO)) + unit
+                    .withHint("最多还能投 " + plain(planned.subtract(alreadyFed).max(BigDecimal.ZERO)) + shown
                             + ", 请改小本次投入量")
                     .withHintTarget("sourceWipQuantity");
         }
