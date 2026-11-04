@@ -42,7 +42,8 @@ spring:
             webStatFilter: 
                 enabled: true
             statViewServlet:
-                enabled: true
+                # 默认关: 没配密码时占位符会原样当密码用, 而 /druid/** 不需要登录
+                enabled: ${MALL_DRUID_CONSOLE_ENABLED:false}
                 # 设置白名单，不填则允许所有访问
                 allow:
                 url-pattern: /druid/*

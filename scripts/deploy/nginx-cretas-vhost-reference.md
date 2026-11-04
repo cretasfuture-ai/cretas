@@ -79,7 +79,7 @@ map $request_uri $cretas_ambiguous_path {
 if ($cretas_ambiguous_path) { return 400; }
 ```
 
-Every server block that serves traffic includes the snippet on the line after `server_name`:
+Every live server block that reaches Cretas Java or Python includes the snippet on the line after `server_name`. `ops/nginx-vhosts-139/web-admin-test.conf` (8097) is not loaded on 139 today: add the include if it comes back.
 
 ```nginx
 include /www/server/nginx/conf/snippets/block-ambiguous-path.conf;
