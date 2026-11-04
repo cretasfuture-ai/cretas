@@ -2,9 +2,30 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 492
+expectedToolCount: 493
 expectedLegacyCount: 467
 descriptors:
+  - toolName: "gate_diagnose_batch"
+    implementationClass: "com.cretas.aims.ai.tool.impl.material.GateDiagnoseBatchTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["material", "warehouse", "quality"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
   - toolName: "unsupported_capability"
     implementationClass: "com.cretas.aims.ai.tool.impl.system.UnsupportedCapabilityTool"
     provenance: EXPLICIT
