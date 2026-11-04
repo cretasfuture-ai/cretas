@@ -39,6 +39,8 @@ import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.utils.SecurityUtils;
 import com.cretas.aims.service.FuturePlanMatchingService;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.PermissionService;
@@ -238,6 +240,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     /** T159-B R4: 写入时维度单位校验 (optional — null → fail-open). */
     @Autowired(required = false)
     private com.cretas.aims.service.uom.MaterialUomConverter materialUomConverter;
+
+    @Autowired(required = false)
+    private UnitContractService unitContractService;
 
     /** Rebuilds weighted-average cost after normalizing every stock layer to the material master unit. */
     @Autowired(required = false)
@@ -472,7 +477,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                         || !Objects.equals(existing.getSupplierId(), request.getSupplierId())
                         || !Objects.equals(existing.getWarehouseId(), expectedWarehouseId)
                         || !Objects.equals(existing.getReceiptDate(), request.getReceiptDate())
-                        || !Objects.equals(existing.getQuantityUnit(), request.getQuantityUnit())
+                        || !unitsEquivalent(factoryId, existing.getQuantityUnit(), request.getQuantityUnit())
                         || existing.getReceiptQuantity() == null
                         || existing.getReceiptQuantity().compareTo(request.getReceiptQuantity()) != 0
                         || existing.getWeightPerUnit() == null
@@ -480,7 +485,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                         || existing.getTotalWeight() == null
                         || request.getTotalWeight() == null
                         || existing.getTotalWeight().compareTo(request.getTotalWeight()) != 0) {
-                    throw new BusinessException(409, "赠品来源行幂等键已用于不同入库内容，已拒绝覆盖");
+                    throw new BusinessException(409, "赠品来源行幂等键已用于不同入库内容，已拒绝覆盖")
+                            .withHint("请使用原来源行的完整入库内容重试，或为不同来源行提供新的来源行号");
                 }
                 return materialBatchMapper.toDTO(existing);
             }
@@ -502,7 +508,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(404, "原材料不存在或不属于当前工厂");
         }
         if (keyedFreeGift && materialUomConverter == null && materialType.getUnit() != null
-                && !materialType.getUnit().equals(request.getQuantityUnit())) {
+                && !unitsEquivalent(factoryId, materialType.getUnit(), request.getQuantityUnit())) {
             throw new BusinessException(503, "赠品单位换算服务不可用，不能将包装数量当作主单位数量")
                     .withHintTarget("quantityUnit");
         }
@@ -543,7 +549,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     : materialBatchRepository.save(batch);
         } catch (DataIntegrityViolationException duplicate) {
             if (freeGift) {
-                throw new BusinessException(409, "该赠品来源单据行已被其他请求入库，请刷新后使用原批次");
+                throw new BusinessException(409, "该赠品来源单据行已被其他请求入库，请刷新后使用原批次")
+                        .withHint("请刷新并复用已存在的赠品批次，不要重复入库");
             }
             throw duplicate;
         }
@@ -621,6 +628,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                             materialName, canonicalUnit))
                     .withSeverity("BLOCKING");
         }
+    }
+
+    private boolean unitsEquivalent(String factoryId, String left, String right) {
+        if (left == null || right == null) return left == right;
+        if (unitContractService != null) return unitContractService.areEquivalent(factoryId, left, right);
+        return UnitContractServiceImpl.crossLanguageCode(left)
+                .equals(UnitContractServiceImpl.crossLanguageCode(right));
     }
 
     private void validateSourceDoc(CreateMaterialBatchRequest request, String factoryId, Long userId) {
@@ -2826,7 +2840,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 || receiptQty.compareTo(java.math.BigDecimal.ZERO) <= 0
                 || receiptPrice.compareTo(java.math.BigDecimal.ZERO) < 0
                 || (!allowZeroPrice && receiptPrice.compareTo(java.math.BigDecimal.ZERO) == 0)) {
-            if (allowZeroPrice) throw new BusinessException(409, "赠品数量或成本层缺失，已停止入库");
+            if (allowZeroPrice) throw new BusinessException(409, "赠品数量或成本层缺失，已停止入库")
+                    .withHint("请核对赠品数量、单位和成本层后重试");
             return;
         }
         if (materialMovingAverageCalculator != null) {
@@ -2842,7 +2857,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                         materialType.getId(), materialType.getUnit(), layers);
                 if (!result.complete()) {
                     if (allowZeroPrice) throw new BusinessException(409,
-                            "赠品入库成本重建失败，已停止入库；请先核对历史成本和单位换算");
+                            "赠品入库成本重建失败，已停止入库；请先核对历史成本和单位换算")
+                            .withHint("请补齐历史成本层或单位换算配置后重试赠品入库");
                     log.warn("Moving-average rebuild skipped for materialType={}: {}",
                             materialType.getId(), result.issues());
                     return;
@@ -2854,7 +2870,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                         result.totalValue(), result.averagePrice());
             } catch (Exception e) {
                 if (allowZeroPrice) throw new BusinessException(409,
-                        "赠品入库成本重建失败，整笔入库已停止，请核对历史成本与单位后重试", e);
+                        "赠品入库成本重建失败，整笔入库已停止，请核对历史成本与单位后重试", e)
+                        .withHint("请核对历史成本层与单位配置后重试赠品入库");
                 log.warn("Moving-average rebuild failed without blocking receipt: materialType={}, error={}",
                         materialType.getId(), e.getMessage());
             }

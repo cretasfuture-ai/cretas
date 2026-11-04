@@ -6,6 +6,8 @@ import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -18,6 +20,8 @@ import java.util.Map;
 public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
     private final SalesDeliveryBatchAllocationService allocationService;
     private final SalesDeliveryItemRepository deliveryItemRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private UnitContractService unitContractService;
 
     public SalesDeliveryBatchAllocateTool(SalesDeliveryBatchAllocationService allocationService,
                                           SalesDeliveryItemRepository deliveryItemRepository) {
@@ -56,7 +60,7 @@ public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
                                             Map<String, Object> context) {
         String deliveryItemId = getString(params, "deliveryItemId");
         SalesDeliveryItem deliveryItem = resolveDeliveryItem(factoryId, deliveryItemId);
-        requireDeliveryLineUnits(deliveryItem, params);
+        requireDeliveryLineUnits(factoryId, deliveryItem, params);
         String mode = getString(params, "allocationMode");
         if ("AUTO_FIFO".equalsIgnoreCase(mode)) {
             BigDecimal requiredQty = getBigDecimal(params, "requiredQty");
@@ -67,13 +71,15 @@ public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
             if (!productTypeId.equals(deliveryItem.getProductTypeId())
                     || deliveryItem.getDeliveredQuantity() == null
                     || requiredQty.compareTo(deliveryItem.getDeliveredQuantity()) != 0) {
-                throw new BusinessException(409, "productTypeId或requiredQty与该发货明细不一致，已拒绝跨行分配");
+                throw new BusinessException(409, "productTypeId或requiredQty与该发货明细不一致，已拒绝跨行分配")
+                        .withHint("请使用该发货明细真实的产品ID和待发货数量后重试");
             }
             boolean allocated = allocationService.autoAllocateFifo(factoryId, deliveryItemId,
                     productTypeId, requiredQty, deliveryItem.getUnit(), deliveryItem.getSourceWarehouseCode());
             if (!allocated) {
                 throw new com.cretas.aims.exception.BusinessException(409,
-                        "可用成品库存不足，未写入部分批次分配");
+                        "可用成品库存不足，未写入部分批次分配")
+                        .withHint("请补足来源仓可用成品库存，或拆分发货明细后再分配");
             }
         } else if ("EXPLICIT".equalsIgnoreCase(mode)) {
             List<?> raw = getList(params, "allocations");
@@ -106,7 +112,7 @@ public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
                                             Map<String, Object> context) {
         String deliveryItemId = getString(params, "deliveryItemId");
         SalesDeliveryItem deliveryItem = resolveDeliveryItem(factoryId, deliveryItemId);
-        requireDeliveryLineUnits(deliveryItem, params);
+        requireDeliveryLineUnits(factoryId, deliveryItem, params);
         if (!"AUTO_FIFO".equalsIgnoreCase(getString(params, "allocationMode"))) {
             return Map.of("status", "PREVIEW", "canDo", false, "deliveryItemId", deliveryItemId,
                     "message", "AI当前只支持AUTO_FIFO分配预览；指定批次请在发货明细页面核对后操作，本次未产生确认令牌。");
@@ -120,7 +126,8 @@ public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
         if (!productTypeId.equals(deliveryItem.getProductTypeId())
                 || deliveryItem.getDeliveredQuantity() == null
                 || requiredQty.compareTo(deliveryItem.getDeliveredQuantity()) != 0) {
-            throw new BusinessException(409, "productTypeId或requiredQty与该发货明细不一致，已拒绝跨行推荐");
+            throw new BusinessException(409, "productTypeId或requiredQty与该发货明细不一致，已拒绝跨行推荐")
+                    .withHint("请使用该发货明细真实的产品ID和待发货数量后重试预览");
         }
         return Map.of("status", "PREVIEW", "deliveryItemId", deliveryItemId,
                 "recommendations", allocationService.recommendFifo(factoryId, deliveryItemId,
@@ -129,13 +136,21 @@ public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
                 "message", "这是库存推荐，确认执行后才会真实分配");
     }
 
-    private void requireDeliveryLineUnits(SalesDeliveryItem item, Map<String,Object> params) {
+    private void requireDeliveryLineUnits(String factoryId, SalesDeliveryItem item, Map<String,Object> params) {
         String unit = getString(params, "unit");
         String warehouse = getString(params, "sourceWarehouseCode");
-        if (unit != null && !java.util.Objects.equals(unit, item.getUnit())
+        if (unit != null && !unitsEquivalent(factoryId, unit, item.getUnit())
                 || warehouse != null && !java.util.Objects.equals(warehouse, item.getSourceWarehouseCode())) {
-            throw new BusinessException(409, "单位或来源仓库与发货明细不一致，请先在发货单核对，不能由模型改写");
+            throw new BusinessException(409, "单位或来源仓库与发货明细不一致，请先在发货单核对，不能由模型改写")
+                    .withHint("请按发货明细记录的单位和来源仓库提交，模型不能修改发货行属性");
         }
+    }
+
+    private boolean unitsEquivalent(String factoryId, String left, String right) {
+        if (left == null || right == null) return left == right;
+        if (unitContractService != null) return unitContractService.areEquivalent(factoryId, left, right);
+        return UnitContractServiceImpl.crossLanguageCode(left)
+                .equals(UnitContractServiceImpl.crossLanguageCode(right));
     }
 
     private SalesDeliveryItem resolveDeliveryItem(String factoryId, String deliveryItemId) {

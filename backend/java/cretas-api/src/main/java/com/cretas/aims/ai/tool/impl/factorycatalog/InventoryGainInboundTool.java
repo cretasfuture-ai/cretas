@@ -39,7 +39,8 @@ public class InventoryGainInboundTool extends AbstractBusinessTool {
     private Evidence verifyApprovedPositive(String factoryId, String stocktakeId) {
         StocktakeDTO detail = stocktakeService.getDetail(stocktakeId, factoryId);
         if (!FactoryStocktake.Status.APPROVED.name().equals(detail.getStatus())) {
-            throw new BusinessException(409, "盘盈入库只接受已审批(APPROVED)盘点单，不能代办审批");
+            throw new BusinessException(409, "盘盈入库只接受已审批(APPROVED)盘点单，不能代办审批")
+                    .withHint("请先在盘点流程完成审批，再重试盘盈入库");
         }
         StocktakeDiffPreviewDTO diff = stocktakeService.previewDiff(stocktakeId, factoryId);
         if (diff.getDiffLines() == null || diff.getDiffLines().isEmpty()
@@ -48,7 +49,8 @@ public class InventoryGainInboundTool extends AbstractBusinessTool {
                         line.getActualQty() == null || line.getSystemQty() == null
                                 || !("SURPLUS".equals(line.getDifferenceType())
                                 || "MATCH".equals(line.getDifferenceType())))) {
-            throw new BusinessException(409, "盘点单必须全部已清点且只能包含盘盈/零差，负差或混合差异不得作为盘盈入库");
+            throw new BusinessException(409, "盘点单必须全部已清点且只能包含盘盈/零差，负差或混合差异不得作为盘盈入库")
+                    .withHint("请完成盘点并仅保留正差或零差；负差或混合差异请走完整盘点调整");
         }
         return new Evidence(detail, diff);
     }

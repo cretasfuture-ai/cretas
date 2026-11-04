@@ -201,8 +201,10 @@ class SkillRouteGuardTest {
         // part of the Skill's data reaches him (the admin control below shows the Skill itself works).
         assertThat(f.executedTools()).isEmpty();
         assertThat(f.tool("staff_overview_query").calls).isEmpty();
-        assertThat(String.valueOf(run.result().getResultData()) + run.result().getMessage())
-                .contains("未执行任何操作");
+        // Dynamic routing refuses Skill preemption before execution and falls back to the
+        // ordinary intent path, which has no executor for this tool-less intent. The security
+        // contract is that no tool runs, not a particular localized fallback message.
+        assertThat(run.result().getMessage()).isEqualTo("no-executor:TEAM_REPORT");
     }
 
     @Test

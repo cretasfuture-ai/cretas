@@ -64,3 +64,16 @@
 - 合入最新主线db2457beac（新增V20261104_42）后，因生产out-of-order=false，本迁移最终顺延为V20261104_43__factory_intent_catalog_retirement.sql。SQL内容未改；生成器检查、PostgreSQL迁移/并发协议、14个Python目录契约复验通过；最终合并构建记录在java-acceptance-43.log。
 - 独立训练目录：本机证据目录training-catalog-final；现有权重、映射、保护集和原微调测试集保持原样。不部署、不执行生产迁移、不产生外部模型调用。
 - 本机完整证据：C:/Users/Steve/Documents/Cretas工厂意图目录-20261104/，含final-verification-receipt.json、CI日志、风险复核与主工作区误写记录.md。后三者分别是验证事实、源审事实和操作事故边界，不能互相替代。
+
+
+## CI完整回归修复 scope（3feab75a41）
+
+- 当前状态in-progress；CI41850043404共7063例，13失败1错误。实际完成前不合并。
+- Owner /root/catalog_skill_result：SkillExecutorImpl.java及PurchaseGrantCallerContractTest、DeferredPurchaseGrantPostgresLifecycleContractTest、SkillRouteGuardTest。调查新失败传播/授权链是否实际缺陷；仅按业务契约修复或同步过时fixture，不隐藏拒绝，不放宽授权。验收由Root串行跑上述测试及SkillExecutorFailurePropagationContractTest。
+- Owner /root/catalog_java_retire：factorycatalog/**、MaterialBatchServiceImpl.java及直接相关测试；修复本批新增409缺hint、裸单位字符串比较，使用实际单位契约，不调高阈值。验收BareUnitEqualityRatchetContractTest、BusinessException409HintCoverageContractTest及原Tool/成本目标测试。禁止Maven竞争target。
+- Root：GatedDataToolAiPathPermissionTest及相关已审权限分类TSV、AutonomousToolExecutionContractTest，按退役/新Tool/平台治理声明同步真实清单；保留整Skill拒绝与权限隔离断言。数据库并发错误由readonly风险Reviewer给出证据后Root窄跑复验。
+- 所有worker不得写台账、启动子代理、改模型/保护集/线上；本修复唯一写Owner仍为Root，禁止改无关基线。
+
+- Root扩scope：ProcessSheetRowSubmitLockRepositoryQueryValidationTest测试同步；保留真实Repository/双事务、等待发生、SUBMITTED和不加锁DRAFT阴性断言，测试独占H2与有限15秒锁超时，不改生产查询。依据完整CI最深H2 HYT00/50200超过默认2秒；不循环重试。
+
+- Skill Owner扩scope到PurchaseGrantCallerService.java：此次Skill success=false传播使已知expired/revoked被旧caller提前映成503 unknown，属于真实兼容缺陷。保留原403明确原因与一次拒绝审计断言；未知才503且不重试，失败wrapper内success=true不得放行。禁止修改测试掩盖已知拒绝。
