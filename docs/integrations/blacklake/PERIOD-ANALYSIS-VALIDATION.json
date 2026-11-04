@@ -1,0 +1,274 @@
+{
+  "task_ids": [
+    "BLACKLAKE-PERIOD-CORE-20261104",
+    "BLACKLAKE-PERIOD-UI-20261104",
+    "BLACKLAKE-PERIOD-ADAPTER-20261104"
+  ],
+  "slice_base_sha": "0fb8af4582eca8c987e859fcc611c1db2589e4e5",
+  "source_hashes": {
+    "backend/python/blacklake/period_acceptance.py": "cb7427c0bf45ebcfd86db6ef47161da773a7608290374a1e04c81588d1f8bd92",
+    "backend/python/blacklake/period_api.py": "7efc03b8741ad8c892af742de5359e4f8a5f27d3be67538d880070edac0b381b",
+    "backend/python/blacklake/period_contract.py": "0d691e3a01da734460b34dc33293c8045ecf0db6131cea4c6b7bb1fd235651fb",
+    "backend/python/blacklake/period_projection.py": "f4ae5e1ee57d7501b3eea2f8823ecb394067cde1bd08cf8be91b80fe7535d622",
+    "backend/python/blacklake/period_runtime.py": "81574a45854992992668e205c3ae1e015591f8f0dd0799eb8544cda83e4563fe",
+    "backend/python/blacklake/preview_session.py": "b32b0c81fb88c5aca337f5af962a9931de6a0b24ed9ad6e9b462b72c52c0fe4e",
+    "backend/python/blacklake/smartbi_api.py": "0f7b1166ecfb3b5508b602954a49417075523f5b173301811baee77ddda9fdac",
+    "backend/python/blacklake/smartbi_app.py": "97cd915a31c5dd61e6f950e83262959dfe02cfbca5ade474162202d8a4f7ae2d",
+    "backend/python/blacklake/smartbi_store.py": "0f374477edcc35690669a4a90cba98ad66a2cc212fb28a1697278181022dbac7",
+    "backend/python/blacklake/test_local.py": "c488951cb9c653e7e5cdc2cf1ff7b10e84a7647fc7332e3f80760212a83916f2",
+    "backend/python/smartbi/services/period_reports.py": "862005cff77917bb58c77be19c8f20c9381c18a3c0e3759ee8e5b1610503bc40",
+    "backend/python/smartbi/services/period_schedule.py": "7091ae78b0e790de737aef8372e76254bf4fbd48d5cd1f1f2a26893b5b13b7e5",
+    "backend/python/smartbi/services/period_windows.py": "a2e7f683775a2ca8cc8dbcdf4d1e104205e5ca7f76bc7128fe08bf370542d9cd",
+    "backend/python/tests/test_blacklake_period_app.py": "93ddf9cb11b4e5fbe950498eb0bea2158cdbc4bf16b31787b8e79bbffec00c34",
+    "backend/python/tests/test_blacklake_periods.py": "c0d1fda705bc6ffa598a08747751848ae26bbca02e6d95598fb4ff012cb60502",
+    "backend/python/tests/test_blacklake_preview_session.py": "2ea84da0d44a3b8474c23e65346c05f410a3051b79c79bb6b0c2de428cf2ae0e",
+    "backend/python/tests/test_smartbi_period_reports.py": "bd69d32ba3225b92dc84e7c7151a1a78ff5cff3b58f50b90d2acae2e1a9e241f",
+    "backend/python/tests/test_smartbi_period_schedule.py": "5e13dcb213aefaa5fa084fffd260a7657d2a01082c28c246885a20f1f4914ac1",
+    "backend/python/tests/test_smartbi_period_windows.py": "a3dfc9b2a9a527f1ffdb47c786403843559489143cd9eeedff83edd6930a34b7",
+    "web-admin/scripts/blacklake-prototype-acceptance.mjs": "c42ecb215f64e536cd833a5966a236920ac43e61007d97e117223dae072b227e",
+    "web-admin/src/api/smartbi/blacklake.ts": "47b26eabd64f6789cff7331a0a1ec3b4dee582e1ea8c75a505fd62b6a0e1cb63",
+    "web-admin/src/components/smartbi/PrototypeSectionInsight.vue": "37871cc8da8538eb7544ba48fb6290a06ba7f8e9f68d86ccb3ad086fc9cbcc75",
+    "web-admin/src/views/smart-bi/__tests__/blacklakePeriod.spec.ts": "c69d00d73bd546b03b53c4ec9aa4df1edfe0e23c2ccfa6730a20b794960e6250",
+    "web-admin/src/views/smart-bi/__tests__/BlacklakePeriodControls.spec.ts": "8ea4a206a23fe535253c26eb3d589061e0d81a38a4bbd8474a6c6dc56768f5ea",
+    "web-admin/src/views/smart-bi/__tests__/blacklakePrototypeAnalysis.spec.ts": "7abb7121449eecefe2a41b667f02772301eb738b39e70c7a0d39fcced422a842",
+    "web-admin/src/views/smart-bi/blacklakePeriod.ts": "a4c0edb6e1c53a2ac744875e093bedbf9bec10cffe7007818c682d7c801162fe",
+    "web-admin/src/views/smart-bi/BlacklakePeriodAnalysis.vue": "5e76ff1344a90f56f1663cbae7eb71fb3fa29a59980b3f4ffe64c360fc2866f2",
+    "web-admin/src/views/smart-bi/BlacklakePeriodControls.vue": "0e82302b8897443cdc7aa56b4da589b43bc7ac31bd9d71282144e79256efb701",
+    "web-admin/src/views/smart-bi/BlacklakePrototypeAnalysis.vue": "394d3bb82dbb7dc26cf42982b44382192830ca821958933b03bdbb0df6bd5c06",
+    "web-admin/src/views/smart-bi/BlacklakePrototypeCostAlerts.vue": "934dd85f1ef2710c3ba2b776233c97bd8704c1d33fc96aeb2481925a04099353",
+    "web-admin/src/views/smart-bi/BlacklakePrototypeCostIntelligence.vue": "8fdaf280cf2586316375ca3411ed46af90f44b37a61c985e5022fdf805dacb83"
+  },
+  "backend": {
+    "passed": 314,
+    "real_redis": true,
+    "log": "validation/pytest-sections-final.log",
+    "exit_code": 0,
+    "real_postgresql_scram": true,
+    "note": "105 persisted force revisions retains full assertion with per-test timeout 180; first 60-second attempt timed out under concurrent builds",
+    "skipped": 0,
+    "command": "python -m blacklake.test_local",
+    "xml": "validation/pytest-sections-final.xml"
+  },
+  "frontend": {
+    "additional_previously_passed": 10,
+    "passed": 56,
+    "log": "validation/period-frontend-frozen.log",
+    "files": 11,
+    "additional_scope": "unchanged SectionInsight/DataAlertsPanel tests in 66-test delivery run",
+    "exit_code": 0
+  },
+  "api": {
+    "success": true,
+    "sourceBusinessWrites": 0,
+    "sourceRefreshed": false,
+    "checks": [
+      {
+        "kind": "day",
+        "startDate": "2026-11-03",
+        "endDate": "2026-11-03",
+        "factsSeconds": 0.81,
+        "projects": 10,
+        "eligible": 0,
+        "firstStatus": "queued",
+        "savedStatus": "queued",
+        "sameRequestReused": true,
+        "rulesSaved": true,
+        "nextAiAttemptAt": "2026-11-04T04:37:19.471043Z",
+        "usedHistory": 0,
+        "aiStatus": "rate_limited",
+        "aiModel": "qwen3.8:27b",
+        "revision": 1,
+        "reportId": "a5806f0878ad45758e38ebe55b92f657"
+      },
+      {
+        "kind": "week",
+        "startDate": "2026-10-26",
+        "endDate": "2026-11-01",
+        "factsSeconds": 1.45,
+        "projects": 61,
+        "eligible": 12,
+        "firstStatus": "queued",
+        "savedStatus": "queued",
+        "sameRequestReused": true,
+        "rulesSaved": true,
+        "nextAiAttemptAt": "2026-11-04T04:37:15.921834Z",
+        "usedHistory": 0,
+        "aiStatus": "rate_limited",
+        "aiModel": "qwen3.8:27b",
+        "revision": 1,
+        "reportId": "f75777d1be924da2803be656f8a14fb7"
+      },
+      {
+        "kind": "month",
+        "startDate": "2026-11-01",
+        "endDate": "2026-11-30",
+        "factsSeconds": 1.14,
+        "projects": 34,
+        "eligible": 3,
+        "firstStatus": "queued",
+        "savedStatus": "queued",
+        "sameRequestReused": true,
+        "rulesSaved": true,
+        "nextAiAttemptAt": "2026-11-04T04:37:18.081236Z",
+        "usedHistory": 0,
+        "aiStatus": "rate_limited",
+        "aiModel": "qwen3.8:27b",
+        "revision": 1,
+        "reportId": "8b004524c56a423fabbf27532fe49c8b"
+      },
+      {
+        "kind": "custom",
+        "startDate": "2026-10-29",
+        "endDate": "2026-11-02",
+        "factsSeconds": 1.0,
+        "projects": 64,
+        "eligible": 15,
+        "firstStatus": "queued",
+        "savedStatus": "queued",
+        "sameRequestReused": true,
+        "rulesSaved": true,
+        "nextAiAttemptAt": "2026-11-04T04:37:16.652122Z",
+        "usedHistory": 0,
+        "aiStatus": "rate_limited",
+        "aiModel": "qwen3.8:27b",
+        "revision": 1,
+        "reportId": "90f6ab23ed67456b8ad0a9308372c49c"
+      },
+      {
+        "kind": "quarter",
+        "startDate": "2026-10-01",
+        "endDate": "2026-12-31",
+        "factsSeconds": 0.97,
+        "projects": 91,
+        "eligible": 16,
+        "firstStatus": "queued",
+        "savedStatus": "queued",
+        "sameRequestReused": true,
+        "rulesSaved": true,
+        "nextAiAttemptAt": "2026-11-04T04:37:15.191088Z",
+        "usedHistory": 0,
+        "aiStatus": "rate_limited",
+        "aiModel": "qwen3.8:27b",
+        "revision": 1,
+        "reportId": "919afa2b28d447d08483dff576b5b5f1"
+      },
+      {
+        "kind": "year",
+        "startDate": "2026-01-01",
+        "endDate": "2026-12-31",
+        "factsSeconds": 0.95,
+        "projects": 91,
+        "eligible": 16,
+        "firstStatus": "queued",
+        "savedStatus": "queued",
+        "sameRequestReused": true,
+        "rulesSaved": true,
+        "nextAiAttemptAt": "2026-11-04T04:37:14.248263Z",
+        "usedHistory": 0,
+        "aiStatus": "rate_limited",
+        "aiModel": "qwen3.8:27b",
+        "revision": 1,
+        "reportId": "6cbbf9ec72e04943b817987ead9bd2a1"
+      }
+    ],
+    "fullSnapshot": {
+      "projects": 109,
+      "eligible": 16
+    },
+    "stage": "report_year",
+    "nightlyEnabled": true,
+    "lastTick": "2026-11-04T11:44:35.423561+08:00",
+    "timezone": "Asia/Shanghai",
+    "allAiComplete": false
+  },
+  "nightly": {
+    "raw_source_sync_started": false,
+    "enabled": true,
+    "os_service_installed": false,
+    "minute": 55,
+    "hour": 23,
+    "boundaries_verified": "fixed-clock tests; real future boundaries not awaited",
+    "timezone": "Asia/Shanghai"
+  },
+  "storage": {
+    "lease_and_defer_restart_tested": true,
+    "kind": "private local SQLite PoC",
+    "immutable_ready_revisions": true,
+    "production_migration_applied": false
+  },
+  "browser": {
+    "screenshots": [
+      "outputs/period-20261104/period-cost.jpg",
+      "outputs/period-20261104/inventory-gap.jpg"
+    ],
+    "url": "http://127.0.0.1:5178/blacklake-smartbi.html",
+    "private_artifacts": true,
+    "checks": [
+      "date presets",
+      "cross-month arbitrary range",
+      "numbers available while AI queued",
+      "change range while AI pending",
+      "history drawer separate period",
+      "period product cost followup",
+      "focused anomaly followup",
+      "historical inventory missing not zero",
+      "23:55 visible plan"
+    ],
+    "direct_entry_password_inputs": 0,
+    "surface": "user in-app browser tab 2"
+  },
+  "risk_review": {
+    "scope": "authority before facts; tenant/fingerprint/lease; immutable ready; history compatibility; durable source/definition checkpoint; AI deferral without quota bypass",
+    "blocking_findings": 0,
+    "mode": "read-only static"
+  },
+  "delivery": {
+    "merged": false,
+    "source_business_writes": 0,
+    "draft": true,
+    "source_snapshot_beijing": "2026-11-03 17:21:49",
+    "production_deployed": false,
+    "pr": 1390,
+    "source_refreshed": false,
+    "new_period_ai_complete": false,
+    "ai_pending_reason": "existing protected local AI hourly quota; rules saved and durable retry enabled"
+  },
+  "typecheck": {
+    "log": "validation/period-typecheck-frozen.log",
+    "command": "node --max-old-space-size=6144 node_modules/vue-tsc/bin/vue-tsc.js -b",
+    "exit_code": 0
+  },
+  "builds": {
+    "isolated": {
+      "log": "validation/period-build-frozen.log",
+      "command": "npx vite build --mode blacklake --outDir <private>/build-isolated-frozen",
+      "exit_code": 0
+    },
+    "default": {
+      "reason": "only erased API types changed in legacy graph; runtime UI changes stay in isolated entry",
+      "log": "validation/period-build-default.log",
+      "evidence_reused": true,
+      "command": "npx vite build --outDir <private>/build-default",
+      "exit_code": 0,
+      "isolation": {
+        "isolated_marker_matches": 0,
+        "legacy_blacklake_chunk_count": 1,
+        "isolated_html_present": false
+      }
+    }
+  },
+  "whitespace_only_cleanup": {
+    "backend/python/tests/test_smartbi_period_schedule.py": {
+      "tested_sha256": "bf0eca5e33aee741b47c39a1c4acb9f051c305418c2326b7ecf1755da6e3dbe6"
+    },
+    "web-admin/src/views/smart-bi/__tests__/BlacklakePeriodControls.spec.ts": {
+      "tested_sha256": "7f28201245b16232a9d20332a68985e056557d200a356e3e25872fdef0e36e8c"
+    },
+    "web-admin/src/views/smart-bi/__tests__/blacklakePeriod.spec.ts": {
+      "tested_sha256": "c31732bfa010cbea833629b0aca0a9aff45ec27f3f516bbb70b55620076dcad5"
+    },
+    "web-admin/src/views/smart-bi/blacklakePeriod.ts": {
+      "tested_sha256": "a85d8e6ef502b8ccac478a4635d5760c6949588cc270acde4aa1c1d6d7c49244"
+    }
+  }
+}

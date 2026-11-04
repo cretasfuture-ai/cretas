@@ -24,6 +24,7 @@ export interface CostProject {
 }
 export interface BlacklakeAnalysis {
   alertFollowups?: Record<string, AlertFollowup>;
+  periodMetadata?: BlacklakePeriodMetadata;
   sectionInsights?: SectionInsightReport[];
   costAlerts?: CostAlertReport;
   eligibleCostReview?: EligibleCostReview;
@@ -35,10 +36,26 @@ export interface BlacklakeAnalysis {
     quality: { product: string; process: string; unit: string; good: number | null; defective: number | null; goodRate: number | null; records: number; missingRecords: number }[];
     processes: { process: string; tasks: number; hours: number | null; inProgress: number; missingDurationTasks: number }[]; };
   inventory: { records: { product: string; warehouse: string; unit: string; quantity: number | null }[];
-    byWarehouseUnit: { warehouse: string; unit: string; quantity: number | null; records: number; missing: number }[]; pairsNotReturned: number; movementOrders: number; };
+    byWarehouseUnit: { warehouse: string; unit: string; quantity: number | null; records: number; missing: number }[]; pairsNotReturned: number | null; movementOrders: number; };
   cost: { projects: CostProject[]; materials: { materialCode: string; material: string; unit: string; netConsumption: number | null; recognizedCost: number | null; lines: number }[];
     linkedMaterialLines: number; unlinkedMaterialLines: number; excludedUnapprovedOrders: number; knownMaterialCostLines: number; sourceZeroCostLines: number; knownLaborTasks: number; unitCostAvailableProjects: number; fullManufacturingCost: null; grossProfit: null; };
 }
+
+export type BlacklakePeriodBasis = 'completed' | 'created';
+export type BlacklakePeriodKind = 'day' | 'week' | 'month' | 'quarter' | 'year' | 'custom';
+export interface BlacklakePeriodQuery { start_date: string; end_date: string; basis: BlacklakePeriodBasis; kind: BlacklakePeriodKind; }
+export interface BlacklakePeriodMetadata {
+  startDate: string; endDate: string; kind: BlacklakePeriodKind; basis: BlacklakePeriodBasis; timezone: string;
+  fingerprint: string; scopeDescription: string; dataAsOf: string; unassignedProjects: number; selectedProjects: number;
+  coverageStatus: string; inventoryStatus: string; unassignedMovementOrders?: number;
+}
+export interface BlacklakePeriodJob {
+  id: string; status: 'queued' | 'running' | 'ready' | 'failed'; period: Omit<BlacklakePeriodMetadata, 'fingerprint' | 'scopeDescription' | 'dataAsOf' | 'unassignedProjects' | 'selectedProjects' | 'coverageStatus' | 'inventoryStatus'>;
+  fingerprint: string; revision: number; definitionVersion?: string | null; fromCache?: boolean; nextAttemptAt?: string | null; createdAt: string; finishedAt?: string | null;
+  result?: { generatedAt?: string | null; sectionInsights: SectionInsightReport[]; summary: string; observations: string[]; history: { comparisonAvailable?: boolean; usedReports: { id: string; startDate: string; endDate: string; relation: string; sameSourceSnapshot?: boolean; dataAsOf?: string }[]; recurringIssues: string[]; newIssues: string[]; resolvedIssues: string[] }; ai: CostAlertReport['ai'] };
+  error?: string;
+}
+export interface BlacklakePeriodSchedule { enabled: boolean; timezone: string; rules: { label: string; description: string }[]; lastTick?: string; message?: string; }
 
 export interface SectionInsightReport {
   sectionId: string; title: string; summary: string; observations: string[]; calculation: string[];
@@ -51,6 +68,7 @@ export interface SectionInsightReport {
 export async function askBlacklakeSection(payload: {
   section_id: string; question: string; run_id: string;
   alert_id?: string;
+  period?: BlacklakePeriodQuery;
   history?: { role: 'user' | 'assistant'; content: string }[];
 }): Promise<{ answer: string; sectionId: string; runId: string; alertId?: string | null; engine: string; ai?: { status: string; model?: string; message?: string } }> {
   const response = await pythonFetch<{ success: boolean; data: { answer: string; sectionId: string; runId: string; alertId?: string | null; engine: string; ai?: { status: string; model?: string; message?: string } }; message: string }>(
@@ -65,6 +83,7 @@ export interface AlertFollowup {
 }
 export async function saveBlacklakeAlertFollowup(alertId: string, payload: {
   run_id: string; status: AlertFollowup['status']; note: string; expected_revision: number;
+  period?: BlacklakePeriodQuery;
 }): Promise<AlertFollowup> {
   const response = await pythonFetch<{success:boolean;data:AlertFollowup;message:string}>(
     `/api/smartbi/blacklake/alerts/${encodeURIComponent(alertId)}/followup`,
@@ -82,7 +101,7 @@ export interface CostDataAlert {
 export interface CostAlertReport {
   schema: string; ruleVersion: string; summary: { projects: number; costEligible: number; costBlocked: number; alerts: number; byFamily: Record<string, number>; byType: Record<string, number> };
   items: CostDataAlert[]; limitations: string[];
-  ai: { status: string; message: string; model?: string; host?: string; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
+  ai: { status: string; message: string; model?: string; host?: string; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
 }
 export interface EligibleCostReview {
   eligibleProjects: number; products: number; limitations: string[];
@@ -90,9 +109,43 @@ export interface EligibleCostReview {
   projects: (CostProject & { materialPerFinished: number; laborPerFinished: number; laborShare: number | null; components: (MaterialLine & { costPerFinished: number; usagePerFinished: number })[] })[];
 }
 
-export async function getBlacklakeAnalysis(): Promise<BlacklakeAnalysis> {
+function periodQueryString(query?: BlacklakePeriodQuery | null): string {
+  if (!query) return '';
+  const params = new URLSearchParams({ start_date: query.start_date, end_date: query.end_date, basis: query.basis, kind: query.kind });
+  return `?${params.toString()}`;
+}
+
+export async function getBlacklakeAnalysis(query?: BlacklakePeriodQuery | null): Promise<BlacklakeAnalysis> {
   const response = await pythonFetch<{ success: boolean; data: BlacklakeAnalysis; message: string }>(
-    '/api/smartbi/blacklake/analysis', { preserveResponseKeys: true });
+    `/api/smartbi/blacklake/analysis${periodQueryString(query)}`, { preserveResponseKeys: true });
+  if (!response.success) throw new Error(response.message);
+  return response.data;
+}
+
+export async function createBlacklakePeriodReport(query: BlacklakePeriodQuery, force = false, expectedFingerprint?: string): Promise<BlacklakePeriodJob> {
+  const response = await pythonFetch<{ success: boolean; data: BlacklakePeriodJob; message: string }>(
+    '/api/smartbi/blacklake/period-reports', { method: 'POST', body: JSON.stringify({ ...query, force, ...(expectedFingerprint ? { expected_fingerprint: expectedFingerprint } : {}) }), preserveResponseKeys: true, timeoutMs: 30000 });
+  if (!response.success) throw new Error(response.message);
+  return response.data;
+}
+
+export async function getBlacklakePeriodReport(id: string): Promise<BlacklakePeriodJob> {
+  const response = await pythonFetch<{ success: boolean; data: BlacklakePeriodJob; message: string }>(
+    `/api/smartbi/blacklake/period-reports/${encodeURIComponent(id)}`, { preserveResponseKeys: true });
+  if (!response.success) throw new Error(response.message);
+  return response.data;
+}
+
+export async function listBlacklakePeriodReports(): Promise<BlacklakePeriodJob[]> {
+  const response = await pythonFetch<{ success: boolean; data: BlacklakePeriodJob[]; message: string }>(
+    '/api/smartbi/blacklake/period-reports', { preserveResponseKeys: true });
+  if (!response.success) throw new Error(response.message);
+  return response.data;
+}
+
+export async function getBlacklakePeriodSchedule(): Promise<BlacklakePeriodSchedule> {
+  const response = await pythonFetch<{ success: boolean; data: BlacklakePeriodSchedule; message: string }>(
+    '/api/smartbi/blacklake/period-schedule', { preserveResponseKeys: true });
   if (!response.success) throw new Error(response.message);
   return response.data;
 }

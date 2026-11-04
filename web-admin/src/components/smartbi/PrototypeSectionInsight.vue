@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import UButton from '@nuxt/ui/components/Button.vue';
 import UBadge from '@nuxt/ui/components/Badge.vue';
-import { askBlacklakeSection, type CostDataAlert, type SectionInsightReport } from '@/api/smartbi/blacklake';
+import { askBlacklakeSection, type BlacklakePeriodQuery, type CostDataAlert, type SectionInsightReport } from '@/api/smartbi/blacklake';
 import { useAuthStore } from '@/store/modules/auth';
 import { localizeBlacklakeText } from '@/views/smart-bi/blacklakePresentation';
 
@@ -13,6 +13,7 @@ interface ChatMessage {
 
 const props = withDefaults(defineProps<{
   report: SectionInsightReport;
+  period?: BlacklakePeriodQuery | null;
   focusAlert?: CostDataAlert | null;
   openRequest?: number;
 }>(), {
@@ -45,6 +46,7 @@ const sectionIdentity = computed(() => [
   authIdentity.value,
   props.report.scope.runId,
   props.report.sectionId,
+  JSON.stringify(props.period ?? null),
   props.focusAlert?.id ?? '',
   JSON.stringify(props.report),
   JSON.stringify(props.focusAlert),
@@ -118,6 +120,7 @@ async function submitQuestion() {
     section_id: props.report.sectionId,
     question: value,
     run_id: props.report.scope.runId,
+    ...(props.period ? { period: props.period } : {}),
     history: previousHistory,
     ...(focusAlertId.value ? { alert_id: focusAlertId.value } : {}),
   };
@@ -152,7 +155,7 @@ async function submitQuestion() {
         <div class="insight-kicker">这组数据的分析 <UBadge color="neutral" variant="subtle">只读快照</UBadge></div>
         <h3>{{ report.title }}</h3>
         <p class="insight-summary">{{ localizeBlacklakeText(report.summary) }}</p>
-        <p class="insight-scope">分析范围：{{ localizeBlacklakeText(scopeDescription) }}</p>
+        <p class="insight-scope">分析范围：{{ localizeBlacklakeText(scopeDescription) }}；不随图表单位或表格筛选变化，除非重新分析。</p>
       </div>
       <details class="scope-details">
         <summary>数据快照</summary>

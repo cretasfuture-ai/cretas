@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict
 
 from blacklake.smartbi_store import read, settings
+from .period_contract import PeriodSelection, window
 
 router=APIRouter()
 
@@ -25,17 +26,24 @@ def authorize(request, configured):
 
 
 @router.get('/analysis')
-async def analysis(request: Request):
+async def analysis(request: Request, start_date: str | None=None, end_date: str | None=None,
+                   basis: Literal['completed','created']='completed',
+                   kind: Literal['day','week','month','quarter','year','custom']='custom'):
     path=os.environ.get('BLACKLAKE_SMARTBI_CONFIG')
     if not path: raise HTTPException(404,'黑湖测试数据集尚未启用')
     configured=settings(path)
     authorize(request,configured)
     await cost_authority(request, configured)
+    period=window(start_date,end_date,basis,kind)
     try:
         import asyncio
-        data=await asyncio.to_thread(read,configured)
+        data=await asyncio.to_thread(read,configured,period) if period is not None else await asyncio.to_thread(read,configured)
         from .alert_followups import load
-        data['alertFollowups']=await asyncio.to_thread(load,configured,data['runId'])
+        scoped_config={**configured,'run_id':data['runId']}
+        data['alertFollowups']=await asyncio.to_thread(load,scoped_config,data['runId'])
+        if period is not None:
+            # Numeric facts and deterministic alerts are immediate; saved diagnosis is separate.
+            data['sectionInsights']=[]
     except Exception:
         raise HTTPException(503,'黑湖测试数据集读取或一致性验证失败') from None
     return {'success':True,'data':data,'message':'六膳门账号可见历史 · 只读分析'}
@@ -71,6 +79,7 @@ class Followup(BaseModel):
     run_id: str = Field(min_length=1,max_length=200)
     history: list[Turn] = Field(default_factory=list,max_length=6)
     alert_id: str | None = Field(default=None,min_length=1,max_length=200)
+    period: PeriodSelection | None = None
 
 
 @router.post('/sections/followup')
@@ -80,7 +89,8 @@ async def followup(payload: Followup, request: Request):
     configured=settings(path);authorize(request,configured)
     await cost_authority(request, configured)
     import asyncio
-    try:data=await asyncio.to_thread(read,configured)
+    selected_period=payload.period.window() if payload.period else None
+    try:data=await asyncio.to_thread(read,configured,selected_period) if selected_period else await asyncio.to_thread(read,configured)
     except Exception:raise HTTPException(503,'当前来源证据读取失败，未生成回答') from None
     if payload.run_id != data['runId']:
         raise HTTPException(409,'数据归档已变化，请刷新该分析后再继续追问')
@@ -97,7 +107,7 @@ async def followup(payload: Followup, request: Request):
     from smartbi.services.alert_local_ai import enrich
     if report.get('ai',{}).get('status')!='complete':
         await enrich(report,getattr(request.state,'user_id',None))
-        if report.get('ai',{}).get('status')=='complete':
+        if report.get('ai',{}).get('status')=='complete' and payload.period is None:
             from .section_review import save
             await asyncio.to_thread(save,report,Path(path).resolve().parent/'cost-common-ai.dpapi')
     text=answer(section,payload.question,[h.model_dump() for h in payload.history])
@@ -121,6 +131,7 @@ class AlertProgress(BaseModel):
     status: Literal['open','awaiting_data','verified']
     note: str=Field(min_length=1,max_length=500)
     expected_revision: int=Field(ge=0)
+    period: PeriodSelection | None = None
 
 
 @router.post('/alerts/{alert_id}/followup')
@@ -130,15 +141,19 @@ async def save_alert_progress(alert_id:str,payload:AlertProgress,request:Request
     configured=settings(path);authorize(request,configured)
     await cost_authority(request,configured)
     import asyncio
-    try:data=await asyncio.to_thread(read,configured)
+    selected_period=payload.period.window() if payload.period else None
+    try:data=await asyncio.to_thread(read,configured,selected_period) if selected_period else await asyncio.to_thread(read,configured)
     except Exception:raise HTTPException(503,'来源证据暂不可读，未保存跟进状态') from None
     if payload.run_id!=data['runId']:raise HTTPException(409,'归档已变化，请刷新后再保存')
     if not any(a['id']==alert_id for a in data['costAlerts']['items']):raise HTTPException(404,'当前归档中没有该异常')
     if not payload.note.strip():raise HTTPException(422,'请填写本次跟进说明')
     from .alert_followups import save,FollowupConflict
     try:
-        result=await asyncio.to_thread(save,configured,payload.run_id,alert_id,payload.status,payload.note,
+        result=await asyncio.to_thread(save,{**configured,'run_id':data['runId']},payload.run_id,alert_id,payload.status,payload.note,
                                       payload.expected_revision,getattr(request.state,'user_id',None))
     except FollowupConflict:raise HTTPException(409,'跟进记录已被更新，请刷新后重试') from None
     except Exception:raise HTTPException(503,'跟进状态未能保存，请稍后重试') from None
     return {'success':True,'data':result,'message':'已保存Cretas跟进记录；原始数据、成本规则和核算缺口未改变'}
+
+from .period_api import router as period_router
+router.include_router(period_router)

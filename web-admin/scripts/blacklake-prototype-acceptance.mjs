@@ -13,7 +13,7 @@ await context.route('**/*',route=>{
  if(!['127.0.0.1','localhost'].includes(url.hostname))return route.abort();
  if(['POST','PUT','PATCH','DELETE'].includes(req.method())){
    if(req.method()==='POST' && metadataPaths.has(path)){metadataWrites++;return route.continue();}
-   if(!['/__blacklake/local-session','/api/mobile/auth/unified-login','/api/smartbi/blacklake/sections/followup'].includes(path)){blocked.push(path);return route.abort();}
+   if(!['/__blacklake/local-session','/api/mobile/auth/unified-login','/api/smartbi/blacklake/sections/followup','/api/smartbi/blacklake/period-reports'].includes(path)){blocked.push(path);return route.abort();}
  }return route.continue();
 });
 const nav=label=>page.getByRole('navigation',{name:'',exact:true}).getByRole('button',{name:label,exact:true});
@@ -29,6 +29,8 @@ async function ask(id){
 const result={success:false,prototype:'samples-v5',sourceBusinessWrites:0,blockedMutationAttempts:blocked,pageErrors:errors,sectionAnswers:answers};
 try{
  await page.goto('http://127.0.0.1:5178/blacklake-smartbi.html');
+ await page.getByRole('heading',{name:'成本核算概览',exact:true}).waitFor({timeout:90000});
+ await page.getByRole('button',{name:'全部已采集',exact:true}).click();
  await page.getByRole('heading',{name:'成本核算概览',exact:true}).waitFor({timeout:90000});
  assert.equal(await page.getByPlaceholder('请输入密码').count(),0);
  await page.getByTestId('cost-projects').locator('tbody tr').first().waitFor();
@@ -61,6 +63,8 @@ try{
  await dialog.getByRole('button',{name:'保存跟进',exact:true}).click();const saveResponse=await saved;assert.equal(saveResponse.status(),200);assert.equal((await saveResponse.json()).data.status,'awaiting_data');
  await selected.row.getByText('待补资料',{exact:true}).waitFor();
  await page.reload();await page.getByRole('heading',{name:'成本核算概览',exact:true}).waitFor({timeout:60000});
+ await page.getByRole('button',{name:'全部已采集',exact:true}).click();
+ await page.getByRole('heading',{name:'成本核算概览',exact:true}).waitFor({timeout:60000});
  await nav('异常与跟进').click();const persisted=page.locator(`[data-alert-id="${selected.id}"]`);await persisted.getByText('待补资料',{exact:true}).waitFor();
  assert.equal(baseline.eligibleCostReview.eligibleProjects,16);assert.equal(baseline.costAlerts.summary.costBlocked,93);
  stage='focused-followup';await persisted.getByRole('button',{name:'追问此异常',exact:true}).click();

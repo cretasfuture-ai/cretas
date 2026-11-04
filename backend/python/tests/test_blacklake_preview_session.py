@@ -7,11 +7,13 @@ from blacklake import preview_session
 KEY='synthetic-local-preview-signing-key-only'
 
 
-def setup(monkeypatch,*,full=True,claim_factory='BLACKLAKE_POC_TEST'):
+def setup(monkeypatch,*,full=True,claim_factory='BLACKLAKE_POC_TEST',issued_at=None):
     config={'tenant_id':'BLACKLAKE_POC_TEST','username':'synthetic','password':'synthetic-only','jwt_secret':KEY}
     monkeypatch.setenv('LOCALAPPDATA','synthetic')
     monkeypatch.setattr(preview_session,'load_local_secret',lambda p:config)
-    token=jwt.encode({'factoryId':claim_factory,'userId':33,'role':'factory_super_admin'},KEY,algorithm='HS256')
+    claims={'factoryId':claim_factory,'userId':33,'role':'factory_super_admin'}
+    if issued_at is not None:claims['iat']=issued_at
+    token=jwt.encode(claims,KEY,algorithm='HS256')
     calls=[];client_type=httpx.Client
     def handle(request):
         calls.append(request.url)
@@ -39,4 +41,19 @@ def test_preview_does_not_return_session_if_cost_authority_denies(monkeypatch):
 def test_preview_rejects_signed_token_for_another_factory(monkeypatch):
     calls=setup(monkeypatch,claim_factory='FOREIGN')
     with pytest.raises(RuntimeError,match='TEST_SESSION_TOKEN_MISMATCH'):preview_session.session()
+    assert len(calls)==1
+
+
+def test_preview_waits_for_verified_recent_issued_at_without_relaxing_receiver(monkeypatch):
+    setup(monkeypatch,issued_at=101)
+    monkeypatch.setattr(preview_session.time,'time',lambda:100.5)
+    waited=[];monkeypatch.setattr(preview_session.time,'sleep',waited.append)
+    assert preview_session.session()['success'] is True
+    assert waited==[0.55]
+
+
+def test_preview_rejects_large_clock_skew_before_authority_request(monkeypatch):
+    calls=setup(monkeypatch,issued_at=110)
+    monkeypatch.setattr(preview_session.time,'time',lambda:100)
+    with pytest.raises(RuntimeError,match='TEST_SESSION_CLOCK_SKEW'):preview_session.session()
     assert len(calls)==1

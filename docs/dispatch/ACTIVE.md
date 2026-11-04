@@ -7,6 +7,10 @@
 
 ## 在飞任务
 
+- BLACKLAKE-PERIOD-CORE-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope smartbi周期窗口/队列/历史/调度及tests；执行者已交付，314后端通过；回执archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
+- BLACKLAKE-PERIOD-UI-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope PrototypeAnalysis/SectionInsight、blacklake.ts、PeriodControls/Analysis及spec；日期/异步/历史/追问完成；验收见archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
+- BLACKLAKE-PERIOD-ADAPTER-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope blacklake周期投影/API/运行器、store/app/preview、tests与文档；六类真实周期API通过，规则已存/27B配额等待；23:55定时已启用；仅隔离测试；回执archive/2026-11-04-blacklake-period-analysis.md。
+
 - BLACKLAKE-PLAIN-PAGE-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope 隔离PrototypeAnalysis/Intelligence及comparison helper/spec；两位小数、问题工单与冲突组阻断；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。
 - BLACKLAKE-PLAIN-INSIGHT-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope PrototypeSectionInsight/CostAlerts、presentation helper/spec；中文证据、范围和工单核对；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。
 

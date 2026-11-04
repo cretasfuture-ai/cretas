@@ -5,6 +5,7 @@ stdout is captured in memory and returned as a no-store session response.
 """
 import json
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -27,6 +28,17 @@ def session():
         if (claims.get('factoryId')!=config['tenant_id'] or claims.get('userId')!=data.get('userId')
                 or claims.get('role')!=data['role'] or type(claims.get('userId')) is not int):
             raise RuntimeError('TEST_SESSION_TOKEN_MISMATCH')
+        # The dedicated Java issuer and Windows verifier can cross a second
+        # boundary. Wait for a verified token to become valid; never relax the
+        # receiving service's signature, tenant, expiry or issued-at checks.
+        issued_at=claims.get('iat')
+        if issued_at is not None:
+            if type(issued_at) not in (int,float):
+                raise RuntimeError('TEST_SESSION_ISSUED_AT_INVALID')
+            ahead=issued_at-time.time()
+            if ahead>5:
+                raise RuntimeError('TEST_SESSION_CLOCK_SKEW')
+            if ahead>0:time.sleep(ahead+0.05)
         authority=client.post('http://127.0.0.1:11210/api/mobile/BLACKLAKE_POC_TEST/smart-bi/cost-product-access',
                               json={'productIds':[]},headers={'Authorization':'Bearer '+token})
         authority.raise_for_status();verified=authority.json();scope=verified.get('data') or {}

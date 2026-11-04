@@ -37,7 +37,7 @@ def settings(path):
     return value
 
 
-def read(value):
+def read(value, period=None):
     connection=psycopg2.connect(value['dsn'],connect_timeout=5)
     try:
         connection.set_session(readonly=True)
@@ -64,14 +64,22 @@ def read(value):
         if value.get('gap_evidence_file'):
             evidence=load_local_secret(value['gap_evidence_file'])
             evidence=bind_evidence(value,records,evidence)
+        period_metadata=None
+        if period is not None:
+            from .period_projection import project_period
+            data,metadata,period_metadata=project_period(data,metadata,period)
+            # Whole-history supplemental evidence is never relabeled as a period probe.
+            evidence=None
         analysis=build(data,metadata)
         analysis['costIntelligence']=enrich(analysis,data,metadata,evidence)
+        if period_metadata is not None:
+            analysis['costIntelligence']['gapEvidence']={'status':'period_not_verified'}
         from smartbi.services.cost_data_alerts import evaluate
         from .cost_review import review
-        analysis['costAlerts']=evaluate(analysis['cost']['projects'],scope=digest(scope[:2]),run_id=scope[2])
+        analysis['costAlerts']=evaluate(analysis['cost']['projects'],scope=digest(scope[:2]),run_id=analysis['runId'])
         # A former 8B review is historical evidence, not the selected runtime.
         # Only attach a current, fully validated shared 27B review.
-        if os.environ.get('LOCALAPPDATA'):
+        if period is None and os.environ.get('LOCALAPPDATA'):
             from .section_review import attach
             attach(analysis['costAlerts'], Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/cost-common-ai.dpapi')
         analysis['eligibleCostReview']=review(analysis)
@@ -79,6 +87,9 @@ def read(value):
         analysis['dataAlerts']=analysis['costAlerts']
         from .section_insights import build as build_sections
         analysis['sectionInsights']=build_sections(analysis)
+        if period_metadata is not None:
+            from .period_projection import describe_period
+            describe_period(analysis,period_metadata)
         return analysis
     finally:
         connection.close()

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { getBlacklakeAnalysis, type AlertFollowup, type BlacklakeAnalysis, type CostDataAlert, type CostProject, type SectionInsightReport } from '@/api/smartbi/blacklake';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { createBlacklakePeriodReport, getBlacklakeAnalysis, getBlacklakePeriodReport, getBlacklakePeriodSchedule, listBlacklakePeriodReports, type AlertFollowup, type BlacklakeAnalysis, type BlacklakePeriodJob, type BlacklakePeriodQuery, type BlacklakePeriodSchedule, type CostDataAlert, type CostProject, type SectionInsightReport } from '@/api/smartbi/blacklake';
 import DynamicChartRenderer from '@/components/smartbi/DynamicChartRenderer.vue';
 import SectionInsight from '@/components/smartbi/PrototypeSectionInsight.vue';
 import BlacklakeCostIntelligence from './BlacklakePrototypeCostIntelligence.vue';
@@ -11,6 +11,10 @@ import UButton from '@nuxt/ui/components/Button.vue';
 import UBadge from '@nuxt/ui/components/Badge.vue';
 import { buildCostOverview, buildUnitCostChart, groupEligibleCostProjects } from './costOverview';
 import { formatBlacklakeNumber, localizeBlacklakeText } from './blacklakePresentation';
+import BlacklakePeriodControls from './BlacklakePeriodControls.vue';
+import BlacklakePeriodAnalysis from './BlacklakePeriodAnalysis.vue';
+import { formatBlacklakeDateTime, periodForKind, periodIdentity } from './blacklakePeriod';
+import { useAuthStore } from '@/store/modules/auth';
 
 const props = defineProps<{ activeView?: string }>();
 const emit = defineEmits<{ (event: 'update:activeView', value: string): void }>();
@@ -28,6 +32,20 @@ const focusedSection = ref('');
 const focusedAlert = ref<CostDataAlert | null>(null);
 const openRequest = ref(0);
 const comparisonOpen=ref(false);
+const periodQuery = ref<BlacklakePeriodQuery | null>(periodForKind('day'));
+const periodJob = ref<BlacklakePeriodJob | null>(null);
+const periodHistory = ref<BlacklakePeriodJob[]>([]);
+const periodSchedule = ref<BlacklakePeriodSchedule | null>(null);
+const periodError = ref('');
+const periodLoading = ref(false);
+const periodRequestGeneration = ref(0);
+const lastAppliedPeriodResultKey = ref('');
+const historyDrawerJob = ref<BlacklakePeriodJob | null>(null);
+const periodAuxError = ref('');
+const mounted = ref(false);
+const authStore = useAuthStore();
+const authIdentity = computed(() => [authStore.factoryId, authStore.user?.id ?? '', authStore.currentRole].join(':'));
+let periodPollTimer: number | undefined;
 function toggleComparison(event:Event){comparisonOpen.value=(event.target as HTMLDetailsElement).open;}
 const viewTitles:Record<string,string>={cost:'原料到成品成本分析',alerts:'异常与跟进',gaps:'关联与估值补查',production:'生产与工序',inventory:'库存与仓库',coverage:'数据覆盖与口径'};
 function updateProgress(value:AlertFollowup){if(data.value)data.value.alertFollowups={...data.value.alertFollowups,[value.alertId]:value};}
@@ -84,22 +102,134 @@ watch(() => props.activeView, value => {
 watch(tab, value => {
   if (value !== props.activeView) emit('update:activeView', value);
 });
-async function load() {
-  loading.value = true; error.value = '';
-  try {
-    const refreshed=await getBlacklakeAnalysis();
-    selected.value=null;focusedAlert.value=null;focusedSection.value='';openRequest.value=0;
-    data.value=refreshed;refreshEpoch.value++;
-    unit.value = units.value.includes('kg') ? 'kg' : units.value[0] || '';
-    inventoryUnit.value = inventoryUnits.value.includes('kg') ? 'kg' : inventoryUnits.value[0] || '';
-    overviewUnit.value = overviewUnits.value.includes('kg') ? 'kg' : overviewUnits.value[0] || '';
-  } catch (e) { error.value = e instanceof Error ? e.message : '读取失败，请重试'; data.value = null; }
-  finally { loading.value = false; }
-}
 function goTo(section: string) {
   tab.value = section;
   void nextTick(()=>document.querySelector(section==='cost'?'[data-testid="cost-projects"]':'.blacklake-page .page-header')?.scrollIntoView({block:'start',behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'}));
 }
+
+function stopPeriodPolling() {
+  if (periodPollTimer !== undefined) window.clearTimeout(periodPollTimer);
+  periodPollTimer = undefined;
+}
+
+function resetPeriodView() {
+  stopPeriodPolling();
+  data.value = null; periodJob.value = null; lastAppliedPeriodResultKey.value = ''; periodHistory.value = []; historyDrawerJob.value = null; periodSchedule.value = null; error.value = ''; periodError.value = ''; periodAuxError.value = ''; periodLoading.value = false; selected.value = null; focusedAlert.value = null; focusedSection.value = ''; openRequest.value = 0;
+}
+
+function applyPeriodInsights(job: BlacklakePeriodJob): boolean {
+  const metadata = data.value?.periodMetadata;
+  const query = periodQuery.value;
+  const valid = !!data.value && !!job.result && !!metadata && !!query
+    && job.fingerprint === metadata.fingerprint
+    && job.period.startDate === query.start_date && job.period.endDate === query.end_date
+    && job.period.basis === query.basis
+    && job.period.timezone === metadata.timezone;
+  if (!valid) {
+    periodError.value = '分析结果与当前数据快照或周期范围不一致，未装载旧结果，请刷新后重试。';
+    return false;
+  }
+  if (!data.value || !job.result) return false;
+  const resultKey = `${job.id}:${job.result.generatedAt || JSON.stringify(job.result)}`;
+  if (lastAppliedPeriodResultKey.value === resultKey) return true;
+  const nextCostAlerts = data.value.costAlerts && job.result.ai
+    ? { ...data.value.costAlerts, ai: { ...data.value.costAlerts.ai, ...job.result.ai } }
+    : data.value.costAlerts;
+  data.value = { ...data.value, sectionInsights: job.result.sectionInsights, costAlerts: nextCostAlerts };
+  lastAppliedPeriodResultKey.value = resultKey;
+  refreshEpoch.value += 1;
+  return true;
+}
+
+function periodPollDelay(nextAttemptAt?: string | null) {
+  if (!nextAttemptAt) return 2500;
+  const remaining = new Date(nextAttemptAt).getTime() - Date.now();
+  return Math.min(30000, Math.max(2500, Number.isFinite(remaining) ? remaining : 2500));
+}
+
+function isCurrentRequest(generation: number, identity: string) {
+  return mounted.value && generation === periodRequestGeneration.value && identity === authIdentity.value;
+}
+
+async function refreshPeriodHistory(generation: number, identity: string) {
+  try {
+    const history = await listBlacklakePeriodReports();
+    if (isCurrentRequest(generation, identity)) periodHistory.value = history;
+  } catch (cause) {
+    if (isCurrentRequest(generation, identity)) periodAuxError.value = cause instanceof Error ? cause.message : '历史周期报告暂不可用。';
+  }
+}
+
+async function refreshPeriodSchedule(generation: number, identity: string) {
+  try {
+    const schedule = await getBlacklakePeriodSchedule();
+    if (isCurrentRequest(generation, identity)) periodSchedule.value = schedule;
+  } catch (cause) {
+    if (isCurrentRequest(generation, identity)) periodAuxError.value = cause instanceof Error ? cause.message : '自动计划暂不可用。';
+  }
+}
+
+async function pollPeriodReport(jobId: string, generation: number, identity: string) {
+  try {
+    const next = await getBlacklakePeriodReport(jobId);
+    if (!isCurrentRequest(generation, identity)) return;
+    periodJob.value = next;
+    if (next.result) applyPeriodInsights(next);
+    if (next.status === 'ready') { periodLoading.value = false; void refreshPeriodHistory(generation, identity); return; }
+    if (next.status === 'failed') { periodLoading.value = false; periodError.value = next.error || '周期分析失败，可重试。'; return; }
+    periodPollTimer = window.setTimeout(() => { void pollPeriodReport(jobId, generation, identity); }, periodPollDelay(next.nextAttemptAt));
+  } catch (cause) {
+    if (!isCurrentRequest(generation, identity)) return;
+    periodLoading.value = false; periodError.value = cause instanceof Error ? cause.message : '读取周期分析状态失败。';
+  }
+}
+
+async function loadForPeriod(query: BlacklakePeriodQuery | null, force = false) {
+  const generation = ++periodRequestGeneration.value;
+  const identity = authIdentity.value;
+  resetPeriodView();
+  void refreshPeriodHistory(generation, identity);
+  void refreshPeriodSchedule(generation, identity);
+  loading.value = true;
+  try {
+    const refreshed = await getBlacklakeAnalysis(query);
+    if (!isCurrentRequest(generation, identity)) return;
+    data.value = refreshed; refreshEpoch.value += 1;
+    unit.value = units.value.includes('kg') ? 'kg' : units.value[0] || '';
+    inventoryUnit.value = inventoryUnits.value.includes('kg') ? 'kg' : inventoryUnits.value[0] || '';
+    overviewUnit.value = overviewUnits.value.includes('kg') ? 'kg' : overviewUnits.value[0] || '';
+    if (!query) return;
+    periodLoading.value = true;
+    const submitted = await createBlacklakePeriodReport(query, force, refreshed.periodMetadata?.fingerprint);
+    if (!isCurrentRequest(generation, identity)) return;
+    periodJob.value = submitted;
+    if (submitted.result) applyPeriodInsights(submitted);
+    if (submitted.status === 'ready') { periodLoading.value = false; void refreshPeriodHistory(generation, identity); }
+    else if (submitted.status === 'failed') { periodLoading.value = false; periodError.value = submitted.error || '周期分析失败，可重试。'; }
+    else void pollPeriodReport(submitted.id, generation, identity);
+  } catch (cause) {
+    if (!isCurrentRequest(generation, identity)) return;
+    if (data.value) periodError.value = cause instanceof Error ? cause.message : '周期分析任务未能创建。';
+    else error.value = cause instanceof Error ? cause.message : '读取失败，请重试';
+  } finally {
+    if (isCurrentRequest(generation, identity)) loading.value = false;
+  }
+}
+
+function onPeriodChange(query: BlacklakePeriodQuery | null) {
+  if (periodIdentity(query) === periodIdentity(periodQuery.value)) return;
+  periodQuery.value = query;
+  void loadForPeriod(query);
+}
+
+function retryPeriod() { if (periodQuery.value) void loadForPeriod(periodQuery.value, true); }
+function openHistory(job: BlacklakePeriodJob) { historyDrawerJob.value = job; }
+
+watch(authIdentity, (value, previous) => {
+  if (!previous || value === previous) return;
+  resetPeriodView(); periodRequestGeneration.value += 1; periodHistory.value = []; historyDrawerJob.value = null; periodSchedule.value = null; periodAuxError.value = '';
+  void loadForPeriod(periodQuery.value);
+});
 
 function clearFocus(sectionId?: string) {
   if (!sectionId || focusedSection.value === sectionId) {
@@ -126,7 +256,11 @@ function focusAlert(alert: CostDataAlert) {
   tab.value = ['product_cost', 'labor', 'material', 'finished'].includes(inferred) ? 'cost' : inferred;
   void nextTick(() => document.querySelector(`[data-testid="section-insight-${inferred}"]`)?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth', block: 'center' }));
 }
-onMounted(load);
+onMounted(() => {
+  mounted.value = true;
+  void loadForPeriod(periodQuery.value);
+});
+onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; stopPeriodPolling(); });
 </script>
 
 <template>
@@ -134,9 +268,13 @@ onMounted(load);
     <header class="page-header">
       <div><span class="eyebrow">SMARTBI · 黑湖只读测试</span><h2>六膳门 · {{ viewTitles[tab] || '生产经营分析' }}</h2>
         <p>以工单贯通领退料、工序与成品；可识别直接成本单独披露。</p></div>
-      <UButton color="neutral" variant="outline" :loading="loading" @click="load">刷新分析</UButton>
+      <UButton color="neutral" variant="outline" :loading="loading" @click="void loadForPeriod(periodQuery)">刷新分析</UButton>
     </header>
+    <BlacklakePeriodControls :model-value="periodQuery" :disabled="loading" @change="onPeriodChange" />
     <el-alert v-if="error" type="error" :closable="false" :title="error" show-icon />
+    <el-alert v-if="periodError" type="warning" :closable="false" :title="periodError" show-icon />
+    <el-alert v-if="periodAuxError" type="info" :closable="false" :title="periodAuxError" show-icon />
+    <BlacklakePeriodAnalysis :metadata="data?.periodMetadata" :job="periodJob" :history="periodHistory" :schedule="periodSchedule" @retry="retryPeriod" @open-history="openHistory" />
     <template v-if="data">
       <p class="snapshot">采集时间：{{ new Date(data.snapshotAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}（北京时间） · 账号可见历史 · 库存为该时点快照</p>
       <section v-show="tab === 'cost'" class="overview-shell" aria-label="成本分析概览">
@@ -167,7 +305,7 @@ onMounted(load);
           <el-empty v-else description="当前没有同单位且具备材料、人工、成品量的可核算工单" />
           <div v-if="overviewGroups.length" class="unit-cost-groups" data-testid="unit-cost-groups"><div v-for="group in overviewGroups" :key="group.key"><span class="product-identity"><b>{{ group.product }}</b><small>{{ group.displayIdentity }}</small></span><UBadge color="neutral" variant="soft">{{ group.sampleCount }} 条工单</UBadge><strong>{{ fmt(group.weightedUnitCost) }} / {{ group.unit }}</strong></div></div>
           <div class="unit-cost-note"><span>加权口径：各产品组材料成本 ÷ 成品良品量 + 人工成本 ÷ 成品良品量。</span><UButton size="sm" color="neutral" variant="ghost" @click="goTo('cost')">查看逐工单明细</UButton></div>
-          <SectionInsight v-if="insightFor('product_cost')" :report="insightFor('product_cost')!" :focus-alert="focusedSection === 'product_cost' ? focusedAlert : null" :open-request="focusedSection === 'product_cost' ? openRequest : 0" @clear-focus="clearFocus('product_cost')" @locate-order="locateOrder" />
+          <SectionInsight v-if="insightFor('product_cost')" :report="insightFor('product_cost')!" :period="periodQuery" :focus-alert="focusedSection === 'product_cost' ? focusedAlert : null" :open-request="focusedSection === 'product_cost' ? openRequest : 0" @clear-focus="clearFocus('product_cost')" @locate-order="locateOrder" />
         </UCard>
       </section>
       <el-tabs v-model="tab">
@@ -186,7 +324,7 @@ onMounted(load);
               <el-table-column label="核对状态" min-width="225"><template #default="{ row }"><el-tag :type="!row.unitCostAvailable ? 'danger' : projectAlerts(row.projectId).length || row.issues.length ? 'warning' : 'success'">{{ !row.unitCostAvailable ? '暂不能核算，需核对资料' : projectAlerts(row.projectId).length ? `${projectAlerts(row.projectId).length} 条核对提醒` : row.issues.length ? `${row.issues.length} 项待补资料` : '来源字段具备' }}</el-tag><el-button v-if="projectAlerts(row.projectId).length || row.issues.length" link type="warning" @click.stop="locateOrder(row.projectId)">查看问题</el-button></template></el-table-column>
               <el-table-column label="链路" width="95" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="selected = row">查看链路</el-button></template></el-table-column>
             </el-table>
-            <SectionInsight v-if="insightFor('finished')" :report="insightFor('finished')!" :focus-alert="focusedSection === 'finished' ? focusedAlert : null" :open-request="focusedSection === 'finished' ? openRequest : 0" @clear-focus="clearFocus('finished')" @locate-order="locateOrder" />
+            <SectionInsight v-if="insightFor('finished')" :report="insightFor('finished')!" :period="periodQuery" :focus-alert="focusedSection === 'finished' ? focusedAlert : null" :open-request="focusedSection === 'finished' ? openRequest : 0" @clear-focus="clearFocus('finished')" @locate-order="locateOrder" />
           </el-card>
           <details class="comparison-evidence" @toggle="toggleComparison"><summary>展开同产品工单差额与逐物料证据</summary><BlacklakeCostIntelligence v-if="comparisonOpen" :intelligence="data.costIntelligence" :projects="data.cost.projects" /></details>
           <el-card shadow="never" class="section-card"><h3>加工人工 · 可核算工单</h3>
@@ -198,15 +336,15 @@ onMounted(load);
               <el-table-column label="单位成品人工"><template #default="{ row }">{{ fmt(row.laborPerFinished) }} / {{ row.unit }}</template></el-table-column>
               <el-table-column label="人工占比"><template #default="{ row }">{{ row.laborShare == null ? '待核' : `${fmt(row.laborShare * 100)}%` }}</template></el-table-column>
             </el-table>
-            <SectionInsight v-if="insightFor('labor')" :report="insightFor('labor')!" :focus-alert="focusedSection === 'labor' ? focusedAlert : null" :open-request="focusedSection === 'labor' ? openRequest : 0" @clear-focus="clearFocus('labor')" @locate-order="locateOrder" />
+            <SectionInsight v-if="insightFor('labor')" :report="insightFor('labor')!" :period="periodQuery" :focus-alert="focusedSection === 'labor' ? focusedAlert : null" :open-request="focusedSection === 'labor' ? openRequest : 0" @clear-focus="clearFocus('labor')" @locate-order="locateOrder" />
           </el-card>
-          <el-card shadow="never" class="section-card"><h3>全历史原料净消耗（已关联工单）</h3><p class="note">按物料与来源单位保留；不混加不同单位。未关联领退料未计入下表。</p>
+          <el-card shadow="never" class="section-card"><h3>{{ periodQuery ? '所选工单的原料净消耗' : '全历史原料净消耗（已关联工单）' }}</h3><p class="note">按物料与来源单位保留；不混加不同单位。未关联领退料未计入下表。</p>
             <el-table :data="data.cost.materials" height="340" stripe><el-table-column prop="material" label="原料" min-width="190" /><el-table-column prop="unit" label="单位" width="85" /><el-table-column label="净消耗"><template #default="{ row }">{{ fmt(row.netConsumption) }}</template></el-table-column><el-table-column label="已识别净额"><template #default="{ row }">{{ fmt(row.recognizedCost) }}</template></el-table-column><el-table-column prop="lines" label="领退料行数" /></el-table>
-            <SectionInsight v-if="insightFor('material')" :report="insightFor('material')!" :focus-alert="focusedSection === 'material' ? focusedAlert : null" :open-request="focusedSection === 'material' ? openRequest : 0" @clear-focus="clearFocus('material')" @locate-order="locateOrder" />
+            <SectionInsight v-if="insightFor('material')" :report="insightFor('material')!" :period="periodQuery" :focus-alert="focusedSection === 'material' ? focusedAlert : null" :open-request="focusedSection === 'material' ? openRequest : 0" @clear-focus="clearFocus('material')" @locate-order="locateOrder" />
           </el-card>
         </el-tab-pane>
         <el-tab-pane label="成本与数据异常" name="alerts">
-          <BlacklakeCostAlerts v-if="data.costAlerts && data.eligibleCostReview" :alerts="data.costAlerts" :review="data.eligibleCostReview" :followups="data.alertFollowups" @ask="focusAlert" @updated="updateProgress" @locate-order="locateOrder" />
+          <BlacklakeCostAlerts v-if="data.costAlerts && data.eligibleCostReview" :alerts="data.costAlerts" :review="data.eligibleCostReview" :followups="data.alertFollowups" :period="periodQuery" @ask="focusAlert" @updated="updateProgress" @locate-order="locateOrder" />
           <el-alert v-else type="warning" :closable="false" title="异常分析结果未返回，请核对分析服务。" />
         </el-tab-pane>
         <el-tab-pane label="关联与估值补查" name="gaps">
@@ -215,15 +353,15 @@ onMounted(load);
         <el-tab-pane label="生产与工序" name="production">
           <div class="chart-grid"><el-card shadow="never"><div class="section-heading"><h3>计划与实际 · 前 15 个产品</h3><el-select v-model="unit" aria-label="生产数量单位"><el-option v-for="u in units" :key="u" :label="u" :value="u" /></el-select></div><DynamicChartRenderer :config="planChart" :number-precision="2" /></el-card><el-card shadow="never"><h3>工序累计工时 · 前 12 项</h3><p class="note">累计快照，用于定位需关注工序，不能据此认定效率或瓶颈原因。</p><DynamicChartRenderer :config="processChart" :number-precision="2" /></el-card></div>
           <el-card shadow="never" class="section-card"><h3>已审批报工质量 · 按产品 / 工序 / 单位</h3><el-table :data="data.production.quality" height="400" stripe><el-table-column prop="product" label="产品" min-width="180" /><el-table-column prop="process" label="工序" /><el-table-column prop="unit" label="单位" width="75" /><el-table-column label="良品数"><template #default="{ row }">{{ fmt(row.good) }}</template></el-table-column><el-table-column label="不良数"><template #default="{ row }">{{ fmt(row.defective) }}</template></el-table-column><el-table-column label="良品率"><template #default="{ row }">{{ row.goodRate == null ? '未提供' : `${fmt(row.goodRate * 100)}%` }}</template></el-table-column></el-table></el-card>
-            <SectionInsight v-if="insightFor('production')" :report="insightFor('production')!" :focus-alert="focusedSection === 'production' ? focusedAlert : null" :open-request="focusedSection === 'production' ? openRequest : 0" @clear-focus="clearFocus('production')" @locate-order="locateOrder" />
+            <SectionInsight v-if="insightFor('production')" :report="insightFor('production')!" :period="periodQuery" :focus-alert="focusedSection === 'production' ? focusedAlert : null" :open-request="focusedSection === 'production' ? openRequest : 0" @clear-focus="clearFocus('production')" @locate-order="locateOrder" />
         </el-tab-pane>
         <el-tab-pane label="库存与仓库" name="inventory">
-          <el-alert type="info" :closable="false" :title="`已返回 ${data.inventory.records.length} 条余额；另有 ${data.inventory.pairsNotReturned} 个产品与仓库组合未返回，保持未知。`" />
-            <el-card shadow="never" class="section-card"><div class="section-heading"><h3>仓库余额 · 同单位比较</h3><el-select v-model="inventoryUnit" aria-label="库存数量单位"><el-option v-for="u in inventoryUnits" :key="u" :label="u" :value="u" /></el-select></div><DynamicChartRenderer :config="stockChart" :number-precision="2" /><el-table :data="stockRows" height="380" stripe><el-table-column prop="product" label="物料 / 产品" min-width="200" /><el-table-column prop="warehouse" label="仓库" /><el-table-column prop="unit" label="单位" width="75" /><el-table-column label="来源余额"><template #default="{ row }">{{ fmt(row.quantity) }}</template></el-table-column></el-table><SectionInsight v-if="insightFor('inventory')" :report="insightFor('inventory')!" :focus-alert="focusedSection === 'inventory' ? focusedAlert : null" :open-request="focusedSection === 'inventory' ? openRequest : 0" @clear-focus="clearFocus('inventory')" @locate-order="locateOrder" /></el-card>
+          <el-alert type="info" :closable="false" :title="data.periodMetadata && data.periodMetadata.inventoryStatus !== 'snapshot_within_period' ? '所选日期没有历史库存余额，不能把没有记录当作零库存。请补充当期库存快照后再分析。' : `已返回 ${data.inventory.records.length} 条采集时点余额；未返回的产品与仓库组合${data.inventory.pairsNotReturned == null ? '数量未知' : `有 ${data.inventory.pairsNotReturned} 个`}，保持未知，不是期末余额。`" />
+            <el-card shadow="never" class="section-card"><div class="section-heading"><h3>仓库余额 · 同单位比较</h3><el-select v-model="inventoryUnit" aria-label="库存数量单位"><el-option v-for="u in inventoryUnits" :key="u" :label="u" :value="u" /></el-select></div><DynamicChartRenderer :config="stockChart" :number-precision="2" /><el-table :data="stockRows" height="380" stripe><el-table-column prop="product" label="物料 / 产品" min-width="200" /><el-table-column prop="warehouse" label="仓库" /><el-table-column prop="unit" label="单位" width="75" /><el-table-column label="来源余额"><template #default="{ row }">{{ fmt(row.quantity) }}</template></el-table-column></el-table><SectionInsight v-if="insightFor('inventory')" :report="insightFor('inventory')!" :period="periodQuery" :focus-alert="focusedSection === 'inventory' ? focusedAlert : null" :open-request="focusedSection === 'inventory' ? openRequest : 0" @clear-focus="clearFocus('inventory')" @locate-order="locateOrder" /></el-card>
         </el-tab-pane>
         <el-tab-pane label="数据覆盖与口径" name="coverage">
           <el-card shadow="never"><h3>数据集已接入 13 类资料</h3><el-table :data="data.catalog"><el-table-column label="资料"><template #default="{ row }">{{ coverageLabel[row.resource] || row.resource }}</template></el-table-column><el-table-column prop="count" label="条数" /></el-table><h3>分析发现</h3><ul><li v-for="item in data.findings" :key="item">{{ item }}</li></ul><h3>使用边界</h3><ul><li v-for="item in data.limitations" :key="item">{{ item }}</li></ul></el-card>
-            <SectionInsight v-if="insightFor('coverage')" :report="insightFor('coverage')!" :focus-alert="focusedSection === 'coverage' ? focusedAlert : null" :open-request="focusedSection === 'coverage' ? openRequest : 0" @clear-focus="clearFocus('coverage')" @locate-order="locateOrder" />
+            <SectionInsight v-if="insightFor('coverage')" :report="insightFor('coverage')!" :period="periodQuery" :focus-alert="focusedSection === 'coverage' ? focusedAlert : null" :open-request="focusedSection === 'coverage' ? openRequest : 0" @clear-focus="clearFocus('coverage')" @locate-order="locateOrder" />
         </el-tab-pane>
       </el-tabs>
       <el-drawer :model-value="!!selected" @close="selected = null" size="min(100%, 1080px)" title="原料 → 工序 → 成品 · 工单成本链路">
@@ -234,13 +372,16 @@ onMounted(load);
           <el-alert v-else type="success" :closable="false" :title="`单位可识别直接成本 ${fmt(selected.unitIdentifiedDirectCost)} / ${selected.unit}（来源币种，非完整制造成本）`" />
           <p class="note">材料金额有值 {{ selected.materialCostKnownLines }}/{{ selected.materialLines }} 行；累计工资有值 {{ selected.laborCostKnownTasks }}/{{ selected.taskCount }} 项。缺失不补零。</p><h3>实际领料与退料明细</h3><el-table :data="selected.materialLinesDetail" stripe><el-table-column prop="material" label="原料" min-width="170" /><el-table-column prop="orderCode" label="来源出入库单" min-width="150" /><el-table-column label="净消耗"><template #default="{ row }">{{ fmt(row.netConsumption) }} {{ row.unit }}</template></el-table-column><el-table-column label="来源单价"><template #default="{ row }">{{ fmt(row.unitPrice) }}</template></el-table-column><el-table-column label="来源净额"><template #default="{ row }">{{ fmt(row.recognizedCost) }}</template></el-table-column></el-table>
           <h3>工序进度与累计人工</h3><el-table :data="selected.processes" stripe><el-table-column prop="process" label="工序" /><el-table-column label="状态"><template #default="{ row }">{{ statusName(row.status) }}</template></el-table-column><el-table-column label="累计工时（小时）"><template #default="{ row }">{{ fmt(row.hours) }}</template></el-table-column><el-table-column label="累计工资"><template #default="{ row }">{{ fmt(row.laborCost) }}</template></el-table-column></el-table>
-          <h3>工单用料参考 · 父级查询已核实</h3>
-          <p class="note">已按工单ID和编号交叉查询验证归属；源端单位用量的换算基准待核，不替代实际领料或成本。</p>
+          <h3>工单用料参考 · {{ verifiedReferences.length ? '已核实的配方用料参考' : '暂无可展示的已核实参考用料' }}</h3>
+          <p class="note">{{ verifiedReferences.length ? '已按工单 ID 和编号交叉查询验证归属；' : '当前快照没有可展示的已核实参考用料；' }}源端单位用量的换算基准待核，不能替代实际领料或成本。</p>
           <el-table :data="verifiedReferences" stripe><el-table-column prop="materialCode" label="物料代码" /><el-table-column prop="feedProcessCode" label="投料工序代码" /><el-table-column label="源端单位用量（基准待核）"><template #default="{ row }">{{ valueLabel(row.sourceUnitQty) }}</template></el-table-column></el-table>
           <p class="note">数量未跨工序求和。工资估算未重复叠加；BOM 标准用量未代替实际领料。</p>
         </template>
       </el-drawer>
     </template>
+    <el-drawer v-if="historyDrawerJob" :model-value="!!historyDrawerJob" title="历史周期报告" size="min(100%, 760px)" @close="historyDrawerJob = null">
+      <template v-if="historyDrawerJob"><h3>{{ historyDrawerJob.period.startDate }} 至 {{ historyDrawerJob.period.endDate }}</h3><p class="note">报告状态：{{ ({ queued: '等候分析', running: '正在分析', ready: '已生成', failed: '分析失败' })[historyDrawerJob.status] }} · 版本 {{ historyDrawerJob.revision }} · 保存时间 {{ formatBlacklakeDateTime(historyDrawerJob.finishedAt || historyDrawerJob.createdAt) }}</p><p v-if="historyDrawerJob.result?.summary">{{ localizeBlacklakeText(historyDrawerJob.result.summary) }}</p><h4 v-if="historyDrawerJob.result?.observations.length">观察</h4><ul><li v-for="item in historyDrawerJob.result?.observations || []" :key="item">{{ localizeBlacklakeText(item) }}</li></ul><p class="note">历史报告保留原周期范围，不与当前页面数据混合。</p></template>
+    </el-drawer>
   </main>
 </template>
 

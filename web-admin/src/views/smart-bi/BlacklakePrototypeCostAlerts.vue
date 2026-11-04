@@ -3,9 +3,9 @@ import { computed, ref, watch, watchEffect } from 'vue';
 import UButton from '@nuxt/ui/components/Button.vue';
 import UBadge from '@nuxt/ui/components/Badge.vue';
 import { useAuthStore } from '@/store/modules/auth';
-import { saveBlacklakeAlertFollowup, type AlertFollowup, type CostAlertReport, type CostDataAlert, type EligibleCostReview } from '@/api/smartbi/blacklake';
+import { saveBlacklakeAlertFollowup, type AlertFollowup, type BlacklakePeriodQuery, type CostAlertReport, type CostDataAlert, type EligibleCostReview } from '@/api/smartbi/blacklake';
 import { formatBlacklakeNumber, localizeBlacklakeField, localizeBlacklakeText, readableEvidenceEntries } from './blacklakePresentation';
-const props = defineProps<{ alerts: CostAlertReport; review: EligibleCostReview; followups?: Record<string,AlertFollowup> }>();
+const props = defineProps<{ alerts: CostAlertReport; review: EligibleCostReview; followups?: Record<string,AlertFollowup>; period?: BlacklakePeriodQuery | null }>();
 const emit=defineEmits<{ask:[alert:CostDataAlert];updated:[followup:AlertFollowup];'locate-order':[projectId:number]}>();
 const auth=useAuthStore();
 const progress=ref<Record<string,AlertFollowup>>({});
@@ -23,7 +23,7 @@ async function save(){
   if(!note.value.trim()){saveError.value='请填写本次跟进说明';return;}
   const stamp=generation;saving.value=true;saveError.value='';
   try{
-    const result=await saveBlacklakeAlertFollowup(alert.id,{run_id:alert.runId,status:status.value,note:note.value,
+    const result=await saveBlacklakeAlertFollowup(alert.id,{run_id:alert.runId,status:status.value,note:note.value,period:props.period || undefined,
       expected_revision:progress.value[alert.id]?.revision||0});
     if(stamp!==generation)return;
     progress.value={...progress.value,[alert.id]:result};editing.value=null;emit('updated',result);
