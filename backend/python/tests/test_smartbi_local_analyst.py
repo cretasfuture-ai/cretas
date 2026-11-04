@@ -269,3 +269,10 @@ def test_department_order_is_normalized_but_unknown_owner_is_rejected():
     assert analyst.validate(value,pack,facts)[1][0]['owner']=='生产/仓库'
     value['sections'][0]['owner']='外部供应商'
     with pytest.raises(ValueError,match='ANALYST_OWNER'):analyst.validate(value,pack,facts)
+
+
+@pytest.mark.parametrize('text',['数据未覆盖完整周期，不能外推。','当前非完整周期，结论受限。','数据采集早于周期结束，不能预测后续。'])
+def test_equivalent_explicit_partial_period_wording_is_recognized(text):
+    import re
+    assert all(re.search(pattern,text) for pattern in analyst.HAZARD_WORDS['PARTIAL_PERIOD'])
+    assert not all(re.search(pattern,'本周期数据完整，已完成全部核算。') for pattern in analyst.HAZARD_WORDS['PARTIAL_PERIOD'])
