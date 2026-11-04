@@ -1,13 +1,13 @@
 """工厂 AI 读路径回归电池 — 与 restaurant_ai_eval 同构 (2026-07-24 验收轮建立)。
 
-覆盖工厂 demo (DEMO_FACTORY2) 的核心只读问法: 库存/设备/生产/质检/财务/
+覆盖工厂 F006 (六膳门食品科技, 测试租户) 的核心只读问法: 库存/设备/生产/质检/财务/
 考勤/退货/订单。断言是结构性 marker (含/不含), 不锁具体数字。
 本电池同时锁住 2026-07-24 验收修复: legacy 权限误拒全员 (原料查询)、
 考勤占位符、退货/销售订单误路由。
 
     python -X utf8 -m smartbi.scripts.factory_ai_eval --base https://admin.cretaceousfuture.com
 
-Exit 0 = 全过; 1 = 有失败 — cron/CI 可直接接。
+Exit 0 = 全过; 1 = 有失败; 2 = 没量到 (登录/凭证) — cron/CI 可直接接。
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-FACTORY_ID = "DEMO_FACTORY2"
+from smartbi.scripts.factory_eval_auth import FACTORY_ID, factory_login
 
 _FORBIDDEN_EVERYWHERE = [
     "暂未配置执行器",
@@ -69,12 +69,9 @@ def _post_json(url: str, payload: Dict[str, Any],
 
 
 def run_eval(base: str, only: Optional[str] = None) -> int:
-    login = _post_json(f"{base}/api/mobile/auth/demo-login?tenant=factory", {})
-    token = (login.get("data") or {}).get("token") or (login.get("data") or {}).get("accessToken")
-    if not token:
-        print("FATAL: factory demo login failed", login)
-        return 2
-    auth = {"Authorization": f"Bearer {token}"}
+    auth = factory_login(base, _post_json)
+    if auth is None:
+        return 2  # 没量到 (≠ 1 断言失败)
 
     passed, failed = 0, 0
     failures: List[str] = []

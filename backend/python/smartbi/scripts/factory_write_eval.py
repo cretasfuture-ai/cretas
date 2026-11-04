@@ -4,10 +4,11 @@
 1. 写意图识别命中 (确定性写短语 → 正确 intentCode + WRITE_CONFIRM_REQUIRED + aiMode=WRITE)
 2. mode=READ 强制只读 (写请求 → READ_MODE_WRITE_BLOCKED 跳转文案)
 3. TCC 预览 (previewOnly → PREVIEW + confirmableAction: token/digest/300s)
-4. demo 写闸 (confirm → DEMO_WRITE_BLOCKED, 演示不落库)
-5. 读问法 aiMode=READ 标记
+4. 读问法 aiMode=READ 标记
 
-全程 DEMO_FACTORY2: demo 闸保证零真实写入 — 本电池天然安全。
+全程 F006 (六膳门食品科技, 团队测试租户), 用 FACTORY_EVAL_USERNAME/PASSWORD 登录
+(见 factory_eval_auth.py)。⛔ 不调用 /ai-intents/confirm —— F006 没有 demo 写闸,
+confirm 会真写; 本电池零写入靠「只到预览」保证。
 
     python -X utf8 -m smartbi.scripts.factory_write_eval --base https://admin.cretaceousfuture.com
 
@@ -24,7 +25,7 @@ import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
-FACTORY_ID = "DEMO_FACTORY2"
+from smartbi.scripts.factory_eval_auth import FACTORY_ID, factory_login
 
 # (短语, 期望 intentCode) — 关键词确定性命中的写意图
 WRITE_INTENT_CASES = [
@@ -58,12 +59,9 @@ def _post_json(url: str, payload: Dict[str, Any],
 
 
 def run_eval(base: str) -> int:
-    login = _post_json(f"{base}/api/mobile/auth/demo-login?tenant=factory", {})
-    token = (login.get("data") or {}).get("token") or (login.get("data") or {}).get("accessToken")
-    if not token:
-        print("FATAL: factory demo login failed")
-        return 2
-    auth = {"Authorization": f"Bearer {token}"}
+    auth = factory_login(base, _post_json)
+    if auth is None:
+        return 2  # 没量到 (≠ 1 断言失败)
 
     def execute(payload: Dict[str, Any]) -> Dict[str, Any]:
         resp = _post_json(f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute",
@@ -105,7 +103,7 @@ def run_eval(base: str) -> int:
         problems.append("跳转文案缺失")
     check("READ 拦截: 删除客户", problems, str(d.get("message") or ""))
 
-    # ── 3+4. TCC: 预览 → token → confirm → demo 闸 ──
+    # ── 3. TCC: 预览 → token (只到预览, 不 confirm) ──
     d = execute({"userInput": TCC_QUERY, "intentCode": TCC_INTENT,
                  "previewOnly": True, "sessionId": _rand_sid("tcc")})
     ca = d.get("confirmableAction") or {}
@@ -124,24 +122,11 @@ def run_eval(base: str) -> int:
         problems.append("缺 actionType")
     check("TCC 预览铸 token", problems, str(d.get("message") or "")[:100])
 
-    if ca.get("confirmToken"):
-        body = {"commandDigest": ca["commandDigest"], "expiresAt": ca["expiresAt"],
-                "requestId": "weval-" + ca["commandDigest"][:12],
-                "idempotencyKey": "wevali-" + ca["commandDigest"][:12]}
-        try:
-            resp = _post_json(f"{base}/api/mobile/{FACTORY_ID}/ai-intents/confirm", body,
-                              headers={**auth, "X-Cretas-Confirmation-Token": ca["confirmToken"]})
-            d3 = resp.get("data") or {}
-        except Exception as exc:  # noqa: BLE001
-            d3 = {"status": f"<ERROR {exc}>"}
-        problems = []
-        if d3.get("status") != "DEMO_WRITE_BLOCKED":
-            problems.append(f"demo 闸应拦截 (DEMO_WRITE_BLOCKED), 实为 {d3.get('status')}")
-        check("demo 写闸: confirm 不落库", problems, str(d3.get("message") or ""))
-    else:
-        check("demo 写闸: confirm 不落库", ["无 token 无法驱动 confirm"], "")
+    # ⛔ 不再驱动 /ai-intents/confirm: 原先靠 DEMO_FACTORY2 的 demo 写闸 (DEMO_WRITE_BLOCKED)
+    #    保证 confirm 不落库; 现在目标是 F006 (真实可写租户, 无 demo 闸), confirm 会真建产品。
+    #    评测不打执行入口写业务数据 —— 到「铸出 token + 影响说明」为止。
 
-    # ── 5. 读问法 aiMode 标记 ──
+    # ── 4. 读问法 aiMode 标记 ──
     d = execute({"userInput": "库存有哪些预警", "sessionId": _rand_sid("aim")})
     problems = []
     if d.get("aiMode") != "READ":
