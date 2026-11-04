@@ -40,7 +40,15 @@ def _no_process_secret_products_by_default():
     async def _none_map(*_a, **_k):
         return {}
 
-    restore = []
+    async def _no_settings_database(*_a, **_k):
+        raise RuntimeError("no secrecy settings database in unit tests")
+
+    # factory_secrecy reads a failed read as every item ON. Tests about the switches replace _read.
+    from common import factory_secrecy
+
+    restore = [(factory_secrecy, "_read", factory_secrecy._read)]
+    factory_secrecy._read = _no_settings_database
+    factory_secrecy.invalidate()
     targets = (("smartbi.services.distillation_capture", "factory_lists_or_last_good", _empty_lists),
                ("scripts.export_distillation_dataset", "all_factory_lists", _none_map))
     # Corpus scripts (LLM judge / human review sampling / eval freeze) filter

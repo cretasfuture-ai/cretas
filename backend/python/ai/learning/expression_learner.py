@@ -72,7 +72,8 @@ def _compute_expression_hash(expression: str) -> str:
 class ExpressionLearner:
     """工艺保密 (Steve 2026-10-29): 只学进原话所属工厂自己; 没有工厂的记录不学 (不写全局 —— 以前
     factory_id 为 NULL 的记录会写成 NULL 工厂的 SEMANTIC_HIGH 行, 被每家工厂检索到); 训练授权撤回 /
-    查不到、提到本厂工艺保密产品、配方参数 / 客户 / 人名的原话不学 (``learning_rules.factory_learnable``)。"""
+    查不到、客户 / 人名 / 工资考勤数值的原话不学, 该厂 d 开着时提到本厂工艺保密产品、配方参数带数值的也不学
+    (``learning_rules.judge``)。"""
 
     def __init__(self, pool, *, consent_scope=None, factory_lists=None):
         from ai.learning import learning_rules

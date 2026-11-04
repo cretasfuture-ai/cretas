@@ -15,6 +15,14 @@ outside LLM or into a training file; every row goes through
 If the consent table cannot be read the script stops: an unreadable table could
 hide a withdrawal.
 
+No secrecy switch is read here, the training filter (item d) included, on purpose:
+export_training_data merges every factory's rows into one file for one model (the
+records do not even carry factory_id) and the labeling scripts post straight to
+DashScope, past the egress redaction. That is content crossing factories, which no
+switch opens (Java ProcessSecretSampleFilter.checkSharedContent). d is the default-off
+per-factory choice; following it here would put every such factory's protected
+products into the model all factories share. To follow d, partition by factory first.
+
 Consent DB connection (SmartBI database, NOT the cretas DB the scripts read):
     CONSENT_DB_HOST / CONSENT_DB_PORT / CONSENT_DB_NAME / CONSENT_DB_USER /
     CONSENT_DB_PASSWORD, falling back to the POSTGRES_* host/port/user/password
