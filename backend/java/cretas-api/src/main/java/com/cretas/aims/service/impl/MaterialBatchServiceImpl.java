@@ -2854,7 +2854,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                         result.totalValue(), result.averagePrice());
             } catch (Exception e) {
                 if (allowZeroPrice) throw new BusinessException(409,
-                        "赠品入库成本重建失败，整笔入库已停止，请核对历史成本与单位后重试");
+                        "赠品入库成本重建失败，整笔入库已停止，请核对历史成本与单位后重试", e);
                 log.warn("Moving-average rebuild failed without blocking receipt: materialType={}, error={}",
                         materialType.getId(), e.getMessage());
             }

@@ -86,6 +86,7 @@ class FreeGiftCostAtomicityRepositoryQueryValidationTest {
             batch.setReceiptDate(LocalDate.now()); batch.setReceiptQuantity(BigDecimal.TEN); batch.setQuantityUnit("kg");
             batch.setUnitPrice(BigDecimal.TEN); batch.setUsedQuantity(BigDecimal.ZERO); batch.setReservedQuantity(BigDecimal.ZERO);
             batch.setCreatedBy(owners.first()); batch.setWarehouseId("WH-TEST");
+            batch.setCustomFields(null);
             batch.setStatus(MaterialBatchStatus.AVAILABLE); em.persist(batch); em.flush(); return owners.first();
         });
         var mapper = mock(MaterialBatchMapper.class);
@@ -98,6 +99,7 @@ class FreeGiftCostAtomicityRepositoryQueryValidationTest {
             batch.setUsedQuantity(BigDecimal.ZERO); batch.setReservedQuantity(BigDecimal.ZERO);
             batch.setSourceDocType("FREE_GIFT"); batch.setSourceDocId(request.getSourceDocId());
             batch.setCreatedBy(owner);
+            batch.setCustomFields(null);
             batch.setStatus(MaterialBatchStatus.AVAILABLE); return batch;
         });
         var service = new MaterialBatchServiceImpl(batches, mock(MaterialBatchAdjustmentRepository.class), materials,
