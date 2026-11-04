@@ -98,10 +98,14 @@ export interface CostDataAlert {
   entityRefs: { projectId: number; projectCode: string; productCode: string | null; unit: string | null }[];
   evidence: Record<string, unknown>; detectedBy: string; ruleVersion: string; scope: string; runId: string; status: string;
 }
+export interface LocalAIUsage {
+  inputTokens: number | null; outputTokens: number | null; totalTokens: number | null;
+  durationSeconds?: number | null; source: string; estimated: boolean; requestId?: string;
+}
 export interface CostAlertReport {
   schema: string; ruleVersion: string; summary: { projects: number; costEligible: number; costBlocked: number; alerts: number; byFamily: Record<string, number>; byType: Record<string, number> };
   items: CostDataAlert[]; limitations: string[];
-  ai: { status: string; message: string; model?: string; host?: string; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
+  ai: { status: string; message: string; model?: string; host?: string; usage?: LocalAIUsage; currentRequestUsage?: LocalAIUsage; cacheHit?: boolean; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
 }
 export interface EligibleCostReview {
   eligibleProjects: number; products: number; limitations: string[];

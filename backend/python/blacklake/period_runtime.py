@@ -208,9 +208,9 @@ async def run_one(config):
         result = await compile_report(job, history, actor)
         ai_status=result['ai'].get('status')
         if ai_status in ('rate_limited','busy'):
-            # Budget backpressure is not a failed analysis and must not exhaust retries.
+            # Legacy rate-limited drafts now resume through the same serial queue.
             await asyncio.to_thread(db.defer,key,job['id'],job['leaseToken'],result,
-                                    3600 if ai_status=='rate_limited' else 60,True)
+                                    15,True)
         elif ai_status=='unavailable':
             if job.get('attempts',1)>=3:
                 await asyncio.to_thread(db.fail,key,job['id'],job['leaseToken'],

@@ -18,6 +18,7 @@ const AI_STATUS_TEXT: Record<string, string> = { complete: 'AI 已完成核对',
 const aiStatusText = (value: string) => AI_STATUS_TEXT[value] || `AI 状态：${value}`;
 const JOB_STATUS_TEXT: Record<BlacklakePeriodJob['status'], string> = { queued: '等候分析', running: '正在分析', ready: '已生成', failed: '分析失败' };
 const jobStatusText = (value: BlacklakePeriodJob['status']) => JOB_STATUS_TEXT[value];
+const tokenText = (value: number | null | undefined) => value == null ? '未知' : value.toLocaleString('zh-CN');
 </script>
 
 <template>
@@ -28,6 +29,8 @@ const jobStatusText = (value: BlacklakePeriodJob['status']) => JOB_STATUS_TEXT[v
       <p v-if="job.status === 'failed'" role="alert">{{ localizeBlacklakeText(job.error, '分析任务失败，请重试。') }}</p><button v-if="job.status === 'failed'" type="button" @click="emit('retry')">重试分析</button>
       <div v-else-if="job.result" class="period-result"><p v-if="job.result.summary">{{ localizeBlacklakeText(job.result.summary) }}</p><ul v-if="job.result.observations.length"><li v-for="item in job.result.observations.slice(0, 3)" :key="item">{{ localizeBlacklakeText(item) }}</li></ul><small v-if="job.result.ai">{{ aiStatusText(job.result.ai.status) }}<span v-if="job.result.ai.message">：{{ localizeBlacklakeText(job.result.ai.message) }}</span></small><small v-if="job.result.history.comparisonAvailable || (job.result.history.comparisonAvailable == null && job.result.history.usedReports.some(report => /previous/.test(report.relation)))">历史变化：新增 {{ job.result.history.newIssues.length }} · 持续 {{ job.result.history.recurringIssues.length }} · 本次未再命中，待确认 {{ job.result.history.resolvedIssues.length }}</small><small v-else>历史变化：尚无可比历史，不能判断新增或已解决。</small><div v-if="job.result.history.usedReports.length" class="used-reports"><span>参考来源：</span><span v-for="report in job.result.history.usedReports" :key="report.id">{{ report.startDate }} 至 {{ report.endDate }} · {{ relationText(report.relation) }}</span></div></div>
     </div>
+    <small v-if="job?.result?.ai.usage" class="period-schedule">本报告 AI 用量：输入 {{ tokenText(job.result.ai.usage.inputTokens) }} · 输出 {{ tokenText(job.result.ai.usage.outputTokens) }} · 合计 {{ tokenText(job.result.ai.usage.totalTokens) }} token（模型实际返回值）<span v-if="job.result.ai.cacheHit">；本次复用结果，新增消耗 0 token。</span></small>
+    <small v-else-if="job?.result?.ai.status === 'complete' || job?.result?.ai.status === 'partial'" class="period-schedule">本报告未记录 token 用量（旧报告或模型未返回），不补估算。</small>
     <details v-if="history.length" class="period-history"><summary>打开历史周期报告（{{ history.length }}）</summary><button v-for="item in history" :key="item.id" type="button" class="history-row" @click="emit('open-history', item)"><span>{{ item.period.startDate }} 至 {{ item.period.endDate }}</span><small>{{ jobStatusText(item.status) }} · {{ formatDate(item.finishedAt || item.createdAt) }}</small></button></details>
     <p v-if="schedule" class="period-schedule">自动分析：{{ schedule.enabled ? '已启用' : '未启用' }} · {{ schedule.message || schedule.rules.map(rule => rule.label).join('、') || '暂无规则' }}</p>
   </section>

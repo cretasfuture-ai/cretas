@@ -78,3 +78,5 @@ python -m blacklake metrics --contract blacklake/verified_contract.json --resour
 本次只交付测试环境的工程与数据验证，不包含生产上线、完整制造成本、毛利、P2 AI Agent 或业务负责人验收。具体证据和未验证项见 REPORT.md。
 
 2026-11-04 的日期范围、夜间定时、持久报告、历史复用和逐项追问见 [周期分析报告](PERIOD-ANALYSIS-REPORT.md)。该能力当前运行于本机隔离测试服务，AI 配额等待、来源时点和库存历史缺口均单独披露。
+
+后续按用户要求取消 AI 小时次数限制，改为串行排队，全部当前等待报告已完成并开始记录实际 token；见 [AI 排队与用量回执](AI-QUEUE-REPORT.md)。历史报告无用量时保持未知。

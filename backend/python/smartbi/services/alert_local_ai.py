@@ -24,6 +24,29 @@ MODELS=frozenset({'qwen3:8b','qwen3:14b','qwen3.8:27b'})
 _lock=asyncio.Lock()
 _cache=OrderedDict()
 
+
+class InferenceResult(dict):
+    def __init__(self,value,usage):
+        super().__init__(value)
+        self.usage=usage
+
+
+class LocalAIOutputError(RuntimeError):
+    def __init__(self,usage):
+        super().__init__('LOCAL_AI_OUTPUT_INVALID')
+        self.usage=usage
+
+
+def provider_usage(response):
+    def count(key):
+        value=response.get(key)
+        return value if type(value) is int and value>=0 else None
+    incoming=count('prompt_eval_count');outgoing=count('eval_count');duration=count('total_duration')
+    return {'inputTokens':incoming,'outputTokens':outgoing,
+            'totalTokens':incoming+outgoing if incoming is not None and outgoing is not None else None,
+            'durationSeconds':duration/1_000_000_000 if duration is not None else None,
+            'source':'ollama_response','estimated':False}
+
 def fingerprint(report):
     return hashlib.sha256(json.dumps({k:v for k,v in report.items() if k!='ai'},sort_keys=True,ensure_ascii=False,default=str).encode()).hexdigest()
 
@@ -107,7 +130,9 @@ def infer(payload,config):
             response=response.json()
     else:raise RuntimeError('LOCAL_AI_DISABLED')
     if response.get('model')!=payload['model']:raise RuntimeError('LOCAL_AI_MODEL_MISMATCH')
-    return json.loads(response['message']['content'])
+    usage=provider_usage(response)
+    try:return InferenceResult(json.loads(response['message']['content']),usage)
+    except (ValueError,TypeError,KeyError):raise LocalAIOutputError(usage) from None
 
 async def enrich(report,requester=None):
     """Optional AI failure is reported explicitly without invalidating the rules."""
@@ -121,7 +146,7 @@ async def enrich(report,requester=None):
         key=(fingerprint(report),json.dumps(config,sort_keys=True))
         async with _lock:
             if key in _cache and time.monotonic()-_cache[key][0]<600:
-                report['ai']=dict(_cache[key][1],cacheHit=True);return report
+                report['ai']=dict(_cache[key][1],cacheHit=True,currentRequestUsage={'inputTokens':0,'outputTokens':0,'totalTokens':0,'source':'cache','estimated':False});return report
         from .alert_ai_coordination import run
         scope=report.get('scope') or {}
         tenant=scope.get('factoryId') if isinstance(scope,dict) else scope
@@ -131,6 +156,8 @@ async def enrich(report,requester=None):
             'message':'本地AI选择的核对动作和优先级，待人工确认；金额与规则结论未改变',
             'inputFingerprint':key[0],'sourceRecordsSent':0,'externalProviderCalls':0,'cacheHit':False,
             'reviewedRepresentativeFacts':len(facts),'maxRepresentativeFacts':24,'representativeOnly':True}
+        usage=getattr(raw,'usage',None)
+        if usage is not None:ai.update(usage=usage,currentRequestUsage=usage)
         total=len(representative_groups(report))
         ai['totalRepresentativeGroups']=total
         if total>len(facts):
@@ -140,12 +167,9 @@ async def enrich(report,requester=None):
             while len(_cache)>128:_cache.popitem(last=False)
             report['ai']=ai
     except Exception as exc:
-        from .alert_ai_coordination import ReviewBusy,ReviewQuota
+        from .alert_ai_coordination import ReviewBusy
         if isinstance(exc,ReviewBusy):
-            report['ai']={'status':'busy','message':'本地AI正在处理其他任务，请稍后重试；规则提醒已完成'}
-            return report
-        if isinstance(exc,ReviewQuota):
-            report['ai']={'status':'rate_limited','message':'本地AI已达到本小时核对次数上限；规则提醒仍可使用'}
+            report['ai']={'status':'busy','message':'本地AI正在按顺序处理任务，本次仍在等待；周期报告会自动继续排队，规则提醒已完成'}
             return report
         report['ai']={'status':'unavailable','message':'本地AI暂不可用或输出未通过校验，规则提醒仍可使用'}
     return report

@@ -163,19 +163,18 @@ def test_model_identity_is_checked_not_merely_echoed_from_config(monkeypatch):
     with pytest.raises(RuntimeError,match='MODEL_MISMATCH'):
         alert_local_ai.infer({'model':'qwen3.8:27b'}, {'transport':'ssh','host':'canada-mini','model':'qwen3.8:27b'})
 
-def test_model_busy_has_no_cross_tenant_queue_and_quotas_survive_workers():
+def test_model_serializes_cross_tenant_queue_without_hourly_quotas():
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
-    from smartbi.services.alert_ai_coordination import run,ReviewBusy,ReviewQuota
+    from smartbi.services.alert_ai_coordination import run
     started=Event();release=Event();config={'transport':'ssh','host':'synthetic'}
     def slow(*args):started.set();release.wait(3);return {'ok':True}
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         first=pool.submit(run,slow,{},config,'A',1)
         assert started.wait(2)
-        stamp=time.monotonic()
-        with pytest.raises(ReviewBusy):run(lambda *a:None,{},config,'B',2)
-        assert time.monotonic()-stamp<1
+        second=pool.submit(run,lambda *a:{'second':True},{},config,'B',2)
+        time.sleep(0.05)
+        assert not second.done()
         release.set();assert first.result()['ok']
-    for _ in range(5):run(lambda *a:None,{},config,'A',1)
-    with pytest.raises(ReviewQuota):run(lambda *a:None,{},config,'A',1)
-    run(lambda *a:None,{},config,'A',2)  # another user has its own bounded allowance
+        assert second.result()['second']
+    for _ in range(14):run(lambda *a:None,{},config,'A',1)

@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- BLACKLAKE-AI-QUEUE-20261104 — review — Owner Codex/root — Base 8001020537b1a7cdd6d70c13b388bf01f5b8362f — Scope shared alert_ai协调/推理/usage、period恢复、tests/UI与文档；319后端/20前端/类型/构建通过；12报告完成，新调用1865token；回执archive/2026-11-04-blacklake-ai-queue.md；PR#1390 draft，未生产。
+
 - BLACKLAKE-PERIOD-CORE-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope smartbi周期窗口/队列/历史/调度及tests；执行者已交付，314后端通过；回执archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
 - BLACKLAKE-PERIOD-UI-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope PrototypeAnalysis/SectionInsight、blacklake.ts、PeriodControls/Analysis及spec；日期/异步/历史/追问完成；验收见archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
 - BLACKLAKE-PERIOD-ADAPTER-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope blacklake周期投影/API/运行器、store/app/preview、tests与文档；六类真实周期API通过，规则已存/27B配额等待；23:55定时已启用；仅隔离测试；回执archive/2026-11-04-blacklake-period-analysis.md。

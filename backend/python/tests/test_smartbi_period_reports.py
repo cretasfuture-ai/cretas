@@ -178,3 +178,19 @@ def test_schedule_checkpoint_is_scope_isolated_monotonic_and_survives_restart(tm
     assert restarted.schedule_checkpoint(SCOPE) == '2026-11-05T15:55:00Z'
     with pytest.raises(ValueError):
         restarted.schedule_checkpoint(SCOPE, datetime(2026, 11, 6, 0, 0))
+
+
+def test_explicit_resume_only_releases_owned_queued_ai_backpressure(tmp_path):
+    db=ReportStore(tmp_path/'resume.sqlite3')
+    waiting=submit(db);lease=db.claim(SCOPE,waiting['id'])
+    draft={'ai':{'status':'rate_limited'},'summary':'keep rules'}
+    saved=db.defer(SCOPE,waiting['id'],lease['leaseToken'],draft,3600)
+    other=submit(db,OTHER_SCOPE);other_lease=db.claim(OTHER_SCOPE,other['id'])
+    db.defer(OTHER_SCOPE,other['id'],other_lease['leaseToken'],draft,3600)
+    ready=submit(db,force=True);ready_lease=db.claim(SCOPE,ready['id'])
+    original=db.complete(SCOPE,ready['id'],ready_lease['leaseToken'],draft)
+    assert db.resume_ai_queue(SCOPE)==[waiting['id']]
+    resumed=db.get(SCOPE,waiting['id'])
+    assert resumed['nextAttemptAt'] is None and resumed['result']==saved['result']
+    assert db.get(OTHER_SCOPE,other['id'])['nextAttemptAt']
+    assert db.get(SCOPE,ready['id'])==original
