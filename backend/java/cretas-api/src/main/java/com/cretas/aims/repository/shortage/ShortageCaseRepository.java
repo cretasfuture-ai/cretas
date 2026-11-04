@@ -38,4 +38,16 @@ public interface ShortageCaseRepository extends JpaRepository<ShortageCase, Stri
     Page<ShortageCase> findForFactory(@Param("factoryId") String factoryId,
                                       @Param("openOnly") boolean openOnly,
                                       Pageable pageable);
+
+    /** 某一种来源的实例列表 (交付风险页只看自己的)。 */
+    @Query("SELECT c FROM ShortageCase c WHERE c.factoryId = :factoryId AND c.sourceType = :sourceType "
+            + "AND (:openOnly = false OR c.closedAt IS NULL) ORDER BY c.lastRefreshedAt DESC")
+    Page<ShortageCase> findForFactoryBySource(@Param("factoryId") String factoryId,
+                                              @Param("sourceType") ShortageCase.SourceType sourceType,
+                                              @Param("openOnly") boolean openOnly,
+                                              Pageable pageable);
+
+    /** 同一来源最近一条已结束的实例: 风险没变就不因为重新扫描再开一条。 */
+    Optional<ShortageCase> findFirstByFactoryIdAndSourceTypeAndSourceIdAndClosedAtIsNotNullOrderByClosedAtDesc(
+            String factoryId, ShortageCase.SourceType sourceType, String sourceId);
 }

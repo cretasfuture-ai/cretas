@@ -25,7 +25,7 @@ import java.util.UUID;
 @Where(clause = "deleted_at IS NULL")
 public class ShortageCase extends BaseEntity {
 
-    public enum SourceType { SALES_ORDER }
+    public enum SourceType { SALES_ORDER, DELIVERY_RISK }
 
     /** 阶段; 终态是 CANCELLED / MANUAL / CLOSED。GAP_RESOLVED 仍未关闭 (等后续确认)。 */
     public enum Stage {
