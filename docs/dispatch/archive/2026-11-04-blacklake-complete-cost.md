@@ -38,3 +38,11 @@ Private root: `D:/CretasSmartBILab/local-analyst-distillation/complete-cost-2026
 Legacy PostgreSQL SCRAM/Redis chain: 364 passed. Targeted queue/authority/interpretation regression: 57 passed. Final queue/provider checks: 21 passed. Frontend targets: 22 passed, including progress recovery after a failed batch. Vue typecheck and frozen-source blacklake-mode build passed. Existing legacy CSS warning is unrelated.
 
 Completion requires exact 44/44 original facts, 26/26 individual-order answers and all 145 fact IDs. Final accepted JSON revalidates against original raw answers; scope, unchanged cost arithmetic and exact model manifest are verified. Until private `completion-proof.json` exists, this run is in progress.
+
+## Completed acceptance
+
+Completed 2026-11-04 23:42 Beijing time: all 145 facts, including original 44 and 26 per-order answers, across 43 accepted batches. Every accepted batch revalidated against original raw model JSON; all 26 material/payroll/unit-cost calculations reconciled at both private Python and Vite proxy endpoints. Native UI displayed 44/44, 26/26 and 145/145, and scoped follow-up/stale-version rejection passed. Legacy period-analysis HTTP remained 200.
+
+All 66 calls, including failed validation and retries, returned recorded usage: 194,406 input + 69,174 output = 263,580 local-model tokens. Unknown usage calls: zero. Three early malformed/truncated raw strings were discarded by the prior adapter; their usage is retained and this limitation is explicit. Every accepted result has its original answer, and subsequent unparsed text is retained privately. Paid cumulative conservative teaching cost remains USD 1.958427; no new cloud calls.
+
+The live model tag matched the exact locally retained manifest SHA-256 `aaee06c39dcf2437cde036998d960e1fc1494b8191be7cc9657d01e509097813`. Source business writes remain zero. Actual batch genealogy remains unverified; completion describes evidence interpretation, not proof of full manufacturing cost or business causes. Full private report and independent archive restoration receipts are under the private root above. No merge or production deployment.
