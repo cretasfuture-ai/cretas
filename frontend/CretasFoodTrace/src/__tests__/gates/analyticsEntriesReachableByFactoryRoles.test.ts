@@ -170,6 +170,13 @@ describe('② 三棵树都注册了入口屏 + 全部下一跳，且挂的是同
     for (const t of TREES) expect(screensIn(t.stack).map((r) => r.screenName)).not.toContain('__NoSuchRoute__');
   });
 
+  it('FinanceAnalyticsTab 不占底栏：只写 tabBarButton: () => null 会留一格空位（真机实测）', () => {
+    const source = fs.readFileSync(path.join(NAV_DIR, 'FinanceNavigator.tsx'), 'utf8');
+    const block = source.slice(source.indexOf('name="FinanceAnalyticsTab"'));
+    const options = block.slice(0, block.indexOf('/>'));
+    expect(options).toContain("tabBarItemStyle: { display: 'none' }");
+  });
+
   it('FinanceNavigator 真的挂了 FinanceAnalyticsTab，且它指向 AnalyticsReportStackNavigator', () => {
     const regs = screensIn({ file: path.join(NAV_DIR, 'FinanceNavigator.tsx'), scope: 'FinanceNavigator' });
     const tab = regs.find((r) => r.screenName === 'FinanceAnalyticsTab');
