@@ -1,7 +1,7 @@
 # 工厂意图目录整合
 
 - Task: `FACTORY-INTENT-CATALOG-20261104`
-- 状态：`in-progress`；用户已明确要求接管，唯一写 Owner `/root`（01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98）。
+- PR：https://github.com/cretasfuture-ai/cretas/pull/1449；唯一写 Owner `/root`（01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98）。本归档与 ACTIVE 移除同批合入；只有 PR 实际 MERGED 才表示主线 scope 已释放。
 - 独立 worktree：`C:/Users/Steve/cretas-factory-intent-catalog-20261104`
 - Base: `d2eb41679d9575fc404ef260440de4523b49d010`（从原交接 Base 2c9578b59b fast-forward 到 fresh origin/main，无冲突）
 - 用户授权：退出餐饮业务，删除餐饮专属意图及链路；保留转换未完成的工厂共用能力，整理合并、Tool/Skill、参数解析与训练目录。
@@ -54,3 +54,13 @@
 - Linux Python Gate运行41842383774通过：10377 passed、188 skipped、153 deselected、2 xfailed；Python源码与该验证版本一致。Java首轮clean编译5000主源/2391测试源成功，221例中1失败2错误，分别为Skill参数保留、退役策略fixture计数、赠品并发fixture缺仓库；正在修复与重验。
 - 新主线GateDiagnoseBatchTool补READ与真实WriteGuard契约；三类scoped lookup全空返回404，不把不存在批次报为无拦截。新增阴性/阳性测试，等待最终验证。
 - 本机主工作区误写3个测试文件后按HEAD恢复，缺修改前快照，无法证明未覆盖原未提交内容；详见本机证据目录的主工作区误写记录.md。后续只写本worktree。
+
+
+## 最终交付候选
+
+- 265规范标签、81活动餐饮专属标签退役、29共用配置处理（28直接转正，1效率别名并入已有标签），251唯一Tool绑定、11只读Skill；餐饮历史命名空间在识别、执行和训练入口均拒绝。旧259头及线上模型不替换。
+- 本地236目标测试/构建通过，0失败/错误/跳过；冻结源码PostgreSQL17真实Service事务/并发3/3通过。CI41846840818实际执行70个目标契约/JPA测试并成功，包含本批全部6个RepositoryQueryValidationTest。Python完整Gate10378通过、188跳过、153排除、2预期失败；无新增跳过/排除项。
+- fresh DB进度门禁、脚本、安全与源一致性检查通过；完整空库Flyway仍有原有V20260827_01前置表缺失，不能据此声称fresh-install全程通过。最终PR门禁与合并事实以PR检查记录为准。
+- 合入最新主线db2457beac（新增V20261104_42）后，因生产out-of-order=false，本迁移最终顺延为V20261104_43__factory_intent_catalog_retirement.sql。SQL内容未改；生成器检查、PostgreSQL迁移/并发协议、14个Python目录契约复验通过；最终合并构建记录在java-acceptance-43.log。
+- 独立训练目录：本机证据目录training-catalog-final；现有权重、映射、保护集和原微调测试集保持原样。不部署、不执行生产迁移、不产生外部模型调用。
+- 本机完整证据：C:/Users/Steve/Documents/Cretas工厂意图目录-20261104/，含final-verification-receipt.json、CI日志、风险复核与主工作区误写记录.md。后三者分别是验证事实、源审事实和操作事故边界，不能互相替代。

@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `FACTORY-INTENT-CATALOG-20261104` — `in-progress` — Owner `/root`（01a1a59f）— Base d2eb41679d9575fc404ef260440de4523b49d010；工厂意图目录/退役餐饮Tool-Skill/解析绑定/召回训练同步，scope与验收见archive/2026-11-04-factory-intent-catalog.md；禁止线上模型替换。
 
 
 

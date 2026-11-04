@@ -29,7 +29,7 @@ python scripts/finetune/generate_factory_intent_catalog.py <output_dir>
 
 现有 259 头分类器与新 265 类规范目录是不同契约；本批不重新编号旧模型，不把新目录生成冒充模型已迁移。
 
-新迁移为 `V20261104_32__factory_intent_catalog_retirement.sql`，由 `scripts/ai/generate_factory_intent_migration.py` 生成，`--check` 检查漂移。它退役配置、归并别名短语、重分类共用能力并更新明确的 Tool/Skill 绑定；保持工厂隔离与实际业务权限。人工开票的拒绝/只读查询路由及密码导航取消旧写分类及写审批标记，实际开票/密码写权限不变。迁移兼容旧 bootstrap 的 TEXT JSON 文档列，非法旧 JSON 明确失败。
+新迁移为 `V20261104_43__factory_intent_catalog_retirement.sql`，由 `scripts/ai/generate_factory_intent_migration.py` 生成，`--check` 检查漂移。它退役配置、归并别名短语、重分类共用能力并更新明确的 Tool/Skill 绑定；保持工厂隔离与实际业务权限。人工开票的拒绝/只读查询路由及密码导航取消旧写分类及写审批标记，实际开票/密码写权限不变。迁移兼容旧 bootstrap 的 TEXT JSON 文档列，非法旧 JSON 明确失败。
 
 `scripts/ai/verify_factory_catalog_migrations.py --dsn <loopback_test_dsn>` 在隔离 PostgreSQL schema 验证迁移、短语冲突、旧列类型、别名域、权限保持、来源行唯一性和软删重收，并验证数据库行锁协议。真实 Service 的事务回滚及并发验证另由 `FreeGiftCostAtomicityRepositoryQueryValidationTest` 执行，支持独占的 PostgreSQL 测试数据库。
 
