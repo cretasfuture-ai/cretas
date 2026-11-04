@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { computed, defineComponent, h, inject, provide, type Ref } from 'vue';
 import type { CompleteCostReport, CostProject } from '@/api/smartbi/blacklake';
@@ -29,6 +29,7 @@ const table=defineComponent({props:['data'],setup(p,{slots}){provide('rows',comp
 const column=defineComponent({setup(_,{slots}){const rows=inject<Ref<CostProject[]>>('rows');return()=>h('div',rows?.value.map(row=>slots.default?.({row})));}});
 function render(){return mount(Component,{global:{stubs:{'el-table':table,'el-table-column':column,'el-select':{template:'<div><slot/></div>'},'el-option':true,'el-pagination':true,'el-input':true,'el-dialog':true,'el-alert':{props:['title'],template:'<div role="alert">{{title}}</div>'}}}});}
 beforeEach(()=>{auth.store.factoryId='T';vi.mocked(getBlacklakeCompleteCost).mockReset();});
+afterEach(()=>{vi.useRealTimers();});
 it('shows exact two-decimal material, labor and unit cost while interpretations are queued',async()=>{
   vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(data());const page=render();await flushPromises();
   expect(page.text()).toContain('0 / 44');expect(page.text()).toContain('2.25 / 盒');
@@ -47,4 +48,11 @@ it('never attaches another factory response after identity changes',async()=>{
   vi.mocked(getBlacklakeCompleteCost).mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;})).mockRejectedValueOnce(new Error('无权限'));
   const page=render();auth.store.factoryId='OTHER';await flushPromises();finish(data());await flushPromises();
   expect(page.text()).not.toContain('合成食品');expect(page.text()).toContain('无权限');page.unmount();
+});
+it('continues checking progress after a failed batch is repaired in the queue',async()=>{
+  vi.useFakeTimers();const failed=data();failed.batchAnalysis.status='failed';
+  vi.mocked(getBlacklakeCompleteCost).mockResolvedValueOnce(failed).mockResolvedValueOnce(data());
+  const page=render();await flushPromises();expect(page.text()).toContain('部分批次尚未通过校验');
+  await vi.advanceTimersByTimeAsync(15000);await flushPromises();
+  expect(getBlacklakeCompleteCost).toHaveBeenCalledTimes(2);expect(page.text()).toContain('模型正在按顺序分析');page.unmount();
 });

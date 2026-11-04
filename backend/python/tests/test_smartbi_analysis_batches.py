@@ -38,6 +38,19 @@ def test_prioritizing_waiting_evidence_does_not_touch_the_running_job(tmp_path):
     q.finish(first,validate(answer(first['items']),first['items']))
     assert q.claim(run)['items'][0]['cohort']=='original44'
 
+
+def test_splitting_a_failed_batch_preserves_every_fact_and_original_calls(tmp_path):
+    q=Queue(tmp_path/'q.sqlite3');scope={'tenant':'A'}
+    items=[{**item(f'F{i:03d}'),'kind':'work_order_detail'} for i in range(7)]
+    run=q.submit(scope,'source',items);job=q.claim(run)
+    with pytest.raises(ValueError,match='WAIT_FOR_ACTIVE'):q.split_pending(run,'work_order_detail')
+    q.call(job['id'],{},error='SYNTHETIC_FAILURE');q.finish(job,error='SYNTHETIC_FAILURE')
+    assert q.split_pending(run,'work_order_detail')==1
+    while (job:=q.claim(run)) is not None:q.finish(job,validate(answer(job['items']),job['items']))
+    result=q.read(run,scope)
+    assert result['status']=='complete' and result['analyzedFacts']==7 and result['calls']==1
+    assert q.submit(scope,'source',items)==run and q.read(run,scope)['status']=='complete'
+
 def test_failed_or_uninterpreted_facts_never_count_as_complete(tmp_path):
     q=Queue(tmp_path/'q.sqlite3');run=q.submit({'tenant':'A'},'source',[item()])
     job=q.claim(run);q.finish(job,error='BAD_OUTPUT')

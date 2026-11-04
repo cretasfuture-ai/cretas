@@ -63,6 +63,25 @@ class Queue:
             selected=[r for r in rows if json.loads(r['input_json'])[0]['cohort']==cohort]
             for index,row in enumerate(selected):db.execute("UPDATE jobs SET seq=? WHERE id=? AND status='queued'",(index-len(selected),row['id']))
             return len(selected)
+    def split_pending(self,run_id,kind,max_items=3):
+        """Split difficult queued/failed batches; keep original calls and fact IDs."""
+        if not 1<=max_items<=6:raise ValueError('BATCH_SPLIT_SIZE_INVALID')
+        changed=0
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute("SELECT 1 FROM jobs WHERE run_id=? AND status='running'",(run_id,)).fetchone():raise ValueError('BATCH_SPLIT_WAIT_FOR_ACTIVE_JOB')
+            rows=db.execute("SELECT * FROM jobs WHERE run_id=? AND status!='split' ORDER BY seq",(run_id,)).fetchall()
+            for index,row in enumerate(rows):
+                items=json.loads(row['input_json'])
+                if row['status'] not in ('queued','failed'):continue
+                if len(items)>max_items and all(r['kind']==kind for r in items):
+                    db.execute("UPDATE jobs SET status='split' WHERE id=?",(row['id'],))
+                    for part,offset in enumerate(range(0,len(items),max_items)):
+                        identity=digest([row['id'],'split',max_items,part])
+                        db.execute("INSERT OR IGNORE INTO jobs(id,run_id,seq,status,input_json) VALUES(?,?,?,'queued',?)",(identity,run_id,index*100+part,encode(items[offset:offset+max_items])))
+                    changed+=1
+                else:db.execute('UPDATE jobs SET seq=? WHERE id=?',(index*100,row['id']))
+        return changed
     def finish(self,job,result=None,error=None,requeue=False):
         with self.connect() as db:
             current=db.execute("SELECT input_json FROM jobs WHERE id=? AND status='running' AND owner=? AND expires>?",(job['id'],job['owner'],time.time())).fetchone()
@@ -85,7 +104,7 @@ class Queue:
         with self.connect() as db:
             run=db.execute('SELECT * FROM runs WHERE id=? AND scope=?',(run_id,encode(scope))).fetchone()
             if run is None:raise ValueError('BATCH_SCOPE_MISMATCH')
-            rows=db.execute('SELECT * FROM jobs WHERE run_id=? ORDER BY seq',(run_id,)).fetchall()
+            rows=db.execute("SELECT * FROM jobs WHERE run_id=? AND status!='split' ORDER BY seq",(run_id,)).fetchall()
             calls=db.execute('SELECT usage_json,error FROM calls WHERE job_id IN (SELECT id FROM jobs WHERE run_id=?)',(run_id,)).fetchall()
         items=json.loads(run['input_json']);results=[];states={}
         for row in rows:
@@ -108,12 +127,17 @@ def payload(items,model,feedback=None):
     allowed=[]
     for item in items:
         allowed.append({k:v for k,v in item.items() if k in ('id','cohort','sectionId','kind','statistics','considerations','groupId','statisticMeaning','dataRequest','breakdown')})
+        allowed[-1]['mustExplain']=[HAZARDS[code] for code in item.get('considerations',[]) if code in HAZARDS]
+        if item['kind']=='work_order_detail':
+            allowed[-1]['mustExplain'].append('本工单实际批次仍待核：必须在whatItMeans或cannotConclude明确说明批次或批号仍未核实，即使其他风险已解释。')
     instructions={'facts':allowed,'riskDefinitions':HAZARDS,'metricDefinitions':STATISTIC_DEFINITIONS,
         'direction':REVIEW_DIRECTIONS[items[0]['sectionId']],'allowedOwners':sorted(analyst.OWNERS),
         'instruction':'逐条事实单独解释，analyses必须覆盖每个给定id，不能合并省略。每条只解释自己的统计和所属产品，不能把同批其他事实的异常套过来。kind是指标类型；groupId是匿名分组，不是规格已确认。事实正文由系统绑定，文字不写数字或代号；不要写百分之，用“覆盖所选样本但不证明实际完整”等定性描述。eligibleCount是满足全部必需字段的工单数，为零只说明没有工单全部通过，绝不是每张工单所有字段都缺失。每条必须解释自己的全部considerations，不能只说待核。没有风险证据时可说账面未见明显异常，但不代表数据完整或批次贯通。每条用普通中文说明怎么看、影响、找谁核什么、不能证明什么。',
         'schema':{'analyses':[{'factId':'原样复制事实id','whatItMeans':'怎么看','whyItMatters':'有什么影响','hypotheses':[],
                             'nextStep':'先核对什么','owner':'allowedOwners之一','cannotConclude':'不能下什么结论','followupQuestion':'还可问什么'}]}}
-    if feedback:instructions['validationFeedback']=feedback
+    if feedback:
+        instructions['validationFeedback']=feedback
+        instructions['repairInstruction']='逐条重新检查mustExplain，必须在自己的怎么看、影响或限制中白话解释。SMALL_SAMPLE要明确写样本少，不能推广为标准成本或趋势；UNIT_CONVERSION要说单位换算与批次待核；BATCH_ORDER_BATCH_BOUNDARY_REQUIRED必须在对应fact的whatItMeans或cannotConclude明确写批次仍待核。只改遗漏，不删除其他已给风险，不输出数字。'
     system='''你是食品工厂的经营分析助手，用简明白话逐条解释已计算事实。只返回用户给定格式的JSON对象，根字段只能是analyses，绝不输出reviews或sections。
 每个输入id必须有一条独立分析，factId原样复制。文字字段不要写阿拉伯数字、中文金额数量、百分之或事实代号；数字、工单、产品和单据由程序显示，不需要在你的解释里重复。
 kind说明指标类型，statistics是程序计算值。解释每条自己的全部considerations，风险不能只列标题。不能把其他事实或其他groupId的风险套到当前产品。

@@ -7,6 +7,7 @@ Scope: exhaustive local evidence queue, original 44 omitted facts, fixed 26 elig
 
 - `analysis_evidence.build(..., include_all=True)` exposes all available facts; existing bounded callers retain default behavior.
 - `analysis_batches.Queue` persists scoped inputs, leased FIFO tasks, original payloads/answers and reported usage in local SQLite. Completion requires a separate validated answer for every input fact. Restart reuses completed jobs; prioritization touches queued jobs only. Failed outputs do not count as completed analysis.
+- Difficult per-order batches can be split down to individual facts. Superseded parents retain their original calls and usage; child jobs keep the original fact IDs. Active jobs cannot be split, and completion still requires the full original fact set.
 - Outputs bind real names and numbers server-side and reject unsupported numbers, scope, certainty and complete-cost assertions. JSON schema fixes structure, roles and fact IDs, as supported by [Ollama structured outputs](https://docs.ollama.com/capabilities/structured-outputs); business validation remains independent.
 - Exact full-coverage phrases may be rendered qualitatively only when the independently computed coverage equals one; original JSON is unchanged. No fully eligible order does not imply all fields are missing.
 - Original 44 facts retain the original 109-order context. The eligible cohort has 75 section facts and 26 individual-order facts: 145 total. No representative answer substitutes for unanswered facts.
@@ -34,6 +35,6 @@ Private root: `D:/CretasSmartBILab/local-analyst-distillation/complete-cost-2026
 
 ## Validation and completion
 
-Legacy PostgreSQL SCRAM/Redis chain: 364 passed. Targeted queue/authority/interpretation regression: 57 passed; subsequent queue/provider additions have separate final receipts. Frontend targets: 21 passed. Vue typecheck passed; build receipts retained. Existing legacy CSS warning is unrelated.
+Legacy PostgreSQL SCRAM/Redis chain: 364 passed. Targeted queue/authority/interpretation regression: 57 passed. Final queue/provider checks: 21 passed. Frontend targets: 22 passed, including progress recovery after a failed batch. Vue typecheck and frozen-source blacklake-mode build passed. Existing legacy CSS warning is unrelated.
 
 Completion requires exact 44/44 original facts, 26/26 individual-order answers and all 145 fact IDs. Final accepted JSON revalidates against original raw answers; scope, unchanged cost arithmetic and exact model manifest are verified. Until private `completion-proof.json` exists, this run is in progress.

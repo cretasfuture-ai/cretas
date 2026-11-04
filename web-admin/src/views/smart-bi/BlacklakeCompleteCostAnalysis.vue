@@ -21,7 +21,7 @@ async function load(){
     const next=await getBlacklakeCompleteCost();if(epoch!==generation)return;
     report.value=next;
     if(!units.value.includes(unit.value))unit.value=units.value[0]||'';
-    if(next.batchAnalysis.status==='running')timer=window.setTimeout(()=>void load(),15000);
+    if(next.batchAnalysis.status!=='complete')timer=window.setTimeout(()=>void load(),15000);
   }catch(cause){if(epoch===generation){report.value=null;selected.value=null;chatFact.value=null;answer.value='';error.value=cause instanceof Error?cause.message:'成本分析暂不可用';}}
   finally{if(epoch===generation)loading.value=false;}
 }
@@ -36,6 +36,8 @@ const chart=computed(()=>buildUnitCostChart(groups.value));
 const facts=computed(()=>(report.value?.batchAnalysis.results||[]).filter(r=>r.cohort===cohort.value&&(!section.value||r.sectionId===section.value)&&r.display.text.toLowerCase().includes(search.value.toLowerCase())));
 const visibleFacts=computed(()=>facts.value.slice((page.value-1)*6,page.value*6));
 const completedOrders=computed(()=>(report.value?.batchAnalysis.results||[]).filter(r=>r.kind==='work_order_detail').length);
+const alertsFor=(id:number)=>(report.value?.analysis.costAlerts?.items||[]).filter(a=>a.entityRefs.some(p=>p.projectId===id));
+const factFor=(id:number)=>(report.value?.batchAnalysis.results||[]).find(r=>r.kind==='work_order_detail'&&r.display.entityRefs?.some(p=>p.projectId===id));
 const orderFact=computed(()=>(report.value?.batchAnalysis.results||[]).find(r=>r.kind==='work_order_detail'&&r.display.entityRefs?.some(p=>p.projectId===selected.value?.projectId)));
 const needs=computed(()=>report.value?.analysis.costTraceability.workOrders.find(r=>String(r.workOrderId)===String(selected.value?.projectId))?.needs||[]);
 const selectedAlerts=computed(()=>(report.value?.analysis.costAlerts?.items||[]).filter(a=>a.entityRefs.some(p=>p.projectId===selected.value?.projectId)));
@@ -69,6 +71,7 @@ async function ask(){
         <el-table :data="orders" stripe><el-table-column prop="projectCode" label="工单" min-width="180"/><el-table-column prop="product" label="成品" min-width="180"/>
           <el-table-column label="最终良品" min-width="120"><template #default="{row}">{{ fmt(row.finishedGood) }} {{ row.unit }}</template></el-table-column>
           <el-table-column label="单位直接成本" min-width="130"><template #default="{row}">{{ fmt(row.unitIdentifiedDirectCost) }} / {{ row.unit }}</template></el-table-column>
+          <el-table-column label="待核与分析" min-width="150"><template #default="{row}"><el-tag v-if="alertsFor(row.projectId).length" type="warning">{{ alertsFor(row.projectId).length }} 条待核提醒</el-tag><span v-else>字段具备</span><p class="note">{{ factFor(row.projectId)?'逐单解释已完成':'逐单解释排队中' }}</p></template></el-table-column>
           <el-table-column label="明细与异常" width="160"><template #default="{row}"><UButton color="neutral" variant="outline" @click="selected=row">查看原料与分析</UButton></template></el-table-column>
         </el-table>
         <section v-if="selected" class="detail" aria-label="最新工单成本明细"><h4>{{ selected.projectCode }} · {{ selected.product }}</h4>
@@ -82,6 +85,7 @@ async function ask(){
       </UCard>
       <UCard><template #header><h3>逐条证据 · 数据下面的白话分析</h3></template>
         <div class="filters"><el-select v-model="cohort" aria-label="证据分析范围"><el-option value="eligible26" label="26张工单全部证据"/><el-option value="original44" label="原遗漏的44条证据"/></el-select><el-select v-model="section" aria-label="分析板块" clearable placeholder="全部板块"><el-option v-for="(label,id) in labels" :key="id" :value="id" :label="label"/></el-select></div>
+        <p class="note">{{ cohort==='original44'?'这44条来自原109张工单的范围，不把它们当成所选26张工单的结论。':'下方仅解释所选26张工单的证据；工单字段具备，不等于实际批次和完整费用已经核实。' }}</p>
         <article v-for="f in visibleFacts" :key="f.factId" class="fact"><span class="note">{{ labels[f.sectionId] }}</span><details><summary>查看统计依据与具体工单</summary><p>{{ f.display.text }}</p></details><div class="analysis"><p><strong>怎么看：</strong>{{ f.whatItMeans }}</p><p><strong>影响：</strong>{{ f.whyItMatters }}</p><p><strong>下一步：</strong>{{ f.nextStep }}（{{ f.owner }}）</p><p class="note">现在不能下的结论：{{ f.cannotConclude }}</p><UButton color="neutral" variant="outline" @click="openChat(f)">单独追问这条分析</UButton></div></article>
         <p v-if="!visibleFacts.length">当前筛选下暂无已完成解释，可调整筛选或等待排队完成。</p>
         <el-pagination v-model:current-page="page" :page-size="6" :total="facts.length" layout="prev, pager, next, total"/>
