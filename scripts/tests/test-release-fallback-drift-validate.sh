@@ -88,8 +88,9 @@ if [ "${1:-}" = build ]; then
     manifest=$(release_manifest_default_path)
     mkdir -p "$(dirname "$manifest")"
     cp "$MOCK_FIXTURE_JAR" "$(dirname "$manifest")/$RELEASE_JAR_NAME"
-    sha=$(sha256sum "$MOCK_FIXTURE_JAR" | awk '{print $1}')
-    [ "${MOCK_CORRUPT_JAR_SHA:-0}" != 1 ] || sha=$(printf 'x' | sha256sum | awk '{print $1}')
+    sha_line=$(sha256sum "$MOCK_FIXTURE_JAR")
+    sha=${sha_line%% *}
+    [ "${MOCK_CORRUPT_JAR_SHA:-0}" != 1 ] || sha=$(printf '%064d' 0)
     {
         printf 'format=%s\nsuccess=true\n' "$RELEASE_MANIFEST_FORMAT"
         printf 'build_commit=%s\n' "$(git rev-parse HEAD)"
