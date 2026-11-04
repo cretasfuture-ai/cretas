@@ -139,6 +139,15 @@ def build(analysis):
         ['未返回可能是无记录、查询可见范围或仓库产品组合不适用，不能直接归因。'],
         ['缺少期初余额和完整收发存时间边界，不能由当前快照证明历史收发存已平衡。'],
         ['仓库核对未返回组合和未关联领退料，财务对照期初与期间审批收发记录。'])
+    trace=analysis.get('costTraceability')
+    if trace:
+        if trace['scope']['snapshotId']!=analysis['runId']:raise ValueError('TRACE_SECTION_SNAPSHOT_MISMATCH')
+        from smartbi.services.cost_traceability import ACTION_SECTIONS
+        for sid,section in result.items():
+            actions=[a for a in trace['actions'] if ACTION_SECTIONS.get(a['code'],'coverage')==sid]
+            section['dataRequests']=actions
+            selected=sorted(actions,key=lambda a:(a['priority']!='high',a['impactType']!='unit_cost',a['workOrderCode']))[:2]
+            section['nextSteps']=[f"{a['workOrderCode']}：{a['responsibleRole']}核对{a['missingData']} 补齐后：{a['afterProvided']}" for a in selected]+section['nextSteps']
     return list(result.values())
 
 

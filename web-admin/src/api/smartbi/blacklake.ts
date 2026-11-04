@@ -1,6 +1,32 @@
 import { pythonFetch } from './common';
 import type { FactoryRecommendation } from './factory-charts';
 
+export interface CostDataRequest {
+  id: string; code: string; workOrderId: number | string; workOrderCode: string;
+  missingData: string; responsibleRole: string; afterProvided: string; sourceStatus: string;
+  impactType: string; priority: string; sourceDocuments?: string[];
+}
+export interface TraceableWorkOrder {
+  workOrderId: number | string; workOrderCode: string; product: string; productCode: string;
+  unit: string | null; identifiedUnitCost: number | null; directCostAvailable: boolean;
+  directCostBlockingReasons: string[]; needs: CostDataRequest[];
+  businessLinks: { sourceDocumentCode?: string; materialName?: string; feedProcessName?: string | null; processId: number | string | null }[];
+  providedClues: { label: string; value: string | number; usage: string }[];
+  baselineComparison?: { directCostAvailable: boolean };
+}
+export interface CostTraceabilityReport {
+  schema: string; checkedAt: string; workOrders: TraceableWorkOrder[];
+  summary: { workOrders: number; ordersWithDirectCost: number; materialOriginLinks: number; materialProcessLinks: number };
+  baselineComparison?: { newlyFieldsEligibleOriginallyBlocked: number; previouslyEligibleNowBlocked: number; stillBlockedOriginalCohort: number };
+  sourceProbe?: { allRequiredQueriesComplete: boolean; newOrdersOutsideOriginalCohort: number };
+}
+export async function getBlacklakeCostTraceability(): Promise<CostTraceabilityReport> {
+  const response = await pythonFetch<{ success: boolean; data: CostTraceabilityReport; message: string }>(
+    '/api/smartbi/blacklake/cost-traceability?mode=latest', { preserveResponseKeys: true });
+  if (!response.success) throw new Error(response.message);
+  return response.data;
+}
+
 export interface CostBridgeMaterial { material: string; materialCode: string; unit: string; baselineUsage: number | null; comparisonUsage: number | null; baselineContribution: number; comparisonContribution: number; delta: number; usageEffect: number | null; priceEffect: number | null; basis: string; }
 export interface CostComparison { productCode: string; product: string; unit: string; eligibleProjects: number; visibleProjects: number; weightedUnitCost: number; minimum: number; maximum: number; candidateId: string;
   bridge: { baselineProject: string; comparisonProject: string; unit: string; delta: number; materialDelta: number; laborDelta: number; reconciliationDifference: number; materials: CostBridgeMaterial[]; selection: string; limitations: string[] } | null; }

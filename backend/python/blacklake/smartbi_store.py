@@ -64,6 +64,13 @@ def read(value, period=None):
         if value.get('gap_evidence_file'):
             evidence=load_local_secret(value['gap_evidence_file'])
             evidence=bind_evidence(value,records,evidence)
+        from .traceability import mapped,subset
+        parents=defaultdict(list)
+        trusted=evidence and evidence.get('status')=='complete' and evidence.get('negativeControlVerified') is True
+        if trusted:
+            for row in evidence.get('verifiedMaterialParents',[]):parents[row['projectId']].append(row['materialId'])
+        controls=[{'projectId':pid,'dualQueryEqual':True,'materialIds':ids} for pid,ids in parents.items()]
+        trace=mapped(data,build(data,metadata),scope[:2],value['run_id'],metadata.get('finished_at'),controls,bool(trusted))
         period_metadata=None
         if period is not None:
             from .period_projection import project_period
@@ -71,6 +78,7 @@ def read(value, period=None):
             # Whole-history supplemental evidence is never relabeled as a period probe.
             evidence=None
         analysis=build(data,metadata)
+        analysis['costTraceability']=subset(trace,[p['id'] for p in data['project']],analysis['runId']) if period is not None else trace
         analysis['costIntelligence']=enrich(analysis,data,metadata,evidence)
         if period_metadata is not None:
             analysis['costIntelligence']['gapEvidence']={'status':'period_not_verified'}

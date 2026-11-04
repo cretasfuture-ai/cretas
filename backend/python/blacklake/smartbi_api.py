@@ -72,6 +72,26 @@ class Turn(BaseModel):
     content: str = Field(min_length=1,max_length=12000)
 
 
+@router.get('/cost-traceability')
+async def cost_traceability(request:Request,mode:Literal['latest','snapshot']='latest'):
+    path=os.environ.get('BLACKLAKE_SMARTBI_CONFIG')
+    if not path:raise HTTPException(404,'黑湖测试数据集尚未启用')
+    configured=settings(path);authorize(request,configured)
+    await cost_authority(request,configured)
+    import asyncio
+    try:
+        if mode=='snapshot':
+            data=await asyncio.to_thread(read,configured)
+            result=data['costTraceability']
+        else:
+            from .traceability import configured_report
+            result=await asyncio.to_thread(configured_report,configured)
+            if result is None:raise ValueError('TRACE_NOT_CONFIGURED')
+    except Exception:
+        raise HTTPException(503,'成本关联补查报告未就绪或与当前来源不一致，未猜测工单归属') from None
+    return {'success':True,'data':result,'message':'逐单列出缺什么、找谁补、补齐后能判断什么；不改写历史金额和黑湖业务'}
+
+
 class Followup(BaseModel):
     model_config=ConfigDict(extra='forbid')
     section_id: Literal['coverage','material','labor','finished','product_cost','production','inventory']

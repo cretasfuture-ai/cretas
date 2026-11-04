@@ -34,6 +34,10 @@ def response_for(pack,facts):
             'nextStep':'先核对材料单据、人工记录和最终良品，再核对规格与加工阶段。','owner':'生产/财务',
             'cannotConclude':'样本不足、周期数据未齐或缺历史库存时，不能判断完整成本和趋势；无数据不代表没有生产。',
             'followupQuestion':'还缺哪些资料才能确认成本？','considerations':required})
+        narrative=pack.get('narrativeRequirements',{}).get(sid,[])
+        if 'normal_control' in narrative:sections[-1]['whatItMeans']+='另一组账面波动小，但记录完整性仍待核。'
+        if 'order_and_quantity_coverage' in narrative:sections[-1]['whatItMeans']+='按工单与按产量覆盖不同，不能外推全厂。'
+        if 'business_link_is_not_batch' in narrative:sections[-1]['whatItMeans']+='业务关联不是批次证明。'
     return {'reviews':[{'alertId':f['alertId'],'check':f['allowedChecks'][0],'priority':'high'} for f in facts],
             'sections':sections}
 
@@ -52,6 +56,7 @@ def install_model(monkeypatch,mutate_first=None):
         prompt=json.loads(payload['messages'][1]['content']);calls.append(prompt)
         pack={'sectionIds':list(prompt['curriculum']),'facts':prompt['facts'],
               'requiredConsiderations':prompt['requiredConsiderations'],
+              'narrativeRequirements':prompt.get('narrativeChecklist',{}),
               'requiredFactRefs':{p['sectionId']:p['mustUseEvidenceRefs'] for p in prompt['sectionPlan']}}
         value=response_for(pack,prompt['reviewFacts'])
         if mutate_first and len(calls)==1:mutate_first(value)
@@ -256,3 +261,11 @@ def test_excel_weighted_statistics_are_calculated_and_hidden_from_non_price_role
     pack=build(report)
     assert any(f['kind']=='weighted_unit_cost' for f in pack['facts'])
     assert 'PRIVATE-' not in json.dumps(analyst.payload_for(pack,provider.facts_for(report),'qwen3.8:27b'))
+
+
+def test_department_order_is_normalized_but_unknown_owner_is_rejected():
+    report=sample_report();pack=build(report);facts=provider.facts_for(report)
+    value=response_for(pack,facts);value['sections'][0]['owner']='仓库/生产'
+    assert analyst.validate(value,pack,facts)[1][0]['owner']=='生产/仓库'
+    value['sections'][0]['owner']='外部供应商'
+    with pytest.raises(ValueError,match='ANALYST_OWNER'):analyst.validate(value,pack,facts)

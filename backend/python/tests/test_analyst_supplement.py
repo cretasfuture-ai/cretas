@@ -15,6 +15,14 @@ def test_single_decision_has_no_other_case_context():
         module.decision_payload('private-record')
 
 
+def test_lineage_teacher_egress_is_fixed_synthetic_cases_only(client):
+    payload=module.teacher_payload('gpt-6.1-sol','high','lineage')
+    assert all(row['synthetic'] is True for row in json.loads(payload['input'])['cases'])
+    payload['input']='actual factory batch or work order'
+    with pytest.raises(module.TeacherError,match='SYNTHETIC_EGRESS_ONLY'):
+        client.call('lineage','gpt-6.1-sol',payload,'responses')
+
+
 def test_budget_shares_prior_cost_and_stops_before_new_dollar_limit(tmp_path):
     ledger=module.SupplementBudget(tmp_path/'budget.db')
     payload=module.teacher_payload('gpt-6-astra','medium')

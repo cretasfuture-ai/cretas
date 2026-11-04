@@ -46,6 +46,26 @@ CASES = [
      'facts': {'tasks': 37, 'outputs': 33, 'taskOutputRelation': 'many-to-many',
                'alerts': 10, 'unlinkedMaterialRows': 1, 'countingScopesDifferent': True}},
 ]
+LINEAGE_CASES = [
+    {'id':'line_vs_batch','synthetic':True,'question':'哪些关联已成立，还缺什么、找谁补、补后能判断什么？',
+     'facts':{'issuePointsToWorkOrderMaterialRow':True,'parentIdCodeAndProductMatched':True,
+              'materialFeedProcessMatchesTask':True,'upstreamReceiptOrBatchAllocation':None}},
+    {'id':'ambiguous_producer','synthetic':True,'question':'能选哪张上游工单？列出补证据动作。',
+     'facts':{'sameProductUnitProducers':2,'datesAndQuantitiesNear':True,'actualBatchReference':None,'allocationQuantity':None}},
+    {'id':'carried_value','synthetic':True,'question':'原料成本和半成品领料金额如何避免重复？',
+     'facts':{'upstreamMaterials':80,'upstreamLabor':20,'downstreamMaterialCarryingValue':100,
+              'downstreamLabor':30,'carryingValueConfirmedIncludesUpstream':True,'otherManufacturingExpensesKnown':False}},
+    {'id':'split_and_joint','synthetic':True,'question':'拆批、混批和一料多成品还缺哪些成本依据？',
+     'facts':{'receiptQty':10,'claimedAllocations':[6,6],'jointProductAllocationRuleApproved':False,
+              'outputsHaveDifferentUnits':True}},
+    {'id':'order_action','synthetic':True,'question':'用缺什么、找谁、补齐能判断什么写逐单动作。',
+     'facts':{'finishedGoodQuantity':None,'materialCostIsSourceZero':True,'laborZeroReasonUnknown':True,
+              'sourceQueriesSuccessful':True}},
+    {'id':'normal_and_coverage','synthetic':True,'question':'怎样解释稳定对照及可算子集，避免误导？',
+     'facts':{'stableSameProductUnitCosts':[20,20.01,19.99,20],'actualBatchChainUnverified':True,
+              'eligibleOrders':6,'allOrders':30,'eligibleGoodKg':480,'allGoodKg':4800,
+              'missingConcentratedInLargeOrders':True}},
+]
 SYSTEM = '''你是一次性离线补课教师。只分析明确标为合成的案例，不调用工具。
 把事实、假设、数据缺口分开。模型结论不覆盖程序计算，账面估值不是采购价，金额不默认人民币。
 重点补齐：逐物料投入组合、零人工基准、正常对照、覆盖选择偏差、计数粒度、库存时点与自相矛盾。
@@ -130,7 +150,7 @@ class Supplement:
             raise TeacherError('SUPPLEMENT_MODEL_BILLING_MISMATCH')
         if endpoint == 'responses':
             effort = payload.get('reasoning', {}).get('effort')
-            if effort not in ('medium', 'high') or payload != teacher_payload(model, effort):
+            if effort not in ('medium', 'high') or not any(payload==teacher_payload(model,effort,lesson) for lesson in ('general','lineage')):
                 raise TeacherError('SUPPLEMENT_SYNTHETIC_EGRESS_ONLY')
         elif not any(payload == decision_payload(case_id) for case_id in [None]+[c['id'] for c in REVIEW_CASES]):
             raise TeacherError('SUPPLEMENT_SYNTHETIC_EGRESS_ONLY')
@@ -164,11 +184,13 @@ class Supplement:
         return result
 
 
-def teacher_payload(model, effort):
+def teacher_payload(model, effort, lesson='general'):
+    if lesson not in ('general','lineage'):raise TeacherError('UNKNOWN_SYNTHETIC_LESSON')
     return {'model': model, 'store': False, 'max_output_tokens': 6000,
             'reasoning': {'effort': effort},
             'text': {'verbosity': 'medium', 'format': {'type': 'json_schema', 'name': 'analyst_supplement', 'strict': True, 'schema': SCHEMA}},
-            'instructions': SYSTEM, 'input': json.dumps({'cases': CASES}, ensure_ascii=False)}
+            'instructions': SYSTEM+(' 每题写清已证实的关联、尚缺的具体单据/字段、责任角色和补齐后能解决的判断；计划BOM不是实际消耗，业务关联不是批次证明，入库成本已承接上游时不重复相加。' if lesson=='lineage' else ''),
+            'input': json.dumps({'cases': CASES if lesson=='general' else LINEAGE_CASES}, ensure_ascii=False)}
 
 
 REVIEW_CASES = [

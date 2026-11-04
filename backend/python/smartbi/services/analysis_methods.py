@@ -4,6 +4,9 @@ Definitions describe existing deterministic metrics, not model-created arithmeti
 No factory answers, amounts, threshold tuning or identity inference.
 """
 STATISTIC_DEFINITIONS = {
+    'lineage_business_links':'领退料明细通过来源ID、工单ID/编码、产品编码及父级查询验证后，关联到工单用料行；部分可再关联投料工序。这不是批次或物料物理流转证明。',
+    'work_order_data_request':'程序逐单生成的资料、责任角色及补齐用途。实际清单覆盖全部工单，模型只解释提供的代表项；同一工单可有多个缺口。',
+    'custom_field_basis':'所有以FieldOrderCount结尾的指标都是填有该自定义字段的工单张数，绝不是字段的价格、重量或金额。已有字段仍需确认单位、实际/计划属性、生效范围；不能代替库存计价或批次分配。',
     'alertCount': '本类提醒条数；不是受影响工单、物料或金额数；提醒可能重叠。附带比率是代表提醒的值，不是全厂汇总。',
     'spread': 'same_product_bridge中为同产品最高和最低单位直接成本之差除最低成本；不能擅换分母后宣称原阈值不成立。',
     'lowLaborZero': '布尔标记：同产品最低单位成本对照单的账面人工为零；不是零工资工单数量，也不是已确认没有人工。',

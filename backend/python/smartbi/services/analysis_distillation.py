@@ -3,6 +3,22 @@ from collections import defaultdict
 from decimal import Decimal,InvalidOperation
 
 EXAMPLES=[
+    {'case':'material_line_is_not_batch','firstLook':'领料来源明细已匹配工单用料行与投料工序。',
+     'secondLook':'先核对ID所属对象；用料行、库存入库明细和批号是不同对象。继续找实际入库批次及领用分配。',
+     'indicators':['业务父单关联','投料工序关联','实际批次与分配数量'],
+     'direction':'仓库补入库明细、批号和拆混批领用量，生产核实工序；前者解决来源追溯，后者解决工序归属。'},
+    {'case':'per_order_request','firstLook':'一张工单缺少最终良品，材料为源端零值，人工也为零。',
+     'secondLook':'逐项写缺什么、找谁、补后能判断什么；区分已查询未提供、零值待核、查询失败和未完工。',
+     'indicators':['具体单据与字段','责任角色','补齐后的计算或判断','查询证据状态'],
+     'direction':'生产核最终审批良品，财务和仓库核历史计价，生产财务核计薪是否集中或另记；不笼统要求补齐全部资料。'},
+    {'case':'carrying_value_boundary','firstLook':'半成品领料已有账面价值，上游还有原料和人工。',
+     'secondLook':'先确认半成品价值是否承接上游；若已承接，只在下游增加本阶段新增成本，不把上游再加一次。',
+     'indicators':['各阶段成本边界','承接价值','本阶段新增成本','其他制造费用是否具备'],
+     'direction':'同编码或时间接近的上游工单仅为候选，不能按猜测回填；识别直接成本不是完整制造成本。'},
+    {'case':'split_batch_and_joint_outputs','firstLook':'一批原料供多张工单，或一个工序产出多种产品。',
+     'secondLook':'核对拆混批实际分配及各来源可用量；联产品还需要获准的成本分摊依据。',
+     'indicators':['逐笔领用分配量','来源数量上限','同单位换算','联产品分摊规则'],
+     'direction':'仓库核数量及退料，生产核规格与产出，财务核分摊；不跨单位直接按数量均摊，不超配库存，不重复成本。'},
     {'case':'apparent_low_cost','firstLook':'单位成本很低，人工占比较高。',
      'secondLook':'先查是否只做包装，再查主料或半成品价值是否另记；投入与成品单位不同时追查包装换算和批次。',
      'indicators':['材料覆盖','人工占比','包装工序边界','上游到成品单位换算是否有依据'],

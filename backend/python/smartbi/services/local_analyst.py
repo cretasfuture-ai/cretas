@@ -17,6 +17,7 @@ from .analysis_playbook import VERSION,SECTIONS,HAZARDS,SYSTEM_PROMPT,curriculum
 
 _cache=OrderedDict()
 OWNERS={'生产','仓库','财务','生产/仓库','生产/财务','主数据/生产','数据管理员'}
+OWNER_ALIASES={'仓库/生产':'生产/仓库','财务/生产':'生产/财务','生产/主数据':'主数据/生产'}
 FIELDS={'sectionId','evidenceRefs','whatItMeans','whyItMatters','hypotheses','nextStep','owner','cannotConclude','followupQuestion','considerations'}
 HAZARD_WORDS={
     'MATERIAL_MIX':(r'材料|半成品',r'组合|用量|耗量|折算|估值'),
@@ -90,6 +91,10 @@ def payload_for(pack,review_facts,model,repair=None):
         plan['mustExplainInText']={code:HAZARDS[code] for code in pack['requiredConsiderations'][plan['sectionId']]}
     data['groupScopeInstruction']='groupId相同才可讨论同组关联；无groupId的提醒是总体或代表统计，不能套给某个产品。必须讨论高差价组及提供的稳定对照；覆盖要区分按张数与同单位产量。'
     data['selfCheck']='返回前逐板块核对 mustExplainInText：每项都必须写入白话文字，不能只列considerations。样本少必须明确样本少且不能推广；先查缺失，不断言严重低估。'
+    data['narrativeChecklist']=pack.get('narrativeRequirements',{})
+    data['narrativeDefinitions']={'normal_control':'正文明确说另一组账面波动小，但记录完整性仍待核，不只引用稳定组。',
+        'order_and_quantity_coverage':'正文解释按工单与按产量覆盖不同；加权不消除集中缺失。',
+        'business_link_is_not_batch':'正文区分已核实业务关联与仍未核实批次，不能称成本链已贯通。'}
     if repair:data['validationFeedback']=repair
     return AnalystPayload(model=model,stream=False,think=False,format='json',keep_alive='60s',
         options={'temperature':0,'num_ctx':16384,'num_predict':6000},
@@ -118,12 +123,22 @@ def validate(value,pack,review_facts):
         if not isinstance(codes,list) or any(not isinstance(c,str) for c in codes) or set(codes)!=set(pack['requiredConsiderations'][sid]):raise ValueError('ANALYST_REQUIRED_RISKS')
         covered={c for ref in refs for c in evidence[ref]['considerations']}
         if not set(codes)<=covered:raise ValueError('ANALYST_RISK_EVIDENCE')
-        if section['owner'] not in OWNERS:raise ValueError('ANALYST_OWNER')
+        # Only reorder the same explicit departments; never infer a new owner.
+        owner=OWNER_ALIASES.get(section['owner'],section['owner']) if isinstance(section['owner'],str) else None
+        if owner not in OWNERS:raise ValueError('ANALYST_OWNER')
         hypotheses=section['hypotheses']
         if not isinstance(hypotheses,list) or len(hypotheses)>2:raise ValueError('ANALYST_HYPOTHESES')
         texts=[section[k] for k in ('whatItMeans','whyItMatters','nextStep','cannotConclude','followupQuestion')]+hypotheses
         if any(not isinstance(t,str) or not 4<=len(t)<=240 for t in texts):raise ValueError('ANALYST_TEXT_LENGTH')
         combined=' '.join(texts)
+        narrative=' '.join(section[k] for k in ('whatItMeans','whyItMatters'))
+        for requirement in pack.get('narrativeRequirements',{}).get(sid,[]):
+            if requirement=='normal_control' and not re.search(r'账面(?:较|相对)?稳定|波动(?:较|很)?小|差异(?:较|很)?小',narrative):
+                raise ValueError('ANALYST_NORMAL_CONTROL_NOT_EXPLAINED')
+            if requirement=='order_and_quantity_coverage' and not (re.search(r'工单|张数',narrative) and '产量' in narrative):
+                raise ValueError('ANALYST_QUANTITY_COVERAGE_NOT_EXPLAINED')
+            if requirement=='business_link_is_not_batch' and not ('批次' in narrative or '批号' in narrative):
+                raise ValueError('ANALYST_BATCH_BOUNDARY_NOT_EXPLAINED')
         if re.search(r'\d|百分之|[零一二三四五六七八九十百千万点]+(?:倍|元|公斤|包|盒)',combined):raise ValueError('ANALYST_UNBOUND_NUMBER_OR_ALIAS')
         if _asserted(r'已证实.{0,8}(浪费|漏记|低效)|确定是|原因就是|利润为|毛利率为|必然',combined):raise ValueError('ANALYST_UNSUPPORTED_CERTAINTY')
         if any(_unsupported_impact(text) for text in texts):
@@ -133,7 +148,7 @@ def validate(value,pack,review_facts):
             raise ValueError('ANALYST_INVENTORY_AVAILABILITY_CONTRADICTION')
         for code in codes:
             if any(not re.search(pattern,combined) for pattern in HAZARD_WORDS.get(code,())):raise ValueError('ANALYST_RISK_NOT_EXPLAINED:'+code)
-        sections.append({**section,'evidenceRefs':refs,'title':_curriculum(pack)[sid]['label'],
+        sections.append({**section,'owner':owner,'evidenceRefs':refs,'title':_curriculum(pack)[sid]['label'],
                          'statistics':[deepcopy(pack['displayFacts'][ref]) for ref in refs],
                          'indicator':_curriculum(pack)[sid],
                          'hypotheses':['待核实：'+text for text in hypotheses]})

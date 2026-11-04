@@ -226,6 +226,8 @@ def test_actual_reader_binds_alert_and_ai_cache_to_period_not_only_source_run(so
     from blacklake.full_archive import digest
     from smartbi.services.alert_local_ai import fingerprint
     raw=dated(source)
+    # Real stored stock orders have external IDs; traceability now validates them.
+    for i,order in enumerate(raw['stock_order']):order['id']=900+i
     records=[(resource,str(i),digest(payload),payload) for resource,rows in raw.items() for i,payload in enumerate(rows)]
     metadata={**META,'source_totals':dict(Counter(r[0] for r in records))}
     class Cursor:

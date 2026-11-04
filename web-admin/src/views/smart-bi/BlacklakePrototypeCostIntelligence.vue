@@ -5,6 +5,7 @@ import '@/utils/echarts';
 import type { BlacklakeCostIntelligence, CostProject } from '@/api/smartbi/blacklake';
 import { localizeBlacklakeText } from './blacklakePresentation';
 import { comparableCostGroups } from './blacklakeComparison';
+import BlacklakeCostTraceability from './BlacklakeCostTraceability.vue';
 
 const props = withDefaults(defineProps<{ intelligence: BlacklakeCostIntelligence; projects: CostProject[]; mode?: 'analysis' | 'gaps' }>(), { mode: 'analysis' });
 const selectedId = ref('');
@@ -69,6 +70,7 @@ const chartOption = computed<Record<string, unknown>>(() => {
     </el-card>
   </section>
   <section v-else class="intelligence" data-testid="prototype-cost-gap-evidence">
+    <BlacklakeCostTraceability />
     <el-alert v-if="gap.status !== 'complete'" type="warning" :closable="false" :title="gap.status === 'period_not_verified' ? '所选日期尚未完成独立关联补查。这里不把全历史补查数量当作本期结果；可返回全部已采集查看原补查记录。' : '补查证据暂不可用，当前保留原记录，不猜填关联或成本。'" />
     <template v-else>
       <el-alert type="success" :closable="false" :title="`${summary.materialsQueryVerified || 0} 条用料记录的父级查询已交叉核实`" />

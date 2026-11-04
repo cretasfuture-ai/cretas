@@ -40,7 +40,7 @@ def build(report,context=None):
     has_cost=bool(context) or (report.get('datasetKind')=='production_cost' and
                               report.get('capabilities',{}).get('cost',{}).get('status') in ('summary_only','insufficient'))
     section_ids=list(SECTIONS) if has_cost else ['coverage']
-    facts=[];display={};required={s:set() for s in section_ids}
+    facts=[];display={};required={s:set() for s in section_ids};trace_required=[]
     by_project={p.get('projectId'):p for p in context.get('eligibleCostReview',{}).get('projects',[]) if p.get('projectId') is not None}
 
     def add(section,kind,text,*,values=None,hazards=(),entity_refs=(),group_key=None):
@@ -147,6 +147,42 @@ def build(report,context=None):
             add('coverage','product_coverage',f"{rows[0].get('product') or key[0]}：{len(rows)} 张工单中 {len(eligible_rows)} 张具备计算字段；按张数覆盖 {_fmt(len(eligible_rows)/len(rows)*100)}%，按已提供且同单位良品量覆盖 {_fmt(quantity_ratio*100 if quantity_ratio is not None else None)}%；缺少良品量时不猜产量覆盖。",
                 values={'sampleSize':len(rows),'eligibleCount':len(eligible_rows),
                         'eligibleRatio':len(eligible_rows)/len(rows),'eligibleQuantityRatio':quantity_ratio},group_key=key)
+        trace=context.get('costTraceability')
+        if trace:
+            if (trace.get('schema')!='smartbi-cost-traceability/1' or trace.get('analysisScope')!=report.get('scope')
+                    or trace.get('scope',{}).get('snapshotId')!=context.get('runId')):
+                raise ValueError('TRACE_EVIDENCE_SCOPE_MISMATCH')
+            summary=trace['summary']
+            ref=add('material','lineage_business_links',
+                f"当前工单核实 {summary['materialOriginLinks']} 条领退料到用料清单的来源关联，其中 {summary['materialProcessLinks']} 条能定位投料工序。没有实际入库批次和领用分配证明，不能称原料到成品批次成本已贯通。",
+                values={'materialOriginLinks':summary['materialOriginLinks'],'materialProcessLinks':summary['materialProcessLinks'],
+                        'physicalBatchChainsVerified':summary['physicalBatchChainsVerified']})
+            trace_required.append(('material',ref))
+            clues=trace.get('fieldClueSummary',{})
+            if clues:
+                clue_keys={'原材价格':'rawPriceFieldOrderCount','领料重量':'issuedWeightFieldOrderCount',
+                    '单片重量':'pieceWeightFieldOrderCount','最小单位重量':'minimumUnitWeightFieldOrderCount','计算初成数量':'initialQuantityFieldOrderCount'}
+                ref=add('material','custom_field_basis',
+                    '已有自定义业务线索：'+'；'.join(f'{name} {count} 张工单' for name,count in clues.items() if name!='产品类型')+
+                    '。字段的单位、实际或计划属性、适用批次仍需确认；不重复索取已有值，不直接替换库存领料实际成本。',
+                    values={clue_keys[name]:count for name,count in clues.items() if name in clue_keys})
+                facts[-1]['statisticMeaning']='每个数字是填有该字段的工单数，不是价格、重量或金额；字段有值不代表单位及业务含义已验证。'
+                trace_required.append(('material',ref))
+            from .cost_traceability import ACTION_SECTIONS
+            work_orders={str(r['workOrderId']):r for r in trace['workOrders']}
+            chosen=set()
+            for action in sorted(trace['actions'],key=lambda a:(a['priority']!='high',a['impactType']!='unit_cost',a['workOrderCode'])):
+                section=ACTION_SECTIONS.get(action['code'],'coverage')
+                if section in chosen:continue
+                chosen.add(section);order=work_orders[str(action['workOrderId'])]
+                ref=add(section,'work_order_data_request',
+                    f"{action['workOrderCode']}（{order.get('product') or '产品待核'}）：缺什么——{action['missingData']}；找谁——{action['responsibleRole']}；补齐后——{action['afterProvided']}。",
+                    values={'affectedRecords':len(action['affectedRecordIds'])},
+                    entity_refs=[{'projectId':order['workOrderId'],'projectCode':order['workOrderCode']}],
+                    group_key=(order.get('productCode'),order.get('unit')))
+                facts[-1]['dataRequest']={k:action[k] for k in ('code','missingData','responsibleRole','afterProvided','sourceStatus','impactType')}
+                facts[-1]['dataRequest']['alreadyProvidedClues']=[c['label'] for c in order.get('providedClues',[])]
+                trace_required.append((section,ref))
         cost=context.get('cost',{})
         add('material','material_link_coverage',f"所选工单关联 {cost.get('linkedMaterialLines',0)} 行领退料；未关联 {cost.get('unlinkedMaterialLines',0)} 行，源端零金额 {cost.get('sourceZeroCostLines',0)} 行。",
             values={'linkedLines':cost.get('linkedMaterialLines'),'unlinkedLines':cost.get('unlinkedMaterialLines'),'zeroValueLines':cost.get('sourceZeroCostLines')},hazards=['MISSING_COST'] if cost.get('sourceZeroCostLines') else [])
@@ -169,6 +205,8 @@ def build(report,context=None):
             add(section,'not_supplied',f'{SECTIONS[section]}未提供可验证的统计证据，当前不能判断。',hazards=['NO_DATA'])
     # Keep a bounded, explicit per-section sample. Omitted facts are disclosed.
     selected=[];required_refs={sid:[] for sid in section_ids}
+    for sid,ref in trace_required:required_refs[sid].append(ref)
+    narrative={sid:[] for sid in section_ids}
     bridges=[f for f in facts if f['kind']=='same_product_bridge']
     if bridges:
         high=max(bridges,key=lambda f:f['statistics']['spread'])
@@ -176,11 +214,17 @@ def build(report,context=None):
         quote=next((f for f in facts if high.get('groupId') and f['kind']=='common_input_price_check' and f.get('groupId')==high.get('groupId')),None)
         if quote:required_refs['product_cost'].append(quote['id'])
         different=[f for f in bridges if f.get('groupId')!=high.get('groupId')]
-        if different:required_refs['product_cost'].append(min(different,key=lambda f:f['statistics']['spread'])['id'])
+        if different:
+            normal=min(different,key=lambda f:f['statistics']['spread'])
+            required_refs['product_cost'].append(normal['id'])
+            if normal['statistics']['spread']<.01 and normal['statistics']['sampleSize']>=3:
+                narrative['product_cost'].append('normal_control')
     product_coverage=[f for f in facts if f['kind']=='product_coverage']
     if product_coverage:
         worst=min(product_coverage,key=lambda f:(f['statistics']['eligibleRatio'],-f['statistics']['sampleSize']))
         required_refs['coverage'].append(worst['id'])
+        if any('eligibleQuantityRatio' in f['statistics'] for f in product_coverage):narrative['coverage'].append('order_and_quantity_coverage')
+    if trace_required:narrative['material'].append('business_link_is_not_batch')
     for section in section_ids:
         group=[f for f in facts if f['sectionId']==section]
         critical=[]
@@ -194,4 +238,5 @@ def build(report,context=None):
             'displayFacts':{ref:value for ref,value in display.items() if ref in retained},
             'requiredConsiderations':{s:sorted(required[s]) for s in section_ids},
             'requiredFactRefs':required_refs,
+            'narrativeRequirements':narrative,
             'omittedFacts':len(facts)-len(selected)+report.get('analysisMetrics',{}).get('omittedGroups',0)}
