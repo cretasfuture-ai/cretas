@@ -33,6 +33,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List
@@ -47,6 +48,10 @@ _CONSENT_MODULE_PATH = (
 
 @lru_cache(maxsize=1)
 def rules():
+    # these scripts run from scripts/finetune; the rules import ``common`` from backend/python
+    backend_python = str(_CONSENT_MODULE_PATH.parents[2])
+    if backend_python not in sys.path:
+        sys.path.insert(0, backend_python)
     spec = importlib.util.spec_from_file_location("training_consent_rules", _CONSENT_MODULE_PATH)
     if spec is None or spec.loader is None:
         raise SystemExit(f"cannot load training rules from {_CONSENT_MODULE_PATH}")
@@ -135,18 +140,44 @@ def consent_map() -> Dict[str, str]:
     return consent
 
 
+def every_factorys_terms() -> frozenset:
+    """Every factory's process-secret terms: what these scripts produce crosses factories."""
+    terms = frozenset(t for factory_terms, _ in factory_lists_map().values() for t in factory_terms)
+    logger.info("shared content check: %d terms", len(terms))
+    return terms
+
+
+def _names_a_term(terms: frozenset, text: object) -> bool:
+    """``text`` holds one of ``terms``, plain or masked. Anything but a string is refused."""
+    r = rules()
+    return not isinstance(text, str) or r.mentions_any(terms, text) or r.mentions_any(r.masked_terms(terms), text)
+
+
+def drop_records_naming_protected_terms(records: Iterable[Dict]) -> List[Dict]:
+    """For labeled records that carry no factory (``zpd_labeled`` / ``shadow_adjudicated`` files): they
+    may predate the product's protection or have passed under an older list, and the file they go
+    into trains the model every factory shares. Unreadable lists stop the run."""
+    terms = every_factorys_terms()
+    records = list(records)
+    kept = [rec for rec in records if not _names_a_term(terms, rec.get("text"))]
+    logger.info("shared content check: %d of %d records kept", len(kept), len(records))
+    return kept
+
+
 def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List[Dict]:
     """Rows that may be used, with their text fields desensitized per factory.
 
     Same rules as capture / export (2026-11-03 review B2). A row is dropped when
-    it has no factory, belongs to a restaurant / test / backup tenant, names one
-    of its factory's process-secret terms, people or customers, or carries a
+    it has no factory, belongs to a restaurant / test / backup tenant, names any
+    factory's process-secret terms (one model for every factory: Steve 2026-11-04)
+    or its own factory's people or customers, or carries a
     recipe / parameter word with a value. ``factory_id`` must be selected by the
     caller.
     """
     r = rules()
     keys = tuple(text_keys)
     kept: List[Dict] = []
+    shared_terms = every_factorys_terms()
     dropped = {"no_factory": 0, "tenant": 0, "factory_list": 0, "content": 0}
     for row in rows:
         factory_id = row.get("factory_id") or ""
@@ -156,9 +187,9 @@ def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List
         if not r.is_training_tenant(factory_id):
             dropped["tenant"] += 1
             continue
-        terms, directory = factory_lists_map().get(factory_id, (frozenset(), frozenset()))
+        _, directory = factory_lists_map().get(factory_id, (frozenset(), frozenset()))
         texts = [row.get(k) for k in keys]
-        if r.mentions_any(terms, *texts) or r.mentions_any(directory, *texts):
+        if r.mentions_any(shared_terms, *texts) or r.mentions_any(directory, *texts):
             dropped["factory_list"] += 1
             continue
         scope = r.scope_from_map(consent_map(), factory_id)

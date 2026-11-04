@@ -454,6 +454,6 @@ def test_rows_naming_a_process_secret_product_are_not_exported():
             _row("F001", metadata={"desensitized": True}, input_text="普通牛肉干本月销量"),
             _row("F002", metadata={"desensitized": True}, input_text="秘制牛肉干本月销量")]
     gated = export_mod.gate_shared_rows(rows, consent={}, factory_lists=lists)
-    # F001's protected product is out; the same name in F002 is not F002's protected product
+    # the shared set crosses factories: F001's protected product is out of F002's rows too
     assert [(g["row"]["factory_id"], g["row"]["input_text"]) for g in gated] == [
-        ("F001", "普通牛肉干本月销量"), ("F002", "秘制牛肉干本月销量")]
+        ("F001", "普通牛肉干本月销量")]

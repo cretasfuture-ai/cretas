@@ -33,7 +33,7 @@ from typing import Dict, List, Optional, Tuple
 import psycopg2
 import psycopg2.extras
 
-from training_consent_gate import apply_utterance_rule
+from training_consent_gate import apply_utterance_rule, drop_records_naming_protected_terms
 
 logger = logging.getLogger(__name__)
 
@@ -463,6 +463,10 @@ def main():
     if not all_records:
         logger.info("No records from any source. Nothing to export.")
         sys.exit(0)
+
+    # The output trains the model every factory shares. The file sources skip the utterance rule
+    # above, so every record is checked here. Unreadable lists stop the run, DB outage or not.
+    all_records = drop_records_naming_protected_terms(all_records)
 
     # -----------------------------------------------------------------------
     # Deduplicate

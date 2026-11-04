@@ -10,6 +10,9 @@ unreadable consent table means "nobody is authorized", never the reverse.
 from __future__ import annotations
 
 import importlib
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -131,11 +134,65 @@ def test_process_secret_terms_tenants_and_missing_factories_are_dropped(monkeypa
             {"factory_id": None, "user_input": "今天卖了多少"},               # no factory -> out
             {"factory_id": "", "user_input": "今天卖了多少"},
             {"factory_id": "F006", "user_input": "398礼盒今天发了多少"},      # name check alone (no process word) -> out
-            {"factory_id": "F007", "user_input": "398礼盒今天发了多少"},      # not F007's product -> kept
+            {"factory_id": "F007", "user_input": "398礼盒今天发了多少"},      # one model for all: F006's product -> out
+            {"factory_id": "F007", "user_input": "今天发了多少礼盒"},         # nobody's term -> kept
             {"factory_id": "F006", "user_input": "批次 398 今天完工了吗"}]   # pure-numeric name not collected -> kept
     kept = gate.apply_utterance_rule(rows, ("user_input",))
     assert [(r["factory_id"], r["user_input"]) for r in kept] == [
-        ("F007", "<数值>礼盒今天发了多少"), ("F006", "批次 <数值> 今天完工了吗")]
+        ("F007", "今天发了多少礼盒"), ("F006", "批次 <数值> 今天完工了吗")]
+
+
+_PROTECTED = [{"factory_id": "F006", "id": "p1", "code": "C-1", "name": "398礼盒", "category": None,
+               "product_category": None, "aliases": None},
+              {"factory_id": "F006", "id": "p2", "code": "C-2", "name": "老卤牛肉2号", "category": None,
+               "product_category": None, "aliases": None}]
+
+
+def _export_files(monkeypatch, tmp_path, lines):
+    """export_training_data.main with its two file sources and the database down."""
+    export = importlib.import_module("export_training_data")
+
+    def no_db():
+        raise export.psycopg2.OperationalError("db down")
+
+    monkeypatch.setattr(export, "get_db_connection", no_db)
+    source = tmp_path / "labeled.jsonl"
+    source.write_text("\n".join(lines), encoding="utf-8")
+    out = tmp_path / "merged.jsonl"
+    monkeypatch.setattr(sys, "argv", ["export", "--output", str(out), "--zpd-file", str(source),
+                                      "--adjudicated-file", str(tmp_path / "none.jsonl")])
+    export.main()
+    return out
+
+
+def test_labeled_files_cannot_carry_a_protected_term_into_the_shared_training_file(monkeypatch, tmp_path):
+    """They carry no factory and skip the utterance rule, so the check is on the way out."""
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn(products=_PROTECTED))
+    lines = ['{"text": "398礼盒今天发了多少", "label": "A"}', '{"text": "老卤牛肉<数值>号库存", "label": "A"}',
+             '{"text": "今天的产量是多少", "label": "A"}']
+    out = _export_files(monkeypatch, tmp_path, lines)
+    assert [json.loads(line)["text"] for line in out.read_text(encoding="utf-8").splitlines()] == ["今天的产量是多少"]
+
+
+def test_unreadable_lists_stop_the_export_even_with_only_file_rows(monkeypatch, tmp_path):
+    def down():
+        raise RuntimeError("cretas db down")
+
+    monkeypatch.setattr(gate, "_connect_cretas", down)
+    with pytest.raises(SystemExit) as stopped:
+        _export_files(monkeypatch, tmp_path, ['{"text": "今天的产量是多少", "label": "A"}'])
+    assert stopped.value.code not in (0, None)
+    assert not (tmp_path / "merged.jsonl").exists()
+
+
+def test_the_rules_load_the_way_the_pipeline_runs_them():
+    """From scripts/finetune with no PYTHONPATH: pytest's own path hides this one."""
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    code = "import training_consent_gate as g; print(g.rules().masked_terms(frozenset({'老卤牛肉2号'})))"
+    done = subprocess.run([sys.executable, "-c", code], cwd=_FINETUNE, env=env, capture_output=True,
+                          encoding="utf-8", errors="replace")
+    assert done.returncode == 0, done.stderr[-400:]
+    assert "<数值>" in done.stdout
 
 
 def test_no_secrecy_switch_opens_the_gate(monkeypatch):

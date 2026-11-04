@@ -288,17 +288,20 @@ async def test_the_shared_export_sees_a_term_in_masked_form(world, state):
 
 def test_a_term_that_is_only_a_number_has_no_masked_form():
     """398 masks to <数值>, which would drop every masked row of the factory."""
-    lists = {F: psn.FactoryLists(terms=frozenset({"398"}))}
-    assert psn.row_holds_own_secrets_for_shared_content(
-        {"factory_id": F, "input_text": "本月产量 <数值> 箱", "teacher_output": ANSWER}, lists) is False
+    shared = psn.shared_content_lists({F: psn.FactoryLists(terms=frozenset({"398"}))})
+    assert psn.row_holds_secrets_for_shared_content(
+        {"factory_id": F, "input_text": "本月产量 <数值> 箱", "teacher_output": ANSWER}, shared) is False
 
 
-async def test_the_shared_export_compares_a_row_with_its_own_factory_only(world):
-    """Not a new union of every factory's lists: another factory's product of the same name is not
-    secret there, and that row stayed in the shared export before this switch existed."""
-    world.set("on")
-    other = _row("product", factory_id="F_OTHER", row_id=9)
-    gated = export_mod.gate_shared_rows([other], {}, await psn.all_factory_lists())
+@pytest.mark.parametrize("state", STATES)
+@pytest.mark.parametrize("text", [SAMPLES["product"], "老卤牛肉<数值>号本月销量多少"])
+async def test_the_shared_export_checks_every_factorys_terms(world, state, text):
+    """A co-packer's row naming its customer's protected product, plain or masked, whatever either
+    factory's settings say. Same list as Java checkSharedContent. A plain row of that factory stays."""
+    world.set(state)
+    other = {**_row("plain", factory_id="F_OTHER", row_id=8), "input_text": text}
+    plain = _row("plain", factory_id="F_OTHER", row_id=9)
+    gated = export_mod.gate_shared_rows([other, plain], {}, await psn.all_factory_lists())
     assert [g["row"]["id"] for g in gated] == [9]
 
 
