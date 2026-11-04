@@ -83,6 +83,7 @@
     "/production/batches",
     "/production/bom/ecns",
     "/production/cost-variance",
+    "/production/delivery-risks",
     "/production/kanban",
     "/production/material-flow",
     "/production/plans",
@@ -149,6 +150,7 @@
   ],
   "sales": [
     "/sales/customers",
+    "/sales/delivery-risks",
     "/sales/orders",
     "/sales/payment-requests",
     "/sales/returns",

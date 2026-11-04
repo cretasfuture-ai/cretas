@@ -34,6 +34,7 @@ public interface ShortageCaseRepository extends JpaRepository<ShortageCase, Stri
                                                       @Param("materialTypeId") String materialTypeId);
 
     @Query("SELECT c FROM ShortageCase c WHERE c.factoryId = :factoryId "
+            + "AND c.sourceType = com.cretas.aims.entity.shortage.ShortageCase$SourceType.SALES_ORDER "
             + "AND (:openOnly = false OR c.closedAt IS NULL) ORDER BY c.lastRefreshedAt DESC")
     Page<ShortageCase> findForFactory(@Param("factoryId") String factoryId,
                                       @Param("openOnly") boolean openOnly,
