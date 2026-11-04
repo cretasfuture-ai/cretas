@@ -72,6 +72,37 @@ class Turn(BaseModel):
     content: str = Field(min_length=1,max_length=12000)
 
 
+@router.get('/complete-cost-analysis')
+async def complete_cost_analysis(request:Request):
+    path=os.environ.get('BLACKLAKE_SMARTBI_CONFIG')
+    if not path:raise HTTPException(404,'黑湖测试数据集尚未启用')
+    configured=settings(path);authorize(request,configured);await cost_authority(request,configured)
+    from .complete_cost_store import read as read_complete
+    import asyncio
+    try:
+        result=await asyncio.to_thread(read_complete,configured)
+        if result is None:raise ValueError('NOT_CONFIGURED')
+    except Exception:raise HTTPException(503,'逐条成本分析尚未就绪或与当前工厂不一致') from None
+    return {'success':True,'data':result,'message':'最新26张固定工单；数据立即读取，分析按批次逐条保存'}
+
+
+class CompleteCostFollowup(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    fact_id:str=Field(min_length=1,max_length=100)
+    run_id:str=Field(min_length=1,max_length=200)
+    question:str=Field(min_length=1,max_length=2000)
+
+
+@router.post('/complete-cost-analysis/followup')
+async def complete_cost_followup(body:CompleteCostFollowup,request:Request):
+    response=await complete_cost_analysis(request);value=response['data']
+    if body.run_id!=value['sourceRunId']:raise HTTPException(409,'分析版本已变化，请刷新后追问')
+    from .complete_cost_store import followup
+    try:result=followup(value,body.fact_id,body.question)
+    except ValueError:raise HTTPException(409,'这条证据仍在排队或不属于当前分析') from None
+    return {'success':True,'data':result,'message':'基于本条已保存证据回答'}
+
+
 @router.get('/cost-traceability')
 async def cost_traceability(request:Request,mode:Literal['latest','snapshot']='latest'):
     path=os.environ.get('BLACKLAKE_SMARTBI_CONFIG')

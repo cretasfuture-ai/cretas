@@ -6,6 +6,31 @@ export interface CostDataRequest {
   missingData: string; responsibleRole: string; afterProvided: string; sourceStatus: string;
   impactType: string; priority: string; sourceDocuments?: string[];
 }
+
+export interface CompleteCostFact {
+  factId: string; cohort: 'original44' | 'eligible26'; sectionId: string; kind: string;
+  whatItMeans: string; whyItMatters: string; nextStep: string; owner: string; cannotConclude: string; hypotheses: string[];
+  display: { text: string; entityRefs?: { projectId: number; projectCode?: string }[] };
+}
+export interface CompleteCostReport {
+  schema: string; sourceRunId: string; sourceCheckedAt: string; analysis: BlacklakeAnalysis & { costTraceability: CostTraceabilityReport };
+  contract: { originalRemainingFacts: number; eligibleOrders: number; inventoryBoundary: string };
+  batchAnalysis: { status: string; expectedFacts: number; analyzedFacts: number; remainingFacts: number; results: CompleteCostFact[];
+    cohorts: Record<string, { expected: number; analyzed: number }>; usage: LocalAIUsage | null; usageUnknownCalls?: number; jobs: Record<string, number> };
+}
+export async function getBlacklakeCompleteCost(): Promise<CompleteCostReport> {
+  const response = await pythonFetch<{ success: boolean; data: CompleteCostReport; message: string }>(
+    '/api/smartbi/blacklake/complete-cost-analysis', { preserveResponseKeys: true });
+  if (!response.success) throw new Error(response.message);
+  return response.data;
+}
+export async function followupBlacklakeCompleteCost(runId: string, factId: string, question: string): Promise<string> {
+  const response = await pythonFetch<{ success: boolean; data: { answer: string }; message: string }>(
+    '/api/smartbi/blacklake/complete-cost-analysis/followup', { method: 'POST', preserveResponseKeys: true,
+      body: JSON.stringify({ run_id: runId, fact_id: factId, question }) });
+  if (!response.success) throw new Error(response.message);
+  return response.data.answer;
+}
 export interface TraceableWorkOrder {
   workOrderId: number | string; workOrderCode: string; product: string; productCode: string;
   unit: string | null; identifiedUnitCost: number | null; directCostAvailable: boolean;

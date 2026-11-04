@@ -35,7 +35,7 @@ def _fmt(value):
     return '未提供' if number is None else f'{number:,.2f}'
 
 
-def build(report,context=None):
+def build(report,context=None,*,include_all=False):
     context=context or {}
     has_cost=bool(context) or (report.get('datasetKind')=='production_cost' and
                               report.get('capabilities',{}).get('cost',{}).get('status') in ('summary_only','insufficient'))
@@ -233,6 +233,7 @@ def build(report,context=None):
             if fact not in critical:critical.append(fact)
         critical += [f for f in group if f['id'] in required_refs[section] and f not in critical]
         selected.extend(critical+[f for f in group if f not in critical][:max(0,18-len(critical))])
+    if include_all:selected=facts
     retained={f['id'] for f in selected}
     return {'version':VERSION,'isCostDataset':has_cost,'sectionIds':section_ids,'facts':selected,
             'displayFacts':{ref:value for ref,value in display.items() if ref in retained},

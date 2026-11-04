@@ -32,9 +32,10 @@ class InferenceResult(dict):
 
 
 class LocalAIOutputError(RuntimeError):
-    def __init__(self,usage):
+    def __init__(self,usage,raw_content=None):
         super().__init__('LOCAL_AI_OUTPUT_INVALID')
         self.usage=usage
+        self.raw_content=raw_content
 
 
 def provider_usage(response):
@@ -133,7 +134,10 @@ def infer(payload,config):
     if response.get('model')!=payload['model']:raise RuntimeError('LOCAL_AI_MODEL_MISMATCH')
     usage=provider_usage(response)
     try:return InferenceResult(json.loads(response['message']['content']),usage)
-    except (ValueError,TypeError,KeyError):raise LocalAIOutputError(usage) from None
+    except (ValueError,TypeError,KeyError):
+        message=response.get('message')
+        raw=message.get('content') if isinstance(message,dict) else None
+        raise LocalAIOutputError(usage,raw if isinstance(raw,str) else None) from None
 
 async def enrich(report,requester=None,*,analysis_context=None):
     """Optional AI failure is reported explicitly without invalidating the rules."""

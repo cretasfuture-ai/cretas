@@ -11,6 +11,7 @@ import { tokenActivationDelayMs } from './blacklakeSession';
 
 const props = withDefaults(defineProps<{ mode?: 'blacklake' | 'shared-alerts' }>(), { mode: 'blacklake' });
 const SharedAlertsTestView = defineAsyncComponent(() => import('./SharedAlertsTestView.vue'));
+const CompleteCostAnalysis = defineAsyncComponent(() => import('./BlacklakeCompleteCostAnalysis.vue'));
 const sessionKey = props.mode === 'shared-alerts' ? 'smartbi_shared_test_signed_in' : 'blacklake_test_signed_in';
 const auth = useAuthStore();
 const signedIn = ref(props.mode!=='blacklake' && !!localStorage.getItem(sessionKey));
@@ -23,6 +24,7 @@ const collapsed=ref(localStorage.getItem('blacklake-nav-collapsed')==='true');
 const mobileOpen=ref(false);
 const navigation=[
   {id:'cost',label:'原料到成品成本',icon:'i-lucide-chart-no-axes-combined'},
+  {id:'complete-cost',label:'26张工单成本复核',icon:'i-lucide-clipboard-check'},
   {id:'alerts',label:'异常与跟进',icon:'i-lucide-circle-alert'},
   {id:'gaps',label:'关联与估值补查',icon:'i-lucide-git-pull-request-arrow'},
   {id:'production',label:'生产与工序',icon:'i-lucide-factory'},
@@ -89,6 +91,7 @@ function logout() {
       <div class="header-end"><UBadge color="primary" variant="soft">{{ mode === 'shared-alerts' ? '合成数据测试' : '六膳门 · 隔离测试' }}</UBadge><UButton v-if="signedIn" @click="mode==='blacklake'?login():logout()" color="neutral" variant="ghost" size="sm">{{ mode==='blacklake'?'重新连接':'退出分析' }}</UButton></div>
     </header>
     <SharedAlertsTestView v-if="signedIn && mode === 'shared-alerts'" />
+    <CompleteCostAnalysis v-else-if="signedIn && activeView==='complete-cost'" />
     <BlacklakeAnalysis v-else-if="signedIn" v-model:active-view="activeView" />
     <UCard v-else-if="mode==='blacklake'" class="login-card">
       <h2>{{ busy?'正在连接六膳门分析…':'连接六膳门分析' }}</h2>
