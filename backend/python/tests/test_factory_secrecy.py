@@ -98,28 +98,6 @@ async def test_reads_are_cached_ten_seconds_and_egress_reads_at_most_five(settin
     assert fs.cached_is_on("F-NEVER-READ", fs.EGRESS_REDACTION) is True
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("code", fs.CODES)
-async def test_the_snapshot_gives_the_same_answer_as_is_on(settings, code):
-    """批处理脚本的整表读法。同一条规则两种读法 (异步按厂读 / 同步整表读): 这里钉两份一致, 不是各自都对。"""
-    table, _ = settings
-    table.update({"F-NONE": {}, "F-ON": {code: True}, "F-OFF": {code: False}, "F-NULL": {code: None},
-                  "F-A-ON": {fs.PROCESS_SECRET: True}, "__missing__": ("F-GONE",)})
-    factories = ["F-NONE", "F-ON", "F-OFF", "F-NULL", "F-A-ON"]
-    rows = [(f, c, v) for f in factories for c, v in table[f].items()] + [("F-GONE", code, False)]
-    snapshot = fs.settings_snapshot([(f,) for f in factories], rows)
-    for factory in factories + ["F-GONE", None, "", "PLATFORM"]:
-        fs.invalidate()
-        assert fs.snapshot_is_on(snapshot, factory, code) is await fs.is_on(factory, code), factory
-
-
-def test_a_failed_snapshot_is_on_for_everyone():
-    for code in fs.CODES:
-        assert fs.snapshot_is_on(None, F, code) is True
-    with pytest.raises(ValueError):
-        fs.snapshot_is_on({}, F, "MADE_UP")
-
-
 def test_the_items_file_is_the_generated_copy_of_the_java_enum():
     data = json.loads((Path(fs.__file__).with_name("secrecy_items.json")).read_text(encoding="utf-8"))
     assert "SecrecyItem" in data["_generated"]

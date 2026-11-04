@@ -178,20 +178,24 @@ def test_the_always_on_checks_cannot_reach_the_training_filter():
         assert not re.search(r"training_filter_on|filtered_terms|factory_secrecy|TRAINING_FILTER", body), name
 
 
-def test_only_the_lists_and_the_finetune_gate_read_the_training_filter():
+def test_only_the_lists_read_the_training_filter():
     """One read point in the service: the lists carry d. A second reader would be a second place
-    that can disagree with it (the finetune gate is sync and reads a snapshot by the same rule)."""
+    that can disagree with it. The finetune gate reads no switch: what it feeds is one model for
+    every factory (test_finetune_training_consent_gate pins the verdicts)."""
     root = Path(__file__).resolve().parents[1]
-    modules = ["smartbi/services/distillation_capture.py", "ai/learning/learning_rules.py",
-               "ai/learning/expression_learner.py", "ai/learning/keyword_learner.py",
-               "scripts/export_distillation_dataset.py", "scripts/corpus_judge.py",
-               "scripts/training_name_leak_count.py"]
-    readers = [m for m in modules if re.search(r"factory_secrecy|TRAINING_FILTER", (root / m).read_text(encoding="utf-8"))]
-    assert readers == []
-    lists_module = (root / "smartbi/services/process_secret_names.py").read_text(encoding="utf-8")
-    assert "factory_secrecy.TRAINING_FILTER" in lists_module
-    gate = (root / "../../scripts/finetune/training_consent_gate.py").read_text(encoding="utf-8")
-    assert "r.TRAINING_FILTER" in gate
+    modules = ["smartbi/services/distillation_capture.py", "smartbi/services/training_consent.py",
+               "ai/learning/learning_rules.py", "ai/learning/expression_learner.py",
+               "ai/learning/keyword_learner.py", "scripts/export_distillation_dataset.py",
+               "scripts/corpus_judge.py", "scripts/training_name_leak_count.py",
+               "../../scripts/finetune/training_consent_gate.py"]
+    pattern = r"factory_secrecy\b|\bTRAINING_FILTER\b|training_filter_on"
+    allowed = {"smartbi/services/distillation_capture.py", "smartbi/services/training_consent.py",
+               "ai/learning/learning_rules.py", "scripts/export_distillation_dataset.py"}
+    code = {m: (root / m).read_text(encoding="utf-8") for m in modules}
+    assert not [m for m in modules if re.search(r"factory_secrecy\.|import factory_secrecy", code[m])]
+    # those four take d from the lists; nothing else may mention it, the gate least of all
+    assert [m for m in modules if m not in allowed and re.search(pattern, code[m])] == []
+    assert "factory_secrecy.TRAINING_FILTER" in (root / "smartbi/services/process_secret_names.py").read_text(encoding="utf-8")
 
 
 def test_word_file_switch_is_a_strict_json_boolean():

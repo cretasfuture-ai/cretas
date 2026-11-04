@@ -37,9 +37,10 @@ Customer wording: docs sent to the website session the same day.
         number (``process_word_with_value``). The word alone ("杀菌温度一般设多少",
         "建议优化卤制工序") no longer blocks: the secret is the value / the
         factory's own step order ("腌制 24 小时再滚揉", "滚揉 … 良品率 92.86%");
-      - the factory's protected product terms (``FactoryLists.terms``). The exception
-        is what crosses factories: the shared export checks them whatever d says
-        (``process_secret_names.row_names_own_terms_for_shared_content``).
+      - the factory's protected product terms (``FactoryLists.terms``).
+    What crosses factories does not follow d: the shared export keeps checking the terms
+    (``process_secret_names.row_names_own_terms_for_shared_content``), and the finetune gate,
+    whose output is one model for every factory, keeps the whole rule and reads no switch.
     A hit drops the whole sample; masking is no substitute (商业秘密保护规定
     第五至七、十一至十二条: protection is not limited to numbers).
 
@@ -229,16 +230,17 @@ def qa_has_blocked_content(input_text: Optional[str], answer: Optional[str], *,
     return mentions_any(names, input_text, answer)
 
 
-def utterance_has_blocked_content(text: Optional[str], *, directory: Iterable[str],
-                                  training_filter_on: bool = True) -> bool:
-    """True when an intent utterance must not be stored: a pay / attendance word with a value,
-    one of the factory's people / customers, or (item d on) a recipe / parameter word with a
-    value. Same verdicts as Java ``TrainingSampleRules.utteranceBlocked``."""
+def utterance_has_blocked_content(text: Optional[str], *, directory: Iterable[str]) -> bool:
+    """True when an intent utterance must not be stored (any factory): a recipe /
+    parameter word or a pay / attendance word with a value, or one of the factory's
+    people / customers. The full rule, with no item d: its one production reader is the finetune
+    gate, whose output is a model shared by every factory (``scripts/finetune/training_consent_gate.py``).
+    Own-factory learning follows d in ``ai.learning.learning_rules.judge``."""
     from common.process_secret_terms import mentions_any
 
     names = _names_directory(directory)
-    return ((training_filter_on and process_word_with_value(text, UTTERANCE_MARKERS))
-            or pay_word_with_value(text) or mentions_any(names, text))
+    return (process_word_with_value(text, UTTERANCE_MARKERS) or pay_word_with_value(text)
+            or mentions_any(names, text))
 
 
 def remove_personal_identifiers(text: Optional[str]) -> Optional[str]:
@@ -267,13 +269,12 @@ def is_withdrawn(scope: str) -> bool:
     return scope == WITHDRAWN
 
 
-def desensitize_utterance(scope: str, text: Optional[str], *, directory: Iterable[str],
-                          training_filter_on: bool = True) -> Tuple[bool, Optional[str]]:
-    """Intent-mapping rule: ``(keep, text)``. Withdrawn factories, pay / attendance content
-    with a value, the factory's people / customers and (item d on) parameter / recipe content
-    with a value are dropped; authorized -> raw; otherwise numbers masked."""
-    if is_withdrawn(scope) or utterance_has_blocked_content(
-            text, directory=directory, training_filter_on=training_filter_on):
+def desensitize_utterance(scope: str, text: Optional[str], *,
+                          directory: Iterable[str]) -> Tuple[bool, Optional[str]]:
+    """Intent-mapping rule: ``(keep, text)``. Withdrawn factories, parameter /
+    recipe or pay / attendance content with a value and the factory's people /
+    customers are dropped; authorized -> raw; otherwise numbers masked."""
+    if is_withdrawn(scope) or utterance_has_blocked_content(text, directory=directory):
         return False, None
     if keeps_raw(scope):
         return True, text
@@ -285,14 +286,6 @@ def desensitize_utterance(scope: str, text: Optional[str], *, directory: Iterabl
 # this module so the SQL stays in one place.
 from common.process_secret_sql import ALL_FACTORY_DIRECTORY_SQL, ALL_PROTECTED_TERMS_SQL  # noqa: E402,F401
 from common.process_secret_terms import mentions_any  # noqa: E402,F401  (finetune gate)
-# item d for the finetune gate (sync, psycopg2). The rule itself is common.factory_secrecy's.
-from common.factory_secrecy import (  # noqa: E402,F401
-    ALL_FACTORIES_SQL,
-    ALL_SETTINGS_SQL,
-    TRAINING_FILTER,
-    settings_snapshot,
-    snapshot_is_on,
-)
 
 
 def lists_by_factory(product_rows: Iterable[Mapping[str, Any]],

@@ -19,7 +19,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +47,6 @@ READ_TIMEOUT_S = 5.0
 SETTINGS_SQL = "SELECT item_code, enabled FROM factory_secrecy_settings WHERE factory_id = $1"
 # 工厂表里没有这家工厂 → 每一项都当开启 (与 Java FactorySecrecyConfig 一致; 审查 #3)
 FACTORY_EXISTS_SQL = "SELECT EXISTS (SELECT 1 FROM factories WHERE id = $1)"
-# 没有参数, 同步的批处理脚本 (scripts/finetune, psycopg2) 整表读一次: settings_snapshot / snapshot_is_on
-ALL_SETTINGS_SQL = "SELECT factory_id, item_code, enabled FROM factory_secrecy_settings"
-ALL_FACTORIES_SQL = "SELECT id FROM factories"
 
 # factory_id -> (读到的时间, {item_code: True/False/None(跟随)})
 # factory_id -> (读到的时间, 配置; None = 工厂表里没有这家工厂)
@@ -124,29 +121,6 @@ def cached_is_on(factory_id: Optional[str], code: str, *, max_age: Optional[floa
     return resolve(cached[1], code)
 
 
-def settings_snapshot(factory_rows: Iterable[Sequence[Any]],
-                      setting_rows: Iterable[Sequence[Any]]) -> Dict[str, Dict[str, Optional[bool]]]:
-    """``ALL_FACTORIES_SQL`` / ``ALL_SETTINGS_SQL`` 的行 -> ``{factory_id: 配置}``。只含工厂表里有的工厂
-    (配置表里有、工厂表里没有的行不算数: 这家工厂按「工厂不存在」判, 与 :func:`_read` 一致)。"""
-    snapshot: Dict[str, Dict[str, Optional[bool]]] = {str(r[0]): {} for r in factory_rows}
-    for factory_id, code, enabled in setting_rows:
-        stored = snapshot.get(str(factory_id))
-        if stored is not None and code in _KNOWN:
-            stored[code] = enabled
-    return snapshot
-
-
-def snapshot_is_on(snapshot: Optional[Dict[str, Dict[str, Optional[bool]]]],
-                   factory_id: Optional[str], code: str) -> bool:
-    """同 :func:`is_on` 的规则, 读 :func:`settings_snapshot` 的结果。``snapshot`` 为 None (读失败) /
-    工厂不明 / 工厂表里没有这家工厂 → True (偏向保密)。"""
-    if code not in _KNOWN:
-        raise ValueError(f"unknown secrecy item: {code}")
-    if snapshot is None or _unknown_factory(factory_id):
-        return True
-    return resolve(snapshot.get(str(factory_id).strip()), code)
-
-
 async def egress_redaction_on(factory_id: Optional[str]) -> bool:
     """出外脱敏 (c): 缓存不超过 5 秒。"""
     return await is_on(factory_id, EGRESS_REDACTION, max_age=EGRESS_MAX_AGE_S)
@@ -167,8 +141,7 @@ def invalidate(factory_id: Optional[str] = None) -> None:
 
 
 __all__ = [
-    "AI_SECRECY_AUDIT", "ALL_FACTORIES_SQL", "ALL_SETTINGS_SQL", "CODES", "CUSTOMER_HELD", "EGRESS_REDACTION",
-    "ITEMS", "PLATFORM_RECIPE_BLOCK", "PROCESS_SECRET", "SETTINGS_SQL", "TRAINING_FILTER", "cached_is_on",
-    "egress_redaction_on", "invalidate", "is_on", "process_secret_inert", "resolve", "settings_snapshot",
-    "snapshot_is_on",
+    "AI_SECRECY_AUDIT", "CODES", "CUSTOMER_HELD", "EGRESS_REDACTION", "ITEMS", "PLATFORM_RECIPE_BLOCK",
+    "PROCESS_SECRET", "SETTINGS_SQL", "TRAINING_FILTER", "cached_is_on", "egress_redaction_on", "invalidate",
+    "is_on", "process_secret_inert", "resolve",
 ]

@@ -23,9 +23,11 @@ Item d is read here and nowhere else in the service: :func:`factory_lists` and
 so capture, export, the corpus scripts and the learners all follow it. It is read on every
 call, not cached with the lists, through ``common.factory_secrecy.is_on`` (10 seconds, and a
 read error or an unknown factory counts as ON). A factory with no lists at all is not in the
-map and reads as ON. Content shared across factories does not follow d:
-:func:`row_names_own_terms_for_shared_content`. ``FactoryLists.terms`` itself never changes with
-d, so anything built from it stays independent of every switch.
+map and reads as ON. What crosses factories does not follow d:
+:func:`row_names_own_terms_for_shared_content` for the shared export, and the finetune gate
+(``scripts/finetune/training_consent_gate.py``, one model for every factory) reads no switch at
+all. ``FactoryLists.terms`` itself never changes with d, so anything built from it stays
+independent of every switch.
 
 The lists live in the Cretas main database; this module reads them through
 ``get_cretas_pool``. Lookup errors propagate, EXCEPT through

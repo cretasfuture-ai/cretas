@@ -1,10 +1,8 @@
 """Training-data rule for the intent fine-tuning / labeling scripts.
 
 Owner rule (Steve, 2026-10-24): intent mappings (utterance -> intent) are used
-by default; an utterance naming the factory's people / customers or holding a pay
-value is dropped for every factory, one with recipe / process-parameter content or a
-protected product is dropped while the training filter (item d) of the factory that
-owns the row is on, and an un-authorized factory's utterance has its numbers and
+by default; an utterance with recipe / process-parameter content is dropped for
+every factory, and an un-authorized factory's utterance has its numbers and
 phone / ID / bank numbers masked. The rules live in
 ``backend/python/smartbi/services/training_consent.py`` (``desensitize_utterance``),
 loaded here by file path (these scripts run outside the backend package); the
@@ -16,6 +14,14 @@ outside LLM or into a training file; every row goes through
 ``apply_utterance_rule`` first. Withdrawn factories (clause 10) are dropped.
 If the consent table cannot be read the script stops: an unreadable table could
 hide a withdrawal.
+
+No secrecy switch is read here, the training filter (item d) included, on purpose:
+export_training_data merges every factory's rows into one file for one model (the
+records do not even carry factory_id) and the labeling scripts post straight to
+DashScope, past the egress redaction. That is content crossing factories, which no
+switch opens (Java ProcessSecretSampleFilter.checkSharedContent). d is the default-off
+per-factory choice; following it here would put every such factory's protected
+products into the model all factories share. To follow d, partition by factory first.
 
 Consent DB connection (SmartBI database, NOT the cretas DB the scripts read):
     CONSENT_DB_HOST / CONSENT_DB_PORT / CONSENT_DB_NAME / CONSENT_DB_USER /
@@ -29,7 +35,7 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List
 
 logger = logging.getLogger(__name__)
 
@@ -110,28 +116,6 @@ def factory_lists_map() -> Dict[str, tuple]:
 
 
 @lru_cache(maxsize=1)
-def training_filter_snapshot() -> Optional[Dict[str, Dict]]:
-    """Every factory's secrecy settings from the cretas database, one read per run. Unreadable ->
-    None, which ``snapshot_is_on`` reads as every item ON: filtering more than the factory asked
-    for is safe, so unlike the lists above this does not stop the script."""
-    try:
-        conn = _connect_cretas()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(rules().ALL_FACTORIES_SQL)
-                factories = cur.fetchall()
-                cur.execute(rules().ALL_SETTINGS_SQL)
-                settings = cur.fetchall()
-        finally:
-            conn.close()
-        return rules().settings_snapshot(factories, settings)
-    except Exception as e:  # noqa: BLE001
-        logger.error("secrecy settings unreadable (%s), treating the training filter as ON for every factory",
-                     type(e).__name__)
-        return None
-
-
-@lru_cache(maxsize=1)
 def consent_map() -> Dict[str, str]:
     """``{factory_id: scope}`` (withdrawn factories read as 'withdrawn'); unreadable -> SystemExit."""
     try:
@@ -155,10 +139,10 @@ def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List
     """Rows that may be used, with their text fields desensitized per factory.
 
     Same rules as capture / export (2026-11-03 review B2). A row is dropped when
-    it has no factory, belongs to a restaurant / test / backup tenant, names one of its
-    factory's people or customers or carries a pay value, or, while that factory's item d is
-    on, names one of its process-secret terms or carries a recipe / parameter word with a
-    value. ``factory_id`` must be selected by the caller.
+    it has no factory, belongs to a restaurant / test / backup tenant, names one
+    of its factory's process-secret terms, people or customers, or carries a
+    recipe / parameter word with a value. ``factory_id`` must be selected by the
+    caller.
     """
     r = rules()
     keys = tuple(text_keys)
@@ -173,16 +157,14 @@ def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List
             dropped["tenant"] += 1
             continue
         terms, directory = factory_lists_map().get(factory_id, (frozenset(), frozenset()))
-        filter_on = r.snapshot_is_on(training_filter_snapshot(), factory_id, r.TRAINING_FILTER)
         texts = [row.get(k) for k in keys]
-        if (filter_on and r.mentions_any(terms, *texts)) or r.mentions_any(directory, *texts):
+        if r.mentions_any(terms, *texts) or r.mentions_any(directory, *texts):
             dropped["factory_list"] += 1
             continue
         scope = r.scope_from_map(consent_map(), factory_id)
         out = dict(row)
         for key in keys:
-            keep, text = r.desensitize_utterance(scope, row.get(key), directory=directory,
-                                                 training_filter_on=filter_on)
+            keep, text = r.desensitize_utterance(scope, row.get(key), directory=directory)
             if not keep:
                 break
             out[key] = text

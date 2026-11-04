@@ -7,7 +7,7 @@
 
 每条都走真实入口 (capture / 私有导出 / 共享导出 / corpus_judge 发给外部模型的内容 / 两个学习器 / 挂起重判)。
 假的只有配置表的读取 (``factory_secrecy._read``) 和两个库的连接; 名单、开关、规则都是真的。
-微调闸是同步的另一条路, 同一张矩阵在 test_finetune_training_consent_gate。
+微调闸不在这张矩阵里: 它的产物是所有工厂共用的一个模型, 不读 d (test_finetune_training_consent_gate 钉)。
 """
 from __future__ import annotations
 
@@ -341,6 +341,30 @@ async def test_a_row_kept_while_the_filter_was_off_does_not_go_out_once_it_is_on
     prompts, runs = await _prompts_of_a_run(judge, monkeypatch, [{**row, "metadata": None}, {**_row("plain"), "metadata": None}])
     assert runs == 1 and SAMPLES["process"] not in prompts
     assert export_mod.passes_training_rule(row, await psn.all_factory_lists()) is False
+
+
+@pytest.mark.parametrize("state", STATES)
+async def test_the_readers_check_the_answer_with_the_answer_markers(world, state, monkeypatch):
+    """The answer alone can carry the value, and generic 工序 counts in the input only (rule "B")."""
+    judge = importlib.import_module("scripts.corpus_judge")
+    monkeypatch.setattr(judge, "all_factory_lists", psn.all_factory_lists)
+    world.set(state)
+    rows = [{**_row("plain", row_id=1), "teacher_output": "杀菌温度 121 度", "metadata": None},
+            {**_row("plain", row_id=2), "teacher_output": "共 3 道工序", "metadata": None},
+            {**_row("plain", row_id=3), "input_text": "共 3 道工序", "metadata": None}]
+    got = [r["id"] for r in await judge.fetch_unjudged_rows(_judge_pool(rows=rows), 50)]
+    assert got == ([1, 2, 3] if state in FILTER_OFF_STATES else [2])
+
+
+async def test_a_seed_row_with_a_process_value_stays_and_a_real_one_does_not(world, monkeypatch):
+    """Seed rows are made up. Their factory has no lists, which reads as filter on, so the
+    exemption is what keeps them: without it the synthetic corpus would drop out of the judge."""
+    judge = importlib.import_module("scripts.corpus_judge")
+    monkeypatch.setattr(judge, "all_factory_lists", psn.all_factory_lists)
+    world.set("on")
+    rows = [{**_row("process", row_id=1, factory_id="SEED_R"), "metadata": None},
+            {**_row("process", row_id=2), "metadata": None}]
+    assert [r["id"] for r in await judge.fetch_unjudged_rows(_judge_pool(rows=rows), 50)] == [1]
 
 
 # ------------------------------------------------------------------ learners
