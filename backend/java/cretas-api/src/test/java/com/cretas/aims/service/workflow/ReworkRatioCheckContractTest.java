@@ -142,4 +142,88 @@ class ReworkRatioCheckContractTest {
         check.enforce(F, "plan", r);
         assertThat(r.getReworkRatio()).isNull();
     }
+
+    // ------------------------------------------------------------------
+    // App 报工路径 (YieldReportServiceImpl): 领用回料半成品 (sourceWipNo)
+    // ------------------------------------------------------------------
+
+    private static com.cretas.aims.entity.workprocess.WorkProcessTask task() {
+        com.cretas.aims.entity.workprocess.WorkProcessTask t = new com.cretas.aims.entity.workprocess.WorkProcessTask();
+        t.setId(7L);
+        t.setProductTypeId("P1");
+        return t;
+    }
+
+    private static SemiFinishedInventory wip(boolean rework) {
+        SemiFinishedInventory w = new SemiFinishedInventory();
+        w.setIsRework(rework);
+        return w;
+    }
+
+    private void enforceAppYield(boolean rework, String reworkKg, String totalKg, ReworkRatioDeviation submitted,
+                       com.cretas.aims.entity.ProductionReport report) {
+        check.enforceYieldReport(F, task(), wip(rework), new BigDecimal(reworkKg), new BigDecimal(totalKg),
+                submitted, report);
+    }
+
+    @Test
+    @DisplayName("App 路径: 回料占比超限不填原因 => 409, 同一个错误码 (App 与 web 共用)")
+    void yieldOverWithoutReasonRejected() {
+        limit("10");
+        com.cretas.aims.entity.ProductionReport report = new com.cretas.aims.entity.ProductionReport();
+        assertThatThrownBy(() -> enforceAppYield(true, "15", "115", null, report))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo(ReworkRatioCheck.ERROR_CODE));
+        assertThat(report.getCustomFields()).isNull();
+    }
+
+    @Test
+    @DisplayName("App 路径: 超限填原因放行, 快照落 customFields.reworkRatio; 没超限只留 WITHIN")
+    void yieldReasonLeavesTraceInCustomFields() {
+        limit("10");
+        com.cretas.aims.entity.ProductionReport over = new com.cretas.aims.entity.ProductionReport();
+        enforceAppYield(true, "15", "115", ReworkRatioDeviation.builder().reason("品质允许").build(), over);
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> snap = (java.util.Map<String, Object>) over.getCustomFields().get("reworkRatio");
+        assertThat(snap.get("status")).isEqualTo(ReworkRatioCheck.STATUS_OVER_WITH_REASON);
+        assertThat(snap.get("reason")).isEqualTo("品质允许");
+        assertThat((BigDecimal) snap.get("actualPercent")).isEqualByComparingTo("15");
+
+        com.cretas.aims.entity.ProductionReport within = new com.cretas.aims.entity.ProductionReport();
+        enforceAppYield(true, "5", "105", null, within);
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> ok = (java.util.Map<String, Object>) within.getCustomFields().get("reworkRatio");
+        assertThat(ok.get("status")).isEqualTo(ReworkRatioCheck.STATUS_WITHIN);
+        assertThat(ok.get("reason")).isNull();
+    }
+
+    @Test
+    @DisplayName("App 路径: 没设上限 / 不是回料 / 投入量未知都不拦、不留快照")
+    void yieldNotApplicableNeverBlocks() {
+        com.cretas.aims.entity.ProductionReport a = new com.cretas.aims.entity.ProductionReport();
+        limit(null);
+        enforceAppYield(true, "90", "100", null, a);
+        assertThat(a.getCustomFields()).isNull();
+
+        limit("10");
+        com.cretas.aims.entity.ProductionReport b = new com.cretas.aims.entity.ProductionReport();
+        enforceAppYield(false, "90", "100", null, b);
+        assertThat(b.getCustomFields()).isNull();
+
+        com.cretas.aims.entity.ProductionReport c = new com.cretas.aims.entity.ProductionReport();
+        check.enforceYieldReport(F, task(), wip(true), new BigDecimal("90"), null, null, c);
+        assertThat(c.getCustomFields()).isNull();
+    }
+
+    @Test
+    @DisplayName("App 路径接线: YieldReportServiceImpl 真的调了 enforceYieldReport, 请求带 reworkRatio")
+    void yieldServiceIsWired() throws Exception {
+        java.nio.file.Path svc = java.nio.file.Path.of(
+                "src/main/java/com/cretas/aims/service/yield/impl/YieldReportServiceImpl.java");
+        String src = java.nio.file.Files.readString(svc);
+        assertThat(src).contains("reworkRatioCheck.enforceYieldReport(");
+        assertThat(src).contains("req.getReworkRatio()");
+        assertThat(com.cretas.aims.dto.yield.YieldReportRequest.class.getDeclaredField("reworkRatio")).isNotNull();
+    }
 }

@@ -164,6 +164,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.BlendRatioCheck blendRatioCheck;
 
+    /** 缺口 03 回料比例上限 (App 领用回料半成品)。字段注入 (required=false) 不改构造器。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.ReworkRatioCheck reworkRatioCheck;
+
     /**
      * App 报工 {@code material_batch_refs} → RAW_TO_PRODUCTION 边。本类建带领料引用报工的
      * <b>两处</b> (submitReport / recordMaterialInput) 都调这里。
@@ -568,6 +572,11 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 缺口 06: 多主料按份额汇合时, 偏差 >±2pp 必须带原因; 快照并入 customFields.blendRatio。
         if (blendRatioCheck != null) {
             blendRatioCheck.enforceYieldReport(factoryId, t, effMaterialRefs, req.getBlendRatio(), r);
+        }
+        // 缺口 03: 领用的源半成品是回料且占比超过本道产品上限 ⇒ 必须带原因 (同 web 工序表 ReworkRatioCheck)
+        if (reworkRatioCheck != null && sourceWip != null) {
+            reworkRatioCheck.enforceYieldReport(factoryId, t, sourceWip, effSourceWipQuantity, effInput,
+                    req.getReworkRatio(), r);
         }
         ProductionReport saved = reportRepo.save(r);
 
