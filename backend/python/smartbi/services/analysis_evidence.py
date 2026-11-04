@@ -1,6 +1,8 @@
 """Build model-safe statistics and separately bind readable, authorised evidence."""
 from collections import Counter,defaultdict
 import math
+import hashlib
+import json
 
 from .analysis_playbook import SECTIONS,VERSION
 
@@ -39,12 +41,23 @@ def build(report,context=None):
                               report.get('capabilities',{}).get('cost',{}).get('status') in ('summary_only','insufficient'))
     section_ids=list(SECTIONS) if has_cost else ['coverage']
     facts=[];display={};required={s:set() for s in section_ids}
+    by_project={p.get('projectId'):p for p in context.get('eligibleCostReview',{}).get('projects',[]) if p.get('projectId') is not None}
 
-    def add(section,kind,text,*,values=None,hazards=(),entity_refs=()):
+    def add(section,kind,text,*,values=None,hazards=(),entity_refs=(),group_key=None):
         if section not in required:section='coverage'
         ref=f'F{len(facts)+1:03d}'
         clean={k:n for k,v in (values or {}).items() if (n:=_number(v)) is not None}
         facts.append({'id':ref,'sectionId':section,'kind':kind,'statistics':clean,'considerations':list(hazards)})
+        if group_key is None and entity_refs:
+            keys=[]
+            for entity in entity_refs:
+                row=by_project.get(entity.get('projectId')) or entity
+                keys.append((row.get('productCode'),row.get('unit')))
+            if keys and all(k[0] and k[1] for k in keys) and len(set(keys))==1:group_key=keys[0]
+        if group_key and all(group_key):
+            facts[-1]['groupId']='G'+hashlib.sha256(json.dumps([report.get('scope'),group_key],sort_keys=True,default=str).encode()).hexdigest()[:12]
+        if kind in TYPE_SECTION or kind in ('CURRENCY_UNVERIFIED',):
+            facts[-1]['statisticScope']='alert_count_and_representative_ratio'
         display[ref]={'id':ref,'text':text,'entityRefs':list(entity_refs)}
         required[section].update(hazards)
         return ref
@@ -81,7 +94,7 @@ def build(report,context=None):
         for group in metric_groups.values():
             for rank,product in enumerate(sorted(group,key=lambda p:_number(p['weightedUnitCost']),reverse=True),1):
                 add('product_cost','weighted_unit_cost',f"{product['product']}：仅在字段通过校验子集内，{product['projects']} 张工单的加权材料加人工 {_fmt(product['weightedUnitCost'])}/{product['unit']}；工单范围 {_fmt(product['minimum'])}—{_fmt(product['maximum'])}/{product['unit']}，不代表完整制造成本。",
-                    values={'sameUnitAmountRank':rank,'sampleSize':product['projects']},hazards=['SMALL_SAMPLE'] if product['projects']<3 else [])
+                    values={'sameUnitAmountRank':rank,'sampleSize':product['projects']},hazards=['SMALL_SAMPLE'] if product['projects']<3 else [],group_key=(product.get('productCode'),product.get('unit')))
     if context:
         period=context.get('periodMetadata',{})
         if period:
@@ -96,7 +109,7 @@ def build(report,context=None):
             for rank,product in enumerate(sorted(group,key=lambda p:p['weightedUnitCost'],reverse=True),1):
                 add('product_cost','weighted_unit_cost',
                     f"{product['product']}：{product['projects']} 张资料具备工单，按产量加权的材料加人工 {_fmt(product['weightedUnitCost'])}/{product['unit']}，工单范围 {_fmt(product['minimum'])}—{_fmt(product['maximum'])}/{product['unit']}。不同产品不能仅据名次判断异常。",
-                    values={'sameUnitAmountRank':rank,'sampleSize':product['projects']},hazards=['SMALL_SAMPLE'] if product['projects']<3 else [])
+                    values={'sameUnitAmountRank':rank,'sampleSize':product['projects']},hazards=['SMALL_SAMPLE'] if product['projects']<3 else [],group_key=(product.get('productCode'),product.get('unit')))
         projects=context.get('eligibleCostReview',{}).get('projects',[])
         from .analysis_distillation import second_pass_facts
         for insight in second_pass_facts(projects):
@@ -118,6 +131,22 @@ def build(report,context=None):
                 ('低价对照单人工为零，应先核实人工是否另记，不能把差额认定为浪费。' if zero_labor else '这是账面差额，不是已证实的浪费或采购涨价。'),
                 values={'spread':delta/minimum,'sampleSize':len(group),'lowLaborZero':int(zero_labor)},
                 hazards=['ZERO_LABOR_BASELINE'] if zero_labor else [],entity_refs=[{k:p[k] for k in ('projectId','projectCode')} for p in (high,low)])
+        # All orders and units remain visible for coverage; no cost is imputed.
+        coverage_groups=defaultdict(list)
+        for project in context.get('cost',{}).get('projects',[]):
+            coverage_groups[(project.get('productCode'),project.get('unit'))].append(project)
+        for key,rows in coverage_groups.items():
+            if not key[0] or not key[1]:continue
+            eligible_rows=[p for p in rows if p.get('unitCostAvailable') is True]
+            quantities=[_number(p.get('finishedGood')) for p in rows]
+            eligible_quantities=[_number(p.get('finishedGood')) for p in eligible_rows]
+            quantity_available=all(q is not None and q>=0 for q in quantities)
+            total_qty=sum(quantities) if quantity_available else None
+            eligible_qty=sum(q for q in eligible_quantities if q is not None) if quantity_available else None
+            quantity_ratio=eligible_qty/total_qty if total_qty and eligible_qty is not None else None
+            add('coverage','product_coverage',f"{rows[0].get('product') or key[0]}：{len(rows)} 张工单中 {len(eligible_rows)} 张具备计算字段；按张数覆盖 {_fmt(len(eligible_rows)/len(rows)*100)}%，按已提供且同单位良品量覆盖 {_fmt(quantity_ratio*100 if quantity_ratio is not None else None)}%；缺少良品量时不猜产量覆盖。",
+                values={'sampleSize':len(rows),'eligibleCount':len(eligible_rows),
+                        'eligibleRatio':len(eligible_rows)/len(rows),'eligibleQuantityRatio':quantity_ratio},group_key=key)
         cost=context.get('cost',{})
         add('material','material_link_coverage',f"所选工单关联 {cost.get('linkedMaterialLines',0)} 行领退料；未关联 {cost.get('unlinkedMaterialLines',0)} 行，源端零金额 {cost.get('sourceZeroCostLines',0)} 行。",
             values={'linkedLines':cost.get('linkedMaterialLines'),'unlinkedLines':cost.get('unlinkedMaterialLines'),'zeroValueLines':cost.get('sourceZeroCostLines')},hazards=['MISSING_COST'] if cost.get('sourceZeroCostLines') else [])
@@ -139,16 +168,30 @@ def build(report,context=None):
         if not any(f['sectionId']==section for f in facts):
             add(section,'not_supplied',f'{SECTIONS[section]}未提供可验证的统计证据，当前不能判断。',hazards=['NO_DATA'])
     # Keep a bounded, explicit per-section sample. Omitted facts are disclosed.
-    selected=[]
+    selected=[];required_refs={sid:[] for sid in section_ids}
+    bridges=[f for f in facts if f['kind']=='same_product_bridge']
+    if bridges:
+        high=max(bridges,key=lambda f:f['statistics']['spread'])
+        required_refs['product_cost'].append(high['id'])
+        quote=next((f for f in facts if high.get('groupId') and f['kind']=='common_input_price_check' and f.get('groupId')==high.get('groupId')),None)
+        if quote:required_refs['product_cost'].append(quote['id'])
+        different=[f for f in bridges if f.get('groupId')!=high.get('groupId')]
+        if different:required_refs['product_cost'].append(min(different,key=lambda f:f['statistics']['spread'])['id'])
+    product_coverage=[f for f in facts if f['kind']=='product_coverage']
+    if product_coverage:
+        worst=min(product_coverage,key=lambda f:(f['statistics']['eligibleRatio'],-f['statistics']['sampleSize']))
+        required_refs['coverage'].append(worst['id'])
     for section in section_ids:
         group=[f for f in facts if f['sectionId']==section]
         critical=[]
         for code in sorted(required[section]):
             fact=next(f for f in group if code in f['considerations'])
             if fact not in critical:critical.append(fact)
+        critical += [f for f in group if f['id'] in required_refs[section] and f not in critical]
         selected.extend(critical+[f for f in group if f not in critical][:max(0,18-len(critical))])
     retained={f['id'] for f in selected}
     return {'version':VERSION,'isCostDataset':has_cost,'sectionIds':section_ids,'facts':selected,
             'displayFacts':{ref:value for ref,value in display.items() if ref in retained},
             'requiredConsiderations':{s:sorted(required[s]) for s in section_ids},
+            'requiredFactRefs':required_refs,
             'omittedFacts':len(facts)-len(selected)+report.get('analysisMetrics',{}).get('omittedGroups',0)}

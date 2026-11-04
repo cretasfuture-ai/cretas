@@ -28,7 +28,10 @@ def create_app():
     # Dedicated current-policy test Java; shared legacy 11010 stays untouched.
     os.environ['JAVA_API_BASE_URL']='http://127.0.0.1:11210'
     os.environ['SMARTBI_ALERT_AI_TRANSPORT']='ssh'
-    os.environ['SMARTBI_ALERT_AI_SSH_HOST']='canada-mini'
+    host=os.environ.get('BLACKLAKE_LOCAL_AI_SSH_HOST','canada-mini')
+    if host not in ('canada-mini','aurora-mini'):
+        raise RuntimeError('LOCAL_AI_APPROVED_HOST_REQUIRED')
+    os.environ['SMARTBI_ALERT_AI_SSH_HOST']=host
     os.environ['SMARTBI_ALERT_AI_MODEL']='qwen3.8:27b'
     os.environ['SMARTBI_LOCAL_ANALYST_ENABLED']='1'
     os.environ['SMARTBI_ALERT_AI_STATE_FILE']=str((Path(os.environ['LOCALAPPDATA'])/'Cretas/SmartBIAlerts/local-ai-state.sqlite3').resolve())

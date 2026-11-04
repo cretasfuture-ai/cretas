@@ -25,6 +25,7 @@ def response_for(pack,facts):
         for code in required:
             fact=next(f for f in group if code in f['considerations'])
             if fact['id'] not in refs:refs.append(fact['id'])
+        refs+= [ref for ref in pack.get('requiredFactRefs',{}).get(sid,[]) if ref not in refs]
         refs+= [f['id'] for f in group if f['id'] not in refs][:10-len(refs)]
         sections.append({'sectionId':sid,'evidenceRefs':refs,
             'whatItMeans':'材料和人工记录还要核对，成本差异只是线索，不能当成已确认的浪费。',
@@ -50,7 +51,8 @@ def install_model(monkeypatch,mutate_first=None):
     def infer(payload,config):
         prompt=json.loads(payload['messages'][1]['content']);calls.append(prompt)
         pack={'sectionIds':list(prompt['curriculum']),'facts':prompt['facts'],
-              'requiredConsiderations':prompt['requiredConsiderations']}
+              'requiredConsiderations':prompt['requiredConsiderations'],
+              'requiredFactRefs':{p['sectionId']:p['mustUseEvidenceRefs'] for p in prompt['sectionPlan']}}
         value=response_for(pack,prompt['reviewFacts'])
         if mutate_first and len(calls)==1:mutate_first(value)
         return provider.InferenceResult(value,{'inputTokens':10,'outputTokens':3,'totalTokens':13,'durationSeconds':0.1,'source':'ollama_response','estimated':False})
@@ -66,6 +68,18 @@ def test_profile_teaches_statistics_interpretation_and_keeps_private_names_off_m
     assert '怎么看' in wire and '为什么值得' in wire and '不能' in wire
     assert set(pack['sectionIds'])=={'coverage','material','labor','finished','product_cost','production','inventory'}
     assert all(f['id'] in pack['displayFacts'] for f in pack['facts'])
+
+
+def test_failed_explanation_enters_local_candidate_pool_without_auto_approval(monkeypatch,tmp_path):
+    from smartbi.services.analyst_flywheel import FlywheelStore
+    path=tmp_path/'learning.db';monkeypatch.setenv('SMARTBI_ANALYST_FLYWHEEL_DB',str(path))
+    def invalid(v):v['sections'][0]['whyItMatters']='材料成本严重低估，无法反映真实消耗。'
+    calls=install_model(monkeypatch,invalid)
+    report=sample_report();asyncio.run(analyst.enrich(report,'actor'))
+    assert len(calls)==2 and report['ai']['status']=='complete'
+    assert report['ai']['flywheel']['status']=='candidate_only'
+    assert len(report['ai']['flywheel']['candidateIds'])==1
+    assert FlywheelStore(path).export_confirmed(report['scope'],'train')==[]
 
 
 def test_generic_nonproduction_table_is_not_forced_into_manufacturing_cost():
@@ -99,6 +113,30 @@ def test_negated_impact_is_not_confused_with_asserting_understated_cost():
     analyst.validate(value,pack,facts)
     value['sections'][0]['whatItMeans']='当前数据说明全厂成本严重低估。'
     with pytest.raises(ValueError,match='UNSUPPORTED_COVERAGE_IMPACT'):analyst.validate(value,pack,facts)
+
+
+@pytest.mark.parametrize('text',[
+    '材料成本严重低估，导致单位成本失真，无法反映真实消耗。',
+    '无法倒推历史库存，材料成本严重低估。',
+    '不能确认真实损耗，但材料成本严重低估。',
+    '材料成本缺失会导致产品成本被低估，影响定价策略。',
+])
+def test_unrelated_later_negation_does_not_hide_an_unsupported_assertion(text):
+    assert analyst._unsupported_impact(text)
+    report=sample_report();pack=build(report);facts=provider.facts_for(report);value=response_for(pack,facts)
+    value['sections'][0]['whyItMatters']=text
+    with pytest.raises(ValueError,match='UNSUPPORTED_COVERAGE_IMPACT'):analyst.validate(value,pack,facts)
+
+
+@pytest.mark.parametrize('text',[
+    '不能断定实际成本一定严重低估。',
+    '如果材料漏记，单位成本可能严重低估。',
+    '若主料未记全，账面单位成本将严重低估。',
+    '材料成本可能未记全，不能确定是否低估。',
+    '材料成本是否被低估？',
+])
+def test_explicit_uncertainty_and_conditionals_remain_valid(text):
+    assert not analyst._unsupported_impact(text)
 
 
 def test_cautious_negative_claims_are_not_misread_as_certain_causes():

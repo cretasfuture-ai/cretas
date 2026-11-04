@@ -9,11 +9,12 @@
 
 - BLACKLAKE-AI-QUEUE-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-blacklake-ai-queue.md；PR#1390 draft，未生产。
 
-- BLACKLAKE-PERIOD-CORE-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope smartbi周期核心/tests；验收archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
-- BLACKLAKE-PERIOD-UI-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope Prototype日期/历史/追问UI/tests；验收archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
+- BLACKLAKE-PERIOD-CORE-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
+- BLACKLAKE-PERIOD-UI-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
 
 - SMARTBI-LOCAL-ANALYST-20261104 — review — Owner Codex/root；346后端/29前端；Base及scope见archive/2026-11-04-smartbi-local-analyst.md；PR#1390。
-- SMARTBI-CLAUDE-TEACHER-20261104 — review — Owner Codex/root — Base bb1a811201 — Scope 教师/方法、隔离Vite代理及tests/docs；347/12/15测试通过，1.47USD；API/UI已回读；验收见archive/2026-11-04-smartbi-claude-teacher.md；PR#1390。
+- SMARTBI-CLAUDE-TEACHER-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-smartbi-claude-teacher.md；PR#1390。
+- SMARTBI-TEACHER-FLYWHEEL-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-smartbi-teacher-flywheel.md；PR#1390 draft；359主链/19新增通过；.9七板块partial；不改长期云路由/生产。
 - BLACKLAKE-PERIOD-ADAPTER-20261104 — review — Owner Codex/root — Base 0fb8af4582eca8c987e859fcc611c1db2589e4e5 — Scope blacklake周期投影/API/运行器、store/app/preview、tests与文档；六类真实周期API通过，规则已存/27B配额等待；23:55定时已启用；仅隔离测试；回执archive/2026-11-04-blacklake-period-analysis.md。
 
 - BLACKLAKE-PLAIN-PAGE-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope 隔离PrototypeAnalysis/Intelligence及comparison helper/spec；两位小数、问题工单与冲突组阻断；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。

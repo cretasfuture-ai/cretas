@@ -15,6 +15,18 @@ EXAMPLES=[
      'secondLook':'核实数量是否实称实耗，还是按产量、配方或默认规则生成；再查退料、损耗和期初在制品。',
      'indicators':['账面投入产出比','相同投入产出比的重复程度','计量来源是否可追溯','损耗记录是否具备'],
      'direction':'账面相等不证明实际没有损耗；先确认计量来源，再讨论出成率，不指控数据造假。'},
+    {'case':'normal_control','firstLook':'高差异组与另一产品的稳定组同时存在。',
+     'secondLook':'分别解释两组，稳定组保留为正常对照；样本少，不能推广为标准成本，也不能把高差异组的问题套给稳定组。',
+     'indicators':['同产品同单位组内差异','稳定对照','样本量','数据完整性'],
+     'direction':'必须说清稳定组当前未见明显账面波动，不证明实际完整或无异常；同码异名另行核实。'},
+    {'case':'coverage_selection','firstLook':'可算工单只是部分样本，缺失集中于特定批次。',
+     'secondLook':'同时看工单覆盖和同单位产量覆盖；先补缺失批次，再讨论加权成本。',
+     'indicators':['工单覆盖','产量覆盖','缺失集中程度','未知数量'],
+     'direction':'未知不能填零；加权不能消除选择偏差，也不能猜测偏差方向。'},
+    {'case':'contradictory_impact','firstLook':'错误表述：材料成本缺失会导致产品成本严重低估，影响定价。后文又说不能确认低估。',
+     'secondLook':'改为：材料成本可能未记全，先核零值原因、计价状态和是否另记；尚不能确定成本偏差的方向和程度。',
+     'indicators':['证据是否支持影响程度','正文与限制是否一致','必需风险是否写进白话解释'],
+     'direction':'不照抄错误表述。风险代号写进列表不等于解释风险；有样本少就明确说样本少、不能推广。'},
 ]
 
 
@@ -49,6 +61,29 @@ def peer_basis(high,low):
             'highValuationPerKg':upper[1],'lowValuationPerKg':lower[1]}
 
 
+def common_quotes(high,low):
+    """Compare only observed positive-quantity book quotes, not purchase prices."""
+    def index(project):
+        values=defaultdict(list)
+        for row in project.get('components',[]):
+            qty=_decimal(row.get('netConsumption'));price=_decimal(row.get('unitPrice'))
+            if not row.get('materialCode') or not row.get('unit') or qty is None or qty<=0 or price is None or price<0:continue
+            values[(row['materialCode'],str(row['unit']).casefold())].append((price,row.get('material')))
+        return values
+    a,b=index(high),index(low);same=changed=ambiguous=conflicts=0;details=[]
+    for key in sorted(set(a)&set(b)):
+        pa={v[0] for v in a[key]};pb={v[0] for v in b[key]}
+        names_a={v[1] for v in a[key]};names_b={v[1] for v in b[key]}
+        conflicts+=int(names_a!=names_b or len(names_a|names_b)>1)
+        if len(pa)!=1 or len(pb)!=1:ambiguous+=1;continue
+        upper,lower=next(iter(pa)),next(iter(pb))
+        same+=int(upper==lower);changed+=int(upper!=lower)
+        if len(details)<4:details.append(f"编码 {key[0]}：两单领料账面单价 {upper:,.2f}/{key[1]} 与 {lower:,.2f}/{key[1]}")
+    if not (same+changed+ambiguous):return None
+    return {'sameBookQuoteCount':same,'changedBookQuoteCount':changed,
+            'ambiguousBookQuoteCount':ambiguous,'inputNameConflictCount':conflicts},details
+
+
 def second_pass_facts(projects):
     groups=defaultdict(list);names=defaultdict(set);facts=[]
     known_products={p.get('productCode') for p in projects if p.get('productCode')}
@@ -73,6 +108,14 @@ def second_pass_facts(projects):
                     'text':f"{name}：{high['projectCode']} 对比 {low['projectCode']}，每{unit}成品的账面公斤投入变化 {basis['inputQuantityChange']*100:,.2f}%，领料折算值变化 {basis['inputValuationChange']*100:,.2f}%；按公斤计量材料的每{unit}账面净额变化 {basis['kgMaterialCostPerFinishedChange']*100:,.2f}%，不含非公斤材料。材料组合{'不同' if basis['inputKindsChanged'] else '相同'}。折算值不是采购价，不能直接认定涨价或超耗。",
                     'values':{k:basis[k] for k in ('inputQuantityChange','inputValuationChange','inputKindsChanged','kgMaterialCostPerFinishedChange')},
                     'hazards':['MATERIAL_MIX'] if basis['inputKindsChanged'] else [],
+                    'refs':[{'projectId':p['projectId'],'projectCode':p['projectCode']} for p in (high,low)]})
+            quotes=common_quotes(high,low)
+            if quotes:
+                values,details=quotes
+                facts.append({'section':'product_cost','kind':'common_input_price_check',
+                    'text':f"{name}：{high['projectCode']} 对比 {low['projectCode']}，"+'；'.join(details)+
+                           f"。共同编码中 {values['sameBookQuoteCount']} 组账面单价相同、{values['changedBookQuoteCount']} 组不同、{values['ambiguousBookQuoteCount']} 组多价无法直接比较；{values['inputNameConflictCount']} 组名称不一致。先核实材料组合和阶段，不能从加权折算值变化直接认定采购涨价。",
+                    'values':values,'hazards':[],
                     'refs':[{'projectId':p['projectId'],'projectCode':p['projectCode']} for p in (high,low)]})
         masses=[_mass(p) for p in group]
         if len(group)>=3 and str(unit).casefold()=='kg' and all(m and abs(m[0]-1)<Decimal('0.000000001') for m in masses):

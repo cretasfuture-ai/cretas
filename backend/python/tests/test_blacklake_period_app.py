@@ -3,6 +3,21 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import pytest
+
+
+@pytest.mark.parametrize('host,valid',[('aurora-mini',True),('unexpected-host',False)])
+def test_only_approved_operator_compute_hosts(host,valid):
+    root=Path(__file__).resolve().parents[1]
+    code='''
+import blacklake.smartbi_app as module
+module.settings=lambda p:{'jwt_secret':'synthetic-no-real-key-for-bootstrap-test-1234'}
+module.create_app()
+'''
+    result=subprocess.run([sys.executable,'-c',code],cwd=root,
+        env=dict(os.environ,BLACKLAKE_LOCAL_AI_SSH_HOST=host),capture_output=True,text=True,timeout=40)
+    assert (result.returncode==0) is valid
+    if not valid:assert 'LOCAL_AI_APPROVED_HOST_REQUIRED' in result.stderr
 
 
 def test_standalone_period_adapter_registers_routes_before_any_real_data_access():

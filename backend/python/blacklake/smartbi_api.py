@@ -115,7 +115,7 @@ async def followup(payload: Followup, request: Request):
     # Never send free-text questions, history, source rows or names to a model.
     # The rule answer uses current evidence; 27B only selects bounded checks.
     from smartbi.services.alert_local_ai import enrich
-    if report.get('ai',{}).get('status')!='complete':
+    if report.get('ai',{}).get('status') not in ('complete','partial'):
         await enrich(report,getattr(request.state,'user_id',None),analysis_context=data)
         if report.get('ai',{}).get('status')=='complete' and payload.period is None:
             from .section_review import save

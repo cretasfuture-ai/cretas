@@ -38,5 +38,6 @@ def test_stage_conflicts_cannot_be_turned_into_comparable_quantity_effects():
 
 def test_distilled_examples_are_methods_not_factory_codes_or_fixed_cost_answers():
     wire=str(EXAMPLES)
-    assert len(EXAMPLES)==3 and all(e['firstLook'] and e['secondLook'] and e['indicators'] for e in EXAMPLES)
+    assert {'normal_control','coverage_selection','contradictory_impact'}<={e['case'] for e in EXAMPLES}
+    assert all(e['firstLook'] and e['secondLook'] and e['indicators'] for e in EXAMPLES)
     assert 'GD2026' not in wire and '六膳门' not in wire
