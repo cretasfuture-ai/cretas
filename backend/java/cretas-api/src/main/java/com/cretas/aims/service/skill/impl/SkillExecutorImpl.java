@@ -86,6 +86,15 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired(required = false)
     private InventoryAnalysisWorkflow inventoryAnalysisWorkflow;
 
+    /** Direct callers bypass SkillRouter, so catalog Skills repeat the tenant/active gate here. */
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.skill.SkillRegistry skillRegistry;
+
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.intent.IntentConfigManagementService intentConfigManagementService;
+
     // S6-02 — a tool with an approved runtime policy runs through the tool gateway, exactly as an
     // interactive call of that tool does: the gateway re-reads the user, factory and permissions
     // from the database, checks that the policy admits SKILL_WORKFLOW, enforces confirmation and
@@ -205,6 +214,11 @@ public class SkillExecutorImpl implements SkillExecutor {
                 log.warn("Skill is disabled: {}", skill.getName());
                 return SkillResult.error(skill.getName(), "Skill is disabled",
                         executedTools, System.currentTimeMillis() - startTime);
+            }
+
+            SkillResult catalogGate = catalogSkillGate(skill, context, executedTools, startTime);
+            if (catalogGate != null) {
+                return catalogGate;
             }
 
             // 2a. Permission preflight (S6 acceptance, ERP-S6-02-SKILL-ROLE-BYPASS-001): every tool this Skill
@@ -488,6 +502,50 @@ public class SkillExecutorImpl implements SkillExecutor {
                 .executedTools(executedTools)
                 .executionTime(System.currentTimeMillis() - startTime)
                 .build();
+    }
+
+    /**
+     * Router filtering is not an execution boundary: scheduled/direct callers can invoke this
+     * service with a SkillDefinition directly. Catalog-owned Skills therefore require both the
+     * factory Skill switch and the active, non-deleted factory/platform intent binding here.
+     */
+    private SkillResult catalogSkillGate(SkillDefinition skill, SkillContext context,
+                                         List<String> executedTools, long startTime) {
+        String intentCode = com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(skill.getName());
+        if (intentCode == null) {
+            return null;
+        }
+        if (context == null || context.getFactoryId() == null || context.getFactoryId().isBlank()) {
+            return SkillResult.error(skill.getName(), "Catalog Skill requires a factory context",
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
+        if (skillRegistry == null || intentConfigManagementService == null) {
+            return SkillResult.error(skill.getName(), "Catalog Skill authorization is unavailable; execution refused",
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
+        try {
+            SkillDefinition factorySkill = skillRegistry.getSkillForFactory(context.getFactoryId(), skill.getName());
+            if (factorySkill == null || !factorySkill.isEnabled()) {
+                return SkillResult.error(skill.getName(), "Catalog Skill is disabled for this factory",
+                        executedTools, System.currentTimeMillis() - startTime);
+            }
+            boolean intentAvailable = intentConfigManagementService.getIntentByCode(
+                            context.getFactoryId(), intentCode)
+                    .filter(intent -> Boolean.TRUE.equals(intent.getIsActive()) && intent.getDeletedAt() == null)
+                    .filter(intent -> intent.getFactoryId() == null
+                            || context.getFactoryId().equals(intent.getFactoryId()))
+                    .isPresent();
+            if (!intentAvailable) {
+                return SkillResult.error(skill.getName(), "Catalog intent is inactive or unavailable for this factory",
+                        executedTools, System.currentTimeMillis() - startTime);
+            }
+            return null;
+        } catch (RuntimeException gateFailure) {
+            log.warn("Catalog Skill gate failed closed: skill={}, factoryId={}, error={}",
+                    skill.getName(), context.getFactoryId(), gateFailure.getMessage());
+            return SkillResult.error(skill.getName(), "Catalog Skill authorization check failed; execution refused",
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
     }
 
     private String clarificationQuestion(String parameter) {
