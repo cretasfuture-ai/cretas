@@ -11,7 +11,7 @@ spring:
             master:
                 url: jdbc:postgresql://127.0.0.1:5432/mall_center?currentSchema=public&stringtype=unspecified
                 username: cretas
-                password: Cretas2024!
+                password: ${MALL_DB_PASSWORD}
             # 从库数据源
             slave:
                 # 从数据源开关/默认关闭
