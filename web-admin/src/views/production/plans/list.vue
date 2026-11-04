@@ -2822,10 +2822,12 @@ async function submitComplete() {
           confirm: true,
         }
       : {
-          // Legacy-compatible exception override path. The normal path above never
-          // echoes server facts back; only a human-resolved blocker uses these fields.
+          // Exception override path. The normal path above never echoes server facts
+          // back; only a human-resolved blocker uses these fields.
+          // confirm 必须是 true: 后端 confirm=false 只预览不结单 (D-S315-02)。
           idempotencyKey: settlementIdempotencyKey.value,
-          confirm: false,
+          confirm: true,
+          manualOverride: true,
           actualFinishedQuantity: completeActualQuantity.value,
           defectCountOutcome: completeForm.value.defectCountOutcome || null,
           defectQuantity: completeForm.value.defectCountOutcome === 'COUNTED'

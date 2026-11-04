@@ -13,7 +13,8 @@ describe('clean settlement external WIP contract', () => {
   it('switches to the manual payload when a WIP row is added', () => {
     expect(source).toContain('const hasManualWip = settlementPrefillClean.value');
     expect(source).toContain('completeForm.value.semiFinishedConsumptions.length > 0');
-    expect(source).toContain('confirm: false');
+    expect(source).toContain('manualOverride: true');
+    expect(source).not.toContain('confirm: false');
     expect(source).toContain('rawMaterialConsumptions: buildRawConsumptionPayload()');
     expect(source).toContain('laborSegments: completeForm.value.laborSegments.length > 0');
     expect(source).toContain('semiFinishedConsumptions: buildWipConsumptionPayload()');

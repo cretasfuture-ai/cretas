@@ -494,6 +494,8 @@ class WorkshopReportReservationSettlementContractTest {
     /** 结单请求: 单行原料领用 = 报工 materialBatchRefs 聚合出来的那一笔。 */
     private ProductionSettlementRequest requestConsuming(BigDecimal quantity) {
         return ProductionSettlementRequest.builder()
+                .confirm(true)
+                .manualOverride(true)
                 .idempotencyKey("idem-reserve-1")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
@@ -515,6 +517,7 @@ class WorkshopReportReservationSettlementContractTest {
     private void wireSettlement(MaterialBatch batch) {
         ProductionPlan plan = plan();
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
                         FACTORY_ID, PLAN_ID, "idem-reserve-1")).thenReturn(Optional.empty());

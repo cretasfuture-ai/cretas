@@ -285,6 +285,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
 
+    /** 结单时把剩余半成品转进半成品库 (D-S315-02); required=false 同上, 真要入库却没有它 ⇒ 500。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.SettlementSemiStockingService settlementSemiStockingService;
+
     /** raw-centric 多成品: 建计划/转批次守卫 —— 断言 owner 启用 workflow 终端覆盖所选成品. required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.ProductWorkflowResolutionService workflowResolutionService;
@@ -3627,13 +3631,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新页面后重试, 系统会自动生成结单提交键")
                     .withHintTarget("核对结单");
         }
+        assertSemiFinishedQuantityValid(request);
 
-        ProductionPlan plan = request.isConfirm()
-                ? productionPlanRepository.findByIdForUpdate(planId)
-                        .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
-                        .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId))
-                : productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
-                        .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        // D-S315-02: confirm=false 只预览。走独立的只读分支, ⛔ 不靠事务回滚兜底 ——
+        // 结单链路里有独立事务的写点, 回滚挡不住; 下面的库存释放与扣减也一步都不能走。
+        if (!request.isConfirm()) {
+            return previewSettlement(factoryId, planId, request);
+        }
+
+        ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
         requireVisiblePlan(factoryId, plan);
 
         Optional<ProductionSettlement> sameRequest = productionSettlementRepository
@@ -3674,21 +3682,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         ensureWorkflowSettlementUsesSubmittedReports(factoryId, plan);
-        ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || request.isConfirm()
-                ? deriveConfirmedSettlementRequest(factoryId, planId, request, isWorkflowPlan(plan))
-                : request;
-        if (isWorkflowPlan(plan)
-                && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
-            if (customerSuppliedSettlementCoverageGuard == null) {
-                throw new BusinessException(500, "客供结单完整性校验服务未初始化，不能结单")
-                        .withCode("CUSTOMER_SUPPLIED_SETTLEMENT_GUARD_UNAVAILABLE")
-                        .withHintTarget("rawMaterialConsumptions");
-            }
-            customerSuppliedSettlementCoverageGuard.mergeMissingManualRawConsumptions(
-                    factoryId, plan, effectiveRequest, request);
-        }
+        ProductionSettlementRequest effectiveRequest = resolveEffectiveSettlementRequest(factoryId, planId, plan, request);
 
         validateSettlementRequest(plan, effectiveRequest);
+        com.cretas.aims.service.production.SettlementSemiStockingService.Stocking semiStocking =
+                resolveSemiStocking(factoryId, plan, effectiveRequest);
 
         // 缺陷 38 结单热修: 物料大类在这里一次性批量取全 (⛔ 不逐行查),
         // 然后传进下面两个循环调用链 (validation + posting), 避免 N+1。
@@ -3728,6 +3726,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setSettledAt(LocalDateTime.now());
         settlement = productionSettlementRepository.save(settlement);
         persistWorkflowSettlementOutputs(factoryId, plan, settlement, effectiveRequest);
+        String semiAnchor = semiStocking == null ? null
+                : settlementSemiStockingService.stock(factoryId, plan, semiStocking, settlement.getId());
 
         for (ProductionSettlementConsumption line : consumptionLines) {
             line.setSettlementId(settlement.getId());
@@ -3794,11 +3794,107 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     settlement.getId(), settlement.getActualFinishedQuantity()));
         }
 
-        List<String> warnings = List.of("已按实际领用扣减原料/半成品库存; 成品需仓库确认实收后再入库");
+        List<String> warnings = new ArrayList<>();
+        warnings.add("已按实际领用扣减原料/半成品库存; 成品需仓库确认实收后再入库");
+        if (semiAnchor != null) {
+            warnings.add("剩余半成品 " + stripTrailing(semiStocking.quantity()) + " 已入半成品库 (" + semiAnchor
+                    + "), 这批料的成本仍算在本计划成品上, 半成品库里成本未知");
+        }
         log.info("六扇门生产结单完成: factoryId={}, planId={}, settlementId={}, finished={}, semiFinished={}",
                 factoryId, planId, settlement.getId(),
                 settlement.getActualFinishedQuantity(), settlement.getActualSemiFinishedQuantity());
         return toSettlementResponse(settlement, warnings);
+    }
+
+    /** 半成品量是请求里唯一没有报工事实可对的数, 不合法就拒绝, ⛔ 不当成 0。 */
+    private void assertSemiFinishedQuantityValid(ProductionSettlementRequest request) {
+        BigDecimal semi = request.getActualSemiFinishedQuantity();
+        if (semi == null || semi.signum() < 0) {
+            throw new BusinessException(400, "实际半成品量不合法: " + semi)
+                    .withCode("SETTLEMENT_SEMI_QUANTITY_INVALID")
+                    .withHint("请填写大于等于 0 的数字; 没有要入半成品库的量就填 0")
+                    .withHintTarget("actualSemiFinishedQuantity");
+        }
+    }
+
+    /**
+     * 这次结单实际用的事实。Workflow 计划与普通确认都以报工为准;
+     * 只有非 Workflow 计划的人工补录才用请求里的手工事实。预览与正式结单走这同一份。
+     */
+    private ProductionSettlementRequest resolveEffectiveSettlementRequest(
+            String factoryId, String planId, ProductionPlan plan, ProductionSettlementRequest request) {
+        ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || !request.isManualOverride()
+                ? deriveConfirmedSettlementRequest(factoryId, planId, request, isWorkflowPlan(plan))
+                : request;
+        if (isWorkflowPlan(plan)
+                && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            if (customerSuppliedSettlementCoverageGuard == null) {
+                throw new BusinessException(500, "客供结单完整性校验服务未初始化，不能结单")
+                        .withCode("CUSTOMER_SUPPLIED_SETTLEMENT_GUARD_UNAVAILABLE")
+                        .withHintTarget("rawMaterialConsumptions");
+            }
+            customerSuppliedSettlementCoverageGuard.mergeMissingManualRawConsumptions(
+                    factoryId, plan, effectiveRequest, request);
+        }
+        return effectiveRequest;
+    }
+
+    private com.cretas.aims.service.production.SettlementSemiStockingService.Stocking resolveSemiStocking(
+            String factoryId, ProductionPlan plan, ProductionSettlementRequest effectiveRequest) {
+        BigDecimal semi = effectiveRequest.getActualSemiFinishedQuantity();
+        if (semi == null || semi.signum() <= 0) {
+            return null;
+        }
+        if (settlementSemiStockingService == null) {
+            throw new BusinessException(500, "半成品入库服务未初始化，不能结单")
+                    .withCode("SETTLEMENT_SEMI_STOCKING_UNAVAILABLE")
+                    .withHintTarget("actualSemiFinishedQuantity");
+        }
+        return settlementSemiStockingService.resolve(factoryId, plan, semi, this::isUsableProcessSheetRow);
+    }
+
+    /**
+     * confirm=false: 与正式结单同样的判定, 但只读 —— 不拿悲观锁、不释放报工占用、不写结单和库存。
+     * 判定不过时报的错与正式结单相同; 过了就返回将要结成的数, {@code settled=false}。
+     */
+    private ProductionSettlementResponse previewSettlement(String factoryId, String planId,
+                                                           ProductionSettlementRequest request) {
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
+
+        Optional<ProductionSettlement> sameRequest = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                        factoryId, planId, request.getIdempotencyKey());
+        if (sameRequest.isPresent()) {
+            return toSettlementResponse(sameRequest.get(), List.of("该结单请求已提交过, 已返回原结单结果"));
+        }
+        if (productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId).isPresent()) {
+            throw new BusinessException(409, "该生产计划已结单, 不能重复完成")
+                    .withCode("PRODUCTION_ALREADY_SETTLED")
+                    .withHint("请刷新生产计划列表查看最新状态")
+                    .withHintTarget("核对结单");
+        }
+        if (productionReportCorrectionService != null) {
+            productionReportCorrectionService.assertNoPendingForPlan(factoryId, planId);
+        }
+        ensureWorkflowSettlementUsesSubmittedReports(factoryId, plan);
+        ProductionSettlementRequest effectiveRequest = resolveEffectiveSettlementRequest(factoryId, planId, plan, request);
+        validateSettlementRequest(plan, effectiveRequest);
+        resolveSemiStocking(factoryId, plan, effectiveRequest);
+
+        return ProductionSettlementResponse.builder()
+                .settled(false)
+                .productionPlanId(planId)
+                .planNumber(plan.getPlanNumber())
+                .status(plan.getStatus() == null ? null : plan.getStatus().name())
+                .plannedQuantity(zeroIfNull(plan.getPlannedQuantity()))
+                .actualFinishedQuantity(effectiveRequest.getActualFinishedQuantity())
+                .actualSemiFinishedQuantity(effectiveRequest.getActualSemiFinishedQuantity())
+                .quantityUnit(resolveSettlementRequestUnit(effectiveRequest))
+                .warnings(List.of("这是结单预览, 没有结单也没有写入任何数据; 确认无误后用 confirm=true 提交"))
+                .build();
     }
 
     /**
@@ -3817,7 +3913,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionSettlementPrefillResponse latest = getSettlementPrefill(factoryId, planId);
         // Run the same one-click guard inside the locked settlement transaction,
         // after its idempotent return. A retry must not audit already-consumed stock.
-        if (confirmation.isConfirm()) {
+        // 人工补录是文员处理过阻塞项之后的路, 不过一键确认闸; 预览走这里, 判定与正式结单一致。
+        if (!confirmation.isManualOverride()) {
             if (customerSuppliedSettlementCoverageGuard == null) {
                 throw new BusinessException(500, "结单完整性校验服务未初始化，不能结单")
                         .withCode("CUSTOMER_SUPPLIED_SETTLEMENT_GUARD_UNAVAILABLE");
@@ -3842,8 +3939,21 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint(isBlank(detail) ? "请先完成并正式提交逐道报工" : detail)
                     .withHintTarget("核对结单");
         }
+        // 成品量以报工为准。传了一个对不上的数就拒绝 —— 换成报工的数再结单, 就是把用户的数悄悄改掉。
+        BigDecimal claimedFinished = confirmation.getActualFinishedQuantity();
+        BigDecimal reportedFinished = derived.getActualFinishedQuantity();
+        if (!confirmation.isManualOverride() && claimedFinished != null && reportedFinished != null
+                && claimedFinished.compareTo(reportedFinished) != 0) {
+            throw new BusinessException(409, "结单成品量与报工不一致: 传入 " + stripTrailing(claimedFinished)
+                    + ", 报工 " + stripTrailing(reportedFinished))
+                    .withCode("PRODUCTION_SETTLEMENT_QUANTITY_CONFLICT")
+                    .withHint("成品量以逐道报工为准; 如报工有误, 请先更正报工再结单")
+                    .withHintTarget("actualFinishedQuantity");
+        }
         derived.setIdempotencyKey(confirmation.getIdempotencyKey());
         derived.setConfirm(true);
+        // 报工里没有「剩余半成品」这个事实 (预填恒为 0), 这个数只能来自请求, ⛔ 不能被预填的 0 盖掉。
+        derived.setActualSemiFinishedQuantity(confirmation.getActualSemiFinishedQuantity());
         derived.setQuantityVarianceReason(firstNonBlank(
                 confirmation.getQuantityVarianceReason(), derived.getQuantityVarianceReason()));
         derived.setQuantityVarianceNote(trimToNull(confirmation.getQuantityVarianceNote()));

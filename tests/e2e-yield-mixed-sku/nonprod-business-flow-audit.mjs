@@ -411,6 +411,8 @@ async function main() {
   const settlementSubmit = await api('POST', `/${FACTORY_ID}/production-plans/${encodeURIComponent(planId)}/settle`, {
     ...prefill,
     idempotencyKey: `${AUDIT_PREFIX}-settle`,
+    confirm: true,
+    manualOverride: true,
     actualFinishedQuantity: prefill.actualFinishedQuantity ?? 0.13,
     actualSemiFinishedQuantity: prefill.actualSemiFinishedQuantity ?? 0,
     quantityUnit: prefill.quantityUnit || 'kg',

@@ -151,6 +151,7 @@ class SettlementLineageWiringTest {
     void settlementSfiFeedWritesWipConsume() throws Exception {
         ProcessSheetRow row = feedRow("SFI-STOCK", "30");
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan()));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan()));
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
                 FACTORY_ID, PLAN_ID, "idem-l")).thenReturn(Optional.empty());
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
@@ -172,6 +173,8 @@ class SettlementLineageWiringTest {
                 .thenAnswer(inv -> inv.getArgument(3));
 
         service.settleProduction(FACTORY_ID, PLAN_ID, ProductionSettlementRequest.builder()
+                .confirm(true)
+                .manualOverride(true)
                 .idempotencyKey("idem-l")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)

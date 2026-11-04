@@ -25,12 +25,20 @@ public class ProductionSettlementRequest {
     private String idempotencyKey;
 
     /**
-     * Normal settlement contract: the caller only confirms that the plan should be closed.
-     * When true, the service ignores client-supplied production facts and re-derives them
-     * from submitted process reports inside the settlement transaction.
+     * false = 只预览, 不写任何数据; true = 结单 (D-S315-02)。
+     *
+     * <p>true 时生产事实以报工为准, 在结单事务内重算: {@code actualFinishedQuantity} 与报工不一致
+     * 直接拒绝, 不静默替换。报工里没有的 {@code actualSemiFinishedQuantity} 按传入的量结单, 半成品入半成品库。
      */
     @Builder.Default
     private boolean confirm = false;
+
+    /**
+     * 人工补录: 文员处理完阻塞项后, 按手工录入的事实结单 (web「部分数据需人工核对补全」那条路)。
+     * 只在 {@code confirm=true} 时写库; Workflow 计划的产出与领用仍以报工为准。
+     */
+    @Builder.Default
+    private boolean manualOverride = false;
 
     @PositiveOrZero(message = "actualFinishedQuantity must be >= 0")
     private BigDecimal actualFinishedQuantity;

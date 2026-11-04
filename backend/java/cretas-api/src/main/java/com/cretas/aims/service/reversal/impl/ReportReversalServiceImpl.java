@@ -1989,6 +1989,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             log.debug("[SP2] restoreSettlementConsumption: 无结单记录, 跳过 planId={}", planId);
             return false;
         }
+        reverseSettlementSemiStocking(factoryId, planId, settlement, operatorId);
 
         List<ProductionSettlementConsumption> lines = productionSettlementConsumptionRepository
                 .findBySettlementIdAndDeletedAtIsNull(settlement.getId());
@@ -2042,6 +2043,29 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔, settlement 已软删",
                 planId, settlement.getId(), restoredMaterial, restoredSemi);
         return true;
+    }
+
+    /**
+     * 结单转进半成品库的量随整单撤回退出来 (D-S315-02); 已被领走时 reverseClerkOutput 拒绝, 整体回滚。
+     * 在制批次那一半不用还: 撤回已把这一批的在制物料批整批作废 (见 voidClerkWipStock)。
+     * 没有这一行 = 结单时没入库 (量为 0, 或这个功能上线前的结单), 没东西可退。
+     */
+    private void reverseSettlementSemiStocking(String factoryId, String planId,
+                                               ProductionSettlement settlement, Long operatorId) {
+        BigDecimal stocked = settlement.getActualSemiFinishedQuantity();
+        if (stocked == null || stocked.signum() <= 0) {
+            return;
+        }
+        String anchor = com.cretas.aims.service.production.SettlementSemiStockingService
+                .anchor(planId, settlement.getId());
+        if (wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, anchor).isEmpty()) {
+            return;
+        }
+        if (wipInventoryService == null) {
+            throw new BusinessException(500, "半成品入库撤回服务未初始化, 不能撤回")
+                    .withCode("SETTLEMENT_SEMI_STOCKING_UNAVAILABLE");
+        }
+        wipInventoryService.reverseClerkOutput(factoryId, anchor, stocked, null, operatorId);
     }
 
     /** Validate the settlement's plan/batch scope before any report or settlement mutation. */
