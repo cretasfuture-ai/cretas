@@ -74,43 +74,8 @@ def _spec(payload, query, **kw):
 
 # ── 正向：老板已经指定了门店，⛔ 不许再问「是指哪家店」 ────────────────────
 
-@pytest.mark.parametrize("query, missing", [
-    ("怎么让最差的那家店好起来", ["time_range", "store_scope"]),
-    ("最好的那家店做对了什么", ["time_range", "store_scope"]),
-    # prod 实测模型两种顺序都出过 —— 判据不能依赖顺序
-    ("垫底那家怎么救", ["store_scope", "time_range"]),
-])
-def test_计算式指代不再被问是指哪家店(query, missing):
-    spec = _spec(superlative_payload(missing_fields=missing), query)
-
-    assert spec.store_scope == "all", "按门店拆的计划, 门店范围就是全部门店"
-    assert spec.clarification_needed is False, (
-        "老板已经用「最差的那家」指定了门店, 只剩时间 —— "
-        "时间有安全默认值且会被显式披露")
-    assert spec.time_range_defaulted is True, "时间走既有的默认窗口 + 明示"
-    assert spec.store_scope_defaulted is True, (
-        "⛔ 必须留下披露标记 —— 偷偷替老板选口径才是降级, 选了并说出来不是")
 
 
-def test_模型没说缺门店时同样把按门店拆读成全部门店():
-    """prod 实测「拖后腿的那家店是哪家」: 模型 `missing_fields=('time_range',)`,
-
-    门店范围留空 → 下游 `_apply_store_scope_guard` 自己问了一句
-    「这项分析要看哪一组门店？」。⇒ 判据挂在 `dimensions` 上而不是挂在
-    `missing_fields` 上, 两条路才都接得住。
-    """
-    spec = _spec(
-        superlative_payload(
-            intent="RESTAURANT_OPS_STORE_MARGIN",
-            analysis_action="lookup",
-            missing_fields=["time_range"],
-            clarification_question="你想看哪个时间范围？",
-        ),
-        "拖后腿的那家店是哪家",
-    )
-
-    assert spec.store_scope == "all"
-    assert spec.clarification_needed is False
 
 
 # ── 阴性对照：每一条都在守一个具体行为，破坏那个行为它就该红 ───────────────
@@ -179,19 +144,6 @@ def test_对照4_单店租户逐字维持既有行为():
     assert spec.clarification_needed is True
 
 
-def test_对照5_还缺指标时反问必须留着():
-    """守的行为: 指标**没有**无歧义的默认值, 补错等于给一个看着像答案的错答案。
-
-    prod 实测出过 `missing_fields=('time_range', 'metric')`。
-    """
-    spec = _spec(
-        superlative_payload(missing_fields=["time_range", "metric"]),
-        "我要不要关掉最差的那家店",
-    )
-
-    assert spec.clarification_needed is True
-    assert spec.store_scope == "all", (
-        "门店那一格照样封定 —— 但只剩的那个缺项是指标, 所以还要问")
 
 
 def test_对照6_澄清延续轮逐字维持既有行为():

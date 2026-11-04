@@ -158,14 +158,6 @@ class TestTheControls:
         assert spec.clarification_needed is False, (
             "名录问题被接管之后还在反问 —— 正是它当初要消灭的那件事")
 
-    def test_control_2_a_pure_directory_question_is_unchanged(self):
-        """纯名录问句：模型自己给 STORE_DIRECTORY ⇒ 与本改动无关，行为不变。"""
-        spec = _compile(DIRECTORY_PLAN, DIRECTORY_QUERY)
-        assert spec.intent == "RESTAURANT_OPS_STORE_DIRECTORY"
-        assert spec.requested_metrics == ()
-        assert spec.wants_margin is False
-        assert spec.store_scope == "all"
-        assert spec.clarification_needed is False
 
     def test_control_3_a_sentence_the_regex_does_not_match(self):
         """措辞不匹配 ⇒ 名录那条路够不着它。

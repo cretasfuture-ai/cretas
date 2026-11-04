@@ -25,16 +25,8 @@ import java.util.stream.Collectors;
  * - "创建一个skill叫库存质检联查，包含库存查询和质检查询"
  * - "创建推荐的 material-auto-combo skill"
  *
- * ═══════════════════════════════════════════════════════════════════════════
- * factoryId 隔离豁免说明 (Whitelist — Audit 2026-04-07)
- * ───────────────────────────────────────────────────────────────────────────
- * 本 Tool 属于"治理类元工具"，操作 SmartBiSkill 实体（当前全局无 factoryId）。
- * 上游隔离手段:
- *   1. AIIntentConfig 通过 factoryId + intent_code 绑定到允许该工厂使用的意图
- *   2. permission 层拦截只允许 admin/super_admin 角色使用治理类 Tool
- *   3. SmartBiSkill factory 级隔离属 V3 P2 任务 (需 DB 迁移)
- * 一旦 SmartBiSkill 加 factory_id (V3 P2)，本 Tool 需同步加 factoryId 过滤。
- * ═══════════════════════════════════════════════════════════════════════════
+ * 全局 SmartBiSkill 尚未按工厂隔离。所有预览、查询和写入仅允许服务端认证的
+ * 平台管理员；工厂角色或请求参数中的 role 不能授权全局治理操作。
  */
 @Slf4j
 @Component
@@ -98,6 +90,7 @@ public class SkillComposeTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
                                              Map<String, Object> context) throws Exception {
+        com.cretas.aims.ai.catalog.PlatformGovernanceAccess.requireAdmin();
         String name = getString(params, "name");
         List<String> tools = getList(params, "tools");
 
@@ -147,6 +140,7 @@ public class SkillComposeTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                              Map<String, Object> context) throws Exception {
+        com.cretas.aims.ai.catalog.PlatformGovernanceAccess.requireAdmin();
         // 权限检查：仅管理员可创建 Skill
         String role = context != null ? (String) context.get("role") : null;
         if (role == null || (!role.contains("admin") && !role.contains("ADMIN"))) {
@@ -250,6 +244,6 @@ public class SkillComposeTool extends AbstractBusinessTool {
 
     @Override
     public boolean hasPermission(String userRole) {
-        return userRole != null && java.util.Set.of("factory_super_admin", "permission_admin").contains(userRole);
+        return com.cretas.aims.ai.catalog.PlatformGovernanceAccess.allowed();
     }
 }

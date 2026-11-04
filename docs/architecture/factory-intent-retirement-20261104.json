@@ -1,0 +1,965 @@
+{
+  "schema_version": 1,
+  "status": "reviewed-disposition-not-applied",
+  "date": "2026-11-04",
+  "base_sha": "2c9578b59bbda410bd0f4d70fc0fc1b4ecccca7e",
+  "source_sha256": "f635561ffc271a76d7fb2b679cee847eda8d368c6c5cc4be69510373d301ba97",
+  "boundary": "No production writes, runtime removal, training changes, or model replacement performed. Dedicated code deletion requires dependency closure; a domain flag alone is insufficient.",
+  "counts": {
+    "source": 347,
+    "retire_intents": 81,
+    "reclassify_candidates": 29,
+    "confirmed_alias_merges": 1,
+    "remaining_after_confirmed_alias_merge": 265
+  },
+  "retire": [
+    {
+      "code": "COMPREHENSIVE_SYNTHESIS",
+      "name": "综合多维分析",
+      "tool": "restaurant_comprehensive_synthesis_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_ARAP_PAYABLE_QUERY",
+      "name": "供应商应付账款查询",
+      "tool": "restaurant_arap_payable_query",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_AT_RISK_GUEST_QUERY",
+      "name": "即将流失客户查询",
+      "tool": "restaurant_at_risk_guest_query",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_AVG_TICKET",
+      "name": "人均消费查询",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_BESTSELLER_QUERY",
+      "name": "畅销菜品查询",
+      "tool": "restaurant_dish_bestseller_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_BOM_VARIANCE",
+      "name": "BOM成本差异归因",
+      "tool": "restaurant_bom_variance",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_COMBO_SPLIT",
+      "name": "套餐拆单统计",
+      "tool": "restaurant_combo_split",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DAILY_RECONCILIATION",
+      "name": "日清日结",
+      "tool": "restaurant_daily_reconciliation",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DAILY_REVENUE",
+      "name": "日营业额查询",
+      "tool": "restaurant_revenue_trend_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISCOUNT_USAGE",
+      "name": "优惠券使用情况",
+      "tool": "restaurant_discount_usage_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISH_COST_ANALYSIS",
+      "name": "菜品成本分析",
+      "tool": "restaurant_dish_cost_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISH_COST_QUERY",
+      "name": "菜品成本卡查询",
+      "tool": "restaurant_dish_cost_query",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISH_CREATE",
+      "name": "创建菜品",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISH_DELETE",
+      "name": "删除菜品",
+      "tool": "restaurant_dish_delete",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISH_PRODUCT_SALES_RANKING",
+      "name": "菜品产品销售排行",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISH_SALES_RANKING",
+      "name": "菜品销量排行",
+      "tool": "restaurant_dish_bestseller_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISH_SLOW",
+      "name": "滞销菜品分析",
+      "tool": "restaurant_dish_slowseller_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_DISH_UPDATE",
+      "name": "更新菜品",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_ECONOMICS_ANALYSIS",
+      "name": "餐厅经营分析",
+      "tool": "restaurant_economics_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_INGREDIENT_COST_TREND",
+      "name": "食材成本趋势",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_INGREDIENT_EXPIRY_ALERT",
+      "name": "食材保质期预警",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_INGREDIENT_LOW_STOCK",
+      "name": "食材低库存提醒",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_INGREDIENT_STOCK",
+      "name": "食材库存查询",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_LABOR_PRODUCTIVITY",
+      "name": "人效监控",
+      "tool": "restaurant_labor_productivity",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_MARGIN_ANALYSIS",
+      "name": "毛利分析",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_OPS_GROSS_MARGIN",
+      "name": "Restaurant ops gross margin analysis",
+      "tool": "restaurant_ops_gold_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_OPS_RECIPE_COST",
+      "name": "Restaurant ops recipe cost analysis",
+      "tool": "restaurant_ops_gold_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_OPS_REQUISITION_TREND",
+      "name": "Restaurant ops requisition trend analysis",
+      "tool": "restaurant_ops_gold_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_OPS_SALES_SUMMARY",
+      "name": "Restaurant ops sales summary",
+      "tool": "restaurant_ops_gold_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_OPS_STOCK_SHORTAGE",
+      "name": "Restaurant ops stock shortage analysis",
+      "tool": "restaurant_ops_gold_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_OPS_STORE_MARGIN",
+      "name": "Restaurant ops store margin analysis",
+      "tool": "restaurant_ops_gold_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_OPS_TREND_ANALYSIS",
+      "name": "Restaurant ops trend analysis",
+      "tool": "restaurant_ops_gold_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_OPS_WASTAGE_TOP",
+      "name": "Restaurant ops wastage analysis",
+      "tool": "restaurant_ops_gold_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_ORDER_STATISTICS",
+      "name": "订单统计",
+      "tool": "restaurant_order_type_mix_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_PEAK_HOURS_ANALYSIS",
+      "name": "高峰时段分析",
+      "tool": "restaurant_peak_hours_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_PEAK_MONTH",
+      "name": "营收峰值月份",
+      "tool": "restaurant_peak_month_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_PERFORMANCE_RULE",
+      "name": "绩效规则",
+      "tool": "restaurant_performance_rule_manage",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_PIECEWORK_CALC",
+      "name": "计件计算",
+      "tool": "restaurant_piecework_calc",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_PIECEWORK_CONFIG",
+      "name": "计件配置",
+      "tool": "restaurant_piecework_config",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_PROCUREMENT_CREATE",
+      "name": "创建采购单",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_PROCUREMENT_FORECAST",
+      "name": "采购预测",
+      "tool": "restaurant_procurement_forecast",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_PROCUREMENT_SUGGESTION",
+      "name": "采购建议",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_RATING_REVENUE_CORRELATION",
+      "name": "门店评分营收关联",
+      "tool": "store_review_revenue",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REP_COMMISSION_QUERY",
+      "name": "营销员提成查询",
+      "tool": "restaurant_rep_commission_query",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_RETURN_ANOMALY",
+      "name": "退货异常检测",
+      "tool": "restaurant_return_anomaly",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_RETURN_RATE",
+      "name": "退单率查询",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVENUE_TREND",
+      "name": "营业额趋势",
+      "tool": "restaurant_revenue_trend_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_BAD_STORE",
+      "name": "差评最多门店",
+      "tool": "restaurant_review_store_rank",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_CITY",
+      "name": "城市评价对比",
+      "tool": "restaurant_review_city",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_COMPLAINT",
+      "name": "投诉差评集中点",
+      "tool": "restaurant_review_complaint",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_DISH_ISSUE",
+      "name": "差评菜品标签",
+      "tool": "restaurant_review_dish_issue",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_ENV_SCORE",
+      "name": "门店环境分对比",
+      "tool": "restaurant_review_env_score",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_ENV_TAGS",
+      "name": "环境评价标签",
+      "tool": "restaurant_review_score_tags",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_GOOD_TAGS",
+      "name": "好评高频词",
+      "tool": "restaurant_review_good_tags",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_PLATFORM",
+      "name": "平台评价对比",
+      "tool": "restaurant_review_platform",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_REPLY_RATE",
+      "name": "评价回复率",
+      "tool": "restaurant_review_reply_rate",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_SERVICE_SCORE",
+      "name": "门店服务分排名",
+      "tool": "restaurant_review_service_score",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_SERVICE_TAGS",
+      "name": "服务评价标签",
+      "tool": "restaurant_review_score_tags",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_SUMMARY",
+      "name": "客户评价总览",
+      "tool": "restaurant_review_summary",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_TIME_PERIOD",
+      "name": "时段评价分布",
+      "tool": "restaurant_review_time_period",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_TREND",
+      "name": "评价趋势",
+      "tool": "restaurant_review_trend",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_VIP",
+      "name": "VIP评价情况",
+      "tool": "restaurant_review_vip",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_REVIEW_VIP_TAGS",
+      "name": "VIP口味偏好",
+      "tool": "restaurant_review_vip_tags",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_SALES_PLAN_CREATE",
+      "name": "创建销售计划",
+      "tool": "restaurant_sales_plan_create",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_SALES_PLAN_TRACK",
+      "name": "销售计划追踪",
+      "tool": "restaurant_sales_plan_track",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_SEAT_CONFIG_MANAGE",
+      "name": "桌位配置管理",
+      "tool": "restaurant_seat_config_manage",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_SEAT_OCCUPANCY",
+      "name": "桌位配置分析",
+      "tool": "restaurant_seat_occupancy",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_SHIFT_ANALYSIS",
+      "name": "排班分析",
+      "tool": "restaurant_shift_analysis",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_SHIFT_CREATE",
+      "name": "创建排班",
+      "tool": "restaurant_shift_create",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_SMART_REORDER",
+      "name": "智能叫货单",
+      "tool": "restaurant_smart_reorder",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_STORE_KPI_DASHBOARD",
+      "name": "店长KPI",
+      "tool": "restaurant_store_kpi_dashboard",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_STORE_REVENUE_RANK",
+      "name": "门店营收排行",
+      "tool": "restaurant_store_revenue_rank_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_TABLE_TURNOVER",
+      "name": "翻台率查询",
+      "tool": "restaurant_table_turnover",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_VALUE_SUMMARY",
+      "name": "价值回馈月报",
+      "tool": "restaurant_value_summary",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_VIP_GUEST_QUERY",
+      "name": "重点客户查询",
+      "tool": "restaurant_vip_guest_query",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_VOICE_REQUISITION",
+      "name": "语音录入领料单",
+      "tool": "restaurant_voice_requisition",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_WASTAGE_ANOMALY",
+      "name": "损耗异常检测",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_WASTAGE_RATE",
+      "name": "损耗率分析",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_WASTAGE_SUMMARY",
+      "name": "损耗汇总",
+      "tool": null,
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "RESTAURANT_WEEKDAY_WEEKEND",
+      "name": "周末周中对比",
+      "tool": "restaurant_weekday_weekend_gold",
+      "tool_shared_with_retained": false
+    },
+    {
+      "code": "REVENUE_REPORT_GENERATE",
+      "name": "生成收入管理报表",
+      "tool": "revenue_report_generate",
+      "tool_shared_with_retained": false
+    }
+  ],
+  "retain_and_reclassify": [
+    {
+      "code": "ADDITIVE_COMPLIANCE",
+      "name": "添加剂合规检查",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "CAMERA_STREAMS",
+      "name": "摄像头流媒体地址",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "CAMERA_SUBSCRIBE",
+      "name": "订阅摄像头事件",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "CAMERA_UNSUBSCRIBE",
+      "name": "取消摄像头事件订阅",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "COLD_CHAIN_EQUIPMENT_REGISTER",
+      "name": "注册冷链设备",
+      "tool": "cold_chain_equipment_register",
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "COLD_CHAIN_MONITORING",
+      "name": "冷链温控监测",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "EFFICIENCY_COMPARE_ALIAS",
+      "name": "效率对比(别名)",
+      "tool": "efficiency_comparison",
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": "EFFICIENCY_COMPARISON"
+    },
+    {
+      "code": "FOOD_SAMPLE_LIFECYCLE",
+      "name": "食品留样全生命周期",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "FREE_GIFT_INBOUND",
+      "name": "赠品入库",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "GOVERNANCE_PATTERN_DISCOVERY",
+      "name": "工具使用模式分析",
+      "tool": "governance_pattern_discovery",
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "GOVERNANCE_SKILL_COMPOSE",
+      "name": "创建Skill组合",
+      "tool": "governance_skill_compose",
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "GOVERNANCE_SKILL_MANAGE",
+      "name": "Skill和Tool管理",
+      "tool": "governance_skill_manage",
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "HACCP_CHECKPOINT",
+      "name": "HACCP 检查",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "INVENTORY_GAIN_INBOUND",
+      "name": "盘盈入库",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "PRODUCT_PRODUCT_SALES_RANKING",
+      "name": "产品销售排名",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SALES_DELIVERY_BATCH_ALLOCATE",
+      "name": "发货批次分配",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SSOP_DAILY_SANITATION",
+      "name": "SSOP 每日清洁 (Workdesk)",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SUPPLIER_PRICE_ALERT",
+      "name": "供应商价格预警",
+      "tool": "supplier_price_alert",
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SUPPLIER_QUALIFICATION_ALERT",
+      "name": "供应商资质预警",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SYSTEM_FEEDBACK",
+      "name": "意见反馈",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SYSTEM_PASSWORD_RESET",
+      "name": "密码修改",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SYSTEM_PERMISSION_QUERY",
+      "name": "权限查询",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SYSTEM_PROFILE_EDIT",
+      "name": "编辑个人信息",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SYSTEM_SETTINGS",
+      "name": "系统设置",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "SYSTEM_SWITCH_FACTORY",
+      "name": "切换工厂",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "TAX_GROUP_INVOICE",
+      "name": "税率分组开票",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "TRACE_CODE_FORMAT",
+      "name": "溯源码格式查询",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "WAREHOUSE_TODAY_RECEIVING_PENDING",
+      "name": "今日 PO 待收清单",
+      "tool": null,
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    },
+    {
+      "code": "WORKFLOW_RULE_TEST",
+      "name": "测试流转规则",
+      "tool": "workflow_rule_test",
+      "status": "preserve-capability-verify-factory-dependencies",
+      "alias_target": null
+    }
+  ],
+  "unchanged_codes": [
+    "ABACA_WEIGHT_LOG",
+    "ABACA_WEIGHT_SUMMARY",
+    "ACCOUNT_QUERY",
+    "ACCOUNTS_RECEIVABLE_AGING",
+    "ACCOUNT_TREE_LOOKUP",
+    "ADDITIVE_BOM_COMPLIANCE",
+    "ADDITIVE_CHECK",
+    "ADDITIVE_COMPLIANCE_QUALITY",
+    "ADDITIVE_SMART_MATCH",
+    "ALERT_ACKNOWLEDGE",
+    "ALERT_ACTIVE",
+    "ALERT_BY_EQUIPMENT",
+    "ALERT_DIAGNOSE",
+    "ALERT_LIST",
+    "ALERT_RESOLVE",
+    "ALERT_STATS",
+    "ALERT_TRIAGE",
+    "APPROVAL_ACTION_EXECUTE",
+    "APPROVAL_PENDING_QUERY",
+    "ATTENDANCE_ANOMALY",
+    "ATTENDANCE_DEPARTMENT",
+    "ATTENDANCE_HISTORY",
+    "ATTENDANCE_MONTHLY",
+    "ATTENDANCE_STATS",
+    "ATTENDANCE_STATS_BY_DEPT",
+    "ATTENDANCE_STATUS",
+    "ATTENDANCE_TODAY",
+    "BALANCE_SHEET_QUERY",
+    "BATCH_CONSUMPTION_ADJUST",
+    "BATCH_CONSUMPTION_QUERY",
+    "BATCH_FULL_TRACE",
+    "BATCH_TRACE_BY_CUSTOMER",
+    "BATCH_UPDATE",
+    "BOM_RECIPE_QUERY",
+    "BUSINESS_LINK_QUERY",
+    "CALL_FOLLOWUP_PENDING",
+    "CASHFLOW_STATEMENT_QUERY",
+    "CLOCK_IN",
+    "CLOCK_OUT",
+    "COLD_CHAIN_ALERT_ACKNOWLEDGE",
+    "COLD_CHAIN_ALERT_ACTIVE",
+    "COLD_CHAIN_TEMP_QUERY",
+    "COMMISSION_PENDING_TOTAL",
+    "CONTEXT_CONTINUE",
+    "CONVERSION_RATE_UPDATE",
+    "COST_QUERY",
+    "CUSTOMER_ACTIVE",
+    "CUSTOMER_BY_TYPE",
+    "CUSTOMER_LIST",
+    "CUSTOMER_NOTIFY_BATCH",
+    "CUSTOMER_PRIORITY_QUERY",
+    "CUSTOMER_PURCHASE_HISTORY",
+    "CUSTOMER_QUALITY_STANDARD",
+    "CUSTOMER_REVENUE_TREND",
+    "CUSTOMER_SEARCH",
+    "CUSTOMER_STATS",
+    "CUSTOMER_TRACKING_RECENT_QUERY",
+    "DAILY_CUSTOMER_FOLLOWUP",
+    "EFFICIENCY_COMPARISON",
+    "EQUIPMENT_MAINTENANCE",
+    "FACTORY_CONFIG_AGENT",
+    "FACTORY_MR_CLOSE",
+    "FACTORY_MR_GENERATE",
+    "FACTORY_MR_QUERY_PENDING",
+    "FACTORY_NOTIFICATION_CONFIG",
+    "FINANCE_INVOICE_APPROVE",
+    "FINANCE_INVOICE_REQUEST",
+    "FINANCE_INVOICE_STATUS",
+    "FINANCE_PAYMENT_RECORD",
+    "FINANCE_PPT_EXPORT",
+    "FINANCIAL_CHART_GENERATE",
+    "FOOD_SAFETY_RECALL",
+    "FOOD_SAMPLE_CREATE",
+    "FOOD_SAMPLE_DISPOSE",
+    "FOOD_SAMPLE_QUERY_PENDING_DISPOSE",
+    "FOOD_SAMPLE_TRACE",
+    "HACCP_REVIEW",
+    "HACCP_STATUS_QUERY",
+    "HR_EXPENSE_REQUEST_QUERY",
+    "HR_LEAVE_APPROVE",
+    "HR_LEAVE_BALANCE_QUERY",
+    "HR_LEAVE_REQUEST_QUERY",
+    "HR_LEAVE_SUBMIT",
+    "HR_OVERTIME_REQUEST_QUERY",
+    "INCOME_STATEMENT_QUERY",
+    "INDICATOR_ALERT",
+    "INDICATOR_COMPARISON",
+    "INDICATOR_QUERY",
+    "INVENTORY_FREEZE",
+    "LINEAGE_QUERY",
+    "MATERIAL_ADJUST_QUANTITY",
+    "MATERIAL_BATCH_CONSUME",
+    "MATERIAL_BATCH_CREATE",
+    "MATERIAL_BATCH_QUERY",
+    "MATERIAL_BATCH_RELEASE",
+    "MATERIAL_BATCH_RESERVE",
+    "MATERIAL_BATCH_USE",
+    "MATERIAL_BATCH_WIP_QUERY",
+    "MATERIAL_DISPOSAL_RECOMMENDATION",
+    "MATERIAL_EXPIRED_QUERY",
+    "MATERIAL_EXPIRING_ALERT",
+    "MATERIAL_FIFO_RECOMMEND",
+    "MATERIAL_LOW_STOCK_ALERT",
+    "MATERIAL_MARK_ABACA",
+    "MATERIAL_TODAY_RECEIVING_QUERY",
+    "MATERIAL_UPDATE",
+    "MONTHLY_FINANCIAL_CLOSE",
+    "OPERATION_LOG_QUERY",
+    "OPPORTUNITY_FUNNEL_STATS",
+    "OPPORTUNITY_STAGE_ALERT",
+    "OPPORTUNITY_TRANSITION",
+    "ORDER_LIST",
+    "ORDER_STATUS",
+    "ORDER_TODAY",
+    "OUT_OF_DOMAIN",
+    "PAGINATION_PREVIOUS",
+    "PDA_SCAN_TASK_GENERATE",
+    "PERIOD_CONFIRM_CLOSE",
+    "PERIOD_REOPEN",
+    "PERIOD_REQUEST_CLOSE",
+    "PERIOD_STATUS_QUERY",
+    "PLAN_UPDATE",
+    "PRICE_HISTORY_QUERY",
+    "PRINT_DOCUMENT",
+    "PRINT_TEMPLATE_CREATE_FROM_AI",
+    "PROCESSING_CAPACITY_TODAY",
+    "PROCESS_TASK_ANALYSIS",
+    "PROCESS_TASK_QUERY",
+    "PROCESS_TASK_SUMMARY",
+    "PROCUREMENT_ORDER_CREATE",
+    "PRODUCT_CREATE_FLYWHEEL",
+    "PRODUCTION_BATCH_CREATE",
+    "PRODUCTION_DELIVERY_WARN_QUERY",
+    "PRODUCTION_DEMAND_ANALYSIS",
+    "PRODUCTION_DEMAND_QUERY",
+    "PRODUCTION_PLAN_CREATE",
+    "PRODUCTION_PROGRESS_DASHBOARD",
+    "PRODUCT_TYPE_QUERY",
+    "PRODUCT_UPDATE",
+    "PURCHASE_FINANCE_APPROVE",
+    "PURCHASE_ORDER_APPROVE",
+    "PURCHASE_ORDER_LIST",
+    "QUALITY_CHECK_CREATE",
+    "QUALITY_CHECK_QUERY",
+    "QUALITY_CHECK_SUMMARY",
+    "QUALITY_CHIEF_WORKDESK",
+    "QUALITY_CRITICAL_ITEMS",
+    "QUALITY_DEFECT_QUERY",
+    "QUALITY_DEFECT_RECORD",
+    "QUALITY_DISPOSITION_EVALUATE",
+    "QUALITY_DISPOSITION_EXECUTE",
+    "QUALITY_RETURN_CREATE",
+    "QUALITY_RETURN_QUERY",
+    "QUALITY_STATS",
+    "RD_REQUEST_CREATE",
+    "RD_SAMPLE_APPROVE",
+    "RD_SAMPLE_CREATE",
+    "RECALL_LOSS_ESTIMATE",
+    "RECEIVE_CONFIRM_CREATE",
+    "RECEIVE_QUALITY_CHECK_TODAY",
+    "RECEIVE_WITH_LIMIT",
+    "REGULATORY_REPORT",
+    "RELEASE_DECISION",
+    "REMINDER_LIST_MINE",
+    "REPORT_ANOMALY",
+    "REPORT_COST_VARIANCE",
+    "REPORT_DASHBOARD_OVERVIEW",
+    "REPORT_EFFICIENCY",
+    "REPORT_FINANCE",
+    "REPORT_INVENTORY",
+    "REPORT_KPI",
+    "REPORT_PRODUCTION",
+    "REPORT_QUALITY",
+    "REPORT_TRENDS",
+    "REQUISITION_CREATE",
+    "RETURN_ORDER_APPROVE",
+    "RETURN_ORDER_CREATE",
+    "RETURN_ORDER_LIST",
+    "REUSABLE_CONTAINER_LOSS",
+    "REUSABLE_CONTAINER_QUERY",
+    "REUSABLE_CONTAINER_RETURN_IN",
+    "REUSABLE_CONTAINER_SHIP_OUT",
+    "RULE_CONFIG",
+    "SALES_FORECAST_7DAY",
+    "SALES_NEED_CONVERT",
+    "SALES_NEED_CREATE",
+    "SAMPLE_TO_BOM",
+    "SCALE_CALIBRATE",
+    "SCALE_DEVICE_DETAIL",
+    "SCALE_LIST_DEVICES",
+    "SCALE_TROUBLESHOOT",
+    "SCHEDULING_LIST",
+    "SCHEDULING_SET_AUTO",
+    "SCHEDULING_SET_DISABLED",
+    "SCHEDULING_SET_MANUAL",
+    "SHIPMENT_CONFIRM_CREATE",
+    "SHIPMENT_CREATE",
+    "SHIPMENT_QUERY",
+    "SHIPMENT_STATS",
+    "SHORTAGE_ANALYSIS",
+    "SKU_GROSS_MARGIN",
+    "SMART_INDICATOR_QUERY",
+    "SOURCE_INDIVIDUAL_QUERY",
+    "SPRINT10_SHIPMENT_PENDING_TODAY",
+    "SSOP_EXECUTE_COMPLETE",
+    "SSOP_EXECUTION_TODAY",
+    "SSOP_MONTHLY_AUDIT_REPORT",
+    "SSOP_PROCEDURE_CREATE",
+    "SSOP_PRODUCTION_GATE_CHECK",
+    "STOCK_ALERT",
+    "SUPPLIER_ACTIVE",
+    "SUPPLIER_BY_CATEGORY",
+    "SUPPLIER_CAN_ORDER_CHECK",
+    "SUPPLIER_DELIVERY_ETA",
+    "SUPPLIER_EVALUATE",
+    "SUPPLIER_LIST",
+    "SUPPLIER_QUALIFICATION_CREATE",
+    "SUPPLIER_QUALIFICATION_LOOKUP",
+    "SUPPLIER_QUALIFICATION_QUERY_EXPIRING",
+    "SUPPLIER_RANKING",
+    "SUPPLIER_SEARCH",
+    "SYSTEM_HELP",
+    "TRACE_BATCH",
+    "TRACE_FULL",
+    "TRACE_PUBLIC",
+    "TRANSFER_APPROVE",
+    "TRANSFER_CREATE",
+    "UNSUPPORTED_CAPABILITY",
+    "WAGE_COST_SUMMARY",
+    "WAGE_POLICY_QUERY",
+    "WECHAT_CREATE",
+    "WECHAT_RECENT_QUERY",
+    "WORK_PROCESS_CONFIG_UPDATE",
+    "WORK_PROCESS_TASK_ASSIGN",
+    "WORK_PROCESS_TASK_COMPLETE",
+    "WORK_PROCESS_TASK_SPAWN",
+    "WORK_PROCESS_TASK_START"
+  ],
+  "confirmed_aliases": {
+    "EFFICIENCY_COMPARE_ALIAS": "EFFICIENCY_COMPARISON"
+  },
+  "required_work": [
+    "Trace dedicated and shared Java/Python/Web/RN code dependencies before deleting implementations.",
+    "Delete retired intents from active DB catalog, fallback catalog, retrieval examples/indexes and model candidate sets. Historical migrations are not an active feature registry.",
+    "Migrate retained capabilities into factory/common implementation paths and validate existing business contracts.",
+    "Review potential merges by parameter/output equivalence; only efficiency alias confirmed here.",
+    "Bind single actions to Tool, explicit multi-step flows to Skill; retain permission/tenant/preview/confirmation and audit boundaries.",
+    "Wire existing entity resolution with tenant-scoped unique-ID resolution; ambiguous identities require clarification.",
+    "Rebuild training label contract and independent holdouts after catalog freeze; no production model replacement.",
+    "Run dependency/build/contract/JPA/migration checks appropriate to actual changes before integration."
+  ],
+  "known_contract_issues": [
+    "RECALL_LOSS_ESTIMATE writes estimatedLoss despite read-only description.",
+    "SPRINT10_SHIPMENT_PENDING_TODAY shares query/write implementation with SHIPMENT_CONFIRM_CREATE.",
+    "PAGINATION_PREVIOUS uses pagination_next; verify explicit targetPage propagation."
+  ]
+}

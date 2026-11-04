@@ -682,6 +682,10 @@ _INTENT_DESCRIPTIONS: Dict[str, str] = {
 }
 
 _VALID_CODES = frozenset(_INTENT_DESCRIPTIONS)
+# Retired namespace: descriptions remain importable for historical fixtures,
+# but no planner/promotion/dispatch path may treat them as executable labels.
+RESTAURANT_AI_RETIRED = True
+_VALID_CODES = frozenset()
 TIME_CLARIFICATION_QUESTION = (
     "你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。"
 )
@@ -1955,13 +1959,23 @@ def contextualize_restaurant_followup(
 
     # A fully specified new metric + time phrase is self-contained.  Leading
     # pronouns such as "那毛利呢" remain dependent and intentionally inherit.
+    # The public restaurant intent registry is retired, but this shared
+    # follow-up helper still needs to recognize a fully explicit entity turn
+    # before deciding whether to inherit parent context.  Calling
+    # ``match_restaurant_ops`` here made retirement turn every explicit dish
+    # query into a dependent follow-up (its registry is intentionally empty).
     standalone_code = match_restaurant_ops(current)
+    standalone_named_dish = _explicit_named_dish_metric_spec(current)
     leading_dependent = current.startswith((
         "那", "这个", "那个", "它", "刚才", "继续", "再",
         "换成", "改成", "换回", "改回", "换看", "改看", "换查", "改查",
         "只看", "就看", "只查", "就查",
     ))
-    if standalone_code and _uses_relative_sales_window(current) and not leading_dependent:
+    if (
+        (standalone_code or standalone_named_dish is not None)
+        and _uses_relative_sales_window(current)
+        and not leading_dependent
+    ):
         return current, False
 
     # Resolver-produced slots are the only inheritance source.  Crucially, we
@@ -8641,6 +8655,8 @@ async def parse_restaurant_query(
     `record_time_phrase` fail-open(内部吞异常只留 WARNING), 所以这里不用
     try/except 包一层 —— 包了反而会把它的失败语义改成「静默」的第二层。
     """
+    if RESTAURANT_AI_RETIRED:
+        return None
     spec = await _parse_restaurant_query_impl(
         query,
         pool,

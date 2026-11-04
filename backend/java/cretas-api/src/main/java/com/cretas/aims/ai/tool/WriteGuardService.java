@@ -81,7 +81,9 @@ public class WriteGuardService {
             // 2026-11-03 (S6 follow-up): "REJECT" here is "拒收原因" (why batches were rejected), a query:
             // its only data call is MaterialBatchService#getExpiredBatches. Pinned by
             // GatedDataStrictSweepPermissionTest#materialRejectionReasonIsAReadToolGatedLikeTheInventoryPages.
-            "MATERIAL_REJECTION_REASON");
+            "MATERIAL_REJECTION_REASON",
+            // Factory catalog: the former only queries samples; the latter only returns navigation.
+            "FOOD_SAMPLE_QUERY_PENDING_DISPOSE", "PASSWORD_RESET", "SYSTEM_PASSWORD_RESET");
 
     public boolean isWriteAction(ToolExecutor.ActionType t) {
         return t == ToolExecutor.ActionType.WRITE

@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
  *   <li>预估总损失 = 上三项之和 + 品牌损失系数 (20% 加成)</li>
  * </ul>
  *
- * <p>更新 RecallEvent.estimatedLoss 字段供 UI 展示.
+ * <p>返回召回损失估算，不修改 RecallEvent。
  *
  * <p>LLM 触发场景:
  * <ul>
@@ -44,7 +44,7 @@ import java.util.stream.Collectors;
  *   <li>"损失多少钱"</li>
  * </ul>
  *
- * <p>read + light update (仅 update estimatedLoss).
+ * <p>Read-only estimate; no persistence.
  *
  * <p>Intent Code: {@code RECALL_LOSS_ESTIMATE}
  */
@@ -76,7 +76,7 @@ public class RecallLossEstimateTool extends AbstractBusinessTool {
     public String getDescription() {
         return "召回损失预估 — 聚合冻结库存价值 + 客户退货金额 + 行政成本 + 品牌损失 (20% 加成). "
                 + "LLM 触发: '这次召回损失多少' / '召回成本预估' / '损失多少钱' / "
-                + "'召回会赔多少'. 更新 RecallEvent.estimatedLoss.";
+                + "'召回会赔多少'. 仅返回估算，不修改事件。";
     }
 
     @Override
@@ -180,9 +180,7 @@ public class RecallLossEstimateTool extends AbstractBusinessTool {
 
         BigDecimal totalLoss = subtotal.add(brandLoss).setScale(2, RoundingMode.HALF_UP);
 
-        // 更新 RecallEvent.estimatedLoss
-        event.setEstimatedLoss(totalLoss);
-        recallEventRepository.save(event);
+        // An estimate is a read-only projection; persisting it requires a separate explicit write flow.
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("recallEventId", recallEventId);
@@ -225,7 +223,7 @@ public class RecallLossEstimateTool extends AbstractBusinessTool {
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */
     @Override
     public AccessMode getAccessMode() {
-        return AccessMode.WRITE;
+        return AccessMode.READ;
     }
 
     /**

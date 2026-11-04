@@ -2278,6 +2278,15 @@ async def tiered_answer(
     behavior -- ``"java_entry_delegate"`` when ``java_tool_name`` is set, else
     no tag.
     """
+    from smartbi.gold.restaurant.restaurant_intent import RESTAURANT_AI_RETIRED
+    if RESTAURANT_AI_RETIRED:
+        return {
+            "kind": "unavailable",
+            "answer_text": "餐饮专属 AI 能力已下线；请使用业务页面查看餐饮数据。",
+            "charts": [], "kpis": [], "title": "餐饮 AI 能力已下线",
+            "code": "RESTAURANT_AI_RETIRED", "contract_pass": False, "spec": None,
+        }
+
     # ── 额度耗尽 → 整体封闭，任何层都不产出答案 ───────────────────────────
     #
     # 🔴 Steve 2026-08-07 拍板：「如果 LLM 的额度没有了，那整个 AI 的，不管是
@@ -3367,6 +3376,9 @@ def should_delegate(
     so Java cannot reinterpret it. Legacy specs retain the older compatibility
     rules below while callers migrate.
     """
+    from smartbi.gold.restaurant.restaurant_intent import RESTAURANT_AI_RETIRED
+    if RESTAURANT_AI_RETIRED:
+        return False
     # Dish-scoped questions ("米饭的销量") delegate unconditionally: the
     # Java Gold tools have no per-dish answer path, while the Python
     # gross-margin resolver scopes to the named dish (Sheet 7/22 菜品链).

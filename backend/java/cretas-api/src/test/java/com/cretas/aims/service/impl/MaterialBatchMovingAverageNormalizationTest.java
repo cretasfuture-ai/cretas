@@ -64,6 +64,104 @@ class MaterialBatchMovingAverageNormalizationTest {
         assertThat(material.getMovingAvgPrice()).isEqualByComparingTo("15.0000");
     }
 
+    @Test
+    void keyedZeroCostGiftRebuildsAverageInsteadOfSkippingTheLayer() {
+        MaterialBatchRepository batchRepository = mock(MaterialBatchRepository.class);
+        RawMaterialTypeRepository materialRepository = mock(RawMaterialTypeRepository.class);
+        MaterialBatchServiceImpl service = new MaterialBatchServiceImpl(
+                batchRepository,
+                mock(MaterialBatchAdjustmentRepository.class),
+                materialRepository,
+                mock(MaterialBatchMapper.class),
+                mock(MaterialConsumptionRepository.class),
+                mock(ProductionPlanBatchUsageRepository.class),
+                mock(ExcelUtil.class),
+                mock(FuturePlanMatchingService.class));
+
+        MaterialUomConverter converter = new MaterialUomConverter(
+                mock(MaterialPackagingHierarchyRepository.class),
+                mock(com.cretas.aims.repository.material.MaterialPackagingSpecRepository.class),
+                materialRepository,
+                com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
+        ReflectionTestUtils.setField(service, "materialMovingAverageCalculator",
+                new MaterialMovingAverageCalculator(converter));
+
+        RawMaterialType material = new RawMaterialType();
+        material.setId("MAT-GIFT");
+        material.setFactoryId("F006");
+        material.setUnit("kg");
+        when(materialRepository.save(any(RawMaterialType.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(batchRepository.findByFactoryIdAndMaterialTypeId("F006", "MAT-GIFT"))
+                .thenReturn(List.of(batch("PURCHASE-1", "10", "kg", "10"),
+                        batch("GIFT-1", "10", "kg", "0")));
+
+        ReflectionTestUtils.invokeMethod(service, "updateMovingAvgPrice", material,
+                new BigDecimal("10"), BigDecimal.ZERO, "GIFT-1", true);
+
+        assertThat(material.getMovingAvgPrice()).isEqualByComparingTo("5.0000");
+    }
+
+    @Test
+    void unknownExistingCostBlocksGiftInsteadOfCommittingWithStaleAverage() {
+        MaterialBatchRepository batchRepository = mock(MaterialBatchRepository.class);
+        RawMaterialTypeRepository materialRepository = mock(RawMaterialTypeRepository.class);
+        MaterialBatchServiceImpl service = new MaterialBatchServiceImpl(
+                batchRepository,
+                mock(MaterialBatchAdjustmentRepository.class),
+                materialRepository,
+                mock(MaterialBatchMapper.class),
+                mock(MaterialConsumptionRepository.class),
+                mock(ProductionPlanBatchUsageRepository.class),
+                mock(ExcelUtil.class),
+                mock(FuturePlanMatchingService.class));
+        MaterialUomConverter converter = new MaterialUomConverter(
+                mock(MaterialPackagingHierarchyRepository.class),
+                mock(com.cretas.aims.repository.material.MaterialPackagingSpecRepository.class),
+                materialRepository,
+                com.cretas.aims.service.unit.TestUnitContractFactory.legacyFacade());
+        ReflectionTestUtils.setField(service, "materialMovingAverageCalculator",
+                new MaterialMovingAverageCalculator(converter));
+        RawMaterialType material = new RawMaterialType();
+        material.setId("MAT-UNKNOWN");
+        material.setFactoryId("F006");
+        material.setUnit("kg");
+        when(batchRepository.findByFactoryIdAndMaterialTypeId("F006", "MAT-UNKNOWN"))
+                .thenReturn(List.of(batch("UNKNOWN-1", "10", "kg", null),
+                        batch("GIFT-1", "10", "kg", "0")));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                ReflectionTestUtils.invokeMethod(service, "updateMovingAvgPrice", material,
+                        new BigDecimal("10"), BigDecimal.ZERO, "GIFT-1", true))
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+
+        assertThat(material.getMovingAvgPrice()).isNull();
+    }
+
+    @Test
+    void legacyFourArgumentZeroPriceStillSkipsReceipt() {
+        MaterialBatchRepository batchRepository = mock(MaterialBatchRepository.class);
+        RawMaterialTypeRepository materialRepository = mock(RawMaterialTypeRepository.class);
+        MaterialBatchServiceImpl service = new MaterialBatchServiceImpl(
+                batchRepository,
+                mock(MaterialBatchAdjustmentRepository.class),
+                materialRepository,
+                mock(MaterialBatchMapper.class),
+                mock(MaterialConsumptionRepository.class),
+                mock(ProductionPlanBatchUsageRepository.class),
+                mock(ExcelUtil.class),
+                mock(FuturePlanMatchingService.class));
+        RawMaterialType material = new RawMaterialType();
+        material.setId("MAT-LEGACY");
+        material.setFactoryId("F006");
+        material.setUnit("kg");
+        material.setMovingAvgPrice(new BigDecimal("10"));
+
+        ReflectionTestUtils.invokeMethod(service, "updateMovingAvgPrice", material,
+                new BigDecimal("10"), BigDecimal.ZERO, "GIFT-LEGACY");
+
+        assertThat(material.getMovingAvgPrice()).isEqualByComparingTo("10");
+    }
+
     private static MaterialBatch batch(String id, String quantity, String unit, String price) {
         MaterialBatch batch = new MaterialBatch();
         batch.setId(id);
@@ -71,7 +169,7 @@ class MaterialBatchMovingAverageNormalizationTest {
         batch.setUsedQuantity(BigDecimal.ZERO);
         batch.setReservedQuantity(BigDecimal.ZERO);
         batch.setQuantityUnit(unit);
-        batch.setUnitPrice(new BigDecimal(price));
+        batch.setUnitPrice(price == null ? null : new BigDecimal(price));
         return batch;
     }
 }

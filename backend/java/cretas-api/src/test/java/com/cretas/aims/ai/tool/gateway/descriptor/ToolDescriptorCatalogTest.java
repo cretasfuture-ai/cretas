@@ -19,6 +19,29 @@ class ToolDescriptorCatalogTest {
     private final ToolDescriptorInventoryLoader loader = new ToolDescriptorInventoryLoader();
 
     @Test
+    void newFactoryAndCommonToolsAreExplicitReviewRequiredDescriptors() {
+        ToolDescriptorCatalog catalog = ToolDescriptorCatalog.loadDefault();
+        assertThat(catalog.inventory().descriptors())
+                .filteredOn(entry -> Set.of(
+                        "free_gift_inbound", "inventory_gain_inbound", "product_sales_ranking",
+                        "sales_delivery_batch_allocate", "tax_group_invoice", "trace_code_format",
+                        "shipment_pending_today", "pagination_previous").contains(entry.toolName()))
+                .hasSize(8)
+                .allSatisfy(entry -> {
+                    assertThat(entry.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
+                    assertThat(entry.governanceStatus()).isEqualTo(ToolGovernanceStatus.REVIEW_REQUIRED);
+                });
+    }
+
+    @Test
+    void retiredRestaurantRuntimeToolsAreNotInTheCurrentCatalog() {
+        ToolDescriptorCatalog catalog = ToolDescriptorCatalog.loadDefault();
+        assertThat(catalog.inventory().descriptors())
+                .extracting(ToolDescriptorInventoryEntry::toolName)
+                .noneMatch(name -> name.startsWith("restaurant_"));
+    }
+
+    @Test
     void newPurchaseGrantIsExplicitAuditMetadataAndHasNoRuntimePolicy() {
         var inventory = loader.loadDefault();
         var entries = inventory.descriptors().stream()
@@ -38,7 +61,7 @@ class ToolDescriptorCatalogTest {
         assertThat(new RuntimeToolPolicyLoader().loadDefault().policies())
                 .extracting(RuntimeToolPolicyEntry::toolName).doesNotContain(PurchaseGrantExecuteTool.NAME);
         assertThat(RuntimeToolDescriptorRegistry.loadDefault().findApproved(PurchaseGrantExecuteTool.NAME)).isEmpty();
-        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(11);
+        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(9);
     }
 
     @Test
@@ -47,12 +70,12 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(587);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(568);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(492);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(467);
         // Existing factory analysis adds one explicit, approved ANALYZE/LOW tool.
-        assertThat(statistics.total()).isEqualTo(587);
+        assertThat(statistics.total()).isEqualTo(492);
         // 2026-10-29 S6-04: alert_rule_toggle declares UPDATE/MEDIUM/v2/roles and gets the first SCHEDULER write policy.
-        assertThat(statistics.legacy()).isEqualTo(568);
+        assertThat(statistics.legacy()).isEqualTo(467);
         // 2026-09-15: #815 新增 source_individual_query，EXPLICIT/READ/LOW/REVIEW_REQUIRED；
         // 总数 584 → 585，LEGACY_INFERRED 不变。
         // 2026-08-27: 579 → 584 (+5, legacy 计数不变 — 全部落在 EXPLICIT 一侧)。
@@ -72,17 +95,17 @@ class ToolDescriptorCatalogTest {
         // 确认卡的影响说明要用「将修改……现有数据」措辞)。同 ToolDescriptorInventoryDriftTest 的
         // override actionType 61 → 63。riskLevel 桶不变 (UPDATE 的默认风险仍是 LOW)。
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 442L,
-                ToolExecutor.ActionType.WRITE, 62L,
-                ToolExecutor.ActionType.UPDATE, 29L,
+                ToolExecutor.ActionType.READ, 361L,
+                ToolExecutor.ActionType.WRITE, 63L,
+                ToolExecutor.ActionType.UPDATE, 27L,
                 ToolExecutor.ActionType.DELETE, 11L,
-                ToolExecutor.ActionType.ANALYZE, 20L,
-                ToolExecutor.ActionType.GENERATE, 16L,
-                ToolExecutor.ActionType.NOTIFY, 7L));
+                ToolExecutor.ActionType.ANALYZE, 10L,
+                ToolExecutor.ActionType.GENERATE, 15L,
+                ToolExecutor.ActionType.NOTIFY, 5L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 510L,
-                ToolExecutor.RiskLevel.MEDIUM, 68L,
-                ToolExecutor.RiskLevel.HIGH, 9L,
+                ToolExecutor.RiskLevel.LOW, 415L,
+                ToolExecutor.RiskLevel.MEDIUM, 69L,
+                ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         // previewSupported 36 → 37 (+1): RestaurantDishDeleteTool 新增 doPreview() 实现 —— 安全改进
         // (高风险软删除工具现在支持"确认前先看变更预览"), 不是退化。见 ApprovedToolSourceMetadataTest
@@ -92,7 +115,7 @@ class ToolDescriptorCatalogTest {
         // 2026-10-06: 39 → 47 (+8): 一线默认开放的 8 个日常写工具补只读 doPreview() (打卡 2 / 原料入库 + 领用 /
         // 周转框发出 + 归还 / 质检任务 + 不良登记), 同 ToolDescriptorInventoryDriftTest 的 override supportsPreview 44 → 52。
         // Controlled purchase now requires a real preview and current procurement permission.
-        assertThat(statistics.previewSupported()).isEqualTo(48);
+        assertThat(statistics.previewSupported()).isEqualTo(53);
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
@@ -100,13 +123,13 @@ class ToolDescriptorCatalogTest {
         // re-review: lineage_query opens again (traceability parity) and the 2 HACCP tools move to codes (-3).
         // 2026-11-03 strict sweep (follow-up of #1316): role gates where the data is only served by role-gated endpoints;
         // after the organizer's rulings (quality / cold chain / procurement / not-stricter) most became permission codes.
-        assertThat(statistics.requiresPermission()).isEqualTo(76);
+        assertThat(statistics.requiresPermission()).isEqualTo(77);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 559L,
-                ToolGovernanceStatus.REVIEW_REQUIRED_P0, 17L,
-                ToolGovernanceStatus.APPROVED, 11L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 471L,
+                ToolGovernanceStatus.REVIEW_REQUIRED_P0, 12L,
+                ToolGovernanceStatus.APPROVED, 9L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         // 2026-08-27 (#185 修复解析器盲区后浮现): 这 3 个 LEGACY_INFERRED 的 HIGH 风险 WRITE
@@ -156,8 +179,6 @@ class ToolDescriptorCatalogTest {
                 .extracting(ToolDescriptorInventoryEntry::toolName)
                 .containsExactlyInAnyOrder(
                         "user_disable",
-                        "restaurant_dish_delete",
-                        "restaurant_owner_action_advisor",
                         "canvas_product_work_process_config",
                         "canvas_work_process_catalog",
                         "product_create",
@@ -175,15 +196,16 @@ class ToolDescriptorCatalogTest {
                 .filter(entry -> entry.governanceStatus() == ToolGovernanceStatus.REVIEW_REQUIRED_P0)
                 .map(ToolDescriptorInventoryEntry::toolName)
                 .collect(Collectors.toUnmodifiableSet());
-        Set<String> approvedP0 = Set.of("user_disable", "restaurant_dish_delete");
+        Set<String> approvedP0 = Set.of("user_disable");
 
         assertThat(actualP0).containsExactlyInAnyOrderElementsOf(
                 ToolDescriptorInventoryLoader.P0_TOOL_NAMES.stream()
-                        .filter(toolName -> !approvedP0.contains(toolName))
+                        .filter(toolName -> !toolName.startsWith("restaurant_")
+                                && !approvedP0.contains(toolName))
                         .collect(Collectors.toUnmodifiableSet()));
-        // 18 → 17: bom_version_approve 随 9 个老式 BOM 写入工具退役, 从 P0_TOOL_NAMES 摘除。
-        // 这个数量的是「仍待审的 P0 工具数」—— 少一个工具就该少一个, 不是把闸放松。
-        assertThat(actualP0).hasSize(17);
+        // Retired restaurant P0 names remain in the shared historical allowlist,
+        // but no longer have descriptors. Only current descriptors count here.
+        assertThat(actualP0).hasSize(12);
         for (String toolName : actualP0) {
             ToolDescriptorInventoryEntry byName = catalog.findByToolName(toolName).orElseThrow();
             assertThat(byName.governanceStatus()).isEqualTo(ToolGovernanceStatus.REVIEW_REQUIRED_P0);

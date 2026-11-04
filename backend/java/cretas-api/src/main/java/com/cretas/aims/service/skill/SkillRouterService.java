@@ -66,6 +66,10 @@ public interface SkillRouterService {
      */
     List<SkillDefinition> findMatchingSkills(String userQuery);
 
+    default List<SkillDefinition> findMatchingSkills(String userQuery, String factoryId) {
+        return findMatchingSkills(userQuery);
+    }
+
     /**
      * 直接执行指定的Skill
      *

@@ -39,6 +39,31 @@ public class CameraSubscribeTool extends AbstractBusinessTool {
         return "camera_subscribe";
     }
 
+    @Override public ActionType getActionType() { return ActionType.WRITE; }
+    @Override public boolean supportsPreview() { return true; }
+    @Override public boolean requiresPermission() { return true; }
+    @Override public boolean hasPermission(String role) {
+        return role != null && Set.of("factory_super_admin", "permission_admin", "super_admin", "platform_admin", "developer").contains(role);
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params, Map<String, Object> context) {
+        String deviceId = getString(params, "deviceId");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "PREVIEW");
+        result.put("action", "SUBSCRIBE");
+        if (deviceId != null && !deviceId.isBlank()) {
+            IsapiDevice device = deviceService.getDevice(factoryId, deviceId);
+            result.put("deviceId", device.getId());
+            result.put("deviceName", device.getDeviceName());
+        } else {
+            result.put("scope", "ALL_FACTORY_CAMERAS");
+        }
+        result.put("currentlySubscribedDeviceIds", subscriptionService.getActiveSubscriptionIds(factoryId));
+        result.put("message", "确认后才会订阅摄像头告警，本次预览未改变订阅。");
+        return result;
+    }
+
     @Override
     public String getDescription() {
         return "订阅摄像头告警事件。可以订阅单个设备或所有设备的告警推送。" +

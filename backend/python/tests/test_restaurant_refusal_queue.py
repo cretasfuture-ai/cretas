@@ -401,119 +401,8 @@ async def test_record_refusal_is_fail_open(monkeypatch):
 # ═══ 4. 接上没有 —— 跑在产品真实入口上 ═════════════════════════════════════
 
 
-@pytest.mark.asyncio
-async def test_java_delegate_entry_records_refusal(monkeypatch):
-    """🔴 「生产上谁保证 `record_refusal` 被调用？」的答案，就是这条断言。
-
-    跑的是**真实入口** `gold_reads.post_restaurant_tiered_answer`
-    （Java `GoldBackedRestaurantTool` 委派端点，RN App 的餐饮问答走它）：
-    真的 `RestaurantQuerySpec`、真的返回字典形状、真的 `should_delegate`、
-    真的 `classify_refusal`。只桩掉外部 IO：连接池、规划器、执行、那一次 INSERT。
-
-    ⇒ 变异「把 `record_refusal(...)` 那一行删掉」必须让它红。
-    ⛔ 只测 `record_refusal` 本身是不够的 —— 那是测 helper，测不出「有没有人调它」。
-    """
-    import smartbi.api.gold_reads as gold_reads_mod
-    from smartbi.api.gold_reads import (
-        TieredIntentAnswerRequest,
-        post_restaurant_tiered_answer,
-    )
-
-    spec = _dimension_gap_spec()
-    monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "MOCK_REST")
-    monkeypatch.setattr(
-        gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
-        AsyncMock(return_value=spec),
-    )
-    monkeypatch.setattr(
-        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
-        AsyncMock(return_value=_mismatch_result(spec)),
-    )
-    writes = []
-
-    async def _fake_log(pool, query, factory_id, upload_id, template_code,
-                        answer, wall_ms, agg_meta=None):
-        writes.append({"template_code": template_code, "agg_meta": agg_meta,
-                       "query": query, "factory_id": factory_id})
-        return 1
-
-    monkeypatch.setattr(
-        "smartbi.services.llm_fallback_logger.log_template_hit", _fake_log)
-
-    body = TieredIntentAnswerRequest(
-        factory_id="MOCK_REST", query="哪家店折扣最多",
-        java_tool_name="restaurant_discount_summary_gold",
-    )
-    response = await post_restaurant_tiered_answer(
-        SimpleNamespace(state=SimpleNamespace(role="restaurant_manager",
-                                              user_id=None)),
-        body,
-    )
-    # 记账走 asyncio.create_task（对用户零延迟）—— 让 loop 转一圈。
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert response["kind"] == "clarification", "构造无效: 这次不是拒答"
-    assert writes, (
-        "拒答没有进队列 —— 生产入口没有人调 record_refusal（形态 B: 机制在、没接上）")
-    assert writes[0]["template_code"] == rq.REFUSAL_SENTINEL
-    assert writes[0]["agg_meta"]["refusal_reason"] == rq.REASON_NO_DIMENSION
-    assert writes[0]["query"] == "哪家店折扣最多", "原句必须原样落下来"
-    assert writes[0]["factory_id"] == "MOCK_REST"
 
 
-@pytest.mark.asyncio
-async def test_java_delegate_entry_writes_nothing_for_a_real_answer(monkeypatch):
-    """同一个真实入口上的阴性对照：正常答案不进队列。
-
-    ⚠️ 少了它，上面那条只证明了「这个入口会写一行」，证明不了「它写的是拒答」。
-    """
-    import smartbi.api.gold_reads as gold_reads_mod
-    from smartbi.api.gold_reads import (
-        TieredIntentAnswerRequest,
-        post_restaurant_tiered_answer,
-    )
-
-    spec = _spec(intent="RESTAURANT_OPS_SALES_SUMMARY",
-                 planned_intents=("RESTAURANT_OPS_SALES_SUMMARY",
-                                  "RESTAURANT_OPS_GROSS_MARGIN"))
-    monkeypatch.setattr(gold_reads_mod, "get_factory_id", lambda: "MOCK_REST")
-    monkeypatch.setattr(
-        gold_reads_mod, "get_pg_pool", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        "smartbi.gold.restaurant.restaurant_intent.parse_restaurant_query",
-        AsyncMock(return_value=spec),
-    )
-    monkeypatch.setattr(
-        "smartbi.gold.restaurant.restaurant_intent_service.tiered_answer",
-        AsyncMock(return_value={
-            "kind": "answer",
-            "answer_text": "本月全部门店营收合计 ¥6,490,180.61。",
-            "charts": [], "kpis": [], "title": "经营分析",
-            "code": "RESTAURANT_OPS_SALES_SUMMARY",
-            "contract_pass": True, "spec": spec,
-        }),
-    )
-    fake_log = AsyncMock(return_value=1)
-    monkeypatch.setattr(
-        "smartbi.services.llm_fallback_logger.log_template_hit", fake_log)
-
-    body = TieredIntentAnswerRequest(
-        factory_id="MOCK_REST", query="本月营收多少",
-        java_tool_name="restaurant_sales_summary_gold",
-    )
-    response = await post_restaurant_tiered_answer(
-        SimpleNamespace(state=SimpleNamespace(role="restaurant_manager",
-                                              user_id=None)),
-        body,
-    )
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert response["kind"] == "answer", "构造无效: 这次不是成功回答"
-    assert fake_log.await_count == 0, "成功的回答被记进了拒答队列"
 
 
 # ═══ 5. 聚合：人工看的那张表 ═══════════════════════════════════════════════
@@ -649,32 +538,6 @@ def test_reason_breakdown_counts_occurrences_not_distinct_queries():
 # ═══ 6. 闭环：补完能力后批量晋升进飞轮 A ═══════════════════════════════════
 
 
-def test_promotion_entries_are_accepted_by_flywheel_a(tmp_path, monkeypatch):
-    """闭环的判据：产出的形状**飞轮 A 真的收得下**。
-
-    ⛔ 不新造一套晋升通道（形态 D）—— 断言方式是把产出直接喂给
-       `apply_promotions`，让它自己说收不收。
-    ⚠️ 断言 `added` 而不是「没报错」：`apply_promotions` 对不认识的形状是
-       **skip 而不是抛**，只看没报错等于什么都没测。
-    """
-    from smartbi.gold.restaurant import restaurant_intent_promotion as promo
-
-    monkeypatch.setattr(promo, "LEDGER_FILE", tmp_path / "ledger.json")
-    monkeypatch.setattr(promo, "REJECTED_FILE", tmp_path / "rejected.json")
-
-    rows = [
-        {"query": "哪家店折扣最多", "reason": rq.REASON_NO_DIMENSION},
-        {"query": "今天天气怎么样", "reason": rq.REASON_OUT_OF_DOMAIN},
-    ]
-    entries = rq.promotion_entries(
-        rows, code="RESTAURANT_OPS_DISCOUNT_SUMMARY")
-
-    assert entries == [{"query": "哪家店折扣最多",
-                        "code": "RESTAURANT_OPS_DISCOUNT_SUMMARY"}], (
-        "⛔ 域外必须被剔掉: 「补完能力」这个前提对它根本不成立")
-
-    out = promo.apply_promotions(entries)
-    assert out["added"] == entries, f"飞轮 A 不收这个形状: {out['skipped']}"
 
 
 def test_promotion_entries_writes_nothing_by_itself(tmp_path, monkeypatch):

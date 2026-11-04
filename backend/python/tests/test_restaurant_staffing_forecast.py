@@ -31,17 +31,6 @@ def test_future_horizons_are_calendar_bounded():
     assert horizon_window("month", as_of) == (date(2026, 9, 1), date(2026, 9, 30))
 
 
-@pytest.mark.parametrize(
-    "question,horizon",
-    [
-        ("明天怎么排班", "tomorrow"),
-        ("下周需要多少兼职", "week"),
-        ("下个月各店人效安排", "month"),
-    ],
-)
-def test_real_questions_route_to_staffing_horizon(question, horizon):
-    assert match_restaurant_ops(question) == "RESTAURANT_OPS_STAFFING_ADVICE"
-    assert horizon_from_question(question) == horizon
 
 
 @pytest.mark.parametrize(

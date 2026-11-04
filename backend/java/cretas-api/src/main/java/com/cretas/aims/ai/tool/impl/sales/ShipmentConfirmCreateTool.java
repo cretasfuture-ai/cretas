@@ -146,10 +146,21 @@ public class ShipmentConfirmCreateTool extends AbstractBusinessTool {
     }
 
     /** Query 模式 — 列今日待发 SO. */
-    private Map<String, Object> queryTodayPendingShipments(String factoryId) {
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    @com.cretas.aims.annotation.DataScope("created_by")
+    public Map<String, Object> queryTodayPendingShipments(String factoryId) {
         LocalDate today = LocalDate.now();
+        List<SalesOrder> visibleOrders = new ArrayList<>();
+        boolean truncated = false;
+        // Use the same row-scoped service as order_list; never load other salespeople's orders first.
+        for (int page = 1; page <= 100; page++) {
+            var visible = salesService.getSalesOrdersFiltered(factoryId, null, null, null, page, 200);
+            visibleOrders.addAll(visible.getContent());
+            if (visible.getTotalPages() == null || page >= visible.getTotalPages()) break;
+            if (page == 100) truncated = true;
+        }
         // 查所有可发货状态 (SO_DELIVERABLE) + requiredDeliveryDate <= 今天 + 还有未发量
-        List<SalesOrder> candidates = salesOrderRepository.findAll().stream()
+        List<SalesOrder> candidates = visibleOrders.stream()
                 .filter(so -> factoryId.equals(so.getFactoryId()))
                 .filter(so -> so.getStatus() != null
                         && OrderUsageWhitelists.SO_DELIVERABLE.contains(so.getStatus()))
@@ -197,12 +208,13 @@ public class ShipmentConfirmCreateTool extends AbstractBusinessTool {
         result.put("today", today);
         result.put("orders", orderList);
         result.put("orderCount", orderList.size());
+        result.put("truncated", truncated);
         String msg = orderList.isEmpty()
                 ? "今日待发: 暂无待发货销售订单"
                 : String.format("今日待发: %d 个销售订单, 共 %d 个待发行",
                         orderList.size(),
                         orderList.stream().mapToInt(o -> (Integer) o.get("itemCount")).sum());
-        result.put("message", msg);
+        result.put("message", truncated ? msg + "（仅包含当前可见范围前20000个订单，请缩小查询范围）" : msg);
         return result;
     }
 

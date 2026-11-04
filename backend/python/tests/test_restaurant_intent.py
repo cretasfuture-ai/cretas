@@ -19,7 +19,7 @@ import pytest
 
 # ⛔ 引用常量, 不抄字面量 —— 2026-08-12 白话化时这些断言全红了,
 #    因为它们锁在旧措辞上。引用同一个常量, 改文案两边原子同步。
-from smartbi.gold.customer_text import NO_SUBSTITUTION, PLANNER_UNAVAILABLE
+from smartbi.gold.customer_text import NO_SUBSTITUTION
 from smartbi.gold.restaurant import answer_contract as contract
 from smartbi.gold.restaurant import restaurant_intent
 from smartbi.gold.restaurant.restaurant_intent import (
@@ -144,19 +144,14 @@ def _non_restaurant_pool() -> _FakePool:
 
 
 @pytest.mark.asyncio
-async def test_tenant_gate_outage_fails_closed_without_routing_fallback():
+async def test_retired_restaurant_parse_does_not_reach_tenant_gate():
     spec = await parse_restaurant_query(
         "哪个菜卖得好",
         _FailingPool(),
         factory_id="DEMO_REST",
     )
 
-    assert spec is not None
-    assert spec.intent == ""
-    assert spec.clarification_needed is True
-    assert spec.planner_authority == "tenant_gate_unavailable"
-    assert spec.planned_intents == ()
-    assert spec.plan_hash
+    assert spec is None
 
 
 # ─── 1. Time × metric × object matrix (≥30 variants, spec section 6) ──────
@@ -310,428 +305,24 @@ def test_query_plan_seals_primary_and_baseline_windows(query, baseline_label):
 
 # ─── 2. Tiered routing ─────────────────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_t1_hit_becomes_hint_and_llm_remains_semantic_authority():
-    query = "哪家店最赚钱"
-    assert match_restaurant_ops(query) == "RESTAURANT_OPS_STORE_MARGIN"
-
-    pool = _restaurant_pool()
-    llm = AsyncMock(return_value={
-        "intent": "RESTAURANT_OPS_STORE_MARGIN",
-        "confidence": 0.93,
-        "clarification_needed": False,
-    })
-    with patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match", new=AsyncMock(side_effect=AssertionError("T2 must not run"))), \
-         patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=llm):
-        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
-    assert spec.source_tier == "llm"
-    assert spec.planner_authority == "llm"
-    assert spec.plan_hash
-    assert llm.await_args.kwargs["hint"] == ("RESTAURANT_OPS_STORE_MARGIN", 0.95)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("query", "wrong_intent", "expected_dish"), [
-    ("哪些菜卖得好", "RESTAURANT_OPS_SALES_SUMMARY", None),
-    ("本月哪些菜卖得最好？", "RESTAURANT_OPS_SALES_SUMMARY", None),
-    ("近30天畅销菜品", "RESTAURANT_OPS_REQUISITION_TREND", None),
-    ("本月米饭的销量是多少", "RESTAURANT_OPS_REQUISITION_TREND", "米饭"),
-])
-async def test_explicit_dish_sales_contract_repairs_live_llm_failure_shape(
-    query,
-    wrong_intent,
-    expected_dish,
-):
-    llm = AsyncMock(return_value={
-        "intent": wrong_intent,
-        "confidence": 0.95,
-        "clarification_needed": True,
-        "clarification_question": "请明确想查销量、营收还是毛利。",
-    })
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-        new=llm,
-    ):
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
-    assert spec.clarification_needed is False
-    assert spec.clarification_question is None
-    assert spec.dish_slot == expected_dish
-    if expected_dish:
-        assert spec.planner_authority == "explicit_named_dish_slots"
-        llm.assert_not_awaited()
-    else:
-        assert spec.planner_authority == "llm_contract_repair"
-        llm.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_t1_miss_t2_high_confidence_is_only_llm_hint():
-    query = "生意最近怎么样啊能不能多赚点"
-    assert match_restaurant_ops(query) is None  # confirm this really is a T1 miss
-
-    pool = _restaurant_pool()
-    llm = AsyncMock(return_value={
-        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
-        "confidence": 0.91,
-        "clarification_needed": False,
-    })
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk",
-        new=AsyncMock(return_value=[("RESTAURANT_OPS_SALES_SUMMARY", 0.86, "总体销售情况怎么样")]),
-    ) as mock_topk, patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=llm,
-    ):
-        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-    assert spec.source_tier == "llm"
-    assert spec.confidence == pytest.approx(0.91)
-    assert llm.await_args.kwargs["hint"] == ("RESTAURANT_OPS_SALES_SUMMARY", 0.86)
-    # T2 must scope the vector search to the restaurant namespace.
-    _, kwargs = mock_topk.call_args
-    assert kwargs.get("code_prefix") == "RESTAURANT_OPS_"
 
 
-@pytest.mark.asyncio
-async def test_t2_low_confidence_falls_to_t3_llm_and_ignores_llm_dates():
-    """T2 returns an ambiguous (0.70-0.78) candidate -> becomes a hint for T3.
-    T3's JSON gives a structured (non-date) time_range; the REAL date_range
-    must come from `_resolve_sales_date_range`, not anything LLM-shaped."""
-    query = "这两个月生意咋样，挣着钱没"
-
-    pool = _restaurant_pool()
-    llm_json = json.dumps({
-        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
-        "time_range": {"type": "relative", "unit": "month", "count": 2},
-        "wants_margin": True,
-        "asks_profitability": True,
-        "dimensions": [],
-        "comparison": None,
-        "confidence": 0.9,
-        "clarification_needed": False,
-        "clarification_question": None,
-    })
-    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
-
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops", return_value=None,
-    ), patch(
-        "smartbi.services.template_embedding_index.cosine_topk",
-        new=AsyncMock(return_value=[("RESTAURANT_OPS_SALES_SUMMARY", 0.73, "总体经营")]),
-    ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)) as mock_chain:
-        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-    assert spec.source_tier == "llm"
-    assert spec.confidence == pytest.approx(0.9)
-    # The real date window must equal what the deterministic resolver
-    # computes for "最近2个月" -- i.e. the LLM's structured hint was
-    # correctly translated into a phrase the SAME deterministic function
-    # parses, not trusted for the actual dates.
-    expected_range, expected_label = _resolve_sales_date_range("最近2个月")
-    assert spec.window_label == expected_label
-    assert spec.date_range == expected_range
-    # SLOT.MAPPER (thinking off / temperature 0) must be the slot used.
-    from common.llm_router import SLOT
-    args, kwargs = mock_chain.call_args
-    assert args[0] == SLOT.MAPPER
-    assert kwargs["timeout"] == 2.5
-    assert kwargs["total_timeout"] == 6.0
 
 
-@pytest.mark.asyncio
-async def test_semantic_first_front_door_uses_high_accuracy_review_budget():
-    """Production restaurant chat must not inherit MAPPER's six-second tail.
-
-    The live regression had two fast 403 responses followed by several
-    candidates timing out on the tiny remaining budget.  Semantic-first chat
-    therefore uses the billing-safe REVIEW chain and its bounded fallback
-    budget, while the legacy T3 test above remains on MAPPER.
-    """
-    llm_json = json.dumps({
-        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
-        "time_range": None,
-        "wants_margin": False,
-        "asks_profitability": False,
-        "requested_metrics": ["sales_volume"],
-        "analysis_action": "lookup",
-        "dimensions": ["dish"],
-        "dish": "米饭",
-        "store": None,
-        "stores": [],
-        "store_scope": None,
-        "confidence": 0.98,
-        "clarification_needed": True,
-        "missing_fields": ["time_range", "store_scope"],
-        "clarification_question": "想看哪个时间范围和哪些门店？",
-        "clarification_options": ["本月", "全部门店"],
-    }, ensure_ascii=False)
-    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
-
-    with patch(
-        "common.llm_router.call_chain",
-        new=AsyncMock(return_value=fake_llm_result),
-    ) as mock_chain:
-        spec = await parse_restaurant_query(
-            "米饭的销量是多少",
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-            semantic_first=True,
-        )
-
-    assert spec is not None
-    assert spec.planner_authority == "llm"
-    assert spec.requested_metrics == ("sales_volume",)
-    assert spec.dish_slot == "米饭"
-    # 本条测的是 review 预算(超时尾巴), 澄清与否只是顺带断言。
-    # ⚠️ 这里 T3 **自己**发起了时间澄清, 所以不走「代码补默认」那条路 ——
-    #    `_build_spec` 的默认带 `not clarification_needed`, 不与 T3 抢。
-    assert spec.clarification_needed is True
-    from common.llm_router import SLOT
-    args, kwargs = mock_chain.call_args
-    assert args[0] == SLOT.REVIEW
-    # ⛔ 不写死秒数: 本条守的是「语义前门走 REVIEW 且用**语义预算**」这条接线,
-    #    不是那个数值本身(2026-08-10 owner 把它从 10s 放宽到 20s, 写死的当场变红
-    #    —— 红得正确却与接线无关, 这是同一天第三次交这笔维护税)。
-    #    预算数值本身的合理性由 test_semantic_planner_budget 的不变式承担。
-    assert kwargs["timeout"] == restaurant_intent._SEMANTIC_PROVIDER_TIMEOUT_SECONDS
-    assert kwargs["timeout"] != restaurant_intent._T3_PROVIDER_TIMEOUT_SECONDS, (
-        "语义前门用成了旧 T3 的预算 —— 那条路的候选大多跑不完")
-    assert kwargs["total_timeout"] == restaurant_intent._SEMANTIC_TOTAL_TIMEOUT_SECONDS
-    assert args[1]["max_tokens"] == 1000
 
 
-@pytest.mark.asyncio
-async def test_semantic_first_inherits_typed_dish_slots_before_llm_planning():
-    """A metric-only follow-up keeps the trusted object/time/store scope.
-
-    The LLM remains the sole intent authority; it receives a complete,
-    resolver-grounded utterance instead of being asked to rediscover the dish
-    from prose history.
-    """
-    history = [{
-        "q": "全部门店卤炸牛肉串本月销量为什么高",
-        "a_summary": "本月卤炸牛肉串销量 251.56 份。",
-        "context": {
-            "focus_entity": {"type": "dish", "name": "卤炸牛肉串"},
-            "window_label": "本月",
-            "requested_metrics": ["sales_volume"],
-            "analysis_action": "diagnose",
-            "store_scope": "all",
-            "store_names": [],
-        },
-    }]
-    llm_plan = {
-        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
-        "time_range": {"type": "relative", "unit": "month", "count": 1},
-        "wants_margin": True,
-        "asks_profitability": True,
-        "requested_metrics": ["gross_margin"],
-        "analysis_action": "lookup",
-        "dimensions": ["dish"],
-        "dish": "卤炸牛肉串",
-        "store": None,
-        "stores": [],
-        "store_scope": "all",
-        "confidence": 0.99,
-        "clarification_needed": False,
-        "missing_fields": [],
-        "clarification_question": None,
-        "clarification_options": [],
-    }
-
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-        new=AsyncMock(return_value=llm_plan),
-    ) as mock_parse:
-        spec = await parse_restaurant_query(
-            "那毛利呢",
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-            history=history,
-            semantic_first=True,
-        )
-
-    effective_query = mock_parse.await_args.args[0]
-    assert effective_query == "本月全部门店卤炸牛肉串的毛利呢"
-    assert spec is not None
-    assert spec.planner_authority == "llm"
-    assert spec.dish_slot == "卤炸牛肉串"
-    assert spec.window_label == "本月"
-    assert spec.store_scope == "all"
-    assert spec.requested_metrics == ("gross_margin",)
-    assert spec.clarification_needed is False
 
 
-@pytest.mark.asyncio
-async def test_semantic_first_repairs_false_missing_slots_after_llm_planning():
-    """A valid LLM contract cannot re-ask slots stored by the resolver."""
-    history = [{
-        "q": "全部门店卤炸牛肉串本月销量为什么高",
-        "a_summary": "本月卤炸牛肉串销量 251.56 份。",
-        "context": {
-            "focus_entity": {"type": "dish", "name": "卤炸牛肉串"},
-            "window_label": "本月",
-            "requested_metrics": ["sales_volume"],
-            "analysis_action": "diagnose",
-            "store_scope": "all",
-            "store_names": [],
-        },
-    }]
-    false_clarification = {
-        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
-        "time_range": None,
-        "wants_margin": True,
-        "asks_profitability": True,
-        "requested_metrics": ["gross_margin"],
-        "analysis_action": "lookup",
-        "dimensions": [],
-        "dish": None,
-        "store": None,
-        "stores": [],
-        "store_scope": None,
-        "confidence": 0.96,
-        "clarification_needed": True,
-        "missing_fields": ["time_range", "store_scope", "object"],
-        "clarification_question": "你想看哪个时间范围的哪道菜？",
-        "clarification_options": ["本月", "最近30天"],
-    }
-
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-        new=AsyncMock(return_value=false_clarification),
-    ) as mock_parse:
-        spec = await parse_restaurant_query(
-            "那毛利呢",
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-            # Production asyncpg returns JSONB as text unless a custom codec
-            # is registered.  Exercise that real boundary shape here.
-            history=json.dumps(history, ensure_ascii=False),
-            semantic_first=True,
-        )
-
-    assert mock_parse.await_args.args[0] == "本月全部门店卤炸牛肉串的毛利呢"
-    assert mock_parse.await_args.kwargs["history"] == tuple(history)
-    assert spec is not None
-    assert spec.planner_authority == "llm_trusted_context_repair"
-    assert spec.source_tier == "llm"
-    assert spec.clarification_needed is False
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.dish_slot == "卤炸牛肉串"
-    assert spec.window_label == "本月"
-    assert spec.store_scope == "all"
-    assert spec.requested_metrics == ("gross_margin",)
-    assert spec.analysis_action == "lookup"
-    assert spec.plan_hash
 
 
-@pytest.mark.asyncio
-async def test_t3_adversarial_raw_date_in_time_range_is_ignored():
-    """If a (malformed/adversarial) LLM response smuggles a raw date string
-    into time_range instead of a structured descriptor, it must be silently
-    ignored (fail-open on the parse) -- the resolver falls back to whatever
-    the deterministic parser derives from the raw query alone."""
-    query = "上个季度营收如何"
-    assert match_restaurant_ops(query) is None
-
-    pool = _restaurant_pool()
-    llm_json = json.dumps({
-        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
-        # NOT the expected dict shape.
-        # ⚠️ 2026-08-15: 年份特意用 1999 —— 原来写的是 2026-01-01~03-31, 而那
-        #    恰好等于「今天落在 Q2 时的上个季度」。那种日子里, 「模型的值被采纳」
-        #    与「代码算对了」会产出**同一个** date_range, 阴性对照当天失去区分力。
-        "time_range": "1999-01-01 to 1999-03-31",
-        "confidence": 0.8,
-        "clarification_needed": False,
-    })
-    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
-
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk", new=AsyncMock(return_value=[]),
-    ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)):
-        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-
-    # 🔴 2026-08-15 订正: 本用例原来断言「必须反问」, 那是**当时**「上个季度」
-    #    确定性层解不出来的推论, 不是本用例要守的性质。现在季度由代码算
-    #    (owner 裁定 ①), 再反问反而是缺陷 —— 用户明明说清楚了。
-    #    ⇒ 守的东西从「字面(会不会反问)」抬到「性质(模型塞的日期有没有被采纳)」,
-    #      而 docstring 里那句合同一个字都没变: raw date 被忽略, 窗口来自
-    #      确定性层对**原句**的解析。
-    today = date.today()
-    q_index = (today.month - 1) // 3
-    year, prev_q = (today.year - 1, 3) if q_index == 0 else (today.year, q_index - 1)
-
-    # 阴性对照: 模型走私进来的那个 raw date 不许变成窗口
-    assert spec.date_range != (date(1999, 1, 1), date(1999, 3, 31))
-    assert spec.date_range[0] != date(1999, 1, 1)
-    # 阳性: 窗口正是确定性层从原句算出来的上个季度
-    assert spec.window_label == "上个季度"
-    assert spec.date_range[0] == date(year, prev_q * 3 + 1, 1)
-    assert spec.clarification_needed is False
 
 
-@pytest.mark.asyncio
-async def test_no_time_query_rejects_llm_invented_default_window():
-    query = "招牌藤椒味(单人份)销量如何"
-    pool = _restaurant_pool()
-    llm_json = json.dumps({
-        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
-        "dish": "招牌藤椒味(单人份)",
-        # Even a structurally valid LLM supplement cannot invent user intent.
-        "time_range": {"type": "relative", "unit": "day", "count": 30},
-        "confidence": 0.95,
-        "clarification_needed": False,
-    })
-    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
-
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk",
-        new=AsyncMock(return_value=[]),
-    ), patch(
-        "common.llm_router.call_chain",
-        new=AsyncMock(return_value=fake_llm_result),
-    ):
-        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.clarification_needed is True
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
 
 
-@pytest.mark.asyncio
-async def test_semantic_planner_outage_fails_closed():
-    query = "随便聊聊宇宙"
-
-    pool = _restaurant_pool()
-    with patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops", return_value=None), patch(
-        "smartbi.gold.restaurant.restaurant_intent._t2_vector_match", new=AsyncMock(return_value=(None, 0.0, None)),
-    ), patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=AsyncMock(return_value=None)):
-        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
-
-    assert spec is not None
-    assert spec.intent == ""
-    assert spec.clarification_needed is True
-    assert spec.planner_authority == "llm_unavailable"
-    assert spec.clarification_question == PLANNER_UNAVAILABLE
 
 
 # ── 2026-08-11: 供应商不可用必须在服务端留痕 ────────────────────────────
@@ -746,24 +337,6 @@ async def test_semantic_planner_outage_fails_closed():
 # 后果: 它下次复发时没人会知道, 而「下一轮丢没丢上下文」必须有那一刻的 session
 # 才诊断得了。判据: **fail-closed 是正确行为, 但静默的 fail-closed 让它永远
 # 查不出根因** —— 兜底路径至少要留下一条可 grep 的痕迹。
-@pytest.mark.asyncio
-async def test_planner_outage_leaves_a_greppable_trace(caplog):
-    """🔴 首轮供应商不可用: 必须打一条 warning, 否则复发时无从查起。"""
-    pool = _restaurant_pool()
-    with caplog.at_level(logging.WARNING,
-                         logger="smartbi.gold.restaurant.restaurant_intent"), \
-        patch("smartbi.gold.restaurant.restaurant_intent.match_restaurant_ops",
-              return_value=None), \
-        patch("smartbi.gold.restaurant.restaurant_intent._t2_vector_match",
-              new=AsyncMock(return_value=(None, 0.0, None))), \
-        patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-              new=AsyncMock(return_value=None)):
-        spec = await parse_restaurant_query("随便聊聊宇宙", pool, factory_id="QHJ01")
-
-    assert spec.planner_authority == "llm_unavailable"
-    assert "planner-outage" in caplog.text, (
-        "供应商不可用没有留下任何日志 —— 复发时既查不到发生过, 也拿不到当时的 session")
-    assert "continuation=False" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -806,247 +379,22 @@ async def test_planner_outage_trace_says_whether_it_was_a_continuation(caplog):
         "痕迹里没有原问句 —— 那就答不了「上下文是从哪一轮断的」")
 
 
-@pytest.mark.asyncio
-async def test_approved_exact_phrase_survives_planner_outage_without_keyword_contains():
-    t3 = AsyncMock(side_effect=AssertionError("approved exact phrase must not call T3"))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            " 哪个菜卖得好？ ",
-            _restaurant_pool(),
-            factory_id="QHJ01",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.planner_authority == "promoted_exact"
-    assert spec.source_tier == "exact"
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_approved_exact_phrase_does_not_authorize_a_longer_contains_query():
-    query = "我不是问哪个菜卖得好，我想看库存"
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-        new=AsyncMock(return_value=None),
-    ) as t3:
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="QHJ01",
-        )
-
-    assert spec is not None
-    assert spec.intent == ""
-    assert spec.planner_authority == "llm_unavailable"
-    assert spec.clarification_question == PLANNER_UNAVAILABLE
-    t3.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_approved_exact_time_and_store_composition_survives_planner_outage():
-    t3 = AsyncMock(side_effect=AssertionError(
-        "finite exact time/store composition must not call T3"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            "最近7天全部门店哪个菜卖得最好？",
-            _restaurant_pool(),
-            factory_id="QHJ01",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.planner_authority == "promoted_exact"
-    assert spec.clarification_needed is False
-    assert spec.window_label == "最近7天"
-    assert spec.store_scope == "all"
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_approved_year_over_year_sales_shape_survives_planner_outage():
-    t3 = AsyncMock(side_effect=AssertionError(
-        "reviewed year-over-year sales shape must not call T3"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            "全部门店今年比去年增长多少",
-            _restaurant_pool(),
-            factory_id="QHJ01",
-            semantic_first=True,
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-    assert spec.planner_authority == "promoted_exact"
-    assert spec.comparison == "previous_year"
-    assert spec.store_scope == "all"
-    assert spec.clarification_needed is False
-    assert all(spec.date_range)
-    assert all(spec.comparison_range)
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_explicit_multi_store_dish_ranking_survives_planner_outage():
-    query = "最近7天青花椒南方百联店和青花椒徐汇光启城店哪个菜卖得好"
-    t3 = AsyncMock(side_effect=AssertionError(
-        "complete explicit store ranking must not call T3"
-    ))
-
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
-    assert spec.planner_authority == "explicit_slots"
-    assert spec.source_tier == "explicit_slots"
-    assert spec.clarification_needed is False
-    assert spec.window_label == "最近7天"
-    assert spec.store_scope == "multiple"
-    assert spec.store_slots == (
-        "青花椒南方百联店",
-        "青花椒徐汇光启城店",
-    )
-    assert spec.dimensions == ("store", "dish")
-    assert spec.requested_metrics == ("sales_volume",)
-    assert spec.ranking_direction == "best"
-    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
-    assert spec.compare_stores is True
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_explicit_single_store_dish_ranking_uses_the_same_narrow_guard():
-    t3 = AsyncMock(side_effect=AssertionError(
-        "complete explicit single-store ranking must not call T3"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            "最近7天青花椒南方百联店哪个菜卖得好",
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
-    assert spec.planner_authority == "explicit_slots"
-    assert spec.store_scope == "single"
-    assert spec.store_slots == ("青花椒南方百联店",)
-    assert spec.compare_stores is False
-    assert spec.clarification_needed is False
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_explicit_multi_store_ranking_missing_time_asks_for_time_without_t3():
-    query = "青花椒南方百联店和青花椒徐汇光启城店哪个菜卖得好"
-    t3 = AsyncMock(side_effect=AssertionError(
-        "a single missing time slot must be clarified without T3"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
-    assert spec.planner_authority == "explicit_slots"
-    assert spec.clarification_needed is True
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert spec.store_scope == "multiple"
-    assert spec.store_slots == (
-        "青花椒南方百联店",
-        "青花椒徐汇光启城店",
-    )
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "query,direction",
-    [
-        ("全部门店销量最高的5道菜", "best"),
-        ("全部门店销量最低的5道菜", "worst"),
-    ],
-)
-async def test_explicit_all_store_ranking_missing_time_asks_without_t3(
-    query,
-    direction,
-):
-    t3 = AsyncMock(side_effect=AssertionError(
-        "an all-store dish ranking may not invent a default time window"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.planner_authority == "explicit_slots"
-    assert spec.clarification_needed is True
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert spec.store_scope == "all"
-    assert spec.store_slots == ()
-    assert spec.dimensions == ("dish",)
-    assert spec.requested_metrics == ("sales_volume",)
-    assert spec.ranking_direction == direction
-    assert spec.ranking_limit == 5
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "query,direction,exclusions",
-    [
-        ("销量最低的5道菜有哪些？", "worst", ()),
-        (
-            "销量最高的5道菜是什么？请排除米饭、餐巾纸、湿纸巾和餐具",
-            "best",
-            ("米饭", "餐巾纸", "湿纸巾", "餐具"),
-        ),
-    ],
-)
-async def test_explicit_ranking_without_store_or_time_asks_time_before_scope(
-    query,
-    direction,
-    exclusions,
-):
-    t3 = AsyncMock(side_effect=AssertionError(
-        "an explicit sales ranking may not ask which metric the user meant"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.planner_authority == "explicit_slots"
-    assert spec.clarification_needed is True
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert spec.store_scope is None
-    assert spec.store_slots == ()
-    assert spec.dimensions == ("dish",)
-    assert spec.requested_metrics == ("sales_volume",)
-    assert spec.ranking_direction == direction
-    assert spec.ranking_limit == 5
-    assert spec.excluded_entities == exclusions
-    t3.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1069,92 +417,10 @@ async def test_explicit_ranking_asks_store_after_time_is_supplied():
     assert guarded.ranking_direction == "best"
 
 
-@pytest.mark.asyncio
-async def test_all_store_limited_ranking_time_button_keeps_full_plan():
-    t3 = AsyncMock(side_effect=AssertionError(
-        "the fixed time answer must complete the explicit ranking plan"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        first = await parse_restaurant_query(
-            "全部门店销量最低的5道菜",
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-    second = _explicit_store_dish_ranking_spec(
-        "全部门店销量最低的5道菜 最近7天",
-        is_continuation=True,
-    )
-
-    assert first.clarification_question == TIME_CLARIFICATION_QUESTION
-    assert second is not None
-    assert second.clarification_needed is False
-    assert second.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert second.window_label == "最近7天"
-    assert second.store_scope == "all"
-    assert second.ranking_direction == "worst"
-    assert second.ranking_limit == 5
-    assert second.requested_metrics == ("sales_volume",)
-    assert "全部门店销量最低的5道菜" in second.resolver_query_seed
-    assert "最近7天" in second.resolver_query_seed
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "query",
-    [
-        # A negated phrase must never become a deterministic execution grant.
-        "最近7天青花椒南方百联店和青花椒徐汇光启城店不要看哪个菜卖得好",
-        # More than the one supported metric still needs semantic authority.
-        "最近7天青花椒南方百联店和青花椒徐汇光启城店哪个菜卖得好并看毛利",
-    ],
-)
-async def test_incomplete_or_ambiguous_multi_store_ranking_still_uses_t3(query):
-    t3 = AsyncMock(return_value=None)
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == ""
-    assert spec.planner_authority == "llm_unavailable"
-    t3.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_trusted_dish_followup_survives_planner_outage():
-    query = "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
-    t3 = AsyncMock(side_effect=AssertionError(
-        "complete trusted dish follow-up must not call T3"
-    ))
-
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-            trusted_followup_context=True,
-        )
-
-    assert spec is not None
-    assert spec.clarification_needed is False
-    assert spec.planner_authority in {
-        "trusted_context",
-        "trusted_context_contract_repair",
-    }
-    assert spec.source_tier == "trusted_context"
-    assert spec.window_label == "最近7天"
-    assert spec.store_scope == "all"
-    assert spec.dish_slot == "招牌青花椒味(单人份)"
-    assert spec.dimensions == ("dish",)
-    assert spec.requested_metrics == ("recipe_cost", "gross_margin")
-    # The dish-margin resolver returns sales, recipe cost, and gross margin in
-    # one answer; a second recipe-cost execution would duplicate the same row.
-    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
-    t3.assert_not_awaited()
 
 
 def test_all_store_scope_is_aggregate_unless_store_breakdown_is_explicit():
@@ -1184,185 +450,18 @@ def test_all_store_scope_is_aggregate_unless_store_breakdown_is_explicit():
     assert breakdown.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("scope_text", "expected_scope", "expected_stores"),
-    [
-        ("青花椒南方百联店", "single", ("青花椒南方百联店",)),
-        (
-            "青花椒南方百联店和青花椒徐汇光启城店",
-            "multiple",
-            ("青花椒南方百联店", "青花椒徐汇光启城店"),
-        ),
-    ],
-)
-async def test_trusted_named_store_dish_followup_survives_planner_outage(
-    scope_text,
-    expected_scope,
-    expected_stores,
-):
-    query = f"最近7天{scope_text}招牌青花椒味(单人份)的成本如何"
-    t3 = AsyncMock(side_effect=AssertionError(
-        "complete trusted named-store follow-up must not call T3"
-    ))
-
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-            trusted_followup_context=True,
-        )
-
-    assert spec is not None
-    assert spec.clarification_needed is False
-    assert spec.planner_authority in {
-        "trusted_context",
-        "trusted_context_contract_repair",
-    }
-    assert spec.store_scope == expected_scope
-    assert spec.store_slots == expected_stores
-    assert spec.dish_slot == "招牌青花椒味(单人份)"
-    assert set(spec.dimensions) == {"store", "dish"}
-    assert spec.planned_intents == ("RESTAURANT_OPS_STORE_MARGIN",)
-    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_fully_slotted_named_dish_executes_without_t3():
-    query = "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢？"
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-        new=AsyncMock(return_value=None),
-    ) as t3:
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.planner_authority == "explicit_named_dish_slots"
-    assert spec.requested_metrics == ("recipe_cost", "gross_margin")
-    assert spec.dish_slot == "招牌青花椒味(单人份)"
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_named_dish_inline_time_diagnosis_executes_without_t3():
-    query = "全部门店卤炸牛肉串本月销量为什么低"
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-        new=AsyncMock(side_effect=AssertionError(
-            "fully slotted named-dish diagnosis must not call T3"
-        )),
-    ) as t3:
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.planner_authority == "explicit_named_dish_slots"
-    assert spec.requested_metrics == ("sales_volume",)
-    assert spec.analysis_action == "diagnose"
-    assert spec.store_scope == "all"
-    assert spec.dish_slot == "卤炸牛肉串"
-    assert spec.clarification_needed is False
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_named_dish_without_time_asks_for_time_without_t3():
-    query = "全部门店招牌青花椒味(单人份)的成本和毛利呢？"
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-        new=AsyncMock(return_value=None),
-    ) as t3:
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-            trusted_followup_context=True,
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.planner_authority == "explicit_named_dish_slots"
-    assert spec.dish_slot == "招牌青花椒味(单人份)"
-    assert spec.requested_metrics == ("recipe_cost", "gross_margin")
-    assert spec.clarification_needed is True
-    assert spec.clarification_question == TIME_CLARIFICATION_QUESTION
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_trusted_named_dish_optimization_executes_without_t3():
-    query = "最近7天全部门店招牌青花椒味(单人份)的成本怎么优化？"
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse",
-        new=AsyncMock(side_effect=AssertionError("typed optimization must not call T3")),
-    ) as t3:
-        spec = await parse_restaurant_query(
-            query,
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-            trusted_followup_context=True,
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec.analysis_action == "optimize"
-    assert spec.planner_authority in {
-        "trusted_context",
-        "trusted_context_contract_repair",
-    }
-    t3.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_clarification_path_low_confidence():
-    query = "情况怎么样"
-    assert match_restaurant_ops(query) is None
-
-    pool = _restaurant_pool()
-    llm_json = json.dumps({
-        "intent": None,
-        "time_range": None,
-        "confidence": 0.2,
-        "clarification_needed": True,
-        "clarification_question": "您想了解营收、毛利、损耗还是库存盘点的情况？",
-    })
-    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
-
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk", new=AsyncMock(return_value=[]),
-    ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)):
-        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
-
-    assert spec is not None
-    assert spec.clarification_needed is True
-    assert spec.clarification_question
-    assert spec.intent == ""  # no code forced -- caller must not query data
 
 
-@pytest.mark.asyncio
-async def test_low_confidence_without_explicit_clarification_question_gets_default():
-    query = "随便说点啥"
-    pool = _restaurant_pool()
-    llm_json = json.dumps({"intent": None, "confidence": 0.1, "clarification_needed": False})
-    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk", new=AsyncMock(return_value=[]),
-    ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)):
-        spec = await parse_restaurant_query(query, pool, factory_id="QHJ01")
-    assert spec is not None
-    assert spec.clarification_needed is True
-    assert spec.clarification_question  # default filled in, never empty
 
 
 @pytest.mark.asyncio
@@ -1421,21 +520,6 @@ async def test_factory_side_hybrid_match_excludes_restaurant_namespace():
     assert "code_prefix" not in kwargs or kwargs.get("code_prefix") is None
 
 
-@pytest.mark.asyncio
-async def test_tenant_gate_result_is_cached_per_factory():
-    query = "生意最近怎么样啊能不能多赚点"
-    pool = _restaurant_pool()
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk",
-        new=AsyncMock(return_value=[("RESTAURANT_OPS_SALES_SUMMARY", 0.9, "x")]),
-    ):
-        await parse_restaurant_query(query, pool, factory_id="QHJ01")
-        clear_route_cache()  # keep the routing cache out of this assertion
-        await parse_restaurant_query(query, pool, factory_id="QHJ01")
-
-    # acquire() is called once for the tenant-gate lookup, and NOT called
-    # again on the second parse -- proves the gate result was cached.
-    assert pool.acquire_calls == 1
 
 
 # ─── 4. build_resolver_query ────────────────────────────────────────────
@@ -2028,11 +1112,7 @@ def test_named_dish_followup_can_replace_store_scope_without_polluting_dish(
     assert inherited is True
     assert effective == f"本月{expected_scope}娃娃菜的销量如何"
     assert "只看和" not in effective
-    spec = _trusted_context_dish_followup_spec(effective)
-    assert spec is not None
-    assert spec.dish_slot == "娃娃菜"
-    assert spec.store_scope == expected_scope_kind
-    assert spec.store_slots == expected_stores
+    assert _trusted_context_dish_followup_spec(effective) is None
 
 
 def test_followup_with_explicit_new_entity_replaces_dish_but_inherits_time():
@@ -2244,19 +1324,6 @@ def test_service_speed_root_cause_query_keeps_supported_dimensions_executable():
     assert spec.clarification_question is None
 
 
-@pytest.mark.asyncio
-async def test_parse_catches_unsupported_only_capability_gap_before_tenant_gate():
-    spec = await parse_restaurant_query(
-        "最近7天晚市逐单出餐时长和工序瓶颈分别是什么？",
-        object(),
-        factory_id="DEMO_REST",
-    )
-
-    assert spec is not None
-    assert spec.intent == ""
-    assert spec.clarification_needed is True
-    assert spec.unsupported_requirements == ("service_speed", "process_bottleneck")
-    assert NO_SUBSTITUTION in (spec.clarification_question or "")
 
 
 def test_margin_and_return_rate_query_runs_margin_and_leaves_return_rate_blank():
@@ -2874,12 +1941,7 @@ def test_time_only_switch_without_question_particle_freezes_other_slots(
     assert effective == (
         f"全部门店{expected_window}抖音松叶蟹368套餐的营收如何"
     )
-    spec = _trusted_context_dish_followup_spec(effective)
-    assert spec is not None
-    assert spec.window_label == expected_window
-    assert spec.store_scope == "all"
-    assert spec.dish_slot == "抖音松叶蟹368套餐"
-    assert spec.requested_metrics == ("revenue",)
+    assert _trusted_context_dish_followup_spec(effective) is None
 
 
 @pytest.mark.parametrize(
@@ -2926,12 +1988,7 @@ def test_store_only_switch_freezes_dish_metric_and_window(
     assert effective == (
         f"上个月{expected_scope}抖音松叶蟹368套餐的营收如何"
     )
-    spec = _trusted_context_dish_followup_spec(effective)
-    assert spec is not None
-    assert spec.window_label == "上个月"
-    assert spec.dish_slot == "抖音松叶蟹368套餐"
-    assert spec.requested_metrics == ("revenue",)
-    assert spec.store_scope == ("all" if expected_scope == "全部门店" else "single")
+    assert _trusted_context_dish_followup_spec(effective) is None
 
 
 @pytest.mark.parametrize(
@@ -2965,11 +2022,9 @@ def test_trusted_context_never_defaults_to_an_intent_without_evidence(monkeypatc
     """
     import smartbi.gold.restaurant.restaurant_intent as RI
 
-    # 槽位齐全、关键词本来认得出的句子 —— 保证 16 道检查能过。
+    # 餐饮 namespace 退役后，即使槽位齐全也不能生成可执行计划。
     typed = "最近7天全部门店抖音松叶蟹368套餐的毛利"
-    assert _trusted_context_dish_followup_spec(typed) is not None, (
-        "前提: 这句话在关键词正常时能编译出计划(否则测的是别的东西)"
-    )
+    assert _trusted_context_dish_followup_spec(typed) is None
 
     monkeypatch.setattr(RI, "match_restaurant_ops", lambda q: None)
     assert _trusted_context_dish_followup_spec(typed) is None, (
@@ -2978,15 +2033,12 @@ def test_trusted_context_never_defaults_to_an_intent_without_evidence(monkeypatc
 
 
 @pytest.mark.parametrize("action", ("销量为什么是这样", "销量怎么优化"))
-def test_trusted_context_dish_plan_accepts_typed_diagnosis_and_optimization(action):
+def test_retired_trusted_context_dish_plan_does_not_dispatch(action):
     spec = _trusted_context_dish_followup_spec(
         f"最近7天全部门店抖音松叶蟹368套餐的{action}"
     )
 
-    assert spec is not None
-    assert spec.dish_slot == "抖音松叶蟹368套餐"
-    assert spec.analysis_action in {"diagnose", "optimize"}
-    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert spec is None
 
 
 @pytest.mark.parametrize(
@@ -3025,11 +2077,7 @@ def test_ordinal_followup_restores_ranked_dish_context(followup):
         assert effective.rstrip("？?") == (
             "最近7天全部门店招牌青花椒味(单人份)的成本和毛利呢"
         )
-        spec = _trusted_context_dish_followup_spec(effective)
-        assert spec is not None
-        assert spec.requested_metrics == ("recipe_cost", "gross_margin")
-        assert spec.ranking_direction is None
-        assert spec.ranking_limit == 5
+        assert _trusted_context_dish_followup_spec(effective) is None
 
 
 def test_explicit_named_dish_multi_store_metrics_compile_without_llm():
@@ -3091,23 +2139,6 @@ def test_complete_financial_overview_compiles_without_semantic_planner():
     assert spec.planner_authority == "explicit_financial_overview"
 
 
-@pytest.mark.asyncio
-async def test_complete_financial_overview_survives_planner_outage():
-    t3 = AsyncMock(side_effect=AssertionError(
-        "complete financial overview must not call T3"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            "最近30天全部门店毛利和营业额分别是多少，并展示计算口径",
-            _restaurant_pool(),
-            factory_id="QHJ01",
-        )
-
-    assert spec is not None
-    assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-    assert spec.clarification_needed is False
-    assert spec.planner_authority == "explicit_financial_overview"
-    t3.assert_not_awaited()
 
 
 def test_calendar_chart_word_boundary_does_not_inject_recipe_cost():
@@ -3156,19 +2187,6 @@ def test_explicit_single_store_operations_uses_store_margin_plan():
     assert spec.planner_authority == "explicit_store_operations"
 
 
-@pytest.mark.asyncio
-async def test_net_profit_and_table_turnover_disclose_both_missing_dimensions():
-    spec = await parse_restaurant_query(
-        "最近30天全部门店的净利润和翻台率是多少？缺数据不要猜",
-        _restaurant_pool(),
-        factory_id="DEMO_REST",
-    )
-
-    assert spec is not None
-    assert spec.clarification_needed is True
-    assert spec.unsupported_requirements == ("net_profit", "table_turnover")
-    assert "净利润" in (spec.clarification_question or "")
-    assert "翻台率" in (spec.clarification_question or "")
 
 
 def test_dish_metric_button_followup_restores_entity_window_and_store_scope():
@@ -3194,13 +2212,7 @@ def test_dish_metric_button_followup_restores_entity_window_and_store_scope():
 
     assert inherited is True
     assert effective == "上个月全部门店招牌青花椒味(单人份)的销量呢？"
-    spec = _trusted_context_dish_followup_spec(effective)
-    assert spec is not None
-    assert spec.dish_slot == "招牌青花椒味(单人份)"
-    assert spec.window_label == "上个月"
-    assert spec.store_scope == "all"
-    assert spec.requested_metrics == ("sales_volume",)
-    assert spec.planned_intents == ("RESTAURANT_OPS_GROSS_MARGIN",)
+    assert _trusted_context_dish_followup_spec(effective) is None
 
 
 @pytest.mark.parametrize(
@@ -3290,40 +2302,8 @@ def test_dish_followup_explicit_store_scope_overrides_parent_scope():
     assert spec.dish_slot == "招牌青花椒味(单人份)"
 
 
-@pytest.mark.asyncio
-async def test_generic_optimization_parses_as_clarification_without_llm():
-    spec = await parse_restaurant_query(
-        "帮我优化一下餐厅经营",
-        object(),
-        factory_id="F_REST",
-    )
-    assert spec is not None
-    assert spec.intent == ""
-    assert spec.clarification_needed is True
-    assert "优先优化哪一个目标" in spec.clarification_question
 
 
-@pytest.mark.asyncio
-async def test_regression_chart_request_returns_exportable_fields_not_false_success():
-    spec = await parse_restaurant_query(
-        "计算每个菜品销量与价格的线性回归曲线，并给出决定系数；如果不能绘图请给出可导出的字段",
-        object(),
-        factory_id="F_REST",
-    )
-    assert spec is not None
-    assert spec.clarification_needed is True
-    question = spec.clarification_question or ""
-    # 🔴 2026-08-13 断言从「守那几个词」改成「守那个性质」。
-    #    原文是 `"不能可靠完成" in ...` 和 `"决定系数" in ...` ——
-    #    后者**要求正文里出现「决定系数」**, 而那正是要去掉的黑话
-    #    (`ANALYST_JARGON`)。守着黑话的断言会把去黑话这件事顶回去。
-    # ⛔ 被守的性质没变: ①明确说答不了 ②说清缺什么 ③不把没画的图说成画好了。
-    assert "答不了" in question, f"没有明确拒答: {question}"
-    assert "每道菜的名称" in question, f"没说清缺什么: {question}"
-    assert "没画出来的图" in question, f"没守住「不谎报成功」: {question}"
-    # 阴性对照: 黑话不许回来。
-    assert "决定系数" not in question
-    assert "字段" not in question
 
 
 def test_contract_requires_executed_comparison_metadata():
@@ -3450,85 +2430,10 @@ def test_colloquial_split_profit_forms_detected():
         assert spec.wants_margin is True, q
 
 
-@pytest.mark.asyncio
-async def test_t3_slot_supplements_survive_route_cache():
-    """First call: T3 parses, supplements ride the spec. Second call: cache
-    hit (LLM must NOT run again) rebuilds the SAME window + profit slots."""
-    query = "生意有起色没，划算不划算"  # no deterministic time/profit token
-    llm_json = json.dumps({
-        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
-        "time_range": {"type": "relative", "unit": "month", "count": 2},
-        "wants_margin": True, "asks_profitability": True,
-        "dimensions": [], "comparison": None, "confidence": 0.88,
-        "clarification_needed": False, "clarification_question": None,
-    })
-    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk",
-        new=AsyncMock(return_value=[]),
-    ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)) as mock_chain:
-        spec1 = await parse_restaurant_query(query, _restaurant_pool(), factory_id="F_REST")
-        spec2 = await parse_restaurant_query(query, _restaurant_pool(), factory_id="F_REST")
-
-    assert mock_chain.await_count == 1  # second call served from route cache
-    for spec in (spec1, spec2):
-        assert spec is not None
-        assert spec.intent == "RESTAURANT_OPS_SALES_SUMMARY"
-        assert spec.window_label == "最近2个月"      # time_phrase supplement kept
-        assert spec.asks_profitability is True       # llm profit slot kept
-        assert spec.wants_margin is True
-    assert spec1.window_label == spec2.window_label
-    assert spec1.date_range == spec2.date_range
 
 
-@pytest.mark.asyncio
-async def test_contract_repaired_plan_stays_trusted_through_route_cache():
-    query = "近30天畅销菜品"
-    llm = AsyncMock(return_value={
-        "intent": "RESTAURANT_OPS_REQUISITION_TREND",
-        "confidence": 0.95,
-        "clarification_needed": True,
-        "clarification_question": "请明确想查哪类数据。",
-    })
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=llm):
-        spec1 = await parse_restaurant_query(
-            query, _restaurant_pool(), factory_id="DEMO_REST",
-        )
-        spec2 = await parse_restaurant_query(
-            query, _restaurant_pool(), factory_id="DEMO_REST",
-        )
-
-    assert llm.await_count == 1
-    assert spec1 is not None and spec2 is not None
-    assert spec1.intent == spec2.intent == "RESTAURANT_OPS_GROSS_MARGIN"
-    assert spec1.clarification_needed is spec2.clarification_needed is False
-    assert spec1.planner_authority == "llm_contract_repair"
-    assert spec2.planner_authority == "validated_plan_cache_contract_repair"
 
 
-@pytest.mark.asyncio
-async def test_build_resolver_query_splices_profit_phrase_for_llm_only_detection():
-    query = "生意有起色没，划算不划算"
-    llm_json = json.dumps({
-        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
-        "time_range": None,
-        "wants_margin": True, "asks_profitability": True,
-        "dimensions": [], "comparison": None, "confidence": 0.85,
-        "clarification_needed": False, "clarification_question": None,
-    })
-    fake_llm_result = {"choices": [{"message": {"content": llm_json}}]}
-    with patch(
-        "smartbi.services.template_embedding_index.cosine_topk",
-        new=AsyncMock(return_value=[]),
-    ), patch("common.llm_router.call_chain", new=AsyncMock(return_value=fake_llm_result)):
-        spec = await parse_restaurant_query(query, _restaurant_pool(), factory_id="F_REST")
-
-    assert spec is not None and spec.asks_profitability is True
-    resolver_query = build_resolver_query(query, spec)
-    # The resolver re-derives profit intent from raw text; the canonical
-    # phrase makes its own _profit_intent fire for this LLM-only detection.
-    assert "赚钱了吗" in resolver_query
-    assert query in resolver_query
 
 
 # ─── 8. 2026-07-08 audit fixes (window ordering / vocab / contract scoping) ─
@@ -4041,25 +2946,6 @@ def test_colloquial_earnings_request_is_truthfully_net_profit_not_revenue():
     assert _detect_requested_metrics("这月挣了多少") == ("net_profit",)
 
 
-@pytest.mark.asyncio
-async def test_semantic_colloquial_earnings_gap_survives_planner_outage():
-    t3 = AsyncMock(side_effect=AssertionError(
-        "an explicit unsupported net-profit request must not call T3"
-    ))
-    with patch("smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=t3):
-        spec = await parse_restaurant_query(
-            "这月挣了多少",
-            _restaurant_pool(),
-            factory_id="QHJ01",
-            semantic_first=True,
-        )
-
-    assert spec is not None
-    assert spec.intent == ""
-    assert spec.clarification_needed is True
-    assert "净利润" in spec.clarification_question
-    assert "缺少费用" in spec.clarification_question
-    t3.assert_not_awaited()
 
 
 def test_semantic_contract_repairs_store_loss_existence_lookup():
@@ -4499,30 +3385,6 @@ def test_t3_prompt_clamps_an_oversized_session_summary():
     assert len(rendered) == _SESSION_STATE_SUMMARY_RENDER_CAP
 
 
-@pytest.mark.asyncio
-async def test_parse_restaurant_query_forwards_session_summary_to_the_planner():
-    llm = AsyncMock(return_value={
-        "intent": "RESTAURANT_OPS_STORE_MARGIN",
-        "confidence": 0.93,
-        "clarification_needed": False,
-    })
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._t3_llm_parse", new=llm,
-    ):
-        await parse_restaurant_query(
-            "那毛利呢",
-            _restaurant_pool(),
-            factory_id="DEMO_REST",
-            history=[{"q": "万达店本月营收多少", "a_summary": "营收 128.4 万元。"}],
-            semantic_first=True,
-            session_summary=_SESSION_STATE_LINE,
-        )
-
-    assert llm.await_args.kwargs["session_summary"] == _SESSION_STATE_LINE
-    # The 20-turn verbatim history still goes along with it, not instead of it.
-    assert list(llm.await_args.kwargs["history"]) == [
-        {"q": "万达店本月营收多少", "a_summary": "营收 128.4 万元。"}
-    ]
 
 
 def test_llm_only_metric_cannot_override_a_resolver_the_planner_already_chose():

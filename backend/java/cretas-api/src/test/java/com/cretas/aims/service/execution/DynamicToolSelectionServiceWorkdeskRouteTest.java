@@ -266,7 +266,7 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
     }
 
     @Test
-    void tryExplicitSkillRouteForIntent_skillRouterReturnsNull_returnsNull() {
+    void tryExplicitSkillRouteForIntent_catalogSkillRouterReturnsNull_returnsFailed() {
         when(mockSkillRouter.isSkillsEnabled()).thenReturn(true);
         when(mockSkillRouter.executeSkill(any(), any(SkillContext.class)))
                 .thenReturn(null);
@@ -279,7 +279,9 @@ class DynamicToolSelectionServiceWorkdeskRouteTest {
         IntentExecuteResponse response = service.tryExplicitSkillRouteForIntent(
                 intent, "今日跟谁", "F006", 100L, "factory_super_admin");
 
-        assertThat(response).isNull();
+        assertThat(response).isNotNull();
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getIntentCode()).isEqualTo("DAILY_CUSTOMER_FOLLOWUP");
     }
 
     @Test

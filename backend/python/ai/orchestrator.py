@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from ai import registry as registry_module
 from ai.config import default_config
 from ai.db import row_to_dto
+from ai.factory_catalog import canonical_code, filter_runtime_rows, is_retired
 from ai.dto import (
     ActionType,
     AIIntentConfigDto,
@@ -88,6 +89,10 @@ class Orchestrator:
         enable_llm: bool = True,
     ) -> IntentMatchResultDto:
         """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。"""
+        # Matchers/classifiers may return historical head IDs; final matching
+        # must still obey the reviewed retirement policy while preserving
+        # tenant-owned non-restaurant custom rows.
+        visible_intents = filter_runtime_rows(visible_intents)
         if (self.decision_matcher is not None and enable_llm
                 and self.config.decision_enabled_for(businessType)):
             try:
@@ -520,7 +525,14 @@ class Orchestrator:
         # code can leak via topCandidates[0].intentCode even when bestMatch is
         # None (the downstream meta lookup already filters bestMatch).
         visible_codes = {i.get("intent_code") for i in visible_intents}
-        top_candidates = [c for c in top_candidates if c.intentCode in visible_codes]
+        normalized_candidates = []
+        for candidate in top_candidates:
+            if is_retired(candidate.intentCode):
+                continue
+            candidate.intentCode = canonical_code(candidate.intentCode)
+            if candidate.intentCode in visible_codes:
+                normalized_candidates.append(candidate)
+        top_candidates = normalized_candidates
 
         if not top_candidates:
             result = IntentMatchResultDto.empty(userInput=query)

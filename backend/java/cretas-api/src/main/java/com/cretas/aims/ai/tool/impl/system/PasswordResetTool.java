@@ -55,9 +55,9 @@ public class PasswordResetTool extends AbstractBusinessTool {
         return result;
     }
 
-    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    /** Only explains the existing account-security navigation; never changes a password. */
     @Override
     public AccessMode getAccessMode() {
-        return AccessMode.WRITE;
+        return AccessMode.READ;
     }
 }

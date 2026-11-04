@@ -13,18 +13,12 @@ class ApprovedToolSensitiveLoggingContractTest {
     void approvedRestrictedToolsDoNotLogRawParametersOrUserProvidedNamesAndReasons() throws Exception {
         String userDisable = logLines(Path.of(
                 "src/main/java/com/cretas/aims/ai/tool/impl/user/UserDisableTool.java"));
-        String dishDelete = logLines(Path.of(
-                "src/main/java/com/cretas/aims/ai/tool/impl/restaurant/RestaurantDishDeleteTool.java"));
 
         assertThat(userDisable)
                 .doesNotContain("参数: {}")
                 .doesNotContain("username={}, userId={}")
                 .doesNotContain("原因: {}")
                 .doesNotContain("targetUserId, reason");
-        assertThat(dishDelete)
-                .doesNotContain("参数: {}")
-                .doesNotContain("name={}")
-                .doesNotContain("dish.getName()");
     }
 
     private static String logLines(Path source) throws Exception {

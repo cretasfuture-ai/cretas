@@ -55,6 +55,10 @@ public interface SkillRegistry {
      */
     List<SkillDefinition> getAllSkills();
 
+    List<SkillDefinition> getSkillsForFactory(String factoryId);
+
+    SkillDefinition getSkillForFactory(String factoryId, String skillName);
+
     /**
      * 获取所有启用的Skill定义
      *

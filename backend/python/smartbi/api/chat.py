@@ -114,6 +114,14 @@ async def _try_tiered_restaurant_intent(
       {"kind": "answer", "answer_text": str, "charts": list, "kpis": list,
        "title": str, "code": str, "contract_pass": bool, "spec": spec}
     """
+    from smartbi.gold.restaurant.restaurant_intent import RESTAURANT_AI_RETIRED
+    if RESTAURANT_AI_RETIRED:
+        return {
+            "kind": "unavailable",
+            "answer_text": "餐饮专属 AI 能力已下线；请使用业务页面查看餐饮数据。",
+            "charts": [], "kpis": [], "title": "餐饮 AI 能力已下线",
+            "code": "RESTAURANT_AI_RETIRED", "contract_pass": False, "spec": None,
+        }
     from smartbi.gold.restaurant.restaurant_intent_service import tiered_answer
 
     kwargs: Dict[str, Any] = {"session_key": session_key}
@@ -1321,6 +1329,8 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         request.context,
         request.table_type,
     )
+    if request.table_type == "restaurant_ops":
+        raise HTTPException(status_code=410, detail="RESTAURANT_AI_RETIRED")
     (
         trusted_role,
         trusted_user_key,
@@ -2118,6 +2128,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
     # Run security checks before constructing StreamingResponse so failures are
     # real HTTP 403/404 responses, never HTTP 200 followed by an SSE error.
     trusted_factory_id = _require_trusted_factory_id(http_request)
+    if request.table_type == "restaurant_ops":
+        raise HTTPException(status_code=410, detail="RESTAURANT_AI_RETIRED")
     trusted_role, _, trusted_session_user_id, _ = _trusted_chat_identity(http_request)
     trusted_restaurant_session_key = _trusted_restaurant_session_key(
         trusted_factory_id,

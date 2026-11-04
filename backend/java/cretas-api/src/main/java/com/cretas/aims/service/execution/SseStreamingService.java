@@ -61,19 +61,6 @@ import java.util.concurrent.ExecutorService;
 @Service
 public class SseStreamingService {
 
-    // R16: 餐饮租户 SSE no-tool 死胡同出口先走 tiered 路由 (非反转路径的保险)。
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate sseTieredIntentDelegate;
-
-    // Card4 (2026-07-28): SSE tiered-first parity flag — mirrors
-    // IntentExecutionOrchestrator's cretas.restaurant.tiered-first.enabled binding so the
-    // streaming channel can be toggled in lockstep with the synchronous /execute path.
-    // Default true in a real Spring context; plain `new SseStreamingService(...)` unit tests
-    // that don't go through Spring get Java's default `false` unless a test explicitly opts
-    // in via ReflectionTestUtils, which keeps existing SSE tests unaffected.
-    @org.springframework.beans.factory.annotation.Value("${cretas.restaurant.tiered-first.enabled:true}")
-    private boolean tieredFirstEnabled;
-
     private static final long SSE_TIMEOUT_MS = 120_000L;
 
     private final ExecutorService sseExecutor = java.util.concurrent.Executors.newFixedThreadPool(
@@ -129,10 +116,6 @@ public class SseStreamingService {
     // 回落纯 writeGuardService 启发式, 与 IntentExecutionOrchestrator 的处理一致。
     @Autowired(required = false)
     private com.cretas.aims.service.intent.IntentAccessModeFilter intentAccessModeFilter;
-
-    @Autowired(required = false)
-    private com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector
-            restaurantGrossMarginChatRouteSelector;
 
     /**
      * 意图级权限码门 (与 /execute 的 checkIntentPermission 同一份实现)。
@@ -428,20 +411,8 @@ public class SseStreamingService {
                 return;
             }
 
-            // Card4 (2026-07-28): restaurant tiered-first, aligned to
-            // IntentExecutionOrchestrator.execute() :371-400. Restaurant natural-language reads
-            // get one top-level semantic authority on the SSE channel too — ahead of the bounded
-            // Runtime selector, early question-type detection and the semantic cache below, so a
-            // streamed answer can no longer diverge from /execute's answer to the same question.
-            // Explicit intent codes are handled above and never reach here; write verbs and
-            // explicit read-vetoes fall through unchanged to the legacy branches.
-            //
-            // hasExplicitReadVeto/isRestaurantWriteRequest are called on IntentExecutionOrchestrator
-            // itself (package-private static there) rather than duplicated here — a card4 fix-round
-            // finding (2026-07-28): an earlier copy of the veto phrase-matcher in this file silently
-            // diverged from orchestrator's dimension-contrast-aware rewrite (卡1, PR #1914), which
-            // reintroduced exactly the "same question, different entry, different answer" bug this
-            // card exists to close. Single source of truth — never copy this logic again.
+            // Dedicated restaurant semantic/runtime routes are retired. Continue through the
+            // same catalog-backed recognition path as factory requests.
             boolean restaurantTenant = !factoryPackConstrained
                     && isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId));
 
@@ -458,64 +429,6 @@ public class SseStreamingService {
                     && streamFollowUpConfirmation(emitter, factoryId, request, userId, userRole, startTime)) {
                 return;
             }
-            boolean restaurantSemanticPlanEligible = tieredFirstEnabled
-                    && !factoryPackConstrained
-                    && !Boolean.TRUE.equals(request.getPreviewOnly())
-                    && restaurantTenant
-                    && userInput != null && !userInput.isEmpty()
-                    && !IntentExecutionOrchestrator.hasExplicitReadVeto(userInput);
-            // 写动词是唯一压掉语义权威的原因时记下来 —— 识别层要靠它判「闸说改、解析器说看」
-            // 的矛盾, 与 IntentExecutionOrchestrator.execute() 同一套推导。
-            boolean restaurantWriteVerbSuppressedPlan = restaurantSemanticPlanEligible
-                    && IntentExecutionOrchestrator.isRestaurantWriteRequest(userInput);
-            boolean requiresRestaurantSemanticPlan = restaurantSemanticPlanEligible
-                    && !restaurantWriteVerbSuppressedPlan;
-            if (requiresRestaurantSemanticPlan) {
-                IntentExecuteResponse tieredFirst = tryRestaurantTieredDelegate(
-                        factoryId, userInput, request, "sse_tiered_first");
-                if (tieredFirst != null) {
-                    log.info("[SSE][Branch:TieredFirst] restaurant semantic planner accepted: factoryId={}",
-                            factoryId);
-                    streamTerminalResponse(emitter, tieredFirst, startTime);
-                    return;
-                }
-                // Fail closed: no delegate available (or it errored) means no 8-layer legacy
-                // fallback and no stale-cache leak for this restaurant question — an explicit
-                // "no answer this turn" beats silently returning a possibly wrong/old answer.
-                log.warn("[SSE][Branch:TieredFirst] restaurant semantic planner unavailable; "
-                        + "fail closed: factoryId={}", factoryId);
-                streamTerminalResponse(emitter, buildRestaurantTieredFirstFailClosedResponse(request), startTime);
-                return;
-            }
-
-            // Keep the stream front door aligned with /execute. This returns a bounded launch
-            // instruction only; it never proxies the restaurant Runtime's own SSE stream.
-            if (!factoryPackConstrained
-                    && !Boolean.TRUE.equals(request.getPreviewOnly())
-                    && (request.getIntentCode() == null || request.getIntentCode().isBlank())) {
-                Optional<IntentExecuteResponse> restaurantAgentRoute =
-                        restaurantGrossMarginChatRouteSelector == null
-                                ? Optional.empty()
-                                : restaurantGrossMarginChatRouteSelector.select(
-                                        factoryId, userInput, userRole);
-                if (restaurantAgentRoute.isPresent()) {
-                    IntentExecuteResponse response = restaurantAgentRoute.get();
-                    sendSseEvent(emitter, "intent_recognized", Map.of(
-                            "intentCode", response.getIntentCode(),
-                            "intentName", response.getIntentName(),
-                            "intentCategory", response.getIntentCategory(),
-                            "confidence", response.getConfidence(),
-                            "matchMethod", response.getMatchMethod()));
-                    sendSseEvent(emitter, "result", response);
-                    sendSseEvent(emitter, "complete", Map.of(
-                            "status", response.getStatus(),
-                            "cacheHit", false,
-                            "totalLatencyMs", System.currentTimeMillis() - startTime));
-                    emitter.complete();
-                    return;
-                }
-            }
-
             // 1.5. 早期问题类型检测
             if (!factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
                 QuestionType earlyQuestionType = knowledgeBase.detectQuestionType(userInput);
@@ -540,11 +453,8 @@ public class SseStreamingService {
             }
 
             // 2. 查询语义缓存
-            // Card4 (2026-07-28): restaurant tenants never read the semantic cache on the SSE
-            // channel, even when tiered-first above didn't fire (write verb / read-veto /
-            // tiered-first disabled). The cache can hold an answer up to 1h stale; the tiered
-            // planner (when eligible) already produced a fresh answer above, and every other
-            // restaurant branch below re-derives its own answer rather than replaying an old one.
+            // Restaurant tenants do not read the semantic cache on the SSE channel. Keep this
+            // freshness boundary while the dedicated restaurant execution lane is retired.
             // 第 3b 步: 带最近对话的轮次也不读语义缓存 (缓存键只有工厂+原话, 不含上下文)。
             boolean skipCacheForRestaurant = factoryPackConstrained || restaurantTenant
                     || !recentTurns(request).isEmpty();
@@ -638,10 +548,6 @@ public class SseStreamingService {
                     streamNoPermission(emitter, intent, admissionDenied, startTime);
                     return;
                 }
-            }
-            if (streamRestaurantWriteReadAmbiguity(
-                    emitter, restaurantWriteVerbSuppressedPlan, intent, request, startTime)) {
-                return;
             }
             sendSseEvent(emitter, "intent_recognized", Map.of(
                     "intentCode", intent.getIntentCode(),
@@ -2342,60 +2248,10 @@ public class SseStreamingService {
         return index == 1 ? "" : line.toString();
     }
 
-    /** R16: SSE no-tool 出口的餐饮 tiered 兜底 — 未命中回落原死胡同提示。 */
+    /** Retired restaurant lane: use the ordinary catalog no-tool response. */
     private IntentExecuteResponse noToolResponseWithRestaurantFallback(
             AIIntentConfig intent, String factoryId, IntentExecuteRequest request) {
-        IntentExecuteResponse delegated = tryRestaurantTieredDelegate(
-                factoryId, request != null ? request.getUserInput() : null, request, "sse_no_tool");
-        if (delegated != null) {
-            log.info("[SSE][Branch:TieredDelegate] no-tool 出口被 tiered 路由接管: intentCode={}",
-                    intent != null ? intent.getIntentCode() : null);
-            return delegated;
-        }
         return toolDispatchService.buildNoToolResponse(intent);
-    }
-
-    /**
-     * Card4 (2026-07-28): shared restaurant tiered-delegate call, used by both the new
-     * top-of-stream tiered-first gate ("sse_tiered_first") and the pre-existing R16 no-tool
-     * dead-end fallback ("sse_no_tool"). Returns null on no-match, unavailable delegate or
-     * delegate error — callers decide what "no answer" means for their branch.
-     */
-    private IntentExecuteResponse tryRestaurantTieredDelegate(
-            String factoryId, String userInput, IntentExecuteRequest request, String origin) {
-        if (sseTieredIntentDelegate == null
-                || !isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId))
-                || userInput == null) {
-            return null;
-        }
-        try {
-            Map<String, Object> delegateParams = new java.util.HashMap<>();
-            delegateParams.put("userInput", userInput);
-            Map<String, Object> delegateContext = new java.util.HashMap<>();
-            delegateContext.put("request", request);
-            Map<String, Object> delegated = sseTieredIntentDelegate.tryDelegate(
-                    factoryId, delegateParams, delegateContext, origin);
-            if (delegated == null || delegated.get("message") == null) {
-                return null;
-            }
-            String delegatedMessage = delegated.get("message").toString();
-            Map<String, Object> delegatedData = new java.util.HashMap<>();
-            delegatedData.put("charts", delegated.getOrDefault("charts", java.util.List.of()));
-            delegatedData.put("kpis", delegated.getOrDefault("kpis", java.util.List.of()));
-            delegatedData.put("source", "restaurant_ops_gold");
-            return IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
-                    .status("SUCCESS")
-                    .message(delegatedMessage)
-                    .formattedText(delegatedMessage)
-                    .resultData(delegatedData)
-                    .executedAt(java.time.LocalDateTime.now())
-                    .build();
-        } catch (Exception e) {
-            log.warn("[SSE][Branch:TieredDelegate] delegate 失败 (origin={}): {}", origin, e.getMessage());
-            return null;
-        }
     }
 
     /**
@@ -2434,23 +2290,6 @@ public class SseStreamingService {
     }
 
     /**
-     * Card4 (2026-07-28): fail-closed response for the tiered-first gate, mirrors
-     * IntentExecutionOrchestrator's buildRestaurantDeterministicResponse(request,
-     * "NEED_CLARIFICATION", true, ...) call at execute() :395-399.
-     */
-    private IntentExecuteResponse buildRestaurantTieredFirstFailClosedResponse(IntentExecuteRequest request) {
-        String message = "餐饮语义规划暂时不可用，本次没有执行任何分析。请稍后重试。";
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .status("NEED_CLARIFICATION")
-                .message(message)
-                .formattedText(message)
-                .sessionId(request != null ? request.getSessionId() : null)
-                .executedAt(LocalDateTime.now())
-                .build();
-    }
-
-    /**
      * Task-1 (2026-08-05, restaurant-tenant-consolidation): now domain-aware, matching
      * {@link IntentExecutionOrchestrator#isRestaurantTenantId} /
      * {@link DynamicToolSelectionService#isRestaurantTenantId} /
@@ -2461,8 +2300,8 @@ public class SseStreamingService {
      * <p>Card4 (2026-07-28) history: this used to be an ID-only check ("no factory-domain
      * DB lookup is wired into SseStreamingService") and its Javadoc explicitly warned "a
      * factory whose id doesn't match RES_/REST_/DEMO_REST but whose domain IS resolved as
-     * RESTAURANT would gate tiered-first in /execute but NOT here — do not assume the two
-     * checks always agree." MOCK_REST is exactly that factory; task-1 closes the gap by
+     * RESTAURANT would take a different execution path — do not assume the two checks always
+     * agree." MOCK_REST is exactly that factory; task-1 closes the gap by
      * resolving domain via {@link BusinessTypeGate#resolveDomain} (already-injected
      * dependency, reused instead of wiring a new one) at the call sites and passing it in.
      */

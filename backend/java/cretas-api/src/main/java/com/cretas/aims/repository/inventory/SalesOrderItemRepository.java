@@ -14,6 +14,59 @@ import java.util.List;
 @Repository
 public interface SalesOrderItemRepository extends JpaRepository<SalesOrderItem, Long> {
 
+    /** Factory/date/status sales ranking with package-unit normalization. */
+    @Query("""
+            SELECT soi.productTypeId AS productTypeId,
+                   MIN(soi.productName) AS productName,
+                   SUM(CASE WHEN soi.packagingFactor IS NOT NULL
+                             AND soi.unit = soi.packagingUnit
+                            THEN soi.quantity * soi.packagingFactor
+                            ELSE soi.quantity END) AS quantity,
+                   SUM(soi.quantity * soi.unitPrice
+                       * (1 - COALESCE(soi.discountRate, 0) / 100.0)) AS amount,
+                   CASE WHEN soi.packagingFactor IS NOT NULL
+                             AND soi.unit = soi.packagingUnit
+                            THEN soi.packagingBaseUnit ELSE soi.unit END AS unit
+              FROM SalesOrderItem soi
+              JOIN soi.salesOrder so
+             WHERE so.factoryId = :factoryId
+               AND so.orderDate >= :startDate
+               AND so.orderDate <= :endDate
+               AND so.status IN :statuses
+               AND (:scoped = false OR so.createdBy IN :owners)
+               AND soi.unitPrice IS NOT NULL
+             GROUP BY soi.productTypeId,
+                      CASE WHEN soi.packagingFactor IS NOT NULL
+                             AND soi.unit = soi.packagingUnit
+                           THEN soi.packagingBaseUnit ELSE soi.unit END
+             ORDER BY SUM(soi.quantity * soi.unitPrice
+                       * (1 - COALESCE(soi.discountRate, 0) / 100.0)) DESC,
+                      SUM(CASE WHEN soi.packagingFactor IS NOT NULL
+                                AND soi.unit = soi.packagingUnit
+                               THEN soi.quantity * soi.packagingFactor
+                               ELSE soi.quantity END) DESC,
+                      soi.productTypeId
+            """)
+    List<SalesRankingRow> rankSalesByProduct(
+            @Param("factoryId") String factoryId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("statuses") Collection<SalesOrderStatus> statuses,
+            @Param("scoped") boolean scoped,
+            @Param("owners") Collection<Long> owners);
+
+    interface SalesRankingRow {
+        String getProductTypeId();
+        String getProductName();
+        java.math.BigDecimal getQuantity();
+        java.math.BigDecimal getAmount();
+        String getUnit();
+        default java.util.Map<String, java.math.BigDecimal> getQuantitiesByUnit() {
+            return getUnit() == null || getQuantity() == null ? java.util.Map.of()
+                    : java.util.Map.of(getUnit(), getQuantity());
+        }
+    }
+
     List<SalesOrderItem> findBySalesOrderId(String salesOrderId);
 
     /**

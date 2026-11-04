@@ -22,19 +22,6 @@ class _BoomPool:
         raise AssertionError("额度耗尽时不该碰库：封闭必须发生在所有层之前")
 
 
-@pytest.mark.asyncio
-async def test_all_layers_are_closed_when_capacity_is_gone(monkeypatch):
-    monkeypatch.setattr(svc, "_llm_capacity_available", lambda: False)
-
-    res = await svc.tiered_answer("最近损耗情况怎么样", _BoomPool(), "MOCK_REST", "factory_super_admin")
-
-    assert res["kind"] == "unavailable"
-    assert res["code"] == "RESTAURANT_AI_UNAVAILABLE"
-    assert res["contract_pass"] is False
-    assert "不可用" in res["answer_text"]
-    # 🔴 不许给出任何业务数字 —— 那正是「部分可用」的形态。
-    assert not res["kpis"]
-    assert not res["charts"]
 
 
 @pytest.mark.asyncio
@@ -51,23 +38,6 @@ async def test_promoted_route_does_not_answer_either(monkeypatch):
     assert res["kind"] == "unavailable", "晋升表回放也必须被关掉"
 
 
-@pytest.mark.asyncio
-async def test_normal_path_untouched_when_capacity_is_fine(monkeypatch):
-    """可用时这道闸必须完全透明 —— 否则它会变成一个新的故障源。
-
-    ⚠️ 断言写法换过一次：`tiered_answer` 内部会吞掉下游异常并转成 clarification，
-    所以 `pytest.raises` 恒不成立。改成**直接断言「结果不是被这道闸拦下的」** ——
-    量的是这道闸的行为，而不是下游怎么失败。
-    """
-    monkeypatch.setattr(svc, "_llm_capacity_available", lambda: True)
-
-    res = await svc.tiered_answer(
-        "随便问点什么", _BoomPool(), "MOCK_REST", "factory_super_admin"
-    )
-
-    # 可用时不该出现「AI 暂不可用」——不论下游最终成功还是失败。
-    assert (res or {}).get("code") != "RESTAURANT_AI_UNAVAILABLE"
-    assert (res or {}).get("kind") != "unavailable"
 
 
 def test_capacity_probe_fails_open():

@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from ai.factory_catalog import canonical_code, is_retired, is_retired_tool
+
 _PUNCT = re.compile(r"[\s，。！？、,.!?~…：:；;\"'“”‘’（）()【】\[\]…—\-]+")
 _NUM = r"(?:\d+(?:\.\d+)?|[零一二两三四五六七八九十百千万半]+)"
 _UNIT = r"(?:斤|公斤|千克|kg|g|克|吨|箱|袋|桶|件|包|个|盒|瓶|托|卷|板|只|块|份|条|根|筐|框|kg)"
@@ -85,8 +87,11 @@ FROM ai_entity_lexicon
 def build_snapshot(phrase_rows: List[Dict[str, Any]], lexicon_rows: List[Dict[str, Any]]) -> RegistrySnapshot:
     phrases: Dict[Tuple[str, str], Dict[str, str]] = {}
     for r in phrase_rows:
+        code = canonical_code(r.get("intent_code"))
+        if not code or is_retired(r.get("intent_code")) or is_retired_tool(r.get("tool_name")):
+            continue
         key = (str(r["factory_id"]), str(r["business_type"]).upper())
-        phrases.setdefault(key, {})[str(r["normalized_text"])] = str(r["intent_code"])
+        phrases.setdefault(key, {})[str(r["normalized_text"])] = code
     # 一个别名只对应一个标签。同一别名登记在两类实体下 (「酱牛肉」既是物料也是产品) 时,
     # 按 ENTITY_TAGS 的书写顺序取第一个 —— ⛔ 不能依赖 set 的迭代顺序: 字符串哈希每个进程
     # 随机, prod 两个 uvicorn worker 会把同一句话归一化成两个不同的键 (2026-10-02 实测)。
@@ -145,7 +150,10 @@ def lookup(snap: RegistrySnapshot, query: str, factory_id: str, business_type: s
     table = snap.phrases.get((factory_id, (business_type or "").upper()))
     if not table or not key:
         return None, key
-    return table.get(key), key
+    code = table.get(key)
+    if code and is_retired(code):
+        return None, key
+    return canonical_code(code), key
 
 
 __all__ = ["normalize", "n1", "build_snapshot", "load_registry", "get_registry", "set_registry", "lookup",

@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import List
 
 from ai.embedding import get_embedding_cached, vec_to_pgvector_text
+from ai.factory_catalog import canonical_code, is_retired
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +78,14 @@ class RAGRetriever:
         except Exception:
             logger.exception("RAG retrieval failed (table missing? schema mismatch?)")
             return []
-        return [
-            RAGCase(
-                query=r["query"], intent_code=r["intent_code"],
+        cases = []
+        for r in rows:
+            code = canonical_code(r.get("intent_code"))
+            if not code or is_retired(r.get("intent_code")):
+                continue
+            cases.append(RAGCase(
+                query=r["query"], intent_code=code,
                 confidence=float(r["confidence"]), similarity=float(r["similarity"]),
                 source=r["source"],
-            )
-            for r in rows
-        ]
+            ))
+        return cases

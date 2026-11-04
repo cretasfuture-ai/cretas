@@ -27,6 +27,7 @@ import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.entity.bom.BomRecipe;
@@ -53,6 +54,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -164,6 +166,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
     private final ExcelUtil excelUtil;
     private final FuturePlanMatchingService futurePlanMatchingService;
+
+    @Autowired
+    private SupplierRepository supplierRepository;
 
     @Autowired(required = false)
     private PurchaseReceiveRecordRepository purchaseReceiveRecordRepository;
@@ -396,6 +401,90 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @RuleEvaluate(value = "INVENTORY", target = "request")
     @Transactional
     public MaterialBatchDTO createMaterialBatch(String factoryId, CreateMaterialBatchRequest request, Long userId) {
+        boolean freeGift = "FREE_GIFT".equals(request.getSourceDocType());
+        if (request.getReceiptQuantity() == null || request.getReceiptQuantity().signum() <= 0) {
+            throw new BusinessException(400, "入库数量必须大于0");
+        }
+        if (request.getTotalWeight() == null || request.getTotalWeight().signum() <= 0) {
+            throw new BusinessException(400, "入库总重量必须大于0");
+        }
+        if (request.getTotalValue() == null || request.getTotalValue().signum() < 0
+                || (!freeGift && request.getTotalValue().signum() == 0)) {
+            throw new BusinessException(400, freeGift
+                    ? "赠品入库总价值不能为负数"
+                    : "采购等普通入库总价值必须大于0");
+        }
+        if (request.getUnitPrice() != null && request.getUnitPrice().signum() < 0) {
+            throw new BusinessException(400, "单价不能为负数");
+        }
+        boolean keyedFreeGift = freeGift
+                && ((request.getSourceLineNo() != null && !request.getSourceLineNo().isBlank())
+                || (request.getSourceEventKey() != null && !request.getSourceEventKey().isBlank()));
+        if (keyedFreeGift && ((request.getTotalValue() != null && request.getTotalValue().signum() != 0)
+                || (request.getUnitPrice() != null && request.getUnitPrice().signum() != 0))) {
+            throw new BusinessException(400, "带来源行幂等键的FREE_GIFT赠品入库必须保持总价值和单价为0");
+        }
+        if (!freeGift && request.getUnitPrice() != null && request.getUnitPrice().signum() == 0) {
+            throw new BusinessException(400, "采购等普通入库单价必须大于0");
+        }
+        if (freeGift) {
+            if (keyedFreeGift && (request.getSourceDocId() == null || request.getSourceDocId().isBlank()
+                    || request.getSourceLineNo() == null || request.getSourceLineNo().isBlank())) {
+                throw new BusinessException(400, "带来源行幂等键的赠品入库必须同时提供来源单据ID和来源行号");
+            }
+            if (supplierRepository == null
+                    || supplierRepository.findByIdAndFactoryId(request.getSupplierId(), factoryId).isEmpty()) {
+                throw new BusinessException(404, "供应商不存在或不属于当前工厂");
+            }
+        }
+        if (keyedFreeGift) {
+            // Serialize receipts for this material before either the idempotency lookup or
+            // the cost-layer query: different source lines must not lose a WAC update.
+            if (materialTypeRepository.lockByFactoryIdAndIdIn(factoryId,
+                    List.of(request.getMaterialTypeId())).isEmpty()) {
+                throw new BusinessException(404, "原材料不存在或不属于当前工厂");
+            }
+            if (request.getSourceDocId() == null || request.getSourceDocId().isBlank()
+                    || request.getSourceLineNo() == null || request.getSourceLineNo().isBlank()) {
+                throw new BusinessException(400, "赠品入库必须提供来源单据ID和来源行号");
+            }
+            request.setSourceEventKey(request.getSourceDocId() + "#line:" + request.getSourceLineNo());
+            if (request.getSourceEventKey().length() > 64) {
+                throw new BusinessException(400, "赠品来源单据ID和行号组合过长，无法建立幂等键");
+            }
+            if (supplierRepository == null
+                    || supplierRepository.findByIdAndFactoryId(request.getSupplierId(), factoryId).isEmpty()) {
+                throw new BusinessException(404, "供应商不存在或不属于当前工厂");
+            }
+            MaterialBatch existing = materialBatchRepository
+                    .findByFactoryIdAndSourceDocTypeAndSourceEventKey(factoryId, "FREE_GIFT",
+                            request.getSourceEventKey()).orElse(null);
+            if (existing != null) {
+                String expectedWarehouseId = request.getWarehouseId() != null && !request.getWarehouseId().isBlank()
+                        ? request.getWarehouseId() : warehouseResolver.resolveLogisticsId(factoryId);
+                BigDecimal expectedWeightPerUnit = request.getWeightPerUnit() != null
+                        ? request.getWeightPerUnit()
+                        : request.getTotalWeight().divide(request.getReceiptQuantity(), 4,
+                                java.math.RoundingMode.HALF_UP);
+                if (!Objects.equals(existing.getSourceDocId(), request.getSourceDocId())
+                        || existing.getUnitPrice() == null || existing.getUnitPrice().signum() != 0
+                        || !Objects.equals(existing.getMaterialTypeId(), request.getMaterialTypeId())
+                        || !Objects.equals(existing.getSupplierId(), request.getSupplierId())
+                        || !Objects.equals(existing.getWarehouseId(), expectedWarehouseId)
+                        || !Objects.equals(existing.getReceiptDate(), request.getReceiptDate())
+                        || !Objects.equals(existing.getQuantityUnit(), request.getQuantityUnit())
+                        || existing.getReceiptQuantity() == null
+                        || existing.getReceiptQuantity().compareTo(request.getReceiptQuantity()) != 0
+                        || existing.getWeightPerUnit() == null
+                        || existing.getWeightPerUnit().compareTo(expectedWeightPerUnit) != 0
+                        || existing.getTotalWeight() == null
+                        || request.getTotalWeight() == null
+                        || existing.getTotalWeight().compareTo(request.getTotalWeight()) != 0) {
+                    throw new BusinessException(409, "赠品来源行幂等键已用于不同入库内容，已拒绝覆盖");
+                }
+                return materialBatchMapper.toDTO(existing);
+            }
+        }
         // C-074/C-075/X-10: 补录时效锁 — 入库日期不得早于 T-maxDays (默认 T-2)
         if (backdateWindowValidator != null) {
             backdateWindowValidator.assertWithinWindow(request.getReceiptDate(), "原料入库");
@@ -409,12 +498,21 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 验证并获取原材料类型
         var materialType = materialTypeRepository.findById(request.getMaterialTypeId())
             .orElseThrow(() -> new ResourceNotFoundException("原材料类型不存在"));
+        if (freeGift && !Objects.equals(factoryId, materialType.getFactoryId())) {
+            throw new BusinessException(404, "原材料不存在或不属于当前工厂");
+        }
+        if (keyedFreeGift && materialUomConverter == null && materialType.getUnit() != null
+                && !materialType.getUnit().equals(request.getQuantityUnit())) {
+            throw new BusinessException(503, "赠品单位换算服务不可用，不能将包装数量当作主单位数量")
+                    .withHintTarget("quantityUnit");
+        }
 
         // T159-B R4: UoM dimension guard at 入库 (receipt) write time.
         checkInboundUnitCompatible(materialType, request.getQuantityUnit());
 
         // 创建批次
         MaterialBatch batch = materialBatchMapper.toEntity(request, factoryId, userId.longValue());
+        batch.setSourceEventKey(request.getSourceEventKey());
         // 生成UUID作为ID
         batch.setId(java.util.UUID.randomUUID().toString());
         // D1 双仓流转 (PR #310 §5.5): 入库默认 WH-LOG (物流仓). DTO 显式传则用 DTO 值.
@@ -440,7 +538,18 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 复用 EncodingRule (MATERIAL_BATCH) 原子序号; 忽略前端任何手填值。
         String batchNumber = generateUniqueBatchNumber(generateMaterialBatchNumber(factoryId));
         batch.setBatchNumber(batchNumber);
-        batch = materialBatchRepository.save(batch);
+        try {
+            batch = freeGift ? materialBatchRepository.saveAndFlush(batch)
+                    : materialBatchRepository.save(batch);
+        } catch (DataIntegrityViolationException duplicate) {
+            if (freeGift) {
+                throw new BusinessException(409, "该赠品来源单据行已被其他请求入库，请刷新后使用原批次");
+            }
+            throw duplicate;
+        }
+        // Keyed gifts must have a valid cost layer before publishing receipt events.
+        updateMovingAvgPrice(materialType, batch.getReceiptQuantity(), batch.getUnitPrice(),
+                batch.getId(), keyedFreeGift);
         log.info("创建原材料批次成功: batchNumber={}", batch.getBatchNumber());
 
         // Round 9 Fix (R8-α Gap #3 per-module template): persist Canvas V3 dynamic fields.
@@ -468,9 +577,6 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 log.warn("Publish MaterialBatchCreatedEvent failed for batch {}: {}", batch.getId(), e.getMessage());
             }
         }
-
-        // 更新物料类型移动平均价
-        updateMovingAvgPrice(materialType, batch.getReceiptQuantity(), batch.getUnitPrice(), batch.getId());
 
         // 自动匹配到未来生产计划
         try {
@@ -2704,9 +2810,22 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     private void updateMovingAvgPrice(com.cretas.aims.entity.RawMaterialType materialType,
                                       java.math.BigDecimal receiptQty, java.math.BigDecimal receiptPrice,
                                       String newBatchId) {
+        updateMovingAvgPrice(materialType, receiptQty, receiptPrice, newBatchId, false);
+    }
+
+    /**
+     * Rebuilds moving average after a receipt. Keyed FREE_GIFT receipts are
+     * real zero-cost layers; ordinary callers retain the historical zero-price
+     * skip rule.
+     */
+    private void updateMovingAvgPrice(com.cretas.aims.entity.RawMaterialType materialType,
+                                      java.math.BigDecimal receiptQty, java.math.BigDecimal receiptPrice,
+                                      String newBatchId, boolean allowZeroPrice) {
         if (receiptQty == null || receiptPrice == null
                 || receiptQty.compareTo(java.math.BigDecimal.ZERO) <= 0
-                || receiptPrice.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+                || receiptPrice.compareTo(java.math.BigDecimal.ZERO) < 0
+                || (!allowZeroPrice && receiptPrice.compareTo(java.math.BigDecimal.ZERO) == 0)) {
+            if (allowZeroPrice) throw new BusinessException(409, "赠品数量或成本层缺失，已停止入库");
             return;
         }
         if (materialMovingAverageCalculator != null) {
@@ -2721,6 +2840,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 var result = materialMovingAverageCalculator.calculate(
                         materialType.getId(), materialType.getUnit(), layers);
                 if (!result.complete()) {
+                    if (allowZeroPrice) throw new BusinessException(409,
+                            "赠品入库成本重建失败，已停止入库；请先核对历史成本和单位换算");
                     log.warn("Moving-average rebuild skipped for materialType={}: {}",
                             materialType.getId(), result.issues());
                     return;
@@ -2731,34 +2852,32 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                         materialType.getName(), result.normalizedQuantity(), materialType.getUnit(),
                         result.totalValue(), result.averagePrice());
             } catch (Exception e) {
+                if (allowZeroPrice) throw new BusinessException(409,
+                        "赠品入库成本重建失败，整笔入库已停止，请核对历史成本与单位后重试");
                 log.warn("Moving-average rebuild failed without blocking receipt: materialType={}, error={}",
                         materialType.getId(), e.getMessage());
             }
             return;
         }
+        if (allowZeroPrice) throw new BusinessException(503, "赠品入库成本计算服务不可用，已停止入库");
         try {
             // 直接用增量公式: newAvg = (existingQty * currentAvg + receiptQty * receiptPrice) / (existingQty + receiptQty)
             // 不依赖 findAvailableBatchesFEFO 查询（该查询有 enum 状态匹配问题）
             java.math.BigDecimal currentAvg = materialType.getMovingAvgPrice();
-            java.math.BigDecimal existingQty;
-
-            if (currentAvg != null && currentAvg.compareTo(java.math.BigDecimal.ZERO) > 0) {
-                // 有现有均价 — 用当前在库量 (receiptQty - usedQty - reservedQty) 加权。
-                // 注意: 早期实现用 getTotalWeight() = weightPerUnit × receiptQuantity, 但 weightPerUnit
-                // 是可选字段, 大部分批次未填, 退化成 0 → 加权公式失效成"最新单价覆盖"。
-                // getCurrentQuantity 是 @Transient 计算属性, 直接反映当前在库存货量, 跟会计标准
-                // 移动加权平均成本 (Moving Weighted Average Cost) 公式语义一致。
-                List<MaterialBatch> allBatches = materialBatchRepository
-                        .findByFactoryIdAndMaterialTypeId(
-                                materialType.getFactoryId(), materialType.getId());
-                existingQty = allBatches.stream()
-                        .filter(b -> !b.getId().equals(newBatchId))
-                        .map(b -> b.getCurrentQuantity() != null ? b.getCurrentQuantity() : java.math.BigDecimal.ZERO)
-                        .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
-            } else {
-                // 首批入库 — 均价直接等于本批单价
+            List<MaterialBatch> allBatches = materialBatchRepository
+                    .findByFactoryIdAndMaterialTypeId(
+                            materialType.getFactoryId(), materialType.getId());
+            java.math.BigDecimal existingQty = allBatches.stream()
+                    .filter(b -> b.getId() == null || !b.getId().equals(newBatchId))
+                    .map(b -> b.getCurrentQuantity() != null ? b.getCurrentQuantity() : java.math.BigDecimal.ZERO)
+                    .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+            if (currentAvg == null) {
+                // Existing stock with unknown cost must remain unknown rather
+                // than being silently valued at zero.
+                if (existingQty.compareTo(java.math.BigDecimal.ZERO) > 0) {
+                    return;
+                }
                 currentAvg = java.math.BigDecimal.ZERO;
-                existingQty = java.math.BigDecimal.ZERO;
             }
 
             java.math.BigDecimal totalValue = existingQty.multiply(currentAvg)

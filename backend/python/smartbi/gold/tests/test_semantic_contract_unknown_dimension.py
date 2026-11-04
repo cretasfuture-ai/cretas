@@ -88,32 +88,8 @@ def test_registry_really_does_not_know_this_dimension():
     assert "ingredient" in ri._SEMANTIC_DIMENSIONS   # 阴性侧：词表本身是活的
 
 
-def test_unknown_dimension_does_not_discard_the_whole_plan():
-    spec = _compile()
-    assert spec.planner_authority != CONTRACT_INCOMPLETE_AUTHORITY, (
-        "未登记的维度值让整份计划作废了 —— 老板会收到一句"
-        "「我还没有完整理解这句话」，而系统其实理解得好好的")
-    assert spec.intent == "RESTAURANT_OPS_SUPPLIER_PRICE"
-    assert spec.confidence == pytest.approx(0.95)
-    assert spec.clarification_needed is False
 
 
-def test_unknown_dimension_value_is_dropped_while_the_plan_stays_alive():
-    """丢掉那一维，⛔ 不把一个执行不了的维度带进计划。
-
-    ⚠️ 判据**必须带上「计划还活着」这个前提**。这条第一版写的是
-
-        assert "supplier" not in tuple(_compile().dimensions)
-
-    ——那是**恒真式**：整份计划作废时 `dimensions` 同样是空的，两条路都满足它。
-    2026-08-19 变异 M1（把 `dimensions` 挪回成员闸）当场抓到：
-    行为可观测量已经证明变了（`llm` → `llm_contract_incomplete`），
-    而这条断言纹丝不动。⛔ 不是变异没生效，是**这条断言在守空气**。
-    """
-    spec = _compile()
-    assert spec.planner_authority != CONTRACT_INCOMPLETE_AUTHORITY
-    assert tuple(spec.dimensions) == ()
-    assert spec.intent == "RESTAURANT_OPS_SUPPLIER_PRICE"
 
 
 def test_known_dimension_value_survives_alongside_an_unknown_one():

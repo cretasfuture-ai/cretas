@@ -108,27 +108,8 @@ def test_precondition_this_really_is_the_store_scope_gate(entry):
 
 # ── 承重 ──────────────────────────────────────────────────────────────
 
-def test_the_dead_end_now_has_an_exit(entry):
-    res = entry(_spec())
-    buttons = res.get("followups") or []
-    assert buttons, (
-        "门店口径拒答仍然 0 个按钮 —— 在 UI 上那就是终点, "
-        "老板逐轮答完之后无路可走")
-    assert buttons == [{"label": "看全部门店", "question": "全部门店怎么样 本月"}], (
-        f"出口不是那一个, 或者问句拼歪了: {buttons}")
 
 
-def test_the_exit_question_stands_on_its_own(entry):
-    """按钮发的必须是**能独立成立的完整问句**, ⛔ 不是裸范围词。
-
-    2026-07-31 实测: 只发「模拟·徐汇美罗城店」回来的是另一句拒答 —— 哑弹。
-    """
-    q = (entry(_spec())["followups"] or [{}])[0].get("question", "")
-    assert q.startswith("全部门店"), f"范围没拼在开头: {q!r}"
-    assert len(q) > len("全部门店"), f"发的是裸范围词, 那是哑弹: {q!r}"
-    assert STORE not in q, (
-        f"老板点名的那家店还在问句里 —— 那正是刚被这道闸拦下的问句, "
-        f"做成按钮就是第二颗哑弹: {q!r}")
 
 
 # ── 阴性对照 ──────────────────────────────────────────────────────────

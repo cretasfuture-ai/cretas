@@ -6,6 +6,18 @@ from pathlib import Path
 from flywheel_reviewed import label_catalog
 
 
+def _normalize_catalog_label(label):
+    try:
+        from ai.factory_catalog import normalize_training_label
+    except ModuleNotFoundError:
+        import sys
+        backend_python = Path(__file__).resolve().parents[2] / 'backend' / 'python'
+        if str(backend_python) not in sys.path:
+            sys.path.insert(0, str(backend_python))
+        from ai.factory_catalog import normalize_training_label
+    return normalize_training_label(label)
+
+
 def validate_replay_inputs(new_data, old_data):
     if not old_data:
         return
@@ -50,6 +62,11 @@ def resolve_mapping(model_path, provided, records):
         generic_forward = configured_forward == {'LABEL_'+str(i): i for i in range(len(mapping))}
         if not generic_forward and configured_forward != mapping:
             raise ValueError('Model config label2id differs from sidecar class IDs')
+    # Keep the complete historical head untouched, but never allow a retired
+    # label into a new training corpus. Confirmed aliases are normalized before
+    # the existing head-ID membership check.
+    for record in records:
+        record['label'] = _normalize_catalog_label(record.get('label'))
     unknown = {r['label'] for r in records} - set(mapping)
     if unknown:
         raise ValueError('Training data contains labels absent from existing model')

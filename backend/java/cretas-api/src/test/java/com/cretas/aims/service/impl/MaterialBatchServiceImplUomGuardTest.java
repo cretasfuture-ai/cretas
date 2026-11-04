@@ -240,6 +240,9 @@ class MaterialBatchServiceImplUomGuardTest {
         req.setMaterialTypeId(materialTypeId);
         req.setQuantityUnit(quantityUnit);
         req.setReceiptQuantity(java.math.BigDecimal.valueOf(100));
+        req.setTotalWeight(java.math.BigDecimal.valueOf(100));
+        req.setTotalValue(java.math.BigDecimal.valueOf(1000));
+        req.setUnitPrice(java.math.BigDecimal.TEN);
         req.setReceiptDate(java.time.LocalDate.now());
         req.setSourceDocType("MANUAL_ADJUST");
         req.setNotes("T159 test");

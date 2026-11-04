@@ -305,8 +305,6 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
                     queryPreprocessorService);
             ReflectionTestUtils.setField(orchestrator, "factoryCapabilityPackRoutingPolicy", policy);
             ReflectionTestUtils.setField(orchestrator, "writeGuardService", writeGuardService);
-            ReflectionTestUtils.setField(
-                    orchestrator, "restaurantGrossMarginChatRouteSelector", restaurantSelector);
             ReflectionTestUtils.setField(orchestrator, "toolExecutionGateway", ownerToolGateway);
             ReflectionTestUtils.setField(
                     orchestrator, "authenticatedToolPrincipalFactory", principalFactory);

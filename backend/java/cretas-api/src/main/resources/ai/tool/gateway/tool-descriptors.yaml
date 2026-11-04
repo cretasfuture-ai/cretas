@@ -2,8 +2,8 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 587
-expectedLegacyCount: 568
+expectedToolCount: 492
+expectedLegacyCount: 467
 descriptors:
   - toolName: "unsupported_capability"
     implementationClass: "com.cretas.aims.ai.tool.impl.system.UnsupportedCapabilityTool"
@@ -16,1506 +16,6 @@ descriptors:
     allowedRoles: []
     version: "1.0.0"
     domainTags: ["unsupported"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_calibration_history"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCalibrationHistoryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_bom_layer_status"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantBomLayerStatusTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_cost_rigidity_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCostRigidityAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_channel_margin"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantChannelMarginTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_benchmark_alert"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantBenchmarkAlertTool"
-    provenance: LEGACY_INFERRED
-    actionType: NOTIFY
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_performance_eval"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.PerformanceEvalTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_labor_productivity"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.LaborProductivityTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_procurement_forecast"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.ProcurementForecastTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_piecework_calc"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.PieceworkCalcTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_menu_engineering"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantMenuEngineeringTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_member_rfm"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantMemberRfmTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_monthly_ppt_export"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantMonthlyPptExportTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_menu_normalization"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantMenuNormalizationTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_long_tail_sku"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantLongTailSkuTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_department_pnl"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantDepartmentPnlTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_cross_chain_benchmark"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantCrossChainBenchmarkTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_forecast"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantForecastTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dining_heatmap"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantDiningHeatmapTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_daily_reconciliation"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.DailyReconciliationTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_voice_requisition"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantVoiceRequisitionTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_vip_guest_query"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantVipGuestQueryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["restaurant:read"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_wastage_rate"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantWastageRateTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_wastage_anomaly"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantWastageAnomalyTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_table_turnover"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantTableTurnoverTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_return_rate"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantReturnRateTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_rep_commission_query"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantRepCommissionQueryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["sales:view"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_slow_seller_query"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantSlowSellerQueryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_revenue_trend"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantRevenueTrendTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_shift_create"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.ShiftScheduleCreateTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_seat_config_manage"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.SeatConfigManageTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_combo_split"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.ComboSplitTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_bom_variance"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.BomVarianceTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_sales_plan_track"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.SalesPlanTrackTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_wastage_summary"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantWastageSummaryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "finance:read_write", "procurement:price:view"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_wastage_record"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantWastageRecordTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED_P0
-  - toolName: "restaurant_sales_plan_create"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.SalesPlanCreateTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "revenue_report_generate"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RevenueReportGenerateTool"
-    provenance: LEGACY_INFERRED
-    actionType: GENERATE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["revenue"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_multi_store_comparison"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantMultiStoreComparisonTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_dish_issue"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewDishTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_complaint"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewComplaintTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_good_tags"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewGoodTagsTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_env_score"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewEnvScoreTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_city"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewCityTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_staff_ranking_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantStaffRankingGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_revenue_trend_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantRevenueTrendGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_weekday_weekend_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantWeekdayWeekendGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_store_revenue_rank_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantStoreRevenueRankGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_time_period"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewTimePeriodTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_summary"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewSummaryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_vip_tags"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewVipTagsTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_trend"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewTrendTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_store_rank"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewStoreRankTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_reply_rate"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewReplyRateTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_platform"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewPlatformTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_service_score"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewServiceScoreTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_score_tags"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewScoreTagsTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_peak_month_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantPeakMonthGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_return_anomaly"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.ReturnAnomalyTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_value_summary"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantValueSummaryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_seat_occupancy"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.SeatOccupancyTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_competitive"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.ReviewCompetitiveTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_temporal_comparison"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantTemporalComparisonTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_shrinkage_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantShrinkageAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantReviewAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_stored_value"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantStoredValueTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_store_pnl_one_pager"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.RestaurantStorePnlOnePagerTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dish_slowseller_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantDishSlowsellerGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dish_bestseller_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantDishBestsellerGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_order_type_mix_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantOrderTypeMixGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_ops_gold_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantOpsGoldAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_discount_usage_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantDiscountUsageGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_smart_reorder"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.SmartReorderTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_shift_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.ShiftAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_comprehensive_synthesis_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantComprehensiveSynthesisGoldTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_store_kpi_dashboard"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.diagnostic.StoreKpiDashboardTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
     overrideFlags:
       actionType: false
       riskLevel: false
@@ -2286,388 +786,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dish_update"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishUpdateTool"
-    provenance: LEGACY_INFERRED
-    actionType: UPDATE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED_P0
-  - toolName: "restaurant_dish_sales_ranking"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishSalesRankingTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_ingredient_cost_trend"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantIngredientCostTrendTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_economics_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantEconomicsAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dish_product_sales_ranking"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishProductSalesRankingTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dish_create"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishCreateTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED_P0
-  - toolName: "restaurant_dish_cost_query"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishCostQueryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "inventory:read", "procurement:read", "procurement:read_write", "production:read", "sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dish_list"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishListTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dish_delete"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishDeleteTool"
-    provenance: EXPLICIT
-    actionType: UPDATE
-    riskLevel: HIGH
-    supportsPreview: true
-    requiresPermission: true
-    requiredPermissions: ["restaurant:read_write"]
-    allowedRoles: []
-    version: "2.0.0"
-    domainTags: ["restaurant", "menu", "product-master"]
-    overrideFlags:
-      actionType: true
-      riskLevel: true
-      supportsPreview: true
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: true
-      version: true
-      domainTags: true
-    governanceStatus: APPROVED
-  - toolName: "restaurant_peak_hours_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantPeakHoursAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_owner_action_advisor"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantOwnerActionAdvisorTool"
-    provenance: EXPLICIT
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: ["analytics:read"]
-    allowedRoles: []
-    version: "2.0.0"
-    domainTags: ["restaurant", "analytics", "decision-support"]
-    overrideFlags:
-      actionType: true
-      riskLevel: true
-      supportsPreview: true
-      requiresPermission: true
-      hasPermission: true
-      requiredPermissions: true
-      version: true
-      domainTags: true
-    governanceStatus: APPROVED
-  - toolName: "restaurant_procurement_suggestion"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantProcurementSuggestionTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_procurement_create"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantProcurementCreateTool"
-    provenance: LEGACY_INFERRED
-    actionType: WRITE
-    riskLevel: MEDIUM
-    supportsPreview: false
-    requiresPermission: true
-    requiredPermissions: ["procurement:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: true
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED_P0
-  - toolName: "restaurant_order_statistics"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantOrderStatisticsTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_ingredient_low_stock"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantIngredientLowStockTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_ingredient_expiry_alert"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantIngredientExpiryAlertTool"
-    provenance: LEGACY_INFERRED
-    actionType: NOTIFY
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_margin_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantMarginAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_ingredient_stock"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantIngredientStockTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_dish_cost_analysis"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishCostAnalysisTool"
-    provenance: LEGACY_INFERRED
-    actionType: ANALYZE
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "inventory:read", "procurement:read", "procurement:read_write", "production:read", "sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
   - toolName: "report_scheduling_mode_change"
     implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportSchedulingModeChangeTool"
     provenance: LEGACY_INFERRED
@@ -2828,106 +946,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_avg_ticket"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantAvgTicketTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_at_risk_guest_query"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantAtRiskGuestQueryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["restaurant:read"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_daily_revenue"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDailyRevenueTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_bestseller_query"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantBestsellerQueryTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "procurement:read", "sales:read", "sales:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_arap_payable_query"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantArApPayableTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["finance:read", "finance:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
   - toolName: "report_sku_gross_margin"
     implementationClass: "com.cretas.aims.ai.tool.impl.report.SkuGrossMarginTool"
     provenance: LEGACY_INFERRED
@@ -2968,46 +986,6 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_piecework_config"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.PieceworkConfigTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["hr:read", "hr:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_performance_rule_manage"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.PerformanceRuleManageTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: ["hr:read", "hr:read_write"]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED_P0
   - toolName: "balance_sheet_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.workdesk.BalanceSheetQueryTool"
     provenance: LEGACY_INFERRED
@@ -3569,6 +1547,195 @@ descriptors:
       version: true
       domainTags: true
     governanceStatus: APPROVED
+  - toolName: "free_gift_inbound"
+    implementationClass: "com.cretas.aims.ai.tool.impl.factorycatalog.FreeGiftInboundTool"
+    provenance: EXPLICIT
+    actionType: WRITE
+    riskLevel: MEDIUM
+    supportsPreview: true
+    requiresPermission: true
+    requiredPermissions: ["warehouse:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["free"]
+    overrideFlags:
+      actionType: true
+      riskLevel: false
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "inventory_gain_inbound"
+    implementationClass: "com.cretas.aims.ai.tool.impl.factorycatalog.InventoryGainInboundTool"
+    provenance: EXPLICIT
+    actionType: WRITE
+    riskLevel: MEDIUM
+    supportsPreview: true
+    requiresPermission: true
+    requiredPermissions: ["warehouse:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["inventory"]
+    overrideFlags:
+      actionType: true
+      riskLevel: false
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "product_sales_ranking"
+    implementationClass: "com.cretas.aims.ai.tool.impl.factorycatalog.ProductSalesRankingTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: true
+    requiresPermission: true
+    requiredPermissions: ["sales:read", "sales:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["product"]
+    overrideFlags:
+      actionType: true
+      riskLevel: false
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "sales_delivery_batch_allocate"
+    implementationClass: "com.cretas.aims.ai.tool.impl.factorycatalog.SalesDeliveryBatchAllocateTool"
+    provenance: EXPLICIT
+    actionType: WRITE
+    riskLevel: MEDIUM
+    supportsPreview: true
+    requiresPermission: true
+    requiredPermissions: ["sales:read_write", "warehouse:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["sales"]
+    overrideFlags:
+      actionType: true
+      riskLevel: false
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "tax_group_invoice"
+    implementationClass: "com.cretas.aims.ai.tool.impl.factorycatalog.TaxGroupInvoiceTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: true
+    requiredPermissions: ["finance:read", "finance:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["tax"]
+    overrideFlags:
+      actionType: true
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "trace_code_format"
+    implementationClass: "com.cretas.aims.ai.tool.impl.factorycatalog.TraceCodeFormatTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["trace"]
+    overrideFlags:
+      actionType: true
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "shipment_pending_today"
+    implementationClass: "com.cretas.aims.ai.tool.impl.sales.ShipmentPendingTodayTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["shipment"]
+    overrideFlags:
+      actionType: true
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "pagination_previous"
+    implementationClass: "com.cretas.aims.ai.tool.impl.system.PaginationPreviousTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: []
+    overrideFlags:
+      actionType: false
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "supply_impact_query"
+    implementationClass: "com.cretas.aims.ai.tool.impl.supplyimpact.SupplyImpactQueryTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["finance:read", "finance:read_write", "procurement:price:view"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["supply"]
+    overrideFlags:
+      actionType: true
+      riskLevel: false
+      supportsPreview: false
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: false
+      domainTags: false
+    governanceStatus: REVIEW_REQUIRED
   - toolName: "user_create"
     implementationClass: "com.cretas.aims.ai.tool.impl.user.UserCreateTool"
     provenance: LEGACY_INFERRED
@@ -4968,46 +3135,6 @@ descriptors:
       requiresPermission: false
       hasPermission: false
       requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "store_review_revenue"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.StoreReviewRevenueTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["store"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_review_vip"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.review.RestaurantReviewVipTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
@@ -8277,19 +6404,19 @@ descriptors:
   - toolName: "camera_unsubscribe"
     implementationClass: "com.cretas.aims.ai.tool.impl.camera.CameraUnsubscribeTool"
     provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
+    actionType: WRITE
+    riskLevel: MEDIUM
+    supportsPreview: true
+    requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["camera"]
     overrideFlags:
-      actionType: false
+      actionType: true
       riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
       requiredPermissions: false
       version: false
       domainTags: false
@@ -8417,19 +6544,19 @@ descriptors:
   - toolName: "camera_subscribe"
     implementationClass: "com.cretas.aims.ai.tool.impl.camera.CameraSubscribeTool"
     provenance: LEGACY_INFERRED
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
+    actionType: WRITE
+    riskLevel: MEDIUM
+    supportsPreview: true
+    requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["camera"]
     overrideFlags:
-      actionType: false
+      actionType: true
       riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
       requiredPermissions: false
       version: false
       domainTags: false
@@ -11635,27 +9762,6 @@ descriptors:
       requiresPermission: false
       hasPermission: false
       requiredPermissions: true
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
-  - toolName: "restaurant_peak_hours_gold"
-    implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.gold.RestaurantPeakHoursGoldTool"
-    provenance: EXPLICIT
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    allowedRoles: []
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED

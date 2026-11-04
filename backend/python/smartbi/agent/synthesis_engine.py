@@ -1423,17 +1423,19 @@ class ComprehensiveSynthesisEngine:
         start, end = date_range
         start_iso, end_iso = start.isoformat(), end.isoformat()
         restaurant_scope = _is_restaurant_synthesis_tenant(factory_id)
-        scope_store_names: Optional[Tuple[str, ...]] = None
         if restaurant_scope:
-            store_data_factory = demo_data_factory_for_code(
-                "RESTAURANT_OPS_SALES_SUMMARY",
-                factory_id,
+            return SynthesisResponse(
+                answer="餐饮专属 AI 能力已下线；请使用业务页面查看餐饮数据。",
+                source="restaurant_ai_retired",
+                tokens=0,
+                tokens_used_today=0,
+                tokens_cap=0,
+                elapsed_ms=int((time.monotonic() - t0) * 1000),
+                charts=[],
+                alerts=[],
+                dimension_coverage=None,
             )
-            scope_store_names = await _resolve_synthesis_store_scope(
-                self._pool,
-                store_data_factory,
-                question,
-            )
+        scope_store_names: Optional[Tuple[str, ...]] = None
         # Exact cache entries must not cross page-focus contexts. Semantic cache
         # is skipped below for contextual requests because its vector/index key
         # represents the user's literal question, not the focused chart.

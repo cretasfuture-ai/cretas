@@ -225,29 +225,3 @@ async def test_no_range_keeps_rolling_behaviour():
             "rolling fallback lost — a caller passing only days must still get "
             f"a window ending today:\n{sql}"
         )
-
-
-@pytest.mark.asyncio
-async def test_dispatch_delivers_range_to_wastage_resolver():
-    """End-to-end through the dispatcher — where the kwargs were dropped.
-
-    Mutating only the resolver signature back would make this fail, which is
-    the point: the defect lived at the call site, not in the function body.
-    """
-    conn = _pool_conn()
-    answer = await resolve_by_code(
-        "RESTAURANT_OPS_WASTAGE_TOP",
-        _RecordingPool(conn),
-        "MOCK_REST",
-        days=30,
-        date_range=_JUNE,
-        window_label="上个月",
-        query="上个月损耗金额最高的食材",
-        role="restaurant_manager",
-    )
-
-    assert answer is not None
-    assert "上个月" in answer.answer_text
-    assert any(_JUNE[0] in args for _sql, args in _all_calls(conn)), (
-        "resolve_by_code filtered the requested range out again"
-    )

@@ -180,7 +180,7 @@ public class FoodSampleCreateTool extends AbstractBusinessTool {
         }
 
         // 验证 MaterialBatch 存在
-        Optional<MaterialBatch> mbOpt = materialBatchRepository.findById(materialBatchId);
+        Optional<MaterialBatch> mbOpt = materialBatchRepository.findByIdAndFactoryId(materialBatchId, factoryId);
         if (mbOpt.isEmpty()) {
             result.put("canDo", false);
             result.put("message", String.format(
@@ -238,7 +238,7 @@ public class FoodSampleCreateTool extends AbstractBusinessTool {
         }
 
         // 验证 MaterialBatch 存在
-        Optional<MaterialBatch> mbOpt = materialBatchRepository.findById(materialBatchId);
+        Optional<MaterialBatch> mbOpt = materialBatchRepository.findByIdAndFactoryId(materialBatchId, factoryId);
         if (mbOpt.isEmpty()) {
             throw new BusinessException(404,
                     String.format("MaterialBatch id=%s 不存在, 无法关联留样", materialBatchId))

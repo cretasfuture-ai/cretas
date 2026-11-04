@@ -15,6 +15,12 @@ import jakarta.persistence.LockModeType;
 @Repository
 public interface SalesDeliveryItemRepository extends JpaRepository<SalesDeliveryItem, Long> {
 
+    /** Factory-scoped delivery-line lookup used before any AI recommendation or allocation. */
+    @Query("SELECT i FROM SalesDeliveryItem i JOIN i.deliveryRecord d "
+            + "WHERE i.id = :id AND d.factoryId = :factoryId")
+    Optional<SalesDeliveryItem> findByIdAndDeliveryRecordFactoryId(
+            @Param("id") Long id, @Param("factoryId") String factoryId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT i FROM SalesDeliveryItem i WHERE i.id = :id")
     Optional<SalesDeliveryItem> findByIdForUpdate(@Param("id") Long id);

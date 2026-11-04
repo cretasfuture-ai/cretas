@@ -18,7 +18,7 @@ from smartbi.agent.runtime.contracts import (
     ProvenanceReference,
     TrustedExecutionContext,
 )
-from smartbi.agent.runtime.descriptors import restaurant_descriptors
+from smartbi.agent.runtime.descriptors import ReadToolDescriptor, ToolLimits
 from smartbi.agent.runtime.gateway import (
     _CompatDeadlineExpired,
     _await_with_deadline,
@@ -123,7 +123,7 @@ def draft(descriptor):
 
 
 def gateway_with_adapter(adapter):
-    descriptor = restaurant_descriptors()[0]
+    descriptor = _generic_descriptor()
     registry = ReadonlyToolRegistry()
     registry.register(descriptor, adapter)
     pool = FakePool()
@@ -134,6 +134,24 @@ def gateway_with_adapter(adapter):
         clock=lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
     )
     return descriptor, pool, gateway
+
+
+def _generic_descriptor() -> ReadToolDescriptor:
+    """Keep gateway mechanics covered after restaurant AI descriptors retire."""
+    return ReadToolDescriptor(
+        name="factory_read_contract.v1",
+        version="v1",
+        business_question="A generic bounded read contract",
+        source_assets=("test_asset",),
+        time_grain="DAY",
+        input_schema=(("startDate", "ISO_DATE"), ("endDate", "ISO_DATE")),
+        allowed_parameters=frozenset({"startDate", "endDate"}),
+        required_parameters=frozenset({"startDate", "endDate"}),
+        classification=DataClassification.FINANCIAL_RESTRICTED,
+        conclusions_allowed=("bounded read evidence",),
+        conclusions_blocked=("causal attribution",),
+        limits=ToolLimits(max_rows=10),
+    )
 
 
 @pytest.mark.asyncio
@@ -218,7 +236,7 @@ async def test_coroutine_timeout_wraps_pool_acquire_and_does_not_enter_transacti
     async def adapter(*args):
         raise AssertionError("adapter must not run")
 
-    descriptor = restaurant_descriptors()[0]
+    descriptor = _generic_descriptor()
     registry = ReadonlyToolRegistry()
     registry.register(descriptor, adapter)
     gateway = ReadToolGateway(SlowPool(), registry)

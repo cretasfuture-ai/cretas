@@ -88,12 +88,6 @@ def test_the_pieces_of_the_criterion_are_not_constants():
 
 
 # ══ 一 · 承重：能力表说能出，就不许剥 ═══════════════════════════════════
-def test_a_resolver_that_can_serve_ingredient_keeps_the_llm_dimension():
-    """🔴 承重：LLM 给了 ingredient 而 resolver 真能按食材出 ⇒ ⛔ 不许剥。"""
-    spec = ri._semantic_spec_from_t3(
-        _plan(intent="RESTAURANT_OPS_SUPPLIER_PRICE"), DISH_COST_QUERY)
-    assert "ingredient" in spec.dimensions, (
-        f"resolver 真能按食材出, 维度却被 6 个词剥掉了: {spec.dimensions}")
 
 
 # ══ 二 · 对照：能让上面变红的那些输入 ═══════════════════════════════════
