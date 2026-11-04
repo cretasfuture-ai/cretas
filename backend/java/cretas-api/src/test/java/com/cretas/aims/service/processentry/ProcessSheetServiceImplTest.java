@@ -1929,4 +1929,88 @@ class ProcessSheetServiceImplTest {
                 .filter(c -> "fryMinutes".equals(c.get("key"))).findFirst().orElseThrow();
         assertThat(fry.get("status")).isEqualTo("OK");
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // 工艺参数偏离汇总 × web 工序表: 一次填报写多条报工, 汇总只算一次
+    // ─────────────────────────────────────────────────────────────
+
+    @Autowired
+    private com.cretas.aims.controller.ProcessParamDeviationController paramDeviationController;
+
+    @Test
+    @DisplayName("偏离汇总: web 工序表一道工序写多条报工且各带同一份快照 ⇒ 汇总里这次填报只算 1 次, 不是 N 次")
+    void paramDeviationReport_countsOneWebSheetEntryOnce() {
+        com.cretas.aims.entity.WorkProcess wp = new com.cretas.aims.entity.WorkProcess();
+        wp.setId("PSF-WP-PD-" + UUID.randomUUID().toString().substring(0, 8));
+        wp.setFactoryId(FACTORY_ID);
+        wp.setProcessName("炒制");
+        wp.setProcessCategory("加工");
+        wp.setUnit("kg");
+        wp.setDefaultOutputMaterialKind(com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind.SEMI_FINISHED);
+        java.util.Map<String, Object> oilTemp = new java.util.LinkedHashMap<>();
+        oilTemp.put("key", "oilTemp");
+        oilTemp.put("label", "油温");
+        oilTemp.put("type", "number");
+        oilTemp.put("enabled", true);
+        oilTemp.put("unit", "℃");
+        oilTemp.put("standardValue", 155);
+        oilTemp.put("min", 150);
+        oilTemp.put("max", 160);
+        wp.setCustomFieldSchema(List.of(oilTemp));
+        workProcessRepoForReversal.saveAndFlush(wp);
+        com.cretas.aims.entity.ProductWorkProcess pwp = new com.cretas.aims.entity.ProductWorkProcess();
+        pwp.setFactoryId(FACTORY_ID);
+        pwp.setProductTypeId(PRODUCT_TYPE_ID);
+        pwp.setWorkProcessId(wp.getId());
+        pwp.setProcessOrder(1);
+        pwp.setReportingRequired(true);
+        pwp.setAllowSemiFinishedInjection(true);
+        pwp.setAllowMultipleUpstreamSources(true);
+        pwp.setAllowFinishedGoodsSource(false);
+        productWorkProcessRepoForReversal.saveAndFlush(pwp);
+
+        ProcessSheetRowRequest req = baseReq("row-param-dev-1", "xiuyou", 1, "80");
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setRawMaterialInputs(List.of(rawInput(rawBatchId, "100")));
+        // 人工时段 ⇒ 除了承载自定义字段的辅助 YIELD 报工, 还会再写一条 LABOR 报工, 两条都带同一份 paramChecks
+        com.cretas.aims.dto.processentry.LaborSegment shift = new com.cretas.aims.dto.processentry.LaborSegment();
+        shift.setStartTime("08:00");
+        shift.setEndTime("10:00");
+        shift.setWorkerCount(2);
+        req.setLaborSegments(List.of(shift));
+        java.util.Map<String, Object> values = new java.util.LinkedHashMap<>();
+        values.put("oilTemp", new BigDecimal("165"));
+        req.setCustomFields(values);
+
+        ProcessSheetRowResult result = processSheetService.saveRow(FACTORY_ID, planId, req, operatorId);
+        assertThat(result.isMaterialized()).isTrue();
+
+        // 阳性读数 (扇出确实发生): 携带 paramChecks 的报工行不止一条。只有这样「只算 1 次」才有区分力
+        long carriers = reportRepo.findYieldReportsByBatch(FACTORY_ID, result.getBatchId()).stream()
+                .filter(r -> r.getCustomFields() != null && r.getCustomFields().get("paramChecks") != null)
+                .count();
+        assertThat(carriers).as("web 工序表这一道写了几条带快照的报工").isGreaterThan(1);
+
+        com.cretas.aims.dto.quality.ProcessParamDeviationDTO.SummaryView summary =
+                paramDeviationController.summary(FACTORY_ID, null, null, null, null, null).getData();
+        assertThat(summary.getRows()).hasSize(1);
+        assertThat(summary.getRows().get(0).getParamKey()).isEqualTo("oilTemp");
+        assertThat(summary.getRows().get(0).getReportCount()).as("一次填报 = 1 次, 不是 " + carriers + " 条报工").isEqualTo(1);
+        assertThat(summary.getRows().get(0).getDeviationCount()).isEqualTo(1);
+        assertThat(summary.getTotalChecked()).isEqualTo(1);
+
+        com.cretas.aims.dto.common.PageResponse<com.cretas.aims.dto.quality.ProcessParamDeviationDTO.DetailRow> details =
+                paramDeviationController.details(FACTORY_ID, null, null, null, null, null, null, null, null).getData();
+        assertThat(details.getTotalElements()).isEqualTo(1);
+        assertThat(details.getContent().get(0).getBatchId()).isEqualTo(result.getBatchId());
+        assertThat(details.getContent().get(0).getStatus()).isEqualTo("HIGH");
+        assertThat(details.getContent().get(0).getMeasuredValue()).isEqualByComparingTo("165");
+        System.out.println("PPD-WEB-READOUT carriers=" + carriers + " process=" + summary.getRows().get(0).getProcessName()
+                + " reporter=" + details.getContent().get(0).getReporterName()
+                + " product=" + details.getContent().get(0).getProductName());
+
+        // 跨租户: 另一个工厂查不到这一条
+        assertThat(paramDeviationController.summary(OTHER_FACTORY_ID, null, null, null, null, null).getData()
+                .getTotalChecked()).isZero();
+    }
 }
