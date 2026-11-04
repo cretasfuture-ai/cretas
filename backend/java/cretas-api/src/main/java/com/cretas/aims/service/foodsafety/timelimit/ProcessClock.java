@@ -21,7 +21,8 @@ import java.util.function.BiPredicate;
  * <ul>
  *   <li>领用扣最早的笔。{@code PER_LOT} 下跳过当时已超时的笔: 超时的料没人动, 新料被领走之后,
  *       账上留下的必须还是那笔旧料, 不能被算成新料;</li>
- *   <li>同一 {@code sourceRef} 重新入账 (重存) 沿用第一次入账时刻;</li>
+ *   <li>重存: 先冲销再入账, 被冲销的量回到原来那一笔 (逐道录入的 {@code sourceRef} 是整行共用的锚,
+ *       不是单笔凭据, 所以只认回冲销过的量, 其余仍是新的一笔);</li>
  *   <li>撤回领用的量退回最老的笔, 不生成新笔;</li>
  *   <li>盘盈 / 认不出来源的量算进最老的笔, 盘亏从最新的笔扣。</li>
  * </ul>
@@ -52,6 +53,8 @@ public final class ProcessClock {
         private final Long reportId;
         private BigDecimal in;
         private BigDecimal open;
+        /** 被冲销、等着重新入账的量。 */
+        private BigDecimal reversed = BigDecimal.ZERO;
 
         public Lot(LocalDateTime at, String sourceRef, Long reportId, BigDecimal quantity) {
             this.at = at;
@@ -138,17 +141,21 @@ public final class ProcessClock {
     }
 
     private static void credit(List<Lot> lots, Txn txn, BigDecimal qty) {
+        BigDecimal left = qty;
         if (txn.sourceRef() != null && txn.reportId() == null) {
-            // 重存 / 冲销后再入账: 同一笔料, 沿用第一次入账的时刻
             for (Lot lot : lots) {
-                if (txn.sourceRef().equals(lot.sourceRef) && lot.reportId == null) {
-                    lot.in = lot.in.add(qty);
-                    lot.open = lot.open.add(qty);
-                    return;
+                if (left.signum() > 0 && lot.reversed.signum() > 0 && txn.sourceRef().equals(lot.sourceRef)) {
+                    BigDecimal back = lot.reversed.min(left);
+                    lot.reversed = lot.reversed.subtract(back);
+                    lot.in = lot.in.add(back);
+                    lot.open = lot.open.add(back);
+                    left = left.subtract(back);
                 }
             }
         }
-        lots.add(new Lot(txn.at(), txn.sourceRef(), txn.reportId(), qty));
+        if (left.signum() > 0) {
+            lots.add(new Lot(txn.at(), txn.sourceRef(), txn.reportId(), left));
+        }
     }
 
     private static void consume(List<Lot> lots, BigDecimal qty, LocalDateTime at,
@@ -186,7 +193,11 @@ public final class ProcessClock {
             }
         }
         for (int i = lots.size() - 1; i >= 0 && left.signum() > 0; i--) {
-            left = left.subtract(take(lots.get(i), left));
+            Lot lot = lots.get(i);
+            BigDecimal taken = take(lot, left);
+            lot.in = lot.in.subtract(taken);
+            lot.reversed = lot.reversed.add(taken);
+            left = left.subtract(taken);
         }
     }
 

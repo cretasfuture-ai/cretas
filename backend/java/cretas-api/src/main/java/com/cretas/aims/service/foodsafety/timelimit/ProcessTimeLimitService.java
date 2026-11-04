@@ -36,8 +36,16 @@ import com.cretas.aims.service.lineage.LineageEdgeRecorder;
 import com.cretas.aims.service.quality.release.QcInspectionGuard;
 import com.cretas.aims.service.quality.release.QcReleaseService;
 import com.cretas.aims.service.unit.UnitDisplayNames;
+import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
+import com.cretas.aims.service.yield.PendingInterimFeedService;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -136,6 +144,21 @@ public class ProcessTimeLimitService {
     private final ProcessTimeLimitEventWriter eventWriter;
     private final QcReleaseService qcReleaseService;
     private final WarehouseResolver warehouseResolver;
+    private final ProductProcessWorkflowRevisionRepository revisionRepository;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * 逐道录入是延迟扣减: 已录入还没小结的量账上还在。按笔判可领量时要减掉, 否则两行各领一次就把超时的料领走了。
+     * {@code @Lazy}: 它反向依赖库存服务。
+     */
+    @Autowired(required = false)
+    @Lazy
+    private PendingInterimFeedService pendingInterimFeedService;
+
+    /** 测试 / 装配用。 */
+    public void setPendingInterimFeedService(PendingInterimFeedService service) {
+        this.pendingInterimFeedService = service;
+    }
 
     /** 一条来源当前的时限状态 (页面显示与写入口共用)。 */
     public record SourceStatus(
@@ -614,8 +637,11 @@ public class ProcessTimeLimitService {
                                 LocalDateTime now) {
         ProcessTimeLimitConfig config = configOf(port);
         String processName = processNameOf(factoryId, port, consumer);
+        // 放行只算同一端口的: 宽松工序的复检结论不能替严格工序放行
         List<ProcessTimeLimitEvent> releases = eventRepository.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(
-                factoryId, source.type(), source.id(), ProcessTimeLimitEvent.Status.RELEASED);
+                        factoryId, source.type(), source.id(), ProcessTimeLimitEvent.Status.RELEASED).stream()
+                .filter(e -> Objects.equals(e.getWorkflowPortId(), port.getWorkflowPortId()))
+                .toList();
         boolean paused;
         List<LotClock> clocks;
         boolean startMissing = false;
@@ -640,13 +666,13 @@ public class ProcessTimeLimitService {
         }
         Long pauseMarkId = paused ? openPauseMarkId(factoryId, source, config) : null;
         return summarize(source, port, consumer.productionBatchId(), config, processName, clocks, paused,
-                pauseMarkId, startMissing, now);
+                pauseMarkId, startMissing, claimedNotDeducted(factoryId, source, config), now);
     }
 
     private Evaluation summarize(Source source, WorkflowTaskPort port, Long consumerBatchId,
                                  ProcessTimeLimitConfig config,
                                  String processName, List<LotClock> clocks, boolean paused, Long pauseMarkId,
-                                 boolean startMissing, LocalDateTime now) {
+                                 boolean startMissing, BigDecimal claimed, LocalDateTime now) {
         List<LotClock> active = clocks.stream().filter(c -> !c.waived() && c.start() != null)
                 .sorted(Comparator.comparing(LotClock::deadline)).toList();
         List<LotClock> overdue = active.stream().filter(c -> c.deadline().isBefore(now)).toList();
@@ -664,7 +690,7 @@ public class ProcessTimeLimitService {
             expired = balance;
             coveredUntil = now;
         }
-        BigDecimal drawable = balance.subtract(expired).max(BigDecimal.ZERO);
+        BigDecimal drawable = balance.subtract(expired).subtract(claimed).max(BigDecimal.ZERO);
 
         LotClock shown = overdue.isEmpty() ? (active.isEmpty() ? null : active.get(0)) : overdue.get(0);
         // 按笔时还有没超时的部分: 倒计时显示下一笔, 超时量单独写
@@ -693,6 +719,21 @@ public class ProcessTimeLimitService {
         LotClock first = overdue.isEmpty() ? null : overdue.get(0);
         return new Evaluation(source, port, consumerBatchId, config, processName, status, coveredUntil,
                 first == null ? null : first.start(), first == null ? null : first.deadline());
+    }
+
+    /** 按笔时: 这一行已被录入 / 待审批报工认领、账上还没扣的量。整批规则不看数量, 不必查。 */
+    private BigDecimal claimedNotDeducted(String factoryId, Source source, ProcessTimeLimitConfig config) {
+        if (!config.perLot() || !TargetType.SEMI_FINISHED.equals(source.type())) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal pendingReports = reportRepository.sumPendingInputBySourceWipNo(factoryId, source.batchNumber(), null);
+        PendingInterimFeedService.Snapshot rows = pendingInterimFeedService == null
+                ? PendingInterimFeedService.Snapshot.empty()
+                : pendingInterimFeedService.pendingSemiFeedSnapshot(factoryId);
+        if (rows.isUnresolved(source.batchNumber())) {
+            return source.balance();   // 待扣量算不出来: 不当成 0, 按全被认领算
+        }
+        return (pendingReports == null ? BigDecimal.ZERO : pendingReports).add(rows.pendingOf(source.batchNumber()));
     }
 
     private String reason(Source source, ProcessTimeLimitConfig config, String processName, String state,
@@ -926,7 +967,10 @@ public class ProcessTimeLimitService {
         return new Consumer(task.getProductionBatchId(), task, ports);
     }
 
-    /** 这个计划的工艺快照; 没有工艺批次的旧计划返回 {@code null} (不限时)。 */
+    /**
+     * 这个计划的工艺快照。批次还没物化时 (二次加工开工在物化之前扣半成品) 读计划钉住的工艺版本;
+     * 两者都没有的旧计划返回 {@code null} (不限时)。
+     */
     private Consumer consumerOfPlan(String factoryId, String planId) {
         for (ProductionBatch batch : productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId)) {
             Optional<ProductionWorkflowInstance> instance =
@@ -936,7 +980,45 @@ public class ProcessTimeLimitService {
                         portRepository.findByFactoryIdAndWorkflowInstanceId(factoryId, instance.get().getId()));
             }
         }
-        return null;
+        return planRepository.findByIdAndFactoryId(planId, factoryId)
+                .map(ProductionPlan::getSelectedWorkflowRevisionId)
+                .flatMap(id -> revisionRepository.findByIdAndFactoryId(id, factoryId))
+                .map(revision -> new Consumer(null, null, limitedPortsOf(factoryId, revision.getNodesJson())))
+                .orElse(null);
+    }
+
+    /** 工艺版本里配了时限的投入端口 (还没物化, 没有任务 id)。 */
+    private List<WorkflowTaskPort> limitedPortsOf(String factoryId, String nodesJson) {
+        JsonNode nodes;
+        try {
+            nodes = objectMapper.readTree(nodesJson);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(409, "工艺版本内容读不出来，不能判断投料时限")
+                    .withCode(CODE_INVALID)
+                    .withHint("请联系管理员核对该计划钉住的工艺版本");
+        }
+        Map<String, JsonNode> byId = new HashMap<>();
+        nodes.forEach(node -> byId.put(node.path("id").asText(), node));
+        List<WorkflowTaskPort> out = new ArrayList<>();
+        for (JsonNode node : nodes) {
+            for (JsonNode raw : node.path("data").path("ports")) {
+                if (!raw.hasNonNull("timeLimit") || !"INPUT".equals(raw.path("direction").asText())) {
+                    continue;
+                }
+                JsonNode material = byId.get(raw.path("materialNodeId").asText());
+                WorkflowTaskPort port = new WorkflowTaskPort();
+                port.setFactoryId(factoryId);
+                port.setWorkflowPortId(raw.path("id").asText());
+                port.setDirection(WorkflowTaskPort.Direction.INPUT);
+                port.setMaterialNodeId(raw.path("materialNodeId").asText());
+                port.setMaterialKind(material == null ? null : material.path("kind").asText());
+                port.setSkuId(material == null ? null : material.path("data").path("skuId").asText());
+                port.setTimeLimitConfig(objectMapper.convertValue(raw.get("timeLimit"),
+                        new TypeReference<Map<String, Object>>() { }));
+                out.add(port);
+            }
+        }
+        return out;
     }
 
     private static boolean isLimitedInput(WorkflowTaskPort port) {
@@ -974,13 +1056,20 @@ public class ProcessTimeLimitService {
         if (portId != null && !portId.isBlank()) {
             return limited.stream().filter(p -> portId.equals(p.getWorkflowPortId())).findFirst().orElse(null);
         }
-        if (nodeId != null && !nodeId.isBlank()) {
-            return limited.stream().filter(p -> nodeId.equals(p.getMaterialNodeId())).findFirst().orElse(null);
-        }
-        return limited.stream().filter(p -> Objects.equals(p.getSkuId(), sku))
-                .filter(p -> processOrder == null || taskRepository.findByFactoryIdAndId(p.getFactoryId(), p.getTaskId())
-                        .map(t -> processOrder.equals(t.getProcessOrder())).orElse(false))
+        boolean byNode = nodeId != null && !nodeId.isBlank();
+        return limited.stream()
+                .filter(p -> byNode ? nodeId.equals(p.getMaterialNodeId()) : Objects.equals(p.getSkuId(), sku))
+                .filter(p -> atOrder(p, processOrder))
                 .findFirst().orElse(null);
+    }
+
+    /** 这个端口是不是这一道的。工艺版本读出来的端口还没有任务, 不分道。 */
+    private boolean atOrder(WorkflowTaskPort port, Integer processOrder) {
+        if (processOrder == null || port.getTaskId() == null) {
+            return true;
+        }
+        return taskRepository.findByFactoryIdAndId(port.getFactoryId(), port.getTaskId())
+                .map(t -> processOrder.equals(t.getProcessOrder())).orElse(false);
     }
 
     private static ProcessTimeLimitConfig configOf(WorkflowTaskPort port) {
@@ -988,6 +1077,9 @@ public class ProcessTimeLimitService {
     }
 
     private String processNameOf(String factoryId, WorkflowTaskPort port, Consumer consumer) {
+        if (port.getTaskId() == null) {
+            return "下一道工序";
+        }
         WorkProcessTask task = consumer.task() != null && Objects.equals(consumer.task().getId(), port.getTaskId())
                 ? consumer.task()
                 : taskRepository.findByFactoryIdAndId(factoryId, port.getTaskId()).orElse(null);

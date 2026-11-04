@@ -79,6 +79,9 @@ class ProcessTimeLimitServiceContractTest {
     private final ProcessTimeLimitEventRepository eventRepo = mock(ProcessTimeLimitEventRepository.class);
     private final ProcessTimeLimitEventWriter writer = mock(ProcessTimeLimitEventWriter.class);
     private final QcReleaseService qcRelease = mock(QcReleaseService.class);
+    private final ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+    private final com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository revisionRepo =
+            mock(com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository.class);
 
     private LocalDateTime now = T0;
     private final List<ProcessTimeLimitEvent> releases = new ArrayList<>();
@@ -88,9 +91,9 @@ class ProcessTimeLimitServiceContractTest {
     @BeforeEach
     void setUp() {
         service = new ProcessTimeLimitService(portRepo, taskRepo, mock(WorkProcessRepository.class), batchRepo,
-                mock(ProductionPlanRepository.class), instanceRepo, reportRepo, semiRepo, txnRepo, materialRepo,
+                planRepo, instanceRepo, reportRepo, semiRepo, txnRepo, materialRepo,
                 mock(FinishedGoodsBatchRepository.class), edgeRepo, markRepo, eventRepo, writer, qcRelease,
-                mock(WarehouseResolver.class)) {
+                mock(WarehouseResolver.class), revisionRepo, new com.fasterxml.jackson.databind.ObjectMapper()) {
             @Override
             protected LocalDateTime now() {
                 return now;
@@ -157,7 +160,7 @@ class ProcessTimeLimitServiceContractTest {
 
     private ProcessTimeLimitEvent release(LocalDateTime coveredUntil, LocalDateTime validUntil) {
         ProcessTimeLimitEvent event = ProcessTimeLimitEvent.builder().coveredUntil(coveredUntil)
-                .validUntil(validUntil).status(ProcessTimeLimitEvent.Status.RELEASED).build();
+                .workflowPortId("in-SKU").validUntil(validUntil).status(ProcessTimeLimitEvent.Status.RELEASED).build();
         releases.add(event);
         return event;
     }
@@ -272,6 +275,53 @@ class ProcessTimeLimitServiceContractTest {
     }
 
     @Test
+    @DisplayName("放行只算同一端口: 宽松工序的结论不替严格工序放行")
+    void releaseFromAnotherPortDoesNotApply() {
+        port("SKU", "SEMI_FINISHED", limit(120, "OUTPUT_POSTED"));
+        ledger(txn("IN", 1L, 100, 0));
+        now = T0.plusMinutes(200);
+        release(now, null).setWorkflowPortId("in-loose");
+        assertEquals(ProcessTimeLimitService.CODE_EXCEEDED, blocked(semi(100, 0), 10).getErrorCode());
+    }
+
+    @Test
+    @DisplayName("按笔: 已录入 / 待审批但账上没扣的量要算掉, 两行不能把超时的料领走")
+    void perLotCountsClaimedButUndeductedQuantity() {
+        port("SKU", "SEMI_FINISHED", limit(120, "OUTPUT_POSTED", "mixRule", "PER_LOT"));
+        ledger(txn("IN", 1L, 50, 0), txn("IN", 2L, 50, 110));
+        com.cretas.aims.service.yield.PendingInterimFeedService pending =
+                mock(com.cretas.aims.service.yield.PendingInterimFeedService.class);
+        when(pending.pendingSemiFeedSnapshot(F)).thenReturn(new com.cretas.aims.service.yield.PendingInterimFeedService
+                .Snapshot(Map.of("W-1", BigDecimal.valueOf(30)), java.util.Set.of()));
+        when(reportRepo.sumPendingInputBySourceWipNo(F, "W-1", null)).thenReturn(BigDecimal.TEN);
+        service.setPendingInterimFeedService(pending);
+        now = T0.plusMinutes(130);
+        passes(semi(100, 0), 10);
+        assertTrue(blocked(semi(100, 0), 11).getMessage().contains("现在只能领 10"));
+    }
+
+    @Test
+    @DisplayName("二次加工开工在物化之前: 批次和实例都没有时读钉住的工艺版本")
+    void planBeforeMaterializationReadsPinnedRevision() {
+        com.cretas.aims.entity.ProductionPlan plan = mock(com.cretas.aims.entity.ProductionPlan.class);
+        when(plan.getId()).thenReturn("PLAN");
+        when(plan.getSelectedWorkflowRevisionId()).thenReturn(77L);
+        when(batchRepo.findByFactoryIdAndProductionPlanId(F, "PLAN")).thenReturn(List.of());
+        when(planRepo.findByIdAndFactoryId("PLAN", F)).thenReturn(Optional.of(plan));
+        com.cretas.aims.entity.ProductProcessWorkflowRevision revision =
+                mock(com.cretas.aims.entity.ProductProcessWorkflowRevision.class);
+        when(revision.getNodesJson()).thenReturn("[{\"id\":\"m\",\"kind\":\"SEMI_FINISHED\",\"data\":{\"skuId\":\"SKU\"}},"
+                + "{\"id\":\"p\",\"kind\":\"PROCESS\",\"data\":{\"ports\":[{\"id\":\"in-SKU\",\"direction\":\"INPUT\","
+                + "\"materialNodeId\":\"m\",\"timeLimit\":{\"maxMinutes\":120,\"startEvent\":\"OUTPUT_POSTED\"}}]}}]");
+        when(revisionRepo.findByIdAndFactoryId(77L, F)).thenReturn(Optional.of(revision));
+        ledger(txn("IN", 1L, 100, 0));
+        now = T0.plusMinutes(200);
+        BusinessException e = assertThrows(BusinessException.class, () -> service.assertSemiFeedForPlan(
+                F, plan, semi(100, 0), BigDecimal.TEN, 7L));
+        assertEquals(ProcessTimeLimitService.CODE_EXCEEDED, e.getErrorCode());
+    }
+
+    @Test
     @DisplayName("复检放行过了有效期: 又算超时")
     void releaseExpires() {
         port("SKU", "SEMI_FINISHED", limit(120, "OUTPUT_POSTED"));
@@ -337,7 +387,7 @@ class ProcessTimeLimitServiceContractTest {
     @DisplayName("冷藏暂停: 配了才算, 没配登记了也不顺延")
     void coldPauseOnlyCountsWhenConfigured() {
         ledger(txn("IN", 1L, 100, 0));
-        ProcessTimeMark pause = ProcessTimeMark.builder().markKind(ProcessTimeMark.Kind.PAUSE)
+        ProcessTimeMark pause = ProcessTimeMark.builder().id(41L).markKind(ProcessTimeMark.Kind.PAUSE)
                 .markCode(ProcessTimeLimitConfig.PAUSE_COLD_STORAGE).startedAt(T0.plusMinutes(30)).build();
         when(markRepo.findByTargets(eq(F), eq("SEMI_FINISHED"), any())).thenReturn(List.of(pause));
         now = T0.plusMinutes(400);

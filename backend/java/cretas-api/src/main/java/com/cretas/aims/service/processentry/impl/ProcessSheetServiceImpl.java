@@ -406,6 +406,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         if (reworkRatioCheck != null) {
             reworkRatioCheck.enforce(factoryId, planId, req);
         }
+        // 缺口 14: 工序间 / 投料时限。必须在回料严格扣减之前: 扣完再判, 看到的是扣后的余额,
+        //   超时的料整行领走时余额 0 就放过去了。回料自动追加的来源此时已在 req 上。
+        assertProcessTimeLimit(factoryId, planId, req, userId);
+        req.setTimeLimitChecked(true);
 
         // 回料是一个已经存在于常驻 SFI 的可复用库存批次。与普通 SFI（小结时扣减）不同，
         // 正式报工确认弹窗已经向操作员承诺本次回料会被领用，因此在同一事务内严格扣减。
@@ -1173,11 +1177,22 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
     }
 
-    /** 这一行已经投下去的内容 (时限闸不重判这部分); 没有或还是草稿 = 这次才算投料。 */
+    private void assertProcessTimeLimit(String factoryId, String planId, ProcessSheetRowRequest req, Long userId) {
+        if (processTimeLimitService != null) {
+            processTimeLimitService.assertWebFeed(factoryId, planId, req, alreadyFedRow(factoryId, planId, req), userId);
+        }
+    }
+
+    /**
+     * 这一行已经投下去的内容 (时限闸不重判这部分)。只有正式提交过才算: 撤销小结会把行打回 DRAFT 并退库,
+     * 再提交是重新投料。多产出的投入落在首行 {@code <行号>#0}。
+     */
     private ProcessSheetRowRequest alreadyFedRow(String factoryId, String planId, ProcessSheetRowRequest req) {
+        String rowId = req.getOutputs() != null && !req.getOutputs().isEmpty()
+                ? req.getClientRowId() + "#0" : req.getClientRowId();
         return rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
-                        factoryId, planId, req.getProcessCode(), req.getClientRowId())
-                .filter(row -> !"DRAFT".equals(row.getRowStatus()))
+                        factoryId, planId, req.getProcessCode(), rowId)
+                .filter(row -> ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus()))
                 .map(row -> tryDeserialize(row.getRowPayload()))
                 .orElse(null);
     }
@@ -1202,10 +1217,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         //     所以上游产出的料还没到时在这里拒绝; 草稿 (saveDraft) 不走本方法, 照常可存。
         assertWorkflowUpstreamReady(factoryId, planId, req);
 
-        // 1c. 缺口 14: 工序间 / 投料时限。放在多产出分支之前; 回料自动追加的来源此时已在 req 上。
-        //     被拦时整个事务回滚 (含已严格扣减的回料), 留痕走独立事务。
-        if (processTimeLimitService != null) {
-            processTimeLimitService.assertWebFeed(factoryId, planId, req, alreadyFedRow(factoryId, planId, req), userId);
+        // 1c. 缺口 14: 工序间 / 投料时限。放在多产出分支之前。正式提交已在扣回料之前判过 (见 submitRow)。
+        if (!req.isTimeLimitChecked()) {
+            assertProcessTimeLimit(factoryId, planId, req, userId);
         }
 
         // 2B.2 多产出分支 (前置于单产出校验/upsert): 多产出用自己的逐产出校验 + 分组 upsert/删除,

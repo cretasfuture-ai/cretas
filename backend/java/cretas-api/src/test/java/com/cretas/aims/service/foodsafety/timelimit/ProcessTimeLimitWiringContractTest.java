@@ -38,16 +38,28 @@ class ProcessTimeLimitWiringContractTest {
         String source = read("service/processentry/impl/ProcessSheetServiceImpl.java")
                 .replace("\r\n", "\n");
         String body = methodBody(source, "public ProcessSheetRowResult saveRow(");
-        int gate = body.indexOf("processTimeLimitService.assertWebFeed(");
+        int gate = body.indexOf("assertProcessTimeLimit(");
         int multi = body.indexOf("saveMultiOutputRow(");
         assertTrue(gate >= 0 && gate < multi, "时限闸必须在多产出分支之前");
     }
 
     @Test
-    @DisplayName("草稿不是投料: 已保存内容只认非草稿行")
-    void draftRowsDoNotCountAsFed() throws IOException {
+    @DisplayName("正式提交: 在回料严格扣减之前过闸, 扣完再判看到的是扣后余额")
+    void submitRunsBeforeReworkDeduction() throws IOException {
+        String source = read("service/processentry/impl/ProcessSheetServiceImpl.java")
+                .replace("\r\n", "\n");
+        String body = methodBody(source, "public ProcessSheetRowResult submitRow(");
+        int gate = body.indexOf("assertProcessTimeLimit(");
+        int consume = body.indexOf("consumeReworkInputs(");
+        int auto = body.indexOf("reworkPolicyAutoDeduction.apply(");
+        assertTrue(auto >= 0 && auto < gate && gate < consume, "时限闸要在回料自动追加之后、严格扣减之前");
+    }
+
+    @Test
+    @DisplayName("只有正式提交过才算已投料: 草稿和撤销小结打回的行都要重判")
+    void onlySubmittedRowsCountAsFed() throws IOException {
         String source = read("service/processentry/impl/ProcessSheetServiceImpl.java");
-        assertTrue(source.contains(".filter(row -> !\"DRAFT\".equals(row.getRowStatus()))"));
+        assertTrue(source.contains(".filter(row -> ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus()))"));
     }
 
     @Test

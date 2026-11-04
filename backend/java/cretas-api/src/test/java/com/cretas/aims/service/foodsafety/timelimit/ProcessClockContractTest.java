@@ -86,6 +86,25 @@ class ProcessClockContractTest {
     }
 
     @Test
+    @DisplayName("逐道录入的锚是整行共用的: 没冲销过的新产出是新的一笔, 不沾旧笔的时刻")
+    void sharedAnchorRefStartsNewLotUnlessReversed() {
+        List<ProcessClock.Lot> lots = replay(40, in(0, "interim-settle-in:A", 30), out(10, 30),
+                in(4000, "interim-settle-in:A", 40));
+        assertEquals(1, lots.size());
+        assertLot(lots.get(0), 4000, 40);
+    }
+
+    @Test
+    @DisplayName("重存改大: 冲销过的量回原笔, 多出来的才是新笔")
+    void resaveWithLargerQuantitySplitsAtReversedAmount() {
+        ProcessClock.Txn reverse = new ProcessClock.Txn("REVERSE", "x", null, BigDecimal.valueOf(-30), T0.plusMinutes(50));
+        List<ProcessClock.Lot> lots = replay(45, in(0, "A", 30), reverse, in(55, "A", 45));
+        assertEquals(2, lots.size());
+        assertLot(lots.get(0), 0, 30);
+        assertLot(lots.get(1), 55, 15);
+    }
+
+    @Test
     @DisplayName("撤回领用: 量退回原来的笔, 不生成新笔")
     void restoredDrawGoesBackToOldLot() {
         ProcessClock.Txn restore = new ProcessClock.Txn("REVERSE", "REVERSE-1", null,
