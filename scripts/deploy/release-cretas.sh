@@ -182,17 +182,24 @@ git -C "$PROJECT_ROOT" cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
     || { echo "ERROR: Base SHA cannot be resolved: $BASE_SHA" >&2; exit 1; }
 git -C "$PROJECT_ROOT" merge-base --is-ancestor "$BASE_SHA" HEAD \
     || { echo "ERROR: registered Base SHA is not an ancestor of candidate HEAD" >&2; exit 1; }
+# 这几道闸在 EXIT trap 装上之前, 而 recover_from_main_drift 重新执行时也会走到这里
+# (比如 main 在重新执行的瞬间又动了), 所以要自己打终态。
+refuse_before_report() {
+    echo "ERROR: $1" >&2
+    printf 'RELEASE_FINAL_STATUS=failed\n'
+    exit 1
+}
+
 [ -z "$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=normal)" ] \
-    || { echo "ERROR: unified release requires a clean worktree" >&2; exit 1; }
+    || refuse_before_report "unified release requires a clean worktree"
 
 HEAD_SHA=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
 if [ "$PHASE" != build ]; then
-    git -C "$PROJECT_ROOT" fetch --quiet origin main
+    git -C "$PROJECT_ROOT" fetch --quiet origin main \
+        || refuse_before_report "cannot fetch origin/main; exact-main cannot be proven"
     ORIGIN_MAIN_SHA=$(git -C "$PROJECT_ROOT" rev-parse origin/main)
-    [ "$HEAD_SHA" = "$ORIGIN_MAIN_SHA" ] || {
-        echo "ERROR: deployment requires clean exact origin/main (HEAD=$HEAD_SHA origin/main=$ORIGIN_MAIN_SHA)" >&2
-        exit 1
-    }
+    [ "$HEAD_SHA" = "$ORIGIN_MAIN_SHA" ] \
+        || refuse_before_report "deployment requires clean exact origin/main (HEAD=$HEAD_SHA origin/main=$ORIGIN_MAIN_SHA)"
 fi
 
 CHANGED_FILES=$(git -C "$PROJECT_ROOT" diff --name-only "$BASE_SHA" HEAD --)
@@ -232,6 +239,7 @@ WEB_DEPLOY_SECONDS=0
 DEPLOY_SECONDS=0
 VERIFY_SECONDS=0
 FINAL_STATUS=failed
+FINAL_STATUS_PRINTED=false
 JAVA_BUILD_COUNT=0
 WEB_BUILD_COUNT=0
 JAVA_STAGE_STATUS=not-requested
@@ -365,6 +373,11 @@ on_exit() {
     local rc=$?
     if [ "$rc" -ne 0 ]; then FINAL_STATUS=failed; fi
     write_report "$rc" || true
+    # set -e 中途退出到不了脚本末尾那行。exec 重新执行不触发 EXIT trap, 所以整条发布
+    # 不管前进过几次, 这一行都恰好一次。
+    if [ "$FINAL_STATUS_PRINTED" != true ]; then
+        printf 'RELEASE_FINAL_STATUS=%s\n' "$FINAL_STATUS"
+    fi
     # 🔴 R43 同款坑: 这个 `trap on_exit EXIT` 会【整个替换】前面
     # `acquire_deploy_lock "cretas-release"` (deploy-common.sh) 注册的那条清锁
     # trap —— bash 的 trap 不叠加, 后设的赢。不清的后果就是当晚踩过的那个:
@@ -693,7 +706,13 @@ ensure_exact_main_after_artifacts() {
     local started origin_sha dirty
 
     started=$(date +%s)
-    git -C "$PROJECT_ROOT" fetch --quiet origin main
+    # 显式判: `ensure_exact_main_after_artifacts ... || return 1` 这种调用下 set -e 失效,
+    # fetch 失败会被吞掉, 拿旧 ref 把守卫放过去。
+    if ! git -C "$PROJECT_ROOT" fetch --quiet origin main; then
+        MAIN_GUARD_STATUS=failed
+        echo "ERROR: cannot fetch origin/main during $label; exact-main cannot be proven, refusing deployment" >&2
+        return 1
+    fi
     origin_sha=$(git -C "$PROJECT_ROOT" rev-parse origin/main)
     dirty=$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=normal)
     MAIN_GUARD_SECONDS=$((MAIN_GUARD_SECONDS + $(date +%s) - started))
@@ -715,6 +734,23 @@ ensure_exact_main_after_artifacts() {
         return 1
     fi
     MAIN_GUARD_STATUS=passed
+}
+
+# 回退构建之后的收尾校验。manifest validate 要求 HEAD == origin/main, 而构建要几分钟, 这期间
+# 共用 .git 的别的 worktree 一次 fetch 就能让 origin/main 变掉。先过 main 守卫, 漂移才走得到
+# recover_from_main_drift; 否则 validate 直接 return 1, set -e 无声退出 (2026-11-04 #1417:
+# 构建 8 分钟后 DEPLOY_EXIT=1, 无 ERROR, 无 RELEASE_FINAL_STATUS, 回执 main_guard=passed)。
+#
+# validate 失败后再过一次守卫: 守卫和 validate 之间 ref 也可能动, 那仍然是漂移, 不是制品坏了。
+validate_after_fallback_build() {
+    local component=$1 manifest_script=$2 rc=0
+
+    ensure_exact_main_after_artifacts "artifact validation/fallback build" || return 1
+    "$manifest_script" validate || rc=$?
+    [ "$rc" -ne 0 ] || return 0
+    ensure_exact_main_after_artifacts "$component manifest validation" || return 1
+    echo "ERROR: $component manifest validation failed after the fallback build (rc=$rc); see the ${component^^}_MANIFEST_INVALID line above; refusing deployment" >&2
+    return "$rc"
 }
 
 guard_exact_main_before_fallback() {
@@ -776,7 +812,7 @@ java_fallback_build() {
     if [ "$CI_ARTIFACT_STATUS" = used ]; then
         return 0
     fi
-    "$SCRIPT_DIR/release-jar-manifest.sh" validate
+    validate_after_fallback_build Java "$SCRIPT_DIR/release-jar-manifest.sh"
 }
 
 web_artifact_ready() {
@@ -794,7 +830,7 @@ web_fallback_build() {
     echo "WARN: Web manifest invalid; using the one permitted build fallback" >&2
     build_web
     record_fallback_build web
-    "$SCRIPT_DIR/release-web-manifest.sh" validate
+    validate_after_fallback_build Web "$SCRIPT_DIR/release-web-manifest.sh"
 }
 
 # 单组件入口保持原语义(ready 不成立就回退构建), 供 java) / web) 两个 case 用。
@@ -898,8 +934,8 @@ build_both_fallback_parallel() {
     record_fallback_build java
     record_fallback_build web
     # 两边都要按各自那套再验一次 —— 与串行路径的收尾完全相同, 并行只改了"谁先谁后"。
-    "$SCRIPT_DIR/release-jar-manifest.sh" validate
-    "$SCRIPT_DIR/release-web-manifest.sh" validate
+    validate_after_fallback_build Java "$SCRIPT_DIR/release-jar-manifest.sh" || return 1
+    validate_after_fallback_build Web "$SCRIPT_DIR/release-web-manifest.sh"
 }
 
 deploy_java() {
@@ -1129,3 +1165,4 @@ printf 'RELEASE_WEB_STATUS=build:%s,deploy:%s\n' "$WEB_BUILD_STATUS" "$WEB_DEPLO
 printf 'RELEASE_JAVA_OUTCOME=%s\n' "$JAVA_DEPLOY_OUTCOME"
 printf 'RELEASE_WEB_OUTCOME=%s\n' "$WEB_DEPLOY_OUTCOME"
 printf 'RELEASE_FINAL_STATUS=%s\n' "$FINAL_STATUS"
+FINAL_STATUS_PRINTED=true
