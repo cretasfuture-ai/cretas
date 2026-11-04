@@ -301,6 +301,13 @@ const businessRoutes: RouteRecordRaw[] = [
             // 采购 / 质量 / 销售各有自己的一条 (/procurement|quality|sales/shortage-cases), 面包屑跟着各自的组
             meta: { requiresAuth: true, title: '缺料异常', module: 'production' }
           },
+          {
+            // 交付风险异常: 可能延期的订单走 证据 → 影响 → 建议 → 负责人 → 结果; 销售组有同一页面的一条
+            path: 'delivery-risks',
+            name: 'ProductionDeliveryRisks',
+            component: () => import('@/views/production/delivery-risks/index.vue'),
+            meta: { requiresAuth: true, title: '交付风险', module: 'production' }
+          },
           // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 生产看板 hub ——
           // 合并未完成计划队列/备货看板/交货预警 3 个视角为一个入口 (el-tabs), 见
           // views/production/kanban/index.vue + views/production/productionKanbanTab.ts。
@@ -1003,6 +1010,12 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             name: 'SalesShortageCases',
             component: () => import('@/views/production/shortage-cases/index.vue'),
             meta: { requiresAuth: true, title: '缺料异常', module: 'sales' }
+          },
+          {
+            path: 'delivery-risks',
+            name: 'SalesDeliveryRisks',
+            component: () => import('@/views/production/delivery-risks/index.vue'),
+            meta: { requiresAuth: true, title: '交付风险', module: 'sales' }
           },
           {
             path: 'orders',
