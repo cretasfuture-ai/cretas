@@ -165,36 +165,20 @@ public class ProcessSecretSampleFilter {
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public SampleVerdict checkTrainingSample(String kind, String factoryId, String... texts) {
-        return check(kind, factoryId, true, texts);
-    }
-
-    /**
-     * 只查本厂<b>保密词</b> (不含人员 / 客户) —— 人工添加关键词用: 不按训练授权拦, 也不拦人名客户名,
-     * 但不许是本厂保密产品的全名 / 编码 / ID。事务与失败处理同 {@link #checkTrainingSample}。
-     */
-    @Transactional(propagation = Propagation.NOT_SUPPORTED)
-    public SampleVerdict checkProtectedTerms(String kind, String factoryId, String... texts) {
-        return check(kind, factoryId, false, texts);
-    }
-
-    private SampleVerdict check(String kind, String factoryId, boolean withDirectory, String... texts) {
         if (factoryId == null || factoryId.isBlank()) {
             return SampleVerdict.UNVERIFIED;     // 没有工厂就没有可比的名单 (不用所有工厂的并集)
         }
         // 「训练数据过滤」(d; 按样本所属的工厂, 开关读不到按开着) 只管<b>保密产品词</b>。人名 / 客户名是隐私不是保密:
-        // 训练、学习、蒸馏样本里一律剔除, 任何开关都不管 (Steve 2026-11-04) —— 下面 withDirectory 不许跟着 d 走。
+        // 训练、学习、蒸馏样本里一律剔除, 任何开关都不管 (Steve 2026-11-04) —— 下面查人员 / 客户那一半不许跟着 d 走。
         // 名单查不出来时两者同样: 按上次成功的名单判, 否则挂起 / 不存, 绝不直接存。训练授权由调用方照常判
         boolean withTerms = !trainingFilterOff(factoryId);
-        if (!withTerms && !withDirectory) {
-            return SampleVerdict.CLEAR;          // 只查保密词的入口 (人工关键词), d 又关着: 没有要查的
-        }
         try {
             TrainingLists lists = trainingLists(factoryId);
-            return names(lists, withTerms, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
+            return names(lists, withTerms, texts) ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
         } catch (RuntimeException e) {
             TrainingLists last = lastGoodLists.get(factoryId);
             SampleVerdict verdict = last == null ? SampleVerdict.UNVERIFIED
-                    : names(last, withTerms, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.HELD;
+                    : names(last, withTerms, texts) ? SampleVerdict.PROTECTED : SampleVerdict.HELD;
             log.warn("训练样本名单查询失败, {}: kind={}, factory={}, reason={}",
                     verdict == SampleVerdict.HELD ? "按上次成功的名单判过, 挂起待重判"
                             : verdict == SampleVerdict.PROTECTED ? "上次成功的名单里有, 不存" : "没有上次成功的名单, 本条不存",
@@ -207,9 +191,9 @@ public class ProcessSecretSampleFilter {
         }
     }
 
-    private static boolean names(TrainingLists lists, boolean withTerms, boolean withDirectory, String... texts) {
+    private static boolean names(TrainingLists lists, boolean withTerms, String... texts) {
         return (withTerms && ProcessSecretTerms.mentionsAny(lists.terms(), texts))
-                || (withDirectory && ProcessSecretTerms.mentionsAny(lists.directory(), texts));
+                || ProcessSecretTerms.mentionsAny(lists.directory(), texts);
     }
 
     /**

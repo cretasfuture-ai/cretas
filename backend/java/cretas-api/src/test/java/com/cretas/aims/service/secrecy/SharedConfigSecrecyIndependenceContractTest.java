@@ -70,7 +70,7 @@ class SharedConfigSecrecyIndependenceContractTest {
     /** 结果随某家工厂的开关变的方法 (过滤器 / 访问服务)。 */
     static final Pattern SWITCH_DEPENDENT = Pattern.compile(
             "\\.(mentionsProtectedProduct|trainingFilterOff|protectedProductTypeIds|switchedOffPolicyProductTypeIds"
-                    + "|protectedProductNames|hiddenFromPlatform|checkTrainingSample|checkProtectedTerms)\\s*\\(");
+                    + "|protectedProductNames|hiddenFromPlatform|checkTrainingSample)\\s*\\(");
 
     static String code(String rel) throws IOException {
         return FactorySecrecyGatesContractTest.stripJavaComments(

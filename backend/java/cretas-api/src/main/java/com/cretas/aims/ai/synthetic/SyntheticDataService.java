@@ -6,6 +6,9 @@ import com.cretas.aims.config.SyntheticDataConfig;
 import com.cretas.aims.entity.learning.SampleSource;
 import com.cretas.aims.entity.learning.TrainingSample;
 import com.cretas.aims.repository.learning.TrainingSampleRepository;
+import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
+import com.cretas.aims.service.consent.TrainingConsentService;
+import com.cretas.aims.service.consent.TrainingSampleRules;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -28,7 +31,11 @@ import java.util.stream.Collectors;
  * 2. 生成候选样本 (IntentScenGenerator)
  * 3. 验证样本有效性 (IntentValidator)
  * 4. GRAPE 筛选分布偏移风险 (GRAPEFilter)
- * 5. 持久化到 TrainingSample
+ * 5. 过训练样本规则, 持久化到 TrainingSample
+ *
+ * <p>合成样本从本厂已确认的真实样本造出来, 写的是同一张 ai_training_samples, 所以和
+ * {@code recordSample} 同一套规则: 撤回 / 查不到授权的工厂不写; 人名、客户名、工资考勤数字任何开关都不管,
+ * 一律不写; 保密词和工艺数值跟「训练数据过滤」(d); 未授权工厂脱敏后写。
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -45,6 +52,8 @@ public class SyntheticDataService {
     private final GRAPEFilter grapeFilter;
     private final TrainingSampleRepository trainingSampleRepository;
     private final SyntheticDataConfig syntheticDataConfig;
+    private final TrainingConsentService trainingConsentService;
+    private final ProcessSecretSampleFilter processSecretSampleFilter;
 
     // ==================== 生成结果 ====================
 
@@ -75,6 +84,11 @@ public class SyntheticDataService {
          * 最终保存的样本数
          */
         private int saved;
+
+        /**
+         * 被训练样本规则挡下、没有保存的样本数
+         */
+        private int privacyDropped;
 
         /**
          * 使用的骨架ID
@@ -129,6 +143,19 @@ public class SyntheticDataService {
         log.info("开始为意图 {} 生成合成数据, 工厂: {}, 目标数量: {}", intentCode, factoryId, targetCount);
 
         try {
+            TrainingConsentService.Status consent = trainingConsentService.status(factoryId);
+            if (!consent.storable()) {
+                log.info("工厂 {} 的训练授权不允许写样本，跳过生成", factoryId);
+                return SyntheticGenerationResult.builder()
+                        .generated(0)
+                        .validated(0)
+                        .filtered(0)
+                        .saved(0)
+                        .errorMessage("本厂训练授权不允许写样本")
+                        .durationMs(System.currentTimeMillis() - startTime)
+                        .build();
+            }
+
             // 检查合成数据比例限制
             if (!checkRatioLimit(factoryId)) {
                 log.warn("工厂 {} 的合成数据比例已达上限，跳过生成", factoryId);
@@ -190,28 +217,37 @@ public class SyntheticDataService {
             log.debug("GRAPE 筛选通过: {} 个 (通过率: {:.2f}%)", filtered,
                     validated > 0 ? (filtered * 100.0 / validated) : 0);
 
-            // Step 5: 限制最终数量并转换为 TrainingSample
-            List<SyntheticSample> finalSamples = filteredSamples.stream()
-                    .limit(targetCount)
-                    .collect(Collectors.toList());
-
-            List<TrainingSample> trainingSamples = finalSamples.stream()
-                    .map(sample -> toTrainingSample(sample, factoryId))
-                    .collect(Collectors.toList());
+            // Step 5: 过训练样本规则, 限制最终数量并转换为 TrainingSample (先过规则再数, 挡掉的不占名额)
+            boolean authorized = consent == TrainingConsentService.Status.AUTHORIZED;
+            boolean trainingFilterOff = processSecretSampleFilter.trainingFilterOff(factoryId);
+            List<TrainingSample> trainingSamples = new ArrayList<>();
+            int privacyDropped = 0;
+            for (SyntheticSample sample : filteredSamples) {
+                if (trainingSamples.size() >= targetCount) {
+                    break;
+                }
+                String text = textToStore(factoryId, sample.getUserInput(), authorized, trainingFilterOff);
+                if (text == null) {
+                    privacyDropped++;
+                    continue;
+                }
+                trainingSamples.add(toTrainingSample(sample, text, factoryId));
+            }
 
             // Step 6: 保存到数据库
             List<TrainingSample> savedSamples = trainingSampleRepository.saveAll(trainingSamples);
             int saved = savedSamples.size();
 
             long duration = System.currentTimeMillis() - startTime;
-            log.info("意图 {} 合成数据生成完成: 生成={}, 验证={}, 筛选={}, 保存={}, 耗时={}ms",
-                    intentCode, generated, validated, filtered, saved, duration);
+            log.info("意图 {} 合成数据生成完成: 生成={}, 验证={}, 筛选={}, 规则挡下={}, 保存={}, 耗时={}ms",
+                    intentCode, generated, validated, filtered, privacyDropped, saved, duration);
 
             return SyntheticGenerationResult.builder()
                     .generated(generated)
                     .validated(validated)
                     .filtered(filtered)
                     .saved(saved)
+                    .privacyDropped(privacyDropped)
                     .skeletonId(skeletonId)
                     .durationMs(duration)
                     .build();
@@ -230,16 +266,33 @@ public class SyntheticDataService {
     }
 
     /**
+     * 这条合成样本要存的文本, {@code null} = 不存。名单判的是原文 (脱敏后的文本看不出「六个核桃」), 只有 CLEAR 才存:
+     * 合成样本没有挂起表, 下一轮重新生成就是了。
+     */
+    private String textToStore(String factoryId, String userInput, boolean authorized, boolean trainingFilterOff) {
+        if (userInput == null || userInput.isBlank()) {
+            return null;
+        }
+        String text = TrainingSampleRules.textToStore(userInput.trim(), authorized, trainingFilterOff);
+        if (text == null) {
+            return null;
+        }
+        return processSecretSampleFilter.checkTrainingSample("synthetic", factoryId, userInput)
+                == ProcessSecretSampleFilter.SampleVerdict.CLEAR ? text : null;
+    }
+
+    /**
      * 将 SyntheticSample 转换为 TrainingSample 实体
      *
      * @param synthetic 合成样本
+     * @param text      过了规则、要存的文本
      * @param factoryId 工厂ID
      * @return TrainingSample 实体
      */
-    private TrainingSample toTrainingSample(SyntheticSample synthetic, String factoryId) {
+    private TrainingSample toTrainingSample(SyntheticSample synthetic, String text, String factoryId) {
         TrainingSample sample = TrainingSample.createSynthetic(
                 factoryId,
-                synthetic.getUserInput(),
+                text,
                 synthetic.getIntentCode(),
                 synthetic.getGeneratorConfidence(),
                 synthetic.getSkeletonId()

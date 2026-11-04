@@ -9,6 +9,7 @@ import com.cretas.aims.service.KeywordLearningService;
 import com.cretas.aims.service.consent.LearningContentRules;
 import com.cretas.aims.service.consent.ProcessSecretSampleFilter;
 import com.cretas.aims.service.consent.TrainingConsentService;
+import com.cretas.aims.service.consent.TrainingSampleRules;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -59,15 +60,16 @@ public class KeywordLearningServiceImpl implements KeywordLearningService {
     }
 
     /**
-     * 人工添加的关键词: 不按训练授权拦, 但仍不许是本厂工艺保密词 (全名 / 编码 / ID); 判断不了就不加。
-     * 走 {@link ProcessSecretSampleFilter#checkProtectedTerms} (挂起本方法所在的事务查库): 以前在事务里
+     * 人工添加的关键词: 不按训练授权拦, 也不查工艺词 + 数值; 但人名、客户名、工资考勤数字是隐私, 人工加也不行
+     * (Steve 2026-11-04), 保密词跟「训练数据过滤」(d); 判断不了就不加。
+     * 走 {@link ProcessSecretSampleFilter#checkTrainingSample} (挂起本方法所在的事务查库): 以前在事务里
      * catch 名单查询异常, 外层事务已被标成只能回滚, 提交时抛 UnexpectedRollbackException (待办第 8 条)。
      */
     private boolean manualKeywordAllowed(String factoryId, String keyword) {
-        if (processSecretSampleFilter == null) {
+        if (processSecretSampleFilter == null || TrainingSampleRules.utteranceHasPayValue(keyword)) {
             return false;
         }
-        return processSecretSampleFilter.checkProtectedTerms("manual_keyword", factoryId, keyword)
+        return processSecretSampleFilter.checkTrainingSample("manual_keyword", factoryId, keyword)
                 == ProcessSecretSampleFilter.SampleVerdict.CLEAR;
     }
 
@@ -187,7 +189,7 @@ public class KeywordLearningServiceImpl implements KeywordLearningService {
             log.info("本厂没有意图配置行, 不写关键词: factory={}, intent={}", factoryId, intentCode);
             return 0;
         }
-        // 每个词都过学习规则: 人工添加只查本厂保密产品名, 其余来源走完整的训练授权 / 内容规则
+        // 每个词都过学习规则: 人工添加查隐私和保密词 (manualKeywordAllowed), 其余来源走完整的训练授权 / 内容规则
         keywords = keywords.stream()
                 .filter(k -> k != null && !k.isBlank())
                 .filter(k -> source == LearnSource.MANUAL_ADD
