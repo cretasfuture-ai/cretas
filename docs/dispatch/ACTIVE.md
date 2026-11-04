@@ -29,7 +29,6 @@
 
 
 
-- `FACTORY-INTENT-CATALOG-20261104` — `in-progress` — Owner `/root`（01a1a59f）— Base db2457beac；工厂目录CI回归修复，权限清单/Skill失败传播/409提示/单位契约，scope与验收见archive/2026-11-04-factory-intent-catalog.md；不替换线上模型。
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 
 

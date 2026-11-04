@@ -70,7 +70,7 @@ INSERT INTO smart_bi_skill VALUES
  ('custom-shared','["material_batch_query"]','{}',true,NULL);
 ALTER TABLE ai_intent_configs ADD COLUMN sensitivity_level text;
 """)
-                retirement = (MIGRATIONS / "V20261104_43__factory_intent_catalog_retirement.sql").read_text(encoding="utf-8")
+                retirement = (MIGRATIONS / "V20261104_51__factory_intent_catalog_retirement.sql").read_text(encoding="utf-8")
                 cur.execute(retirement)
                 cur.execute("SELECT is_active, deleted_at IS NOT NULL, previous_snapshot->>'tool_name' FROM ai_intent_configs WHERE id='retired'")
                 assert cur.fetchone() == (False, True, "restaurant_x")

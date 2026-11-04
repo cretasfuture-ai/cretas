@@ -33,7 +33,7 @@ class FactoryIntentCatalogContractTest {
     }
     @Test
     void canonicalCatalogRetiresDedicatedCodesWithoutDeletingSharedFactoryCapabilities() {
-        assertThat(FactoryIntentCatalog.canonicalCodes()).hasSize(265);
+        assertThat(FactoryIntentCatalog.canonicalCodes()).hasSize(266);
         assertThat(FactoryIntentCatalog.retiredCodes()).hasSize(81);
         FactoryIntentCatalog.retiredCodes().forEach(code -> {
             assertThat(FactoryIntentCatalog.isRetiredIntent(code)).isTrue();

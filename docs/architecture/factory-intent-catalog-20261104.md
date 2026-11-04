@@ -8,8 +8,10 @@
 | 退役活动餐饮专属意图 | 81；历史 `RESTAURANT_*` 同样拒绝 |
 | 原餐饮域共用配置 | 29：28 项直接转正，1 项别名并入既有标签 |
 | 确认合并的别名 | `EFFICIENCY_COMPARE_ALIAS → EFFICIENCY_COMPARISON` |
-| 最终规范标签 | 265：254 条 Tool 路由、11 条 Skill 路由 |
-| Tool 绑定 | 251 个唯一名称；Skill 内工具另有真实注册与只读闭包检查 |
+| 最终规范标签 | 266：255 条 Tool 路由、11 条 Skill 路由 |
+| Tool 绑定 | 252 个唯一名称；Skill 内工具另有真实注册与只读闭包检查 |
+
+原347条快照退役和合并后为265类；再同步主线新增的只读 `GATE_DIAGNOSE_BATCH`，最终266类。新增标签不改变旧模型头或测试集。
 
 餐饮专属 Tool 实现、内置 Skill、Python AI resolver/路由注册和 Java 自然语言/SSE 委派退出运行目录。已有业务单据、审计、共享 ETL、日期/实体/租户解析 helpers 保留。`TieredIntentDelegate` 仅留无外呼的兼容入口，不能访问旧 Python 餐饮 API。
 
@@ -27,9 +29,9 @@
 python scripts/finetune/generate_factory_intent_catalog.py <output_dir>
 ```
 
-现有 259 头分类器与新 265 类规范目录是不同契约；本批不重新编号旧模型，不把新目录生成冒充模型已迁移。
+现有 259 头分类器与新 266 类规范目录是不同契约；本批不重新编号旧模型，不把新目录生成冒充模型已迁移。
 
-新迁移为 `V20261104_43__factory_intent_catalog_retirement.sql`，由 `scripts/ai/generate_factory_intent_migration.py` 生成，`--check` 检查漂移。它退役配置、归并别名短语、重分类共用能力并更新明确的 Tool/Skill 绑定；保持工厂隔离与实际业务权限。人工开票的拒绝/只读查询路由及密码导航取消旧写分类及写审批标记，实际开票/密码写权限不变。迁移兼容旧 bootstrap 的 TEXT JSON 文档列，非法旧 JSON 明确失败。
+新迁移为 `V20261104_51__factory_intent_catalog_retirement.sql`，由 `scripts/ai/generate_factory_intent_migration.py` 生成，`--check` 检查漂移。它退役配置、归并别名短语、重分类共用能力并更新明确的 Tool/Skill 绑定；保持工厂隔离与实际业务权限。人工开票的拒绝/只读查询路由及密码导航取消旧写分类及写审批标记，实际开票/密码写权限不变。迁移兼容旧 bootstrap 的 TEXT JSON 文档列，非法旧 JSON 明确失败。
 
 `scripts/ai/verify_factory_catalog_migrations.py --dsn <loopback_test_dsn>` 在隔离 PostgreSQL schema 验证迁移、短语冲突、旧列类型、别名域、权限保持、来源行唯一性和软删重收，并验证数据库行锁协议。真实 Service 的事务回滚及并发验证另由 `FreeGiftCostAtomicityRepositoryQueryValidationTest` 执行，支持独占的 PostgreSQL 测试数据库。
 

@@ -56,7 +56,7 @@
 - 本机主工作区误写3个测试文件后按HEAD恢复，缺修改前快照，无法证明未覆盖原未提交内容；详见本机证据目录的主工作区误写记录.md。后续只写本worktree。
 
 
-## 最终交付候选
+## 交付候选阶段记录（现行以末段266类/51迁移为准）
 
 - 265规范标签、81活动餐饮专属标签退役、29共用配置处理（28直接转正，1效率别名并入已有标签），251唯一Tool绑定、11只读Skill；餐饮历史命名空间在识别、执行和训练入口均拒绝。旧259头及线上模型不替换。
 - 本地236目标测试/构建通过，0失败/错误/跳过；冻结源码PostgreSQL17真实Service事务/并发3/3通过。CI41846840818实际执行70个目标契约/JPA测试并成功，包含本批全部6个RepositoryQueryValidationTest。Python完整Gate10378通过、188跳过、153排除、2预期失败；无新增跳过/排除项。
@@ -77,3 +77,13 @@
 - Root扩scope：ProcessSheetRowSubmitLockRepositoryQueryValidationTest测试同步；保留真实Repository/双事务、等待发生、SUBMITTED和不加锁DRAFT阴性断言，测试独占H2与有限15秒锁超时，不改生产查询。依据完整CI最深H2 HYT00/50200超过默认2秒；不循环重试。
 
 - Skill Owner扩scope到PurchaseGrantCallerService.java：此次Skill success=false传播使已知expired/revoked被旧caller提前映成503 unknown，属于真实兼容缺陷。保留原403明确原因与一次拒绝审计断言；未知才503且不重试，失败wrapper内success=true不得放行。禁止修改测试掩盖已知拒绝。
+
+
+## 现行交付候选（266类，V20261104_51）
+
+- 完整CI7063例发现的13失败1错误已逐项修复；修复后统一package341例全部通过（0失败/错误/跳过），日志java-final-complete.log。
+- 真实已知采购拒绝保留403原原因与一次审计；未知/损坏/矛盾的Skill包装结果503且不执行、不重试。原权限及审计断言保留。裸单位比较走单位契约，新增409补操作hint；不提高棘轮阈值。
+- 存量H2并发用例改独占库、保留原兼容参数、有限15秒锁超时及显式释放；以H2会话BLOCKER_ID证明真实等锁，保留SUBMITTED、等待时长及不加锁DRAFT阴性对照。生产查询不变。
+- 最新主线10daa82cc7新增只读GATE_DIAGNOSE_BATCH及V20261104_50。已合入并保留；原265条规范记录内容不变，仅新增此1条，当前266类（255 Tool路由、11 Skill路由、252唯一Tool名）。训练目录单独更新到training-catalog-final266；不修改旧头/权重/保护集。
+- 因生产out-of-order=false，当前目录迁移顺延为V20261104_51__factory_intent_catalog_retirement.sql；生成器、PostgreSQL17目录迁移与并发协议复验通过。新增266目录、Python封闭性/飞轮契约与最终Java封装日志分别为python-final266-contracts.log和java-final266-package.log。
+- 根回执final-verification-receipt.json保留按版本绑定的证据；最终完整PR门禁与合并事实以PR1449为准。Source冻结，主线scope仅在PR合入时释放；不部署、不运行生产迁移、不替换线上模型。

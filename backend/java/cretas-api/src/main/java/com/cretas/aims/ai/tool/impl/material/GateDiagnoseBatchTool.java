@@ -34,11 +34,6 @@ public class GateDiagnoseBatchTool extends AbstractBusinessTool {
     }
 
     @Override
-    public AccessMode getAccessMode() {
-        return AccessMode.READ;
-    }
-
-    @Override
     public ActionType getActionType() {
         return ActionType.READ;
     }

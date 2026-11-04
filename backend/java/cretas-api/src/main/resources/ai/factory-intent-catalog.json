@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source": "active platform/global catalog snapshot 2026-11-04; no tenant/customer data",
+  "source": "active platform/global catalog snapshot 2026-11-04; no tenant/customer data; includes main 10daa82cc7 GATE_DIAGNOSE_BATCH",
   "canonical_intents": [
     {
       "intent_code": "ABACA_WEIGHT_LOG",
@@ -27,11 +27,11 @@
       "route_type": "TOOL"
     },
     {
-      "intent_code": "ACCOUNT_QUERY",
-      "intent_name": "查询会计科目",
-      "intent_category": "QUERY",
-      "description": "查 factory 可见会计科目 (含 GAAP 标准 + factory 自定义), 支持 category / balanceType 过滤. read-only.",
-      "tool_name": "account_query",
+      "intent_code": "ACCOUNTS_RECEIVABLE_AGING",
+      "intent_name": "应收账龄",
+      "intent_category": "ANALYSIS",
+      "description": "应收账龄 6 桶分析, 60+ 天高风险标记. read-only.",
+      "tool_name": "accounts_receivable_aging",
       "required_entities": null,
       "is_active": true,
       "business_type": "COMMON",
@@ -39,11 +39,11 @@
       "route_type": "TOOL"
     },
     {
-      "intent_code": "ACCOUNTS_RECEIVABLE_AGING",
-      "intent_name": "应收账龄",
-      "intent_category": "ANALYSIS",
-      "description": "应收账龄 6 桶分析, 60+ 天高风险标记. read-only.",
-      "tool_name": "accounts_receivable_aging",
+      "intent_code": "ACCOUNT_QUERY",
+      "intent_name": "查询会计科目",
+      "intent_category": "QUERY",
+      "description": "查 factory 可见会计科目 (含 GAAP 标准 + factory 自定义), 支持 category / balanceType 过滤. read-only.",
+      "tool_name": "account_query",
       "required_entities": null,
       "is_active": true,
       "business_type": "COMMON",
@@ -1057,6 +1057,18 @@
       "route_type": "TOOL"
     },
     {
+      "intent_code": "GATE_DIAGNOSE_BATCH",
+      "intent_name": "批次被拦原因诊断",
+      "intent_category": "MATERIAL",
+      "description": "诊断某个批次为什么领不了料 / 出不了库 / 投不了料: 被哪道闸拦、涉及的批次与数量、怎么解开 (只读, 不执行解开动作)",
+      "tool_name": "gate_diagnose_batch",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "COMMON",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
       "intent_code": "GOVERNANCE_PATTERN_DISCOVERY",
       "intent_name": "工具使用模式分析",
       "intent_category": "SYSTEM",
@@ -1789,18 +1801,6 @@
       "route_type": "TOOL"
     },
     {
-      "intent_code": "PRODUCT_CREATE_FLYWHEEL",
-      "intent_name": "飞轮建产品",
-      "intent_category": "DATA_OPERATION",
-      "description": null,
-      "tool_name": "product_create",
-      "required_entities": null,
-      "is_active": true,
-      "business_type": "COMMON",
-      "factory_id": null,
-      "route_type": "TOOL"
-    },
-    {
       "intent_code": "PRODUCTION_BATCH_CREATE",
       "intent_name": "创建生产批次",
       "intent_category": "DATA_OP",
@@ -1875,6 +1875,18 @@
       "required_entities": null,
       "is_active": true,
       "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "PRODUCT_CREATE_FLYWHEEL",
+      "intent_name": "飞轮建产品",
+      "intent_category": "DATA_OPERATION",
+      "description": null,
+      "tool_name": "product_create",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "COMMON",
       "factory_id": null,
       "route_type": "TOOL"
     },

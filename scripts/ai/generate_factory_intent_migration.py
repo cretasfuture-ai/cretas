@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "backend/java/cretas-api/src/main/resources/ai/factory-intent-catalog.json"
-TARGET = ROOT / "backend/java/cretas-api/src/main/resources/db/flyway/V20261104_43__factory_intent_catalog_retirement.sql"
+TARGET = ROOT / "backend/java/cretas-api/src/main/resources/db/flyway/V20261104_51__factory_intent_catalog_retirement.sql"
 
 
 def render() -> str:
