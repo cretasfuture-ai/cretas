@@ -151,6 +151,7 @@ const rawMenuConfig: MenuItem[] = [
     children: [
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production', groupLabel: '生产过程' },
       { path: '/production/shortage-cases', title: '缺料异常', icon: '', module: 'production' },
+      { path: '/production/delivery-risks', title: '交付风险', icon: '', module: 'production' },
       // 🔴 2026-08-26: B8 生产进度数字大屏 —— 客户 2026-04 原话点名要的东西
       //   (ProductionProgressDashboardController:19 「可以做一个数字打屏嘛…看到当天所有商品
       //   工序生产的一个进度」), 2026-04-08 就做完了(后端 203 行零硬编码 + 162 行单测,
@@ -280,6 +281,7 @@ const rawMenuConfig: MenuItem[] = [
       // 不在本轮合并范围内 (owner 拍板的合并表未列它) —— 保持独立菜单项。
       // 食品 DAG 缺口 09: 与财务管理 → 成本差异同一页, 生产经理从这里进
       { path: '/production/cost-variance', title: '成本差异', icon: '', module: 'production' },
+      { path: '/production/cost-deviation-cases', title: '成本损耗异常', icon: '', module: 'production' },
       { path: '/production-analytics/cost-summary', title: '成本汇总', icon: '', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
     ]
@@ -387,6 +389,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/sales/customers', title: '客户管理', icon: '', module: 'sales' },
       // S4 缺料异常: 销售看订单为什么还没排上 / 交期会不会延误, 与生产组同一页面, 本组自己的路由 (面包屑=销售管理)
       { path: '/sales/shortage-cases', title: '缺料异常', icon: '', module: 'sales' },
+      { path: '/sales/delivery-risks', title: '交付风险', icon: '', module: 'sales' },
       { path: '/sales/shipments', title: '出货记录', icon: '', module: 'sales',
         hideForFactoryTypes: ['RESTAURANT'] },
       // T-RTA fix (audit B2 BLOCKER 2026-05-13): /sales/returns route was added by
@@ -466,6 +469,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance', groupLabel: '财务分析' },
       // 食品 DAG 缺口 09: 成本差异 (标准 = 锁定配方用量 × 开计划时单价快照, 拆价格差/用量差/替代料差/人工差)
       { path: '/finance/cost-variance', title: '成本差异', icon: '', module: 'finance' },
+      { path: '/finance/cost-deviation-cases', title: '成本损耗异常', icon: '', module: 'finance' },
       { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance', groupLabel: '财务配置' },
       { path: '/finance/accounting-period', title: '会计期间', icon: '', module: 'finance' }
     ]

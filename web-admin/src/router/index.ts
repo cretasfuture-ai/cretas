@@ -301,6 +301,13 @@ const businessRoutes: RouteRecordRaw[] = [
             // 采购 / 质量 / 销售各有自己的一条 (/procurement|quality|sales/shortage-cases), 面包屑跟着各自的组
             meta: { requiresAuth: true, title: '缺料异常', module: 'production' }
           },
+          {
+            // 交付风险异常: 可能延期的订单走 证据 → 影响 → 建议 → 负责人 → 结果; 销售组有同一页面的一条
+            path: 'delivery-risks',
+            name: 'ProductionDeliveryRisks',
+            component: () => import('@/views/production/delivery-risks/index.vue'),
+            meta: { requiresAuth: true, title: '交付风险', module: 'production' }
+          },
           // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 生产看板 hub ——
           // 合并未完成计划队列/备货看板/交货预警 3 个视角为一个入口 (el-tabs), 见
           // views/production/kanban/index.vue + views/production/productionKanbanTab.ts。
@@ -420,6 +427,12 @@ const businessRoutes: RouteRecordRaw[] = [
             name: 'ProductionCostVariance',
             component: () => import('@/views/finance/cost-variance/index.vue'),
             meta: { requiresAuth: true, title: '成本差异', module: 'production' }
+          },
+          {
+            path: 'cost-deviation-cases',
+            name: 'ProductionCostDeviationCases',
+            component: () => import('@/views/finance/cost-deviation-cases/index.vue'),
+            meta: { requiresAuth: true, title: '成本损耗异常', module: 'production' }
           },
           {
             path: 'analysis-query',
@@ -1006,6 +1019,12 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: { requiresAuth: true, title: '缺料异常', module: 'sales' }
           },
           {
+            path: 'delivery-risks',
+            name: 'SalesDeliveryRisks',
+            component: () => import('@/views/production/delivery-risks/index.vue'),
+            meta: { requiresAuth: true, title: '交付风险', module: 'sales' }
+          },
+          {
             path: 'orders',
             name: 'SalesOrders',
             component: () => import('@/views/sales/orders/list.vue'),
@@ -1439,6 +1458,12 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             name: 'FinanceCostVariance',
             component: () => import('@/views/finance/cost-variance/index.vue'),
             meta: { requiresAuth: true, title: '成本差异', module: 'finance' }
+          },
+          {
+            path: 'cost-deviation-cases',
+            name: 'FinanceCostDeviationCases',
+            component: () => import('@/views/finance/cost-deviation-cases/index.vue'),
+            meta: { requiresAuth: true, title: '成本损耗异常', module: 'finance' }
           },
           // SP5 W6: 毛利红线配置 (目标毛利率管理, 财务/超管可配, #693 报价红线读它)
           {

@@ -24,7 +24,7 @@ import java.time.LocalDateTime;
 @Where(clause = "deleted_at IS NULL")
 public class ShortageCaseOutcomeCheck extends BaseEntity {
 
-    public enum Trigger { RESCHEDULE_APPLIED, PURCHASE_DRAFT, MANUAL_RECHECK }
+    public enum Trigger { RESCHEDULE_APPLIED, PURCHASE_DRAFT, MANUAL_RECHECK, RISK_RECHECK }
 
     public enum Verdict {
         ACHIEVED("目标已达成"), PENDING_SUPPLY("等到货, 交期可保"), NOT_ACHIEVED("目标未达成"), UNKNOWN("无法判定");
