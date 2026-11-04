@@ -78,6 +78,7 @@ class ProcessSecretDataLayerContractTest {
      */
     static final Set<String> NOT_RECIPE_FIELDS = Set.of(
             "percent", // 影响分析: 用户输入的原料涨价假设百分比, 不是配方份额
+            "metricPct", "thresholdPct", // 成本损耗异常: 差异率读数与告警阈值, 不是配方份额
             "maxReworkRatioPercent", "limitPercent", "actualPercent", // 缺口03: 回料占比上限/实际占比 (阈值与实测, 不是配方份额)
             "acceptanceRate", "accuracyRate", "achievementRate", "achievementRatePct", "activationRate",
             "actualAuxCostPerUnit", "actualCostPerUnit", "actualDurationHours", "actualEquipmentCostRatio",
@@ -252,6 +253,9 @@ class ProcessSecretDataLayerContractTest {
             "yield", "conversion", "conversionCandidates", "conversionDate", "conversionEvidence",
             // blendRatio 是整个配比核对快照对象, 里面的配方份额字段已在词表里
             "blendRatio",
+            // reworkRatio 是回料上限核对的快照对象 (实际占比 / 产品上限 / 回料量 / 主料量 / 原因), 是本次报工的实际结果
+            // 与产品上限, 不是配方; 与 web 工序表落在 row_payload.reworkRatio 的是同一个形状
+            "reworkRatio",
             // 工作流节点配置 schema 里的参数名 (允许超额百分比 / 质检抽样率), 不是配方
             "maxExceedPercent", "samplingRate",
             // APS 按天排: 某天这个计划占当天产线产能的比例, 是排程量, 不是配方

@@ -28,6 +28,8 @@ import {
   type BlendMaterialOption,
 } from '../../utils/blendRatio';
 import { isProcessSecretHidden } from '../../utils/processSecretField';
+import { reworkReasonRequiredMessage, type ReworkRatioInput } from '../../utils/reworkRatio';
+import ReworkRatioReasonModal from '../../components/processing/ReworkRatioReasonModal';
 import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
 import CcpReadingsSection from '../../components/processing/CcpReadingsSection';
 import ProcessParamsSection from '../../components/processing/ProcessParamsSection';
@@ -683,6 +685,9 @@ const YieldStepReportScreen: React.FC = () => {
   const [materialOptionsById, setMaterialOptionsById] = useState<ReadonlyMap<string, BlendMaterialOption>>(new Map());
   const [blendReason, setBlendReason] = useState('');
   const [blendNote, setBlendNote] = useState('');
+  // 缺口 03 回料上限: 被后端 409 拦下时弹窗选原因 (reworkPrompt = 后端那句话), 选完放进 ref 带着重提
+  const reworkRatioRef = useRef<ReworkRatioInput | null>(null);
+  const [reworkPrompt, setReworkPrompt] = useState<string | null>(null);
   const handleMaterialOptionsLoaded = useCallback((options: TaskMaterialBatchOption[]) => {
     setMaterialOptionsById((prev) => {
       const next = new Map(prev);
@@ -1469,6 +1474,7 @@ const YieldStepReportScreen: React.FC = () => {
             }
           : {}),
         ...(blendPayload ? { blendRatio: blendPayload } : {}),
+        ...(reworkRatioRef.current ? { reworkRatio: reworkRatioRef.current } : {}),
         ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
         ...(buildPhotoAnnotations() ? { photoAnnotations: buildPhotoAnnotations() } : {}),
       };
@@ -1479,12 +1485,20 @@ const YieldStepReportScreen: React.FC = () => {
           appAlert('提交失败', res.message || '请重试');
           return;
         }
+        reworkRatioRef.current = null;
         await refetchYield();
         setEvidencePhotos([]);
         maybeShowBalanceWarning(res.data.balanceWarning);
         maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
         appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
       } catch (error) {
+        // 缺口 03: 回料占比超过本道产品上限 → 弹原因选择, 选完带 reworkRatio 重提 (已填内容保留)
+        const reworkMsg = reworkReasonRequiredMessage(error);
+        if (reworkMsg) {
+          setReworkPrompt(reworkMsg);
+          return;
+        }
+        reworkRatioRef.current = null;
         handleError(error, { showAlert: false, logError: true });
         const { title, msg } = friendlySubmitError(error);
         if (isAxiosError(error) && !error.response) {
@@ -1554,6 +1568,7 @@ const YieldStepReportScreen: React.FC = () => {
           }
         : {}),
       ...(blendPayload ? { blendRatio: blendPayload } : {}),
+      ...(reworkRatioRef.current ? { reworkRatio: reworkRatioRef.current } : {}),
       ...(!isFirstStep && effectiveSourceWipNo ? { sourceWipNo: effectiveSourceWipNo } : {}),
       ...(hasSourceWipInput && sourceWipInput != null ? { sourceWipQuantity: sourceWipInput } : {}),
       ...(uploadedEvidenceUrls.length > 0 ? { evidenceImages: uploadedEvidenceUrls } : {}),
@@ -1567,6 +1582,7 @@ const YieldStepReportScreen: React.FC = () => {
         appAlert('提交失败', res.message || '请重试');
         return;
       }
+      reworkRatioRef.current = null;
       await refetchYield();
       // 投入提交成功 → 该道转 IN_PRODUCTION; 清生产阶段输入残留
       setEvidencePhotos([]);
@@ -1574,6 +1590,13 @@ const YieldStepReportScreen: React.FC = () => {
       maybeShowSemiOutputGap((res.data as { semiOutputNotConfigured?: string }).semiOutputNotConfigured);
       appAlert('投入已提交', '本道进入生产阶段, 可分多段报工时, 完工时录产出');
     } catch (error) {
+      // 缺口 03: 回料占比超过本道产品上限 → 弹原因选择, 选完带 reworkRatio 重提 (已填内容保留)
+      const reworkMsg = reworkReasonRequiredMessage(error);
+      if (reworkMsg) {
+        setReworkPrompt(reworkMsg);
+        return;
+      }
+      reworkRatioRef.current = null;
       handleError(error, { showAlert: false, logError: true });
       const { title, msg } = friendlySubmitError(error);
       // F3: 网络失败 → 重试按钮 (表单数据已由 state 保留)
@@ -1593,6 +1616,16 @@ const YieldStepReportScreen: React.FC = () => {
       materialBatchRefs, materialBatchValidation, effectiveSourceWipNo, hasSourceWipInput,
       inputOverLimit, inputMaxHint, inputMax, materialInputTotal, uploadedEvidenceUrls, batchId, refetchYield,
       buildPhotoAnnotations, blendBlocked, blendPayload]);
+
+  const handleReworkReasonConfirm = useCallback((input: ReworkRatioInput) => {
+    reworkRatioRef.current = input;
+    setReworkPrompt(null);
+    void handleSubmitInput();
+  }, [handleSubmitInput]);
+  const handleReworkReasonCancel = useCallback(() => {
+    reworkRatioRef.current = null;
+    setReworkPrompt(null);
+  }, []);
 
   // ========================= 阶段 2a: 提交本段工时 (reportKind=SEGMENT) =========================
   const handleSubmitSegment = useCallback(async (forceDuplicate?: unknown) => {
@@ -3713,6 +3746,13 @@ const YieldStepReportScreen: React.FC = () => {
           </>
         ) : null}
       </ScrollView>
+      <ReworkRatioReasonModal
+        message={reworkPrompt}
+        previous={reworkRatioRef.current}
+        submitting={submitting}
+        onConfirm={handleReworkReasonConfirm}
+        onCancel={handleReworkReasonCancel}
+      />
     </ScreenWrapper>
   );
 };

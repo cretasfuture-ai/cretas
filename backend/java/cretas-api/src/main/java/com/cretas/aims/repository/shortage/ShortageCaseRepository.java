@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import jakarta.persistence.LockModeType;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,7 +25,16 @@ public interface ShortageCaseRepository extends JpaRepository<ShortageCase, Stri
                                              @Param("sourceType") ShortageCase.SourceType sourceType,
                                              @Param("sourceId") String sourceId);
 
-    Optional<ShortageCase> findByIdAndFactoryId(String id, String factoryId);
+    /**
+     * 缺料入口只认销售订单来源: 同一张表里的成本 / 损耗异常带金额口径, 权限门比缺料窄,
+     * ⛔ 不能经缺料的详情 / 台账 / 重排入口读到或改到。
+     */
+    default Optional<ShortageCase> findByIdAndFactoryId(String id, String factoryId) {
+        return findByIdAndFactoryIdAndSourceTypeIn(id, factoryId, List.of(ShortageCase.SourceType.SALES_ORDER));
+    }
+
+    Optional<ShortageCase> findByIdAndFactoryIdAndSourceTypeIn(String id, String factoryId,
+                                                               Collection<ShortageCase.SourceType> sourceTypes);
 
     /** 本厂还没关闭、且缺口里有这种物料的实例 —— 入库 / 放行时只刷新它们。 */
     @Query("SELECT DISTINCT c FROM ShortageCase c, ShortageCaseLine l WHERE l.caseId = c.id "
@@ -33,20 +43,17 @@ public interface ShortageCaseRepository extends JpaRepository<ShortageCase, Stri
     List<ShortageCase> findOpenByFactoryIdAndMaterial(@Param("factoryId") String factoryId,
                                                       @Param("materialTypeId") String materialTypeId);
 
-    @Query("SELECT c FROM ShortageCase c WHERE c.factoryId = :factoryId "
-            + "AND c.sourceType = com.cretas.aims.entity.shortage.ShortageCase$SourceType.SALES_ORDER "
-            + "AND (:openOnly = false OR c.closedAt IS NULL) ORDER BY c.lastRefreshedAt DESC")
-    Page<ShortageCase> findForFactory(@Param("factoryId") String factoryId,
-                                      @Param("openOnly") boolean openOnly,
-                                      Pageable pageable);
+    /** 缺料列表, 同样只认销售订单来源。 */
+    default Page<ShortageCase> findForFactory(String factoryId, boolean openOnly, Pageable pageable) {
+        return findForFactoryBySources(factoryId, openOnly, List.of(ShortageCase.SourceType.SALES_ORDER), pageable);
+    }
 
-    /** 某一种来源的实例列表 (交付风险页只看自己的)。 */
-    @Query("SELECT c FROM ShortageCase c WHERE c.factoryId = :factoryId AND c.sourceType = :sourceType "
+    @Query("SELECT c FROM ShortageCase c WHERE c.factoryId = :factoryId AND c.sourceType IN :sourceTypes "
             + "AND (:openOnly = false OR c.closedAt IS NULL) ORDER BY c.lastRefreshedAt DESC")
-    Page<ShortageCase> findForFactoryBySource(@Param("factoryId") String factoryId,
-                                              @Param("sourceType") ShortageCase.SourceType sourceType,
-                                              @Param("openOnly") boolean openOnly,
-                                              Pageable pageable);
+    Page<ShortageCase> findForFactoryBySources(@Param("factoryId") String factoryId,
+                                               @Param("openOnly") boolean openOnly,
+                                               @Param("sourceTypes") Collection<ShortageCase.SourceType> sourceTypes,
+                                               Pageable pageable);
 
     /** 同一来源最近一条已结束的实例: 风险没变就不因为重新扫描再开一条。 */
     Optional<ShortageCase> findFirstByFactoryIdAndSourceTypeAndSourceIdAndClosedAtIsNotNullOrderByClosedAtDesc(

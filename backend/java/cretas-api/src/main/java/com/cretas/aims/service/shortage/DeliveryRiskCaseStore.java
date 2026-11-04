@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -47,8 +48,7 @@ public class DeliveryRiskCaseStore {
     private final ObjectMapper objectMapper;
 
     public ShortageCase own(String factoryId, String caseId) {
-        return caseRepository.findByIdAndFactoryId(caseId, factoryId)
-                .filter(c -> c.getSourceType() == SourceType.DELIVERY_RISK)
+        return caseRepository.findByIdAndFactoryIdAndSourceTypeIn(caseId, factoryId, List.of(SourceType.DELIVERY_RISK))
                 .orElseThrow(() -> new BusinessException(404, "交付风险实例不存在或不属于本厂"));
     }
 

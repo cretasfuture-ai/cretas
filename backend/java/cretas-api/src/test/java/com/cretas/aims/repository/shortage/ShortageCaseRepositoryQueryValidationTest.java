@@ -211,9 +211,9 @@ class ShortageCaseRepositoryQueryValidationTest {
 
         assertThat(cases.findForFactory("F-SRC", false, page).getContent()).extracting(ShortageCase::getId)
                 .containsExactly(shortage.getId());
-        assertThat(cases.findForFactoryBySource("F-SRC", ShortageCase.SourceType.DELIVERY_RISK, false, page).getContent())
+        assertThat(cases.findForFactoryBySources("F-SRC", false, List.of(ShortageCase.SourceType.DELIVERY_RISK), page).getContent())
                 .extracting(ShortageCase::getId).containsExactly(risk.getId());
-        assertThat(cases.findForFactoryBySource("F-SRC", ShortageCase.SourceType.DELIVERY_RISK, true, page).getContent()).isEmpty();
+        assertThat(cases.findForFactoryBySources("F-SRC", true, List.of(ShortageCase.SourceType.DELIVERY_RISK), page).getContent()).isEmpty();
         assertThat(cases.findFirstByFactoryIdAndSourceTypeAndSourceIdAndClosedAtIsNotNullOrderByClosedAtDesc(
                 "F-SRC", ShortageCase.SourceType.DELIVERY_RISK, "SO-B")).isPresent();
     }

@@ -212,6 +212,16 @@ class ProcessTimeLimitServiceContractTest {
     }
 
     @Test
+    @DisplayName("刚过期: 写「不到 1 分钟」, 不写「已超时 0 分钟」")
+    void justExpiredMessageIsNotZeroMinutes() {
+        port("SKU", "SEMI_FINISHED", limit(120, "OUTPUT_POSTED"));
+        ledger(txn("IN", 1L, 100, 0));
+        now = T0.plusMinutes(120).plusSeconds(20);
+        String message = blocked(semi(100, 0), 10).getMessage();
+        assertTrue(message.contains("已超时 不到 1 分钟"), message);
+    }
+
+    @Test
     @DisplayName("留痕写失败也照样拦")
     void traceFailureStillBlocks() {
         port("SKU", "SEMI_FINISHED", limit(120, "OUTPUT_POSTED"));

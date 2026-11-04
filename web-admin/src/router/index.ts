@@ -429,6 +429,12 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '成本差异', module: 'production' }
           },
           {
+            path: 'cost-deviation-cases',
+            name: 'ProductionCostDeviationCases',
+            component: () => import('@/views/finance/cost-deviation-cases/index.vue'),
+            meta: { requiresAuth: true, title: '成本损耗异常', module: 'production' }
+          },
+          {
             path: 'analysis-query',
             name: 'ProductionAnalysisQuery',
             component: () => import('@/views/production/analysis/index.vue'),
@@ -1445,6 +1451,12 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             name: 'FinanceCostVariance',
             component: () => import('@/views/finance/cost-variance/index.vue'),
             meta: { requiresAuth: true, title: '成本差异', module: 'finance' }
+          },
+          {
+            path: 'cost-deviation-cases',
+            name: 'FinanceCostDeviationCases',
+            component: () => import('@/views/finance/cost-deviation-cases/index.vue'),
+            meta: { requiresAuth: true, title: '成本损耗异常', module: 'finance' }
           },
           // SP5 W6: 毛利红线配置 (目标毛利率管理, 财务/超管可配, #693 报价红线读它)
           {

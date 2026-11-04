@@ -73,7 +73,7 @@ public class DeliveryRiskController {
                                             @RequestParam(defaultValue = "true") boolean openOnly,
                                             @RequestParam(defaultValue = "0") int page,
                                             @RequestParam(defaultValue = "50") int size) {
-        var rows = caseRepository.findForFactoryBySource(factoryId, ShortageCase.SourceType.DELIVERY_RISK, openOnly,
+        var rows = caseRepository.findForFactoryBySources(factoryId, openOnly, List.of(ShortageCase.SourceType.DELIVERY_RISK),
                 PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 100)));
         return ApiResponse.success("获取成功", rows.getContent().stream().map(this::view).toList());
     }

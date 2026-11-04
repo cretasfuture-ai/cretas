@@ -281,6 +281,7 @@ const rawMenuConfig: MenuItem[] = [
       // 不在本轮合并范围内 (owner 拍板的合并表未列它) —— 保持独立菜单项。
       // 食品 DAG 缺口 09: 与财务管理 → 成本差异同一页, 生产经理从这里进
       { path: '/production/cost-variance', title: '成本差异', icon: '', module: 'production' },
+      { path: '/production/cost-deviation-cases', title: '成本损耗异常', icon: '', module: 'production' },
       { path: '/production-analytics/cost-summary', title: '成本汇总', icon: '', module: 'analytics',
         hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
     ]
@@ -467,6 +468,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/finance/sku-margin', title: 'SKU毛利率分析', icon: '', module: 'finance', groupLabel: '财务分析' },
       // 食品 DAG 缺口 09: 成本差异 (标准 = 锁定配方用量 × 开计划时单价快照, 拆价格差/用量差/替代料差/人工差)
       { path: '/finance/cost-variance', title: '成本差异', icon: '', module: 'finance' },
+      { path: '/finance/cost-deviation-cases', title: '成本损耗异常', icon: '', module: 'finance' },
       { path: '/finance/gross-margin-redline', title: '毛利红线配置', icon: '', module: 'finance', groupLabel: '财务配置' },
       { path: '/finance/accounting-period', title: '会计期间', icon: '', module: 'finance' }
     ]

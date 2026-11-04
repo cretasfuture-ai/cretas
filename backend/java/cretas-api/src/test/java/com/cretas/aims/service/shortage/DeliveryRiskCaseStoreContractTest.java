@@ -69,7 +69,7 @@ class DeliveryRiskCaseStoreContractTest {
         c.setSourceId("SO1");
         c.setStage(stage);
         c.setInputFingerprint("old");
-        when(cases.findByIdAndFactoryId("C1", "F1")).thenReturn(Optional.of(c));
+        when(cases.findByIdAndFactoryIdAndSourceTypeIn("C1", "F1", List.of(SourceType.DELIVERY_RISK))).thenReturn(Optional.of(c));
         when(cases.findOpenForUpdate("F1", SourceType.DELIVERY_RISK, "SO1")).thenReturn(Optional.of(c));
         return c;
     }
@@ -99,9 +99,7 @@ class DeliveryRiskCaseStoreContractTest {
 
     @Test
     void shortageCaseIsNotReachableAsDeliveryRisk() {
-        ShortageCase c = new ShortageCase();
-        c.setSourceType(SourceType.SALES_ORDER);
-        when(cases.findByIdAndFactoryId("S1", "F1")).thenReturn(Optional.of(c));
+        when(cases.findByIdAndFactoryIdAndSourceTypeIn("S1", "F1", List.of(SourceType.DELIVERY_RISK))).thenReturn(Optional.empty());
         assertThatThrownBy(() -> store.own("F1", "S1")).isInstanceOf(BusinessException.class);
     }
 

@@ -9,7 +9,7 @@
 
 ALTER TABLE shortage_cases DROP CONSTRAINT IF EXISTS shortage_cases_source_type_check;
 ALTER TABLE shortage_cases ADD CONSTRAINT shortage_cases_source_type_check
-    CHECK (source_type IN ('SALES_ORDER', 'DELIVERY_RISK'));
+    CHECK (source_type IN ('SALES_ORDER', 'COST_VARIANCE', 'MATERIAL_BALANCE', 'DELIVERY_RISK'));
 
 ALTER TABLE shortage_case_actions DROP CONSTRAINT IF EXISTS shortage_case_actions_action_type_check;
 ALTER TABLE shortage_case_actions ADD CONSTRAINT shortage_case_actions_action_type_check
