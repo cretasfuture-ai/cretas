@@ -9,6 +9,7 @@ import path from 'path';
 import {
   resolveInitialStepIndex,
   resolveInputUnit,
+  canFinishWithoutNewOutput,
   resolveStepPhase,
   type StepPhase,
   type StepTaskLike,
@@ -38,6 +39,28 @@ describe('resolveStepPhase', () => {
 
   it('无法识别的阶段值当作没有, 退回任务状态', () => {
     expect(resolveStepPhase({ status: 'COMPLETED' }, 'WHATEVER')).toBe('COMPLETED');
+  });
+
+  it('只有留单产出的任务被别的入口完工: 报工推导是生产中, 任务已结束就不许再续报', () => {
+    expect(resolveStepPhase({ status: 'COMPLETED' }, 'IN_PRODUCTION')).toBe('COMPLETED');
+    expect(resolveStepPhase({ status: 'SKIPPED' }, 'IN_PRODUCTION')).toBe('COMPLETED');
+    expect(resolveStepPhase({ status: 'IN_PROGRESS' }, 'IN_PRODUCTION')).toBe('IN_PRODUCTION');
+  });
+});
+
+describe('canFinishWithoutNewOutput', () => {
+  it('已有累计产出, 标记完工时留空或填 0 都放行', () => {
+    expect(canFinishWithoutNewOutput('', true, 5)).toBe(true);
+    expect(canFinishWithoutNewOutput('   ', true, 5)).toBe(true);
+    expect(canFinishWithoutNewOutput('0', true, 5)).toBe(true);
+  });
+
+  it('阴性: 留单续报 / 从没报过产出 / 填了新增量 / 乱填, 都不走这条路', () => {
+    expect(canFinishWithoutNewOutput('', false, 5)).toBe(false);
+    expect(canFinishWithoutNewOutput('', true, 0)).toBe(false);
+    expect(canFinishWithoutNewOutput('0', true, 0)).toBe(false);
+    expect(canFinishWithoutNewOutput('3', true, 5)).toBe(false);
+    expect(canFinishWithoutNewOutput('abc', true, 5)).toBe(false);
   });
 });
 
