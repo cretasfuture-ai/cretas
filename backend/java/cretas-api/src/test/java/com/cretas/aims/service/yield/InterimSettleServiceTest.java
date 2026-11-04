@@ -463,6 +463,29 @@ class InterimSettleServiceTest {
     }
 
     @Test
+    @DisplayName("🔒🔒 QC 生产门: 处置判返工后状态不再是 FAILED, 小结产出的成品一样隔离")
+    void planWithReworkPendingBatch_settlesFinishedGoodsAsDefective() {
+        ProcessSheetRow rX = row(24L, 1, "CLK-B-QC", reqFinished(1, "CLK-B-QC", new BigDecimal("40"),
+                new BigDecimal("6"), upstreamSemi("SFI-QC-1", "20")));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(rX));
+        when(consumptionRepository.findByProductionPlanIdAndFactoryIdAndInterimSettledAtIsNull(PLAN_ID, FACTORY))
+                .thenReturn(new ArrayList<>());
+        ProductionBatch rework = new ProductionBatch();
+        rework.setId(99L);
+        rework.setFactoryId(FACTORY);
+        rework.setProductionPlanId(PLAN_ID);
+        rework.setQualityStatus(QualityStatus.REWORK_REQUIRED);
+        when(batchRepository.findByFactoryIdAndProductionPlanId(FACTORY, PLAN_ID))
+                .thenReturn(List.of(rework));
+
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+
+        ArgumentCaptor<FinishedGoodsBatch> fgCap = ArgumentCaptor.forClass(FinishedGoodsBatch.class);
+        verify(finishedGoodsBatchRepository, times(1)).save(fgCap.capture());
+        assertThat(fgCap.getValue().getStatus()).isEqualTo("DEFECTIVE");
+    }
+
+    @Test
     @DisplayName("SFI 投料幂等: 已结成品道重复小结 → 不再二次 consumeClerkSemi")
     void sfiFeedstockIdempotentOnResettle() {
         ProcessSheetRow rX = row(21L, 1, "CLK-B-Y", reqFinished(1, "CLK-B-Y", new BigDecimal("40"),

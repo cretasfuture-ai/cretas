@@ -208,6 +208,18 @@ class QcReleaseRepositoryQueryValidationTest {
     }
 
     @Test
+    @DisplayName("D-S302-01: 处置判返工 / 报废的批次同样算不合格未解除 (真跑 JPQL, 集合与枚举方法一致)")
+    void uncleanedCountCoversEveryLockedStatus() {
+        for (var status : com.cretas.aims.entity.enums.QualityStatus.values()) {
+            String plan = "PLANLOCK-" + status.name();
+            productionBatch(F, plan, status);
+            em.clear();
+            assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of(plan), "#NO-PREFIX#"))
+                    .as(status.name()).isEqualTo(status.isDispositionLocked() ? 1L : 0L);
+        }
+    }
+
+    @Test
     @DisplayName("第二轮审查 M2: 计划质检 FAILED 计数 —— 按计划 id 或计划前缀; PASSED 不算; 工厂隔离; 哨兵不命中")
     void qcFailedCount() {
         productionBatch(F, "PLANAAAA-0001", com.cretas.aims.entity.enums.QualityStatus.FAILED);

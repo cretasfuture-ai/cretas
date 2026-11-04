@@ -1,6 +1,7 @@
 package com.cretas.aims.service.quality;
 
 import com.cretas.aims.ai.tool.impl.quality.QualityCheckUpdateTool;
+import com.cretas.aims.ai.tool.impl.quality.QualityDispositionExecuteTool;
 import com.cretas.aims.ai.tool.impl.quality.QualityResultSubmitTool;
 import com.cretas.aims.controller.QualityDispositionController;
 import com.cretas.aims.dto.quality.DispositionApplyRequest;
@@ -90,6 +91,7 @@ class QualityBatchDispositionContractTest {
     private LocalDateTime clock = LocalDateTime.of(2026, 11, 4, 9, 0);
     private int auditSeq;
 
+    private QualityInspectionRepository inspectionRepo;
     private QcReleaseRecordRepository releaseRecords;
     private ProductTypeRepository productTypes;
     private QualityInspectionServiceImpl inspectionService;
@@ -115,7 +117,7 @@ class QualityBatchDispositionContractTest {
                 .thenAnswer(call -> List.copyOf(finishedGoods));
         when(goodsRepo.save(any())).thenAnswer(call -> call.getArgument(0));
 
-        QualityInspectionRepository inspectionRepo = mock(QualityInspectionRepository.class);
+        inspectionRepo = mock(QualityInspectionRepository.class);
         when(inspectionRepo.save(any())).thenAnswer(call -> {
             QualityInspection row = call.getArgument(0);
             if (row.getCreatedAt() == null) {
@@ -517,6 +519,41 @@ class QualityBatchDispositionContractTest {
 
         assertThat(inspections.get("qi-fail").getResult()).isEqualTo("FAIL");
         assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("AI 提交工具: 判 FAIL 结论全空白不落库 (D-S302-02); 有结论才建记录")
+    void aiSubmitToolNeedsAReasonToFail() {
+        QualityResultSubmitTool submit = new QualityResultSubmitTool();
+        ReflectionTestUtils.setField(submit, "qualityInspectionService", inspectionService);
+        Map<String, Object> blank = new HashMap<>(Map.of("checkId", "qi-ai", "result", "FAIL",
+                "conclusion", "   ", "productionBatchId", 100L));
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(submit, "doExecute", FACTORY, blank,
+                new HashMap<String, Object>(Map.of("userId", INSPECTOR))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("原因");
+        assertThat(inspections).doesNotContainKey("qi-ai");
+    }
+
+    @Test
+    @DisplayName("AI 处置工具: 放行不合格批只是提交审批, 不说「执行成功」, 批次不动")
+    void aiDispositionToolTellsTheTruthAboutApproval() {
+        inspect("qi-fail", "FAIL", "0");
+        QualityInspection pass = inspect("qi-pass", "PASS", "100");
+        when(inspectionRepo.findFirstByFactoryIdAndProductionBatchIdOrderByInspectionDateDesc(FACTORY, 100L))
+                .thenReturn(Optional.of(pass));
+        QualityDispositionExecuteTool tool = new QualityDispositionExecuteTool();
+        ReflectionTestUtils.setField(tool, "qualityInspectionRepository", inspectionRepo);
+        ReflectionTestUtils.setField(tool, "qualityDispositionRuleService", ruleService);
+
+        Map<String, Object> result = ReflectionTestUtils.invokeMethod(tool, "doExecute", FACTORY,
+                new HashMap<>(Map.of("productionBatchId", 100L, "action", "RELEASE", "reason", "复检合格")),
+                new HashMap<String, Object>(Map.of("userId", INSPECTOR)));
+
+        assertThat(String.valueOf(result.get("message"))).contains("已提交审批").doesNotContain("执行成功");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
     }
 
     // ==================== 夹具 ====================
