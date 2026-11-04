@@ -36,8 +36,8 @@ const canPurchase = computed(() => permissionStore.canWrite('procurement'));
 const canDecide = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production'));
 const canReschedule = computed(() => permissionStore.canWrite('production') || permissionStore.canWrite('scheduling'));
 // 与后端 POST /{caseId}/refresh 的 @RequirePermission 同一份口径: 没写权限的角色点了只会 403
-const canRefreshCase = computed(() => (['procurement', 'production', 'warehouse', 'quality'] as const)
-  .some((module) => permissionStore.canWrite(module)));
+const canRefreshCase = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production')
+  || permissionStore.canWrite('warehouse') || permissionStore.canWrite('quality'));
 
 const STAGE_LABEL: Record<ShortageCaseStage, string> = {
   DETECTED: '待处理',
