@@ -61,22 +61,24 @@ def explain_row(row: Mapping[str, Any], by_factory: Mapping[str, FactoryLists]) 
     ``content_blocked``: the capture-time content rule (process word + value / per-person
     pay / the factory's own people & customers) — the number comparable to the 48.2%.
     ``usable``: the full export verdict (rule version, tenant, factory, content, secret terms).
+    Item d follows ``lists.training_filter_on``: ``--live-lists`` reads it, ``--lists-json`` has
+    no switch and judges every factory with the filter on.
     """
     fid = row.get("factory_id") or None
     meta = metadata_dict(row.get("metadata"))
     q, a = row.get("input_text") or "", row.get("teacher_output") or ""
     lists = lists_for_row(fid, by_factory) if fid else EMPTY_LISTS
     reasons: List[str] = []
-    if tc.process_word_with_value(q, tc.QA_INPUT_PROCESS_MARKERS):
+    if lists.training_filter_on and tc.process_word_with_value(q, tc.QA_INPUT_PROCESS_MARKERS):
         reasons.append("process_value_in_input")
-    if tc.process_word_with_value(a, tc.QA_ANSWER_PROCESS_MARKERS):
+    if lists.training_filter_on and tc.process_word_with_value(a, tc.QA_ANSWER_PROCESS_MARKERS):
         reasons.append("process_value_in_answer")
     if tc.pay_word_with_value(q, a):
         reasons.append("personnel_value")
     if lists.directory and (tc_mentions(lists.directory, q, a)):
         reasons.append("factory_person_or_customer")
     content_blocked = bool(reasons)
-    if tc_mentions(lists.terms, q, a):
+    if tc_mentions(lists.filtered_terms, q, a):
         reasons.append("process_secret_term")
     synthetic = tc.is_synthetic_factory(fid)
     if not synthetic:

@@ -180,7 +180,8 @@ class KeywordLearner:
         """One pass over recent ai_training_samples. Returns {(factory_id, intent_code): set(new_keywords)}.
 
         工艺保密 (Steve 2026-10-29): 按 (工厂, 意图) 分组, 只写进那家工厂自己的意图行; 没有工厂的样本不学;
-        训练授权撤回 / 查不到、提到本厂工艺保密产品、配方参数 / 客户 / 人名的原话不学。
+        训练授权撤回 / 查不到、客户 / 人名 / 工资考勤数值的原话不学, 该厂 d 开着时提到本厂工艺保密产品、
+        配方参数带数值的也不学 (``learning_rules.judge``)。
 
         Persistence: UPDATE ai_intent_configs.keywords with JSON-merge of new keywords.
         DB read error → returns {} gracefully (degrade not crash).

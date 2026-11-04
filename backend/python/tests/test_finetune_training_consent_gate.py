@@ -138,6 +138,38 @@ def test_process_secret_terms_tenants_and_missing_factories_are_dropped(monkeypa
         ("F007", "<数值>礼盒今天发了多少"), ("F006", "批次 <数值> 今天完工了吗")]
 
 
+def test_no_secrecy_switch_opens_the_gate(monkeypatch):
+    """What the gate feeds is one model for every factory, so it keeps the whole rule whatever the
+    factory set (item d defaults to off). An authorized factory is the worst case: its text stays raw."""
+    seen = []
+
+    class _SpyCursor(_CretasCursor):
+        def execute(self, sql, params=None):
+            seen.append(sql)
+            super().execute(sql, params)
+
+    class _SpyConn(_CretasConn):
+        def cursor(self, *a, **kw):
+            return _SpyCursor(self._products, self._people)
+
+    product = {"factory_id": "F_D", "id": "p1", "code": "C-1", "name": "秘制牛肉干", "category": None,
+               "product_category": None, "aliases": None}
+    monkeypatch.setattr(gate, "_connect", lambda: _Conn([("F_D", "private")]))
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _SpyConn(products=[product], people=[("F_D", "王五")]))
+    samples = ["本月产量多少", "秘制牛肉干本月销量多少", "这个产品配方里盐放 3 克", "王五本月产量多少", "本月工资 8000 元"]
+    kept = gate.apply_utterance_rule([{"factory_id": "F_D", "user_input": t} for t in samples], ("user_input",))
+    assert [r["user_input"] for r in kept] == ["本月产量多少"]
+    assert any("process_secret_policies" in s for s in seen)          # the spy saw the gate's reads
+    assert not any("factory_secrecy_settings" in s for s in seen)
+
+
+def test_the_export_really_loses_the_factory_so_the_gate_must_not_follow_it():
+    """Why the test above holds: if a later change keeps factory_id on the merged records, the
+    training file can be partitioned and this reason needs looking at again."""
+    source = (_FINETUNE / "export_training_data.py").read_text(encoding="utf-8")
+    assert '"text": text,' in source and '"factory_id"' not in source
+
+
 def test_unreadable_names_stop_the_script(monkeypatch):
     def boom():
         raise RuntimeError("connection refused")
