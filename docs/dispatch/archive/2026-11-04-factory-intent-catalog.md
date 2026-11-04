@@ -34,7 +34,7 @@
 - 数据与模型边界：本批不执行训练，不修改 `evaluation_holdout.jsonl`、旧35条、当前79条新测试或现有259头/候选产物。旧实验源码提交867de8ea8f留在独立训练分支；报告在本机Documents/Cretas意图微调-20261104。
 - Java 第二切片同Owner `/root/catalog_java_retire`：专属清理已返回，下一scope为新 `ai/tool/impl/factorycatalog/**`、`service/intent/catalog/**` 与同包测试，补6个此前无等价实现的工厂共用入口；优先复用真实Service/DTO，不造完成结果。既有Repository/Entity/业务Service修改必须先向Root报精确文件再扩scope，任何新增查询需真实JPA/数据库验证。Root单写共享目录和迁移；worker不写Maven target，不运行生产操作。
 - Java 扩scope已批准（仅该Owner）：`dto/material/CreateMaterialBatchRequest.java`、`service/impl/MaterialBatchServiceImpl.java`、`service/inventory/impl/InventoryLedgerServiceImpl.java`（仅FREE_GIFT零价/幂等/真实流水，不放宽采购价格）、`repository/inventory/SalesOrderItemRepository.java`及产品排名真实JPA测试、`service/impl/LabelServiceImpl.java`/必要`service/LabelService.java`（固定现行格式抽共享policy，不伪造配置）。赠品需新增唯一索引/表结构则先报Root；Root单写迁移。盘盈Tool必须只应用已OA审批APPROVED的正差盘点单，不代填盘点数/发起审批。税率分组开票保持人工入口410，不绕过自动开票政策。
-- Java 最后接线scope同Owner：`repository/inventory/SalesDeliveryItemRepository.java` 增加真实factory-scoped发货明细lookup，并接入新allocation Tool及真实RepositoryQueryValidationTest。Gift并发唯一索引由Root新增，仅作用FREE_GIFT非空source_event_key，不改变采购/其他来源幂等约束。
+- Java 最后接线scope同Owner：`repository/inventory/SalesDeliveryItemRepository.java` 增加真实factory-scoped发货明细lookup，并接入新allocation Tool及真实RepositoryQueryValidationTest。最终复用既有活行来源事件唯一索引，不新增赠品永久唯一索引，保留软删后重收契约。
 - 下一必要验证：规范目录三分区/别名与真实Tool-Skill绑定闭包；退役标签在短语、候选、RAG、执行及训练入口均被拒绝。最终一次运行相关Python、Java与迁移门禁和完整编译，日志留独立证据目录。
 - Java inventory补充同Owner：tool-descriptors.yaml与descriptor目标测试，按真实源同步8个新增Tool、摄像头metadata及关闭餐饮migration lane；不改catalog JSON，不运行Maven。Root串行验证。
 - 绑定验证Owner /root/catalog_python：仅新增Java ai/catalog/FactoryCatalogRuntimeBindingContractTest.java；用真实Tool类metadata、ToolRegistry与SkillRegistry验证29保留能力绑定与11只读Skill闭包。不得运行Maven或改实现/JSON。Root负责最终验证。
@@ -44,3 +44,13 @@
 - Python旧断言扩scope：完整门禁602失败均需逐项归类；/root/catalog_python允许修改门禁失败涉及的45个Python测试文件（仅旧餐饮AI入口/注册/成功断言），不改实现/CI/excludes/共享helper断言。删除的专属用例须列出nodeid与退役原因；混合测试保留工厂/安全/日期/歧义部分。验收失败文件目标pytest与退役契约联合；完整日志保留不伪称初次全绿。
 - Skill执行结果Owner /root/catalog_skill_result：仅service/skill/impl/SkillExecutorImpl.java与新Skill结果ContractTest，修复单Tool/多Tool success=false及NEED_MORE_INFO传播、不继续执行失败链；接现有实体grounding参数链。不得改Dynamic(现归路由Owner)、catalog/model。Root最终Maven。
 - 税率分组闭环Owner /root/catalog_skill_result：接管factorycatalog/TaxGroupInvoiceTool.java，新增service/intent/catalog/FactoryInvoiceTaxQueryService及对应真实Service/Repository契约测试；复用现有厂级发票/订单查询返回自动生成记录的taxBreakdown/status，缺ID澄清，人工ISSUE仍410，零写入。允许同步FactoryCatalogToolBehaviorTest税率用例与FactoryCatalogDispatchBoundaryContractTest税率方法；Root不并发改这些文件。
+
+
+## 2026-11-04 集成检查点
+
+- 实现提交 `f40325588a`；与 fresh origin/main `fb99b19020b4216ad5276fc0904a00d052a6e0ef` 合并为 `b2ccca95e3`，无冲突。新增主线 gate_diagnose_batch 描述登记同步提交 `9110f8b9ca`，描述目录493个Tool；规范意图仍265类。
+- 草稿 PR #1449：https://github.com/cretasfuture-ai/cretas/pull/1449。尚未合并、部署或执行生产迁移。
+- PostgreSQL17隔离schema迁移与赠品并发锁协议通过；最终目录/退役/训练飞轮61条Python契约通过；265类训练目录输出到独立证据目录。原259头映射、模型、保护集未改。
+- Linux Python Gate运行41842383774通过：10377 passed、188 skipped、153 deselected、2 xfailed；Python源码与该验证版本一致。Java首轮clean编译5000主源/2391测试源成功，221例中1失败2错误，分别为Skill参数保留、退役策略fixture计数、赠品并发fixture缺仓库；正在修复与重验。
+- 新主线GateDiagnoseBatchTool补READ与真实WriteGuard契约；三类scoped lookup全空返回404，不把不存在批次报为无拦截。新增阴性/阳性测试，等待最终验证。
+- 本机主工作区误写3个测试文件后按HEAD恢复，缺修改前快照，无法证明未覆盖原未提交内容；详见本机证据目录的主工作区误写记录.md。后续只写本worktree。

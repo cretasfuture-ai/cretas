@@ -87,9 +87,9 @@ class SkillExecutorFailurePropagationContractTest {
 
     @Test
     void catalogLlmCannotInventBatchNumberForRealTool() {
-        StubBusinessTool first = new StubBusinessTool("indicator_query", List.of(),
+        StubBusinessTool first = new StubBusinessTool("indicator_query", List.of(), List.of("batchNumber", "materialId"),
                 "{\"success\":true,\"data\":{}}", mapper);
-        StubBusinessTool second = new StubBusinessTool("indicator_comparison", List.of(),
+        StubBusinessTool second = new StubBusinessTool("indicator_comparison", List.of(), List.of("batchNumber", "materialId"),
                 "{\"success\":true,\"data\":{}}", mapper);
         register(first);
         register(second);
@@ -107,9 +107,9 @@ class SkillExecutorFailurePropagationContractTest {
 
     @Test
     void catalogLlmMayUseEntityValueExplicitlyPresentInUserQuery() {
-        StubBusinessTool first = new StubBusinessTool("indicator_query", List.of(),
+        StubBusinessTool first = new StubBusinessTool("indicator_query", List.of(), List.of("batchNumber", "materialId"),
                 "{\"success\":true,\"data\":{}}", mapper);
-        StubBusinessTool second = new StubBusinessTool("indicator_comparison", List.of(),
+        StubBusinessTool second = new StubBusinessTool("indicator_comparison", List.of(), List.of("batchNumber", "materialId"),
                 "{\"success\":true,\"data\":{}}", mapper);
         register(first);
         register(second);
@@ -322,13 +322,20 @@ class SkillExecutorFailurePropagationContractTest {
     private static final class StubBusinessTool extends AbstractBusinessTool {
         private final String name;
         private final List<String> required;
+        private final List<String> properties;
         private final String response;
         private final AtomicInteger calls = new AtomicInteger();
         private Map<String, Object> lastContext = new HashMap<>();
 
         private StubBusinessTool(String name, List<String> required, String response, ObjectMapper mapper) {
+            this(name, required, required, response, mapper);
+        }
+
+        private StubBusinessTool(String name, List<String> required, List<String> properties,
+                                 String response, ObjectMapper mapper) {
             this.name = name;
             this.required = required;
+            this.properties = properties;
             this.response = response;
             this.objectMapper = mapper;
         }
@@ -342,7 +349,7 @@ class SkillExecutorFailurePropagationContractTest {
         @Override
         public Map<String, Object> getParametersSchema() {
             Map<String, Object> properties = new HashMap<>();
-            required.forEach(name -> properties.put(name, Map.of("type", "string")));
+            this.properties.forEach(name -> properties.put(name, Map.of("type", "string")));
             return Map.of("type", "object", "properties", properties, "required", required);
         }
 

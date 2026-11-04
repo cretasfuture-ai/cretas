@@ -85,7 +85,7 @@ class FreeGiftCostAtomicityRepositoryQueryValidationTest {
             batch.setFactoryId("F006"); batch.setMaterialTypeId(material.getId()); batch.setSupplierId("SUP-F006");
             batch.setReceiptDate(LocalDate.now()); batch.setReceiptQuantity(BigDecimal.TEN); batch.setQuantityUnit("kg");
             batch.setUnitPrice(BigDecimal.TEN); batch.setUsedQuantity(BigDecimal.ZERO); batch.setReservedQuantity(BigDecimal.ZERO);
-            batch.setCreatedBy(owners.first());
+            batch.setCreatedBy(owners.first()); batch.setWarehouseId("WH-TEST");
             batch.setStatus(MaterialBatchStatus.AVAILABLE); em.persist(batch); em.flush(); return owners.first();
         });
         var mapper = mock(MaterialBatchMapper.class);

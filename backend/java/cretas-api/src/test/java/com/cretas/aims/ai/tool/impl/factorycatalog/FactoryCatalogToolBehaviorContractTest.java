@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
-class FactoryCatalogToolBehaviorTest {
+class FactoryCatalogToolBehaviorContractTest {
 
     @Test
     void freeGift_createsZeroCostSourceLineIdempotentBatch() {
