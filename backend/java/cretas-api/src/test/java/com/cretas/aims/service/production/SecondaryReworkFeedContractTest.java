@@ -57,6 +57,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -322,6 +323,9 @@ class SecondaryReworkFeedContractTest {
 
         assertStock("0.6", "0.4");
         assertThat(feed.heldQuantity(F, source())).isEqualByComparingTo("0");
+        // 原批次的产量和批次记录都不动: 返工的合格率算在返工批次上, 不覆盖来源批
+        assertThat(wip.getProducedQuantity()).isEqualByComparingTo("1.0");
+        verify(batchRepo, never()).save(any());
         assertThat(ledger).anyMatch(t -> Long.valueOf(11L).equals(t.getReportId())
                 && SemiFinishedInventoryTransaction.TxnType.OUT.equals(t.getTxnType())
                 && t.getQuantity().abs().compareTo(new BigDecimal("0.6")) == 0

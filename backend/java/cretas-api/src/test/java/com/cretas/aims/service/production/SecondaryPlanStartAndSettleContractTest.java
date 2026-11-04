@@ -192,6 +192,18 @@ class SecondaryPlanStartAndSettleContractTest {
         verify(feed, never()).assertAcceptedBy(any(), any(), any());
     }
 
+    @Test
+    @DisplayName("取消: 开工后没报工, 占用按流水余额全部还回, 计划取消")
+    void cancelReturnsTheHold() {
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, PLAN)).thenReturn(List.of());
+
+        service.cancelProductionPlan(F, PLAN, "不做了");
+
+        verify(feed).release(eq(F), any(), isNull(), any());
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.CANCELLED);
+    }
+
     private ProcessSheetRow reworkRow() {
         ProcessSheetRow row = new ProcessSheetRow();
         row.setFactoryId(F);
