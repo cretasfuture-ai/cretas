@@ -25,6 +25,7 @@ import argparse
 import json
 import logging
 import os
+import tempfile
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -404,7 +405,17 @@ def main():
         default=DEFAULT_SINCE_DAYS,
         help=f"Look back N days for DB records (default: {DEFAULT_SINCE_DAYS})",
     )
+    parser.add_argument('--reviewed-flywheel-file', type=Path, help='Explicitly reviewed flywheel JSONL (optional)')
+    parser.add_argument('--flywheel-labels-file', type=Path, help='Current live classifier label catalog')
+    parser.add_argument('--flywheel-holdout-file', type=Path, help='Protected evaluation texts/groups; applied to ALL sources')
     args = parser.parse_args()
+    flywheel_args = (args.reviewed_flywheel_file, args.flywheel_labels_file, args.flywheel_holdout_file)
+    if any(flywheel_args) and not all(flywheel_args):
+        parser.error('All three flywheel file arguments are required together')
+    reviewed_records = []
+    if args.reviewed_flywheel_file:
+        from flywheel_reviewed import load_reviewed
+        reviewed_records = load_reviewed(*flywheel_args)
 
     # Setup logging
     logging.basicConfig(
@@ -418,12 +429,20 @@ def main():
     output_path = script_dir / args.output
     zpd_path = script_dir / args.zpd_file
     adjudicated_path = script_dir / args.adjudicated_file
+    default_holdout = script_dir / 'data' / 'evaluation_holdout.jsonl'
+    from flywheel_reviewed import HoldoutGuard
+    HoldoutGuard(default_holdout)  # Missing registry is an error, even for default exports.
+    input_paths = [zpd_path, adjudicated_path, default_holdout] + [p for p in flywheel_args if p]
+    for input_path in input_paths:
+        if output_path.resolve() == input_path.resolve() or (
+                output_path.exists() and input_path.exists() and os.path.samefile(output_path, input_path)):
+            parser.error('Output must not alias a training input or protected registry')
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # -----------------------------------------------------------------------
     # Source 1: ZPD labeled data (file-based, no DB needed)
     # -----------------------------------------------------------------------
-    all_records: List[Dict] = []
+    all_records: List[Dict] = list(reviewed_records)
 
     zpd_records = load_zpd_data(zpd_path)
     all_records.extend(zpd_records)
@@ -461,12 +480,20 @@ def main():
             logger.info("Database connection closed")
 
     if not all_records:
-        logger.info("No records from any source. Nothing to export.")
-        sys.exit(0)
+        logger.error("No records from any source; aborting so a stale export cannot be trained.")
+        sys.exit(2)
 
     # The output trains the model every factory shares. The file sources skip the utterance rule
     # above, so every record is checked here. Unreadable lists stop the run, DB outage or not.
     all_records = drop_records_naming_protected_terms(all_records)
+    from flywheel_reviewed import exclude_holdout, reject_conflicts
+    all_records = exclude_holdout(all_records, default_holdout)
+    if args.flywheel_holdout_file:
+        from flywheel_reviewed import exclude_holdout
+        before_holdout = len(all_records)
+        all_records = exclude_holdout(all_records, args.flywheel_holdout_file)
+        logger.info('Protected holdout: excluded %d records across all sources', before_holdout - len(all_records))
+    reject_conflicts(all_records)
 
     # -----------------------------------------------------------------------
     # Deduplicate
@@ -477,14 +504,19 @@ def main():
     # -----------------------------------------------------------------------
     # Write output (strip internal 'confidence' field from final output)
     # -----------------------------------------------------------------------
-    with open(output_path, "w", encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=output_path.parent,
+                                     prefix=output_path.name+'.', suffix='.tmp', delete=False) as f:
+        temp_output = Path(f.name)
         for record in deduped:
             output_record = {
                 "text": record["text"],
                 "label": record["label"],
                 "source": record["source"],
             }
+            if record.get('flywheel_evidence'):
+                output_record['flywheel_evidence'] = record['flywheel_evidence']
             f.write(json.dumps(output_record, ensure_ascii=False) + "\n")
+    os.replace(temp_output, output_path)
 
     logger.info("Wrote %d records to %s", len(deduped), output_path)
 
