@@ -33,6 +33,11 @@ describe('YieldStepReportScreen 留单后完工', () => {
     expect(fn).toContain("appAlert('请填写本道产出量', '产出量必须大于 0')");
   });
 
+  it('没有新增就完工时, 成功提示不写「0 盒已记为本道产出」, 有新增时照写', () => {
+    const fn = between('const doSubmitOutput = useCallback', 'const handleSavePartialOutput');
+    expect(fn).toContain("${finishOnly ? '' : `${output} ${outUnit} 已记为本道产出。`}${cumText}");
+  });
+
   it('完工确认按累计产出算不平衡, 没有新增时写明累计数', () => {
     const fn = between('const handleSubmitOutput = useCallback', '// ========================= 完成阶段');
     expect(fn).toContain('canFinishWithoutNewOutput(outputQty, true, savedOutput)');

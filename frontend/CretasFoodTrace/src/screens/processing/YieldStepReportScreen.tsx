@@ -1851,7 +1851,7 @@ const YieldStepReportScreen: React.FC = () => {
         const cumText = cumulative != null ? `本道累计产出 ${cumulative} ${outUnit}。` : '';
         appAlert(
           '本道已完工',
-          `${output} ${outUnit} 已记为本道产出。${cumText}出成率已锁定, 本道不能再报产出。\n` +
+          `${finishOnly ? '' : `${output} ${outUnit} 已记为本道产出。`}${cumText}出成率已锁定, 本道不能再报产出。\n` +
             (isLastStep ? '这是末道, 可去看整批汇总。' : '可去下一道工序。'),
         );
       }
