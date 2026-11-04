@@ -26,6 +26,14 @@ import com.cretas.aims.annotation.RequireModule;
 @RequestMapping("/api/mobile/{factoryId}/sales-deliveries/items/{deliveryItemId}/batch-allocations")
 public class SalesDeliveryBatchAllocationController {
 
+    /**
+     * 下面两处 2026-08-20 的放宽只放了 RequirePermission, 而 2026-08-22 的 V20261030_13 把
+     * warehouse_manager 的 sales 模块收成 '-' 之后, sales_order 模块闸把仓管全部拦成 403,
+     * 放宽等于没生效 (D-S309-01)。
+     * ⛔ 只点名仓管: 同样持 warehouse:read_write 的仓库员 (warehouse_worker) 范围不变, 仍被模块闸拦住。
+     */
+    private static final String WAREHOUSE_ALLOCATOR_ROLE = "warehouse_manager";
+
     private final SalesDeliveryBatchAllocationService service;
 
     @GetMapping
@@ -57,7 +65,7 @@ public class SalesDeliveryBatchAllocationController {
      * **两处都改了** —— 仓管重新分配时要先清空, 只放宽一处会卡在第二步。
      */
     @RequirePermission({"sales:read_write", "warehouse:read_write"})
-    @RequireModule("sales_order")
+    @RequireModule(value = "sales_order", alsoAllowRoles = WAREHOUSE_ALLOCATOR_ROLE)
     @PostMapping
     @Operation(summary = "设置发货行的批次分配（先清空再写入）")
     public ApiResponse<Map<String, Object>> allocate(
@@ -119,7 +127,7 @@ public class SalesDeliveryBatchAllocationController {
      * **两处都改了** —— 仓管重新分配时要先清空, 只放宽一处会卡在第二步。
      */
     @RequirePermission({"sales:read_write", "warehouse:read_write"})
-    @RequireModule("sales_order")
+    @RequireModule(value = "sales_order", alsoAllowRoles = WAREHOUSE_ALLOCATOR_ROLE)
     @DeleteMapping
     @Operation(summary = "清空发货行的批次分配")
     public ApiResponse<Void> clear(
