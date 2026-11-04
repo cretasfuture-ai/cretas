@@ -61,6 +61,7 @@ class FinetuneConfig:
     weight_decay: float = 0.01
     max_length: int = 64
     seed: int = 42
+    label_mapping_path: Optional[str] = None
     eval_steps: int = 50
     save_steps: int = 100
     early_stopping_patience: int = 3
@@ -173,11 +174,12 @@ def freeze_model_layers(model, num_layers_to_freeze: int):
     建议冻结 8-10 层，只训练最后 2-4 层
     """
     # 冻结 embeddings
-    for param in model.roberta.embeddings.parameters():
+    backbone = model.base_model
+    for param in backbone.embeddings.parameters():
         param.requires_grad = False
 
     # 冻结前 N 层 encoder
-    for i, layer in enumerate(model.roberta.encoder.layer):
+    for i, layer in enumerate(backbone.encoder.layer):
         if i < num_layers_to_freeze:
             for param in layer.parameters():
                 param.requires_grad = False
@@ -205,6 +207,8 @@ def compute_metrics(eval_pred):
 
 def run_finetuning(config: FinetuneConfig):
     """执行增量微调"""
+    from training_label_contract import validate_replay_inputs
+    validate_replay_inputs(config.new_data_path, config.old_data_path)
     # 设置随机种子
     random.seed(config.seed)
     torch.manual_seed(config.seed)
@@ -218,12 +222,29 @@ def run_finetuning(config: FinetuneConfig):
         logger.info(f"加载旧数据: {config.old_data_path}")
         old_data = load_data(config.old_data_path)
 
+    from flywheel_reviewed import exclude_holdout
+    protected = Path(__file__).resolve().parent / 'data' / 'evaluation_holdout.jsonl'
+    new_data = exclude_holdout(new_data, protected)
+    if old_data:
+        old_data = exclude_holdout(old_data, protected)
+    if not new_data:
+        raise ValueError('No new training samples remain after holdout protection')
+
     # 合并数据
     merged_data = merge_and_sample_data(new_data, old_data, config.replay_ratio)
+    from flywheel_reviewed import normalized, reject_conflicts
+    reject_conflicts(merged_data)
+    unique_rows = {}
+    for row in merged_data:
+        key = normalized(row['text'])
+        if key not in unique_rows or (row.get('flywheel_evidence') and not unique_rows[key].get('flywheel_evidence')):
+            unique_rows[key] = row
+    merged_data = list(unique_rows.values())
 
     # 构建标签映射
-    labels = list(set(d["label"] for d in merged_data))
-    label_to_id = {label: i for i, label in enumerate(sorted(labels))}
+    from training_label_contract import resolve_mapping
+    label_to_id = resolve_mapping(config.model_path, config.label_mapping_path, merged_data)
+    labels = list(label_to_id)
     id_to_label = {i: label for label, i in label_to_id.items()}
 
     logger.info(f"标签数量: {len(labels)}")
@@ -240,7 +261,7 @@ def run_finetuning(config: FinetuneConfig):
         model = AutoModelForSequenceClassification.from_pretrained(
             str(model_path),
             num_labels=len(labels),
-            ignore_mismatched_sizes=True  # 允许分类层大小不匹配
+            ignore_mismatched_sizes=False  # Existing head IDs must stay unchanged.
         )
         logger.info("加载已微调的模型")
     else:
@@ -251,6 +272,9 @@ def run_finetuning(config: FinetuneConfig):
             num_labels=len(labels)
         )
         logger.info("加载预训练模型")
+
+    model.config.label2id = label_to_id
+    model.config.id2label = id_to_label
 
     # 冻结早期层
     if config.freeze_layers > 0:
@@ -357,12 +381,14 @@ def main():
     parser.add_argument("--replay-ratio", type=float, default=0.5, help="旧数据回放比例")
     parser.add_argument("--freeze-layers", type=int, default=8, help="冻结前 N 层")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
+    parser.add_argument('--label-mapping', help='Must exactly match the existing model label_to_id')
 
     args = parser.parse_args()
 
     config = FinetuneConfig(
         new_data_path=args.new_data,
         old_data_path=args.old_data,
+        label_mapping_path=args.label_mapping,
         model_path=args.model_path,
         output_path=args.output_path,
         epochs=args.epochs,

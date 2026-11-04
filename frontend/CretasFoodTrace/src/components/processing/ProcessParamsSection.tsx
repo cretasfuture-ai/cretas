@@ -2,7 +2,7 @@
  * ProcessParamsSection — 产出报工屏的「工艺参数」录入栏 (docs/specs/app-process-params-entry.md)。
  *
  * 本道工序配了参数才出现 (没有 enabled 字段 → 整段不渲染)。每行: 参数名 + 大号数字输入框(单位在右) +
- * 下方常驻一行标准文案; 填的数超范围时这行变红「偏高 · …」/「偏低 · …」。参数非必填, 超标不挡提交
+ * 上方常驻一行标准文案; 填的数超范围时这行变红「偏高 · …」/「偏低 · …」。参数非必填, 超标不挡提交
  * (只在提交确认里列出)。
  *
  * UX Flow Analysis 见 spec: F1 常驻标准 / F3 字号 ≥ 24 + decimal-pad + 「请填数字」 /
@@ -53,6 +53,15 @@ export const ProcessParamsSection: React.FC<Props> = ({
         return (
           <View key={def.key} style={styles.item} testID={`process-param-row-${def.key}`}>
             <Text style={styles.name}>{def.label}{unit ? `（${unit}）` : ''}</Text>
+            {/* 放在输入框上方: 键盘是 pan 模式, 窗口只上移到输入框露出, 框下面的内容填写时全被盖住 */}
+            {hint ? (
+              <Text
+                style={[styles.hint, bad && styles.hintBad]}
+                testID={`process-param-hint-${def.key}`}
+              >
+                {hint}
+              </Text>
+            ) : null}
             <PaperTextInput
               mode="outlined"
               value={text}
@@ -67,14 +76,6 @@ export const ProcessParamsSection: React.FC<Props> = ({
               accessibilityLabel={`${def.label}${standard ? `，${standard}` : ''}`}
               testID={`process-param-input-${def.key}`}
             />
-            {hint ? (
-              <Text
-                style={[styles.hint, bad && styles.hintBad]}
-                testID={`process-param-hint-${def.key}`}
-              >
-                {hint}
-              </Text>
-            ) : null}
           </View>
         );
       })}
@@ -90,11 +91,11 @@ const styles = StyleSheet.create({
   title: { fontSize: 16, fontWeight: '700', color: '#303133' },
   subtitle: { fontSize: 13, color: '#909399', marginTop: 2, marginBottom: 6 },
   item: { paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#E4EEF9' },
-  name: { fontSize: 16, fontWeight: '600', color: '#303133', marginBottom: 6 },
+  name: { fontSize: 16, fontWeight: '600', color: '#303133', marginBottom: 2 },
   // Paper 的 fontSize 只认 style (不认 contentStyle)
   input: { minHeight: 52, fontSize: 24, backgroundColor: '#FFFFFF' },
   inputContent: { minHeight: 52 },
-  hint: { fontSize: 14, color: '#909399', marginTop: 6, lineHeight: 20, minHeight: 20 },
+  hint: { fontSize: 14, color: '#909399', marginBottom: 6, lineHeight: 20, minHeight: 20 },
   hintBad: { color: '#F56C6C', fontWeight: '600' },
 });
 

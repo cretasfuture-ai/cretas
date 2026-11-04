@@ -191,6 +191,12 @@ class ReportsFinanceAnalyticsGateContractTest {
             }
             assertThat(entries).as(screen).isPositive();
         }
+        // 车间主任首页 (#1428) 走快捷入口: 只有 analyticsEntriesFor 给了才渲染, 它是这个入口的权限门
+        String wsHome = Files.readString(REPO.resolve(
+                "frontend/CretasFoodTrace/src/screens/workshop-supervisor/home/WSHomeScreen.tsx"), StandardCharsets.UTF_8);
+        assertThat(wsHome).contains("analyticsQuickActions(analyticsEntriesFor(user))");
+        assertThat(Files.readString(REPO.resolve("frontend/CretasFoodTrace/src/utils/analyticsEntries.ts"), StandardCharsets.UTF_8))
+                .contains("return hasModulePermission(user, 'analytics', 'read');");
         // RN 里没有别处再进时段成本分析 / 直接调财务报表
         try (var files = Files.walk(REPO.resolve("frontend/CretasFoodTrace/src/screens"))) {
             List<String> others = files.filter(p -> p.toString().endsWith(".tsx"))
@@ -202,7 +208,7 @@ class ReportsFinanceAnalyticsGateContractTest {
                         }
                     })
                     .map(p -> p.getFileName().toString())
-                    .filter(n -> !List.of("ProcessingDashboard.tsx", "AIReportListScreen.tsx").contains(n))
+                    .filter(n -> !List.of("ProcessingDashboard.tsx", "AIReportListScreen.tsx", "WSHomeScreen.tsx").contains(n))
                     .toList();
             assertThat(others).isEmpty();
         }
