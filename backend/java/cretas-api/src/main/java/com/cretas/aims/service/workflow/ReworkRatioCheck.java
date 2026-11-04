@@ -5,6 +5,9 @@ import com.cretas.aims.dto.workflow.ReworkRatioDeviation;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -90,7 +93,8 @@ public class ReworkRatioCheck {
                     .withCode(ERROR_CODE)
                     .withHint("请核对回料投入量；确实要这样投的，选择超限原因（选「其他」需写明）后再正式报工")
                     .withHintTarget("回料超限原因")
-                    .withSeverity("BLOCKING");
+                    .withSeverity("BLOCKING")
+                    .withDiagnosis(GateDiagnosis.of(GateId.REWORK_RATIO, ERROR_CODE, "WORKFLOW_STEP", text).resolve("核对回料投入量; 确按此投的, 选择超限原因 (选「其他」需写明) 后再正式报工", null).build());
         }
         if (!STANDARD_REASONS.contains(reason)) {
             throw new BusinessException(400, "回料超限原因「" + reason + "」不在可选范围内")
@@ -104,7 +108,8 @@ public class ReworkRatioCheck {
                     .withCode(ERROR_CODE)
                     .withHint("在说明框里写明为什么回料占比超过上限")
                     .withHintTarget("回料超限原因")
-                    .withSeverity("BLOCKING");
+                    .withSeverity("BLOCKING")
+                    .withDiagnosis(GateDiagnosis.of(GateId.REWORK_RATIO, ERROR_CODE, "WORKFLOW_STEP", text).resolve("核对回料投入量; 确按此投的, 选择超限原因 (选「其他」需写明) 后再正式报工", null).build());
         }
         snap.setStatus(STATUS_OVER_WITH_REASON);
         snap.setReason(reason);

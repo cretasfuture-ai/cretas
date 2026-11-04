@@ -38,7 +38,7 @@ class GateDiagnosisContractTest {
         long diagnosed = Arrays.stream(GateId.values()).filter(GateId::diagnosed).count();
         long exempt = Arrays.stream(GateId.values()).filter(g -> !g.diagnosed()).count();
         assertEquals(GateId.values().length, diagnosed + exempt);
-        assertEquals(14, diagnosed, "已接诊断的闸数");
+        assertEquals(16, diagnosed, "已接诊断的闸数");
         assertEquals(3, exempt, "登记不接的闸数");
         for (GateId g : GateId.values()) {
             if (!g.diagnosed()) {
@@ -149,8 +149,11 @@ class GateDiagnosisContractTest {
                 new Wiring("shortage/ShortageStartGate.java", GateId.SHORTAGE_START, 1),
                 new Wiring("workflow/BlendRatioCheck.java", GateId.BLEND_RATIO, 2),
                 new Wiring("wip/impl/WipInventoryServiceImpl.java", GateId.INSUFFICIENT_BALANCE, 2),
-                new Wiring("inventory/impl/FinishedGoodsFeedServiceImpl.java", GateId.INSUFFICIENT_BALANCE, 1));
-        Pattern p = Pattern.compile("withDiagnosis\\(GateDiagnosis\\.of\\(GateId\\.(\\w+)");
+                new Wiring("inventory/impl/FinishedGoodsFeedServiceImpl.java", GateId.INSUFFICIENT_BALANCE, 1),
+                new Wiring("workflow/ReworkRatioCheck.java", GateId.REWORK_RATIO, 2),
+                new Wiring("foodsafety/timelimit/ProcessTimeLimitService.java", GateId.TIME_LIMIT, 2));
+        Pattern p = Pattern.compile(
+                "withDiagnosis\\(\\s*(?:[\\w.]*\\.)?GateDiagnosis\\.of\\(\\s*(?:[\\w.]*\\.)?GateId\\.(\\w+)");
         for (Wiring w : wirings) {
             String src = Files.readString(root.resolve(w.file()));
             Matcher m = p.matcher(src);

@@ -21,6 +21,8 @@ public enum GateId {
     WORKFLOW_UPSTREAM("上游工序未产出", null),
     SHORTAGE_START("缺料开工", null),
     BLEND_RATIO("配比偏差", null),
+    TIME_LIMIT("投料时限", null),
+    REWORK_RATIO("回料占比超限", null),
     CCP_DEVIATION_HOLD("CCP 偏离扣留", "不是独立拒绝点: 偏离只把批次置为待检, 拒绝时由 SEMI_QC_PENDING / WIP_QC / FG_QC_PENDING / MATERIAL_BATCH_STATE 诊断; 持有记录没有成因字段, 诊断里不区分是需检还是偏离, 解开方式相同 (质检放行页处理偏离后放行)"),
     REWORK_PURITY("返工纯度", "只在返工配料建议里给出判定 (Verdict), 不抛拒绝, 没有拒绝提示可诊断"),
     OWNERSHIP_CONTEXT_MISSING("缺归属上下文", "数据缺失型拒绝 (计划/批次缺客户归属), 解开方式是补数据而非操作, 由各归属闸的 CONTEXT_REQUIRED 码覆盖");
