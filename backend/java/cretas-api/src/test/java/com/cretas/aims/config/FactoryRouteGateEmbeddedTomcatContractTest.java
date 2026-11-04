@@ -256,6 +256,9 @@ class FactoryRouteGateEmbeddedTomcatContractTest {
     void dashboardJudgesTheRoutedFactory() throws IOException {
         assertThat(get("/api/mobile/dashboard/F002", null).status()).isEqualTo(401);
         assertThat(get("/api/mobile/dashboard/F002", factoryToken).status()).isEqualTo(403);
+        // A factory token that merely names a platform role is still a factory token.
+        String namedPlatformRole = jwtUtil.generateToken(FACTORY_USER_ID, "F001", "factory_probe", "super_admin");
+        assertThat(get("/api/mobile/dashboard/F002", namedPlatformRole).status()).isEqualTo(403);
         assertThat(calls(mobileService, "getDashboardData")).as("the handler must never run").isZero();
 
         assertThat(get("/api/mobile/dashboard/F001", factoryToken).status()).isEqualTo(200);
