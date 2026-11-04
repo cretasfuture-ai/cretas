@@ -167,6 +167,12 @@ public class YieldReportRequest {
     private com.cretas.aims.dto.workflow.BlendRatioDeviation blendRatio;
 
     /**
+     * 缺口 03 回料比例上限: 领用的源半成品是回料、占比超过本道产品上限时必填的原因 (reason/note);
+     * 服务端算出的快照落在 production_reports.custom_fields.reworkRatio。
+     */
+    private com.cretas.aims.dto.workflow.ReworkRatioDeviation reworkRatio;
+
+    /**
      * 工序自定义字段 / 工艺参数的实际值 (key 对应 WorkProcess.customFieldSchema)。只在产出报工 (OUTPUT / 旧式整合) 上收;
      * 落 custom_fields.clerkCustomFields, 服务端按当时的标准生成 custom_fields.paramChecks 快照 (与 web 工序表同口径)。
      */
