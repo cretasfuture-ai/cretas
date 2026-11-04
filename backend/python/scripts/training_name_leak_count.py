@@ -26,6 +26,15 @@ a number in the next would read as a pay value.
 Learning writes only a factory's own rows; platform rows (no factory) have no directory and show
 up as ``rows_unchecked``.
 
+Global rows: a row with no owning factory (empty, blank or ``*``, as Java ``isGlobalFactory``) has no
+directory of its own and is ``rows_unchecked``. ``--global-union`` compares those rows with the
+union of every factory's directory instead, count only, masked rows included. Such a row cannot
+be attributed to a factory, so a hit is a possible name and never a proven one, and it is not
+``rows_with_name``: it has its own columns (``global_rows_compared``, ``rows_with_possible_name``,
+``possible_name_row_ids``, and ``possible_masked_name_row_ids`` for the part that matched a masked
+form). A hit exits 1 like any other. Rows with a factory are still compared with their own
+directory only. ``--factory`` is refused with it: that filter would drop every global row.
+
 Time: ``--since`` is GMT+8 wall-clock time, whatever the database session zone is. A
 ``timestamp`` column is compared as it stands (Java stores ``LocalDateTime``, the wall clock of
 the GMT+8 service); a ``timestamptz`` column is compared with that wall clock converted at
@@ -54,6 +63,7 @@ counted in ``names_lost_when_masked``.
 
     python scripts/training_name_leak_count.py --self-test
     python scripts/training_name_leak_count.py --since '2026-11-04 12:00:00' [--factory F006]
+    python scripts/training_name_leak_count.py --since '2026-11-04 12:00:00' --global-union
 
 Needs POSTGRES_HOST / POSTGRES_PORT / POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD for the
 cretas database. Every real run repeats the self-test first, plus a live positive control on
@@ -164,11 +174,24 @@ def names_masked_form(pattern: Optional[Pattern[str]], texts: Sequence[Optional[
     return pattern is not None and any(t and VALUE_TOKEN in t and pattern.search(fold(t)) for t in texts)
 
 
-def tally(table: str, rows: Iterable[Row], directory: Mapping[str, FrozenSet[str]]) -> List[Dict[str, Any]]:
+def is_global_row(factory_id: Optional[str]) -> bool:
+    """No owning factory: empty, blank or ``*`` (same as Java ``LearningContentRules.isGlobalFactory``)."""
+    return not factory_id or not factory_id.strip() or factory_id.strip() == "*"
+
+
+def union_directory(directory: Mapping[str, FrozenSet[str]]) -> FrozenSet[str]:
+    return frozenset(name for names in directory.values() for name in names)
+
+
+def tally(table: str, rows: Iterable[Row], directory: Mapping[str, FrozenSet[str]],
+          union: Optional[FrozenSet[str]] = None) -> List[Dict[str, Any]]:
     """Per-factory counts for one table. A row is compared with its own factory's directory; the
-    pay rule needs no directory and reads every row. Masked rows are read too (module docstring)."""
+    pay rule needs no directory and reads every row. Masked rows are read too (module docstring).
+    ``union`` (``--global-union``): rows with no owning factory are compared with it instead of
+    being left unchecked; rows with a factory never are."""
     per: Dict[Optional[str], Dict[str, Any]] = {}
     masked: Dict[Optional[str], Optional[Pattern[str]]] = {}
+    union_regex = masked_name_regex(union)[0] if union else None
     for row_id, factory_id, texts, pay_texts in rows:
         names = directory.get(factory_id) if factory_id else None
         entry = per.get(factory_id)
@@ -178,11 +201,22 @@ def tally(table: str, rows: Iterable[Row], directory: Mapping[str, FrozenSet[str
                                        "names_lost_when_masked": lost,
                                        "rows_scanned": 0, "rows_unchecked": 0, "rows_with_name": 0, "row_ids": [],
                                        "rows_with_masked_name": 0, "masked_name_row_ids": [],
+                                       "global_rows_compared": 0, "rows_with_possible_name": 0,
+                                       "possible_name_row_ids": [], "possible_masked_name_row_ids": [],
                                        "pay_rows_scanned": 0, "rows_with_pay_value": 0, "pay_row_ids": []}
         entry["pay_rows_scanned"] += 1
         if tc.pay_word_with_value(*(unmasked(t) for t in pay_texts)):
             entry["rows_with_pay_value"] += 1
             entry["pay_row_ids"].append(str(row_id))
+        if union and is_global_row(factory_id):
+            entry["global_rows_compared"] += 1
+            in_masked_form = not tc.mentions_any(union, *texts) and names_masked_form(union_regex, texts)
+            if in_masked_form or tc.mentions_any(union, *texts):
+                entry["rows_with_possible_name"] += 1
+                entry["possible_name_row_ids"].append(str(row_id))
+            if in_masked_form:
+                entry["possible_masked_name_row_ids"].append(str(row_id))
+            continue
         if not names:
             entry["rows_unchecked"] += 1
             continue
@@ -242,6 +276,30 @@ def self_test() -> List[str]:
         failures.append("a row without a directory was not reported as unchecked")
     if c.get("pay_row_ids") != ["no_directory_pay"]:
         failures.append(f"F_C pay hits {c.get('pay_row_ids')} != ['no_directory_pay']")
+    return failures + self_test_global(directory)
+
+
+def self_test_global(directory: Mapping[str, FrozenSet[str]]) -> List[str]:
+    """``--global-union``: a global row naming anyone in any factory is a possible hit, also in
+    masked form; a clean or masked clean global row is not; a row with a factory is still compared
+    with its own directory only; without the union nothing is compared."""
+    rows = [("g_person", None, ("测试甲某报工",), ()), ("g_other_factory", "*", ("测试乙某报工",), ()),
+            ("g_masked", " ", ("<数值>个测试核桃发了多少",), ()), ("g_clean", None, ("今天产量多少",), ()),
+            ("g_masked_clean", None, ("今天入库 <数值> 箱",), ()), ("own", "F_A", ("测试乙某报工",), ())]
+    report = tally("self_test_global", rows, directory, union_directory(directory))
+    failures = []
+    possible = sorted(i for e in report for i in e["possible_name_row_ids"])
+    if possible != ["g_masked", "g_other_factory", "g_person"]:
+        failures.append(f"global possible hits {possible} != ['g_masked', 'g_other_factory', 'g_person']")
+    if sorted(i for e in report for i in e["possible_masked_name_row_ids"]) != ["g_masked"]:
+        failures.append("global masked hit not told apart")
+    if sum(e["global_rows_compared"] for e in report) != 5:
+        failures.append("global rows compared != 5")
+    if any(e["row_ids"] or e["rows_unchecked"] for e in report):
+        failures.append("a global row or the own-factory row landed in the proven / unchecked columns")
+    plain = tally("self_test_global", rows, directory)
+    if any(e["possible_name_row_ids"] for e in plain) or sum(e["rows_unchecked"] for e in plain) != 5:
+        failures.append("without --global-union a global row must stay unchecked")
     return failures
 
 
@@ -337,7 +395,7 @@ def warnings_for(entries: Sequence[Mapping[str, Any]], clock: Mapping[str, Any])
     return out
 
 
-def measure(conn, since: str, factory: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
+def measure(conn, since: str, factory: Optional[str] = None, global_union: bool = False) -> Tuple[int, Dict[str, Any]]:
     """Returns ``(exit_code, report)``. ``conn`` is switched to a read-only session first."""
     conn.set_session(readonly=True, autocommit=False)
     try:
@@ -351,29 +409,37 @@ def measure(conn, since: str, factory: Optional[str] = None) -> Tuple[int, Dict[
             broken = live_control(directory)
             if broken:
                 return 2, {"error": "live positive control failed", "factories": sorted(broken)}
+            union = union_directory(directory) if global_union else None
             clock = read_clock(cur)
             time_columns: List[Dict[str, Any]] = []
             entries: List[Dict[str, Any]] = []
             for table, time_column, columns in TABLES:
                 column_type = time_column_type(cur, table, time_column)
                 time_columns.append(read_time_column(cur, table, time_column, column_type, factory))
-                entries += tally(table, read_rows(cur, table, time_column, column_type, columns, since, factory), directory)
+                entries += tally(table, read_rows(cur, table, time_column, column_type, columns, since, factory),
+                                 directory, union)
     finally:
         conn.rollback()
     scanned = sum(e["rows_scanned"] for e in entries)
     hits = sum(e["rows_with_name"] for e in entries)
     pay_hits = sum(e["rows_with_pay_value"] for e in entries)
+    possible = sum(e["rows_with_possible_name"] for e in entries)
+    global_compared = sum(e["global_rows_compared"] for e in entries)
     report = {"database": clock, "time_columns": time_columns, "warnings": warnings_for(entries, clock),
               "since": since, "factory": factory, "rows_scanned": scanned,
               "rows_unchecked": sum(e["rows_unchecked"] for e in entries), "rows_with_name": hits,
               "rows_with_masked_name": sum(e["rows_with_masked_name"] for e in entries),
+              "global_union": global_union, "union_directory_size": len(union or ()),
+              "union_names_lost_when_masked": masked_name_regex(union or ())[1],
+              "global_rows_compared": global_compared, "rows_with_possible_name": possible,
+              "rows_with_possible_masked_name": sum(len(e["possible_masked_name_row_ids"]) for e in entries),
               "pay_rows_scanned": sum(e["pay_rows_scanned"] for e in entries), "rows_with_pay_value": pay_hits,
               "tables": entries}
-    if hits or pay_hits:
+    if hits or pay_hits or possible:
         return 1, report
     if report["pay_rows_scanned"] == 0:     # every row read counts here, with a directory or not
         return 2, {**report, "no_rows_in_window": True, "note": NO_ROWS_NOTE}
-    if scanned == 0:
+    if scanned == 0 and global_compared == 0:
         return 2, {**report, "error": "no row compared with a directory: nothing measured"}
     return 0, report
 
@@ -408,6 +474,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="GMT+8 wall-clock time, whatever the database session zone is, no offset: rows created "
                          "(intent keywords: updated) at or after it, e.g. '2026-11-04 12:00:00'")
     ap.add_argument("--factory", help="only this factory")
+    ap.add_argument("--global-union", action="store_true",
+                    help="compare rows with no owning factory with the union of every factory's people and customers: "
+                         "count only, a hit is a possible name, in its own columns; not with --factory")
     ap.add_argument("--self-test", action="store_true", help="positive and negative controls only, no database")
     args = ap.parse_args(argv)
 
@@ -420,10 +489,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if not args.since:
         ap.error("--since is required (or --self-test)")
+    if args.global_union and args.factory:
+        ap.error("--global-union reads rows with no factory: --factory would drop all of them")
     try:
         conn = _connect()
         try:
-            code, report = measure(conn, args.since, args.factory)
+            code, report = measure(conn, args.since, args.factory, args.global_union)
         finally:
             conn.close()
     except Exception as e:  # noqa: BLE001 - not measured is its own exit code

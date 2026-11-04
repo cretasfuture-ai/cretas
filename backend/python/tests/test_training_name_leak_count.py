@@ -184,6 +184,59 @@ def test_a_wall_clock_since_is_accepted(since):
     assert counter.since_gmt8(since) == since.strip()
 
 
+@pytest.mark.parametrize("factory_id, is_global", [(None, True), ("", True), ("  ", True), ("*", True), (" * ", True),
+                                                   ("F_A", False), ("PLATFORM", False)])
+def test_a_global_row_means_the_same_as_java(factory_id, is_global):
+    assert counter.is_global_row(factory_id) is is_global
+
+
+def test_global_union_keeps_proven_and_possible_apart():
+    directory = counter.tc.directory_by_factory([("F_A", "王五"), ("F_B", "六个核桃"), ("F_B", "三十")])
+    union = counter.union_directory(directory)
+    assert union == {"王五", "六个核桃", "三十"}
+    report = counter.tally("t", [(1, None, ("王五报工",), ()), (2, None, ("<数值>个核桃",), ()), (3, None, ("今天产量",), ()),
+                                 (4, None, ("今天入库 <数值> 箱",), ()), (5, "F_A", ("六个核桃",), ()),
+                                 (6, "F_A", ("王五",), ())], directory, union)
+    by = {e["factory_id"]: e for e in report}
+    assert (by[None]["global_rows_compared"], by[None]["rows_with_possible_name"]) == (4, 2)
+    assert (by[None]["possible_name_row_ids"], by[None]["possible_masked_name_row_ids"]) == (["1", "2"], ["2"])
+    assert (by[None]["row_ids"], by[None]["rows_unchecked"]) == ([], 0)
+    assert by["F_A"]["row_ids"] == ["6"]                                   # 5 names F_B: own directory only
+    assert by["F_A"]["possible_name_row_ids"] == []
+
+
+def test_without_the_flag_global_rows_stay_unchecked():
+    directory = counter.tc.directory_by_factory([("F_A", "王五")])
+    report = counter.tally("t", [(1, None, ("王五报工",), ())], directory)
+    assert (report[0]["rows_unchecked"], report[0]["global_rows_compared"], report[0]["possible_name_row_ids"]) == (1, 0, [])
+
+
+def test_global_union_refuses_factory(capsys):
+    with pytest.raises(SystemExit) as stop:
+        counter.main(["--since", "2026-11-04 12:00:00", "--global-union", "--factory", "F006"])
+    assert stop.value.code == 2
+    assert "--global-union" in capsys.readouterr().err
+
+
+def test_the_flag_reaches_measure(monkeypatch, capsys):
+    class _Conn:
+        def close(self):
+            pass
+
+    seen = []
+    monkeypatch.setattr(counter, "_connect", _Conn)
+    monkeypatch.setattr(counter, "measure", lambda *a: (seen.append(a[3]) or (0, {})))
+    counter.main(["--since", "2026-11-04 12:00:00", "--global-union"])
+    counter.main(["--since", "2026-11-04 12:00:00"])
+    assert seen == [True, False]
+
+
+def test_self_test_exits_two_when_a_global_row_is_not_compared(monkeypatch, capsys):
+    monkeypatch.setattr(counter, "is_global_row", lambda _f: False)
+    assert counter.main(["--self-test"]) == 2
+    assert "global" in capsys.readouterr().out
+
+
 def test_the_production_directory_sql_and_matcher_are_the_ones_used():
     assert counter.tc.ALL_FACTORY_DIRECTORY_SQL is __import__(
         "common.process_secret_sql", fromlist=["x"]).ALL_FACTORY_DIRECTORY_SQL
@@ -319,6 +372,58 @@ def test_measure_on_real_postgres_counts_all_three_tables_and_writes_nothing():
         assert code == 2                                                   # nothing scanned is not a clean 0
         assert empty["no_rows_in_window"] is True and "not that the run failed" in empty["note"]
         assert "error" not in empty                                        # and it does not read as a failure
+    finally:
+        _drop(conn, schema)
+
+
+def test_global_union_on_real_postgres_counts_global_rows_and_shows_no_text():
+    schema = "leak_" + uuid.uuid4().hex[:10]
+    conn = _connection(schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO ai_learned_expressions VALUES
+                    ('e-1', NULL, '王五的订单', '2026-11-04 13:00'),
+                    ('e-2', '*', '赵六的订单', '2026-11-04 13:00'),
+                    ('e-3', NULL, '<数值>个核桃的订单', '2026-11-04 13:00'),
+                    ('e-4', NULL, '今天产量多少', '2026-11-04 13:00'),
+                    ('e-5', NULL, '王五的订单', '2026-11-03 13:00');
+                INSERT INTO ai_intent_configs VALUES
+                    ('i-1', NULL, '["本月", "华联超市"]', '2025-01-01', '2026-11-04 13:00'),
+                    ('i-2', NULL, '["本月"]', '2025-01-01', '2026-11-04 13:00');
+                INSERT INTO ai_training_samples VALUES (1, 'F_A', '赵六今天报工', '2026-11-04 13:00');
+            """)
+        plain_code, plain = counter.measure(conn, "2026-11-04 12:00:00")
+        assert (plain_code, plain["global_union"], plain["rows_with_possible_name"]) == (0, False, 0)
+        assert plain["rows_unchecked"] == 6                                # the same rows, not compared
+
+        code, report = counter.measure(conn, "2026-11-04 12:00:00", global_union=True)
+        assert code == 1                                                   # a possible hit is a hit to read
+        by = {(e["table"], e["factory_id"]): e for e in report["tables"]}
+        assert by[("ai_learned_expressions", None)]["possible_name_row_ids"] == ["e-1", "e-3"]
+        assert by[("ai_learned_expressions", None)]["possible_masked_name_row_ids"] == ["e-3"]
+        assert by[("ai_learned_expressions", "*")]["possible_name_row_ids"] == ["e-2"]   # 赵六 is F_B's
+        assert by[("ai_intent_configs", None)]["possible_name_row_ids"] == ["i-1"]       # keywords, one at a time
+        assert (report["rows_with_possible_name"], report["rows_with_possible_masked_name"]) == (4, 1)
+        assert report["global_rows_compared"] == 6 and report["rows_unchecked"] == 0
+        assert report["union_directory_size"] == 4                         # 王五, 华联超市, 六个核桃, 赵六
+        assert report["rows_with_name"] == 0                               # 1 names another factory: own directory only
+        dump = json.dumps(report, ensure_ascii=False)
+        for raw in ("王五", "赵六", "华联超市", "核桃", "订单", "<数值>"):
+            assert raw not in dump, raw                                    # counts and ids only
+    finally:
+        _drop(conn, schema)
+
+
+def test_global_rows_alone_are_measured_and_clean_is_exit_zero():
+    schema = "leak_" + uuid.uuid4().hex[:10]
+    conn = _connection(schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO ai_learned_expressions VALUES ('e-1', NULL, '今天产量多少', '2026-11-04 13:00')")
+        code, report = counter.measure(conn, "2026-11-04 12:00:00", global_union=True)
+        assert (code, report["rows_scanned"], report["global_rows_compared"]) == (0, 0, 1)
+        assert "error" not in report
     finally:
         _drop(conn, schema)
 
