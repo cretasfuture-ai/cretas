@@ -249,6 +249,14 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private java.math.BigDecimal materialBalanceRedPct = new java.math.BigDecimal("15.00");
 
+    /** 成本差异告警阈值 (%), V20261104_31; null = 未配置, 不告警 */
+    @Column(name = "cost_deviation_variance_pct", precision = 6, scale = 2)
+    private java.math.BigDecimal costDeviationVariancePct;
+
+    /** 物料平衡告警阈值 (%), V20261104_31; null = 未配置, 不告警 */
+    @Column(name = "cost_deviation_balance_pct", precision = 6, scale = 2)
+    private java.math.BigDecimal costDeviationBalancePct;
+
     // ==================== 审计字段 ====================
     /**
      * 创建人ID

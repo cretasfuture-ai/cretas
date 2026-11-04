@@ -77,6 +77,20 @@ public interface FactorySettingsRepository extends JpaRepository<FactorySettings
     int updateMaterialBalanceThresholds(@Param("factoryId") String factoryId, @Param("warn") java.math.BigDecimal warn,
                                         @Param("red") java.math.BigDecimal red);
 
+    /** 成本 / 损耗告警阈值 [成本差异%, 物料平衡%] (V20261104_31), 各自可空 = 未配置。 */
+    @Query("SELECT f.costDeviationVariancePct, f.costDeviationBalancePct FROM FactorySettings f WHERE f.factoryId = :factoryId")
+    java.util.List<Object[]> findCostDeviationThresholdsByFactoryId(@Param("factoryId") String factoryId);
+
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE FactorySettings f SET f.costDeviationVariancePct = :variance, f.costDeviationBalancePct = :balance WHERE f.factoryId = :factoryId")
+    int updateCostDeviationThresholds(@Param("factoryId") String factoryId, @Param("variance") java.math.BigDecimal variance,
+                                      @Param("balance") java.math.BigDecimal balance);
+
+    /** 配了任一告警阈值的工厂; 定时扫描只扫它们。 */
+    @Query("SELECT f.factoryId FROM FactorySettings f WHERE f.costDeviationVariancePct IS NOT NULL OR f.costDeviationBalancePct IS NOT NULL")
+    java.util.List<String> findFactoryIdsWithCostDeviationThresholds();
+
      /**
      * 更新AI每周配额（仅平台管理员可用）
       */

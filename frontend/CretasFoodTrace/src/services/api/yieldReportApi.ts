@@ -273,6 +273,11 @@ export interface YieldReportRequest {
    */
   blendRatio?: { reason: string; note?: string };
   /**
+   * 缺口 03 回料比例上限: 领用的源半成品是回料、占比超过本道产品上限时必填的原因 (被后端 409
+   * REWORK_RATIO_REASON_REQUIRED 拦下后补发; note 仅「其他」时必填)。快照由后端落在 custom_fields.reworkRatio。
+   */
+  reworkRatio?: { reason: string; note?: string };
+  /**
    * 缺口 13 (审查中 7): 本道挂了关键控制点时, 完工出成随请求带上 CCP 实测值 ——
    * 后端与产出同一事务落库; 缺一项整笔 400 (CCP_READING_MISSING), 产出不入账。
    */

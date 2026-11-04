@@ -6,6 +6,9 @@ import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 
 import java.util.Objects;
 
@@ -53,7 +56,8 @@ public final class SalesFinishedGoodsOwnershipGuard {
                         .withHint(prestocked
                                 ? "只能选择已由本订单预留的客户已有库存"
                                 : "请选择该客户订单生产并入库的成品批次")
-                        .withHintTarget(hintTarget);
+                        .withHintTarget(hintTarget)
+                    .withDiagnosis(GateDiagnosis.of(GateId.SALES_FG_OWNERSHIP, "CUSTOMER_OWNED_FINISHED_GOODS_SCOPE_MISMATCH", "FG_BATCH", batch.getBatchNumber()).resolve(prestocked ? "只能选择已由本订单预留的客户已有库存" : "改选该客户订单生产并入库的成品批次", null).build());
             }
             return;
         }
@@ -61,7 +65,8 @@ public final class SalesFinishedGoodsOwnershipGuard {
         if (batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
             throw new BusinessException(409, "普通销售订单不能发出客户所有的成品库存")
                     .withCode("CUSTOMER_OWNED_FINISHED_GOODS_FORBIDDEN")
-                    .withHintTarget(hintTarget);
+                    .withHintTarget(hintTarget)
+                    .withDiagnosis(GateDiagnosis.of(GateId.SALES_FG_OWNERSHIP, "CUSTOMER_OWNED_FINISHED_GOODS_FORBIDDEN", "FG_BATCH", batch.getBatchNumber()).resolve("批次 " + batch.getBatchNumber() + " 是客户所有的成品, 普通销售订单不能发; 改选公司自有成品批次", null).build());
         }
     }
 

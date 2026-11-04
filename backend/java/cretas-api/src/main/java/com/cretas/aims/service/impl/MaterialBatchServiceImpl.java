@@ -1886,7 +1886,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         MaterialBatchStatus st = batch.getStatus();
         if (st != null && st.blocksProduction()) {
             throw new BusinessException(409, st.productionBlockedMessage())
-                    .withHint(st.productionBlockedHint());
+                    .withHint(st.productionBlockedHint())
+                    .withDiagnosis(com.cretas.aims.service.gate.MaterialBatchStateGate.diagnose(batch).orElseThrow());
         }
     }
 

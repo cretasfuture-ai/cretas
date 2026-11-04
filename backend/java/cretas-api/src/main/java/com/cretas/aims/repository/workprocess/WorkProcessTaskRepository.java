@@ -31,6 +31,17 @@ public interface WorkProcessTaskRepository extends JpaRepository<WorkProcessTask
             String factoryId, Long workflowInstanceId);
 
     /**
+     * 物理删除某工艺实例的任务 (只给重钉丢弃未开工的编译产物用)。实体是软删的, {@code delete} 留下的行
+     * 会挡住删实例的外键。调用方要先确认没有报工 / 库存引用这些任务。
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query(value = "DELETE FROM work_process_tasks "
+            + "WHERE factory_id = :factoryId AND workflow_instance_id = :workflowInstanceId", nativeQuery = true)
+    int hardDeleteCompiledTasks(@org.springframework.data.repository.query.Param("factoryId") String factoryId,
+                                @org.springframework.data.repository.query.Param("workflowInstanceId")
+                                Long workflowInstanceId);
+
+    /**
      * 列出某批次某状态的工序任务 (按 processOrder 升序).
      */
     List<WorkProcessTask> findByFactoryIdAndProductionBatchIdAndStatusOrderByProcessOrderAsc(

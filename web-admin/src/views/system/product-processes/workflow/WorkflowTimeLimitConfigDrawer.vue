@@ -33,7 +33,7 @@
               data-testid="time-limit-enabled"
             />
           </div>
-          <el-form v-if="drafts[index].enabled" label-width="124px" label-position="left" size="small">
+          <el-form v-if="drafts[index].enabled" label-width="156px" label-position="left" size="small">
             <el-form-item label="时限(分钟)" required>
               <el-input-number
                 v-model="drafts[index].maxMinutes"
