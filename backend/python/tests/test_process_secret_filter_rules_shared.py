@@ -155,19 +155,43 @@ def test_desensitize_cases():
     assert "工厂A" not in desensitize_for_training("分析以下工厂数据", "")[0]
 
 
-def test_python_training_filter_does_not_read_any_secrecy_switch():
-    """Steve 2026-11-04: person / customer names and pay / attendance values are always filtered,
-    no setting controls them. Python's training side reads no switch today, so nothing can turn
-    them off. PR-2 wires d here: when this goes red, keep the directory check and
-    ``pay_word_with_value`` outside d (see FactoryLists) and move this test to pin that instead
-    of deleting it."""
+def _function_source(path, name):
+    import ast
+
+    source = path.read_text(encoding="utf-8")
+    node = next(n for n in ast.walk(ast.parse(source))
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
+    return ast.get_source_segment(source, node)
+
+
+def test_the_always_on_checks_cannot_reach_the_training_filter():
+    """Steve 2026-11-04: person / customer names and pay / attendance values are always filtered, no
+    setting controls them. Item d gates the terms and the process word rule only. The behaviour is
+    pinned at each entry in test_training_filter_switch; this pins the shape: the functions that do
+    the always-on check do not mention d, so a later edit cannot quietly make them follow it."""
     root = Path(__file__).resolve().parents[1]
-    modules = ["smartbi/services/process_secret_names.py", "smartbi/services/distillation_capture.py",
-               "smartbi/services/training_consent.py", "ai/learning/learning_rules.py",
-               "scripts/export_distillation_dataset.py",
-               "scripts/corpus_judge.py", "../../scripts/finetune/training_consent_gate.py"]
+    always_on = [(root / "smartbi/services/training_consent.py", "pay_word_with_value"),
+                 (root / "smartbi/services/process_secret_names.py", "row_has_private_content"),
+                 (root / "smartbi/services/process_secret_names.py", "row_names_own_terms_for_shared_content")]
+    for path, name in always_on:
+        body = _function_source(path, name).split('"""')[-1]    # the code, not its docstring
+        assert not re.search(r"training_filter_on|filtered_terms|factory_secrecy|TRAINING_FILTER", body), name
+
+
+def test_only_the_lists_and_the_finetune_gate_read_the_training_filter():
+    """One read point in the service: the lists carry d. A second reader would be a second place
+    that can disagree with it (the finetune gate is sync and reads a snapshot by the same rule)."""
+    root = Path(__file__).resolve().parents[1]
+    modules = ["smartbi/services/distillation_capture.py", "ai/learning/learning_rules.py",
+               "ai/learning/expression_learner.py", "ai/learning/keyword_learner.py",
+               "scripts/export_distillation_dataset.py", "scripts/corpus_judge.py",
+               "scripts/training_name_leak_count.py"]
     readers = [m for m in modules if re.search(r"factory_secrecy|TRAINING_FILTER", (root / m).read_text(encoding="utf-8"))]
     assert readers == []
+    lists_module = (root / "smartbi/services/process_secret_names.py").read_text(encoding="utf-8")
+    assert "factory_secrecy.TRAINING_FILTER" in lists_module
+    gate = (root / "../../scripts/finetune/training_consent_gate.py").read_text(encoding="utf-8")
+    assert "r.TRAINING_FILTER" in gate
 
 
 def test_word_file_switch_is_a_strict_json_boolean():

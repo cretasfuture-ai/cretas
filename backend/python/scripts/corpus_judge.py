@@ -89,11 +89,12 @@ logger = logging.getLogger("corpus_judge")
 # Training rule (owner 2026-10-24): only synthetic seed rows and rows that passed the
 # 2026-10-24 training rule at capture are read / labeled / sent out here.
 from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
-# Privacy clause 6: rows naming one of their factory's process-secret terms are
-# never sent to the judge LLM (rows with no factory are not read at all), and
-# neither are rows naming one of its people / customers or holding a pay /
-# attendance value (privacy, no setting controls it: Steve 2026-11-04). The
-# CURRENT lists are applied on every run ("judge 每次按当前名单重判"): an exclusion
+# Privacy clause 6: while a factory's training filter (item d) is on, rows naming one
+# of its process-secret terms or holding a process value are not sent to the judge LLM
+# (rows with no factory are not read at all). Rows naming one of its people / customers
+# or holding a pay / attendance value never are (privacy, no setting controls it:
+# Steve 2026-11-04). The
+# CURRENT lists and d are applied on every run ("judge 每次按当前名单重判"): an exclusion
 # flag records the list fingerprint it was made under, and a row flagged under a
 # different list is fetched and judged again. Rows held at capture
 # (secrecy_recheck) are re-judged first. A failed lookup aborts the run.

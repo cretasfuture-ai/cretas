@@ -9,12 +9,23 @@ Per factory:
 * ``directory``: its people (``users.full_name``) and customers
   (``customers.name``), matched exactly.
 
-A sample naming any of them is not stored / exported / judged. A sample with no
+A sample naming any of ``directory`` is not stored / exported / judged, whatever
+any setting says. A sample naming one of ``terms`` is not, while the training filter
+(item d) of the factory that owns the sample is on. A sample with no
 factory is matched against NOTHING — never against the union of every factory's
 lists (that union blocked a no-factory row for naming another factory's 牛腱):
 capture refuses rows without a factory, and readers drop them
 (``row_names_protected_product`` is False for them, ``passes_training_rule`` and
 ``usable_rows_sql`` exclude them).
+
+Item d is read here and nowhere else in the service: :func:`factory_lists` and
+:func:`all_factory_lists` stamp it on what they return (``FactoryLists.training_filter_on``),
+so capture, export, the corpus scripts and the learners all follow it. It is read on every
+call, not cached with the lists, through ``common.factory_secrecy.is_on`` (10 seconds, and a
+read error or an unknown factory counts as ON). A factory with no lists at all is not in the
+map and reads as ON. Content shared across factories does not follow d:
+:func:`row_names_own_terms_for_shared_content`. ``FactoryLists.terms`` itself never changes with
+d, so anything built from it stays independent of every switch.
 
 The lists live in the Cretas main database; this module reads them through
 ``get_cretas_pool``. Lookup errors propagate, EXCEPT through
@@ -25,11 +36,13 @@ re-checks held rows against the current lists.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
+from common import factory_secrecy
 from common.process_secret_sql import (  # noqa: F401
     ALL_FACTORY_DIRECTORY_SQL,
     ALL_PROTECTED_TERMS_SQL,
@@ -52,17 +65,25 @@ _CACHE_SECONDS = 60.0
 class FactoryLists:
     """One factory's lists. ``terms`` and ``directory`` are already folded.
 
-    INVARIANT (Steve 2026-11-04) for whoever wires the training filter switch (item d, PR-2)
-    into Python: ``directory`` (person and customer names) and the pay / attendance word +
-    value rule (``training_consent.pay_word_with_value``) are PRIVACY, not secrecy. They are
-    always filtered from training, learning and distillation samples and NO setting controls
-    them. Only ``terms`` (protected products) and the process word + value rule may follow d.
-    Never skip a whole check because d is off: split it, as Java ProcessSecretSampleFilter.check does."""
+    INVARIANT (Steve 2026-11-04): ``directory`` (person and customer names) and the pay /
+    attendance word + value rule (``training_consent.pay_word_with_value``) are PRIVACY, not
+    secrecy. They are always filtered from training, learning and distillation samples and NO
+    setting controls them. Only ``terms`` (protected products) and the process word + value
+    rule follow the training filter (item d, ``training_filter_on``). Never skip a whole check
+    because d is off: split it, as Java ProcessSecretSampleFilter.checkTrainingSample does.
+
+    ``terms`` is always the full list; read ``filtered_terms`` for "what this sample's factory
+    filters now". ``training_filter_on`` defaults to True: lists built by hand filter everything."""
     terms: FrozenSet[str] = frozenset()
     directory: FrozenSet[str] = frozenset()
+    training_filter_on: bool = True
+
+    @property
+    def filtered_terms(self) -> FrozenSet[str]:
+        return self.terms if self.training_filter_on else frozenset()
 
     def names_any(self, *texts: Optional[str]) -> bool:
-        return mentions_any(self.terms, *texts) or mentions_any(self.directory, *texts)
+        return mentions_any(self.filtered_terms, *texts) or mentions_any(self.directory, *texts)
 
 
 EMPTY_LISTS = FactoryLists()
@@ -91,7 +112,18 @@ def lists_from_rows(product_rows: Iterable[Mapping[str, Any]],
     return FactoryLists(terms=secret_terms_from_policy_rows(product_rows), directory=directory_names(names))
 
 
+async def _with_training_filter(factory_id: str, lists: FactoryLists) -> FactoryLists:
+    """``lists`` stamped with item d as it stands now. The caches keep the unstamped lists."""
+    on = await factory_secrecy.is_on(factory_id, factory_secrecy.TRAINING_FILTER)
+    return replace(lists, training_filter_on=on)
+
+
 async def factory_lists(factory_id: str, pool=None) -> FactoryLists:
+    """Lists of one factory, with its item d. Lookup errors propagate (never cached)."""
+    return await _with_training_filter(factory_id, await _load_factory_lists(factory_id, pool))
+
+
+async def _load_factory_lists(factory_id: str, pool=None) -> FactoryLists:
     """Lists of one factory (cached 60 s). Errors propagate (never cached)."""
     now = time.monotonic()
     hit = _cache.get(factory_id)
@@ -118,12 +150,19 @@ async def factory_lists_or_last_good(factory_id: str, pool=None) -> Tuple[Factor
         last = _last_good.get(factory_id)
         if last is None:
             raise
-        return last, True
+        return await _with_training_filter(factory_id, last), True
 
 
 async def all_factory_lists(pool=None) -> Mapping[str, FactoryLists]:
-    """``{factory_id: FactoryLists}`` for every factory with protected products,
-    people or customers (cached 60 s). Errors propagate (never cached)."""
+    """``{factory_id: FactoryLists}`` for every factory with protected products, people or
+    customers, each with its item d. Lookup errors propagate (never cached)."""
+    raw = await _load_all_factory_lists(pool)
+    stamped = await asyncio.gather(*(_with_training_filter(f, lists) for f, lists in raw.items()))
+    return dict(zip(raw, stamped))
+
+
+async def _load_all_factory_lists(pool=None) -> Mapping[str, FactoryLists]:
+    """Every factory's lists (cached 60 s). Errors propagate (never cached)."""
     now = time.monotonic()
     hit = _all_cache.get(_ALL)
     if hit and now - hit[0] < _CACHE_SECONDS:
@@ -156,9 +195,10 @@ def lists_for_row(factory_id: Optional[str],
 
 
 def terms_fingerprint(by_factory: Optional[Mapping[str, FactoryLists]]) -> str:
-    """Fingerprint of every factory's secret terms (corpus_judge records it on
-    rows it excluded, and re-judges rows excluded under a different list)."""
-    return fingerprint(f"{f}\t{t}" for f, lists in (by_factory or {}).items() for t in lists.terms)
+    """Fingerprint of the terms each factory filters now (corpus_judge records it on rows it
+    excluded, and re-judges rows excluded under a different list). Item d counts: switching it
+    changes what is filtered, so the rows excluded before are looked at again."""
+    return fingerprint(f"{f}\t{t}" for f, lists in (by_factory or {}).items() for t in lists.filtered_terms)
 
 
 SAMPLE_TEXT_FIELDS: Tuple[str, ...] = ("input_text", "teacher_output")
@@ -167,10 +207,38 @@ SAMPLE_TEXT_FIELDS: Tuple[str, ...] = ("input_text", "teacher_output")
 def row_names_protected_product(row: Mapping[str, Any],
                                 by_factory: Optional[Mapping[str, FactoryLists]],
                                 fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> bool:
-    """True when a ``smart_bi_distillation_samples`` row (``factory_id`` plus
-    the text ``fields``) names one of its factory's process-secret terms."""
+    """True when a ``smart_bi_distillation_samples`` row (``factory_id`` plus the text
+    ``fields``) names one of the process-secret terms its factory filters (item d)."""
     lists = lists_for_row(row.get("factory_id"), by_factory)
-    return mentions_any(lists.terms, *(row.get(f) for f in fields))
+    return mentions_any(lists.filtered_terms, *(row.get(f) for f in fields))
+
+
+def row_names_own_terms_for_shared_content(row: Mapping[str, Any],
+                                           by_factory: Optional[Mapping[str, FactoryLists]],
+                                           fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> bool:
+    """For content that crosses factories (the shared export): the row names one of its own
+    factory's terms. Reads ``terms``, never ``training_filter_on``: no secrecy setting opens this,
+    as in Java ProcessSecretSampleFilter.checkSharedContent (a factory with d off, or with
+    everything off, still keeps its terms out of what other factories get).
+    The row's OWN factory only, on purpose: another factory's product with the same name is not
+    secret there (see the module doc on the union of every factory's lists)."""
+    return mentions_any(lists_for_row(row.get("factory_id"), by_factory).terms, *(row.get(f) for f in fields))
+
+
+def row_has_process_value(row: Mapping[str, Any],
+                          by_factory: Optional[Mapping[str, FactoryLists]],
+                          fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> bool:
+    """True when a row holds a process word with a value and its factory's item d is on. Capture
+    does not stop this while d is off, so a row kept then can reach a reader after d is turned on;
+    every reader checks again. ``teacher_output`` is the answer, the other fields are input.
+    Synthetic seed rows are made up: nothing in them is anyone's process."""
+    from smartbi.services.training_consent import is_synthetic_factory, qa_process_value
+
+    factory_id = row.get("factory_id")
+    if is_synthetic_factory(factory_id) or not lists_for_row(factory_id, by_factory).training_filter_on:
+        return False
+    return any(qa_process_value(None, row.get(f)) if f == "teacher_output" else qa_process_value(row.get(f), None)
+               for f in fields)
 
 
 def row_has_private_content(row: Mapping[str, Any],
@@ -194,9 +262,10 @@ def drop_rows_naming_protected_products(
         rows: Iterable[Any],
         by_factory: Optional[Mapping[str, FactoryLists]],
         fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> List[Any]:
-    """Rows that name none of their factory's process-secret terms and hold nothing private
-    (``row_has_private_content``) (corpus scripts: LLM judge, human review sampling, eval
-    freeze, synthesis report). Rows must carry ``factory_id`` and the text ``fields``. A real row with no
+    """Rows that hold nothing private (``row_has_private_content``, always checked) and, while
+    their factory's item d is on, name none of its process-secret terms and hold no process word
+    with a value (corpus scripts: LLM judge, human review sampling, eval freeze, synthesis
+    report). Rows must carry ``factory_id`` and the text ``fields``. A real row with no
     factory is dropped as well: it cannot be checked against anyone's lists
     (``usable_rows_sql`` already excludes it; this is the second lock).
     ``by_factory`` comes from ``all_factory_lists``: a failed lookup must abort
@@ -204,6 +273,7 @@ def drop_rows_naming_protected_products(
     fields = tuple(fields)
     return [r for r in rows
             if r.get("factory_id") and not row_names_protected_product(r, by_factory, fields)
+            and not row_has_process_value(r, by_factory, fields)
             and not row_has_private_content(r, by_factory, fields)]
 
 
@@ -272,15 +342,21 @@ async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists]
     """Re-judge rows held at capture (``RECHECK_KEY``) against the CURRENT lists
     (``by_factory`` from :func:`all_factory_lists` — a failed lookup must abort
     the caller first), on the raw capture text. Clean rows are released (marker and
-    raw text removed, usable again). Rows that now name a secret term, person or
-    customer are flagged ``REJECTED_KEY`` and kept for manual review — never
+    raw text removed, usable again). Rows that now name a person or customer, hold a pay value
+    or, while the factory's item d is on, name a secret term or hold a process value are
+    flagged ``REJECTED_KEY`` and kept for manual review — never
     deleted (Q5); they stay out of every export / training read, and keep only
     the reason, the list version and the time (no raw text). Held rows past the
     retention are deleted first.
     Returns ``{"released": n, "rejected": n, "expired": n}``."""
     from datetime import datetime, timezone
 
-    from smartbi.services.training_consent import DESENSITIZED_KEY, RECHECK_KEY, REJECTED_KEY
+    from smartbi.services.training_consent import (
+        DESENSITIZED_KEY,
+        RECHECK_KEY,
+        REJECTED_KEY,
+        qa_has_blocked_content,
+    )
 
     async with smartbi_pool.acquire() as conn:
         expired = await expire_held_rows(conn)
@@ -295,6 +371,9 @@ async def rejudge_held_rows(smartbi_pool, by_factory: Mapping[str, FactoryLists]
             reject.append((r["id"], {"reason": "no_factory", "lists": version, "at": now}))
         elif lists.names_any(raw_in, raw_out):
             reject.append((r["id"], {"reason": "names_factory_list", "lists": version, "at": now}))
+        elif qa_has_blocked_content(raw_in, raw_out, directory=lists.directory,
+                                    training_filter_on=lists.training_filter_on):
+            reject.append((r["id"], {"reason": "blocked_content", "lists": version, "at": now}))
         else:
             release.append(r["id"])
     async with smartbi_pool.acquire() as conn:

@@ -17,7 +17,19 @@ Customer wording: docs sent to the website session the same day.
   * Intent mappings (utterance -> intent) are used by default with numbers and
     phone / ID / bank numbers masked. They teach UNDERSTANDING, so an utterance
     may describe steps ("腌制和滚揉一起做").
-  * Never used, for any factory, authorized or not:
+  * Never used, for any factory, authorized or not. Privacy: no setting controls
+    these (Steve 2026-11-04):
+      - pay / attendance (``PERSONNEL_MARKERS``) WITH a concrete value, in Q&A and
+        in utterances, same rule as the process words (Steve 2026-11-03 Q2, A:
+        "本月工资总额" alone passes, "本月工资总额 35 万" is blocked);
+      - a person or customer of THAT factory, matched exactly against its own
+        ``users.full_name`` / ``customers.name`` (``directory``, loaded by
+        ``smartbi.services.process_secret_names``). The old regex guess
+        (role word + surname, company suffix) is gone: it blocked "员工周报在哪看",
+        "我们公司客户有哪些" and similar sentences that name nobody.
+  * Not used while the sample factory's training filter (item d, ``TRAINING_FILTER``)
+    is on, authorized or not. Secrecy: d is per factory, by the factory that owns the
+    sample, default OFF; a read error or an unknown factory counts as ON:
       - a process word WITH a concrete value (Steve 2026-10-29, option A): a
         process-parameter / recipe word (``PARAMETER_MARKERS``) — and in Q&A
         also a step / problem-handling word (``STRUCTURE_MARKERS``,
@@ -25,15 +37,9 @@ Customer wording: docs sent to the website session the same day.
         number (``process_word_with_value``). The word alone ("杀菌温度一般设多少",
         "建议优化卤制工序") no longer blocks: the secret is the value / the
         factory's own step order ("腌制 24 小时再滚揉", "滚揉 … 良品率 92.86%");
-      - pay / attendance (``PERSONNEL_MARKERS``) WITH a concrete value, in Q&A and
-        in utterances, same rule as the process words (Steve 2026-11-03 Q2, A:
-        "本月工资总额" alone passes, "本月工资总额 35 万" is blocked). Privacy like
-        names (Steve 2026-11-04): no setting controls it;
-      - a person or customer of THAT factory, matched exactly against its own
-        ``users.full_name`` / ``customers.name`` (``directory``, loaded by
-        ``smartbi.services.process_secret_names``). The old regex guess
-        (role word + surname, company suffix) is gone: it blocked "员工周报在哪看",
-        "我们公司客户有哪些" and similar sentences that name nobody.
+      - the factory's protected product terms (``FactoryLists.terms``). The exception
+        is what crosses factories: the shared export checks them whatever d says
+        (``process_secret_names.row_names_own_terms_for_shared_content``).
     A hit drops the whole sample; masking is no substitute (商业秘密保护规定
     第五至七、十一至十二条: protection is not limited to numbers).
 
@@ -198,17 +204,24 @@ def _names_directory(directory: Optional[Iterable[str]]) -> Iterable[str]:
     return directory
 
 
+def qa_process_value(input_text: Optional[str], answer: Optional[str]) -> bool:
+    """A process word with a value in a Q&A sample. Follows the training filter (item d)."""
+    return (process_word_with_value(input_text, QA_INPUT_PROCESS_MARKERS)
+            or process_word_with_value(answer, QA_ANSWER_PROCESS_MARKERS))
+
+
 def qa_has_blocked_content(input_text: Optional[str], answer: Optional[str], *,
-                           directory: Iterable[str]) -> bool:
-    """True when a Q&A / insight sample must not be stored (any factory).
+                           directory: Iterable[str], training_filter_on: bool = True) -> bool:
+    """True when a Q&A / insight sample must not be stored.
 
     ``directory``: the sample factory's people and customer names
-    (``process_secret_names.FactoryLists.directory``)."""
+    (``process_secret_names.FactoryLists.directory``). ``training_filter_on``: item d of the
+    factory that owns the sample (``FactoryLists.training_filter_on``). It gates the process
+    word rule only: the pay rule and ``directory`` run either way."""
     from common.process_secret_terms import mentions_any
 
     names = _names_directory(directory)
-    if (process_word_with_value(input_text, QA_INPUT_PROCESS_MARKERS)
-            or process_word_with_value(answer, QA_ANSWER_PROCESS_MARKERS)):
+    if training_filter_on and qa_process_value(input_text, answer):
         return True
     # Q2 (Steve 2026-11-03, A): pay / attendance words block only with a value nearby, too
     if pay_word_with_value(input_text, answer):
@@ -216,15 +229,16 @@ def qa_has_blocked_content(input_text: Optional[str], answer: Optional[str], *,
     return mentions_any(names, input_text, answer)
 
 
-def utterance_has_blocked_content(text: Optional[str], *, directory: Iterable[str]) -> bool:
-    """True when an intent utterance must not be stored (any factory): a recipe /
-    parameter word or a pay / attendance word with a value, or one of the factory's
-    people / customers."""
+def utterance_has_blocked_content(text: Optional[str], *, directory: Iterable[str],
+                                  training_filter_on: bool = True) -> bool:
+    """True when an intent utterance must not be stored: a pay / attendance word with a value,
+    one of the factory's people / customers, or (item d on) a recipe / parameter word with a
+    value. Same verdicts as Java ``TrainingSampleRules.utteranceBlocked``."""
     from common.process_secret_terms import mentions_any
 
     names = _names_directory(directory)
-    return (process_word_with_value(text, UTTERANCE_MARKERS) or pay_word_with_value(text)
-            or mentions_any(names, text))
+    return ((training_filter_on and process_word_with_value(text, UTTERANCE_MARKERS))
+            or pay_word_with_value(text) or mentions_any(names, text))
 
 
 def remove_personal_identifiers(text: Optional[str]) -> Optional[str]:
@@ -253,12 +267,13 @@ def is_withdrawn(scope: str) -> bool:
     return scope == WITHDRAWN
 
 
-def desensitize_utterance(scope: str, text: Optional[str], *,
-                          directory: Iterable[str]) -> Tuple[bool, Optional[str]]:
-    """Intent-mapping rule: ``(keep, text)``. Withdrawn factories, parameter /
-    recipe or pay / attendance content with a value and the factory's people /
-    customers are dropped; authorized -> raw; otherwise numbers masked."""
-    if is_withdrawn(scope) or utterance_has_blocked_content(text, directory=directory):
+def desensitize_utterance(scope: str, text: Optional[str], *, directory: Iterable[str],
+                          training_filter_on: bool = True) -> Tuple[bool, Optional[str]]:
+    """Intent-mapping rule: ``(keep, text)``. Withdrawn factories, pay / attendance content
+    with a value, the factory's people / customers and (item d on) parameter / recipe content
+    with a value are dropped; authorized -> raw; otherwise numbers masked."""
+    if is_withdrawn(scope) or utterance_has_blocked_content(
+            text, directory=directory, training_filter_on=training_filter_on):
         return False, None
     if keeps_raw(scope):
         return True, text
@@ -270,6 +285,14 @@ def desensitize_utterance(scope: str, text: Optional[str], *,
 # this module so the SQL stays in one place.
 from common.process_secret_sql import ALL_FACTORY_DIRECTORY_SQL, ALL_PROTECTED_TERMS_SQL  # noqa: E402,F401
 from common.process_secret_terms import mentions_any  # noqa: E402,F401  (finetune gate)
+# item d for the finetune gate (sync, psycopg2). The rule itself is common.factory_secrecy's.
+from common.factory_secrecy import (  # noqa: E402,F401
+    ALL_FACTORIES_SQL,
+    ALL_SETTINGS_SQL,
+    TRAINING_FILTER,
+    settings_snapshot,
+    snapshot_is_on,
+)
 
 
 def lists_by_factory(product_rows: Iterable[Mapping[str, Any]],

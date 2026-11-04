@@ -55,14 +55,21 @@ class _Conn:
 
 
 class _CretasCursor:
-    """The cretas DB as the gate reads it: protected products (with policy aliases) and the
-    people / customer directory, keyed by which SQL ran."""
+    """The cretas DB as the gate reads it: protected products (with policy aliases), the
+    people / customer directory and the secrecy settings, keyed by which SQL ran.
+    ``factories`` None = the settings read fails, which the gate reads as item d ON."""
 
-    def __init__(self, products, people):
+    def __init__(self, products, people, factories=None, settings=()):
         self._products, self._people = products, people
+        self._factories, self._settings = factories, settings
         self._rows, self.description = [], []
 
     def execute(self, sql, params=None):
+        if "factory_secrecy_settings" in sql or "FROM factories" in sql:
+            if self._factories is None:
+                raise RuntimeError("relation does not exist")
+            self._rows = ([(f,) for f in self._factories] if "FROM factories" in sql else list(self._settings))
+            return
         if "process_secret_policies" in sql:
             cols = ["factory_id", "id", "code", "name", "category", "product_category", "aliases"]
             self._rows = [tuple(p.get(c) for c in cols) for p in self._products]
@@ -82,11 +89,12 @@ class _CretasCursor:
 
 
 class _CretasConn:
-    def __init__(self, products=(), people=()):
+    def __init__(self, products=(), people=(), factories=None, settings=()):
         self._products, self._people = list(products), list(people)
+        self._factories, self._settings = factories, settings
 
     def cursor(self, *a, **kw):
-        return _CretasCursor(self._products, self._people)
+        return _CretasCursor(self._products, self._people, self._factories, self._settings)
 
     def close(self):
         pass
@@ -96,11 +104,13 @@ class _CretasConn:
 def _fresh_cache(monkeypatch):
     gate.consent_map.cache_clear()
     gate.factory_lists_map.cache_clear()
+    gate.training_filter_snapshot.cache_clear()
     # factory lists come from the cretas DB: none by default (tests set their own)
     monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn())
     yield
     gate.consent_map.cache_clear()
     gate.factory_lists_map.cache_clear()
+    gate.training_filter_snapshot.cache_clear()
 
 
 def test_the_factorys_own_people_are_dropped_and_others_kept(monkeypatch):
@@ -136,6 +146,51 @@ def test_process_secret_terms_tenants_and_missing_factories_are_dropped(monkeypa
     kept = gate.apply_utterance_rule(rows, ("user_input",))
     assert [(r["factory_id"], r["user_input"]) for r in kept] == [
         ("F007", "<数值>礼盒今天发了多少"), ("F006", "批次 <数值> 今天完工了吗")]
+
+
+_D_FACTORY = "F_D"
+_D_PRODUCT = {"factory_id": _D_FACTORY, "id": "p1", "code": "C-1", "name": "秘制牛肉干", "category": None,
+              "product_category": None, "aliases": None}
+_D_SAMPLES = {"plain": "本月产量多少", "product": "秘制牛肉干本月销量多少", "process": "这个产品配方里盐放 3 克",
+              "person": "王五本月产量多少", "customer": "华联超市的订单多少", "pay": "本月工资 8000 元"}
+_D_ROW = (_D_FACTORY, "TRAINING_FILTER")
+
+
+@pytest.mark.parametrize("factories, settings, kept", [
+    # d defaults to off: the transition. Privacy stays filtered, the d items pass.
+    ([_D_FACTORY], (), {"plain", "product", "process"}),
+    ([_D_FACTORY], [(*_D_ROW, False)], {"plain", "product", "process"}),
+    ([_D_FACTORY], [(*_D_ROW, None)], {"plain", "product", "process"}),
+    ([_D_FACTORY], [(*_D_ROW, True)], {"plain"}),
+    (None, (), {"plain"}),                               # settings unreadable -> ON, the script goes on
+    ([], (), {"plain"}),                                 # not in the factories table -> ON
+    ([], [(*_D_ROW, False)], {"plain"}),                 # a setting cannot outvote "no such factory"
+], ids=["default_no_row", "explicit_off", "follow_null", "on", "read_error", "unknown_factory", "orphan_setting"])
+def test_the_training_filter_per_owner_factory(monkeypatch, factories, settings, kept):
+    monkeypatch.setattr(gate, "_connect", lambda: _Conn([(_D_FACTORY, "private")]))
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn(
+        products=[_D_PRODUCT], people=[(_D_FACTORY, "王五"), (_D_FACTORY, "华联超市")],
+        factories=factories, settings=settings))
+    rows = [{"factory_id": _D_FACTORY, "kind": k, "user_input": t} for k, t in _D_SAMPLES.items()]
+    out = gate.apply_utterance_rule(rows, ("user_input",))
+    assert {r["kind"] for r in out} == kept
+    assert all(r["user_input"] == _D_SAMPLES[r["kind"]] for r in out)    # authorized: raw
+
+
+def test_the_training_filter_is_per_factory_not_per_run(monkeypatch):
+    monkeypatch.setattr(gate, "_connect", lambda: _Conn([]))
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn(
+        products=[_D_PRODUCT, {**_D_PRODUCT, "factory_id": "F_ON"}], factories=[_D_FACTORY, "F_ON"],
+        settings=[("F_ON", "TRAINING_FILTER", True)]))
+    rows = [{"factory_id": f, "user_input": _D_SAMPLES["product"]} for f in (_D_FACTORY, "F_ON")]
+    assert [r["factory_id"] for r in gate.apply_utterance_rule(rows, ("user_input",))] == [_D_FACTORY]
+
+
+def test_with_the_filter_off_an_unauthorized_factory_still_gets_masked_numbers(monkeypatch):
+    monkeypatch.setattr(gate, "_connect", lambda: _Conn([]))
+    monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn(factories=[_D_FACTORY]))
+    out = gate.apply_utterance_rule([{"factory_id": _D_FACTORY, "user_input": _D_SAMPLES["process"]}], ("user_input",))
+    assert [r["user_input"] for r in out] == ["这个产品配方里盐放 <数值> 克"]
 
 
 def test_unreadable_names_stop_the_script(monkeypatch):

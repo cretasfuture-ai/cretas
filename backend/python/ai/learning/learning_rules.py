@@ -3,9 +3,10 @@
 工艺保密产品可以出现在授权用户的对话里, 但不许被学走、在别的工厂复现:
 
 - 全局 (factory_id 为空 / 空白 / ``*``) 一律不由系统学习写入: 全局行对所有工厂可见;
-- 本厂: 撤回训练 / 查不到授权状态不学; 提到本厂工艺保密词 (全名 / 编码 / ID) 不学;
-  配方 / 工艺参数词、工资 / 考勤词带具体数值、本厂人员姓名 / 客户名称不学
-  (``utterance_has_blocked_content``, 人名客户名按本厂表精确匹配)。
+- 本厂: 撤回训练 / 查不到授权状态不学; 工资 / 考勤词带具体数值、本厂人员姓名 / 客户名称不学
+  (隐私, 不归任何开关管; 人名客户名按本厂表精确匹配);
+- 该厂「训练数据过滤」(d) 开着时 (随名单一起读: 默认关, 读不到按开着): 提到本厂工艺保密词
+  (全名 / 编码 / ID)、配方 / 工艺参数词带具体数值也不学。
 
 判断结果三态 (:class:`Verdict`): 能学 / 不能学 / **这次判断不了** (授权状态或本厂名单查询出错)。
 判断不了的原话不学, 但也不是「不能学」—— 学习任务把它记下来, 下一轮续读重判
@@ -66,7 +67,7 @@ async def judge(factory_id: Optional[str], text: Optional[str], *,
 
     if is_global_factory(factory_id) or not text or not text.strip():
         return Verdict.SKIP
-    if process_word_with_value(text, UTTERANCE_MARKERS) or pay_word_with_value(text):
+    if pay_word_with_value(text):
         return Verdict.SKIP
     try:
         scope = await consent_scope(factory_id)
@@ -82,6 +83,8 @@ async def judge(factory_id: Optional[str], text: Optional[str], *,
         logger.warning("learning: factory lists lookup failed for %s, retry later (%s)",
                        factory_id, type(e).__name__)
         return Verdict.RETRY
+    if lists.training_filter_on and process_word_with_value(text, UTTERANCE_MARKERS):
+        return Verdict.SKIP
     return Verdict.SKIP if lists.names_any(text) else Verdict.LEARN
 
 
