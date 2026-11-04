@@ -78,4 +78,17 @@ public interface ShortageScheduleQueryRepository extends Repository<LineSchedule
     List<Object[]> findLiveOrderArrival(@Param("factoryId") String factoryId,
                                         @Param("materialTypeId") String materialTypeId);
 
+    /** 这些生产计划下还没做完的排程任务 (含已开工); 所属排程计划还在用。交付风险按它们的计划完工时间比交期。 */
+    @Query("SELECT ls FROM LineSchedule ls WHERE ls.productionPlanId IN :planIds AND ls.plan.factoryId = :factoryId "
+            + "AND ls.status IN :live AND ls.plan.status IN :livePlans")
+    List<LineSchedule> findLiveByPlanIdsIn(@Param("factoryId") String factoryId, @Param("planIds") Collection<String> planIds,
+                                           @Param("live") Collection<LineSchedule.ScheduleStatus> live,
+                                           @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans);
+
+    default List<LineSchedule> findLiveByPlanIds(String factoryId, Collection<String> planIds) {
+        return planIds.isEmpty() ? List.of() : findLiveByPlanIdsIn(factoryId, planIds, java.util.EnumSet.of(
+                LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.in_progress,
+                LineSchedule.ScheduleStatus.delayed), java.util.EnumSet.of(
+                SchedulingPlan.PlanStatus.draft, SchedulingPlan.PlanStatus.confirmed, SchedulingPlan.PlanStatus.in_progress));
+    }
 }
