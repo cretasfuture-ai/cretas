@@ -148,7 +148,7 @@ jobs:
 
   postgres-reversal-concurrency:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     # GitHub-hosted (public repo: 4 vCPU / 16 GB). -DreuseForks=false gives each test class a fresh JVM, as
     # Aurora's Maven wrapper did: one shared fork accumulated Spring contexts and OOMed at 6g.
     env:
