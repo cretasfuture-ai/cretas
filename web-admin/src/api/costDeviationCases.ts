@@ -5,7 +5,7 @@
  * 阈值 null = 未配置, 该类不告警。
  */
 import { get, post, put } from './request';
-import type { ApiResponse } from './request';
+import type { ApiResponse } from '@/types/api';
 import type { PlanCostVariance } from './costVariance';
 
 export interface CostDeviationCase {
