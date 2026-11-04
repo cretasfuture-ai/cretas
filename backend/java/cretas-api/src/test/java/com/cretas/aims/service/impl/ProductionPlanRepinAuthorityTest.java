@@ -314,8 +314,17 @@ class ProductionPlanRepinAuthorityTest {
 
         InOrder order = inOrder(portRepo, taskRepo, instanceRepo);
         order.verify(portRepo).deleteAll(any());
-        order.verify(taskRepo).deleteAll(any());
+        // 软删实体走 deleteAll 只写 deleted_at, 行还在, 删实例会撞外键 (prod 整单 500)
+        order.verify(taskRepo).hardDeleteCompiledTasks(FACTORY, 71L);
         order.verify(instanceRepo).delete(instance);
+        org.mockito.Mockito.verify(taskRepo, org.mockito.Mockito.never()).deleteAll(any());
+    }
+
+    @Test
+    @DisplayName("任务是软删实体: 这就是物理删除不能换回 deleteAll 的原因")
+    void workProcessTaskStaysSoftDeleted() {
+        assertThat(com.cretas.aims.entity.workprocess.WorkProcessTask.class
+                .getAnnotation(org.hibernate.annotations.SQLDelete.class).sql()).contains("deleted_at");
     }
 
     /**
@@ -465,6 +474,25 @@ class ProductionPlanRepinAuthorityTest {
             assertThat(binding.getPlanNumber()).isEqualTo("PLAN-REPIN-1");
             assertThat(binding.isProductionStarted()).isTrue();
         });
+    }
+
+    @Test
+    @DisplayName("已取消的计划不跟新版本: 不改绑、不动它的运行时")
+    void automaticRepinSkipsCancelledPlans() throws Exception {
+        ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+        ProcessSheetRowRepository rowRepo = mock(ProcessSheetRowRepository.class);
+        ProductionPlan plan = plan();
+        plan.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
+        when(planRepo.findByFactoryIdAndSelectedWorkflowIdIn(org.mockito.ArgumentMatchers.eq(FACTORY), any()))
+                .thenReturn(List.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
+        Long before = plan.getSelectedWorkflowId();
+
+        var summary = newService(planRepo, rowRepo)
+                .repinUnstartedPlansToCurrentAuthority(FACTORY, List.of(before), 1L);
+
+        assertThat(summary.getReboundPlanCount()).isZero();
+        assertThat(plan.getSelectedWorkflowId()).isEqualTo(before);
     }
 
     @Test

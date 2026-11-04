@@ -709,6 +709,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             if (plan == null || !workflowIds.contains(plan.getSelectedWorkflowId())) {
                 continue;
             }
+            // 已取消的计划不会再开工, 跟不跟新配置都没有意义; 留着它当时的快照
+            if (plan.getStatus() == ProductionPlanStatus.CANCELLED) {
+                continue;
+            }
             if (hasStartedProduction(factoryId, plan.getId())) {
                 preserved.add(planReference(plan));
                 continue;
@@ -945,10 +949,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             repinWorkflowTaskPortRepository.deleteAll(repinWorkflowTaskPortRepository
                     .findByFactoryIdAndWorkflowInstanceId(factoryId, instance.getId()));
         }
+        // 🔴 任务必须物理删除: WorkProcessTask 是软删实体, deleteAll 只写 deleted_at, 行还在,
+        //    紧接着删实例就撞 fk_wpt_workflow_instance_owner (发布新工艺整单 500)。
+        //    上面已确认没有引用这些任务的报工 / 库存, 这里丢的是从未执行过的编译产物, 不是业务记录。
+        entityManager.flush();
         if (repinWorkProcessTaskRepository != null) {
-            repinWorkProcessTaskRepository.deleteAll(repinWorkProcessTaskRepository
-                    .findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(
-                            factoryId, instance.getId()));
+            repinWorkProcessTaskRepository.hardDeleteCompiledTasks(factoryId, instance.getId());
         }
         productionWorkflowInstanceRepository.delete(instance);
         entityManager.flush();
