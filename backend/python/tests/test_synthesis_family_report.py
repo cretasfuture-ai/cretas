@@ -125,7 +125,7 @@ async def test_report_hides_rows_naming_a_process_secret_product(monkeypatch, ca
     assert "为什么上周退货变多" not in out and "祖传卤汁鸭" not in out
     assert "秘制牛肉干销量为什么下滑" in out                  # F006: not its product
     assert "snapshots=2" in out and "为什么毛利率下降" in out  # control, aggregated in Python
-    assert "2 sample(s) naming a process-secret product not shown" in out
+    assert "2 sample(s) with a process-secret product, a person / customer or a pay value not shown" in out
 
 
 async def test_report_aborts_when_the_name_lookup_fails(monkeypatch, capsys):

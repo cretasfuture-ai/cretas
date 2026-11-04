@@ -107,6 +107,97 @@ def test_helper_uses_the_rows_own_factory_and_drops_rows_without_one():
     assert psn.lists_for_row(None, _LISTS) == psn.EMPTY_LISTS
 
 
+# ---- privacy: person / customer names and pay values (Steve 2026-11-04) ----
+
+_DIRECTORY = {"F_A": psn.lists_from_rows((), ["王五", "华联超市"]), "F_B": psn.lists_from_rows((), ["赵六"])}
+
+# (id, factory_id, input_text, teacher_output); no process-secret term anywhere
+_PRIVATE_ROWS = [
+    (1, "F_A", "王五本月产量多少", "增长"),               # own person, in the input -> out
+    (2, "F_A", "本月产量多少", "华联超市的订单最多"),      # own customer, in the answer -> out
+    (3, "F_A", "本月工资 8000 元", "增长"),               # pay value, in the input -> out
+    (4, "F_A", "本月出勤", "考勤异常 3 人次"),            # attendance value, in the answer -> out
+    (5, "F_C", "工资 8000 元", "增长"),                   # no lists for this factory: pay needs none -> out
+    (6, "F_A", "查一下本月工资", "增长"),                 # the word alone stays (Q2)
+    (7, "F_A", "赵六本月产量多少", "增长"),               # another factory's person stays
+    (8, "SEED_F", "合成工资 6000 元", "增长"),            # synthetic seed: made up, nobody's pay
+    (9, "F_A", "本月产量多少", "增长 8%"),                # control
+]
+_PRIVATE_KEPT = [6, 7, 8, 9]
+
+
+def _private_rows():
+    return [{"id": i, "factory_id": f, "input_text": q, "teacher_output": a,
+             "metadata": None, "source": "chat_qa", "business_type": "factory"}
+            for i, f, q, a in _PRIVATE_ROWS]
+
+
+async def _directory(*_a, **_k):
+    return _DIRECTORY
+
+
+def test_helper_drops_private_rows_with_no_process_secret_term_in_sight():
+    assert not any(lists.terms for lists in _DIRECTORY.values())
+    assert [r["id"] for r in psn.drop_rows_naming_protected_products(_private_rows(), _DIRECTORY)] == _PRIVATE_KEPT
+
+
+def test_the_privacy_check_reads_the_fields_the_caller_names():
+    row = {"id": 1, "factory_id": "F_A", "query": "王五本月产量", "input_text": "本月产量", "teacher_output": "增长"}
+    assert psn.drop_rows_naming_protected_products([row], _DIRECTORY) == [row]
+    assert psn.drop_rows_naming_protected_products([row], _DIRECTORY, ("query", "input_text", "teacher_output")) == []
+
+
+async def test_private_rows_never_reach_the_outside_judge(monkeypatch):
+    judge = importlib.import_module("scripts.corpus_judge")
+    monkeypatch.setattr(judge, "all_factory_lists", _directory)
+    for fetch in (judge.fetch_unjudged_rows, judge.fetch_crossfamily_rows):
+        pool = _judge_pool(rows=_private_rows())
+        assert [r["id"] for r in await fetch(pool, 50)] == _PRIVATE_KEPT
+        marks = [a for s, a in pool.executed if "jsonb_build_object('process_secret_excluded'" in s]
+        assert len(marks) == 1 and sorted(marks[0][0]) == [1, 2, 3, 4, 5]   # flagged, so later runs skip them
+
+
+async def test_the_judge_prompt_of_a_run_holds_no_private_text(monkeypatch):
+    """Through run_judge itself: what call_chain receives, not what the fetch returned."""
+    judge = importlib.import_module("scripts.corpus_judge")
+    monkeypatch.setattr(judge, "all_factory_lists", _directory)
+    pool = _judge_pool(rows=_private_rows())
+
+    async def make_pool(_dsn):
+        return pool
+
+    sent = []
+
+    async def chain(_slot, payload, **_k):
+        sent.append(payload["messages"][1]["content"])
+        return {"choices": [{"message": {"content":
+                '{"factuality": 4, "actionability": 4, "fluency": 4, "overall": 4}'}}]}
+
+    monkeypatch.setattr(judge, "_make_pool", make_pool)
+    monkeypatch.setattr(judge, "call_chain", chain)
+    await judge.run_judge(limit=50)
+    assert len(sent) == len(_PRIVATE_KEPT)                                  # the judge really ran
+    prompts = "\n".join(sent)
+    for private in ("王五", "华联超市", "考勤异常", "8000"):
+        assert private not in prompts, private
+    assert "合成工资 6000 元" in prompts                                    # positive control: the seed row went out
+
+
+async def test_g3_sample_and_eval_freeze_drop_private_rows_too(monkeypatch):
+    g3 = importlib.import_module("scripts.corpus_g3_sample")
+    monkeypatch.setattr(g3, "all_factory_lists", _directory)
+    pool = _Pool({"smart_bi_distillation_samples": _private_rows()})
+    assert [r["id"] for r in await g3.fetch_sample_rows(pool, 10, per_bucket=False)] == _PRIVATE_KEPT
+
+    freeze = importlib.import_module("scripts.corpus_eval_freeze")
+    pool = _Pool({"NOT (metadata ? 'eval_frozen')": _private_rows(), "WHERE metadata ? 'eval_frozen'": [],
+                  "COUNT(*) AS cnt": [{"source": "chat_qa", "business_type": "factory", "cnt": 100}]})
+    monkeypatch.setattr(freeze, "_make_pool", _pool_for(pool))
+    monkeypatch.setattr(freeze, "all_factory_lists", _directory)
+    await freeze.run_freeze(n=30, dry_run=False)
+    assert [args[0] for sql, args in pool.executed if "eval_frozen" in sql] == [_PRIVATE_KEPT]
+
+
 # ---- corpus_judge: rows sent to the LLM judge ----
 
 async def test_judge_fetch_drops_rows_naming_a_process_secret_product(monkeypatch):

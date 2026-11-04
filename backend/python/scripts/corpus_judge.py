@@ -90,7 +90,9 @@ logger = logging.getLogger("corpus_judge")
 # 2026-10-24 training rule at capture are read / labeled / sent out here.
 from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
 # Privacy clause 6: rows naming one of their factory's process-secret terms are
-# never sent to the judge LLM (rows with no factory are not read at all). The
+# never sent to the judge LLM (rows with no factory are not read at all), and
+# neither are rows naming one of its people / customers or holding a pay /
+# attendance value (privacy, no setting controls it: Steve 2026-11-04). The
 # CURRENT lists are applied on every run ("judge 每次按当前名单重判"): an exclusion
 # flag records the list fingerprint it was made under, and a row flagged under a
 # different list is fetched and judged again. Rows held at capture
@@ -428,7 +430,7 @@ _CROSSFAMILY_FETCH_SQL = """
     LIMIT $1
 """
 
-# Rows naming a process-secret term are flagged so later runs do not refetch
+# Rows the filter drops (process-secret term, person / customer, pay value) are flagged so later runs do not refetch
 # them forever (the batch would silently shrink to "judged 0") — but only for
 # as long as the list is the same: the flag records the list fingerprint, and a
 # row flagged under another list is fetched and re-judged (the product may have
@@ -470,7 +472,7 @@ async def _current_lists(pool):
 
 
 async def _drop_process_secret_rows(pool, rows, label: str, lists, fp: str) -> List[Any]:
-    """Drop rows naming a process-secret term (privacy clause 6), flag them with
+    """Drop rows naming a process-secret term or holding private content, flag them with
     the current list fingerprint and log how many; un-flag rows that were
     excluded under an older list and now pass."""
     kept = drop_rows_naming_protected_products(rows, lists)
@@ -485,7 +487,7 @@ async def _drop_process_secret_rows(pool, rows, label: str, lists, fp: str) -> L
                 await conn.execute(_UNMARK_PROCESS_SECRET_SQL, released)
     if excluded:
         logger.warning(
-            "%s: excluded %d row(s) naming a process-secret product (not sent to the "
+            "%s: excluded %d row(s) with a process-secret product, a person / customer or a pay value (not sent to the "
             "judge; flagged %s with list %s so later runs skip them until the list "
             "changes): ids=%s",
             label, len(excluded), PROCESS_SECRET_FLAG, fp, excluded[:50],
