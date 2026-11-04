@@ -10,6 +10,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { AnalyticsEntry } from '../utils/analyticsEntries';
 
 export interface QuickAction {
   id: string;
@@ -133,6 +134,22 @@ export const WORKSHOP_SUP_ACTIONS: QuickAction[] = [
   { id: 'team-report', label: '班组报工', icon: 'account-group', iconColor: '#059669', iconBg: '#ECFDF5', screen: 'TeamBatchReport' },
   { id: 'equipment', label: '设备监控', icon: 'tools', iconColor: '#0891B2', iconBg: '#ECFEFF', screen: 'EquipmentMonitoring' },
 ];
+
+/**
+ * 经营分析入口（AI 分析报告 / 时间范围成本分析）→ 快捷操作。
+ * 调用方传 `analyticsEntriesFor(user)`：没有 analytics 读权限时那是空数组，这里就什么都不加。
+ * id 取 entry.testID，不会与既有 id 重名；默认可见（不在 WORKSHOP_SUP_DEFAULT_HIDDEN 里）。
+ */
+export function analyticsQuickActions(entries: ReadonlyArray<AnalyticsEntry>): QuickAction[] {
+  return entries.map((e) => ({
+    id: e.testID,
+    label: e.label,
+    icon: e.icon,
+    iconColor: '#9C27B0',
+    iconBg: '#F3E5F5',
+    screen: e.route,
+  }));
+}
 
 export const DISPATCHER_ACTIONS: QuickAction[] = [
   { id: 'create-plan', label: '创建计划', icon: 'plus-circle', iconColor: '#7C3AED', iconBg: '#F5F3FF', screen: 'PlanCreate' },
