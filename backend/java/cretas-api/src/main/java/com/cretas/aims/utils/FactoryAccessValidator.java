@@ -37,11 +37,16 @@ public class FactoryAccessValidator {
             throw new AuthenticationException("用户未登录");
         }
 
+        // 平台身份可访问所有工厂。平台账号的 id 与 users.id 是两个命名空间, 不能拿它查 users。
+        if (com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(com.cretas.aims.security.AuthenticatedActor::hasFactoryBypass).isPresent()) {
+            return;
+        }
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new AuthenticationException("用户不存在"));
 
-        // 平台管理员可访问所有工厂
-        if (isPlatformAdmin(user)) {
+        if ("PLATFORM".equals(user.getFactoryId())) {
             return;
         }
 
@@ -63,30 +68,4 @@ public class FactoryAccessValidator {
         validateAccess(factoryId, userId);
     }
 
-    /**
-     * 检查用户是否为平台管理员
-     *
-     * 平台管理员可以访问所有工厂的数据
-     */
-    private boolean isPlatformAdmin(User user) {
-        String factoryId = user.getFactoryId();
-        String role = user.getRole();
-
-        // PLATFORM 工厂ID 表示平台级用户
-        if ("PLATFORM".equals(factoryId)) {
-            return true;
-        }
-
-        // super_admin 和 platform_admin 角色可访问所有工厂
-        if ("super_admin".equals(role) || "platform_admin".equals(role)) {
-            return true;
-        }
-
-        // developer 角色可访问所有工厂（开发调试用）
-        if ("developer".equals(role)) {
-            return true;
-        }
-
-        return false;
-    }
 }

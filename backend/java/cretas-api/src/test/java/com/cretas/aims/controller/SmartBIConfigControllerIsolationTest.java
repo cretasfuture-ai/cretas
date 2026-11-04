@@ -86,7 +86,7 @@ class SmartBIConfigControllerIsolationTest {
     /** 平台角色请求 — 跨工厂 by design。 */
     private static MockHttpServletRequest platformReq() {
         MockHttpServletRequest r = new MockHttpServletRequest();
-        r.setAttribute("role", "platform_admin");
+        r.setAttribute("role", "platform_admin"); r.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE, new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "platform_admin"));
         r.setAttribute("factoryId", "F001");
         return r;
     }
