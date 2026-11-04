@@ -25,7 +25,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Proxy, stated plainly: a platform role literal in a class is the stand-in for "this code may
  * trust a role string". It sees a new literal, not a role read from configuration, and it cannot
- * tell what a listed class does with the literal; each listed class was read and classified.
+ * tell what a listed class does with the literal. Listed classes were classified from the lines
+ * that use it, not read whole. {@code ai/tool/} is exempt as a package and has not been audited.
  */
 @DisplayName("Gate: platform roles stay off factory users, and role strings grant no platform authority")
 class PlatformRoleBoundaryGateContractTest {
@@ -58,7 +59,7 @@ class PlatformRoleBoundaryGateContractTest {
     private static final String PLATFORM_IDENTITY_FIRST = "behind a typed platform actor or /api/platform";
     private static final String IN_FACTORY = "role allow-list inside the caller's own factory, crosses no factory";
 
-    /** Classes outside AI tools that name a platform role, each read and classified. */
+    /** Classes outside AI tools that name a platform role, classified from the lines that use it. */
     private static final Map<String, String> ROLE_LITERAL_CLASSES = Map.ofEntries(
             Map.entry("entity/enums/FactoryUserRole", DEFINITION),
             Map.entry("entity/enums/PlatformRole", DEFINITION),
