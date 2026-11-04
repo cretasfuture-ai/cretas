@@ -24,11 +24,17 @@ usage() {
     echo "  --min-f1 F        Min F1 threshold for quality gate (default: 0.70)"
     echo "  --dry-run         Print steps without executing"
     echo "  --skip-train      Skip training step (export data only)"
+    echo "  --reviewed-flywheel-file PATH --flywheel-labels-file PATH --flywheel-holdout-file PATH"
+    echo "                    Optional reviewed intake; all three files are required"
     echo "  -h, --help        Show this help"
     exit 0
 }
 
 SKIP_TRAIN=false
+FLYWHEEL_ARGS=()
+FLYWHEEL_REVIEWED=""
+FLYWHEEL_LABELS=""
+FLYWHEEL_HOLDOUT=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --days) SHADOW_DAYS="$2"; shift 2 ;;
@@ -36,10 +42,24 @@ while [[ $# -gt 0 ]]; do
         --min-f1) MIN_F1_THRESHOLD="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --skip-train) SKIP_TRAIN=true; shift ;;
+        --reviewed-flywheel-file|--flywheel-labels-file|--flywheel-holdout-file)
+            if [[ $# -lt 2 || "$2" == --* ]]; then echo "Missing flywheel file argument" >&2; exit 2; fi
+            case "$1" in
+                --reviewed-flywheel-file) FLYWHEEL_REVIEWED="$2" ;;
+                --flywheel-labels-file) FLYWHEEL_LABELS="$2" ;;
+                --flywheel-holdout-file) FLYWHEEL_HOLDOUT="$2" ;;
+            esac
+            shift 2 ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
+if [[ -n "$FLYWHEEL_REVIEWED$FLYWHEEL_LABELS$FLYWHEEL_HOLDOUT" ]]; then
+    for file in "$FLYWHEEL_REVIEWED" "$FLYWHEEL_LABELS" "$FLYWHEEL_HOLDOUT"; do
+        if [[ ! -f "$file" ]]; then echo "All three readable flywheel files are required" >&2; exit 2; fi
+    done
+    FLYWHEEL_ARGS=(--reviewed-flywheel-file "$FLYWHEEL_REVIEWED" --flywheel-labels-file "$FLYWHEEL_LABELS" --flywheel-holdout-file "$FLYWHEEL_HOLDOUT")
+fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 run() {
@@ -104,7 +124,7 @@ fi
 # Step 4: Export Merged Training Data
 log ""
 log "=== Step 4/5: Export Training Data ==="
-run python "$SCRIPT_DIR/export_training_data.py"
+run python "$SCRIPT_DIR/export_training_data.py" "${FLYWHEEL_ARGS[@]}"
 
 MERGED="$DATA_DIR/merged_training_data.jsonl"
 if [ -f "$MERGED" ]; then
@@ -129,13 +149,12 @@ if [ "$SKIP_TRAIN" = true ]; then
 else
     run python "$SCRIPT_DIR/incremental_finetune.py" \
         --new-data "$MERGED" \
-        --old-data "$DATA_DIR/merged_training_data.jsonl" \
         --model-path "/www/wwwroot/python-services/models/chinese-roberta-wwm-ext-classifier/final" \
         --output-path "$DATA_DIR/../models/v8" \
         --replay-ratio 5.0 \
         --freeze-layers 8 \
         --epochs 5 \
-        --label-mapping "$DATA_DIR/merged_label_mapping.json"
+        --label-mapping "/www/wwwroot/python-services/models/chinese-roberta-wwm-ext-classifier/final/label_mapping.json"
 
     log "Training complete. Check model output in $SCRIPT_DIR/models/"
 fi
