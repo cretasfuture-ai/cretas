@@ -91,7 +91,7 @@ class WipInventoryServiceSecondaryTest {
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.of(wip));
             when(wipRepo.save(any())).thenReturn(wip);
 
-            service.deductForSecondaryPlan(WIP_ID, new BigDecimal("30"), FACTORY_ID, 7L, Owner.COMPANY);
+            service.deductForSecondaryPlan(WIP_ID, new BigDecimal("30"), FACTORY_ID, 7L, Owner.COMPANY, "PLAN-1");
 
             // availableQuantity 应为 50
             ArgumentCaptor<SemiFinishedInventory> wipCaptor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
@@ -117,7 +117,7 @@ class WipInventoryServiceSecondaryTest {
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.of(wip));
             when(wipRepo.save(any())).thenReturn(wip);
 
-            service.deductForSecondaryPlan(WIP_ID, new BigDecimal("50"), FACTORY_ID, null, Owner.COMPANY);
+            service.deductForSecondaryPlan(WIP_ID, new BigDecimal("50"), FACTORY_ID, null, Owner.COMPANY, "PLAN-1");
 
             ArgumentCaptor<SemiFinishedInventory> captor = ArgumentCaptor.forClass(SemiFinishedInventory.class);
             verify(wipRepo).save(captor.capture());
@@ -130,7 +130,7 @@ class WipInventoryServiceSecondaryTest {
         void wipNotFound_throws404() {
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("10"), FACTORY_ID, null, Owner.COMPANY))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("10"), FACTORY_ID, null, Owner.COMPANY, "PLAN-1"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("半成品库存行不存在");
         }
@@ -142,7 +142,7 @@ class WipInventoryServiceSecondaryTest {
             wip.setFactoryId("DIFFERENT_FACTORY");
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.of(wip));
 
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("10"), FACTORY_ID, null, Owner.COMPANY))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("10"), FACTORY_ID, null, Owner.COMPANY, "PLAN-1"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("工厂 ID 不匹配");
         }
@@ -153,7 +153,7 @@ class WipInventoryServiceSecondaryTest {
             SemiFinishedInventory wip = buildWip(new BigDecimal("20"));
             when(wipRepo.findByIdForUpdate(WIP_ID)).thenReturn(Optional.of(wip));
 
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("30"), FACTORY_ID, null, Owner.COMPANY))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, new BigDecimal("30"), FACTORY_ID, null, Owner.COMPANY, "PLAN-1"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("WIP 余量不足");
         }
@@ -161,7 +161,7 @@ class WipInventoryServiceSecondaryTest {
         @Test
         @DisplayName("扣减量为 0 → 400")
         void zeroQty_throws400() {
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, BigDecimal.ZERO, FACTORY_ID, null, Owner.COMPANY))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, BigDecimal.ZERO, FACTORY_ID, null, Owner.COMPANY, "PLAN-1"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("扣减数量必须大于 0");
             verify(wipRepo, never()).findByIdForUpdate(any());
@@ -170,7 +170,7 @@ class WipInventoryServiceSecondaryTest {
         @Test
         @DisplayName("扣减量为 null → 400")
         void nullQty_throws400() {
-            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, null, FACTORY_ID, null, Owner.COMPANY))
+            assertThatThrownBy(() -> service.deductForSecondaryPlan(WIP_ID, null, FACTORY_ID, null, Owner.COMPANY, "PLAN-1"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("扣减数量必须大于 0");
         }

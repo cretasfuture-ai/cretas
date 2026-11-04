@@ -289,6 +289,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.SettlementSemiStockingService settlementSemiStockingService;
 
+    /** 返工计划来源半成品的接料判定与占用 (D-S315-01); required=false 同上, 走到返工计划却没有它 ⇒ 500。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
+
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeed() {
+        if (secondaryPlanFeedService == null) {
+            throw new BusinessException(500, "二次加工服务未初始化, 无法处理半成品来源");
+        }
+        return secondaryPlanFeedService;
+    }
+
     /** raw-centric 多成品: 建计划/转批次守卫 —— 断言 owner 启用 workflow 终端覆盖所选成品. required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.ProductWorkflowResolutionService workflowResolutionService;
@@ -3348,31 +3359,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
         }
 
-        // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
-        // 注: 在事务内执行, 扣减失败直接抛出异常回滚整个 startProduction (fail-closed, 无 fail-soft)
-        // ⛔ 刻意留在这里而不下沉到 createBatchFromPlan: 逐工序录入(ClerkProcessEntryServiceImpl)
-        //    走的是「前端先调 /create-batch, 再由 materializeBatch 按 edges 精确扣半成品」这条路,
-        //    把扣减挪进 createBatchFromPlan 会让同一 SECONDARY 计划被扣两次(幽灵超扣)。
-        //    详见 ClerkProcessEntryServiceImpl 里 "不调用 startProduction" 那段注释。
-        if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
-            if (wipInventoryService == null) {
-                throw new BusinessException(500, "二次加工服务未初始化, 无法扣减半成品库存");
-            }
-            // 缺口 14: 二次加工开工这一刻就是领半成品
-            if (processTimeLimitService != null) {
-                processTimeLimitService.assertSemiFeedForPlan(factoryId, plan,
-                        semiFinishedInventoryRepository.findById(plan.getSecondarySourceWipId()).orElse(null),
-                        plan.getPlannedQuantity(), operatorId);
-            }
-            wipInventoryService.deductForSecondaryPlan(
-                    plan.getSecondarySourceWipId(),
-                    plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO,
-                    factoryId,
-                    operatorId,
-                    com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan));
-            log.info("SP2 二次加工 WIP 扣减完成: planId={}, wipId={}", planId, plan.getSecondarySourceWipId());
-        }
-
         // 🔴 2026-08-02: 「开工」必须同时把批次建出来。
         //
         // 此前 startProduction 只翻状态不建批次, 而报工与结单都需要批次 → 计划进入
@@ -3410,6 +3396,33 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionBatch createdBatch = materializeBatchForPlan(factoryId, plan);
         log.info("开工已建批次: planId={}, batchId={}, batchNumber={}",
                 planId, createdBatch.getId(), createdBatch.getBatchNumber());
+
+        // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
+        // ⛔ 必须在建批次之后: 建批次时才知道工艺图接不接得住这份料 (D-S315-01), 接不住要在扣库存之前拦下。
+        // 注: 在事务内执行, 扣减失败直接抛出异常回滚整个 startProduction (fail-closed, 无 fail-soft)
+        // ⛔ 刻意留在这里而不下沉到 createBatchFromPlan: 逐工序录入(ClerkProcessEntryServiceImpl)
+        //    走的是「前端先调 /create-batch, 再由 materializeBatch 按 edges 精确扣半成品」这条路,
+        //    把扣减挪进 createBatchFromPlan 会让同一 SECONDARY 计划被扣两次(幽灵超扣)。
+        //    详见 ClerkProcessEntryServiceImpl 里 "不调用 startProduction" 那段注释。
+        if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
+            if (wipInventoryService == null) {
+                throw new BusinessException(500, "二次加工服务未初始化, 无法扣减半成品库存");
+            }
+            // 缺口 14: 二次加工开工这一刻就是领半成品
+            if (processTimeLimitService != null) {
+                processTimeLimitService.assertSemiFeedForPlan(factoryId, plan,
+                        semiFinishedInventoryRepository.findById(plan.getSecondarySourceWipId()).orElse(null),
+                        plan.getPlannedQuantity(), operatorId);
+            }
+            wipInventoryService.deductForSecondaryPlan(
+                    plan.getSecondarySourceWipId(),
+                    plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO,
+                    factoryId,
+                    operatorId,
+                    com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan),
+                    planId);
+            log.info("SP2 二次加工 WIP 扣减完成: planId={}, wipId={}", planId, plan.getSecondarySourceWipId());
+        }
 
         if (applicationEventPublisher != null) {
             try {
@@ -3687,6 +3700,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         validateSettlementRequest(plan, effectiveRequest);
         com.cretas.aims.service.production.SettlementSemiStockingService.Stocking semiStocking =
                 resolveSemiStocking(factoryId, plan, effectiveRequest);
+        releaseSecondaryHoldForSettlement(factoryId, plan, settledBy);
 
         // 缺陷 38 结单热修: 物料大类在这里一次性批量取全 (⛔ 不逐行查),
         // 然后传进下面两个循环调用链 (validation + posting), 避免 N+1。
@@ -3804,6 +3818,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 factoryId, planId, settlement.getId(),
                 settlement.getActualFinishedQuantity(), settlement.getActualSemiFinishedQuantity());
         return toSettlementResponse(settlement, warnings);
+    }
+
+    /**
+     * 返工计划结单 (D-S315-01): 开工扣下的占用全部还回来源行, 实际投料随后按原路径严格扣减 ——
+     * 没用完的自动留在库存, 用了的只扣一次。必须在下面任何一道读半成品余额的校验之前。
+     */
+    private void releaseSecondaryHoldForSettlement(String factoryId, ProductionPlan plan, Long operatorId) {
+        if (!"SECONDARY".equals(plan.getPlanSourceType()) || plan.getSecondarySourceWipId() == null) {
+            return;
+        }
+        com.cretas.aims.service.production.SecondaryPlanFeedService feed = secondaryPlanFeed();
+        feed.forPlan(factoryId, plan).ifPresent(source -> feed.release(factoryId, source, null, operatorId));
     }
 
     /** 半成品量是请求里唯一没有报工事实可对的数, 不合法就拒绝, ⛔ 不当成 0。 */
@@ -4048,7 +4074,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             sawAnyTask = true;
+            // 返工计划: 料是来源半成品, 接料工序之前的道本来就不做, 不要求报完 (D-S315-01)
+            int firstRequiredOrder = "SECONDARY".equals(plan.getPlanSourceType())
+                    ? secondaryPlanFeed().firstReceivingOrder(factoryId, plan, tasks) : Integer.MIN_VALUE;
             for (com.cretas.aims.entity.workprocess.WorkProcessTask t : tasks) {
+                if (t.getProcessOrder() != null && t.getProcessOrder() < firstRequiredOrder) {
+                    continue;
+                }
                 if (t.getStatus() != com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED) {
                     return false;   // 还有工序没报完 → 不放行
                 }
@@ -8799,19 +8831,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 || isSecondaryInProgress;
 
         if (isSecondaryInProgress && !hasYields) {
-            // 反冲开工扣的半成品 WIP (还回 plannedQuantity), 然后直接取消 (不卡 IN_PROGRESS, 不导向报工撤回)。
-            if (wipInventoryService == null) {
-                throw new BusinessException(500, "二次加工服务未初始化, 无法反冲半成品库存");
-            }
-            BigDecimal reverseQty = plan.getPlannedQuantity() != null
-                    ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO;
-            if (reverseQty.compareTo(java.math.BigDecimal.ZERO) > 0) {
-                wipInventoryService.reverseSecondaryDeduct(
-                        plan.getSecondarySourceWipId(), reverseQty, factoryId,
-                        operatorId);
-                log.info("修1 SECONDARY 取消反冲 WIP: planId={}, wipId={}, qty={}",
-                        planId, plan.getSecondarySourceWipId(), reverseQty);
-            }
+            // 还回本计划还占着的半成品, 然后直接取消 (不卡 IN_PROGRESS, 不导向报工撤回)。
+            // ⛔ 还的是占用余额, 不是计划量: /create-batch 开工的计划没有占用; 报工撤回过的那部分早已转成库存。
+            com.cretas.aims.service.production.SecondaryPlanFeedService feed = secondaryPlanFeed();
+            BigDecimal released = feed.forPlan(factoryId, plan)
+                    .map(source -> feed.release(factoryId, source, null, operatorId))
+                    .orElse(BigDecimal.ZERO);
+            log.info("修1 SECONDARY 取消还回占用: planId={}, wipId={}, qty={}",
+                    planId, plan.getSecondarySourceWipId(), released);
             // 落入下方直接取消逻辑 (置 CANCELLED + 级联空批次/任务)。
         } else if (hasProductionActivity) {
             // 无论计划当前处于 PENDING / IN_PROGRESS / PAUSED 等何种非终态，
@@ -9965,6 +9992,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         plan.getSkipProcessReporting(), responsibleId, responsibleId);
         log.info("转批次已 spawn 报工任务: batchId={}, productTypeId={}, skipProcessReporting={}, taskCount={}",
                 saved.getId(), saved.getProductTypeId(), plan.getSkipProcessReporting(), spawnedTasks.size());
+
+        // D-S315-01: 两个开工入口都走这里。工艺图接不住来源半成品 ⇒ 拦下, 事务回滚, 批次和任务都不留。
+        if ("SECONDARY".equals(plan.getPlanSourceType())) {
+            secondaryPlanFeed().assertAcceptedBy(factoryId, plan, saved.getId());
+        }
 
         // 更新计划状态为 IN_PROGRESS
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);

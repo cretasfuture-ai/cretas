@@ -142,6 +142,11 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Lazy
     private com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService ccpMonitoringService;
 
+    /** 返工计划来源半成品的占用 (D-S315-01)。⚠️ @Lazy: 它反过来用本类还占用。 */
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
+
     /**
      * 半成品行入一笔产出后, 按质检策略刷新 {@code inspectionStatus} (不扣 ⇒ 原样)。
      *
@@ -260,9 +265,18 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (report.getSourceWipNo() != null && !report.getSourceWipNo().isBlank()
                 && report.getInputQuantity() != null) {
             BigDecimal sourceWipQuantity = sourceWipQuantity(report);
+            // 返工计划领自己的来源 (D-S315-01): 开工已占用的部分不再看余额, 校验后还回占用,
+            // 再走下面同一条扣减 —— 流水、血缘、成本都和普通领用一样, 这批料只扣一次。
+            BigDecimal covered = secondaryPlanFeedService == null ? BigDecimal.ZERO
+                    : secondaryPlanFeedService.coveredByHold(factoryId, task.getProductionBatchId(),
+                            report.getSourceWipNo(), sourceWipQuantity, report.getId());
             SemiFinishedInventory sourceWip = validateSourceWip(
                     factoryId, ownershipGuard.ofProductionBatch(factoryId, task.getProductionBatchId()),
-                    report.getSourceWipNo(), sourceWipQuantity, report.getInputUnit(), report.getId());
+                    report.getSourceWipNo(), sourceWipQuantity.subtract(covered), report.getInputUnit(), report.getId());
+            if (covered.signum() > 0) {
+                secondaryPlanFeedService.forBatch(factoryId, task.getProductionBatchId()).ifPresent(source ->
+                        secondaryPlanFeedService.release(factoryId, source, covered, operatorId));
+            }
             consumeSourceWip(sourceWip, sourceWipQuantity, report, task, operatorId);
         }
         String outputKind = report.getOutputKind();
@@ -2263,7 +2277,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      */
     @Override
     public void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId,
-                                       Owner consumer) {
+                                       Owner consumer, String planId) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "扣减数量必须大于 0");
         }
@@ -2299,7 +2313,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .semiFinishedId(wip.getId())
                 .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
                 .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
-                .sourceRef("secondary-plan-deduct:" + wipId)
+                .sourceRef(com.cretas.aims.service.production.SecondaryPlanFeedService.deductRef(wipId, planId))
                 .quantity(qty.negate())
                 .unitCostAtTxn(wip.getUnitCost())
                 .balanceAfter(newAvail)
@@ -2317,7 +2331,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      * <p>调用方必须持有 @Transactional。findByIdForUpdate 悲观写锁防并发 (与 deduct 对称)。
      */
     @Override
-    public void reverseSecondaryDeduct(Long wipId, BigDecimal qty, String factoryId, Long operatorId) {
+    public void reverseSecondaryDeduct(Long wipId, BigDecimal qty, String factoryId, Long operatorId, String planId) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "反冲数量必须大于 0");
         }
@@ -2350,7 +2364,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .semiFinishedId(wip.getId())
                 .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
                 .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
-                .sourceRef("secondary-plan-reverse:" + wipId)
+                .sourceRef(com.cretas.aims.service.production.SecondaryPlanFeedService.reverseRef(wipId, planId))
                 .quantity(qty)
                 .unitCostAtTxn(wip.getUnitCost())
                 .balanceAfter(newAvail)

@@ -71,7 +71,8 @@ class WorkflowStepUnlockGuardContractTest {
         ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
         rowRepo = mock(ProcessSheetRowRepository.class);
         reportRepo = mock(ProductionReportRepository.class);
-        guard = new WorkflowStepUnlockGuard(taskRepo, portRepo, wpRepo, batchRepo, rowRepo, reportRepo, mapper);
+        guard = new WorkflowStepUnlockGuard(taskRepo, portRepo, wpRepo, batchRepo, rowRepo, reportRepo, mapper,
+                org.mockito.Mockito.mock(com.cretas.aims.service.production.SecondaryPlanFeedService.class));
         ProductionBatch batch = new ProductionBatch();
         batch.setProductionPlanId("PLAN-1");
         when(batchRepo.findById(500L)).thenReturn(java.util.Optional.of(batch));

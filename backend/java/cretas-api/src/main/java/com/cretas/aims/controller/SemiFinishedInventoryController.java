@@ -30,6 +30,7 @@ public class SemiFinishedInventoryController {
 
     private final WipInventoryService wipInventoryService;
     private final com.cretas.aims.service.processentry.IntermediateOwnershipGuard ownershipGuard;
+    private final com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
 
     /**
      * 工厂级半成品重量库存快照。
@@ -73,8 +74,32 @@ public class SemiFinishedInventoryController {
         // 缺口 16: 带 planId = 投料下拉, 只列与该计划同一归属的半成品; 不带 = 库存总览, 全列
         List<WipRowDTO> rows = wipInventoryService.listWipByFactory(factoryId, productTypeId, maxProcessOrder,
                 planId == null || planId.isBlank() ? null : ownershipGuard.ofPlanId(factoryId, planId));
+        rows = withOwnSecondarySource(factoryId, planId, rows);
         log.debug("[C3] listInventory factoryId={} productTypeId={} maxProcessOrder={} → {} rows",
                 factoryId, productTypeId, maxProcessOrder, rows.size());
         return ApiResponse.success(rows);
+    }
+
+    /**
+     * 返工计划的投料下拉 (D-S315-01): 来源半成品一定要在列表里, 可领量 = 这个计划还能投多少。
+     * 开工占用把余额扣成 0 时, 按余额过滤会把它藏起来; 来源的工序序靠后时, 按阶段过滤也会藏。
+     */
+    private List<WipRowDTO> withOwnSecondarySource(String factoryId, String planId, List<WipRowDTO> rows) {
+        if (planId == null || planId.isBlank()) {
+            return rows;
+        }
+        return secondaryPlanFeedService.forPlanId(factoryId, planId).map(source -> {
+            List<WipRowDTO> merged = new java.util.ArrayList<>(rows);
+            merged.removeIf(row -> source.batchNo().equals(row.getIntermediateBatchNo()));
+            wipInventoryService.listWipByFactory(factoryId).stream()
+                    .filter(row -> source.batchNo().equals(row.getIntermediateBatchNo()))
+                    .findFirst()
+                    .ifPresent(row -> {
+                        row.setAvailableQuantity(secondaryPlanFeedService.remainingForPlan(factoryId, source));
+                        row.setStatus(com.cretas.aims.entity.SemiFinishedInventory.Status.AVAILABLE);
+                        merged.add(row);
+                    });
+            return merged;
+        }).orElse(rows);
     }
 }
