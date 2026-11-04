@@ -475,7 +475,7 @@ class TestIdempotency:
 
         rows = await fetch_unjudged_rows(mock_pool, limit=42)  # noqa: F841
 
-        mock_conn.fetch.assert_called_once()
+        assert mock_conn.fetch.call_count == 2   # held-row re-judge (2026-10-29), then the judge fetch
         call_args = mock_conn.fetch.call_args
         # First positional arg is the SQL, second is the limit
         assert 42 in call_args[0] or 42 in call_args.args, (
@@ -495,7 +495,7 @@ class TestIdempotency:
 
         await fetch_unjudged_rows(mock_pool, limit=10, source="intent_llm")
 
-        mock_conn.fetch.assert_called_once()
+        assert mock_conn.fetch.call_count == 2   # held-row re-judge (2026-10-29), then the judge fetch
         call_args = mock_conn.fetch.call_args
         # "intent_llm" should be passed as a bind parameter
         all_args = list(call_args.args) + list(call_args.kwargs.values())

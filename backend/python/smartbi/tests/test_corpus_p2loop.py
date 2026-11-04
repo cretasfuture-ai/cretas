@@ -189,8 +189,10 @@ def _make_mock_pool_with_rows(
         ]
 
     mock_conn = AsyncMock()
+    # usable_rows_sql only returns rows with a factory (2026-10-29: a factory-less row is
+    # dropped as uncheckable), so candidates carry one like the real query's rows do
     mock_conn.fetch.side_effect = [
-        [_make_asyncpg_record(r) for r in candidate_rows],
+        [_make_asyncpg_record({"factory_id": "F006", **r}) for r in candidate_rows],
         [_make_asyncpg_record(r) for r in already_frozen],
         [_make_asyncpg_record(r) for r in total_quality_rows],
     ]
@@ -539,8 +541,10 @@ def _make_mock_pool_with_four_rows(
 ) -> tuple:
     """Build a mock pool for the extended run_freeze that fetches 3 result sets."""
     mock_conn = AsyncMock()
+    # usable_rows_sql only returns rows with a factory (2026-10-29: a factory-less row is
+    # dropped as uncheckable), so candidates carry one like the real query's rows do
     mock_conn.fetch.side_effect = [
-        [_make_asyncpg_record(r) for r in candidate_rows],
+        [_make_asyncpg_record({"factory_id": "F006", **r}) for r in candidate_rows],
         [_make_asyncpg_record(r) for r in already_frozen],
         [_make_asyncpg_record(r) for r in total_quality_rows],
     ]

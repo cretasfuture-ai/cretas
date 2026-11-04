@@ -196,7 +196,8 @@ public class PlatformServiceImpl implements PlatformService {
                 .stream()
                 .filter(batch -> ProductionBatchStatus.COMPLETED.equals(batch.getStatus()))
                 .filter(batch -> batch.getQuantity() != null)
-                .filter(batch -> !processSecretAccessService.protectedProductTypeIds(batch.getFactoryId())
+                // 按批次所属工厂的开关: 平台看不到的保密产品不计 (b 关时平台能看, 照常计入)
+                .filter(batch -> !processSecretAccessService.hiddenFromPlatform(batch.getFactoryId())
                         .contains(batch.getProductTypeId()))
                 .mapToDouble(batch -> batch.getQuantity().doubleValue())
                 .sum();

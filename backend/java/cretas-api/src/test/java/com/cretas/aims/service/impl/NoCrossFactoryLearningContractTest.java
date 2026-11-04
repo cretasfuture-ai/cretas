@@ -53,7 +53,8 @@ class NoCrossFactoryLearningContractTest {
         when(consent.status(anyString())).thenReturn(com.cretas.aims.service.consent.TrainingConsentService.Status.AUTHORIZED);
         com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
                 mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
-        when(filter.mentionsProtectedProduct(anyString(), anyString())).thenReturn(false);
+        when(filter.checkTrainingSample(anyString(), anyString(), org.mockito.ArgumentMatchers.any(String[].class)))
+                .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
         return new KeywordLearningServiceImpl(intents, mock(KeywordEffectivenessService.class), factoryConfig,
                 new com.fasterxml.jackson.databind.ObjectMapper(), consent, filter);
     }
@@ -194,7 +195,11 @@ class NoCrossFactoryLearningContractTest {
     void knowledgeNamingAnyFactorysProtectedProductIsNeverPromotable() {
         com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
                 mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
-        when(filter.mentionsAnyFactoryProtectedProduct("秘制酱牛肉怎么卖", "秘制酱牛肉怎么卖")).thenReturn(true);
+        // 全局检查走挂起调用方事务的 checkSharedContent (待办第 8 条)
+        when(filter.checkSharedContent("global_knowledge", "秘制酱牛肉怎么卖", "秘制酱牛肉怎么卖"))
+                .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
+        when(filter.checkSharedContent("global_knowledge", "今天卖了多少", "今天卖了多少"))
+                .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
         ActiveLearningServiceImpl service = activeLearning(filter);
 
         com.cretas.aims.entity.learning.CrossFactoryKnowledge secret =
@@ -205,8 +210,9 @@ class NoCrossFactoryLearningContractTest {
         assertThat(service.promotableToGlobal(plain)).isTrue();
         // 判断不了 (没注入 / 查库出错) 按「提到了」处理, 不晋升
         assertThat(activeLearning(null).promotableToGlobal(plain)).isFalse();
-        when(filter.mentionsAnyFactoryProtectedProduct("今天卖了多少", "今天卖了多少"))
-                .thenThrow(new IllegalStateException("db down"));
+        // 查库出错时过滤器返回 UNVERIFIED (不抛, 不把调用方事务标成只能回滚)
+        when(filter.checkSharedContent("global_knowledge", "今天卖了多少", "今天卖了多少"))
+                .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.UNVERIFIED);
         assertThat(service.promotableToGlobal(plain)).isFalse();
     }
 
@@ -214,8 +220,11 @@ class NoCrossFactoryLearningContractTest {
     void suggestionNamingAProtectedProductIsNotAddedToTheSharedPhraseTable() {
         com.cretas.aims.service.consent.ProcessSecretSampleFilter filter =
                 mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
-        when(filter.mentionsAnyFactoryProtectedProduct(anyString(), anyString()))
-                .thenAnswer(inv -> ((String) inv.getArgument(0)).contains("秘制酱牛肉"));
+        when(filter.checkSharedContent(anyString(), org.mockito.ArgumentMatchers.any(String[].class)))
+                .thenAnswer(inv -> ((String) inv.getArgument(1)).contains("秘制酱牛肉")
+                        ? com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.PROTECTED : com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
+        when(filter.checkTrainingSample(anyString(), anyString(), org.mockito.ArgumentMatchers.any(String[].class)))
+                .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);   // 本厂名单放行, 证明是全局 (共用短语表) 那道拦下的
         ActiveLearningServiceImpl service = activeLearning(filter);
         com.cretas.aims.repository.learning.LearningSuggestionRepository suggestions =
                 mock(com.cretas.aims.repository.learning.LearningSuggestionRepository.class);

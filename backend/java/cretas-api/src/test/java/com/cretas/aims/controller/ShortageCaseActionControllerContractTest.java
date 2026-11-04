@@ -36,7 +36,8 @@ class ShortageCaseActionControllerContractTest {
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.standaloneSetup(new ShortageCaseActionController(service,
-                        mock(ShortageCaseActionRepository.class), mock(ShortageCaseRepository.class)))
+                        mock(ShortageCaseActionRepository.class), mock(ShortageCaseRepository.class),
+                        OutcomeCheckStubs.unknown()))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
         when(service.createProcurementDraft(any(), any(), any(), any())).thenReturn(

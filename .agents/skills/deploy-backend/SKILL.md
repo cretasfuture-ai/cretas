@@ -48,9 +48,9 @@ Reuse needs all three; otherwise the deploy phase falls back once to local Maven
 2. Both phases use exactly the same `--tests` selector.
 3. `~/.cache/cretas/java-deploy/current/release-jar.manifest` was not overwritten by another tree's build. Parallel release lines each set their own `CRETAS_JAVA_RELEASE_MANIFEST`.
 
-Success criterion: `DEPLOY_EXIT=0` and `RELEASE_FINAL_STATUS` appears exactly once in the log. Its absence is a failure (the closing printf is killed under `set -e`; the exit code in a background-task notification is not trustworthy).
+Success criterion: `DEPLOY_EXIT=0` and `RELEASE_FINAL_STATUS` appears exactly once in the log with value `deployed` or `no-op`. Failures also print `RELEASE_FINAL_STATUS=failed`, so its presence alone is not success; its absence is a failure too (killed process or bad arguments). The exit code in a background-task notification is not trustworthy.
 
-- The exact-main gate rejects silently: BUILD SUCCESS, tests green, then it stops with `deploy_mode=none` in the receipt. Fix: `git fetch && git switch --detach origin/main`, rerun.
+- If main moves during a fallback build, the entrypoint advances to the new main and re-executes (up to `CRETAS_RELEASE_DRIFT_RETRIES`, default 2). Past that budget, or when the release commits are not in the new main, it prints `ERROR` and `RELEASE_FINAL_STATUS=failed` with `deploy_mode=none` in the receipt. Fix: `git fetch && git switch --detach origin/main`, rerun. For manifest failures read the `JAVA_MANIFEST_INVALID` / `WEB_MANIFEST_INVALID reason=` line.
 - `build="reused"` / `java_build=0` / `build_count=0` in the receipt is a normal success. Deploy-phase validation does not compare the test selector; read the manifest's `target_tests` before claiming the current selector was gated.
 - `no-op` versus `deployed` comes from the Java/Web child receipts, never from the source diff.
 - Once a production release starts, do not merge unrelated PRs until its receipt is complete.

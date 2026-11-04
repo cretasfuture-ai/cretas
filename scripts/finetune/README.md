@@ -2,6 +2,48 @@
 
 ## 概述
 
+### 审核后的飞轮数据入口
+
+`export_training_data.py` 和 `pipeline.sh` 接受以下三个参数（必须同时提供）：
+
+```bash
+python scripts/finetune/export_training_data.py \
+  --reviewed-flywheel-file /absolute/path/reviewed.jsonl \
+  --flywheel-labels-file /absolute/path/current-model-info.json \
+  --flywheel-holdout-file /absolute/path/holdout.jsonl \
+  --output /absolute/path/new-training-data.jsonl
+```
+
+这条命令导出数据，不训练、不加载模型；`pipeline.sh` 仍会运行裁判/合成等原有步骤，
+仅需导出时直接使用 exporter。不要为了接入数据而运行完整流水线或旧部署示例。
+标签目录使用本次目标分类器 `/api/classifier/info` 的 `labels` 或 `label_mapping.json` 的
+`label_to_id`。不要把教师概率写成审核结论，也不要猜测旧标签与现有标签的映射。
+
+每条审核记录至少包含 `record_id`、`text`、`label`、`group_id`、`split: "train"`、
+`review: {status: "approved", reviewer: "...", basis: "..."}`，以及
+`provenance: {source_kind: "synthetic" | "factory", evidence_refs: ["..."]}`。
+真实工厂记录还必须提供 `factory_id` 并经过现有授权/撤回/敏感内容过滤；所有来源仍经过
+全厂保密词检查。审核字段是受控数据文件的审计记录，不是身份认证或安全授权。
+
+`holdout.jsonl` 每行包含 `text`、可选 `group_id`。缺失/空的保留集、未知标签、缺审核依据、
+评测来源冒充训练、重复审核原话均拒绝。已知同源改写须共用 `group_id`；规范化相同文本及
+字符相似度≥0.85的近似句也拒绝。相似度不能识别所有语义改写，不能替代同源分组。
+保留集还会从旧数据、ZPD、shadow、feedback 等全部导出来源中排除，防止旁路泄漏。
+本轮已经用于评测的样本只保留为测试/裁决证据，不直接回灌。合格记录的审核来源随
+`flywheel_evidence` 字段进入导出文件，微调加载器仍使用 `text`/`label`。
+
+默认持久保护清单是 `data/evaluation_holdout.jsonl`，不传飞轮参数时也强制应用；文件缺失或为空则停止。
+额外传入的 holdout 是追加保护。直接运行增量训练器时，新数据和旧数据回放也会排除默认保护集。
+这份清单仅登记已知评测原话，不能证明历史模型没学过它们；当前样本与旧语料有重合，比较结果仅作描述。
+导出会拒绝跨来源同一句话的矛盾标签，输出不能覆盖任何输入/保护清单，写入使用原子替换。
+
+增量训练必须指定已有本地模型目录；`--label-mapping` 可选，但传入时必须与模型目录的
+`label_mapping.json` 完全一致。训练保留整个分类头的ID，未在当前数据出现的类也不删掉，
+不允许通过 `ignore_mismatched_sizes` 静默重建分类头。非通用 `LABEL_n` 的模型config映射也必须一致。
+`/info` 标签数组仅用于审核入口的标签名校验，不提供训练类别ID；训练ID以目标模型sidecar为准。
+新数据和旧数据回放不能是同路径/同内容文件；流水线对已合并语料不再重复传成旧数据。
+训练前会拒绝矛盾标签并去除规范化相同原话，避免精确重复跨入随机训练/验证两侧。
+
 本目录包含增量微调意图分类器的脚本和数据，用于解决 CLASSIFIER 层的混淆问题。
 
 ## 问题意图

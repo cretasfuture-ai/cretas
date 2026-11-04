@@ -208,6 +208,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowDown, Refresh } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { describeAuditReason } from './auditLabels';
+import { policySaveWarnings, policySaveWarningText } from './policyWarnings';
 import {
   createProcessSecretGrant,
   disableProcessSecretPolicy,
@@ -369,6 +370,11 @@ async function savePolicy() {
     });
     if (res.success) {
       ElMessage.success(`「${row.name}」已设为${MODE_LABELS[policyDialog.storageMode]}`);
+      // 服务端提示 (不是拒绝): 如产品全名是通用品类词, 训练过滤不按名字拦 —— 必须让负责人看到
+      const warnings = policySaveWarnings(res.data);
+      if (warnings.length) {
+        ElMessage({ type: 'warning', message: policySaveWarningText(row.name, warnings), duration: 10000, showClose: true });
+      }
       policyDialog.open = false;
       await load();
     }

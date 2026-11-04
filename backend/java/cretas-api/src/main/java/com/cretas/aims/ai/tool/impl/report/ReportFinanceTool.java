@@ -206,4 +206,21 @@ public class ReportFinanceTool extends AbstractBusinessTool {
     public java.util.Set<String> getRequiredPermissions() {
         return java.util.Set.of("finance:read", "finance:read_write", "procurement:price:view");
     }
+
+    /**
+     * 这份报表 (含应收 / 应付 / 客户预收、收入、成本) 在 App 里只出现在「经营分析」页 (web 路由 module=analytics,
+     * 卡片「往来余额」; RN 只在老板 / 厂长报表里): 没有经营分析模块的角色在 App 里看不到它, 对话也不给
+     * (ERP-S6-LLM-PROMPT-PRICE-LEAK (2): 生产 / 销售 / 采购主管 analytics「-」, 以前凭 procurement:price:view 拿到整份)。
+     */
+    @Override
+    public java.util.Set<String> getAlsoRequiredPermissions() {
+        return FINANCE_REPORT_SURFACE;
+    }
+
+    /**
+     * 财务报表数据 (ReportService#getFinanceReport) 在 App 里出现的模块: 经营分析。读这份数据的工具都另需它,
+     * 与 GET /reports/finance 的 alsoAny 同一组 (GatedDataToolAiPathPermissionTest 按接口推出并比对)。
+     */
+    public static final java.util.Set<String> FINANCE_REPORT_SURFACE =
+            java.util.Set.of("analytics:read", "analytics:read_write");
 }

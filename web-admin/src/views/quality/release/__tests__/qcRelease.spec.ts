@@ -85,6 +85,74 @@ describe('质检放行页', () => {
     wrapper.unmount();
   });
 
+  describe('超时处置 (缺口 14)', () => {
+    const openEvent = {
+      id: 5, targetType: 'SEMI_FINISHED', targetId: '77', batchNumber: 'SEMI-9', processName: '卤制', limitMinutes: 120,
+      startEvent: 'OUTPUT_POSTED', mixRule: 'EARLIEST', startAt: '2026-11-04T08:00:00', deadlineAt: '2026-11-04T10:00:00',
+      blockedAt: '2026-11-04T10:30:00', expiredQuantity: 12.5, unit: 'kg', recheckValidMinutes: 30, status: 'OPEN',
+      conclusion: null, decidedByName: null, decidedAt: null, validUntil: null,
+    };
+    const decided = {
+      ...openEvent, id: 4, batchNumber: 'SEMI-8', status: 'RELEASED', conclusion: '复检合格',
+      decidedByName: '王质检', decidedAt: '2026-11-04T09:00:00', validUntil: '2026-11-04T09:30:00',
+    };
+
+    beforeEach(() => {
+      state.get.mockImplementation((url: string) => {
+        if (url.endsWith('/events')) return Promise.resolve(ok([openEvent]));
+        if (url.endsWith('/events/records')) return Promise.resolve(ok([decided, openEvent]));
+        return Promise.resolve(ok(url.endsWith('/pending') ? pendingRows : []));
+      });
+      state.post.mockResolvedValue({ success: true, data: decided, message: '已复检放行' });
+    });
+
+    const conclusionBox = () => (document.querySelector('textarea[data-testid="timeout-conclusion"]')
+      ?? document.querySelector('[data-testid="timeout-conclusion"] textarea')) as HTMLTextAreaElement;
+    const timeoutSubmit = () => document.querySelector('[data-testid="timeout-decision-submit"]') as HTMLButtonElement;
+
+    it('列出待处置批次和已处置记录; 待处置的不混进记录', async () => {
+      const wrapper = mountPage();
+      await flushPromises();
+      const open = wrapper.get('[data-testid="timeout-events-table"]').text();
+      expect(open).toContain('SEMI-9');
+      expect(open).toContain('2 小时');
+      expect(open).toContain('2026-11-04 08:00（上道产出入账）');
+      expect(open).toContain('12.5');
+      const records = wrapper.get('[data-testid="timeout-records-table"]').text();
+      expect(records).toContain('SEMI-8');
+      expect(records).toContain('王质检');
+      expect(records).not.toContain('SEMI-9');
+      expect(wrapper.text()).toContain('超时处置 (1)');
+      wrapper.unmount();
+    });
+
+    it('标题带批次号; 没选结果或没填结论不能提交; 提交发到这条事件上', async () => {
+      const wrapper = mountPage();
+      await flushPromises();
+      await wrapper.get('[data-testid="timeout-decide-5"]').trigger('click');
+      await flushPromises();
+      expect(document.body.textContent).toContain('超时处置 — 卤制 (SEMI-9)');
+      expect(timeoutSubmit().disabled, '没选结果').toBe(true);
+      expect(document.body.textContent).toContain('请选择处置结果');
+
+      (document.querySelector('[data-testid="timeout-decision-released"] input') as HTMLInputElement).click();
+      await flushPromises();
+      expect(timeoutSubmit().disabled, '没填结论').toBe(true);
+      expect(document.body.textContent).toContain('放行后 30 分钟 内可以领用');
+
+      const box = conclusionBox();
+      box.value = '中心温度复测合格';
+      box.dispatchEvent(new Event('input'));
+      await flushPromises();
+      timeoutSubmit().click();
+      await flushPromises();
+      expect(state.post).toHaveBeenCalledWith('/F-QC/process-time-limits/events/5/decision', {
+        decision: 'RELEASED', conclusion: '中心温度复测合格',
+      });
+      wrapper.unmount();
+    });
+  });
+
   it('有未处理 CCP 偏离: 默认选「不合格」, 「放行」被禁用, 提示去处理偏离', async () => {
     const wrapper = mountPage();
     await flushPromises();

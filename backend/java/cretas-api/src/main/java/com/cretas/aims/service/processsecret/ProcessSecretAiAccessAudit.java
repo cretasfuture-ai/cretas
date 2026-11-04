@@ -91,9 +91,24 @@ public class ProcessSecretAiAccessAudit {
         return writeFailures.get();
     }
 
-    /** 进入一个 AI 入口。嵌套 / 同一请求里的后续入口并进同一条记录。 */
+    /** 单测直接 new 时当开启 (照常记录); Spring 下由 setter 注入 (没有这个 bean 的切片测试保持全开)。 */
+    private com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy =
+            com.cretas.aims.service.secrecy.FactorySecrecyConfig.allOn();
+
+    @Autowired(required = false)
+    public void setFactorySecrecyConfig(com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy) {
+        this.secrecy = secrecy;
+    }
+
+    /**
+     * 进入一个 AI 入口。嵌套 / 同一请求里的后续入口并进同一条记录。
+     * 该厂「AI 保密审计」(f, 默认跟随工艺保密) 关着时返回不写库的句柄; 工厂不明 / 读不到配置按开启 (照常记)。
+     */
     public Access begin(String factoryId, Entry entry) {
         if (accessService == null) return new Access(null, false);
+        if (!secrecy.isOn(factoryId, com.cretas.aims.service.secrecy.SecrecyItem.AI_SECRECY_AUDIT)) {
+            return new Access(null, false);
+        }
         try {
             Access attached = attachToRequest(factoryId, entry);
             if (attached != null) return attached;

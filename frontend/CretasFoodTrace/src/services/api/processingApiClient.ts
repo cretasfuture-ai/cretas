@@ -85,6 +85,8 @@ export interface ProcessingBatch {
   otherCost?: number;
   totalCost?: number;
   unitCost?: number;
+  /** 批次计量单位 */
+  unit?: string;
   // Quality fields (Phase 4 data integrity)
   goodQuantity?: number;
   defectQuantity?: number;

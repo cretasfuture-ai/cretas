@@ -533,6 +533,28 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
     }
 
     /**
+     * 这个用户是否看得到经营财务数字: 财务读写 (Rule 2b 的口径: 营收 / 成本 / 利润) 且默认价格口径可见 —— 与 HTTP
+     * 响应层同一个判定。只能整段给、不能逐字段遮的东西 (例如存档的日报 / 周报全文) 用它决定给不给, 看不到就不给
+     * (ERP-S6-LLM-PROMPT-PRICE-LEAK)。用户为空 / 查不到 ⇒ false。
+     */
+    public boolean seesFinanceFigures(Long userId) {
+        if (userId == null) {
+            return false;
+        }
+        try {
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null) {
+                return false;
+            }
+            MaskDecision decision = decide(user, PRICE_VIEW_PERMISSION, PriceSensitive.PURCHASE);
+            return decision.canViewFinance() && decision.canViewPrices();
+        } catch (Exception e) {
+            log.warn("PriceFieldResponseAdvice.seesFinanceFigures failed for userId={}, hiding: {}", userId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * 工具把金额写进回复文字前问这一句: 这个值若以 {@code key} 放在结果 Map 里, 这个用户看得到吗?
      * 与字段同一套键名规则 (Rule 1 / 2 / 2b), 所以文字与字段同进同出。用户为空 / 查不到 ⇒ false。
      */
@@ -580,6 +602,14 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             List<Object> copy = new java.util.ArrayList<>(collection.size());
             copies.put(value, copy);
             collection.forEach(v -> copy.add(copyForView(v, hiddenSpecs, copies)));
+            return copy;
+        }
+        if (value instanceof com.fasterxml.jackson.databind.JsonNode node) {
+            // Skill 组合结果里的子工具结果是 JsonNode: 先转成 Map / List 再按同一规则遮 (不转就原样漏过去)
+            com.fasterxml.jackson.databind.ObjectMapper mapper = objectMapper != null ? objectMapper
+                    : new com.fasterxml.jackson.databind.ObjectMapper();
+            Object copy = copyForView(mapper.convertValue(node, Object.class), hiddenSpecs, copies);
+            copies.put(value, copy);
             return copy;
         }
         if (value.getClass().isArray() && !value.getClass().getComponentType().isPrimitive()) {

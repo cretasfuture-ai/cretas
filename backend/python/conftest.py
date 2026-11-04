@@ -23,32 +23,41 @@ import pytest  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _no_process_secret_products_by_default():
-    """Training-sample capture / export look up the factory's process-secret
-    product names in the Cretas main database (privacy clause 6). Unit tests
-    have no such database: default to "no protected products". Tests about the
-    rule itself monkeypatch these names on the module that imported them.
+    """Training-sample capture / export look up the factory's lists
+    (process-secret terms, people, customers) in the Cretas main database.
+    Unit tests have no such database: default to "empty lists". Tests about the
+    rule itself monkeypatch these lookups on the module that imported them.
 
     Deliberately NOT built on ``monkeypatch``: requesting monkeypatch from this
     root autouse fixture would make it the outermost fixture, so its undo would
     run after other fixtures' teardown checks (test_probe_llm_registry's
     _SAFE_MODELS guard saw its own test's patches still in place)."""
-    async def _none(*_a, **_k):
-        return frozenset()
+    from smartbi.services.process_secret_names import EMPTY_LISTS
+
+    async def _empty_lists(*_a, **_k):
+        return EMPTY_LISTS, False
 
     async def _none_map(*_a, **_k):
         return {}
 
-    restore = []
-    targets = (("smartbi.services.distillation_capture", "protected_product_names", _none),
-               ("smartbi.services.distillation_capture", "all_protected_product_names", _none_map),
-               ("scripts.export_distillation_dataset", "all_protected_product_names", _none_map))
+    async def _no_settings_database(*_a, **_k):
+        raise RuntimeError("no secrecy settings database in unit tests")
+
+    # factory_secrecy reads a failed read as every item ON. Tests about the switches replace _read.
+    from common import factory_secrecy
+
+    restore = [(factory_secrecy, "_read", factory_secrecy._read)]
+    factory_secrecy._read = _no_settings_database
+    factory_secrecy.invalidate()
+    targets = (("smartbi.services.distillation_capture", "factory_lists_or_last_good", _empty_lists),
+               ("scripts.export_distillation_dataset", "all_factory_lists", _none_map))
     # Corpus scripts (LLM judge / human review sampling / eval freeze) filter
-    # their rows by the same names. Patched only when a test already imported
+    # their rows by the same lists. Patched only when a test already imported
     # them: importing corpus_judge here would bypass its test's import stubs.
-    loaded_only = (("scripts.corpus_judge", "all_protected_product_names", _none_map),
-                   ("scripts.corpus_g3_sample", "all_protected_product_names", _none_map),
-                   ("scripts.corpus_eval_freeze", "all_protected_product_names", _none_map),
-                   ("scripts.synthesis_family_report", "all_protected_product_names", _none_map))
+    loaded_only = (("scripts.corpus_judge", "all_factory_lists", _none_map),
+                   ("scripts.corpus_g3_sample", "all_factory_lists", _none_map),
+                   ("scripts.corpus_eval_freeze", "all_factory_lists", _none_map),
+                   ("scripts.synthesis_family_report", "all_factory_lists", _none_map))
     for module_name, attr, stub in targets:
         try:
             module = __import__(module_name, fromlist=[attr])

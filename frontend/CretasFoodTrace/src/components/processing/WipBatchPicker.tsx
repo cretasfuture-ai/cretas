@@ -24,8 +24,17 @@
  *  摩擦点: F1 全部待检 = 死胡同 (Rule 5, HIGH) → 写明「请通知质检员放行」+ 重新加载;
  *          F2 不知道为什么点不动 (Rule 1, HIGH) → 行内原因文字, 不靠颜色单独表达;
  *          F3 误触 (内联规则) → 待检行 disabled, 行高沿用 ≥44pt。
+ *
+ * UX Flow Analysis (ux-flow 门控, 2026-11-04, 缺口 14 工序时限; 传 taskId 才生效):
+ *  旅程: 打开本道报工 → 每行看到还剩多久 → 超时行灰显带原因 → 选还能领的一行 → 填量提交。
+ *  摩擦点: F1 全部超时 = 死胡同 (Rule 5, HIGH) → 写明找质检员处置 + 重新加载; 【不】触发 onEmpty;
+ *          F2 不知道为什么点不动 (Rule 1, HIGH) → 行内写「已超时 X，请找质检员处置」;
+ *          F3 只有一部分超时 (Rule 1) → 两行: 可领 Y / 另有 Z 已超时, 投入上限按可领;
+ *          F4 倒计时过期 → 每分钟按 deadlineAt 本地重算, 到点再问一次后端, 后端判定为准;
+ *          F5 误触 (内联规则) → 不能领的行 disabled, 行高 ≥44pt。
+ *  时限读不到时行照常显示并写一句说明, 能不能领由后端在提交时判定。
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -35,6 +44,14 @@ import {
   ScrollView,
 } from 'react-native';
 import { yieldReportApi, WipRowDTO } from '../../services/api/yieldReportApi';
+import { processTimeLimitApi, ProcessTimeLimitStatus } from '../../services/api/processTimeLimitApi';
+import {
+  crossedDeadline,
+  timeLimitBlockReason,
+  timeLimitDrawable,
+  timeLimitExpiredQuantity,
+  timeLimitLine,
+} from '../../utils/processTimeLimit';
 
 type WipQcFields = Partial<Pick<WipRowDTO, 'inspectionStatus' | 'availableQuantity' | 'inspectionPendingQuantity'>>;
 
@@ -61,12 +78,19 @@ export function wipQcBlockReason(row: WipQcFields): string | null {
   return null;
 }
 
+/** 现在真能领的量: 待检和超时两道都要过 (超时只挡一部分时取较小的)。 */
+export function wipDrawableQuantity(row: WipQcFields, status?: ProcessTimeLimitStatus): number {
+  const free = wipFreeQuantity(row);
+  const drawable = timeLimitDrawable(status);
+  return drawable == null ? free : Math.min(free, drawable);
+}
+
 export interface WipSelection {
   /** 选中的工序批次号 = 报工 sourceWipNo */
   sourceWipNo: string;
   /** 该批次余额单位 (= 上道 outputUnit, 可能 ≠ 本道 unit), 供投入 :max 用 */
   unit: string | null;
-  /** 该批次可领余额 (= availableQuantity), 供投入 :max 用 */
+  /** 该批次现在能领的量 (扣掉待检和超时), 供投入 :max 用 */
   availableQuantity: number | null;
 }
 
@@ -75,6 +99,8 @@ interface WipBatchPickerProps {
   batchId: number;
   /** 当前工厂 ID (可选, 不传则 yieldReportApi 自动解析) */
   factoryId?: string;
+  /** 本道工序任务 ID: 传了才读时限状态 (缺口 14), 不传行为不变 */
+  taskId?: number;
   /** 当前选中的 sourceWipNo (受控; null = 未选) */
   selectedSourceWipNo: string | null;
   /** 选中变更回调 (传 null 表示清空选择) */
@@ -93,6 +119,7 @@ interface WipBatchPickerProps {
 export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
   batchId,
   factoryId,
+  taskId,
   selectedSourceWipNo,
   onChange,
   disabled = false,
@@ -102,11 +129,52 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rows, setRows] = useState<WipRowDTO[]>([]);
+  const [statuses, setStatuses] = useState<Map<string, ProcessTimeLimitStatus>>(new Map());
+  const [statusFailed, setStatusFailed] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const statusSeq = useRef(0);
+  const recheckedDeadlines = useRef(new Set<string>());
+  /** 上次告诉父组件的「批次:可领量」: 量变了才再说一次。 */
+  const emittedSelection = useRef<string | null>(null);
+  // 调用方传的是内联函数: 放进 useCallback 依赖会让父组件每次渲染都重新加载一遍
+  const onEmptyRef = useRef(onEmpty);
+  onEmptyRef.current = onEmpty;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  // 读失败不挡行: 后端在提交时还会判定
+  const loadStatuses = useCallback(async () => {
+    const seq = ++statusSeq.current;
+    if (taskId == null) {
+      setStatuses(new Map());
+      setStatusFailed(false);
+      return;
+    }
+    try {
+      const res = await processTimeLimitApi.getTaskStatuses(taskId, factoryId);
+      if (seq !== statusSeq.current) return;
+      if (res.success && Array.isArray(res.data)) {
+        const next = new Map<string, ProcessTimeLimitStatus>();
+        res.data.forEach((status) => {
+          if (status.batchNumber) next.set(status.batchNumber, status);
+        });
+        setStatuses(next);
+        setStatusFailed(false);
+        setNowMs(Date.now());
+      } else {
+        setStatusFailed(true);
+      }
+    } catch {
+      if (seq === statusSeq.current) setStatusFailed(true);
+    }
+  }, [factoryId, taskId]);
 
   // 加载该批次 WIP, 过滤到 AVAILABLE && 余额>0 (服务端可能已过滤, 这里再保险一次)
   const loadWip = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
+    // 和批次一起读完再显示, 不让操作员先看到还没标超时的行
+    const statusLoad = loadStatuses();
     try {
       const res = await yieldReportApi.listWip(batchId, factoryId);
       if (res.success && Array.isArray(res.data)) {
@@ -118,7 +186,7 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
         // 防呆 Rule 5: 确认为空时通知父组件，避免死胡同 (submitBlockedNoWip 无法解除)
         // ⚠️ 只有待检行时【不算空】: 料在, 只是等放行 —— 放开主管兜底会把待检料绕过去。
         if (available.length === 0) {
-          onEmpty?.();
+          onEmptyRef.current?.();
         }
       } else {
         setLoadError(res.message || '无法加载半成品批次');
@@ -127,32 +195,77 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
       const msg = err instanceof Error ? err.message : '加载半成品批次失败';
       setLoadError(msg);
     } finally {
+      await statusLoad;
       setLoading(false);
     }
-  }, [batchId, factoryId, onEmpty]);
+  }, [batchId, factoryId, loadStatuses]);
 
   useEffect(() => {
     loadWip();
   }, [loadWip]);
 
-  const selectableCount = rows.filter((r) => wipQcBlockReason(r) == null).length;
+  const statusOf = useCallback(
+    (row: WipRowDTO) => statuses.get(row.intermediateBatchNo),
+    [statuses],
+  );
+  const blockReasonOf = useCallback(
+    (row: WipRowDTO) => wipQcBlockReason(row) ?? timeLimitBlockReason(statusOf(row), nowMs),
+    [nowMs, statusOf],
+  );
+
+  // 倒计时每分钟本地重算; 有行到点了再问一次后端 (每个截止时间只问一次, 手机时钟不准时不至于一直问)
+  useEffect(() => {
+    if (statuses.size === 0) return undefined;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setNowMs(now);
+      const due = [...statuses.values()].filter((status) => crossedDeadline(status, now)
+        && !recheckedDeadlines.current.has(`${status.batchNumber}:${status.deadlineAt}`));
+      if (due.length > 0) {
+        due.forEach((status) => recheckedDeadlines.current.add(`${status.batchNumber}:${status.deadlineAt}`));
+        void loadStatuses();
+      }
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [loadStatuses, statuses]);
+
+  // 已选的这笔重新读到新状态: 不能领了就撤掉选择, 量变了就更新投入上限
+  useEffect(() => {
+    if (selectedSourceWipNo == null) {
+      emittedSelection.current = null;
+      return;
+    }
+    const row = rows.find((candidate) => candidate.intermediateBatchNo === selectedSourceWipNo);
+    const status = row ? statuses.get(row.intermediateBatchNo) : undefined;
+    if (!row || !status) return;
+    if (timeLimitBlockReason(status, Date.now()) != null) {
+      onChangeRef.current(null);
+      return;
+    }
+    const availableQuantity = wipDrawableQuantity(row, status);
+    const key = `${row.intermediateBatchNo}:${availableQuantity}`;
+    if (emittedSelection.current === key) return;
+    emittedSelection.current = key;
+    onChangeRef.current({ sourceWipNo: row.intermediateBatchNo, unit: row.unit, availableQuantity });
+  }, [rows, selectedSourceWipNo, statuses]);
+
+  const selectableCount = rows.filter((r) => blockReasonOf(r) == null).length;
+  const anyTimeBlocked = rows.some((r) => timeLimitBlockReason(statusOf(r), nowMs) != null);
 
   const selectRow = useCallback(
     (row: WipRowDTO) => {
-      if (disabled || wipQcBlockReason(row) != null) return;
+      if (disabled || blockReasonOf(row) != null) return;
       if (!required && row.intermediateBatchNo === selectedSourceWipNo) {
         onChange(null);
         return;
       }
+      // 待检和超时的那部分不能领 —— 投入上限按「现在能领的量」
+      const availableQuantity = wipDrawableQuantity(row, statusOf(row));
+      emittedSelection.current = `${row.intermediateBatchNo}:${availableQuantity}`;
       // required=true 时再次点击不取消; optional 模式下上方已处理清空。
-      onChange({
-        sourceWipNo: row.intermediateBatchNo,
-        unit: row.unit,
-        // 待检的那部分不能领 —— 投入上限按「现在能领的量」
-        availableQuantity: wipFreeQuantity(row),
-      });
+      onChange({ sourceWipNo: row.intermediateBatchNo, unit: row.unit, availableQuantity });
     },
-    [disabled, onChange, required, selectedSourceWipNo],
+    [blockReasonOf, disabled, onChange, required, selectedSourceWipNo, statusOf],
   );
 
   return (
@@ -189,7 +302,10 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
           <ScrollView style={styles.listScroll} nestedScrollEnabled>
             {rows.map((row: WipRowDTO) => {
               const selected = row.intermediateBatchNo === selectedSourceWipNo;
-              const blockReason = wipQcBlockReason(row);
+              const blockReason = blockReasonOf(row);
+              const status = statusOf(row);
+              const timeLine = blockReason == null ? timeLimitLine(status, nowMs) : null;
+              const expiredQty = blockReason == null ? timeLimitExpiredQuantity(status) : 0;
               return (
                 <TouchableOpacity
                   key={row.intermediateBatchNo}
@@ -214,8 +330,13 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
                       {row.processName ?? `第 ${row.processOrder ?? '?'} 道`}
                     </Text>
                     <Text style={styles.wipAvail}>
-                      可领 {wipFreeQuantity(row)} {row.unit ?? ''}
+                      可领 {wipDrawableQuantity(row, status)} {row.unit ?? ''}
                     </Text>
+                    {expiredQty > 0 ? (
+                      <Text style={styles.wipBlocked} testID={`wip-row-expired-${row.intermediateBatchNo}`}>
+                        另有 {expiredQty} {row.unit ?? ''} 已超时
+                      </Text>
+                    ) : null}
                     {wipPendingQuantity(row) > 0 && blockReason == null ? (
                       <Text style={styles.wipBlocked} testID={`wip-row-pending-${row.intermediateBatchNo}`}>
                         另有 {wipPendingQuantity(row)} {row.unit ?? ''} 待检，质检员放行后才能领
@@ -226,6 +347,14 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
                         {blockReason}
                       </Text>
                     ) : null}
+                    {timeLine != null ? (
+                      <Text
+                        style={status?.state === 'WARNING' ? styles.wipTimeWarning : styles.wipTime}
+                        testID={`wip-row-time-${row.intermediateBatchNo}`}
+                      >
+                        {timeLine}
+                      </Text>
+                    ) : null}
                   </View>
                 </TouchableOpacity>
               );
@@ -233,11 +362,21 @@ export const WipBatchPicker: React.FC<WipBatchPickerProps> = ({
           </ScrollView>
         )}
 
+        {!loading && statusFailed && rows.length > 0 ? (
+          <Text style={styles.wipTime} testID="wip-time-limit-unavailable">
+            剩余时间没读到，能不能领以提交结果为准
+          </Text>
+        ) : null}
+
         {/* 未选提示 (防呆 Rule 1: 事前明确告知必须选) */}
         {!loading && loadError == null && rows.length > 0 && selectableCount === 0 ? (
           <View style={styles.hint} testID="wip-all-pending-hint">
-            <Text style={styles.hintText}>上道半成品都在等质检放行，现在不能领用</Text>
-            <Text style={styles.emptyGuide}>请通知质检员放行，放行后点「重新加载」</Text>
+            <Text style={styles.hintText}>
+              {anyTimeBlocked ? '上道半成品现在都不能领用' : '上道半成品都在等质检放行，现在不能领用'}
+            </Text>
+            <Text style={styles.emptyGuide}>
+              {anyTimeBlocked ? '请通知质检员处置，处置后点重新加载' : '请通知质检员放行，放行后点「重新加载」'}
+            </Text>
             <TouchableOpacity onPress={loadWip} style={styles.retryBtn}>
               <Text style={styles.retryText}>重新加载</Text>
             </TouchableOpacity>
@@ -266,13 +405,15 @@ const styles = StyleSheet.create({
   emptyGuide: { fontSize: 12, color: '#E6A23C', textAlign: 'center', paddingHorizontal: 12, paddingBottom: 8 },
   listScroll: { maxHeight: 320 },
   row: {
-    flexDirection: 'row', alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center', minHeight: 44,
     paddingVertical: 12, paddingHorizontal: 6,
     borderBottomWidth: 1, borderBottomColor: '#E6F0FB',
   },
   rowSelected: { backgroundColor: '#ECF5FF', borderRadius: 6 },
   rowBlocked: { opacity: 0.6 },
   wipBlocked: { fontSize: 13, color: '#F56C6C', marginTop: 4, fontWeight: '600' },
+  wipTime: { fontSize: 13, color: '#606266', marginTop: 4 },
+  wipTimeWarning: { fontSize: 13, color: '#D9730D', marginTop: 4, fontWeight: '600' },
   radio: {
     width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#C0C4CC',
     backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', marginRight: 12,

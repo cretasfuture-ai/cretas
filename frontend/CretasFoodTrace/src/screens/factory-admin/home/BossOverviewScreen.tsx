@@ -5,6 +5,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 
 import type { AppTheme } from '../../../theme';
+import { useAuthStore } from '../../../store/authStore';
+import { analyticsEntriesFor, type AnalyticsEntryRoute } from '../../../utils/analyticsEntries';
 
 type BossRoute =
   | 'BossProductionPlans'
@@ -14,7 +16,9 @@ type BossRoute =
   // 通用现场能力 —— 注册在同一个 OverviewStack 里（见 BossNavigator.tsx）。
   | 'Traceability'
   | 'VisionVerify'
-  | 'SourceIndividualList';
+  | 'SourceIndividualList'
+  // 经营分析 —— 有 analytics 读权限才显示入口 (utils/analyticsEntries.ts)。
+  | AnalyticsEntryRoute;
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
@@ -61,6 +65,9 @@ export default function BossOverviewScreen() {
   const navigation = useNavigation();
   const theme = useTheme<AppTheme>();
   const open = (route: BossRoute) => navigation.navigate(route as never);
+  const user = useAuthStore((state) => state.user);
+  // 没有 analytics 读权限 ⇒ 空数组 ⇒ 整个「经营分析」分组不渲染
+  const analyticsEntries = analyticsEntriesFor(user);
   const { spacing, borderRadius } = theme.custom;
 
   return (
@@ -136,6 +143,34 @@ export default function BossOverviewScreen() {
             />
           ))}
         </List.Section>
+
+        {analyticsEntries.length > 0 && (
+          <List.Section>
+            <Text
+              variant="titleSmall"
+              style={{
+                color: theme.colors.onSurfaceVariant,
+                marginHorizontal: spacing.l,
+                marginTop: spacing.l,
+                marginBottom: spacing.s,
+              }}
+            >
+              经营分析
+            </Text>
+            {analyticsEntries.map((entry) => (
+              <List.Item
+                key={entry.route}
+                testID={entry.testID}
+                title={entry.label}
+                titleStyle={{ color: theme.colors.onSurface }}
+                onPress={() => open(entry.route)}
+                left={(props) => <List.Icon {...props} icon={entry.icon} color={theme.colors.onSurfaceVariant} />}
+                right={(props) => <List.Icon {...props} icon="chevron-right" />}
+                style={[styles.listItem, { paddingHorizontal: spacing.l }]}
+              />
+            ))}
+          </List.Section>
+        )}
       </ScrollView>
     </View>
   );

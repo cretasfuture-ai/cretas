@@ -19,6 +19,7 @@ import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -178,10 +179,10 @@ class ProcessSheetMultiOutputUnknownCostTest {
 
     private void allocate(List<Object> materializations, List<String> warnings) throws Throwable {
         Method method = ProcessSheetServiceImpl.class.getDeclaredMethod(
-                "applyMultiOutputCostAllocation", String.class, String.class, List.class, Set.class, List.class);
+                "applyMultiOutputCostAllocation", String.class, String.class, List.class, Set.class, Map.class, List.class);
         method.setAccessible(true);
         try {
-            method.invoke(service, F, PLAN, materializations, Set.of(), warnings);
+            method.invoke(service, F, PLAN, materializations, Set.of(), Map.of(), warnings);
         } catch (InvocationTargetException e) {
             throw e.getCause();
         }

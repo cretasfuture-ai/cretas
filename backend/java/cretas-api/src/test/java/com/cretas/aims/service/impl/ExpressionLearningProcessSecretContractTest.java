@@ -54,14 +54,15 @@ class ExpressionLearningProcessSecretContractTest {
 
         access = mock(ProcessSecretAccessService.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
-        when(access.factoriesWithProtectedProducts()).thenReturn(Set.of(FA));
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.of(FA));
         when(access.protectedProductTypeIds(FA)).thenReturn(Set.of("pA"));
         ProductType p = new ProductType();
         p.setId("pA");
         p.setFactoryId(FA);
         p.setName(SECRET);
         when(products.findAllById(Set.of("pA"))).thenReturn(List.of(p));
-        ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products);
+        ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products,
+                com.cretas.aims.service.consent.TrainingListTestSupport.directoryBackedBy(products));
 
         service = new ExpressionLearningServiceImpl(repo, null, null, null, null, consent, filter);
         ReflectionTestUtils.setField(service, "self", mock(ExpressionLearningService.class));
@@ -108,7 +109,8 @@ class ExpressionLearningProcessSecretContractTest {
 
     @Test
     void recipeParameterContentIsNotLearned() {
-        assertThat(service.learnExpression(FA, "BOM_RECIPE_QUERY", "这个产品配方里盐放多少", 0.95,
+        // 2026-10-29 选 A: 配方 / 工艺参数词带具体数值才拦
+        assertThat(service.learnExpression(FA, "BOM_RECIPE_QUERY", "这个产品配方里盐放 3 克", 0.95,
                 LearnedExpression.SourceType.LLM_FALLBACK)).isNull();
         verify(repo, never()).save(any());
     }

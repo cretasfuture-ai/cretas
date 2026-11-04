@@ -49,11 +49,11 @@ from smartbi.gold.restaurant.restaurant_intent_promotion import (  # noqa: E402
 )
 
 # Training rule (2026-10-24) + privacy clause 6: only rule-tagged / synthetic,
-# non-withdrawn rows are read, and rows naming a process-secret product (own
-# factory's, or ANY factory's for rows with no factory) are never printed. A
-# failed name lookup propagates and aborts the report.
+# non-withdrawn rows are read, and rows naming one of their own factory's
+# process-secret terms (rows with no factory are dropped too) are never printed.
+# A failed lookup propagates and aborts the report.
 from smartbi.services.process_secret_names import (  # noqa: E402
-    all_protected_product_names,
+    all_factory_lists,
     drop_rows_naming_protected_products,
 )
 from smartbi.services.training_consent import usable_rows_sql  # noqa: E402
@@ -181,10 +181,10 @@ async def _run(dsn: Optional[str], *, min_count: int) -> None:
     if records:
         # lookup failure raises -> the report aborts (never "nothing protected")
         kept = drop_rows_naming_protected_products(
-            records, await all_protected_product_names(), _FILTER_FIELDS)
+            records, await all_factory_lists(), _FILTER_FIELDS)
         excluded = len(records) - len(kept)
         if excluded:
-            print(f"({excluded} sample(s) naming a process-secret product not shown)")
+            print(f"({excluded} sample(s) with a process-secret product, a person / customer or a pay value not shown)")
         records = _aggregate(kept)
     if not records:
         print("No source='synthesis' rows yet — the synthesis path has not been "

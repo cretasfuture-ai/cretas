@@ -1091,14 +1091,12 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/Clerk
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/FactoryOnHandCaliberTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/LaborRateConfigTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/PackagedBatchStockVisibilityTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetBomFamilyRequirementsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetByproductMaterializationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetConfiguredUnitsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetCustomFieldValidationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetInjectionCostTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetInventoryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetMultiOutputProjectionTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetMultiOutputUnknownCostTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetReportingUnitFoldTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetRowsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/processentry/ProcessSheetServiceConcurrencyTest.java

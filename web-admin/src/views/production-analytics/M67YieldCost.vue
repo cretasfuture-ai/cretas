@@ -358,7 +358,7 @@
             <tbody>
               <tr v-for="row in mixCostSplit.rows" :key="row.key">
                 <td>{{ row.name }}</td>
-                <td>{{ row.qty == null ? '已保密' : `${row.qty} ${displayAuditUnit(row.unit)}` }}</td>
+                <td>{{ row.qtySecret ? '已保密' : row.qty == null ? '—' : `${row.qty} ${displayAuditUnit(row.unit)}` }}</td>
                 <td>{{ row.unitPrice == null ? '未归集' : `¥${Number(row.unitPrice).toFixed(2)}/${displayAuditUnit(row.unit)}` }}</td>
                 <td>{{ money2(row.cost) }}</td>
                 <td>{{ row.weightShare == null ? '—' : `${row.weightShare}%` }}</td>
@@ -379,6 +379,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { sameUnit } from '@/utils/unitPricing';
+import { isProcessSecretHidden } from '@/utils/processSecretField';
 import { DocumentCopy, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useRoute } from 'vue-router';
@@ -422,6 +423,8 @@ interface StepGroup {
 interface MixRel {
   batchNumber?: string; batchId?: string; quantity?: number; unit?: string; unitPrice?: number; totalCost?: number;
   weightSharePct?: number; costSharePct?: number; sourceType?: string;
+  /** 工艺保密裁剪标记 (后端出口裁剪带的 processSecret: { hiddenFields }) */
+  processSecret?: unknown;
 }
 interface SankeyNode { name: string; displayName: string; tooltipText: string; itemStyle?: { color: string } }
 interface CostSource { batchId?: string; batchName?: string; quantity?: number; unit?: string; unitPrice?: number; cost?: number; weightSharePct?: number; costSharePct?: number; depth?: number }
@@ -1236,7 +1239,8 @@ const mixCostSplit = computed(() => {
   const rows = mixRels.value.filter(r => r.totalCost != null);
   const totalCost = rows.reduce((s, r) => s + Number(r.totalCost || 0), 0);
   const totalQty = mixRels.value.reduce((s, r) => s + Number(r.quantity || 0), 0) || 1;
-  // 工艺保密: 按配方自动扣料的来源量 / 金额由后端置 null —— 显示「已保密」, ⛔ 不按 0 算占比 (独立审查 V2.1 M4)
+  // 工艺保密: 按配方自动扣料的来源量 / 金额由后端置 null 并带 processSecret 标记 —— 有标记显示「已保密」,
+  // 没标记的 null 是「没有数」显示「—」(工艺保密可按工厂关掉, null 不再等于被隐藏); ⛔ 都不按 0 算占比 (独立审查 V2.1 M4)
   return {
     hasCost: rows.length > 0,
     totalCost,
@@ -1244,6 +1248,7 @@ const mixCostSplit = computed(() => {
       key: `${r.batchId || r.batchNumber || 'upstream'}-${index}`,
       name: r.batchNumber || r.batchId || '上游',
       qty: r.quantity == null ? null : Number(r.quantity),
+      qtySecret: r.quantity == null && isProcessSecretHidden(r, 'quantity'),
       unit: r.unit,
       unitPrice: r.unitPrice,
       cost: r.totalCost,

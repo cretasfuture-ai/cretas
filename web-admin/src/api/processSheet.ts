@@ -195,6 +195,11 @@ export interface ProcessSheetRowRequest {
    */
   blendRatio?: BlendRatioDeviation;
   /**
+   * 缺口 03 回料比例上限: 前端只发 reason/note (超限时必填, 被后端 REWORK_RATIO_REASON_REQUIRED 拦下后补发);
+   * 其余由后端 ReworkRatioCheck 计算并覆盖。草稿不校验。
+   */
+  reworkRatio?: { reason: string; note?: string | null };
+  /**
    * 缺口 13 (审查中 7): 本道挂了关键控制点时, 正式报工随请求带上 CCP 实测值 ——
    * 后端与报工同一事务落库; 缺一项整笔 400 (CCP_READING_MISSING), 产出不入账。超限偏离写进返回的 warnings。
    */
@@ -452,7 +457,8 @@ export function submitRow(
   body: ProcessSheetRowRequest,
 ): Promise<ApiResponse<ProcessSheetRowResult>> {
   return post<ProcessSheetRowResult>(`${sheetBase(factoryId, planId)}/row/submit`, body, {
-    _handledErrorCodes: ['PRODUCTION_STOCK_SHORTAGE'],
+    // REWORK_RATIO_REASON_REQUIRED: 调用方弹窗收集原因后重提, 不要拦截器再弹一条 sticky 错误
+    _handledErrorCodes: ['PRODUCTION_STOCK_SHORTAGE', 'REWORK_RATIO_REASON_REQUIRED'],
   });
 }
 
@@ -622,6 +628,8 @@ export interface WorkflowPortDescriptor {
    * 报工页多产出时自动带进「成本分摊比例」, 仍可改 (后端记下原份额, 食品 DAG 缺口 10)。
    */
   fixedCostShare?: number | null;
+  /** 仅 input 端口有意义: 工艺版本上冻结的时限配置 (缺口 14)。null/缺省 = 不限时。 */
+  timeLimit?: import('./processTimeLimit').WorkflowPortTimeLimit | null;
   /**
    * 仅 output 端口有意义: 画布上这个物料 Cell 被标记成了**回料**。
    *

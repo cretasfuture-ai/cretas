@@ -191,6 +191,14 @@
       "name": "Payments",
       "description": "Cashier payment execution"
     },
+    "aiReports": {
+      "name": "AI Analysis Reports",
+      "description": "Past analysis reports, generate a new one"
+    },
+    "timeRangeCost": {
+      "name": "Time Range Cost Analysis",
+      "description": "Cost and AI analysis over a date range"
+    },
     "finishedGoods": {
       "name": "Finished Goods",
       "description": "Finished goods on hand"

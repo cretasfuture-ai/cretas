@@ -263,11 +263,13 @@ public class WorkstationCountingService {
         }
 
         // 3. 读取电子秤重量
-        BigDecimal weight = readScaleWeight(state.getScaleDeviceId(), state.getFactoryId());
+        BigDecimal weight = readScaleWeight(state.getScaleDeviceId(), state.getFactoryId()).orElse(null);
 
-        // 4. 累加计数
+        // 4. 累加计数 (没读到秤重量 = null, 不加进总重, ⛔ 不当 0)
         state.setProductCount(state.getProductCount() + 1);
-        state.setTotalWeight(state.getTotalWeight().add(weight));
+        if (weight != null) {
+            state.setTotalWeight(state.getTotalWeight().add(weight));
+        }
         state.getProductWeights().add(new ProductWeight(
                 state.getProductCount(),
                 weight,
@@ -289,7 +291,7 @@ public class WorkstationCountingService {
                 .totalWeight(state.getTotalWeight())
                 .gestureDetected(gestureResult.getGestureType())
                 .confidence(gestureResult.getConfidence())
-                .message("计数成功")
+                .message(weight == null && state.getScaleDeviceId() != null ? "计数成功, 但没读到秤重量" : "计数成功")
                 .build();
     }
 
@@ -314,11 +316,13 @@ public class WorkstationCountingService {
 
         // 如果提供了手动重量则使用，否则从电子秤读取
         BigDecimal weight = manualWeight != null ? manualWeight :
-                readScaleWeight(state.getScaleDeviceId(), state.getFactoryId());
+                readScaleWeight(state.getScaleDeviceId(), state.getFactoryId()).orElse(null);
 
-        // 累加计数
+        // 累加计数 (没读到秤重量 = null, 不加进总重, ⛔ 不当 0)
         state.setProductCount(state.getProductCount() + 1);
-        state.setTotalWeight(state.getTotalWeight().add(weight));
+        if (weight != null) {
+            state.setTotalWeight(state.getTotalWeight().add(weight));
+        }
         state.getProductWeights().add(new ProductWeight(
                 state.getProductCount(),
                 weight,
@@ -335,7 +339,7 @@ public class WorkstationCountingService {
                 .currentCount(state.getProductCount())
                 .productWeight(weight)
                 .totalWeight(state.getTotalWeight())
-                .message("手动计数成功")
+                .message(weight == null && state.getScaleDeviceId() != null ? "手动计数成功, 但没读到秤重量" : "手动计数成功")
                 .build();
     }
 
@@ -510,31 +514,52 @@ public class WorkstationCountingService {
         return workSessionRepository.findActiveByBatchIdAndEmployeeId(batchId, workerId);
     }
 
-    private BigDecimal readScaleWeight(String scaleDeviceId, String factoryId) {
+    /**
+     * 读电子秤最近一条读数, 按读数自带的单位换算成 kg。
+     * 读不到 / 没有重量字段 / 单位认不出 / 异常 → {@link Optional#empty()} (如实「没读到」), ⛔ 不返回 0。
+     */
+    Optional<BigDecimal> readScaleWeight(String scaleDeviceId, String factoryId) {
         if (scaleDeviceId == null) {
-            return BigDecimal.ZERO;
+            return Optional.empty();
         }
 
         try {
-            // 获取电子秤最近的称重数据
             List<IotDeviceData> recentData = iotDataService.getRecentData(factoryId, scaleDeviceId, 1);
-
-            if (recentData != null && !recentData.isEmpty()) {
-                IotDeviceData data = recentData.get(0);
-                String dataValue = data.getDataValue();
-
-                if (dataValue != null && !dataValue.isEmpty()) {
-                    JsonNode payload = objectMapper.readTree(dataValue);
-                    if (payload.has("weight")) {
-                        return BigDecimal.valueOf(payload.get("weight").asDouble());
-                    }
-                }
+            if (recentData == null || recentData.isEmpty()) {
+                return Optional.empty();
             }
+            String dataValue = recentData.get(0).getDataValue();
+            if (dataValue == null || dataValue.isEmpty()) {
+                return Optional.empty();
+            }
+            JsonNode payload = objectMapper.readTree(dataValue);
+            // 读数可能在顶层, 也可能包在 data 里 (MqttSubscriber 存的是整条消息, 重量在 data 下)
+            JsonNode reading = payload != null && payload.has("weight") ? payload
+                    : (payload != null && payload.path("data").has("weight") ? payload.get("data") : null);
+            if (reading == null) {
+                return Optional.empty();
+            }
+            return scaleReadingToKg(reading.get("weight").asDouble(),
+                    reading.has("unit") ? reading.get("unit").asText() : null);
         } catch (Exception e) {
             log.warn("读取电子秤重量失败: deviceId={}, error={}", scaleDeviceId, e.getMessage());
+            return Optional.empty();
         }
+    }
 
-        return BigDecimal.ZERO;
+    /** 秤读数 → kg。没写单位按 kg (秤默认); 写了但认不出/不是质量单位 → 没读到, 不猜。 */
+    public static Optional<BigDecimal> scaleReadingToKg(double weight, String unit) {
+        if (Double.isNaN(weight) || Double.isInfinite(weight)) {
+            return Optional.empty();
+        }
+        BigDecimal value = BigDecimal.valueOf(weight);
+        if (unit == null || unit.isBlank()) {
+            return Optional.of(value);
+        }
+        return com.cretas.aims.service.unit.impl.UnitContractServiceImpl.describeBuiltIn(unit)
+                .filter(u -> u.dimension() == com.cretas.aims.service.unit.UnitDimension.MASS)
+                .map(u -> value.multiply(u.factorToBase()).divide(BigDecimal.valueOf(1000),
+                        6, java.math.RoundingMode.HALF_UP).stripTrailingZeros());
     }
 
     private void updateStageRecordCount(Long stageRecordId, int count, BigDecimal totalWeight) {
@@ -552,9 +577,14 @@ public class WorkstationCountingService {
 
         BigDecimal sum = weights.stream()
                 .map(ProductWeight::getWeight)
+                .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        long read = weights.stream().map(ProductWeight::getWeight).filter(Objects::nonNull).count();
+        if (read == 0) {
+            return BigDecimal.ZERO;
+        }
 
-        return sum.divide(BigDecimal.valueOf(weights.size()), 3, java.math.RoundingMode.HALF_UP);
+        return sum.divide(BigDecimal.valueOf(read), 3, java.math.RoundingMode.HALF_UP);
     }
 
     private String buildLabelAlertMessage(LabelRecognitionResult result) {

@@ -69,14 +69,16 @@ class ProcessSecretCrossFactoryRound4ContractTest {
     void setUp() {
         ProcessSecretAccessService access = mock(ProcessSecretAccessService.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
-        when(access.factoriesWithProtectedProducts()).thenReturn(Set.of(FA));
+        // 写给所有工厂的共享内容 (平台级意图 / 晋升 / 回滚 / 全局说法 / 共享短语表) 的并集不看开关 (第四 / 五轮复审)
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.of(FA));
         when(access.protectedProductTypeIds(FA)).thenReturn(Set.of("pA"));
         ProductType p = new ProductType();
         p.setId("pA");
         p.setFactoryId(FA);
         p.setName(SECRET);
         when(products.findAllById(Set.of("pA"))).thenReturn(List.of(p));
-        filter = new ProcessSecretSampleFilter(access, products);
+        filter = new ProcessSecretSampleFilter(access, products,
+                com.cretas.aims.service.consent.TrainingListTestSupport.directoryBackedBy(products));
         intents = mock(AIIntentConfigRepository.class);
         guard = new IntentConfigWriteGuard(intents, filter);
     }

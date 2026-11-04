@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#fdfcfa">
 <title>数据安全 · 白垩纪 Cretas</title>
-<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看会留下记录，工艺和配方任何情况下都不用于训练模型。每一条都写明是怎么做到的。">
+<meta name="description" content="白垩纪 Cretas 如何保护工厂的配方与经营数据：工厂之间互相看不到，平台人员查看会留下记录；工艺保密、平台看不到配方、外发脱敏、训练过滤等可按工厂开启。每一条都写明是怎么做到的。">
 <link rel="canonical" href="https://cretaceousfuture.com/data-security/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="数据安全 · 白垩纪 Cretas">
@@ -147,13 +147,13 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <a href="#q-isolation">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
     <li class="v6-reveal">
-      <b>我们看，要你授权</b>
-      <p>配方默认显示代号，每次查看都留下记录。</p>
+      <b>我们看，都有记录</b>
+      <p>默认平台能看配方，开启保密后日常看不到。每次查看都留下记录。</p>
       <a href="#q-platform">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
     <li class="v6-reveal">
-      <b>工艺配方不进训练</b>
-      <p>工艺参数、配方和工序做法，任何情况下都不用于训练。</p>
+      <b>训练过滤可开启</b>
+      <p>开启后，带工艺数值和提到保密产品的记录不进训练。默认未开启。</p>
       <a href="#q-training">怎么做到 <span aria-hidden="true">↓</span></a>
     </li>
   </ol>
@@ -246,6 +246,24 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
         <li data-claim="C1-ai-scope" data-claim-status="live">AI 助手查数据时，工厂身份取自提问人的登录凭证，模型自己不能指定去查哪个工厂。</li>
         <li data-claim="C1-api-scope" data-claim-status="commitment">系统里每个读写工厂数据的接口，都只按登录身份所属的工厂取数。</li>
         <li data-claim="C1-no-cross-learning" data-claim-status="commitment">AI 在你工厂学到的说法和用词，只在你的工厂里用，不会带到别的工厂。</li>
+        <li data-claim="C1-always-on" data-claim-status="live">工厂之间的隔离始终生效，不受任何配置影响。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qrow v6-reveal" id="q-options">
+    <h3>这些保护默认开着吗？</h3>
+    <div>
+      <p class="ans" data-claim="C0-opt-in" data-claim-status="live">工厂之间的隔离始终开着，不能关。其余各项默认关闭，新工厂和已有工厂都一样，按工厂选择开启。</p>
+      <span class="how-label">可以开启的项目</span>
+      <ul>
+        <li data-claim="C0-opt-in" data-claim-status="live">工艺保密：配方、配比、出成率和成本按人遮挡。</li>
+        <li data-claim="C0-opt-in" data-claim-status="live">平台看不到配方：工艺保密开着时才起作用，平台人员日常看不到保密产品的配方和成本。</li>
+        <li data-claim="C0-opt-in" data-claim-status="live">出外脱敏：发给外部 AI 模型之前，公司名、人名、电话和产品名换成代号。</li>
+        <li data-claim="C0-opt-in" data-claim-status="live">训练数据过滤：保密产品名和工艺数值从训练样本中剔除。</li>
+        <li data-claim="C0-opt-in" data-claim-status="live">客户侧保管：核心工艺不入云，由你自己的执行端保存。</li>
+        <li data-claim="C0-opt-in" data-claim-status="live">AI 保密审计：记录每次 AI 请求的保密访问情况，默认跟随工艺保密。</li>
+        <li data-claim="C0-opt-in" data-claim-status="live">需要开启时告诉我们，由我们在平台上按工厂设置，每次改动都留记录。</li>
       </ul>
     </div>
   </div>
@@ -253,10 +271,11 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="qrow v6-reveal" id="q-platform" data-claim="C2-platform-access" data-claim-status="commitment">
     <h3>你们（平台方）能看到我的配方吗？</h3>
     <div>
-      <p class="ans">默认看不到明细。要看必须经你授权，而且每次都留下记录。</p>
+      <p class="ans">默认能看。开启工艺保密和「平台看不到配方」之后，日常看不到。每次查看都留下记录。</p>
       <span class="how-label">怎么做到</span>
       <ul>
-        <li>配方和工艺参数默认以代号显示，查看明细需要你方授权。</li>
+        <li>这两项都开着时，平台人员日常看不到保密产品的配方和成本。</li>
+        <li>「平台看不到配方」关着时，平台人员可以查看、编辑配方和成本，也可以做 AI 分析，每一次都记入访问记录。</li>
         <li>平台人员每一次查看你工厂的数据，都会记下是谁、什么时间、看了什么，你可以随时查看这份记录。</li>
       </ul>
     </div>
@@ -265,15 +284,17 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
   <div class="qrow v6-reveal" id="q-training">
     <h3>我的数据会被拿去训练模型吗？</h3>
     <div>
-      <p class="ans" data-claim="C3-process-never" data-claim-status="live">工艺内容不会，任何情况下都不会。</p>
+      <p class="ans" data-claim="C3-training-filter" data-claim-status="live">工艺内容要看「训练数据过滤」开没开，这一项默认关闭。</p>
       <span class="how-label">怎么做到</span>
       <ul>
-        <li data-claim="C3-process-never" data-claim-status="live">工艺参数（温度、时间、配比、用量等）、配方和原料用量、工序顺序和合并方式、问题的处理办法、薪酬考勤、客户名称和人员姓名：含有这些内容的记录整条不进训练，授权了也一样。</li>
+        <li data-claim="C3-training-filter" data-claim-status="live">开启后：配方、配比、用量、杀菌温度这类工艺词和具体数值出现在同一句或同一条记录里的，以及提到保密产品的记录，整条不进训练，授权了也一样。</li>
+        <li data-claim="C3-training-filter" data-claim-status="live">没开启时：这些记录不再被剔除。没有书面授权的工厂，记录里的数字换成占位符；已书面授权的工厂，按原文用于训练。</li>
+        <li data-claim="C3-personal" data-claim-status="live">本厂在系统中登记的人员、客户名称，以及工资考勤数字，不进入训练数据。</li>
         <li data-claim="C3-default-train" data-claim-status="commitment">默认用于训练的包括 AI 问答的提问方式和分析思路、说法与功能的对应关系。训练副本里经营数字换成占位符，名称换成通用标记，电话、证件号、银行卡号删除；你系统里的原始数据不受影响。</li>
         <li data-claim="C3-scheduling-own" data-claim-status="commitment">排程数据默认不用于训练；只有你书面授权，才会用来训练只给你用的排程模型。</li>
         <li data-claim="C3-excluded" data-claim-status="live">价格与交易对象的对应关系、客户名单、合同、录音、账户凭证和访问日志，都不用于训练。</li>
         <li data-claim="C3-no-cross-process" data-claim-status="live">平台不分析、不比对任何工厂的工艺流程，你的工艺只用来运行你自己的系统。</li>
-        <li data-claim="C3-secret-product" data-claim-status="commitment">你可以把任一产品设为工艺保密：它的工序、物料、成本不用于任何训练，不纳入跨客户的统计和对比；日常使用中，平台人员看不到它的配方和成本，只有应你要求、把你工厂的数据完整交还给你时，平台超级管理员的导出操作会包含这些内容，并全程留痕；你自己系统里的报表不受影响。</li>
+        <li data-claim="C3-secret-product" data-claim-status="commitment">开启工艺保密后，你可以把任一产品设为保密产品：它不纳入跨客户的统计和对比；再开启「平台看不到配方」，日常使用中平台人员看不到它的配方和成本，只有应你要求、把你工厂的数据完整交还给你时，平台超级管理员的导出操作会包含这些内容，并全程留痕；你自己系统里的报表不受影响。保密产品要不进训练，还需要开启「训练数据过滤」。</li>
       </ul>
     </div>
   </div>
@@ -284,11 +305,11 @@ html:not(.v6-js) .v6-reveal{opacity:1;transform:none}
       <p class="ans" data-claim="C4-provider" data-claim-status="live">用的是阿里云百炼的通义千问。阿里云公开说明，按量付费 API 的调用数据不会用于模型训练。</p>
       <span class="how-label">怎么做到</span>
       <ul>
-        <li data-claim="C4-smartbi-redact" data-claim-status="live">智能报表分析把数据交给模型之前，先把客户、门店、产品名称换成代号；换不成功，这次就不发送，不会带着原文发出去。</li>
+        <li data-claim="C4-smartbi-redact" data-claim-status="live">开启「出外脱敏」的工厂：智能报表分析把数据交给模型之前，先把客户、门店、产品名称换成代号；换不成功，这次就不发送，不会带着原文发出去。没开启时，内容按原文发给模型。不知道数据属于哪家工厂时，一律不发。</li>
         <li data-claim="C4-image-not-redacted" data-claim-status="live">单据照片、发票、送货单、SOP 图片和 PDF 交给 AI 识别时，按原样识别，不做名称替换；上传时页面会提示。摄像头抓拍默认关闭，由工厂自己决定是否打开。</li>
-        <li data-claim="C4-assistant-redact" data-claim-status="live">工厂 AI 助手把查询结果交给模型总结之前，同样先把名称换成代号，换不成功就不发送。</li>
-        <li data-claim="C4-secret-ai" data-claim-status="live">设为工艺保密的产品：负责人和你授权的人在 AI 对话里能用到它的完整数据（包括成本），帮自己分析；其他人（本厂没授权的人、平台人员、别的工厂、定时任务）通过 AI 拿到的数据不含它的成本，合计旁会注明「不含 N 个保密产品」。AI 的分析结果和缓存按工厂和授权分开保存，每次 AI 取数都留记录。发给模型之前，保密产品的名称换成代号。</li>
-        <li data-claim="C4-intent-exception" data-claim-status="live">例外：识别你想办什么事的那一步，会把你说的原话原样发给模型，原话里如果提到产品名（包括保密产品），不做替换。</li>
+        <li data-claim="C4-assistant-redact" data-claim-status="live">开启「出外脱敏」的工厂：工厂 AI 助手把查询结果交给模型总结之前，同样先把名称换成代号，换不成功就不发送。</li>
+        <li data-claim="C4-secret-ai" data-claim-status="live">开启工艺保密的工厂，保密产品在 AI 里按人区分：负责人和你授权的人在 AI 对话里能用到它的完整数据（包括成本），帮自己分析；其他人（本厂没授权的人、别的工厂、定时任务，以及「平台看不到配方」开着时的平台人员）通过 AI 拿到的数据不含它的成本，合计旁会注明「不含 N 个保密产品」。AI 的分析结果和缓存按工厂和授权分开保存；AI 保密审计开着时，每次 AI 取数都留记录。</li>
+        <li data-claim="C4-intent-exception" data-claim-status="live">例外：即使开启出外脱敏，识别你想办什么事的那一步，也会把你说的原话原样发给模型，原话里如果提到产品名（包括保密产品），不做替换。</li>
       </ul>
     </div>
   </div>

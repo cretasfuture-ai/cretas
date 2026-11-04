@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 每日 AI 回归评测 —— 现只跑 DEMO_FACTORY2 的工厂读电池与工厂写路径电池; 失败追加 alerts 日志。
+# 每日 AI 回归评测 —— 现只跑 F006 的工厂读电池与工厂写路径电池; 失败追加 alerts 日志。
 #
 # 2026-10-29 MOCK_REST AI writes stopped, owner-approved: 原先的餐饮电池
 # (smartbi.scripts.restaurant_ai_eval, R6→R22 52 案例, 写死 MOCK_REST) 与餐饮飞轮日报
@@ -25,6 +25,7 @@ ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
   # shellcheck disable=SC1091
   source /www/wwwroot/cretas/.env.prod 2>/dev/null
   set +a
+  # 工厂评测凭证 FACTORY_EVAL_USERNAME/PASSWORD (F006 账号) 同样只在 .env.prod, 缺了电池退 2 = 没量到
   rc=0
 
   # ── 工厂读电池 (2026-07-24 验收轮建立) ──
@@ -34,7 +35,8 @@ ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
   frc=$?
   echo "=== factory read done (rc=$frc) ==="
   if [ "$frc" -ne 0 ]; then
-    echo "FACTORY READ EVAL FAILED rc=$frc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    # rc=1 断言失败 / rc=2 没量到 (登录、凭证) —— 措辞不同, 别把「没量到」读成「模型退化」
+    echo "FACTORY READ EVAL $([ "$frc" -eq 1 ] && echo FAILED || echo NOT-MEASURED) rc=$frc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
     rc=$((rc || frc))
   fi
 
@@ -45,7 +47,7 @@ ALERTS=/www/wwwroot/cretas/logs/restaurant-ai-eval-alerts.log
   wrc=$?
   echo "=== factory write done (rc=$wrc) ==="
   if [ "$wrc" -ne 0 ]; then
-    echo "FACTORY WRITE EVAL FAILED rc=$wrc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
+    echo "FACTORY WRITE EVAL $([ "$wrc" -eq 1 ] && echo FAILED || echo NOT-MEASURED) rc=$wrc $(date '+%F %T') — 见 $LOG" >> "$ALERTS"
     rc=$((rc || wrc))
   fi
 

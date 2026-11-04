@@ -24,13 +24,17 @@ Run on the server (DB env from the app's .env):
 Rows are already deduped at write time (UNIQUE input_hash, ON CONFLICT refresh),
 so no dedup needed here. NO RLS on the table → reads all factories cross-business.
 
-训练规则 (Steve 2026-10-24, 见 smartbi/services/training_consent.py):
-  - 真实行必须带 metadata.training_rule (采集时已过新规则); 之前采集的旧行一律排除,
-    等补检。导出时再查一次 qa_has_blocked_content (工艺参数 / 结构 / 问题处理 /
-    人员薪酬), 命中排除 —— 任何工厂, 授权与否。
+训练规则 (Steve 2026-10-24 / 2026-10-29 选 A, 见 smartbi/services/training_consent.py):
+  - 真实行的 metadata.training_rule 必须是真实的规则版本 (RULE_VERSIONS; 只看键在不在不算,
+    演练行写的是 "drill"); 之前采集的旧行一律排除, 等补检。餐饮 / 测试 / 备份租户
+    (MOCK_REST、DEMO_REST、QATEST_*、F006BK, 以及 restaurant 桶) 与没有工厂的行一律排除。
+    导出时按当前名单再查一次, 命中排除, 授权与否: 人员薪酬 / 本厂人员客户 (隐私, 不看任何开关);
+    该厂「训练数据过滤」(d) 开着时再查工艺词 + 具体数值和本厂保密词 (按行所属工厂, 读不到按开着)。
   - SHARED 导出 (默认, 按 business_type 分桶):
+      * 这份数据跨工厂: 真实行提到任何一家工厂的保密词、带工艺词 + 具体数值一律排除, 不看 d 也不看
+        任何开关 (process_secret_names.row_holds_secrets_for_shared_content)。
       * 合成行 (只认 SEED_R/SEED_F 哨兵工厂; metadata.source_kind / seeded 由调用方写入,
-        不算合成, 无工厂的行照样过训练规则与任意工厂的工艺保密名称检查) → 收入。
+        不算合成) → 收入。
       * metadata.desensitized 行 (未授权工厂, 采集时已脱敏) → 收入。
       * shared_anon 工厂的原始行 → 经 desensitize_for_training 脱敏 (名称换通用标记、
         数字全部换占位符) 后收入。
@@ -56,16 +60,22 @@ for _p in (_PYTHON_ROOT, os.path.join(_PYTHON_ROOT, "smartbi")):
         sys.path.insert(0, _p)
 
 from smartbi.services.process_secret_names import (  # noqa: E402
-    all_protected_product_names,
-    row_names_protected_product,
+    all_factory_lists,
+    lists_for_row,
+    row_holds_secrets_for_shared_content,
+    shared_content_lists,
 )
 from smartbi.services.training_consent import (  # noqa: E402 (after path bootstrap)
     DESENSITIZED_KEY,
-    RULE_KEY,
+    NON_TRAINING_BUSINESS_TYPES,
+    RECHECK_KEY,
+    REJECTED_KEY,
     SYNTHETIC_FACTORY_IDS,
     WITHDRAWN,
     fetch_consent_map,
+    has_real_rule_version,
     is_synthetic_factory,
+    is_training_tenant,
     qa_has_blocked_content,
     scope_from_map,
 )
@@ -143,28 +153,28 @@ def _is_synthetic(row: Dict[str, Any]) -> bool:
     (SEED_R / SEED_F, the ids the seeder writes; same test as capture's
     is_synthetic_factory). metadata.source_kind / metadata.seeded is
     caller-supplied and never makes a row synthetic: a row with a real tenant
-    stays that tenant's data, and a row with no factory still has to pass the
-    training rule, including the any-factory process-secret name check."""
+    stays that tenant's data, and a row with no factory is not exported
+    (``passes_training_rule``)."""
     return is_synthetic_factory(row.get("factory_id"))
+
+
+class ConsentUnreadable(RuntimeError):
+    """training_consent could not be read: the export stops (2026-11-03 review N7a)."""
 
 
 async def _load_consent(pool) -> Dict[str, str]:
     """Return {factory_id: consent_scope} from training_consent.
 
-    Missing factory = no row = default-deny ('none'). If the table does not
-    exist yet (migration not applied), returns {} → every real tenant is
-    treated as 'none' (still default-deny, never a fail-open).
+    Missing factory = no row = 'none'. An unreadable table (missing, permission,
+    connection) ABORTS the export: an empty map would read every withdrawn factory
+    as 'none' and export its desensitized rows (fail-open; review N7a).
     """
     try:
         async with pool.acquire() as conn:
             return await fetch_consent_map(conn)
-    except Exception as e:  # table absent / permission → treat as no consent
-        logger.warning(
-            "training_consent unreadable (%s) — treating ALL real tenants as "
-            "'none' (default-deny). Apply V20261001_01 migration if unexpected.",
-            e,
-        )
-        return {}
+    except Exception as e:
+        logger.error("training_consent unreadable (%s) — export aborted, nothing written", e)
+        raise ConsentUnreadable(f"training_consent unreadable: {type(e).__name__}: {e}") from e
 
 
 def _consent_of(row: Dict[str, Any], consent: Dict[str, str]) -> str:
@@ -220,42 +230,64 @@ def _metadata(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def passes_training_rule(row: Dict[str, Any],
-                         protected_names: Optional[Mapping[str, Any]] = None) -> bool:
-    """A real row may be exported only if it was captured under the 2026-10-24
-    rule and still has no blocked content (re-checked here, defense in depth),
-    and it does not name one of its factory's process-secret products (privacy
-    clause 6; rows captured before the product was protected are caught here).
-    A row with no factory must not name a process-secret product of ANY factory."""
-    if RULE_KEY not in _metadata(row):
+                         factory_lists: Optional[Mapping[str, Any]] = None) -> bool:
+    """A real row may be exported only if
+
+    * it carries a REAL capture rule version (``training_rule`` in
+      ``RULE_VERSIONS``; a drill row stamped ``"drill"`` does not count);
+    * it belongs to a factory tenant (not a restaurant / test / backup tenant,
+      not the restaurant bucket) — and to a factory at all: a row without one
+      cannot be matched against any factory's lists, and the union of every
+      factory's lists is no substitute;
+    * it still has no blocked content under the CURRENT rule: no per-person pay and none of the
+      factory's own people / customers, whatever any setting says; and, while the factory's item
+      d is on, no process word with a value and none of its process-secret terms (privacy clause
+      6; rows captured before the product was protected, or while d was off, are caught here).
+      Re-checked here with the current lists and d, so a row held at capture
+      (``secrecy_recheck``) is re-judged."""
+    meta = _metadata(row)
+    if not has_real_rule_version(meta):
         return False
-    if qa_has_blocked_content(row.get("input_text"), row.get("teacher_output")):
+    # held at capture (waiting for re-judgement) or rejected by it (kept for manual
+    # review, Q5): never exported
+    if RECHECK_KEY in meta or REJECTED_KEY in meta:
         return False
-    # no factory: we cannot tell whose product it names -> any factory's names
-    return not row_names_protected_product(row, protected_names)
+    factory_id = row.get("factory_id")
+    if not is_training_tenant(factory_id) or (row.get("business_type") or "") in NON_TRAINING_BUSINESS_TYPES:
+        return False
+    lists = lists_for_row(factory_id, factory_lists)
+    if qa_has_blocked_content(row.get("input_text"), row.get("teacher_output"), directory=lists.directory,
+                              training_filter_on=lists.training_filter_on):
+        return False
+    return not lists.names_any(row.get("input_text"), row.get("teacher_output"))
 
 
 def gate_shared_rows(
     rows: List[Dict[str, Any]],
     consent: Dict[str, str],
-    protected_names: Optional[Mapping[str, Any]] = None,
+    factory_lists: Optional[Mapping[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Gate rows for the SHARED (cross-tenant) export.
 
-    Synthetic -> raw. Real rows must pass the training rule; then desensitized
-    rows -> as stored, shared_anon raw rows -> anonymized, private raw rows ->
-    excluded (own model only).
+    Synthetic -> raw. Real rows must pass the training rule and, because this set crosses
+    factories, hold neither any factory's process-secret terms nor a process value whatever any
+    setting says (``row_holds_secrets_for_shared_content``); then desensitized rows -> as stored, shared_anon
+    raw rows -> anonymized, private raw rows -> excluded (own model only).
 
     Returned items: {"row", "input_text", "teacher_output", "consent_class"}.
     """
     from smartbi.services.corpus_anonymize import desensitize_for_training
 
+    shared = shared_content_lists(factory_lists)
     out: List[Dict[str, Any]] = []
     for r in rows:
         if _is_synthetic(r):
             out.append({"row": r, "input_text": None, "teacher_output": None,
                         "consent_class": "synthetic"})
             continue
-        if not passes_training_rule(r, protected_names):
+        if not passes_training_rule(r, factory_lists):
+            continue
+        if row_holds_secrets_for_shared_content(r, shared):
             continue
         if _consent_of(r, consent) == WITHDRAWN:
             continue  # withdrawn factories leave every model update (clause 10)
@@ -291,10 +323,10 @@ async def _export_private(args, pool) -> None:
 
     rows = await _fetch_rows(args.source, args.business_type, args.min_quality,
                              pool=pool, factory_id=args.factory)
-    # process content and process-secret products never enter any set, the
-    # factory's own model included
-    protected = await all_protected_product_names()
-    rows = [r for r in rows if passes_training_rule(r, protected)]
+    # the training rule holds for the factory's own model too: names and pay values never,
+    # process content and process-secret products while its item d is on
+    lists = await all_factory_lists()   # failure aborts the export
+    rows = [r for r in rows if passes_training_rule(r, lists)]
     if not rows:
         logger.info("No samples for factory %s — nothing to export.", args.factory)
         return
@@ -342,8 +374,8 @@ async def main() -> None:
         logger.info("No samples matched — nothing to export.")
         return
 
-    protected = await all_protected_product_names()   # failure aborts the export
-    gated = gate_shared_rows(rows, consent, protected)
+    lists = await all_factory_lists()   # failure aborts the export
+    gated = gate_shared_rows(rows, consent, lists)
     excluded = len(rows) - len(gated)
     if not gated:
         logger.info(

@@ -78,10 +78,35 @@ class ProductionBatchRepositoryQueryValidationTest {
         repository.flush();
         policyRepository.flush();
 
+        // 工厂级保密配置 (按批次所属工厂): 没有配置行 = 工艺保密关, 保密产品照常计入
+        assertThat(repository.countExcludingProcessSecretProducts() - totalBefore).isEqualTo(3);
+        // 工艺保密 (a) 开、平台看不到配方 (b) 开 → 排除
+        setting("repo-factory", "PROCESS_SECRET", true);
+        setting("repo-factory", "PLATFORM_RECIPE_BLOCK", true);
         assertThat(repository.countExcludingProcessSecretProducts() - totalBefore).isEqualTo(2);
         assertThat(repository.countByStatusExcludingProcessSecretProducts(ProductionBatchStatus.COMPLETED)
                 - completedBefore).isEqualTo(1);
         assertThat(repository.count()).isGreaterThanOrEqualTo(totalBefore + 3);   // control: all 3 exist
+        // b 关: 平台看得到, 照常计入 (同一请求只改 b)
+        setting("repo-factory", "PLATFORM_RECIPE_BLOCK", false);
+        assertThat(repository.countExcludingProcessSecretProducts() - totalBefore).isEqualTo(3);
+        // B 档 + 客户侧保管 (e) 开: 与 a / b 无关, 排除
+        setting("repo-factory", "PROCESS_SECRET", false);
+        policyRepository.findByFactoryIdAndProductTypeId("repo-factory", "repo-secret-product").ifPresent(p -> {
+            p.setStorageMode(com.cretas.aims.entity.processsecret.ProcessSecretStorageMode.CUSTOMER_HELD);
+            policyRepository.saveAndFlush(p);
+        });
+        setting("repo-factory", "CUSTOMER_HELD", true);
+        assertThat(repository.countExcludingProcessSecretProducts() - totalBefore).isEqualTo(2);
+    }
+
+    @Autowired
+    private com.cretas.aims.repository.secrecy.FactorySecrecySettingRepository settingRepository;
+
+    private void setting(String factoryId, String item, boolean enabled) {
+        settingRepository.saveAndFlush(com.cretas.aims.entity.secrecy.FactorySecrecySetting.builder()
+                .factoryId(factoryId).itemCode(item).enabled(enabled)
+                .updatedAt(java.time.LocalDateTime.now()).updatedBy(1L).build());
     }
 
     private static ProductionBatch batch(String number, String plan, String type) {

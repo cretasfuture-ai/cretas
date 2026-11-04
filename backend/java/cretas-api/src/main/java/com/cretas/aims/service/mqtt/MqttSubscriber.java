@@ -146,12 +146,14 @@ public class MqttSubscriber {
         // 1. 存储到 iot_device_data 表
         iotDataService.saveDeviceData(factoryId, deviceId, "WEIGHT", data);
 
-        // 2. 更新 FactoryEquipment.lastWeightReading
-        iotDataService.updateEquipmentLastWeight(
-                deviceId,
-                BigDecimal.valueOf(weight),
-                LocalDateTime.now()
-        );
+        // 2. 更新 FactoryEquipment.lastWeightReading (统一存 kg: 读数单位认不出就不更新, 不存一个单位不明的数)
+        java.util.Optional<BigDecimal> weightKg =
+                com.cretas.aims.service.workstation.WorkstationCountingService.scaleReadingToKg(weight, unit);
+        if (weightKg.isPresent()) {
+            iotDataService.updateEquipmentLastWeight(deviceId, weightKg.get(), LocalDateTime.now());
+        } else {
+            log.warn("称重单位无法换算为 kg, 不更新最近读数: device={}, weight={}, unit={}", deviceId, weight, unit);
+        }
 
         // 3. 如果稳定，记录日志（未来可触发自动入库流程）
         if (stable) {

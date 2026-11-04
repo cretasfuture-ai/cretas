@@ -1,0 +1,77 @@
+{
+  "_generated" : "由 Java 枚举 SecrecyItem 生成, 不要手改; 见 SecrecyItemsJsonDriftContractTest",
+  "items" : [
+    {
+      "code" : "PROCESS_SECRET",
+      "letter" : "a",
+      "label" : "工艺保密",
+      "default" : "OFF",
+      "triState" : false,
+      "requiresReason" : true,
+      "offRequiresConfirmation" : false,
+      "offConfirmWarning" : null,
+      "effectiveOnlyWhen" : null,
+      "offEffect" : "关闭后，本厂的配方、配比、出成率和成本不再按人遮挡，本厂账号都能看到；AI 也不再按人裁剪这些数据；「工艺保密」设置页会隐藏。已经设好的保密产品和授权会保留，重新开启后恢复生效。"
+    },
+    {
+      "code" : "PLATFORM_RECIPE_BLOCK",
+      "letter" : "b",
+      "label" : "平台看不到配方",
+      "default" : "OFF",
+      "triState" : false,
+      "requiresReason" : true,
+      "offRequiresConfirmation" : false,
+      "offConfirmWarning" : null,
+      "effectiveOnlyWhen" : "PROCESS_SECRET",
+      "offEffect" : "关闭后，平台人员可查看、编辑配方和成本，可做 AI 分析（仍须指明是哪家工厂；每一次查看、编辑都记入保密访问记录）。只在「工艺保密」开启时起作用：工艺保密关闭时，本厂配方本来就不遮挡，这一项不起作用。"
+    },
+    {
+      "code" : "EGRESS_REDACTION",
+      "letter" : "c",
+      "label" : "出外脱敏",
+      "default" : "OFF",
+      "triState" : false,
+      "requiresReason" : true,
+      "offRequiresConfirmation" : false,
+      "offConfirmWarning" : null,
+      "effectiveOnlyWhen" : null,
+      "offEffect" : "关闭后，发给外部 AI 模型的内容不再把公司名、人名、电话和产品名换成代号，按原文发出。不知道数据属于哪家工厂时，仍然不发。"
+    },
+    {
+      "code" : "TRAINING_FILTER",
+      "letter" : "d",
+      "label" : "训练数据过滤",
+      "default" : "OFF",
+      "triState" : false,
+      "requiresReason" : false,
+      "offRequiresConfirmation" : false,
+      "offConfirmWarning" : null,
+      "effectiveOnlyWhen" : null,
+      "offEffect" : "关闭后，保密产品名和工艺数值不再从训练样本中剔除；人名、客户名、工资考勤数字始终剔除，不受此项影响。能不能用于训练仍按本厂的训练授权（同意 / 撤回）决定。"
+    },
+    {
+      "code" : "CUSTOMER_HELD",
+      "letter" : "e",
+      "label" : "客户侧保管（核心工艺不入云）",
+      "default" : "OFF",
+      "triState" : false,
+      "requiresReason" : true,
+      "offRequiresConfirmation" : true,
+      "offConfirmWarning" : "这会撤销与客户合同中约定的云端不保管工艺",
+      "effectiveOnlyWhen" : null,
+      "offEffect" : "关闭后，设为「核心工艺不入云」的产品恢复为云端收发完整工艺。这一项与「工艺保密」互不影响：开着时，即使工艺保密关闭，这些产品依然不在云端收发完整工艺。"
+    },
+    {
+      "code" : "AI_SECRECY_AUDIT",
+      "letter" : "f",
+      "label" : "AI 保密审计",
+      "default" : "FOLLOW_PROCESS_SECRET",
+      "triState" : true,
+      "requiresReason" : false,
+      "offRequiresConfirmation" : false,
+      "offConfirmWarning" : null,
+      "effectiveOnlyWhen" : null,
+      "offEffect" : "关闭后，不再为本厂每次 AI 请求记录保密访问档位。默认跟随「工艺保密」：工艺保密开着就记，关着就不记；也可以单独设为开或关。"
+    }
+  ]
+}

@@ -3,21 +3,33 @@
 工艺保密产品可以出现在授权用户的对话里, 但不许被学走、在别的工厂复现:
 
 - 全局 (factory_id 为空 / 空白 / ``*``) 一律不由系统学习写入: 全局行对所有工厂可见;
-- 本厂: 撤回训练 / 查不到授权状态不学; 提到本厂工艺保密产品不学;
-  配方 / 工艺参数、具体客户名、人名不学 (``utterance_has_blocked_content``)。
+- 本厂: 撤回训练 / 查不到授权状态不学; 工资 / 考勤词带具体数值、本厂人员姓名 / 客户名称不学
+  (隐私, 不归任何开关管; 人名客户名按本厂表精确匹配);
+- 该厂「训练数据过滤」(d) 开着时 (随名单一起读: 默认关, 读不到按开着): 提到本厂工艺保密词
+  (全名 / 编码 / ID)、配方 / 工艺参数词带具体数值也不学。
 
-判断所需的查询出错一律按「不能学」处理 (fail-closed)。授权状态和保密产品名的查询函数
-由调用方注入 (测试用假的; 生产用 :func:`default_consent_scope` / :func:`default_protected_names`)。
+判断结果三态 (:class:`Verdict`): 能学 / 不能学 / **这次判断不了** (授权状态或本厂名单查询出错)。
+判断不了的原话不学, 但也不是「不能学」—— 学习任务把它记下来, 下一轮续读重判
+(:class:`RetryQueue`), 不因为一次查库失败就永久跳过 (2026-10-29 待办第 2 条)。
+授权状态和本厂名单的查询函数由调用方注入 (测试用假的; 生产用 :func:`default_consent_scope` /
+:func:`default_factory_lists`)。
 """
 from __future__ import annotations
 
+import enum
 import logging
-from typing import Awaitable, Callable, Iterable, Optional
+from typing import Any, Awaitable, Callable, Dict, Hashable, List, Optional
 
 logger = logging.getLogger(__name__)
 
 ConsentLookup = Callable[[str], Awaitable[str]]
-NamesLookup = Callable[[str], Awaitable[Iterable[str]]]
+ListsLookup = Callable[[str], Awaitable[Any]]   # -> process_secret_names.FactoryLists
+
+
+class Verdict(enum.Enum):
+    LEARN = "learn"
+    SKIP = "skip"
+    RETRY = "retry"   # 判断不了 (查询出错): 这次不学, 下一轮续读
 
 
 def is_global_factory(factory_id: Optional[str]) -> bool:
@@ -36,35 +48,76 @@ async def default_consent_scope(factory_id: str) -> str:
         return await fetch_consent_scope(conn, factory_id)
 
 
-async def default_protected_names(factory_id: str) -> Iterable[str]:
-    from smartbi.services.process_secret_names import protected_product_names
+async def default_factory_lists(factory_id: str):
+    from smartbi.services.process_secret_names import factory_lists
 
-    return await protected_product_names(factory_id)
+    return await factory_lists(factory_id)
+
+
+async def judge(factory_id: Optional[str], text: Optional[str], *,
+                consent_scope: ConsentLookup,
+                factory_lists: ListsLookup) -> Verdict:
+    """这段原话能不能学进 ``factory_id`` 这一家 (全局一律不行)。"""
+    from smartbi.services.training_consent import (
+        UTTERANCE_MARKERS,
+        is_withdrawn,
+        pay_word_with_value,
+        process_word_with_value,
+    )
+
+    if is_global_factory(factory_id) or not text or not text.strip():
+        return Verdict.SKIP
+    if pay_word_with_value(text):
+        return Verdict.SKIP
+    try:
+        scope = await consent_scope(factory_id)
+    except Exception as e:  # 查不到可能掩盖了撤回 -> 这次不学, 下一轮再判
+        logger.warning("learning: training_consent lookup failed for %s, retry later (%s)",
+                       factory_id, type(e).__name__)
+        return Verdict.RETRY
+    if is_withdrawn(scope):
+        return Verdict.SKIP
+    try:
+        lists = await factory_lists(factory_id)
+    except Exception as e:
+        logger.warning("learning: factory lists lookup failed for %s, retry later (%s)",
+                       factory_id, type(e).__name__)
+        return Verdict.RETRY
+    if lists.training_filter_on and process_word_with_value(text, UTTERANCE_MARKERS):
+        return Verdict.SKIP
+    return Verdict.SKIP if lists.names_any(text) else Verdict.LEARN
 
 
 async def factory_learnable(factory_id: Optional[str], text: Optional[str], *,
                             consent_scope: ConsentLookup,
-                            protected_names: NamesLookup) -> bool:
-    """这段原话能不能学进 ``factory_id`` 这一家 (全局一律不行)。"""
-    from smartbi.services.process_secret_names import mentions_any
-    from smartbi.services.training_consent import is_withdrawn, utterance_has_blocked_content
+                            factory_lists: ListsLookup) -> bool:
+    """只要「能不能学」的调用方用 (判断不了 = 不学)。"""
+    return await judge(factory_id, text, consent_scope=consent_scope,
+                       factory_lists=factory_lists) is Verdict.LEARN
 
-    if is_global_factory(factory_id) or not text or not text.strip():
-        return False
-    if utterance_has_blocked_content(text):
-        return False
-    try:
-        scope = await consent_scope(factory_id)
-    except Exception as e:  # 查不到可能掩盖了撤回 -> 不学
-        logger.warning("learning: training_consent lookup failed for %s, not learning (%s)",
-                       factory_id, type(e).__name__)
-        return False
-    if is_withdrawn(scope):
-        return False
-    try:
-        names = await protected_names(factory_id)
-    except Exception as e:
-        logger.warning("learning: process-secret lookup failed for %s, not learning (%s)",
-                       factory_id, type(e).__name__)
-        return False
-    return not mentions_any(names, text)
+
+class RetryQueue:
+    """学习任务的续读队列: 这一轮判断不了的行留到下一轮再判 (按 key 去重, 有上限)。
+
+    学习任务每 5 分钟读最近 1 小时的行; 查库失败持续超过窗口时, 这些行就再也读不到了 ——
+    所以判断不了的行自己记下来。超过上限时丢最早的并记 WARNING (不静默)。"""
+
+    def __init__(self, limit: int = 2000):
+        self.limit = limit
+        self._rows: Dict[Hashable, Any] = {}
+
+    def add(self, key: Hashable, row: Any) -> None:
+        self._rows.pop(key, None)
+        self._rows[key] = row
+        while len(self._rows) > self.limit:
+            oldest = next(iter(self._rows))
+            self._rows.pop(oldest)
+            logger.warning("learning retry queue full (%d), dropped the oldest row", self.limit)
+
+    def drain(self) -> List[Any]:
+        rows = list(self._rows.values())
+        self._rows.clear()
+        return rows
+
+    def __len__(self) -> int:
+        return len(self._rows)

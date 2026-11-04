@@ -161,6 +161,25 @@ public final class LlmParameterGrounding {
         return new Result(accepted, dropped);
     }
 
+    /**
+     * 没有工具 JSON schema 的抽参点 (缺参追问 / 填槽兜底 / Skill 计划) 用的入口: 只按槽位类型
+     * (NUMBER / INTEGER / DECIMAL … 见 {@link SlotAnswerRule#isNumericType}) 拼出最小 schema 再走
+     * {@link #ground}。规则只有一份 —— 写操作的参数不管从哪条 LLM 路径来, 都同一个出处校验
+     * (2026-11-03: #940 只接在 ToolDispatchService, 追问回答「1827」仍可被抽出产量 0)。
+     *
+     * @param slotTypes 参数名 → 槽位类型 (可为 null, 未知类型按文本处理)
+     */
+    public static Result groundSlots(Map<String, ?> llmValues, Map<String, Object> existingParams,
+                                     String userInput, Map<String, String> slotTypes) {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        if (slotTypes != null) {
+            slotTypes.forEach((name, type) -> properties.put(name,
+                    Map.of("type", SlotAnswerRule.isNumericType(type) ? "number" : "string")));
+        }
+        Map<String, Object> values = llmValues == null ? Map.of() : new LinkedHashMap<>(llmValues);
+        return ground(values, existingParams, userInput, Map.of("properties", properties));
+    }
+
     /** 参数名是否算自由文本业务字段 (备注 / 原因 / 说明 / 描述 …)。 */
     public static boolean isFreeTextParam(String name) {
         if (name == null) {

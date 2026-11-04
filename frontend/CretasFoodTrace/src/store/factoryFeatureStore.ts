@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { apiClient } from '../services/api/apiClient';
+import { isSecrecyOnIn, type SecrecyCode } from '../config/secrecyItems';
 
 /**
  * Maps screen IDs to their owning module IDs.
@@ -119,6 +120,8 @@ interface FactoryFeatureState {
   getSortedModules: () => Array<{ moduleId: string; priority: number; moduleName: string }>;
   getProductionMode: () => string;
   isProcessMode: () => boolean;
+  /** 工厂级保密配置某项是否开启 (feature-config 里 moduleId = "secrecy" 的只读行; 只认 true)。 */
+  isSecrecyOn: (code: SecrecyCode) => boolean;
   reset: () => void;
 }
 
@@ -289,6 +292,9 @@ export const useFactoryFeatureStore = create<FactoryFeatureState>((set, get) => 
   isProcessMode: () => {
     return get().getProductionMode() === 'PROCESS';
   },
+
+  // 工厂级保密配置 (平台设置, 只读): 只有明确 true 才算开 —— 不沿用上面「没加载 / 缺行 = 启用」的默认
+  isSecrecyOn: (code: SecrecyCode) => isSecrecyOnIn(get().modules, code),
 
   reset: () => set({ modules: {}, loaded: false, loading: false }),
 }));

@@ -33,6 +33,7 @@ import ProcessOutputTable from './ProcessOutputTable.vue';
 import ProcessInputSourceTable from './ProcessInputSourceTable.vue';
 import ProcessStockShortageAlert from './ProcessStockShortageAlert.vue';
 import BlendRatioPanel from './BlendRatioPanel.vue';
+import ProcessTimeLimitPanel from './ProcessTimeLimitPanel.vue';
 import { evaluateBlend, blendReasonBlockedReason, type BlendEvaluation, type BlendLineInput } from './blendRatio';
 import { presentStockShortage, type StockShortagePresentation } from './processStockShortage';
 import { boundOutputRoleOf, byproductEntryMode, isReworkLine, partitionOutputPorts } from './processSheetOutputs';
@@ -62,6 +63,8 @@ import { isProcessSecretHidden } from '@/utils/processSecretField';
 import { loadHeldBatchNumbers } from '@/api/qcRelease';
 import type { CcpReading } from '@/api/ccp';
 import CcpEntryDialog from './CcpEntryDialog.vue';
+import ReworkRatioReasonDialog from './ReworkRatioReasonDialog.vue';
+import { REWORK_RATIO_REASON_REQUIRED, errorCodeOf, type ReworkRatioInput } from './reworkRatio';
 import { checkParam, collectParamDeviations, formatParamStandard } from '@/utils/processParamCheck';
 
 type PortSelectionMode = NonNullable<WorkflowPortDescriptor['selectionGroupMode']>;
@@ -2532,6 +2535,27 @@ function formalSubmitSummary(row: SheetRow): string {
 // 不存在「CCP 没查到却照常报工」的半态。legacy 计划没有工序身份 → 不出现 CCP 录入。
 // -------------------------------------------------------------------------
 const ccpDialogRef = ref<InstanceType<typeof CcpEntryDialog> | null>(null);
+// 缺口 03 回料超限: 后端算占比, 超限没原因 409 → 弹窗收集原因 → 带 reworkRatio 重提 (见 submitWithReworkReason)
+const reworkDialogRef = ref<InstanceType<typeof ReworkRatioReasonDialog> | null>(null);
+
+/**
+ * 正式提交; 被 REWORK_RATIO_REASON_REQUIRED 拦下就弹窗问原因再重提 (原因不够会再被拦、再问)。
+ * 用户取消返回 null —— 调用方不报错、表单原样保留。
+ */
+async function submitWithReworkReason(row: SheetRow, req: ProcessSheetRowRequest) {
+  let reworkRatio: ReworkRatioInput | undefined;
+  for (;;) {
+    try {
+      return await submitRow(props.factoryId, props.planId, reworkRatio ? { ...req, reworkRatio } : req);
+    } catch (e: unknown) {
+      if (errorCodeOf(e) !== REWORK_RATIO_REASON_REQUIRED) throw e;
+      const label = `${props.processLabel || props.processCode}${row.batchNumber ? ' · ' + row.batchNumber : ''}`;
+      const picked = await reworkDialogRef.value?.collect(e instanceof Error ? e.message : '回料占比超过上限', label, reworkRatio);
+      if (!picked) return null;
+      reworkRatio = picked;
+    }
+  }
+}
 const stepCheckpoints = computed(() => props.workflowContext?.ccpCheckpoints ?? []);
 
 async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
@@ -2595,7 +2619,8 @@ async function handleSave(row: SheetRow, action: 'draft' | 'submit') {
     if (action === 'submit' && ccpReadings) req.ccpReadings = ccpReadings;
     const resp = action === 'draft'
       ? await saveDraftRow(props.factoryId, props.planId, req)
-      : await submitRow(props.factoryId, props.planId, req);
+      : await submitWithReworkReason(row, req);
+    if (!resp) return; // 回料超限弹窗里选了「返回修改」: 不报工, 行内数据原样保留
     const result = resp.data;
     if (result?.batchNumber) row.batchNumber = result.batchNumber;
     // 2B.2 多产出: 逐产出批次号回填 (按 workflowPortId 对齐; 缺失时按序号兜底, 理论不出现)。
@@ -3436,6 +3461,8 @@ function rowIsDirty(row: SheetRow): boolean {
 
 const hasUnsavedRows = computed(() => rows.value.some(rowIsDirty));
 
+const timeLimitPanelRef = ref<InstanceType<typeof ProcessTimeLimitPanel> | null>(null);
+
 // -------------------------------------------------------------------------
 // Bug 1 修复 (fix/process-entry-cache-and-blend-cost, F006 现场走查): 半成品(SFI)/成品(FG)/
 // 原料批次余量是全局共享的常驻库存 (可被任意其它 process tab 选作投料来源), 但上面的 watch
@@ -3456,6 +3483,7 @@ function refreshSharedInventories() {
   if (showSfi.value) void loadSfiOptions();
   if (showFg.value) void loadFgOptions();
   void loadQcHeldBatches();
+  void timeLimitPanelRef.value?.reload();
 }
 
 defineExpose({ hasUnsavedRows, refreshSharedInventories });
@@ -3464,6 +3492,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 <template>
   <div class="sp-grid-wrap">
     <CcpEntryDialog ref="ccpDialogRef" />
+    <ReworkRatioReasonDialog ref="reworkDialogRef" />
 
     <!-- ====================================================================
          2B Task F2 (additive, fool-proof Rule 2/3/5): workflow 计划产出/所需原料只读展示。
@@ -3547,6 +3576,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
         ，然后重新创建生产计划。
       </div>
     </el-alert>
+
+    <!-- 缺口 14: 时限配在 workflow 工艺版本上, legacy 计划没有; 这道工序有状态才显示 -->
+    <ProcessTimeLimitPanel
+      v-if="workflowContext"
+      ref="timeLimitPanelRef"
+      :factory-id="factoryId"
+      :plan-id="planId"
+      :process-order="processOrder"
+      :input-ports="workflowContext.inputs ?? []"
+    />
 
     <!-- ====================================================================
          CARD LAYOUT

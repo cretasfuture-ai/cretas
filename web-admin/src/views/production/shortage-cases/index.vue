@@ -17,6 +17,10 @@ import {
   decideShortageCase,
   proposeReschedule,
   applyReschedule,
+  getOutcomeChecks,
+  recheckOutcome,
+  type OutcomeVerdict,
+  type ShortageOutcomeCheck,
   type ProcurementProposal,
   type RescheduleProposal,
   type ShortageCase,
@@ -31,6 +35,9 @@ const factoryId = computed(() => authStore.factoryId || '');
 const canPurchase = computed(() => permissionStore.canWrite('procurement'));
 const canDecide = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production'));
 const canReschedule = computed(() => permissionStore.canWrite('production') || permissionStore.canWrite('scheduling'));
+// 与后端 POST /{caseId}/refresh 的 @RequirePermission 同一份口径: 没写权限的角色点了只会 403
+const canRefreshCase = computed(() => permissionStore.canWrite('procurement') || permissionStore.canWrite('production')
+  || permissionStore.canWrite('warehouse') || permissionStore.canWrite('quality'));
 
 const STAGE_LABEL: Record<ShortageCaseStage, string> = {
   DETECTED: '待处理',
@@ -64,6 +71,7 @@ const REASON_LABEL: Record<string, string> = {
   SO_FINANCE_APPROVED: '订单财务审核通过',
   MATERIAL_RECEIVED: '物料入库',
   MATERIAL_BATCH_RELEASED: '质检放行',
+  PURCHASE_ORDER_SUPPLY_CHANGED: '采购单状态变化',
   MANUAL_REFRESH: '手动核对',
   PURCHASE_DRAFT_CREATED: '生成采购草稿',
   RESCHEDULE_PROPOSED: '生成重排方案',
@@ -130,7 +138,7 @@ async function openDetail(row: ShortageCase) {
     const res = await getShortageCase(factoryId.value, row.id);
     if (res.success) {
       detail.value = res.data;
-      await loadProposals(row.id);
+      await Promise.all([loadProposals(row.id), loadOutcomeChecks(row.id)]);
     } else {
       ElMessage.error(res.message || '详情加载失败');
     }
@@ -193,6 +201,58 @@ async function draft(materialTypeId: string) {
     ElMessage.error((e as { message?: string })?.message || '生成采购草稿失败');
   } finally {
     drafting.value = null;
+  }
+}
+
+// ---- 执行后核对: 重排 / 转采购之后后端自动核对一次, 这里展示并可手动再核对
+const outcomeChecks = ref<ShortageOutcomeCheck[]>([]);
+const outcomeLoadFailed = ref(false);
+const rechecking = ref(false);
+const canRecheck = computed(() => canPurchase.value || canReschedule.value);
+const VERDICT_TAG: Record<OutcomeVerdict, 'success' | 'warning' | 'danger' | 'info'> = {
+  ACHIEVED: 'success',
+  PENDING_SUPPLY: 'warning',
+  NOT_ACHIEVED: 'danger',
+  UNKNOWN: 'info',
+};
+const CHECK_TRIGGER_LABEL: Record<ShortageOutcomeCheck['trigger'], string> = {
+  RESCHEDULE_APPLIED: '应用重排后',
+  PURCHASE_DRAFT: '生成采购草稿后',
+  MANUAL_RECHECK: '手动核对',
+};
+const latestCheck = computed(() => outcomeChecks.value[outcomeChecks.value.length - 1] ?? null);
+
+async function loadOutcomeChecks(caseId: string) {
+  outcomeChecks.value = [];
+  outcomeLoadFailed.value = false;
+  try {
+    const res = await getOutcomeChecks(factoryId.value, caseId);
+    if (res.success) {
+      outcomeChecks.value = res.data ?? [];
+    } else {
+      outcomeLoadFailed.value = true;
+    }
+  } catch {
+    // 拿不到就如实标「加载失败」, 不显示成「还没核对过」
+    outcomeLoadFailed.value = true;
+  }
+}
+
+async function recheck() {
+  if (!detail.value) return;
+  rechecking.value = true;
+  try {
+    const res = await recheckOutcome(factoryId.value, detail.value.case.id);
+    if (res.success) {
+      ElMessage.success(res.message || '已核对');
+      await loadOutcomeChecks(detail.value.case.id);
+    } else {
+      ElMessage.error(res.message || '核对失败');
+    }
+  } catch (e: unknown) {
+    ElMessage.error(errorText(e, '核对失败'));
+  } finally {
+    rechecking.value = false;
   }
 }
 
@@ -350,7 +410,7 @@ onMounted(load);
 
           <div class="section-head">
             <h4>缺口</h4>
-            <el-button size="small" :icon="Refresh" :loading="refreshing" @click="refreshCase">按当前库存重新核对</el-button>
+            <el-button v-if="canRefreshCase && isOpen" size="small" :icon="Refresh" :loading="refreshing" @click="refreshCase">按当前库存重新核对</el-button>
           </div>
           <el-table :data="detail.lines" size="small" border>
             <el-table-column label="物料" min-width="120">
@@ -445,6 +505,34 @@ onMounted(load);
             </div>
           </template>
 
+          <div class="section-head">
+            <h4>处理结果核对</h4>
+            <el-button v-if="canRecheck && isOpen" size="small" :loading="rechecking" @click="recheck">
+              按当前数据再核对
+            </el-button>
+          </div>
+          <div v-if="outcomeLoadFailed" class="hint">核对记录加载失败，请稍后重新打开</div>
+          <div v-else-if="!latestCheck" class="hint">还没核对过。应用重排或生成采购草稿后会自动核对一次。</div>
+          <template v-else>
+            <div class="verdict">
+              <el-tag :type="VERDICT_TAG[latestCheck.verdict]">{{ latestCheck.verdictLabel }}</el-tag>
+              <span class="hint">{{ CHECK_TRIGGER_LABEL[latestCheck.trigger] }} · {{ time(latestCheck.createdAt) }}</span>
+            </div>
+            <div class="verdict-detail">{{ latestCheck.detail }}</div>
+            <div class="hint">
+              交期 {{ latestCheck.dueDate ?? '—' }} · 最晚完工 {{ time(latestCheck.latestPlannedEnd) }}
+              · 晚于交期 {{ latestCheck.lateScheduleCount }} 个 · 未关闭缺口 {{ latestCheck.openGapLines }} 行
+              · 预计到货 {{ latestCheck.supplyReadyDate ?? '—' }}
+            </div>
+            <el-collapse v-if="outcomeChecks.length > 1" class="check-history">
+              <el-collapse-item :title="`更早的核对（${outcomeChecks.length - 1} 次）`">
+                <div v-for="c in outcomeChecks.slice(0, -1).reverse()" :key="c.id" class="hint">
+                  {{ time(c.createdAt) }} {{ CHECK_TRIGGER_LABEL[c.trigger] }}：{{ c.detail }}
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+          </template>
+
           <h4>处理记录</h4>
           <el-timeline>
             <el-timeline-item v-for="(e, i) in detail.events" :key="i" :timestamp="time(e.createdAt)">
@@ -470,5 +558,8 @@ onMounted(load);
 .gap { color: var(--el-color-danger); font-weight: 600; }
 .decision-bar { display: flex; gap: 8px; margin: 12px 0; }
 .candidate { margin: 8px 0; }
+.verdict { display: flex; gap: 8px; align-items: center; }
+.verdict-detail { margin: 6px 0 4px; font-size: 13px; }
+.check-history { margin-top: 8px; }
 .candidate-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
 </style>

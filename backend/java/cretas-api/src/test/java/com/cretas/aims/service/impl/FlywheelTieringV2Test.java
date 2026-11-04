@@ -48,6 +48,14 @@ class FlywheelTieringV2Test {
     private static final String INTENT_CODE  = "INVENTORY_QUERY";
     private static final String EXPRESSION   = "查一下库存";
 
+    private static com.cretas.aims.service.consent.ProcessSecretSampleFilter clearFilter() {
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter f =
+                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
+        when(f.checkTrainingSample(anyString(), anyString(), org.mockito.ArgumentMatchers.any(String[].class)))
+                .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
+        return f;
+    }
+
     @BeforeEach
     void setUp() {
         repo = mock(LearnedExpressionRepository.class);
@@ -65,7 +73,7 @@ class FlywheelTieringV2Test {
                 null,    // RequestScopedEmbeddingCache
                 null,    // IntentEmbeddingCacheService
                 consent, // TrainingConsentService
-                mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class) // 不提保密产品
+                clearFilter() // 不提保密产品
         );
 
         // #553 守卫: inject a default "allow-promote" configService mock so that existing

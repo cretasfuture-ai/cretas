@@ -35,12 +35,26 @@ export function resolveStepPhase(
   task: Pick<StepTaskLike, 'status'>,
   yieldPhase: string | null | undefined,
 ): StepPhase {
+  const taskDone = task.status === 'COMPLETED' || task.status === 'SKIPPED';
+  // 只有留单产出的任务被别的入口完工时, 报工推导出来是「生产中」; 这时任务已结束, 不能再让人续报
+  if (yieldPhase === 'IN_PRODUCTION' && taskDone) return 'COMPLETED';
   if (yieldPhase != null && STEP_PHASES.includes(yieldPhase)) {
     return yieldPhase as StepPhase;
   }
-  return task.status === 'COMPLETED' || task.status === 'SKIPPED'
-    ? 'COMPLETED'
-    : 'AWAITING_INPUT';
+  return taskDone ? 'COMPLETED' : 'AWAITING_INPUT';
+}
+
+/**
+ * 留单之后全部产出都已保存, 工人没有新增量, 只想完工 —— 产出量留空或填 0 都算。
+ * ⛔ 只对「标记完工」且已有累计产出放行: 留单续报或从没报过产出时, 0 仍要挡下。
+ */
+export function canFinishWithoutNewOutput(
+  outputText: string,
+  markComplete: boolean,
+  savedOutput: number,
+): boolean {
+  if (!markComplete || savedOutput <= 0) return false;
+  return outputText.trim() === '' || parseFloat(outputText) === 0;
 }
 
 /**

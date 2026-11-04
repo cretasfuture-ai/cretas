@@ -191,6 +191,14 @@
       "name": "付款处理",
       "description": "出纳付款执行"
     },
+    "aiReports": {
+      "name": "AI 分析报告",
+      "description": "历史分析报告、生成新报告"
+    },
+    "timeRangeCost": {
+      "name": "时间范围成本分析",
+      "description": "按日期区间看成本与 AI 分析"
+    },
     "finishedGoods": {
       "name": "成品库存",
       "description": "成品在库查询"

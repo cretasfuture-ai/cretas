@@ -700,13 +700,13 @@ public class PurchaseServiceImpl implements PurchaseService {
             order.setFinanceReviewedAt(null);
             log.info("采购订单无需审批，直接生效: orderId={}, orderNumber={}",
                     orderId, order.getOrderNumber());
-            return purchaseOrderRepository.save(order);
+            return saveAndAnnounceSupplyChange(order);
         }
         validateRunnableApprovalRoute(factoryId, instance.get());
         projectWorkflowState(order, instance.get(), initiatorUserId);
         log.info("提交采购订单并启动 OA: orderId={}, orderNumber={}, instanceId={}, workflowStatus={}",
                 orderId, order.getOrderNumber(), instance.get().getId(), instance.get().getStatus());
-        return purchaseOrderRepository.save(order);
+        return saveAndAnnounceSupplyChange(order);
     }
 
 
@@ -864,7 +864,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                 factoryId, "PURCHASE_ORDER", orderId, context, originalInitiator);
         validateRunnableApprovalRoute(factoryId, instance);
         projectWorkflowState(order, instance, originalInitiator);
-        purchaseOrderRepository.save(order);
+        saveAndAnnounceSupplyChange(order);
         log.warn("受限恢复采购单 OA 实例: factoryId={}, orderId={}, orderNumber={}, instanceId={}, operatorUserId={}",
                 factoryId, orderId, order.getOrderNumber(), instance.getId(), operatorUserId);
         return recoveryResponse(order, instance, true);
@@ -912,7 +912,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
                 instanceId, actorId, actorRole, action, notes);
         projectWorkflowState(order, updated, actorId);
-        return purchaseOrderRepository.save(order);
+        return saveAndAnnounceSupplyChange(order);
     }
 
     /**
@@ -1195,6 +1195,24 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
     }
 
+    /**
+     * 采购单进出缺料「在途」口径 ({@code ShortageSupplyQueryRepository#findOpenOrderRemaining}) 的状态变化,
+     * 一律走这里保存: 不发事件, 含该物料的缺料实例要等下一次入库或手动核对才追上, 在途一直是旧数。
+     * 收货由 {@link MaterialReceivedEvent} 负责; 口径内部的流转 (转待财务复核) 和收完转完成不走这里。
+     */
+    private PurchaseOrder saveAndAnnounceSupplyChange(PurchaseOrder order) {
+        PurchaseOrder saved = purchaseOrderRepository.save(order);
+        java.util.Set<String> materialTypeIds = purchaseOrderItemRepository.findByPurchaseOrderId(order.getId()).stream()
+                .map(PurchaseOrderItem::getMaterialTypeId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        if (applicationEventPublisher != null && !materialTypeIds.isEmpty()) {
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.PurchaseOrderSupplyChangedEvent(
+                    this, order.getFactoryId(), order.getId(), materialTypeIds));
+        }
+        return saved;
+    }
+
     private void projectWorkflowState(PurchaseOrder order,
                                       ApprovalWorkflowInstance instance,
                                       Long actorId) {
@@ -1399,7 +1417,7 @@ public class PurchaseServiceImpl implements PurchaseService {
                     orderId, instance.getId(), instance.getStatus(), order.getStatus());
         }
 
-        return purchaseOrderRepository.save(order);
+        return saveAndAnnounceSupplyChange(order);
     }
 
     /**
@@ -1430,7 +1448,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             log.info("[legacy] 审批采购订单: orderId={}, approvedBy={}", orderId, approvedBy);
         }
 
-        PurchaseOrder saved = purchaseOrderRepository.save(order);
+        PurchaseOrder saved = saveAndAnnounceSupplyChange(order);
 
         // Sprint2-J follow-up: 流入 PENDING_FINANCE_REVIEW 通知 finance_manager 角色.
         // 业务: 财务及时看到待审 → 缩短审批等待 → 不阻塞采购履约.
@@ -1647,7 +1665,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         order.setFinanceReviewedAt(java.time.LocalDateTime.now());
         order.setFinanceReviewNotes(notes);
         log.info("采购订单财务审核通过: orderId={}, reviewedBy={}", orderId, reviewedBy);
-        return purchaseOrderRepository.save(order);
+        return saveAndAnnounceSupplyChange(order);
     }
 
     @Override
@@ -1663,7 +1681,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         order.setFinanceReviewedAt(java.time.LocalDateTime.now());
         order.setFinanceReviewNotes(notes);
         log.info("采购订单财务审核驳回: orderId={}, reviewedBy={}", orderId, reviewedBy);
-        return purchaseOrderRepository.save(order);
+        return saveAndAnnounceSupplyChange(order);
     }
 
     @Override
@@ -1682,7 +1700,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
         order.setStatus(PurchaseOrderStatus.CANCELLED);
         log.info("取消采购订单: orderId={}, orderNumber={}", orderId, order.getOrderNumber());
-        return purchaseOrderRepository.save(order);
+        return saveAndAnnounceSupplyChange(order);
     }
 
     @Override
@@ -2230,7 +2248,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         order.setReceivingCloseNotes(notes == null || notes.isBlank() ? null : notes);
         order.setReceivingClosedBy(userId);
         order.setReceivingClosedAt(LocalDateTime.now());
-        purchaseOrderRepository.save(order);
+        saveAndAnnounceSupplyChange(order);
         log.info("仓储少收关闭采购单: factoryId={}, purchaseOrderId={}, orderNumber={}, reason={}, userId={}",
                 factoryId, purchaseOrderId, order.getOrderNumber(), request.getReasonCode(), userId);
         return PurchaseOrderStatus.CLOSED;

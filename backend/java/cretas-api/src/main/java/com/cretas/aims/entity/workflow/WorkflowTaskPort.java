@@ -10,11 +10,14 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import io.hypersistence.utils.hibernate.type.json.JsonType;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
+import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -117,6 +120,14 @@ public class WorkflowTaskPort extends BaseEntity {
      */
     @Column(name = "fixed_cost_share", precision = 9, scale = 4)
     private BigDecimal fixedCostShare;
+
+    /**
+     * 工序间 / 投料时限, 冻结自画布 INPUT 端口的 timeLimit (食品 DAG 缺口 14)。null = 不限时。
+     * 字段含义见 {@code ProcessTimeLimitConfig}。
+     */
+    @Type(JsonType.class)
+    @Column(name = "time_limit_config", columnDefinition = "jsonb")
+    private Map<String, Object> timeLimitConfig;
 
     @Column(name = "quantity_mode", length = 24)
     private String quantityMode;

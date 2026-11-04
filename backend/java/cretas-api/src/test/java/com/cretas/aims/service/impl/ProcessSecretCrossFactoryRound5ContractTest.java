@@ -60,7 +60,8 @@ class ProcessSecretCrossFactoryRound5ContractTest {
     void setUp() {
         access = mock(ProcessSecretAccessService.class);
         ProductTypeRepository products = mock(ProductTypeRepository.class);
-        when(access.factoriesWithProtectedProducts()).thenReturn(Set.of(FA));
+        // 写给所有工厂的共享内容 (平台级意图 / 晋升 / 回滚 / 全局说法 / 共享短语表) 的并集不看开关 (第四 / 五轮复审)
+        when(access.factoriesWithPolicyProducts()).thenReturn(Set.of(FA));
         when(access.protectedProductTypeIds(FA)).thenReturn(Set.of("pA"));
         ProductType p = new ProductType();
         p.setId("pA");
@@ -68,7 +69,8 @@ class ProcessSecretCrossFactoryRound5ContractTest {
         p.setName(SECRET);
         when(products.findAllById(Set.of("pA"))).thenReturn(List.of(p));
         intents = mock(AIIntentConfigRepository.class);
-        guard = new IntentConfigWriteGuard(intents, new ProcessSecretSampleFilter(access, products));
+        guard = new IntentConfigWriteGuard(intents, new ProcessSecretSampleFilter(access, products,
+                com.cretas.aims.service.consent.TrainingListTestSupport.directoryBackedBy(products)));
     }
 
     @AfterEach
@@ -134,10 +136,10 @@ class ProcessSecretCrossFactoryRound5ContractTest {
         when(intents.findById("p3")).thenReturn(Optional.of(plain2));
 
         service.rollbackFactoryToLastVersion(null, 1L, "admin", "r");
-        verify(access, Mockito.times(1)).factoriesWithProtectedProducts();   // 一批只查一次
+        verify(access, Mockito.times(1)).factoriesWithPolicyProducts();   // 一批只查一次
 
         // 查不到名单: 503, 一行都没动
-        when(access.factoriesWithProtectedProducts()).thenThrow(new IllegalStateException("db down"));
+        when(access.factoriesWithPolicyProducts()).thenThrow(new IllegalStateException("db down"));
         AIIntentConfig fresh = platformRow("p4", "PLAIN_CODE_3", "[\"产量\"]", "[\"出货\"]");
         when(intents.findGlobalIntents()).thenReturn(List.of(fresh));
         when(intents.findById("p4")).thenReturn(Optional.of(fresh));

@@ -83,7 +83,8 @@ class TrainingSampleSecrecyLookupTransactionContractTest {
 
         @Bean
         ProcessSecretSampleFilter processSecretSampleFilter(FailingAccessService access) {
-            return new ProcessSecretSampleFilter(access, mock(ProductTypeRepository.class));
+            return new ProcessSecretSampleFilter(access, mock(ProductTypeRepository.class),
+                    org.mockito.Mockito.mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class));
         }
 
         @Bean
@@ -91,6 +92,11 @@ class TrainingSampleSecrecyLookupTransactionContractTest {
             TrainingConsentService consent = mock(TrainingConsentService.class);
             when(consent.status("F006")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
             return consent;
+        }
+
+        @Bean
+        TrainingSampleHoldStore trainingSampleHoldStore() {
+            return mock(TrainingSampleHoldStore.class);
         }
 
         @Bean

@@ -25,6 +25,10 @@ public class ProcessSheetRowRequest {
     @NotBlank
     private String clientRowId;
 
+    /** 服务端内部: 本次已过时限闸 (正式提交在扣回料之前判过, saveRow 不再判)。不进出 JSON。 */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private boolean timeLimitChecked;
+
     /** 工序代码: "xiuyou" | "chaoshui" | "shuzhi" | ... */
     @NotBlank
     private String processCode;

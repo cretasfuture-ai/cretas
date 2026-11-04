@@ -82,7 +82,8 @@ class TrainingConsentGateContractTest {
                 org.mockito.Mockito.mock(com.cretas.aims.service.processsecret.ProcessSecretAccessService.class);
         com.cretas.aims.repository.ProductTypeRepository products =
                 org.mockito.Mockito.mock(com.cretas.aims.repository.ProductTypeRepository.class);
-        ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products);
+        ProcessSecretSampleFilter filter = new ProcessSecretSampleFilter(access, products,
+                com.cretas.aims.service.consent.TrainingListTestSupport.directoryBackedBy(products));
 
         com.cretas.aims.entity.ProductType product(String id, String factoryId, String name) {
             com.cretas.aims.entity.ProductType p = new com.cretas.aims.entity.ProductType();
@@ -99,18 +100,20 @@ class TrainingConsentGateContractTest {
                     product("P1", "F006", "秘制牛肉干"),
                     product("P2", "OTHER", "麻辣鸭脖"),     // another factory's row never counts
                     product("P3", "F006", "酱")));         // single-character names never match
-            assertThat(filter.mentionsProtectedProduct("F006", "秘制牛肉干今天做了多少")).isTrue();
-            assertThat(filter.mentionsProtectedProduct("F006", null, "问一下秘制牛肉干")).isTrue();
-            assertThat(filter.mentionsProtectedProduct("F006", "麻辣鸭脖今天做了多少")).isFalse();
-            assertThat(filter.mentionsProtectedProduct("F006", "酱料还剩多少")).isFalse();
-            assertThat(filter.mentionsProtectedProduct("F006", "普通牛肉干今天做了多少")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), "秘制牛肉干今天做了多少")).isTrue();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), null, "问一下秘制牛肉干")).isTrue();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), "麻辣鸭脖今天做了多少")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), "酱料还剩多少")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), "普通牛肉干今天做了多少")).isFalse();
         }
 
         @Test
-        void factoryWithoutProtectedProductsNeverLooksUpNames() {
+        void factoryWithoutProtectedProductsNeverLooksUpProducts() {
             when(access.protectedProductTypeIds("F007")).thenReturn(java.util.Set.of());
-            assertThat(filter.mentionsProtectedProduct("F007", "秘制牛肉干")).isFalse();
-            assertThat(filter.mentionsProtectedProduct(null, "秘制牛肉干")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F007").terms(), "秘制牛肉干")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists(null).terms(), "秘制牛肉干")).isFalse();
+            assertThat(filter.checkTrainingSample("intent", null, "秘制牛肉干"))
+                    .isEqualTo(ProcessSecretSampleFilter.SampleVerdict.UNVERIFIED);   // no factory: no lists
             verifyNoInteractions(products);
         }
     }
@@ -220,13 +223,24 @@ class TrainingConsentGateContractTest {
         }
 
         @Test
-        void recipeUtteranceIsNotStoredEvenWhenAuthorized() {
+        void recipeUtteranceWithAValueIsNotStoredEvenWhenAuthorized() {
             when(trainingConsentService.status("F_PRIV")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
-            when(processSecretSampleFilter.checkTrainingSample("intent", "F_PRIV", "这个产品配方里盐放多少"))
-                    .thenReturn(ProcessSecretSampleFilter.SampleVerdict.CLEAR); // 保密判断放行, 证明是配方规则拦下的
-            assertThat(service.recordSample("F_PRIV", "这个产品配方里盐放多少", "BOM_RECIPE_QUERY",
+            assertThat(service.recordSample("F_PRIV", "这个产品配方里盐放 3 克", "BOM_RECIPE_QUERY",
                     TrainingSample.MatchMethod.EXACT, 0.9, "s1")).isNull();
             verify(sampleRepository, never()).save(any());
+            // 内容规则在名单判断之前就拦下 (不是保密名单拦的)
+            verify(processSecretSampleFilter, never()).checkTrainingSample(anyString(), anyString(), any(String[].class));
+        }
+
+        @Test
+        void recipeWordWithoutAValueIsStored() {
+            // 2026-10-29 选 A: 只有工艺词、没有具体数值的原话不拦
+            when(trainingConsentService.status("F_PRIV")).thenReturn(TrainingConsentService.Status.AUTHORIZED);
+            when(processSecretSampleFilter.checkTrainingSample("intent", "F_PRIV", "这个产品配方里盐放多少"))
+                    .thenReturn(ProcessSecretSampleFilter.SampleVerdict.CLEAR);
+            when(sampleRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+            assertThat(service.recordSample("F_PRIV", "这个产品配方里盐放多少", "BOM_RECIPE_QUERY",
+                    TrainingSample.MatchMethod.EXACT, 0.9, "s1")).isNotNull();
         }
 
         @Test
@@ -278,7 +292,7 @@ class TrainingConsentGateContractTest {
         @Test
         void lowConfidenceInputNamingAProcessSecretProductIsNotCollected() {
             when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.DEFAULT);
-            when(processSecretSampleFilter.checkTrainingSample("active_learning", "F006", "秘制牛肉干还剩多少", null))
+            when(processSecretSampleFilter.checkTrainingSample("active_learning", "F006", "秘制牛肉干还剩多少", null, null, null))
                     .thenReturn(ProcessSecretSampleFilter.SampleVerdict.PROTECTED);
             assertThat(service.collectSample("F006", 1L, "秘制牛肉干还剩多少", null, "X",
                     new BigDecimal("0.3"), "SEMANTIC", null, null, "rec-1")).isNull();
@@ -292,7 +306,7 @@ class TrainingConsentGateContractTest {
 
         @Test
         void processParameterInputIsNotCollected() {
-            assertThat(service.collectSample("F006", 1L, "杀菌温度调到多少合适", null, "X",
+            assertThat(service.collectSample("F006", 1L, "杀菌温度调到 121 度合适", null, "X",
                     new BigDecimal("0.3"), "SEMANTIC", null, null, "rec-1")).isNull();
             verifyNoInteractions(sampleRepository);
         }
@@ -308,7 +322,8 @@ class TrainingConsentGateContractTest {
         @Test
         void unauthorizedFactoryLowConfidenceInputIsCollectedDesensitized() {
             when(trainingConsentService.status("F006")).thenReturn(TrainingConsentService.Status.DEFAULT);
-            when(processSecretSampleFilter.checkTrainingSample("active_learning", "F006", "那批 200 箱还剩多少", "那批 200 箱 剩余"))
+            when(processSecretSampleFilter.checkTrainingSample("active_learning", "F006", "那批 200 箱还剩多少", "那批 200 箱 剩余",
+                    "200箱", null))
                     .thenReturn(ProcessSecretSampleFilter.SampleVerdict.CLEAR);
             when(sampleRepository.existsBySourceRecordId(anyString())).thenReturn(false);
             when(sampleRepository.save(any())).thenAnswer(i -> i.getArgument(0));

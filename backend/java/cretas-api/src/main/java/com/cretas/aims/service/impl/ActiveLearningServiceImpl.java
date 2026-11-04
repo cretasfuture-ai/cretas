@@ -10,6 +10,7 @@ import com.cretas.aims.service.ExpressionLearningService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.service.consent.TrainingConsentService;
+import com.cretas.aims.service.consent.TrainingSampleHoldStore;
 import com.cretas.aims.service.consent.TrainingSampleRules;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -59,6 +60,10 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
     private final IntentKnowledgeBase intentKnowledgeBase;
     private final ExpressionLearningService expressionLearningService;
 
+    /** 挂起待重判的样本写这里 (必需: 没有它 HELD 的样本只能丢); 手工 new 出来的测试实例为 null。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private TrainingSampleHoldStore holdStore;
+
     @Value("${cretas.ai.active-learning.confidence-threshold:0.7}")
     private BigDecimal confidenceThreshold;
 
@@ -70,8 +75,12 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
 
     // ==================== Sample Collection ====================
 
+    /**
+     * 不开事务 (待办第 10 条): 授权、本厂名单在写入<b>之前</b>判完 (以前在事务里判, 名单缓存未命中时一次收样本占两个连接);
+     * 写入是去重查询 + 一条 save, 各自走仓库的事务。保密判断覆盖要存的全部文本: 原话、归一化原话、命中关键词、
+     * 候选意图 (待办第 10 条: matchedKeywords / topCandidates 以前没过名单)。
+     */
     @Override
-    @Transactional
     public ActiveLearningSample collectSample(
             String factoryId,
             Long userId,
@@ -89,18 +98,35 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
             return null;
         }
 
-        // 训练规则 (2026-10-24): 配方 / 工艺参数类原话任何工厂都不存; 未授权工厂脱敏后存
-        if (TrainingSampleRules.utteranceHasBlockedContent(userInput)
-                || TrainingSampleRules.utteranceHasBlockedContent(normalizedInput)) {
+        // 训练规则 (2026-10-24 / 10-29 选 A): 配方 / 工艺参数词带具体数值的原话不存; 未授权工厂脱敏后存。
+        // 该厂「训练数据过滤」(d) 关着时不按这些词拦 (#1400); 工资 / 考勤词 + 数值这里照样拦, 人名 / 客户名下面
+        // checkTrainingSample 照样拦 (隐私, 不归 d 管); 训练授权照常判。
+        // topCandidates 不走工资规则: 里面的数字是候选意图的分数, 不是工资
+        boolean trainingFilterOff = processSecretSampleFilter.trainingFilterOff(factoryId);
+        if (TrainingSampleRules.utteranceBlocked(userInput, trainingFilterOff)
+                || TrainingSampleRules.utteranceBlocked(normalizedInput, trainingFilterOff)
+                || TrainingSampleRules.utteranceHasPayValue(matchedKeywords)) {
             return null;
         }
         TrainingConsentService.Status status = trainingConsentService.status(factoryId);
         if (!status.storable()) {
             return null;
         }
-        // 隐私条款第六条: 提到本厂工艺保密产品的原话不进训练样本。名单查不出来 (UNVERIFIED) 也不存, 不抛
-        if (processSecretSampleFilter.checkTrainingSample("active_learning", factoryId, userInput, normalizedInput)
-                != com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
+        // 隐私条款第六条 + 本厂人员 / 客户: 名单查不出来时按上次成功的名单判, 判过的挂起待重判 (HELD);
+        // 连上次的都没有 (UNVERIFIED) 不存。都不抛
+        com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict verdict =
+                processSecretSampleFilter.checkTrainingSample("active_learning", factoryId,
+                        userInput, normalizedInput, matchedKeywords, topCandidates);
+        if (verdict == com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.HELD) {
+            if (holdStore != null) {
+                // 原文 (复审 N3): 重判用原文; 放行时本方法再按当时的授权脱敏
+                holdStore.holdActiveLearning(factoryId, new TrainingSampleHoldStore.ActiveLearningSampleData(
+                        userId, userInput, normalizedInput, matchedIntentCode, confidenceScore, matchMethod,
+                        topCandidates, matchedKeywords, sourceRecordId));
+            }
+            return null;
+        }
+        if (verdict != com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR) {
             return null;
         }
         if (status != TrainingConsentService.Status.AUTHORIZED) {
@@ -538,7 +564,11 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         return null;
     }
 
-    /** 文本提到任何一家工厂的保密产品名, 或无法判断 → true (调用方据此不写全局)。 */
+    /**
+     * 文本提到任何一家工厂的保密词, 或无法判断 → true (调用方据此不写全局 / 共享短语表)。走过滤器挂起调用方事务的
+     * {@code checkSharedContent}: 所有工厂的保密词、不看任何保密开关 (第五轮复审); 查库失败不把调用方事务标成只能回滚
+     * (待办第 8 条)。
+     */
     boolean namesAnyProtectedProduct(String text) {
         if (text == null || text.isBlank()) {
             return false;
@@ -546,12 +576,8 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         if (processSecretSampleFilter == null) {
             return true;
         }
-        try {
-            return processSecretSampleFilter.mentionsAnyFactoryProtectedProduct(text, text.toLowerCase().trim());
-        } catch (RuntimeException e) {
-            log.warn("全局写入前的保密产品检查失败, 按提到处理: {}", e.getClass().getSimpleName());
-            return true;
-        }
+        return processSecretSampleFilter.checkSharedContent("global_knowledge", text, text.toLowerCase().trim())
+                != com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR;
     }
 
     static final String KNOWLEDGE_NOT_FOUND = "知识不存在";

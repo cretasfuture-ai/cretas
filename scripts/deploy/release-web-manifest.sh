@@ -353,6 +353,29 @@ web_release_validate_cached() {
     printf 'Restored trusted Web archive from tree cache: %s\n' "$current_tree"
 }
 
+# 只读诊断, 与 release_manifest_validate_failure_reason 同一个用途: validate 的
+# `|| return 1` 全部无声, 失败后由 CLI 说出原因。
+web_release_validate_failure_reason() {
+    local manifest=$1
+    local repo_root=$2
+    local head_sha origin_sha
+
+    if [ "${SKIP_GIT_CHECK:-}" != "1" ]; then
+        head_sha=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)
+        origin_sha=$(git -C "$repo_root" rev-parse origin/main 2>/dev/null || true)
+        if [ "$head_sha" != "$origin_sha" ]; then
+            printf 'head_not_origin_main HEAD=%s origin/main=%s\n' "$head_sha" "$origin_sha"
+            return 0
+        fi
+    fi
+    web_release_require_clean_worktree "$repo_root" \
+        || { printf 'worktree_dirty\n'; return 0; }
+    web_release_validation_ref "$repo_root" >/dev/null 2>&1 \
+        || { printf 'offline_head_not_detached_local_main\n'; return 0; }
+    [ -f "$manifest" ] || { printf 'manifest_missing path=%s\n' "$manifest"; return 0; }
+    printf 'manifest_or_archive_invalid path=%s\n' "$manifest"
+}
+
 web_release_ensure_dependencies() {
     local repo_root=$1
     local web_admin_dir="$repo_root/web-admin"
@@ -517,7 +540,11 @@ web_release_main() {
     case "$command" in
         build) web_release_build "$repo_root" "$manifest" ;;
         validate)
-            web_release_validate_cached "$manifest" "$repo_root" || return 1
+            web_release_validate_cached "$manifest" "$repo_root" || {
+                printf 'WEB_MANIFEST_INVALID reason=%s\n' \
+                    "$(web_release_validate_failure_reason "$manifest" "$repo_root")" >&2
+                return 1
+            }
             printf 'Trusted Web archive: %s\n' "$WEB_RELEASE_ARCHIVE_PATH"
             ;;
         *) web_release_usage >&2; return 2 ;;

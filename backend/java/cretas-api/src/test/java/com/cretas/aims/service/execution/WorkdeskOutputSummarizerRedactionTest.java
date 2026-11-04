@@ -39,7 +39,9 @@ class WorkdeskOutputSummarizerRedactionTest {
         summarizer = new WorkdeskOutputSummarizer(llm, new ObjectMapper());
         ReflectionTestUtils.setField(summarizer, "enabled", true);
         ReflectionTestUtils.setField(summarizer, "maxChars", 800);
-        ReflectionTestUtils.setField(summarizer, "processSecretSampleFilter", processSecret);
+        // 外发统一走 LlmEgressGuard (工厂级保密配置 c 也在里面判); 保密产品名由它查
+        ReflectionTestUtils.setField(summarizer, "egressGuard",
+                new com.cretas.aims.service.consent.LlmEgressGuard(new ObjectMapper(), processSecret));
     }
 
     private static IntentExecuteResponse followupResponse() {

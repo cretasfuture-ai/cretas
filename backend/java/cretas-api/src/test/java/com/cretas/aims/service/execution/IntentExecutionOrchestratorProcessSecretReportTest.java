@@ -65,6 +65,8 @@ class IntentExecutionOrchestratorProcessSecretReportTest {
 
     private String systemPromptSent(ProcessSecretLlmCostScope scope) {
         ReflectionTestUtils.setField(orchestrator, "llmCostScope", scope);
+        // 测的是工艺保密; 调用者是老板, 价格判定原样放行 (看不到经营数字的一侧见 FinanceReportLlmPromptPriceContractTest)
+        OrchestratorPriceViewTestSupport.callerSeesAllAmounts(orchestrator);
         orchestrator.generateConversationalResponse(FACTORY, "最近经营怎么样", QuestionType.GENERAL_QUESTION, false, null);
         ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
         verify(llm).chat(system.capture(), anyString());   // 一定会发生: 模型被调用了, 读的是它真正收到的系统提示词

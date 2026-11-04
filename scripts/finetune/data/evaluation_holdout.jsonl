@@ -1,0 +1,119 @@
+{"text": "查一下这周的销售数据", "group_id": "b2eb06c252d24774757a2bf02dc0f56f7737c289e9a25fbcadb2c84d567b53e1", "case_id": "judge-001", "source_kind": "evaluation"}
+{"text": "查一下这周的销售数据", "group_id": "b2eb06c252d24774757a2bf02dc0f56f7737c289e9a25fbcadb2c84d567b53e1", "case_id": "select-001", "source_kind": "evaluation"}
+{"text": "本季度销售情况如何", "group_id": "e117d5d2be081db71c55721c526da3ac4b51d72889299042a1b08b48a938d726", "case_id": "judge-002", "source_kind": "evaluation"}
+{"text": "本季度销售情况如何", "group_id": "e117d5d2be081db71c55721c526da3ac4b51d72889299042a1b08b48a938d726", "case_id": "select-002", "source_kind": "evaluation"}
+{"text": "给我看看总体销售", "group_id": "45ae04a220cc73b72f3c9f8e272e47f45ba5eb3d9f96e78eb41de2de86f98485", "case_id": "judge-003", "source_kind": "evaluation"}
+{"text": "给我看看总体销售", "group_id": "45ae04a220cc73b72f3c9f8e272e47f45ba5eb3d9f96e78eb41de2de86f98485", "case_id": "select-003", "source_kind": "evaluation"}
+{"text": "销售业绩怎么样了", "group_id": "7722cfd9dd7720b2868acd2e2d6fa0be6b82788d1d4b375fd6a0a017c6950266", "case_id": "judge-004", "source_kind": "evaluation"}
+{"text": "销售业绩怎么样了", "group_id": "7722cfd9dd7720b2868acd2e2d6fa0be6b82788d1d4b375fd6a0a017c6950266", "case_id": "select-004", "source_kind": "evaluation"}
+{"text": "添加销售记录", "group_id": "d38a9b34364781148e36ad19138e4dd282994d4862e1da5b7c25c9b06c46f415", "case_id": "judge-005", "source_kind": "evaluation"}
+{"text": "谁是销冠", "group_id": "71c4bb49b90961560472ebcba3c5cb7acbf87ba58d121073bd5cebd25d159976", "case_id": "judge-006", "source_kind": "evaluation"}
+{"text": "这个月销售冠军是谁", "group_id": "4cb3091a9683178b3bba0673fce5e54da609b610537fca76ea41484ffd7da019", "case_id": "judge-007", "source_kind": "evaluation"}
+{"text": "这个月销售冠军是谁", "group_id": "4cb3091a9683178b3bba0673fce5e54da609b610537fca76ea41484ffd7da019", "case_id": "select-007", "source_kind": "evaluation"}
+{"text": "业绩前十名", "group_id": "fd0df2604682e59aeda848f34d6e2bca81bd9b76fc0c0173a6dd9a4a69af8622", "case_id": "judge-008", "source_kind": "evaluation"}
+{"text": "业绩前十名", "group_id": "fd0df2604682e59aeda848f34d6e2bca81bd9b76fc0c0173a6dd9a4a69af8622", "case_id": "select-008", "source_kind": "evaluation"}
+{"text": "销售排行榜给我看看", "group_id": "930c621052486aab64e8edeeb90ba7618fcf082f737b976b575fa17c7dcd6d6e", "case_id": "judge-009", "source_kind": "evaluation"}
+{"text": "销售排行榜给我看看", "group_id": "930c621052486aab64e8edeeb90ba7618fcf082f737b976b575fa17c7dcd6d6e", "case_id": "select-009", "source_kind": "evaluation"}
+{"text": "销售总额多少", "group_id": "6d4e06f3fb8ed9f0c8991ea9f684beba1c010407b8edd81d1593e41768d2550a", "case_id": "judge-010", "source_kind": "evaluation"}
+{"text": "销售走势图给我看看", "group_id": "6cf05fa2f9f73e631e6e24d87528558487f873eb6f977cf7f1a9109d5af39427", "case_id": "judge-011", "source_kind": "evaluation"}
+{"text": "销售走势图给我看看", "group_id": "6cf05fa2f9f73e631e6e24d87528558487f873eb6f977cf7f1a9109d5af39427", "case_id": "select-011", "source_kind": "evaluation"}
+{"text": "最近销量是上升还是下降", "group_id": "4ebafb1586c2b15621337aea537ad3a253320ae96fad81ebcd207922aec64bee", "case_id": "judge-012", "source_kind": "evaluation"}
+{"text": "最近销量是上升还是下降", "group_id": "4ebafb1586c2b15621337aea537ad3a253320ae96fad81ebcd207922aec64bee", "case_id": "select-012", "source_kind": "evaluation"}
+{"text": "环比数据", "group_id": "140917d0afea867e572a948abe38c6d576cbad05df9522a36eae8e14d6ebb28e", "case_id": "judge-013", "source_kind": "evaluation"}
+{"text": "环比数据", "group_id": "140917d0afea867e572a948abe38c6d576cbad05df9522a36eae8e14d6ebb28e", "case_id": "select-013", "source_kind": "evaluation"}
+{"text": "销售排名", "group_id": "3a84ef1fd6c433e48e749aed982c8fd5882a0fc8ecdc5b50b9b6775bce018e31", "case_id": "judge-014", "source_kind": "evaluation"}
+{"text": "现在库存情况怎么样", "group_id": "84b3f3b049678f14173e32e17768ce1fffbe342f407bfed545c0c74e7d4a5674", "case_id": "judge-015", "source_kind": "evaluation"}
+{"text": "现在库存情况怎么样", "group_id": "84b3f3b049678f14173e32e17768ce1fffbe342f407bfed545c0c74e7d4a5674", "case_id": "select-015", "source_kind": "evaluation"}
+{"text": "哪些产品快没货了", "group_id": "da72755fe077289dfb12210670e70aadb4b12032e6c4bd84109374493dbe7b62", "case_id": "judge-016", "source_kind": "evaluation"}
+{"text": "哪些产品快没货了", "group_id": "da72755fe077289dfb12210670e70aadb4b12032e6c4bd84109374493dbe7b62", "case_id": "select-016", "source_kind": "evaluation"}
+{"text": "库存量查一下", "group_id": "1f6ac80f094a98ff007c21ab559156dabc8705c55443c849a5f33d6b11f91218", "case_id": "judge-017", "source_kind": "evaluation"}
+{"text": "库存量查一下", "group_id": "1f6ac80f094a98ff007c21ab559156dabc8705c55443c849a5f33d6b11f91218", "case_id": "select-017", "source_kind": "evaluation"}
+{"text": "销售数据", "group_id": "fb36a6f991e88b0c4906edd9e21ca65bbf6d46d7bf482c26672e30c13b5a901e", "case_id": "judge-018", "source_kind": "evaluation"}
+{"text": "这批物料的来源是哪里", "group_id": "ef98d2b445914ed20db3040c04bbe7abbf54b23c2f86c206650f63127c66fc8e", "case_id": "judge-019", "source_kind": "evaluation"}
+{"text": "这批物料的来源是哪里", "group_id": "ef98d2b445914ed20db3040c04bbe7abbf54b23c2f86c206650f63127c66fc8e", "case_id": "select-019", "source_kind": "evaluation"}
+{"text": "查一下批号20240115", "group_id": "96b105bc1b03c118f22302fc0c3acd0c6aebed04736bb851e96071517b9002e4", "case_id": "judge-020", "source_kind": "evaluation"}
+{"text": "查一下批号20240115", "group_id": "96b105bc1b03c118f22302fc0c3acd0c6aebed04736bb851e96071517b9002e4", "case_id": "select-020", "source_kind": "evaluation"}
+{"text": "原料溯源信息", "group_id": "77ce598c2084c4ffd3cf551099420f0cf0aa1b93dbcec44e54534e691d22bbba", "case_id": "judge-021", "source_kind": "evaluation"}
+{"text": "原料溯源信息", "group_id": "77ce598c2084c4ffd3cf551099420f0cf0aa1b93dbcec44e54534e691d22bbba", "case_id": "select-021", "source_kind": "evaluation"}
+{"text": "物料库存多少", "group_id": "817644baadc9ff9376af63539befcfb15fefeba1717a4e877b6bf0ebb6e4f33b", "case_id": "judge-022", "source_kind": "evaluation"}
+{"text": "今天车间生产了多少", "group_id": "cf48288d575e2b2b3dfafc0d537304ece632b8d944cee9edadda9e80d7c0c80f", "case_id": "judge-023", "source_kind": "evaluation"}
+{"text": "今天车间生产了多少", "group_id": "cf48288d575e2b2b3dfafc0d537304ece632b8d944cee9edadda9e80d7c0c80f", "case_id": "select-023", "source_kind": "evaluation"}
+{"text": "工单进度查询", "group_id": "ec252c73e5afffc5af24892221bb6b869cdacf42cbba1168bcb25a0849f4fe6b", "case_id": "judge-024", "source_kind": "evaluation"}
+{"text": "工单进度查询", "group_id": "ec252c73e5afffc5af24892221bb6b869cdacf42cbba1168bcb25a0849f4fe6b", "case_id": "select-024", "source_kind": "evaluation"}
+{"text": "产线产出情况", "group_id": "475caf6bbabacb1c89fc67da9f3e7679ad98a40f09395eefbf531136c629df0d", "case_id": "judge-025", "source_kind": "evaluation"}
+{"text": "产线产出情况", "group_id": "475caf6bbabacb1c89fc67da9f3e7679ad98a40f09395eefbf531136c629df0d", "case_id": "select-025", "source_kind": "evaluation"}
+{"text": "设备状态", "group_id": "240cf246ac394b99dc4e3e958daa34d8b52b7d4029eceb4b980c066376b5fdef", "case_id": "judge-026", "source_kind": "evaluation"}
+{"text": "1号机台运行正常吗", "group_id": "99ee9ecd350fd1eb9da7146f2225cf7f05513593cb6a278bf0374c77bb46ec03", "case_id": "judge-027", "source_kind": "evaluation"}
+{"text": "1号机台运行正常吗", "group_id": "99ee9ecd350fd1eb9da7146f2225cf7f05513593cb6a278bf0374c77bb46ec03", "case_id": "select-027", "source_kind": "evaluation"}
+{"text": "有没有设备故障", "group_id": "77bca44eed453634f5bc8dc9452e4eba1acabab0e55d7e2fac4a8ab7f2875c67", "case_id": "judge-028", "source_kind": "evaluation"}
+{"text": "有没有设备故障", "group_id": "77bca44eed453634f5bc8dc9452e4eba1acabab0e55d7e2fac4a8ab7f2875c67", "case_id": "select-028", "source_kind": "evaluation"}
+{"text": "设备运行报告", "group_id": "ead3e8d394780ceeaa3f4ccff0026e9a023ffca3c2713524e286a52c88ac31cf", "case_id": "judge-029", "source_kind": "evaluation"}
+{"text": "设备运行报告", "group_id": "ead3e8d394780ceeaa3f4ccff0026e9a023ffca3c2713524e286a52c88ac31cf", "case_id": "select-029", "source_kind": "evaluation"}
+{"text": "生产进度", "group_id": "b037d6c46acb19cde186037a32582cf9f3755ff14668d77a498ab1ae6b0f78c0", "case_id": "judge-030", "source_kind": "evaluation"}
+{"text": "这批货的质检报告", "group_id": "4c6d9ab5500a9e6095a73c2c634cd3e8cbd9b6f862a70528ed6732c110282e8a", "case_id": "judge-031", "source_kind": "evaluation"}
+{"text": "这批货的质检报告", "group_id": "4c6d9ab5500a9e6095a73c2c634cd3e8cbd9b6f862a70528ed6732c110282e8a", "case_id": "select-031", "source_kind": "evaluation"}
+{"text": "今天的合格率", "group_id": "d1b5e5a7ad08757b7b6bee4d79c1a6bb43be64bba348468fa46c437f8d29a3fd", "case_id": "judge-032", "source_kind": "evaluation"}
+{"text": "今天的合格率", "group_id": "d1b5e5a7ad08757b7b6bee4d79c1a6bb43be64bba348468fa46c437f8d29a3fd", "case_id": "select-032", "source_kind": "evaluation"}
+{"text": "不良品数量", "group_id": "f216e34e8c991ff94b1584d8be19b039cfab57f8176b8f852296cee1fb9df769", "case_id": "judge-033", "source_kind": "evaluation"}
+{"text": "不良品数量", "group_id": "f216e34e8c991ff94b1584d8be19b039cfab57f8176b8f852296cee1fb9df769", "case_id": "select-033", "source_kind": "evaluation"}
+{"text": "设备状态", "group_id": "240cf246ac394b99dc4e3e958daa34d8b52b7d4029eceb4b980c066376b5fdef", "case_id": "judge-034", "source_kind": "evaluation"}
+{"text": "今天几个人上班", "group_id": "5821e959193bfeb043048890737d663999590774ec8c703c07dd44888fd38d92", "case_id": "judge-035", "source_kind": "evaluation"}
+{"text": "今天几个人上班", "group_id": "5821e959193bfeb043048890737d663999590774ec8c703c07dd44888fd38d92", "case_id": "select-035", "source_kind": "evaluation"}
+{"text": "张三的考勤记录", "group_id": "31a67c1f6062022f32f6213360e80a1cbbaca2a82d7ec7c456b5b6df59095fd0", "case_id": "judge-036", "source_kind": "evaluation"}
+{"text": "张三的考勤记录", "group_id": "31a67c1f6062022f32f6213360e80a1cbbaca2a82d7ec7c456b5b6df59095fd0", "case_id": "select-036", "source_kind": "evaluation"}
+{"text": "本周缺勤情况", "group_id": "921d45d846f70870952eca45eee0b714429d7c2d2c9d9c8040735af0da132b9b", "case_id": "judge-037", "source_kind": "evaluation"}
+{"text": "本周缺勤情况", "group_id": "921d45d846f70870952eca45eee0b714429d7c2d2c9d9c8040735af0da132b9b", "case_id": "select-037", "source_kind": "evaluation"}
+{"text": "签个到", "group_id": "88e0c292205b63b928a283ec70e74a28c09ec8b03044b575ffffb9ce9bf11787", "case_id": "judge-038", "source_kind": "evaluation"}
+{"text": "订单发货了吗", "group_id": "6e59534fdc5d79f1a54d2e9f3095001e6fe3ada3034f08c484910fc304fc06f5", "case_id": "judge-039", "source_kind": "evaluation"}
+{"text": "订单发货了吗", "group_id": "6e59534fdc5d79f1a54d2e9f3095001e6fe3ada3034f08c484910fc304fc06f5", "case_id": "select-039", "source_kind": "evaluation"}
+{"text": "物流到哪了", "group_id": "eda54c03733f4411a507f32e2305a8fb20677f0114dffb2598e6779d4e3594f4", "case_id": "judge-040", "source_kind": "evaluation"}
+{"text": "物流到哪了", "group_id": "eda54c03733f4411a507f32e2305a8fb20677f0114dffb2598e6779d4e3594f4", "case_id": "select-040", "source_kind": "evaluation"}
+{"text": "今天出货量", "group_id": "615504d9b85042676e63bc58093327d72cd35a987bac5d602b5916bcb48a505c", "case_id": "judge-041", "source_kind": "evaluation"}
+{"text": "今天出货量", "group_id": "615504d9b85042676e63bc58093327d72cd35a987bac5d602b5916bcb48a505c", "case_id": "select-041", "source_kind": "evaluation"}
+{"text": "创建发货单", "group_id": "ab39e50b736486b56305555ca154471cf63c770b0932b7d7023db316dad5130b", "case_id": "judge-042", "source_kind": "evaluation"}
+{"text": "系统有没有报警", "group_id": "e8dff312634da37d8c72b5ed3e41e40da742ef7e1b156a565a1ed0ae451d9939", "case_id": "judge-043", "source_kind": "evaluation"}
+{"text": "系统有没有报警", "group_id": "e8dff312634da37d8c72b5ed3e41e40da742ef7e1b156a565a1ed0ae451d9939", "case_id": "select-043", "source_kind": "evaluation"}
+{"text": "今天的异常情况", "group_id": "41c9c8dedaa27e19db6e5aae70f2166f438211b06e3a19163473ba92debbbbb3", "case_id": "judge-044", "source_kind": "evaluation"}
+{"text": "今天的异常情况", "group_id": "41c9c8dedaa27e19db6e5aae70f2166f438211b06e3a19163473ba92debbbbb3", "case_id": "select-044", "source_kind": "evaluation"}
+{"text": "告警列表给我看看", "group_id": "cc8698105ca83c559a99bc1c25ba9f5f23eddefb09e911a8d47364673ee7c9ed", "case_id": "judge-045", "source_kind": "evaluation"}
+{"text": "告警列表给我看看", "group_id": "cc8698105ca83c559a99bc1c25ba9f5f23eddefb09e911a8d47364673ee7c9ed", "case_id": "select-045", "source_kind": "evaluation"}
+{"text": "处理这个异常", "group_id": "677be2b6a2a94c80e82deb32992333c03da4b1d2a772a479470cd975763f0ded", "case_id": "judge-046", "source_kind": "evaluation"}
+{"text": "1827", "group_id": "52a6932d5af5316a815af86286167054ebaa4953cedb82e3914a5c126e363ea4", "case_id": "slot-001", "source_kind": "evaluation"}
+{"text": "1827号", "group_id": "efba787fe0b085d9f819798eeb5cbc5000449dfd310190987b30f1dd04683039", "case_id": "slot-002", "source_kind": "evaluation"}
+{"text": "就是1827", "group_id": "cb95bb7cd6a18d45c745bb0ea9faf9fc9de9fbc368f587bdf5fb1fefc7fbcadc", "case_id": "slot-003", "source_kind": "evaluation"}
+{"text": "第1827号任务", "group_id": "9c8ada9fa8607996c9fb048c41ab89d0ce825a116d34e25d12535cb0dbb109e5", "case_id": "slot-004", "source_kind": "evaluation"}
+{"text": " 1827 。", "group_id": "5666ac7b99f8c586bc562564896add2b776f5daf3f0daa0ec6443690cc2329b3", "case_id": "slot-005", "source_kind": "evaluation"}
+{"text": "是1827吧", "group_id": "054520a02898fdf85c713fd3b0ff2bd6a527a95ed4118b491805eebc397380e3", "case_id": "slot-006", "source_kind": "evaluation"}
+{"text": "#1827", "group_id": "a4896b4d2e6fea37859a76bfdda9de13848e1fed698b099f19809eb36adb5fca", "case_id": "slot-007", "source_kind": "evaluation"}
+{"text": "查一下1830号任务", "group_id": "1a6ef09c76c827d90a85d72126c5bda1242c883079b40c0b8431450a6e1cd0fb", "case_id": "slot-008", "source_kind": "evaluation"}
+{"text": "做完了，产量0", "group_id": "a1b152187a097281132ae323de81a90288426aed59f3f1d3269a3dfa744394c7", "case_id": "slot-009", "source_kind": "evaluation"}
+{"text": "上班打卡", "group_id": "b6b26c02394aa0ef19f7f4937d66a340636fa4e9bf91f8b6aa5f114b7cb6f11d", "case_id": "slot-010", "source_kind": "evaluation"}
+{"text": "今天我的工序任务", "group_id": "a594703825c9e31b573e5281f40f06017b8928d3dccf856ad628006b2d60a88b", "case_id": "slot-011", "source_kind": "evaluation"}
+{"text": "开始1830号工序任务", "group_id": "27e8c4e0a00c9b074a26c5e8fca8a1f7804d243ac26b49684fdaa4282a6e344c", "case_id": "slot-012", "source_kind": "evaluation"}
+{"text": "1827和1828", "group_id": "d2d5a9bff46910840f8faac1faadb472845526963fcc9e2d60ebac4440a4fa08", "case_id": "slot-013", "source_kind": "evaluation"}
+{"text": "好了", "group_id": "e9934d5d82275b80b335c20d4a99de2301cec916f6cc13d98b78087030f1add2", "case_id": "slot-014", "source_kind": "evaluation"}
+{"text": "产量 3.5 公斤", "group_id": "e68df0d988e6ee51b0371fd1ecdc99f28ebc1ea86de2f99c75f06319baab57e7", "case_id": "quantity-001", "source_kind": "evaluation"}
+{"text": "做了十公斤", "group_id": "5698a4b00fbc20b9c766db90bd94b9f00dc37e3793a444fdd4003f37697a3026", "case_id": "quantity-002", "source_kind": "evaluation"}
+{"text": "一百五", "group_id": "fd438bdefc9ae6a520f15900fb5e8fb86cf7fa01121ae492a12f1a2c2a8caef1", "case_id": "quantity-003", "source_kind": "evaluation"}
+{"text": "三点五斤", "group_id": "76ee395cc0c0ef186d36426f991200e49cbc295169a89913d1cd5b48d479f45b", "case_id": "quantity-004", "source_kind": "evaluation"}
+{"text": "两万", "group_id": "f994e332a8ad137bf5b99b3cd2fd6691df079f8cb47a4f85ebbe3fb2a0672854", "case_id": "quantity-005", "source_kind": "evaluation"}
+{"text": "产量零", "group_id": "cdcf6a781756fb3201ac26f84d39e598edd9698cbf927a96db8eee0acc6c225b", "case_id": "quantity-006", "source_kind": "evaluation"}
+{"text": "零个", "group_id": "1f0879aa8f974413a57712127dd178efe5f68d48531f1be41e4464ee22293a4d", "case_id": "quantity-007", "source_kind": "evaluation"}
+{"text": "产量０", "group_id": "3e3f383c7659a63feeaf5544d9ee1736fcc5d0f7d4d4c86ce7fa6b48a6531737", "case_id": "quantity-008", "source_kind": "evaluation"}
+{"text": "10kg", "group_id": "353cf81ae2f921ca92d197e32357dcd160af016446dc4de1469b52200fb1669f", "case_id": "quantity-009", "source_kind": "evaluation"}
+{"text": "产品 eb0aa47b 批次 B001", "group_id": "16819a905645641d087d5a0576231957cb098e5cc44f05feeace5bed80126ef8", "case_id": "quantity-010", "source_kind": "evaluation"}
+{"text": "零件做完了", "group_id": "36c53a46219bae20e9ed057553034f9717c99d7bfdff6899bf6faa1721311285", "case_id": "quantity-011", "source_kind": "evaluation"}
+{"text": "零下", "group_id": "147e91d32b9397d485ed42cdd1be3e8f82d2019a1d0baaa3b5ab489b2855b62d", "case_id": "quantity-012", "source_kind": "evaluation"}
+{"text": "零件做了0个", "group_id": "ae967b37d9e459484f4a8990aa2746746c22ead156295945ff3b278bc7bb6d29", "case_id": "quantity-013", "source_kind": "evaluation"}
+{"text": "用户回复：1827", "group_id": "23f09344a01c65547e82d8820117c31a262e5ae394afa6cfd763977779b6b7c5", "case_id": "completion-missing-quantity", "source_kind": "evaluation"}
+{"text": "用户回复：1827 产量0 设备故障", "group_id": "c36d4768055ec4842bf829718a371549705c34ee94de6c496d88d9a61d118a13", "case_id": "completion-explicit-zero", "source_kind": "evaluation"}
+{"text": "随便聊聊", "group_id": "b67a5f811064d7907f07ca11dbaa170f8be2318c543ebf4297a73290dfe3d592", "case_id": "select-no-suitable-intent", "source_kind": "evaluation"}
+{"text": "F001 工厂今天的原料批次入库情况怎么样? 请用 2-3 句话总结。", "group_id": "20d6283c3c2727e952a6fed81eb71b84f2b994b020bc1e88d1025ff834fe57a5", "case_id": "benchmark-chat", "source_kind": "evaluation"}
+{"text": "数据: 5 月销售环比 +15%, 客单价 -3%, 复购率 +8%。给出关键洞察。", "group_id": "dee1a9255ca0704c9e3373e7710419e2564463b4658d9761374862626fe13440", "case_id": "benchmark-insights", "source_kind": "evaluation"}
+{"text": "数据维度: 日期(string), 销售额(number), 区域(string)。10 行,日期跨 5 个区域。推荐一个图表。", "group_id": "cb858558d9b3c68ab193dfa0c3936a5cd78c09c082d7191f341685a4ca608993", "case_id": "benchmark-chart", "source_kind": "evaluation"}
+{"text": "Excel 列: ['交易日期', '产品类别', '销售金额(元)', '客户名称', '订购数量']。映射到标准字段。", "group_id": "d328745b15412c24301e81e0feddf5439812af7cdbc3d8d5ce0c876eeb323c32", "case_id": "benchmark-mapper", "source_kind": "evaluation"}
+{"text": "场景: F001 工厂 3 月毛利率从 22% 跌到 18%,但销售额没变,采购总额上升 7%,人力成本不变。分析。", "group_id": "eefb211490cf6b58ace99c9efe53bcb8894beaca8bcbc95db1406d9e6209d95f", "case_id": "benchmark-reasoning", "source_kind": "evaluation"}
+{"text": "请审核: '本公司销售业绩飞速增长 200%,远超行业平均 5% 水平,毛利达 80%,是同行 4 倍,具有绝对竞争优势。预计明年再翻倍。'", "group_id": "748f37e4b0a755adbd0ade5e3d78b4841d70e7f540d176dc4040ce697309cbb2", "case_id": "benchmark-review", "source_kind": "evaluation"}
+{"text": "{\"finished_goods_required\": 10, \"finished_goods_available\": 100, \"fullySatisfied\": true, \"productionSuggestions\": [], \"procurementSuggestions\": []}", "group_id": "088128fe37917f1b4a9d3538ff9f79816a3bf61d6d8e110eee18e588a4851c3c", "case_id": "shortage-fg-sufficient", "source_kind": "evaluation"}
+{"text": "{\"finished_goods_required\": 100, \"finished_goods_available\": 30, \"productionSuggestions\": [{\"product\": \"Product A\", \"quantity\": 70}], \"material_requirement\": {\"material\": \"面粉\", \"quantity\": 50}, \"materialShortages\": [], \"fullySatisfied\": false, \"procurementSuggestions\": []}", "group_id": "a2dd6a6126d5ef58d84f325f9558c983f7845a3cbb4cb623d5699d0b6e1096d4", "case_id": "shortage-material-sufficient", "source_kind": "evaluation"}
+{"text": "{\"A\": {\"order\": 60, \"finishedStock\": 10, \"productionSuggestion\": 50, \"M1Required\": 20}, \"B\": {\"order\": 40, \"finishedStock\": 0, \"productionSuggestion\": 40, \"M1Required\": 30}, \"M1\": {\"aggregatedRequired\": 50, \"available\": 15, \"shortage\": 35}, \"execution_policy\": \"所有生产和采购写操作需系统权限与确认\"}", "group_id": "d9fbd761b145fd245ca4ae4357eb2e2da052eaef8bde64ed260800ff3c15d615", "case_id": "shortage-shared-material", "source_kind": "evaluation"}

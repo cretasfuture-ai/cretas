@@ -137,6 +137,16 @@ public interface ToolExecutor {
     }
 
     /**
+     * 与 {@link #getRequiredPermissions()} 是「且」: 过了那一组之后, 还须持有这里任一权限码。
+     * 用于数据在 App 里只出现在某个模块页面上的工具 (例如财务报表只在「经营分析」页), 对话与 App 同口径。
+     *
+     * @return 另需的权限码集合 (任一即可); 空集合表示没有额外要求
+     */
+    default Set<String> getAlsoRequiredPermissions() {
+        return Set.of();
+    }
+
+    /**
      * 工具是否支持预览模式（TCC 确认流第一阶段）
      *
      * 支持预览的工具在 previewOnly=true 时返回操作预览而不执行，

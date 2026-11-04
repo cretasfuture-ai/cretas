@@ -25,6 +25,42 @@ ALL_FACTORIES_PROTECTED_NAMES_SQL = """
 """
 
 
+# ---- 训练样本的本厂名单 (common.process_secret_terms; Steve 2026-10-29 选 A) ----
+# 外发脱敏不用这几条 (仍按上面的产品名)。名单 = 保密产品的全名 / 编码 / ID + 本厂人员姓名 + 本厂客户名称。
+PROTECTED_TERMS_SQL = """
+    SELECT DISTINCT pt.id::text AS id, pt.code, pt.name, pt.category, pt.product_category, p.aliases
+    FROM process_secret_policies p
+    JOIN product_types pt ON pt.id::text = p.product_type_id AND pt.factory_id = p.factory_id
+    WHERE p.factory_id = $1
+"""
+ALL_PROTECTED_TERMS_SQL = """
+    SELECT DISTINCT p.factory_id, pt.id::text AS id, pt.code, pt.name, pt.category, pt.product_category, p.aliases
+    FROM process_secret_policies p
+    JOIN product_types pt ON pt.id::text = p.product_type_id AND pt.factory_id = p.factory_id
+"""
+# 保密产品: 含已软删除的产品 (fail-closed; 2026-11-03 复审 N2, Java 侧同一口径)。
+# 别名 aliases: 保密负责人在保密设置里登记 (Flyway V20261104_23, JSON 数组)。
+#
+# 人员 / 客户: 含已软删除的行 (离职员工、停用客户的名字照样是本厂的人和客户); 客户 / 供应商的
+# 联系人也算本厂名单里的人名 (复审 N6)。与 Java FactoryNameDirectoryRepository 同一口径。
+FACTORY_DIRECTORY_SQL = """
+    SELECT full_name AS name FROM users WHERE factory_id = $1 AND full_name IS NOT NULL
+    UNION SELECT name FROM customers WHERE factory_id = $1 AND name IS NOT NULL
+    UNION SELECT contact_name FROM customers WHERE factory_id = $1 AND contact_name IS NOT NULL
+    UNION SELECT contact_person FROM customers WHERE factory_id = $1 AND contact_person IS NOT NULL
+    UNION SELECT contact_name FROM suppliers WHERE factory_id = $1 AND contact_name IS NOT NULL
+    UNION SELECT contact_person FROM suppliers WHERE factory_id = $1 AND contact_person IS NOT NULL
+"""
+ALL_FACTORY_DIRECTORY_SQL = """
+    SELECT factory_id, full_name AS name FROM users WHERE full_name IS NOT NULL AND factory_id IS NOT NULL
+    UNION SELECT factory_id, name FROM customers WHERE name IS NOT NULL AND factory_id IS NOT NULL
+    UNION SELECT factory_id, contact_name FROM customers WHERE contact_name IS NOT NULL AND factory_id IS NOT NULL
+    UNION SELECT factory_id, contact_person FROM customers WHERE contact_person IS NOT NULL AND factory_id IS NOT NULL
+    UNION SELECT factory_id, contact_name FROM suppliers WHERE contact_name IS NOT NULL AND factory_id IS NOT NULL
+    UNION SELECT factory_id, contact_person FROM suppliers WHERE contact_person IS NOT NULL AND factory_id IS NOT NULL
+"""
+
+
 _JAVA_TRIM = "".join(chr(c) for c in range(33))
 
 

@@ -47,6 +47,7 @@ function OperatorTabNavigator() {
       initialRouteName="OperatorReportTab"
       screenOptions={{
         headerShown: false,
+        tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: '#2196F3',
         tabBarInactiveTintColor: '#757575',
         tabBarStyle: {

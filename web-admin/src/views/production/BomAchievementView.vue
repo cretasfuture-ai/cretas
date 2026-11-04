@@ -363,7 +363,8 @@ function handleSizeChange(size: number) {
                 </el-table-column>
                 <el-table-column prop="actual" label="实际用量" width="120" align="right">
                   <template #default="{ row: r }">
-                    <span v-if="r.actual === null" class="secret-hidden" title="该产品工艺已设为保密，按配比自动带出的用量已隐藏">已保密</span>
+                    <span v-if="r.secretHidden" class="secret-hidden" title="该产品工艺已设为保密，按配比自动带出的用量已隐藏">已保密</span>
+                    <span v-else-if="r.actual === null" class="secret-hidden">—</span>
                     <template v-else>{{ r.actual }} {{ r.unit || '' }}</template>
                   </template>
                 </el-table-column>

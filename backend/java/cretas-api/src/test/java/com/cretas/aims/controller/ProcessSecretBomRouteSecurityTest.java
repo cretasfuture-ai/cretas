@@ -62,6 +62,8 @@ class ProcessSecretBomRouteSecurityTest {
     ProcessSecretAuditRecorder recorder;
     ProcessSecretGrantRepository grants;
     BomCopyService copyService;
+    ProcessSecretAccessService access;
+    BomRecipe recipe;
     MockMvc mvc;
 
     @BeforeEach
@@ -72,14 +74,14 @@ class ProcessSecretBomRouteSecurityTest {
         recorder = mock(ProcessSecretAuditRecorder.class);
         grants = mock(ProcessSecretGrantRepository.class);
         when(grants.findActive(anyString(), anyString(), any(), any(), any())).thenReturn(List.of());
-        ProcessSecretAccessService access = new ProcessSecretAccessService(policies, grants, recorder);
+        access = new ProcessSecretAccessService(policies, grants, recorder);
 
         ProcessSecretPolicy policy = ProcessSecretPolicy.builder().id(1L).factoryId(F).productTypeId(SECRET)
                 .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(OWNER).createdBy(OWNER).build();
         when(policies.findByFactoryIdAndProductTypeId(F, SECRET)).thenReturn(Optional.of(policy));
         when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(policy));
 
-        BomRecipe recipe = new BomRecipe();
+        recipe = new BomRecipe();
         recipe.setId("r1");
         recipe.setFactoryId(F);
         recipe.setProductTypeId(SECRET);
@@ -146,6 +148,105 @@ class ProcessSecretBomRouteSecurityTest {
                 .andExpect(status().isOk()));
         // 阳性对照: 同一条路由、同一份数据, 负责人拿到完整明细 (证明上面的「不含」不是解码或空响应造成的)
         org.assertj.core.api.Assertions.assertThat(full).contains("秘方香料").contains("3.25");
+    }
+
+    static final AuthenticatedActor PLATFORM = new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 1L, null, "platform_admin");
+    static final String SUMMARY_REASON = "无权查看，已替换为摘要";
+
+    MockHttpServletRequestBuilder asActor(String route, AuthenticatedActor actor) {
+        return get(route).requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE, actor);
+    }
+
+    /** 2026-11-04 F006 复测: b 开时这两条路由返回 200 + 摘要, 却没有一行审计, 工厂查不到平台来看过。 */
+    @Test
+    void aPlatformAccountSeeingASummaryLeavesAnAuditRowOnTheDetailAndCurrentRoutes() throws Exception {
+        when(recipeService.getCurrentRecipe(F, SECRET)).thenReturn(Optional.of(recipe));
+        for (String route : List.of("/api/mobile/F-A/bom/recipes/r1", "/api/mobile/F-A/bom/recipes/by-product/P17/current")) {
+            String body = utf8(mvc.perform(asActor(route, PLATFORM)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.processSecret.visibility").value("RESTRICTED")));
+            org.assertj.core.api.Assertions.assertThat(body).doesNotContain("秘方香料");
+            verify(recorder).record(F, SECRET, PLATFORM, com.cretas.aims.entity.processsecret.ProcessSecretAction.VIEW_FULL,
+                    "DENY", SUMMARY_REASON, "GET " + route);
+        }
+    }
+
+    /** 平台以外的跨厂账号 (令牌工厂是 PLATFORM、角色放行) 同样不是本厂用户。 */
+    @Test
+    void anAccountFromOutsideTheFactoryLeavesAnAuditRowToo() throws Exception {
+        AuthenticatedActor outsider = new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 5L, "PLATFORM", "super_admin");
+        mvc.perform(asActor("/api/mobile/F-A/bom/recipes/r1", outsider)).andExpect(status().isOk());
+        verify(recorder).record(org.mockito.ArgumentMatchers.eq(F), org.mockito.ArgumentMatchers.eq(SECRET),
+                org.mockito.ArgumentMatchers.eq(outsider), any(), org.mockito.ArgumentMatchers.eq("DENY"),
+                org.mockito.ArgumentMatchers.eq(SUMMARY_REASON), anyString());
+    }
+
+    /** 本厂用户翻页不记 (会淹没审计); 负责人看全量不是这条路径。 */
+    @Test
+    void aFactoryUserSeeingASummaryAndTheOwnerSeeingTheRecipeLeaveNoSummaryRow() throws Exception {
+        mvc.perform(as(get("/api/mobile/F-A/bom/recipes/r1"), 77, "production_manager"))
+                .andExpect(jsonPath("$.data.processSecret.visibility").value("RESTRICTED"));
+        mvc.perform(as(get("/api/mobile/F-A/bom/recipes/r1"), OWNER, "factory_super_admin")).andExpect(status().isOk());
+        verify(recorder, never()).record(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(SUMMARY_REASON), any());
+    }
+
+    /** b 关: 平台看完整配方, 不是摘要, 不记「已替换」(阴性对照: 上面的行确实是 b 开时的摘要写的)。 */
+    @Test
+    void withThePlatformBlockOffThePlatformSeesTheRecipeAndNoSummaryRowIsWritten() throws Exception {
+        com.cretas.aims.service.secrecy.FactorySecrecyConfig secrecy = mock(com.cretas.aims.service.secrecy.FactorySecrecyConfig.class);
+        when(secrecy.isOn(any(), any())).thenReturn(true);
+        when(secrecy.isOn(F, com.cretas.aims.service.secrecy.SecrecyItem.PLATFORM_RECIPE_BLOCK)).thenReturn(false);
+        access.setFactorySecrecyConfig(secrecy);
+        String body = utf8(mvc.perform(asActor("/api/mobile/F-A/bom/recipes/r1", PLATFORM)).andExpect(status().isOk()));
+        org.assertj.core.api.Assertions.assertThat(body).contains("秘方香料");
+        verify(recorder, never()).record(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.eq(SUMMARY_REASON), any());
+    }
+
+    /** 一页里同一产品的多个配方: 一次请求只记一行; 不同产品各记一行。 */
+    @Test
+    void aListRecordsOneRowPerProductNotOnePerObject() throws Exception {
+        BomRecipe sameProduct = new BomRecipe();
+        sameProduct.setId("r2");
+        sameProduct.setFactoryId(F);
+        sameProduct.setProductTypeId(SECRET);
+        ProcessSecretPolicy other = ProcessSecretPolicy.builder().id(2L).factoryId(F).productTypeId("P18")
+                .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(OWNER).createdBy(OWNER).build();
+        when(policies.findByFactoryIdAndProductTypeId(F, "P18")).thenReturn(Optional.of(other));
+        when(policies.findByFactoryIdOrderByProductTypeIdAsc(F)).thenReturn(List.of(
+                ProcessSecretPolicy.builder().id(1L).factoryId(F).productTypeId(SECRET)
+                        .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED).ownerUserId(OWNER).createdBy(OWNER).build(), other));
+        access.invalidate(F);
+        BomRecipe otherProduct = new BomRecipe();
+        otherProduct.setId("r3");
+        otherProduct.setFactoryId(F);
+        otherProduct.setProductTypeId("P18");
+        when(recipeService.listRecipes(any(), any(), any())).thenReturn(
+                new org.springframework.data.domain.PageImpl<>(List.of(recipe, sameProduct, otherProduct),
+                        org.springframework.data.domain.PageRequest.of(0, 20), 3));
+        mvc.perform(asActor("/api/mobile/F-A/bom/recipes", PLATFORM)).andExpect(status().isOk());
+        verify(recorder).record(org.mockito.ArgumentMatchers.eq(F), org.mockito.ArgumentMatchers.eq(SECRET), any(), any(),
+                org.mockito.ArgumentMatchers.eq("DENY"), org.mockito.ArgumentMatchers.eq(SUMMARY_REASON), anyString());
+        verify(recorder).record(org.mockito.ArgumentMatchers.eq(F), org.mockito.ArgumentMatchers.eq("P18"), any(), any(),
+                org.mockito.ArgumentMatchers.eq("DENY"), org.mockito.ArgumentMatchers.eq(SUMMARY_REASON), anyString());
+    }
+
+    /** 解析不出产品走 fail-closed 的摘要: 也记, 产品留空, 不能因为没有产品就漏掉。 */
+    @Test
+    void aSummaryWithoutAKnownProductIsStillRecorded() throws Exception {
+        recipe.setProductTypeId(null);
+        mvc.perform(asActor("/api/mobile/F-A/bom/recipes/r1", PLATFORM)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.processSecret.visibility").value("RESTRICTED"));
+        verify(recorder).record(org.mockito.ArgumentMatchers.eq(F), org.mockito.ArgumentMatchers.isNull(), any(), any(),
+                org.mockito.ArgumentMatchers.eq("DENY"), org.mockito.ArgumentMatchers.eq(SUMMARY_REASON), anyString());
+    }
+
+    /** 审计写不进去时响应照旧是摘要: 内容已经裁掉了, 不能因此报 500, 更不能放出原文。 */
+    @Test
+    void aFailingAuditWriteStillAnswersWithTheSummary() throws Exception {
+        org.mockito.Mockito.doThrow(new RuntimeException("db down")).when(recorder)
+                .record(any(), any(), any(), any(), any(), any(), any());
+        String body = utf8(mvc.perform(asActor("/api/mobile/F-A/bom/recipes/r1", PLATFORM)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.processSecret.visibility").value("RESTRICTED")));
+        org.assertj.core.api.Assertions.assertThat(body).doesNotContain("秘方香料");
     }
 
     static String utf8(org.springframework.test.web.servlet.ResultActions actions) throws Exception {

@@ -501,6 +501,23 @@ public final class LlmEgressRedactor {
         return r.refused() ? r : new Result(null, r.texts, r.tokenToReal, null, r.droppedFields);
     }
 
+    /**
+     * 「出外脱敏」(c) 关着、且工厂已知时 ({@link LlmEgressGuard} 判): 原样发出 —— 不换代号、不丢字段, 也不需要还原。
+     * 结构化数据展开不了照样拒绝 (那是发不出去, 不是脱敏)。{@code recordOnly}: 记录本身不发, 只发文本。
+     */
+    static Result passThrough(ObjectMapper objectMapper, Object data, List<String> texts, boolean recordOnly) {
+        String payload = null;
+        if (data != null && !recordOnly) {
+            try {
+                payload = objectMapper.writeValueAsString(toPlainTree(objectMapper, data));
+            } catch (RuntimeException | JsonProcessingException e) {
+                return new Result(null, Map.of(), "结果类型无法展开", 0);
+            }
+        }
+        List<String> sent = texts == null ? List.of() : java.util.Collections.unmodifiableList(new ArrayList<>(texts));
+        return new Result(payload, sent, Map.of(), null, 0);
+    }
+
     private Result redact(Object data, List<String> texts, Map<String, Party> knownParties,
                           Collection<String> protectedNames, boolean detectNames, boolean recordOnly) {
         Object tree = null;

@@ -1,3 +1,5 @@
+import type { WorkflowPortTimeLimit } from '@/api/processTimeLimit';
+
 export type ProductProcessNodeKind =
   | 'RAW_MATERIAL'
   | 'PROCESS'
@@ -116,6 +118,11 @@ export interface ProcessPort {
    * (食品 DAG 缺口 10, Steve 2026-11-03)。合计必须 100, 发布时后端编译器校验。
    */
   fixedCostShare?: number | null;
+  /**
+   * 工序间 / 投料时限, 仅 INPUT 端口 (食品 DAG 缺口 14): 原料端口 = 投料时限, 半成品端口 = 工序间时限。
+   * 随工艺版本冻结; 没有这个键 = 不限时。
+   */
+  timeLimit?: WorkflowPortTimeLimit | null;
   ordinal: number;
 }
 
@@ -398,7 +405,7 @@ export type WorkflowPatch =
 
 export interface WorkflowValidationError {
   code: 'SCHEMA' | 'NODE_REFERENCE' | 'SKU_REQUIRED' | 'PORT_REQUIRED' | 'PORT_GROUP_INVALID'
-    | 'OUTPUT_CONTRACT_INVALID' | 'CYCLE' | 'BOUNDARY_REQUIRED';
+    | 'OUTPUT_CONTRACT_INVALID' | 'CYCLE' | 'BOUNDARY_REQUIRED' | 'TIME_LIMIT_INVALID';
   message: string;
   nodeId?: string;
   edgeId?: string;

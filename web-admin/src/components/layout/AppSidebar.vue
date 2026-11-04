@@ -23,6 +23,7 @@ import {
   hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
   getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden,
 } from './factoryMenuVisibility';
+import { secrecyFromFeatureConfig, secrecyHiddenMenuPaths } from '@/api/factorySecrecy';
 
 const router = useRouter();
 const route = useRoute();
@@ -119,7 +120,8 @@ let disabledFetchToken = 0;
 async function fetchDisabledModules(factoryId: string) {
   const token = ++disabledFetchToken;
   factoryAnalyticsMenuEnabled.value = false;
-  hiddenFactoryMenuPaths.value = [];
+  // 保密配置读到 `=== true` 之前, 依赖它的菜单 (工艺保密) 一律不显示
+  hiddenFactoryMenuPaths.value = secrecyHiddenMenuPaths({});
   hiddenFactoryMenuModules.value = [];
   if (!factoryId || isDemoTenant(factoryId)) {
     disabledModuleCodes.value = [];
@@ -141,8 +143,14 @@ async function fetchDisabledModules(factoryId: string) {
     factoryAnalyticsMenuEnabled.value = featuresResult.status === 'fulfilled'
       && featuresResult.value.success
       && hasFactoryAnalyticsSidebarOptIn(featuresResult.value.data);
-    hiddenFactoryMenuPaths.value = featuresResult.status === 'fulfilled' && featuresResult.value.success
-      ? getDisabledFactoryMenuPaths(featuresResult.value.data) : [];
+    // 工厂级保密配置 (平台设置, 只读): 「工艺保密」不是明确开启 (=== true) 时隐藏工艺保密菜单
+    const secrecyFlags = featuresResult.status === 'fulfilled' && featuresResult.value.success
+      ? secrecyFromFeatureConfig(featuresResult.value.data) : {};
+    hiddenFactoryMenuPaths.value = [
+      ...(featuresResult.status === 'fulfilled' && featuresResult.value.success
+        ? getDisabledFactoryMenuPaths(featuresResult.value.data) : []),
+      ...secrecyHiddenMenuPaths(secrecyFlags),
+    ];
     hiddenFactoryMenuModules.value = featuresResult.status === 'fulfilled' && featuresResult.value.success
       ? getHiddenFactoryMenuModules(featuresResult.value.data) : [];
   } catch {

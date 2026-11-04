@@ -25,6 +25,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.entity.workprocess.ProcessParamCheck;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -128,6 +129,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     /** 缺口 16 跨客户领料: 字段注入只为既有单测装配; 领用时没有它 ⇒ 500, 不放行。 */
     @Autowired(required = false)
     private com.cretas.aims.service.processentry.IntermediateOwnershipGuard intermediateOwnershipGuard;
+
+    /** 工序间 / 投料时限 (缺口 14)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService processTimeLimitService;
 
     @Autowired(required = false)
     private BackdateWindowValidator backdateWindowValidator;
@@ -387,6 +392,10 @@ public class YieldReportServiceImpl implements YieldReportService {
             sourceWip = wipInventoryService.validateSourceWip(
                     factoryId, intermediateOwnershipGuard.ofProductionBatch(factoryId, batchId),
                     req.getSourceWipNo(), effSourceWipQuantity, effInputUnit, null);
+            // 缺口 14: 工序间时限 —— 报工这一刻就是投料; 审批过账时不再判, 否则合法投料会事后失败
+            if (processTimeLimitService != null) {
+                processTimeLimitService.assertSemiFeedForTask(factoryId, t, sourceWip, effSourceWipQuantity, workerId);
+            }
         }
 
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数
@@ -430,6 +439,11 @@ public class YieldReportServiceImpl implements YieldReportService {
             effectiveWorkMinutes = sumMinutes;
             effectiveWorkers = maxHead;   // 峰值人数 (非 SUM) — 修 M2 inflation
         }
+
+        // 工艺参数 (App 产出报工录入): 与 web 工序表同口径 —— 未配置的键 400, 超标不拦, 服务端按当时标准留快照。
+        Map<String, Object> processParams = processParamsForReport(req, reportKind, costWp);
+        List<Map<String, Object>> paramChecks = processParams == null ? null
+                : ProcessParamCheck.evaluate(costWp.getCustomFieldSchema(), processParams);
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
@@ -475,8 +489,10 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .auxPotNo(req.getAuxPotNo())                 // AUDIT-004: 共享锅(运行时锅号, 不继承)
                 .auxPotTotalCost(req.getAuxPotTotalCost())
                 .auxAllocMethod(effAuxAllocMethod)     // AUDIT-004: 分摊方式 (req优先, 否则继承工序配置)
-                .customFields(buildYieldCustomFields(reportKind, sourceWip == null ? null : effSourceWipQuantity,
-                        req.getMarkComplete()))
+                .customFields(withProcessParams(
+                        buildYieldCustomFields(reportKind, sourceWip == null ? null : effSourceWipQuantity,
+                                req.getMarkComplete()),
+                        processParams, paramChecks))
                 // 工序批次号是任务级: 仅首条报工生成, 后续条 null (避免 uq_pr_intermediate_batch_no 冲突)
                 .intermediateBatchNo(isFirstReportForTask ? generateBatchNo(t, batchId) : null)
                 // G7: 本道领用的源 WIP 工序批次号 (向后兼容: null 走旧路径); 三阶段: 仅 INPUT/legacy 消耗
@@ -1243,6 +1259,44 @@ public class YieldReportServiceImpl implements YieldReportService {
             if (byproductMaps != null) m.put("byproducts", byproductMaps);
             return m;
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 本次报工带的工艺参数; 没带返回 null。只在产出报工 (OUTPUT / 旧式整合) 上收 —— 参数描述的是「这一锅」,
+     * 领料 / 工时段报工上没有对应的那一锅。键必须是本道工序配置过的字段 (没配置过任何字段也算未配置)。
+     */
+    private Map<String, Object> processParamsForReport(YieldReportRequest req, String reportKind, WorkProcess wp) {
+        Map<String, Object> submitted = req.getCustomFields();
+        if (submitted == null || submitted.isEmpty()) {
+            return null;
+        }
+        if (!("OUTPUT".equals(reportKind) || reportKind == null)) {
+            throw new BusinessException(400, "工艺参数只在产出报工时填写")
+                    .withHint("请在产出报工里填写这一锅的工艺参数")
+                    .withHintTarget("customFields");
+        }
+        String processName = wp == null ? "本道工序" : wp.getProcessName();
+        List<Map<String, Object>> schema = wp == null ? null : wp.getCustomFieldSchema();
+        if (schema == null || schema.isEmpty()) {
+            throw new BusinessException(400, "工序「" + processName + "」没有配置工艺参数")
+                    .withHint("请先在工序设置里添加参数字段, 再报工")
+                    .withHintTarget("customFields");
+        }
+        com.cretas.aims.service.processentry.impl.ProcessCustomFieldValidation
+                .checkKeys(schema, submitted.keySet(), processName);
+        return new LinkedHashMap<>(submitted);
+    }
+
+    /** 与 web 工序表同一命名空间与形状 (clerkCustomFields / paramChecks), 下游读者无需区分来源。 */
+    private static Map<String, Object> withProcessParams(Map<String, Object> fields, Map<String, Object> processParams,
+                                                         List<Map<String, Object>> paramChecks) {
+        if (processParams != null) {
+            fields.put("clerkCustomFields", processParams);
+        }
+        if (paramChecks != null && !paramChecks.isEmpty()) {
+            fields.put("paramChecks", paramChecks);
+        }
+        return fields;
     }
 
     private Map<String, Object> buildYieldCustomFields(String reportKind, BigDecimal sourceWipQuantity,

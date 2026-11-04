@@ -9,7 +9,9 @@ import com.cretas.aims.repository.shortage.ShortageCaseActionRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseRepository;
 import com.cretas.aims.security.ActorRef;
 import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.entity.shortage.ShortageCaseOutcomeCheck;
 import com.cretas.aims.service.shortage.ShortageCaseActionService;
+import com.cretas.aims.service.shortage.ShortageOutcomeCheckService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -38,6 +40,7 @@ public class ShortageCaseActionController {
     private final ShortageCaseActionService actionService;
     private final ShortageCaseActionRepository actionRepository;
     private final ShortageCaseRepository caseRepository;
+    private final ShortageOutcomeCheckService outcomeChecks;
 
     @Data
     public static class DraftRequest {
@@ -91,8 +94,48 @@ public class ShortageCaseActionController {
                                                                          @PathVariable String caseId,
                                                                          @Valid @RequestBody DraftRequest request,
                                                                          HttpServletRequest http) {
-        var result = actionService.createProcurementDraft(factoryId, caseId, request.getMaterialTypeId(), actor(http, factoryId));
-        return ApiResponse.success(result.reused() ? "已有在走的采购单, 未重复生成" : "采购草稿已生成", result);
+        ActorRef actor = actor(http, factoryId);
+        var result = actionService.createProcurementDraft(factoryId, caseId, request.getMaterialTypeId(), actor);
+        // 执行后核对: 草稿还没下给供应商, 到货日不作数 —— 核对结果如实写回实例, 不默认成功
+        Long actionId = actionRepository.findByCaseIdAndMaterialTypeIdAndActionTypeAndStatus(caseId,
+                        request.getMaterialTypeId(), ShortageCaseAction.ActionType.PURCHASE_DRAFT,
+                        ShortageCaseAction.Status.DONE)
+                .map(ShortageCaseAction::getId).orElse(null);
+        ShortageCaseOutcomeCheck chk = outcomeChecks.check(factoryId, caseId,
+                ShortageCaseOutcomeCheck.Trigger.PURCHASE_DRAFT, actionId, actor);
+        return ApiResponse.success((result.reused() ? "已有在走的采购单, 未重复生成" : "采购草稿已生成")
+                + "; 核对结果: " + chk.getDetail(), result);
+    }
+
+    public record OutcomeCheckView(Long id, Long actionId, String trigger, String verdict, String verdictLabel,
+                                   boolean gapClosed, int openGapLines, java.time.LocalDate dueDate,
+                                   LocalDateTime latestPlannedEnd, int lateScheduleCount,
+                                   java.time.LocalDate supplyReadyDate, String detail, LocalDateTime createdAt) {
+        static OutcomeCheckView of(ShortageCaseOutcomeCheck c) {
+            return new OutcomeCheckView(c.getId(), c.getActionId(), c.getTrigger().name(), c.getVerdict().name(),
+                    c.getVerdict().label(), c.isGapClosed(), c.getOpenGapLines(), c.getDueDate(),
+                    c.getLatestPlannedEnd(), c.getLateScheduleCount(), c.getSupplyReadyDate(), c.getDetail(),
+                    c.getCreatedAt());
+        }
+    }
+
+    @RequirePermission({"procurement:read", "procurement:read_write", "production:read", "production:read_write",
+            "scheduling:read", "scheduling:read_write", "sales:read", "sales:read_write"})
+    @GetMapping("/outcome-checks")
+    @Operation(summary = "执行后核对记录", description = "每次重排 / 转采购之后的目标达成核对, 按时间顺序")
+    public ApiResponse<List<OutcomeCheckView>> outcomeChecks(@PathVariable String factoryId, @PathVariable String caseId) {
+        return ApiResponse.success("获取成功",
+                outcomeChecks.list(factoryId, caseId).stream().map(OutcomeCheckView::of).toList());
+    }
+
+    @RequirePermission({"procurement:read_write", "production:read_write", "scheduling:read_write"})
+    @PostMapping("/outcome-checks")
+    @Operation(summary = "重新核对结果", description = "按当前排程、交期、采购到货再核对一次目标是否达成")
+    public ApiResponse<OutcomeCheckView> recheck(@PathVariable String factoryId, @PathVariable String caseId,
+                                                 HttpServletRequest http) {
+        ShortageCaseOutcomeCheck chk = outcomeChecks.check(factoryId, caseId,
+                ShortageCaseOutcomeCheck.Trigger.MANUAL_RECHECK, null, actor(http, factoryId));
+        return ApiResponse.success(chk.getDetail(), OutcomeCheckView.of(chk));
     }
 
     @RequirePermission({"procurement:read_write", "production:read_write"})

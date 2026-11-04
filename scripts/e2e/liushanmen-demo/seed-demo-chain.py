@@ -36,7 +36,7 @@ _STEP_LOG: list = []  # 每元素: {step_id, name, result, assertion, http_statu
 # ─────────────────────────────────────────────────────────
 FACTORY_ID = "F006"
 USERNAME = "f006_admin"
-PASSWORD = "123456"
+PASSWORD = os.environ.get("F006_SEED_PASSWORD", "")  # 不落进仓库; 缺了 login 会失败, 明确报错
 DEMO_MARK = "DEMO-0610"
 DEMO_DATE = "2026-06-10"
 

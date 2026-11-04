@@ -165,42 +165,51 @@ def extract_new_keywords(query: str, existing: Iterable[str]) -> Set[str]:
 
 class KeywordLearner:
     def __init__(self, pool, existing_keywords: Dict[str, List[str]], *,
-                 consent_scope=None, protected_names=None):
+                 consent_scope=None, factory_lists=None):
         """existing_keywords: {intent_code: [keyword, ...]} loaded from ai_intent_configs."""
         from ai.learning import learning_rules
 
         self.pool = pool
         self.existing_keywords = existing_keywords
         self._consent_scope = consent_scope or learning_rules.default_consent_scope
-        self._protected_names = protected_names or learning_rules.default_protected_names
+        self._factory_lists = factory_lists or learning_rules.default_factory_lists
+        # 判断不了 (授权 / 名单查询出错) 的行下一轮续读 (待办第 2 条「学习任务续读」)
+        self.retry = learning_rules.RetryQueue()
 
     async def run_once(self, min_confidence: float = 0.9) -> Dict[Tuple[str, str], Set[str]]:
         """One pass over recent ai_training_samples. Returns {(factory_id, intent_code): set(new_keywords)}.
 
         工艺保密 (Steve 2026-10-29): 按 (工厂, 意图) 分组, 只写进那家工厂自己的意图行; 没有工厂的样本不学;
-        训练授权撤回 / 查不到、提到本厂工艺保密产品、配方参数 / 客户 / 人名的原话不学。
+        训练授权撤回 / 查不到、客户 / 人名 / 工资考勤数值的原话不学, 该厂 d 开着时提到本厂工艺保密产品、
+        配方参数带数值的也不学 (``learning_rules.judge``)。
 
         Persistence: UPDATE ai_intent_configs.keywords with JSON-merge of new keywords.
         DB read error → returns {} gracefully (degrade not crash).
         DB write error → logged, returned dict still reflects what was learned in-memory.
         """
-        from ai.learning.learning_rules import factory_learnable
+        from ai.learning.learning_rules import Verdict, judge
 
         learned: Dict[Tuple[str, str], Set[str]] = {}
         rows: List[dict] = []
         try:
             async with self.pool.acquire() as conn:
-                rows = await conn.fetch(SAMPLE_QUERY_SQL, min_confidence)
+                fetched = [dict(r) for r in await conn.fetch(SAMPLE_QUERY_SQL, min_confidence)]
         except Exception:
             logger.exception("KeywordLearner: read ai_training_samples failed")
             return learned
+        rows = list({(r["factory_id"], r["intent_code"], r["query"]): r
+                     for r in self.retry.drain() + fetched}.values())
 
         groups: Dict[Tuple[str, str], List[str]] = {}
         for row in rows:
             factory_id = row["factory_id"]
-            if not await factory_learnable(factory_id, row["query"],
-                                           consent_scope=self._consent_scope,
-                                           protected_names=self._protected_names):
+            verdict = await judge(factory_id, row["query"],
+                                  consent_scope=self._consent_scope,
+                                  factory_lists=self._factory_lists)
+            if verdict is Verdict.RETRY:
+                self.retry.add((factory_id, row["intent_code"], row["query"]), row)
+                continue
+            if verdict is not Verdict.LEARN:
                 continue
             groups.setdefault((factory_id, row["intent_code"]), []).append(row["query"])
 

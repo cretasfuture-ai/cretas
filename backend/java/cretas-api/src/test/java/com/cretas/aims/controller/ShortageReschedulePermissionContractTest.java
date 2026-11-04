@@ -45,7 +45,9 @@ class ShortageReschedulePermissionContractTest {
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.standaloneSetup(new ShortageRescheduleController(service,
-                        mock(RescheduleProposalRepository.class), caseRepository()))
+                        mock(RescheduleProposalRepository.class), caseRepository(),
+                        mock(com.cretas.aims.repository.shortage.ShortageCaseActionRepository.class),
+                        OutcomeCheckStubs.unknown()))
                 .addInterceptors(new PermissionInterceptor(permissions, users, new ObjectMapper()))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
