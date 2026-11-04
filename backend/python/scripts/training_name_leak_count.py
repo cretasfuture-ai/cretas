@@ -14,12 +14,15 @@ Tables and text columns (rows with ``created_at >= --since``, soft-deleted rows 
     active_learning_samples  user_input, normalized_input, matched_keywords, top_candidates
     ai_learned_expressions   expression
     ai_intent_configs        keywords (``updated_at >= --since``)
+    keyword_effectiveness    keyword
 
 Learned keywords: they are appended to an existing intent row, so ``created_at`` says nothing
 about them and this table goes by ``updated_at``, which every JPA save moves. That time belongs to
 the row, not to a keyword: a row touched since ``--since`` is read in full, so a hit there may be
-an older keyword. Production judges one keyword at a time, so does this script: the JSON list is
-split first, otherwise a word in one keyword and a number in the next would read as a pay value.
+an older keyword. ``keyword_effectiveness`` holds the same learned keywords one per row with their
+own ``created_at``, so a hit there is dated: read the two together. Production judges one keyword
+at a time, so does this script: the JSON list is split first, otherwise a word in one keyword and
+a number in the next would read as a pay value.
 Learning writes only a factory's own rows; platform rows (no factory) have no directory and show
 up as ``rows_unchecked``.
 
@@ -91,6 +94,7 @@ TABLES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
      ("user_input", "normalized_input", "matched_keywords::text", "top_candidates::text")),
     ("ai_learned_expressions", "created_at", ("expression",)),
     ("ai_intent_configs", "updated_at", ("keywords::text",)),
+    ("keyword_effectiveness", "created_at", ("keyword",)),
 )
 
 # One stored JSON list; production judges it one item at a time

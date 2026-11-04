@@ -213,6 +213,8 @@ def _connection(schema):
                 created_at timestamp);
             CREATE TABLE ai_intent_configs (id varchar(36), factory_id varchar(50), keywords jsonb,
                 created_at timestamp, updated_at timestamp);
+            CREATE TABLE keyword_effectiveness (id bigint, factory_id varchar(50), keyword varchar(255),
+                created_at timestamp);
             INSERT INTO users VALUES ('F_A', '王五');
             INSERT INTO customers VALUES ('F_A', '六个核桃', NULL, NULL);
             INSERT INTO customers VALUES ('F_A', '华联超市', NULL, NULL);
@@ -261,6 +263,11 @@ def test_measure_on_real_postgres_counts_all_three_tables_and_writes_nothing():
                     ('i-3', 'F_A', '["考勤 3 天"]', '2025-01-01', '2026-11-04 13:00'),
                     ('i-4', 'F_A', '["华联超市"]', '2025-01-01', '2025-01-01'),
                     ('i-5', NULL, '["本月"]', '2025-01-01', '2026-11-04 13:00');
+                INSERT INTO keyword_effectiveness VALUES
+                    (1, 'F_A', '华联超市', '2026-11-04 13:00'),
+                    (2, 'F_A', '王五', '2026-11-03 13:00'),
+                    (3, 'F_A', '考勤 3 天', '2026-11-04 13:00'),
+                    (4, 'F_A', '本月', '2026-11-04 13:00');
             """)
         code, report = counter.measure(conn, "2026-11-04 12:00:00")
         assert code == 1
@@ -281,9 +288,13 @@ def test_measure_on_real_postgres_counts_all_three_tables_and_writes_nothing():
         assert by[("ai_intent_configs", "F_A")]["pay_row_ids"] == ["i-3"]
         assert by[("ai_intent_configs", "F_A")]["rows_scanned"] == 3
         assert by[("ai_intent_configs", None)]["rows_unchecked"] == 1
-        assert report["rows_with_name"] == 6
+        # one row per keyword, with its own date: 2 was learned before --since
+        assert by[("keyword_effectiveness", "F_A")]["row_ids"] == ["1"]
+        assert by[("keyword_effectiveness", "F_A")]["pay_row_ids"] == ["3"]
+        assert by[("keyword_effectiveness", "F_A")]["rows_scanned"] == 3
+        assert report["rows_with_name"] == 7
         assert report["rows_with_masked_name"] == 2
-        assert report["rows_with_pay_value"] == 7
+        assert report["rows_with_pay_value"] == 8
         assert report["rows_unchecked"] == 3
         assert any("rows_unchecked=3" in w and "ai_intent_configs/no factory=1" in w for w in report["warnings"])
         columns = {c["table"]: c for c in report["time_columns"]}
