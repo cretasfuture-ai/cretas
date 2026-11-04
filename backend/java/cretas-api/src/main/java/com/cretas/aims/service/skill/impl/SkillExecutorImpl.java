@@ -277,6 +277,18 @@ public class SkillExecutorImpl implements SkillExecutor {
             log.info("Skill execution completed: skill={}, tools={}, time={}ms",
                     skill.getName(), executedTools, executionTime);
 
+            ToolFailure toolFailure = findToolFailure(toolResult);
+            if (toolFailure != null) {
+                return SkillResult.builder()
+                        .success(false)
+                        .skillName(skill.getName())
+                        .data(toolResult)
+                        .message(toolFailure.message())
+                        .executedTools(executedTools)
+                        .executionTime(executionTime)
+                        .build();
+            }
+
             return SkillResult.builder()
                     .success(true)
                     .skillName(skill.getName())
@@ -388,12 +400,19 @@ public class SkillExecutorImpl implements SkillExecutor {
         String toolName = skill.getTools().get(0);
         log.info("Deterministic execution: skill={}, tool={}", skill.getName(), toolName);
 
-        // Build params from context (factoryId, userId, etc.)
-        Map<String, Object> params = new HashMap<>();
-        if (context.getFactoryId() != null) params.put("factoryId", context.getFactoryId());
-        if (context.getUserId() != null) params.put("userId", context.getUserId());
-        if (context.getExtractedParams() != null) params.putAll(context.getExtractedParams());
+        // Build params from context (factoryId, userId, etc.). Deterministic execution must
+        // never manufacture an entity identifier just to make a Tool call look successful.
+        Map<String, Object> params = contextParams(context);
         context.setExtractedParams(params);
+
+        Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
+        if (executor.isEmpty()) {
+            throw new IllegalArgumentException("Tool not found: " + toolName);
+        }
+        List<String> missingParams = missingRequiredParameters(executor.get(), params);
+        if (!missingParams.isEmpty()) {
+            return missingParametersResult(skill.getName(), missingParams, executedTools, startTime);
+        }
 
         // Execute the single tool directly
         Object result = executeSingleTool(toolName, params, context);
@@ -408,13 +427,76 @@ public class SkillExecutorImpl implements SkillExecutor {
         log.info("Deterministic execution completed: skill={}, tool={}, time={}ms",
                 skill.getName(), toolName, executionTime);
 
+        ToolFailure toolFailure = failureForResult(toolName, result);
         return SkillResult.builder()
-                .success(true)
+                .success(toolFailure == null)
                 .skillName(skill.getName())
                 .data(results)
+                .message(toolFailure == null ? null : toolFailure.message())
                 .executedTools(executedTools)
                 .executionTime(executionTime)
                 .build();
+    }
+
+    private Map<String, Object> contextParams(SkillContext context) {
+        Map<String, Object> params = new HashMap<>();
+        if (context.getFactoryId() != null) params.put("factoryId", context.getFactoryId());
+        if (context.getUserId() != null) params.put("userId", context.getUserId());
+        if (context.getSessionId() != null) params.put("sessionId", context.getSessionId());
+        if (context.getUserQuery() != null) params.put("userQuery", context.getUserQuery());
+        if (context.getExtractedParams() != null) params.putAll(context.getExtractedParams());
+        return params;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> missingRequiredParameters(ToolExecutor executor, Map<String, Object> params) {
+        Map<String, Object> schema = executor.getParametersSchema();
+        if (schema == null || !(schema.get("required") instanceof List<?> required)) {
+            return List.of();
+        }
+        return required.stream()
+                .filter(Objects::nonNull)
+                .map(String::valueOf)
+                .filter(name -> !hasValue(params.get(name)))
+                .toList();
+    }
+
+    private boolean hasValue(Object value) {
+        return value != null && (!(value instanceof String text) || !text.isBlank());
+    }
+
+    private SkillResult missingParametersResult(String skillName, List<String> missingParams,
+                                                List<String> executedTools, long startTime) {
+        String message = "为了完成操作，还需要以下信息：" + String.join("、", missingParams)
+                + "。请补充后再试。";
+        Map<String, Object> data = new LinkedHashMap<>();
+        List<String> questions = missingParams.stream()
+                .map(this::clarificationQuestion)
+                .toList();
+        data.put("success", false);
+        data.put("status", "NEED_MORE_INFO");
+        data.put("needMoreInfo", true);
+        data.put("missingParameters", missingParams);
+        data.put("clarificationQuestions", questions);
+        data.put("message", message);
+        data.put("error", message);
+        return SkillResult.builder()
+                .success(false)
+                .skillName(skillName)
+                .data(data)
+                .message(message)
+                .executedTools(executedTools)
+                .executionTime(System.currentTimeMillis() - startTime)
+                .build();
+    }
+
+    private String clarificationQuestion(String parameter) {
+        return switch (parameter) {
+            case "batchId", "batchNumber" -> "请提供批次号。";
+            case "productId", "productTypeId" -> "请提供产品。";
+            case "materialTypeId" -> "请提供原材料。";
+            default -> "请提供" + parameter + "。";
+        };
     }
 
     @Override
@@ -881,6 +963,13 @@ public class SkillExecutorImpl implements SkillExecutor {
                 // Add result to chain context for subsequent tools
                 chainContext.put("previous_" + plan.toolName, result);
 
+                ToolFailure failure = failureForResult(plan.toolName, result);
+                if (failure != null) {
+                    log.warn("Tool returned unsuccessful JSON, stopping chain: tool={}, status={}, message={}",
+                            plan.toolName, failure.status(), failure.message());
+                    break;
+                }
+
             } catch (Exception e) {
                 log.error("Tool execution failed, stopping chain: {}", plan.toolName, e);
                 results.put(plan.toolName, Map.of("error", e.getMessage(), "success", false));
@@ -1041,6 +1130,67 @@ public class SkillExecutorImpl implements SkillExecutor {
         boolean succeeded = parsed instanceof JsonNode node && node.path("success").asBoolean(false);
         recordStep(context, toolName, executor, trustedParams, succeeded ? "SUCCEEDED" : "FAILED", null);
         return parsed;
+    }
+
+    /**
+     * Tool executors use a JSON envelope. A parsed envelope with success=false is a
+     * business failure (or a clarification), not a successful Skill result.
+     */
+    private ToolFailure findToolFailure(Object toolResult) {
+        if (!(toolResult instanceof Map<?, ?> results)) {
+            return null;
+        }
+        for (Map.Entry<?, ?> entry : results.entrySet()) {
+            if (entry.getKey() == null || String.valueOf(entry.getKey()).startsWith("_")) {
+                continue;
+            }
+            ToolFailure failure = failureForResult(String.valueOf(entry.getKey()), entry.getValue());
+            if (failure != null) {
+                return failure;
+            }
+        }
+        return null;
+    }
+
+    private ToolFailure failureForResult(String toolName, Object result) {
+        JsonNode payload = null;
+        if (result instanceof JsonNode node) {
+            payload = node;
+        } else if (result instanceof Map<?, ?> map) {
+            payload = objectMapper.valueToTree(map);
+        } else if (result instanceof String text) {
+            try {
+                JsonNode parsed = objectMapper.readTree(text);
+                if (parsed != null && parsed.isObject()) {
+                    payload = parsed;
+                }
+            } catch (Exception ignored) {
+                // Non-JSON Tool output is not a standard failure envelope; preserve legacy data.
+            }
+        }
+        if (payload == null || !payload.isObject() || !payload.has("success")
+                || payload.path("success").asBoolean(true)) {
+            return null;
+        }
+
+        String status = payload.path("status").asText(null);
+        String message = firstText(payload, "error", "message", "question");
+        if (message == null || message.isBlank()) {
+            message = "NEED_MORE_INFO".equals(status)
+                    ? "请补充工具执行所需的信息。"
+                    : "工具「" + toolName + "」执行失败。";
+        }
+        return new ToolFailure(toolName, status, message, result);
+    }
+
+    private String firstText(JsonNode payload, String... fields) {
+        for (String field : fields) {
+            JsonNode value = payload.get(field);
+            if (value != null && !value.isNull() && !value.asText().isBlank()) {
+                return value.asText();
+            }
+        }
+        return null;
     }
 
     /**
@@ -1271,6 +1421,18 @@ public class SkillExecutorImpl implements SkillExecutor {
                 Object result = executeSingleTool(tool, stepParams, context);
                 results.put(tool, result);
                 executedTools.add(tool);
+                ToolFailure failure = failureForResult(tool, result);
+                if (failure != null) {
+                    return SkillResult.builder()
+                            .success(false)
+                            .skillName(skill.getName())
+                            .data(results)
+                            .partialResults(results)
+                            .message(failure.message())
+                            .executedTools(executedTools)
+                            .executionTime(System.currentTimeMillis() - startTime)
+                            .build();
+                }
             } catch (Exception stepFailure) {
                 executedTools.add(tool + " (failed)");
                 return SkillResult.builder()
@@ -1438,6 +1600,7 @@ public class SkillExecutorImpl implements SkillExecutor {
         Map<String, Object> partialResults = new LinkedHashMap<>();
         List<String> skippedNodes = new ArrayList<>();
         boolean hasError = false;
+        String firstErrorMessage = null;
 
         // Build global params from context
         Map<String, Object> globalParams = new HashMap<>();
@@ -1482,7 +1645,12 @@ public class SkillExecutorImpl implements SkillExecutor {
             } else {
                 hasError = true;
                 executedTools.add(node.getToolName() + " (failed)");
-                partialResults.put(nodeId, Map.of("error", result.errorMessage, "success", false));
+                Map<String, Object> failureData = new LinkedHashMap<>();
+                failureData.put("error", result.errorMessage);
+                failureData.put("success", false);
+                if (result.data != null) failureData.put("result", result.data);
+                partialResults.put(nodeId, failureData);
+                if (firstErrorMessage == null) firstErrorMessage = result.errorMessage;
 
                 if (strategy == SkillDefinition.ErrorStrategy.STOP) {
                     log.warn("DAG: stopping execution at node {} due to STOP strategy", nodeId);
@@ -1493,9 +1661,9 @@ public class SkillExecutorImpl implements SkillExecutor {
 
         long executionTime = System.currentTimeMillis() - startTime;
 
-        // Determine overall success: for CONTINUE_ON_ERROR, partial success is OK
-        boolean overallSuccess = !hasError ||
-                (strategy == SkillDefinition.ErrorStrategy.CONTINUE_ON_ERROR && !partialResults.isEmpty());
+        // Partial results remain available for CONTINUE_ON_ERROR, but a failed Tool must
+        // never make the encompassing Skill look successful.
+        boolean overallSuccess = !hasError;
 
         log.info("DAG execution completed: skill={}, executed={}, skipped={}, hasError={}, time={}ms",
                 skill.getName(), executedTools.size(), skippedNodes.size(), hasError, executionTime);
@@ -1509,8 +1677,7 @@ public class SkillExecutorImpl implements SkillExecutor {
                 .partialResults(partialResults)
                 .skippedNodes(skippedNodes)
                 .errorStrategy(strategy.name())
-                .message(overallSuccess ? "DAG execution completed" :
-                        "DAG execution failed at one or more nodes")
+                .message(overallSuccess ? "DAG execution completed" : firstErrorMessage)
                 .build();
     }
 
@@ -1602,6 +1769,10 @@ public class SkillExecutorImpl implements SkillExecutor {
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 Object result = executeSingleTool(node.getToolName(), mergedParams, context);
+                ToolFailure failure = failureForResult(node.getToolName(), result);
+                if (failure != null) {
+                    return NodeExecutionResult.error(node.getId(), failure.message(), result);
+                }
                 return NodeExecutionResult.success(node.getId(), result);
             } catch (Exception e) {
                 log.warn("DAG: node {} attempt {}/{} failed: {}",
@@ -1632,6 +1803,10 @@ public class SkillExecutorImpl implements SkillExecutor {
                 fallback, node.getId(), originalError);
         try {
             Object result = executeSingleTool(fallback, params, context);
+            ToolFailure failure = failureForResult(fallback, result);
+            if (failure != null) {
+                return NodeExecutionResult.error(node.getId(), failure.message(), result);
+            }
             return NodeExecutionResult.success(node.getId(), result);
         } catch (Exception e) {
             log.error("DAG: fallback tool {} also failed: {}", fallback, e.getMessage());
@@ -1798,12 +1973,19 @@ public class SkillExecutorImpl implements SkillExecutor {
             return new NodeExecutionResult(nodeId, false, false, null, errorMessage);
         }
 
+        static NodeExecutionResult error(String nodeId, String errorMessage, Object data) {
+            return new NodeExecutionResult(nodeId, false, false, data, errorMessage);
+        }
+
         static NodeExecutionResult skipped(String nodeId) {
             return new NodeExecutionResult(nodeId, false, true, null, "Skipped");
         }
     }
 
     // ==================== Inner Classes ====================
+
+    private record ToolFailure(String toolName, String status, String message, Object data) {
+    }
 
     /**
      * Tool execution plan
