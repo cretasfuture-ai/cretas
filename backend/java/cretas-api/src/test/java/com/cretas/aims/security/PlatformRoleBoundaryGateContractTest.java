@@ -38,13 +38,16 @@ class PlatformRoleBoundaryGateContractTest {
             Set.of("platform_admin", "super_admin", "developer", "platform_super_admin");
     private static final String AI_TOOLS = "ai/tool/";
 
-    /** Writes a factory user's role or position from input: must call the boundary in the same method. */
-    private static final Set<String> GUARDED_WRITERS = Set.of(
-            "mapper/UserMapper#toEntity",
-            "mapper/UserMapper#updateEntity",
-            "service/impl/UserServiceImpl#convertFromExportDTO",
-            "service/impl/UserServiceImpl#updateUserRole",
-            "service/mobile/impl/MobileAuthServiceImpl#registerPhaseTwo");
+    /**
+     * Writes a factory user's role or position from input, with the number of boundary calls the
+     * method must make: one per value it writes, so losing one of two cannot hide behind the other.
+     */
+    private static final Map<String, Integer> GUARDED_WRITERS = Map.of(
+            "mapper/UserMapper#toEntity", 2,
+            "mapper/UserMapper#updateEntity", 2,
+            "service/impl/UserServiceImpl#convertFromExportDTO", 2,
+            "service/impl/UserServiceImpl#updateUserRole", 1,
+            "service/mobile/impl/MobileAuthServiceImpl#registerPhaseTwo", 2);
 
     /** Writes only fixed values, or a throwaway object that is never stored. */
     private static final Map<String, String> FIXED_WRITERS = Map.of(
@@ -87,11 +90,11 @@ class PlatformRoleBoundaryGateContractTest {
             Map.entry("service/restaurant/RestaurantAgentRunService", IN_FACTORY),
             Map.entry("service/yield/impl/InterimSettleReversalRequestServiceImpl", IN_FACTORY));
 
-    private record Scan(int classes, Map<String, Boolean> writers, Set<String> roleLiteralClasses, Set<String> aiTools) {
+    private record Scan(int classes, Map<String, Integer> writers, Set<String> roleLiteralClasses, Set<String> aiTools) {
     }
 
     private Scan scan() throws IOException {
-        Map<String, Boolean> writers = new TreeMap<>();
+        Map<String, Integer> writers = new TreeMap<>();
         Set<String> literals = new TreeSet<>();
         Set<String> tools = new TreeSet<>();
         int[] classes = {0};
@@ -108,12 +111,12 @@ class PlatformRoleBoundaryGateContractTest {
                     public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
                         return new MethodVisitor(Opcodes.ASM9) {
                             boolean writes;
-                            boolean guarded;
+                            int guards;
 
                             @Override
                             public void visitMethodInsn(int opcode, String owner, String callee, String desc, boolean itf) {
                                 if (owner.equals(USER) && SETTERS.contains(callee)) writes = true;
-                                if (owner.equals(BOUNDARY) && callee.equals("refuseOnFactoryUser")) guarded = true;
+                                if (owner.equals(BOUNDARY) && callee.equals("refuseOnFactoryUser")) guards++;
                             }
 
                             @Override
@@ -125,7 +128,7 @@ class PlatformRoleBoundaryGateContractTest {
 
                             @Override
                             public void visitEnd() {
-                                if (writes) writers.put(relative + "#" + name, guarded);
+                                if (writes) writers.put(relative + "#" + name, guards);
                             }
                         };
                     }
@@ -142,13 +145,13 @@ class PlatformRoleBoundaryGateContractTest {
         assertThat(scan.classes()).as("INSTRUMENT DEAD: run after compile").isGreaterThan(2000);
         assertThat(scan.writers().keySet()).as("a new path writes a user's role: guard it and register it here")
                 .containsExactlyInAnyOrderElementsOf(union());
-        for (String writer : GUARDED_WRITERS) {
-            assertThat(scan.writers().get(writer)).as("%s must call PlatformRoleBoundary.refuseOnFactoryUser", writer).isTrue();
-        }
+        GUARDED_WRITERS.forEach((writer, guards) -> assertThat(scan.writers().get(writer))
+                .as("%s must call PlatformRoleBoundary.refuseOnFactoryUser once per value it writes", writer)
+                .isEqualTo(guards));
     }
 
     private static Set<String> union() {
-        Set<String> all = new TreeSet<>(GUARDED_WRITERS);
+        Set<String> all = new TreeSet<>(GUARDED_WRITERS.keySet());
         all.addAll(FIXED_WRITERS.keySet());
         return all;
     }

@@ -169,6 +169,7 @@ class PlatformRoleBoundaryEmbeddedTomcatContractTest {
 
     @Autowired private JwtUtil jwtUtil;
     @Autowired private FactoryAccessValidator factoryAccessValidator;
+    @Autowired private UserServiceImpl userService;
     @Autowired private ServletWebServerApplicationContext serverContext;
     @LocalServerPort private int port;
 
@@ -328,6 +329,21 @@ class PlatformRoleBoundaryEmbeddedTomcatContractTest {
         assertThat(received(scheduledTaskRepository, "F002")).as("it stays on its own factory's tasks").isFalse();
         send("GET", "/api/mobile/scheduled-tasks?factoryId=F002&enabled=true", realPlatform, null);
         assertThat(received(scheduledTaskRepository, "F002")).as("positive control: a real platform token reads it").isTrue();
+    }
+
+    @Test
+    @DisplayName("a spreadsheet import cannot carry a platform role in the position column")
+    void importCannotGrant() {
+        com.cretas.aims.dto.user.UserExportDTO row = new com.cretas.aims.dto.user.UserExportDTO();
+        row.setUsername("imported");
+        row.setPosition("super_admin");
+        assertThatThrownBy(() -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                userService, "convertFromExportDTO", row, "F001"))
+                .hasMessageContaining("平台角色不能分配给工厂账号");
+        row.setPosition("班组长");
+        assertThatCode(() -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                userService, "convertFromExportDTO", row, "F001"))
+                .as("positive control: an ordinary job title imports").doesNotThrowAnyException();
     }
 
     @Test
