@@ -51,7 +51,7 @@ def _asserted(pattern,text):
     for clause in re.split(r'[。；;\n]|但是|不过|然而|但',text):
         for match in re.finditer(pattern,clause):
             prefix=clause[max(0,match.start()-12):match.start()]
-            if not re.search(r'不能|不应|不代表|无法断言|未能证实|尚未证实',prefix):return True
+            if not re.search(r'不能|不应|不代表|无法断言|未能证实|尚未证实|(?:不|并非)$',prefix):return True
     return False
 
 

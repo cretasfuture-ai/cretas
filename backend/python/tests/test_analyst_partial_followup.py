@@ -12,7 +12,7 @@ def test_saved_bounded_review_does_not_reinfer_every_followup(monkeypatch):
           'sectionInsights':[{'sectionId':'product_cost'}]}
     saved={'status':'ready','result':{'runId':'synthetic-run',
         'ai':{'status':'partial','analysisProfileVersion':VERSION,'analysisSections':[],
-              'omittedAnalysisFacts':14,'reviews':[]}}}
+              'omittedAnalysisFacts':14,'reviews':[],'usage':{'totalTokens':10}}}}
     monkeypatch.setenv('BLACKLAKE_SMARTBI_CONFIG','synthetic')
     monkeypatch.setenv('SMARTBI_LOCAL_ANALYST_ENABLED','1')
     monkeypatch.setattr(api,'settings',lambda path:config)
@@ -31,3 +31,5 @@ def test_saved_bounded_review_does_not_reinfer_every_followup(monkeypatch):
     assert result['success']
     assert result['data']['ai']['omittedAnalysisFacts']==14
     assert result['data']['ai']['analysisProfileVersion']==VERSION
+    assert result['data']['ai']['currentRequestUsage']['totalTokens']==0
+    assert result['data']['ai']['usage']['totalTokens']==10

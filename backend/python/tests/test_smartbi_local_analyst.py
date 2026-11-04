@@ -226,6 +226,12 @@ def test_durable_retry_retains_usage_without_double_counting_shared_call_ids():
     assert current['usage']['totalTokens']==26 and len(current['usageCalls'])==2
 
 
+def test_negative_necessity_is_not_misclassified_as_a_confirmed_cause():
+    assert not analyst._asserted(r'必然','成本高不必然耗量高，仍需核实投入组合。')
+    assert not analyst._asserted(r'必然','成本差并非必然来自浪费。')
+    assert analyst._asserted(r'必然','不是材料问题，必然是生产浪费。')
+
+
 def test_excel_and_other_api_sources_use_the_same_profile_and_permission_gate(client,monkeypatch):
     monkeypatch.setenv('SMARTBI_ALERT_AI_TRANSPORT','ssh');calls=install_model(monkeypatch)
     for source in ('api','excel'):

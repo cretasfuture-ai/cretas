@@ -109,7 +109,9 @@ async def followup(payload: Followup, request: Request):
         compatible=next((j for j in saved if j['status']=='ready' and j.get('result',{}).get('runId')==data['runId']
                          and j.get('result',{}).get('ai',{}).get('analysisProfileVersion')==VERSION),None)
         if compatible:
-            report['ai']=compatible['result']['ai']
+            report['ai']={**compatible['result']['ai'],'cacheHit':True,
+                          'currentRequestUsage':{'inputTokens':0,'outputTokens':0,'totalTokens':0,
+                                                 'source':'saved_report','estimated':False}}
             from smartbi.services.local_analyst import apply_sections
             apply_sections([section],report['ai'])
     # Never send free-text questions, history, source rows or names to a model.
