@@ -40,4 +40,6 @@ python -m blacklake.teacher_eval --run
 
 目标测试：`python -m pytest tests/test_blacklake_teacher_eval.py -q`，12 项通过。覆盖并发预算、防重置/重复调用、实际 token 结算、网络未知结果保留预算、未知收费/模型拒绝、截断缓存拒绝、匿名字段白名单与检验案例隔离。
 
+用户要求长文保留后，汇总调用支持显式 `allow_partial`：保留已返回正文并标记 incomplete/needsLocalSummary，不将不完整 JSON 冒充正常结构化结果。默认调用仍拒绝将截断输出直接作为完整结论。
+
 本文件记录方法和约束。实际付费完成数、token、费用、教师发现和本地重放结果以本轮完成回执为准；不能以代码/离线测试通过代替真实模型完成。

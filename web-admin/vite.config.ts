@@ -5,10 +5,12 @@ import { blacklakeLocalPreview } from './tooling/blacklakeLocalPreview';
 import { resolve } from 'path';
 import { elementPlusTableResize, elementPlusTableResizePrebundle } from './tooling/elementPlusTableResize';
 import { elementPlusTableColumnResize, elementPlusTableColumnResizePrebundle } from './tooling/elementPlusTableColumnResize';
+import { pythonProxyTarget } from './tooling/blacklakePythonTarget';
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
+  const pythonTarget = pythonProxyTarget(mode, env);
   return {
     plugins: [elementPlusTableResize(), elementPlusTableColumnResize(), vue(),
       ...(mode==='blacklake'?[blacklakeLocalPreview()]:[]),
@@ -35,7 +37,7 @@ export default defineConfig(({ mode }) => {
         // ⚠️ 生产那条规则还带租户 allow-list; dev 不复现它 —— Python 服务端
         //    自己强制跨租户隔离(越权返回 403), allow-list 不是安全边界。
         '^/api/mobile/[A-Za-z0-9_-]+/smart-bi/(analysis/(finance|sales|kitchen-cost|department|region|inventory|procurement)|mapping-review)': {
-          target: env.VITE_PYTHON_URL || 'http://localhost:8083',
+          target: pythonTarget,
           changeOrigin: true,
         },
         '/api': {
@@ -45,7 +47,7 @@ export default defineConfig(({ mode }) => {
         // Python SmartBI 服务代理 - 解决跨域问题
         // /smartbi-api/api/chart/build → http://localhost:8083/api/chart/build
         '/smartbi-api': {
-          target: env.VITE_PYTHON_URL || 'http://localhost:8083',
+          target: pythonTarget,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/smartbi-api/, ''),
         },
