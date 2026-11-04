@@ -2,13 +2,17 @@ package com.cretas.aims.service.production;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
 import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -16,7 +20,8 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -30,8 +35,12 @@ import java.util.function.Predicate;
  * {@code actualSemiFinishedQuantity} 也只记一个数。这里按请求的量把它搬进半成品库:
  * 半成品库入账, 同一量从在制批次扣掉 —— 两边都留着就是同一批货算两次。
  *
- * <p>数量只认报工事实: 剩余量 = 非成品道产出 − 本计划下道投入。超过剩余量、认不出是哪种半成品、
- * 根本没有剩余, 都拒绝, ⛔ 不夹到一个能过的数。
+ * <p>剩余量看在制批次本身, ⛔ 不用「产出 − 逐道行投料」现算: 投料量的单位可能和产出不同,
+ * 别的计划也可能从这批领过料, 这两件事只有在制批次的消耗记录全都算上了 (单位是库存单位)。
+ * 超过剩余量、认不出是哪种半成品、根本没有剩余, 都拒绝, ⛔ 不夹到一个能过的数。
+ *
+ * <p>每批在制一行半成品库记录 ({@link #anchor}), 行上的 {@code materialBatchRefs} 记着来源生产批次,
+ * 从这行往回追溯才接得上。入库明细存在结单上 ({@code semiStockingDetail}), 整单撤回照着它把两边都还回去。
  *
  * <p>入库单位成本传 null: 这批料的成本已经算在本计划成品头上, 这里再记一份就是同一笔成本两处各算一次。
  */
@@ -39,13 +48,18 @@ import java.util.function.Predicate;
 @RequiredArgsConstructor
 public class SettlementSemiStockingService {
 
+    private static final ObjectMapper DETAIL_MAPPER = new ObjectMapper();
+
     private final ProcessSheetRowRepository processSheetRowRepository;
     private final MaterialBatchRepository materialBatchRepository;
+    private final MaterialConsumptionRepository materialConsumptionRepository;
     private final WipInventoryService wipInventoryService;
+    private final UnitContractService unitContractService;
     private final ObjectMapper objectMapper;
 
-    /** 一道非成品产出里能转走的那部分。 */
-    public record Slice(Long productionBatchId, String batchNumber, BigDecimal quantity) {
+    /** 一批在制里转走的量: {@code quantity} 是半成品单位, {@code storageQuantity} 是在制批次的库存单位。 */
+    public record Slice(Long productionBatchId, String batchNumber, String materialBatchId,
+                        BigDecimal quantity, BigDecimal storageQuantity) {
     }
 
     /** 校验通过的入库方案; {@code slices} 的数量合计 = {@code quantity}。 */
@@ -53,9 +67,28 @@ public class SettlementSemiStockingService {
                            BigDecimal quantity, List<Slice> slices) {
     }
 
-    /** 半成品库的行号: 每次结单一行, 整单撤回时凭结单 id 就能找回来。 */
-    public static String anchor(String planId, String settlementId) {
-        return WipInventoryService.clerkSemiAnchor(planId, settlementId);
+    /** 落在结单上的一条入库明细, 整单撤回照着还。 */
+    public record StockedSlice(String anchor, Long productionBatchId, String materialBatchId,
+                               BigDecimal quantity, BigDecimal storageQuantity) {
+    }
+
+    /** 半成品库的行号: 每次结单、每批在制各一行, 这样一行只有一个来源批。 */
+    public static String anchor(String planId, String settlementId, int sliceIndex) {
+        return WipInventoryService.clerkSemiAnchor(planId, settlementId) + "-" + sliceIndex;
+    }
+
+    /** 结单上的入库明细; 空 = 这次结单没有入库 (量为 0, 或这个功能上线前的结单)。 */
+    public static List<StockedSlice> parseDetail(String detail) {
+        if (detail == null || detail.isBlank()) {
+            return List.of();
+        }
+        try {
+            return DETAIL_MAPPER.readValue(detail, new TypeReference<List<StockedSlice>>() { });
+        } catch (JsonProcessingException e) {
+            throw new BusinessException(409, "结单的半成品入库明细无法解析, 不能撤回")
+                    .withCode("SETTLEMENT_SEMI_DETAIL_INVALID")
+                    .withHint("请联系管理员核对这张结单的半成品入库明细");
+        }
     }
 
     /**
@@ -69,48 +102,47 @@ public class SettlementSemiStockingService {
         if (quantity == null || quantity.signum() <= 0) {
             return null;
         }
+        Map<Long, Producer> producers = new LinkedHashMap<>();
         List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId());
-        List<Producer> producers = new ArrayList<>();
-        Map<String, BigDecimal> fedByBatchNumber = new HashMap<>();
         for (ProcessSheetRow row : rows == null ? List.<ProcessSheetRow>of() : rows) {
-            if (!usableRow.test(row)) {
+            if (!usableRow.test(row) || row.getBatchId() == null) {
                 continue;
             }
             ProcessSheetRowRequest req = parse(row);
-            if (!req.isFinished() && row.getBatchId() != null && positive(req.getOutputQuantity())) {
-                producers.add(new Producer(row, req));
-            }
-            for (ProcessSheetRowRequest.UpstreamRef ref
-                    : req.getUpstreamSources() == null ? List.<ProcessSheetRowRequest.UpstreamRef>of()
-                            : req.getUpstreamSources()) {
-                if (!ref.isSemiFinished() && !ref.isFinishedGoods() && ref.getSourceBatchNumber() != null
-                        && positive(ref.getFeedQuantityKg())) {
-                    fedByBatchNumber.merge(ref.getSourceBatchNumber(), ref.getFeedQuantityKg(), BigDecimal::add);
-                }
+            if (!req.isFinished() && positive(req.getOutputQuantity())) {
+                producers.putIfAbsent(row.getBatchId(), new Producer(row, req));
             }
         }
-        producers.sort(Comparator.comparing(p -> p.row().getProcessOrder(),
-                Comparator.nullsLast(Comparator.naturalOrder())));
 
         Set<String> productTypes = new LinkedHashSet<>();
+        Set<String> units = new HashSet<>();
         List<Slice> leftovers = new ArrayList<>();
         BigDecimal totalLeftover = BigDecimal.ZERO;
         String unit = null;
         Integer processOrder = null;
-        for (Producer producer : producers) {
+        List<Producer> ordered = new ArrayList<>(producers.values());
+        ordered.sort(Comparator.comparing(p -> p.row().getProcessOrder(),
+                Comparator.nullsLast(Comparator.naturalOrder())));
+        for (Producer producer : ordered) {
             ProcessSheetRow row = producer.row();
-            ProcessSheetRowRequest req = producer.request();
-            BigDecimal fed = fedByBatchNumber.getOrDefault(row.getBatchNumber(), BigDecimal.ZERO);
-            BigDecimal leftover = req.getOutputQuantity().subtract(fed);
-            // 同一批次号多行时, 投入量从第一行起依次抵掉
-            fedByBatchNumber.put(row.getBatchNumber(), fed.subtract(req.getOutputQuantity()).max(BigDecimal.ZERO));
-            if (leftover.signum() <= 0) {
+            MaterialBatch wip = materialBatchRepository
+                    .findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                            factoryId, "PRODUCTION_BATCH", String.valueOf(row.getBatchId()))
+                    .orElse(null);
+            if (wip == null) {
                 continue;
             }
-            productTypes.add(req.getProductTypeId());
-            leftovers.add(new Slice(row.getBatchId(), row.getBatchNumber(), leftover));
-            totalLeftover = totalLeftover.add(leftover);
-            unit = unit == null ? req.getUnit() : unit;
+            BigDecimal storageLeft = leftoverInStorageUnit(factoryId, wip);
+            if (storageLeft.signum() <= 0) {
+                continue;
+            }
+            String rowUnit = producer.request().getUnit();
+            BigDecimal left = convert(factoryId, storageLeft, wip.getQuantityUnit(), rowUnit);
+            productTypes.add(producer.request().getProductTypeId());
+            units.add(unitContractService.storageUnit(factoryId, rowUnit));
+            leftovers.add(new Slice(row.getBatchId(), row.getBatchNumber(), wip.getId(), left, storageLeft));
+            totalLeftover = totalLeftover.add(left);
+            unit = unit == null ? rowUnit : unit;
             processOrder = processOrder == null ? row.getProcessOrder() : processOrder;
         }
 
@@ -120,7 +152,7 @@ public class SettlementSemiStockingService {
                     .withHint("实际半成品量请填 0; App 报工产出的半成品在报工时已入半成品库, 不用在结单时再填")
                     .withHintTarget("actualSemiFinishedQuantity");
         }
-        if (productTypes.size() != 1 || productTypes.contains(null)) {
+        if (productTypes.size() != 1 || productTypes.contains(null) || units.size() != 1) {
             throw new BusinessException(409, "本计划剩余的半成品不止一种, 无法判断这次要入库的是哪一种")
                     .withCode("SETTLEMENT_SEMI_AMBIGUOUS")
                     .withHint("请把多余的半成品在下道报工里投完, 或联系主管核对后再结单")
@@ -141,32 +173,103 @@ public class SettlementSemiStockingService {
                 break;
             }
             BigDecimal take = leftover.quantity().min(remaining);
-            slices.add(new Slice(leftover.productionBatchId(), leftover.batchNumber(), take));
+            BigDecimal storageTake = take.compareTo(leftover.quantity()) == 0 ? leftover.storageQuantity()
+                    : convert(factoryId, take, unit, storageUnitOf(leftover, factoryId));
+            slices.add(new Slice(leftover.productionBatchId(), leftover.batchNumber(), leftover.materialBatchId(),
+                    take, storageTake));
             remaining = remaining.subtract(take);
         }
         return new Stocking(productTypes.iterator().next(), unit, processOrder, quantity, slices);
     }
 
-    /** 入半成品库, 同量从在制批次扣掉。必须在结单事务内调用。 */
+    /**
+     * 入半成品库, 同量从在制批次扣掉。必须在结单事务内调用。
+     *
+     * @return 入库明细 (JSON), 存到结单上给整单撤回用
+     */
     public String stock(String factoryId, ProductionPlan plan, Stocking stocking, String settlementId) {
-        for (Slice slice : stocking.slices()) {
+        List<StockedSlice> stocked = new ArrayList<>();
+        for (int i = 0; i < stocking.slices().size(); i++) {
+            Slice slice = stocking.slices().get(i);
             MaterialBatch wip = materialBatchRepository
-                    .findByFactoryIdAndSourceDocTypeAndSourceDocId(
-                            factoryId, "PRODUCTION_BATCH", String.valueOf(slice.productionBatchId()))
+                    .findByIdAndFactoryIdForUpdate(slice.materialBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(409, "在制批次 " + slice.batchNumber()
                             + " 没有对应的在制库存, 无法转入半成品库")
                             .withCode("SETTLEMENT_SEMI_WIP_NOT_FOUND")
                             .withHint("请核对该道报工是否已物化, 或把实际半成品量改为 0")
                             .withHintTarget("actualSemiFinishedQuantity"));
-            BigDecimal used = wip.getUsedQuantity() == null ? BigDecimal.ZERO : wip.getUsedQuantity();
-            wip.setUsedQuantity(used.add(slice.quantity()));
+            // 锁内再量一次: 校验到这里之间, 别的计划可能又从这批领了料
+            if (slice.storageQuantity().compareTo(leftoverInStorageUnit(factoryId, wip)) > 0) {
+                throw new BusinessException(409, "在制批次 " + slice.batchNumber() + " 的剩余量刚被领用, 不够转入半成品库")
+                        .withCode("SETTLEMENT_SEMI_EXCEEDS_LEFTOVER")
+                        .withHint("请刷新后按最新的剩余量重新填写实际半成品量")
+                        .withHintTarget("actualSemiFinishedQuantity");
+            }
+            // 下道投料只写消耗记录、不进 used; 这里按「已用 + 消耗」的大者接着加, 批次余量才等于真实剩余
+            wip.setUsedQuantity(consumedInStorageUnit(factoryId, wip).add(slice.storageQuantity()));
             wip.assertConsumptionInvariant();
             materialBatchRepository.save(wip);
+
+            String anchor = anchor(plan.getId(), settlementId, i);
+            Map<String, Object> ref = new LinkedHashMap<>();
+            ref.put("materialBatchId", slice.materialBatchId());
+            ref.put("productionBatchId", slice.productionBatchId());
+            ref.put("quantity", slice.quantity());
+            wipInventoryService.postClerkOutput(factoryId, anchor, stocking.productTypeId(), slice.quantity(),
+                    stocking.unit(), null, List.of(ref), stocking.processOrder());
+            stocked.add(new StockedSlice(anchor, slice.productionBatchId(), slice.materialBatchId(),
+                    slice.quantity(), slice.storageQuantity()));
         }
-        String anchor = anchor(plan.getId(), settlementId);
-        wipInventoryService.postClerkOutput(factoryId, anchor, stocking.productTypeId(), stocking.quantity(),
-                stocking.unit(), null, null, stocking.processOrder());
-        return anchor;
+        try {
+            return DETAIL_MAPPER.writeValueAsString(stocked);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("半成品入库明细无法写入结单", e);
+        }
+    }
+
+    /** 在制批次还剩多少 (库存单位)。消耗记录含别的计划领的料; 已过账的消耗同时在 used 里, 取大的那个不重复减。 */
+    private BigDecimal leftoverInStorageUnit(String factoryId, MaterialBatch wip) {
+        BigDecimal reserved = wip.getReservedQuantity() == null ? BigDecimal.ZERO : wip.getReservedQuantity();
+        BigDecimal receipt = wip.getReceiptQuantity() == null ? BigDecimal.ZERO : wip.getReceiptQuantity();
+        return receipt.subtract(consumedInStorageUnit(factoryId, wip)).subtract(reserved);
+    }
+
+    private BigDecimal consumedInStorageUnit(String factoryId, MaterialBatch wip) {
+        BigDecimal consumed = BigDecimal.ZERO;
+        for (MaterialConsumption consumption
+                : materialConsumptionRepository.findByFactoryIdAndBatchId(factoryId, wip.getId())) {
+            if (positive(consumption.getQuantity())) {
+                consumed = consumed.add(consumption.getQuantity());
+            }
+        }
+        BigDecimal used = wip.getUsedQuantity() == null ? BigDecimal.ZERO : wip.getUsedQuantity();
+        return used.max(consumed);
+    }
+
+    private String storageUnitOf(Slice slice, String factoryId) {
+        return materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceDocId(
+                        factoryId, "PRODUCTION_BATCH", String.valueOf(slice.productionBatchId()))
+                .map(MaterialBatch::getQuantityUnit)
+                .orElse(null);
+    }
+
+    /** 同一单位原样; kg⇄g 换算; 其它组合没有普适换算, 拒绝, ⛔ 不当成相等。 */
+    private BigDecimal convert(String factoryId, BigDecimal quantity, String fromUnit, String toUnit) {
+        String from = unitContractService.storageUnit(factoryId, fromUnit);
+        String to = unitContractService.storageUnit(factoryId, toUnit);
+        if (from != null && !from.isBlank() && from.equals(to)) {
+            return quantity;
+        }
+        if ("kg".equals(from) && "g".equals(to)) {
+            return quantity.movePointRight(3);
+        }
+        if ("g".equals(from) && "kg".equals(to)) {
+            return quantity.movePointLeft(3);
+        }
+        throw new BusinessException(409, "在制批次单位与半成品单位不一致, 无法换算: " + fromUnit + " / " + toUnit)
+                .withCode("SETTLEMENT_SEMI_UNIT_MISMATCH")
+                .withHint("请核对该道工序的产出单位, 或把实际半成品量改为 0")
+                .withHintTarget("actualSemiFinishedQuantity");
     }
 
     private ProcessSheetRowRequest parse(ProcessSheetRow row) {

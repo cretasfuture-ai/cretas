@@ -98,6 +98,10 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
         if (userModuleAccessService.canAccessModule(user, moduleCode)) {
             return true;
         }
+        // 管理员对主模块显式 DENY 是明确的决定, 不能被别的模块绕过去
+        if (userModuleAccessService.isExplicitlyDenied(user, moduleCode)) {
+            return false;
+        }
         for (String alternative : alsoAllowModules) {
             if (configService.isModuleEnabled(factoryId, alternative)
                     && userModuleAccessService.canAccessModule(user, alternative)) {

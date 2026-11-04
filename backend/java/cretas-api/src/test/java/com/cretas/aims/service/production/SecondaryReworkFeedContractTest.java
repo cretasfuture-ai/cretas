@@ -152,6 +152,12 @@ class SecondaryReworkFeedContractTest {
         port(rework, WorkflowTaskPort.Direction.OUTPUT, "FG-NODE", "FG-1");
 
         when(wipRepo.findById(WIP_ID)).thenAnswer(inv -> Optional.of(wip));
+        when(wipRepo.findSourceRefById(WIP_ID)).thenAnswer(inv -> Optional.of(sourceRef()));
+        when(planRepo.findPlanStatusesByFactoryIdAndIdIn(eq(F), anyCollection())).thenAnswer(inv -> {
+            List<Object[]> statuses = new ArrayList<>();
+            statuses.add(new Object[] {PLAN_ID, plan.getStatus()});
+            return statuses;
+        });
         when(wipRepo.findByIdForUpdate(WIP_ID)).thenAnswer(inv -> Optional.of(wip));
         when(wipRepo.findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(F, WIP_NO))
                 .thenAnswer(inv -> Optional.of(wip));
@@ -179,6 +185,16 @@ class SecondaryReworkFeedContractTest {
         named.setProcessName("腌制");
         when(workProcessRepo.findByFactoryIdAndIdIn(eq(F), anyList())).thenReturn(List.of(named));
         when(ownershipGuard.ofProductionBatch(eq(F), any())).thenReturn(IntermediateOwnershipGuard.Owner.COMPANY);
+    }
+
+    private SemiFinishedInventoryRepository.SourceRef sourceRef() {
+        return new SemiFinishedInventoryRepository.SourceRef() {
+            @Override public Long getId() { return wip.getId(); }
+            @Override public String getFactoryId() { return wip.getFactoryId(); }
+            @Override public String getIntermediateBatchNo() { return wip.getIntermediateBatchNo(); }
+            @Override public String getProductTypeId() { return wip.getProductTypeId(); }
+            @Override public String getUnit() { return wip.getUnit(); }
+        };
     }
 
     private WorkProcessTask task(Long id, int order, String processId) {
@@ -424,25 +440,105 @@ class SecondaryReworkFeedContractTest {
         assertStock("0.4", "0.6");
     }
 
+    private SemiFinishedInventoryTransaction legacyRow(String ref, String quantity) {
+        return SemiFinishedInventoryTransaction.builder()
+                .semiFinishedId(WIP_ID).sourceRef(ref).quantity(new BigDecimal(quantity)).build();
+    }
+
     @Test
-    @DisplayName("上线前开工的计划: 流水没带计划号, 按时间和数量认领, 取消照样还回")
-    void holdFromBeforeRefCarriedPlanIdIsRecognised() {
-        LocalDateTime created = LocalDateTime.now().minusHours(2);
-        plan.setCreatedAt(created);
-        plan.setStartTime(created.plusHours(1));
+    @DisplayName("上线前开工的计划: 流水认不出是谁占的 → 不还, 库存不动, 计划备注写明待人工核对")
+    void unattributableHoldIsNotGuessed() {
         wip.setConsumedQuantity(new BigDecimal("0.6"));
         wip.refreshAvailableQuantity();
-        SemiFinishedInventoryTransaction old = SemiFinishedInventoryTransaction.builder()
-                .semiFinishedId(WIP_ID)
-                .sourceRef("secondary-plan-deduct:" + WIP_ID)
-                .quantity(new BigDecimal("-0.6"))
-                .build();
-        old.setCreatedAt(created.plusMinutes(59));
-        ledger.add(old);
+        ledger.add(legacyRow("secondary-plan-deduct:" + WIP_ID, "-0.6"));
 
-        feed.release(F, source(), null, 7L);
+        BigDecimal released = feed.closeHold(F, plan, 7L);
 
-        assertStock("0", "1.0");
+        assertThat(released).isEqualByComparingTo("0");
+        assertStock("0.6", "0.4");
+        assertThat(plan.getNotes()).contains("待人工核对").contains(WIP_NO);
+    }
+
+    @Test
+    @DisplayName("旧格式的扣减已被旧格式的反冲抵消: 没有待核对的量, 不写备注")
+    void legacyDeductAlreadyReversedIsNotReported() {
+        ledger.add(legacyRow("secondary-plan-deduct:" + WIP_ID, "-0.6"));
+        ledger.add(legacyRow("secondary-plan-reverse:" + WIP_ID, "0.6"));
+
+        feed.closeHold(F, plan, 7L);
+
+        assertThat(plan.getNotes()).isNull();
+    }
+
+    @Test
+    @DisplayName("本计划有带号流水时, 同一来源上别的计划留下的旧流水不写到本计划头上")
+    void taggedPlanIgnoresOtherPlansLegacyRows() {
+        ledger.add(legacyRow("secondary-plan-deduct:" + WIP_ID, "-0.2"));
+        start();
+
+        feed.closeHold(F, plan, 7L);
+
+        assertThat(plan.getNotes()).isNull();
+    }
+
+    @Test
+    @DisplayName("直接完工: 已提交的逐道投料留在占用里当消耗, 只还没用的部分")
+    void closeKeepsWhatRowsAlreadyFed() throws Exception {
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(F, WIP_NO))
+                .thenAnswer(inv -> Optional.of(wip));
+        start();
+        savedRow(feedRow("r1", "0.4"), ProcessSheetRow.SUBMISSION_SUBMITTED);
+
+        BigDecimal released = feed.closeHold(F, plan, 7L);
+
+        assertThat(released).isEqualByComparingTo("0.2");
+        assertStock("0.4", "0.6");
+    }
+
+    @Test
+    @DisplayName("报工和取消的先后: 计划已取消再报工 → 409, 占用和库存都不动")
+    void reportOnClosedPlanIsRejected() {
+        start();
+        plan.setStatus(ProductionPlanStatus.CANCELLED);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> postReport(11L, "0.4"));
+
+        assertThat(ex.getErrorCode()).isEqualTo("SECONDARY_PLAN_NOT_ACTIVE");
+        assertStock("0.6", "0.4");
+    }
+
+    @Test
+    @DisplayName("先锁计划再锁来源: 报工和取消同一顺序, 不互相死锁")
+    void reportLocksPlanBeforeSource() {
+        start();
+        org.mockito.Mockito.clearInvocations(planRepo, wipRepo);
+
+        postReport(11L, "0.4");
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(planRepo, wipRepo);
+        order.verify(planRepo).findByIdForUpdate(PLAN_ID);
+        order.verify(wipRepo).findByIdForUpdate(WIP_ID);
+    }
+
+    @Test
+    @DisplayName("解锁判定不把库存行读进持久化上下文: 否则之后的行锁拿到旧余额")
+    void resolvingTheSourceDoesNotLoadTheEntity() {
+        org.mockito.Mockito.clearInvocations(wipRepo);
+
+        guard.evaluate(F, rework);
+        feed.forPlan(F, plan);
+
+        verify(wipRepo, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("可领量看真实库存: 计划还能投 0.6, 但来源被盘亏后只剩 0.3, 显示 0.3")
+    void remainingIsCappedByRealStock() {
+        assertThat(feed.remainingForPlan(F, source())).isEqualByComparingTo("0.6");
+
+        wip.setConsumedQuantity(new BigDecimal("0.7"));
+
+        assertThat(feed.remainingForPlan(F, source())).isEqualByComparingTo("0.3");
     }
 
     @Test

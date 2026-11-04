@@ -166,6 +166,13 @@ class WorkshopReportReservationSettlementContractTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
+        // 人工补录要 production:read_write; 这里的用例不测权限本身
+        com.cretas.aims.service.PermissionService permissionService =
+                org.mockito.Mockito.mock(com.cretas.aims.service.PermissionService.class);
+        org.mockito.Mockito.lenient().when(permissionService.hasPermission(any(), org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
+        org.mockito.Mockito.lenient().when(userRepository.findById(any()))
+                .thenReturn(Optional.of(new com.cretas.aims.entity.User()));
+        ReflectionTestUtils.setField(service, "permissionService", permissionService);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
                 productionSettlementConsumptionRepository);
@@ -496,6 +503,7 @@ class WorkshopReportReservationSettlementContractTest {
         return ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("idem-reserve-1")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)

@@ -170,6 +170,13 @@ class ProductionPlanSettlementTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
+        // 人工补录要 production:read_write; 这里的用例不测权限本身
+        com.cretas.aims.service.PermissionService permissionService =
+                org.mockito.Mockito.mock(com.cretas.aims.service.PermissionService.class);
+        org.mockito.Mockito.lenient().when(permissionService.hasPermission(any(), anyString())).thenReturn(true);
+        org.mockito.Mockito.lenient().when(userRepository.findById(any()))
+                .thenReturn(Optional.of(new com.cretas.aims.entity.User()));
+        ReflectionTestUtils.setField(service, "permissionService", permissionService);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "intermediateOwnershipGuard", org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         ReflectionTestUtils.setField(service, "productionSettlementOutputLineRepository",
@@ -439,6 +446,7 @@ class ProductionPlanSettlementTest {
         return ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("idem-r2")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
@@ -693,6 +701,7 @@ class ProductionPlanSettlementTest {
         ProductionSettlementRequest request = ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("idem-mixed")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
@@ -1057,6 +1066,7 @@ class ProductionPlanSettlementTest {
         ProductionSettlementRequest manualWip = ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .semiFinishedConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
                         .semiFinishedInventoryId(349L).batchNumber("WIP-B10822-S1-1844")
                         .quantity(new BigDecimal("0.01")).unit("kg").build()))
@@ -1339,6 +1349,7 @@ class ProductionPlanSettlementTest {
         ProductionSettlementRequest request = ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("customer-manual-raw")
                 .rawMaterialConsumptions(List.of(
                         ProductionSettlementRequest.ConsumptionLine.builder()
@@ -1422,6 +1433,7 @@ class ProductionPlanSettlementTest {
         ProductionSettlementRequest request = ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("idem-toll")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
@@ -1474,6 +1486,7 @@ class ProductionPlanSettlementTest {
         ProductionSettlementRequest request = ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("idem-toll-neg1")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
@@ -1523,6 +1536,7 @@ class ProductionPlanSettlementTest {
         ProductionSettlementRequest request = ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("idem-toll-neg2")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
@@ -1597,6 +1611,7 @@ class ProductionPlanSettlementTest {
                 .idempotencyKey("workflow-manual-wip")
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .actualFinishedQuantity(new BigDecimal("999"))
                 .semiFinishedConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
                         .semiFinishedInventoryId(7L)
@@ -2542,6 +2557,7 @@ class ProductionPlanSettlementTest {
                 .idempotencyKey("idem-1")
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
                 .rawMaterialConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
@@ -2767,6 +2783,7 @@ class ProductionPlanSettlementTest {
         return ProductionSettlementRequest.builder()
                 .confirm(true)
                 .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey(idempotencyKey)
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)

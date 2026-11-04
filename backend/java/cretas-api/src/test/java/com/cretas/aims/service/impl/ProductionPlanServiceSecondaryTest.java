@@ -282,7 +282,7 @@ class ProductionPlanServiceSecondaryTest {
             svc.cancelProductionPlan(FACTORY_ID, PLAN_ID, "不做了");
 
             // 占用全部还回 (quantity=null 表示按流水里还占着的量还)
-            verify(secondaryPlanFeedService).release(eq(FACTORY_ID), any(), org.mockito.ArgumentMatchers.isNull(), any());
+            verify(secondaryPlanFeedService).closeHold(eq(FACTORY_ID), eq(plan), any());
             // 计划置 CANCELLED, 不卡 IN_PROGRESS
             assertThat(plan.getStatus())
                     .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
@@ -313,7 +313,7 @@ class ProductionPlanServiceSecondaryTest {
                     .hasMessageContaining("报工");
 
             // 有报工 → 不走反冲 (走报工撤回), 计划不被置 CANCELLED
-            verify(secondaryPlanFeedService, never()).release(any(), any(), any(), any());
+            verify(secondaryPlanFeedService, never()).closeHold(any(), any(), any());
             assertThat(plan.getStatus())
                     .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS);
         }
@@ -334,7 +334,7 @@ class ProductionPlanServiceSecondaryTest {
 
             svc.cancelProductionPlan(FACTORY_ID, "NORMAL-PLAN-001", "空计划取消");
 
-            verify(secondaryPlanFeedService, never()).release(any(), any(), any(), any());
+            verify(secondaryPlanFeedService, never()).closeHold(any(), any(), any());
             assertThat(plan.getStatus())
                     .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
         }

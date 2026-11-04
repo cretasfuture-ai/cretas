@@ -33,6 +33,11 @@ public class ProductionSettlementResponse {
      */
     private Boolean settled;
 
+    /** 这张结单是不是人工补录的 (审计用)。 */
+    private Boolean manualOverride;
+
+    private String manualOverrideReason;
+
     private String settlementId;
     private String productionPlanId;
     private String planNumber;

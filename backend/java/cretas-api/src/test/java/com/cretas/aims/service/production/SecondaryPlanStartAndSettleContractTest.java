@@ -52,7 +52,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -193,15 +192,58 @@ class SecondaryPlanStartAndSettleContractTest {
     }
 
     @Test
-    @DisplayName("取消: 开工后没报工, 占用按流水余额全部还回, 计划取消")
+    @DisplayName("取消: 开工后没报工, 占用按流水余额还回, 计划取消")
     void cancelReturnsTheHold() {
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
         when(batchRepository.findByFactoryIdAndProductionPlanId(F, PLAN)).thenReturn(List.of());
 
         service.cancelProductionPlan(F, PLAN, "不做了");
 
-        verify(feed).release(eq(F), any(), isNull(), any());
+        verify(feed).closeHold(eq(F), eq(plan), any());
         assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.CANCELLED);
+    }
+
+    @Test
+    @DisplayName("取消: 暂停的计划也占着料, 一样还回")
+    void cancelFromPausedReturnsTheHold() {
+        plan.setStatus(ProductionPlanStatus.PAUSED);
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, PLAN)).thenReturn(List.of());
+
+        service.cancelProductionPlan(F, PLAN, "不做了");
+
+        verify(feed).closeHold(eq(F), eq(plan), any());
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.CANCELLED);
+    }
+
+    @Test
+    @DisplayName("取消: 有已提交的逐道行 → 走报工撤回, 不全额还占用")
+    void cancelWithSubmittedRowIsRejected() {
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, PLAN)).thenReturn(List.of());
+        when(rowRepository.findByFactoryIdAndPlanId(F, PLAN)).thenReturn(List.of(reworkRow()));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.cancelProductionPlan(F, PLAN, "不做了"));
+
+        assertThat(ex.getErrorCode()).isEqualTo("PLAN_HAS_PRODUCTION_DATA");
+        verify(feed, never()).closeHold(any(), any(), any());
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.IN_PROGRESS);
+    }
+
+    @Test
+    @DisplayName("不走结单的完工: 没用完的占用还回")
+    void completeWithoutSettlementClosesTheHold() {
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        var settings = Mockito.mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+        when(settings.findSkipProcessReportingDefaultByFactoryId(F)).thenReturn(false);
+        ReflectionTestUtils.setField(service, "factorySettingsRepository", settings);
+        when(planRepository.findById(PLAN)).thenAnswer(inv -> Optional.of(plan));
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, PLAN)).thenReturn(List.of());
+
+        service.completeProduction(F, PLAN, new BigDecimal("0.5"), null);
+
+        verify(feed).closeHold(eq(F), eq(plan), any());
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.COMPLETED);
     }
 
     private ProcessSheetRow reworkRow() {
@@ -251,7 +293,7 @@ class SecondaryPlanStartAndSettleContractTest {
         service.settleProduction(F, PLAN, settle(), 7L);
 
         InOrder order = Mockito.inOrder(feed, wipInventoryService);
-        order.verify(feed).release(eq(F), any(), isNull(), eq(7L));
+        order.verify(feed).settleHold(eq(F), eq(plan), eq(7L));
         order.verify(wipInventoryService).consumeClerkSemiStrict(eq(F), any(), eq(WIP_NO), eq(new BigDecimal("0.4")));
         verify(wipInventoryService).consumeClerkSemiStrict(any(), any(), any(), any());
     }
@@ -265,7 +307,8 @@ class SecondaryPlanStartAndSettleContractTest {
 
         service.settleProduction(F, PLAN, preview, 7L);
 
-        verify(feed, never()).release(any(), any(), any(), any());
+        verify(feed, never()).settleHold(any(), any(), any());
+        verify(feed, never()).closeHold(any(), any(), any());
         verify(wipInventoryService, never()).consumeClerkSemiStrict(any(), any(), any(), any());
     }
 
@@ -311,6 +354,6 @@ class SecondaryPlanStartAndSettleContractTest {
 
         service.settleProduction(F, PLAN, settle(), 7L);
 
-        verify(feed, never()).release(any(), any(), any(), any());
+        verify(feed, never()).settleHold(any(), any(), any());
     }
 }

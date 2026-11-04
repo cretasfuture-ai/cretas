@@ -36,9 +36,14 @@ public class ProductionSettlementRequest {
     /**
      * 人工补录: 文员处理完阻塞项后, 按手工录入的事实结单 (web「部分数据需人工核对补全」那条路)。
      * 只在 {@code confirm=true} 时写库; Workflow 计划的产出与领用仍以报工为准。
+     * 需要 production:read_write 和 {@link #manualOverrideReason}, 标记、原因、操作人都落在结单上。
      */
     @Builder.Default
     private boolean manualOverride = false;
+
+    /** 人工补录的原因, {@code manualOverride=true} 时必填。 */
+    @jakarta.validation.constraints.Size(max = 255, message = "manualOverrideReason 不能超过 255 字")
+    private String manualOverrideReason;
 
     @PositiveOrZero(message = "actualFinishedQuantity must be >= 0")
     private BigDecimal actualFinishedQuantity;

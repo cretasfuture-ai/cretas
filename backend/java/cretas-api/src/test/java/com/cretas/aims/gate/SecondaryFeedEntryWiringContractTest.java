@@ -163,26 +163,116 @@ class SecondaryFeedEntryWiringContractTest {
         assertThat(controller.settleProduction(F, "P1", "Bearer t", request).getMessage()).contains("已提交");
     }
 
-    @Test
-    @DisplayName("整单撤回: 结单入库的半成品退出来; 上线前的结单没有这一行, 不报错")
-    void reversalTakesTheStockedSemiBackOut() {
-        SemiFinishedInventoryRepository wipRepo = mock(SemiFinishedInventoryRepository.class);
-        WipInventoryService wip = mock(WipInventoryService.class);
-        ReportReversalServiceImpl svc = WorkflowStepUnlockWiringContractTest.construct(ReportReversalServiceImpl.class,
-                Map.of(SemiFinishedInventoryRepository.class, wipRepo));
-        ReflectionTestUtils.setField(svc, "wipInventoryService", wip);
+    private ProductionSettlement stockedSettlement(Long fromBatch) {
         ProductionSettlement settlement = new ProductionSettlement();
         settlement.setId("settlement-1");
-        settlement.setActualSemiFinishedQuantity(new BigDecimal("0.4"));
-        String anchor = SettlementSemiStockingService.anchor("P1", "settlement-1");
+        settlement.setActualSemiFinishedQuantity(new BigDecimal("30"));
+        settlement.setSemiStockingDetail("[{\"anchor\":\"CLK-SEMI-1\",\"productionBatchId\":" + fromBatch
+                + ",\"materialBatchId\":\"MB-W\",\"quantity\":30,\"storageQuantity\":30000}]");
+        return settlement;
+    }
 
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(F, anchor)).thenReturn(Optional.empty());
-        ReflectionTestUtils.invokeMethod(svc, "reverseSettlementSemiStocking", F, "P1", settlement, 7L);
-        verify(wip, never()).reverseClerkOutput(any(), any(), any(), any(), any());
+    private record ReversalFixture(ReportReversalServiceImpl service, WipInventoryService wip,
+                                   com.cretas.aims.entity.MaterialBatch batch) {
+    }
 
-        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(F, anchor))
-                .thenReturn(Optional.of(new SemiFinishedInventory()));
-        ReflectionTestUtils.invokeMethod(svc, "reverseSettlementSemiStocking", F, "P1", settlement, 7L);
-        verify(wip).reverseClerkOutput(eq(F), eq(anchor), eq(new BigDecimal("0.4")), isNull(), eq(7L));
+    private ReversalFixture reversal() {
+        var materialRepo = mock(com.cretas.aims.repository.MaterialBatchRepository.class);
+        var batch = new com.cretas.aims.entity.MaterialBatch();
+        batch.setReceiptQuantity(new BigDecimal("90000"));
+        batch.setUsedQuantity(new BigDecimal("90000"));
+        when(materialRepo.findByIdAndFactoryIdForUpdate("MB-W", F)).thenReturn(Optional.of(batch));
+        WipInventoryService wip = mock(WipInventoryService.class);
+        ReportReversalServiceImpl svc = WorkflowStepUnlockWiringContractTest.construct(
+                ReportReversalServiceImpl.class, Map.of());
+        ReflectionTestUtils.setField(svc, "wipInventoryService", wip);
+        ReflectionTestUtils.setField(svc, "materialBatchRepository", materialRepo);
+        return new ReversalFixture(svc, wip, batch);
+    }
+
+    @Test
+    @DisplayName("撤回别的道: 半成品库退出来, 在制批次的已用量也按库存单位还回去, 两边都还")
+    void reversalRestoresBothSides() {
+        ReversalFixture fixture = reversal();
+
+        ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking",
+                F, stockedSettlement(501L), 999L, 7L);
+
+        verify(fixture.wip()).reverseClerkOutput(F, "CLK-SEMI-1", new BigDecimal("30"), null, 7L);
+        assertThat(fixture.batch().getUsedQuantity()).isEqualByComparingTo("60000");
+    }
+
+    @Test
+    @DisplayName("撤回的就是这一道: 在制批次已被作废, 不再还")
+    void reversalOfTheProducingStepSkipsTheVoidedBatch() {
+        ReversalFixture fixture = reversal();
+
+        ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking",
+                F, stockedSettlement(501L), 501L, 7L);
+
+        verify(fixture.wip()).reverseClerkOutput(F, "CLK-SEMI-1", new BigDecimal("30"), null, 7L);
+        assertThat(fixture.batch().getUsedQuantity()).isEqualByComparingTo("90000");
+    }
+
+    @Test
+    @DisplayName("上线前的结单没有入库明细: 不动任何库存")
+    void reversalOfOldSettlementTouchesNothing() {
+        ReversalFixture fixture = reversal();
+        ProductionSettlement old = new ProductionSettlement();
+        old.setActualSemiFinishedQuantity(new BigDecimal("30"));
+
+        ReflectionTestUtils.invokeMethod(fixture.service(), "reverseSettlementSemiStocking", F, old, 999L, 7L);
+
+        verify(fixture.wip(), never()).reverseClerkOutput(any(), any(), any(), any(), any());
+        assertThat(fixture.batch().getUsedQuantity()).isEqualByComparingTo("90000");
+    }
+
+    @Test
+    @DisplayName("批次完工把计划结束时: 返工计划的占用还回; 普通计划不碰")
+    void batchCompletionClosesTheHold() {
+        var planRepo = mock(ProductionPlanRepository.class);
+        var batchRepo = mock(com.cretas.aims.repository.ProductionBatchRepository.class);
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId("P1");
+        plan.setPlanSourceType("SECONDARY");
+        plan.setSecondarySourceWipId(403L);
+        when(planRepo.findById("P1")).thenReturn(Optional.of(plan));
+        when(batchRepo.countByProductionPlanIdAndStatusNot(eq("P1"), any())).thenReturn(0L);
+        var orchestrator = WorkflowStepUnlockWiringContractTest.construct(
+                com.cretas.aims.service.orchestration.SupplyChainOrchestrator.class,
+                Map.of(ProductionPlanRepository.class, planRepo,
+                        com.cretas.aims.repository.ProductionBatchRepository.class, batchRepo));
+        ReflectionTestUtils.setField(orchestrator, "secondaryPlanFeedService", feed);
+        var batch = new com.cretas.aims.entity.ProductionBatch();
+        batch.setFactoryId(F);
+        batch.setProductionPlanId("P1");
+
+        ReflectionTestUtils.invokeMethod(orchestrator, "updateProductionPlanProgress", batch);
+        verify(feed).closeHold(eq(F), eq(plan), any());
+
+        plan.setPlanSourceType("NORMAL");
+        plan.setSecondarySourceWipId(null);
+        org.mockito.Mockito.clearInvocations(feed);
+        ReflectionTestUtils.invokeMethod(orchestrator, "updateProductionPlanProgress", batch);
+        verify(feed, never()).closeHold(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("追溯: 结单入库的半成品行能解析到来源生产批; 普通锚点行照旧解析不出")
+    void stockedSemiResolvesToItsSourceBatch() {
+        var resolver = WorkflowStepUnlockWiringContractTest.construct(
+                com.cretas.aims.service.lineage.SemiSourceBatchResolver.class, Map.of());
+        SemiFinishedInventory stocked = new SemiFinishedInventory();
+        stocked.setIntermediateBatchNo("CLK-SEMI-1");
+        stocked.setMaterialBatchRefs(List.of(Map.of("materialBatchId", "MB-W", "productionBatchId", 501L)));
+
+        var resolved = resolver.resolve(F, stocked, "TEST");
+
+        assertThat(resolved.isResolved()).isTrue();
+        assertThat(resolved.productionBatchId()).isEqualTo(501L);
+
+        SemiFinishedInventory pooled = new SemiFinishedInventory();
+        pooled.setIntermediateBatchNo("CLK-SEMI-2");
+        assertThat(resolver.resolve(F, pooled, "TEST").isResolved()).isFalse();
     }
 }

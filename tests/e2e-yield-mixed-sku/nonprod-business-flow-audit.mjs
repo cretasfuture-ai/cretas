@@ -413,6 +413,7 @@ async function main() {
     idempotencyKey: `${AUDIT_PREFIX}-settle`,
     confirm: true,
     manualOverride: true,
+    manualOverrideReason: 'e2e 人工补录',
     actualFinishedQuantity: prefill.actualFinishedQuantity ?? 0.13,
     actualSemiFinishedQuantity: prefill.actualSemiFinishedQuantity ?? 0,
     quantityUnit: prefill.quantityUnit || 'kg',

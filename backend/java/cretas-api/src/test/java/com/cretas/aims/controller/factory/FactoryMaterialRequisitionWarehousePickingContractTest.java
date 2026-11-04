@@ -136,6 +136,17 @@ class FactoryMaterialRequisitionWarehousePickingContractTest {
     }
 
     @Test
+    @DisplayName("阴性: 账号被显式 DENY production_plan 时, warehouse 权限不能绕过去")
+    void explicitDenyOnPrimaryModuleWins() throws Exception {
+        when(moduleAccess.isExplicitlyDenied(user, "production_plan")).thenReturn(true);
+
+        mockMvc.perform(asUser(put(BASE + "/MR-1/start-picking"))).andExpect(status().isForbidden());
+        mockMvc.perform(confirmPicking()).andExpect(status().isForbidden());
+        mockMvc.perform(asUser(put(BASE + "/MR-1/transfer"))).andExpect(status().isForbidden());
+        verifyNoInteractions(service);
+    }
+
+    @Test
     @DisplayName("阴性: 本厂仓储模块没启用时, warehouse 权限不算数")
     void disabledWarehouseModuleDoesNotCount() throws Exception {
         when(factoryConfigService.isModuleEnabled("F006", "warehouse")).thenReturn(false);

@@ -20,6 +20,20 @@ describe('clean settlement external WIP contract', () => {
     expect(source).toContain('semiFinishedConsumptions: buildWipConsumptionPayload()');
   });
 
+  it('sends the semi-finished quantity on the one-click path when the input has a value', () => {
+    const clean = source.slice(source.indexOf('const payload = settlementPrefillClean.value && !hasManualWip'));
+    const oneClick = clean.slice(0, clean.indexOf('// Exception override path'));
+    expect(oneClick).toContain('actualSemiFinishedQuantity: completeSemiFinishedOutputQuantity.value');
+    expect(oneClick).not.toContain('manualOverride');
+  });
+
+  it('requires a reason and production write access for a manual override', () => {
+    expect(source).toContain('manualOverrideReason: settlementManualReason.value');
+    expect(source).toContain("permissionStore.canWrite('production')) return '人工补录结单需要生产写权限");
+    expect(source).toContain("return settlementManualReason.value ? '' : '请选择人工补录原因'");
+    expect(source).toContain('? !firstWipLineError.value && !settlementManualBlockedReason.value');
+  });
+
   it('exposes a progressive WIP entry and loads current-factory inventory', () => {
     expect(source).toContain('补充外部半成品领用');
     expect(source).toContain('@click="openSettlementManualWip"');

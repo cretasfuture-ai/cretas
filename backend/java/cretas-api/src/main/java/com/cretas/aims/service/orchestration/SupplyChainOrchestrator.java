@@ -65,6 +65,9 @@ public class SupplyChainOrchestrator {
     private final ProductionBatchRepository productionBatchRepository;
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     private final ApplicationEventPublisher applicationEventPublisher;
+
+    @Autowired(required = false)
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
     private final QualityInspectionService qualityInspectionService;
     private final BatchConsumptionService batchConsumptionService;
     private final ProductTypeRepository productTypeRepository;
@@ -879,6 +882,13 @@ public class SupplyChainOrchestrator {
 
         boolean planJustCompleted = false;
         if (incompleteBatches == 0) {
+            // 批次完工直接把计划结束, 不走结单: 返工计划没用掉的来源半成品占用在这里还回去
+            if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
+                if (secondaryPlanFeedService == null) {
+                    throw new IllegalStateException("二次加工服务未初始化, 无法还回半成品占用");
+                }
+                secondaryPlanFeedService.closeHold(batch.getFactoryId(), plan, resolveBatchActor(batch));
+            }
             plan.setStatus(ProductionPlanStatus.COMPLETED);
             plan.setEndTime(java.time.LocalDateTime.now());
             planJustCompleted = true;

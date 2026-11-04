@@ -45,6 +45,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -96,6 +97,9 @@ class ProductionSettlementConfirmContractTest {
     @Mock private WipInventoryService wipInventoryService;
     @Mock private WorkshopReportReservationService reservationService;
     @Mock private CustomerSuppliedSettlementCoverageGuard coverageGuard;
+    @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
+    @Mock private com.cretas.aims.repository.SemiFinishedInventoryRepository semiRepository;
+    @Mock private com.cretas.aims.service.PermissionService permissionService;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private ProductionPlanServiceImpl service;
@@ -115,7 +119,12 @@ class ProductionSettlementConfirmContractTest {
         ReflectionTestUtils.setField(service, "workshopReservationService", reservationService);
         ReflectionTestUtils.setField(service, "customerSuppliedSettlementCoverageGuard", coverageGuard);
         ReflectionTestUtils.setField(service, "settlementSemiStockingService",
-                new SettlementSemiStockingService(rowRepository, materialBatchRepository, wipInventoryService, mapper));
+                new SettlementSemiStockingService(rowRepository, materialBatchRepository,
+                        materialConsumptionRepository, wipInventoryService, unitContractService, mapper));
+        ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
+        ReflectionTestUtils.setField(service, "semiFinishedInventoryRepository", semiRepository);
+        ReflectionTestUtils.setField(service, "permissionService", permissionService);
+        when(unitContractService.storageUnit(any(), any())).thenAnswer(inv -> inv.getArgument(1));
 
         plan = new ProductionPlan();
         plan.setId(PLAN);
@@ -126,9 +135,11 @@ class ProductionSettlementConfirmContractTest {
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
 
         wipBatch = new MaterialBatch();
+        wipBatch.setId("MB-WIP");
         wipBatch.setBatchNumber("WIP-" + WIP_BATCH_NO);
         wipBatch.setReceiptQuantity(new BigDecimal("0.9"));
-        wipBatch.setUsedQuantity(new BigDecimal("0.5"));
+        wipBatch.setUsedQuantity(BigDecimal.ZERO);
+        wipBatch.setQuantityUnit("kg");
 
         when(planRepository.findByIdForUpdate(PLAN)).thenReturn(Optional.of(plan));
         when(planRepository.findByIdAndFactoryId(PLAN, FACTORY)).thenReturn(Optional.of(plan));
@@ -146,8 +157,21 @@ class ProductionSettlementConfirmContractTest {
         when(conversionRepository.findAll()).thenReturn(Collections.emptyList());
         when(materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceDocId(
                 FACTORY, "PRODUCTION_BATCH", String.valueOf(WIP_BATCH_ID))).thenReturn(Optional.of(wipBatch));
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-WIP", FACTORY)).thenReturn(Optional.of(wipBatch));
         when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+        // 下道投的 0.5 记在在制批次的消耗记录上 (库存单位), 不在逐道行里现算
+        when(materialConsumptionRepository.findByFactoryIdAndBatchId(FACTORY, "MB-WIP"))
+                .thenAnswer(inv -> new ArrayList<>(consumptions));
+        consumptions.add(consumption("0.5"));
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN)).thenReturn(sourceRoute());
+    }
+
+    private final List<com.cretas.aims.entity.MaterialConsumption> consumptions = new ArrayList<>();
+
+    private static com.cretas.aims.entity.MaterialConsumption consumption(String quantity) {
+        com.cretas.aims.entity.MaterialConsumption consumption = new com.cretas.aims.entity.MaterialConsumption();
+        consumption.setQuantity(new BigDecimal(quantity));
+        return consumption;
     }
 
     private List<ProcessSheetRow> sourceRoute() throws Exception {
@@ -228,8 +252,8 @@ class ProductionSettlementConfirmContractTest {
     }
 
     @Test
-    @DisplayName("confirm=false 与正式结单同一判定: 超过剩余量在预览就拒绝, 仍零写入")
-    void previewRejectsWhatConfirmWouldReject() {
+    @DisplayName("confirm=false: 半成品量超过剩余量在预览就拒绝, 仍零写入 (预览不校验库存行, 那部分要到正式结单)")
+    void previewRejectsOverLeftoverBeforeAnyWrite() {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.settleProduction(FACTORY, PLAN, request(false, "0.5").build(), 10L));
 
@@ -247,17 +271,19 @@ class ProductionSettlementConfirmContractTest {
         assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.COMPLETED);
         assertThat(response.getActualSemiFinishedQuantity()).isEqualByComparingTo("0.4");
         verify(wipInventoryService).postClerkOutput(eq(FACTORY), anyString(), eq("SEMI-1"),
-                eq(new BigDecimal("0.4")), eq("kg"), isNull(), isNull(), eq(1));
+                eq(new BigDecimal("0.4")), eq("kg"), isNull(), anyList(), eq(1));
+        // 下道投的 0.5 + 转走的 0.4 = 收到的 0.9, 在制批次见底
         assertThat(wipBatch.getUsedQuantity()).isEqualByComparingTo("0.9");
+        assertThat(wipBatch.getCurrentQuantity()).isEqualByComparingTo("0");
     }
 
     @Test
-    @DisplayName("confirm=true 不带半成品量: 不入库, 也不动在制批次")
-    void confirmWithoutSemiStocksNothing() {
+    @DisplayName("confirm=true 明确传 0 (用户确认没有半成品要入库): 不入库, 也不动在制批次")
+    void confirmWithExplicitZeroStocksNothing() {
         service.settleProduction(FACTORY, PLAN, request(true, "0").build(), 10L);
 
         verify(wipInventoryService, never()).postClerkOutput(any(), any(), any(), any(), any(), any(), any(), any());
-        assertThat(wipBatch.getUsedQuantity()).isEqualByComparingTo("0.5");
+        assertThat(wipBatch.getUsedQuantity()).isEqualByComparingTo("0");
     }
 
     @Test
@@ -305,5 +331,222 @@ class ProductionSettlementConfirmContractTest {
 
         assertThat(ex.getErrorCode()).isEqualTo("SETTLEMENT_SEMI_NO_LEFTOVER");
         verify(settlementRepository, never()).save(any());
+    }
+
+    private ArgumentCapturingSettlement capture() {
+        return new ArgumentCapturingSettlement();
+    }
+
+    private final class ArgumentCapturingSettlement {
+        ProductionSettlement saved() {
+            org.mockito.ArgumentCaptor<ProductionSettlement> captor =
+                    org.mockito.ArgumentCaptor.forClass(ProductionSettlement.class);
+            verify(settlementRepository, Mockito.atLeastOnce()).save(captor.capture());
+            return captor.getValue();
+        }
+    }
+
+    @Test
+    @DisplayName("入库明细落在结单上, 行上记着来源批: 撤回和追溯都靠它")
+    void stockingDetailAndSourceBatchAreRecorded() {
+        service.settleProduction(FACTORY, PLAN, request(true, "0.4").build(), 10L);
+
+        org.mockito.ArgumentCaptor<List<Map<String, Object>>> refs = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(wipInventoryService).postClerkOutput(any(), any(), any(), any(), any(), any(), refs.capture(), any());
+        assertThat(refs.getValue().get(0)).containsEntry("productionBatchId", WIP_BATCH_ID);
+        var detail = SettlementSemiStockingService.parseDetail(capture().saved().getSemiStockingDetail());
+        assertThat(detail).hasSize(1);
+        assertThat(detail.get(0).materialBatchId()).isEqualTo("MB-WIP");
+        assertThat(detail.get(0).productionBatchId()).isEqualTo(WIP_BATCH_ID);
+        assertThat(detail.get(0).storageQuantity()).isEqualByComparingTo("0.4");
+    }
+
+    @Test
+    @DisplayName("别的计划从这批领的料也算: 剩余量看在制批次的全部消耗")
+    void otherPlansConsumptionCounts() {
+        consumptions.add(consumption("0.3"));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY, PLAN, request(true, "0.4").build(), 10L));
+
+        assertThat(ex.getErrorCode()).isEqualTo("SETTLEMENT_SEMI_EXCEEDS_LEFTOVER");
+    }
+
+    @Test
+    @DisplayName("单位不同走换算: 在制批次按 g 存, 半成品按 kg 算")
+    void leftoverIsConvertedFromStorageUnit() {
+        wipBatch.setReceiptQuantity(new BigDecimal("900"));
+        wipBatch.setQuantityUnit("g");
+        consumptions.clear();
+        consumptions.add(consumption("500"));
+
+        service.settleProduction(FACTORY, PLAN, request(true, "0.4").build(), 10L);
+
+        assertThat(wipBatch.getUsedQuantity()).isEqualByComparingTo("900");
+        verify(wipInventoryService).postClerkOutput(any(), any(), any(),
+                org.mockito.ArgumentMatchers.argThat(q -> q.compareTo(new BigDecimal("0.4")) == 0), eq("kg"),
+                any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("单位没有换算关系: 拒绝, 不当成相等")
+    void unconvertibleUnitIsRejected() {
+        wipBatch.setQuantityUnit("盒");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY, PLAN, request(true, "0.4").build(), 10L));
+
+        assertThat(ex.getErrorCode()).isEqualTo("SETTLEMENT_SEMI_UNIT_MISMATCH");
+    }
+
+    @Test
+    @DisplayName("只出半成品的非 Workflow 计划: 没有成品也能结单, 半成品入库")
+    void semiOnlyPlanCanSettle() throws Exception {
+        ProcessSheetRowRequest semi = new ProcessSheetRowRequest();
+        semi.setClientRowId("semi");
+        semi.setProcessCode("cure");
+        semi.setProcessOrder(1);
+        semi.setProductTypeId("SEMI-1");
+        semi.setOutputQuantity(new BigDecimal("0.9"));
+        semi.setUnit("kg");
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN))
+                .thenReturn(List.of(row(semi, WIP_BATCH_ID, WIP_BATCH_NO)));
+
+        ProductionSettlementResponse response = service.settleProduction(FACTORY, PLAN,
+                request(true, "0.4").actualFinishedQuantity(null).build(), 10L);
+
+        assertThat(response.getActualSemiFinishedQuantity()).isEqualByComparingTo("0.4");
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.COMPLETED);
+    }
+
+    @Test
+    @DisplayName("Workflow 计划缺成品产出: 半成品量不能把它放过去")
+    void workflowPlanStillNeedsReportedFinishedOutput() throws Exception {
+        plan.setWorkflowSelectionMode(com.cretas.aims.entity.ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowId(44L);
+        plan.setSkipProcessReporting(true);
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN)).thenReturn(List.of());
+
+        assertThrows(BusinessException.class, () -> service.settleProduction(FACTORY, PLAN,
+                request(true, "0.4").actualFinishedQuantity(null).build(), 10L));
+
+        verify(settlementRepository, never()).save(any());
+    }
+
+    private ProductionSettlementRequest.ProductionSettlementRequestBuilder manual() {
+        return request(true, "0").manualOverride(true).manualOverrideReason("报工数据缺失")
+                .laborDeferredReason("工时稍后补录");
+    }
+
+    private void userHasProductionWrite(boolean allowed) {
+        com.cretas.aims.entity.User user = new com.cretas.aims.entity.User();
+        when(userRepository.findById(10L)).thenReturn(Optional.of(user));
+        when(permissionService.hasPermission(user, "production:read_write")).thenReturn(allowed);
+    }
+
+    @Test
+    @DisplayName("人工补录: 标记、原因、操作人都落在结单上")
+    void manualOverrideIsAudited() {
+        userHasProductionWrite(true);
+
+        ProductionSettlementResponse response = service.settleProduction(FACTORY, PLAN, manual().build(), 10L);
+
+        ProductionSettlement saved = capture().saved();
+        assertThat(saved.isManualOverride()).isTrue();
+        assertThat(saved.getManualOverrideReason()).isEqualTo("报工数据缺失");
+        assertThat(saved.getSettledBy()).isEqualTo(10L);
+        assertThat(response.getManualOverride()).isTrue();
+    }
+
+    @Test
+    @DisplayName("普通结单不留人工补录标记")
+    void ordinarySettleIsNotMarkedManual() {
+        service.settleProduction(FACTORY, PLAN, request(true, "0").build(), 10L);
+
+        assertThat(capture().saved().isManualOverride()).isFalse();
+    }
+
+    @Test
+    @DisplayName("人工补录没写原因: 拒绝, 不结单")
+    void manualOverrideNeedsReason() {
+        userHasProductionWrite(true);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> service.settleProduction(
+                FACTORY, PLAN, manual().manualOverrideReason("  ").build(), 10L));
+
+        assertThat(ex.getErrorCode()).isEqualTo("SETTLEMENT_MANUAL_REASON_REQUIRED");
+        verify(settlementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("只有排程写权限: 人工补录 403, 不结单")
+    void schedulingOnlyCannotManualOverride() {
+        userHasProductionWrite(false);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY, PLAN, manual().build(), 10L));
+
+        assertThat(ex.getErrorCode()).isEqualTo("SETTLEMENT_MANUAL_OVERRIDE_FORBIDDEN");
+        verify(settlementRepository, never()).save(any());
+    }
+
+    private void reportedSemiFeed(String quantity) throws Exception {
+        ProcessSheetRowRequest fed = new ProcessSheetRowRequest();
+        fed.setClientRowId("fed");
+        fed.setProcessCode("form");
+        fed.setProcessOrder(2);
+        fed.setProductTypeId("FG-1");
+        fed.setFinished(true);
+        fed.setOutputQuantity(new BigDecimal("5"));
+        fed.setUnit("袋");
+        ProcessSheetRowRequest.UpstreamRef ref = new ProcessSheetRowRequest.UpstreamRef();
+        ref.setSourceBatchNumber("CLK-SEMI-1");
+        ref.setSemiFinished(true);
+        ref.setFeedQuantityKg(new BigDecimal(quantity));
+        fed.setUpstreamSources(List.of(ref));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN)).thenReturn(List.of(row(fed, 502L, "CLK-B-1")));
+        var sourceRef = Mockito.mock(com.cretas.aims.repository.SemiFinishedInventoryRepository.SourceRef.class);
+        when(sourceRef.getFactoryId()).thenReturn(FACTORY);
+        when(sourceRef.getIntermediateBatchNo()).thenReturn("CLK-SEMI-1");
+        when(semiRepository.findSourceRefById(7L)).thenReturn(Optional.of(sourceRef));
+        when(wipInventoryService.resolveSemiFeedQtyInSourceUnit(eq(FACTORY), eq("CLK-SEMI-1"), any()))
+                .thenAnswer(inv -> inv.getArgument(2));
+        userHasProductionWrite(true);
+    }
+
+    private ProductionSettlementRequest manualSemi(String quantity) {
+        return manual().semiFinishedConsumptions(List.of(ProductionSettlementRequest.ConsumptionLine.builder()
+                .semiFinishedInventoryId(7L).quantity(new BigDecimal(quantity)).unit("kg").build())).build();
+    }
+
+    @Test
+    @DisplayName("手工半成品领用少报: 报工投 100 手工填 1 → 拒绝, 不让 99 变幻库存; 预览同样拒绝")
+    void manualSemiBelowReportedFeedIsRejected() throws Exception {
+        reportedSemiFeed("100");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY, PLAN, manualSemi("1"), 10L));
+        assertThat(ex.getErrorCode()).isEqualTo("SETTLEMENT_MANUAL_SEMI_MISMATCH");
+        verify(settlementRepository, never()).save(any());
+
+        ProductionSettlementRequest preview = manualSemi("1");
+        preview.setConfirm(false);
+        BusinessException previewEx = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY, PLAN, preview, 10L));
+        assertThat(previewEx.getErrorCode()).isEqualTo("SETTLEMENT_MANUAL_SEMI_MISMATCH");
+    }
+
+    @Test
+    @DisplayName("手工半成品领用多报同样拒绝; 量对得上才过这道闸")
+    void manualSemiMustMatchExactly() throws Exception {
+        reportedSemiFeed("100");
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.settleProduction(FACTORY, PLAN, manualSemi("101"), 10L));
+        assertThat(ex.getErrorCode()).isEqualTo("SETTLEMENT_MANUAL_SEMI_MISMATCH");
+
+        ProductionSettlementRequest matching = manualSemi("100");
+        matching.setConfirm(false);
+        assertThat(service.settleProduction(FACTORY, PLAN, matching, 10L).getSettled()).isFalse();
     }
 }

@@ -337,7 +337,7 @@ class ProductionPlanCancelConcurrencyTest {
         service.cancelProductionPlan(FACTORY_ID, PLAN_ID, "订单取消");
 
         // 占用全部还回 (quantity=null 表示按流水里还占着的量还)
-        verify(secondaryPlanFeedService).release(eq(FACTORY_ID), any(), org.mockito.ArgumentMatchers.isNull(), any());
+        verify(secondaryPlanFeedService).closeHold(eq(FACTORY_ID), eq(target), any());
         // 计划置 CANCELLED, 不卡 IN_PROGRESS
         assertEquals(ProductionPlanStatus.CANCELLED, target.getStatus());
     }
@@ -362,7 +362,7 @@ class ProductionPlanCancelConcurrencyTest {
         assertEquals(409, ex.getCode());
         assertEquals(ProductionPlanStatus.IN_PROGRESS, target.getStatus());
         // 有报工 → 走报工撤回流, 不反冲
-        verify(secondaryPlanFeedService, never()).release(any(), any(), any(), any());
+        verify(secondaryPlanFeedService, never()).closeHold(any(), any(), any());
     }
 
     @Test

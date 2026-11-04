@@ -6,6 +6,7 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.entity.SemiFinishedInventoryTransaction;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
@@ -21,11 +22,11 @@ import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -48,7 +49,15 @@ import java.util.stream.Collectors;
  * 先把对应的占用还回来 ({@link #release}), 再走原来的扣减。这样同一批料不会扣两次,
  * 撤回报工只还到库存, 没用完的占用在结单或取消时全部还回。
  * 占用还剩多少看流水 ({@link #heldQuantity}), ⛔ 不按计划量推算: /create-batch 开工的计划根本没有占用。
+ *
+ * <h3>并发</h3>
+ * 报工和取消 / 结单都先锁计划再锁来源行 (同一顺序, 不互相死锁): 拿到计划锁之后再读状态,
+ * 所以报工不会落在刚取消的计划上, 取消也不会漏看刚提交的报工。
+ *
+ * <h3>上线前开工的计划</h3>
+ * 旧流水不带计划号, 认不出是谁占的。⛔ 不猜: 不自动还, 记到计划备注让人核对。
  */
+@Slf4j
 @Service
 public class SecondaryPlanFeedService {
 
@@ -65,6 +74,9 @@ public class SecondaryPlanFeedService {
     private final ProductionReportRepository reportRepository;
     private final WipInventoryService wipInventoryService;
     private final ObjectMapper objectMapper;
+
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
 
     public SecondaryPlanFeedService(ProductionPlanRepository planRepository,
                                     ProductionBatchRepository batchRepository,
@@ -112,9 +124,10 @@ public class SecondaryPlanFeedService {
         if (plan == null || !"SECONDARY".equals(plan.getPlanSourceType()) || plan.getSecondarySourceWipId() == null) {
             return Optional.empty();
         }
-        return wipRepository.findById(plan.getSecondarySourceWipId())
-                .filter(wip -> factoryId.equals(wip.getFactoryId()))
-                .map(wip -> toSource(plan, wip));
+        // ⛔ 这里不能用 findById: 见 findSourceRefById 的说明, 解锁判定之后同一事务还要锁这一行扣账
+        return wipRepository.findSourceRefById(plan.getSecondarySourceWipId())
+                .filter(ref -> factoryId.equals(ref.getFactoryId()))
+                .map(ref -> toSource(plan, ref));
     }
 
     public Optional<Source> forPlanId(String factoryId, String planId) {
@@ -134,9 +147,9 @@ public class SecondaryPlanFeedService {
                 .flatMap(planId -> forPlanId(factoryId, planId));
     }
 
-    private static Source toSource(ProductionPlan plan, SemiFinishedInventory wip) {
-        return new Source(plan, wip.getId(), wip.getIntermediateBatchNo(), wip.getProductTypeId(),
-                plan.getPlannedQuantity(), wip.getUnit());
+    private static Source toSource(ProductionPlan plan, SemiFinishedInventoryRepository.SourceRef ref) {
+        return new Source(plan, ref.getId(), ref.getIntermediateBatchNo(), ref.getProductTypeId(),
+                plan.getPlannedQuantity(), ref.getUnit());
     }
 
     /**
@@ -194,53 +207,32 @@ public class SecondaryPlanFeedService {
                 .orElse(Integer.MIN_VALUE);
     }
 
-    /** 本计划在来源行上还占着多少 (开工扣下、还没转成消耗或还回去的量)。 */
+    /** 本计划在来源行上还占着多少 (开工扣下、还没转成消耗或还回去的量)。只认带本计划号的流水。 */
     public BigDecimal heldQuantity(String factoryId, Source source) {
         String planId = source.plan().getId();
         String deduct = deductRef(source.wipId(), planId);
         String reverse = reverseRef(source.wipId(), planId);
-        List<SemiFinishedInventoryTransaction> ledger = txnRepository
-                .findBySemiFinishedIdOrderByCreatedAtAsc(source.wipId());
         BigDecimal held = BigDecimal.ZERO;
-        BigDecimal returned = BigDecimal.ZERO;
-        for (SemiFinishedInventoryTransaction txn : ledger) {
-            if (deduct.equals(txn.getSourceRef()) && txn.getQuantity() != null) {
+        for (SemiFinishedInventoryTransaction txn : txnRepository.findBySemiFinishedIdOrderByCreatedAtAsc(source.wipId())) {
+            if (txn.getQuantity() == null) {
+                continue;
+            }
+            if (deduct.equals(txn.getSourceRef())) {
                 held = held.add(txn.getQuantity().abs());
-            } else if (reverse.equals(txn.getSourceRef()) && txn.getQuantity() != null) {
-                returned = returned.add(txn.getQuantity().abs());
+            } else if (reverse.equals(txn.getSourceRef())) {
+                held = held.subtract(txn.getQuantity().abs());
             }
         }
-        if (held.signum() == 0) {
-            held = heldBeforeRefCarriedPlanId(source, ledger);
-        }
-        return held.subtract(returned).max(BigDecimal.ZERO);
+        return held.max(BigDecimal.ZERO);
     }
 
     /**
-     * 流水号带上计划 id 之前开工的计划: 流水认不出是谁扣的, 按「创建到开工之间、量等于计划量」认领。
-     * 新流水都带计划 id, 这条只对上线前已开工、还没结束的计划起作用。
-     */
-    private BigDecimal heldBeforeRefCarriedPlanId(Source source, List<SemiFinishedInventoryTransaction> ledger) {
-        ProductionPlan plan = source.plan();
-        LocalDateTime from = plan.getCreatedAt();
-        LocalDateTime to = plan.getStartTime();
-        if (from == null || to == null || source.plannedQuantity() == null) {
-            return BigDecimal.ZERO;
-        }
-        String legacyRef = DEDUCT_REF + source.wipId();
-        boolean found = ledger.stream().anyMatch(txn -> legacyRef.equals(txn.getSourceRef())
-                && txn.getQuantity() != null && txn.getCreatedAt() != null
-                && txn.getQuantity().abs().compareTo(source.plannedQuantity()) == 0
-                && !txn.getCreatedAt().isBefore(from) && !txn.getCreatedAt().isAfter(to));
-        return found ? source.plannedQuantity() : BigDecimal.ZERO;
-    }
-
-    /**
-     * 把占用还回来源行。{@code quantity} 为 null = 全部还回 (结单 / 取消)。
+     * 把占用还回来源行。{@code quantity} 为 null = 全部还回。先锁行再读占用, 并发时不会两边都按旧余额还。
      *
      * @return 实际还回的量; 没有占用时是 0
      */
     public BigDecimal release(String factoryId, Source source, BigDecimal quantity, Long operatorId) {
+        lockSource(source);
         BigDecimal held = heldQuantity(factoryId, source);
         BigDecimal take = quantity == null ? held : quantity.min(held);
         if (take.signum() <= 0) {
@@ -250,9 +242,76 @@ public class SecondaryPlanFeedService {
         return take;
     }
 
+    /** 结单: 占用全部还回, 实际投料随后按结单的原路径严格扣减。 */
+    public void settleHold(String factoryId, ProductionPlan plan, Long operatorId) {
+        Optional<Source> source = forPlan(factoryId, plan);
+        if (source.isEmpty()) {
+            noteUnresolvedHold(plan, "来源半成品记录已不存在");
+            return;
+        }
+        release(factoryId, source.get(), null, operatorId);
+        noteIfHoldUnattributable(source.get());
+    }
+
     /**
-     * App 报工领来源半成品: 查超量, 返回这次领用里占用能覆盖的量 (这部分不用再看库存余额)。
-     * 不是这个计划的来源 ⇒ 0, 按普通领用处理。
+     * 不走结单就结束的路径 (取消 / 直接完工 / 批次完工): 还回没用掉的占用。
+     * 已提交的逐道投料这些路径不会再扣, 这部分留在占用里就是它的消耗, ⛔ 不能一起还, 否则料用了库存却回来了。
+     * 必须在调用方保存计划之前调用, 认不准时要写计划备注。
+     *
+     * @return 实际还回的量
+     */
+    public BigDecimal closeHold(String factoryId, ProductionPlan plan, Long operatorId) {
+        Optional<Source> source = forPlan(factoryId, plan);
+        if (source.isEmpty()) {
+            noteUnresolvedHold(plan, "来源半成品记录已不存在");
+            return BigDecimal.ZERO;
+        }
+        planRepository.findByIdForUpdate(plan.getId());   // 与报工同一把锁, 同一顺序
+        lockSource(source.get());
+        BigDecimal unused = heldQuantity(factoryId, source.get())
+                .subtract(rowsFed(factoryId, source.get(), null, null));
+        BigDecimal released = unused.signum() <= 0 ? BigDecimal.ZERO
+                : release(factoryId, source.get(), unused, operatorId);
+        noteIfHoldUnattributable(source.get());
+        return released;
+    }
+
+    /** 这行流水是上线前的格式: 有开工扣减, 却没有一条带本计划号。认不出是不是本计划占的, 不动账, 记下来给人核对。 */
+    private void noteIfHoldUnattributable(Source source) {
+        String planId = source.plan().getId();
+        String tagged = deductRef(source.wipId(), planId);
+        String legacyDeduct = DEDUCT_REF + source.wipId();
+        String legacyReverse = REVERSE_REF + source.wipId();
+        BigDecimal legacyOpen = BigDecimal.ZERO;
+        for (SemiFinishedInventoryTransaction txn : txnRepository.findBySemiFinishedIdOrderByCreatedAtAsc(source.wipId())) {
+            if (tagged.equals(txn.getSourceRef())) {
+                return;
+            }
+            if (txn.getQuantity() == null) {
+                continue;
+            }
+            if (legacyDeduct.equals(txn.getSourceRef())) {
+                legacyOpen = legacyOpen.add(txn.getQuantity().abs());
+            } else if (legacyReverse.equals(txn.getSourceRef())) {
+                legacyOpen = legacyOpen.subtract(txn.getQuantity().abs());
+            }
+        }
+        if (legacyOpen.signum() > 0) {
+            noteUnresolvedHold(source.plan(), "来源 " + source.batchNo() + " 上有 " + plain(legacyOpen)
+                    + " 的旧格式开工扣减认不出属于哪个计划");
+        }
+    }
+
+    private void noteUnresolvedHold(ProductionPlan plan, String reason) {
+        String note = "【待人工核对】" + reason + ", 系统没有自动还回, 请核对来源半成品库存后用半成品盘点校正";
+        plan.setNotes(plan.getNotes() == null ? note : plan.getNotes() + "\n" + note);
+        log.warn("[secondary-hold] UNRESOLVED planId={} wipId={} reason={}",
+                plan.getId(), plan.getSecondarySourceWipId(), reason);
+    }
+
+    /**
+     * App 报工领来源半成品: 锁住计划和来源, 确认计划还开着、没超量,
+     * 返回这次领用里占用能覆盖的量 (这部分不用再看库存余额)。不是这个计划的来源 ⇒ 0, 按普通领用处理。
      */
     public BigDecimal coveredByHold(String factoryId, Long productionBatchId, String sourceWipNo,
                                     BigDecimal quantity, Long excludeReportId) {
@@ -264,6 +323,7 @@ public class SecondaryPlanFeedService {
         if (source.isEmpty()) {
             return BigDecimal.ZERO;
         }
+        lockPlanAndSource(factoryId, source.get());
         assertWithinPlan(source.get(), fedQuantity(factoryId, source.get(), null, null, excludeReportId), quantity);
         return heldQuantity(factoryId, source.get()).min(quantity);
     }
@@ -278,14 +338,50 @@ public class SecondaryPlanFeedService {
         if (thisRow.signum() <= 0) {
             return;
         }
+        lockPlanAndSource(factoryId, source.get());
         assertWithinPlan(source.get(),
                 fedQuantity(factoryId, source.get(), req.getProcessCode(), req.getClientRowId(), null), thisRow);
     }
 
-    /** 投料下拉要显示的可领量: 这个计划还能投多少 (计划量 − 已报)。 */
+    /**
+     * 投料下拉要显示的可领量: 计划还能投多少, 且不超过真实库存 (本计划占着的 + 来源现在能领的)。
+     * 只给读接口用: 这里读了实体, 不能和扣账放在同一事务。
+     */
     public BigDecimal remainingForPlan(String factoryId, Source source) {
-        return nz(source.plannedQuantity()).subtract(fedQuantity(factoryId, source, null, null, null))
-                .max(BigDecimal.ZERO);
+        BigDecimal planLeft = nz(source.plannedQuantity()).subtract(fedQuantity(factoryId, source, null, null, null));
+        BigDecimal drawable = wipRepository.findById(source.wipId())
+                .map(SemiFinishedInventory::drawableBalance)
+                .orElse(BigDecimal.ZERO);
+        return planLeft.min(heldQuantity(factoryId, source).add(drawable)).max(BigDecimal.ZERO);
+    }
+
+    /** 先计划后来源, 和取消 / 结单同一顺序。拿到计划锁之后读状态, 读的是别人提交之后的值。 */
+    private void lockPlanAndSource(String factoryId, Source source) {
+        String planId = source.plan().getId();
+        planRepository.findByIdForUpdate(planId);
+        Object status = planRepository.findPlanStatusesByFactoryIdAndIdIn(factoryId, List.of(planId)).stream()
+                .filter(tuple -> tuple != null && tuple.length > 1)
+                .map(tuple -> tuple[1])
+                .findFirst()
+                .orElse(null);
+        if (status != ProductionPlanStatus.IN_PROGRESS && status != ProductionPlanStatus.PAUSED) {
+            throw new BusinessException(409, "返工计划已结束, 不能再投来源半成品")
+                    .withCode("SECONDARY_PLAN_NOT_ACTIVE")
+                    .withHint("请刷新生产计划列表查看最新状态")
+                    .withHintTarget("productionPlan");
+        }
+        lockSource(source);
+    }
+
+    private void lockSource(Source source) {
+        SemiFinishedInventory locked = wipRepository.findByIdForUpdate(source.wipId())
+                .orElseThrow(() -> new BusinessException(409, "来源半成品记录已不存在: " + source.batchNo())
+                        .withCode("SECONDARY_SOURCE_NOT_FOUND")
+                        .withHint("请联系主管核对该批半成品")
+                        .withHintTarget("wipId"));
+        if (entityManager != null) {
+            entityManager.refresh(locked);   // 同一事务先前读过这行时, 锁查询返回的是旧值; 查询本身已先 flush
+        }
     }
 
     private void assertWithinPlan(Source source, BigDecimal alreadyFed, BigDecimal thisTime) {
@@ -305,15 +401,7 @@ public class SecondaryPlanFeedService {
     private BigDecimal fedQuantity(String factoryId, Source source, String excludeProcessCode,
                                    String excludeClientRowId, Long excludeReportId) {
         String planId = source.plan().getId();
-        BigDecimal fed = BigDecimal.ZERO;
-        for (ProcessSheetRow row : rowRepository.findByFactoryIdAndPlanId(factoryId, planId)) {
-            if (ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus())
-                    || (excludeClientRowId != null && excludeClientRowId.equals(row.getClientRowId())
-                            && Objects.equals(excludeProcessCode, row.getProcessCode()))) {
-                continue;
-            }
-            fed = fed.add(rowFeed(factoryId, source, parse(row)));
-        }
+        BigDecimal fed = rowsFed(factoryId, source, excludeProcessCode, excludeClientRowId);
         for (ProductionBatch batch : batchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId)) {
             for (ProductionReport report : reportRepository.findYieldReportsByBatch(factoryId, batch.getId())) {
                 if (source.batchNo().equals(report.getSourceWipNo())
@@ -322,6 +410,20 @@ public class SecondaryPlanFeedService {
                     fed = fed.add(reportFeed(report));
                 }
             }
+        }
+        return fed;
+    }
+
+    /** 已提交的逐道行投到这份来源上的量。这部分要到结单才真正扣减。 */
+    private BigDecimal rowsFed(String factoryId, Source source, String excludeProcessCode, String excludeClientRowId) {
+        BigDecimal fed = BigDecimal.ZERO;
+        for (ProcessSheetRow row : rowRepository.findByFactoryIdAndPlanId(factoryId, source.plan().getId())) {
+            if (ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus())
+                    || (excludeClientRowId != null && excludeClientRowId.equals(row.getClientRowId())
+                            && Objects.equals(excludeProcessCode, row.getProcessCode()))) {
+                continue;
+            }
+            fed = fed.add(rowFeed(factoryId, source, parse(row)));
         }
         return fed;
     }
