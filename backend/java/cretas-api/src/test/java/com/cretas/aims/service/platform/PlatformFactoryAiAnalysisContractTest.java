@@ -981,6 +981,24 @@ class PlatformFactoryAiAnalysisContractTest {
         assertNothingHappened();
     }
 
+    /**
+     * 这条路由对任何角色串都放行角色判断, 所以工厂令牌写着平台角色名时, 挡它的只有「是不是平台令牌」。
+     * 校验消息: 要证明是拦截器这道闸挡的, 不是后面入口服务的身份闸兜住的。
+     */
+    @Test
+    void aFactoryTokenNamingAPlatformRoleGetsNoPlatformAuthorityOnTheEntry() throws Exception {
+        User user = new User();
+        user.setId(5L);
+        user.setFactoryId(F1);
+        user.setIsActive(true);
+        when(users.findById(5L)).thenReturn(Optional.of(user));
+        for (String platformRole : List.of("super_admin", "auditor", "operation_admin")) {
+            analyse(F1, jwt.generateToken(5L, F1, "boss", platformRole)).andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.message").value("无权访问平台管理API，需要平台管理员权限"));
+        }
+        assertNothingHappened();
+    }
+
     @Test
     void anAnonymousCallIsStoppedByTheRealInterceptor() throws Exception {
         mvc.perform(post("/api/platform/factories/" + F1 + ROUTE).contentType(MediaType.APPLICATION_JSON).content(body("")))
