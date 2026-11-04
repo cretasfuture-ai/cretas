@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { Search, Refresh } from '@element-plus/icons-vue';
+import { balanceProcessLabel } from './balanceProcessLabel';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -389,7 +390,11 @@ function handleReset() {
               <span class="balance-plan-sub">计划 {{ plan.planNumber ?? '—' }} · 批次 {{ plan.batchNumbers.join('、') || '—' }}</span>
             </div>
             <el-table :data="plan.rows" border stripe style="width: 100%">
-              <el-table-column prop="processName" label="工序" min-width="120" />
+              <el-table-column label="工序" min-width="120">
+                <template #default="{ row }">
+                  <span data-testid="balance-process-name">{{ balanceProcessLabel(row.processName, row.processOrder) }}</span>
+                </template>
+              </el-table-column>
               <el-table-column label="投入" width="120" align="right">
                 <template #default="{ row }">{{ fmtQty(row.input, row.unit) }}</template>
               </el-table-column>
