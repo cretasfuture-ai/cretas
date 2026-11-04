@@ -45,6 +45,7 @@ import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguatio
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import MaterialAliasDialog from './MaterialAliasDialog.vue';
+import SupplyImpactDialog from '@/components/common/SupplyImpactDialog.vue';
 import MaterialMergeDialog from './MaterialMergeDialog.vue';
 import type { RawMaterialTypeRow } from '@/api/materialAliasMerge';
 import { packagingProblemSummary, splitPackagingRules } from './packagingRuleDraft';
@@ -1467,6 +1468,14 @@ const aliasTarget = ref<RawMaterialTypeRow | null>(null);
 const mergeDialogVisible = ref(false);
 const mergeTarget = ref<RawMaterialTypeRow | null>(null);
 
+const impactVisible = ref(false);
+const impactTarget = ref<RawMaterialTypeRow | null>(null);
+
+function openImpact(row: TableRow): void {
+  impactTarget.value = row as RawMaterialTypeRow;
+  impactVisible.value = true;
+}
+
 function openAliasDialog(row: TableRow): void {
   aliasTarget.value = row as RawMaterialTypeRow;
   aliasDialogVisible.value = true;
@@ -1654,6 +1663,7 @@ function handleSizeChange(size: number) {
           <template #default="{ row }">
             <!-- Issue #779: 反查供应商入口 -->
             <el-button link type="primary" :icon="View" @click="openSuppliersForMaterial(row)">供应商</el-button>
+            <el-button link type="primary" data-test="row-supply-impact" @click="openImpact(row)">影响分析</el-button>
             <!-- 别名 / 合并: 与编辑同一道写门禁; 已合并的行不再允许编辑 / 合并 / 加别名 -->
             <el-button
               v-if="canWrite && !row.mergedIntoId"
@@ -1703,6 +1713,13 @@ function handleSizeChange(size: number) {
       />
     </el-card>
 
+    <SupplyImpactDialog
+      v-if="impactVisible"
+      v-model="impactVisible"
+      :factory-id="factoryId"
+      :target="{ materialTypeId: impactTarget?.id }"
+      :target-name="impactTarget?.name ?? ''"
+    />
     <MaterialAliasDialog
       v-model="aliasDialogVisible"
       :factory-id="factoryId"
