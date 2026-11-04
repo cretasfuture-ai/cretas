@@ -13,6 +13,22 @@ Tables and text columns (rows with ``created_at >= --since``, soft-deleted rows 
     ai_training_samples      user_input
     active_learning_samples  user_input, normalized_input, matched_keywords, top_candidates
     ai_learned_expressions   expression
+    ai_intent_configs        keywords (``updated_at >= --since``)
+
+Learned keywords: they are appended to an existing intent row, so ``created_at`` says nothing
+about them and this table goes by ``updated_at``, which every JPA save moves. That time belongs to
+the row, not to a keyword: a row touched since ``--since`` is read in full, so a hit there may be
+an older keyword. Production judges one keyword at a time, so does this script: the JSON list is
+split first, otherwise a word in one keyword and a number in the next would read as a pay value.
+Learning writes only a factory's own rows; platform rows (no factory) have no directory and show
+up as ``rows_unchecked``.
+
+Time: ``--since`` is GMT+8 wall-clock time, whatever the database session zone is. A
+``timestamp`` column is compared as it stands (Java stores ``LocalDateTime``, the wall clock of
+the GMT+8 service); a ``timestamptz`` column is compared with that wall clock converted at
+Asia/Shanghai. Any other column type stops the run. The report opens with the session zone, the
+database clock in GMT+8, and per table the column read, its type and its min / max, so a shifted
+clock can be seen. A ``--since`` with an offset is refused: a ``::timestamp`` cast would drop it.
 
 Matchers: the production ones. Names: ``directory_by_factory`` over ``ALL_FACTORY_DIRECTORY_SQL``
 and ``mentions_any`` (same verdicts as Java ``ProcessSecretTerms``: the shared case file runs
@@ -44,8 +60,10 @@ Exit codes: 0 = rows were scanned and none contains a name or a pay value; 1 = s
 the report); 2 = nothing measured: the self-test failed, the database is unreadable or not
 read-only, the directory is empty, or no row was compared with a directory. A 0 needs
 ``rows_scanned`` > 0 to mean anything: rows whose factory has no directory are reported as
-``rows_unchecked``, never as clean. ``rows_scanned`` / ``rows_unchecked`` are about names;
-``pay_rows_scanned`` counts every row the pay rule read.
+``rows_unchecked``, never as clean, and a non-zero ``rows_unchecked`` is listed under ``warnings``
+(also on stderr) with the table and factory. A 0 with warnings means "clean where compared".
+``rows_scanned`` / ``rows_unchecked`` are about names; ``pay_rows_scanned`` counts every row the
+pay rule read.
 """
 from __future__ import annotations
 
@@ -54,6 +72,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Pattern, Sequence, Tuple
 
 _PYTHON_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -65,12 +84,27 @@ from common import training_values as tv  # noqa: E402
 from common.process_secret_terms import fold  # noqa: E402
 from smartbi.services import training_consent as tc  # noqa: E402
 
-# table -> text expressions (jsonb columns are read as their text form)
-TABLES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("ai_training_samples", ("user_input",)),
-    ("active_learning_samples", ("user_input", "normalized_input", "matched_keywords::text", "top_candidates::text")),
-    ("ai_learned_expressions", ("expression",)),
+# table, the column --since applies to, text expressions (jsonb columns are read as their text form)
+TABLES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
+    ("ai_training_samples", "created_at", ("user_input",)),
+    ("active_learning_samples", "created_at",
+     ("user_input", "normalized_input", "matched_keywords::text", "top_candidates::text")),
+    ("ai_learned_expressions", "created_at", ("expression",)),
+    ("ai_intent_configs", "updated_at", ("keywords::text",)),
 )
+
+# One stored JSON list; production judges it one item at a time
+LIST_COLUMNS = frozenset({"keywords::text"})
+
+SINCE_ZONE = "Asia/Shanghai"
+GMT8_SECONDS = 8 * 3600
+# column type -> (the --since comparison, the column as GMT+8 wall clock). A timestamptz compared
+# with a bare ::timestamp is converted at the SESSION zone, which is the bug this table prevents.
+TIME_COLUMN_SQL: Mapping[str, Tuple[str, str]] = {
+    "timestamp without time zone": ("{c} >= %s::timestamp", "{c}"),
+    "timestamp with time zone": (f"{{c}} >= (%s::timestamp AT TIME ZONE '{SINCE_ZONE}')",
+                                 f"{{c}} AT TIME ZONE '{SINCE_ZONE}'"),
+}
 
 # Production does not run the pay rule on these: the numbers in them are intent scores
 NOT_PAY_CHECKED = frozenset({"top_candidates::text"})
@@ -212,21 +246,85 @@ def live_control(directory: Mapping[str, FrozenSet[str]]) -> List[str]:
             if names and not tc.mentions_any(names, "前缀" + next(iter(names)) + "后缀")]
 
 
+def list_items(text: Optional[str]) -> List[Optional[str]]:
+    """The items of a stored JSON list. Anything else stays one text: it must still be read,
+    an unparsable value is not an empty one."""
+    if not text:
+        return []
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return [text]
+    return [item if isinstance(item, str) else json.dumps(item, ensure_ascii=False) for item in value] \
+        if isinstance(value, list) else [text]
+
+
 def read_directory(cur) -> Dict[str, FrozenSet[str]]:
     cur.execute(tc.ALL_FACTORY_DIRECTORY_SQL)
     return tc.directory_by_factory(cur.fetchall())
 
 
-def read_rows(cur, table: str, columns: Sequence[str], since: str, factory: Optional[str]) -> Iterable[Row]:
-    sql = f"SELECT id::text, factory_id, {', '.join(columns)} FROM {table} WHERE created_at >= %s::timestamp"
+def read_clock(cur) -> Dict[str, Any]:
+    cur.execute(f"SELECT current_setting('TimeZone'), EXTRACT(TIMEZONE FROM now())::int, "
+                f"(now() AT TIME ZONE '{SINCE_ZONE}')::text")
+    zone, offset, now = cur.fetchone()
+    return {"session_time_zone": zone, "session_utc_offset_seconds": offset, "now_gmt8": now,
+            "since_is": f"GMT+8 wall clock ({SINCE_ZONE})"}
+
+
+def time_column_type(cur, table: str, column: str) -> str:
+    cur.execute("SELECT atttypid::regtype::text FROM pg_attribute "
+                "WHERE attrelid = %s::regclass AND attname = %s AND NOT attisdropped", (table, column))
+    row = cur.fetchone()
+    if row is None or row[0] not in TIME_COLUMN_SQL:
+        raise ValueError(f"{table}.{column}: cannot compare --since with column type {row and row[0]}")
+    return row[0]
+
+
+def read_time_column(cur, table: str, column: str, column_type: str, factory: Optional[str]) -> Dict[str, Any]:
+    shown = TIME_COLUMN_SQL[column_type][1].format(c=column)
+    sql = f"SELECT min({shown})::text, max({shown})::text FROM {table}"
+    cur.execute(sql + (" WHERE factory_id = %s" if factory else ""), [factory] if factory else [])
+    low, high = cur.fetchone()
+    return {"table": table, "column": column, "column_type": column_type, "min_gmt8": low, "max_gmt8": high}
+
+
+def read_rows(cur, table: str, time_column: str, column_type: str, columns: Sequence[str], since: str,
+              factory: Optional[str]) -> Iterable[Row]:
+    since_sql = TIME_COLUMN_SQL[column_type][0].format(c=time_column)
+    sql = f"SELECT id::text, factory_id, {', '.join(columns)} FROM {table} WHERE {since_sql}"
     args: List[Any] = [since]
     if factory:
         sql += " AND factory_id = %s"
         args.append(factory)
     cur.execute(sql + " ORDER BY id", args)
     for r in cur.fetchall():
-        texts = r[2:]
-        yield r[0], r[1], texts, [t for t, c in zip(texts, columns) if c not in NOT_PAY_CHECKED]
+        texts: List[Optional[str]] = []
+        pay_texts: List[Optional[str]] = []
+        for text, column in zip(r[2:], columns):
+            items = list_items(text) if column in LIST_COLUMNS else [text]
+            texts += items
+            if column not in NOT_PAY_CHECKED:
+                pay_texts += items
+        yield r[0], r[1], texts, pay_texts
+
+
+def warnings_for(entries: Sequence[Mapping[str, Any]], clock: Mapping[str, Any]) -> List[str]:
+    """What a reader must not miss next to a clean-looking count. Table and factory ids only."""
+    out: List[str] = []
+    unchecked = [e for e in entries if e["rows_unchecked"]]
+    if unchecked:
+        where = ", ".join(f"{e['table']}/{e['factory_id'] or 'no factory'}={e['rows_unchecked']}" for e in unchecked)
+        out.append(f"rows_unchecked={sum(e['rows_unchecked'] for e in unchecked)}: names were NOT compared on these "
+                   f"rows (no directory for their factory), they are not clean: {where}")
+    lost = {e["factory_id"]: e["names_lost_when_masked"] for e in entries if e["names_lost_when_masked"]}
+    if lost:
+        where = ", ".join(f"{f}={n}" for f, n in sorted(lost.items(), key=lambda kv: kv[0] or ""))
+        out.append(f"names_lost_when_masked: numerals-only names cannot be compared on masked rows: {where}")
+    if clock["session_utc_offset_seconds"] != GMT8_SECONDS:
+        out.append(f"database session zone is {clock['session_time_zone']}, not GMT+8: a timestamp column filled by "
+                   "a database DEFAULT holds that zone's wall clock, and --since reads it as GMT+8")
+    return out
 
 
 def measure(conn, since: str, factory: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
@@ -243,15 +341,20 @@ def measure(conn, since: str, factory: Optional[str] = None) -> Tuple[int, Dict[
             broken = live_control(directory)
             if broken:
                 return 2, {"error": "live positive control failed", "factories": sorted(broken)}
+            clock = read_clock(cur)
+            time_columns: List[Dict[str, Any]] = []
             entries: List[Dict[str, Any]] = []
-            for table, columns in TABLES:
-                entries += tally(table, read_rows(cur, table, columns, since, factory), directory)
+            for table, time_column, columns in TABLES:
+                column_type = time_column_type(cur, table, time_column)
+                time_columns.append(read_time_column(cur, table, time_column, column_type, factory))
+                entries += tally(table, read_rows(cur, table, time_column, column_type, columns, since, factory), directory)
     finally:
         conn.rollback()
     scanned = sum(e["rows_scanned"] for e in entries)
     hits = sum(e["rows_with_name"] for e in entries)
     pay_hits = sum(e["rows_with_pay_value"] for e in entries)
-    report = {"since": since, "factory": factory, "rows_scanned": scanned,
+    report = {"database": clock, "time_columns": time_columns, "warnings": warnings_for(entries, clock),
+              "since": since, "factory": factory, "rows_scanned": scanned,
               "rows_unchecked": sum(e["rows_unchecked"] for e in entries), "rows_with_name": hits,
               "rows_with_masked_name": sum(e["rows_with_masked_name"] for e in entries),
               "pay_rows_scanned": sum(e["pay_rows_scanned"] for e in entries), "rows_with_pay_value": pay_hits,
@@ -276,9 +379,22 @@ def _connect():
     )
 
 
+def since_gmt8(value: str) -> str:
+    """``--since``: a date / time without an offset (a ``::timestamp`` cast would silently drop it)."""
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a date / time: {value!r}") from None
+    if parsed.tzinfo is not None:
+        raise argparse.ArgumentTypeError(f"no offset please, --since is GMT+8 wall clock: {value!r}")
+    return value.strip()
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--since", help="rows created at or after this time, e.g. '2026-11-04 12:00:00'")
+    ap.add_argument("--since", type=since_gmt8,
+                    help="GMT+8 wall-clock time, whatever the database session zone is, no offset: rows created "
+                         "(intent keywords: updated) at or after it, e.g. '2026-11-04 12:00:00'")
     ap.add_argument("--factory", help="only this factory")
     ap.add_argument("--self-test", action="store_true", help="positive and negative controls only, no database")
     args = ap.parse_args(argv)
@@ -302,6 +418,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps({"error": f"not measured: {type(e).__name__}"}))
         return 2
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    for warning in report.get("warnings", ()):
+        print(f"WARNING: {warning}", file=sys.stderr)
     return code
 
 

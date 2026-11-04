@@ -113,6 +113,77 @@ def test_a_numeral_name_does_not_match_a_row_without_the_token():
     assert not counter.names_masked_form(counter.masked_name_regex({"王五"})[0], ("王五", None))
 
 
+def test_keywords_are_judged_one_at_a_time_like_production():
+    assert counter.list_items('["考勤", "3月"]') == ["考勤", "3月"]
+    assert counter.tc.pay_word_with_value('["考勤", "3月"]')               # the false hit of reading the list whole
+    assert not counter.tc.pay_word_with_value(*counter.list_items('["考勤", "3月"]'))
+    assert counter.tc.pay_word_with_value(*counter.list_items('["本月", "考勤 3 天"]'))
+
+
+@pytest.mark.parametrize("stored, items", [(None, []), ("", []), ("[]", []), ("工资 8000,考勤", ["工资 8000,考勤"]),
+                                           ('{"a": "工资 8000"}', ['{"a": "工资 8000"}']), ("[1, null]", ["1", "null"])])
+def test_a_keyword_value_that_is_not_a_list_is_still_read(stored, items):
+    assert counter.list_items(stored) == items
+
+
+def _entry(**kw):
+    return {"table": "t", "factory_id": "F_A", "rows_unchecked": 0, "names_lost_when_masked": 0, **kw}
+
+
+_GMT8_CLOCK = {"session_time_zone": "Asia/Shanghai", "session_utc_offset_seconds": 28800}
+
+
+def test_no_warning_when_every_row_was_compared_in_gmt8():
+    assert counter.warnings_for([_entry()], _GMT8_CLOCK) == []
+
+
+def test_unchecked_rows_are_a_warning_with_table_and_factory():
+    warnings = counter.warnings_for([_entry(), _entry(table="u", factory_id=None, rows_unchecked=3),
+                                     _entry(table="v", factory_id="F_C", rows_unchecked=2)], _GMT8_CLOCK)
+    assert len(warnings) == 1
+    assert "rows_unchecked=5" in warnings[0] and "not clean" in warnings[0]
+    assert "u/no factory=3" in warnings[0] and "v/F_C=2" in warnings[0]
+
+
+def test_lost_names_and_another_session_zone_are_warnings():
+    assert "F_A=2" in counter.warnings_for([_entry(names_lost_when_masked=2)], _GMT8_CLOCK)[0]
+    zone = counter.warnings_for([_entry()], {"session_time_zone": "UTC", "session_utc_offset_seconds": 0})
+    assert len(zone) == 1 and "UTC" in zone[0]
+
+
+def test_warnings_reach_stderr_next_to_a_clean_exit(monkeypatch, capsys):
+    class _Conn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(counter, "_connect", _Conn)
+    monkeypatch.setattr(counter, "measure", lambda *_a: (0, {"warnings": ["rows_unchecked=5"]}))
+    assert counter.main(["--since", "2026-11-04 12:00:00"]) == 0
+    captured = capsys.readouterr()
+    assert "WARNING: rows_unchecked=5" in captured.err
+    assert json.loads(captured.out)["warnings"] == ["rows_unchecked=5"]
+
+
+def test_help_says_since_is_gmt8(capsys):
+    with pytest.raises(SystemExit) as stop:
+        counter.main(["--help"])
+    assert stop.value.code == 0
+    assert "GMT+8" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("since", ["2026-11-04 12:00:00+00:00", "2026-11-04 12:00:00+08:00", "tomorrow"])
+def test_a_since_with_an_offset_or_no_date_is_refused(since, capsys):
+    with pytest.raises(SystemExit) as stop:
+        counter.main(["--since", since])
+    assert stop.value.code == 2
+    assert "--since" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("since", ["2026-11-04 12:00:00", "2026-11-04", " 2026-11-04 12:00 "])
+def test_a_wall_clock_since_is_accepted(since):
+    assert counter.since_gmt8(since) == since.strip()
+
+
 def test_the_production_directory_sql_and_matcher_are_the_ones_used():
     assert counter.tc.ALL_FACTORY_DIRECTORY_SQL is __import__(
         "common.process_secret_sql", fromlist=["x"]).ALL_FACTORY_DIRECTORY_SQL
@@ -140,6 +211,8 @@ def _connection(schema):
                 normalized_input text, matched_keywords jsonb, top_candidates jsonb, created_at timestamp);
             CREATE TABLE ai_learned_expressions (id varchar(36), factory_id varchar(50), expression text,
                 created_at timestamp);
+            CREATE TABLE ai_intent_configs (id varchar(36), factory_id varchar(50), keywords jsonb,
+                created_at timestamp, updated_at timestamp);
             INSERT INTO users VALUES ('F_A', '王五');
             INSERT INTO customers VALUES ('F_A', '六个核桃', NULL, NULL);
             INSERT INTO customers VALUES ('F_A', '华联超市', NULL, NULL);
@@ -182,6 +255,12 @@ def test_measure_on_real_postgres_counts_all_three_tables_and_writes_nothing():
                     ('e-1', 'F_A', '华联超市的订单', '2026-11-04 13:00'),
                     ('e-2', NULL, '王五', '2026-11-04 13:00'),
                     ('e-3', NULL, '考勤异常 3 人次', '2026-11-04 13:00');
+                INSERT INTO ai_intent_configs VALUES
+                    ('i-1', 'F_A', '["本月", "华联超市"]', '2025-01-01', '2026-11-04 13:00'),
+                    ('i-2', 'F_A', '["考勤", "3月"]', '2025-01-01', '2026-11-04 13:00'),
+                    ('i-3', 'F_A', '["考勤 3 天"]', '2025-01-01', '2026-11-04 13:00'),
+                    ('i-4', 'F_A', '["华联超市"]', '2025-01-01', '2025-01-01'),
+                    ('i-5', NULL, '["本月"]', '2025-01-01', '2026-11-04 13:00');
             """)
         code, report = counter.measure(conn, "2026-11-04 12:00:00")
         assert code == 1
@@ -196,9 +275,24 @@ def test_measure_on_real_postgres_counts_all_three_tables_and_writes_nothing():
         assert by[("ai_learned_expressions", "F_A")]["row_ids"] == ["e-1"]
         assert by[("ai_learned_expressions", None)]["rows_unchecked"] == 2
         assert by[("ai_learned_expressions", None)]["pay_row_ids"] == ["e-3"]  # no directory needed
-        assert report["rows_with_name"] == 5
+        # learned onto an old row (created 2025): only updated_at sees it. i-2 is two keywords, not
+        # one pay value; i-4 was not touched since
+        assert by[("ai_intent_configs", "F_A")]["row_ids"] == ["i-1"]
+        assert by[("ai_intent_configs", "F_A")]["pay_row_ids"] == ["i-3"]
+        assert by[("ai_intent_configs", "F_A")]["rows_scanned"] == 3
+        assert by[("ai_intent_configs", None)]["rows_unchecked"] == 1
+        assert report["rows_with_name"] == 6
         assert report["rows_with_masked_name"] == 2
-        assert report["rows_with_pay_value"] == 6
+        assert report["rows_with_pay_value"] == 7
+        assert report["rows_unchecked"] == 3
+        assert any("rows_unchecked=3" in w and "ai_intent_configs/no factory=1" in w for w in report["warnings"])
+        columns = {c["table"]: c for c in report["time_columns"]}
+        assert sorted(columns) == sorted(t[0] for t in counter.TABLES)
+        assert columns["ai_intent_configs"]["column"] == "updated_at"
+        assert columns["ai_training_samples"]["column_type"] == "timestamp without time zone"
+        assert columns["ai_training_samples"]["min_gmt8"] == "2026-11-03 13:00:00"
+        assert columns["ai_training_samples"]["max_gmt8"] == "2026-11-04 13:00:00"
+        assert report["database"]["now_gmt8"] and report["database"]["session_time_zone"]
         dump = json.dumps(report, ensure_ascii=False)
         for raw in ("王五", "华联超市", "赵六", "报工", "工资", "考勤", "8000", "核桃", "<数值>"):
             assert raw not in dump, raw                                    # counts and ids only
@@ -211,5 +305,42 @@ def test_measure_on_real_postgres_counts_all_three_tables_and_writes_nothing():
         only_pay_code, only_pay = counter.measure(conn, "2026-11-04 12:00:00", "F_B")
         assert (only_pay_code, only_pay["rows_with_name"], only_pay["rows_with_pay_value"]) == (1, 0, 1)
         assert counter.measure(conn, "2026-11-05 00:00:00")[0] == 2        # nothing scanned is not a clean 0
+    finally:
+        _drop(conn, schema)
+
+
+@pytest.mark.parametrize("session_zone", ["UTC", "Asia/Shanghai", "America/New_York"])
+@pytest.mark.parametrize("column_type, after, before, name", [
+    ("timestamp", "2026-11-04 12:30", "2026-11-04 11:30", "timestamp without time zone"),
+    ("timestamptz", "2026-11-04 12:30+08", "2026-11-04 11:30+08", "timestamp with time zone"),
+])
+def test_since_is_gmt8_whatever_the_column_type_and_session_zone(session_zone, column_type, after, before, name):
+    schema = "leak_" + uuid.uuid4().hex[:10]
+    conn = _connection(schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET TIME ZONE '{session_zone}'")
+            cur.execute(f"ALTER TABLE ai_training_samples ALTER created_at TYPE {column_type}")
+            cur.execute("INSERT INTO ai_training_samples VALUES (1, 'F_A', '王五今天报工', %s), (2, 'F_A', '王五昨天报工', %s)",
+                        (after, before))
+        code, report = counter.measure(conn, "2026-11-04 12:00:00")
+        assert code == 1
+        assert [e["row_ids"] for e in report["tables"]] == [["1"]]         # 11:30 GMT+8 is before --since
+        assert report["database"]["session_time_zone"] == session_zone
+        column = next(c for c in report["time_columns"] if c["table"] == "ai_training_samples")
+        assert column["column_type"] == name
+        assert (column["min_gmt8"][:16], column["max_gmt8"][:16]) == ("2026-11-04 11:30", "2026-11-04 12:30")
+    finally:
+        _drop(conn, schema)
+
+
+def test_a_time_column_of_another_type_stops_the_run():
+    schema = "leak_" + uuid.uuid4().hex[:10]
+    conn = _connection(schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE ai_training_samples ALTER created_at TYPE text")
+        with pytest.raises(ValueError, match="column type text"):
+            counter.measure(conn, "2026-11-04 12:00:00")
     finally:
         _drop(conn, schema)
