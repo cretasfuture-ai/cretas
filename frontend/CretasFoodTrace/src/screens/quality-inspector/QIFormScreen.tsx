@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { appAlert } from '../../components/ui/AppDialog';
+import { hasReasonText, itemsNeedingFailReason } from './dynamicQualityForm.logic';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -315,7 +316,7 @@ export default function QIFormScreen() {
 
       // ⚠️ 后端返的是信封 `{ inspection, passRate }`, 不是记录本身 ——
       //    直接取 `record.id` 恒为 undefined, QIResult 会拿到一个空 id。
-      const envelope = record as unknown as { id?: string; inspection?: { id?: string | number } };
+      const envelope = record as unknown as { id?: string; inspection?: { id?: string | number }; dispositionRequired?: boolean };
       const inspectionId = String(envelope.inspection?.id ?? envelope.id ?? '');
 
       // 照片存成 QUALITY_CHECK 附件。`Attachment.EntityType.QUALITY_CHECK` 早就存在,
@@ -341,6 +342,7 @@ export default function QIFormScreen() {
       navigation.replace('QIResult', {
         recordId: inspectionId,
         passed,
+        ...(envelope.dispositionRequired ? { dispositionRequired: true } : {}),
       });
     } catch (error) {
       console.error('提交失败:', error);
@@ -619,9 +621,13 @@ function DynamicQualityFormScreen({ batch, form, batchNumber, onRefreshStandard 
       || (item.effectiveMaxValue != null && Number.isFinite(n) && n > item.effectiveMaxValue);
   });
 
+  const reasonRequiredFor = itemsNeedingFailReason(form.items, values);
+  const reasonMissing = reasonRequiredFor.length > 0 && !hasReasonText(notes);
+
   const submit = async () => {
     if (submitGuard.current) return;
     if (requiredMissing.length) { setError(`请填写必检项目：${requiredMissing.map((i) => i.label).join('、')}`); return; }
+    if (reasonMissing) { setError(`请在备注里写明不合格的原因：${reasonRequiredFor.join('、')}`); return; }
     try {
       submitGuard.current = true;
       setSubmitting(true); setError(null);
@@ -632,7 +638,11 @@ function DynamicQualityFormScreen({ batch, form, batchNumber, onRefreshStandard 
       if (inspectionId == null || !['PASS', 'FAIL'].includes(result)) {
         throw new Error('服务端未返回完整的质检结果，请保留当前填写内容后重试');
       }
-      navigation.replace('QIResult', { recordId: String(inspectionId), passed: result === 'PASS' });
+      navigation.replace('QIResult', {
+        recordId: String(inspectionId),
+        passed: result === 'PASS',
+        ...(response.dispositionRequired ? { dispositionRequired: true } : {}),
+      });
     } catch (e) {
       const message = getQualityInspectionSubmitErrorMessage(e, '提交失败，请检查标准版本后重试', t('form.checkNetworkAndRetry'));
       const isStaleError = typeof e === 'object' && e !== null
@@ -659,7 +669,8 @@ function DynamicQualityFormScreen({ batch, form, batchNumber, onRefreshStandard 
         <View style={styles.batchCard}><Text style={styles.batchNumber}>{batchNumber}</Text><Text style={styles.batchInfo}>{batch.productName} · {batch.unit} {batch.quantity}</Text><Text style={styles.batchInfo}>标准版本：{form.standardRevision}</Text></View>
         <View style={styles.sampleSection}><Text style={styles.sampleTitle}>抽样组数</Text><Text style={styles.batchInfo}>1 组（当前动态质检表按一组样本提交）</Text></View>
         {form.items.map((item, index) => <View key={item.bindingId} style={styles.checkCard}><Text style={styles.checkName}>{index + 1}. {item.label}{item.effectiveIsRequired ? '（必检）' : ''}</Text><Text style={styles.batchInfo}>{item.unit || '无单位'} · {item.effectiveMinValue ?? '无下限'} ~ {item.effectiveMaxValue ?? '无上限'}{item.effectiveStandardValue ? ` · ${item.effectiveStandardValue}` : ''}</Text>{item.valueType === 'BOOLEAN' ? <View style={styles.booleanChoices}><TouchableOpacity accessibilityRole="button" accessibilityLabel={`${item.label} 是`} style={[styles.booleanChoice, values[item.bindingId] === 'true' && styles.booleanChoiceSelected]} onPress={() => setValues((prev) => ({ ...prev, [item.bindingId]: 'true' }))}><Text style={values[item.bindingId] === 'true' ? styles.booleanChoiceTextSelected : undefined}>是</Text></TouchableOpacity><TouchableOpacity accessibilityRole="button" accessibilityLabel={`${item.label} 否`} style={[styles.booleanChoice, values[item.bindingId] === 'false' && styles.booleanChoiceSelected]} onPress={() => setValues((prev) => ({ ...prev, [item.bindingId]: 'false' }))}><Text style={values[item.bindingId] === 'false' ? styles.booleanChoiceTextSelected : undefined}>否</Text></TouchableOpacity></View> : <TextInput style={styles.dynamicInput} value={values[item.bindingId] || ''} onChangeText={(value) => setValues((prev) => ({ ...prev, [item.bindingId]: value }))} keyboardType={item.valueType === 'TEXT' ? 'default' : 'decimal-pad'} placeholder="填写实测值" />} </View>)}
-        <TextInput style={styles.remarksInput} value={notes} onChangeText={setNotes} placeholder="备注（可选）" multiline />
+        {reasonRequiredFor.length > 0 && <Text style={styles.submitErrorText}>{`不合格，必须写原因：${reasonRequiredFor.join('、')}`}</Text>}
+        <TextInput style={styles.remarksInput} value={notes} onChangeText={setNotes} placeholder={reasonRequiredFor.length > 0 ? '不合格原因（必填）' : '备注（可选）'} multiline />
         {invalid && <Text style={styles.submitErrorText}>存在超出标准范围的实测值，提交后将记录为 FAIL。</Text>}
         {error && <Text style={styles.submitErrorText} accessibilityRole="alert">{error}</Text>}
         {stale && <TouchableOpacity accessibilityRole="button" style={styles.refreshStandardButton} onPress={refreshStandard}><Text style={styles.refreshStandardText}>刷新标准（保留已填写答案）</Text></TouchableOpacity>}

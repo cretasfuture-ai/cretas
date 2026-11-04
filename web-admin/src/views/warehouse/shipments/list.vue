@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
+import { PACKAGING_MISMATCH_CODE, confirmPackagingConversion, isPackagingMismatchError, mismatchConfirmLines } from '@/views/sales/packagingConversion';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh, Check } from '@element-plus/icons-vue';
 import { formatDateTime } from '@/utils/dateFormat';
@@ -39,7 +40,7 @@ const pendingPagination = ref({ page: 1, size: 10, total: 0 });
 const confirmDialogVisible = ref(false);
 const confirmDialogLoading = ref(false);
 const confirmingDelivery = ref<TableRow | null>(null);
-const confirmItems = ref<Array<{ id: string; productName: string; plannedQty: number; actualQty: number; unit: string; batches: string[] }>>([]);
+const confirmItems = ref<Array<{ id: string; productName: string; plannedQty: number; actualQty: number; unit: string; productTypeId: string; sourceWarehouseCode: string; batches: string[] }>>([]);
 
 onMounted(() => {
   // Issue #740: 默认加载销售待确认 queue
@@ -112,6 +113,8 @@ async function openConfirmDialog(row: TableRow) {
         plannedQty: Number(it.deliveredQuantity || 0),
         actualQty: Number(it.deliveredQuantity || 0),
         unit: String(it.unit || 'kg'),
+        productTypeId: String(it.productTypeId || ''),
+        sourceWarehouseCode: String(it.sourceWarehouseCode || ''),
         batches,
       };
     }));
@@ -139,10 +142,8 @@ async function submitConfirmDelivery() {
   }
   confirmDialogLoading.value = true;
   try {
-    const res = await post(
-      `/${factoryId.value}/warehouse/deliveries/${confirmingDelivery.value.id}/confirm`,
-      { actualQuantities }
-    );
+    const res = await confirmWithPackagingCheck(actualQuantities);
+    if (res === null) return;
     if (res.success) {
       ElMessage.success('出库完成，成品库存已扣减');
       confirmDialogVisible.value = false;
@@ -157,6 +158,64 @@ async function submitConfirmDelivery() {
   } finally {
     confirmDialogLoading.value = false;
   }
+}
+
+function postDeliveryConfirm(actualQuantities: Record<string, number>) {
+  if (!confirmingDelivery.value) return Promise.resolve(null);
+  return post(
+    `/${factoryId.value}/warehouse/deliveries/${confirmingDelivery.value.id}/confirm`,
+    { actualQuantities },
+    { _handledErrorCodes: [PACKAGING_MISMATCH_CODE] },
+  );
+}
+
+/**
+ * O-309-1: 确认发货时系统不会自动换算规格不一致的货。后端拦下来后, 在这里把每行要用的批次和两边规格
+ * 列给仓管确认, 确认后写分配 (带确认标记) 再发一次。取消 = 返回 null, 什么都没发。
+ */
+async function confirmWithPackagingCheck(actualQuantities: Record<string, number>) {
+  try {
+    return await postDeliveryConfirm(actualQuantities);
+  } catch (e) {
+    if (!isPackagingMismatchError(e)) throw e;
+  }
+  const plans: Array<{ item: (typeof confirmItems.value)[number]; rows: TableRow[] }> = [];
+  for (const item of confirmItems.value) {
+    if (!item.id || !item.productTypeId || item.actualQty <= 0) continue;
+    const res = await get<TableRow[]>(`/${factoryId.value}/sales-deliveries/items/${item.id}/batch-allocations/recommend-fifo`, {
+      params: {
+        productTypeId: item.productTypeId,
+        requiredQty: item.actualQty,
+        unit: item.unit,
+        sourceWarehouseCode: item.sourceWarehouseCode || undefined,
+      },
+    });
+    const rows = res.success && Array.isArray(res.data) ? res.data : [];
+    if (rows.some((row) => row.packagingMismatch === true)) plans.push({ item, rows });
+  }
+  const lines = plans.flatMap(({ item, rows }) => mismatchConfirmLines(item.productName, rows.map((row) => ({
+    batchNumber: String(row.batchNumber || ''),
+    allocatedQty: Number(row.recommendedQuantity || 0),
+    unit: String(row.unit || item.unit),
+    packagingMismatch: row.packagingMismatch === true,
+    batchPackagingLabel: String(row.batchPackagingLabel || ''),
+    linePackagingLabel: String(row.linePackagingLabel || ''),
+  }))));
+  if (lines.length === 0) {
+    ElMessage.error('库存已变动，请关闭后重新打开这一单');
+    return null;
+  }
+  if (!(await confirmPackagingConversion(lines))) return null;
+  for (const { item, rows } of plans) {
+    await post(`/${factoryId.value}/sales-deliveries/items/${item.id}/batch-allocations`, {
+      allocations: rows.map((row) => ({
+        finishedGoodsBatchId: String(row.batchId),
+        allocatedQty: Number(row.recommendedQuantity || 0),
+        ...(row.packagingMismatch === true ? { packagingConversionConfirmed: true } : {}),
+      })),
+    });
+  }
+  return postDeliveryConfirm(actualQuantities);
 }
 
 function getDeliveryStatusType(status: string) {

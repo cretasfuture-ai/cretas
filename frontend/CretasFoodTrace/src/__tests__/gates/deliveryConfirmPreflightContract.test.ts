@@ -43,6 +43,19 @@ function code(): string {
     .replace(/^\s*\/\/.*$/gm, '');
 }
 
+describe('规格不一致 (O-309-1): App 不写分配, 但不能把人晾在那儿', () => {
+  it('取货提示只显示系统自动发货时真正会扣的批次', () => {
+    expect(code()).toMatch(/recommendFifo\(row\.id, \{[\s\S]*?skipPackagingMismatch: true/);
+  });
+
+  it('后端说规格对不上时用对话框 (提示条几秒就消失), 按错误码认, 不按文案猜', () => {
+    const s = code();
+    expect(s).toContain("data?.errorCode === 'BATCH_PACKAGING_SPEC_MISMATCH'");
+    expect(s).toMatch(/if \(specMismatch\) \{\s*setSpecMismatchNotice\(message\)/);
+    expect(s).toContain('testID="wh-confirm-spec-mismatch"');
+  });
+});
+
 describe('发货确认前置校验契约', () => {
   it('阳性对照: 文件读得到, 且确实是那一屏', () => {
     // 没有这一条, 下面的 toContain 在读不到文件时会一起失效, 而闸看起来仍然正常。

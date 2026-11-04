@@ -25,6 +25,9 @@ const route = useRoute();
 const router = useRouter();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('quality'));
+// 审批闸在后端是「财务经理或工厂管理员」(DisposalRecordService#assertApprovalRole), 按钮跟它走:
+// 质检角色看不到一个点了必 403 的按钮, 财务经理从「财务管理 → 报废审批」进来看得到。
+const canApprove = computed(() => permissionStore.canWrite('finance'));
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -113,7 +116,10 @@ function handleTargetTypeChange() {
   if (disposalForm.value.targetType === 'FINISHED') loadFgBatches();
 }
 
-onMounted(() => loadBatches());
+onMounted(() => {
+  // 原料批次只有新建申请用得到; 财务经理没有仓储权限, 不发这个注定 403 的请求
+  if (canWrite.value) void loadBatches();
+});
 
 async function validateRecallContext(expectedRequest: number, expectedRecallId: string, expectedBatchId: string) {
   if (!expectedRecallId || !factoryId.value) {
@@ -723,7 +729,7 @@ function getDisposalReason(row: TableRow): string {
           <template #default="{ row }">
             <el-button data-activity-action="disposal.view" type="primary" link size="small" @click="handleView(row)">查看</el-button>
             <el-button
-              v-if="canWrite && row.status === 'PENDING'"
+              v-if="canApprove && row.status === 'PENDING'"
               data-activity-action="disposal.approve"
               type="success"
               link
@@ -733,7 +739,7 @@ function getDisposalReason(row: TableRow): string {
               @click="handleApprove(row)"
             >批准</el-button>
             <el-button
-              v-if="canWrite && row.status === 'PENDING'"
+              v-if="canApprove && row.status === 'PENDING'"
               data-activity-action="disposal.reject.open"
               type="danger"
               link

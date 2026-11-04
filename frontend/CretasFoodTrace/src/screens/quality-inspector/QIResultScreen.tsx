@@ -31,7 +31,7 @@ export default function QIResultScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProps>();
   const insets = useSafeAreaInsets();
-  const { recordId, passed } = route.params;
+  const { recordId, passed, dispositionRequired } = route.params;
   const [record, setRecord] = useState<QualityRecord | null>(null);
 
   useEffect(() => {
@@ -107,6 +107,7 @@ export default function QIResultScreen() {
 
         <Text style={styles.resultSubtitle}>
           {resultDescription}
+          {dispositionRequired ? '\n这批货之前判过不合格，本次记录已保存，但批次还不能放行：请质量经理走不良品处置，复核通过后才可以出货。' : ''}
         </Text>
 
         {/* 结果详情卡片 */}

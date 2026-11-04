@@ -148,7 +148,9 @@ function openDisposalLink(kind: 'original' | 'red' | 'record') {
   if (!isCurrentContext(context) || !isDisposalVoucher.value) return;
   const id = kind === 'original' ? disposalOrigin.value?.id : disposalRed.value?.id;
   if (kind === 'record' && disposalRecordId.value) {
-    void router.push({ path: '/quality/disposals', query: { disposalId: disposalRecordId.value } });
+    // 财务经理没有质检模块, 进 /quality/disposals 会被路由闸挡回去
+    const disposalPage = permissionStore.canAccess('quality') ? '/quality/disposals' : '/finance/disposal-approvals';
+    void router.push({ path: disposalPage, query: { disposalId: disposalRecordId.value } });
   } else if (id) void router.push(`/finance/voucher/${encodeURIComponent(id)}`);
 }
 

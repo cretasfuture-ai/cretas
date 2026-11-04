@@ -617,7 +617,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 + packagingLabel(item.getPackagingUnit(), item.getPackagingBaseUnit(), item.getPackagingFactor())
                 + "）不一致，需要确认换算后才能分配")
                 .withCode("BATCH_PACKAGING_SPEC_MISMATCH")
-                .withHint("请换一个规格一致的批次；确需用这批，到「分配批次」里核对换算并确认")
+                .withHint("请换一个规格一致的批次；确需用这批，核对换算后确认再分配")
                 .withHintTarget("finishedGoodsBatchId");
     }
 
@@ -735,7 +735,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                         + row.get("batchPackagingLabel") + "）与发货行规格（" + row.get("linePackagingLabel")
                         + "）不一致，系统不会自动换算")
                         .withCode("BATCH_PACKAGING_SPEC_MISMATCH")
-                        .withHint("请到「分配批次」里核对换算并确认，或换一个规格一致的批次后再发货")
+                        .withHint("请到电脑端「仓储管理 → 出货管理」确认这一单时核对换算，或换规格一致的货再发")
                         .withHintTarget("finishedGoodsBatchId");
             }
         }

@@ -45,6 +45,61 @@ describe('dynamic quality inspection screen', () => {
     expect(mockReplace).toHaveBeenCalledWith('QIResult', { recordId: 'qi-1', passed: false });
   });
 
+  describe('不合格必须写原因 (D-S302-02)', () => {
+    beforeEach(() => {
+      api.getDynamicQualityForm.mockResolvedValue({
+        batchId, batchNumber: 'PB-1885', productTypeId: 'QA-S301-A', productName: 'QA product A', standardRevision: 'rev-1',
+        items: [{ bindingId: 'binding-a', itemId: 'item-a', itemVersion: 3, label: '温度', valueType: 'RANGE', unit: '°C', effectiveMinValue: 0, effectiveMaxValue: 10, effectiveIsRequired: true, requireNoteOnFail: true }],
+      });
+      api.submitDynamicInspection.mockResolvedValue({ inspection: { id: 'qi-1', result: 'FAIL' }, standardRevision: 'rev-1' });
+    });
+
+    it('超标就提前说要写原因, 空着和全空白都不提交, 填的值保留', async () => {
+      render(<QIFormScreen />);
+      await waitFor(() => expect(screen.getByText(/温度/)).toBeTruthy());
+      expect(screen.getByPlaceholderText('备注（可选）')).toBeTruthy();
+      const input = screen.getByPlaceholderText('填写实测值');
+      fireEvent.changeText(input, '15');
+      expect(screen.getByText('不合格，必须写原因：温度')).toBeTruthy();
+
+      fireEvent.press(screen.getByText('提交质检结果'));
+      fireEvent.changeText(screen.getByPlaceholderText('不合格原因（必填）'), '\u3000  ');
+      fireEvent.press(screen.getByText('提交质检结果'));
+
+      expect(screen.getByText('请在备注里写明不合格的原因：温度')).toBeTruthy();
+      expect(api.submitDynamicInspection).not.toHaveBeenCalled();
+      expect(input.props.value).toBe('15');
+    });
+
+    it('写了原因就提交, 原因随请求送到后端', async () => {
+      render(<QIFormScreen />);
+      await waitFor(() => expect(screen.getByText(/温度/)).toBeTruthy());
+      fireEvent.changeText(screen.getByPlaceholderText('填写实测值'), '15');
+      fireEvent.changeText(screen.getByPlaceholderText('不合格原因（必填）'), '冷链断了');
+      fireEvent.press(screen.getByText('提交质检结果'));
+      await waitFor(() => expect(api.submitDynamicInspection).toHaveBeenCalledWith(batchId, expect.objectContaining({ notes: '冷链断了' })));
+    });
+
+    it('阴性: 合格不要求原因', async () => {
+      api.submitDynamicInspection.mockResolvedValue({ inspection: { id: 'qi-2', result: 'PASS' }, standardRevision: 'rev-1' });
+      render(<QIFormScreen />);
+      await waitFor(() => expect(screen.getByText(/温度/)).toBeTruthy());
+      fireEvent.changeText(screen.getByPlaceholderText('填写实测值'), '5');
+      fireEvent.press(screen.getByText('提交质检结果'));
+      await waitFor(() => expect(api.submitDynamicInspection).toHaveBeenCalledTimes(1));
+      expect(mockReplace).toHaveBeenCalledWith('QIResult', { recordId: 'qi-2', passed: true });
+    });
+  });
+
+  it('批次判过不合格时后端说还要处置, 结果页要知道 (D-S302-01)', async () => {
+    api.submitDynamicInspection.mockResolvedValue({ inspection: { id: 'qi-3', result: 'PASS' }, standardRevision: 'rev-1', dispositionRequired: true });
+    render(<QIFormScreen />);
+    await waitFor(() => expect(screen.getByText(/温度/)).toBeTruthy());
+    fireEvent.changeText(screen.getByPlaceholderText('填写实测值'), '5');
+    fireEvent.press(screen.getByText('提交质检结果'));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('QIResult', { recordId: 'qi-3', passed: true, dispositionRequired: true }));
+  });
+
   it('refreshes a stale standard on the mounted action, preserves input, and resubmits with the new revision', async () => {
     api.submitDynamicInspection
       .mockRejectedValueOnce(new Error('质检标准已更新，请刷新后重新确认'))

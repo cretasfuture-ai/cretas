@@ -447,6 +447,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
     ]);
     expect(childPaths('/finance')).toEqual([
       '/finance/adjustments',
+      '/finance/disposal-approvals',
       '/finance/costs',
       '/finance/three-statements',
       '/finance/reports',

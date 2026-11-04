@@ -129,7 +129,7 @@ describe('后端 · 确认发货时自动按先进先出分配', () => {
   });
 
   it('🔴 库存不够时不做部分分配（分配一半再放行会让下游拿到对不上的数）', () => {
-    expect(allocService).toMatch(/remaining\.signum\(\) > 0 \|\| picks\.isEmpty\(\)[\s\S]{0,200}return false;/);
+    expect(allocService).toMatch(/remaining\.signum\(\) > 0 \|\| picks\.isEmpty\(\)[\s\S]{0,400}return false;/);
   });
 
   it('发货确认先自动分配，⛔ 不再直接抛「未完成批次分配」', () => {
