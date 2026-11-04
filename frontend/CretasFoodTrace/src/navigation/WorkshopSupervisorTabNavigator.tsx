@@ -33,6 +33,7 @@ export function WorkshopSupervisorTabNavigator() {
     <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
         headerShown: false,
+        tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: TAB_COLORS.active,
         tabBarInactiveTintColor: TAB_COLORS.inactive,
         tabBarStyle: {
