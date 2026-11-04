@@ -70,7 +70,7 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 
 | 项 | 规则 | 代码位置 |
 |---|---|---|
-| 谁能用 | 库里有效的平台超级管理员本人；其余平台账号要由超级管理员开通（开给一个平台角色或一个平台账号）。每次现查库，撤销下一次调用就生效。未开通 403 | `PlatformAiAnalysisGrantService.requireEntry`；授权接口 `/api/platform/ai-analysis/grants`（列表 / 开通 / `revoke`，只给库里有效的超级管理员，必须写理由）；表 `platform_ai_analysis_grants`，只追加的留痕表 `platform_ai_analysis_grant_audit`（V20261104_24） |
+| 谁能用 | 库里有效的平台超级管理员本人；其余平台账号要由超级管理员开通（开给一个平台角色或一个平台账号）。每次现查库，撤销下一次调用就生效。未开通 403 | `PlatformAiAnalysisGrantService.requireEntry`；授权接口 `/api/platform/ai-analysis/grants`（列表 / 开通 / `revoke`，只给库里有效的超级管理员，必须写理由）；表 `platform_ai_analysis_grants`，只追加的留痕表 `platform_ai_analysis_grant_audit`（V20261104_25） |
 | a / b | **不读**。配置怎么设都能用（`FactorySecrecyGatesContractTest` 把入口服务列为不许引用保密配置的类） | `PlatformFactoryAiAnalysisService` |
 | 保密产品 | a、b 都开时也读得到。放行只在 `ProcessSecretPlatformAiScope` 里成立：入口打开、绑当前线程 + 一个平台账号 + 一家工厂、分析结束或抛异常就关。它只被 `ProcessSecretAccessService.permitsPlatformAiRead` 读，⛔ `decide` / `permitsViewFull` / `platformSeesFull` / `hiddenFromPlatform` 都不看它，同一账号走既有配方 / 成本 / 分析接口照旧被挡 | `ProcessSecretLlmCostScope.fullView` |
 | 客户侧保管（e 开的 B 档） | 云端没有完整工艺，读不到：这些批次不进提示词，响应 `data.notice` 明说；全部批次都是 B 档时 403，不调模型 | `AIEnterpriseService.analyzeTimeRangeForPlatform` |

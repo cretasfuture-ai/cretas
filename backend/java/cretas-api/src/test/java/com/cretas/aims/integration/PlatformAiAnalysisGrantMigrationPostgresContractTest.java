@@ -27,13 +27,13 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * V20261104_24 在真实 PostgreSQL 上: 表与实体逐列一致, 授权角色的 CHECK 与枚举 {@link PlatformRole} 一致
+ * V20261104_25 在真实 PostgreSQL 上: 表与实体逐列一致, 授权角色的 CHECK 与枚举 {@link PlatformRole} 一致
  * (超级管理员不在内), 同一对象只有一行, 留痕只追加 (UPDATE / DELETE / TRUNCATE 都被触发器拒绝)。
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class PlatformAiAnalysisGrantMigrationPostgresContractTest {
 
-    private static final String MIGRATION = "db/flyway/V20261104_24__platform_ai_analysis_grants.sql";
+    private static final String MIGRATION = "db/flyway/V20261104_25__platform_ai_analysis_grants.sql";
 
     @Test
     void migrationMatchesEntitiesAndEnforcesItsRules() throws Exception {
