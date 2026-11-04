@@ -537,6 +537,28 @@ class QualityBatchDispositionContractTest {
     }
 
     @Test
+    @DisplayName("AI 更新工具: 待检任务判 FAIL 没原因不写, 带原因才写 (D-S302-02)")
+    void aiUpdateToolNeedsAReasonToFail() {
+        // 自动建的待检任务自带这句备注, 它不是不合格原因
+        inspect("qi-pending", "PENDING", null).setNotes("批次完成自动创建质检任务");
+        QualityCheckUpdateTool update = new QualityCheckUpdateTool();
+        ReflectionTestUtils.setField(update, "qualityInspectionService", inspectionService);
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(update, "doExecute", FACTORY,
+                new HashMap<>(Map.of("checkId", "qi-pending", "result", "FAIL", "notes", "  ")),
+                new HashMap<String, Object>()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("原因");
+        assertThat(inspections.get("qi-pending").getResult()).isEqualTo("PENDING");
+
+        ReflectionTestUtils.invokeMethod(update, "doExecute", FACTORY,
+                new HashMap<>(Map.of("checkId", "qi-pending", "result", "FAIL", "notes", "温度超标")),
+                new HashMap<String, Object>());
+        assertThat(inspections.get("qi-pending").getResult()).isEqualTo("FAIL");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+    }
+
+    @Test
     @DisplayName("AI 处置工具: 放行不合格批只是提交审批, 不说「执行成功」, 批次不动")
     void aiDispositionToolTellsTheTruthAboutApproval() {
         inspect("qi-fail", "FAIL", "0");

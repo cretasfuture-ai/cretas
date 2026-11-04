@@ -163,6 +163,11 @@ public class QualityCheckUpdateTool extends AbstractBusinessTool {
                 default -> throw new IllegalArgumentException(
                         "检验结果只能是 PASS/FAIL/CONDITIONAL, 收到: " + finalResult);
             };
+            // D-S302-02: 这个工具能把待检任务直接判 FAIL, 判不合格必须本次写明原因。
+            // ⛔ 不看原记录的备注: 自动建的待检任务自带「批次完成自动创建…」, 那不是原因。
+            if ("FAIL".equals(canonical) && (notes == null || notes.isBlank())) {
+                throw new IllegalArgumentException("判定不合格必须说明原因");
+            }
             patch.setResult(canonical);
             updatedFields.add("检验结果");
         }
