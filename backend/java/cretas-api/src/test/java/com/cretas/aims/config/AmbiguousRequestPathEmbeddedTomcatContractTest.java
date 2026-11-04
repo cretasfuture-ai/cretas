@@ -444,7 +444,7 @@ class AmbiguousRequestPathEmbeddedTomcatContractTest {
     @DisplayName("the path rule itself, including what Tomcat happens to stop first today")
     void pathRule() {
         for (String ambiguous : List.of("/a;b", "/a/;", "/%41", "/%7a", "/%30", "/%2d", "/%2E", "/%5f",
-                "/x%2Fy", "/x%2fy", "/x%5Cy", "/x%5cy")) {
+                "/x%2Fy", "/x%2fy", "/x%5Cy", "/x%5cy", "/x%20/%70latform")) {
             assertThat(AmbiguousRequestPathFilter.isAmbiguous(ambiguous)).as(ambiguous).isTrue();
         }
         for (String legal : List.of("/api/mobile/F001/orders", "/a%3Bb", "/a%20b", "/a%25b", "/a%2Bb",
