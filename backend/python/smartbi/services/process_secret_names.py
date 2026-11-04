@@ -25,8 +25,8 @@ call, not cached with the lists, through ``common.factory_secrecy.is_on`` (10 se
 read error or an unknown factory counts as ON). A factory with no lists at all is not in the
 map and reads as ON. What crosses factories does not follow d:
 :func:`cannot_be_shared` for the shared export and for every row capture is about to mask (a
-masked row's only destination is the shared set, and masking would hide what has to be checked),
-and the finetune gate (``scripts/finetune/training_consent_gate.py``, one model for every factory)
+masked row goes to the shared set unless consent changes later, and masking would hide what has to
+be checked), and the finetune gate (``scripts/finetune/training_consent_gate.py``, one model for every factory)
 reads no switch at all. ``FactoryLists.terms`` itself never changes with d, so anything built from
 it stays independent of every switch.
 
@@ -228,13 +228,27 @@ def cannot_be_shared(lists: FactoryLists, input_text: Optional[str], answer: Opt
     return mentions_any(lists.terms, input_text, answer) or qa_process_value(input_text, answer)
 
 
+VALUE_TOKEN = "<数值>"     # what mask_numbers writes in place of a value
+
+
+def _masked_terms(terms: Iterable[str]) -> List[str]:
+    """Terms as a masked row holds them: 老卤牛肉2号 is 老卤牛肉<数值>号 there. A term that masking
+    leaves almost nothing of has no such form: it would match any number."""
+    from smartbi.services.training_consent import mask_numbers
+
+    masked = (mask_numbers(t) or "" for t in terms)
+    return [m for m in masked if VALUE_TOKEN in m and len(m.replace(VALUE_TOKEN, "")) >= 2]
+
+
 def row_holds_own_secrets_for_shared_content(row: Mapping[str, Any],
                                              by_factory: Optional[Mapping[str, FactoryLists]]) -> bool:
-    """For the shared export: :func:`cannot_be_shared` on the row, by its OWN factory only, on
-    purpose: another factory's product with the same name is not secret there (see the module doc
-    on the union of every factory's lists)."""
-    return cannot_be_shared(lists_for_row(row.get("factory_id"), by_factory),
-                            row.get("input_text"), row.get("teacher_output"))
+    """For the shared export: :func:`cannot_be_shared` on the row, or one of its terms in masked
+    form (a row masked before the product was protected: capture could not refuse it then). By
+    the row's OWN factory only, on purpose: another factory's product with the same name is not
+    secret there (see the module doc on the union of every factory's lists)."""
+    lists = lists_for_row(row.get("factory_id"), by_factory)
+    input_text, answer = row.get("input_text"), row.get("teacher_output")
+    return cannot_be_shared(lists, input_text, answer) or mentions_any(_masked_terms(lists.terms), input_text, answer)
 
 
 def row_has_process_value(row: Mapping[str, Any],

@@ -2,7 +2,8 @@
 工资考勤数值永远过滤。
 
 🔴 这次改动的本质是一次转换: d 默认关, 而 Python 以前不读 d、对所有工厂全过滤。上线那一刻, 所有没配过 d 的
-工厂从「全过滤」变成「只过滤隐私那部分」。所以矩阵里的 ``default_no_row`` 就是那次转换本身,
+工厂自己保留原文的数据 (private / shared_anon) 从「全过滤」变成「只过滤隐私那部分」; 要脱敏的样本和共享导出
+不变, 它们跨工厂, 不跟 d。矩阵里的 ``default_no_row`` 就是那次转换本身,
 ``on`` / ``read_error`` / ``unknown_factory`` 是转换之前的行为。
 
 每条都走真实入口 (capture / 私有导出 / 共享导出 / corpus_judge 发给外部模型的内容 / 两个学习器 / 挂起重判)。
@@ -264,6 +265,34 @@ async def test_the_shared_export_never_takes_a_factorys_own_terms(world, state):
     assert _kinds(g["row"]["id"] for g in gated) == {"plain"}
 
 
+@pytest.mark.parametrize("state", STATES)
+async def test_the_shared_export_judges_raw_shared_anon_rows_before_anonymizing(world, state):
+    """The other way in: rows kept raw and anonymized at export, with the real lists."""
+    world.set(state)
+    rows = [{**_row(k), "metadata": {"training_rule": RULE_VERSION}} for k in SAMPLES]
+    gated = export_mod.gate_shared_rows(rows, {F: "shared_anon"}, await psn.all_factory_lists())
+    assert _kinds(g["row"]["id"] for g in gated) == {"plain"}
+    assert [g["consent_class"] for g in gated] == ["shared_anon"]
+
+
+@pytest.mark.parametrize("state", STATES)
+async def test_the_shared_export_sees_a_term_in_masked_form(world, state):
+    """A row masked before the product was protected: capture could not refuse it, the exact match
+    misses it. Other masked numbers in a row are no reason to drop it."""
+    world.set(state)
+    masked = {**_row("plain", row_id=1), "input_text": "老卤牛肉<数值>号本月销量多少"}
+    other = {**_row("plain", row_id=2), "input_text": "本月产量 <数值> 箱"}
+    gated = export_mod.gate_shared_rows([masked, other], {}, await psn.all_factory_lists())
+    assert [g["row"]["id"] for g in gated] == [2]
+
+
+def test_a_term_that_is_only_a_number_has_no_masked_form():
+    """398 masks to <数值>, which would drop every masked row of the factory."""
+    lists = {F: psn.FactoryLists(terms=frozenset({"398"}))}
+    assert psn.row_holds_own_secrets_for_shared_content(
+        {"factory_id": F, "input_text": "本月产量 <数值> 箱", "teacher_output": ANSWER}, lists) is False
+
+
 async def test_the_shared_export_compares_a_row_with_its_own_factory_only(world):
     """Not a new union of every factory's lists: another factory's product of the same name is not
     secret there, and that row stayed in the shared export before this switch existed."""
@@ -465,6 +494,9 @@ async def test_a_held_row_that_will_stay_masked_keeps_the_full_rule(world, state
     assert counts["released"] == 1
     rejected = [a for s, a in pool.executed if "jsonb_build_object('secrecy_rejected'" in s]
     assert _kinds(a[0] for a in rejected) == set(SAMPLES) - {"plain"}
+    reasons = {list(SAMPLES)[a[0]]: json.loads(a[1])["reason"] for a in rejected}
+    if state in FILTER_OFF_STATES:
+        assert reasons["product"] == reasons["process"] == "masked_not_shareable"
 
 
 # ------------------------------------------------------------------ the switch itself
