@@ -184,7 +184,7 @@ async def _run(dsn: Optional[str], *, min_count: int) -> None:
             records, await all_factory_lists(), _FILTER_FIELDS)
         excluded = len(records) - len(kept)
         if excluded:
-            print(f"({excluded} sample(s) naming a process-secret product not shown)")
+            print(f"({excluded} sample(s) with a process-secret product, a person / customer or a pay value not shown)")
         records = _aggregate(kept)
     if not records:
         print("No source='synthesis' rows yet — the synthesis path has not been "

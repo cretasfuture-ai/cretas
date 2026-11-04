@@ -55,8 +55,6 @@ class NoCrossFactoryLearningContractTest {
                 mock(com.cretas.aims.service.consent.ProcessSecretSampleFilter.class);
         when(filter.checkTrainingSample(anyString(), anyString(), org.mockito.ArgumentMatchers.any(String[].class)))
                 .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
-        when(filter.checkProtectedTerms(anyString(), anyString(), org.mockito.ArgumentMatchers.any(String[].class)))
-                .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
         return new KeywordLearningServiceImpl(intents, mock(KeywordEffectivenessService.class), factoryConfig,
                 new com.fasterxml.jackson.databind.ObjectMapper(), consent, filter);
     }

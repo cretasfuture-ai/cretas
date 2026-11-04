@@ -55,6 +55,10 @@ import java.util.function.BiFunction;
  * <p>只在<b>本次 HTTP 响应</b>的序列化里生效 (专用 ObjectMapper + ThreadLocal 作用域),
  * 不影响业务代码里其它地方对这些对象的 JSON 序列化 (快照、缓存、Python 调用), 也不改实体本身。</p>
  *
+ * <p>换成摘要的响应仍是 200, 而摘要里已经没有字段可让 {@link ProcessSecretPayloadScrubber} 再遮, 它不会写审计:
+ * 本厂以外的账号 (平台、别厂) 被换成摘要时在这里记一行, 工厂才查得到平台来看过。本厂用户不记: 日常翻页每次都会触发,
+ * 记了会淹没审计 (同 scrubber 对成本合计的取舍)。⛔ 只记 ID / 动作 / 结论。
+ *
  * <p>必须排在 {@link PriceFieldResponseAdvice} 之后: 价格先隐藏, 再转成 JSON 树。
  * 本厂没有任何保密策略时直接放行, 不做额外序列化。</p>
  */
@@ -63,6 +67,7 @@ import java.util.function.BiFunction;
 public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
 
     public static final String RESTRICTED_MESSAGE = "该产品工艺已设为保密，需要保密负责人授权才能查看完整内容";
+    static final String SUMMARY_AUDIT_REASON = "无权查看，已替换为摘要";
 
     private static final ThreadLocal<Scope> SCOPE = new ThreadLocal<>();
 
@@ -137,15 +142,30 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         // 直接返回 JsonNode 的接口: 复制一份再裁, 不改调用方手里的树
         JsonNode filtered = payload instanceof JsonNode tree ? tree.deepCopy() : toTree(payload, scope);
         // V2: 派生 DTO / Map 里的配比、单位用量、转换率、标准出成率按字段词表统一裁剪
+        String resourceRef = http.getMethod() + " " + http.getRequestURI();
         boolean scrubbed = payloadScrubber.scrub(filtered, actor, requestFactory,
-                ProcessSecretReadTracker.reads(), http.getMethod() + " " + http.getRequestURI(),
+                ProcessSecretReadTracker.reads(), resourceRef,
                 ProcessSecretPayloadScrubber.isAggregateRoute(routePattern(http)));
+        auditSummaries(scope, resourceRef);
         if (!scope.redacted && !scrubbed) return body;
         if (body instanceof ApiResponse<?> api) {
             ((ApiResponse<Object>) api).setData(filtered);
             return api;
         }
         return filtered;
+    }
+
+    /**
+     * 这次响应里被换成摘要的产品, 每个记一行 (同一产品一次请求只记一次)。写失败不改变响应: 内容已经裁掉了,
+     * {@link ProcessSecretAccessService#audit} 记 ERROR 日志。
+     */
+    private void auditSummaries(Scope scope, String resourceRef) {
+        for (ProductKey key : scope.summarized) {
+            if (scope.actor.isPlatformAdmin() || !key.factoryId().equals(scope.actor.factoryId())) {
+                accessService.audit(key.factoryId(), key.productTypeId(), scope.actor, ProcessSecretAction.VIEW_FULL,
+                        "DENY", SUMMARY_AUDIT_REASON, resourceRef);
+            }
+        }
     }
 
     /** @return 裁剪后的 JSON 树; 没有任何对象被裁剪时返回 null (调用方保留原响应)。 */
@@ -190,6 +210,8 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
         final Map<String, Set<String>> protectedByFactory = new HashMap<>();
         final Map<ProductKey, ProcessSecretAccessService.Decision> decisions = new HashMap<>();
         final Map<String, Optional<String>> recipeProduct = new HashMap<>();
+        /** 被换成摘要的 (工厂, 产品); 解析不出产品时产品为 null。 */
+        final Set<ProductKey> summarized = new java.util.LinkedHashSet<>();
         boolean redacted;
 
         Scope(AuthenticatedActor actor, String requestFactory) {
@@ -417,6 +439,7 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
             Scope scope = SCOPE.get();
             if (scope == null || value == null) return false;
             ProcessSecretAccessService.Decision decision = null;
+            ProductKey hit = null;
             boolean unresolved = false;
             String anyFactory = null;
             for (ProductKey key : rule.keys().apply(value, scope)) {
@@ -429,6 +452,7 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                 ProcessSecretAccessService.Decision d = scope.restricted(key.factoryId(), key.productTypeId());
                 if (d != null) {
                     decision = d;
+                    hit = key;
                     break;
                 }
             }
@@ -436,9 +460,11 @@ public class ProcessSecretResponseAdvice implements ResponseBodyAdvice<Object> {
                     && scope.factoryHasProtection(anyFactory != null ? anyFactory : scope.factoryOfUsage())) {
                 decision = new ProcessSecretAccessService.Decision(ProcessSecretAccessService.Outcome.DENY, null,
                         "无法确认所属产品");
+                hit = new ProductKey(anyFactory != null ? anyFactory : scope.factoryOfUsage(), null);
             }
             if (decision == null) return false;
             scope.redacted = true;
+            scope.summarized.add(hit);
             gen.writeStartObject();
             rule.summary().write(value, gen);
             gen.writeObjectFieldStart("processSecret");

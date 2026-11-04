@@ -759,11 +759,21 @@ class SyntheticDataServiceTest {
         @Mock
         private SyntheticDataConfig syntheticDataConfig;
 
+        @Mock
+        private com.cretas.aims.service.consent.TrainingConsentService trainingConsentService;
+
+        @Mock
+        private com.cretas.aims.service.consent.ProcessSecretSampleFilter processSecretSampleFilter;
+
         @InjectMocks
         private SyntheticDataService syntheticDataService;
 
         @BeforeEach
         void setUp() {
+            lenient().when(trainingConsentService.status(anyString()))
+                    .thenReturn(com.cretas.aims.service.consent.TrainingConsentService.Status.AUTHORIZED);
+            lenient().when(processSecretSampleFilter.checkTrainingSample(anyString(), anyString(), any(String[].class)))
+                    .thenReturn(com.cretas.aims.service.consent.ProcessSecretSampleFilter.SampleVerdict.CLEAR);
             // Configure default mock behavior
             lenient().when(syntheticDataConfig.getMaxSyntheticRatio()).thenReturn(0.8);
             lenient().when(syntheticDataConfig.getCandidateMultiplier()).thenReturn(3);

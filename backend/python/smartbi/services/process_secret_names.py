@@ -173,20 +173,38 @@ def row_names_protected_product(row: Mapping[str, Any],
     return mentions_any(lists.terms, *(row.get(f) for f in fields))
 
 
+def row_has_private_content(row: Mapping[str, Any],
+                            by_factory: Optional[Mapping[str, FactoryLists]],
+                            fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> bool:
+    """True when a row names a person or customer of its own factory, or has a pay /
+    attendance word with a value. Privacy, not secrecy (Steve 2026-11-04): no setting controls
+    it (``FactoryLists``). Capture already refuses such rows; this catches what capture could
+    not know, such as a person added to the directory afterwards. Synthetic seed rows are made
+    up and belong to no one: nothing in them is anyone's pay."""
+    from smartbi.services.training_consent import is_synthetic_factory, pay_word_with_value
+
+    factory_id = row.get("factory_id")
+    if is_synthetic_factory(factory_id):
+        return False
+    texts = [row.get(f) for f in fields]
+    return mentions_any(lists_for_row(factory_id, by_factory).directory, *texts) or pay_word_with_value(*texts)
+
+
 def drop_rows_naming_protected_products(
         rows: Iterable[Any],
         by_factory: Optional[Mapping[str, FactoryLists]],
         fields: Iterable[str] = SAMPLE_TEXT_FIELDS) -> List[Any]:
-    """Rows that name none of their factory's process-secret terms (corpus
-    scripts: LLM judge, human review sampling, eval freeze, synthesis report).
-    Rows must carry ``factory_id`` and the text ``fields``. A real row with no
+    """Rows that name none of their factory's process-secret terms and hold nothing private
+    (``row_has_private_content``) (corpus scripts: LLM judge, human review sampling, eval
+    freeze, synthesis report). Rows must carry ``factory_id`` and the text ``fields``. A real row with no
     factory is dropped as well: it cannot be checked against anyone's lists
     (``usable_rows_sql`` already excludes it; this is the second lock).
     ``by_factory`` comes from ``all_factory_lists``: a failed lookup must abort
     the caller, never be read as "nothing protected"."""
     fields = tuple(fields)
     return [r for r in rows
-            if r.get("factory_id") and not row_names_protected_product(r, by_factory, fields)]
+            if r.get("factory_id") and not row_names_protected_product(r, by_factory, fields)
+            and not row_has_private_content(r, by_factory, fields)]
 
 
 # ---- held rows (captured against the last good lists) ----
