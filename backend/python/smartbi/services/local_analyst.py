@@ -16,8 +16,8 @@ from .analysis_evidence import build
 from .analysis_playbook import VERSION,SECTIONS,HAZARDS,SYSTEM_PROMPT,curriculum
 
 _cache=OrderedDict()
-OWNERS={'生产','仓库','财务','生产/仓库','生产/财务','主数据/生产','数据管理员'}
-OWNER_ALIASES={'仓库/生产':'生产/仓库','财务/生产':'生产/财务','生产/主数据':'主数据/生产'}
+OWNERS={'生产','仓库','财务','生产/仓库','生产/财务','财务/仓库','主数据/生产','数据管理员'}
+OWNER_ALIASES={'仓库/生产':'生产/仓库','财务/生产':'生产/财务','仓库/财务':'财务/仓库','生产/主数据':'主数据/生产'}
 FIELDS={'sectionId','evidenceRefs','whatItMeans','whyItMatters','hypotheses','nextStep','owner','cannotConclude','followupQuestion','considerations'}
 HAZARD_WORDS={
     'MATERIAL_MIX':(r'材料|半成品',r'组合|用量|耗量|折算|估值'),

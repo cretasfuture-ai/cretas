@@ -267,6 +267,8 @@ def test_department_order_is_normalized_but_unknown_owner_is_rejected():
     report=sample_report();pack=build(report);facts=provider.facts_for(report)
     value=response_for(pack,facts);value['sections'][0]['owner']='仓库/生产'
     assert analyst.validate(value,pack,facts)[1][0]['owner']=='生产/仓库'
+    value['sections'][0]['owner']='仓库/财务'
+    assert analyst.validate(value,pack,facts)[1][0]['owner']=='财务/仓库'
     value['sections'][0]['owner']='外部供应商'
     with pytest.raises(ValueError,match='ANALYST_OWNER'):analyst.validate(value,pack,facts)
 
