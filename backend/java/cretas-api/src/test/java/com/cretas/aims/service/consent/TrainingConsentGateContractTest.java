@@ -100,18 +100,18 @@ class TrainingConsentGateContractTest {
                     product("P1", "F006", "秘制牛肉干"),
                     product("P2", "OTHER", "麻辣鸭脖"),     // another factory's row never counts
                     product("P3", "F006", "酱")));         // single-character names never match
-            assertThat(filter.trainingLists("F006").namesAny("秘制牛肉干今天做了多少")).isTrue();
-            assertThat(filter.trainingLists("F006").namesAny(null, "问一下秘制牛肉干")).isTrue();
-            assertThat(filter.trainingLists("F006").namesAny("麻辣鸭脖今天做了多少")).isFalse();
-            assertThat(filter.trainingLists("F006").namesAny("酱料还剩多少")).isFalse();
-            assertThat(filter.trainingLists("F006").namesAny("普通牛肉干今天做了多少")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), "秘制牛肉干今天做了多少")).isTrue();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), null, "问一下秘制牛肉干")).isTrue();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), "麻辣鸭脖今天做了多少")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), "酱料还剩多少")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F006").terms(), "普通牛肉干今天做了多少")).isFalse();
         }
 
         @Test
         void factoryWithoutProtectedProductsNeverLooksUpProducts() {
             when(access.protectedProductTypeIds("F007")).thenReturn(java.util.Set.of());
-            assertThat(filter.trainingLists("F007").namesAny("秘制牛肉干")).isFalse();
-            assertThat(filter.trainingLists(null).namesAny("秘制牛肉干")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists("F007").terms(), "秘制牛肉干")).isFalse();
+            assertThat(ProcessSecretTerms.mentionsAny(filter.trainingLists(null).terms(), "秘制牛肉干")).isFalse();
             assertThat(filter.checkTrainingSample("intent", null, "秘制牛肉干"))
                     .isEqualTo(ProcessSecretSampleFilter.SampleVerdict.UNVERIFIED);   // no factory: no lists
             verifyNoInteractions(products);

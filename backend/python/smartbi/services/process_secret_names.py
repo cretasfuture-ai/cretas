@@ -53,9 +53,10 @@ class FactoryLists:
     """One factory's lists. ``terms`` and ``directory`` are already folded.
 
     INVARIANT (Steve 2026-11-04) for whoever wires the training filter switch (item d, PR-2)
-    into Python: ``directory`` (person and customer names) is PRIVACY, not secrecy. It is
+    into Python: ``directory`` (person and customer names) and the pay / attendance word +
+    value rule (``training_consent.pay_word_with_value``) are PRIVACY, not secrecy. They are
     always filtered from training, learning and distillation samples and NO setting controls
-    it. Only ``terms`` (protected products) and the process word + value rule may follow d.
+    them. Only ``terms`` (protected products) and the process word + value rule may follow d.
     Never skip a whole check because d is off: split it, as Java ProcessSecretSampleFilter.check does."""
     terms: FrozenSet[str] = frozenset()
     directory: FrozenSet[str] = frozenset()

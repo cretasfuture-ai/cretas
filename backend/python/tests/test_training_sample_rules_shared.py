@@ -56,6 +56,20 @@ def test_every_parameter_marker_blocks_an_utterance_only_with_a_value():
         assert tc.utterance_has_blocked_content(f"{m}是 12", directory=()) is True, m
 
 
+def test_java_personnel_markers_match_python():
+    block = re.search(r"PERSONNEL_MARKERS = List\.of\((.*?)\);", _JAVA_RULES.read_text(encoding="utf-8"), re.S)
+    assert block, "PERSONNEL_MARKERS not found in TrainingSampleRules.java"
+    assert tuple(re.findall(r'"([^"]*)"', block.group(1))) == tc.PERSONNEL_MARKERS
+
+
+def test_every_pay_marker_blocks_an_utterance_only_with_a_value():
+    """Steve 2026-11-04: pay / attendance + number is privacy in utterances too, not only in Q&A."""
+    for m in tc.PERSONNEL_MARKERS:
+        assert tc.utterance_has_blocked_content(f"问一下{m}的情况", directory=()) is False, m
+        assert tc.utterance_has_blocked_content(f"{m}是 12", directory=()) is True, m
+        assert tc.desensitize_utterance("private", f"{m}是 12", directory=()) == (False, None), m
+
+
 def test_the_directory_is_required():
     """A caller that forgets the factory's people / customers must fail loudly."""
     import pytest

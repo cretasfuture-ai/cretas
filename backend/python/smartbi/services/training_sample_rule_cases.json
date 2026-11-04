@@ -2,6 +2,16 @@
   "_doc": "Shared cases for the training-sample rules (Steve 2026-10-24; content rule changed 2026-10-29 option A: a recipe / parameter word blocks only together with a concrete value; people / customers are matched exactly against the factory's own tables — see process_secret_filter_rule_cases.json). utterance_cases run in Python (training_consent.desensitize_utterance with an empty directory) AND Java (TrainingSampleRules.textToStore); stored=null means not stored. qa_cases run in Python only (training_consent.qa_has_blocked_content, directory from the case, default empty).",
   "utterance_cases": [
     {
+      "text": "本月工资 8000 元",
+      "authorized": true,
+      "stored": null
+    },
+    {
+      "text": "本月工资总额",
+      "authorized": true,
+      "stored": "本月工资总额"
+    },
+    {
       "text": "这个产品的配方里盐放多少",
       "authorized": false,
       "stored": "这个产品的配方里盐放多少"

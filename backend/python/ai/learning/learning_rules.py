@@ -4,7 +4,7 @@
 
 - 全局 (factory_id 为空 / 空白 / ``*``) 一律不由系统学习写入: 全局行对所有工厂可见;
 - 本厂: 撤回训练 / 查不到授权状态不学; 提到本厂工艺保密词 (全名 / 编码 / ID) 不学;
-  配方 / 工艺参数词带具体数值、本厂人员姓名 / 客户名称不学
+  配方 / 工艺参数词、工资 / 考勤词带具体数值、本厂人员姓名 / 客户名称不学
   (``utterance_has_blocked_content``, 人名客户名按本厂表精确匹配)。
 
 判断结果三态 (:class:`Verdict`): 能学 / 不能学 / **这次判断不了** (授权状态或本厂名单查询出错)。
@@ -57,11 +57,16 @@ async def judge(factory_id: Optional[str], text: Optional[str], *,
                 consent_scope: ConsentLookup,
                 factory_lists: ListsLookup) -> Verdict:
     """这段原话能不能学进 ``factory_id`` 这一家 (全局一律不行)。"""
-    from smartbi.services.training_consent import is_withdrawn, process_word_with_value, UTTERANCE_MARKERS
+    from smartbi.services.training_consent import (
+        UTTERANCE_MARKERS,
+        is_withdrawn,
+        pay_word_with_value,
+        process_word_with_value,
+    )
 
     if is_global_factory(factory_id) or not text or not text.strip():
         return Verdict.SKIP
-    if process_word_with_value(text, UTTERANCE_MARKERS):
+    if process_word_with_value(text, UTTERANCE_MARKERS) or pay_word_with_value(text):
         return Verdict.SKIP
     try:
         scope = await consent_scope(factory_id)

@@ -156,13 +156,15 @@ def test_desensitize_cases():
 
 
 def test_python_training_filter_does_not_read_any_secrecy_switch():
-    """Steve 2026-11-04: person / customer names are always filtered, no setting controls them.
-    Python's training side reads no switch today, so nothing can turn them off. PR-2 wires d here:
-    when this goes red, keep the directory check outside d (see FactoryLists) and move this test
-    to pin that instead of deleting it."""
+    """Steve 2026-11-04: person / customer names and pay / attendance values are always filtered,
+    no setting controls them. Python's training side reads no switch today, so nothing can turn
+    them off. PR-2 wires d here: when this goes red, keep the directory check and
+    ``pay_word_with_value`` outside d (see FactoryLists) and move this test to pin that instead
+    of deleting it."""
     root = Path(__file__).resolve().parents[1]
     modules = ["smartbi/services/process_secret_names.py", "smartbi/services/distillation_capture.py",
-               "smartbi/services/training_consent.py", "scripts/export_distillation_dataset.py",
+               "smartbi/services/training_consent.py", "ai/learning/learning_rules.py",
+               "scripts/export_distillation_dataset.py",
                "scripts/corpus_judge.py", "../../scripts/finetune/training_consent_gate.py"]
     readers = [m for m in modules if re.search(r"factory_secrecy|TRAINING_FILTER", (root / m).read_text(encoding="utf-8"))]
     assert readers == []

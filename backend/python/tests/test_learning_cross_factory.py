@@ -120,6 +120,19 @@ async def test_people_and_customers_are_matched_against_the_factorys_own_tables(
     assert await verdict("FA", "员工周报在哪看") is Verdict.LEARN        # names nobody
 
 
+async def test_a_pay_or_attendance_word_with_a_number_is_never_learned():
+    """Steve 2026-11-04: privacy, like names. The word alone is still learned (Q2)."""
+    lists = _names({})
+
+    async def verdict(t):
+        return await judge("FA", t, consent_scope=CONSENT, factory_lists=lists)
+
+    assert await verdict("本月工资 8000 元") is Verdict.SKIP
+    assert await verdict("考勤异常 3 人次") is Verdict.SKIP
+    assert await verdict("查一下本月工资") is Verdict.LEARN
+    assert await verdict("看下考勤") is Verdict.LEARN
+
+
 async def test_a_failed_lookup_is_retry_not_skip():
     lists = _names({"F_DOWN": RuntimeError("cretas db down"), "FA": frozenset({SECRET})})
 

@@ -9,7 +9,8 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <ul>
  *   <li>{@link #factoryLearnable}: 只写进<b>本厂</b>的东西。与训练样本 ({@code recordSample}) 同一套规则:
- *       撤回 / 查不到授权状态不学; 提到本厂工艺保密产品不学; 配方 / 工艺参数、具体客户名、人名不学。</li>
+ *       撤回 / 查不到授权状态不学; 提到本厂工艺保密产品不学; 配方 / 工艺参数、具体客户名、人名、
+ *       工资 / 考勤数值不学。</li>
  *   <li>{@link #isGlobalFactory}: 工厂字段为空、空白或 "*" 的行对所有工厂可见。</li>
  *   <li>{@link #servable}: 读出口 —— 系统学来的全局行 (不是人工预置 MANUAL) 来自某一家工厂, 不给任何工厂用。</li>
  * </ul>
@@ -44,8 +45,9 @@ public final class LearningContentRules {
             log.warn("训练授权 / 保密产品判断未注入, 不学: factory={}", factoryId);
             return false;
         }
-        // 该厂「训练数据过滤」(d) 关着: 不按配方参数 / 客户 / 人名关键词拦 (#1400; 训练授权下面照常判)
-        if (!filter.trainingFilterOff(factoryId) && TrainingSampleRules.utteranceHasBlockedContent(text)) {
+        // 该厂「训练数据过滤」(d) 关着: 不按「工艺词 + 数值」拦。工资 / 考勤词 + 数值这里照样拦, 人名 / 客户名下面
+        // checkTrainingSample 照样拦 (隐私, 不归 d 管)
+        if (TrainingSampleRules.utteranceBlocked(text, filter.trainingFilterOff(factoryId))) {
             return false;
         }
         try {

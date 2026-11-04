@@ -71,7 +71,7 @@ def explain_row(row: Mapping[str, Any], by_factory: Mapping[str, FactoryLists]) 
         reasons.append("process_value_in_input")
     if tc.process_word_with_value(a, tc.QA_ANSWER_PROCESS_MARKERS):
         reasons.append("process_value_in_answer")
-    if tc.has_word_with_value(q, tc.PERSONNEL_MARKERS) or tc.has_word_with_value(a, tc.PERSONNEL_MARKERS):
+    if tc.pay_word_with_value(q, a):
         reasons.append("personnel_value")
     if lists.directory and (tc_mentions(lists.directory, q, a)):
         reasons.append("factory_person_or_customer")

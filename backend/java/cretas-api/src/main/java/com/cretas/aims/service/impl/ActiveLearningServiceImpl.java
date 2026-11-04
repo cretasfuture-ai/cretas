@@ -99,10 +99,13 @@ public class ActiveLearningServiceImpl implements ActiveLearningService {
         }
 
         // 训练规则 (2026-10-24 / 10-29 选 A): 配方 / 工艺参数词带具体数值的原话不存; 未授权工厂脱敏后存。
-        // 该厂「训练数据过滤」(d) 关着时不按这些关键词拦 (#1400, Steve 2026-11-03 Q3=B); 训练授权照常判
-        if (!processSecretSampleFilter.trainingFilterOff(factoryId)
-                && (TrainingSampleRules.utteranceHasBlockedContent(userInput)
-                || TrainingSampleRules.utteranceHasBlockedContent(normalizedInput))) {
+        // 该厂「训练数据过滤」(d) 关着时不按这些词拦 (#1400); 工资 / 考勤词 + 数值这里照样拦, 人名 / 客户名下面
+        // checkTrainingSample 照样拦 (隐私, 不归 d 管); 训练授权照常判。
+        // topCandidates 不走工资规则: 里面的数字是候选意图的分数, 不是工资
+        boolean trainingFilterOff = processSecretSampleFilter.trainingFilterOff(factoryId);
+        if (TrainingSampleRules.utteranceBlocked(userInput, trainingFilterOff)
+                || TrainingSampleRules.utteranceBlocked(normalizedInput, trainingFilterOff)
+                || TrainingSampleRules.utteranceHasPayValue(matchedKeywords)) {
             return null;
         }
         TrainingConsentService.Status status = trainingConsentService.status(factoryId);

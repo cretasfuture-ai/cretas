@@ -25,9 +25,10 @@ Customer wording: docs sent to the website session the same day.
         number (``process_word_with_value``). The word alone ("杀菌温度一般设多少",
         "建议优化卤制工序") no longer blocks: the secret is the value / the
         factory's own step order ("腌制 24 小时再滚揉", "滚揉 … 良品率 92.86%");
-      - per-person pay / attendance in Q&A (``PERSONNEL_MARKERS``) WITH a
-        concrete value, same rule as the process words (Steve 2026-11-03 Q2, A:
-        "本月工资总额" alone passes, "本月工资总额 35 万" is blocked);
+      - pay / attendance (``PERSONNEL_MARKERS``) WITH a concrete value, in Q&A and
+        in utterances, same rule as the process words (Steve 2026-11-03 Q2, A:
+        "本月工资总额" alone passes, "本月工资总额 35 万" is blocked). Privacy like
+        names (Steve 2026-11-04): no setting controls it;
       - a person or customer of THAT factory, matched exactly against its own
         ``users.full_name`` / ``customers.name`` (``directory``, loaded by
         ``smartbi.services.process_secret_names``). The old regex guess
@@ -178,6 +179,12 @@ def process_word_with_value(text: Optional[str], markers: Tuple[str, ...]) -> bo
     return has_word_with_value(text, markers, CONDITIONAL_MARKERS)
 
 
+def pay_word_with_value(*texts: Optional[str]) -> bool:
+    """A pay / attendance word with a concrete value nearby. Privacy, like person and customer
+    names (Steve 2026-11-04): the training filter switch (item d) must not control it."""
+    return any(has_word_with_value(t, PERSONNEL_MARKERS) for t in texts)
+
+
 def _hit(text: Optional[str], markers: Tuple[str, ...]) -> bool:
     return bool(text) and any(m in text for m in markers)
 
@@ -204,18 +211,20 @@ def qa_has_blocked_content(input_text: Optional[str], answer: Optional[str], *,
             or process_word_with_value(answer, QA_ANSWER_PROCESS_MARKERS)):
         return True
     # Q2 (Steve 2026-11-03, A): pay / attendance words block only with a value nearby, too
-    if has_word_with_value(input_text, PERSONNEL_MARKERS) or has_word_with_value(answer, PERSONNEL_MARKERS):
+    if pay_word_with_value(input_text, answer):
         return True
     return mentions_any(names, input_text, answer)
 
 
 def utterance_has_blocked_content(text: Optional[str], *, directory: Iterable[str]) -> bool:
     """True when an intent utterance must not be stored (any factory): a recipe /
-    parameter word with a value, or one of the factory's people / customers."""
+    parameter word or a pay / attendance word with a value, or one of the factory's
+    people / customers."""
     from common.process_secret_terms import mentions_any
 
     names = _names_directory(directory)
-    return process_word_with_value(text, UTTERANCE_MARKERS) or mentions_any(names, text)
+    return (process_word_with_value(text, UTTERANCE_MARKERS) or pay_word_with_value(text)
+            or mentions_any(names, text))
 
 
 def remove_personal_identifiers(text: Optional[str]) -> Optional[str]:
@@ -247,8 +256,8 @@ def is_withdrawn(scope: str) -> bool:
 def desensitize_utterance(scope: str, text: Optional[str], *,
                           directory: Iterable[str]) -> Tuple[bool, Optional[str]]:
     """Intent-mapping rule: ``(keep, text)``. Withdrawn factories, parameter /
-    recipe content with a value and the factory's people / customers are
-    dropped; authorized -> raw; otherwise numbers masked."""
+    recipe or pay / attendance content with a value and the factory's people /
+    customers are dropped; authorized -> raw; otherwise numbers masked."""
     if is_withdrawn(scope) or utterance_has_blocked_content(text, directory=directory):
         return False, None
     if keeps_raw(scope):

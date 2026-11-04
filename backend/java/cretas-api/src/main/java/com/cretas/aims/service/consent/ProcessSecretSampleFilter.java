@@ -98,7 +98,8 @@ public class ProcessSecretSampleFilter {
 
     /**
      * 该厂「训练数据过滤」(d) 是否<b>关着</b> (按样本所属的工厂; 工厂不明 / 读不到 → 开着 → false)。关着时不按保密产品名
-     * 和配方参数 / 客户 / 人名关键词剔除该厂的训练样本; 训练授权 (同意 / 撤回) 不受影响。
+     * 和「工艺词 + 数值」剔除该厂的训练样本; <b>人名 / 客户名照样剔除</b> (隐私, 不归任何开关管, Steve 2026-11-04);
+     * 训练授权 (同意 / 撤回) 不受影响。
      * 问「关着吗」而不是「开着吗」: 被 mock 的默认 false 落在过滤照常生效那一边。
      */
     public boolean trainingFilterOff(String factoryId) {
@@ -140,9 +141,6 @@ public class ProcessSecretSampleFilter {
     public record TrainingLists(Set<String> terms, Set<String> directory) {
         public static final TrainingLists EMPTY = new TrainingLists(Set.of(), Set.of());
 
-        public boolean namesAny(String... texts) {
-            return ProcessSecretTerms.mentionsAny(terms, texts) || ProcessSecretTerms.mentionsAny(directory, texts);
-        }
     }
 
     static final String METRIC_SAMPLE_UNVERIFIED = "cretas.training_sample.secrecy_unverified";
@@ -183,18 +181,20 @@ public class ProcessSecretSampleFilter {
         if (factoryId == null || factoryId.isBlank()) {
             return SampleVerdict.UNVERIFIED;     // 没有工厂就没有可比的名单 (不用所有工厂的并集)
         }
-        if (trainingFilterOff(factoryId)) {
-            // 该厂「训练数据过滤」(d) 关着 (#1400; 按样本所属的工厂; 开关读不到按开着): 不按保密产品名 / 人员 / 客户拦。
-            // 训练授权 (同意 / 撤回) 由调用方照常判
-            return SampleVerdict.CLEAR;
+        // 「训练数据过滤」(d; 按样本所属的工厂, 开关读不到按开着) 只管<b>保密产品词</b>。人名 / 客户名是隐私不是保密:
+        // 训练、学习、蒸馏样本里一律剔除, 任何开关都不管 (Steve 2026-11-04) —— 下面 withDirectory 不许跟着 d 走。
+        // 名单查不出来时两者同样: 按上次成功的名单判, 否则挂起 / 不存, 绝不直接存。训练授权由调用方照常判
+        boolean withTerms = !trainingFilterOff(factoryId);
+        if (!withTerms && !withDirectory) {
+            return SampleVerdict.CLEAR;          // 只查保密词的入口 (人工关键词), d 又关着: 没有要查的
         }
         try {
             TrainingLists lists = trainingLists(factoryId);
-            return names(lists, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
+            return names(lists, withTerms, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.CLEAR;
         } catch (RuntimeException e) {
             TrainingLists last = lastGoodLists.get(factoryId);
             SampleVerdict verdict = last == null ? SampleVerdict.UNVERIFIED
-                    : names(last, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.HELD;
+                    : names(last, withTerms, withDirectory, texts) ? SampleVerdict.PROTECTED : SampleVerdict.HELD;
             log.warn("训练样本名单查询失败, {}: kind={}, factory={}, reason={}",
                     verdict == SampleVerdict.HELD ? "按上次成功的名单判过, 挂起待重判"
                             : verdict == SampleVerdict.PROTECTED ? "上次成功的名单里有, 不存" : "没有上次成功的名单, 本条不存",
@@ -207,8 +207,9 @@ public class ProcessSecretSampleFilter {
         }
     }
 
-    private static boolean names(TrainingLists lists, boolean withDirectory, String... texts) {
-        return withDirectory ? lists.namesAny(texts) : ProcessSecretTerms.mentionsAny(lists.terms(), texts);
+    private static boolean names(TrainingLists lists, boolean withTerms, boolean withDirectory, String... texts) {
+        return (withTerms && ProcessSecretTerms.mentionsAny(lists.terms(), texts))
+                || (withDirectory && ProcessSecretTerms.mentionsAny(lists.directory(), texts));
     }
 
     /**

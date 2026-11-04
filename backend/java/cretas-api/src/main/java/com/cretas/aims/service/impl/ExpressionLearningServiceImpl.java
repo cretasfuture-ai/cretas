@@ -604,17 +604,17 @@ public class ExpressionLearningServiceImpl implements ExpressionLearningService 
         if (userInput == null || userInput.trim().isEmpty()) {
             return null;
         }
-        // 训练规则 (2026-10-24 / 10-29 选 A): 撤回 / 查不到的工厂不存; 配方 / 工艺参数词带具体数值不存;
+        // 训练规则 (2026-10-24 / 10-29 选 A): 撤回 / 查不到的工厂不存; 配方 / 工艺参数词、工资 / 考勤词带具体数值不存;
         // 本厂人员 / 客户 / 保密词不存; 未授权工厂脱敏后存
         TrainingConsentService.Status status = trainingConsentService.status(factoryId);
         if (!status.storable()) {
             return null;
         }
         boolean authorized = status == TrainingConsentService.Status.AUTHORIZED;
-        // 该厂「训练数据过滤」(d) 关着 (#1400): 不按配方参数 / 客户 / 人名关键词拦, 未授权照旧脱敏数字
-        String textToStore = processSecretSampleFilter.trainingFilterOff(factoryId)
-                ? (authorized ? userInput.trim() : TrainingSampleRules.maskNumbers(userInput.trim()))
-                : TrainingSampleRules.textToStore(userInput.trim(), authorized);
+        // 该厂「训练数据过滤」(d) 关着 (#1400): 不按「工艺词 + 数值」拦, 未授权照旧脱敏数字; 工资 / 考勤词 + 数值这里
+        // 照样拦, 人名 / 客户名下面 checkTrainingSample 照样拦 (隐私, 不归 d 管)
+        String textToStore = TrainingSampleRules.textToStore(userInput.trim(), authorized,
+                processSecretSampleFilter.trainingFilterOff(factoryId));
         if (textToStore == null) {
             return null;
         }

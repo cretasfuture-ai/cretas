@@ -10,6 +10,9 @@ import java.util.regex.Pattern;
  *   <li>配方 / 工艺参数类词 ({@link #PARAMETER_MARKERS}) <b>和具体数值在同一句 / 同一条记录里</b>:
  *       任何工厂都不存, 授权也不存 ({@link TrainingValueRules#hasWordWithValue}, 12 字窗口)。词单独出现 (「杀菌温度一般设多少」)
  *       不拦 —— 保密的是数值;</li>
+ *   <li>工资 / 考勤词 ({@link #PERSONNEL_MARKERS}) <b>和具体数值在一起</b>: 隐私 (Steve 2026-11-04), 与人名、客户名一样
+ *       任何工厂都不存, <b>任何开关都不管</b> ({@link #utteranceHasPayValue})。词单独出现 (「本月工资总额」) 不拦。
+ *       工艺词那条才归「训练数据过滤」(d) 管, 见 {@link #utteranceBlocked};</li>
  *   <li>其余原话默认存, 用来学「听懂」; 未授权工厂的原话把数字、手机号、身份证号、银行卡号换成占位符;
  *       已授权 (training_consent = private / shared_anon) 原样存。</li>
  * </ul>
@@ -29,6 +32,9 @@ public final class TrainingSampleRules {
             "配方", "配比", "配料比", "投料比", "用量", "添加量", "添加比例",
             "工艺参数", "工艺条件", "加工参数", "杀菌温度", "杀菌时间", "灭菌温度", "灭菌时间",
             "中心温度", "油温", "转速", "糖度", "盐度", "含水量", "浓度", "pH");
+
+    /** 工资 / 考勤词 (与 Python PERSONNEL_MARKERS 逐项相同)。 */
+    public static final List<String> PERSONNEL_MARKERS = List.of("工资", "薪资", "薪酬", "考勤");
 
     // 具体客户名 / 人名 (Steve 2026-10-24): 原话里出现就整条不存。三个常量与 Python
     // _ORG_SUFFIX / _SURNAMES / _PERSON_ROLE 逐字相同 (Python 测试比对)。
@@ -58,11 +64,26 @@ public final class TrainingSampleRules {
     }
 
     /**
-     * 原话的内容规则: 配方 / 工艺参数词带具体数值 → 任何工厂都不进训练样本。
+     * 原话的内容规则 (全量, d 开时用): 配方 / 工艺参数词或工资 / 考勤词带具体数值 → 不进训练样本。
      * (人名 / 客户名 / 保密产品名由 {@link ProcessSecretSampleFilter#checkTrainingSample} 按本厂名单判。)
      */
     public static boolean utteranceHasBlockedContent(String text) {
-        return TrainingValueRules.hasWordWithValue(text, PARAMETER_MARKERS, TrainingValueRules.CONDITIONAL_MARKERS);
+        return TrainingValueRules.hasWordWithValue(text, PARAMETER_MARKERS, TrainingValueRules.CONDITIONAL_MARKERS)
+                || utteranceHasPayValue(text);
+    }
+
+    /** 工资 / 考勤词带具体数值 (隐私, 不归任何开关管)。 */
+    public static boolean utteranceHasPayValue(String text) {
+        return TrainingValueRules.hasWordWithValue(text, PERSONNEL_MARKERS, List.of());
+    }
+
+    /**
+     * 收样本 / 学习入口用这一个: 该厂 d 关时不按工艺词拦, 工资 / 考勤词 + 数值始终拦。
+     *
+     * @param trainingFilterOff {@link ProcessSecretSampleFilter#trainingFilterOff} 的结果
+     */
+    public static boolean utteranceBlocked(String text, boolean trainingFilterOff) {
+        return trainingFilterOff ? utteranceHasPayValue(text) : utteranceHasBlockedContent(text);
     }
 
     /** 未授权工厂原话的脱敏: 证件号 / 卡号 / 手机号 → 占位符, 其余数值 (含中文数字、pH4 这类贴着单位的) → {@code <数值>}。 */
@@ -80,7 +101,12 @@ public final class TrainingSampleRules {
      * 一条原话该怎么存: {@code null} = 不存; 否则返回要存的文本 (已授权原样, 未授权脱敏)。
      */
     public static String textToStore(String text, boolean authorized) {
-        if (utteranceHasBlockedContent(text)) {
+        return textToStore(text, authorized, false);
+    }
+
+    /** 同上, 带该厂 d 的状态 (见 {@link #utteranceBlocked})。 */
+    public static String textToStore(String text, boolean authorized, boolean trainingFilterOff) {
+        if (utteranceBlocked(text, trainingFilterOff)) {
             return null;
         }
         return authorized ? text : maskNumbers(text);
