@@ -20,7 +20,7 @@ This file provides guidance to Claude Code when working with this repository.
 | Cretas 后端 (Java) | 10010 / 10020 | prod 蓝绿双槽交替 active；哪槽在跑只看 139 网关 `_upstream_cretas.conf`，不要写死 10010 |
 | Python 服务 | 8083 | `http://localhost:8083` |
 | Embedding 服务 | 9090 | gRPC |
-| Mall 后端 | 8080 | `http://139.196.165.140:8080` |
+| Mall 后端 | — | 已停用：2026-07-26 起 Java 已停，centerapi 返回 410，47:8080 与 139:8080 无服务；匿名路由和 Druid 修好前不得重启 |
 | PostgreSQL | 5432 | `localhost:5432` |
 | Redis | 6379 | `localhost:6379` |
 | FRP | 7501 | 内网穿透 |

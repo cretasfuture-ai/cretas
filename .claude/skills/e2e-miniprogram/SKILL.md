@@ -21,7 +21,7 @@ Node 脚本经 WebSocket 9420 连微信开发者工具（DevTools）驱动 `Mall
 | _(空)_ / `run` | 运行全部套件（`node run-e2e.js`） |
 | `run core|shopping|user|merchant|ai|trace|decoration` | 单套件（定义见 `references/suites.md`） |
 | `setup` | 启动 DevTools 自动化并验证连接 |
-| `check` | 环境连通性（node ≥ 18、9420 端口、后端 `http://139.196.165.140:8080/actuator/health`） |
+| `check` | 环境连通性（node ≥ 18、9420 端口、后端已停用，见 `.agents/skills/e2e-miniprogram/SKILL.md`，真后端用例现在跑不了） |
 | `verify <feature>` | 验证指定功能的数据正确性 |
 
 ## 前置条件

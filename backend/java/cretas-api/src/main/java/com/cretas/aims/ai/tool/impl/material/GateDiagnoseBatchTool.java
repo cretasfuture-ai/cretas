@@ -44,6 +44,12 @@ public class GateDiagnoseBatchTool extends AbstractBusinessTool {
     }
 
     @Override
+    public AccessMode getAccessMode() {
+        // 只读诊断: 不声明会按 fail-closed 当写工具, 被 W0 写确认门拦成「需要确认」
+        return AccessMode.READ;
+    }
+
+    @Override
     public boolean supportsPreview() {
         return false;
     }
