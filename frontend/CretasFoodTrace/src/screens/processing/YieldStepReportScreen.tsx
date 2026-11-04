@@ -59,6 +59,7 @@ import { isAxiosError } from 'axios';
 import { useCanViewPrice } from '../../store/canViewPriceStore';
 import { TouchableRipple } from 'react-native-paper';
 import {
+  canFinishWithoutNewOutput,
   resolveInitialStepIndex,
   resolveStepPhase,
   type StepPhase,
@@ -833,7 +834,7 @@ const YieldStepReportScreen: React.FC = () => {
       if (!task || !yieldData) return 'AWAITING_INPUT';
       const s = yieldData.steps.find((st: StepYieldDTO) => st.processOrder === task.processOrder);
       if (!s) return 'AWAITING_INPUT';
-      return (s.phase as StepPhase) ?? 'AWAITING_INPUT';
+      return resolveStepPhase(task, s.phase);
     },
     [yieldData],
   );
@@ -1228,6 +1229,8 @@ const YieldStepReportScreen: React.FC = () => {
     const out = parseFloat(outputQty);
     return outputHardCap != null && !Number.isNaN(out) && out > outputHardCap;
   }, [outputQty, outputHardCap]);
+  // 本道已留单保存的累计产出: 产出汇总每次提交都重取, 优先用它; yieldLimits 留单后可能还是旧数
+  const savedOutput = currentStepYield?.totalOutput ?? yieldLimits?.alreadyReported ?? 0;
 
   // 单元D: 上道多笔 WIP 但未选领用批次 → 阻塞投入提交.
   // wipPickerConfirmedEmpty: WipBatchPicker 确认服务端无可领批次后 onEmpty 回调置 true，
@@ -1760,8 +1763,9 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     // CCP: 按钮已置灰 + 界面已写明缺什么 + 后端错误码兜底 (CCP_READING_MISSING)
-    const output = parseFloat(outputQty);
-    if (Number.isNaN(output) || output <= 0) {
+    const finishOnly = canFinishWithoutNewOutput(outputQty, markComplete, savedOutput);
+    const output = finishOnly ? 0 : parseFloat(outputQty);
+    if (!finishOnly && (Number.isNaN(output) || output <= 0)) {
       appAlert('请填写本道产出量', '产出量必须大于 0');
       return;
     }
@@ -1881,7 +1885,7 @@ const YieldStepReportScreen: React.FC = () => {
   }, [currentTask, evidenceUploading, outputQty, byproducts, wasteQty, sampleRetainQty,
       outUnit, uploadedEvidenceUrls, batchId, refetchYield, submitOutputWithForce,
       taskOptions, semiQtyByCode, buildPhotoAnnotations, ccpReadingsForRequest, afterCcpReport,
-      paramDefs, paramValues]);
+      paramDefs, paramValues, savedOutput]);
 
   // 同单未完结续报: 保存本次产出但不完工 (留单继续) — 无二次确认 (可改, 低门槛)。
   const handleSavePartialOutput = useCallback(() => {
@@ -1910,11 +1914,13 @@ const YieldStepReportScreen: React.FC = () => {
       appAlert('产出量异常', '产出量超过物理上限, 请核对 (疑似单位/数量错误)');
       return;
     }
-    const outVal = parseFloat(outputQty);
+    const finishOnly = canFinishWithoutNewOutput(outputQty, true, savedOutput);
+    const outVal = finishOnly ? 0 : parseFloat(outputQty);
+    // 完工看的是整道累计产出, 不是这一次填的数
     const imbalance = describeYieldImbalance(
       currentStepYield?.totalInput ?? null,
       currentStepYield?.inputUnit ?? unit,
-      outVal,
+      savedOutput + outVal,
       outUnit,
     );
     const header = `${productType || ''} ${currentTask?.processName ?? ''}`;
@@ -1924,7 +1930,8 @@ const YieldStepReportScreen: React.FC = () => {
       return;
     }
     const paramDeviations = collectParamDeviations(paramDefs, paramValues);
-    const baseBody = '完工后本道出成率锁定, 确认要完工出成吗? (若还要继续产出, 请改用"保存, 稍后继续")';
+    const baseBody = `${finishOnly ? `这次没有新增产出, 本道累计产出 ${savedOutput} ${outUnit}。\n` : ''}`
+      + '完工后本道出成率锁定, 确认要完工出成吗? (若还要继续产出, 请改用"保存, 稍后继续")';
     let title = '完工出成确认';
     let message = `${header}\n${baseBody}`;
     if (imbalance.kind === 'imbalanced') {
@@ -1959,7 +1966,7 @@ const YieldStepReportScreen: React.FC = () => {
       { text: '确认完工出成', style: 'default', onPress: () => doSubmitOutput(true) },
     ]);
   }, [outputOverHardCap, productType, currentTask, doSubmitOutput, outputQty, currentStepYield, unit, outUnit,
-      paramDefs, paramValues]);
+      paramDefs, paramValues, savedOutput]);
 
   // ========================= 完成阶段: 下一道 =========================
   const goNextStep = useCallback(() => {
@@ -3257,12 +3264,12 @@ const YieldStepReportScreen: React.FC = () => {
               <Text style={styles.sectionTitle} testID="yield-output-block">完工出成 (本道做完才填)</Text>
 
               {/* 同单未完结续报: 显示本道已累计产出 (防呆 — 操作员清楚还能继续) */}
-              {(yieldLimits?.alreadyReported ?? 0) > 0 ? (
+              {savedOutput > 0 ? (
                 <View style={styles.autoWasteBanner} testID="yield-already-reported-banner">
                   <Text style={styles.autoWasteText}>
-                    本道已累计产出 {yieldLimits?.alreadyReported} {outUnit}
+                    本道已累计产出 {savedOutput} {outUnit}
                     {yieldLimits?.remaining != null ? ` · 含超收容差还可报 ${yieldLimits.remaining} ${outUnit}` : ''}
-                    , 本次填写新增产出量。
+                    , 本次填写新增产出量; 没有新增就留空, 直接点「标记完工」。
                   </Text>
                 </View>
               ) : null}

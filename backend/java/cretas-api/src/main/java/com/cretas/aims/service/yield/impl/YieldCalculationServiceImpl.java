@@ -42,6 +42,10 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
         return value == null ? null : value.toString();
     }
 
+    private static boolean isPartialOutput(ProductionReport r) {
+        return r.getCustomFields() != null && Boolean.FALSE.equals(r.getCustomFields().get("markComplete"));
+    }
+
     private static String customProcessName(ProductionReport r) {
         String name = customString(r, "processEntryProcessName");
         return name == null || name.isBlank() ? null : name;
@@ -107,6 +111,8 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             // 三阶段 phase 推断信号: 是否有 INPUT 报工 / 有 OUTPUT 报工 (或 legacy: 有投入 / 有产出)
             boolean hasInputSignal = false;
             boolean hasOutputSignal = false;
+            // 留单产出 (markComplete=false) 只算「在产」, 不算完工; 与提交侧同口径: null/true → 完工
+            boolean hasCompletingOutput = false;
             for (ProductionReport r : group) {
                 String kind = r.getReportKind();
                 boolean kindOutput = "OUTPUT".equals(kind);
@@ -115,6 +121,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
                 if (kindOutput || (kind == null && r.getOutputQuantity() != null
                         && r.getOutputQuantity().compareTo(BigDecimal.ZERO) > 0)) {
                     hasOutputSignal = true;
+                    if (!isPartialOutput(r)) {
+                        hasCompletingOutput = true;
+                    }
                 }
                 if (kindInput || (kind == null && r.getInputQuantity() != null
                         && r.getInputQuantity().compareTo(BigDecimal.ZERO) > 0)) {
@@ -278,9 +287,9 @@ public class YieldCalculationServiceImpl implements YieldCalculationService {
             }
             BigDecimal carryover = prevOutput == null ? null : prevOutput.subtract(totalInput);
 
-            // 三阶段 (单元1): phase 推断 — 有产出信号 → COMPLETED; 有投入信号(无产出) → IN_PRODUCTION; 否则 AWAITING_INPUT
-            String phase = hasOutputSignal ? "COMPLETED"
-                    : (hasInputSignal ? "IN_PRODUCTION" : "AWAITING_INPUT");
+            // 三阶段 (单元1): phase 推断 — 有完工产出 → COMPLETED; 有投入或留单产出 → IN_PRODUCTION; 否则 AWAITING_INPUT
+            String phase = hasCompletingOutput ? "COMPLETED"
+                    : (hasInputSignal || hasOutputSignal ? "IN_PRODUCTION" : "AWAITING_INPUT");
 
             steps.add(StepYieldDTO.builder()
                     .workProcessTaskId(head.getWorkProcessTaskId())
