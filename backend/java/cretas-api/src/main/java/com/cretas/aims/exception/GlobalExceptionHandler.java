@@ -226,6 +226,10 @@ public class GlobalExceptionHandler {
         } else {
             body = ApiResponse.error(e.getCode(), message);
         }
+        if (!e.getDiagnoses().isEmpty()) {
+            // 诊断卡数据: 前端从 data.gateDiagnoses 读 (闸名/对象/缺口/解开方式)
+            ((ApiResponse<Object>) body).setData(java.util.Map.of("gateDiagnoses", e.getDiagnoses()));
+        }
         // Map business code to HTTP status. Default 400 for unknown / 4xx-validation paths.
         HttpStatus status = switch (code) {
             case 401 -> HttpStatus.UNAUTHORIZED;

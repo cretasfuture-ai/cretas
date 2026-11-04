@@ -100,10 +100,66 @@ const pulseHintTarget = (label: string) => {
   setTimeout(() => target.classList.remove('cretas-pulse-hint'), 5000);
 };
 
+// 出库/领料/投料被拦: 后端在 data.gateDiagnoses 带结构化原因 (闸名/对象/缺多少/解开方式/跳转路由)
+export interface GateDiagnosis {
+  gate: string;
+  gateLabel: string;
+  code: string;
+  subjectType: string;
+  subjectRef: string | null;
+  cause: string | null;
+  required: number | null;
+  available: number | null;
+  shortBy: number | null;
+  unit: string | null;
+  howToResolve: string;
+  resolveRoute: string | null;
+}
+
+export const extractGateDiagnoses = (data: unknown): GateDiagnosis[] => {
+  const list = (data as { gateDiagnoses?: unknown } | null | undefined)?.gateDiagnoses;
+  return Array.isArray(list) ? (list as GateDiagnosis[]) : [];
+};
+
+const showGateDiagnosisCard = async (message: string, diagnoses: GateDiagnosis[]) => {
+  const { ElMessageBox } = await import('element-plus');
+  const { h } = await import('vue');
+  const qty = (d: GateDiagnosis) =>
+    d.shortBy != null && d.shortBy > 0
+      ? `要 ${d.required}${d.unit ?? ''}，可用 ${d.available}${d.unit ?? ''}，缺 ${d.shortBy}${d.unit ?? ''}`
+      : '';
+  const card = (d: GateDiagnosis) =>
+    h('div', { class: 'gate-diagnosis-card', style: 'border:1px solid #f3d19e;border-radius:6px;padding:8px 12px;margin-top:8px;text-align:left' }, [
+      h('div', { style: 'font-weight:600' }, `${d.gateLabel}${d.subjectRef ? ' · ' + d.subjectRef : ''}`),
+      d.cause ? h('div', { style: 'color:#909399' }, `原因：${d.cause}`) : null,
+      qty(d) ? h('div', null, qty(d)) : null,
+      h('div', { style: 'color:#409eff' }, `怎么解开：${d.howToResolve}`),
+    ]);
+  const route = diagnoses.find(d => d.resolveRoute)?.resolveRoute ?? null;
+  try {
+    await ElMessageBox({
+      title: `操作被 ${diagnoses.length} 道闸拦住`,
+      message: h('div', null, [h('div', null, message), ...diagnoses.map(card)]),
+      type: 'warning',
+      showCancelButton: !!route,
+      confirmButtonText: route ? '去解开' : '我知道了',
+      cancelButtonText: '关闭',
+      distinguishCancelAndClose: true,
+    });
+    if (route) {
+      const router = await getRouter();
+      router.push(route);
+    }
+  } catch { /* 关闭 */ }
+};
+
 const showRichError = async (
   message: string,
-  opts: { actionHint?: string | null; severity?: string | null; hintTarget?: string | null }
+  opts: { actionHint?: string | null; severity?: string | null; hintTarget?: string | null; gateDiagnoses?: GateDiagnosis[] }
 ) => {
+  if (opts.gateDiagnoses && opts.gateDiagnoses.length > 0) {
+    return showGateDiagnosisCard(message, opts.gateDiagnoses);
+  }
   const el = await import('element-plus');
   const { ElMessageBox } = el;
   if (opts.severity === 'BLOCKING') {
@@ -313,6 +369,7 @@ request.interceptors.response.use(
             actionHint: rich.actionHint,
             severity: rich.severity,
             hintTarget: rich.hintTarget,
+            gateDiagnoses: extractGateDiagnoses(data.data),
           });
         }
         return rejectReportedApiError(new ApiError(
@@ -645,6 +702,7 @@ request.interceptors.response.use(
         actionHint: rich.actionHint,
         severity: rich.severity,
         hintTarget: rich.hintTarget,
+        gateDiagnoses: extractGateDiagnoses(error.response?.data?.data),
       });
     }
 

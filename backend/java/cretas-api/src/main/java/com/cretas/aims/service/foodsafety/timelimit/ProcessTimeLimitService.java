@@ -336,7 +336,11 @@ public class ProcessTimeLimitService {
                     .withHint("这道工序的投料时限从解冻开始算。请先在逐道录入的时限面板里登记「开始解冻」；"
                             + "没有登记就不知道从什么时候算，系统不会替你猜")
                     .withSeverity("BLOCKING")
-                    .withHintTarget(e.source().batchNumber());
+                    .withHintTarget(e.source().batchNumber())
+                    .withDiagnosis(com.cretas.aims.service.gate.GateDiagnosis.of(
+                                    com.cretas.aims.service.gate.GateId.TIME_LIMIT, CODE_START_MISSING, "BATCH", e.source().batchNumber())
+                            .cause("未登记开始解冻")
+                            .resolve("在逐道录入的时限面板里登记批次 " + e.source().batchNumber() + " 的「开始解冻」", null).build());
         }
         BigDecimal expired = s.expiredQuantity();
         if (expired == null || expired.signum() <= 0) {
@@ -361,7 +365,13 @@ public class ProcessTimeLimitService {
                 .withCode(CODE_EXCEEDED)
                 .withHint("请通知质检员在「" + RELEASE_PATH + "」复检放行或判不合格，处置后再领；也可以改选没有超时的批次")
                 .withSeverity("BLOCKING")
-                .withHintTarget(e.source().batchNumber());
+                .withHintTarget(e.source().batchNumber())
+                .withDiagnosis(com.cretas.aims.service.gate.GateDiagnosis.of(
+                                com.cretas.aims.service.gate.GateId.TIME_LIMIT, CODE_EXCEEDED, "BATCH", e.source().batchNumber())
+                        .cause("已超时 " + plain(s.expiredQuantity()) + unit)
+                        .qty(quantity, s.drawableQuantity()).unit(unit)
+                        .resolve("通知质检员在「质量管理 → 质检放行」复检放行或判不合格批次 " + e.source().batchNumber()
+                                + "; 或改选没有超时的批次", com.cretas.aims.service.gate.GateRoutes.QC_RELEASE).build());
     }
 
     private void recordBlocked(String factoryId, Evaluation e, Long userId) {

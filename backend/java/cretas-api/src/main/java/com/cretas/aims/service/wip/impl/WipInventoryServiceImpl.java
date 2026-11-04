@@ -11,6 +11,9 @@ import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.event.ProductionCostUpdatedEvent;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.gate.GateDiagnosis;
+import com.cretas.aims.service.gate.GateId;
+import com.cretas.aims.service.gate.GateRoutes;
 import com.cretas.aims.dto.yield.WipRowDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductProcessWorkflow;
@@ -1255,7 +1258,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     //    以后这类提示就都不看了。⇒ 只说【下一步做什么】+ 一句关于下拉的事实。
                     .withHint("请刷新半成品下拉后改选批次, 或减少投料量 —— 下拉里的余量已扣除其它计划已录入、尚未结算的待扣部分")
                     .withSeverity("BLOCKING")
-                    .withHintTarget(intermediateBatchNo);
+                    .withHintTarget(intermediateBatchNo)
+                    .withDiagnosis(GateDiagnosis.of(GateId.INSUFFICIENT_BALANCE, "SFI_INSUFFICIENT", "SEMI_BATCH", intermediateBatchNo).qty(deductQty, available).unit(u).resolve("刷新半成品下拉后改选批次, 或减少投料量", null).build());
         }
         sfi.setConsumedQuantity(nz(sfi.getConsumedQuantity()).add(deductQty));
         sfi.refreshAvailableQuantity();
@@ -2147,7 +2151,8 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                                 inputQuantity.stripTrailingZeros().toPlainString(), u,
                                 claimable.stripTrailingZeros().toPlainString(), u))
                         .withSeverity("BLOCKING")
-                        .withHintTarget("inputQuantity");
+                        .withHintTarget("inputQuantity")
+                    .withDiagnosis(GateDiagnosis.of(GateId.INSUFFICIENT_BALANCE, "WIP_RESERVED_INSUFFICIENT", "SEMI_BATCH", String.valueOf(sourceWip.getIntermediateBatchNo())).cause("含待审批占用 " + reserved.stripTrailingZeros().toPlainString() + u).qty(inputQuantity, claimable).unit(u).resolve("减少投入量, 或先审批/驳回前面占用的报工", null).build());
             }
             throw new BusinessException(409, "领用量超过半成品余额")
                     .withCode("WIP_INSUFFICIENT")
