@@ -66,7 +66,7 @@ try{
  stage='focused-followup';await persisted.getByRole('button',{name:'追问此异常',exact:true}).click();
  const focus=page.locator('.section-insight:visible').filter({has:page.getByRole('note')});await focus.waitFor();
  const pending=page.waitForResponse(r=>r.url().endsWith('/sections/followup')&&r.request().method()==='POST');
- await focus.getByRole('textbox',{name:'向本段提问'}).fill('这个异常接下来优先查什么？');await focus.getByRole('button',{name:'发送',exact:true}).click();
+ await focus.getByRole('textbox',{name:'向这组数据提问'}).fill('这个异常接下来优先查什么？');await focus.getByRole('button',{name:'发送',exact:true}).click();
  const answer=(await (await pending).json()).data;assert.equal(answer.alertId,selected.id);assert(answer.answer.includes('当前跟进：'));
  await focus.locator('.message--assistant').waitFor();await focus.screenshot({path:join(out,'02-alert-followup.png')});
  stage='refresh-context';const refreshed=page.waitForResponse(r=>r.url().endsWith('/blacklake/analysis')&&r.request().method()==='GET');

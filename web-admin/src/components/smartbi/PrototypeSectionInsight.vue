@@ -4,6 +4,7 @@ import UButton from '@nuxt/ui/components/Button.vue';
 import UBadge from '@nuxt/ui/components/Badge.vue';
 import { askBlacklakeSection, type CostDataAlert, type SectionInsightReport } from '@/api/smartbi/blacklake';
 import { useAuthStore } from '@/store/modules/auth';
+import { localizeBlacklakeText } from '@/views/smart-bi/blacklakePresentation';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -21,6 +22,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (event: 'clear-focus'): void;
+  (event: 'locate-order', projectId: number): void;
 }>();
 
 const question = ref('');
@@ -55,6 +57,9 @@ const questionLength = computed(() => question.value.length);
 const canAsk = computed(() => question.value.trim().length > 0 && questionLength.value <= 500 && !loading.value);
 const chatId = computed(() => `section-followup-${props.report.sectionId}`);
 const focusTitle = computed(() => props.focusAlert?.title ?? '');
+const evidenceSources = computed(() => props.report.evidenceSources ?? []);
+const relatedOrders = computed(() => props.report.relatedOrders ?? []);
+const scopeDescription = computed(() => props.report.scopeDescription?.trim() || '当前段落暂无更具体的范围说明。');
 
 function resetConversation() {
   requestVersion.value += 1;
@@ -129,7 +134,7 @@ async function submitQuestion() {
       || result.runId !== props.report.scope.runId
       || (resultAlertId ?? null) !== (focusAlertId.value ?? null)
     ) return;
-    history.value = [...previousHistory, { role: 'user', content: value }, { role: 'assistant', content: result.answer }].slice(-6);
+    history.value = [...previousHistory, { role: 'user' as const, content: value }, { role: 'assistant' as const, content: result.answer }].slice(-6);
     question.value = '';
   } catch (cause) {
     if (version !== requestVersion.value || identity !== sectionIdentity.value) return;
@@ -144,9 +149,10 @@ async function submitQuestion() {
   <section class="section-insight" :data-testid="`section-insight-${report.sectionId}`">
     <div class="insight-header">
       <div class="insight-heading">
-        <div class="insight-kicker">本段分析 <UBadge color="neutral" variant="subtle">只读快照</UBadge></div>
+        <div class="insight-kicker">这组数据的分析 <UBadge color="neutral" variant="subtle">只读快照</UBadge></div>
         <h3>{{ report.title }}</h3>
-        <p class="insight-summary">{{ report.summary }}</p>
+        <p class="insight-summary">{{ localizeBlacklakeText(report.summary) }}</p>
+        <p class="insight-scope">分析范围：{{ localizeBlacklakeText(scopeDescription) }}</p>
       </div>
       <details class="scope-details">
         <summary>数据快照</summary>
@@ -157,9 +163,9 @@ async function submitQuestion() {
     <aside v-if="focusAlert" class="focus-context" role="note" :aria-label="`当前核对：${focusTitle}`">
       <div class="focus-context__copy">
         <UBadge color="warning" variant="subtle">当前核对</UBadge>
-        <strong>{{ focusAlert.title }}</strong>
+        <strong>{{ localizeBlacklakeText(focusAlert.title) }}</strong>
         <span>责任角色：{{ focusAlert.owner }}</span>
-        <span>动作：{{ focusAlert.action }}</span>
+        <span>动作：{{ localizeBlacklakeText(focusAlert.action) }}</span>
       </div>
       <UButton color="neutral" variant="outline" size="sm" type="button" @click="clearFocus">清除上下文</UButton>
     </aside>
@@ -167,49 +173,60 @@ async function submitQuestion() {
     <div class="insight-strip">
       <article class="insight-strip__item insight-strip__item--impact">
         <span class="insight-label">影响</span>
-        <p class="impact-copy">{{ impact }}</p>
+        <p class="impact-copy">{{ localizeBlacklakeText(impact) }}</p>
         <details v-if="remainingObservations.length || impact" class="insight-details insight-details--inline">
           <summary>查看完整观察</summary>
-          <p>{{ impact }}</p>
-          <ul v-if="remainingObservations.length"><li v-for="item in remainingObservations" :key="item">{{ item }}</li></ul>
+          <p>{{ localizeBlacklakeText(impact) }}</p>
+          <ul v-if="remainingObservations.length"><li v-for="item in remainingObservations" :key="item">{{ localizeBlacklakeText(item) }}</li></ul>
         </details>
       </article>
       <article class="insight-strip__item">
         <span class="insight-label">结论</span>
-        <p>{{ report.summary }}</p>
+        <p>{{ localizeBlacklakeText(report.summary) }}</p>
       </article>
       <article class="insight-strip__item insight-strip__item--next">
         <span class="insight-label">下一步</span>
-        <p>{{ report.nextSteps[0] || '暂无建议动作。' }}</p>
+        <p>{{ report.nextSteps[0] ? localizeBlacklakeText(report.nextSteps[0]) : '暂无建议动作。' }}</p>
       </article>
     </div>
 
     <div class="detail-list">
       <details v-if="report.hypotheses.length" class="insight-details insight-details--hypothesis">
         <summary><span>待验证假设</span><UBadge color="warning" variant="subtle">未证实</UBadge></summary>
-        <ul><li v-for="item in report.hypotheses" :key="item">{{ item }}</li></ul>
+        <ul><li v-for="item in report.hypotheses" :key="item">{{ localizeBlacklakeText(item) }}</li></ul>
       </details>
       <details v-if="report.nextSteps.length > 1" class="insight-details">
         <summary>其余建议动作（{{ report.nextSteps.length - 1 }}）</summary>
-        <ul><li v-for="item in report.nextSteps.slice(1)" :key="item">{{ item }}</li></ul>
+        <ul><li v-for="item in report.nextSteps.slice(1)" :key="item">{{ localizeBlacklakeText(item) }}</li></ul>
       </details>
       <details v-if="report.calculation.length" class="insight-details">
         <summary>计算口径</summary>
-        <ul><li v-for="item in report.calculation" :key="item">{{ item }}</li></ul>
+        <ul><li v-for="item in report.calculation" :key="item">{{ localizeBlacklakeText(item) }}</li></ul>
       </details>
       <details v-if="report.limitations.length" class="insight-details">
         <summary>使用边界</summary>
-        <ul><li v-for="item in report.limitations" :key="item">{{ item }}</li></ul>
+        <ul><li v-for="item in report.limitations" :key="item">{{ localizeBlacklakeText(item) }}</li></ul>
       </details>
-      <details v-if="report.evidenceRefs.length" class="insight-details">
-        <summary>证据引用</summary>
-        <div class="evidence-refs"><code v-for="reference in report.evidenceRefs" :key="reference">{{ reference }}</code></div>
+      <details v-if="evidenceSources.length || report.evidenceRefs.length" class="insight-details">
+        <summary>数据来源</summary>
+        <ul v-if="evidenceSources.length" class="source-list"><li v-for="source in evidenceSources" :key="`${source.label}-${source.description}`"><strong>{{ source.label }}</strong><span>{{ localizeBlacklakeText(source.description) }}</span></li></ul>
+        <p v-else class="empty-source">暂未提供可读来源说明。</p>
+      </details>
+      <details v-if="relatedOrders.length" class="insight-details related-orders">
+        <summary>需要回到工单核对（{{ relatedOrders.length }}）</summary>
+        <div v-for="order in relatedOrders" :key="order.projectId" class="related-order">
+          <div class="related-order__heading"><strong>{{ order.projectCode }} · {{ order.product }}</strong><UButton color="primary" variant="outline" size="sm" type="button" @click="emit('locate-order', order.projectId)">核对工单</UButton></div>
+          <details v-if="order.reasons.length" class="insight-details insight-details--nested">
+            <summary>为什么要核对</summary>
+            <ul><li v-for="reason in order.reasons" :key="reason">{{ localizeBlacklakeText(reason) }}</li></ul>
+          </details>
+        </div>
       </details>
     </div>
 
     <div class="followup" data-testid="section-followup">
       <div class="followup-heading">
-        <div><h4>继续追问</h4><p>只基于本次运行和本段证据回答，不补造缺失数据。</p></div>
+        <div><h4>继续追问</h4><p>只基于本次运行和这组数据的证据回答，不补造缺失数据。</p></div>
         <div class="followup-actions">
           <span v-if="loading" class="followup-status" role="status">正在核对…</span>
           <UButton color="primary" variant="outline" type="button" :aria-expanded="chatOpen" :aria-controls="chatId" @click="toggleChat">{{ chatOpen ? '收起追问' : '继续追问' }}</UButton>
@@ -222,11 +239,11 @@ async function submitQuestion() {
         <div v-if="visibleHistory.length" class="conversation" aria-live="polite">
           <div v-for="(message, index) in visibleHistory" :key="`${message.role}-${index}-${message.content}`" :class="['message', `message--${message.role}`]">
             <span class="message-role">{{ message.role === 'user' ? '你' : '分析助手' }}</span>
-            <p>{{ message.content }}</p>
+            <p>{{ message.role === 'assistant' ? localizeBlacklakeText(message.content) : message.content }}</p>
           </div>
         </div>
         <form class="question-form" @submit.prevent="submitQuestion">
-          <label class="sr-only" :for="`section-question-${report.sectionId}`">向本段提问</label>
+          <label class="sr-only" :for="`section-question-${report.sectionId}`">向这组数据提问</label>
           <input
             :id="`section-question-${report.sectionId}`"
             ref="questionInput"
@@ -267,6 +284,7 @@ h3, h4 { color: var(--insight-ink); }
 h3 { margin: 0 0 6px; font-size: 17px; letter-spacing: -.01em; }
 h4 { margin: 0 0 3px; font-size: 14px; }
 .insight-summary, .followup-heading p { margin: 0; color: var(--insight-text); line-height: 1.65; }
+.insight-scope { margin: 5px 0 0; color: #687f98; font-size: 12px; line-height: 1.6; }
 .scope-details { flex: none; color: #8491a3; font-size: 11px; }
 .scope-details summary { padding: 4px 8px; border-radius: 999px; color: var(--insight-primary); background: var(--insight-page); cursor: pointer; list-style: none; white-space: nowrap; }
 .scope-details summary::-webkit-details-marker { display: none; }
@@ -292,8 +310,16 @@ h4 { margin: 0 0 3px; font-size: 14px; }
 .insight-details--inline summary { padding: 0; font-size: 11px; }
 .insight-details--inline > p, .insight-details--inline > ul { padding: 6px 0 0 15px; font-size: 12px; }
 .insight-details--hypothesis { border-color: #ead9ad; background: #fffdf8; }
-.evidence-refs { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 11px; }
-.evidence-refs code { padding: 3px 6px; border-radius: 5px; background: var(--insight-page); color: #687f98; font-size: 11px; }
+.source-list { display: grid; gap: 7px; margin: 0; padding: 0 12px 11px 29px; color: var(--insight-text); font-size: 12px; line-height: 1.7; }
+.source-list strong { margin-right: 7px; color: var(--insight-ink); }
+.empty-source { padding-left: 29px !important; color: #8491a3 !important; }
+.related-orders { background: #fbfcfe; }
+.related-order { padding: 0 12px 11px; }
+.related-order + .related-order { padding-top: 9px; border-top: 1px solid var(--insight-line); }
+.related-order__heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--insight-ink); font-size: 12px; }
+.insight-details--nested { margin-top: 7px; border-color: #d8e2ed; }
+.insight-details--nested summary { padding: 7px 9px; font-size: 11px; }
+.insight-details--nested > ul { padding: 0 10px 8px 26px; }
 .followup { margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--insight-line); }
 .followup-heading { align-items: center; }
 .followup-actions { display: flex; align-items: center; gap: 10px; flex: none; }

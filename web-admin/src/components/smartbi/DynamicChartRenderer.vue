@@ -18,6 +18,7 @@ interface Props {
   height?: number;
   title?: string;
   presentation?: 'standard' | 'plain';
+  numberPrecision?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -41,6 +42,7 @@ let resizeObserver: ResizeObserver | null = null;
 let rafId = 0;
 let prevChartType: string | null = null; // Fix 63: track chart type for transition
 let prevPresentation = props.presentation;
+let prevNumberPrecision = props.numberPrecision;
 
 const PIE_COLORS = CHART_COLORS;
 
@@ -68,7 +70,7 @@ onUnmounted(() => {
   chartInstance = null;
 });
 
-watch(() => [props.config, props.presentation], () => {
+watch(() => [props.config, props.presentation, props.numberPrecision], () => {
   nextTick(() => updateChart());
 }, { deep: true });
 
@@ -175,11 +177,25 @@ function updateChart() {
           emphasis: { iconStyle: { borderColor: '#2D8B57' } },
         };
       }
+      // Display precision is opt-in. Keep source values intact for charts and calculations.
+      if (props.numberPrecision !== undefined) {
+        const digits = Math.max(0, Math.min(20, Math.trunc(props.numberPrecision)));
+        const format = (value: unknown) => typeof value === 'number'
+          ? value.toLocaleString('zh-CN', { maximumFractionDigits: digits }) : value == null ? '未提供' : String(value);
+        opt.tooltip = { ...(opt.tooltip as Record<string, unknown> | undefined), valueFormatter: format };
+        for (const axisKey of ['xAxis', 'yAxis']) {
+          const axes = Array.isArray(opt[axisKey]) ? opt[axisKey] : [opt[axisKey]];
+          for (const axis of axes as (Record<string, unknown> | undefined)[]) {
+            if (axis?.type === 'value') axis.axisLabel = { ...(axis.axisLabel as Record<string, unknown> | undefined), formatter: format };
+          }
+        }
+      }
       // Fix 63: Use notMerge=false when same chart type for smooth data transitions
       const curChartType = (props.config as unknown as Record<string, unknown>).chartType as string | undefined;
-      const sameType = prevChartType != null && curChartType === prevChartType && prevPresentation === props.presentation;
+      const sameType = prevChartType != null && curChartType === prevChartType && prevPresentation === props.presentation && prevNumberPrecision === props.numberPrecision;
       prevChartType = curChartType || null;
       prevPresentation = props.presentation;
+      prevNumberPrecision = props.numberPrecision;
       chartInstance.setOption(option, { notMerge: !sameType, lazyUpdate: true });
     }
   } catch (err) {

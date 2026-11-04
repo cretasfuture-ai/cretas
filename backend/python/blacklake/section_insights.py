@@ -12,7 +12,7 @@ SECTIONS = {
 }
 
 
-def fmt(value, digits=4):
+def fmt(value, digits=2):
     return '未提供' if value is None else f'{value:,.{digits}f}'.rstrip('0').rstrip('.')
 
 
@@ -36,44 +36,70 @@ def build(analysis):
     cost, production = analysis['cost'], analysis['production']
     review = analysis['eligibleCostReview']
     eligible = review['eligibleProjects']; total = production['projectCount']
-    common = ['金额币种未由来源返回，待核；材料和人工只是可识别直接成本，不是完整制造成本或毛利。',
-              '原料/半成品到成品缺逐批对应及期初在制品；不能把上游工单成本再叠加到下游领料估值。']
+    common = ['黑湖未说明金额是什么币种，需要财务确认。这里仅包含已记录的材料和人工，未包含所有制造费用，不能用来算完整制造成本或毛利。',
+              '还缺每批原料、半成品与成品的对应记录，以及期初尚未做完的货。半成品领料金额若已含上游成本，就不能再加一次上游工单成本。']
     result = {}
     def add(key, summary, observations, calculation, hypotheses, limitations, steps):
         alerts = section_alerts(analysis, key)
+        sources = {
+            'coverage': [('工单及成本检查结果', '逐张检查完工状态、成品数量、领退料金额和任务工资；一张工单可能缺多项资料。')],
+            'material': [('已审批的生产领料、退料明细', '使用已关联到工单的材料数量、历史单价和领退料金额；未关联的单据单独列出。')],
+            'labor': [('工序任务的累计工资与工时', '按任务所属工单汇总工资；报工中的估算工资不会再加一次。')],
+            'finished': [('工单最终良品数量与完工状态', '成品量按工单最终良品计算，工序任务和各次报工的数量不重复累加。')],
+            'product_cost': [('材料领退料、任务工资和工单最终良品', '只比较资料具备的工单；同产品名称、代码和成品单位分别计算。')],
+            'production': [('工单状态、工序任务及报工记录', '工单用于看完工情况；任务用于看累计工时；报工用于核对良品、不良品及审批情况。')],
+            'inventory': [('仓库库存余额及历史出入库单', '库存是采集时的余额，领退料是历史记录；两者不能直接当作同一期间的收发存对账。')],
+        }
+        by_id = {str(p['projectId']): p for p in cost['projects']}
+        related = {}
+        for alert in alerts:
+            for reference in alert['entityRefs']:
+                project = by_id.get(str(reference['projectId']))
+                if project is None:
+                    continue
+                entry = related.setdefault(str(project['projectId']), {
+                    'projectId': project['projectId'], 'projectCode': project['projectCode'],
+                    'product': project['product'], 'reasons': []})
+                if alert['title'] not in entry['reasons']:
+                    entry['reasons'].append(alert['title'])
+        scope = (f'本次采集的全部 {total} 张工单；其中 {eligible} 张资料具备，可展示单位材料加人工成本。'
+                 if key != 'inventory' else '本次采集时的库存余额，以及账号可见的历史出入库记录。')
         result[key] = {'sectionId': key, 'title': SECTIONS[key][0], 'summary': summary,
             'observations': observations, 'calculation': calculation, 'hypotheses': hypotheses,
             'limitations': limitations, 'nextSteps': steps,
             'suggestedQuestions': ['这个数字怎么算的？', '目前缺什么，影响哪些判断？', '接下来优先查什么？'],
-            'scope': {'runId': analysis['runId']}, 'evidenceRefs': [a['id'] for a in alerts]}
+            'scope': {'runId': analysis['runId']}, 'evidenceRefs': [a['id'] for a in alerts],
+            'scopeDescription': scope + ' 这是这组数据的整体分析，不是按固定天数切成的一段；不随图表单位、搜索或表格筛选改变。',
+            'evidenceSources': [{'label': label, 'description': description} for label, description in sources[key]],
+            'relatedOrders': list(related.values())}
 
     reasons = Counter(issue for p in cost['projects'] if not p['unitCostAvailable'] for issue in p['issues'])
-    add('coverage', f'{eligible}/{total} 张工单通过单位直接成本字段校验，另外 {total-eligible} 张仍需补证据。',
-        ['通过字段校验不代表实际材料和人工已经归集完整。'] +
+    add('coverage', f'{eligible}/{total} 张工单资料具备，可以先算材料加人工的单位成本；另外 {total-eligible} 张还缺资料或尚未满足完工条件。',
+        ['能算出数字，不代表所有食材和工资都已经记全。'] +
         [f'{reason}：影响 {count} 张（同一工单可有多个原因，不可相加）。' for reason, count in reasons.most_common(5)],
-        ['可核算占比 = 通过字段校验工单数 ÷ 可见工单总数；不是金额覆盖率。'],
+        ['可核算占比 = 资料具备的工单数 ÷ 本次可见工单总数；表示有多少工单能算，不表示已记录多少成本金额。'],
         ['缺失可能来自未报工、未归集或关联未填，当前数据不能区分真实原因。'], common,
         ['先核实领退料工单关联，再补历史估值、人工与成品量；保留原始缺失和源端零值。'])
 
     add('material', f'已关联 {cost["linkedMaterialLines"]} 行领退料；{cost["unlinkedMaterialLines"]} 行尚未确认工单，{cost["sourceZeroCostLines"]} 行金额为源端零值。',
-        ['下表按物料与单位保留净消耗；不同单位不相加。',
+        ['材料数量按领料减退料计算，同一种材料、同一种单位分别看；公斤和包不能直接相加。',
          f'来源金额有值 {cost["knownMaterialCostLines"]} 行，其中零值不等于材料免费。'],
         ['材料净额 = 已审批生产领料成本 − 已审批退料成本。',
          '单位材料成本 = 该工单已识别材料净额 ÷ 该工单最终良品量。'],
-        ['材料差异可能受领料估值、投入量、替代料或退料影响，需原始单据确认。'], common +
-        ['BOM 单位用量基准未核，不能据此断言超耗；当前移动平均价不能回填历史领料价。'],
+        ['材料成本不同，可能是单价、用量、换料或退料不同，需要回看原单确认。'], common +
+        ['标准配方的单位用量还没有核实，不能直接说超耗。今天的库存均价不能当作历史领料的价格。'],
         ['仓库核对未关联的领退料单；财务复核零估值发生时点的成本单价。'])
 
     labor_rows = sorted((p for p in review['projects'] if p.get('laborShare') is not None), key=lambda p:p['laborShare'], reverse=True)
     labor_obs = [f'任务累计工资有值 {cost["knownLaborTasks"]}/{production["taskCount"]} 个任务；有值包括需要核实的零值。']
-    labor_obs += [f'{p["projectCode"]}（{p["product"]}）人工占可识别直接成本 {p["laborShare"]:.1%}，单位人工 {fmt(p["laborPerFinished"])} / {p["unit"]}。' for p in labor_rows[:2]]
-    add('labor', '人工只使用工序任务累计工资，不叠加报工估算工资；比例偏高是核对信号。', labor_obs,
-        ['工单人工成本 = 所属工序任务累计工资之和；任一必需工资缺失则不能默认为零。',
-         '人工占比 = 人工成本 ÷ 已识别材料与人工合计；材料估值偏低也会使占比升高。'],
+    labor_obs += [f'{p["projectCode"]}（{p["product"]}）：每 {p["unit"]} 的人工成本为 {fmt(p["laborPerFinished"])} / {p["unit"]}，占已记录材料加人工成本的 {p["laborShare"]:.2%}。' for p in labor_rows[:2]]
+    add('labor', '人工成本只加总各工序任务已记录的工资。人工占比高时先查材料有没有记全，再查工资；不能直接认定工人效率低。', labor_obs,
+        ['工单人工成本 = 这张工单各工序任务的累计工资之和。工资没提供时标为缺失，不当作零。',
+         '人工占比 = 人工成本 ÷ 已记录的材料加人工总额。材料少记了，也会让人工占比显得很高。'],
         ['可能是计薪、报工归集或工艺劳动强度差异；不能仅凭占比认定效率低。'], common,
         ['生产复核累计工时与审批报工，财务核对工资口径；同时核实材料估值是否完整。'])
 
-    add('finished', '工单、工序任务和报工是不同粒度；成品数量只按工单最终良品口径计算一次。',
+    add('finished', '一张工单可能经过多道工序、分多次报工。同一批货不能每报一次就多算一次，成品数量只按工单最终良品计算一次。',
         [f'可见工单 {total} 张，任务 {production["taskCount"]} 个，报工 {production["outputCount"]} 条；三者数量不互相求和。',
          f'目前只有 {eligible} 张工单同时具备单位成本所需字段。'],
         ['单位直接成本 =（已识别材料净额 + 工序任务累计工资）÷ 工单最终良品量。',
@@ -82,13 +108,19 @@ def build(analysis):
         ['核对最终审批良品、完工状态与成品入库；单位换算需要明确基准。'])
 
     ranking = sorted(review['rankings'], key=lambda p:(p['unit'], -p['weightedUnitCost']))
-    observations = [f'{p["product"]}（{p["productCode"]}）：{p["projects"]} 张可比口径工单，加权单位成本 {fmt(p["weightedUnitCost"])} / {p["unit"]}，工单区间 {fmt(p["minimum"])}—{fmt(p["maximum"])}。' for p in ranking]
-    comparisons = [c for c in analysis['costIntelligence']['comparisons'] if c.get('bridge')]
+    observations = [f'{p["product"]}（产品编码 {p["productCode"]}）：{p["projects"]} 张工单，按产量计算的平均单位成本 {fmt(p["weightedUnitCost"])} / {p["unit"]}；各工单最低 {fmt(p["minimum"])}、最高 {fmt(p["maximum"])} / {p["unit"]}。' for p in ranking]
+    comparisons = []
+    for candidate in analysis['costIntelligence']['comparisons']:
+        rows = [p for p in review['projects'] if p.get('productCode') == candidate.get('productCode')
+                and p.get('unit') == candidate.get('unit')]
+        if (candidate.get('bridge') and rows and len(rows) == candidate.get('eligibleProjects')
+                and all(p['product'] == candidate['product'] for p in rows)):
+            comparisons.append(candidate)
     observations += [f'{c["product"]}同产品最高与最低工单差额 {fmt(c["bridge"]["delta"])} / {c["unit"]}，其中材料差额 {fmt(c["bridge"]["materialDelta"])}、人工差额 {fmt(c["bridge"]["laborDelta"])}；这不是时间趋势。' for c in comparisons]
-    add('product_cost', f'{eligible} 张工单可展示可识别直接成本，按产品与单位分组；成本水平高不直接等于异常。', observations,
-        ['产品加权单位成本 = 该产品同单位合格子集直接成本合计 ÷ 该子集最终良品合计；不平均各工单单位成本。',
-         '同产品差额 = 材料单位成本差额 + 人工单位成本差额；逐物料贡献与总差额进行对账。'],
-        ['材料价格、耗用、人工、规格和工艺阶段都可能影响差额；目前只能证明代数贡献。'], common +
+    add('product_cost', f'先分析资料具备的 {eligible} 张工单：每做出一单位成品，花了多少材料和人工。按同产品、同单位分别比较；贵不一定代表有问题。', observations,
+        ['同产品平均单位成本 = 这些工单的材料加人工总额 ÷ 最终良品总量。大单小单按产量算，不能把每张工单的单价直接取平均。',
+         '两张工单的单位成本差多少，拆成材料差多少、人工差多少，再逐项查材料明细。'],
+        ['价格、用料量、工资、产品规格或生产阶段都可能影响差额。目前能算出钱差在哪一项，还不能确定为什么会差。'], common +
         ['产品名称冲突、规格差异仍须核；最低观测值不是标准成本或目标成本。'],
         ['优先看同产品差额分解，再回查差异最大的物料与人工；不可跨产品据排名判断浪费。'])
 
@@ -97,7 +129,7 @@ def build(analysis):
         ['计划与实际按产品和单位展示；累计工时高只表示任务工时汇总高，不证明瓶颈或人员效率低。'],
         ['状态完成率 = 完工状态工单数 ÷ 可见工单数；良品率按报工良品 ÷（良品 + 不良）计算，缺失不补零。'],
         ['工时偏高可能与批量、在制、停机或报工方式相关，当前数据不能区分。'],
-        ['缺少经过核验的标准工时、班次和延期基准，不输出已证实的效率或延期因果。'],
+        ['缺少已核实的标准工时、班次和计划交期，暂时不能确定哪里效率低，或为什么延期。'],
         ['检查审批状态、任务持续时长和最终工序；再补标准工时与排程基准。'])
     inventory = analysis['inventory']
     add('inventory', f'当前库存返回 {len(inventory["records"])} 行余额，历史出入库单 {inventory["movementOrders"]} 张。',
@@ -126,6 +158,8 @@ def answer(report, question, history=()):
     else:
         groups = [('当前可回答的证据', report['observations']), ('可继续问', report['suggestedQuestions'])]
     text = [report['title']+'：'+report['summary']]
+    if report.get('scopeDescription'):
+        text.append('分析范围：'+report['scopeDescription'])
     for title, lines in groups:
         text.append(title+'：\n'+'\n'.join('• '+line for line in lines))
     return '\n\n'.join(text)

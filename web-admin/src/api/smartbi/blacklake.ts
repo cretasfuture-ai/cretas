@@ -44,6 +44,9 @@ export interface SectionInsightReport {
   sectionId: string; title: string; summary: string; observations: string[]; calculation: string[];
   hypotheses: string[]; limitations: string[]; nextSteps: string[]; suggestedQuestions: string[];
   scope: { runId: string; projectId?: number }; evidenceRefs: string[];
+  scopeDescription?: string;
+  evidenceSources?: { label: string; description: string }[];
+  relatedOrders?: { projectId: number; projectCode: string; product: string; reasons: string[] }[];
 }
 export async function askBlacklakeSection(payload: {
   section_id: string; question: string; run_id: string;

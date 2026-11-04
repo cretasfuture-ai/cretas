@@ -7,7 +7,10 @@
 
 ## 在飞任务
 
-- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope 黑湖/SmartBI、Web、tests、docs及独立测试环境；PR#1390 draft；本机自动进入，新增3后端/17前端及真实UI、同源403/原API401通过；真实Java权限保留，不生产部署/黑湖写入。
+- BLACKLAKE-PLAIN-PAGE-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope 隔离PrototypeAnalysis/Intelligence及comparison helper/spec；两位小数、问题工单与冲突组阻断；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。
+- BLACKLAKE-PLAIN-INSIGHT-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope PrototypeSectionInsight/CostAlerts、presentation helper/spec；中文证据、范围和工单核对；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。
+
+- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope 黑湖/SmartBI、Web、tests、docs及独立测试环境；PR#1390 draft；七组真实浏览器追问、白话证据/工单核对、后端269/前端50/类型检查/双构建通过；不生产部署/黑湖写入。
 - BLACKLAKE-PROTOTYPE-PAGE-20261104 — review — Owner Codex/root — Base f015b1f07ead743d0f4dcaa48207a01517bbd0bc — Scope 隔离PrototypeAnalysis与costOverview/spec；执行者4测试，root集成5分组测试/35前端/双构建/E2E通过；回执archive/2026-11-04-prototype-ui.md；待PR合并。
 - BLACKLAKE-PROTOTYPE-INSIGHT-20261104 — review — Owner Codex/root — Base f015b1f07ead743d0f4dcaa48207a01517bbd0bc — Scope 隔离PrototypeSectionInsight/spec；执行者8测试，root事实版本负测后9测试及E2E通过；回执archive/2026-11-04-prototype-ui.md；待PR合并。
 - BLACKLAKE-SECTION-UI-20261103 — review — Owner Codex/root — Base 29fde108334e58f70a76aa6badcbe6da0debd3c6 — Scope BlacklakeAnalysis.vue、SectionInsight.vue及对应spec；执行者5测试通过，root18前端/构建/七板块E2E通过；回执archive/2026-11-03-shared-alerts.md；待PR合并。

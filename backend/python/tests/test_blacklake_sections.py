@@ -39,6 +39,44 @@ def test_sections_explain_original_amounts_and_do_not_double_count(source):
     assert all(s['scope']['runId']=='synthetic' for s in reports.values())
 
 
+def test_readable_sources_scopes_and_order_links_preserve_cost_facts(source):
+    original=analysis(source)
+    reports={s['sectionId']:s for s in original['sectionInsights']}
+    for report in reports.values():
+        assert '不随图表单位、搜索或表格筛选改变' in report['scopeDescription']
+        assert report['evidenceSources'][0]['label']
+        assert all(set(item)=={'label','description'} for item in report['evidenceSources'])
+        expected={str(p['projectId']) for a in original['costAlerts']['items']
+                  if a['id'] in report['evidenceRefs'] for p in a['entityRefs']}
+        assert {str(p['projectId']) for p in report['relatedOrders']}==expected
+        assert all(p['reasons'] and p['projectCode'] for p in report['relatedOrders'])
+    from blacklake.section_insights import fmt
+    assert fmt(65.4856123)=='65.49'
+    assert fmt(None)=='未提供'
+    assert original['cost']==analysis(source)['cost']
+    assert '分析范围' in answer(reports['labor'],'怎么算？')
+
+
+def test_display_rounding_keeps_codes_and_calculation_precision():
+    from blacklake.presentation import readable_text
+    assert readable_text('最高 70.8881/KG、最低 61.0772/KG')=='最高 70.89/KG、最低 61.08/KG'
+    assert readable_text('GD202610290011 产品A1.2345 批次1.2345-001')=='GD202610290011 产品A1.2345 批次1.2345-001'
+
+
+def test_section_never_explains_mixed_names_as_same_product_difference(source):
+    value=analysis(source)
+    project=value['eligibleCostReview']['projects'][0]
+    candidate={'productCode':project['productCode'],'product':project['product'],'unit':project['unit'],
+               'eligibleProjects':1,'bridge':{'delta':1,'materialDelta':1,'laborDelta':0}}
+    value['costIntelligence']['comparisons']=[candidate]
+    report=next(s for s in sections(value) if s['sectionId']=='product_cost')
+    assert any('同产品最高与最低' in item for item in report['observations'])
+    value['eligibleCostReview']['projects'].append({**project,'product':'不同名称的上游半成品'})
+    candidate['eligibleProjects']=2
+    report=next(s for s in sections(value) if s['sectionId']=='product_cost')
+    assert not any('同产品最高与最低' in item for item in report['observations'])
+
+
 def test_missing_cost_stays_blocked_and_followup_explains_gap(source):
     source['stock_order'][0]['orderDetails'][0]['changedCostAmountSigned']=None
     reports={s['sectionId']:s for s in analysis(source)['sectionInsights']}

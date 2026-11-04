@@ -4,8 +4,9 @@ import UButton from '@nuxt/ui/components/Button.vue';
 import UBadge from '@nuxt/ui/components/Badge.vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { saveBlacklakeAlertFollowup, type AlertFollowup, type CostAlertReport, type CostDataAlert, type EligibleCostReview } from '@/api/smartbi/blacklake';
+import { formatBlacklakeNumber, localizeBlacklakeField, localizeBlacklakeText, readableEvidenceEntries } from './blacklakePresentation';
 const props = defineProps<{ alerts: CostAlertReport; review: EligibleCostReview; followups?: Record<string,AlertFollowup> }>();
-const emit=defineEmits<{ask:[alert:CostDataAlert];updated:[followup:AlertFollowup]}>();
+const emit=defineEmits<{ask:[alert:CostDataAlert];updated:[followup:AlertFollowup];'locate-order':[projectId:number]}>();
 const auth=useAuthStore();
 const progress=ref<Record<string,AlertFollowup>>({});
 const statusFilter=ref('');
@@ -38,8 +39,9 @@ const filtered = computed(() => props.alerts.items.filter(a => (!family.value ||
   (!statusFilter.value || (progress.value[a.id]?.status || 'open')===statusFilter.value) &&
   `${a.title} ${a.message} ${a.entityRefs.map(p => p.projectCode).join(' ')}`.includes(search.value)));
 const visible = computed(() => filtered.value.slice((page.value - 1) * 15, page.value * 15));
-const fmt = (n: number | null | undefined) => n == null ? '未提供' : n.toLocaleString('zh-CN', { maximumFractionDigits: 4 });
+const fmt = (n: number | null | undefined) => formatBlacklakeNumber(n);
 const aiAdvice = (a: CostDataAlert) => props.alerts.ai.reviews?.find(r => r.alertId === a.id);
+const evidenceEntries = (a: CostDataAlert) => readableEvidenceEntries(a.evidence);
 const unitRows = computed(() => props.review.projects.filter(p => p.unit === selectedUnit.value).sort((a, b) => (a.productCode ?? '').localeCompare(b.productCode ?? '') || a.projectCode.localeCompare(b.projectCode)));
 </script>
 <template>
@@ -48,14 +50,14 @@ const unitRows = computed(() => props.review.projects.filter(p => p.unit === sel
       <h3>成本与数据异常提醒</h3><p>缺价、缺产量和缺关联本身就是分析发现。规则独立运行，AI 按同一证据给出核对建议。</p>
       <div class="metrics"><div><small>字段可核算 / 全部工单</small><strong>{{ review.eligibleProjects }} / {{ alerts.summary.projects }}</strong></div><div><small>暂不能核算</small><strong>{{ alerts.summary.costBlocked }} 张</strong></div><div><small>成本差异信号</small><strong>{{ alerts.summary.byFamily.business_signal || 0 }} 条</strong></div></div>
       <el-alert type="warning" :closable="false" title="字段能计算不等于实际成本已归集完整。提醒可重叠；未完工属于准备条件，零值与缺失分开核对。" />
-      <p class="ai-state" data-testid="local-ai-state">{{ alerts.ai.status === 'complete' ? `本地 AI · ${alerts.ai.host} / ${alerts.ai.model}` : '规则分析' }}：{{ alerts.ai.message }}</p>
+      <p class="ai-state" data-testid="local-ai-state">{{ alerts.ai.status === 'complete' ? `本地 AI · ${alerts.ai.host} / ${alerts.ai.model}` : '规则分析' }}：{{ localizeBlacklakeText(alerts.ai.message) }}</p>
       <div class="filters"><el-select v-model="family" aria-label="异常类别" @change="page = 1"><el-option label="全部类别" value="" /><el-option v-for="(label, key) in families" :key="key" :label="label" :value="key" /></el-select><el-select v-model="statusFilter" aria-label="跟进状态" @change="page=1"><el-option label="全部状态" value="" /><el-option v-for="(label,key) in statusNames" :key="key" :label="label" :value="key" /></el-select><el-input v-model="search" placeholder="搜索问题或工单编码" clearable @input="page = 1" /></div>
       <p class="note">跟进状态是 Cretas 的人工记录；标记“已核对”不会修改来源数据，也不会解除单位成本的阻断条件。</p>
       <el-table :data="visible" stripe row-key="id" data-testid="cost-alert-table">
-        <el-table-column type="expand"><template #default="{ row }: { row: CostDataAlert }"><div class="details"><p><b>涉及工单：</b>{{ row.entityRefs.map(p => p.projectCode).join('、') || '整个数据集' }}</p><p><b>影响字段：</b>{{ row.fields.join('、') }}</p><p><b>证据：</b><span v-for="(value, key) in row.evidence" :key="key">{{ key }}：{{ typeof value === 'object' ? JSON.stringify(value) : value }}； </span></p><p>来源归档 {{ row.runId }} · 规则 {{ row.ruleVersion }} · 待核实</p></div></template></el-table-column>
-        <el-table-column label="类别 / 影响" min-width="150"><template #default="{ row }"><el-tag :type="row.blocksUnitCost ? 'danger' : 'warning'">{{ families[row.family] }}</el-tag><p>{{ row.blocksUnitCost ? '阻断单位成本' : '需要核对，未证实原因' }}</p></template></el-table-column>
-        <el-table-column label="发现的问题" min-width="330"><template #default="{ row }"><b>{{ row.title }}</b><p>{{ row.message }}</p></template></el-table-column>
-        <el-table-column label="核对动作 / 责任角色" min-width="300"><template #default="{ row }"><p>{{ row.action }}</p><small>{{ row.owner }}</small><p v-if="aiAdvice(row)" class="ai-advice">本地 AI 建议：{{ aiAdvice(row)?.suggestion }}（{{ aiAdvice(row)?.priority === 'high' ? '优先核对' : '常规核对' }}，待人工确认）</p></template></el-table-column>
+        <el-table-column type="expand"><template #default="{ row }: { row: CostDataAlert }"><div class="details"><p><b>需要核对的工单：</b></p><div v-if="row.entityRefs.length" class="order-links"><UButton v-for="entity in row.entityRefs" :key="entity.projectId" size="sm" color="primary" variant="outline" type="button" @click="emit('locate-order', entity.projectId)">核对工单 {{ entity.projectCode }}</UButton></div><p v-else>这条提醒影响当前数据集，暂无单个工单可定位。</p><p><b>影响字段：</b>{{ row.fields.map(localizeBlacklakeField).join('、') || '来源系统未提供可读字段' }}</p><div v-if="evidenceEntries(row).length" class="evidence-list"><p v-for="entry in evidenceEntries(row)" :key="`${entry.label}-${entry.value}`"><b>{{ entry.label }}：</b>{{ entry.value }}</p></div><p v-else>暂无可读证据细节。</p><p class="details-note">这条提醒需要人工核对，不代表已确认原因。</p></div></template></el-table-column>
+        <el-table-column label="类别 / 影响" min-width="150"><template #default="{ row }"><el-tag :type="row.blocksUnitCost ? 'danger' : 'warning'">{{ families[row.family] || '待人工确认' }}</el-tag><p>{{ row.blocksUnitCost ? '会阻断单位成本展示' : '需要核对，原因尚未证实' }}</p></template></el-table-column>
+        <el-table-column label="发现的问题" min-width="330"><template #default="{ row }"><b>{{ localizeBlacklakeText(row.title) }}</b><p>{{ localizeBlacklakeText(row.message) }}</p></template></el-table-column>
+        <el-table-column label="核对动作 / 责任角色" min-width="300"><template #default="{ row }"><p>{{ localizeBlacklakeText(row.action) }}</p><small>{{ localizeBlacklakeText(row.owner) }}</small><p v-if="aiAdvice(row)" class="ai-advice">本地 AI 建议：{{ localizeBlacklakeText(aiAdvice(row)?.suggestion) }}（{{ aiAdvice(row)?.priority === 'high' ? '优先核对' : '常规核对' }}，待人工确认）</p></template></el-table-column>
         <el-table-column label="跟进" min-width="210"><template #default="{ row }"><div class="followup-actions" :data-alert-id="row.id"><UBadge :color="progress[row.id]?.status==='verified'?'success':progress[row.id]?.status==='awaiting_data'?'warning':'neutral'" variant="soft">{{ statusNames[progress[row.id]?.status || 'open'] }}</UBadge><small v-if="progress[row.id]">{{ progress[row.id].note }}</small><UButton size="sm" variant="soft" @click="emit('ask',row)">追问此异常</UButton><UButton size="sm" color="neutral" variant="ghost" @click="edit(row)">记录跟进</UButton></div></template></el-table-column>
       </el-table>
       <el-pagination v-model:current-page="page" :page-size="15" :total="filtered.length" layout="prev, pager, next, total" /><el-empty v-if="!filtered.length" description="当前筛选下没有提醒" />
@@ -70,7 +72,7 @@ const unitRows = computed(() => props.review.projects.filter(p => p.unit === sel
       </el-table><p v-for="text in review.limitations" :key="text" class="note">{{ text }}</p>
     </el-card></details>
     <el-dialog :model-value="!!editing" title="记录异常跟进" width="min(92vw, 520px)" @close="editing=null" :close-on-click-modal="false">
-      <template v-if="editing"><p>{{ editing.title }}</p><p class="note">责任角色：{{ editing.owner }}</p>
+      <template v-if="editing"><p>{{ localizeBlacklakeText(editing.title) }}</p><p class="note">责任角色：{{ localizeBlacklakeText(editing.owner) }}</p>
       <el-form label-position="top" @submit.prevent="save"><el-form-item label="跟进状态"><el-select v-model="status" aria-label="本次跟进状态"><el-option v-for="(label,key) in statusNames" :key="key" :label="label" :value="key" /></el-select></el-form-item>
       <el-form-item label="本次核对 / 待补资料说明"><el-input v-model="note" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="例如：已联系仓库核实领退料关联，等待原单回执" /></el-form-item>
       <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" /><p class="note">仅保存测试环境的跟进记录，不改成本金额和黑湖数据。</p>
@@ -79,6 +81,6 @@ const unitRows = computed(() => props.review.projects.filter(p => p.unit === sel
   </section>
 </template>
 <style scoped>
-h3{font-size:17px;margin:0 0 12px}p{line-height:1.8}.el-card{border-radius:10px}.section{margin-top:20px}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:20px 0}.metrics div{padding:16px;background:#f4f6f9;border-radius:10px}.metrics strong,.metrics small{display:block}.metrics strong{font-size:24px;margin-top:8px}.note,small{color:#596579}.filters,.heading{display:flex;gap:16px;align-items:center;justify-content:space-between;margin:20px 0}.filters .el-select,.heading .el-select{width:240px}.filters .el-input{max-width:400px}.details{padding:16px;overflow-wrap:anywhere}.ai-advice{color:#1B65A8}.el-pagination{margin-top:16px;overflow-x:auto}.ai-state{background:#f4f6f9;padding:12px}@media(max-width:700px){.metrics{grid-template-columns:1fr}.filters,.heading{flex-wrap:wrap}.filters .el-input,.filters .el-select{width:100%;max-width:none}}
+h3{font-size:17px;margin:0 0 12px}p{line-height:1.8}.el-card{border-radius:10px}.section{margin-top:20px}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:20px 0}.metrics div{padding:16px;background:#f4f6f9;border-radius:10px}.metrics strong,.metrics small{display:block}.metrics strong{font-size:24px;margin-top:8px}.note,small{color:#596579}.filters,.heading{display:flex;gap:16px;align-items:center;justify-content:space-between;margin:20px 0}.filters .el-select,.heading .el-select{width:240px}.filters .el-input{max-width:400px}.details{padding:16px;overflow-wrap:anywhere}.order-links{display:flex;flex-wrap:wrap;gap:8px;margin:-4px 0 12px}.evidence-list{display:grid;gap:4px}.details-note{color:#596579;font-size:12px}.ai-advice{color:#1B65A8}.el-pagination{margin-top:16px;overflow-x:auto}.ai-state{background:#f4f6f9;padding:12px}@media(max-width:700px){.metrics{grid-template-columns:1fr}.filters,.heading{flex-wrap:wrap}.filters .el-input,.filters .el-select{width:100%;max-width:none}}
 </style>
 <style scoped>.followup-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.followup-actions small{display:block;flex-basis:100%;overflow-wrap:anywhere}details>summary{padding:16px;border:1px solid var(--c-line,#e5eaf1);border-radius:10px;color:var(--c-primary,#1b65a8);cursor:pointer;background:white}.filters{flex-wrap:wrap}</style>

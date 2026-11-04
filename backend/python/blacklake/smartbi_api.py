@@ -102,7 +102,8 @@ async def followup(payload: Followup, request: Request):
             await asyncio.to_thread(save,report,Path(path).resolve().parent/'cost-common-ai.dpapi')
     text=answer(section,payload.question,[h.model_dump() for h in payload.history])
     if context_alert:
-        text='当前跟进：'+context_alert['title']+'\n'+context_alert['message']+'\n责任角色：'+context_alert['owner']+'\n下一步：'+context_alert['action']+'\n\n'+text
+        from .presentation import readable_text
+        text='当前跟进：'+readable_text(context_alert['title'])+'\n'+readable_text(context_alert['message'])+'\n责任角色：'+context_alert['owner']+'\n下一步：'+readable_text(context_alert['action'])+'\n\n'+text
     from .section_review import for_section
     ai=for_section(report,[context_alert] if context_alert else section_alerts(data,payload.section_id))
     if ai.get('reviews') and ai.get('status') in ('complete','partial'):

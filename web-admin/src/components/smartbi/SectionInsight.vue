@@ -88,7 +88,7 @@ async function submitQuestion() {
     // A report refresh or a changed section must never let an old answer leak into
     // the new conversation. The request can still finish, but its response is stale.
     if (version !== requestVersion.value || identity !== sectionIdentity.value || result.sectionId !== props.report.sectionId || result.runId !== props.report.scope.runId) return;
-    history.value = [...previousHistory, { role: 'user', content: value }, { role: 'assistant', content: result.answer }].slice(-6);
+    history.value = [...previousHistory, { role: 'user' as const, content: value }, { role: 'assistant' as const, content: result.answer }].slice(-6);
     question.value = '';
   } catch (cause) {
     if (version !== requestVersion.value || identity !== sectionIdentity.value) return;

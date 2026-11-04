@@ -77,6 +77,7 @@ describe('SectionInsight', () => {
     expect(wrapper.text()).toContain('已关联工单的原料净消耗快照。');
     expect(wrapper.text()).toContain('首要观察：有值金额与零值来源需要区分。');
     expect(wrapper.text()).toContain('先核对来源单据。');
+    expect(wrapper.text()).toContain('暂未提供可读来源说明。');
     expect(wrapper.find('.insight-strip').exists()).toBe(true);
     expect(wrapper.find('.detail-list details').element.open).toBe(false);
     expect(wrapper.find('.followup-panel').exists()).toBe(false);
@@ -190,6 +191,38 @@ describe('SectionInsight', () => {
     await wrapper.setProps({report:makeReport({summary:'同一归档中的证据已更新'}),focusAlert:{...makeAlert(),ruleVersion:'new-rule'}});
     finish?.({answer:'旧规则回答',sectionId:'material',runId:'run-1',alertId:'alert-1',engine:'test'});await flushPromises();
     expect(wrapper.text()).not.toContain('旧规则回答');expect(wrapper.findAll('.message')).toHaveLength(0);
+  });
+
+  it('uses readable scope and sources, hides opaque evidence IDs, and locates related orders', async () => {
+    const wrapper = mount(SectionInsight, { props: { report: makeReport({
+      scopeDescription: '本次快照中的已关联工单与来源领退料。',
+      evidenceSources: [{ label: '工单用料记录', description: '来自本次快照的领料与退料明细。' }],
+      evidenceRefs: ['materials:run-1:opaque-internal-id'],
+      relatedOrders: [{ projectId: 16, projectCode: 'MO-0016', product: '香酥鸡', reasons: ['来源金额为零，需要回到原单核对。'] }],
+    }) } });
+
+    expect(wrapper.text()).toContain('这组数据的分析');
+    expect(wrapper.text()).toContain('本次快照中的已关联工单与来源领退料');
+    expect(wrapper.text()).toContain('工单用料记录');
+    expect(wrapper.text()).not.toContain('materials:run-1:opaque-internal-id');
+    const locateButton = wrapper.findAll('button').find(button => button.text() === '核对工单');
+    expect(locateButton).toBeDefined();
+    await locateButton!.trigger('click');
+    expect(wrapper.emitted('locate-order')).toEqual([[16]]);
+    await wrapper.get('.related-order .insight-details--nested summary').trigger('click');
+    expect(wrapper.text()).toContain('来源金额为零，需要回到原单核对。');
+  });
+
+  it('formats assistant terminology without mutating the user question history', async () => {
+    askMock.mockResolvedValue({ answer: '请核对领退料与工单关联三元组，成本 1.2345 元。', sectionId: 'material', runId: 'run-1', engine: 'test' });
+    const wrapper = mount(SectionInsight, { props: { report: makeReport() } });
+    await wrapper.get('[aria-expanded="false"]').trigger('click');
+    await wrapper.get('input').setValue('估值 1.2345');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    expect(wrapper.text()).toContain('估值 1.2345');
+    expect(wrapper.text()).toContain('核对领退料的工单编码、业务单类型和关联编号，成本 1.23 元。');
+    expect(wrapper.text()).not.toContain('领退料与工单关联三元组');
   });
 
   it('rejects questions longer than 500 characters', async () => {
