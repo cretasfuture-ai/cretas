@@ -21,6 +21,9 @@
             <el-tag v-if="detail && !supplierProfileComplete(detail)" type="warning" size="small">资料不完整</el-tag>
           </div>
         </div>
+        <div class="header-actions">
+          <el-button data-test="supplier-supply-impact" @click="impactVisible = true">影响分析</el-button>
+        </div>
         <div v-if="canWrite" class="header-actions">
           <el-button v-if="!editing" @click="startEdit">编辑资料</el-button>
           <el-button v-if="!editing" :type="isActive ? 'warning' : 'success'" plain @click="changeStatus">
@@ -30,6 +33,13 @@
       </div>
     </template>
 
+    <SupplyImpactDialog
+      v-if="impactVisible"
+      v-model="impactVisible"
+      :factory-id="factoryId"
+      :target="{ supplierId: detail?.id }"
+      :target-name="detail?.name ?? ''"
+    />
     <el-skeleton v-if="loading" :rows="8" animated />
     <template v-else-if="detail">
       <el-tabs v-model="activeTab">
@@ -395,6 +405,7 @@ import { get } from '@/api/request';
 import { listSystemUnits, type SystemUnit } from '@/api/systemUnits';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import SupplierProfileCollections from './SupplierProfileCollections.vue';
+import SupplyImpactDialog from '@/components/common/SupplyImpactDialog.vue';
 import {
   getSupplier,
   listSupplierMaterials,
@@ -422,6 +433,8 @@ import {
   supplierFormRules, supplierProfileComplete, supplierStatus, normalizeSupplierPayload,
 } from './supplierModel';
 import { toSupplierHistoryViewRow, type SupplierHistoryApiRow, type SupplierHistoryViewRow } from './supplierHistory';
+
+const impactVisible = ref(false);
 
 const props = defineProps<{
   modelValue: boolean;
