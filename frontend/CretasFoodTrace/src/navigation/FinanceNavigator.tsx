@@ -12,6 +12,7 @@ import CashierPaymentListScreen from "../screens/factory-admin/finance/CashierPa
 import ArApOverviewScreen from '../screens/factory-admin/inventory/ArApOverviewScreen';
 import PriceListScreen from '../screens/factory-admin/inventory/PriceListScreen';
 import OATodoStackNavigator from "./OATodoStackNavigator";
+import AnalyticsReportStackNavigator from './AnalyticsReportStackNavigator';
 import ProfileStackNavigator from "./ProfileStackNavigator";
 import { useAuthStore } from "../store/authStore";
 import { getUserRole } from "../types/auth";
@@ -110,6 +111,17 @@ export default function FinanceNavigator() {
           }}
         />
       )}
+      {/*
+        2026-11-04 隐藏 Tab：承载「AI 分析报告 / 时间范围成本分析」三条路由，不占底栏
+        （底栏已有 首页/账务/待办/付款/经营/我的）。入口是首页功能卡
+        （homeModules.ts 的 aiReports / timeRangeCost，受 analytics 读权限控制）。
+        路由无条件注册；授权由入口可见性 + 页面内判断 + 后端承担。
+      */}
+      <Tab.Screen
+        name="FinanceAnalyticsTab"
+        component={AnalyticsReportStackNavigator}
+        options={{ title: '分析', tabBarButton: () => null }}
+      />
       {operatingReportsEnabled && (
         <Tab.Screen name="FinanceOperatingReportsTab" component={OperatingReportStackNavigator}
           options={{ title: '经营', tabBarButtonTestID: 'finance-tab-operating-reports',

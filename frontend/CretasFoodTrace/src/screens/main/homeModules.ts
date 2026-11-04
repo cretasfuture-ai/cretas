@@ -320,6 +320,30 @@ export const FINANCE_HOME_MODULES: HomeModuleSpec[] = [
     route: 'CashierPaymentTab',
     nestedScreen: 'CashierPaymentList',
   },
+  // 2026-11-04 经营分析: 路由在隐藏的 FinanceAnalyticsTab (AnalyticsReportStackNavigator)。
+  // 可见性 = analytics 读权限 (requiredReadModulesAny) 再叠加本角色前缀权限, 与销售/采购的 arAp 同一写法。
+  {
+    id: 'aiReports',
+    nameKey: 'modules.aiReports.name',
+    descriptionKey: 'modules.aiReports.description',
+    icon: 'robot-outline',
+    color: '#9C27B0',
+    requiredPermissions: ['finance:read'],
+    requiredReadModulesAny: ['analytics'],
+    route: 'FinanceAnalyticsTab',
+    nestedScreen: 'AIReportList',
+  },
+  {
+    id: 'timeRangeCost',
+    nameKey: 'modules.timeRangeCost.name',
+    descriptionKey: 'modules.timeRangeCost.description',
+    icon: 'chart-timeline-variant',
+    color: '#13C2C2',
+    requiredPermissions: ['finance:read'],
+    requiredReadModulesAny: ['analytics'],
+    route: 'FinanceAnalyticsTab',
+    nestedScreen: 'TimeRangeCostAnalysis',
+  },
 ];
 
 /** ViewerNavigator —— 全只读。后端给 viewer 的前缀是 `view`（实测 `getPermissionPrefix()`）。 */

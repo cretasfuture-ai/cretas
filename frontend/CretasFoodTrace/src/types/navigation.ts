@@ -635,6 +635,10 @@ export type WSHomeStackParamList = {
   MyWorkReports: undefined;
   EquipmentMonitoring: undefined;
   ProductionPlanManagement: { statusFilter?: string } | undefined;
+  // 经营分析 (2026-11-04): 有 analytics 读权限的主管从首页快捷操作进
+  AIReportList: undefined;
+  AIAnalysisDetail: { reportId: number; reportType: string; title: string };
+  TimeRangeCostAnalysis: undefined;
   AIChat: {
     entryContext?: {
       module: 'sales' | 'purchase' | 'production' | 'finance' | 'inventory' | string;

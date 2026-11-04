@@ -58,6 +58,16 @@ import ProductionPlanManagementScreen from "../../screens/processing/ProductionP
  * 而 permissionHelper 里 workshop_supervisor 正是 read_write）。
  */
 import ProcessTaskApprovalScreen from "../../screens/processing/ProcessTaskApprovalScreen";
+/*
+ * 2026-11-04 开放「AI 分析报告」「时间范围成本分析」给有经营分析读权限的车间主管。
+ * 这三条此前只注册在 ProcessingStackNavigator（只挂 MainNavigator），主管进不去。
+ * 联通图：AIReportList → AIAnalysisDetail / TimeRangeCostAnalysis，⛔ 不能只注册入口屏。
+ * 入口在首页快捷操作（受 analytics 读权限控制，见 utils/analyticsEntries.ts）。
+ * 由 __tests__/gates/analyticsEntriesReachableByFactoryRoles.test.ts 钉住。
+ */
+import AIReportListScreen from "../../screens/processing/AIReportListScreen";
+import AIAnalysisDetailScreen from "../../screens/processing/AIAnalysisDetailScreen";
+import TimeRangeCostAnalysisScreen from "../../screens/processing/TimeRangeCostAnalysisScreen";
 import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WSHomeStackParamList>();
@@ -158,6 +168,11 @@ export function WSHomeStackNavigator() {
 
       {/* 业务流程图节点的下钻目标 */}
       <Stack.Screen name="ProductionPlanManagement" component={ProductionPlanManagementScreen} options={{ title: "生产计划" }} />
+
+      {/* 经营分析 (2026-11-04): 入口屏 + 全部下一跳 */}
+      <Stack.Screen name="AIReportList" component={AIReportListScreen} options={{ title: "AI 分析报告" }} />
+      <Stack.Screen name="AIAnalysisDetail" component={AIAnalysisDetailScreen} options={{ title: "报告详情" }} />
+      <Stack.Screen name="TimeRangeCostAnalysis" component={TimeRangeCostAnalysisScreen} options={{ title: "时间范围成本分析" }} />
     </Stack.Navigator>
   );
 }

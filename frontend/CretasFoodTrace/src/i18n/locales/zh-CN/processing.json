@@ -944,43 +944,43 @@
   },
   "aiReports": {
     "title": "AI分析报告",
-    "filters": {
+    "types": {
       "all": "全部",
       "batch": "批次",
       "weekly": "周报",
       "monthly": "月报"
     },
-    "types": {
+    "reportType": {
       "batch": "批次分析",
       "weekly": "周报",
       "monthly": "月报",
       "custom": "自定义"
     },
     "metadata": {
-      "batchLabel": "批次:",
-      "timeLabel": "时间:",
-      "costLabel": "成本:"
+      "batch": "批次:",
+      "time": "时间:",
+      "cost": "成本:"
     },
     "stats": {
       "findings": "{{count}}个发现",
       "suggestions": "{{count}}条建议"
     },
-    "timeAgo": {
+    "time": {
       "justNow": "刚刚",
-      "minutesAgo": "{{count}}分钟前",
-      "hoursAgo": "{{count}}小时前",
-      "daysAgo": "{{count}}天前"
+      "minutesAgo": "{{minutes}}分钟前",
+      "hoursAgo": "{{hours}}小时前",
+      "daysAgo": "{{days}}天前"
     },
     "empty": {
-      "icon": "📊",
       "title": "暂无AI分析报告",
       "hint": "点击右下角按钮，开始生成新的AI分析报告"
     },
-    "fabLabel": "生成新报告",
+    "fab": "生成新报告",
+    "loading": "加载中...",
     "messages": {
       "loadFailed": "加载失败",
-      "retryMessage": "请稍后重试",
-      "userInfoIncomplete": "用户信息不完整"
+      "retry": "请稍后重试",
+      "userInfoError": "用户信息不完整"
     }
   },
   "aiConversation": {

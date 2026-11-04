@@ -25,7 +25,8 @@ import { useFactoryFeatureStore } from '../../../store/factoryFeatureStore';
 import { OfflineIndicator } from '../../../components/common/OfflineIndicator';
 import { QuickActionsGrid } from '../../../components/common/QuickActionsGrid';
 import { TutorialOverlay } from '../../../components/common/TutorialOverlay';
-import { WORKSHOP_SUP_ACTIONS } from '../../../store/quickActionsStore';
+import { WORKSHOP_SUP_ACTIONS, analyticsQuickActions } from '../../../store/quickActionsStore';
+import { analyticsEntriesFor } from '../../../utils/analyticsEntries';
 import { useTutorialStore, TUTORIAL_HOME, TUTORIAL_ENABLED, useTutorialTarget, registerTutorialTarget } from '../../../store/tutorialStore';
 import { useDraftReportStore } from '../../../store/draftReportStore';
 import { getCurrentFactoryId } from '../../../utils/factoryIdHelper';
@@ -198,8 +199,20 @@ export function WSHomeScreen() {
     }
   }, [showTutorial]);
 
+  // 经营分析入口只给有 analytics 读权限的账号 (analyticsEntriesFor 无权限时返回空数组)
+  const quickActions = React.useMemo(
+    () => [...WORKSHOP_SUP_ACTIONS, ...analyticsQuickActions(analyticsEntriesFor(user))],
+    [user],
+  );
+
   const navigateQuickAction = useCallback((screen: string) => {
     switch (screen) {
+      case 'AIReportList':
+        navigation.navigate('AIReportList');
+        return;
+      case 'TimeRangeCostAnalysis':
+        navigation.navigate('TimeRangeCostAnalysis');
+        return;
       case 'ProcessOperation':
         navigation.navigate('ProcessOperation');
         return;
@@ -556,7 +569,7 @@ export function WSHomeScreen() {
         <View testID="quick-actions-section" style={styles.quickActionsSection}>
           <QuickActionsGrid
             role="workshop_supervisor"
-            allActions={WORKSHOP_SUP_ACTIONS}
+            allActions={quickActions}
             onActionPress={(action) => {
               navigateQuickAction(action.screen);
             }}

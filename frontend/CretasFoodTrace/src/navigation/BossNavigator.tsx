@@ -19,6 +19,10 @@ import VisionVerifyScreen from '../screens/shared/VisionVerifyScreen';
 import SourceIndividualFormScreen from '../screens/shared/SourceIndividualFormScreen';
 import SourceIndividualDetailScreen from '../screens/shared/SourceIndividualDetailScreen';
 import SourceIndividualListScreen from '../screens/shared/SourceIndividualListScreen';
+// 经营分析屏 —— 同样复用 ProcessingStackNavigator 里的那批组件。
+import AIReportListScreen from '../screens/processing/AIReportListScreen';
+import AIAnalysisDetailScreen from '../screens/processing/AIAnalysisDetailScreen';
+import TimeRangeCostAnalysisScreen from '../screens/processing/TimeRangeCostAnalysisScreen';
 import SmartBIStackNavigator from './SmartBIStackNavigator';
 import FAReportsStackNavigator from './factory-admin/FAReportsStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
@@ -63,6 +67,19 @@ function BossOverviewStack() {
       <OverviewStack.Screen name="SourceIndividualDetail" component={SourceIndividualDetailScreen} />
       {/* 2026-09-16: 首页「源头个体」瓷砖改落到只读列表 (点行进详情, 右上 + 才进登记表)。 */}
       <OverviewStack.Screen name="SourceIndividualList" component={SourceIndividualListScreen} />
+      {/*
+        2026-11-04 开放「AI 分析报告」「时间范围成本分析」—— 此前只注册在
+        `ProcessingStackNavigator`（只挂 MainNavigator），工厂超管在手机上进不去。
+
+        ⚠️ 三条一起注册，⛔ 不能只注册两个入口屏（联通图）：
+          · `AIReportListScreen` → `navigate('AIAnalysisDetail', { reportId, reportType, title })`
+          · `AIReportListScreen` → `navigate('TimeRangeCostAnalysis')`（右下角「生成新报告」）
+        入口在总览页「经营分析」分组，受 analytics 读权限控制（`utils/analyticsEntries.ts`）。
+        由 `__tests__/gates/analyticsEntriesReachableByFactoryRoles.test.ts` 钉住。
+      */}
+      <OverviewStack.Screen name="AIReportList" component={AIReportListScreen} />
+      <OverviewStack.Screen name="AIAnalysisDetail" component={AIAnalysisDetailScreen} />
+      <OverviewStack.Screen name="TimeRangeCostAnalysis" component={TimeRangeCostAnalysisScreen} />
     </OverviewStack.Navigator>
   );
 }
