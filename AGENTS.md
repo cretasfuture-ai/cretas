@@ -30,7 +30,7 @@ This file provides guidance to Codex when working with this repository.
 | Cretas 后端 (Java) | 10010 / 10020 | prod 蓝绿槽交替使用；开发机经 SSH tunnel 访问，public direct access is closed |
 | Python 服务 | 8083 | `http://localhost:8083` |
 | Embedding 服务 | 9090 | gRPC |
-| Mall 后端 | 8080 | `http://139.196.165.140:8080` |
+| Mall 后端 | — | 已停用：2026-07-26 起 Java 已停，centerapi 返回 410，47:8080 与 139:8080 无服务；匿名路由和 Druid 修好前不得重启 |
 | PostgreSQL | 5432 | `localhost:5432` |
 | Redis | 6379 | `localhost:6379` |
 | FRP | 7501 | 内网穿透 |
@@ -125,7 +125,6 @@ GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离�
 ```bash
 ssh root@139.196.165.140 "cat /www/server/panel/vhost/nginx/_upstream_cretas.conf"
 ssh root@47.100.235.168 "systemctl status cretas-backend cretas-backend-green cretas-python cretas-embedding --no-pager"
-ssh root@139.196.165.140 "systemctl status mall-backend --no-pager"
 ```
 
 常规发布和切流必须使用本仓库发布入口；手工重启仅用于明确的故障处置，并先确认 active 槽位。
