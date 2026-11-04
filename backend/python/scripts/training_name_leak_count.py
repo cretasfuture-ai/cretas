@@ -61,7 +61,9 @@ the directory it just loaded.
 
 Exit codes: 0 = rows were scanned and none contains a name or a pay value; 1 = some do (ids in
 the report); 2 = nothing measured: the self-test failed, the database is unreadable or not
-read-only, the directory is empty, or no row was compared with a directory. A 0 needs
+read-only, the directory is empty, or no row was compared with a directory. A window with no rows
+at all is also 2, but it is not a failure: the report says ``no_rows_in_window: true`` with a
+``note`` (also on stderr), against an ``error`` for rows that exist and could not be compared. A 0 needs
 ``rows_scanned`` > 0 to mean anything: rows whose factory has no directory are reported as
 ``rows_unchecked``, never as clean, and a non-zero ``rows_unchecked`` is listed under ``warnings``
 (also on stderr) with the table and factory. A 0 with warnings means "clean where compared".
@@ -313,6 +315,10 @@ def read_rows(cur, table: str, time_column: str, column_type: str, columns: Sequ
         yield r[0], r[1], texts, pay_texts
 
 
+NO_ROWS_NOTE = ("no rows in the window: exit 2 means nothing was measured, not that the run failed. "
+                "Check since and time_columns, or run again once rows exist")
+
+
 def warnings_for(entries: Sequence[Mapping[str, Any]], clock: Mapping[str, Any]) -> List[str]:
     """What a reader must not miss next to a clean-looking count. Table and factory ids only."""
     out: List[str] = []
@@ -365,6 +371,8 @@ def measure(conn, since: str, factory: Optional[str] = None) -> Tuple[int, Dict[
               "tables": entries}
     if hits or pay_hits:
         return 1, report
+    if report["pay_rows_scanned"] == 0:     # every row read counts here, with a directory or not
+        return 2, {**report, "no_rows_in_window": True, "note": NO_ROWS_NOTE}
     if scanned == 0:
         return 2, {**report, "error": "no row compared with a directory: nothing measured"}
     return 0, report
@@ -424,6 +432,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(json.dumps(report, ensure_ascii=False, indent=2))
     for warning in report.get("warnings", ()):
         print(f"WARNING: {warning}", file=sys.stderr)
+    if report.get("note"):
+        print(f"NOTE: {report['note']}", file=sys.stderr)
     return code
 
 

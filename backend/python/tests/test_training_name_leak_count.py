@@ -315,9 +315,37 @@ def test_measure_on_real_postgres_counts_all_three_tables_and_writes_nothing():
 
         only_pay_code, only_pay = counter.measure(conn, "2026-11-04 12:00:00", "F_B")
         assert (only_pay_code, only_pay["rows_with_name"], only_pay["rows_with_pay_value"]) == (1, 0, 1)
-        assert counter.measure(conn, "2026-11-05 00:00:00")[0] == 2        # nothing scanned is not a clean 0
+        code, empty = counter.measure(conn, "2026-11-05 00:00:00")
+        assert code == 2                                                   # nothing scanned is not a clean 0
+        assert empty["no_rows_in_window"] is True and "not that the run failed" in empty["note"]
+        assert "error" not in empty                                        # and it does not read as a failure
     finally:
         _drop(conn, schema)
+
+
+def test_rows_that_exist_but_could_not_be_compared_stay_an_error_not_a_note():
+    schema = "leak_" + uuid.uuid4().hex[:10]
+    conn = _connection(schema)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO ai_learned_expressions VALUES ('e-1', NULL, '今天产量多少', '2026-11-04 13:00')")
+        code, report = counter.measure(conn, "2026-11-04 12:00:00")
+        assert code == 2
+        assert "no row compared with a directory" in report["error"]
+        assert "no_rows_in_window" not in report and "note" not in report
+    finally:
+        _drop(conn, schema)
+
+
+def test_the_no_rows_note_reaches_stderr_next_to_exit_two(monkeypatch, capsys):
+    class _Conn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(counter, "_connect", _Conn)
+    monkeypatch.setattr(counter, "measure", lambda *_a: (2, {"no_rows_in_window": True, "note": counter.NO_ROWS_NOTE}))
+    assert counter.main(["--since", "2026-11-04 12:00:00"]) == 2
+    assert "NOTE: no rows in the window" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("session_zone", ["UTC", "Asia/Shanghai", "America/New_York"])
