@@ -95,14 +95,17 @@ async function runScan() {
 
 async function openDetail(row: DeliveryRiskCase) {
   detailVisible.value = true;
-  detail.value = null;
-  ownerUserId.value = row.ownerUserId;
+  // 同一条实例刷新时保留旧内容, 不让抽屉闪空
+  if (detail.value?.case.id !== row.id) detail.value = null;
   task.value = '';
   result.value = '';
   try {
     const [d, a] = await Promise.all([getDeliveryRisk(factoryId.value, row.id), listAssignees(factoryId.value)]);
-    if (d.success) detail.value = d.data;
-    else ElMessage.error(d.message || '详情加载失败');
+    if (d.success) {
+      detail.value = d.data;
+      // 负责人以服务端最新值为准: 传进来的 row 可能是指派之前的
+      ownerUserId.value = d.data.case.ownerUserId;
+    } else ElMessage.error(d.message || '详情加载失败');
     assignees.value = a.success ? a.data ?? [] : [];
   } catch (e) {
     ElMessage.error(errorText(e, '详情加载失败'));
@@ -189,7 +192,7 @@ onMounted(load);
     <el-drawer v-model="detailVisible" size="600px" :title="detail ? `交付风险 ${detail.case.orderNumber ?? ''}` : '交付风险'">
       <template v-if="detail">
         <p>
-          <el-tag :type="LEVEL_TAG[detail.assessment.level]">{{ LEVEL_LABEL[detail.assessment.level] }}</el-tag>
+          <el-tag :type="LEVEL_TAG[detail.assessment.level]" disable-transitions data-testid="detail-level">{{ LEVEL_LABEL[detail.assessment.level] }}</el-tag>
           {{ detail.case.stageLabel }} · 交期 {{ detail.assessment.dueDate ?? '未知' }}
         </p>
         <h4>异常</h4>
