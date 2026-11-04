@@ -64,7 +64,7 @@ public final class CostDeviationEvaluator {
             }
             BigDecimal abs = pct.abs();
             if (max == null || abs.compareTo(max) > 0) max = abs;
-            if (abs.compareTo(thresholdPct) > 0) over.add(r.getProcessName() + " " + plain(abs) + "%");
+            if (abs.compareTo(thresholdPct) > 0) over.add((r.getProcessName() == null ? "未命名工序" : r.getProcessName()) + " " + plain(abs) + "%");
         }
         if (max == null) {
             return reading(ShortageCase.SourceType.MATERIAL_BALANCE, block.getPlanId(), block.getPlanNumber(),
@@ -76,8 +76,13 @@ public final class CostDeviationEvaluator {
                 : "未解释差额超阈值 " + plain(thresholdPct) + "%: " + String.join("、", over);
         if (unknown > 0) summary += ", 另有 " + unknown + " 道工序算不出";
         return reading(ShortageCase.SourceType.MATERIAL_BALANCE, block.getPlanId(), block.getPlanNumber(),
-                block.getProductName(), over.isEmpty() ? Outcome.WITHIN : Outcome.DEVIATED, max, thresholdPct, null,
+                displayProduct(block.getProductName()), over.isEmpty() ? Outcome.WITHIN : Outcome.DEVIATED, max, thresholdPct, null,
                 over.size(), unknown, summary);
+    }
+
+    /** 系统内部占位产品 (__RAW_WORKFLOW_OWNER__…) 不给人看。 */
+    private static String displayProduct(String name) {
+        return name != null && name.startsWith("__") ? null : name;
     }
 
     private static Reading reading(ShortageCase.SourceType type, String planId, String planNumber, String productName,
