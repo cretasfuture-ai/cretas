@@ -4,6 +4,8 @@
  *  - 数字字段常驻标准文案; 超范围变红且带「偏高 · / 偏低 · 」; 非数字「请填数字」;
  *  - 非数字类型字段是普通文本输入框。
  */
+import fs from 'fs';
+import path from 'path';
 import React, { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import ProcessParamsSection from '../../../components/processing/ProcessParamsSection';
@@ -46,6 +48,20 @@ describe('ProcessParamsSection', () => {
       expect(screen.queryByTestId('process-params-section')).toBeNull();
     },
   );
+
+  it('提示排在输入框上方: 键盘是 pan 模式, 框下面的内容填写时会被盖住 (小米真机实测)', () => {
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../../components/processing/ProcessParamsSection.tsx'),
+      'utf8',
+    );
+    const hintAt = src.indexOf('testID={`process-param-hint-');
+    const inputAt = src.indexOf('<PaperTextInput\n') === -1
+      ? src.indexOf('<PaperTextInput\r\n')
+      : src.indexOf('<PaperTextInput\n');
+    expect(hintAt).toBeGreaterThan(-1);
+    expect(inputAt).toBeGreaterThan(-1);
+    expect(hintAt).toBeLessThan(inputAt);
+  });
 
   it('标题带工序名 + 副标题; 停用项不出现; 数字项常驻标准文案(灰)', () => {
     render(<Harness schema={SCHEMA} />);
