@@ -145,15 +145,19 @@ async def compile_report(job, history, actor):
     projects = analysis['production']['projectCount']
     eligible = analysis['cost']['unitCostAvailableProjects']
     report = analysis['costAlerts']
+    context = previous_context(history, job, analysis)
+    analysis['analysisHistory']=context
     if projects:
         from smartbi.services.alert_local_ai import enrich
-        await enrich(report, actor)
+        await enrich(report, actor,analysis_context=analysis)
     else:
         report['ai'] = {'status': 'not_applicable', 'message': '本期没有可归属工单，未调用AI猜测成本或生产原因。'}
     configured_model=os.environ.get('SMARTBI_ALERT_AI_MODEL')
     if configured_model:
         report['ai'].setdefault('model',configured_model)
-    context = previous_context(history, job, analysis)
+    if os.environ.get('SMARTBI_LOCAL_ANALYST_ENABLED')=='1':
+        from smartbi.services.analysis_playbook import VERSION
+        report['ai'].setdefault('analysisProfileVersion',VERSION)
     summary = (f"{period['startDate']} 至 {period['endDate']}归入 {projects} 张工单；"
                f'{eligible} 张资料具备，{projects-eligible} 张仍需核对材料、人工或成品记录。'
                if projects else '所选日期没有已同步且能按当前日期口径归属的工单；这不表示工厂没有生产，也不表示成本为零。')
@@ -178,6 +182,8 @@ async def compile_report(job, history, actor):
         if repeated:
             first=repeated[0]
             section['nextSteps'].insert(0, '历史报告也出现过“'+first['title']+'”这类提醒，本期仍命中；建议优先处理：'+first['action']+'。旧结论不能代替本期核对。')
+    from smartbi.services.local_analyst import apply_sections
+    apply_sections(sections,report['ai'])
     return {'summary': summary, 'observations': observations, 'sectionInsights': sections,
             'history': context, 'ai': report['ai'], 'dataAsOf': period['dataAsOf'],
             'sourceRunId': period['baseRunId'], 'runId': analysis['runId'],
@@ -197,7 +203,7 @@ async def run_one(config):
     if actor is None:
         return False
     db = store(); key = scope(config)
-    job = await asyncio.to_thread(db.claim, key)
+    job = await asyncio.to_thread(db.claim, key, None, 1400)
     if job is None:
         return False
     try:
@@ -206,6 +212,8 @@ async def run_one(config):
             raise ValueError('PERIOD_REPORT_SOURCE_SCOPE_MISMATCH')
         history = await asyncio.to_thread(db.history, key, job, 100)
         result = await compile_report(job, history, actor)
+        from smartbi.services.local_analyst import retain_usage
+        retain_usage(result['ai'],(job.get('result') or {}).get('ai',{}))
         ai_status=result['ai'].get('status')
         if ai_status in ('rate_limited','busy'):
             # Legacy rate-limited drafts now resume through the same serial queue.

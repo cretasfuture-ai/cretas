@@ -62,6 +62,19 @@ function makeAlert(id = 'alert-1'): CostDataAlert {
 }
 
 describe('SectionInsight', () => {
+  it('labels model interpretation and shows impact without exposing evidence aliases', () => {
+    const report = makeReport({ localAnalysis: {
+      sectionId: 'material', title: '材料解读', evidenceRefs: ['F017'], whatItMeans: '材料记录还需核对',
+      whyItMatters: '只看包装会低估成品成本', hypotheses: ['可能是包装工序'], nextStep: '请仓库核对主料', owner: '仓库',
+      cannotConclude: '不能认定成品便宜', followupQuestion: '还缺哪些主料记录？', considerations: ['PACKAGING_ONLY'],
+      statistics: [{ id: 'F017', text: '合成产品仅见包装记录' }],
+      indicator: { label: '材料', indicator: '单位材料成本', formula: '材料净额除良品', howToRead: '先核对记录完整性' },
+    } });
+    const wrapper = mount(SectionInsight, { props: { report } });
+    expect(wrapper.text()).toContain('本地模型经营解读');
+    expect(wrapper.text()).toContain('只看包装会低估成品成本');
+    expect(wrapper.text()).not.toContain('F017');
+  });
   function setAuth(factoryId = 'F001', currentRole = 'viewer', userId = 101) {
     authStoreHolder.current = reactive({ factoryId, currentRole, user: { id: userId } });
   }

@@ -12,7 +12,7 @@ export interface DatasetAlertReport {
   summary: { rows?: number; scannedRows?: number; projects?: number; alerts: number; truncated?: boolean; byType: Record<string, number>; byFamily: Record<string, number> };
   capabilities?: { quality: { status: string }; cost: { status: string; reason?: string; eligibleRows?: number; scannedRows?: number }; costMissingFields: string[] };
   items: DataAlert[];
-  ai: { status: string; message?: string; model?: string; host?: string; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
+  ai: { status: string; message?: string; model?: string; host?: string; analysisProfileVersion?: string; analysisSections?: import('./local-analysis').LocalAnalysisSection[]; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
 }
 interface Envelope { success: boolean; data: DatasetAlertReport; message: string }
 export async function getDatasetAlerts(uploadId: number): Promise<DatasetAlertReport> {

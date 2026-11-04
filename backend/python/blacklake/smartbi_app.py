@@ -30,6 +30,7 @@ def create_app():
     os.environ['SMARTBI_ALERT_AI_TRANSPORT']='ssh'
     os.environ['SMARTBI_ALERT_AI_SSH_HOST']='canada-mini'
     os.environ['SMARTBI_ALERT_AI_MODEL']='qwen3.8:27b'
+    os.environ['SMARTBI_LOCAL_ANALYST_ENABLED']='1'
     os.environ['SMARTBI_ALERT_AI_STATE_FILE']=str((Path(os.environ['LOCALAPPDATA'])/'Cretas/SmartBIAlerts/local-ai-state.sqlite3').resolve())
     @asynccontextmanager
     async def lifespan(app):

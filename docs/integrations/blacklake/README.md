@@ -80,3 +80,5 @@ python -m blacklake metrics --contract blacklake/verified_contract.json --resour
 2026-11-04 的日期范围、夜间定时、持久报告、历史复用和逐项追问见 [周期分析报告](PERIOD-ANALYSIS-REPORT.md)。该能力当前运行于本机隔离测试服务，AI 配额等待、来源时点和库存历史缺口均单独披露。
 
 后续按用户要求取消 AI 小时次数限制，改为串行排队，全部当前等待报告已完成并开始记录实际 token；见 [AI 排队与用量回执](AI-QUEUE-REPORT.md)。历史报告无用量时保持未知。
+
+新增本地模型经营解读：指标、统计依据、白话解释、假设、核对动作与边界共用版本化框架；见 [分析方法](ANALYST-PLAYBOOK.md) 和 [实际验证](LOCAL-ANALYST-REPORT.md)。新模板已用六膳门一段数据验证，旧历史报告按需升级。

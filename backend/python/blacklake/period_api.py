@@ -40,6 +40,14 @@ async def submit(payload: ReportRequest, request: Request):
         job = await asyncio.to_thread(runtime.store().submit, runtime.scope(config), window.wire(),
                                       data['periodMetadata']['fingerprint'], data, 'manual',
                                       getattr(request.state, 'user_id', None), payload.force)
+        # Explicitly requested ranges upgrade old explanation profiles by a new
+        # immutable revision; background reconciliation does not rewrite history.
+        from smartbi.services.analysis_playbook import VERSION as ANALYSIS_PROFILE
+        if (os.getenv('SMARTBI_LOCAL_ANALYST_ENABLED')=='1' and job['status']=='ready'
+                and job.get('result',{}).get('ai',{}).get('analysisProfileVersion')!=ANALYSIS_PROFILE):
+            job=await asyncio.to_thread(runtime.store().submit,runtime.scope(config),window.wire(),
+                                       data['periodMetadata']['fingerprint'],data,'analysis_profile_upgrade',
+                                       getattr(request.state,'user_id',None),True)
     except HTTPException:
         raise
     except Exception:

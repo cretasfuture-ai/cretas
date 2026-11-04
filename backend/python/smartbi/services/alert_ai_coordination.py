@@ -21,7 +21,9 @@ def _key(value):return hashlib.sha256(str(value).encode()).hexdigest()
 def _connection():
     path=Path(os.getenv('SMARTBI_ALERT_AI_STATE_FILE') or Path.home()/'.cache/cretas/smartbi-alert-ai/state.sqlite3')
     path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
-    db=sqlite3.connect(path,timeout=0.2,isolation_level=None)
+    # Admission/usage writes are short, but schema checks can contend with a
+    # sibling connection on Windows. Wait for that transaction, not a quota.
+    db=sqlite3.connect(path,timeout=5,isolation_level=None)
     db.execute('CREATE TABLE IF NOT EXISTS leases (resource TEXT PRIMARY KEY, owner TEXT NOT NULL, expires REAL NOT NULL)')
     db.execute('CREATE TABLE IF NOT EXISTS attempts (bucket TEXT NOT NULL, at REAL NOT NULL)')
     db.execute('CREATE INDEX IF NOT EXISTS attempts_bucket_time ON attempts(bucket,at)')
@@ -49,7 +51,8 @@ def run(infer,payload,config,tenant,user):
                 db.execute('DELETE FROM inference_queue WHERE expires<=?',(now,))
                 head=db.execute('SELECT owner FROM inference_queue WHERE resource=? ORDER BY sequence LIMIT 1',(resource,)).fetchone()
                 if head and head[0]==owner and not db.execute('SELECT 1 FROM leases WHERE resource=?',(resource,)).fetchone():
-                    db.execute('INSERT INTO leases VALUES (?,?,?)',(resource,owner,now+180))
+                    lease_seconds=min(480,max(180,int(getattr(payload,'timeout_seconds',150))+30))
+                    db.execute('INSERT INTO leases VALUES (?,?,?)',(resource,owner,now+lease_seconds))
                     db.execute('DELETE FROM inference_queue WHERE owner=?',(owner,))
                     acquired=True
                 db.execute('COMMIT')
@@ -66,6 +69,8 @@ def run(infer,payload,config,tenant,user):
             return result
         except Exception as exc:
             failure=exc
+            if getattr(exc,'usage',None) is not None:
+                exc.usage={**exc.usage,'requestId':owner}
             raise
         finally:
             usage=getattr(result if failure is None else failure,'usage',None) or {}

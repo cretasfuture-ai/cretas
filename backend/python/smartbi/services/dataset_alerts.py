@@ -663,6 +663,19 @@ def analyze_dataset(
     families = Counter(item["family"] for item in items)
     types = Counter(item["type"] for item in items)
     quality_available = bool(scanned_rows) and not any(item["family"] == "data_quality" and item["severity"] == "blocking" for item in items)
+    ranking_groups = defaultdict(list)
+    if cost_rules_enabled and not source_is_non_work_order:
+        for _, row, values in cost_rows:
+            name = _string(_field_value(row,"productName",resolved))
+            if name:ranking_groups[(_string(values['productCode']),_string(values['unit']),name)].append(values)
+    rankings=[]
+    for (code,unit,name),group in ranking_groups.items():
+        quantity=sum((_number(row['finishedGood']) for row in group),Decimal(0))
+        costs=[(_number(row['materialCost'])+_number(row['laborCost']))/_number(row['finishedGood']) for row in group]
+        total=sum((_number(row['materialCost'])+_number(row['laborCost']) for row in group),Decimal(0))
+        rankings.append({'productCode':code,'unit':unit,'product':name,'projects':len(group),
+                         'weightedUnitCost':_decimal_for_report(total/quantity),
+                         'minimum':_decimal_for_report(min(costs)),'maximum':_decimal_for_report(max(costs))})
     return {
         "schema": SCHEMA,
         "ruleVersion": RULE_VERSION,
@@ -693,6 +706,8 @@ def analyze_dataset(
             "costMissingFields": sorted(set(cost_missing_fields + missing_value_fields + invalid_cost_fields)),
         },
         "items": items,
+        "analysisMetrics": {"rankings":rankings[:100],"omittedGroups":max(0,len(rankings)-100),
+                            "scope":"eligible_rows_only","fullManufacturingCost":None,"grossProfit":None},
         "ai": {"status": "not_run", "message": "规则只返回类型、计数和比例等可审计事实；未上传或生成原始明细解释。"},
     }
 

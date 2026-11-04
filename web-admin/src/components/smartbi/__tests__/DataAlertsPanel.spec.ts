@@ -15,6 +15,18 @@ function report(id: string, factory = 'A'): DatasetAlertReport {
 const options = { global: { renderStubDefaultSlot: true, directives: { loading: () => {} }, stubs: { ...Object.fromEntries(['ElButton', 'ElCard', 'ElInput', 'ElSelect', 'ElOption', 'ElPagination', 'ElEmpty'].map(name => [name, true])), ElAlert: { props: ['title'], template: '<p>{{ title }}</p>' }, ElTable: { name: 'ElTable', props: ['data'], template: '<div><slot /></div>' }, ElTableColumn: { template: '<span />' } } } };
 beforeEach(() => { get.mockReset();auth.factoryId = 'A';auth.user.id = 1;auth.currentRole = 'factory_super_admin'; });
 describe('shared source and session ownership', () => {
+  it('shows the same local business interpretation for uploaded data without raw aliases', () => {
+    const supplied = report('upload');
+    supplied.ai.analysisSections = [{ sectionId: 'coverage', title: '数据覆盖', evidenceRefs: ['F001'],
+      whatItMeans: '成本资料仍不完整', whyItMatters: '缺价会低估成本', hypotheses: ['可能尚未计价'],
+      nextStep: '核对历史单据', owner: '财务', cannotConclude: '不能认定产品低成本', followupQuestion: '还缺哪些单据？',
+      considerations: ['MISSING_COST'], statistics: [{ id: 'F001', text: '合成记录存在缺价' }],
+      indicator: { label: '覆盖', indicator: '覆盖率', formula: '可算数量除样本数量', howToRead: '缺失不补零' } }];
+    const wrapper = shallowMount(DataAlertsPanel, { ...options, props: { report: supplied } });
+    expect(wrapper.text()).toContain('怎么看：成本资料仍不完整');
+    expect(wrapper.text()).toContain('统计依据：合成记录存在缺价');
+    expect(wrapper.text()).not.toContain('F001');
+  });
   it('renders supplied rules without starting AI', () => {
     const wrapper = shallowMount(DataAlertsPanel, { ...options, props: { report: report('rules') } });
     expect(wrapper.text()).toContain('规则已完成');expect(get).not.toHaveBeenCalled();

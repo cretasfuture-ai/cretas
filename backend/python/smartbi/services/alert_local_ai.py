@@ -115,15 +115,16 @@ def payload_for(facts,model):
                         {'role':'user','content':json.dumps({'facts':facts,'checks':CHECKS},ensure_ascii=False)}]}
 
 def infer(payload,config):
+    inference_timeout=min(450,max(150,int(getattr(payload,'timeout_seconds',150))))
     if config['transport']=='ssh':
         command=['ssh','-T','-o','BatchMode=yes','-o','ConnectTimeout=6',config['host'],
-                 'curl --noproxy "*" -fsS --max-time 150 -H "Content-Type: application/json" --data-binary @- http://127.0.0.1:11434/api/chat']
-        process=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,encoding='utf-8',timeout=160)
+                 'curl --noproxy "*" -fsS --max-time '+str(inference_timeout)+' -H "Content-Type: application/json" --data-binary @- http://127.0.0.1:11434/api/chat']
+        process=subprocess.run(command,input=json.dumps(payload),capture_output=True,text=True,encoding='utf-8',timeout=inference_timeout+10)
         if process.returncode or len(process.stdout)>131072:raise RuntimeError('LOCAL_AI_TRANSPORT_FAILED')
         response=json.loads(process.stdout)
     elif config['transport']=='http':
         import httpx
-        with httpx.Client(timeout=150,trust_env=False,follow_redirects=False) as client:
+        with httpx.Client(timeout=inference_timeout,trust_env=False,follow_redirects=False) as client:
             response=client.post(config['base']+'/api/chat',json=payload)
             response.raise_for_status()
             if len(response.content)>131072:raise RuntimeError('LOCAL_AI_RESPONSE_TOO_LARGE')
@@ -134,8 +135,11 @@ def infer(payload,config):
     try:return InferenceResult(json.loads(response['message']['content']),usage)
     except (ValueError,TypeError,KeyError):raise LocalAIOutputError(usage) from None
 
-async def enrich(report,requester=None):
+async def enrich(report,requester=None,*,analysis_context=None):
     """Optional AI failure is reported explicitly without invalidating the rules."""
+    if os.getenv('SMARTBI_LOCAL_ANALYST_ENABLED')=='1':
+        from .local_analyst import enrich as explain
+        return await explain(report,requester,analysis_context)
     try:
         config=provider_config()
         if config['transport']=='disabled':

@@ -167,11 +167,13 @@ def test_model_serializes_cross_tenant_queue_without_hourly_quotas():
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
     from smartbi.services.alert_ai_coordination import run
+    from smartbi.services.alert_ai_coordination import _connection
+    _connection().close()  # Schema fsync is separate from inference scheduling.
     started=Event();release=Event();config={'transport':'ssh','host':'synthetic'}
-    def slow(*args):started.set();release.wait(3);return {'ok':True}
+    def slow(*args):started.set();release.wait(20);return {'ok':True}
     with ThreadPoolExecutor(max_workers=2) as pool:
         first=pool.submit(run,slow,{},config,'A',1)
-        assert started.wait(2)
+        assert started.wait(10)
         second=pool.submit(run,lambda *a:{'second':True},{},config,'B',2)
         time.sleep(0.05)
         assert not second.done()

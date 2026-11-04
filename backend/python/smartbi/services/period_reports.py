@@ -365,14 +365,20 @@ class ReportStore:
             db.execute('COMMIT')
             return self._public(updated)
 
-    def resume_ai_queue(self, scope: Mapping[str, Any]) -> list[str]:
+    def resume_ai_queue(self, scope: Mapping[str, Any], analysis_profile: str | None = None) -> list[str]:
         """Explicitly resume old quota/busy drafts; never alter ready or leased jobs."""
         _,scope_key=_scope(scope)
         self._ensure()
         with self._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             rows=db.execute("SELECT id,result_json FROM period_reports WHERE scope_key=? AND definition_version=? AND status='queued' AND lease_token IS NULL",(scope_key,DEFINITION_VERSION)).fetchall()
-            ids=[row['id'] for row in rows if (_load(row['result_json']) or {}).get('ai',{}).get('status') in ('rate_limited','busy')]
+            ids=[]
+            for row in rows:
+                ai=(_load(row['result_json']) or {}).get('ai',{})
+                if (ai.get('status') in ('rate_limited','busy') or
+                        (analysis_profile and ai.get('status')=='unavailable' and ai.get('analysisProfileVersion')
+                         and ai['analysisProfileVersion']!=analysis_profile)):
+                    ids.append(row['id'])
             db.executemany('UPDATE period_reports SET next_attempt_at=NULL WHERE id=? AND scope_key=? AND status=\'queued\' AND lease_token IS NULL',[(job_id,scope_key) for job_id in ids])
             db.execute('COMMIT')
             return ids

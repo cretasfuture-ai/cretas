@@ -165,6 +165,34 @@ def test_invalid_range_rejected_and_old_scope_cannot_be_used_for_followup(period
     assert client.post(path+'/sections/followup',json=body,headers=headers).status_code==409
 
 
+def test_explicit_profile_upgrade_preserves_old_ready_and_reuses_new_revision(period_client,monkeypatch):
+    client,headers,raw,config,*_=period_client
+    path='/api/smartbi/blacklake/period-reports'
+    body={'start_date':'2026-11-03','end_date':'2026-11-03'}
+    old=client.post(path,json=body,headers=headers).json()['data']
+    assert asyncio.run(period_runtime.run_one(config))
+    old_ready=period_runtime.store().get(period_runtime.scope(config),old['id'])
+    monkeypatch.setenv('SMARTBI_LOCAL_ANALYST_ENABLED','1')
+    upgraded=client.post(path,json=body,headers=headers).json()['data']
+    assert upgraded['id']!=old['id'] and upgraded['revision']==old['revision']+1
+    same=client.post(path,json=body,headers=headers).json()['data']
+    assert same['id']==upgraded['id']
+    assert asyncio.run(period_runtime.run_one(config))
+    ready=client.post(path,json=body,headers=headers).json()['data']
+    assert ready['id']==upgraded['id'] and ready['status']=='ready'
+    assert period_runtime.store().get(period_runtime.scope(config),old['id'])==old_ready
+
+
+def test_empty_period_profile_never_requeues_forever(period_client,monkeypatch):
+    client,headers,raw,config,*_=period_client
+    monkeypatch.setenv('SMARTBI_LOCAL_ANALYST_ENABLED','1')
+    body={'start_date':'2025-01-01','end_date':'2025-01-01'}
+    job=client.post('/api/smartbi/blacklake/period-reports',json=body,headers=headers).json()['data']
+    assert asyncio.run(period_runtime.run_one(config))
+    again=client.post('/api/smartbi/blacklake/period-reports',json=body,headers=headers).json()['data']
+    assert again['id']==job['id'] and again['result']['ai']['status']=='not_applicable'
+
+
 def test_worker_rechecks_authority_and_no_data_never_calls_model(period_client,monkeypatch):
     client,headers,raw,config,*_=period_client;path='/api/smartbi/blacklake'
     job=client.post(path+'/period-reports',json={'start_date':'2026-11-03','end_date':'2026-11-03'},headers=headers).json()['data']

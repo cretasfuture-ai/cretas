@@ -58,6 +58,8 @@ export interface BlacklakePeriodJob {
 export interface BlacklakePeriodSchedule { enabled: boolean; timezone: string; rules: { label: string; description: string }[]; lastTick?: string; message?: string; }
 
 export interface SectionInsightReport {
+  localAnalysis?: import('./local-analysis').LocalAnalysisSection;
+  ruleSummary?: string;
   sectionId: string; title: string; summary: string; observations: string[]; calculation: string[];
   hypotheses: string[]; limitations: string[]; nextSteps: string[]; suggestedQuestions: string[];
   scope: { runId: string; projectId?: number }; evidenceRefs: string[];
@@ -105,7 +107,7 @@ export interface LocalAIUsage {
 export interface CostAlertReport {
   schema: string; ruleVersion: string; summary: { projects: number; costEligible: number; costBlocked: number; alerts: number; byFamily: Record<string, number>; byType: Record<string, number> };
   items: CostDataAlert[]; limitations: string[];
-  ai: { status: string; message: string; model?: string; host?: string; usage?: LocalAIUsage; currentRequestUsage?: LocalAIUsage; cacheHit?: boolean; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
+  ai: { status: string; message: string; model?: string; host?: string; analysisProfileVersion?: string; analysisSections?: import('./local-analysis').LocalAnalysisSection[]; usage?: LocalAIUsage; currentRequestUsage?: LocalAIUsage; cacheHit?: boolean; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
 }
 export interface EligibleCostReview {
   eligibleProjects: number; products: number; limitations: string[];

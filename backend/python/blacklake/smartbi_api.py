@@ -59,7 +59,7 @@ async def local_review(request:Request):
     from smartbi.services.alert_local_ai import enrich
     try:data=await asyncio.to_thread(read,configured)
     except Exception:raise HTTPException(503,'黑湖测试数据集读取或一致性验证失败') from None
-    report=await enrich(data['dataAlerts'],getattr(request.state,'user_id',None))
+    report=await enrich(data['dataAlerts'],getattr(request.state,'user_id',None),analysis_context=data)
     from .section_review import save
     if report.get('ai',{}).get('status')=='complete':
         await asyncio.to_thread(save, report, Path(path).resolve().parent/'cost-common-ai.dpapi')
@@ -102,11 +102,21 @@ async def followup(payload: Followup, request: Request):
         context_alert=next((a for a in section_alerts(data,payload.section_id) if a['id']==payload.alert_id),None)
         if context_alert is None:raise HTTPException(404,'该异常不属于当前板块或归档，请刷新后重试')
     report=data['dataAlerts']
+    if payload.period and os.environ.get('SMARTBI_LOCAL_ANALYST_ENABLED')=='1':
+        from . import period_runtime
+        from smartbi.services.analysis_playbook import VERSION
+        saved=await asyncio.to_thread(period_runtime.store().list,period_runtime.scope(configured),50)
+        compatible=next((j for j in saved if j['status']=='ready' and j.get('result',{}).get('runId')==data['runId']
+                         and j.get('result',{}).get('ai',{}).get('analysisProfileVersion')==VERSION),None)
+        if compatible:
+            report['ai']=compatible['result']['ai']
+            from smartbi.services.local_analyst import apply_sections
+            apply_sections([section],report['ai'])
     # Never send free-text questions, history, source rows or names to a model.
     # The rule answer uses current evidence; 27B only selects bounded checks.
     from smartbi.services.alert_local_ai import enrich
     if report.get('ai',{}).get('status')!='complete':
-        await enrich(report,getattr(request.state,'user_id',None))
+        await enrich(report,getattr(request.state,'user_id',None),analysis_context=data)
         if report.get('ai',{}).get('status')=='complete' and payload.period is None:
             from .section_review import save
             await asyncio.to_thread(save,report,Path(path).resolve().parent/'cost-common-ai.dpapi')
@@ -122,7 +132,7 @@ async def followup(payload: Followup, request: Request):
     else:text+='\n\n本地核对状态：'+ai.get('message','尚未完成')+'；以上回答来自已验证规则与当前证据。'
     return {'success':True,'data':{'answer':text,'sectionId':payload.section_id,'runId':data['runId'],
             'alertId':payload.alert_id,
-            'engine':'确定性证据解释；27B仅选择核对动作','ai':ai},'message':'仅解释当前板块，不执行业务修改'}
+            'engine':'当前证据统计与本地模型已校验解读' if report.get('ai',{}).get('analysisSections') else '确定性证据解释；27B选择核对动作','ai':ai},'message':'仅解释当前板块，不执行业务修改'}
 
 
 class AlertProgress(BaseModel):

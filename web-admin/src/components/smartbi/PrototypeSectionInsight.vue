@@ -155,6 +155,7 @@ async function submitQuestion() {
         <div class="insight-kicker">这组数据的分析 <UBadge color="neutral" variant="subtle">只读快照</UBadge></div>
         <h3>{{ report.title }}</h3>
         <p class="insight-summary">{{ localizeBlacklakeText(report.summary) }}</p>
+        <p v-if="report.localAnalysis" class="insight-scope">本地模型经营解读 · 统计依据已核对，原因仍待验证</p>
         <p class="insight-scope">分析范围：{{ localizeBlacklakeText(scopeDescription) }}；不随图表单位或表格筛选变化，除非重新分析。</p>
       </div>
       <details class="scope-details">
@@ -194,6 +195,7 @@ async function submitQuestion() {
     </div>
 
     <div class="detail-list">
+      <article v-if="report.localAnalysis" class="insight-details" data-testid="local-business-interpretation"><strong>为什么值得关注</strong><p>{{ report.localAnalysis.whyItMatters }}</p><p>现在不能下的结论：{{ report.localAnalysis.cannotConclude }}</p></article>
       <details v-if="report.hypotheses.length" class="insight-details insight-details--hypothesis">
         <summary><span>待验证假设</span><UBadge color="warning" variant="subtle">未证实</UBadge></summary>
         <ul><li v-for="item in report.hypotheses" :key="item">{{ localizeBlacklakeText(item) }}</li></ul>

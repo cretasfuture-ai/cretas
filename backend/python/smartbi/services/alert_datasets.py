@@ -10,6 +10,7 @@ def for_role(report,role):
     if can_view_details(role):return report
     masked=deepcopy(report)
     masked['items']=[]
+    masked.pop('analysisMetrics',None)
     masked['summary'].update(alerts=0,byType={},byFamily={})
     masked['runId']='restricted'
     masked['analysisStatus']='restricted'

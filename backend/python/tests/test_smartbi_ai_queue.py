@@ -71,6 +71,14 @@ def test_failed_provider_keeps_unknown_usage_and_releases_for_next_request():
         assert 'tenant-secret' not in '\n'.join(db.iterdump())
 
 
+def test_invalid_json_consumption_has_a_call_id_for_durable_retry_accounting():
+    def fail(*args):raise ai.LocalAIOutputError({'inputTokens':10,'outputTokens':3,'totalTokens':13})
+    with pytest.raises(ai.LocalAIOutputError) as error:queue.run(fail,{}, {'transport':'ssh','host':'synthetic'},'T','U')
+    assert error.value.usage['requestId']
+    with queue._connection() as db:
+        assert db.execute('SELECT request_id,total_tokens FROM inference_usage').fetchone()==(error.value.usage['requestId'],13)
+
+
 def test_ollama_actual_counts_are_distinct_from_model_content_and_missing_not_zero(monkeypatch):
     response={'model':'qwen3.8:27b','prompt_eval_count':123,'eval_count':45,'total_duration':2_000_000_000,
               'message':{'content':'{"reviews":[]}'}}
