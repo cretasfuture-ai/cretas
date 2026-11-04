@@ -88,11 +88,112 @@ class ProcessingServiceImplDynamicQualityStandardContractTest {
         return request;
     }
 
+    private void assertFailNoteRequired(DynamicQualityInspectionRequest request) {
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.submitDynamicInspection(FACTORY, BATCH, request, 1557L));
+        assertEquals(400, error.getCode());
+        assertEquals("QUALITY_FAIL_NOTE_REQUIRED", error.getErrorCode());
+        assertTrue(error.getMessage().contains("中心温度"), error.getMessage());
+    }
+
+    @Test
+    void requireNoteOnFailRejectsMissingOrBlankReasonBeforeAnythingIsSaved() {
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        // null / 空串 / 半角空格 / 全角空格 / 不换行空格 / 换行: 都不算写了原因
+        for (String blank : new String[]{null, "", "   ", "\u3000\u3000", "\u00A0", " \n\t"}) {
+            DynamicQualityInspectionRequest request = request(revision, "binding-temp", "item-temp", 3, "15");
+            request.setNotes(blank);
+            request.getAnswers().get(0).setNote(blank);
+            assertFailNoteRequired(request);
+        }
+        verify(qualityInspectionService, never()).createInspection(anyString(), any());
+    }
+
+    @Test
+    void reasonOnTheInspectionOrOnTheItemIsEnoughAndItemReasonIsKept() {
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+
+        DynamicQualityInspectionRequest overall = request(revision, "binding-temp", "item-temp", 3, "15");
+        overall.setNotes("  中心温度偏高, 冷链断了  ");
+        assertEquals("FAIL", ((QualityInspection) service.submitDynamicInspection(FACTORY, BATCH, overall, 1557L)
+                .get("inspection")).getResult());
+
+        DynamicQualityInspectionRequest perItem = request(revision, "binding-temp", "item-temp", 3, "15");
+        perItem.getAnswers().get(0).setNote("探针读数 15 度");
+        QualityInspection saved = (QualityInspection) service.submitDynamicInspection(FACTORY, BATCH, perItem, 1557L)
+                .get("inspection");
+        Map<?, ?> item = (Map<?, ?>) ((List<?>) saved.getCustomFields().get("items")).get(0);
+        assertEquals("探针读数 15 度", item.get("note"));
+    }
+
+    @Test
+    void passedItemNeedsNoReason() {
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        DynamicQualityInspectionRequest request = request(revision, "binding-temp", "item-temp", 3, "5");
+        request.setNotes("");
+        assertEquals("PASS", ((QualityInspection) service.submitDynamicInspection(FACTORY, BATCH, request, 1557L)
+                .get("inspection")).getResult());
+    }
+
+    @Test
+    void itemThatDoesNotRequireNoteMayFailWithoutOne() {
+        binding.getQualityCheckItem().setRequireNoteOnFail(false);
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        assertEquals("FAIL", ((QualityInspection) service.submitDynamicInspection(FACTORY, BATCH,
+                request(revision, "binding-temp", "item-temp", 3, "15"), 1557L).get("inspection")).getResult());
+    }
+
+    @Test
+    void passingItemWithRequireNoteDoesNotDemandReasonForAnotherFailingItem() {
+        QualityCheckItem optional = QualityCheckItem.builder().id("item-sense").factoryId(FACTORY)
+                .itemCode("SENSE").itemName("感官评分").version(1).valueType("RANGE")
+                .minValue(new BigDecimal("60")).maxValue(new BigDecimal("100"))
+                .requireNoteOnFail(false).isRequired(true).enabled(true).build();
+        QualityCheckItemBinding sense = QualityCheckItemBinding.builder().id("binding-sense").factoryId(FACTORY)
+                .productTypeId("QA-PRODUCT").qualityCheckItemId("item-sense").qualityCheckItem(optional)
+                .enabled(true).overrideIsRequired(true).build();
+        when(bindingRepository.findByProductTypeIdWithItems("QA-PRODUCT")).thenReturn(List.of(binding, sense));
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+
+        DynamicQualityInspectionRequest request = request(revision, "binding-temp", "item-temp", 3, "5");
+        DynamicQualityInspectionRequest.Answer failing = new DynamicQualityInspectionRequest.Answer();
+        failing.setBindingId("binding-sense"); failing.setItemId("item-sense"); failing.setItemVersion(1); failing.setValue("10");
+        request.setAnswers(List.of(request.getAnswers().get(0), failing));
+
+        assertEquals("FAIL", ((QualityInspection) service.submitDynamicInspection(FACTORY, BATCH, request, 1557L)
+                .get("inspection")).getResult());
+    }
+
+    @Test
+    void formTellsClientsWhichItemsRequireAReason() {
+        List<?> items = (List<?>) service.getDynamicQualityForm(FACTORY, BATCH).get("items");
+        assertEquals(true, ((Map<?, ?>) items.get(0)).get("requireNoteOnFail"));
+    }
+
+    @Test
+    void responseSaysTheBatchStillNeedsDispositionAfterALaterPass() {
+        batch.setQualityStatus(com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        when(productionBatchRepository.findById(any())).thenReturn(Optional.of(batch));
+        when(qualityInspectionService.createInspection(eq(FACTORY), any(QualityInspection.class))).thenAnswer(call -> {
+            QualityInspection row = call.getArgument(1);
+            row.setProductionBatchId(1885L);
+            return row;
+        });
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+
+        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH,
+                request(revision, "binding-temp", "item-temp", 3, "5"), 1557L);
+
+        assertEquals("FAILED", result.get("batchQualityStatus"));
+        assertEquals(true, result.get("dispositionRequired"));
+    }
+
     @Test
     void outOfRangeMeasurementPersistsServerFailAndCompleteSnapshot() {
         String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
-        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH,
-                request(revision, "binding-temp", "item-temp", 3, "15"), 1557L);
+        DynamicQualityInspectionRequest failing = request(revision, "binding-temp", "item-temp", 3, "15");
+        failing.setNotes("中心温度超标");
+        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH, failing, 1557L);
         QualityInspection saved = (QualityInspection) result.get("inspection");
         assertEquals("FAIL", saved.getResult());
         assertEquals(BigDecimal.ONE, saved.getFailCount());

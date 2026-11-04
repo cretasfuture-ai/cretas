@@ -90,9 +90,12 @@ public class SalesDeliveryBatchAllocationController {
             @RequestParam String productTypeId,
             @RequestParam BigDecimal requiredQty,
             @RequestParam(required = false) String unit,
-            @RequestParam(required = false) String sourceWarehouseCode) {
-        return ApiResponse.success("FIFO 推荐 (按生产日期升序)",
-                service.recommendFifo(
+            @RequestParam(required = false) String sourceWarehouseCode,
+            @RequestParam(defaultValue = "false") boolean skipPackagingMismatch) {
+        return ApiResponse.success("FIFO 推荐 (按生产日期升序)", skipPackagingMismatch
+                ? service.recommendFifoSkippingPackagingMismatch(
+                        factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode)
+                : service.recommendFifo(
                         factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode));
     }
 
