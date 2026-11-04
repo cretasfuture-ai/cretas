@@ -310,6 +310,8 @@ async def persist_distillation_sample(
             _log_skip_once("process value / personnel / named person or customer is never used "
                            "for training", factory_id, f"source={source}")
             return
+        # PR-2 (item d) may only relax the terms part here: lists.directory stays always on
+        # (see FactoryLists), and qa_has_blocked_content above also checks the directory.
         if lists.names_any(input_text, teacher_output):
             _log_skip_once("sample names a process-secret product", factory_id)
             return

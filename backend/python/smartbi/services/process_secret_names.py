@@ -50,7 +50,13 @@ _CACHE_SECONDS = 60.0
 
 @dataclass(frozen=True)
 class FactoryLists:
-    """One factory's lists. ``terms`` and ``directory`` are already folded."""
+    """One factory's lists. ``terms`` and ``directory`` are already folded.
+
+    INVARIANT (Steve 2026-11-04) for whoever wires the training filter switch (item d, PR-2)
+    into Python: ``directory`` (person and customer names) is PRIVACY, not secrecy. It is
+    always filtered from training, learning and distillation samples and NO setting controls
+    it. Only ``terms`` (protected products) and the process word + value rule may follow d.
+    Never skip a whole check because d is off: split it, as Java ProcessSecretSampleFilter.check does."""
     terms: FrozenSet[str] = frozenset()
     directory: FrozenSet[str] = frozenset()
 

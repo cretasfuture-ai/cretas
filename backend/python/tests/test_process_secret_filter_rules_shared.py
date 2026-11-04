@@ -155,6 +155,19 @@ def test_desensitize_cases():
     assert "工厂A" not in desensitize_for_training("分析以下工厂数据", "")[0]
 
 
+def test_python_training_filter_does_not_read_any_secrecy_switch():
+    """Steve 2026-11-04: person / customer names are always filtered, no setting controls them.
+    Python's training side reads no switch today, so nothing can turn them off. PR-2 wires d here:
+    when this goes red, keep the directory check outside d (see FactoryLists) and move this test
+    to pin that instead of deleting it."""
+    root = Path(__file__).resolve().parents[1]
+    modules = ["smartbi/services/process_secret_names.py", "smartbi/services/distillation_capture.py",
+               "smartbi/services/training_consent.py", "scripts/export_distillation_dataset.py",
+               "scripts/corpus_judge.py", "../../scripts/finetune/training_consent_gate.py"]
+    readers = [m for m in modules if re.search(r"factory_secrecy|TRAINING_FILTER", (root / m).read_text(encoding="utf-8"))]
+    assert readers == []
+
+
 def test_word_file_switch_is_a_strict_json_boolean():
     """Review round 3, item 2: bool("false") is True in Python while Java reads it as false —
     only a JSON true / false is accepted; anything else fails loudly."""
