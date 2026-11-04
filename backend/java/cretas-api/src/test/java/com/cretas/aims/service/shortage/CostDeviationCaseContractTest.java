@@ -84,6 +84,15 @@ class CostDeviationCaseContractTest {
     }
 
     @Test
+    void balance_unnamedProcessAndInternalProduct_notShownRaw() {
+        var b = MaterialBalanceTableDTO.PlanBlock.builder().planId("P1").productName("__RAW_WORKFLOW_OWNER__X")
+                .rows(List.of(row(null, "9"))).build();
+        Reading r = CostDeviationEvaluator.evaluateBalance(b, FIVE);
+        assertThat(r.summary()).contains("未命名工序").doesNotContain("null");
+        assertThat(r.productName()).isNull();
+    }
+
+    @Test
     void fingerprint_ignoresThreshold() {
         assertThat(CostDeviationEvaluator.evaluateCost(variance("9", 0), FIVE).fingerprint())
                 .isEqualTo(CostDeviationEvaluator.evaluateCost(variance("9", 0), new BigDecimal("3")).fingerprint());

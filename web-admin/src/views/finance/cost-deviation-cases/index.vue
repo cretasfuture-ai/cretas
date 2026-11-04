@@ -201,13 +201,17 @@ onMounted(() => {
 
     <el-alert v-if="scanResult" type="info" :closable="false" class="scan"
       :title="`扫描 ${scanResult.evaluated} 项: 新增 ${scanResult.created}, 更新 ${scanResult.refreshed}, 阈值内 ${scanResult.within}, 已处理未变 ${scanResult.alreadyResolved}, 算不出 ${scanResult.unknown.length}, 失败 ${scanResult.failed}`">
-      <div v-for="(u, i) in scanResult.unknown" :key="i">{{ u.planNumber ?? '未知计划' }}: {{ u.reason }}</div>
+      <div class="unknown-list">
+        <div v-for="(u, i) in scanResult.unknown" :key="i">{{ u.planNumber ?? '未知计划' }}: {{ u.reason }}</div>
+      </div>
     </el-alert>
 
     <el-table v-loading="loading" :data="cases" empty-text="没有异常" @row-click="openCase">
       <el-table-column prop="sourceLabel" label="类型" width="100" />
       <el-table-column prop="planNumber" label="计划" width="180" />
-      <el-table-column prop="productName" label="产品" width="160" />
+      <el-table-column label="产品" width="160">
+        <template #default="{ row }">{{ row.productName ?? '未知' }}</template>
+      </el-table-column>
       <el-table-column prop="summary" label="异常" min-width="280" />
       <el-table-column label="差异金额" width="110">
         <template #default="{ row }">{{ amountText(row) }}</template>
@@ -220,7 +224,7 @@ onMounted(() => {
 
     <el-dialog v-model="thresholdsOpen" title="告警阈值" width="420px">
       <p class="hint">留空 = 未配置, 该类不告警。</p>
-      <el-form label-width="130px">
+      <el-form label-width="150px">
         <el-form-item label="成本差异率 (%)">
           <el-input-number v-model="draft.variancePct" :min="0.01" :max="100" :value-on-clear="null" />
         </el-form-item>
@@ -305,6 +309,7 @@ onMounted(() => {
 .page { padding: 16px; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 12px 0; }
 .scan { margin-bottom: 12px; }
+.unknown-list { max-height: 120px; overflow-y: auto; }
 .hint { color: var(--el-text-color-secondary); }
 .row { display: flex; gap: 8px; }
 .note { margin: 8px 0; }

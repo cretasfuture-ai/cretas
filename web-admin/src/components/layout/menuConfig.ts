@@ -151,6 +151,7 @@ const rawMenuConfig: MenuItem[] = [
     children: [
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production', groupLabel: '生产过程' },
       { path: '/production/shortage-cases', title: '缺料异常', icon: '', module: 'production' },
+      { path: '/production/delivery-risks', title: '交付风险', icon: '', module: 'production' },
       // 🔴 2026-08-26: B8 生产进度数字大屏 —— 客户 2026-04 原话点名要的东西
       //   (ProductionProgressDashboardController:19 「可以做一个数字打屏嘛…看到当天所有商品
       //   工序生产的一个进度」), 2026-04-08 就做完了(后端 203 行零硬编码 + 162 行单测,
@@ -387,6 +388,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/sales/customers', title: '客户管理', icon: '', module: 'sales' },
       // S4 缺料异常: 销售看订单为什么还没排上 / 交期会不会延误, 与生产组同一页面, 本组自己的路由 (面包屑=销售管理)
       { path: '/sales/shortage-cases', title: '缺料异常', icon: '', module: 'sales' },
+      { path: '/sales/delivery-risks', title: '交付风险', icon: '', module: 'sales' },
       { path: '/sales/shipments', title: '出货记录', icon: '', module: 'sales',
         hideForFactoryTypes: ['RESTAURANT'] },
       // T-RTA fix (audit B2 BLOCKER 2026-05-13): /sales/returns route was added by
