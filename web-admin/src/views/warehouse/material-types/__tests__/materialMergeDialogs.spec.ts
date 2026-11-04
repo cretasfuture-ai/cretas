@@ -41,6 +41,7 @@ function checkResult(over: Partial<MaterialMergeCheck> = {}): MaterialMergeCheck
     duplicate: brief(material),
     master: brief(master),
     blockers: [],
+    replacements: [],
     warnings: [],
     aliasesToAdd: ['海天酱油'],
     ...over,
@@ -142,6 +143,51 @@ describe('合并重复物料弹窗', () => {
     expect(h.mergeMaterial).toHaveBeenCalledWith('F1', 'm1', 'm2', '同类不同品牌整合');
     expect(h.success).toHaveBeenCalledWith('已合并，「海天酱油」已成为「生抽」的别名');
     expect(w.emitted('merged')).toHaveLength(1);
+  });
+
+  it('会自动替换的引用合并前列出来; 合并后要人核对的结果用不自动消失的提示显示', async () => {
+    h.checkMaterialMerge.mockResolvedValue({
+      success: true,
+      data: checkResult({
+        replacements: [
+          { code: 'WORKFLOW', message: '2 张草稿工艺图', items: ['卤牛肉', '酱鸭'] },
+          { code: 'SUPPLIER', message: '1 家供应商的供货关系', items: ['张记调料'] },
+        ],
+      }),
+    });
+    h.mergeMaterial.mockResolvedValue({
+      success: true,
+      data: {
+        duplicateId: 'm1',
+        masterId: 'm2',
+        aliasesAdded: [],
+        replaced: { draftWorkflows: 2, suppliers: 1, purchaseOrderItems: 0, notes: ['「张记调料」已在供主物料，沿用主物料的价格，旧的供货关系已停用'] },
+      },
+    });
+    const w = await mountMerge();
+    await chooseMaster(w);
+    const block = w.find('[data-test="merge-replacements"]');
+    expect(block.text()).toContain('合并时会自动换成主物料「生抽」');
+    expect(w.find('[data-test="replacement-WORKFLOW"]').text()).toContain('2 张草稿工艺图：卤牛肉、酱鸭');
+    expect(w.find('[data-test="replacement-SUPPLIER"]').text()).toContain('张记调料');
+
+    await chooseReason(w, '重复录入');
+    await confirmBtn(w).trigger('click');
+    await flushPromises();
+    const { ElMessage } = await import('element-plus');
+    expect(ElMessage).toHaveBeenCalledWith({
+      message: '「张记调料」已在供主物料，沿用主物料的价格，旧的供货关系已停用',
+      type: 'warning',
+      duration: 0,
+      showClose: true,
+    });
+  });
+
+  it('没有要替换的引用时不显示这一块', async () => {
+    h.checkMaterialMerge.mockResolvedValue({ success: true, data: checkResult() });
+    const w = await mountMerge();
+    await chooseMaster(w);
+    expect(w.find('[data-test="merge-replacements"]').exists()).toBe(false);
   });
 
   it('原因选「其他」必须填说明, 填了才可确认且以说明为 reason', async () => {

@@ -157,8 +157,12 @@ async function handleConfirm(): Promise<void> {
   const masterName = check.value.master.name;
   submitting.value = true;
   try {
-    await mergeMaterial(props.factoryId, props.material.id, masterId.value, reasonValue.value || undefined);
+    const result = await mergeMaterial(props.factoryId, props.material.id, masterId.value, reasonValue.value || undefined);
     ElMessage.success(`已合并，「${oldName}」已成为「${masterName}」的别名`);
+    const notes = result?.data?.replaced?.notes ?? [];
+    if (notes.length > 0) {
+      ElMessage({ message: notes.join('；'), type: 'warning', duration: 0, showClose: true });
+    }
     visible.value = false;
     emit('merged');
   } catch (e) {
@@ -211,6 +215,17 @@ async function handleConfirm(): Promise<void> {
       <template v-if="check">
         <div v-if="check.aliasesToAdd.length" class="merge-block" data-test="merge-aliases">
           合并后主物料「{{ check.master.name }}」会新增别名：{{ check.aliasesToAdd.join('、') }}
+        </div>
+
+        <div v-if="check.replacements?.length" class="merge-block" data-test="merge-replacements">
+          <div>合并时会自动换成主物料「{{ check.master.name }}」：</div>
+          <div
+            v-for="r in check.replacements"
+            :key="r.code"
+            :data-test="`replacement-${r.code}`"
+          >
+            {{ r.message }}：{{ r.items.join('、') }}
+          </div>
         </div>
 
         <el-alert

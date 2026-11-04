@@ -35,9 +35,10 @@ import java.util.stream.Collectors;
  * 物料别名 + 重复物料合并 (新工厂复盘: 「配方名称和系统名称对不上」「同类品牌多, 要整合」)。
  *
  * <p><b>合并只做三件事</b>: 被合并物料停用并记下去向、它的名字(和原有别名)挂到主物料上、记合并人和原因。
- * 历史批次 / 单据 / 成本一行不动。Owner 2026-11-03 裁定: 被合并物料还在配方、工艺图、供应商供货、
- * 在途采购里用着, 或者还有库存, 一律拦住并列出位置 —— 不自动改指向
- * (配方与工艺图之间有同步关系, 自动改风险大)。</p>
+ * 历史批次 / 单据 / 成本一行不动。Owner 2026-11-03 裁定: 还有库存, 或还在当前配方、已发布工艺图里用着,
+ * 拦住并列出位置 (配方与工艺图之间有同步关系, 自动改风险大)。
+ * Owner 2026-11-04 放开一部分: 单位等价时, 草稿工艺图、供应商供货、一点没收货的采购单行
+ * 由 {@link MaterialMergeReferenceReplacer} 自动换到主物料; 单位不同或已开始收货的仍然拦住。</p>
  */
 @Slf4j
 @Service
@@ -48,6 +49,7 @@ public class MaterialAliasMergeService {
     private static final int MAX_MERGE_CHAIN = 10;
 
     private final RawMaterialTypeRepository materialTypeRepository;
+    private final MaterialMergeReferenceReplacer referenceReplacer;
     private final RawMaterialTypeAliasRepository aliasRepository;
     private final UnitContractService unitContractService;
 
@@ -195,6 +197,9 @@ public class MaterialAliasMergeService {
                     .withHintTarget("masterId");
         }
 
+        MaterialMergeDTO.ReplacementResult replaced = referenceReplacer.apply(
+                factoryId, duplicate, master, referenceReplacer.plan(factoryId, duplicateId));
+
         String operator = currentOperator();
         List<String> added = new ArrayList<>();
         // 被合并物料原有的别名整体挪到主物料上 (同一张表里改归属, 唯一约束不受影响)
@@ -226,6 +231,7 @@ public class MaterialAliasMergeService {
                 .duplicateId(duplicateId)
                 .masterId(masterId)
                 .aliasesAdded(added)
+                .replaced(replaced)
                 .build();
     }
 
@@ -260,15 +266,33 @@ public class MaterialAliasMergeService {
         stockBlocker(factoryId, duplicate.getId()).ifPresent(blockers::add);
         listBlocker("BOM", "还在 %d 张配方里用着", "请先到「配方管理」把这些配方里的该物料换成主物料",
                 bomProducts(factoryId, duplicate.getId())).ifPresent(blockers::add);
-        listBlocker("WORKFLOW", "还在 %d 张工艺图里用着", "请先到「工艺流程」把这些工艺图里的投料换成主物料",
-                workflowProducts(factoryId, duplicate.getId())).ifPresent(blockers::add);
-        listBlocker("SUPPLIER", "还有 %d 家供应商登记在供这个物料", "请到「供应商」把供货关系改到主物料上，或停用这些供货关系",
-                supplierNames(factoryId, duplicate.getId())).ifPresent(blockers::add);
-        listBlocker("PURCHASE_ORDER", "还有 %d 张采购单没完成", "请等这些采购单收货完成、关闭或取消后再合并",
-                openPurchaseOrders(factoryId, duplicate.getId())).ifPresent(blockers::add);
+
+        boolean unitsMatch = sameUnit(factoryId, duplicate.getUnit(), master.getUnit());
+        MaterialMergeReferenceReplacer.Plan plan = referenceReplacer.plan(factoryId, duplicate.getId());
+        List<MaterialMergeDTO.Replacement> replacements = new ArrayList<>();
+        listBlocker("WORKFLOW", "还在 %d 张已发布工艺图里用着", "请先到「工艺流程」把这些工艺图里的投料换成主物料并发布新版本",
+                publishedWorkflowProducts(factoryId, duplicate.getId())).ifPresent(blockers::add);
+        listBlocker("PURCHASE_ORDER", "还有 %d 张采购单已开始收货", "已收的货记在旧物料上，请等这些采购单收货完成、关闭或取消后再合并",
+                plan.stuckPurchaseOrders()).ifPresent(blockers::add);
+        if (unitsMatch) {
+            replacement("WORKFLOW", "%d 张草稿工艺图", List.copyOf(new LinkedHashSet<>(plan.draftWorkflows().values())))
+                    .ifPresent(replacements::add);
+            replacement("SUPPLIER", "%d 家供应商的供货关系", List.copyOf(plan.suppliers().values()))
+                    .ifPresent(replacements::add);
+            replacement("PURCHASE_ORDER", "%d 张没收货的采购单", plan.purchaseOrderNumbers())
+                    .ifPresent(replacements::add);
+        } else {
+            String why = "两个物料单位不同，不能自动替换。";
+            listBlocker("DRAFT_WORKFLOW", "还在 %d 张草稿工艺图里用着", why + "请到「工艺流程」手工换成主物料",
+                    List.copyOf(new LinkedHashSet<>(plan.draftWorkflows().values()))).ifPresent(blockers::add);
+            listBlocker("SUPPLIER", "还有 %d 家供应商登记在供这个物料", why + "请到「供应商」把供货关系改到主物料上，或停用这些供货关系",
+                    List.copyOf(plan.suppliers().values())).ifPresent(blockers::add);
+            listBlocker("OPEN_PURCHASE_ORDER", "还有 %d 张采购单没完成", why + "请等这些采购单关闭或取消后再合并",
+                    plan.purchaseOrderNumbers()).ifPresent(blockers::add);
+        }
 
         List<String> warnings = new ArrayList<>();
-        if (!sameUnit(factoryId, duplicate.getUnit(), master.getUnit())) {
+        if (!unitsMatch) {
             warnings.add("单位不同：「" + duplicate.getName() + "」按 " + duplicate.getUnit()
                     + "，「" + master.getName() + "」按 " + master.getUnit() + "。合并后按主物料的单位记。");
         }
@@ -285,6 +309,7 @@ public class MaterialAliasMergeService {
                 .duplicate(brief(duplicate))
                 .master(brief(master))
                 .blockers(blockers)
+                .replacements(replacements)
                 .warnings(warnings)
                 .aliasesToAdd(new ArrayList<>(aliasesToAdd))
                 .build();
@@ -335,13 +360,13 @@ public class MaterialAliasMergeService {
                 .getResultList());
     }
 
-    private List<String> workflowProducts(String factoryId, String materialTypeId) {
+    private List<String> publishedWorkflowProducts(String factoryId, String materialTypeId) {
         // 工艺图节点以 JSON 存物料 id; id 是 UUID 级别的长串, 按带引号的整串匹配不会误命中
         return strings(entityManager.createNativeQuery(
                         "SELECT DISTINCT COALESCE(p.name, w.product_type_id) FROM product_process_workflows w "
                                 + "LEFT JOIN product_types p ON p.id = w.product_type_id "
                                 + "WHERE w.factory_id = ?1 AND w.deleted_at IS NULL "
-                                + "AND w.status IN ('DRAFT', 'PUBLISHED') "
+                                + "AND w.status = 'PUBLISHED' "
                                 + "AND CAST(w.nodes_json AS VARCHAR) LIKE ?2 "
                                 + "ORDER BY 1")
                 .setParameter(1, factoryId)
@@ -349,28 +374,16 @@ public class MaterialAliasMergeService {
                 .getResultList());
     }
 
-    private List<String> supplierNames(String factoryId, String materialTypeId) {
-        return strings(entityManager.createNativeQuery(
-                        "SELECT DISTINCT COALESCE(s.name, sm.supplier_id) FROM supplier_materials sm "
-                                + "LEFT JOIN suppliers s ON s.id = sm.supplier_id "
-                                + "WHERE sm.factory_id = ?1 AND sm.material_type_id = ?2 "
-                                + "AND sm.deleted_at IS NULL AND sm.active = TRUE ORDER BY 1")
-                .setParameter(1, factoryId)
-                .setParameter(2, materialTypeId)
-                .getResultList());
-    }
-
-    private List<String> openPurchaseOrders(String factoryId, String materialTypeId) {
-        return strings(entityManager.createNativeQuery(
-                        "SELECT DISTINCT po.order_number FROM purchase_orders po "
-                                + "JOIN purchase_order_items i ON i.purchase_order_id = po.id "
-                                + "WHERE po.factory_id = ?1 AND i.material_type_id = ?2 "
-                                + "AND po.deleted_at IS NULL AND i.deleted_at IS NULL "
-                                + "AND po.status NOT IN ('COMPLETED', 'CANCELLED', 'CLOSED') "
-                                + "ORDER BY po.order_number")
-                .setParameter(1, factoryId)
-                .setParameter(2, materialTypeId)
-                .getResultList());
+    private static Optional<MaterialMergeDTO.Replacement> replacement(
+            String code, String messageFormat, List<String> items) {
+        if (items.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(MaterialMergeDTO.Replacement.builder()
+                .code(code)
+                .message(String.format(messageFormat, items.size()))
+                .items(items.size() > MAX_LISTED_ITEMS ? items.subList(0, MAX_LISTED_ITEMS) : items)
+                .build());
     }
 
     private static Optional<MaterialMergeDTO.Blocker> listBlocker(
