@@ -13,6 +13,15 @@ from .intelligence import enrich as intelligence
 from .lineage_probe import save
 from .traceability import subset
 
+def project_dates(projects):
+    """Preserve source dates separately from validated cost arithmetic."""
+    from .period_projection import instant
+    def normalized(value):
+        parsed = instant(value)
+        return parsed.isoformat() if parsed else None
+    return {str(row['id']): {'completedAt': normalized(row.get('actualEndTime')),
+                            'createdAt': normalized(row.get('createTime'))} for row in projects}
+
 def prepare(directory,config):
     from smartbi.services.analysis_evidence import build,TYPE_HAZARD
     from smartbi.services.cost_data_alerts import evaluate
@@ -53,6 +62,7 @@ def prepare(directory,config):
     old_by_id={str(p['projectId']):p for p in eligible}
     for row in analysis['cost']['projects']:
         if row!=old_by_id[str(row['projectId'])]:raise ValueError('COST_RECOMPUTATION_MISMATCH')
+    analysis['cost']['projectDates'] = project_dates(raw['project'])
     analysis['eligibleCostReview']=review(analysis)
     analysis['costIntelligence']=intelligence(analysis,raw,metadata)
     analysis['costAlerts']=evaluate(analysis['cost']['projects'],scope=digest((config['tenant_id'],config['source_factory_id'])),run_id=run_id)

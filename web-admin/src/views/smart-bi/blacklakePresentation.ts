@@ -99,6 +99,11 @@ export function localizeBlacklakeText(value: unknown, fallback = '来源系统�
     return TERM_LABELS[text] || fallback;
   }
   const translatedPhrases = [
+    ['关联仅为候选，非实际流转证明', '目前只能对上业务单据，还不能确认用了哪个实际批次'],
+    ['上游单位与成品不同', '领入材料与成品使用不同单位'],
+    ['批次未核', '实际用料批次还没核实'],
+    ['成本归集', '成本记录'],
+    ['归集口径', '记账范围'],
     ['确认是否漏估值或确为零成本', '确认材料当时是否没有记价，或确实为零成本'],
     ['核对领退料与工单关联三元组', '核对领退料的工单编码、业务单类型和关联编号'],
     ['同代码同单位工单', '同产品、同单位的工单'],
@@ -111,7 +116,7 @@ export function localizeBlacklakeText(value: unknown, fallback = '来源系统�
     ['核对归集口径', '核对材料和工资有没有记全、记对'],
     ['材料归集完整', '材料是否记全'],
     ['归集完整性', '记录是否完整'],
-  ].reduce((result, [phrase, replacement]) => result.split(phrase).join(replacement), text);
+  ].sort((a,b)=>b[0].length-a[0].length).reduce((result, [phrase, replacement]) => result.split(phrase).join(replacement), text);
   const translated = Object.entries(TERM_LABELS).reduce((result, [term, label]) => {
     if (/[\u4e00-\u9fff]/.test(term)) return result.split(term).join(label);
     return result.replace(new RegExp(`\\b${escapeRegExp(term)}\\b`, 'gi'), label);
@@ -123,7 +128,7 @@ export function formatBlacklakeNumber(value: unknown, fallback = '未提供'): s
   if (value === null || value === undefined || value === '') return fallback;
   const number = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(number)) return fallback;
-  return number.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  return number.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function isOpaqueIdentifier(value: string): boolean {

@@ -152,15 +152,11 @@ async function submitQuestion() {
   <section class="section-insight" :data-testid="`section-insight-${report.sectionId}`">
     <div class="insight-header">
       <div class="insight-heading">
-        <div class="insight-kicker">这组数据的分析 <UBadge color="neutral" variant="subtle">只读快照</UBadge></div>
+        <div class="insight-kicker">分析与建议</div>
         <h3>{{ report.title }}</h3>
-        <p class="insight-summary">{{ localizeBlacklakeText(report.summary) }}</p>
-        <p v-if="report.localAnalysis" class="insight-scope">本地模型经营解读 · 统计依据已核对，原因仍待验证</p>
-        <p class="insight-scope">分析范围：{{ localizeBlacklakeText(scopeDescription) }}；不随图表单位或表格筛选变化，除非重新分析。</p>
       </div>
       <details class="scope-details">
-        <summary>数据快照</summary>
-        <div>运行 {{ report.scope.runId }}<span v-if="report.scope.projectId"> · 工单 {{ report.scope.projectId }}</span></div>
+        <summary>分析范围</summary><p>{{ localizeBlacklakeText(scopeDescription) }}</p><p>覆盖所选周期全部工单，切换图表单位或搜索明细不改变此处结论。</p>
       </details>
     </div>
 
@@ -176,7 +172,7 @@ async function submitQuestion() {
 
     <div class="insight-strip">
       <article class="insight-strip__item insight-strip__item--impact">
-        <span class="insight-label">影响</span>
+        <span class="insight-label">哪里需要注意</span>
         <p class="impact-copy">{{ localizeBlacklakeText(impact) }}</p>
         <details v-if="remainingObservations.length || impact" class="insight-details insight-details--inline">
           <summary>查看完整观察</summary>
@@ -185,19 +181,19 @@ async function submitQuestion() {
         </details>
       </article>
       <article class="insight-strip__item">
-        <span class="insight-label">结论</span>
+        <span class="insight-label">这组数据怎么样</span>
         <p>{{ localizeBlacklakeText(report.summary) }}</p>
       </article>
       <article class="insight-strip__item insight-strip__item--next">
-        <span class="insight-label">下一步</span>
+        <span class="insight-label">怎么处理</span>
         <p>{{ report.nextSteps[0] ? localizeBlacklakeText(report.nextSteps[0]) : '暂无建议动作。' }}</p>
       </article>
     </div>
 
     <div class="detail-list">
-      <article v-if="report.localAnalysis" class="insight-details" data-testid="local-business-interpretation"><strong>为什么值得关注</strong><p>{{ report.localAnalysis.whyItMatters }}</p><p>现在不能下的结论：{{ report.localAnalysis.cannotConclude }}</p></article>
+      <details v-if="report.localAnalysis" class="insight-details" data-testid="local-business-interpretation"><summary>原因与判断依据</summary><p>{{ report.localAnalysis.whyItMatters }}</p><p>{{ report.localAnalysis.cannotConclude }}</p></details>
       <details v-if="report.hypotheses.length" class="insight-details insight-details--hypothesis">
-        <summary><span>待验证假设</span><UBadge color="warning" variant="subtle">未证实</UBadge></summary>
+        <summary><span>可能原因</span><UBadge color="warning" variant="subtle">未证实</UBadge></summary>
         <ul><li v-for="item in report.hypotheses" :key="item">{{ localizeBlacklakeText(item) }}</li></ul>
       </details>
       <details v-if="report.nextSteps.length > 1" class="insight-details">
@@ -231,7 +227,7 @@ async function submitQuestion() {
 
     <div class="followup" data-testid="section-followup">
       <div class="followup-heading">
-        <div><h4>继续追问</h4><p>只基于本次运行和这组数据的证据回答，不补造缺失数据。</p></div>
+        <div><h4>继续追问</h4><p>针对上面这组数据，继续问原因或处理办法。</p></div>
         <div class="followup-actions">
           <span v-if="loading" class="followup-status" role="status">正在核对…</span>
           <UButton color="primary" variant="outline" type="button" :aria-expanded="chatOpen" :aria-controls="chatId" @click="toggleChat">{{ chatOpen ? '收起追问' : '继续追问' }}</UButton>

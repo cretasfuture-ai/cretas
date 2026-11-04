@@ -13,7 +13,7 @@ import { buildCostOverview, buildUnitCostChart, groupEligibleCostProjects } from
 import { formatBlacklakeNumber, localizeBlacklakeText } from './blacklakePresentation';
 import BlacklakePeriodControls from './BlacklakePeriodControls.vue';
 import BlacklakePeriodAnalysis from './BlacklakePeriodAnalysis.vue';
-import { formatBlacklakeDateTime, periodForKind, periodIdentity } from './blacklakePeriod';
+import { beijingDate, formatBlacklakeDateTime, periodForKind, periodIdentity } from './blacklakePeriod';
 import { useAuthStore } from '@/store/modules/auth';
 
 const props = defineProps<{ activeView?: string }>();
@@ -24,6 +24,8 @@ const loading = ref(false);
 const error = ref('');
 const tab = ref('cost');
 const search = ref('');
+const orderPage=ref(1);
+const pageSize=ref(20);
 const issuesOnly = ref(false);
 const eligibleOnly = ref(true);
 const selected = ref<CostProject | null>(null);
@@ -43,6 +45,7 @@ const lastAppliedPeriodResultKey = ref('');
 const historyDrawerJob = ref<BlacklakePeriodJob | null>(null);
 const periodAuxError = ref('');
 const mounted = ref(false);
+let initialDateResolved=false;
 const authStore = useAuthStore();
 const authIdentity = computed(() => [authStore.factoryId, authStore.user?.id ?? '', authStore.currentRole].join(':'));
 let periodPollTimer: number | undefined;
@@ -57,6 +60,9 @@ const statusName = (value: string) => ({ '0': '未开始', '10': '进行中', '2
 const filtered = computed(() => (data.value?.cost.projects || []).filter(p =>
   (!eligibleOnly.value || p.unitCostAvailable) &&
   (!issuesOnly.value || p.issues.length > 0 || projectAlerts(p.projectId).length > 0) && `${p.projectCode} ${p.product}`.toLowerCase().includes(search.value.toLowerCase())));
+const pagedOrders=computed(()=>filtered.value.slice((orderPage.value-1)*pageSize.value,orderPage.value*pageSize.value));
+watch([search,issuesOnly,eligibleOnly,periodQuery,pageSize],()=>{orderPage.value=1;});
+watch(()=>filtered.value.length,()=>{orderPage.value=Math.min(orderPage.value,Math.max(1,Math.ceil(filtered.value.length/pageSize.value)));});
 const alertsByProject = computed(() => {
   const grouped = new Map<number, CostDataAlert[]>();
   for (const alert of data.value?.costAlerts?.items || []) {
@@ -194,6 +200,13 @@ async function loadForPeriod(query: BlacklakePeriodQuery | null, force = false) 
   try {
     const refreshed = await getBlacklakeAnalysis(query);
     if (!isCurrentRequest(generation, identity)) return;
+    if(!initialDateResolved){
+      initialDateResolved=true;
+      const parsed=new Date(refreshed.snapshotAt);
+      if(query?.kind==='day'&&!refreshed.production.projectCount&&!Number.isNaN(parsed.getTime())&&query.start_date>beijingDate(parsed)){
+        const next=periodForKind('day',beijingDate(parsed));periodQuery.value=next;void loadForPeriod(next);return;
+      }
+    }
     data.value = refreshed; refreshEpoch.value += 1;
     unit.value = units.value.includes('kg') ? 'kg' : units.value[0] || '';
     inventoryUnit.value = inventoryUnits.value.includes('kg') ? 'kg' : inventoryUnits.value[0] || '';
@@ -267,7 +280,7 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
   <main :key="refreshEpoch" class="blacklake-page" :data-shell-navigation="props.activeView !== undefined" v-loading="loading">
     <header class="page-header">
       <div><span class="eyebrow">SMARTBI · 黑湖只读测试</span><h2>六膳门 · {{ viewTitles[tab] || '生产经营分析' }}</h2>
-        <p>以工单贯通领退料、工序与成品；可识别直接成本单独披露。</p></div>
+        <p>看本期成本表现，核对材料、人工和需要处理的工单。</p></div>
       <UButton color="neutral" variant="outline" :loading="loading" @click="void loadForPeriod(periodQuery)">刷新分析</UButton>
     </header>
     <BlacklakePeriodControls :model-value="periodQuery" :disabled="loading" @change="onPeriodChange" />
@@ -276,26 +289,26 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
     <el-alert v-if="periodAuxError" type="info" :closable="false" :title="periodAuxError" show-icon />
     <BlacklakePeriodAnalysis :metadata="data?.periodMetadata" :job="periodJob" :history="periodHistory" :schedule="periodSchedule" @retry="retryPeriod" @open-history="openHistory" />
     <template v-if="data">
-      <p class="snapshot">采集时间：{{ new Date(data.snapshotAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) }}（北京时间） · 账号可见历史 · 库存为该时点快照</p>
+      <p class="snapshot">资料更新 {{ formatBlacklakeDateTime(data.snapshotAt) }}</p>
       <section v-show="tab === 'cost'" class="overview-shell" aria-label="成本分析概览">
         <UCard class="overview-card overview-summary">
-          <div class="overview-heading"><div><span class="eyebrow">先看结论，再看明细</span><h3>成本核算概览</h3><p>当前先展示工单覆盖与可核对信号；金额仅按同单位、可追溯工单计算。</p></div><UBadge color="warning" variant="soft">只读快照</UBadge></div>
+          <div class="overview-heading"><div><span class="eyebrow">先看结论，再看明细</span><h3>成本核算概览</h3><p>材料＋人工，暂不含制造费用。</p></div></div>
           <div class="overview-metrics">
             <div><span>工单覆盖</span><strong>{{ overviewMetrics?.eligibleProjects }} / {{ overviewMetrics?.projectCount }}</strong><small>可核算工单 · {{ fmtPercent(overviewMetrics?.orderCoveragePercent) }}</small></div>
-            <div><span>暂不能核算</span><strong>{{ overviewMetrics?.blockedProjects }}</strong><small>保留缺失原因，不补零</small></div>
+            <div><span>暂不能核算</span><strong>{{ overviewMetrics?.blockedProjects }}</strong><small>打开工单查看缺什么</small></div>
             <div><span>关联领退料</span><strong>{{ overviewMetrics?.linkedMaterialLines }}</strong><small>另有 {{ overviewMetrics?.unlinkedMaterialLines }} 行未确认</small></div>
-            <div><span>来源零值</span><strong class="warning">{{ overviewMetrics?.sourceZeroCostLines }}</strong><small>零值不等于免费</small></div>
+            <div><span>材料金额为零</span><strong class="warning">{{ overviewMetrics?.sourceZeroCostLines }}</strong><small>零值不等于免费</small></div>
           </div>
         </UCard>
         <div class="overview-grid">
           <UCard class="overview-card analysis-card">
-            <div class="overview-heading"><div><h3>当前分析</h3><p>先处理能改变核算准备度的事项</p></div><UBadge color="primary" variant="soft">{{ data.production.projectCount }} 张工单</UBadge></div>
-            <ul class="overview-list"><li>已识别 {{ overviewMetrics?.eligibleProjects }} 张工单具备单位直接成本字段，覆盖率按工单数计算。</li><li>{{ overviewMetrics?.sourceZeroCostLines }} 行材料来源为零值，需区分“源端零值”和“未提供”。</li><li>材料与人工分开披露，不据此推导完整制造成本、利润或跨工序总额。</li></ul>
+            <div class="overview-heading"><div><h3>当前分析</h3><p>先处理影响成本判断的问题</p></div><UBadge color="primary" variant="soft">{{ data.production.projectCount }} 张工单</UBadge></div>
+            <ul class="overview-list"><li>{{ overviewMetrics?.eligibleProjects }} 张工单可以核算，{{ overviewMetrics?.blockedProjects }} 张还需要补资料。</li><li v-for="alert in (data.costAlerts?.items || []).filter(a=>a.family!=='readiness').slice(0,2)" :key="alert.id"><strong>{{ localizeBlacklakeText(alert.title) }}</strong>：{{ localizeBlacklakeText(alert.action) }}</li><li v-if="!data.production.projectCount">这段时间没有已采集的工单，可调整日期查看。</li></ul>
             <div class="overview-actions"><UButton size="sm" @click="goTo('cost')">查看成本链路</UButton><UButton size="sm" color="neutral" variant="outline" @click="goTo('coverage')">查看数据口径</UButton></div>
           </UCard>
           <UCard class="overview-card priority-card">
             <div class="overview-heading"><div><h3>优先核对</h3><p>异常提醒按证据回到对应页面</p></div><UBadge color="warning" variant="soft">{{ data.costAlerts?.summary.alerts || 0 }} 条提醒</UBadge></div>
-            <div class="signal-list"><button type="button" @click="goTo('alerts')"><span>成本差异信号</span><UBadge color="warning" variant="soft">{{ overviewMetrics?.businessSignalCount }}</UBadge></button><button type="button" @click="goTo('alerts')"><span>数据质量</span><UBadge color="neutral" variant="soft">{{ overviewMetrics?.dataQualityAlertCount }}</UBadge></button><button type="button" @click="goTo('alerts')"><span>核算准备条件</span><UBadge color="error" variant="soft">{{ overviewMetrics?.readinessAlertCount }}</UBadge></button></div>
+            <div class="signal-list"><button type="button" @click="goTo('alerts')"><span>成本差异信号</span><UBadge color="warning" variant="soft">{{ overviewMetrics?.businessSignalCount }}</UBadge></button><button type="button" @click="goTo('alerts')"><span>数据质量</span><UBadge color="neutral" variant="soft">{{ overviewMetrics?.dataQualityAlertCount }}</UBadge></button><button type="button" @click="goTo('alerts')"><span>比较条件待补</span><UBadge color="error" variant="soft">{{ overviewMetrics?.readinessAlertCount }}</UBadge></button></div>
             <div class="overview-actions"><UButton size="sm" color="neutral" variant="outline" @click="goTo('alerts')">打开异常提醒</UButton></div>
           </UCard>
         </div>
@@ -312,8 +325,8 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
         <el-tab-pane label="原料 → 成品成本" name="cost">
           <el-card shadow="never">
             <div class="section-heading"><h3>逐工单成本链路</h3><div class="filters"><el-input v-model="search" placeholder="搜索工单或产品" clearable aria-label="搜索工单或产品" /><el-checkbox v-model="eligibleOnly">仅看可核算工单</el-checkbox><el-checkbox v-model="issuesOnly">仅看待核对</el-checkbox></div></div>
-            <p class="note">金额按来源币种展示（接口未返回币种，待业务核实）。材料净额 = 领料成本 − 退料成本；人工只取任务累计工资，不叠加报工估算。未核实工单不展示单位成本。</p>
-            <el-table :data="filtered" stripe height="480" @row-click="selected = $event" data-testid="cost-projects">
+            <p class="note">材料＋人工；资料不齐的工单标记待核对。币种待确认。</p>
+            <el-table :data="pagedOrders" row-key="projectId" stripe height="480" @row-click="selected = $event" data-testid="cost-projects">
               <el-table-column prop="projectCode" label="工单" width="155" fixed />
               <el-table-column prop="product" label="成品" min-width="180" show-overflow-tooltip />
               <el-table-column label="状态" width="85"><template #default="{ row }">{{ statusName(row.status) }}</template></el-table-column>
@@ -324,10 +337,11 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
               <el-table-column label="核对状态" min-width="225"><template #default="{ row }"><el-tag :type="!row.unitCostAvailable ? 'danger' : projectAlerts(row.projectId).length || row.issues.length ? 'warning' : 'success'">{{ !row.unitCostAvailable ? '暂不能核算，需核对资料' : projectAlerts(row.projectId).length ? `${projectAlerts(row.projectId).length} 条核对提醒` : row.issues.length ? `${row.issues.length} 项待补资料` : '来源字段具备' }}</el-tag><el-button v-if="projectAlerts(row.projectId).length || row.issues.length" link type="warning" @click.stop="locateOrder(row.projectId)">查看问题</el-button></template></el-table-column>
               <el-table-column label="链路" width="95" fixed="right"><template #default="{ row }"><el-button link type="primary" @click.stop="selected = row">查看链路</el-button></template></el-table-column>
             </el-table>
+            <el-pagination v-model:current-page="orderPage" v-model:page-size="pageSize" :page-sizes="[20,50,100]" :total="filtered.length" layout="total, sizes, prev, pager, next"/>
             <SectionInsight v-if="insightFor('finished')" :report="insightFor('finished')!" :period="periodQuery" :focus-alert="focusedSection === 'finished' ? focusedAlert : null" :open-request="focusedSection === 'finished' ? openRequest : 0" @clear-focus="clearFocus('finished')" @locate-order="locateOrder" />
           </el-card>
           <details class="comparison-evidence" @toggle="toggleComparison"><summary>展开同产品工单差额与逐物料证据</summary><BlacklakeCostIntelligence v-if="comparisonOpen" :intelligence="data.costIntelligence" :projects="data.cost.projects" /></details>
-          <el-card shadow="never" class="section-card"><h3>加工人工 · 可核算工单</h3>
+          <el-card shadow="never" class="section-card"><details><summary>加工人工 · 查看工序成本与分析</summary>
             <p class="note">单独查看人工贡献，不与报工估算工资重复累加。</p>
             <el-table :data="data.eligibleCostReview?.projects || []" height="300" stripe data-testid="cost-labor">
               <el-table-column prop="projectCode" label="工单" min-width="150" />
@@ -337,11 +351,11 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
               <el-table-column label="人工占比"><template #default="{ row }">{{ row.laborShare == null ? '待核' : `${fmt(row.laborShare * 100)}%` }}</template></el-table-column>
             </el-table>
             <SectionInsight v-if="insightFor('labor')" :report="insightFor('labor')!" :period="periodQuery" :focus-alert="focusedSection === 'labor' ? focusedAlert : null" :open-request="focusedSection === 'labor' ? openRequest : 0" @clear-focus="clearFocus('labor')" @locate-order="locateOrder" />
-          </el-card>
-          <el-card shadow="never" class="section-card"><h3>{{ periodQuery ? '所选工单的原料净消耗' : '全历史原料净消耗（已关联工单）' }}</h3><p class="note">按物料与来源单位保留；不混加不同单位。未关联领退料未计入下表。</p>
+          </details></el-card>
+          <el-card shadow="never" class="section-card"><details><summary>原料净消耗 · 查看材料明细与分析</summary><p class="note">按物料与来源单位保留；不混加不同单位。未关联领退料未计入下表。</p>
             <el-table :data="data.cost.materials" height="340" stripe><el-table-column prop="material" label="原料" min-width="190" /><el-table-column prop="unit" label="单位" width="85" /><el-table-column label="净消耗"><template #default="{ row }">{{ fmt(row.netConsumption) }}</template></el-table-column><el-table-column label="已识别净额"><template #default="{ row }">{{ fmt(row.recognizedCost) }}</template></el-table-column><el-table-column prop="lines" label="领退料行数" /></el-table>
             <SectionInsight v-if="insightFor('material')" :report="insightFor('material')!" :period="periodQuery" :focus-alert="focusedSection === 'material' ? focusedAlert : null" :open-request="focusedSection === 'material' ? openRequest : 0" @clear-focus="clearFocus('material')" @locate-order="locateOrder" />
-          </el-card>
+          </details></el-card>
         </el-tab-pane>
         <el-tab-pane label="成本与数据异常" name="alerts">
           <BlacklakeCostAlerts v-if="data.costAlerts && data.eligibleCostReview" :alerts="data.costAlerts" :review="data.eligibleCostReview" :followups="data.alertFollowups" :period="periodQuery" @ask="focusAlert" @updated="updateProgress" @locate-order="locateOrder" />
@@ -366,7 +380,7 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
       </el-tabs>
       <el-drawer :model-value="!!selected" @close="selected = null" size="min(100%, 1080px)" title="原料 → 工序 → 成品 · 工单成本链路">
         <template v-if="selected"><h2>{{ selected.projectCode }} · {{ selected.product }}</h2>
-          <section class="order-checks" aria-label="本工单问题与核对建议"><h3>这张工单需要核对什么</h3><p class="plain-language">系统只在来源字段足够时计算单位直接成本；下面的问题表示当前证据还不完整，不会用猜测补齐。</p><ul v-if="selected.issues.length || selectedAlerts.length"><li v-for="issue in selected.issues" :key="`reason-${issue}`"><strong>数据缺口：</strong>{{ localizeBlacklakeText(issue) }}</li><li v-for="alert in selectedAlerts" :key="alert.id"><strong>{{ localizeBlacklakeText(alert.title) }}</strong>：{{ localizeBlacklakeText(alert.message) }}<span class="alert-meta">责任角色：{{ localizeBlacklakeText(alert.owner) }} · 建议：{{ localizeBlacklakeText(alert.action) }}</span></li></ul><el-empty v-else description="当前没有已识别的待核对问题" :image-size="48" /></section>
+          <section class="order-checks" aria-label="本工单问题与核对建议"><h3>这张工单需要核对什么</h3><p class="plain-language">先核对以下问题，再确认这张工单的成本。</p><ul v-if="selected.issues.length || selectedAlerts.length"><li v-for="issue in selected.issues" :key="`reason-${issue}`"><strong>数据缺口：</strong>{{ localizeBlacklakeText(issue) }}</li><li v-for="alert in selectedAlerts" :key="alert.id"><strong>{{ localizeBlacklakeText(alert.title) }}</strong>：{{ localizeBlacklakeText(alert.message) }}<span class="alert-meta">责任角色：{{ localizeBlacklakeText(alert.owner) }} · 建议：{{ localizeBlacklakeText(alert.action) }}</span></li></ul><el-empty v-else description="当前没有已识别的待核对问题" :image-size="48" /></section>
           <div class="flow"><div><span>原料领退料</span><strong>{{ selected.materialLines }} 行</strong><small>净额 {{ fmt(selected.materialCost) }}</small></div><b aria-hidden="true">→</b><div><span>生产工序</span><strong>{{ selected.taskCount }} 项</strong><small>累计人工 {{ fmt(selected.laborCost) }}</small></div><b aria-hidden="true">→</b><div><span>工单成品良品量</span><strong>{{ fmt(selected.finishedGood) }} {{ selected.unit }}</strong><small>{{ statusName(selected.status) }}</small></div></div>
           <el-alert v-if="selected.issues.length" type="warning" :closable="false" title="暂不展示单位成本"><template #default><ul><li v-for="issue in selected.issues" :key="issue">{{ issue }}</li></ul></template></el-alert>
           <el-alert v-else type="success" :closable="false" :title="`单位可识别直接成本 ${fmt(selected.unitIdentifiedDirectCost)} / ${selected.unit}（来源币种，非完整制造成本）`" />
@@ -380,7 +394,7 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
       </el-drawer>
     </template>
     <el-drawer v-if="historyDrawerJob" :model-value="!!historyDrawerJob" title="历史周期报告" size="min(100%, 760px)" @close="historyDrawerJob = null">
-      <template v-if="historyDrawerJob"><h3>{{ historyDrawerJob.period.startDate }} 至 {{ historyDrawerJob.period.endDate }}</h3><p class="note">报告状态：{{ ({ queued: '等候分析', running: '正在分析', ready: '已生成', failed: '分析失败' })[historyDrawerJob.status] }} · 版本 {{ historyDrawerJob.revision }} · 保存时间 {{ formatBlacklakeDateTime(historyDrawerJob.finishedAt || historyDrawerJob.createdAt) }}</p><p v-if="historyDrawerJob.result?.summary">{{ localizeBlacklakeText(historyDrawerJob.result.summary) }}</p><h4 v-if="historyDrawerJob.result?.observations.length">观察</h4><ul><li v-for="item in historyDrawerJob.result?.observations || []" :key="item">{{ localizeBlacklakeText(item) }}</li></ul><p class="note">历史报告保留原周期范围，不与当前页面数据混合。</p></template>
+      <template v-if="historyDrawerJob"><h3>{{ historyDrawerJob.period.startDate }} 至 {{ historyDrawerJob.period.endDate }}</h3><p class="note">报告状态：{{ ({ queued: '等候分析', running: '正在分析', ready: '已生成', failed: '分析失败' })[historyDrawerJob.status] }} · {{ formatBlacklakeDateTime(historyDrawerJob.finishedAt || historyDrawerJob.createdAt) }}</p><p v-if="historyDrawerJob.result?.summary">{{ localizeBlacklakeText(historyDrawerJob.result.summary) }}</p><h4 v-if="historyDrawerJob.result?.observations.length">观察</h4><ul><li v-for="item in historyDrawerJob.result?.observations || []" :key="item">{{ localizeBlacklakeText(item) }}</li></ul></template>
     </el-drawer>
   </main>
 </template>

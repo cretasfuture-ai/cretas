@@ -24,7 +24,7 @@ const collapsed=ref(localStorage.getItem('blacklake-nav-collapsed')==='true');
 const mobileOpen=ref(false);
 const navigation=[
   {id:'cost',label:'原料到成品成本',icon:'i-lucide-chart-no-axes-combined'},
-  {id:'complete-cost',label:'26张工单成本复核',icon:'i-lucide-clipboard-check'},
+  {id:'complete-cost',label:'工单成本复核',icon:'i-lucide-clipboard-check'},
   {id:'alerts',label:'异常与跟进',icon:'i-lucide-circle-alert'},
   {id:'gaps',label:'关联与估值补查',icon:'i-lucide-git-pull-request-arrow'},
   {id:'production',label:'生产与工序',icon:'i-lucide-factory'},

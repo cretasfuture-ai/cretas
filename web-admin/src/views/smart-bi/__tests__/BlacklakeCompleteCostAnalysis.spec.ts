@@ -26,21 +26,21 @@ function data():CompleteCostReport{
       cost:{projects:Array.from({length:26},(_,i)=>({...project,projectId:i+1,projectCode:'SYNTHETIC-'+(i+1)})),materials:[],linkedMaterialLines:1,unlinkedMaterialLines:0,excludedUnapprovedOrders:0,knownMaterialCostLines:1,sourceZeroCostLines:0,knownLaborTasks:26,unitCostAvailableProjects:26,fullManufacturingCost:null,grossProfit:null}}};
 }
 const table=defineComponent({props:['data'],setup(p,{slots}){provide('rows',computed(()=>p.data));return()=>h('div',slots.default?.());}});
-const column=defineComponent({setup(_,{slots}){const rows=inject<Ref<CostProject[]>>('rows');return()=>h('div',rows?.value.map(row=>slots.default?.({row})));}});
-function render(){return mount(Component,{global:{stubs:{'el-table':table,'el-table-column':column,'el-select':{template:'<div><slot/></div>'},'el-option':true,'el-pagination':true,'el-input':true,'el-dialog':true,'el-alert':{props:['title'],template:'<div role="alert">{{title}}</div>'}}}});}
+const column=defineComponent({props:['prop'],setup(p,{slots}){const rows=inject<Ref<CostProject[]>>('rows');return()=>h('div',rows?.value.map(row=>slots.default?slots.default({row}):p.prop==='product'?row.product:p.prop==='projectCode'?row.projectCode:''));}});
+function render(){return mount(Component,{global:{stubs:{'el-table':table,'el-table-column':column,'el-select':{name:'ElSelect',props:['modelValue'],emits:['update:modelValue'],template:'<div><slot/></div>'},'el-option':true,'el-pagination':{name:'ElPagination',props:['total','currentPage'],emits:['update:currentPage'],template:'<div/>'},'el-input':true,'el-dialog':true,'el-drawer':{template:'<aside><slot/></aside>'},'el-alert':{props:['title'],template:'<div role="alert">{{title}}</div>'}}}});}
 beforeEach(()=>{auth.store.factoryId='T';vi.mocked(getBlacklakeCompleteCost).mockReset();});
 afterEach(()=>{vi.useRealTimers();});
 it('shows exact two-decimal material, labor and unit cost while interpretations are queued',async()=>{
   vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(data());const page=render();await flushPromises();
   expect(page.text()).toContain('0 / 44');expect(page.text()).toContain('2.25 / 盒');
-  await page.findAll('button').find(b=>b.text()==='查看原料与分析')!.trigger('click');
-  expect(page.text()).toContain('材料净额 20.00');expect(page.text()).toContain('工序人工 2.50');
+  await page.findAll('button').find(b=>b.text()==='查看成本与分析')!.trigger('click');
+  expect(page.text()).toContain('材料净额20.00');expect(page.text()).toContain('工序人工2.50');
   expect(page.text()).toContain('解释仍在排队');expect(page.text()).not.toContain('本轮所有证据已逐条完成');page.unmount();
 });
 it('removes previously visible cost details when renewed authorization fails',async()=>{
   vi.mocked(getBlacklakeCompleteCost).mockResolvedValueOnce(data()).mockRejectedValueOnce(new Error('成本授权未确认'));
   const page=render();await flushPromises();expect(page.text()).toContain('合成食品');
-  await page.findAll('button').find(b=>b.text()==='刷新进度')!.trigger('click');await flushPromises();
+  await page.findAll('button').find(b=>b.text()==='刷新')!.trigger('click');await flushPromises();
   expect(page.text()).toContain('成本授权未确认');expect(page.text()).not.toContain('合成食品');page.unmount();
 });
 it('never attaches another factory response after identity changes',async()=>{
@@ -52,7 +52,27 @@ it('never attaches another factory response after identity changes',async()=>{
 it('continues checking progress after a failed batch is repaired in the queue',async()=>{
   vi.useFakeTimers();const failed=data();failed.batchAnalysis.status='failed';
   vi.mocked(getBlacklakeCompleteCost).mockResolvedValueOnce(failed).mockResolvedValueOnce(data());
-  const page=render();await flushPromises();expect(page.text()).toContain('部分批次尚未通过校验');
+  const page=render();await flushPromises();expect(page.text()).toContain('部分分析暂不可用');
   await vi.advanceTimersByTimeAsync(15000);await flushPromises();
-  expect(getBlacklakeCompleteCost).toHaveBeenCalledTimes(2);expect(page.text()).toContain('模型正在按顺序分析');page.unmount();
+  expect(getBlacklakeCompleteCost).toHaveBeenCalledTimes(2);expect(page.text()).toContain('分析排队中');page.unmount();
+});
+
+it('paginates 1000 orders and resets the page when filters change',async()=>{
+  const value=data();value.analysis.cost.projects=Array.from({length:1000},(_,i)=>({...value.analysis.cost.projects[0]!,projectId:i+1,projectCode:'SYN-'+i}));
+  vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(value);const page=render();await flushPromises();
+  const buttons=()=>page.findAll('button').filter(b=>b.text()==='查看成本与分析');
+  expect(buttons()).toHaveLength(20);const pager=page.findAllComponents({name:'ElPagination'})[0]!;
+  expect(pager.props('total')).toBe(1000);pager.vm.$emit('update:currentPage',50);await flushPromises();expect(buttons()).toHaveLength(20);
+  page.findAllComponents({name:'ElSelect'})[0]!.vm.$emit('update:modelValue','all');await flushPromises();expect(pager.props('currentPage')).toBe(1);page.unmount();
+});
+
+it('uses source completion dates for the latest seven data days and keeps per-order analysis attached',async()=>{
+  const value=data();value.analysis.cost.projects=value.analysis.cost.projects.slice(0,2);
+  value.analysis.cost.projectDates={'1':{completedAt:'2026-10-01T00:00:00Z',createdAt:null},'2':{completedAt:'2026-11-03T00:00:00Z',createdAt:null}};
+  value.batchAnalysis.results=[{factId:'ORDER2',cohort:'eligible26',sectionId:'product_cost',kind:'work_order_detail',whatItMeans:'只属于第二张工单的解释',whyItMatters:'核对材料',nextStep:'找仓库确认',owner:'仓库',cannotConclude:'暂无批次证明',hypotheses:[],display:{text:'工单2',entityRefs:[{projectId:2}]}}];
+  vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(value);const page=render();await flushPromises();
+  expect(page.text()).toContain('10-28 至 11-03 · 1 张工单');expect(page.findAll('button').filter(b=>b.text()==='查看成本与分析')).toHaveLength(1);
+  // Per-order answers never appear in the detached specialty list.
+  expect(page.text()).not.toContain('只属于第二张工单的解释');
+  await page.findAll('button').find(b=>b.text()==='查看成本与分析')!.trigger('click');expect(page.text()).toContain('只属于第二张工单的解释');page.unmount();
 });

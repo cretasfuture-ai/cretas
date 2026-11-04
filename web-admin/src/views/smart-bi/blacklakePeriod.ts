@@ -53,7 +53,7 @@ export function periodForKind(kind: BlacklakePeriodKind, anchor = yesterdayInBei
 
 export function periodLabel(query: BlacklakePeriodQuery | null): string {
   if (!query) return '全部已采集';
-  return `${query.start_date} 至 ${query.end_date}`;
+  return query.start_date.slice(0,4) === query.end_date.slice(0,4) ? `${query.start_date.slice(5)} 至 ${query.end_date.slice(5)}` : `${query.start_date} 至 ${query.end_date}`;
 }
 
 export function periodIdentity(query: BlacklakePeriodQuery | null): string {
@@ -65,5 +65,7 @@ export function formatBlacklakeDateTime(value: string | null | undefined): strin
   if (!value) return '未提供';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value.replace(/\.\d+(?=(Z|[+-]\d\d:\d\d)$)/, '');
-  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(parsed);
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(parsed);
+  const part = (name: string) => parts.find(p => p.type === name)?.value || '';
+  return `${part('month')}-${part('day')} ${part('hour')}:${part('minute')}`;
 }

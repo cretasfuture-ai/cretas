@@ -8,7 +8,7 @@ describe('blacklake presentation helpers', () => {
     expect(localizeBlacklakeText('42')).toBe('来源系统未提供可读说明');
     expect(localizeBlacklakeText('GD202610290011 产品A1.2345 批次1.2345-001')).toBe('GD202610290011 产品A1.2345 批次1.2345-001');
     expect(localizeBlacklakeText('成本 1.2345 元')).toBe('成本 1.23 元');
-    expect(localizeBlacklakeText('单位成本 60.2421来源金额/KG，成品量 1,431.6000KG')).toBe('单位成本 60.24来源金额/KG，成品量 1,431.6KG');
+    expect(localizeBlacklakeText('单位成本 60.2421来源金额/KG，成品量 1,431.6000KG')).toBe('单位成本 60.24来源金额/KG，成品量 1,431.60KG');
     expect(localizeBlacklakeText('确认是否漏估值')).toBe('确认材料当时是否没有记价，或确实为零成本');
     expect(localizeBlacklakeText('当时估值依据')).toBe('当时的计价依据');
     expect(localizeBlacklakeText('最终良品量缺失或非正数')).toBe('成品良品量没有提供，或小于等于零');
@@ -31,7 +31,7 @@ describe('blacklake presentation helpers', () => {
       'materialLinesDetail.recognizedCost': 4.567,
     });
     expect(entries).toEqual([
-      { label: '领退料明细', value: '材料 鸡胸肉 · 领退料单编码 MO-2026-001 · 单位 kg · 数量 0 · 来源单价 未提供 · 来源金额 0' },
+      { label: '领退料明细', value: '材料 鸡胸肉 · 领退料单编码 MO-2026-001 · 单位 kg · 数量 0.00 · 来源单价 未提供 · 来源金额 0.00' },
       { label: '材料明细中的来源金额', value: '4.57' },
     ]);
   });
@@ -39,7 +39,7 @@ describe('blacklake presentation helpers', () => {
   it('presents numeric status codes as workflow labels and keeps thresholds as labeled decimals', () => {
     expect(readableEvidenceEntries({ status: 20, threshold: 0.2 })).toEqual([
       { label: '当前状态', value: '已完工' },
-      { label: '提醒标准', value: '20%' },
+      { label: '提醒标准', value: '20.00%' },
     ]);
   });
   it('identifies the exact highest and lowest cost orders with readable percentages', () => {
@@ -47,7 +47,7 @@ describe('blacklake presentation helpers', () => {
       {label:'最低成本工单',value:'GD202611010001'},
       {label:'最高成本工单',value:'GD202610300015'},
       {label:'最高比最低高出',value:'25.01%'},
-      {label:'参与比较的工单数',value:'4'},
+      {label:'参与比较的工单数',value:'4.00'},
       {label:'产品规格与工艺是否已人工核实一致',value:'否'},
     ]);
   });

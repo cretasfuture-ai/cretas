@@ -6,10 +6,12 @@ import DynamicChartRenderer from '@/components/smartbi/DynamicChartRenderer.vue'
 import { getBlacklakeCompleteCost, followupBlacklakeCompleteCost, type CompleteCostReport, type CompleteCostFact, type CostProject } from '@/api/smartbi/blacklake';
 import { useAuthStore } from '@/store/modules/auth';
 import { buildUnitCostChart, groupEligibleCostProjects } from './costOverview';
-import { formatBlacklakeDateTime } from './blacklakePeriod';
+import { beijingDate, formatBlacklakeDateTime } from './blacklakePeriod';
+import { localizeBlacklakeText } from './blacklakePresentation';
 const report=ref<CompleteCostReport|null>(null),loading=ref(false),error=ref('');
 const search=ref(''),unit=ref(''),page=ref(1),cohort=ref('eligible26'),section=ref('');
 const selected=ref<CostProject|null>(null),chatFact=ref<CompleteCostFact|null>(null),question=ref(''),answer=ref(''),asking=ref(false);
+const orderPage=ref(1),pageSize=ref(20),product=ref(''),attention=ref('all'),dateMode=ref('recent'),startDate=ref(''),endDate=ref('');
 const auth=useAuthStore();let generation=0;let timer:number|undefined;
 const identity=computed(()=>[auth.factoryId,auth.user?.id,auth.currentRole].join(':'));
 const fmt=(value:number|null|undefined)=>value==null?'未提供':value.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -20,6 +22,8 @@ async function load(){
   try{
     const next=await getBlacklakeCompleteCost();if(epoch!==generation)return;
     report.value=next;
+    if(selected.value)selected.value=next.analysis.cost.projects.find(r=>r.projectId===selected.value?.projectId)||null;
+    if(chatFact.value)chatFact.value=next.batchAnalysis.results.find(r=>r.factId===chatFact.value?.factId)||null;
     if(!units.value.includes(unit.value))unit.value=units.value[0]||'';
     if(next.batchAnalysis.status!=='complete')timer=window.setTimeout(()=>void load(),15000);
   }catch(cause){if(epoch===generation){report.value=null;selected.value=null;chatFact.value=null;answer.value='';error.value=cause instanceof Error?cause.message:'成本分析暂不可用';}}
@@ -30,14 +34,29 @@ watch(identity,()=>{generation++;report.value=null;selected.value=null;chatFact.
 onBeforeUnmount(()=>{generation++;stop();});
 watch([cohort,section,search],()=>{page.value=1;});
 const units=computed(()=>[...new Set((report.value?.analysis.cost.projects||[]).map(r=>r.unit).filter((u):u is string=>!!u))]);
-const orders=computed(()=>(report.value?.analysis.cost.projects||[]).filter(r=>`${r.projectCode} ${r.product}`.toLowerCase().includes(search.value.toLowerCase())));
-const groups=computed(()=>groupEligibleCostProjects(report.value?.analysis.cost.projects||[],unit.value).sort((a,b)=>b.weightedUnitCost-a.weightedUnitCost));
+const allOrders=computed(()=>report.value?.analysis.cost.projects||[]);
+const orderDate=(id:number)=>{const date=report.value?.analysis.cost.projectDates?.[String(id)]?.completedAt;return date&&!Number.isNaN(new Date(date).getTime())?beijingDate(new Date(date)):'';};
+const latestDate=computed(()=>allOrders.value.map(r=>orderDate(r.projectId)).filter(Boolean).sort().at(-1)||'');
+const range=computed(()=>{if(dateMode.value==='all'||dateMode.value==='undated')return null;if(dateMode.value==='custom')return[startDate.value,endDate.value];if(!latestDate.value)return null;const d=new Date(`${latestDate.value}T12:00:00Z`);d.setUTCDate(d.getUTCDate()-6);return[d.toISOString().slice(0,10),latestDate.value];});
+const validDate=(v:string)=>/^\d{4}-\d{2}-\d{2}$/.test(v)&&!Number.isNaN(new Date(v+'T12:00:00Z').getTime())&&new Date(v+'T12:00:00Z').toISOString().slice(0,10)===v;
+const dateError=computed(()=>dateMode.value==='custom'&&(!validDate(startDate.value)||!validDate(endDate.value)||startDate.value>endDate.value));
+const products=computed(()=>[...new Set(allOrders.value.map(r=>r.product))].sort());
+const orders=computed(()=>allOrders.value.filter(r=>{const date=orderDate(r.projectId);return !dateError.value&&(!product.value||r.product===product.value)&&(!attention.value||attention.value==='all'||alertsFor(r.projectId).some(a=>a.family===attention.value))&&(dateMode.value==='undated'?!date:!range.value||(!!date&&date>=range.value[0]!&&date<=range.value[1]!))&&`${r.projectCode} ${r.product}`.toLowerCase().includes(search.value.toLowerCase());}).sort((a,b)=>alertsFor(b.projectId).filter(x=>x.family!=='readiness').length-alertsFor(a.projectId).filter(x=>x.family!=='readiness').length||orderDate(b.projectId).localeCompare(orderDate(a.projectId))));
+const visibleOrders=computed(()=>orders.value.slice((orderPage.value-1)*pageSize.value,orderPage.value*pageSize.value));
+const filteredUnits=computed(()=>[...new Set(orders.value.map(r=>r.unit).filter((u):u is string=>!!u))]);
+watch(filteredUnits,value=>{if(!value.includes(unit.value))unit.value=value[0]||'';});
+watch([search,product,attention,dateMode,startDate,endDate,pageSize],()=>{orderPage.value=1;selected.value=null;chatFact.value=null;});
+watch(()=>orders.value.length,()=>{orderPage.value=Math.min(orderPage.value,Math.max(1,Math.ceil(orders.value.length/pageSize.value)));});
+const groups=computed(()=>groupEligibleCostProjects(orders.value,unit.value).sort((a,b)=>b.weightedUnitCost-a.weightedUnitCost));
+const activeAlerts=computed(()=>(report.value?.analysis.costAlerts?.items||[]).filter(a=>a.entityRefs.some(p=>orders.value.some(r=>r.projectId===p.projectId))));
+const countFamily=(family:string)=>activeAlerts.value.filter(a=>a.family===family).length;
+const actionItems=computed(()=>activeAlerts.value.filter(a=>a.family!=='readiness').slice(0,4));
+function locate(id:number){selected.value=orders.value.find(r=>r.projectId===id)||null;}
 const chart=computed(()=>buildUnitCostChart(groups.value));
-const facts=computed(()=>(report.value?.batchAnalysis.results||[]).filter(r=>r.cohort===cohort.value&&(!section.value||r.sectionId===section.value)&&r.display.text.toLowerCase().includes(search.value.toLowerCase())));
+const facts=computed(()=>(report.value?.batchAnalysis.results||[]).filter(r=>r.kind!=='work_order_detail'&&r.cohort===cohort.value&&(!section.value||r.sectionId===section.value)));
 const visibleFacts=computed(()=>facts.value.slice((page.value-1)*6,page.value*6));
 const completedOrders=computed(()=>(report.value?.batchAnalysis.results||[]).filter(r=>r.kind==='work_order_detail').length);
 const alertsFor=(id:number)=>(report.value?.analysis.costAlerts?.items||[]).filter(a=>a.entityRefs.some(p=>p.projectId===id));
-const factFor=(id:number)=>(report.value?.batchAnalysis.results||[]).find(r=>r.kind==='work_order_detail'&&r.display.entityRefs?.some(p=>p.projectId===id));
 const orderFact=computed(()=>(report.value?.batchAnalysis.results||[]).find(r=>r.kind==='work_order_detail'&&r.display.entityRefs?.some(p=>p.projectId===selected.value?.projectId)));
 const needs=computed(()=>report.value?.analysis.costTraceability.workOrders.find(r=>String(r.workOrderId)===String(selected.value?.projectId))?.needs||[]);
 const selectedAlerts=computed(()=>(report.value?.analysis.costAlerts?.items||[]).filter(a=>a.entityRefs.some(p=>p.projectId===selected.value?.projectId)));
@@ -52,49 +71,62 @@ async function ask(){
 </script>
 <template>
   <main class="complete-cost" data-testid="complete-cost-analysis">
-    <header><div><h2>最新补查 · 26张工单成本复核</h2><p>逐张核对原料、加工人工、成品和异常；每条分析都保留统计依据。</p></div><UButton color="neutral" variant="outline" :loading="loading" @click="load">刷新进度</UButton></header>
+    <header><div><h2>工单成本复核</h2><p>看哪些产品成本高，找到具体工单和处理办法。</p></div><UButton color="neutral" variant="outline" :loading="loading" @click="load">刷新</UButton></header>
     <el-alert v-if="error" type="warning" :closable="false" :title="error"/>
-    <p v-if="loading&&!report" role="status">正在读取已保存的数据和排队分析…</p>
+    <p v-if="loading&&!report" role="status">正在读取成本…</p>
     <template v-if="report">
-      <p class="note">来源核查截至 {{ formatBlacklakeDateTime(report.sourceCheckedAt) }}。固定使用原109张中字段具备的26张，不随历史页面日期筛选改变，也不能代表全厂。不是完整制造成本或毛利；实际批次关联仍待补证。</p>
-      <UCard><div class="metrics"><div><span>原遗漏证据补分析</span><strong>{{ report.batchAnalysis.cohorts.original44?.analyzed ?? 0 }} / 44</strong></div><div><span>工单逐张分析</span><strong>{{ completedOrders }} / 26</strong></div><div><span>全部证据逐条完成</span><strong>{{ report.batchAnalysis.analyzedFacts }} / {{ report.batchAnalysis.expectedFacts }}</strong></div><div><span>本地模型累计用量</span><strong>{{ report.batchAnalysis.usage?.totalTokens?.toLocaleString() ?? '等待返回' }}</strong></div></div>
-        <p role="status">{{ report.batchAnalysis.status==='complete'?'本轮所有证据已逐条完成并保存。':report.batchAnalysis.status==='failed'?'部分批次尚未通过校验，已保留原答，等待恢复；数据仍可查看。':'模型正在按顺序分析，已完成的内容逐条显示，刷新或关闭页面不会丢失队列。' }}</p>
-        <p v-if="report.batchAnalysis.usageUnknownCalls" class="note">有 {{ report.batchAnalysis.usageUnknownCalls }} 次调用用量尚未返回，上方仅统计已返回用量。</p>
+      <UCard><div class="filters filter-grid">
+        <label>完工时间<el-select v-model="dateMode" aria-label="工单完工时间"><el-option value="recent" label="最近有数据的7天"/><el-option value="custom" label="自定义日期"/><el-option value="all" label="全部已采集"/><el-option value="undated" label="缺少完工日期"/></el-select></label>
+        <label>产品<el-select v-model="product" clearable filterable placeholder="全部产品" aria-label="筛选成本产品"><el-option v-for="name in products" :key="name" :value="name" :label="name"/></el-select></label>
+        <label>关注事项<el-select v-model="attention" aria-label="筛选核对事项"><el-option value="all" label="全部工单"/><el-option value="business_signal" label="成本变化待核查"/><el-option value="data_quality" label="数据需要核对"/><el-option value="readiness" label="比较条件待补"/></el-select></label>
+        <label>查找工单<el-input v-model="search" aria-label="搜索最新成本工单" placeholder="工单号或产品名称" clearable/></label>
+      </div>
+      <div v-if="dateMode==='custom'" class="filters"><label>开始日期<input v-model="startDate" type="date" aria-label="复核开始日期"></label><label>结束日期<input v-model="endDate" type="date" aria-label="复核结束日期"></label></div>
+      <p v-if="dateError" role="alert">请选择有效的开始与结束日期。</p>
+      <p class="note">{{ range ? `${range[0]?.slice(5)} 至 ${range[1]?.slice(5)}` : dateMode==='undated'?'缺少完工日期的工单':'全部已采集工单' }} · {{ orders.length }} 张工单 · 材料＋人工，暂不含制造费用；币种待确认。</p>
+      <p v-if="!latestDate&&dateMode==='recent'" class="note">来源未提供完工日期，暂列已采集工单，请先补齐日期。</p>
       </UCard>
-      <UCard><template #header><div class="heading"><h3>同单位产品成本 · 材料加人工</h3><el-select v-model="unit" aria-label="最新成本成品单位"><el-option v-for="u in units" :key="u" :value="u" :label="u"/></el-select></div></template>
-        <DynamicChartRenderer v-if="groups.length" :config="chart" :height="300" :number-precision="2" presentation="plain"/>
-        <p class="note">每个产品按材料加人工总额除该组最终良品量；不同单位、规格、加工阶段不能仅按高低认定异常。半成品领料已经承接的上游价值不再重复相加。</p>
-        <div v-for="g in groups" :key="g.key" class="rank"><span>{{ g.product }}</span><strong>{{ fmt(g.weightedUnitCost) }} / {{ g.unit }}</strong><span>{{ g.sampleCount }} 张工单</span></div>
+      <div class="metrics"><UCard><span>本次复核</span><strong>{{ orders.length }} 张</strong></UCard><UCard><span>成本变化待核查</span><strong>{{ countFamily('business_signal') }} 项</strong></UCard><UCard><span>数据需要核对</span><strong>{{ countFamily('data_quality') }} 项</strong></UCard><UCard><span>比较条件待补</span><strong>{{ countFamily('readiness') }} 项</strong></UCard></div>
+      <UCard v-if="actionItems.length"><template #header><h3>优先处理</h3></template><article v-for="item in actionItems" :key="item.id" class="action-row"><div><strong>{{ localizeBlacklakeText(item.title) }}</strong><p>{{ localizeBlacklakeText(item.message) }}</p><p v-if="item.entityRefs.some(p=>!orders.some(r=>r.projectId===p.projectId))" class="note">此对照还包含筛选范围外的同产品工单。</p><p>找{{ item.owner }}：{{ localizeBlacklakeText(item.action) }}</p></div><UButton color="neutral" variant="outline" @click="locate(item.entityRefs.find(p=>orders.some(r=>r.projectId===p.projectId))!.projectId)">查看涉及工单</UButton></article></UCard>
+      <UCard><template #header><div class="heading"><h3>哪些产品成本高</h3><el-select v-model="unit" aria-label="最新成本成品单位"><el-option v-for="u in units" :key="u" :value="u" :label="u"/></el-select></div></template>
+        <DynamicChartRenderer v-if="groups.length" :config="chart" :height="280" :number-precision="2" presentation="plain"/>
+        <el-empty v-else description="当前筛选没有可比较的产品"/>
+        <p class="note">按每{{ unit || '单位' }}成品的材料与人工排序。规格、加工阶段不同的产品不能直接比高低。</p>
       </UCard>
-      <UCard><template #header><h3>26张工单 · 从原料到成品逐单核对</h3></template>
-        <el-input v-model="search" aria-label="搜索最新成本工单" placeholder="搜索工单或产品，同时筛选下方分析" clearable/>
-        <el-table :data="orders" stripe><el-table-column prop="projectCode" label="工单" min-width="180"/><el-table-column prop="product" label="成品" min-width="180"/>
-          <el-table-column label="最终良品" min-width="120"><template #default="{row}">{{ fmt(row.finishedGood) }} {{ row.unit }}</template></el-table-column>
-          <el-table-column label="单位直接成本" min-width="130"><template #default="{row}">{{ fmt(row.unitIdentifiedDirectCost) }} / {{ row.unit }}</template></el-table-column>
-          <el-table-column label="待核与分析" min-width="150"><template #default="{row}"><el-tag v-if="alertsFor(row.projectId).length" type="warning">{{ alertsFor(row.projectId).length }} 条待核提醒</el-tag><span v-else>字段具备</span><p class="note">{{ factFor(row.projectId)?'逐单解释已完成':'逐单解释排队中' }}</p></template></el-table-column>
-          <el-table-column label="明细与异常" width="160"><template #default="{row}"><UButton color="neutral" variant="outline" @click="selected=row">查看原料与分析</UButton></template></el-table-column>
+      <UCard><template #header><div class="heading"><h3>逐张核对工单</h3><span class="note">共 {{ orders.length }} 张 · 点击工单查看对应分析</span></div></template>
+        <el-table :data="visibleOrders" row-key="projectId" stripe @row-click="selected=$event" data-testid="review-order-table"><el-table-column prop="projectCode" label="工单" min-width="180"/><el-table-column prop="product" label="成品" min-width="180"/>
+          <el-table-column label="完工日期" width="110"><template #default="{row}">{{ orderDate(row.projectId).slice(5)||'待补' }}</template></el-table-column>
+          <el-table-column label="成品量" min-width="120"><template #default="{row}">{{ fmt(row.finishedGood) }} {{ row.unit }}</template></el-table-column>
+          <el-table-column label="单位成本" min-width="130"><template #default="{row}">{{ fmt(row.unitIdentifiedDirectCost) }} / {{ row.unit }}</template></el-table-column>
+          <el-table-column label="需要关注" min-width="150"><template #default="{row}"><el-tag v-if="alertsFor(row.projectId).some(a=>a.family==='data_quality')" type="warning">数据待核对</el-tag><el-tag v-if="alertsFor(row.projectId).some(a=>a.family==='business_signal')" type="warning">成本待核查</el-tag><span v-if="!alertsFor(row.projectId).some(a=>a.family!=='readiness')">暂无重点提醒</span></template></el-table-column>
+          <el-table-column label="操作" width="140"><template #default="{row}"><UButton color="neutral" variant="outline" @click.stop="selected=row">查看成本与分析</UButton></template></el-table-column>
         </el-table>
-        <section v-if="selected" class="detail" aria-label="最新工单成本明细"><h4>{{ selected.projectCode }} · {{ selected.product }}</h4>
-          <p>成品良品 {{ fmt(selected.finishedGood) }} {{ selected.unit }}；材料净额 {{ fmt(selected.materialCost) }}，工序人工 {{ fmt(selected.laborCost) }}；单位材料加人工 {{ fmt(selected.unitIdentifiedDirectCost) }} / {{ selected.unit }}。币种待核。</p>
-          <h4>原料或半成品 → 本工单成品</h4><el-table :data="selected.materialLinesDetail" stripe><el-table-column prop="material" label="材料"/><el-table-column prop="orderCode" label="领退料单"/><el-table-column label="净耗用"><template #default="{row}">{{ fmt(row.netConsumption) }} {{ row.unit }}</template></el-table-column><el-table-column label="已记录净额"><template #default="{row}">{{ fmt(row.recognizedCost) }}</template></el-table-column></el-table>
-          <h4>加工人工</h4><el-table :data="selected.processes" stripe><el-table-column prop="process" label="工序"/><el-table-column label="累计工时"><template #default="{row}">{{ fmt(row.hours) }} 小时</template></el-table-column><el-table-column label="已记录工资"><template #default="{row}">{{ fmt(row.laborCost) }}</template></el-table-column></el-table>
-          <div class="analysis"><h4>这张工单的分析</h4><template v-if="orderFact"><p>{{ orderFact.whatItMeans }}</p><p>影响：{{ orderFact.whyItMatters }}</p><p>下一步：{{ orderFact.nextStep }}（{{ orderFact.owner }}）</p><p class="note">现在不能下的结论：{{ orderFact.cannotConclude }}</p><UButton color="neutral" variant="outline" @click="openChat(orderFact)">追问这张工单</UButton></template><p v-else>这张工单的解释仍在排队；上述数字已由规则计算。</p></div>
-          <h4>异常与待核资料</h4><p v-for="a in selectedAlerts" :key="a.id">{{ a.title }}：{{ a.message }}</p><p v-if="!selectedAlerts.length">现有规则未命中明确异常；不代表批次链或实际费用已全部核实。</p>
-          <article v-for="n in needs" :key="n.id" class="request"><strong>需确认：{{ n.missingData }}</strong><p>找谁：{{ n.responsibleRole }}。补齐后：{{ n.afterProvided }}</p></article>
-        </section>
+        <el-pagination v-model:current-page="orderPage" v-model:page-size="pageSize" :page-sizes="[20,50,100]" :total="orders.length" layout="total, sizes, prev, pager, next"/>
       </UCard>
-      <UCard><template #header><h3>逐条证据 · 数据下面的白话分析</h3></template>
-        <div class="filters"><el-select v-model="cohort" aria-label="证据分析范围"><el-option value="eligible26" label="26张工单全部证据"/><el-option value="original44" label="原遗漏的44条证据"/></el-select><el-select v-model="section" aria-label="分析板块" clearable placeholder="全部板块"><el-option v-for="(label,id) in labels" :key="id" :value="id" :label="label"/></el-select></div>
-        <p class="note">{{ cohort==='original44'?'这44条来自原109张工单的范围，不把它们当成所选26张工单的结论。':'下方仅解释所选26张工单的证据；工单字段具备，不等于实际批次和完整费用已经核实。' }}</p>
-        <article v-for="f in visibleFacts" :key="f.factId" class="fact"><span class="note">{{ labels[f.sectionId] }}</span><details><summary>查看统计依据与具体工单</summary><p>{{ f.display.text }}</p></details><div class="analysis"><p><strong>怎么看：</strong>{{ f.whatItMeans }}</p><p><strong>影响：</strong>{{ f.whyItMatters }}</p><p><strong>下一步：</strong>{{ f.nextStep }}（{{ f.owner }}）</p><p class="note">现在不能下的结论：{{ f.cannotConclude }}</p><UButton color="neutral" variant="outline" @click="openChat(f)">单独追问这条分析</UButton></div></article>
-        <p v-if="!visibleFacts.length">当前筛选下暂无已完成解释，可调整筛选或等待排队完成。</p>
+      <details class="technical"><summary>查看其他专项分析与数据说明</summary>
+        <p class="note">资料更新 {{ formatBlacklakeDateTime(report.sourceCheckedAt) }} · 以下专项分析使用完整采集范围，不随上方工单筛选变化。</p>
+        <p role="status">{{ report.batchAnalysis.status==='complete'?'分析已完成':report.batchAnalysis.status==='failed'?'部分分析暂不可用，正在等待恢复':'分析排队中，已完成的工单可先查看' }}</p>
+        <p class="note">逐单分析 {{ completedOrders }} / {{ report.contract.eligibleOrders }}；补查 {{ report.batchAnalysis.cohorts.original44?.analyzed ?? 0 }} / 44；模型用量 {{ report.batchAnalysis.usage?.totalTokens?.toLocaleString() ?? '未返回' }} token。</p>
+        <div class="filters"><el-select v-model="cohort" aria-label="证据分析范围"><el-option value="eligible26" label="可核算工单专项分析"/><el-option value="original44" label="全部109张工单的补查分析"/></el-select><el-select v-model="section" aria-label="分析板块" clearable placeholder="全部板块"><el-option v-for="(label,id) in labels" :key="id" :value="id" :label="label"/></el-select></div>
+        <p class="note">{{ cohort==='original44'?'以下来自原109张工单，不代表上方筛选工单。':'以下来自本轮全部可核算工单。' }}</p>
+        <details v-for="f in visibleFacts" :key="f.factId" class="fact"><summary>{{ labels[f.sectionId] }} · {{ localizeBlacklakeText(f.whatItMeans) }}</summary><p>{{ localizeBlacklakeText(f.whyItMatters) }}</p><p>怎么处理：{{ localizeBlacklakeText(f.nextStep) }}（{{ f.owner }}）</p><p>{{ localizeBlacklakeText(f.display.text) }}</p><p class="note">{{ localizeBlacklakeText(f.cannotConclude) }}</p><UButton color="neutral" variant="outline" @click="openChat(f)">追问这项分析</UButton></details>
         <el-pagination v-model:current-page="page" :page-size="6" :total="facts.length" layout="prev, pager, next, total"/>
-      </UCard>
-      <p class="note">{{ report.contract.inventoryBoundary }} 本轮只调用本地27B，不调用付费云端补课接口。</p>
+      </details>
+      <el-drawer :model-value="!!selected" size="min(960px, 100%)" :title="selected ? `${selected.projectCode} · ${selected.product}` : '工单成本'" @update:model-value="value=>{if(!value)selected=null;}">
+        <section v-if="selected" class="detail" aria-label="最新工单成本明细">
+          <div class="order-summary"><div><span>单位成本</span><strong>{{ fmt(selected.unitIdentifiedDirectCost) }} / {{ selected.unit }}</strong></div><div><span>材料净额</span><strong>{{ fmt(selected.materialCost) }}</strong></div><div><span>工序人工</span><strong>{{ fmt(selected.laborCost) }}</strong></div><div><span>成品良品</span><strong>{{ fmt(selected.finishedGood) }} {{ selected.unit }}</strong></div></div>
+          <div class="analysis"><h3>这张工单怎么看</h3><template v-if="orderFact"><p>{{ localizeBlacklakeText(orderFact.whatItMeans) }}</p><p>{{ localizeBlacklakeText(orderFact.whyItMatters) }}</p><h4>接下来怎么做</h4><p>{{ localizeBlacklakeText(orderFact.nextStep) }}</p><p class="note">找谁处理：{{ orderFact.owner }}</p><UButton color="primary" variant="outline" @click="openChat(orderFact)">追问这张工单</UButton><details><summary>判断依据与注意事项</summary><p>{{ localizeBlacklakeText(orderFact.display.text) }}</p><p>{{ localizeBlacklakeText(orderFact.cannotConclude) }}</p><p v-for="hypothesis in orderFact.hypotheses" :key="hypothesis">可能原因（待核实）：{{ localizeBlacklakeText(hypothesis) }}</p></details></template><p v-else>这张工单的解释仍在排队，成本数据可以先核对。</p></div>
+          <h3>需要处理什么</h3><article v-for="a in selectedAlerts.filter(a=>a.family!=='readiness')" :key="a.id" class="request"><strong>{{ localizeBlacklakeText(a.title) }}</strong><p>{{ localizeBlacklakeText(a.message) }}</p><p>找{{ a.owner }}：{{ localizeBlacklakeText(a.action) }}</p></article><p v-if="!selectedAlerts.some(a=>a.family!=='readiness')">暂未发现重点问题。</p>
+          <details v-if="needs.length||selectedAlerts.some(a=>a.family==='readiness')"><summary>比较前还需要确认的资料</summary><article v-for="n in needs" :key="n.id" class="request"><strong>{{ localizeBlacklakeText(n.missingData) }}</strong><p>找{{ n.responsibleRole }}补齐。补齐后：{{ localizeBlacklakeText(n.afterProvided) }}</p></article><p v-for="a in selectedAlerts.filter(a=>a.family==='readiness')" :key="a.id">{{ localizeBlacklakeText(a.message) }} 找{{ a.owner }}：{{ localizeBlacklakeText(a.action) }}</p></details>
+          <h3>原料 → 成品：材料花在哪里</h3><el-table :data="selected.materialLinesDetail" stripe><el-table-column prop="material" label="材料"/><el-table-column prop="orderCode" label="领退料单"/><el-table-column label="净耗用"><template #default="{row}">{{ fmt(row.netConsumption) }} {{ row.unit }}</template></el-table-column><el-table-column label="金额"><template #default="{row}">{{ fmt(row.recognizedCost) }}</template></el-table-column></el-table>
+          <h3>加工：人工花在哪里</h3><el-table :data="selected.processes" stripe><el-table-column prop="process" label="工序"/><el-table-column label="工时"><template #default="{row}">{{ fmt(row.hours) }} 小时</template></el-table-column><el-table-column label="工资"><template #default="{row}">{{ fmt(row.laborCost) }}</template></el-table-column></el-table>
+        </section>
+      </el-drawer>
     </template>
-    <el-dialog :model-value="!!chatFact" title="围绕这条证据继续核对" width="min(720px, 94vw)" @update:model-value="value=>{if(!value)chatFact=null;}"><template v-if="chatFact"><p>{{ chatFact.whatItMeans }}</p><el-input v-model="question" type="textarea" :rows="3" aria-label="本条成本证据追问" placeholder="例如：找谁补资料？为什么还不能认定浪费？"/><UButton color="primary" :loading="asking" @click="ask">提交追问</UButton><p class="chat-answer">{{ answer }}</p><p class="note">基于这条已保存证据回答，不增加模型调用或改变金额。</p></template></el-dialog>
+    <el-dialog :model-value="!!chatFact" :title="selected ? `追问 ${selected.projectCode}` : '追问这项分析'" width="min(720px, 94vw)" @update:model-value="value=>{if(!value)chatFact=null;}"><template v-if="chatFact"><p>{{ localizeBlacklakeText(chatFact.whatItMeans) }}</p><el-input v-model="question" type="textarea" :rows="3" aria-label="本条成本证据追问" placeholder="想核对哪里？例如：找谁补资料、人工为什么高？"/><UButton color="primary" :loading="asking" @click="ask">发送</UButton><p v-if="answer" class="chat-answer">{{ localizeBlacklakeText(answer) }}</p></template></el-dialog>
   </main>
 </template>
 <style scoped>
-.complete-cost{padding:24px;display:grid;gap:20px;color:var(--c-ink)}header,.heading{display:flex;justify-content:space-between;align-items:center;gap:16px}h2,h3,h4{margin:0 0 8px}h2{font-size:23px}h3{font-size:17px}h4{font-size:15px}p{line-height:1.8}header p,.note{color:var(--c-muted);font-size:12px}.metrics{display:flex;flex-wrap:wrap;gap:24px}.metrics span,.metrics strong{display:block}.metrics strong{font-size:24px;margin-top:8px}.metrics span{color:var(--c-muted)}.heading .el-select{width:180px}.rank,.filters{display:flex;gap:16px;align-items:center;margin:12px 0}.rank{justify-content:space-between;border-bottom:1px solid var(--c-line);padding:8px 0}.filters .el-select{width:240px}.detail,.fact{border-top:1px solid var(--c-line);padding-top:20px;margin-top:20px}.analysis{padding:16px;margin:16px 0;border:1px solid var(--c-line);border-radius:10px;background:var(--c-page)}.request{padding:12px 0;border-bottom:1px solid var(--c-line)}details p,.chat-answer{white-space:pre-wrap;overflow-wrap:anywhere}.chat-answer{line-height:1.9}.el-input{margin-bottom:12px}@media(max-width:760px){.complete-cost{padding:16px}header,.filters{align-items:stretch;flex-direction:column}.metrics{gap:16px}.metrics strong{font-size:20px}}
+.complete-cost{padding:24px;display:grid;gap:20px;color:var(--c-ink)}header,.heading{display:flex;justify-content:space-between;align-items:center;gap:16px}h2,h3,h4{margin:0 0 8px}h2{font-size:23px}h3{font-size:17px}h4{font-size:15px}p{line-height:1.8}header p,.note{color:var(--c-muted);font-size:12px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.metrics span,.metrics strong{display:block}.metrics strong{font-size:24px;margin-top:8px}.metrics span{color:var(--c-muted)}.heading .el-select{width:180px}.rank,.filters{display:flex;gap:16px;align-items:center;margin:12px 0}.rank{justify-content:space-between;border-bottom:1px solid var(--c-line);padding:8px 0}.filters .el-select{width:240px}.detail,.fact{border-top:1px solid var(--c-line);padding-top:20px;margin-top:20px}.analysis{padding:16px;margin:16px 0;border:1px solid var(--c-line);border-radius:10px;background:var(--c-page)}.request{padding:12px 0;border-bottom:1px solid var(--c-line)}details p,.chat-answer{white-space:pre-wrap;overflow-wrap:anywhere}.chat-answer{line-height:1.9}.el-input{margin-bottom:12px}@media(max-width:760px){.complete-cost{padding:16px}header,.filters{align-items:stretch;flex-direction:column}.metrics{gap:16px}.metrics strong{font-size:20px}}
+.filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:start}.filter-grid label{min-width:0;display:grid;gap:8px;font-size:12px;color:var(--c-muted)}.filter-grid .el-select{width:100%}.action-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:12px 0;border-top:1px solid var(--c-line)}.action-row p{margin:4px 0;font-size:13px}.technical{padding:16px;border:1px solid var(--c-line);border-radius:10px}.technical>summary,details>summary{cursor:pointer;color:var(--c-primary,#1b65a8);font-size:13px}.el-pagination{margin-top:20px;overflow:auto}.order-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.order-summary span,.order-summary strong{display:block}.order-summary span{font-size:12px;color:var(--c-muted)}.order-summary strong{font-size:21px;margin-top:6px}.detail{margin:0;padding:0;border:0}.detail>h3{margin-top:28px}.detail details{margin:16px 0}.filters input[type=date]{padding:8px;border:1px solid var(--c-line);border-radius:6px}@media(max-width:760px){.filter-grid,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.action-row{align-items:stretch;flex-direction:column}}@media(max-width:440px){.filter-grid{grid-template-columns:1fr}}
 </style>

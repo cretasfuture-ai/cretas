@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { beijingDate, periodForKind, periodIdentity, periodLabel, yesterdayInBeijing } from '../blacklakePeriod';
+import { beijingDate, formatBlacklakeDateTime, periodForKind, periodIdentity, periodLabel, yesterdayInBeijing } from '../blacklakePeriod';
 
 describe('Blacklake period helpers', () => {
+  it('shows compact Beijing dates and preserves years across year boundaries',()=>{
+    expect(formatBlacklakeDateTime('2026-11-04T23:30:55Z')).toBe('11-05 07:30');
+    expect(periodLabel(periodForKind('day','2026-11-04'))).toBe('11-04 至 11-04');
+    expect(periodLabel(periodForKind('week','2027-01-01'))).toBe('2026-12-28 至 2027-01-03');
+  });
   it('uses Beijing date rather than browser-local date', () => {
     const lateUtc = new Date('2026-11-04T23:30:00.000Z');
     expect(beijingDate(lateUtc)).toBe('2026-11-05');

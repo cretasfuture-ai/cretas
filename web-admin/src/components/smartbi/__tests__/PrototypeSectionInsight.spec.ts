@@ -71,7 +71,7 @@ describe('SectionInsight', () => {
       indicator: { label: '材料', indicator: '单位材料成本', formula: '材料净额除良品', howToRead: '先核对记录完整性' },
     } });
     const wrapper = mount(SectionInsight, { props: { report } });
-    expect(wrapper.text()).toContain('本地模型经营解读');
+    expect(wrapper.text()).toContain('原因与判断依据');
     expect(wrapper.text()).toContain('只看包装会低估成品成本');
     expect(wrapper.text()).not.toContain('F017');
   });
@@ -214,7 +214,7 @@ describe('SectionInsight', () => {
       relatedOrders: [{ projectId: 16, projectCode: 'MO-0016', product: '香酥鸡', reasons: ['来源金额为零，需要回到原单核对。'] }],
     }) } });
 
-    expect(wrapper.text()).toContain('这组数据的分析');
+    expect(wrapper.text()).toContain('分析与建议');
     expect(wrapper.text()).toContain('本次快照中的已关联工单与来源领退料');
     expect(wrapper.text()).toContain('工单用料记录');
     expect(wrapper.text()).not.toContain('materials:run-1:opaque-internal-id');

@@ -55,6 +55,7 @@ describe('Blacklake prototype page', () => {
   };
 
   beforeEach(() => {
+    vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-11-05T04:00:00Z'));
     authMock.store.factoryId = 'F006'; authMock.store.user = { id: 1 }; authMock.store.currentRole = 'factory_super_admin';
     vi.mocked(getBlacklakeAnalysis).mockReset();
     vi.mocked(createBlacklakePeriodReport).mockReset().mockResolvedValue({ id: 'job-1', status: 'queued', period: { startDate: '2026-11-04', endDate: '2026-11-04', kind: 'day', basis: 'completed', timezone: 'Asia/Shanghai' }, fingerprint: 'f'.repeat(64), revision: 1, createdAt: '2026-11-04T23:00:00+08:00' });
@@ -131,7 +132,7 @@ describe('Blacklake prototype page', () => {
 
   it('loads a queued rule draft once while local AI waits', async () => {
     const queuedResult = { generatedAt: '2026-11-04T10:00:00+08:00', sectionInsights: [{ sectionId: 'product_cost', title: '规则草稿', summary: '规则已保存', observations: [], calculation: [], hypotheses: [], limitations: [], nextSteps: [], suggestedQuestions: [], scope: { runId: 'draft' }, evidenceRefs: [] }], summary: '规则草稿', observations: [], history: { usedReports: [], recurringIssues: [], newIssues: [], resolvedIssues: [] }, ai: { status: 'not_run', message: '本地 AI 等待补充' } };
-    const queuedJob = { id: 'draft-job', status: 'queued' as const, period: { startDate: '2026-11-03', endDate: '2026-11-03', kind: 'day' as const, basis: 'completed' as const, timezone: 'Asia/Shanghai' }, fingerprint: 'f'.repeat(64), revision: 1, createdAt: '2026-11-04T10:00:00+08:00', nextAttemptAt: '2026-11-04T10:01:00+08:00', result: queuedResult };
+    const queuedJob = { id: 'draft-job', status: 'queued' as const, period: { startDate: '2026-11-04', endDate: '2026-11-04', kind: 'day' as const, basis: 'completed' as const, timezone: 'Asia/Shanghai' }, fingerprint: 'f'.repeat(64), revision: 1, createdAt: '2026-11-04T10:00:00+08:00', nextAttemptAt: '2026-11-04T10:01:00+08:00', result: queuedResult };
     vi.mocked(getBlacklakeAnalysis).mockResolvedValue({ ...analysis });
     vi.mocked(createBlacklakePeriodReport).mockResolvedValue(queuedJob);
     vi.mocked(getBlacklakePeriodReport).mockResolvedValue(queuedJob);

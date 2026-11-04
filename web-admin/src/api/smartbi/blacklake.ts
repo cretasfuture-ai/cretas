@@ -88,7 +88,7 @@ export interface BlacklakeAnalysis {
     processes: { process: string; tasks: number; hours: number | null; inProgress: number; missingDurationTasks: number }[]; };
   inventory: { records: { product: string; warehouse: string; unit: string; quantity: number | null }[];
     byWarehouseUnit: { warehouse: string; unit: string; quantity: number | null; records: number; missing: number }[]; pairsNotReturned: number | null; movementOrders: number; };
-  cost: { projects: CostProject[]; materials: { materialCode: string; material: string; unit: string; netConsumption: number | null; recognizedCost: number | null; lines: number }[];
+  cost: { projects: CostProject[]; projectDates?: Record<string, { completedAt: string | null; createdAt: string | null }>; materials: { materialCode: string; material: string; unit: string; netConsumption: number | null; recognizedCost: number | null; lines: number }[];
     linkedMaterialLines: number; unlinkedMaterialLines: number; excludedUnapprovedOrders: number; knownMaterialCostLines: number; sourceZeroCostLines: number; knownLaborTasks: number; unitCostAvailableProjects: number; fullManufacturingCost: null; grossProfit: null; };
 }
 
