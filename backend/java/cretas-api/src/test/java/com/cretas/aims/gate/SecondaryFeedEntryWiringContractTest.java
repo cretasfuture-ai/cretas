@@ -143,6 +143,27 @@ class SecondaryFeedEntryWiringContractTest {
     }
 
     @Test
+    @DisplayName("/settle 的提示语跟着结果走: 预览不能说「已提交」")
+    void settleMessageFollowsTheOutcome() {
+        var plans = mock(com.cretas.aims.service.ProductionPlanService.class);
+        var mobile = mock(com.cretas.aims.service.MobileService.class);
+        when(mobile.getUserFromToken(any())).thenReturn(new com.cretas.aims.dto.user.UserDTO());
+        var controller = WorkflowStepUnlockWiringContractTest.construct(
+                com.cretas.aims.controller.ProductionPlanController.class,
+                Map.of(com.cretas.aims.service.ProductionPlanService.class, plans,
+                        com.cretas.aims.service.MobileService.class, mobile));
+        var request = new com.cretas.aims.dto.production.ProductionSettlementRequest();
+
+        when(plans.settleProduction(any(), any(), any(), any())).thenReturn(
+                com.cretas.aims.dto.production.ProductionSettlementResponse.builder().settled(false).build());
+        assertThat(controller.settleProduction(F, "P1", "Bearer t", request).getMessage()).contains("未写入");
+
+        when(plans.settleProduction(any(), any(), any(), any())).thenReturn(
+                com.cretas.aims.dto.production.ProductionSettlementResponse.builder().settled(true).build());
+        assertThat(controller.settleProduction(F, "P1", "Bearer t", request).getMessage()).contains("已提交");
+    }
+
+    @Test
     @DisplayName("整单撤回: 结单入库的半成品退出来; 上线前的结单没有这一行, 不报错")
     void reversalTakesTheStockedSemiBackOut() {
         SemiFinishedInventoryRepository wipRepo = mock(SemiFinishedInventoryRepository.class);
