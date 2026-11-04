@@ -1,5 +1,6 @@
 package com.cretas.aims.service.workflow;
 
+import com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitConfig;
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
@@ -226,9 +227,43 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     optionalPercent(
                             port.get("inputShareRatio"), nodeId, path + ".inputShareRatio"),
                     optionalPercent(
-                            port.get("fixedCostShare"), nodeId, path + ".fixedCostShare")));
+                            port.get("fixedCostShare"), nodeId, path + ".fixedCostShare"),
+                    parseTimeLimit(port.get("timeLimit"), nodeId, path + ".timeLimit")));
         }
         return List.copyOf(ports);
+    }
+
+    /** 时限配置: 没写 = 不限时; 写了就必须完整合法 (食品 DAG 缺口 14)。 */
+    private ProcessTimeLimitConfig parseTimeLimit(Object raw, String nodeId, String path) {
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof Map<?, ?> map)) {
+            throw runtimeInvalid(nodeId, path, "must be an object");
+        }
+        try {
+            return ProcessTimeLimitConfig.parse(map);
+        } catch (IllegalArgumentException e) {
+            throw runtimeInvalid(nodeId, path, e.getMessage());
+        }
+    }
+
+    /** 时限只能配在投入端口上, 起算点要和料的种类对得上。 */
+    private Map<String, Object> frozenTimeLimit(DeclaredPort port, String materialKind, String nodeId, int index) {
+        ProcessTimeLimitConfig config = port.timeLimit();
+        if (config == null) {
+            return null;
+        }
+        String path = "data.ports[" + index + "].timeLimit";
+        if (!"INPUT".equals(port.direction())) {
+            throw runtimeInvalid(nodeId, path, "time limits belong on INPUT ports");
+        }
+        try {
+            config.assertFitsMaterialKind(materialKind);
+        } catch (IllegalArgumentException e) {
+            throw runtimeInvalid(nodeId, path, e.getMessage());
+        }
+        return config.toMap();
     }
 
     /**
@@ -591,7 +626,8 @@ public class ProductProcessWorkflowRuntimeCompiler {
                     selectionGroup == null ? null : selectionGroup.minSelections(),
                     selectionGroup == null ? null : selectionGroup.maxSelections(),
                     declaredPort.inputShareRatio(),
-                    declaredPort.fixedCostShare()));
+                    declaredPort.fixedCostShare(),
+                    frozenTimeLimit(declaredPort, materialNode.getKind(), workflowNodeId, index)));
         }
     }
 
@@ -767,11 +803,13 @@ public class ProductProcessWorkflowRuntimeCompiler {
             /** 主原料在本工序投入端口间的相对份额(%)。null = 不参与推算。owner 2026-09-02 裁定走 (a): 配比进画布端口。 */
             BigDecimal inputShareRatio,
             /** 固定比例分摊下本产出端口的成本份额(%); 按重量时恒为 null (见 applyCostAllocationMethod)。 */
-            BigDecimal fixedCostShare) {
+            BigDecimal fixedCostShare,
+            /** 工序间 / 投料时限; null = 不限时。 */
+            ProcessTimeLimitConfig timeLimit) {
 
         DeclaredPort withFixedCostShare(BigDecimal share) {
             return new DeclaredPort(id, direction, materialNodeId, unit, conversionRefId, conversionVersion,
-                    ordinal, standardQuantity, quantityMode, inputShareRatio, share);
+                    ordinal, standardQuantity, quantityMode, inputShareRatio, share, timeLimit);
         }
     }
 

@@ -51,6 +51,10 @@ public class TaskMaterialBatchPickerService {
     private final WorkflowTaskPortRepository taskPortRepository;
     private final WarehouseResolver warehouseResolver;
 
+    /** 工序间 / 投料时限 (缺口 14)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService processTimeLimitService;
+
     @Transactional(readOnly = true)
     public List<TaskMaterialBatchOptionDTO> list(String factoryId, Long batchId, Long taskId) {
         WorkProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, taskId)
@@ -133,6 +137,10 @@ public class TaskMaterialBatchPickerService {
                     || !allowedTypes.containsKey(batch.getMaterialTypeId())) {
                 throw new BusinessException(409, "所选原料批次不属于当前任务的可用输入")
                         .withHint("请重新选择当前工厂、当前任务允许的可用生产仓原料批次");
+            }
+            // 缺口 14: 投料时限。原料批次不是累加行, 超时就是整批, 不需要按量判
+            if (processTimeLimitService != null) {
+                processTimeLimitService.assertRawFeedForTask(factoryId, task, batch, null, task.getAssignedTo());
             }
             InputUnit inputPort = allowedTypes.get(batch.getMaterialTypeId());
             String portUnit = inputPort.code();

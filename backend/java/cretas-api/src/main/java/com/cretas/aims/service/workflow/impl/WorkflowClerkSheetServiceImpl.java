@@ -423,6 +423,7 @@ public class WorkflowClerkSheetServiceImpl implements WorkflowClerkSheetService 
                 .inputShareRatio(port.getInputShareRatio())
                 .fixedCostShare(WorkflowTaskPort.Direction.OUTPUT.equals(port.getDirection())
                         ? port.getFixedCostShare() : null)
+                .timeLimit(port.getTimeLimitConfig())
                 .selectionGroupId(port.getSelectionGroupId())
                 .selectionGroupLabel(port.getSelectionGroupLabel())
                 .selectionGroupMode(port.getSelectionGroupMode())

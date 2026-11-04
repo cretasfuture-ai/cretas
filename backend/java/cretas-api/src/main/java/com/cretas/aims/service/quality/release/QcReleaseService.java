@@ -201,7 +201,7 @@ public class QcReleaseService {
                 } else {
                     // 审查高 2: 判不合格 = 把待检的那部分数量从可用余额里转出 (QC_REJECT 出库流水),
                     // 已放行的存量不动; 这一行回到「无待检」, 之后的新产出照常按需检进待检。
-                    writeOffRejectedSemi(factoryId, s, pending, userId);
+                    writeOffSemi(factoryId, s, pending, userId, "qc-reject:" + s.getId());
                 }
                 s.setInspectionStatus(null);
                 s.setInspectionPendingQuantity(null);
@@ -284,7 +284,8 @@ public class QcReleaseService {
         return pending == null ? BigDecimal.ZERO : pending;
     }
 
-    private void writeOffRejectedSemi(String factoryId, SemiFinishedInventory s, BigDecimal qty, Long userId) {
+    /** 判不合格转出 (质检放行 / 时限超时处置共用): 写 QC_REJECT 出库流水, 不改已放行的存量。 */
+    public void writeOffSemi(String factoryId, SemiFinishedInventory s, BigDecimal qty, Long userId, String sourceRef) {
         if (semiTxnRepo == null) {
             throw new BusinessException(500, "半成品不合格转出缺少流水仓储, 不能判定不合格").withCode(CODE_INVALID);
         }
@@ -298,7 +299,7 @@ public class QcReleaseService {
                 .semiFinishedId(s.getId())
                 .txnType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.TxnType.OUT)
                 .sourceType(com.cretas.aims.entity.SemiFinishedInventoryTransaction.SourceType.QC_REJECT)
-                .sourceRef("qc-reject:" + s.getId())
+                .sourceRef(sourceRef)
                 .quantity(qty.negate())
                 .unitCostAtTxn(s.getUnitCost())
                 .balanceAfter(after)

@@ -297,6 +297,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
 
+    /** 工序间 / 投料时限 (缺口 14)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService processTimeLimitService;
+
     /** 以销定产批量建计划: 取产品工序名拼 processName (镜像前端 loadBomProcesses). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.ProductWorkProcessService productWorkProcessService;
@@ -3343,6 +3347,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
             if (wipInventoryService == null) {
                 throw new BusinessException(500, "二次加工服务未初始化, 无法扣减半成品库存");
+            }
+            // 缺口 14: 二次加工开工这一刻就是领半成品
+            if (processTimeLimitService != null) {
+                processTimeLimitService.assertSemiFeedForPlan(factoryId, plan,
+                        semiFinishedInventoryRepository.findById(plan.getSecondarySourceWipId()).orElse(null),
+                        plan.getPlannedQuantity(), operatorId);
             }
             wipInventoryService.deductForSecondaryPlan(
                     plan.getSecondarySourceWipId(),

@@ -207,6 +207,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.ReworkRatioCheck reworkRatioCheck;
 
+    /** 工序间 / 投料时限 (缺口 14)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService processTimeLimitService;
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveDraft(String factoryId, String planId,
@@ -1169,6 +1173,15 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         }
     }
 
+    /** 这一行已经投下去的内容 (时限闸不重判这部分); 没有或还是草稿 = 这次才算投料。 */
+    private ProcessSheetRowRequest alreadyFedRow(String factoryId, String planId, ProcessSheetRowRequest req) {
+        return rowRepo.findByFactoryIdAndPlanIdAndProcessCodeAndClientRowId(
+                        factoryId, planId, req.getProcessCode(), req.getClientRowId())
+                .filter(row -> !"DRAFT".equals(row.getRowStatus()))
+                .map(row -> tryDeserialize(row.getRowPayload()))
+                .orElse(null);
+    }
+
     @Override
     @Transactional
     public ProcessSheetRowResult saveRow(String factoryId, String planId,
@@ -1188,6 +1201,12 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 1b. 缺口 04: 按工艺图解锁。有正数产出的行会把这道工序记成已报 (WorkflowTaskProgressWriter),
         //     所以上游产出的料还没到时在这里拒绝; 草稿 (saveDraft) 不走本方法, 照常可存。
         assertWorkflowUpstreamReady(factoryId, planId, req);
+
+        // 1c. 缺口 14: 工序间 / 投料时限。放在多产出分支之前; 回料自动追加的来源此时已在 req 上。
+        //     被拦时整个事务回滚 (含已严格扣减的回料), 留痕走独立事务。
+        if (processTimeLimitService != null) {
+            processTimeLimitService.assertWebFeed(factoryId, planId, req, alreadyFedRow(factoryId, planId, req), userId);
+        }
 
         // 2B.2 多产出分支 (前置于单产出校验/upsert): 多产出用自己的逐产出校验 + 分组 upsert/删除,
         //   顶层 finished/unit/outputQuantity 只是 @NotNull 占位, 不能拿去跑单产出 B3/单位归一化 (否则误 409)。
