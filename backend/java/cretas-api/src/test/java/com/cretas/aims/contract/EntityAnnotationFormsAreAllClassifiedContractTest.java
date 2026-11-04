@@ -102,7 +102,7 @@ class EntityAnnotationFormsAreAllClassifiedContractTest {
         DECLARES_UNIQUENESS.put("Index", "@Index(…, unique = true) —— 2026-09-07 咬过一次：它此前不在任何闸的视野里");
         DECLARES_UNIQUENESS.put("Column", "@Column(unique = true) —— 不带 name 时列名要从字段名推 snake_case");
         DECLARES_UNIQUENESS.put("Id", "主键本身就是一条唯一性声明");
-        DECLARES_UNIQUENESS.put("IdClass", "复合主键: 与多个 @Id 一起把这几列合起来声明为唯一 (树上 1 处: FactorySecrecySetting 的 factory_id + item_code)");
+        DECLARES_UNIQUENESS.put("IdClass", "复合主键: 与多个 @Id 一起把这几列合起来声明为唯一 (树上 2 处: FactorySecrecySetting 的 factory_id + item_code, PlatformAiAnalysisGrant 的 grantee_type + grantee_ref)");
         DECLARES_UNIQUENESS.put("OneToOne", "JPA 规范：一对一映射的 join column 默认带唯一约束（树上 1 处：FactorySettings）");
         DECLARES_UNIQUENESS.put("JoinColumn", "它有 unique() 属性（树上 158 处 @JoinColumn，带 unique=true 的 0 处）");
 
@@ -117,7 +117,7 @@ class EntityAnnotationFormsAreAllClassifiedContractTest {
         java.util.Collections.addAll(EXPLICITLY_IRRELEVANT,
                 "BatchSize", "ColumnDefault", "Convert", "CreationTimestamp", "DynamicInsert", "Entity", "EntityGraph",
                 "EntityListeners", "Enumerated", "Formula", "Generated", "GeneratedValue",
-                "GenericGenerator", "JdbcTypeCode", "Lock", "ManyToOne", "MappedSuperclass", "Modifying",
+                "GenericGenerator", "Immutable", "JdbcTypeCode", "Lock", "ManyToOne", "MappedSuperclass", "Modifying",
                 "NotFound", "OneToMany", "OrderBy", "Param", "PostLoad", "PrePersist", "PreRemove",
                 "PreUpdate", "Query", "Repository", "SQLDelete", "Transactional", "Transient", "Type",
                 "UpdateTimestamp", "Version", "Where");

@@ -48,7 +48,8 @@ import java.util.stream.Collectors;
  *       {@link #decide} 返回 NOT_PROTECTED。策略与授权留在库里不动, 重新开启后原样生效。</li>
  *   <li>客户侧保管 (e) 与 a 无关: e 开着时 B 档产品照旧受保护 (即使 a 关); e 关时 B 档按 A 档处理 (a 也关则不保护)。</li>
  *   <li>平台看不到配方 (b) 只在 a 开时起作用: a 开、b 关时平台账号对该厂按 FULL 处理 (照样记审计),
- *       本厂无权账号照旧被遮。</li>
+ *       本厂无权账号照旧被遮。b 只管平台人员看 / 改配方和成本, 不管平台授权的 AI 分析入口
+ *       (Steve 2026-11-04; 那条放行只在 {@link #permitsPlatformAiRead} 一处)。</li>
  *   <li>训练数据过滤 (d) 不在这里判: 只按<b>样本所属的工厂</b>判 ({@code ProcessSecretSampleFilter.trainingFilterOff})。
  *       写给所有工厂的共享内容用的全厂并集 {@link #factoriesWithPolicyProducts} <b>不看任何开关</b> —— 跨厂保护不受开关影响
  *       (第四 / 五轮复审; 以前那份按 d 剔工厂的并集已删)。</li>

@@ -548,8 +548,11 @@ class PlatformFactoryAiAnalysisContractTest {
             seen.put("otherAdmin", access.permitsPlatformAiRead(otherAdmin, F1, "P-SECRET"));
             seen.put("factoryUser", access.permitsPlatformAiRead(factoryUser, F1, "P-SECRET"));
             seen.put("otherFactory", access.permitsPlatformAiRead(PLATFORM_ACTOR, F2, "P-SECRET"));
-            seen.put("otherThread", CompletableFuture.supplyAsync(
-                    () -> access.permitsPlatformAiRead(PLATFORM_ACTOR, F1, "P-SECRET")).get(5, TimeUnit.SECONDS));
+            // 这个线程在作用域打开时才创建: 作用域若被子线程继承, 这里就会看到放行
+            CompletableFuture<Boolean> other = new CompletableFuture<>();
+            Thread thread = new Thread(() -> other.complete(access.permitsPlatformAiRead(PLATFORM_ACTOR, F1, "P-SECRET")));
+            thread.start();
+            seen.put("otherThread", other.get(5, TimeUnit.SECONDS));
             return inv.callRealMethod();
         }).when(python).analyzeGeneral(anyString(), any(), any(PythonGeneralAnalysisRequest.class));
         answerWithAnalysis();
