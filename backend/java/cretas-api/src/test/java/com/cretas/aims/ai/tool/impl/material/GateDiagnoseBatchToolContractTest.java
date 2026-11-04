@@ -15,7 +15,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /** AI 只读诊断 Tool: 读同一份诊断, 一处涉及多道闸时全部列出, 且只说怎么解开、不代替用户执行。 */
-class GateDiagnoseBatchToolTest {
+class GateDiagnoseBatchToolContractTest {
 
     @Test
     void declaresReadOnlySoTheWriteConfirmGateDoesNotBlockIt() {
