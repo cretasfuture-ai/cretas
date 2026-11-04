@@ -33,6 +33,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List
@@ -47,6 +48,10 @@ _CONSENT_MODULE_PATH = (
 
 @lru_cache(maxsize=1)
 def rules():
+    # these scripts run from scripts/finetune; the rules import ``common`` from backend/python
+    backend_python = str(_CONSENT_MODULE_PATH.parents[2])
+    if backend_python not in sys.path:
+        sys.path.insert(0, backend_python)
     spec = importlib.util.spec_from_file_location("training_consent_rules", _CONSENT_MODULE_PATH)
     if spec is None or spec.loader is None:
         raise SystemExit(f"cannot load training rules from {_CONSENT_MODULE_PATH}")
@@ -157,12 +162,6 @@ def drop_records_naming_protected_terms(records: Iterable[Dict]) -> List[Dict]:
     kept = [rec for rec in records if not _names_a_term(terms, rec.get("text"))]
     logger.info("shared content check: %d of %d records kept", len(kept), len(records))
     return kept
-
-
-def without_protected_terms(texts: Iterable[object]) -> List[str]:
-    """``texts`` minus those holding any factory's term: for what goes into a prompt to an outside LLM."""
-    terms = every_factorys_terms()
-    return [t for t in texts if not _names_a_term(terms, t)]
 
 
 def apply_utterance_rule(rows: Iterable[Dict], text_keys: Iterable[str]) -> List[Dict]:

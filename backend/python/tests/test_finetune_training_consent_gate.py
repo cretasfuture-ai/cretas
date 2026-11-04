@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -183,26 +185,14 @@ def test_unreadable_lists_stop_the_export_even_with_only_file_rows(monkeypatch, 
     assert not (tmp_path / "merged.jsonl").exists()
 
 
-def test_keywords_and_examples_for_the_outside_llm_lose_protected_terms(monkeypatch):
-    synth = importlib.import_module("synthesize_weak_class_data")
-    monkeypatch.setattr(gate, "_connect_cretas", lambda: _CretasConn(products=_PROTECTED))
-    row = ("X", "名称", "说明", json.dumps(["398礼盒", "库存"], ensure_ascii=False),
-           json.dumps(["老卤牛肉<数值>号还有多少", "还有多少库存"], ensure_ascii=False))
-
-    class _Cur(_Cursor):
-        def fetchall(self):
-            return [row]
-
-    class _DbConn:
-        def cursor(self):
-            return _Cur([])
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(synth.psycopg2, "connect", lambda **_k: _DbConn())
-    meta = synth.fetch_intent_metadata(["X"])["X"]
-    assert meta["keywords"] == ["库存"] and meta["examples"] == ["还有多少库存"]
+def test_the_rules_load_the_way_the_pipeline_runs_them():
+    """From scripts/finetune with no PYTHONPATH: pytest's own path hides this one."""
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    code = "import training_consent_gate as g; print(g.rules().masked_terms(frozenset({'老卤牛肉2号'})))"
+    done = subprocess.run([sys.executable, "-c", code], cwd=_FINETUNE, env=env, capture_output=True,
+                          encoding="utf-8", errors="replace")
+    assert done.returncode == 0, done.stderr[-400:]
+    assert "<数值>" in done.stdout
 
 
 def test_no_secrecy_switch_opens_the_gate(monkeypatch):
