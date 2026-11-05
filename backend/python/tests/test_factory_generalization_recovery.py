@@ -29,6 +29,18 @@ def test_unknown_quarantine_preserves_original_ledger_and_locks_local_prediction
 
 @pytest.mark.parametrize('unknown',['positive','ambiguous'])
 def test_recovery_never_calls_unknown_and_scores_it_wrong_without_dropping_rows(tmp_path,monkeypatch,unknown):
+    # This unit contract tests recovery transport/accounting, not the optional
+    # training-runtime sklearn dependency. Keep an independent count/F1 oracle.
+    def count_scores(rows):
+        n=len(rows);correct=sum(r['label']==r['prediction'] for r in rows)
+        labels={r['label'] for r in rows}|{r['prediction'] for r in rows};f1=[]
+        for label in labels:
+            tp=sum(r['label']==label and r['prediction']==label for r in rows)
+            fp=sum(r['label']!=label and r['prediction']==label for r in rows)
+            fn=sum(r['label']==label and r['prediction']!=label for r in rows)
+            f1.append(2*tp/(2*tp+fp+fn) if 2*tp+fp+fn else 0.)
+        return dict(n=n,correct=correct,accuracy=correct/n,macro_f1=sum(f1)/len(f1))
+    monkeypatch.setattr(recovery,'scores',count_scores)
     policy=dict(temperature=1.,confidence=.95,margin=.05,mini_confidence=.8,critic_enabled=False,model_sha256='frozen-weights')
     selected=dict(validation=dict(accuracy=1.),training_validation_gap=0.)
     monkeypatch.setattr(recovery,'validate',lambda _: (dict(aliases={}),policy,selected))
@@ -51,6 +63,7 @@ def test_recovery_never_calls_unknown_and_scores_it_wrong_without_dropping_rows(
     assert unknown not in called and len(called)==2
     summary=json.loads((tmp_path/'confirmation-summary.json').read_text(encoding='utf-8'))
     assert summary['n']==3 and summary['hybrid']['n']==3 and summary['hybrid']['correct']==2
+    assert summary['hybrid']['macro_f1']==pytest.approx(.5)
     paired=recovery.read(tmp_path/'confirmation-paired.jsonl')
     assert next(r for r in paired if r['record_id']==unknown)['prediction']=='__API_ERROR__'
     assert summary['primary_confirmation_openings']==1
