@@ -64,7 +64,7 @@ public class PlatformFactoryControlAuthority {
         writeLock.lock(factoryId);
     }
 
-    private void checkFactory(String factoryId) {
+    public void checkFactory(String factoryId) {
         if (factoryId == null || !factoryId.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,49}")) {
             throw new BusinessException(400, "工厂标识无效或超过业务配置支持长度");
         }

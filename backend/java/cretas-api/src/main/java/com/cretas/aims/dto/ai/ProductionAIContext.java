@@ -127,6 +127,12 @@ public class ProductionAIContext {
      */
     private Integer excludedProtectedProductCount;
 
+    /**
+     * 给 AI 的版本里成本被隐藏的产品行数: 比上面那个数宽, 还含同计划的普通联产品和认不出产品的行。
+     * 上面那个数只数保密产品, 认不出的行让它是 0; 要告诉读者「有几行没有成本」时用这个。null 含义同上。
+     */
+    private Integer costWithheldProductCount;
+
     // ========== 计算时间 ==========
 
     /**

@@ -23,7 +23,7 @@
       "offRequiresConfirmation" : false,
       "offConfirmWarning" : null,
       "effectiveOnlyWhen" : "PROCESS_SECRET",
-      "offEffect" : "关闭后，平台人员可查看、编辑配方和成本，可做 AI 分析（仍须指明是哪家工厂；每一次查看、编辑都记入保密访问记录）。只在「工艺保密」开启时起作用：工艺保密关闭时，本厂配方本来就不遮挡，这一项不起作用。"
+      "offEffect" : "开启时，平台人员不能自己查看、编辑配方和成本；关闭后可以，每一次都记入保密访问记录。只在「工艺保密」开启时起作用。这一项不影响平台授权的 AI 分析入口：它仍可分析数据，包括保密产品的成本，每次使用都记入保密访问记录；平台超级管理员不需要授权，其他平台账号须经授权。"
     },
     {
       "code" : "EGRESS_REDACTION",

@@ -52,6 +52,14 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
     // 平台API路径前缀
     private static final String PLATFORM_API_PREFIX = "/api/platform";
 
+    /**
+     * 平台 AI 分析入口给所有平台角色用 (Steve 2026-11-04), 是否开通由入口自己按库里的授权判,
+     * 这里只把这一条路由从「平台管理员角色」白名单里放出来。⛔ 只匹配这一条完整路径; 带斜杠结尾 / 矩阵参数的变体
+     * 匹配不上, 照旧按角色白名单挡。平台令牌 ({@code platformPrincipal}) 仍是硬要求。
+     */
+    private static final Pattern PLATFORM_AI_ANALYSIS_ENTRY =
+            Pattern.compile("/api/platform/factories/[^/;]+/ai-analysis/cost/time-range");
+
     // Internal API shared secret (Python→Java calls)
     private static final String INTERNAL_API_SECRET = System.getenv("INTERNAL_API_SECRET") != null
             ? System.getenv("INTERNAL_API_SECRET") : "";
@@ -277,7 +285,9 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
             }
 
             // 检查是否有平台管理员角色
-            if (!platformPrincipal || tokenRole == null || !PLATFORM_ADMIN_ROLES.contains(tokenRole.toLowerCase())) {
+            boolean roleAdmitted = tokenRole != null && (PLATFORM_ADMIN_ROLES.contains(tokenRole.toLowerCase())
+                    || isPlatformAiAnalysisEntry(request.getMethod(), requestUri));
+            if (!platformPrincipal || !roleAdmitted) {
                 log.warn("平台API权限不足: userId={}, role={}, uri={}",
                         userId, tokenRole, requestUri);
                 sendForbiddenResponse(response, "无权访问平台管理API，需要平台管理员权限");
@@ -329,6 +339,10 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
         // 继续处理请求
         return true;
+    }
+
+    private static boolean isPlatformAiAnalysisEntry(String method, String uri) {
+        return "POST".equalsIgnoreCase(method) && PLATFORM_AI_ANALYSIS_ENTRY.matcher(uri).matches();
     }
 
     private boolean admitFactory(HttpServletResponse response, String factoryId, Long userId, String tokenFactoryId,
