@@ -9,6 +9,7 @@ import com.cretas.aims.entity.material.MaterialPackagingSpec;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.event.PurchaseOrderSupplyChangedEvent;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -48,6 +49,7 @@ public class MaterialMergeReferenceReplacer {
 
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final UnitContractService unitContractService;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -336,21 +338,27 @@ public class MaterialMergeReferenceReplacer {
             }
             List<String> targetIds = strings(entityManager.createNativeQuery(
                             "SELECT id FROM material_packaging_specs WHERE factory_id = ?1 "
-                                    + "AND material_type_id = ?2 AND package_unit = ?3 "
-                                    + "AND base_unit = ?4 AND conversion_factor = ?5 "
+                                    + "AND material_type_id = ?2 AND conversion_factor = ?3 "
                                     + "AND deleted_at IS NULL AND is_active = TRUE ORDER BY id")
                     .setParameter(1, factoryId)
                     .setParameter(2, master.getId())
-                    .setParameter(3, source.getPackageUnit())
-                    .setParameter(4, source.getBaseUnit())
-                    .setParameter(5, source.getConversionFactor())
+                    .setParameter(3, source.getConversionFactor())
                     .getResultList());
-            if (targetIds.size() != 1) {
-                throw mergeConflict(targetIds.isEmpty()
+            List<MaterialPackagingSpec> equivalents = targetIds.stream()
+                    .map(id -> entityManager.find(MaterialPackagingSpec.class, id))
+                    .filter(Objects::nonNull)
+                    .filter(candidate -> factoryId.equals(candidate.getFactoryId())
+                            && master.getId().equals(candidate.getMaterialTypeId())
+                            && Boolean.TRUE.equals(candidate.getActive()))
+                    .filter(candidate -> sameStorageUnit(factoryId, source.getPackageUnit(), candidate.getPackageUnit())
+                            && sameStorageUnit(factoryId, source.getBaseUnit(), candidate.getBaseUnit()))
+                    .toList();
+            if (equivalents.size() != 1) {
+                throw mergeConflict(equivalents.isEmpty()
                         ? "主物料没有等价的原料包装规格，不能自动替换"
                         : "主物料有多个等价的原料包装规格，不能猜采购依据");
             }
-            MaterialPackagingSpec target = entityManager.find(MaterialPackagingSpec.class, targetIds.get(0));
+            MaterialPackagingSpec target = equivalents.get(0);
             if (target == null || !factoryId.equals(target.getFactoryId())
                     || !master.getId().equals(target.getMaterialTypeId())
                     || !Boolean.TRUE.equals(target.getActive())) {
@@ -468,7 +476,7 @@ public class MaterialMergeReferenceReplacer {
                 .map(id -> entityManager.find(SupplierMaterialPurchaseSpec.class, id))
                 .filter(Objects::nonNull)
                 .filter(candidate -> Objects.equals(targetMaterialTypeId, candidate.getMaterialTypeId()))
-                .filter(candidate -> equivalentSpec(source, candidate))
+                .filter(candidate -> equivalentSpec(factoryId, source, candidate))
                 .map(SupplierMaterialPurchaseSpec::getId)
                 .toList();
         if (equivalents.size() != 1) {
@@ -479,13 +487,21 @@ public class MaterialMergeReferenceReplacer {
         return equivalents.get(0);
     }
 
-    private boolean equivalentSpec(SupplierMaterialPurchaseSpec left, SupplierMaterialPurchaseSpec right) {
-        return Objects.equals(left.getPurchasePackageUnit(), right.getPurchasePackageUnit())
-                && Objects.equals(left.getInventoryBaseUnit(), right.getInventoryBaseUnit())
+    private boolean equivalentSpec(String factoryId, SupplierMaterialPurchaseSpec left, SupplierMaterialPurchaseSpec right) {
+        return sameStorageUnit(factoryId, left.getPurchasePackageUnit(), right.getPurchasePackageUnit())
+                && sameStorageUnit(factoryId, left.getInventoryBaseUnit(), right.getInventoryBaseUnit())
                 && sameDecimal(left.getConversionFactor(), right.getConversionFactor())
                 && sameDecimal(left.getQuotedPrice(), right.getQuotedPrice())
                 && sameDecimal(left.getTaxIncludedQuotedPrice(), right.getTaxIncludedQuotedPrice())
                 && Objects.equals(left.getCurrency(), right.getCurrency());
+    }
+
+    /** Alias identity only; quantities, prices and conversion factors are never implicitly converted. */
+    private boolean sameStorageUnit(String factoryId, String left, String right) {
+        if (left == null || right == null || left.isBlank() || right.isBlank()) return false;
+        String l = unitContractService.storageUnit(factoryId, left);
+        String r = unitContractService.storageUnit(factoryId, right);
+        return l != null && !l.isBlank() && l.equals(r);
     }
 
     private boolean sameDecimal(BigDecimal left, BigDecimal right) {

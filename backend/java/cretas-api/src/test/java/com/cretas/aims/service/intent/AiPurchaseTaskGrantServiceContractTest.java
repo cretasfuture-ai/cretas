@@ -657,8 +657,21 @@ class AiPurchaseTaskGrantServiceContractTest {
         SupplierMaterialRepository relations = mock(SupplierMaterialRepository.class);
         Supplier supplier = new Supplier(); supplier.setId("SUP-1"); supplier.setIsActive(true);
         when(suppliers.findByIdAndFactoryId("SUP-1", "F-1")).thenReturn(Optional.of(supplier));
-        RawMaterialType material = new RawMaterialType(); material.setId("MAT-1"); material.setFactoryId("F-1"); material.setName("raw"); material.setUnit("kg");
+        RawMaterialType material = new RawMaterialType(); material.setId("MAT-1"); material.setFactoryId("F-1"); material.setName("raw"); material.setUnit("kg"); material.setIsActive(true);
         when(materials.findById("MAT-1")).thenReturn(Optional.of(material));
+        when(materials.lockByFactoryIdAndIdIn("F-1", List.of("MAT-1"))).thenReturn(List.of(material));
+        when(materials.findFreshWriteStateByFactoryIdAndIdIn("F-1", List.of("MAT-1")))
+                .thenAnswer(invocation -> {
+                    var state = mock(RawMaterialTypeRepository.WriteStateProjection.class);
+                    when(state.getId()).thenReturn("MAT-1");
+                    when(state.getIsActive()).thenReturn(jdbcTemplate.queryForObject(
+                            "SELECT is_active FROM raw_material_types WHERE factory_id=? AND id=?",
+                            Boolean.class, "F-1", "MAT-1"));
+                    when(state.getMergedIntoId()).thenReturn(jdbcTemplate.queryForObject(
+                            "SELECT merged_into_id FROM raw_material_types WHERE factory_id=? AND id=?",
+                            String.class, "F-1", "MAT-1"));
+                    return List.of(state);
+                });
         SupplierMaterial relation = new SupplierMaterial(); relation.setId("REL-1"); relation.setFactoryId("F-1"); relation.setSupplierId("SUP-1"); relation.setMaterialTypeId("MAT-1"); relation.setPurchaseUnit("kg"); relation.setActive(true);
         when(relations.existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue("F-1", "SUP-1", "MAT-1")).thenReturn(true);
         when(relations.findByFactoryIdAndSupplierIdAndMaterialTypeId("F-1", "SUP-1", "MAT-1")).thenReturn(Optional.of(relation));
