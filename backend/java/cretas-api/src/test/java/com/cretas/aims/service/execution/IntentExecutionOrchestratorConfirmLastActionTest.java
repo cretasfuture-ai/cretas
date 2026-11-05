@@ -74,6 +74,7 @@ class IntentExecutionOrchestratorConfirmLastActionTest {
     @BeforeEach
     void setUp() {
         aiIntentService = mock(AIIntentService.class);
+        when(aiIntentService.hasPermission("WORK_PROCESS_TASK_START", ROLE)).thenReturn(true);
         toolRegistry = mock(ToolRegistry.class);
         tokenService = mock(PreviewTokenService.class);
         tool = new ScriptedStartTool();
