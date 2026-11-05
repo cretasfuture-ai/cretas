@@ -186,3 +186,10 @@ A: 增加训练样本数量，或减少 `--freeze-layers` (如 6)
 
 ### Q: GPU 内存不足怎么办?
 A: 减小 `--batch-size` (如 4) 或增加 `--freeze-layers`
+## 266类工厂目录独立实验
+
+`factory_experiment.py` 为离线实验入口，复用 `incremental_finetune.py`，支持显式验证集和保护测试集。输入为外部证据目录中的 `authored-families.json`（每标签依次为训练、验证、测试表达数组），以及上一轮本机基线及语料。先运行 `prepare --evidence <目录>` 冻结数据与哈希，再运行 `train`、`local`；不要覆盖已存在的实验目录。新266类头只按相同标签名转移旧分类权重，新类另行初始化，原模型目录不写入。
+
+`factory_cloud_shadow.py --evidence <目录>` 只把合成文本和无真值的候选提交给三个已指定的OpenAI模型；使用本机已有 `.codex/secrets/cretas-openai-eval.env`，不打印密钥。最多500次计划请求，最多3并发，不自动重试，未决请求先检查回执；不能据此确认账户剩余额度。TF-IDF候选是离线替代实验，不代表线上BM25/向量召回效果。
+
+35条原始审核和所有已评测文本只用于保护诊断；训练只能接收独立新样本。禁止按测试成绩修改阈值、补真值候选、重标测试标签，或用教师一致作为自动训练批准。生成的权重/业务语料/请求回执保存在Git以外；具体结果与局限见 `docs/dispatch/archive/2026-11-05-intent266-local-experiment.md`。本入口不部署、不替换生产模型。
