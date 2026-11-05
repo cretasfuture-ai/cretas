@@ -6,14 +6,21 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
-- `SEMANTIC-SALES-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476修正；订单/库存样板，统一语义上下文、直达准入、参数纠正及修复。scope含Java识别DTO/入口/会话服务、Python ai、专项tests/证据。保留freeze；无生产写/训练/模型替换/部署。
-- `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
+
+- `SEMANTIC-PREVIEW-REVISION-20261106` — `review` — Owner /root/preview_revision — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PreviewToken revision invalidation + contract/JPA gates; root runs Maven; no production writes/deploy/train.
+- `SEMANTIC-CONVERSATION-STATE-20261106` — `review` — Owner /root/conversation_state — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — scope ConversationSession/Repository及ConversationService/Impl，持久化暂停恢复；不建平行库。验收PauseResumeContractTest及真实JPA StartupGuard；root统一Maven，保留安全门禁。
+- `SEMANTIC-FOLLOWUP-SAFETY-20261106` — `review` — Owner /root/followup_safety — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — scope FollowUpResolver及其测试；堵成功写后SET/SUB累计重放与未知单位丢失。验收FollowUpResolverTest、FollowUpSubmittedWriteSafetyContractTest；root统一Maven，禁止生产/训练/部署。
+- `SEMANTIC-SALES-20261105` — `review` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476修正；订单/库存样板，统一语义上下文、直达准入、参数纠正及修复。scope含Java识别DTO/入口/会话服务、Python ai、专项tests/证据。保留freeze；无生产写/训练/模型替换/部署。
 
 
 
-- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `c24e11bb0a2c8e2714981d51b86849bd6fa2a8de` — #1469已发/44业务通过；#1480代码已合，两个S3代码scope归档释放。继续官方发布/OTA及F006自有S302/309/315业务；QA对象/5558独占详本机协调状态，S610本人签署待。
 
-- `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
+
+
+
+
+
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `blocked` — Owner `01a1a954/root` — Base `898877a2a981159291b16c523f99f822d7c4a2f0` — 软件修复/发布/实收47通过，2原成本豁免；仅S6-10业务代表与QA本人试点签署未提供，禁止代签。代码scope/生产锁/设备均释放；证据及对象保留见archive/2026-11-06-tasks-business-final-closeout.md。
 
 
 
@@ -114,7 +121,11 @@
 
 
 ## Scope 锁地图
-- `SEMANTIC-SALES-20261105`：Java execution/识别DTO/会话；Python ai/{api,dto,orchestrator,registry,matcher/decision}；Web AIQuery/intent-chat新会话声明；专项tests/证据。Owner同任务行；独立worktree；不含Repository/Entity/训练/线上。
+
+- `SEMANTIC-PREVIEW-REVISION-20261106`：PreviewTokenService/Impl、IntentPreviewTokenRepository、PreviewRevisionInvalidationContractTest/StartupGuardTest；Owner /root/preview_revision；root统一Maven。
+- `SEMANTIC-CONVERSATION-STATE-20261106`：精确scope见archive/2026-11-06-semantic-conversation-scope.json；Owner /root/conversation_state；含短事务/actor锁和相关fixture更新，不写其他文件/ACTIVE/迁移/target；JPA必验，root统一Maven。
+- `SEMANTIC-FOLLOWUP-SAFETY-20261106`：execution/FollowUpResolver.java、FollowUpResolverTest.java、FollowUpSubmittedWriteSafetyContractTest.java；Owner /root/followup_safety；不改其他文件/ACTIVE/target，root统一验证。
+- `SEMANTIC-SALES-20261105`：Java execution/识别DTO/会话、crm/OrderQueryTool及身份契约测试；Python ai/{api,dto,orchestrator,registry,matcher/decision}；Web AIQuery/intent-chat；专项tests/证据。Owner同任务行；独立worktree；Entity/Repo由子任务锁定；禁训练/线上。
 
 
 

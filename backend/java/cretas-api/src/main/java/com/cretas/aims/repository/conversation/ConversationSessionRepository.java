@@ -3,11 +3,13 @@ package com.cretas.aims.repository.conversation;
 import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.entity.conversation.ConversationSession.SessionStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import jakarta.persistence.LockModeType;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -21,6 +23,43 @@ import java.util.Optional;
  */
 @Repository
 public interface ConversationSessionRepository extends JpaRepository<ConversationSession, String> {
+
+    /**
+     * Serializes all state transitions owned by one factory/user actor.  The
+     * deterministic order avoids two paused sessions being resumed at once.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM ConversationSession s " +
+           "WHERE s.factoryId = :factoryId AND s.userId = :userId " +
+           "AND s.status IN ('ACTIVE', 'PAUSED') " +
+           "ORDER BY s.sessionId ASC")
+    List<ConversationSession> findByFactoryIdAndUserIdForUpdate(
+        @Param("factoryId") String factoryId,
+        @Param("userId") Long userId
+    );
+
+    /** Transaction-scoped owner mutex; works even when the actor has no rows yet. */
+    @Query(value = "SELECT 1 FROM pg_advisory_xact_lock(" +
+            "hashtextextended(CAST(:ownerKey AS text), 0))", nativeQuery = true)
+    Integer lockActorAdvisory(@Param("ownerKey") String ownerKey);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM ConversationSession s " +
+           "WHERE s.sessionId = :sessionId AND s.factoryId = :factoryId " +
+           "AND s.userId = :userId")
+    Optional<ConversationSession> findBySessionIdAndFactoryIdAndUserIdForUpdate(
+        @Param("sessionId") String sessionId,
+        @Param("factoryId") String factoryId,
+        @Param("userId") Long userId
+    );
+
+    @Query("SELECT s FROM ConversationSession s " +
+           "WHERE s.factoryId = :factoryId AND s.userId = :userId " +
+           "AND s.status = 'PAUSED' ORDER BY s.createdAt DESC")
+    List<ConversationSession> findPausedByFactoryAndUser(
+        @Param("factoryId") String factoryId,
+        @Param("userId") Long userId
+    );
 
     Optional<ConversationSession> findBySessionIdAndFactoryIdAndUserId(
         String sessionId,
@@ -76,7 +115,7 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
      * 活跃状态 + 最后活跃时间超过阈值
      */
     @Query("SELECT s FROM ConversationSession s " +
-           "WHERE s.status = 'ACTIVE' " +
+           "WHERE s.status IN ('ACTIVE', 'PAUSED') " +
            "AND s.lastActiveAt < :expireTime")
     List<ConversationSession> findExpiredSessions(@Param("expireTime") LocalDateTime expireTime);
 
@@ -123,7 +162,7 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
            "s.status = 'TIMEOUT', " +
            "s.completedAt = :now, " +
            "s.updatedAt = :now " +
-           "WHERE s.status = 'ACTIVE' " +
+           "WHERE s.status IN ('ACTIVE', 'PAUSED') " +
            "AND s.lastActiveAt < :expireTime")
     int expireInactiveSessions(
         @Param("expireTime") LocalDateTime expireTime,
@@ -169,7 +208,7 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
            "COUNT(CASE WHEN s.status = 'TIMEOUT' THEN 1 END) AS timeout, " +
            "COUNT(CASE WHEN s.status = 'CANCELLED' THEN 1 END) AS cancelled, " +
            "COUNT(CASE WHEN s.status = 'MAX_ROUNDS_REACHED' THEN 1 END) AS maxRounds, " +
-           "COUNT(s) AS total " +
+           "COUNT(CASE WHEN s.status <> 'PAUSED' THEN 1 END) AS total " +
            "FROM ConversationSession s " +
            "WHERE s.factoryId = :factoryId " +
            "AND s.createdAt >= :since")
@@ -202,7 +241,8 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
      */
     @Modifying
     @Query("DELETE FROM ConversationSession s " +
-           "WHERE s.status IN ('TIMEOUT', 'CANCELLED', 'MAX_ROUNDS_REACHED') " +
-           "AND s.completedAt < :before")
+           "WHERE s.status IN ('TIMEOUT', 'CANCELLED', 'MAX_ROUNDS_REACHED', 'PAUSED') " +
+           "AND (s.completedAt < :before OR " +
+           "(s.status = 'PAUSED' AND s.lastActiveAt < :before))")
     int deleteOldUnsuccessfulSessions(@Param("before") LocalDateTime before);
 }

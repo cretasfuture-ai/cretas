@@ -205,12 +205,12 @@ public final class FollowUpResolver {
         if ((m = QTY_ADD.matcher(text)).matches()) {
             BigDecimal n = parseNumber(m.group(1));
             result = n == null ? null : base.add(n);
-        } else if ((m = QTY_SUB.matcher(text)).matches()) {
-            BigDecimal n = parseNumber(m.group(1));
-            result = n == null ? null : base.subtract(n);
-        } else if ((m = QTY_SET_PREFIX.matcher(text)).matches() || (m = QTY_SET_SUFFIX.matcher(text)).matches()) {
-            result = parseNumber(m.group(1));
         } else {
+            // MATERIAL_BATCH_* tools all apply quantity as a delta.  SET/SUB follow-ups
+            // used to be converted to that same write with the derived total, so a
+            // successful 50 followed by "改成80" could consume another 80.  A correction
+            // or reversal needs its own explicit, domain-safe flow; do not manufacture a
+            // second business write from this follow-up resolver.
             return Optional.empty();
         }
         if (result == null || result.signum() <= 0 || !unitCompatible(m.group(2), p.get("unit"))) {
@@ -241,8 +241,14 @@ public final class FollowUpResolver {
     }
 
     private static boolean unitCompatible(String spoken, Object known) {
-        if (spoken == null || !(known instanceof String k)) {
+        if (spoken == null) {
             return true;
+        }
+        // A spoken unit must be checked against a unit carried by the successful
+        // action.  Accepting a missing/unknown known unit silently drops the spoken
+        // unit because MaterialBatchUseTool has no unit parameter.
+        if (!(known instanceof String k)) {
+            return false;
         }
         if (KG_UNITS.contains(spoken) && KG_UNITS.contains(k)) {
             return true;

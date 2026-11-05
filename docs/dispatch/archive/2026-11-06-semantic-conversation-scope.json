@@ -1,0 +1,24 @@
+{
+  "owner": "/root/conversation_state",
+  "taskId": "SEMANTIC-CONVERSATION-STATE-20261106",
+  "acceptance": "ConversationTaskRepairContractTest,ConversationPauseResumeContractTest,ConversationSessionPauseResumeStartupGuardTest,ConversationReadVersionContractTest plus listed related fixtures; root final Maven",
+  "baseSHA": "8fa0ac5268d98e962a8eb3d19b630507c170bd88",
+  "reason": "Short model-free transactions, owner advisory lock and existing constructor/mock fixture updates; no tests started by worker",
+  "allowedFiles": [
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/dto/ai/IntentExecuteRequest.java",
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/entity/conversation/ConversationSession.java",
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/repository/conversation/ConversationSessionRepository.java",
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/service/ConversationService.java",
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/service/execution/ConversationTaskRepairSupport.java",
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ConversationServiceImpl.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/ConversationTaskRepairContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SseStreamingServiceSlotContinuationTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SupplierComparisonDispatchContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SupplierComparisonStreamingContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ConversationHistoryEgressRedactionTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ConversationPauseResumeContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ConversationServiceIsolationTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ConversationSessionPauseResumeStartupGuardTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ConversationSlotAnswerGroundingContractTest.java"
+  ]
+}

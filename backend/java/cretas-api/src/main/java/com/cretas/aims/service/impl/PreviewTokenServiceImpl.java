@@ -2,25 +2,38 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.entity.intent.IntentPreviewToken.TokenStatus;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
 import com.cretas.aims.repository.intent.IntentPreviewTokenRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.math.BigDecimal;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** Atomic, command-bound implementation of the preview confirmation lifecycle. */
@@ -30,9 +43,20 @@ import java.util.UUID;
 public class PreviewTokenServiceImpl implements PreviewTokenService {
 
     private static final int MAX_RESOLUTION_MESSAGE_LENGTH = 500;
+    private static final Set<String> DRAFT_TECHNICAL_PARAMETER_KEYS = Set.of(
+            "factoryId", "factory_id", "tenantId", "tenant_id",
+            "userId", "user_id", "actorUserId", "actor_user_id",
+            "userRole", "user_role", "role", "userInput", "intentCode");
 
     private final IntentPreviewTokenRepository tokenRepository;
     private final ObjectMapper objectMapper;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    /** Injected separately so the existing two-argument compatibility constructor remains stable. */
+    @Autowired
+    private ConversationSessionRepository conversationSessionRepository;
 
     @Override
     @Transactional
@@ -82,6 +106,35 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
                 request.intentCode(), request.toolName(), request.descriptorVersion(),
                 request.expiresInSeconds());
         return saved;
+    }
+
+    @Override
+    @Transactional
+    public IntentPreviewToken createDraftBoundToken(BoundTokenRequest request,
+                                                    String sessionId,
+                                                    String expectedFingerprint) {
+        validateBoundRequest(request);
+        requireNonBlank(sessionId, "sessionId");
+        requireNonBlank(expectedFingerprint, "expectedFingerprint");
+        requireFactoryActor(request.factoryId(), request.userId());
+        ConversationSession session = lockDraftSession(
+                request.factoryId(), request.userId(), sessionId);
+        if (!isValidDraftSession(session, expectedFingerprint)) {
+            throw new IllegalStateException("conversation draft is stale or no longer active");
+        }
+        if (!draftParametersMatch(session, request.parameters())) {
+            throw new IllegalStateException("draft collected parameters do not match preview parameters");
+        }
+        Map<String, Object> currentValues = new LinkedHashMap<>(request.currentValues());
+        currentValues.put("_conversationDraft", Map.of(
+                "sessionId", sessionId,
+                "revision", expectedFingerprint));
+        BoundTokenRequest boundRequest = new BoundTokenRequest(
+                request.factoryId(), request.userId(), request.username(), request.intentCode(),
+                request.intentName(), request.toolName(), request.descriptorVersion(),
+                request.executionMode(), request.entityType(), request.entityId(), request.operation(),
+                request.parameters(), currentValues, request.newValues(), request.expiresInSeconds());
+        return createBoundToken(boundRequest);
     }
 
     /**
@@ -168,6 +221,13 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
             return ClaimResult.failure("令牌无效或已过期");
         }
 
+        // Every production claim shares the conversation worker's owner mutex. Typed factory
+        // actor proof is intentionally deferred until the token is known to be draft-bound, so
+        // legacy/system confirmation tickets retain their existing principal contract.
+        if (conversationSessionRepository != null) {
+            lockActor(factoryId, userId);
+        }
+
         Optional<IntentPreviewToken> existingOpt = tokenRepository.findByToken(token);
         if (existingOpt.isEmpty()) {
             log.warn("确认认领失败: tokenFingerprint={}, reason=not-found", tokenFingerprint);
@@ -185,6 +245,27 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
             log.warn("确认认领失败: tokenFingerprint={}, reason=status-{}",
                     tokenFingerprint, existing.getStatus());
             return ClaimResult.failure("令牌已被处理: " + existing.getStatus());
+        }
+
+        Optional<DraftBinding> draftBinding = readDraftBinding(existing.getCurrentValues());
+        if (hasDraftBindingMarker(existing.getCurrentValues())) {
+            if (conversationSessionRepository == null) {
+                throw new IllegalStateException("draft-bound claim requires ConversationSessionRepository");
+            }
+            if (!isCurrentFactoryActor(factoryId, userId)) {
+                return ClaimResult.failure("草稿预览需要当前工厂用户主体");
+            }
+        }
+        if (hasDraftBindingMarker(existing.getCurrentValues())
+                && (draftBinding.isEmpty()
+                || !isValidDraftBinding(factoryId, userId, draftBinding.get()))) {
+            int cancelled = tokenRepository.cancelPendingToken(
+                    token, factoryId, userId, "会话草稿已变化，预览已失效",
+                    LocalDateTime.now(), TokenStatus.PENDING, TokenStatus.CANCELLED);
+            if (cancelled != 1) {
+                throw new IllegalStateException("draft-bound preview invalidation lost its conditional update");
+            }
+            return ClaimResult.failure("会话草稿已变化，请重新发起预览");
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -291,6 +372,20 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public boolean hasPendingDraftPreview(String factoryId, Long userId,
+                                           String sessionId, String revision) {
+        if (factoryId == null || factoryId.isBlank() || userId == null
+                || sessionId == null || sessionId.isBlank()
+                || revision == null || revision.isBlank()
+                || !isCurrentFactoryActor(factoryId, userId)
+                || conversationSessionRepository == null) {
+            return false;
+        }
+        return hasPendingDraftPreviewInternal(factoryId, userId, sessionId, revision);
+    }
+
+    @Override
     @Transactional
     public boolean cancelToken(String token, String factoryId, Long userId, String reason) {
         int cancelled = tokenRepository.cancelPendingToken(
@@ -298,6 +393,135 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
                 LocalDateTime.now(), TokenStatus.PENDING, TokenStatus.CANCELLED);
         log.info("取消预览令牌: tokenFingerprint={}, cancelled={}", fingerprint(token), cancelled);
         return cancelled == 1;
+    }
+
+    @Override
+    @Transactional
+    public boolean invalidateForRevision(String factoryId, Long userId, String intentCode) {
+        if (factoryId == null || factoryId.isBlank() || userId == null
+                || intentCode == null || intentCode.isBlank()) {
+            return false;
+        }
+        if (AuthenticatedActor.fromCurrentExecution()
+                .filter(actor -> actor.type() == AuthenticatedActorType.FACTORY_USER
+                        && userId.equals(actor.id())
+                        && factoryId.equals(actor.factoryId()))
+                .isEmpty()) {
+            log.warn("拒绝预览修订失效: reason=missing-or-mismatched-factory-actor, factory={}, user={}, intent={}",
+                    factoryId, userId, intentCode);
+            return false;
+        }
+        if (conversationSessionRepository == null) {
+            throw new IllegalStateException("预览修订失效缺少ConversationSessionRepository");
+        }
+        lockActor(factoryId, userId);
+        if (entityManager == null) {
+            throw new IllegalStateException("预览修订失效缺少JPA EntityManager");
+        }
+
+        List<IntentPreviewToken> activeTokens = tokenRepository
+                .findActiveByFactoryIdAndUserIdAndIntentCodeForUpdate(
+                        factoryId, userId, intentCode, TokenStatus.PENDING, TokenStatus.EXECUTING);
+
+        // A repository query can return a previously managed instance. Refresh under the same
+        // pessimistic lock so a concurrent claim cannot be hidden by a stale PENDING snapshot.
+        activeTokens.forEach(token -> entityManager.refresh(token, LockModeType.PESSIMISTIC_WRITE));
+
+        // A ticket without the trusted tenant binding is not owned by this factory actor.
+        // Do not cancel it or report a successful invalidation in that case.
+        for (IntentPreviewToken token : activeTokens) {
+            if (!factoryId.equals(token.getFactoryId())
+                    || !factoryId.equals(token.getTenantId())
+                    || !userId.equals(token.getUserId())
+                    || !intentCode.equals(token.getIntentCode())) {
+                log.warn("拒绝预览修订失效: reason=owner-scope-mismatch, factory={}, user={}, intent={}",
+                        factoryId, userId, intentCode);
+                return false;
+            }
+            if (token.getStatus() == TokenStatus.EXECUTING) {
+                log.warn("拒绝预览修订失效: reason=executing-ticket, factory={}, user={}, intent={}",
+                        factoryId, userId, intentCode);
+                return false;
+            }
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        for (IntentPreviewToken token : activeTokens) {
+            if (token.getStatus() == TokenStatus.PENDING) {
+                int cancelled = tokenRepository.cancelPendingToken(
+                        token.getToken(), factoryId, userId, "被修订前的预览失效操作替代",
+                        now, TokenStatus.PENDING, TokenStatus.CANCELLED);
+                if (cancelled != 1) {
+                    // The row lock normally makes this impossible. Throw so Spring rolls back
+                    // every cancellation already issued in this transaction instead of leaving
+                    // a partially invalidated revision state behind.
+                    log.warn("预览修订失效条件更新未命中: factory={}, user={}, intent={}",
+                            factoryId, userId, intentCode);
+                    throw new IllegalStateException("预览修订失效条件更新未命中");
+                }
+            }
+        }
+        return true;
+    }
+
+    @Override
+    @Transactional
+    public boolean invalidateDraftForRevision(String factoryId, Long userId, String intentCode,
+                                              String sessionId, String expectedFingerprint) {
+        if (factoryId == null || factoryId.isBlank() || userId == null
+                || intentCode == null || intentCode.isBlank()
+                || sessionId == null || sessionId.isBlank()
+                || expectedFingerprint == null || expectedFingerprint.isBlank()) {
+            return false;
+        }
+        if (!isCurrentFactoryActor(factoryId, userId)
+                || conversationSessionRepository == null || entityManager == null) {
+            return false;
+        }
+        lockActor(factoryId, userId);
+        ConversationSession session = conversationSessionRepository
+                .findBySessionIdAndFactoryIdAndUserIdForUpdate(sessionId, factoryId, userId)
+                .orElse(null);
+        if (session == null || !isValidDraftInvalidationSession(session, expectedFingerprint)) {
+            return false;
+        }
+
+        List<IntentPreviewToken> activeTokens = tokenRepository
+                .findActiveByFactoryIdAndUserIdAndIntentCodeForUpdate(
+                        factoryId, userId, intentCode, TokenStatus.PENDING, TokenStatus.EXECUTING);
+        activeTokens.forEach(token -> entityManager.refresh(token, LockModeType.PESSIMISTIC_WRITE));
+        List<IntentPreviewToken> matching = activeTokens.stream()
+                .filter(token -> factoryId.equals(token.getFactoryId())
+                        && factoryId.equals(token.getTenantId())
+                        && userId.equals(token.getUserId())
+                        && intentCode.equals(token.getIntentCode()))
+                .filter(token -> readDraftBinding(token.getCurrentValues())
+                        .filter(binding -> sessionId.equals(binding.sessionId())
+                                && expectedFingerprint.equals(binding.revision()))
+                        .isPresent())
+                .toList();
+        if (matching.stream().anyMatch(token -> token.getStatus() == TokenStatus.EXECUTING)) {
+            return false;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        List<IntentPreviewToken> livePending = matching.stream()
+                .filter(token -> token.getStatus() == TokenStatus.PENDING
+                        && token.getExpiresAt() != null
+                        && token.getExpiresAt().isAfter(now))
+                .toList();
+        if (session.getStatus() == ConversationSession.SessionStatus.COMPLETED
+                && livePending.isEmpty()) {
+            return false;
+        }
+        for (IntentPreviewToken token : matching) {
+            if (livePending.contains(token)
+                    && tokenRepository.cancelPendingToken(
+                    token.getToken(), factoryId, userId, "指定会话草稿修订已失效", now,
+                    TokenStatus.PENDING, TokenStatus.CANCELLED) != 1) {
+                throw new IllegalStateException("draft revision invalidation conditional update lost");
+            }
+        }
+        return true;
     }
 
     @Override
@@ -332,6 +556,172 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
             log.info("清理历史令牌: deleted={}, keepDays={}", deleted, daysToKeep);
         }
         return deleted;
+    }
+
+    private void requireFactoryActor(String factoryId, Long userId) {
+        if (!isCurrentFactoryActor(factoryId, userId)) {
+            throw new IllegalStateException("draft-bound preview requires the current factory actor");
+        }
+    }
+
+    private boolean isCurrentFactoryActor(String factoryId, Long userId) {
+        return AuthenticatedActor.fromCurrentExecution()
+                .filter(actor -> actor.type() == AuthenticatedActorType.FACTORY_USER
+                        && userId != null && userId.equals(actor.id())
+                        && factoryId != null && factoryId.equals(actor.factoryId()))
+                .isPresent();
+    }
+
+    /** Same lock order as ConversationServiceImpl: owner advisory, then owned mutable rows. */
+    private void lockActor(String factoryId, Long userId) {
+        conversationSessionRepository.lockActorAdvisory(ownerKey(factoryId, userId));
+        conversationSessionRepository.findByFactoryIdAndUserIdForUpdate(factoryId, userId);
+    }
+
+    private String ownerKey(String factoryId, Long userId) {
+        String factory = factoryId == null ? "" : factoryId;
+        return factory.length() + ":" + factory + ":" + String.valueOf(userId);
+    }
+
+    private ConversationSession lockDraftSession(String factoryId, Long userId, String sessionId) {
+        if (conversationSessionRepository == null) {
+            throw new IllegalStateException("draft-bound preview requires ConversationSessionRepository");
+        }
+        lockActor(factoryId, userId);
+        return conversationSessionRepository.findBySessionIdAndFactoryIdAndUserIdForUpdate(
+                        sessionId, factoryId, userId)
+                .orElseThrow(() -> new IllegalStateException("conversation draft session not found"));
+    }
+
+    private boolean isValidDraftSession(ConversationSession session, String expectedFingerprint) {
+        if (session == null || session.getStatus() == null || session.isExpired()) {
+            return false;
+        }
+        if (session.getStatus() != ConversationSession.SessionStatus.ACTIVE
+                && session.getStatus() != ConversationSession.SessionStatus.COMPLETED) {
+            return false;
+        }
+        if (entityManager == null) {
+            throw new IllegalStateException("draft-bound preview requires JPA EntityManager");
+        }
+        entityManager.refresh(session, LockModeType.PESSIMISTIC_WRITE);
+        return (session.getStatus() == ConversationSession.SessionStatus.ACTIVE
+                || session.getStatus() == ConversationSession.SessionStatus.COMPLETED)
+                && !session.isExpired()
+                && expectedFingerprint.equals(ConversationService.draftRevisionFingerprint(session));
+    }
+
+    private boolean isValidDraftBinding(String factoryId, Long userId, DraftBinding binding) {
+        if (conversationSessionRepository == null || entityManager == null) {
+            throw new IllegalStateException("draft-bound claim requires JPA conversation state");
+        }
+        Optional<ConversationSession> session = conversationSessionRepository
+                .findBySessionIdAndFactoryIdAndUserIdForUpdate(binding.sessionId(), factoryId, userId);
+        if (session.isEmpty()) {
+            return false;
+        }
+        ConversationSession locked = session.get();
+        entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE);
+        return isValidDraftSession(locked, binding.revision())
+                && binding.revision().equals(ConversationService.draftRevisionFingerprint(locked));
+    }
+
+    private boolean isValidDraftInvalidationSession(ConversationSession session,
+                                                    String expectedFingerprint) {
+        if (session == null || session.getStatus() == null || session.isExpired()) {
+            return false;
+        }
+        if (session.getStatus() != ConversationSession.SessionStatus.ACTIVE
+                && session.getStatus() != ConversationSession.SessionStatus.PAUSED
+                && session.getStatus() != ConversationSession.SessionStatus.COMPLETED) {
+            return false;
+        }
+        entityManager.refresh(session, LockModeType.PESSIMISTIC_WRITE);
+        return (session.getStatus() == ConversationSession.SessionStatus.ACTIVE
+                || session.getStatus() == ConversationSession.SessionStatus.PAUSED
+                || session.getStatus() == ConversationSession.SessionStatus.COMPLETED)
+                && !session.isExpired()
+                && expectedFingerprint.equals(ConversationService.draftRevisionFingerprint(session));
+    }
+
+    private boolean draftParametersMatch(ConversationSession session, Map<String, Object> parameters) {
+        if (session == null || parameters == null) {
+            return false;
+        }
+        Map<String, String> collected = session.getCollectedParameters();
+        for (String key : parameters.keySet()) {
+            if (!collected.containsKey(key) && !DRAFT_TECHNICAL_PARAMETER_KEYS.contains(key)) {
+                return false;
+            }
+        }
+        for (Map.Entry<String, String> entry : collected.entrySet()) {
+            if (!parameters.containsKey(entry.getKey())
+                    || !equivalentDraftValue(entry.getValue(), parameters.get(entry.getKey()))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean equivalentDraftValue(String expected, Object actual) {
+        if (expected == null || actual == null) {
+            return expected == null && actual == null;
+        }
+        try {
+            return new BigDecimal(expected).compareTo(new BigDecimal(String.valueOf(actual))) == 0;
+        } catch (NumberFormatException ignored) {
+            return expected.equals(String.valueOf(actual));
+        }
+    }
+
+    private boolean hasPendingDraftPreviewInternal(String factoryId, Long userId,
+                                                    String sessionId, String revision) {
+        List<IntentPreviewToken> pending = tokenRepository
+                .findByFactoryIdAndTenantIdAndUserIdAndStatus(
+                        factoryId, factoryId, userId, TokenStatus.PENDING);
+        LocalDateTime now = LocalDateTime.now();
+        return pending.stream()
+                .filter(token -> token.getExpiresAt() != null && token.getExpiresAt().isAfter(now))
+                .map(token -> readDraftBinding(token.getCurrentValues()).orElse(null))
+                .anyMatch(binding -> binding != null
+                        && sessionId.equals(binding.sessionId())
+                        && revision.equals(binding.revision()));
+    }
+
+    private Optional<DraftBinding> readDraftBinding(String currentValuesJson) {
+        if (currentValuesJson == null || currentValuesJson.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            JsonNode root = objectMapper.readTree(currentValuesJson);
+            JsonNode binding = root == null ? null : root.get("_conversationDraft");
+            if (binding == null || !binding.isObject()
+                    || binding.get("sessionId") == null || binding.get("revision") == null
+                    || !binding.get("sessionId").isTextual() || !binding.get("revision").isTextual()
+                    || binding.get("sessionId").asText().isBlank()
+                    || binding.get("revision").asText().isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(new DraftBinding(
+                    binding.get("sessionId").asText(), binding.get("revision").asText()));
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    private boolean hasDraftBindingMarker(String currentValuesJson) {
+        if (currentValuesJson == null || currentValuesJson.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(currentValuesJson);
+            return root != null && root.isObject() && root.has("_conversationDraft");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private record DraftBinding(String sessionId, String revision) {
     }
 
     private void validateBoundRequest(BoundTokenRequest request) {

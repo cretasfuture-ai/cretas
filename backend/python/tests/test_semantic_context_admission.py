@@ -59,3 +59,53 @@ def test_contextual_decision_is_fail_closed_when_not_available(reason):
         task_context={"contextStatus": "PRESENT"}))
     assert result.bestMatch is None and result.requiresConfirmation
     assert result.timingMs["contextFallbackBlocked"] == 1 and orch.llm_matcher.calls == 0
+
+
+@pytest.mark.parametrize("context", [
+    {"contextStatus": "NEW", "hasPageReference": False, "hasClientHistory": False},
+    {"contextStatus": "PRESENT", "taskStatus": "ACTIVE"},
+    {"contextStatus": "PRESENT", "taskStatus": "COMPLETED"},
+    {"contextStatus": "EXPIRED"}, {"contextStatus": "UNKNOWN"},
+    {"contextStatus": "NEW", "hasPageReference": True},
+])
+@pytest.mark.parametrize("query", ["查看详情", "上个月呢", "第一名库存呢", "取消"])
+def test_label_registry_enabled_and_bypassed_preserve_same_semantic_decision(context, query):
+    outcomes = []
+    for enabled in (True, False):
+        rows = ([{"factory_id": "F006", "business_type": "FACTORY",
+                  "normalized_text": registry.normalize(query, []), "intent_code": "CLOCK_OUT"}]
+                if enabled else [])
+        registry.set_registry(registry.build_snapshot(rows, []))
+        # Approved labels have no independent-route review; even NEW must reach the decision.
+        dec = FakeDecision(["MATERIAL_BATCH_QUERY"], {"MATERIAL_BATCH_QUERY": .98, "CLOCK_OUT": .02})
+        result = _run(_orch(dec), query=query, task_context=context)
+        outcomes.append((result.bestMatch.intentCode, result.requiresConfirmation, dec.choose_calls))
+        assert dec.choose_calls == 1
+        if enabled:
+            assert result.timingMs["registryCandidateOnly"] == 1 and "CLOCK_OUT" in dec.seen_options
+    assert outcomes[0] == outcomes[1]
+
+
+def test_registry_routes_and_labels_are_isolated_by_factory_and_domain():
+    query = "查看详情"
+    snap = registry.build_snapshot([{"factory_id": "F006", "business_type": "FACTORY",
+        "normalized_text": registry.normalize(query, []), "intent_code": "CLOCK_OUT"}], [])
+    assert registry.lookup(snap, query, "F006", "FACTORY")[0] == "CLOCK_OUT"
+    assert registry.lookup(snap, query, "F999", "FACTORY")[0] is None
+    assert registry.lookup(snap, query, "F006", "RESTAURANT")[0] is None
+
+
+@pytest.mark.parametrize("related", [{"slotTask": {}}, {"pageReference": {}},
+    {"lastActionCommitted": {"status": "COMMITTED"}}, {"draftTasks": [{"status": "PAUSED"}]},
+    {"references": [{"type": "READ_QUERY", "id": "ORDER_LIST"}]}])
+def test_related_evidence_cannot_be_hidden_behind_a_new_flag(related):
+    query = "查看详情"
+    key = registry.normalize(query, [])
+    registry.set_registry(registry.build_snapshot([{"factory_id": "F006", "business_type": "FACTORY",
+        "normalized_text": key, "intent_code": "CLOCK_OUT"}], []))
+    registry.get_registry().standalone_routes = frozenset({("F006", "FACTORY", key, "CLOCK_OUT")})
+    dec = FakeDecision(["MATERIAL_BATCH_QUERY"], {"MATERIAL_BATCH_QUERY": .98, "CLOCK_OUT": .02})
+    result = _run(_orch(dec), query=query, task_context={"contextStatus": "NEW", **related})
+    assert result.bestMatch.intentCode == "MATERIAL_BATCH_QUERY" and dec.choose_calls == 1
+    prompt = history_block(_with_task_context([], {"contextStatus": "NEW", **related}))
+    assert next(iter(related)) in prompt

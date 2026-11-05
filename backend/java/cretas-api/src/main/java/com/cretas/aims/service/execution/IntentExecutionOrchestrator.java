@@ -87,6 +87,9 @@ public class IntentExecutionOrchestrator {
     private SalesRankingConversationSupport salesRankingConversationSupport;
     @org.springframework.beans.factory.annotation.Autowired
     private SemanticConversationContextService semanticConversationContextService;
+
+    @Autowired(required = false)
+    private ConversationTaskRepairSupport conversationTaskRepairSupport;
     /**
      * AI 数据访问审计: 一次意图执行一条; 期间的工具调用 / 成本分析并进这一条 (同一线程, 请求外也合并)。
      * 单测直接构造时不记录。
@@ -397,6 +400,15 @@ public class IntentExecutionOrchestrator {
             IntentExecuteResponse admissionFailure = SemanticConversationContextService.admissionFailure(request);
             if (admissionFailure != null) return admissionFailure;
         }
+        if (conversationTaskRepairSupport != null && !Boolean.TRUE.equals(request.getForceExecute())) {
+            IntentExecuteResponse repair = conversationTaskRepairSupport.prepare(factoryId,userId,request);
+            if (repair != null) return repair;
+            if (semanticConversationContextService != null)
+                semanticConversationContextService.prepare(factoryId,userId,request);
+            conversationTaskRepairSupport.refreshContext(factoryId,userId,request);
+            IntentExecuteResponse failure = SemanticConversationContextService.admissionFailure(request);
+            if (failure != null) return failure;
+        }
         if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
             hydrateRestaurantComparisonContext(factoryId, userId, request);
         }
@@ -694,6 +706,7 @@ public class IntentExecutionOrchestrator {
         // Parameter-filling continuations stay in Java when the semantic-first
         // restaurant path is disabled or the request is an operational write.
         if (!factoryPackConstrained
+                && (request.getSemanticTaskAction() == null || "CONTINUE".equals(request.getSemanticTaskAction()))
                 && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             IntentExecuteResponse conversationResponse = handleConversationContinuation(
                     factoryId, request, userId, userRole);
@@ -1477,6 +1490,10 @@ public class IntentExecutionOrchestrator {
         try {
             Optional<ConversationSession> pending = conversationService.getSession(
                     factoryId, userId, request.getSessionId());
+            if (pending.isEmpty() && !"CONTINUE".equals(request.getSemanticTaskAction())) return null;
+            if (pending.isPresent() && (pending.get().getStatus() != ConversationSession.SessionStatus.ACTIVE
+                    || pending.get().isExpired())) return "CONTINUE".equals(request.getSemanticTaskAction())
+                    ? IntentExecuteResponse.builder().status("TASK_CHANGED").message("任务已变化，未继续执行旧请求。").build() : null;
             if (pending.isPresent()
                     && SupplierComparisonReadIntent.CODE.equals(pending.get().getKnownIntentCode())) {
                 AIIntentConfig supplier = AIIntentConfig.builder()
@@ -1492,14 +1509,26 @@ public class IntentExecutionOrchestrator {
                     conversationService.continueConversation(
                             factoryId, userId, request.getSessionId(), request.getUserInput());
 
+            if (conversationResp != null && (conversationResp.isTaskChanged()
+                    || "CONTINUE".equals(request.getSemanticTaskAction())
+                    && (conversationResp.getStatus() == ConversationSession.SessionStatus.CANCELLED
+                    || conversationResp.getStatus() == ConversationSession.SessionStatus.TIMEOUT)))
+                return IntentExecuteResponse.builder().status("TASK_CHANGED")
+                        .message("任务已变化，未继续执行旧请求。").sessionId(request.getSessionId()).build();
+
             if (conversationResp == null ||
                 conversationResp.getStatus() == ConversationSession.SessionStatus.CANCELLED) {
                 return null; // Continue normal flow
             }
 
             if (conversationResp.isCompleted() && conversationResp.getIntentCode() != null) {
+                Map<String,Object> collected = new LinkedHashMap<>();
+                conversationService.getSession(factoryId,userId,request.getSessionId())
+                        .map(ConversationSession::getCollectedParameters).ifPresent(collected::putAll);
+                request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(collected));
                 conversationService.endConversation(
                         factoryId, userId, request.getSessionId(), conversationResp.getIntentCode());
+                request.setSemanticTaskAction("DRAFT_READY");
                 request.setIntentCode(conversationResp.getIntentCode());
                 request.setForceExecute(true);
                 return executeWithExplicitIntent(factoryId, request, userId, userRole);

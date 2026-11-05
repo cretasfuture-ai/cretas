@@ -52,7 +52,9 @@ public class EntitySlot {
         /** 菜品 */
         DISH,
         /** Last read-query parameters, scoped to this existing conversation memory. */
-        READ_QUERY
+        READ_QUERY,
+        /** Projection of a successful server Tool action; never draft state or execution authority. */
+        LAST_ACTION
     }
 
     /**

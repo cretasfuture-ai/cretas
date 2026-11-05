@@ -39,6 +39,15 @@ public class IntentExecuteRequest {
     private Map<String, Object> semanticPreviousRead;
     @com.fasterxml.jackson.annotation.JsonIgnore
     private String semanticReadVersion;
+    /** Server-only task repair decision; never accepted from HTTP JSON. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String semanticTaskAction;
+    /** Server-only opaque paused-draft reference to resume after a read. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String semanticResumeDraftId;
+    /** Server-only revision of the paused draft; prevents a late read from reviving a changed task. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String semanticResumeDraftRevision;
 
     /**
      * 用户输入的自然语言文本

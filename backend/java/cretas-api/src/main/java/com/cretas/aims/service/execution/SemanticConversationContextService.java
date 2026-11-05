@@ -21,7 +21,7 @@ public class SemanticConversationContextService {
     @org.springframework.beans.factory.annotation.Value("${cretas.ai.memory.expire-minutes:60}")
     private int expireMinutes = 60;
     private static final Set<String> PARAMS = Set.of("startDate", "endDate", "status", "page", "size",
-            "limit", "metric", "quantity", "unit", "materialTypeId", "productTypeId", "orderId", "batchId", "batchNumber");
+            "limit", "metric", "quantity", "unit", "materialTypeId", "productTypeId", "orderId", "batchId", "batchNumber", "queryType");
     @org.springframework.beans.factory.annotation.Autowired
     public SemanticConversationContextService(ConversationMemoryService memory) {
         this(memory, Clock.systemDefaultZone());
@@ -31,7 +31,9 @@ public class SemanticConversationContextService {
     }
 
     public void prepare(String factoryId, Long userId, IntentExecuteRequest request) {
-        request.setSemanticHistory(SseStreamingService.recentTurns(request));
+        Map<String,Object> priorSnapshot = request.getSemanticContext();
+        request.setSemanticHistory(SseStreamingService.recentTurns(request).stream()
+                .filter(turn -> "user".equals(turn.get("role"))).toList());
         request.setSemanticParameters(null);
         request.setSemanticParameterSources(null);
         request.setSemanticPreviousRead(null);
@@ -40,6 +42,10 @@ public class SemanticConversationContextService {
         snapshot.put("schemaVersion", 1);
         snapshot.put("contextStatus", "UNKNOWN");
         snapshot.put("provenance", "SERVER_CONVERSATION_MEMORY");
+        snapshot.put("referenceTime", priorSnapshot != null && priorSnapshot.get("referenceTime") instanceof String anchor
+                ? anchor : LocalDateTime.now(clock.withZone(java.time.ZoneId.of("Asia/Shanghai"))).toString());
+        if (priorSnapshot != null && priorSnapshot.containsKey("selectedIntentCandidate"))
+            snapshot.put("selectedIntentCandidate",priorSnapshot.get("selectedIntentCandidate"));
         boolean boundActor = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
                 .filter(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER
                         && Objects.equals(factoryId, a.factoryId()) && Objects.equals(userId, a.id())).isPresent();
@@ -113,7 +119,8 @@ public class SemanticConversationContextService {
                         });
                         task.put("parameters", safeValues); task.put("parameterSource", "PREVIOUS_COLLECTED_UNCONFIRMED_PROVENANCE");
                         snapshot.put("slotTask", task);
-                        if (pending.isExpired() && pending.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.ACTIVE) {
+                        if (pending.isExpired() && (pending.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.ACTIVE
+                                || pending.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.PAUSED)) {
                             snapshot.put("contextStatus", "EXPIRED"); snapshot.put("reason", "SLOT_SESSION_EXPIRED");
                         }
                     }
@@ -135,8 +142,22 @@ public class SemanticConversationContextService {
                         Map<String,Object> ref = new LinkedHashMap<>();
                         ref.put("type", type.name());
                         ref.put("reference", "entity-" + refs.size());
+                        if (type == EntitySlot.SlotType.LAST_ACTION && slot.getMetadata()!=null
+                                && "COMMITTED".equals(slot.getMetadata().get("status"))) {
+                            Map<String,Object> committed = new LinkedHashMap<>();
+                            committed.put("intentCode",slot.getId()); committed.put("status","COMMITTED");
+                            if (slot.getMetadata().get("toolName") instanceof String name) committed.put("toolName",name);
+                            Map<String,Object> safe = new LinkedHashMap<>();
+                            if (slot.getMetadata().get("params") instanceof Map<?,?> values)
+                                values.forEach((k,v) -> { if (k instanceof String key
+                                    && (LastActionContract.QUANTITY_KEYS.contains(key) || LastActionContract.UNIT_KEY.equals(key))
+                                    && LastActionContract.safeValue(key,v)!=null) safe.put(key,LastActionContract.safeValue(key,v)); });
+                            committed.put("parameters",safe);
+                            snapshot.put("lastActionCommitted",committed);
+                        }
                         if (type == EntitySlot.SlotType.READ_QUERY && slot.getMetadata() != null) {
-                            if (Set.of("ORDER_LIST", "MATERIAL_BATCH_QUERY", SalesRankingParameters.INTENT, "CLEARED").contains(slot.getId()))
+                            if (slot.getId()==null) throw new IllegalStateException("Stored read goal is missing");
+                            if (SalesRankingConversationSupport.isStoredRead(slot) || "CLEARED".equals(slot.getId()))
                                 ref.put("id", slot.getId());
                             Map<String,Object> params = new LinkedHashMap<>();
                             slot.getMetadata().forEach((k,v) -> {
@@ -145,6 +166,26 @@ public class SemanticConversationContextService {
                             });
                             Map<String,Object> local = new LinkedHashMap<>();
                             local.put("id", slot.getId()); local.put("parameters", Map.copyOf(params));
+                            if (slot.getMetadata().get("toolName") instanceof String sourceTool) {
+                                local.put("toolName",sourceTool); ref.put("toolName",sourceTool);
+                            }
+                            if (slot.getMetadata().get("resultReferences") instanceof List<?> resultRefs) {
+                                List<Map<String,Object>> localRefs = new ArrayList<>();
+                                List<Map<String,Object>> summaries = new ArrayList<>();
+                                for (Object value : resultRefs.stream().limit(LastActionContract.MAX_LIST_IDS).toList()) {
+                                    if (!(value instanceof Map<?,?> item) || !(item.get("reference") instanceof String token)
+                                            || !token.matches("order-result-[1-9][0-9]?") || !"ORDER".equals(item.get("entityType"))
+                                            || LastActionContract.safeValue("orderId",item.get("id")) == null) continue;
+                                    if (!(item.get("ordinal") instanceof Number ordinal) || ordinal.intValue() < 1
+                                            || ordinal.intValue() > LastActionContract.MAX_LIST_IDS
+                                            || !token.equals("order-result-"+ordinal.intValue())) continue;
+                                    Map<String,Object> summary = Map.of("reference",token,"entityType","ORDER",
+                                            "ordinal",ordinal.intValue(),"ranked",false);
+                                    Map<String,Object> actual = new LinkedHashMap<>(summary);
+                                    actual.put("id",item.get("id")); localRefs.add(actual); summaries.add(summary);
+                                }
+                                local.put("resultReferences",List.copyOf(localRefs)); ref.put("resultReferences",List.copyOf(summaries));
+                            }
                             for (String key : List.of("taskStatus", "reason")) {
                                 if (slot.getMetadata().get(key) instanceof String value) local.put(key, value);
                             }
@@ -162,7 +203,7 @@ public class SemanticConversationContextService {
                                 Map<String,String> safeSources = new LinkedHashMap<>();
                                 sources.forEach((k,v) -> {
                                     if (k instanceof String key && PARAMS.contains(key) && v instanceof String value
-                                            && Set.of("CURRENT_EXPLICIT", "PREVIOUS_VALUE", "SYSTEM_DEFAULT_OR_RESOLVER").contains(value)) safeSources.put(key, value);
+                                            && Set.of("CURRENT_EXPLICIT", "PREVIOUS_VALUE", "SYSTEM_DEFAULT_OR_RESOLVER", "SERVER_RESULT_REFERENCE").contains(value)) safeSources.put(key, value);
                                 });
                                 ref.put("parameterSources", safeSources);
                             }
@@ -172,7 +213,10 @@ public class SemanticConversationContextService {
                     snapshot.put("references", refs);
                 }
             } catch (RuntimeException failure) {
+                snapshot.put("contextStatus","UNKNOWN");
                 snapshot.put("reason", "STATE_READ_FAILED");
+                snapshot.remove("references"); snapshot.remove("slotTask"); snapshot.remove("lastActionCommitted");
+                request.setSemanticPreviousRead(null);
             }
         }
         request.setSemanticContext(Collections.unmodifiableMap(snapshot));
@@ -195,11 +239,26 @@ public class SemanticConversationContextService {
         return request.getSemanticContext() != null && "NEW".equals(request.getSemanticContext().get("contextStatus"))
                 && !Boolean.TRUE.equals(request.getSemanticContext().get("hasPageReference"))
                 && !Boolean.TRUE.equals(request.getSemanticContext().get("hasClientHistory"))
+                && !request.getSemanticContext().containsKey("slotTask")
+                && !request.getSemanticContext().containsKey("lastActionCommitted")
+                && !request.getSemanticContext().containsKey("pageReference")
+                && !hasItems(request.getSemanticContext().get("draftTasks"))
+                && !hasItems(request.getSemanticContext().get("references"))
                 && !request.getSemanticContext().containsKey("selectedIntentCandidate");
+    }
+
+    private static boolean hasItems(Object value) {
+        return value != null && (!(value instanceof java.util.Collection<?> items) || !items.isEmpty());
     }
 
     static List<Map<String,String>> effectiveHistory(IntentExecuteRequest request) {
         return request.getSemanticHistory() == null ? SseStreamingService.recentTurns(request) : request.getSemanticHistory();
+    }
+
+    static LocalDateTime referenceTime(IntentExecuteRequest request) {
+        if (request.getSemanticContext() != null && request.getSemanticContext().get("referenceTime") instanceof String time)
+            return LocalDateTime.parse(time);
+        return LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
     }
 
     static boolean hasReadContext(IntentExecuteRequest request) {

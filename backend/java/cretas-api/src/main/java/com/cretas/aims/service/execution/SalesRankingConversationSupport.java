@@ -116,7 +116,7 @@ public class SalesRankingConversationSupport {
 
     void applyCurrentParameters(IntentExecuteRequest request, Map<String, Object> params) {
         if (request.getSemanticContext() == null) SalesRankingParameters.apply(request.getUserInput(), params, LocalDate.now(clock));
-        else SalesRankingParameters.defaults(params, LocalDate.now(clock));
+        else SalesRankingParameters.defaults(params, SemanticConversationContextService.referenceTime(request).toLocalDate());
     }
 
     @org.springframework.transaction.annotation.Transactional
@@ -153,13 +153,18 @@ public class SalesRankingConversationSupport {
                 && request.getSemanticPreviousRead().get("parameters") instanceof Map<?,?> previous)
             previous.forEach((k,v) -> { if (k instanceof String key) metadata.put(key,v); });
         String previousIntent = request.getSemanticPreviousRead() == null ? null : String.valueOf(request.getSemanticPreviousRead().get("id"));
-        String reservedGoal = previousIntent != null && (SalesRankingParameters.INTENT.equals(previousIntent) || OTHER_READS.containsValue(previousIntent))
+        String reservedGoal = previousIntent != null && (SalesRankingParameters.INTENT.equals(previousIntent) || OTHER_READS.containsValue(previousIntent)
+                || "order_query".equals(request.getSemanticPreviousRead().get("toolName")))
                 ? previousIntent : "UNRESOLVED_READ";
         metadata.put(TURN_KEY, UUID.randomUUID().toString()); metadata.put("resolutionStatus", "RESOLVING");
         metadata.put("taskStatus", request.getSemanticPreviousRead() == null ? "UNRESOLVED"
                 : request.getSemanticPreviousRead().getOrDefault("taskStatus", "UNRESOLVED"));
         if (request.getSemanticPreviousRead() != null && request.getSemanticPreviousRead().get("reason") instanceof String reason)
             metadata.put("reason", reason);
+        if (request.getSemanticPreviousRead() != null && request.getSemanticPreviousRead().get("resultReferences") instanceof java.util.List<?> refs)
+            metadata.put("resultReferences", refs);
+        if (request.getSemanticPreviousRead() != null && request.getSemanticPreviousRead().get("toolName") instanceof String sourceTool)
+            metadata.put("toolName", sourceTool);
         boolean reserved = memory.compareAndSetReadQuery(factoryId, userId, request.getSessionId(), observed,
                 EntitySlot.builder().type(EntitySlot.SlotType.READ_QUERY).id(reservedGoal).metadata(metadata).mentionedAt(LocalDateTime.now(clock)).build());
         if (reserved) {
@@ -173,13 +178,18 @@ public class SalesRankingConversationSupport {
     boolean rememberResolvedRead(String toolName, String factoryId, Long userId, IntentExecuteRequest request,
                               Map<String,Object> params) {
         String intent = SalesRankingParameters.TOOL.equals(toolName) ? SalesRankingParameters.INTENT : OTHER_READS.get(toolName);
+        return rememberResolvedRead(toolName, intent, factoryId, userId, request, params);
+    }
+
+    boolean rememberResolvedRead(String toolName, String intent, String factoryId, Long userId, IntentExecuteRequest request,
+                              Map<String,Object> params) {
         if (intent == null || !boundActor(factoryId, userId) || request.getSessionId() == null) return false;
         ConversationContext owner = memory.getOrCreateContext(factoryId, userId, request.getSessionId());
         if (!owned(owner, factoryId, userId, request.getSessionId()))
             throw new com.cretas.aims.exception.BusinessException(403, "会话归属不符。");
         Map<String,Object> values = new LinkedHashMap<>();
         Map<String,Object> sources = new LinkedHashMap<>();
-        Set<String> fields = Set.of("startDate", "endDate", "status", "page", "size", "limit", "metric", "materialTypeId", "batchNumber");
+        Set<String> fields = Set.of("startDate", "endDate", "status", "page", "size", "limit", "metric", "materialTypeId", "batchNumber", "orderId", "queryType");
         fields.forEach(k -> {
             if (params.get(k) != null) {
                 values.put(k, params.get(k));
@@ -189,6 +199,7 @@ public class SalesRankingConversationSupport {
             }
         });
         values.put("parameterSources", sources);
+        values.put("toolName",toolName);
         values.put("taskStatus", "RUNNING");
         String reserved = request.getContext() == null ? null : (String) request.getContext().get(TURN_KEY);
         if (reserved == null) return false;
@@ -202,6 +213,11 @@ public class SalesRankingConversationSupport {
     }
 
     public boolean finishRead(String factoryId, Long userId, IntentExecuteRequest request, String status) {
+        return finishRead(factoryId,userId,request,status,null);
+    }
+
+    boolean finishRead(String factoryId, Long userId, IntentExecuteRequest request, String status,
+                       java.util.List<Map<String,Object>> resultReferences) {
         if (request.getSemanticReadVersion() == null) return true;
         ConversationContext owner = memory.getContext(request.getSessionId());
         if (!owned(owner, factoryId, userId, request.getSessionId()) || !isCurrent(factoryId, userId, request)) return false;
@@ -212,6 +228,9 @@ public class SalesRankingConversationSupport {
         values.put("resolutionStatus", request.getSemanticParameters() != null ? "RESOLVED" : "NOT_ACCEPTED");
         if ("UNSUPPORTED_CAPABILITY".equals(status)) values.put("reason", status);
         if ("UNSUPPORTED_CAPABILITY".equals(values.get("reason"))) values.put("taskStatus", "BLOCKED");
+        if (request.getSemanticParameters() != null && resultReferences != null
+                && Set.of("SUCCESS","COMPLETED").contains(String.valueOf(status)))
+            values.put("resultReferences",resultReferences);
         String previousVersion = (String) values.get(TURN_KEY);
         String terminalVersion = UUID.randomUUID().toString(); values.put(TURN_KEY, terminalVersion);
         boolean completed = memory.compareAndSetReadQuery(factoryId, userId, request.getSessionId(), previousVersion,
@@ -242,9 +261,32 @@ public class SalesRankingConversationSupport {
         ConversationContext owner = memory.getContext(request.getSessionId());
         if (!owned(owner, factoryId, userId, request.getSessionId())) return false;
         EntitySlot slot = owner.getSlot(EntitySlot.SlotType.READ_QUERY);
-        return slot != null && (SalesRankingParameters.INTENT.equals(slot.getId()) || OTHER_READS.containsValue(slot.getId())
-                || "UNRESOLVED_READ".equals(slot.getId())) && slot.getMetadata() != null
+        return isStoredRead(slot) && slot.getMetadata() != null
                 && Objects.equals(request.getContext().get(TURN_KEY), slot.getMetadata().get(TURN_KEY));
+    }
+
+    static boolean isStoredRead(EntitySlot slot) {
+        return slot != null && (SalesRankingParameters.INTENT.equals(slot.getId()) || OTHER_READS.containsValue(slot.getId())
+                || "UNRESOLVED_READ".equals(slot.getId()) || slot.getMetadata() != null
+                && "order_query".equals(slot.getMetadata().get("toolName")));
+    }
+
+    void rememberCommittedAction(String factoryId, Long userId, IntentExecuteRequest request,
+                                 com.cretas.aims.entity.config.AIIntentConfig intent, String toolName,
+                                 IntentExecuteResponse response) {
+        if (!boundActor(factoryId,userId) || request.getSessionId()==null || intent==null
+                || Boolean.TRUE.equals(request.getPreviewOnly()) || response==null
+                || !Set.of("SUCCESS","COMPLETED").contains(String.valueOf(response.getStatus()))
+                || response.getMetadata()==null) return;
+        var action = LastActionContract.sanitize(response.getMetadata().get(LastActionContract.CONTEXT_KEY),System.currentTimeMillis());
+        if (action.isEmpty() || !intent.getIntentCode().equals(action.get().intentCode())
+                || !toolName.equals(action.get().toolName())) return;
+        ConversationContext owner = memory.getOrCreateContext(factoryId,userId,request.getSessionId());
+        if (!owned(owner,factoryId,userId,request.getSessionId())) return;
+        memory.updateEntitySlot(request.getSessionId(),EntitySlot.SlotType.LAST_ACTION,EntitySlot.builder()
+                .type(EntitySlot.SlotType.LAST_ACTION).id(intent.getIntentCode()).mentionedAt(LocalDateTime.now(clock))
+                .metadata(Map.of("toolName",toolName,"status","COMMITTED","params",action.get().params(),
+                        "at",System.currentTimeMillis(),"sessionId",request.getSessionId())).build());
     }
 
     private void invalidate(String sessionId, String reason) {

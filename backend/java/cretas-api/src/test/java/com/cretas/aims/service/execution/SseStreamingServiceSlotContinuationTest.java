@@ -813,7 +813,9 @@ class SseStreamingServiceSlotContinuationTest {
             when(semanticCache.queryCache(anyString(), anyString())).thenReturn(SemanticCacheHit.miss(0L));
 
             conversations = new ConversationServiceImpl(
-                    inMemorySessions(), mock(AIIntentConfigRepository.class), null, conversationLlm);
+                    inMemorySessions(), mock(AIIntentConfigRepository.class), null, conversationLlm,
+                    mock(org.springframework.transaction.PlatformTransactionManager.class));
+            ReflectionTestUtils.setField(conversations, "entityManager", mock(jakarta.persistence.EntityManager.class));
             ReflectionTestUtils.setField(conversations, "maxRounds", 5);
             ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
             ReflectionTestUtils.setField(conversations, "confidenceThreshold", 0.7);
@@ -869,6 +871,10 @@ class SseStreamingServiceSlotContinuationTest {
                 return s;
             });
             when(repo.findBySessionIdAndFactoryIdAndUserId(anyString(), anyString(), anyLong()))
+                    .thenAnswer(inv -> Optional.ofNullable(sessions.get((String) inv.getArgument(0)))
+                            .filter(s -> s.getFactoryId().equals(inv.getArgument(1))
+                                    && s.getUserId().equals(inv.getArgument(2))));
+            when(repo.findBySessionIdAndFactoryIdAndUserIdForUpdate(anyString(), anyString(), anyLong()))
                     .thenAnswer(inv -> Optional.ofNullable(sessions.get((String) inv.getArgument(0)))
                             .filter(s -> s.getFactoryId().equals(inv.getArgument(1))
                                     && s.getUserId().equals(inv.getArgument(2))));

@@ -14,14 +14,21 @@ import com.cretas.aims.service.consent.LlmEgressGuard;
 import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.PersistenceContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -49,6 +56,15 @@ public class ConversationServiceImpl implements ConversationService {
     private final ExpressionLearningService learningService;
     private final DashScopeClient dashScopeClient;
     private final ObjectMapper objectMapper;
+    private final TransactionTemplate transactionTemplate;
+
+    /**
+     * The shared EntityManager may retain an owner row in the OpenEntityManagerInView
+     * first-level cache after another transaction changes it. Every locked mutation
+     * therefore refreshes from the database before inspecting or changing state.
+     */
+    @PersistenceContext
+    private EntityManager entityManager;
 
     /** 发给模型前脱敏; 单测直接 new 本类时用默认实例。 */
     @Autowired
@@ -71,27 +87,33 @@ public class ConversationServiceImpl implements ConversationService {
             ConversationSessionRepository sessionRepository,
             AIIntentConfigRepository intentConfigRepository,
             @Autowired(required = false) ExpressionLearningService learningService,
-            @Autowired(required = false) DashScopeClient dashScopeClient) {
+            @Autowired(required = false) DashScopeClient dashScopeClient,
+            PlatformTransactionManager transactionManager) {
         this.sessionRepository = sessionRepository;
         this.intentConfigRepository = intentConfigRepository;
         this.learningService = learningService;
         this.dashScopeClient = dashScopeClient;
         this.objectMapper = new ObjectMapper();
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     @Override
-    @Transactional
     public ConversationResponse startConversation(String factoryId, Long userId, String userInput) {
         log.info("开始多轮对话: factory={}, user={}, input={}",
                 factoryId, userId, truncate(userInput, 50));
 
-        // 取消之前的活跃会话
-        sessionRepository.cancelActiveSessionsForUser(factoryId, userId, LocalDateTime.now());
-
-        // 创建新会话
-        ConversationSession session = ConversationSession.create(factoryId, userId, userInput);
-        session.setMaxRounds(maxRounds);
-        session.setTimeoutMinutes(timeoutMinutes);
+        // Reserve the row in a short owner transaction. The model call below
+        // deliberately runs after this transaction has released the advisory lock.
+        ConversationSession session = transactionTemplate.execute(status -> {
+            lockActorSessions(factoryId, userId);
+            sessionRepository.cancelActiveSessionsForUser(factoryId, userId, LocalDateTime.now());
+            ConversationSession reserved = ConversationSession.create(factoryId, userId, userInput);
+            reserved.setSessionId(UUID.randomUUID().toString());
+            reserved.setMaxRounds(maxRounds);
+            reserved.setTimeoutMinutes(timeoutMinutes);
+            return sessionRepository.saveAndFlush(reserved);
+        });
+        String reservationCas = conversationCasFingerprint(session);
 
         // 获取可用意图列表
         List<AIIntentConfig> availableIntents = getAvailableIntents(factoryId);
@@ -99,25 +121,28 @@ public class ConversationServiceImpl implements ConversationService {
         // 调用 LLM 生成初始响应
         LlmConversationResult llmResult = callLlmForConversation(session, userInput, availableIntents);
 
-        // 更新会话
-        session.addAssistantMessage(llmResult.getMessage());
-        session.setCandidates(llmResult.getCandidates());
-        session.setLastConfidence(llmResult.getConfidence());
-
-        // 检查是否已经可以确定意图
-        if (llmResult.isIntentConfirmed() && llmResult.getConfidence() >= confidenceThreshold) {
-            session.complete(llmResult.getIntentCode(), llmResult.getConfidence());
-            log.info("首轮对话即确定意图: session={}, intent={}, confidence={}",
-                    session.getSessionId(), llmResult.getIntentCode(), llmResult.getConfidence());
-        }
-
-        sessionRepository.save(session);
-
-        return buildResponse(session, llmResult);
+        return transactionTemplate.execute(status -> {
+            lockActorSessions(factoryId, userId);
+            Optional<ConversationSession> current = findExactLocked(factoryId, userId, session.getSessionId());
+            if (current.isEmpty()) return ConversationResponse.builder().sessionId(session.getSessionId())
+                    .status(SessionStatus.CANCELLED).completed(false).message("会话已变化，请重新开始").build();
+            ConversationSession committed = current.get();
+            if (committed.getStatus() != SessionStatus.ACTIVE
+                    || !reservationCas.equals(conversationCasFingerprint(committed))) {
+                return unchangedResponse(committed, "会话已被其他操作改变，未写入迟到的模型结果");
+            }
+            committed.addAssistantMessage(llmResult.getMessage());
+            committed.setCandidates(llmResult.getCandidates());
+            committed.setLastConfidence(llmResult.getConfidence());
+            if (llmResult.isIntentConfirmed() && llmResult.getConfidence() >= confidenceThreshold) {
+                committed.complete(llmResult.getIntentCode(), llmResult.getConfidence());
+            }
+            sessionRepository.save(committed);
+            return buildResponse(committed, llmResult);
+        });
     }
 
     @Override
-    @Transactional
     public ConversationResponse startParameterCollection(
             String factoryId,
             Long userId,
@@ -130,7 +155,6 @@ public class ConversationServiceImpl implements ConversationService {
     }
 
     @Override
-    @Transactional
     public ConversationResponse startParameterCollection(
             String factoryId,
             Long userId,
@@ -140,11 +164,13 @@ public class ConversationServiceImpl implements ConversationService {
             List<String> clarificationQuestions,
             Map<String, Object> alreadyCollected) {
 
-        log.info("开始参数收集对话: factory={}, user={}, intent={}, params={}",
-                factoryId, userId, intentCode, requiredParameters.size());
+        return transactionTemplate.execute(status -> {
+            log.info("开始参数收集对话: factory={}, user={}, intent={}, params={}",
+                    factoryId, userId, intentCode, requiredParameters.size());
 
-        // 取消之前的活跃会话
-        sessionRepository.cancelActiveSessionsForUser(factoryId, userId, LocalDateTime.now());
+            lockActorSessions(factoryId, userId);
+            // 取消之前的活跃会话
+            sessionRepository.cancelActiveSessionsForUser(factoryId, userId, LocalDateTime.now());
 
         // 构建初始收集问题
         String initialQuestion = buildParameterCollectionMessage(
@@ -164,6 +190,7 @@ public class ConversationServiceImpl implements ConversationService {
         // 创建参数收集会话
         ConversationSession session = ConversationSession.createForParameterCollection(
                 factoryId, userId, intentCode, sessionParams, initialQuestion);
+        session.setSessionId(UUID.randomUUID().toString());
         session.setMaxRounds(maxRounds);
         session.setTimeoutMinutes(timeoutMinutes);
         // 这一句里已经抽到的参数先记上: 补齐缺的那个之后执行要一起带走 (不在待问清单里, 不会被追问)
@@ -192,61 +219,68 @@ public class ConversationServiceImpl implements ConversationService {
                 .intentName(intentName)
                 .requiresConfirmation(true)
                 .build();
+        });
     }
 
     @Override
-    @Transactional
     public ConversationResponse continueConversation(
             String factoryId, Long userId, String sessionId, String userReply) {
         log.info("继续多轮对话: session={}, reply={}", sessionId, truncate(userReply, 50));
 
-        Optional<ConversationSession> optSession =
-                sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
-        if (optSession.isEmpty()) {
-            log.warn("会话不存在: {}", sessionId);
-            return ConversationResponse.builder()
-                    .sessionId(sessionId)
-                    .status(SessionStatus.CANCELLED)
-                    .completed(false)
-                    .message("会话不存在或已过期")
-                    .build();
-        }
+        ContinueSnapshot snapshot = transactionTemplate.execute(status -> {
+            lockActorSessions(factoryId, userId);
+            Optional<ConversationSession> opt = findExactLocked(factoryId, userId, sessionId);
+            if (opt.isEmpty()) {
+                return ContinueSnapshot.response(ConversationResponse.builder()
+                        .sessionId(sessionId).status(SessionStatus.CANCELLED).completed(false).taskChanged(true)
+                        .message("会话不存在或已过期").build());
+            }
+            ConversationSession locked = opt.get();
+            if (locked.isExpired()) {
+                locked.timeout();
+                sessionRepository.save(locked);
+                return ContinueSnapshot.response(ConversationResponse.builder()
+                        .sessionId(sessionId).status(SessionStatus.TIMEOUT).completed(false).taskChanged(true)
+                        .message("会话已超时，请重新开始").build());
+            }
+            if (!locked.canContinue()) {
+                return ContinueSnapshot.response(ConversationResponse.builder()
+                        .sessionId(sessionId).status(locked.getStatus())
+                        .completed(false).taskChanged(true)
+                        .message(getStatusMessage(locked.getStatus())).build());
+            }
+            ConversationSession detached = detachedSnapshot(locked);
+            return ContinueSnapshot.session(detached, conversationCasFingerprint(detached));
+        });
+        if (snapshot.response != null) return snapshot.response;
 
-        ConversationSession session = optSession.get();
+        ConversationSession session = snapshot.session;
+        // All model work is intentionally outside the transaction and outside
+        // the actor advisory lock.  The final phase below performs CAS again.
+        ConversationResponse result = session.isParameterCollectionMode()
+                ? continueParameterCollection(session, userReply, false)
+                : continueIntentRecognition(session, userReply, false);
 
-        // 检查会话状态
-        if (session.isExpired()) {
-            session.timeout();
+        return transactionTemplate.execute(status -> {
+            lockActorSessions(factoryId, userId);
+            Optional<ConversationSession> current = findExactLocked(factoryId, userId, sessionId);
+            if (current.isEmpty()) return unchangedResponse(session, "会话已变化，未写入迟到的回复");
+            ConversationSession locked = current.get();
+            if (!snapshot.cas.equals(conversationCasFingerprint(locked))
+                    || locked.getStatus() != SessionStatus.ACTIVE) {
+                return unchangedResponse(locked, "会话已变化，未写入迟到的回复");
+            }
             sessionRepository.save(session);
-            return ConversationResponse.builder()
-                    .sessionId(sessionId)
-                    .status(SessionStatus.TIMEOUT)
-                    .completed(false)
-                    .message("会话已超时，请重新开始")
-                    .build();
-        }
-
-        if (!session.canContinue()) {
-            return ConversationResponse.builder()
-                    .sessionId(sessionId)
-                    .status(session.getStatus())
-                    .completed(session.getStatus() == SessionStatus.COMPLETED)
-                    .message(getStatusMessage(session.getStatus()))
-                    .build();
-        }
-
-        // 根据会话模式分发处理
-        if (session.isParameterCollectionMode()) {
-            return continueParameterCollection(session, userReply);
-        } else {
-            return continueIntentRecognition(session, userReply);
-        }
+            if (session.getStatus() == SessionStatus.COMPLETED) learnFromSession(session);
+            return result;
+        });
     }
 
     /**
      * 继续参数收集对话
      */
-    private ConversationResponse continueParameterCollection(ConversationSession session, String userReply) {
+    private ConversationResponse continueParameterCollection(ConversationSession session, String userReply,
+                                                             boolean persist) {
         log.info("继续参数收集: session={}, reply={}", session.getSessionId(), truncate(userReply, 50));
 
         // 添加用户消息
@@ -255,7 +289,7 @@ public class ConversationServiceImpl implements ConversationService {
         // 进入下一轮
         if (!session.nextRound()) {
             session.maxRoundsReached();
-            sessionRepository.save(session);
+            if (persist) sessionRepository.save(session);
             return ConversationResponse.builder()
                     .sessionId(session.getSessionId())
                     .currentRound(session.getCurrentRound())
@@ -283,11 +317,11 @@ public class ConversationServiceImpl implements ConversationService {
         // 检查是否所有参数都已收集
         if (session.allParametersCollected()) {
             session.completeParameterCollection();
-            sessionRepository.save(session);
 
             String message = String.format("好的，已收集到所有必需信息。正在为您执行「%s」...",
                     session.getKnownIntentCode());
             session.addAssistantMessage(message);
+            if (persist) sessionRepository.save(session);
 
             log.info("参数收集完成: session={}, intent={}, params={}",
                     session.getSessionId(), session.getKnownIntentCode(), session.getCollectedParameters());
@@ -309,7 +343,7 @@ public class ConversationServiceImpl implements ConversationService {
         String nextQuestion = buildNextParameterQuestion(session);
         session.addAssistantMessage(nextQuestion);
 
-        sessionRepository.save(session);
+        if (persist) sessionRepository.save(session);
 
         return ConversationResponse.builder()
                 .sessionId(session.getSessionId())
@@ -326,7 +360,8 @@ public class ConversationServiceImpl implements ConversationService {
     /**
      * 继续意图识别对话 (原有逻辑)
      */
-    private ConversationResponse continueIntentRecognition(ConversationSession session, String userReply) {
+    private ConversationResponse continueIntentRecognition(ConversationSession session, String userReply,
+                                                           boolean persist) {
         // 添加用户消息
         session.addUserMessage(userReply);
 
@@ -334,10 +369,10 @@ public class ConversationServiceImpl implements ConversationService {
         String confirmedIntent = checkDirectConfirmation(userReply, session.getCandidates());
         if (confirmedIntent != null) {
             session.complete(confirmedIntent, 0.95);
-            sessionRepository.save(session);
+            if (persist) sessionRepository.save(session);
 
             // 触发学习
-            learnFromSession(session);
+            if (persist) learnFromSession(session);
 
             return buildConfirmedResponse(session, confirmedIntent);
         }
@@ -345,7 +380,7 @@ public class ConversationServiceImpl implements ConversationService {
         // 进入下一轮
         if (!session.nextRound()) {
             session.maxRoundsReached();
-            sessionRepository.save(session);
+            if (persist) sessionRepository.save(session);
             return ConversationResponse.builder()
                     .sessionId(session.getSessionId())
                     .currentRound(session.getCurrentRound())
@@ -375,51 +410,191 @@ public class ConversationServiceImpl implements ConversationService {
                     llmResult.getIntentCode(), llmResult.getConfidence());
 
             // 触发学习
-            learnFromSession(session);
+            if (persist) learnFromSession(session);
         }
 
-        sessionRepository.save(session);
+        if (persist) sessionRepository.save(session);
 
         return buildResponse(session, llmResult);
     }
 
     @Override
-    @Transactional
     public boolean endConversation(String factoryId, Long userId, String sessionId, String intentCode) {
         log.info("结束对话: session={}, intent={}", sessionId, intentCode);
-
-        Optional<ConversationSession> optSession =
-                sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
-        if (optSession.isEmpty()) {
-            return false;
-        }
-
-        ConversationSession session = optSession.get();
-        session.complete(intentCode, 1.0); // 用户确认置信度为1
-        sessionRepository.save(session);
-
-        // 触发学习
-        learnFromSession(session);
-
-        return true;
+        return transactionTemplate.execute(status -> {
+            lockActorSessions(factoryId, userId);
+            Optional<ConversationSession> optSession = findExactLocked(factoryId, userId, sessionId);
+            if (optSession.isEmpty()) return false;
+            ConversationSession session = optSession.get();
+            if (session.getStatus() != SessionStatus.ACTIVE || session.isExpired()) {
+                if (session.getStatus() == SessionStatus.ACTIVE && session.isExpired()) {
+                    session.timeout();
+                    sessionRepository.save(session);
+                }
+                return false;
+            }
+            session.complete(intentCode, 1.0);
+            sessionRepository.save(session);
+            learnFromSession(session);
+            return true;
+        });
     }
 
     @Override
-    @Transactional
     public boolean cancelConversation(String factoryId, Long userId, String sessionId) {
-        log.info("取消对话: session={}", sessionId);
+        return cancelConversation(factoryId, userId, sessionId, false);
+    }
 
-        Optional<ConversationSession> optSession =
-                sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
-        if (optSession.isEmpty()) {
+    @Override
+    public boolean cancelConversation(String factoryId, Long userId, String sessionId,
+                                      boolean pendingPreviewProof) {
+        log.info("取消对话: session={}", sessionId);
+        return transactionTemplate.execute(status -> {
+            lockActorSessions(factoryId, userId);
+            Optional<ConversationSession> optSession = findExactLocked(factoryId, userId, sessionId);
+            if (optSession.isEmpty()) return false;
+            ConversationSession session = optSession.get();
+            if (session.getStatus() != SessionStatus.ACTIVE && session.getStatus() != SessionStatus.PAUSED
+                    && !(pendingPreviewProof && session.getStatus() == SessionStatus.COMPLETED)) {
+                return false;
+            }
+            session.cancel();
+            sessionRepository.save(session);
+            return true;
+        });
+    }
+
+    @Override
+    public boolean pauseConversation(String factoryId, Long userId, String sessionId) {
+        return pauseConversation(factoryId, userId, sessionId, false);
+    }
+
+    @Override
+    public boolean pauseConversation(String factoryId, Long userId, String sessionId,
+                                     boolean pendingPreviewProof) {
+        if (sessionId == null || sessionId.isBlank()) {
             return false;
         }
+        return transactionTemplate.execute(status -> {
+            List<ConversationSession> locked = lockActorSessions(factoryId, userId);
+            Optional<ConversationSession> optSession = pendingPreviewProof
+                    ? findExactLocked(factoryId, userId, sessionId)
+                    : findLockedSession(locked, factoryId, userId, sessionId);
+            if (optSession.isEmpty()) return false;
+            ConversationSession session = optSession.get();
+            if (session.getStatus() != SessionStatus.ACTIVE
+                    && !(pendingPreviewProof && session.getStatus() == SessionStatus.COMPLETED)) return false;
+            if (session.isExpired()) {
+                session.timeout();
+                sessionRepository.save(session);
+                return false;
+            }
+            session.pause();
+            sessionRepository.save(session);
+            return true;
+        });
+    }
 
-        ConversationSession session = optSession.get();
-        session.cancel();
-        sessionRepository.save(session);
+    @Override
+    public boolean resumeConversation(String factoryId, Long userId, String sessionId) {
+        return resumeConversation(factoryId, userId, sessionId, null);
+    }
 
-        return true;
+    @Override
+    public boolean resumeConversation(String factoryId, Long userId, String sessionId,
+                                      String expectedFingerprint) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+        return transactionTemplate.execute(status -> {
+            List<ConversationSession> locked = lockActorSessions(factoryId, userId);
+            Optional<ConversationSession> optSession = findLockedSession(locked, factoryId, userId, sessionId);
+            if (optSession.isEmpty()) return false;
+            ConversationSession session = optSession.get();
+            if (session.getStatus() != SessionStatus.PAUSED) return false;
+            if (session.isExpired()) {
+                session.timeout();
+                sessionRepository.save(session);
+                return false;
+            }
+            if (expectedFingerprint != null && (expectedFingerprint.isBlank()
+                    || !expectedFingerprint.equals(ConversationService.draftRevisionFingerprint(session)))) {
+                return false;
+            }
+            boolean anotherActive = locked.stream()
+                    .anyMatch(other -> !sessionId.equals(other.getSessionId())
+                            && other.getStatus() == SessionStatus.ACTIVE);
+            if (anotherActive) return false;
+            session.resume();
+            sessionRepository.save(session);
+            return true;
+        });
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ConversationSession> getPausedSessions(String factoryId, Long userId) {
+        List<ConversationSession> paused = sessionRepository.findPausedByFactoryAndUser(factoryId, userId);
+        return paused == null ? Collections.emptyList() : paused;
+    }
+
+    @Override
+    public boolean reviseDraft(String factoryId, Long userId, String sessionId,
+                               Map<String, String> delta, String expectedFingerprint) {
+        return reviseDraft(factoryId, userId, sessionId, delta, expectedFingerprint, false);
+    }
+
+    @Override
+    public boolean reviseDraft(String factoryId, Long userId, String sessionId,
+                               Map<String, String> delta, String expectedFingerprint,
+                               boolean pendingPreviewProof) {
+        if (sessionId == null || sessionId.isBlank() || expectedFingerprint == null
+                || expectedFingerprint.isBlank() || delta == null || delta.isEmpty()) {
+            return false;
+        }
+        return transactionTemplate.execute(status -> {
+            List<ConversationSession> locked = lockActorSessions(factoryId, userId);
+            Optional<ConversationSession> optSession = pendingPreviewProof
+                    ? findExactLocked(factoryId, userId, sessionId)
+                    : findLockedSession(locked, factoryId, userId, sessionId);
+            if (optSession.isEmpty()) return false;
+            ConversationSession session = optSession.get();
+            if (!session.isParameterCollectionMode()
+                    || (session.getStatus() != SessionStatus.ACTIVE && session.getStatus() != SessionStatus.PAUSED
+                    && !(pendingPreviewProof && session.getStatus() == SessionStatus.COMPLETED))
+                    || session.isExpired()
+                    || !expectedFingerprint.equals(ConversationService.draftRevisionFingerprint(session))) {
+                return false;
+            }
+            Set<String> allowed = new HashSet<>(session.getCollectedParameters().keySet());
+            session.getRequiredParameters().forEach(p -> {
+                if (p.getName() != null) allowed.add(p.getName());
+            });
+            for (Map.Entry<String, String> entry : delta.entrySet()) {
+                String key = entry.getKey();
+                if (!isSafeDraftField(key) || !allowed.contains(key)
+                        || entry.getValue() == null || entry.getValue().isBlank()) return false;
+            }
+            if (pendingPreviewProof && session.getStatus() == SessionStatus.COMPLETED) {
+                session.setStatus(SessionStatus.ACTIVE);
+                session.setCompletedAt(null);
+                session.setFinalIntentCode(null);
+            }
+            delta.forEach(session::addCollectedParameter);
+            sessionRepository.save(session);
+            return true;
+        });
+    }
+
+    private boolean isSafeDraftField(String key) {
+        if (key == null || key.isBlank()) return false;
+        String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
+        return !normalized.contains("factory") && !normalized.contains("tenant")
+                && !normalized.contains("userid") && !normalized.contains("actor")
+                && !normalized.contains("session") && !normalized.contains("intent")
+                && !normalized.contains("tool") && !normalized.contains("permission")
+                && !normalized.contains("role") && !normalized.contains("auth")
+                && !normalized.equals("status");
     }
 
     @Override
@@ -432,6 +607,124 @@ public class ConversationServiceImpl implements ConversationService {
     @Transactional(readOnly = true)
     public Optional<ConversationSession> getSession(String factoryId, Long userId, String sessionId) {
         return sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
+    }
+
+    /** Acquire an owner lock first, then lock only mutable ACTIVE/PAUSED rows. */
+    private List<ConversationSession> lockActorSessions(String factoryId, Long userId) {
+        sessionRepository.lockActorAdvisory(ownerKey(factoryId, userId));
+        List<ConversationSession> locked = sessionRepository.findByFactoryIdAndUserIdForUpdate(factoryId, userId);
+        if (locked == null || locked.isEmpty()) return Collections.emptyList();
+        locked.forEach(this::refreshLocked);
+        return locked;
+    }
+
+    private String ownerKey(String factoryId, Long userId) {
+        String factory = factoryId == null ? "" : factoryId;
+        return factory.length() + ":" + factory + ":" + String.valueOf(userId);
+    }
+
+    /** Resolve only from rows locked by the current actor transaction. */
+    private Optional<ConversationSession> findLockedSession(
+            List<ConversationSession> locked, String factoryId, Long userId, String sessionId) {
+        if (sessionId == null) {
+            return Optional.empty();
+        }
+        Optional<ConversationSession> owned = locked.stream()
+                .filter(s -> sessionId.equals(s.getSessionId())
+                        && Objects.equals(factoryId, s.getFactoryId())
+                        && Objects.equals(userId, s.getUserId()))
+                .findFirst();
+        return owned;
+    }
+
+    /** Exact row lock for terminal-state checks; caller must already hold actor lock. */
+    private Optional<ConversationSession> findExactLocked(String factoryId, Long userId, String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return Optional.empty();
+        Optional<ConversationSession> result = sessionRepository
+                .findBySessionIdAndFactoryIdAndUserIdForUpdate(sessionId, factoryId, userId);
+        result.ifPresent(this::refreshLocked);
+        return result;
+    }
+
+    private void refreshLocked(ConversationSession session) {
+        entityManager.refresh(session, LockModeType.PESSIMISTIC_WRITE);
+    }
+
+    private String conversationCasFingerprint(ConversationSession session) {
+        try {
+            String payload = ConversationService.draftRevisionFingerprint(session)
+                    + "|round=" + session.getCurrentRound()
+                    + "|status=" + session.getStatus()
+                    + "|confidence=" + session.getLastConfidence()
+                    + "|messages=" + session.buildConversationHistory()
+                    + "|candidates=" + objectMapper.writeValueAsString(session.getCandidates());
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(payload.getBytes(StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder(digest.length * 2);
+            for (byte b : digest) result.append(String.format("%02x", b));
+            return result.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("无法计算会话 CAS 指纹", e);
+        }
+    }
+
+    /** Copy all persisted basic/JSON fields before any model-phase mutation. */
+    private ConversationSession detachedSnapshot(ConversationSession source) {
+        return ConversationSession.builder()
+                .sessionId(source.getSessionId())
+                .factoryId(source.getFactoryId())
+                .userId(source.getUserId())
+                .originalInput(source.getOriginalInput())
+                .finalIntentCode(source.getFinalIntentCode())
+                .currentRound(source.getCurrentRound())
+                .maxRounds(source.getMaxRounds())
+                .status(source.getStatus())
+                .sessionMode(source.getSessionMode())
+                .knownIntentCode(source.getKnownIntentCode())
+                .requiredParametersJson(source.getRequiredParametersJson())
+                .collectedParametersJson(source.getCollectedParametersJson())
+                .messagesJson(source.getMessagesJson())
+                .candidatesJson(source.getCandidatesJson())
+                .lastConfidence(source.getLastConfidence())
+                .timeoutMinutes(source.getTimeoutMinutes())
+                .createdAt(source.getCreatedAt())
+                .updatedAt(source.getUpdatedAt())
+                .lastActiveAt(source.getLastActiveAt())
+                .completedAt(source.getCompletedAt())
+                .build();
+    }
+
+    private ConversationResponse unchangedResponse(ConversationSession session, String message) {
+        return ConversationResponse.builder()
+                .taskChanged(true)
+                .sessionId(session.getSessionId())
+                .currentRound(session.getCurrentRound())
+                .maxRounds(session.getMaxRounds())
+                .status(session.getStatus())
+                .completed(false)
+                .message(message)
+                .intentCode(null)
+                .build();
+    }
+
+    private static final class ContinueSnapshot {
+        private final ConversationSession session;
+        private final String cas;
+        private final ConversationResponse response;
+
+        private ContinueSnapshot(ConversationSession session, String cas, ConversationResponse response) {
+            this.session = session;
+            this.cas = cas;
+            this.response = response;
+        }
+
+        private static ContinueSnapshot session(ConversationSession session, String cas) {
+            return new ContinueSnapshot(session, cas, null);
+        }
+
+        private static ContinueSnapshot response(ConversationResponse response) {
+            return new ContinueSnapshot(null, null, response);
+        }
     }
 
     @Override
@@ -863,6 +1156,8 @@ public class ConversationServiceImpl implements ConversationService {
      */
     private String getStatusMessage(SessionStatus status) {
         switch (status) {
+            case PAUSED:
+                return "对话已暂停";
             case COMPLETED:
                 return "对话已完成";
             case TIMEOUT:

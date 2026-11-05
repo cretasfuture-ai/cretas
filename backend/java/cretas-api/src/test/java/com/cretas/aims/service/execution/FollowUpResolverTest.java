@@ -147,8 +147,8 @@ class FollowUpResolverTest {
 
     @ParameterizedTest
     @CsvSource({
-            "再加十公斤,30", "再加10kg,30", "多五公斤,25", "加二十,40", "少五公斤,15", "减两公斤,18",
-            "改成五十公斤,50", "改为一百五,150", "三十公斤就行,30", "再加十五公斤,35", "改成2.5公斤,2.5"})
+            "再加十公斤,30", "再加10kg,30", "多五公斤,25", "加二十,40",
+            "再加十五公斤,35"})
     void quantityChangeAdjustsTheSameIntent(String input, String expected) {
         Map<String, Object> params = new HashMap<>();
         params.put("batchId", "MB-7");
@@ -162,6 +162,14 @@ class FollowUpResolverTest {
         assertThat(f.get().params()).containsEntry("batchId", "MB-7").containsEntry("unit", "kg");
         assertThat(new BigDecimal(f.get().params().get("quantity").toString()))
                 .isEqualByComparingTo(new BigDecimal(expected));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"少五公斤", "减两公斤", "改成五十公斤", "改为一百五", "三十公斤就行", "改成2.5公斤"})
+    void quantityChangeDoesNotTurnSetOrSubtractIntoAnotherAddWrite(String input) {
+        Map<String, Object> params = Map.of("batchId", "MB-7", "quantity", 50, "unit", "kg");
+
+        assertThat(resolve(input, last("MATERIAL_BATCH_USE", params))).as(input).isEmpty();
     }
 
     @Test
@@ -180,6 +188,8 @@ class FollowUpResolverTest {
         assertThat(resolve("再加十斤", last("MATERIAL_BATCH_USE", params))).as("斤 ≠ 公斤").isEmpty();
         assertThat(resolve("再加十箱", last("MATERIAL_BATCH_USE", params))).as("箱 ≠ 公斤").isEmpty();
         assertThat(resolve("再加十千克", last("MATERIAL_BATCH_USE", params))).as("千克 = 公斤").isPresent();
+        assertThat(resolve("再加十箱", last("MATERIAL_BATCH_USE", Map.of("batchId", "MB-7", "quantity", 50))))
+                .as("工具未提供已知单位时不能默默丢掉口述单位").isEmpty();
     }
 
     @ParameterizedTest

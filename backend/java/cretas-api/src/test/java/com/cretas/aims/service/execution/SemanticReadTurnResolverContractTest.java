@@ -20,6 +20,33 @@ import static org.mockito.Mockito.*;
 
 /** Actual parameter/state merge with simulated transport output; NOT real LLM acceptance. */
 class SemanticReadTurnResolverContractTest {
+    @Test void repeatedUngroundedNumericDefaultIsAppliedOnlyAfterSemanticMerge() throws Exception {
+        try (var h = new SalesRankingSemanticContractTest.Harness()) {
+            var request = request(h, "看看销售排行");
+            model(h, "NEW", Map.of("limit", 20));
+            assertThat(h.dispatch.resolveReadTurn("F006", 7L, request,
+                    IntentMatchResult.builder().bestMatch(h.intent).confidence(1.0).build())).isNull();
+            assertThat(request.getSemanticParameters()).doesNotContainKey("limit");
+            assertThat(request.getSemanticParameterSources()).doesNotContainKey("limit");
+            Map<String,Object> execution = new LinkedHashMap<>(request.getSemanticParameters());
+            h.support.applyCurrentParameters(request, execution);
+            assertThat(execution).containsEntry("limit",20).containsEntry("metric","amount")
+                    .containsEntry("startDate","2026-11-01").containsEntry("endDate","2026-11-05");
+        }
+    }
+
+    @Test void ungroundedDefaultCannotReplacePreviouslyConfirmedLimit() throws Exception {
+        try (var h = new SalesRankingSemanticContractTest.Harness()) {
+            previous(h, SalesRankingParameters.INTENT, Map.of("limit",7,"metric","amount"));
+            var request = request(h, "时间改成本月，其他不变");
+            model(h, "CORRECT", Map.of("startDate","2026-11-01","endDate","2026-11-30","limit",20));
+            assertThat(h.dispatch.resolveReadTurn("F006", 7L, request,
+                    IntentMatchResult.builder().bestMatch(h.intent).confidence(1.0).build())).isNull();
+            assertThat(request.getSemanticParameters()).containsEntry("limit",7);
+            assertThat(request.getSemanticParameterSources()).containsEntry("limit","PREVIOUS_VALUE");
+        }
+    }
+
     @Test void filledFieldsCanBeCorrectedAndUnchangedCompatibleFiltersSurvive() throws Exception {
         try (var h = new SalesRankingSemanticContractTest.Harness()) {
             previous(h, "ORDER_LIST", Map.of("startDate", "2026-10-01", "endDate", "2026-10-31", "status", "CONFIRMED"));
