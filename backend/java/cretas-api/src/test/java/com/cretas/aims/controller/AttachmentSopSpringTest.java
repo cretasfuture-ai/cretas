@@ -152,8 +152,16 @@ class AttachmentSopSpringTest {
             User principal = invocation.getArgument(0, User.class);
             Set<String> granted = principal == null ? null : exactPermissionGrants.get(principal.getId());
             if (granted == null) return invocation.callRealMethod();
-            for (String required : invocation.getArgument(1, String[].class)) {
-                if (granted.contains(required)) return true;
+            // Mockito may expose Java varargs as either one String[] or expanded raw arguments.
+            for (int i = 1; i < invocation.getRawArguments().length; i++) {
+                Object raw = invocation.getRawArguments()[i];
+                if (raw instanceof String[] required) {
+                    for (String permission : required) {
+                        if (granted.contains(permission)) return true;
+                    }
+                } else if (raw instanceof String permission && granted.contains(permission)) {
+                    return true;
+                }
             }
             return false;
         }).when(permissionService).hasAnyPermission(any(), any(String[].class));
@@ -234,10 +242,10 @@ class AttachmentSopSpringTest {
     }
 
     private static Object column(Map<String, Object> row, String name) {
-        return row.entrySet().stream()
+        Map.Entry<String, Object> entry = row.entrySet().stream()
                 .filter(entry -> entry.getKey().equalsIgnoreCase(name))
-                .map(Map.Entry::getValue)
                 .findFirst().orElse(null);
+        return entry == null ? null : entry.getValue();
     }
 
     private long liveSops(String factoryId) {
