@@ -19,6 +19,7 @@ import {
 } from '@element-plus/icons-vue';
 import { menuConfig, platformMenuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
 import SidebarMenuNode from './SidebarMenuNode.vue';
+import { getF006DemoMenu } from './f006DemoMenu';
 import {
   hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
   getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden,
@@ -293,7 +294,8 @@ const filteredMenu = computed(() => {
   const sourceMenu = authStore.isPlatform && !factoryView.isViewingFactory
     ? platformMenuConfig
     : roleCode.value === 'finance_manager' ? financeManagerMenu : menuConfig;
-  return sourceMenu
+  const demoMenu = factoryView.isViewingFactory ? [] : getF006DemoMenu(effectiveFactoryId.value, roleCode.value);
+  return [...demoMenu, ...sourceMenu]
     .map(item => filterMenuItem(item))
     .filter((item): item is MenuItem => item !== null);
 });
