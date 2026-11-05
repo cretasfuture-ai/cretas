@@ -881,6 +881,59 @@ public class PurchaseServiceImpl implements PurchaseService {
                                              String actorRole,
                                              HistoryAction action,
                                              String notes) {
+        return applyWorkflowActionInternal(factoryId, orderId, instanceId, actorId, actorRole,
+                action, notes, false);
+    }
+
+    @Override
+    @Transactional
+    @Loggable(module = "PURCHASE_ORDER", action = "OA_DEMO_APPROVE", entityType = "PurchaseOrder",
+              entityIdParam = "orderId")
+    public PurchaseOrder applyDemoApproveAction(String factoryId,
+                                                String orderId,
+                                                String instanceId,
+                                                Long actorId,
+                                                String actorRole,
+                                                String expectedNodeId,
+                                                HistoryAction action,
+                                                String notes) {
+        if (!"F006".equals(factoryId)) {
+            throw new BusinessException(403, "演示审批仅限 F006 工厂")
+                    .withCode("F006_DEMO_TENANT_REQUIRED");
+        }
+        if (!"factory_super_admin".equals(actorRole)) {
+            throw new BusinessException(403, "演示审批仅限工厂超级管理员")
+                    .withCode("F006_DEMO_ROLE_REQUIRED");
+        }
+        if (action != HistoryAction.APPROVE) {
+            throw new BusinessException(400, "演示审批入口只支持通过")
+                    .withCode("F006_DEMO_APPROVE_ONLY");
+        }
+        return applyWorkflowActionInternal(factoryId, orderId, instanceId, actorId, actorRole,
+                action, notes, true, expectedNodeId);
+    }
+
+    private PurchaseOrder applyWorkflowActionInternal(String factoryId,
+                                                       String orderId,
+                                                       String instanceId,
+                                                       Long actorId,
+                                                       String actorRole,
+                                                       HistoryAction action,
+                                                       String notes,
+                                                       boolean demoSelfApprovalBypass) {
+        return applyWorkflowActionInternal(factoryId, orderId, instanceId, actorId, actorRole,
+                action, notes, demoSelfApprovalBypass, null);
+    }
+
+    private PurchaseOrder applyWorkflowActionInternal(String factoryId,
+                                                       String orderId,
+                                                       String instanceId,
+                                                       Long actorId,
+                                                       String actorRole,
+                                                       HistoryAction action,
+                                                       String notes,
+                                                       boolean demoSelfApprovalBypass,
+                                                       String expectedNodeId) {
         PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在: " + orderId));
         if (workflowEngine == null) {
@@ -893,12 +946,24 @@ public class PurchaseServiceImpl implements PurchaseService {
             throw new BusinessException(400, "审批实例与采购单不匹配")
                     .withCode("PURCHASE_APPROVAL_IDENTITY_MISMATCH");
         }
+        if (demoSelfApprovalBypass
+                && instance.getStatus() == InstanceStatus.RUNNING
+                && (expectedNodeId == null || expectedNodeId.isBlank()
+                || instance.getCurrentNodeIds() == null
+                || instance.getCurrentNodeIds().isEmpty()
+                || !expectedNodeId.equals(instance.getCurrentNodeIds().get(0)))) {
+            throw new BusinessException(409, "审批节点已变化，请刷新待办后重试")
+                    .withCode("OA_TASK_NODE_CHANGED");
+        }
+        if (demoSelfApprovalBypass) {
+            validateDemoApprovalEligibility(order, factoryId, actorId, actorRole, action);
+        }
         if (instance.getStatus() != InstanceStatus.RUNNING) {
             // Terminal replays are pure reads. Do not refresh approval timestamps,
             // append history, or bump the purchase-order version on a duplicate action.
             return order;
         }
-        if (actorId != null
+        if (!demoSelfApprovalBypass && actorId != null
                 && actorId.equals(instance.getInitiatedBy())
                 && (selfApprovalPolicy == null
                     || !selfApprovalPolicy.allowsSelfApproval(factoryId, instance, actorId, actorRole))) {
@@ -913,6 +978,34 @@ public class PurchaseServiceImpl implements PurchaseService {
                 instanceId, actorId, actorRole, action, notes);
         projectWorkflowState(order, updated, actorId);
         return saveAndAnnounceSupplyChange(order);
+    }
+
+    private void validateDemoApprovalEligibility(PurchaseOrder order,
+                                                  String factoryId,
+                                                  Long actorId,
+                                                  String actorRole,
+                                                  HistoryAction action) {
+        if (!"F006".equals(factoryId) || !"F006".equals(order.getFactoryId())) {
+            throw new BusinessException(403, "演示审批仅限 F006 工厂")
+                    .withCode("F006_DEMO_TENANT_REQUIRED");
+        }
+        if (!"factory_super_admin".equals(actorRole)) {
+            throw new BusinessException(403, "演示审批仅限工厂超级管理员")
+                    .withCode("F006_DEMO_ROLE_REQUIRED");
+        }
+        if (action != HistoryAction.APPROVE) {
+            throw new BusinessException(400, "演示审批入口只支持通过")
+                    .withCode("F006_DEMO_APPROVE_ONLY");
+        }
+        if (actorId == null || !actorId.equals(order.getCreatedBy())) {
+            throw new BusinessException(403, "演示审批仅限本次演示订单发起人")
+                    .withCode("F006_DEMO_ACTOR_REQUIRED");
+        }
+        if (order.getRemark() == null
+                || !order.getRemark().startsWith("DEMO-F006-FLOW-20261105")) {
+            throw new BusinessException(403, "采购单不是本次 F006 演示订单")
+                    .withCode("F006_DEMO_MARKER_REQUIRED");
+        }
     }
 
     /**

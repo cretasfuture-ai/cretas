@@ -359,6 +359,120 @@ public class WorkflowInstanceController {
         return ApiResponse.success(result);
     }
 
+    /**
+     * F006-only demonstration approval boundary.  This is intentionally a
+     * separate path: the normal OA action remains subject to self-approval
+     * policy, while this marked, single-tenant demo flow may self-approve.
+     */
+    @PostMapping("/{instanceId}/demo-actions")
+    @Operation(summary = "F006 演示审批通过（专用入口）")
+    public ApiResponse<Map<String, Object>> executeDemoAction(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String instanceId,
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody WorkflowActionRequest request) {
+        User user = resolveCurrentUser(authorization);
+        if (user == null) {
+            throw new BusinessException(401, "未授权 — JWT 解析失败");
+        }
+        if (!"F006".equals(factoryId) || !"F006".equals(user.getFactoryId())) {
+            throw new BusinessException(403, "演示审批仅限 F006 工厂")
+                    .withCode("F006_DEMO_TENANT_REQUIRED");
+        }
+        if (!"factory_super_admin".equals(user.getRoleCode())) {
+            throw new BusinessException(403, "演示审批仅限工厂超级管理员")
+                    .withCode("F006_DEMO_ROLE_REQUIRED");
+        }
+        if (request == null || request.action() == null
+                || !"APPROVE".equalsIgnoreCase(request.action().trim())) {
+            throw new BusinessException(400, "演示审批入口只支持通过")
+                    .withCode("F006_DEMO_APPROVE_ONLY").withHintTarget("action");
+        }
+        if (request.idempotencyKey() == null || request.idempotencyKey().isBlank()) {
+            throw new BusinessException(400, "OA 审批动作缺少幂等键")
+                    .withCode("OA_IDEMPOTENCY_KEY_REQUIRED").withHintTarget("idempotencyKey");
+        }
+        if (request.idempotencyKey().length() > 128) {
+            throw new BusinessException(400, "OA 审批幂等键不能超过 128 个字符")
+                    .withCode("OA_IDEMPOTENCY_KEY_TOO_LONG").withHintTarget("idempotencyKey");
+        }
+        if (request.expectedNodeId() == null || request.expectedNodeId().isBlank()) {
+            throw new BusinessException(400, "OA 审批动作缺少预期节点")
+                    .withCode("OA_EXPECTED_NODE_REQUIRED").withHintTarget("expectedNodeId");
+        }
+        ApprovalWorkflowInstance instance = workflowEngine.getInstance(factoryId, instanceId)
+                .orElseThrow(() -> new BusinessException(404, "OA 审批实例不存在"));
+        if (!"PURCHASE_ORDER".equals(instance.getModuleCode())) {
+            throw new BusinessException(400, "演示审批实例必须是采购订单")
+                    .withCode("F006_DEMO_PURCHASE_REQUIRED");
+        }
+        if (instance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING
+                && (instance.getCurrentNodeIds() == null
+                || instance.getCurrentNodeIds().isEmpty()
+                || !request.expectedNodeId().equals(instance.getCurrentNodeIds().get(0)))) {
+            throw new BusinessException(409, "审批节点已变化，请刷新待办后重试")
+                    .withCode("OA_TASK_NODE_CHANGED");
+        }
+        if (instance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING
+                && !workflowEngine.canTransition(instance, user)) {
+            throw new BusinessException(403, "您不属于当前审批节点的处理角色")
+                    .withCode("OA_TASK_FORBIDDEN");
+        }
+        if (purchaseOrderRepository == null) {
+            throw new BusinessException(503, "演示订单校验服务不可用")
+                    .withCode("F006_DEMO_ORDER_VALIDATION_UNAVAILABLE");
+        }
+        PurchaseOrder order = purchaseOrderRepository
+                .findByIdAndFactoryId(instance.getBusinessEntityId(), factoryId)
+                .orElseThrow(() -> new BusinessException(404, "演示采购订单不存在"));
+        if (!factoryId.equals(order.getFactoryId())
+                || !user.getId().equals(order.getCreatedBy())
+                || order.getRemark() == null
+                || !order.getRemark().startsWith("DEMO-F006-FLOW-20261105")) {
+            throw new BusinessException(403, "采购单不是本次 F006 演示订单")
+                    .withCode("F006_DEMO_MARKER_REQUIRED");
+        }
+        if (oaActionIdempotencyService == null) {
+            throw new BusinessException(503, "OA 审批幂等服务暂不可用，请稍后重试")
+                    .withCode("OA_IDEMPOTENCY_SERVICE_UNAVAILABLE");
+        }
+        OaActionIdempotencyService.ActionContext actionContext =
+                new OaActionIdempotencyService.ActionContext(
+                        factoryId, instanceId, request.idempotencyKey(), request.expectedNodeId(),
+                        HistoryAction.APPROVE.name(), user.getId(), user.getRoleCode(), request.notes());
+        Map<String, Object> result = oaActionIdempotencyService.execute(
+                actionContext,
+                () -> executeDemoDomainAction(factoryId, instanceId, instance, user,
+                        request.expectedNodeId(), request.notes()));
+        return ApiResponse.success(result);
+    }
+
+    private Map<String, Object> executeDemoDomainAction(
+            String factoryId,
+            String instanceId,
+            ApprovalWorkflowInstance instance,
+            User user,
+            String expectedNodeId,
+            String notes) {
+        PurchaseOrder order = purchaseService.applyDemoApproveAction(
+                factoryId,
+                instance.getBusinessEntityId(),
+                instanceId,
+                user.getId(),
+                user.getRoleCode(),
+                expectedNodeId,
+                HistoryAction.APPROVE,
+                notes);
+        ApprovalWorkflowInstance updated = workflowEngine.getLatestInstance(
+                factoryId, instance.getModuleCode(), instance.getBusinessEntityId())
+                .orElse(instance);
+        return Map.of(
+                "instanceId", updated.getId(),
+                "workflowStatus", updated.getStatus().name(),
+                "businessEntityId", order.getId(),
+                "businessStatus", order.getStatus().name());
+    }
+
     private Map<String, Object> executeDomainAction(
             String factoryId,
             String instanceId,
