@@ -65,3 +65,13 @@ PR #1451、#1457、#1438、#1475 已合并；原安全链部署 commit ecfb04cba
 主线汇合保留验收组在飞任务，补充归档已发布 #1475 后台退役旧登记（原安全链 release receipt 同上）：
 
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
+
+## 汇合检查点
+
+主线 `91bfa2c9b42ac5e98ca67b02e0de6686339b5913` 已合入清理分支。合并保留两个独立 PG 选择器：PurchaseAutoSuggestion 与 SupplierDeliveryNativeQuery。下列已冻结子切片由 root 统一持有最终验证/PR scope，细节迁出 ACTIVE（状态仍 review，未声称已合并）：
+
+- `SEC-RESTAURANT-CHAT-20261105` — `claimed` — Owner restaurant_chat/root — Base 41f58a822cf — scope smartbi/api/chat.py及专属回归已冻，续food_kb全目录及其专属tests；清餐饮RAG/guard/分类/入库入口，保留factory/OCR/通用食品知识。Python Owner只管其余闭包/registry；四代码执行者隔离。
+- `SEC-RESTAURANT-FACTORY-COMPAT-20261105` — `review` — Owner factory_compat/root — Base 41f58a822cf — scope FactoryKpiPanel及其测试(当前)、Finding/Navigation、平台菜单/角色模块/Interview目录、PermissionService仅模块注册、Attachment权限及对应tests；移除餐饮注册并保留工厂能力。root串行Maven权限/启动；禁改Orch/SSE/Supplier/SmartBI/Canvas，详见归档。
+- `SEC-RESTAURANT-FACTORY-STORE-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope Python eval/store.py、validation.py、__init__.py及agent_eval旧trace/service/factory/http tests；清餐饮corpus/旧trace，恢复factory ACL/503正向，pytest相关集合。禁止service/runner/legacy/PG测试；独立目录产物，冻结释放。
+- `SEC-RESTAURANT-PYTHON-SURFACES-20261105` — `claimed` — Owner restaurant_chat/root — Base 41f58a822cf — scope POS/twodfire闭包、canonical/dish_*、共享队列dish分支、shared诊断及chart-insight API/service/相关tests；保留工厂上传/通用队列/finance/租户。main注册由root移除；禁止AgentOps/legacy/CI/Java/UI。
+- `SEC-RESTAURANT-PYTHON-DOMAINS-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope canonical/entity_resolution、knowledge/loader、shared除diagnostics及smartbi_compat/_rbac_strip.py的餐饮分支与相关tests；先核factory消费者，删dish/restaurant配置入口，保留通用实体/工厂配置/ACL；禁改main/AgentOps；pytest对应集合。
