@@ -63,3 +63,35 @@ def test_trainer_never_randomly_splits_explicit_test(tmp_path):
     config=SimpleNamespace(seed=42,new_data_path='train',old_data_path=None,replay_ratio=0,validation_data_path='validation',protected_test_path='test',model_path=str(tmp_path),label_mapping_path=None,freeze_layers=0,max_length=64,output_path=str(tmp_path/'out'),epochs=2,batch_size=4,learning_rate=5e-6,warmup_ratio=.1,weight_decay=.01,eval_steps=50,save_steps=100)
     with pytest.raises(ReachedArguments):ns['run_finetuning'](config)
     assert captured==[(['独立采购进货样本XYZ'],[0]),(['机器保养台账LMN'],[0])]
+
+
+def test_shadow_resume_canary_is_not_charged_twice(tmp_path,monkeypatch):
+    import asyncio,json
+    import factory_cloud_shadow as shadow
+    secrets=tmp_path/'.codex/secrets'
+    secrets.mkdir(parents=True)
+    (secrets/'cretas-openai-eval.env').write_text('OPENAI_API_KEY=dummy-shadow-fixture',encoding='utf-8')
+    monkeypatch.setattr(Path,'home',classmethod(lambda cls:tmp_path))
+    rows=[dict(id='test:'+str(i),split='test',text='synthetic '+str(i),choices=[dict(value='A',description='fixture')]) for i in range(2)]
+    monkeypatch.setattr(shadow,'plan',lambda _:rows)
+    output=tmp_path/'cloud-results.jsonl'
+    output.write_text(json.dumps(dict(model=shadow.MODELS[0],id='test:0'))+'\n',encoding='utf-8')
+    calls=[]
+    class Client:
+        def __init__(self,**_):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*_):pass
+        async def post(self,url,json):
+            from types import SimpleNamespace
+            calls.append((json['model'],json['input']))
+            body=dict(usage=dict(input_tokens=10,output_tokens=2))
+            if url.endswith('decisions'):body['answers']=[dict(choice='A',confidence=.9)]
+            else:body['output']=[dict(content=[dict(type='output_text',text='{"label":"A","confidence":0.9}')])]
+            return SimpleNamespace(status_code=200,headers={},json=lambda:body)
+    monkeypatch.setattr(shadow.httpx,'AsyncClient',Client)
+    asyncio.run(shadow.run(tmp_path))
+    assert len(calls)==5
+    assert len(set(calls))==5
+    results=[json.loads(line) for line in output.read_text(encoding='utf-8').splitlines()]
+    assert len(results)==6
+    assert len({(r['model'],r['id']) for r in results})==6

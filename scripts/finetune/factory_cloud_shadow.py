@@ -59,6 +59,7 @@ async def run(root):
         if config.get(k):headers[h]=config[k]
     output=root/'cloud-results.jsonl';existing=read(output) if output.exists() else []
     done={(r['model'],r['id']) for r in existing}
+    if len(done)!=len(existing):raise ValueError('Duplicate cloud evidence; inspect before resuming')
     ledgerpath=root/'cloud-ledger.json'; ledger=json.loads(ledgerpath.read_text(encoding='utf-8')) if ledgerpath.exists() else []
     if any(r['state']=='pending' for r in ledger):raise ValueError('Unresolved request; inspect before resuming, no automatic retry')
     stop=asyncio.Event();sem=asyncio.Semaphore(3)
@@ -97,6 +98,7 @@ async def run(root):
                 encoded=json.dumps(result,ensure_ascii=False)
                 if config['OPENAI_API_KEY'] in encoded:raise ValueError('Credential in result')
                 with output.open('a',encoding='utf-8') as f:f.write(encoded+'\n')
+                done.add((model,row['id']))
                 print(model,row['id'],result.get('status'),result.get('raw'),round(result.get('latency_ms',0)),flush=True)
         # A single canary for each model, then bounded parallel requests, no retries.
         for model in MODELS:
