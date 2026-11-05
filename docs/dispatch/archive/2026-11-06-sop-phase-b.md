@@ -15,3 +15,5 @@ Owner food/root；Base 09555864bf513a87285c96f7fd6b137dd164f150；worktree C:/Us
 唯一新增配置范围：application-prod.properties显式cretas.sop-attachments.write-enabled=true；SopAttachmentRollout代码缺省false保持，新增真实ConfigDataApplicationContextInitializer的prod绑定阳性与显式false覆盖拒绝Contract。prod开启开关之前沿用原身份/权限/工艺保密/ACL/HEAD/路径/审计全部门禁，不生成额外例外。回滚下限精确09555864bf或其后兼容jar，原PhaseA源码与测试留Git历史。冻结后的官方Java/Web制品、required CI、合并/生产部署、main Android OTA/5560 App与F006受控业务验收必须分别完成。
 
 最终主线组合Web完整type exit0；旧RN28与type内容未变复用，Web抽屉23通过。已恢复原独立SOP spec（含完整UX Flow Analysis）到本切片，不生成Superpowers制品。实际Java prod配置绑定新两项仍待官方13类，未把前端或旧PhaseA测试当新配置已验证。
+
+交付依赖冻结：父PR1487（Material/同food Owner）稳定源687b3已合入本feature，1490临时base到其分支，父正常合main后retarget main；B仅17文件增量，不重新接管或重复修改Supplier/物料源码。仍从Base0955定义官方release范围，避免squash后feature父SHA不在main祖先链；最终B制品包含父物料与本SOP界面/配置，13类SOP门禁与combined required CI分别记录，父212目标内容复用。
