@@ -213,20 +213,40 @@ public class SecondaryPlanFeedService {
      * 同一计划只占一次: 流水里有过本计划的占用就不再扣。
      */
     public void takeHold(String factoryId, ProductionPlan plan, Long operatorId) {
-        if (!"SECONDARY".equals(plan.getPlanSourceType()) || plan.getSecondarySourceWipId() == null) {
+        if (plan == null || plan.getId() == null || factoryId == null
+                || !factoryId.equals(plan.getFactoryId())) {
+            throw new BusinessException(409, "返工计划不属于当前工厂，不能占用来源半成品")
+                    .withCode("SECONDARY_PLAN_FACTORY_MISMATCH")
+                    .withHint("请重新打开本厂计划后再开工");
+        }
+        // Clerk entry may have read a PENDING plan without a lock. Serialize all
+        // entry points on plan -> source, then re-read the ledger after the lock.
+        ProductionPlan lockedPlan = planRepository.findByIdForUpdate(plan.getId())
+                .orElseThrow(() -> new BusinessException(409, "返工计划已不存在，不能占用来源半成品")
+                        .withCode("SECONDARY_PLAN_NOT_FOUND")
+                        .withHint("请刷新计划列表并重新选择计划"));
+        if (entityManager != null) {
+            entityManager.refresh(lockedPlan);
+        }
+        if (!factoryId.equals(lockedPlan.getFactoryId()) || lockedPlan.getDeletedAt() != null) {
+            throw new BusinessException(409, "返工计划不属于当前工厂或已删除，不能占用来源半成品")
+                    .withCode("SECONDARY_PLAN_FACTORY_MISMATCH")
+                    .withHint("请重新打开本厂有效计划后再开工");
+        }
+        if (!"SECONDARY".equals(lockedPlan.getPlanSourceType()) || lockedPlan.getSecondarySourceWipId() == null) {
             return;
         }
-        Long wipId = plan.getSecondarySourceWipId();
-        String deduct = deductRef(wipId, plan.getId());
+        Long wipId = lockedPlan.getSecondarySourceWipId();
+        String deduct = deductRef(wipId, lockedPlan.getId());
         boolean alreadyHeld = txnRepository.findBySemiFinishedIdOrderByCreatedAtAsc(wipId).stream()
                 .anyMatch(txn -> deduct.equals(txn.getSourceRef()));
         if (alreadyHeld) {
             return;
         }
         wipInventoryService.deductForSecondaryPlan(wipId,
-                plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : BigDecimal.ZERO,
-                factoryId, operatorId, IntermediateOwnershipGuard.ofPlan(plan), plan.getId());
-        log.info("SP2 二次加工开工占用: planId={}, wipId={}", plan.getId(), wipId);
+                lockedPlan.getPlannedQuantity() != null ? lockedPlan.getPlannedQuantity() : BigDecimal.ZERO,
+                factoryId, operatorId, IntermediateOwnershipGuard.ofPlan(lockedPlan), lockedPlan.getId());
+        log.info("SP2 二次加工开工占用: planId={}, wipId={}", lockedPlan.getId(), wipId);
     }
 
     /** 本计划在来源行上还占着多少 (开工扣下、还没转成消耗或还回去的量)。只认带本计划号的流水。 */

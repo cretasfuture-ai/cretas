@@ -121,6 +121,8 @@ class SecondaryHoldPostgresContractTest {
     @MockBean IntermediateOwnershipGuard ownershipGuard;
     @MockBean com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
     @MockBean com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope processSecretLlmCostScope;
+    @MockBean com.cretas.aims.service.finance.ProductionCostConsistency productionCostConsistency;
+    @MockBean com.cretas.aims.service.finance.ReturnedCostSynchronizationService returnedCostSynchronizationService;
 
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
@@ -152,6 +154,10 @@ class SecondaryHoldPostgresContractTest {
     }
 
     private Fixture fixture(ProductionPlanStatus status) {
+        return fixture(status, true);
+    }
+
+    private Fixture fixture(ProductionPlanStatus status, boolean initiallyHeld) {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         return tx.execute(state -> {
             SemiFinishedInventory wip = SemiFinishedInventory.builder()
@@ -185,8 +191,10 @@ class SecondaryHoldPostgresContractTest {
             batch.setProductionPlanId(plan.getId());
             batch = batches.save(batch);
 
-            wipService.deductForSecondaryPlan(wip.getId(), new BigDecimal("0.6"), F, 7L,
-                    IntermediateOwnershipGuard.Owner.COMPANY, plan.getId());
+            if (initiallyHeld) {
+                wipService.deductForSecondaryPlan(wip.getId(), new BigDecimal("0.6"), F, 7L,
+                        IntermediateOwnershipGuard.Owner.COMPANY, plan.getId());
+            }
             return new Fixture(plan.getId(), wip.getId(), wip.getIntermediateBatchNo(), batch.getId());
         });
     }
@@ -323,6 +331,64 @@ class SecondaryHoldPostgresContractTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    void concurrentDistinctEntriesTakeOnlyOnePlanHold() throws Exception {
+        Fixture f = fixture(ProductionPlanStatus.PENDING, false);
+        assertThat(jdbc.update("update semi_finished_inventory set produced_quantity=3, "
+                + "available_quantity=3, consumed_quantity=0 where id=? and factory_id=?", f.wipId(), F))
+                .isEqualTo(1);
+        CountDownLatch firstHeld = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch secondRead = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger secondPid = new java.util.concurrent.atomic.AtomicInteger();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> first = pool.submit(() -> tx.executeWithoutResult(state -> {
+                ProductionPlan plan = plans.findByIdForUpdate(f.planId()).orElseThrow();
+                feed.takeHold(F, plan, 7L);
+                firstHeld.countDown();
+                try {
+                    if (!releaseFirst.await(30, TimeUnit.SECONDS)) throw new IllegalStateException("first release timed out");
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(error);
+                }
+            }));
+            assertThat(firstHeld.await(30, TimeUnit.SECONDS)).isTrue();
+            Future<?> second = pool.submit(() -> tx.executeWithoutResult(state -> {
+                // A distinct entry has its own transaction and an earlier, unlocked managed plan.
+                ProductionPlan earlierRead = plans.findByIdAndFactoryId(f.planId(), F).orElseThrow();
+                secondPid.set(jdbc.queryForObject("select pg_backend_pid()", Integer.class));
+                secondRead.countDown();
+                feed.takeHold(F, earlierRead, 8L);
+            }));
+            assertThat(secondRead.await(30, TimeUnit.SECONDS)).isTrue();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+            boolean waiting = false;
+            while (System.nanoTime() < deadline) {
+                waiting = Boolean.TRUE.equals(jdbc.queryForObject(
+                        "select exists(select 1 from pg_stat_activity where pid=? and wait_event_type='Lock')",
+                        Boolean.class, secondPid.get()));
+                if (waiting) break;
+                Thread.sleep(20); // Observe an actual DB lock wait, not a probabilistic scheduling delay.
+            }
+            assertThat(waiting).as("second entry really waits while first hold is uncommitted").isTrue();
+            releaseFirst.countDown();
+            first.get(30, TimeUnit.SECONDS);
+            second.get(30, TimeUnit.SECONDS);
+        } finally {
+            releaseFirst.countDown();
+            pool.shutdownNow();
+        }
+        assertThat(jdbc.queryForObject("select count(*) from semi_finished_inventory_transactions "
+                + "where factory_id=? and semi_finished_id=? and source_ref=?", Integer.class,
+                F, f.wipId(), SecondaryPlanFeedService.deductRef(f.wipId(), f.planId())))
+                .as("same plan has exactly one source hold despite distinct concurrent entries").isEqualTo(1);
+        assertThat(consumed(f)).isEqualByComparingTo("0.6");
+        assertThat(jdbc.queryForObject("select available_quantity from semi_finished_inventory where id=?",
+                BigDecimal.class, f.wipId())).isEqualByComparingTo("2.4");
     }
 
     @Test

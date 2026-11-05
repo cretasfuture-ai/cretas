@@ -175,6 +175,7 @@ class SecondaryReworkFeedContractTest {
         when(batchRepo.findById(REWORK_BATCH)).thenReturn(Optional.of(batch));
         when(batchRepo.findByFactoryIdAndProductionPlanId(F, PLAN_ID)).thenReturn(List.of(batch));
         when(planRepo.findByIdAndFactoryId(PLAN_ID, F)).thenAnswer(inv -> Optional.of(plan));
+        when(planRepo.findByIdForUpdate(PLAN_ID)).thenAnswer(inv -> Optional.of(plan));
         when(taskRepo.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(F, INSTANCE))
                 .thenReturn(List.of(cure, rework));
         when(taskRepo.findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(F, REWORK_BATCH))

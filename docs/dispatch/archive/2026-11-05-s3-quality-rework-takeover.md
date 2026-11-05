@@ -10,6 +10,8 @@ Owner: 01a1a954/root. Base SHA: 91bfa2c9b42ac5e98ca67b02e0de6686339b5913.
 
 允许文件（两冻结PR原diff并集，对应修复限同scope）：
 
+新增迁移与真实库存测试scope：`backend/java/cretas-api/src/test/java/com/cretas/aims/integration/QualityDispositionInventoryPostgresContractTest.java`（唯一写Owner root/qc_pg；Base91bfa2c9；parent冻结后统一Maven/PG串行运行）及 `ProductionSettlementManualOverrideMigrationPostgresContractTest.java`（root）。未发布结单迁移由旧V20261104_61顺延V20261105_93，避开main91与方案组预留92；发布需先合/应用较小版本并最终重检。
+
 补充对应测试scope：`backend/java/cretas-api/src/test/java/com/cretas/aims/service/wip/WipOutputCorrectionPostgresContractTest.java`。原PR1446新增mandatory持久化注入导致此既有JDBC-only PG fixture启动失败；仅补测试注入依赖，禁止删生产refresh或把该fixture称为Hibernate验证。真实缓存/锁并发由SecondaryHoldPostgresContractTest执行。
 - `.github/workflows/java-gate-pr.yml`
 - `backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/quality/QualityCheckUpdateTool.java`
@@ -58,7 +60,7 @@ Owner: 01a1a954/root. Base SHA: 91bfa2c9b42ac5e98ca67b02e0de6686339b5913.
 - `backend/java/cretas-api/src/main/java/com/cretas/aims/service/yield/impl/PendingInterimFeedServiceImpl.java`
 - `backend/java/cretas-api/src/main/java/com/cretas/aims/service/yield/impl/YieldReportServiceImpl.java`
 - `backend/java/cretas-api/src/main/java/com/cretas/aims/service/yield/OrderCostBreakdownService.java`
-- `backend/java/cretas-api/src/main/resources/db/flyway/V20261104_61__production_settlement_manual_override_and_semi_stocking.sql`
+- `backend/java/cretas-api/src/main/resources/db/flyway/V20261105_93__production_settlement_manual_override_and_semi_stocking.sql`
 - `backend/java/cretas-api/src/main/resources/platform/factory-menu-paths.json`
 - `backend/java/cretas-api/src/test/java/com/cretas/aims/controller/DisposalFinanceApprovalAccessContractTest.java`
 - `backend/java/cretas-api/src/test/java/com/cretas/aims/controller/factory/FactoryMaterialRequisitionWarehousePickingContractTest.java`
@@ -119,3 +121,13 @@ Owner: 01a1a954/root. Base SHA: 91bfa2c9b42ac5e98ca67b02e0de6686339b5913.
 - `web-admin/src/views/sales/packagingConversion.ts`
 - `web-admin/src/views/warehouse/shipments/__tests__/packagingConfirm.integration.test.ts`
 - `web-admin/src/views/warehouse/shipments/list.vue`
+
+## 整合修复检查点（尚未验证通过）
+
+原1446五处冲突已解，PG selector65+64取并集66再新增两项真实PG为68，无删除。保留alsoAllowRoles与alsoAllowModules两种端点例外，原工厂主开关、显式DENY及独立权限层不变。
+
+发现真实P1：clerk独立幂等键可同计划并发双占来源。takeHold现在先锁计划并refresh，严格factory/deleted后从锁后真值判来源，再查ledger/扣WIP；新增真实锁等待、3kg充足余额和恰一次占用的确定性PG竞态，不用余额不足造绿。独立源码复核通过，但运行证据仍待补。
+
+原PG启动修复首跑：JDBC WipOutput5通过，SecondaryHold8仍缺最新main财务required bean，新增两项测试依赖后待复验；未删生产refresh。质量原API断言适配1469新窄API且保留旧API阴性，3项重测通过。Web九套首轮55通过/1旧API断言失败原件保留，其余同内容证据复用；新报废菜单正式catalog补齐。RN五套43项通过，typecheck和原生UI待做。
+
+子任务TASKS-S3-QC-PG-20261105仅新增五场景真实库存测试文件，静态diff检查通过、未运行Maven或连接数据库，未commit；root已收回唯一写Owner并统一纳入待运行36类选择器。原未发布迁移61已顺延93，增加实际Flyway/PG/SpringJPA旧行/新行两场景，明确仅结单表投影验证，不冒称全应用迁移回放。

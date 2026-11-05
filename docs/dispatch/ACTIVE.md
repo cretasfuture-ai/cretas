@@ -7,6 +7,7 @@
 
 ## 在飞任务
 
+
 - `TASKS-S3-QUALITY-REWORK-20261105` — `in-progress` — Owner `01a1a954/root` — Base `91bfa2c9b42ac5e98ca67b02e0de6686339b5913` — WT cretas-quality-rework-20261105整合#1441/#1446；scope两PR原diff及测试，明细archive/2026-11-05-s3-quality-rework-takeover.md；CI/冲突修复→PG/JPA/安全复核→发布/F006 UI。共享入口保留他组变更；无发布/设备占用。
 
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。

@@ -52,6 +52,7 @@ describe('报废页按钮权限', () => {
     expect(has(wrapper, 'disposal.reject.open')).toBe(true);
     expect(has(wrapper, 'disposal.create.open')).toBe(false);
     expect(get.mock.calls.map(([url]) => String(url))).not.toContain('/F006/material-batches');
+    expect(get.mock.calls.map(([url]) => String(url))).not.toContain('/F006/disposal-records/eligible-material-batches');
     expect(get.mock.calls.map(([url]) => String(url))).toContain('/F006/disposal-records');
   });
 
@@ -60,7 +61,8 @@ describe('报废页按钮权限', () => {
     expect(has(wrapper, 'disposal.create.open')).toBe(true);
     expect(has(wrapper, 'disposal.approve')).toBe(false);
     expect(has(wrapper, 'disposal.reject.open')).toBe(false);
-    expect(get.mock.calls.map(([url]) => String(url))).toContain('/F006/material-batches');
+    expect(get.mock.calls.map(([url]) => String(url))).toContain('/F006/disposal-records/eligible-material-batches');
+    expect(get.mock.calls.map(([url]) => String(url))).not.toContain('/F006/material-batches');
   });
 
   it('工厂管理员: 两边都有', async () => {
