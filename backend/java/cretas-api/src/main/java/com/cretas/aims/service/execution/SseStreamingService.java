@@ -443,7 +443,7 @@ public class SseStreamingService {
                 return;
             }
             // 1.5. 早期问题类型检测
-            if (SemanticConversationContextService.allowsDirectRoute(request)
+            if ((semanticConversationContextService == null || SemanticConversationContextService.allowsDirectRoute(request))
                     && !factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
                 QuestionType earlyQuestionType = knowledgeBase.detectQuestionType(userInput);
                 if (earlyQuestionType == QuestionType.GENERAL_QUESTION ||
@@ -471,7 +471,8 @@ public class SseStreamingService {
             // freshness boundary while the dedicated restaurant execution lane is retired.
             // 第 3b 步: 带最近对话的轮次也不读语义缓存 (缓存键只有工厂+原话, 不含上下文)。
             boolean skipCacheForRestaurant = factoryPackConstrained || restaurantTenant
-                    || !SemanticConversationContextService.allowsDirectRoute(request);
+                    || !recentTurns(request).isEmpty()
+                    || semanticConversationContextService != null && !SemanticConversationContextService.allowsDirectRoute(request);
             SemanticCacheHit cacheHit = skipCacheForRestaurant
                     ? SemanticCacheHit.miss(0L)
                     : semanticCacheService.queryCache(factoryId, userInput);
@@ -508,7 +509,10 @@ public class SseStreamingService {
                 // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
                 Long recognizerUserId = trustedFactoryActor ? userId : null;
                 String recognizerSessionId = trustedFactoryActor ? request.getSessionId() : null;
-                matchResult = aiIntentService.recognizeIntentWithConfidence(
+                matchResult = request.getSemanticContext() == null ? aiIntentService.recognizeIntentWithConfidence(
+                        userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                        request.getMode(), null, recentTurns(request))
+                        : aiIntentService.recognizeIntentWithConfidence(
                         userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
                         request.getMode(), null, SemanticConversationContextService.effectiveHistory(request), request.getSemanticContext());
             } catch (LlmSchemaValidationException e) {
@@ -527,17 +531,20 @@ public class SseStreamingService {
             if (semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)
                 semanticReadIntent = aiIntentService.getIntentByCode(factoryId,
                         SemanticConversationContextService.previousReadIntent(request)).orElse(null);
-            if (semanticReadIntent != null) {
-                String denied = permissionDeniedMessage(factoryId, semanticReadIntent, userId, userRole);
-                if (denied != null) {
-                    streamNoPermission(emitter, semanticReadIntent, denied, startTime);
+            if (request.getSemanticContext() != null && (ToolDispatchService.supportsSemanticRead(semanticReadIntent)
+                    || semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)) {
+                if (semanticReadIntent != null) {
+                    String denied = permissionDeniedMessage(factoryId, semanticReadIntent, userId, userRole);
+                    if (denied != null) {
+                        streamNoPermission(emitter, semanticReadIntent, denied, startTime);
+                        return;
+                    }
+                }
+                IntentExecuteResponse readTurn = toolDispatchService.resolveReadTurn(factoryId, userId, request, matchResult);
+                if (readTurn != null) {
+                    streamTerminalResponse(emitter, readTurn, startTime);
                     return;
                 }
-            }
-            IntentExecuteResponse readTurn = toolDispatchService.resolveReadTurn(factoryId, userId, request, matchResult);
-            if (readTurn != null) {
-                streamTerminalResponse(emitter, readTurn, startTime);
-                return;
             }
             // 5. 处理识别结果
             if (!matchResult.hasMatch()) {

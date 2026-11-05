@@ -111,6 +111,9 @@ public class ToolDispatchService {
                     NEW/SWITCH是独立目标；CONTINUE/CORRECT仅可用于同一个目标。
                     parameters仅返回本轮明确给出或明确纠正的值，不填旧值或默认值。已填字段也必须允许纠正。
                     参数应符合当前真实Tool描述/参数；时间按日期边界规范化，状态按真实枚举识别。
+                    dateScope描述本轮时间变化：CLOSED为单日或封闭区间，FROM为只有起点，UNTIL为只有终点，
+                    UNCHANGED为没有修改时间，UNRESOLVED为无法确定边界。不要把封闭单日变成无限未来。
+                    CLOSED应给出startDate和endDate；FROM/UNTIL只给相应一边，不继承此前另一边。
                     目标切换后不继承不兼容参数；“其他不变”仅保留同一任务已有兼容条件。
                     取消是对当前任务的明确对话动作，不能按某个词片段决定；修饰对象的否定不是取消。
                     过期/未知状态不等于新会话；不能据此猜旧对象、日期或状态，依据不足就CLARIFY。
@@ -145,7 +148,8 @@ public class ToolDispatchService {
             }
             Map<String,Object> turnSchema = Map.of("type", "object", "properties", Map.of(
                     "action", Map.of("type", "string", "enum", List.of("NEW", "CONTINUE", "CORRECT", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")),
-                    "parameters", deltaSchema, "message", Map.of("type", "string")), "required", List.of("action", "parameters", "message"));
+                    "dateScope", Map.of("type", "string", "enum", List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED")),
+                    "parameters", deltaSchema, "message", Map.of("type", "string")), "required", List.of("action", "dateScope", "parameters", "message"));
             LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, factoryId,
                     system, objectMapper.writeValueAsString(input));
             if (redacted.refused()) return readTurnReply("NEED_MORE_INFO", "当前任务上下文无法安全解析，请明确查询目标和条件。");
@@ -186,16 +190,39 @@ public class ToolDispatchService {
                     && "UNSUPPORTED_CAPABILITY".equals(previous.get("reason")) && !delta.containsKey("metric"))
                 return readTurnReply("UNSUPPORTED_CAPABILITY", "上次请求的排行指标尚不受支持，请先明确是否改看金额排行。");
             Map<?,?> properties = schema.get("properties") instanceof Map<?,?> p ? p : Map.of();
-            for (var entry : delta.entrySet()) {
-                if (!(entry.getKey() instanceof String key) || !properties.containsKey(key)
+            if (delta.keySet().stream().anyMatch(key -> !(key instanceof String)))
+                return readTurnReply("NEED_MORE_INFO", "返回了无法校验的查询字段，请明确查询条件。");
+            Map<String,Object> rawDelta = new java.util.LinkedHashMap<>();
+            delta.forEach((k,v) -> rawDelta.put(String.valueOf(k), v));
+            boolean changesDate = rawDelta.containsKey("startDate") || rawDelta.containsKey("endDate");
+            String dateScope = turn.get("dateScope") instanceof String value ? value : changesDate ? "UNRESOLVED" : "UNCHANGED";
+            if ("CLOSED".equals(dateScope)) {
+                // The model chooses the meaning; existing calendar rules supply a missing bound.
+                // Never infer a closed period from a partial date alone (e.g. an open-ended query).
+                if (timeRanges.size() == 1 && timeRanges.get(0).isValid()) {
+                    String start = timeRanges.get(0).getStart().toLocalDate().toString();
+                    String end = timeRanges.get(0).getEnd().toLocalDate().toString();
+                    if (start.equals(rawDelta.get("startDate"))) rawDelta.putIfAbsent("endDate", end);
+                    if (end.equals(rawDelta.get("endDate"))) rawDelta.putIfAbsent("startDate", start);
+                }
+                if (!rawDelta.containsKey("startDate") || !rawDelta.containsKey("endDate"))
+                    return readTurnReply("NEED_MORE_INFO", "未能确定完整的查询时间范围，请明确开始和结束日期。");
+            } else if ("FROM".equals(dateScope) && rawDelta.containsKey("startDate") && !rawDelta.containsKey("endDate")) {
+                merged.remove("endDate"); sources.remove("endDate");
+            } else if ("UNTIL".equals(dateScope) && rawDelta.containsKey("endDate") && !rawDelta.containsKey("startDate")) {
+                merged.remove("startDate"); sources.remove("startDate");
+            } else if (!"UNCHANGED".equals(dateScope) || changesDate) {
+                return readTurnReply("NEED_MORE_INFO", "未能确定时间条件的边界，请说明是完整区间还是只有起止一边。");
+            }
+            for (var entry : rawDelta.entrySet()) {
+                String key = entry.getKey();
+                if (!properties.containsKey(key)
                         || entry.getValue() == null || !(entry.getValue() instanceof String
                         || entry.getValue() instanceof Number || entry.getValue() instanceof Boolean))
                     return readTurnReply("NEED_MORE_INFO", "返回了无法校验的查询条件，请明确查询条件。");
                 merged.put(key, entry.getValue());
                 sources.put(key, "CURRENT_EXPLICIT");
             }
-            Map<String,Object> rawDelta = new java.util.LinkedHashMap<>();
-            delta.forEach((k,v) -> rawDelta.put(String.valueOf(k), v));
             Map<String,Object> computedEvidence = new java.util.LinkedHashMap<>();
             for (String dateKey : List.of("startDate", "endDate")) {
                 Object value = rawDelta.get(dateKey);
@@ -208,6 +235,9 @@ public class ToolDispatchService {
                 return readTurnReply("NEED_MORE_INFO", "部分查询参数缺少本轮输入依据，请明确这些条件后重试。");
             String invalid = validateReadParameters(schema, merged, factoryId, false);
             if (invalid != null) return readTurnReply("NEED_MORE_INFO", invalid);
+            if ("CLOSED".equals(dateScope) && java.time.LocalDate.parse(String.valueOf(rawDelta.get("startDate")))
+                    .isAfter(java.time.LocalDate.parse(String.valueOf(rawDelta.get("endDate")))))
+                return readTurnReply("NEED_MORE_INFO", "查询开始日期不能晚于结束日期，请确认时间范围。");
             request.setSemanticParameters(java.util.Collections.unmodifiableMap(merged));
             request.setSemanticParameterSources(java.util.Collections.unmodifiableMap(sources));
             return null;
@@ -218,6 +248,10 @@ public class ToolDispatchService {
             if (pilot && request.getSemanticParameters() == null && salesRankingConversationSupport != null)
                 salesRankingConversationSupport.finishRead(factoryId, userId, request, "BLOCKED");
         }
+    }
+
+    static boolean supportsSemanticRead(AIIntentConfig intent) {
+        return intent != null && intent.getToolName() != null && SEMANTIC_READ_TOOLS.contains(intent.getToolName());
     }
 
     private static Map<?,?> previousRead(IntentExecuteRequest request) {

@@ -37,6 +37,7 @@ F006 的 `ORDER_LIST -> order_list`、`MATERIAL_BATCH_QUERY -> material_batch_qu
 - Java contextual 分支跳过不带上下文的旧缓存/短语提前返回；相关 LLM 不可用时明确失败/澄清，不回退为无上下文确定意图。旧无任务上下文调用兼容保留，不声称全仓所有入口均已统一。
 - 只读试点用实际绑定 Tool 的描述/schema 让 LLM 识别 NEW/CONTINUE/CORRECT/SWITCH/CANCEL/CLARIFY/UNSUPPORTED 及参数 delta。保留 NONE/CLARIFY，不将唯一候选伪装成置信度 1。
 - 参数顺序：本轮明确修改优先；同目标保留兼容的此前值；换目标清除不兼容条件；模型合并后再补缺省值。既有时间规则、参数 grounding、真实 Tool enum/type/bounds、权限和业务服务做最终校验。数量排行无法通过“理解为销量”后返回金额榜。
+- 日期补充契约：LLM 用 dateScope 区分 CLOSED/FROM/UNTIL/UNCHANGED/UNRESOLVED。程序仅在 CLOSED 且唯一现有时间规范化证据匹配时补全遗漏边界，不靠句式白名单决定开放/封闭；FROM/UNTIL 清除旧的相反边界；反向封闭区间和无法确定的边界先澄清。非时间纠正保留旧双边日期。
 - 删除两入口对识别前 `prepare` 句式强制路由的调用；未命中不再清空旧槽、抢先填满默认值。旧方法仅保留兼容/历史测试用途，未新增续句白名单。原数量纠正、写确认、取消机制继续复用。
 - READ_QUERY 在同一原记忆槽采用事务内悲观行锁 + 版本 CAS。reserve 保留旧目标直至语义验证成功，终态轮换版本；取消失败回滚、迟到结果不再推进已取消/被替换任务。同目标关联的原 ConversationSession 才被取消，不顺带取消其他草稿。
 
@@ -69,12 +70,14 @@ Java 命令的选择器：`SemanticConversationContextContractTest,SemanticReadT
 |---|---|---|
 | 查上月已确认订单 | ORDER_LIST，10月1—31日，CONFIRMED | SUCCESS / SUCCESS |
 | 时间改成本月，状态不变 | ORDER_LIST，11月1—30日，CONFIRMED 保留 | SUCCESS / SUCCESS |
-| 查今天入库的原料 | MATERIAL_BATCH_QUERY，当日，移除订单状态 | SUCCESS / SUCCESS |
+| 查今天入库的原料 | MATERIAL_BATCH_QUERY；normal缺endDate，SSE有单日双边；订单状态已移除 | 服务均SUCCESS，但normal任务失败 |
 | 不用查了 | CANCEL，READ_QUERY 终态 CLEARED | CANCELLED / CANCELLED |
 
-开发回放 8/8 轮、2/2 对话通过；失败/未知均留在其所属尝试记录中。此前适配器失败（请求 chunked 读取、错误依赖注入、路径参数文件等）完整保留，不当作产品成功，也不悄悄丢弃。**无同题旧源码真实模型数值基线，不能声称量化提升。**
+**评分更正：原报告的8/8已撤回。** 原断言只检查 material startDate，漏检了 endDate；普通入口当日查询缺少上界，SSE 完整。在完整目标、双边日期、状态和取消状态标准下，此轮为 **7/8轮、1/2完整对话**。同一标准重评检索消融轮也为7/8（该轮SSE缺少endDate）。原始trace、旧summary及更正后的 `*-strict-date-rescore.json` 同时保留；不删除失败或把缺界限当作成功。
+此前适配器失败（请求 chunked 读取、错误依赖注入、路径参数文件等）完整保留，不当作产品成功，也不悄悄丢弃。**无原生产源码同题真实模型数值基线，不能声称相对生产的量化提升。** 日期修复后的重测需独立记录。
 
 该次 32 次真实模型调用：mini 24 次（input 16,649 / output 605），Luna 8 次（input 5,669 / output 0）。真实服务轮延迟 nearest-rank p50 5.352s，p95 7.711s，样本仅8轮；每轮4次调用。按未缓存标准费率估算 $0.015776，保守缓存写入上界 $0.016627，非账单实扣，也未假定免费抵扣。
+初次检索消融用了24次调用，p50 4.590s / p95 5.771s、标准价约$0.013557；必要参数正确率同为7/8，不能据此声称无损达到100%。完整两候选仅是受控目录，不证明266类召回覆盖。
 
 此前裸 Luna 公开开发 8 项中冻结期望为7/8；“不用的原料还有多少”没有误取消，但目标/动作未达期望，仍记失败/待审。Terra 复核指出“库存中的不用/闲置”能力含义需先澄清，不改写成绩使其变为通过。
 97.11%=773/796 保留为旧离线标签指标；上述结果不能证明真实多轮达到95%，也不能证明线上综合成功率。
@@ -96,3 +99,5 @@ Java 命令的选择器：`SemanticConversationContextContractTest,SemanticReadT
 尚未验证/尚未实施：全矩阵精确表启用/绕过收益；真实模型对“待发货”能力澄清；页面/首条结果真实对象ID的两步只读任务；通用多草稿中断/恢复与“继续”歧义；所有写草稿更改后的确认失效组合；真实独立多轮 gold；实际 HTTP/UI；生产治理下库存入口成功。已有通用数量纠正/取消回归保留，但不据此宣称这些新增场景全覆盖。
 
 当前阶段只交付首切片分支候选及其证据。commit、push、最终HEAD CI、合并和部署分开记录于收尾回执。冻结未解除，不 merge、不推 main、不部署、不替换线上模型。
+
+CI首轮 `7e4dd11cbf`：8项通过、fast-contracts失败、最终全量按草稿规则跳过。Java为7311 tests /47 failures /64 errors /229 skipped，失败集中9类。新增入口错误影响了无server snapshot的旧快捷路径/重载和非试点重复准入；定向复验已复现，不当作基线噪声。修复策略是生产必需context bean继续强制注入；仅缺少新版快照的旧调用保留原ordinary8/SSE9参数及既有快捷机制；新版语义预校验/resolve仅限三种只读Tool及已存在READ续轮，不影响其他意图原有权限与canonicalization顺序。后续精确提交和门禁结果见最终回执。

@@ -88,7 +88,7 @@ class SseStreamingServiceFollowUpTest {
                 .containsEntry("taskId", 12L)
                 .containsEntry("followUpRule", FollowUpResolver.RULE_WP_DONE);
         verify(h.aiIntentService, never()).recognizeIntentWithConfidence(
-                anyString(), anyString(), anyInt(), any(), any(), any(), any(), any(), any(), any());
+                anyString(), anyString(), anyInt(), any(), any(), any(), any(), any(), any());
         verify(h.toolDispatchService, never()).executeWithTool(any(), any(), any(), any(), any(), any(), any());
     }
 
@@ -103,7 +103,7 @@ class SseStreamingServiceFollowUpTest {
         assertThat(result.getStatus()).isEqualTo("COMPLETED");
         assertThat(result.getMetadata()).isNull();
         verify(h.aiIntentService).recognizeIntentWithConfidence(
-                eq("好了"), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), any(), any());
+                eq("好了"), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), any());
     }
 
     @Test
@@ -116,7 +116,7 @@ class SseStreamingServiceFollowUpTest {
 
         assertThat(result.getStatus()).isEqualTo("COMPLETED");
         verify(h.aiIntentService).recognizeIntentWithConfidence(
-                eq("今天产量多少"), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), any(), any());
+                eq("今天产量多少"), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), any());
     }
 
     @Test
@@ -129,7 +129,7 @@ class SseStreamingServiceFollowUpTest {
                 .context(Map.of("lastAction", lastAction("WORK_PROCESS_TASK_START", Map.of("taskId", 12)))).build());
 
         verify(h.aiIntentService).recognizeIntentWithConfidence(
-                eq("好了"), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), any(), any());
+                eq("好了"), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), any());
     }
 
     @Test
@@ -170,7 +170,7 @@ class SseStreamingServiceFollowUpTest {
                 eq("factory_super_admin"), any());
         assertThat(sent.getValue().getContext()).containsEntry("taskId", 12L);
         verify(h.aiIntentService, never()).recognizeIntentWithConfidence(
-                anyString(), anyString(), anyInt(), any(), any(), any(), any(), any(), any(), any());
+                anyString(), anyString(), anyInt(), any(), any(), any(), any(), any(), any());
         verify(h.pythonAiMatcherClient, after(400).never())
                 .recordSelection(any(), any(), any(), any(), any(), any());
     }
@@ -231,7 +231,7 @@ class SseStreamingServiceFollowUpTest {
             when(aiIntentService.getIntentByCode("F001", code)).thenReturn(Optional.of(intent));
             when(aiIntentService.hasPermission(code, "factory_super_admin")).thenReturn(true);
             when(aiIntentService.recognizeIntentWithConfidence(
-                    eq(input), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), any(), any()))
+                    eq(input), eq("F001"), eq(3), eq(7L), eq("factory_super_admin"), any(), any(), any(), any()))
                     .thenReturn(IntentMatchResult.builder().userInput(input).bestMatch(intent).confidence(0.95)
                             .matchMethod(IntentMatchResult.MatchMethod.LLM).isStrongSignal(true)
                             .requiresConfirmation(false)

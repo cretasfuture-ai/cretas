@@ -643,7 +643,7 @@ public class IntentExecutionOrchestrator {
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
             }
         }
-        if (SemanticConversationContextService.allowsDirectRoute(request)
+        if ((semanticConversationContextService == null || SemanticConversationContextService.allowsDirectRoute(request))
                 && !negationVetoWrite && userInput != null && !userInput.isEmpty()
                 && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)
                 && !isRestaurantCompoundQuestion(factoryId, userInput)) {
@@ -703,7 +703,7 @@ public class IntentExecutionOrchestrator {
         }
 
         // 0.3. 早期问题类型检测
-        if (SemanticConversationContextService.allowsDirectRoute(request) && !factoryPackConstrained
+        if ((semanticConversationContextService == null || SemanticConversationContextService.allowsDirectRoute(request)) && !factoryPackConstrained
                 && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentExecuteResponse earlyRouteResponse = handleEarlyQuestionTypeDetection(
                     factoryId, userInput, request, userId, userRole);
@@ -713,7 +713,7 @@ public class IntentExecutionOrchestrator {
         }
 
         // 0.5. 语义缓存
-        if (SemanticConversationContextService.allowsDirectRoute(request) && userInput != null && !userInput.isEmpty()) {
+        if ((semanticConversationContextService == null || SemanticConversationContextService.allowsDirectRoute(request)) && userInput != null && !userInput.isEmpty()) {
             handleSemanticCache(factoryId, userInput, request);
         }
 
@@ -729,7 +729,10 @@ public class IntentExecutionOrchestrator {
                 Long recognizerUserId = hasTrustedConversationIdentity(
                         factoryId, userId, request.getSessionId()) ? userId : null;
                 String recognizerSessionId = recognizerUserId == null ? null : request.getSessionId();
-                matchResult = aiIntentService.recognizeIntentWithConfidence(
+                matchResult = request.getSemanticContext() == null ? aiIntentService.recognizeIntentWithConfidence(
+                        request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId))
+                        : aiIntentService.recognizeIntentWithConfidence(
                         request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
                         request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId),
                         SemanticConversationContextService.effectiveHistory(request), request.getSemanticContext());
@@ -743,12 +746,15 @@ public class IntentExecutionOrchestrator {
         if (semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)
             semanticReadIntent = aiIntentService.getIntentByCode(factoryId,
                     SemanticConversationContextService.previousReadIntent(request)).orElse(null);
-        if (semanticReadIntent != null) {
-            IntentExecuteResponse denied = checkIntentPermission(semanticReadIntent, factoryId, userId, userRole);
-            if (denied != null) return denied;
+        if (request.getSemanticContext() != null && (ToolDispatchService.supportsSemanticRead(semanticReadIntent)
+                || semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)) {
+            if (semanticReadIntent != null) {
+                IntentExecuteResponse denied = checkIntentPermission(semanticReadIntent, factoryId, userId, userRole);
+                if (denied != null) return denied;
+            }
+            IntentExecuteResponse readTurn = toolDispatchService.resolveReadTurn(factoryId, userId, request, matchResult);
+            if (readTurn != null) return readTurn;
         }
-        IntentExecuteResponse readTurn = toolDispatchService.resolveReadTurn(factoryId, userId, request, matchResult);
-        if (readTurn != null) return readTurn;
 
         if (matchResult != null && matchResult.hasMatch()
                 && SupplierComparisonReadIntent.CODE.equals(matchResult.getBestMatch().getIntentCode())) {

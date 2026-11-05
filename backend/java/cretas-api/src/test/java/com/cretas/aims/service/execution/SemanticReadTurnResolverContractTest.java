@@ -56,6 +56,66 @@ class SemanticReadTurnResolverContractTest {
         }
     }
 
+    @ParameterizedTest @ValueSource(strings = {"startDate", "endDate"})
+    void closedSingleDayCompletesMissingBoundFromExistingCalendarEvidence(String providedBound) throws Exception {
+        try (var h = new SalesRankingSemanticContractTest.Harness()) {
+            previous(h, "ORDER_LIST", Map.of("endDate", "2026-10-31", "status", "CONFIRMED"));
+            var request = request(h, "查今天入库的原料");
+            model(h, "SWITCH", Map.of(providedBound, "2026-11-05"), "CLOSED");
+            assertThat(h.dispatch.resolveReadTurn("F006", 7L, request, bind(h, new MaterialBatchQueryTool(), "MATERIAL_BATCH_QUERY"))).isNull();
+            assertThat(request.getSemanticParameters()).containsExactlyInAnyOrderEntriesOf(
+                    Map.of("startDate", "2026-11-05", "endDate", "2026-11-05"));
+            assertThat(request.getSemanticParameterSources()).containsEntry("startDate", "CURRENT_EXPLICIT").containsEntry("endDate", "CURRENT_EXPLICIT");
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"FROM", "UNTIL"})
+    void openEndedCorrectionRemovesOldOppositeBoundWithoutClosingToday(String scope) throws Exception {
+        try (var h = new SalesRankingSemanticContractTest.Harness()) {
+            previous(h, "ORDER_LIST", Map.of("startDate", "2026-10-01", "endDate", "2026-10-31", "status", "CONFIRMED"));
+            String kept = "FROM".equals(scope) ? "startDate" : "endDate";
+            String removed = "FROM".equals(scope) ? "endDate" : "startDate";
+            var request = request(h, "FROM".equals(scope) ? "时间改为从今天起，状态不变" : "时间改为截至今天，状态不变");
+            model(h, "CORRECT", Map.of(kept, "2026-11-05"), scope);
+            assertThat(h.dispatch.resolveReadTurn("F006", 7L, request, bind(h, new OrderListTool(mock(SalesService.class)), "ORDER_LIST"))).isNull();
+            assertThat(request.getSemanticParameters()).containsExactlyInAnyOrderEntriesOf(
+                    Map.of(kept, "2026-11-05", "status", "CONFIRMED"));
+            assertThat(request.getSemanticParameterSources()).doesNotContainKey(removed);
+        }
+    }
+
+    @Test void nonTimeCorrectionRetainsBothPreviousDateBounds() throws Exception {
+        try (var h = new SalesRankingSemanticContractTest.Harness()) {
+            previous(h, "ORDER_LIST", Map.of("startDate", "2026-10-01", "endDate", "2026-10-31", "status", "CONFIRMED"));
+            var request = request(h, "状态改为PROCESSING，日期不变");
+            model(h, "CORRECT", Map.of("status", "PROCESSING"), "UNCHANGED");
+            assertThat(h.dispatch.resolveReadTurn("F006", 7L, request, bind(h, new OrderListTool(mock(SalesService.class)), "ORDER_LIST"))).isNull();
+            assertThat(request.getSemanticParameters()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                    "startDate", "2026-10-01", "endDate", "2026-10-31", "status", "PROCESSING"));
+            assertThat(request.getSemanticParameterSources()).containsEntry("startDate", "PREVIOUS_VALUE").containsEntry("endDate", "PREVIOUS_VALUE");
+        }
+    }
+
+    @Test void reversedClosedDateRangeCannotExecuteAsAnEmptyQuery() throws Exception {
+        try (var h = new SalesRankingSemanticContractTest.Harness()) {
+            var request = request(h, "查2026-11-30到2026-11-01的订单");
+            model(h, "NEW", Map.of("startDate", "2026-11-30", "endDate", "2026-11-01"), "CLOSED");
+            assertThat(h.dispatch.resolveReadTurn("F006", 7L, request, bind(h, new OrderListTool(mock(SalesService.class)), "ORDER_LIST")).getStatus())
+                    .isEqualTo("NEED_MORE_INFO");
+            assertThat(request.getSemanticParameters()).isNull();
+        }
+    }
+
+    @Test void incompleteUnresolvedDateCannotRunAnUnboundedQuery() throws Exception {
+        try (var h = new SalesRankingSemanticContractTest.Harness()) {
+            var request = request(h, "查今天入库的原料");
+            model(h, "NEW", Map.of("startDate", "2026-11-05"), "UNRESOLVED");
+            assertThat(h.dispatch.resolveReadTurn("F006", 7L, request, bind(h, new MaterialBatchQueryTool(), "MATERIAL_BATCH_QUERY")).getStatus())
+                    .isEqualTo("NEED_MORE_INFO");
+            assertThat(request.getSemanticParameters()).isNull();
+        }
+    }
+
     @Test void scopedNegationDoesNotCancelWhenSemanticActionIsNewQuery() throws Exception {
         try (var h = new SalesRankingSemanticContractTest.Harness()) {
             previous(h, "ORDER_LIST", Map.of("status", "CONFIRMED"));
@@ -127,8 +187,13 @@ class SemanticReadTurnResolverContractTest {
         return IntentMatchResult.builder().bestMatch(AIIntentConfig.builder().intentCode(code).toolName(tool.getToolName()).build()).confidence(1.0).build();
     }
     static DashScopeClient model(SalesRankingSemanticContractTest.Harness h, String action, Map<String,Object> delta) throws Exception {
+        String scope = delta.containsKey("startDate") && delta.containsKey("endDate") ? "CLOSED"
+                : delta.containsKey("startDate") ? "FROM" : delta.containsKey("endDate") ? "UNTIL" : "UNCHANGED";
+        return model(h, action, delta, scope);
+    }
+    static DashScopeClient model(SalesRankingSemanticContractTest.Harness h, String action, Map<String,Object> delta, String scope) throws Exception {
         var client = mock(DashScopeClient.class);
-        String arguments = h.mapper.writeValueAsString(Map.of("action", action, "parameters", delta, "message", "请明确支持的查询口径。"));
+        String arguments = h.mapper.writeValueAsString(Map.of("action", action, "dateScope", scope, "parameters", delta, "message", "请明确支持的查询口径。"));
         var response = h.mapper.convertValue(Map.of("choices", List.of(Map.of("message", Map.of("tool_calls", List.of(Map.of(
                 "id", "fixture", "type", "function", "function", Map.of("name", "resolve_read_turn", "arguments", arguments))))))), ChatCompletionResponse.class);
         when(client.chatWithTools(anyString(), anyString(), anyList())).thenReturn(response);
