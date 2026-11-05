@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `TASKS-S315-SEMI-ENTRY-20261106` — `in-progress` — Owner `01a1a954/root` — Base `9daf3620fa686c6cda7f8bd3da9848b67218e9ed` — scope production/plans/list.vue与半成品结单入口tests；真实正常报工后clean结单隐藏剩余半成品输入，修复两种结单分支均可录入，目标测试/type/官方Web构建/CI后PR发布，复测同QA计划364ea与余量0.4回库。
+- `TASKS-S315-SEMI-ENTRY-20261106` — `review` — Owner `01a1a954/root` — Base `eacf526cf33daa707f4f45f86eae471d076cf4a5` — scope production/plans/list.vue与对应tests；PR1486修clean半成品输入/差异说明错列，21/type/原CI通过；整合最新沙盒main后组合Web构建/必需CI，Java沿用main不重发。继续同QA计划364ea余0.4与de598877返工结单验收。
 
 
 
