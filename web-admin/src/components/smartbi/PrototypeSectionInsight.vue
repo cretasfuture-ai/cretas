@@ -61,7 +61,7 @@ const chatId = computed(() => `section-followup-${props.report.sectionId}`);
 const focusTitle = computed(() => props.focusAlert?.title ?? '');
 const evidenceSources = computed(() => props.report.evidenceSources ?? []);
 const relatedOrders = computed(() => props.report.relatedOrders ?? []);
-const scopeDescription = computed(() => props.report.scopeDescription?.trim() || '当前段落暂无更具体的范围说明。');
+const scopeDescription = computed(() => props.report.scopeDescription?.trim() || '分析范围尚未说明，请先核对日期和工单。');
 
 function resetConversation() {
   requestVersion.value += 1;
@@ -171,21 +171,20 @@ async function submitQuestion() {
     </aside>
 
     <div class="insight-strip">
+      <article class="insight-strip__item">
+        <span class="insight-label">先看结论</span>
+        <p>{{ localizeBlacklakeText(report.summary) }}</p>
+      </article>
       <article class="insight-strip__item insight-strip__item--impact">
-        <span class="insight-label">哪里需要注意</span>
+        <span class="insight-label">哪些数字值得关注</span>
         <p class="impact-copy">{{ localizeBlacklakeText(impact) }}</p>
-        <details v-if="remainingObservations.length || impact" class="insight-details insight-details--inline">
-          <summary>查看完整观察</summary>
-          <p>{{ localizeBlacklakeText(impact) }}</p>
+        <details v-if="remainingObservations.length" class="insight-details insight-details--inline">
+          <summary>其他观察（{{ remainingObservations.length }}）</summary>
           <ul v-if="remainingObservations.length"><li v-for="item in remainingObservations" :key="item">{{ localizeBlacklakeText(item) }}</li></ul>
         </details>
       </article>
-      <article class="insight-strip__item">
-        <span class="insight-label">这组数据怎么样</span>
-        <p>{{ localizeBlacklakeText(report.summary) }}</p>
-      </article>
       <article class="insight-strip__item insight-strip__item--next">
-        <span class="insight-label">怎么处理</span>
+        <span class="insight-label">接下来做什么</span>
         <p>{{ report.nextSteps[0] ? localizeBlacklakeText(report.nextSteps[0]) : '暂无建议动作。' }}</p>
       </article>
     </div>

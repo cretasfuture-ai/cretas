@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { computed, defineComponent, h, inject, provide, type Ref } from 'vue';
-import type { CompleteCostReport, CostProject } from '@/api/smartbi/blacklake';
+import type { CompleteCostReport, CostProject, CostDataAlert } from '@/api/smartbi/blacklake';
 vi.mock('@nuxt/ui/components/Card.vue',()=>({default:{template:'<div><slot name="header"/><slot/></div>'}}));
 vi.mock('@nuxt/ui/components/Button.vue',()=>({default:{template:'<button><slot/></button>'}}));
 vi.mock('@/components/smartbi/DynamicChartRenderer.vue',()=>({default:{template:'<div>成本图表</div>'}}));
@@ -30,6 +30,23 @@ const column=defineComponent({props:['prop'],setup(p,{slots}){const rows=inject<
 function render(){return mount(Component,{global:{stubs:{'el-table':table,'el-table-column':column,'el-select':{name:'ElSelect',props:['modelValue'],emits:['update:modelValue'],template:'<div><slot/></div>'},'el-option':true,'el-pagination':{name:'ElPagination',props:['total','currentPage'],emits:['update:currentPage'],template:'<div/>'},'el-input':true,'el-dialog':true,'el-drawer':{template:'<aside><slot/></aside>'},'el-alert':{props:['title'],template:'<div role="alert">{{title}}</div>'}}}});}
 beforeEach(()=>{auth.store.factoryId='T';vi.mocked(getBlacklakeCompleteCost).mockReset();});
 afterEach(()=>{vi.useRealTimers();});
+it('guides data checks first and opens the actual higher-cost order from a reconciled product gap',async()=>{
+  const report=data();const first=report.analysis.cost.projects[0]!;
+  const higher={...first,projectId:2,projectCode:'HIGHER-ORDER',finishedGood:100,materialCost:500,laborCost:100,unitIdentifiedDirectCost:6,identifiedDirectCost:600};
+  report.analysis.cost.projects=[first,higher];
+  const items:CostDataAlert[]=(['data_quality','business_signal'] as const).map(family=>({id:family,type:'synthetic',family,severity:'warning',blocksUnitCost:false,title:'合成核对项',message:'核对原单',owner:'财务/生产',action:'核对原单',fields:[],entityRefs:[{projectId:1,projectCode:first.projectCode,productCode:'P',unit:'盒'}],evidence:{},detectedBy:'test',ruleVersion:'test',scope:'test',runId:'S',status:'open'}));
+  report.analysis.costAlerts={schema:'test',ruleVersion:'test',summary:{projects:2,costEligible:2,costBlocked:0,alerts:2,byFamily:{data_quality:1,business_signal:1},byType:{}},items,limitations:[],ai:{status:'not_run',message:'合成测试'}};
+  vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(report);const page=render();await flushPromises();
+  expect(page.get('.metrics').text()).toContain('先核对资料的产品1 项');
+  expect(page.get('.metrics').text()).toContain('再核对成本差异的产品0 项');
+  await page.findAll('button').find(b=>b.text()==='查看资料问题')!.trigger('click');
+  await page.findAll('button').find(b=>b.text()==='查看产品分析')!.trigger('click');
+  expect(page.get('[aria-label="同产品工单成本差额"]').text()).toContain('相差 3.75');
+  expect(page.text()).toContain('先处理下方的资料问题');
+  await page.findAll('button').find(b=>b.text()==='核对较高成本工单')!.trigger('click');
+  expect(page.get('[aria-label="最新工单成本明细"] .analysis').text()).toContain('材料费 5.00、人工费 1.00，合计 6.00');
+  page.unmount();
+});
 it('shows exact two-decimal material, labor and unit cost while interpretations are queued',async()=>{
   vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(data());const page=render();await flushPromises();
   expect(page.text()).toContain('0 / 44');expect(page.text()).toContain('2.25 / 盒');
