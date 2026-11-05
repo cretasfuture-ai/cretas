@@ -7,19 +7,13 @@
 
 ## 在飞任务
 
-- `F006-PROD-ROLLOUT-20261105` — `blocked` — Owner root — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope PR1477菜单/沙盒整合及正式站配置部署验收；用户已授权冻结解除后直接合并部署。SEC-PLAN-AUDIT冻结仍在，共享回执仅built；不抢发布窗口。验收Java23、Web35/type/build、正式菜单/隔离重置。
+- `F006-PROD-ROLLOUT-20261105` — `in-progress` — Owner root — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope 正式隔离slot/manager预置、新快照/真实启动与重置验证；用户已授权先准备，冻结解除后合并部署及f006_admin完整验收。不改active正式流量，不抢冻结窗口。
 
-- `F006-SANDBOX-LOCAL-RELAY-20261105` — `review` — Owner root/sandbox_runtime_executor — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/local_relay.py、tests/test_local_relay.py；本机UI认证桥接，仅F006/1309，生产业务零写；验收python unittest。不改共享白名单、不发布。
+- `F006-SANDBOX-BASELINE-20261105` — `in-progress` — Owner root — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope 新版F006只读快照/独立库真实JPA启动与全表重置证据；生产零业务写。旧618表证据不作新版证明。local relay旧切片已归档。
 
-- `F006-SANDBOX-BASELINE-20261105` — `review` — Owner root — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/baseline_export.py及独立测试；F006只读FK闭包投影/敏感字段清除/本机独立PG恢复验证；不写生产，不复制整库业务数据。
+- `F006-SANDBOX-API-20261105` — `in-progress` — Owner root/real_auth_gate — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope Java service/demo/F006SandboxRealAuthContractTest；真实JwtAuthInterceptor/WebMvcConfig MVC鉴权联测。验收目标Maven test；不改生产/Entity/Repository/迁移/主鉴权实现。
 
-- `F006-SANDBOX-API-20261105` — `review` — Owner root/backend_demo — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope Java controller/demo、service/demo、对应测试；F006超管沙盒生命周期及隔离代理；验收 F006SandboxGatewayContractTest。不改Entity/Repository/迁移，不合并发布。
-
-- `F006-SANDBOX-RUNTIME-20261105` — `review` — Owner root — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/实现及配置；隔离实例管理与重置；验收python unittest。禁止生产变更/删除，不合并发布；旧Owner已停止，测试独立委派。
-
-- `F006-SANDBOX-TESTS-20261105` — `review` — Owner root/sandbox_runtime_executor — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/tests/{test_runtime.py,test_orchestrator.py}；strict fixtures和真实HTTP/恢复控制流测试；验收python unittest。不改实现/台账，不启资源。
-
-- `F006-SANDBOX-WEB-20261105` — `review` — Owner root — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope web-admin/src/{demo,views/demo-flow,api/request.ts,components/layout}及对应测试；显式进入、隔离路由、结束后清理；验收Vitest目标+vue-tsc -b。等待主线冻结解除后发布。
+- `F006-SANDBOX-RUNTIME-20261105` — `in-progress` — Owner root/prod_runtime — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope create_private_config.py、linux_service.py、linux systemd模板、test_linux_provision.py、README；Linux私有配置/服务生成及安全验证。验收Python unittest；不碰远端、台账、orchestrator/runtime实现。
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
 
 

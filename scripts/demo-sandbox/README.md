@@ -89,3 +89,30 @@ Tests: `python -m unittest discover -s scripts/demo-sandbox/tests -v`.
 Real acceptance additionally requires two complete business rounds, resetting
 between them and verifying old session access is rejected and all isolated
 content returns to the registered baseline. Unit tests alone do not prove this.
+
+## Linux service template (review-only)
+
+On Linux, private configuration is created only in a new direct child of
+`/var/lib/cretas/f006-demo-sandbox`; the approved parent itself, existing
+directories, repository paths, and symlink escapes are rejected. The slot
+directory is mode 700 and generated private files are mode 600. Unsupported
+platforms fail closed. The generator accepts only the production signing-key
+SHA-256 fingerprint and creates independent sandbox keys; it never reads a
+production secret.
+
+`linux_service.py` renders, without running systemd or touching a remote
+host, a review-only unit for the loopback manager at `127.0.0.1:10041` and
+the fixed runtime config
+`/var/lib/cretas/f006-demo-sandbox/runtime/runtime.private.json`. The unit
+uses the dedicated
+`/opt/cretas/f006-demo-sandbox/venv/bin/python` interpreter (Python 3.9+)
+and read-only code directory. It also writes a clearly labelled blue/green
+gateway environment review file using the real Spring relaxed-binding names
+`CRETAS_DEMO_SANDBOX_ENABLED`,
+`CRETAS_DEMO_SANDBOX_MANAGER_BASE_URL`, and
+`CRETAS_DEMO_SANDBOX_CONTROL_KEY=` as a blank placeholder. It contains no
+key, bearer token, or production endpoint. The service runs as root because
+Docker socket access is root-equivalent; its command, loopback manager, and
+private paths remain fixed. An operator must review and install these files
+through the normal change process; this script never invokes daemon-reload,
+restarts a service, removes volumes, or changes an active production gateway.
