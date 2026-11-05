@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `ARTIFACT-PARAM-AI-DELIVERY-20261105` — `in-progress` — Owner 食品DAG/root — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope 参数偏差汇总三端接入/可信归属负测、AI成本分摊语义/编译预览/对应合同及版本登记；独立复用OTA WT，不含SOP/物料/他组质量返工；目标测试+真实PG/JPA/CI→官方发布及F006验收。
+
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
 
 

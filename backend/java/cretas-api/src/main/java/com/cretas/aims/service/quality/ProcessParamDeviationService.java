@@ -187,15 +187,8 @@ public class ProcessParamDeviationService {
                 continue;   // LIKE 预筛命中了别处的同名文本: 不是快照
             }
             String productTypeId = asString(row.get("product_type_id"));
-            String planId = asString(row.get("plan_id"));
-            String resolvedProductTypeId = asString(row.get("resolved_product_type_id"));
-            String resolvedPlanId = asString(row.get("resolved_plan_id"));
-            if ((resolvedProductTypeId != null && hiddenProducts.contains(resolvedProductTypeId))
-                    || (resolvedPlanId != null && hiddenPlans.contains(resolvedPlanId))) {
-                continue;   // 工艺保密: 无权的保密产品不进
-            }
-            if (hasHiddenScope && isBlank(resolvedProductTypeId) && isBlank(resolvedPlanId)) {
-                continue;   // 无法可靠归属时宁可少读, 不能把历史脏快照泄给受限调用者
+            if (hasHiddenScope && !hasVisibleTrustedOwnership(row, hiddenProducts, hiddenPlans)) {
+                continue;   // 每一个历史归属都必须可信且可见, 普通产品不能掩盖另一个保密或失效来源
             }
             // web 工序表一道工序写多条报工, 每条带同一份快照: 每次填报只算一次
             Long batchId = asLong(row.get("batch_id"));
@@ -220,6 +213,29 @@ public class ProcessParamDeviationService {
             }
         }
         return result;
+    }
+
+    private static boolean hasVisibleTrustedOwnership(Map<String, Object> row,
+                                                       Set<String> hiddenProducts, Set<String> hiddenPlans) {
+        Set<String> products = new HashSet<>();
+        for (String source : List.of("batch", "report", "task")) {
+            String raw = blankToNull(asString(row.get(source + "_product_id")));
+            String resolved = blankToNull(asString(row.get("resolved_" + source + "_product_id")));
+            if (raw != null && (!raw.equals(resolved) || hiddenProducts.contains(resolved))) return false;
+            if (resolved != null) products.add(resolved);
+        }
+        if (products.size() > 1) return false;
+        String plan = blankToNull(asString(row.get("plan_id")));
+        String resolvedPlan = blankToNull(asString(row.get("resolved_plan_id")));
+        if (plan != null && (!plan.equals(resolvedPlan) || hiddenPlans.contains(resolvedPlan))) return false;
+        String task = blankToNull(asString(row.get("task_id")));
+        if (task != null && !task.equals(blankToNull(asString(row.get("resolved_task_id"))))) return false;
+        String reportBatch = blankToNull(asString(row.get("report_batch_id")));
+        String taskBatch = blankToNull(asString(row.get("task_batch_id")));
+        String resolvedBatch = blankToNull(asString(row.get("resolved_batch_id")));
+        if (reportBatch != null && !reportBatch.equals(resolvedBatch)) return false;
+        if (taskBatch != null && !taskBatch.equals(resolvedBatch)) return false;
+        return !products.isEmpty() || resolvedPlan != null;
     }
 
     private JsonNode parse(Long reportId, String json) {

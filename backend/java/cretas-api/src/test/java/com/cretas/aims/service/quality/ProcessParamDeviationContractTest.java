@@ -9,6 +9,7 @@ import com.cretas.aims.dto.quality.ProcessParamDeviationDTO;
 import com.cretas.aims.dto.yield.YieldReportRequest;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
@@ -17,6 +18,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
@@ -76,6 +78,7 @@ class ProcessParamDeviationContractTest {
     @Autowired private ProductionBatchRepository batchRepo;
     @Autowired private ProductionReportRepository reportRepo;
     @Autowired private ProductTypeRepository productTypeRepo;
+    @Autowired private ProductionPlanRepository planRepo;
     @MockBean private ProcessSecretAggregateExclusions aggregateExclusions;
 
     private WorkProcess fry;
@@ -138,6 +141,65 @@ class ProcessParamDeviationContractTest {
         assertThat(view.getTotalChecked()).isEqualTo(6);
         assertThat(view.getTotalDeviations()).isEqualTo(4);
         assertThat(row(view, "炒制", "oilTemp").getReportCount()).isEqualTo(4);
+    }
+
+    @Test
+    void ordinaryBatchCannotMaskProtectedReportProduct() {
+        jdbc.update("UPDATE production_reports SET product_type_id = ? WHERE factory_id = ? AND batch_id = ?",
+                "PPD-PT-A", F, b1.getId());
+        restrictProductA();
+        assertThat(controller.summary(F, null, null, null, null, null).getData().getTotalChecked()).isZero();
+        assertThat(controller.details(F, null, null, null, null, null, null, null, null)
+                .getData().getTotalElements()).isZero();
+    }
+
+    @Test
+    void ordinaryBatchCannotMaskProtectedTaskProduct() {
+        jdbc.update("UPDATE work_process_tasks SET product_type_id = ? WHERE factory_id = ? AND production_batch_id = ?",
+                "PPD-PT-A", F, b1.getId());
+        restrictProductA();
+        assertThat(controller.summary(F, null, null, null, null, null).getData().getTotalChecked()).isZero();
+    }
+
+    @Test
+    void ordinaryProductCannotMaskStaleForeignOrDeletedProductAndPlanSources() {
+        seedProduct(OTHER, "PPD-FOREIGN", "他厂");
+        seedProduct(F, "PPD-DELETED", "已删");
+        jdbc.update("UPDATE product_types SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", "PPD-DELETED");
+        for (String product : List.of("PPD-STALE", "PPD-FOREIGN", "PPD-DELETED")) {
+            ProductionReport dirty = snapshotReport(F, b1.getId(), "HIGH");
+            dirty.setProductTypeId(product);
+            reportRepo.saveAndFlush(dirty);
+        }
+        for (String state : List.of("STALE", "FOREIGN", "DELETED")) {
+            String planId = "PPD-PLAN-" + state;
+            if (!state.equals("STALE")) {
+                ProductionPlan plan = new ProductionPlan();
+                plan.setId(planId);
+                plan.setFactoryId(state.equals("FOREIGN") ? OTHER : F);
+                plan.setPlanNumber(planId);
+                plan.setProductTypeId("PPD-PT-B");
+                plan.setPlannedQuantity(BigDecimal.TEN);
+                plan.setPlannedUnit("kg");
+                plan.setCreatedBy(1L);
+                if (state.equals("DELETED")) plan.setDeletedAt(LocalDateTime.now());
+                planRepo.saveAndFlush(plan);
+            }
+            ProductionBatch dirtyBatch = batch(F, "PPD-B-" + state, "PPD-PT-B");
+            jdbc.update("UPDATE production_batches SET production_plan_id = ? WHERE id = ?", planId, dirtyBatch.getId());
+            reportRepo.saveAndFlush(snapshotReport(F, dirtyBatch.getId(), "HIGH"));
+        }
+        restrictProductA();
+        ProcessParamDeviationDTO.SummaryView view = controller.summary(F, null, null, null, null, null).getData();
+        assertThat(view.getTotalChecked()).as("only the clean ordinary B report remains").isEqualTo(1);
+        assertThat(controller.details(F, null, null, null, null, null, null, null, null)
+                .getData().getContent()).extracting(ProcessParamDeviationDTO.DetailRow::getBatchNumber)
+                .containsExactly("PPD-B1");
+    }
+
+    private void restrictProductA() {
+        when(aggregateExclusions.forCurrentCaller(F, "process param deviation"))
+                .thenReturn(new ProcessSecretAggregateExclusions.Scope(List.of("PPD-PT-A"), List.of()));
     }
 
     // ------------------------------------------------------------------ 汇总: 分母

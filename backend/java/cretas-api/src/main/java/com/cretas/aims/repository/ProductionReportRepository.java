@@ -614,6 +614,17 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             pb.batch_number AS batch_number,
             pb.production_plan_id AS plan_id,
             pp.id AS resolved_plan_id,
+            pb.product_type_id AS batch_product_id,
+            ptb.id AS resolved_batch_product_id,
+            pr.product_type_id AS report_product_id,
+            ptr.id AS resolved_report_product_id,
+            wpt.product_type_id AS task_product_id,
+            ptt.id AS resolved_task_product_id,
+            pr.batch_id AS report_batch_id,
+            wpt.production_batch_id AS task_batch_id,
+            pb.id AS resolved_batch_id,
+            pr.work_process_task_id AS task_id,
+            wpt.id AS resolved_task_id,
             COALESCE(pb.product_type_id, pr.product_type_id, wpt.product_type_id) AS product_type_id,
             ptp.id AS resolved_product_type_id,
             ptp.name AS product_name,
@@ -638,6 +649,12 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             AND pp.factory_id = :factoryId AND pp.deleted_at IS NULL
         LEFT JOIN product_types ptp ON ptp.id = COALESCE(pb.product_type_id, pr.product_type_id, wpt.product_type_id)
             AND ptp.factory_id = :factoryId AND ptp.deleted_at IS NULL
+        LEFT JOIN product_types ptb ON ptb.id = pb.product_type_id
+            AND ptb.factory_id = :factoryId AND ptb.deleted_at IS NULL
+        LEFT JOIN product_types ptr ON ptr.id = pr.product_type_id
+            AND ptr.factory_id = :factoryId AND ptr.deleted_at IS NULL
+        LEFT JOIN product_types ptt ON ptt.id = wpt.product_type_id
+            AND ptt.factory_id = :factoryId AND ptt.deleted_at IS NULL
         LEFT JOIN users u ON u.id = pr.worker_id
             AND u.factory_id = :factoryId AND u.deleted_at IS NULL
         WHERE pr.factory_id = :factoryId
