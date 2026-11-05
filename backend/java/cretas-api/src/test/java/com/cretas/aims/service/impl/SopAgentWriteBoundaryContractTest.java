@@ -4,6 +4,7 @@ import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.smartbi.AiAgentRule;
 import com.cretas.aims.repository.UserRepository;
@@ -15,9 +16,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -53,14 +56,18 @@ class SopAgentWriteBoundaryContractTest {
         context.put("userId", 1L);
     }
 
-    private Map<String, Object> run(String name, ToolExecutor.AccessMode mode) throws Exception {
+    private Map<String, Object> run(String name, ToolExecutor.AccessMode mode, String... followingTools) throws Exception {
         when(executor.getToolName()).thenReturn(name);
         when(executor.getAccessMode()).thenReturn(mode);
         when(executor.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
         when(registry.getExecutor(name)).thenReturn(Optional.of(executor));
         AiAgentRule rule = new AiAgentRule();
-        rule.setToolChainConfig(mapper.writeValueAsString(Map.of("tools", List.of(
-                Map.of("toolName", name, "paramsMapping", Map.of(), "outputKey", "result")))));
+        List<Map<String, Object>> steps = new ArrayList<>();
+        steps.add(Map.of("toolName", name, "paramsMapping", Map.of(), "outputKey", "result"));
+        for (String following : followingTools) {
+            steps.add(Map.of("toolName", following, "paramsMapping", Map.of(), "outputKey", "nextResult"));
+        }
+        rule.setToolChainConfig(mapper.writeValueAsString(Map.of("tools", steps)));
         when(rules.findById("rule")).thenReturn(Optional.of(rule));
         return service.executeRuleToolChain("rule", context);
     }
@@ -119,5 +126,62 @@ class SopAgentWriteBoundaryContractTest {
         ReflectionTestUtils.setField(service, "writeGuardService", null);
         assertThat(run("sku_update_complexity", ToolExecutor.AccessMode.WRITE).get("success")).isEqualTo(false);
         verify(executor, never()).execute(any(), anyMap());
+    }
+
+    @Test
+    void failedReadStepStopsBeforeAnyFollowingWriteAndNeverReportsWholeChainSuccess() throws Exception {
+        when(executor.execute(any(ToolCall.class), anyMap())).thenReturn("{\"success\":false,\"message\":\"parse rejected\"}");
+        Map<String, Object> result = run("sop_parse_document", ToolExecutor.AccessMode.READ, "sku_update_complexity");
+        assertThat(result.get("success")).isEqualTo(false);
+        assertThat(result.get("failedStep")).isEqualTo("sop_parse_document");
+        assertThat(result).containsKey("lastResult");
+        verify(registry, never()).getExecutor("sku_update_complexity");
+    }
+
+    @Test
+    void wrappedBusinessFailureCannotBecomeSuccessfulChain() throws Exception {
+        when(executor.execute(any(ToolCall.class), anyMap()))
+                .thenReturn("{\"success\":true,\"data\":{\"success\":false,\"message\":\"not applied\"}}");
+        Map<String, Object> result = run("sku_update_complexity", ToolExecutor.AccessMode.WRITE);
+        assertThat(result).containsEntry("success", false).containsEntry("outcome", "UNKNOWN")
+                .containsEntry("retryable", false).containsKey("lastResult");
+    }
+
+    @Test
+    void metadataWriteExceptionIsUnknownAndNeverRepeated() throws Exception {
+        when(executor.execute(any(ToolCall.class), anyMap())).thenThrow(new IllegalStateException("after possible write"));
+        Map<String, Object> result = run("sku_update_complexity", ToolExecutor.AccessMode.WRITE);
+        assertThat(result).containsEntry("success", false).containsEntry("outcome", "UNKNOWN")
+                .containsEntry("retryable", false);
+        assertThat(String.valueOf(result.get("error"))).contains("勿重复执行");
+        verify(executor, times(1)).execute(any(ToolCall.class), anyMap());
+    }
+
+    @Test
+    void realBusinessToolSwallowingAnExceptionAfterItsEffectStillProducesUnknown() throws Exception {
+        AtomicInteger effects = new AtomicInteger();
+        AbstractBusinessTool realTool = new AbstractBusinessTool() {
+            @Override public String getToolName() { return "sku_update_complexity"; }
+            @Override public String getDescription() { return "Test SOP metadata updater"; }
+            @Override public Map<String, Object> getParametersSchema() {
+                return Map.of("type", "object", "properties", Map.of());
+            }
+            @Override protected List<String> getRequiredParameters() { return List.of(); }
+            @Override protected Map<String, Object> doExecute(String factory, Map<String, Object> params,
+                                                             Map<String, Object> ctx) {
+                effects.incrementAndGet();
+                throw new IllegalStateException("after simulated metadata commit");
+            }
+        };
+        ReflectionTestUtils.setField(realTool, "objectMapper", mapper);
+        when(registry.getExecutor("sku_update_complexity")).thenReturn(Optional.of(realTool));
+        AiAgentRule rule = new AiAgentRule();
+        rule.setToolChainConfig("{\"tools\":[{\"toolName\":\"sku_update_complexity\",\"paramsMapping\":{}}]}");
+        when(rules.findById("rule")).thenReturn(Optional.of(rule));
+        Map<String, Object> result = service.executeRuleToolChain("rule", context);
+        assertThat(effects.get()).isEqualTo(1);
+        assertThat(result).containsEntry("success", false).containsEntry("outcome", "UNKNOWN")
+                .containsEntry("retryable", false).containsKey("lastResult");
+        assertThat(String.valueOf(result.get("error"))).contains("勿重复执行");
     }
 }

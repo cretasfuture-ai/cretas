@@ -345,14 +345,32 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
                 lastResult = result;
 
                 // 检查是否成功
-                if (!Boolean.TRUE.equals(result.get("success"))) {
+                if (!Boolean.TRUE.equals(result.get("success"))
+                        || (result.get("data") instanceof Map<?, ?> data
+                            && Boolean.FALSE.equals(data.get("success")))) {
                     log.warn("工具执行返回失败: toolName={}, result={}", toolName, result);
+                    if (AUTOMATIC_SOP_METADATA_WRITES.contains(toolName)) {
+                        // AbstractBusinessTool may have swallowed an exception
+                        // after its business service committed. A false wrapper
+                        // is not proof of rollback and must never invite replay.
+                        return Map.of("success", false, "outcome", "UNKNOWN", "retryable", false,
+                                "error", "SOP 写操作结果未确认，请核对实际记录，勿重复执行",
+                                "failedStep", toolName, "lastResult", result);
+                    }
+                    return Map.of("success", false,
+                            "error", "SOP 步骤未完成，请核对实际结果后再继续",
+                            "failedStep", toolName, "lastResult", result);
                 }
 
                 log.info("工具执行完成: toolName={}, outputKey={}", toolName, step.getOutputKey());
 
             } catch (Exception e) {
                 log.error("工具执行异常: toolName={}, error={}", toolName, e.getMessage(), e);
+                if (AUTOMATIC_SOP_METADATA_WRITES.contains(toolName)) {
+                    return Map.of("success", false, "outcome", "UNKNOWN", "retryable", false,
+                            "error", "SOP 写操作执行结果不明，请核对实际记录，勿重复执行",
+                            "failedStep", toolName);
+                }
                 return Map.of(
                         "success", false,
                         "error", "工具执行失败: " + toolName + " - " + e.getMessage(),
