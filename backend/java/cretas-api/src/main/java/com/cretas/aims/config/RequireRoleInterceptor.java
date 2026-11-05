@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.Locale;
 
 /**
  * Round 5 Fix SEC-1: Enforces {@link RequireRole} annotations.
@@ -31,7 +32,8 @@ import java.util.Set;
 public class RequireRoleInterceptor implements HandlerInterceptor {
 
     // Kept in sync with JwtAuthInterceptor.PLATFORM_ADMIN_ROLES — platform admins bypass
-    // factory-level role checks (same policy as factoryId URL check).
+    // factory-level role checks (same policy as factoryId URL check). Only an explicit platform
+    // identity counts; a factory token naming one of these roles matches nothing here.
     private static final Set<String> PLATFORM_ADMIN_ROLES = Set.of(
             "super_admin", "platform_admin", "developer", "platform_super_admin"
     );
@@ -62,7 +64,7 @@ public class RequireRoleInterceptor implements HandlerInterceptor {
         }
 
         Object roleAttr = request.getAttribute("role");
-        String role = roleAttr == null ? null : String.valueOf(roleAttr).toLowerCase();
+        String role = roleAttr == null ? null : String.valueOf(roleAttr).trim().toLowerCase(Locale.ROOT);
 
         if (role == null) {
             log.warn("@RequireRole: missing role attribute, uri={}", request.getRequestURI());
@@ -70,12 +72,15 @@ public class RequireRoleInterceptor implements HandlerInterceptor {
             return false;
         }
 
-        if (PLATFORM_ADMIN_ROLES.contains(role)) {
+        boolean platformIdentity = com.cretas.aims.security.AuthenticatedActor.current(request)
+                .filter(com.cretas.aims.security.AuthenticatedActor::isPlatformAdmin).isPresent();
+        if (platformIdentity && PLATFORM_ADMIN_ROLES.contains(role)) {
             return true;
         }
 
+        boolean roleIsTrusted = platformIdentity || !com.cretas.aims.security.PlatformRoleBoundary.isPlatformTier(role);
         for (String allowedRole : allowed) {
-            if (allowedRole != null && allowedRole.equalsIgnoreCase(role)) {
+            if (roleIsTrusted && allowedRole != null && allowedRole.trim().toLowerCase(Locale.ROOT).equals(role)) {
                 return true;
             }
         }

@@ -44,6 +44,8 @@ import com.cretas.aims.service.mobile.WebLoginSessionService;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.utils.CookieAuthHelper;
 import com.cretas.aims.utils.JwtUtil;
+import org.apache.catalina.Context;
+import org.apache.tomcat.util.descriptor.web.FilterMap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -64,8 +66,11 @@ import org.springframework.boot.web.embedded.tomcat.TomcatWebServer;
 import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.ImportSelector;
 import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.core.Ordered;
 import org.springframework.core.annotation.OrderUtils;
+import org.springframework.core.type.AnnotationMetadata;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -80,6 +85,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -119,6 +125,8 @@ class AmbiguousRequestPathEmbeddedTomcatContractTest {
     })
     @Import({
             AmbiguousRequestPathFilter.class,
+            PriceSensitiveContextFilter.class,
+            PackagePrivateFilters.class,
             WebMvcConfig.class,
             JwtAuthInterceptor.class,
             DemoReadOnlyInterceptor.class,
@@ -145,6 +153,14 @@ class AmbiguousRequestPathEmbeddedTomcatContractTest {
             UserCountController.class
     })
     static class Harness {
+    }
+
+    /** ClientErrorBodyLimitFilter is package-private, so it can only be named. */
+    static class PackagePrivateFilters implements ImportSelector {
+        @Override
+        public String[] selectImports(AnnotationMetadata metadata) {
+            return new String[]{CLIENT_ERROR_FILTER};
+        }
     }
 
     @MockBean private TokenBlacklistService tokenBlacklistService;
@@ -177,6 +193,7 @@ class AmbiguousRequestPathEmbeddedTomcatContractTest {
     @Autowired private ServletWebServerApplicationContext serverContext;
     @LocalServerPort private int port;
 
+    private static final String CLIENT_ERROR_FILTER = "com.cretas.aims.audit.client.ClientErrorBodyLimitFilter";
     private static final long FACTORY_USER_ID = 7001L;
     private static final String PLATFORM_TAIL = "/blueprints";
     /** Not in DataScopeRouteInterceptor.RESOURCES, no annotation guard: the JWT factory check is all it has. */
@@ -410,6 +427,7 @@ class AmbiguousRequestPathEmbeddedTomcatContractTest {
     @Test
     @DisplayName("encoded values real clients send still reach the controller, decoded")
     void legalEncodedValuesStillWork() throws IOException {
+        // %3B reaches Java as %3B only through a raw-passing vhost; see the filter's javadoc.
         Outcome encodedId = probe("/api/mobile/F001/customers/A%3Bb%20c%2B%25%E4%B8%AD/credit-status",
                 factoryToken, creditCheckService, "checkCreditAvailable");
         assertThat(encodedId.response().status()).isEqualTo(200);
@@ -420,6 +438,17 @@ class AmbiguousRequestPathEmbeddedTomcatContractTest {
                 platformToken, blueprintService, "getBlueprintsByIndustryType");
         assertThat(encodedQuery.response().status()).isEqualTo(200);
         assertThat(encodedQuery.ran()).isTrue();
+    }
+
+    @Test
+    @DisplayName("encoded control bytes in a path are refused and never reach a controller")
+    void encodedControlBytesAreRefused() throws IOException {
+        for (String target : List.of("/api/mobile/F001%00/ai/value-summary", "/api/mobile/F001%0a/ai/value-summary",
+                "/api/mobile/F001%0D/ai/value-summary", "/api/mobile/F001%7f/ai/value-summary")) {
+            Outcome outcome = tenant(target, factoryToken);
+            assertThat(outcome.ran()).as("controller must not run: %s", target).isFalse();
+            assertThat(outcome.response().status()).as("status of %s", target).isEqualTo(400);
+        }
     }
 
     @Test
@@ -444,11 +473,12 @@ class AmbiguousRequestPathEmbeddedTomcatContractTest {
     @DisplayName("the path rule itself, including what Tomcat happens to stop first today")
     void pathRule() {
         for (String ambiguous : List.of("/a;b", "/a/;", "/%41", "/%7a", "/%30", "/%2d", "/%2E", "/%5f",
-                "/x%2Fy", "/x%2fy", "/x%5Cy", "/x%5cy", "/x%20/%70latform")) {
+                "/x%2Fy", "/x%2fy", "/x%5Cy", "/x%5cy", "/x%20/%70latform",
+                "/a%00b", "/a%0Ab", "/a%0db", "/a%1Fb", "/a%7Fb")) {
             assertThat(AmbiguousRequestPathFilter.isAmbiguous(ambiguous)).as(ambiguous).isTrue();
         }
         for (String legal : List.of("/api/mobile/F001/orders", "/a%3Bb", "/a%20b", "/a%25b", "/a%2Bb",
-                "/%E4%B8%AD", "/a%7Eb", "/a%", "/a%4", "/a%zz", "/a.b-c_d")) {
+                "/%E4%B8%AD", "/a%7Eb", "/a%21b", "/a%", "/a%4", "/a%zz", "/a.b-c_d")) {
             assertThat(AmbiguousRequestPathFilter.isAmbiguous(legal)).as(legal).isFalse();
         }
         assertThat(AmbiguousRequestPathFilter.isAmbiguous(null)).isFalse();
@@ -456,13 +486,37 @@ class AmbiguousRequestPathEmbeddedTomcatContractTest {
 
     @Test
     @DisplayName("wiring: picked up by the application's component scan, ahead of filters that read the raw path")
-    void filterIsWiredIntoTheRealApplication() {
+    void filterIsWiredIntoTheRealApplication() throws ClassNotFoundException {
         assertThat(AnnotationUtils.findAnnotation(AmbiguousRequestPathFilter.class, Component.class))
                 .as("the harness imports this class by hand; only @Component registers it in production")
                 .isNotNull();
         assertThat(AmbiguousRequestPathFilter.class.getPackageName())
                 .startsWith(CretasBackendApplication.class.getPackageName());
         assertThat(OrderUtils.getOrder(AmbiguousRequestPathFilter.class))
+                .isGreaterThan(Ordered.HIGHEST_PRECEDENCE)
+                .isLessThan(OrderUtils.getOrder(Class.forName(CLIENT_ERROR_FILTER)))
                 .isLessThan(OrderUtils.getOrder(WebLoginSessionFilter.class));
+    }
+
+    @Test
+    @DisplayName("the running Tomcat context maps this filter on /*, behind the correlation filter, ahead of raw-path readers")
+    void runningContextMapsTheFilter() {
+        Context context = (Context) ((TomcatWebServer) serverContext.getWebServer())
+                .getTomcat().getHost().findChildren()[0];
+        List<FilterMap> maps = Arrays.asList(context.findFilterMaps());
+        int mine = position(maps, "AmbiguousRequestPathFilter");
+        assertThat(maps.get(mine).getURLPatterns()).containsExactly("/*");
+        assertThat(mine).isGreaterThan(position(maps, "correlationAuditFilter"));
+        assertThat(mine).isGreaterThan(position(maps, "PriceSensitiveContextFilter"));
+        assertThat(mine).isLessThan(position(maps, "ClientErrorBodyLimitFilter"));
+        assertThat(mine).isLessThan(position(maps, "WebLoginSessionFilter"));
+    }
+
+    private static int position(List<FilterMap> maps, String name) {
+        for (int i = 0; i < maps.size(); i++) {
+            if (maps.get(i).getFilterName().toLowerCase(Locale.ROOT).contains(name.toLowerCase(Locale.ROOT))) return i;
+        }
+        throw new AssertionError("INSTRUMENT DEAD: no filter map for " + name + " in "
+                + maps.stream().map(FilterMap::getFilterName).toList());
     }
 }

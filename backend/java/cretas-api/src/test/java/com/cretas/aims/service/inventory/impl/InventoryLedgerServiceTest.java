@@ -147,7 +147,23 @@ class InventoryLedgerServiceTest {
             List<Object> list = (r instanceof List) ? (List<Object>) r : List.of(r);
             stubbing = stubbing.thenReturn(list);
         }
-        when(em.createQuery(anyString())).thenReturn(q);
+        stubQueriesWithoutFreeGifts(q);
+    }
+
+    /** Keep the original movement sequence independent of the additional gift aggregates. */
+    private void stubQueriesWithoutFreeGifts(Query movementQuery) {
+        when(em.createQuery(anyString())).thenAnswer(invocation -> {
+            String jpql = invocation.getArgument(0);
+            return jpql.contains("b.sourceDocType = 'FREE_GIFT'")
+                    ? emptyFreeGiftQuery() : movementQuery;
+        });
+    }
+
+    private Query emptyFreeGiftQuery() {
+        Query giftQuery = mock(Query.class);
+        when(giftQuery.setParameter(anyString(), any())).thenReturn(giftQuery);
+        when(giftQuery.getResultList()).thenReturn(Collections.emptyList());
+        return giftQuery;
     }
 
     /** 设置所有 EntityManager.createQuery 返回零 */
@@ -155,7 +171,7 @@ class InventoryLedgerServiceTest {
         Query q = mock(Query.class);
         when(q.setParameter(anyString(), any())).thenReturn(q);
         when(q.getResultList()).thenReturn(List.of(BigDecimal.ZERO));
-        when(em.createQuery(anyString())).thenReturn(q);
+        stubQueriesWithoutFreeGifts(q);
         return q;
     }
 
@@ -169,7 +185,7 @@ class InventoryLedgerServiceTest {
         }
         // fallback: zero for remaining calls
         stubbing.thenReturn(List.of(BigDecimal.ZERO));
-        when(em.createQuery(anyString())).thenReturn(q);
+        stubQueriesWithoutFreeGifts(q);
     }
 
     // ========================= Tests =========================
@@ -229,7 +245,7 @@ class InventoryLedgerServiceTest {
                 .thenReturn(List.of(BigDecimal.ZERO))               // stocktake loss qty
                 .thenReturn(List.of(BigDecimal.ZERO))               // stocktake profit amount
                 .thenReturn(List.of(BigDecimal.ZERO));              // stocktake loss amount
-        when(em.createQuery(anyString())).thenReturn(q);
+        stubQueriesWithoutFreeGifts(q);
 
         List<InventoryLedgerLineDTO> result = service.getLedger(FACTORY_ID, START, END, MAT_ID);
 
@@ -251,7 +267,7 @@ class InventoryLedgerServiceTest {
         Query q = mock(Query.class);
         when(q.setParameter(anyString(), any())).thenReturn(q);
         when(q.getResultList()).thenReturn(List.of(BigDecimal.ZERO));
-        when(em.createQuery(anyString())).thenReturn(q);
+        stubQueriesWithoutFreeGifts(q);
 
         service.getLedger(FACTORY_ID, START, END, MAT_ID);
 
@@ -309,8 +325,13 @@ class InventoryLedgerServiceTest {
         Query q = mock(Query.class);
         when(q.setParameter(anyString(), any())).thenReturn(q);
         when(q.getResultList()).thenReturn(List.of(BigDecimal.ZERO), Collections.emptyList());
-        when(em.createQuery(anyString())).thenReturn(q).thenReturn(q)
-                .thenThrow(new IllegalArgumentException("invalid MaterialConsumption query"));
+        when(em.createQuery(anyString())).thenAnswer(invocation -> {
+            String jpql = invocation.getArgument(0);
+            if (jpql.contains("FROM MaterialConsumption")) {
+                throw new IllegalArgumentException("invalid MaterialConsumption query");
+            }
+            return jpql.contains("b.sourceDocType = 'FREE_GIFT'") ? emptyFreeGiftQuery() : q;
+        });
 
         assertThrows(IllegalStateException.class,
                 () -> service.getLedger(FACTORY_ID, START, END, MAT_ID,
@@ -344,7 +365,7 @@ class InventoryLedgerServiceTest {
                 .thenReturn(List.of(BigDecimal.ZERO))               // stocktake loss qty
                 .thenReturn(List.of(BigDecimal.ZERO))               // stocktake profit amount
                 .thenReturn(List.of(BigDecimal.ZERO));              // stocktake loss amount
-        when(em.createQuery(anyString())).thenReturn(q);
+        stubQueriesWithoutFreeGifts(q);
 
         List<InventoryLedgerLineDTO> result = service.getLedger(FACTORY_ID, START, END, null);
 
@@ -556,7 +577,7 @@ class InventoryLedgerServiceTest {
                 .thenReturn(List.of(lossQty != null ? lossQty : BigDecimal.ZERO))       // 7: loss qty
                 .thenReturn(profitAmount != null ? List.of(profitAmount) : List.of())   // 8: profit amount
                 .thenReturn(lossAmount != null ? List.of(lossAmount) : List.of());      // 9: loss amount
-        when(em.createQuery(anyString())).thenReturn(q);
+        stubQueriesWithoutFreeGifts(q);
 
         when(materialTypeRepo.findByFactoryId(FACTORY_ID))
                 .thenReturn(List.of(buildMaterial(MAT_ID, "猪舌", "kg")));

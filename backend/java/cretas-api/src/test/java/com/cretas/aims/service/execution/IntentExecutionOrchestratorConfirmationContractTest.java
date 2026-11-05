@@ -37,7 +37,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
-class IntentExecutionOrchestratorConfirmationTest {
+class IntentExecutionOrchestratorConfirmationContractTest {
 
     private static final String FACTORY = "F001";
     private static final long USER = 12L;
@@ -82,6 +82,7 @@ class IntentExecutionOrchestratorConfirmationTest {
         ReflectionTestUtils.setField(orchestrator, "previewTokenService", tokenService);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
+        when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(true);
     }
 
     @Test
@@ -200,6 +201,46 @@ class IntentExecutionOrchestratorConfirmationTest {
         when(aiIntentService.getIntentByCode(FACTORY, "ORDER_CREATE")).thenReturn(Optional.of(config));
         when(toolRegistry.getExecutor("order_create")).thenReturn(Optional.of(tool));
         return tool;
+    }
+
+    @Test
+    void confirmationRechecksRevokedIntentPermissionBeforeToolLookup() {
+        configuredTool();
+        when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(false);
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+        assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+        verifyNoInteractions(dispatchService);
+        verify(toolRegistry, never()).getExecutor(any());
+        verify(tokenService).resolveClaim(eq(TOKEN), eq(CLAIM), eq(false), any());
+    }
+
+    @Test
+    void previewConfirmationCannotSubstituteForApprovalEvenAtHighSensitivity() {
+        AIIntentConfig config = intentConfig();
+        config.setSensitivityLevel("HIGH");
+        config.setRequiresApproval(true);
+        when(aiIntentService.getIntentByCode(FACTORY, "ORDER_CREATE")).thenReturn(Optional.of(config));
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+        assertThat(response.getStatus()).isEqualTo("PENDING_APPROVAL");
+        assertThat(response.getMessage()).contains("未提交审批", "未执行操作").doesNotContain("审批请求已提交");
+        verifyNoInteractions(dispatchService, toolRegistry);
+        verify(tokenService).resolveClaim(eq(TOKEN), eq(CLAIM), eq(false), any());
+    }
+
+    @Test
+    void callerForceExecuteCannotAuthorizeAnApprovalRequiredWrite() {
+        AIIntentConfig config = intentConfig();
+        config.setSensitivityLevel("HIGH");
+        config.setRequiresApproval(true);
+        when(aiIntentService.getIntentByCode(FACTORY, "ORDER_CREATE")).thenReturn(Optional.of(config));
+        IntentExecuteResponse response = orchestrator.executeWithExplicitIntent(FACTORY,
+                IntentExecuteRequest.builder().intentCode("ORDER_CREATE").userInput("建订单")
+                        .forceExecute(true)
+                        .context(new WriteGuardService().withServerConfirmation(Map.of("confirmed", true)))
+                        .build(), USER, ROLE);
+        assertThat(response.getStatus()).isEqualTo("PENDING_APPROVAL");
+        assertThat(response.getMessage()).contains("未提交审批", "未执行操作").doesNotContain("审批请求已提交");
+        verifyNoInteractions(dispatchService);
     }
 
     private AIIntentConfig intentConfig() {

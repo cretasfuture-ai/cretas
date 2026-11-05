@@ -14,6 +14,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -26,6 +27,7 @@ import java.util.Map;
  * <p>应用时基线或按当前数据重算的结果有一处对不上就整体 409「方案已过期」, 不改任何排程。
  */
 @RestController
+@Slf4j
 @RequiredArgsConstructor
 @RequestMapping("/api/mobile/{factoryId}/shortage-cases/{caseId}/reschedule-proposals")
 @Tag(name = "缺料异常", description = "局部重排")
@@ -89,13 +91,21 @@ public class ShortageRescheduleController {
         var actor = ShortageCaseActionController.actor(http, factoryId);
         RescheduleProposal p = rescheduleService.apply(factoryId, caseId, proposalId, request.getCandidateKey(), actor);
         // 执行后核对: 按台账这一行 (result_ref = 方案 id) 核对交期与缺口, 结论写回实例, 不默认成功
-        Long actionId = actionRepository.findByCaseIdOrderByIdAsc(caseId).stream()
-                .filter(a -> a.getActionType() == com.cretas.aims.entity.shortage.ShortageCaseAction.ActionType.RESCHEDULE_APPLIED
-                        && p.getId().equals(a.getResultRef()))
-                .map(com.cretas.aims.entity.shortage.ShortageCaseAction::getId)
-                .reduce((x, y) -> y).orElse(null);
-        var chk = outcomeChecks.check(factoryId, caseId,
-                com.cretas.aims.entity.shortage.ShortageCaseOutcomeCheck.Trigger.RESCHEDULE_APPLIED, actionId, actor);
-        return ApiResponse.success("排程已调整; 核对结果: " + chk.getDetail(), ProposalView.of(p));
+        try {
+            Long actionId = actionRepository.findByCaseIdOrderByIdAsc(caseId).stream()
+                    .filter(a -> a.getActionType() == com.cretas.aims.entity.shortage.ShortageCaseAction.ActionType.RESCHEDULE_APPLIED
+                            && p.getId().equals(a.getResultRef()))
+                    .map(com.cretas.aims.entity.shortage.ShortageCaseAction::getId)
+                    .reduce((x, y) -> y).orElse(null);
+            var chk = outcomeChecks.check(factoryId, caseId,
+                    com.cretas.aims.entity.shortage.ShortageCaseOutcomeCheck.Trigger.RESCHEDULE_APPLIED, actionId, actor);
+            return ApiResponse.success("排程已调整; 核对结果: " + chk.getDetail(), ProposalView.of(p));
+        } catch (RuntimeException checkFailure) {
+            // apply has committed. Preserve that acknowledgement while making the missing
+            // outcome verification explicit; never invite replay of the applied proposal.
+            log.error("排程已调整但结果核对未完成: factoryId={}, caseId={}, proposalId={}",
+                    factoryId, caseId, proposalId, checkFailure);
+            return ApiResponse.success("排程已调整; 结果核对未完成，交期是否达成尚未确认，请核对当前排程，勿重复应用。", ProposalView.of(p));
+        }
     }
 }

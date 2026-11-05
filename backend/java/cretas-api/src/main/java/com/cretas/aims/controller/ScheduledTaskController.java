@@ -87,8 +87,7 @@ public class ScheduledTaskController {
     }
 
     private boolean isPlatformRole(HttpServletRequest request) {
-        String role = (String) request.getAttribute("role");
-        return "platform_admin".equals(role) || "super_admin".equals(role);
+        return com.cretas.aims.security.PlatformRoleBoundary.hasCrossFactoryAuthority(request);
     }
 
     /** 🔒 校验 task 属于 caller 工厂 (非平台角色)。平台角色跳过; 否则不存在 404, 跨厂 403。 */

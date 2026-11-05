@@ -35,7 +35,7 @@ class FoodSafetySkillRegistrationTest {
 
     @BeforeEach
     void setUp() {
-        when(smartBiSkillRepository.findByEnabledTrueOrderByPriorityAsc())
+        when(smartBiSkillRepository.findAll())
                 .thenReturn(Collections.emptyList());
 
         registry = new SkillRegistryImpl(smartBiSkillRepository, new ObjectMapper());
@@ -75,47 +75,38 @@ class FoodSafetySkillRegistrationTest {
     }
 
     @Test
-    @DisplayName("FS-SKILL-03: food-safety-recall main Skill registered with 8 Tools")
-    void recallSkillRegisteredWith8Tools() {
+    @DisplayName("FS-SKILL-03: food-safety-recall is a factory read-only catalog Skill")
+    void recallSkillRegisteredAsFactoryReadOnlyCatalogSkill() {
         Optional<SkillDefinition> skill = registry.getSkill("food-safety-recall");
         assertTrue(skill.isPresent(), "food-safety-recall 应该已注册");
         SkillDefinition def = skill.get();
-        assertEquals("QUALITY", def.getCategory());
+        assertEquals("FACTORY", def.getCategory());
         assertEquals(40, def.getPriority());  // priority 40 — 高优先级 (P3 关键 Skill)
 
         List<String> tools = def.getTools();
-        assertEquals(8, tools.size(), "应串 8 个 Tool");
-        assertTrue(tools.contains("batch_trace_by_customer_date"));
-        assertTrue(tools.contains("batch_full_trace"));
-        assertTrue(tools.contains("haccp_checkpoint_review"));
-        assertTrue(tools.contains("additive_compliance_check"));
-        assertTrue(tools.contains("inventory_freeze"));
-        assertTrue(tools.contains("customer_notify_batch"));
-        assertTrue(tools.contains("regulatory_report_generate"));
-        assertTrue(tools.contains("recall_loss_estimate"));
+        assertEquals(List.of(
+                "batch_trace_by_customer_date",
+                "batch_full_trace",
+                "haccp_checkpoint_review",
+                "additive_compliance_check",
+                "recall_loss_estimate"), tools);
+        assertFalse(tools.contains("inventory_freeze"));
+        assertFalse(tools.contains("customer_notify_batch"));
+        assertFalse(tools.contains("regulatory_report_generate"));
 
-        // 触发词含召回关键短语
-        List<String> triggers = def.getTriggers();
-        assertTrue(triggers.contains("启动召回"));
-        assertTrue(triggers.contains("拉肚子"));
-
-        // promptTemplate 含 4 个一键执行按钮提示
-        String prompt = def.getPromptTemplate();
-        assertTrue(prompt.contains("冻结库存"));
-        assertTrue(prompt.contains("通知客户"));
-        assertTrue(prompt.contains("生成监管文件"));
-        assertTrue(prompt.contains("关闭召回事件"));
+        assertEquals(List.of("召回评估", "食品召回", "召回影响", "召回损失"),
+                def.getTriggers());
     }
 
     @Test
-    @DisplayName("FS-SKILL-04: findBestMatch finds food-safety-recall on 召回 query")
+    @DisplayName("FS-SKILL-04: findBestMatch finds food-safety-recall on catalog trigger")
     void recallSkillMatchesByTrigger() {
-        Optional<SkillDefinition> best = registry.findBestMatch("启动召回 B-20260518-A03");
+        Optional<SkillDefinition> best = registry.findBestMatch("召回评估 B-20260518-A03");
         assertTrue(best.isPresent(), "应能匹配到食品召回 Skill");
         // 不强制 best 是 food-safety-recall (可能其他 Skill score 更高)
         // 但 food-safety-recall 必须在 matches 列表里
-        List<SkillDefinition> matches = registry.findMatchingSkills("启动召回");
+        List<SkillDefinition> matches = registry.findMatchingSkills("召回评估");
         assertTrue(matches.stream().anyMatch(s -> "food-safety-recall".equals(s.getName())),
-                "启动召回 查询应能匹配 food-safety-recall Skill");
+                "召回评估 查询应能匹配 food-safety-recall Skill");
     }
 }

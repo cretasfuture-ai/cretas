@@ -136,6 +136,9 @@ public class ToolDispatchService {
     private ToolExecutionGateway toolExecutionGateway;
 
     @Autowired
+    private com.cretas.aims.ai.tool.gateway.ToolRuntimeRegistry toolRuntimeRegistry;
+
+    @Autowired
     private LegacyToolMigrationRegistry legacyToolMigrationRegistry;
 
     @Autowired
@@ -327,6 +330,7 @@ public class ToolDispatchService {
             // The process-local confirmation marker exists only long enough for W0 and RBAC to
             // inspect it. Never serialize or forward it to a Tool; keep the separate legacy
             // business parameter confirmed=true for tools that still require that second check.
+            boolean boundConfirmation = writeGuardService.isConfirmed(request.getContext());
             request.setContext(com.cretas.aims.ai.tool.WriteGuardService
                     .withoutServerConfirmationMarker(request.getContext()));
 
@@ -335,6 +339,11 @@ public class ToolDispatchService {
                 log.info("Tool preview 模式: tool={}, intentCode={}", tool.getToolName(), intent.getIntentCode());
                 return executeToolPreview(tool, factoryId, request, intent, userId, userRole);
             }
+
+            // A claimed preview is already the approved command. Do not resolve references or
+            // extract new parameters from the synthetic confirmation text after this boundary.
+            boolean writeOperation = writeGuardService.isWriteTool(tool)
+                    || writeGuardService.isWriteIntent(intent);
 
             // 2. 构建 ToolCall
             if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
@@ -353,16 +362,19 @@ public class ToolDispatchService {
                     log.info("使用预处理后的查询: '{}' -> '{}'", request.getUserInput(), userInputToUse);
                 }
             }
-            params.put("userInput", userInputToUse);
+            if (!boundConfirmation) {
+                params.put("userInput", userInputToUse);
+            }
             params.put("intentCode", intent.getIntentCode());
 
             // 2.5. 从预处理结果中提取解析的引用
             // 识别分支带着管线的预处理结果; 短语直达 / 显式意图分支没有, 补跑规则预处理 (ERP-S6-10 同因):
             // 以前那条分支上「这个批次」「上个月」直接丢了, 同一句话走哪条分支结果不同。
-            PreprocessedQuery preprocessed = matchResult != null && matchResult.getPreprocessedQuery() != null
+            PreprocessedQuery preprocessed = boundConfirmation ? null
+                    : matchResult != null && matchResult.getPreprocessedQuery() != null
                     ? matchResult.getPreprocessedQuery()
                     : shortcutPreprocess(request, factoryId, userId);
-            if (preprocessed != null) {
+            if (!boundConfirmation && preprocessed != null) {
                 PreprocessedQuery pq = preprocessed;
                 Map<String, PreprocessedQuery.ResolvedReference> refs = pq.getResolvedReferences();
                 if (refs != null && !refs.isEmpty()) {
@@ -425,7 +437,7 @@ public class ToolDispatchService {
                     (List<String>) parametersSchema.get("required") : null;
 
             Map<String, Object> ruleExtractedParams = new HashMap<>();
-            if (requiredParams != null && !requiredParams.isEmpty()) {
+            if (!boundConfirmation && requiredParams != null && !requiredParams.isEmpty()) {
                 List<String> missingParams = requiredParams.stream()
                         .filter(p -> !params.containsKey(p) ||
                                      params.get(p) == null ||
@@ -444,7 +456,8 @@ public class ToolDispatchService {
             }
 
             // 2.8. LLM 提取剩余参数
-            Map<String, Object> llmExtractedParams = extractParametersWithLLM(factoryId, userInputToUse, tool, params);
+            Map<String, Object> llmExtractedParams = boundConfirmation ? new HashMap<>()
+                    : extractParametersWithLLM(factoryId, userInputToUse, tool, params);
             if (!llmExtractedParams.isEmpty() && isFollowUpConfirmation(request)) {
                 // 追问确认按钮带来的参数是用户在按钮上看见并点了的 (「领用 30 公斤」);
                 // 补缺参时 LLM 从原话「再加十公斤」里读出的 10 不许把它改掉。
@@ -472,7 +485,18 @@ public class ToolDispatchService {
             // including ordinary mobile SSE calls while the broad migration flag is disabled.
             // Other tools retain the independent default-off legacy migration allowlist.
             // A selected Gateway attempt never enters legacy cache/retry on denial or failure.
-            if ("material_stock_summary".equals(tool.getToolName())
+            boolean governed;
+            try {
+                governed = toolRuntimeRegistry != null && toolRuntimeRegistry.isGoverned(tool.getToolName());
+            } catch (RuntimeException unavailablePolicy) {
+                log.error("Tool governance unavailable; refusing legacy fallback: tool={}", tool.getToolName(), unavailablePolicy);
+                return IntentExecuteResponse.builder().intentRecognized(true)
+                        .intentCode(intent.getIntentCode()).status("DENIED")
+                        .message("工具执行策略暂时无法核验，未执行操作，请稍后重试。")
+                        .executedAt(LocalDateTime.now()).build();
+            }
+            if (governed
+                    || "material_stock_summary".equals(tool.getToolName())
                     || (intentDispatchGatewayMigrationEnabled
                     && legacyToolMigrationRegistry.contains(tool.getToolName()))) {
                 return executeThroughMigrationGateway(
@@ -494,7 +518,7 @@ public class ToolDispatchService {
 
             // 4. 冗余检查 (ET-Agent 行为校准)
             String sessionId = request.getSessionId() != null ? request.getSessionId() : "default";
-            if (!SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+            if (!writeOperation && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
                     && redundancyService.isRedundant(sessionId, tool.getToolName(), params)) {
                 log.info("检测到冗余调用，跳过执行: tool={}, session={}", tool.getToolName(), sessionId);
                 Optional<String> cachedResult = redundancyService.getCachedResult(sessionId, tool.getToolName(), params);
@@ -523,7 +547,8 @@ public class ToolDispatchService {
             }
 
             // 5. 执行 Tool（带自动重试）
-            final int MAX_RETRIES = 3;
+            // A write may have committed before a transport/verification error. Never retry it.
+            final int MAX_RETRIES = writeOperation ? 1 : 3;
             String resultJson = null;
             // 工具里按口径判定为可见、已写出的价格属性 (响应层对这一份结果不再按键名剥, 见 PriceSensitiveContext)
             java.util.Set<String> visiblePriceKeys = java.util.Set.of();
@@ -567,6 +592,7 @@ public class ToolDispatchService {
                         ToolCallRecord record = ToolCallRecord.builder()
                                 .sessionId(sessionId)
                                 .factoryId(factoryId)
+                                .userId(userId)
                                 .toolName(tool.getToolName())
                                 .toolParameters(argumentsJson)
                                 .parametersHash(redundancyService.computeParametersHash(params))
@@ -579,7 +605,7 @@ public class ToolDispatchService {
                                 .recovered(attempt > 1)
                                 .build();
                         ToolCallRecord savedRecord = redundancyService.recordToolCall(record);
-                        if (toolSucceeded && savedRecord != null && resultJson != null
+                        if (!writeOperation && toolSucceeded && savedRecord != null && resultJson != null
                                 && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())) {
                             // cacheResult stores into tool_call_cache.cached_result (JSONB).
                             // Don't substring-truncate — that splits tokens and produces
@@ -684,6 +710,17 @@ public class ToolDispatchService {
                 } catch (Exception e) {
                     lastException = e;
                     retryCount = attempt;
+                    if (writeOperation) {
+                        // The tool may already have committed. Read-side self correction must
+                        // never replay a write or turn an uncertain outcome into a retry prompt.
+                        log.error("Write tool outcome unknown; not retried: tool={}", tool.getToolName(), e);
+                        return IntentExecuteResponse.builder()
+                                .intentRecognized(true).intentCode(intent.getIntentCode())
+                                .status("OUTCOME_UNKNOWN").aiMode("WRITE")
+                                .message("操作结果暂时无法确认，请先在业务页面核对记录，勿重复提交。")
+                                .metadata(Map.of("toolName", tool.getToolName(), "retryable", false))
+                                .executedAt(LocalDateTime.now()).build();
+                    }
 
                     String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
                     log.warn("Tool 执行失败 (尝试 {}/{}): tool={}, error={}",
@@ -1446,6 +1483,7 @@ public class ToolDispatchService {
         String toolName = selectedTool.getToolName();
         try {
             String expectedVersion = "material_stock_summary".equals(toolName)
+                    || (toolRuntimeRegistry != null && toolRuntimeRegistry.isGoverned(toolName))
                     ? selectedTool.getVersion()
                     : legacyToolMigrationRegistry.expectedVersion(toolName)
                             .orElseThrow(() -> new SecurityException(

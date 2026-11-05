@@ -13,6 +13,9 @@
 | `api.cretaceousfuture.com.conf` | 443 | API consumer DNS vhost (HTTPS, currently DNS=NXDOMAIN) | `cretas_python` via shared include |
 | `smart-bi-routing.conf` | — | **Shared snippet** — included by all 3 vhosts above. Single source of truth for cutover paths. Server live path: `/www/server/nginx/conf/snippets/smart-bi-routing.conf`. |
 | `web-admin-test.conf` | 8097 | QA test env web-admin (Vue dist at `/www/wwwroot/web-admin-test/`) | `47.100.235.168:8084` (Python test 8084) |
+| `_cretas_ambiguous_path_map.conf` | — | Gateway path rule, the map. Live path: `/www/server/panel/vhost/nginx/_cretas_ambiguous_path_map.conf`, loaded by the main config's vhost glob, not by a named include. See `scripts/deploy/nginx-cretas-vhost-reference.md`. |
+| `_cretas_word_gate_map.conf` | — | Gateway word gate, the maps. Live path: `/www/server/panel/vhost/nginx/_cretas_word_gate_map.conf`. Stop-gap added 2026-11-04, review around 2026-11-11. |
+| `block-ambiguous-path.conf` | — | Gateway path rule, the refusal. Live path: `/www/server/nginx/conf/snippets/block-ambiguous-path.conf`. |
 | `*.original` | — | Pre-patch snapshots scp'd from server 139 at 23:47 CST on 2026-05-12. Reference only — do not deploy. |
 
 ## Shared-include architecture (2026-05-15)
