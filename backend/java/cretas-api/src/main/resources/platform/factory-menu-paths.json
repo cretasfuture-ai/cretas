@@ -101,6 +101,7 @@
     "/quality/disposition",
     "/quality/inspections",
     "/quality/label-qc",
+    "/quality/param-deviation",
     "/quality/recalls",
     "/quality/release",
     "/quality/returns",

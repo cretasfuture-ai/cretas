@@ -231,6 +231,51 @@ describe('product process workflow model', () => {
     });
   });
 
+  it('applies cost allocation method and output shares through both patch whitelist layers', () => {
+    const definition = fixedRatioWorkflowDefinition();
+    const process = definition.nodes.find((node) => node.id === 'process:1');
+    if (!process) throw new Error('fixed-ratio process fixture is missing');
+    const ports = structuredClone((process.data as ProcessNodeData).ports);
+    ports.find((port) => port.id === 'output:1')!.fixedCostShare = 80;
+    ports.push({
+      id: 'output:2', direction: 'OUTPUT', materialNodeId: 'semi:2',
+      materialName: '副品', materialKind: 'SEMI_FINISHED', unit: 'kg', ordinal: 1,
+      fixedCostShare: 20,
+    });
+
+    const applied = applyWorkflowPatches(definition, [
+      { op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'costAllocationMethod', value: 'FIXED_RATIO' },
+      { op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'ports', value: ports },
+    ]);
+    expect(applied.errors).toEqual([]);
+    expect(applied.definition.nodes.find((node) => node.id === 'process:1')?.data)
+      .toMatchObject({ costAllocationMethod: 'FIXED_RATIO', ports: expect.arrayContaining([
+        expect.objectContaining({ id: 'output:1', fixedCostShare: 80 }),
+        expect.objectContaining({ id: 'output:2', fixedCostShare: 20 }),
+      ]) });
+
+    const cleared = applyWorkflowPatches(applied.definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'costAllocationMethod', value: null,
+    }]);
+    expect(cleared.errors).toEqual([]);
+    expect(cleared.definition.nodes.find((node) => node.id === 'process:1')?.data)
+      .toMatchObject({ costAllocationMethod: null });
+
+    expectWorkflowPatchRejected(definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'costAllocationMethod', value: 'SALES_VALUE',
+    }]);
+    const inputFixedShare = structuredClone((process.data as ProcessNodeData).ports);
+    inputFixedShare[0].fixedCostShare = 50;
+    expectWorkflowPatchRejected(definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'ports', value: inputFixedShare,
+    }]);
+    const negativeOutputShare = structuredClone((process.data as ProcessNodeData).ports);
+    negativeOutputShare[1].fixedCostShare = -1;
+    expectWorkflowPatchRejected(definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'ports', value: negativeOutputShare,
+    }]);
+  });
+
   it('applies only strictly shaped workflow patches to a local DRAFT', () => {
     const definition = simpleWorkflowDefinition();
     definition.status = 'PUBLISHED';
@@ -620,6 +665,22 @@ function simpleWorkflowDefinition(): ProductProcessWorkflowDefinition {
     ],
     viewport: { x: 0, y: 0, zoom: 1 },
   };
+}
+
+function fixedRatioWorkflowDefinition(): ProductProcessWorkflowDefinition {
+  const definition = simpleWorkflowDefinition();
+  const process = definition.nodes.find((node) => node.id === 'process:1');
+  if (!process) throw new Error('workflow fixture is missing process:1');
+  (process.data as ProcessNodeData).reportingSelectionMode = 'ACTUAL_IO';
+  definition.nodes.push({
+    id: 'semi:2', kind: 'SEMI_FINISHED', position: { x: 496, y: 160 },
+    data: { name: '副品', skuId: 'SFI-2', baseUnit: 'kg' },
+  });
+  definition.edges.push({
+    id: 'edge:process:semi:2', source: 'process:1', sourceHandle: 'output:2',
+    target: 'semi:2', targetHandle: 'input',
+  });
+  return definition;
 }
 
 /** 两个原料 Cell 的最小图 —— 第二个可以声明自己是第一个的替代料。 */

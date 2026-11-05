@@ -771,6 +771,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             component: () => import('@/views/quality/ccp/index.vue'),
             meta: { requiresAuth: true, title: 'CCP 监控记录', module: 'quality' }
           },
+          // 工艺参数偏离: 报工参数判定快照按工序 + 参数汇总, 下钻到每次偏离
+          {
+            path: 'param-deviation',
+            name: 'QualityParamDeviation',
+            component: () => import('@/views/quality/param-deviation/index.vue'),
+            meta: { requiresAuth: true, title: '工艺参数偏离', module: 'quality' }
+          },
           {
             path: 'disposition',
             name: 'QualityDisposition',

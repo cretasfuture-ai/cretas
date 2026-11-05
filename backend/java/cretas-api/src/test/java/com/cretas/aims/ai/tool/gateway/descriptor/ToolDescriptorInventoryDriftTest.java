@@ -211,7 +211,8 @@ class ToolDescriptorInventoryDriftTest {
         assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(85);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(65);
         assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(177);
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(12);
+        // 2026-11-05: canvas_product_process_workflow_config explicitly versions fixed-share preview (v1.1.0).
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(13);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(24);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
