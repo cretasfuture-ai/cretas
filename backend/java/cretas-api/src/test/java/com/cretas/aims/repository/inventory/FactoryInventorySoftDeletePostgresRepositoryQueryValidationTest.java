@@ -25,6 +25,7 @@ import java.sql.DriverManager;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Real PostgreSQL/JPA proof for the two factory inventory entities fixed in this slice.
@@ -82,6 +83,7 @@ class FactoryInventorySoftDeletePostgresRepositoryQueryValidationTest {
         SupplierDeliveryNote note = new SupplierDeliveryNote();
         note.setId("soft-delete-sdn-factory");
         note.setFactoryId("F-SOFT-DELETE");
+        note.setPhotoHash("a".repeat(64));
         note.setDeliveryDate(LocalDate.of(2026, 11, 6));
         note.setSourceType(DeliveryNoteSourceType.MANUAL);
         note.setStatus(DeliveryNoteStatus.DRAFT);
@@ -110,6 +112,24 @@ class FactoryInventorySoftDeletePostgresRepositoryQueryValidationTest {
         entityManager.clear();
         assertThat(supplierDeliveryNotes.findById(note.getId())).isEmpty();
         assertThat(wastageRecords.findById(wastage.getId())).isEmpty();
+
+        // The global photo identity is deliberately retained, including across factories.
+        // Do this last: PostgreSQL marks the transaction failed after the unique violation.
+        SupplierDeliveryNote duplicate = new SupplierDeliveryNote();
+        duplicate.setId("soft-delete-sdn-duplicate");
+        duplicate.setFactoryId("F-SOFT-DELETE-OTHER");
+        duplicate.setPhotoHash(note.getPhotoHash());
+        duplicate.setDeliveryDate(LocalDate.of(2026, 11, 6));
+        duplicate.setSourceType(DeliveryNoteSourceType.MANUAL);
+        duplicate.setStatus(DeliveryNoteStatus.DRAFT);
+        duplicate.setPostingStatus(DeliveryPostingStatus.UNPOSTED);
+        duplicate.setPriceAnomalyApprovalStatus(PriceAnomalyApprovalStatus.NONE);
+        assertThatThrownBy(() -> supplierDeliveryNotes.saveAndFlush(duplicate))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class)
+                .hasRootCauseInstanceOf(org.postgresql.util.PSQLException.class)
+                .satisfies(failure -> assertThat(((org.postgresql.util.PSQLException)
+                        org.springframework.core.NestedExceptionUtils.getMostSpecificCause(failure))
+                        .getSQLState()).isEqualTo("23505"));
     }
 
     private Object nativeDeletedAt(String table, String id) {

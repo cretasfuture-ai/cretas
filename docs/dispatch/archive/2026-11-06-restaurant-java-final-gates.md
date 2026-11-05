@@ -29,3 +29,7 @@
 main 后续合入 #1477/eacf526 的 F006 工厂演示沙箱，导致共享台账冲突。本组在本地 f70060f7e5 整合，保留 main 已交付代码原样，餐饮退役实现不变；仅移除已交付的 BACKGROUND 僵尸台账行，不更改其他 Owner 记录。新 main 的五个 Java 文件不由旧候选 ca3d 的 CI 代为背书。
 
 本地 v24 五类 42 项全部通过、零失败/错误/跳过：SandboxGateway 23、真实 JWT/Sandbox 4、Demo 只读 5、平台角色边界 2、AI 数据权限 8。Node 只读入口/写请求拦截契约 4 项通过。两组测试均未访问生产。原 ca3d 的 PG 最终为 343 项、零失败/错误、2 既有跳过；其 full 作业取得自然终态后再集中推送整合候选并核验最终 CI，不取消在跑的全量。
+
+ca3d 全量自然终态为 19,432 项观测：19,120 通过、2 失败、310 跳过。剩余两个失败均已按根因修复：ApprovedToolSourceMetadataTest 为库存汇总精确使用 inventory 两码，其他两工具四码不变；软删除唯一性分类登记保留照片身份不释放。后者先用生产 `BEGIN READ ONLY` 查询 pg_index，确认 supplier_delivery_notes_photo_hash_key 为有效全量 UNIQUE(photo_hash)、无部分谓词，再在独立 PG 验证软删后跨厂同 hash 仍报 23505。本次不放宽索引、不恢复 V92、不改失败基线。
+
+v25 三类五项（两个失败契约及新增 PG 断言）全部通过、零失败/错误/跳过，commandExitCode=0/stopExitCode=0；生产业务写和 DDL 均为零。完整失败 artifact 与只读索引证据已保存到外部证据目录。
