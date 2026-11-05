@@ -63,3 +63,7 @@ App清理：仅本组report24059申请撤回39，PENDING，提交者1309；保�
 仍需真实人工动作：撤回申请39的另一名主管审批；没有绕过四眼原则或直接删除已提交报工。后续测试/部署/验收回执继续独立记录。
 
 最终独立风险复审：先前P0/P1全部解决，无剩余阻塞，可以commit/PR；源码/测试scope完成，ACTIVE本批临时行撤出并由本归档保留任务ID、Base与完整证据。未提前声称已合并/部署。
+
+候选发布准备完成：统一 release --phase build（31显式类，190/0/0/0，构建rc0）+ YES-STAGE预上传，RELEASE_FINAL_STATUS=built恰好1次，deploy_mode=none，未安装/重启/切流。JAR SHA256 8d387282b1fb41a166118e5befb2c04b706a809e4333501e48c5836d1e5d4c1c，回执 ~/.cache/cretas/release-reports/cretas-1793844464-158.json。
+PR #1460 commit c0f8590975；CI脚本闸发现测试改名配套基线需收缩，按pr-test-selection.py --write仅移除旧ConfirmationTest一行（1325→1324），本地selection gate PASS，不改源码/测试，不重跑产品用例。
+原任务产品59e35032上限3%已恢复null，仅上限/updatedAt变化；撤回39仍PENDING，审计快照保留。

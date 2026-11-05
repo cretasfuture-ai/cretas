@@ -673,7 +673,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/FactoryN
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/FollowUpResolverTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentClarificationBusinessTypeFilterTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorConfirmLastActionTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorConfirmationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorDishClarificationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorFactoryPackRouteTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorFreeTextWorkdeskTest.java
