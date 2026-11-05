@@ -11,6 +11,7 @@ import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.SupplierMaterial;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierMaterialRepository;
 import org.springframework.test.util.ReflectionTestUtils;
 import com.cretas.aims.repository.SupplierRepository;
@@ -56,6 +57,7 @@ class PurchaseServiceImplContractNumberRoundtripTest {
     @Mock private SupplierRepository supplierRepository;
     @Mock private RawMaterialTypeRepository materialTypeRepository;
     @Mock private SupplierMaterialRepository supplierMaterialRepository;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
 
     private PurchaseServiceImpl service;
 
@@ -75,7 +77,8 @@ class PurchaseServiceImplContractNumberRoundtripTest {
                 null,  // bomItemRepository
                 null,  // arApService
                 null,  // applicationEventPublisher
-                null   // materialBatchService
+                null,  // materialBatchService
+                materialReferenceWriteGuard
         );
         ReflectionTestUtils.setField(service, "supplierMaterialRepository", supplierMaterialRepository);
     }
@@ -191,7 +194,8 @@ class PurchaseServiceImplContractNumberRoundtripTest {
     void update_contractNumberUpdated() {
         PurchaseOrder existingOrder = buildExistingOrder();
         existingOrder.setContractNumber("OLD-HT-001");
-        when(purchaseOrderRepository.findById(eq(ORDER_ID))).thenReturn(Optional.of(existingOrder));
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(eq(ORDER_ID), eq(FACTORY)))
+                .thenReturn(Optional.of(existingOrder));
         when(purchaseOrderRepository.save(any())).thenReturn(existingOrder);
 
         UpdatePurchaseOrderRequest req = new UpdatePurchaseOrderRequest();
@@ -220,7 +224,8 @@ class PurchaseServiceImplContractNumberRoundtripTest {
         existingOrder.setContractNumber("KEEP-ME");
         existingOrder.setSettlementType(SettlementType.PREPAID);
         existingOrder.setInvoiceReminderDays(7);
-        when(purchaseOrderRepository.findById(eq(ORDER_ID))).thenReturn(Optional.of(existingOrder));
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(eq(ORDER_ID), eq(FACTORY)))
+                .thenReturn(Optional.of(existingOrder));
         when(purchaseOrderRepository.save(any())).thenReturn(existingOrder);
 
         UpdatePurchaseOrderRequest req = new UpdatePurchaseOrderRequest();
@@ -245,7 +250,8 @@ class PurchaseServiceImplContractNumberRoundtripTest {
     void update_contractNumberEmptyStringClears() {
         PurchaseOrder existingOrder = buildExistingOrder();
         existingOrder.setContractNumber("OLD-CONTRACT");
-        when(purchaseOrderRepository.findById(eq(ORDER_ID))).thenReturn(Optional.of(existingOrder));
+        when(purchaseOrderRepository.findByIdAndFactoryIdForUpdate(eq(ORDER_ID), eq(FACTORY)))
+                .thenReturn(Optional.of(existingOrder));
         when(purchaseOrderRepository.save(any())).thenReturn(existingOrder);
 
         UpdatePurchaseOrderRequest req = new UpdatePurchaseOrderRequest();

@@ -10,6 +10,7 @@ import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
@@ -61,6 +62,7 @@ class PurchaseServiceImplReceivePriceInheritTest {
     @Mock private com.cretas.aims.service.finance.ArApService arApService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private WarehouseInventoryGuardService warehouseInventoryGuardService;
 
@@ -84,7 +86,8 @@ class PurchaseServiceImplReceivePriceInheritTest {
                 bomItemRepository,
                 arApService,
                 applicationEventPublisher,
-                materialBatchService);
+                materialBatchService,
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "warehouseInventoryGuardService", warehouseInventoryGuardService);
         // @Value 注入字段, 单测手动设成 30% 只是为了让本用例的数量落在上限内。

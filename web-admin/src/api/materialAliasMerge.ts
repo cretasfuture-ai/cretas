@@ -44,8 +44,10 @@ export type MaterialMergeBlockerCode =
   | 'STOCK'
   | 'BOM'
   | 'WORKFLOW'
+  | 'DRAFT_WORKFLOW'
   | 'SUPPLIER'
   | 'PURCHASE_ORDER'
+  | 'OPEN_PURCHASE_ORDER'
   | 'CATEGORY';
 
 export interface MaterialMergeBlocker {
@@ -55,8 +57,15 @@ export interface MaterialMergeBlocker {
   hint: string;
 }
 
+export interface MaterialMergeReplacement {
+  code: 'WORKFLOW' | 'SUPPLIER' | 'PURCHASE_ORDER';
+  message: string;
+  items: string[];
+}
+
 export interface MaterialMergeCheck {
   canMerge: boolean;
+  replacements: MaterialMergeReplacement[];
   duplicate: MaterialBrief;
   master: MaterialBrief;
   blockers: MaterialMergeBlocker[];
@@ -64,7 +73,15 @@ export interface MaterialMergeCheck {
   aliasesToAdd: string[];
 }
 
+export interface MaterialMergeReplaced {
+  draftWorkflows: number;
+  suppliers: number;
+  purchaseOrderItems: number;
+  notes: string[];
+}
+
 export interface MaterialMergeResult {
+  replaced?: MaterialMergeReplaced;
   duplicateId: string;
   masterId: string;
   aliasesAdded: string[];

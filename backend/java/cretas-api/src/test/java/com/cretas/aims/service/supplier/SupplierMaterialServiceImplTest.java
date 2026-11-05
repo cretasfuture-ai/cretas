@@ -12,6 +12,7 @@ import com.cretas.aims.service.unit.CanonicalUnit;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -33,11 +34,13 @@ class SupplierMaterialServiceImplTest {
     @Mock SupplierRepository supplierRepository;
     @Mock RawMaterialTypeRepository materialRepository;
     @Mock UnitContractService unitContractService;
+    @Mock MaterialReferenceWriteGuard materialReferenceWriteGuard;
     SupplierMaterialServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new SupplierMaterialServiceImpl(repository, supplierRepository, materialRepository, unitContractService);
+        service = new SupplierMaterialServiceImpl(repository, supplierRepository, materialRepository,
+                unitContractService, materialReferenceWriteGuard);
     }
 
     @Test
