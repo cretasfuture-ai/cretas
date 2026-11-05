@@ -156,6 +156,15 @@ class SalesRankingSemanticContractTest {
         }
     }
 
+    @ParameterizedTest @ValueSource(strings = {"销售排行前1000个", "销售排行前0个"})
+    void invalidLimitIsClarifiedWithoutTruncationOrQuery(String text) {
+        try (var h = new Harness()) {
+            assertThat(h.run(h.query(text)).getStatus()).isEqualTo("NEED_MORE_INFO");
+            verifyNoInteractions(h.ranking);
+            assertThat(h.run(h.query("销售排行前五个")).getStatus()).isEqualTo("SUCCESS");
+        }
+    }
+
     @Test void directToolQuantityAndInvalidLimitNeverQueryTheService() throws Exception {
         try (var h = new Harness()) {
             for (var extra : List.of(Map.<String,Object>of("metric", "quantity"), Map.<String,Object>of("limit", 101))) {

@@ -1756,6 +1756,14 @@ public class ToolDispatchService {
                     .message("当前产品排行仅支持销售订单金额排序，不支持销量排名；请确认是否改看金额排行。")
                     .build();
         }
+        if (params.get("limit") instanceof Number n
+                && (new java.math.BigDecimal(n.toString()).compareTo(java.math.BigDecimal.ONE) < 0
+                || new java.math.BigDecimal(n.toString()).compareTo(java.math.BigDecimal.valueOf(100)) > 0)) {
+            return IntentExecuteResponse.builder().status("NEED_MORE_INFO").aiMode("READ")
+                    .intentCode(SalesRankingParameters.INTENT)
+                    .message("产品排行支持前1到100名，请提供这个范围内的条数，未执行查询。")
+                    .build();
+        }
         return null;
     }
 

@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 public final class SalesRankingParameters {
     public static final String INTENT = "PRODUCT_SALES_RANKING";
     public static final String TOOL = "product_sales_ranking";
-    private static final Pattern LIMIT = Pattern.compile("前([0-9]{1,3}|[一二两三四五六七八九十百]{1,3})(?:个|名|条)?");
+    private static final Pattern LIMIT = Pattern.compile("前([0-9]+|[一二两三四五六七八九十百]+)(?:个|名|条)?");
     private SalesRankingParameters() { }
 
     public static void apply(String input, Map<String, Object> params, LocalDate today) {
@@ -39,7 +39,10 @@ public final class SalesRankingParameters {
         var matcher = LIMIT.matcher(text);
         if (matcher.find()) {
             var n = FollowUpResolver.parseNumber(matcher.group(1));
-            if (n != null) params.put("limit", n.intValueExact());
+            // Keep the complete number. Out-of-range values are clarified at dispatch,
+            // never silently truncated (e.g. 1000 -> 100) or clamped into a different request.
+            if (n != null) params.put("limit", n.compareTo(java.math.BigDecimal.valueOf(100)) > 0
+                    ? n : n.intValueExact());
         }
         // Only absent dates default. Existing explicit dates (including those resolved by the
         // standard preprocessor/LLM) retain their meaning; partial ranges are never guessed.
