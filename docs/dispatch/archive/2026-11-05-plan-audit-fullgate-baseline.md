@@ -34,3 +34,14 @@ UserDisableTool、CustomerCrmStatusQueryTool、InvoiceStatusTool 的三处描述
 ## 原接手记录的后续证据
 
 早期接手记录中的“离线私钥路径待提供”已解除：本机自行找到现存私钥，仅本地使用，未输出、复制或上传其内容。现有平台 F006 备份 run 14（export 22）已完成 A 级导出包恢复核验：加密包 8,523,464 字节，解密包 SHA-256 `f6f1d2adbe04a6c60b395286bf42887e745f2b9c49e661707f09e4b4cb3233b9` 与台账一致，251 个文件哈希、249 张表及 123,263 行逐表核对通过。明文仅在进程内存，未还原到生产数据库；未再次删除任何工厂。证据为本机 `C:/Users/Steve/cretas-audit-evidence-20261105/backup-restore-result.json`。
+
+
+## 12:53 阶段交付与 main 冻结
+
+#1451 已于 04:52:28Z 合并，squash `1fd507de1e3dee2fd7482a8d617c4a512a4dd278`；#1457 已于 04:52:48Z 合并，squash `0b2bdd6b8844ff865f898bcea1cea763d6442d76`。共同31项修复随1451进入main。上述四个已合并实现任务归档并释放文件scope；1438仍在飞，不提前标完成。
+
+有效当前head全量证据：1451 `6b90e4128c` / run41963776528，19318例=19027 passed+291 skipped、0失败错误；1457 `b9604684f5` / run41963854007，19335例=19044 passed+291 skipped、0失败错误。辅助1462 `1b6e37a3eb` / run41960359191，19316例=19025 passed+291 skipped、0失败错误。三份库存/目录/扫描的九类78项均逐一实际passed，HEAD和整仓tree与本地Git对象一致；instrument/ratchet通过，不把条件skip算执行。
+
+原1438整合head `382dd7fbe6` / run41963966444亦已全量通过：19400例=19108 passed+292 skipped、0失败错误，平台AI57与真实JPA7均实际passed；其PG job127036541353执行真实迁移1项、0失败错误跳过。但合并前main新增1464/1465/1466，推进至df325，Java/Python/Web都有新源码，故不能用原96ca制品部署新main。1438将同步新main再跑最终整合门禁与构建，不动这些已合并实现。
+
+登记 `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105`：Owner为本组当前聊天，main合并/发布准备窗口优先；其他Owner继续feature开发测试，暂缓推进main，已有有效发布锁/原子操作仍优先。此次登记不等于已进入生产运行时窗口，也不授予新增生产业务写入/删除权限。正式生产与业务验证以本组发布回执和PR最终说明为准。

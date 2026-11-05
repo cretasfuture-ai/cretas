@@ -90,9 +90,11 @@ public class UserMapper {
         applyDepartment(user, request.getDepartment());
         // 设置 roleCode 和 position
         if (request.getRoleCode() != null) {
+            com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(request.getRoleCode().name(), null);
             user.setRoleCode(request.getRoleCode().name());
             user.setPosition(request.getRoleCode().name());
         } else if (request.getPosition() != null) {
+            com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(request.getPosition(), null);
             user.setRoleCode(request.getPosition());
             user.setPosition(request.getPosition());
         }
@@ -126,6 +128,7 @@ public class UserMapper {
         // Apr 20 Bug BR-13 fix: roleCode 之前在此 mapper 被 ignore, 导致 /users/{id} PUT
         // 送 roleCode 无效 (用户 "角色变更保存, 更新失败"). 现补 update.
         if (request.getRoleCode() != null) {
+            com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(request.getRoleCode().name(), user.getRoleCode());
             user.setRoleCode(request.getRoleCode().name());
         }
         if (request.getMonthlySalary() != null) {
@@ -145,6 +148,7 @@ public class UserMapper {
         // isActive is intentionally handled in UserServiceImpl.updateUser
         // (Apr 18 Bug #57) and stays there.
         if (request.getPosition() != null) {
+            com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(request.getPosition(), user.getPosition());
             user.setPosition(request.getPosition());
         }
         // R-2① (2026-08-20): department 之前**只在 toEntity(新建) 里写**, update 这一路

@@ -346,7 +346,7 @@ class ScheduledTaskControllerTest {
     /** 平台角色请求 — 绕过多租户守卫, 让现有长度/正常路径测试聚焦原逻辑。 */
     private static MockHttpServletRequest req() {
         MockHttpServletRequest r = new MockHttpServletRequest();
-        r.setAttribute("role", "platform_admin");
+        r.setAttribute("role", "platform_admin"); r.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE, new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "platform_admin"));
         r.setAttribute("factoryId", "F001");
         return r;
     }

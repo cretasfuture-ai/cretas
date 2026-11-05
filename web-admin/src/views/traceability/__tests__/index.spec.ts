@@ -39,17 +39,29 @@ vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canA
 vi.mock('@/api/request', () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 
 const getFullTraceMock = vi.fn();
+const getRecentTraceabilityMock = vi.fn();
+const findSalesOrdersForTraceMock = vi.fn();
+const getPlansBySalesOrderMock = vi.fn();
+const getBatchesForProductionPlansMock = vi.fn();
+const getSalesOrderDocumentTraceMock = vi.fn();
 const getHistoryMock = vi.fn();
 vi.mock('@/api/quality-disposition', () => ({ getDispositionHistory: (...args: unknown[]) => getHistoryMock(...args) }));
 vi.mock('@/api/traceability', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/traceability')>()),
   getFullTrace: (...args: unknown[]) => getFullTraceMock(...args),
+  getRecentTraceability: (...args: unknown[]) => getRecentTraceabilityMock(...args),
+  findSalesOrdersForTrace: (...args: unknown[]) => findSalesOrdersForTraceMock(...args),
+  getPlansBySalesOrder: (...args: unknown[]) => getPlansBySalesOrderMock(...args),
+  getBatchesForProductionPlans: (...args: unknown[]) => getBatchesForProductionPlansMock(...args),
 }));
 
 const getDetailMock = vi.fn();
 vi.mock('@/api/sourceIndividual', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/sourceIndividual')>()),
   getSourceIndividualDetail: (...args: unknown[]) => getDetailMock(...args),
+}));
+vi.mock('@/api/documentTrace', () => ({
+  getSalesOrderDocumentTrace: (...args: unknown[]) => getSalesOrderDocumentTraceMock(...args),
 }));
 
 import TracePage from '../index.vue';
@@ -80,9 +92,16 @@ beforeEach(() => {
   pushMock.mockReset();
   replaceMock.mockReset();
   getFullTraceMock.mockReset();
+  getRecentTraceabilityMock.mockReset();
+  findSalesOrdersForTraceMock.mockReset();
+  getPlansBySalesOrderMock.mockReset();
+  getBatchesForProductionPlansMock.mockReset();
+  getSalesOrderDocumentTraceMock.mockReset();
   getDetailMock.mockReset();
   getHistoryMock.mockReset();
   getHistoryMock.mockResolvedValue([]);
+  getRecentTraceabilityMock.mockResolvedValue({ success: true, data: { content: [], totalElements: 0, totalPages: 0, size: 20, number: 0 } });
+  getSalesOrderDocumentTraceMock.mockResolvedValue({ success: true, data: { anchorType: 'SALES_ORDER', anchorId: 'SO-1', anchorNumber: 'SO-1', documents: [], missingLinks: [] } });
 });
 
 describe('溯源查询页 — 「本批来自 N 头牛」横幅', () => {
@@ -213,6 +232,80 @@ describe('溯源查询页 — 「本批来自 N 头牛」横幅', () => {
 
     expect(wrapper.find('[data-testid="source-individual-banner"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('本批来自');
+  });
+});
+
+describe('溯源查询页 — 最近批次与销售单入口', () => {
+  it('loads recent batches from the traceability list and queries the selected real batch', async () => {
+    getRecentTraceabilityMock.mockResolvedValue({ success: true, data: {
+      content: [{ batchNumber: 'PB-RECENT', productName: '冷鲜牛腩', productionDate: '2026-11-05', qualityStatus: 'PASSED', status: 'COMPLETED', completedQuantity: 18 }],
+      totalElements: 1, totalPages: 1, size: 20, number: 0,
+    } });
+    getFullTraceMock.mockResolvedValue({ success: true, data: sixCattleTrace() });
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="recent-batches-table"]').text()).toContain('PB-RECENT');
+    await wrapper.get('[data-testid="recent-batch-query"]').trigger('click');
+    await flushPromises();
+    expect(getFullTraceMock).toHaveBeenCalledWith('F006', 'PB-RECENT');
+  });
+
+  it('resolves sales order by ID → plan ID → productionPlanId, never by display fields', async () => {
+    findSalesOrdersForTraceMock.mockResolvedValue([{ id: 'SO-1', orderNumber: 'SO-2026-001' }]);
+    getPlansBySalesOrderMock.mockResolvedValue([{ id: 'PLAN-1', planNumber: 'PLAN-2026-001', sourceOrderId: 'SO-1' }]);
+    getBatchesForProductionPlansMock.mockResolvedValue([{ id: 'BATCH-ID-1', batchNumber: 'PB-2026-001', productionPlanId: 'PLAN-1' }]);
+    getSalesOrderDocumentTraceMock.mockResolvedValue({ success: true, data: {
+      anchorType: 'SALES_ORDER', anchorId: 'SO-1', anchorNumber: 'SO-2026-001', missingLinks: [],
+      documents: [
+        { documentType: 'PURCHASE_ORDER', documentId: 'PO-1', documentNumber: 'PO-2026-001', direction: 'UPSTREAM' },
+        { documentType: 'PURCHASE_RECEIPT', documentId: 'RCV-1', documentNumber: 'RCV-2026-001', direction: 'UPSTREAM' },
+      ],
+    } });
+    getFullTraceMock.mockResolvedValue({ success: true, data: sixCattleTrace() });
+    const wrapper = mountPage();
+    await wrapper.get('[data-testid="mode-sales-order"]').trigger('click');
+    await wrapper.get('[data-testid="sales-order-input"]').setValue('SO-2026-001');
+    await wrapper.find('[data-testid="sales-order-trace"] form').trigger('submit');
+    await flushPromises();
+    expect(findSalesOrdersForTraceMock).toHaveBeenCalledWith('F006', 'SO-2026-001');
+    expect(getPlansBySalesOrderMock).toHaveBeenCalledWith('F006', 'SO-1');
+    expect(getBatchesForProductionPlansMock).toHaveBeenCalledWith('F006', ['PLAN-1']);
+    expect(getSalesOrderDocumentTraceMock).toHaveBeenCalledWith('F006', 'SO-1');
+    expect(wrapper.get('[data-testid="sales-source-documents"]').text()).toContain('PO-2026-001');
+    expect(wrapper.get('[data-testid="sales-source-documents"]').text()).toContain('RCV-2026-001');
+    await wrapper.findAll('[data-testid="sales-source-document"]')[0].trigger('click');
+    expect(pushMock).toHaveBeenCalledWith({ path: '/procurement/orders/PO-1' });
+    await wrapper.get('[data-testid="sales-batch-option"]').trigger('click');
+    await flushPromises();
+    expect(getFullTraceMock).toHaveBeenCalledWith('F006', 'PB-2026-001');
+    expect(wrapper.get('[data-testid="trace-sales-anchor"]').text()).toContain('SO-2026-001');
+    expect(wrapper.get('[data-testid="trace-document-anchors"]').text()).toContain('SH-2026-001');
+  });
+
+  it('keeps four-state failure and empty semantics for recent batches and sales lookup', async () => {
+    getRecentTraceabilityMock.mockRejectedValue(new Error('最近批次服务不可用'));
+    findSalesOrdersForTraceMock.mockResolvedValue([]);
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="recent-batches-error"]').text()).toContain('最近批次服务不可用');
+    await wrapper.get('[data-testid="mode-sales-order"]').trigger('click');
+    await wrapper.get('[data-testid="sales-order-input"]').setValue('SO-NONE');
+    await wrapper.find('[data-testid="sales-order-trace"] form').trigger('submit');
+    await flushPromises();
+    expect(wrapper.get('[data-testid="sales-order-empty"]').exists()).toBe(true);
+  });
+
+  it('does not let an old recent-batch response cross a tenant or actor change', async () => {
+    let resolveOld!: (value: unknown) => void;
+    getRecentTraceabilityMock.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
+    const wrapper = mountPage();
+    identity.factoryId = 'F007';
+    identity.user.id = 8;
+    await nextTick();
+    resolveOld({ success: true, data: { content: [{ batchNumber: 'OLD-TENANT', productName: '旧租户', productionDate: '2026-11-05', qualityStatus: 'PASS', status: 'COMPLETED', completedQuantity: 1 }], totalElements: 1, totalPages: 1, size: 20, number: 0 } });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="recent-batches-table"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('OLD-TENANT');
   });
 });
 

@@ -249,7 +249,8 @@ class InertPreAuthorizeGapsAuthorizationTest {
         roleOnly.perform(get("/api/platform/report-prompts").requestAttr("role", "factory_super_admin"))
                 .andExpect(status().isForbidden());
         verify(promptConfigs, never()).getAllConfigs(any());
-        roleOnly.perform(get("/api/platform/report-prompts").requestAttr("role", "platform_admin"))
+        roleOnly.perform(get("/api/platform/report-prompts").requestAttr("role", "platform_admin")
+                        .requestAttr(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE, new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "platform_admin")))
                 .andExpect(status().isOk());
         verify(promptConfigs).getAllConfigs(any());
     }
