@@ -6,8 +6,7 @@ Route:
   GET /api/smartbi/{factory_id}/uploads/list?limit=50&days=7
 
 Source table: smart_bi_pg_excel_uploads (RLS-isolated per factory).
-Filename → report_type detection via pos_router (二维火 keyword match);
-falls back to detected_table_type column or "unknown".
+Report type is read from the persisted detected_table_type column.
 
 Auth: JWT Bearer (factory_id claim must match URL) or X-Internal-Secret.
 Same _enforce_factory_match contract as revenue_report.py.
@@ -49,24 +48,7 @@ async def _get_pool():
 
 
 def _detect_report_type(filename: Optional[str], fallback: Optional[str]) -> str:
-    """Filename → short report_type.
-
-    Tries pos_router keyword match first (二维火 POS reports), then falls
-    back to the upload row's detected_table_type column, then "unknown".
-
-    Per Rule 1, explicit ``is not None`` checks for the fallback chain so a
-    blank string in detected_table_type doesn't get treated as missing.
-    """
-    if filename is not None and filename.strip():
-        try:
-            from smartbi.ingestion.pos_router import _route_by_filename
-            decision = _route_by_filename(filename)
-            if decision is not None:
-                return decision.report_type
-        except Exception as e:
-            # pos_router registry load issue — non-fatal, fall through.
-            logger.debug("[upload-status] pos_router lookup failed: %s", e)
-
+    """Return the persisted report type, or ``unknown`` when absent."""
     if fallback is not None and fallback.strip():
         return fallback
 

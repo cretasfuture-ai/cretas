@@ -34,7 +34,6 @@ class SemanticIntentMatcherWarmupTest {
         IntentKnowledgeBase knowledgeBase = mock(IntentKnowledgeBase.class);
         EmbeddingClient embedding = mock(EmbeddingClient.class);
         when(knowledgeBase.getPhraseToIntentMapping()).thenReturn(Map.of("hello", "HELLO"));
-        when(knowledgeBase.getRestaurantPhraseMapping()).thenReturn(Map.of());
         when(embedding.isAvailable()).thenReturn(true);
         when(embedding.encodeBatch(java.util.List.of("hello")))
                 .thenReturn(java.util.List.of(new float[]{1, 0}));

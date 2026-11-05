@@ -2,7 +2,6 @@ package com.cretas.aims.service.indicator;
 
 import com.cretas.aims.dto.platform.CreateFactoryRequest;
 import com.cretas.aims.entity.Factory;
-import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.entity.indicator.Indicator;
 import com.cretas.aims.entity.indicator.IndicatorComputation;
 import com.cretas.aims.repository.DroolsRuleRepository;
@@ -12,7 +11,6 @@ import com.cretas.aims.repository.indicator.IndicatorRepository;
 import com.cretas.aims.service.impl.FactoryServiceImpl;
 import com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategy;
 import com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategyRegistry;
-import com.cretas.aims.service.restaurant.RestaurantAgentActionWorkflowProvisioner;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -91,13 +89,6 @@ class FactoryIndicatorProvisionerContractTest {
         verify(indicators, never()).existsIncludingDeleted(eq("NEW"), anyString());
     }
 
-    @Test void restaurantIsNotGivenManufacturingMetrics() {
-        Factory restaurant = new Factory(); restaurant.setType(FactoryType.RESTAURANT);
-        when(factories.findByIdForUpdate("NEW")).thenReturn(Optional.of(restaurant));
-        assertThat(service.provision("NEW")).isZero();
-        verifyNoInteractions(indicators, computations, registry);
-    }
-
     @Test void missingFactoryOrMissingStrategyFailsRatherThanClaimingInitialized() {
         assertThatThrownBy(() -> service.provision("MISSING")).isInstanceOf(IllegalStateException.class);
         when(registry.find("FACTORY_LU_YIELD_RATE")).thenReturn(Optional.empty());
@@ -108,8 +99,7 @@ class FactoryIndicatorProvisionerContractTest {
     @Test void formalFactoryCreationCallsProvisionerAndDoesNotSwallowItsFailure() {
         DroolsRuleRepository rules = mock(DroolsRuleRepository.class);
         FactoryIndicatorProvisioner provisioner = mock(FactoryIndicatorProvisioner.class);
-        FactoryServiceImpl factoryService = new FactoryServiceImpl(factories, rules,
-                mock(RestaurantAgentActionWorkflowProvisioner.class), provisioner);
+        FactoryServiceImpl factoryService = new FactoryServiceImpl(factories, rules, provisioner);
         when(factories.save(any())).thenAnswer(call -> call.getArgument(0));
         CreateFactoryRequest request = CreateFactoryRequest.builder()
                 .name("新厂验收").industryCode("FOOD").regionCode("2026").build();

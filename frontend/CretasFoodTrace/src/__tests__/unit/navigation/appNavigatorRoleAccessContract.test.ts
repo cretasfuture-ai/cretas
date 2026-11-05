@@ -12,8 +12,9 @@ describe('AppNavigator authenticated role access contract', () => {
     expect(appNavigatorSource).not.toContain('WAREHOUSE_ROLES');
   });
 
-  it('keeps restaurant admins and quality inspectors on their mobile navigators', () => {
-    expect(appNavigatorSource).toContain('isRestaurant(user) ? <FactoryAdminNavigator />');
+  it('keeps factory bosses and quality inspectors on their mobile navigators', () => {
+    expect(appNavigatorSource).toContain('if (userRole === "factory_super_admin")');
+    expect(appNavigatorSource).toContain('return <BossNavigator />');
     expect(appNavigatorSource).toContain('userRole === "quality_inspector"');
     expect(appNavigatorSource).toContain('return <QualityInspectorNavigator />');
   });
@@ -32,8 +33,8 @@ describe('AppNavigator authenticated role access contract', () => {
     expect(appNavigatorSource).toContain('return <WarehouseWorkerNavigator />');
   });
 
-  it('routes factory bosses to view and approval while preserving restaurant admin flows', () => {
-    expect(appNavigatorSource).toContain('return isRestaurant(user) ? <FactoryAdminNavigator /> : <BossNavigator />');
+  it('routes factory bosses to the factory view and approval navigator', () => {
+    expect(appNavigatorSource).toContain('return <BossNavigator />');
   });
 
   it('uses a locked fallback for unknown roles', () => {

@@ -13,18 +13,15 @@
  * parsing and semantic-cache matching while preserving chart-aware answers.
  *
  * Markdown + chart rendering is reused as-is from the existing chat UI
- * (ChatBubble.vue + ChatTypingIndicator.vue, same components
- * RestaurantChatPanel.vue uses) rather than re-implemented here — this
+ * (ChatBubble.vue + ChatTypingIndicator.vue) rather than re-implemented here — this
  * panel is a slimmer, page-agnostic shell around them (no restaurant-themed
  * styling, adds the 聚焦 selector + context-embedding on top).
  */
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
 import { ElButton, ElInput, ElMessage, ElRadioButton, ElRadioGroup } from 'element-plus';
 import ChatBubble from '../chat/ChatBubble.vue';
-import ChatTypingIndicator from '../chat/ChatTypingIndicator.vue';
-import { askRestaurantIntent } from '@/api/smartbi/restaurant-synthesis';
-import { useAuthStore } from '@/store/modules/auth';
-import type { ChatTurn } from '@/types/restaurant-chat';
+import { executeIntent } from '@/api/smartbi/intent-chat';
+import type { ChatTurn } from '@/types/smartbi-chat';
 import type { AnalysisChartContext } from './analysisBullets';
 
 const props = defineProps<{
@@ -35,17 +32,6 @@ const props = defineProps<{
   /** Page title, used as the "全页" focus label + fallback context title. */
   pageTitle: string;
 }>();
-
-/**
- * 版式分流 (AI 对话标准, 2026-10-08 Steve 裁定):
- *  - 工厂租户: 新标准版式 (助手全宽无头像 / 骨架屏 / 30s 超时 / 条件滚动 / 复制 / 示例芯片 ...)
- *  - 餐饮租户: 版式保持原样, 与改前逐字相同 (legacyParity.spec.ts 用改前 fixture 比对)
- * 租户判断与 AIQuery.vue 同源: authStore.businessDomain === 'RESTAURANT'。⛔ 不按页面路径判断:
- * 同一个面板既挂在餐饮页 restaurant/analytics/platform.vue, 也挂在 crm / ops 的分析页。
- */
-const authStore = useAuthStore();
-const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURANT');
-const isStandard = computed(() => !isRestaurantTenant.value);
 
 /** W2: 客户端超时 30 秒, 用 AbortController 中断。 */
 const ANALYSIS_TIMEOUT_MS = 30_000;
@@ -118,7 +104,7 @@ const focusLabel = computed(() =>
 );
 
 function resetConversation() {
-  if (isStandard.value && activeController) {
+  if (activeController) {
     activeController.abort();
     activeController = null;
     isTyping.value = false;
@@ -202,8 +188,8 @@ async function sendMessage(text?: string) {
   await scrollToBottom();
 
   isTyping.value = true;
-  // 标准版式 (工厂): 30s 客户端超时 + 可中断。餐饮保持原来的无超时行为。
-  const controller = isStandard.value ? new AbortController() : null;
+  // 工厂分析请求支持 30s 客户端超时和用户中断。
+  const controller = new AbortController();
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   if (controller) {
@@ -214,17 +200,14 @@ async function sendMessage(text?: string) {
     }, ANALYSIS_TIMEOUT_MS);
     await scrollToBottom(); // 骨架屏出现后回到底部, 答案到达时的「离底部距离」只反映用户自己有没有往上翻
   }
-  // N1: 追加答案之前量好「用户是不是还在底部附近」; 餐饮永远滚到底 (旧行为)
+  // N1: 追加答案之前量好「用户是不是还在底部附近」。
   let followBottom = true;
   try {
-    const pending = askRestaurantIntent(props.factoryId, question, sessionId.value, {
-      pageContext: buildPageContext(),
-      dimensionHints: focusedContext.value.dimensionHints,
-    });
+    const pending = executeIntent(props.factoryId, question, { sessionId: sessionId.value, mode: 'READ', context: { pageContext: buildPageContext(), dimensionHints: focusedContext.value.dimensionHints } });
     const response = controller ? await raceAbort(Promise.resolve(pending), controller.signal) : await pending;
     if (controller) followBottom = isNearBottom();
 
-    if (!response.success) {
+    if (response.status === 'FAILED' || response.status === 'ERROR') {
       if (controller) {
         // 标准版式: 说人话, 不露后端原文 (W2)
         turns.value.push({
@@ -236,7 +219,7 @@ async function sendMessage(text?: string) {
         ElMessage.error(FRIENDLY_FAILURE_TEXT);
       } else {
         // Honest failure: real backend/network message, never a fabricated answer.
-        const errMsg = response.error || '分析失败，请稍后重试';
+        const errMsg = response.message || '分析失败，请稍后重试';
         turns.value.push({
           id: crypto.randomUUID(),
           role: 'ai',
@@ -250,12 +233,9 @@ async function sendMessage(text?: string) {
       turns.value.push({
         id: crypto.randomUUID(),
         role: 'ai',
-        content: response.answer || '已完成分析',
+        content: response.formattedText || response.message || '已完成分析',
         timestamp: Date.now(),
-        charts: response.charts,
-        alerts: response.alerts,
-        followUpActions: response.followUpActions,
-        source: response.source,
+        source: response.status,
       });
     }
   } catch (error: unknown) {
@@ -329,18 +309,18 @@ defineExpose({ setFocus, sendMessage, clearConversation });
 </script>
 
 <template>
-  <div class="acp-panel" :class="{ 'acp-std': isStandard }">
+  <div class="acp-panel acp-std">
     <div class="acp-header">
       <div class="acp-title">
         <span class="acp-title-dot"></span>
         AI 分析 · {{ pageTitle }}
       </div>
-      <el-button :size="isStandard ? 'default' : 'small'" link @click="clearConversation">清空对话</el-button>
+      <el-button size="default" link @click="clearConversation">清空对话</el-button>
     </div>
 
     <div class="acp-focus-row">
       <span class="acp-focus-label">聚焦:</span>
-      <el-radio-group v-model="focusKey" :size="isStandard ? 'default' : 'small'" @change="onFocusChange">
+      <el-radio-group v-model="focusKey" size="default" @change="onFocusChange">
         <el-radio-button :value="ALL_FOCUS">全页</el-radio-button>
         <el-radio-button v-for="ctx in contexts" :key="ctx.key" :value="ctx.key">
           {{ ctx.title }}
@@ -350,29 +330,16 @@ defineExpose({ setFocus, sendMessage, clearConversation });
 
     <div ref="chatContainer" class="acp-body">
       <div v-if="turns.length === 0" class="acp-empty">
-        <template v-if="isStandard">
-          <div class="acp-empty-text">当前聚焦 {{ focusLabel }}。直接问，或点下面的示例问题：</div>
-          <div class="acp-examples">
-            <el-button
-              v-for="q in EXAMPLE_QUESTIONS"
-              :key="q"
-              round
-              class="acp-example"
-              data-testid="acp-example"
-              :disabled="isTyping"
-              @click="sendMessage(q)"
-            >
-              {{ q }}
-            </el-button>
-          </div>
-        </template>
-        <div v-else class="acp-empty-text">
-          当前聚焦 {{ focusLabel }} — 问问我，例如: "用3条bullet解读并给营销建议" / "这个数据说明什么问题"
+        <div class="acp-empty-text">当前聚焦 {{ focusLabel }}。直接问，或点下面的示例问题：</div>
+        <div class="acp-examples">
+          <el-button v-for="q in EXAMPLE_QUESTIONS" :key="q" round class="acp-example" data-testid="acp-example" :disabled="isTyping" @click="sendMessage(q)">
+            {{ q }}
+          </el-button>
         </div>
       </div>
 
       <template v-for="turn in turns" :key="turn.id">
-        <ChatBubble :turn="turn" :variant="isStandard ? 'standard' : 'legacy'">
+        <ChatBubble :turn="turn" variant="standard">
           <template #followups>
             <div
               v-if="turn.role === 'ai' && turn.followUpActions?.length"
@@ -381,7 +348,7 @@ defineExpose({ setFocus, sendMessage, clearConversation });
               <el-button
                 v-for="action in turn.followUpActions"
                 :key="action.question"
-                :size="isStandard ? 'default' : 'small'"
+                size="default"
                 round
                 @click="sendMessage(action.question)"
               >
@@ -389,7 +356,7 @@ defineExpose({ setFocus, sendMessage, clearConversation });
               </el-button>
             </div>
           </template>
-          <template v-if="isStandard" #actions>
+          <template #actions>
             <div class="acp-actions">
               <el-button text class="acp-copy" data-testid="acp-copy" @click="copyTurn(turn)">复制</el-button>
             </div>
@@ -399,7 +366,7 @@ defineExpose({ setFocus, sendMessage, clearConversation });
       </template>
 
       <div
-        v-if="isTyping && isStandard"
+        v-if="isTyping"
         class="acp-skeleton"
         role="status"
         aria-live="polite"
@@ -414,20 +381,19 @@ defineExpose({ setFocus, sendMessage, clearConversation });
         ></span>
         <div class="acp-skeleton-caption">正在分析…</div>
       </div>
-      <ChatTypingIndicator v-else-if="isTyping" />
     </div>
 
     <div class="acp-input">
       <el-input
         v-model="inputText"
         placeholder="输入问题, 回车发送..."
-        :size="isStandard ? 'large' : undefined"
+        size="large"
         :disabled="isTyping"
         @keyup.enter="sendMessage()"
       />
       <el-button
         type="primary"
-        :size="isStandard ? 'large' : undefined"
+        size="large"
         :loading="isTyping"
         @click="sendMessage()"
       >发送</el-button>

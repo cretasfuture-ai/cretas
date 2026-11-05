@@ -105,7 +105,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/rd/SampleCrea
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/report/ProcessSecretToolTextTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/report/ReportCostVarianceToolNotComparableTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/report/SkuGrossMarginToolTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/restaurant/TieredIntentDelegateTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/source/SourceIndividualQueryToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/system/AiValueSummaryToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/system/FindingActionPlanToolTest.java
@@ -157,7 +156,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/P
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/ProductWorkProcessRecommendToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/WorkProcessCatalogToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/WorkProcessTaskTransitionPreviewToolTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/util/RestaurantEconomicsOutputFormatterTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/usage/LlmUsageScopeTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/workflow/inventory/InventoryAnalysisWorkflowTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/aspect/RateLimitAspectTest.java
@@ -169,10 +167,8 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/canonical/Depend
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/draftentry/DraftEnumLabelsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/draftentry/SupplierReceivingMaterialDropdownTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/FactoryConfirmedFactReuseTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/InterviewModuleCatalogParityTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/InterviewSessionOwnershipMessageTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/cache/IntentResultCacheTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/client/GoldFinanceClientAchievementTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/GoldFinanceClientTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/IsapiClientTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/LabelQcAnalysisClientTest.java
@@ -180,16 +176,12 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/client/ParsedHeaderRestore
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/PythonAiMatcherClientTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/PythonServiceCircuitBreakerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/PythonSmartBIClientFoodKBTenantHeaderTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/client/PythonSmartBIClientSectionTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/PythonSmartBIClientTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/client/RestaurantAgentRuntimeClientTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/client/RestaurantOwnerActionClientTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/agentops/AgentOpsClientTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/DemoFactoryGateConfigTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/DemoReadOnlyInterceptorTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/EnumCoercionJacksonConfigTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/FlywayLineageBackfillValidateOnlyTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/config/IntentKnowledgeBaseTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/JacksonBigDecimalForFloatsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/JwtAuthInterceptorDisabledUserTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/JwtAuthInterceptorFactoryClosedTest.java
@@ -247,7 +239,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/controller/LeaveRequestCon
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/LegacyShipmentWriteFreezeControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/ManufacturerRegistryControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/MaterialBatchControllerSourceBoundaryTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/MaterialRequisitionControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/MobileControllerRateLimitTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/MyWageControllerSelfScopeTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/NotificationControllerCreateTest.java
@@ -278,7 +269,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/controller/ProductionWareh
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/PurchaseRequisitionControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/RawMaterialTypeFoolproofMvcTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/ReferenceDataControllerTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/RestaurantDepartmentModuleAllowlistTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/RestockBoardControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/ReusableContainerControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/RoleControllerListRolesTest.java
@@ -289,7 +279,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/controller/SmartBIUploadCo
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/SmartBiQueryTemplateControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/StocktakeControllerInitiateConstraintRouteTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/StocktakeControllerSubmitNullWorkflowTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/StocktakingRecordControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/TaskBadgeControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/TraceabilityControllerScanTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/TriggerChainControllerTest.java
@@ -297,7 +286,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/controller/UnitContractCon
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/WagePolicyControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/WarehouseInventoryControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/WarehouseLayoutControllerTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/WastageRecordControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/agentops/AgentOpsControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/ai/FactoryCapabilityPackControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/datacenter/ExportRuleControllerTest.java
@@ -315,10 +303,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/controller/inventory/Sales
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/inventory/SalesControllerProductInventorySummaryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/operations/CustomerMaterialArrivalNoticeControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/rd/RdControllerTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/restaurant/DishCostCardControllerTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/restaurant/RestaurantAgentRunControllerTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/restaurant/RestaurantCrmControllerTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/restaurant/SupplierDeliveryNoteControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/warehouse/WarehouseDeliveryControllerHistoryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/warehouse/WarehouseReceivingControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/warehouse/WarehouseReceivingCustomerSuppliedControllerTest.java
@@ -439,8 +423,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductUnitCon
 backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductionProcessFlowTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/integration/QualityInspectionAtomicWritebackIntegrationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/integration/QualityInspectionFlowTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/integration/RestaurantDiagnosticChatE2ETest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/integration/RestaurantP35IntegrationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/integration/SalesInvoiceTodoOutboxPostgresIntegrationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ShipmentTraceabilityFlowTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/integration/TraceabilityPostgresAcceptanceTest.java
@@ -511,7 +493,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/repository/lineage/BatchLi
 backend/java/cretas-api/src/test/java/com/cretas/aims/repository/lineage/BatchLineageEdgeRepositoryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/repository/restock/MultiWarehouseDemandRepositoryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/repository/restock/RestockAggregationRepositoryTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/repository/workflow/RestaurantAgentActionWorkflowProvisioningIntegrationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/scheduler/FinishedGoodsExpirySchedulerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/scheduler/ModelTrainingSchedulerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/scheduler/SalesOrderInvoiceTodoSchedulerTest.java
@@ -577,7 +558,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/alerts/AlertInvent
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/alerts/AlertPoAmountThresholdListenerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/alerts/InventoryLowStockEventPublisherTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/alerts/LowStockDualAlertServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/alerts/restaurant/RestaurantHealthAlertBridgeServiceUnavailableTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/arena/ArenaRLTournamentServiceTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/attachment/impl/AttachmentServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/auth/PermissionRegistryServiceImplTest.java
@@ -673,7 +653,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/FactoryN
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/FollowUpResolverTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentClarificationBusinessTypeFilterTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorConfirmLastActionTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorDishClarificationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorFactoryPackRouteTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorFreeTextWorkdeskTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorMemoryPersistTest.java
@@ -681,10 +660,8 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentEx
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorNumberProvenanceTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorProcessSecretReportTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorReadWriteModeTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/IntentExecutionOrchestratorStoreClarificationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/LlmParameterGroundingTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/NarrowPathTelemetryTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/RestaurantFindingHintAppenderTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SlotAnswerRuleTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SseStreamingNoMatchMessageTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SseStreamingServiceFactoryPackRouteTest.java
@@ -767,7 +744,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/finding/FindingTex
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/finding/FindingTextRendererTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/finding/impl/FindingServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/finding/impl/LowStockFindingProviderTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/finding/impl/RestaurantWastageFindingReaderTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/foodsafety/impl/RegulatoryReportPdfServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/hr/AnnualBonusTaxCalculatorTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/hr/AnnualTaxCalculatorTest.java
@@ -856,7 +832,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/RawMaterialTy
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/RejectReversesInventoryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ReportServiceImplProfitDetailTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ReporterNameFallbackTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/RestaurantDomainPrefixTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ResultFormatterMaterialInventoryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ResultFormatterToolListEnvelopeTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/SemanticCacheProcessSecretTest.java
@@ -1008,7 +983,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/mobile/impl/Mobile
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/mobile/impl/MobileAuthServiceImplDisabledUserTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/mobile/impl/MobileAuthServiceImplFactoryClosedTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/mobile/impl/MobileAuthServiceImplMultiSessionTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/mobile/impl/MobileAuthServiceImplPhoneRegistrationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/mobile/impl/MobileDeviceServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/mobile/impl/MobileVersionCheckResponseTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/mobile/impl/MobileVersionCompareTest.java
@@ -1129,24 +1103,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/report/impl/RateWi
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/reports/OperatingReportGrossMarginDiscountPercentTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/reports/OperatingReportProcessSecretPromptTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/reports/OperatingReportSecretMaskTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/DishCostCardServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/InventoryPostingIntegrityTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/MaterialRequisitionInventoryApprovalTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantAgentActionProposalMapperTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantAgentActionWorkflowServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantAgentRunServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantCommissionServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantCostAttributionServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantCrmServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantGrossMarginChatRouteSelectorTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantInventoryConsumptionPostingTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantInventoryPostingRealPurchaseIntegrationTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/RestaurantInventoryPostingServiceImplTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/SupplierDeliveryNoteServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/VoiceRequisitionParserServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/WastageRecordServiceAccountabilityTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/impl/RecipeVersionServiceImplTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/restaurant/impl/SupplierMonthlyReconciliationServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/restock/RestockBoardServiceTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/restock/RestockUnitConverterTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/restock/WarehouseRestockBoardServiceTest.java
@@ -1183,7 +1139,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/smartbi/impl/Finan
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/smartbi/impl/ForecastServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/smartbi/impl/RecommendationServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/smartbi/impl/SmartBIConfigServiceImplBatch1Test.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/smartbi/impl/SmartBIRestaurantRoutingTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/smartbi/impl/SmartBIUploadFlowChartMetaWiringTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/source/SourceIndividualDetailServiceTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/source/SourceIndividualServiceTest.java

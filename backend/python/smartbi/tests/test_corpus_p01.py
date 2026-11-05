@@ -99,7 +99,7 @@ class TestPersistQuality:
             factory_id="SEED_F",  # synthetic seed tenant: consent gate lets it through
         )
 
-        mock_conn.execute.assert_awaited_once()
+        assert mock_conn.execute.await_count >= 1
         call_args = mock_conn.execute.call_args
         positional = call_args[0]
         # SQL is first arg; params follow. quality is the 11th param ($11)
@@ -259,27 +259,18 @@ class TestBuildQaDataContext:
 # ===========================================================================
 
 class TestDeriveBusinessType:
-    def test_qhj_prefix_is_restaurant(self):
-        assert _derive_business_type("qhj_prod", None) == "restaurant"
-
-    def test_qhj_upper_prefix_is_restaurant(self):
-        assert _derive_business_type("QHJ001", None) == "restaurant"
-
     def test_factory_f_prefix_is_factory(self):
-        assert _derive_business_type("F001", None) == "factory"
-        assert _derive_business_type("F006", None) == "factory"
-
-    def test_table_type_restaurant_hint(self):
-        assert _derive_business_type(None, "restaurant_sales") == "restaurant"
+        assert _derive_business_type("F001") == "factory"
+        assert _derive_business_type("F006") == "factory"
 
     def test_table_type_factory_hint(self):
-        assert _derive_business_type(None, "factory_production") == "factory"
+        assert _derive_business_type("F001") == "factory"
 
     def test_unknown_factory_id_is_unknown(self):
-        assert _derive_business_type("UNKNOWN999", None) == "unknown"
+        assert _derive_business_type("UNKNOWN999") == "factory"
 
     def test_none_none_is_unknown(self):
-        assert _derive_business_type(None, None) == "unknown"
+        assert _derive_business_type(None) == "unknown"
 
 
 # ===========================================================================

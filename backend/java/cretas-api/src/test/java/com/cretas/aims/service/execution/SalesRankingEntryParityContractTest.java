@@ -86,6 +86,7 @@ class SalesRankingEntryParityContractTest {
             ReflectionTestUtils.setField(ordinary, "configService", configs);
             ReflectionTestUtils.setField(ordinary, "writeGuardService", new WriteGuardService());
             var domain = mock(BusinessTypeGate.class);
+            when(domain.resolveDomain("F006")).thenReturn("FACTORY");
             when(domain.check(anyString(), any())).thenReturn(Optional.empty());
             ReflectionTestUtils.setField(ordinary, "businessTypeGate", domain);
             ReflectionTestUtils.setField(ordinary, "salesRankingConversationSupport", h.support);

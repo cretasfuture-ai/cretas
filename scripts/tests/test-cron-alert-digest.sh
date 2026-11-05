@@ -76,12 +76,12 @@ ok "0 个 alert 文件 ⇒ rc=2 no-alert-files"
 # ── 1. 首跑: 三个文件的存量行全进 digest, rc=1, 游标建立 ─────────────────
 printf 'A1 soft-delete orphans found\nA2 second line\n' > "$LOGS/soft-delete-orphans.alert"
 printf 'B1 LLM CANARY FLAGGED rc=1\n' > "$LOGS/llm-canary-alerts.log"
-: > "$LOGS/margin-parity-alerts.log"
+: > "$LOGS/source-alerts.log"
 printf 'should be ignored\n' > "$LOGS/soft-delete-orphans.cron.log"
 run_it
 [ "$RC" = 1 ] || fail "[1] 期望 rc=1 实得 $RC: $OUT"
 assert_out "files=3 new_lines=3" "[1]"; assert_out "== soft-delete-orphans.alert  (+2)" "[1]"; assert_out "== llm-canary-alerts.log  (+1)" "[1]"
-assert_out "A1 soft-delete" "[1]"; assert_out "B1 LLM CANARY" "[1]"; assert_no_out "margin-parity" "[1] 空文件不该出现在 digest 里"
+assert_out "A1 soft-delete" "[1]"; assert_out "B1 LLM CANARY" "[1]"; assert_no_out "source-alerts" "[1] 空文件不该出现在 digest 里"
 assert_no_out "should be ignored" "[1] *.cron.log 不是 alert 文件"
 [ -f "$STATE/soft-delete-orphans.alert.cursor" ] || fail "[1] 游标没建"
 case "$(ledger_last)" in *"DIGEST files=3 new_lines=3 sink=stdout delivered=yes rc=1"*) ;; *) fail "[1] 台账: $(ledger_last)" ;; esac
@@ -137,7 +137,7 @@ else
 fi
 
 # ── 7. sink 配置错 ⇒ rc=2 ────────────────────────────────────────────────
-printf 'X1\n' >> "$LOGS/margin-parity-alerts.log"
+printf 'X1\n' >> "$LOGS/source-alerts.log"
 run_it ALERT_SINK=webhook; [ "$RC" = 2 ] || fail "[7] 期望 rc=2 实得 $RC"; assert_out "reason=webhook-url-missing" "[7]"
 run_it ALERT_SINK=pigeon; [ "$RC" = 2 ] || fail "[7b] 期望 rc=2 实得 $RC"; assert_out "reason=unknown-sink:pigeon" "[7b]"
 run_it; [ "$RC" = 1 ] || fail "[7c] 配置错之后游标应未前进, 实得 rc=$RC"; assert_out "X1" "[7c]"
@@ -191,7 +191,7 @@ assert_no_out "DIGEST empty" "[11] 一个都读不了不许说 empty"
 ok "全部输入读不了 ⇒ rc=2 no-readable-alert-files"
 
 # ── 12. dead 路径台账也恰好一行判决 (明细走 digest.alerts) ───────────────────────
-printf 'D1 line for dead path\n' >> "$LOGS/margin-parity-alerts.log"   # 没新增会在 sink 之前走 empty 路径, 要先有行
+printf 'D1 line for dead path\n' >> "$LOGS/source-alerts.log"   # 没新增会在 sink 之前走 empty 路径, 要先有行
 before=$(grep -c . "$STATE/digest.ledger"); run_it ALERT_SINK=pigeon; after=$(grep -c . "$STATE/digest.ledger")
 [ "$((after - before))" = 1 ] || fail "[12] dead 路径台账应恰好长 1 行, 实得 $((after - before))"
 grep -q 'INSTRUMENT_DEAD reason=unknown-sink:pigeon rc=2' <(ledger_last) || fail "[12] 台账判决行: $(ledger_last)"

@@ -155,18 +155,15 @@ class ListSummaryEntityPermissionContractTest {
     }
 
     @Test
-    @DisplayName("restaurant_manager can read wastage through the real permission service")
-    void restaurantManagerCanReadWastageWithRealPermissionService() throws Exception {
+    @DisplayName("retired restaurant_manager cannot read wastage through the real permission service")
+    void restaurantManagerCannotReadWastageWithRealPermissionService() throws Exception {
         User restaurantManager = user(7004L);
         restaurantManager.setRoleCode(FactoryUserRole.restaurant_manager.name());
         when(userRepository.findById(7004L)).thenReturn(Optional.of(restaurantManager));
-        when(listSummaryService.computeSummary(eq(FACTORY), eq("wastage"), any(ListSummaryRequest.class)))
-                .thenReturn(summary("wastage"));
+        JsonNode response = postWithRealPermissionService("wastage", restaurantManager.getId(), 403);
 
-        JsonNode response = postWithRealPermissionService("wastage", restaurantManager.getId(), 200);
-
-        assertEquals(200, response.path("code").asInt());
-        verify(listSummaryService).computeSummary(eq(FACTORY), eq("wastage"), any(ListSummaryRequest.class));
+        assertFalse(response.path("success").asBoolean());
+        verify(listSummaryService, never()).computeSummary(any(), any(), any());
     }
 
     @Test

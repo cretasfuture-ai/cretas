@@ -133,7 +133,7 @@ class SseStreamingClarificationOptionsContractTest {
         ClarificationCandidateService candidateService = new ClarificationCandidateService(
                 configService, permissionGate, accessModeFilter, new WriteGuardService());
         ReflectionTestUtils.setField(service, "factoryCapabilityPackRoutingPolicy", packPolicy);
-        ReflectionTestUtils.setField(service, "businessTypeGate", mock(BusinessTypeGate.class));
+        FactoryAnalysisTestMetadata.bindNamedFactories(service);
         ReflectionTestUtils.setField(service, "writeGuardService", new WriteGuardService());
         ReflectionTestUtils.setField(service, "clarificationCandidateService", candidateService);
 
@@ -232,7 +232,7 @@ class SseStreamingClarificationOptionsContractTest {
                 new ObjectMapper(), toolRegistry, toolDispatch, dynamic,
                 replyClient, mock(DashScopeConfig.class)));
         ReflectionTestUtils.setField(service, "factoryCapabilityPackRoutingPolicy", packPolicy);
-        ReflectionTestUtils.setField(service, "businessTypeGate", mock(BusinessTypeGate.class));
+        FactoryAnalysisTestMetadata.bindNamedFactories(service);
         ReflectionTestUtils.setField(service, "writeGuardService", new WriteGuardService());
         ReflectionTestUtils.setField(service, "clarificationCandidateService",
                 new ClarificationCandidateService(configService, permissionGate, accessModeFilter,

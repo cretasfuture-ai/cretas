@@ -854,6 +854,7 @@ class SseStreamingServiceSlotContinuationTest {
             stubDispatch(queryTool, query, "COMPLETED");
             stubDispatch(batchTool, batchCreate, "WRITE_CONFIRM_REQUIRED");
             stubDispatch(useTool, use, "WRITE_CONFIRM_REQUIRED");
+            FactoryAnalysisTestMetadata.bindNamedFactories(service);
         }
 
         /** 会话表: 内存 map, save 时像 JPA 一样补 sessionId / lastActiveAt。 */

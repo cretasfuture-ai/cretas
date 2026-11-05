@@ -66,7 +66,7 @@ async def test_store_level_wins_over_factory_level():
     pool = _Pool({"S1": _Row(config_value="门店值"), None: _Row(config_value="工厂值")})
 
     got = await cfg.resolve_config(
-        pool, "F1", "restaurant.output_preference", store_id="S1", default="兜底"
+        pool, "F1", "factory.output_preference", store_id="S1", default="兜底"
     )
 
     assert got == "门店值"
@@ -77,18 +77,18 @@ async def test_store_level_wins_over_factory_level():
 async def test_falls_back_to_factory_then_default():
     pool = _Pool({None: _Row(config_value="工厂值")})
     assert await cfg.resolve_config(
-        pool, "F1", "restaurant.x", store_id="S1", default="兜底"
+        pool, "F1", "factory.x", store_id="S1", default="兜底"
     ) == "工厂值"
     assert pool.queried == ["S1", None], "门店级没有 -> 必须再落工厂级"
 
     empty = _Pool({})
-    assert await cfg.resolve_config(empty, "F1", "restaurant.x", default="兜底") == "兜底"
+    assert await cfg.resolve_config(empty, "F1", "factory.x", default="兜底") == "兜底"
 
 
 @pytest.mark.asyncio
 async def test_rls_guc_is_set_to_the_asking_tenant():
     pool = _Pool({None: _Row(config_value="v")})
-    await cfg.resolve_config(pool, "F42", "restaurant.x")
+    await cfg.resolve_config(pool, "F42", "factory.x")
     assert pool.guc == "F42", "不设 GUC 会因 RLS 假性 0 行（本仓踩过多次）"
 
 
@@ -100,7 +100,7 @@ async def test_db_failure_fails_open():
         def acquire(self):
             raise RuntimeError("db down")
 
-    assert await cfg.resolve_config(_Boom(), "F1", "restaurant.x", default="兜底") == "兜底"
+    assert await cfg.resolve_config(_Boom(), "F1", "factory.x", default="兜底") == "兜底"
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,7 @@ async def test_cross_domain_key_is_a_coding_error():
     """
     pool = _Pool({})
     with pytest.raises(ValueError, match="前缀"):
-        await cfg.resolve_config(pool, "F1", "factory.something", domain="restaurant")
+        await cfg.resolve_config(pool, "F1", "sales.something", domain="factory")
     with pytest.raises(ValueError, match="domain"):
         await cfg.resolve_config(pool, "F1", "sales.x", domain="sales")
 
@@ -132,9 +132,6 @@ def test_the_three_implementations_share_one_caliber():
     root = Path(cfg.__file__).parent.parent
     sources = {
         "async_config_lookup": Path(cfg.__file__).read_text(encoding="utf-8"),
-        "health_check_metrics": (
-            root / "services" / "restaurant" / "health_check_metrics.py"
-        ).read_text(encoding="utf-8"),
         "dynamic_config_resolver": (
             root / "shared" / "dynamic_config_resolver.py"
         ).read_text(encoding="utf-8"),

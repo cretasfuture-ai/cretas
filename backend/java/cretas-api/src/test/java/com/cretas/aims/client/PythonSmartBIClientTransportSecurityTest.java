@@ -193,9 +193,9 @@ class PythonSmartBIClientTransportSecurityTest {
         getServer.enqueue(json(200, "{\"success\":true,\"report\":{}}"));
         PythonSmartBIClient getClient = newClient(getServer, 1, "get-secret");
 
-        Map<String, Object> response = getClient.getRestaurantHealthCheckReport("REST-1", "2026-07");
-        assertThat(response).containsEntry("success", true);
-        assertThat(getServer.getRequestCount()).isEqualTo(2);
+        assertThatThrownBy(() -> getClient.forecastWithData(List.of(1.0, 2.0, 3.0), 1, "auto"))
+                .isInstanceOf(IOException.class);
+        assertThat(getServer.getRequestCount()).isEqualTo(1);
     }
 
     @Test

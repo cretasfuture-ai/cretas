@@ -9,10 +9,8 @@ import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Sequence
 
-from smartbi.agent.runtime.run_contracts import GrossMarginDeclineRequest, RouteCode
 
 MAX_CASES = 100
-MAX_RUNTIME_SHADOW_CASES = 20
 MAX_CASE_BYTES = 32_768
 MAX_SNAPSHOT_BYTES = 64_000
 MAX_AGENT_OPS_PAYLOAD_BYTES = 4 * 1024 * 1024
@@ -28,14 +26,6 @@ _FORBIDDEN_KEYS = re.compile(
 )
 _SAFE_SNAPSHOT_DIGEST_KEYS = {
     "promptSnapshotDigest", "modelSnapshotDigest", "toolSnapshotDigest",
-}
-_RUNTIME_CASE_EXTRA_KEYS = {"inputSnapshot", "sourceRunId", "evidenceDigests"}
-_RUNTIME_EVIDENCE_DIGEST_KEYS = {
-    "inputDigest",
-    "trajectoryDigest",
-    "numericTruthDigest",
-    "evidenceDigest",
-    "sourceRunDigest",
 }
 
 
@@ -73,13 +63,12 @@ def validate_request_id(value: str) -> str:
         raise AgentOpsValidationError("INVALID_REQUEST_ID") from exc
 
 
-RESTAURANT_DOMAIN = "RESTAURANT"
 FACTORY_DOMAIN = "FACTORY"
 _FACTORY_INTENT = re.compile(r"^[A-Z][A-Z0-9_]{2,95}$")
 
 
 def validate_domain(domain: str) -> str:
-    if domain not in (RESTAURANT_DOMAIN, FACTORY_DOMAIN):
+    if domain != FACTORY_DOMAIN:
         raise AgentOpsValidationError("UNSUPPORTED_BUSINESS_DOMAIN")
     return domain
 
@@ -87,14 +76,10 @@ def validate_domain(domain: str) -> str:
 def _validate_expected_route(route: Any, domain: str) -> None:
     """Routes never cross domains: a restaurant pass says nothing about factory."""
 
-    restaurant_route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION.value
-    if domain == RESTAURANT_DOMAIN:
-        if route != restaurant_route:
-            raise AgentOpsValidationError("UNSUPPORTED_EXPECTED_ROUTE")
-        return
     if (
         not isinstance(route, str)
-        or route == restaurant_route
+        or route == "GROSS_MARGIN_DECLINE_ATTRIBUTION"
+        or route.startswith("RESTAURANT_")
         or not _FACTORY_INTENT.fullmatch(route)
     ):
         raise AgentOpsValidationError("UNSUPPORTED_EXPECTED_ROUTE")
@@ -103,12 +88,6 @@ def _validate_expected_route(route: Any, domain: str) -> None:
 def infer_case_domain(cases: Sequence[Mapping[str, Any]]) -> str:
     """Stored sets carry no domain column; the routes in the cases decide it."""
 
-    restaurant_route = RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION.value
-    if cases and all(
-        isinstance(case, Mapping) and case.get("expectedRoute") == restaurant_route
-        for case in cases
-    ):
-        return RESTAURANT_DOMAIN
     return FACTORY_DOMAIN
 
 
@@ -127,22 +106,16 @@ def validate_cases(
 
 
 def validate_case(
-    case: Mapping[str, Any], domain: str = RESTAURANT_DOMAIN
+    case: Mapping[str, Any], domain: str = FACTORY_DOMAIN
 ) -> dict[str, Any]:
     expected_keys = {
         "caseId", "expectedRoute", "requiredTools", "numericTruthRefs",
         "maxRounds", "maxToolCalls",
     }
-    if not isinstance(case, Mapping) or set(case) not in (
-        expected_keys,
-        expected_keys | _RUNTIME_CASE_EXTRA_KEYS,
-    ):
+    if not isinstance(case, Mapping) or set(case) != expected_keys:
         raise AgentOpsValidationError("INVALID_EVAL_CASE_SCHEMA")
     case_id = _identifier(case["caseId"], "INVALID_CASE_ID")
     _validate_expected_route(case["expectedRoute"], domain)
-    if domain == FACTORY_DOMAIN and _RUNTIME_CASE_EXTRA_KEYS & set(case):
-        # Runtime-shadow corpora are restaurant-only; never smuggle them in.
-        raise AgentOpsValidationError("INVALID_EVAL_CASE_SCHEMA")
     tools = _tools(case["requiredTools"])
     refs = _numeric_refs(case["numericTruthRefs"])
     max_rounds = _bounded_int(case["maxRounds"], 1, 2, "INVALID_MAX_ROUNDS")
@@ -155,46 +128,8 @@ def validate_case(
         "maxRounds": max_rounds,
         "maxToolCalls": max_calls,
     }
-    if _RUNTIME_CASE_EXTRA_KEYS.issubset(case):
-        normalized.update({
-            "inputSnapshot": validate_runtime_input_snapshot(case["inputSnapshot"]),
-            "sourceRunId": validate_request_id(case["sourceRunId"]),
-            "evidenceDigests": _runtime_evidence_digests(case["evidenceDigests"]),
-        })
     _bounded_json(normalized, MAX_CASE_BYTES, "EVAL_CASE_TOO_LARGE")
     return normalized
-
-
-def validate_runtime_shadow_cases(
-    cases: Sequence[Mapping[str, Any]],
-) -> tuple[dict[str, Any], ...]:
-    if not 1 <= len(cases) <= MAX_RUNTIME_SHADOW_CASES:
-        raise AgentOpsValidationError("RUNTIME_SHADOW_CASE_COUNT_OUT_OF_BOUNDS")
-    normalized = validate_cases(cases)
-    if any(not _RUNTIME_CASE_EXTRA_KEYS.issubset(case) for case in normalized):
-        raise AgentOpsValidationError("RUNTIME_SHADOW_CASE_REQUIRED")
-    return normalized
-
-
-def validate_runtime_input_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
-    expected = {"startDate", "endDate", "storeTopN", "dishTopN"}
-    if not isinstance(value, Mapping) or set(value) != expected:
-        raise AgentOpsValidationError("INVALID_RUNTIME_INPUT_SNAPSHOT")
-    try:
-        request = GrossMarginDeclineRequest(
-            start_date=value["startDate"],
-            end_date=value["endDate"],
-            store_top_n=value["storeTopN"],
-            dish_top_n=value["dishTopN"],
-        )
-    except (TypeError, ValueError, KeyError) as exc:
-        raise AgentOpsValidationError("INVALID_RUNTIME_INPUT_SNAPSHOT") from exc
-    return {
-        "startDate": request.start_date,
-        "endDate": request.end_date,
-        "storeTopN": request.store_top_n,
-        "dishTopN": request.dish_top_n,
-    }
 
 
 def validate_actual_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -202,9 +137,7 @@ def validate_actual_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != keys:
         raise AgentOpsValidationError("INVALID_ACTUAL_SNAPSHOT_SCHEMA")
     route = value["routeCode"]
-    if route != RouteCode.GROSS_MARGIN_DECLINE_ATTRIBUTION.value:
-        # Other controlled strings are admitted so route mismatch can be measured.
-        route = _identifier(route, "INVALID_ACTUAL_ROUTE")
+    route = _identifier(route, "INVALID_ACTUAL_ROUTE")
     tools = _tools(value["tools"])
     rounds_used = _bounded_int(value["roundsUsed"], 0, 2, "INVALID_ROUNDS_USED")
     tool_calls_used = _bounded_int(
@@ -274,23 +207,6 @@ def validate_runner_bounds_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_runtime_shadow_bounds_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
-    expected = {"maxCases", "maxConcurrency", "perCaseTimeoutMs"}
-    if not isinstance(value, Mapping) or set(value) != expected:
-        raise AgentOpsValidationError("INVALID_RUNNER_BOUNDS_SCHEMA")
-    return {
-        "maxCases": _bounded_int(
-            value["maxCases"], 1, MAX_RUNTIME_SHADOW_CASES, "INVALID_MAX_CASES"
-        ),
-        "maxConcurrency": _bounded_int(
-            value["maxConcurrency"], 1, 2, "INVALID_MAX_CONCURRENCY"
-        ),
-        "perCaseTimeoutMs": _bounded_int(
-            value["perCaseTimeoutMs"], 1_000, 75_000, "INVALID_CASE_TIMEOUT"
-        ),
-    }
-
-
 def ensure_payload_budget(value: Any, code: str = "AGENT_OPS_PAYLOAD_TOO_LARGE") -> None:
     _bounded_json(value, MAX_AGENT_OPS_PAYLOAD_BYTES, code)
 
@@ -337,18 +253,6 @@ def _numeric_refs(value: Any) -> dict[str, str]:
             rendered = rendered.rstrip("0").rstrip(".")
         result[key] = rendered or "0"
     return result
-
-
-def _runtime_evidence_digests(value: Any) -> dict[str, str]:
-    if not isinstance(value, Mapping) or set(value) != _RUNTIME_EVIDENCE_DIGEST_KEYS:
-        raise AgentOpsValidationError("INVALID_RUNTIME_EVIDENCE_DIGESTS")
-    normalized: dict[str, str] = {}
-    for key in sorted(_RUNTIME_EVIDENCE_DIGEST_KEYS):
-        digest = value[key]
-        if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
-            raise AgentOpsValidationError("INVALID_RUNTIME_EVIDENCE_DIGESTS")
-        normalized[key] = digest
-    return normalized
 
 
 def _identifier(value: Any, code: str) -> str:

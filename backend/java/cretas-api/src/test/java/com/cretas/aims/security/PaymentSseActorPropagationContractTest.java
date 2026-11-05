@@ -8,6 +8,7 @@ import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.ConversationMemoryService;
 import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.execution.SseStreamingService;
+import com.cretas.aims.service.execution.BusinessTypeGate;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -41,6 +42,9 @@ class PaymentSseActorPropagationContractTest {
         var knowledge=mock(IntentKnowledgeBase.class);
         when(knowledge.detectQuestionType(anyString())).thenReturn(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND);
         var service=new SseStreamingService(intents,cache,knowledge,null,mapper,null,null,null,null,null);
+        var businessTypeGate = mock(BusinessTypeGate.class);
+        when(businessTypeGate.resolveDomain("F1")).thenReturn("FACTORY");
+        ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
         var executor=Executors.newSingleThreadExecutor();
         ReflectionTestUtils.setField(service,"sseExecutor",executor);
         var memory=mock(ConversationMemoryService.class);

@@ -593,6 +593,7 @@ class SseConversationPaginationContractTest {
             ReflectionTestUtils.setField(service, "factoryCapabilityPackRoutingPolicy", policy);
             ReflectionTestUtils.setField(service, "writeGuardService", writeGuardService);
             ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
+            when(businessTypeGate.resolveDomain(FACTORY)).thenReturn("FACTORY");
             ReflectionTestUtils.setField(service, "intentPermissionGate", permissionGate);
             ReflectionTestUtils.setField(service, "conversationMemoryService", memory);
             doNothing().when(service).sendSseEvent(any(), anyString(), any());

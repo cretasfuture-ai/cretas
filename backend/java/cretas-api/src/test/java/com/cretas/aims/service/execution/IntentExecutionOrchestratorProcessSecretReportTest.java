@@ -61,6 +61,7 @@ class IntentExecutionOrchestratorProcessSecretReportTest {
         when(analysisResults.findFirstByFactoryIdAndReportTypeAndExpiresAtAfterOrderByCreatedAtDesc(
                 eq(FACTORY), eq("weekly"), any())).thenReturn(Optional.empty());
         when(llm.chat(anyString(), anyString())).thenReturn("建议关注成本。");
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     private String systemPromptSent(ProcessSecretLlmCostScope scope) {

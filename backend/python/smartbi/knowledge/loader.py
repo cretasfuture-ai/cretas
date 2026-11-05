@@ -20,11 +20,13 @@ _KB_ROOT = Path(__file__).parent
 class IndustryKnowledgeBase:
     """Load and query industry benchmarks and playbooks from YAML files."""
 
-    def __init__(self, industry: str = "restaurant"):
+    def __init__(self, industry: str = "factory"):
         """
         Args:
-            industry: "restaurant" or "factory"
+            industry: must be "factory"
         """
+        if industry != "factory":
+            raise ValueError("only the factory knowledge domain is supported")
         self.industry = industry
         self.base_path = _KB_ROOT / industry
         self._benchmarks_cache: Dict[str, dict] = {}
@@ -177,38 +179,7 @@ class IndustryKnowledgeBase:
 
         lines.append("、".join(metric_parts) + "。")
 
-        # Add menu engineering if restaurant
-        if self.industry == "restaurant":
-            lines.append(
-                "菜品四象限(Menu Engineering)：Star(高销量+高利润)=主推、"
-                "Plow(高销量+低利润)=提价或缩份量、Puzzle(低销量+高利润)=加推广、"
-                "Dog(低销量+低利润)=考虑下架。"
-            )
-
         return "\n".join(lines)
-
-    def format_dianping_for_prompt(self, sub_sector: str = "") -> str:
-        """Generate Dianping standards text for prompt injection."""
-        standards_path = self.base_path / "standards" / "dianping_rules.yaml"
-        standards = self._load_yaml(standards_path)
-        if not standards:
-            return ""
-
-        parts = ["大众点评上榜评估标准："]
-        bichi = standards.get("必吃榜", {})
-        if bichi:
-            dims = bichi.get("dimensions", [])
-            parts.append(f"必吃榜评选维度：{'、'.join(dims[:5])}")
-            disq = bichi.get("disqualifiers", [])
-            if disq:
-                parts.append(f"淘汰项：{'、'.join(disq[:5])}")
-
-        heizz = standards.get("黑珍珠", {})
-        if heizz:
-            dims = heizz.get("dimensions", [])
-            parts.append(f"黑珍珠评选维度：{'、'.join(dims[:3])}")
-
-        return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Internal
@@ -233,16 +204,7 @@ class IndustryKnowledgeBase:
 # Module-level convenience
 # ------------------------------------------------------------------
 
-_restaurant_kb: Optional[IndustryKnowledgeBase] = None
 _factory_kb: Optional[IndustryKnowledgeBase] = None
-
-
-def get_restaurant_kb() -> IndustryKnowledgeBase:
-    """Get singleton restaurant knowledge base."""
-    global _restaurant_kb
-    if _restaurant_kb is None:
-        _restaurant_kb = IndustryKnowledgeBase("restaurant")
-    return _restaurant_kb
 
 
 def get_factory_kb() -> IndustryKnowledgeBase:

@@ -147,6 +147,7 @@ class FinanceReportLlmPromptPriceContractTest {
         BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
         when(businessTypeGate.check(any(), any())).thenReturn(Optional.empty());
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
 
         ResultFormatterServiceImpl formatter = new ResultFormatterServiceImpl();
         ReflectionTestUtils.setField(formatter, "priceView", advice);

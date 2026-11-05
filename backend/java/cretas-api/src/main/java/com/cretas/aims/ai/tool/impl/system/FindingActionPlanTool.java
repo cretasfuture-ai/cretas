@@ -76,6 +76,12 @@ public class FindingActionPlanTool extends AbstractBusinessTool {
         return AccessMode.READ;
     }
 
+    /** The action-plan service consumes the inventory finding surface, so it uses the same RBAC gate. */
+    @Override
+    public java.util.Set<String> getRequiredPermissions() {
+        return java.util.Set.of("inventory:read", "inventory:read_write");
+    }
+
     @Override
     public RiskLevel getRiskLevel() {
         return RiskLevel.LOW;

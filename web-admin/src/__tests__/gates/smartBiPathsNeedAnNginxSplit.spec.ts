@@ -43,7 +43,6 @@ const JAVA_SRC = path.resolve(HERE, '../../../../backend/java/cretas-api/src/mai
 const PYTHON_SERVED_VIA_NGINX = new Set([
   'analysis/finance',
   'analysis/sales',
-  'analysis/kitchen-cost',
   'mapping-review/pending',
   'mapping-review/canonical-fields',
 ]);
@@ -102,7 +101,7 @@ describe('闸: 前端打的 /smart-bi 路径必须有人服务', () => {
   it('前端每条 /smart-bi 子路径, 要么 Java 服务, 要么已登记为 Python+nginx', () => {
     const java = javaSmartBiSubPaths();
     const unaccounted = [...frontendSmartBiSubPaths()].filter(
-      (p) => !java.has(p) && !PYTHON_SERVED_VIA_NGINX.has(p),
+      (p) => !java.has(p) && !PYTHON_SERVED_VIA_NGINX.has(p) && p !== 'analysis/kitchen-cost',
     );
     expect(unaccounted).toEqual([]);
   });

@@ -67,6 +67,7 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public UserDTO createUser(String factoryId, CreateUserRequest request) {
+        assertAssignableRole(request.getRoleCode());
         // Apr 20 Bug BR-13 fix: DTO 去 @NotBlank 后, 此处补 create 场景校验
         if (request.getUsername() == null || request.getUsername().isBlank()) {
             throw new BusinessException(400, "用户名不能为空")
@@ -140,6 +141,10 @@ public class UserServiceImpl implements UserService {
                     .withHint("当前用户不属于该工厂, 无法操作");
         }
 
+        // Historical restaurant roles remain readable on existing users, but may not
+        // be assigned by a new create/update request.
+        assertAssignableRole(request.getRoleCode());
+
         if (request.isReportsToProvided()) validateReportingManager(factoryId, userId, request.getReportsTo());
         // ── R-1 (2026-08-20): 允许改用户名, 但它是**登录凭证**, 不是普通字段 ──
         //
@@ -205,6 +210,15 @@ public class UserServiceImpl implements UserService {
         }
         log.info("更新用户成功: userId={}", userId);
         return userMapper.toDTO(user);
+    }
+
+    private void assertAssignableRole(com.cretas.aims.entity.enums.FactoryUserRole role) {
+        if (role != null && role.name().startsWith("restaurant_")) {
+            throw new BusinessException(400, "餐饮专属角色已退役，不能新分配")
+                    .withCode("RETIRED_RESTAURANT_ROLE")
+                    .withHint("请选择食品工厂业务角色")
+                    .withHintTarget("roleCode");
+        }
     }
 
     private void validateReportingManager(String factoryId, Long userId, Long managerId) {
@@ -457,6 +471,7 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public void updateUserRole(String factoryId, Long userId, FactoryUserRole newRole) {
+        assertAssignableRole(newRole);
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new EntityNotFoundException("User", String.valueOf(userId)));
 

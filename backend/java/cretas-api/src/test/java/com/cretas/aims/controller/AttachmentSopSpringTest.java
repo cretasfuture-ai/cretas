@@ -126,6 +126,7 @@ class AttachmentSopSpringTest {
     @Autowired EntityManager entityManager;
     @Autowired WorkProcessRepository processes;
     @Autowired EquipmentRepository equipments;
+    @SpyBean AttachmentServiceImpl attachmentService;
     @MockBean OssService ossService;
     @MockBean OssConfig ossConfig;
     @MockBean OSS ossClient;
@@ -662,8 +663,10 @@ class AttachmentSopSpringTest {
         // A raw legacy role/user id is not a validated JWT actor.
         assertThat(mvc.perform(get(base + "/" + id).requestAttr("userId", platform))
                 .andReturn().getResponse().getStatus()).isEqualTo(401);
+        org.mockito.Mockito.clearInvocations(attachmentService);
         assertThat(send(get(base).param("entityType", "WORK_PROCESS").param("entityId", processF1), platform)
                 .getResponse().getStatus()).isEqualTo(403);
+        verify(attachmentService, never()).queryByEntity(F1, EntityType.WORK_PROCESS, processF1);
         assertThat(send(get(base + "/" + id + "/download-url"), platform).getResponse().getStatus()).isEqualTo(403);
         assertThat(send(post(base + "/upload-url").contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of("fileName", "p.pdf", "fileType", "application/pdf",
@@ -672,6 +675,9 @@ class AttachmentSopSpringTest {
         verify(ossClient, never()).generatePresignedUrl(any(GeneratePresignedUrlRequest.class));
 
         when(secrecy.isOn(F1, SecrecyItem.PLATFORM_RECIPE_BLOCK)).thenReturn(false);
+        assertThat(send(get(base).param("entityType", "WORK_PROCESS").param("entityId", processF1), platform)
+                .getResponse().getStatus()).isEqualTo(200);
+        verify(attachmentService, times(1)).queryByEntity(F1, EntityType.WORK_PROCESS, processF1);
         assertThat(send(get(base + "/" + id + "/download-url"), platform).getResponse().getStatus()).isEqualTo(200);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM process_secret_access_events "
                 + "WHERE factory_id=? AND product_type_id=? AND actor_type='PLATFORM_ADMIN' AND actor_id=? "
@@ -787,8 +793,13 @@ class AttachmentSopSpringTest {
                 .getResponse().getStatus()).isEqualTo(403);
         assertThat(send(delete(base + "/" + existingId), restaurant).getResponse().getStatus()).isEqualTo(403);
 
+        // inventory:read passes the route's OR gate but cannot read procurement attachments.
+        grantOnly(worker, "inventory:read");
+        org.mockito.Mockito.clearInvocations(attachmentService);
         assertThat(send(get(base).param("entityType", "PURCHASE_ORDER").param("entityId", "po-1"), worker)
                 .getResponse().getStatus()).isEqualTo(403);
+        verify(attachmentService, never()).queryByEntity(F1, EntityType.PURCHASE_ORDER, "po-1");
+        grantOnly(worker, "inventory:write");
         assertThat(send(get(base).param("entityType", "WASTAGE_RECORD").param("entityId", entityId), worker)
                 .getResponse().getStatus()).isEqualTo(403);
         assertThat(send(post(base + "/upload-url").contentType(MediaType.APPLICATION_JSON)

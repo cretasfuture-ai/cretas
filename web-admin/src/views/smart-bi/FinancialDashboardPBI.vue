@@ -9,7 +9,6 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import FinanceAnalysis from './FinanceAnalysis.vue';
-import FinancePbiGoldView from './components/FinancePbiGoldView.vue';
 import { resolveFinanceSection, shouldRenderGoldFinanceView } from './financeDashboardSection';
 import {
   periodSelectionToRequest,
@@ -1560,14 +1559,7 @@ onBeforeUnmount(() => {
     <!-- P4: 顶层 section tabs — 财务 PBI 看板 / 财务数据分析 (合并自原 /smart-bi/finance) -->
     <el-tabs v-model="sectionTab" class="finance-section-tabs">
     <el-tab-pane label="财务 PBI 看板" name="dashboard">
-    <!-- follow-up (fu2): 餐饮租户 Gold 财务全量视图 (免上传 / 免手动生成).
-         工厂租户 (或餐饮点「上传财务文件」) 走下方原 upload-based PBI 看板。 -->
-    <FinancePbiGoldView
-      v-if="goldFinanceMode"
-      @switch-to-upload="showUploadForRestaurant = true"
-    />
-
-    <template v-else>
+    <template>
     <!-- Top Toolbar -->
     <el-card class="toolbar-card" shadow="never">
       <div class="toolbar-inner">

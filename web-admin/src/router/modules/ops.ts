@@ -10,36 +10,13 @@
  */
 import type { RouteRecordRaw } from 'vue-router';
 
-const restaurantAnalyticsRoles = [
-  'factory_super_admin',
-  'platform_admin',
-  'permission_admin',
-  'finance_manager',
-  'restaurant_manager',
-];
-
 const agentOpsAdminRoles = [
   'factory_super_admin',
   'platform_admin',
   'permission_admin',
-  'restaurant_manager',
-  'restaurant_owner',
 ];
 
 const opsRoutes: RouteRecordRaw[] = [
-  {
-    path: 'ops/operations-analysis',
-    name: 'OpsOperationsAnalysis',
-    component: () => import('@/views/ops/operations-analysis/index.vue'),
-    meta: {
-      requiresAuth: true,
-      title: '运营分析',
-      icon: 'Operation',
-      module: 'analytics',
-      roles: restaurantAnalyticsRoles,
-      hideForFactoryTypes: ['FACTORY'], // restaurant/demo tenants only
-    },
-  },
   {
     path: 'ops/agent-ops',
     name: 'AgentOps',
@@ -51,8 +28,8 @@ const opsRoutes: RouteRecordRaw[] = [
       icon: 'DataAnalysis',
       module: 'analytics',
       roles: agentOpsAdminRoles,
-      // 工厂管理员只看自己工厂（后端以登录身份定租户）；餐饮保留但已弃用。
-      businessDomain: ['FACTORY', 'RESTAURANT'],
+      // 工厂管理员只看自己工厂（后端以登录身份定租户）。
+      businessDomain: ['FACTORY'],
     },
     children: [
       {

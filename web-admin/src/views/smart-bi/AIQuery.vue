@@ -84,11 +84,6 @@ import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
 import { sanitizeCustomerAiText } from './components/chat/customerAiText';
 import { buildJavaIntentChartOption } from './components/chat/javaIntentChartAdapter';
-import {
-  inferOwnerActionScenario,
-  isOwnerActionFollowupText,
-} from './restaurantOwnerActionRegistry';
-import { getRestaurantRoleExperience } from '@/views/restaurant/restaurantRoleExperience';
 import FactoryAnalysisChat from './FactoryAnalysisChat.vue';
 
 // Render markdown content safely
@@ -118,7 +113,7 @@ const aiDebug = computed(() => route.query?.aiDebug === '1');
  * AI 对话标准 S2/S3: 对话区按钮、芯片 ≥ 32px (Element Plus default 尺寸 = 32px, small = 24px)。
  * 餐饮租户保持原样 (small) —— 餐饮不在本次标准范围内。
  */
-const uiBtnSize = computed<'small' | 'default'>(() => (isRestaurantTenant.value ? 'small' : 'default'));
+const uiBtnSize = computed<'small' | 'default'>(() => (false ? 'small' : 'default'));
 
 /** AI 对话标准 W1: 骨架屏 3 条, 宽度 92% / 78% / 62% */
 const SKELETON_BAR_WIDTHS = [92, 78, 62] as const;
@@ -313,15 +308,8 @@ function messageChartWithMeta(msg: ChatMessage): ChartWithMeta | null {
   };
 }
 
-function isRestaurantJavaIntentAnswer(message: ChatMessage): boolean {
-  const intentCode = message.feedbackTarget?.intentCode ?? '';
-  return message.source === 'restaurant_owner_action'
-    || message.source === 'restaurant_ops_gold'
-    || intentCode.startsWith('RESTAURANT_');
-}
-
 function shouldRenderAutoChartInsight(message: ChatMessage): boolean {
-  return Boolean(message.chartConfig?.option) && !isRestaurantJavaIntentAnswer(message);
+  return Boolean(message.chartConfig?.option);
 }
 
 /**
@@ -350,10 +338,9 @@ function multiChartWithMeta(cfg: ChartConfig): ChartWithMeta | null {
 
 // 客户反馈 (Sheet 7/20): 复杂问题无法生成图表时, 数据要能导出 xlsx 供
 // 数据分析师做高级分析。凡带图表/表格数据的 AI 回答均可一键导出。
-function isRestaurantComplexAnalysisGap(msg: ChatMessage): boolean {
+function isComplexAnalysisGap(msg: ChatMessage): boolean {
   return Boolean(
-    isRestaurantTenant.value
-    && msg.role === 'assistant'
+    msg.role === 'assistant'
     && /价格弹性|回归曲线|线性回归|决定系数|置信区间|复杂图表/.test(msg.content || ''),
   );
 }
@@ -366,13 +353,13 @@ function messageHasExportableData(msg: ChatMessage): boolean {
       msg.chartConfig?.option
       || msg.charts?.length
       || msg.table?.data?.length
-      || isRestaurantComplexAnalysisGap(msg)
+      || isComplexAnalysisGap(msg)
     ),
   );
 }
 
 function messageExportLabel(msg: ChatMessage): string {
-  return isRestaurantComplexAnalysisGap(msg)
+  return isComplexAnalysisGap(msg)
     && !msg.chartConfig?.option
     && !msg.charts?.length
     && !msg.table?.data?.length
@@ -440,7 +427,7 @@ async function exportMessageData(msg: ChatMessage): Promise<void> {
       const ws = XLSX.utils.json_to_sheet(msg.table.data);
       XLSX.utils.book_append_sheet(wb, ws, sheetName('明细数据', '明细数据'));
     }
-    if (!wb.SheetNames.length && isRestaurantComplexAnalysisGap(msg)) {
+    if (!wb.SheetNames.length && isComplexAnalysisGap(msg)) {
       const requiredFields = [
         '菜品名称', '日期', '门店', '价格', '销量', '销售额', '订单数',
         '促销活动', '渠道', '营业时段', '缺货情况', '对照门店或对照时段',
@@ -520,9 +507,6 @@ function resetChatSession(): void {
     // ignore — sessionStorage blocked
   }
 }
-
-// 餐饮快捷问题由 restaurantRoleExperience 单一真值提供。老板、店长、采购、
-// 厨师长共享同一 LLM 入口，但第一屏问题必须与职责和价格权限一致。
 
 // P1-B: 时间变体追问 map — 前端静态补充. 后端 gold 工具已对时间参数化,
 // 点击 chip 只是预填+提交一个新问题, 走现有 intent 路由.
@@ -745,33 +729,21 @@ function inferDomainFromFilename(name: string): string {
   return 'default';
 }
 
-// P1-B: For RESTAURANT tenants, the quick-question section is replaced by the
-// grouped catalog (rendered separately in the template). This flat list is used
-// as a fallback for non-restaurant tenants and the autocomplete list.
-const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURANT');
-/** Factory-only free-question analysis is an explicit child mode. Generic AI
- * chat remains untouched for the normal query tab and for restaurant tenants. */
-const isFactoryAnalysisMode = computed(() => route.query.mode === 'factory' && !isRestaurantTenant.value);
+// Factory-only free-question analysis is an explicit child mode.
+const isFactoryAnalysisMode = computed(() => route.query.mode === 'factory');
 
 function customerSafeAnswer(text: string): string {
-  return isRestaurantTenant.value ? sanitizeCustomerAiText(text) : text;
+  return text;
 }
 const ownerActionSessionId = ref('');
 const currentOwnerActionScenario = ref('');
 const pendingOwnerActionScenario = ref('');
-const showRestaurantMoreQuestions = ref(false);
-const restaurantRoleExperience = computed(() => getRestaurantRoleExperience(permissionStore.currentRole));
-const restaurantPrimaryQuestions = computed(() => restaurantRoleExperience.value.ai.primaryQuestions);
-const restaurantMoreQuestionGroups = computed(() => restaurantRoleExperience.value.ai.moreGroups);
-const restaurantMoreQuestionCount = computed(() => restaurantMoreQuestionGroups.value
-  .reduce((total, group) => total + group.questions.length, 0));
 
 function shouldSendOwnerActionContext(query: string, analysisContinuation = false): boolean {
-  if (!isRestaurantTenant.value) return false;
+  if (!false) return false;
   if (analysisContinuation) return false;
   const text = query.trim();
-  if (inferOwnerActionScenario(text)) return true;
-  return Boolean((ownerActionSessionId.value || pendingOwnerActionScenario.value) && isOwnerActionFollowupText(text));
+  return false;
 }
 
 function ownerActionFollowups(items?: string[], scenario?: string): Array<{ label: string; question: string; ownerActionScenario?: string }> {
@@ -783,14 +755,6 @@ function ownerActionFollowups(items?: string[], scenario?: string): Array<{ labe
 }
 
 const quickQuestions = computed<string[]>(() => {
-  // Restaurant tenants get the grouped catalog (rendered as grouped chips).
-  // Return all questions flattened so autocomplete still covers them.
-  if (isRestaurantTenant.value) {
-    return [
-      ...restaurantPrimaryQuestions.value,
-      ...restaurantMoreQuestionGroups.value.flatMap((group) => group.questions),
-    ];
-  }
   const item = dataSources.value.find(d => d.id === selectedUploadId.value);
   const fname = item?.fileName || item?.originalFileName || '';
   const sname = (item as any)?.sheetName || '';
@@ -799,14 +763,10 @@ const quickQuestions = computed<string[]>(() => {
 });
 const queryPlaceholder = computed(() => {
   if (nl2sqlMode.value) return '输入数据查询，例如：各产品的销售额汇总';
-  if (isRestaurantTenant.value) return restaurantRoleExperience.value.ai.placeholder;
   return '输入您的问题（下拉有 40+ 模板秒回问题可选）';
 });
 
 function buildWelcomeMessage(): string {
-  if (isRestaurantTenant.value) {
-    return `您好！我是${restaurantRoleExperience.value.ai.title}。${restaurantRoleExperience.value.ai.description}系统会自动调用当前租户已经整理好的餐饮数据，不需要手动选择数据源。`;
-  }
   const sourceHint = dataSourceLabel.value
     ? `\n\n当前${dataSourceLabel.value}`
     : '\n\n提示：暂无上传数据，建议先在"数据分析"页面上传 Excel 文件。';
@@ -991,20 +951,6 @@ function triggerRelatedFollowup(query: string, ownerActionScenario?: string) {
   handleSendMessage();
 }
 
-// P1-B (2026-06-03): time-variant follow-up chips for restaurant tenants.
-// Looks up the last user question against RESTAURANT_TIME_FOLLOWUPS patterns.
-// Returns an empty array for non-restaurant tenants — the chips never appear.
-function timeFollowups(lastQuestion?: string): Array<{ label: string; question: string }> {
-  if (!isRestaurantTenant.value || !lastQuestion) return [];
-  const q = lastQuestion.trim();
-  for (const entry of RESTAURANT_TIME_FOLLOWUPS) {
-    if (entry.patterns.some((p) => q.includes(p))) {
-      return entry.followups;
-    }
-  }
-  return [];
-}
-
 async function sendFeedback(msg: ChatMessage, value: 1 | -1) {
   if (!msg.logId && !msg.feedbackTarget) return;
   if (msg.feedbackPending) return;  // in-flight, ignore rapid double-click
@@ -1065,9 +1011,9 @@ const sseRetryVisible = ref(false);
 const NO_WRITE_NOTE = '没有执行任何写操作';
 const SSE_TIMEOUT_TEXT_LEGACY = '连接超时，服务响应较慢。';
 const SSE_TIMEOUT_TEXT_STD = `连接超时，服务响应较慢（${NO_WRITE_NOTE}）。可以点「重新提问」再试一次。`;
-const sseTimeoutText = computed(() => (isRestaurantTenant.value ? SSE_TIMEOUT_TEXT_LEGACY : SSE_TIMEOUT_TEXT_STD));
+const sseTimeoutText = computed(() => SSE_TIMEOUT_TEXT_STD);
 function withNoWriteNote(text: string): string {
-  if (isRestaurantTenant.value || text.includes(NO_WRITE_NOTE)) return text;
+  if (text.includes(NO_WRITE_NOTE)) return text;
   return `${text}（${NO_WRITE_NOTE}）`;
 }
 let sseWarningTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1226,73 +1172,6 @@ const javaIntentSessionId = ref<string | undefined>(undefined);
 const activeAiTab = ref<'consult' | 'operate'>('consult');
 const hasAnyWrite = computed(() => permissionStore.hasAnyWriteAccess());
 const operateSessionId = ref('');
-const restaurantConversationContext = ref<RestaurantConversationContext | null>(null);
-
-const RESTAURANT_CONTEXT_METRIC_LABELS: Record<string, string> = {
-  sales_volume: '销量',
-  recipe_cost: '成本',
-  gross_margin: '毛利率',
-  revenue: '营收',
-  orders: '订单',
-  wastage: '损耗',
-  staffing: '排班人效',
-};
-
-function normalizeRestaurantConversationContext(value: unknown): RestaurantConversationContext | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  const rawFocus = (raw.focus_entity ?? raw.focusEntity) as Record<string, unknown> | undefined;
-  const focusType = rawFocus?.type;
-  const focusName = rawFocus?.name;
-  const focusEntity: RestaurantConversationContext['focusEntity'] = (
-    (focusType === 'dish' || focusType === 'store')
-    && typeof focusName === 'string'
-    && focusName.trim()
-  ) ? { type: focusType, name: focusName.trim() } : undefined;
-  const rawWindow = raw.window_label ?? raw.windowLabel;
-  const windowLabel = typeof rawWindow === 'string' && rawWindow.trim()
-    ? rawWindow.trim()
-    : undefined;
-  const rawMetrics = raw.requested_metrics ?? raw.requestedMetrics;
-  const requestedMetrics = Array.isArray(rawMetrics)
-    ? rawMetrics.filter((item): item is string => (
-        typeof item === 'string' && Boolean(RESTAURANT_CONTEXT_METRIC_LABELS[item])
-      ))
-    : [];
-  const rawAction = raw.analysis_action ?? raw.analysisAction;
-  const analysisAction = (
-    rawAction === 'lookup'
-    || rawAction === 'compare'
-    || rawAction === 'diagnose'
-    || rawAction === 'optimize'
-  ) ? rawAction : undefined;
-  if (!focusEntity && !windowLabel && requestedMetrics.length === 0) return null;
-  return { focusEntity, windowLabel, requestedMetrics, analysisAction };
-}
-
-const restaurantContextSummary = computed(() => {
-  const context = restaurantConversationContext.value;
-  if (!context) return '';
-  const parts: string[] = [];
-  if (context.focusEntity?.name) parts.push(`对象：${context.focusEntity.name}`);
-  if (context.windowLabel && context.windowLabel !== '全部历史') {
-    parts.push(`时间：${context.windowLabel}`);
-  }
-  const metricLabels = context.requestedMetrics
-    .map((metric) => RESTAURANT_CONTEXT_METRIC_LABELS[metric])
-    .filter(Boolean);
-  if (metricLabels.length) parts.push(`指标：${metricLabels.join('、')}`);
-  return parts.join(' · ');
-});
-
-function isRestaurantAnalysisContinuation(query: string): boolean {
-  if (!isRestaurantTenant.value || !restaurantConversationContext.value) return false;
-  const text = query.trim();
-  if (!text || text.length > 48) return false;
-  return /^(那|这个|那个|它|刚才|继续|再|为什么|怎么|如何|下一步|先做|换成|改成|销量|营收|营业额|毛利|成本|最近|本月|上个月|近)/.test(text)
-    || /(呢|为什么|怎么优化|怎么提升|如何优化|如何提升|下一步先做什么)[？?]?$/.test(text);
-}
-
 // 操作卡状态集合 (除 READ_MODE_WRITE_BLOCKED, 它渲染咨询 tab 拦截卡)
 const OPERATION_CARD_STATUSES = new Set([
   'WRITE_CONFIRM_REQUIRED', 'PREVIEW', 'DEMO_WRITE_BLOCKED',
@@ -1397,21 +1276,20 @@ async function tryJavaIntentChat(
   try {
     // AI 读写分离: 操作 tab 用独立 session (咨询会话不得污染操作 slot-filling)。
     const isOperateTab = activeAiTab.value === 'operate' && hasAnyWrite.value;
-    const analysisContinuation = !isOperateTab && isRestaurantAnalysisContinuation(query);
-    const inferredOwnerActionScenario = analysisContinuation ? '' : inferOwnerActionScenario(query);
+    const analysisContinuation = false;
+    const inferredOwnerActionScenario = '';
     const pendingScenario = pendingOwnerActionScenario.value;
     const ownerActionQuery = shouldSendOwnerActionContext(query, analysisContinuation);
-    const followupScenario = isOwnerActionFollowupText(query) ? currentOwnerActionScenario.value : '';
+    const followupScenario = '';
     const ownerActionScenario = pendingScenario || inferredOwnerActionScenario || followupScenario || undefined;
     const ownerActionSessionForRequest = (
-      pendingScenario || isOwnerActionFollowupText(query)
+      pendingScenario
     ) ? (ownerActionSessionId.value || undefined) : undefined;
     const intentSessionForRequest = isOperateTab
       ? (operateSessionId.value || (operateSessionId.value = createChatSessionId()))
       : (javaIntentSessionId.value || getOrCreateChatSessionId());
     const requestContext: Record<string, unknown> = {};
     if (analysisContinuation) {
-      requestContext.restaurantAnalysisContinuation = true;
     }
     if (ownerActionQuery) {
       Object.assign(requestContext, {
@@ -1555,8 +1433,6 @@ async function tryJavaIntentChat(
         ?? _rd?.structuredContext
         ?? _td?.structuredContext;
       if (!isOwnerActionResponse && !isOperateTab) {
-        const normalizedContext = normalizeRestaurantConversationContext(_conversationContext);
-        if (normalizedContext) restaurantConversationContext.value = normalizedContext;
       }
       const _followups = _rd?.suggestedFollowups ?? _td?.suggestedFollowups;
       if (Array.isArray(_followups) && _followups.length > 0) {
@@ -1721,8 +1597,6 @@ async function tryJavaIntentChat(
         ?? clarificationData?.structuredContext
         ?? clarificationToolData?.structuredContext;
       if (!isOperateTab) {
-        const normalizedContext = normalizeRestaurantConversationContext(clarificationContext);
-        if (normalizedContext) restaurantConversationContext.value = normalizedContext;
       }
       const clarificationFollowups = clarificationData?.suggestedFollowups
         ?? clarificationToolData?.suggestedFollowups;
@@ -2583,7 +2457,6 @@ function handleClearHistory() {
   resetChatSession();
   javaIntentSessionId.value = undefined;
   operateSessionId.value = '';  // 操作 tab session 同步重开 (下次发送再生成)
-  restaurantConversationContext.value = null;
 
   chatHistory.value = [{
     id: 'welcome',
@@ -2600,7 +2473,6 @@ function handleNewTopic() {
   resetChatSession();
   javaIntentSessionId.value = undefined;
   operateSessionId.value = '';
-  restaurantConversationContext.value = null;
   // 加一条系统消息说明 (用 assistant 风格但内容是状态提示).
   chatHistory.value.push({
     id: `topic-reset-${Date.now()}`,
@@ -2616,13 +2488,13 @@ function handleNewTopic() {
  * 一列都不隐藏。餐饮租户保持原样 (列名原样), 不在本次标准范围内。
  */
 function messageColumnLabel(message: ChatMessage, col: string): string {
-  if (isRestaurantTenant.value) return col;
+  if (false) return col;
   return resolveColumnLabel(col, buildBackendColumnLabels(message.sqlResult?.fields));
 }
 
 /** G1: 非餐饮租户 ≤ 8 列不设固定 min-width (自适应, 1440 宽不横滚); 餐饮保持 100。 */
 function tableColumnMinWidth(columnCount: number): string | undefined {
-  return isRestaurantTenant.value ? '100' : columnMinWidth(columnCount);
+  return false ? '100' : columnMinWidth(columnCount);
 }
 
 /** N2: 悬停出现的「复制」按钮 —— 复制这条消息的正文 (助手 / 用户都有)。 */
@@ -2658,15 +2530,12 @@ function handleKeydown(event: KeyboardEvent) {
       <div class="header-left">
         <h1>
           <el-icon><ChatDotRound /></el-icon>
-          {{ isRestaurantTenant ? restaurantRoleExperience.ai.title : 'AI 智能问答' }}
+          {{ 'AI 智能问答' }}
         </h1>
-        <p v-if="isRestaurantTenant" class="ai-page-subtitle">
-          {{ restaurantRoleExperience.ai.description }}
-        </p>
       </div>
       <div class="header-right">
         <el-select
-          v-if="dataSources.length > 0 && !isRestaurantTenant"
+          v-if="dataSources.length > 0 && !false"
           v-model="selectedUploadId"
           placeholder="选择数据源"
           size="small"
@@ -2683,7 +2552,7 @@ function handleKeydown(event: KeyboardEvent) {
             </el-tooltip>
           </el-option>
         </el-select>
-        <el-tooltip v-if="!isRestaurantTenant" content="SQL 直查：直接将问题转为 SQL 查询数据" placement="bottom">
+        <el-tooltip v-if="!false" content="SQL 直查：直接将问题转为 SQL 查询数据" placement="bottom">
           <el-switch
             v-model="nl2sqlMode"
             active-text="SQL 直查"
@@ -2700,14 +2569,6 @@ function handleKeydown(event: KeyboardEvent) {
       </div>
     </div>
 
-    <div v-if="isRestaurantTenant" class="restaurant-ai-contract" aria-label="AI 数据与操作边界">
-      <span class="restaurant-ai-contract__label">当前范围</span>
-      <span>当前餐饮租户</span>
-      <span>真实业务数据取数</span>
-      <span>大模型解释与建议</span>
-      <span>{{ hasAnyWrite ? '操作需预览确认' : '当前账号只读' }}</span>
-    </div>
-
     <!-- AI 读写分离 (2026-07-23): 咨询/操作 双 tab。仅有写权限账号可见;
          纯只读账号不渲染 tabs UI, 保持原单栏外观 (mode=READ)。 -->
     <div v-if="hasAnyWrite" class="ai-mode-tabs">
@@ -2719,28 +2580,17 @@ function handleKeydown(event: KeyboardEvent) {
         {{ activeAiTab === 'consult' ? '咨询模式：只查数据，不做修改' : '操作模式：可执行写操作，执行前需预览确认' }}
       </span>
     </div>
-    <div
-      v-if="isRestaurantTenant && activeAiTab === 'consult' && restaurantConversationContext"
-      class="restaurant-context-bar"
-      data-testid="restaurant-context-bar"
-    >
-      <span class="restaurant-context-label">当前上下文</span>
-      <span>{{ restaurantContextSummary || '已建立餐饮分析上下文' }}</span>
-      <span class="restaurant-context-retention">最多保留最近 20 轮</span>
-      <el-button link type="primary" size="small" @click="handleNewTopic">清除上下文</el-button>
-    </div>
-
     <div class="chat-container">
       <!-- 物化分析面板：仅在选择了数据源时展示，位于对话历史区上方 -->
       <MaterializedAnalysisPanel
-        v-if="selectedUploadId && !isRestaurantTenant"
+        v-if="selectedUploadId && !false"
         :upload-id="selectedUploadId"
       />
 
       <!-- 对话历史区 -->
       <!-- AI 对话标准 (docs/ux/ai-chat-standard.md §3): 非餐饮租户走 .ai-std 版式 ——
            助手全宽无头像无气泡、不打时间戳、一套系统字体栈; 餐饮租户保持原样 (不在本次标准范围内)。 -->
-      <div class="chat-history" :class="{ 'ai-std': !isRestaurantTenant }" ref="chatContainerRef" @scroll="onChatScroll">
+      <div class="chat-history" :class="{ 'ai-std': !false }" ref="chatContainerRef" @scroll="onChatScroll">
         <div class="chat-thread" data-testid="aiq-thread">
         <div
           v-for="(message, msgIdx) in chatHistory"
@@ -2748,19 +2598,19 @@ function handleKeydown(event: KeyboardEvent) {
           class="chat-message"
           :class="message.role"
         >
-          <div v-if="isRestaurantTenant" class="message-avatar">
+          <div v-if="false" class="message-avatar">
             <el-icon v-if="message.role === 'user'"><User /></el-icon>
             <el-icon v-else><Cpu /></el-icon>
           </div>
           <div class="message-content">
-            <div v-if="isRestaurantTenant" class="message-header">
+            <div v-if="false" class="message-header">
               <span class="role-name">{{ message.role === 'user' ? '我' : 'AI 助手' }}</span>
               <span class="message-time">{{ formatTime(message.timestamp) }}</span>
             </div>
             <div class="message-body" :data-testid="message.role === 'assistant' ? 'aiq-assistant-body' : 'aiq-user-bubble'">
               <!-- W1: 非餐饮租户加载中用骨架屏 (3 条, 92% / 78% / 62%) + 一行进度文字, 不用单个转圈 -->
               <div
-                v-if="message.loading && !isRestaurantTenant"
+                v-if="message.loading && !false"
                 class="loading-skeleton"
                 data-testid="aiq-loading-skeleton"
                 role="status"
@@ -2818,7 +2668,7 @@ function handleKeydown(event: KeyboardEvent) {
                   :factory-id="factoryId ?? ''"
                 />
                 <!-- 非餐饮租户加载中: 状态文字已在骨架屏下面那一行, 不再把同一句话当正文渲染第二遍 -->
-                <template v-else-if="message.role === 'assistant' && message.loading && !isRestaurantTenant"></template>
+                <template v-else-if="message.role === 'assistant' && message.loading && !false"></template>
                 <div v-else-if="message.role === 'assistant' && message.streaming" class="message-text streaming-text">{{ customerSafeAnswer(message.content) }}</div>
                 <div v-else-if="message.role === 'assistant'" class="message-text markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <div v-else class="message-text">{{ message.content }}</div>
@@ -2900,7 +2750,7 @@ function handleKeydown(event: KeyboardEvent) {
                 >
                   <strong>怎么看这几张图：</strong>{{ message.chartGuide }}
                 </div>
-                <template v-if="!isRestaurantJavaIntentAnswer(message) && message.charts && message.charts.length">
+                <template v-if="message.charts && message.charts.length">
                   <ChartInsightProvider
                     v-for="(c, ci) in message.charts"
                     :key="`insight-${message.id}__${ci}`"
@@ -3050,28 +2900,6 @@ function handleKeydown(event: KeyboardEvent) {
                   </el-button>
                 </div>
 
-                <!-- P1-B (2026-06-03): time-variant follow-up chips for restaurant tenants.
-                     Only shown when the backend suggestedFollowups are absent (to avoid
-                     crowding the UI when the gold tool already returned rich follow-ups).
-                     Looks at the preceding user message to decide which time variants to show. -->
-                <div
-                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && !(message.suggestedFollowups?.length) && timeFollowups(msgIdx > 0 ? chatHistory[msgIdx - 1]?.content : '').length > 0"
-                  class="message-related-followups"
-                >
-                  <span class="related-label">换个时间:</span>
-                  <el-button
-                    v-for="(f, i) in timeFollowups(msgIdx > 0 ? chatHistory[msgIdx - 1]?.content : '')"
-                    :key="i"
-                    :size="uiBtnSize"
-                    type="success"
-                    plain
-                    round
-                    @click="triggerRelatedFollowup(f.question)"
-                  >
-                    {{ f.label }}
-                  </el-button>
-                </div>
-
                 <!-- Feedback for both LLM and template answers (Apr 24 2026 extended).
                      Template hits get a logId via _log_template_hit_safe in chat.py. -->
                 <div
@@ -3095,14 +2923,14 @@ function handleKeydown(event: KeyboardEvent) {
               </template>
             </div>
             <!-- N2: 悬停 (或键盘聚焦) 时出现「复制」; 助手和用户消息都有 -->
-            <div v-if="!isRestaurantTenant && !message.loading && message.content" class="message-actions">
+            <div v-if="!false && !message.loading && message.content" class="message-actions">
               <el-button text :size="uiBtnSize" data-testid="aiq-copy" @click="handleCopyMessage(message)">复制</el-button>
             </div>
           </div>
         </div>
 
         <!-- Template section - shown when only welcome message exists (no real conversation) -->
-        <div v-if="chatHistory.length <= 1 && !isRestaurantTenant" class="template-section">
+        <div v-if="chatHistory.length <= 1 && !false" class="template-section">
           <h3 class="template-title">
             <el-icon><Cpu /></el-icon> 选择分析模板
           </h3>
@@ -3149,52 +2977,7 @@ function handleKeydown(event: KeyboardEvent) {
       </div>
 
       <!-- 快捷问题 (hide when conversation has started to save space) -->
-      <!-- P1-B: RESTAURANT 租户展示分组目录; 其他租户展示扁平 chip 列表 (原有逻辑) -->
-      <div v-if="chatHistory.length <= 2 && isRestaurantTenant" class="quick-questions quick-questions--restaurant">
-        <div class="restaurant-question-head">
-          <div>
-            <span class="label">{{ restaurantRoleExperience.roleLabel }}今天先问这几个</span>
-            <p>按当前职责排序；数值由业务工具提供，解释与建议由大模型完成。</p>
-          </div>
-          <el-button
-            size="small"
-            text
-            @click="showRestaurantMoreQuestions = !showRestaurantMoreQuestions"
-          >
-            {{ showRestaurantMoreQuestions ? '收起' : `更多 ${restaurantMoreQuestionCount} 个` }}
-          </el-button>
-        </div>
-        <div class="restaurant-primary-questions">
-          <el-button
-            v-for="(q, qi) in restaurantPrimaryQuestions"
-            :key="qi"
-            size="small"
-            round
-            @click="handleQuickQuestion(q)"
-          >
-            {{ q }}
-          </el-button>
-        </div>
-        <div v-if="showRestaurantMoreQuestions" class="questions-grouped">
-          <div
-            v-for="group in restaurantMoreQuestionGroups"
-            :key="group.label"
-            class="questions-group"
-          >
-            <span class="group-label">{{ group.label }}</span>
-            <el-button
-              v-for="(q, qi) in group.questions"
-              :key="qi"
-              size="small"
-              round
-              @click="handleQuickQuestion(q)"
-            >
-              {{ q }}
-            </el-button>
-          </div>
-        </div>
-      </div>
-      <div v-else-if="chatHistory.length <= 2" class="quick-questions">
+      <div v-if="chatHistory.length <= 2" class="quick-questions">
         <span class="label">快捷问题:</span>
         <div class="questions-list">
           <el-button
@@ -3210,16 +2993,16 @@ function handleKeydown(event: KeyboardEvent) {
       </div>
 
       <!-- 输入区域 -->
-      <div class="input-area" :class="{ 'ai-std-input': !isRestaurantTenant }" data-testid="aiq-input-area">
+      <div class="input-area" :class="{ 'ai-std-input': !false }" data-testid="aiq-input-area">
         <el-autocomplete
           v-model="inputQuery"
           ref="inputRef"
           class="query-autocomplete"
-          :size="isRestaurantTenant ? 'default' : 'large'"
+          :size="false ? 'default' : 'large'"
           :fetch-suggestions="fetchAutocomplete"
           :placeholder="queryPlaceholder"
-          :aria-label="isRestaurantTenant
-            ? `${restaurantRoleExperience.roleLabel}餐饮 AI 问题`
+          :aria-label="false
+            ? '工厂 AI 问题'
             : 'AI 智能问答输入'"
           :disabled="isTyping"
           :trigger-on-focus="true"
@@ -3233,7 +3016,7 @@ function handleKeydown(event: KeyboardEvent) {
             <div class="suggestion-item">
               <span class="suggestion-text">{{ item.value }}</span>
  <!-- 「秒回」是命中缓存的内部标记 (E1「快速响应」徽标同类): 业务用户不看, ?aiDebug=1 才显示; 餐饮保持原样 -->
- <span v-if="aiDebug || isRestaurantTenant" class="suggestion-tag"> 秒回</span>
+ <span v-if="aiDebug || false" class="suggestion-tag"> 秒回</span>
             </div>
           </template>
         </el-autocomplete>
@@ -3250,7 +3033,7 @@ function handleKeydown(event: KeyboardEvent) {
 
       <!-- 措施③ "猜你想问" 推荐区: 输入框下方. 列出该工厂已物化的模板, 点 chip
            直接命中物化缓存 (0 token, ~230ms). 仅在有已物化模板时展示. -->
-      <div v-if="recommendChips.length > 0 && !isRestaurantTenant" class="recommend-area">
+      <div v-if="recommendChips.length > 0 && !false" class="recommend-area">
         <span class="recommend-label">
           <el-icon><MagicStick /></el-icon> 猜你想问:
         </span>

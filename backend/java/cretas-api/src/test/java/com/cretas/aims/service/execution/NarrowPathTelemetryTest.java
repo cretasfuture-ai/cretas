@@ -69,23 +69,13 @@ class NarrowPathTelemetryTest {
     }
 
     @Test
-    @DisplayName("UT-NP-01: 餐饮短语命中 601 表 -> 打出 gate=restaurantPhrase taken=true 带 intentCode 和问句")
-    void restaurantPhraseHitIsInstrumented() {
+    @DisplayName("UT-NP-01: 退役餐饮短语不再命中，也不产生窄路径日志")
+    void retiredRestaurantPhraseHasNoProviderOrTelemetry() {
         Optional<String> hit = kb.matchPhrase("菜品列表", "RESTAURANT");
-
-        // 先证明仪器测的是真事: 这条短语确实命中了餐饮表。
-        // ⛔ 没有这一步, 「日志里有那行」也可能只是我把 log 写在了分支外面。
-        assertThat(hit).as("样本短语必须真的命中 601 表, 否则这条断言测的不是埋点")
-                .contains("RESTAURANT_DISH_LIST");
-
+        assertThat(hit).as("餐饮专属短语映射已退役").isEmpty();
         assertThat(narrowPathLines())
-                .as("命中餐饮短语表却没有埋点 —— 601 条的去留就没有读数来源")
-                .hasSize(1);
-        assertThat(narrowPathLines().get(0))
-                .contains("gate=restaurantPhrase")
-                .contains("taken=true")
-                .contains("intentCode=RESTAURANT_DISH_LIST")
-                .contains("q=菜品列表");
+                .as("退役餐饮 provider 不得留下窄路径正向 telemetry")
+                .isEmpty();
     }
 
     @Test

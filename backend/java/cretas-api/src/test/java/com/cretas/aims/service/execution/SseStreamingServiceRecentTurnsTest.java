@@ -164,6 +164,7 @@ class SseStreamingServiceRecentTurnsTest {
             ReflectionTestUtils.setField(service, "writeGuardService", mock(WriteGuardService.class));
             ReflectionTestUtils.setField(service, "businessTypeGate", mock(BusinessTypeGate.class));
             doNothing().when(service).sendSseEvent(any(), anyString(), any());
+            FactoryAnalysisTestMetadata.bindNamedFactories(service);
         }
 
         private void recognizes(String input, String code) {

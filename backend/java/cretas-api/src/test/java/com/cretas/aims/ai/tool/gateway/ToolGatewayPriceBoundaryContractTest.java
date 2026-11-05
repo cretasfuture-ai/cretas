@@ -2,6 +2,7 @@ package com.cretas.aims.ai.tool.gateway;
 
 import com.cretas.aims.ai.tool.impl.material.MaterialStockSummaryTool;
 import com.cretas.aims.ai.tool.AbstractTool;
+import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
@@ -16,6 +17,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.config.FactoryToolConfigRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import org.junit.jupiter.api.AfterEach;
@@ -177,6 +179,52 @@ class ToolGatewayPriceBoundaryContractTest {
     }
 
     @Test
+    void materialSummaryDescriptorUsesInventoryPermissionsOnly() {
+        assertThat(descriptor().requiredPermissions())
+                .containsExactlyInAnyOrder("inventory:read", "inventory:read_write")
+                .doesNotContain("warehouse:read", "warehouse:read_write");
+    }
+
+    @Test
+    void teamLeaderWithWarehouseOnlyPermissionIsDeniedBeforeInventoryServices() {
+        activeUser.setRoleCode("team_leader");
+        assertThat(permissionService.hasAnyPermission(activeUser, "inventory:read", "inventory:read_write"))
+                .as("team_leader must not gain inventory permission from the role matrix")
+                .isFalse();
+        ToolRegistry tools = org.mockito.Mockito.mock(ToolRegistry.class);
+        lenient().when(tools.getExecutor("material_stock_summary")).thenReturn(Optional.of(concreteTool));
+        ToolRuntimeRegistry realRuntime = new ToolRuntimeRegistry(tools,
+                org.mockito.Mockito.mock(FactoryToolConfigRepository.class));
+        DefaultToolExecutionGateway realGateway = new DefaultToolExecutionGateway(
+                principalPolicy, realRuntime, confirmationLease, ledgerService, objectMapper);
+
+        ToolExecutionResult result = realGateway.execute(commandFor("team_leader", Set.of("warehouse:read"),
+                ToolExecutionSource.SKILL_WORKFLOW));
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.DENIED);
+        verify(materialBatchService, never()).getMaterialBatchList(any(), any());
+        verify(findingService, never()).detectInline(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void realRuntimeRegistryAcceptsInventoryPrincipalAndExactExecutor() {
+        ToolRegistry tools = org.mockito.Mockito.mock(ToolRegistry.class);
+        when(tools.getExecutor("material_stock_summary")).thenReturn(Optional.of(concreteTool));
+        ToolRuntimeRegistry realRuntime = new ToolRuntimeRegistry(tools,
+                org.mockito.Mockito.mock(FactoryToolConfigRepository.class));
+
+        ExecutionPrincipal principal = commandFor("warehouse_manager", Set.of("inventory:read"),
+                ToolExecutionSource.SKILL_WORKFLOW).principal();
+        Optional<ToolRuntimeRegistry.ResolvedTool> resolved = realRuntime.resolve(
+                commandFor("warehouse_manager", Set.of("inventory:read"), ToolExecutionSource.SKILL_WORKFLOW), principal);
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.orElseThrow().executor()).isSameAs(concreteTool);
+        assertThat(resolved.orElseThrow().descriptor().requiredPermissions())
+                .containsExactlyInAnyOrder("inventory:read", "inventory:read_write");
+    }
+
+    @Test
     void concreteServiceFailureReturnsFailedAndRestoresPriorContext() {
         activeUser.setRoleCode("warehouse_manager");
         when(materialBatchService.getMaterialBatchList(any(), any()))
@@ -243,16 +291,24 @@ class ToolGatewayPriceBoundaryContractTest {
     }
 
     private ExecutionPrincipal assertedPrincipal() {
-        return new ExecutionPrincipal("F006", "FACTORY", "42", PrincipalType.USER,
-                Set.of("warehouse_manager"), Set.of("inventory:read"), Set.of());
+        return commandFor("warehouse_manager", Set.of("inventory:read")).principal();
     }
 
-    private ToolExecutionCommand command() {
+    private ToolExecutionCommand commandFor(String role, Set<String> permissions) {
+        return commandFor(role, permissions, ToolExecutionSource.AI_CHAT);
+    }
+
+    private ToolExecutionCommand commandFor(String role, Set<String> permissions, ToolExecutionSource source) {
         return new ToolExecutionCommand(
                 "request-1", "correlation-1", "trace-1", "material_stock_summary", "1.0.0",
                 JsonNodeFactory.instance.objectNode(),
-                assertedPrincipal(), ToolExecutionSource.AI_CHAT, ToolExecutionMode.EXECUTE,
+                new ExecutionPrincipal("F006", "FACTORY", "42", PrincipalType.USER,
+                        Set.of(role), permissions, Set.of()), source, ToolExecutionMode.EXECUTE,
                 Optional.empty(), Optional.empty(), Optional.empty(), Instant.now().plusSeconds(60));
+    }
+
+    private ToolExecutionCommand command() {
+        return commandFor("warehouse_manager", Set.of("inventory:read"));
     }
 
     private ToolExecutionCommand previewCommand(String requestId) {
@@ -267,7 +323,7 @@ class ToolGatewayPriceBoundaryContractTest {
         return new ToolDescriptor(
                 "material_stock_summary", com.cretas.aims.ai.tool.ToolExecutor.ActionType.READ,
                 com.cretas.aims.ai.tool.ToolExecutor.RiskLevel.LOW,
-                Set.of("warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"),
+                Set.of("inventory:read", "inventory:read_write"),
                 Set.of(), Set.of(com.cretas.aims.entity.enums.FactoryType.FACTORY), Set.of("material"),
                 "1.0.0", false, ConfirmationPolicy.NOT_REQUIRED, ApprovalPolicy.NOT_REQUIRED,
                 IdempotencyPolicy.NOT_REQUIRED, DataClassification.INTERNAL,

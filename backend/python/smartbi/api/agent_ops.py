@@ -16,22 +16,16 @@ from smartbi.agent.eval import (
     OfflineBatchRunner,
     PostgresAgentOpsStore,
     RunnerBounds,
-    RuntimeShadowBatchRunner,
-    RuntimeShadowBounds,
 )
 from smartbi.agent.eval.store import AgentOpsAccessError, AgentOpsConflictError
 from smartbi.agent.eval.runner import EvaluatorBuildUnavailableError
 from smartbi.agent.eval.validation import AgentOpsValidationError, ensure_payload_budget
-from smartbi.agent.rollout import RuntimeShadowRolloutPolicy
 from smartbi.config import get_pg_pool
 
 router = APIRouter(prefix="/api/internal/smartbi/agent/runs/ops")
 
-_ADMIN_ROLES = frozenset({
-    "factory_super_admin", "platform_admin", "permission_admin",
-    "restaurant_manager", "restaurant_owner",
-})
-_SUPPORTED_DOMAINS = frozenset({"RESTAURANT", "FACTORY"})
+_ADMIN_ROLES = frozenset({"factory_super_admin", "platform_admin", "permission_admin"})
+_SUPPORTED_DOMAINS = frozenset({"FACTORY"})
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
@@ -56,14 +50,6 @@ class CreateEvalSetBody(BaseModel):
     cases: list[EvalCaseBody] = Field(min_length=1, max_length=100)
 
 
-class ImportRuntimeCorpusBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    schema_version: Literal["1.0"] = Field(alias="schemaVersion")
-    request_id: uuid.UUID = Field(alias="requestId")
-    name: str = Field(min_length=1, max_length=96)
-    version: int = Field(ge=1, le=1_000_000)
-    description: str = Field(default="", max_length=500)
-    max_cases: int = Field(default=20, alias="maxCases", ge=1, le=20)
 
 
 class RunnerBoundsBody(BaseModel):
@@ -81,32 +67,6 @@ class RunExperimentBody(BaseModel):
     config_snapshot: dict[str, Any] = Field(alias="configSnapshot")
     actual_snapshots: dict[str, dict[str, Any]] = Field(alias="actualSnapshots", max_length=100)
     bounds: RunnerBoundsBody = Field(default_factory=RunnerBoundsBody)
-
-    @model_validator(mode="after")
-    def enforce_total_budget(self):
-        ensure_payload_budget(
-            self.model_dump(by_alias=True, mode="json"),
-            "AGENT_OPS_REQUEST_PAYLOAD_TOO_LARGE",
-        )
-        return self
-
-
-class RuntimeShadowBoundsBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    max_cases: int = Field(default=20, alias="maxCases", ge=1, le=20)
-    max_concurrency: int = Field(default=2, alias="maxConcurrency", ge=1, le=2)
-    per_case_timeout_ms: int = Field(
-        default=75_000, alias="perCaseTimeoutMs", ge=1_000, le=75_000
-    )
-
-
-class RunRuntimeShadowBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    schema_version: Literal["1.0"] = Field(alias="schemaVersion")
-    request_id: uuid.UUID = Field(alias="requestId")
-    eval_set_id: uuid.UUID = Field(alias="evalSetId")
-    config_snapshot: dict[str, Any] = Field(alias="configSnapshot")
-    bounds: RuntimeShadowBoundsBody = Field(default_factory=RuntimeShadowBoundsBody)
 
     @model_validator(mode="after")
     def enforce_total_budget(self):
@@ -153,23 +113,6 @@ async def _require_pg_pool():
     if pool is None:
         raise HTTPException(status_code=503, detail="AGENT_OPS_STORE_UNAVAILABLE")
     return pool
-
-
-def require_runtime_shadow_context(request: Request) -> AgentOpsContext:
-    """Apply trusted identity validation and canary policy before service wiring."""
-
-    context = require_agent_ops_context(request)
-    if context.business_type != "RESTAURANT":
-        # Runtime shadow replays the restaurant runtime only.
-        raise HTTPException(status_code=403, detail="RUNTIME_SHADOW_RESTAURANT_ONLY")
-    policy = RuntimeShadowRolloutPolicy.from_environ()
-    if not policy.master_enabled:
-        raise HTTPException(status_code=503, detail="AGENT_OPS_RUNTIME_SHADOW_DISABLED")
-    if not policy.allows(context):
-        raise HTTPException(
-            status_code=403, detail="AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED"
-        )
-    return context
 
 
 def require_trace_ingest_context(request: Request) -> AgentOpsContext:
@@ -230,19 +173,6 @@ def require_agent_ops_context(request: Request) -> AgentOpsContext:
     )
 
 
-async def get_runtime_shadow_agent_ops_service(
-    _context: AgentOpsContext = Depends(require_runtime_shadow_context),
-) -> AgentOpsService:
-    """Build the Runtime Shadow runner only after its request gate succeeds."""
-
-    pool = await _require_pg_pool()
-    return AgentOpsService(
-        PostgresAgentOpsStore(pool),
-        OfflineBatchRunner(),
-        runtime_shadow_runner=RuntimeShadowBatchRunner(pool),
-    )
-
-
 @router.post("/eval-sets", status_code=201)
 async def create_eval_set(
     body: CreateEvalSetBody,
@@ -257,28 +187,6 @@ async def create_eval_set(
             version=body.version,
             description=body.description,
             cases=[case.model_dump(by_alias=True) for case in body.cases],
-        )
-        return _bounded_response(record.safe_dict(include_cases=False))
-    except AgentOpsConflictError as exc:
-        raise HTTPException(status_code=409, detail=_conflict_code(exc)) from exc
-    except AgentOpsValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.post("/eval-sets/import-runtime-corpus", status_code=201)
-async def import_runtime_corpus(
-    body: ImportRuntimeCorpusBody,
-    context: AgentOpsContext = Depends(require_runtime_shadow_context),
-    service: AgentOpsService = Depends(get_runtime_shadow_agent_ops_service),
-):
-    try:
-        record = await service.import_runtime_corpus(
-            context,
-            request_id=str(body.request_id),
-            name=body.name,
-            version=body.version,
-            description=body.description,
-            max_cases=body.max_cases,
         )
         return _bounded_response(record.safe_dict(include_cases=False))
     except AgentOpsConflictError as exc:
@@ -346,35 +254,6 @@ async def run_experiment(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except TimeoutError as exc:
         raise HTTPException(status_code=422, detail="RUNNER_CASE_TIMEOUT") from exc
-
-
-@router.post("/experiments/runtime-shadow", status_code=201)
-async def run_runtime_shadow(
-    body: RunRuntimeShadowBody,
-    context: AgentOpsContext = Depends(require_runtime_shadow_context),
-    service: AgentOpsService = Depends(get_runtime_shadow_agent_ops_service),
-):
-    try:
-        record = await service.run_runtime_shadow(
-            context,
-            request_id=str(body.request_id),
-            eval_set_id=str(body.eval_set_id),
-            config_snapshot=body.config_snapshot,
-            bounds=RuntimeShadowBounds(
-                max_cases=body.bounds.max_cases,
-                max_concurrency=body.bounds.max_concurrency,
-                per_case_timeout_seconds=body.bounds.per_case_timeout_ms / 1000.0,
-            ),
-        )
-        return _bounded_response(record.safe_dict(include_cases=False))
-    except AgentOpsAccessError as exc:
-        raise HTTPException(status_code=404, detail="EVAL_SET_NOT_FOUND") from exc
-    except AgentOpsConflictError as exc:
-        raise HTTPException(status_code=409, detail=_conflict_code(exc)) from exc
-    except (AgentOpsValidationError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="RUNTIME_SHADOW_CASE_TIMEOUT") from exc
 
 
 @router.get("/experiments")

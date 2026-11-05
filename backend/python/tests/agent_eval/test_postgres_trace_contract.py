@@ -78,52 +78,6 @@ class _Pool:
         return _Borrow(self.connection)
 
 
-@pytest.mark.asyncio
-async def test_trace_binds_exact_d10b_admin_audit_gucs_and_allows_other_owner_admin():
-    connection = _Connection()
-    store = PostgresAgentOpsStore(_Pool(connection))
-    trace = await store.load_trace(
-        context("R001", user="other-admin", role="restaurant_manager"),
-        "00000000-0000-0000-0000-000000000001",
-        after_sequence=0,
-        limit=1,
-    )
-    assert trace["state"] == "COMPLETED"
-    assert connection.executed == [
-        ("SELECT set_config('app.factory_id',$1,true)", ("R001",)),
-        ("SELECT set_config('app.user_id',$1,true)", ("other-admin",)),
-        ("SELECT set_config('app.actor_role',$1,true)", ("restaurant_manager",)),
-        ("SELECT set_config('app.agent_ops_audit','true',true)", ()),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_trace_denies_non_admin_cross_tenant_and_unset_context():
-    connection = _Connection()
-    store = PostgresAgentOpsStore(_Pool(connection))
-    with pytest.raises(AgentOpsAccessError):
-        await store.load_trace(
-            context(role="operator"), "00000000-0000-0000-0000-000000000001",
-            after_sequence=0, limit=1,
-        )
-    with pytest.raises(AgentOpsAccessError):
-        await store.load_trace(
-            context("R002"), "00000000-0000-0000-0000-000000000001",
-            after_sequence=0, limit=1,
-        )
-    with pytest.raises(AgentOpsAccessError):
-        await store.load_trace(
-            context(user=""), "00000000-0000-0000-0000-000000000001",
-            after_sequence=0, limit=1,
-        )
-    assert connection.executed == [
-        ("SELECT set_config('app.factory_id',$1,true)", ("R002",)),
-        ("SELECT set_config('app.user_id',$1,true)", ("42",)),
-        ("SELECT set_config('app.actor_role',$1,true)", ("platform_admin",)),
-        ("SELECT set_config('app.agent_ops_audit','true',true)", ()),
-    ]
-
-
 def test_d10b_v05_uses_the_same_admin_audit_guc_contract_when_present():
     migration = (
         Path(__file__).parents[2]

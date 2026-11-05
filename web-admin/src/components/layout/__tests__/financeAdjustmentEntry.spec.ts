@@ -71,11 +71,6 @@ describe('FIN fresh dedicated menu through current sidebar and route contracts',
     p.applyUserModuleAccess(denied); permissionApi.getUserModuleAccess.mockResolvedValue(denied);
     const { w, r } = await sidebar(); expect(w.text()).not.toContain('调整审批'); await r.push('/finance/adjustments'); expect(r.currentRoute.value.path).toBe('/403');
   });
-  it('restaurant dedicated finance remains unchanged and excludes factory adjustment entry', async () => {
-    identity('RESTAURANT'); const { w } = await sidebar(); expect(w.text()).not.toContain('调整审批');
-    expect(w.text()).toContain('供应商月对账'); expect(w.text()).toContain('成本归因');
-    expect(flatten(financeManagerMenu).find(m => m.path === '/finance/adjustments')?.hideForFactoryTypes).toEqual(['RESTAURANT']);
-  });
   it('does not transplant the old dashboard gate over current production entry', () => {
     expect(flatten(menuConfig).find(m => m.path === '/dashboard/production-progress')?.module).toBe('production');
   });

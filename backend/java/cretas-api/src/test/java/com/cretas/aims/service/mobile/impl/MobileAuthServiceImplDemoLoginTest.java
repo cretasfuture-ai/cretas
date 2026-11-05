@@ -84,8 +84,6 @@ class MobileAuthServiceImplDemoLoginTest {
                 passwordEncoder, jwtUtil, userMapper, tempTokenService, tokenBlacklistService,
                 mobileDeviceService, permissionService);
         ReflectionTestUtils.setField(service, "demoEnabled", true);
-        ReflectionTestUtils.setField(service, "demoRestFactoryId", "DEMO_REST");
-        ReflectionTestUtils.setField(service, "demoRestUsername", "demo_rest");
         ReflectionTestUtils.setField(service, "demoFactoryFactoryId", "DEMO_FACTORY2");
         ReflectionTestUtils.setField(service, "demoFactoryUsername", "demo_factory2");
         ReflectionTestUtils.setField(service, "demoLogisticsFactoryId", "DEMO_LOGISTICS");
@@ -198,6 +196,14 @@ class MobileAuthServiceImplDemoLoginTest {
     @DisplayName("未知 tenant -> 400 BusinessException")
     void demoLogin_unknownTenant_throws400() {
         assertThatThrownBy(() -> service.demoLogin("unknown-tenant"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("无效的演示类型");
+    }
+
+    @Test
+    @DisplayName("餐饮 demo tenant 已退役")
+    void demoLogin_restTenantIsRejected() {
+        assertThatThrownBy(() -> service.demoLogin("rest"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("无效的演示类型");
     }

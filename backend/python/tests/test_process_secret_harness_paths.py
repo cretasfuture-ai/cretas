@@ -37,6 +37,7 @@ HARNESSED_PATHS = {
     "smartbi/services/insights/llm_client.py": 4,
     "smartbi/services/insights/chart_insight_service.py": 1,
     "smartbi/agent/synthesis_engine.py": 1,
+    "smartbi/scripts/minimal_safe_set_liveness.py": 1,
     "smartbi/api/financial_dashboard.py": 2,
     "smartbi/services/unified_analyzer.py": 1,
     "smartbi/services/cross_sheet_aggregator.py": 1,
@@ -57,19 +58,6 @@ EXCLUDED_PATHS = {
     "smartbi/services/structure/llm_analyzer.py": "表结构分析, 输出 JSON",
     "smartbi/services/sql_generator.py": "按表结构生成 SQL, 不解读数据",
     "smartbi/agent/orchestrator.py": "餐饮连锁分析 (餐饮线已废弃, Steve 10-08)",
-    "smartbi/gold/restaurant/answer_addresses_query.py": "餐饮 (已废弃)",
-    "smartbi/gold/restaurant/answer_quality_judge.py": "餐饮 (已废弃)",
-    "smartbi/gold/restaurant/expansion_gate.py": "餐饮 (已废弃)",
-    "smartbi/gold/restaurant/promotion_llm_review.py": "餐饮 (已废弃)",
-    "smartbi/gold/restaurant/restaurant_agent.py": "餐饮 (已废弃)",
-    "smartbi/gold/restaurant/restaurant_intent.py": "餐饮 (已废弃)",
-    "smartbi/services/restaurant/review_analyzer_llm.py": "餐饮 (已废弃)",
-    "smartbi/services/restaurant/staffing_forecast.py": "餐饮 (已废弃)",
-    "smartbi/scripts/a36_provider_acceptance.py": "离线验收脚本, 不在服务路径上",
-    "smartbi/scripts/chain_context_diagnose.py": "离线诊断脚本, 不在服务路径上",
-    "smartbi/scripts/llm_capability_rank.py": "离线评测脚本, 不在服务路径上",
-    "smartbi/scripts/t3_aistore_thinking_probe.py": "离线探针脚本, 不在服务路径上",
-    "smartbi/scripts/t7_deepseek_acceptance.py": "离线验收脚本, 不在服务路径上",
 }
 
 HARNESS_CALL = "with_process_secret_harness"

@@ -73,17 +73,16 @@ async def test_get_tenant_type_passes_factory_id_through_as_first_param():
 
 
 @pytest.mark.asyncio
-async def test_get_tenant_type_missing_row_defaults_to_factory():
-    """Mirror Java SmartBIServiceImpl.isRestaurantTenant orElse(false) — a
-    missing factories row collapses to FACTORY rather than raising."""
+async def test_get_tenant_type_missing_row_is_rejected():
+    """Missing metadata must not silently acquire factory semantics."""
     conn = _FakeConn(None)
-    tenant = await get_tenant_type("R_DOES_NOT_EXIST", conn)
-    assert tenant is TenantType.FACTORY
+    with pytest.raises(ValueError, match="metadata missing"):
+        await get_tenant_type("R_DOES_NOT_EXIST", conn)
 
 
 @pytest.mark.asyncio
-async def test_get_tenant_type_handles_null_type_column():
-    """``factories.type`` IS NULL → FACTORY (defensive default)."""
+async def test_get_tenant_type_rejects_null_type_column():
+    """``factories.type`` IS NULL must fail closed."""
     conn = _FakeConn({"type": None})
-    tenant = await get_tenant_type("F_LEGACY_NO_TYPE", conn)
-    assert tenant is TenantType.FACTORY
+    with pytest.raises(ValueError, match="metadata is missing"):
+        await get_tenant_type("F_LEGACY_NO_TYPE", conn)

@@ -96,11 +96,6 @@ public class PlatformFactoryMenuService {
 
     private static String moduleLabel(String id) {
         return switch (id) {
-            case "restaurantFinance" -> "餐饮财务";
-            case "restaurantHr" -> "餐饮人事";
-            case "restaurantMarketing" -> "餐饮营销";
-            case "restaurantOps" -> "餐饮运营";
-            case "restaurantProcurement" -> "餐饮采购";
             default -> PermissionModuleCatalog.label(id);
         };
     }
@@ -108,10 +103,10 @@ public class PlatformFactoryMenuService {
     // The Web permission name exceeds the existing 20-character storage limit.
     // This menu-only alias avoids changing business module IDs or schema.
     private static String storageModuleId(String id) {
-        return "restaurantProcurement".equals(id) ? "restaurant_buy" : id;
+        return id;
     }
 
     private static String webModuleId(String id) {
-        return "restaurant_buy".equals(id) ? "restaurantProcurement" : id;
+        return id;
     }
 }

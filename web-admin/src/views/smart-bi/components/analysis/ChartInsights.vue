@@ -27,7 +27,7 @@
  */
 import { ref } from 'vue';
 import { ElButton } from 'element-plus';
-import { askRestaurantIntent } from '@/api/smartbi/restaurant-synthesis';
+import { executeIntent } from '@/api/smartbi/intent-chat';
 import { getFactoryId } from '@/api/smartbi/common';
 import { splitMarkdownBullets } from './analysisBullets';
 
@@ -62,21 +62,16 @@ async function loadAiInsight() {
     // fresh sessionId each time (no cross-chart memory bleed). Routed through
     // the unified Java orchestrator (Card4) so this answer can never diverge
     // from what the same question would get through free-form chat.
-    const res = await askRestaurantIntent(getFactoryId(), query, crypto.randomUUID());
+    const res = await executeIntent(getFactoryId(), query, { sessionId: crypto.randomUUID(), mode: 'READ' });
 
-    if (!res.success) {
-      aiError.value = res.error || 'AI 解读失败，请稍后重试';
-      aiBullets.value = null;
-      return;
-    }
-    if (res.source === 'degraded') {
+    if (res.status === 'FAILED' || res.status === 'ERROR') {
       // Honest: backend explicitly degraded (budget/service) — show that
       // plainly, never fabricate an interpretation.
-      aiError.value = res.answer || 'AI 分析当前不可用（额度或服务降级）';
+      aiError.value = res.message || 'AI 分析当前不可用（服务降级）';
       aiBullets.value = null;
       return;
     }
-    aiBullets.value = splitMarkdownBullets(res.answer).slice(0, 4);
+    aiBullets.value = splitMarkdownBullets(res.formattedText || res.message || '').slice(0, 4);
   } catch (e) {
     aiError.value = e instanceof Error ? e.message : 'AI 解读失败';
     aiBullets.value = null;

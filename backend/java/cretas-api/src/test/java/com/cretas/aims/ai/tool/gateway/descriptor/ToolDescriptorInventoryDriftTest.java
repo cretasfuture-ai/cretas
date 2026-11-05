@@ -210,7 +210,7 @@ class ToolDescriptorInventoryDriftTest {
         // 2026-11-03 strict sweep + organizer rulings: role gates and declared codes per GatedDataToolAiPathPermissionTest.
         assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(85);
         assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(65);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(177);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(178);
         // 2026-11-05: canvas_product_process_workflow_config explicitly versions fixed-share preview (v1.1.0).
         assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(13);
         assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(24);

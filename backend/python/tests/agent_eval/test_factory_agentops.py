@@ -172,17 +172,25 @@ async def test_factory_context_accepts_factory_routes_and_rejects_the_restaurant
         ctx, request_id=request_id(1), name="fac", version=1, description="",
         cases=[factory_case()])
     assert created.name == "fac"
+    retired_restaurant_case = case()
+    retired_restaurant_case["expectedRoute"] = "GROSS_MARGIN_DECLINE_ATTRIBUTION"
     with pytest.raises(AgentOpsValidationError, match="UNSUPPORTED_EXPECTED_ROUTE"):
         await service.create_eval_set(
             ctx, request_id=request_id(2), name="fac2", version=1, description="",
-            cases=[case()])  # restaurant gross-margin case
+            cases=[retired_restaurant_case])
+    for retired_route in ("RESTAURANT_MARGIN_ANALYSIS", "RESTAURANT_DAILY_REVENUE"):
+        retired_restaurant_case["expectedRoute"] = retired_route
+        with pytest.raises(AgentOpsValidationError, match="UNSUPPORTED_EXPECTED_ROUTE"):
+            await service.create_eval_set(
+                ctx, request_id=request_id(10 + len(retired_route)), name="fac-retired",
+                version=len(retired_route), description="", cases=[retired_restaurant_case])
 
 
 @pytest.mark.asyncio
 async def test_restaurant_context_cannot_create_factory_routes():
     service = AgentOpsService(InMemoryAgentOpsStore())
-    ctx = AgentOpsContext("R001", "42", "platform_admin", "corr")
-    with pytest.raises(AgentOpsValidationError, match="UNSUPPORTED_EXPECTED_ROUTE"):
+    ctx = AgentOpsContext("R001", "42", "platform_admin", "corr", "RESTAURANT")
+    with pytest.raises(AgentOpsValidationError, match="UNSUPPORTED_BUSINESS_DOMAIN"):
         await service.create_eval_set(
             ctx, request_id=request_id(1), name="x", version=1, description="",
             cases=[factory_case()])
@@ -206,15 +214,6 @@ async def test_factory_experiment_uses_the_factory_evaluator_and_detects_failure
     assert experiment.aggregate["passedCount"] == 1
     failed = [r for r in experiment.case_results if not r["passed"]]
     assert failed[0]["caseId"] == "b" and "ROUTE_MISMATCH" in failed[0]["failureCodes"]
-
-
-@pytest.mark.asyncio
-async def test_runtime_shadow_stays_restaurant_only():
-    service = AgentOpsService(InMemoryAgentOpsStore())
-    with pytest.raises(AgentOpsValidationError, match="RUNTIME_SHADOW_RESTAURANT_ONLY"):
-        await service.import_runtime_corpus(
-            factory_ctx(), request_id=request_id(1), name="x", version=1,
-            description="", max_cases=1)
 
 
 # --------------------------------------------------------------------- traces
@@ -297,7 +296,7 @@ def test_http_accepts_factory_and_still_rejects_other_domains():
     shadow = ok.post(
         "/api/internal/smartbi/agent/runs/ops/eval-sets/import-runtime-corpus",
         json={"schemaVersion": "1.0", "requestId": request_id(8), "name": "s", "version": 1})
-    assert shadow.status_code == 403
+    assert shadow.status_code in {404, 405}
     other = TestClient(app_for("MANUFACTURING"))
     assert other.get("/api/internal/smartbi/agent/runs/ops/eval-sets").status_code == 403
     rest = TestClient(app_for("RESTAURANT"))

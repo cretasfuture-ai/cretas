@@ -94,7 +94,7 @@ async def test_experiment_compare_reports_regression_and_is_reproducible():
     assert current.snapshot_digest == same_again.snapshot_digest
     assert current.request_digest == same_again.request_digest
     assert comparison["promptSnapshotChanged"] is False
-    assert current.evaluator_version == "restaurant-offline-v1"
+    assert current.evaluator_version == "factory-offline-v1"
     assert current.actual_snapshots["margin-1"]["numericTruthRefs"] == {
         "ev-1:fact-1": "11"
     }
@@ -106,32 +106,6 @@ async def test_experiment_compare_reports_regression_and_is_reproducible():
     with pytest.raises(AgentOpsStoreError, match="snapshot digest mismatch"):
         await store.save_experiment(
             context(), replace(current, snapshot_digest="0" * 64)
-        )
-
-
-@pytest.mark.asyncio
-async def test_trace_reuses_seeded_truth_redacts_and_is_tenant_scoped():
-    store = InMemoryAgentOpsStore()
-    service = AgentOpsService(store)
-    run_id = "00000000-0000-0000-0000-000000000001"
-    store.seed_trace("R001", run_id, {
-        "runId": run_id,
-        "state": "COMPLETED",
-        "rawPrompt": "must not escape",
-        "events": [{"sequence": 1, "eventType": "RUN_STARTED", "payload": {"token": "x"}}],
-    })
-    trace = await service.trace(context(), run_id, after_sequence=0, limit=1)
-    assert "rawPrompt" not in trace
-    assert "token" not in trace["events"][0]["payload"]
-    assert "factoryId" not in trace
-    with pytest.raises(AgentOpsAccessError):
-        await service.trace(context("R002"), run_id, after_sequence=0, limit=1)
-    with pytest.raises(AgentOpsAccessError):
-        await service.trace(
-            context("R001", "99", "operator"),
-            run_id,
-            after_sequence=0,
-            limit=1,
         )
 
 

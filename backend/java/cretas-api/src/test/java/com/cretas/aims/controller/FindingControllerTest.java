@@ -4,6 +4,8 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.service.finding.Finding;
 import com.cretas.aims.service.finding.FindingService;
 import com.cretas.aims.service.finding.FindingTextRenderer;
+import com.cretas.aims.service.finding.FindingActionPlanService;
+import com.cretas.aims.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,8 +35,11 @@ class FindingControllerTest {
     @Mock
     private FindingTextRenderer findingTextRenderer;
 
+    @Mock
+    private FindingActionPlanService findingActionPlanService;
+
     private static Finding wastage() {
-        return new Finding("WASTAGE_TYPE_CONCENTRATION", "restaurant",
+        return new Finding("LOW_STOCK", "inventory",
                 Finding.Severity.INFO, 70, "变质", "变质",
                 Map.of("cost", 266929.48, "share", 37.0, "windowDays", 7));
     }
@@ -47,13 +52,13 @@ class FindingControllerTest {
     @Test
     @DisplayName("UT-FC-01: 返回 findings + text，并把三个桶都暴露出去")
     void returnsFindingsAndAllThreeBuckets() {
-        when(findingService.detectInline(FACTORY_ID, "restaurant")).thenReturn(
+        when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
                 new FindingService.Result(List.of(wastage()), List.of("损耗类型集中度"), 1,
                         Map.of("WASTAGE_TYPE_CONCENTRATION", 1), List.of(),
                         List.of(new FindingService.SkippedRule("食材损耗离群", "基线历史不足"))));
         when(findingTextRenderer.renderInline(any())).thenReturn("⚠️ 顺带 1 件事：\n · 变质…");
 
-        Map<String, Object> data = body(controller.getFindings(FACTORY_ID, "restaurant"));
+        Map<String, Object> data = body(controller.getFindings(FACTORY_ID, "inventory"));
 
         assertEquals(1, ((List<?>) data.get("findings")).size());
         assertTrue(((String) data.get("findingsText")).contains("变质"));
@@ -66,12 +71,12 @@ class FindingControllerTest {
     @Test
     @DisplayName("UT-FC-02: 🔴 无发现时 findings 为空但 checkedRules 非空 —— 前端据此说「均正常」而不是「加载失败」")
     void allClearIsDistinguishableFromFailure() {
-        when(findingService.detectInline(FACTORY_ID, "restaurant")).thenReturn(
+        when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
                 new FindingService.Result(List.of(), List.of("损耗类型集中度"), 0, Map.of(),
                         List.of(), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("✅ 已检查 损耗类型集中度，均正常。");
 
-        Map<String, Object> data = body(controller.getFindings(FACTORY_ID, "restaurant"));
+        Map<String, Object> data = body(controller.getFindings(FACTORY_ID, "inventory"));
 
         assertTrue(((List<?>) data.get("findings")).isEmpty());
         assertFalse(((List<?>) data.get("checkedRules")).isEmpty(),
@@ -79,9 +84,9 @@ class FindingControllerTest {
     }
 
     @Test
-    @DisplayName("UT-FC-03: domain 缺省为 restaurant")
-    void domainDefaultsToRestaurant() {
-        when(findingService.detectInline(FACTORY_ID, "restaurant")).thenReturn(
+    @DisplayName("UT-FC-03: domain 缺省为 inventory")
+    void domainDefaultsToInventory() {
+        when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
                 new FindingService.Result(List.of(), List.of(), 0, Map.of(), List.of(), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("");
 
@@ -91,14 +96,29 @@ class FindingControllerTest {
     @Test
     @DisplayName("UT-FC-04: 🔴 规则失败时 failedRules 非空且 complete=false，前端不得当成正常")
     void failureIsVisibleToTheClient() {
-        when(findingService.detectInline(FACTORY_ID, "restaurant")).thenReturn(
+        when(findingService.detectInline(FACTORY_ID, "inventory")).thenReturn(
                 new FindingService.Result(List.of(), List.of(), 0, Map.of(),
                         List.of("损耗类型集中度"), List.of()));
         when(findingTextRenderer.renderInline(any())).thenReturn("");
 
-        Map<String, Object> data = body(controller.getFindings(FACTORY_ID, "restaurant"));
+        Map<String, Object> data = body(controller.getFindings(FACTORY_ID, "inventory"));
 
         assertEquals(List.of("损耗类型集中度"), data.get("failedRules"));
         assertEquals(false, data.get("complete"));
+    }
+
+    @Test
+    @DisplayName("UT-FC-05: factory action-plan defaults to inventory")
+    void actionPlanDefaultsToInventory() {
+        when(findingActionPlanService.generate(FACTORY_ID, "inventory"))
+                .thenReturn(Map.of("hasPlan", false, "domain", "inventory"));
+        Map<String, Object> data = body(controller.getActionPlan(FACTORY_ID, null));
+        assertEquals("inventory", data.get("domain"));
+    }
+
+    @Test
+    @DisplayName("UT-FC-06: retired restaurant finding domain is rejected")
+    void retiredRestaurantDomainIsRejected() {
+        assertThrows(BusinessException.class, () -> controller.getFindings(FACTORY_ID, "restaurant"));
     }
 }

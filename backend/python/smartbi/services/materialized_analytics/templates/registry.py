@@ -56,7 +56,7 @@ def load_all_templates():
     this file; importing them at module level would cycle. Function-body
     imports are evaluated lazily when this function is called.
 
-    W1 generic templates + W2 restaurant-specific templates (12 added).
+    Factory-safe templates only; retired restaurant templates are not imported.
     """
     # W1 generic (5)
     from . import top_n_by_dim          # noqa: F401
@@ -64,44 +64,6 @@ def load_all_templates():
     from . import category_distribution  # noqa: F401
     from . import anomaly_detection     # noqa: F401
     from . import pareto_analysis       # noqa: F401
-    # W2 restaurant-specific (12)
-    from . import dish_sales_top_n           # noqa: F401
-    from . import dish_slow_movers           # noqa: F401
-    from . import time_slot_revenue          # noqa: F401
-    from . import dish_category_breakdown    # noqa: F401
-    from . import member_consumption         # noqa: F401
-    from . import table_type_comparison      # noqa: F401
-    from . import staff_performance          # noqa: F401
-    from . import store_performance          # noqa: F401
-    from . import channel_analysis           # noqa: F401
-    from . import promotion_impact           # noqa: F401
-    from . import dish_time_slot_matrix      # noqa: F401
-    from . import refund_analysis            # noqa: F401
-    from . import weekday_weekend_pattern    # noqa: F401
-    # W3 餐饮常见 Q-A 补充 (Apr 22 2026, 4 templates)
-    from . import dish_by_table_type              # noqa: F401
-    from . import combo_usage_rate                # noqa: F401
-    from . import reverse_checkout_stats          # noqa: F401
-    from . import store_customer_stratification   # noqa: F401
-    # W3 财务端补充 (Apr 22 2026, 4 more templates)
-    from . import profit_loss_statement           # noqa: F401
-    from . import revenue_management_report       # noqa: F401
-    from . import stored_value_card_consumption   # noqa: F401
-    from . import groupon_channel_breakdown       # noqa: F401
-    # W3 进销存 (Apr 22 2026)
-    from . import purchase_inventory_inflow       # noqa: F401
-    # W3 营业概况报表 (Apr 22 2026) — 桂满陇/营业概况类聚合报表
-    from . import business_overview_summary       # noqa: F401
-    # W3 会员深度 (Apr 22 2026) — 唏嘛香 60K 会员卡级
-    from . import member_deep_analytics           # noqa: F401
-    # W4 专项报表覆盖 (Apr 22 2026)
-    from . import reviews_sentiment_summary       # noqa: F401
-    from . import payment_method_mix              # noqa: F401
-    from . import kitchen_dispatch_heatmap        # noqa: F401
-    from . import period_comparison_trend         # noqa: F401
-    # W4 quality-audit fixes (Apr 22 2026)
-    from . import dish_store_drill                # noqa: F401
-    from . import monthly_anomaly                 # noqa: F401
     # Manufacturing (Apr 27 2026 H4 deferred ship)
     # First template — pattern others (equipment_oee, work_order_status,
     # batch_yield, downtime_analysis) should follow when manufacturing data

@@ -16,11 +16,11 @@ import WHReceiptCreateScreen from "../../screens/warehouse/inbound/WHReceiptCrea
 import WHPurchaseReceiveListScreen from "../../screens/warehouse/inbound/WHPurchaseReceiveListScreen";
 import WHUnorderedInboundReceiveScreen from "../../screens/warehouse/inbound/WHUnorderedInboundReceiveScreen";
 import WHScanOperationScreen from "../../screens/warehouse/shared/WHScanOperationScreen";
-import SupplierDeliveryListScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
-import SupplierDeliveryCreateScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen";
-import SupplierDeliveryDetailScreen from "../../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
-import PriceAnomalyApprovalScreen from "../../screens/restaurant/supplier-delivery/PriceAnomalyApprovalScreen";
 import WHTransitLedgerScreen from "../../screens/warehouse/inventory/WHTransitLedgerScreen";
+import SupplierDeliveryListScreen from "../../screens/inventory/supplier-delivery/SupplierDeliveryListScreen";
+import SupplierDeliveryCreateScreen from "../../screens/inventory/supplier-delivery/SupplierDeliveryCreateScreen";
+import SupplierDeliveryDetailScreen from "../../screens/inventory/supplier-delivery/SupplierDeliveryDetailScreen";
+import PriceAnomalyApprovalScreen from "../../screens/inventory/supplier-delivery/PriceAnomalyApprovalScreen";
 import { screenErrorBoundary } from '../../components/common/ScreenErrorBoundary';
 
 const Stack = createNativeStackNavigator<WHInboundStackParamList>();
@@ -92,11 +92,10 @@ export function WHInboundStackNavigator() {
         component={WHUnorderedInboundReceiveScreen}
         options={{ title: "无订单入库" }}
       />
-
-      <Stack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} options={{ title: "待验收入库" }} />
-      <Stack.Screen name="SupplierDeliveryCreate" component={SupplierDeliveryCreateScreen} options={{ title: "新建送货单" }} />
-      <Stack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} options={{ title: "送货单详情" }} />
-      <Stack.Screen name="PriceAnomalyApproval" component={PriceAnomalyApprovalScreen} options={{ title: "价格异常审批" }} />
+      <Stack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} />
+      <Stack.Screen name="SupplierDeliveryCreate" component={SupplierDeliveryCreateScreen} />
+      <Stack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} />
+      <Stack.Screen name="PriceAnomalyApproval" component={PriceAnomalyApprovalScreen} />
     </Stack.Navigator>
   );
 }

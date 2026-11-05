@@ -9,6 +9,27 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# Restaurant removal contract: deleted ops entrypoints must not silently return,
+# while the shared registry probe remains a deployed cron consumer.
+for removed in \
+    scripts/cron/restaurant-ai-eval.sh \
+    scripts/cron/refresh-demo-rest.sh \
+    scripts/cron/replay-equivalence-daily.sh \
+    scripts/cron/flywheel-promotion-staleness-daily.sh \
+    scripts/cron/daily-close-push.sh \
+    scripts/ops/run-finance-etl-daily.sh \
+    scripts/tools/convert_restaurant_csv_to_xlsx.py \
+    scripts/customer-audit-e2e-2026-05-14-gml/run-restaurant-extras.mjs \
+    scripts/parity-gate/audit-restaurant-schema.sql \
+    scripts/parity-gate/record-restaurant-goldens.sh; do
+    [ ! -e "$ROOT/$removed" ] || fail "deleted restaurant entrypoint still exists: $removed"
+done
+grep -Fq 'probe-llm-registry.sh' "$DEPLOY_SCRIPT" \
+    || fail "shared LLM registry probe is no longer in deployment checks"
+if grep -Eiq 'restaurant-ai-eval|refresh-demo-rest|run-finance-etl|record-restaurant-goldens' "$DEPLOY_SCRIPT"; then
+    fail "deployment script still references deleted restaurant entrypoint"
+fi
+
 grep -Fq "<<'ENDSSH'" "$DEPLOY_SCRIPT" || fail "remote dependency heredoc must be quoted"
 grep -Fq 'requirements_sha256=' "$DEPLOY_SCRIPT" || fail "requirements hash missing"
 grep -Fq 'installed_sha256=' "$DEPLOY_SCRIPT" || fail "venv state hash missing"
@@ -41,8 +62,6 @@ for runtime_file in \
     "$ROOT/scripts/systemd/cretas-gold-etl-refresh.service" \
     "$ROOT/scripts/systemd/cretas-gold-etl-refresh.service.d/python-runtime.conf" \
     "$ROOT/scripts/systemd/cretas-corpus-refresh.service.d/python-runtime.conf" \
-    "$ROOT/scripts/cron/restaurant-ai-eval.sh" \
-    "$ROOT/scripts/cron/refresh-demo-rest.sh" \
     "$ROOT/scripts/cron/probe-llm-registry.sh"; do
     grep -Fq 'venv-current' "$runtime_file" \
         || fail "runtime consumer is not pinned to venv-current: $runtime_file"

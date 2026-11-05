@@ -120,6 +120,6 @@ public class BatchConsumptionAdjustTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredRoles() {
-        return java.util.Set.of("factory_super_admin", "permission_admin", "restaurant_owner");
+        return java.util.Set.of("factory_super_admin", "permission_admin");
     }
 }

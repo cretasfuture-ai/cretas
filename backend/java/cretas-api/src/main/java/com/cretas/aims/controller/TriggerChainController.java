@@ -216,7 +216,8 @@ public class TriggerChainController {
     @Operation(summary = "获取行业模板列表")
     public ApiResponse<List<FactoryTemplate>> getTemplates(@PathVariable String factoryId) {
         if (templateRepo == null) return ApiResponse.success(List.of());
-        return ApiResponse.success(templateRepo.findByIsActiveTrue());
+        return ApiResponse.success(templateRepo.findByIsActiveTrue().stream()
+                .filter(template -> !com.cretas.aims.util.RetiredTemplatePolicy.isRetired(template)).toList());
     }
 
     @RequirePermission({"system:read_write"})

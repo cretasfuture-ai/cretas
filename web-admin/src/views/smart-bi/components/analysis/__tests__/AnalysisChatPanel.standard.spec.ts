@@ -1,8 +1,7 @@
 /**
  * AnalysisChatPanel (分析页右侧 AI 对话栏) 按 AI 对话标准重构后的行为测试。
  * 真实挂载 AnalysisChatPanel + 真实 ChatBubble + 真实 Element Plus, 只 mock:
- *   - 接口 askRestaurantIntent (外部 IO)
- *   - 租户来源 useAuthStore (businessDomain, 与 AIQuery.vue 的 isRestaurantTenant 同源)
+ *   - 统一工厂 intent-chat 接口 (外部 IO)
  *   - ElMessage (只加 spy, 其余 Element Plus 照用)
  *   - RestaurantChartBlock (echarts 在 jsdom 里没有意义)
  * 每条工厂侧的断言都配一条餐饮租户的阴性对照。
@@ -21,9 +20,8 @@ const h = vi.hoisted(() => ({
   clipboardWrite: vi.fn(),
 }));
 
-vi.mock('@/api/smartbi/restaurant-synthesis', () => ({
-  askRestaurantIntent: (...args: unknown[]) => h.askIntent(...args),
-  sendRestaurantAnswerFeedback: vi.fn(),
+vi.mock('@/api/smartbi/intent-chat', () => ({
+  executeIntent: (...args: unknown[]) => h.askIntent(...args),
 }));
 vi.mock('@/store/modules/auth', () => ({
   useAuthStore: () => h.auth,
@@ -79,10 +77,8 @@ function mountPanel(domain: 'FACTORY' | 'RESTAURANT'): VueWrapper {
 }
 
 const okAnswer = (over: Record<string, unknown> = {}) => ({
-  success: true,
-  answer: '这是答案正文',
-  charts: [],
-  alerts: [],
+  status: 'SUCCESS',
+  formattedText: '这是答案正文',
   ...over,
 });
 
@@ -143,14 +139,6 @@ describe('L1 / L2: 版式', () => {
     expect(user.text()).toContain('看看销售');
   });
 
-  it('餐饮阴性对照: 头像在, 没有 bubble-std / acp-std', async () => {
-    h.askIntent.mockResolvedValue(okAnswer());
-    const w = mountPanel('RESTAURANT');
-    await send(w, '看看销售');
-    expect(w.findAll('.bubble-avatar')).toHaveLength(1);
-    expect(w.find('.chat-bubble.bubble-ai').classes()).not.toContain('bubble-std');
-    expect(w.find('.acp-panel').classes()).not.toContain('acp-std');
-  });
 
   it('ChatBubble 不传 variant = 旧版式 (默认值保持旧样子)', () => {
     const w = mount(ChatBubble, { props: { turn: { id: 'a', role: 'ai', content: 'hi', timestamp: 1 } } });
@@ -197,20 +185,8 @@ describe('L2 / T1-T3 / S4: 样式源文本 (+ 旧样式阴性对照)', () => {
     expect(PANEL_SRC).toContain(FONT_STACK);
   });
 
-  it('阴性对照: 旧版式规则原值还在 (餐饮仍在用), 全局 --font-family 没被改', () => {
-    const oldUser = cssBlock(BUBBLE_SRC, '.bubble-user .bubble-body');
-    expect(oldUser).toContain('max-width: 72%;');
-    expect(oldUser).toContain('padding: 12px 16px;');
-    expect(oldUser).toContain('border-radius: 14px 14px 4px 14px;');
-    expect(oldUser).toContain("'Noto Serif SC'");
-    expect(cssBlock(BUBBLE_SRC, '.bubble-ai .bubble-avatar')).toContain("'Playfair Display'");
-    const globalCss = readFileSync(resolve(__dirname, '../../../../../style.css'), 'utf8');
-    const fam = globalCss.match(/--font-family:\s*([^;]+);/);
-    expect(fam).not.toBeNull();
-    expect(fam![1]).toMatch(/^\s*['"]?Noto Sans SC/);
-  });
 
-  it('S4: 工厂输入框 / 发送是 large(40px), 圆角 8 / 内边距 12 / 16px; 餐饮保持默认档', () => {
+  it('S4: 工厂输入框 / 发送是 large(40px), 圆角 8 / 内边距 12 / 16px', () => {
     const f = mountPanel('FACTORY');
     expect(f.find('.acp-input .el-input').classes()).toContain('el-input--large');
     expect(f.find('.acp-input .el-button').classes()).toContain('el-button--large');
@@ -220,28 +196,13 @@ describe('L2 / T1-T3 / S4: 样式源文本 (+ 旧样式阴性对照)', () => {
     expect(wrapper).toContain('padding: 1px 12px;');
     expect(cssBlock(PANEL_SRC, '.acp-std .acp-input :deep(.el-input__inner)')).toContain('font-size: 16px;');
 
-    const r = mountPanel('RESTAURANT');
-    expect(r.find('.acp-input .el-input').classes()).not.toContain('el-input--large');
-    expect(r.find('.acp-input .el-button').classes()).not.toContain('el-button--large');
   });
 
-  it('按钮尺寸: 工厂 清空对话 / 聚焦 / 追问芯片都是 default(32px) 档; 餐饮保持 small', async () => {
-    h.askIntent.mockResolvedValue(okAnswer({ followUpActions: [{ label: '最近30天', question: '最近30天怎样' }] }));
+  it('按钮尺寸: 工厂清空对话 / 聚焦都是 default(32px) 档', () => {
     const f = mountPanel('FACTORY');
-    await send(f, '问');
     const clearF = f.findAll('.acp-header .el-button')[0];
     expect(clearF.classes()).not.toContain('el-button--small');
     expect(f.find('.el-radio-group .el-radio-button').classes()).not.toContain('el-radio-button--small');
-    const chipF = f.findAll('.acp-followups .el-button');
-    expect(chipF).toHaveLength(1);
-    expect(chipF[0].classes()).not.toContain('el-button--small');
-
-    h.askIntent.mockResolvedValue(okAnswer({ followUpActions: [{ label: '最近30天', question: '最近30天怎样' }] }));
-    const r = mountPanel('RESTAURANT');
-    await send(r, '问');
-    expect(r.findAll('.acp-header .el-button')[0].classes()).toContain('el-button--small');
-    expect(r.find('.el-radio-group .el-radio-button').classes()).toContain('el-radio-button--small');
-    expect(r.find('.acp-followups .el-button').classes()).toContain('el-button--small');
   });
 });
 
@@ -254,11 +215,6 @@ describe('G1: markdown 表格 → 记录卡 (窄面板)', () => {
     expect(cards).toHaveLength(2);
     expect(cards[0].text().replace(/\s+/g, '')).toBe('门店一店营收100');
     expect(cards[1].findAll('.bubble-record-key').map((n) => n.text())).toEqual(['门店', '营收']);
-  });
-  it('阴性对照: 默认(legacy)仍是 <table>, 没有记录卡', () => {
-    const w = mount(ChatBubble, { props: { turn: { id: 'a', role: 'ai', content: table, timestamp: 1 } } });
-    expect(w.find('table').exists()).toBe(true);
-    expect(w.findAll('.bubble-record')).toHaveLength(0);
   });
 });
 
@@ -281,14 +237,6 @@ describe('W1: 骨架屏', () => {
     expect(w.find('.bubble-ai').text()).toContain('这是答案正文');
   });
 
-  it('餐饮阴性对照: 仍是三点动画, 没有骨架', async () => {
-    h.askIntent.mockReturnValue(new Promise(() => {}));
-    const w = mountPanel('RESTAURANT');
-    void (w.vm as unknown as Vm).sendMessage('看看销售');
-    await flushPromises();
-    expect(w.find('.typing-wrap').exists()).toBe(true);
-    expect(w.find('[data-testid="acp-loading-skeleton"]').exists()).toBe(false);
-  });
 });
 
 describe('W2: 30 秒客户端超时 + 失败文案说人话', () => {
@@ -316,26 +264,15 @@ describe('W2: 30 秒客户端超时 + 失败文案说人话', () => {
     expect(w.find('.acp-input .el-input').classes()).not.toContain('is-disabled'); // 能再问
 
     // 迟到的答案: 被中断的请求不许再往对话里塞东西
-    release(okAnswer({ answer: '迟到的答案' }));
+    release(okAnswer({ formattedText: '迟到的答案' }));
     await flushPromises();
     expect(w.text()).not.toContain('迟到的答案');
     expect(w.findAll('.bubble-ai')).toHaveLength(1);
   });
 
-  it('餐饮阴性对照: 过了 60 秒仍在等 (旧行为没有超时), 也没有 abort', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const abortSpy = vi.spyOn(AbortController.prototype, 'abort');
-    h.askIntent.mockReturnValue(new Promise(() => {}));
-    const w = mountPanel('RESTAURANT');
-    void (w.vm as unknown as Vm).sendMessage('看看销售');
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(abortSpy).not.toHaveBeenCalled();
-    expect(w.find('.typing-wrap').exists()).toBe(true);
-    expect(w.findAll('.bubble-ai')).toHaveLength(0);
-  });
 
-  it('工厂: 接口返回失败 / 抛异常, 文案说人话, 不露后端原文; 餐饮仍露原文 (阴性对照)', async () => {
-    h.askIntent.mockResolvedValueOnce({ success: false, answer: '', charts: [], alerts: [], error: 'Java intent service unavailable' });
+  it('工厂: 接口返回失败 / 抛异常, 文案说人话, 不露后端原文', async () => {
+    h.askIntent.mockResolvedValueOnce({ status: 'FAILED', message: 'Java intent service unavailable' });
     const f = mountPanel('FACTORY');
     await send(f, '问一');
     expect(f.find('.bubble-ai').text()).toContain(FRIENDLY);
@@ -349,12 +286,6 @@ describe('W2: 30 秒客户端超时 + 失败文案说人话', () => {
     expect(f.findAll('.bubble-ai')[1].text()).toContain(FRIENDLY);
     expect(f.text()).not.toContain('502');
 
-    h.askIntent.mockResolvedValueOnce({ success: false, answer: '', charts: [], alerts: [], error: 'Java intent service unavailable' });
-    const r = mountPanel('RESTAURANT');
-    await send(r, '问一');
-    expect(r.find('.bubble-ai').text()).toContain('请求失败');
-    expect(r.find('.bubble-ai').text()).toContain('Java intent service unavailable');
-    expect(r.text()).not.toContain(FRIENDLY);
   });
 
   it('工厂: 清空对话会中断进行中的请求, 迟到的答案不落进新对话', async () => {
@@ -372,13 +303,13 @@ describe('W2: 30 秒客户端超时 + 失败文案说人话', () => {
     expect(w.find('[data-testid="acp-loading-skeleton"]').exists()).toBe(false);
     expect(w.findAll('.chat-bubble')).toHaveLength(0);
 
-    release(okAnswer({ answer: '迟到的答案' }));
+    release(okAnswer({ formattedText: '迟到的答案' }));
     await pending;
     await flushPromises();
     expect(w.text()).not.toContain('迟到的答案');
     expect(w.findAll('.chat-bubble')).toHaveLength(0);
     // 对照: 清空后可以正常再问一次
-    h.askIntent.mockResolvedValue(okAnswer({ answer: '新答案' }));
+    h.askIntent.mockResolvedValue(okAnswer({ formattedText: '新答案' }));
     await send(w, '再问');
     expect(w.find('.bubble-ai').text()).toContain('新答案');
   });
@@ -423,11 +354,6 @@ describe('N1: 只有离底部不超过 120px 才自动滚到底', () => {
     expect(at121.after).toBe(579);
   });
 
-  it('餐饮阴性对照: 同样往上翻 400px, 旧行为仍然无条件滚到底', async () => {
-    const r = await scenario('RESTAURANT', 400);
-    expect(r.parked).toBe(300);
-    expect(r.after).toBe(1000);
-  });
 });
 
 describe('F1: 示例问题只在空对话出现', () => {
@@ -446,7 +372,7 @@ describe('F1: 示例问题只在空对话出现', () => {
     expect(w.find('.acp-empty').exists()).toBe(false);
   });
 
-  it('工厂: 清空对话后示例问题回来; 餐饮阴性对照: 没有芯片, 保留写死的示例文字', async () => {
+  it('工厂: 清空对话后示例问题回来', async () => {
     h.askIntent.mockResolvedValue(okAnswer());
     const f = mountPanel('FACTORY');
     await send(f, '问');
@@ -455,9 +381,6 @@ describe('F1: 示例问题只在空对话出现', () => {
     await flushPromises();
     expect(f.findAll('[data-testid="acp-example"]')).toHaveLength(3);
 
-    const r = mountPanel('RESTAURANT');
-    expect(r.findAll('[data-testid="acp-example"]')).toHaveLength(0);
-    expect(r.find('.acp-empty-text').text()).toContain('用3条bullet解读并给营销建议');
   });
 });
 
@@ -480,13 +403,6 @@ describe('N2: 悬停出现的「复制」', () => {
     expect(PANEL_SRC).toMatch(/\.chat-bubble:hover\) \.acp-actions[\s\S]*?\{\s*opacity: 1;/);
   });
 
-  it('餐饮阴性对照: 没有复制按钮', async () => {
-    h.askIntent.mockResolvedValue(okAnswer());
-    const w = mountPanel('RESTAURANT');
-    await send(w, '看看销售');
-    expect(w.findAll('[data-testid="acp-copy"]')).toHaveLength(0);
-    expect(w.text()).not.toContain('复制');
-  });
 });
 
 describe('E1 / 其余保留项', () => {
@@ -496,7 +412,7 @@ describe('E1 / 其余保留项', () => {
     await send(w, '看看销售');
     expect(w.text()).not.toMatch(/restaurant_ops_gold|快速响应|置信度|token|\d+\s?ms\b|321/i);
 
-    h.askIntent.mockResolvedValue(okAnswer({ source: 'degraded', answer: '系统提示' }));
+    h.askIntent.mockResolvedValue(okAnswer({ status: 'degraded', formattedText: '系统提示' }));
     await send(w, '再问');
     expect(w.find('.acp-source-note').exists()).toBe(true);
     expect(w.find('.acp-source-note').text()).toContain('降级');
@@ -506,11 +422,11 @@ describe('E1 / 其余保留项', () => {
     h.askIntent.mockResolvedValue(okAnswer());
     const w = mountPanel('FACTORY');
     await send(w, '看看销售');
-    const [factoryId, question, sessionId, context] = h.askIntent.mock.calls[0];
+    const [factoryId, question, options] = h.askIntent.mock.calls[0];
     expect(factoryId).toBe('F001');
     expect(question).toBe('看看销售');
-    expect(sessionId).toEqual(expect.any(String));
-    expect(context.pageContext).toContain('营收 10 万');
-    expect(context.dimensionHints).toEqual(['sales']);
+    expect(options).toMatchObject({ sessionId: expect.any(String), mode: 'READ' });
+    expect(options.context.pageContext).toContain('营收 10 万');
+    expect(options.context.dimensionHints).toEqual(['sales']);
   });
 });

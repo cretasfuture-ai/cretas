@@ -10,7 +10,7 @@
   - 输出结构化 Diagnosis 对象 (含建议文案 + severity + playbook 引用)
 
 使用示例:
-    >>> engine = DiagnosticsEngine(domain="restaurant", sub_sector="火锅")
+    >>> engine = DiagnosticsEngine(domain="factory", sub_sector="食品加工")
     >>> diagnoses = engine.run({
     ...     "food_cost_ratio": 0.46,    # 46% (高于火锅 38-48 范围上限附近)
     ...     "labor_cost_ratio": 0.34,   # 34%
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # ── Type definitions ────────────────────────────────────────
 
-Domain = Literal["restaurant", "factory"]
+Domain = Literal["factory"]
 Status = Literal["健康", "偏低", "正常", "偏高", "严重偏高", "严重偏低", "异常"]
 Severity = Literal["info", "warning", "critical"]
 
@@ -133,9 +133,9 @@ class DiagnosticsEngine:
         sub_sector: str = "",
         kb_root: Optional[Path] = None,
     ):
-        if domain not in ("restaurant", "factory"):
+        if domain != "factory":
             raise ValueError(
-                f"domain 必须是 'restaurant' 或 'factory', 收到 {domain!r}. "
+                f"domain 必须是 'factory', 收到 {domain!r}. "
                 f"跨 domain 诊断会污染数据."
             )
 

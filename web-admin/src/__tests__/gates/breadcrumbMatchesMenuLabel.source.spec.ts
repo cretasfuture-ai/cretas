@@ -66,7 +66,6 @@ const BASELINE: Record<string, [string, string]> = {
   // 「菜单 ∩ router」交集里，本闸的棘轮检测会正确判定这条基线已过期，所以删掉，
   // ⛔ 不留着当免检条目 (与 08-28 warehouse/semi-finished 那条同一处理方式)。
   '/rd/samples': ['研发样品', '研发样品管理'],
-  '/restaurant/admin/etl-status': ['ETL 状态', '餐饮 ETL 状态'],
   '/smart-bi/analysis': ['AI 问答 / 数据分析', '智能数据分析'],
   '/smart-bi/query-templates': ['查询模板', '查询模板管理'],
   '/smart-bi/upload': ['Excel 上传', 'Excel上传'],
@@ -120,7 +119,7 @@ describe('面包屑(router meta.title) 与菜单标签一致', () => {
     const both = [...menu.keys()].filter(p => router.has(p));
     expect(both.length, '两份的交集为空 ⇒ 主断言恒绿').toBeGreaterThan(100);
     // 本 PR 修掉的那 4 处, 必须真的在比对范围里 —— 否则「修好了」是不可判定的
-    for (const p of ['/workdesk/quality-chief', '/system/products', '/crm', '/finance/invoices']) {
+    for (const p of ['/workdesk/quality-chief', '/system/products', '/finance/invoices']) {
       expect(both, `${p} 应在比对范围内`).toContain(p);
     }
   });
@@ -131,7 +130,6 @@ describe('面包屑(router meta.title) 与菜单标签一致', () => {
     for (const [p, why] of [
       ['/workdesk/quality-chief', '原值是另一个菜单项 /workdesk/quality-manager 的名字'],
       ['/system/products', '该屏横幅正在防「SKU vs 采购原料」的混淆, 而面包屑用的就是那个泛称'],
-      ['/crm', '「CRM 商机」与「会员与营销」是两个概念'],
       ['/finance/invoices', '丢了「销售」这个限定 —— 同菜单下还有采购发票'],
     ] as const) {
       expect(router.get(p), `${p}: ${why}`).toBe(menu.get(p));

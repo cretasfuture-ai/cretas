@@ -83,7 +83,7 @@ def _make_context(
     x_dim: str = "store",
     y_metric: str = "revenue",
     aggregation: str = "sum",
-    domain: str = "restaurant",
+    domain: str = "factory",
     data_pattern: str = "ranking:top-share:65-80:cat-count:4-8",
     permission_tier: str = "finance_visible",
     factory_id: str = "F001",
@@ -161,13 +161,13 @@ class TestSignatureDeterminism:
         """U1.8: signature does NOT include factoryId — cross-tenant template sharing."""
         ctx = _make_context(
             chart_type="BAR", x_dim="store", y_metric="revenue",
-            aggregation="sum", domain="restaurant",
+            aggregation="sum", domain="factory",
             data_pattern="ranking:top-share:65-80:n4-8",
             permission_tier="finance_visible", factory_id="F001"
         )
         sig = compute_signature(ctx)
         # U1.8: factoryId excluded from raw string
-        raw = "BAR|store|revenue|sum|restaurant|ranking:top-share:65-80:n4-8|finance_visible"
+        raw = "BAR|store|revenue|sum|factory|ranking:top-share:65-80:n4-8|finance_visible"
         expected = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         assert sig == expected
 
@@ -228,13 +228,14 @@ class TestChartInsightService:
         ctx = _make_context()
         svc = self._make_service(budget=FakeBudgetBlocked())
 
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
+        result = await svc.get_insight(ctx, caller_role="factory_super_admin")
         assert result is None
         svc._call_llm.assert_not_called()
 
-    async def test_demo_rest_common_chart_uses_deterministic_template_before_llm(self):
+    async def test_factory_common_chart_uses_deterministic_template_before_llm(self, monkeypatch):
+        monkeypatch.setenv("CHART_INSIGHT_DETERMINISTIC_FIRST", "1")
         ctx = _make_context(
-            factory_id="DEMO_REST",
+            factory_id="F001",
             chart_type="BAR",
             x_dim="store",
             y_metric="cost",
@@ -247,7 +248,7 @@ class TestChartInsightService:
             "smartbi.services.insights.chart_insight_service.persist_distillation_sample",
             new=AsyncMock(),
         ) as persist_mock:
-            result = await svc.get_insight(ctx, caller_role="restaurant_manager")
+            result = await svc.get_insight(ctx, caller_role="factory_super_admin")
 
         assert result is not None
         assert result.source == "template"
@@ -285,7 +286,7 @@ class TestRBACGuarantees:
         svc._call_llm = AsyncMock(return_value=None)
 
         # Call with explicit jwt_factory_id override
-        await svc.get_insight(evil_ctx, caller_role="restaurant_manager", jwt_factory_id=jwt_factory_id)
+        await svc.get_insight(evil_ctx, caller_role="factory_super_admin", jwt_factory_id=jwt_factory_id)
 
         # The fetchrow call should use F001, not EVIL
         # We verify by checking what signature was used in the DB lookup
@@ -317,7 +318,7 @@ class TestRBACGuarantees:
         svc = ChartInsightService(pool=pool, budget_tracker=FakeBudgetOk(), promote_threshold=3)
         svc._call_llm = AsyncMock(return_value=None)
 
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id=jwt_factory_id)
+        result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id=jwt_factory_id)
         # Must return None (blocked) when factory IDs mismatch
         assert result is None, (
             "Cross-tenant request (jwt_factory_id != ctx.factory_id) should return None"
@@ -366,7 +367,7 @@ class TestEndpointRBAC:
             "x_dim": "store",
             "y_metric": "revenue",
             "aggregation": "sum",
-            "domain": "restaurant",
+            "domain": "factory",
             "data_pattern": "ranking:top-share:65-80:n4-8",
             "factory_id": "F001",  # This should be IGNORED; JWT wins
             "series_values": [100, 80, 60, 40],
@@ -438,7 +439,7 @@ class TestU1Hardening:
             "suggestion": None,
         }
         svc = self._make_service_with_none_tracker(llm_response=valid_claims_response)
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager")
+        result = await svc.get_insight(ctx, caller_role="factory_super_admin")
         assert result is None, (
             f"budget_tracker=None must return None (fail-closed), got: {result}"
         )
@@ -472,7 +473,7 @@ class TestU1Hardening:
             "suggestion": None,
         }
         svc = self._make_service(llm_response=valid_resp, budget=CapturingBudget())
-        await svc.get_insight(ctx, caller_role="restaurant_manager")
+        await svc.get_insight(ctx, caller_role="factory_super_admin")
 
         assert len(consumed_tokens) > 0, "consume() should have been called after LLM response"
         assert consumed_tokens[0] >= 600, (
@@ -519,7 +520,7 @@ from smartbi.services.insights.chart_insight_service import (  # noqa: E402
 )
 
 
-def _ctx(values: List[float], labels: List[str], domain: str = "restaurant") -> ChartInsightContext:
+def _ctx(values: List[float], labels: List[str], domain: str = "factory") -> ChartInsightContext:
     """Minimal ChartInsightContext for _validate_claims tests."""
     return ChartInsightContext(
         chart_type="PIE",
@@ -780,7 +781,7 @@ class TestGetInsightClaimsPinning:
             x_dim="channel",
             y_metric="revenue",
             aggregation="sum",
-            domain="restaurant",
+            domain="factory",
             data_pattern="ranking:top-share:65-80:n4-8",
             permission_tier=permission_tier,
             factory_id="F001",
@@ -807,7 +808,7 @@ class TestGetInsightClaimsPinning:
         }
         svc._call_llm = AsyncMock(return_value=structured_response)
 
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+        result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
         assert result is not None, (
             "Valid structured LLM response should produce an InsightResult, got None"
@@ -863,7 +864,7 @@ class TestGetInsightClaimsPinning:
         }
         svc._call_llm = AsyncMock(return_value=entity_swap_response)
 
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+        result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
         assert result is None, (
             "Entity-swap (外卖=62 when real is 堂食=62) must be rejected by _validate_claims "
@@ -925,7 +926,7 @@ class TestCorpus:
     def _make_ctx(
         self,
         permission_tier: str = "finance_visible",
-        domain: str = "restaurant",
+        domain: str = "factory",
         factory_id: str = "F001",
     ) -> ChartInsightContext:
         return ChartInsightContext(
@@ -956,7 +957,7 @@ class TestCorpus:
           - metadata contains permission_tier
         """
         svc, pool, conn = self._make_service_for_corpus()
-        ctx = self._make_ctx(domain="restaurant")
+        ctx = self._make_ctx(domain="factory")
 
         valid_llm_response = {
             "claims": [{"entity": "堂食", "stat_type": "share", "value": 62.0}],
@@ -981,7 +982,7 @@ class TestCorpus:
             "smartbi.services.insights.chart_insight_service.persist_distillation_sample",
             side_effect=fake_persist,
         ):
-            result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+            result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
         # Must succeed (return an InsightResult)
         assert result is not None, (
@@ -1005,12 +1006,10 @@ class TestCorpus:
         )
 
         # business_type must be mapped from domain (restaurant → "restaurant")
-        assert call["business_type"] in {"restaurant", "factory"}, (
-            f"business_type must be 'restaurant' or 'factory', got {call['business_type']!r}"
+        assert call["business_type"] == "factory", (
+            f"business_type must be 'factory', got {call['business_type']!r}"
         )
-        assert call["business_type"] == "restaurant", (
-            f"domain='restaurant' must map to business_type='restaurant', got {call['business_type']!r}"
-        )
+        assert call["business_type"] == "factory"
 
         # teacher_model must be present (non-None)
         assert call.get("teacher_model") is not None, (
@@ -1051,7 +1050,7 @@ class TestCorpus:
         → persist_distillation_sample must NOT be called (rejected outputs never enter corpus).
         """
         svc, pool, conn = self._make_service_for_corpus()
-        ctx = self._make_ctx(domain="restaurant")
+        ctx = self._make_ctx(domain="factory")
 
         # Entity-swap: LLM claims 外卖=62% but real 外卖=38% → recompute fails → claim dropped
         # → no valid claims → _validate_claims returns None → rejected path
@@ -1072,7 +1071,7 @@ class TestCorpus:
             "smartbi.services.insights.chart_insight_service.persist_distillation_sample",
             side_effect=fake_persist,
         ):
-            result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+            result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
         # Must return None (entity-swap rejected by _validate_claims)
         assert result is None, (
@@ -1090,8 +1089,8 @@ class TestCorpus:
     # ------------------------------------------------------------------
 
     def test_map_domain(self):
-        """_map_domain should map: restaurant→restaurant, finance→factory, factory→factory, else→unknown."""
-        assert _map_domain("restaurant") == "restaurant"
+        """_map_domain only maps supported factory-side domains."""
+        assert _map_domain("restaurant") == "unknown"
         assert _map_domain("finance") == "factory"
         assert _map_domain("factory") == "factory"
         assert _map_domain("unknown_x") == "unknown"
@@ -1108,7 +1107,7 @@ class TestCorpus:
         - include absolute series values (so cross-tenant collision is avoided)
         - produce an input_hash (via compute_input_hash) that is a 64-char hex string
         """
-        ctx = self._make_ctx(domain="restaurant")
+        ctx = self._make_ctx(domain="factory")
         text = _corpus_input_text(ctx)
 
         assert text, "input_text must be non-empty"
@@ -1182,7 +1181,7 @@ class TestBudgetOnFailure:
         svc, consume_calls = self._make_service_with_capturing_budget(llm_response=None)
         ctx = _make_context(factory_id="F001")
 
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+        result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
         # Service must return None (LLM failed)
         assert result is None, f"LLM failure must produce None result, got {result}"
@@ -1214,7 +1213,7 @@ class TestBudgetOnFailure:
             series_labels=["堂食", "外卖"],
         )
 
-        result = await svc.get_insight(ctx, caller_role="restaurant_manager", jwt_factory_id="F001")
+        result = await svc.get_insight(ctx, caller_role="factory_super_admin", jwt_factory_id="F001")
 
         assert result is not None, "Valid LLM response must produce an InsightResult"
         assert len(consume_calls) > 0, "consume() must be called on success path too"

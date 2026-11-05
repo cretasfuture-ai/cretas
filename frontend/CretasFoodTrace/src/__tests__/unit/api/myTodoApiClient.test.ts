@@ -97,7 +97,7 @@ describe('todoApprovalApiClient', () => {
       () => todoApprovalApiClient.priceAnomalyReject('DN-1', 'price mismatch', 'F123'),
       'post',
       '/api/mobile/F123/warehouse/supplier-delivery-notes/DN-1/price-anomaly/reject',
-      { notes: 'price mismatch' },
+      { comment: 'price mismatch' },
     ],
     [
       'wastage approve',

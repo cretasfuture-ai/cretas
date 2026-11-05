@@ -7,6 +7,8 @@ describe('interview module dropdown catalog', () => {
     expect(isKnownInterviewModule(' Quality ')).toBe(true)
     expect(isKnownInterviewModule('quality-check')).toBe(false)
     expect(isKnownInterviewModule('')).toBe(false)
+    expect(isKnownInterviewModule('restaurant')).toBe(false)
+    expect(isKnownInterviewModule(' Restaurant ')).toBe(false)
   })
   it('gives the display name for a chosen id and has unique ids', () => {
     expect(interviewModuleLabel('quality')).toBe('质检')

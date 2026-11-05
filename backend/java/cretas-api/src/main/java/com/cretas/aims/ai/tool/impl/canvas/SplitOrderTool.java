@@ -256,6 +256,6 @@ public class SplitOrderTool extends AbstractBusinessTool {
 
     @Override
     public boolean hasPermission(String userRole) {
-        return userRole != null && java.util.Set.of("department_admin", "dispatcher", "factory_super_admin", "permission_admin", "restaurant_owner", "sales_manager").contains(userRole);
+        return userRole != null && java.util.Set.of("department_admin", "dispatcher", "factory_super_admin", "permission_admin", "sales_manager").contains(userRole);
     }
 }

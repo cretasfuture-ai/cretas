@@ -64,8 +64,7 @@ public class ListSummaryController {
             // WastageRecord read routes are currently unannotated; its write and
             // accounting routes are inventory/price/finance, so inventory read is
             // the least-privilege domain read for this non-price summary.
-            Map.entry("wastage", List.of("restaurant:read", "restaurant:read_write",
-                    "inventory:read", "inventory:read_write")),
+            Map.entry("wastage", List.of("inventory:read", "inventory:read_write")),
             Map.entry("attendance", List.of("hr:read", "hr:read_write")),
             Map.entry("returnOrder", List.of("sales:read", "sales:read_write",
                     "procurement:read", "procurement:read_write", "finance:read", "finance:read_write")),

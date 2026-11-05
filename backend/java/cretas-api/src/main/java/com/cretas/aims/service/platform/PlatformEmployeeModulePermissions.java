@@ -31,9 +31,10 @@ public class PlatformEmployeeModulePermissions {
             for (UserMenuPermission row : repository.findByFactoryIdAndUserId(user.getFactoryId(), String.valueOf(user.getId()))) {
                 String code = row.getMenuCode();
                 if (code == null || !code.startsWith(PREFIX)) continue;
-                if (row.getGrantedBy() == null || !row.getGrantedBy().matches("PLATFORM_ADMIN:[1-9][0-9]*")) throw unavailable();
                 String key = code.substring(PREFIX.length());
                 int dot = key.lastIndexOf('.');
+                if (isRetiredRestaurantModule(dot < 1 ? key : key.substring(0, dot))) continue;
+                if (row.getGrantedBy() == null || !row.getGrantedBy().matches("PLATFORM_ADMIN:[1-9][0-9]*")) throw unavailable();
                 if (dot < 1 || !key.substring(0, dot).matches("[a-z][A-Za-z0-9_]{0,63}") || row.getGrantType() == null) {
                     throw unavailable();
                 }
@@ -56,13 +57,14 @@ public class PlatformEmployeeModulePermissions {
     }
 
     public Map<String, String> apply(User user, Map<String, String> base) {
-        if (protectedRole(user)) return base;
         Map<String, String> result = new LinkedHashMap<>(base);
-        result.putAll(overrides(user));
+        result.keySet().removeIf(this::isRetiredRestaurantModule);
+        if (!protectedRole(user)) result.putAll(overrides(user));
         return result;
     }
 
     public String apply(User user, String module, String baseLevel) {
+        if (isRetiredRestaurantModule(module)) return "-";
         if (protectedRole(user)) return baseLevel;
         return overrides(user).getOrDefault(module, baseLevel);
     }
@@ -75,6 +77,9 @@ public class PlatformEmployeeModulePermissions {
         if (protectedRole(user) || !Boolean.TRUE.equals(user.getIsActive())
                 || user.getRoleEnum() == null || user.getRoleEnum() == FactoryUserRole.unactivated) {
             throw new BusinessException(400, "不可修改全权管理员或未启用员工的个人权限");
+        }
+        if (isRetiredRestaurantModule(module)) {
+            throw new BusinessException(400, "餐饮模块已退役，不可配置个人权限");
         }
         Set<String> known = new HashSet<>();
         PermissionServiceImpl.hardcodedMatrixSnapshot().values().forEach(map -> known.addAll(map.keySet()));
@@ -106,6 +111,9 @@ public class PlatformEmployeeModulePermissions {
     private boolean protectedRole(User user) {
         return user == null || user.getRoleEnum() == null || user.getRoleEnum() == FactoryUserRole.unactivated
                 || user.getRoleEnum() == FactoryUserRole.factory_super_admin || user.getRoleEnum() == FactoryUserRole.platform_admin;
+    }
+    private boolean isRetiredRestaurantModule(String module) {
+        return module != null && module.trim().toLowerCase(Locale.ROOT).startsWith("restaurant");
     }
     private String level(boolean read, boolean write) { return read ? (write ? "rw" : "r") : (write ? "w" : "-"); }
     private BusinessException unavailable() { return new BusinessException(503, "员工权限配置暂时无法读取，请稍后重试"); }

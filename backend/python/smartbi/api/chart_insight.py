@@ -49,9 +49,6 @@ FINANCE_ROLES: frozenset[str] = frozenset({
     "sales_manager",
     "dispatcher",
     "production_manager",
-    "restaurant_manager",
-    "restaurant_owner",
-    "restaurant_purchaser",
     "permission_admin",
     "department_admin",
 })
@@ -88,7 +85,7 @@ class ChartInsightRequest(BaseModel):
     x_dim: str = Field(..., description="time|store|product|channel|category|other")
     y_metric: str = Field(..., description="revenue|quantity|margin|cost|count|pct|other")
     aggregation: str = Field("sum", description="sum|avg|max|count")
-    domain: str = Field("restaurant", description="restaurant|factory|finance")
+    domain: str = Field("factory", description="factory|finance")
     data_pattern: str = Field(..., description="Canonical bucket string e.g. ranking:top-share:65-80:n4-8")
     factory_id: str = Field(..., description="Tenant ID (must match JWT factoryId; body value used for context only)")
     series_values: List[float] = Field(default_factory=list, description="Numeric series data")
@@ -189,6 +186,16 @@ async def chart_insight(request: Request, body: ChartInsightRequest) -> Dict[str
         logger.warning(
             "[chart-insight] cross-tenant attempt: jwt=%s body=%s role=%s",
             jwt_factory_id, body.factory_id, caller_role,
+        )
+
+    if body.domain not in {"factory", "finance"}:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "Unsupported chart domain; use factory or finance.",
+                "code": "UNSUPPORTED_DOMAIN",
+            },
         )
         return JSONResponse(
             status_code=403,

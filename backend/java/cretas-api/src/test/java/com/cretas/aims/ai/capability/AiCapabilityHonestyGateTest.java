@@ -48,7 +48,6 @@ class AiCapabilityHonestyGateTest {
 
         List<PhraseMapping> out = new ArrayList<>();
         collect(out, "phraseToIntentMapping", kb.getPhraseToIntentMapping());
-        collect(out, "restaurantPhraseMapping", kb.getRestaurantPhraseMapping());
         collect(out, "commonPhraseMapping", kb.getCommonPhraseMapping());
         return out;
     }

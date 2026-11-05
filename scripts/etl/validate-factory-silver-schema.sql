@@ -15,9 +15,6 @@
 --   docs/superpowers/specs/2026-05-12-t6-6-sub-a-production-impl-spec.md §2.3
 --   docs/superpowers/specs/2026-05-12-t6-6-sub-b-quality-impl-spec.md §2.3
 --
--- Sister script: scripts/etl/validate-restaurant-data-quality.py (restaurant
--- side, Python because per-factory RLS context-switch is easier in code).
-
 \pset border 2
 \pset format aligned
 

@@ -199,47 +199,7 @@ describe('QIFormScreen requires a real judgement before submitting', () => {
 });
 
 // ============================================================
-// 缺陷 3: 盘点执行 (盲盘)
-// ============================================================
-describe('Stocktaking counting screens do not anchor the counter', () => {
-  const execute = readCode('restaurant/stocktaking/StocktakingExecuteScreen.tsx');
-  const list = readCode('restaurant/stocktaking/StocktakingListScreen.tsx');
-
-  it('does not render the book quantity while the count is being entered', () => {
-    expect(execute).toContain('onChangeText={setActualQty}'); // 阳性对照: 输入框还在
-
-    /*
-     * 这条断言的第一版写成「取 `result ? (` 之前的那一段, 断言它不含账面数」。
-     * 变异对照当场证明它是错的: 揭盲分支在文件里排在**录入表单之前**, 所以那个
-     * 切片根本不包含录入区 —— 把账面数放回录入框上方, 闸纹丝不动。
-     * (形态 A: 我想知道的是"录入区有没有", 我实际在量的是"文件开头那一段有没有"。)
-     *
-     * 改成按**变量**判, 不按位置判 —— 这两个名字本身就分开了盘前/盘后:
-     *   `record` = 提交**前**加载的记录 → 它的 systemQuantity 一次都不许渲染
-     *   `result` = 提交**后**后端返回的记录 → 揭盲用的就是它
-     */
-    expect(execute).not.toContain('record.systemQuantity');
-  });
-
-  it('reveals the variance only after submitting, using the server-computed value', () => {
-    expect(execute).toContain('setResult(completed)');
-    expect(execute).toContain('result.differenceQuantity');
-    expect(execute).toContain('result.systemQuantity');
-    // 差异算不出来时显示 "—" —— `?? 0` 会把"没算出来"说成"差异为 0"
-    expect(execute).not.toContain('differenceQuantity ?? 0');
-  });
-
-  it('does not leak the book quantity on the list card that opens the count screen', () => {
-    // 列表卡片是执行屏的入口; 只改执行屏而留着这里, 等于没改。
-    expect(list).toContain("r.status === 'COMPLETED'");
-    const systemQtyIndex = list.indexOf('r.systemQuantity');
-    const guardIndex = list.indexOf("r.status === 'COMPLETED'");
-    expect(systemQtyIndex).toBeGreaterThan(guardIndex);
-  });
-});
-
-// ============================================================
-// 缺陷 4: 报告导出屏 —— 声称一个从未发生的结果
+// 缺陷 3: 报告导出屏 —— 声称一个从未发生的结果
 //
 // 「不返回假数据」的另一面: **不要声称一个没发生的结果**。
 // 这个屏原来弹「报告生成成功, 已保存到文件」, 而
