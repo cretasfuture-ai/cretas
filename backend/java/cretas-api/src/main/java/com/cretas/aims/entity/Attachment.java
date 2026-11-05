@@ -1,5 +1,7 @@
 package com.cretas.aims.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.cretas.aims.security.AuthenticatedActorType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -91,8 +93,19 @@ public class Attachment extends BaseEntity {
     @Column(name = "description", length = 500)
     private String description;
 
-    @Column(name = "uploaded_by", nullable = false)
+    @Column(name = "uploaded_by")
     private Long uploadedBy;
+
+    /** Namespace-aware uploader identity; omitted from generic attachment JSON. */
+    @JsonIgnore
+    @Enumerated(EnumType.STRING)
+    @Column(name = "uploaded_actor_type", length = 32)
+    private AuthenticatedActorType uploadedActorType;
+
+    /** Namespace-aware uploader id; omitted from generic attachment JSON. */
+    @JsonIgnore
+    @Column(name = "uploaded_actor_id")
+    private Long uploadedActorId;
 
     @Column(name = "uploaded_at", nullable = false)
     private LocalDateTime uploadedAt;
@@ -141,6 +154,10 @@ public class Attachment extends BaseEntity {
         /** Sprint 6 W2-C-2 — 通话记录录音附件 (CallRecord audio 文件挂载到附件中心). */
         CALL_RECORD,
         PRODUCTION_REPORT,
+        /** 工序 SOP 文件 (entity_id = work_processes.id, 字符串主键). */
+        WORK_PROCESS,
+        /** 设备 SOP 文件 (entity_id = factory_equipment.id 的十进制字符串). */
+        EQUIPMENT,
         GENERIC
     }
 

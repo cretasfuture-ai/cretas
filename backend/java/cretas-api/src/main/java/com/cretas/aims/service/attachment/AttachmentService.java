@@ -2,6 +2,7 @@ package com.cretas.aims.service.attachment;
 
 import com.cretas.aims.entity.Attachment;
 import com.cretas.aims.entity.Attachment.EntityType;
+import com.cretas.aims.security.ActorRef;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
 
@@ -32,6 +33,9 @@ public interface AttachmentService {
      * @return 新注册或已存在的 Attachment
      */
     Attachment register(String factoryId, RegisterAttachmentRequest req, Long userId);
+
+    /** Register with a namespace-aware authenticated actor (used by SOP paths). */
+    Attachment registerAsActor(String factoryId, RegisterAttachmentRequest req, ActorRef actor);
 
     /**
      * 查询某实体的全部未删除附件 (按 uploadedAt 倒序).
@@ -71,6 +75,14 @@ public interface AttachmentService {
      */
     String generateUploadUrl(String factoryId, String fileName, String fileType);
 
+    /** Issues an SOP upload for one factory, entity type and target only. */
+    String generateSopUploadUrl(String factoryId, EntityType type, String entityId,
+                                String fileName, String fileType);
+
+    /** SOP upload URL plus the exact headers covered by the OSS signature. */
+    com.cretas.aims.service.attachment.dto.UploadUrlResponse generateSopUploadUrlResponse(
+            String factoryId, EntityType type, String entityId, String fileName, String fileType);
+
     /**
      * 生成 OSS pre-signed GET URL — 1 小时有效.
      *
@@ -90,10 +102,34 @@ public interface AttachmentService {
     void softDelete(String factoryId, String id, Long userId);
 
     /**
+     * 工序 / 设备 SOP 的删除: 调用方 (controller) 已按实体类型校验过「管理 SOP」的写权限,
+     * 所以这里不再要求「上传者本人或管理员」(车间主任要能删别人传的旧版本)。
+     * 仍然校验: 附件属于 factoryId, 且目标工序 / 设备若还存在则必须属于 factoryId。
+     *
+     * @throws com.cretas.aims.exception.BusinessException 400 if 不是 SOP 类型 / 403 if 目标跨厂 / 404 if not found
+     */
+    void softDeleteSop(String factoryId, String id, Long userId);
+
+    /** Delete SOP with a namespace-aware actor; platform ids never enter users.id columns. */
+    void softDeleteSopAsActor(String factoryId, String id, ActorRef actor);
+
+    /**
+     * 校验 SOP 的目标 (工序 / 设备) 属于 factoryId。上传前取签名 URL、注册元数据、删除都走这一处。
+     *
+     * @param requireExists true = 目标不存在即 404 (上传 / 注册); false = 目标已被删除时放行
+     *                      (删除孤儿 SOP), 但目标存在且属于别的工厂时仍然 403
+     * @throws com.cretas.aims.exception.BusinessException 400 / 403 跨厂 / 404
+     */
+    void validateSopTarget(String factoryId, EntityType type, String entityId, boolean requireExists);
+
+    /**
      * 更新 — 仅允许改 {@code description} / {@code businessTag} / {@code fileCategory}.
      * 不允许改 fileUrl / entityType / entityId / uploadedBy.
      *
      * <p>权限: 同 {@link #softDelete}.
      */
     Attachment update(String factoryId, String id, UpdateAttachmentRequest req, Long userId);
+
+    /** Update SOP metadata under the actor-aware permission path. */
+    Attachment updateAsActor(String factoryId, String id, UpdateAttachmentRequest req, ActorRef actor);
 }
