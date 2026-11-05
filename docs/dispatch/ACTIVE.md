@@ -7,6 +7,7 @@
 
 ## 在飞任务
 
+- `INTENT-QUOTA-TEACHER-20261105` — `in-progress` — Owner Codex/root；Base `453c12048c3d32a626c81b2474de3eaff0889874`；scope: finetune UTC/共享组计量及目标测试/本任务archive；Terra/Luna小规模教师影子复核，不训练/调参已打开确认集，不换线上；93相关+额度测试/CI。遵守main发布冻结，仅分支验证。
 - `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 
 - `SEC-PLAN-AUDIT-1438-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。

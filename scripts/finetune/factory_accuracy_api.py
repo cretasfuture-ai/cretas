@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import time
 import httpx
+from factory_quota_accounting import quota_group,legacy_rows,add_usage
 
 MINI='gpt-5.4-mini-2026-03-17'
 BIG='gpt-5.4-2026-03-05'
@@ -30,14 +31,13 @@ class SyntheticClient:
         if len(self.done)!=len(self.results):raise ValueError('Duplicate API receipt')
         self.ledger=json.loads(self.ledger_path.read_text(encoding='utf-8')) if self.ledger_path.exists() else []
         if any(r['state']=='pending' for r in self.ledger):raise ValueError('Unresolved request reservation; inspect before resume')
-        self.used={MINI:0,BIG:0};self.reserved={MINI:0,BIG:0}
+        # Keys represent shared groups, not independent per-model allowances.
+        self.used={MINI:0,BIG:0};self.reserved={MINI:0,BIG:0};self.active=set()
+        today=dt.datetime.now(dt.timezone.utc).date().isoformat();self.budget_day=today
         # Known prior traffic from this task family today, not organization-wide visibility.
         prior=Path.home()/'Documents/Cretas意图微调-266-20261105/cloud-results.jsonl'
         if prior.exists():
-            for r in [json.loads(s) for s in prior.read_text(encoding='utf-8').splitlines()]:
-                if r.get('model') in self.used:
-                    u=r.get('usage') or {};self.used[r['model']]+=u.get('input_tokens',0)+u.get('output_tokens',0)
-        today=dt.datetime.now(dt.timezone.utc).date().isoformat()
+            for r in legacy_rows(prior):add_usage(self.used,r,today)
         budget_root=self.root.parent if (self.root/'shared-budget-root').exists() else self.root
         roots=[budget_root]
         previous_roots=budget_root/'budget-previous-roots.json'
@@ -61,8 +61,7 @@ class SyntheticClient:
             identity=(directory,r['id'])
             if identity in known:raise ValueError('Duplicate cross-phase receipt')
             known.add(identity)
-            if r['day']==today and r.get('usage'):
-                self.used[r['model']]+=r['usage']['input_tokens']+r['usage'].get('output_tokens',0)
+            add_usage(self.used,r,today)
         ledgers=set()
         for directory in roots:
             for path in directory.rglob('api-ledger.json'):
@@ -71,12 +70,16 @@ class SyntheticClient:
                 for reservation in json.loads(path.read_text(encoding='utf-8')):
                     if reservation['state']=='abandoned_unknown':
                         if reservation.get('day')!=today:continue
-                        self.used[reservation['model']]+=reservation['reserved_tokens']
+                        self.used[quota_group(reservation['model'])]+=reservation['reserved_tokens']
 
     def persist(self):
         self.ledger_path.write_text(json.dumps(self.ledger,ensure_ascii=False,indent=2),encoding='utf-8')
 
-    async def close(self):await self.http.aclose()
+    async def close(self):
+        # A quota/format failure must not cancel unrelated in-flight responses.
+        running=[task for task in self.active if task is not asyncio.current_task() and not task.done()]
+        if running:await asyncio.gather(*running,return_exceptions=True)
+        await self.http.aclose()
 
     async def ask(self,id,model,instructions,content,schema,max_output=4096,effort='low'):
         payload=dict(model=model,store=False,reasoning=dict(effort=effort),instructions=instructions,input=content,max_output_tokens=max_output,text=dict(format=dict(type='json_schema',name='synthetic_intent_data',strict=True,schema=schema)))
@@ -89,16 +92,23 @@ class SyntheticClient:
             return old['parsed']
         async with self.sem:
             if self.stop:raise RuntimeError('Previous request stopped the run')
+            if dt.datetime.now(dt.timezone.utc).date().isoformat()!=self.budget_day:
+                self.stop=True;raise ValueError('UTC day changed; reopen client after pending requests settle')
             reserve=len(encoded.encode('utf-8'))+max_output
             if self.used[model]+self.reserved[model]+reserve>CAPS[model]:
                 self.stop=True;raise ValueError('Known daily token ceiling reached')
             reservation=dict(id=id,model=model,day=dt.datetime.now(dt.timezone.utc).date().isoformat(),state='pending',payload_sha256=fingerprint,reserved_tokens=reserve)
             self.ledger.append(reservation);self.reserved[model]+=reserve;self.persist()
+            task=asyncio.current_task();self.active.add(task)
             start=time.perf_counter();result=dict(id=id,model=model,day=dt.datetime.now(dt.timezone.utc).date().isoformat(),payload_sha256=fingerprint)
             try:
                 response=await self.http.post('https://api.openai.com/v1/responses',json=payload)
                 result.update(status=response.status_code,request_id=response.headers.get('x-request-id'),latency_ms=(time.perf_counter()-start)*1000)
                 body=response.json()
+                if isinstance(body.get('created_at'),(int,float)):
+                    result['response_created_at']=body['created_at']
+                    result['day']=dt.datetime.fromtimestamp(body['created_at'],dt.timezone.utc).date().isoformat()
+                    reservation['day']=result['day']
                 if response.status_code!=200:
                     result['error']=body.get('error',{}).get('code') or 'http_error';self.stop=True
                 else:
@@ -117,6 +127,7 @@ class SyntheticClient:
                 if self.key in serialized:raise ValueError('Credential in output')
                 with self.path.open('a',encoding='utf-8') as f:f.write(serialized+'\n')
                 self.results.append(result);self.done[id]=result
+                self.active.discard(task)
             print(id,model,result.get('status'),(result.get('usage') or {}).get('total_tokens'),flush=True)
             if result.get('error'):raise RuntimeError('API run stopped: '+str(result['error']))
             return result['parsed']

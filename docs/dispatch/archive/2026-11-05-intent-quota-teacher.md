@@ -1,0 +1,29 @@
+# INTENT-QUOTA-TEACHER-20261105
+
+Base `453c12048c3d32a626c81b2474de3eaff0889874`; sole Owner Codex/root `01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98`, branch `codex/intent-quota-teacher-20261105`. Follow-up to user clarification of UTC reset, independent model groups, and permission to use GPT6.1 Terra/GPT6 Luna as offline teachers. Scope: shared-group/day accounting, request draining, corresponding tests and12 protected teacher probes. No further model fitting, routing changes, production writes, deploy/reload or online model replacement.
+
+## Correct accounting
+
+Official help defines separate1M/10M groups, each shared across listed models, reset00:00UTC (Beijing08:00). Snapshot date2026-11-05. GPT6 Luna is listed in1M group; GPT6.1 Terra is not listed and no complimentary credit is claimed. Model availability is separate: real account `GET /v1/models`200 includes both exact IDs.
+
+Prior API client correctly kept Mini/GPT5.4 counters separate, but incorrectly treated representative model counters as the whole group: it omitted earlier same-day Luna126485 and unconditionally added legacy Mini/GPT5.4 traffic without filtering date. Correct this with `factory_quota_accounting.py`: known shared groups/aliases/snapshots, UTC day from server creation or explicit day, hash-bound evidence for legacy missing dates, unknown day/group fail closed. Old legacy batch contains194 Responses server timestamps all2026-11-05T01:28:32–01:30:49Z; file creation01:28:29Z/modification01:30:49Z and291-call receipt bind the97 Decisions rows to the same UTC date via explicit sidecar. Directory names are not date evidence.
+
+At follow-up completion, known observed1M-group tokens1,054,540 (GPT5.4+Luna),10M-group tokens10,243,355, plus44140 unresolved old-request token upper bounds gives10,287,495. Terra1621 tokens separately reserved as paid/unlisted. All6016 associated records lie onUTC2026-11-05; yesterday was not carried over for these actual requests. These are this task family's known records, not organization-wide usage or verified incentive redemption. Decisions endpoint complimentary eligibility is not separately established, so Luna group inclusion is conservative. Official whole-request quota crossing and actual invoice remain distinct from token sums.
+
+Old stop behavior closed the HTTP client while other requests were in flight after a quota/format failure, creating unknown results. Track active requests and drain them before closing; retain actual network-timeout HOLD/no-replay behavior. On UTC rollover, a live client stops before another HTTP request and requires reopening after pending calls settle. Source default limits remain1M/10M; no automatic paid override.
+
+## Teacher shadow, not more fitting
+
+Evidence directory `C:\Users\Steve\Documents\Cretas意图教师复核-20261105`. Freeze12 independent source-grounded synthetic probes before inference, verified disjoint from prior training/protected data. GPT6 Luna Decisions baseline on12; GPT6.1 Terra Responses reads only16 source definitions to generate general boundary rules (no probes, expected labels or baseline outputs); same Luna/probes then evaluated with the rules. Exactly3 HTTP200 calls. Baseline12/12, guided12/12,0 changes: feasible integration, **no demonstrated gain**, not a basis for a new accuracy claim or mandatory runtime teacher step. Rules retained as review candidates; all12 probes training_eligible=false and registered as protected. No full Workflow generation/execution and no production integration.
+
+Primary experiment remains unchanged: local87.94%, local+Mini97.11%, old1637 local86.07%; old35 local16/35, hybrid27/35 and clarification26/40 weaknesses retained. Do not fit/tune opened data or promote teacher votes into human truth.
+
+## Cost reconciliation
+
+User explicitly allowed round extra cost<=USD1. Authorized Mini follow-up143 requests has uncached-price upper equivalent$0.27705375. Corrected prior1M-group possible Big overage bound:41695 overage tokens plus at most1133-token crossing request, conservatively all at highest$15/M => $0.64242. If Decisions is not eligible for complimentary quota, prior Luna input-only fees are much lower instead; the bound does not assume free Decisions. Teacher actual usage, conservatively priced all Terra input at highest cache-write2.50/M and output5/M, Luna Decisions input0.25/M and output0, gives$0.00871875. Combined conservative bound$0.9281925 <USD1. This is not a verified bill; account eligibility/other organization traffic not visible. Old teacher preliminary estimate$0.00716025 excluded possible Terra cache-write premium and is superseded by reconciliation. No additional model requests planned.
+
+## Checks and merge boundary
+
+103 related Python tests passed before CI; UTC07:59:59→08:00 boundary, independent/shared groups, legacy date/hash integrity, aliases, unknown model/day rejection, and in-flight draining covered. Existing no-gold/no-replay/full-denominator tests retained. No new skip/exclusion or optional ML dependency added. Source/doc final checks and CI receipts recorded separately.
+
+Applicable main freeze `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` belongs to Owner `01a1a954-e8fa-7a10-8eda-3f5ba0872102`; this follow-up stays on branch/PR until explicit release. Execution incident: prior PR1471 was merged as453c120 while that freeze row was already in41f58a8; coordinator missed it. User informed, no production deploy/replacement executed, no revert or additional main push attempted. Direct cross-chat message tool is unavailable; record requires release Owner to assess main drift, not claimed delivered/resolved. Retain worktree/artifacts; no cleanup authorization. Scope remains protected pending freeze release/merge.
