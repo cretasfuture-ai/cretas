@@ -31,6 +31,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,11 +51,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Opt-in proof against a real Aliyun OSS endpoint. It deliberately does not run without the
- * explicit environment switch. The database remains the isolated test H2 database unless the
- * caller selects another already-safe test datasource through the normal test profile.
+ * explicit environment switch. The database is always an isolated, PostgreSQL-compatible H2
+ * database, even when an external datasource is present in the test environment.
  */
 @DataJpaTest(showSql = false)
-@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.ANY)
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
 @TestPropertySource(properties = "cretas.sop-attachments.write-enabled=true")
 @EntityScan(basePackages = "com.cretas.aims.entity")
@@ -64,6 +66,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AttachmentSopOssIntegrationContractTest {
 
     private static final long PLATFORM_ACTOR_ID = 7_300_001L;
+    private static final String H2_DATABASE_NAME =
+            "sop_oss_proof_" + UUID.randomUUID().toString().replace("-", "");
+
+    @DynamicPropertySource
+    static void isolatedH2Properties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", () -> "jdbc:h2:mem:" + H2_DATABASE_NAME
+                + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE");
+        registry.add("spring.datasource.driver-class-name", () -> "org.h2.Driver");
+        registry.add("spring.datasource.username", () -> "sa");
+        registry.add("spring.datasource.password", () -> "");
+        registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.H2Dialect");
+        registry.add("spring.jpa.properties.hibernate.dialect",
+                () -> "org.hibernate.dialect.H2Dialect");
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+        registry.add("spring.flyway.enabled", () -> "false");
+    }
 
     @Autowired AttachmentService attachmentService;
     @Autowired AttachmentRepository attachmentRepository;

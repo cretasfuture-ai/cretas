@@ -141,7 +141,7 @@ jobs:
           echo "READING: JAVA_FORK_XMX=${CRETAS_JAVA_FORK_XMX:-3g} runner=${RUNNER_NAME:-?}"
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           "$MVN" -B test \
-            -Dtest='*ContractTest,*ContractsTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest,*RoleGateTest,*RoleGateMvcTest,*SecurityTest,*VulnerabilityTest,*AuthorizationTest,*PermissionTest,*PermissionGateTest,PermissionServiceImpl*Test,*ArchitectureTest,*GuardTest,*GateTest,*RbacTest,*IsolationTest,*RedactionTest,*TenantScopeTest,ProcessSheetMultiOutputUnknownCostTest' \
+            -Dtest='*ContractTest,*ContractsTest,*RepositoryQueryValidationTest,FlywayVersionUniquenessTest,*StartupGuardTest,*RoleGateTest,*RoleGateMvcTest,*SecurityTest,*VulnerabilityTest,*AuthorizationTest,*PermissionTest,*PermissionGateTest,PermissionServiceImpl*Test,*ArchitectureTest,*GuardTest,*GateTest,*RbacTest,*IsolationTest,*RedactionTest,*TenantScopeTest,ProcessSheetMultiOutputUnknownCostTest,AttachmentSopSpringTest' \
             -Dsurefire.failIfNoSpecifiedTests=false \
             -Dspring.profiles.active=test \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
