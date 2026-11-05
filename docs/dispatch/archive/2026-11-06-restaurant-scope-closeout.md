@@ -25,3 +25,7 @@
 - `SEC-RESTAURANT-INTENT-FIXTURE-20261105` — `review` — Owner root — Base 19923121a6 — scope 两库存工具Java、gateway双YAML/declared清单及GatedData/Demo/DescriptorPolicyResolver/ToolGatewayPriceBoundary/RuntimeToolPolicyLoader/ToolDescriptorInventoryDrift测试；最小权限与精确描述，root Maven/SCM。
 - `SEC-RESTAURANT-RETIRED-TESTS-20261105` — `review` — Owner root — Base 19923121a6 — scope inventory的SupplierDeliveryNote/WastageRecord及FactoryInventorySoftDeleteRepositoryQueryValidationTest、soft-delete-known-violations.txt；补类级软删除并真实PG验证；root Maven/SCM。
 - `SEC-RESTAURANT-JAVA-CLIENTS-20261105` — `review` — Owner root — Base 5fa4d12c5d — scope PythonSmartBIClient/GoldFinanceClient、KB/SemanticMatcher、IndicatorQueryServiceImpl/LlmIntentFallbackClientImpl及tests；迁工厂共用、删餐饮HTTP/phrase/domain闭包；root Maven，禁Orch/权限/Supplier。
+
+## 随后 main SOP Phase B 整合
+
+main342dc816fd（1490）新增生产SOP写入开关及Web/App文件入口，已无冲突整合；本组不回退其已授权开关。Java生产类、Entity/Repository及锁序均未变，Attachment先授权后查询和typed actor继续保留。配置/rollout测试与Web/App构建按新内容补验证，旧542项与34e产品树继续单独绑定，不冒充新资源树已通过。回滚floor仍为095558或后续actor兼容版本；未发本批App OTA。
