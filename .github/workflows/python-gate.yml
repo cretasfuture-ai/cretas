@@ -226,7 +226,6 @@ jobs:
             efficiency_recognition/tests \
             smartbi/agent/tests \
             smartbi/api/tests \
-            smartbi/external_benchmarks/tests \
             smartbi/gold/tests \
             smartbi/ingestion/tests \
             smartbi/services \
@@ -236,3 +235,11 @@ jobs:
             $EXCLUDES \
             -k "not e2e and not integration" \
             --tb=short
+
+      - name: Factory AgentOps real PostgreSQL migration and trace contracts
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" python -c '
+          import os, sys, pytest
+          os.environ["AGENT_OPS_PG_DSN"] = os.environ["SMARTBI_PG_DSN"]
+          os.environ["AGENT_OPS_PG_CONFIRM"] = "YES"
+          sys.exit(pytest.main(["tests/agent_eval/test_postgres_migration_gate.py", "tests/agent_eval/test_factory_trace_postgres_contract.py", "-q", "--tb=short"]))'

@@ -7,12 +7,10 @@ import json
 import re
 import uuid
 from dataclasses import replace
-from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping, Protocol, Sequence
 
 from .contracts import AgentOpsContext, EvalSetRecord, ExperimentRecord, utc_iso
 from .factory_trace import build_factory_trace_response
-from .runtime_shadow import numeric_truth_ref_key
 from .validation import (
     canonical_digest,
     validate_actual_snapshots,
@@ -22,7 +20,6 @@ from .validation import (
     validate_factory_trace,
     validate_name,
     validate_request_id,
-    validate_runtime_shadow_cases,
     validate_runner_bounds_snapshot,
 )
 
@@ -54,9 +51,6 @@ class AgentOpsStore(Protocol):
     ) -> ExperimentRecord | None: ...
     async def list_experiments(self, context: AgentOpsContext) -> tuple[ExperimentRecord, ...]: ...
     async def get_experiment(self, context: AgentOpsContext, experiment_id: str) -> ExperimentRecord: ...
-    async def load_runtime_corpus(
-        self, context: AgentOpsContext, *, limit: int
-    ) -> tuple[Mapping[str, Any], ...]: ...
     async def record_factory_trace(self, context: AgentOpsContext, trace: Mapping[str, Any]) -> Mapping[str, Any]: ...
     async def load_trace(
         self, context: AgentOpsContext, run_id: str, *, after_sequence: int, limit: int
@@ -138,18 +132,8 @@ class InMemoryAgentOpsStore:
         self._experiments: dict[str, ExperimentRecord] = {}
         self._eval_requests: dict[tuple[str, str, str], str] = {}
         self._experiment_requests: dict[tuple[str, str, str], str] = {}
-        self._traces: dict[str, Mapping[str, Any]] = {}
-        self._runtime_corpus: dict[str, tuple[Mapping[str, Any], ...]] = {}
         self._lock = asyncio.Lock()
         self._factory_traces: dict[str, dict[str, Any]] = {}
-
-    def seed_trace(self, factory_id: str, run_id: str, trace: Mapping[str, Any]) -> None:
-        self._traces[run_id] = {**dict(trace), "factoryId": factory_id}
-
-    def seed_runtime_corpus(
-        self, factory_id: str, cases: Sequence[Mapping[str, Any]]
-    ) -> None:
-        self._runtime_corpus[factory_id] = validate_runtime_shadow_cases(cases)
 
     async def create_eval_set(self, context, record):
         _require_context(context)
@@ -249,15 +233,6 @@ class InMemoryAgentOpsStore:
                 raise AgentOpsAccessError("experiment not found")
             return _validate_experiment_record(item)
 
-    async def load_runtime_corpus(self, context, *, limit):
-        _require_admin_context(context)
-        _require_runtime_corpus_limit(limit)
-        async with self._lock:
-            return tuple(
-                dict(case)
-                for case in self._runtime_corpus.get(context.factory_id, ())[:limit]
-            )
-
     async def record_factory_trace(self, context, trace):
         _require_context(context)
         _require_factory_context(context)
@@ -287,14 +262,7 @@ class InMemoryAgentOpsStore:
                     {**trace, "createdAt": item["createdAt"]},
                     trace["steps"], after_sequence=after_sequence, limit=limit,
                 )
-        async with self._lock:
-            item = self._traces.get(run_id)
-            if item is None or item.get("factoryId") != context.factory_id:
-                raise AgentOpsAccessError("run not found")
-            result = _safe_trace_record(
-                item, after_sequence=after_sequence, limit=limit
-            )
-            return result
+        raise AgentOpsAccessError("factory trace not found")
 
 
 class PostgresAgentOpsStore:
@@ -466,55 +434,6 @@ class PostgresAgentOpsStore:
             raise AgentOpsAccessError("experiment not found")
         return self._experiment(row)
 
-    async def load_runtime_corpus(self, context, *, limit):
-        _require_admin_context(context)
-        _require_runtime_corpus_limit(limit)
-        async with self._pool.acquire() as connection:
-            async with connection.transaction(readonly=True):
-                await self._bind_trace(connection, context)
-                runs = await connection.fetch(
-                    """SELECT run_id,factory_id,route_code,state,sanitized_request,
-                              outcome_summary,failure_code,rounds_used,tool_calls_used,
-                              created_at,completed_at
-                       FROM smart_bi_agent_run
-                       WHERE factory_id=$1
-                         AND state IN ('COMPLETED','PARTIAL')
-                         AND route_code='GROSS_MARGIN_DECLINE_ATTRIBUTION'
-                         AND failure_code IS NULL
-                         AND outcome_summary IS NOT NULL
-                         AND completed_at IS NOT NULL
-                       ORDER BY completed_at DESC
-                       LIMIT $2""",
-                    context.factory_id,
-                    min(limit * 3, 60),
-                )
-                run_ids = [row["run_id"] for row in runs]
-                events = []
-                if run_ids:
-                    events = await connection.fetch(
-                        """SELECT run_id,event_sequence,event_type,step_id,tool_name,payload
-                           FROM smart_bi_agent_event
-                           WHERE factory_id=$1 AND run_id=ANY($2::uuid[])
-                           ORDER BY run_id,event_sequence""",
-                        context.factory_id,
-                        run_ids,
-                    )
-        grouped: dict[str, list[Mapping[str, Any]]] = {}
-        for event in events:
-            grouped.setdefault(str(event["run_id"]), []).append(event)
-        cases: list[Mapping[str, Any]] = []
-        for run in runs:
-            case = _trusted_runtime_case(
-                run,
-                grouped.get(str(run["run_id"]), ()),
-                value_loader=self._value,
-            )
-            if case is not None:
-                cases.append(case)
-            if len(cases) == limit:
-                break
-        return validate_runtime_shadow_cases(cases) if cases else ()
-
     async def record_factory_trace(self, context, trace):
         _require_context(context)
         _require_factory_context(context)
@@ -574,73 +493,14 @@ class PostgresAgentOpsStore:
         _require_admin_context(context)
         _require_after_sequence(after_sequence)
         _require_limit(limit)
-        if context.business_type == "FACTORY":
-            return await self._load_factory_trace(
-                context, run_id, after_sequence=after_sequence, limit=limit
-            )
-        async with self._pool.acquire() as connection:
-            async with connection.transaction(readonly=True):
-                await self._bind_trace(connection, context)
-                run = await connection.fetchrow(
-                    """SELECT run_id,factory_id,route_code,state,correlation_id,
-                              sanitized_request,outcome_summary,failure_code,
-                              rounds_used,tool_calls_used,facts_used,evidence_bytes_used,
-                              created_at,updated_at,completed_at
-                       FROM smart_bi_agent_run WHERE run_id=$1::uuid AND factory_id=$2""",
-                    run_id, context.factory_id,
-                )
-                if run is None:
-                    raise AgentOpsAccessError("run not found")
-                events = await connection.fetch(
-                    """SELECT event_sequence,event_type,step_id,tool_name,payload,created_at
-                       FROM smart_bi_agent_event
-                       WHERE run_id=$1::uuid AND factory_id=$2
-                         AND event_sequence > $3
-                       ORDER BY event_sequence LIMIT $4""",
-                    run_id, context.factory_id, after_sequence, limit + 1,
-                )
-        has_more = len(events) > limit
-        events = events[:limit]
-        safe = _redact_trace({
-            "runId": str(run["run_id"]),
-            "routeCode": run["route_code"],
-            "state": run["state"],
-            "correlationId": run["correlation_id"],
-            "inputSummary": _safe_input_summary(self._value(run["sanitized_request"])),
-            "outcome": _safe_outcome(self._value(run["outcome_summary"])),
-            "failureCode": run["failure_code"],
-            "counters": {
-                "roundsUsed": run["rounds_used"], "toolCallsUsed": run["tool_calls_used"],
-                "factsUsed": run["facts_used"], "evidenceBytesUsed": run["evidence_bytes_used"],
-            },
-            "createdAt": run["created_at"].isoformat(),
-            "updatedAt": run["updated_at"].isoformat(),
-            "completedAt": run["completed_at"].isoformat() if run["completed_at"] else None,
-            "events": [
-                {
-                    "sequence": item["event_sequence"], "eventType": item["event_type"],
-                    "stepId": item["step_id"], "toolName": item["tool_name"],
-                    "payload": _safe_event_payload(self._value(item["payload"])),
-                    "createdAt": item["created_at"].isoformat(),
-                }
-                for item in events
-            ],
-        })
-        safe["page"] = _trace_page(
-            after_sequence, limit, safe["events"], has_more=has_more
+        _require_factory_context(context)
+        return await self._load_factory_trace(
+            context, run_id, after_sequence=after_sequence, limit=limit
         )
-        return safe
 
     @staticmethod
     async def _bind(connection, context):
         await connection.execute("SELECT set_config('app.factory_id',$1,true)", context.factory_id)
-
-    @staticmethod
-    async def _bind_trace(connection, context):
-        await connection.execute("SELECT set_config('app.factory_id',$1,true)", context.factory_id)
-        await connection.execute("SELECT set_config('app.user_id',$1,true)", context.user_id)
-        await connection.execute("SELECT set_config('app.actor_role',$1,true)", context.role)
-        await connection.execute("SELECT set_config('app.agent_ops_audit','true',true)")
 
     @staticmethod
     def _json(value):
@@ -701,122 +561,24 @@ class PostgresAgentOpsStore:
         return _validate_experiment_record(record)
 
 
-_SENSITIVE = re.compile(
-    r"(?:prompt|question|raw[_-]?request|secret|token|password|authorization|cookie|"
-    r"api[_-]?key|credential|member[_-]?id|review[_-]?text)",
-    re.IGNORECASE,
-)
 
 
-def _redact_trace(value: Mapping[str, Any]) -> dict[str, Any]:
-    def clean(item: Any, key: str = "") -> Any:
-        if _SENSITIVE.search(key):
-            return "[REDACTED]"
-        if isinstance(item, Mapping):
-            return {str(k): clean(v, str(k)) for k, v in item.items()}
-        if isinstance(item, list):
-            return [clean(v) for v in item[:200]]
-        if isinstance(item, str) and len(item) > 2048:
-            return item[:2048] + "...[TRUNCATED]"
-        return item
-    return clean(dict(value))
 
 
-def _safe_input_summary(value: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        return {}
-    allowed = ("startDate", "endDate", "storeTopN", "dishTopN")
-    return {key: value[key] for key in allowed if key in value}
 
 
-_SAFE_OUTCOME_KEYS = frozenset({
-    "status", "routeCode", "claims", "blockers", "observations",
-    "attributionSupported", "actionProposals",
-})
-_SAFE_EVENT_KEYS = frozenset({
-    "routeCode", "stepCount", "maxRounds", "maxToolCalls", "round",
-    "purposeCode", "evidenceId", "evidenceStatus", "factCount",
-    "evidenceBytes", "warningCodes", "failureCode", "roundsUsed",
-    "toolCallsUsed", "factsUsed", "evidenceBytesUsed", "status",
-    "claims", "blockers", "observations", "attributionSupported",
-    "actionProposals", "gapCodes", "clarificationCodes", "replanReasonCodes",
-    "drilldown", "drilldownTruncated",
-})
 
 
-def _safe_outcome(value: Any) -> dict[str, Any] | None:
-    if value is None:
-        return None
-    if not isinstance(value, Mapping):
-        return {}
-    return _redact_trace({key: value[key] for key in _SAFE_OUTCOME_KEYS if key in value})
 
 
-def _safe_event_payload(value: Any) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        return {}
-    return _redact_trace({key: value[key] for key in _SAFE_EVENT_KEYS if key in value})
 
 
-def _safe_trace_record(
-    value: Mapping[str, Any], *, after_sequence: int, limit: int
-) -> dict[str, Any]:
-    top_keys = (
-        "runId", "routeCode", "state", "correlationId", "inputSummary",
-        "failureCode", "counters", "createdAt", "updatedAt", "completedAt",
-    )
-    result = {key: value[key] for key in top_keys if key in value}
-    result["outcome"] = _safe_outcome(value.get("outcome"))
-    raw_events = value.get("events", [])
-    events: list[dict[str, Any]] = []
-    has_more = False
-    if isinstance(raw_events, list):
-        eligible = [
-            raw
-            for raw in raw_events
-            if isinstance(raw, Mapping)
-            and isinstance(raw.get("sequence"), int)
-            and raw["sequence"] > after_sequence
-        ]
-        has_more = len(eligible) > limit
-        for raw in eligible[:limit]:
-            if not isinstance(raw, Mapping):
-                continue
-            event = {
-                key: raw[key]
-                for key in ("sequence", "eventType", "stepId", "toolName", "createdAt")
-                if key in raw
-            }
-            event["payload"] = _safe_event_payload(raw.get("payload"))
-            events.append(event)
-    result["events"] = events
-    safe = _redact_trace(result)
-    safe["page"] = _trace_page(
-        after_sequence, limit, safe["events"], has_more=has_more
-    )
-    return safe
 
 
-def _trace_page(
-    after_sequence: int,
-    limit: int,
-    events: Sequence[Mapping[str, Any]],
-    *,
-    has_more: bool,
-) -> dict[str, Any]:
-    next_sequence = int(events[-1]["sequence"]) if events else after_sequence
-    return {
-        "afterSequence": after_sequence,
-        "limit": limit,
-        "returned": len(events),
-        "hasMore": has_more,
-        "nextAfterSequence": next_sequence if has_more else None,
-    }
 
 
 _ADMIN_ROLES = frozenset({
     "factory_super_admin", "platform_admin", "permission_admin",
-    "restaurant_manager", "restaurant_owner",
 })
 
 
@@ -850,196 +612,8 @@ def _require_limit(limit: int) -> None:
         raise AgentOpsStoreError("trace limit out of bounds")
 
 
-def _require_runtime_corpus_limit(limit: int) -> None:
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
-        raise AgentOpsStoreError("runtime corpus limit out of bounds")
 
 
-def _trusted_runtime_case(
-    run: Mapping[str, Any],
-    events: Sequence[Mapping[str, Any]],
-    *,
-    value_loader,
-) -> Mapping[str, Any] | None:
-    """Freeze one complete durable run into a digest-backed replay case."""
-
-    try:
-        run_id = str(uuid.UUID(str(run["run_id"])))
-        if run["factory_id"] is None or run["failure_code"] is not None:
-            return None
-        if run["state"] not in {"COMPLETED", "PARTIAL"}:
-            return None
-        if run["route_code"] != "GROSS_MARGIN_DECLINE_ATTRIBUTION":
-            return None
-        request = value_loader(run["sanitized_request"])
-        if not isinstance(request, Mapping) or set(request) != {
-            "routeCode", "startDate", "endDate", "storeTopN", "dishTopN"
-        }:
-            return None
-        if request["routeCode"] != run["route_code"]:
-            return None
-        input_snapshot = {
-            "startDate": request["startDate"],
-            "endDate": request["endDate"],
-            "storeTopN": request["storeTopN"],
-            "dishTopN": request["dishTopN"],
-        }
-        outcome = value_loader(run["outcome_summary"])
-        if not isinstance(outcome, Mapping) or outcome.get("routeCode") != run["route_code"]:
-            return None
-        sequences = [int(event["event_sequence"]) for event in events]
-        if not sequences or sequences != list(range(1, len(sequences) + 1)):
-            return None
-        event_types = [str(event["event_type"]) for event in events]
-        if event_types[-1] != "RUN_COMPLETED" or any(
-            event_type in {"STEP_FAILED", "RUN_FAILED", "RUN_CANCELLED", "BUDGET_EXCEEDED"}
-            for event_type in event_types
-        ):
-            return None
-        required_tools = [
-            str(event["tool_name"])
-            for event in events
-            if event["event_type"] == "STEP_COMPLETED" and event["tool_name"]
-        ]
-        rounds_used = int(run["rounds_used"])
-        tool_calls_used = int(run["tool_calls_used"])
-        if (
-            not required_tools
-            or not 1 <= rounds_used <= 2
-            or not len(required_tools) <= tool_calls_used <= 10
-        ):
-            return None
-
-        evidence_facts: dict[tuple[str, str], Mapping[str, Any]] = {}
-        evidence_digest_rows: list[Mapping[str, Any]] = []
-        for event in events:
-            if event["event_type"] != "EVIDENCE_RECORDED":
-                continue
-            payload = value_loader(event["payload"])
-            if not isinstance(payload, Mapping) or not isinstance(
-                payload.get("factReferences"), list
-            ):
-                return None
-            evidence_id = payload.get("evidenceId")
-            tool_name = event["tool_name"]
-            if not isinstance(evidence_id, str) or not isinstance(tool_name, str):
-                return None
-            safe_facts: list[Mapping[str, Any]] = []
-            for fact in payload["factReferences"]:
-                if not isinstance(fact, Mapping):
-                    return None
-                fact_id = fact.get("factId")
-                metric = fact.get("metric")
-                dimensions = fact.get("dimensions", {})
-                if (
-                    not isinstance(fact_id, str)
-                    or not isinstance(metric, str)
-                    or not isinstance(dimensions, Mapping)
-                ):
-                    return None
-                normalized_fact = {
-                    "factId": fact_id,
-                    "metric": metric,
-                    "value": fact.get("value"),
-                    "dimensions": {
-                        str(key): str(value) for key, value in sorted(dimensions.items())
-                    },
-                }
-                evidence_facts[(evidence_id, fact_id)] = {
-                    **normalized_fact,
-                    "toolName": tool_name,
-                }
-                safe_facts.append(normalized_fact)
-            evidence_digest_rows.append({
-                "toolName": tool_name,
-                "evidenceId": evidence_id,
-                "facts": safe_facts,
-            })
-
-        claims = outcome.get("claims", [])
-        if not isinstance(claims, list):
-            return None
-        numeric_truth_refs: dict[str, str] = {}
-        for claim in claims:
-            if not isinstance(claim, Mapping):
-                return None
-            evidence_id = claim.get("evidenceId")
-            fact_id = claim.get("factId")
-            statement_code = claim.get("statementCode")
-            metric = claim.get("metric")
-            value = claim.get("value")
-            if not all(
-                isinstance(item, str)
-                for item in (evidence_id, fact_id, statement_code, metric, value)
-            ):
-                return None
-            fact = evidence_facts.get((evidence_id, fact_id))
-            if fact is None or fact["metric"] != metric:
-                return None
-            if not _same_decimal(fact.get("value"), value):
-                return None
-            key = numeric_truth_ref_key(
-                tool_name=str(fact["toolName"]),
-                statement_code=statement_code,
-                metric=metric,
-                dimensions=fact["dimensions"],
-            )
-            if key in numeric_truth_refs and not _same_decimal(
-                numeric_truth_refs[key], value
-            ):
-                return None
-            numeric_truth_refs[key] = value
-
-        trajectory_digest = canonical_digest(required_tools)
-        numeric_digest = canonical_digest(numeric_truth_refs)
-        evidence_digest = canonical_digest(evidence_digest_rows)
-        input_digest = canonical_digest(input_snapshot)
-        source_run_digest = canonical_digest({
-            "runId": run_id,
-            "routeCode": run["route_code"],
-            "state": run["state"],
-            "inputDigest": input_digest,
-            "trajectoryDigest": trajectory_digest,
-            "numericTruthDigest": numeric_digest,
-            "evidenceDigest": evidence_digest,
-            "roundsUsed": rounds_used,
-            "toolCallsUsed": tool_calls_used,
-            "completedAt": run["completed_at"].isoformat(),
-        })
-        return {
-            "caseId": f"runtime-{run_id}",
-            "inputSnapshot": input_snapshot,
-            "expectedRoute": run["route_code"],
-            "requiredTools": required_tools,
-            "numericTruthRefs": numeric_truth_refs,
-            "maxRounds": rounds_used,
-            "maxToolCalls": tool_calls_used,
-            "sourceRunId": run_id,
-            "evidenceDigests": {
-                "inputDigest": input_digest,
-                "trajectoryDigest": trajectory_digest,
-                "numericTruthDigest": numeric_digest,
-                "evidenceDigest": evidence_digest,
-                "sourceRunDigest": source_run_digest,
-            },
-        }
-    except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError):
-        return None
-
-
-def _same_decimal(left: Any, right: Any) -> bool:
-    if left is None or right is None:
-        return False
-    try:
-        left_decimal = Decimal(str(left))
-        right_decimal = Decimal(str(right))
-    except InvalidOperation:
-        return False
-    return (
-        left_decimal.is_finite()
-        and right_decimal.is_finite()
-        and left_decimal == right_decimal
-    )
 
 
 def _validate_request_lookup(
