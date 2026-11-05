@@ -130,12 +130,12 @@ class MaterialPackagingHierarchyIdWidthPostgresContractTest {
             assertSqlState("23505", () -> insertHierarchy(jdbc, "duplicate", materialId, "kg"));
             assertSqlState("23514", () -> jdbc.update(
                     "INSERT INTO material_packaging_hierarchy "
-                            + "(id,factory_id,material_type_id,level1_unit,level1_per_level2," 
+                            + "(id,factory_id,material_type_id,level1_unit,level1_per_level2,"
                             + "created_at,updated_at) VALUES (?,?,?,'kg',10,now(),now())",
                     "bad-check", "F-WIDTH", checkMaterialId));
             assertSqlState("23503", () -> jdbc.update(
                     "INSERT INTO material_packaging_hierarchy "
-                            + "(id,factory_id,material_type_id,level1_unit,level1_per_level2," 
+                            + "(id,factory_id,material_type_id,level1_unit,level1_per_level2,"
                             + "level2_unit,created_at,updated_at) VALUES (?,?,?,'kg',10,'box',now(),now())",
                     "bad-fk", "F-WIDTH", "RMT_" + "z".repeat(36)));
             assertAtomicHierarchyAndSpecRollback(jdbc, atomicMaterialId);
@@ -182,7 +182,7 @@ class MaterialPackagingHierarchyIdWidthPostgresContractTest {
 
     private static void insertHierarchy(JdbcTemplate jdbc, String id, String materialId, String unit) {
         jdbc.update("INSERT INTO material_packaging_hierarchy "
-                        + "(id,factory_id,material_type_id,level1_unit,level1_per_level2," 
+                        + "(id,factory_id,material_type_id,level1_unit,level1_per_level2,"
                         + "level2_unit,created_at,updated_at) VALUES (?,?,?, ?,10,?,now(),now())",
                 id, "F-WIDTH", materialId, unit, "box");
     }
@@ -256,7 +256,7 @@ class MaterialPackagingHierarchyIdWidthPostgresContractTest {
             connection.setAutoCommit(false);
             try (PreparedStatement insert = connection.prepareStatement(
                     "INSERT INTO material_packaging_hierarchy "
-                            + "(id,factory_id,material_type_id,level1_unit,level1_per_level2," 
+                            + "(id,factory_id,material_type_id,level1_unit,level1_per_level2,"
                             + "level2_unit,created_at,updated_at) VALUES (?,?,?,'kg',10,'box',now(),now())")) {
                 insert.setString(1, "rollback-one");
                 insert.setString(2, "F-WIDTH");
