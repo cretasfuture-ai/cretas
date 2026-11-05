@@ -128,7 +128,9 @@ class Manager:
 
     def _prepare(self, sid):
         try:
-            self.slot.prepare(); self._ready_auth_check()
+            self.slot.prepare()
+            if isinstance(self.slot,SandboxOrchestrator): self.cfg['sandbox_bearer_token']=self.slot.issue_node_token()
+            self._ready_auth_check()
         except Exception:
             with self.lock: end_requested = sid in self.ending
             if end_requested: self._reset(sid); return

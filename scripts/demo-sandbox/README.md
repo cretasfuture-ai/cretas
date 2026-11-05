@@ -63,6 +63,14 @@ root filesystem is read-only; writable runtime paths are tmpfs. PostgreSQL and
 Redis volumes are retained. No Docker daemon/WSL shutdown, volume removal,
 production transaction deletion or shared cache flush is performed.
 
+Preparation creates one clearly named isolated finance-review fixture so the
+normal approval chain has a valid independent role. Its password is disabled,
+its platform access is empty and the manager never issues credentials for it.
+The presenter continues using f006_admin. The fixture is removed by reset along
+with the round's other added rows. Each preparation also renews the fixed demo
+actor's 24-hour node token using the independent node key; an old token in the
+private startup file does not prevent demonstrating again on a later day.
+
 The finished flow remains available for cost and reverse-trace viewing until
 the user clicks **结束演示并清空**. A new round is available only after `ENDED`.
 Historical SmartBI and photo examples remain in production and are accessed

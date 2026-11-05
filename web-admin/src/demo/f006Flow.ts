@@ -178,7 +178,7 @@ export async function executeStep(state:DemoState,stepId:DemoStepId,form:DemoRec
     if(String(r.productionPlanId)!==id(plan()))throw new Error('领料单不属于本次计划')
     if(r.status==='PENDING')await put(transport,path(`material-requisitions/${id(r)}/start-picking`),{})
     r=scoped(record(await transport.get(path(`material-requisitions/${id(r)}`))))
-    if(['PICKING','PENDING','DRAFT'].includes(String(r.status))){
+    if(['PICKING','PENDING','DRAFT'].includes(String(r.status)) && !r.pickedAt){
       const receipt=await readDocument(transport,path(`warehouse/receiving/receipts/${id(ent(state,'purchaseReceipt'))}`),state)
       const picks=[]
       for(const item of rows(r.items)){

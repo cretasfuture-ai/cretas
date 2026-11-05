@@ -78,7 +78,7 @@ watch(
  * 且它以 flush:'pre' 跑在渲染之前 —— 缓存键在同一帧内就是新的, 组件当场重新 mount。
  */
 watch(
-  () => [route.fullPath, authStore.factoryId],
+  () => [route.fullPath, authStore.factoryId, workspaceScope.value],
   () => workspace.openRoute({
     fullPath: route.fullPath,
     path: route.path,
@@ -127,15 +127,15 @@ function pinDraggedReference(event: DragEvent): void {
 <template>
   <div class="app-layout">
     <!-- 侧边栏 -->
-    <AppSidebar v-if="!isReferenceFrame" />
+    <AppSidebar v-if="sandboxReady && !isReferenceFrame" />
 
     <!-- 主内容区 -->
     <div class="app-main" :style="mainStyle">
       <!-- 顶部栏 -->
-      <AppHeader v-if="!isReferenceFrame" />
+      <AppHeader v-if="sandboxReady && !isReferenceFrame" />
       <F006SandboxBanner v-if="sandboxSession" />
 
-      <WorkspaceTabs v-if="!isReferenceFrame" ref="workspaceTabs" />
+      <WorkspaceTabs v-if="sandboxReady && !isReferenceFrame" ref="workspaceTabs" />
 
       <!-- FK_BLOCK 防呆导航浮条: 从关联页跳转处理完毕后引导返回 -->
       <ReturnBanner v-if="!isReferenceFrame" />

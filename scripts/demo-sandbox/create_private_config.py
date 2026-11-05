@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """Create private local sandbox settings. Never reads/copies production secrets."""
 import argparse
-import base64
 import hashlib
-import hmac
 import json
 import os
 import secrets
 import shutil
 import subprocess
-import time
 import uuid
 from pathlib import Path
 from orchestrator import CONTAINERS, VOLUMES, NETWORK, atomic_json, JDBC_URL
-
-def encode(value): return base64.urlsafe_b64encode(value).decode().rstrip('=')
+from node_credentials import issue_node_token
 
 def create(root, jar, baseline, fingerprint):
     root = root.resolve()
@@ -30,10 +26,7 @@ def create(root, jar, baseline, fingerprint):
         subprocess.run(['icacls',str(root),'/inheritance:r','/grant:r',user+':(OI)(CI)F','SYSTEM:(OI)(CI)F'],capture_output=True,check=True)
     private_jar = root/'app.jar'; shutil.copyfile(jar,private_jar)
     pg_password = secrets.token_urlsafe(48); signing_key = secrets.token_urlsafe(64); control_key = secrets.token_urlsafe(48)
-    claims = {'userId':1309,'factoryId':'F006','username':'f006_admin','role':'factory_super_admin','sub':'f006_admin',
-        'jti':str(uuid.uuid4()),'iat':int(time.time()),'exp':int(time.time())+86400}
-    signing = encode(b'{"alg":"HS256","typ":"JWT"}')+'.'+encode(json.dumps(claims,separators=(',',':')).encode())
-    token = signing+'.'+encode(hmac.new(signing_key.encode(),signing.encode(),hashlib.sha256).digest())
+    token = issue_node_token(signing_key)
     properties = {
         'server.port':'10040','server.address':'0.0.0.0','spring.profiles.include':'pg','spring.datasource.url':JDBC_URL,
         'spring.datasource.username':'cretas_sandbox','spring.datasource.password':pg_password,

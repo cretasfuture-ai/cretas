@@ -52,14 +52,16 @@ class Docker:
     def run(self, args, timeout=120, **kwargs):
         if not args or args[0] != 'docker' or args[1] in {'compose','down','prune'} or (args[1] == 'rm' and {'-v','--volumes'}.intersection(args)) or args[1:3] == ['volume','rm']:
             raise OrchestratorError('unsafe Docker command')
-        return self.runner(args, shell=False, capture_output=True, text=not isinstance(kwargs.get('input'), bytes), timeout=timeout, **kwargs)
+        as_text=not isinstance(kwargs.get('input'),bytes)
+        if as_text: kwargs.setdefault('encoding','utf-8')
+        return self.runner(args, shell=False, capture_output=True, text=as_text, timeout=timeout, **kwargs)
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args): return None
 
 class SandboxOrchestrator:
     def __init__(self, cfg, docker=None):
-        self.cfg = cfg; self.docker = docker or Docker(); self._validate_cfg()
+        self.cfg = cfg; self._validate_cfg(); self.docker = docker or Docker()
 
     def _validate_cfg(self):
         if self.cfg.get('db_name') != 'f006_demo_sandbox': raise OrchestratorError('only the fixed sandbox database is allowed')
@@ -365,8 +367,31 @@ class SandboxOrchestrator:
 
     def prepare(self):
         if self._validate_properties()['spring.datasource.url'] != JDBC_URL: raise OrchestratorError('sandbox PostgreSQL string binding must be configured before preparation')
-        self._verify_identity(); self._stop_java(); self._restore(); self._clear_redis(); self._start('java'); self._health()
+        self._verify_identity(); self._stop_java(); self._restore(); self._clear_redis(); self._seed_approval_actor(); self._start('java'); self._health()
         return self._verify_identity()
+
+    def issue_node_token(self):
+        from node_credentials import issue_node_token
+        return issue_node_token(self._validate_properties()['cretas.jwt.secret'])
+
+    def _seed_approval_actor(self):
+        """A non-login fixture satisfies the genuine independent approval route.
+
+        It exists only during a prepared round and is removed by the normal
+        baseline restore. No source-person record or production account is used.
+        """
+        node=self._inspect('pg')
+        expected=json.loads(Path(self.cfg['identity_path']).read_text(encoding='utf-8'))
+        if node['Id'] != expected['nodes']['pg']['id']: raise OrchestratorError('registered fixture database changed')
+        self._pg("""BEGIN;
+DO $$ BEGIN
+ IF (SELECT count(*) FROM public.users) <> 1 OR
+    (SELECT count(*) FROM public.users WHERE id=1309 AND factory_id='F006') <> 1
+ THEN RAISE EXCEPTION 'approval fixture requires the single registered F006 actor'; END IF;
+END $$;
+INSERT INTO public.users (id,created_at,updated_at,factory_id,is_active,password_hash,role_code,username,full_name,level,platform_type,employee_code)
+OVERRIDING SYSTEM VALUE VALUES (900006001,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'F006',true,'SANDBOX_DISABLED','finance_manager','demo_f006_finance_reviewer','演示财务复核（隔离）',99,'','D006FIN');
+COMMIT;""")
 
     def reset(self):
         self._verify_identity(); self._stop_java(); self._restore(); self._clear_redis()
