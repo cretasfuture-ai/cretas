@@ -246,14 +246,14 @@ public class PurchaseInvoiceThreeWayMatcher {
             line.setUnit(l.item.getUnit());
             line.setUnitPrice(req.unitPrice());
             line.setAmount(req.amount().setScale(2, RoundingMode.HALF_UP));
-            classify(line, l.item);
+            classify(factoryId, line, l.item);
             result.add(line);
         }
 
         // 累计量守恒: 采购单行
         for (Map.Entry<Long, BigDecimal> e : requestedByLine.entrySet()) {
             LineLedger l = ledger.lines().get(e.getKey());
-            String name = materialLabel(l.item);
+            String name = materialLabel(factoryId, l.item);
             if (l.invoiceable() == null) {
                 throw new BusinessException(422, name + "：" + (l.blocker != null ? l.blocker : "可开票量量不出来"))
                         .withCode("PURCHASE_INVOICE_QUANTITY_UNVERIFIABLE");
@@ -280,7 +280,7 @@ public class PurchaseInvoiceThreeWayMatcher {
             if (e.getValue().compareTo(left) > 0) {
                 PurchaseReceiveRecord record = ledger.receiptRecords().get(e.getKey());
                 throw new BusinessException(409, "收货行（" + (record != null ? record.getReceiveNumber() : e.getKey())
-                        + " / " + materialLabel(l.item) + "）已被开票 " + plain(used) + "，本次 " + plain(e.getValue())
+                        + " / " + materialLabel(factoryId, l.item) + "）已被开票 " + plain(used) + "，本次 " + plain(e.getValue())
                         + " 超过剩余 " + plain(left.max(BigDecimal.ZERO)) + UnitDisplayNames.display(l.item.getUnit()))
                         .withCode("PURCHASE_INVOICE_RECEIPT_OVER_INVOICED")
                         .withHint("同一收货行不能被多张发票重复开满，请改指其它收货行或减少数量")
@@ -290,7 +290,7 @@ public class PurchaseInvoiceThreeWayMatcher {
         return result;
     }
 
-    private void classify(PurchaseInvoiceLine line, PurchaseOrderItem item) {
+    private void classify(String factoryId, PurchaseInvoiceLine line, PurchaseOrderItem item) {
         List<String> notes = new ArrayList<>();
         String status = PurchaseInvoiceLine.MATCHED;
         if (line.getMaterialTypeId() == null) {
@@ -299,7 +299,8 @@ public class PurchaseInvoiceThreeWayMatcher {
             notes.add("发票行未写物料，无法核对是否与采购单行一致");
         } else if (!Objects.equals(line.getMaterialTypeId(), item.getMaterialTypeId())) {
             status = PurchaseInvoiceLine.MATERIAL_MISMATCH;
-            notes.add("发票物料 " + line.getMaterialTypeId() + " ≠ 采购单行物料 " + item.getMaterialTypeId());
+            notes.add("发票物料「" + materialLabel(factoryId, line.getMaterialTypeId())
+                    + "」≠ 采购单行物料「" + materialLabel(factoryId, item.getMaterialTypeId()) + "」");
         }
         BigDecimal expected = expectedAmount(item, line.getQuantity());
         line.setExpectedAmount(expected);
@@ -393,8 +394,26 @@ public class PurchaseInvoiceThreeWayMatcher {
 
     // ─── helpers ──────────────────────────────────────────────────────────────
 
-    private static String materialLabel(PurchaseOrderItem item) {
-        return hasText(item.getMaterialName()) ? item.getMaterialName() : item.getMaterialTypeId();
+    private String materialLabel(String factoryId, PurchaseOrderItem item) {
+        return materialLabel(factoryId, item.getMaterialTypeId());
+    }
+
+    /**
+     * 备注面向财务用户，物料名称只能从当前工厂的主数据读取。
+     * 查询不到时不回退订单快照或跨工厂数据，明确标成未知，避免把外厂名称带出。
+     */
+    private String materialLabel(String factoryId, String materialTypeId) {
+        if (!hasText(materialTypeId)) return "未知物料";
+        return materialTypeRepository.findByIdAndFactoryId(materialTypeId, factoryId)
+                .map(material -> {
+                    String name = material.getName();
+                    String code = material.getCode();
+                    if (hasText(name) && hasText(code)) return name + "（编号 " + code + "）";
+                    if (hasText(name)) return name;
+                    if (hasText(code)) return "未知物料（编号 " + code + "）";
+                    return "未知物料";
+                })
+                .orElse("未知物料");
     }
 
     private static boolean sameUnit(String a, String b) {
