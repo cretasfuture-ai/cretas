@@ -72,6 +72,9 @@ public class OrderCostBreakdownDTO {
      * <p>null = 该批无 SFI/FG 投料 (常规生产, 零回归) 或 脱敏 或 {@link #costComplete}=false (成本不完整)。
      */
     private BigDecimal semiFeedCost;
+
+    /** 结单转入半成品库时划走的成本 (已从 totalCost 扣除); null = 没有划转。 */
+    private BigDecimal semiTransferredCost;
     private BigDecimal totalCost;
     private BigDecimal perBoxCost;
     /**

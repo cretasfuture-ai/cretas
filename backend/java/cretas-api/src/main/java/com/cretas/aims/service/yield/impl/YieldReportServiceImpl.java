@@ -160,6 +160,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /** 返工计划的来源半成品: 报工时算占用、超量, 投料下拉里给出来 (D-S315-01)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
+
     /** 缺口 06 汇合配比校验。字段注入 (required=false) 不改构造器, 见 BlendRatioWiringContractTest。 */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.BlendRatioCheck blendRatioCheck;
@@ -393,9 +397,15 @@ public class YieldReportServiceImpl implements YieldReportService {
             if (intermediateOwnershipGuard == null) {
                 throw new BusinessException(500, "半成品归属校验服务未就绪, 不能领用半成品");
             }
+            // 返工计划领自己的来源 (D-S315-01): 开工占用的部分不看余额, 超量在 coveredByHold 里拦。
+            BigDecimal coveredByHold = secondaryPlanFeedService == null ? BigDecimal.ZERO
+                    : secondaryPlanFeedService.coveredByHold(
+                            factoryId, batchId, req.getSourceWipNo(), effSourceWipQuantity, null);
             sourceWip = wipInventoryService.validateSourceWip(
                     factoryId, intermediateOwnershipGuard.ofProductionBatch(factoryId, batchId),
-                    req.getSourceWipNo(), effSourceWipQuantity, effInputUnit, null);
+                    req.getSourceWipNo(),
+                    effSourceWipQuantity == null ? null : effSourceWipQuantity.subtract(coveredByHold),
+                    effInputUnit, null);
             // 缺口 14: 工序间时限 —— 报工这一刻就是投料; 审批过账时不再判, 否则合法投料会事后失败
             if (processTimeLimitService != null) {
                 processTimeLimitService.assertSemiFeedForTask(factoryId, t, sourceWip, effSourceWipQuantity, workerId);
@@ -890,6 +900,15 @@ public class YieldReportServiceImpl implements YieldReportService {
         // G7 Wave 4: 上道恰有一笔可领 WIP → 回显其工序批次号, RN 报工直接带 sourceWipNo。
         String sourceWipNo = resolveSourceWipNo(factoryId, batchId, t.getProcessOrder(), sourceOrders);
 
+        // D-S315-01: 接料工序的可领量是本返工计划的来源, 不是批次自己的上道 WIP (批次里根本没有)。
+        java.util.Optional<com.cretas.aims.service.production.SecondaryPlanFeedService.Source> secondarySource =
+                secondarySourceReceivedBy(factoryId, t);
+        if (secondarySource.isPresent()) {
+            wipAvailable = secondaryPlanFeedService.remainingForPlan(factoryId, secondarySource.get());
+            wipAvailableUnit = secondarySource.get().unit();
+            sourceWipNo = secondarySource.get().batchNo();
+        }
+
         return YieldLimitsDTO.builder()
                 .workProcessTaskId(workProcessTaskId)
                 .targetQuantity(targetQuantity)
@@ -1084,6 +1103,16 @@ public class YieldReportServiceImpl implements YieldReportService {
             }
         }
         return java.util.Set.of(t.getProcessOrder() - 1);
+    }
+
+    /** 这道工序是不是接返工计划来源半成品的那道。 */
+    private java.util.Optional<com.cretas.aims.service.production.SecondaryPlanFeedService.Source> secondarySourceReceivedBy(
+            String factoryId, WorkProcessTask t) {
+        if (secondaryPlanFeedService == null) {
+            return java.util.Optional.empty();
+        }
+        return secondaryPlanFeedService.forBatch(factoryId, t.getProductionBatchId())
+                .filter(source -> secondaryPlanFeedService.receives(factoryId, source, t));
     }
 
     private BigDecimal computeCarryover(String factoryId, Long batchId, WorkProcessTask t, BigDecimal thisInput) {
@@ -2014,6 +2043,27 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Override
     @Transactional(readOnly = true)
     public List<WipRowDTO> listWip(String factoryId, Long batchId) {
+        List<WipRowDTO> rows = new ArrayList<>(listWipRows(factoryId, batchId));
+        rows.addAll(secondarySourceRow(factoryId, batchId));
+        return rows;
+    }
+
+    private List<WipRowDTO> secondarySourceRow(String factoryId, Long batchId) {
+        if (secondaryPlanFeedService == null) {
+            return List.of();
+        }
+        return secondaryPlanFeedService.forBatch(factoryId, batchId)
+                .map(source -> List.of(WipRowDTO.builder()
+                        .intermediateBatchNo(source.batchNo())
+                        .productTypeId(source.productTypeId())
+                        .availableQuantity(secondaryPlanFeedService.remainingForPlan(factoryId, source))
+                        .unit(source.unit())
+                        .status(SemiFinishedInventory.Status.AVAILABLE)
+                        .build()))
+                .orElse(List.of());
+    }
+
+    private List<WipRowDTO> listWipRows(String factoryId, Long batchId) {
         if (batchId == null) {
             return new ArrayList<>();
         }

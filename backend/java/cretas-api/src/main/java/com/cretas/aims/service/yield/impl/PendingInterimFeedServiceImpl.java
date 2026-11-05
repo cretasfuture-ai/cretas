@@ -39,6 +39,11 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
     /** 只用来回答「这一行的计划还结不结得掉」—— 见 {@link #reachablePlanStatuses}。 */
     private final ProductionPlanRepository planRepository;
 
+    /** 返工计划开工占用 (D-S315-01)。@Lazy: 它经 WIP 服务绕回本类, 留可选注入断开环。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
+
     /**
      * factoryId → 上一次<b>喊出去过</b>的异常指纹。见 {@link #shouldAnnounce}。
      *
@@ -75,6 +80,7 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
         Set<String> orphanPlanIds = new HashSet<>();
         Set<String> cancelledPlanIds = new HashSet<>();
         Set<String> anomalousTerminalPlanIds = new HashSet<>();
+        Map<String, BigDecimal> holds = new HashMap<>();
 
         for (ProcessSheetRow row : rows) {
             String planId = row.getPlanId();
@@ -148,6 +154,12 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
                     }
                     continue;
                 }
+                // D-S315-01: 返工计划投自己的来源时, 这批料开工已从余额里占用了, 再算待扣 = 同一批货减两遍。
+                // 只把占用盖不住的部分算待扣; /create-batch 开工的计划没有占用, 照常全算。
+                qtyInSourceUnit = qtyInSourceUnit.subtract(takeFromHold(factoryId, planId, srcBatchNo, qtyInSourceUnit, holds));
+                if (qtyInSourceUnit.signum() <= 0) {
+                    continue;
+                }
                 out.merge(srcBatchNo, qtyInSourceUnit, BigDecimal::add);
             }
         }
@@ -179,6 +191,22 @@ public class PendingInterimFeedServiceImpl implements PendingInterimFeedService 
                     excluded.anomalousTerminalPlanIds());
         }
         return new Snapshot(Map.copyOf(out), Set.copyOf(unresolved), excluded);
+    }
+
+    /** 这笔投料里被本计划开工占用盖住的量; {@code holds} 记着每个计划还剩多少没被盖掉。 */
+    private BigDecimal takeFromHold(String factoryId, String planId, String srcBatchNo, BigDecimal qty,
+                                    Map<String, BigDecimal> holds) {
+        if (secondaryPlanFeedService == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal left = holds.computeIfAbsent(planId + "|" + srcBatchNo, key -> secondaryPlanFeedService
+                .forPlanId(factoryId, planId)
+                .filter(source -> source.batchNo().equals(srcBatchNo))
+                .map(source -> secondaryPlanFeedService.heldQuantity(factoryId, source))
+                .orElse(BigDecimal.ZERO));
+        BigDecimal taken = left.min(qty);
+        holds.put(planId + "|" + srcBatchNo, left.subtract(taken));
+        return taken;
     }
 
     /**

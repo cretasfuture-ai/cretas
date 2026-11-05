@@ -29,6 +29,7 @@ function mountPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.canWrite = true;
   route.query = { batchId: '11003' };
   state.get.mockImplementation((url: string) => {
     if (url.endsWith('/batches/11003')) return Promise.resolve(ok(batch));
@@ -38,6 +39,31 @@ beforeEach(() => {
 });
 
 describe('质检列表动态标准入口', () => {
+  it('隔离批次同批 PASS 显示复检放行复核并携带真实记录进入处置', async () => {
+    state.get.mockImplementation((url: string) => {
+      if (url.endsWith('/batches/11003')) return Promise.resolve(ok({ ...batch, qualityStatus: 'FAILED' }));
+      return Promise.resolve(ok({ content: [{ id: 'qi-pass', productionBatchId: 11003, result: 'PASS', passRate: 100 }], totalElements: 1 }));
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+    const review = wrapper.findAll('button').find(button => button.text() === '复检放行复核');
+    expect(review).toBeTruthy();
+    await review!.trigger('click');
+    expect(state.push).toHaveBeenCalledWith({ path: '/quality/disposition', query: { batchId: '11003', inspectionId: 'qi-pass' } });
+    expect(state.post).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it.each(['PASSED', undefined])('普通合格/缺失状态上下文不暴露 PASS 处置入口: %s', async qualityStatus => {
+    state.get.mockImplementation((url: string) => url.endsWith('/batches/11003')
+      ? Promise.resolve(ok({ ...batch, qualityStatus }))
+      : Promise.resolve(ok({ content: [{ id: 'qi-pass', productionBatchId: 11003, result: 'PASS', passRate: 100 }], totalElements: 1 })));
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.findAll('button').some(button => button.text() === '复检放行复核')).toBe(false);
+    wrapper.unmount();
+  });
+
   it('读取当前批次标准并挂载动态表单', async () => {
     const wrapper = mountPage();
     await flushPromises();

@@ -19,6 +19,9 @@ public interface UserModuleAccessService {
 
     boolean canAccessModule(User user, String moduleCode);
 
+    /** 账号上有没有一条生效的 DENY 覆盖 (角色默认没有这个模块不算, 那不是有人关的)。 */
+    boolean isExplicitlyDenied(User user, String moduleCode);
+
     List<ModuleAccessView> listEffectiveAccess(String factoryId, String userId);
 
     UserModuleAccess setOverride(

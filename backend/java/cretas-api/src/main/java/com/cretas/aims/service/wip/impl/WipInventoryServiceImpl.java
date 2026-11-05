@@ -142,6 +142,14 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Lazy
     private com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService ccpMonitoringService;
 
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
+    /** 返工计划来源半成品的占用 (D-S315-01)。⚠️ @Lazy: 它反过来用本类还占用。 */
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
+
     /**
      * 半成品行入一笔产出后, 按质检策略刷新 {@code inspectionStatus} (不扣 ⇒ 原样)。
      *
@@ -260,9 +268,18 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (report.getSourceWipNo() != null && !report.getSourceWipNo().isBlank()
                 && report.getInputQuantity() != null) {
             BigDecimal sourceWipQuantity = sourceWipQuantity(report);
+            // 返工计划领自己的来源 (D-S315-01): 开工已占用的部分不再看余额, 校验后还回占用,
+            // 再走下面同一条扣减 —— 流水、血缘、成本都和普通领用一样, 这批料只扣一次。
+            BigDecimal covered = secondaryPlanFeedService == null ? BigDecimal.ZERO
+                    : secondaryPlanFeedService.coveredByHold(factoryId, task.getProductionBatchId(),
+                            report.getSourceWipNo(), sourceWipQuantity, report.getId());
             SemiFinishedInventory sourceWip = validateSourceWip(
                     factoryId, ownershipGuard.ofProductionBatch(factoryId, task.getProductionBatchId()),
-                    report.getSourceWipNo(), sourceWipQuantity, report.getInputUnit(), report.getId());
+                    report.getSourceWipNo(), sourceWipQuantity.subtract(covered), report.getInputUnit(), report.getId());
+            if (covered.signum() > 0) {
+                secondaryPlanFeedService.forBatch(factoryId, task.getProductionBatchId()).ifPresent(source ->
+                        secondaryPlanFeedService.release(factoryId, source, covered, operatorId));
+            }
             consumeSourceWip(sourceWip, sourceWipQuantity, report, task, operatorId);
         }
         String outputKind = report.getOutputKind();
@@ -2263,13 +2280,13 @@ public class WipInventoryServiceImpl implements WipInventoryService {
      */
     @Override
     public void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId,
-                                       Owner consumer) {
+                                       Owner consumer, String planId) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "扣减数量必须大于 0");
         }
         // 悲观写锁防并发超扣
-        SemiFinishedInventory wip = wipRepo.findByIdForUpdate(wipId)
-                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId));
+        SemiFinishedInventory wip = refreshedAfterLock(wipRepo.findByIdForUpdate(wipId)
+                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId)));
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
@@ -2299,7 +2316,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .semiFinishedId(wip.getId())
                 .txnType(SemiFinishedInventoryTransaction.TxnType.OUT)
                 .sourceType(SemiFinishedInventoryTransaction.SourceType.SECONDARY_CONSUME)
-                .sourceRef("secondary-plan-deduct:" + wipId)
+                .sourceRef(com.cretas.aims.service.production.SecondaryPlanFeedService.deductRef(wipId, planId))
                 .quantity(qty.negate())
                 .unitCostAtTxn(wip.getUnitCost())
                 .balanceAfter(newAvail)
@@ -2312,18 +2329,29 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     }
 
     /**
+     * 拿到行锁后强制读库。同一事务里先前读过这一行时, 锁查询返回的是持久化上下文里的旧值,
+     * 表又没有 @Version, 改完写回会覆盖别人已提交的余额。锁查询本身会先 flush, 这里不会丢本事务的改动。
+     */
+    private SemiFinishedInventory refreshedAfterLock(SemiFinishedInventory locked) {
+        if (entityManager != null) {
+            entityManager.refresh(locked);
+        }
+        return locked;
+    }
+
+    /**
      * 修1 (🔴) 二次加工反冲 — {@link #deductForSecondaryPlan} 的逆: 还回开工扣的半成品余量。
      *
      * <p>调用方必须持有 @Transactional。findByIdForUpdate 悲观写锁防并发 (与 deduct 对称)。
      */
     @Override
-    public void reverseSecondaryDeduct(Long wipId, BigDecimal qty, String factoryId, Long operatorId) {
+    public void reverseSecondaryDeduct(Long wipId, BigDecimal qty, String factoryId, Long operatorId, String planId) {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "反冲数量必须大于 0");
         }
         // 悲观写锁 (与 deductForSecondaryPlan 对称)
-        SemiFinishedInventory wip = wipRepo.findByIdForUpdate(wipId)
-                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId));
+        SemiFinishedInventory wip = refreshedAfterLock(wipRepo.findByIdForUpdate(wipId)
+                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId)));
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
@@ -2350,7 +2378,7 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .semiFinishedId(wip.getId())
                 .txnType(SemiFinishedInventoryTransaction.TxnType.REVERSE)
                 .sourceType(SemiFinishedInventoryTransaction.SourceType.REVERSAL)
-                .sourceRef("secondary-plan-reverse:" + wipId)
+                .sourceRef(com.cretas.aims.service.production.SecondaryPlanFeedService.reverseRef(wipId, planId))
                 .quantity(qty)
                 .unitCostAtTxn(wip.getUnitCost())
                 .balanceAfter(newAvail)
