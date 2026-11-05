@@ -147,11 +147,16 @@ export async function executeStep(state:DemoState,stepId:DemoStepId,form:DemoRec
     result=await readDocument(transport,path(`warehouse/receiving/receipts/${id(r)}`),state)
     if(result.status!=='CONFIRMED'||rows(result.items).some(item=>!item.materialBatchId))throw new Error('收货批次尚未完整入库')
   }else if(stepId==='sales-order-submit'||stepId==='sales-order-approve'){
-    const s=await readDocument(transport,path(`sales/orders/${id(so())}`),state)
-    if(stepId==='sales-order-submit'&&!['FINANCE_APPROVED','PROCESSING','COMPLETED','PARTIAL_DELIVERED','PENDING_FINANCE_REVIEW'].includes(String(s.status)))await send(`sales/orders/${id(s)}/submit-for-review`,{})
+    let s=await readDocument(transport,path(`sales/orders/${id(so())}`),state)
+    if(stepId==='sales-order-submit'&&s.status==='DRAFT'){
+      await send(`sales/orders/${id(s)}/confirm`,{})
+      s=await readDocument(transport,path(`sales/orders/${id(s)}`),state)
+    }
+    if(stepId==='sales-order-submit'&&['CONFIRMED','FINANCE_REJECTED'].includes(String(s.status)))await send(`sales/orders/${id(s)}/submit-for-review`,{})
     if(stepId==='sales-order-approve')await approveWorkflow(state.runKey,'SALES_ORDER',id(s),transport)
     result=await readDocument(transport,path(`sales/orders/${id(s)}`),state)
-    if(stepId==='sales-order-approve'&&!['FINANCE_APPROVED','CONFIRMED','PROCESSING','COMPLETED'].includes(String(result.status)))throw new Error('销售审批尚未通过')
+    if(stepId==='sales-order-submit'&&!['FINANCE_APPROVED','PENDING_FINANCE_REVIEW','WORKFLOW_RUNNING','PROCESSING','COMPLETED','PARTIAL_DELIVERED'].includes(String(result.status)))throw new Error('销售订单尚未进入审核或获批状态')
+    if(stepId==='sales-order-approve'&&!['FINANCE_APPROVED','PROCESSING','COMPLETED','PARTIAL_DELIVERED'].includes(String(result.status)))throw new Error('销售审批尚未通过')
   }else if(stepId==='production-plan-create'){
     let p=state.entities.productionPlan
     if(!p){const existing=rows(await transport.get(path(`production-plans/by-sales-order/${id(so())}`)));p=existing.find(v=>String(v.notes).includes(state.runKey))}
