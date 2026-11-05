@@ -2,6 +2,7 @@ package com.cretas.aims.repository.shortage;
 
 import com.cretas.aims.entity.shortage.ProcessParamDeviationCaseDetail;
 import com.cretas.aims.entity.shortage.ShortageCase;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
@@ -10,6 +11,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -29,6 +31,8 @@ class ProcessParamDeviationCaseRepositoryQueryValidationTest {
 
     @Autowired private ShortageCaseRepository cases;
     @Autowired private ProcessParamDeviationCaseDetailRepository details;
+    @Autowired private EntityManager entityManager;
+    @Autowired private JdbcTemplate jdbc;
 
     @Test
     void sourceKeyLockQueryAndEnumMappingExecuteAgainstRealJpaContext() {
@@ -74,5 +78,14 @@ class ProcessParamDeviationCaseRepositoryQueryValidationTest {
                 java.util.List.of(ShortageCase.SourceType.PROCESS_PARAM_DEVIATION))).isPresent();
         assertThat(details.findByCaseIdAndFactoryIdForUpdate(c.getId(), "Q-PARAM")).isPresent();
         assertThat(details.findByFactoryIdAndSourceKey("OTHER", "yield-report:1:temp")).isEmpty();
+
+        details.delete(d);
+        details.flush();
+        entityManager.clear();
+        assertThat(details.findById(c.getId())).isEmpty();
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM process_param_deviation_case_details WHERE case_id = ? AND deleted_at IS NOT NULL",
+                Integer.class, c.getId())).isEqualTo(1);
+        assertThat(cases.findById(c.getId())).isPresent();
     }
 }

@@ -11,6 +11,7 @@ import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -29,6 +30,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @Entity
 @Table(name = "process_param_deviation_case_details")
+@SQLDelete(sql = "UPDATE process_param_deviation_case_details SET deleted_at = NOW() WHERE case_id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ProcessParamDeviationCaseDetail extends BaseEntity {
 

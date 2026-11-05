@@ -22,3 +22,9 @@ PhaseA implementation状态review，真实迁移95已线上成功，V20261106_1�
 
 官方可信制品已完成：head7d2819 Java19类272总=270pass+既有ShortageCaseRepo两H2-only seed在PG条件skip，0fail/error；新增迁移1/生命周期4/JPA1/Service7/双profile7全无skip，Java package383秒、Web77秒，PG57048 finally stop0。初次统一stage被审计有效锁58024拒绝，未跑测试；随后官方manifest入口独立构建不占发布锁，未拼生产部署。
 1499首轮scan-surface-in-sync实际FAIL只因新增Entity统计550→551；用canonical --regen-offline在既有476表hasdel快照上重放，只改生成出处stamp/统计注释，扫描62对/手工2条和实际SQL完全不变、drift gate PASS，不改阈值/生成器/数据库快照。最终补齐OK事实恢复中文状态且仍需人工核查，Panel目标10与type/build按新Web内容复验；Java源码/测试树不变复用272证据与JAR，不再Maven。正式head/stage/CI与生产A/B仍待，未称业务通过。
+
+## 2026-11-06 CI soft-delete gate fix
+
+Head2926 actual fast CI executed7612 tests: one failure in SoftDeleteAnnotationCoverageRatchetContractTest; PG lane succeeded. New detail Entity had @Where but no local @SQLDelete, so repository delete could physically remove a fact. No baseline/threshold was changed. Add version-bound SQLDelete using the real case_id primary key, plus real JPA delete+flush+clear and JDBC proof that the physical row remains with deleted_at while ORM hides it and the parent remains. Original failure log retained at pr1499-fast-first-failure.log.
+
+Normal merge of published24c7 into this candidate changes no source tree and removes already-delivered SOP from PR three-dot diff. Source changed for the Entity fix, so Java trusted artifact must rebuild once; unchanged final Web tree6dcd03339c09 is reused. Final official selector is the prior19 plus SoftDeleteAnnotationCoverageRatchetContractTest and SqlDeleteBindsVersionColumnContractTest; current-head CI must pass again. PhaseA writer remains disabled, migration unchanged; no production writes from this fix.
