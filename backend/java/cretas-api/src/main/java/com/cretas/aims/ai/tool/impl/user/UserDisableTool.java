@@ -60,7 +60,7 @@ public class UserDisableTool extends AbstractBusinessTool {
 
         Map<String, Object> username = new HashMap<>();
         username.put("type", "string");
-        username.put("description", "要禁用的用户名（当不知道userId时可用用户名查找）");
+        username.put("description", "要禁用的用户名；不知道用户编号时，可用用户名查找");
         properties.put("username", username);
 
         Map<String, Object> reason = new HashMap<>();

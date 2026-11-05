@@ -47,7 +47,7 @@ public class InvoiceStatusTool extends AbstractBusinessTool {
         return Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "salesOrderId", Map.of("type", "string", "description", "销售订单ID (可选,优先级低于 invoiceId)"),
+                        "salesOrderId", Map.of("type", "string", "description", "销售订单编号（可选，优先按发票编号查询）"),
                         "invoiceId", Map.of("type", "string", "description", "开票记录ID (可选,优先级最高)")
                 ),
                 "required", List.of()
