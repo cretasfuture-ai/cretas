@@ -82,6 +82,23 @@ def test_api_unknown_timeout_preserves_pending_and_forbids_resume(tmp_path,monke
     asyncio.run(scenario())
 
 
+def test_explicitly_abandoned_unknown_is_upper_bound_charged_and_never_replayed(tmp_path,monkeypatch):
+    api,root,requests=fake_client(tmp_path,monkeypatch,timeout=True)
+    async def scenario():
+        client=api.SyntheticClient(root)
+        with pytest.raises(RuntimeError):await client.ask('unknown',api.MINI,'classify','synthetic',{'type':'object'},20)
+        await client.close()
+        ledger=json.loads((root/'api-ledger.json').read_text(encoding='utf-8'))
+        ledger[0]['state']='abandoned_unknown'
+        (root/'api-ledger.json').write_text(json.dumps(ledger),encoding='utf-8')
+        resumed=api.SyntheticClient(root)
+        assert resumed.used[api.MINI]==ledger[0]['reserved_tokens']
+        with pytest.raises(ValueError,match='never replay unknown'):await resumed.ask('unknown',api.MINI,'classify','synthetic',{'type':'object'},20)
+        assert len(requests)==1
+        await resumed.close()
+    asyncio.run(scenario())
+
+
 def test_api_daily_budget_blocks_before_network(tmp_path,monkeypatch):
     api,root,requests=fake_client(tmp_path,monkeypatch)
     async def scenario():
@@ -122,14 +139,25 @@ def test_followup_mini_receives_no_gold_or_family_metadata(tmp_path,monkeypatch)
     class Client:
         def __init__(self,*_,**__):pass
         async def close(self):pass
-        async def ask(self,*args):payloads.append(args[3]);return {'label':'A','confidence':.9}
+        async def ask(self,*args):payloads.append(args[3]);return {'choice':0,'confidence':.9}
     monkeypatch.setattr(followup,'SyntheticClient',Client)
     pool=SimpleNamespace(choices=lambda *_:[dict(value='A',description='read fixture')])
     rows=[dict(record_id='sample',text='synthetic request',label='SECRET_LABEL',group_id='SECRET_FAMILY',logits=[2,1])]
     output=asyncio.run(followup.mini_many(tmp_path,'fixture',rows,pool))
     assert set(json.loads(payloads[0]))=={'text','candidates'}
+    assert json.loads(payloads[0])['candidates']==[dict(id=0,description='read fixture')]
     assert 'SECRET_LABEL' not in payloads[0] and 'SECRET_FAMILY' not in payloads[0]
     assert output['sample']['prediction']=='A'
+
+
+def test_followup_confirmation_rejects_changed_selection_before_inference(tmp_path,monkeypatch):
+    import factory_generalization as followup
+    monkeypatch.setattr(followup,'verify',lambda _ : ({},{}))
+    monkeypatch.setattr(followup,'predict',lambda *_:pytest.fail('Must not read model or test predictions'))
+    (tmp_path/'selection.json').write_text('{}',encoding='utf-8')
+    policy=dict(runner_sha256=followup.sha(Path(followup.__file__)),decision_sha256=followup.sha(SCRIPTS/'factory_accuracy_eval.py'),selection_sha256='stale-selection',mapping_sha256='unused',test_hash='unused')
+    (tmp_path/'routing-policy.json').write_text(json.dumps(policy),encoding='utf-8')
+    with pytest.raises(ValueError,match='Calibrated selection'):asyncio.run(followup.confirm(tmp_path))
 
 
 @pytest.mark.parametrize('text,ambiguous',[('库存还有多少',True),('上次那张排行呢',True),('今天异常情况怎么样',True),('上班打卡',False),('确认这张采购单收货',False),('这批原料来自哪个供应商',False),('本周产品销售排名',False),('库存周转率是多少',False)])

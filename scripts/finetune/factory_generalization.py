@@ -73,7 +73,12 @@ async def generate(root,phase):
         '不能编造系统未支持的动作。不能出现标签ID、函数名、技术变量或答案编号，不能使用真实客户、姓名、工厂代码。缺实体ID不妨碍明确意图；缺业务对象不能当明确意图。'
         'OUT_OF_DOMAIN只生成真正无关闲聊；UNSUPPORTED_CAPABILITY生成明确但系统不支持的工厂需求。其余不要涉及餐饮桌台菜品运营。'+style)
     schema=dict(type='object',properties=dict(texts=dict(type='array',items=dict(type='string'),minItems=count,maxItems=count)),required=['texts'],additionalProperties=False)
-    client=SyntheticClient(root,concurrency=3)
+    # Confirmation uses its own receipt/ledger files and a different model budget.
+    # It may be generated alongside training text, with no shared writer files.
+    directory=root if phase=='train' else root/(phase+'-generation')
+    directory.mkdir(exist_ok=True)
+    if directory!=root:(directory/'shared-budget-root').write_text('parent',encoding='utf-8')
+    client=SyntheticClient(directory,concurrency=3)
     try:
         async def one(code):
             context=context_for(code,definitions)
@@ -100,9 +105,19 @@ async def audit(root):
     client=SyntheticClient(root,concurrency=3)
     try:
         async def one(i,batch,candidates):
+            request_id='v2:audit:'+str(i)
+            incident_path=root/'audit-format-incident.json'
+            incident=json.loads(incident_path.read_text(encoding='utf-8')) if incident_path.exists() else {}
+            if request_id in incident.get('unknown_never_replay',[]):return []
+            previous=client.done.get(request_id)
+            if previous and previous.get('error'):
+                if request_id not in incident.get('completed_format_repair',[]):raise ValueError('Explicit audit repair authorization missing')
+                request_id='v2:audit-format-repair1:'+str(i)
+            max_output=incident.get('original_output_limits',{}).get('v2:audit:'+str(i),4096)
+            if previous and previous.get('error'):max_output=4096
             schema=dict(type='object',properties=dict(labels=dict(type='array',items=dict(type='string',enum=candidates+['__UNCERTAIN__']),minItems=len(batch),maxItems=len(batch))),required=['labels'],additionalProperties=False)
             payload=dict(candidates=[{k:definitions[c][k] for k in ['code','name','meaning']} for c in candidates],texts=[r['text'] for r in batch])
-            result=await client.ask('v2:audit:'+str(i),MINI,'独立复核工厂用户原话。逐句按最终需要的输出和动作选最具体标签，不要被背景名词误导；查询不能当执行。无唯一明确目标、无合适候选或不确定则__UNCERTAIN__。顺序对应原话，不推测生成标签。',json.dumps(payload,ensure_ascii=False),schema,2048)
+            result=await client.ask(request_id,MINI,'独立复核工厂用户原话。逐句按最终需要的输出和动作选最具体标签，不要被背景名词误导；查询不能当执行。无唯一明确目标、无合适候选或不确定则__UNCERTAIN__。顺序对应原话，不推测生成标签。',json.dumps(payload,ensure_ascii=False),schema,max_output)
             if len(result['labels'])!=len(batch):raise ValueError('Audit alignment mismatch')
             return [dict(r,training_audit=label) for r,label in zip(batch,result['labels'])]
         output=[r for batch in await asyncio.gather(*(one(i,*batch) for i,batch in enumerate(batches))) for r in batch]
@@ -231,15 +246,18 @@ def train(root):
 async def mini_many(root,phase,rows,pool):
     directory=root/(phase+'-shadow');directory.mkdir(exist_ok=True)
     (directory/'shared-budget-root').write_text('parent',encoding='utf-8');client=SyntheticClient(directory,concurrency=3)
-    instruction=('识别工厂ERP最终业务目标，只选最具体吻合候选，不执行。背景提到的对象不是目标。区分查询/执行、原料/成品、流水/统计/综合工作台。缺业务对象/指标/动作或无唯一匹配选__CLARIFY__；缺具体编号不妨碍明确意图。闲聊选OUT_OF_DOMAIN，明确缺失能力选UNSUPPORTED_CAPABILITY。')
+    instruction=('识别工厂ERP最终业务目标，只返回最具体吻合的候选编号，不执行。背景提到的对象不是目标。区分查询/执行、原料/成品、流水/统计/综合工作台。缺业务对象/指标/动作或无唯一匹配选需要澄清的候选；缺具体编号不妨碍明确意图。无关闲聊和明确缺失能力按对应候选定义选择。')
     try:
         async def one(row):
             choices=pool.choices(row['text'],row['logits'])
             choices=[dict(value=r['value'],description=r['description'][:100]) for r in choices]
             values=[r['value'] for r in choices]
-            schema=dict(type='object',properties=dict(label=dict(type='string',enum=values),confidence=dict(type='number',minimum=0,maximum=1)),required=['label','confidence'],additionalProperties=False)
-            body=await client.ask('v2:'+phase+':'+row['record_id'],MINI,instruction,json.dumps(dict(text=row['text'],candidates=choices),ensure_ascii=False),schema,768)
-            return dict(record_id=row['record_id'],prediction=body['label'],confidence=body['confidence'],candidates=values)
+            schema=dict(type='object',properties=dict(choice=dict(type='integer',enum=list(range(len(values)))),confidence=dict(type='number',minimum=0,maximum=1)),required=['choice','confidence'],additionalProperties=False)
+            compact=[dict(id=i,description=c['description']) for i,c in enumerate(choices)]
+            body=await client.ask('v2:'+phase+':'+row['record_id'],MINI,instruction,json.dumps(dict(text=row['text'],candidates=compact),ensure_ascii=False),schema,768)
+            choice=body['choice']
+            if type(choice) is not int or not 0<=choice<len(values):raise ValueError('Invalid candidate index')
+            return dict(record_id=row['record_id'],prediction=values[choice],confidence=body['confidence'],candidates=values)
         output=await asyncio.gather(*(one(row) for row in rows));write(root/(phase+'-mini.jsonl'),output)
         return {r['record_id']:r for r in output}
     finally:await client.close()
@@ -262,7 +280,7 @@ async def calibrate(root):
                 grid.append(dict(policy=policy,hybrid=scores(paired),mini_calls=sum(decision(r,mapping,policy)[1]=='abstain' for r in rows)))
     feasible=[r for r in grid if r['hybrid']['accuracy']>=.97]
     best=min(feasible,key=lambda r:(r['mini_calls'],-r['hybrid']['accuracy'])) if feasible else max(grid,key=lambda r:(r['hybrid']['accuracy'],-r['mini_calls']))
-    policy=dict(best['policy'],model_sha256=selection['model_sha256'],test_hash=sha(root/'test.jsonl'),runner_sha256=sha(Path(__file__)),decision_sha256=sha(WORK/'scripts/finetune/factory_accuracy_eval.py'),selected_on='independent calibration only',metrics=best)
+    policy=dict(best['policy'],model_sha256=selection['model_sha256'],test_hash=sha(root/'test.jsonl'),runner_sha256=sha(Path(__file__)),decision_sha256=sha(WORK/'scripts/finetune/factory_accuracy_eval.py'),selection_sha256=sha(root/'selection.json'),mapping_sha256=sha(root/'model-mapping.json'),selected_on='independent calibration only',metrics=best)
     path=root/'routing-policy.json'
     if path.exists() and json.loads(path.read_text(encoding='utf-8'))!=policy:raise ValueError('Routing policy changed')
     save(path,policy);save(root/'calibration-search.json',grid)
@@ -272,6 +290,7 @@ async def calibrate(root):
 async def confirm(root):
     protocol,manifest=verify(root);selection=json.loads((root/'selection.json').read_text(encoding='utf-8'));policy=json.loads((root/'routing-policy.json').read_text(encoding='utf-8'))
     if sha(Path(__file__))!=policy['runner_sha256'] or sha(WORK/'scripts/finetune/factory_accuracy_eval.py')!=policy['decision_sha256']:raise ValueError('Routing implementation changed')
+    if sha(root/'selection.json')!=policy['selection_sha256'] or sha(root/'model-mapping.json')!=policy['mapping_sha256'] or sha(root/'test.jsonl')!=policy['test_hash']:raise ValueError('Calibrated selection, mapping or test changed')
     selected=Path(selection['model_path'])
     if sha(selected/'model.safetensors')!=policy['model_sha256']:raise ValueError('Selected model changed')
     stamp=dict(model=policy['model_sha256'],test=sha(root/'test.jsonl'),policy=sha(root/'routing-policy.json'),selection=sha(root/'selection.json'))
