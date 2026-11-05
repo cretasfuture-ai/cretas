@@ -15,7 +15,7 @@ describe('SavedAnalysisReport', () => {
     const wrapper = mount(SavedAnalysisReport, { props: { report: report() } });
     expect(wrapper.text()).toContain('136');
     expect(wrapper.text()).toContain('可核对材料与人工');
-    expect(wrapper.text()).toContain('已有资料可核对');
+    expect(wrapper.text()).toContain('这 136 张工单里，37 张可核对材料和人工成本');
     expect(wrapper.text()).toContain('找谁处理');
     expect(wrapper.text()).not.toContain('北京时间含首尾');
     expect(wrapper.text()).not.toContain('数据版本 v2');

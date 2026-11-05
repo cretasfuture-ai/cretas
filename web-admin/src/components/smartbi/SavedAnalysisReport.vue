@@ -19,7 +19,8 @@ const sectionName = (section: SectionInsightReport) => shortNames[section.sectio
 const category = (section: SectionInsightReport) => section.sectionId.includes('cost') || section.sectionId.includes('material') ? '成本' : section.sectionId.includes('inventory') ? '库存' : section.sectionId.includes('production') || section.sectionId.includes('quality') ? '生产' : '资料';
 const roleSuggestions:Record<string,string>={coverage:'生产、仓库和财务负责人',material:'仓库负责人、生产领料经办人',labor:'生产负责人、财务',finished:'生产负责人、成品仓管',product_cost:'生产负责人、财务',production:'生产主管、计划负责人',inventory:'仓库负责人、财务'};
 const ownerLabel=computed(()=>activeSection.value?.localAnalysis?.owner||roleSuggestions[activeSection.value?.sectionId||'']||'工厂管理员');
-const statisticText = (section: SectionInsightReport) => (section.localAnalysis?.statistics || []).filter(item=>!isBoilerplate(item.text)).map(item => clean(item.text)).filter(Boolean).slice(0, 2);
+const plainStatistic=(value:string)=>value.includes('缺什么')?value.split(/[；;]\s*找谁/)[0]!.replace(/缺什么[—\-：:]+/,'缺少').replace(/[。；]+$/,'。'):value;
+const statisticText = (section: SectionInsightReport) => (section.localAnalysis?.statistics || []).filter(item=>!isBoilerplate(item.text)).map(item => plainStatistic(clean(item.text))).filter(Boolean).slice(0, 2);
 const fallbackEvidence = (section: SectionInsightReport) => [...section.observations, ...section.calculation].filter(item=>!isBoilerplate(item)).map(clean).filter(Boolean);
 const metrics = computed(() => {
   const summary = props.report?.result?.summary || '';
@@ -29,6 +30,13 @@ const metrics = computed(() => {
     ['暂不能核对成本', summary.match(/(\d[\d,]*)\s*张仍需核对/)?.[1]],
   ].filter(([, value]) => value).map(([label, value]) => ({ label, value: String(value) }));
   return entries;
+});
+const conclusion=computed(()=>{
+  const section=activeSection.value;
+  if(section?.sectionId==='coverage'&&metrics.value.length===3){
+    return `这 ${metrics.value[0]!.value} 张工单里，${metrics.value[1]!.value} 张可核对材料和人工成本；其余 ${metrics.value[2]!.value} 张，先确认完工进度或补齐成本资料。`;
+  }
+  return clean(section?.localAnalysis?.whatItMeans||section?.summary||'本节暂未形成可读结论。');
 });
 </script>
 
@@ -42,7 +50,7 @@ const metrics = computed(() => {
       <nav v-if="sections.length" class="section-nav" aria-label="报告内容"><button v-for="section in sections" :key="section.sectionId" type="button" :class="{active: activeSection?.sectionId === section.sectionId}" @click="selectedId = section.sectionId">{{ sectionName(section) }}</button></nav>
       <article v-if="activeSection" class="section-card">
         <div class="card-title"><span class="category">{{category(activeSection)}}</span><h3>{{sectionName(activeSection)}}</h3></div>
-        <p class="conclusion">{{clean(activeSection.localAnalysis?.whatItMeans||activeSection.summary||'本节暂未形成可读结论。')}}</p>
+        <p class="conclusion">{{conclusion}}</p>
         <div class="action-grid">
           <div><b>哪里要核对</b><p v-for="item in (statisticText(activeSection).length?statisticText(activeSection):fallbackEvidence(activeSection).slice(0,2))" :key="item">{{item}}</p><p v-if="!statisticText(activeSection).length&&!fallbackEvidence(activeSection).length" class="muted">暂无明确数字依据。</p></div>
           <div><b>找谁处理</b><p>{{ownerLabel}}</p></div>
