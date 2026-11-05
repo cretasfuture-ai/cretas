@@ -4,7 +4,7 @@ vi.mock('../request', () => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: v
 
 import { get } from '../request';
 import { ApiError } from '@/types/api';
-import { getFullTrace, isTraceNotFound } from '../traceability';
+import { getBatchesForProductionPlans, getFullTrace, isTraceNotFound } from '../traceability';
 import { getSourceIndividualDetail } from '../sourceIndividual';
 
 const mockedGet = vi.mocked(get);
@@ -51,5 +51,33 @@ describe('isTraceNotFound — both shapes the interceptor can hand us', () => {
     expect(isTraceNotFound(new ApiError('服务器错误', 'SERVER_ERROR', 500))).toBe(false);
     expect(isTraceNotFound(new Error('Network Error'))).toBe(false);
     expect(isTraceNotFound(null)).toBe(false);
+  });
+});
+
+describe('traceability sales-order batch resolution', () => {
+  it('walks every batch page before applying exact productionPlanId matching', async () => {
+    mockedGet
+      .mockResolvedValueOnce({ success: true, data: {
+        content: [{ id: 'b-1', batchNumber: 'PB-1', productionPlanId: 'plan-1' }],
+        totalElements: 2, totalPages: 2, size: 200, number: 0,
+      } })
+      .mockResolvedValueOnce({ success: true, data: {
+        content: [
+          { id: 'b-2', batchNumber: 'PB-2', productionPlanId: 'plan-2' },
+          { id: 'b-3', batchNumber: 'PB-3', productionPlanId: 'plan-1' },
+        ],
+        totalElements: 3, totalPages: 2, size: 200, number: 1,
+      } });
+
+    await expect(getBatchesForProductionPlans('F006', ['plan-1'])).resolves.toEqual([
+      { id: 'b-1', batchNumber: 'PB-1', productionPlanId: 'plan-1' },
+      { id: 'b-3', batchNumber: 'PB-3', productionPlanId: 'plan-1' },
+    ]);
+    expect(mockedGet).toHaveBeenNthCalledWith(1, '/F006/processing/batches-with-clerk-wip', {
+      params: { page: 1, size: 200 }, _silent: true,
+    });
+    expect(mockedGet).toHaveBeenNthCalledWith(2, '/F006/processing/batches-with-clerk-wip', {
+      params: { page: 2, size: 200 }, _silent: true,
+    });
   });
 });

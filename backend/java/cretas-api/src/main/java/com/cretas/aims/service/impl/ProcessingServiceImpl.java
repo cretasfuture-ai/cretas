@@ -3207,6 +3207,14 @@ public class ProcessingServiceImpl implements ProcessingService {
             String factoryId,
             java.time.LocalDateTime startDate,
             java.time.LocalDateTime endDate) {
+        return getTimeRangeBatchesWithCounts(factoryId, startDate, endDate).rows();
+    }
+
+    @Override
+    public TimeRangeBatches getTimeRangeBatchesWithCounts(
+            String factoryId,
+            java.time.LocalDateTime startDate,
+            java.time.LocalDateTime endDate) {
 
         log.info("获取时间范围批次成本数据: factoryId={}, startDate={}, endDate={}",
                 factoryId, startDate, endDate);
@@ -3216,6 +3224,7 @@ public class ProcessingServiceImpl implements ProcessingService {
                 .findByFactoryIdAndCreatedAtBetween(factoryId, startDate, endDate);
 
         log.info("查询到{}个批次", batches.size());
+        final int found = batches.size();
 
         // 2. 限制最大批次数量（避免Token消耗过大）
         final int MAX_BATCHES = 50;
@@ -3223,6 +3232,7 @@ public class ProcessingServiceImpl implements ProcessingService {
             log.warn("批次数量过多({})，限制为前{}个", batches.size(), MAX_BATCHES);
             batches = batches.subList(0, MAX_BATCHES);
         }
+        final int attempted = batches.size();
 
         // 3. 为每个批次获取增强的成本数据
         List<Map<String, Object>> batchesCostData = batches.stream()
@@ -3249,7 +3259,7 @@ public class ProcessingServiceImpl implements ProcessingService {
 
         log.info("成功获取{}个批次的成本数据", batchesCostData.size());
 
-        return batchesCostData;
+        return new TimeRangeBatches(batchesCostData, found, found - attempted, attempted - batchesCostData.size());
     }
 
     /**

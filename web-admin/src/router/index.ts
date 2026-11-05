@@ -112,6 +112,18 @@ const businessRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, title: '首页', icon: 'House', module: 'dashboard' }
       },
       {
+        path: 'demo-flow',
+        name: 'F006DemoFlow',
+        component: () => import('@/views/demo-flow/index.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '流程演示',
+          icon: 'VideoPlay',
+          module: 'dashboard',
+          roles: ['factory_super_admin'],
+        },
+      },
+      {
         path: 'platform/factories',
         name: 'PlatformFactories',
         component: () => import('@/views/platform/factories/index.vue'),

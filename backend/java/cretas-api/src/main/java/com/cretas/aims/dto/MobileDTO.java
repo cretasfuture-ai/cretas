@@ -620,6 +620,11 @@ public class MobileDTO {
         private Integer quotaConsumed;
 
         /**
+         * 给读者的说明（平台 AI 分析入口：哪些产品读不到）；没有就是 null
+         */
+        private String notice;
+
+        /**
          * 错误信息（失败时返回）
          */
         private String errorMessage;

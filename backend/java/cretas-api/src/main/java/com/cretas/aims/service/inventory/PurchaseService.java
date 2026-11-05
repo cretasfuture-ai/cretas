@@ -71,6 +71,20 @@ public interface PurchaseService {
                                       String notes);
 
     /**
+     * F006 demo-only approval boundary.  The implementation revalidates the
+     * demo tenant, role, order marker, actor and APPROVE action before entering
+     * the ordinary workflow transition kernel.
+     */
+    PurchaseOrder applyDemoApproveAction(String factoryId,
+                                         String orderId,
+                                         String instanceId,
+                                         Long actorId,
+                                         String actorRole,
+                                         String expectedNodeId,
+                                         HistoryAction action,
+                                         String notes);
+
+    /**
      * Phase 4a follow-up (issue #45) — RuleEngine bridge method, invoked by submitOrder
      * via self-proxy so {@code @RuleEvaluate} aspect fires.
      *

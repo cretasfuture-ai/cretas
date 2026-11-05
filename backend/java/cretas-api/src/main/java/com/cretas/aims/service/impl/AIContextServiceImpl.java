@@ -129,6 +129,7 @@ public class AIContextServiceImpl implements AIContextService {
         BigDecimal costedOutput = BigDecimal.ZERO;
         // 「不含 N 个保密产品」的 N: 只数真正受保护的产品, 锚点 / 同计划普通产品不算
         Set<String> withheldProtected = new LinkedHashSet<>();
+        int costWithheldRows = 0;
 
         for (ProductionByProductDTO stat : productionStats) {
             String productTypeId = stat.getProductTypeId();
@@ -140,6 +141,7 @@ public class AIContextServiceImpl implements AIContextService {
                     && (productTypeId == null || excluded.coversProduct(productTypeId)
                         || productBatches.stream().anyMatch(b -> excluded.coversPlan(b.getProductionPlanId())));
             if (withheld) {
+                costWithheldRows++;
                 withheldProtected.addAll(excluded.protectedBehind(productTypeId, productBatches.stream()
                         .map(ProductionBatch::getProductionPlanId).filter(Objects::nonNull).toList()));
                 productionWithCost.add(ProductionAIContext.ProductionWithCostDTO.builder()
@@ -305,6 +307,7 @@ public class AIContextServiceImpl implements AIContextService {
                 .topProductsByCost(topByCost)
                 .topProductsByCostVariance(topByVariance)
                 .excludedProtectedProductCount(excluded != null ? withheldProtected.size() : null)
+                .costWithheldProductCount(excluded != null ? costWithheldRows : null)
                 .calculatedAt(LocalDateTime.now().format(DATE_FORMATTER))
                 .build();
     }
