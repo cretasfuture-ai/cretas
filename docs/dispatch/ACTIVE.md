@@ -6,17 +6,11 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
-- `SEC-RESTAURANT-SSE-FIXTURE-20261105` — `review` — Owner root — Base c21afba0f7 — scope PaymentSseActor/ClarificationRoleAudience/SkillRouteGuard/SseConversationPagination/SseF006BossMini/SseSemanticCacheAdmission/SupplierComparisonStreaming七阳性tests；exact Factory；root测试。
 
-- `SEC-RESTAURANT-FACTORY-COMPAT-20261105` — `review` — Owner root — Base 41f58a822cf — scope Python warmup及materialized共享模板tests；已冻结f883/Python full5983pass，PR1479最终交付，详归档。
 
-- `SEC-RESTAURANT-OPS-20261105` — `review` — Owner root — Base 41f58a822cf — scope scripts餐饮cron/ETL/演示/E2E及Python部署引用；清除运行入口/重新生成readonly bundle，保留工厂场景。验收Node/shell/部署契约；4执行者目录产物隔离，冻结即释放。
 
-- `SEC-RESTAURANT-JAVA-20261105` — `review` — Owner root — Base 41f58a822cf — scope backend/java及tests；餐饮退役、工厂供货、权限/配置/模板拦截；Canvas仅退休角色deny，不改DAG/缺料/采购审批业务。验收Maven、真实PG/JPA、factory回归，详归档。
 
-- `SEC-RESTAURANT-PYTHON-20261105` — `review` — Owner root — Base 41f58a822cf — scope synthesis_engine tests与test_synthesis_auto_dimensions/dish_margin_plan；恢复被改名隐藏的factory断言，删纯餐饮case，禁改生产源码/其他tests；pytest目标及_retired_test零扫描。
 
-- `SEC-RESTAURANT-UI-20261105` — `review` — Owner root — Base 41f58a822cf — scope web-admin及frontend/CretasFoodTrace；删除餐饮专属页面/导航/API/角色入口，迁出工厂复用。验收Web/RN类型/构建/入口契约；禁止Canvas/缺料/演示业务修改。
 
 
 
@@ -156,11 +150,3 @@
 - 按 AGENTS.md 的唯一协调者、结构化回执与弹性并发规则执行；创建 worktree、派工和合并前核对本表及 `git worktree list`。
 - 仅在飞状态；merged 当次归档释放 scope。每条≤300字、全文≤30000 bytes，不开三级增量段；详细证据进 archive/。PR/push/fastlane 保留 `python scripts/ci/check_dispatch_active.py` 门禁。
 - 原维护规则全文保留在 archive/2026-10-22-s6-b3b-review.md。
-
-- `SEC-RESTAURANT-FACTORY-STORE-20261105` — `review` — Owner root — Base 41f58a822cf — scope Python AgentOps store/validation及factory ACL/trace回归；保留旧factory精确重放，pytest+独立PG证据见归档。
-
-- `SEC-SUPPLIER-SPEC-LOCK-20261105` — `review` — Owner root — Base 80ba92ace2 — scope 独立supplier-guard-verify WT的SupplierMaterialPurchaseSpecServiceImpl及其单测/PG引用契约/JPA查询测试；接eb guard、锁后父关系复核；root独占Maven/commit。
-
-- `SEC-RESTAURANT-INTENT-FIXTURE-20261105` — `review` — Owner root — Base 19923121a6 — scope 两库存工具Java、gateway双YAML/declared清单及GatedData/Demo/DescriptorPolicyResolver/ToolGatewayPriceBoundary/RuntimeToolPolicyLoader/ToolDescriptorInventoryDrift测试；最小权限与精确描述，root Maven/SCM。
-- `SEC-RESTAURANT-RETIRED-TESTS-20261105` — `review` — Owner root — Base 19923121a6 — scope inventory的SupplierDeliveryNote/WastageRecord及FactoryInventorySoftDeleteRepositoryQueryValidationTest、soft-delete-known-violations.txt；补类级软删除并真实PG验证；root Maven/SCM。
-- `SEC-RESTAURANT-JAVA-CLIENTS-20261105` — `review` — Owner root — Base 5fa4d12c5d — scope PythonSmartBIClient/GoldFinanceClient、KB/SemanticMatcher、IndicatorQueryServiceImpl/LlmIntentFallbackClientImpl及tests；迁工厂共用、删餐饮HTTP/phrase/domain闭包；root Maven，禁Orch/权限/Supplier。
