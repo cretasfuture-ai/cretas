@@ -141,12 +141,13 @@ class ToolDispatchServiceLastActionTest {
         dispatch.executeWithTool(tool, "F006", confirmed(context), intent("MATERIAL_BATCH_USE", "原料领用", tool),
                 42L, "warehouse_manager", null);
 
-        assertThat(tool.arguments).containsEntry("quantity", 30).containsEntry("productionPlanId", "PP-1");
+        assertThat(tool.arguments).containsEntry("quantity", 30).doesNotContainKey("productionPlanId");
+        org.mockito.Mockito.verify(dispatch, org.mockito.Mockito.never()).extractParametersWithLLM(anyString(), anyString(), any(), anyMap());
     }
 
     @Test
-    void withoutFollowUpMarkerLlmExtractionStillOverridesAsBefore() throws Exception {
-        // 对照: 不是追问确认点回来的请求, 维持原行为 (LLM 补参覆盖) —— 证明上一条的「没被改」来自标记
+    void confirmedCommandIsFrozenWithoutFollowUpMarkerToo() throws Exception {
+        // 确认令牌冻结全部业务参数，不再由 LLM 覆盖；不依赖追问按钮标记。
         ScriptedTool tool = useTool();
         ToolDispatchService dispatch = spy(newDispatch());
         doReturn(new HashMap<>(Map.of("quantity", 10, "productionPlanId", "PP-1")))
@@ -155,7 +156,7 @@ class ToolDispatchServiceLastActionTest {
         dispatch.executeWithTool(tool, "F006", confirmed(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30))),
                 intent("MATERIAL_BATCH_USE", "原料领用", tool), 42L, "warehouse_manager", null);
 
-        assertThat(tool.arguments).containsEntry("quantity", 10);
+        assertThat(tool.arguments).containsEntry("quantity", 30).doesNotContainKey("productionPlanId");
     }
 
     /**
@@ -171,15 +172,15 @@ class ToolDispatchServiceLastActionTest {
         com.cretas.aims.service.consent.LlmEgressGuard guard =
                 new com.cretas.aims.service.consent.LlmEgressGuard(new ObjectMapper(), names);
         List<com.cretas.aims.service.consent.LlmEgressRedactor.Result> seen = new java.util.ArrayList<>();
-        ScriptedTool tool = useTool();
+        ScriptedTool tool = new ScriptedTool("material_batch_query", ToolExecutor.AccessMode.READ, "{\"success\":true}");
         ToolDispatchService dispatch = spy(newDispatch());
         org.mockito.Mockito.doAnswer(inv -> {
             seen.add(guard.texts("deep", null, "秘制酱牛肉再领十公斤"));
             return new HashMap<>();
         }).when(dispatch).extractParametersWithLLM(eq("F006"), anyString(), any(), anyMap());
 
-        dispatch.executeWithTool(tool, "F006", confirmed(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30))),
-                intent("MATERIAL_BATCH_USE", "原料领用", tool), 42L, "warehouse_manager", null);
+        dispatch.executeWithTool(tool, "F006", IntentExecuteRequest.builder().userInput("查库存").context(Map.of()).build(),
+                intent("MATERIAL_BATCH_QUERY", "原料查询", tool), 42L, "warehouse_manager", null);
 
         assertThat(seen).hasSize(1);
         assertThat(seen.get(0).refused()).isFalse();
@@ -197,6 +198,8 @@ class ToolDispatchServiceLastActionTest {
     }
 
     private IntentExecuteRequest confirmed(Map<String, Object> context) {
+        context = new HashMap<>(context);
+        context.putIfAbsent("userInput", "再加十公斤");
         return IntentExecuteRequest.builder().userInput("再加十公斤")
                 .context(writeGuard.withServerConfirmation(context)).build();
     }

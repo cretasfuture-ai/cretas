@@ -31,16 +31,22 @@ public class GateDiagnosisService {
     private final FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
     public List<GateDiagnosis> diagnoseBatch(String factoryId, String batchNumber) {
+        var material = materialBatchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNumber);
+        var semi = semiRepository.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, batchNumber);
+        var finished = finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNumber);
+        if (material.isEmpty() && semi.isEmpty() && finished.isEmpty()) {
+            throw new BusinessException(404, "当前工厂未找到该批次，请核对批次号")
+                    .withCode("BATCH_NOT_FOUND");
+        }
         List<GateDiagnosis> out = new ArrayList<>();
-        materialBatchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNumber).ifPresent(mb -> {
+        material.ifPresent(mb -> {
             MaterialBatchStateGate.diagnose(mb).ifPresent(out::add);
             if ("PRODUCTION_BATCH".equals(mb.getSourceDocType())) {
                 collect(out, () -> QcInspectionGuard.assertWipBatchDrawable(mb, batchNumber, null));
             }
         });
-        semiRepository.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, batchNumber)
-                .ifPresent(sfi -> collect(out, () -> QcInspectionGuard.assertSemiDrawable(sfi, null)));
-        finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(factoryId, batchNumber).ifPresent(fg ->
+        semi.ifPresent(sfi -> collect(out, () -> QcInspectionGuard.assertSemiDrawable(sfi, null)));
+        finished.ifPresent(fg ->
                 collect(out, () -> FinishedGoodsBatchSaleabilityGuard.assertSaleable(fg, null, LocalDate.now())));
         return out;
     }

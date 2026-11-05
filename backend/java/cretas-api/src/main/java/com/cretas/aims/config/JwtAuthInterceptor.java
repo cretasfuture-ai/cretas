@@ -313,26 +313,47 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
 
         String urlFactoryId = extractFactoryIdFromUrl(requestUri);
 
-        if (urlFactoryId != null && !isPublicEndpoint(requestUri)) {
-            // 首先检查是否有有效的认证信息（401 场景）
-            if (userId == null || (tokenFactoryId == null && tokenRole == null)) {
-                log.warn("未认证请求: userId={}, tokenFactoryId={}, urlFactoryId={}",
-                        userId, tokenFactoryId, urlFactoryId);
-                sendUnauthorizedResponse(response, "未授权，请先登录");
-                return false;
-            }
+        if (urlFactoryId != null && !isPublicEndpoint(requestUri)
+                && !admitFactory(response, urlFactoryId, userId, tokenFactoryId, tokenRole, platformPrincipal)) {
+            return false;
+        }
 
-            // URL中包含factoryId，需要验证权限（403 场景）
-            if (!validateFactoryAccess(urlFactoryId, tokenFactoryId, platformPrincipal ? tokenRole : null)) {
-                log.warn("跨工厂访问被拒绝: userId={}, tokenFactoryId={}, urlFactoryId={}, role={}",
-                        userId, tokenFactoryId, urlFactoryId, tokenRole);
-                sendForbiddenResponse(response, "无权访问该工厂数据");
-                return false;
-            }
+        // 上面判的是 URL 第一段, 保留字和公开前缀会让它跳过; 而 handler 收到的是路由匹配出的 {factoryId}。
+        // /api/mobile/dashboard/F002 第一段是保留字, /api/mobile/system/shipments/1 把 system 当工厂,
+        // 两者都曾匿名走到 handler。所以路由带工厂变量时, 对 handler 实际收到的值再判一次, 不看公开端点。
+        String routedFactoryId = routedFactoryId(request);
+        if (routedFactoryId != null
+                && !admitFactory(response, routedFactoryId, userId, tokenFactoryId, tokenRole, platformPrincipal)) {
+            return false;
         }
 
         // 继续处理请求
         return true;
+    }
+
+    private boolean admitFactory(HttpServletResponse response, String factoryId, Long userId, String tokenFactoryId,
+                                 String tokenRole, boolean platformPrincipal) throws IOException {
+        // 首先检查是否有有效的认证信息（401 场景）
+        if (userId == null || (tokenFactoryId == null && tokenRole == null)) {
+            log.warn("未认证请求: userId={}, tokenFactoryId={}, factoryId={}", userId, tokenFactoryId, factoryId);
+            sendUnauthorizedResponse(response, "未授权，请先登录");
+            return false;
+        }
+
+        // 请求指向某个工厂，需要验证权限（403 场景）
+        if (!validateFactoryAccess(factoryId, tokenFactoryId, platformPrincipal ? tokenRole : null)) {
+            log.warn("跨工厂访问被拒绝: userId={}, tokenFactoryId={}, factoryId={}, role={}",
+                    userId, tokenFactoryId, factoryId, tokenRole);
+            sendForbiddenResponse(response, "无权访问该工厂数据");
+            return false;
+        }
+        return true;
+    }
+
+    /** 路由匹配出的 {factoryId}, 即 handler 实际收到的值; 路由没有这个变量时为 null。 */
+    private static String routedFactoryId(HttpServletRequest request) {
+        Object variables = request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
+        return variables instanceof Map<?, ?> map && map.get("factoryId") instanceof String factoryId ? factoryId : null;
     }
 
     /**

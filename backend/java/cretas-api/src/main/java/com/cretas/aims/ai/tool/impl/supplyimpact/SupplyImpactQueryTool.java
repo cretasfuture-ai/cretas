@@ -86,6 +86,11 @@ public class SupplyImpactQueryTool extends AbstractBusinessTool {
         return AccessMode.READ;
     }
 
+    @Override
+    public ActionType getActionType() {
+        return ActionType.READ;
+    }
+
     /** 与 SupplyImpactController 同一道闸 (S6: AI 能做的 = App 里本来就能做的)。 */
     @Override
     public Set<String> getRequiredPermissions() {

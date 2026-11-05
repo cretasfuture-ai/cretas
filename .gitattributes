@@ -56,3 +56,4 @@ backend/java/cretas-api/src/main/java/com/cretas/aims/controller/finance/ArApCon
 backend/java/cretas-api/src/main/java/com/cretas/aims/controller/finance/InvoiceController.java whitespace=trailing-space,cr-at-eol
 backend/java/cretas-api/src/main/java/com/cretas/aims/controller/finance/PaymentRecordController.java whitespace=trailing-space,cr-at-eol
 web-admin/src/views/finance/ar-ap/index.vue whitespace=trailing-space,cr-at-eol
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/LabelServiceImpl.java whitespace=trailing-space,cr-at-eol

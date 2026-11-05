@@ -1,31 +1,5 @@
-# Temporary D11B migration lane. This file is intersected with the frozen legacy inventory and
-# exact Spring runtime metadata; it is not a replacement for runtime-tool-policies.yaml.
-# 2026-11-03: restaurant_order_statistics left the lane: it reads sales orders, so it now carries the sales-order
-# permission codes (S6 strict sweep), and this lane only admits tools with no legacy permission metadata.
+# The temporary restaurant-only migration lane is retired, not reassigned to factory tools.
+# Runtime-approved factory policies remain independently governed.
 schemaVersion: 1
-expectedToolCount: 2
-tools:
-  - implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishListTool"
-    toolName: "restaurant_dish_list"
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    allowedRoles: []
-    allowedBusinessTypes: [RESTAURANT, BRANCH]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    dataClassification: CONFIDENTIAL
-  - implementationClass: "com.cretas.aims.ai.tool.impl.restaurant.RestaurantIngredientStockTool"
-    toolName: "restaurant_ingredient_stock"
-    actionType: READ
-    riskLevel: LOW
-    supportsPreview: false
-    requiresPermission: false
-    requiredPermissions: []
-    allowedRoles: []
-    allowedBusinessTypes: [RESTAURANT, BRANCH]
-    version: "1.0.0"
-    domainTags: ["restaurant"]
-    dataClassification: CONFIDENTIAL
+expectedToolCount: 0
+tools: []

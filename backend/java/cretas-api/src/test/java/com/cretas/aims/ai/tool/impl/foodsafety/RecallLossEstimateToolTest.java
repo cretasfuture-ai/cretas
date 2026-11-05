@@ -28,6 +28,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -109,9 +110,8 @@ class RecallLossEstimateToolTest {
         BigDecimal brandLoss = (BigDecimal) data.get("brandLoss");
         assertEquals(0, brandLoss.compareTo(new BigDecimal("2400.00")));
 
-        verify(recallEventRepository, times(1)).save(any(RecallEvent.class));
-        // event.estimatedLoss 被更新
-        assertEquals(0, event.getEstimatedLoss().compareTo(new BigDecimal("14400.00")));
+        verify(recallEventRepository, never()).save(any(RecallEvent.class));
+        assertNull(event.getEstimatedLoss(), "Read-only estimate must not mutate the managed entity");
     }
 
     // ── helpers ──

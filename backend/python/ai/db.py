@@ -28,6 +28,7 @@ from typing import Any, Dict, List
 
 from ai.config import default_config
 from ai.dto import AIIntentConfigDto
+from ai.factory_catalog import filter_runtime_rows, project_reclassified_row
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class IntentSnapshot:
 # Module-level state (singleton snapshot)
 _current_snapshot: IntentSnapshot = IntentSnapshot()
 _snapshot_lock = asyncio.Lock()
+_blocked_factory_codes: Dict[str, set[str]] = {}
 
 
 SELECT_SQL = """
@@ -70,6 +72,17 @@ WHERE deleted_at IS NULL
 ORDER BY priority DESC, intent_code ASC
 """
 
+# Entity @Where hides inactive/deleted tenant rows from the normal query, but
+# those rows are still policy-bearing tombstones: they must shadow a platform
+# default for that one factory.  Keep this projection separate from the
+# executable snapshot so learning/keyword consumers never see tombstones.
+BLOCKED_CODES_SQL = """
+SELECT factory_id, intent_code
+FROM ai_intent_configs
+WHERE factory_id IS NOT NULL
+  AND (deleted_at IS NOT NULL OR is_active IS DISTINCT FROM TRUE)
+"""
+
 
 async def load_snapshot(pool) -> IntentSnapshot:
     """Load all visible intents into snapshot. Called on startup + every
@@ -77,7 +90,7 @@ async def load_snapshot(pool) -> IntentSnapshot:
 
     Returns the new snapshot. Replaces global singleton atomically.
     """
-    global _current_snapshot
+    global _current_snapshot, _blocked_factory_codes
 
     async with pool.acquire() as conn:
         try:
@@ -97,6 +110,14 @@ async def load_snapshot(pool) -> IntentSnapshot:
                 SELECT_SQL.replace(" required_roles, required_permission,",
                                    " required_roles,")
             )
+        blocked_raw = await conn.fetch(BLOCKED_CODES_SQL)
+
+    blocked_codes: Dict[str, set[str]] = {}
+    for row in blocked_raw:
+        factory_id = row.get("factory_id")
+        intent_code = row.get("intent_code")
+        if factory_id is not None and intent_code:
+            blocked_codes.setdefault(str(factory_id), set()).add(str(intent_code))
 
     rows = [dict(r) for r in rows_raw]
     snap = IntentSnapshot(
@@ -110,6 +131,7 @@ async def load_snapshot(pool) -> IntentSnapshot:
 
     async with _snapshot_lock:
         _current_snapshot = snap
+        _blocked_factory_codes = blocked_codes
 
     logger.info(
         "Loaded ai_intent_configs snapshot: %d rows, max_config_version=%d",
@@ -142,7 +164,29 @@ def filter_intents_for_request(
     does — fixture-driven tests may pass rows that include them.
     """
     visible = []
-    for r in rows:
+    # Tests and callers may pass a complete row list (including tombstones),
+    # while production snapshots receive the native blocked-code projection
+    # above.  Merge both sources so a tenant tombstone always wins over a
+    # platform row without affecting another tenant's fallback.
+    blocked_codes = set(_blocked_factory_codes.get(str(factoryId), set()))
+    for row in rows:
+        row_factory = row.get("factory_id")
+        intent_code = row.get("intent_code")
+        is_tombstone = (
+            row_factory == factoryId
+            and intent_code
+            and (
+                row.get("deleted_at") is not None
+                or ("is_active" in row and row.get("is_active") is not True)
+            )
+        )
+        if is_tombstone:
+            blocked_codes.add(str(intent_code))
+    # Apply the reviewed 29-row RESTAURANT→FACTORY projection before the
+    # business-type gate. Tenant, active/deleted, permission and approval
+    # fields remain those of the DB row and are never taken from the catalog.
+    projected_rows = [project_reclassified_row(r) for r in rows]
+    for r in projected_rows:
         # soft-delete defense (SQL also strips, but tests pass full set)
         if r.get("deleted_at") is not None:
             continue
@@ -153,12 +197,16 @@ def filter_intents_for_request(
         row_factory = r.get("factory_id")
         if row_factory is not None and row_factory != factoryId:
             continue
+        if row_factory is None and str(r.get("intent_code") or "") in blocked_codes:
+            continue
         # business type scope
         bt = r.get("business_type")
         if bt != "COMMON" and bt != businessType:
             continue
         visible.append(r)
-    return visible
+    # The reviewed catalog is a retirement/alias policy, not a platform
+    # allow-list: unknown factory-owned non-restaurant rows remain eligible.
+    return filter_runtime_rows(visible)
 
 
 _WRITE_SENSITIVITY = frozenset({"HIGH", "CRITICAL"})
@@ -310,4 +358,5 @@ __all__ = [
     "row_to_dto",
     "start_periodic_refresh",
     "SELECT_SQL",
+    "BLOCKED_CODES_SQL",
 ]

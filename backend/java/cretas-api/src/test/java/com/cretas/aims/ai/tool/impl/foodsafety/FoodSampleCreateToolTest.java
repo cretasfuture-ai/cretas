@@ -74,7 +74,7 @@ class FoodSampleCreateToolTest {
                 eq(FACTORY_ID), eq(BATCH), any())).thenReturn(List.of());
         MaterialBatch mb = new MaterialBatch();
         mb.setId(MATERIAL_BATCH_ID);
-        when(materialBatchRepository.findById(MATERIAL_BATCH_ID)).thenReturn(Optional.of(mb));
+        when(materialBatchRepository.findByIdAndFactoryId(MATERIAL_BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(mb));
         when(foodSampleRepository.save(any(FoodSample.class))).thenAnswer(inv -> {
             FoodSample s = inv.getArgument(0);
             s.setId(9999L);
@@ -135,7 +135,7 @@ class FoodSampleCreateToolTest {
     void executeMaterialBatchNotFound() {
         when(foodSampleRepository.findByFactoryIdAndBatchNumberAndSampleTimeAfter(
                 anyString(), anyString(), any())).thenReturn(List.of());
-        when(materialBatchRepository.findById(anyString())).thenReturn(Optional.empty());
+        when(materialBatchRepository.findByIdAndFactoryId(anyString(), eq(FACTORY_ID))).thenReturn(Optional.empty());
 
         Map<String, Object> params = Map.of(
                 "batchNumber", BATCH,

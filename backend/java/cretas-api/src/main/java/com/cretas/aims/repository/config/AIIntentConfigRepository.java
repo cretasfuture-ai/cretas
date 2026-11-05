@@ -18,6 +18,10 @@ import java.util.Optional;
  */
 @Repository
 public interface AIIntentConfigRepository extends JpaRepository<AIIntentConfig, String> {
+    /** Native on purpose: a tombstone must shadow a platform default despite Entity @Where. */
+    @Query(value = "SELECT c.intent_code FROM ai_intent_configs c WHERE c.factory_id = :factoryId " +
+            "AND (c.deleted_at IS NOT NULL OR c.is_active IS DISTINCT FROM TRUE)", nativeQuery = true)
+    List<String> findBlockedIntentCodesInFactoryScope(@Param("factoryId") String factoryId);
 
     /** Native authority projection intentionally includes tombstones hidden by the Entity filter. */
     interface SupplierComparisonAuthority {

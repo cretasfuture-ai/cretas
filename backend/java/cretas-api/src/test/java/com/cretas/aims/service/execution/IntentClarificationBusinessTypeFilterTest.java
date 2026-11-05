@@ -107,7 +107,7 @@ class IntentClarificationBusinessTypeFilterTest {
     }
 
     @Test
-    @DisplayName("RESTAURANT factory → defaults are restaurant intents, NO manufacturing intents")
+    @DisplayName("RESTAURANT factory → defaults never advertise retired restaurant intents")
     void restaurantDefaultsExcludeManufacturing() {
         when(configService.resolveBusinessDomain(RESTAURANT_FACTORY)).thenReturn("RESTAURANT");
 
@@ -115,10 +115,8 @@ class IntentClarificationBusinessTypeFilterTest {
                 orchestrator.buildDefaultSuggestions(RESTAURANT_FACTORY);
         List<String> codes = actionCodes(defaults);
 
-        // No manufacturing leakage.
-        assertThat(codes).doesNotContainAnyElementsOf(MANUFACTURING_CODES);
-        // Restaurant defaults present.
-        assertThat(codes).contains(
+        assertThat(codes).contains("MATERIAL_BATCH_QUERY", "PROCESSING_BATCH_LIST");
+        assertThat(codes).doesNotContain(
                 "RESTAURANT_BESTSELLER_QUERY",
                 "RESTAURANT_STORE_REVENUE_RANK",
                 "RESTAURANT_ORDER_STATISTICS");
@@ -143,7 +141,7 @@ class IntentClarificationBusinessTypeFilterTest {
     }
 
     @Test
-    @DisplayName("ensureMinChoices pads a RESTAURANT clarification with restaurant (not manufacturing) intents")
+    @DisplayName("ensureMinChoices pads a RESTAURANT clarification with shared intents")
     void ensureMinChoicesRestaurantPadding() {
         when(configService.resolveBusinessDomain(RESTAURANT_FACTORY)).thenReturn("RESTAURANT");
 
@@ -158,8 +156,11 @@ class IntentClarificationBusinessTypeFilterTest {
                 orchestrator.ensureMinChoices(sentinelOnly, 2, RESTAURANT_FACTORY);
         List<String> codes = actionCodes(padded);
 
-        assertThat(codes).doesNotContainAnyElementsOf(MANUFACTURING_CODES);
-        assertThat(codes).contains("RESTAURANT_BESTSELLER_QUERY", "RESTAURANT_STORE_REVENUE_RANK");
+        assertThat(codes).contains("MATERIAL_BATCH_QUERY", "PROCESSING_BATCH_LIST");
+        assertThat(codes).doesNotContain(
+                "RESTAURANT_BESTSELLER_QUERY",
+                "RESTAURANT_STORE_REVENUE_RANK",
+                "RESTAURANT_ORDER_STATISTICS");
     }
 
     @Test

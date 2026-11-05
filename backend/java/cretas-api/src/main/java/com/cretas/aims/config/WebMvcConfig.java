@@ -57,12 +57,13 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 "/webjars/**"
         };
 
-        // PR #872 (#860 follow-up): /api/mobile/public/** 是匿名公开端点
-        //   (转发 / 分享链接 / 未来其他无登录需要的 read-only path). 必须从 JWT /
-        //   Permission / RequireRole / Module 拦截器全部排除, 否则匿名访问会被 401.
+        // PR #872 (#860 follow-up): 匿名分享链接必须从 JWT / Permission / RequireRole / Module
+        //   拦截器全部排除, 否则匿名访问会被 401.
         //   security model: token 本身 = 32 char base62 ~ 190 bit entropy 即唯一凭证.
+        //   ⛔ 只列真实的匿名路由, 不要放宽成 /api/mobile/public/**: 那样 public 会被当成
+        //   /api/mobile/{factoryId}/** 的工厂 ID, 全部工厂路由都匿名可达, 注解守卫也一起失效.
         String[] publicWhitelist = {
-                "/api/mobile/public/**"
+                "/api/mobile/public/share/*"
         };
 
         // 1. JWT认证拦截器 - 验证Token，设置用户信息

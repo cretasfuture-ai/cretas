@@ -15,6 +15,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -86,6 +88,15 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired(required = false)
     private InventoryAnalysisWorkflow inventoryAnalysisWorkflow;
 
+    /** Direct callers bypass SkillRouter, so catalog Skills repeat the tenant/active gate here. */
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.skill.SkillRegistry skillRegistry;
+
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.intent.IntentConfigManagementService intentConfigManagementService;
+
     // S6-02 — a tool with an approved runtime policy runs through the tool gateway, exactly as an
     // interactive call of that tool does: the gateway re-reads the user, factory and permissions
     // from the database, checks that the policy admits SKILL_WORKFLOW, enforces confirmation and
@@ -122,16 +133,16 @@ public class SkillExecutorImpl implements SkillExecutor {
     // ==================== Configuration ====================
 
     @Value("${ai.skill_executor.parallel_execution_enabled:true}")
-    private boolean parallelExecutionEnabled;
+    private boolean parallelExecutionEnabled = true;
 
     @Value("${ai.skill_executor.tool_timeout_seconds:30}")
-    private int toolTimeoutSeconds;
+    private int toolTimeoutSeconds = 30;
 
     @Value("${ai.skill_executor.max_tools_per_skill:5}")
-    private int maxToolsPerSkill;
+    private int maxToolsPerSkill = 5;
 
     @Value("${ai.skill_executor.default_timeout_ms:60000}")
-    private long defaultTimeoutMs;
+    private long defaultTimeoutMs = 60000L;
 
     /**
      * Tool execution thread pool
@@ -142,6 +153,7 @@ public class SkillExecutorImpl implements SkillExecutor {
      * Variable placeholder pattern: ${variableName}
      */
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\$\\{([^}]+)}");
+    private static final Pattern ENTITY_TOKEN_PATTERN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]{1,}");
 
     @PreDestroy
     public void shutdown() {
@@ -207,6 +219,11 @@ public class SkillExecutorImpl implements SkillExecutor {
                         executedTools, System.currentTimeMillis() - startTime);
             }
 
+            SkillResult catalogGate = catalogSkillGate(skill, context, executedTools, startTime);
+            if (catalogGate != null) {
+                return catalogGate;
+            }
+
             // 2a. Permission preflight (S6 acceptance, ERP-S6-02-SKILL-ROLE-BYPASS-001): every tool this Skill
             // may run is checked against the caller's current permissions before anything runs. A Skill
             // never returns part of what the caller could not read directly; one denied tool fails the
@@ -249,6 +266,8 @@ public class SkillExecutorImpl implements SkillExecutor {
 
             // 5. Call LLM to get parameters and execution plan
             Map<String, Object> params;
+            Map<String, Object> trustedParams = context.getExtractedParams() == null
+                    ? Map.of() : new HashMap<>(context.getExtractedParams());
             try {
                 String llmResponse = callLlm(prompt, context.getUserQuery(), context.getFactoryId());
                 log.debug("LLM response for skill {}: length={}", skill.getName(),
@@ -267,7 +286,23 @@ public class SkillExecutorImpl implements SkillExecutor {
                 if (context.getUserId() != null) params.put("userId", context.getUserId());
                 params.put("_llmFallback", "deterministic_no_llm");
             }
+            params = groundSkillParameters(skill, context, params, trustedParams);
             context.setExtractedParams(params);
+            List<ToolExecutionPlan> selectedPlans = buildToolExecutionPlans(skill, params);
+            List<String> missingCatalogParams = missingCatalogRequiredParameters(skill, params, selectedPlans);
+            if (!missingCatalogParams.isEmpty()) {
+                return missingParametersResult(skill.getName(), missingCatalogParams, executedTools, startTime);
+            }
+            if (skill.getTools() != null && skill.getTools().size() == 1) {
+                Optional<ToolExecutor> singleTool = toolRegistry.getExecutor(skill.getTools().get(0));
+                if (singleTool.isPresent()) {
+                    List<String> missingSingleToolParams = missingRequiredParameters(singleTool.get(), params);
+                    if (!missingSingleToolParams.isEmpty()) {
+                        return missingParametersResult(skill.getName(), missingSingleToolParams,
+                                executedTools, startTime);
+                    }
+                }
+            }
             log.info("Extracted {} parameters for skill {}", params.size(), skill.getName());
 
             // 7. Execute associated Tools
@@ -276,6 +311,18 @@ public class SkillExecutorImpl implements SkillExecutor {
             long executionTime = System.currentTimeMillis() - startTime;
             log.info("Skill execution completed: skill={}, tools={}, time={}ms",
                     skill.getName(), executedTools, executionTime);
+
+            ToolFailure toolFailure = findToolFailure(toolResult);
+            if (toolFailure != null) {
+                return SkillResult.builder()
+                        .success(false)
+                        .skillName(skill.getName())
+                        .data(failureData(toolFailure, toolResult))
+                        .message(toolFailure.message())
+                        .executedTools(executedTools)
+                        .executionTime(executionTime)
+                        .build();
+            }
 
             return SkillResult.builder()
                     .success(true)
@@ -373,7 +420,17 @@ public class SkillExecutorImpl implements SkillExecutor {
             return false;
         }
 
-        // Single-tool skill with params available from context — skip LLM
+        Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
+        if (executor.isEmpty()) {
+            return false;
+        }
+        Map<String, Object> params = contextParams(context);
+        if (!missingRequiredParameters(executor.get(), params).isEmpty()) {
+            // Let LLM extraction and catalog grounding supply an explicitly stated value.
+            return false;
+        }
+
+        // Single-tool skill with all required params available from context — skip LLM
         log.info("Skill {} eligible for deterministic execution (single tool: {})",
                 skill.getName(), toolName);
         return true;
@@ -388,12 +445,19 @@ public class SkillExecutorImpl implements SkillExecutor {
         String toolName = skill.getTools().get(0);
         log.info("Deterministic execution: skill={}, tool={}", skill.getName(), toolName);
 
-        // Build params from context (factoryId, userId, etc.)
-        Map<String, Object> params = new HashMap<>();
-        if (context.getFactoryId() != null) params.put("factoryId", context.getFactoryId());
-        if (context.getUserId() != null) params.put("userId", context.getUserId());
-        if (context.getExtractedParams() != null) params.putAll(context.getExtractedParams());
+        // Build params from context (factoryId, userId, etc.). Deterministic execution must
+        // never manufacture an entity identifier just to make a Tool call look successful.
+        Map<String, Object> params = contextParams(context);
         context.setExtractedParams(params);
+
+        Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
+        if (executor.isEmpty()) {
+            throw new IllegalArgumentException("Tool not found: " + toolName);
+        }
+        List<String> missingParams = missingRequiredParameters(executor.get(), params);
+        if (!missingParams.isEmpty()) {
+            return missingParametersResult(skill.getName(), missingParams, executedTools, startTime);
+        }
 
         // Execute the single tool directly
         Object result = executeSingleTool(toolName, params, context);
@@ -408,13 +472,316 @@ public class SkillExecutorImpl implements SkillExecutor {
         log.info("Deterministic execution completed: skill={}, tool={}, time={}ms",
                 skill.getName(), toolName, executionTime);
 
+        ToolFailure toolFailure = failureForResult(toolName, result);
         return SkillResult.builder()
-                .success(true)
+                .success(toolFailure == null)
                 .skillName(skill.getName())
-                .data(results)
+                .data(toolFailure == null ? results : failureData(toolFailure, results))
+                .message(toolFailure == null ? null : toolFailure.message())
                 .executedTools(executedTools)
                 .executionTime(executionTime)
                 .build();
+    }
+
+    private Map<String, Object> contextParams(SkillContext context) {
+        Map<String, Object> params = new HashMap<>();
+        if (context.getFactoryId() != null) params.put("factoryId", context.getFactoryId());
+        if (context.getUserId() != null) params.put("userId", context.getUserId());
+        if (context.getSessionId() != null) params.put("sessionId", context.getSessionId());
+        if (context.getUserQuery() != null) params.put("userQuery", context.getUserQuery());
+        if (context.getExtractedParams() != null) params.putAll(context.getExtractedParams());
+        com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
+                params, context.getFactoryId(), parseUserId(context.getUserId()), context.getUserRole());
+        return params;
+    }
+
+    /**
+     * Ground LLM output before it becomes Skill state. Catalog Skills are especially strict:
+     * entity identifiers are accepted only from already trusted context or as exact values in
+     * the current user sentence. The model cannot invent a same-tenant entity and cannot choose
+     * an entity from an ambiguous sentence without a trusted slot value.
+     */
+    private Map<String, Object> groundSkillParameters(SkillDefinition skill, SkillContext context,
+                                                       Map<String, Object> params,
+                                                       Map<String, Object> trustedParams) {
+        Map<String, Object> safe = new LinkedHashMap<>();
+        List<String> catalogTools = com.cretas.aims.ai.catalog.FactoryIntentCatalog.requiredSkillTools(skill.getName());
+        if (catalogTools == null) {
+            safe.putAll(params);
+        } else {
+            List<JsonNode> selectedNodes = declaredCatalogPlanNodes(skill, params);
+            List<String> selectedTools = selectedNodes.stream()
+                    .map(node -> node.path("tool_name").asText(null))
+                    .filter(Objects::nonNull)
+                    .toList();
+            Map<String, Object> schema = catalogParameterSchema(
+                    selectedTools.isEmpty() ? catalogTools : selectedTools);
+            Map<String, Object> globalValues = new LinkedHashMap<>(params);
+            globalValues.remove("_tools_to_execute");
+            globalValues.remove("_execution_order");
+            globalValues.remove("_reasoning");
+            com.cretas.aims.service.execution.LlmParameterGrounding.Result grounded =
+                    com.cretas.aims.service.execution.LlmParameterGrounding.ground(
+                            globalValues, trustedParams, context.getUserQuery(), schema);
+            safe.putAll(filterCatalogParameters(grounded.accepted(), schema,
+                    context.getUserQuery(), trustedParams));
+
+            if (params.containsKey("_tools_to_execute")) {
+                ArrayNode sanitizedPlans = objectMapper.createArrayNode();
+                for (JsonNode node : selectedNodes) {
+                    String toolName = node.path("tool_name").asText();
+                    Map<String, Object> rawToolParams = Map.of();
+                    if (node.has("params")) {
+                        try {
+                            rawToolParams = objectMapper.convertValue(
+                                    node.get("params"), new TypeReference<Map<String, Object>>() {});
+                        } catch (IllegalArgumentException malformedParams) {
+                            log.warn("Discarding malformed catalog params: skill={}, tool={}",
+                                    skill.getName(), toolName);
+                        }
+                    }
+                    Map<String, Object> planSchema = catalogParameterSchema(List.of(toolName));
+                    Map<String, Object> planTrusted = new LinkedHashMap<>(trustedParams);
+                    planTrusted.putAll(safe);
+                    com.cretas.aims.service.execution.LlmParameterGrounding.Result planGrounded =
+                            com.cretas.aims.service.execution.LlmParameterGrounding.ground(
+                                    rawToolParams, planTrusted, context.getUserQuery(), planSchema);
+                    Map<String, Object> cleanToolParams = filterCatalogParameters(planGrounded.accepted(), planSchema,
+                            context.getUserQuery(), planTrusted);
+                    cleanToolParams.putAll(planTrusted);
+                    com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
+                            cleanToolParams, context.getFactoryId(), parseUserId(context.getUserId()), context.getUserRole());
+                    ObjectNode cleanNode = objectMapper.createObjectNode();
+                    cleanNode.put("tool_name", toolName);
+                    cleanNode.set("params", objectMapper.valueToTree(cleanToolParams));
+                    sanitizedPlans.add(cleanNode);
+                }
+                safe.put("_tools_to_execute", sanitizedPlans);
+            }
+            copyCatalogControl(params, safe, "_execution_order");
+            copyCatalogControl(params, safe, "_reasoning");
+        }
+        if (catalogTools == null) {
+            safe.putAll(trustedParams);
+        } else {
+            safe.putAll(filterCatalogParameters(trustedParams, catalogParameterSchema(skill),
+                    context.getUserQuery(), trustedParams));
+        }
+        com.cretas.aims.service.execution.TrustedExecutionContext.enforcePrincipal(
+                safe, context.getFactoryId(), parseUserId(context.getUserId()), context.getUserRole());
+        return safe;
+    }
+
+    private Map<String, Object> catalogParameterSchema(SkillDefinition skill) {
+        return catalogParameterSchema(com.cretas.aims.ai.catalog.FactoryIntentCatalog.requiredSkillTools(skill.getName()));
+    }
+
+    private Map<String, Object> catalogParameterSchema(List<String> tools) {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        if (tools != null) {
+            for (String toolName : tools) {
+                toolRegistry.getExecutor(toolName).ifPresent(tool -> {
+                    Map<String, Object> schema = tool.getParametersSchema();
+                    if (schema != null && schema.get("properties") instanceof Map<?, ?> declared) {
+                        declared.forEach((key, value) -> properties.put(String.valueOf(key), value));
+                    }
+                });
+            }
+        }
+        return Map.of("type", "object", "properties", properties);
+    }
+
+    private Map<String, Object> filterCatalogParameters(Map<String, Object> values,
+                                                        Map<String, Object> schema,
+                                                        String userQuery,
+                                                        Map<String, Object> trustedParams) {
+        Set<String> allowed = new HashSet<>();
+        if (schema != null && schema.get("properties") instanceof Map<?, ?> properties) {
+            properties.keySet().forEach(key -> allowed.add(String.valueOf(key)));
+        }
+        allowed.addAll(List.of("factoryId", "userId", "userRole", "sessionId", "userQuery"));
+        Map<String, Object> filtered = new LinkedHashMap<>();
+        values.forEach((key, value) -> {
+            if (allowed.contains(key)) filtered.put(key, value);
+        });
+        for (Map.Entry<String, Object> entry : new ArrayList<>(filtered.entrySet())) {
+            if (!trustedParams.containsKey(entry.getKey())
+                    && isEntityParameter(entry.getKey(), schema)
+                    && (!valueAppearsInUserQuery(entry.getValue(), userQuery)
+                    || ambiguousEntityMention(entry.getKey(), userQuery))) {
+                filtered.remove(entry.getKey());
+            }
+        }
+        return filtered;
+    }
+
+    private List<JsonNode> declaredCatalogPlanNodes(SkillDefinition skill, Map<String, Object> params) {
+        Object selected = params.get("_tools_to_execute");
+        if (!(selected instanceof JsonNode toolsNode) || !toolsNode.isArray()) return List.of();
+        List<String> declared = skill.getTools() == null ? List.of() : skill.getTools();
+        List<String> catalogAllowed = com.cretas.aims.ai.catalog.FactoryIntentCatalog.requiredSkillTools(skill.getName());
+        List<JsonNode> valid = new ArrayList<>();
+        for (JsonNode node : toolsNode) {
+            String toolName = node.path("tool_name").asText(null);
+            if (toolName != null && declared.contains(toolName)
+                    && (catalogAllowed == null || catalogAllowed.contains(toolName))
+                    && toolRegistry.hasExecutor(toolName)) {
+                valid.add(node);
+            } else {
+                log.warn("Discarding untrusted catalog tool plan entry: skill={}, tool={}",
+                        skill.getName(), toolName);
+            }
+        }
+        return valid;
+    }
+
+    private void copyCatalogControl(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source.containsKey(key)) target.put(key, source.get(key));
+    }
+
+    private boolean isEntityParameter(String name, Map<String, Object> schema) {
+        if (name == null || name.equals("factoryId") || name.equals("userId") || name.equals("userRole")) {
+            return false;
+        }
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith("id") || lower.endsWith("number") || lower.endsWith("code")
+                || lower.contains("batch") || lower.contains("material") || lower.contains("product");
+    }
+
+    private boolean valueAppearsInUserQuery(Object value, String userQuery) {
+        if (value == null || userQuery == null || userQuery.isBlank()) return false;
+        String text = String.valueOf(value).trim();
+        return !text.isEmpty() && userQuery.toLowerCase(Locale.ROOT).contains(text.toLowerCase(Locale.ROOT));
+    }
+
+    private boolean ambiguousEntityMention(String parameter, String userQuery) {
+        if (userQuery == null || userQuery.isBlank()) return false;
+        String lower = userQuery.toLowerCase(Locale.ROOT);
+        String marker = parameter.toLowerCase(Locale.ROOT).contains("batch") ? "批次"
+                : parameter.toLowerCase(Locale.ROOT).contains("material") ? "原料" : null;
+        if (marker == null) return false;
+        int markerAt = lower.indexOf(marker);
+        if (markerAt < 0) return false;
+        int end = lower.length();
+        for (String separator : List.of("，", ",", "。", ".", "；", ";")) {
+            int separatorAt = lower.indexOf(separator, markerAt + marker.length());
+            if (separatorAt >= 0) end = Math.min(end, separatorAt);
+        }
+        Matcher matcher = ENTITY_TOKEN_PATTERN.matcher(userQuery.substring(markerAt + marker.length(), end));
+        Set<String> mentions = new HashSet<>();
+        while (matcher.find()) mentions.add(matcher.group().toLowerCase(Locale.ROOT));
+        return mentions.size() > 1;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> missingRequiredParameters(ToolExecutor executor, Map<String, Object> params) {
+        Map<String, Object> schema = executor.getParametersSchema();
+        if (schema == null || !(schema.get("required") instanceof List<?> required)) {
+            return List.of();
+        }
+        return required.stream()
+                .filter(Objects::nonNull)
+                .map(String::valueOf)
+                .filter(name -> !hasValue(params.get(name)))
+                .toList();
+    }
+
+    private List<String> missingCatalogRequiredParameters(SkillDefinition skill, Map<String, Object> params,
+                                                         List<ToolExecutionPlan> selectedPlans) {
+        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.requiredSkillTools(skill.getName()) == null) {
+            return List.of();
+        }
+        Set<String> missing = new LinkedHashSet<>();
+        for (ToolExecutionPlan plan : selectedPlans) {
+            toolRegistry.getExecutor(plan.toolName).ifPresent(tool -> {
+                Map<String, Object> merged = new LinkedHashMap<>(params);
+                if (plan.params != null) merged.putAll(plan.params);
+                missing.addAll(missingRequiredParameters(tool, merged));
+            });
+        }
+        return List.copyOf(missing);
+    }
+
+    private boolean hasValue(Object value) {
+        return value != null && (!(value instanceof String text) || !text.isBlank());
+    }
+
+    private SkillResult missingParametersResult(String skillName, List<String> missingParams,
+                                                List<String> executedTools, long startTime) {
+        String message = "为了完成操作，还需要以下信息：" + String.join("、", missingParams)
+                + "。请补充后再试。";
+        Map<String, Object> data = new LinkedHashMap<>();
+        List<String> questions = missingParams.stream()
+                .map(this::clarificationQuestion)
+                .toList();
+        data.put("success", false);
+        data.put("status", "NEED_MORE_INFO");
+        data.put("needMoreInfo", true);
+        data.put("missingParameters", missingParams);
+        data.put("clarificationQuestions", questions);
+        data.put("message", message);
+        data.put("error", message);
+        return SkillResult.builder()
+                .success(false)
+                .skillName(skillName)
+                .data(data)
+                .message(message)
+                .executedTools(executedTools)
+                .executionTime(System.currentTimeMillis() - startTime)
+                .build();
+    }
+
+    /**
+     * Router filtering is not an execution boundary: scheduled/direct callers can invoke this
+     * service with a SkillDefinition directly. Catalog-owned Skills therefore require both the
+     * factory Skill switch and the active, non-deleted factory/platform intent binding here.
+     */
+    private SkillResult catalogSkillGate(SkillDefinition skill, SkillContext context,
+                                         List<String> executedTools, long startTime) {
+        String intentCode = com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(skill.getName());
+        if (intentCode == null) {
+            return null;
+        }
+        if (context == null || context.getFactoryId() == null || context.getFactoryId().isBlank()) {
+            return SkillResult.error(skill.getName(), "Catalog Skill requires a factory context",
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
+        if (skillRegistry == null || intentConfigManagementService == null) {
+            return SkillResult.error(skill.getName(), "Catalog Skill authorization is unavailable; execution refused",
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
+        try {
+            SkillDefinition factorySkill = skillRegistry.getSkillForFactory(context.getFactoryId(), skill.getName());
+            if (factorySkill == null || !factorySkill.isEnabled()) {
+                return SkillResult.error(skill.getName(), "Catalog Skill is disabled for this factory",
+                        executedTools, System.currentTimeMillis() - startTime);
+            }
+            boolean intentAvailable = intentConfigManagementService.getIntentByCode(
+                            context.getFactoryId(), intentCode)
+                    .filter(intent -> Boolean.TRUE.equals(intent.getIsActive()) && intent.getDeletedAt() == null)
+                    .filter(intent -> intent.getFactoryId() == null
+                            || context.getFactoryId().equals(intent.getFactoryId()))
+                    .isPresent();
+            if (!intentAvailable) {
+                return SkillResult.error(skill.getName(), "Catalog intent is inactive or unavailable for this factory",
+                        executedTools, System.currentTimeMillis() - startTime);
+            }
+            return null;
+        } catch (RuntimeException gateFailure) {
+            log.warn("Catalog Skill gate failed closed: skill={}, factoryId={}, error={}",
+                    skill.getName(), context.getFactoryId(), gateFailure.getMessage());
+            return SkillResult.error(skill.getName(), "Catalog Skill authorization check failed; execution refused",
+                    executedTools, System.currentTimeMillis() - startTime);
+        }
+    }
+
+    private String clarificationQuestion(String parameter) {
+        return switch (parameter) {
+            case "batchId", "batchNumber" -> "请提供批次号。";
+            case "productId", "productTypeId" -> "请提供产品。";
+            case "materialTypeId" -> "请提供原材料。";
+            default -> "请提供" + parameter + "。";
+        };
     }
 
     @Override
@@ -881,6 +1248,13 @@ public class SkillExecutorImpl implements SkillExecutor {
                 // Add result to chain context for subsequent tools
                 chainContext.put("previous_" + plan.toolName, result);
 
+                ToolFailure failure = failureForResult(plan.toolName, result);
+                if (failure != null) {
+                    log.warn("Tool returned unsuccessful JSON, stopping chain: tool={}, status={}, message={}",
+                            plan.toolName, failure.status(), failure.message());
+                    break;
+                }
+
             } catch (Exception e) {
                 log.error("Tool execution failed, stopping chain: {}", plan.toolName, e);
                 results.put(plan.toolName, Map.of("error", e.getMessage(), "success", false));
@@ -1041,6 +1415,96 @@ public class SkillExecutorImpl implements SkillExecutor {
         boolean succeeded = parsed instanceof JsonNode node && node.path("success").asBoolean(false);
         recordStep(context, toolName, executor, trustedParams, succeeded ? "SUCCEEDED" : "FAILED", null);
         return parsed;
+    }
+
+    /**
+     * Tool executors use a JSON envelope. A parsed envelope with success=false is a
+     * business failure (or a clarification), not a successful Skill result.
+     */
+    private ToolFailure findToolFailure(Object toolResult) {
+        if (!(toolResult instanceof Map<?, ?> results)) {
+            return null;
+        }
+        for (Map.Entry<?, ?> entry : results.entrySet()) {
+            if (entry.getKey() == null || String.valueOf(entry.getKey()).startsWith("_")) {
+                continue;
+            }
+            ToolFailure failure = failureForResult(String.valueOf(entry.getKey()), entry.getValue());
+            if (failure != null) {
+                return failure;
+            }
+        }
+        return null;
+    }
+
+    private ToolFailure failureForResult(String toolName, Object result) {
+        JsonNode payload = null;
+        if (result instanceof JsonNode node) {
+            payload = node;
+        } else if (result instanceof Map<?, ?> map) {
+            payload = objectMapper.valueToTree(map);
+        } else if (result instanceof String text) {
+            try {
+                JsonNode parsed = objectMapper.readTree(text);
+                if (parsed != null && parsed.isObject()) {
+                    payload = parsed;
+                }
+            } catch (Exception ignored) {
+                // Non-JSON Tool output is not a standard failure envelope; preserve legacy data.
+            }
+        }
+        if (payload == null || !payload.isObject() || !payload.has("success")
+                || payload.path("success").asBoolean(true)) {
+            return null;
+        }
+
+        String status = payload.path("status").asText(null);
+        String message = firstText(payload, "error", "message", "question");
+        if (message == null || message.isBlank()) {
+            message = "NEED_MORE_INFO".equals(status)
+                    ? "请补充工具执行所需的信息。"
+                    : "工具「" + toolName + "」执行失败。";
+        }
+        return new ToolFailure(toolName, status, message, result);
+    }
+
+    private String firstText(JsonNode payload, String... fields) {
+        for (String field : fields) {
+            JsonNode value = payload.get(field);
+            if (value != null && !value.isNull() && !value.asText().isBlank()) {
+                return value.asText();
+            }
+        }
+        return null;
+    }
+
+    /** Keep failure metadata at SkillResult.data's top level for Dynamic callers. */
+    private Map<String, Object> failureData(ToolFailure failure, Object toolResults) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("success", false);
+        data.put("status", failure.status() == null ? "FAILED" : failure.status());
+        JsonNode payload = failurePayload(failure.data());
+        boolean needMoreInfo = "NEED_MORE_INFO".equals(failure.status())
+                || (payload != null && payload.path("needMoreInfo").asBoolean(false));
+        data.put("needMoreInfo", needMoreInfo);
+        if (payload != null && payload.has("clarificationQuestions")) {
+            data.put("clarificationQuestions", objectMapper.convertValue(
+                    payload.get("clarificationQuestions"), List.class));
+        }
+        data.put("message", failure.message());
+        data.put("error", failure.message());
+        data.put("toolResults", toolResults);
+        return data;
+    }
+
+    private JsonNode failurePayload(Object result) {
+        if (result instanceof JsonNode node) return node;
+        if (result instanceof Map<?, ?> map) return objectMapper.valueToTree(map);
+        if (result instanceof String text) {
+            try { return objectMapper.readTree(text); }
+            catch (Exception ignored) { return null; }
+        }
+        return null;
     }
 
     /**
@@ -1271,6 +1735,18 @@ public class SkillExecutorImpl implements SkillExecutor {
                 Object result = executeSingleTool(tool, stepParams, context);
                 results.put(tool, result);
                 executedTools.add(tool);
+                ToolFailure failure = failureForResult(tool, result);
+                if (failure != null) {
+                    return SkillResult.builder()
+                            .success(false)
+                            .skillName(skill.getName())
+                            .data(failureData(failure, results))
+                            .partialResults(results)
+                            .message(failure.message())
+                            .executedTools(executedTools)
+                            .executionTime(System.currentTimeMillis() - startTime)
+                            .build();
+                }
             } catch (Exception stepFailure) {
                 executedTools.add(tool + " (failed)");
                 return SkillResult.builder()
@@ -1438,6 +1914,7 @@ public class SkillExecutorImpl implements SkillExecutor {
         Map<String, Object> partialResults = new LinkedHashMap<>();
         List<String> skippedNodes = new ArrayList<>();
         boolean hasError = false;
+        String firstErrorMessage = null;
 
         // Build global params from context
         Map<String, Object> globalParams = new HashMap<>();
@@ -1482,7 +1959,12 @@ public class SkillExecutorImpl implements SkillExecutor {
             } else {
                 hasError = true;
                 executedTools.add(node.getToolName() + " (failed)");
-                partialResults.put(nodeId, Map.of("error", result.errorMessage, "success", false));
+                Map<String, Object> failureData = new LinkedHashMap<>();
+                failureData.put("error", result.errorMessage);
+                failureData.put("success", false);
+                if (result.data != null) failureData.put("result", result.data);
+                partialResults.put(nodeId, failureData);
+                if (firstErrorMessage == null) firstErrorMessage = result.errorMessage;
 
                 if (strategy == SkillDefinition.ErrorStrategy.STOP) {
                     log.warn("DAG: stopping execution at node {} due to STOP strategy", nodeId);
@@ -1493,12 +1975,24 @@ public class SkillExecutorImpl implements SkillExecutor {
 
         long executionTime = System.currentTimeMillis() - startTime;
 
-        // Determine overall success: for CONTINUE_ON_ERROR, partial success is OK
-        boolean overallSuccess = !hasError ||
-                (strategy == SkillDefinition.ErrorStrategy.CONTINUE_ON_ERROR && !partialResults.isEmpty());
+        // Partial results remain available for CONTINUE_ON_ERROR, but a failed Tool must
+        // never make the encompassing Skill look successful.
+        boolean overallSuccess = !hasError;
 
         log.info("DAG execution completed: skill={}, executed={}, skipped={}, hasError={}, time={}ms",
                 skill.getName(), executedTools.size(), skippedNodes.size(), hasError, executionTime);
+
+        if (hasError && !partialResults.isEmpty()) {
+            for (Map.Entry<String, NodeExecutionResult> entry : nodeResults.entrySet()) {
+                NodeExecutionResult nodeResult = entry.getValue();
+                if (nodeResult.success || nodeResult.data == null) continue;
+                ToolFailure failure = failureForResult(entry.getKey(), nodeResult.data);
+                if (failure != null) {
+                    putFailureMetadata(partialResults, failure, new LinkedHashMap<>(partialResults));
+                }
+                break;
+            }
+        }
 
         return SkillResult.builder()
                 .success(overallSuccess)
@@ -1509,9 +2003,12 @@ public class SkillExecutorImpl implements SkillExecutor {
                 .partialResults(partialResults)
                 .skippedNodes(skippedNodes)
                 .errorStrategy(strategy.name())
-                .message(overallSuccess ? "DAG execution completed" :
-                        "DAG execution failed at one or more nodes")
+                .message(overallSuccess ? "DAG execution completed" : firstErrorMessage)
                 .build();
+    }
+
+    private void putFailureMetadata(Map<String, Object> data, ToolFailure failure, Object toolResults) {
+        data.putAll(failureData(failure, toolResults));
     }
 
     /**
@@ -1602,6 +2099,10 @@ public class SkillExecutorImpl implements SkillExecutor {
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 Object result = executeSingleTool(node.getToolName(), mergedParams, context);
+                ToolFailure failure = failureForResult(node.getToolName(), result);
+                if (failure != null) {
+                    return NodeExecutionResult.error(node.getId(), failure.message(), result);
+                }
                 return NodeExecutionResult.success(node.getId(), result);
             } catch (Exception e) {
                 log.warn("DAG: node {} attempt {}/{} failed: {}",
@@ -1632,6 +2133,10 @@ public class SkillExecutorImpl implements SkillExecutor {
                 fallback, node.getId(), originalError);
         try {
             Object result = executeSingleTool(fallback, params, context);
+            ToolFailure failure = failureForResult(fallback, result);
+            if (failure != null) {
+                return NodeExecutionResult.error(node.getId(), failure.message(), result);
+            }
             return NodeExecutionResult.success(node.getId(), result);
         } catch (Exception e) {
             log.error("DAG: fallback tool {} also failed: {}", fallback, e.getMessage());
@@ -1798,12 +2303,19 @@ public class SkillExecutorImpl implements SkillExecutor {
             return new NodeExecutionResult(nodeId, false, false, null, errorMessage);
         }
 
+        static NodeExecutionResult error(String nodeId, String errorMessage, Object data) {
+            return new NodeExecutionResult(nodeId, false, false, data, errorMessage);
+        }
+
         static NodeExecutionResult skipped(String nodeId) {
             return new NodeExecutionResult(nodeId, false, true, null, "Skipped");
         }
     }
 
     // ==================== Inner Classes ====================
+
+    private record ToolFailure(String toolName, String status, String message, Object data) {
+    }
 
     /**
      * Tool execution plan

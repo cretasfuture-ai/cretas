@@ -60,7 +60,7 @@ ssh root@139.196.165.140 'cat /www/server/panel/vhost/nginx/_upstream_cretas.con
 | **Showcase** | **139** | `/www/wwwroot/showcase/cretaceousfuture/`（本地 `platform/`） | www.cretaceousfuture.com |
 | Nginx 网关 | **139** | 宝塔 Nginx | API / Python → 47 |
 | 餐饮平台模拟器 | **139** | `/www/wwwroot/mock-platform/`（服务 `cretas-mock-platform`，绑 `127.0.0.1:9200`，nginx 反代 `/mock/`） | 139/mock/ |
-| Mall 后端 | **139** | `mall-backend` service | 8080 |
+| Mall 后端 | — | 已停用：2026-07-26 起 Java 已停，centerapi 返回 410，47:8080 与 139:8080 无服务；匿名路由和 Druid 修好前不得重启 | — |
 
 Showcase 和 mock-platform 只上 139，不上 47：模拟器扮演「外部世界」，放到 47 就破坏了隔离前提；而且 139 安全组只放行 80/443/8086，自开端口从 47 打过去一律 TIMEOUT。模拟器健康看 `generator: running`，光有 `status: ok` 不够。
 

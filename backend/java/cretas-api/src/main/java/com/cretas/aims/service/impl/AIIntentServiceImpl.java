@@ -543,6 +543,7 @@ public class AIIntentServiceImpl implements AIIntentService {
      */
     private IntentMatchResult applyAccessModeFilter(IntentMatchResult result, String factoryId,
                                                     String mode, java.util.Set<String> userPermissions) {
+        result = com.cretas.aims.ai.catalog.FactoryIntentCatalog.filterResult(result);
         if (result == null || mode == null || accessModeFilter == null) {
             return result;
         }

@@ -76,10 +76,26 @@ public class PurchaseGrantCallerService {
                         .userRole(actor.role()).userQuery("执行本人已确认采购授权")
                         .extractedParams(trusted).build();
                 var skill = skills.getObject().execute(definition, context);
-                if (!skill.isSuccess()) throw new BusinessException(503, "采购执行结果未知，请查询原授权状态，勿重新执行")
-                        .withCode("PURCHASE_GRANT_OUTCOME_UNKNOWN");
+                JsonNode skillData = mapper.valueToTree(skill.getData());
+                // SkillExecutor keeps failure metadata at the top level and retains the original
+                // Tool envelopes under toolResults. A known business refusal is still a refusal;
+                // only an unknown/malformed wrapper result is an outcome ambiguity.
+                result = skillData.path(PurchaseGrantExecuteTool.NAME);
+                if (result.isMissingNode() || result.isNull()) {
+                    result = skillData.path("toolResults").path(PurchaseGrantExecuteTool.NAME);
+                }
+                if (!skill.isSuccess()) {
+                    String code = result.path("code").asText();
+                    if (result.path("success").isBoolean() && !result.path("success").booleanValue()
+                            && "PURCHASE_GRANT_REJECTED".equals(code)) {
+                        throw new BusinessException(403,
+                                result.path("error").asText("采购授权执行已拒绝"))
+                                .withCode("PURCHASE_GRANT_REJECTED");
+                    }
+                    throw new BusinessException(503, "采购执行结果未知，请查询原授权状态，勿重新执行")
+                            .withCode("PURCHASE_GRANT_OUTCOME_UNKNOWN");
+                }
                 // Skill wrapper success alone does not imply its inner Tool succeeded.
-                result = mapper.valueToTree(skill.getData()).path(PurchaseGrantExecuteTool.NAME);
         } catch (BusinessException refused) {
             throw refused;
         } catch (Exception unknown) {

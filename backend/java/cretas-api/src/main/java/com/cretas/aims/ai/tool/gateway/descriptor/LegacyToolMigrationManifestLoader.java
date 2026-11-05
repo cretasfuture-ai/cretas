@@ -29,9 +29,8 @@ public final class LegacyToolMigrationManifestLoader {
     public static final String DEFAULT_RESOURCE =
             "ai/tool/gateway/legacy-intent-dispatch-migration.yaml";
     static final int YAML_CODE_POINT_LIMIT = 32_000;
-    static final Set<String> INITIAL_ALLOWED_TOOLS = Set.of(
-            "restaurant_dish_list",
-            "restaurant_ingredient_stock");
+    // The only two tools in this temporary lane were restaurant-specific and are retired.
+    static final Set<String> INITIAL_ALLOWED_TOOLS = Set.of();
 
     private static final Pattern JAVA_CLASS_NAME = Pattern.compile(
             "[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)+");

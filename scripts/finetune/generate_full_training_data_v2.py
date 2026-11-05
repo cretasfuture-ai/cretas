@@ -23,6 +23,26 @@ from collections import defaultdict
 
 random.seed(42)
 
+
+def filter_catalog_intents(intents):
+    """Drop reviewed retired capabilities and normalize the one confirmed alias."""
+    import sys
+    backend_python = Path(__file__).resolve().parents[2] / "backend" / "python"
+    if str(backend_python) not in sys.path:
+        sys.path.insert(0, str(backend_python))
+    from ai.factory_catalog import canonical_code, is_platform_intent, is_retired, is_retired_tool
+
+    out = {}
+    for intent in intents:
+        code = intent.get("intent_code")
+        if (not is_platform_intent(code) or is_retired(code)
+                or is_retired_tool(intent.get("tool_name"))):
+            continue
+        normalized = dict(intent)
+        normalized["intent_code"] = canonical_code(code)
+        out.setdefault(normalized["intent_code"], normalized)
+    return list(out.values())
+
 # ===========================================================================
 # 1. DOMAIN SYNONYM DICTIONARY (50+ word groups)
 # ===========================================================================
@@ -1462,6 +1482,7 @@ def generate_training_data():
 
     # Filter out test intents
     intents = [i for i in intents if not should_exclude(i['intent_code'])]
+    intents = filter_catalog_intents(intents)
     print(f"After filtering test/placeholder: {len(intents)} intents")
 
     # --- Inject synthetic intents for new classes ---

@@ -1187,6 +1187,8 @@ async def post_restaurant_tiered_answer(
       {"delegate": True, "answer_text": str, "charts": [...], "kpis": [...],
        "code": str, "contract_pass": bool}
     """
+    raise HTTPException(status_code=410, detail="RESTAURANT_AI_RETIRED")
+
     from smartbi.gold.restaurant.restaurant_intent import (
         DEFAULT_OUTPUT_PREFERENCE,
         log_intent_miss,

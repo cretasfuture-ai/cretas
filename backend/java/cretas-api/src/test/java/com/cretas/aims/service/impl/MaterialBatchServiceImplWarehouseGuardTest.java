@@ -236,6 +236,9 @@ class MaterialBatchServiceImplWarehouseGuardTest {
         req.setWarehouseId(warehouseId);
         req.setQuantityUnit("kg");
         req.setReceiptQuantity(BigDecimal.valueOf(100));
+        req.setTotalWeight(BigDecimal.valueOf(100));
+        req.setTotalValue(BigDecimal.valueOf(1000));
+        req.setUnitPrice(BigDecimal.TEN);
         req.setReceiptDate(LocalDate.now());
         req.setSourceDocType("MANUAL_ADJUST");
         req.setNotes("W1 #03 guard wiring test");

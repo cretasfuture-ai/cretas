@@ -14,15 +14,11 @@ class LegacyToolMigrationManifestLoaderTest {
             new LegacyToolMigrationManifestLoader();
 
     @Test
-    void defaultManifestContainsOnlyTheThreeAuditedRestaurantReadTools() {
+    void defaultManifestHasRetiredTheRestaurantOnlyLane() {
         LegacyToolMigrationManifest manifest = loader.loadDefault();
 
-        assertThat(manifest.expectedToolCount()).isEqualTo(2);
-        assertThat(manifest.tools())
-                .extracting(LegacyToolMigrationEntry::toolName)
-                .containsExactlyInAnyOrder(
-                        "restaurant_dish_list",
-                        "restaurant_ingredient_stock");
+        assertThat(manifest.expectedToolCount()).isZero();
+        assertThat(manifest.tools()).isEmpty();
         assertThat(manifest.tools()).allSatisfy(entry -> {
             assertThat(entry.actionType().name()).isIn("READ", "ANALYZE");
             assertThat(entry.riskLevel().name()).isEqualTo("LOW");

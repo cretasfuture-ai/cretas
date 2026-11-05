@@ -5,10 +5,12 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.repository.shortage.RescheduleProposalRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseRepository;
+import com.cretas.aims.repository.shortage.ShortageCaseActionRepository;
 import com.cretas.aims.security.ActorRef;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.shortage.ShortageRescheduleService;
+import com.cretas.aims.service.shortage.ShortageOutcomeCheckService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -25,19 +27,22 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.hamcrest.Matchers.containsString;
 
 /** 重排的操作人取 JWT 验过的身份; 别厂 token 进不来; 没选候选在入口就 400; 方案过期如实 409。 */
 class ShortageRescheduleControllerContractTest {
 
     private final ShortageRescheduleService service = mock(ShortageRescheduleService.class);
+    private final ShortageOutcomeCheckService checks = OutcomeCheckStubs.unknown();
+    private final ShortageCaseActionRepository actions = mock(ShortageCaseActionRepository.class);
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.standaloneSetup(new ShortageRescheduleController(service,
                         mock(RescheduleProposalRepository.class), mock(ShortageCaseRepository.class),
-                        mock(com.cretas.aims.repository.shortage.ShortageCaseActionRepository.class),
-                        OutcomeCheckStubs.unknown()))
+                        actions,
+                        checks))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
         RescheduleProposal p = new RescheduleProposal();
@@ -82,5 +87,50 @@ class ShortageRescheduleControllerContractTest {
         mvc.perform(as(post("/api/mobile/F1/shortage-cases/C1/reschedule-proposals/RP-1/apply"), "F1")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"candidateKey\":\"SAME_LINE_POSTPONE\"}"))
                 .andExpect(status().isConflict());
+        verify(checks, never()).check(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void committedScheduleIsAcknowledgedEvenWhenItsLaterCheckThrows() throws Exception {
+        RescheduleProposal applied = new RescheduleProposal();
+        applied.setId("RP-1");
+        applied.setStatus(RescheduleProposal.Status.APPLIED);
+        applied.setCandidates(List.of());
+        when(service.apply(any(), any(), any(), any(), any())).thenReturn(applied);
+        when(checks.check(any(), any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("verification storage unavailable"));
+        mvc.perform(as(post("/api/mobile/F1/shortage-cases/C1/reschedule-proposals/RP-1/apply"), "F1")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"candidateKey\":\"SAME_LINE_POSTPONE\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value("RP-1"))
+                .andExpect(jsonPath("$.data.status").value("APPLIED"))
+                .andExpect(jsonPath("$.message").value(containsString("排程已调整")))
+                .andExpect(jsonPath("$.message").value(containsString("结果核对未完成")))
+                .andExpect(jsonPath("$.message").value(containsString("交期是否达成尚未确认")))
+                .andExpect(jsonPath("$.message").value(containsString("勿重复应用")));
+        verify(service).apply(eq("F1"), eq("C1"), eq("RP-1"), eq("SAME_LINE_POSTPONE"), any());
+    }
+
+    @Test
+    void committedScheduleIsAcknowledgedWhenPostWriteActionLookupFails() throws Exception {
+        RescheduleProposal applied = new RescheduleProposal();
+        applied.setId("RP-1");
+        applied.setStatus(RescheduleProposal.Status.APPLIED);
+        applied.setCandidates(List.of());
+        when(service.apply(any(), any(), any(), any(), any())).thenReturn(applied);
+        when(actions.findByCaseIdOrderByIdAsc("C1"))
+                .thenThrow(new IllegalStateException("action ledger temporarily unavailable"));
+        mvc.perform(as(post("/api/mobile/F1/shortage-cases/C1/reschedule-proposals/RP-1/apply"), "F1")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"candidateKey\":\"SAME_LINE_POSTPONE\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value("RP-1"))
+                .andExpect(jsonPath("$.data.status").value("APPLIED"))
+                .andExpect(jsonPath("$.message").value(containsString("结果核对未完成")))
+                .andExpect(jsonPath("$.message").value(containsString("交期是否达成尚未确认")))
+                .andExpect(jsonPath("$.message").value(containsString("勿重复应用")));
+        verify(service).apply(eq("F1"), eq("C1"), eq("RP-1"), eq("SAME_LINE_POSTPONE"), any());
+        verify(checks, never()).check(any(), any(), any(), any(), any());
     }
 }

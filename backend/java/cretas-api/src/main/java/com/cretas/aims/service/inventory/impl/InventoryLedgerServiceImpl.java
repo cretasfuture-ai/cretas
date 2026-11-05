@@ -610,7 +610,15 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 .setParameter("end", end)
                 .setParameter("receiveStatus", PurchaseReceiveStatus.CONFIRMED)
                 .getResultList();
-        return result.isEmpty() ? ZERO : toBD(result.get(0));
+        BigDecimal purchaseQty = result.isEmpty() ? ZERO : toBD(result.get(0));
+        List<Object> gifts = em.createQuery(
+                "SELECT COALESCE(SUM(b.receiptQuantity), 0) FROM MaterialBatch b "
+                        + "WHERE b.factoryId = :fid AND b.materialTypeId = :mid "
+                        + "AND b.receiptDate BETWEEN :start AND :end "
+                        + "AND b.sourceDocType = 'FREE_GIFT' AND b.deletedAt IS NULL")
+                .setParameter("fid", factoryId).setParameter("mid", materialTypeId)
+                .setParameter("start", start).setParameter("end", end).getResultList();
+        return purchaseQty.add(gifts.isEmpty() ? ZERO : toBD(gifts.get(0)));
     }
 
     @SuppressWarnings("unchecked")
@@ -631,7 +639,27 @@ public class InventoryLedgerServiceImpl implements InventoryLedgerService {
                 .setParameter("receiveStatus", PurchaseReceiveStatus.CONFIRMED)
                 .getResultList();
         Object val = result.isEmpty() ? null : result.get(0);
-        return val == null ? null : toBD(val).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        BigDecimal purchaseAmount = val == null ? null : toBD(val).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        List<Object> gifts = em.createQuery(
+                "SELECT SUM(b.receiptQuantity * b.unitPrice) FROM MaterialBatch b "
+                        + "WHERE b.factoryId = :fid AND b.materialTypeId = :mid "
+                        + "AND b.receiptDate BETWEEN :start AND :end "
+                        + "AND b.sourceDocType = 'FREE_GIFT' AND b.deletedAt IS NULL")
+                .setParameter("fid", factoryId).setParameter("mid", materialTypeId)
+                .setParameter("start", start).setParameter("end", end).getResultList();
+        Object giftVal = gifts.isEmpty() ? null : gifts.get(0);
+        List<Object> giftCounts = em.createQuery(
+                "SELECT COUNT(b) FROM MaterialBatch b "
+                        + "WHERE b.factoryId = :fid AND b.materialTypeId = :mid "
+                        + "AND b.receiptDate BETWEEN :start AND :end "
+                        + "AND b.sourceDocType = 'FREE_GIFT' AND b.deletedAt IS NULL")
+                .setParameter("fid", factoryId).setParameter("mid", materialTypeId)
+                .setParameter("start", start).setParameter("end", end).getResultList();
+        boolean hasGift = !giftCounts.isEmpty() && toBD(giftCounts.get(0)).signum() > 0;
+        BigDecimal giftAmount = giftVal == null ? ZERO : toBD(giftVal);
+        if (purchaseAmount == null && !hasGift) return null;
+        return (purchaseAmount == null ? ZERO : purchaseAmount).add(giftAmount)
+                .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
     }
 
     @SuppressWarnings("unchecked")

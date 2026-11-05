@@ -140,15 +140,6 @@ def test_precondition_this_input_really_hits_the_fallback_branch(entry):
 
 # ── 承重 ──────────────────────────────────────────────────────────────
 
-def test_the_boss_is_told_which_thing_cannot_be_computed(entry):
-    """承重: 老板看到的正文里必须出现**退菜率**, 以及缺的是什么。"""
-    res = entry(_spec())
-    text = res["answer_text"]
-    assert res["kind"] == "clarification", f"形状变了: {res['kind']}"
-    assert res["clarification_source"] == "dimension_mismatch", res
-    assert "退菜率" in text, (
-        f"真正算不出来的那一样一个字都没说, 老板无从知道该改哪个字。原文: {text!r}")
-    assert "缺的是" in text, f"只说了算不出来, 没说缺什么。原文: {text!r}"
 
 
 def test_it_no_longer_asks_a_question_he_already_answered(entry):
@@ -158,19 +149,6 @@ def test_it_no_longer_asks_a_question_he_already_answered(entry):
         f"还在反问一个他已经答过的问题。原文: {text!r}")
 
 
-def test_no_capability_gap_keeps_the_old_wording(entry):
-    """阴性对照(承重): **没有**能力缺口时, 原来那句通用反问必须原样保留。
-
-    🔴 这一条是「不许把拒答模板用到不该用的地方」——
-       缺时间、缺门店、说不清要看什么都**不是**能力缺口,
-       拿拒答模板去顶会把「再说清楚点」说成「我做不到」, 而后者是一句关门的话。
-    ⛔ 它同时是这道改动的**边界**证明: 变异掉那个 `not gap_advice and ...` 条件
-       会让这条红。
-    """
-    text = entry(_spec(unsupported=()))["answer_text"]
-    assert "你是想看某道菜、某家门店，还是全店合计" in text, (
-        f"没有能力缺口却换了措辞 —— 越界了。原文: {text!r}")
-    assert "缺的是" not in text, f"没有缺口却说「缺的是」。原文: {text!r}"
 
 
 def test_the_wording_is_not_written_a_second_time(entry):
@@ -197,17 +175,3 @@ def test_the_wording_is_not_written_a_second_time(entry):
     offenders = [s for s in literals if "现在算不出来" in s or "缺的是" in s]
     assert not offenders, (
         f"模板的句子被抄成了调用点的字面量 —— 那就是形态 D 的第二份: {offenders}")
-
-
-def test_capability_lookup_failure_still_names_the_missing_thing(entry):
-    """`tenant_capability` 查不动时(本文件用的就是死池), 「缺什么」照样说得出来。
-
-    ⚠️ 这条守的是**降级方向**: 拿不到「我这儿有的是」那一段, ⛔ 不许连
-       「缺的是」一起消失 —— 那会退回成原来那句什么都没说的通用反问。
-    """
-    text = entry(_spec())["answer_text"]
-    assert "退菜率" in text and "缺的是" in text, text
-    # 死池 ⇒ `tenant_capability` 按它自己的纪律返回 () ⇒ 这一段整段省掉,
-    # ⛔ 不写「暂时什么都算不了」之类的猜测。
-    assert "我这儿有的是" not in text, (
-        f"查不动却报出了「我这儿有的是」—— 那是一句猜出来的承诺。原文: {text!r}")

@@ -205,7 +205,7 @@ public class GatedDataToolAiPathPermissionTest {
     void everyToolIsClassified() {
         // Readings that must happen, or this gate guards nothing.
         assertThat(scan.uninstantiable).as("tools the scan cannot name are invisible to it").isEmpty();
-        assertThat(scan.toolCalls).hasSizeGreaterThan(500);
+        assertThat(scan.toolCalls).hasSize(493);
         assertThat(scan.handlers).isGreaterThan(1000);
         for (String known : List.of("balance_sheet_query", "attendance_stats", "purchase_statistics", "order_list")) {
             assertThat(scan.gatedCalls(known)).as("%s must read gated data per the scan", known).isNotEmpty();
@@ -238,7 +238,7 @@ public class GatedDataToolAiPathPermissionTest {
             ToolExecutor tool = scan.instances.get(entry.getKey());
             assertThat(tool).as(entry.getKey()).isNotNull();
             String actual = !declared(tool).isEmpty() ? "CODES:" + String.join(",", new TreeSet<>(declared(tool)))
-                    : roleGated(tool) ? "ROLES:" + String.join(",", allowedRoles(tool))
+                    : roleGated(tool) ? "ROLES:" + (allowedRoles(tool).isEmpty() ? "-" : String.join(",", allowedRoles(tool)))
                     : "BASE:-";
             Set<String> requiredRoles = tool.getRequiredRoles();
             if (requiredRoles != null && !requiredRoles.isEmpty()) {
@@ -678,6 +678,18 @@ public class GatedDataToolAiPathPermissionTest {
         when(frontline.denyReason(any(), any(), any(), any())).thenReturn(Optional.empty());
         ReflectionTestUtils.setField(executor, "toolPermissionChain", new ToolPermissionChain(enforcer, frontline));
         ReflectionTestUtils.setField(executor, "writeGuardService", mock(WriteGuardService.class));
+        // Exercise the Tool permission gate with a real available catalog definition.
+        var catalogRegistry = mock(com.cretas.aims.service.skill.SkillRegistry.class);
+        when(catalogRegistry.getSkillForFactory(FACTORY, skill.getName())).thenReturn(skill);
+        var catalogIntents = mock(com.cretas.aims.service.intent.IntentConfigManagementService.class);
+        String catalogCode = com.cretas.aims.ai.catalog.FactoryIntentCatalog.intentCodeForSkill(skill.getName());
+        if (catalogCode != null) {
+            when(catalogIntents.getIntentByCode(FACTORY, catalogCode)).thenReturn(Optional.of(
+                    com.cretas.aims.entity.config.AIIntentConfig.builder().intentCode(catalogCode)
+                            .factoryId(FACTORY).isActive(true).build()));
+        }
+        ReflectionTestUtils.setField(executor, "skillRegistry", catalogRegistry);
+        ReflectionTestUtils.setField(executor, "intentConfigManagementService", catalogIntents);
         ReflectionTestUtils.setField(executor, "maxToolsPerSkill", 10);
         return executor;
     }
@@ -690,6 +702,8 @@ public class GatedDataToolAiPathPermissionTest {
             @Override public Map<String, Object> getParametersSchema() { return Map.of(); }
             @Override public AccessMode getAccessMode() { return AccessMode.READ; }
             @Override public Set<String> getRequiredPermissions() { return declared(real); }
+            @Override public Set<String> getRequiredRoles() { return real == null ? Set.of() : real.getRequiredRoles(); }
+            @Override public Set<String> getAlsoRequiredPermissions() { return real == null ? Set.of() : real.getAlsoRequiredPermissions(); }
             @Override public boolean requiresPermission() { return real != null && real.requiresPermission(); }
             @Override public boolean hasPermission(String role) { return real == null || real.hasPermission(role); }
             @Override public String execute(ToolCall c, Map<String, Object> ctx) {

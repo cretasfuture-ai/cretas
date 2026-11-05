@@ -1,6 +1,7 @@
 package com.cretas.aims.service.intent.impl;
 
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.ai.catalog.FactoryIntentCatalog;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
@@ -54,7 +55,11 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Override
     public Optional<AIIntentConfig> getIntentByCode(String factoryId, String intentCode) {
         log.debug("getIntentByCode(factoryId={}, intentCode={})", factoryId, intentCode);
-        List<AIIntentConfig> results = intentRepository.findByIntentCodeAndFactoryIdOrPlatform(intentCode, factoryId);
+        if (FactoryIntentCatalog.isRetiredIntent(intentCode)) return Optional.empty();
+        if (intentRepository.findBlockedIntentCodesInFactoryScope(factoryId)
+                .contains(FactoryIntentCatalog.canonicalCode(intentCode))) return Optional.empty();
+        List<AIIntentConfig> results = FactoryIntentCatalog.project(intentRepository
+                .findByIntentCodeAndFactoryIdOrPlatform(FactoryIntentCatalog.canonicalCode(intentCode), factoryId));
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
 
@@ -62,14 +67,16 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Deprecated
     public Optional<AIIntentConfig> getIntentByCode(String intentCode) {
         log.debug("getIntentByCode(intentCode={})", intentCode);
-        return intentRepository.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(intentCode);
+        if (FactoryIntentCatalog.isRetiredIntent(intentCode)) return Optional.empty();
+        return intentRepository.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(
+                FactoryIntentCatalog.canonicalCode(intentCode)).map(FactoryIntentCatalog::project);
     }
 
     @Override
     @Cacheable(value = "allIntents", key = "#factoryId")
     public List<AIIntentConfig> getAllIntents(String factoryId) {
         log.debug("getAllIntents(factoryId={})", factoryId);
-        return intentRepository.findByFactoryIdOrPlatformLevel(factoryId);
+        return projectVisible(factoryId, intentRepository.findByFactoryIdOrPlatformLevel(factoryId));
     }
 
     @Override
@@ -77,7 +84,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Cacheable(value = "allIntents_legacy")
     public List<AIIntentConfig> getAllIntents() {
         log.debug("getAllIntents()");
-        return intentRepository.findByIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc();
+        return FactoryIntentCatalog.project(intentRepository.findByIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc());
     }
 
     @Override
@@ -87,7 +94,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
             log.warn("getIntentsByCategory called without factoryId");
             return List.of();
         }
-        return intentRepository.findByFactoryIdAndCategory(factoryId, category);
+        return projectVisible(factoryId, intentRepository.findByFactoryIdAndCategory(factoryId, category));
     }
 
     @Override
@@ -95,7 +102,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Cacheable(value = "intentsByCategory_legacy", key = "#category")
     public List<AIIntentConfig> getIntentsByCategory(String category) {
         log.warn("Deprecated getIntentsByCategory() called without factoryId");
-        return intentRepository.findByIntentCategoryAndIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc(category);
+        return FactoryIntentCatalog.project(intentRepository.findByIntentCategoryAndIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc(category));
     }
 
     @Override
@@ -105,14 +112,14 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
             log.warn("getIntentsBySensitivity called without factoryId");
             return List.of();
         }
-        return intentRepository.findByFactoryIdAndSensitivity(factoryId, sensitivityLevel);
+        return projectVisible(factoryId, intentRepository.findByFactoryIdAndSensitivity(factoryId, sensitivityLevel));
     }
 
     @Override
     @Deprecated
     public List<AIIntentConfig> getIntentsBySensitivity(String sensitivityLevel) {
         log.warn("Deprecated getIntentsBySensitivity() called without factoryId");
-        return intentRepository.findBySensitivityLevelAndIsActiveTrueAndDeletedAtIsNull(sensitivityLevel);
+        return FactoryIntentCatalog.project(intentRepository.findBySensitivityLevelAndIsActiveTrueAndDeletedAtIsNull(sensitivityLevel));
     }
 
     @Override
@@ -122,7 +129,8 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
             log.warn("getAllCategories called without factoryId");
             return List.of();
         }
-        return intentRepository.findCategoriesByFactoryId(factoryId);
+        return getAllIntents(factoryId).stream().map(AIIntentConfig::getIntentCategory)
+                .filter(java.util.Objects::nonNull).distinct().toList();
     }
 
     @Override
@@ -130,7 +138,13 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Cacheable(value = "intentCategories_legacy")
     public List<String> getAllCategories() {
         log.warn("Deprecated getAllCategories() called without factoryId");
-        return intentRepository.findAllCategories();
+        return getAllIntents().stream().map(AIIntentConfig::getIntentCategory)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+    }
+
+    private List<AIIntentConfig> projectVisible(String factoryId, List<AIIntentConfig> rows) {
+        var blocked = new java.util.HashSet<>(intentRepository.findBlockedIntentCodesInFactoryScope(factoryId));
+        return FactoryIntentCatalog.project(rows).stream().filter(row -> !blocked.contains(row.getIntentCode())).toList();
     }
 
     // ==================== CRUD ====================
@@ -139,6 +153,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Transactional
     public AIIntentConfig createIntent(AIIntentConfig intentConfig) {
         log.debug("createIntent(intentCode={})", intentConfig.getIntentCode());
+        requireSupportedBinding(intentConfig);
         return intentRepository.save(intentConfig);
     }
 
@@ -146,7 +161,16 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Transactional
     public AIIntentConfig updateIntent(AIIntentConfig intentConfig) {
         log.debug("updateIntent(intentCode={})", intentConfig.getIntentCode());
+        requireSupportedBinding(intentConfig);
         return intentRepository.save(intentConfig);
+    }
+
+    private void requireSupportedBinding(AIIntentConfig config) {
+        if (FactoryIntentCatalog.isRetiredIntent(config.getIntentCode())
+                || !java.util.Objects.equals(config.getIntentCode(), FactoryIntentCatalog.canonicalCode(config.getIntentCode()))
+                || FactoryIntentCatalog.isRetiredTool(config.getToolName())) {
+            throw new com.cretas.aims.exception.BusinessException(410, "该意图或工具已退役，请使用工厂规范目录");
+        }
     }
 
     @Override
@@ -167,6 +191,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
         AIIntentConfig existing = ownRow(factoryId, intentCode)
                 .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404,
                         com.cretas.aims.service.intent.IntentConfigWriteGuard.NOT_OWNED_MESSAGE));
+        if (active) requireSupportedBinding(existing);
         existing.setIsActive(active);
         intentRepository.save(existing);
     }
@@ -274,13 +299,14 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
 
     @Override
     public AIIntentConfig getIntentConfigByCode(String factoryId, String intentCode) {
+        if (FactoryIntentCatalog.isRetiredIntent(intentCode)) return null;
         // v27b: Avoid JPQL (:factoryId IS NULL) syntax that causes PostgreSQL 42P18
         try {
-            Optional<AIIntentConfig> config = intentRepository.findByIntentCode(intentCode);
+            Optional<AIIntentConfig> config = intentRepository.findByIntentCode(FactoryIntentCatalog.canonicalCode(intentCode));
             if (config.isPresent()) {
                 AIIntentConfig found = config.get();
                 if (found.getFactoryId() == null || found.getFactoryId().equals(factoryId)) {
-                    return found;
+                    return FactoryIntentCatalog.project(found);
                 }
             }
         } catch (Exception e) {

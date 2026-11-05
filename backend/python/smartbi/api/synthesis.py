@@ -226,10 +226,18 @@ def _factory_id(request: Request, override: Optional[str]) -> str:
     return fid
 
 
+def _reject_retired_restaurant_ai(factory_id: str) -> None:
+    """The comprehensive synthesis route must not bypass the retired namespace."""
+    normalized = str(factory_id or "").strip().upper()
+    if not (normalized.startswith("F") and len(normalized) <= 6):
+        raise HTTPException(status_code=410, detail="RESTAURANT_AI_RETIRED")
+
+
 @router.post("/comprehensive")
 async def comprehensive(request: Request, body: SynthesisRequest):
     """Non-streaming multi-dim synthesis. Returns answer + charts + plan + fact_check."""
     fid = _factory_id(request, body.factory_id)
+    _reject_retired_restaurant_ai(fid)
     q = body.effective_question
     if len(q) > 500:
         raise HTTPException(status_code=400, detail="question too long (max 500 chars)")
@@ -283,6 +291,7 @@ async def comprehensive_stream(request: Request, body: SynthesisRequest):
       event: error   — on failure
     """
     fid = _factory_id(request, body.factory_id)
+    _reject_retired_restaurant_ai(fid)
     user_id = _trusted_user_id(request)
     q = body.effective_question
     if len(q) > 500:

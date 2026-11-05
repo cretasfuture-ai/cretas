@@ -1,7 +1,6 @@
 package com.cretas.aims.service.product;
 
 import com.cretas.aims.ai.tool.impl.dataop.ProductUpdateTool;
-import com.cretas.aims.ai.tool.impl.restaurant.RestaurantDishDeleteTool;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
@@ -47,7 +46,6 @@ import static org.mockito.Mockito.when;
  *   <li>{@code ProductTypeServiceImpl.updateProductType} —— REST PUT/PATCH 产品详情</li>
  *   <li>{@code ProductTypeServiceImpl.updateProductTypesStatus} —— REST 批量启停</li>
  *   <li>{@code ProductUpdateTool} —— AI 工具 {@code product_update} (2026-08-28 生产事故那条路)</li>
- *   <li>{@code RestaurantDishDeleteTool} —— AI 工具 {@code restaurant_dish_delete}</li>
  * </ol>
  * 每个入口都配一条阴性对照(无在飞订单 → 放行且真的写了库)。
  */
@@ -333,46 +331,4 @@ class ProductRetirementGuardWiringTest {
         verify(productTypeRepository, never()).save(any(ProductType.class));
     }
 
-    // ==================== 入口 4: AI 工具 restaurant_dish_delete ====================
-
-    private RestaurantDishDeleteTool dishDeleteTool() {
-        RestaurantDishDeleteTool tool = new RestaurantDishDeleteTool();
-        ReflectionTestUtils.setField(tool, "productTypeRepository", productTypeRepository);
-        ReflectionTestUtils.setField(tool, "productRetirementGuard", guard);
-        return tool;
-    }
-
-    @Test
-    void restaurantDishDeleteToolBlocksRetirementWhenOrdersAreInFlight() {
-        ProductType dish = activeSku();
-        when(productTypeRepository.findByIdAndFactoryId(SKU_ID, FACTORY)).thenReturn(Optional.of(dish));
-        stubOrders(twoApprovedOrders());
-
-        RestaurantDishDeleteTool tool = dishDeleteTool();
-
-        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
-                tool, "doExecute", FACTORY,
-                Map.of("id", SKU_ID),
-                Map.of("factoryId", FACTORY)))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(error -> assertThat(error.getMessage()).contains("SO-20260812-0001"));
-
-        verify(productTypeRepository, never()).save(any(ProductType.class));
-        assertThat(dish.getIsActive()).isTrue();
-    }
-
-    @Test
-    void restaurantDishDeleteToolAllowsRetirementWhenNoOrdersAreInFlight() {
-        ProductType dish = activeSku();
-        when(productTypeRepository.findByIdAndFactoryId(SKU_ID, FACTORY)).thenReturn(Optional.of(dish));
-        stubOrders(Map.of());
-
-        RestaurantDishDeleteTool tool = dishDeleteTool();
-        Map<String, Object> result = ReflectionTestUtils.invokeMethod(
-                tool, "doExecute", FACTORY, Map.of("id", SKU_ID), Map.of("factoryId", FACTORY));
-
-        assertThat(result).isNotNull();
-        assertThat(dish.getIsActive()).isFalse();
-        verify(productTypeRepository).save(any(ProductType.class));
-    }
 }

@@ -81,6 +81,14 @@ class ReadToolDescriptor:
 
 
 def restaurant_descriptors() -> tuple[ReadToolDescriptor, ...]:
+    # Restaurant Read Tools were retired from the AI catalog. Keep the
+    # descriptor datatypes importable for old non-AI tooling, but expose no
+    # model-visible descriptors or callable capability.
+    return ()
+
+    # Retained below only as inert historical source until the module is
+    # physically removed in a dedicated cleanup; unreachable code is never
+    # registered by runtime/registry.
     financial = DataClassification.FINANCIAL_RESTRICTED
     operational = DataClassification.OPERATIONAL_INTERNAL
     customer = DataClassification.CUSTOMER_SENSITIVE_AGGREGATED

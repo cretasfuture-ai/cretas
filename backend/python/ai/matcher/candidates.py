@@ -25,11 +25,12 @@ from typing import Dict, List, Optional
 
 from ai.dto import CandidateIntentDto, MatchMethod
 from ai.embedding import get_embedding_cached, vec_to_pgvector_text
+from ai.factory_catalog import canonical_code, filter_runtime_rows
 
 logger = logging.getLogger(__name__)
 
 DESC_SQL = """
-SELECT intent_code, intent_name, intent_category, description,
+SELECT intent_code, intent_name, intent_category, tool_name, description,
        CASE WHEN embedding IS NULL THEN NULL ELSE 1 - (embedding <=> $1::vector) END AS similarity
 FROM ai_intent_configs
 WHERE deleted_at IS NULL
@@ -93,10 +94,16 @@ class BlendRetriever:
                     logger.warning("BlendRetriever: ai_intent_examples 不存在 (迁移未跑?), 只用描述向量")
                     _missing_table_warned = True
                 ex_rows = []
-        meta = {r["intent_code"]: r for r in desc_rows}
-        scores = blend_scores({r["intent_code"]: (None if r["similarity"] is None else float(r["similarity"]))
-                               for r in desc_rows},
-                              {r["intent_code"]: float(r["similarity"]) for r in ex_rows}, self.blend)
+        desc_rows = filter_runtime_rows(desc_rows)
+        desc_by_code = {str(r["intent_code"]): r for r in desc_rows}
+        ex_scores = {}
+        for r in ex_rows:
+            code = canonical_code(r.get("intent_code"))
+            if code and not code in ex_scores:
+                ex_scores[code] = float(r["similarity"])
+        meta = desc_by_code
+        scores = blend_scores({str(r["intent_code"]): (None if r["similarity"] is None else float(r["similarity"]))
+                               for r in desc_rows}, ex_scores, self.blend)
         ranked = sorted(scores.items(), key=lambda kv: -kv[1])[: (top_k or self.top_k)]
         return [
             CandidateIntentDto(

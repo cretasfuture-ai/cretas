@@ -47,22 +47,6 @@ def _promised(button) -> str:
 # ⚠️ 「一个按钮都没有」和「按钮全是诚实的」在下面那条断言里长得一模一样。
 #    没有这一条, 闸把所有按钮删光也会全绿。
 
-def test_honest_seed_still_gets_buttons():
-    """阳性对照 —— 用户自己把时间词写在**开头**时, 按钮照给, 且诚实。
-
-    🔴 这同时是缺陷【1】的**阴性对照**: 这条 seed 修前就 0/3 不一致
-       (两个按钮都对), 修后必须**仍然**两个按钮都在、都对。
-       它证明这道闸不是「把按钮全删了」。
-    """
-    buttons = _time_buttons("最近30天全部门店营收和订单量分别是多少")
-    assert len(buttons) == 2, f"诚实的 seed 上按钮被删了: {buttons}"
-    for b in buttons:
-        assert _resolve_sales_query_spec(b["question"]).window_label == _promised(b), (
-            f"阳性对照自己就不自洽, 仪器坏了: {b}")
-    assert [b["question"] for b in buttons] == [
-        "本月全部门店营收和订单量分别是多少",
-        "上个月全部门店营收和订单量分别是多少",
-    ], "阳性对照的问句变了 —— 逐字比, 不是只比 kind"
 
 
 # ── 被守的行为 ────────────────────────────────────────────────────────

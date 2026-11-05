@@ -426,6 +426,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/sales/orders',
       '/sales/customers',
       '/sales/shortage-cases',
+      '/sales/delivery-risks',
       '/sales/shipments',
       '/sales/returns',
       '/sales/payment-requests',

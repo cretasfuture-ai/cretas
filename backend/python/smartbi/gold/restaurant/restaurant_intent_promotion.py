@@ -59,6 +59,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# The restaurant-specific AI namespace is retired. Keep historical ledger
+# helpers importable, but make every promotion path explicitly fail closed.
+RESTAURANT_AI_RETIRED = True
+
 _DATA = Path(__file__).parent.parent / "data"
 LEDGER_FILE = _DATA / "promoted_restaurant_intent_samples.json"
 # 否决账本 (2026-07-23): 人审否决过的问法 (写操作错接/上下文省略句等),
@@ -150,6 +154,8 @@ def load_promoted_samples() -> Dict[str, List[str]]:
     """Read the repo-committed ledger. Tolerates a missing/empty/corrupt file
     (fail-open, mirrors learning_promotion._load): callers treat {} as "no
     promotions yet", never as an error."""
+    if RESTAURANT_AI_RETIRED:
+        return {}
     try:
         if LEDGER_FILE.exists():
             with open(LEDGER_FILE, "r", encoding="utf-8") as f:
@@ -175,6 +181,8 @@ def merge_samples(base: Optional[Dict[str, List[str]]] = None) -> Dict[str, List
 
     Base entries keep their original order; ledger-only entries are appended
     sorted (stable diffs, no dependency on ledger file's on-disk order)."""
+    if RESTAURANT_AI_RETIRED:
+        return {}
     if base is None:
         from smartbi.gold.restaurant.restaurant_ops_router import SAMPLE_QUERIES
         base = SAMPLE_QUERIES
@@ -533,6 +541,13 @@ def apply_promotions(entries: List[Dict[str, str]]) -> Dict[str, Any]:
     the CLI to print as a diff summary. Does not write the file at all when
     nothing was added (no gratuitous touch of a file a human will `git diff`
     afterwards)."""
+    if RESTAURANT_AI_RETIRED:
+        return {
+            "added": [],
+            "skipped": [{"reason": "RESTAURANT_AI_RETIRED"}],
+            "ledger_path": str(LEDGER_FILE),
+            "ledger_size": 0,
+        }
     from smartbi.gold.restaurant.restaurant_intent import _VALID_CODES
 
     ledger = load_promoted_samples()
@@ -679,6 +694,14 @@ async def apply_route_promotions(
     a DB failure: unlike the read path, an apply that did not persist must not
     look like it succeeded.
     """
+    if RESTAURANT_AI_RETIRED:
+        return {
+            "domain": domain,
+            "scope": scope,
+            "source": source,
+            "written": [],
+            "skipped": [{"reason": "RESTAURANT_AI_RETIRED"}],
+        }
     from smartbi.gold.restaurant.restaurant_intent import (
         _VALID_CODES,
         _normalize_exact_phrase,

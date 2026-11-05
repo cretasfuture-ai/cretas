@@ -54,4 +54,8 @@ public interface ShortageCaseRepository extends JpaRepository<ShortageCase, Stri
                                                @Param("openOnly") boolean openOnly,
                                                @Param("sourceTypes") Collection<ShortageCase.SourceType> sourceTypes,
                                                Pageable pageable);
+
+    /** 同一来源最近一条已结束的实例: 风险没变就不因为重新扫描再开一条。 */
+    Optional<ShortageCase> findFirstByFactoryIdAndSourceTypeAndSourceIdAndClosedAtIsNotNullOrderByClosedAtDesc(
+            String factoryId, ShortageCase.SourceType sourceType, String sourceId);
 }

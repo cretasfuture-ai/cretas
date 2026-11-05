@@ -76,6 +76,9 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class IntentExecutionOrchestrator {
+
+    /** Dedicated restaurant AI routes were retired with the intent catalog. */
+    private static final boolean RESTAURANT_LEGACY_AI_ROUTES_ENABLED = false;
     @Autowired
     private com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService controlledPurchase;
     @Autowired(required = false)
@@ -171,16 +174,6 @@ public class IntentExecutionOrchestrator {
     // via the constructor — no circular dependency.
     private final QueryPreprocessorService queryPreprocessorService;
 
-    // Optional dependencies
-    @Autowired(required = false)
-    private com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate tieredIntentDelegate;
-
-    // 顺带提示 (domain="restaurant" 发现层)。与 tieredIntentDelegate 同为
-    // required=false 字段注入: 本类的既有单测直接 new 出实例、不走 Spring,
-    // 改成必需注入会让那些测试全部 NPE。为空时只是不挂提示, 主回答不受影响。
-    @Autowired(required = false)
-    private RestaurantFindingHintAppender restaurantFindingHintAppender;
-
     /** 发给模型前脱敏; 单测直接 new 本类时用默认实例 (不查保密产品名)。 */
     @Autowired
     private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard =
@@ -195,10 +188,6 @@ public class IntentExecutionOrchestrator {
      */
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope = com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
-
-    // R16 tiered-first 反转开关: 关掉即完全回到 Java-first + gate 摆渡的旧行为。
-    @Value("${cretas.restaurant.tiered-first.enabled:true}")
-    private boolean tieredFirstEnabled;
 
     @Autowired(required = false)
     private ResultFormatterService resultFormatterService;
@@ -238,11 +227,6 @@ public class IntentExecutionOrchestrator {
 
     @Autowired
     private AuthenticatedToolPrincipalFactory authenticatedToolPrincipalFactory;
-
-    /** Main Chat selector for the single bounded restaurant Runtime route. */
-    @Autowired(required = false)
-    private com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector
-            restaurantGrossMarginChatRouteSelector;
 
     /** Default-off boundary for the version-controlled factory capability packs. */
     @Autowired
@@ -368,6 +352,9 @@ public class IntentExecutionOrchestrator {
 
     private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
                                           Long userId, String userRole) {
+        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
+            return retiredCapabilityResponse();
+        }
 
         log.info("执行意图: factoryId={}, userInput={}, intentCode={}, userId={}, role={}",
                 factoryId,
@@ -441,12 +428,6 @@ public class IntentExecutionOrchestrator {
             return executeWithExplicitIntent(
                     factoryId, dishDeleteRequest, userId, userRole, factoryPackRoute);
         }
-        boolean restaurantSemanticPlanEligible = tieredFirstEnabled
-                && !factoryPackConstrained
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && isRestaurantTenant(factoryId)
-                && userInput != null && !userInput.isEmpty()
-                && !hasExplicitReadVeto(userInput);
         // 📊 [NarrowPath] 埋点 2/3 —— 只打 taken=true 一侧。
         // ⚠️ 单独一个 if, 不合进上面的表达式: 那是短路求值, 走到 `isRestaurantTenant`
         //    为 false 时 `hasExplicitReadVeto` 根本不会被求值, 顺带记一笔就会漏。
@@ -458,52 +439,7 @@ public class IntentExecutionOrchestrator {
         }
         // 写动词是唯一让语义权威被跳过的那个原因时记下来 —— 后面识别层要靠它判「闸说改、
         // 解析器说看」的矛盾。两个布尔从同一个前提推导, 不各写一遍, 免得日后只改一处。
-        boolean restaurantWriteVerbSuppressedPlan = restaurantSemanticPlanEligible
-                && isRestaurantWriteRequest(userInput);
-        boolean requiresRestaurantSemanticPlan = restaurantSemanticPlanEligible
-                && !restaurantWriteVerbSuppressedPlan;
-
-        // Restaurant READ natural language has one top-level semantic
-        // authority. Run it before bounded-agent selectors, special report
-        // contracts, comprehensive/owner-action heuristics, phrase shortcuts,
-        // Java conversation inheritance and caches. Python emits an immutable
-        // QueryPlan or an explicit clarification; Java still owns explicit
-        // intents, write verbs, permission checks, preview and confirmation.
-        if (requiresRestaurantSemanticPlan) {
-            IntentExecuteResponse tieredFirst =
-                    tryRestaurantTieredDelegate(factoryId, userInput, request);
-            if (tieredFirst != null) {
-                log.info("[Branch:TieredFirst] restaurant semantic planner accepted: factoryId={}",
-                        factoryId);
-                return tieredFirst;
-            }
-            log.warn("[Branch:TieredFirst] restaurant semantic planner unavailable; fail closed: factoryId={}",
-                    factoryId);
-            return buildRestaurantDeterministicResponse(
-                    request,
-                    "NEED_CLARIFICATION",
-                    true,
-                    "餐饮语义规划暂时不可用，本次没有执行任何分析。请稍后重试。");
-        }
-
-        // The bounded restaurant Runtime is selected before owner-advice, report shortcuts,
-        // conversation inheritance, cache and general intent recognition. This branch returns
-        // launch metadata only; the JWT-protected run facade performs the actual start and repeats
-        // every tenant/role/rollout check.
-        if (!factoryPackConstrained
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && !isRestaurantComprehensiveSynthesisQuestion(request.getUserInput())
-                && !hasExplicitReadVeto(request.getUserInput())
-                && restaurantGrossMarginChatRouteSelector != null) {
-            Optional<IntentExecuteResponse> restaurantAgentRoute =
-                    restaurantGrossMarginChatRouteSelector.select(
-                            factoryId, request.getUserInput(), userRole);
-            if (restaurantAgentRoute.isPresent()) {
-                log.info("[restaurant-agent-chat] selected bounded route: factoryId={}, userId={}",
-                        factoryId, userId);
-                return restaurantAgentRoute.get();
-            }
-        }
+        boolean restaurantWriteVerbSuppressedPlan = false;
 
         // 0.1. W1b: early VETO gate in the execution layer. The orchestrator's own phrase shortcut
         // (#0.2 below) is contains-based and would execute "看订单" inside "别给我看订单" — bypassing
@@ -576,7 +512,6 @@ public class IntentExecutionOrchestrator {
         }
         if (!factoryPackConstrained
                 && userInput != null && !userInput.isEmpty()
-                && !(tieredFirstEnabled && isRestaurantTenant(factoryId))
                 && !hasExplicitReadVeto(userInput)
                 && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)
                 && !isRestaurantCompoundQuestion(factoryId, userInput)) {
@@ -667,7 +602,6 @@ public class IntentExecutionOrchestrator {
         // produce consistent routing).
         if (!factoryPackConstrained
                 && !negationVetoWrite && userInput != null && !userInput.isEmpty()
-                && !(tieredFirstEnabled && isRestaurantTenant(factoryId))
                 && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
             IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
             if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
@@ -811,11 +745,6 @@ public class IntentExecutionOrchestrator {
         // 2b. 通用咨询/闲聊
         if (matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION ||
             matchResult.getQuestionType() == QuestionType.CONVERSATIONAL) {
-            IntentExecuteResponse conversationalTieredDelegated =
-                    tryRestaurantTieredDelegate(factoryId, request.getUserInput(), request);
-            if (conversationalTieredDelegated != null) {
-                return conversationalTieredDelegated;
-            }
             String llmResponse = generateConversationalResponse(factoryId, request.getUserInput(),
                     matchResult.getQuestionType(), request.getEnableThinking(), request.getThinkingBudget());
             return IntentExecuteResponse.builder()
@@ -835,6 +764,9 @@ public class IntentExecutionOrchestrator {
         }
 
         AIIntentConfig intent = matchResult.getBestMatch();
+        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(intent.getIntentCode())) {
+            return retiredCapabilityResponse();
+        }
         log.info("识别到意图: code={}, category={}, sensitivity={}, matchMethod={}, confidence={}",
                 intent.getIntentCode(), intent.getIntentCategory(), intent.getSensitivityLevel(),
                 matchResult.getMatchMethod(), matchResult.getConfidence());
@@ -885,9 +817,8 @@ public class IntentExecutionOrchestrator {
         }
 
         // 审批检查
-        if (intent.needsApproval()
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && !Boolean.TRUE.equals(request.getForceExecute())) {
+        if (Boolean.TRUE.equals(intent.getRequiresApproval())
+                && !Boolean.TRUE.equals(request.getPreviewOnly())) {
             return buildApprovalResponse(intent);
         }
 
@@ -940,20 +871,6 @@ public class IntentExecutionOrchestrator {
                 log.info("[Branch:Skill] 显式 Skill 路由 (by intent_code) 成功: intentCode={}, total={}",
                         intent.getIntentCode(), count);
                 return finishSkillBranchResponse(factoryId, request, intent, userId, explicitSkillResponse);
-            }
-        }
-
-        // 3.55. R15: 餐饮租户分析问先试 tiered 路由, 再进 slot-filling。
-        // 「今年比去年增长多少」曾被指标查询 slot-filling 抢走并把 UPPER_SNAKE
-        // 指标码直接问用户。写操作动词的问句不拦, 保留其参数收集流程。
-        if (isRestaurantTenant(factoryId) && request.getUserInput() != null
-                && !isRestaurantWriteRequest(request.getUserInput())) {
-            IntentExecuteResponse preSlotDelegated =
-                    tryRestaurantTieredDelegate(factoryId, request.getUserInput(), request);
-            if (preSlotDelegated != null) {
-                log.info("[Branch:TieredDelegate] slot-filling 前被 tiered 路由接管: intentCode={}",
-                        intent.getIntentCode());
-                return preSlotDelegated;
             }
         }
 
@@ -1102,6 +1019,9 @@ public class IntentExecutionOrchestrator {
             String userRole,
             FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute) {
         String intentCode = request.getIntentCode();
+        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(intentCode)) {
+            return retiredCapabilityResponse();
+        }
         log.info("使用显式意图代码执行: intentCode={}, factoryId={}", intentCode, factoryId);
 
         Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, intentCode);
@@ -1166,9 +1086,8 @@ public class IntentExecutionOrchestrator {
         // Approval governs the mutation, not its read-only TCC preview. Keeping
         // previewOnly outside this gate lets the user inspect before/after and
         // impact details before deciding whether to request approval/confirm.
-        if (intent.needsApproval()
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && !Boolean.TRUE.equals(request.getForceExecute())) {
+        if (Boolean.TRUE.equals(intent.getRequiresApproval())
+                && !Boolean.TRUE.equals(request.getPreviewOnly())) {
             return buildApprovalResponse(intent);
         }
 
@@ -1346,6 +1265,22 @@ public class IntentExecutionOrchestrator {
                         .message("意图配置已变化，请重新发起预览")
                         .executedAt(LocalDateTime.now())
                         .build();
+            }
+
+            if (!com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(boundToolName)) {
+                // A preview is not an approval grant. Recheck current intent authorization before
+                // reconstructing any server confirmation authority from the claimed command.
+                IntentExecuteResponse denied = checkIntentPermission(intentConfig, factoryId, userId, userRole);
+                if (denied != null) {
+                    previewTokenService.resolveClaim(confirmToken, claimId, false, denied.getMessage());
+                    return denied;
+                }
+                if (Boolean.TRUE.equals(intentConfig.getRequiresApproval())) {
+                    IntentExecuteResponse approval = buildApprovalResponse(intentConfig);
+                    previewTokenService.resolveClaim(confirmToken, claimId, false, approval.getMessage());
+                    return approval;
+                }
+
             }
 
             Optional<ToolExecutor> toolOpt = toolRegistry.getExecutor(boundToolName);
@@ -1593,11 +1528,6 @@ public class IntentExecutionOrchestrator {
             return null;
         }
 
-        IntentExecuteResponse earlyTieredDelegated = tryRestaurantTieredDelegate(factoryId, userInput, request);
-        if (earlyTieredDelegated != null) {
-            return earlyTieredDelegated;
-        }
-
         // Analysis request check
         if (earlyQuestionType == QuestionType.GENERAL_QUESTION &&
             analysisRouterService.isAnalysisRequest(userInput, earlyQuestionType)) {
@@ -1784,7 +1714,9 @@ public class IntentExecutionOrchestrator {
                     ? trustedBusinessDomain
                     : resolvePhraseBusinessDomain(factoryId);
 
-            Optional<String> restaurantOpsMatch = matchRestaurantOpsIntent(normalized, businessDomain);
+            Optional<String> restaurantOpsMatch = RESTAURANT_LEGACY_AI_ROUTES_ENABLED
+                    ? matchRestaurantOpsIntent(normalized, businessDomain)
+                    : Optional.empty();
             if (restaurantOpsMatch.isPresent()) {
                 String matchedCode = restaurantOpsMatch.get();
                 Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, matchedCode);
@@ -1836,6 +1768,9 @@ public class IntentExecutionOrchestrator {
     }
 
     private IntentMatchResult tryRestaurantOpsPhraseShortcut(String userInput, String factoryId) {
+        if (!RESTAURANT_LEGACY_AI_ROUTES_ENABLED) {
+            return null;
+        }
         try {
             String normalized = userInput.toLowerCase().trim();
             String businessDomain = resolvePhraseBusinessDomain(factoryId);
@@ -1875,6 +1810,10 @@ public class IntentExecutionOrchestrator {
     }
 
     private Optional<AIIntentConfig> getIntentByCodeWithPlatformFallback(String factoryId, String intentCode) {
+        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(intentCode)) {
+            return Optional.empty();
+        }
+        intentCode = com.cretas.aims.ai.catalog.FactoryIntentCatalog.canonicalCode(intentCode);
         if (SupplierComparisonReadIntent.CODE.equals(intentCode)) {
             return SupplierComparisonReadIntent.resolve(factoryId, toolRegistry, intentConfigRepository);
         }
@@ -1886,6 +1825,12 @@ public class IntentExecutionOrchestrator {
             return intentOpt;
         }
         return aiIntentService.getIntentByCode(intentCode);
+    }
+
+    private IntentExecuteResponse retiredCapabilityResponse() {
+        return IntentExecuteResponse.builder().intentRecognized(false).status("UNSUPPORTED_CAPABILITY")
+                .message("餐饮专属能力已退役，请使用工厂业务功能。")
+                .executedAt(LocalDateTime.now()).build();
     }
 
     /** Server-owned metadata, not an authorization grant or a persisted intent seed. */
@@ -2238,136 +2183,6 @@ public class IntentExecutionOrchestrator {
     // ==================== 分析流程 ====================
 
     /**
-     * Sheet 7/22 菜品链: 餐饮租户的 GENERAL_QUESTION/CONVERSATIONAL/分析类
-     * null-intent 出口统一先问 Python tiered 路由 (菜品限域/时间窗/session
-     * 多轮继承在彼侧)。命中返回完整响应, 未命中返回 null 走原分支。
-     */
-    private IntentExecuteResponse tryRestaurantTieredDelegate(String factoryId,
-                                                              String userInput,
-                                                              IntentExecuteRequest request) {
-        if (tieredIntentDelegate == null || !isRestaurantTenant(factoryId)) {
-            return null;
-        }
-        java.util.Map<String, Object> delegateParams = new java.util.HashMap<>();
-        delegateParams.put("userInput", userInput);
-        java.util.Map<String, Object> delegateContext = new java.util.HashMap<>();
-        delegateContext.put("request", request);
-        java.util.Map<String, Object> delegated = tieredIntentDelegate.tryDelegate(
-                factoryId, delegateParams, delegateContext, "orchestrator_null_intent");
-        // R16 tiered-first 反转去重: 无论命中与否, 本请求已经问过一次 Python tiered
-        // 路由 — 在 request context 打 ATTEMPTED_CONTEXT_KEY 标记。下游全部 gate
-        // (工具头 / no-tool 出口 / slot-filling 前置, 均经由本方法调用)
-        // 见 TieredIntentDelegate.tryDelegate 内部检查该标记即跳过, 同一请求绝不
-        // 二次调用 Python (tiered parse 可能含 T3 LLM, 重复调用是纯浪费)。
-        if (request != null) {
-            // Copy-then-put: request.getContext() may be an immutable Map (e.g. Map.of(...)
-            // built by callers/tests) — mutating it in place would throw
-            // UnsupportedOperationException, so always materialize a fresh mutable map.
-            java.util.Map<String, Object> mutableRequestContext =
-                    request.getContext() != null
-                            ? new java.util.HashMap<>(request.getContext())
-                            : new java.util.HashMap<>();
-            mutableRequestContext.put(
-                    com.cretas.aims.ai.tool.impl.restaurant.TieredIntentDelegate.ATTEMPTED_CONTEXT_KEY,
-                    Boolean.TRUE);
-            request.setContext(mutableRequestContext);
-        }
-        if (delegated == null || delegated.get("message") == null) {
-            return null;
-        }
-        String delegatedMessage = delegated.get("message").toString();
-        java.util.Map<String, Object> delegatedData = new java.util.HashMap<>();
-        delegatedData.put("charts", delegated.getOrDefault("charts", java.util.List.of()));
-        delegatedData.put("kpis", delegated.getOrDefault("kpis", java.util.List.of()));
-        delegatedData.put("source", "restaurant_ops_gold");
-        if (delegated.get("suggestedFollowups") != null) {
-            delegatedData.put("suggestedFollowups", delegated.get("suggestedFollowups"));
-        }
-        if (delegated.get("contractPass") != null) {
-            delegatedData.put("contractPass", delegated.get("contractPass"));
-        }
-        if (delegated.get("queryPlanHash") != null) {
-            delegatedData.put("queryPlanHash", delegated.get("queryPlanHash"));
-        }
-        // spec §2.1 输出形态偏好 —— 转发链的最后一跳。当前三端尚未消费这个字段，
-        // 先保留后端权威的封闭词表，避免各端落地时各猜默认值；若三端最终明确放弃
-        // output-aware 渲染且契约测试也移除该槽，再删除整条转发链。
-        if (delegated.get("outputPreference") != null) {
-            delegatedData.put("outputPreference", delegated.get("outputPreference"));
-        }
-        if (delegated.get("executedResolvers") != null) {
-            delegatedData.put("executedResolvers", delegated.get("executedResolvers"));
-        }
-        if (delegated.get("conversationContext") != null) {
-            delegatedData.put("conversationContext", delegated.get("conversationContext"));
-        }
-        if (delegated.get("warning") != null) {
-            delegatedData.put("warning", delegated.get("warning"));
-        }
-        if (delegated.get("clarificationContinuation") != null) {
-            delegatedData.put(
-                    "clarificationContinuation",
-                    delegated.get("clarificationContinuation"));
-        }
-        // 顺带提示 —— 店长问任何问题时带出最重要的 1-2 条发现。
-        // 挂在这里而不是某个 Tool 上: 本方法有 7 个调用点但全部汇入此处组装响应,
-        // 而餐饮提问在到达 Java Tool 之前就被 tiered 路由委派走了 (2026-08-06 实测
-        // RESTAURANT_WASTAGE_ANOMALY 的 Tool 日志 0 次调用)。挂 Tool = 挂在没人走的路上。
-        // 🔴 2026-08-12 §9.9: **拒答/反问的正文不附加发现块** —— 带一堆发现读起来
-        //    像是回答了, 店长会以为拿到了东西。
-        //    抑制开关(appender 的 awaitingClarification)一直都在, 它 javadoc 写的意图
-        //    也正是这个; 但此前它读的是 `clarificationContinuation`, 而 Python 只在
-        //    **延续轮**才发那个字段 —— 首轮拒答因此漏网(prod 实测三句全中)。
-        //    改判 `kind == "clarification"`, 两种轮次都盖住。
-        String delegatedKind = String.valueOf(delegated.get("kind"));
-        boolean isClarification = "clarification".equals(delegatedKind)
-                || delegated.get("clarificationContinuation") != null;
-        // 🔴 系统故障（执行链挂了 / LLM 熔断）也不挂发现块 —— 但**不出按钮**。
-        //    clarification 出按钮是因为「缺数据」是可行动的；「系统挂了」不是：
-        //    在「餐饮执行链暂时不可用」下面放一颗「顺带 2 件事」按钮、点下去生成
-        //    行动建议，等于**在故障页上卖建议**。
-        // ⚠️ 这两条路必须分开：Python 侧同一个文件里 `unavailable` 早就存在
-        //    （LLM 额度不可用那条），它的注释写着「用户分不清『这条是可信的事实』
-        //    和『那条是因为 AI 挂了才这么答』」——同一条理由。
-        boolean isUnavailable = "unavailable".equals(delegatedKind);
-        String messageWithHint = restaurantFindingHintAppender == null
-                ? delegatedMessage
-                : restaurantFindingHintAppender.append(
-                        delegatedMessage, factoryId, isClarification || isUnavailable);
-        // 发现是**真算出来的**, 整块扔掉是白丢价值 —— 降级成可点的追问按钮(§9.9 ④)。
-        if (isClarification && restaurantFindingHintAppender != null) {
-            java.util.Map<String, Object> hintFollowup =
-                    restaurantFindingHintAppender.refusalFollowup(delegatedMessage, factoryId);
-            if (hintFollowup != null) {
-                java.util.List<Object> merged = new java.util.ArrayList<>();
-                Object existing = delegatedData.get("suggestedFollowups");
-                if (existing instanceof java.util.List<?> list) {
-                    merged.addAll(list);
-                }
-                // 🔴 **排第一位, 不是追加**。前端 `normalizeFollowUpActions` 拼完
-                //    四路来源之后 `.slice(0, 4)` —— 追加在末尾时, 这一轮若已有 ≥4 条
-                //    建议, 这颗按钮会被**静默切掉**(不报错、不留痕, 只是没了)。
-                //    而它是拒答唯一的下一步(§9.9 ④「必须可点」), 掉了就等于没做。
-                // ⚠️ 前端去重键是 `question`, 而本按钮的 question 是固定串
-                //    「这些问题怎么办」—— 同一轮别处若也产出这句, **先到先得**,
-                //    排第一位同时也保证了冲突时活下来的是这颗。
-                merged.add(0, hintFollowup);
-                delegatedData.put("suggestedFollowups", merged);
-            }
-        }
-
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .intentCode(delegated.get("code") != null ? delegated.get("code").toString() : null)
-                .status("SUCCESS")
-                .message(messageWithHint)
-                .formattedText(messageWithHint)
-                .resultData(delegatedData)
-                .executedAt(LocalDateTime.now())
-                .build();
-    }
-
-    /**
      * R13e: 意图已识别但无执行器 (误匹配到未配置意图, 如「那招牌藤椒味(单人份)呢」
      * → RESTAURANT_DISH_CREATE) 是死胡同出口 — 餐饮租户先问 tiered 路由再放弃,
      * 避免用户拿到"请联系管理员配置"而实际数据可答。
@@ -2375,13 +2190,6 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse noToolResponseWithRestaurantFallback(AIIntentConfig intent,
                                                                        String factoryId,
                                                                        IntentExecuteRequest request) {
-        IntentExecuteResponse delegated = tryRestaurantTieredDelegate(
-                factoryId, request != null ? request.getUserInput() : null, request);
-        if (delegated != null) {
-            log.info("[Branch:TieredDelegate] no-tool 出口被 tiered 路由接管: intentCode={}",
-                    intent != null ? intent.getIntentCode() : null);
-            return delegated;
-        }
         return toolDispatchService.buildNoToolResponse(intent);
     }
 
@@ -2565,10 +2373,6 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse executeAnalysisFlow(String factoryId, String userInput,
                                                        IntentExecuteRequest request,
                                                        Long userId, String userRole) {
-        IntentExecuteResponse tieredDelegated = tryRestaurantTieredDelegate(factoryId, userInput, request);
-        if (tieredDelegated != null) {
-            return tieredDelegated;
-        }
         try {
             AnalysisTopic topic = analysisRouterService.detectAnalysisTopic(userInput);
             AnalysisContext analysisContext = AnalysisContext.builder()
@@ -2998,7 +2802,7 @@ public class IntentExecutionOrchestrator {
     }
 
     private IntentExecuteResponse buildApprovalResponse(AIIntentConfig intent) {
-        String msg = "此操作需要审批确认。审批请求已提交。";
+        String msg = "此操作需要审批，当前 AI 入口尚不支持提交和核验审批。未提交审批、未执行操作，请通过业务页面完成审批。";
         return IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
@@ -3548,20 +3352,9 @@ public class IntentExecutionOrchestrator {
             }
         }
         if (dataActions.size() >= minCount) return actions;
-        // C1: pad with a FACTORY-AWARE pool of guaranteed-bound intents — never pad a restaurant
-        // clarification with manufacturing intents (查询原料库存 / 查询生产批次).
-        String factoryDomain = resolveFactoryDomainSafe(factoryId);
-        IntentExecuteResponse.SuggestedAction[] padCandidates =
-                "RESTAURANT".equalsIgnoreCase(factoryDomain)
-                ? new IntentExecuteResponse.SuggestedAction[] {
-                        IntentExecuteResponse.SuggestedAction.builder()
-                                .actionCode("RESTAURANT_BESTSELLER_QUERY").actionName("查询畅销菜品").build(),
-                        IntentExecuteResponse.SuggestedAction.builder()
-                                .actionCode("RESTAURANT_STORE_REVENUE_RANK").actionName("查询门店营收排行").build(),
-                        IntentExecuteResponse.SuggestedAction.builder()
-                                .actionCode("RESTAURANT_ORDER_STATISTICS").actionName("查询订单统计").build(),
-                }
-                : new IntentExecuteResponse.SuggestedAction[] {
+        // C1: pad with factory-shared capabilities only; retired restaurant intents must
+        // never be suggested as a fallback choice.
+        IntentExecuteResponse.SuggestedAction[] padCandidates = new IntentExecuteResponse.SuggestedAction[] {
                         IntentExecuteResponse.SuggestedAction.builder()
                                 .actionCode("MATERIAL_BATCH_QUERY").actionName("查询原料库存").build(),
                         IntentExecuteResponse.SuggestedAction.builder()
@@ -4022,6 +3815,9 @@ public class IntentExecutionOrchestrator {
     }
 
     boolean isRestaurantOwnerActionFactory(String factoryId, String factoryDomain) {
+        if (!RESTAURANT_LEGACY_AI_ROUTES_ENABLED) {
+            return false;
+        }
         if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
             return true;
         }
@@ -4035,6 +3831,9 @@ public class IntentExecutionOrchestrator {
     }
 
     boolean hasRestaurantOwnerActionSignal(String factoryId, Map<String, Object> context) {
+        if (!RESTAURANT_LEGACY_AI_ROUTES_ENABLED) {
+            return false;
+        }
         if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
             return true;
         }
@@ -4072,26 +3871,6 @@ public class IntentExecutionOrchestrator {
                                                                    IntentExecuteRequest request,
                                                                    Long userId,
                                                                    String userRole) {
-        // Sheet 7/22 菜品链轮5: 「怎么优化」若 session 里刚聊过某道菜, 应答该菜
-        // 的优化依据而非全店 owner 建议。Python 已消费同会话 pending
-        // clarification 后返回的续接澄清同样优先；否则会把“还缺时间”的
-        // 具名菜问题丢给全店 owner advisor。普通全店语境/无 pending session
-        // 仍走原 owner 流程。
-        IntentExecuteResponse dishScoped = tryRestaurantTieredDelegate(
-                factoryId, request.getUserInput(), request);
-        boolean clarificationContinuation = false;
-        if (dishScoped != null && dishScoped.getResultData() instanceof Map<?, ?> data) {
-            clarificationContinuation = Boolean.TRUE.equals(
-                    data.get("clarificationContinuation"));
-        }
-        if (dishScoped != null
-                && (
-                    "RESTAURANT_OPS_GROSS_MARGIN".equals(dishScoped.getIntentCode())
-                    || isDishScopedRestaurantOpsResponse(dishScoped)
-                    || clarificationContinuation
-                )) {
-            return dishScoped;
-        }
         Map<String, Object> context = request.getContext() == null
                 ? Collections.emptyMap()
                 : request.getContext();
@@ -4369,25 +4148,12 @@ public class IntentExecutionOrchestrator {
      */
     List<IntentExecuteResponse.SuggestedAction> buildDefaultSuggestions(String factoryId) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
-        String factoryDomain = resolveFactoryDomainSafe(factoryId);
-        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
-            actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                    .actionCode("RESTAURANT_BESTSELLER_QUERY").actionName("查询畅销菜品")
-                    .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute").build());
-            actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                    .actionCode("RESTAURANT_STORE_REVENUE_RANK").actionName("查询门店营收排行")
-                    .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute").build());
-            actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                    .actionCode("RESTAURANT_ORDER_STATISTICS").actionName("查询订单统计")
-                    .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute").build());
-        } else {
-            actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                    .actionCode("MATERIAL_BATCH_QUERY").actionName("查询原料库存")
-                    .endpoint("/api/mobile/" + factoryId + "/material-batches").build());
-            actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                    .actionCode("PROCESSING_BATCH_LIST").actionName("查询生产批次")
-                    .endpoint("/api/mobile/" + factoryId + "/processing/batches").build());
-        }
+        actions.add(IntentExecuteResponse.SuggestedAction.builder()
+                .actionCode("MATERIAL_BATCH_QUERY").actionName("查询原料库存")
+                .endpoint("/api/mobile/" + factoryId + "/material-batches").build());
+        actions.add(IntentExecuteResponse.SuggestedAction.builder()
+                .actionCode("PROCESSING_BATCH_LIST").actionName("查询生产批次")
+                .endpoint("/api/mobile/" + factoryId + "/processing/batches").build());
         actions.add(IntentExecuteResponse.SuggestedAction.builder()
                 .actionCode("REPHRASE").actionName("重新描述").build());
         actions.add(IntentExecuteResponse.SuggestedAction.builder()

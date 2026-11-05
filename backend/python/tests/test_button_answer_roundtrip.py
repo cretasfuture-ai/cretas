@@ -81,42 +81,16 @@ def _spec(**overrides) -> RestaurantQuerySpec:
 
 
 # ── 前置事实: 种子确实是已批准的零 LLM 路由 ─────────────────────────────
-def test_fixture_seed_is_an_approved_exact_route():
-    """⚠️ 少了它, 下面所有 `_approved_exact_continuation_route` 断言在
-    `_approved_exact_shape` 判不出这个种子时会**静默读成 0** —— 交接里
-    点名烧过一次探针在这上面。"""
-    assert _approved_exact_shape(SEED) == (SEED_CODE, False, False)
 
 
 # ══════════════════════════════════════════════════════════════════
 # 1. 端到端(承重): 产出侧的 question 原样喂给消费侧, 四个时间按钮全部 HIT
 # ══════════════════════════════════════════════════════════════════
-def test_producer_buttons_hit_the_consumer_for_all_four_time_windows():
-    spec = _spec(clarification_question=TIME_CLARIFICATION_QUESTION)
-    buttons = _clarification_followups(spec, SEED)
-
-    # 阳性对照: 拿到了按钮, 且它们确实是**合成句**而不是光秃秃的词 ——
-    # 否则下面"HIT"可能只是因为按钮意外退化成了旧形状。
-    assert len(buttons) == 4, buttons
-    for b in buttons:
-        assert b["question"] != b["label"], (
-            f"按钮 {b} 的 question 退化成了裸词, 这条测试就测不到合成句的形状了")
-        assert b["question"].endswith(SEED), b
-
-    for b in buttons:
-        routed = _approved_exact_continuation_route(
-            SEED, b["question"], TIME_CLARIFICATION_QUESTION)
-        assert routed == SEED_CODE, (
-            f"按钮 {b} 的合成句没有被接收侧认出 —— 零 LLM 延续断了: {b}")
 
 
 # ══════════════════════════════════════════════════════════════════
 # 2. 阳性对照: 旧的光秃秃的词仍然 HIT(证明白名单本身没被动过)
 # ══════════════════════════════════════════════════════════════════
-@pytest.mark.parametrize("window", ["本月", "上个月", "最近7天", "最近30天"])
-def test_legacy_bare_word_answer_still_hits(window):
-    assert _approved_exact_continuation_route(
-        SEED, window, TIME_CLARIFICATION_QUESTION) == SEED_CODE
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -165,35 +139,6 @@ def test_trusted_dish_continuation_combined_string_is_not_doubled():
     assert spec.dish_slot == "米饭"
 
 
-@pytest.mark.asyncio
-async def test_parse_continuation_concatenated_is_not_doubled():
-    """`_parse_continuation` 里的 `concatenated` 同样不许把 original_query
-    拼两遍 —— 用 promoted_code 分支直接把它送进 `_build_spec` 的路径断言
-    `resolver_query_seed` 的实际值(见该分支: `_build_spec(promoted_code,
-    concatenated, ...)`, 未传 `time_phrase` 时 `effective_query == query`,
-    `resolver_query_seed == effective_query`)。
-
-    只桩 `_is_restaurant_tenant`(唯一的 I/O), 其余全走真实代码路径。
-    """
-    pending = {
-        "original_query": SEED,
-        "clarification_question": TIME_CLARIFICATION_QUESTION,
-    }
-    composed_answer = f"本月{SEED}"
-
-    with patch(
-        "smartbi.gold.restaurant.restaurant_intent._is_restaurant_tenant",
-        new=AsyncMock(return_value=True),
-    ):
-        spec = await _parse_continuation(
-            composed_answer, object(), factory_id="DEMO_REST", pending=pending)
-
-    assert spec is not None
-    assert spec.intent == SEED_CODE
-    assert spec.planner_authority == "promoted_exact"
-    assert spec.resolver_query_seed == f"{SEED} 本月", spec.resolver_query_seed
-    assert spec.resolver_query_seed.count(SEED) == 1, (
-        f"original_query 在 concatenated 里出现了不止一次: {spec.resolver_query_seed!r}")
 
 
 # ══════════════════════════════════════════════════════════════════

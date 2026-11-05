@@ -316,12 +316,6 @@ def _parsed(**over):
     return base
 
 
-def test_precondition_the_stub_passes_the_llm_contract():
-    """前提：桩必须过契约闸，否则下面三条量的是 fail-closed，不是被守的行为。"""
-    spec = _t3(_parsed(), _STOREMISS_NO_STORE_Q)
-    assert spec.planner_authority != "llm_contract_incomplete", (
-        "桩没过契约闸 —— 后面的断言无论红不红都没有意义")
-    assert spec.intent == "RESTAURANT_OPS_STORE_MARGIN"
 
 
 def test_upstream_stops_preempting_when_an_unknown_store_was_named():

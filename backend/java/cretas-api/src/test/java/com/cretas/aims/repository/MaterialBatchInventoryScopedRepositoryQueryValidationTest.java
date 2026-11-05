@@ -44,6 +44,15 @@ class MaterialBatchInventoryScopedRepositoryQueryValidationTest {
     }
 
     @Test
+    void foodSampleBatchLookupCannotCrossFactories() {
+        repository.saveAndFlush(batch("SAMPLE-OWN", FACTORY, 101L, MaterialBatchStatus.AVAILABLE, "RM-1", "WH-RAW"));
+        repository.saveAndFlush(batch("SAMPLE-FOREIGN", OTHER_FACTORY, 101L, MaterialBatchStatus.AVAILABLE, "RM-1", "WH-RAW"));
+        assertThat(repository.findByIdAndFactoryId("SAMPLE-OWN", FACTORY)).isPresent();
+        assertThat(repository.findByIdAndFactoryId("SAMPLE-FOREIGN", FACTORY)).isEmpty();
+        assertThat(repository.findByIdAndFactoryId("SAMPLE-FOREIGN", OTHER_FACTORY)).isPresent();
+    }
+
+    @Test
     void statusScopeQueriesApplyFactoryCreatorStatusWarehouseAndMaterialPredicates() {
         repository.saveAndFlush(batch("A", FACTORY, 101L, MaterialBatchStatus.AVAILABLE, "RM-1", "WH-RAW"));
         repository.saveAndFlush(batch("B", FACTORY, 202L, MaterialBatchStatus.AVAILABLE, "RM-1", "WH-RAW"));

@@ -24,7 +24,7 @@ import java.math.BigDecimal;
 @Where(clause = "deleted_at IS NULL")
 public class ShortageCaseAction extends BaseEntity {
 
-    public enum ActionType { PURCHASE_DRAFT, DECISION, RESCHEDULE_APPLIED }
+    public enum ActionType { PURCHASE_DRAFT, DECISION, RESCHEDULE_APPLIED, HANDLING_TASK }
 
     public enum Status { DONE, SUPERSEDED }
 

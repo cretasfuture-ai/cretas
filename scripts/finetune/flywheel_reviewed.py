@@ -9,6 +9,19 @@ from pathlib import Path
 from typing import Dict, List
 
 
+def _normalize_catalog_label(label: str) -> str:
+    """Use the runtime catalog when available, including from standalone CLI."""
+    try:
+        from ai.factory_catalog import normalize_training_label
+    except ModuleNotFoundError:
+        import sys
+        backend_python = Path(__file__).resolve().parents[2] / 'backend' / 'python'
+        if str(backend_python) not in sys.path:
+            sys.path.insert(0, str(backend_python))
+        from ai.factory_catalog import normalize_training_label
+    return normalize_training_label(label)
+
+
 def normalized(text: str) -> str:
     return ''.join(unicodedata.normalize('NFKC', text).casefold().split())
 
@@ -89,7 +102,12 @@ def load_reviewed(path: Path, labels_path: Path, holdout_path: Path) -> List[Dic
             raise ValueError('Approved records need group_id and evidence_refs')
         if provenance.get('source_kind') not in ('synthetic', 'factory'):
             raise ValueError('Evaluation/unknown provenance cannot train')
-        if row.get('label') not in labels:
+        raw_label = row.get('label')
+        try:
+            label = _normalize_catalog_label(raw_label)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if label not in labels and raw_label not in labels:
             raise ValueError('Flywheel label is absent from current model catalog')
         if guard.overlaps(row):
             raise ValueError('Flywheel training record overlaps protected holdout')
@@ -107,7 +125,7 @@ def load_reviewed(path: Path, labels_path: Path, holdout_path: Path) -> List[Dic
         if fingerprint in seen:
             raise ValueError('Duplicate reviewed flywheel utterance; resolve labels first')
         seen.add(fingerprint)
-        result.append({'text': text, 'label': row['label'], 'source': 'flywheel_reviewed',
+        result.append({'text': text, 'label': label, 'source': 'flywheel_reviewed',
                        'confidence': 1.0, 'group_id': row['group_id'],
                        'flywheel_evidence': {'record_id': row['record_id'], 'review': review,
                                              'provenance': provenance, 'text_sha256': fingerprint}})

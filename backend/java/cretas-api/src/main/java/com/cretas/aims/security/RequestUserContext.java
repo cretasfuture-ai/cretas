@@ -23,9 +23,9 @@ import jakarta.servlet.http.HttpServletRequest;
  * {@code /api/mobile/&#123;factoryId&#125;/**} 满足，因为：
  * <ol>
  *   <li>{@code WebMvcConfig} 把拦截器挂在 {@code /api/mobile/**}（order=1）</li>
- *   <li>不在 {@code /api/mobile/public/**} 匿名白名单里</li>
- *   <li>{@code FACTORY_ID_PATTERN}（{@code /api/mobile/([^/]+)/}）命中，且首段是真 factoryId，
- *       不在 {@code auth}/{@code activation}/{@code health}/{@code workflow}/… 那串排除名单里</li>
+ *   <li>不在 {@code /api/mobile/public/share/*} 匿名白名单里</li>
+ *   <li>路由带 {@code {factoryId}} 变量，{@code JwtAuthInterceptor} 对这个值做工厂校验，
+ *       不论 URL 首段是不是 {@code auth}/{@code activation}/{@code health}/{@code workflow}/… 那串保留字</li>
  *   <li>于是走 {@code JwtAuthInterceptor} 的 401 分支：{@code userId == null} 直接拒</li>
  * </ol>
  * ⇒ 能走到 controller，userId 一定非空。

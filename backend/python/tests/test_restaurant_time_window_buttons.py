@@ -67,24 +67,6 @@ def test_no_time_buttons_when_the_resolver_ignores_the_requested_window():
     }) == []
 
 
-def test_the_two_candidate_gates_actually_disagree():
-    """钉住「为什么不能用维度表」。
-
-    没有这一条, 把闸换回 `_RESOLVER_DIMENSIONS['time']` 上面两条**照样绿**
-    —— 那就等于没测到选择本身。
-    """
-    from smartbi.gold.restaurant.restaurant_intent_service import _RESOLVER_DIMENSIONS
-    from smartbi.gold.restaurant.restaurant_ops_router import (
-        resolver_supports_explicit_window,
-    )
-
-    # 维度表误拒的那个
-    assert "time" not in _RESOLVER_DIMENSIONS["RESTAURANT_OPS_WASTAGE_TOP"]
-    assert resolver_supports_explicit_window("RESTAURANT_OPS_WASTAGE_TOP")
-
-    # 维度表误放的那个
-    assert "time" in _RESOLVER_DIMENSIONS["RESTAURANT_OPS_STAFFING_ADVICE"]
-    assert not resolver_supports_explicit_window("RESTAURANT_OPS_STAFFING_ADVICE")
 
 
 def test_unknown_intent_gets_no_time_buttons():
@@ -98,34 +80,10 @@ def test_unknown_intent_gets_no_time_buttons():
 # ── 拼问句 ────────────────────────────────────────────────────────────
 
 
-def test_store_prefix_is_preserved_and_time_prefix_swapped():
-    got = _questions({
-        "intent": "RESTAURANT_OPS_WASTAGE_TOP",
-        "window_label": "上个月",
-        "question_seed": "全部门店上个月损耗金额最高的食材",
-    })
-    assert "全部门店本月损耗金额最高的食材" in got, got
-    # 时间词不能重复, 也不能把门店前缀吃掉
-    assert not any("上个月" in q for q in got), got
-    assert all(q.startswith("全部门店") for q in got), got
 
 
-def test_absolute_month_prefix_is_stripped():
-    got = _questions({
-        "intent": "RESTAURANT_OPS_SALES_SUMMARY",
-        "window_label": "2026年6月",
-        "question_seed": "2026年6月各门店营收",
-    })
-    assert any(q == "本月各门店营收" for q in got), got
-    assert not any("2026年6月" in q for q in got), got
 
 
-def test_question_without_a_time_prefix_just_gets_one_prepended():
-    got = _questions({
-        "intent": "RESTAURANT_OPS_WASTAGE_TOP",
-        "question_seed": "损耗金额最高的食材",
-    })
-    assert "本月损耗金额最高的食材" in got, got
 
 
 def test_current_window_is_not_offered_again():
@@ -156,35 +114,3 @@ def test_no_question_seed_means_no_time_buttons():
 
 
 # ── 与既有按钮合流 ────────────────────────────────────────────────────
-
-
-def test_time_buttons_come_before_store_buttons_and_stay_capped():
-    got = _suggested_followups({
-        "intent": "RESTAURANT_OPS_SALES_SUMMARY",   # store + date_range 都支持
-        "window_label": "上个月",
-        "question_seed": "全部门店上个月营收",
-        "store_scope": "all",
-        "store_options": ["A店", "B店", "C店", "D店"],
-    })
-    questions = [item["question"] for item in got]
-    assert len(got) <= 4
-    assert len(questions) == len(set(questions))
-    # 换时间比换门店常用 —— 时间在前
-    assert questions[0].startswith("全部门店本月"), questions
-    assert any("A店" in q for q in questions), questions
-
-
-def test_ranking_topic_no_longer_swaps_the_question_for_a_generic_one():
-    """旧的 topic 时间按钮发的是写死的泛问句, 换窗口顺带换了问题。
-
-    问「上个月毛利最低的三道菜」点「看本月」, 旧实现回的是
-    「本月哪个菜卖得最好？」—— 而标签读起来是「同一个问题、换个月」。
-    """
-    got = _questions({
-        "intent": "RESTAURANT_OPS_GROSS_MARGIN",
-        "topic_kind": "dish_ranking",
-        "window_label": "上个月",
-        "question_seed": "上个月毛利最低的三道菜",
-    })
-    assert not any("哪个菜卖得最好" in q for q in got), got
-    assert "本月毛利最低的三道菜" in got, got

@@ -86,4 +86,49 @@ class MaterialMovingAverageCalculatorTest {
         assertThat(result.averagePrice()).isNull();
         assertThat(result.issues()).singleElement().asString().contains("B-BAD");
     }
+
+    @Test
+    void includesZeroCostGiftLayerInAverage() {
+        MaterialMovingAverageCalculator.CalculationResult result = calculator.calculate(
+                MATERIAL_ID,
+                "kg",
+                List.of(
+                        new MaterialMovingAverageCalculator.CostLayer(
+                                new BigDecimal("10"), "kg", new BigDecimal("10"), "PURCHASE-1"),
+                        new MaterialMovingAverageCalculator.CostLayer(
+                                new BigDecimal("10"), "kg", BigDecimal.ZERO, "GIFT-1")));
+
+        assertThat(result.complete()).isTrue();
+        assertThat(result.normalizedQuantity()).isEqualByComparingTo("20");
+        assertThat(result.totalValue()).isEqualByComparingTo("100");
+        assertThat(result.averagePrice()).isEqualByComparingTo("5.0000");
+    }
+
+    @Test
+    void zeroCostGiftCanEstablishZeroAverageWhenItIsTheFirstLayer() {
+        MaterialMovingAverageCalculator.CalculationResult result = calculator.calculate(
+                MATERIAL_ID,
+                "kg",
+                List.of(new MaterialMovingAverageCalculator.CostLayer(
+                        new BigDecimal("10"), "kg", BigDecimal.ZERO, "GIFT-ONLY")));
+
+        assertThat(result.complete()).isTrue();
+        assertThat(result.averagePrice()).isEqualByComparingTo("0.0000");
+    }
+
+    @Test
+    void unknownExistingCostIsNotTreatedAsZero() {
+        MaterialMovingAverageCalculator.CalculationResult result = calculator.calculate(
+                MATERIAL_ID,
+                "kg",
+                List.of(
+                        new MaterialMovingAverageCalculator.CostLayer(
+                                new BigDecimal("10"), "kg", null, "UNKNOWN-1"),
+                        new MaterialMovingAverageCalculator.CostLayer(
+                                new BigDecimal("10"), "kg", BigDecimal.ZERO, "GIFT-1")));
+
+        assertThat(result.complete()).isFalse();
+        assertThat(result.averagePrice()).isNull();
+        assertThat(result.normalizedQuantity()).isEqualByComparingTo("10");
+    }
 }
