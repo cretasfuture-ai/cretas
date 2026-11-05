@@ -17,7 +17,23 @@ import { useRoute, useRouter } from 'vue-router';
 import { Connection, Search } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { getFullTrace, isTraceNotFound, type FullTraceResponse, type ProcessingStageInfo } from '@/api/traceability';
+import {
+  findSalesOrdersForTrace,
+  getBatchesForProductionPlans,
+  getFullTrace,
+  getPlansBySalesOrder,
+  getRecentTraceability,
+  isTraceNotFound,
+  type FullTraceResponse,
+  type ProductionBatchTraceOption,
+  type ProcessingStageInfo,
+  type ProductionPlanTraceOption,
+  type SalesOrderTraceOption,
+  type TraceabilityListItem,
+} from '@/api/traceability';
+import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
+import type { BusinessDocumentTrace, TraceDocument } from '@/types/businessDocumentTrace';
+import { documentTraceTarget, traceDocumentLabel } from '@/utils/documentTraceNavigation';
 import { displayProcessUnit } from '@/utils/processSheetUnits';
 import { formatDateTime } from '@/utils/dateFormat';
 import { bannerText, summarizeSourceIndividuals } from './lineageBanner';
@@ -54,6 +70,23 @@ const queriedBatch = ref('');
 const trace = ref<FullTraceResponse | null>(null);
 const errorMessage = ref('');
 
+type SourceMode = 'batch' | 'sales-order';
+const sourceMode = ref<SourceMode>('batch');
+const recentBatches = ref<TraceabilityListItem[]>([]);
+const recentBatchesStatus = ref<'loading' | 'ready' | 'error'>('loading');
+const recentBatchesError = ref('');
+const salesOrderInput = ref('');
+const salesOrders = ref<SalesOrderTraceOption[]>([]);
+const salesPlans = ref<ProductionPlanTraceOption[]>([]);
+const salesBatches = ref<ProductionBatchTraceOption[]>([]);
+const selectedSalesOrder = ref<SalesOrderTraceOption | null>(null);
+const selectedSalesPlan = ref<ProductionPlanTraceOption | null>(null);
+const salesLookupStatus = ref<'idle' | 'loading' | 'ready' | 'error'>('idle');
+const salesLookupError = ref('');
+let salesLookupSequence = 0;
+let recentLookupSequence = 0;
+const salesDocumentTrace = ref<BusinessDocumentTrace | null>(null);
+
 const drawerVisible = ref(false);
 const drawerIndividualId = ref<string | null>(null);
 let requestSequence = 0;
@@ -77,6 +110,42 @@ watch(() => [factoryId.value, authStore.user?.id, route.query.batchNumber], () =
   if (batchInput.value) void runQuery(batchInput.value);
 }, { immediate: true });
 
+watch(() => [factoryId.value, authStore.user?.id] as const, async ([nextFactory, nextActor]) => {
+  const request = ++recentLookupSequence;
+  ++salesLookupSequence;
+  salesOrders.value = [];
+  salesPlans.value = [];
+  salesBatches.value = [];
+  salesDocumentTrace.value = null;
+  salesDocumentTrace.value = null;
+  selectedSalesOrder.value = null;
+  selectedSalesPlan.value = null;
+  salesLookupStatus.value = 'idle';
+  salesLookupError.value = '';
+  recentBatches.value = [];
+  recentBatchesStatus.value = 'loading';
+  recentBatchesError.value = '';
+  if (!nextFactory) {
+    recentBatchesStatus.value = 'ready';
+    return;
+  }
+  const requestedFactory = nextFactory;
+  const requestedActor = nextActor;
+  try {
+    const response = await getRecentTraceability(nextFactory, 1, 20);
+    if (request !== recentLookupSequence || requestedFactory !== factoryId.value || requestedActor !== authStore.user?.id) return;
+    if (!response.success || !response.data || !Array.isArray(response.data.content)) {
+      throw new Error(response.message || '最近批次数据格式错误，请重试');
+    }
+    recentBatches.value = response.data.content;
+    recentBatchesStatus.value = 'ready';
+  } catch (error) {
+    if (request !== recentLookupSequence || requestedFactory !== factoryId.value || requestedActor !== authStore.user?.id) return;
+    recentBatchesStatus.value = 'error';
+    recentBatchesError.value = String((error as Error)?.message || '最近批次加载失败');
+  }
+}, { immediate: true });
+
 // Daily workspace keeps tabs alive: read back new QC records on return.
 onActivated(() => {
   pageIsActive = true;
@@ -91,6 +160,8 @@ onBeforeUnmount(() => { pageIsActive = false; clearTrace(); });
 async function handleSearch() {
   const batchNumber = batchInput.value.trim();
   if (!batchNumber) return;
+  selectedSalesOrder.value = null;
+  selectedSalesPlan.value = null;
   // 地址栏同步, 让这一条链路可以被复制/收藏。replace 而不是 push: 连查三次不该留三条历史。
   if (route?.query?.batchNumber !== batchNumber) {
     await router.replace({ query: { ...route.query, batchNumber } });
@@ -98,6 +169,80 @@ async function handleSearch() {
     if (queriedBatch.value === batchNumber && status.value !== 'idle') return;
   }
   await runQuery(batchNumber);
+}
+
+async function lookupSalesOrders() {
+  const keyword = salesOrderInput.value.trim();
+  if (!factoryId.value || !keyword) return;
+  const request = ++salesLookupSequence;
+  const requestedFactory = factoryId.value;
+  const requestedActor = authStore.user?.id;
+  salesLookupStatus.value = 'loading';
+  salesLookupError.value = '';
+  selectedSalesOrder.value = null;
+  selectedSalesPlan.value = null;
+  salesOrders.value = [];
+  salesPlans.value = [];
+  salesBatches.value = [];
+  try {
+    const orders = await findSalesOrdersForTrace(requestedFactory, keyword);
+    if (request !== salesLookupSequence || requestedFactory !== factoryId.value || requestedActor !== authStore.user?.id) return;
+    salesOrders.value = orders;
+    salesLookupStatus.value = 'ready';
+    if (salesOrders.value.length === 1) await selectSalesOrder(salesOrders.value[0]);
+  } catch (error) {
+    if (request !== salesLookupSequence || requestedFactory !== factoryId.value || requestedActor !== authStore.user?.id) return;
+    salesLookupStatus.value = 'error';
+    salesLookupError.value = String((error as Error)?.message || '销售单查询失败');
+  }
+}
+
+async function selectSalesOrder(order: SalesOrderTraceOption) {
+  if (!factoryId.value) return;
+  const request = ++salesLookupSequence;
+  const requestedFactory = factoryId.value;
+  const requestedActor = authStore.user?.id;
+  selectedSalesOrder.value = order;
+  selectedSalesPlan.value = null;
+  salesPlans.value = [];
+  salesBatches.value = [];
+  salesLookupStatus.value = 'loading';
+  salesLookupError.value = '';
+  try {
+    const plans = await getPlansBySalesOrder(requestedFactory, order.id);
+    if (request !== salesLookupSequence || requestedFactory !== factoryId.value || requestedActor !== authStore.user?.id) return;
+    const planIds = plans.map((plan) => String(plan.id));
+    const [batches, documentTrace] = await Promise.all([
+      getBatchesForProductionPlans(requestedFactory, planIds),
+      getSalesOrderDocumentTrace(requestedFactory, order.id),
+    ]);
+    if (request !== salesLookupSequence || requestedFactory !== factoryId.value || requestedActor !== authStore.user?.id) return;
+    salesPlans.value = plans;
+    salesBatches.value = batches;
+    if (!documentTrace.success || !documentTrace.data) throw new Error(documentTrace.message || '销售单据链路返回格式错误，请重试');
+    salesDocumentTrace.value = documentTrace.data;
+    salesLookupStatus.value = 'ready';
+  } catch (error) {
+    if (request !== salesLookupSequence || requestedFactory !== factoryId.value || requestedActor !== authStore.user?.id) return;
+    salesLookupStatus.value = 'error';
+    salesLookupError.value = String((error as Error)?.message || '销售单关联链路查询失败');
+  }
+}
+
+const salesUpstreamDocuments = computed<TraceDocument[]>(() =>
+  (salesDocumentTrace.value?.documents ?? []).filter((document) =>
+    document.documentType === 'PURCHASE_ORDER' || document.documentType === 'PURCHASE_RECEIPT',
+  ),
+);
+function openTraceDocument(document: TraceDocument) {
+  const target = documentTraceTarget(document);
+  if (target) void router.push(target);
+}
+
+function selectSalesBatch(batch: ProductionBatchTraceOption, plan: ProductionPlanTraceOption) {
+  selectedSalesPlan.value = plan;
+  batchInput.value = batch.batchNumber;
+  void runQuery(batch.batchNumber);
 }
 
 async function runQuery(batchNumber: string) {
@@ -242,7 +387,15 @@ function openIndividual(id: string) {
     </div>
 
     <el-card shadow="never" class="content-card query-card">
-      <form class="query-bar" @submit.prevent="handleSearch">
+      <div class="query-mode" role="tablist" aria-label="溯源入口">
+        <el-button :type="sourceMode === 'batch' ? 'primary' : 'default'" data-testid="mode-batch" @click="sourceMode = 'batch'">
+          按批次号
+        </el-button>
+        <el-button :type="sourceMode === 'sales-order' ? 'primary' : 'default'" data-testid="mode-sales-order" @click="sourceMode = 'sales-order'">
+          按销售单号追溯
+        </el-button>
+      </div>
+      <form v-if="sourceMode === 'batch'" class="query-bar" @submit.prevent="handleSearch">
         <el-input
           v-model="batchInput"
           :prefix-icon="Search"
@@ -261,6 +414,73 @@ function openIndividual(id: string) {
           查询
         </el-button>
       </form>
+      <div v-if="sourceMode === 'sales-order'" class="sales-order-trace" data-testid="sales-order-trace">
+        <form class="query-bar" @submit.prevent="lookupSalesOrders">
+          <el-input v-model="salesOrderInput" placeholder="输入销售单号" data-testid="sales-order-input" />
+          <el-button type="primary" native-type="submit" :loading="salesLookupStatus === 'loading'" :disabled="!salesOrderInput.trim()" data-testid="sales-order-search">
+            查找销售单
+          </el-button>
+        </form>
+        <el-alert v-if="salesLookupStatus === 'error'" type="error" :title="salesLookupError" :closable="false" data-testid="sales-order-error" />
+        <el-empty v-else-if="salesLookupStatus === 'ready' && salesOrders.length === 0" description="未找到匹配销售单" :image-size="60" data-testid="sales-order-empty" />
+        <div v-else-if="salesOrders.length > 1" class="sales-order-options" data-testid="sales-order-options">
+          <el-button v-for="order in salesOrders" :key="order.id" link type="primary" @click="selectSalesOrder(order)">
+            {{ order.orderNumber }}
+          </el-button>
+        </div>
+        <el-alert v-if="selectedSalesOrder && salesLookupStatus === 'ready'" type="info" :closable="false" data-testid="sales-order-anchor">
+          销售单 <strong>{{ selectedSalesOrder.orderNumber }}</strong> → 计划 → 批次（按真实 ID 关联）
+        </el-alert>
+        <div v-if="selectedSalesOrder && salesLookupStatus === 'ready'" class="sales-source-documents" data-testid="sales-source-documents">
+          <span class="sales-plan-title">该销售单的上游采购/收货单：</span>
+          <template v-if="salesUpstreamDocuments.length > 0">
+            <el-button
+              v-for="document in salesUpstreamDocuments"
+              :key="`${document.documentType}-${document.documentId}`"
+              link
+              type="primary"
+              data-testid="sales-source-document"
+              @click="openTraceDocument(document)"
+            >
+              {{ traceDocumentLabel(document.documentType) }} {{ document.documentNumber || document.documentId }}
+            </el-button>
+          </template>
+          <span v-else data-testid="sales-source-documents-empty">无关联采购单或收货单</span>
+        </div>
+        <el-empty v-if="selectedSalesOrder && salesLookupStatus === 'ready' && salesBatches.length === 0" description="该销售单暂无可追溯生产批次" :image-size="60" data-testid="sales-batch-empty" />
+        <div v-for="plan in salesPlans" :key="plan.id" class="sales-plan-group">
+          <div class="sales-plan-title">生产计划 {{ plan.planNumber || plan.id }}</div>
+          <el-button
+            v-for="batch in salesBatches.filter(item => item.productionPlanId === plan.id)"
+            :key="batch.id"
+            link
+            type="primary"
+            data-testid="sales-batch-option"
+            @click="selectSalesBatch(batch, plan)"
+          >
+            批次 {{ batch.batchNumber }}
+          </el-button>
+        </div>
+      </div>
+    </el-card>
+
+    <el-card v-if="sourceMode === 'batch'" shadow="never" class="content-card recent-batches" data-testid="recent-batches">
+      <div class="card-title">最近生产批次</div>
+      <el-skeleton v-if="recentBatchesStatus === 'loading'" :rows="2" animated data-testid="recent-batches-loading" />
+      <el-alert v-else-if="recentBatchesStatus === 'error'" type="error" :title="recentBatchesError" :closable="false" data-testid="recent-batches-error" />
+      <el-empty v-else-if="recentBatches.length === 0" description="暂无最近批次" :image-size="60" data-testid="recent-batches-empty" />
+      <el-table v-else :data="recentBatches" size="small" data-testid="recent-batches-table">
+        <el-table-column prop="batchNumber" label="批次号" min-width="170" />
+        <el-table-column prop="productName" label="产品" min-width="140" />
+        <el-table-column prop="productionDate" label="生产日期" min-width="130" />
+        <el-table-column prop="qualityStatus" label="质量" min-width="100" />
+        <el-table-column prop="completedQuantity" label="数量" min-width="90" />
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button link type="primary" data-testid="recent-batch-query" @click="selectedSalesOrder = null; selectedSalesPlan = null; batchInput = row.batchNumber; void runQuery(row.batchNumber)">查询</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
     </el-card>
 
     <!-- 未查询 -->
@@ -297,6 +517,13 @@ function openIndividual(id: string) {
 
     <!-- 有数据 -->
     <template v-else-if="status === 'ready' && trace">
+      <el-alert v-if="selectedSalesOrder" type="info" :closable="false" class="trace-anchor" data-testid="trace-sales-anchor">
+        <div data-testid="trace-document-anchors">
+          销售单 {{ selectedSalesOrder.orderNumber }}<span v-if="selectedSalesPlan"> · 生产计划 {{ selectedSalesPlan.planNumber || selectedSalesPlan.id }}</span>
+          <span v-if="trace.shipments.length > 0"> · 本批次全部出货：{{ trace.shipments.map(shipment => shipment.shipmentNumber).join('、') }}</span>
+          <span v-else> · 本批次暂无出货单记录</span>
+        </div>
+      </el-alert>
       <el-row :gutter="16" class="trace-row">
         <!-- 溯源码卡 -->
         <el-col :xs="24" :md="8">
@@ -565,6 +792,39 @@ function openIndividual(id: string) {
 
 .content-card {
   border-radius: 10px;
+  margin-bottom: 16px;
+}
+
+.query-mode {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.sales-order-trace {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.sales-order-options,
+.sales-plan-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sales-plan-title {
+  color: var(--el-text-color-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.recent-batches {
+  margin-bottom: 16px;
+}
+
+.trace-anchor {
   margin-bottom: 16px;
 }
 

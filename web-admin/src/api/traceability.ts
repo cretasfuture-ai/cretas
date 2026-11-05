@@ -1,5 +1,64 @@
 import { get } from './request';
 
+export interface TraceabilityListItem {
+  batchNumber: string;
+  productName: string;
+  productionDate: string;
+  status: string;
+  qualityStatus: string;
+  completedQuantity: number;
+}
+
+export interface TraceabilityPageResponse<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  size: number;
+  number: number;
+}
+
+export interface SalesOrderTraceOption {
+  id: string;
+  orderNumber: string;
+}
+
+export interface ProductionPlanTraceOption {
+  id: string;
+  planNumber: string;
+  sourceOrderId?: string | null;
+  sourceOrderIds?: string[] | null;
+}
+
+export interface ProductionBatchTraceOption {
+  id: string;
+  batchNumber: string;
+  productionPlanId?: string | null;
+}
+
+type TracePagePayload<T> = TraceabilityPageResponse<T> | {
+  data?: TraceabilityPageResponse<T>;
+};
+
+function isTraceabilityPage<T>(value: unknown): value is TraceabilityPageResponse<T> {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as { content?: unknown; totalPages?: unknown };
+  return Array.isArray(candidate.content) && typeof candidate.totalPages === 'number';
+}
+
+function unwrapTraceabilityPage<T>(value: unknown): TraceabilityPageResponse<T> | undefined {
+  if (isTraceabilityPage<T>(value)) return value;
+  if (!value || typeof value !== 'object') return undefined;
+  const nested = (value as { data?: unknown }).data;
+  return isTraceabilityPage<T>(nested) ? nested : undefined;
+}
+
+function unwrapTraceabilityList<T>(value: unknown): T[] | undefined {
+  if (Array.isArray(value)) return value as T[];
+  if (!value || typeof value !== 'object') return undefined;
+  const nested = (value as { data?: unknown }).data;
+  return Array.isArray(nested) ? nested as T[] : undefined;
+}
+
 /**
  * 溯源查询 —— 一条批次从源头个体到出货的完整链路。
  *
@@ -200,6 +259,53 @@ export function getFullTrace(factoryId: string, batchNumber: string) {
     `/${factoryId}/traceability/full/${encodeURIComponent(batchNumber)}`,
     { _silent: true }
   );
+}
+
+export function getRecentTraceability(factoryId: string, page = 1, size = 20) {
+  return get<TraceabilityPageResponse<TraceabilityListItem>>(
+    `/${factoryId}/traceability`,
+    { params: { page, size } },
+  );
+}
+
+export async function findSalesOrdersForTrace(factoryId: string, keyword: string): Promise<SalesOrderTraceOption[]> {
+  const response = await get<TracePagePayload<SalesOrderTraceOption>>(
+    `/${factoryId}/sales/orders`,
+    { params: { keyword, page: 1, size: 20 }, _silent: true } as never,
+  );
+  const page = unwrapTraceabilityPage<SalesOrderTraceOption>(response.data);
+  if (!page || !Array.isArray(page.content)) throw new Error('销售单查询返回格式错误，请重试');
+  return page.content.filter((order) => order?.id && order?.orderNumber);
+}
+
+export async function getPlansBySalesOrder(factoryId: string, salesOrderId: string): Promise<ProductionPlanTraceOption[]> {
+  const response = await get<ProductionPlanTraceOption[] | { data?: ProductionPlanTraceOption[] }>(
+    `/${factoryId}/production-plans/by-sales-order/${encodeURIComponent(salesOrderId)}`,
+    { _silent: true } as never,
+  );
+  const plans = unwrapTraceabilityList<ProductionPlanTraceOption>(response.data);
+  if (!Array.isArray(plans)) throw new Error('销售单关联计划返回格式错误，请重试');
+  return plans.filter((plan) => plan?.id);
+}
+
+export async function getBatchesForProductionPlans(factoryId: string, planIds: string[]): Promise<ProductionBatchTraceOption[]> {
+  if (planIds.length === 0) return [];
+  const allowed = new Set(planIds);
+  const batches: ProductionBatchTraceOption[] = [];
+  let pageNumber = 1;
+  let totalPages = 1;
+  do {
+    const response = await get<TracePagePayload<ProductionBatchTraceOption>>(
+      `/${factoryId}/processing/batches-with-clerk-wip`,
+      { params: { page: pageNumber, size: 200 }, _silent: true } as never,
+    );
+    const page = unwrapTraceabilityPage<ProductionBatchTraceOption>(response.data);
+    if (!page || !Array.isArray(page.content)) throw new Error('生产批次查询返回格式错误，请重试');
+    batches.push(...page.content.filter((batch) => batch?.batchNumber && batch.productionPlanId && allowed.has(batch.productionPlanId)));
+    totalPages = Math.max(pageNumber, page.totalPages || pageNumber);
+    pageNumber += 1;
+  } while (pageNumber <= totalPages);
+  return batches;
 }
 
 /**
