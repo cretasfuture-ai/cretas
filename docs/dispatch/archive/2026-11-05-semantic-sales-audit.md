@@ -42,7 +42,8 @@ Service/Repository 保持原样：订单日期含首尾；SO_ALL 排除 DRAFT/CA
 服务入口回放使用真实普通/SSE 入口、共享政策、dispatch 与排行 Tool；初始意图配置、权限、模型/抽参及业务数据依赖受控。
 它能证明给定前提下参数/能力/状态行为，不能证明真实模型识别率、线上端到端成功率、实际延迟和费用。
 任何传输前最后一瞬间的取消与跨 JVM 同时修改仍需真实并发验证，不凭本轮顺序测试宣称全覆盖。
-最终 Maven 目标回归 197/197（0失败/错误/跳过），包含新增语义回归19项；同次 package 退出0。
+首轮完整 Maven 目标回归在6fe3a82375为197/197（0失败/错误/跳过），包含新增语义回归19项；同次 package 退出0。
+随后补充了条数0/1000的边界拒绝，语义回归增至21项；先前197项证据不冒充此追加变更的最终验证。当前提交的精确测试数、命令和package结果以结构化回执及PR1476为准。
 命令选择10个测试类：SalesRankingSemanticContractTest、SalesRankingEntryParityContractTest、ProductSalesRankingScopeContractTest、FactoryCatalogToolBehaviorContractTest、FollowUpResolverTest、SlotAnswerRuleTest、SseStreamingServiceFollowUpTest、ToolDispatchServiceLastActionTest、ConversationMemoryOwnershipContractTest、IntentExecutionOrchestratorSuggestedActionSecurityTest。
 普通/SSE初始意图和其他业务Tool由fixture给定，模型/抽参及权限依赖受控；库存/订单仅验证转交现有READ和取消，没有宣称它们的SQL/日期/状态纠正完整通过。两个入口的会话归属拒绝状态名沿用各自既有契约，安全动作均为拒绝且不查询。
 最终命令、源码/测试哈希、JAR哈希与报告哈希在 `C:/Users/Steve/Documents/Cretas语义架构方案-20261105/execution-receipt.json` 归档；失败/未验证项未计入成功。
