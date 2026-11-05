@@ -60,6 +60,7 @@ export interface CostStructureSummary {
   totalCost: number | null;
   batchCount: number;
   totalActualQty: number | null;
+  quantityByUnit?: Record<string, number>;
 }
 
 export interface CostStructureData {
@@ -98,6 +99,8 @@ export interface YieldTrendResponse {
 /** One product's aggregated cost comparison */
 export interface ProductCostItem {
   productTypeId: string;
+  unit: string | null;
+  productName?: string | null;
   batchCount: number;
   totalActualQty: number | null;
   totalGoodQty: number | null;

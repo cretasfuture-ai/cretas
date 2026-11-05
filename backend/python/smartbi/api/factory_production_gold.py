@@ -230,6 +230,53 @@ async def _query_gold(
         return None, str(exc)
 
 
+async def _query_fact_product_rows(
+    factory_id: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+):
+    """Read product quantities from Silver, where the source unit is retained.
+
+    The Gold daily rollup intentionally has no unit column.  It therefore cannot
+    be used to label or aggregate quantities when a product has historical
+    batches in more than one unit.  Keep this query narrow and read-only; cost
+    comparison can still aggregate the same fact rows in Python.
+    """
+    from smartbi.config import get_pg_pool
+    pool = await get_pg_pool()
+    if pool is None:
+        return None, "db pool unavailable"
+    conditions = ["factory_id = $1", "product_type_id IS NOT NULL"]
+    params: list = [factory_id]
+    idx = 2
+    if start_date is not None:
+        conditions.append(f"stat_date >= ${idx}")
+        params.append(start_date)
+        idx += 1
+    if end_date is not None:
+        conditions.append(f"stat_date <= ${idx}")
+        params.append(end_date)
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SELECT set_config('app.factory_id', $1, false)", factory_id)
+                rows = await conn.fetch(
+                    f"""
+                    SELECT product_type_id, unit, planned_qty, actual_qty, good_qty,
+                           yield_rate, material_cost, labor_cost, equipment_cost,
+                           other_cost, total_cost, stat_date, batch_count
+                    FROM fact_production_batch
+                    WHERE {' AND '.join(conditions)}
+                    ORDER BY product_type_id, unit, stat_date
+                    """,
+                    *params,
+                )
+        return rows, None
+    except Exception as exc:
+        logger.warning("[factory-gold] fact product query failed for %s: %s", factory_id, exc)
+        return None, str(exc)
+
+
 def _row_to_dict(row) -> dict:
     """Convert asyncpg Row to camelCase dict with honest null preservation."""
     return {
@@ -291,6 +338,28 @@ async def cost_structure(
         return {"success": True, "data": {"rows": [], "summary": {}}, "message": "暂无生产数据"}
 
     items = [_row_to_dict(r) for r in rows]
+    # Gold has no unit column. Reconcile quantity against Silver so mixed-unit
+    # production is never presented as one (usually kg) total.
+    fact_rows, fact_err = await _query_fact_product_rows(factory_id, startDate, endDate)
+    quantity_by_date: dict[str, dict[str, float]] = {}
+    if not fact_err and fact_rows:
+        for fact in fact_rows:
+            day = fact.get("stat_date") if hasattr(fact, "get") else None
+            day = day.isoformat() if hasattr(day, "isoformat") else str(day) if day else None
+            if not day:
+                continue
+            unit = (fact.get("unit") if hasattr(fact, "get") else None) or "未提供单位"
+            qty = fact.get("actual_qty") if hasattr(fact, "get") else None
+            if qty is None and hasattr(fact, "get"):
+                qty = fact.get("total_actual_qty")
+            if qty is not None:
+                by_unit = quantity_by_date.setdefault(day, {})
+                by_unit[unit] = by_unit.get(unit, 0.0) + float(qty)
+        for item in items:
+            by_unit = quantity_by_date.get(item["statDate"], {})
+            item["actualQtyByUnit"] = {k: round(v, 2) for k, v in by_unit.items()}
+            if len(by_unit) != 1:
+                item["totalActualQty"] = None
     cost_scope = None
     if _can_view_cost(role):
         # Rebuild per-day costs BEFORE the summary so the summary is the sum of
@@ -311,6 +380,10 @@ async def cost_structure(
         "totalCost":          _sum_field("totalCost"),
         "batchCount":         sum(item["batchCount"] for item in items),
         "totalActualQty":     _sum_field("totalActualQty"),
+        "quantityByUnit": {
+            unit: round(sum(values.get(unit, 0.0) for values in quantity_by_date.values()), 2)
+            for unit in sorted({unit for values in quantity_by_date.values() for unit in values})
+        },
     }
 
     data = {"rows": items, "summary": summary}
@@ -410,13 +483,14 @@ async def product_cost_compare(
 
     role = _get_role(request)
 
-    rows, err = await _query_gold(factory_id, startDate, endDate)
+    rows, err = await _query_fact_product_rows(factory_id, startDate, endDate)
     if err:
         return {"success": False, "data": None, "message": err}
     if not rows:
         return {"success": True, "data": {"products": []}, "message": "暂无生产数据"}
 
-    # Aggregate across days per product_type_id
+    # Aggregate across fact rows per (product_type_id, source unit).  Never
+    # combine 盒/袋/kg quantities: the unit is part of the reporting grain.
     from collections import defaultdict
     agg: dict = defaultdict(lambda: {
         "batchCount": 0,
@@ -432,35 +506,45 @@ async def product_cost_compare(
             return None
         return (a or 0.0) + (b or 0.0)
 
+    def _value(row, *names):
+        for name in names:
+            value = row.get(name) if hasattr(row, "get") else None
+            if value is not None:
+                return value
+        return None
+
     for row in rows:
-        pid = row["product_type_id"]
+        pid = _value(row, "product_type_id")
         if pid is None:
             continue  # skip all-products rollup rows
-        bucket = agg[pid]
-        bucket["batchCount"] += row["batch_count"]
-        bucket["totalPlannedQty"] = _null_add(bucket["totalPlannedQty"],    float(
-            row["total_planned_qty"]) if row["total_planned_qty"] is not None else None)
-        bucket["totalActualQty"] = _null_add(bucket["totalActualQty"],     float(
-            row["total_actual_qty"]) if row["total_actual_qty"] is not None else None)
-        bucket["totalGoodQty"] = _null_add(bucket["totalGoodQty"],       float(
-            row["total_good_qty"]) if row["total_good_qty"] is not None else None)
-        bucket["totalMaterialCost"] = _null_add(bucket["totalMaterialCost"],  float(
-            row["total_material_cost"]) if row["total_material_cost"] is not None else None)
-        bucket["totalLaborCost"] = _null_add(bucket["totalLaborCost"],     float(
-            row["total_labor_cost"]) if row["total_labor_cost"] is not None else None)
+        unit = _value(row, "unit")
+        bucket = agg[(pid, unit)]
+        bucket["batchCount"] += int(_value(row, "batch_count") or 1)
+        bucket["totalPlannedQty"] = _null_add(bucket["totalPlannedQty"], float(
+            _value(row, "planned_qty", "total_planned_qty")) if _value(row, "planned_qty", "total_planned_qty") is not None else None)
+        bucket["totalActualQty"] = _null_add(bucket["totalActualQty"], float(
+            _value(row, "actual_qty", "total_actual_qty")) if _value(row, "actual_qty", "total_actual_qty") is not None else None)
+        bucket["totalGoodQty"] = _null_add(bucket["totalGoodQty"], float(
+            _value(row, "good_qty", "total_good_qty")) if _value(row, "good_qty", "total_good_qty") is not None else None)
+        bucket["totalMaterialCost"] = _null_add(bucket["totalMaterialCost"], float(
+            _value(row, "material_cost", "total_material_cost")) if _value(row, "material_cost", "total_material_cost") is not None else None)
+        bucket["totalLaborCost"] = _null_add(bucket["totalLaborCost"], float(
+            _value(row, "labor_cost", "total_labor_cost")) if _value(row, "labor_cost", "total_labor_cost") is not None else None)
         bucket["totalEquipmentCost"] = _null_add(bucket["totalEquipmentCost"], float(
-            row["total_equipment_cost"]) if row["total_equipment_cost"] is not None else None)
-        bucket["totalOtherCost"] = _null_add(bucket["totalOtherCost"],     float(
-            row["total_other_cost"]) if row["total_other_cost"] is not None else None)
-        bucket["totalCost"] = _null_add(bucket["totalCost"],          float(
-            row["total_cost"]) if row["total_cost"] is not None else None)
+            _value(row, "equipment_cost", "total_equipment_cost")) if _value(row, "equipment_cost", "total_equipment_cost") is not None else None)
+        bucket["totalOtherCost"] = _null_add(bucket["totalOtherCost"], float(
+            _value(row, "other_cost", "total_other_cost")) if _value(row, "other_cost", "total_other_cost") is not None else None)
+        bucket["totalCost"] = _null_add(bucket["totalCost"], float(
+            _value(row, "total_cost")) if _value(row, "total_cost") is not None else None)
         # Weighted yield: weight by batch_count
-        if row["avg_yield_rate"] is not None:
-            bucket["yieldRateNumerator"] += float(row["avg_yield_rate"]) * row["batch_count"]
-            bucket["yieldRateDenominator"] += row["batch_count"]
+        yield_rate = _value(row, "yield_rate", "avg_yield_rate")
+        if yield_rate is not None:
+            count = int(_value(row, "batch_count") or 1)
+            bucket["yieldRateNumerator"] += float(yield_rate) * count
+            bucket["yieldRateDenominator"] += count
 
     products: List[dict] = []
-    for pid, bucket in agg.items():
+    for (pid, unit), bucket in agg.items():
         avg_yield = (
             round(bucket["yieldRateNumerator"] / bucket["yieldRateDenominator"], 2)
             if bucket["yieldRateDenominator"] > 0 else None
@@ -471,6 +555,7 @@ async def product_cost_compare(
 
         products.append({
             "productTypeId":     pid,
+            "unit":              unit,
             "batchCount":        bucket["batchCount"],
             "totalActualQty":    round(bucket["totalActualQty"],  2) if bucket["totalActualQty"] is not None else None,
             "totalGoodQty":      round(bucket["totalGoodQty"],    2) if bucket["totalGoodQty"] is not None else None,
