@@ -33,3 +33,11 @@ main 后续合入 #1477/eacf526 的 F006 工厂演示沙箱，导致共享台账
 ca3d 全量自然终态为 19,432 项观测：19,120 通过、2 失败、310 跳过。剩余两个失败均已按根因修复：ApprovedToolSourceMetadataTest 为库存汇总精确使用 inventory 两码，其他两工具四码不变；软删除唯一性分类登记保留照片身份不释放。后者先用生产 `BEGIN READ ONLY` 查询 pg_index，确认 supplier_delivery_notes_photo_hash_key 为有效全量 UNIQUE(photo_hash)、无部分谓词，再在独立 PG 验证软删后跨厂同 hash 仍报 23505。本次不放宽索引、不恢复 V92、不改失败基线。
 
 v25 三类五项（两个失败契约及新增 PG 断言）全部通过、零失败/错误/跳过，commandExitCode=0/stopExitCode=0；生产业务写和 DDL 均为零。完整失败 artifact 与只读索引证据已保存到外部证据目录。
+
+## SOP main 整合与权限前置修复
+
+推送 b120 后 main 合入 #1485/095558 的 SOP 兼容层，PR 冲突使该 head 未触发 CI，不能称其 CI 已运行。本地 561a585e44 整合：保留 main PG 选择器完整前缀及两个 SOP 闸，再追加本组三个 PG 闸；保留餐饮拒绝和 SOP 默认禁写。候选继承 main 的 V94，餐饮清理自身没有新增 DDL/V92；后续发布须遵守该迁移及兼容回滚门禁。
+
+v26 整合验证 102 项观测、零失败/错误，1 项真实 OSS opt-in 因明确关闭而跳过；自有 PG 正常停止。其中 V94 真实 PG 迁移、Attachment JPA 启动/持久化以及照片身份保留均实际执行，其余 Spring/JVM 断言不冒充真实 PG。
+
+独立复核发现 incoming main 的 listByEntity 在动态权限/工艺保密检查前查询附件，已改为先授权、后查询，返回映射与原策略不变。v27 Controller 13 + 真实 Spring/H2 21 共 34 项全部通过、零跳过；新断言覆盖跨模块权限通过粗 OR 后被动态实体权限拒绝时零查询、受保护 SOP 拒绝时零查询及允许路径查询一次。源码终审无残余 P0/P1，未新增或恢复餐饮入口。

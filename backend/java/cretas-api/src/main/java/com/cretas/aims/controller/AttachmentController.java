@@ -138,12 +138,16 @@ public class AttachmentController {
             @RequestParam EntityType entityType,
             @RequestParam String entityId,
             HttpServletRequest request) {
-        List<Attachment> list = attachmentService.queryByEntity(factoryId, entityType, entityId);
-        if (AttachmentPermissionResolver.isSopType(entityType)) {
+        boolean sop = AttachmentPermissionResolver.isSopType(entityType);
+        if (sop) {
             requireSopAccess(request, factoryId, entityType, ProcessSecretAction.VIEW_FULL, false);
+        } else {
+            permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), entityType);
+        }
+        List<Attachment> list = attachmentService.queryByEntity(factoryId, entityType, entityId);
+        if (sop) {
             return ResponseEntity.ok(ApiResponse.success((T) list.stream().map(SopAttachmentMetadata::from).toList()));
         }
-        permissionResolver.requireRead(permissionResolver.resolveCurrentUser(request), entityType);
         return ResponseEntity.ok(ApiResponse.success((T) list));
     }
 
