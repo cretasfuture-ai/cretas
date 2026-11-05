@@ -17,7 +17,7 @@ import java.io.Serializable;
 import java.time.LocalDateTime;
 
 /**
- * 平台 AI 分析入口的一条授权 (V20261104_25)。有行 = 已开通, 撤销 = 删掉这一行。
+ * 平台 AI 分析入口的一条授权 (V20261105_91)。有行 = 已开通, 撤销 = 删掉这一行。
  * 只有 {@code PlatformAiAnalysisGrantService} 写。不继承 BaseEntity: 不软删, 历史在 {@link PlatformAiAnalysisGrantAudit}。
  *
  * <p>{@link Persistable#isNew()} 恒为 true: 主键是业务键, 默认的 save 会先查后 merge, 并发开通时后到的一方会

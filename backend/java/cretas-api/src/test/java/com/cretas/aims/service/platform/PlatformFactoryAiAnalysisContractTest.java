@@ -5,6 +5,7 @@ import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.audit.PlatformDataAccessLogInterceptor;
 import com.cretas.aims.audit.PlatformDataAccessLogWriter;
 import com.cretas.aims.client.PythonSmartBIClient;
+import com.cretas.aims.aspect.RateLimitAspect;
 import com.cretas.aims.config.DashScopeConfig;
 import com.cretas.aims.config.DemoReadOnlyInterceptor;
 import com.cretas.aims.config.JwtAuthInterceptor;
@@ -17,6 +18,7 @@ import com.cretas.aims.controller.AIController;
 import com.cretas.aims.controller.BomRecipeController;
 import com.cretas.aims.controller.platform.PlatformAiAnalysisGrantController;
 import com.cretas.aims.controller.platform.PlatformFactoryAiAnalysisController;
+import com.cretas.aims.dto.AIRequestDTO;
 import com.cretas.aims.dto.bom.BomSeasoningResponse;
 import com.cretas.aims.dto.report.ProductionByProductDTO;
 import com.cretas.aims.dto.python.PythonGeneralAnalysisRequest;
@@ -43,6 +45,7 @@ import com.cretas.aims.entity.processsecret.ProcessSecretPolicy;
 import com.cretas.aims.entity.processsecret.ProcessSecretStorageMode;
 import com.cretas.aims.entity.secrecy.FactorySecrecySetting;
 import com.cretas.aims.exception.GlobalExceptionHandler;
+import com.cretas.aims.exception.RateLimitExceededException;
 import com.cretas.aims.repository.AIAnalysisResultRepository;
 import com.cretas.aims.repository.AIAuditLogRepository;
 import com.cretas.aims.repository.AIQuotaUsageRepository;
@@ -109,6 +112,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.QueryTimeoutException;
+import org.springframework.aop.aspectj.annotation.AspectJProxyFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
@@ -119,6 +123,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -151,6 +157,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -261,6 +268,7 @@ class PlatformFactoryAiAnalysisContractTest {
     PlatformAdmin admin;
     MockMvc mvc;
     MockMvc existing;
+    PlatformFactoryAiAnalysisService platformService;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -328,7 +336,7 @@ class PlatformFactoryAiAnalysisContractTest {
         wireGrantRepositories();
         PlatformAiAnalysisGrantService grantService = new PlatformAiAnalysisGrantService(grantRepository,
                 grantAuditRepository, admins, authority);
-        PlatformFactoryAiAnalysisService service = new PlatformFactoryAiAnalysisService(grantService, authority,
+        platformService = new PlatformFactoryAiAnalysisService(grantService, authority,
                 factories, access, enterprise);
 
         jwt = new JwtUtil();
@@ -348,7 +356,7 @@ class PlatformFactoryAiAnalysisContractTest {
                 ProcessSecretTestHooks.scrubber(access, recipeRepository,
                         mock(ProductionWorkflowInstanceRepository.class), mock(ProductionPlanRepository.class)),
                 webMapper);
-        mvc = MockMvcBuilders.standaloneSetup(new PlatformFactoryAiAnalysisController(service),
+        mvc = MockMvcBuilders.standaloneSetup(new PlatformFactoryAiAnalysisController(platformService),
                         new PlatformAiAnalysisGrantController(grantService))
                 .addInterceptors(registeredFor(webMapper).toArray(new HandlerInterceptor[0]))
                 .setControllerAdvice(new GlobalExceptionHandler(), advice)
@@ -398,6 +406,43 @@ class PlatformFactoryAiAnalysisContractTest {
         order.verify(batches, atLeastOnce()).findByFactoryIdAndCreatedAtBetween(eq(F1), any(), any());
         order.verify(python).analyzeGeneralWithoutCapture(eq(F1), any(PythonGeneralAnalysisRequest.class));
         assertThat(server.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void platformAnalysisControllerRateLimitUsesRealAspectPerAccountAndDoesNotConsumeFactoryQuota() throws Exception {
+        grantRows.put("ROLE|operation_admin", PlatformAiAnalysisGrant.builder()
+                .granteeType("ROLE").granteeRef("operation_admin").grantedBy(ADMIN)
+                .grantedAt(LocalDateTime.now()).reason("限流隔离测试").build());
+
+        AspectJProxyFactory proxyFactory = new AspectJProxyFactory(
+                new PlatformFactoryAiAnalysisController(platformService));
+        proxyFactory.addAspect(new RateLimitAspect());
+        PlatformFactoryAiAnalysisController proxy = proxyFactory.getProxy();
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute("userId", ADMIN);
+        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, PLATFORM_ACTOR);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        AIRequestDTO.TimeRangeAnalysisRequest body = new AIRequestDTO.TimeRangeAnalysisRequest();
+        body.setStartDate(RANGE_START);
+        body.setEndDate(RANGE_END);
+        body.setDimension("overall");
+        body.setQuestion(QUESTION);
+
+        for (int i = 0; i < 6; i++) {
+            answerWithAnalysis();
+            assertThat(proxy.analyzeTimeRange(F1, body, request).getSuccess()).isTrue();
+        }
+        assertThatThrownBy(() -> proxy.analyzeTimeRange(F1, body, request))
+                .isInstanceOf(RateLimitExceededException.class);
+        assertThat(server.getRequestCount()).isEqualTo(6);
+
+        request.setAttribute("userId", STAFF);
+        request.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, STAFF, "PLATFORM", "operation_admin"));
+        answerWithAnalysis();
+        assertThat(proxy.analyzeTimeRange(F1, body, request).getSuccess()).isTrue();
+        verifyNoInteractions(quotaUsage, quotaConfig);
     }
 
     /** 裁定: 入口不读 a / b。四种组合都能用, a 开时保密产品都进提示词 (b 开关不改变结果)。 */

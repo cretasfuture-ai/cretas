@@ -1,6 +1,6 @@
 # 工艺保密产品与 AI：外发、学习、缓存的边界
 
-**最后更新**: 2026-11-04（平台授权 AI 分析入口；b 的含义改为只管平台人员看 / 改；此前 2026-10-29：Steve 当天的原则与裁定；同日复审补齐学习 / 检索 / 外发的跨厂路径；毛利汇总裁定 B 记为已知风险；AI 访问审计）
+**最后更新**: 2026-11-05（平台授权 AI 分析入口、账号级限流与迁移版本；b 的含义改为只管平台人员看 / 改；此前 2026-10-29：Steve 当天的原则与裁定；同日复审补齐学习 / 检索 / 外发的跨厂路径；毛利汇总裁定 B 记为已知风险；AI 访问审计）
 
 ## 原则（Steve 2026-10-29）
 
@@ -64,13 +64,13 @@ Python 侧现在会被拒绝的调用（没有工厂、也不是内部调用 / �
 - `food_kb/services/reranker.py` 拒绝时退回检索原顺序（不发）。
 以上按代码路径归类，未逐个线上实测；正常工厂请求（JWT 带工厂、Java 带 `X-Factory-Id`）不受影响，单测 `tests/test_egress_factory_fail_closed.py` 覆盖两侧。
 
-### 平台授权 AI 分析入口（Steve 2026-11-04）
+### 平台授权 AI 分析入口（Steve 2026-11-05）
 
 裁定原话：「平台ai能access所有的 不管是什么配置 这样才能最基本的同意管理」。`POST /api/platform/factories/{factoryId}/ai-analysis/cost/time-range`，非流式，工厂只取路径。
 
 | 项 | 规则 | 代码位置 |
 |---|---|---|
-| 谁能用 | 库里有效的平台超级管理员本人；其余平台账号要由超级管理员开通（开给一个平台角色或一个平台账号，超级管理员的账号不能开通）。每次现查库，撤销下一次调用就生效。未开通 403。账号授权在账号改角色后保留，直到撤销；角色授权跟着库里当前的角色走。超级管理员的账号不能开通只挡账号授权：超级管理员仍能开通一个角色，之后被降级到这个角色就能用。账号存在、是不是超级管理员只在开通时校验，撤销只看格式：账号后来升成超级管理员或行被删了也撤得掉，否则再被降级时授权就回来了。并发重复开通只留一行一条留痕，后到的 409 | `PlatformAiAnalysisGrantService.requireEntry`；授权接口 `/api/platform/ai-analysis/grants`（列表 / 开通 / `revoke`，只给库里有效的超级管理员，必须写理由）；表 `platform_ai_analysis_grants`，只追加的留痕表 `platform_ai_analysis_grant_audit`（V20261104_25） |
+| 谁能用 | 库里有效的平台超级管理员本人；其余平台账号要由超级管理员开通（开给一个平台角色或一个平台账号，超级管理员的账号不能开通）。每次现查库，撤销下一次调用就生效。未开通 403。账号授权在账号改角色后保留，直到撤销；角色授权跟着库里当前的角色走。超级管理员的账号不能开通只挡账号授权：超级管理员仍能开通一个角色，之后被降级到这个角色就能用。账号存在、是不是超级管理员只在开通时校验，撤销只看格式：账号后来升成超级管理员或行被删了也撤得掉，否则再被降级时授权就回来了。并发重复开通只留一行一条留痕，后到的 409；入口每个平台账号每 60 秒最多 6 次，按账号隔离，超限在进入工厂分析前拒绝 | `PlatformAiAnalysisGrantService.requireEntry`、入口 `@RateLimit(count=6, period=60, limitType=USER)`；授权接口 `/api/platform/ai-analysis/grants`（列表 / 开通 / `revoke`，只给库里有效的超级管理员，必须写理由）；表 `platform_ai_analysis_grants`，只追加的留痕表 `platform_ai_analysis_grant_audit`（V20261105_91） |
 | a / b | **不读**。配置怎么设都能用（`FactorySecrecyGatesContractTest` 把入口服务列为不许引用保密配置的类） | `PlatformFactoryAiAnalysisService` |
 | 保密产品 | a、b 都开时也读得到。放行只在 `ProcessSecretPlatformAiScope` 里成立：入口打开、绑当前线程 + 一个平台账号 + 一家工厂、分析结束或抛异常就关。它只被 `ProcessSecretAccessService.permitsPlatformAiRead` 读，⛔ `decide` / `permitsViewFull` / `platformSeesFull` / `hiddenFromPlatform` 都不看它，同一账号走既有配方 / 成本 / 分析接口照旧被挡 | `ProcessSecretLlmCostScope.fullView` |
 | 客户侧保管（e 开的 B 档） | 云端没有完整工艺，成本和工艺读不到：时间段内这些批次和同计划批次不进提示词；近 30 天生产统计里这些产品的**名称和产量仍然发出**，成本列是「保密」。响应 `data.notice` 按实际发出的内容分别说明（产品只在 30 天统计里出现、时间段内没有批次时也说）；30 天这一句的数字是成本被隐藏的产品行数（`ProductionAIContext.costWithheldProductCount`），含同计划的普通联产品和认不出产品的行，不只是保密产品。全部批次都是 B 档时 403，不调模型 | `AIEnterpriseService.platformNotice` |

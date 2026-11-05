@@ -15,7 +15,7 @@ import org.hibernate.annotations.Immutable;
 import java.time.LocalDateTime;
 
 /**
- * 平台 AI 分析入口授权的留痕 (V20261104_25), 只追加: 库里触发器拒绝 UPDATE / DELETE / TRUNCATE,
+ * 平台 AI 分析入口授权的留痕 (V20261105_91), 只追加: 库里触发器拒绝 UPDATE / DELETE / TRUNCATE,
  * 实体不可变、没有 setter, 仓库只有写入和读取 ({@code PlatformAiAnalysisGrantAuditRepository})。
  */
 @Entity

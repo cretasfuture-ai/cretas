@@ -3,6 +3,7 @@ package com.cretas.aims.integration;
 import com.cretas.aims.entity.enums.PlatformRole;
 import com.cretas.aims.entity.platform.PlatformAiAnalysisGrant;
 import com.cretas.aims.entity.platform.PlatformAiAnalysisGrantAudit;
+import org.flywaydb.core.Flyway;
 import jakarta.persistence.Column;
 import jakarta.persistence.Table;
 import org.junit.jupiter.api.Test;
@@ -11,6 +12,8 @@ import org.springframework.core.io.ClassPathResource;
 
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -27,13 +30,14 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * V20261104_25 在真实 PostgreSQL 上: 表与实体逐列一致, 授权角色的 CHECK 与枚举 {@link PlatformRole} 一致
+ * 在真实 PostgreSQL 上证明已应用 V20261104.50 后, V20261105.91 能以 outOfOrder=false 正常升级;
+ * 新迁移的表与实体逐列一致, 授权角色的 CHECK 与枚举 {@link PlatformRole} 一致
  * (超级管理员不在内), 同一对象只有一行, 留痕只追加 (UPDATE / DELETE / TRUNCATE 都被触发器拒绝)。
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class PlatformAiAnalysisGrantMigrationPostgresContractTest {
 
-    private static final String MIGRATION = "db/flyway/V20261104_25__platform_ai_analysis_grants.sql";
+    private static final String MIGRATION = "db/flyway/V20261105_91__platform_ai_analysis_grants.sql";
 
     @Test
     void migrationMatchesEntitiesAndEnforcesItsRules() throws Exception {
@@ -41,13 +45,24 @@ class PlatformAiAnalysisGrantMigrationPostgresContractTest {
         String url = DisposablePostgresTargetGuard.requireSafeUrl(requiredEnv("CRETAS_WORKFLOW_PG_URL"));
         String user = requiredEnv("CRETAS_WORKFLOW_PG_USER");
         String password = System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", "");
+        Path migrationDir = Files.createTempDirectory("platform-ai-grants-migrations-");
+        Path location = migrationDir.resolve("db/flyway");
+        Files.createDirectories(location);
         try (Connection connection = DriverManager.getConnection(url, user, password);
              Statement statement = connection.createStatement()) {
             statement.execute("CREATE SCHEMA " + schema);
-            statement.execute("SET search_path TO " + schema);
             String sql = new String(new ClassPathResource(MIGRATION).getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            statement.execute(sql);
-            statement.execute(sql);   // IF NOT EXISTS / OR REPLACE: 重跑不报错
+            Files.writeString(location.resolve("V20261104_50__prior_fixture.sql"),
+                    "CREATE TABLE platform_ai_grants_prior_fixture (id INTEGER PRIMARY KEY)");
+            Flyway prior = flyway(url, user, password, schema, location);
+            assertThat(prior.migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(currentVersion(connection, schema)).isEqualTo("20261104.50");
+
+            Files.writeString(location.resolve("V20261105_91__platform_ai_analysis_grants.sql"), sql);
+            Flyway upgraded = flyway(url, user, password, schema, location);
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(currentVersion(connection, schema)).isEqualTo("20261105.91");
+            statement.execute("SET search_path TO " + schema);
 
             assertColumnsMatchEntity(connection, schema, PlatformAiAnalysisGrant.class);
             assertColumnsMatchEntity(connection, schema, PlatformAiAnalysisGrantAudit.class);
@@ -82,11 +97,32 @@ class PlatformAiAnalysisGrantMigrationPostgresContractTest {
                 assertThat(rs.getString(1)).isEqualTo("审计抽查");
                 assertThat(rs.next()).isFalse();
             }
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(0);
         } finally {
             try (Connection connection = DriverManager.getConnection(url, user, password);
                  Statement statement = connection.createStatement()) {
                 statement.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
             }
+            try (var paths = Files.walk(migrationDir)) {
+                paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                    try { Files.deleteIfExists(path); }
+                    catch (java.io.IOException error) { throw new IllegalStateException(error); }
+                });
+            }
+        }
+    }
+
+    private static Flyway flyway(String url, String user, String password, String schema, Path location) {
+        return Flyway.configure().dataSource(url, user, password).schemas(schema).defaultSchema(schema)
+                .locations("filesystem:" + location.toAbsolutePath()).outOfOrder(false).load();
+    }
+
+    private static String currentVersion(Connection connection, String schema) throws SQLException {
+        try (var ps = connection.prepareStatement("SELECT version FROM " + schema
+                + ".flyway_schema_history WHERE success = true ORDER BY installed_rank DESC LIMIT 1");
+             var rs = ps.executeQuery()) {
+            assertThat(rs.next()).isTrue();
+            return rs.getString(1);
         }
     }
 

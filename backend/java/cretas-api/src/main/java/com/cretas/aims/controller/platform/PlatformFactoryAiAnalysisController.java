@@ -3,6 +3,8 @@ package com.cretas.aims.controller.platform;
 import com.cretas.aims.dto.AIRequestDTO;
 import com.cretas.aims.dto.MobileDTO;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.annotation.RateLimit;
+import com.cretas.aims.annotation.RateLimit.LimitType;
 import com.cretas.aims.service.platform.PlatformFactoryAiAnalysisService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -27,6 +29,7 @@ public class PlatformFactoryAiAnalysisController {
     }
 
     @PostMapping("/cost/time-range")
+    @RateLimit(count = 6, period = 60, limitType = LimitType.USER, message = "平台 AI 分析请求过于频繁，请稍后再试")
     public ApiResponse<MobileDTO.AICostAnalysisResponse> analyzeTimeRange(
             @PathVariable String factoryId,
             @Valid @RequestBody AIRequestDTO.TimeRangeAnalysisRequest body,
