@@ -1,6 +1,7 @@
 """Resume omitted model-safe facts without changing an immutable base report."""
 import asyncio
 from copy import deepcopy
+from collections import Counter
 import hashlib
 import json
 import os
@@ -97,7 +98,8 @@ def payload(full,batch,model,feedback=None,previous=None):
         'requiredRiskWording':{f['id']:[RISK_WORDING.get(c,HAZARDS.get(c,c)) for c in f['considerations']] for f in batch},
         'validationFeedback':feedback,
         'previousRejectedReviews':[{k:r[k][:1000] for k in FIELDS if isinstance(r.get(k),str)}
-            for r in (previous or []) if isinstance(r,dict) and r.get('factId') in ids],
+            for r in (previous if isinstance(previous,list) else [])
+            if isinstance(r,dict) and isinstance(r.get('factId'),str) and r['factId'] in ids],
         'repairInstructions':'若有校验反馈，只改写本批未通过项。previousRejectedReviews是未通过的草稿，不是已确认事实。'
         '删除全部文字字段中的数字和中文数量，包括一条、两条、一张、一个、一次；不改写成其他数量。'
         '样本数量统一改写为“样本少”，具体数字会单独显示。不要把资料缺失直接写成已发生的成本低估、浪费或异常。'
@@ -162,6 +164,15 @@ async def complete(job,facts,scope,path,requester,*,batch_size=8,exhaustive=Fals
             del state['accepted'][id]
     save(path,state,guard)
     pending=[f for f in missing if f['id'] not in state['accepted']]
+    # Give untouched facts a turn before repeatedly rejected facts. One difficult
+    # group must not prevent the rest of the report from being attempted.
+    rejected=Counter()
+    for rejection in state.get('rejections',[]):
+        candidate=rejection.get('candidate')
+        rows=candidate.get('reviews') if isinstance(candidate,dict) else None
+        if isinstance(rows,list):
+            rejected.update(r['factId'] for r in rows if isinstance(r,dict) and isinstance(r.get('factId'),str))
+    if exhaustive:pending.sort(key=lambda f:rejected[f['id']])
     for offset in range(0,len(pending),batch_size):
         if max_batches is not None and offset//batch_size>=max_batches:break
         batch=pending[offset:offset+batch_size]

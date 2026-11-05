@@ -138,16 +138,17 @@ async def test_full_mode_reviews_base_facts_too_and_resumes_after_repair_failure
     bad=False
     first=await supplement.complete(job,context,scope,path,1,exhaustive=True,max_batches=1,batch_size=4)
     assert seen[-1]['validationFeedback']  # Previous rejection is fed back across durable claims.
-    assert seen[-1]['previousRejectedReviews']
     assert all(r['factId'] in {f['id'] for f in seen[-1]['facts']} for r in seen[-1]['previousRejectedReviews'])
     progress=first['result']['ai']['analysisFactCoverage']
-    assert progress['reviewed']==4 and progress['remaining']==7 and progress['additionalReviewed']==3
+    assert progress['reviewed']==4 and progress['remaining']==7 and progress['additionalReviewed']==4
+    assert not {f['id'] for f in seen[0]['facts']}.intersection(f['id'] for f in seen[-1]['facts'])
     accepted={f['factId'] for f in first['result']['ai']['supplementalReviews']}
     final=await supplement.complete(job,context,scope,path,1,exhaustive=True,batch_size=4)
     assert not accepted.intersection(f['id'] for call in seen[-2:] for f in call['facts'])
     assert final['result']['ai']['analysisFactCoverage']['reviewed']==11
     assert final['result']['ai']['analysisFactCoverage']['remaining']==0
     assert final['result']['ai']['status']=='complete'
+    assert any(call['previousRejectedReviews'] for call in seen)
 
 
 @pytest.mark.asyncio
@@ -185,3 +186,20 @@ async def test_one_invalid_fact_keeps_valid_siblings_and_repairs_only_the_invali
     state=json.loads(path.read_text(encoding='utf8'))
     assert len(state['accepted'])==7
     assert calls[-1]==[missing[0]['id']]
+    with pytest.raises(supplement.SupplementRetry):await supplement.complete(job,context,scope,path,1,exhaustive=True,max_batches=1)
+    assert len(json.loads(path.read_text(encoding='utf8'))['accepted'])==10  # Other facts are not starved.
+
+
+@pytest.mark.asyncio
+async def test_malformed_rejected_response_can_resume_after_restart(monkeypatch,tmp_path):
+    from smartbi.services import alert_local_ai,alert_ai_coordination
+    job,context,original,_=fixture(monkeypatch)
+    fact=original['facts'][0];pack={**original,'facts':[fact],'omittedFacts':0}
+    monkeypatch.setattr(supplement,'build',lambda *args,**kwargs:pack)
+    monkeypatch.setattr(alert_local_ai,'provider_config',lambda:{'transport':'ssh','model':'local'})
+    monkeypatch.setattr(alert_ai_coordination,'run',lambda *args:{'reviews':None})
+    path=tmp_path/'malformed.json';scope={'tenant_id':'T','source_factory_id':'F','connector':'blacklake'}
+    with pytest.raises(supplement.SupplementRetry):await supplement.complete(job,context,scope,path,1,exhaustive=True)
+    monkeypatch.setattr(alert_ai_coordination,'run',lambda *args:{'reviews':[review(fact)]})
+    result=await supplement.complete(job,context,scope,path,1,exhaustive=True)
+    assert result['result']['ai']['analysisFactCoverage']['remaining']==0
