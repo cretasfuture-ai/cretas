@@ -153,19 +153,22 @@ class QualityDispositionInventoryPostgresContractTest {
     @Test
     void lockedSiblingKeepsSamePlanGoodsQuarantined() {
         Fixture f = fixture(false);
-        ProductionBatch sibling = productionBatch(f.factoryId(), f.planId(), f.productId(), QualityStatus.FAILED,
-                "PB-SIBLING-" + suffix());
+        Long siblingId = tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), f.planId(), f.productId(), QualityStatus.FAILED,
+                "PB-SIBLING-" + suffix())).getId());
+        assertThat(siblingId).isNotNull().isNotEqualTo(f.productionBatchId());
+        assertDbQualityStatus(siblingId, QualityStatus.FAILED);
         String siblingFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-SIBLING-" + suffix(),
                 FinishedGoodsBatch.Status.DEFECTIVE);
 
         QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
 
-        assertThat(sibling.getId()).isNotEqualTo(f.productionBatchId());
         assertThat(result.getFinishedGoodsReleased()).isZero();
         assertThat(result.getFinishedGoodsHeld()).isEqualTo(2);
         assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbFinishedGoods(siblingFg, FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbQualityStatus(f.productionBatchId(), QualityStatus.PASSED);
+        assertDbQualityStatus(siblingId, QualityStatus.FAILED);
         assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
         assertInspectionRetained(f.inspectionId());
     }
@@ -182,7 +185,8 @@ class QualityDispositionInventoryPostgresContractTest {
         QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
 
         assertThat(result.getFinishedGoodsReleased()).isEqualTo(1);
-        assertThat(result.getFinishedGoodsHeld()).isEqualTo(2);
+        // Return children are independent stock: neither released nor counted in this disposition.
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
         assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
         assertDbFinishedGoods(returnFg, FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbFinishedGoods(rejectedFg, FinishedGoodsBatch.Status.DEFECTIVE);
@@ -341,8 +345,16 @@ class QualityDispositionInventoryPostgresContractTest {
     }
 
     private void assertInspectionRetained(String id) {
-        assertThat(jdbc.queryForObject("select count(*) from quality_inspections where id = ?", Long.class, id))
+        assertThat(jdbc.queryForObject("select count(*) from quality_inspections where id = ? and factory_id = ?",
+                Long.class, id, FACTORY))
                 .isEqualTo(1L);
+        var original = jdbc.queryForMap("select result,sample_size,pass_count,fail_count,pass_rate "
+                + "from quality_inspections where id = ? and factory_id = ?", id, FACTORY);
+        assertThat(original.get("result")).isEqualTo("FAIL");
+        assertThat((BigDecimal) original.get("sample_size")).isEqualByComparingTo("1");
+        assertThat((BigDecimal) original.get("pass_count")).isEqualByComparingTo("0");
+        assertThat((BigDecimal) original.get("fail_count")).isEqualByComparingTo("1");
+        assertThat((BigDecimal) original.get("pass_rate")).isEqualByComparingTo("0");
     }
 
     private static String suffix() {
