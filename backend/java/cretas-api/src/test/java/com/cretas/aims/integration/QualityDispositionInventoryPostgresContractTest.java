@@ -16,7 +16,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.quality.QcReleaseRecordRepository;
 import com.cretas.aims.service.quality.FactoryRecallService;
 import com.cretas.aims.service.quality.QualityDispositionInventoryService;
-import com.cretas.aims.service.quality.QualityDispositionRuleService.DispositionAction;
+import com.cretas.aims.service.QualityDispositionRuleService.DispositionAction;
 import com.cretas.aims.service.quality.release.QcInspectionPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
