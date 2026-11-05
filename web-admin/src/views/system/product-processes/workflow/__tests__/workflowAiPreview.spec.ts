@@ -1,10 +1,88 @@
 import { describe, expect, it } from 'vitest';
-import { previewWorkflowAiDefinitions, previewWorkflowAiSpec, workflowAiStableJson } from '../workflowAiPreview';
+import {
+  previewWorkflowAiDefinitions,
+  previewWorkflowAiSpec,
+  resolveWorkflowAiAllocation,
+  workflowAiStableJson,
+} from '../workflowAiPreview';
 import type { ProductProcessWorkflowDefinition } from '../types';
 
 import { EMPTY_CANVAS, LARGE_SPEC, LARGE_PATHS } from './workflowAiPreview.fixture';
 
 describe('workflow AI complete change projection', () => {
+  it('resolves named 80/20 output shares onto the actual ports and preserves omitted weight behavior', () => {
+    expect(resolveWorkflowAiAllocation('FIXED_RATIO', [
+      { portId: 'out-a', name: '主品' }, { portId: 'out-b', name: '副品' },
+    ], [
+      { name: '主品', fixedCostShare: 80 }, { name: '副品', fixedCostShare: 20 },
+    ])).toEqual({ method: 'FIXED_RATIO', shares: { 'out-a': 80, 'out-b': 20 }, pending: [] });
+    expect(resolveWorkflowAiAllocation(undefined, [
+      { portId: 'out-a', name: '主品' }, { portId: 'out-b', name: '副品' },
+    ], [])).toEqual({ shares: {}, pending: [] });
+  });
+
+  it.each([undefined, null, 'WEIGHT'])(
+    'does not silently downgrade explicit 80/20 shares when method is %s',
+    method => {
+      const result = resolveWorkflowAiAllocation(method, [
+        { portId: 'out-a', name: '主品' }, { portId: 'out-b', name: '副品' },
+      ], [
+        { name: '主品', fixedCostShare: 80 }, { name: '副品', fixedCostShare: 20 },
+      ]);
+      expect(result.shares).toEqual({});
+      expect(result.pending).toHaveLength(1);
+      expect(result.pending[0]).toContain('FIXED_RATIO');
+    },
+  );
+
+  it.each([
+    ['negative share', [{ name: '主品', fixedCostShare: -1 }, { name: '副品', fixedCostShare: 101 }]],
+    ['sum is not 100', [{ name: '主品', fixedCostShare: 80 }, { name: '副品', fixedCostShare: 10 }]],
+    ['unmatched output', [{ name: '不存在', fixedCostShare: 100 }, { name: '副品', fixedCostShare: 20 }]],
+    ['missing share', [{ name: '主品', fixedCostShare: 80 }, { name: '副品' }]],
+    ['ambiguous output', [{ name: '主品', fixedCostShare: 80 }, { name: '主品', fixedCostShare: 20 }]],
+  ])('keeps %s as an explicit pending confirmation without guessing', (_label, requested) => {
+    const result = resolveWorkflowAiAllocation('FIXED_RATIO', [
+      { portId: 'out-a', name: '主品' }, { portId: 'out-b', name: '副品' },
+    ], requested);
+    expect(result.method).toBe('FIXED_RATIO');
+    expect(result.pending.length).toBeGreaterThan(0);
+    expect(result.pending.join('')).toContain('待确认');
+    expect(Object.keys(result.shares).every(key => ['out-a', 'out-b'].includes(key))).toBe(true);
+  });
+
+  it('shows allocation method and ratios in the same semantic confirmation diff as the written process fields', () => {
+    const graph = {
+      ...EMPTY_CANVAS,
+      nodes: [
+        { id: 'raw', kind: 'RAW_MATERIAL', data: { name: '原料' } },
+        { id: 'process', kind: 'PROCESS', data: {
+          processName: '分流', costAllocationMethod: 'WEIGHT', ports: [
+            { id: 'in', direction: 'INPUT', materialNodeId: 'raw', unit: 'kg' },
+            { id: 'out-a', direction: 'OUTPUT', materialNodeId: 'a', materialName: '主品', unit: 'kg' },
+            { id: 'out-b', direction: 'OUTPUT', materialNodeId: 'b', materialName: '副品', unit: 'kg' },
+          ],
+        } },
+        { id: 'a', kind: 'SEMI_FINISHED', data: { name: '主品' } },
+        { id: 'b', kind: 'SEMI_FINISHED', data: { name: '副品' } },
+      ],
+      edges: [
+        { source: 'raw', target: 'process' }, { source: 'process', target: 'a' }, { source: 'process', target: 'b' },
+      ],
+    } as unknown as ProductProcessWorkflowDefinition;
+    const preview = previewWorkflowAiSpec(graph, {
+      rawMaterials: ['原料'],
+      steps: [{ process: '分流', costAllocationMethod: 'FIXED_RATIO', outputs: [
+        { name: '主品', kind: 'SEMI_FINISHED', fixedCostShare: 80 },
+        { name: '副品', kind: 'SEMI_FINISHED', fixedCostShare: 20 },
+      ] }],
+    });
+    if (!preview.ok) throw new Error(preview.message);
+    expect(preview.rows.some(row => row.path.endsWith('.costAllocationMethod'))).toBe(true);
+    expect(preview.rows.some(row => row.path.endsWith('.fixedCostShare'))).toBe(true);
+    expect(preview.rows.map(row => row.text).join('\n')).toContain('固定比例');
+  });
+
   it.each(['bound', 'unbound'])('pairs a third-stage replacement by unchanged %s material neighbours and exposes all three reporting changes', binding => {
     const kinds = ['RAW_MATERIAL', 'PROCESS', 'SEMI_FINISHED', 'PROCESS', 'SEMI_FINISHED', 'PROCESS', 'FINISHED_GOOD'];
     const names = ['原料', '前处理', '半成品一', '后处理', '半成品二', '装盒', '成品'];
