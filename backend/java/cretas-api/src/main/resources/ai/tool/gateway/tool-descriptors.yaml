@@ -1975,7 +1975,7 @@ descriptors:
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
-      version: false
+      version: true
       domainTags: true
     governanceStatus: REVIEW_REQUIRED
   - toolName: "canvas_work_process_catalog"
