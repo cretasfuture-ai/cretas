@@ -217,7 +217,7 @@ public class CanvasAIController {
     // D3: narrow route for work-process catalog (create/update work-process master data)
     private static final String WORK_PROCESS_CATALOG_MODULE = "work_process_catalog";
     private static final String WORK_PROCESS_CATALOG_TOOL = "canvas_work_process_catalog";
-    private static final String WORK_PROCESS_CATALOG_VERSION = "1.0.0";
+    private static final String WORK_PROCESS_CATALOG_VERSION = "1.1.0";
     /**
      * Prose → canvas_work_process_catalog parameters. This prompt used to live in the
      * browser (WorkProcessAIChatPanel.buildInstruction) and was posted as the chat
@@ -238,15 +238,24 @@ public class CanvasAIController {
             - standardYieldMin / standardYieldMax: 标准出成率上下限，用小数，例如 30% 写 0.30
             - needsInput: 是否需要录投入量，true / false
             - standardHourlyRate: 标准时薪，数字，单位元/小时
+            - customFieldSchema: 可选的逐工序录入字段数组。每项使用 key/label/type/enabled；type=number 时，
+              可按用户明确说出的工艺标准填写 unit/standardValue/min/max，例如油温标准 155℃、范围 150~160：
+              [{"key":"oilTemp","label":"油温","type":"number","enabled":true,"unit":"℃",
+                "standardValue":155,"min":150,"max":160}]
 
             规则:
-            - 工序主数据不维护投入/产出单位，禁止生成 unit 或 outputUnit。
-            - 用户没提到的字段一律省略，不要猜、不要补默认值。
+            - 工序主数据不维护投入/产出单位，禁止生成顶层 unit 或 outputUnit；customFieldSchema 内的 unit 是工艺参数单位，可按用户明确输入填写。
+            - 用户没提到的字段一律省略，不要猜、不要补默认值；尤其不要凭空生成工艺标准数值。
+            - action=update 时省略 customFieldSchema 表示保持原配置，不要隐式清空；只有用户明确要求清空时才返回 []。
+            - customFieldSchema 必须是安全的 JSON 数组；key/label/type 必填且 key 唯一，标准值/上下限只能用于 number，
+              非数字、畸形对象、重复 key 或 min 大于 max 都不要猜测，返回 {"error":"..."}。
             - 如果无法判断要做什么，返回 {"error":"<一句中文说明还缺什么>"}。
 
             例子:
             输入: 新建焯水工序，加工类，标准时薪25
             输出: {"action":"create","processName":"焯水","processCategory":"加工","standardHourlyRate":25}
+            输入: 新建油炸工序，油温标准155℃，允许150到160℃
+            输出: {"action":"create","processName":"油炸","customFieldSchema":[{"key":"oilTemp","label":"油温","type":"number","enabled":true,"unit":"℃","standardValue":155,"min":150,"max":160}]}
             """;
 
     /**

@@ -46,6 +46,8 @@ class RuntimeToolDescriptorRegistryTest {
                     && descriptor.allowedRoles().isEmpty()).isFalse();
             assertThat(descriptor.allowedBusinessTypes()).isNotEmpty();
         }
+        assertThat(registry.findApproved("canvas_work_process_catalog").orElseThrow().version())
+                .isEqualTo("1.1.0");
         assertThat(registry.findApproved("smartbi_factory_analysis").orElseThrow())
                 .satisfies(descriptor -> {
                     assertThat(descriptor.version()).isEqualTo("1.0.0");
