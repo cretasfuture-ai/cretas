@@ -106,3 +106,10 @@ SupplierMaterialService create/update先锁raw；SupplierMaterialPurchaseSpecSer
 独立窄复核确认另外10组工厂正向夹具未接新增strict metadata，按精确ID补齐，未改生产源码或业务断言。完整编译后显式11类（含复用Facade）实际205项，0failure/error/skip，所选类XML逐一存在；native commandExit0/stopExit0/productionAccess=false。涵盖角色受众、SSE分页/缓存/actor、金额脱敏、供应商工具、确认后续和WriteGuard。证据root-final-invocation-v14.json、java-final-source-snapshot-v14.json、v14-reports及v14-verified-summary.json，当前内容冻结。
 
 c21 Java全量/PG作业42041027518仍执行，先取得完整结果再集中push，避免反复取消；不能把205项局部目标当全量CI通过。各子scope源冻结转review，root父任务继续持有唯一Owner；未合main、不发布，生产写入0。
+## CI 真实PG发现的目录缺陷已实修
+
+c21远端PG共325项，0failure/1error/2skip；唯一错误是模块正式启用后读回状态遇duplicate trace。新版Supplier引用契约11项在同一CI实际通过。删除Java目录尾部重复trace，保留原溯源项；删除Web访谈模块下拉漏存的restaurant。原Parity测试提升为InterviewModuleCatalogParityContractTest，实际断言两侧唯一、工厂模块仍存在、餐饮不可选且逐字一致；选择基线只收缩1条。
+
+原失败PG启用用例与新Parity契约v15实际2/0/0/0，native command/stop均0，productionAccess=false。Web目录/保存错误显示2套7项通过。未改原启用用例的发布/读回成功判据；未使用去重fallback掩盖目录错误。工厂客户性质RESTAURANT保留，属于工厂B2B客户资料，并非餐饮功能入口。
+
+完整Java CI仍执行，最终修复将统一推送并核验最终HEAD；main/发布HOLD保持。

@@ -175,8 +175,6 @@ public final class InterviewModuleConfigCatalog {
             new Entry("trace", "溯源", "溯源查询相关屏幕", CARRIER_RN,
                     List.of()),
             new Entry("system", "系统", "通知设置等系统屏幕", CARRIER_RN,
-                    List.of()),
-            new Entry("trace", "溯源", "溯源查询相关屏幕", CARRIER_RN,
                     List.of()));
 
     /** 本目录能关掉的后端门禁码全集 —— 闸拿它比对 {@code @RequireModule} 的码。 */

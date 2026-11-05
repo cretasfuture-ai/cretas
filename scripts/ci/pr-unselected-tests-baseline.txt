@@ -167,7 +167,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/canonical/Depend
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/draftentry/DraftEnumLabelsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/draftentry/SupplierReceivingMaterialDropdownTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/FactoryConfirmedFactReuseTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/InterviewModuleCatalogParityTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/InterviewSessionOwnershipMessageTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/cache/IntentResultCacheTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/GoldFinanceClientTest.java

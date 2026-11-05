@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** web-admin 的模块下拉必须与后端目录逐字一致：后端不认的 id 只会 400。 */
-class InterviewModuleCatalogParityTest {
+class InterviewModuleCatalogParityContractTest {
 
     @Test
     void frontendModuleDropdownMatchesTheBackendCatalog() throws Exception {
@@ -23,7 +23,9 @@ class InterviewModuleCatalogParityTest {
         while (matcher.find()) frontend.add(matcher.group(1));
         List<String> backend = InterviewModuleConfigCatalog.all().stream()
                 .map(InterviewModuleConfigCatalog.Entry::moduleId).toList();
-        assertThat(backend).as("后端目录非空").isNotEmpty();
+        assertThat(backend).as("后端目录非空且moduleId唯一").isNotEmpty().doesNotHaveDuplicates();
+        assertThat(backend).contains("quality", "trace", "system").doesNotContain("restaurant");
+        assertThat(frontend).as("前端moduleId唯一且拒退休餐饮").doesNotHaveDuplicates().doesNotContain("restaurant");
         assertThat(frontend).containsExactlyElementsOf(backend);
     }
 }
