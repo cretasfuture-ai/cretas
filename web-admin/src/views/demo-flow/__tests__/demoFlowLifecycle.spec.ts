@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, nextTick, ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { executeStep } = vi.hoisted(() => ({ executeStep: vi.fn() }))
+const { executeStep, initializeDemo } = vi.hoisted(() => ({ executeStep: vi.fn(), initializeDemo: vi.fn() }))
 vi.mock('@/api/request', () => ({ default: { get: vi.fn().mockResolvedValue({ data: [] }) } }))
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F006', currentRole: 'factory_super_admin', user: { username: 'f006_admin', factoryUser: { factoryId: 'F006' } } }) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
@@ -15,7 +15,7 @@ vi.mock('@/demo/f006Flow', () => {
     DEMO_STEPS: steps,
     createDemoState: () => ({ schemaVersion: 2, runKey: 'DEMO-F006-FLOW-20261105-test', factoryId: 'F006', currentStep: 0, entities: {}, completed: [], readbacks: {} }),
     prepareStep: (state: { currentStep: number }, step: string) => ({ step, fields: [], entityIds: {} }),
-    initializeDemo: (state: unknown) => state,
+    initializeDemo,
     assertF006Session: () => undefined,
     executeStep,
   }
@@ -27,7 +27,27 @@ describe('F006 demo playback lifecycle', () => {
   beforeEach(() => {
     sessionStorage.clear()
     vi.useFakeTimers()
+    initializeDemo.mockReset().mockImplementation(async (state: unknown) => state)
     executeStep.mockReset().mockImplementation(async (state: { currentStep: number }) => ({ ...state, currentStep: state.currentStep + 1, readbacks: {}, entities: {}, completed: [] }))
+  })
+
+  it('disables continuous playback until live demo initialization finishes', async () => {
+    let finish!: () => void
+    initializeDemo.mockImplementationOnce((state: unknown) => new Promise(resolve => { finish = () => resolve(state) }))
+    const wrapper = mount(DemoFlow, { global: { stubs: { 'el-button': { template: '<button @click="$emit(\'click\')"><slot /></button>' } } } })
+    await flushPromises()
+    const playback = () => wrapper.findAll('button').find(button => button.text().includes('连续演示'))!
+    expect(playback().attributes('disabled')).toBeDefined()
+    await playback().trigger('click')
+    expect(executeStep).not.toHaveBeenCalled()
+    finish()
+    await flushPromises()
+    expect(playback().attributes('disabled')).toBeUndefined()
+    await playback().trigger('click')
+    await flushPromises()
+    expect(executeStep).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    vi.useRealTimers()
   })
 
   it('does not execute a scheduled next step after unmount', async () => {
