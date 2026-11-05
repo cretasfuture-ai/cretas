@@ -18,3 +18,4 @@ Scope锁：WorkProcessCatalogTool.java；CanvasAIController.java仅WORK_PROCESS_
 - 合11类82唯一用例通过；shared validator保持原样，typed入口拒绝非字符串key/label/type、非布尔enabled；创建[]不称清空，更新[]确认后清空及整组替换提示。
 - 版本四方均1.1.0，两个yaml仅该工具version项变化，未改其他工具治理与权限。新写测试后缀ContractTest确保会执行；整合候选后另用57类统一制品门禁覆盖Canvas真实proof链与本次字段。
 - 根协调归档本地ACTIVE临时行，不改其他任务行。未宣称PR合并/生产部署/业务验收；生产验收仅预备新F006独立QA工序创建/读回/重放拒绝/官方清理。
+整合门禁补充scope：WorkProcessPreviewApplyContractTest.java仅对应新1.1.0工序工具的claim夹具与标准字段断言。首次57类构建413项中3失败，均旧夹具硬编码1.0.0（实际版本保护正确拒绝），没有放松校验；Web构建成功但统一回执failed/deploy none，不能记stage成功。修后该3类场景实际3/0/0/0，2026-11-05 14:57:58 BUILD SUCCESS，日志dag20-proof-persistence-accepted.log；原真实Service→Entity保存链增油温unit/standard/min/max预览及保存完全相等、proof1.1.0断言，未新增模拟“成功”旁路。11类82+整合3共12类85唯一覆盖，最终57类制品需重建。

@@ -87,7 +87,7 @@ class WorkProcessPreviewApplyContractTest {
                 .thenAnswer(invocation -> {
                     PreviewTokenService.BoundTokenRequest request =
                             new PreviewTokenService.BoundTokenRequest(
-                                    "F006", 42L, null, "test", "test", "canvas_work_process_catalog", "1.0.0",
+                                    "F006", 42L, null, "test", "test", "canvas_work_process_catalog", "1.1.0",
                                     ToolExecutionMode.EXECUTE, "CANVAS_DIFF", "test", "UPDATE", paramsForClaim,
                                     Map.of(), paramsForClaim, 300);
                     IntentPreviewToken claimed = IntentPreviewToken.builder()
@@ -132,20 +132,26 @@ class WorkProcessPreviewApplyContractTest {
         var response = preview("""
                 {"action":"create","processName":"验收工序","processCategory":"加工",
                  "estimatedMinutes":5,"standardHourlyRate":25,"standardYieldMin":0.3,
-                 "standardYieldMax":0.6,"needsInput":false}
-                """, "新建验收工序，加工类，预估工时5分钟，时薪25元，出成率30%至60%，不需录投入量");
+                 "standardYieldMax":0.6,"needsInput":false,"customFieldSchema":[
+                 {"key":"oilTemp","label":"油温","type":"number","enabled":true,
+                  "unit":"℃","standardValue":155,"min":150,"max":160}]}
+                """, "新建验收工序，加工类，预估工时5分钟，时薪25元，出成率30%至60%，不需录投入量；油温标准155℃，范围150到160℃");
         var params = params(response);
         assertEquals(5, params.get("estimatedMinutes"));
         assertNotNull(params.get("standardHourlyRate"), "Preview lost the declared hourly rate");
         assertEquals(0, new BigDecimal(params.get("standardHourlyRate").toString()).compareTo(new BigDecimal("25.00")));
-        for (var label : List.of("加工", "预估工时：5 分钟", "标准时薪：25.00 元/小时", "出成率下限：0.3", "出成率上限：0.6", "需录投入量：否"))
+        for (var label : List.of("加工", "预估工时：5 分钟", "标准时薪：25.00 元/小时", "出成率下限：0.3", "出成率上限：0.6", "需录投入量：否",
+                "油温", "单位=℃", "标准=155", "下限=150", "上限=160"))
             assertTrue(response.getReply().contains(label), response.getReply());
+        assertEquals("1.1.0", assertInstanceOf(Map.class, response.getDiffs().get(0).get("proof"))
+                .get("descriptorVersion"));
         var saved = apply(response);
         assertEquals(params.get("estimatedMinutes"), saved.getEstimatedMinutes());
         assertEquals(0, new BigDecimal(params.get("standardHourlyRate").toString()).compareTo(saved.getStandardHourlyRate()));
         assertEquals(new BigDecimal(params.get("standardYieldMin").toString()), saved.getStandardYieldMin());
         assertEquals(new BigDecimal(params.get("standardYieldMax").toString()), saved.getStandardYieldMax());
         assertEquals(params.get("needsInput"), saved.getNeedsInput());
+        assertEquals(params.get("customFieldSchema"), saved.getCustomFieldSchema());
     }
 
     @Test void omittedOptionalValuesStayAbsentAndNullAfterARealCreate() {
