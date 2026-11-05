@@ -8,6 +8,11 @@ import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.PreviewTokenService;
+import com.cretas.aims.entity.intent.IntentPreviewToken;
+import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
+import org.springframework.test.util.ReflectionTestUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +28,7 @@ class CanvasAIApplyDiffsResultTest {
     private ToolRegistry registry;
     private CanvasAIController controller;
     private MobileService mobile;
+    private PreviewTokenService previewTokens;
     private static final String TOOL = "canvas_work_process_catalog";
 
     @BeforeEach void setUp() {
@@ -30,14 +36,35 @@ class CanvasAIApplyDiffsResultTest {
         mobile = mock(MobileService.class);
         var user = new com.cretas.aims.dto.user.UserDTO();
         user.setId(1L);
+        user.setFactoryId("LOCAL_B05");
+        user.setFactoryType("FACTORY");
+        user.setRoleCode(FactoryUserRole.permission_admin);
         when(mobile.getUserFromToken("local-test")).thenReturn(user);
         controller = new CanvasAIController(registry, new ObjectMapper(), mock(DashScopeClient.class),
                 mobile, mock(ToolExecutionGateway.class));
+        previewTokens = mock(PreviewTokenService.class);
+        when(previewTokens.resolveClaim(anyString(), anyString(), anyBoolean(), anyString())).thenReturn(true);
+        ReflectionTestUtils.setField(controller, "previewTokenService", previewTokens);
     }
 
-    private Map<String, Object> diff(Map<String, Object> params) { return Map.of("tool", TOOL, "params", params); }
+    private Map<String, Object> diff(Map<String, Object> params) {
+        String proof = "test-proof-" + UUID.randomUUID();
+        String digest = "test-digest-" + UUID.randomUUID();
+        String claimId = "test-claim-" + UUID.randomUUID();
+        Map<String, Object> persisted = Map.copyOf(params);
+        IntentPreviewToken row = IntentPreviewToken.builder().token(proof)
+                .factoryId("LOCAL_B05").tenantId("LOCAL_B05").userId(1L)
+                .intentCode("CANVAS_DIFF_" + UUID.randomUUID()).entityType("CANVAS_DIFF")
+                .entityId(TOOL).operation("UPDATE").executionMode(ToolExecutionMode.EXECUTE)
+                .toolName(TOOL).descriptorVersion("1.0.0").commandDigest(digest).build();
+        when(previewTokens.claimToken(proof, "LOCAL_B05", 1L, digest))
+                .thenReturn(PreviewTokenService.ClaimResult.success(row, claimId, persisted))
+                .thenReturn(PreviewTokenService.ClaimResult.failure("令牌已处理"));
+        return Map.of("tool", TOOL, "params", params,
+                "proof", Map.of("token", proof, "commandDigest", digest, "descriptorVersion", "1.0.0"));
+    }
 
-    @ParameterizedTest @NullAndEmptySource @ValueSource(strings = {"1", "2", "3"})
+    @ParameterizedTest @NullAndEmptySource @ValueSource(strings = {"1", "2"})
     void legacyHttpClientIsRejectedBeforeAnyExecution(String protocol) throws Exception {
         var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
         var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
@@ -61,8 +88,32 @@ class CanvasAIApplyDiffsResultTest {
                 .contentType("application/json").content("[{\"tool\":\"canvas_work_process_catalog\",\"params\":{\"action\":\"create\"}}]"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.success").value(false))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message").value(org.hamcrest.Matchers.containsString("确认凭据")));
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.items[0].message").value(org.hamcrest.Matchers.containsString("确认凭据")));
         assertEquals(0, tool.writes);
+    }
+
+    @Test void protocolThreeWithNoActorCannotClaimOrExecute() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .post("/api/mobile/LOCAL_B05/config/v2/ai/apply-diffs")
+                .header("X-Canvas-Result-Protocol", "3").contentType("application/json").content("[]"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.success").value(false))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.message").value(org.hamcrest.Matchers.containsString("登录")));
+        verify(previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verifyNoInteractions(registry);
+    }
+
+    @Test void internalEntryCannotExecuteRawDiffWithoutProof() {
+        var tool = new ContractTool();
+        when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
+        var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test",
+                List.of(Map.of("tool", TOOL, "params", Map.of("action", "create"))));
+        assertFalse(response.getSuccess());
+        assertEquals("FAILURE", response.getData().items().get(0).status());
+        assertTrue(response.getData().items().get(0).message().contains("确认凭据"));
+        assertEquals(0, tool.writes);
+        verify(previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verify(registry, never()).getExecutor(anyString());
     }
 
     @Test void toolWrappedFailuresDoNotProveThatRetryIsSafe() {
@@ -93,9 +144,10 @@ class CanvasAIApplyDiffsResultTest {
 
     @Test void allSuccessfulHasExplicitSuccessAndDistinctInvocationIds() throws Exception {
         ToolExecutor tool = mock(ToolExecutor.class);
+        when(tool.getVersion()).thenReturn("1.0.0");
         when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
         when(tool.execute(any(), anyMap())).thenReturn("{\"success\":true,\"data\":{}}");
-        var response = controller.applyDiffs("LOCAL_B05", null, List.of(diff(Map.of()), diff(Map.of())));
+        var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(diff(Map.of()), diff(Map.of())));
         assertTrue(response.getSuccess());
         assertEquals(2, response.getData().applied());
         var ids = org.mockito.ArgumentCaptor.forClass(ToolCall.class);
@@ -116,9 +168,10 @@ class CanvasAIApplyDiffsResultTest {
     @ValueSource(strings = {"not-json", "null", "[]", "{}", "{\"success\":\"true\"}"})
     void malformedToolResultIsUnknownNotSafeToRetry(String raw) throws Exception {
         ToolExecutor tool = mock(ToolExecutor.class);
+        when(tool.getVersion()).thenReturn("1.0.0");
         when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
         when(tool.execute(any(), anyMap())).thenReturn(raw);
-        var response = controller.applyDiffs("LOCAL_B05", null, List.of(diff(Map.of())));
+        var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(diff(Map.of())));
         assertFalse(response.getSuccess());
         assertEquals("UNKNOWN", response.getData().items().get(0).status());
         verify(tool, times(1)).execute(any(), anyMap());
@@ -126,17 +179,18 @@ class CanvasAIApplyDiffsResultTest {
 
     @Test void thrownExecutorMayAlreadyHaveWrittenSoIsUnknown() throws Exception {
         ToolExecutor tool = mock(ToolExecutor.class);
+        when(tool.getVersion()).thenReturn("1.0.0");
         when(registry.getExecutor(TOOL)).thenReturn(Optional.of(tool));
         when(tool.execute(any(), anyMap())).thenThrow(new IllegalStateException("private-internal-error"));
-        var response = controller.applyDiffs("LOCAL_B05", null, List.of(diff(Map.of())));
+        var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(diff(Map.of())));
         assertEquals("UNKNOWN", response.getData().items().get(0).status());
         assertFalse(response.getData().items().get(0).message().contains("private-internal-error"));
     }
 
     @Test void emptyInvalidUnknownAndPreviewOnlyNeverExecute() {
-        assertFalse(controller.applyDiffs("LOCAL_B05", null, List.of()).getSuccess());
-        assertFalse(controller.applyDiffs("LOCAL_B05", null, null).getSuccess());
-        var response = controller.applyDiffs("LOCAL_B05", null, Arrays.asList(null, Map.of(),
+        assertFalse(controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of()).getSuccess());
+        assertFalse(controller.applyDiffs("LOCAL_B05", "Bearer local-test", null).getSuccess());
+        var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", Arrays.asList(null, Map.of(),
                 Map.of("tool", TOOL, "params", "invalid"), Map.of("tool", "canvas_missing"),
                 Map.of("tool", "canvas_product_process_workflow_config")));
         assertFalse(response.getSuccess());

@@ -362,6 +362,29 @@ class CanvasAIPlanConfirmationContractTest {
                 "确认内容与预览不一致，请重新生成方案");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"canvas_product_process_workflow_config", "canvas_product_work_process_config"})
+    void previewOnlyToolIsRejectedEvenWithAnOtherwiseMatchingClaim(String previewOnlyTool) throws Exception {
+        Map<String, Object> params = Map.of("action", "create");
+        IntentPreviewToken row = token(params);
+        row.setToolName(previewOnlyTool);
+        row.setEntityId(previewOnlyTool);
+        when(previewTokens.claimToken("proof-preview-only", FACTORY, 7L, "digest-preview-only"))
+                .thenReturn(PreviewTokenService.ClaimResult.success(row, "claim-preview-only", params));
+        mvc.perform(post("/api/mobile/{factoryId}/config/v2/ai/apply-diffs", FACTORY)
+                        .header("Authorization", "Bearer local-test")
+                        .header("X-Canvas-Result-Protocol", "3")
+                        .contentType("application/json")
+                        .content("[{\"tool\":\"" + previewOnlyTool + "\",\"params\":{\"action\":\"create\"},"
+                                + "\"proof\":{\"token\":\"proof-preview-only\",\"commandDigest\":\"digest-preview-only\"}}]"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].status").value("UNKNOWN"));
+        verify(registry, never()).getExecutor(previewOnlyTool);
+        verify(executor, never()).execute(any(), anyMap());
+        verify(previewTokens).resolveClaim("proof-preview-only", "claim-preview-only", false,
+                "认领后执行结果不明，请核对实际记录，勿重复执行");
+    }
+
     private IntentPreviewToken token(Map<String, Object> params) {
         return IntentPreviewToken.builder()
                 .token("persisted-token")

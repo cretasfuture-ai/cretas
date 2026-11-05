@@ -173,9 +173,19 @@ class CanvasAIWorkflowConfigTest {
 
     @Test
     void applyDiffsHardRejectsWorkflowPreviewToolWithoutExecute() throws Exception {
+        UserDTO actor = new UserDTO();
+        actor.setId(7L);
+        actor.setFactoryId("F006");
+        actor.setFactoryType("FACTORY");
+        actor.setRoleCode(FactoryUserRole.factory_super_admin);
+        when(mobileService.getUserFromToken("local-test")).thenReturn(actor);
+        var previewTokens = mock(com.cretas.aims.service.PreviewTokenService.class);
+        Field proofField = CanvasAIController.class.getDeclaredField("previewTokenService");
+        proofField.setAccessible(true);
+        proofField.set(controller, previewTokens);
         ApiResponse<CanvasAIController.ApplyDiffsResult> response = controller.applyDiffs(
                 "F006",
-                null,
+                "Bearer local-test",
                 List.of(Map.of(
                         "tool", TOOL_NAME,
                         "params", Map.of("patches", List.of()))));
@@ -183,7 +193,10 @@ class CanvasAIWorkflowConfigTest {
         assertFalse(response.getSuccess());
         assertEquals(0, response.getData().applied());
         assertEquals("FAILURE", response.getData().items().get(0).status());
-        assertEquals("WORKFLOW_AI_PREVIEW_ONLY", response.getData().items().get(0).message());
+        // The raw internal entry now hits the same proof guard as HTTP. The
+        // otherwise-valid-claim preview-only cases are guarded in the ContractTest.
+        assertTrue(response.getData().items().get(0).message().contains("确认凭据"));
+        org.mockito.Mockito.verifyNoInteractions(previewTokens);
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
         verify(toolRegistry, never()).getExecutor(TOOL_NAME);
     }

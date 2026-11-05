@@ -962,8 +962,9 @@ public class CanvasAIController {
             }
             try {
                 validateCanvasTool(toolName);
-                if (PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)) {
-                    throw new BusinessException("Workflow 仅支持本地预览，禁止执行");
+                if (PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)
+                        || PRODUCT_WORK_PROCESS_TOOL.equals(toolName)) {
+                    throw new BusinessException("该工具仅支持本地预览，禁止执行");
                 }
                 ToolExecutor executor = toolRegistry.getExecutor(toolName).orElse(null);
                 if (executor == null) {
@@ -1096,83 +1097,12 @@ public class CanvasAIController {
         return response;
     }
 
-    // Internal execution entry; only the protocol-aware method is HTTP-mapped.
+    // Internal callers use the same proof-bound engine as HTTP; no legacy raw execution path.
     @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<ApplyDiffsResult> applyDiffs(
             String factoryId, String authorization, List<Map<String, Object>> diffs) {
-
-        Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
-        String operationId = "canvas-confirm-" + UUID.randomUUID();
-        toolContext.put("operationId", operationId);
-        toolContext.put("confirmationSource", "explicit-user-confirmation");
-        List<ApplyDiffResult> items = new ArrayList<>();
-        int total = diffs == null ? 0 : diffs.size();
-        for (int index = 0; index < total; index++) {
-            Map<String, Object> diff = diffs.get(index);
-            String toolName = diff != null && diff.get("tool") instanceof String name ? name : "";
-            if (toolName.isBlank() || (diff.containsKey("params") && !(diff.get("params") instanceof Map))) {
-                items.add(new ApplyDiffResult(index, "FAILURE", "变更格式无效，未执行"));
-                continue;
-            }
-            if (PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)) {
-                items.add(new ApplyDiffResult(index, "FAILURE", "WORKFLOW_AI_PREVIEW_ONLY"));
-                continue;
-            }
-            ToolExecutor executor;
-            String argsJson;
-            try {
-                validateCanvasTool(toolName);
-                executor = toolRegistry.getExecutor(toolName).orElse(null);
-                if (executor == null) {
-                    items.add(new ApplyDiffResult(index, "FAILURE", "工具不存在，未执行"));
-                    continue;
-                }
-                argsJson = objectMapper.writeValueAsString(diff.getOrDefault("params", Map.of()));
-            } catch (Exception e) {
-                items.add(new ApplyDiffResult(index, "FAILURE", "变更校验失败，未执行"));
-                continue;
-            }
-            try {
-                // Returning normally does not mean the tool succeeded: business tools
-                // encode validation and business failures in their JSON result.
-                String raw = executor.execute(ToolCall.of(operationId + "-" + index, toolName, argsJson), toolContext);
-                var result = objectMapper.readTree(raw);
-                if (result == null || !result.isObject() || !result.path("success").isBoolean()) {
-                    items.add(new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行"));
-                } else if (!result.path("success").booleanValue()
-                        || (result.path("data").path("success").isBoolean()
-                            && !result.path("data").path("success").booleanValue())) {
-                    var failure = result.path("success").booleanValue() ? result.path("data") : result;
-                    String message = failure.path("error").asText(failure.path("message").asText("变更未完成"));
-                    // Tool wrappers can catch an exception after a side effect. A false
-                    // response cannot prove rollback or make replay safe.
-                    items.add(new ApplyDiffResult(index, "UNKNOWN", message));
-                } else if ("DUPLICATE".equals(result.path("data").path("status").asText())) {
-                    items.add(new ApplyDiffResult(index, "REUSED", "已存在相同工序，复用已有记录，未新增"));
-                } else if ("PENDING_DDL".equals(result.path("data").path("status").asText())
-                        || "PENDING_DDL".equals(result.path("data").path("data").path("status").asText())) {
-                    items.add(new ApplyDiffResult(index, "UNKNOWN", "字段仍待数据库变更，尚未完成，请核对处理进度，勿重复执行"));
-                } else {
-                    items.add(new ApplyDiffResult(index, "SUCCESS", "变更已完成"));
-                }
-            } catch (Exception e) {
-                // The executor may already have written before throwing or returning
-                // malformed JSON. Never describe this as definitely not executed.
-                log.warn("Canvas apply result unknown: operationId={}, index={}, tool={}", operationId, index, toolName);
-                items.add(new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行"));
-            }
-        }
-        int applied = (int) items.stream().filter(item -> "SUCCESS".equals(item.status())).count();
-        int reused = (int) items.stream().filter(item -> "REUSED".equals(item.status())).count();
-        boolean complete = total > 0 && applied + reused == total;
-        String msg = total == 0 ? "没有可执行的变更" : "已完成 " + applied + "/" + total + " 项，复用 " + reused + " 项";
-        if (!complete && total > 0) msg += "；其余未完成或结果不明，请逐项核对，勿整批重试";
-        ApplyDiffsResult result = new ApplyDiffsResult(operationId, total, applied, reused, List.copyOf(items));
-        ApiResponse<ApplyDiffsResult> response = complete ? ApiResponse.success(msg, result) : ApiResponse.error(msg);
-        response.setData(result);
-        return response;
+        return applyBoundDiffs(factoryId, authorization, diffs);
     }
-
     public record ApplyDiffResult(int index, String status, String message) {}
     public record ApplyDiffsResult(String operationId, int total, int applied, int reused, List<ApplyDiffResult> items) {}
 

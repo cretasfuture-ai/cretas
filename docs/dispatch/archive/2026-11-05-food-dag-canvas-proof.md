@@ -42,3 +42,7 @@ Worktree C:/Users/Steve/cretas-food-dag-canvas-20261105；branch codex/food-dag-
 - ACTIVE仅本批临时行移出，本归档保留任务ID/Base/scope与证据；不改他人在飞任务。未宣称已合并、部署、迁移或生产业务验收。
 
 私有证据：B:/moved-from-d/Documents/Codex/2026-11-05/wo/outputs/食品DAG-恢复/（canvas-proof-resolution-final.log、canvas-frontend-proof-flow.log、canvas-editor-proof-apply.log）；原Maven七类日志C:/Users/Steve/.codex/tmp/food-dag-canvas-20261105/maven-final-7classes-post-p1.log。
+
+CI架构门禁补齐：原内部applyDiffs仍保留raw执行循环，导致直调站点1→2。删除该循环，内部签名仅委托同一proof引擎，所有调用都需服务端凭据，保持唯一executor.execute；不改架构baseline/扫描器。原结果测试逐项设置已持久化参数/版本的claim夹具并补内部raw拒绝，安全引擎纵深拒绝两种本地预览工具。追加ToolExecutionArchitectureTest到目标与发布选择器。
+
+统一入口最终冻结验证：canvas-unified-engine-accepted.log，Maven八类（含ToolExecutionArchitectureTest）82 tests / 0 failures / 0 errors / 0 skipped，2026-11-05 13:41:56 BUILD SUCCESS，113秒。内部入口和HTTP均经过proof引擎；旧Workflow夹具补真实身份与本地凭据依赖，未恢复raw旁路。前端字节未变，复用六套56项及build证据。旧74项/hash记录为此前版本历史，不作为本补丁通过证据。
