@@ -118,7 +118,8 @@ class RawMaterialTypeRoleGateMvcTest {
     @Test
     @DisplayName("平台管理员 (super_admin) 无条件放行 DELETE — PLATFORM_ADMIN_ROLES 不受角色白名单约束")
     void platformSuperAdminBypass_delete_passes() throws Exception {
-        mockMvc.perform(delete(ITEM_URL).requestAttr("role", "super_admin"))
+        mockMvc.perform(delete(ITEM_URL).requestAttr("role", "super_admin")
+                        .requestAttr(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE, new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "super_admin")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
 

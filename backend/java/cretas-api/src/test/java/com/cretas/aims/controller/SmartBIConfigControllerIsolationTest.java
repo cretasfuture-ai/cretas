@@ -86,7 +86,7 @@ class SmartBIConfigControllerIsolationTest {
     /** 平台角色请求 — 跨工厂 by design。 */
     private static MockHttpServletRequest platformReq() {
         MockHttpServletRequest r = new MockHttpServletRequest();
-        r.setAttribute("role", "platform_admin");
+        r.setAttribute("role", "platform_admin"); r.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE, new com.cretas.aims.security.AuthenticatedActor(com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "platform_admin"));
         r.setAttribute("factoryId", "F001");
         return r;
     }
@@ -176,6 +176,22 @@ class SmartBIConfigControllerIsolationTest {
                 controller.listIntents(platformReq(), null);
 
         assertEquals(2, resp.getBody().getData().size(), "平台角色看全部");
+    }
+
+    @Test
+    void listIntents_factoryTokenNamingPlatformRole_seesOwnFactoryOnly() {
+        AIIntentConfig mine = intent("a", "F001");
+        AIIntentConfig foreign = intent("c", "F999");
+        when(configService.listIntents(any())).thenReturn(List.of(mine, foreign));
+        MockHttpServletRequest request = factoryReq("F001");
+        request.setAttribute("role", "platform_admin");
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 7L, "F001", "platform_admin"));
+
+        ResponseEntity<ApiResponse<List<AIIntentConfig>>> resp = controller.listIntents(request, null);
+
+        assertEquals(1, resp.getBody().getData().size(), "角色字符串不给跨工厂权限");
     }
 
     private static AIIntentConfig intent(String id, String factoryId) {
