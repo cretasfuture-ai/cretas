@@ -11,7 +11,7 @@
 
 
 
-- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner: `01a1a954/root` — Base `5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f` — 仅本组部署后业务复测/私有场景表；代码冻结统一交付并归档至archive/2026-11-05-tasks-final-delivery.md，合入即释放代码scope；不占其他组main/发布锁。
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `e976bdc0281ea99fae65e4db9213c825e27c09ec` — #1469已合并部署/业务44通过，回执archive/2026-11-05-tasks-acceptance-closeout.md；仅该切片代码/设备/发布scope释放。继续接手开放#1441质量/#1446返工，当前只读核scope；S6-10本人签署待完成。
 
 - `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 
