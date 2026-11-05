@@ -76,3 +76,68 @@ async def _full_scope(*args, **kwargs):
 
 async def _no_scope_rollup(*args, **kwargs):
     return None
+
+
+@pytest.mark.asyncio
+async def test_fact_query_executes_against_row_grain_schema_without_aggregate_columns(monkeypatch):
+    """Exercise the SQL: Silver has one row per batch, no batch_count column."""
+    import sqlite3
+    from contextlib import asynccontextmanager
+    from smartbi import config
+    from smartbi.api import factory_production_gold as gold
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute("""CREATE TABLE fact_production_batch (
+        factory_id TEXT, product_type_id TEXT, unit TEXT, planned_qty REAL,
+        actual_qty REAL, good_qty REAL, yield_rate REAL, material_cost REAL,
+        labor_cost REAL, equipment_cost REAL, other_cost REAL, total_cost REAL,
+        stat_date TEXT)""")
+    db.execute("INSERT INTO fact_production_batch VALUES ('F006','BEEF','盒',4,4,4,100,60,5,0,0,65,'2026-11-05')")
+    db.execute("INSERT INTO fact_production_batch VALUES ('F005','PRIVATE','kg',9,9,9,100,900,0,0,0,900,'2026-11-05')")
+
+    @asynccontextmanager
+    async def context(value=None):
+        yield value
+
+    class Connection:
+        transaction = lambda self: context()
+
+        async def execute(self, sql, factory_id):
+            assert "set_config('app.factory_id'" in sql
+            assert factory_id == 'F006'
+
+        async def fetch(self, sql, *params):
+            return [dict(row) for row in db.execute(sql, params)]
+
+    connection = Connection()
+    pool = SimpleNamespace(acquire=lambda: context(connection))
+
+    async def get_pool():
+        return pool
+
+    monkeypatch.setattr(config, 'get_pg_pool', get_pool)
+    rows, error = await gold._query_fact_product_rows('F006', None, None)
+    db.close()
+    assert error is None
+    assert len(rows) == 1
+    assert rows[0]['product_type_id'] == 'BEEF'
+    assert rows[0]['unit'] == '盒'
+    assert rows[0]['batch_count'] == 1
+
+
+@pytest.mark.asyncio
+async def test_unit_source_query_failure_is_an_error_not_a_mixed_quantity_fallback(monkeypatch):
+    from smartbi.api import factory_production_gold as gold
+    monkeypatch.setattr(gold, '_query_gold', lambda *args, **kwargs: _rows([{}]))
+
+    async def unavailable(*args):
+        return None, 'source quantity unavailable'
+
+    monkeypatch.setattr(gold, '_query_fact_product_rows', unavailable)
+    # Use a valid Gold row so the source-unit failure, not row conversion, is tested.
+    monkeypatch.setattr(gold, '_row_to_dict', lambda _row: {})
+    response = await gold.cost_structure(_request(), None, None)
+    assert response['success'] is False
+    assert response['data'] is None
+    assert 'source quantity unavailable' in response['message']

@@ -26,7 +26,8 @@ const aiFilling = ref(false)
 let autoplayTimer: ReturnType<typeof setTimeout> | undefined
 const DEMO_SKU_ID = '2a6f37c4-b0e1-55ae-b31a-ddc6815829cd'
 const SESSION_KEY = 'cretas:f006-demo-flow:20261105'
-const isF006Admin = computed(() => authStore.factoryId === 'F006' && authStore.currentRole === 'factory_super_admin')
+// The authenticated route owns the role restriction; the page checks the tenant.
+const isF006Admin = computed(() => authStore.factoryId === 'F006')
 const currentStep = computed(() => DEMO_STEPS[currentIndex.value])
 const currentFields = computed<DemoField[]>(() => currentStep.value ? prepareStep(state.value, currentStep.value.id).fields : [])
 const progress = computed(() => Math.round(((currentIndex.value + 1) / DEMO_STEPS.length) * 100))
