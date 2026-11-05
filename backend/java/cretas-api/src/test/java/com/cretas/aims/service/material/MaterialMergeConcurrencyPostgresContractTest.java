@@ -14,6 +14,7 @@ import com.cretas.aims.entity.config.ModuleSchema;
 import com.cretas.aims.entity.processsecret.ProcessSecretPolicy;
 import com.cretas.aims.entity.processsecret.ProcessSecretStorageMode;
 import com.cretas.aims.entity.enums.TaxTreatment;
+import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.integration.DisposablePostgresTargetGuard;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
@@ -422,8 +423,8 @@ class MaterialMergeConcurrencyPostgresContractTest {
         Fixture f = fixture(false);
         String supplier = "MMS-" + UUID.randomUUID();
         jdbc.update("INSERT INTO suppliers (id, factory_id, code, supplier_code, name, is_active, created_by, version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, ?, 'PG Supplier', TRUE, 1, 0, now(), now())",
-                supplier, f.factoryFactory, supplier, supplier);
+                        + "VALUES (?, ?, ?, ?, 'PG Supplier', TRUE, ?, 0, now(), now())",
+                supplier, f.factoryFactory, supplier, supplier, f.actorId);
         // V20261028_90's whole-row identity is intentionally exercised: the
         // tombstone is for the master material, while the live row is for the
         // duplicate. Moving the live row to master would collide with it.
@@ -456,8 +457,8 @@ class MaterialMergeConcurrencyPostgresContractTest {
         Fixture f = fixture(false);
         String supplier = "MMS-" + UUID.randomUUID();
         jdbc.update("INSERT INTO suppliers (id, factory_id, code, supplier_code, name, is_active, created_by, version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, ?, 'PG Positive Supplier', TRUE, 1, 0, now(), now())",
-                supplier, f.factoryFactory, supplier, supplier);
+                        + "VALUES (?, ?, ?, ?, 'PG Positive Supplier', TRUE, ?, 0, now(), now())",
+                supplier, f.factoryFactory, supplier, supplier, f.actorId);
         String relation = "MM-SM-POS-" + UUID.randomUUID();
         jdbc.update("INSERT INTO supplier_materials "
                         + "(id, factory_id, supplier_id, material_type_id, currency, purchase_unit, active, preferred, version, created_at, updated_at, deleted_at) "
@@ -477,13 +478,13 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Test
     void openStandaloneReceiptBlocksMergeButConfirmedHistoryDoesNot() {
         Fixture f = fixture(false);
-        String supplier = insertSupplier(f.factoryFactory, "PG Receipt Supplier");
+        String supplier = insertSupplier(f, "PG Receipt Supplier");
         String receive = "MM-RCV-" + UUID.randomUUID();
         jdbc.update("INSERT INTO purchase_receive_records "
                         + "(id, factory_id, receive_number, purchase_order_id, supplier_id, receive_date, status, "
                         + "received_by, total_amount, created_at, updated_at, deleted_at) "
-                        + "VALUES (?, ?, ?, NULL, ?, CURRENT_DATE, 'DRAFT', 1, 0, now(), now(), NULL)",
-                receive, f.factoryFactory, receive, supplier);
+                        + "VALUES (?, ?, ?, NULL, ?, CURRENT_DATE, 'DRAFT', ?, 0, now(), now(), NULL)",
+                receive, f.factoryFactory, receive, supplier, f.actorId);
         jdbc.update("INSERT INTO purchase_receive_items "
                         + "(receive_record_id, material_type_id, material_name, received_quantity, unit, price_unit, "
                         + "created_at, updated_at, deleted_at) VALUES (?, ?, '重复物料', 1, 'kg', 'kg', now(), now(), NULL)",
@@ -506,7 +507,7 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Test
     void supplierCollisionMapsOnlyEquivalentPurchaseSpecAndPreservesOrderIdentity() {
         Fixture f = fixture(false);
-        String supplier = insertSupplier(f.factoryFactory, "PG Spec Supplier");
+        String supplier = insertSupplier(f, "PG Spec Supplier");
         String duplicateRelation = insertSupplierMaterial(f, supplier, f.duplicateId, "MM-SM-D-", true);
         String masterRelation = insertSupplierMaterial(f, supplier, f.masterId, "MM-SM-M-", true);
         String duplicateSpec = insertSpec(f, duplicateRelation, "D-SPEC", "10.00");
@@ -537,7 +538,7 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Test
     void supplierCollisionWithNoEquivalentSpecRollsBackEveryReference() {
         Fixture f = fixture(false);
-        String supplier = insertSupplier(f.factoryFactory, "PG Spec Conflict Supplier");
+        String supplier = insertSupplier(f, "PG Spec Conflict Supplier");
         String duplicateRelation = insertSupplierMaterial(f, supplier, f.duplicateId, "MM-SM-D-", true);
         String masterRelation = insertSupplierMaterial(f, supplier, f.masterId, "MM-SM-M-", true);
         String duplicateSpec = insertSpec(f, duplicateRelation, "D-SPEC", "10.00");
@@ -568,7 +569,7 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Test
     void inactiveMasterSupplierRelationIsReactivatedAndReceivesEquivalentSpec() {
         Fixture f = fixture(false);
-        String supplier = insertSupplier(f.factoryFactory, "PG Inactive Master Supplier");
+        String supplier = insertSupplier(f, "PG Inactive Master Supplier");
         String duplicateRelation = insertSupplierMaterial(f, supplier, f.duplicateId, "MM-SM-D-", true);
         String masterRelation = insertSupplierMaterial(f, supplier, f.masterId, "MM-SM-M-", false);
         String duplicateSpec = insertSpec(f, duplicateRelation, "D-SPEC", "10.00");
@@ -618,7 +619,7 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Test
     void realQuoteFrontdoorFirstThenMergeMovesTheSameReference() {
         Fixture f = fixture(false);
-        String supplier = insertSupplier(f.factoryFactory, "PG Quote Supplier");
+        String supplier = insertSupplier(f, "PG Quote Supplier");
         String relation = insertSupplierMaterial(f, supplier, f.duplicateId, "MM-SM-Q-", true);
         String spec = insertSpec(f, relation, "Q-SPEC", "10.00");
         String po = insertOpenPurchaseOrder(f);
@@ -664,8 +665,8 @@ class MaterialMergeConcurrencyPostgresContractTest {
         Fixture f = fixture(false);
         String supplier = "MMS-" + UUID.randomUUID();
         jdbc.update("INSERT INTO suppliers (id, factory_id, code, supplier_code, name, is_active, created_by, version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, ?, 'PG Race Supplier', TRUE, 1, 0, now(), now())",
-                supplier, f.factoryFactory, supplier, supplier);
+                        + "VALUES (?, ?, ?, ?, 'PG Race Supplier', TRUE, ?, 0, now(), now())",
+                supplier, f.factoryFactory, supplier, supplier, f.actorId);
         String relation = "MM-SM-RACE-" + UUID.randomUUID();
         CountDownLatch rawLocked = new CountDownLatch(1);
         CountDownLatch releaseReference = new CountDownLatch(1);
@@ -770,8 +771,8 @@ class MaterialMergeConcurrencyPostgresContractTest {
         String historicalOrderNumber = "PO-HIST-" + f.factoryFactory.substring(f.factoryFactory.length() - 12);
         jdbc.update("INSERT INTO purchase_orders (id, factory_id, order_number, purchase_type, order_date, status, "
                         + "created_by, version, purchase_invoice_status, vflag, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, 'DIRECT', CURRENT_DATE, 'COMPLETED', 1, 0, 'NOT_RECEIVED', 'UNCREATED', now(), now())",
-                sourceId, f.factoryFactory, historicalOrderNumber);
+                        + "VALUES (?, ?, ?, 'DIRECT', CURRENT_DATE, 'COMPLETED', ?, 0, 'NOT_RECEIVED', 'UNCREATED', now(), now())",
+                sourceId, f.factoryFactory, historicalOrderNumber, f.actorId);
         jdbc.update("INSERT INTO purchase_order_items (purchase_order_id, material_type_id, material_name, quantity, unit, "
                         + "price_unit, quantity_to_price_factor, received_quantity, created_at, updated_at) "
                         + "VALUES (?, ?, '历史重复物料', 1, 'kg', 'kg', 1, 0, now(), now())",
@@ -861,6 +862,17 @@ class MaterialMergeConcurrencyPostgresContractTest {
     void rawOwnerSaveWaitsForMergeAndThenRejectsWithoutDeadlock() throws Exception {
         Fixture f = fixture(true);
         String rawOwnerId = f.duplicateId;
+        ProductType rawOwnerAnchor = new ProductType();
+        rawOwnerAnchor.setId(rawOwnerId);
+        rawOwnerAnchor.setFactoryId(f.factoryFactory);
+        rawOwnerAnchor.setCode("RAW-OWNER-" + rawOwnerId.substring(rawOwnerId.length() - 12));
+        rawOwnerAnchor.setName("__RAW_WORKFLOW_OWNER__" + rawOwnerId);
+        rawOwnerAnchor.setCategory(ProductCategory.RAW_MATERIAL);
+        rawOwnerAnchor.setProductCategory(ProductCategory.RAW_MATERIAL);
+        rawOwnerAnchor.setUnit("kg");
+        rawOwnerAnchor.setIsActive(false);
+        rawOwnerAnchor.setCreatedBy(f.actorId);
+        productTypeRepository.saveAndFlush(rawOwnerAnchor);
         jdbc.update("UPDATE product_process_workflows SET product_type_id=? WHERE id=?",
                 rawOwnerId, f.workflowId);
 
@@ -1002,11 +1014,11 @@ class MaterialMergeConcurrencyPostgresContractTest {
         materialRepository.saveAndFlush(material);
     }
 
-    private String insertSupplier(String factory, String name) {
+    private String insertSupplier(Fixture f, String name) {
         String id = "MMS-" + UUID.randomUUID();
         jdbc.update("INSERT INTO suppliers (id, factory_id, code, supplier_code, name, is_active, created_by, version, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, ?, ?, TRUE, 1, 0, now(), now())",
-                id, factory, id, id, name);
+                        + "VALUES (?, ?, ?, ?, ?, TRUE, ?, 0, now(), now())",
+                id, f.factoryFactory, id, id, name, f.actorId);
         return id;
     }
 
@@ -1047,8 +1059,8 @@ class MaterialMergeConcurrencyPostgresContractTest {
         String po = "MM-PO-SPEC-" + UUID.randomUUID();
         jdbc.update("INSERT INTO purchase_orders (id, factory_id, order_number, purchase_type, order_date, status, "
                         + "created_by, version, purchase_invoice_status, vflag, created_at, updated_at) "
-                        + "VALUES (?, ?, ?, 'DIRECT', CURRENT_DATE, 'DRAFT', 1, 0, 'NOT_RECEIVED', 'UNCREATED', now(), now())",
-                po, f.factoryFactory, po);
+                        + "VALUES (?, ?, ?, 'DIRECT', CURRENT_DATE, 'DRAFT', ?, 0, 'NOT_RECEIVED', 'UNCREATED', now(), now())",
+                po, f.factoryFactory, po, f.actorId);
         return po;
     }
 

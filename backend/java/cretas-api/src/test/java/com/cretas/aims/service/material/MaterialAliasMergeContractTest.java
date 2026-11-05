@@ -22,6 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.util.List;
 import java.util.Map;
@@ -56,19 +57,19 @@ class MaterialAliasMergeContractTest {
 
     @BeforeEach
     void setUp() {
+        RequestContextHolder.resetRequestAttributes();
         jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
         jdbc.update("INSERT INTO factories (id, name, type, level, is_active, manually_verified, ai_weekly_quota, "
                         + "created_at, updated_at) VALUES (?, ?, 'FACTORY', 0, TRUE, FALSE, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
                         + "(?, ?, 'FACTORY', 0, TRUE, FALSE, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 F, "Alias Merge Factory", OTHER, "Alias Merge Other Factory");
         User actor = new User();
-        actor.setId(990001L);
         actor.setFactoryId(F);
         actor.setUsername("alias-merge-admin");
         actor.setPasswordHash("test");
         actor.setIsActive(true);
         actor.setRoleCode("factory_super_admin");
-        userRepo.saveAndFlush(actor);
+        actor = userRepo.saveAndFlush(actor);
         actorScope = AuthenticatedActor.trustedAsyncScope(new AuthenticatedActor(
                 AuthenticatedActorType.FACTORY_USER, actor.getId(), F, actor.getRoleCode()));
         material("M-MASTER", F, "LY-001", "酱油", "kg");
@@ -79,6 +80,7 @@ class MaterialAliasMergeContractTest {
     @AfterEach
     void clearActor() {
         if (actorScope != null) actorScope.close();
+        RequestContextHolder.resetRequestAttributes();
     }
 
     @Test

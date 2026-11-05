@@ -259,7 +259,6 @@ class MaterialMergeWorkflowWriteGuardContractTest {
 
     @Test
     void missingTrustedActorIsDenied() {
-        moduleEnabled();
         assertThatThrownBy(() -> guard.require(FACTORY, plan(1L)))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(403));
@@ -327,6 +326,8 @@ class MaterialMergeWorkflowWriteGuardContractTest {
                 .factoryId(FACTORY).productTypeId(productId)
                 .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED)
                 .ownerUserId(9999L).createdBy(9999L).build();
+        when(policyRepository.findByFactoryIdAndProductTypeId(FACTORY, "OWNER"))
+                .thenReturn(Optional.empty());
         when(policyRepository.findByFactoryIdAndProductTypeId(FACTORY, productId))
                 .thenReturn(Optional.of(policy));
         when(policyRepository.findByFactoryIdOrderByProductTypeIdAsc(FACTORY))
