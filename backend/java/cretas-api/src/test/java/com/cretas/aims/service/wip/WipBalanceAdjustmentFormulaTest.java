@@ -258,7 +258,7 @@ class WipBalanceAdjustmentFormulaTest {
         r.setAvailableQuantity(new BigDecimal("80"));   // 旧漂移: 存量列没纳入盘亏
         locked(r);
 
-        assertThatThrownBy(() -> svc.deductForSecondaryPlan(77L, new BigDecimal("60"), FACTORY, 1L, Owner.COMPANY))
+        assertThatThrownBy(() -> svc.deductForSecondaryPlan(77L, new BigDecimal("60"), FACTORY, 1L, Owner.COMPANY, "PLAN-1"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("WIP 余量不足");
         verify(txnRepo, never()).save(any());

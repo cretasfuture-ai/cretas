@@ -238,7 +238,7 @@ async function runSku(s) {
   let settled = false, finishedBatchId = null;
   try {
     const pf = await api('GET', `/${FACTORY}/production-plans/${encodeURIComponent(planId)}/settlement/prefill`).catch(() => null);
-    const settleBody = { ...(pf || {}), idempotencyKey: `${planNumber}-fcm-settle`,
+    const settleBody = { ...(pf || {}), idempotencyKey: `${planNumber}-fcm-settle`, confirm: true, manualOverride: true, manualOverrideReason: 'e2e 人工补录',
       actualFinishedQuantity: (pf && pf.actualFinishedQuantity) ?? 0.09,
       quantityUnit: (pf && pf.quantityUnit) || 'kg',
       quantityVarianceReason: '现场称重差异' };

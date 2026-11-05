@@ -83,6 +83,10 @@ public class OrderCostBreakdownService {
     private com.cretas.aims.repository.ProductionSettlementConsumptionRepository
             settlementConsumptionRepository;
 
+    /** 结单转入半成品库时划走的成本 (见 settledSemiTransfer); 字段注入, 理由同上。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionSettlementRepository settlementRepository;
+
     /**
      * pinned BOM 快照缺失时的回退来源 —— 画布那条路<b>不写</b> {@code bom_versions}。
      *
@@ -586,6 +590,14 @@ public class OrderCostBreakdownService {
         if (semiFeedUnknown) {
             missingCostItems.add("SEMI_FINISHED_OR_FINISHED_FEED_PRICE");
         }
+        // 结单转进半成品库的量, 成本随货走了, 不再算在本计划头上。转走那部分成本未知时分不开,
+        // 本计划成本也不算完整 (⛔ 不当 0, 也不把全额留给成品)。
+        SemiTransfer semiTransfer = settledSemiTransfer(factoryId, batches);
+        BigDecimal grossTotal = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost).add(equipment).add(other);
+        boolean semiTransferUnknown = semiTransfer.unknown() || semiTransfer.credit().compareTo(grossTotal) > 0;
+        if (semiTransferUnknown) {
+            missingCostItems.add("SETTLEMENT_SEMI_TRANSFER_COST");
+        }
         missingCostItems = missingCostItems.stream().distinct().collect(Collectors.toCollection(ArrayList::new));
         customerSuppliedItems = customerSuppliedItems.stream().distinct()
                 .collect(Collectors.toCollection(ArrayList::new));
@@ -620,10 +632,9 @@ public class OrderCostBreakdownService {
             blockingMissingItems = new ArrayList<>(blockingMissingItems);
             blockingMissingItems.add("NO_COST_COLLECTED");
         }
-        boolean costComplete = !semiFeedUnknown
+        boolean costComplete = !semiFeedUnknown && !semiTransferUnknown
                 && (!auditEligible || blockingMissingItems.isEmpty());
-        BigDecimal total = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost)
-                .add(equipment).add(other);
+        BigDecimal total = grossTotal.subtract(semiTransfer.credit());
         BigDecimal perBox = boxCount > 0 ? total.divide(BigDecimal.valueOf(boxCount), 2, RoundingMode.HALF_UP) : BigDecimal.ZERO;
 
         List<ByproductLine> byproducts = new ArrayList<>(byproductAcc.values());
@@ -717,6 +728,7 @@ public class OrderCostBreakdownService {
                 .otherCost(otherComplete || other.signum() != 0 ? other : null)
                 .otherCostStatus(otherStatus)
                 .semiFeedCost(anySemiFeed ? semiFeedCost : null)   // null = 无 SFI/FG 投料 (N/A)
+                .semiTransferredCost(semiTransfer.credit().signum() > 0 ? semiTransfer.credit() : null)
                 .costComplete(costComplete)
                 .missingCostItemCount(missingCostItems.size())
                 .missingCostItems(missingCostItems)
@@ -770,6 +782,36 @@ public class OrderCostBreakdownService {
             }
         }
         return dto;
+    }
+
+    private record SemiTransfer(BigDecimal credit, boolean unknown) {
+    }
+
+    /** 这几个批次所属计划的结单上, 转入半成品库带走了多少成本。撤回后结单软删, 这笔自然回到计划上。 */
+    private SemiTransfer settledSemiTransfer(String factoryId, List<ProductionBatch> batches) {
+        BigDecimal credit = BigDecimal.ZERO;
+        boolean unknown = false;
+        if (settlementRepository == null) {
+            return new SemiTransfer(credit, false);
+        }
+        java.util.Set<String> planIds = batches.stream().map(ProductionBatch::getProductionPlanId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
+        for (String planId : planIds) {
+            var settlement = settlementRepository
+                    .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId).orElse(null);
+            if (settlement == null) {
+                continue;
+            }
+            for (var slice : com.cretas.aims.service.production.SettlementSemiStockingService
+                    .parseDetail(settlement.getSemiStockingDetail())) {
+                if (slice.transferredCost() == null) {
+                    unknown = true;
+                } else {
+                    credit = credit.add(slice.transferredCost());
+                }
+            }
+        }
+        return new SemiTransfer(credit, unknown);
     }
 
     /**
@@ -2203,6 +2245,7 @@ public class OrderCostBreakdownService {
     }
 
     private void maskCosts(OrderCostBreakdownDTO dto) {
+        dto.setSemiTransferredCost(null);
         dto.setRawMaterialCost(null);
         dto.setLaborCost(null);
         dto.setSeasoningCost(null);

@@ -22,7 +22,7 @@
 
 
 
-- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `e976bdc0281ea99fae65e4db9213c825e27c09ec` — #1469已合并部署/业务44通过，回执archive/2026-11-05-tasks-acceptance-closeout.md；仅该切片代码/设备/发布scope释放。继续接手开放#1441质量/#1446返工，当前只读核scope；S6-10本人签署待完成。
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `c24e11bb0a2c8e2714981d51b86849bd6fa2a8de` — #1469已发/44业务通过；#1480代码已合，两个S3代码scope归档释放。继续官方发布/OTA及F006自有S302/309/315业务；QA对象/5558独占详本机协调状态，S610本人签署待。
 
 
 

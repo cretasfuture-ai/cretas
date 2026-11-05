@@ -89,6 +89,15 @@ public enum QualityStatus {
     }
 
     /**
+     * 不合格尚未解除: 只有处置 + 复核能改它, 后补一条合格检验不算数 (D-S302-01, Owner 2026-11-04)。
+     * 这个集合也是「本计划的成品不可售」的判据: 质检放行、小结、结单入库都读它。
+     */
+    public boolean isDispositionLocked() {
+        return this == FAILED || this == REWORK_REQUIRED || this == REWORKING
+                || this == REWORK_COMPLETED || this == SCRAPPED;
+    }
+
+    /**
      * 检查是否已完成（终态）
      */
     public boolean isFinalized() {

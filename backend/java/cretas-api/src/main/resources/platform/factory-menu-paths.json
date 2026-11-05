@@ -41,6 +41,7 @@
     "/finance/cost-deviation-cases",
     "/finance/cost-variance",
     "/finance/costs",
+    "/finance/disposal-approvals",
     "/finance/gross-margin-redline",
     "/finance/invoices",
     "/finance/payments",
@@ -178,6 +179,7 @@
   "warehouse": [
     "/warehouse/inventory-query",
     "/warehouse/material-price-trend",
+    "/warehouse/material-requisitions",
     "/warehouse/material-segments",
     "/warehouse/material-types",
     "/warehouse/materials",

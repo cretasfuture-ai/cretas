@@ -728,7 +728,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // ③.6 R3 修复: 回扣结单消耗的原料 usedQuantity (+ 恢复被领用的半成品), 并软删结单,
         // 让原料/半成品库存归还且允许重新结单。同一 @Transactional, 禁 fail-soft。
         boolean settlementRestored = restoreSettlementConsumption(
-                factoryId, log_.getPlanId(), logId, reversalOperatorId(log_));
+                factoryId, log_.getPlanId(), batchId, logId, reversalOperatorId(log_));
         for (Long settlementSemiWipId : settlementSemiWipIds) {
             SemiFinishedInventory restored = wipRepo.findByIdForUpdate(settlementSemiWipId)
                     .orElseThrow(() -> malformedWipTransaction(
@@ -1966,7 +1966,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * @param reversalLogId  撤回日志ID (半成品「还回领用」流水的 sourceRef)
      * @param operatorId     记账人 (见 {@link #reversalOperatorId})
      */
-    private boolean restoreSettlementConsumption(String factoryId, String planId,
+    private boolean restoreSettlementConsumption(String factoryId, String planId, Long reversedBatchId,
                                                  Long reversalLogId, Long operatorId) {
         if (materialBatchRepository == null
                 || productionSettlementRepository == null
@@ -1989,6 +1989,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             log.debug("[SP2] restoreSettlementConsumption: 无结单记录, 跳过 planId={}", planId);
             return false;
         }
+        reverseSettlementSemiStocking(factoryId, settlement, reversedBatchId, operatorId);
 
         List<ProductionSettlementConsumption> lines = productionSettlementConsumptionRepository
                 .findBySettlementIdAndDeletedAtIsNull(settlement.getId());
@@ -2042,6 +2043,41 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔, settlement 已软删",
                 planId, settlement.getId(), restoredMaterial, restoredSemi);
         return true;
+    }
+
+    /**
+     * 结单转进半成品库的量随撤回退出来 (D-S315-02), 两边都还: 半成品库连成本减回去, 在制批次的已用量也减回去
+     * (成本回到计划上不用单独做: 结单软删后 OrderCostBreakdownService 就不再扣这笔) ——
+     * 否则这批料在两边都没了, 重新结单还会再扣一次。半成品已被领走时 reverseClerkOutput 拒绝, 整体回滚。
+     *
+     * <p>撤回只撤一道 (见 {@link #rowsOfReversedStep}), 结单却是整单还原, 所以大多数切片的在制批次都还在。
+     * 只有这次撤回的那一道, 它的在制批次已被 voidClerkWipStock 作废, 不用再还。
+     */
+    private void reverseSettlementSemiStocking(String factoryId, ProductionSettlement settlement,
+                                               Long reversedBatchId, Long operatorId) {
+        var slices = com.cretas.aims.service.production.SettlementSemiStockingService
+                .parseDetail(settlement.getSemiStockingDetail());
+        if (slices.isEmpty()) {
+            return;
+        }
+        if (wipInventoryService == null) {
+            throw new BusinessException(500, "半成品入库撤回服务未初始化, 不能撤回")
+                    .withCode("SETTLEMENT_SEMI_STOCKING_UNAVAILABLE");
+        }
+        for (var slice : slices) {
+            wipInventoryService.reverseClerkOutput(factoryId, slice.anchor(), slice.quantity(),
+                    slice.transferredCost(), operatorId);
+            if (Objects.equals(slice.productionBatchId(), reversedBatchId)) {
+                continue;
+            }
+            if (!restoreMaterialBatchConsumption(factoryId, slice.materialBatchId(), slice.storageQuantity())) {
+                throw new BusinessException(409, String.format(
+                        "撤回失败: 半成品入库对应的在制批次恢复失败 (materialBatchId=%s, qty=%s) — 已回滚",
+                        slice.materialBatchId(), slice.storageQuantity()))
+                        .withCode("SETTLEMENT_SEMI_WIP_RESTORE_FAILED")
+                        .withHint("请刷新原结单和在制批次库存，核对半成品入库记录后再重试撤回；仍不一致请联系管理员");
+            }
+        }
     }
 
     /** Validate the settlement's plan/batch scope before any report or settlement mutation. */

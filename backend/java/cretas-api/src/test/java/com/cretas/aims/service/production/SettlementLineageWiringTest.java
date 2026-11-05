@@ -120,6 +120,13 @@ class SettlementLineageWiringTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
+        // 人工补录要 production:read_write; 这里的用例不测权限本身
+        com.cretas.aims.service.PermissionService permissionService =
+                org.mockito.Mockito.mock(com.cretas.aims.service.PermissionService.class);
+        org.mockito.Mockito.lenient().when(permissionService.hasPermission(any(), anyString())).thenReturn(true);
+        org.mockito.Mockito.lenient().when(userRepository.findById(any()))
+                .thenReturn(Optional.of(new com.cretas.aims.entity.User()));
+        ReflectionTestUtils.setField(service, "permissionService", permissionService);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
                 productionSettlementConsumptionRepository);
@@ -151,6 +158,7 @@ class SettlementLineageWiringTest {
     void settlementSfiFeedWritesWipConsume() throws Exception {
         ProcessSheetRow row = feedRow("SFI-STOCK", "30");
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan()));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan()));
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
                 FACTORY_ID, PLAN_ID, "idem-l")).thenReturn(Optional.empty());
         when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
@@ -172,6 +180,9 @@ class SettlementLineageWiringTest {
                 .thenAnswer(inv -> inv.getArgument(3));
 
         service.settleProduction(FACTORY_ID, PLAN_ID, ProductionSettlementRequest.builder()
+                .confirm(true)
+                .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("idem-l")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)

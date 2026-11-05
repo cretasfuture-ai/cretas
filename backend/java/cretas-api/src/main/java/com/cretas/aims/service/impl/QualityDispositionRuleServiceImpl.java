@@ -73,6 +73,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
 
         // 检查是否需要审批
         boolean requiresApproval = recommendedAction.requiresApproval()
+                || releasesUnclearedBatch(recommendedAction, inspection)
                 || checkApprovalRequirement(factoryId, recommendedAction, evalContext);
 
         // 查找匹配的规则配置
@@ -116,7 +117,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         boolean passRateOk = inspection.getPassRate().compareTo(PASS_RATE_THRESHOLD_RELEASE) >= 0;
         boolean resultPass = "PASS".equalsIgnoreCase(inspection.getResult());
 
-        if (!passRateOk || !resultPass) {
+        if (!passRateOk || !resultPass || isAwaitingDisposition(inspection)) {
             return false;
         }
 
@@ -124,6 +125,16 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         Map<String, Object> context = buildEvaluationContext(inspection, new HashMap<>());
         return !approvalChainService.requiresApproval(
                 factoryId, DecisionType.QUALITY_RELEASE, context);
+    }
+
+    @Override
+    public boolean isAwaitingDisposition(QualityInspection inspection) {
+        return dispositionInventoryService != null && dispositionInventoryService.isAwaitingDisposition(inspection);
+    }
+
+    /** D-S302-01: 批次还不合格时, 哪怕最新一次检验全合格, 放行也要另一个人复核。 */
+    private boolean releasesUnclearedBatch(DispositionAction action, QualityInspection inspection) {
+        return action == DispositionAction.RELEASE && isAwaitingDisposition(inspection);
     }
 
     @Override
@@ -201,12 +212,14 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
 
         // 动作静态审批契约是最低门禁；工厂动态规则可以进一步要求审批，不能放宽。
         boolean needsApproval = !approvalGranted && (action.requiresApproval()
+                || releasesUnclearedBatch(action, inspection)
                 || requiresSpecialApproval(factoryId, inspection, action));
 
         String auditLogId = null;
         String approvalRequestId = null;
         boolean approvalInitiated = false;
         String newStatus = null;
+        int finishedGoodsHeld = 0;
 
         if (needsApproval) {
             // 需要特批 - 记录审计并启动审批流程
@@ -236,10 +249,30 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
             log.info("质检处置需要特批: auditLogId={}", auditLogId);
 
         } else {
+            // 🔒 库存桥接: 只在<b>最终直接执行</b>分支翻转库存 (非 approval-initiated 分支)。
+            // 未审批申请 / 被拒审批不会走到这里, 保证「审批门禁」—— 翻转发生在最终执行/审批通过, 不在提交时。
+            // 在同一 @Transactional 内, 与审计日志一起提交/回滚。批次状态由它写, 所以排在审计之前:
+            // 审计和响应里的 newStatus 读实际写下的值, 不再是 mapActionToStatus 的声明。
+            newStatus = mapActionToStatus(action);
+            if (dispositionInventoryService != null) {
+                try {
+                    var applied = dispositionInventoryService.applyDisposition(inspection, action);
+                    if (applied != null) {
+                        finishedGoodsHeld = applied.getFinishedGoodsHeld();
+                        if (applied.getBatchQualityStatus() != null) newStatus = applied.getBatchQualityStatus();
+                    }
+                } catch (Exception e) {
+                    // 库存翻转失败必须让整个处置事务回滚 (审计日志与库存状态不能不一致): 食安关键路径, fail-loud。
+                    log.error("质检处置库存桥接失败, 回滚整个处置: inspectionId={}, action={}: {}",
+                            inspection.getId(), action, e.getMessage(), e);
+                    throw e;
+                }
+            }
+
             // 直接执行
             Map<String, Object> outputResult = new HashMap<>();
             outputResult.put("action", action.name());
-            outputResult.put("newStatus", mapActionToStatus(action));
+            outputResult.put("newStatus", newStatus);
 
             var auditLog = decisionAuditService.logRuleExecution(
                     factoryId,
@@ -255,21 +288,6 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
             );
 
             auditLogId = auditLog.getId();
-            newStatus = mapActionToStatus(action);
-
-            // 🔒 库存桥接: 只在<b>最终直接执行</b>分支翻转库存 (非 approval-initiated 分支)。
-            // 未审批申请 / 被拒审批不会走到这里, 保证「审批门禁」—— 翻转发生在最终执行/审批通过, 不在提交时。
-            // 在同一 @Transactional 内, 与审计日志一起提交/回滚。放行→隔离批次回 AVAILABLE。
-            if (dispositionInventoryService != null) {
-                try {
-                    dispositionInventoryService.applyDisposition(inspection, action);
-                } catch (Exception e) {
-                    // 库存翻转失败必须让整个处置事务回滚 (审计日志与库存状态不能不一致): 食安关键路径, fail-loud。
-                    log.error("质检处置库存桥接失败, 回滚整个处置: inspectionId={}, action={}: {}",
-                            inspection.getId(), action, e.getMessage(), e);
-                    throw e;
-                }
-            }
 
             log.info("质检处置已执行: action={}, newStatus={}", action, newStatus);
         }
@@ -282,7 +300,9 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
                 .auditLogId(auditLogId)
                 .message(approvalInitiated
                         ? "处置请求已提交，等待审批"
-                        : "处置已执行: " + action.getDescription())
+                        : "处置已执行: " + action.getDescription()
+                                + (finishedGoodsHeld > 0
+                                        ? "；同计划还有 " + finishedGoodsHeld + " 个成品批次仍在隔离中，不可销售" : ""))
                 .newBatchStatus(newStatus)
                 .build();
     }
@@ -475,7 +495,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
             case RELEASE:
                 return "PASSED";
             case CONDITIONAL_RELEASE:
-                return "CONDITIONAL_PASSED";
+                return "PARTIAL_PASS";
             case REWORK:
                 return "REWORK_REQUIRED";
             case SCRAP:
