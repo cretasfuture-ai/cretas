@@ -134,6 +134,14 @@ export interface ConfigDiff {
   before: unknown
   after: unknown
   description: string
+  /** Server-issued, single-use proof for the exact tool/version/params. */
+  proof?: CanvasDiffProof
+}
+
+export interface CanvasDiffProof {
+  token: string
+  commandDigest: string
+  descriptorVersion: string
 }
 
 export type ConfigStatus = 'DRAFT' | 'PENDING_REVIEW' | 'APPROVED' | 'PUBLISHED' | 'REJECTED'

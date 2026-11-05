@@ -58,7 +58,8 @@ class RuntimeToolPolicyLoaderTest {
         assertThat(manifest.policies().get(0).supportsPreview()).isFalse();
         assertThat(manifest.policies().get(1).supportsPreview()).isTrue();
         assertThat(manifest.policies().subList(1, 3)).allSatisfy(policy -> {
-            assertThat(policy.version()).isEqualTo("1.0.0");
+            assertThat(policy.version()).isEqualTo(
+                    "canvas_work_process_catalog".equals(policy.toolName()) ? "1.1.0" : "1.0.0");
             assertThat(policy.supportsPreview()).isTrue();
             assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
             assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);

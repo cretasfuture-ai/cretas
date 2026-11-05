@@ -54,7 +54,7 @@ class WorkProcessCatalogToolTest {
         assertTrue(tool.hasPermission(FactoryUserRole.factory_super_admin.name()));
         assertTrue(tool.hasPermission(FactoryUserRole.permission_admin.name()));
         assertFalse(tool.hasPermission(FactoryUserRole.operator.name()));
-        assertEquals("1.0.0", tool.getVersion());
+        assertEquals("1.1.0", tool.getVersion());
         assertEquals(Set.of("canvas", "production", "work-process", "master-data"),
                 tool.getDomainTags());
         assertTrue(tool.getParametersSchema().containsKey("properties"));
@@ -77,6 +77,68 @@ class WorkProcessCatalogToolTest {
         verify(workProcessService).list(eq(FACTORY_ID), any());
         verify(workProcessService, never()).create(anyString(), any());
         verify(workProcessService, never()).update(anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("preview/execute 复用工艺标准 schema 映射，预览展示单位和标准范围")
+    void standardsAreMappedAndShownInPreview() throws Exception {
+        PageResponse<WorkProcessDTO> emptyPage = new PageResponse<>();
+        emptyPage.setContent(List.of());
+        when(workProcessService.list(eq(FACTORY_ID), any())).thenReturn(emptyPage);
+        List<Map<String, Object>> schema = List.of(Map.of(
+                "key", "oilTemp", "label", "油温", "type", "number", "enabled", true,
+                "unit", "℃", "standardValue", 155, "min", 150, "max", 160));
+
+        Map<String, Object> preview = invokeDoPreview(Map.of(
+                "action", "create", "processName", "油炸", "processCategory", "加工",
+                "customFieldSchema", schema));
+
+        assertEquals(schema, preview.get("customFieldSchema"));
+        assertTrue(preview.get("message").toString().contains("油温"));
+        assertTrue(preview.get("message").toString().contains("单位=℃"));
+        assertTrue(preview.get("message").toString().contains("标准=155"));
+        assertTrue(preview.get("message").toString().contains("下限=150"));
+        assertTrue(preview.get("message").toString().contains("上限=160"));
+        verify(workProcessService, never()).create(anyString(), any());
+        verify(workProcessService, never()).update(anyString(), anyString(), any());
+
+        when(workProcessService.create(eq(FACTORY_ID), any(WorkProcessDTO.class)))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+        invokeDoExecute(Map.of(
+                "action", "create", "processName", "油炸", "processCategory", "加工",
+                "customFieldSchema", schema));
+        verify(workProcessService).create(eq(FACTORY_ID), dtoCaptor.capture());
+        assertEquals(schema, dtoCaptor.getValue().getCustomFieldSchema());
+    }
+
+    @Test
+    @DisplayName("畸形 customFieldSchema 在 service 写入前拒绝")
+    void malformedStandardsNeverWrite() throws Exception {
+        Map<String, Object> malformed = new HashMap<>();
+        malformed.put("key", "oilTemp");
+        malformed.put("label", "油温");
+        malformed.put("type", "number");
+        malformed.put("min", 160);
+        malformed.put("max", 150);
+
+        assertThrows(BusinessException.class, () -> invokeDoExecute(Map.of(
+                "action", "create", "processName", "油炸", "processCategory", "加工",
+                "customFieldSchema", List.of(malformed))));
+        verifyNoInteractions(workProcessService);
+    }
+
+    @Test
+    @DisplayName("update 缺省不改 schema，明确 [] 才清空")
+    void updateSchemaPresenceIsPreserved() throws Exception {
+        when(workProcessService.update(eq(FACTORY_ID), eq("wp-1"), any(WorkProcessDTO.class)))
+                .thenAnswer(invocation -> invocation.getArgument(2));
+
+        invokeDoExecute(Map.of("action", "update", "id", "wp-1", "processName", "油炸"));
+        invokeDoExecute(Map.of("action", "update", "id", "wp-1", "customFieldSchema", List.of()));
+
+        verify(workProcessService, times(2)).update(eq(FACTORY_ID), eq("wp-1"), dtoCaptor.capture());
+        assertNull(dtoCaptor.getAllValues().get(0).getCustomFieldSchema());
+        assertEquals(List.of(), dtoCaptor.getAllValues().get(1).getCustomFieldSchema());
     }
 
     @Test
