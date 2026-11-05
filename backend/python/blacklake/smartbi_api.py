@@ -83,7 +83,7 @@ async def complete_cost_analysis(request:Request):
         result=await asyncio.to_thread(read_complete,configured)
         if result is None:raise ValueError('NOT_CONFIGURED')
     except Exception:raise HTTPException(503,'逐条成本分析尚未就绪或与当前工厂不一致') from None
-    return {'success':True,'data':result,'message':'最新26张固定工单；数据立即读取，分析按批次逐条保存'}
+    return {'success':True,'data':result,'message':'当前可核算工单；数值与规则取同一份已保存数据，历史补查另列范围'}
 
 
 class CompleteCostFollowup(BaseModel):
@@ -111,7 +111,7 @@ async def cost_traceability(request:Request,mode:Literal['latest','snapshot']='l
     await cost_authority(request,configured)
     import asyncio
     try:
-        if mode=='snapshot':
+        if mode=='snapshot' or os.environ.get('BLACKLAKE_LIVE_CONFIG'):
             data=await asyncio.to_thread(read,configured)
             result=data['costTraceability']
         else:
@@ -228,3 +228,5 @@ async def save_alert_progress(alert_id:str,payload:AlertProgress,request:Request
 
 from .period_api import router as period_router
 router.include_router(period_router)
+from .live_api import router as live_router
+router.include_router(live_router)

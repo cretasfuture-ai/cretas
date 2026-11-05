@@ -6,6 +6,7 @@ import type { CompleteCostReport, CostProject, CostDataAlert } from '@/api/smart
 vi.mock('@nuxt/ui/components/Card.vue',()=>({default:{template:'<div><slot name="header"/><slot/></div>'}}));
 vi.mock('@nuxt/ui/components/Button.vue',()=>({default:{template:'<button><slot/></button>'}}));
 vi.mock('@/components/smartbi/DynamicChartRenderer.vue',()=>({default:{template:'<div>成本图表</div>'}}));
+vi.mock('@/components/smartbi/ContinuousAnalysisPanel.vue',()=>({default:{name:'ContinuousAnalysisPanel',emits:['data-updated'],template:'<div />'}}));
 const auth=vi.hoisted(()=>({store:{factoryId:'T',user:{id:1},currentRole:'factory_super_admin'}}));
 vi.mock('@/store/modules/auth',async()=>{const{reactive}=await import('vue');auth.store=reactive(auth.store);return{useAuthStore:()=>auth.store};});
 vi.mock('@/api/smartbi/blacklake',()=>({getBlacklakeCompleteCost:vi.fn(),followupBlacklakeCompleteCost:vi.fn()}));

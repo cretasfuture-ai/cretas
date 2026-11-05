@@ -1,0 +1,21 @@
+# SMARTBI-LIVE-STOCK-20261105
+
+Base: a19812efc525f036d75979306851f733ca4bc5dd. Owner: root. Isolated worktree: cretas-blacklake-20261103. No Blacklake business writes or Cretas production changes.
+
+Scope: backend/python/blacklake continuous acquisition and negative-stock reconciliation, corresponding tests, prototype analysis integration and isolated preview runtime. Keep factory binding, Redis limits/connection lock, immutable local evidence, dates, deterministic calculations and bounded local AI queue.
+
+UI delegation: LIVE-STOCK-UI, owner UI worker, only new web-admin/src/components/smartbi/StockReconciliation.vue, LiveMonitor.vue, web-admin/src/api/smartbi/blacklake-live.ts and corresponding specs. No existing shared files. Acceptance: targeted vitest specs; root integration typecheck/build/browser.
+
+UI follow-up after user screenshot: LIVE-REPORT-UI, same Base, owner live_stock_ui; only new web-admin/src/components/smartbi/SavedAnalysisReport.vue and its spec. Root owns integration and removes raw report dumps from LiveMonitor. Acceptance: focused Vitest, shared typecheck/build and actual report drawer visual readback.
+
+Root acceptance: live read-only source receipts, per-material evidence and unresolved owner/action; synthetic reconciliation/monitor failure and scope tests; frontend typecheck/build; actual preview browser readback; durable task startup/retry/readback. One-week collection completion must remain pending until elapsed.
+
+Implemented renewable minute collection, content-addressed local retention, per-stage source clocks, original-negative continuity, audited detail-warehouse reconciliation, current product-cost projection, daily history/gaps, coalesced local27B reports and independent durable nightly ticks. Original44 explanations retain historical provenance; current eligible cohort is count-neutral. SQLite schema initialization is serialized.
+
+Actual initial source scan:543 read queries; routine successful polls56 queries. Current visible counts at verification:136projects,386tasks,350reports,416stock orders,197stock rows and37eligible cost orders. Original6negative balances match visible net ledger changes; new seventh negative does not. These are book evidence, not proof of physical shortage. Source business mutations0; no paid teacher calls. Detailed rows and identifying business payloads stay private outside Git.
+
+Verification: broader affected backend suite139passed before final live-only changes; final live/cost slice31passed; preview/period gateway slice47passed at its last change; frontend36passed and Vue typecheck0. Build/publication/browser/runtime receipts are retained privately. Native-task startup exposed argument quoting and packaged LocalAppData redirects; failures are retained as failed receipts, followed by real scheduled-task success and consecutive source polls. Cretas production services and Java schema unchanged. Week observation remains ongoing until the saved deadline.
+
+Final updates: current traceability endpoint also uses live136/37, rather than static109/26. Known source unit precision (6decimal places for pieces/packages/boxes) is used in negative-stock explanations instead of asking for settings already returned. Final backend slice33passed, including concurrent first-open/WAL locking and live traceability authorization. Actual task restart/readback succeeded with the same scoped database. Source routine polls56requests and remain serialized.
+
+User screenshot exposed a presentation regression: the first saved-report drawer stacked every raw section and the background monitor dumped every observation. Replaced both report entrances with a shared card/tab view, concise counters, roles/actions and collapsed evidence; history/model usage remains separately expandable. UI follow-up37tests and typecheck passed; clean-ui build passed in2m38s. Source/AI results were retained, not rewritten for presentation. One-week completion is still not claimed.

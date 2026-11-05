@@ -37,7 +37,7 @@ def settings(path):
     return value
 
 
-def read(value, period=None):
+def read(value, period=None, *, live_cycle_id=None):
     connection=psycopg2.connect(value['dsn'],connect_timeout=5)
     try:
         connection.set_session(readonly=True)
@@ -68,6 +68,9 @@ def read(value, period=None):
             if not operational:raise ValueError('OPERATIONS_PARENT_OBSERVATION_REQUIRED')
             from .operations_supplement import load
             data,metadata=load(data,metadata,value,os.environ['BLACKLAKE_OPERATIONS_SUPPLEMENT_FILE'])
+        if os.environ.get('BLACKLAKE_LIVE_CONFIG'):
+            from .live_monitor import load
+            data,metadata=load(data,metadata,value,os.environ['BLACKLAKE_LIVE_CONFIG'],live_cycle_id)
         from .period_projection import instant
         from zoneinfo import ZoneInfo
         completed=[instant(p.get('actualEndTime')) for p in data['project'] if str(p.get('status'))=='20']

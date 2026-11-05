@@ -210,6 +210,7 @@ def build(data, metadata):
                                  'statuses':dict(status),'completionRate':status['20']/len(projects) if projects else None,
                                  'planActual':plan_actual,'quality':quality_rows,'processes':process_rows},
                    'inventory':{'records':balances,'byWarehouseUnit':inventory_totals,
+                                'reconciliations':[r for r in metadata.get('stock_reconciliations',[]) if r['checkedAt']==metadata.get('stock_finished_at')],
                                 'balanceAsOf':metadata.get('stock_finished_at',metadata.get('finished_at')) if balances else None,
                                 'lastAvailableBalanceAt':metadata.get('stock_latest_finished_at',metadata.get('stock_finished_at',metadata.get('finished_at'))),
                                 'pairsNotReturned':metadata['stock_pairs_not_returned'],'movementOrders':len(orders)},

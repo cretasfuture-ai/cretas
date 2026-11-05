@@ -62,6 +62,7 @@ def project_period(data, metadata, window):
     if metadata.get('stock_snapshots'):
         chosen=max(candidates,key=lambda s:instant(s['at'])) if candidates else None
         source['stock']=deepcopy(chosen['records']) if chosen else []
+        if not chosen:metadata={**metadata,'stock_reconciliations':[]}
         metadata={**metadata,'stock_finished_at':chosen['at'] if chosen else metadata.get('stock_latest_finished_at'),
                   'stock_pairs_not_returned':chosen['pairsNotReturned'] if chosen else None}
         snapshot=instant(chosen['at']) if chosen else None

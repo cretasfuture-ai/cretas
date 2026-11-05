@@ -40,12 +40,17 @@ def create_app():
         from .period_runtime import schedule_loop, ensure_worker, stop_workers
         ensure_worker(configured)
         scheduler=asyncio.create_task(schedule_loop(configured)) if os.environ.get('BLACKLAKE_PERIOD_SCHEDULER_ENABLED')=='1' else None
+        from .live_api import analysis_loop
+        live_task=asyncio.create_task(analysis_loop(configured)) if os.environ.get('BLACKLAKE_LIVE_CONFIG') else None
         try:
             yield
         finally:
             if scheduler is not None:
                 scheduler.cancel()
                 await asyncio.gather(scheduler,return_exceptions=True)
+            if live_task is not None:
+                live_task.cancel()
+                await asyncio.gather(live_task,return_exceptions=True)
             await stop_workers()
 
     app=FastAPI(title='SmartBI · 六膳门黑湖只读测试',docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan)

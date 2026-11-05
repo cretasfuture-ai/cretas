@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import CostDataTable from '@/components/smartbi/CostDataTable.vue';
+import StockReconciliation from '@/components/smartbi/StockReconciliation.vue';
+import LiveMonitor from '@/components/smartbi/LiveMonitor.vue';
+import SavedAnalysisReport from '@/components/smartbi/SavedAnalysisReport.vue';
+import {getBlacklakeLiveMonitor,type LiveMonitorReport} from '@/api/smartbi/blacklake-live';
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import { createBlacklakePeriodReport, getBlacklakeAnalysis, getBlacklakePeriodReport, getBlacklakePeriodSchedule, listBlacklakePeriodReports, type AlertFollowup, type BlacklakeAnalysis, type BlacklakePeriodJob, type BlacklakePeriodQuery, type BlacklakePeriodSchedule, type CostDataAlert, type CostProject, type SectionInsightReport } from '@/api/smartbi/blacklake';
 import DynamicChartRenderer from '@/components/smartbi/DynamicChartRenderer.vue';
@@ -25,6 +29,38 @@ const data = shallowRef<BlacklakeAnalysis | null>(null);
 const refreshEpoch=ref(0);
 const loading = ref(false);
 const error = ref('');
+const liveMonitor=shallowRef<LiveMonitorReport|null>(null);
+const liveError=ref('');
+let liveTimer:number|undefined;
+let liveOffset=0;
+let liveReading=false;
+let liveSuccess:string|null=null;
+async function refreshLive(offset=liveOffset){
+  if(liveReading)return;
+  liveReading=true;
+  const identity=authIdentity.value;
+  try{
+    const report=await getBlacklakeLiveMonitor(offset);
+    if(!mounted.value||identity!==authIdentity.value)return;
+    liveOffset=offset;liveMonitor.value=report;liveError.value='';
+    if(liveSuccess&&report.lastSuccessAt!==liveSuccess&&!loading.value){
+      const generation=periodRequestGeneration.value;
+      const facts=await getBlacklakeAnalysis(periodQuery.value);
+      if(isCurrentRequest(generation,identity)){
+        data.value=facts;
+        if(periodJob.value?.fingerprint!==facts.periodMetadata?.fingerprint){periodJob.value=null;lastAppliedPeriodResultKey.value='';}
+      }
+    }
+    liveSuccess=report.lastSuccessAt;
+  }catch(cause){if(mounted.value&&identity===authIdentity.value)liveError.value=cause instanceof Error?cause.message:'持续采集状态暂不可读。';}
+  finally{liveReading=false;}
+}
+async function pollLive(){await refreshLive();if(mounted.value)liveTimer=window.setTimeout(()=>{void pollLive();},30000);}
+async function openLiveReport(id:string){
+  const identity=authIdentity.value;
+  try{const report=await getBlacklakePeriodReport(id);if(mounted.value&&identity===authIdentity.value)historyDrawerJob.value=report;}
+  catch(cause){liveError.value=cause instanceof Error?cause.message:'报告暂不可读';}
+}
 const tab = ref('cost');
 const search = ref('');
 const orderPage=ref(1);
@@ -284,11 +320,12 @@ function onPeriodChange(query: BlacklakePeriodQuery | null) {
 }
 
 function retryPeriod() { if (periodQuery.value) void loadForPeriod(periodQuery.value, true); }
-function openHistory(job: BlacklakePeriodJob) { historyDrawerJob.value = job; }
+function openHistory(job: BlacklakePeriodJob) { historyDrawerJob.value = job;void openLiveReport(job.id); }
 
 watch(authIdentity, (value, previous) => {
   if (!previous || value === previous) return;
   resetPeriodView(); periodRequestGeneration.value += 1; periodHistory.value = []; historyDrawerJob.value = null; periodSchedule.value = null; periodAuxError.value = '';
+  liveMonitor.value=null;liveSuccess=null;liveOffset=0;
   void loadForPeriod(periodQuery.value);
 });
 
@@ -320,8 +357,9 @@ function focusAlert(alert: CostDataAlert) {
 onMounted(() => {
   mounted.value = true;
   void loadForPeriod(periodQuery.value);
+  void pollLive();
 });
-onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; stopPeriodPolling(); });
+onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; stopPeriodPolling();if(liveTimer!==undefined)window.clearTimeout(liveTimer); });
 </script>
 
 <template>
@@ -331,7 +369,12 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
         <p>{{ viewDescriptions[tab] || '查看本期数据和需要处理的问题。' }}</p></div>
       <UButton color="neutral" variant="outline" :loading="loading" @click="void loadForPeriod(periodQuery)">刷新分析</UButton>
     </header>
+    <details class="section-card live-campaign"><summary>每分钟持续采集 · {{ liveMonitor?.lastSuccessAt ? `最近成功 ${formatBlacklakeDateTime(liveMonitor.lastSuccessAt)}，已成功 ${liveMonitor.successfulCycles} 轮` : '正在读取状态' }} · 展开查看一周记录与分析</summary><p v-if="liveError" role="alert">{{ liveError }}</p><LiveMonitor :report="liveMonitor" @refresh="refreshLive()" @history-page="refreshLive($event)" @open-report="openLiveReport" /></details>
+    <details v-if="data?.operationalSource?.referenceExplanation" class="note"><summary>查看配方参考资料的复核时间</summary><p>{{ data.operationalSource.referenceExplanation }}</p><p>工单用料参考 {{ formatBlacklakeDateTime(data.operationalSource.materialReferencesCheckedAt || '') }} · BOM配方参考 {{ formatBlacklakeDateTime(data.operationalSource.bomReferencesCheckedAt || '') }}</p></details>
     <BlacklakePeriodControls :model-value="periodQuery" :disabled="loading" @change="onPeriodChange" />
+    <p v-if="liveError||liveMonitor?.error" class="note" role="alert">{{ liveError||liveMonitor?.error }}</p>
+    <details v-if="liveMonitor?.gaps?.length" class="note"><summary>查看没有连续采集的时间段（{{ liveMonitor.gaps.length }} 段）</summary><ul><li v-for="gap in liveMonitor.gaps" :key="gap.from">{{ formatBlacklakeDateTime(gap.from) }} 至 {{ formatBlacklakeDateTime(gap.to) }} 没有连续记录，不能当作每分钟均已采集。</li></ul></details>
+    <details v-if="liveMonitor?.dailyStats?.length" class="note"><summary>按天查看本周采集情况</summary><CostDataTable :rows="liveMonitor.dailyStats" :columns="[{key:'date',label:'日期',type:'text'},{key:'cycles',label:'尝试轮次',type:'number',count:true},{key:'successful',label:'成功轮次',type:'number',count:true},{key:'changed',label:'数据变化',type:'number',count:true},{key:'requests',label:'查询请求',type:'number',count:true}]" paginate /></details>
     <el-alert v-if="error" type="error" :closable="false" :title="error" show-icon />
     <el-alert v-if="periodError" type="warning" :closable="false" :title="periodError" show-icon />
     <el-alert v-if="periodAuxError" type="info" :closable="false" :title="periodAuxError" show-icon />
@@ -437,6 +480,7 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
               <p v-if="inventoryFocus.length" class="note">已定位 {{ stockRows.length }} 行问题明细，库存汇总仍按当前单位。<UButton color="neutral" variant="ghost" @click="inventoryFocus=[]">恢复全部库存明细</UButton></p>
               <details><summary>按仓库比较库存数量</summary><p v-if="inventoryUnit==='__all__'||inventoryUnit==='__missing__'" class="note">请先选择同一个计量单位，再比较仓库数量。</p><DynamicChartRenderer v-else :config="stockChart" :number-precision="2" /></details>
               <CostDataTable :rows="stockRows" :columns="[{key:'product',label:'物料 / 产品',type:'text',minWidth:190},{key:'productCode',label:'物料编码',minWidth:140},{key:'warehouse',label:'仓库',type:'select'},{key:'warehouseCode',label:'仓库编码'},{key:'unit',label:'单位',type:'select',width:75},{key:'quantity',label:'采集时余额',type:'number'},{key:'reviewStatus',label:'核对提示',type:'select',minWidth:150}]" paginate stripe data-testid="stock-records"><template #quantity="{row}">{{ fmt(row.quantity) }}</template></CostDataTable>
+              <StockReconciliation :rows="data.inventory.reconciliations||[]" :snapshot-at="data.inventory.balanceAsOf" />
               <OperationsReviewPanel v-if="inventoryReview" title="库存先核什么" :summary="inventorySummary" :findings="inventoryReview.findings" :allow-ask="!!insightFor('inventory')" @locate="locateOperational($event,'inventory')" @ask="askOperational($event,'inventory')" />
               <SectionInsight v-if="insightFor('inventory')" :report="insightFor('inventory')!" :period="periodQuery" :focus-alert="focusedSection === 'inventory' ? focusedAlert : null" :open-request="focusedSection === 'inventory' ? openRequest : 0" :initial-question="operationalQuestion" :context-key="operationalContext" @clear-focus="clearFocus('inventory')" @locate-order="locateOrder" /></el-card>
         </el-tab-pane>
@@ -460,8 +504,8 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
         </template>
       </el-drawer>
     </template>
-    <el-drawer v-if="historyDrawerJob" :model-value="!!historyDrawerJob" title="历史周期报告" size="min(100%, 760px)" @close="historyDrawerJob = null">
-      <template v-if="historyDrawerJob"><h3>{{ historyDrawerJob.period.startDate }} 至 {{ historyDrawerJob.period.endDate }}</h3><p class="note">报告状态：{{ ({ queued: '等候分析', running: '正在分析', ready: '已生成', failed: '分析失败' })[historyDrawerJob.status] }} · {{ formatBlacklakeDateTime(historyDrawerJob.finishedAt || historyDrawerJob.createdAt) }}</p><p v-if="historyDrawerJob.result?.summary">{{ localizeBlacklakeText(historyDrawerJob.result.summary) }}</p><h4 v-if="historyDrawerJob.result?.observations.length">观察</h4><ul><li v-for="item in historyDrawerJob.result?.observations || []" :key="item">{{ localizeBlacklakeText(item) }}</li></ul></template>
+    <el-drawer v-if="historyDrawerJob" :model-value="!!historyDrawerJob" title="问题与处理建议" size="min(100%, 960px)" @close="historyDrawerJob = null">
+      <SavedAnalysisReport :report="historyDrawerJob" />
     </el-drawer>
   </main>
 </template>

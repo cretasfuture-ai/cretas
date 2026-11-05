@@ -50,6 +50,17 @@ def test_history_summary_parameter_is_narrow_and_other_filters_stay_blocked(prev
     assert len(calls)==1
 
 
+def test_live_history_paging_is_readonly_bounded_and_scope_free(preview):
+    client,calls=preview;path='/smartbi-api/api/smartbi/blacklake/'
+    assert client.get(path+'live-monitor?history_offset=100').status_code==200
+    assert calls[-1].url.params['history_offset']=='100'
+    for resource in ('live-monitor?history_offset=-1','live-monitor?history_offset=1000001',
+                     'live-monitor?history_offset=0&history_offset=1','live-monitor?tenant_id=OTHER','analysis?history_offset=0'):
+        assert client.get(path+resource).status_code==400
+    assert client.post(path+'live-monitor',json={},headers={'Origin':ORIGIN}).status_code==403
+    assert len(calls)==1
+
+
 def test_browser_auth_is_discarded_and_only_fixed_local_analytical_upstream_is_used(preview):
     client, calls = preview
     response = client.get('/smartbi-api/api/smartbi/blacklake/complete-cost-analysis',

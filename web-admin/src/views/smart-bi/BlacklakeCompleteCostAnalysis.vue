@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import CostDataTable from '@/components/smartbi/CostDataTable.vue';
+import ContinuousAnalysisPanel from '@/components/smartbi/ContinuousAnalysisPanel.vue';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import UCard from '@nuxt/ui/components/Card.vue';
 import UButton from '@nuxt/ui/components/Button.vue';
@@ -29,6 +30,7 @@ async function load(){
   try{
     const next=await getBlacklakeCompleteCost();if(epoch!==generation)return;
     report.value=next;
+    if(next.contract.live&&cohort.value==='eligible26')cohort.value='eligible_live';
     if(selected.value)selected.value=next.analysis.cost.projects.find(r=>r.projectId===selected.value?.projectId)||null;
     if(chatFact.value)chatFact.value=next.batchAnalysis.results.find(r=>r.factId===chatFact.value?.factId)||null;
     if(!units.value.includes(unit.value))unit.value=units.value[0]||'';
@@ -97,6 +99,7 @@ async function ask(){
 <template>
   <main class="complete-cost" data-testid="complete-cost-analysis">
     <header><div><h2>成品 / 半成品成本分析</h2><p>先看产品成本，再找到影响成本的工单。</p></div><UButton color="neutral" variant="outline" :loading="loading" @click="load">刷新</UButton></header>
+    <ContinuousAnalysisPanel @data-updated="load" />
     <el-alert v-if="error" type="warning" :closable="false" :title="error"/>
     <p v-if="loading&&!report" role="status">正在读取成本…</p>
     <template v-if="report">
@@ -156,9 +159,9 @@ async function ask(){
       </template>
       <details class="technical"><summary>查看其他专项分析与数据说明</summary>
         <p class="note">资料更新 {{ formatBlacklakeDateTime(report.sourceCheckedAt) }} · 以下专项分析使用完整采集范围，不随上方工单筛选变化。</p>
-        <p role="status">{{ report.batchAnalysis.status==='complete'?'分析已完成':report.batchAnalysis.status==='failed'?'部分分析暂不可用，正在等待恢复':'分析排队中，已完成的工单可先查看' }}</p>
-        <p class="note">逐单分析 {{ completedOrders }} / {{ report.contract.eligibleOrders }}；补查 {{ report.batchAnalysis.cohorts.original44?.analyzed ?? 0 }} / 44；模型用量 {{ report.batchAnalysis.usage?.totalTokens?.toLocaleString() ?? '未返回' }} token。</p>
-        <div class="filters"><el-select v-model="cohort" aria-label="证据分析范围"><el-option value="eligible26" label="可核算工单专项分析"/><el-option value="original44" label="全部109张工单的补查分析"/></el-select><el-select v-model="section" aria-label="分析板块" clearable placeholder="全部板块"><el-option v-for="(label,id) in labels" :key="id" :value="id" :label="label"/></el-select></div>
+        <p role="status">{{ report.contract.live?'规则核对已更新，本地AI解读与用量见上方持续采集报告':report.batchAnalysis.status==='complete'?'分析已完成':report.batchAnalysis.status==='failed'?'部分分析暂不可用，正在等待恢复':'分析排队中，已完成的工单可先查看' }}</p>
+        <p v-if="report.contract.live" class="note">本期逐单规则核对 {{ completedOrders }} / {{ report.contract.eligibleOrders }}；历史补查 {{ report.batchAnalysis.cohorts.original44?.analyzed ?? 0 }} / {{report.contract.originalRemainingFacts}}。本地AI解读与用量在上方持续采集报告中查看。</p><p v-else class="note">逐单分析 {{ completedOrders }} / {{ report.contract.eligibleOrders }}；补查 {{ report.batchAnalysis.cohorts.original44?.analyzed ?? 0 }} / 44；模型用量 {{ report.batchAnalysis.usage?.totalTokens?.toLocaleString() ?? '未返回' }} token。</p>
+        <div class="filters"><el-select v-model="cohort" aria-label="证据分析范围"><el-option :value="report.contract.live?'eligible_live':'eligible26'" label="可核算工单专项分析"/><el-option value="original44" label="原109张工单的历史补查分析"/></el-select><el-select v-model="section" aria-label="分析板块" clearable placeholder="全部板块"><el-option v-for="(label,id) in labels" :key="id" :value="id" :label="label"/></el-select></div>
         <p class="note">{{ cohort==='original44'?'以下来自原109张工单，不代表上方筛选工单。':'以下来自本轮全部可核算工单。' }}</p>
         <details v-for="f in visibleFacts" :key="f.factId" class="fact"><summary>{{ labels[f.sectionId] }} · {{ localizeBlacklakeText(f.whatItMeans) }}</summary><p>{{ localizeBlacklakeText(f.whyItMatters) }}</p><p>怎么处理：{{ localizeBlacklakeText(f.nextStep) }}（{{ f.owner }}）</p><p>{{ localizeBlacklakeText(f.display.text) }}</p><p class="note">{{ localizeBlacklakeText(f.cannotConclude) }}</p><UButton color="neutral" variant="outline" @click="openChat(f)">追问这项分析</UButton></details>
         <el-pagination v-model:current-page="page" :page-size="6" :total="facts.length" layout="prev, pager, next, total"/>

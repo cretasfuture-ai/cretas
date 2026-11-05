@@ -263,6 +263,10 @@ def ensure_worker(config):
 
 async def reconcile_windows(config, db, key, limit=10):
     """Requeue stored windows once per source revision, without losing older windows."""
+    if os.environ.get('BLACKLAKE_LIVE_CONFIG'):
+        # Minute collection has one coalescing analysis lane in live_api;
+        # reopening every saved historical range each minute would flood the model.
+        return 0
     from smartbi.services.period_windows import parse_window
     from smartbi.services.period_reports import DEFINITION_VERSION
     from .full_archive import digest
@@ -360,8 +364,14 @@ async def stop_workers():
 
 
 def schedule_status():
-    return {'enabled': os.environ.get('BLACKLAKE_PERIOD_SCHEDULER_ENABLED') == '1',
-            'timezone': 'Asia/Shanghai', 'lastTick': _last_tick, 'message': _schedule_error or
+    live_state=None
+    if os.environ.get('BLACKLAKE_LIVE_CONFIG'):
+        from .live_monitor import config,status
+        try:live_state=status(config(os.environ['BLACKLAKE_LIVE_CONFIG']))
+        except Exception:live_state={'enabled':False,'nightly':{'error':'持续计划状态暂不可读，请核对本机服务。'}}
+    return {'enabled': os.environ.get('BLACKLAKE_PERIOD_SCHEDULER_ENABLED') == '1' or bool(live_state and live_state['enabled']),
+            'executionLane':'live_nightly' if os.environ.get('BLACKLAKE_LIVE_CONFIG') else 'period_scheduler',
+            'timezone': 'Asia/Shanghai', 'lastTick': (live_state or {}).get('nightly',{}).get('lastSuccessAt') or _last_tick, 'message': (live_state or {}).get('nightly',{}).get('error') or _schedule_error or
             '每晚23:55按已同步数据分析；停机后从持久检查点补跑（首次启用回看两天），新快照会逐批复核已保存范围，旧版本保留。',
             'rules': [{'label': '日报', 'description': '每晚23:55分析当天，并补齐前一天的已结束周期。'},
                       {'label': '周报', 'description': '周日晚23:55分析本周；周一晚补齐上周。'},

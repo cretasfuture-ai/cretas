@@ -106,4 +106,13 @@ def source_revision(config, path, bom_path=None, supplement_path=None):
         supplement=json.loads(candidate.read_text(encoding='utf8'))
         if (supplement.get('tenant_id'),str(supplement.get('source_factory_id')),supplement.get('baselineRunId'),supplement.get('parentObservationId')) != (config['tenant_id'],str(config['source_factory_id']),config['run_id'],observation['probeId']):
             raise ValueError('OPERATIONS_SUPPLEMENT_SCOPE_MISMATCH')
-    return config['run_id']+':operations:'+digest({'observation':observation,'bom':bom,'supplement':supplement,'projection':3})
+    live_hash=None
+    import os
+    if os.environ.get('BLACKLAKE_LIVE_CONFIG'):
+        from .live_monitor import config as live_config, latest
+        live=live_config(os.environ['BLACKLAKE_LIVE_CONFIG'])
+        if (live['tenant_id'],str(live['source_factory_id']),live['baselineRunId'])!=(config['tenant_id'],str(config['source_factory_id']),config['run_id']):
+            raise ValueError('LIVE_REVISION_SCOPE_MISMATCH')
+        p=latest(live)
+        if p:live_hash=digest(p['data'])
+    return config['run_id']+':operations:'+digest({'observation':observation,'bom':bom,'supplement':supplement,'live':live_hash,'projection':3})

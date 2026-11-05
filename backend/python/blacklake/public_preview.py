@@ -22,7 +22,7 @@ from .period_contract import PeriodSelection
 TENANT = 'BLACKLAKE_POC_TEST'
 UPSTREAM = 'http://127.0.0.1:8095'
 PREFIX = '/smartbi-api/api/smartbi/blacklake/'
-GET_ROUTES = {'analysis', 'complete-cost-analysis', 'cost-traceability', 'period-reports', 'period-schedule'}
+GET_ROUTES = {'analysis', 'complete-cost-analysis', 'cost-traceability', 'period-reports', 'period-schedule', 'live-monitor'}
 POST_ROUTES = {'sections/followup', 'complete-cost-analysis/followup', 'period-reports'}
 QUERY_KEYS = {'start_date', 'end_date', 'basis', 'kind', 'mode'}
 SECRET_KEYS = {'accesstoken', 'refreshtoken', 'token', 'password', 'jwtsecret', 'apikey', 'authorization',
@@ -169,7 +169,12 @@ def create_app(dist: Path, origin: str, broker=None, transport=None):
         if not allowed:
             return failure('公开预览仅支持查看和分析，不保存跟进或修改业务数据', 403)
         summary_query=request.method=='GET' and resource=='period-reports'
-        allowed_query=QUERY_KEYS|({'summaries_only'} if summary_query else set())
+        live_query=request.method=='GET' and resource=='live-monitor'
+        allowed_query=({'history_offset'} if live_query else QUERY_KEYS)|({'summaries_only'} if summary_query else set())
+        if 'history_offset' in request.query_params:
+            offsets=request.query_params.getlist('history_offset')
+            if not live_query or len(offsets)!=1 or not re.fullmatch(r'\d{1,7}',offsets[0]) or int(offsets[0])>1000000:
+                return failure('持续采集记录页码无效',400)
         if set(request.query_params) - allowed_query:
             return failure('不支持的筛选条件', 400)
         if 'summaries_only' in request.query_params and request.query_params.getlist('summaries_only')!=['true']:

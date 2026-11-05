@@ -8,13 +8,14 @@ export interface CostDataRequest {
 }
 
 export interface CompleteCostFact {
-  factId: string; cohort: 'original44' | 'eligible26'; sectionId: string; kind: string;
+  factId: string; cohort: 'original44' | 'eligible26' | 'eligible_live'; sectionId: string; kind: string;
+  historical?:boolean;engine?:string;sourceRunId?:string;sourceCheckedAt?:string;
   whatItMeans: string; whyItMatters: string; nextStep: string; owner: string; cannotConclude: string; hypotheses: string[];
   display: { text: string; entityRefs?: { projectId: number; projectCode?: string }[] };
 }
 export interface CompleteCostReport {
   schema: string; sourceRunId: string; sourceCheckedAt: string; analysis: BlacklakeAnalysis & { costTraceability: CostTraceabilityReport };
-  contract: { originalRemainingFacts: number; eligibleOrders: number; inventoryBoundary: string };
+  contract: { originalRemainingFacts: number; eligibleOrders: number; inventoryBoundary: string;live?:boolean };
   batchAnalysis: { status: string; expectedFacts: number; analyzedFacts: number; remainingFacts: number; results: CompleteCostFact[];
     cohorts: Record<string, { expected: number; analyzed: number }>; usage: LocalAIUsage | null; usageUnknownCalls?: number; jobs: Record<string, number> };
 }
@@ -76,7 +77,7 @@ export interface CostProject {
 export interface BlacklakeAnalysis {
   operationsSupplement?:{checkedAt:string;reportingUnitsRecovered:number;outputRecords:number;unresolvedOutputs:{outputId:number|string;projectId:number|string;reason:string}[];inventoryRecords:number;stockPairsQueried:number;stockPairsNotReturned:number;requests:{code:string;status:string;missing:string;owner:string;action:string;afterProvided:string}[]};
   latestCompletedDate?:string|null;
-  operationalSource?:{workOrdersCheckedAt:string;inventoryCheckedAt:string|null;baselineAnchor:string;observationId:string};
+  operationalSource?:{workOrdersCheckedAt:string;inventoryCheckedAt:string|null;materialReferencesCheckedAt?:string;bomReferencesCheckedAt?:string;referenceExplanation?:string;baselineAnchor:string;observationId:string};
   alertFollowups?: Record<string, AlertFollowup>;
   periodMetadata?: BlacklakePeriodMetadata;
   sectionInsights?: SectionInsightReport[];
@@ -89,7 +90,7 @@ export interface BlacklakeAnalysis {
     planActual: { productCode?:string|null;product: string; unit: string; planned: number | null; actual: number | null; projects: number; plannedMissing: number; actualMissing: number }[];
     quality: { productCode?:string|null;processId?:number|string|null;product: string; process: string; unit: string; good: number | null; defective: number | null; goodRate: number | null; records: number; missingRecords: number }[];
     processes: { processId?:number|string|null;projectIds?:(number|string)[];process: string; tasks: number; hours: number | null; inProgress: number; missingDurationTasks: number }[]; };
-  inventory: { records: { productCode?:string|null;warehouseKey?:string;warehouseCode?:string;product: string; warehouse: string; unit: string; quantity: number | null }[];
+  inventory: { reconciliations?:import('./blacklake-live').StockReconciliationRow[]; records: { productCode?:string|null;warehouseKey?:string;warehouseCode?:string;product: string; warehouse: string; unit: string; quantity: number | null }[];
     byWarehouseUnit: { warehouseKey?:string;warehouse: string; unit: string; quantity: number | null; records: number; missing: number }[]; pairsNotReturned: number | null; movementOrders: number;balanceAsOf?:string|null;lastAvailableBalanceAt?:string|null; };
   cost: { projects: CostProject[]; projectDates?: Record<string, { completedAt: string | null; createdAt: string | null }>; materials: { materialCode: string; material: string; unit: string; netConsumption: number | null; recognizedCost: number | null; lines: number;missingCostLines?:number }[];
     linkedMaterialLines: number; unlinkedMaterialLines: number; excludedUnapprovedOrders: number; knownMaterialCostLines: number; sourceZeroCostLines: number; knownLaborTasks: number; unitCostAvailableProjects: number; fullManufacturingCost: null; grossProfit: null; };
