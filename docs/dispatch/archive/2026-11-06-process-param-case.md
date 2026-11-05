@@ -1,6 +1,6 @@
 # ARTIFACT-PARAM-CASE-20261106
 
-Base 2de52fb66e7caaf892d9430afba23e8b81d5e57d；Owner food/root，backend唯一写者param_executor；worktree C:/Users/Steve/cretas-food-dag-canvas-20261105，branch codex/process-param-deviation-case-20261106。复用本组已完成PhaseA的clean副本，不新增worktree，不清理他人。
+原始Base 2de52fb66e7caaf892d9430afba23e8b81d5e57d；Owner food/root，backend唯一写者param_executor；worktree C:/Users/Steve/cretas-food-dag-canvas-20261105，branch codex/process-param-deviation-case-20261106。复用本组已完成PhaseA的clean副本，不新增worktree，不清理他人。
 
 Scope：ShortageCase.SourceType与必要source-specific action隔离；新增entity/shortage/ProcessParamDeviationCaseDetail、repository/shortage/ProcessParamDeviationCaseDetailRepository、service/shortage/ProcessParamDeviationCase*、controller/ProcessParamDeviationCaseController及DTO、现有YieldReportServiceImpl与ClerkProcessEntryService两个真实报工事务接点、相应窄Contract/真实JPA/PG测试；必要现有ProcessParamDeviationService/DTO仅本feature接线。迁移唯一预留V20261106_1__process_param_deviation_case.sql，正式发布前重新核主线/线上/各组冻结唯一号，不启out-of-order。Supplier、Material、SOP、AI Gateway、CI/发布脚本、原审批权限矩阵、其他组范围禁止。
 
@@ -16,3 +16,6 @@ Web执行授权冻结：任务ARTIFACT-PARAM-CASE-WEB-20261106，Base2de52fb66e7
 
 最终集成Base更新56a93c20e58f64281c0c584f02be5a0884597bbd（95已正式上线），源3b716+正常merge dab45。四项风险已闭：真实SQL首句5s锁超时且helper不替设；case→detail统一锁与刷新/关闭真实PG barrier；同厂active+PermissionService实际RW负责人；JPA固定隔离H2。App服务端权威工序名覆盖客户字段，Clerk旧来源保持。最终Service7/JPA1/PG1+4，Web未变API/page证据复用+新Panel9与type0，root staged diff-check实际补正仅自有新docs CRLF。
 root最终追加Scope：ProcessParamDeviationCaseRolloutContractTest真实ConfigData分别prod/pg-prod默认禁写与显式覆盖，避免先前SOP实际profile遗漏复发；CI PG选择器保留最新main74类完整前缀，仅append本组3类。官方18类Java与一次Web build/stage、同headCI、正常PR/merge、兼容A发布/0新source验证后，再独立B启用与同F006 QA业务验收。当前source不能称已部署。
+
+最终review Base为 bfe0f7481be2318e2f598b17a4818f8e91e7d541；source正常整合已发布APS f158及其docs bfe，原dab45的实际第二parent为f158（共享origin ref已由并行fetch推进），并非56a9，最终父链已核。只自有ACTIVE行已归档并释放source写锁，未删他组行。候选将以本组先行SOP编码修复PR1498作为stack base（36138083e0），单独PR只展示参数case；官方组合19类明确包含URI守卫。1498正常入main后再retarget main，必须证明Java/Web tree相等才复用制品，不部署缺main源码的旧jar。
+PhaseA implementation状态review，真实迁移95已线上成功，V20261106_1仍唯一未发布，无out-of-order。默认及prod/pg-prod通过实际writer注入保持禁写，兼容A正式发布/0新source行后再独立启用；此归档不把未完成CI/部署/业务计为完成。
