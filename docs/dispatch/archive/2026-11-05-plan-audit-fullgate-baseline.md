@@ -17,7 +17,11 @@ UserDisableTool、CustomerCrmStatusQueryTool、InvoiceStatusTool 的三处描述
 
 ## 其余门禁
 
-目录退役相关四类测试由独立执行者维护，只改测试以守住当前 main 的过滤和只读目录契约；不得恢复退役餐饮能力或旧召回混合写链。完整回执将在同批交付时补齐。
+目录退役相关四类测试只改测试以守住当前 main 的过滤和只读目录契约。返回值比较意图、置信度、匹配方法、输入及非空候选，保留 cache/Python/legacy 的调用次数与上下文断言；缓存 put 保留原 `eq(py)` 契约，生产先缓存原结果再过滤返回值。两条餐饮上下文测试仍验证绕开 cache/Python，但退役意图必须 no-match。
+
+收入报告生成已退役，要求 `UNSUPPORTED_CAPABILITY` 且整个派发器无交互。三个餐饮 Skill 用例验证默认缺席及真实 register 后仍被拒绝，并用允许的工厂 Skill 注册成功作阳性对照。召回评估的工具列表精确为五项只读工具，明确不含冻结、通知、监管上报三个旧写工具；按正式“召回评估”触发词验证，不恢复旧混合写链或扩展“启动召回”的产品语义。Mockito 保持严格模式。
+
+独立执行者提交 `4c5bc0c669`，root 整合后补强缓存原值、完整零派发、注册阴性/阳性对照，六类最终冻结验证：`mvn -B test -Dtest=AIIntentServiceImplPythonIntegrationTest,WriteGuardWiringTest,RestaurantSkillsRegistrationTest,FoodSafetySkillRegistrationTest,FactoryIntentCatalogContractTest,FactoryCatalogRuntimeBindingContractTest -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx2g"`。40 项全部执行，0 failures/errors/skips，退出码 0，2026-11-05 11:12 +08:00；本机日志 `C:/Users/Steve/cretas-audit-evidence-20261105/catalog-final-targeted.log`。独立只读复核确认三处补强关闭，未改产品源码、目录、失败基线或 CI 选择器。
 
 ## 库存流水测试夹具
 

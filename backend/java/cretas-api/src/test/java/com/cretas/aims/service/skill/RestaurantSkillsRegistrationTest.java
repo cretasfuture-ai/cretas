@@ -1,5 +1,6 @@
 package com.cretas.aims.service.skill;
 
+import com.cretas.aims.dto.skill.SkillDefinition;
 import com.cretas.aims.repository.smartbi.SmartBiSkillRepository;
 import com.cretas.aims.service.skill.impl.SkillRegistryImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -9,13 +10,14 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Collections;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit test for 2 new restaurant skills added in P2.7.
+ * Retired restaurant skills remain absent and cannot be registered at runtime.
  *
  * Constructs {@link SkillRegistryImpl} directly with mocked dependencies
  * and invokes the private {@code initializeDefaultSkills()} via reflection.
@@ -50,17 +52,31 @@ class RestaurantSkillsRegistrationTest {
 
     @Test
     void retiredRestaurantDiagnosticsSkillIsRejected() {
-        assertThat(registry.getSkill("restaurant-diagnostics")).isEmpty();
+        assertRetiredSkillCannotRegister("restaurant-diagnostics");
     }
 
     @Test
     void retiredRestaurantChainAnalysisSkillIsRejected() {
-        assertThat(registry.getSkill("restaurant-chain-analysis")).isEmpty();
+        assertRetiredSkillCannotRegister("restaurant-chain-analysis");
     }
 
     @Test
     void retiredRestaurantOperationsAndWastageSkillsAreRejected() {
-        assertThat(registry.getSkill("restaurant-operations")).isEmpty();
-        assertThat(registry.getSkill("restaurant-wastage")).isEmpty();
+        assertRetiredSkillCannotRegister("restaurant-operations");
+        assertRetiredSkillCannotRegister("restaurant-wastage");
+    }
+
+    private void assertRetiredSkillCannotRegister(String name) {
+        assertThat(registry.getSkill(name)).isEmpty();
+        SkillDefinition candidate = SkillDefinition.builder().name(name).enabled(true)
+                .tools(List.of("batch_full_trace")).triggers(List.of("退役能力探针")).build();
+        registry.register(candidate);
+        assertThat(registry.getSkill(name)).as("retired names cannot re-enter through register")
+                .isEmpty();
+
+        SkillDefinition allowed = SkillDefinition.builder().name("factory-retirement-positive-control")
+                .enabled(true).tools(List.of("batch_full_trace")).triggers(List.of("工厂追溯探针")).build();
+        registry.register(allowed);
+        assertThat(registry.getSkill(allowed.getName())).containsSame(allowed);
     }
 }

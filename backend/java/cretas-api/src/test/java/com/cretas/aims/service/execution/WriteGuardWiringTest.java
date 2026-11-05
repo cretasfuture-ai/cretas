@@ -49,6 +49,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -254,8 +255,7 @@ class WriteGuardWiringTest {
                 orchestrator.executeWithExplicitIntent(FACTORY, request, USER_ID, ROLE);
 
         assertThat(response.getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
-        verify(toolDispatchService, never())
-                .executeWithTool(any(), anyString(), any(), any(), anyLong(), anyString(), any());
+        verifyNoInteractions(toolDispatchService);
     }
 
     // ================= (d) previewOnly write → not blocked =================

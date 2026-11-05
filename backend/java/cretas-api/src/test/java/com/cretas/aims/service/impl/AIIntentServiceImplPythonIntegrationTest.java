@@ -2,7 +2,6 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.cache.IntentResultCache;
 import com.cretas.aims.client.PythonAiMatcherClient;
-import com.cretas.aims.ai.catalog.FactoryIntentCatalog;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.intent.PythonIntentMatchRequest;
 import com.cretas.aims.entity.config.AIIntentConfig;
@@ -147,11 +146,8 @@ class AIIntentServiceImplPythonIntegrationTest {
                 "查询订单", "F001", 3, 22L, "admin", null);
 
         assertSemanticMatch(py, result);
-        org.mockito.ArgumentCaptor<IntentMatchResult> cached =
-                org.mockito.ArgumentCaptor.forClass(IntentMatchResult.class);
         verify(cache, times(1))
-                .put(eq("查询订单"), eq("F001"), eq("admin"), eq("FACTORY"), cached.capture());
-        assertSemanticMatch(py, FactoryIntentCatalog.filterResult(cached.getValue()));
+                .put(eq("查询订单"), eq("F001"), eq("admin"), eq("FACTORY"), eq(py));
         verify(pipelineService, never())
                 .recognizeIntentWithConfidence(anyString(), anyString(), anyInt(),
                         any(), anyString(), any());
@@ -213,7 +209,6 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "先别入库", "F001", 3, 22L, "admin", null);
 
-        none.setTopCandidates(java.util.List.of());
         assertCatalogNoMatch(result, "先别入库");
         verify(pipelineService, never())
                 .recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), anyString(), any());

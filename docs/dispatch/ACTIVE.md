@@ -9,7 +9,7 @@
 
 - `SEC-INVENTORY-FIXTURE-GATE-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 072bf5681969a55029d929d00a6101a28ec92a15 — 仅InventoryLedgerServiceTest及归档，隔离新增FREE_GIFT查询与旧顺序夹具，保留8项失败的原业务断言；验收完整该类，不改生产库存/查询。
 - `SEC-PARAM-SCHEMA-GATE-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 072bf5681969a55029d929d00a6101a28ec92a15 — 参数扫描排除测试产物、3处描述业务化；scope LeakScanTest/ScopeContractTest/UserDisable/CustomerCrmStatus/InvoiceStatus及归档；验收两扫描类，阈值不增。
-- `SEC-FACTORY-CATALOG-TEST-20261105` — `in-progress` — Owner root/fix_1438 — Base 072bf5681969a55029d929d00a6101a28ec92a15 — 维护AIIntentPython/WriteGuardWiring/RestaurantSkills/FoodSafetySkill四测试类，按main已发布目录守卫更新21项旧期待；只改测试；目标四类+目录两Contract；不改库存。
+- `SEC-FACTORY-CATALOG-TEST-20261105` — `review` — Owner root/fix_1438 — Base 072bf5681969a55029d929d00a6101a28ec92a15 — 维护AIIntentPython/WriteGuardWiring/RestaurantSkills/FoodSafetySkill四测试类，按main已发布目录守卫更新21项旧期待；只改测试；目标四类+目录两Contract；不改库存。
 
 
 
