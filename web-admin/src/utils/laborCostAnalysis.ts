@@ -22,12 +22,12 @@ const divide=(a:number|null,b:number|null)=>finite(a)&&finite(b)&&b>0?a/b:null;
 
 /** Money rounded once; final positive-weight process receives the cent remainder. */
 export function allocateLaborByPersonHours(total:number|null,weights:(number|null)[]):(number|null)[]{
-  const unavailable=()=>weights.map(()=>null);
+  const unavailable=():null[]=>weights.map(():null=>null);
   if(!finite(total)||total<0||!weights.length||weights.some(w=>!finite(w)||w<0))return unavailable();
   const totalWeight=sum(weights);if(totalWeight===null||totalWeight<=0)return unavailable();
   const cents=Math.round((total+Number.EPSILON)*100);
   if(!Number.isSafeInteger(cents))return unavailable();
-  const last=weights.findLastIndex(w=>w!==null&&w>0);let used=0;
+  let last=-1;for(let index=weights.length-1;index>=0;index--){if(finite(weights[index])&&weights[index]!>0){last=index;break;}}let used=0;
   return weights.map((w,index)=>{
     const share=index===last?cents-used:Math.min(cents-used,Math.round(cents*(w as number)/totalWeight));
     used+=share;return share/100;
@@ -42,7 +42,7 @@ export function analyzeLaborCosts(input:LaborCostInput){
   const personHours=sum(rows.map(row=>finite(row.personHours)&&row.personHours>=0?row.personHours:null));
   const rosterReady=rows.length>0&&rows.every(row=>row.rosterComplete===true&&!!row.workerIds?.length&&row.workerIds.every(id=>typeof id==='string'&&id.trim().length>0));
   const participants=rosterReady?new Set(rows.flatMap(row=>row.workerIds?.map(id=>id.trim())||[])).size:null;
-  const preview=reconciled?allocateLaborByPersonHours(total,rows.map(row=>row.personHours)):rows.map(()=>null);
+  const preview=reconciled?allocateLaborByPersonHours(total,rows.map(row=>row.personHours)):rows.map(():null=>null);
   return {
     total,detailTotal,reconciled,personHours,participants,
     perPerson:reconciled?divide(total,participants):null,

@@ -13,8 +13,8 @@ describe('cost alert page remains readable with incomplete identity or unavailab
     const review: EligibleCostReview = { eligibleProjects: 2, products: 0, rankings: [], projects: [{ ...project, materialPerFinished: 5, laborPerFinished: 2, laborShare: 2 / 7, components: [] }, { ...project, projectId: 2, projectCode: 'P2', materialPerFinished: 5, laborPerFinished: 2, laborShare: 2 / 7, components: [] }], limitations: [] };
     const wrapper = shallowMount(BlacklakeCostAlerts, { props: { alerts, review }, global: { renderStubDefaultSlot: true, stubs: { ElTable: { name: 'ElTable', props: ['data'], template: '<div><slot /></div>' }, ElTableColumn: { template: '<span />' } } } });
     await wrapper.vm.$nextTick();
-    const tables = wrapper.findAllComponents({ name: 'ElTable' });
-    expect(tables.some(t => Array.isArray(t.props('data')) && t.props('data').length === 2 && t.props('data')[0].projectCode === 'P1')).toBe(true);
+    const tables = wrapper.findAllComponents({ name: 'CostDataTable' });
+    expect(tables.some(t => Array.isArray(t.props('rows')) && t.props('rows').length === 2 && t.props('rows')[0].projectCode === 'P1')).toBe(true);
     expect(wrapper.text()).toContain('AI不可用，规则仍可用');
     expect(wrapper.text()).toContain('2 张工单');
   });

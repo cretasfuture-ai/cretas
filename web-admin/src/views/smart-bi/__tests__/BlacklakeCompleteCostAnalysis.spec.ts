@@ -65,7 +65,7 @@ it('paginates 1000 orders and resets the page when filters change',async()=>{
   expect(buttons()).toHaveLength(0);
   expect(page.findAll('button').filter(b=>b.text()==='查看产品分析')).toHaveLength(1);
   await page.findAll('button').find(b=>b.text()==='查看产品分析')!.trigger('click');
-  expect(buttons()).toHaveLength(20);const pager=page.findAllComponents({name:'ElPagination'})[0]!;
+  expect(buttons()).toHaveLength(20);const pager=page.find('[data-testid="review-order-table"]').findComponent({name:'ElPagination'});
   expect(pager.props('total')).toBe(1000);pager.vm.$emit('update:currentPage',50);await flushPromises();expect(buttons()).toHaveLength(20);
   page.findAllComponents({name:'ElSelect'})[0]!.vm.$emit('update:modelValue','all');await flushPromises();expect(page.findAllComponents({name:'ElPagination'})[0]!.props('currentPage')).toBe(1);expect(buttons()).toHaveLength(0);page.unmount();
 });

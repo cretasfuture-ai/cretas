@@ -43,6 +43,7 @@ const analysis = {
 
 describe('Blacklake prototype page', () => {
   const asyncPageStubs = {
+  CostDataTable: {props:['rows'],template:'<div><span v-for="(row,i) in rows" :key="i">{{ row.product }}</span><slot/></div>'},
     BlacklakePeriodControls: { name: 'BlacklakePeriodControls', emits: ['change'], template: '<button data-testid="period-change" @click="$emit(\'change\', { start_date: \'2026-11-02\', end_date: \'2026-11-02\', basis: \'completed\', kind: \'day\' })">change</button>' },
     BlacklakePeriodAnalysis: { name: 'BlacklakePeriodAnalysis', template: '<div><slot /></div>' },
     BlacklakePrototypeCostIntelligence: true,
@@ -67,7 +68,7 @@ describe('Blacklake prototype page', () => {
 
   it('keeps project-linked alerts visible in the cost table path', async () => {
     vi.mocked(getBlacklakeAnalysis).mockResolvedValue({ ...analysis });
-    const wrapper = shallowMount(BlacklakePrototypeAnalysis, { global: { stubs: {
+    const wrapper = shallowMount(BlacklakePrototypeAnalysis, { global: { stubs: { CostDataTable:{props:['rows'],template:'<div><span v-for="(row,i) in rows" :key="i">{{ row.product }}</span><slot/></div>'},
       DynamicChartRenderer: true,
       PrototypeSectionInsight: true,
       BlacklakePrototypeCostAlerts: { template: '<div />' },
@@ -98,7 +99,7 @@ describe('Blacklake prototype page', () => {
   it('passes the GET fingerprint and force=true on failed retry', async () => {
     vi.mocked(getBlacklakeAnalysis).mockResolvedValue({ ...analysis });
     vi.mocked(createBlacklakePeriodReport).mockResolvedValueOnce({ id: 'failed', status: 'failed', period: { startDate: '2026-11-04', endDate: '2026-11-04', kind: 'day', basis: 'completed', timezone: 'Asia/Shanghai' }, fingerprint: 'f'.repeat(64), revision: 1, createdAt: '2026-11-04T23:00:00+08:00', error: '失败' });
-    const wrapper = shallowMount(BlacklakePrototypeAnalysis, { global: { stubs: {
+    const wrapper = shallowMount(BlacklakePrototypeAnalysis, { global: { stubs: { CostDataTable:{props:['rows'],template:'<div><span v-for="(row,i) in rows" :key="i">{{ row.product }}</span><slot/></div>'},
       ...asyncPageStubs,
       BlacklakePeriodAnalysis: { name: 'BlacklakePeriodAnalysis', emits: ['retry'], template: '<button data-testid="retry-period" @click="$emit(\'retry\')">retry</button>' },
     } } });

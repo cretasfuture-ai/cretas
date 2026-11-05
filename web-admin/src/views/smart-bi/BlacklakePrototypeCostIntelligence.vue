@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import CostDataTable from '@/components/smartbi/CostDataTable.vue';
 import { computed, ref } from 'vue';
 import VChart from 'vue-echarts';
 import '@/utils/echarts';
@@ -54,14 +55,7 @@ const chartOption = computed<Record<string, unknown>>(() => {
           <h4>差异从哪里来：{{ comparison.bridge.comparisonProject }} 对比 {{ comparison.bridge.baselineProject }}</h4>
           <p>{{ localizeBlacklakeText(comparison.bridge.selection) }}</p>
           <div class="metrics bridge-metrics"><div><small>材料单位成本差额</small><strong>{{ fmt(comparison.bridge.materialDelta) }}</strong></div><div><small>人工单位成本差额</small><strong>{{ fmt(comparison.bridge.laborDelta) }}</strong></div><div><small>单位直接成本差额</small><strong>{{ fmt(comparison.bridge.delta) }} / {{ comparison.unit }}</strong></div></div>
-          <el-table :data="comparison.bridge.materials" stripe data-testid="prototype-cost-bridge-materials">
-            <el-table-column prop="material" label="原料" min-width="180" />
-            <el-table-column label="基准单位耗用" min-width="145"><template #default="{ row }">{{ fmt(row.baselineUsage) }} {{ row.unit }}/{{ comparison.unit }}</template></el-table-column>
-            <el-table-column label="对比单位耗用" min-width="145"><template #default="{ row }">{{ fmt(row.comparisonUsage) }} {{ row.unit }}/{{ comparison.unit }}</template></el-table-column>
-            <el-table-column label="材料成本差额" min-width="130"><template #default="{ row }">{{ fmt(row.delta) }}</template></el-table-column>
-            <el-table-column label="耗用量影响" min-width="130"><template #default="{ row }">{{ fmt(row.usageEffect) }}</template></el-table-column>
-            <el-table-column label="单价影响" min-width="140"><template #default="{ row }">{{ fmt(row.priceEffect) }}</template></el-table-column>
-          </el-table>
+          <CostDataTable :rows="comparison.bridge.materials" :columns="[{key:'material',label:'原料',type:'text',minWidth:180},{key:'baselineUsage',label:'基准单位耗用',type:'number',minWidth:145},{key:'comparisonUsage',label:'对比单位耗用',type:'number',minWidth:145},{key:'delta',label:'材料成本差额',type:'number',minWidth:130},{key:'usageEffect',label:'耗用量影响',type:'number',minWidth:130},{key:'priceEffect',label:'单价影响',type:'number',minWidth:140}]" paginate   stripe data-testid="prototype-cost-bridge-materials"><template #baselineUsage="{row}">{{ fmt(row.baselineUsage) }} {{ row.unit }}/{{ comparison.unit }}</template><template #comparisonUsage="{row}">{{ fmt(row.comparisonUsage) }} {{ row.unit }}/{{ comparison.unit }}</template><template #delta="{row}">{{ fmt(row.delta) }}</template><template #usageEffect="{row}">{{ fmt(row.usageEffect) }}</template><template #priceEffect="{row}">{{ fmt(row.priceEffect) }}</template></CostDataTable>
           <p class="note">材料差额与人工差额只是数学拆分，不能单独证明涨价、损耗或人员效率原因；新增材料项也不会被强行拆分。</p>
         </template>
         <div class="findings"><h4>需要关注</h4><p v-for="text in card.findings.attention" :key="text">{{ localizeBlacklakeText(text) }}</p><h4>建议核对</h4><p v-for="text in card.findings.suggestions" :key="text">{{ localizeBlacklakeText(text) }}</p></div>
@@ -71,18 +65,20 @@ const chartOption = computed<Record<string, unknown>>(() => {
   </section>
   <section v-else class="intelligence" data-testid="prototype-cost-gap-evidence">
     <BlacklakeCostTraceability />
+    <details><summary>其他领退料与价格核对线索</summary>
     <el-alert v-if="gap.status !== 'complete'" type="warning" :closable="false" :title="gap.status === 'period_not_verified' ? '所选日期尚未完成独立关联补查。这里不把全历史补查数量当作本期结果；可返回全部已采集查看原补查记录。' : '补查证据暂不可用，当前保留原记录，不猜填关联或成本。'" />
     <template v-else>
       <el-alert type="success" :closable="false" :title="`${summary.materialsQueryVerified || 0} 条用料记录的父级查询已交叉核实`" />
       <p class="note">已核对 {{ summary.materialProjectsChecked || 0 }}/{{ summary.materialProjectsExpected || 0 }} 张工单；负对照：{{ gap.negativeControlVerified ? '源端明确拒绝不存在的工单' : '未形成有效证据' }}。来源回执未直接给出所属工单，已用查询时填写的工单编号交叉核对，没有猜填关联。</p>
       <div class="metrics"><div><small>仍无工单关联的领退料</small><strong>{{ summary.unlinkedStillMissing || 0 }} 行</strong></div><div><small>补查仍为零的领料金额</small><strong>{{ summary.zeroAmountsReconfirmed || 0 }} 行</strong></div><div><small>当前移动均价线索</small><strong>{{ summary.productsWithCurrentPriceClues || 0 }} 种物料</strong></div></div>
-      <el-card shadow="never"><h3>还没有闭合的关联</h3><el-table :data="gap.unresolvedLinks || []" stripe><el-table-column prop="orderCode" label="来源领退料单" min-width="180" /><el-table-column prop="material" label="物料" min-width="180" /><el-table-column label="源端状态" min-width="200"><template #default="{ row }">{{ row.status === 'source_still_has_no_link' ? '关联指针仍为空' : '源记录已变化或未返回，需重新核实' }}</template></el-table-column><el-table-column label="下一步核对" min-width="300"><template #default="{ row }">{{ localizeBlacklakeText(row.action) }}</template></el-table-column></el-table></el-card>
+      <el-card shadow="never"><h3>还没有闭合的关联</h3><CostDataTable :rows="gap.unresolvedLinks || []" :columns="[{key:'orderCode',label:'来源领退料单',type:'text',minWidth:180},{key:'material',label:'物料',type:'text',minWidth:180},{key:'status',label:'源端状态',type:'select',minWidth:200},{key:'action',label:'下一步核对',type:'text',minWidth:300}]" paginate   stripe><template #status="{row}">{{ row.status === 'source_still_has_no_link' ? '关联指针仍为空' : '源记录已变化或未返回，需重新核实' }}</template><template #action="{row}">{{ localizeBlacklakeText(row.action) }}</template></CostDataTable></el-card>
       <el-card shadow="never" class="section"><h3>价格线索 · 不回填历史实际成本</h3><p class="note">当前移动均价只能作为补查线索，不能代替历史领料成本；新增单据也不混入旧时点金额。</p>
-        <el-table :data="gap.currentPriceClues || []" stripe><el-table-column prop="material" label="物料" min-width="180" /><el-table-column prop="unit" label="来源单位" /><el-table-column label="当前移动均价"><template #default="{ row }">{{ fmt(row.price) }}</template></el-table-column><el-table-column prop="usage" label="证据限制" min-width="300" /></el-table>
+        <CostDataTable :rows="gap.currentPriceClues || []" :columns="[{key:'material',label:'物料',type:'text',minWidth:180},{key:'unit',label:'来源单位',type:'select'},{key:'price',label:'当前移动均价',type:'number'},{key:'usage',label:'证据限制',type:'text',minWidth:300}]" paginate   stripe><template #price="{row}">{{ fmt(row.price) }}</template></CostDataTable>
         <p class="note">查询时间：{{ checkedAt }}</p>
       </el-card>
     </template>
-    <el-card shadow="never" class="section"><h3>成本核对清单</h3><p class="note">同一工单可能有多个问题，以下数量不能相加当作工单数。BOM 单位与损耗口径未核实前，不计算标准耗用差异。</p><el-table :data="intelligence.worklist" stripe><el-table-column label="需要核对的问题" min-width="300"><template #default="{ row }">{{ localizeBlacklakeText(row.issue) }}</template></el-table-column><el-table-column prop="projects" label="涉及工单数" width="140" /></el-table></el-card>
+    </details>
+    <el-card shadow="never" class="section"><h3>成本核对清单</h3><p class="note">同一工单可能有多个问题，以下数量不能相加当作工单数。BOM 单位与损耗口径未核实前，不计算标准耗用差异。</p><CostDataTable :rows="intelligence.worklist" :columns="[{key:'issue',label:'需要核对的问题',type:'text',minWidth:300},{key:'projects',label:'涉及工单数',type:'number',count:true,width:140}]" paginate   stripe><template #issue="{row}">{{ localizeBlacklakeText(row.issue) }}</template></CostDataTable></el-card>
   </section>
 </template>
 
