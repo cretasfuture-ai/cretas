@@ -19,6 +19,12 @@ import java.util.Optional;
  */
 @Repository
 public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType, String> {
+    interface WriteStateProjection {
+        String getId();
+        Boolean getIsActive();
+        String getMergedIntoId();
+    }
+
     interface CodeConflictView {
         String getId();
         String getName();
@@ -46,6 +52,16 @@ public interface RawMaterialTypeRepository extends JpaRepository<RawMaterialType
     @Query("SELECT r FROM RawMaterialType r WHERE r.factoryId = :factoryId AND r.id IN :ids ORDER BY r.id")
     List<RawMaterialType> lockByFactoryIdAndIdIn(@Param("factoryId") String factoryId,
                                                  @Param("ids") Collection<String> ids);
+
+    /** Fresh scalar state check after the pessimistic lock; bypasses a stale persistence-context entity. */
+    @Query(value = "SELECT id AS \"id\", is_active AS \"isActive\", "
+            + "merged_into_id AS \"mergedIntoId\" "
+            + "FROM raw_material_types "
+            + "WHERE factory_id = :factoryId AND id IN (:ids) AND deleted_at IS NULL "
+            + "ORDER BY id", nativeQuery = true)
+    List<WriteStateProjection> findFreshWriteStateByFactoryIdAndIdIn(
+            @Param("factoryId") String factoryId,
+            @Param("ids") Collection<String> ids);
      /**
      * 查找工厂的所有原材料类型
       */

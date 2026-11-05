@@ -6,7 +6,10 @@ import com.cretas.aims.repository.RawMaterialTypeRepository;
 import org.springframework.stereotype.Component;
 
 import java.util.Collection;
+import java.util.Map;
+import java.util.function.Function;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Serializes new material references with material merge.  Callers must acquire
@@ -37,11 +40,22 @@ public class MaterialReferenceWriteGuard {
         if (locked.size() != ids.size()) {
             throw conflict("采购/工艺引用的物料不存在或不属于当前工厂");
         }
+        List<RawMaterialTypeRepository.WriteStateProjection> freshStates =
+                repository.findFreshWriteStateByFactoryIdAndIdIn(factoryId, ids);
+        if (freshStates.size() != ids.size()) {
+            throw conflict("采购/工艺引用的物料不存在或不属于当前工厂");
+        }
+        Map<String, RawMaterialTypeRepository.WriteStateProjection> stateById = freshStates.stream()
+                .collect(Collectors.toMap(RawMaterialTypeRepository.WriteStateProjection::getId, Function.identity()));
         for (RawMaterialType material : locked) {
-            if (!Boolean.TRUE.equals(material.getIsActive())) {
+            RawMaterialTypeRepository.WriteStateProjection state = stateById.get(material.getId());
+            if (state == null) {
+                throw conflict("采购/工艺引用的物料不存在或不属于当前工厂");
+            }
+            if (!Boolean.TRUE.equals(state.getIsActive())) {
                 throw conflict("物料「" + material.getName() + "」已停用，不能创建新引用");
             }
-            if (material.getMergedIntoId() != null) {
+            if (state.getMergedIntoId() != null) {
                 throw conflict("物料「" + material.getName() + "」已合并到别的物料，不能创建新引用");
             }
         }
