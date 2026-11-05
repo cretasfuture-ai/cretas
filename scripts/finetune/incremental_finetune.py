@@ -62,6 +62,8 @@ class FinetuneConfig:
     max_length: int = 64
     seed: int = 42
     label_mapping_path: Optional[str] = None
+    validation_data_path: Optional[str] = None
+    protected_test_path: Optional[str] = None
     eval_steps: int = 50
     save_steps: int = 100
     early_stopping_patience: int = 3
@@ -241,6 +243,14 @@ def run_finetuning(config: FinetuneConfig):
             unique_rows[key] = row
     merged_data = list(unique_rows.values())
 
+    validation_data = None
+    if getattr(config, 'validation_data_path', None) or getattr(config, 'protected_test_path', None):
+        if not getattr(config, 'validation_data_path', None) or not getattr(config, 'protected_test_path', None):
+            raise ValueError('Explicit validation and protected test files are required together')
+        from experiment_split_contract import validate_splits
+        validation_data = load_data(config.validation_data_path)
+        validate_splits(merged_data, validation_data, load_jsonl(config.protected_test_path))
+
     # 构建标签映射
     from training_label_contract import resolve_mapping
     label_to_id = resolve_mapping(config.model_path, config.label_mapping_path, merged_data)
@@ -285,9 +295,15 @@ def run_finetuning(config: FinetuneConfig):
     label_ids = [label_to_id[d["label"]] for d in merged_data]
 
     # 划分训练集和验证集
-    train_texts, val_texts, train_labels, val_labels = train_test_split(
-        texts, label_ids, test_size=0.1, random_state=config.seed, stratify=label_ids
-    )
+    if validation_data is not None:
+        resolve_mapping(config.model_path, config.label_mapping_path, validation_data)
+        train_texts, train_labels = texts, label_ids
+        val_texts = [d['text'] for d in validation_data]
+        val_labels = [label_to_id[d['label']] for d in validation_data]
+    else:
+        train_texts, val_texts, train_labels, val_labels = train_test_split(
+            texts, label_ids, test_size=0.1, random_state=config.seed, stratify=label_ids
+        )
 
     train_dataset = IntentDataset(train_texts, train_labels, tokenizer, config.max_length)
     val_dataset = IntentDataset(val_texts, val_labels, tokenizer, config.max_length)
@@ -382,6 +398,8 @@ def main():
     parser.add_argument("--freeze-layers", type=int, default=8, help="冻结前 N 层")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument('--label-mapping', help='Must exactly match the existing model label_to_id')
+    parser.add_argument('--validation-data', help='Fixed independent validation JSONL')
+    parser.add_argument('--protected-test-data', help='Protected test JSONL, never sampled for training')
 
     args = parser.parse_args()
 
@@ -389,6 +407,8 @@ def main():
         new_data_path=args.new_data,
         old_data_path=args.old_data,
         label_mapping_path=args.label_mapping,
+        validation_data_path=args.validation_data,
+        protected_test_path=args.protected_test_data,
         model_path=args.model_path,
         output_path=args.output_path,
         epochs=args.epochs,

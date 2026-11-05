@@ -29,6 +29,7 @@ import {
 } from '../../utils/blendRatio';
 import { isProcessSecretHidden } from '../../utils/processSecretField';
 import { reworkReasonRequiredMessage, type ReworkRatioInput } from '../../utils/reworkRatio';
+import { isSecondaryBatchSourceType } from '../../utils/secondaryProcessing';
 import ReworkRatioReasonModal from '../../components/processing/ReworkRatioReasonModal';
 import type { TaskMaterialBatchOption } from '../../services/api/yieldReportApi';
 import CcpReadingsSection from '../../components/processing/CcpReadingsSection';
@@ -740,9 +741,9 @@ const YieldStepReportScreen: React.FC = () => {
   const [semiQtyByCode, setSemiQtyByCode] = useState<Record<string, string>>({});
 
   // ── SP3 二次加工领半成品 ──
-  // 批次类型 (SEMI_FINISHED → 首道领厂内半成品库存而非原料)
+  // 批次类型 (后端写 SECONDARY; 旧值 SEMI_FINISHED 兼容 → 首道领厂内半成品库存而非原料)
   const [batchSourceType, setBatchSourceType] = useState<string | undefined>(undefined);
-  const isSecondaryProcessing = batchSourceType === 'SEMI_FINISHED';
+  const isSecondaryProcessing = isSecondaryBatchSourceType(batchSourceType);
   // 可用半成品库存列表 (仅二次加工首道加载)
   const [availableWipList, setAvailableWipList] = useState<SemiFinishedInventoryItem[]>([]);
   const [availableWipLoading, setAvailableWipLoading] = useState(false);

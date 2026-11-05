@@ -20,6 +20,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -32,6 +33,7 @@ import java.util.List;
  * <p>操作人取 JWT 验过的身份; 工厂用户的 token 必须属于路径上的工厂。
  */
 @RestController
+@Slf4j
 @RequiredArgsConstructor
 @RequestMapping("/api/mobile/{factoryId}/shortage-cases/{caseId}")
 @Tag(name = "缺料异常", description = "采购交接与人工决定")
@@ -97,14 +99,21 @@ public class ShortageCaseActionController {
         ActorRef actor = actor(http, factoryId);
         var result = actionService.createProcurementDraft(factoryId, caseId, request.getMaterialTypeId(), actor);
         // 执行后核对: 草稿还没下给供应商, 到货日不作数 —— 核对结果如实写回实例, 不默认成功
-        Long actionId = actionRepository.findByCaseIdAndMaterialTypeIdAndActionTypeAndStatus(caseId,
-                        request.getMaterialTypeId(), ShortageCaseAction.ActionType.PURCHASE_DRAFT,
-                        ShortageCaseAction.Status.DONE)
-                .map(ShortageCaseAction::getId).orElse(null);
-        ShortageCaseOutcomeCheck chk = outcomeChecks.check(factoryId, caseId,
-                ShortageCaseOutcomeCheck.Trigger.PURCHASE_DRAFT, actionId, actor);
-        return ApiResponse.success((result.reused() ? "已有在走的采购单, 未重复生成" : "采购草稿已生成")
-                + "; 核对结果: " + chk.getDetail(), result);
+        String written = result.reused() ? "已有在走的采购单, 未重复生成" : "采购草稿已生成";
+        try {
+            Long actionId = actionRepository.findByCaseIdAndMaterialTypeIdAndActionTypeAndStatus(caseId,
+                            request.getMaterialTypeId(), ShortageCaseAction.ActionType.PURCHASE_DRAFT,
+                            ShortageCaseAction.Status.DONE)
+                    .map(ShortageCaseAction::getId).orElse(null);
+            ShortageCaseOutcomeCheck chk = outcomeChecks.check(factoryId, caseId,
+                    ShortageCaseOutcomeCheck.Trigger.PURCHASE_DRAFT, actionId, actor);
+            return ApiResponse.success(written + "; 核对结果: " + chk.getDetail(), result);
+        } catch (RuntimeException checkFailure) {
+            // createProcurementDraft has already returned from its transaction. A later check
+            // failure cannot undo that draft or honestly be reported as a failed mutation.
+            log.error("采购草稿已返回但结果核对未完成: factoryId={}, caseId={}", factoryId, caseId, checkFailure);
+            return ApiResponse.success(written + "; 结果核对未完成，交期是否达成尚未确认，请核对现有采购单，勿重复生成。", result);
+        }
     }
 
     public record OutcomeCheckView(Long id, Long actionId, String trigger, String verdict, String verdictLabel,

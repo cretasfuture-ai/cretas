@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: mysql-dockerfile
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       TZ: Asia/Shanghai
     restart: always
     container_name: joolun-mysql
@@ -58,6 +58,7 @@ services:
       - "7500:7500"
     environment:
       - TZ=Asia/Shanghai
+      - MALL_DRUID_LOGIN_PASSWORD
     volumes:
       - ./joolun/logs:/home/joolun/logs
       - ./joolun/uploadPath:/home/joolun/uploadPath

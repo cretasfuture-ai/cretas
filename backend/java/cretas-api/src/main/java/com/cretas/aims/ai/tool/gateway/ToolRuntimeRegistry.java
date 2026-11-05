@@ -45,11 +45,9 @@ public class ToolRuntimeRegistry {
      * gateway still decides the call (source, principal, permissions, confirmation).
      */
     public boolean isGoverned(String toolName) {
-        try {
-            return toolName != null && descriptorRegistry.findApproved(toolName).isPresent();
-        } catch (RuntimeException unavailableRuntimeTruth) {
-            return false;
-        }
+        // An unavailable policy is not evidence that a tool is ungoverned. Propagate the
+        // classification failure so callers cannot fall back to a legacy write path.
+        return toolName != null && descriptorRegistry.findApproved(toolName).isPresent();
     }
 
     public Optional<ResolvedTool> resolve(

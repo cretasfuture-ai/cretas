@@ -50,7 +50,7 @@ public class CustomerCrmStatusQueryTool extends AbstractBusinessTool {
 
         Map<String, Object> customerName = new HashMap<>();
         customerName.put("type", "string");
-        customerName.put("description", "客户名称 — customerId 不提供时按名称精确匹配单个客户");
+        customerName.put("description", "客户名称；未提供客户编号时，按名称精确匹配单个客户");
         properties.put("customerName", customerName);
 
         schema.put("properties", properties);

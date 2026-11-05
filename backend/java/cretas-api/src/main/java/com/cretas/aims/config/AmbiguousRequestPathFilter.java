@@ -25,12 +25,20 @@ import java.io.IOException;
  * truthful, instead of patching each one.
  *
  * <p>No legitimate client sends these: {@code encodeURIComponent} and {@code quote} never encode
- * letters, digits, {@code -}, {@code .} or {@code _}. An encoded separator is refused too; Tomcat
- * rejects it first today, and this holds if that default ever changes. Encoded values that real
- * ids and names need ({@code %3B}, {@code %20}, {@code %25}, UTF-8 bytes) still pass.
+ * letters, digits, {@code -}, {@code .} or {@code _}, and no id or name holds a control byte. An
+ * encoded separator is refused too; Tomcat rejects it first today, and this holds if that default
+ * ever changes. {@code %20}, {@code %25} and UTF-8 bytes still pass.
+ *
+ * <p>{@code %3B} passes this filter but does not survive every route here: the URI-form
+ * {@code proxy_pass} on the admin, web-admin and www vhosts decodes it, so it arrives as a real
+ * {@code ;} and is refused. A value holding {@code ;} cannot travel in a path through those vhosts.
+ *
+ * <p>Order: behind the {@code HIGHEST_PRECEDENCE} filters, which do not judge the path, so a refusal
+ * still carries its correlation id; ahead of {@code ClientErrorBodyLimitFilter} and
+ * {@link WebLoginSessionFilter}, which do.
  */
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 10)
+@Order(Ordered.HIGHEST_PRECEDENCE + 5)
 public class AmbiguousRequestPathFilter extends OncePerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(AmbiguousRequestPathFilter.class);
@@ -62,15 +70,16 @@ public class AmbiguousRequestPathFilter extends OncePerRequestFilter {
         for (int at = rawUri.indexOf('%'); at >= 0 && at + 2 < rawUri.length(); at = rawUri.indexOf('%', at + 1)) {
             int high = Character.digit(rawUri.charAt(at + 1), 16);
             int low = Character.digit(rawUri.charAt(at + 2), 16);
-            if (high >= 0 && low >= 0 && needsNoEncoding((char) (high * 16 + low))) {
+            if (high >= 0 && low >= 0 && refusedWhenEncoded((char) (high * 16 + low))) {
                 return true;
             }
         }
         return false;
     }
 
-    private static boolean needsNoEncoding(char decoded) {
-        return (decoded >= 'a' && decoded <= 'z') || (decoded >= 'A' && decoded <= 'Z')
+    private static boolean refusedWhenEncoded(char decoded) {
+        return decoded < 0x20 || decoded == 0x7F
+                || (decoded >= 'a' && decoded <= 'z') || (decoded >= 'A' && decoded <= 'Z')
                 || (decoded >= '0' && decoded <= '9')
                 || decoded == '-' || decoded == '.' || decoded == '_'
                 || decoded == '/' || decoded == '\\';
