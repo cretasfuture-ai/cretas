@@ -215,7 +215,8 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
     }
     private BusinessException materialReferenceConflict() {
         return new BusinessException(409, "供应物料引用在写入期间发生变化")
-                .withCode("MATERIAL_REFERENCE_CONFLICT");
+                .withCode("MATERIAL_REFERENCE_CONFLICT")
+                .withHint("请刷新供应物料列表，重新选择有效的供应物料后再保存采购规格");
     }
     private RawMaterialType ownedMaterial(String factoryId, String materialTypeId) {
         RawMaterialType material = materialRepository.findById(materialTypeId)

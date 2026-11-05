@@ -103,7 +103,11 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
 
         assertThatThrownBy(() -> service.create("F006", "sup", "rel", request("case", "kg", false)))
                 .isInstanceOfSatisfying(BusinessException.class,
-                        error -> assertThat(error.getErrorCode()).isEqualTo("MATERIAL_REFERENCE_CONFLICT"));
+                        error -> {
+                            assertThat(error.getCode()).isEqualTo(409);
+                            assertThat(error.getErrorCode()).isEqualTo("MATERIAL_REFERENCE_CONFLICT");
+                            assertThat(error.getActionHint()).contains("刷新供应物料列表", "重新选择有效的供应物料");
+                        });
         verifyNoInteractions(materialReferenceWriteGuard, entityManager, materialRepository);
         verify(repository, never()).saveAndFlush(any());
     }
@@ -167,7 +171,11 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
                 .when(entityManager).refresh(any(SupplierMaterial.class), eq(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE));
 
         assertThatThrownBy(() -> service.update("F006", "sup", "rel", "spec-1", request("case", "kg", false)))
-                .isInstanceOf(BusinessException.class)
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode()).isEqualTo("MATERIAL_REFERENCE_CONFLICT");
+                    assertThat(error.getActionHint()).contains("刷新供应物料列表", "重新选择有效的供应物料");
+                })
                 .hasMessageContaining("发生变化");
         verify(repository, never()).saveAndFlush(any());
     }
