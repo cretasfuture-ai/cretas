@@ -6,10 +6,15 @@ import com.cretas.aims.dto.material.MaterialMergeDTO;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.RawMaterialTypeService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,14 +50,35 @@ class MaterialAliasMergeContractTest {
     @Autowired private RawMaterialTypeService materialTypeService;
     @Autowired private MaterialAliasMergeService aliasMergeService;
     @Autowired private RawMaterialTypeRepository materialRepo;
+    @Autowired private UserRepository userRepo;
     @jakarta.persistence.PersistenceContext private jakarta.persistence.EntityManager entityManager;
+    private AuthenticatedActor.ActorScope actorScope;
 
     @BeforeEach
     void setUp() {
         jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
+        jdbc.update("INSERT INTO factories (id, name, type, level, is_active, manually_verified, ai_weekly_quota, "
+                        + "created_at, updated_at) VALUES (?, ?, 'FACTORY', 0, TRUE, FALSE, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                        + "(?, ?, 'FACTORY', 0, TRUE, FALSE, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                F, "Alias Merge Factory", OTHER, "Alias Merge Other Factory");
+        User actor = new User();
+        actor.setId(990001L);
+        actor.setFactoryId(F);
+        actor.setUsername("alias-merge-admin");
+        actor.setPasswordHash("test");
+        actor.setIsActive(true);
+        actor.setRoleCode("factory_super_admin");
+        userRepo.saveAndFlush(actor);
+        actorScope = AuthenticatedActor.trustedAsyncScope(new AuthenticatedActor(
+                AuthenticatedActorType.FACTORY_USER, actor.getId(), F, actor.getRoleCode()));
         material("M-MASTER", F, "LY-001", "酱油", "kg");
         material("M-DUP", F, "LY-002", "生抽酱油", "kg");
         material("M-OTHER-FACTORY", OTHER, "LY-001", "大骨", "kg");
+    }
+
+    @AfterEach
+    void clearActor() {
+        if (actorScope != null) actorScope.close();
     }
 
     @Test

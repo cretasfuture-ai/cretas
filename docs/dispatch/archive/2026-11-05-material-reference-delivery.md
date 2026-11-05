@@ -9,3 +9,5 @@ Owner food/root；Base 5bef001c9256efad02cd59361822184dfd24678f；branch codex/m
 Supplier源码精确来自审计31a3eb0287、731c05ee09、323f1db35c，食品未独立改其实现。helper实际签名lockActive(String, Collection<String>)，eb908e的Guard+RawRepo两文件契约不变。
 
 本组组合源e2a576686e的最终真实PG19+409Hint5=24/0/0/0，其他相同内容目标与Supplier的PG11/两unit15、RawRepo启动1已通过；隔离后34文件逐字等价。完整官方24类build/stage、最终CI、合并、生产部署、F006 UI业务验收仍分别记录在PR与外部回执，不把源码/旧目标证据升级成部署。无DDL/Entity改动，Repository有真实JPA与PG门禁。原1439在新交付合并后才关闭为superseded，原分支/worktree保留。
+
+2026-11-06补充唯一scope：ARTIFACT-MATERIAL-WORKFLOW-AUTH-20261106，Base5bef，Owner food/merge_executor。新增MaterialMergeWorkflowWriteGuard、MaterialAliasMergeService finalPlan写前接线及对应Contract/真实PG权限负例/必要fixture；正常生产写角色+production RW、当前可信actor、owner与全部graph SKU的ProcessSecret EDIT，解析失败allProtected。沿用既有ProcessSecretWorkflowOutputs，读预检产品名例外不扩大；不改Supplier/其他组/权限矩阵/Repo新查询。root统一目标、JPA、风险及发布。

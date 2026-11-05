@@ -6,12 +6,16 @@ import com.cretas.aims.dto.ProductProcessWorkflowDTO;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.processsecret.ProcessSecretPolicy;
+import com.cretas.aims.entity.processsecret.ProcessSecretStorageMode;
 import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.integration.DisposablePostgresTargetGuard;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
@@ -31,14 +35,22 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
+import com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder;
+import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Bean;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -66,6 +78,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.mock;
 
@@ -81,6 +95,8 @@ import static org.mockito.Mockito.mock;
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 @Import({MaterialAliasMergeService.class, MaterialMergeReferenceReplacer.class, MaterialReferenceWriteGuard.class,
+        MaterialMergeWorkflowWriteGuard.class, ProcessSecretAccessService.class,
+        ProcessSecretAuditRecorder.class, ProcessSecretRecipeGuard.class,
         MaterialMergeConcurrencyPostgresContractTest.JacksonTestConfiguration.class})
 class MaterialMergeConcurrencyPostgresContractTest {
 
@@ -133,6 +149,7 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Autowired private ProductProcessWorkflowRepository workflowRepository;
     @Autowired private ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
     @Autowired private ProductTypeRepository productTypeRepository;
+    @Autowired private ProcessSecretPolicyRepository processSecretPolicyRepository;
     @Autowired private PurchaseOrderItemRepository purchaseOrderItemRepository;
     @Autowired private PurchaseOrderRepository purchaseOrderRepository;
     @Autowired private SupplierMaterialRepository supplierMaterialRepository;
@@ -143,11 +160,24 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Autowired private MaterialReferenceWriteGuard materialReferenceWriteGuard;
     @Autowired private PlatformTransactionManager transactionManager;
     @MockBean private UnitContractService unitContractService;
+    @MockBean private PermissionService permissionService;
     @MockBean private org.springframework.context.ApplicationEventPublisher eventPublisher;
+    @SpyBean private ProcessSecretAuditRecorder processSecretAuditRecorder;
+    private AuthenticatedActor.ActorScope actorScope;
+    private volatile AuthenticatedActor activeActor;
 
     @BeforeEach
     void configureUnitContract() {
         when(unitContractService.areEquivalent(anyString(), anyString(), anyString())).thenReturn(true);
+        when(permissionService.hasPermission(any(User.class), org.mockito.ArgumentMatchers.eq("production:read_write")))
+                .thenReturn(true);
+    }
+
+    @AfterEach
+    void clearActor() {
+        if (actorScope != null) actorScope.close();
+        activeActor = null;
+        reset(processSecretAuditRecorder);
     }
 
     @Test
@@ -217,6 +247,87 @@ class MaterialMergeConcurrencyPostgresContractTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    void warehouseOnlyMergeIsRejectedBeforeAnyReferenceWrite() {
+        Fixture f = fixture(true);
+        addReferenceSnapshotData(f);
+        MergeSnapshot before = snapshot(f, f.workflowId);
+        setActorRole(f, "warehouse_manager");
+
+        assertMergeForbidden(f);
+        assertThat(snapshot(f, f.workflowId)).isEqualTo(before);
+    }
+
+    @Test
+    void productionWriteWithoutOwnerEditIsRejectedBeforeAnyReferenceWrite() {
+        Fixture f = fixture(true);
+        addReferenceSnapshotData(f);
+        addPolicy(f, f.productTypeId, f.actorId + 1);
+        MergeSnapshot before = snapshot(f, f.workflowId);
+
+        assertMergeForbidden(f);
+        assertThat(snapshot(f, f.workflowId)).isEqualTo(before);
+    }
+
+    @Test
+    void ordinaryOwnerStillCannotRewriteProtectedGraphOutput() {
+        Fixture f = fixture(true);
+        addReferenceSnapshotData(f);
+        String protectedOutput = "MM-SECRET-OUTPUT-" + UUID.randomUUID();
+        addPolicy(f, f.productTypeId, f.actorId);
+        addPolicy(f, protectedOutput, f.actorId + 1);
+        setWorkflowNodes(f.workflowId, "[{\"data\":{\"skuId\":\"" + protectedOutput
+                + "\"}},{\"text\":\"" + f.duplicateId + "\"}]");
+        MergeSnapshot before = snapshot(f, f.workflowId);
+
+        assertMergeForbidden(f);
+        assertThat(snapshot(f, f.workflowId)).isEqualTo(before);
+    }
+
+    @Test
+    void validJsonWithUnparseableGraphFailsClosedAgainstAllProtectedProducts() {
+        Fixture f = fixture(true);
+        addReferenceSnapshotData(f);
+        addPolicy(f, "MM-SECRET-PARSE-" + UUID.randomUUID(), f.actorId + 1);
+        // Valid jsonb object, but not the workflow-node list accepted by the graph parser;
+        // retain the duplicate text so the merge plan still includes this draft.
+        setWorkflowNodes(f.workflowId, "{\"text\":\"" + f.duplicateId + "\"}");
+        MergeSnapshot before = snapshot(f, f.workflowId);
+
+        assertMergeForbidden(f);
+        assertThat(snapshot(f, f.workflowId)).isEqualTo(before);
+    }
+
+    @Test
+    void auditFailureRejectsAnOtherwiseAuthorizedMergeBeforeReferenceWrite() {
+        Fixture f = fixture(true);
+        addReferenceSnapshotData(f);
+        addPolicy(f, f.productTypeId, f.actorId);
+        doThrow(new IllegalStateException("audit unavailable")).when(processSecretAuditRecorder).record(
+                anyString(), anyString(), any(AuthenticatedActor.class),
+                any(com.cretas.aims.entity.processsecret.ProcessSecretAction.class),
+                anyString(), anyString(), anyString());
+        MergeSnapshot before = snapshot(f, f.workflowId);
+
+        assertMergeForbidden(f);
+        assertThat(snapshot(f, f.workflowId)).isEqualTo(before);
+    }
+
+    @Test
+    void mixedDraftGraphsRejectTheWholeMergeWhenOneOutputIsProtected() {
+        Fixture f = fixture(true);
+        addReferenceSnapshotData(f);
+        String protectedOutput = "MM-SECRET-MIXED-" + UUID.randomUUID();
+        addPolicy(f, f.productTypeId, f.actorId);
+        addPolicy(f, protectedOutput, f.actorId + 1);
+        long secondWorkflow = insertDraftWorkflow(f, "[{\"data\":{\"skuId\":\""
+                + protectedOutput + "\"}},{\"text\":\"" + f.duplicateId + "\"}]");
+        MergeSnapshot before = snapshot(f, f.workflowId, secondWorkflow);
+
+        assertMergeForbidden(f);
+        assertThat(snapshot(f, f.workflowId, secondWorkflow)).isEqualTo(before);
     }
 
     @Test
@@ -798,8 +909,15 @@ class MaterialMergeConcurrencyPostgresContractTest {
         jdbc.update("INSERT INTO factories (id, name, type, level, is_active, manually_verified, ai_weekly_quota, "
                         + "created_at, updated_at) VALUES (?, ?, 'FACTORY', 0, TRUE, FALSE, 20, now(), now())",
                 factory, factoryName);
-        jdbc.update("INSERT INTO users (id, factory_id, username, password_hash, is_active, created_at, updated_at) "
-                        + "VALUES (1, ?, 'merge-pg-user', 'test', TRUE, now(), now()) ON CONFLICT (id) DO NOTHING", factory);
+        long actorId = 100000L + Math.abs((long) factory.hashCode());
+        String username = "merge-pg-" + factory.substring(factory.length() - 12);
+        jdbc.update("INSERT INTO users (id, factory_id, username, password_hash, is_active, role_code, created_at, updated_at) "
+                        + "VALUES (?, ?, ?, 'test', TRUE, 'factory_super_admin', now(), now())",
+                actorId, factory, username);
+        if (actorScope != null) actorScope.close();
+        activeActor = new AuthenticatedActor(
+                AuthenticatedActorType.FACTORY_USER, actorId, factory, "factory_super_admin");
+        actorScope = AuthenticatedActor.trustedAsyncScope(activeActor);
         material(master, factory, "MASTER", "主物料");
         material(duplicate, factory, "DUP", "重复物料");
         String productType = "MM-PRODUCT-" + UUID.randomUUID();
@@ -815,13 +933,13 @@ class MaterialMergeConcurrencyPostgresContractTest {
             po = "MM-PO-" + UUID.randomUUID();
             jdbc.update("INSERT INTO purchase_orders (id, factory_id, order_number, purchase_type, order_date, status, "
                             + "created_by, version, purchase_invoice_status, vflag, created_at, updated_at) "
-                            + "VALUES (?, ?, ?, 'DIRECT', CURRENT_DATE, 'APPROVED', 1, 0, 'NOT_RECEIVED', 'UNCREATED', now(), now())",
-                    po, factory, po);
+                            + "VALUES (?, ?, ?, 'DIRECT', CURRENT_DATE, 'APPROVED', ?, 0, 'NOT_RECEIVED', 'UNCREATED', now(), now())",
+                    po, factory, po, actorId);
             jdbc.update("INSERT INTO purchase_order_items (purchase_order_id, material_type_id, material_name, quantity, unit, "
                             + "price_unit, quantity_to_price_factor, received_quantity, created_at, updated_at) "
                             + "VALUES (?, ?, '重复物料', 1, 'kg', 'kg', 1, 0, now(), now())", po, duplicate);
         }
-        return new Fixture(factory, master, duplicate, productType, workflow, po);
+        return new Fixture(factory, master, duplicate, productType, workflow, po, actorId);
     }
 
     private void material(String id, String factory, String code, String name) {
@@ -908,8 +1026,104 @@ class MaterialMergeConcurrencyPostgresContractTest {
         return purchaseService;
     }
 
+    private void assertMergeForbidden(Fixture fixture) {
+        Throwable error = capture(() -> transaction(() ->
+                mergeService.merge(fixture.factoryFactory, fixture.duplicateId, fixture.request())));
+        assertThat(error).isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                e -> assertThat(e.getCode()).isEqualTo(403));
+    }
+
+    private void setActorRole(Fixture fixture, String role) {
+        transaction(() -> jdbc.update("UPDATE users SET role_code=? WHERE id=?", role, fixture.actorId));
+        if (actorScope != null) actorScope.close();
+        activeActor = new AuthenticatedActor(
+                AuthenticatedActorType.FACTORY_USER, fixture.actorId, fixture.factoryFactory, role);
+        actorScope = AuthenticatedActor.trustedAsyncScope(activeActor);
+    }
+
+    private void addPolicy(Fixture fixture, String productTypeId, long ownerId) {
+        transaction(() -> processSecretPolicyRepository.saveAndFlush(ProcessSecretPolicy.builder()
+                .factoryId(fixture.factoryFactory)
+                .productTypeId(productTypeId)
+                .storageMode(ProcessSecretStorageMode.CLOUD_RESTRICTED)
+                .ownerUserId(ownerId)
+                .createdBy(fixture.actorId)
+                .build()));
+    }
+
+    private void addReferenceSnapshotData(Fixture fixture) {
+        String supplier = "MM-AUTH-SUP-" + UUID.randomUUID();
+        String relation = "MM-AUTH-SM-" + UUID.randomUUID();
+        transaction(() -> {
+            jdbc.update("INSERT INTO suppliers (id, factory_id, code, supplier_code, name, is_active, created_by, "
+                            + "version, created_at, updated_at) VALUES (?, ?, ?, ?, 'Auth Snapshot Supplier', TRUE, ?, 0, now(), now())",
+                    supplier, fixture.factoryFactory, supplier, supplier, fixture.actorId);
+            jdbc.update("INSERT INTO supplier_materials "
+                            + "(id, factory_id, supplier_id, material_type_id, currency, purchase_unit, active, preferred, "
+                            + "version, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, 'CNY', 'kg', TRUE, FALSE, 0, now(), now(), NULL)",
+                    relation, fixture.factoryFactory, supplier, fixture.duplicateId);
+            jdbc.update("INSERT INTO raw_material_type_aliases "
+                            + "(id, factory_id, material_type_id, alias, normalized_alias, source, created_by, created_at) "
+                            + "VALUES (?, ?, ?, ?, ?, 'MANUAL', ?, now())",
+                    "MM-AUTH-ALIAS-" + UUID.randomUUID(), fixture.factoryFactory, fixture.duplicateId,
+                    "历史别名-" + fixture.duplicateId.substring(fixture.duplicateId.length() - 8),
+                    "历史别名" + fixture.duplicateId.substring(fixture.duplicateId.length() - 8),
+                    String.valueOf(fixture.actorId));
+        });
+    }
+
+    private void setWorkflowNodes(long workflowId, String nodesJson) {
+        transaction(() -> jdbc.update("UPDATE product_process_workflows SET nodes_json=?::jsonb WHERE id=?",
+                nodesJson, workflowId));
+    }
+
+    private long insertDraftWorkflow(Fixture fixture, String nodesJson) {
+        return transactionReturning(() -> jdbc.queryForObject("INSERT INTO product_process_workflows "
+                        + "(factory_id, product_type_id, schema_version, status, definition_version, nodes_json, "
+                        + "edges_json, viewport_json, unit_review_required, lock_version, created_at, updated_at) "
+                        + "VALUES (?, ?, 1, 'DRAFT', 1, ?::jsonb, '[]'::jsonb, '{}'::jsonb, FALSE, 0, now(), now()) "
+                        + "RETURNING id", Long.class, fixture.factoryFactory, fixture.productTypeId, nodesJson));
+    }
+
+    private MergeSnapshot snapshot(Fixture fixture, long... workflowIds) {
+        Map<Long, String> nodes = new java.util.LinkedHashMap<>();
+        for (long workflowId : workflowIds) {
+            nodes.put(workflowId, jdbc.queryForObject(
+                    "SELECT CAST(nodes_json AS text) FROM product_process_workflows WHERE id=?",
+                    String.class, workflowId));
+        }
+        String purchaseMaterial = fixture.purchaseOrderId == null ? null : jdbc.queryForObject(
+                "SELECT material_type_id FROM purchase_order_items WHERE purchase_order_id=?",
+                String.class, fixture.purchaseOrderId);
+        return new MergeSnapshot(
+                jdbc.queryForObject("SELECT is_active FROM raw_material_types WHERE id=?", Boolean.class,
+                        fixture.duplicateId),
+                jdbc.queryForObject("SELECT merged_into_id FROM raw_material_types WHERE id=?", String.class,
+                        fixture.duplicateId),
+                nodes,
+                purchaseMaterial,
+                jdbc.queryForObject("SELECT COUNT(*) FROM supplier_materials WHERE factory_id=?", Integer.class,
+                        fixture.factoryFactory),
+                jdbc.queryForObject("SELECT COUNT(*) FROM raw_material_type_aliases WHERE factory_id=?",
+                        Integer.class, fixture.factoryFactory));
+    }
+
+    private long transactionReturning(java.util.function.Supplier<Long> action) {
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentExecution().orElse(activeActor);
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(actor)) {
+            return new TransactionTemplate(transactionManager).execute(status -> action.get());
+        }
+    }
+
+    private record MergeSnapshot(Boolean duplicateActive, String mergedIntoId,
+                                 Map<Long, String> workflowNodes, String purchaseMaterial,
+                                 Integer supplierRows, Integer aliasRows) { }
+
     private void transaction(Runnable action) {
-        new TransactionTemplate(transactionManager).executeWithoutResult(status -> action.run());
+        AuthenticatedActor actor = AuthenticatedActor.fromCurrentExecution().orElse(activeActor);
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(actor)) {
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> action.run());
+        }
     }
 
     private static Throwable capture(Runnable action) {
@@ -953,7 +1167,7 @@ class MaterialMergeConcurrencyPostgresContractTest {
     }
 
     private record Fixture(String factoryFactory, String masterId, String duplicateId,
-                           String productTypeId, long workflowId, String purchaseOrderId) {
+                           String productTypeId, long workflowId, String purchaseOrderId, long actorId) {
         private MaterialMergeDTO.MergeRequest request() {
             return new MaterialMergeDTO.MergeRequest(masterId, "PG concurrency");
         }

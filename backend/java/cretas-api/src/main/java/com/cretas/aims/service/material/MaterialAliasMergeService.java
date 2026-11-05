@@ -56,6 +56,7 @@ public class MaterialAliasMergeService {
     private final UnitContractService unitContractService;
     private final ProductProcessWorkflowRepository workflowRepository;
     private final PurchaseOrderRepository purchaseOrderRepository;
+    private final MaterialMergeWorkflowWriteGuard workflowWriteGuard;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -213,6 +214,10 @@ public class MaterialAliasMergeService {
         MaterialMergeReferenceReplacer.Plan finalPlan = referenceReplacer.plan(
                 factoryId, duplicateId, masterId);
         ensureReferencesWereLocked(initialPlan, finalPlan);
+        // The final plan is already locked above. Authorize the automatic production graph
+        // rewrite before the replacer or alias writes begin, so a warehouse-only caller
+        // cannot partially mutate a draft Workflow through material merge.
+        workflowWriteGuard.require(factoryId, finalPlan);
         MaterialMergeDTO.ReplacementResult replaced = referenceReplacer.apply(
                 factoryId, duplicate, master, finalPlan);
 
