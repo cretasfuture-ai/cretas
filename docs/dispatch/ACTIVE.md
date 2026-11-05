@@ -16,7 +16,7 @@
 - SMARTBI-CLAUDE-TEACHER-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-smartbi-claude-teacher.md；PR#1390。
 - SMARTBI-TEACHER-FLYWHEEL-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-smartbi-teacher-flywheel.md；PR#1390 draft；359主链/19新增通过；.9七板块partial；不改长期云路由/生产。
 - BLACKLAKE-PERIOD-ADAPTER-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-blacklake-period-analysis.md；仅隔离测试，原夜间计划保留。
-- BLACKLAKE-PRODUCT-UX-20261105 — review — Owner root；Base b302ccf7be；scope/验收见archive/2026-11-05-blacklake-product-cost-ux.md；产品→工单→分析，25测试通过；仅测试，PR#1390。
+- SMARTBI-LABOR-UX-20261105 — review — Owner root；Base 30ead06ada；scope/验收见archive/2026-11-05-smartbi-labor-cost-ux.md；共用人工分析、MES/黑湖UI及人均口径；41前端/19Java通过；不部署，PR#1390。
 
 - BLACKLAKE-PLAIN-PAGE-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope 隔离PrototypeAnalysis/Intelligence及comparison helper/spec；两位小数、问题工单与冲突组阻断；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。
 - BLACKLAKE-PLAIN-INSIGHT-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope PrototypeSectionInsight/CostAlerts、presentation helper/spec；中文证据、范围和工单核对；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。

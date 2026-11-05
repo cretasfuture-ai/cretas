@@ -8,7 +8,8 @@ import { useAuthStore } from '@/store/modules/auth';
 import { buildUnitCostChart } from './costOverview';
 import { beijingDate, formatBlacklakeDateTime } from './blacklakePeriod';
 import { localizeBlacklakeText } from './blacklakePresentation';
-import { buildProductCostReviews } from './productCostReview';
+import { buildProductCostReviews, blacklakeLaborInput } from './productCostReview';
+import LaborCostAnalysisPanel from '@/components/smartbi/LaborCostAnalysisPanel.vue';
 const report=ref<CompleteCostReport|null>(null),loading=ref(false),error=ref('');
 const search=ref(''),unit=ref(''),page=ref(1),cohort=ref('eligible26'),section=ref('');
 const selected=ref<CostProject|null>(null),chatFact=ref<CompleteCostFact|null>(null),question=ref(''),answer=ref(''),asking=ref(false);
@@ -40,6 +41,7 @@ const allOrders=computed(()=>report.value?.analysis.cost.projects||[]);
 const orderDate=(id:number)=>{const date=report.value?.analysis.cost.projectDates?.[String(id)]?.completedAt;return date&&!Number.isNaN(new Date(date).getTime())?beijingDate(new Date(date)):'';};
 const latestDate=computed(()=>allOrders.value.map(r=>orderDate(r.projectId)).filter(Boolean).sort().at(-1)||'');
 const range=computed(()=>{if(dateMode.value==='all'||dateMode.value==='undated')return null;if(dateMode.value==='custom')return[startDate.value,endDate.value];if(!latestDate.value)return null;const d=new Date(`${latestDate.value}T12:00:00Z`);d.setUTCDate(d.getUTCDate()-6);return[d.toISOString().slice(0,10),latestDate.value];});
+watch(dateMode,value=>{if(value==='custom'&&latestDate.value&&!startDate.value&&!endDate.value){const d=new Date(latestDate.value+'T12:00:00Z');d.setUTCDate(d.getUTCDate()-6);startDate.value=d.toISOString().slice(0,10);endDate.value=latestDate.value;}});
 const validDate=(v:string)=>/^\d{4}-\d{2}-\d{2}$/.test(v)&&!Number.isNaN(new Date(v+'T12:00:00Z').getTime())&&new Date(v+'T12:00:00Z').toISOString().slice(0,10)===v;
 const dateError=computed(()=>dateMode.value==='custom'&&(!validDate(startDate.value)||!validDate(endDate.value)||startDate.value>endDate.value));
 const products=computed(()=>[...new Set(allOrders.value.map(r=>r.product))].sort());
@@ -47,6 +49,8 @@ const orders=computed(()=>allOrders.value.filter(r=>{const date=orderDate(r.proj
 const productReviews=computed(()=>buildProductCostReviews(orders.value,report.value?.analysis.costAlerts?.items||[]).filter(group=>(attention.value==='all'||group.alerts.some(a=>a.family===attention.value))&&`${group.product} ${group.productCode||''} ${group.orders.map(r=>r.projectCode).join(' ')}`.toLowerCase().includes(search.value.toLowerCase())));
 const visibleProducts=computed(()=>productReviews.value.slice((productPage.value-1)*pageSize.value,productPage.value*pageSize.value));
 const activeProduct=computed(()=>productReviews.value.find(row=>row.key===selectedProductKey.value));
+const productLabor=computed(()=>blacklakeLaborInput(activeProduct.value?.orders||[]));
+const selectedLabor=computed(()=>blacklakeLaborInput(selected.value?[selected.value]:[]));
 const productOrders=computed(()=>activeProduct.value?.orders||[]);
 const visibleOrders=computed(()=>productOrders.value.slice((orderPage.value-1)*pageSize.value,orderPage.value*pageSize.value));
 watch(selectedProductKey,()=>{orderPage.value=1;selected.value=null;chatFact.value=null;answer.value='';});
@@ -99,16 +103,10 @@ async function ask(){
       <p class="note">{{ range ? `${range[0]?.slice(5)} 至 ${range[1]?.slice(5)}` : dateMode==='undated'?'缺少完工日期的工单':'全部已采集工单' }} · {{ focusedOrders.length }} 张工单 · 材料＋人工，暂不含制造费用；币种待确认。</p>
       <p v-if="!latestDate&&dateMode==='recent'" class="note">来源未提供完工日期，暂列已采集工单，请先补齐日期。</p>
       </UCard>
-      <div class="metrics"><UCard><span>{{ activeProduct ? '涉及工单' : '成品 / 半成品' }}</span><strong>{{ activeProduct ? productOrders.length+' 张' : productReviews.length+' 项' }}</strong></UCard><UCard><span>成本变化待核查</span><strong>{{ countFamily('business_signal') }} 项</strong></UCard><UCard><span>数据需要核对</span><strong>{{ countFamily('data_quality') }} 项</strong></UCard><UCard><span>比较条件待补</span><strong>{{ countFamily('readiness') }} 项</strong></UCard></div>
-      <UCard v-if="!activeProduct"><template #header><div class="heading"><h3>哪些产品成本高</h3><el-select v-model="unit" aria-label="最新成本成品单位"><el-option v-for="u in units" :key="u" :value="u" :label="u"/></el-select></div></template>
-        <DynamicChartRenderer v-if="groups.length" :config="chart" :height="280" :number-precision="2" presentation="plain"/>
-        <el-empty v-else description="当前筛选没有可比较的产品"/>
-        <p class="note">按每{{ unit || '单位' }}成品的材料与人工排序。规格、加工阶段不同的产品不能直接比高低。</p>
-      </UCard>
+      <div v-if="!activeProduct" class="metrics"><UCard><span>成品 / 半成品</span><strong>{{ productReviews.length }} 项</strong></UCard><UCard><span>涉及工单</span><strong>{{ focusedOrders.length }} 张</strong></UCard><UCard><span>成本待核查的产品</span><strong>{{ productReviews.filter(g=>g.alerts.some(a=>a.family==='business_signal')).length }} 项</strong></UCard><UCard><span>数据待核对的产品</span><strong>{{ productReviews.filter(g=>g.alerts.some(a=>a.family==='data_quality')).length }} 项</strong></UCard></div>
       <UCard v-if="!activeProduct" data-testid="product-cost-list"><template #header><div class="heading"><h3>成品 / 半成品成本总览</h3><span class="note">{{ productReviews.length }} 项产品 · 点击查看成本分析和相关工单</span></div></template>
         <el-table :data="visibleProducts" row-key="key" stripe @row-click="openProduct($event.key)">
           <el-table-column prop="product" label="成品 / 半成品" min-width="200"/>
-          <el-table-column prop="displayIdentity" label="产品编码" min-width="145"/>
           <el-table-column label="工单数" width="85"><template #default="{row}">{{ row.sampleCount }}</template></el-table-column>
           <el-table-column label="产出合计" min-width="125"><template #default="{row}">{{ fmt(row.finishedGood) }} {{ row.unit }}</template></el-table-column>
           <el-table-column label="材料费" min-width="110"><template #default="{row}">{{ fmt(row.materialCost) }}</template></el-table-column>
@@ -119,15 +117,22 @@ async function ask(){
         </el-table>
         <el-pagination v-model:current-page="productPage" v-model:page-size="pageSize" :page-sizes="[20,50,100]" :total="productReviews.length" layout="total, sizes, prev, pager, next"/>
       </UCard>
+      <details v-if="!activeProduct" class="technical"><summary>按单位比较产品成本</summary>
+      <UCard><template #header><div class="heading"><h3>哪些产品成本高</h3><el-select v-model="unit" aria-label="最新成本成品单位"><el-option v-for="u in units" :key="u" :value="u" :label="u"/></el-select></div></template>
+        <DynamicChartRenderer v-if="groups.length" :config="chart" :height="280" :number-precision="2" presentation="plain"/>
+        <el-empty v-else description="当前筛选没有可比较的产品"/>
+        <p class="note">按每{{ unit || '单位' }}成品的材料与人工排序。规格、加工阶段不同的产品不能直接比高低。</p>
+      </UCard>
+      </details>
       <template v-if="activeProduct">
         <div class="product-breadcrumb"><UButton color="neutral" variant="outline" @click="selectedProductKey=''">返回全部产品</UButton><span>成品 / 半成品</span><span aria-hidden="true"> / </span><strong>{{ activeProduct.product }}</strong></div>
         <UCard data-testid="selected-product-analysis"><template #header><div><h3>{{ activeProduct.product }} · 产品成本分析</h3><p class="note">{{ activeProduct.displayIdentity }} · 本次日期范围内 {{ productOrders.length }} 张工单</p></div></template>
           <div class="order-summary"><div><span>平均单位成本</span><strong>{{ fmt(activeProduct.weightedUnitCost) }} / {{ activeProduct.unit }}</strong></div><div><span>产出合计</span><strong>{{ fmt(activeProduct.finishedGood) }} {{ activeProduct.unit }}</strong></div><div><span>材料费合计</span><strong>{{ fmt(activeProduct.materialCost) }}</strong></div><div><span>人工费合计</span><strong>{{ fmt(activeProduct.laborCost) }}</strong></div></div>
-          <div class="analysis"><h4>这个产品的成本怎么样</h4><p>每{{ activeProduct.unit }}的平均成本为 {{ fmt(activeProduct.weightedUnitCost) }}，其中材料 {{ fmt(activeProduct.weightedMaterialUnitCost) }}、人工 {{ fmt(activeProduct.weightedLaborUnitCost) }}。</p><p v-if="activeProduct.sampleCount>1">涉及工单的单位成本最低 {{ fmt(activeProduct.minimumUnitCost) }}，最高 {{ fmt(activeProduct.maximumUnitCost) }}，相差 {{ fmt(activeProduct.maximumUnitCost-activeProduct.minimumUnitCost) }} / {{ activeProduct.unit }}。在下方打开工单，可以核对差额来自哪些材料和工序。</p><p v-else>这段时间只有一张工单，先看本单材料与人工，暂时无法比较不同工单的成本。</p><p v-if="activeProduct.identityConflict" class="warning">这个产品编码还出现过其他名称或加工阶段，已分开显示；请生产或主数据负责人核实，确认前不要合并比较。</p><p class="note">平均单位成本按材料费与人工费合计除以总产出计算；成品与半成品各看各的，不把上下游成本再相加。</p></div>
+          <div class="analysis"><h4>这个产品的成本怎么样</h4><p>每{{ activeProduct.unit }}的平均成本为 {{ fmt(activeProduct.weightedUnitCost) }}，其中材料 {{ fmt(activeProduct.weightedMaterialUnitCost) }}、人工 {{ fmt(activeProduct.weightedLaborUnitCost) }}。</p><p v-if="activeProduct.sampleCount>1">涉及工单的单位成本最低 {{ fmt(activeProduct.minimumUnitCost) }}，最高 {{ fmt(activeProduct.maximumUnitCost) }}，相差 {{ fmt(activeProduct.maximumUnitCost-activeProduct.minimumUnitCost) }} / {{ activeProduct.unit }}。在下方打开工单，可以核对差额来自哪些材料和工序。</p><p v-else>这段时间只有一张工单，先看本单材料与人工，暂时无法比较不同工单的成本。</p><p v-if="activeProduct.identityConflict" class="warning">这个产品编码还出现过其他名称或加工阶段，已分开显示；请生产或主数据负责人核实，确认前不要合并比较。</p><details><summary>统计说明</summary><p class="note">平均单位成本按材料费与人工费合计除以总产出计算；成品与半成品各看各的，不把上下游成本再相加。</p></details></div>
           <details><summary>材料花在哪里</summary><el-table :data="activeProduct.materials" stripe><el-table-column prop="material" label="原料 / 半成品"/><el-table-column label="净耗用"><template #default="{row}">{{ fmt(row.quantity) }} {{ row.unit }}</template></el-table-column><el-table-column label="材料金额"><template #default="{row}">{{ fmt(row.amount) }}</template></el-table-column></el-table></details>
-          <details><summary>人工花在哪些工序</summary><el-table :data="activeProduct.processes" stripe><el-table-column prop="process" label="工序"/><el-table-column label="累计工时"><template #default="{row}">{{ fmt(row.hours) }} 小时</template></el-table-column><el-table-column label="人工金额"><template #default="{row}">{{ fmt(row.amount) }}</template></el-table-column></el-table></details>
+          <details><summary>人工与工序成本 · 分摊、人均和待补资料</summary><LaborCostAnalysisPanel :input="productLabor" :scope-label="`${activeProduct.product} · ${productOrders.length} 张工单`"/></details>
         </UCard>
-      <UCard v-if="activeProduct && actionItems.length"><template #header><h3>优先处理</h3></template><article v-for="item in actionItems" :key="item.id" class="action-row"><div><strong>{{ localizeBlacklakeText(item.title) }}</strong><p>{{ localizeBlacklakeText(item.message) }}</p><p v-if="item.entityRefs.some(p=>!productOrders.some(r=>r.projectId===p.projectId))" class="note">此对照还包含当前产品或日期范围外的工单。</p><p>找{{ item.owner }}：{{ localizeBlacklakeText(item.action) }}</p></div><UButton color="neutral" variant="outline" @click="locate(item.entityRefs.find(p=>productOrders.some(r=>r.projectId===p.projectId))!.projectId)">查看涉及工单</UButton></article></UCard>
+      <UCard v-if="activeProduct && actionItems.length"><template #header><h3>优先处理</h3></template><article v-for="item in actionItems" :key="item.id" class="action-row"><div><strong>{{ localizeBlacklakeText(item.title) }}</strong><details><summary>问题依据</summary><p>{{ localizeBlacklakeText(item.message) }}</p></details><p v-if="item.entityRefs.some(p=>!productOrders.some(r=>r.projectId===p.projectId))" class="note">此对照还包含当前产品或日期范围外的工单。</p><p>找{{ item.owner }}：{{ localizeBlacklakeText(item.action) }}</p></div><UButton color="neutral" variant="outline" @click="locate(item.entityRefs.find(p=>productOrders.some(r=>r.projectId===p.projectId))!.projectId)">核对工单</UButton></article></UCard>
       <UCard><template #header><div class="heading"><h3>{{ activeProduct.product }} · 相关工单</h3><span class="note">共 {{ productOrders.length }} 张 · 点击工单查看对应分析</span></div></template>
         <el-table :data="visibleOrders" row-key="projectId" stripe @row-click="selected=$event" data-testid="review-order-table"><el-table-column prop="projectCode" label="工单" min-width="180"/><el-table-column prop="product" label="成品" min-width="180"/>
           <el-table-column label="完工日期" width="110"><template #default="{row}">{{ orderDate(row.projectId).slice(5)||'待补' }}</template></el-table-column>
@@ -155,7 +160,7 @@ async function ask(){
           <h3>需要处理什么</h3><article v-for="a in selectedAlerts.filter(a=>a.family!=='readiness')" :key="a.id" class="request"><strong>{{ localizeBlacklakeText(a.title) }}</strong><p>{{ localizeBlacklakeText(a.message) }}</p><p>找{{ a.owner }}：{{ localizeBlacklakeText(a.action) }}</p></article><p v-if="!selectedAlerts.some(a=>a.family!=='readiness')">暂未发现重点问题。</p>
           <details v-if="needs.length||selectedAlerts.some(a=>a.family==='readiness')"><summary>比较前还需要确认的资料</summary><article v-for="n in needs" :key="n.id" class="request"><strong>{{ localizeBlacklakeText(n.missingData) }}</strong><p>找{{ n.responsibleRole }}补齐。补齐后：{{ localizeBlacklakeText(n.afterProvided) }}</p></article><p v-for="a in selectedAlerts.filter(a=>a.family==='readiness')" :key="a.id">{{ localizeBlacklakeText(a.message) }} 找{{ a.owner }}：{{ localizeBlacklakeText(a.action) }}</p></details>
           <h3>原料 → 成品：材料花在哪里</h3><el-table :data="selected.materialLinesDetail" stripe><el-table-column prop="material" label="材料"/><el-table-column prop="orderCode" label="领退料单"/><el-table-column label="净耗用"><template #default="{row}">{{ fmt(row.netConsumption) }} {{ row.unit }}</template></el-table-column><el-table-column label="金额"><template #default="{row}">{{ fmt(row.recognizedCost) }}</template></el-table-column></el-table>
-          <h3>加工：人工花在哪里</h3><el-table :data="selected.processes" stripe><el-table-column prop="process" label="工序"/><el-table-column label="工时"><template #default="{row}">{{ fmt(row.hours) }} 小时</template></el-table-column><el-table-column label="工资"><template #default="{row}">{{ fmt(row.laborCost) }}</template></el-table-column></el-table>
+          <LaborCostAnalysisPanel :input="selectedLabor" :scope-label="`${selected.projectCode} · ${selected.product}`"/>
         </section>
       </el-drawer>
     </template>

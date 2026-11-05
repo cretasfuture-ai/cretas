@@ -1,12 +1,19 @@
 import { expect, it } from 'vitest';
 import type { CostProject } from '@/api/smartbi/blacklake';
-import { buildProductCostReviews } from '../productCostReview';
+import { blacklakeLaborInput,buildProductCostReviews } from '../productCostReview';
 
 function row(id:number, changes:Partial<CostProject>={}):CostProject {
   return {projectId:id,projectCode:`ORDER-${id}`,product:'合成成品',productCode:'SYN',unit:'包',status:'20',planned:10,actual:10,finishedGood:10,materialCost:20,laborCost:5,identifiedDirectCost:25,unitIdentifiedDirectCost:2.5,materialLines:1,materialCostKnownLines:1,sourceZeroCostLines:0,taskCount:1,laborCostKnownTasks:1,issues:[],unitCostAvailable:true,
     materialLinesDetail:[{material:'合成半成品',materialCode:'M',unit:'kg',netConsumption:2,recognizedCost:20,unitPrice:10,orderCode:'OUT-'+id,date:'2026-11-03',bizType:'32'}],
     processes:[{process:'包装',status:'20',good:10,hours:1,laborCost:5}],...changes};
 }
+
+it('wires actual Blacklake wages without re-labelling reported duration as person-hours',()=>{
+  const input=blacklakeLaborInput([row(1),row(2)]);
+  expect(input).toMatchObject({total:10,output:20,unit:'包'});
+  expect(input.rows).toHaveLength(1);expect(input.rows[0]).toMatchObject({amount:10,reportedHours:2,personHours:null});
+  expect(input.rows[0]!.workerIds).toBeUndefined();
+});
 
 it('weights product costs by actual output, retains member orders and sums components once',()=>{
   const large=row(2,{finishedGood:90,materialCost:450,laborCost:90});

@@ -1046,6 +1046,7 @@ public class WageCalculationService {
      * @param periodEnd 周期结束
      * @return 分析结果
      */
+    @Transactional(readOnly = true, isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
     public Map<String, Object> analyzeLaborCost(String factoryId,
             LocalDate periodStart, LocalDate periodEnd) {
 
@@ -1109,13 +1110,21 @@ public class WageCalculationService {
         }
         analysis.put("byProcessStage", byProcess);
 
-        // 8. 工人数量
-        long workerCount = workerDailyEfficiencyRepository.countWorkersByDate(factoryId, periodEnd);
+        // Same payroll period/population as the wage and piece-count sums above.
+        // The last day's attendance is not the denominator for a whole-period wage.
+        List<PayrollRecord> periodPayroll = payrollRecordRepository.findByDateRange(factoryId, periodStart, periodEnd);
+        long workerCount = periodPayroll.stream().map(PayrollRecord::getWorkerId)
+                .filter(Objects::nonNull).distinct().count();
+        boolean workersComplete = periodPayroll.stream().allMatch(row -> row.getWorkerId() != null);
+        boolean wagesComplete = periodPayroll.stream().allMatch(row -> row.getTotalWage() != null);
+        boolean piecesComplete = periodPayroll.stream().allMatch(row -> row.getTotalPieceCount() != null);
         analysis.put("workerCount", workerCount);
+        analysis.put("workerCountComplete", workersComplete);
+        analysis.put("workerCountBasis", "DISTINCT_PAYROLL_WORKERS_IN_SELECTED_PERIOD");
 
         // 9. 人均产出 —— 分母是 workerCount, 为 0 时算不出来。⛔ 不兜 0。
         BigDecimal avgPiecesPerWorker = null;
-        if (workerCount > 0 && totalPieceCount != null) {
+        if (workersComplete && piecesComplete && workerCount > 0 && totalPieceCount != null) {
             avgPiecesPerWorker = BigDecimal.valueOf(totalPieceCount)
                     .divide(BigDecimal.valueOf(workerCount), 2, RoundingMode.HALF_UP);
         }
@@ -1123,7 +1132,7 @@ public class WageCalculationService {
 
         // 10. 人均工资 —— 同上。
         BigDecimal avgWagePerWorker = null;
-        if (workerCount > 0 && totalWage != null) {
+        if (workersComplete && wagesComplete && workerCount > 0 && totalWage != null) {
             avgWagePerWorker = totalWage.divide(BigDecimal.valueOf(workerCount), 2, RoundingMode.HALF_UP);
         }
         analysis.put("avgWagePerWorker", avgWagePerWorker);

@@ -11,6 +11,13 @@ import {
 } from '../m67YieldCostAudit';
 
 describe('M67 成品出厂核算审计口径', () => {
+  it('uses authorized native labor detail in the shared analysis without exposing masked costs',()=>{
+    const source=readFileSync(resolve(process.cwd(),'src/views/production-analytics/M67YieldCost.vue'),'utf8');
+    expect(source).toContain('v-if="cb && !cb.priceMasked && cb.laborCost != null"');
+    expect(source).toContain('rows:mesLaborRows(cb.value?.laborDetails||[])');
+    expect(source).toContain(':input="nativeLaborInput"');
+    expect(source).toContain('cb.value?.costDenominatorQuantity??cb.value?.outputQuantity');
+  });
   it('uses the pinned 800g/box contract for 5kg → 4.5kg → 5box', () => {
     const firstStepYield = calculateYieldRate({
       inputQuantity: 5,

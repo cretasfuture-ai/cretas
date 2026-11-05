@@ -131,7 +131,8 @@
         </section>
 
         <section class="audit-section">
-          <h3>人工明细</h3>
+          <LaborCostAnalysisPanel v-if="cb && !cb.priceMasked && cb.laborCost != null" :input="nativeLaborInput" :scope-label="cb.orderNumber || cb.finishedBatchNumber || '本批生产'"/>
+          <details><summary>人工明细与计价记录</summary>
           <el-table :data="auditLaborLines" border size="small" empty-text="未归集人工明细">
             <el-table-column label="工序" min-width="150"><template #default="{ row }">{{ row.processName || `工序${row.processOrder ?? ''}` }}</template></el-table-column>
             <el-table-column label="人数" width="70"><template #default="{ row }">{{ row.workerCount ?? '—' }}</template></el-table-column>
@@ -142,6 +143,7 @@
             <el-table-column label="金额 / 状态" min-width="170"><template #default="{ row }">{{ formatCollectedMoney(row.amount, row.collectionStatus, row.missingReason) }} · <span :class="collectionDisplay(row.amount, row.collectionStatus, row.missingReason).complete ? 'collected' : 'uncollected'">{{ collectionDisplay(row.amount, row.collectionStatus, row.missingReason).label }}</span></template></el-table-column>
           </el-table>
           <div class="audit-subtotal">合计：{{ totalLaborMinutes == null ? '人工时未完整归集' : `${totalLaborMinutes} 人分钟 = ${totalLaborHours!.toFixed(4)} 人小时` }}</div>
+          </details>
         </section>
 
         <section class="audit-section">
@@ -379,6 +381,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { sameUnit } from '@/utils/unitPricing';
+import LaborCostAnalysisPanel from '@/components/smartbi/LaborCostAnalysisPanel.vue';
+import { mesLaborRows, type LaborCostInput } from '@/utils/laborCostAnalysis';
 import { DocumentCopy, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { useRoute } from 'vue-router';
@@ -987,6 +991,12 @@ const auditLaborLines = computed<LaborAuditLine[]>(() => {
     missingReason: step.laborCost == null ? '人工费率或报工时段未归集' : undefined,
   }));
 });
+const nativeLaborInput=computed<LaborCostInput>(()=>({
+  rows:mesLaborRows(cb.value?.laborDetails||[]),
+  total:finiteNumber(cb.value?.laborCost),
+  output:finiteNumber(cb.value?.costDenominatorQuantity??cb.value?.outputQuantity),
+  unit:cb.value?.costDenominatorUnit||cb.value?.outputUnit||null,
+}));
 const totalLaborMinutes = computed(() => {
   if (!auditLaborLines.value.length || auditLaborLines.value.some((line) => finiteNumber(line.laborMinutes) == null)) return null;
   return auditLaborLines.value.reduce((sum, line) => sum + Number(line.laborMinutes), 0);

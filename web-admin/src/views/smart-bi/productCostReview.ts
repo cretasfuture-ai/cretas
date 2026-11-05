@@ -1,5 +1,17 @@
 import type { CostDataAlert, CostProject } from '@/api/smartbi/blacklake';
 import { groupEligibleCostProjects, type ProductUnitCostSummary } from './costOverview';
+import type { LaborCostInput } from '@/utils/laborCostAnalysis';
+
+/** Blacklake task duration is not proven person-hours, and contains no worker roster. */
+export function blacklakeLaborInput(orders:readonly CostProject[]):LaborCostInput {
+  const known=(values:(number|null)[])=>values.length&&values.every(v=>typeof v==='number'&&Number.isFinite(v))?values.reduce<number>((a,b)=>a+(b as number),0):null;
+  const groups=new Map<string,CostProject['processes']>();
+  for(const order of orders)for(const row of order.processes)groups.set(row.process,[...(groups.get(row.process)||[]),row]);
+  const units=new Set(orders.map(row=>row.unit));const unit=units.size===1?orders[0]?.unit??null:null;
+  return {total:known(orders.map(r=>r.laborCost)),output:unit?known(orders.map(r=>r.finishedGood)):null,unit,
+    rows:[...groups].map(([process,rows],index)=>({id:`blacklake:${index}`,process,amount:known(rows.map(r=>r.laborCost)),reportedHours:known(rows.map(r=>r.hours)),personHours:null})),
+  };
+}
 
 export interface ProductCostReview extends ProductUnitCostSummary {
   orders: CostProject[];
