@@ -104,7 +104,7 @@ export interface ApplyDiffsResult {
 
 export const aiApplyDiffs = (factoryId: string, diffs: Record<string, unknown>[]) =>
   request.post<ApplyDiffsResult>(`${v2(factoryId)}/ai/apply-diffs`, diffs, {
-    headers: { 'X-Canvas-Result-Protocol': '2' },
+    headers: { 'X-Canvas-Result-Protocol': '3' },
   })
 
 // Config version status

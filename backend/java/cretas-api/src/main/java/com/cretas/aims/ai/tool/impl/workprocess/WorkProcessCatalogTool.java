@@ -4,6 +4,7 @@ import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.dto.WorkProcessDTO;
 import com.cretas.aims.entity.enums.FactoryUserRole;
+import com.cretas.aims.entity.workprocess.WorkProcessCustomFieldSchema;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.WorkProcessService;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +46,7 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
     public String getDescription() {
         return "工序管理页用于新增或修改工序主数据。支持字段: 工序名称、类别、标准工时、"
                 + "出成率上下限、需录投入量、标准时薪。"
+                + "可选的数字工艺标准字段支持 key/label/type/enabled/unit/standardValue/min/max。"
                 + "投入/产出单位由 Workflow/SKU 端口决定，不在工序主数据重复维护。"
                 + "新增前会按名称+类别查重，避免重复创建。"
                 + "出成率请传小数，例如 30% 传 0.30。";
@@ -84,6 +86,20 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         properties.put("standardHourlyRate", Map.of(
                 "type", "number",
                 "description", "标准时薪，单位元/小时"));
+        properties.put("customFieldSchema", Map.of(
+                "type", "array",
+                "description", "可选的逐工序录入字段；数字字段可配置 unit/standardValue/min/max。缺省不改，明确 [] 清空",
+                "items", Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "key", Map.of("type", "string"),
+                                "label", Map.of("type", "string"),
+                                "type", Map.of("type", "string", "enum", List.of("number", "text", "date")),
+                                "enabled", Map.of("type", "boolean"),
+                                "unit", Map.of("type", "string"),
+                                "standardValue", Map.of("type", "number"),
+                                "min", Map.of("type", "number"),
+                                "max", Map.of("type", "number")))));
         schema.put("properties", properties);
         schema.put("required", List.of("action"));
         return schema;
@@ -127,7 +143,7 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
 
     @Override
     public String getVersion() {
-        return "1.0.0";
+        return "1.1.0";
     }
 
     @Override
@@ -146,7 +162,7 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
             Map<String, Object> preview = previewParameters(action, draft);
             preview.put("status", existing == null ? "PREVIEW" : "DUPLICATE");
             preview.put("existingId", existing != null ? existing.getId() : "");
-            preview.put("message", existing == null ? "将创建工序: " + draft.getProcessName() + previewFields(draft)
+            preview.put("message", existing == null ? "将创建工序: " + draft.getProcessName() + previewFields(draft, false)
                     : "已存在同名同类别工序，建议直接复用: " + existing.getProcessName());
             return preview;
         }
@@ -155,7 +171,9 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
             Map<String, Object> preview = previewParameters(action, draft);
             preview.put("status", "PREVIEW");
             preview.put("id", id);
-            preview.put("message", "将更新工序 " + id + previewFields(draft));
+            preview.put("message", "将更新工序 " + id + previewFields(draft, true)
+                    + (draft.getCustomFieldSchema() == null ? ""
+                    : "\n确认后将替换该工序全部工艺标准字段，未列出的字段将移除。"));
             return preview;
         }
         throw new BusinessException(400, "不支持的工序操作: " + action);
@@ -172,6 +190,7 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         putPresent(values, "standardYieldMax", draft.getStandardYieldMax());
         putPresent(values, "needsInput", draft.getNeedsInput());
         putPresent(values, "standardHourlyRate", draft.getStandardHourlyRate());
+        putPresent(values, "customFieldSchema", draft.getCustomFieldSchema());
         return values;
     }
 
@@ -179,7 +198,7 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         if (value != null) values.put(key, value);
     }
 
-    private String previewFields(WorkProcessDTO draft) {
+    private String previewFields(WorkProcessDTO draft, boolean updating) {
         List<String> fields = new ArrayList<>();
         if (draft.getProcessName() != null) fields.add("工序名称：" + draft.getProcessName());
         if (draft.getProcessCategory() != null) fields.add("工序类别：" + draft.getProcessCategory());
@@ -188,7 +207,26 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
         if (draft.getStandardYieldMin() != null) fields.add("出成率下限：" + draft.getStandardYieldMin().toPlainString());
         if (draft.getStandardYieldMax() != null) fields.add("出成率上限：" + draft.getStandardYieldMax().toPlainString());
         if (draft.getNeedsInput() != null) fields.add("需录投入量：" + (draft.getNeedsInput() ? "是" : "否"));
+        if (draft.getCustomFieldSchema() != null) {
+            fields.add("工艺标准字段：" + (draft.getCustomFieldSchema().isEmpty()
+                    ? (updating ? "确认后清空全部字段" : "不配置工艺标准字段")
+                    : draft.getCustomFieldSchema().stream()
+                            .map(this::describeCustomField)
+                            .reduce((left, right) -> left + "；" + right)
+                            .orElse("已配置")));
+        }
         return fields.isEmpty() ? "" : "\n" + String.join("\n", fields);
+    }
+
+    private String describeCustomField(Map<String, Object> field) {
+        String label = Objects.toString(field.get("label"), Objects.toString(field.get("key"), "未命名"));
+        if (!"number".equals(field.get("type"))) return label;
+        List<String> standard = new ArrayList<>();
+        if (field.get("unit") != null) standard.add("单位=" + field.get("unit"));
+        if (field.get("standardValue") != null) standard.add("标准=" + field.get("standardValue"));
+        if (field.get("min") != null) standard.add("下限=" + field.get("min"));
+        if (field.get("max") != null) standard.add("上限=" + field.get("max"));
+        return standard.isEmpty() ? label : label + "（" + String.join("，", standard) + "）";
     }
 
     @Override
@@ -260,7 +298,50 @@ public class WorkProcessCatalogTool extends AbstractBusinessTool {
                 .standardYieldMax(getBigDecimal(params, "standardYieldMax"))
                 .needsInput(getBoolean(params, "needsInput"))
                 .standardHourlyRate(toScale2(getBigDecimal(params, "standardHourlyRate")))
+                .customFieldSchema(readCustomFieldSchema(params))
                 .build();
+    }
+
+    /** Missing means leave unchanged; explicit [] means clear on update. */
+    private List<Map<String, Object>> readCustomFieldSchema(Map<String, Object> params) {
+        if (!params.containsKey("customFieldSchema") || params.get("customFieldSchema") == null) {
+            return null;
+        }
+        Object raw = params.get("customFieldSchema");
+        if (!(raw instanceof List<?> entries)) {
+            throw new BusinessException(400, "customFieldSchema 必须是数组")
+                    .withHintTarget("customFieldSchema");
+        }
+        List<Map<String, Object>> schema = new ArrayList<>(entries.size());
+        for (int index = 0; index < entries.size(); index++) {
+            Object entry = entries.get(index);
+            if (!(entry instanceof Map<?, ?> rawField)) {
+                throw new BusinessException(400, "customFieldSchema 第 " + (index + 1) + " 项必须是对象")
+                        .withHintTarget("customFieldSchema");
+            }
+            Map<String, Object> field = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> item : rawField.entrySet()) {
+                if (!(item.getKey() instanceof String key)) {
+                    throw new BusinessException(400, "customFieldSchema 第 " + (index + 1) + " 项的属性名必须是文字")
+                            .withHintTarget("customFieldSchema");
+                }
+                field.put(key, item.getValue());
+            }
+            for (String name : List.of("key", "label", "type")) {
+                if (!(field.get(name) instanceof String)) {
+                    throw new BusinessException(400, "customFieldSchema 第 " + (index + 1)
+                            + " 项的 " + name + " 必须是文字")
+                            .withHintTarget("customFieldSchema");
+                }
+            }
+            if (field.get("enabled") != null && !(field.get("enabled") instanceof Boolean)) {
+                throw new BusinessException(400, "customFieldSchema 第 " + (index + 1)
+                        + " 项的 enabled 必须是布尔值")
+                        .withHintTarget("customFieldSchema");
+            }
+            schema.add(field);
+        }
+        return WorkProcessCustomFieldSchema.validated(schema);
     }
 
     private String getRequiredText(Map<String, Object> params, String key, String message) {

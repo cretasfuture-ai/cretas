@@ -88,8 +88,14 @@ class ReworkRatioCheckContractTest {
         limit("10");
         assertThatThrownBy(() -> check.enforce(F, "plan", req("15")))
                 .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
-                        .isEqualTo(ReworkRatioCheck.ERROR_CODE));
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).getErrorCode()).isEqualTo(ReworkRatioCheck.ERROR_CODE);
+                    // 诊断来自回料占比闸 (归因), 带怎么解开
+                    assertThat(((BusinessException) e).getDiagnoses()).hasSize(1);
+                    assertThat(((BusinessException) e).getDiagnoses().get(0).gate())
+                            .isEqualTo(com.cretas.aims.service.gate.GateId.REWORK_RATIO);
+                    assertThat(((BusinessException) e).getDiagnoses().get(0).howToResolve()).contains("超限原因");
+                });
     }
 
     @Test

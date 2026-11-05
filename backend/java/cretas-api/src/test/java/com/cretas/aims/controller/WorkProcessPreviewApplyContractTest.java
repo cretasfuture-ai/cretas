@@ -7,6 +7,7 @@ import com.cretas.aims.ai.tool.impl.workprocess.WorkProcessCatalogTool;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.*;
+import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.repository.ai.*;
 import com.cretas.aims.repository.bom.*;
@@ -34,6 +35,7 @@ class WorkProcessPreviewApplyContractTest {
     final ObjectMapper mapper = new ObjectMapper();
     final WorkProcessRepository repository = mock(WorkProcessRepository.class);
     final DashScopeClient llm = mock(DashScopeClient.class);
+    final PreviewTokenService previewTokens = mock(PreviewTokenService.class);
     CanvasAIController controller;
 
     @BeforeEach void setUp() {
@@ -70,7 +72,37 @@ class WorkProcessPreviewApplyContractTest {
         when(mobile.getUserFromToken("local-token")).thenReturn(UserDTO.builder().id(42L)
                 .factoryId("F006").factoryType("FACTORY").roleCode(FactoryUserRole.factory_super_admin).build());
         controller = new CanvasAIController(registry, mapper, llm, mobile, gateway);
+        ReflectionTestUtils.setField(controller, "previewTokenService", previewTokens);
+        when(previewTokens.resolveClaim(anyString(), anyString(), anyBoolean(), anyString())).thenReturn(true);
+        when(previewTokens.createBoundToken(any())).thenAnswer(invocation -> {
+            PreviewTokenService.BoundTokenRequest request = invocation.getArgument(0);
+            return IntentPreviewToken.builder()
+                    .token("canvas-proof")
+                    .factoryId(request.factoryId()).tenantId(request.factoryId()).userId(request.userId())
+                    .toolName(request.toolName()).descriptorVersion(request.descriptorVersion())
+                    .commandDigest("canvas-command-digest").parametersHash("canvas-parameters-hash")
+                    .build();
+        });
+        when(previewTokens.claimToken(anyString(), eq("F006"), eq(42L), anyString()))
+                .thenAnswer(invocation -> {
+                    PreviewTokenService.BoundTokenRequest request =
+                            new PreviewTokenService.BoundTokenRequest(
+                                    "F006", 42L, null, "test", "test", "canvas_work_process_catalog", "1.1.0",
+                                    ToolExecutionMode.EXECUTE, "CANVAS_DIFF", "test", "UPDATE", paramsForClaim,
+                                    Map.of(), paramsForClaim, 300);
+                    IntentPreviewToken claimed = IntentPreviewToken.builder()
+                            .token("canvas-proof").factoryId("F006").tenantId("F006").userId(42L)
+                    .intentCode("CANVAS_DIFF_123e4567-e89b-12d3-a456-426614174000")
+                    .entityType("CANVAS_DIFF").entityId("canvas_work_process_catalog").operation("UPDATE")
+                    .executionMode(ToolExecutionMode.EXECUTE)
+                            .toolName(request.toolName()).descriptorVersion(request.descriptorVersion())
+                            .commandDigest("canvas-command-digest").parametersHash("canvas-parameters-hash")
+                            .build();
+                    return PreviewTokenService.ClaimResult.success(claimed, "canvas-claim", request.parameters());
+                });
     }
+
+    Map<String, Object> paramsForClaim = Map.of();
 
     CanvasAIController.AIResponse preview(String extraction, String sentence) {
         when(llm.chatLowTemp(anyString(), anyString())).thenReturn(extraction);
@@ -78,6 +110,7 @@ class WorkProcessPreviewApplyContractTest {
         request.setModuleCode("work_process_catalog"); request.setMode("plan"); request.setMessage(sentence);
         var response = controller.chat("F006", "Bearer local-token", request).getData();
         assertEquals(1, response.getDiffs().size(), response.getReply());
+        paramsForClaim = params(response);
         verify(repository, never()).save(any());
         return response;
     }
@@ -88,7 +121,7 @@ class WorkProcessPreviewApplyContractTest {
     }
 
     WorkProcess apply(CanvasAIController.AIResponse preview) {
-        var receipt = controller.applyDiffsWithProtocol("F006", "Bearer local-token", "2", preview.getDiffs());
+        var receipt = controller.applyDiffsWithProtocol("F006", "Bearer local-token", "3", preview.getDiffs());
         assertTrue(receipt.getSuccess(), receipt.getMessage());
         assertEquals(1, receipt.getData().applied());
         var saved = ArgumentCaptor.forClass(WorkProcess.class);
@@ -99,20 +132,26 @@ class WorkProcessPreviewApplyContractTest {
         var response = preview("""
                 {"action":"create","processName":"验收工序","processCategory":"加工",
                  "estimatedMinutes":5,"standardHourlyRate":25,"standardYieldMin":0.3,
-                 "standardYieldMax":0.6,"needsInput":false}
-                """, "新建验收工序，加工类，预估工时5分钟，时薪25元，出成率30%至60%，不需录投入量");
+                 "standardYieldMax":0.6,"needsInput":false,"customFieldSchema":[
+                 {"key":"oilTemp","label":"油温","type":"number","enabled":true,
+                  "unit":"℃","standardValue":155,"min":150,"max":160}]}
+                """, "新建验收工序，加工类，预估工时5分钟，时薪25元，出成率30%至60%，不需录投入量；油温标准155℃，范围150到160℃");
         var params = params(response);
         assertEquals(5, params.get("estimatedMinutes"));
         assertNotNull(params.get("standardHourlyRate"), "Preview lost the declared hourly rate");
         assertEquals(0, new BigDecimal(params.get("standardHourlyRate").toString()).compareTo(new BigDecimal("25.00")));
-        for (var label : List.of("加工", "预估工时：5 分钟", "标准时薪：25.00 元/小时", "出成率下限：0.3", "出成率上限：0.6", "需录投入量：否"))
+        for (var label : List.of("加工", "预估工时：5 分钟", "标准时薪：25.00 元/小时", "出成率下限：0.3", "出成率上限：0.6", "需录投入量：否",
+                "油温", "单位=℃", "标准=155", "下限=150", "上限=160"))
             assertTrue(response.getReply().contains(label), response.getReply());
+        assertEquals("1.1.0", assertInstanceOf(Map.class, response.getDiffs().get(0).get("proof"))
+                .get("descriptorVersion"));
         var saved = apply(response);
         assertEquals(params.get("estimatedMinutes"), saved.getEstimatedMinutes());
         assertEquals(0, new BigDecimal(params.get("standardHourlyRate").toString()).compareTo(saved.getStandardHourlyRate()));
         assertEquals(new BigDecimal(params.get("standardYieldMin").toString()), saved.getStandardYieldMin());
         assertEquals(new BigDecimal(params.get("standardYieldMax").toString()), saved.getStandardYieldMax());
         assertEquals(params.get("needsInput"), saved.getNeedsInput());
+        assertEquals(params.get("customFieldSchema"), saved.getCustomFieldSchema());
     }
 
     @Test void omittedOptionalValuesStayAbsentAndNullAfterARealCreate() {

@@ -308,7 +308,7 @@ class ToolRuntimeRegistryTest {
         ExecutionPrincipal principal = current(businessType, role, Set.of());
         return new ToolExecutionCommand(
                 "request-canvas", "correlation-canvas", "trace-canvas",
-                "canvas_work_process_catalog", "1.0.0",
+                "canvas_work_process_catalog", "1.1.0",
                 JsonNodeFactory.instance.objectNode().put("action", "create"),
                 principal, ToolExecutionSource.HTTP_CONTROLLER, ToolExecutionMode.PREVIEW,
                 Optional.empty(), Optional.empty(), Optional.empty(),
