@@ -561,9 +561,8 @@ public class ConversationTaskRepairSupport {
     }
 
     private boolean explicitDraftSelection(IntentExecuteRequest request, Draft draft) {
-        if (request.getSessionId() != null && request.getSessionId().equals(draft.session().getSessionId())) {
-            return true;
-        }
+        // The conversation transport ID may be carried from an interrupted draft;
+        // it is not a fresh UI choice of that draft as the cancellation target.
         String selected = stringContext(request, "resumeSessionId");
         return selected != null && selected.equals(draft.session().getSessionId());
     }

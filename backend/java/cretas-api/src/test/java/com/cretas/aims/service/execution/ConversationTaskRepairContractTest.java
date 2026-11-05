@@ -327,14 +327,16 @@ class ConversationTaskRepairContractTest {
         verify(conversations, never()).cancelConversation(anyString(), anyLong(), anyString(), anyBoolean());
     }
 
-    @Test
-    void currentReadPresencePreventsUnselectedDraftCancellation() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void currentReadPresencePreventsUnselectedDraftCancellation(boolean carriesOldTransportSession) {
         ConversationSession paused = draft("paused-read", ConversationSession.SessionStatus.PAUSED,
                 Map.of("quantity", "50", "unit", "kg"));
         when(conversations.getActiveSession(FACTORY, USER)).thenReturn(Optional.empty());
         when(conversations.getPausedSessions(FACTORY, USER)).thenReturn(List.of(paused));
         llmResponse("{\"taskAction\":\"CANCEL\",\"taskReference\":\"draft-1\"}");
         IntentExecuteRequest request = request("不用查了");
+        if(carriesOldTransportSession) request.setSessionId(paused.getSessionId());
         request.setSemanticContext(Map.of("contextStatus", "PRESENT", "references", List.of(
                 Map.of("type", "READ_QUERY", "reference", "entity-0", "id", "UNRESOLVED_READ",
                         "taskStatus", "UNRESOLVED"))));
