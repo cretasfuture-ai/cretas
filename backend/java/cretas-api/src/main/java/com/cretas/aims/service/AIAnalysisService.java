@@ -156,7 +156,32 @@ public class AIAnalysisService {
         try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                 com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.COST_ANALYSIS)) {
             return analyzeCostAudited(factoryId, userId, batchId, costData, sessionId, customMessage,
-                    enableThinking, thinkingBudget, ai);
+                    enableThinking, thinkingBudget, ai, null);
+        }
+    }
+
+    /** 平台入口的结果里多的一项: 近 30 天生产统计里成本被标为保密的产品数。 */
+    static final String CONTEXT_WITHHELD_PRODUCTS = "contextWithheldProducts";
+
+    /** 平台入口的一次分析: 不进 Python 的训练语料和缓存; 回传这次 30 天统计里被扣掉成本的产品数。 */
+    private static final class PlatformEntryRun {
+        int contextWithheldProducts;
+    }
+
+    /**
+     * 平台授权 AI 分析入口的成本分析 (Steve 2026-11-04)。与 {@link #analyzeCost} 走同一个汇合点 (保密兜底、脱敏、
+     * 数字出处闸都一样), 区别只有两点: 发给 Python 时带不留存信号, 结果里多 {@link #CONTEXT_WITHHELD_PRODUCTS}。
+     * 没有用户: 平台账号的 id 不在 users 表里。
+     */
+    public Map<String, Object> analyzeCostForPlatformEntry(String factoryId, Map<String, Object> costData,
+                                                           String customMessage) {
+        PlatformEntryRun run = new PlatformEntryRun();
+        try (com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
+                com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.COST_ANALYSIS)) {
+            Map<String, Object> result = analyzeCostAudited(factoryId, null, null, costData, null, customMessage,
+                    true, 50, ai, run);
+            result.put(CONTEXT_WITHHELD_PRODUCTS, run.contextWithheldProducts);
+            return result;
         }
     }
 
@@ -164,7 +189,8 @@ public class AIAnalysisService {
                                                    Map<String, Object> costData, String sessionId,
                                                    String customMessage, Boolean enableThinking,
                                                    Integer thinkingBudget,
-                                                   com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai) {
+                                                   com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Access ai,
+                                                   PlatformEntryRun platformRun) {
         // 工艺保密 (中央兜底, 全部成本分析调用点都汇合在这里): 单批是当前账号无权查看的保密产品, 或数据里还夹着
         // 这类产品的行 (调用方该过滤没过滤) —— 整次不发给模型。负责人 / 有效授权照常发。判定本身出错也不发 (fail-closed)。
         if (involvesProcessSecret(factoryId, batchId, costData)) {
@@ -187,7 +213,7 @@ public class AIAnalysisService {
         // 「模型实际看到的那一份」当源 —— 两份就会漂, 闸就会拿错的源去比。
         String llmInput;
         try {
-            llmInput = buildCostLlmInput(factoryId, batchId, costData, customMessage);
+            llmInput = buildCostLlmInput(factoryId, batchId, costData, customMessage, platformRun);
         } catch (Exception e) {
             log.error("AI成本分析提示词构建失败: factoryId={}, batchId={}", factoryId, batchId);
             Map<String, Object> errorResult = new HashMap<>();
@@ -221,15 +247,15 @@ public class AIAnalysisService {
 
         if (result == null) {
             result = analyzeCostViaPython(factoryId, userId, batchId, sentInput, sessionId,
-                    enableThinking, thinkingBudget);
+                    enableThinking, thinkingBudget, platformRun != null);
         }
         restoreAnalysisText(result, redacted);
         return gateCostAnalysisNumbers(result, costData, llmInput);
     }
 
     /**
-     * 数字出处闸 (成本分析)。本方法是全部 10 个成本分析调用点 (批次 / 时间范围 / 对比 /
-     * 日周月报 / 生产报表 / 加工服务) 的唯一汇合点, 所以闸只挂这一处。
+     * 数字出处闸 (成本分析)。本方法是全部成本分析调用点 (批次 / 时间范围 / 对比 / 日周月报 /
+     * 生产报表 / 加工服务 / 平台 AI 分析入口) 的唯一汇合点, 所以闸只挂这一处。
      *
      * <p>源 = 成本数据本身 + 喂给模型的正文 (含预计算上下文与用户问题): 模型能合法引用的
      * 数只有这两处里的。没有确定性模板可退 —— 分析正文本身就是产品 —— 所以删句加注。
@@ -305,13 +331,14 @@ public class AIAnalysisService {
 
     /** 成本分析喂给模型的正文: 自定义问题或格式化成本数据, 前面接预计算上下文。 */
     private String buildCostLlmInput(String factoryId, String batchId,
-                                     Map<String, Object> costData, String customMessage) {
+                                     Map<String, Object> costData, String customMessage,
+                                     PlatformEntryRun platformRun) {
         String userMessage = customMessage != null && !customMessage.trim().isEmpty()
                 ? customMessage
                 : formatCostDataForAI(factoryId, batchId, costData);
 
         // 注入预计算的上下文以减少 Token 消耗
-        String preComputedContext = buildPreComputedContext(factoryId, costData);
+        String preComputedContext = buildPreComputedContext(factoryId, costData, platformRun);
         if (preComputedContext != null && !preComputedContext.isEmpty()) {
             userMessage = preComputedContext + "\n\n" + userMessage;
             log.info("已注入预计算上下文: factoryId={}", factoryId);
@@ -425,7 +452,8 @@ public class AIAnalysisService {
      * @return 格式化的预计算上下文字符串
      */
     @SuppressWarnings("unchecked")
-    private String buildPreComputedContext(String factoryId, Map<String, Object> costData) {
+    private String buildPreComputedContext(String factoryId, Map<String, Object> costData,
+                                           PlatformEntryRun platformRun) {
         if (aiContextService == null) {
             log.debug("[AIContext] AIContextService 未注入，跳过预计算上下文");
             return null;
@@ -458,6 +486,9 @@ public class AIAnalysisService {
                     factoryId, startDate, endDate);
 
             if (productionContext != null) {
+                if (platformRun != null && productionContext.getCostWithheldProductCount() != null) {
+                    platformRun.contextWithheldProducts = productionContext.getCostWithheldProductCount();
+                }
                 String productionPrompt = aiContextService.formatProductionContextForPrompt(productionContext);
                 if (productionPrompt != null && !productionPrompt.isEmpty()) {
                     context.append("【预计算生产统计】\n");
@@ -627,7 +658,8 @@ public class AIAnalysisService {
                                                       String message,
                                                       String sessionId,
                                                       Boolean enableThinking,
-                                                      Integer thinkingBudget) {
+                                                      Integer thinkingBudget,
+                                                      boolean withoutCapture) {
         try {
             PythonGeneralAnalysisRequest request = PythonGeneralAnalysisRequest.builder()
                     // 工艺保密系统约束: Java → Python 通用分析的合同没有 system 字段 (Python 自己拼 system),
@@ -639,8 +671,9 @@ public class AIAnalysisService {
                     .allowTenantDataFallback(false)
                     .build();
 
-            PythonGeneralAnalysisResponse response = pythonSmartBIClient.analyzeGeneral(
-                    factoryId, userId != null ? userId.toString() : null, request);
+            PythonGeneralAnalysisResponse response = withoutCapture
+                    ? pythonSmartBIClient.analyzeGeneralWithoutCapture(factoryId, request)
+                    : pythonSmartBIClient.analyzeGeneral(factoryId, userId != null ? userId.toString() : null, request);
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
             result.put("aiAnalysis", response.getEffectiveAnalysis());

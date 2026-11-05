@@ -18,10 +18,14 @@
 - `F006-SANDBOX-TESTS-20261105` — `review` — Owner root/sandbox_runtime_executor — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/tests/{test_runtime.py,test_orchestrator.py}；strict fixtures和真实HTTP/恢复控制流测试；验收python unittest。不改实现/台账，不启资源。
 
 - `F006-SANDBOX-WEB-20261105` — `review` — Owner root — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope web-admin/src/{demo,views/demo-flow,api/request.ts,components/layout}及对应测试；显式进入、隔离路由、结束后清理；验收Vitest目标+vue-tsc -b。等待主线冻结解除后发布。
+- `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
+
+
+
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `e976bdc0281ea99fae65e4db9213c825e27c09ec` — #1469已合并部署/业务44通过，回执archive/2026-11-05-tasks-acceptance-closeout.md；仅该切片代码/设备/发布scope释放。继续接手开放#1441质量/#1446返工，当前只读核scope；S6-10本人签署待完成。
 
 - `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 
-- `SEC-PLAN-AUDIT-1438-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。
 
 
 

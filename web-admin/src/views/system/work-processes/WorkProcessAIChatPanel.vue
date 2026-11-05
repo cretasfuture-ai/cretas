@@ -79,7 +79,7 @@ import { computed, nextTick, onBeforeUnmount, ref, toRaw } from 'vue';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
 import { aiApplyDiffs, aiChat } from '@/api/canvasApi';
-import type { AIAgentMode } from '@/types/canvas';
+import type { AIAgentMode, CanvasDiffProof } from '@/types/canvas';
 import { ApiError, type ApiResponse } from '@/types/api';
 import { readApplyChangesResult, applyChangesSummary } from '@/views/platform/canvas-editor/applyChangesResult';
 import {
@@ -100,6 +100,7 @@ interface CanvasDiff {
   tool: string;
   params: Record<string, unknown>;
   description?: string;
+  proof?: CanvasDiffProof;
 }
 
 interface AIResponse {

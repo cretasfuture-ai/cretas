@@ -87,6 +87,24 @@ describe('disposal finished-goods selector wiring', () => {
     expect(post.mock.calls[0][1]).not.toHaveProperty('materialBatchId');
   });
 
+  it('loads raw options through the quality endpoint without requiring warehouse inventory read', async () => {
+    get.mockImplementation(async (url: string) => url.endsWith('eligible-material-batches')
+      ? { success: true, data: { content: [{ id: 'RAW-A', batchNumber: 'QA-RAW-A', currentQuantity: 10, quantityUnit: 'kg' }] } }
+      : { success: true, data: [] });
+    const wrapper = shallowMount(DisposalList, { global: {
+      stubs: { 'el-table': { template: '<div />' }, 'el-dialog': { template: '<div />' } },
+      directives: { loading: () => {} }
+    } });
+    await flushPromises();
+    const vm = wrapper.vm as unknown as DisposalVm;
+    expect(get).toHaveBeenCalledWith('/F006/disposal-records/eligible-material-batches', { params: { size: 100 } });
+    expect(get.mock.calls.some(([url]) => String(url).includes('/material-batches'))).toBe(false);
+    expect(vm.currentBatches.map(batch => batch.id)).toEqual(['RAW-A']);
+    vm.disposalForm.batchId = 'RAW-A';
+    expect(vm.selectedBatchMax).toBe(10);
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('customer-owned returned goods need customer confirmation and may be handed back', async () => {
     get.mockImplementation(async (url: string) => url.endsWith('eligible-finished-goods')
       ? { success: true, data: [

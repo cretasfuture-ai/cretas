@@ -2,6 +2,7 @@ package com.cretas.aims.service.shortage;
 
 import com.cretas.aims.entity.LineSchedule;
 import com.cretas.aims.entity.ProductionLine;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.shortage.RescheduleProposal;
@@ -25,6 +26,8 @@ import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.cretas.aims.service.scheduling.ScheduleLineLocks;
 import com.cretas.aims.service.unit.UnitContractService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -78,6 +81,7 @@ public class ShortageRescheduleService {
     private final LineCapacityEquipmentCheck capacityCheck;
     private final ScheduleLineLocks lineLocks;
     private final UnitContractService unitContractService;
+    private final EntityManager entityManager;
 
     /** 生成预览并存下基线。 */
     @Transactional
@@ -98,7 +102,7 @@ public class ShortageRescheduleService {
         p.setFactoryId(factoryId);
         p.setCaseId(c.getId());
         p.setStatus(RescheduleProposal.Status.OPEN);
-        p.setBaseline(plan.affected.stream().map(ShortageRescheduleService::fingerprint).toList());
+        p.setBaseline(plan.affected.stream().map(ls -> fingerprint(factoryId, ls)).toList());
         p.setCandidates(plan.candidates);
         p.setExpiresAt(LocalDateTime.now().plus(PROPOSAL_TTL));
         p.setCreatedByType(actor.type().name());
@@ -153,10 +157,34 @@ public class ShortageRescheduleService {
         for (LineSchedule ls : scheduleQuery.lockByIds(factoryId, ids)) {
             locked.put(ls.getId(), ls);
         }
+        List<String> planIds = locked.values().stream()
+                .map(LineSchedule::getProductionPlanId)
+                .filter(Objects::nonNull)
+                .filter(id -> !id.isBlank())
+                .distinct()
+                .sorted()
+                .toList();
+        for (String planId : planIds) {
+            productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                    .orElseThrow(() -> stale("方案已过期: 生产计划不存在或不属于本厂", "重新生成重排方案, 再确认"));
+            ProductionPlan lockedPlan = productionPlanRepository.findByIdForUpdate(planId)
+                    .orElseThrow(() -> stale("方案已过期: 生产计划不存在", "重新生成重排方案, 再确认"));
+            // The scoped pre-read may already be managed. Taking a JPQL lock does not
+            // replace its cached fields; refresh under the lock before checking the basis.
+            entityManager.refresh(lockedPlan, LockModeType.PESSIMISTIC_WRITE);
+            if (!factoryId.equals(lockedPlan.getFactoryId())) {
+                throw stale("方案已过期: 生产计划不属于本厂", "重新生成重排方案, 再确认");
+            }
+        }
+        for (LineSchedule ls : locked.values()) {
+            if (ls.getProductionPlanId() == null || ls.getProductionPlanId().isBlank()) {
+                throw stale("方案已过期: 生产计划依据已缺失", "重新生成重排方案, 再确认");
+            }
+        }
         for (Map<String, Object> b : p.getBaseline()) {
             LineSchedule now = locked.get((String) b.get("scheduleId"));
-            if (now == null || !fingerprint(now).equals(b)) {
-                throw stale("方案已过期: 排程任务在生成方案后被改动过", "重新生成重排方案, 再确认");
+            if (now == null || !fingerprint(factoryId, now).equals(b)) {
+                throw stale("方案已过期: 排程任务或排程依据在生成方案后被改动过", "重新生成重排方案, 再确认");
             }
         }
         // S4-05: 审批 / 资源 / 到货按当前数据再核一遍, 所选候选必须原样可行
@@ -164,8 +192,9 @@ public class ShortageRescheduleService {
         Map<String, Object> recomputed = now.candidates.stream()
                 .filter(k -> Objects.equals(k.get("key"), candidateKey)).findFirst().orElse(null);
         if (recomputed == null || !Boolean.TRUE.equals(recomputed.get("applicable"))
-                || !Objects.equals(recomputed.get("moves"), chosen.get("moves"))) {
-            throw stale("方案已过期: 到货日期、产线状态或时段占用在生成方案后变了", "重新生成重排方案, 再确认");
+                || !Objects.equals(recomputed.get("moves"), chosen.get("moves"))
+                || !Objects.equals(recomputed.get("basis"), chosen.get("basis"))) {
+            throw stale("方案已过期: 到货日期、产线状态、时段占用或排程依据在生成方案后变了", "重新生成重排方案, 再确认");
         }
 
         LocalDateTime at = LocalDateTime.now();
@@ -289,11 +318,19 @@ public class ShortageRescheduleService {
     private Map<String, Object> sameLine(String factoryId, List<LineSchedule> affected, Duration shift, Set<String> movingIds,
                                          LocalDate due) {
         List<Map<String, Object>> moves = new ArrayList<>();
+        List<Map<String, Object>> basis = new ArrayList<>();
         List<String> notes = new ArrayList<>();
         Map<String, ProductionLine> lines = lines(factoryId);
         List<Slot> claimed = new ArrayList<>();   // 本方案里已经占下的 (线, 时段), 被挪的任务之间也不能撞
         boolean ok = true;
         for (LineSchedule ls : affected) {
+            BasisCheck basisCheck = basis(factoryId, ls);
+            if (!basisCheck.valid()) {
+                ok = false;
+                notes.add(basisCheck.reason());
+            } else {
+                basis.add(basisCheck.display());
+            }
             LocalDateTime start = ls.getPlannedStartTime().plus(shift);
             LocalDateTime end = ls.getPlannedEndTime().plus(shift);
             ProductionLine line = lines.get(ls.getProductionLineId());
@@ -307,21 +344,33 @@ public class ShortageRescheduleService {
                 notes.add(name(line, ls.getProductionLineId()) + " 在 " + start + " – " + end + " 已有任务");
             }
             claimed.add(new Slot(ls.getProductionLineId(), start, end));
-            moves.add(move(ls, lines, ls.getProductionLineId(), start, end));
+            if (basisCheck.valid()) {
+                moves.add(move(ls, lines, ls.getProductionLineId(), start, end));
+            }
         }
         deliveryNote(moves, due, notes);
         notes.add("到货日按在走采购单的最晚预计到货日估计, 没有核对单上数量够不够");
-        return candidate(SAME_LINE, "同线顺延 " + days(shift) + " 天", ok, moves, notes);
+        notes.add("Workflow/BOM 为生产计划固定快照; APS 仅提供日产能日期依据, 未验证工序级精确耗时");
+        return candidate(SAME_LINE, "同线顺延 " + days(shift) + " 天", ok,
+                basis.size() == affected.size() ? moves : List.of(), notes, basis);
     }
 
     private Map<String, Object> otherLine(String factoryId, List<LineSchedule> affected, Duration shift, Set<String> movingIds,
                                           LocalDate due) {
         List<Map<String, Object>> moves = new ArrayList<>();
+        List<Map<String, Object>> basis = new ArrayList<>();
         List<String> notes = new ArrayList<>();
         Map<String, ProductionLine> lines = lines(factoryId);
         List<Slot> claimed = new ArrayList<>();
         boolean ok = true;
         for (LineSchedule ls : affected) {
+            BasisCheck basisCheck = basis(factoryId, ls);
+            if (!basisCheck.valid()) {
+                ok = false;
+                notes.add(basisCheck.reason());
+                continue;
+            }
+            basis.add(basisCheck.display());
             LocalDateTime start = ls.getPlannedStartTime().plus(shift);
             LocalDateTime end = ls.getPlannedEndTime().plus(shift);
             ProductionPlan pp = ls.getProductionPlanId() == null ? null
@@ -365,7 +414,8 @@ public class ShortageRescheduleService {
             moves.add(move(ls, lines, target, start, end));
         }
         deliveryNote(moves, due, notes);
-        return candidate(OTHER_LINE, "顺延 " + days(shift) + " 天并换线", ok && !moves.isEmpty(), ok ? moves : List.of(), notes);
+        notes.add("Workflow/BOM 为生产计划固定快照; APS 仅提供日产能日期依据, 换线仍需重新核对目标线产能");
+        return candidate(OTHER_LINE, "顺延 " + days(shift) + " 天并换线", ok && !moves.isEmpty(), ok ? moves : List.of(), notes, basis);
     }
 
     // ---------------------------------------------------------------- helpers
@@ -375,6 +425,189 @@ public class ShortageRescheduleService {
         static boolean collides(List<Slot> claimed, String lineId, LocalDateTime start, LocalDateTime end) {
             return claimed.stream().anyMatch(s -> s.lineId.equals(lineId) && s.start.isBefore(end) && s.end.isAfter(start));
         }
+    }
+
+    private record BasisCheck(boolean valid, Map<String, Object> snapshot, Map<String, Object> display, String reason) {
+    }
+
+    /**
+     * 同线顺延也必须能回读正式计划快照和 APS 日产能日期依据。
+     * APS 只证明按天的日期窗口，不把它冒充成工序级精确时长；未知单位不做换算。
+     */
+    private BasisCheck basis(String factoryId, LineSchedule ls) {
+        if (ls.getProductionPlanId() == null || ls.getProductionPlanId().isBlank()) {
+            return invalid("任务 " + ls.getId() + " 缺少生产计划, 无法核对重排依据");
+        }
+        ProductionPlan pp = productionPlanRepository.findByIdAndFactoryId(ls.getProductionPlanId(), factoryId)
+                .orElse(null);
+        if (pp == null || (pp.getFactoryId() != null && !factoryId.equals(pp.getFactoryId()))) {
+            return invalid("任务 " + ls.getId() + " 的生产计划不存在或不属于本厂, 无法核对重排依据");
+        }
+        if (pp.getWorkflowSelectionMode() != ProductionBatch.WorkflowSelectionMode.WORKFLOW
+                || pp.getSelectedWorkflowId() == null || pp.getSelectedWorkflowVersion() == null
+                || pp.getSelectedWorkflowRevisionId() == null
+                || pp.getSelectedWorkflowRevisionHash() == null
+                || pp.getSelectedWorkflowRevisionHash().isBlank()
+                || pp.getWorkflowOutputUnitsByProduct() == null || pp.getWorkflowOutputUnitsByProduct().isEmpty()
+                || pp.getWorkflowOutputUnitsByProduct().entrySet().stream()
+                .anyMatch(e -> e.getKey() == null || e.getKey().isBlank() || e.getValue() == null || e.getValue().isBlank())) {
+            return invalid("任务 " + ls.getId() + " 缺少正式 Workflow revision/输出快照, 不能核对重排依据");
+        }
+        boolean familyBom = pp.getSelectedBomFamilyId() != null && !pp.getSelectedBomFamilyId().isBlank()
+                && pp.getSelectedBomRecipeIdsByProduct() != null && !pp.getSelectedBomRecipeIdsByProduct().isEmpty()
+                && pp.getSelectedBomVersionsByProduct() != null && !pp.getSelectedBomVersionsByProduct().isEmpty()
+                && pp.getSelectedBomRecipeIdsByProduct().keySet().equals(pp.getSelectedBomVersionsByProduct().keySet())
+                && pp.getSelectedBomRecipeIdsByProduct().keySet().equals(pp.getWorkflowOutputUnitsByProduct().keySet())
+                && pp.getSelectedBomRecipeIdsByProduct().entrySet().stream()
+                .allMatch(e -> e.getKey() != null && !e.getKey().isBlank()
+                        && e.getValue() != null && !e.getValue().isBlank()
+                        && pp.getSelectedBomVersionsByProduct().get(e.getKey()) != null
+                        && pp.getSelectedBomVersionsByProduct().get(e.getKey()) > 0);
+        boolean singleBom = !familyBom && pp.getSelectedBomRecipeId() != null && !pp.getSelectedBomRecipeId().isBlank()
+                && pp.getSelectedBomVersion() != null && pp.getSelectedBomVersion() > 0
+                && pp.getWorkflowOutputUnitsByProduct().containsKey(pp.getProductTypeId());
+        if (!singleBom && !familyBom) {
+            return invalid("任务 " + ls.getId() + " 缺少正式 BOM 版本快照或成品映射, 不能核对重排依据");
+        }
+        Map<String, Object> daily = ls.getDailyAllocations();
+        if (daily == null) {
+            return invalid("任务 " + ls.getId() + " 缺少 APS 日产能依据, 不能确定顺延日期");
+        }
+        BigDecimal capacityPerDay = decimal(daily.get("capacityPerDay"));
+        String capacitySource = text(daily.get("capacitySource"));
+        String unit = text(daily.get("unit"));
+        if (capacityPerDay == null || capacityPerDay.signum() <= 0
+                || !("MANUAL".equals(capacitySource) || "EXPERIENCE".equals(capacitySource))
+                || unit == null || unit.isBlank()
+                || pp.getPlannedUnit() == null || pp.getPlannedUnit().isBlank()
+                || !unitContractService.areEquivalent(factoryId, unit, pp.getPlannedUnit())) {
+            return invalid("任务 " + ls.getId()
+                    + " 的 APS 日产能依据缺失、单位不一致或来源不可核对, 不能猜测袋/盒换算");
+        }
+        BigDecimal plannedQuantity = decimal(daily.get("plannedQuantity"));
+        BigDecimal reportedQuantity = decimal(daily.get("reportedQuantity"));
+        BigDecimal remainingQuantity = decimal(daily.get("remainingQuantity"));
+        if (plannedQuantity == null || pp.getPlannedQuantity() == null || !close(plannedQuantity, pp.getPlannedQuantity())
+                || reportedQuantity == null || reportedQuantity.signum() < 0
+                || remainingQuantity == null || remainingQuantity.signum() <= 0
+                || !close(remainingQuantity, plannedQuantity.subtract(reportedQuantity))) {
+            // ProductionPlan.remainingQuantity subtracts allocated raw materials;
+            // APS.remainingQuantity subtracts reported output. They are different facts.
+            return invalid("任务 " + ls.getId() + " 的 APS 计划量、已报量与待排产量不一致, 不能确定顺延日期");
+        }
+        Object rawDays = daily.get("days");
+        if (!(rawDays instanceof List<?> days) || days.isEmpty()) {
+            return invalid("任务 " + ls.getId() + " 缺少 APS 日产能日期分配, 不能确定顺延日期");
+        }
+        List<Map<String, String>> dayBasis = new ArrayList<>();
+        BigDecimal totalQuantity = BigDecimal.ZERO;
+        Set<LocalDate> dates = new HashSet<>();
+        for (Object rawDay : days) {
+            if (!(rawDay instanceof Map<?, ?> day) || text(day.get("date")) == null) {
+                return invalid("任务 " + ls.getId() + " 的 APS 日产能日期分配不可核对");
+            }
+            LocalDate date;
+            try {
+                date = LocalDate.parse(text(day.get("date")));
+            } catch (java.time.format.DateTimeParseException e) {
+                return invalid("任务 " + ls.getId() + " 的 APS 日产能日期无效, 不能确定顺延日期");
+            }
+            BigDecimal quantity = decimal(day.get("quantity"));
+            BigDecimal share = decimal(day.get("shareOfDay"));
+            BigDecimal expectedShare = quantity == null ? null
+                    : quantity.divide(capacityPerDay, 6, java.math.RoundingMode.UP).min(BigDecimal.ONE);
+            if (quantity == null || quantity.signum() <= 0 || quantity.compareTo(capacityPerDay) > 0
+                    || share == null || share.signum() <= 0 || share.compareTo(BigDecimal.ONE) > 0
+                    || expectedShare == null || share.subtract(expectedShare).abs().compareTo(new BigDecimal("0.000001")) > 0
+                    || !dates.add(date)) {
+                return invalid("任务 " + ls.getId() + " 的 APS 日产能日量或占比不可核对");
+            }
+            totalQuantity = totalQuantity.add(quantity);
+            Map<String, String> normalized = new LinkedHashMap<>();
+            normalized.put("date", date.toString());
+            normalized.put("quantity", quantity.stripTrailingZeros().toPlainString());
+            normalized.put("shareOfDay", share.stripTrailingZeros().toPlainString());
+            dayBasis.add(normalized);
+        }
+        dayBasis.sort(Comparator.comparing(d -> LocalDate.parse(d.get("date"))));
+        LocalDate firstDay = dates.stream().min(LocalDate::compareTo).orElseThrow();
+        LocalDate lastDay = dates.stream().max(LocalDate::compareTo).orElseThrow();
+        if (!close(totalQuantity, remainingQuantity)
+                || ls.getPlannedStartTime() == null || ls.getPlannedEndTime() == null
+                || !ls.getPlannedStartTime().isBefore(ls.getPlannedEndTime())
+                || !firstDay.equals(ls.getPlannedStartTime().toLocalDate())
+                || !lastDay.equals(ls.getPlannedEndTime().toLocalDate())) {
+            return invalid("任务 " + ls.getId() + " 的 APS 日期窗口与排程窗口或待排数量不一致");
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("productionPlanId", pp.getId());
+        snapshot.put("workflowSelectionMode", pp.getWorkflowSelectionMode().name());
+        snapshot.put("workflowId", String.valueOf(pp.getSelectedWorkflowId()));
+        snapshot.put("workflowVersion", String.valueOf(pp.getSelectedWorkflowVersion()));
+        snapshot.put("workflowRevisionId", String.valueOf(pp.getSelectedWorkflowRevisionId()));
+        snapshot.put("workflowRevisionHash", pp.getSelectedWorkflowRevisionHash());
+        snapshot.put("workflowOutputUnitsByProduct", new TreeMap<>(pp.getWorkflowOutputUnitsByProduct()));
+        snapshot.put("productTypeId", pp.getProductTypeId());
+        snapshot.put("plannedUnit", pp.getPlannedUnit().trim());
+        snapshot.put("plannedQuantity", pp.getPlannedQuantity().stripTrailingZeros().toPlainString());
+        snapshot.put("remainingQuantity", remainingQuantity.stripTrailingZeros().toPlainString());
+        if (familyBom) {
+            snapshot.put("bomFamilyId", pp.getSelectedBomFamilyId());
+            snapshot.put("bomRecipeIdsByProduct", new TreeMap<>(pp.getSelectedBomRecipeIdsByProduct()));
+            snapshot.put("bomVersionsByProduct", new TreeMap<>(pp.getSelectedBomVersionsByProduct()));
+        } else {
+            snapshot.put("bomRecipeId", pp.getSelectedBomRecipeId());
+            snapshot.put("bomVersion", String.valueOf(pp.getSelectedBomVersion()));
+        }
+        snapshot.put("capacityPerDay", capacityPerDay.stripTrailingZeros().toPlainString());
+        snapshot.put("capacitySource", capacitySource);
+        snapshot.put("unit", unit.trim());
+        snapshot.put("dateBasis", "APS_DAILY_CAPACITY");
+        snapshot.put("days", dayBasis);
+        Map<String, Object> display = new LinkedHashMap<>();
+        display.put("productionPlanId", pp.getId());
+        display.put("workflowId", String.valueOf(pp.getSelectedWorkflowId()));
+        display.put("workflowVersion", String.valueOf(pp.getSelectedWorkflowVersion()));
+        display.put("workflowRevisionId", String.valueOf(pp.getSelectedWorkflowRevisionId()));
+        if (familyBom) {
+            display.put("bomFamilyId", pp.getSelectedBomFamilyId());
+            display.put("bomRecipeIdsByProduct", new TreeMap<>(pp.getSelectedBomRecipeIdsByProduct()));
+            display.put("bomVersionsByProduct", new TreeMap<>(pp.getSelectedBomVersionsByProduct()));
+        } else {
+            display.put("bomRecipeId", pp.getSelectedBomRecipeId());
+            display.put("bomVersion", String.valueOf(pp.getSelectedBomVersion()));
+        }
+        display.put("capacityPerDay", capacityPerDay.stripTrailingZeros().toPlainString());
+        display.put("capacitySource", capacitySource);
+        display.put("unit", unit.trim());
+        display.put("dateBasis", "APS_DAILY_CAPACITY");
+        display.put("days", dayBasis);
+        return new BasisCheck(true, snapshot, display, null);
+    }
+
+    private static BasisCheck invalid(String reason) {
+        return new BasisCheck(false, Map.of(), Map.of(), reason);
+    }
+
+    private static boolean close(BigDecimal left, BigDecimal right) {
+        return left != null && right != null && left.subtract(right).abs().compareTo(new BigDecimal("0.01")) <= 0;
+    }
+
+    private static BigDecimal decimal(Object value) {
+        if (value instanceof BigDecimal v) return v;
+        if (value instanceof Number v) return BigDecimal.valueOf(v.doubleValue());
+        if (value instanceof String v) {
+            try {
+                return new BigDecimal(v.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static String text(Object value) {
+        return value == null ? null : String.valueOf(value).trim();
     }
 
     /**
@@ -456,14 +689,26 @@ public class ShortageRescheduleService {
         return m;
     }
 
+    private Map<String, Object> fingerprint(String factoryId, LineSchedule ls) {
+        Map<String, Object> m = fingerprint(ls);
+        m.put("basis", basis(factoryId, ls).snapshot());
+        return m;
+    }
+
     private static Map<String, Object> candidate(String key, String label, boolean applicable, List<Map<String, Object>> moves,
                                                  List<String> notes) {
+        return candidate(key, label, applicable, moves, notes, List.of());
+    }
+
+    private static Map<String, Object> candidate(String key, String label, boolean applicable, List<Map<String, Object>> moves,
+                                                 List<String> notes, List<Map<String, Object>> basis) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("key", key);
         m.put("label", label);
         m.put("applicable", applicable);
         m.put("moves", moves);
         m.put("notes", notes);
+        m.put("basis", basis);
         return m;
     }
 
