@@ -8,4 +8,3 @@
 - 目标验证：4 套 Vitest / 24 tests 全部通过，包含真实组件 PASS 自动打开/提交既有处置与普通合格批阴性；6GB vue-tsc -b exit 0。未更改 Java/RN 树，沿用 1480 对应验证。Web 官方构建及合并后 F006 申请/主管审批业务读回待执行，不将单测算业务验收。
 
 2026-11-05 状态 merged：该窄修复已整合#1480，feature92ef/merge c24e11bb0a2c8e2714981d51b86849bd6fa2a8de；最终整合Web74及typecheck、官方构建通过，Java最终full19664零红/真实PG通过。代码scope随本记录归档释放；正式部署、Android OTA及F006申请/另一人审批/质检放行仍由父任务推进，未测项不计通过。
-
