@@ -480,7 +480,7 @@ public class ShortageRescheduleService {
                 || !("MANUAL".equals(capacitySource) || "EXPERIENCE".equals(capacitySource))
                 || unit == null || unit.isBlank()
                 || pp.getPlannedUnit() == null || pp.getPlannedUnit().isBlank()
-                || !unit.trim().equalsIgnoreCase(pp.getPlannedUnit().trim())) {
+                || !unitContractService.areEquivalent(factoryId, unit, pp.getPlannedUnit())) {
             return invalid("任务 " + ls.getId()
                     + " 的 APS 日产能依据缺失、单位不一致或来源不可核对, 不能猜测袋/盒换算");
         }

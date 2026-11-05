@@ -27,3 +27,11 @@ Owner：01a1a954/root。状态：review（代码冻结、最终PR门禁待跑，
 `PurchaseInvoiceServiceTest,PurchaseInvoiceThreeWayMatchHttpTest,PurchaseAutoSuggestionPostgresContractTest,PurchaseAutoSuggestionRepositoryQueryValidationTest,ShortageScheduleRepositoryQueryValidationTest,ShortageRescheduleServiceContractTest,ToolParameterDescriptionLeakScanTest,ToolParameterDescriptionScannerScopeContractTest,AIIntentServiceImplPythonIntegrationTest,WriteGuardWiringTest,RestaurantSkillsRegistrationTest,FoodSafetySkillRegistrationTest,FactoryIntentCatalogContractTest,FactoryCatalogRuntimeBindingContractTest,InventoryLedgerServiceTest`
 
 部署后仅复测受影响项：同一第四S4案例在原ghost产线真实UI应用、旧基线409、受控丢响应后按台账恢复；财务UI登记本组错料测试票并标不符释放占量。全部F006，脚本默认dry且记录实际ID/清理或保留。47行唯一场景表和具体业务对象保存在私有证据，不在此公开。真实业务签署不代签，联产成本原豁免保留，全部既有同版本通过证据复用。
+
+## 首轮 CI 修复与复核
+
+8fec 首轮 fast 的三项失败已定位：新增单位裸比较一项、主线 PurchaseServiceImpl 的 OA_TASK_NODE_CHANGED 缺操作 hint 两项；真实 PG 门禁成功。未修改基线或降低断言。
+
+单位比较改为既有 UnitContractService.areEquivalent，使用真实字典实现验证公斤/kg 别名、g 与 kg 不等、袋同单位且换线产能仍拒绝；Service 24/24 通过。BareUnit 5、HintCoverage 5、F006DemoApproval 7 项通过。独立复核无 P0/P1/P2。共享 hint 仅一行消息链，冻结独立 commit 97d7252dc6fcb5b86fa54a3c214377f52a7825f9，已通知审计 Owner 复用；不改变审批业务或权限。
+
+8fec 的最终 build/stage 为 15 类 143/0/0/0、Java/Web 构建成功且仅预上传。后续源码修复需新 HEAD 的可信制品与新 CI；不能把旧制品称为修后部署。

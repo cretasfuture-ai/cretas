@@ -27,6 +27,11 @@ import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.cretas.aims.service.scheduling.ScheduleLineLocks;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
+import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
+import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
+import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import com.cretas.aims.entity.SchedulingPlan;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
@@ -65,7 +70,9 @@ class ShortageRescheduleServiceContractTest {
     private final SalesOrderRepository orders = mock(SalesOrderRepository.class);
     private final LineCapacityEquipmentCheck capacity = mock(LineCapacityEquipmentCheck.class);
     private final ScheduleLineLocks lineLocks = mock(ScheduleLineLocks.class);
-    private final UnitContractService units = mock(UnitContractService.class);
+    private final UnitContractService units = spy(new UnitContractServiceImpl(
+            mock(UnitOfMeasurementRepository.class), mock(ProductUnitConversionRepository.class),
+            mock(MaterialPackagingHierarchyRepository.class), mock(MaterialPackagingSpecRepository.class)));
     private final EntityManager entityManager = mock(EntityManager.class);
     private ShortageRescheduleService service;
 
@@ -418,6 +425,31 @@ class ShortageRescheduleServiceContractTest {
     }
 
     @Test
+    void apsBasisUsesTheUnitDictionaryForAliasesButDoesNotConvertDifferentUnits() {
+        pp.setPlannedUnit("kg");
+        task.getDailyAllocations().put("unit", "公斤");
+        when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("kg"), eq("L2"), any(), any()))
+                .thenReturn(ResourceCheckResult.available("CAPACITY", new BigDecimal("200"), new BigDecimal("100"), "二号线够"));
+        RescheduleProposal aliases = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(aliases, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(true);
+        verify(units, atLeastOnce()).areEquivalent("F1", "公斤", "kg");
+
+        task.getDailyAllocations().put("unit", "g");
+        Map<String, Object> different = candidate(service.propose("F1", "C1", PLANNER), ShortageRescheduleService.SAME_LINE);
+        assertThat(different.get("applicable")).isEqualTo(false);
+        assertThat(different.get("moves")).isEqualTo(List.of());
+
+        pp.setPlannedUnit("袋");
+        pp.setWorkflowOutputUnitsByProduct(Map.of("P1", "袋"));
+        task.getDailyAllocations().put("unit", "袋");
+        when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("袋"), anyString(), any(), any()))
+                .thenReturn(ResourceCheckResult.unverified("CAPACITY", "包装产能未验证", new BigDecimal("100")));
+        RescheduleProposal packaging = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(packaging, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(true);
+        assertThat(candidate(packaging, ShortageRescheduleService.OTHER_LINE).get("applicable")).isEqualTo(false);
+    }
+
+    @Test
     void invalidScheduleWindowDoesNotExposeAConcreteMove() {
         task.setPlannedEndTime(task.getPlannedStartTime());
 
@@ -548,7 +580,6 @@ class ShortageRescheduleServiceContractTest {
         task.setPlannedQuantity(40);
         pp.setPlannedUnit("公斤");
         task.getDailyAllocations().put("unit", "公斤");
-        when(units.areEquivalent("F1", "公斤", "kg")).thenReturn(true);
         // 原样「公斤」也给一个结果: 若没映射成 KG, 流程照常跑完, 由下面的 verify 抓出 (而不是 NPE)
         when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("公斤"), anyString(), any(), any()))
                 .thenReturn(ResourceCheckResult.unverified("CAPACITY", "产能未验证", new BigDecimal("40")));
