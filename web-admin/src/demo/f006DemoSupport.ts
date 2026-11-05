@@ -1,10 +1,11 @@
 import request from '@/api/request'
+import { requireSandboxReady, sandboxSession } from './f006Sandbox'
 
 export type DemoRecord = Record<string, unknown>
 export interface DemoTransport {
   get<T = unknown>(path: string): Promise<T>
   post<T = unknown>(path: string, body?: unknown, config?: Record<string, unknown>): Promise<T>
-  put?<T = unknown>(path: string, body?: unknown): Promise<T>
+  put?<T = unknown>(path: string, body?: unknown, config?: Record<string, unknown>): Promise<T>
 }
 export function record(value: unknown): DemoRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('业务接口未返回有效对象')
@@ -23,7 +24,7 @@ export function rows(value: unknown): DemoRecord[] {
 export const demoTransport: DemoTransport = {
   get: async <T>(path: string) => unwrap(await request.get(path)) as T,
   post: async <T>(path: string, body?: unknown, config?: Record<string, unknown>) => unwrap(await request.post(path, body, config)) as T,
-  put: async <T>(path: string, body?: unknown) => unwrap(await request.put(path, body)) as T,
+  put: async <T>(path: string, body?: unknown, config?: Record<string, unknown>) => unwrap(await request.put(path, body, config)) as T,
 }
 export function scoped(r: DemoRecord): DemoRecord {
   if (r.factoryId !== 'F006') throw new Error('返回记录不属于 F006，演示已停止')
@@ -71,8 +72,16 @@ export async function attachDemoReceipt(receiptId: string, poNumber: string, run
   ctx.font = '22px sans-serif'; ctx.fillText(runKey, 60, 590)
   const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(v => v ? resolve(v) : reject(new Error('演示凭证生成失败')), 'image/png'))
   const signed = record(await transport.post('/F006/attachments/upload-url', { fileName: name, fileType: 'image/png' }))
-  const upload = await fetch(String(signed.uploadUrl), { method: 'PUT', credentials: 'omit', headers: { 'Content-Type': 'image/png' }, body: blob })
-  if (!upload.ok) throw new Error('演示收货凭证上传失败')
+  if (sandboxSession.value) {
+    requireSandboxReady()
+    const uploadPath = String(signed.uploadUrl)
+    if (!/^\/F006\/demo-sandbox-local-files\/[A-Za-z0-9_-]+$/.test(uploadPath)) throw new Error('演示凭证必须写入当前沙盒文件目录')
+    if (!transport.put) throw new Error('当前演示连接不支持凭证上传')
+    await transport.put(uploadPath, blob, { headers: { 'Content-Type': 'image/png' } })
+  } else {
+    const upload = await fetch(String(signed.uploadUrl), { method: 'PUT', credentials: 'omit', headers: { 'Content-Type': 'image/png' }, body: blob })
+    if (!upload.ok) throw new Error('演示收货凭证上传失败')
+  }
   const attachment = record(await transport.post('/F006/attachments', { entityType: 'PURCHASE_RECEIPT', entityId: receiptId, fileName: name, fileUrl: signed.fileUrl, fileSize: blob.size, fileType: 'image/png', uploadSource: 'WEB' }))
   const saved = rows(await transport.get(listPath)).find(item => item.id === attachment.id && item.fileName === name)
   if (!saved) throw new Error('演示收货凭证尚未回读成功，请重试核对')

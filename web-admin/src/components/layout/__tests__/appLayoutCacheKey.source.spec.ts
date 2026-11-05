@@ -28,7 +28,8 @@ describe('AppLayout 真的把标签生命周期接到了 keep-alive 上', () => 
     expect(tag).toContain('cacheKeyFor');
     expect(tag).toContain(':active-key=');
     expect(tag).toContain(':cache-keys="workspaceCacheKeys"');
-    expect(tag).toContain('authStore.factoryId');
+    expect(tag).toContain(':key="workspaceScope"');
+    expect(appLayout).toContain('sandboxSession.value.sessionId');
     expect(appLayout).toContain('workspace.tabs.map(tab => workspace.cacheKeyFor(tab.key))');
   });
 
