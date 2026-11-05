@@ -52,6 +52,16 @@ def plan(job,facts):
 def validate_review(raw,fact,full):
     if not isinstance(raw,dict) or set(raw)!=FIELDS or raw['factId']!=fact['id']:
         raise ValueError('SUPPLEMENT_FACT_ID_OR_SCHEMA')
+    texts=[raw.get(k) for k in ('whatItMeans','nextStep','cannotConclude')]
+    if any(isinstance(t,str) and re.search(r'[零一二三四五六七八九十百千万两]+(?:个|条|张|次|组|项|笔|名|份|样本)',t) for t in texts):
+        raise ValueError('SUPPLEMENT_UNBOUND_CHINESE_QUANTITY')
+    meaning=raw.get('whatItMeans')
+    if isinstance(meaning,str):
+        if analyst._asserted(r'(?:高于|低于|多于|少于|优于).{0,5}(?:其他|其它)(?:组|产品)',meaning):
+            raise ValueError('SUPPLEMENT_UNSUPPORTED_CROSS_GROUP_COMPARISON')
+        size=fact.get('statistics',{}).get('sampleSize')
+        if size is not None and size<2 and analyst._asserted(r'波动(?:很|较)?大|成本(?:很|较)?稳定|波动(?:很|较)?小',meaning):
+            raise ValueError('SUPPLEMENT_VARIATION_REQUIRES_MULTIPLE_SAMPLES')
     sid=fact['sectionId']
     section={'sectionId':sid,'evidenceRefs':[fact['id']],
         'whatItMeans':raw['whatItMeans'],'whyItMatters':raw['whatItMeans'],
@@ -75,8 +85,10 @@ def payload(full,batch,model,feedback=None):
         'validationFeedback':feedback,
         'instruction':'逐条解释facts，不遗漏、不合并。groupId相同才可讨论关联；relatedContext只作背景，不新增待核对项。'
         '每条返回factId、whatItMeans、nextStep、cannotConclude、owner五个字段。'
+        'owner必须从allowedOwners原样选择一个值，不能把多个选项拼接成新的部门组合。'
         'factId原样复制。文字用工厂人员看得懂的白话，说明哪里可能有问题、找谁核对什么。'
-        '正文不写数字、事实编号、产品代号，数字和真实产品名由系统绑定。'
+        '正文不写数字或中文数量（例如“两个”“三个”）、事实编号、产品代号，数字和真实产品名由系统绑定。'
+        '样本数量只说“样本少”；不能因样本少就认定波动大，也不比较其他产品组。'
         '每个事实的considerations风险都必须在正文解释，不能断言原因已确认。每个文字字段不少于四字且不超过两百四十字。'}
     return analyst.AnalystPayload(model=model,stream=False,think=False,format='json',keep_alive='60s',
         options={'temperature':0,'num_ctx':16384,'num_predict':6000},messages=[
@@ -103,9 +115,13 @@ async def complete(job,facts,scope,path,requester,*,batch_size=8):
     if any(state.get(k)!=v for k,v in binding.items()) or state.get('scope')!=scope:
         raise ValueError('SUPPLEMENT_CHECKPOINT_BINDING')
     by_id={f['id']:f for f in missing}
-    for id,raw in state['accepted'].items():
+    for id,raw in list(state['accepted'].items()):
         if id not in by_id:raise ValueError('SUPPLEMENT_UNREQUESTED_FACT')
-        validate_review(raw,by_id[id],full)
+        try:validate_review(raw,by_id[id],full)
+        except ValueError as error:
+            state['rejections'].append({'code':str(error),'candidate':raw,'previouslyAccepted':True})
+            del state['accepted'][id]
+    save(path,state)
     pending=[f for f in missing if f['id'] not in state['accepted']]
     for offset in range(0,len(pending),batch_size):
         batch=pending[offset:offset+batch_size];feedback=None

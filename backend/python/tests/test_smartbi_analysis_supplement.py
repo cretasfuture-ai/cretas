@@ -29,7 +29,10 @@ def review(fact):
 
 def test_rejects_unbound_numbers_unknown_facts_and_certainty(monkeypatch):
     _,_,full,missing=fixture(monkeypatch)
-    for change in ({'factId':'FOREIGN'},{'whatItMeans':'实际材料成本为123元。'},{'whatItMeans':'已证实发生浪费，确定是生产问题。'}):
+    for change in ({'factId':'FOREIGN'},{'whatItMeans':'实际材料成本为123元。'},{'whatItMeans':'已证实发生浪费，确定是生产问题。'},
+                   {'whatItMeans':'仅有两个样本，材料成本需要核对。'},
+                   {'whatItMeans':'该产品的样本多于其他组，材料成本还需核对。'},
+                   {'whatItMeans':'数据波动大，材料成本还需核对。'}):
         with pytest.raises(ValueError):supplement.validate_review({**review(missing[0]),**change},missing[0],full)
 
 
