@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner: `01a1a954/root` — Base `5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f` — S2–S6接手续验；场景表/精确scope/命令见 archive/2026-11-05-tasks-acceptance.md；独立WT，不碰其他组main/发布锁。
+
 
 
 

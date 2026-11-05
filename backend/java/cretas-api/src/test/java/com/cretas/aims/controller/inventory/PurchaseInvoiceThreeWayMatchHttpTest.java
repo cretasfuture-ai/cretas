@@ -1,6 +1,7 @@
 package com.cretas.aims.controller.inventory;
 
 import com.cretas.aims.dto.user.UserDTO;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.PurchaseInvoiceStatus;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
@@ -207,12 +208,17 @@ class PurchaseInvoiceThreeWayMatchHttpTest {
         PurchaseOrder po = order();
         PurchaseOrderItem a = line(po, MAT_A, "100", "10", "13");
         receipt(po, a, "100");
+        material(MAT_A, F, "MAT-A-CODE", "本厂带鱼");
+        material(MAT_B, F, "MAT-B-CODE", "本厂鲳鱼");
 
         // 总额与订单含税额完全相等，但发票上的物料是 B
         JsonNode inv = upload(po, "1130.00", List.of(lineReq(a, null, MAT_B, "100", "1130.00")), 200);
 
         assertThat(inv.at("/data/reconcileStatus").asText()).isEqualTo("PENDING");
-        assertThat(inv.at("/data/reconcileNote").asText()).contains("MAT-B").contains("MAT-A");
+        assertThat(inv.at("/data/reconcileNote").asText())
+                .contains("本厂鲳鱼").contains("MAT-B-CODE")
+                .contains("本厂带鱼").contains("MAT-A-CODE")
+                .doesNotContain("发票物料 MAT-B");
         JsonNode views = body(mvc.perform(get("/api/mobile/" + F + "/invoices/views").param("poId", po.getId()))
                 .andReturn(), 200);
         assertThat(views.at("/data/0/lines/0/matchStatus").asText()).isEqualTo("MATERIAL_MISMATCH");
@@ -224,6 +230,24 @@ class PurchaseInvoiceThreeWayMatchHttpTest {
         assertThat(refused.at("/message").asText()).contains("行级差异");
         em.flush(); em.clear();
         assertThat(em.find(PurchaseInvoice.class, invoiceId).getReconcileStatus()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void s5_06_missingMaterialReference_isExplicitlyUnknownAndDoesNotLeakForeignName() throws Exception {
+        PurchaseOrder po = order();
+        PurchaseOrderItem a = line(po, MAT_A, "100", "10", "0");
+        receipt(po, a, "100");
+        material(MAT_A, F, "MAT-A-CODE", "本厂带鱼");
+        material(MAT_B, "TW-OTHER", "OTHER-B-CODE", "外厂保密物料");
+
+        JsonNode inv = upload(po, "1000.00", List.of(lineReq(a, null, MAT_B, "100", "1000.00")), 200);
+
+        assertThat(inv.at("/data/reconcileStatus").asText()).isEqualTo("PENDING");
+        assertThat(inv.at("/data/reconcileNote").asText())
+                .contains("未知物料")
+                .contains("本厂带鱼")
+                .doesNotContain("外厂保密物料")
+                .doesNotContain("OTHER-B-CODE");
     }
 
     @Test
@@ -393,6 +417,20 @@ class PurchaseInvoiceThreeWayMatchHttpTest {
         po.setTotalAmount(po.getTotalAmount().add(untaxed));
         po.setTaxAmount(po.getTaxAmount().add(item.getLineAmountWithTax().subtract(untaxed)));
         return item;
+    }
+
+    private void material(String id, String factoryId, String code, String name) {
+        RawMaterialType material = new RawMaterialType();
+        material.setId(id);
+        material.setFactoryId(factoryId);
+        material.setCode(code);
+        material.setName(name);
+        material.setCategory("原料");
+        material.setUnit("kg");
+        material.setIsActive(true);
+        material.setIsByproduct(false);
+        material.setSelfSupplied(false);
+        em.persist(material);
     }
 
     private PurchaseReceiveItem receipt(PurchaseOrder po, PurchaseOrderItem item, String qty) {
