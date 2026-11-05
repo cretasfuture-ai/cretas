@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import time
 import httpx
-from sklearn.feature_extraction.text import TfidfVectorizer
 from factory_experiment import read,save,write,sha,verify
 
 MODELS=['gpt-6-luna','gpt-5.4-mini-2026-03-17','gpt-5.4-2026-03-05']
@@ -20,6 +19,7 @@ INSTRUCTIONS=('你是食品工厂意图分类器，只判断意图，不执行�
 
 
 def plan(root):
+    from sklearn.feature_extraction.text import TfidfVectorizer
     verify(root)
     rows=json.loads((root/'catalog.json').read_text(encoding='utf-8'))['canonical_intents']
     docs=[r['intent_name']+' '+str(r.get('description') or '')+' '+r['intent_code'] for r in rows]

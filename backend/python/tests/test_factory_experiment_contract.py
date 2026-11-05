@@ -26,8 +26,15 @@ def test_cross_split_leakage_rejected(text,group):
 
 def test_transferred_classifier_matches_by_label_not_position():
     import torch
-    from transformers import BertConfig,BertForSequenceClassification
-    model=BertForSequenceClassification(BertConfig(vocab_size=8,hidden_size=8,num_hidden_layers=1,num_attention_heads=2,intermediate_size=16,num_labels=3))
+    from types import SimpleNamespace
+    class HeadHarness(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.classifier=torch.nn.Linear(8,3)
+            self.config=SimpleNamespace()
+        def _init_weights(self,head):
+            head.reset_parameters()
+    model=HeadHarness()
     with torch.no_grad():
         model.classifier.weight.copy_(torch.arange(24).reshape(3,8))
         model.classifier.bias.copy_(torch.tensor([1.,2.,3.]))
