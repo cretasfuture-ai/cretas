@@ -132,7 +132,9 @@ public class QualityDispositionExecuteTool extends AbstractBusinessTool {
             data.put("reason", reason);
         }
 
-        String message = executionResult.isSuccess()
+        String message = executionResult.isApprovalInitiated()
+                ? "处置已提交审批: " + actionDesc + "，审批通过后才会生效"
+                : executionResult.isSuccess()
                 ? "处置执行成功: " + actionDesc
                 : "处置执行失败: " + executionResult.getMessage();
 

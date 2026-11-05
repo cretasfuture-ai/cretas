@@ -57,6 +57,16 @@ public class UserModuleAccessServiceImpl implements UserModuleAccessService {
     }
 
     @Override
+    public boolean isExplicitlyDenied(User user, String moduleCode) {
+        if (user == null || user.getId() == null || user.getFactoryId() == null) {
+            return false;
+        }
+        return repository.findActive(user.getFactoryId(), String.valueOf(user.getId()), moduleCode)
+                .map(access -> access.getAccessType() == UserModuleAccess.AccessType.DENY)
+                .orElse(false);
+    }
+
+    @Override
     public List<ModuleAccessView> listEffectiveAccess(String factoryId, String userId) {
         User user = loadUser(factoryId, userId);
         Map<String, UserModuleAccess> overrides = repository.findActiveByFactoryAndUser(factoryId, userId).stream()

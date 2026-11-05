@@ -85,12 +85,22 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
                     "账号 " + userLabel(user) + " 不属于工厂 " + factoryId + "，无法访问模块 " + moduleCode);
             return false;
         }
-        if (!userModuleAccessService.canAccessModule(user, moduleCode)) {
+        if (!userModuleAccessService.canAccessModule(user, moduleCode)
+                && !allowedByNamedRole(annotation, user, moduleCode)) {
             sendUserModuleDenied(response, user, moduleCode,
                     "账号 " + userLabel(user) + " 缺少模块 " + moduleCode + " 的访问权限");
             return false;
         }
         return true;
+    }
+
+    /** {@link RequireModule#alsoAllowRoles()}: 点名的角色放行这条端点, 账号上显式 DENY 的除外。 */
+    private boolean allowedByNamedRole(RequireModule annotation, User user, String moduleCode) {
+        if (annotation.alsoAllowRoles().length == 0 || user.getRoleEnum() == null) {
+            return false;
+        }
+        return java.util.Arrays.asList(annotation.alsoAllowRoles()).contains(user.getRoleEnum().name())
+                && !userModuleAccessService.isExplicitlyDenied(user, moduleCode);
     }
 
     private String extractFactoryId(String path) {

@@ -157,15 +157,22 @@ public class QualityResultSubmitTool extends AbstractBusinessTool {
             throw new IllegalArgumentException("质检结果必须为 PASS、FAIL 或 CONDITIONAL");
         }
 
+        // D-S302-02: 判不合格必须有原因。notes 里还会拼上「结论: 」前缀, 所以在这里看结论本身。
+        if ("FAIL".equals(result) && (conclusion == null || conclusion.isBlank())) {
+            throw new IllegalArgumentException("判定不合格必须说明原因");
+        }
+
         log.info("提交质检结果 - 记录ID: {}, 结果: {}, 结论: {}", checkId, result, conclusion);
 
-        // 3. 构建或更新质检记录
+        // 3. 构建或更新质检记录。更新时写进一个新对象 (patch), 不碰查回来的实体: open-in-view 下
+        //    它是托管的, 改了它 service 再查回来就是改过的值, 原记录不可改的比较会失效。
         QualityInspection inspection;
         boolean isUpdate = false;
 
         try {
             // 尝试获取现有记录进行更新
-            inspection = qualityInspectionService.getInspectionById(factoryId, checkId);
+            qualityInspectionService.getInspectionById(factoryId, checkId);
+            inspection = new QualityInspection();
             isUpdate = true;
             log.info("更新现有质检记录: {}", checkId);
         } catch (Exception e) {

@@ -1503,6 +1503,19 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
           },
           // R28 P2 (R23 P5 deferred): PENDING adjustment approval queue
           {
+            // D-S302-03: 财务经理没有质检模块, 进不了 /quality/disposals; 同一页面在财务下单开一条。
+            // ⛔ 只给有审批资格的角色: 出纳同样持 finance, 后端不放行, 不让他走到一个全是 403 的页面。
+            path: 'disposal-approvals',
+            name: 'FinanceDisposalApprovals',
+            component: () => import('@/views/quality/disposals/list.vue'),
+            meta: {
+              requiresAuth: true,
+              title: '报废审批',
+              module: 'finance',
+              roles: ['finance_manager', 'factory_super_admin', 'platform_admin']
+            }
+          },
+          {
             path: 'adjustments',
             name: 'FinanceAdjustments',
             component: () => import('@/views/finance/adjustments/list.vue'),
