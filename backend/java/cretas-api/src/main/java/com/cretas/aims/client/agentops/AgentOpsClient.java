@@ -49,7 +49,6 @@ public class AgentOpsClient {
     public static final Map<String, String> CLIENT_ERROR_MESSAGES = Map.ofEntries(
             Map.entry("UNSUPPORTED_EXPECTED_ROUTE", "评测用例的期望路由与当前业态不匹配（工厂只能用工厂意图，餐饮只能用餐饮路由）"),
             Map.entry("UNSUPPORTED_BUSINESS_DOMAIN", "当前业态不支持 AgentOps"),
-            Map.entry("RUNTIME_SHADOW_RESTAURANT_ONLY", "运行时影子评测只支持餐饮租户"),
             Map.entry("INVALID_EVAL_CASE_SCHEMA", "评测用例字段不符合要求"),
             Map.entry("DUPLICATE_CASE_ID", "评测用例编号重复"),
             Map.entry("EVAL_CASE_COUNT_OUT_OF_BOUNDS", "评测用例数量超出限制（1 至 100 条）"),
@@ -273,14 +272,9 @@ public class AgentOpsClient {
 
     public record TrustedContext(String factoryId, String userId, String role, String correlationId,
                                  String businessType) {
-        /** Restaurant stays the default so existing callers keep their behaviour. */
-        public TrustedContext(String factoryId, String userId, String role, String correlationId) {
-            this(factoryId, userId, role, correlationId, "RESTAURANT");
-        }
-
         public void validate() {
             if (!safe(factoryId) || !safe(userId) || !safe(role) || !safe(correlationId)
-                    || !("RESTAURANT".equals(businessType) || "FACTORY".equals(businessType))) {
+                    || !"FACTORY".equals(businessType)) {
                 throw new SecurityException("Invalid trusted AgentOps context");
             }
         }

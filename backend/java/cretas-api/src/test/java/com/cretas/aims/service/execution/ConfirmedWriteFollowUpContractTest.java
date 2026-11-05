@@ -31,6 +31,7 @@ class ConfirmedWriteFollowUpContractTest {
             null,null,null,null,h.registry,null,null,
             mock(AgentOrchestrator.class),mock(AgenticRAGRouterService.class),mock(ResultValidatorService.class),
             dispatch,mock(DynamicToolSelectionService.class),mock(QueryPreprocessorService.class));
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
         var tokens=mock(PreviewTokenService.class);
         var intent=h.configs.get(code);
         var token=IntentPreviewToken.builder().token("local-proof").factoryId("F006").tenantId("F006").userId(7L)

@@ -65,10 +65,6 @@ from smartbi.api import (  # noqa: E402
     benchmark,
     finance_extract,
     data_sync,
-    restaurant_analytics,
-    restaurant_staffing,
-    restaurant_ops_gold,
-    restaurant_ops_recipes,
     production_ai,
     financial_dashboard,
     layout,
@@ -78,20 +74,11 @@ from smartbi.api import (  # noqa: E402
     financial_ratios,
     supplier_price,
     price_anomaly,
-    external_benchmarks,
-    restaurant_agent_runs,
-    agent_ops,
 )
-from smartbi.api import restaurant_feedback  # noqa: E402  (飞轮断点2: 👍/👎 统一收口, 2026-07-23)
-from smartbi.api import restaurant_sections  # noqa: E402
-from smartbi.api import restaurant_value  # noqa: E402  (#56 价值可视化回馈回路, 2026-06-04)
-from smartbi.api import restaurant_cost_card  # noqa: E402  (#57 成本卡/出菜反推, 2026-06-04)
 from smartbi.api import intent_analysis  # noqa: E402
 from smartbi.api import revenue_report  # noqa: E402  (Phase G2, PR #516 — was unwired)
-from smartbi.api import twodfire_ingest  # noqa: E402  (二维火 POS skeleton, 2026-06-04)
 from smartbi.api import sales_preset  # noqa: E402  (Sprint 4 W2 S-REPORTS-PRESETS — top 5 active + 9 Sprint 5 stubs)
 from smartbi.api import upload_status  # noqa: E402  (Phase IIa ops dashboard, 2026-05-14)
-from smartbi.api import restaurant_health_check  # noqa: E402  (G4 AI 经营体检表, 2026-06-03)
 from smartbi.api import platform_callback  # noqa: E402  (外部平台回调, 2026-07-29)
 from smartbi.api.materialized_analytics import router as materialized_analytics_router  # noqa: E402
 from smartbi.capability.api import router as capability_router  # noqa: E402
@@ -143,7 +130,6 @@ except ImportError as e:
 # Import Food Knowledge Base API router (optional - requires asyncpg)
 try:
     from food_kb.api import knowledge as food_kb_api
-    from food_kb.api import industry_report as food_kb_industry_report_api
     from food_kb.api import manual_chat as food_kb_manual_chat_api
     _food_kb_available = True
 except ImportError as e:
@@ -446,10 +432,6 @@ async def lifespan(app: FastAPI):
                 logger.info(f"[startup] template embedding index has {existing} rows, skipping populate")
     except Exception as e:
         logger.warning(f"[startup] template embedding warmer failed: {e}")
-
-    # Restaurant-specific AI sample embeddings are retired.  Keep the generic
-    # template embedding warmer above and the restaurant business ETL below;
-    # neither is allowed to register or refresh RESTAURANT_OPS_* AI samples.
 
     # Agent layer narrative_cache TTL pruner — hourly background task.
     # Gated on SMARTBI_AGENT_LAYER_ENABLED so disabled tenants don't touch the table.
@@ -931,23 +913,9 @@ app.include_router(yoy.router, prefix="/api/smartbi", tags=["YoY Comparison"])
 app.include_router(statistical.router, prefix="/api/statistical", tags=["Statistical Analysis"])
 app.include_router(analysis_cache.router, prefix="/api/smartbi", tags=["Analysis Cache"])
 app.include_router(benchmark.router, prefix="/api/smartbi", tags=["Industry Benchmark"])
-app.include_router(external_benchmarks.router, prefix="/api/smartbi", tags=["External Benchmarks"])
 app.include_router(finance_extract.router, prefix="/api/finance", tags=["Finance Extract"])
-app.include_router(restaurant_analytics.router, prefix="/api/smartbi", tags=["Restaurant Analytics"])
-app.include_router(restaurant_staffing.router, prefix="/api/smartbi", tags=["Restaurant Staffing"])
-app.include_router(restaurant_ops_gold.router, prefix="/api/smartbi", tags=["Restaurant Ops Gold"])
-from smartbi.api import indicator_bridge  # noqa: E402
-app.include_router(indicator_bridge.router)
 app.include_router(supplier_price.router, prefix="/api/smartbi", tags=["Supplier Price Gold"])
 app.include_router(price_anomaly.router, prefix="/api/smartbi", tags=["Price Anomaly Deterrence"])
-app.include_router(restaurant_ops_recipes.router, prefix="/api/smartbi", tags=["Restaurant Ops Recipes"])
-app.include_router(restaurant_health_check.router, prefix="/api/smartbi", tags=["Restaurant Health Check"])
-app.include_router(restaurant_agent_runs.router, tags=["Restaurant Agent Runs"])
-app.include_router(agent_ops.router, tags=["AgentOps"])
-app.include_router(restaurant_sections.router, tags=["Restaurant Sections"])
-app.include_router(restaurant_feedback.router, tags=["Restaurant Feedback"])
-app.include_router(restaurant_value.router, prefix="/api/smartbi", tags=["Restaurant Value Feedback"])
-app.include_router(restaurant_cost_card.router, prefix="/api/smartbi", tags=["Restaurant Cost Card"])
 app.include_router(production_ai.router, prefix="/api/smartbi", tags=["Production AI"])
 app.include_router(financial_dashboard.router, prefix="/api/smartbi/financial-dashboard", tags=["Financial Dashboard"])
 app.include_router(layout.router, prefix="/api/smartbi", tags=["Dashboard Layout"])
@@ -960,7 +928,6 @@ app.include_router(materialized_analytics_router, prefix="/api/smartbi", tags=["
 app.include_router(revenue_report.router, tags=["Revenue Report"])
 # 二维火 POS ingest adapter SKELETON (2026-06-04) — router has full prefix baked in.
 # Only the not-configured dead-end is live; configured sync path is a TODO.
-app.include_router(twodfire_ingest.router, tags=["2dfire POS Ingest"])
 # Sprint 4 W2 S-REPORTS-PRESETS (preset sales reports, top 5 active + 9 Sprint 5 stubs)
 app.include_router(sales_preset.router, tags=["Sales Preset Reports"])
 # Upload Status Dashboard (Phase IIa, 2026-05-14) — router has full prefix baked in
@@ -976,19 +943,6 @@ app.include_router(printing_api.router, prefix="/api/printing", tags=["Printing"
 # Gold layer reads — v1 Phase B pilot (§5). Finance-summary from agg_daily.
 from smartbi.api import gold_reads  # noqa: E402
 app.include_router(gold_reads.router, prefix="/api/smartbi", tags=["Gold Reads"])
-
-# 餐饮月度报告 (spec §3.2, 2026-07-29) — 批量执行已有查询计划 + 模板渲染 + xlsx/pdf
-# 导出。不是新引擎: 每一节都走 restaurant_intent_service.tiered_answer。
-from smartbi.api import restaurant_report as restaurant_report_api  # noqa: E402
-app.include_router(restaurant_report_api.router, prefix="/api/smartbi", tags=["Restaurant Monthly Report"])
-
-# G2 餐饮目标拆分 + 达成率预警 (2026-06-03) — year/month/week/day target cascade
-from smartbi.api import restaurant_targets as restaurant_targets_api  # noqa: E402
-app.include_router(restaurant_targets_api.router, prefix="/api/smartbi", tags=["Restaurant Targets"])
-
-# #58 Phase 1 (2026-06-04) — 周/日拆分 + 滚动预测 + 实时 pace 预警 (extends G2)
-from smartbi.api import restaurant_targets_p1 as restaurant_targets_p1_api  # noqa: E402
-app.include_router(restaurant_targets_p1_api.router, prefix="/api/smartbi", tags=["Restaurant Targets P1"])
 
 # Chart Auto-Insight (U4 — POST /api/smartbi/chart-insight, JWT required)
 # 🔒 RBAC: factoryId + role ALWAYS from JWT (request.state), never from request body.
@@ -1022,19 +976,11 @@ app.include_router(
     tags=["Factory Config"],
 )
 
-# 卡5b (2026-07-28): AI 飞轮运营台后端 API — 总览看板 / 晋升审核 / Miss 复盘 /
-# 质量与回归 / 蒸馏数据集导出。仅 platform_admin (不含 factory_super_admin/
-# permission_admin — 这个模块的所有读端点都是跨租户视图, 只有 platform_admin
-# 天然安全, 见 flywheel.py 模块注释)。
-from smartbi.api import flywheel  # noqa: E402
-app.include_router(
-    flywheel.router,
-    prefix="/api/smartbi/flywheel",
-    tags=["AI Flywheel Console"],
-)
-
 # Week 5 Agent layer — gated by env flag until verified on test.
 # When flag is off, /api/smartbi/insights/custom does not exist.
+from smartbi.api.agent_ops import router as agent_ops_router
+app.include_router(agent_ops_router, tags=["Agent Operations"])
+
 if os.getenv("SMARTBI_AGENT_LAYER_ENABLED", "false").lower() == "true":
     from smartbi.agent.api import router as agent_router
     app.include_router(agent_router, prefix="/api/smartbi", tags=["Agent Insights"])
@@ -1063,14 +1009,6 @@ app.include_router(
 # 那段 try/except 自 04-24 起每次启动都在 WARN 里报一次 ImportError —— 守着一个
 # 从没接上的口子。要恢复请新建模块并直接 include_router, 不要再用 try/except 吞。
 
-# Phase A A-1 Restaurant ETL admin (Apr 28 2026): trigger + status endpoints
-from smartbi.api import restaurant_etl_admin  # noqa: E402
-app.include_router(
-    restaurant_etl_admin.router,
-    prefix="/api/smartbi/restaurant/etl",
-    tags=["Restaurant ETL Admin"],
-)
-
 # Factory overview (2026-10-23): 经营分析页顶部概览卡的工厂销售订单汇总 (只读 cretas_db, 租户来自登录)
 from smartbi.api import factory_overview  # noqa: E402
 app.include_router(
@@ -1093,40 +1031,6 @@ app.include_router(
     factory_production_gold.router,
     prefix="/api/smartbi",
     tags=["Factory Production Gold"],
-)
-
-# Restaurant POS dish-name resolution admin (#61 Phase 1, 2026-06-04)
-from smartbi.api import restaurant_name_resolution_admin  # noqa: E402
-app.include_router(
-    restaurant_name_resolution_admin.router,
-    prefix="/api/smartbi/restaurant/name-resolution",
-    tags=["Restaurant POS Name Resolution"],
-)
-
-# Restaurant completeness API (餐饮 Phase A Task 2.1)
-from smartbi.api import restaurant_completeness  # noqa: E402
-app.include_router(
-    restaurant_completeness.router,
-    prefix="/api/smartbi/restaurant",
-    tags=["Restaurant Completeness"],
-)
-
-# Sprint 11 MealClaw Response (2026-05-22) — composite LLM endpoint
-# Strict whitelist response (summary / topItems / recommendations / evidence /
-# dataAvailable) for AI chat layer. See restaurant_llm_composite.py docstring.
-from smartbi.api import restaurant_llm_composite  # noqa: E402
-app.include_router(
-    restaurant_llm_composite.router,
-    prefix="/api/smartbi",
-    tags=["Restaurant LLM Composite"],
-)
-
-# Restaurant outliers API (餐饮 Phase B-1 Task 7 — outlier detection + dismissal)
-from smartbi.api import restaurant_outliers  # noqa: E402
-app.include_router(
-    restaurant_outliers.router,
-    prefix="/api/restaurant",
-    tags=["RestaurantOutliers"],
 )
 
 # Phase A A-3 Data quality queue admin (餐饮 Phase A Task 3.2 — list endpoint)
@@ -1194,7 +1098,6 @@ else:
 # =====================================================
 if _food_kb_available:
     app.include_router(food_kb_api.router, prefix="/api/food-kb", tags=["Food Knowledge Base"])
-    app.include_router(food_kb_industry_report_api.router, prefix="/api/food-kb/industry-report", tags=["Industry Report RAG"])  # noqa: E501
     app.include_router(food_kb_manual_chat_api.router, prefix="/api/food-kb", tags=["Manual Chat"])
 else:
     logger.warning("Food Knowledge Base routes not registered")

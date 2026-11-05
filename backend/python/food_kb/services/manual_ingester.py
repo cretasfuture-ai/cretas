@@ -21,32 +21,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 # Sources to ingest
 MANUAL_SOURCES = [
     {
-        "path": "docs/plans/restaurant-metrics-glossary.html",
-        "title_prefix": "餐饮指数字典",
-        "source": "restaurant-metrics-glossary.html",
-        "type": "html",
-        "subcategory": "restaurant",
-    },
-    {
-        "path": "docs/plans/restaurant-product-manual.html",
-        "title_prefix": "餐饮产品使用手册",
-        "source": "restaurant-product-manual.html",
-        "type": "html",
-        "subcategory": "restaurant",
-    },
-    {
         "path": "backend/python/food_kb/data/f006_production_sop.md",
         "title_prefix": "F006 生产全链路测试 SOP",
         "source": "f006-production-full-chain-sop.md",
         "type": "markdown",
         "subcategory": "factory",
-    },
-    {
-        "path": "docs/manual/restaurant-full-chain-sop.html",
-        "title_prefix": "餐饮全链路SOP",
-        "source": "restaurant-full-chain-sop.html",
-        "type": "html",
-        "subcategory": "restaurant",
     },
 ]
 
@@ -78,7 +57,7 @@ def parse_html_to_sections(html_content: str) -> List[Dict[str, str]]:
         """Extract concise chapter label from h1.
         '第 1 章 · 财务健康 (Financial Health)' → '财务健康'
         '附录 · 模块入口对照表' → '附录'
-        '白垩纪餐饮指数字典' (file root) → ''  (no prefix for top-level)
+        The document root title is omitted when it is the only chapter context.
         """
         # Remove "第 X 章 · " prefix
         text = re.sub(r"^第\s*\d+\s*章\s*[·\-：:]\s*", "", h1_text)
@@ -86,9 +65,6 @@ def parse_html_to_sections(html_content: str) -> List[Dict[str, str]]:
         text = re.sub(r"\s*\([^)]*\)\s*$", "", text)
         # Remove " · " sub-titles (元章节)
         text = text.split(" · ")[0].strip()
-        # Skip top-level title (the document name)
-        if text == "白垩纪餐饮指数字典":
-            return ""
         return text.strip()
 
     def _build_title(chapter: str, subsection: str, metric: str) -> str:
@@ -389,25 +365,6 @@ async def ingest_all(source_names: Optional[Set[str]] = None):
             f"  Atomically swapped to {source_docs} sections / {source_chunks} chunks "
             f"for '{canonical_source}' (replaced {old_count} prior chunks)"
         )
-
-        # Reviewer R2 N1: chunk budget [4, 12] warn for restaurant-product-manual chapters
-        # Soft monitoring — log only, no hard block. Heuristic: avg = total_chunks / num_sections.
-        # source_docs counts sections (h2/h3 splits), not strictly h1 chapters; approximation
-        # good enough for warn signal.
-        if canonical_source == "restaurant-product-manual.html":
-            avg_chunks_per_chapter = source_chunks / max(1, source_docs)
-            if avg_chunks_per_chapter > 12:
-                logger.warning(
-                    f"  ⚠️  chunk budget exceeded: {canonical_source} "
-                    f"avg {avg_chunks_per_chapter:.1f} chunks/chapter (target ≤12). "
-                    f"Consider merging h2 sections in Tier 1 chapters."
-                )
-            elif avg_chunks_per_chapter < 4:
-                logger.warning(
-                    f"  ⚠️  chunk budget under-floor: {canonical_source} "
-                    f"avg {avg_chunks_per_chapter:.1f} chunks/chapter (target ≥4). "
-                    f"Tier 2-5 skeleton chapters too thin."
-                )
 
         total_docs += source_docs
         total_chunks += source_chunks

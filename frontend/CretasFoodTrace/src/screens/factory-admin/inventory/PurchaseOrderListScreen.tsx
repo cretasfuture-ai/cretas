@@ -214,7 +214,6 @@ function PurchaseOrderListForActor() {
           <Appbar.Action
             testID="pm-procurement-confirm-btn"
             icon="truck-check"
-            onPress={() => (navigation as Nav & { navigate: (name: string) => void }).navigate('ProcurementDeliveryConfirm')}
           />
         )}
         <Appbar.Action icon="refresh" onPress={onRefresh} />

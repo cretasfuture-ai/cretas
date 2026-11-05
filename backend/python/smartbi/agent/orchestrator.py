@@ -5,7 +5,7 @@ Composes:
              → corpus_cache.get (serve-from-corpus flywheel) → (hit) return
              → budget_tracker.check_budget → (blocked) degraded response
              → Gold queries (finance/products/discount) for prompt data
-             → call LLM with 餐饮数据分析师 system prompt (spec §4.3)
+    → call LLM with factory data-analysis system prompt
              → budget_tracker.consume + narrative_cache.put
              → return answer
 
@@ -110,7 +110,7 @@ _CORPUS_FEEDBACK_DOWN_THRESHOLD = 2
 INSIGHT_MAX_TOKENS = 2000
 
 
-SYSTEM_PROMPT = """你是一位服务于中国餐饮连锁企业的资深数据分析师。
+SYSTEM_PROMPT = """你是一位服务于食品工厂的资深数据分析师。
 你将收到用户的一个业务问题，以及该企业真实经营数据的摘要。你的任务是基于这些数据回答问题，并给出可执行的运营建议。
 
 严格遵守以下要求：
@@ -779,7 +779,7 @@ async def _capture_insight_distillation(
             task_type="insight",
             input_text=user_prompt,
             teacher_output=answer,
-            business_type="restaurant",
+            business_type="factory",
             factory_id=factory_id,
             system_prompt=SYSTEM_PROMPT,
             teacher_model=teacher_model,

@@ -7,6 +7,7 @@ import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
+import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
@@ -241,6 +242,20 @@ class PurchaseServiceImplOverReceiveTest {
         when(supplierRepository.findByIdAndFactoryId(SUPPLIER_ID, FACTORY_ID))
                 .thenReturn(Optional.of(supplier));
 
+        RawMaterialType material = new RawMaterialType();
+        material.setId(MAT_ID);
+        material.setFactoryId(FACTORY_ID);
+        material.setName(MAT_NAME);
+        material.setUnit("kg");
+        RawMaterialTypeRepository.WriteStateProjection state =
+                mock(RawMaterialTypeRepository.WriteStateProjection.class);
+        when(state.getId()).thenReturn(MAT_ID);
+        when(state.getIsActive()).thenReturn(true);
+        when(rawMaterialTypeRepository.lockByFactoryIdAndIdIn(FACTORY_ID, List.of(MAT_ID)))
+                .thenReturn(List.of(material));
+        when(rawMaterialTypeRepository.findFreshWriteStateByFactoryIdAndIdIn(
+                FACTORY_ID, List.of(MAT_ID))).thenReturn(List.of(state));
+
         CreateReceiveRecordRequest req = buildRequest(new BigDecimal("99999"));  // huge qty
         req.setPurchaseOrderId(null);  // 无单入库
 
@@ -251,6 +266,10 @@ class PurchaseServiceImplOverReceiveTest {
         // purchaseOrderRepository / purchaseOrderItemRepository should NOT be queried
         verify(purchaseOrderRepository, never()).findByIdAndFactoryIdForUpdate(anyString(), anyString());
         verify(purchaseOrderItemRepository, never()).findByPurchaseOrderId(anyString());
+        verify(rawMaterialTypeRepository).lockByFactoryIdAndIdIn(FACTORY_ID, List.of(MAT_ID));
+        verify(rawMaterialTypeRepository).findFreshWriteStateByFactoryIdAndIdIn(
+                FACTORY_ID, List.of(MAT_ID));
+        verify(receiveRecordRepository).save(any(PurchaseReceiveRecord.class));
     }
 
     @Test

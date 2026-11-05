@@ -23,9 +23,8 @@ import java.util.UUID;
 @Service
 public class AgentOpsService {
     private static final Set<String> ADMIN_ROLES = Set.of(
-            "factory_super_admin", "platform_admin", "permission_admin",
-            "restaurant_manager", "restaurant_owner");
-    private static final Set<String> SUPPORTED_DOMAINS = Set.of("RESTAURANT", "FACTORY");
+            "factory_super_admin", "platform_admin", "permission_admin");
+    private static final Set<String> SUPPORTED_DOMAINS = Set.of("FACTORY");
     private static final Set<String> SAFE_CONFLICT_CODES = Set.of(
             "EVAL_SET_VERSION_EXISTS", "IDEMPOTENCY_KEY_REUSED", "EVALUATOR_BUILD_UNAVAILABLE");
 

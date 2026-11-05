@@ -17,7 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Intent Config Management Service Implementation
@@ -32,11 +31,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public class IntentConfigManagementServiceImpl implements IntentConfigManagementService {
 
     private final AIIntentConfigRepository intentRepository;
-
-    /**
-     * v32: factoryId -> businessDomain cache (factory type rarely changes)
-     */
-    private final ConcurrentHashMap<String, String> factoryDomainCache = new ConcurrentHashMap<>();
 
     private FactoryRepository factoryRepository;
 
@@ -317,18 +311,26 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
 
     @Override
     public String resolveBusinessDomain(String factoryId) {
-        if (factoryId == null || factoryId.isBlank()) return BusinessDomainUtils.FACTORY;
-        return factoryDomainCache.computeIfAbsent(factoryId, fid -> {
-            try {
-                return factoryRepository.findById(fid)
-                        .map(Factory::getType)
-                        .map(BusinessDomainUtils::resolveDomain)
-                        .orElse(BusinessDomainUtils.FACTORY);
-            } catch (Exception e) {
-                log.warn("v32 resolveBusinessDomain failed for factoryId={}: {}", fid, e.getMessage());
-                return BusinessDomainUtils.FACTORY;
+        if (factoryId == null || factoryId.isBlank()) {
+            throw new IllegalStateException("租户业务类型不可用: factoryId为空");
+        }
+        if (factoryRepository == null) {
+            throw new IllegalStateException("租户业务类型不可用: 工厂目录未初始化");
+        }
+        try {
+            Factory factory = factoryRepository.findById(factoryId.trim())
+                    .orElseThrow(() -> new IllegalStateException("租户不存在: " + factoryId));
+            if (factory.getType() == null) {
+                throw new IllegalStateException("租户业务类型为空: " + factoryId);
             }
-        });
+            return BusinessDomainUtils.resolveDomain(factory.getType());
+        } catch (RuntimeException e) {
+            log.warn("resolveBusinessDomain failed for factoryId={}: {}", factoryId, e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.warn("resolveBusinessDomain failed for factoryId={}: {}", factoryId, e.getMessage());
+            throw new IllegalStateException("租户业务类型不可用: " + factoryId, e);
+        }
     }
 
     // ==================== Private ====================

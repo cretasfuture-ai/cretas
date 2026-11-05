@@ -9,4 +9,3 @@ export * from './analysis';
 export * from './python-service';
 export * from './dashboard';
 export * from './data-utils';
-export * from './restaurant-chat';

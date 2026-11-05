@@ -143,7 +143,7 @@ class DocumentIngester:
         effective_date: str = None,
         metadata: Optional[Dict] = None,
         operator: str = "system",
-        subcategory: Optional[str] = None,  # NEW: domain routing (e.g. "restaurant", "factory")
+        subcategory: Optional[str] = None,  # Tenant subcategory routing (e.g. "factory")
     ) -> Dict[str, Any]:
         """
         Ingest a single document into the knowledge base.
@@ -158,7 +158,7 @@ class DocumentIngester:
             effective_date: Effective date (YYYY-MM-DD)
             metadata: Additional metadata
             operator: Who is performing the ingestion
-            subcategory: Domain routing tag (e.g., "restaurant", "factory"). None for universal docs.
+        subcategory: Tenant routing tag (e.g., "factory"). None for universal docs.
 
         Returns:
             Ingestion result with document IDs and chunk count

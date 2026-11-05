@@ -110,15 +110,15 @@ class PlatformFactoryMenuConcurrencyPostgresContractTest {
         var pool = Executors.newFixedThreadPool(2);
         try {
             var first = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
-                menuService.update(factory, "restaurantProcurement",
-                        new com.cretas.aims.dto.platform.PlatformFactoryMenuDTO.Update(true, java.util.List.of("/restaurant/procurement")));
+                menuService.update(factory, "procurement",
+                        new com.cretas.aims.dto.platform.PlatformFactoryMenuDTO.Update(true, java.util.List.of("/procurement/orders")));
                 return null;
             }));
             assertThat(firstLocked.await(10, TimeUnit.SECONDS)).isTrue();
             var second = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
                 // The legacy endpoint replaces non-menu config; its normal UI
                 // payload includes the unchanged ordinary fields as well.
-                legacyController.update(factory, "restaurant_buy", Map.of("enabledForReports", true, "unrelated", "keep"));
+                legacyController.update(factory, "procurement", Map.of("enabledForReports", true, "unrelated", "keep"));
                 return null;
             }));
             assertThat(secondAttempted.await(10, TimeUnit.SECONDS)).isTrue();
@@ -131,7 +131,7 @@ class PlatformFactoryMenuConcurrencyPostgresContractTest {
         } finally {
             pool.shutdownNow();
         }
-        Map<String, Object> config = features.findByFactoryIdAndModuleIdAndDeletedAtIsNull(factory, "restaurant_buy")
+        Map<String, Object> config = features.findByFactoryIdAndModuleIdAndDeletedAtIsNull(factory, "procurement")
                 .orElseThrow().getConfig();
         assertThat(config).containsEntry("menuVisible", true).containsEntry("enabledForReports", true)
                 .containsEntry("unrelated", "keep");
@@ -186,7 +186,7 @@ class PlatformFactoryMenuConcurrencyPostgresContractTest {
     }
 
     private void seed(String factory) {
-        seedModule(factory, "restaurant_buy", true);
+        seedModule(factory, "procurement", true);
     }
 
     @Test
@@ -197,12 +197,11 @@ class PlatformFactoryMenuConcurrencyPostgresContractTest {
                 factory, factory, "FACTORY"));
         when(factoryService.getFactoryById(factory)).thenReturn(com.cretas.aims.dto.platform.FactoryDTO.builder()
                 .id(factory).name(factory).type("FACTORY").build());
-        menuService.update(factory, "restaurantProcurement",
+        menuService.update(factory, "procurement",
                 new com.cretas.aims.dto.platform.PlatformFactoryMenuDTO.Update(false, java.util.List.of()));
-        FactoryFeatureConfig row = features.findByFactoryIdAndModuleIdAndDeletedAtIsNull(factory, "restaurant_buy").orElseThrow();
+        FactoryFeatureConfig row = features.findByFactoryIdAndModuleIdAndDeletedAtIsNull(factory, "procurement").orElseThrow();
         assertThat(row.getEnabled()).isTrue();
         assertThat(row.getConfig()).containsEntry("menuVisible", false);
-        assertThat(features.findByFactoryIdAndModuleIdAndDeletedAtIsNull(factory, "restaurantProcurement")).isEmpty();
     }
 
     private void seedModule(String factory, String module, boolean enabled) {

@@ -59,11 +59,12 @@ class TestYesNoDecisionReachesAttribution:
         """守最不显眼的那个（形态 C⁶）。
 
         只点亮 attribution 会让它走 500-token 的薄复述 —— 对「要不要关店」
-        这种决策问句反而更薄。decision 模式必须同时带上 review/sales，
+        这种决策问句反而更薄。decision 模式必须保留工厂 sales 路径，
         这样 `_is_thin_restate_eligible` 才是 False。
         """
         plan = _engine().plan_dimensions(PROD_SHAPED_QUESTION)
-        assert plan["review"] is True and plan["sales"] is True
+        assert "review" not in plan
+        assert plan["sales"] is True
         assert _is_thin_restate_eligible(plan) is False
 
         # 阳性对照：纯归因问句**确实**是 eligible 的 —— 否则上面那条

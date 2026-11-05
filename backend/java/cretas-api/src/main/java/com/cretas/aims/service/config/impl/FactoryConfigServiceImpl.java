@@ -643,6 +643,9 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
         FactoryTemplate template = factoryTemplateRepository.findByTemplateCodeIgnoreCase(templateCode)
                 .orElseThrow(() -> new BusinessException(404, "模板不存在: " + templateCode)
                         .withHint("请刷新模板列表后重新选择").withHintTarget("templateCode"));
+        if (com.cretas.aims.util.RetiredTemplatePolicy.isRetired(template)) {
+            throw new BusinessException(400, "该行业模板已退役").withCode("RETIRED_CONFIGURATION_DOMAIN");
+        }
 
         // 1. Create draft
         FactoryConfiguration config = getOrCreateDraft(factoryId, operatorId);
@@ -692,6 +695,7 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
         if (factoryDefaultValueRepository != null) {
             for (var entry : defaultValues.entrySet()) {
                 String modCode = entry.getKey();
+                if (com.cretas.aims.util.RetiredTemplatePolicy.isRetiredModule(modCode)) continue;
                 for (var fieldEntry : entry.getValue().entrySet()) {
                     FactoryDefaultValue fdv = new FactoryDefaultValue();
                     fdv.setFactoryId(factoryId);

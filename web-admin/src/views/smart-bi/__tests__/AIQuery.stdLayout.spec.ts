@@ -218,15 +218,6 @@ describe('L1 / L2 / L4: 版式', () => {
     expect(assistant[assistant.length - 1].text()).toContain('这是答案正文');
   });
 
-  it('阴性对照: 餐饮租户版式不变 (头像 / 角色名 / 时间都还在, 没有 ai-std)', async () => {
-    executeIntentMock.mockResolvedValue(successResponse);
-    const w = await mountPage('RESTAURANT');
-    await send(w, '查一下今天的库存');
-    expect(w.find('.chat-history').classes()).not.toContain('ai-std');
-    expect(w.findAll('.message-avatar').length).toBeGreaterThan(0);
-    expect(w.findAll('.role-name').length).toBeGreaterThan(0);
-    expect(w.findAll('.message-time').length).toBeGreaterThan(0);
-  });
 
   it('样式源文本: 768 居中 / 用户气泡 / 16px / 字体栈 / 无 10-11px; 阴性对照: 餐饮旧样式和全局字体没被改', () => {
     const style = AIQUERY_SRC.slice(AIQUERY_SRC.indexOf('<style lang="scss" scoped>'));
@@ -270,7 +261,7 @@ describe('L1 / L2 / L4: 版式', () => {
     expect(fam![1]).toMatch(/^\s*['"]?Noto Sans SC/);
   });
 
-  it('S2/S3/S4: 非餐饮按钮、芯片是 default(32px) 档, 输入框 large; 餐饮保持 small (阴性对照)', async () => {
+  it('S2/S3/S4: 工厂按钮、芯片是 default(32px) 档, 输入框 large', async () => {
     const w = await mountPage('FACTORY');
     const chips = w.findAll('.quick-questions .el-button');
     expect(chips.length).toBeGreaterThan(0);
@@ -285,12 +276,6 @@ describe('L1 / L2 / L4: 版式', () => {
     expect(input).toContain('padding: 1px 12px;');
     expect(input).toContain('border-radius: 8px;');
 
-    const rw = await mountPage('RESTAURANT');
-    const rwChips = rw.findAll('.restaurant-primary-questions .el-button');
-    expect(rwChips.length).toBeGreaterThan(0);
-    expect(rwChips.every((b) => b.attributes('data-size') === 'small')).toBe(true);
-    expect(rw.find('.el-autocomplete').attributes('data-size')).toBe('default');
-    expect(rw.find('[data-testid="aiq-input-area"]').classes()).not.toContain('ai-std-input');
   });
 });
 
@@ -329,7 +314,7 @@ describe('E1 / E2: 遥测默认不显示, ?aiDebug=1 才显示', () => {
     expect(w.find('[data-testid="aiq-sql-code"]').exists()).toBe(false);
   });
 
-  it('「秒回」和「已物化 N」: 默认不显示, ?aiDebug=1 才显示; 餐饮保持原样', async () => {
+  it('「秒回」和「已物化 N」: 默认不显示, ?aiDebug=1 才显示', async () => {
     listFactoryTemplatesMock.mockImplementation(async () => ({
       success: true,
       templates: [{ code: 'sales_summary', title: '销售汇总', isRecommended: true, materializationCount: 5 }],
@@ -344,8 +329,6 @@ describe('E1 / E2: 遥测默认不显示, ?aiDebug=1 才显示', () => {
     expect(dbg.findAll('.suggestion-tag').length).toBeGreaterThan(0);
     expect(dbg.text()).toContain('已物化 5');
 
-    const rw = await mountPage('RESTAURANT');
-    expect(rw.findAll('.suggestion-tag').length).toBeGreaterThan(0);
   });
 });
 
@@ -375,16 +358,6 @@ describe('W1: 骨架屏', () => {
     expect(w.text()).toContain('这是答案正文'); // 阳性对照: 加载确实结束并出了答案
   });
 
-  it('阴性对照: 餐饮租户加载中仍是转圈, 不出骨架', async () => {
-    executeIntentMock.mockImplementation(() => new Promise(() => undefined));
-    const w = await mountPage('RESTAURANT');
-    const vm = w.vm as unknown as Vm;
-    vm.inputQuery = '今天营业额';
-    void vm.handleSendMessage();
-    await flushPromises();
-    expect(w.find('[data-testid="aiq-loading-skeleton"]').exists()).toBe(false);
-    expect(w.find('.loading-indicator').exists()).toBe(true);
-  });
 
   it('样式源文本: 高 14 / 圆角 5 / 1.5s 闪烁; 减少动态效果时静止', () => {
     const style = AIQUERY_SRC.slice(AIQUERY_SRC.indexOf('<style lang="scss" scoped>'));
@@ -428,17 +401,6 @@ describe('W2: 超时和失败说「没有执行任何写操作」', () => {
     expect(retry!.attributes('data-size')).toBe('default');
   });
 
-  it('阴性对照: 餐饮租户超时文案保持旧句, 不带这句话', async () => {
-    const { w, callbacks } = await startStream('RESTAURANT');
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    callbacks.onStatus('正在分析');
-    vi.advanceTimersByTime(60_000);
-    await flushPromises();
-    const area = w.find('.sse-retry-area');
-    expect(area.exists()).toBe(true);
-    expect(area.text()).toContain('连接超时，服务响应较慢。');
-    expect(area.text()).not.toContain('没有执行任何写操作');
-  });
 
   it('流式报错 (500): 最终失败文案含「没有执行任何写操作」', async () => {
     const { w, callbacks } = await startStream('FACTORY');
@@ -523,7 +485,7 @@ describe('V3 / G1: 表头与表格列', () => {
 });
 
 describe('N2: 悬停复制', () => {
-  it('助手和用户消息都有「复制」, 点了写剪贴板并提示; 加载中没有 (对照); 餐饮没有 (对照)', async () => {
+  it('助手和用户消息都有复制, 点了写剪贴板并提示; 加载中没有', async () => {
     executeIntentMock.mockResolvedValue(successResponse);
     const w = await mountPage('FACTORY');
     await send(w, '查一下今天的库存');
@@ -543,8 +505,6 @@ describe('N2: 悬停复制', () => {
     await flushPromises();
     expect(h.clipboardWrite).toHaveBeenLastCalledWith('查一下今天的库存');
 
-    const rw = await mountPage('RESTAURANT');
-    expect(rw.findAll('[data-testid="aiq-copy"]')).toHaveLength(0);
   });
 
   it('剪贴板写失败: 提示失败, 不提示成功', async () => {

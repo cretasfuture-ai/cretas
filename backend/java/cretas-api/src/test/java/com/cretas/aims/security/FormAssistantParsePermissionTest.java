@@ -29,7 +29,7 @@ class FormAssistantParsePermissionTest {
     private static final String[] FORM_FILL_PERMISSIONS = {
             "analytics:read_write",
             "production:write", "procurement:write", "sales:write",
-            "warehouse:write", "inventory:write", "system:write", "restaurant:write"
+            "warehouse:write", "inventory:write", "system:write"
     };
 
     private final PermissionServiceImpl permissionService = new PermissionServiceImpl();

@@ -202,7 +202,10 @@ class SseSemanticCacheAdmissionContractTest {
                     registry, dispatch, mock(DynamicToolSelectionService.class), provider, mock(DashScopeConfig.class)));
             ReflectionTestUtils.setField(service, "intentPermissionGate", gate);
             ReflectionTestUtils.setField(service, "writeGuardService", new WriteGuardService());
-            ReflectionTestUtils.setField(service, "businessTypeGate", mock(BusinessTypeGate.class));
+            BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
+            when(businessTypeGate.resolveDomain("F006")).thenReturn("FACTORY");
+            when(businessTypeGate.resolveDomain("F007")).thenReturn("FACTORY");
+            ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
             doAnswer(i -> { events.add(new Event(i.getArgument(1), i.getArgument(2))); return null; })
                     .when(service).sendSseEvent(any(), anyString(), any());
         }

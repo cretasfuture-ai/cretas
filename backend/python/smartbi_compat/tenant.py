@@ -15,9 +15,12 @@ The Java enum has 5 values; for tenant-typed envelope (Q-DEC-8 Option A
 discriminator) we collapse to 2 logical groups:
 
     RESTAURANT, BRANCH                 → restaurant semantics
-    FACTORY, HEADQUARTERS, CENTRAL_KITCHEN, unknown, missing → factory semantics
+    FACTORY, HEADQUARTERS, CENTRAL_KITCHEN → factory semantics
 
-Spec: docs/superpowers/specs/2026-05-11-q4-q5-restaurant-analysis-impl-spec.md §2.2
+Unknown and missing metadata are errors for analytics callers; they must not
+silently acquire factory semantics.
+
+Historical tenant analytics discriminator specification §2.2.
 First consumer: ``smartbi_compat.api.analysis_production`` (chat-A1, 2026-05-12).
 Co-consumer: ``smartbi_compat.api.analysis_quality`` (chat-B1).
 """
@@ -78,16 +81,15 @@ class TenantType(str, Enum):
     def from_db_value(cls, value: Optional[str]) -> "TenantType":
         """Parse ``cretas_db.factories.type`` VARCHAR column.
 
-        Defensive: None / empty / unknown → ``FACTORY`` (matches Java
-        ``isRestaurantTenant`` returning ``false`` on missing rows /
-        repository failures).
+        ``None`` / empty / unknown values raise ``ValueError`` so analytics
+        callers cannot silently treat an unverified tenant as a factory.
         """
         if not value:
-            return cls.FACTORY
+            raise ValueError("tenant type metadata is missing")
         try:
             return cls(value.upper())
-        except ValueError:
-            return cls.FACTORY
+        except (AttributeError, ValueError) as exc:
+            raise ValueError(f"unknown tenant type: {value!r}") from exc
 
 
 async def get_tenant_type(factory_id: str, conn) -> TenantType:
@@ -104,9 +106,8 @@ async def get_tenant_type(factory_id: str, conn) -> TenantType:
     Returns
     -------
     TenantType
-        Defaults to ``FACTORY`` when the row is missing — matches Java
-        ``isRestaurantTenant`` which returns ``false`` (i.e. factory
-        branch) on missing rows, preserving legacy manufacturing path.
+        Returns a known persisted tenant type. Missing rows and invalid
+        metadata raise ``ValueError`` so route consumers can fail closed.
     """
     # P0 fix 2026-05-11: column is `id` (PK), not `factory_id`. Verified via
     # direct psql against cretas_prod_db.factories — caught by chat3 PR #365
@@ -117,5 +118,5 @@ async def get_tenant_type(factory_id: str, conn) -> TenantType:
         factory_id,
     )
     if row is None:
-        return TenantType.FACTORY
+        raise ValueError(f"tenant metadata missing for {factory_id!r}")
     return TenantType.from_db_value(row["type"])

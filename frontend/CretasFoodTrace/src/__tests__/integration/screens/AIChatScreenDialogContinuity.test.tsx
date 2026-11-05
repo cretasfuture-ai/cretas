@@ -90,7 +90,6 @@ jest.mock('../../../components/ai/RichContentRenderer', () => ({
   RichContentRenderer: () => null,
   detectRichData: () => null,
 }));
-jest.mock('../../../components/ai/RestaurantGrossMarginRunCard', () => ({ RestaurantGrossMarginRunCard: () => null }));
 jest.mock('../../../components/common/VoiceMicButton', () => ({ VoiceMicButton: () => null }));
 jest.mock('../../../services/audio/feedbackSounds', () => ({
   feedbackSounds: { onWriteSuccess: jest.fn(), onNeedMoreInfo: jest.fn(), onError: jest.fn() },

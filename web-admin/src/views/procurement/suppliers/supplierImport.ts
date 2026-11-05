@@ -1,7 +1,7 @@
 import {
   parseExcelArrayBuffer,
   type ParsedTable,
-} from '@/views/restaurant/supplier-delivery/supplierDeliveryImport';
+} from '@/utils/excelImport';
 import { isReadableSupplierAddress, isValidSupplierPhone, normalizeText } from './supplierModel';
 
 export const SUPPLIER_IMPORT_FIELDS = [

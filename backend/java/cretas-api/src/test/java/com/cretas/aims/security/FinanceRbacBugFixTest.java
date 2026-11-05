@@ -1,7 +1,7 @@
 package com.cretas.aims.security;
 
 import com.cretas.aims.controller.finance.FinanceReportController;
-import com.cretas.aims.dto.restaurant.SupplierDeliveryNoteDto;
+import com.cretas.aims.dto.inventory.SupplierDeliveryNoteDto;
 import com.cretas.aims.dto.smartbi.TableDataResponse;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.User;
@@ -88,7 +88,7 @@ class FinanceRbacBugFixTest {
     // ───────── Shared helpers ─────────
 
     private void asUserWithPricePermission(Long userId, boolean canViewPrice) {
-        // canViewPrice=true implies the user also has finance read-write (finance_manager / restaurant_owner).
+        // canViewPrice=true implies the user also has finance read-write (finance_manager).
         // PriceFieldResponseAdvice checks BOTH PRICE_VIEW_PERMISSION and FINANCE_READ_PERMISSION;
         // only when both are true does it early-return (skip all stripping).
         // When canViewPrice=false (sales_manager) finance permission is also false.
@@ -371,18 +371,6 @@ class FinanceRbacBugFixTest {
                     "lineAmount visible for finance_manager");
         }
 
-        @Test
-        @DisplayName("restaurant_owner (has price perm): delivery note amounts visible")
-        void restaurantOwner_deliveryNote_pricesVisible() {
-            asUserWithPricePermission(301L, true);
-
-            SupplierDeliveryNoteDto note = sampleNote();
-            run(ApiResponse.success(note));
-
-            assertNotNull(note.getTotalAmount(), "restaurant_owner can see totalAmount");
-            assertNotNull(note.getLines().get(0).getUnitPrice(),
-                    "restaurant_owner can see unitPrice");
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -509,13 +497,6 @@ class FinanceRbacBugFixTest {
                     "finance_manager must have finance:read_write via PERMISSION_MATRIX fallback");
         }
 
-        @Test
-        @DisplayName("restaurant_owner: finance:read → true (PERMISSION_MATRIX fallback)")
-        void restaurantOwner_financeRead_allowed() {
-            User owner = userWithRole(FactoryUserRole.restaurant_owner, "R001");
-            assertTrue(permissionServiceImpl.hasPermission(owner, "finance:read"),
-                    "restaurant_owner must have finance:read (月对账确认 requirement)");
-        }
 
         @Test
         @DisplayName("factory_super_admin: finance:read_write → true (short-circuited at top)")

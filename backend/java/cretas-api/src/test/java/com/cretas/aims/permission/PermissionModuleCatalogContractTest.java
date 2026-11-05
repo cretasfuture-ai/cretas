@@ -57,7 +57,6 @@ class PermissionModuleCatalogContractTest {
         LABELS_BEFORE_CUT_D.put("inventory", "库存管理");
         LABELS_BEFORE_CUT_D.put("report", "报表");
         LABELS_BEFORE_CUT_D.put("rd", "研发管理");
-        LABELS_BEFORE_CUT_D.put("restaurant", "餐饮管理");
     }
 
     /**
@@ -140,6 +139,14 @@ class PermissionModuleCatalogContractTest {
         assertThat(PermissionModuleCatalog.label("module_nobody_registered")).isEqualTo("module_nobody_registered");
         assertThat(PermissionModuleCatalog.columnOrder("module_nobody_registered")).isEqualTo(Integer.MAX_VALUE);
         assertThat(PermissionModuleCatalog.label(null)).isNull();
+    }
+
+    @Test
+    @DisplayName("退役餐饮模块不再注册或获得标签")
+    void retiredRestaurantModuleIsNotRegistered() {
+        assertThat(PermissionModuleCatalog.hasLabel("restaurant")).isFalse();
+        assertThat(PermissionModuleCatalog.label("restaurant")).isEqualTo("restaurant");
+        assertThat(PermissionServiceImpl.hardcodedModules()).doesNotContain("restaurant");
     }
 
     @Test

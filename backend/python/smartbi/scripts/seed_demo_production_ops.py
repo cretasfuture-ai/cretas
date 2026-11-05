@@ -17,7 +17,6 @@ the 5 empty analytics pages read from:
     * fact_production_batch      — Silver stage (ETL source for Gold)
     * agg_factory_batch_daily    — Gold page (cost-structure / yield-trend / product-cost-compare)
 
-DEMO_REST is SKIPPED — it is a restaurant tenant; these manufacturing pages don't apply.
 
 FK-guarded tables (quality_inspections / production_plans / factory_equipment) are
 seeded using REAL existing FK sources resolved per-tenant at runtime — no synthetic
@@ -106,10 +105,10 @@ ENVS: Dict[str, Dict[str, Any]] = {
 }
 
 # ---------------------------------------------------------------------------
-# TENANT REGISTRY  (manufacturing tenants only — DEMO_REST skipped)
+# TENANT REGISTRY (manufacturing tenants only)
 # ---------------------------------------------------------------------------
 
-DEMO_TENANT_IDS = frozenset({"DEMO_FACTORY", "DEMO_FACTORY2", "DEMO_REST", "F004"})
+DEMO_TENANT_IDS = frozenset({"DEMO_FACTORY", "DEMO_FACTORY2", "F004"})
 MFG_TENANT_IDS = frozenset({"DEMO_FACTORY", "DEMO_FACTORY2", "F004"})
 
 # Per-tenant profiles
@@ -174,9 +173,6 @@ def _assert_mfg_tenant(factory_id: str) -> None:
             f"SAFETY: factory_id '{factory_id}' is not a demo tenant. "
             f"Allowed: {sorted(DEMO_TENANT_IDS)}"
         )
-    # DEMO_REST is a demo tenant but not a manufacturing tenant
-    if factory_id == "DEMO_REST":
-        raise ValueError("DEMO_REST is a restaurant tenant — skipping manufacturing seed")
 
 
 def _set_factory_guc(cur, factory_id: str) -> None:
@@ -1189,9 +1185,6 @@ def main() -> None:
     grand_total: Dict[str, int] = {}
 
     for factory_id in tenants:
-        if factory_id == "DEMO_REST":
-            print("\n  Skipping DEMO_REST (restaurant tenant)")
-            continue
         print(f"\n--- {factory_id} ---")
         try:
             cs = seed_cretas_tables(cretas_conn, factory_id, start_date, end_date, args.dry_run)

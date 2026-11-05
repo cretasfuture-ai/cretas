@@ -402,7 +402,7 @@ function formatPercent(num: Reading): string {
           </el-card>
         </el-col>
         <el-col :xs="24" :sm="12" :md="16" :lg="12">
-          <el-card class="stat-card finance" shadow="hover" @click="$router.push('/restaurant/analytics/gross-margin')">
+          <el-card class="stat-card finance" shadow="hover" @click="$router.push('/smart-bi/analysis?tab=finance')">
             <div class="card-header" style="display:flex;align-items:center;gap:8px">
               <el-icon><DataAnalysis /></el-icon><span>毛利深度分析</span>
               <span style="margin-left:auto;font-size:12px;color:#409eff;cursor:pointer">查看专属页面 →</span>
@@ -411,7 +411,7 @@ function formatPercent(num: Reading): string {
               跨模块分析: POS 销售 × 配方成本 = 每道菜毛利. 可按时段筛选, 按毛利率排序识别"赚钱菜" vs"负担菜".
             </div>
             <div style="display:flex;gap:8px">
-              <el-button size="small" type="primary" @click.stop="$router.push('/restaurant/analytics/gross-margin')">查看毛利排行</el-button>
+              <el-button size="small" type="primary" @click.stop="$router.push('/smart-bi/analysis?tab=finance')">查看财务分析</el-button>
  <el-button size="small" @click.stop="$router.push('/smart-bi/query?q=哪道菜毛利最高 top 10')"> AI 分析</el-button>
             </div>
           </el-card>

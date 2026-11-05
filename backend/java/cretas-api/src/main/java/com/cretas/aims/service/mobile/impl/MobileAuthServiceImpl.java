@@ -60,12 +60,6 @@ public class MobileAuthServiceImpl implements MobileAuthService {
     // 演示账号配置 (路演免密登录). cretas.demo.enabled=true 开启.
     @Value("${cretas.demo.enabled:false}")
     private boolean demoEnabled;
-    // 2026-08-05: DEMO_REST 随租户收敛停用, fallback 默认值同步清空 (与
-    // application.properties 的 cretas.demo.rest.* 同步, 避免陈旧默认值误导读者)。
-    @Value("${cretas.demo.rest.factory-id:}")
-    private String demoRestFactoryId;
-    @Value("${cretas.demo.rest.username:}")
-    private String demoRestUsername;
     @Value("${cretas.demo.factory.factory-id:DEMO_FACTORY}")
     private String demoFactoryFactoryId;
     @Value("${cretas.demo.factory.username:demo_factory}")
@@ -145,8 +139,8 @@ public class MobileAuthServiceImpl implements MobileAuthService {
 
     /**
      * 演示账号免密登录 (路演扫码演示用). 不验证密码 — 只能登录配置死的三个 demo 账号
-     * (DEMO_REST / DEMO_FACTORY / DEMO_LOGISTICS), 由 cretas.demo.enabled 开关控制.
-     * DEMO_REST / DEMO_FACTORY 写操作由 DemoReadOnlyInterceptor 拦截只读锁定;
+     * (DEMO_FACTORY / DEMO_LOGISTICS), 由 cretas.demo.enabled 开关控制.
+     * DEMO_FACTORY 写操作由 DemoReadOnlyInterceptor 拦截只读锁定;
      * DEMO_LOGISTICS 不在 cretas.demo.factory-ids 只读锁名单内 (调度员需在自己租户内
      * 创建/调整/确认排线计划), 隔离仅靠 JwtAuthInterceptor 的 JWT factoryId 锁定
      * (无法跨工厂访问其他 factoryId 路径).
@@ -159,17 +153,14 @@ public class MobileAuthServiceImpl implements MobileAuthService {
         }
         String factoryId;
         String username;
-        if ("rest".equalsIgnoreCase(tenant)) {
-            factoryId = demoRestFactoryId;
-            username = demoRestUsername;
-        } else if ("factory".equalsIgnoreCase(tenant)) {
+        if ("factory".equalsIgnoreCase(tenant)) {
             factoryId = demoFactoryFactoryId;
             username = demoFactoryUsername;
         } else if ("logistics".equalsIgnoreCase(tenant)) {
             factoryId = demoLogisticsFactoryId;
             username = demoLogisticsUsername;
         } else {
-            throw new BusinessException(400, "无效的演示类型 (应为 rest / factory / logistics)");
+            throw new BusinessException(400, "无效的演示类型 (应为 factory / logistics)");
         }
         log.info("演示登录: tenant={}, factoryId={}, username={}", tenant, factoryId, username);
         User user = userRepository.findByFactoryIdAndUsername(factoryId, username)
@@ -508,6 +499,8 @@ public class MobileAuthServiceImpl implements MobileAuthService {
             }
         }
 
+        rejectRetiredRestaurantInvitation(whitelist);
+
         // 检查用户是否已存在
         Optional<User> existingUser = userRepository.findByFactoryIdAndPhone(factoryId, phoneNumber);
         boolean isNewUser = !existingUser.isPresent();
@@ -577,6 +570,8 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                 .orElseThrow(() -> new BusinessException(403, "该手机号没有当前工厂的有效邀请")
                         .withHint("请返回手机号验证步骤重新确认工厂").withHintTarget("phoneNumber"));
 
+        rejectRetiredRestaurantInvitation(whitelist);
+
         // 登录账号由服务端固定为手机号，拒绝客户端自定义用户名，避免账号与邀请身份脱节。
         if (!phoneNumber.equals(request.getUsername())) {
             throw new BusinessException(400, "登录账号必须与受邀手机号一致")
@@ -645,6 +640,16 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                         : "注册成功，请等待管理员激活您的账户")
                 .registeredAt(LocalDateTime.now())
                 .build();
+    }
+
+    private void rejectRetiredRestaurantInvitation(Whitelist whitelist) {
+        FactoryUserRole invitedRole = whitelist.getInvitedRoleCode();
+        if (invitedRole != null && invitedRole.isRetiredRestaurantRole()) {
+            throw new BusinessException(403, "餐饮专属角色已退役，不能通过历史邀请开户")
+                    .withCode("RETIRED_RESTAURANT_ROLE")
+                    .withHint("请联系管理员使用食品工厂业务角色")
+                    .withHintTarget("roleCode");
+        }
     }
 
     /**

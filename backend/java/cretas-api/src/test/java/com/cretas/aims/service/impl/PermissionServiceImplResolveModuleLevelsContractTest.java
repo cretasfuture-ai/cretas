@@ -187,7 +187,7 @@ class PermissionServiceImplResolveModuleLevelsContractTest {
         for (FactoryUserRole role : FactoryUserRole.values()) {
             User u = user(role, "F006");
             Map<String, String> levels = service.resolveModuleLevels(u);
-            if (role == FactoryUserRole.unactivated) {
+            if (role == FactoryUserRole.unactivated || role.isRetiredRestaurantRole()) {
                 assertThat(levels).isEmpty();
                 assertThat(service.hasPermission(u, "sales:read")).isFalse();
                 continue;
@@ -211,7 +211,8 @@ class PermissionServiceImplResolveModuleLevelsContractTest {
             assertThat(levels.containsKey(PermissionServiceImpl.MODULE_LEVEL_WILDCARD)).isEqualTo(superAdmin);
         }
         System.out.println("OBSERVED contract cells checked = " + cellsChecked + " across roles = " + rolesChecked);
-        assertThat(rolesChecked).isEqualTo(FactoryUserRole.values().length - 1);
+        assertThat(rolesChecked).isEqualTo((int) java.util.Arrays.stream(FactoryUserRole.values())
+                .filter(role -> role != FactoryUserRole.unactivated && !role.isRetiredRestaurantRole()).count());
         assertThat(cellsChecked).isGreaterThan(rolesChecked * 4);   // 每个角色至少种了 4 行 L1
     }
 

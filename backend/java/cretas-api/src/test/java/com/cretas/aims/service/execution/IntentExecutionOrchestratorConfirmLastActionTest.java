@@ -107,6 +107,7 @@ class IntentExecutionOrchestratorConfirmLastActionTest {
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claim());
         when(tokenService.resolveClaim(eq(TOKEN), eq(CLAIM), anyBoolean(), any())).thenReturn(true);
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     @Test

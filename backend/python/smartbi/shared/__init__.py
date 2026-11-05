@@ -1,9 +1,9 @@
 """SmartBI 共享底层 (domain-agnostic)
 
-本目录是餐饮 + 工厂共用的基础设施层. 任何放在这里的代码必须满足:
+本目录是工厂域共用的基础设施层. 任何放在这里的代码必须满足:
 
-1. **领域无关 (domain-agnostic)**: 不能假设是餐饮或工厂场景
-2. **强制 domain 参数**: 所有跨 domain 的查找/写入必须带 `domain: Literal["restaurant", "factory"]`
+1. **领域无关 (domain-agnostic)**: 不能假设具体业务场景
+2. **强制 factory domain 参数**: 所有查找/写入必须带 `domain: Literal["factory"]`
 3. **不允许跨 domain 数据污染**: 接口拒绝 `domain=None` 或 `domain="all"` 这种泛化值
 
 跨 domain 隔离铁律 (与 services/restaurant/__init__.py + services/factory/__init__.py 一致):

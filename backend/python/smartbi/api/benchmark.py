@@ -384,15 +384,6 @@ async def get_food_processing_benchmarks():
     }
 
 
-@router.get("/benchmark/restaurant")
-async def get_restaurant_benchmarks():
-    """Return restaurant dining industry benchmark data"""
-    return {
-        "success": True,
-        "data": RESTAURANT_DINING_BENCHMARKS,
-    }
-
-
 @router.post("/benchmark/compare", response_model=BenchmarkCompareResponse)
 async def compare_with_benchmarks(req: BenchmarkCompareRequest):
     """Compare actual metrics against industry benchmarks"""

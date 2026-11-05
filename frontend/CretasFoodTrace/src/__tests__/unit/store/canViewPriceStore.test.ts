@@ -13,9 +13,6 @@ describe('canViewPriceForRole', () => {
     'sales_manager',
     'dispatcher',
     'production_manager',
-    'restaurant_manager',
-    'restaurant_owner',
-    'restaurant_purchaser',
     'permission_admin',
     'department_admin',
   ])('allows price view for role %s', (role) => {
@@ -40,6 +37,6 @@ describe('canViewPriceForRole', () => {
   });
 
   it('PRICE_VIEW_ROLES contains the 12 backend price roles', () => {
-    expect(PRICE_VIEW_ROLES.size).toBe(12);
+    expect(PRICE_VIEW_ROLES.size).toBe(9);
   });
 });

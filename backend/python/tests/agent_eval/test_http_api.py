@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+import pytest
 
 from smartbi.agent.eval import (
     AgentOpsService,
@@ -9,12 +10,10 @@ from smartbi.agent.eval import (
 )
 from smartbi.api.agent_ops import (
     get_agent_ops_service,
-    get_runtime_shadow_agent_ops_service,
     router,
 )
 
 from .helpers import case, config_snapshot
-from .test_runtime_shadow import runtime_case
 
 
 def app_and_store():
@@ -27,13 +26,12 @@ def app_and_store():
         request.state.factory_id = request.headers.get("X-Test-Factory", "R001")
         request.state.user_id = request.headers.get("X-Test-User", "42")
         request.state.role = request.headers.get("X-Test-Role", "platform_admin")
-        request.state.business_type = "RESTAURANT"
+        request.state.business_type = "FACTORY"
         return await call_next(request)
 
     app.include_router(router)
     service_override = lambda: AgentOpsService(store)
     app.dependency_overrides[get_agent_ops_service] = service_override
-    app.dependency_overrides[get_runtime_shadow_agent_ops_service] = service_override
     return app, store
 
 
@@ -62,39 +60,14 @@ def test_api_rejects_non_internal_and_tenant_query_injection():
     assert response.json()["detail"] == "TENANT_PARAMETER_FORBIDDEN"
 
 
-def test_runtime_shadow_feature_flag_defaults_closed_and_gates_corpus_import(monkeypatch):
-    app, store = app_and_store()
+def test_retired_runtime_shadow_endpoints_are_not_registered():
+    app, _ = app_and_store()
     client = TestClient(app)
-    body = {
-        "schemaVersion": "1.0",
-        "requestId": "00000000-0000-4000-8000-000000000090",
-        "name": "runtime corpus",
-        "version": 1,
-        "description": "trusted",
-        "maxCases": 20,
-    }
-    monkeypatch.delenv("AGENT_OPS_RUNTIME_SHADOW_ENABLED", raising=False)
-    disabled = client.post(
+    for path in (
         "/api/internal/smartbi/agent/runs/ops/eval-sets/import-runtime-corpus",
-        json=body,
-    )
-    assert disabled.status_code == 503
-    assert disabled.json()["detail"] == "AGENT_OPS_RUNTIME_SHADOW_DISABLED"
-
-    store.seed_runtime_corpus("R001", [runtime_case()])
-    monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_ENABLED", "true")
-    monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_FACTORY_ALLOWLIST", "R001")
-    monkeypatch.setenv(
-        "AGENT_OPS_RUNTIME_SHADOW_ROLE_ALLOWLIST", "platform_admin"
-    )
-    monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_SAMPLE_BPS", "10000")
-    monkeypatch.setenv("AGENT_OPS_RUNTIME_SHADOW_ROLLOUT_SALT", "http-api-test")
-    enabled = client.post(
-        "/api/internal/smartbi/agent/runs/ops/eval-sets/import-runtime-corpus",
-        json=body,
-    )
-    assert enabled.status_code == 201
-    assert enabled.json()["caseCount"] == 1
+        "/api/internal/smartbi/agent/runs/ops/experiments/runtime-shadow",
+    ):
+        assert client.post(path, json={}).status_code in {404, 405}
 
 
 def test_all_writes_require_request_id_and_total_request_budget_stays_bounded():
@@ -184,8 +157,8 @@ def test_api_experiment_and_compare_contract():
         "configSnapshot": config_snapshot(),
         "actualSnapshots": {
             "margin-1": {
-                "routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
-                "tools": ["restaurant_margin_read", "restaurant_cost_read"],
+                "routeCode": "FACTORY_MARGIN_ANALYSIS",
+                "tools": ["factory_margin_read", "factory_cost_read"],
                 "numericTruthRefs": {"ev-1:fact-1": "12.5"},
                 "roundsUsed": 1,
                 "toolCallsUsed": 2,
@@ -197,7 +170,9 @@ def test_api_experiment_and_compare_contract():
         "/api/internal/smartbi/agent/runs/ops/experiments", json=body
     )
     assert first.status_code == 201
-    assert first.json()["evaluatorVersion"] == "restaurant-offline-v1"
+    assert first.json()["aggregate"]["passedCount"] == 1
+    assert first.json()["aggregate"]["passRate"] == "1.000000"
+    assert first.json()["evaluatorVersion"] == "factory-offline-v1"
     assert "caseResults" not in first.json()
     retried = client.post(
         "/api/internal/smartbi/agent/runs/ops/experiments", json=body
@@ -250,7 +225,7 @@ def test_api_experiment_and_compare_contract():
     assert rerun.json()["sourceExperimentId"] == first.json()["experimentId"]
 
 
-def test_api_rerun_fails_closed_when_source_evaluator_build_is_unavailable():
+def test_factory_api_rerun_fails_closed_when_source_evaluator_build_is_unavailable():
     app, store = app_and_store()
     client = TestClient(app)
     eval_set_id = client.post(
@@ -265,8 +240,8 @@ def test_api_rerun_fails_closed_when_source_evaluator_build_is_unavailable():
             "configSnapshot": config_snapshot(),
             "actualSnapshots": {
                 "margin-1": {
-                    "routeCode": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
-                    "tools": ["restaurant_margin_read", "restaurant_cost_read"],
+                    "routeCode": "FACTORY_MARGIN_ANALYSIS",
+                    "tools": ["factory_margin_read", "factory_cost_read"],
                     "numericTruthRefs": {"ev-1:fact-1": "12.5"},
                     "roundsUsed": 1,
                     "toolCallsUsed": 2,
@@ -280,6 +255,7 @@ def test_api_rerun_fails_closed_when_source_evaluator_build_is_unavailable():
         },
     )
     assert run.status_code == 201
+    assert run.json()["aggregate"]["passedCount"] == 1
     unavailable = OfflineBatchRunner()
     unavailable.evaluator_build = "f" * 64
     registry = EvaluatorRegistry((unavailable,))
@@ -297,7 +273,7 @@ def test_api_rerun_fails_closed_when_source_evaluator_build_is_unavailable():
     assert response.json()["detail"] == "EVALUATOR_BUILD_UNAVAILABLE"
 
 
-def test_api_requires_restaurant_admin_and_keeps_store_unavailable_as_503():
+def test_api_requires_factory_admin_and_keeps_store_unavailable_as_503():
     app, _ = app_and_store()
     client = TestClient(app)
     assert client.get(
@@ -313,7 +289,7 @@ def test_api_requires_restaurant_admin_and_keeps_store_unavailable_as_503():
         request.state.factory_id = "R001"
         request.state.user_id = "42"
         request.state.role = "platform_admin"
-        request.state.business_type = "RESTAURANT"
+        request.state.business_type = "FACTORY"
         return await call_next(request)
 
     unavailable.include_router(router)

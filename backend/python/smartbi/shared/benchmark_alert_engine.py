@@ -1,7 +1,7 @@
-"""通用对标预警引擎 — 13 个 sub_sector benchmark YAML 的零成本最大杠杆
+"""工厂对标预警引擎 — sub_sector benchmark YAML 的零成本最大杠杆
 
 核心思路 (来自 Researcher C):
-  14 个 benchmark YAML 已经躺在 knowledge/restaurant/benchmarks/, 但从未被对标预警系统使用.
+  benchmark YAML 位于 knowledge/factory/benchmarks/.
   本引擎自动遍历 benchmark, 跟客户实测对比, 生成"您 X% 高于行业 Y%, 一年多支出 Z 元"的预警.
 
 设计目标:
@@ -19,7 +19,7 @@
   BenchmarkAlert 列表 (按严重度排序)
 
 使用示例:
-    >>> engine = BenchmarkAlertEngine(domain="restaurant", sub_sector="火锅")
+    >>> engine = BenchmarkAlertEngine(domain="factory", sub_sector="食品加工")
     >>> alerts = engine.alert_for_store(
     ...     store_name="鼎鲜火锅·义乌",
     ...     metrics={"food_cost_ratio": 45.85, "labor_cost_ratio": 32.51},
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 # ── Type definitions ────────────────────────────────────────
 
-Domain = Literal["restaurant", "factory"]
+Domain = Literal["factory"]
 Severity = Literal["red", "yellow", "info"]
 
 
@@ -159,9 +159,9 @@ class BenchmarkAlertEngine:
         sub_sector: str,
         kb_root: Optional[Path] = None,
     ):
-        if domain not in ("restaurant", "factory"):
+        if domain != "factory":
             raise ValueError(
-                f"domain 必须是 'restaurant' 或 'factory', 收到 {domain!r}"
+                f"domain 必须是 'factory', 收到 {domain!r}"
             )
         if not sub_sector:
             raise ValueError("benchmark 预警必须指定 sub_sector")

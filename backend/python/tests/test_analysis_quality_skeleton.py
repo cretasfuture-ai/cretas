@@ -56,9 +56,7 @@ from smartbi_compat.api import analysis_quality  # noqa: E402
 from smartbi_compat.api.analysis_quality import (  # noqa: E402
     FACTORY_PHASE_2D_PENDING_MARKER,
     _factory_quality_dispatch,
-    _restaurant_quality_dispatch,
     _FACTORY_BRANCH_DEFERRED_MSG,
-    _RESTAURANT_DATA_AVAILABILITY_VOCAB,
     router,
 )
 
@@ -171,24 +169,6 @@ def test_factory_dispatch_signature_stable():
     assert inspect.iscoroutinefunction(_factory_quality_dispatch)
 
 
-def test_restaurant_dispatch_signature_stable():
-    """4-arg async signature — chat-B3 + Phase 2D MUST preserve.
-
-    chat-B2 (this PR) implements the restaurant body but the dispatcher
-    signature was the chat-B1 contract — locking it here so chat-B3
-    envelope wiring + future restaurant additions (e.g. trend chart)
-    don't introduce kwargs that break the router contract.
-    """
-    sig = inspect.signature(_restaurant_quality_dispatch)
-    assert list(sig.parameters.keys()) == [
-        "factory_id",
-        "start_date",
-        "end_date",
-        "analysis_type",
-    ]
-    assert inspect.iscoroutinefunction(_restaurant_quality_dispatch)
-
-
 # ============================================================
 # Router contract — endpoint path registered + GET-only
 # ============================================================
@@ -213,9 +193,9 @@ def test_router_endpoint_methods_are_get_only():
 
 
 def test_module_advertises_dispatch_helpers():
-    """Stable function names for chat-B3 wiring + Phase 2D (factory)."""
+    """Only the factory dispatcher remains after restaurant retirement."""
     assert hasattr(analysis_quality, "_factory_quality_dispatch")
-    assert hasattr(analysis_quality, "_restaurant_quality_dispatch")
+    assert not hasattr(analysis_quality, "_restaurant_quality_dispatch")
     assert hasattr(analysis_quality, "get_quality_analysis")
 
 
@@ -244,31 +224,6 @@ def test_module_reuses_shared_get_tenant_type():
 # ============================================================
 # Controlled dataAvailability vocabulary (chat-B2 handoff)
 # ============================================================
-
-
-def test_data_availability_vocab_is_immutable_tuple():
-    """Tuple, not list — prevent accidental mutation in chat-B2/B3."""
-    assert isinstance(_RESTAURANT_DATA_AVAILABILITY_VOCAB, tuple)
-
-
-def test_data_availability_vocab_has_exactly_five_markers():
-    """Sub-B spec §4 defines exactly 5 quality-side markers."""
-    assert len(_RESTAURANT_DATA_AVAILABILITY_VOCAB) == 5
-
-
-@pytest.mark.parametrize(
-    "marker",
-    [
-        "MISSING_FOOD_SAFETY_INCIDENT_LOG",  # N1 Q-DEC-4
-        "NO_REVIEW_DATA_FOR_CHAIN",           # N2 Q-DEC-5
-        "RETURN_QTY_NOT_INGESTED",            # N3 Q-DEC-6 F3 fallback
-        "NO_POS_DATA_FOR_PERIOD",             # N3 zero-row
-        "WASTAGE_NOT_TRACKED",                # N4 Q-DEC-7
-    ],
-)
-def test_data_availability_vocab_contains_marker(marker):
-    """All 5 controlled-vocab markers (spec §4) exposed for chat-B2 import."""
-    assert marker in _RESTAURANT_DATA_AVAILABILITY_VOCAB
 
 
 # ============================================================
@@ -502,9 +457,9 @@ async def test_factory_quality_dispatch_no_gold_keeps_phase_2d_placeholder(
     assert result["trendChart"] == {}
 
 
-@pytest.fixture
-def client_endpoint_restaurant(monkeypatch):
-    """TestClient wired with mocks so the RESTAURANT branch emits numeric N3.
+@pytest.fixture(params=["RESTAURANT", "BRANCH"])
+def client_endpoint_restaurant(monkeypatch, request):
+    """TestClient wired with each retired restaurant-family tenant type.
 
     The synthetic data shape mirrors the R_QINGHUAJIAO_REAL pilot in
     ``test_analysis_quality_restaurant.py`` (100 reviews / 15 complaints
@@ -513,7 +468,7 @@ def client_endpoint_restaurant(monkeypatch):
     import smartbi.config
 
     conn = _EndpointFakeConn(
-        factory_type="RESTAURANT",
+        factory_type=request.param,
         complaint={"total_reviews": 100, "complaint_count": 15},
         return_rate={
             "total_sales_qty": Decimal("1000"),
@@ -546,8 +501,7 @@ def client_endpoint_restaurant(monkeypatch):
 
 @pytest.fixture
 def client_endpoint_factory(monkeypatch):
-    """TestClient for auth-only assertions — cretas pool acquisition fails
-    so the router falls back to the FACTORY branch's Phase 2D envelope.
+    """TestClient with explicit FACTORY metadata for auth and positive paths.
 
     Used by the 401 / 403 tests where the assertion fires before any DB
     work (the auth Depend runs first); the fallback keeps any reachable
@@ -555,8 +509,10 @@ def client_endpoint_factory(monkeypatch):
     """
     import smartbi.config
 
+    cretas_pool = _EndpointFakePool(_EndpointFakeConn(factory_type="FACTORY"))
+
     async def fake_get_cretas_pool():
-        raise RuntimeError("pool unavailable in auth-only test")
+        return cretas_pool
 
     async def fake_get_pg_pool():
         return None
@@ -573,45 +529,13 @@ def client_endpoint_factory(monkeypatch):
 
 
 def test_quality_endpoint_returns_full_envelope(client_endpoint_restaurant):
-    """Happy path — RESTAURANT branch returns wrapped envelope + Rule 4 numeric.
-
-    Per audit §4.2 mirroring §4.1 production: GET with valid factory →
-    200 + wrap_response envelope (``data``/``success``/``code``/...) +
-    restaurant 4-metric shape. Additionally asserts Rule 4
-    ``_decimal_to_number`` emits a numeric (int|float) — not str — for
-    ``DISH_RETURN_RATE.value`` (34.5/1000 × 100 = 3.45%), exercising the
-    BigDecimal → number serialization end-to-end through the FastAPI
-    JSON encoder.
-    """
+    """Retired restaurant tenants are rejected rather than downgraded."""
     r = client_endpoint_restaurant.get(
         "/api/mobile/R_QINGHUAJIAO_REAL/smart-bi/analysis/quality",
         params={"startDate": "2026-05-01", "endDate": "2026-05-31"},
         headers=_auth_header_endpoint(factory_id="R_QINGHUAJIAO_REAL"),
     )
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["success"] is True
-    assert "data" in body
-    data = body["data"]
-    assert data["tenantType"] == "RESTAURANT"
-    assert data["startDate"] == "2026-05-01"
-    assert data["endDate"] == "2026-05-31"
-    assert "metrics" in data and len(data["metrics"]) == 4
-    metric_codes = [m["metricCode"] for m in data["metrics"]]
-    assert metric_codes == [
-        "FOOD_SAFETY_INCIDENT_RATE",
-        "COMPLAINT_RATE",
-        "DISH_RETURN_RATE",
-        "WASTAGE_RATE",
-    ]
-    # Rule 4 — _decimal_to_number must serialize as numeric, not str
-    n3 = data["metrics"][2]
-    assert isinstance(n3["value"], (int, float)), (
-        "Rule 4 _decimal_to_number must emit numeric for DISH_RETURN_RATE.value, "
-        f"got {type(n3['value']).__name__}: {n3['value']!r}"
-    )
-    # 34.5 / 1000 * 100 = 3.45% (float branch — non-integral Decimal)
-    assert n3["value"] == 3.45
+    assert r.status_code == 410, r.text
 
 
 def test_factory_endpoint_returns_wrapped_envelope(client_endpoint_factory):

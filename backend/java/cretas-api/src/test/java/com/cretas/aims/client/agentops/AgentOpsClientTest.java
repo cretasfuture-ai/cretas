@@ -50,10 +50,10 @@ class AgentOpsClientTest {
         RecordedRequest request = server.takeRequest(1, TimeUnit.SECONDS);
         assertThat(request.getPath()).isEqualTo("/api/internal/smartbi/agent/runs/ops/eval-sets");
         assertThat(request.getHeader("X-Internal-Secret")).isEqualTo("secret");
-        assertThat(request.getHeader("X-Factory-Id")).isEqualTo("R001");
+        assertThat(request.getHeader("X-Factory-Id")).isEqualTo("F001");
         assertThat(request.getHeader("X-User-Id")).isEqualTo("42");
         assertThat(request.getHeader("X-User-Role")).isEqualTo("platform_admin");
-        assertThat(request.getHeader("X-Business-Type")).isEqualTo("RESTAURANT");
+        assertThat(request.getHeader("X-Business-Type")).isEqualTo("FACTORY");
         JsonNode outbound = mapper.readTree(request.getBody().readUtf8());
         assertThat(outbound.has("factoryId")).isFalse();
         assertThat(outbound.has("userId")).isFalse();
@@ -75,7 +75,7 @@ class AgentOpsClientTest {
         RecordedRequest imported = server.takeRequest(1, TimeUnit.SECONDS);
         assertThat(imported.getPath()).isEqualTo(
                 "/api/internal/smartbi/agent/runs/ops/eval-sets/import-runtime-corpus");
-        assertThat(imported.getHeader("X-Factory-Id")).isEqualTo("R001");
+        assertThat(imported.getHeader("X-Factory-Id")).isEqualTo("F001");
         assertThat(imported.getHeader("X-User-Id")).isEqualTo("42");
         assertThat(imported.getHeader("X-User-Role")).isEqualTo("platform_admin");
         assertThat(imported.getHeader("X-Correlation-ID")).isEqualTo("corr-001");
@@ -226,8 +226,16 @@ class AgentOpsClientTest {
         return new MockResponse().setResponseCode(status).setHeader("Content-Type", "application/json").setBody(body);
     }
 
+    @Test
+    void trustedContextRejectsRetiredRestaurantBusinessType() {
+        AgentOpsClient.TrustedContext retired = new AgentOpsClient.TrustedContext(
+                "R001", "42", "platform_admin", "corr-retired", "RESTAURANT");
+        assertThatThrownBy(retired::validate)
+                .isInstanceOf(SecurityException.class);
+    }
+
     private AgentOpsClient.TrustedContext context() {
-        return new AgentOpsClient.TrustedContext("R001", "42", "platform_admin", "corr-001");
+        return new AgentOpsClient.TrustedContext("F001", "42", "platform_admin", "corr-001", "FACTORY");
     }
 
     private AgentOpsCreateEvalSetRequest body() {

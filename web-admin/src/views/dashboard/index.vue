@@ -40,7 +40,6 @@ const dashboardComponents = {
   DashboardWarehouse: asyncOpts(() => import('@/components/dashboard/DashboardWarehouse.vue')),
   DashboardFinance: asyncOpts(() => import('@/components/dashboard/DashboardFinance.vue')),
   DashboardDefault: asyncOpts(() => import('@/components/dashboard/DashboardDefault.vue')),
-  DashboardRestaurant: asyncOpts(() => import('@/components/dashboard/DashboardRestaurant.vue')),
 };
 
 // 获取当前角色对应的组件

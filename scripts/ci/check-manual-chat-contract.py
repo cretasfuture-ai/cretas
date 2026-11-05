@@ -2,7 +2,7 @@
 """CI lint: 守护 manual_chat.py 关键字段不被 merge 误丢。
 
 历史事故 (2026-04-29): commit 928f12eef 在 e2e/v1-framework merge 时误丢了
-ManualChatRequest 的 category / image_base64 字段，导致工厂版 RAG 路由
+ManualChatRequest 的 image_base64 字段，导致工厂版 RAG 路由
 本地代码失效（prod 仍正常因为是从其他分支部署的）。本脚本作为兜底守护。
 """
 import re
@@ -13,13 +13,13 @@ MANUAL_CHAT = Path("backend/python/food_kb/api/manual_chat.py")
 
 REQUIRED_FIELDS = [
     # ManualChatRequest 必须含的字段（pattern 是行匹配的子串）
-    ('category: Optional[str]', '前端 explicit 域路由参数'),
     ('image_base64: Optional[str]', '截图 OCR 输入字段'),
 ]
 
 REQUIRED_LOGIC = [
     # 必须含的关键逻辑标记
-    ('request.category in ("restaurant", "factory")', '显式 category 路由分支'),
+    ('subcategories: Optional[List[str]] = ["factory"]', '仅工厂操作手册检索'),
+    ('system_prompt = FACTORY_SYSTEM_PROMPT', '工厂操作助手提示词'),
     ('_ocr_extract_text', 'OCR 提取函数'),
     # 2026-06-01: OCR 由直连 LLM_OCR_MODEL 改走 call_chain(SLOT.VL) 免费 VL 链
     # (PR #352, 旁路收口). 守卫从 env 名改为"OCR 仍经免费 VL 链路由"不被误丢.
@@ -33,6 +33,8 @@ def main():
 
     text = MANUAL_CHAT.read_text(encoding="utf-8")
     failures = []
+    if "restaurant" in text.lower() or "餐饮" in text:
+        failures.append("  Retired restaurant routing must not be reintroduced")
 
     for pattern, desc in REQUIRED_FIELDS + REQUIRED_LOGIC:
         if pattern not in text:

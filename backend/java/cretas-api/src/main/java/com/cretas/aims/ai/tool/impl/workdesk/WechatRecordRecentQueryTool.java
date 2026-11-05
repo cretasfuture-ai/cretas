@@ -207,6 +207,6 @@ public class WechatRecordRecentQueryTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredRoles() {
-        return java.util.Set.of("department_admin", "dispatcher", "factory_super_admin", "permission_admin", "restaurant_owner", "sales_manager");
+        return java.util.Set.of("department_admin", "dispatcher", "factory_super_admin", "permission_admin", "sales_manager");
     }
 }

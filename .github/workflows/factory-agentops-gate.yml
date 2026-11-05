@@ -13,6 +13,8 @@ on:
       - 'backend/python/smartbi/agent/runtime/evaluation.py'
       - 'backend/python/tests/fixtures/factory_agentops/**'
       - 'scripts/ci/factory_agentops_gate.py'
+      - 'scripts/ci/check_factory_evaluator_provenance.py'
+      - 'backend/python/tests/agent_eval/test_legacy_factory_compatibility.py'
       - '.github/workflows/factory-agentops-gate.yml'
   push:
     branches: [main]
@@ -21,6 +23,8 @@ on:
       - 'backend/python/smartbi/agent/runtime/evaluation.py'
       - 'backend/python/tests/fixtures/factory_agentops/**'
       - 'scripts/ci/factory_agentops_gate.py'
+      - 'scripts/ci/check_factory_evaluator_provenance.py'
+      - 'backend/python/tests/agent_eval/test_legacy_factory_compatibility.py'
       - '.github/workflows/factory-agentops-gate.yml'
   workflow_dispatch:
 
@@ -37,10 +41,16 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The frozen factory evaluator is verified against pinned source blobs.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Verify frozen factory evaluator provenance
+        run: python scripts/ci/check_factory_evaluator_provenance.py
 
       - name: Gate on the committed fixtures (must be rc=0)
         run: |

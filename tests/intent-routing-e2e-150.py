@@ -14,12 +14,12 @@ sys.stdout.reconfigure(encoding='utf-8')
 BASE_URL = 'http://47.100.235.168:10010' if '--prod' in sys.argv else 'http://47.100.235.168:10011'
 
 # v32: Multi-user token management for business domain routing
-# F001 (FACTORY) uses factory_admin1, F002 (RESTAURANT) uses restaurant_admin1
+# Factory-only routing acceptance uses factory_admin1.
 _tokens = {}  # factory_id -> (token, timestamp)
 
 FACTORY_USER_MAP = {
     'F001': 'factory_admin1',
-    'F002': 'restaurant_admin1',
+
 }
 
 def get_token(factory_id='F001'):
@@ -1460,59 +1460,12 @@ categories = {
     ]),
 
     # ====== AC: RESTAURANT 模块 (餐饮专属) ======
-    'AC1': ('餐饮-菜品查询', [
-        ('今天有哪些菜品', 'QUERY', 'RESTAURANT_DISH_LIST|PRODUCT_TYPE_QUERY|REPORT_DASHBOARD_OVERVIEW|N/A', '菜品列表', 'F002'),
-        ('销量最好的菜是哪几道', 'QUERY', 'RESTAURANT_DISH_PRODUCT_SALES_RANKING|RESTAURANT_BESTSELLER_QUERY|PRODUCT_SALES_RANKING|RESTAURANT_DISH_SALES_RANKING|N/A', '菜品销量排名', 'F002'),
-        ('畅销菜品是什么', 'QUERY', 'RESTAURANT_BESTSELLER_QUERY|RESTAURANT_DISH_PRODUCT_SALES_RANKING|REPORT_KPI|N/A', '畅销菜', 'F002'),
-        ('哪个菜卖不动', 'QUERY', 'RESTAURANT_SLOW_SELLER_QUERY|RESTAURANT_DISH_PRODUCT_SALES_RANKING|PRODUCT_SALES_RANKING|N/A', '滞销菜', 'F002'),
-        ('每道菜的成本是多少', 'QUERY', 'RESTAURANT_DISH_COST_ANALYSIS|COST_QUERY|REPORT_FINANCE|N/A', '菜品成本', 'F002'),
-        ('做红烧肉的成本分析', 'QUERY', 'RESTAURANT_DISH_COST_ANALYSIS|COST_QUERY|FOOD_KNOWLEDGE_QUERY|COST_TREND_ANALYSIS|N/A', '单品成本', 'F002'),
-    ]),
-    'AC2': ('餐饮-食材库存', [
-        ('食材库存还有多少', 'QUERY', 'RESTAURANT_INGREDIENT_STOCK|MATERIAL_BATCH_QUERY|REPORT_INVENTORY|N/A', '食材库存', 'F002'),
-        ('哪些食材快过期了', 'QUERY', 'RESTAURANT_INGREDIENT_EXPIRY_ALERT|MATERIAL_EXPIRING_ALERT|MATERIAL_EXPIRED_QUERY|N/A', '食材过期', 'F002'),
-        ('低库存的食材有哪些', 'QUERY', 'RESTAURANT_INGREDIENT_LOW_STOCK|MATERIAL_LOW_STOCK_ALERT|MATERIAL_BATCH_QUERY|REPORT_INVENTORY|N/A', '食材低库存', 'F002'),
-        ('肉类食材还剩多少', 'QUERY', 'RESTAURANT_INGREDIENT_STOCK|MATERIAL_BATCH_QUERY|REPORT_INVENTORY|N/A', '肉类食材', 'F002'),
-        ('需要采购什么食材', 'QUERY', 'RESTAURANT_PROCUREMENT_SUGGESTION|ORDER_LIST|MATERIAL_LOW_STOCK_ALERT|N/A', '采购建议', 'F002'),
-        ('食材成本最近涨了多少', 'QUERY', 'RESTAURANT_INGREDIENT_COST_TREND|COST_TREND_ANALYSIS|COST_QUERY|REPORT_FINANCE|N/A', '食材成本趋势', 'F002'),
-    ]),
-    'AC3': ('餐饮-营业分析', [
-        ('今天营业额是多少', 'QUERY', 'RESTAURANT_DAILY_REVENUE|REPORT_FINANCE|REPORT_KPI|REPORT_KPI|N/A', '今日营业额', 'F002'),
-        ('本周营业额趋势', 'QUERY', 'RESTAURANT_REVENUE_TREND|REPORT_TRENDS|REPORT_KPI|N/A', '营业额趋势', 'F002'),
-        ('今天接了多少单', 'QUERY', 'RESTAURANT_ORDER_STATISTICS|ORDER_LIST|ORDER_TODAY|REPORT_DASHBOARD_OVERVIEW|N/A', '餐饮订单数', 'F002'),
-        ('哪个时段客人最多', 'QUERY', 'RESTAURANT_PEAK_HOURS_ANALYSIS|REPORT_TRENDS|REPORT_KPI|N/A', '高峰时段', 'F002'),
-        ('毛利率分析', 'QUERY', 'RESTAURANT_MARGIN_ANALYSIS|REPORT_FINANCE|REPORT_FINANCE|REPORT_KPI|PROFIT_TREND_ANALYSIS|N/A', '餐饮毛利率', 'F002'),
-    ]),
-    'AC4': ('餐饮-损耗管理', [
-        ('本周食材损耗汇总', 'QUERY', 'RESTAURANT_WASTAGE_SUMMARY|REPORT_ANOMALY|REPORT_FINANCE|N/A', '损耗汇总', 'F002'),
-        ('损耗率是多少', 'QUERY', 'RESTAURANT_WASTAGE_RATE|REPORT_KPI|REPORT_FINANCE|REPORT_ANOMALY|N/A', '损耗率', 'F002'),
-        ('有没有异常损耗', 'QUERY', 'RESTAURANT_WASTAGE_ANOMALY|REPORT_ANOMALY|ALERT_LIST|EQUIPMENT_ALERT_LIST|N/A', '异常损耗', 'F002'),
-        ('今天浪费了多少食材', 'QUERY', 'RESTAURANT_WASTAGE_SUMMARY|RESTAURANT_WASTAGE_RATE|REPORT_ANOMALY|N/A', '食材浪费', 'F002'),
-        ('损耗最高的食材', 'QUERY', 'RESTAURANT_WASTAGE_ANOMALY|RESTAURANT_WASTAGE_SUMMARY|RESTAURANT_WASTAGE_RATE|MATERIAL_LOSS_RANKING|REPORT_KPI|N/A', '损耗排名', 'F002'),
-    ]),
-    'AC5': ('餐饮-菜品写入(新增/修改/删除)', [
-        ('新增一道菜叫麻辣豆腐，售价38元', 'WRITE', 'RESTAURANT_DISH_CREATE|PRODUCT_UPDATE|N/A', '新增菜品-麻辣豆腐', 'F002'),
-        ('上架一道水煮鱼，定价68元', 'WRITE', 'RESTAURANT_DISH_CREATE|PRODUCT_UPDATE|N/A', '上架菜品-水煮鱼', 'F002'),
-        ('菜单里加一个蒜蓉粉丝蒸扇贝', 'WRITE', 'RESTAURANT_DISH_CREATE|PRODUCT_UPDATE|MATERIAL_BATCH_CREATE|N/A', '菜单新增-扇贝', 'F002'),
-        ('把麻辣豆腐的价格改为42元', 'WRITE', 'RESTAURANT_DISH_UPDATE|PRODUCT_UPDATE|ORDER_UPDATE|N/A', '改价-麻辣豆腐', 'F002'),
-        ('修改鱼香肉丝的售价为32元', 'WRITE', 'RESTAURANT_DISH_UPDATE|PRODUCT_UPDATE|ORDER_UPDATE|N/A', '改价-鱼香肉丝', 'F002'),
-        ('把招牌牛排的描述改成澳洲进口', 'WRITE', 'RESTAURANT_DISH_UPDATE|PRODUCT_UPDATE|N/A', '改描述-牛排', 'F002'),
-        ('下架酸辣粉这道菜', 'WRITE', 'RESTAURANT_DISH_DELETE|PRODUCT_UPDATE|MATERIAL_BATCH_DELETE|N/A', '下架-酸辣粉', 'F002'),
-        ('把凉拌黄瓜从菜单里删掉', 'WRITE', 'RESTAURANT_DISH_DELETE|PRODUCT_UPDATE|MATERIAL_BATCH_DELETE|N/A', '删除-凉拌黄瓜', 'F002'),
-    ]),
-    'AC6': ('餐饮-运营指标(排行/采购/退单/翻台)', [
-        ('查看菜品产品销售排行', 'QUERY', 'RESTAURANT_DISH_PRODUCT_SALES_RANKING|PRODUCT_SALES_RANKING|RESTAURANT_DISH_SALES_RANKING|N/A', '菜品产品销售排行', 'F002'),
-        ('本月菜品销售排名前十', 'QUERY', 'RESTAURANT_DISH_PRODUCT_SALES_RANKING|PRODUCT_SALES_RANKING|RESTAURANT_BESTSELLER_QUERY|N/A', '月度菜品Top10', 'F002'),
-        ('创建一个食材采购单', 'WRITE', 'RESTAURANT_PROCUREMENT_CREATE|ORDER_NEW|FORM_GENERATION|N/A', '创建采购单', 'F002'),
-        ('帮我生成明天的采购订单', 'WRITE', 'RESTAURANT_PROCUREMENT_CREATE|ORDER_NEW|FORM_GENERATION|N/A', '生成采购订单', 'F002'),
-        ('下一批食材采购需要哪些东西', 'QUERY', 'RESTAURANT_PROCUREMENT_SUGGESTION|RESTAURANT_PROCUREMENT_CREATE|MATERIAL_LOW_STOCK_ALERT|N/A', '采购需求查询', 'F002'),
-        ('查看最近的退单率是多少', 'QUERY', 'RESTAURANT_RETURN_RATE|QUALITY_STATS|REPORT_KPI|N/A', '退单率查询', 'F002'),
-        ('这周退菜比例高不高', 'QUERY', 'RESTAURANT_RETURN_RATE|QUALITY_STATS|REPORT_KPI|N/A', '退菜比例', 'F002'),
-        ('哪些菜品被退得最多', 'QUERY', 'RESTAURANT_RETURN_RATE|QUALITY_STATS|RESTAURANT_SLOW_SELLER_QUERY|N/A', '退单菜品排名', 'F002'),
-        ('今天的翻台率怎么样', 'QUERY', 'RESTAURANT_TABLE_TURNOVER|REPORT_KPI|REPORT_EFFICIENCY|N/A', '今日翻台率', 'F002'),
-        ('午餐时段翻台率多少', 'QUERY', 'RESTAURANT_TABLE_TURNOVER|REPORT_KPI|REPORT_EFFICIENCY|N/A', '午餐翻台率', 'F002'),
-        ('上周翻台率跟这周对比', 'QUERY', 'RESTAURANT_TABLE_TURNOVER|REPORT_TRENDS|REPORT_KPI|N/A', '翻台率周对比', 'F002'),
-    ]),
+
+
+
+
+
+
 
     # ====== AD: CAMERA 模块 (摄像头管理) ======
     'AD1': ('摄像头-设备管理查询', [
@@ -1680,11 +1633,11 @@ categories = {
         ('采购一万块钱的猪肉', 'WRITE', 'ORDER_NEW|ORDER_NEW|ORDER_LIST|N/A', '金额驱动采购'),
     ]),
     'AH15': ('跨域-餐饮vs制造歧义', [
-        ('今天食材够用吗', 'QUERY', 'RESTAURANT_INGREDIENT_STOCK|MATERIAL_BATCH_QUERY|MATERIAL_LOW_STOCK_ALERT|REPORT_DASHBOARD_OVERVIEW|N/A', '食材库存歧义', 'F002'),
-        ('菜品成本太高了', 'QUERY', 'RESTAURANT_DISH_COST_ANALYSIS|COST_QUERY|REPORT_FINANCE|N/A', '菜品产品歧义', 'F002'),
-        ('今日订单量和营业额', 'QUERY', 'RESTAURANT_ORDER_STATISTICS|RESTAURANT_DAILY_REVENUE|ORDER_TODAY|REPORT_FINANCE|N/A', '订单营业额', 'F002'),
-        ('损耗太大了要查原因', 'QUERY', 'RESTAURANT_WASTAGE_ANOMALY|WASTAGE_ROOT_CAUSE_ANALYSIS|REPORT_ANOMALY|QUALITY_STATS|ALERT_DIAGNOSE|N/A', '损耗歧义', 'F002'),
-        ('进货建议', 'QUERY', 'RESTAURANT_PROCUREMENT_SUGGESTION|MATERIAL_LOW_STOCK_ALERT|ORDER_LIST|MRP_CALCULATION|N/A', '进货采购建议', 'F002'),
+
+
+
+
+
     ]),
 
     # ====== EXPANSION: AI-AN (v30c 拼写错误/中英混合/emoji/超长/餐饮/多轮) ======
@@ -1804,27 +1757,9 @@ categories = {
     ]),
 
     # ====== AM1-AM3: Restaurant Domain Extended (餐饮扩展) ======
-    'AM1': ('餐饮-写入操作', [
-        ('添加一道新菜品红烧排骨', 'WRITE', 'RESTAURANT_DISH_CREATE|PRODUCT_UPDATE|MATERIAL_BATCH_CREATE|N/A', '新增菜品', 'F002'),
-        ('更新宫保鸡丁的价格为38元', 'WRITE', 'RESTAURANT_DISH_UPDATE|PRODUCT_UPDATE|ORDER_UPDATE|N/A', '更新菜品价格', 'F002'),
-        ('下架麻辣小龙虾这道菜', 'WRITE', 'RESTAURANT_DISH_DELETE|PRODUCT_UPDATE|MATERIAL_BATCH_DELETE|FOOD_KNOWLEDGE_QUERY|N/A', '下架菜品', 'F002'),
-        ('记录今天的食材损耗', 'WRITE', 'RESTAURANT_WASTAGE_RECORD|RESTAURANT_WASTAGE_SUMMARY|MATERIAL_BATCH_CONSUME|MATERIAL_ADJUST_QUANTITY|N/A', '记录损耗', 'F002'),
-        ('今天的食材采购单生成一下', 'WRITE', 'RESTAURANT_PROCUREMENT_CREATE|ORDER_NEW|FORM_GENERATION|N/A', '生成采购单', 'F002'),
-    ]),
-    'AM2': ('餐饮-后厨运营查询', [
-        ('后厨现在有几个人在岗', 'QUERY', 'WORKER_IN_SHOP_REALTIME_COUNT|ATTENDANCE_TODAY|QUERY_ONLINE_STAFF_COUNT|N/A', '后厨人数', 'F002'),
-        ('哪个厨师今天产出最高', 'QUERY', 'REPORT_EFFICIENCY|ATTENDANCE_STATS|PRODUCTION_STATUS_QUERY|REPORT_PRODUCTION|N/A', '厨师产出', 'F002'),
-        ('中午的翻台率是多少', 'QUERY', 'RESTAURANT_TABLE_TURNOVER|REPORT_KPI|REPORT_EFFICIENCY|N/A', '翻台率', 'F002'),
-        ('外卖订单占比多少', 'QUERY', 'RESTAURANT_ORDER_STATISTICS|ORDER_LIST|REPORT_KPI|N/A', '外卖占比', 'F002'),
-        ('哪个菜退单率最高', 'QUERY', 'RESTAURANT_RETURN_RATE|QUALITY_STATS|REPORT_KPI|PRODUCT_SALES_RANKING|N/A', '退单率', 'F002'),
-    ]),
-    'AM3': ('餐饮-经营诊断分析', [
-        ('这周跟上周营业额对比', 'QUERY', 'RESTAURANT_REVENUE_TREND|REPORT_TRENDS|REPORT_KPI|REPORT_PRODUCTION_WEEKLY_COMPARISON|SHIPMENT_STATS|N/A', '餐饮周对比', 'F002'),
-        ('人均消费是多少', 'QUERY', 'RESTAURANT_AVG_TICKET|REPORT_KPI|CUSTOMER_STATS|REPORT_DASHBOARD_OVERVIEW|REPORT_FINANCE_REVENUE|N/A', '人均消费', 'F002'),
-        ('哪些菜品的毛利率最高', 'QUERY', 'RESTAURANT_DISH_COST_ANALYSIS|RESTAURANT_MARGIN_ANALYSIS|QUERY_PRODUCT_GROSS_MARGIN|REPORT_FINANCE|N/A', '菜品毛利排名', 'F002'),
-        ('本月食材成本占营业额比例', 'QUERY', 'RESTAURANT_INGREDIENT_COST_TREND|COST_TREND_ANALYSIS|REPORT_FINANCE|RESTAURANT_MARGIN_ANALYSIS|COST_QUERY|N/A', '食材成本率', 'F002'),
-        ('经营状况总览', 'QUERY', 'RESTAURANT_DAILY_REVENUE|REPORT_DASHBOARD_OVERVIEW|REPORT_KPI|N/A', '餐饮总览', 'F002'),
-    ]),
+
+
+
 
     # ====== AN1-AN3: Multi-Turn Context Simulation (多轮上下文) ======
     'AN1': ('多轮-接上条/继续查', [
@@ -2147,34 +2082,18 @@ categories = {
         ('设个闹钟', 'QUERY', 'OUT_OF_DOMAIN', '域外-闹钟'),
         ('算数学题', 'QUERY', 'OUT_OF_DOMAIN', '域外-数学'),
     ]),
-    'AY2': ('餐饮-自然语言变体(R001)', [
-        ('今天赚了多少', 'QUERY', 'RESTAURANT_DAILY_REVENUE|RESTAURANT_MARGIN_ANALYSIS', '餐饮-日营收变体', 'F002'),
-        ('今日流水', 'QUERY', 'RESTAURANT_DAILY_REVENUE', '餐饮-流水', 'F002'),
-        ('哪个菜卖得好', 'QUERY', 'RESTAURANT_DISH_SALES_RANKING|RESTAURANT_BESTSELLER_QUERY', '餐饮-销量排行变体', 'F002'),
-        ('热门菜', 'QUERY', 'RESTAURANT_BESTSELLER_QUERY', '餐饮-热门菜', 'F002'),
-        ('食材不够了', 'QUERY', 'RESTAURANT_INGREDIENT_LOW_STOCK|RESTAURANT_INGREDIENT_STOCK', '餐饮-食材不足', 'F002'),
-        ('临期食材', 'QUERY', 'RESTAURANT_INGREDIENT_EXPIRY_ALERT', '餐饮-临期', 'F002'),
-        ('什么时候最忙', 'QUERY', 'RESTAURANT_PEAK_HOURS_ANALYSIS', '餐饮-高峰时段变体', 'F002'),
-        ('该买什么', 'QUERY', 'RESTAURANT_PROCUREMENT_SUGGESTION', '餐饮-采购建议变体', 'F002'),
-        ('浪费异常', 'QUERY', 'RESTAURANT_WASTAGE_ANOMALY', '餐饮-异常损耗变体', 'F002'),
-        ('进货价变化', 'QUERY', 'RESTAURANT_INGREDIENT_COST_TREND|COST_TREND_ANALYSIS', '餐饮-食材成本趋势变体', 'F002'),
-        ('不好卖的菜', 'QUERY', 'RESTAURANT_SLOW_SELLER_QUERY', '餐饮-滞销变体', 'F002'),
-        ('收入走势', 'QUERY', 'RESTAURANT_REVENUE_TREND|REPORT_TRENDS', '餐饮-趋势变体', 'F002'),
-        ('废料统计', 'QUERY', 'RESTAURANT_WASTAGE_SUMMARY', '餐饮-废料变体', 'F002'),
-        ('补货清单', 'QUERY', 'RESTAURANT_PROCUREMENT_SUGGESTION', '餐饮-补货变体', 'F002'),
-        ('毛利分析', 'QUERY', 'RESTAURANT_MARGIN_ANALYSIS', '餐饮-毛利变体', 'F002'),
-    ]),
+
     'AZ1': ('v32-交叉验证(同短语不同业态)', [
         ('营业额', 'QUERY', 'REPORT_KPI|REPORT_DASHBOARD_OVERVIEW', '工厂-营业额→REPORT', 'F001'),
-        ('营业额', 'QUERY', 'RESTAURANT_DAILY_REVENUE', '餐饮-营业额→RESTAURANT_REVENUE', 'F002'),
+
         ('毛利率', 'QUERY', 'PROFIT_TREND_ANALYSIS|REPORT_FINANCE', '工厂-毛利率→PROFIT', 'F001'),
-        ('毛利率', 'QUERY', 'RESTAURANT_MARGIN_ANALYSIS', '餐饮-毛利率→RESTAURANT_MARGIN', 'F002'),
+
         ('成本分析', 'QUERY', 'COST_TREND_ANALYSIS|COST_QUERY', '工厂-成本分析→COST', 'F001'),
-        ('成本分析', 'QUERY', 'RESTAURANT_DISH_COST_ANALYSIS', '餐饮-成本分析→RESTAURANT_COST', 'F002'),
+
         ('订单统计', 'QUERY', 'ORDER_LIST|ORDER_TODAY', '工厂-订单统计→ORDER', 'F001'),
-        ('订单统计', 'QUERY', 'RESTAURANT_ORDER_STATISTICS', '餐饮-订单统计→RESTAURANT_ORDER', 'F002'),
+
         ('修改密码', 'QUERY', 'SYSTEM_PASSWORD_RESET', '工厂-修改密码(公共)', 'F001'),
-        ('修改密码', 'QUERY', 'SYSTEM_PASSWORD_RESET', '餐饮-修改密码(公共)', 'F002'),
+
     ]),
     'AY3': ('系统导航-密码/资料/帮助', [
         ('修改密码', 'QUERY', 'SYSTEM_PASSWORD_RESET', '导航-修改密码'),

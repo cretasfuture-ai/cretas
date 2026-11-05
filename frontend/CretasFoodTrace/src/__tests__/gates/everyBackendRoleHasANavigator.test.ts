@@ -39,7 +39,13 @@ const PRODUCTION_ROLES = [
 ] as const;
 
 /** 有意不给独立导航、就该落到锁定页的角色。⛔ 往这里加要写理由。 */
-const DELIBERATELY_RESTRICTED: string[] = [];
+// Retired restaurant roles remain in the historical production snapshot, but
+// must not regain a restaurant navigator after the retirement.
+const DELIBERATELY_RESTRICTED: string[] = [
+  'restaurant_purchaser',
+  'restaurant_owner',
+  'restaurant_manager',
+];
 
 describe('每个后端角色都有导航分支', () => {
   const src = readFileSync(

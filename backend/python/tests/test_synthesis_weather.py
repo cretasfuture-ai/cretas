@@ -126,7 +126,7 @@ def test_weather_plan_cue_requires_revenue_context_and_does_not_open_all():
 
     weather_plan = eng.plan_dimensions("为啥这段生意差，跟天气有关吗")
     assert weather_plan["weather"] is True
-    assert weather_plan["review"] is False
+    assert "review" not in weather_plan
     assert weather_plan["sales"] is False
 
     neutral_plan = eng.plan_dimensions("哪天开会")

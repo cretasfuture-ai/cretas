@@ -4,17 +4,7 @@
  */
 import type { RouteRecordRaw } from 'vue-router';
 import { buildHubRedirect, buildPathRedirect } from '../analysisHubRedirect';
-import {
-  RESTAURANT_ALL_ROLES,
-  RESTAURANT_DATA_STEWARD_ROLES,
-  RESTAURANT_DECISION_ROLES,
-} from '@/views/restaurant/restaurantRoleExperience';
-
 const platformAdminOnlyRoles = ['platform_admin'];
-const restaurantAdminRoles = ['factory_super_admin', 'platform_admin', 'permission_admin'];
-const restaurantAnalyticsAll = [...restaurantAdminRoles, ...RESTAURANT_ALL_ROLES];
-const restaurantAnalyticsDecision = [...restaurantAdminRoles, ...RESTAURANT_DECISION_ROLES];
-const restaurantAnalyticsStewards = [...restaurantAdminRoles, ...RESTAURANT_DATA_STEWARD_ROLES];
 
 const smartBIRoutes: RouteRecordRaw[] = [
   // SmartBI 主模块
@@ -30,7 +20,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/smart-bi/Dashboard.vue'),
         meta: {
           requiresAuth: true, title: '经营驾驶舱', icon: 'Odometer', module: 'analytics',
-          restaurantRoles: restaurantAnalyticsAll,
         },
       },
       // WS4: 经营分析合并模块入口 (财务/销售/趋势/KPI·指标 tab 化)。
@@ -40,7 +29,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/smart-bi/BusinessAnalysisHub.vue'),
         meta: {
           requiresAuth: true, title: '经营分析', icon: 'TrendCharts', module: 'analytics',
-          restaurantRoles: restaurantAnalyticsDecision,
         },
       },
       // WS4: 销售分析已合并入经营分析 hub (redirect 保书签 → ?tab=sales)。组件经 hub 加载。
@@ -55,7 +43,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/smart-bi/QueryTemplateManager.vue'),
         meta: {
           requiresAuth: true, title: '查询模板管理', icon: 'Tickets', module: 'analytics',
-          restaurantRoles: restaurantAnalyticsStewards,
         },
       },
       {
@@ -64,7 +51,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/smart-bi/SmartBIAnalysis.vue'),
         meta: {
           requiresAuth: true, title: '智能数据分析', icon: 'DataAnalysis', module: 'analytics',
-          restaurantRoles: restaurantAnalyticsAll,
         },
       },
       {
@@ -73,7 +59,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/smart-bi/ExcelUpload.vue'),
         meta: {
           requiresAuth: true, title: 'Excel上传', icon: 'Upload', module: 'analytics',
-          restaurantRoles: restaurantAnalyticsStewards,
         },
       },
       {
@@ -82,7 +67,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/smart-bi/DataCompletenessView.vue'),
         meta: {
           requiresAuth: true, title: '数据完整度', icon: 'Checked', module: 'analytics',
-          restaurantRoles: restaurantAnalyticsStewards,
         },
       },
       {
@@ -123,50 +107,9 @@ const smartBIRoutes: RouteRecordRaw[] = [
         redirect: (to) => buildPathRedirect(to, '/smart-bi/dashboard'),
       },
       {
-        path: 'restaurant-v2',
-        name: 'SmartBIRestaurantV2',
-        component: () => import('@/views/smart-bi/RestaurantV2Dashboard.vue'),
-        meta: {
-          requiresAuth: true,
-          title: '餐饮综合分析',
-          icon: 'DataAnalysis',
-          module: 'analytics',
-          hideForFactoryTypes: ['FACTORY'],
-        },
-      },
-      {
         path: 'gold-preview',
         name: 'SmartBIGoldPreview',
         redirect: (to) => buildPathRedirect(to, '/smart-bi/dashboard'),
-      },
-      // QHJ 收入管理报表 (青花椒 / R_*_REAL restaurant chains; Phase I, 2026-05-13)
-      {
-        path: 'revenue-report',
-        name: 'SmartBIRevenueReport',
-        component: () => import('@/views/smart-bi/RevenueReport.vue'),
-        meta: {
-          requiresAuth: true,
-          title: '收入管理报表',
-          icon: 'Money',
-          module: 'analytics',
-          roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager', 'restaurant_owner'],
-          restaurantRoles: [...restaurantAnalyticsDecision, 'finance_manager'],
-          hideForFactoryTypes: ['FACTORY'],  // restaurant tenants only
-        },
-      },
-      // G4 AI 经营体检表 (餐饮诊断报告; 2026-06-03)
-      {
-        path: 'health-report',
-        name: 'SmartBIHealthReport',
-        component: () => import('@/views/smart-bi/HealthReportView.vue'),
-        meta: {
-          requiresAuth: true,
-          title: 'AI 经营体检',
-          icon: 'FirstAidKit',
-          module: 'analytics',
-          restaurantRoles: restaurantAnalyticsDecision,
-          hideForFactoryTypes: ['FACTORY'],  // restaurant tenants only
-        },
       },
       // Phase 0: 字段映射复核队列 (2026-06-15) — 闭合自改进环
       {
@@ -175,7 +118,6 @@ const smartBIRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/smart-bi/MappingReviewQueue.vue'),
         meta: {
           requiresAuth: true, title: '字段映射复核', icon: 'EditPen', module: 'analytics',
-          restaurantRoles: restaurantAnalyticsStewards,
         },
       },
     ],
