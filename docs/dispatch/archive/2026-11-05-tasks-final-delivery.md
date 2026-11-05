@@ -41,3 +41,11 @@ Owner：01a1a954/root。状态：review（代码冻结、最终PR门禁待跑，
 审计依赖1438已合入main/e40ee26673ae6df68f503aecc0664f903186dd9b，本PR已转main。同步仅处理main元数据、评测脚本及Python测试修正；保留其他Owner全部在飞行，PG selector为main64类加本组1类，无删除。dispatch校验通过。
 
 同步前后Java（包括完整测试与资源）tree均5744d636cb929e519ed234b038c2ebe68f665509，Web tree均144753ffaefdf7f9ca9037742a06171ad4cb80e4。因此直接复用dbd547b868的可信18类161项、Web12项/typecheck及完整CI run41979193999（19422总、19128pass、294条件skip、0fail/0error）；不因仅main历史同步重复产品全量。新提交的常规fast/PG仍按workflow执行。仍未合并本PR或部署，业务缺陷继续按真实上线验收关闭。
+
+## 最终main整合与质量候选修复
+
+新增真实缺陷D-S4-QUALITY-READ-01已在f4084610b6修复：质量角色既有原料下拉误用仓储读接口而403；新增质量域窄投影读取与Web调用，保留既有仓储拒绝，复用原DataScope/厂区/AVAILABLE过滤。新增切片11个Java目标与4套18个Web用例均通过，独立安全复核无P0/P1/P2；详见s4-quality-material-options归档。
+
+本候选现整合已合main9043d24214d6fb827cc67f9214de4cf40560ce16（食品DAG交付）及此前ecfb安全发布前置。当前产品树已变化，dbd的19422全量及旧8b8e预上传仅作为先前版本证据，不能冒充当前完整树或最终制品。最终按本组18类、食品57类及质量新旧权限2类去重为76显式类统一集成build/stage，并完成当前PR head快速/真实PG门禁与最终Web typecheck/build；同内容通过证据按其覆盖范围复用，不重复已经冻结的独立验证。
+
+只有前组发布窗口明确释放、本PR合main且官方exact-main部署成功后才执行受影响的S4/S5真实UI闭环。新质量正向必须实际返回并选择本次10kg批次，异厂路径应403；不把空200或默认AVAILABLE称为人工来料放行。原业务签署不代签。

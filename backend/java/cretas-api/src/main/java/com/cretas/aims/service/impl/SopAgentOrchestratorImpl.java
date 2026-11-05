@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
+import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.entity.smartbi.AiAgentRule;
 import com.cretas.aims.event.SopUploadedEvent;
 import com.cretas.aims.repository.smartbi.AiAgentRuleRepository;
@@ -258,9 +259,24 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
     @Autowired(required = false)
     private com.cretas.aims.repository.UserRepository userRepository;
 
+    @Autowired(required = false)
+    private WriteGuardService writeGuardService;
+
+    // SOP upload may persist its derived SKU complexity metadata, after the same
+    // user/tenant/permission checks as a read step. This is NOT authorization for
+    // configurable chains to perform inventory, finance, or other business writes.
+    private static final Set<String> AUTOMATIC_SOP_METADATA_WRITES = Set.of("sku_update_complexity");
+
     private Optional<String> stepDenied(ToolExecutor executor, Map<String, Object> context) {
-        if (toolPermissionChain == null || userRepository == null) {
+        if (toolPermissionChain == null || userRepository == null || writeGuardService == null) {
             return Optional.of("权限校验暂不可用");
+        }
+        // Use the central declaration + heuristic classifier, including its
+        // fail-closed treatment of missing declarations. Request flags and even
+        // another path's confirmation marker cannot authorize a SOP chain write.
+        if (writeGuardService.isWriteTool(executor)
+                && !AUTOMATIC_SOP_METADATA_WRITES.contains(executor.getToolName())) {
+            return Optional.of("SOP 自动流程不允许执行此写操作，请改用对应业务页面确认办理");
         }
         Object factoryId = context.get("factoryId");
         Object rawUser = context.get("userId") != null ? context.get("userId") : context.get("uploadedBy");
@@ -329,14 +345,32 @@ public class SopAgentOrchestratorImpl implements SopAgentOrchestrator {
                 lastResult = result;
 
                 // 检查是否成功
-                if (!Boolean.TRUE.equals(result.get("success"))) {
+                if (!Boolean.TRUE.equals(result.get("success"))
+                        || (result.get("data") instanceof Map<?, ?> data
+                            && Boolean.FALSE.equals(data.get("success")))) {
                     log.warn("工具执行返回失败: toolName={}, result={}", toolName, result);
+                    if (AUTOMATIC_SOP_METADATA_WRITES.contains(toolName)) {
+                        // AbstractBusinessTool may have swallowed an exception
+                        // after its business service committed. A false wrapper
+                        // is not proof of rollback and must never invite replay.
+                        return Map.of("success", false, "outcome", "UNKNOWN", "retryable", false,
+                                "error", "SOP 写操作结果未确认，请核对实际记录，勿重复执行",
+                                "failedStep", toolName, "lastResult", result);
+                    }
+                    return Map.of("success", false,
+                            "error", "SOP 步骤未完成，请核对实际结果后再继续",
+                            "failedStep", toolName, "lastResult", result);
                 }
 
                 log.info("工具执行完成: toolName={}, outputKey={}", toolName, step.getOutputKey());
 
             } catch (Exception e) {
                 log.error("工具执行异常: toolName={}, error={}", toolName, e.getMessage(), e);
+                if (AUTOMATIC_SOP_METADATA_WRITES.contains(toolName)) {
+                    return Map.of("success", false, "outcome", "UNKNOWN", "retryable", false,
+                            "error", "SOP 写操作执行结果不明，请核对实际记录，勿重复执行",
+                            "failedStep", toolName);
+                }
                 return Map.of(
                         "success", false,
                         "error", "工具执行失败: " + toolName + " - " + e.getMessage(),
