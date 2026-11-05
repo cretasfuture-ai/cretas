@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `INTENT266-GENERALIZATION-20261105` — `blocked` — Owner Codex/root；Base `9e6f576a7c02fe68f2f5a1cb9af9185e8d2cd3f6`；scope: scripts/finetune泛化训练/跨轮额度/恢复、对应测试/holdout及archive；新确认796本地87.94%，93目标通过；mini日额度止步，114未发送、2未知计错，待重置或额外付费答复。权重/路由锁定，不换线上。
 - `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 
 - `SEC-PLAN-AUDIT-1438-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。

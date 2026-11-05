@@ -207,3 +207,5 @@ A: 减小 `--batch-size` (如 4) 或增加 `--freeze-layers`
 `factory_generalization.py --evidence <新目录>` 依次执行 `initialize`、`generate-train`、`generate-development`、`generate-confirmation`、`audit`、`negatives`、`curate`、`train`、`calibrate`、`confirm`。独立训练与确认只输入能力定义，不输入旧错题；均衡旧训练回放，验证集选模，新确认集打开后拒绝再次训练/校准。沿用266个输出ID与已声明的260个语义目标。`budget-previous-roots.json` 将前轮回执纳入同日已知用量，不代表组织余额可见。未知请求不能通过新目录重发或忽略其预留额度。
 
 额度中断后先停止原进程，再用 `factory_generalization_recovery.py freeze --evidence <原目录>` 保存原始ledger、锁定本地预测并隔离无完整HTTP回执的请求。它们永不重发、按预留上界计额度，最终保守计错（即使真值是澄清也不算答对），所有题保留在分母。额度允许后才执行 `recover`：仅发送原先未发送的请求，完成请求按原payload哈希缓存复用，保持同一权重、策略、候选、提示词与确认集。恢复入口不提高每日额度、不授予额外付费许可。完整确认后才允许 `regression` 打开旧保护集；诊断结果不得反向拟合。第二轮状态见 `docs/dispatch/archive/2026-11-05-intent266-generalization.md`。
+
+第二轮最终796条本地87.94%／混合97.11%，预设泛化检查通过；旧1637条本地81.80%→86.07%。仍有明确缺口：旧35条本地16/35、混合27/35，澄清26/40；不能用总体达标代替这些质量指标或生产验收。全部评测数据保持保护，不替换线上模型。用户本轮额外付费$1授权仅覆盖已锁定的恢复/旧35诊断，新增请求未缓存价格保守折算约$0.277，默认每日源码上限不变。
