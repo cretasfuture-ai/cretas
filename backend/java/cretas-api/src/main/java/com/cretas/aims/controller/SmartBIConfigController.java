@@ -92,8 +92,7 @@ public class SmartBIConfigController {
     }
 
     private boolean isPlatformRole(HttpServletRequest request) {
-        String role = (String) request.getAttribute("role");
-        return "platform_admin".equals(role) || "super_admin".equals(role);
+        return com.cretas.aims.security.PlatformRoleBoundary.hasCrossFactoryAuthority(request);
     }
 
     /**

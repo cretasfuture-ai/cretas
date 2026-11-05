@@ -217,6 +217,11 @@ public class ProcessSecretLlmCostScope {
         AuthenticatedActor actor = caller();
         Set<String> full = new TreeSet<>();
         for (String productTypeId : protectedIds) {
+            // 平台 AI 分析入口 (只在它打开的作用域里为真, 自己记留痕) 先判: 否则 a 开 b 关时会多记一条完整查看
+            if (accessService.permitsPlatformAiRead(actor, factoryId, productTypeId)) {
+                full.add(productTypeId);
+                continue;
+            }
             // 平台账号的放行每次记一条完整查看 (permitsViewFull); 负责人 / 授权持有人照旧不记
             if (accessService.permitsViewFull(actor, factoryId, productTypeId, "ai cost context " + productTypeId)) {
                 full.add(productTypeId);

@@ -13,6 +13,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RequestAuditSupportContractTest {
 
     @Test
+    void routeFactoryIsTrustedOnlyForAPlatformIdentity() {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/mobile/F002/orders");
+        request.setAttribute("userId", 7L);
+        request.setAttribute("factoryId", "F001");
+        request.setAttribute("role", "platform_admin");
+        request.setAttribute(RequestAuditSupport.POST_AUTH_ATTRIBUTE, Boolean.TRUE);
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, 7L, "F001", "platform_admin"));
+        assertThat(RequestAuditSupport.trustedFactoryId(request)).isNull();
+
+        request.setAttribute(com.cretas.aims.security.AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "platform_admin"));
+        assertThat(RequestAuditSupport.trustedFactoryId(request)).isEqualTo("F002");
+    }
+
+    @Test
     void onlyJwtInterceptorAttributesCanEstablishTrustedFactoryIdentity() {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/mobile/F006/materials/42?secret=leak");
         request.setAttribute("factoryId", "F999");
