@@ -120,7 +120,8 @@ class UrgentInsertWorkerShiftContractTest {
                 new WorkerShiftAvailabilityCheck.Result(true, 2, 1, Set.of(11L), "人员不足"));
         assertThat(analyze()).containsEntry("isFeasible", true);
         assertThatThrownBy(() -> service.confirmInsert(F, 1L, request(List.of(11L, 12L))))
-                .isInstanceOf(BusinessException.class).hasMessageContaining("不可派");
+                .isInstanceOf(BusinessException.class).hasMessageContaining("不可派")
+                .satisfies(failure -> assertThat(((BusinessException) failure).getActionHint()).contains("重新选择"));
         verify(slots, never()).claimAvailableSlot(anyString(), anyString(), any());
         verify(plans, never()).save(any());
     }
@@ -130,7 +131,8 @@ class UrgentInsertWorkerShiftContractTest {
         when(shifts.check(F, start, start.plusHours(2), 2)).thenReturn(
                 WorkerShiftAvailabilityCheck.Result.unverified(2, "人员未验证: 班次已变更"));
         assertThatThrownBy(() -> service.forceInsert(F, 1L, request(List.of(11L, 12L))))
-                .isInstanceOf(BusinessException.class).hasMessageContaining("人员未验证");
+                .isInstanceOf(BusinessException.class).hasMessageContaining("人员未验证")
+                .satisfies(failure -> assertThat(((BusinessException) failure).getActionHint()).contains("确认", "HR班次"));
         verify(slots, never()).claimAvailableSlot(anyString(), anyString(), any());
         verify(plans, never()).save(any());
     }
@@ -150,7 +152,8 @@ class UrgentInsertWorkerShiftContractTest {
     void duplicatesNullAndInvalidIdsNeverCountAsExtraWorkers() {
         for (List<Long> ids : Arrays.asList(List.of(11L, 11L), Arrays.asList(11L, null), List.of(11L, -1L))) {
             assertThatThrownBy(() -> service.confirmInsert(F, 1L, request(ids)))
-                    .isInstanceOf(BusinessException.class).hasMessageContaining("名单无效");
+                    .isInstanceOf(BusinessException.class).hasMessageContaining("名单无效")
+                    .satisfies(failure -> assertThat(((BusinessException) failure).getActionHint()).contains("重复或无效"));
         }
         verifyNoInteractions(shifts, plans);
     }

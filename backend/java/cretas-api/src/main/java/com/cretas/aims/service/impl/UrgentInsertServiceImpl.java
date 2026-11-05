@@ -283,17 +283,20 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (selected.stream().anyMatch(id -> id == null || id <= 0)
                 || new HashSet<>(selected).size() != selected.size()) {
             throw new BusinessException(409, "指定工人名单无效，请重新选择，未创建计划")
-                    .withCode("INSERT_WORKER_SELECTION_INVALID");
+                    .withCode("INSERT_WORKER_SELECTION_INVALID")
+                    .withHint("重新打开人员选择，去掉重复或无效项，仅选择本厂可派工人");
         }
         WorkerShiftAvailabilityCheck.Result checked = checkWorkers(factoryId, slot);
         if (!checked.verified()) {
             throw new BusinessException(409, checked.message() + "，未创建计划")
-                    .withCode("INSERT_WORKERS_UNVERIFIED");
+                    .withCode("INSERT_WORKERS_UNVERIFIED")
+                    .withHint("请先确认该时段的HR班次、请假和任务安排，再刷新人员列表；当前没有预留工人或创建计划");
         }
         if (!checked.available() || selected.size() < checked.requiredWorkers()
                 || !checked.availableWorkerIds().containsAll(selected)) {
             throw new BusinessException(409, "指定工人不足或在该时段不可派，请刷新班次和人员，未创建计划")
-                    .withCode("INSERT_WORKERS_UNAVAILABLE");
+                    .withCode("INSERT_WORKERS_UNAVAILABLE")
+                    .withHint("请重新选择覆盖整个时段、人数满足要求的工人；不可用人员需先确认班次或任务安排");
         }
     }
 
