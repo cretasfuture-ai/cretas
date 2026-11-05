@@ -158,6 +158,9 @@ def test_focused_current_row_check_is_authorized_and_does_not_wait_for_ai(sectio
     assert result.status_code==200
     assert '0 行负余额' in result.json()['data']['answer']
     assert result.json()['data']['ai']['status']=='not_requested'
+    continued=client.post(path,json={**body,'question':'继续','history':[{'role':'user','content':'9000行负库存谁处理？'}]},headers=headers)
+    assert continued.status_code==200 and '0 行负余额' in continued.json()['data']['answer']
+    assert '9000' not in continued.json()['data']['answer']
 
 
 def test_real_authority_failure_blocks_before_data_loading(section_client,monkeypatch):

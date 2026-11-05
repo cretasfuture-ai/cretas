@@ -199,11 +199,16 @@ def operational_answer(analysis, section, question):
     return '\n\n'.join([message,'找谁处理：'+owner+'。'+action,('先核这些明细（最多列五项）：'+examples) if examples else '当前范围没有命中明细。',boundary])
 
 
-def answer(report, question, history=(), analysis=None):
-    """Choose disclosed evidence, never guess missing facts or execute actions."""
+def resolve_question(question, history=()):
     q = question.strip()
     if q in ('继续', '详细一点', '展开说说'):
         q = next((h['content'] for h in reversed(history) if h['role']=='user' and h['content'] not in ('继续','详细一点','展开说说')), q)
+    return q
+
+
+def answer(report, question, history=(), analysis=None):
+    """Choose disclosed evidence, never guess missing facts or execute actions."""
+    q=resolve_question(question,history)
     if any(k in q for k in ('怎么算','计算','公式','口径')):
         groups = [('计算口径', report['calculation']), ('不能据此推断', report['limitations'])]
     elif any(k in q for k in ('缺','补','可信','完整')):
