@@ -268,13 +268,17 @@ async def calibrate(root):
     import numpy as np
     selection=json.loads((root/'selection.json').read_text(encoding='utf-8'));mapping=json.loads((root/'model-mapping.json').read_text(encoding='utf-8'));rows=read(root/'calibration-local.jsonl')
     pool=CandidatePool(json.loads((root/'definitions.json').read_text(encoding='utf-8')),mapping,manifest['aliases'])
+    routing_plan=dict(confidence_grid=[.95,.98],margin_grid=[.05,.1],temperature_grid=[1.,1.25,1.5,2.,2.5,3.],mini_confidence_grid=[.65,.8],reason='Keep prior conservative 0.95 acceptance floor; do not sharpen certainty or relax acceptance on easy synthetic development data. Frozen before confirmation access.')
+    plan_path=root/'routing-preregistration.json'
+    if plan_path.exists() and json.loads(plan_path.read_text(encoding='utf-8'))!=routing_plan:raise ValueError('Routing preregistration changed')
+    save(plan_path,routing_plan)
     cloud=await mini_many(root,'calibration',rows,pool)
     positives=[r for r in rows if r['label'] in mapping]
-    temperature=min([.75,1.,1.25,1.5,2.,2.5,3.],key=lambda t:sum(-np.log(max(probabilities(r['logits'],t)[mapping[r['label']]],1e-12)) for r in positives))
+    temperature=min(routing_plan['temperature_grid'],key=lambda t:sum(-np.log(max(probabilities(r['logits'],t)[mapping[r['label']]],1e-12)) for r in positives))
     grid=[]
-    for threshold in [.7,.8,.9,.95,.98]:
-        for margin in [.05,.1]:
-            for mini_confidence in [.65,.8]:
+    for threshold in routing_plan['confidence_grid']:
+        for margin in routing_plan['margin_grid']:
+            for mini_confidence in routing_plan['mini_confidence_grid']:
                 policy=dict(temperature=temperature,confidence=threshold,margin=margin,mini_confidence=mini_confidence,critic_enabled=False)
                 paired=[dict(r,prediction=decision(r,mapping,policy,cloud[r['record_id']])[0]) for r in rows]
                 grid.append(dict(policy=policy,hybrid=scores(paired),mini_calls=sum(decision(r,mapping,policy)[1]=='abstain' for r in rows)))
