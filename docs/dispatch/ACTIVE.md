@@ -18,13 +18,15 @@
 
 - `SEC-RESTAURANT-UI-20261105` — `review` — Owner root — Base 41f58a822cf — scope web-admin及frontend/CretasFoodTrace；删除餐饮专属页面/导航/API/角色入口，迁出工厂复用。验收Web/RN类型/构建/入口契约；禁止Canvas/缺料/演示业务修改。
 
-- `TASKS-S315-SEMI-ENTRY-20261106` — `review` — Owner `01a1a954/root` — Base `eacf526cf33daa707f4f45f86eae471d076cf4a5` — scope production/plans/list.vue与对应tests；PR1486修clean半成品输入/差异说明错列，21/type/原CI通过；整合最新沙盒main后组合Web构建/必需CI，Java沿用main不重发。继续同QA计划364ea余0.4与de598877返工结单验收。
 
 
 
 
 
-- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `c24e11bb0a2c8e2714981d51b86849bd6fa2a8de` — #1469已发/44业务通过；#1480代码已合，两个S3代码scope归档释放。继续官方发布/OTA及F006自有S302/309/315业务；QA对象/5558独占详本机协调状态，S610本人签署待。
+
+
+
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `blocked` — Owner `01a1a954/root` — Base `898877a2a981159291b16c523f99f822d7c4a2f0` — 软件修复/发布/实收47通过，2原成本豁免；仅S6-10业务代表与QA本人试点签署未提供，禁止代签。代码scope/生产锁/设备均释放；证据及对象保留见archive/2026-11-06-tasks-business-final-closeout.md。
 
 
 

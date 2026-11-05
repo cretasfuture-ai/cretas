@@ -6,6 +6,7 @@ import com.cretas.aims.dto.yield.StepYieldDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionSettlement;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
@@ -85,12 +86,143 @@ class SettlementSemiTransferCostContractTest {
     }
 
     private void settledWith(String transferredCostJson) {
+        settledWith(transferredCostJson, 1L);
+    }
+
+    private void settledWith(String transferredCostJson, Long producerBatchId) {
         ProductionSettlement settlement = new ProductionSettlement();
-        settlement.setSemiStockingDetail("[{\"anchor\":\"CLK-SEMI-1\",\"productionBatchId\":501,"
+        settlement.setSemiStockingDetail("[{\"anchor\":\"CLK-SEMI-1\",\"productionBatchId\":" + producerBatchId + ","
                 + "\"materialBatchId\":\"MB-W\",\"quantity\":0.4,\"storageQuantity\":0.4,"
                 + "\"transferredCost\":" + transferredCostJson + "}]");
         when(settlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(F, PLAN))
                 .thenReturn(Optional.of(settlement));
+    }
+
+    private MaterialConsumption terminalConsumesSource(String producedQuantity) {
+        ProductionBatch terminal = new ProductionBatch();
+        terminal.setId(1L);
+        terminal.setFactoryId(F);
+        terminal.setBatchNumber("PB-TERMINAL");
+        terminal.setBatchType("REGULAR");
+        terminal.setQuantity(new BigDecimal("5"));
+        terminal.setProductionPlanId(PLAN);
+        when(batchRepository.findByFactoryIdAndProductionPlanId(F, PLAN)).thenReturn(List.of(terminal));
+        when(batchRepository.findByFactoryIdAndBatchNumber(F, "PB-TERMINAL")).thenReturn(Optional.of(terminal));
+        when(batchRepository.findByIdAndFactoryId(1L, F)).thenReturn(Optional.of(terminal));
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(PLAN);
+        when(planRepository.findByFactoryIdAndSourceOrderId(F, "SO1")).thenReturn(List.of(plan));
+        when(batchRepository.findByFactoryIdAndProductionPlanIdIn(F, List.of(PLAN))).thenReturn(List.of(terminal));
+        MaterialConsumption parentRaw = new MaterialConsumption();
+        parentRaw.setFactoryId(F);
+        parentRaw.setBatchId("MB1");
+        parentRaw.setQuantity(new BigDecimal("1.2"));
+        parentRaw.setTotalCost(new BigDecimal("9.37"));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(501L, F))
+                .thenReturn(List.of(parentRaw));
+        MaterialBatch wip = new MaterialBatch();
+        wip.setId("MB-W");
+        wip.setFactoryId(F);
+        wip.setBatchNumber("CLK-W-SOURCE");
+        wip.setQuantityUnit("kg");
+        wip.setReceiptQuantity(producedQuantity == null ? null : new BigDecimal(producedQuantity));
+        wip.setSourceDocType("PRODUCTION_BATCH");
+        wip.setSourceDocId("501");
+        when(materialBatchRepository.findByIdAndFactoryId("MB-W", F)).thenReturn(Optional.of(wip));
+        MaterialConsumption feed = new MaterialConsumption();
+        feed.setFactoryId(F);
+        feed.setBatchId("MB-W");
+        feed.setSourceType("SEMI_FINISHED");
+        feed.setQuantity(new BigDecimal("0.6"));
+        feed.setUnitPrice(new BigDecimal("9.37"));
+        feed.setTotalCost(new BigDecimal("5.622"));
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(1L, F)).thenReturn(List.of(feed));
+        when(yieldReportService.getYield(F, 1L)).thenReturn(BatchYieldDTO.builder()
+                .totalLaborCost(new BigDecimal("4.23"))
+                .steps(List.of(StepYieldDTO.builder().processOrder(2).materialCost(BigDecimal.ZERO).build()))
+                .build());
+        return feed;
+    }
+
+    @Test
+    @DisplayName("末道仅领用上游0.6/1kg: 剩余0.4转库不能再扣已分摊之外的成本")
+    void allocatedTerminalCostDoesNotDeductTheLeftoverAgain() {
+        terminalConsumesSource("1");
+        settledWith("3.748", 501L);
+
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, PLAN, false);
+
+        assertThat(dto.getRawMaterialCost()).isEqualByComparingTo("5.622");
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("9.852");
+        assertThat(dto.getSemiTransferredCost()).isNull();
+        assertThat(service.computeByBatch(F, "PB-TERMINAL", false).getTotalCost()).isEqualByComparingTo("9.852");
+        assertThat(service.compute(F, "SO1", false).getTotalCost()).isEqualByComparingTo("9.852");
+        assertThat(service.computeByBatchIds(F, "group", List.of(1L), false).getTotalCost())
+                .isEqualByComparingTo("9.852");
+    }
+
+    @Test
+    @DisplayName("不在末道成本基数中的余料成本未知: 不污染已有可靠分摊")
+    void unrelatedUnknownTransferDoesNotTaintAllocatedCost() {
+        terminalConsumesSource("1");
+        settledWith("null", 501L);
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, PLAN, false);
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("9.852");
+        assertThat(dto.isCostComplete()).isTrue();
+    }
+
+    @Test
+    @DisplayName("历史上游缺产量分母: 不能把全额继承当成已按领用分摊")
+    void missingSourceDenominatorKeepsTransferredCostIncomplete() {
+        terminalConsumesSource(null);
+        settledWith("3.748", 501L);
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, PLAN, false);
+        assertThat(dto.getTotalCost()).isNull();
+        assertThat(dto.isCostComplete()).isFalse();
+        assertThat(dto.getMissingCostItems()).contains("SETTLEMENT_SEMI_TRANSFER_COST");
+    }
+
+    @Test
+    @DisplayName("上游只有人工且缺分母: 不能漏过原料追溯之外的全额继承")
+    void laborOnlyLegacySourceAlsoKeepsCostIncomplete() {
+        terminalConsumesSource(null);
+        when(consumptionRepository.findByProductionBatchIdAndFactoryId(501L, F)).thenReturn(List.of());
+        when(yieldReportService.getYield(F, 501L)).thenReturn(BatchYieldDTO.builder()
+                .totalLaborCost(new BigDecimal("9.37")).steps(List.of()).build());
+        settledWith("3.748", 501L);
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, PLAN, false);
+        assertThat(dto.getTotalCost()).isNull();
+        assertThat(dto.getMissingCostItems()).contains("SETTLEMENT_SEMI_TRANSFER_COST");
+    }
+
+    @Test
+    @DisplayName("缺实际领用量: 全额回落不能被误认为可靠的比例分摊")
+    void missingFeedQuantityKeepsCostIncomplete() {
+        terminalConsumesSource("1").setQuantity(null);
+        settledWith("3.748", 501L);
+        assertThat(service.computeByPlan(F, PLAN, false).getTotalCost()).isNull();
+    }
+
+    @Test
+    @DisplayName("明确零领用: 上游原料与人工均不得继承")
+    void zeroFeedDoesNotInheritUpstreamLabor() {
+        MaterialConsumption feed = terminalConsumesSource("1");
+        feed.setQuantity(BigDecimal.ZERO);
+        feed.setTotalCost(BigDecimal.ZERO);
+        when(yieldReportService.getYield(F, 501L)).thenReturn(BatchYieldDTO.builder()
+                .totalLaborCost(new BigDecimal("9.37")).steps(List.of()).build());
+        settledWith("3.748", 501L);
+        OrderCostBreakdownDTO dto = service.computeByPlan(F, PLAN, false);
+        assertThat(dto.getRawMaterialCost()).isZero();
+        assertThat(dto.getLaborCost()).isEqualByComparingTo("4.23");
+        assertThat(dto.getTotalCost()).isEqualByComparingTo("4.23");
+    }
+
+    @Test
+    @DisplayName("划转缺来源生产批身份: 无法核对成本归属时保持未知")
+    void missingProducerIdentityIsNotTreatedAsUnrelated() {
+        settledWith("80", null);
+        assertThat(service.computeByPlan(F, PLAN, false).getTotalCost()).isNull();
     }
 
     @Test
