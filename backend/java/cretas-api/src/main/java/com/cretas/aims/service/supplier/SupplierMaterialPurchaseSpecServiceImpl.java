@@ -11,6 +11,10 @@ import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitUsageScope;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityNotFoundException;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -26,6 +30,8 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
     private final SupplierMaterialRepository relationRepository;
     private final RawMaterialTypeRepository materialRepository;
     private final UnitContractService unitContractService;
+    private final MaterialReferenceWriteGuard materialReferenceWriteGuard;
+    private final EntityManager entityManager;
 
     @Override @Transactional(readOnly = true)
     public List<SupplierMaterialPurchaseSpecDTO> list(String factoryId, String supplierId, String relationId) {
@@ -73,6 +79,11 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
                                                    SupplierMaterialPurchaseSpecRequest request) {
         SupplierMaterial relation = ownedRelation(factoryId, supplierId, relationId);
         if (!Boolean.TRUE.equals(relation.getActive())) throw new BusinessException(409, "供应关系已停用，不能新增采购包装规格");
+        String materialTypeId = relation.getMaterialTypeId();
+        requireMaterialReference(materialTypeId);
+        materialReferenceWriteGuard.lockActive(factoryId, List.of(materialTypeId));
+        refreshRelation(relation);
+        verifyRelationUnchanged(factoryId, supplierId, materialTypeId, relation);
         RawMaterialType material = ownedMaterial(factoryId, relation.getMaterialTypeId());
         SupplierMaterialPurchaseSpec spec = new SupplierMaterialPurchaseSpec();
         spec.setFactoryId(factoryId);
@@ -87,7 +98,13 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
     public SupplierMaterialPurchaseSpecDTO update(String factoryId, String supplierId, String relationId, String specId,
                                                    SupplierMaterialPurchaseSpecRequest request) {
         SupplierMaterial relation = ownedRelation(factoryId, supplierId, relationId);
+        String materialTypeId = relation.getMaterialTypeId();
+        requireMaterialReference(materialTypeId);
+        materialReferenceWriteGuard.lockActive(factoryId, List.of(materialTypeId));
+        refreshRelation(relation);
+        verifyRelationUnchanged(factoryId, supplierId, materialTypeId, relation);
         SupplierMaterialPurchaseSpec spec = ownedSpec(factoryId, relationId, specId);
+        if (!materialTypeId.equals(spec.getMaterialTypeId())) throw materialReferenceConflict();
         if (request.getVersion() != null && !request.getVersion().equals(spec.getVersion())) {
             throw new ObjectOptimisticLockingFailureException(SupplierMaterialPurchaseSpec.class, specId);
         }
@@ -177,6 +194,28 @@ public class SupplierMaterialPurchaseSpecServiceImpl implements SupplierMaterial
                 .orElseThrow(() -> new BusinessException(404, "供应关系不存在"));
         if (!supplierId.equals(relation.getSupplierId())) throw new BusinessException(403, "供应关系不属于该供应商");
         return relation;
+    }
+    private void verifyRelationUnchanged(String factoryId, String supplierId, String materialTypeId,
+                                         SupplierMaterial relation) {
+        if (!factoryId.equals(relation.getFactoryId()) || !supplierId.equals(relation.getSupplierId())
+                || !Boolean.TRUE.equals(relation.getActive()) || relation.getDeletedAt() != null
+                || !materialTypeId.equals(relation.getMaterialTypeId())) {
+            throw materialReferenceConflict();
+        }
+    }
+    private void requireMaterialReference(String materialTypeId) {
+        if (materialTypeId == null || materialTypeId.isBlank()) throw materialReferenceConflict();
+    }
+    private void refreshRelation(SupplierMaterial relation) {
+        try {
+            entityManager.refresh(relation, LockModeType.PESSIMISTIC_WRITE);
+        } catch (EntityNotFoundException error) {
+            throw materialReferenceConflict();
+        }
+    }
+    private BusinessException materialReferenceConflict() {
+        return new BusinessException(409, "供应物料引用在写入期间发生变化")
+                .withCode("MATERIAL_REFERENCE_CONFLICT");
     }
     private RawMaterialType ownedMaterial(String factoryId, String materialTypeId) {
         RawMaterialType material = materialRepository.findById(materialTypeId)

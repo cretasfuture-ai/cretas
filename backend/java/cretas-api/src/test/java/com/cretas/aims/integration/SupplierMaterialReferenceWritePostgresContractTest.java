@@ -1,6 +1,7 @@
 package com.cretas.aims.integration;
 
 import com.cretas.aims.dto.supplier.SupplierMaterialRequest;
+import com.cretas.aims.dto.supplier.SupplierMaterialPurchaseSpecRequest;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.Supplier;
 import com.cretas.aims.exception.BusinessException;
@@ -9,6 +10,7 @@ import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.supplier.SupplierMaterialServiceImpl;
+import com.cretas.aims.service.supplier.SupplierMaterialPurchaseSpecServiceImpl;
 import com.cretas.aims.service.unit.*;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,11 +46,13 @@ import static org.mockito.Mockito.*;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
-@Import({SupplierMaterialServiceImpl.class, MaterialReferenceWriteGuard.class,
+@Import({SupplierMaterialServiceImpl.class, SupplierMaterialPurchaseSpecServiceImpl.class,
+        MaterialReferenceWriteGuard.class,
         com.cretas.aims.service.secrecy.FactorySecrecyConfig.class})
 class SupplierMaterialReferenceWritePostgresContractTest {
     private static final String SCHEMA = "supplier_reference_" + UUID.randomUUID().toString().replace("-", "");
     @Autowired SupplierMaterialServiceImpl service;
+    @Autowired SupplierMaterialPurchaseSpecServiceImpl purchaseSpecs;
     @Autowired RawMaterialTypeRepository materials;
     @Autowired SupplierRepository suppliers;
     @Autowired SupplierMaterialRepository relations;
@@ -134,6 +138,85 @@ class SupplierMaterialReferenceWritePostgresContractTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void freshProjectionRejectsInactiveRowEvenWhenPersistenceContextWasPreloaded() {
+        Fixture f = seed();
+        new TransactionTemplate(transactions).executeWithoutResult(outer -> {
+            RawMaterialType cached = materials.findById(f.material).orElseThrow();
+            assertThat(cached.getIsActive()).isTrue();
+            TransactionTemplate independent = new TransactionTemplate(transactions);
+            independent.setPropagationBehavior(
+                    org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            independent.executeWithoutResult(inner ->
+                    jdbc.update("UPDATE raw_material_types SET is_active=FALSE WHERE id=?", f.material));
+            assertThat(cached.getIsActive()).isTrue();
+            assertThatThrownBy(() -> guard.lockActive(f.factory, List.of(f.material)))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            error -> assertThat(error.getErrorCode()).isEqualTo("MATERIAL_REFERENCE_CONFLICT"));
+        });
+    }
+
+    @org.junit.jupiter.api.Test
+    void freshWriteStateProjectionExecutesNativeStateAndTenantFilters() {
+        Fixture f = seed();
+        var active = materials.findFreshWriteStateByFactoryIdAndIdIn(f.factory, List.of(f.material));
+        assertThat(active).singleElement().satisfies(state -> {
+            assertThat(state.getId()).isEqualTo(f.material);
+            assertThat(state.getIsActive()).isTrue();
+            assertThat(state.getMergedIntoId()).isNull();
+        });
+        assertThat(materials.findFreshWriteStateByFactoryIdAndIdIn("other-factory", List.of(f.material))).isEmpty();
+        jdbc.update("UPDATE raw_material_types SET merged_into_id=? WHERE id=?", f.redirectedMaterial, f.material);
+        assertThat(materials.findFreshWriteStateByFactoryIdAndIdIn(f.factory, List.of(f.material))).singleElement()
+                .satisfies(state -> assertThat(state.getMergedIntoId()).isEqualTo(f.redirectedMaterial));
+        jdbc.update("UPDATE raw_material_types SET deleted_at=NOW() WHERE id=?", f.material);
+        assertThat(materials.findFreshWriteStateByFactoryIdAndIdIn(f.factory, List.of(f.material))).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void purchaseSpecCreateAndUpdateWaitForMergeThenRejectWithoutWriting(boolean update) throws Exception {
+        Fixture f = seed();
+        String relationId = service.create(f.factory, f.supplier, request(f.material)).getId();
+        String specId = update
+                ? purchaseSpecs.create(f.factory, f.supplier, relationId, purchaseSpecRequest()).getId()
+                : null;
+        CountDownLatch materialLocked = new CountDownLatch(1);
+        CountDownLatch releaseMerge = new CountDownLatch(1);
+        CountDownLatch writerEnteredGuard = new CountDownLatch(1);
+        doAnswer(invocation -> { writerEnteredGuard.countDown(); return invocation.callRealMethod(); })
+                .when(guard).lockActive(eq(f.factory), any());
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var merge = executor.submit(() -> new TransactionTemplate(transactions).executeWithoutResult(status -> {
+                RawMaterialType raw = materials.lockByFactoryIdAndIdIn(f.factory, List.of(f.material)).getFirst();
+                raw.setIsActive(false); materials.saveAndFlush(raw); materialLocked.countDown(); await(releaseMerge);
+            }));
+            assertThat(materialLocked.await(15, TimeUnit.SECONDS)).isTrue();
+            var writer = executor.submit(() -> update
+                    ? purchaseSpecs.update(f.factory, f.supplier, relationId, specId, purchaseSpecRequest())
+                    : purchaseSpecs.create(f.factory, f.supplier, relationId, purchaseSpecRequest()));
+            assertThat(writerEnteredGuard.await(15, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> writer.get(250, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+            releaseMerge.countDown();
+            merge.get(20, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> writer.get(20, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class).hasCauseInstanceOf(BusinessException.class)
+                    .satisfies(error -> assertThat(((BusinessException) error.getCause()).getErrorCode())
+                            .isEqualTo("MATERIAL_REFERENCE_CONFLICT"));
+            if (update) {
+                assertThat(purchaseSpecs.list(f.factory, f.supplier, relationId)).singleElement()
+                        .satisfies(spec -> assertThat(spec.getQuotedPrice()).isEqualByComparingTo("120"));
+            } else {
+                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM supplier_material_purchase_specs WHERE supplier_material_id=?",
+                        Integer.class, relationId)).isZero();
+            }
+        } finally {
+            releaseMerge.countDown(); executor.shutdownNow();
+            assertThat(executor.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"MERGED", "DELETED", "FOREIGN", "MISSING"})
     void cannotCreateReferenceToUnavailableMaterial(String state) {
@@ -153,10 +236,36 @@ class SupplierMaterialReferenceWritePostgresContractTest {
         assertThat(relations.findByFactoryIdAndSupplierIdOrderByActiveDescPreferredDescCreatedAtDesc(callerFactory, supplierId)).isEmpty();
     }
 
+    @org.junit.jupiter.api.Test
+    void purchaseSpecRejectsParentRedirectAfterRawLockWithoutWritingSpec() {
+        Fixture f = seed();
+        String relationId = service.create(f.factory, f.supplier, request(f.material)).getId();
+        SupplierMaterialPurchaseSpecRequest specRequest = new SupplierMaterialPurchaseSpecRequest();
+        specRequest.setName("10kg/箱");
+        specRequest.setPurchasePackageUnit("kg");
+        specRequest.setInventoryBaseUnit("kg");
+        specRequest.setFactor(new BigDecimal("10"));
+        specRequest.setQuotedPrice(new BigDecimal("120"));
+        specRequest.setActive(true);
+
+        doAnswer(invocation -> {
+            invocation.callRealMethod();
+            jdbc.update("UPDATE supplier_materials SET material_type_id=? WHERE id=?", f.redirectedMaterial, relationId);
+            return null;
+        }).when(guard).lockActive(eq(f.factory), any());
+
+        assertThatThrownBy(() -> purchaseSpecs.create(f.factory, f.supplier, relationId, specRequest))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode()).isEqualTo("MATERIAL_REFERENCE_CONFLICT"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM supplier_material_purchase_specs WHERE supplier_material_id=?",
+                Integer.class, relationId)).isZero();
+    }
+
     private Fixture seed() {
         String factory = "SR-" + UUID.randomUUID().toString().substring(0, 8);
         String supplier = UUID.randomUUID().toString();
         String material = UUID.randomUUID().toString();
+        String redirectedMaterial = UUID.randomUUID().toString();
         new TransactionTemplate(transactions).executeWithoutResult(status -> {
             jdbc.update("INSERT INTO factories (id,name,type,level,is_active,manually_verified,ai_weekly_quota,created_at,updated_at) VALUES (?,?,?,0,TRUE,FALSE,20,NOW(),NOW())", factory, factory, "FACTORY");
             long userId = ThreadLocalRandom.current().nextLong(10000, Long.MAX_VALUE);
@@ -169,8 +278,12 @@ class SupplierMaterialReferenceWritePostgresContractTest {
             RawMaterialType raw = new RawMaterialType();
             raw.setId(material); raw.setFactoryId(factory); raw.setCode(material); raw.setName("工厂物料"); raw.setUnit("kg");
             materials.saveAndFlush(raw);
+            RawMaterialType redirected = new RawMaterialType();
+            redirected.setId(redirectedMaterial); redirected.setFactoryId(factory); redirected.setCode(redirectedMaterial);
+            redirected.setName("重定向物料"); redirected.setUnit("kg");
+            materials.saveAndFlush(redirected);
         });
-        return new Fixture(factory, supplier, material);
+        return new Fixture(factory, supplier, material, redirectedMaterial);
     }
 
     private SupplierMaterialRequest request(String id) {
@@ -180,6 +293,12 @@ class SupplierMaterialReferenceWritePostgresContractTest {
     }
     private SupplierMaterialRequest changedRequest(String id) {
         SupplierMaterialRequest r = request(id); r.setDefaultPurchasePrice(new BigDecimal("99")); return r;
+    }
+    private SupplierMaterialPurchaseSpecRequest purchaseSpecRequest() {
+        SupplierMaterialPurchaseSpecRequest r = new SupplierMaterialPurchaseSpecRequest();
+        r.setName("10kg/箱"); r.setPurchasePackageUnit("kg"); r.setInventoryBaseUnit("kg");
+        r.setFactor(new BigDecimal("10")); r.setQuotedPrice(new BigDecimal("120")); r.setActive(true);
+        return r;
     }
     private static void await(CountDownLatch latch) {
         try { if (!latch.await(20, TimeUnit.SECONDS)) throw new IllegalStateException("merge release timeout"); }
@@ -191,5 +310,5 @@ class SupplierMaterialReferenceWritePostgresContractTest {
         return value;
     }
     private static String password() { return System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", ""); }
-    private record Fixture(String factory, String supplier, String material) {}
+    private record Fixture(String factory, String supplier, String material, String redirectedMaterial) {}
 }
