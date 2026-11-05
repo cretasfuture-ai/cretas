@@ -7,10 +7,7 @@
 
 ## 在飞任务
 
-- `TASKS-S4-BASIS-20261105` — `review` — Owner: `01a1a954/root` — Base `50ec3c63e1b08fde335895af4b6818169c0476b5` — 正式依据/漂移/缓存窗口已修；真实PG31、Web12及typecheck通过，独立终审无P0–P2；待统一PR，scope/证据见archive/2026-11-05-s4-basis.md。
-
-- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner: `01a1a954/root` — Base `5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f` — S2–S6接手续验；场景表/精确scope/命令见 archive/2026-11-05-tasks-acceptance.md；独立WT，不碰其他组main/发布锁。
-- `CLAUDE-TASKS-S4-PG-PO-20261105` — `review` — Owner: `01a1a954/root` — Base `072bf5681969a55029d929d00a6101a28ec92a15` — S4自动采购PG参数/取消排程幽灵占线已修；真实JPA与PG通过、独立终审无阻塞，待PR/CI；见archive/2026-11-05-s4-po-postgres.md。
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner: `01a1a954/root` — Base `5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f` — 仅本组部署后业务复测/私有场景表；代码冻结统一交付并归档至archive/2026-11-05-tasks-final-delivery.md，合入即释放代码scope；不占其他组main/发布锁。
 
 - `SEC-PLAN-AUDIT-1457-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f — #1457 Unicode边界修复及注册/导入闸；63目标全绿、风险终审无高/中阻塞；等最终Java门禁，scope同前；不写生产。
 - `SEC-PLAN-AUDIT-1438-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。
