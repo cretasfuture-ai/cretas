@@ -6,6 +6,8 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
+- `SEC-RESTAURANT-OPS-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope scripts餐饮cron/ETL/演示/E2E及Python部署引用；清除运行入口/重新生成readonly bundle，保留工厂场景。验收Node/shell/部署契约；4执行者目录产物隔离，冻结即释放。
+
 - `SEC-RESTAURANT-JAVA-20261105` — `claimed` — Owner restaurant_java/root — Base 41f58a822cf — scope backend/java；迁出工厂复用到货/损耗，删除餐饮栈/路由/默认监听；保留工厂BOM/领料和历史SQL。验收真实JPA+MVC/工厂回归；禁止Canvas/Shortage/采购审批变更。
 
 - `SEC-RESTAURANT-PYTHON-20261105` — `claimed` — Owner restaurant_python/root — Base 41f58a822cf — scope backend/python；删除餐饮专属路由/调度/服务及入口，迁出工厂复用逻辑，保留已应用SQL。验收pytest注册/工厂正向；禁止Java/Web/RN。
