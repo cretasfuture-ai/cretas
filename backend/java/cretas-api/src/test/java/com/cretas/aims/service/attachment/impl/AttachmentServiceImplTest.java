@@ -12,6 +12,9 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.service.OssService;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.service.attachment.SopAttachmentRollout;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +22,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.function.Executable;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -90,6 +94,9 @@ class AttachmentServiceImplTest {
                     .getDeclaredField("purchaseReceiveRecordRepository");
             receiptRepository.setAccessible(true);
             receiptRepository.set(service, purchaseReceiveRecordRepository);
+            Field rollout = AttachmentServiceImpl.class.getDeclaredField("sopAttachmentRollout");
+            rollout.setAccessible(true);
+            rollout.set(service, new SopAttachmentRollout(false));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -393,6 +400,86 @@ class AttachmentServiceImplTest {
             BusinessException ex = assertThrows(BusinessException.class, () ->
                     service.update(FACTORY_ID, ATTACHMENT_ID, new UpdateAttachmentRequest(), OTHER_USER_ID));
             assertEquals(403, ex.getCode());
+        }
+    }
+
+    @Nested
+    @DisplayName("SOP Phase-A 写入闸")
+    class SopRolloutTests {
+
+        private void assertWriteDisabled(Executable operation) {
+            BusinessException error = assertThrows(BusinessException.class, operation);
+            assertEquals(503, error.getCode());
+        }
+
+        private Attachment sop() {
+            Attachment a = new Attachment();
+            a.setId(ATTACHMENT_ID);
+            a.setFactoryId(FACTORY_ID);
+            a.setEntityType(EntityType.WORK_PROCESS);
+            a.setEntityId("wp-disabled");
+            a.setUploadedBy(UPLOADER_ID);
+            a.setFileUrl("https://media.invalid/F006/attachments/sop/wp-disabled/a.pdf");
+            return a;
+        }
+
+        private RegisterAttachmentRequest sopRequest() {
+            RegisterAttachmentRequest req = new RegisterAttachmentRequest();
+            req.setEntityType(EntityType.WORK_PROCESS);
+            req.setEntityId("wp-disabled");
+            req.setFileName("a.pdf");
+            req.setFileUrl("https://media.invalid/F006/attachments/sop/wp-disabled/a.pdf");
+            req.setFileSize(10L);
+            req.setFileType("application/pdf");
+            return req;
+        }
+
+        @Test
+        void disabledGateBlocksUploadUrlAndBothRegisterEntrypoints() {
+            assertWriteDisabled(() -> service.generateSopUploadUrlResponse(
+                    FACTORY_ID, EntityType.WORK_PROCESS, "wp-disabled", "a.pdf", "application/pdf"));
+            assertWriteDisabled(() -> service.generateSopUploadUrl(
+                    FACTORY_ID, EntityType.WORK_PROCESS, "wp-disabled", "a.pdf", "application/pdf"));
+            assertWriteDisabled(() -> service.register(
+                    FACTORY_ID, sopRequest(), UPLOADER_ID));
+            assertWriteDisabled(() -> service.registerAsActor(
+                    FACTORY_ID, sopRequest(), new ActorRef(AuthenticatedActorType.FACTORY_USER, UPLOADER_ID)));
+            verifyNoInteractions(attachmentRepository, ossClient);
+        }
+
+        @Test
+        void disabledGateBlocksDedicatedAndGenericUpdateDeleteWithoutSave() {
+            when(attachmentRepository.findByFactoryIdAndId(FACTORY_ID, ATTACHMENT_ID))
+                    .thenReturn(Optional.of(sop()));
+            assertWriteDisabled(() -> service.updateAsActor(
+                    FACTORY_ID, ATTACHMENT_ID, new UpdateAttachmentRequest(),
+                    new ActorRef(AuthenticatedActorType.FACTORY_USER, UPLOADER_ID)));
+            assertWriteDisabled(() -> service.softDeleteSopAsActor(
+                    FACTORY_ID, ATTACHMENT_ID,
+                    new ActorRef(AuthenticatedActorType.FACTORY_USER, UPLOADER_ID)));
+            assertWriteDisabled(() -> service.update(
+                    FACTORY_ID, ATTACHMENT_ID, new UpdateAttachmentRequest(), UPLOADER_ID));
+            assertWriteDisabled(() -> service.softDelete(
+                    FACTORY_ID, ATTACHMENT_ID, UPLOADER_ID));
+            verify(attachmentRepository, never()).save(any(Attachment.class));
+            verifyNoInteractions(ossClient);
+        }
+
+        @Test
+        void disabledSopGateDoesNotBlockGenericUpdateDelete() {
+            Attachment generic = new Attachment();
+            generic.setId(ATTACHMENT_ID);
+            generic.setFactoryId(FACTORY_ID);
+            generic.setEntityType(EntityType.PURCHASE_ORDER);
+            generic.setUploadedBy(UPLOADER_ID);
+            when(attachmentRepository.findByFactoryIdAndId(FACTORY_ID, ATTACHMENT_ID))
+                    .thenReturn(Optional.of(generic));
+            when(attachmentRepository.save(any(Attachment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            assertDoesNotThrow(() -> service.update(
+                    FACTORY_ID, ATTACHMENT_ID, new UpdateAttachmentRequest(), UPLOADER_ID));
+            assertDoesNotThrow(() -> service.softDelete(FACTORY_ID, ATTACHMENT_ID, UPLOADER_ID));
+            verify(attachmentRepository, times(2)).save(generic);
         }
     }
 

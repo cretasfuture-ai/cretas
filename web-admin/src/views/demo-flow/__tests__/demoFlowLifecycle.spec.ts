@@ -4,8 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { executeStep, initializeDemo } = vi.hoisted(() => ({ executeStep: vi.fn(), initializeDemo: vi.fn() }))
 vi.mock('@/api/request', () => ({ default: { get: vi.fn().mockResolvedValue({ data: [] }) } }))
-vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F006', currentRole: 'factory_super_admin', user: { username: 'f006_admin', factoryUser: { factoryId: 'F006' } } }) }))
+vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F006', currentRole: 'factory_super_admin', user: { id: 1309, username: 'f006_admin', factoryUser: { factoryId: 'F006' } } }) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('@/demo/f006Sandbox', () => ({
+  sandboxSession: { value: { sessionId: 'test-sandbox', status: 'READY' } },
+  SANDBOX_FLOW_STORAGE_KEY: 'cretas:f006:sandbox-flow:v1',
+  requireSandboxReady: () => ({ sessionId: 'test-sandbox', status: 'READY' }),
+  beginSandbox: vi.fn(),
+}))
 vi.mock('@/demo/f006Flow', () => {
   const steps = [
     { id: 'purchase-create', label: '创建采购订单', entity: 'purchaseOrder', fields: [{ name: 'quantity', label: '数量' }, { name: 'unitPrice', label: '价格' }] },
@@ -90,7 +96,7 @@ describe('F006 demo playback lifecycle', () => {
     await nextTick()
     wrapper.vm.shown = false
     await nextTick()
-    sessionStorage.setItem('cretas:f006-demo-flow:20261105', JSON.stringify({ schemaVersion: 2, runKey: 'DEMO-F006-FLOW-20261105-test', factoryId: 'F006', currentStep: 1, entities: {}, completed: ['purchase-create'], readbacks: {} }))
+    sessionStorage.setItem('cretas:f006:sandbox-flow:v1', JSON.stringify({ schemaVersion: 2, sandboxSessionId: 'test-sandbox', runKey: 'DEMO-F006-FLOW-20261105-test', factoryId: 'F006', currentStep: 1, entities: {}, completed: ['purchase-create'], readbacks: {} }))
     resolveStep({ schemaVersion: 2, runKey: 'DEMO-F006-FLOW-20261105-test', factoryId: 'F006', currentStep: 1, entities: {}, completed: ['purchase-create'], readbacks: {} })
     await flushPromises()
     wrapper.vm.shown = true

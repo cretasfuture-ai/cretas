@@ -10,10 +10,13 @@ import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.InOrder;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.cretas.aims.dto.supplier.SupplierMaterialPurchaseSpecDTO;
@@ -32,12 +35,14 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
     @Mock SupplierMaterialRepository relationRepository;
     @Mock RawMaterialTypeRepository materialRepository;
     @Mock UnitContractService unitContractService;
+    @Mock MaterialReferenceWriteGuard materialReferenceWriteGuard;
+    @Mock EntityManager entityManager;
     SupplierMaterialPurchaseSpecServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new SupplierMaterialPurchaseSpecServiceImpl(repository, relationRepository,
-                materialRepository, unitContractService);
+                materialRepository, unitContractService, materialReferenceWriteGuard, entityManager);
         lenient().when(unitContractService.supportsUsage(eq("F006"), anyString(), any())).thenReturn(true);
     }
 
@@ -91,6 +96,23 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
     }
 
     @Test
+    void blankParentMaterialReferenceIsConflictBeforeGuard() {
+        SupplierMaterial relation = relation(true);
+        relation.setMaterialTypeId(" ");
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation));
+
+        assertThatThrownBy(() -> service.create("F006", "sup", "rel", request("case", "kg", false)))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> {
+                            assertThat(error.getCode()).isEqualTo(409);
+                            assertThat(error.getErrorCode()).isEqualTo("MATERIAL_REFERENCE_CONFLICT");
+                            assertThat(error.getActionHint()).contains("刷新供应物料列表", "重新选择有效的供应物料");
+                        });
+        verifyNoInteractions(materialReferenceWriteGuard, entityManager, materialRepository);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
     void rejectsTimeUnitForPurchasePackage() {
         when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation(true)));
         when(materialRepository.findById("mat")).thenReturn(Optional.of(material("kg")));
@@ -121,6 +143,40 @@ class SupplierMaterialPurchaseSpecServiceImplTest {
         assertThatThrownBy(() -> service.create("F006", "sup", "rel", request))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("报价必须大于0");
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createLocksRawBeforeParentRefresh() {
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation(true)));
+        when(materialRepository.findById("mat")).thenReturn(Optional.of(material("kg")));
+        when(unitContractService.normalize(eq("F006"), anyString())).thenAnswer(invocation -> {
+            String raw = invocation.getArgument(1);
+            return new UnitNormalizationResult(raw, raw, mock(com.cretas.aims.service.unit.CanonicalUnit.class));
+        });
+        when(repository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.create("F006", "sup", "rel", request("case", "kg", false));
+
+        InOrder order = inOrder(materialReferenceWriteGuard, entityManager);
+        order.verify(materialReferenceWriteGuard).lockActive("F006", List.of("mat"));
+        order.verify(entityManager).refresh(any(SupplierMaterial.class), eq(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE));
+    }
+
+    @Test
+    void updateRejectsParentMaterialRedirectAfterRefreshWithoutWriting() {
+        SupplierMaterial relation = relation(true);
+        when(relationRepository.findByIdAndFactoryId("rel", "F006")).thenReturn(Optional.of(relation));
+        doAnswer(invocation -> { relation.setMaterialTypeId("mat-redirected"); return null; })
+                .when(entityManager).refresh(any(SupplierMaterial.class), eq(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE));
+
+        assertThatThrownBy(() -> service.update("F006", "sup", "rel", "spec-1", request("case", "kg", false)))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getErrorCode()).isEqualTo("MATERIAL_REFERENCE_CONFLICT");
+                    assertThat(error.getActionHint()).contains("刷新供应物料列表", "重新选择有效的供应物料");
+                })
+                .hasMessageContaining("发生变化");
         verify(repository, never()).saveAndFlush(any());
     }
 

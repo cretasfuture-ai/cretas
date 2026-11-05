@@ -14,6 +14,7 @@ import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDimension;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.service.unit.UnitUsageScope;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
@@ -43,6 +44,7 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
     private final SupplierRepository supplierRepository;
     private final RawMaterialTypeRepository materialRepository;
     private final UnitContractService unitContractService;
+    private final MaterialReferenceWriteGuard materialReferenceWriteGuard;
 
     @Override @Transactional(readOnly = true)
     public List<SupplierMaterialDTO> listBySupplier(String factoryId, String supplierId) {
@@ -61,7 +63,7 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
     @Override @Transactional
     public SupplierMaterialDTO create(String factoryId, String supplierId, SupplierMaterialRequest request) {
         ownedSupplier(factoryId, supplierId, true);
-        RawMaterialType material = ownedMaterial(factoryId, request.getMaterialTypeId());
+        RawMaterialType material = lockedActiveMaterial(factoryId, request.getMaterialTypeId());
         if (repository.findByFactoryIdAndSupplierIdAndMaterialTypeId(factoryId, supplierId, request.getMaterialTypeId()).isPresent()) {
             throw new BusinessException(409, "该供应商与物料的供应关系已存在").withHintTarget("materialTypeId");
         }
@@ -84,7 +86,7 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
         if (request.getMaterialTypeId() != null && !request.getMaterialTypeId().equals(relation.getMaterialTypeId())) {
             throw new BusinessException(400, "已建立的供应关系不能更换物料，请停用后新建").withHintTarget("materialTypeId");
         }
-        RawMaterialType material = ownedMaterial(factoryId, relation.getMaterialTypeId());
+        RawMaterialType material = lockedActiveMaterial(factoryId, relation.getMaterialTypeId());
         apply(relation, request, material);
         enforcePreferred(factoryId, relation);
         return toDto(repository.saveAndFlush(relation));
@@ -235,6 +237,16 @@ public class SupplierMaterialServiceImpl implements SupplierMaterialService {
         if (request.getPreferred() != null) target.setPreferred(request.getPreferred());
         else if (target.getPreferred() == null) target.setPreferred(false);
         if (request.getActive() != null) target.setActive(request.getActive());
+    }
+
+    private RawMaterialType lockedActiveMaterial(String factoryId, String materialTypeId) {
+        if (materialTypeId == null || materialTypeId.isBlank()) {
+            throw new BusinessException(400, "物料不能为空").withHintTarget("materialTypeId");
+        }
+        // Take the same sorted raw-material lock as merge before loading material
+        // state or writing any supplier relation. Do not acquire PO/workflow locks here.
+        materialReferenceWriteGuard.lockActive(factoryId, List.of(materialTypeId));
+        return ownedMaterial(factoryId, materialTypeId);
     }
 
     private Supplier ownedSupplier(String factoryId, String supplierId, boolean requireActive) {

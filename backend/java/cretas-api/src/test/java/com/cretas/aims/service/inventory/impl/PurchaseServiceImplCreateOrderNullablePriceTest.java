@@ -9,6 +9,7 @@ import com.cretas.aims.entity.SupplierMaterial;
 import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierMaterialRepository;
 import org.springframework.test.util.ReflectionTestUtils;
 import com.cretas.aims.repository.SupplierRepository;
@@ -42,6 +43,7 @@ class PurchaseServiceImplCreateOrderNullablePriceTest {
     @Mock private SupplierRepository supplierRepository;
     @Mock private RawMaterialTypeRepository materialTypeRepository;
     @Mock private SupplierMaterialRepository supplierMaterialRepository;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
 
     private PurchaseServiceImpl service;
 
@@ -60,7 +62,8 @@ class PurchaseServiceImplCreateOrderNullablePriceTest {
                 null,
                 null,
                 null,
-                null);
+                null,
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(service, "supplierMaterialRepository", supplierMaterialRepository);
     }
 

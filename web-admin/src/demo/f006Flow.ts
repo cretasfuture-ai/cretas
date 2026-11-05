@@ -2,10 +2,11 @@ import {
   assertLiveAdmin, approveWorkflow, attachDemoReceipt, demoTransport, record, rows, scoped,
   type DemoRecord, type DemoTransport,
 } from './f006DemoSupport'
+import { requireSandboxReady, sandboxSession, SANDBOX_FLOW_STORAGE_KEY } from './f006Sandbox'
 export type { DemoTransport } from './f006DemoSupport'
 export const FACTORY_ID = 'F006'
 export const DEMO_RUN_KEY = 'DEMO-F006-FLOW-20261105'
-export const DEMO_STORAGE_KEY = 'cretas:f006-demo-flow:20261105'
+export const DEMO_STORAGE_KEY = SANDBOX_FLOW_STORAGE_KEY
 export type DemoEntity = DemoRecord & { id?: string | number; factoryId?: string }
 export interface DemoSession { factoryId?: string | null; user?: { factoryId?: string | null } | null; username?: string | null }
 export type DemoStepId = 'purchase-create' | 'sales-order-create' | 'purchase-submit' | 'purchase-approve' | 'purchase-receive' | 'purchase-receive-confirm' | 'sales-order-submit' | 'sales-order-approve' | 'production-plan-create' | 'production-batch-create' | 'material-requisition' | `process-report-${1|2|3|4|5|6}` | 'production-settle' | 'finished-goods-receive' | 'sales-delivery-create' | 'sales-shipment-create' | 'sales-batch-allocate' | 'sales-warehouse-confirm' | 'traceability-read'
@@ -17,7 +18,7 @@ export interface DemoContext {
   rawQuantity: number; finishedQuantity: number
 }
 export interface DemoState {
-  schemaVersion: 2; runKey: string; factoryId: 'F006'; currentStep: number
+  schemaVersion: 2; sandboxSessionId?: string; runKey: string; factoryId: 'F006'; currentStep: number
   entities: Record<string, DemoEntity>; completed: DemoStepId[]; readbacks: Record<string, DemoEntity>
   context?: DemoContext
 }
@@ -33,13 +34,13 @@ export const DEMO_STEPS = [
   step('production-plan-create','按销售需求排产','productionPlan',[field('plannedDate','计划日期'),field('batchDate','生产日期')]),
   step('production-batch-create','开始生产并创建批次','productionBatch'),step('material-requisition','领料并送达生产仓','materialRequisition'),
   ...['原料解冻修整','称量腌制','熟制杀菌','快速冷却','定量包装','金检贴标'].map((name,i)=>step(`process-report-${i+1}` as DemoStepId,`工序${i+1} · ${name}`,`processReport${i+1}`,[field('inputQuantity','投入数量'),field('inputUnit','投入单位'),field('outputQuantity','产出数量'),field('outputUnit','产出单位'),field('workerCount','操作人数'),field('workMinutes','操作分钟')])),
-  step('production-settle','完工结算与成本核算','productionSettlement'),step('finished-goods-receive','确认成品入库','productionWarehouseReceipt'),
+  step('production-settle','完工结算与成本核算','productionSettlement'),step('finished-goods-receive','确认成品入库','productionWarehouseReceipt',[field('equipmentCost','模拟设备费用（元）'),field('otherCost','模拟其他费用（元）')]),
   step('sales-delivery-create','创建销售发货安排','salesDelivery'),step('sales-shipment-create','生成本次发运单','salesShipment',[field('logisticsCompany','物流公司'),field('trackingNumber','物流单号'),field('deliveryAddress','收货地址')]),
   step('sales-batch-allocate','分配本次成品批次','salesBatchAllocation'),step('sales-warehouse-confirm','仓库确认出库','salesShipment'),step('traceability-read','从销售单反向溯源','traceability'),
 ] as const
 export function createDemoState(runKey = `${DEMO_RUN_KEY}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`): DemoState {
   if (!runKey.startsWith(DEMO_RUN_KEY)) throw new Error('演示标识不正确')
-  return { schemaVersion:2,runKey,factoryId:FACTORY_ID,currentStep:0,entities:{},completed:[],readbacks:{} }
+  return { schemaVersion:2,sandboxSessionId:sandboxSession.value?.sessionId,runKey,factoryId:FACTORY_ID,currentStep:0,entities:{},completed:[],readbacks:{} }
 }
 export function assertF006Session(session: DemoSession) {
   if ((session.factoryId || session.user?.factoryId) !== FACTORY_ID) throw new Error('流程演示仅允许 F006 身份')
@@ -52,6 +53,10 @@ function id(r: DemoRecord) { const v=r.id; if (v===undefined || v===null || v===
 function ent(s: DemoState,key:string) { const r=s.entities[key]; if(!r)throw new Error(`请先完成${key}步骤`);return r }
 function str(r:DemoRecord,k:string){return String(r[k]??'')}
 function positive(v:unknown,label:string){const n=Number(v);if(!Number.isFinite(n)||n<=0)throw new Error(`${label}必须大于零`);return n}
+function nonNegativeCost(v:unknown,label:string){
+  if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '') || (typeof v !== 'number' && typeof v !== 'string')) throw new Error(`${label}必须是有限非负数`)
+  const n=Number(v);if(!Number.isFinite(n)||n<0)throw new Error(`${label}必须是有限非负数`);return n
+}
 function day(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 const path=(p:string)=>`/F006/${p}`
 function owned(r:DemoRecord,s:DemoState){scoped(r);const marker=String(r.remark??r.notes??'');if(!marker.includes(s.runKey))throw new Error('该单据不是本次演示创建的单据');return r}
@@ -68,6 +73,7 @@ async function findCreated(t:DemoTransport,p:string,s:DemoState){
   throw new Error('单据列表超过演示核对范围，已停止创建')
 }
 export async function initializeDemo(state:DemoState,transport:DemoTransport=demoTransport):Promise<DemoState>{
+  if(transport===demoTransport && state.sandboxSessionId!==requireSandboxReady().sessionId)throw new Error('演示记录与当前沙盒不一致')
   await assertLiveAdmin(transport)
   if(state.factoryId!==FACTORY_ID || !state.runKey.startsWith(DEMO_RUN_KEY))throw new Error('演示状态不属于F006')
   const result=await Promise.allSettled([
@@ -102,10 +108,12 @@ export function prepareStep(state:DemoState,stepId:DemoStepId){
     const outputs=[c.rawQuantity*.96,c.rawQuantity*.94,kg+.04,kg,c.finishedQuantity,c.finishedQuantity]
     values.inputQuantity=order===1?c.rawQuantity:outputs[order-2];values.outputQuantity=outputs[order-1];values.inputUnit=process.input.unit;values.outputUnit=process.output.unit;values.workerCount=1;values.workMinutes=2
   }
+  if(stepId==='finished-goods-receive'){values.equipmentCost=12.8;values.otherCost=7.2}
   return {step:stepId,fields:spec.fields.map(f=>({...f,value:values[f.name]??f.value})),entityIds:Object.fromEntries(Object.entries(state.entities).filter(([,v])=>v.id).map(([k,v])=>[k,v.id!]))}
 }
 
 export async function executeStep(state:DemoState,stepId:DemoStepId,form:DemoRecord={},transport:DemoTransport=demoTransport):Promise<DemoState>{
+  if(transport===demoTransport && state.sandboxSessionId!==requireSandboxReady().sessionId)throw new Error('演示记录与当前沙盒不一致')
   await assertLiveAdmin(transport)
   if(state.factoryId!==FACTORY_ID||!state.runKey.startsWith(DEMO_RUN_KEY))throw new Error('演示状态工厂不正确')
   const index=DEMO_STEPS.findIndex(s=>s.id===stepId);if(index<0||index!==state.currentStep)throw new Error('请按当前步骤推进，失败步骤不能跳过')
@@ -175,7 +183,7 @@ export async function executeStep(state:DemoState,stepId:DemoStepId,form:DemoRec
     if(String(r.productionPlanId)!==id(plan()))throw new Error('领料单不属于本次计划')
     if(r.status==='PENDING')await put(transport,path(`material-requisitions/${id(r)}/start-picking`),{})
     r=scoped(record(await transport.get(path(`material-requisitions/${id(r)}`))))
-    if(['PICKING','PENDING','DRAFT'].includes(String(r.status))){
+    if(['PICKING','PENDING','DRAFT'].includes(String(r.status)) && !r.pickedAt){
       const receipt=await readDocument(transport,path(`warehouse/receiving/receipts/${id(ent(state,'purchaseReceipt'))}`),state)
       const picks=[]
       for(const item of rows(r.items)){
@@ -221,11 +229,20 @@ export async function executeStep(state:DemoState,stepId:DemoStepId,form:DemoRec
     const settlement=record(await transport.get(path(`production-plans/${id(plan())}/settlement`)))
     result={...posted,...settlement};if(!result.postingStatus)throw new Error('结单未返回库存入账状态')
   }else if(stepId==='finished-goods-receive'){
-    const final=ent(state,'processReport6'),settlement=record(await transport.get(path(`production-plans/${id(plan())}/settlement`)))
-    if(!['POSTED','POSTED_WITH_TOLERANCE'].includes(String(settlement.postingStatus)))save('productionWarehouseReceipt',record(await send(`production-plans/${id(plan())}/warehouse-receipt`,{idempotencyKey:key('warehouse-receipt'),outputLines:[{productTypeId:id(c.product),batchNumber:final.batchNumber,receivedQuantity:c.finishedQuantity,quantityUnit:c.product.unit}]})))
-    const fresh=record(await transport.get(path(`production-plans/${id(plan())}/settlement`)))
+    const equipmentCost=nonNegativeCost(form.equipmentCost,'设备费用'),otherCost=nonNegativeCost(form.otherCost,'其他费用')
+    const currentPlan=await readDocument(transport,path(`production-plans/${id(plan())}`),state)
+    const currentBatch=scoped(record(await transport.get(path(`processing/batches/${id(ent(state,'productionBatch'))}`))))
+    if(String(currentBatch.productionPlanId)!==id(currentPlan))throw new Error('本次生产批次不属于本次生产计划')
+    const final=ent(state,'processReport6')
+    if(String(currentBatch.batchNumber)!==String(final.batchNumber))throw new Error('本次成品批次与本次报工批次不一致')
+    const settlement=record(await transport.get(path(`production-plans/${id(currentPlan)}/settlement`)))
+    if(!['POSTED','POSTED_WITH_TOLERANCE'].includes(String(settlement.postingStatus))&&!state.entities.productionWarehouseReceipt)save('productionWarehouseReceipt',record(await send(`production-plans/${id(currentPlan)}/warehouse-receipt`,{idempotencyKey:key('warehouse-receipt'),outputLines:[{productTypeId:id(c.product),batchNumber:final.batchNumber,receivedQuantity:c.finishedQuantity,quantityUnit:c.product.unit}]})))
+    const fresh=record(await transport.get(path(`production-plans/${id(currentPlan)}/settlement`)))
     if(!['POSTED','POSTED_WITH_TOLERANCE'].includes(String(fresh.postingStatus)))throw new Error('成品尚未确认入库')
+    const costPath=`production-plans/${encodeURIComponent(id(currentPlan))}/costs?equipmentCost=${encodeURIComponent(String(equipmentCost))}&otherCost=${encodeURIComponent(String(otherCost))}`
+    await put(transport,path(costPath))
     const cost=record(await transport.get(path(`production/batches/${encodeURIComponent(String(final.batchNumber))}/cost-breakdown`)))
+    if(cost.calculationStatus!=='COMPLETE'||cost.costComplete!==true||cost.missingCostItemCount!==0)throw new Error('本次成品成本尚未完整核算')
     const outputs=Array.isArray(fresh.outputLines)?rows(fresh.outputLines):Array.isArray(fresh.outputs)?rows(fresh.outputs):[]
     const fg=outputs.find(v=>v.productTypeId===id(c.product))||{}
     result={...fresh,...(state.entities.productionWarehouseReceipt||{}),finishedGoodsBatchId:fg.finishedGoodsBatchId||fresh.finishedGoodsBatchId,finishedGoodsBatchNumber:final.batchNumber,totalCost:cost.totalCost,unitCost:cost.perBoxCost,knownCostSubtotal:cost.knownCostSubtotal,missingCostItemCount:cost.missingCostItemCount,calculationStatus:cost.calculationStatus,unit:c.product.unit}
