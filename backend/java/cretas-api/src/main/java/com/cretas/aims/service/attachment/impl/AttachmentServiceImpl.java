@@ -3,6 +3,8 @@ package com.cretas.aims.service.attachment.impl;
 import com.aliyun.oss.HttpMethod;
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.model.GeneratePresignedUrlRequest;
+import com.aliyun.oss.model.ObjectAcl;
+import com.aliyun.oss.model.ObjectPermission;
 import com.aliyun.oss.model.ObjectMetadata;
 import com.cretas.aims.config.OssConfig;
 import com.cretas.aims.entity.Attachment;
@@ -11,14 +13,21 @@ import com.cretas.aims.entity.Attachment.FileCategory;
 import com.cretas.aims.entity.ProductionReport;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.AttachmentRepository;
+import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.repository.inventory.SalesOrderSuppliedMaterialRequirementRepository;
+import com.cretas.aims.security.AttachmentPermissionResolver;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.attachment.AttachmentService;
+import com.cretas.aims.service.attachment.SopAttachmentRollout;
 import com.cretas.aims.service.attachment.dto.RegisterAttachmentRequest;
 import com.cretas.aims.service.attachment.dto.UpdateAttachmentRequest;
+import com.cretas.aims.service.attachment.dto.UploadUrlResponse;
 import com.cretas.aims.utils.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -81,18 +90,35 @@ public class AttachmentServiceImpl implements AttachmentService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderSuppliedMaterialRequirementRepository suppliedMaterialRequirementRepository;
 
+    /** 工序 / 设备 SOP 的归属校验用; 单测直接 new 本类时为 null, SOP 路径会 503 而不是放行. */
+    @Autowired(required = false)
+    private WorkProcessRepository workProcessRepository;
+
+    @Autowired(required = false)
+    private EquipmentRepository equipmentRepository;
+
     /** OSS 直接客户端 — pre-signed PUT 用; {@code aliyun.oss.enabled=false} 时为 null. */
     @Autowired(required = false)
     private OSS ossClient;
+
+    /** Optional only for narrow/manual construction; absence is fail-closed. */
+    @Autowired(required = false)
+    private SopAttachmentRollout sopAttachmentRollout;
 
     // ==================== register ====================
 
     @Override
     @Transactional
     public Attachment register(String factoryId, RegisterAttachmentRequest req, Long userId) {
-        if (userId == null) {
-            throw new BusinessException(401, "未登录 — 无法注册附件");
-        }
+        if (userId == null) throw new BusinessException(401, "未登录 — 无法注册附件");
+        return registerAsActor(factoryId, req, new ActorRef(AuthenticatedActorType.FACTORY_USER, userId));
+    }
+
+    @Override
+    @Transactional
+    public Attachment registerAsActor(String factoryId, RegisterAttachmentRequest req, ActorRef actor) {
+        if (actor == null) throw new BusinessException(401, "未登录 — 无法注册附件");
+        requireSopWriteIfNeeded(req.getEntityType());
         if (req.getFileHash() != null && !req.getFileHash().isBlank()) {
             Optional<Attachment> replay = attachmentRepository
                     .findByFactoryIdAndEntityTypeAndEntityIdAndFileHash(
@@ -119,7 +145,7 @@ public class AttachmentServiceImpl implements AttachmentService {
         a.setEntityId(req.getEntityId());
         a.setFileName(req.getFileName());
         a.setFileUrl(req.getFileUrl());
-        a.setThumbnailUrl(req.getThumbnailUrl());
+        a.setThumbnailUrl(AttachmentPermissionResolver.isSopType(req.getEntityType()) ? null : req.getThumbnailUrl());
         a.setFileSize(req.getFileSize());
         a.setFileType(req.getFileType());
         a.setFileCategory(req.getFileCategory() != null ? req.getFileCategory() : inferCategory(req.getFileType()));
@@ -127,7 +153,9 @@ public class AttachmentServiceImpl implements AttachmentService {
         a.setFileHash(req.getFileHash());
         a.setBusinessTag(req.getBusinessTag());
         a.setDescription(req.getDescription());
-        a.setUploadedBy(userId);
+        a.setUploadedBy(actor.factoryUserId());
+        a.setUploadedActorType(actor.type());
+        a.setUploadedActorId(actor.id());
         a.setUploadedAt(LocalDateTime.now());
         a.setUploadSource(req.getUploadSource() != null ? req.getUploadSource() : "WEB");
 
@@ -140,7 +168,8 @@ public class AttachmentServiceImpl implements AttachmentService {
         }
 
         // Async 异步生成图片缩略图 — 失败不阻塞 register
-        if (saved.getFileCategory() == FileCategory.PHOTO && saved.getThumbnailUrl() == null) {
+        if (!AttachmentPermissionResolver.isSopType(saved.getEntityType())
+                && saved.getFileCategory() == FileCategory.PHOTO && saved.getThumbnailUrl() == null) {
             try {
                 generateThumbnailAsync(saved.getId());
             } catch (Exception e) {
@@ -152,6 +181,14 @@ public class AttachmentServiceImpl implements AttachmentService {
     }
 
     private void validateEntityBinding(String factoryId, RegisterAttachmentRequest req) {
+        if (AttachmentPermissionResolver.isSopType(req.getEntityType())) {
+            validateSopTarget(factoryId, req.getEntityType(), req.getEntityId(), true);
+            requireSopFileType(req.getFileType());
+            requireOwnFactoryObject(factoryId, req.getEntityType(), req.getEntityId(), req.getFileUrl());
+            requirePrivateSopObject(factoryId, req.getEntityType(), req.getEntityId(), req.getFileUrl(),
+                    req.getFileType(), req.getFileSize());
+            return;
+        }
         if (EntityType.CUSTOMER_SUPPLIED_RECEIPT == req.getEntityType()) {
             if (suppliedMaterialRequirementRepository == null) {
                 throw new BusinessException(503, "客供料任务归属校验服务暂不可用，附件未绑定");
@@ -185,6 +222,185 @@ public class AttachmentServiceImpl implements AttachmentService {
                 factoryId, EntityType.PURCHASE_ORDER, req.getEntityId());
         if (count >= 10) {
             throw new BusinessException(400, "单张采购订单最多允许10个附件");
+        }
+    }
+
+    // ==================== 工序 / 设备 SOP ====================
+
+    @Override
+    @Transactional(readOnly = true)
+    public void validateSopTarget(String factoryId, EntityType type, String entityId, boolean requireExists) {
+        if (!AttachmentPermissionResolver.isSopType(type)) {
+            throw new BusinessException(400, "不是工序或设备 SOP 类型: " + type);
+        }
+        if (entityId == null || entityId.isBlank()) {
+            throw new BusinessException(400, "SOP 所属的" + (type == EntityType.WORK_PROCESS ? "工序" : "设备") + "必填");
+        }
+        if (type == EntityType.WORK_PROCESS) {
+            if (workProcessRepository == null) {
+                throw new BusinessException(503, "工序归属校验服务暂不可用，SOP 未保存");
+            }
+            var process = workProcessRepository.findById(entityId).orElse(null);
+            if (process == null) {
+                if (requireExists) {
+                    throw new BusinessException(404, "工序不存在，SOP 不能绑定到临时或伪造ID");
+                }
+                return;
+            }
+            if (!factoryId.equals(process.getFactoryId())) {
+                throw new BusinessException(403, "该工序不属于当前工厂，跨厂操作 SOP 被拒绝");
+            }
+            return;
+        }
+        if (equipmentRepository == null) {
+            throw new BusinessException(503, "设备归属校验服务暂不可用，SOP 未保存");
+        }
+        Long equipmentId;
+        try {
+            equipmentId = Long.valueOf(entityId.trim());
+        } catch (NumberFormatException e) {
+            throw new BusinessException(400, "设备编号格式不正确: " + entityId);
+        }
+        if (!Long.toString(equipmentId).equals(entityId)) {
+            throw new BusinessException(400, "设备编号必须使用规范十进制 ID: " + entityId);
+        }
+        var equipment = equipmentRepository.findById(equipmentId).orElse(null);
+        if (equipment == null) {
+            if (requireExists) {
+                throw new BusinessException(404, "设备不存在，SOP 不能绑定到临时或伪造ID");
+            }
+            return;
+        }
+        if (!factoryId.equals(equipment.getFactoryId())) {
+            throw new BusinessException(403, "该设备不属于当前工厂，跨厂操作 SOP 被拒绝");
+        }
+    }
+
+    @Override
+    @Transactional
+    public void softDeleteSop(String factoryId, String id, Long userId) {
+        if (userId == null) throw new BusinessException(401, "未登录 — 无法删除附件");
+        softDeleteSopAsActor(factoryId, id, new ActorRef(AuthenticatedActorType.FACTORY_USER, userId));
+    }
+
+    @Override
+    @Transactional
+    public void softDeleteSopAsActor(String factoryId, String id, ActorRef actor) {
+        if (actor == null) throw new BusinessException(401, "未登录 — 无法删除附件");
+        requireSopWriteEnabled();
+        Attachment a = getById(factoryId, id);
+        if (!AttachmentPermissionResolver.isSopType(a.getEntityType())) {
+            throw new BusinessException(400, "该附件不是工序或设备 SOP");
+        }
+        validateSopTarget(factoryId, a.getEntityType(), a.getEntityId(), false);
+        a.softDelete();
+        attachmentRepository.save(a);
+        log.info("SOP 软删: factory={} id={} entityType={} entityId={} byUser={}",
+                factoryId, id, a.getEntityType(), a.getEntityId(), actor);
+    }
+
+    private void requireSopFileType(String fileType) {
+        if (fileType == null || !AttachmentPermissionResolver.SOP_ALLOWED_CONTENT_TYPES
+                .contains(fileType.toLowerCase())) {
+            throw new BusinessException(400, "SOP 文件只支持 PDF 或图片 (jpg / png / webp / gif), 当前类型: " + fileType);
+        }
+    }
+
+    /**
+     * fileUrl 由客户端在直传后回填, 下载时服务端会替它签名 —— 所以必须证明它落在本厂的上传目录
+     * ({@code <media 前缀>/<factoryId>/attachments/...}), 否则任何人可以把别的工厂的对象地址注册成自己的 SOP 再下载。
+     */
+    private void requireOwnFactoryObject(String factoryId, EntityType type, String entityId, String fileUrl) {
+        String mediaPrefix = ossConfig.getMediaUrlPrefix();
+        if (mediaPrefix == null || mediaPrefix.isBlank()) {
+            throw new BusinessException(503, "OSS 地址未配置，SOP 未保存");
+        }
+        String ownDir = mediaPrefix + "/" + sopObjectPrefix(factoryId, type, entityId);
+        String normalized;
+        try {
+            URI uri = URI.create(fileUrl == null ? "" : fileUrl);
+            if (uri.getRawQuery() != null || uri.getRawFragment() != null || uri.getRawUserInfo() != null
+                    || uri.getRawPath() == null
+                    || uri.getRawPath().toLowerCase(java.util.Locale.ROOT).matches(".*%(2e|2f|5c|25).*")
+                    || uri.getRawPath().contains("\\")) {
+                throw new IllegalArgumentException("Ambiguous SOP object path");
+            }
+            normalized = uri.normalize().toString();
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(400, "文件地址格式不正确，SOP 未保存");
+        }
+        if (!normalized.startsWith(ownDir)
+                || !normalized.equals(fileUrl)) {
+            throw new BusinessException(403, "文件地址不属于本厂当前工序或设备的 SOP 上传目录，SOP 未保存");
+        }
+    }
+
+    /** Verify the uploaded object exists, matches declared metadata, and is private before persistence. */
+    private void requirePrivateSopObject(String factoryId, EntityType type, String entityId, String fileUrl,
+                                         String declaredType, Long declaredSize) {
+        if (ossClient == null) throw new BusinessException(503, "OSS 服务暂不可用，SOP 未保存");
+        String[] bucketKey = exactMediaObject(fileUrl);
+        try {
+            ObjectAcl acl = ossClient.getObjectAcl(bucketKey[0], bucketKey[1]);
+            if (acl == null || acl.getPermission() != ObjectPermission.Private) {
+                throw new BusinessException(403, "SOP 对象 ACL 不是 private，拒绝注册");
+            }
+            ObjectMetadata metadata = ossClient.getObjectMetadata(bucketKey[0], bucketKey[1]);
+            if (metadata == null || metadata.getContentLength() < 1
+                    || metadata.getContentLength() > AttachmentPermissionResolver.MAX_UPLOAD_SIZE_BYTES) {
+                throw new BusinessException(400, "SOP 对象不存在或大小超出 10MB");
+            }
+            if (declaredSize == null || metadata.getContentLength() != declaredSize) {
+                throw new BusinessException(400, "SOP 文件大小与 OSS 元数据不一致");
+            }
+            if (metadata.getContentType() == null || !declaredType.equalsIgnoreCase(metadata.getContentType())
+                    || !AttachmentPermissionResolver.SOP_ALLOWED_CONTENT_TYPES.contains(metadata.getContentType().toLowerCase())) {
+                throw new BusinessException(400, "SOP Content-Type 与声明不一致或不受支持");
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BusinessException(503, "SOP 对象 ACL / 元数据校验失败，拒绝注册");
+        }
+    }
+
+    private String[] exactMediaObject(String fileUrl) {
+        try {
+            URI prefix = URI.create(ossConfig.getMediaUrlPrefix());
+            URI value = URI.create(fileUrl);
+            if (!Objects.equals(prefix.getScheme(), value.getScheme())
+                    || !Objects.equals(prefix.getHost(), value.getHost())
+                    || value.getRawQuery() != null || value.getRawFragment() != null) {
+                throw new IllegalArgumentException("SOP object URL mismatch");
+            }
+            String rawPath = value.getRawPath();
+            if (rawPath == null || rawPath.toLowerCase(Locale.ROOT).matches(".*%(2e|2f|5c|25).*")) {
+                throw new IllegalArgumentException("Ambiguous encoded SOP object path");
+            }
+            String base = prefix.getPath().replaceAll("/+$", "");
+            String path = value.getPath();
+            if (!path.startsWith(base + "/")) throw new IllegalArgumentException("SOP object path mismatch");
+            String key = path.substring(base.length() + 1);
+            if (key.isBlank() || key.contains("\\") || key.contains("..")) {
+                throw new IllegalArgumentException("SOP object key mismatch");
+            }
+            return new String[]{ossConfig.getMediaBucket(), key};
+        } catch (Exception e) {
+            throw new BusinessException(400, "SOP 对象地址格式不正确");
+        }
+    }
+
+    private String sopObjectPrefix(String factoryId, EntityType type, String entityId) {
+        if (!AttachmentPermissionResolver.isSopType(type) || entityId == null || entityId.isBlank()) {
+            throw new BusinessException(400, "SOP 所属工序或设备必填");
+        }
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(entityId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return factoryId + "/attachments/sop/" + type.name() + "/"
+                    + java.util.HexFormat.of().formatHex(digest) + "/";
+        } catch (java.security.NoSuchAlgorithmException error) {
+            throw new IllegalStateException("SHA-256 is required by the Java runtime", error);
         }
     }
 
@@ -297,10 +513,39 @@ public class AttachmentServiceImpl implements AttachmentService {
 
     @Override
     public String generateUploadUrl(String factoryId, String fileName, String fileType) {
+        return signUploadObject(factoryId, buildObjectKey(factoryId, fileName), fileType);
+    }
+
+    @Override
+    public String generateSopUploadUrl(String factoryId, EntityType type, String entityId,
+                                       String fileName, String fileType) {
+        return generateSopUploadUrlResponse(factoryId, type, entityId, fileName, fileType).getUploadUrl();
+    }
+
+    @Override
+    public UploadUrlResponse generateSopUploadUrlResponse(String factoryId, EntityType type, String entityId,
+                                                          String fileName, String fileType) {
+        requireSopWriteEnabled();
+        validateSopTarget(factoryId, type, entityId, true);
+        requireSopFileType(fileType);
+        String genericKey = buildObjectKey(factoryId, fileName);
+        String suffix = genericKey.substring((factoryId + "/attachments/").length());
+        return signSopUploadObject(factoryId, sopObjectPrefix(factoryId, type, entityId) + suffix, fileType);
+    }
+
+    private String signUploadObject(String factoryId, String objectKey, String fileType) {
+        return signUploadObjectResponse(factoryId, objectKey, fileType, false).getUploadUrl();
+    }
+
+    private UploadUrlResponse signSopUploadObject(String factoryId, String objectKey, String fileType) {
+        return signUploadObjectResponse(factoryId, objectKey, fileType, true);
+    }
+
+    private UploadUrlResponse signUploadObjectResponse(String factoryId, String objectKey, String fileType,
+                                                       boolean privateSop) {
         if (ossClient == null) {
             throw new BusinessException(503, "OSS 服务未启用 — 请联系管理员配置 aliyun.oss.enabled=true");
         }
-        String objectKey = buildObjectKey(factoryId, fileName);
         Date expiration = new Date(System.currentTimeMillis() + UPLOAD_URL_TTL_SECONDS * 1000L);
         GeneratePresignedUrlRequest request = new GeneratePresignedUrlRequest(
                 ossConfig.getMediaBucket(), objectKey, HttpMethod.PUT);
@@ -308,9 +553,16 @@ public class AttachmentServiceImpl implements AttachmentService {
         if (fileType != null && !fileType.isBlank()) {
             request.setContentType(fileType);
         }
+        Map<String, String> requiredHeaders = new LinkedHashMap<>();
+        if (fileType != null && !fileType.isBlank()) requiredHeaders.put("Content-Type", fileType);
+        if (privateSop) {
+            request.addHeader("x-oss-object-acl", "private");
+            request.addAdditionalHeaderName("x-oss-object-acl");
+            requiredHeaders.put("x-oss-object-acl", "private");
+        }
         String url = ossClient.generatePresignedUrl(request).toString();
         log.debug("Generated upload URL: factory={} key={} ttl={}s", factoryId, objectKey, UPLOAD_URL_TTL_SECONDS);
-        return url;
+        return new UploadUrlResponse(url, stripQuery(url), requiredHeaders);
     }
 
     @Override
@@ -332,6 +584,10 @@ public class AttachmentServiceImpl implements AttachmentService {
             throw new BusinessException(401, "未登录 — 无法删除附件");
         }
         Attachment a = getById(factoryId, id);
+        if (AttachmentPermissionResolver.isSopType(a.getEntityType())) {
+            requireSopWriteEnabled();
+            throw new BusinessException(400, "SOP_TYPED_ACTOR_REQUIRED: 必须通过 actor-aware 写入口删除");
+        }
         if (!a.getUploadedBy().equals(userId) && !isAdmin()) {
             throw new BusinessException(403, "仅上传者本人或管理员可删除");
         }
@@ -347,6 +603,10 @@ public class AttachmentServiceImpl implements AttachmentService {
             throw new BusinessException(401, "未登录 — 无法更新附件");
         }
         Attachment a = getById(factoryId, id);
+        if (AttachmentPermissionResolver.isSopType(a.getEntityType())) {
+            requireSopWriteEnabled();
+            throw new BusinessException(400, "SOP_TYPED_ACTOR_REQUIRED: 必须通过 actor-aware 写入口更新");
+        }
         if (!a.getUploadedBy().equals(userId) && !isAdmin()) {
             throw new BusinessException(403, "仅上传者本人或管理员可更新");
         }
@@ -362,7 +622,34 @@ public class AttachmentServiceImpl implements AttachmentService {
         return attachmentRepository.save(a);
     }
 
+    @Override
+    @Transactional
+    public Attachment updateAsActor(String factoryId, String id, UpdateAttachmentRequest req, ActorRef actor) {
+        if (actor == null) throw new BusinessException(401, "未登录 — 无法更新附件");
+        requireSopWriteEnabled();
+        Attachment a = getById(factoryId, id);
+        if (!AttachmentPermissionResolver.isSopType(a.getEntityType())) {
+            throw new BusinessException(400, "该附件不是工序或设备 SOP");
+        }
+        if (req.getDescription() != null) a.setDescription(req.getDescription());
+        if (req.getBusinessTag() != null) a.setBusinessTag(req.getBusinessTag());
+        if (req.getFileCategory() != null) a.setFileCategory(req.getFileCategory());
+        return attachmentRepository.save(a);
+    }
+
     // ==================== helpers ====================
+
+    private void requireSopWriteIfNeeded(EntityType type) {
+        if (AttachmentPermissionResolver.isSopType(type)) requireSopWriteEnabled();
+    }
+
+    private void requireSopWriteEnabled() {
+        if (sopAttachmentRollout == null) {
+            throw new BusinessException(503,
+                    "SOP 写入暂未启用（cretas.sop-attachments.write-enabled=false），请等待第二阶段发布");
+        }
+        sopAttachmentRollout.requireWriteEnabled();
+    }
 
     /**
      * 推断 file_category 从 MIME type — register 时未提供 fileCategory 时调用.
