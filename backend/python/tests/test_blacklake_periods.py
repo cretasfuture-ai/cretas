@@ -183,6 +183,21 @@ def test_explicit_profile_upgrade_preserves_old_ready_and_reuses_new_revision(pe
     assert period_runtime.store().get(period_runtime.scope(config),old['id'])==old_ready
 
 
+def test_history_summaries_do_not_download_every_analysis_and_full_report_stays_available(period_client):
+    client,headers,raw,config,*_=period_client
+    created=client.post('/api/smartbi/blacklake/period-reports',headers=headers,json={'start_date':'2026-11-03','end_date':'2026-11-03'}).json()['data']
+    assert asyncio.run(period_runtime.run_one(config))
+    full=client.get('/api/smartbi/blacklake/period-reports',headers=headers).json()['data'][0]
+    compact=client.get('/api/smartbi/blacklake/period-reports?summaries_only=true',headers=headers).json()['data'][0]
+    assert compact['id']==full['id']==created['id'] and compact['summaryOnly'] is True
+    assert compact['result']['summary']==full['result']['summary']
+    assert compact['result']['observations']==full['result']['observations']
+    assert compact['result']['sectionInsights']==[] and full['result']['sectionInsights']
+    reread=client.get('/api/smartbi/blacklake/period-reports/'+created['id'],headers=headers).json()['data']
+    assert reread['result']==full['result']
+    assert client.get('/api/smartbi/blacklake/period-reports?summaries_only=true').status_code==401
+
+
 def test_report_distinguishes_new_inventory_from_older_production_clock(source):
     raw=dated(source)
     metadata={**META,'finished_at':'2026-11-04T10:00:00Z','stock_finished_at':'2026-11-05T07:38:00Z'}

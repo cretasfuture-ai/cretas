@@ -40,6 +40,16 @@ def test_anonymous_entry_and_session_return_no_credential(preview):
     assert not calls
 
 
+def test_history_summary_parameter_is_narrow_and_other_filters_stay_blocked(preview):
+    client,calls=preview
+    path='/smartbi-api/api/smartbi/blacklake/'
+    response=client.get(path+'period-reports?summaries_only=true')
+    assert response.status_code==200 and calls[-1].url.params['summaries_only']=='true'
+    for resource in ('analysis?summaries_only=true','period-reports?summaries_only=false','period-reports?summaries_only=true&summaries_only=false','period-reports?tenant_id=OTHER'):
+        assert client.get(path+resource).status_code==400
+    assert len(calls)==1
+
+
 def test_browser_auth_is_discarded_and_only_fixed_local_analytical_upstream_is_used(preview):
     client, calls = preview
     response = client.get('/smartbi-api/api/smartbi/blacklake/complete-cost-analysis',

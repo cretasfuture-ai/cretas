@@ -168,8 +168,12 @@ def create_app(dist: Path, origin: str, broker=None, transport=None):
         allowed = (resource in GET_ROUTES or bool(re.fullmatch(r'period-reports/[A-Za-z0-9_-]{1,160}', resource))) if request.method == 'GET' else resource in POST_ROUTES
         if not allowed:
             return failure('公开预览仅支持查看和分析，不保存跟进或修改业务数据', 403)
-        if set(request.query_params) - QUERY_KEYS:
+        summary_query=request.method=='GET' and resource=='period-reports'
+        allowed_query=QUERY_KEYS|({'summaries_only'} if summary_query else set())
+        if set(request.query_params) - allowed_query:
             return failure('不支持的筛选条件', 400)
+        if 'summaries_only' in request.query_params and request.query_params.getlist('summaries_only')!=['true']:
+            return failure('历史列表仅接受摘要查看参数',400)
         body = b''
         async for chunk in request.stream():
             body += chunk

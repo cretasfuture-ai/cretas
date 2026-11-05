@@ -59,12 +59,24 @@ async def submit(payload: ReportRequest, request: Request):
 
 
 @router.get('/period-reports')
-async def history(request: Request):
+async def history(request: Request, summaries_only: bool=False):
     config = await context(request)
     try:
         reports = await asyncio.to_thread(runtime.store().list, runtime.scope(config), 50)
     except Exception:
         raise HTTPException(503, '历史分析暂不可读，请稍后重试') from None
+    if summaries_only:
+        summaries=[]
+        for job in reports:
+            row=dict(job)
+            if row.get('result'):
+                result=row['result'];ai=result.get('ai') or {}
+                row['result']={k:v for k,v in result.items() if k in ('generatedAt','summary','observations','history')}
+                row['result']['sectionInsights']=[]
+                row['result']['ai']={k:v for k,v in ai.items() if k in ('status','message','model','usage','cacheHit','analysisProfileVersion')}
+                row['summaryOnly']=True
+            summaries.append(row)
+        reports=summaries
     return {'success': True, 'data': reports, 'message': '仅当前工厂及来源的历史分析，旧版本不混入当前数值'}
 
 

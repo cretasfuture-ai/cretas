@@ -201,7 +201,7 @@ export async function getBlacklakePeriodReport(id: string): Promise<BlacklakePer
 
 export async function listBlacklakePeriodReports(): Promise<BlacklakePeriodJob[]> {
   const response = await pythonFetch<{ success: boolean; data: BlacklakePeriodJob[]; message: string }>(
-    '/api/smartbi/blacklake/period-reports', { preserveResponseKeys: true });
+    '/api/smartbi/blacklake/period-reports?summaries_only=true', { preserveResponseKeys: true });
   if (!response.success) throw new Error(response.message);
   return response.data;
 }
