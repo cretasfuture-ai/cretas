@@ -18,7 +18,9 @@ public final class SopAttachmentRollout {
     public void requireWriteEnabled() {
         if (!writeEnabled) {
             throw new BusinessException(503,
-                    "SOP 写入暂未启用（cretas.sop-attachments.write-enabled=false），请等待第二阶段发布");
+                    "SOP 资料正在升级，暂时无法上传、修改或删除")
+                    .withCode("SOP_WRITE_ROLLOUT_PENDING")
+                    .withHint("现有资料仍可查看，请稍后重试");
         }
     }
 }

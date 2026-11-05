@@ -243,7 +243,7 @@ class AttachmentSopSpringTest {
 
     private static Object column(Map<String, Object> row, String name) {
         Map.Entry<String, Object> entry = row.entrySet().stream()
-                .filter(entry -> entry.getKey().equalsIgnoreCase(name))
+                .filter(candidate -> candidate.getKey().equalsIgnoreCase(name))
                 .findFirst().orElse(null);
         return entry == null ? null : entry.getValue();
     }
