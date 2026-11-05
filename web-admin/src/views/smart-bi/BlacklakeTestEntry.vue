@@ -19,12 +19,12 @@ const username = ref('');
 const password = ref('');
 const busy = ref(false);
 const error = ref('');
-const activeView=ref('cost');
+const activeView=ref('complete-cost');
 const collapsed=ref(localStorage.getItem('blacklake-nav-collapsed')==='true');
 const mobileOpen=ref(false);
 const navigation=[
-  {id:'cost',label:'原料到成品成本',icon:'i-lucide-chart-no-axes-combined'},
-  {id:'complete-cost',label:'工单成本复核',icon:'i-lucide-clipboard-check'},
+  {id:'complete-cost',label:'产品成本分析',icon:'i-lucide-clipboard-check'},
+  {id:'cost',label:'周期成本分析',icon:'i-lucide-chart-no-axes-combined'},
   {id:'alerts',label:'异常与跟进',icon:'i-lucide-circle-alert'},
   {id:'gaps',label:'关联与估值补查',icon:'i-lucide-git-pull-request-arrow'},
   {id:'production',label:'生产与工序',icon:'i-lucide-factory'},

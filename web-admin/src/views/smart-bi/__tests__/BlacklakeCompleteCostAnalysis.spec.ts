@@ -33,6 +33,7 @@ afterEach(()=>{vi.useRealTimers();});
 it('shows exact two-decimal material, labor and unit cost while interpretations are queued',async()=>{
   vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(data());const page=render();await flushPromises();
   expect(page.text()).toContain('0 / 44');expect(page.text()).toContain('2.25 / 盒');
+  await page.findAll('button').find(b=>b.text()==='查看产品分析')!.trigger('click');
   await page.findAll('button').find(b=>b.text()==='查看成本与分析')!.trigger('click');
   expect(page.text()).toContain('材料净额20.00');expect(page.text()).toContain('工序人工2.50');
   expect(page.text()).toContain('解释仍在排队');expect(page.text()).not.toContain('本轮所有证据已逐条完成');page.unmount();
@@ -61,9 +62,12 @@ it('paginates 1000 orders and resets the page when filters change',async()=>{
   const value=data();value.analysis.cost.projects=Array.from({length:1000},(_,i)=>({...value.analysis.cost.projects[0]!,projectId:i+1,projectCode:'SYN-'+i}));
   vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(value);const page=render();await flushPromises();
   const buttons=()=>page.findAll('button').filter(b=>b.text()==='查看成本与分析');
+  expect(buttons()).toHaveLength(0);
+  expect(page.findAll('button').filter(b=>b.text()==='查看产品分析')).toHaveLength(1);
+  await page.findAll('button').find(b=>b.text()==='查看产品分析')!.trigger('click');
   expect(buttons()).toHaveLength(20);const pager=page.findAllComponents({name:'ElPagination'})[0]!;
   expect(pager.props('total')).toBe(1000);pager.vm.$emit('update:currentPage',50);await flushPromises();expect(buttons()).toHaveLength(20);
-  page.findAllComponents({name:'ElSelect'})[0]!.vm.$emit('update:modelValue','all');await flushPromises();expect(pager.props('currentPage')).toBe(1);page.unmount();
+  page.findAllComponents({name:'ElSelect'})[0]!.vm.$emit('update:modelValue','all');await flushPromises();expect(page.findAllComponents({name:'ElPagination'})[0]!.props('currentPage')).toBe(1);expect(buttons()).toHaveLength(0);page.unmount();
 });
 
 it('uses source completion dates for the latest seven data days and keeps per-order analysis attached',async()=>{
@@ -71,8 +75,35 @@ it('uses source completion dates for the latest seven data days and keeps per-or
   value.analysis.cost.projectDates={'1':{completedAt:'2026-10-01T00:00:00Z',createdAt:null},'2':{completedAt:'2026-11-03T00:00:00Z',createdAt:null}};
   value.batchAnalysis.results=[{factId:'ORDER2',cohort:'eligible26',sectionId:'product_cost',kind:'work_order_detail',whatItMeans:'只属于第二张工单的解释',whyItMatters:'核对材料',nextStep:'找仓库确认',owner:'仓库',cannotConclude:'暂无批次证明',hypotheses:[],display:{text:'工单2',entityRefs:[{projectId:2}]}}];
   vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(value);const page=render();await flushPromises();
-  expect(page.text()).toContain('10-28 至 11-03 · 1 张工单');expect(page.findAll('button').filter(b=>b.text()==='查看成本与分析')).toHaveLength(1);
+  expect(page.text()).toContain('10-28 至 11-03 · 1 张工单');expect(page.findAll('button').filter(b=>b.text()==='查看成本与分析')).toHaveLength(0);
   // Per-order answers never appear in the detached specialty list.
   expect(page.text()).not.toContain('只属于第二张工单的解释');
+  await page.findAll('button').find(b=>b.text()==='查看产品分析')!.trigger('click');
   await page.findAll('button').find(b=>b.text()==='查看成本与分析')!.trigger('click');expect(page.text()).toContain('只属于第二张工单的解释');page.unmount();
+});
+
+it('drills from product to its own orders and returns without mixing other products',async()=>{
+  const value=data();value.analysis.cost.projects=value.analysis.cost.projects.slice(0,3);
+  value.analysis.cost.projects[2]={...value.analysis.cost.projects[2]!,product:'另一种半成品',productCode:'OTHER'};
+  vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(value);const page=render();await flushPromises();
+  expect(page.findAll('button').filter(b=>b.text()==='查看产品分析')).toHaveLength(2);
+  expect(page.find('[data-testid="review-order-table"]').exists()).toBe(false);
+  // Find the group by its displayed product label rather than relying on sort order.
+  const productTable=page.find('[data-testid="product-cost-list"]');
+  expect(productTable.text()).toContain('合成食品');
+  await page.findAll('button').filter(b=>b.text()==='查看产品分析')[0]!.trigger('click');await flushPromises();
+  const table=page.find('[data-testid="review-order-table"]');expect(table.exists()).toBe(true);
+  const shownOrders=page.findAll('button').filter(b=>b.text()==='查看成本与分析').length;
+  expect([1,2]).toContain(shownOrders);expect(table.text().includes('SYNTHETIC-3')&&table.text().includes('SYNTHETIC-1')).toBe(false);
+  await page.findAll('button').find(b=>b.text()==='返回全部产品')!.trigger('click');await flushPromises();
+  expect(page.find('[data-testid="review-order-table"]').exists()).toBe(false);expect(page.find('[data-testid="product-cost-list"]').exists()).toBe(true);page.unmount();
+});
+
+it('searching an order locates the product without dropping its other orders from totals',async()=>{
+  const value=data();value.analysis.cost.projects=value.analysis.cost.projects.slice(0,2);
+  vi.mocked(getBlacklakeCompleteCost).mockResolvedValue(value);const page=render();await flushPromises();
+  page.findComponent('el-input-stub').vm.$emit('update:modelValue','SYNTHETIC-1');await flushPromises();
+  await page.findAll('button').find(b=>b.text()==='查看产品分析')!.trigger('click');await flushPromises();
+  expect(page.findAll('button').filter(b=>b.text()==='查看成本与分析')).toHaveLength(2);
+  expect(page.find('[data-testid="selected-product-analysis"]').text()).toContain('本次日期范围内 2 张工单');page.unmount();
 });
