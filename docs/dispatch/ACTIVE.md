@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `TASKS-S4-BASIS-20261105` — `review` — Owner: `01a1a954/root` — Base `50ec3c63e1b08fde335895af4b6818169c0476b5` — 正式依据/漂移/缓存窗口已修；真实PG31、Web12及typecheck通过，独立终审无P0–P2；待统一PR，scope/证据见archive/2026-11-05-s4-basis.md。
+
 
 
 
