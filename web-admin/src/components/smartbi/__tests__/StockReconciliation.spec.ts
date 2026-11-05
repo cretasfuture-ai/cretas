@@ -15,13 +15,28 @@ describe('StockReconciliation', () => {
     expect(wrapper.text()).toContain('暂无可核对的库存记录');
     expect(wrapper.text()).not.toContain('0.00');
   });
-  it('shows material evidence, unconfirmed reasons and expandable movements', () => {
+  it('shows material evidence, unconfirmed reasons and expandable movements', async () => {
     const wrapper = mount(StockReconciliation, { props: { rows: [row({ status: 'confirmed', conclusion: '收发与盘点一致。', movements: [{ id: 'mv-1', orderNo: 'IN-1', direction: 'in', bizAt: null, approval: '已审核', quantity: 2, unit: 'kg', counted: true, reason: '' }] })] } });
     expect(wrapper.text()).toContain('番茄酱');
     expect(wrapper.text()).toContain('已确认');
+    expect(wrapper.text()).not.toContain('收发与盘点一致');
+    await wrapper.get('.material-toggle').trigger('click');
     expect(wrapper.text()).toContain('收发与盘点一致');
     expect(wrapper.text()).toContain('当前账面余额 未提供');
     expect(wrapper.text()).toContain('可能原因（尚未确认）');
     expect(wrapper.text()).toContain('IN-1');
+  });
+  it('opens only the selected material and keeps other explanations out of the page', async () => {
+    const wrapper = mount(StockReconciliation, { props: { rows: [row(), row({key:'m-2',product:'牛肉',conclusion:'核对牛肉领料单'})] } });
+    expect(wrapper.findAll('.material-detail')).toHaveLength(0);
+    const buttons=wrapper.findAll('.material-toggle');
+    await buttons[0].trigger('click');
+    expect(wrapper.text()).toContain('期末库存暂无法确认');
+    await buttons[1].trigger('click');
+    expect(wrapper.text()).not.toContain('期末库存暂无法确认');
+    expect(wrapper.text()).toContain('核对牛肉领料单');
+    expect(buttons[0].attributes('aria-expanded')).toBe('false');
+    await buttons[1].trigger('click');
+    expect(wrapper.findAll('.material-detail')).toHaveLength(0);
   });
 });

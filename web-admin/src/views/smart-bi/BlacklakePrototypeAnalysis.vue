@@ -292,6 +292,7 @@ async function loadForPeriod(query: BlacklakePeriodQuery | null, force = false) 
       }
     }
     data.value = refreshed; refreshEpoch.value += 1;
+    loading.value = false;
     unit.value = units.value.includes('kg') ? 'kg' : units.value[0] || '';
     inventoryUnit.value = '__all__';
     overviewUnit.value = overviewUnits.value.includes('kg') ? 'kg' : overviewUnits.value[0] || '';

@@ -82,6 +82,18 @@ describe('Blacklake prototype page', () => {
     expect(wrapper.find('[data-testid="cost-projects"]').exists()).toBe(true);
   });
 
+  it('unblocks facts and period selection while report submission is still pending', async () => {
+    vi.mocked(getBlacklakeAnalysis).mockResolvedValue({ ...analysis });
+    vi.mocked(createBlacklakePeriodReport).mockImplementation(() => new Promise(() => {}));
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});
+    await flushPromises();
+    const vm=wrapper.vm as unknown as {loading:boolean;periodLoading:boolean;data:BlacklakeAnalysis|null};
+    expect(vm.data?.runId).toBe('run-1');
+    expect(vm.loading).toBe(false);
+    expect(vm.periodLoading).toBe(true);
+    wrapper.unmount();
+  });
+
   it('drops an older GET response after switching periods', async () => {
     let resolveFirst!: (value: BlacklakeAnalysis) => void;
     let resolveSecond!: (value: BlacklakeAnalysis) => void;
