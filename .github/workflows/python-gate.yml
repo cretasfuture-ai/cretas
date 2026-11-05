@@ -74,12 +74,14 @@ on:
       - 'backend/python/**'
       - '.github/workflows/python-gate.yml'
       - 'scripts/ci/run-with-test-postgres.sh'
+      - 'scripts/ci/check_factory_evaluator_provenance.py'
       - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
   pull_request:
     paths:
       - 'backend/python/**'
       - '.github/workflows/python-gate.yml'
       - 'scripts/ci/run-with-test-postgres.sh'
+      - 'scripts/ci/check_factory_evaluator_provenance.py'
       - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
   # 手动触发 —— 2026-08-26 加。
   # 本闸此前在 GitHub 上被 disabled_manually, 停用期间攒了 8 条红(其中 1 条是真的
@@ -107,6 +109,9 @@ jobs:
         working-directory: backend/python
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Legacy factory replay tests verify the pinned source artifact projection.
+          fetch-depth: 0
 
       # setup-python 只在**托管** runner 上跑。自建 macOS runner 上它必失败:
       # 它的 macOS 安装脚本把 `/Users/runner` 写死(托管 runner 的用户名就叫 runner),

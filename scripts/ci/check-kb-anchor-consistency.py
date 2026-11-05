@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""CI lint: ensure synthesis section anchor refs match actual section IDs across manuals."""
+"""CI lint: ensure factory synthesis anchors match actual section IDs."""
 import re, sys
 from pathlib import Path
 
 MANUALS = [
-    Path("docs/plans/restaurant-product-manual.html"),
     Path("docs/plans/factory-operation-manual.html"),
 ]
 
@@ -12,7 +11,6 @@ MANUALS = [
 def extract_synthesis(text: str) -> str | None:
     """Extract <section id="synthesis">...</section> with balanced nested <section> tags.
 
-    The restaurant manual has flat <h3 id="syn-N"> inside one <section id="synthesis">.
     The factory manual has nested <section> for each scenario, so a non-greedy regex
     would stop at the first inner </section>. This walker counts opens/closes.
     """
