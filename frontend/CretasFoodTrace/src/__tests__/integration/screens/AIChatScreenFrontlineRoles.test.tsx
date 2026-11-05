@@ -78,9 +78,6 @@ jest.mock('../../../components/ai/RichContentRenderer', () => ({
   RichContentRenderer: () => null,
   detectRichData: () => null,
 }));
-jest.mock('../../../components/ai/RestaurantGrossMarginRunCard', () => ({
-  RestaurantGrossMarginRunCard: () => null,
-}));
 jest.mock('../../../components/common/VoiceMicButton', () => ({
   VoiceMicButton: (props: any) => {
     const { Text } = require('react-native');

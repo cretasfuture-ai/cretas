@@ -36,7 +36,6 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
-import ValueFeedbackStrip from './components/ValueFeedbackStrip.vue';
 import type { ChartWithMeta } from './components/chartInsight';
 import ChartInsight from './components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';

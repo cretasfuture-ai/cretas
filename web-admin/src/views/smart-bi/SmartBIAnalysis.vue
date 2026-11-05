@@ -559,15 +559,8 @@ const appStore = useAppStore();
 // 不再自动选中某个上传分片 (qhj 的 *_part4.csv 这类只是 1/4 分片 → 0 图表空白)。
 // 真正全量数据在 Gold 层 (经营驾驶舱 / 经营分析 已渲染同一组件)。文件上传分析仍
 // 保留在「分析上传文件」开关后, 供用户真正上传新文件时使用。制造业租户不受影响。
-const isRestaurantTenant = computed(() => false);
 const showUploadAnalysis = ref(true);
 const goldMode = computed(() => false);
-// 若 factoryId 在 mount 后才异步就绪 (auth 水合延迟), 重试探测 Gold 区间。
-watch(factoryId, (id) => {
-  if (id && isRestaurantTenant.value && !goldRangeProbed.value) {
-    probeGoldRange().catch(() => {});
-  }
-});
 
 // P3: AI 探索顶层 tab (传 Excel 分析 / 问数据 AI)。与 sheet 级 activeTab 互不相干。
 const route = useRoute();

@@ -186,7 +186,7 @@ describe('L2 / T1-T3 / S4: 样式源文本 (+ 旧样式阴性对照)', () => {
   });
 
 
-  it('S4: 工厂输入框 / 发送是 large(40px), 圆角 8 / 内边距 12 / 16px; 餐饮保持默认档', () => {
+  it('S4: 工厂输入框 / 发送是 large(40px), 圆角 8 / 内边距 12 / 16px', () => {
     const f = mountPanel('FACTORY');
     expect(f.find('.acp-input .el-input').classes()).toContain('el-input--large');
     expect(f.find('.acp-input .el-button').classes()).toContain('el-button--large');
@@ -198,17 +198,11 @@ describe('L2 / T1-T3 / S4: 样式源文本 (+ 旧样式阴性对照)', () => {
 
   });
 
-  it('按钮尺寸: 工厂清空对话 / 聚焦 / 追问芯片都是 default(32px) 档', async () => {
-    h.askIntent.mockResolvedValue(okAnswer({ followUpActions: [{ label: '最近30天', question: '最近30天怎样' }] }));
+  it('按钮尺寸: 工厂清空对话 / 聚焦都是 default(32px) 档', () => {
     const f = mountPanel('FACTORY');
-    await send(f, '问');
     const clearF = f.findAll('.acp-header .el-button')[0];
     expect(clearF.classes()).not.toContain('el-button--small');
     expect(f.find('.el-radio-group .el-radio-button').classes()).not.toContain('el-radio-button--small');
-    const chipF = f.findAll('.acp-followups .el-button');
-    expect(chipF).toHaveLength(1);
-    expect(chipF[0].classes()).not.toContain('el-button--small');
-
   });
 });
 

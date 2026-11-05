@@ -66,9 +66,6 @@ describe('AnalysisChatPanel unified intent routing', () => {
       status: 'SUCCESS',
       formattedText: '你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。',
       source: 'deterministic_fallback',
-      followUpActions: [
-        { label: '最近30天', question: '最近30天哪些生产线良率最低' },
-      ],
     });
 
     const wrapper = mountPanel();
@@ -88,12 +85,6 @@ describe('AnalysisChatPanel unified intent routing', () => {
     const aiBubble = wrapper.find('.stub-bubble[data-role="ai"]');
     expect(aiBubble.text()).toContain('时间范围');
 
-    const followUp = wrapper.findAll('button')
-      .find((button) => button.text() === '最近30天');
-    expect(followUp).toBeDefined();
-    await followUp!.trigger('click');
-    await flushPromises();
-    expect(mocks.askIntent.mock.calls[1][1]).toBe('最近30天哪些生产线良率最低');
   });
 
   it('keeps comprehensive answers and charts returned by the same orchestrator', async () => {

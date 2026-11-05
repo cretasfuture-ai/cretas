@@ -73,9 +73,6 @@ jest.mock('../../../services/ai', () => ({
 }));
 jest.mock('../../../components/ai/AIModeIndicator', () => ({ AIModeIndicator: () => null }));
 jest.mock('../../../components/ai/FeedbackWidget', () => ({ FeedbackWidget: () => null }));
-jest.mock('../../../components/ai/RestaurantGrossMarginRunCard', () => ({
-  RestaurantGrossMarginRunCard: () => null,
-}));
 jest.mock('../../../components/common/VoiceMicButton', () => ({ VoiceMicButton: () => null }));
 jest.mock('../../../services/audio/feedbackSounds', () => ({
   feedbackSounds: {

@@ -236,7 +236,6 @@ async function sendMessage(text?: string) {
         content: response.formattedText || response.message || '已完成分析',
         timestamp: Date.now(),
         source: response.status,
-        followUpActions: response.followUpActions,
       });
     }
   } catch (error: unknown) {

@@ -26,7 +26,6 @@ BASH_ABS=$(command -v bash) || fail "本机缺 bash"
 CASES=(
   "forecast-backtest-watch.sh|FORECAST_BT|FORECAST BACKTEST|0"
   "llm-provider-health-daily.sh|LLM_HEALTH|LLM HEALTH|1"
-  "margin-parity-daily.sh|MARGIN_PARITY|MARGIN PARITY|1"
 )
 
 FAKEBIN="$TMP/bin"; STUB="$TMP/stub"; PYBIN="$TMP/pyvenv/bin"
@@ -112,16 +111,6 @@ for entry in "${CASES[@]}"; do
     case "$(calls)" in *python*) fail "[$script ③] env 不在时不该跑到 python" ;; esac
     N_RC2=$((N_RC2 + 1))
     ok "$script .env.prod 不在 ⇒ rc=2 reason=env-file-missing:env.prod"
-done
-
-# 可选 env 文件: 不在只记一句, ⛔ 不 rc=2 (margin-parity 有 ENV_EXTRA)
-for entry in "margin-parity-daily.sh|MARGIN_PARITY"; do
-    IFS='|' read -r script prefix <<< "$entry"
-    mk_pydir; printf 'X=1\n' > "$TMP/env.prod"; rm -f "$TMP/env.extra"
-    run_script "$script" "$prefix"
-    [ "$RC" = 0 ] || fail "[$script 可选] 期望 rc=0 实得 $RC"
-    grep -q "INFO optional env file absent: $TMP/env.extra" "$TMP/log" || fail "[$script 可选] 日志里没有「可选文件不在」那一句"
-    ok "$script 可选 env 不在 ⇒ 记一句, rc=0"
 done
 
 echo "READING: RC2_CONSTRUCTED=$N_RC2"

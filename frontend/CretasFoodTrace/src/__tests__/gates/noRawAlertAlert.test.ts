@@ -50,13 +50,14 @@ function bucketOf(rel: string): string {
 
 /** 已收敛 ⇒ 必须为 0 */
 const ZERO = new Set(['screens/processing', 'screens/warehouse', 'screens/quality-inspector']);
-/** 餐饮不管: 不进棘轮, 但钉死在实测值 (见下) */
+/** 餐饮目录已退休: 不进工厂 Alert 棘轮, 且目录应保持为空。 */
 const IGNORED = new Set(['screens/restaurant']);
-/** 2026-09-06 实测 screens/restaurant 的 Alert.alert( 数; 餐饮屏不动 ⇒ 这个数不该变 */
-const RESTAURANT_PINNED = 51;
+const RESTAURANT_PINNED = 0;
 /** 2026-09-06 实测 (codemod 第一刀之后), ⛔ 只许往下调
  *  2026-10-07: 「我的」页退出登录改 appAlert (profileLogoutConfirm.test.tsx) —— factory-admin/dispatcher/workshop-supervisor/profile 各 -1, hr 收紧到实测 36 */
 const BASELINE: Record<string, number> = {
+  // Factory supplier-delivery screens migrated out of the retired restaurant tree.
+  'screens/inventory': 20,
   'screens/factory-admin': 356,
   'screens/platform': 297,
   'screens/management': 198,

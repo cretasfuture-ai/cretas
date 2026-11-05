@@ -24,7 +24,6 @@ import ForgotPasswordScreen from "../screens/auth/ForgotPasswordScreen";
 
 // 主导航器
 import MainNavigator from "./MainNavigator";
-import FactoryAdminNavigator from "./FactoryAdminNavigator";
 import WorkshopSupervisorNavigator from "./WorkshopSupervisorNavigator";
 import WarehouseManagerNavigator from "./WarehouseManagerNavigator";
 import HRNavigator from "./HRNavigator";
@@ -105,9 +104,9 @@ function RoleBasedNavigator() {
     autoUnregisterOnLogout: true,
   });
 
-  // factory_super_admin 使用工厂管理员界面
+  // 工厂超管进入工厂 Boss 工作台；餐饮专属 FactoryAdmin 树已退休。
   if (userRole === "factory_super_admin") {
-    return <FactoryAdminNavigator />;
+    return <BossNavigator />;
   }
 
   // hr_admin (HR管理员) 使用HR专属界面

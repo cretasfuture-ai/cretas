@@ -58,7 +58,6 @@ jest.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children, 
 jest.mock('../../../services/ai', () => ({ aiService: {}, detectAnalysisMode: () => ({ mode: 'quick' }) }));
 jest.mock('../../../components/ai/AIModeIndicator', () => ({ AIModeIndicator: () => null }));
 jest.mock('../../../components/common/VoiceMicButton', () => ({ VoiceMicButton: () => null }));
-jest.mock('../../../components/ai/RestaurantGrossMarginRunCard', () => ({ RestaurantGrossMarginRunCard: () => null }));
 jest.mock('../../../services/audio/feedbackSounds', () => ({ feedbackSounds: { onWriteSuccess: jest.fn(), onNeedMoreInfo: jest.fn(), onError: jest.fn(), onNeedMoreInfo: jest.fn() } }));
 jest.mock('react-native', () => {
   const React = require('react');
