@@ -136,3 +136,11 @@ Owner: 01a1a954/root. Base SHA: 91bfa2c9b42ac5e98ca67b02e0de6686339b5913.
 538 最终全量运行 19643 项，58 error + 1 fail，集中于 8 类 H2 集成 fixture；公共原因是新增的真实计划 refresh 触发 JsonBinaryType 在 H2 中的空 Map/List 双编码。真实 PG 同 head 门禁成功。保留生产锁/refresh 和全部原断言，仅把这些单产品 fixture 未使用的四个默认 JSON 快照置 null；另以真实 PG 验证非空快照刷新不变。范围为 CcpMonitoringContractTest、ProductionPotContractTest、ClerkProcessEntryIntegrationTest、ProcessSheetInventoryTest、ProcessSheetRowsTest、ProcessSheetServiceImplTest、QcReleaseWebDrawContractTest、InterimSettleRawDeductionIntegrationTest，以及 SecondaryHoldPostgresContractTest 新增用例。Root 为此 H2 修复唯一写者；不改食品组新增参数用例或其 worktree，合并时保留其冻结增量。
 
 修后 9 类目标实测 91 tests / 0 failures / 0 errors / 0 skipped（含真实 PG 10、H2 81），TARGET_EXIT=0；临时 PG15442 已停止。原 59 红日志/棘轮/归一化清单保留，不扩基线、不跳原测试。独立复核确认 null 只用于本批未使用快照；真实 PG 非空 Map/List 刷新及无扣账断言已执行成功。最终整合候选需新 CI 和扩大至 44 类的官方制品门禁。
+
+## 2026-11-05 最终交付与 scope 释放
+
+代码状态 merged：#1480 已于 14:55:21Z 正常 squash 合入 c24e11bb0a2c8e2714981d51b86849bd6fa2a8de，最终 feature 92ef535b11599c633883fdfd812c95264e66f886 与合并整树一致。本代码任务归档并释放代码 scope；后续发布、OTA 和 F006 QA 由父任务继续负责，不把合并算部署或业务验收。
+
+最终整合已含 #1481，保留双方 PG 选择器和工序表测试。官方 52 类/56 XML 实跑 793 tests，0 failures/errors/skipped；Web 7 套 74 项与类型检查通过，RN 相同内容 43 项及类型检查证据复用。run42040325350 最终 full 19664/0 failures/0 errors/311 skipped，真实 PG 同 head success，其余门禁 success；fast 按最终候选配置 skipped。实际 whole tree a5c37558da0467222da12c52230b8b8805aec4fd 与本地相同。原失败和修复历史保留，不扩基线。
+
+Java tree 259b316ad02b3cc44214bf9f86d8980cfa552455，JAR SHA256 6f662eb2eccf0c1e9d7370b9527ea4e3124e26b166a32f239aad1fe60c563812；Web tree48bae0e0f442e70c2bc034d9fd303af3e9f93c97。官方 build/stage exit0/FINAL=built 一次，尚不代表正式部署。V20261105_93 未发布，线上只读最新91；92已由原Owner放弃，禁止 out-of-order，正式发布前再核。独立模拟器验收明确标注模拟器，实体不再使用；S6-10实际业务代表/QA签署不能代签。
