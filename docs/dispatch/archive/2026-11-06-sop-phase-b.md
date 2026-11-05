@@ -17,3 +17,5 @@ Owner food/root；Base 09555864bf513a87285c96f7fd6b137dd164f150；worktree C:/Us
 最终主线组合Web完整type exit0；旧RN28与type内容未变复用，Web抽屉23通过。已恢复原独立SOP spec（含完整UX Flow Analysis）到本切片，不生成Superpowers制品。实际Java prod配置绑定新两项仍待官方13类，未把前端或旧PhaseA测试当新配置已验证。
 
 交付依赖冻结：父PR1487（Material/同food Owner）稳定源687b3已合入本feature，1490临时base到其分支，父正常合main后retarget main；B仅17文件增量，不重新接管或重复修改Supplier/物料源码。仍从Base0955定义官方release范围，避免squash后feature父SHA不在main祖先链；最终B制品包含父物料与本SOP界面/配置，13类SOP门禁与combined required CI分别记录，父212目标内容复用。
+
+父修复已精确汇合224c49c104（生产单位修复d60b3ddc80与六fixture），组合主线Base更新2de52fb66e7caaf892d9430afba23e8b81d5e57d，B仍17文件增量，不改Supplier。旧父212不背书新单位源码；父官方32类与新CI独立完成，B新增ConfigData四项本地4/0/0/0已过，B官方13类/新CI与发布仍待。
