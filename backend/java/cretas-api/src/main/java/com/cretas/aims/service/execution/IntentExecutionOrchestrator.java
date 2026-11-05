@@ -817,9 +817,8 @@ public class IntentExecutionOrchestrator {
         }
 
         // 审批检查
-        if (intent.needsApproval()
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && !Boolean.TRUE.equals(request.getForceExecute())) {
+        if (Boolean.TRUE.equals(intent.getRequiresApproval())
+                && !Boolean.TRUE.equals(request.getPreviewOnly())) {
             return buildApprovalResponse(intent);
         }
 
@@ -1087,9 +1086,8 @@ public class IntentExecutionOrchestrator {
         // Approval governs the mutation, not its read-only TCC preview. Keeping
         // previewOnly outside this gate lets the user inspect before/after and
         // impact details before deciding whether to request approval/confirm.
-        if (intent.needsApproval()
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && !Boolean.TRUE.equals(request.getForceExecute())) {
+        if (Boolean.TRUE.equals(intent.getRequiresApproval())
+                && !Boolean.TRUE.equals(request.getPreviewOnly())) {
             return buildApprovalResponse(intent);
         }
 
@@ -1267,6 +1265,22 @@ public class IntentExecutionOrchestrator {
                         .message("意图配置已变化，请重新发起预览")
                         .executedAt(LocalDateTime.now())
                         .build();
+            }
+
+            if (!com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(boundToolName)) {
+                // A preview is not an approval grant. Recheck current intent authorization before
+                // reconstructing any server confirmation authority from the claimed command.
+                IntentExecuteResponse denied = checkIntentPermission(intentConfig, factoryId, userId, userRole);
+                if (denied != null) {
+                    previewTokenService.resolveClaim(confirmToken, claimId, false, denied.getMessage());
+                    return denied;
+                }
+                if (Boolean.TRUE.equals(intentConfig.getRequiresApproval())) {
+                    IntentExecuteResponse approval = buildApprovalResponse(intentConfig);
+                    previewTokenService.resolveClaim(confirmToken, claimId, false, approval.getMessage());
+                    return approval;
+                }
+
             }
 
             Optional<ToolExecutor> toolOpt = toolRegistry.getExecutor(boundToolName);
@@ -2788,7 +2802,7 @@ public class IntentExecutionOrchestrator {
     }
 
     private IntentExecuteResponse buildApprovalResponse(AIIntentConfig intent) {
-        String msg = "此操作需要审批确认。审批请求已提交。";
+        String msg = "此操作需要审批，当前 AI 入口尚不支持提交和核验审批。未提交审批、未执行操作，请通过业务页面完成审批。";
         return IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
