@@ -52,10 +52,8 @@ describe('quality daily vision training entry', () => {
 
     expect(menuItem?.title).toBe('经营指标');
     expect(menuItem?.roles).toEqual(['factory_super_admin', 'quality_manager', 'finance_manager']);
-    expect(menuItem?.hideForFactoryTypes).toEqual(['RESTAURANT']);
     expect(resolved.name).toBe('AnalyticsIndicators');
     expect(resolved.meta.roles).toEqual(['factory_super_admin', 'quality_manager', 'finance_manager']);
-    expect(resolved.meta.hideForFactoryTypes).toEqual(['RESTAURANT']);
   });
 
   it('passes the factory store context to the setup and ignores a platform query factory', () => {

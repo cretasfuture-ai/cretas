@@ -38,9 +38,7 @@ import FinanceNavigator from "./FinanceNavigator";
 import OperationsNavigator from "./OperationsNavigator";
 import ProductionManagerNavigator from "./ProductionManagerNavigator";
 import RestrictedRoleNavigator from "./RestrictedRoleNavigator";
-import RestaurantNavigator from "./RestaurantNavigator";
 import BossNavigator from "./BossNavigator";
-import { isRestaurant } from "../utils/factoryType";
 import WarehouseWorkerNavigator from "./WarehouseWorkerNavigator";
 import EquipmentAdminNavigator from "./EquipmentAdminNavigator";
 import QualityManagerNavigator from "./QualityManagerNavigator";
@@ -109,7 +107,7 @@ function RoleBasedNavigator() {
 
   // factory_super_admin 使用工厂管理员界面
   if (userRole === "factory_super_admin") {
-    return isRestaurant(user) ? <FactoryAdminNavigator /> : <BossNavigator />;
+    return <FactoryAdminNavigator />;
   }
 
   // hr_admin (HR管理员) 使用HR专属界面
@@ -180,18 +178,6 @@ function RoleBasedNavigator() {
   if (userRole === "viewer") {
     return <ViewerNavigator />;
   }
-
-  // 餐饮侧三个角色。生产库实测各 1 个账号, 在这之前它们**没有任何分支**,
-  // 一律落到 RestrictedRoleNavigator(锁定页), 而 navigation/restaurant/ 下的
-  // 四棵 stack(11 屏)也从没有被任何地方 import 过 —— 建好了没接上。
-  if (
-    userRole === "restaurant_owner"
-    || userRole === "restaurant_manager"
-    || userRole === "restaurant_purchaser"
-  ) {
-    return <RestaurantNavigator />;
-  }
-
   // 已知的管理/平台兼容角色继续使用原有界面；未知角色进入锁定页
   if (
     userRole === "platform_admin"

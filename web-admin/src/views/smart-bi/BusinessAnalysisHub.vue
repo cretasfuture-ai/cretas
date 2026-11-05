@@ -38,7 +38,6 @@ import FinancialDashboardPBI from './FinancialDashboardPBI.vue';
 import FactoryChartRecommendations from './FactoryChartRecommendations.vue';
 import SalesAnalysis from './SalesAnalysis.vue';
 import TrendsView from '@/views/analytics/trends/index.vue';
-import KpiView from '@/views/analytics/kpi/index.vue';
 import IndicatorCenterDashboard from '@/views/indicator-center/IndicatorCenterDashboard.vue';
 import { resolveBusinessAnalysisTab, type BusinessAnalysisTab } from './businessAnalysisTab';
 import ChartInsights from './components/analysis/ChartInsights.vue';
@@ -222,9 +221,6 @@ async function focusChart(key: string) {
           </el-tab-pane>
           <el-tab-pane label="KPI·指标" name="kpi" lazy>
             <el-tabs v-model="kpiSubTab" type="card" class="kpi-sub-tabs" @tab-change="syncKpiSubQuery">
-              <el-tab-pane label="KPI 看板" name="kpi" lazy>
-                <KpiView />
-              </el-tab-pane>
               <el-tab-pane label="指标中心" name="indicator" lazy>
                 <IndicatorCenterDashboard />
               </el-tab-pane>

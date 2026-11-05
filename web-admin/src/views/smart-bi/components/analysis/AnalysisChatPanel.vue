@@ -22,9 +22,9 @@ import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
 import { ElButton, ElInput, ElMessage, ElRadioButton, ElRadioGroup } from 'element-plus';
 import ChatBubble from '../chat/ChatBubble.vue';
 import ChatTypingIndicator from '../chat/ChatTypingIndicator.vue';
-import { askRestaurantIntent } from '@/api/smartbi/restaurant-synthesis';
+import { executeIntent } from '@/api/smartbi/intent-chat';
 import { useAuthStore } from '@/store/modules/auth';
-import type { ChatTurn } from '@/types/restaurant-chat';
+import type { ChatTurn } from '@/types/smartbi-chat';
 import type { AnalysisChartContext } from './analysisBullets';
 
 const props = defineProps<{
@@ -217,14 +217,11 @@ async function sendMessage(text?: string) {
   // N1: 追加答案之前量好「用户是不是还在底部附近」; 餐饮永远滚到底 (旧行为)
   let followBottom = true;
   try {
-    const pending = askRestaurantIntent(props.factoryId, question, sessionId.value, {
-      pageContext: buildPageContext(),
-      dimensionHints: focusedContext.value.dimensionHints,
-    });
+    const pending = executeIntent(props.factoryId, question, { sessionId: sessionId.value, mode: 'READ', context: { pageContext: buildPageContext(), dimensionHints: focusedContext.value.dimensionHints } });
     const response = controller ? await raceAbort(Promise.resolve(pending), controller.signal) : await pending;
     if (controller) followBottom = isNearBottom();
 
-    if (!response.success) {
+    if (response.status === 'FAILED' || response.status === 'ERROR') {
       if (controller) {
         // 标准版式: 说人话, 不露后端原文 (W2)
         turns.value.push({
@@ -236,7 +233,7 @@ async function sendMessage(text?: string) {
         ElMessage.error(FRIENDLY_FAILURE_TEXT);
       } else {
         // Honest failure: real backend/network message, never a fabricated answer.
-        const errMsg = response.error || '分析失败，请稍后重试';
+        const errMsg = response.message || '分析失败，请稍后重试';
         turns.value.push({
           id: crypto.randomUUID(),
           role: 'ai',
@@ -250,12 +247,9 @@ async function sendMessage(text?: string) {
       turns.value.push({
         id: crypto.randomUUID(),
         role: 'ai',
-        content: response.answer || '已完成分析',
+        content: response.formattedText || response.message || '已完成分析',
         timestamp: Date.now(),
-        charts: response.charts,
-        alerts: response.alerts,
-        followUpActions: response.followUpActions,
-        source: response.source,
+        source: response.status,
       });
     }
   } catch (error: unknown) {

@@ -36,7 +36,6 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
-import RestaurantGoldGrid from './components/RestaurantGoldGrid.vue';
 import ValueFeedbackStrip from './components/ValueFeedbackStrip.vue';
 import type { ChartWithMeta } from './components/chartInsight';
 import ChartInsight from './components/ChartInsight.vue';
@@ -707,7 +706,7 @@ const dateRange = ref<[string, string] | null>(null);
 
 // Apr 24 2026 UX fallback: when 本月 is empty AND user didn't pick a range,
 // auto-probe 近90天 → 上年 → 前年 and silently load the first non-empty range.
-// Tag below the picker explains the switch. Pattern mirrors Trends/RestaurantV2.
+// Tag below the picker explains the switch. Pattern mirrors the trend view.
 const fallbackRangeLabel = ref<string>('');
 const fallbackDateRange = ref<[string, string] | null>(null);
 
@@ -1114,7 +1113,7 @@ async function loadDashboardData() {
       // KPIs" is misleading. Apr 24 UX continuation: instead, when 本月 is
       // empty AND user hasn't picked a range, silently probe 近90天 → 上年 →
       // 前年 to show genuine historical Gold data (same fallback pattern as
-      // Trends/RestaurantV2 KPI strip). A warning tag explains the switch.
+      // Trend KPI strip). A warning tag explains the switch.
       // Apr 25 2026 P1 fix: also trigger fallback when KPI is non-empty but
       // charts are empty — prior logic pinned the user on an all-chart-empty
       // range, creating a "本月销售额 2064万 + 暂无图表" contradiction.
@@ -2145,25 +2144,7 @@ onUnmounted(() => {
       </el-col>
     </el-row>
 
-    <!-- #56 价值可视化回馈回路: 本月价值回馈条 (诊断引擎已算出的省钱/改善金额, 月度+年化
-         两口径)。业态门控仅 RESTAURANT。解决"门店看不到价值 → 配合度崩塌"死因。 -->
-    <ValueFeedbackStrip
-      v-if="isRestaurantTenant"
-      :factory-id="factoryId || ''"
-      :show="isRestaurantTenant"
-    />
-
-    <!-- 餐饮业态: Gold 全量营收分析 (门店排行 + 渠道占比), 取代通用 schema-driven
-         模板卡 — 后者对青花椒误选"星级分"显示累计 SUM bug 且老板不关心 (May 29 2026,
-         per 合理性分析: 营收类指标老板每天必看, 星级评价稀疏过时降级)。制造业仍用模板卡。 -->
-    <RestaurantGoldGrid
-      v-if="isRestaurantTenant"
-      :factory-id="factoryId || ''"
-      :date-range="dateRange"
-    />
-    <!-- Week 6 Template Surfacing: show analysis results for this page -->
-    <!-- demo 租户隐藏: 无 xlsx 上传时模板分析是空占位卡, 路演不展示 -->
-    <TemplateGrid v-else-if="!isDemoTenant" page-key="dashboard" :factory-id="factoryId || ''" />
+    <TemplateGrid v-if="!isDemoTenant" page-key="dashboard" :factory-id="factoryId || ''" />
 
     <!-- Day 8 数据织网 Sub-Project A: bottom CTA prompting users to unlock
          capability-gated cards by uploading more comprehensive data -->

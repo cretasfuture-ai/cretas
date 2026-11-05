@@ -109,24 +109,9 @@ const SCREENS: ScreenSpec[] = [
     removedBinding: 'onChangeText={setRequiredDeliveryDate}',
   },
   {
-    name: '档口报货 — 希望到货日',
-    file: 'screens/restaurant/requisition/ChefRequisitionCreateScreen.tsx',
-    fingerprints: ['purchaseRequisitionApiClient', '档口报货', 'STALL_OPTIONS'],
-    fields: [
-      {
-        anchor: 'testID="chef-requisition-expected-date-picker"',
-        marker: 'value={expectedDate}',
-        a11yLabel: 'accessibilityLabel="选择希望到货日"',
-        locksWhileSubmitting: true,
-      },
-    ],
-    writeBack: /setExpectedDate\(formatDate\(/,
-    removedBinding: 'onChangeText={setExpectedDate}',
-  },
-  {
     name: '供应商送货录入 — 送货日期',
-    file: 'screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen.tsx',
-    fingerprints: ['supplierApiClient', '保存为待验收草稿', 'ocrPhotoUri'],
+    file: 'screens/inventory/supplier-delivery/SupplierDeliveryCreateScreen.tsx',
+    fingerprints: ['inventorySupplierDeliveryApiClient', '保存为待验收草稿', 'ocrPhotoUri'],
     fields: [
       {
         anchor: 'testID="supplier-delivery-date-picker"',
@@ -348,22 +333,22 @@ describe('闸: App 端所有日期字段都改成滚轮选, 不许手打', () =>
   // 形态 D′: 同一个东西有两份它一定会漂 —— 而这次**抽得成一份**,
   // 所以闸钉的不是「N 份逐字一致」, 是「只有一处定义 + 全部 import」。
   // ============================================================
-  describe('日期 helper 只有一处真源, 六个屏一份副本都不许留', () => {
+  describe('日期 helper 只有一处真源, 五个屏一份副本都不许留', () => {
     const ALL_COPIES = [
       'screens/warehouse/inbound/WHReceiptCreateScreen.tsx', // 范例屏, 本次没动
       ...SCREENS.map((s) => s.file),
     ];
 
-    it('仪器自检: 六个屏文件都真读到了(读错路径会让下面的阴性断言全部假绿)', () => {
-      expect(ALL_COPIES.length).toBe(6);
-      expect(new Set(ALL_COPIES).size).toBe(6);
-      // 阳性对照: 六个文件都读得到且非空(读错路径时下面的阴性断言会全部假绿)
+    it('仪器自检: 五个屏文件都真读到了(读错路径会让下面的阴性断言全部假绿)', () => {
+      expect(ALL_COPIES.length).toBe(5);
+      expect(new Set(ALL_COPIES).size).toBe(5);
+      // 阳性对照: 五个文件都读得到且非空(读错路径时下面的阴性断言会全部假绿)
       for (const f of ALL_COPIES) {
         expect(read(f).length).toBeGreaterThan(500);
       }
     });
 
-    it('🔴 共享处各只有一份定义, 六个屏一份都不许再有', () => {
+    it('🔴 共享处各只有一份定义, 五个屏一份都不许再有', () => {
       const shared = read('utils/formatters.ts');
       // 共享处: 各恰好一处。⛔ 必须带左括号: formatDateSlash / formatDateTime /
       //    formatDateTimeFull 都以 'export function formatDate' 开头, 不带括号数出来是 4。

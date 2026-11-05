@@ -76,7 +76,6 @@ const BASELINE: ReadonlySet<string> = new Set([
   'views/scheduling/index.vue :: dashboard.todaySchedules',
   'views/scheduling/realtime/index.vue :: dashboard.lineStats',
   'views/scheduling/realtime/index.vue :: dashboard.todaySchedules',
-  'views/smart-bi/RestaurantV2Dashboard.vue :: reviewStats.lastUpload',
 ]);
 
 function walk(dir: string, ext: string, out: string[] = []): string[] {

@@ -84,11 +84,6 @@ import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
 import { sanitizeCustomerAiText } from './components/chat/customerAiText';
 import { buildJavaIntentChartOption } from './components/chat/javaIntentChartAdapter';
-import {
-  inferOwnerActionScenario,
-  isOwnerActionFollowupText,
-} from './restaurantOwnerActionRegistry';
-import { getRestaurantRoleExperience } from '@/views/restaurant/restaurantRoleExperience';
 import FactoryAnalysisChat from './FactoryAnalysisChat.vue';
 
 // Render markdown content safely
@@ -745,7 +740,7 @@ function inferDomainFromFilename(name: string): string {
 // P1-B: For RESTAURANT tenants, the quick-question section is replaced by the
 // grouped catalog (rendered separately in the template). This flat list is used
 // as a fallback for non-restaurant tenants and the autocomplete list.
-const isRestaurantTenant = computed(() => authStore.businessDomain === 'RESTAURANT');
+const isRestaurantTenant = computed(() => false);
 /** Factory-only free-question analysis is an explicit child mode. Generic AI
  * chat remains untouched for the normal query tab and for restaurant tenants. */
 const isFactoryAnalysisMode = computed(() => route.query.mode === 'factory' && !isRestaurantTenant.value);
@@ -757,7 +752,7 @@ const ownerActionSessionId = ref('');
 const currentOwnerActionScenario = ref('');
 const pendingOwnerActionScenario = ref('');
 const showRestaurantMoreQuestions = ref(false);
-const restaurantRoleExperience = computed(() => getRestaurantRoleExperience(permissionStore.currentRole));
+const restaurantRoleExperience = computed(() => ({ roleLabel: '工厂', ai: { primaryQuestions: [] as string[], moreGroups: [] as Array<{ questions: string[] }>, placeholder: '输入您的问题', title: 'AI 助手', description: '' } }));
 const restaurantPrimaryQuestions = computed(() => restaurantRoleExperience.value.ai.primaryQuestions);
 const restaurantMoreQuestionGroups = computed(() => restaurantRoleExperience.value.ai.moreGroups);
 const restaurantMoreQuestionCount = computed(() => restaurantMoreQuestionGroups.value
@@ -767,8 +762,7 @@ function shouldSendOwnerActionContext(query: string, analysisContinuation = fals
   if (!isRestaurantTenant.value) return false;
   if (analysisContinuation) return false;
   const text = query.trim();
-  if (inferOwnerActionScenario(text)) return true;
-  return Boolean((ownerActionSessionId.value || pendingOwnerActionScenario.value) && isOwnerActionFollowupText(text));
+  return false;
 }
 
 function ownerActionFollowups(items?: string[], scenario?: string): Array<{ label: string; question: string; ownerActionScenario?: string }> {
@@ -1395,13 +1389,13 @@ async function tryJavaIntentChat(
     // AI 读写分离: 操作 tab 用独立 session (咨询会话不得污染操作 slot-filling)。
     const isOperateTab = activeAiTab.value === 'operate' && hasAnyWrite.value;
     const analysisContinuation = !isOperateTab && isRestaurantAnalysisContinuation(query);
-    const inferredOwnerActionScenario = analysisContinuation ? '' : inferOwnerActionScenario(query);
+    const inferredOwnerActionScenario = '';
     const pendingScenario = pendingOwnerActionScenario.value;
     const ownerActionQuery = shouldSendOwnerActionContext(query, analysisContinuation);
-    const followupScenario = isOwnerActionFollowupText(query) ? currentOwnerActionScenario.value : '';
+    const followupScenario = '';
     const ownerActionScenario = pendingScenario || inferredOwnerActionScenario || followupScenario || undefined;
     const ownerActionSessionForRequest = (
-      pendingScenario || isOwnerActionFollowupText(query)
+      pendingScenario
     ) ? (ownerActionSessionId.value || undefined) : undefined;
     const intentSessionForRequest = isOperateTab
       ? (operateSessionId.value || (operateSessionId.value = createChatSessionId()))

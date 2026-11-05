@@ -66,7 +66,6 @@ const BASELINE: Record<string, [string, string]> = {
   // 「菜单 ∩ router」交集里，本闸的棘轮检测会正确判定这条基线已过期，所以删掉，
   // ⛔ 不留着当免检条目 (与 08-28 warehouse/semi-finished 那条同一处理方式)。
   '/rd/samples': ['研发样品', '研发样品管理'],
-  '/restaurant/admin/etl-status': ['ETL 状态', '餐饮 ETL 状态'],
   '/smart-bi/analysis': ['AI 问答 / 数据分析', '智能数据分析'],
   '/smart-bi/query-templates': ['查询模板', '查询模板管理'],
   '/smart-bi/upload': ['Excel 上传', 'Excel上传'],

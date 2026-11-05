@@ -18,7 +18,6 @@ import {
   type UserModuleAccessView,
 } from '@/api/permissionApi';
 import { PRODUCTION_MODULE_REGISTRY, resolveModuleRegistryItem } from '@/config/moduleRegistry';
-import { DEPARTMENTS, DEPARTMENT_ORDER } from '@/views/restaurant/departments/departmentConfig';
 import { factoryViewContext } from './platformFactoryContext';
 
 // 权限矩阵 - 定义每个角色对每个模块的权限
@@ -89,9 +88,9 @@ function weakerOf(a: PermissionLevel, b: PermissionLevel): PermissionLevel {
  * departmentConfig.DEPARTMENTS 信息最全（key / module / 标题 / KPI / 页面入口），
  * 所以它是权威；这里派生。菜单与路由由契约测试钉住不许漂。
  */
-export const RESTAURANT_DEPARTMENT_MODULES = DEPARTMENT_ORDER.map(
-  (key) => DEPARTMENTS[key].module,
-) as readonly string[];
+export const RESTAURANT_DEPARTMENT_MODULES = [
+  'restaurantOps', 'restaurantMarketing', 'restaurantHr', 'restaurantFinance', 'restaurantProcurement',
+] as const;
 
 const PERMISSION_MATRIX: Record<string, ModulePermissions> = {
   // Level 0 - 工厂总监 (最高权限，全模块读写)

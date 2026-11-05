@@ -10,9 +10,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Icon } from 'react-native-paper';
 import { useTranslation } from 'react-i18next';
 import { FAManagementStackParamList } from '../../../types/navigation';
-import { useAuthStore } from '../../../store/authStore';
 import { useFactoryFeatureStore } from '../../../store/factoryFeatureStore';
-import { isRestaurant } from '../../../utils/factoryType';
 
 type NavigationProp = NativeStackNavigationProp<FAManagementStackParamList, 'FAManagement'>;
 
@@ -38,8 +36,6 @@ function GridItem({ icon, title, color, onPress, testID }: GridItemProps) {
 export function FAManagementScreen() {
   const navigation = useNavigation<NavigationProp>();
   const { t } = useTranslation('home');
-  const user = useAuthStore(state => state.user);
-  const isRestaurantMode = isRestaurant(user);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -77,119 +73,9 @@ export function FAManagementScreen() {
           </View>
         </View>
 
-        {/* 餐饮运营 (restaurant mode only) */}
-        {isRestaurantMode && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('management.restaurantOps', '餐饮运营')}</Text>
-          <View style={styles.grid}>
-            <GridItem
-              icon="food"
-              title={t('management.recipeManagement', '配方管理')}
-              color="#FF6B35"
-              onPress={() => navigation.navigate('RecipeList')}
-            />
-            <GridItem
-              icon="clipboard-arrow-down"
-              title={t('management.requisitionCreate', '新建领料')}
-              color="#1B65A8"
-              onPress={() => navigation.navigate('RequisitionCreate')}
-            />
-            <GridItem
-              icon="clipboard-check"
-              title={t('management.requisitionApproval', '领料审批')}
-              color="#388e3c"
-              onPress={() => navigation.navigate('RequisitionApproval')}
-            />
-            <GridItem
-              icon="delete-alert"
-              title={t('management.wastageRecords', '损耗记录')}
-              color="#FF5630"
-              onPress={() => navigation.navigate('WastageList')}
-            />
-            <GridItem
-              icon="clipboard-text-outline"
-              title={t('management.stocktaking', '盘点管理')}
-              color="#FFAB00"
-              onPress={() => navigation.navigate('StocktakingList')}
-            />
-            <GridItem
-              icon="clipboard-edit-outline"
-              title={t('management.chefRequisition', '报货追踪')}
-              color="#1B65A8"
-              testID="fa-chef-requisition-btn"
-              onPress={() => navigation.navigate('ChefRequisitionList')}
-            />
-            <GridItem
-              icon="truck-check"
-              title={t('management.supplierDelivery', '待验收入库')}
-              color="#409eff"
-              testID="fa-supplier-delivery-btn"
-              onPress={() => navigation.navigate('SupplierDeliveryList')}
-            />
-          </View>
-        </View>
-        )}
-
-        {/* 业务管理 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('management.businessManagement')}</Text>
-          <View style={styles.grid}>
-            <GridItem
-              icon="cube-outline"
-              title={isRestaurantMode ? t('management.dishManagement', '菜品管理') : t('management.productTypeManagement')}
-              color="#1890ff"
-              onPress={() => navigation.navigate('ProductTypeManagement')}
-            />
-            <GridItem
-              icon="package-variant"
-              title={isRestaurantMode ? t('management.ingredientTypeManagement', '食材类型') : t('management.materialTypeManagement')}
-              color="#eb2f96"
-              onPress={() => navigation.navigate('MaterialTypeManagement')}
-            />
-            {/* T125: 転换率配置入口已移除 — 后端 API/fallback 仍保留 (F001等BomExpansionService依赖) */}
-            <GridItem
-              icon="cog-transfer-outline"
-              title={t('management.workProcesses', '工序管理')}
-              color="#5b8def"
-              onPress={() => navigation.navigate('WorkProcessList')}
-            />
-            <GridItem
-              icon="format-list-numbered"
-              title={t('management.productWorkProcesses', '产品工序配置')}
-              color="#36cfc9"
-              onPress={() => navigation.navigate('ProductWorkProcessConfig')}
-            />
-          </View>
-        </View>
-
-        {/* 供应链管理 */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t('management.supplyChainManagement')}</Text>
-          <View style={styles.grid}>
-            <GridItem
-              icon="truck-delivery"
-              title={t('management.supplierManagement')}
-              color="#13c2c2"
-              onPress={() => navigation.navigate('SupplierManagement')}
-            />
-            <GridItem
-              icon="store"
-              title={t('management.customerManagement')}
-              color="#f5222d"
-              onPress={() => navigation.navigate('CustomerManagement')}
-            />
-            <GridItem
-              icon="truck"
-              title={t('management.shipmentManagement')}
-              color="#faad14"
-              onPress={() => navigation.navigate('ShipmentManagement')}
-            />
-          </View>
-        </View>
-
         {/* 进销存管理 */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{isRestaurantMode ? t('management.storeInventory', '门店进销存') : t('management.inventoryManagement', '进销存管理')}</Text>
+          <Text style={styles.sectionTitle}>{t('management.inventoryManagement', '进销存管理')}</Text>
           <View style={styles.grid}>
             <GridItem
               icon="cart-arrow-down"
@@ -205,7 +91,7 @@ export function FAManagementScreen() {
             />
             <GridItem
               icon="package-variant-closed"
-              title={isRestaurantMode ? t('management.semiFinishedGoods', '半成品库存') : t('management.finishedGoods', '成品库存')}
+              title={t('management.finishedGoods', '成品库存')}
               color="#722ed1"
               onPress={() => navigation.navigate('FinishedGoodsList')}
             />

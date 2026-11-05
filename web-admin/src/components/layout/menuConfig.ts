@@ -1,10 +1,4 @@
 import type { ModuleName } from '@/store/modules/permission';
-import {
-  RESTAURANT_ALL_ROLES,
-  RESTAURANT_DATA_STEWARD_ROLES,
-  RESTAURANT_DECISION_ROLES,
-} from '@/views/restaurant/restaurantRoleExperience';
-
 // 菜单配置
 export interface MenuItem {
   path: string;
@@ -12,8 +6,6 @@ export interface MenuItem {
   icon: string;
   module: ModuleName;
   roles?: string[];
-  /** 仅 factoryType=RESTAURANT 时叠加的角色白名单，不影响工厂同一路由。 */
-  restaurantRoles?: string[];
   hideForFactoryTypes?: string[];
   children?: MenuItem[];
   groupLabel?: string;
@@ -25,10 +17,6 @@ export interface MenuItem {
 
 const PLATFORM_ADMIN_ONLY = ['platform_admin'];
 const FACTORY_ASSEMBLY_ROLES = ['platform_admin'];
-const RESTAURANT_ADMIN_ROLES = ['factory_super_admin', 'platform_admin', 'permission_admin'];
-const RESTAURANT_ANALYTICS_ALL = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_ALL_ROLES];
-const RESTAURANT_ANALYTICS_DECISION = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_DECISION_ROLES];
-const RESTAURANT_ANALYTICS_STEWARDS = [...RESTAURANT_ADMIN_ROLES, ...RESTAURANT_DATA_STEWARD_ROLES];
 
 // 财务主管专用菜单 - 简化版
 // WS4: 财务看板/财务分析/销售分析 合并为单一「经营分析」hub (财务/销售/趋势/KPI tab)。
@@ -58,8 +46,6 @@ export const financeManagerMenu: MenuItem[] = [
   //   restaurantFinance, 路径在 /restaurant/ 下), 却出现在工厂租户的财务菜单里
   //   ⇒ owner 实测「答案都没有」—— 不是 403, 是工厂租户上**根本没有这类数据**。
   //   ▎「打不开」和「打开了但是空的」是两件事, 修法完全不同。
-  { path: '/restaurant/supplier-reconciliation', title: '供应商月对账', icon: 'Money', module: 'finance', hideForFactoryTypes: ['FACTORY'] },
-  { path: '/restaurant/cost-attribution', title: '成本归因', icon: 'Histogram', module: 'finance', hideForFactoryTypes: ['FACTORY'] },
   // 工厂财务只保留本职工作台。销售/采购审批统一在个人 OA，财务菜单不再重复挂审批索引。
   { path: '/finance/ar-ap', title: '应收应付', icon: 'Wallet', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/adjustments', title: '调整审批', icon: 'Checked', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
@@ -134,7 +120,6 @@ const rawMenuConfig: MenuItem[] = [
   //    就等于顺手把研发暴露给餐饮租户 —— 这里保持原可见性不变。
   {
     path: '/rd', title: '研发管理', icon: 'Aim', module: 'rd',
-    hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/rd/samples', title: '研发样品', icon: '', module: 'rd' },
       { path: '/rd/converted', title: '已转样品库', icon: '', module: 'rd' },
@@ -147,7 +132,6 @@ const rawMenuConfig: MenuItem[] = [
     // UX P2-5 曾把"研发管理"并进来(理由: 它只有 1 条, 减少顶级菜单);
     // 2026-09-01 owner 拍板 A2 又拆回独立组 —— 理由见 /rd 组上的注释。
     path: '/production', title: '生产管理', icon: 'Operation', module: 'production',
-    hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/production/plans', title: '生产计划', icon: '', module: 'production', groupLabel: '生产过程' },
       { path: '/production/shortage-cases', title: '缺料异常', icon: '', module: 'production' },
@@ -246,8 +230,7 @@ const rawMenuConfig: MenuItem[] = [
       // (router redirect 保书签，见 views/production/process-hub/index.vue)。
       // ⛔ 只搬菜单入口/路由挂载点，不碰 WorkProcess 实体/Service/DTO (与在飞的
       // FEATURE-F006-R2-WORKPROCESS-DEDUP-001 不冲突，那条任务锁的是后端代码)。
-      { path: '/production/process-hub', title: '工序', icon: '', module: 'production',
-        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/production/process-hub', title: '工序', icon: '', module: 'production' },
       // 调料维护已并入产品-工序配置画布的「辅料 cell」；旧路由仅作兼容重定向
       // T125: 转换率配置菜单入口早已隐藏 — 后端 API/表/fallback 仍保留 (F001等老工厂
       // BomExpansionService 依赖)。2026-08-05 拍板转换率不再往画布搬, 维护走 API/DB。
@@ -282,20 +265,17 @@ const rawMenuConfig: MenuItem[] = [
       // 食品 DAG 缺口 09: 与财务管理 → 成本差异同一页, 生产经理从这里进
       { path: '/production/cost-variance', title: '成本差异', icon: '', module: 'production' },
       { path: '/production/cost-deviation-cases', title: '成本损耗异常', icon: '', module: 'production' },
-      { path: '/production-analytics/cost-summary', title: '成本汇总', icon: '', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT', 'FACTORY'] },
+      { path: '/production-analytics/cost-summary', title: '成本汇总', icon: '', module: 'analytics' },
     ]
   },
   {
     path: '/analytics/indicators', title: '经营指标', icon: 'Histogram', module: 'analytics',
     roles: ['factory_super_admin', 'quality_manager', 'finance_manager'],
-    hideForFactoryTypes: ['RESTAURANT'],
   },
   {
     // P1-5: restaurants 默认不见 "仓储管理" (食材库存在 /restaurant/stocktaking)
     // UX P2-5: 合并"调拨管理" 1-item 组到这里,减少顶级菜单数
     path: '/warehouse', title: '仓储管理', icon: 'Box', module: 'warehouse',
-    hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/warehouse/unordered-inbound-applications', title: '无订单入库申请', icon: '', module: 'warehouse', groupLabel: '仓储作业', badgeKey: 'unorderedInbound' },
       { path: '/warehouse/materials', title: '入库任务与批次', icon: '', module: 'warehouse', badgeKey: 'warehouseReceiving' },
@@ -327,7 +307,6 @@ const rawMenuConfig: MenuItem[] = [
   {
     // P1-5: restaurants 默认不见 "质量管理" (食品安全走 食检,不是 ISO 质检)
     path: '/quality', title: '质量管理', icon: 'Checked', module: 'quality',
-    hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/quality/inspections', title: '质检记录', icon: '', module: 'quality', groupLabel: '质量检验' },
       // 缺口 11: 需检产品产出待检 → 质检员在这里放行/判不合格
@@ -361,7 +340,6 @@ const rawMenuConfig: MenuItem[] = [
     // P1-5 fix: restaurants 默认不见 "采购管理" (进货走 /restaurant/requisitions)
     // Canvas 管理员可细粒度开启 purchase_order 码解锁.
     path: '/procurement', title: '采购管理', icon: 'ShoppingCart', module: 'procurement',
-    hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/procurement/requisitions/my', title: '我的请购', icon: '', module: 'procurement', groupLabel: '请购流程',
         roles: ['factory_super_admin', 'platform_admin', 'procurement_manager', 'department_admin', 'permission_admin',
@@ -389,8 +367,7 @@ const rawMenuConfig: MenuItem[] = [
       // S4 缺料异常: 销售看订单为什么还没排上 / 交期会不会延误, 与生产组同一页面, 本组自己的路由 (面包屑=销售管理)
       { path: '/sales/shortage-cases', title: '缺料异常', icon: '', module: 'sales' },
       { path: '/sales/delivery-risks', title: '交付风险', icon: '', module: 'sales' },
-      { path: '/sales/shipments', title: '出货记录', icon: '', module: 'sales',
-        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/sales/shipments', title: '出货记录', icon: '', module: 'sales' },
       // T-RTA fix (audit B2 BLOCKER 2026-05-13): /sales/returns route was added by
       // PR #549 but NEVER surfaced in sidebar — customer service / finance roles
       // had no menu entry, only "申请退货" button on individual sales order detail.
@@ -399,14 +376,12 @@ const rawMenuConfig: MenuItem[] = [
       // #739/#746: 销售方向付款申请 (退款/返利/销售费用) — roles 镜像 router/index.ts SalesPaymentRequests
       { path: '/sales/payment-requests', title: '销售付款申请', icon: '', module: 'sales',
         roles: ['factory_super_admin', 'platform_admin', 'sales_manager', 'salesperson', 'finance_manager', 'cashier'] },
-      { path: '/sales/vehicles', title: '车辆字典', icon: '', module: 'sales', groupLabel: '销售配置',
-        hideForFactoryTypes: ['RESTAURANT'] }
+      { path: '/sales/vehicles', title: '车辆字典', icon: '', module: 'sales', groupLabel: '销售配置' }
     ]
   },
   {
     // P1-5: restaurants 默认不见 "人事管理" (小连锁常无 HR 系统,Canvas 可开启 hr_employee)
     path: '/hr', title: '人事管理', icon: 'User', module: 'hr',
-    hideForFactoryTypes: ['RESTAURANT'],
     children: [
       // 2026-09-01 owner 拍板: 账号管理**留在人事管理**, 三处不一致改**面包屑**去跟随它
       // (router 的 meta.breadcrumbParent, 见 router/index.ts)。
@@ -435,7 +410,6 @@ const rawMenuConfig: MenuItem[] = [
   {
     // P1-5: restaurants 默认不见 "设备管理" (manufacturing 专属)
     path: '/equipment', title: '设备管理', icon: 'Monitor', module: 'equipment',
-    hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/equipment/list', title: '设备列表', icon: '', module: 'equipment', groupLabel: '设备台账' },
       { path: '/equipment/maintenance', title: '维护记录', icon: '', module: 'equipment', groupLabel: '维护监控' },
@@ -446,7 +420,6 @@ const rawMenuConfig: MenuItem[] = [
     // P1-5: restaurants 默认不见 "财务管理" (SmartBI 有 /smart-bi/finance 简化版,
     // manufacturing 的 ar-ap/invoices/sku-margin 对餐饮无意义)
     path: '/finance', title: '财务管理', icon: 'Money', module: 'finance',
-    hideForFactoryTypes: ['RESTAURANT'],
     children: [
       { path: '/finance/adjustments', title: '调整审批', icon: '', module: 'finance', groupLabel: '审核队列' },
       { path: '/finance/costs', title: '财务概览', icon: '', module: 'finance', groupLabel: '财务核算' },
@@ -488,13 +461,11 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/system/features', title: '功能模块配置', icon: '', module: 'system' },
       // 2026-10-06 owner: 一线角色 (操作员/出成率录入员/仓库员/质检员) 的 AI 写操作
       //   默认只开日常工作, 其余由工厂管理员在这里逐个开放。餐饮租户没有这四个角色 ⇒ 隐藏。
-      { path: '/system/ai-frontline-grants', title: '一线角色 AI 操作权限', icon: '', module: 'system',
-        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/system/ai-frontline-grants', title: '一线角色 AI 操作权限', icon: '', module: 'system' },
       // Apr 18 2026 bug #48: Canvas 编辑器 router 限制 roles, sidebar 跟上不让 dispatcher/
       // 其他 system:read 角色看到菜单 (否则点进去 /403 体验差)
       { path: '/canvas-editor', title: 'Canvas 配置编辑器', icon: '', module: 'system', roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
-      { path: '/system/badge-generator', title: '员工工牌生成', icon: '', module: 'system',
-        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/system/badge-generator', title: '员工工牌生成', icon: '', module: 'system' },
       // T123: 计量单位字典 — 客户要求"留个给我自己修改"的单位配置模块
       // 后端: GET/POST/PUT/DELETE /api/mobile/{factoryId}/system-config/units
       { path: '/unit-dictionary', title: '计量单位字典', icon: '', module: 'system',
@@ -503,8 +474,7 @@ const rawMenuConfig: MenuItem[] = [
       //   而此前【没有任何界面能查】。审计记录查不到, 等于没有审计。
       { path: '/system/operation-log', title: '操作日志', icon: '', module: 'system' },
       // 2026-10-24 隐私条款第六、十一条对客户开启: 工艺保密管理 / 平台人员访问记录
-      { path: '/system/process-secret', title: '工艺保密', icon: '', module: 'system',
-        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/system/process-secret', title: '工艺保密', icon: '', module: 'system' },
       { path: '/system/platform-access-log', title: '平台访问记录', icon: '', module: 'system',
         roles: ['factory_super_admin', 'permission_admin'] },
       // 2026-10-27 按工厂备份套餐: 工厂只读看本厂记录 / 平台开通与修改
@@ -522,8 +492,6 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/system/tenant-backups', title: '工厂数据备份', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/skill-tools', title: 'Skill/Tool治理', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/llm-usage', title: 'LLM 用量监控', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
-      // 卡5 (2026-07-28 飞轮回接方案 P4 批): 飞轮运营台 5 个子页, 单一菜单入口跳总览, 页内 tab 切换其余 4 页.
-      { path: '/system/ai-flywheel', title: 'AI 飞轮运营台', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       // 标签识别诊断 / 单盒标签精修 —— 2026-08-27 补入口。
       //   这两个平台侧排障页此前【菜单零登记】, 只能手打 URL; 而它们服务的子系统
       //   是生产上数据量最大的之一: 托盘裁图 11409 / 标注 9583 / 照片 5850 / 任务 1495。
@@ -536,8 +504,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/system/pos', title: 'POS集成', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       { path: '/system/smartbi-config', title: 'SmartBI配置', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       // UX P2-5: 行为校准 (1 项) 合并入系统管理下, 不单做顶级组
-      { path: '/calibration/list', title: '行为校准', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY,
-        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/calibration/list', title: '行为校准', icon: '', module: 'system', roles: PLATFORM_ADMIN_ONLY },
       // 餐饮 Phase A A-3 Task 3.5: data quality queue admin page
       { path: '/system/data-quality-queue', title: '数据质量队列', icon: '', module: 'system',
         roles: PLATFORM_ADMIN_ONLY },
@@ -555,15 +522,15 @@ const rawMenuConfig: MenuItem[] = [
     path: '/scheduling', title: '智能调度', icon: 'Calendar', module: 'scheduling',
     children: [
       { path: '/scheduling/logistics/workbench', title: '排线工作台', icon: '', module: 'scheduling', groupLabel: '日常调度',
-        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+        hideForFactoryTypes: ['FACTORY'] },
       { path: '/scheduling/logistics/records', title: '调度记录', icon: '', module: 'scheduling',
-        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+        hideForFactoryTypes: ['FACTORY'] },
       { path: '/scheduling/logistics/orders', title: '门店与订单', icon: '', module: 'scheduling', groupLabel: '基础资料',
-        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+        hideForFactoryTypes: ['FACTORY'] },
       { path: '/scheduling/logistics/resources', title: '车辆与司机', icon: '', module: 'scheduling',
-        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+        hideForFactoryTypes: ['FACTORY'] },
       { path: '/scheduling/logistics/stores', title: '门店库', icon: '', module: 'scheduling',
-        hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+        hideForFactoryTypes: ['FACTORY'] },
       { path: '/scheduling/overview', title: '调度中心', icon: '', module: 'scheduling', groupLabel: '工厂智能调度',
         hideForFactoryTypes: ['LOGISTICS'] },
       { path: '/scheduling/plans', title: '调度计划', icon: '', module: 'scheduling',
@@ -576,95 +543,6 @@ const rawMenuConfig: MenuItem[] = [
         hideForFactoryTypes: ['LOGISTICS'] },
       { path: '/scheduling/settings', title: '排产设置', icon: '', module: 'scheduling', groupLabel: '调度配置',
         hideForFactoryTypes: ['LOGISTICS'] }
-    ]
-  },
-  {
-    // UX 2026-06-02 IA v2: 餐饮组重组为 3 层 (深度分析/日常录入/数据与系统)。
-    // 运营总览移除 (Excel 浏览器病症); 经营驾驶舱复用「数据与分析」组 /smart-bi/dashboard
-    // (业态自适应, 不重复造); 菜品四象限+毛利合并为 菜品分析双tab; 点评口碑保留显性入口。
-    // spec: 2026-06-01-restaurant-web-admin-ia-redesign-design.md v2。
-    path: '/restaurant', title: '餐饮运营', icon: 'KnifeFork', module: 'dashboard',
-    // 2026-07-31: 补上 owner / purchaser / chef。`roles` 是**允许式白名单**
-    // (AppSidebar.canSeeMenuItem: 写了就一票否决), 此前这三个角色即使模块权限
-    // 给对了也看不见餐饮组 —— 权限有两个承载点, #2082/#2083 只改了矩阵那一个。
-    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'hr_admin', 'restaurant_purchaser', 'restaurant_chef', 'warehouse_manager', 'procurement_manager', 'finance_manager', 'sales_manager'],
-    hideForFactoryTypes: ['FACTORY'],
-   
-    children: [
-      // -- 部门驾驶舱 (2026-07-31) --
-      // 不写 roles: 由 module 权限门控即可(四个部门键各自决定谁能看见), 再叠一层
-      // 角色白名单只会变成第二处要同步的地方 —— 那正是 #2084 修的那个坑。
-      { path: '/restaurant/ops', title: '运营', icon: 'Bowl', module: 'restaurantOps', groupLabel: '部门驾驶舱' },
-      { path: '/restaurant/marketing', title: '市场', icon: 'TrendCharts', module: 'restaurantMarketing' },
-      // 采购 2026-08-06 独立成第五个部门 (Steve 拍板)。同样不写 roles, 由 module 门控。
-      { path: '/restaurant/procurement', title: '采购', icon: 'ShoppingCart', module: 'restaurantProcurement' },
-      { path: '/restaurant/hr', title: '人事', icon: 'User', module: 'restaurantHr' },
-      { path: '/restaurant/staffing', title: '预测排班', icon: 'Calendar', module: 'restaurantHr',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'hr_admin'] },
-      { path: '/restaurant/finance', title: '财务', icon: 'Money', module: 'restaurantFinance' },
-      // ── 运营 ────────────────────────────────────────────────────
-      // 后厨供应链: 领料 / 损耗 / 盘点 / 配方
-      { path: '/restaurant/requisitions', title: '领料管理', icon: '', module: 'restaurantOps', groupLabel: '运营' },
-      { path: '/restaurant/wastage', title: '损耗管理', icon: '', module: 'restaurantOps' },
-      { path: '/restaurant/stocktaking', title: '盘点管理', icon: '', module: 'restaurantOps' },
-      { path: '/restaurant/recipes', title: '配方管理', icon: '', module: 'restaurantOps' },
-      // ⚠️ 下面两项**刻意不改 module**: 它们跨工厂/餐饮两侧使用
-      // (warehouse_manager / procurement_manager 也在用, 而这些角色 restaurant='-')。
-      // 改成 restaurantOps 会断掉他们的访问 —— 本轮只归组, 标签留待单独评估。
-      // ⛔ 这里曾写着「2026-08-06 Steve 拍板: 采购职责并入市场(sales_manager),
-      //    厨师长/餐饮采购退役」并据此摘掉了 restaurant_purchaser —— **那一侧是败的**。
-      //    同日更晚的 V20261029_58/_63 把采购立为**第五个部门**, 载体角色就是
-      //    restaurant_purchaser, 权威 departmentConfig.ts 也把本页列为采购部门的
-      //    第一个动作。两处口径打架, 用户可见后果是采购部长点自己部门的动作打不开。
-      //    2026-08-07 按五部门口径收口, 把它加回来。
-      // module 仍不改(见上方 ⚠️): sales_manager / restaurant_purchaser 都有 dashboard:r。
-      { path: '/restaurant/supplier-delivery', title: '供应商进货录入', icon: '', module: 'dashboard',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'sales_manager', 'restaurant_purchaser', 'warehouse_manager', 'procurement_manager'] },
-      // ⚠️ 本项 module='procurement' 而 sales_manager **没有** procurement 权限,
-      // 所以即使加进 roles 也会被 module 闸挡在前面(守卫先查 module 后查 roles)。
-      // 2026-09-01 owner 拍板 B1, 上面那个「待定」由此了结: **保留**, 但换成餐饮自己的
-      // 地址 /restaurant/purchase-plan(同一个页面组件, 见 router/index.ts)。
-      // ⛔ 没有改走 /restaurant/requisitions —— 那条已经在本组里了, 标题是「领料管理」,
-      //    跟报货是两回事, 当年那个备选方案实际上不可用。
-      // Why 要拆: 原来两侧共用 /procurement/requisitions/my, 而面包屑的上一级是**静态的
-      // 只有一个值** ⇒ 给餐饮侧写对就把工厂侧写错。现在工厂侧仍走 /procurement/
-      // requisitions/my(「我的请购」), 两侧各自的面包屑都对得上自己的侧边栏组。
-      // restaurant_purchaser 同样是被上面那条败的注释一起摘掉的 —— 报货/采购计划
-      // 正是采购部门的活。V20261029_64 给了它 procurement:'rw', module 闸能过。
-      { path: '/restaurant/purchase-plan', title: '报货/采购计划', icon: '', module: 'procurement',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'restaurant_manager', 'restaurant_owner', 'restaurant_purchaser', 'warehouse_manager', 'procurement_manager'] },
-
-      // ── 市场 ────────────────────────────────────────────────────
-      // 经营看板归市场: 6 KPI 里日营收/客单价/订单数三项是营收侧, 占多数。
-      { path: '/restaurant/analytics/role-kpi', title: '经营看板', icon: '', module: 'restaurantMarketing', groupLabel: '市场' },
-      { path: '/restaurant/analytics/dishes', title: '菜品分析', icon: '', module: 'restaurantMarketing' },
-      { path: '/restaurant/analytics/stores', title: '门店对比', icon: '', module: 'restaurantMarketing' },
-      { path: '/restaurant/analytics/platform', title: '平台分析', icon: 'ChatDotRound', module: 'restaurantMarketing' },
-      // 🔴 2026-08-07: 这一项此前**有路由、有组件、但没有菜单入口, 也没有任何
-      // 其它页面链接过去** —— 用户到不了。与 `/dashboard/ai-value` 同一类缺陷,
-      // 是可达性扫描扫出来的第二个。
-      // ⚠️ 我第一版写的是 module: 'restaurant'(跟随路由 meta 的板块准入),
-      // 被 `restaurantMenuRouteAlignment.spec.ts` 当场判红 —— 那条契约要求
-      // **每个餐饮功能页都挂在五个部门之一**。营销员提成属市场。
-      // 菜单可见性(restaurantMarketing)比守卫放行(restaurant)窄是可以的:
-      // 部门隔离本来就只做 UI 级防误点, 菜单是入口不是闸。
-      { path: '/restaurant/commission', title: '营销员提成', icon: '', module: 'restaurantMarketing' },
-
-      // ── 财务 ────────────────────────────────────────────────────
-      // 三项都是金额口径, 而 restaurantFinance 的准入本身就要求 PRICE_VIEW_ROLES,
-      // 所以不必再逐项写 roles 白名单 —— 少一处要同步的地方。
-      { path: '/restaurant/cost-attribution', title: '成本归因', icon: '', module: 'restaurantFinance', groupLabel: '财务' },
-      { path: '/restaurant/supplier-reconciliation', title: '供应商月对账', icon: '', module: 'restaurantFinance' },
-      { path: '/restaurant/price-anomaly', title: '价格异常预警', icon: '', module: 'restaurantFinance' },
-
-      // ── 数据与系统 ──────────────────────────────────────────────
-      // 跨部门的数据基础设施, 不归属任何业务部门 —— 归进某一个部门会让其余三个
-      // 部门的分析师找不到它。
-      { path: '/restaurant/data-completeness', title: '数据完整度', icon: '', module: 'restaurant', groupLabel: '数据与系统' },
-      { path: '/restaurant/admin/etl-status', title: 'ETL 状态', icon: '', module: 'restaurant',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] },
-      { path: '/restaurant/admin/name-resolution', title: '菜品名称匹配', icon: '', module: 'restaurant',
-        roles: ['factory_super_admin', 'platform_admin', 'permission_admin'] }
     ]
   },
   {
@@ -682,41 +560,27 @@ const rawMenuConfig: MenuItem[] = [
    
     children: [
       // ★ 主入口 (无 groupLabel, 置顶)
-      { path: '/smart-bi/dashboard', title: '经营驾驶舱', icon: 'Monitor', module: 'analytics',
-        restaurantRoles: RESTAURANT_ANALYTICS_ALL },
+      { path: '/smart-bi/dashboard', title: '经营驾驶舱', icon: 'Monitor', module: 'analytics' },
       // -- AI 探索 --
       // P3: /smart-bi/query 已合并入此页 query tab (redirect /smart-bi/query → /smart-bi/analysis?tab=query), 菜单项移除
-      { path: '/smart-bi/analysis', title: 'AI 问答 / 数据分析', icon: 'DataAnalysis', module: 'analytics', groupLabel: 'AI 探索',
-        restaurantRoles: RESTAURANT_ANALYTICS_ALL },
+      { path: '/smart-bi/analysis', title: 'AI 问答 / 数据分析', icon: 'DataAnalysis', module: 'analytics', groupLabel: 'AI 探索' },
       // -- 经营分析 --
       // WS4: 财务/销售/趋势/KPI·指标 合并为单一 hub。旧路径 (financial-dashboard/sales/
       // trends/kpi/indicator-center) 由 router redirect 保书签 → /smart-bi/analysis-hub?tab=。
-      { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics', groupLabel: '经营分析',
-        restaurantRoles: RESTAURANT_ANALYTICS_DECISION },
+      { path: '/smart-bi/analysis-hub', title: '经营分析', icon: 'TrendCharts', module: 'analytics', groupLabel: '经营分析' },
       { path: '/smart-bi/revenue-report', title: '收入管理报表', icon: 'Money', module: 'analytics',
         roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager', 'restaurant_owner'],
-        restaurantRoles: [...RESTAURANT_ANALYTICS_DECISION, 'finance_manager'],
         hideForFactoryTypes: ['FACTORY'] },
-      { path: '/smart-bi/health-report', title: 'AI 经营体检', icon: 'FirstAidKit', module: 'analytics',
-        restaurantRoles: RESTAURANT_ANALYTICS_DECISION,
-        hideForFactoryTypes: ['FACTORY'] },
-      { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
-      { path: '/analytics/supply-chain', title: '进销存总览', icon: 'Histogram', module: 'analytics',
-        hideForFactoryTypes: ['RESTAURANT'] },
+      { path: '/analytics/alert-dashboard', title: '异常预警', icon: 'Warning', module: 'analytics' },
+      { path: '/analytics/supply-chain', title: '进销存总览', icon: 'Histogram', module: 'analytics' },
       // -- 数据管理 --
-      { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理',
-        restaurantRoles: RESTAURANT_ANALYTICS_STEWARDS },
-      { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics',
-        restaurantRoles: RESTAURANT_ANALYTICS_STEWARDS },
-      { path: '/smart-bi/data-completeness', title: '数据完整度', icon: 'DataAnalysis', module: 'analytics',
-        restaurantRoles: RESTAURANT_ANALYTICS_STEWARDS },
+      { path: '/smart-bi/upload', title: 'Excel 上传', icon: 'Upload', module: 'analytics', groupLabel: '数据管理' },
+      { path: '/smart-bi/query-templates', title: '查询模板', icon: 'Tickets', module: 'analytics' },
+      { path: '/smart-bi/data-completeness', title: '数据完整度', icon: 'DataAnalysis', module: 'analytics' },
       // Phase 0: 字段映射复核 — Excel 列无法自动映射时由人工确认并写入 pin (2026-06-15)
-      { path: '/smart-bi/mapping-review', title: '字段映射复核', icon: 'EditPen', module: 'analytics',
-        restaurantRoles: RESTAURANT_ANALYTICS_STEWARDS },
+      { path: '/smart-bi/mapping-review', title: '字段映射复核', icon: 'EditPen', module: 'analytics' },
       // D-6 保守保留: 分析概览 (与驾驶舱/hub 重叠但数据源不同, P5 凭埋点再决定真删)
-      { path: '/analytics/overview', title: '分析概览', icon: 'DataAnalysis', module: 'analytics',
-        restaurantRoles: RESTAURANT_ANALYTICS_DECISION },
+      { path: '/analytics/overview', title: '分析概览', icon: 'DataAnalysis', module: 'analytics' },
       // -- AI 运维 (admin) — WS4: 收 admin 门控 (普通经营用户不需要) --
       { path: '/smart-bi/food-kb-feedback', title: '知识库反馈', icon: 'ChatDotRound', module: 'analytics', groupLabel: 'AI 运维',
         roles: ['platform_admin', 'permission_admin', 'factory_super_admin'] },
@@ -725,30 +589,6 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/smart-bi/calibration', title: '行为校准监控', icon: 'Aim', module: 'analytics', roles: ['platform_admin'] },
     ]
   },
-  {
-    // CRM P0「会员与营销」(2026-07-11): 首个 top-level 入口, 会员分析 (RFM 客群分层 +
-    // 三维散点 + 生命周期 + 会员画像). Scope-minimal: 只加这一个新顶级组, 不重排其它模块
-    // (完整 5-模块 IA 重构是后续 follow-up)。仅餐饮/demo 租户可见 — 与 revenue-report /
-    // health-report 同一套 hideForFactoryTypes + roles 白名单 (会员储值/消费金额敏感)。
-    path: '/crm', title: '会员与营销', icon: 'User', module: 'analytics',
-    hideForFactoryTypes: ['FACTORY'],
-    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
-    children: [
-      { path: '/crm/member-analysis', title: '会员分析', icon: '', module: 'analytics' },
-    ]
-  },
-  {
-    // 运营分析 (2026-07-12): 撤单稽核 + 区域坪效, 从 经营驾驶舱(RestaurantGoldGrid)
-    // 迁出的独立顶级组 (驾驶舱瘦身)。与 /crm 同一批 hybrid bullet-point analysis
-    // pattern (确定性 bullets + AI 解读 + 整页分析面板), 同一套门控 (会员储值/
-    // 撤单金额同样敏感)。Scope-minimal: 只加这一个新顶级组, 不重排其它模块。
-    path: '/ops', title: '运营分析', icon: 'Operation', module: 'analytics',
-    hideForFactoryTypes: ['FACTORY'],
-    roles: ['factory_super_admin', 'platform_admin', 'permission_admin', 'finance_manager', 'restaurant_manager'],
-    children: [
-      { path: '/ops/operations-analysis', title: '运营分析', icon: '', module: 'analytics' },
-    ]
-  }
 ];
 
 const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
@@ -770,8 +610,6 @@ const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/hr': 120,
   '/equipment': 130,
   '/restaurant': 140,
-  '/ops': 143,
-  '/crm': 145,
 };
 
 function sortTopLevelMenu(items: MenuItem[]): MenuItem[] {

@@ -10,28 +10,7 @@
  */
 import type { RouteRecordRaw } from 'vue-router';
 
-const restaurantAnalyticsRoles = [
-  'factory_super_admin',
-  'platform_admin',
-  'permission_admin',
-  'finance_manager',
-  'restaurant_manager',
-];
-
 const crmRoutes: RouteRecordRaw[] = [
-  {
-    path: 'crm/member-analysis',
-    name: 'CrmMemberAnalysis',
-    component: () => import('@/views/crm/member-analysis/index.vue'),
-    meta: {
-      requiresAuth: true,
-      title: '会员分析',
-      icon: 'User',
-      module: 'analytics',
-      roles: restaurantAnalyticsRoles,
-      hideForFactoryTypes: ['FACTORY'], // restaurant/demo tenants only
-    },
-  },
 ];
 
 export default crmRoutes;

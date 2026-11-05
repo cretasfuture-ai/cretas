@@ -20,11 +20,11 @@ import ReturnOrderListScreen from "../screens/factory-admin/inventory/ReturnOrde
 import ReturnOrderDetailScreen from "../screens/factory-admin/inventory/ReturnOrderDetailScreen";
 import PriceListScreen from "../screens/factory-admin/inventory/PriceListScreen";
 import ArApOverviewScreen from "../screens/factory-admin/inventory/ArApOverviewScreen";
-import ProcurementDeliveryConfirmScreen from "../screens/restaurant/procurement/ProcurementDeliveryConfirmScreen";
-import SupplierDeliveryDetailScreen from "../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen";
-import SupplierDeliveryListScreen from "../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen";
 import PurchaseExceptionListScreen from "../screens/factory-admin/inventory/PurchaseExceptionListScreen";
 import ShortageCasesScreen from "../screens/shared/ShortageCasesScreen";
+import SupplierDeliveryListScreen from "../screens/inventory/supplier-delivery/SupplierDeliveryListScreen";
+import SupplierDeliveryDetailScreen from "../screens/inventory/supplier-delivery/SupplierDeliveryDetailScreen";
+import PriceAnomalyApprovalScreen from "../screens/inventory/supplier-delivery/PriceAnomalyApprovalScreen";
 
 // 供应商管理
 import SupplierManagementScreen from "../screens/management/SupplierManagementScreen";
@@ -32,9 +32,23 @@ import SupplierManagementScreen from "../screens/management/SupplierManagementSc
 // 个人中心
 import ProfileStackNavigator from "./ProfileStackNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+type ProcurementPurchaseStackParamList = {
+  PurchaseOrderList: undefined;
+  PurchaseOrderCreate: undefined;
+  PurchaseOrderDetail: { orderId: string };
+  ReturnOrderList: undefined;
+  ReturnOrderDetail: { orderId: string };
+  PriceList: undefined;
+  ArApOverview: undefined;
+  SupplierDeliveryList: undefined;
+  SupplierDeliveryDetail: { noteId: string };
+  PriceAnomalyApproval: undefined;
+  PurchaseExceptionList: undefined;
+  ShortageCases: undefined;
+};
 
 const Tab = createBottomTabNavigator<any>();
-const PurchaseStack = createNativeStackNavigator<any>();
+const PurchaseStack = createNativeStackNavigator<ProcurementPurchaseStackParamList>();
 const SupplierStack = createNativeStackNavigator<any>();
 
 const TAB_COLORS = {
@@ -52,9 +66,9 @@ function PurchaseStackNavigator() {
       <PurchaseStack.Screen name="ReturnOrderDetail" component={ReturnOrderDetailScreen} />
       <PurchaseStack.Screen name="PriceList" component={PriceListScreen} />
       <PurchaseStack.Screen name="ArApOverview" component={ArApOverviewScreen} />
-      <PurchaseStack.Screen name="ProcurementDeliveryConfirm" component={ProcurementDeliveryConfirmScreen} />
       <PurchaseStack.Screen name="SupplierDeliveryList" component={SupplierDeliveryListScreen} />
       <PurchaseStack.Screen name="SupplierDeliveryDetail" component={SupplierDeliveryDetailScreen} />
+      <PurchaseStack.Screen name="PriceAnomalyApproval" component={PriceAnomalyApprovalScreen} />
       <PurchaseStack.Screen name="PurchaseExceptionList" component={PurchaseExceptionListScreen} />
       <PurchaseStack.Screen name="ShortageCases" component={ShortageCasesScreen} />
     </PurchaseStack.Navigator>
