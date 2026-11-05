@@ -43,7 +43,7 @@ public class ConfirmUrgentInsertRequest {
     @Schema(description = "客户名称")
     private String customerName;
 
-    @Schema(description = "分配的工人ID列表")
+    @Schema(description = "需核验的工人ID列表；提交时核对本厂班次和占用，不代表已预留或完成任务分配。空名单由后续排班分配")
     private List<Long> assignedWorkerIds;
 
     @Schema(description = "分配的设备ID列表")

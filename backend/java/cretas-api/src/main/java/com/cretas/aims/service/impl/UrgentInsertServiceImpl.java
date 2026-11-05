@@ -20,6 +20,7 @@ import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.DecisionAuditService;
 import com.cretas.aims.service.ImpactAnalysisService;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
+import com.cretas.aims.service.scheduling.WorkerShiftAvailabilityCheck;
 import com.cretas.aims.service.ImpactAnalysisService.*;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.PushNotificationService;
@@ -59,6 +60,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final DecisionAuditService decisionAuditService;
     private final ImpactAnalysisService impactAnalysisService;
     private final LineCapacityEquipmentCheck lineChecks;
+    private final WorkerShiftAvailabilityCheck workerShifts;
     private final ApprovalChainService approvalChainService;
     private final PushNotificationService pushNotificationService;
 
@@ -144,6 +146,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         ResourceCheckResult capacityCheck = lineChecks.checkCapacity(factoryId, request.getProductTypeId(),
                 request.getRequiredQuantity(), request.getQuantityUnit(), request.getPreferredProductionLineId(),
                 slot.getStartTime(), slot.getEndTime());
+        WorkerShiftAvailabilityCheck.Result workerCheck = checkWorkers(factoryId, slot);
 
         Map<String, Object> result = new HashMap<>();
 
@@ -202,16 +205,21 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         resourceStatus.put("capacityMessage", capacityCheck.getMessage());
         resourceStatus.put("capacityStatus", LineCapacityEquipmentCheck.status(capacityCheck));
         resourceStatus.put("capacityUnit", request.getQuantityUnit());
-        resourceStatus.put("hasEnoughWorkers", slot.hasEnoughWorkers());
-        // 时段上的人数是生成时段时按产能配置估算的, 不是考勤/排班读数 ⇒ 恒为未验证
-        resourceStatus.put("workerVerified", false);
-        resourceStatus.put("workerMessage", WORKER_UNVERIFIED_REASON);
+        resourceStatus.put("hasEnoughWorkers", workerCheck.available());
+        resourceStatus.put("workerVerified", workerCheck.verified());
+        resourceStatus.put("workerMessage", workerCheck.message());
+        resourceStatus.put("workerStatus", !workerCheck.verified() ? "MISSING"
+                : workerCheck.available() ? "READY" : "SHORTAGE");
+        // 定员沿用时段要求；可用人数来自实际班次/请假/任务，不再信生成时段时的估算快照。
+        resourceStatus.put("workerRequirementSource", "SLOT_REQUIREMENT");
+        resourceStatus.put("workerAvailabilitySource", "HR_SHIFT_AND_ASSIGNMENT");
+        resourceStatus.put("workerReservationStatus", "NOT_RESERVED");
         resourceStatus.put("requiredWorkers", slot.getRequiredWorkers());
-        resourceStatus.put("availableWorkers", slot.getAvailableWorkers());
+        resourceStatus.put("availableWorkers", workerCheck.availableWorkers());
         result.put("resourceStatus", resourceStatus);
 
         // 风险评估
-        String riskLevel = determineRiskLevel(chainImpact, materialCheck, equipmentCheck, capacityCheck, slot);
+        String riskLevel = determineRiskLevel(chainImpact, materialCheck, equipmentCheck, capacityCheck, workerCheck);
         result.put("riskLevel", riskLevel);
         result.put("riskWarnings", chainImpact.getRiskWarnings());
 
@@ -228,31 +236,69 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (!equipmentCheck.isVerified()) {
             unverifiedReasons.add(equipmentCheck.getMessage());
         }
-        unverifiedReasons.add(WORKER_UNVERIFIED_REASON);
+        if (!workerCheck.verified()) {
+            unverifiedReasons.add(workerCheck.message());
+        }
         if (!capacityCheck.isVerified()) {
             unverifiedReasons.add(capacityCheck.getMessage());
         }
         boolean resourcesVerified = unverifiedReasons.isEmpty();
         boolean definitelyShort = (materialCheck.isVerified() && !materialCheck.isAvailable())
                 || (equipmentCheck.isVerified() && !equipmentCheck.isAvailable())
-                || (capacityCheck.isVerified() && !capacityCheck.isAvailable());
+                || (capacityCheck.isVerified() && !capacityCheck.isAvailable())
+                || (workerCheck.verified() && !workerCheck.available());
         boolean isFeasible = resourcesVerified && !definitelyShort
                 && materialCheck.isAvailable() && equipmentCheck.isAvailable()
-                && slot.hasEnoughWorkers() && capacityCheck.isAvailable();
+                && workerCheck.available() && capacityCheck.isAvailable();
         result.put("isFeasible", isFeasible);
         result.put("resourcesVerified", resourcesVerified);
         result.put("unverifiedReasons", unverifiedReasons);
         result.put("feasibilityStatus", isFeasible ? "FEASIBLE" : (definitelyShort ? "INFEASIBLE" : "UNVERIFIED"));
         if (!isFeasible) {
-            result.put("infeasibleReason", buildInfeasibleReason(materialCheck, equipmentCheck, capacityCheck, slot));
+            result.put("infeasibleReason", buildInfeasibleReason(materialCheck, equipmentCheck, capacityCheck, workerCheck));
         }
 
         return result;
     }
 
-    /** 时段人数来源说明: generateInsertSlots 按产能配置估算, 未接考勤/排班。 */
+    /** 无真实核验结果时的失败说明；不得退回生成时段时的估算人数。 */
     static final String WORKER_UNVERIFIED_REASON =
-            "人员未验证: 时段人数按工厂产能配置估算, 未接考勤/排班数据";
+            "人员未验证: 未取得完整的HR班次和人员占用核验结果";
+
+    private WorkerShiftAvailabilityCheck.Result checkWorkers(String factoryId, InsertSlot slot) {
+        WorkerShiftAvailabilityCheck.Result checked = workerShifts.check(
+                factoryId, slot.getStartTime(), slot.getEndTime(), slot.getRequiredWorkers());
+        // 缺失结果绝不能退回 cached availableWorkers 或把未知当成可派。
+        return checked != null ? checked : WorkerShiftAvailabilityCheck.Result.unverified(
+                slot.getRequiredWorkers(), WORKER_UNVERIFIED_REASON);
+    }
+
+    /**
+     * 只有明确提交人员名单的请求才核验名单。空名单仍走既有建待排计划、后续分配路径；
+     * 这里不写 worker_assignments，也不把只读资格核验声称为并发预留或实际到岗。
+     */
+    private void validateSelectedWorkers(String factoryId, InsertSlot slot, ConfirmUrgentInsertRequest request) {
+        List<Long> selected = request.getAssignedWorkerIds();
+        if (selected == null || selected.isEmpty()) return;
+        if (selected.stream().anyMatch(id -> id == null || id <= 0)
+                || new HashSet<>(selected).size() != selected.size()) {
+            throw new BusinessException(409, "指定工人名单无效，请重新选择，未创建计划")
+                    .withCode("INSERT_WORKER_SELECTION_INVALID")
+                    .withHint("重新打开人员选择，去掉重复或无效项，仅选择本厂可派工人");
+        }
+        WorkerShiftAvailabilityCheck.Result checked = checkWorkers(factoryId, slot);
+        if (!checked.verified()) {
+            throw new BusinessException(409, checked.message() + "，未创建计划")
+                    .withCode("INSERT_WORKERS_UNVERIFIED")
+                    .withHint("请先确认该时段的HR班次、请假和任务安排，再刷新人员列表；当前没有预留工人或创建计划");
+        }
+        if (!checked.available() || selected.size() < checked.requiredWorkers()
+                || !checked.availableWorkerIds().containsAll(selected)) {
+            throw new BusinessException(409, "指定工人不足或在该时段不可派，请刷新班次和人员，未创建计划")
+                    .withCode("INSERT_WORKERS_UNAVAILABLE")
+                    .withHint("请重新选择覆盖整个时段、人数满足要求的工人；不可用人员需先确认班次或任务安排");
+        }
+    }
 
     /**
      * 写路径取时段: 只认本厂 (他厂 / 不存在 ⇒ 404, 不改任何数据), 且必须仍是 available。
@@ -291,12 +337,12 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                                       ResourceCheckResult materialCheck,
                                       ResourceCheckResult equipmentCheck,
                                       ResourceCheckResult capacityCheck,
-                                      InsertSlot slot) {
+                                      WorkerShiftAvailabilityCheck.Result workerCheck) {
         // 核对过且确定不够 = 高风险 (未验证不等于不够, 它体现在 feasibilityStatus=UNVERIFIED)
         if ((materialCheck.isVerified() && !materialCheck.isAvailable())
                 || (equipmentCheck.isVerified() && !equipmentCheck.isAvailable())
                 || (capacityCheck.isVerified() && !capacityCheck.isAvailable())
-                || !slot.hasEnoughWorkers()) {
+                || (workerCheck.verified() && !workerCheck.available())) {
             return "critical";
         }
         // 使用链式影响的风险等级
@@ -313,7 +359,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private String buildInfeasibleReason(ResourceCheckResult materialCheck,
                                          ResourceCheckResult equipmentCheck,
                                          ResourceCheckResult capacityCheck,
-                                         InsertSlot slot) {
+                                         WorkerShiftAvailabilityCheck.Result workerCheck) {
         StringBuilder reasons = new StringBuilder();
         if (!materialCheck.isAvailable()) {
             // 未验证的 message 自带「原料未验证: …」, 不冠「原料不足」
@@ -324,10 +370,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             reasons.append(equipmentCheck.isVerified() ? "设备不可用: " : "")
                     .append(equipmentCheck.getMessage()).append("; ");
         }
-        reasons.append(WORKER_UNVERIFIED_REASON).append("; ");
-        if (!slot.hasEnoughWorkers()) {
-            reasons.append("人员不足: 需要").append(slot.getRequiredWorkers())
-                    .append("人，可用").append(slot.getAvailableWorkers()).append("人; ");
+        if (!workerCheck.verified() || !workerCheck.available()) {
+            reasons.append(workerCheck.message()).append("; ");
         }
         if (!capacityCheck.isAvailable()) {
             // message 自带「产能不足: …」或「产能未验证: …」, 单位取自配置
@@ -344,6 +388,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         // 验证时段 —— 只按本厂查: 他厂 / 不存在 一律 404, 不改任何数据
         InsertSlot slot = loadOwnSlot(factoryId, request.getSlotId());
+
+        validateSelectedWorkers(factoryId, slot, request);
 
         // 检查是否强制插入
         if (!Boolean.TRUE.equals(request.getForceInsert())) {
@@ -396,6 +442,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         // 验证时段 —— 只按本厂查: 他厂 / 不存在 一律 404, 不改任何数据
         InsertSlot slot = loadOwnSlot(factoryId, request.getSlotId());
+
+        validateSelectedWorkers(factoryId, slot, request);
 
         // 获取操作用户信息
         User operator = userRepository.findById(userId)

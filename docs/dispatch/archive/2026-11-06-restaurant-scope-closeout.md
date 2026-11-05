@@ -29,3 +29,11 @@
 ## 随后 main SOP Phase B 整合
 
 main342dc816fd（1490）新增生产SOP写入开关及Web/App文件入口，已无冲突整合；本组不回退其已授权开关。Java生产类、Entity/Repository及锁序均未变，Attachment先授权后查询和typed actor继续保留。配置/rollout测试与Web/App构建按新内容补验证，旧542项与34e产品树继续单独绑定，不冒充新资源树已通过。回滚floor仍为095558或后续actor兼容版本；未发本批App OTA。
+
+## 后续全量四红与最终主线整合
+
+8acd的Java42101571730完整19554项中19207通过/343跳过/4失败，PG与其余九工作流成功；未扩大失败基线。四红均精确复现于旧采购超收夹具：新增真实物料guard所需Repository为空或无活动物料快照。仅两测试补齐真实guard依赖，保留409/零库存写并增加合法边界仪器，生产逻辑/guard/阈值未改。补丁首轮缺import编译失败、零测试保留；修正后两类14项全过。
+
+正常整合main95及1495实际pg-prod启用/格式修复至c2e031，官方12类77项全过、零跳过，真实PGcommand0/stop0，双制品成功。候选诊断preflight完整PASS（包括原版diff门禁），不是exact-main生产preflight。1495正式回执cretas-1793913702-402由主协调确认95紧接94、宽191、原70/85行数保持，不能把此前a23合并冒称当时已发布。
+
+最新APS1496/f158原样整合，无源码冲突；保留76类PG并集、pg-prod true、typed actor与本人签署blocked。其新增三类APS契约与本组十二类进行组合验证，并由当前冻结head的正式CI验证；全部结果按实际版本报告，不把旧8acd失败称通过。Java生产类之外的Python/App/Web内容未随此次后端整合变化，同内容证据复用。
