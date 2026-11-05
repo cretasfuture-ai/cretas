@@ -1,6 +1,7 @@
 import json, unittest, tempfile, secrets, uuid
 from pathlib import Path
 import sys
+from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from orchestrator import SandboxOrchestrator, Docker, CONTAINERS, VOLUMES, NETWORK, LABELS, OrchestratorError
 
@@ -17,6 +18,19 @@ class Recorder:
         return P()
 
 class OrchestratorTests(unittest.TestCase):
+    def test_ready_wait_rejects_initdb_temporary_server_and_waits_for_final_postgres(self):
+        slot = object.__new__(SandboxOrchestrator)
+        slot.docker = Mock()
+        slot.docker.run.side_effect = [P(0, 'docker-entrypoint.sh\n'), P(0, 'postgres\n'), P(1), P(0, 'postgres\n'), P(0)]
+        with patch('orchestrator.time.sleep'):
+            slot._wait_pg()
+        commands = [call.args[0][3:] for call in slot.docker.run.call_args_list]
+        self.assertEqual(commands, [
+            ['cat', '/proc/1/comm'], ['cat', '/proc/1/comm'],
+            ['pg_isready', '-U', 'cretas_sandbox', '-d', 'f006_demo_sandbox'],
+            ['cat', '/proc/1/comm'],
+            ['pg_isready', '-U', 'cretas_sandbox', '-d', 'f006_demo_sandbox'],
+        ])
     def cfg(self):
         self.tmp=getattr(self,'tmp',tempfile.TemporaryDirectory()); root=Path(self.tmp.name)
         for n in ('schema.private.sql','rows.private.json','catalog.private.json'): (root/n).write_text('{}',encoding='utf-8')

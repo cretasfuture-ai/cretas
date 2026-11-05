@@ -172,8 +172,13 @@ class SandboxOrchestrator:
     def _wait_pg(self):
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            ready = self.docker.run(['docker', 'exec', CONTAINERS['pg'], 'pg_isready', '-U', 'cretas_sandbox', '-d', 'f006_demo_sandbox'])
-            if ready.returncode == 0: return
+            # The official image starts a temporary PostgreSQL during initdb.
+            # It can answer pg_isready before the entrypoint stops it again.
+            # Only PID 1 == postgres identifies the final exec'ed server.
+            main = self.docker.run(['docker', 'exec', CONTAINERS['pg'], 'cat', '/proc/1/comm'])
+            if main.returncode == 0 and main.stdout.strip() == 'postgres':
+                ready = self.docker.run(['docker', 'exec', CONTAINERS['pg'], 'pg_isready', '-U', 'cretas_sandbox', '-d', 'f006_demo_sandbox'])
+                if ready.returncode == 0: return
             time.sleep(.5)
         raise OrchestratorError('sandbox PostgreSQL did not become ready')
 
