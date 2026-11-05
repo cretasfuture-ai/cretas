@@ -25,6 +25,24 @@ public interface ShortageCaseRepository extends JpaRepository<ShortageCase, Stri
                                              @Param("sourceType") ShortageCase.SourceType sourceType,
                                              @Param("sourceId") String sourceId);
 
+    /** Lock any source-specific case, including a closed case, before its detail row. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM ShortageCase c WHERE c.id = :caseId AND c.factoryId = :factoryId "
+            + "AND c.sourceType IN :sourceTypes")
+    Optional<ShortageCase> findForUpdateByIdAndFactoryIdAndSourceTypeIn(
+            @Param("caseId") String caseId,
+            @Param("factoryId") String factoryId,
+            @Param("sourceTypes") Collection<ShortageCase.SourceType> sourceTypes);
+
+    /** Lock the source row before reading/updating its parameter-detail row. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT c FROM ShortageCase c WHERE c.factoryId = :factoryId AND c.sourceType = :sourceType "
+            + "AND c.sourceId = :sourceId")
+    Optional<ShortageCase> findByFactoryIdAndSourceTypeAndSourceIdForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("sourceType") ShortageCase.SourceType sourceType,
+            @Param("sourceId") String sourceId);
+
     /**
      * 缺料入口只认销售订单来源: 同一张表里的成本 / 损耗异常带金额口径, 权限门比缺料窄,
      * ⛔ 不能经缺料的详情 / 台账 / 重排入口读到或改到。

@@ -26,7 +26,9 @@ import java.util.UUID;
 public class ShortageCase extends BaseEntity {
 
     /** 成本差异 / 物料平衡的 sourceId 是生产计划 id, 详情见 {@link CostDeviationCaseDetail}。交付风险的 sourceId 是销售订单 id。 */
-    public enum SourceType { SALES_ORDER, COST_VARIANCE, MATERIAL_BALANCE, DELIVERY_RISK }
+    public enum SourceType {
+        SALES_ORDER, COST_VARIANCE, MATERIAL_BALANCE, DELIVERY_RISK, PROCESS_PARAM_DEVIATION
+    }
 
     /** 阶段; 终态是 CANCELLED / MANUAL / CLOSED。GAP_RESOLVED 仍未关闭 (等后续确认)。 */
     public enum Stage {
