@@ -81,7 +81,8 @@ class WorkProcessCatalogChatContractTest {
         stubAuthenticated();
         stubExtraction("""
                 {"action":"create","processName":"焯水","processCategory":"加工",
-                 "standardHourlyRate":25}
+                 "standardHourlyRate":25,"customFieldSchema":[{"key":"oilTemp","label":"油温",
+                 "type":"number","enabled":true,"unit":"℃","standardValue":155,"min":150,"max":160}]}
                 """);
         stubToolSuccess();
 
@@ -96,6 +97,14 @@ class WorkProcessCatalogChatContractTest {
         assertEquals("焯水", command.parameters().path("processName").asText());
         assertEquals("加工", command.parameters().path("processCategory").asText());
         assertEquals(25, command.parameters().path("standardHourlyRate").asInt());
+        assertEquals("oilTemp", command.parameters().path("customFieldSchema").get(0).path("key").asText());
+        assertEquals("1.1.0", command.expectedDescriptorVersion());
+        assertEquals(155, command.parameters().path("customFieldSchema").get(0).path("standardValue").asInt());
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(dashScopeClient).chatLowTemp(prompt.capture(), anyString());
+        assertTrue(prompt.getValue().contains("customFieldSchema"));
+        assertTrue(prompt.getValue().contains("standardValue"));
+        assertTrue(prompt.getValue().contains("不要猜"));
         assertFalse(response.isApplied());
     }
 
@@ -281,7 +290,7 @@ class WorkProcessCatalogChatContractTest {
         when(toolExecutionGateway.execute(any())).thenReturn(new ToolExecutionResult(
                 "request-catalog",
                 CATALOG_TOOL,
-                "1.0.0",
+                "1.1.0",
                 "audit-catalog",
                 "trace-catalog",
                 ToolExecutionStatus.SUCCEEDED,
