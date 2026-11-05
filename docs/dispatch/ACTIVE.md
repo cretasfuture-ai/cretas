@@ -7,6 +7,9 @@
 
 ## 在飞任务
 
+- `SEC-PLAN-AUDIT-1457-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f — #1457 Unicode边界修复及注册/导入闸；63目标全绿、风险终审无高/中阻塞；等最终Java门禁，scope同前；不写生产。
+- `SEC-PLAN-AUDIT-1438-20261105` — `in-progress` — Owner root/1438-fix — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。
+
 
 
 

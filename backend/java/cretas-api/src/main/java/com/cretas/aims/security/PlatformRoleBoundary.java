@@ -27,7 +27,10 @@ public final class PlatformRoleBoundary {
     }
 
     public static boolean isPlatformTier(String role) {
-        return role != null && PLATFORM_TIER_ROLES.contains(role.trim().toLowerCase(Locale.ROOT));
+        // Legacy consumers also recognize Unicode case aliases, including dotless i and long s.
+        // Every spelling they recognize must be restricted at the assignment boundary too.
+        return role != null && PLATFORM_TIER_ROLES.stream()
+                .anyMatch(known -> known.equalsIgnoreCase(role.trim()));
     }
 
     /**

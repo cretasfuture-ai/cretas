@@ -292,6 +292,33 @@ class PlatformRoleBoundaryEmbeddedTomcatContractTest {
     }
 
     @Test
+    @DisplayName("Unicode case aliases cannot become platform roles through either factory create field")
+    void unicodeCaseAliasesCannotBeGranted() throws IOException {
+        String base = "{\"username\":\"new_user\",\"fullName\":\"n\",\"password\":\"Abc12345\",\"phone\":\"13800000000\",";
+        for (String role : new String[]{"platform_adm\u0131n", "\u017Fuper_admin", "\u017Fystem_admin", "operat\u0131on_admin", "aud\u0131tor"}) {
+            assertThat(send("POST", "/api/mobile/F001/users", hrAdmin, base + "\"roleCode\":\"" + role + "\"}").status())
+                    .as("roleCode alias %s must be refused by enum binding or the boundary", role).isIn(400, 403);
+            assertThat(send("POST", "/api/mobile/F001/users", hrAdmin, base + "\"roleCode\":null,\"position\":\"" + role + "\"}").status())
+                    .as("position alias %s must be refused", role).isEqualTo(403);
+        }
+        assertThat(calls(userRepository, "save")).isZero();
+    }
+
+    @Test
+    @DisplayName("a legacy factory token with a Unicode platform alias cannot pass a platform role check")
+    void legacyUnicodeRoleCannotGainPlatformAuthority() throws IOException {
+        for (String role : new String[]{"platform_adm\u0131n", "\u017Fuper_admin", "factory_\u017Fuper_admin", "permi\u017Fsion_admin"}) {
+            String token = jwtUtil.generateToken(ACTOR, "F001", "legacy", role);
+            assertThat(send("POST", "/api/mobile/F001/share-links", token, "{}").body())
+                    .as("case-insensitive alias %s must remain an untrusted factory role", role)
+                    .contains("当前角色无权访问此接口");
+        }
+        assertThat(send("POST", "/api/mobile/F001/share-links", factoryAdmin, "{}").body())
+                .as("positive control: ordinary factory admin still passes the role check")
+                .doesNotContain("当前角色无权访问此接口");
+    }
+
+    @Test
     @DisplayName("reset-password: identity decides, not the role string")
     void resetPasswordFollowsIdentity() throws IOException {
         assertThat(send("POST", RESET + "F002", factoryHoldingPlatformRole, null).status())
@@ -365,5 +392,25 @@ class PlatformRoleBoundaryEmbeddedTomcatContractTest {
         } finally {
             RequestContextHolder.resetRequestAttributes();
         }
+    }
+
+    @Test
+    @DisplayName("the public spreadsheet importer fails restricted rows and continues with ordinary rows")
+    void spreadsheetImportKeepsTheRoleBoundary() throws Exception {
+        var restricted = new com.cretas.aims.dto.user.UserExportDTO();
+        restricted.setUsername("restricted_import");
+        restricted.setPosition("platform_adm\u0131n");
+        var ordinary = new com.cretas.aims.dto.user.UserExportDTO();
+        ordinary.setUsername("ordinary_import");
+        ordinary.setPosition("班组长");
+        when(excelUtil.importFromExcel(any(java.io.InputStream.class),
+                org.mockito.ArgumentMatchers.eq(com.cretas.aims.dto.user.UserExportDTO.class)))
+                .thenReturn(java.util.List.of(restricted, ordinary));
+        var result = userService.importUsersFromExcel("F001", new java.io.ByteArrayInputStream(new byte[0]));
+        assertThat(result.getFailureCount()).isEqualTo(1);
+        assertThat(result.getSuccessCount()).isEqualTo(1);
+        var saved = org.mockito.ArgumentCaptor.forClass(User.class);
+        org.mockito.Mockito.verify(userRepository).save(saved.capture());
+        assertThat(saved.getValue().getUsername()).isEqualTo("ordinary_import");
     }
 }
