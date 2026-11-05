@@ -1,12 +1,16 @@
 import json, tempfile, unittest
 from pathlib import Path
 from unittest.mock import Mock
-from orchestrator import SandboxOrchestrator, OrchestratorError, CONTAINERS
+from orchestrator import SandboxOrchestrator, OrchestratorError, CONTAINERS, JDBC_BASE
 from vector_dependency import verify_receipt, SOURCE_DIGEST
 from create_private_config import create
 from baseline_export import validate_schema_material, ExportError, scrub, schema_without_comments
 
 class SecurityTests(unittest.TestCase):
+    def test_legacy_jdbc_slot_can_never_prepare_before_driver_rebind(self):
+        slot=object.__new__(SandboxOrchestrator);slot._validate_properties=lambda:{'spring.datasource.url':JDBC_BASE};slot._verify_identity=Mock()
+        with self.assertRaisesRegex(OrchestratorError,'string binding'):slot.prepare()
+        slot._verify_identity.assert_not_called()
     def test_unmanaged_database_state_cannot_be_reported_clean(self):
         slot=object.__new__(SandboxOrchestrator)
         for state in ('1|0|0','0|1|0','0|0|1'):

@@ -20,19 +20,19 @@ Java 10040 / Redis 6387 retain loopback-only HostConfig bindings; PostgreSQL has
 
 - Java `F006SandboxGatewayContractTest`: 23 passed, zero failure/error/skip; package successful. Includes real Spring component scanning, disabled mode, cookie identity, write fence, exact pure parse exception and role/username drift.
 - JAR SHA-256: `02DB8FADD615FC1354427F51C5E1EF9B0633001D333BEA572C5ADF5187BF9DCF`.
-- Python unittest discovery: 35 passed, including real HTTP manager/relay tests, lifecycle, failed cleanup, attachment cleanup, in-flight drain, wrong actor, full dependency hashes, private roots, schema proof and internal transport.
+- Python unittest discovery: 36 passed, including real HTTP manager/relay tests, lifecycle, failed cleanup, attachment cleanup, in-flight drain, wrong actor, full dependency hashes, private roots, schema proof, internal transport and legacy JDBC preparation rejection.
 - Frontend targeted Vitest: 26 passed, including preparation routing, account switching, hydration, cache scope and cleanup lifecycle.
-- Vue type check and production build passed before the final exact authorization-read addition; final same-selector type/build verification is running separately.
+- Final Vue type check (`vue-tsc -b`, 8 GiB Node heap) and production Vite build passed after the exact authorization-read addition.
 - Source risk review: P0=0, P1=0; this is source review only.
-- Real browser login and initial entry verified at `http://127.0.0.1:5186/demo-flow`. Real Java startup and in-container health succeeded. Full two-round business acceptance remains pending at this checkpoint; earlier failures exposed DI, PostgreSQL string binding, internal-network transport and an insufficient startup timeout and were corrected without declaring acceptance.
-- Physical reset/content proof succeeded on preparation-failure cleanup. This is not a substitute for two successful complete business rounds.
+- Real browser login, READY and purchase creation/readback verified at `http://127.0.0.1:5186/demo-flow`. Sales creation exposed missing PostgreSQL `stringtype=unspecified`: PrimaryDataSourceConfig does not bind Hikari-specific driver properties, so the new configuration pins the production-shaped query directly in the fixed isolated JDBC URL. The old exact URL remains accepted only for identity/reset/cleanup; preparation rejects it before any slot operation. Full two-round business acceptance remains pending at this checkpoint.
+- Physical reset/content proof succeeded on preparation failures and on cleanup after real purchase creation plus a failed sales step. The stopped, clean slot was explicitly rebound to the corrected JDBC properties with all other physical identities unchanged. This is not a substitute for two successful complete business rounds.
 - `check_dispatch_active.py` and `git diff --check` passed.
 
 Private logs/screenshots and runtime configuration are under the user's private `Documents/F006演示-20261105` task directory and are not committed. Early unused private exports were retained after automatic approval rejected their deletion; they are not runtime baselines.
 
 ## Release boundary
 
-No merge or deployment is claimed. Fresh origin/main ACTIVE still contains `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105`; this branch must not bypass that owner lock. The local development relay is not a production deployment. Formal production still has the older real-data flow until an authorized release completes. Menu-shortcut PR #1470 is separate and remains unmerged.
+Draft PR: https://github.com/cretasfuture-ai/cretas/pull/1477 . No merge or deployment is claimed. Fresh origin/main ACTIVE still contains `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105`; this branch must not bypass that owner lock. The local development relay is not a production deployment. Formal production still has the older real-data flow until an authorized release completes. Menu-shortcut PR #1470 is separate and remains unmerged.
 
 ## Next acceptance
 

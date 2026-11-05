@@ -12,7 +12,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from orchestrator import CONTAINERS, VOLUMES, NETWORK, atomic_json
+from orchestrator import CONTAINERS, VOLUMES, NETWORK, atomic_json, JDBC_URL
 
 def encode(value): return base64.urlsafe_b64encode(value).decode().rstrip('=')
 
@@ -35,10 +35,10 @@ def create(root, jar, baseline, fingerprint):
     signing = encode(b'{"alg":"HS256","typ":"JWT"}')+'.'+encode(json.dumps(claims,separators=(',',':')).encode())
     token = signing+'.'+encode(hmac.new(signing_key.encode(),signing.encode(),hashlib.sha256).digest())
     properties = {
-        'server.port':'10040','server.address':'0.0.0.0','spring.profiles.include':'pg','spring.datasource.url':'jdbc:postgresql://postgres:5432/f006_demo_sandbox',
+        'server.port':'10040','server.address':'0.0.0.0','spring.profiles.include':'pg','spring.datasource.url':JDBC_URL,
         'spring.datasource.username':'cretas_sandbox','spring.datasource.password':pg_password,
         'spring.datasource.driver-class-name':'org.postgresql.Driver', 'spring.jpa.properties.hibernate.dialect':'org.hibernate.dialect.PostgreSQLDialect',
-        'spring.datasource.hikari.data-source-properties.stringtype':'unspecified','camera.save.path':'/opt/app/data/camera-images',
+        'camera.save.path':'/opt/app/data/camera-images',
         'spring.jpa.hibernate.ddl-auto':'validate','spring.flyway.enabled':'false','spring.jpa.show-sql':'false',
         'spring.data.redis.host':'redis','spring.data.redis.port':'6379','spring.data.redis.database':'0',
         'spring.redis.host':'redis','spring.redis.port':'6379','spring.redis.database':'0',

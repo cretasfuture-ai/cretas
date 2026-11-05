@@ -25,6 +25,8 @@ PORTS = {'pg': ('5432/tcp', None), 'redis': ('6379/tcp', '6387'), 'java': ('1004
 PROD = {'cretas_prod_db', 'cretas_db', 'prod', 'production'}
 REQUIRED_FILES = {'schema.private.sql', 'rows.private.json', 'catalog.private.json'}
 GLOBAL_SCOPES = {'enum_dictionary':['__GLOBAL__']}
+JDBC_BASE = 'jdbc:postgresql://postgres:5432/f006_demo_sandbox'
+JDBC_URL = JDBC_BASE + '?currentSchema=public&stringtype=unspecified'
 
 class OrchestratorError(RuntimeError): pass
 
@@ -95,12 +97,15 @@ class SandboxOrchestrator:
                 key, separator, value = line.partition('=')
                 if not separator: raise OrchestratorError('invalid sandbox property line')
                 values[key.strip()] = value.strip()
-        expected = {'server.port':'10040', 'spring.datasource.url':'jdbc:postgresql://postgres:5432/f006_demo_sandbox',
+        expected = {'server.port':'10040',
             'spring.datasource.username':'cretas_sandbox', 'spring.datasource.password':self.cfg['pg_password'],
             'spring.datasource.driver-class-name':'org.postgresql.Driver', 'spring.data.redis.host':'redis', 'spring.data.redis.port':'6379',
             'cretas.demo-sandbox.node.enabled':'true', 'cretas.demo.sandbox.enabled':'false', 'aliyun.oss.enabled':'false',
             'spring.flyway.enabled':'false', 'spring.jpa.hibernate.ddl-auto':'validate'}
         if any(values.get(k) != v for k,v in expected.items()): raise OrchestratorError('sandbox properties do not enforce the isolated topology')
+        # The legacy URL is accepted only to verify/reset a stopped old slot.
+        # prepare below requires the production-shaped PostgreSQL binding mode.
+        if values.get('spring.datasource.url') not in {JDBC_BASE,JDBC_URL}: raise OrchestratorError('sandbox JDBC URL changed')
         actual = values.get('cretas.jwt.secret', '')
         fingerprint = values.get('cretas.demo.sandbox.production-jwt-sha256', '')
         if len(actual) < 64 or not re.fullmatch(r'[0-9a-f]{64}', fingerprint) or hashlib.sha256(actual.encode()).hexdigest() == fingerprint:
@@ -359,6 +364,7 @@ class SandboxOrchestrator:
         if self._checked(['docker','exec',CONTAINERS['redis'],'redis-cli','DBSIZE']).stdout.strip() != '0': raise OrchestratorError('sandbox Redis is not empty')
 
     def prepare(self):
+        if self._validate_properties()['spring.datasource.url'] != JDBC_URL: raise OrchestratorError('sandbox PostgreSQL string binding must be configured before preparation')
         self._verify_identity(); self._stop_java(); self._restore(); self._clear_redis(); self._start('java'); self._health()
         return self._verify_identity()
 
