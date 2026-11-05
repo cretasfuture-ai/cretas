@@ -88,9 +88,10 @@ def _orch(decision, sem=None, legacy_sem=None, cfg=CFG):
     )
 
 
-def _run(orch, query="嗯 签个退", business="FACTORY", history=None):
+def _run(orch, query="嗯 签个退", business="FACTORY", history=None, task_context="new"):
     return asyncio.run(orch.match(query=query, factoryId="F006", businessType=business, userId="u", role="operator",
-                                  visible_intents=ROWS, history=history or [], min_confidence=0.7, enable_llm=True))
+                                  visible_intents=ROWS, history=history or [], min_confidence=0.7, enable_llm=True,
+                                  task_context=({"contextStatus": "NEW"} if not history else None) if task_context == "new" else task_context))
 
 
 @pytest.fixture(autouse=True)
@@ -105,6 +106,7 @@ def _empty_registry():
 def test_registry_hit_answers_without_any_llm_call():
     registry.set_registry(registry.build_snapshot(
         [{"factory_id": "F006", "business_type": "FACTORY", "normalized_text": "嗯签个退", "intent_code": "CLOCK_OUT"}], []))
+    registry.get_registry().standalone_routes = frozenset({("F006", "FACTORY", "嗯签个退", "CLOCK_OUT")})
     dec = FakeDecision(["RETURN_ORDER_CREATE"], {"RETURN_ORDER_CREATE": 0.99})
     res = _run(_orch(dec))
     assert res.bestMatch.intentCode == "CLOCK_OUT"

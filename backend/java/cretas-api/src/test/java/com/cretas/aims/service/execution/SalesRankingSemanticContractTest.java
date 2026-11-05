@@ -184,7 +184,7 @@ class SalesRankingSemanticContractTest {
         final ConversationMemoryService memory = mock(ConversationMemoryService.class);
         final ConversationService conversations = mock(ConversationService.class);
         final ConversationContext owner = ConversationContext.builder().sessionId("sales-session")
-                .factoryId("F006").userId(7L).build();
+                .factoryId("F006").userId(7L).lastActiveAt(LocalDateTime.now(CLOCK)).build();
         final SalesRankingConversationSupport support = new SalesRankingConversationSupport(memory, conversations, CLOCK);
         final ProductSalesRankingService ranking = mock(ProductSalesRankingService.class);
         final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
@@ -199,6 +199,16 @@ class SalesRankingSemanticContractTest {
             when(memory.getOrCreateContext("F006", 7L, "sales-session")).thenReturn(owner);
             doAnswer(c -> { owner.setSlot(c.getArgument(1), c.getArgument(2)); return null; })
                     .when(memory).updateEntitySlot(eq("sales-session"), any(), any());
+            doAnswer(c -> {
+                synchronized (owner) {
+                    EntitySlot current = owner.getSlot(EntitySlot.SlotType.READ_QUERY);
+                    Object version = current == null || current.getMetadata() == null ? null
+                            : current.getMetadata().get(ConversationMemoryService.READ_QUERY_VERSION_KEY);
+                    if (!Objects.equals("F006", c.getArgument(0)) || !Objects.equals(7L, c.getArgument(1))
+                            || !Objects.equals(version, c.getArgument(3))) return false;
+                    owner.setSlot(EntitySlot.SlotType.READ_QUERY, c.getArgument(4)); return true;
+                }
+            }).when(memory).compareAndSetReadQuery(anyString(), anyLong(), eq("sales-session"), any(), any());
             when(registry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
             when(registry.getExecutor(SalesRankingParameters.TOOL)).thenReturn(Optional.of(tool));
             ReflectionTestUtils.setField(tool, "objectMapper", mapper);

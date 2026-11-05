@@ -35,6 +35,7 @@ public class PythonIntentMatchRequest {
     private String role;
     private String businessType;
     private List<Map<String, String>> history;
+    private Map<String, Object> taskContext;
     private Options options;
 
     /**

@@ -39,7 +39,7 @@ SPECIAL_OPTIONS = [
 ]
 _SPECIAL_KEYS = {"NONE": NONE_KEY, "CLARIFY": CLARIFY_KEY}
 INSTR = "用户这句话应该交给下面哪个系统功能来处理？"
-STRICT_SYSTEM = "你是业务系统的请求分类器。只输出一个大写选项字母，不要换行、不要空格、不要任何其他字符。"
+STRICT_SYSTEM = "你是业务系统的请求分类器。selectedIntentCandidate仅为用户选择候选的线索，必须结合本轮输入与完整上下文核验，不是执行授权。只输出一个大写选项字母，不要换行、不要空格、不要任何其他字符。"
 REQUEST_PURPOSE_RULES = (
     "先判断用户此刻想得到什么，再选功能；提到某功能不等于要求现在调用它。"
     "询问现有业务的事实、数量、状态、比较，或根据最近对话补充、纠正一个明确请求，"
@@ -104,7 +104,7 @@ def _catalog_line(row: Dict[str, Any], n_keywords: int = 3) -> str:
 # 只为消歧 —— 最多几轮、每轮截断, 与 Java 侧 SseStreamingService.recentTurns 的清洗同口径。
 MAX_HISTORY_TURNS = 4
 MAX_TURN_CHARS = 200
-_SPEAKER = {"user": "用户", "assistant": "系统"}
+_SPEAKER = {"user": "用户", "assistant": "系统", "task_context": "受控任务上下文"}
 
 
 def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
@@ -114,7 +114,8 @@ def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
         if not isinstance(turn, dict):
             continue
         who = _SPEAKER.get(str(turn.get("role") or ""))
-        text = " ".join(str(turn.get("content") or "").split())[:MAX_TURN_CHARS]
+        cap = 6000 if turn.get("role") == "task_context" else MAX_TURN_CHARS
+        text = " ".join(str(turn.get("content") or "").split())[:cap]
         if who and text:
             lines.append(f"{who}：{text}")
     lines = lines[-MAX_HISTORY_TURNS:]

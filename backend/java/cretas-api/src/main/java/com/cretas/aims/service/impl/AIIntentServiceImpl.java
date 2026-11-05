@@ -343,10 +343,26 @@ public class AIIntentServiceImpl implements AIIntentService {
                                                             Long userId, String userRole, String sessionId,
                                                             String mode, java.util.Set<String> userPermissions,
                                                             List<Map<String, String>> history) {
+        return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId,
+                mode, userPermissions, history, null);
+    }
+
+    @Override
+    public IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
+                                                            Long userId, String userRole, String sessionId,
+                                                            String mode, java.util.Set<String> userPermissions,
+                                                            List<Map<String, String>> history,
+                                                            Map<String, Object> taskContext) {
         List<Map<String, String>> turns = history == null ? Collections.emptyList() : history;
-        boolean contextual = !turns.isEmpty();
-        Optional<IntentMatchResult> earlyPhrase = pipelineService.recognizeExpectedEarlyPhrase(
-                userInput, factoryId, userId, sessionId, java.util.Set.of("QUALITY_CHECK_QUERY", "REPORT_TRENDS"));
+        boolean scopedContext = taskContext != null;
+        boolean contextual = !turns.isEmpty() || scopedContext && (
+                !"NEW".equals(taskContext.get("contextStatus"))
+                || Boolean.TRUE.equals(taskContext.get("hasPageReference"))
+                || Boolean.TRUE.equals(taskContext.get("hasClientHistory"))
+                || taskContext.containsKey("selectedIntentCandidate"));
+        Optional<IntentMatchResult> earlyPhrase = contextual ? Optional.empty()
+                : pipelineService.recognizeExpectedEarlyPhrase(userInput, factoryId, userId, sessionId,
+                        java.util.Set.of("QUALITY_CHECK_QUERY", "REPORT_TRENDS"));
         if (earlyPhrase.isPresent() && earlyPhrase.get().hasMatch()
                 && earlyPhrase.get().getBestMatch() != null
                 && java.util.Set.of("QUALITY_CHECK_QUERY", "REPORT_TRENDS").contains(earlyPhrase.get().getBestMatch().getIntentCode())
@@ -428,6 +444,8 @@ public class AIIntentServiceImpl implements AIIntentService {
                 for (Map<String, String> turn : userTurns) {
                     egressTexts.add(turn.get("content"));
                 }
+                Integer taskContextIndex = taskContext == null ? null : egressTexts.size();
+                if (taskContext != null) egressTexts.add(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(taskContext));
                 com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
                         llmEgressGuard.texts(PYTHON_MATCH_EGRESS_SITE, factoryId, Map.of(), egressTexts);
                 if (redacted.refused()) {
@@ -439,6 +457,9 @@ public class AIIntentServiceImpl implements AIIntentService {
                     copy.put("content", redacted.text(i + 1));
                     sentTurns.add(copy);
                 }
+                Map<String,Object> sentTaskContext = taskContextIndex == null ? null
+                        : new com.fasterxml.jackson.databind.ObjectMapper().readValue(redacted.text(taskContextIndex),
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {});
                 PythonIntentMatchRequest req = PythonIntentMatchRequest.builder()
                         .query(redacted.text(0))
                         .factoryId(factoryId)
@@ -447,6 +468,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                         .role(role)
                         .businessType(businessType)
                         .history(sentTurns)
+                        .taskContext(sentTaskContext)
                         // spec §8.2 洞②接线: 这两个字段自 Phase 2B-α 起就存在且有 javadoc
                         // ("READ=剔除写意图候选 | OPERATE=按 userPermissions 剔除无权限写意图"),
                         // 但在此之前全仓库没有任何一处给它们赋过值 —— Python 侧目录过滤一直是死的。
@@ -500,6 +522,15 @@ public class AIIntentServiceImpl implements AIIntentService {
             }
         }
         // ===== END Python branch =====
+
+        // A context-blind fallback cannot reinterpret a failed contextual decision as a new task.
+        if (scopedContext && contextual && shouldUsePythonMatcher(factoryId)) {
+            recordStageHit("CONTEXT_DECISION_UNAVAILABLE");
+            return IntentMatchResult.builder().userInput(userInput)
+                    .matchMethod(IntentMatchResult.MatchMethod.NONE).requiresConfirmation(true)
+                    .clarificationQuestion("暂时无法完整读取或理解当前任务，请重试或明确说明要查询的目标和条件。")
+                    .build();
+        }
 
         // Legacy in-process pipeline (unchanged behavior — authoritative fallback path)
         IntentMatchResult legacyResult = pipelineService.recognizeIntentWithConfidence(

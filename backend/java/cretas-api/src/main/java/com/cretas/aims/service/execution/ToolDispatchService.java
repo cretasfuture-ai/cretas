@@ -76,6 +76,188 @@ public class ToolDispatchService {
             com.cretas.aims.service.consent.LlmEgressGuard.standalone();
 
     static final String PARAM_EGRESS_SITE = "tool-param-extraction";
+    private static final java.util.Set<String> SEMANTIC_READ_TOOLS = java.util.Set.of(
+            "order_list", "material_batch_query", "product_sales_ranking");
+
+    /** Existing parameter resolver, extended to filled-field corrections for the read pilot.
+     * Semantic output is evidence to validate, never an execution or permission grant. */
+    IntentExecuteResponse resolveReadTurn(String factoryId, Long userId, IntentExecuteRequest request,
+                                         IntentMatchResult match) {
+        if (request.getSemanticContext() == null) return null;
+        IntentExecuteResponse admissionFailure = SemanticConversationContextService.admissionFailure(request);
+        if (admissionFailure != null) return admissionFailure;
+        if (match != null && match.hasMatch() && Boolean.TRUE.equals(match.getRequiresConfirmation())) return null;
+        AIIntentConfig intent = match != null && match.hasMatch() ? match.getBestMatch() : null;
+        ToolExecutor tool = intent == null || intent.getToolName() == null ? null
+                : toolRegistry.getExecutor(intent.getToolName()).orElse(null);
+        boolean pilot = tool != null && SEMANTIC_READ_TOOLS.contains(tool.getToolName())
+                && tool.getAccessMode() == ToolExecutor.AccessMode.READ;
+        Map<?,?> previous = previousRead(request);
+        if (!pilot && (intent != null || previous.isEmpty())) return null;
+        if (pilot) {
+            var rbac = toolRbacEnforcer.check(tool, TrustedExecutionContext.merge(Map.of(), factoryId, userId,
+                    com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().map(a -> a.role()).orElse("")));
+            if (rbac == null || !rbac.isAllowed()) return readTurnReply("NO_PERMISSION", "您没有执行此查询的权限。");
+            if (salesRankingConversationSupport == null
+                    || !salesRankingConversationSupport.reserveRead(intent.getIntentCode(), factoryId, userId, request))
+                return readTurnReply("TASK_CHANGED", "当前查询状态已变化，请重试；未执行旧请求。");
+        }
+        try {
+            Map<String,Object> schema = pilot ? tool.getParametersSchema() : Map.of("type", "object", "properties", Map.of());
+            String system = """
+                    你是现有业务系统的只读对话参数解析器。识别本轮对话动作和明确修改的参数，不执行业务。
+                    使用同一个任务快照及最近用户对话理解指代。当前日期以输入为准。
+                    action只能为NEW、CONTINUE、CORRECT、SWITCH、CANCEL、CLARIFY、UNSUPPORTED。
+                    NEW/SWITCH是独立目标；CONTINUE/CORRECT仅可用于同一个目标。
+                    parameters仅返回本轮明确给出或明确纠正的值，不填旧值或默认值。已填字段也必须允许纠正。
+                    参数应符合当前真实Tool描述/参数；时间按日期边界规范化，状态按真实枚举识别。
+                    目标切换后不继承不兼容参数；“其他不变”仅保留同一任务已有兼容条件。
+                    取消是对当前任务的明确对话动作，不能按某个词片段决定；修饰对象的否定不是取消。
+                    过期/未知状态不等于新会话；不能据此猜旧对象、日期或状态，依据不足就CLARIFY。
+                    当前意图为空时不得执行或自行补造业务目标，仅允许取消已有查询或定向澄清。
+                    不支持的指标、范围或动作返回UNSUPPORTED及原因，不能偷换成Tool支持的口径。
+                    销售金额排行不支持数量/销量排行。禁止编造ID、结果、权限或授权。
+                    仅使用resolve_read_turn函数返回结果。message是简短的定向澄清或能力说明。
+                    """;
+            Map<String,Object> input = new java.util.LinkedHashMap<>();
+            input.put("today", java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")).toString());
+            input.put("currentInput", request.getUserInput());
+            input.put("history", SemanticConversationContextService.effectiveHistory(request));
+            input.put("taskContext", request.getSemanticContext());
+            input.put("selectedIntent", pilot ? intent.getIntentCode() : "");
+            input.put("toolDescription", pilot ? tool.getDescription() : "没有选定业务功能，不能执行查询");
+            input.put("toolSchema", schema);
+            var timeRanges = new TimeNormalizationRules().extractAndReplace(request.getUserInput(),
+                    LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"))).getExtractedRanges();
+            input.put("normalizedCurrentTimeRanges", timeRanges);
+            Map<String,Object> deltaSchema = new java.util.LinkedHashMap<>(schema);
+            deltaSchema.remove("required");
+            if (schema.get("properties") instanceof Map<?,?> originalProperties) {
+                Map<String,Object> partial = new java.util.LinkedHashMap<>();
+                originalProperties.forEach((k,v) -> {
+                    if (k instanceof String key && v instanceof Map<?,?> definition) {
+                        Map<String,Object> copy = new java.util.LinkedHashMap<>();
+                        definition.forEach((pk,pv) -> { if (pk instanceof String property && !"default".equals(property)) copy.put(property, pv); });
+                        partial.put(key, copy);
+                    }
+                });
+                deltaSchema.put("properties", partial);
+            }
+            Map<String,Object> turnSchema = Map.of("type", "object", "properties", Map.of(
+                    "action", Map.of("type", "string", "enum", List.of("NEW", "CONTINUE", "CORRECT", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")),
+                    "parameters", deltaSchema, "message", Map.of("type", "string")), "required", List.of("action", "parameters", "message"));
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, factoryId,
+                    system, objectMapper.writeValueAsString(input));
+            if (redacted.refused()) return readTurnReply("NEED_MORE_INFO", "当前任务上下文无法安全解析，请明确查询目标和条件。");
+            ChatCompletionResponse response = dashScopeClient.chatWithTools(redacted.text(0), redacted.text(1),
+                    List.of(Tool.of("resolve_read_turn", "理解当前只读任务与参数变化", turnSchema)));
+            if (!dashScopeClient.hasToolCalls(response)) return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询条件，请重试或说明要修改的条件。");
+            var calls = response.getChoices().get(0).getMessage().getToolCalls();
+            if (calls == null || calls.size() != 1 || calls.get(0).getFunction() == null
+                    || !"resolve_read_turn".equals(calls.get(0).getFunction().getName()))
+                return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询动作，请重试。");
+            Map<String,Object> turn = objectMapper.readValue(redacted.restoreJsonText(calls.get(0).getFunction().getArguments()),
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {});
+            String action = String.valueOf(turn.get("action"));
+            String message = turn.get("message") instanceof String s && !s.isBlank() ? s : "请明确查询目标和条件。";
+            if ("CANCEL".equals(action)) {
+                if (previous.isEmpty() || salesRankingConversationSupport == null)
+                    return readTurnReply("NEED_MORE_INFO", "当前没有可确定取消的查询，请说明要停止哪个任务。");
+                return salesRankingConversationSupport.cancelRead(factoryId, userId, request);
+            }
+            if ("UNSUPPORTED".equals(action)) {
+                if (salesRankingConversationSupport != null) salesRankingConversationSupport.finishRead(factoryId, userId, request, "UNSUPPORTED_CAPABILITY");
+                return readTurnReply("UNSUPPORTED_CAPABILITY", message);
+            }
+            if ("CLARIFY".equals(action) || !pilot) return readTurnReply("NEED_MORE_INFO", message);
+            if (!java.util.Set.of("NEW", "SWITCH", "CONTINUE", "CORRECT").contains(action))
+                return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询动作，请重试。");
+            Map<String,Object> merged = new java.util.LinkedHashMap<>();
+            Map<String,String> sources = new java.util.LinkedHashMap<>();
+            if (java.util.Set.of("CONTINUE", "CORRECT").contains(action)) {
+                if (!intent.getIntentCode().equals(previous.get("id")) || !(previous.get("parameters") instanceof Map<?,?> old)
+                        || !"PRESENT".equals(request.getSemanticContext().get("contextStatus")))
+                    return readTurnReply("NEED_MORE_INFO", "缺少可沿用的同一查询，请说明目标和条件。");
+                old.forEach((k,v) -> { if (k instanceof String key) { merged.put(key, v); sources.put(key, "PREVIOUS_VALUE"); } });
+            }
+            if (!(turn.get("parameters") instanceof Map<?,?> delta))
+                return readTurnReply("NEED_MORE_INFO", "未能解析查询条件，请重试。");
+            if (SalesRankingParameters.INTENT.equals(intent.getIntentCode())
+                    && "UNSUPPORTED_CAPABILITY".equals(previous.get("reason")) && !delta.containsKey("metric"))
+                return readTurnReply("UNSUPPORTED_CAPABILITY", "上次请求的排行指标尚不受支持，请先明确是否改看金额排行。");
+            Map<?,?> properties = schema.get("properties") instanceof Map<?,?> p ? p : Map.of();
+            for (var entry : delta.entrySet()) {
+                if (!(entry.getKey() instanceof String key) || !properties.containsKey(key)
+                        || entry.getValue() == null || !(entry.getValue() instanceof String
+                        || entry.getValue() instanceof Number || entry.getValue() instanceof Boolean))
+                    return readTurnReply("NEED_MORE_INFO", "返回了无法校验的查询条件，请明确查询条件。");
+                merged.put(key, entry.getValue());
+                sources.put(key, "CURRENT_EXPLICIT");
+            }
+            Map<String,Object> rawDelta = new java.util.LinkedHashMap<>();
+            delta.forEach((k,v) -> rawDelta.put(String.valueOf(k), v));
+            Map<String,Object> computedEvidence = new java.util.LinkedHashMap<>();
+            for (String dateKey : List.of("startDate", "endDate")) {
+                Object value = rawDelta.get(dateKey);
+                if (value instanceof String date && timeRanges.stream().anyMatch(range -> range.isValid()
+                        && date.equals(("startDate".equals(dateKey) ? range.getStart() : range.getEnd()).toLocalDate().toString())))
+                    computedEvidence.put(dateKey, value);
+            }
+            LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(rawDelta, computedEvidence, request.getUserInput(), schema);
+            if (!grounded.dropped().isEmpty())
+                return readTurnReply("NEED_MORE_INFO", "部分查询参数缺少本轮输入依据，请明确这些条件后重试。");
+            String invalid = validateReadParameters(schema, merged, factoryId, false);
+            if (invalid != null) return readTurnReply("NEED_MORE_INFO", invalid);
+            request.setSemanticParameters(java.util.Collections.unmodifiableMap(merged));
+            request.setSemanticParameterSources(java.util.Collections.unmodifiableMap(sources));
+            return null;
+        } catch (Exception failure) {
+            log.warn("Read turn resolution unavailable: {}", failure.getClass().getSimpleName());
+            return readTurnReply("NEED_MORE_INFO", "当前任务条件未能完整解析，请重试；尚未执行查询。");
+        } finally {
+            if (pilot && request.getSemanticParameters() == null && salesRankingConversationSupport != null)
+                salesRankingConversationSupport.finishRead(factoryId, userId, request, "BLOCKED");
+        }
+    }
+
+    private static Map<?,?> previousRead(IntentExecuteRequest request) {
+        if (request.getSemanticPreviousRead() != null
+                && !"CLEARED".equals(request.getSemanticPreviousRead().get("id"))) return request.getSemanticPreviousRead();
+        Object refs = request.getSemanticContext().get("references");
+        if (refs instanceof List<?> values) for (Object value : values) {
+            if (value instanceof Map<?,?> ref && "READ_QUERY".equals(ref.get("type"))
+                    && !"CLEARED".equals(ref.get("id"))) return ref;
+        }
+        return Map.of();
+    }
+
+    private static IntentExecuteResponse readTurnReply(String status, String message) {
+        return IntentExecuteResponse.builder().status(status).aiMode("READ").message(message).formattedText(message).build();
+    }
+
+    /** Reuse the existing typed contract validator; the actual Tool schema supplies all rules. */
+    private static String validateReadParameters(Map<String,Object> schema, Map<String,Object> params,
+                                                 String factoryId, boolean required) {
+        var specs = new ArrayList<com.cretas.aims.service.skill.contract.SkillParameterContract.ParamSpec>();
+        Map<?,?> properties = schema.get("properties") instanceof Map<?,?> p ? p : Map.of();
+        List<?> requiredNames = schema.get("required") instanceof List<?> values ? values : List.of();
+        for (var entry : properties.entrySet()) {
+            if (!(entry.getKey() instanceof String name) || !(entry.getValue() instanceof Map<?,?> definition)) continue;
+            var type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.STRING;
+            if ("date".equals(definition.get("format"))) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.DATE;
+            else if (definition.get("enum") instanceof List<?>) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.ENUM;
+            else if ("integer".equals(definition.get("type"))) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.INTEGER;
+            else if ("number".equals(definition.get("type"))) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.NUMBER;
+            else if ("boolean".equals(definition.get("type"))) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.BOOLEAN;
+            List<String> allowed = definition.get("enum") instanceof List<?> values ? values.stream().map(String::valueOf).toList() : List.of();
+            specs.add(new com.cretas.aims.service.skill.contract.SkillParameterContract.ParamSpec(name, type,
+                    required && requiredNames.contains(name), definition.get("minimum") instanceof Number n ? n.doubleValue() : null,
+                    definition.get("maximum") instanceof Number n ? n.doubleValue() : null, 200, allowed, null));
+        }
+        var validation = new com.cretas.aims.service.skill.contract.SkillParameterContractValidator(null).validate(
+                new com.cretas.aims.service.skill.contract.SkillParameterContract(specs), factoryId, params);
+        return validation.ok() ? null : String.join("；", validation.errors());
+    }
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesRankingConversationSupport salesRankingConversationSupport;
     private final ToolCallRedundancyService redundancyService;
@@ -162,7 +344,14 @@ public class ToolDispatchService {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
-            return executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+            IntentExecuteResponse response = executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+            if (SEMANTIC_READ_TOOLS.contains(tool.getToolName()) && salesRankingConversationSupport != null
+                    && !salesRankingConversationSupport.isCurrent(factoryId, userId, request))
+                return readTurnReply("CANCELLED", "查询已停止或条件已更新，已丢弃旧查询结果。");
+            if (request.getSemanticReadVersion() != null && salesRankingConversationSupport != null
+                    && !salesRankingConversationSupport.finishRead(factoryId, userId, request, response == null ? "FAILED" : response.getStatus()))
+                return readTurnReply("CANCELLED", "查询状态已变化，已丢弃旧查询结果。");
+            return response;
         }
     }
 
@@ -172,6 +361,9 @@ public class ToolDispatchService {
                                                   Long userId, String userRole,
                                                   IntentMatchResult matchResult) {
         try {
+            if (request.getSemanticContext() != null && SEMANTIC_READ_TOOLS.contains(tool.getToolName())
+                    && (intent == null || !tool.getToolName().equals(intent.getToolName())))
+                return readTurnReply("UNSUPPORTED_CAPABILITY", "当前意图尚未绑定此查询工具，未执行查询。");
             // Request identity must be checked before parameter extraction or cache lookup.
             // A cached supplier result is subject to the same boundary as a fresh Tool call.
             if ((SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
@@ -346,7 +538,7 @@ public class ToolDispatchService {
             // extract new parameters from the synthetic confirmation text after this boundary.
             boolean writeOperation = writeGuardService.isWriteTool(tool)
                     || writeGuardService.isWriteIntent(intent);
-            if (!writeOperation && salesRankingConversationSupport != null) {
+            if (!writeOperation && salesRankingConversationSupport != null && request.getSemanticContext() == null) {
                 salesRankingConversationSupport.rememberOtherRead(tool.getToolName(), factoryId, userId, request);
             }
 
@@ -358,6 +550,12 @@ public class ToolDispatchService {
             }
             Map<String, Object> params = TrustedExecutionContext.merge(
                     request.getContext(), factoryId, userId, userRole);
+            if (!writeOperation && request.getSemanticContext() != null
+                    && SEMANTIC_READ_TOOLS.contains(tool.getToolName()) && request.getSemanticParameters() == null) {
+                IntentExecuteResponse decision = resolveReadTurn(factoryId, userId, request,
+                        IntentMatchResult.builder().bestMatch(intent).confidence(1.0).build());
+                if (decision != null) return decision;
+            }
 
             String userInputToUse = request.getUserInput();
             if (matchResult != null && matchResult.getPreprocessedQuery() != null) {
@@ -436,7 +634,7 @@ public class ToolDispatchService {
             }
 
             // Reserve before optional model work; a late result cannot revive a cancelled read.
-            if (SalesRankingParameters.TOOL.equals(tool.getToolName())) {
+            if (SalesRankingParameters.TOOL.equals(tool.getToolName()) && request.getSemanticContext() == null) {
                 if (salesRankingConversationSupport != null) {
                     salesRankingConversationSupport.parameters(factoryId, userId, request, params);
                 } else {
@@ -452,7 +650,7 @@ public class ToolDispatchService {
                     (List<String>) parametersSchema.get("required") : null;
 
             Map<String, Object> ruleExtractedParams = new HashMap<>();
-            if (!boundConfirmation && requiredParams != null && !requiredParams.isEmpty()) {
+            if (!boundConfirmation && request.getSemanticParameters() == null && requiredParams != null && !requiredParams.isEmpty()) {
                 List<String> missingParams = requiredParams.stream()
                         .filter(p -> !params.containsKey(p) ||
                                      params.get(p) == null ||
@@ -471,7 +669,7 @@ public class ToolDispatchService {
             }
 
             // 2.8. LLM 提取剩余参数
-            Map<String, Object> llmExtractedParams = boundConfirmation ? new HashMap<>()
+            Map<String, Object> llmExtractedParams = boundConfirmation || request.getSemanticParameters() != null ? new HashMap<>()
                     : extractParametersWithLLM(factoryId, userInputToUse, tool, params);
             if (!llmExtractedParams.isEmpty() && isFollowUpConfirmation(request)) {
                 // 追问确认按钮带来的参数是用户在按钮上看见并点了的 (「领用 30 公斤」);
@@ -492,8 +690,26 @@ public class ToolDispatchService {
                 }
             }
 
+            if (request.getSemanticParameters() != null && SEMANTIC_READ_TOOLS.contains(tool.getToolName())) {
+                if (parametersSchema != null && parametersSchema.get("properties") instanceof Map<?,?> properties)
+                    properties.keySet().forEach(params::remove);
+                params.putAll(request.getSemanticParameters());
+                if (request.getSemanticParameters().containsKey("startDate") && request.getSemanticParameters().containsKey("endDate"))
+                    params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID, params.get("startDate") + "~" + params.get("endDate"));
+                else params.remove(com.cretas.aims.ai.tool.TimeRangeFilter.SAID);
+            }
             IntentExecuteResponse rankingDecision = applySalesRankingParameters(tool, factoryId, userId, request, params);
             if (rankingDecision != null) return rankingDecision;
+            if (request.getSemanticParameters() != null && SEMANTIC_READ_TOOLS.contains(tool.getToolName())) {
+                Map<String,Object> business = new java.util.LinkedHashMap<>();
+                if (parametersSchema.get("properties") instanceof Map<?,?> properties)
+                    properties.keySet().forEach(k -> { if (k instanceof String key && params.containsKey(key)) business.put(key, params.get(key)); });
+                String invalid = validateReadParameters(parametersSchema, business, factoryId, true);
+                if (invalid != null) return readTurnReply("NEED_MORE_INFO", invalid);
+            }
+            if (!writeOperation && request.getSemanticParameters() != null && salesRankingConversationSupport != null
+                    && !salesRankingConversationSupport.rememberResolvedRead(tool.getToolName(), factoryId, userId, request, params))
+                return readTurnReply("CANCELLED", "查询已停止或条件已改变，未执行旧查询。");
 
             // Learned rules, LLM extraction and resolved references are all untrusted inputs.
             // Re-bind the authenticated principal immediately before hashing and Tool execution.
@@ -538,6 +754,7 @@ public class ToolDispatchService {
             String sessionId = request.getSessionId() != null ? request.getSessionId() : "default";
             if (!writeOperation && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
                     && !SalesRankingParameters.TOOL.equals(tool.getToolName())
+                    && request.getSemanticParameters() == null
                     && redundancyService.isRedundant(sessionId, tool.getToolName(), params)) {
                 log.info("检测到冗余调用，跳过执行: tool={}, session={}", tool.getToolName(), sessionId);
                 Optional<String> cachedResult = redundancyService.getCachedResult(sessionId, tool.getToolName(), params);
@@ -577,6 +794,9 @@ public class ToolDispatchService {
 
             for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
                 try {
+                    if (SEMANTIC_READ_TOOLS.contains(tool.getToolName()) && salesRankingConversationSupport != null
+                            && !salesRankingConversationSupport.isCurrent(factoryId, userId, request))
+                        return readTurnReply("CANCELLED", "当前查询已停止或条件已改变，未重试旧请求。");
                     log.debug("执行 Tool (尝试 {}/{}): name={}, arguments={}",
                             attempt, MAX_RETRIES, tool.getToolName(), argumentsJson);
 
@@ -601,7 +821,7 @@ public class ToolDispatchService {
                             visiblePriceKeys = com.cretas.aims.security.PriceSensitiveContext.stopRecordingVisible();
                         }
                     }
-                    if (SalesRankingParameters.TOOL.equals(tool.getToolName())
+                    if (SEMANTIC_READ_TOOLS.contains(tool.getToolName())
                             && salesRankingConversationSupport != null
                             && !salesRankingConversationSupport.isCurrent(factoryId, userId, request)) {
                         return IntentExecuteResponse.builder().status("CANCELLED")
@@ -630,7 +850,7 @@ public class ToolDispatchService {
                                 .recovered(attempt > 1)
                                 .build();
                         ToolCallRecord savedRecord = redundancyService.recordToolCall(record);
-                        if (!writeOperation && toolSucceeded && savedRecord != null && resultJson != null
+                        if (!writeOperation && request.getSemanticParameters() == null && toolSucceeded && savedRecord != null && resultJson != null
                                 && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
                                 && !SalesRankingParameters.TOOL.equals(tool.getToolName())) {
                             // cacheResult stores into tool_call_cache.cached_result (JSONB).
@@ -1737,7 +1957,7 @@ public class ToolDispatchService {
                     .message("查询已取消或条件已更新，未执行旧查询。").build();
         }
         // Resolved read-query parameters cannot be overwritten by a later optional LLM pass.
-        if (request.getContext() != null) {
+        if (request.getSemanticContext() == null && request.getContext() != null) {
             for (String key : java.util.List.of("startDate", "endDate", "limit", "metric")) {
                 if (request.getContext().get(key) != null) params.put(key, request.getContext().get(key));
             }

@@ -20,69 +20,44 @@ import static org.mockito.Mockito.*;
  */
 class SalesRankingEntryParityContractTest {
     @ParameterizedTest @ValueSource(booleans = {false, true})
-    void sameScriptThroughOrdinaryAndStreamingEntry(boolean streaming) throws Exception {
+    void semanticCorrectionsAndCancellationThroughBothEntries(boolean streaming) throws Exception {
         try (var h = new SalesRankingSemanticContractTest.Harness()) {
             var entry = new Entry(h, streaming);
-            assertThat(entry.run("看看销售排行", true).getStatus()).isEqualTo("SUCCESS");
-            assertThat(entry.run("上个月呢", false).getStatus()).isEqualTo("SUCCESS");
+            assertThat(entry.semantic("看看销售排行", h.intent, "NEW", Map.of()).getStatus()).isEqualTo("SUCCESS");
+            assertThat(entry.semantic("同样的看上月", h.intent, "CORRECT", Map.of("startDate", "2026-10-01", "endDate", "2026-10-31")).getStatus()).isEqualTo("SUCCESS");
+            assertThat(entry.lastRequest.getSemanticParameters()).containsEntry("startDate", "2026-10-01").containsEntry("metric", "amount");
             clearInvocations(h.ranking);
-            assertThat(entry.run("不是金额，按销量，前五个", false).getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
+            assertThat(entry.semantic("不是金额，是数量", h.intent, "UNSUPPORTED", Map.of()).getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
             verifyNoInteractions(h.ranking);
-            assertThat(entry.lastRequest.getContext()).containsEntry("startDate", "2026-10-01")
-                    .containsEntry("limit", 5).containsEntry("metric", "quantity");
-            assertThat(entry.run("不是不查，先看上个月", false).getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
-            assertThat(entry.run("按金额", false).getStatus()).isEqualTo("SUCCESS");
-            assertThat(entry.run("不用查了", false).getStatus()).isEqualTo("CANCELLED");
-            clearInvocations(h.ranking);
-            assertThat(entry.run("上个月呢", false).getStatus()).isEqualTo("NEED_MORE_INFO");
-            verifyNoInteractions(h.ranking);
+            assertThat(entry.semantic("不用查了", null, "CANCEL", Map.of()).getStatus()).isEqualTo("CANCELLED");
+            verify(h.conversations).cancelConversation("F006", 7L, "sales-session");
         }
     }
 
     @ParameterizedTest @ValueSource(booleans = {false, true})
-    void revokedPermissionAndForeignIdentityNeverExecuteRanking(boolean streaming) throws Exception {
+    void orderTimeCorrectionRetainsStatusAndSwitchDropsIt(boolean streaming) throws Exception {
         try (var h = new SalesRankingSemanticContractTest.Harness()) {
             var entry = new Entry(h, streaming);
-            assertThat(entry.run("看看销售排行", true).getStatus()).isEqualTo("SUCCESS");
+            var order = entry.read("order_list", "ORDER_LIST");
+            var material = entry.read("material_batch_query", "MATERIAL_BATCH_QUERY");
+            assertThat(entry.semantic("查上月已确认订单", order, "NEW", Map.of("startDate", "2026-10-01", "endDate", "2026-10-31", "status", "CONFIRMED")).getStatus()).isEqualTo("SUCCESS");
+            assertThat(entry.semantic("时间改成本月，状态不变", order, "CORRECT", Map.of("startDate", "2026-11-01", "endDate", "2026-11-30")).getStatus()).isEqualTo("SUCCESS");
+            assertThat(entry.lastRequest.getSemanticParameters()).containsEntry("status", "CONFIRMED").containsEntry("startDate", "2026-11-01");
+            assertThat(entry.semantic("查今天入库的原料", material, "SWITCH", Map.of("startDate", "2026-11-05", "endDate", "2026-11-05")).getStatus()).isEqualTo("SUCCESS");
+            assertThat(entry.lastRequest.getSemanticParameters()).doesNotContainKey("status");
+        }
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void revokedPermissionAndForeignOwnerNeverExecute(boolean streaming) throws Exception {
+        try (var h = new SalesRankingSemanticContractTest.Harness()) {
+            var entry = new Entry(h, streaming);
             when(entry.intents.hasPermission(anyString(), anyString())).thenReturn(false);
-            clearInvocations(h.ranking);
-            assertThat(entry.run("上个月呢", false).getStatus()).isIn("NO_PERMISSION", "FAILED", "SESSION_OWNERSHIP_DENIED");
+            assertThat(entry.semantic("看看销售排行", h.intent, "NEW", Map.of()).getStatus()).isIn("NO_PERMISSION", "FAILED", "SESSION_OWNERSHIP_DENIED");
             verifyNoInteractions(h.ranking);
             h.owner.setFactoryId("FOREIGN");
-            assertThat(entry.run("上个月呢", false).getStatus()).isIn("NO_PERMISSION", "FAILED", "SESSION_OWNERSHIP_DENIED");
+            assertThat(entry.semantic("看看销售排行", h.intent, "NEW", Map.of()).getStatus()).isIn("NO_PERMISSION", "FAILED", "SESSION_OWNERSHIP_DENIED");
             verifyNoInteractions(h.ranking);
-        }
-    }
-
-    @ParameterizedTest @ValueSource(booleans = {false, true})
-    void inventoryAndOrderReadSwitchesDoNotInheritRankingAndCanCancel(boolean streaming) throws Exception {
-        for (String toolName : List.of("material_batch_query", "order_list")) {
-            try (var h = new SalesRankingSemanticContractTest.Harness()) {
-                var entry = new Entry(h, streaming);
-                assertThat(entry.run("上个月销售排行前五个", true).getStatus()).isEqualTo("SUCCESS");
-                String code = toolName.equals("order_list") ? "ORDER_LIST" : "MATERIAL_BATCH_QUERY";
-                var read = mock(ToolExecutor.class);
-                when(read.getToolName()).thenReturn(toolName);
-                when(read.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
-                when(read.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
-                when(read.getParametersSchema()).thenReturn(Map.of("type", "object", "properties", Map.of(), "required", List.of()));
-                when(read.execute(any(), anyMap())).thenReturn("{\"success\":true,\"data\":{\"message\":\"受控只读结果\",\"items\":[]}}");
-                when(h.registry.getExecutor(toolName)).thenReturn(Optional.of(read));
-                var intent = com.cretas.aims.entity.config.AIIntentConfig.builder().intentCode(code)
-                        .intentName("受控只读查询").intentCategory("DATA_QUERY").toolName(toolName)
-                        .businessType("FACTORY").isActive(true).build();
-                when(entry.intents.getIntentByCode("F006", code)).thenReturn(Optional.of(intent));
-                var next = h.query(toolName.equals("order_list") ? "先查销售订单" : "算了，先查原料库存");
-                next.setIntentCode(code);
-                assertThat(entry.execute(next).getStatus()).isEqualTo("SUCCESS");
-                var args = org.mockito.ArgumentCaptor.forClass(com.cretas.aims.ai.dto.ToolCall.class);
-                verify(read).execute(args.capture(), anyMap());
-                assertThat(args.getValue().getFunction().getArguments()).doesNotContain("startDate", "endDate", "metric", "limit");
-                assertThat(entry.run("不用查了", false).getStatus()).isEqualTo("CANCELLED");
-                clearInvocations(h.ranking, read);
-                assertThat(entry.run("上个月呢", false).getStatus()).isEqualTo("NEED_MORE_INFO");
-                verifyNoInteractions(h.ranking, read);
-            }
         }
     }
 
@@ -102,6 +77,9 @@ class SalesRankingEntryParityContractTest {
             deps.put(AIIntentService.class, intents); deps.put(ConversationMemoryService.class, h.memory);
             deps.put(ConversationService.class, h.conversations); deps.put(ToolRegistry.class, h.registry);
             deps.put(ToolDispatchService.class, h.dispatch); deps.put(com.fasterxml.jackson.databind.ObjectMapper.class, h.mapper);
+            var semanticCache = mock(SemanticCacheService.class);
+            when(semanticCache.queryCache(anyString(), anyString())).thenReturn(com.cretas.aims.dto.cache.SemanticCacheHit.miss(0L));
+            deps.put(SemanticCacheService.class, semanticCache);
             ordinary = construct(IntentExecutionOrchestrator.class, deps);
             var configs = mock(IntentConfigManagementService.class);
             when(configs.resolveBusinessDomain("F006")).thenReturn("FACTORY");
@@ -111,12 +89,15 @@ class SalesRankingEntryParityContractTest {
             when(domain.check(anyString(), any())).thenReturn(Optional.empty());
             ReflectionTestUtils.setField(ordinary, "businessTypeGate", domain);
             ReflectionTestUtils.setField(ordinary, "salesRankingConversationSupport", h.support);
+            var context = new SemanticConversationContextService(h.memory, SalesRankingSemanticContractTest.CLOCK);
+            ReflectionTestUtils.setField(ordinary, "semanticConversationContextService", context);
             sse = spy(construct(SseStreamingService.class, deps));
             ReflectionTestUtils.setField(sse, "conversationMemoryService", h.memory);
             ReflectionTestUtils.setField(sse, "conversationService", h.conversations);
             ReflectionTestUtils.setField(sse, "writeGuardService", new WriteGuardService());
             ReflectionTestUtils.setField(sse, "businessTypeGate", domain);
             ReflectionTestUtils.setField(sse, "salesRankingConversationSupport", h.support);
+            ReflectionTestUtils.setField(sse, "semanticConversationContextService", context);
             doAnswer(c -> {
                 if ("result".equals(c.getArgument(1)) && c.getArgument(2) instanceof IntentExecuteResponse response) result.set(response);
                 if ("error".equals(c.getArgument(1))) throw new AssertionError("SSE error: " + c.getArgument(2));
@@ -126,6 +107,32 @@ class SalesRankingEntryParityContractTest {
         IntentExecuteResponse run(String text, boolean explicit) {
             lastRequest = h.query(text); if (!explicit) lastRequest.setIntentCode(null);
             return execute(lastRequest);
+        }
+        IntentExecuteResponse semantic(String text, com.cretas.aims.entity.config.AIIntentConfig intent, String action, Map<String,Object> delta) throws Exception {
+            QueryPreprocessorService preprocessor = (QueryPreprocessorService) ReflectionTestUtils.getField(ordinary, "queryPreprocessorService");
+            when(preprocessor.detectNegationVeto(eq(text), any())).thenReturn("CANCEL".equals(action)
+                    ? QueryPreprocessorService.NegationKind.VETO_READ : QueryPreprocessorService.NegationKind.NONE);
+            var match = com.cretas.aims.dto.intent.IntentMatchResult.builder().bestMatch(intent)
+                    .confidence(intent == null ? 0.0 : .99).matchMethod(com.cretas.aims.dto.intent.IntentMatchResult.MatchMethod.LLM)
+                    .requiresConfirmation(false).build();
+            when(intents.recognizeIntentWithConfidence(anyString(), eq("F006"), anyInt(), any(), anyString(), any(), any(), any(), anyList(), anyMap())).thenReturn(match);
+            SemanticReadTurnResolverContractTest.model(h, action, delta);
+            return run(text, false);
+        }
+        com.cretas.aims.entity.config.AIIntentConfig read(String name, String code) throws Exception {
+            var tool = mock(ToolExecutor.class);
+            when(tool.getToolName()).thenReturn(name);
+            when(tool.getDescription()).thenReturn("受控只读查询");
+            when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+            when(tool.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+            when(tool.getParametersSchema()).thenReturn(Map.of("type", "object", "properties", Map.of(
+                    "startDate", Map.of("type", "string"), "endDate", Map.of("type", "string"), "status", Map.of("type", "string")), "required", List.of()));
+            when(tool.execute(any(), anyMap())).thenReturn("{\"success\":true,\"data\":{\"total\":0,\"content\":[]},\"message\":\"受控空结果\"}");
+            when(h.registry.getExecutor(name)).thenReturn(Optional.of(tool));
+            var intent = com.cretas.aims.entity.config.AIIntentConfig.builder().intentCode(code).intentName(code)
+                    .toolName(name).intentCategory("DATA_OPERATION").businessType("FACTORY").isActive(true).build();
+            when(intents.getIntentByCode("F006", code)).thenReturn(Optional.of(intent));
+            return intent;
         }
         IntentExecuteResponse execute(IntentExecuteRequest request) {
             lastRequest = request;

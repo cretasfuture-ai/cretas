@@ -144,6 +144,8 @@ public class SseStreamingService {
     private final FollowUpResolver followUpResolver = new FollowUpResolver();
     @Autowired(required = false)
     private SalesRankingConversationSupport salesRankingConversationSupport;
+    @org.springframework.beans.factory.annotation.Autowired
+    private SemanticConversationContextService semanticConversationContextService;
 
     /**
      * 参数收集会话 (缺参追问) 的读写。缺席时 (裸构造的单测) 不做缺参续轮, 行为同旧版。
@@ -296,6 +298,14 @@ public class SseStreamingService {
             // Platform/stateless callers may still use unrelated no-session routes. They must
             // never turn their numeric userId into a conversation lookup; only a typed,
             // factory-scoped actor may establish or access server-owned conversation state.
+            if (semanticConversationContextService != null) {
+                semanticConversationContextService.prepare(factoryId, userId, request);
+                IntentExecuteResponse admissionFailure = SemanticConversationContextService.admissionFailure(request);
+                if (admissionFailure != null) {
+                    streamTerminalResponse(emitter, admissionFailure, startTime);
+                    return;
+                }
+            }
             ConversationContext sessionContext = trustedFactoryActor
                     ? establishOwnedSession(factoryId, request, userId)
                     : null;
@@ -329,13 +339,6 @@ public class SseStreamingService {
             }
             boolean factoryPackConstrained = factoryPackRoute.isConstrained();
 
-            if (salesRankingConversationSupport != null) {
-                IntentExecuteResponse readContinuation = salesRankingConversationSupport.prepare(factoryId, userId, request);
-                if (readContinuation != null) {
-                    streamTerminalResponse(emitter, readContinuation, startTime);
-                    return;
-                }
-            }
 
             if (isPaginationRequest(request)) {
                 executePaginationRequest(emitter, factoryId, request, userId, userRole,
@@ -440,7 +443,8 @@ public class SseStreamingService {
                 return;
             }
             // 1.5. 早期问题类型检测
-            if (!factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
+            if (SemanticConversationContextService.allowsDirectRoute(request)
+                    && !factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
                 QuestionType earlyQuestionType = knowledgeBase.detectQuestionType(userInput);
                 if (earlyQuestionType == QuestionType.GENERAL_QUESTION ||
                     earlyQuestionType == QuestionType.CONVERSATIONAL) {
@@ -467,7 +471,7 @@ public class SseStreamingService {
             // freshness boundary while the dedicated restaurant execution lane is retired.
             // 第 3b 步: 带最近对话的轮次也不读语义缓存 (缓存键只有工厂+原话, 不含上下文)。
             boolean skipCacheForRestaurant = factoryPackConstrained || restaurantTenant
-                    || !recentTurns(request).isEmpty();
+                    || !SemanticConversationContextService.allowsDirectRoute(request);
             SemanticCacheHit cacheHit = skipCacheForRestaurant
                     ? SemanticCacheHit.miss(0L)
                     : semanticCacheService.queryCache(factoryId, userInput);
@@ -506,7 +510,7 @@ public class SseStreamingService {
                 String recognizerSessionId = trustedFactoryActor ? request.getSessionId() : null;
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
                         userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                        request.getMode(), null, recentTurns(request));
+                        request.getMode(), null, SemanticConversationContextService.effectiveHistory(request), request.getSemanticContext());
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
                 sendSseEvent(emitter, "result", validationFailureResponse);
@@ -519,6 +523,22 @@ public class SseStreamingService {
                 return;
             }
 
+            AIIntentConfig semanticReadIntent = matchResult != null && matchResult.hasMatch() ? matchResult.getBestMatch() : null;
+            if (semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)
+                semanticReadIntent = aiIntentService.getIntentByCode(factoryId,
+                        SemanticConversationContextService.previousReadIntent(request)).orElse(null);
+            if (semanticReadIntent != null) {
+                String denied = permissionDeniedMessage(factoryId, semanticReadIntent, userId, userRole);
+                if (denied != null) {
+                    streamNoPermission(emitter, semanticReadIntent, denied, startTime);
+                    return;
+                }
+            }
+            IntentExecuteResponse readTurn = toolDispatchService.resolveReadTurn(factoryId, userId, request, matchResult);
+            if (readTurn != null) {
+                streamTerminalResponse(emitter, readTurn, startTime);
+                return;
+            }
             // 5. 处理识别结果
             if (!matchResult.hasMatch()) {
                 if (factoryPackConstrained) {

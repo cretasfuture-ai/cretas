@@ -85,6 +85,8 @@ public class IntentExecutionOrchestrator {
     private FactoryFollowUpService factoryFollowUpService;
     @Autowired(required = false)
     private SalesRankingConversationSupport salesRankingConversationSupport;
+    @org.springframework.beans.factory.annotation.Autowired
+    private SemanticConversationContextService semanticConversationContextService;
     /**
      * AI 数据访问审计: 一次意图执行一条; 期间的工具调用 / 成本分析并进这一条 (同一线程, 请求外也合并)。
      * 单测直接构造时不记录。
@@ -348,7 +350,15 @@ public class IntentExecutionOrchestrator {
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId);
              var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
-            return executeInScope(factoryId, request, userId, userRole);
+            IntentExecuteResponse response = executeInScope(factoryId, request, userId, userRole);
+            if (response != null && request.getSemanticContext() != null && request.getSessionId() != null
+                    && response.getSessionId() == null && !"NO_PERMISSION".equals(response.getStatus())) {
+                Map<String,Object> metadata = new java.util.LinkedHashMap<>(response.getMetadata() == null ? Map.of() : response.getMetadata());
+                if (!metadata.containsKey("sessionId")) {
+                    metadata.put("sessionId", request.getSessionId()); response.setSessionId(request.getSessionId()); response.setMetadata(metadata);
+                }
+            }
+            return response;
         }
     }
 
@@ -382,9 +392,10 @@ public class IntentExecutionOrchestrator {
             return sessionAdmissionDeniedResponse();
         }
 
-        if (salesRankingConversationSupport != null) {
-            IntentExecuteResponse readContinuation = salesRankingConversationSupport.prepare(factoryId, userId, request);
-            if (readContinuation != null) return readContinuation;
+        if (semanticConversationContextService != null) {
+            semanticConversationContextService.prepare(factoryId, userId, request);
+            IntentExecuteResponse admissionFailure = SemanticConversationContextService.admissionFailure(request);
+            if (admissionFailure != null) return admissionFailure;
         }
         if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
             hydrateRestaurantComparisonContext(factoryId, userId, request);
@@ -558,7 +569,8 @@ public class IntentExecutionOrchestrator {
                         factoryId, userInput);
                 return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
             }
-            if (vk == QueryPreprocessorService.NegationKind.VETO_READ) {
+            if (vk == QueryPreprocessorService.NegationKind.VETO_READ
+                    && !SemanticConversationContextService.hasReadContext(request)) {
                 log.info("[W1b] orchestrator VETO_READ → clarification (no phrase shortcut, no execution): '{}'", vInput);
                 return buildNegationVetoClarificationResponse(vInput);
             }
@@ -631,7 +643,8 @@ public class IntentExecutionOrchestrator {
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
             }
         }
-        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()
+        if (SemanticConversationContextService.allowsDirectRoute(request)
+                && !negationVetoWrite && userInput != null && !userInput.isEmpty()
                 && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)
                 && !isRestaurantCompoundQuestion(factoryId, userInput)) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(
@@ -690,7 +703,7 @@ public class IntentExecutionOrchestrator {
         }
 
         // 0.3. 早期问题类型检测
-        if (!factoryPackConstrained
+        if (SemanticConversationContextService.allowsDirectRoute(request) && !factoryPackConstrained
                 && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentExecuteResponse earlyRouteResponse = handleEarlyQuestionTypeDetection(
                     factoryId, userInput, request, userId, userRole);
@@ -700,7 +713,7 @@ public class IntentExecutionOrchestrator {
         }
 
         // 0.5. 语义缓存
-        if (userInput != null && !userInput.isEmpty()) {
+        if (SemanticConversationContextService.allowsDirectRoute(request) && userInput != null && !userInput.isEmpty()) {
             handleSemanticCache(factoryId, userInput, request);
         }
 
@@ -718,12 +731,24 @@ public class IntentExecutionOrchestrator {
                 String recognizerSessionId = recognizerUserId == null ? null : request.getSessionId();
                 matchResult = aiIntentService.recognizeIntentWithConfidence(
                         request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId));
+                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId),
+                        SemanticConversationContextService.effectiveHistory(request), request.getSemanticContext());
             } catch (LlmSchemaValidationException e) {
                 log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
                 return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
             }
         }
+
+        AIIntentConfig semanticReadIntent = matchResult != null && matchResult.hasMatch() ? matchResult.getBestMatch() : null;
+        if (semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)
+            semanticReadIntent = aiIntentService.getIntentByCode(factoryId,
+                    SemanticConversationContextService.previousReadIntent(request)).orElse(null);
+        if (semanticReadIntent != null) {
+            IntentExecuteResponse denied = checkIntentPermission(semanticReadIntent, factoryId, userId, userRole);
+            if (denied != null) return denied;
+        }
+        IntentExecuteResponse readTurn = toolDispatchService.resolveReadTurn(factoryId, userId, request, matchResult);
+        if (readTurn != null) return readTurn;
 
         if (matchResult != null && matchResult.hasMatch()
                 && SupplierComparisonReadIntent.CODE.equals(matchResult.getBestMatch().getIntentCode())) {
@@ -4352,6 +4377,10 @@ public class IntentExecutionOrchestrator {
     private void updateConversationMemory(String sessionId, IntentExecuteRequest request,
                                            IntentExecuteResponse response, IntentMatchResult intentResult,
                                            String factoryId, Long userId) {
+        if (request.getSemanticContext() != null && response != null
+                && java.util.Set.of("CANCELLED", "TASK_CHANGED").contains(String.valueOf(response.getStatus()))) return;
+        if (request.getSemanticReadVersion() != null && salesRankingConversationSupport != null
+                && !salesRankingConversationSupport.isCurrent(factoryId, userId, request)) return;
         try {
             String userInput = request.getUserInput();
             String assistantMessage = response.getMessage() != null ? response.getMessage() : "执行完成";

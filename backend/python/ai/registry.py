@@ -16,6 +16,9 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
+from pathlib import Path
 import re
 import time
 from dataclasses import dataclass, field
@@ -67,10 +70,41 @@ class RegistrySnapshot:
     lexicon: Dict[str, List[Tuple[str, str]]] = field(default_factory=dict)
     loaded_at_unix: float = 0.0
     available: bool = False  # 两张表都读到了
+    # A label approval alone does not establish independence from conversation context.
+    # Route reviews are separate, exact factory/domain/key/code grants; absent = candidate only.
+    standalone_routes: frozenset = field(default_factory=frozenset)
 
 
 _current = RegistrySnapshot()
 _missing_table_warned = False
+_ROUTE_REVIEWS_FILE = Path(__file__).with_name("registry-route-reviews.json")
+
+
+def route_fingerprint(factory_id, business_type, key, code):
+    record = [factory_id, business_type, key, code]
+    return hashlib.sha256(json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
+def _reviewed_standalone_routes(phrases):
+    """Routing applicability metadata, never labels, parameters, results, or permission grants."""
+    try:
+        body = json.loads(_ROUTE_REVIEWS_FILE.read_text(encoding="utf-8"))
+        if body.get("schemaVersion") != 1 or not isinstance(body.get("reviews"), list):
+            return frozenset()
+        approved = set()
+        for row in body["reviews"]:
+            if not isinstance(row, dict) or row.get("decision") != "ALLOW_STANDALONE_ROUTE" or not row.get("evidence"):
+                continue
+            scope = (row.get("factory_id"), row.get("business_type"))
+            key, code = row.get("normalized_text"), row.get("intent_code")
+            if phrases.get(scope, {}).get(key) != code:
+                continue
+            if row.get("record_sha256") == route_fingerprint(*scope, key, code):
+                approved.add((*scope, key, code))
+        return frozenset(approved)
+    except (OSError, ValueError, TypeError):
+        logger.warning("[ai-registry] route review unavailable; approved labels remain semantic candidates")
+        return frozenset()
 
 PHRASES_SQL = """
 SELECT factory_id, business_type, normalized_text, intent_code
@@ -107,7 +141,8 @@ def build_snapshot(phrase_rows: List[Dict[str, Any]], lexicon_rows: List[Dict[st
                 cur[alias] = (rank[et], tag)
     lexicon = {f: sorted(((a, t) for a, (_, t) in m.items()), key=lambda p: (-len(p[0]), p[0]))
                for f, m in lex.items()}
-    return RegistrySnapshot(phrases=phrases, lexicon=lexicon, loaded_at_unix=time.time(), available=True)
+    return RegistrySnapshot(phrases=phrases, lexicon=lexicon, loaded_at_unix=time.time(), available=True,
+                            standalone_routes=_reviewed_standalone_routes(phrases))
 
 
 async def load_registry(pool) -> RegistrySnapshot:

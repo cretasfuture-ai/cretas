@@ -46,6 +46,10 @@ public final class SalesRankingParameters {
             if (n != null) params.put("limit", n.compareTo(java.math.BigDecimal.valueOf(100)) > 0
                     ? n : n.intValueExact());
         }
+        defaults(params, today);
+    }
+
+    public static void defaults(Map<String,Object> params, LocalDate today) {
         // Only absent dates default. Existing explicit dates (including those resolved by the
         // standard preprocessor/LLM) retain their meaning; partial ranges are never guessed.
         if (!params.containsKey("startDate") && !params.containsKey("endDate")) {

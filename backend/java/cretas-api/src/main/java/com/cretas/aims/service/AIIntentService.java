@@ -152,6 +152,14 @@ public interface AIIntentService {
                 mode, userPermissions);
     }
 
+    /** Server-owned context snapshot, shared by ordinary and SSE execution. */
+    default IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
+            Long userId, String userRole, String sessionId, String mode, java.util.Set<String> userPermissions,
+            java.util.List<java.util.Map<String,String>> history, java.util.Map<String,Object> taskContext) {
+        return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId,
+                mode, userPermissions, history);
+    }
+
     // ==================== 多意图识别 ====================
 
     /**

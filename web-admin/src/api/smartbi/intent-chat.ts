@@ -56,6 +56,7 @@ export interface IntentExecuteResponse {
 }
 
 export interface ChatExecuteOptions {
+  conversationStart?: boolean;
   sessionId?: string;
   skipSlotFilling?: boolean;
   context?: Record<string, unknown>;
@@ -92,6 +93,7 @@ export async function executeIntent(
 ): Promise<IntentExecuteResponse> {
   const body: Record<string, unknown> = { userInput };
   if (options.sessionId) body.sessionId = options.sessionId;
+  if (options.conversationStart) body.conversationStart = true;
   if (options.skipSlotFilling) body.skipSlotFilling = true;
   if (options.context) body.context = options.context;
   if (options.mode) body.mode = options.mode;

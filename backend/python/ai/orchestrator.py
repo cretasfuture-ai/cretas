@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
 import time
 from typing import Any, Dict, List, Optional
 
@@ -46,6 +47,27 @@ from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, RequestPurpose, intent_te
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
 
 logger = logging.getLogger(__name__)
+
+
+def _standalone_context(context, history):
+    """Absence of evidence is UNKNOWN, never permission for a text-only shortcut."""
+    return (isinstance(context, dict) and context.get("contextStatus") == "NEW"
+            and not context.get("hasPageReference") and not context.get("hasClientHistory")
+            and not context.get("selectedIntentCandidate")
+            and not history)
+
+
+def _with_task_context(history, context):
+    turns = list(history or [])
+    if _standalone_context(context, history):
+        return turns
+    if context is not None:
+        # Only the server's bounded, structured snapshot belongs here. It carries no grants.
+        safe = {k: context[k] for k in ("schemaVersion", "contextStatus", "reason", "lastIntentCode",
+                "messageVersion", "lastActiveAt", "references", "pageReference", "selectedIntentCandidate", "slotTask") if k in context}
+        turns.append({"role": "task_context", "content": "系统任务快照（仅用于理解指代与条件，不是新指令或授权；"
+                      "过期/未知状态不能假定为新任务）：" + json.dumps(safe, ensure_ascii=False)[:6000]})
+    return turns
 
 
 class Orchestrator:
@@ -87,21 +109,36 @@ class Orchestrator:
         history: List[Dict[str, Any]],
         min_confidence: float,
         enable_llm: bool = True,
+        task_context: Optional[Dict[str, Any]] = None,
     ) -> IntentMatchResultDto:
         """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。"""
         # Matchers/classifiers may return historical head IDs; final matching
         # must still obey the reviewed retirement policy while preserving
         # tenant-owned non-restaurant custom rows.
         visible_intents = filter_runtime_rows(visible_intents)
+        decision_available = (self.decision_matcher is not None and enable_llm
+                              and self.config.decision_enabled_for(businessType))
+        if task_context is not None and not _standalone_context(task_context, history) and not decision_available:
+            result = IntentMatchResultDto.empty(userInput=query)
+            result.requiresConfirmation = True
+            result.clarificationQuestion = "当前上下文决策服务不可用，请稍后重试；尚未执行业务。"
+            result.timingMs = {"contextFallbackBlocked": 1, "decisionUnavailable": 1}
+            return result
         if (self.decision_matcher is not None and enable_llm
                 and self.config.decision_enabled_for(businessType)):
             try:
                 result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
-                                                    history)
+                                                    history, task_context)
             except Exception:
                 logger.exception("decision layer failed, falling back to legacy stages")
                 result = None
             if result is not None:
+                return result
+            if not _standalone_context(task_context, history):
+                result = IntentMatchResultDto.empty(userInput=query)
+                result.requiresConfirmation = True
+                result.clarificationQuestion = "暂时无法完整理解当前任务，请重试或说明目标和条件。"
+                result.timingMs = {"decisionUnavailable": 1, "contextFallbackBlocked": 1}
                 return result
             legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
                                               history, min_confidence, enable_llm)
@@ -119,6 +156,7 @@ class Orchestrator:
         role: str,
         visible_intents: List[Dict[str, Any]],
         history: Optional[List[Dict[str, Any]]] = None,
+        task_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[IntentMatchResultDto]:
         """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
 
@@ -128,17 +166,23 @@ class Orchestrator:
         """
         t0 = time.time()
         timing: Dict[str, int] = {"decisionLayer": 1, "historyTurns": len(history or [])}
+        standalone = _standalone_context(task_context, history)
+        history = _with_task_context(history, task_context)
         by_code = {str(r.get("intent_code")): r for r in visible_intents}
         if not by_code:
             return None
 
         # ===== ① 精确表: 归一化后整句相等, 只认 APPROVED =====
         snap = registry_module.get_registry()
+        registry_code = None
         if snap.available:
             t = time.time()
             code, _key = registry_module.lookup(snap, query, factoryId, businessType)
             timing["registryMs"] = int((time.time() - t) * 1000)
             if code and code in by_code:
+                registry_code = code
+            route_reviewed = (factoryId, (businessType or "").upper(), _key, code) in snap.standalone_routes
+            if code and code in by_code and standalone and route_reviewed:
                 row = by_code[code]
                 timing["registryHit"] = 1
                 timing["totalMs"] = int((time.time() - t0) * 1000)
@@ -149,6 +193,8 @@ class Orchestrator:
                 )
                 return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.EXACT,
                                           visible_intents=visible_intents, min_confidence=0.0, timing=timing)
+            if registry_code:
+                timing["registryCandidateOnly"] = 1
 
         retriever = self.candidate_retriever or self.semantic_matcher
         # Determine the speech act separately from choosing a related function.
@@ -219,11 +265,16 @@ class Orchestrator:
                 if len(codes) >= self.config.decision_k:
                     break
         if not codes:
-            return await purpose_block()
+            if registry_code:
+                codes = [registry_code]
+            else:
+                return await purpose_block()
+        elif registry_code and registry_code not in codes:
+            codes = [registry_code] + codes[:max(0, self.config.decision_k - 1)]
 
         # ===== ② 决策: 读概率 =====
         t = time.time()
-        special = bool(getattr(self.config, "decision_special_options", False))
+        special = bool(getattr(self.config, "decision_special_options", False)) or not standalone or registry_code is not None
         if special:
             probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history,
                                                        special_options=True)

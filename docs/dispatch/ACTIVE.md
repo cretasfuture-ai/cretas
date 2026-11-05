@@ -6,7 +6,8 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
-- `SEMANTIC-SALES-20261105` — `review` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — scope 排行Tool、execution普通/SSE/dispatch、会话槽DTO及tests/审计；首轮197通过+package，追加条数边界复验见PR1476。保留freeze，不合main/部署；模型/训练/35/796不改。
+- `SEMANTIC-LIVE-PROBE-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base 7650d9c981b360d3c96f7b04c586d61cdd0cf9bc — scope仅外部semantic-live-evaluation/entry-probe；root接管适配器修复与真实入口trace。验收独立javac+Python；保留原失败，禁改target/生产/训练；新增$100账本。
+- `SEMANTIC-SALES-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476修正；订单/库存样板，统一语义上下文、直达准入、参数纠正及修复。scope含Java识别DTO/入口/会话服务、Python ai、专项tests/证据。保留freeze；无生产写/训练/模型替换/部署。
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
 
 
@@ -111,7 +112,7 @@
 
 
 ## Scope 锁地图
-- `SEMANTIC-SALES-20261105`：ProductSalesRankingTool、dto/conversation/EntitySlot、execution/{IntentExecutionOrchestrator,SseStreamingService,ToolDispatchService,SalesRanking*}；专项ContractTest/审计文档。Owner同任务行；review锁保留；不含Repository/Entity/训练/线上。
+- `SEMANTIC-SALES-20261105`：Java execution/识别DTO/会话；Python ai/{api,dto,orchestrator,registry,matcher/decision}；Web AIQuery/intent-chat新会话声明；专项tests/证据。Owner同任务行；独立worktree；不含Repository/Entity/训练/线上。
 
 
 

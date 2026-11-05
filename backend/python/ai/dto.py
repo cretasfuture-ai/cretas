@@ -425,6 +425,7 @@ class IntentMatchRequest(_CamelBase):
     role: str
     businessType: str
     history: List[Dict[str, str]] = Field(default_factory=list)
+    taskContext: Optional[Dict[str, Any]] = None
     options: IntentMatchOptions = Field(default_factory=IntentMatchOptions)
     # P1 读写分块 (2026-07-23): 目录过滤参数。mode=READ 剔除写意图;
     # OPERATE+userPermissions 剔除无权限写意图; None=老客户端不过滤。

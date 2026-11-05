@@ -38,6 +38,33 @@ public class ConversationMemoryServiceImpl implements ConversationMemoryService 
 
     private final ConversationMemoryRepository memoryRepository;
     private final DashScopeClient dashScopeClient;
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
+    @Override
+    @Transactional
+    public boolean compareAndSetReadQuery(String factoryId, Long userId, String sessionId,
+                                         String expectedVersion, EntitySlot next) {
+        boolean actor = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER
+                        && Objects.equals(a.factoryId(), factoryId) && Objects.equals(a.id(), userId)).isPresent();
+        if (!actor || next == null || next.getMetadata() == null
+                || !(next.getMetadata().get(READ_QUERY_VERSION_KEY) instanceof String)) return false;
+        var found = memoryRepository.findBySessionId(sessionId);
+        if (found.isEmpty()) return false;
+        ConversationMemory memory = found.get();
+        // Refresh while taking the database row lock: an earlier persistence-context read is
+        // not an atomic compare. This lock is shared across Java processes, not a second store.
+        entityManager.refresh(memory, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
+        if (!Objects.equals(factoryId, memory.getFactoryId()) || !Objects.equals(userId, memory.getUserId())) return false;
+        var slots = memory.getEntitySlots();
+        var current = slots == null ? null : slots.get(EntitySlot.SlotType.READ_QUERY.name());
+        Object currentVersion = current == null || current.getMetadata() == null ? null
+                : current.getMetadata().get(READ_QUERY_VERSION_KEY);
+        if (!Objects.equals(expectedVersion, currentVersion)) return false;
+        updateEntitySlot(sessionId, EntitySlot.SlotType.READ_QUERY, next);
+        return true;
+    }
 
     /** 摘要前脱敏; 单测直接 new 本类时用默认实例。 */
     @Autowired
