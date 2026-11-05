@@ -9,6 +9,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.DisposalMaterialBatchOptionsService;
 import com.cretas.aims.service.PermissionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,7 +49,7 @@ class DisposalMaterialBatchOptionsContractTest {
     void setup() {
         actor = new User(); actor.setId(88L); actor.setFactoryId("F006");
         when(users.findById(88L)).thenReturn(Optional.of(actor));
-        mvc = MockMvcBuilders.standaloneSetup(new DisposalMaterialBatchOptionsController(batches))
+        mvc = MockMvcBuilders.standaloneSetup(new DisposalMaterialBatchOptionsController(new DisposalMaterialBatchOptionsService(batches)))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .addInterceptors(new PermissionInterceptor(permissions, users, new ObjectMapper())).build();
     }
