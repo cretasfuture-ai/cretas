@@ -254,6 +254,13 @@ describe('product process workflow model', () => {
         expect.objectContaining({ id: 'output:2', fixedCostShare: 20 }),
       ]) });
 
+    const cleared = applyWorkflowPatches(applied.definition, [{
+      op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'costAllocationMethod', value: null,
+    }]);
+    expect(cleared.errors).toEqual([]);
+    expect(cleared.definition.nodes.find((node) => node.id === 'process:1')?.data)
+      .toMatchObject({ costAllocationMethod: null });
+
     expectWorkflowPatchRejected(definition, [{
       op: 'SET_NODE_FIELD', nodeId: 'process:1', path: 'costAllocationMethod', value: 'SALES_VALUE',
     }]);

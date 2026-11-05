@@ -617,6 +617,7 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && optionalBoolean(value.allowMultipleUpstreamSources)
     && optionalBoolean(value.allowFinishedGoodsSource)
     && (value.costAllocationMethod === undefined
+      || value.costAllocationMethod === null
       || value.costAllocationMethod === 'WEIGHT'
       || value.costAllocationMethod === 'FIXED_RATIO')
     && isOptionalReworkPolicy(value.reworkPolicy)
@@ -718,7 +719,9 @@ function isAllowedFieldValue(path: string, value: unknown): boolean {
     return value === null || typeof value === 'string';
   }
   if (path === 'reportingRequired') return typeof value === 'boolean';
-  if (path === 'costAllocationMethod') return value === 'WEIGHT' || value === 'FIXED_RATIO';
+  if (path === 'costAllocationMethod') {
+    return value === null || value === 'WEIGHT' || value === 'FIXED_RATIO';
+  }
   if (path === 'conversionRule.mode') return typeof value === 'string' && conversionModes.has(value);
   if (path === 'conversionRule') return isConversionRule(value);
   if (path === 'ports') return Array.isArray(value) && value.every(isProcessPort);
