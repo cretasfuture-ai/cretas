@@ -21,6 +21,7 @@ const labels: Record<string, string> = {
   inputs: '额外原料投入', seasonings: '辅料 / 调料投入', dosagePerKgG: '每 kg 投入克数',
   subsequentPotRatio: '后续锅比例', injectionAmount: '注射量',
   inputShares: '主料份额', percent: '份额 %', reworkSources: '回料来源', output: '回料产出', rework: '是否回料',
+  costAllocationMethod: '成本分摊方式', fixedCostShare: '成本分摊份额 %',
   ccps: '控制点', hazardType: '危害类型', criticalLimitMin: '下限', criticalLimitMax: '上限',
 };
 const owns = (value: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(value, key);
@@ -32,6 +33,83 @@ export function workflowAiStableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(workflowAiStableJson).join(',')}]`;
   if (record(value)) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${workflowAiStableJson(value[key])}`).join(',')}}`;
   return JSON.stringify(value);
+}
+
+export interface WorkflowAiAllocationOutput {
+  portId: string;
+  name: string;
+}
+
+export interface WorkflowAiAllocationRequest {
+  name?: unknown;
+  fixedCostShare?: unknown;
+}
+
+export interface WorkflowAiAllocationResolution {
+  method?: 'WEIGHT' | 'FIXED_RATIO';
+  shares: Record<string, number>;
+  pending: string[];
+}
+
+/**
+ * Resolve AI-declared fixed output shares against the actual output ports.
+ * Matching is exact after the same whitespace/case normalization used by the
+ * compiler; no positional/default matching is allowed.
+ */
+export function resolveWorkflowAiAllocation(
+  method: unknown,
+  outputPorts: WorkflowAiAllocationOutput[],
+  requestedOutputs: WorkflowAiAllocationRequest[],
+): WorkflowAiAllocationResolution {
+  if (method === undefined || method === null || method === 'WEIGHT') {
+    return { ...(method === 'WEIGHT' ? { method: 'WEIGHT' as const } : {}), shares: {}, pending: [] };
+  }
+  if (method !== 'FIXED_RATIO') {
+    return { shares: {}, pending: [`成本分摊方式「${String(method)}」无法识别，待确认`] };
+  }
+  const pending: string[] = [];
+  const shares: Record<string, number> = {};
+  if (outputPorts.length < 2) {
+    pending.push('固定比例成本分摊至少需要两个产出，待确认');
+  }
+  const normalize = (value: string) => value.trim().replace(/\s+/g, '');
+  const portByName = new Map<string, WorkflowAiAllocationOutput[]>();
+  const requestedPortIds = new Set<string>();
+  outputPorts.forEach((port) => {
+    const key = normalize(port.name);
+    if (!key) return;
+    portByName.set(key, [...(portByName.get(key) || []), port]);
+  });
+  requestedOutputs.forEach((output) => {
+    const name = typeof output.name === 'string' ? output.name.trim() : '';
+    const key = normalize(name);
+    const matches = key ? (portByName.get(key) || []) : [];
+    if (!name || matches.length === 0) {
+      pending.push(`固定比例产出「${name || '未命名'}」无法匹配画布产出，待确认`);
+      return;
+    }
+    if (matches.length !== 1 || requestedPortIds.has(matches[0].portId)) {
+      pending.push(`固定比例产出「${name}」匹配不唯一，待确认`);
+      return;
+    }
+    requestedPortIds.add(matches[0].portId);
+    const share = output.fixedCostShare;
+    if (typeof share !== 'number' || !Number.isFinite(share) || !(share > 0) || share > 100) {
+      pending.push(`固定比例产出「${name}」份额无效或缺失，待确认`);
+      return;
+    }
+    shares[matches[0].portId] = share;
+  });
+  outputPorts.forEach((port) => {
+    if (!owns(shares, port.portId)) {
+      pending.push(`固定比例产出「${port.name || '未命名'}」缺少份额，待确认`);
+    }
+  });
+  if (!pending.length) {
+    const total = Object.values(shares).reduce((sum, value) => sum + value, 0);
+    if (Math.abs(total - 100) > 0.01) pending.push(`固定比例合计 ${Number(total.toFixed(2))}%，必须是 100%，待确认`);
+  }
+  return { method: 'FIXED_RATIO', shares, pending };
 }
 
 /**
@@ -290,7 +368,7 @@ function display(value: unknown): string {
   if (value === '') return '空字符串';
   if (value === true) return '是';
   if (value === false) return '否';
-  const modes: Record<string, string> = { ACTUAL_IO: '实际投入与产出', ACTUAL_WEIGHT: '实际重量', INPUT: '投入', OUTPUT: '产出', MAIN: '主产出', CO_PRODUCT: '联产品', BY_PRODUCT: '副产品' };
+  const modes: Record<string, string> = { ACTUAL_IO: '实际投入与产出', ACTUAL_WEIGHT: '实际重量', INPUT: '投入', OUTPUT: '产出', MAIN: '主产出', CO_PRODUCT: '联产品', BY_PRODUCT: '副产品', WEIGHT: '按重量', FIXED_RATIO: '固定比例' };
   return typeof value === 'string' ? modes[value] || value : workflowAiStableJson(value);
 }
 
@@ -370,6 +448,7 @@ export function previewWorkflowAiSpec(
   const oldSteps = processes.map(node => {
     const data = node.data as Record<string, unknown>;
     const ports = Array.isArray(data.ports) ? data.ports as Record<string, unknown>[] : [];
+    const allocationMethod = data.costAllocationMethod;
     const outputs = ports.filter(port => port.direction === 'OUTPUT').map(port => {
       const material = nodes.get(String(port.materialNodeId));
       return {
@@ -380,6 +459,7 @@ export function previewWorkflowAiSpec(
         ...(material && owns(material.data as Record<string, unknown>, 'packagingBindings')
           ? { packagingBindings: material.data.packagingBindings }
           : {}),
+        ...(allocationMethod === 'FIXED_RATIO' ? { fixedCostShare: port.fixedCostShare ?? null } : {}),
       };
     });
     const inputs = ports.filter(port => port.direction === 'INPUT')
@@ -389,6 +469,9 @@ export function previewWorkflowAiSpec(
       .map(node => node!.data.name);
     const step: Record<string, unknown> = { process: data.processName, outputs, inputs };
     if (data.processCategory != null) step.processCategory = data.processCategory;
+    if (allocationMethod === 'WEIGHT' || allocationMethod === 'FIXED_RATIO') {
+      step.costAllocationMethod = allocationMethod;
+    }
     // Keep the loaded value in the old projection. The compiler creates every
     // generated process branch with reportingRequired=true; the projected spec
     // below supplies that implicit default when the AI omitted the field.

@@ -43,6 +43,39 @@ class ProductProcessWorkflowConfigToolAiGapsContractTest {
     }
 
     @Test
+    void fixedCostShareUsesOutputPortsOnlyAndNeverAcceptsOutOfRangeValues() throws Exception {
+        assertTrue(ok(preview(def(), List.of(
+                setField("process:1", "costAllocationMethod", "FIXED_RATIO")))));
+
+        Map<String, Object> validOutput = port("output:1", "OUTPUT", "semi", 1, null);
+        validOutput.put("fixedCostShare", 100d);
+        assertTrue(ok(preview(def(), List.of(setField("process:1", "ports", List.of(
+                port("input:1", "INPUT", "raw", 0, null), validOutput))))));
+
+        Map<String, Object> negativeOutput = new LinkedHashMap<>(validOutput);
+        negativeOutput.put("fixedCostShare", -1d);
+        assertFalse(ok(preview(def(), List.of(setField("process:1", "ports", List.of(
+                port("input:1", "INPUT", "raw", 0, null), negativeOutput))))));
+
+        Map<String, Object> inputShare = port("input:1", "INPUT", "raw", 0, null);
+        inputShare.put("fixedCostShare", 50d);
+        assertFalse(ok(preview(def(), List.of(setField("process:1", "ports", List.of(
+                inputShare, port("output:1", "OUTPUT", "semi", 1, null)))))));
+
+        assertFalse(ok(preview(def(), List.of(
+                setField("process:1", "costAllocationMethod", "SALES_VALUE")))));
+    }
+
+    @Test
+    void fixedRatioTwoOutputActualIoPreviewPreservesNamedShares() throws Exception {
+        // ACTUAL_IO draft preview accepts the new fixedCostShare carrier; the
+        // runtime compiler contract owns publish-time total/missing-share rejection.
+        Map<String, Object> valid = definitionWithTwoOutputs(80d, 20d);
+        assertTrue(ok(preview(valid, List.of(
+                setField("process:1", "costAllocationMethod", "FIXED_RATIO")))));
+    }
+
+    @Test
     void reworkPolicyMustPointAtARealReworkCell() throws Exception {
         Map<String, Object> policy = Map.of("sources",
                 List.of(Map.of("reworkNodeId", "scrap", "inputRatioPercent", 8.5d)));
@@ -149,6 +182,33 @@ class ProductProcessWorkflowConfigToolAiGapsContractTest {
                         edge("e1", "raw", "output", "process:1", "input:1"),
                         edge("e2", "process:1", "output:1", "semi", "input")),
                 "viewport", Map.of("x", 0, "y", 0, "zoom", 1));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> definitionWithTwoOutputs(
+            Double mainFixedShare, Double coProductFixedShare) {
+        Map<String, Object> definition = objectMapper.convertValue(def(), new TypeReference<>() {});
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) definition.get("nodes");
+        Map<String, Object> process = nodes.stream()
+                .filter(node -> "process:1".equals(node.get("id")))
+                .findFirst().orElseThrow();
+        Map<String, Object> data = (Map<String, Object>) process.get("data");
+        data.put("reportingSelectionMode", "ACTUAL_IO");
+        List<Map<String, Object>> ports = new ArrayList<>();
+        Map<String, Object> input = port("input:1", "INPUT", "raw", 0, null);
+        Map<String, Object> main = port("output:1", "OUTPUT", "semi", 1, null);
+        main.put("materialName", "主品");
+        main.put("fixedCostShare", mainFixedShare);
+        Map<String, Object> coProduct = port("output:2", "OUTPUT", "scrap", 2, null);
+        coProduct.put("materialName", "副品");
+        coProduct.put("fixedCostShare", coProductFixedShare);
+        ports.add(input);
+        ports.add(main);
+        ports.add(coProduct);
+        data.put("ports", ports);
+        List<Map<String, Object>> edges = (List<Map<String, Object>>) definition.get("edges");
+        edges.add(edge("e3", "process:1", "output:2", "scrap", "input"));
+        return definition;
     }
 
     private Map<String, Object> materialNode(String id, String kind) {

@@ -167,8 +167,10 @@ public class CanvasAIController {
                   "processCategory": "<optional: 熟制/注射/切配/... — the work process category>",
                   "outputs": [
                     { "kind": "SEMI_FINISHED"|"FINISHED_GOOD", "name": "<output product name>",
-                      "unit": "<kg/盒/只/...>", "byproduct": false, "rework": false }
+                       "unit": "<kg/盒/只/...>", "byproduct": false, "rework": false,
+                       "fixedCostShare": <number 0-100 or null, ONLY when the step uses FIXED_RATIO> }
                   ],
+                   "costAllocationMethod": "WEIGHT"|"FIXED_RATIO",
                   "inputShares": [ { "name": "<input raw material name>", "percent": <number 0-100 or null> } ],
                   "reworkSources": [ { "output": "<name of a rework output in this spec>", "inputRatioPercent": <0-100 or null> } ],
                   "ccps": [
@@ -187,6 +189,13 @@ public class CanvasAIController {
             - steps are ordered; each step consumes the previous step's first output
               (step 1 consumes the rawMaterials).
             - a step with multiple outputs = 分流/多产出 (one process yields several products).
+             - costAllocationMethod is optional. Omitted (or WEIGHT) keeps the existing按重量行为.
+               Only emit FIXED_RATIO when the user explicitly asks for fixed output cost shares.
+               In FIXED_RATIO, match each fixedCostShare to an output by its exact name; every named
+               output needs a finite positive share and all shares must total exactly 100. If an output
+               is missing, duplicated/ambiguous, unmatched, invalid, or the total is not 100, keep the
+               unresolved value as null and make the item explicit for human confirmation. Never guess,
+               default, truncate, or silently clear an existing allocation.
             - "inputs" (optional) = 合流/混批: EXTRA raw materials this step也投入, on TOP of
               the previous step's output. Use it when the user says several ingredients/materials
               are combined/mixed/assembled into one process (e.g. 拼装/分装/调配/混合). Omit or []

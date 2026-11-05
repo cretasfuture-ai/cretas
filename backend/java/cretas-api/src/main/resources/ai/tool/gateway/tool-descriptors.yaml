@@ -1966,7 +1966,7 @@ descriptors:
     supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
-    version: "1.0.0"
+    version: "1.1.0"
     domainTags: ["product-process", "workflow", "configuration"]
     overrideFlags:
       actionType: true
