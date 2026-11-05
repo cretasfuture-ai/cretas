@@ -135,3 +135,5 @@
 - 按 AGENTS.md 的唯一协调者、结构化回执与弹性并发规则执行；创建 worktree、派工和合并前核对本表及 `git worktree list`。
 - 仅在飞状态；merged 当次归档释放 scope。每条≤300字、全文≤30000 bytes，不开三级增量段；详细证据进 archive/。PR/push/fastlane 保留 `python scripts/ci/check_dispatch_active.py` 门禁。
 - 原维护规则全文保留在 archive/2026-10-22-s6-b3b-review.md。
+
+- `INTENT266-ACCURACY-20261105` — `in-progress` — Owner: Codex/root `01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98` — Base `072bf5681969a55029d929d00a6101a28ec92a15`；scope: scripts/finetune边界/数据/训练/mini影子评测、对应Python测试及本任务archive；目标本地80%/混合95%，全程隔离测试，不替换线上。验收:冻结盲测+旧保护集回归+目标测试/CI。
