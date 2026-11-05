@@ -7,6 +7,9 @@
 
 ## 在飞任务
 
+- `ARTIFACT-PARAM-CASE-20261106` — `in-progress` — Owner food/root+param_executor；Base2de52fb66e；scope param case Entity/Repo/service/controller、报工两个写接点及专测；兼容迁移V20261106_1+缺省禁写，后启用。验收：真实JPA/PG、幂等/回滚/权限与报工fanout；无Supplier/Material/SOP/发布脚本改动。
+
+
 
 
 

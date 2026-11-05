@@ -147,6 +147,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
 
+    /** Process-parameter deviation hook; optional so existing constructor-based unit fixtures remain valid. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.shortage.ProcessParamDeviationCaseService processParamDeviationCaseService;
+
     /** 在制批次 (逐道录入 CLK-W) 这次产出要不要扣成待检。 */
     private boolean holdWipOutput(String factoryId, ProductionBatch batch, String outputProductId) {
         if (qcInspectionPolicy == null) {
@@ -1009,6 +1013,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         report.setOutputUnit(outputUnitOf(st));
         report.setCustomFields(processEntryCustomFields(st));
         reportRepo.save(report);
+        recordProcessParamDeviationCase(report);
     }
 
     /**
@@ -1048,6 +1053,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         }
         report.setCustomFields(processEntryCustomFields(st));
         reportRepo.save(report);
+        recordProcessParamDeviationCase(report);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -1096,6 +1102,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             report.setPackagingDetail(st.getPackagingDetail());
         }
         reportRepo.save(report);
+        recordProcessParamDeviationCase(report);
         // 🔴 副产落**生产仓**: 只把名字/重量记在报工里是不够的 —— 不落 material_batches 的话
         // 盘点看不到它, 抵扣就永远没有输入。buildByproductBatch 早写好了但一直没人调
         // (2026-08-01 走查发现, prod 895 条批次里 BYPRODUCT 0 条), 这里是它的接线点。
@@ -1167,6 +1174,20 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             fields.put("paramChecks", st.getParamChecks());
         }
         return fields;
+    }
+
+    private void recordProcessParamDeviationCase(ProductionReport report) {
+        if (processParamDeviationCaseService != null) {
+            // Clerk fan-out rows do not otherwise carry product_type_id. Resolve it
+            // from the factory-scoped batch so secrecy filtering can remain useful;
+            // an unresolved batch deliberately stays null and is fail-closed on read.
+            if (report.getProductTypeId() == null && batchRepo != null && report.getBatchId() != null) {
+                batchRepo.findByIdAndFactoryId(report.getBatchId(), report.getFactoryId())
+                        .map(ProductionBatch::getProductTypeId)
+                        .ifPresent(report::setProductTypeId);
+            }
+            processParamDeviationCaseService.recordReport(report);
+        }
     }
 
     private String processEntryStepKey(StepEntry st) {
