@@ -38,8 +38,20 @@ Private logs/screenshots and runtime configuration are under the user's private 
 
 ## Release boundary
 
-Draft PR: https://github.com/cretasfuture-ai/cretas/pull/1477 . No merge or deployment is claimed. Fresh origin/main ACTIVE still contains `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105`; this branch must not bypass that owner lock. The local development relay is not a production deployment. Formal production still has the older real-data flow until an authorized release completes. Menu-shortcut PR #1470 is separate and remains unmerged.
+Draft PR: https://github.com/cretasfuture-ai/cretas/pull/1477 . No merge or deployment is claimed. Fresh origin/main ACTIVE still contains `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105`; this branch must not bypass that owner lock. The local development relay is not a production deployment. Formal production still has the older real-data flow until an authorized release completes. The menu changes originally reviewed as PR #1470 are now integrated into this candidate; they must not be merged twice.
 
 ## Delivery and remaining work
 
 Two complete business chains and their cleanup assertions are recorded above; one chain used same-run recovery and one was uninterrupted. Source is frozen at ec2e877169; documentation changes reuse that tested source. GitHub reports no checks on the branch, so local validation is not called CI validation. PR remains draft and scopes remain review pending the main-freeze owner's release. The fixed frontend demonstration plus two form-prefill drawers does not implement the optional ideal of a generic global AI operating arbitrary pages. Formal production history/menu shortcuts and isolated runtime rollout are separate delivery states.
+
+## Explicit production rollout request and current-main integration
+
+The user now authorizes direct merge and production deployment after the existing freeze is released, including f006_admin menus. No additional user confirmation is needed for that authorized release. Task F006-PROD-ROLLOUT-20261105 is blocked by the existing owner window, not by missing user authorization.
+
+Refreshed against origin/main `91bfa2c9b42ac5e98ca67b02e0de6686339b5913` using merge `868ac91aa1`; resolved only the ACTIVE conflict by preserving both owners' entries. Integrated the two menu commits from PR1470 as `dee6f41ab7` / `6aa5dd0d06`. The candidate has the 15-entry F006 demo center and keeps normal module/feature filters. No production role/security configuration was changed.
+
+Validation on integrated product source `6aa5dd0d06`: Java F006SandboxGatewayContractTest 23 passed / zero failures, errors or skips / package BUILD SUCCESS; frontend 35 passed across 7 files; vue-tsc -b with 8 GiB heap and Vite production build succeeded. Logs: `sandbox-current-main-java.log`, `sandbox-current-main-web-tests.log`, `sandbox-current-main-vue-tsc.log`, `sandbox-current-main-web-build.log` in the private task directory. This is local validation, not release staging, CI or a new full business replay on the refreshed main.
+
+Freeze evidence: current-main ACTIVE still lists SEC-PLAN-AUDIT-MAIN-FREEZE-20261105 in-progress. PR1438 being merged is not release proof. Relevant owner archives explicitly retain the production window. The latest shared receipt `C:/Users/Steve/.cache/cretas/release-reports/cretas-1793881145-124.json` at 20:31 has status=built and deploy_mode=none; the prior receipt at 20:09 failed with deploy_mode=none. No successful deployment or explicit handoff releasing this window was found.
+
+Read-only host checks found Docker on both servers and no manager listening on 47:10041; no production sandbox service is provisioned. The isolated slot/manager, private Linux settings/baseline and gateway enablement remain required before a usable formal demo release. Local create_private_config currently accepts only the fixed Windows private task directory, so production settings need a reviewed Linux provisioning path; never copy the local node secrets or expose the manager publicly. No host configuration, service restart, Docker lifecycle, production data write or release was performed in this follow-up.

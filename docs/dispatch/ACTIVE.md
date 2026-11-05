@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `F006-PROD-ROLLOUT-20261105` — `blocked` — Owner root — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope PR1477菜单/沙盒整合及正式站配置部署验收；用户已授权冻结解除后直接合并部署。SEC-PLAN-AUDIT冻结仍在，共享回执仅built；不抢发布窗口。验收Java23、Web35/type/build、正式菜单/隔离重置。
+
 - `F006-SANDBOX-LOCAL-RELAY-20261105` — `review` — Owner root/sandbox_runtime_executor — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/local_relay.py、tests/test_local_relay.py；本机UI认证桥接，仅F006/1309，生产业务零写；验收python unittest。不改共享白名单、不发布。
 
 - `F006-SANDBOX-BASELINE-20261105` — `review` — Owner root — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/baseline_export.py及独立测试；F006只读FK闭包投影/敏感字段清除/本机独立PG恢复验证；不写生产，不复制整库业务数据。
