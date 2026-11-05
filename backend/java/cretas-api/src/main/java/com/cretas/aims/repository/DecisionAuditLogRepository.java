@@ -19,6 +19,9 @@ import java.util.List;
 @Repository
 public interface DecisionAuditLogRepository extends JpaRepository<DecisionAuditLog, String> {
 
+    // Historical comparison must scope the SQL read, not filter a fully loaded foreign row.
+    java.util.Optional<DecisionAuditLog> findByIdAndFactoryId(String id, String factoryId);
+
     // 按工厂ID查询
     Page<DecisionAuditLog> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 

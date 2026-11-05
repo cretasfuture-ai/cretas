@@ -37,23 +37,24 @@ class DecisionHistoryRoleGateMvcTest {
         var mapper = new ObjectMapper();
         controller = new DecisionHistoryController(access, comparison);
         mvc = MockMvcBuilders.standaloneSetup(controller)
-                .addInterceptors(new RequireRoleInterceptor(mapper),
-                        new PermissionInterceptor(permissions, users, mapper)).build();
+                .addInterceptors(new PermissionInterceptor(permissions, users, mapper),
+                        new RequireRoleInterceptor(mapper)).build();
     }
 
     @Test void operatorCannotReadEvenWithGuessableIds() throws Exception {
+        allowSystemRead();
         mvc.perform(get(URL).requestAttr("role", "operator").requestAttr("userId", 1L))
                 .andExpect(status().isForbidden());
-        verifyNoInteractions(access, comparison, users, permissions);
+        verifyNoInteractions(access, comparison);
     }
 
     @Test void missingIdentityIsDeniedBeforeReadingAudit() throws Exception {
-        mvc.perform(get(URL)).andExpect(status().isForbidden());
+        mvc.perform(get(URL)).andExpect(status().isUnauthorized());
         verifyNoInteractions(access, comparison);
     }
 
     @Test void adminStillNeedsDynamicSystemReadPermission() throws Exception {
-        when(users.findById(1L)).thenReturn(Optional.of(User.builder().id(1L).factoryId("F006").build()));
+        when(users.findById(1L)).thenReturn(Optional.of(user()));
         when(permissions.hasAnyPermission(any(User.class), any(String[].class))).thenReturn(false);
         mvc.perform(get(URL).requestAttr("role", "factory_super_admin").requestAttr("userId", 1L))
                 .andExpect(status().isForbidden());
@@ -61,11 +62,11 @@ class DecisionHistoryRoleGateMvcTest {
     }
 
     @Test void authorizedReadChecksFactoryBeforeServiceAndReturnsNoExecution() throws Exception {
-        when(users.findById(1L)).thenReturn(Optional.of(User.builder().id(1L).factoryId("F006").build()));
-        when(permissions.hasAnyPermission(any(User.class), any(String[].class))).thenReturn(true);
+        allowSystemRead();
         when(comparison.compare("F006", "current", "baseline")).thenReturn(new DecisionSnapshotComparison(
                 "current", "baseline", Status.SAME_RESULT, "RECORDED_OUTPUT_EQUAL", "a", "a",
-                "rule", 2, "rule", 1, false));
+                "rule", 2, "rule", 1, false, true,
+                DecisionSnapshotComparison.RecordedOutputRelation.SAME, "PERSISTED_COLUMNS_SEMANTIC_ONLY"));
         mvc.perform(get(URL).requestAttr("role", "factory_super_admin").requestAttr("userId", 1L))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.status").value("SAME_RESULT"))
@@ -87,5 +88,22 @@ class DecisionHistoryRoleGateMvcTest {
         mvc.perform(post(URL).requestAttr("role", "factory_super_admin").requestAttr("userId", 1L))
                 .andExpect(status().isMethodNotAllowed());
         verifyNoInteractions(access, comparison);
+    }
+
+    @Test void permissionAdminWithSystemReadAlsoPassesBothRealInterceptors() throws Exception {
+        allowSystemRead();
+        mvc.perform(get(URL).requestAttr("role", "permission_admin").requestAttr("userId", 1L))
+                .andExpect(status().isOk());
+        verify(access).validateAccess("F006");
+        verify(comparison).compare("F006", "current", "baseline");
+    }
+
+    private void allowSystemRead() {
+        when(users.findById(1L)).thenReturn(Optional.of(user()));
+        when(permissions.hasAnyPermission(any(User.class), any(String[].class))).thenReturn(true);
+    }
+
+    private static User user() {
+        var user = new User(); user.setId(1L); user.setFactoryId("F006"); return user;
     }
 }

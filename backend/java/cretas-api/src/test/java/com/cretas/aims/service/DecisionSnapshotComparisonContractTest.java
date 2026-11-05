@@ -28,48 +28,48 @@ class DecisionSnapshotComparisonContractTest {
     @BeforeEach void setup() throws Exception {
         current = snapshot("current", "{\"qty\":1}", "{\"a\":1,\"b\":{\"c\":2,\"d\":3}}");
         baseline = snapshot("baseline", "{\"qty\":1}", "{\"b\":{\"d\":3,\"c\":2},\"a\":1}");
-        when(repository.findById("current")).thenReturn(Optional.of(current));
-        when(repository.findById("baseline")).thenReturn(Optional.of(baseline));
+        when(repository.findByIdAndFactoryId("current", "F006")).thenReturn(Optional.of(current));
+        when(repository.findByIdAndFactoryId("baseline", "F006")).thenReturn(Optional.of(baseline));
     }
 
     @Test void sameSemanticResultIgnoresObjectKeyOrderingWithoutExecutingOrSaving() {
         DecisionSnapshotComparison result = compare();
         assertThat(result.status()).isEqualTo(Status.SAME_RESULT);
-        assertThat(result.currentOutputChecksum()).isEqualTo(result.baselineOutputChecksum()).hasSize(64);
+        assertThat(result.canonicalRecordedOutputHash()).isEqualTo(result.canonicalBaselineOutputHash()).hasSize(64);
         assertThat(result.businessExecutionPerformed()).isFalse();
-        verify(repository).findById("current"); verify(repository).findById("baseline");
+        verify(repository).findByIdAndFactoryId("current", "F006"); verify(repository).findByIdAndFactoryId("baseline", "F006");
         verifyNoMoreInteractions(repository);
     }
 
     @Test void changedResultAcrossRuleVersionsIsReportedWithoutChoosingWinner() throws Exception {
         current = snapshot("current", "{\"qty\":1}", "{\"amount\":2}");
         current.setRuleConfigVersion(2);
-        when(repository.findById("current")).thenReturn(Optional.of(current));
+        when(repository.findByIdAndFactoryId("current", "F006")).thenReturn(Optional.of(current));
         var result = compare();
         assertThat(result.status()).isEqualTo(Status.DIFFERENT_RESULT);
         assertThat(result.currentRuleConfigVersion()).isEqualTo(2);
         assertThat(result.baselineRuleConfigVersion()).isEqualTo(1);
-        assertThat(result.currentOutputChecksum()).isNotEqualTo(result.baselineOutputChecksum());
+        assertThat(result.canonicalRecordedOutputHash()).isNotEqualTo(result.canonicalBaselineOutputHash());
     }
 
     @Test void differentInputsAreNotComparable() throws Exception {
         current = snapshot("current", "{\"qty\":2}", baseline.getOutputResult());
-        when(repository.findById("current")).thenReturn(Optional.of(current));
+        when(repository.findByIdAndFactoryId("current", "F006")).thenReturn(Optional.of(current));
         assertThat(compare().reason()).isEqualTo("INPUT_MISMATCH");
-        assertThat(compare().currentOutputChecksum()).isNull();
+        assertThat(compare().canonicalRecordedOutputHash()).isNull();
     }
 
     @Test void foreignCurrentIdIsIndistinguishableFromMissingAndStopsBeforeBaselineRead() {
-        current.setFactoryId("OTHER");
+        when(repository.findByIdAndFactoryId("current", "F006")).thenReturn(Optional.empty());
         assertThatThrownBy(this::compare).isInstanceOf(EntityNotFoundException.class)
                 .hasMessage("决策记录不存在或不可访问");
-        verify(repository, never()).findById("baseline");
-        when(repository.findById("current")).thenReturn(Optional.empty());
+        verify(repository, never()).findByIdAndFactoryId("baseline", "F006");
+        when(repository.findByIdAndFactoryId("current", "F006")).thenReturn(Optional.empty());
         assertThatThrownBy(this::compare).hasMessage("决策记录不存在或不可访问");
     }
 
     @Test void foreignBaselineIsAlsoRejected() {
-        baseline.setFactoryId("OTHER");
+        when(repository.findByIdAndFactoryId("baseline", "F006")).thenReturn(Optional.empty());
         assertThatThrownBy(this::compare).isInstanceOf(EntityNotFoundException.class);
     }
 
@@ -92,7 +92,7 @@ class DecisionSnapshotComparisonContractTest {
 
     @Test void missingOutputIsUnknownRatherThanEqualNulls() throws Exception {
         current = snapshot("current", "{\"qty\":1}", "null");
-        when(repository.findById("current")).thenReturn(Optional.of(current));
+        when(repository.findByIdAndFactoryId("current", "F006")).thenReturn(Optional.of(current));
         assertInvalid();
     }
 
@@ -115,18 +115,39 @@ class DecisionSnapshotComparisonContractTest {
         assertThat(json).doesNotContain("inputContext", "outputResult", "executor", "approver", "replayData", "qty");
     }
 
+    @Test void checksumMismatchNeverUpgradesSemanticEqualityToIntegrityEvidence() {
+        current.setChecksum("0".repeat(64));
+        var result = compare();
+        assertThat(result.status()).isEqualTo(Status.NOT_COMPARABLE);
+        assertThat(result.reason()).isEqualTo("CHECKSUM_MISMATCH_NO_INTEGRITY_PROOF");
+        assertThat(result.integrityVerified()).isFalse();
+        assertThat(result.recordedOutputRelation()).isEqualTo(DecisionSnapshotComparison.RecordedOutputRelation.SAME);
+    }
+
+    @Test void invalidChecksumFormatCannotYieldEvenSemanticRelation() {
+        current.setChecksum("not-a-checksum"); assertInvalid();
+    }
+
+    @Test void selfOrFutureOrMissingDateIsNotHistoricalBaseline() {
+        assertThat(service.compare("F006", "current", "current").reason()).isEqualTo("INVALID_HISTORICAL_BASELINE");
+        baseline.setCreatedAt(current.getCreatedAt().plusDays(1));
+        assertThat(compare().reason()).isEqualTo("INVALID_HISTORICAL_BASELINE");
+        baseline.setCreatedAt(null);
+        assertThat(compare().status()).isEqualTo(Status.NOT_COMPARABLE);
+    }
+
     private DecisionSnapshotComparison compare() { return service.compare("F006", "current", "baseline"); }
     private void assertInvalid() {
         assertThat(compare().status()).isEqualTo(Status.NOT_COMPARABLE);
         assertThat(compare().reason()).isEqualTo("SNAPSHOT_MISSING_OR_INVALID");
-        assertThat(compare().currentOutputChecksum()).isNull();
+        assertThat(compare().canonicalRecordedOutputHash()).isNull();
     }
     private DecisionAuditLog snapshot(String id, String input, String output) throws Exception {
         String replay = "{\"inputContext\":" + input + ",\"outputResult\":" + output + ",\"timestamp\":\"old\"}";
         return DecisionAuditLog.builder().id(id).factoryId("F006").entityType("ProductionPlan")
                 .entityId("plan").decisionType(DecisionType.RULE_EXECUTION).inputContext(input)
                 .outputResult(output).replayData(replay).checksum(hash(replay)).isReplayable(true)
-                .ruleConfigId("rules").ruleConfigVersion(1).build();
+                .ruleConfigId("rules").ruleConfigVersion(1).createdAt(java.time.LocalDateTime.of(2026, 1, 1, 0, id.equals("baseline") ? 0 : 1)).build();
     }
     private static String hash(String text) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));

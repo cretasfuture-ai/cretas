@@ -2,6 +2,7 @@ package com.cretas.aims.service;
 
 import com.cretas.aims.dto.decision.DecisionSnapshotComparison;
 import com.cretas.aims.dto.decision.DecisionSnapshotComparison.Status;
+import com.cretas.aims.dto.decision.DecisionSnapshotComparison.RecordedOutputRelation;
 import com.cretas.aims.entity.DecisionAuditLog;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
@@ -35,6 +36,10 @@ public class DecisionSnapshotComparisonService {
         }
         DecisionAuditLog current = own(factoryId, decisionId);
         DecisionAuditLog baseline = own(factoryId, baselineId);
+        if (decisionId.equals(baselineId) || current.getCreatedAt() == null || baseline.getCreatedAt() == null
+                || !baseline.getCreatedAt().isBefore(current.getCreatedAt())) {
+            return result(current, baseline, Status.NOT_COMPARABLE, "INVALID_HISTORICAL_BASELINE", null, null);
+        }
         if (blank(current.getEntityType()) || blank(current.getEntityId())
                 || current.getDecisionType() == null
                 || !Objects.equals(current.getEntityType(), baseline.getEntityType())
@@ -51,14 +56,24 @@ public class DecisionSnapshotComparisonService {
             return result(current, baseline, Status.NOT_COMPARABLE, "INPUT_MISMATCH", null, null);
         }
         boolean same = left.output().equals(right.output());
-        return result(current, baseline, same ? Status.SAME_RESULT : Status.DIFFERENT_RESULT,
-                same ? "RECORDED_OUTPUT_EQUAL" : "RECORDED_OUTPUT_DIFFERENT",
-                digest(canonical(left.output()).toString()), digest(canonical(right.output()).toString()));
+        boolean integrityVerified = digest(current.getReplayData()).equalsIgnoreCase(current.getChecksum())
+                && digest(baseline.getReplayData()).equalsIgnoreCase(baseline.getChecksum());
+        // jsonb may normalize the legacy writer's pre-persistence bytes. A mismatch could also
+        // mean tampering: never infer the cause or promote semantic equality to verified evidence.
+        return new DecisionSnapshotComparison(current.getId(), baseline.getId(),
+                integrityVerified ? (same ? Status.SAME_RESULT : Status.DIFFERENT_RESULT) : Status.NOT_COMPARABLE,
+                integrityVerified ? (same ? "RECORDED_OUTPUT_EQUAL" : "RECORDED_OUTPUT_DIFFERENT")
+                        : "CHECKSUM_MISMATCH_NO_INTEGRITY_PROOF",
+                digest(canonical(left.output()).toString()), digest(canonical(right.output()).toString()),
+                current.getRuleConfigId(), current.getRuleConfigVersion(), baseline.getRuleConfigId(),
+                baseline.getRuleConfigVersion(), false, integrityVerified,
+                same ? RecordedOutputRelation.SAME : RecordedOutputRelation.DIFFERENT,
+                "PERSISTED_COLUMNS_SEMANTIC_ONLY");
     }
 
     private DecisionAuditLog own(String factoryId, String id) {
         // Do not reveal whether a foreign ID exists; scope before parsing snapshots.
-        return repository.findById(id).filter(row -> factoryId.equals(row.getFactoryId()))
+        return repository.findByIdAndFactoryId(id, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("决策记录不存在或不可访问"));
     }
 
@@ -66,7 +81,7 @@ public class DecisionSnapshotComparisonService {
         String json = row.getReplayData();
         if (!Boolean.TRUE.equals(row.getIsReplayable()) || blank(json)
                 || json.length() > MAX_SNAPSHOT_CHARS || blank(row.getChecksum())
-                || !digest(json).equalsIgnoreCase(row.getChecksum())) {
+                || !row.getChecksum().matches("(?i)[0-9a-f]{64}")) {
             return null;
         }
         try {
@@ -90,7 +105,8 @@ public class DecisionSnapshotComparisonService {
             Status status, String reason, String currentHash, String baselineHash) {
         return new DecisionSnapshotComparison(current.getId(), baseline.getId(), status, reason,
                 currentHash, baselineHash, current.getRuleConfigId(), current.getRuleConfigVersion(),
-                baseline.getRuleConfigId(), baseline.getRuleConfigVersion(), false);
+                baseline.getRuleConfigId(), baseline.getRuleConfigVersion(), false, false,
+                RecordedOutputRelation.NOT_EVALUATED, "PERSISTED_COLUMNS_SEMANTIC_ONLY");
     }
 
     private static boolean blank(String value) { return value == null || value.isBlank(); }
