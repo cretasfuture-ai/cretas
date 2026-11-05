@@ -297,6 +297,7 @@ public class OrderCostBreakdownService {
         // 结单领用行按【计划】存, 而本循环按【批次】走 —— 同一个计划的多个批次不能各加一遍,
         // 否则原料成本翻倍。用这个集合保证每个计划只并入一次。
         java.util.Set<String> settlementPlansMerged = new java.util.HashSet<>();
+        java.util.Set<Long> unapportionedSourceBatchIds = new java.util.HashSet<>();
         for (ProductionBatch b : batches) {
             auditBatches.add(b);
             boolean unreportedMultiOutputOwnerPlaceholder =
@@ -440,7 +441,7 @@ public class OrderCostBreakdownService {
             for (MaterialConsumption c : batchConsumptions) {
                 java.util.Set<Long> visited = new java.util.HashSet<>();
                 visited.add(b.getId());   // 起点批次入环检测集
-                BigDecimal[] leaf = traceCost(factoryId, c, 1, visited);
+                BigDecimal[] leaf = traceCost(factoryId, c, 1, visited, unapportionedSourceBatchIds);
                 BigDecimal cost = leaf[0];
                 int depth = leaf[1].intValue();
                 MaterialBatch mb = c.getBatchId() == null ? null
@@ -553,7 +554,8 @@ public class OrderCostBreakdownService {
                 //   被 MaterialConsumption 消耗 —— 常规生产批不走此链, 故对常规批零影响 (见 traceCost javadoc)。
                 java.util.Set<Long> chainVisited = new java.util.HashSet<>();
                 chainVisited.add(b.getId());
-                BigDecimal[] up = aggregateUpstreamLaborSeasoning(factoryId, c, 1, chainVisited);
+                BigDecimal[] up = aggregateUpstreamLaborSeasoning(
+                        factoryId, c, 1, chainVisited, unapportionedSourceBatchIds);
                 labor = labor.add(up[0]);
                 seasoning = seasoning.add(up[1]);
                 upstreamByproductCredit = upstreamByproductCredit.add(up[2]);
@@ -592,7 +594,7 @@ public class OrderCostBreakdownService {
         }
         // 结单转进半成品库的量, 成本随货走了, 不再算在本计划头上。转走那部分成本未知时分不开,
         // 本计划成本也不算完整 (⛔ 不当 0, 也不把全额留给成品)。
-        SemiTransfer semiTransfer = settledSemiTransfer(factoryId, batches);
+        SemiTransfer semiTransfer = settledSemiTransfer(factoryId, batches, unapportionedSourceBatchIds);
         BigDecimal grossTotal = labor.add(seasoning).add(packaging).add(raw).add(semiFeedCost).add(equipment).add(other);
         boolean semiTransferUnknown = semiTransfer.unknown() || semiTransfer.credit().compareTo(grossTotal) > 0;
         if (semiTransferUnknown) {
@@ -787,13 +789,16 @@ public class OrderCostBreakdownService {
     private record SemiTransfer(BigDecimal credit, boolean unknown) {
     }
 
-    /** 这几个批次所属计划的结单上, 转入半成品库带走了多少成本。撤回后结单软删, 这笔自然回到计划上。 */
-    private SemiTransfer settledSemiTransfer(String factoryId, List<ProductionBatch> batches) {
+    /** 只划走当前归集根批次仍承担的成本；末道沿实际领用比例继承的上游成本不能再扣余料。 */
+    private SemiTransfer settledSemiTransfer(String factoryId, List<ProductionBatch> batches,
+                                             java.util.Set<Long> unapportionedSourceBatchIds) {
         BigDecimal credit = BigDecimal.ZERO;
         boolean unknown = false;
         if (settlementRepository == null) {
             return new SemiTransfer(credit, false);
         }
+        java.util.Set<Long> rootBatchIds = batches.stream().map(ProductionBatch::getId)
+                .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
         java.util.Set<String> planIds = batches.stream().map(ProductionBatch::getProductionPlanId)
                 .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
         for (String planId : planIds) {
@@ -804,6 +809,17 @@ public class OrderCostBreakdownService {
             }
             for (var slice : com.cretas.aims.service.production.SettlementSemiStockingService
                     .parseDetail(settlement.getSemiStockingDetail())) {
+                if (slice.productionBatchId() == null) {
+                    unknown = true;
+                    continue;
+                }
+                if (!rootBatchIds.contains(slice.productionBatchId())) {
+                    // traceCost normally already takes only the quantity actually fed to the terminal.
+                    // Legacy rows without a denominator inherit the full source instead: the share is
+                    // unprovable, so neither a second credit nor a trusted numeric total is safe.
+                    unknown |= unapportionedSourceBatchIds.contains(slice.productionBatchId());
+                    continue;
+                }
                 if (slice.transferredCost() == null) {
                     unknown = true;
                 } else {
@@ -1497,7 +1513,9 @@ public class OrderCostBreakdownService {
         return planWide == null ? List.of() : planWide;
     }
 
-    private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth, java.util.Set<Long> visited) {
+    private BigDecimal[] traceCost(String factoryId, MaterialConsumption c, int depth,
+                                   java.util.Set<Long> visited,
+                                   java.util.Set<Long> unapportionedSourceBatchIds) {
         BigDecimal own = nz(c.getTotalCost());
         if (c.getBatchId() == null) {
             return new BigDecimal[]{own, BigDecimal.valueOf(depth)};
@@ -1529,7 +1547,7 @@ public class OrderCostBreakdownService {
         BigDecimal sum = BigDecimal.ZERO;
         int maxChildDepth = depth;
         for (MaterialConsumption u : up) {
-            BigDecimal[] r = traceCost(factoryId, u, depth + 1, visited);
+            BigDecimal[] r = traceCost(factoryId, u, depth + 1, visited, unapportionedSourceBatchIds);
             sum = sum.add(r[0]);
             maxChildDepth = Math.max(maxChildDepth, r[1].intValue());
         }
@@ -1556,6 +1574,9 @@ public class OrderCostBreakdownService {
                     .multiply(multiOutputOwnerShare(factoryId, upstreamBatchId))
                     .divide(upstreamQty, 4, java.math.RoundingMode.HALF_UP);
         } else {
+            if (sum.signum() > 0) {
+                unapportionedSourceBatchIds.add(upstreamBatchId);
+            }
             apportioned = legacy;   // 缺量数据 → 改前行为, 既有数据零回归
         }
         visited.remove(upstreamBatchId);   // 路径作用域出栈 (见上方 diamond 注释)
@@ -1622,11 +1643,15 @@ public class OrderCostBreakdownService {
      * legacy 兜底一致, WIP 物化批必带 receiptQuantity 故分摊分支总命中)。
      */
     private BigDecimal[] aggregateUpstreamLaborSeasoning(String factoryId, MaterialConsumption c,
-                                                         int depth, java.util.Set<Long> visited) {
+                                                         int depth, java.util.Set<Long> visited,
+                                                         java.util.Set<Long> unapportionedSourceBatchIds) {
         // [labor, seasoning, byproductCredit, semiFeedKnown, semiFeedAny(0/1), semiFeedUnknown(0/1)]
         BigDecimal[] zero = {BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO};
         if (c.getBatchId() == null || depth >= MAX_DEPTH) {
+            return zero;
+        }
+        if (c.getQuantity() != null && c.getQuantity().signum() == 0) {
             return zero;
         }
         MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(c.getBatchId(), factoryId).orElse(null);
@@ -1654,7 +1679,8 @@ public class OrderCostBreakdownService {
         boolean semiUnknown = feed[2].signum() > 0;
         // 再递归该上游批的消耗 → 更上游的 人工/调料/副产/投料
         for (MaterialConsumption u : consumptionRepository.findByProductionBatchIdAndFactoryId(upstreamBatchId, factoryId)) {
-            BigDecimal[] r = aggregateUpstreamLaborSeasoning(factoryId, u, depth + 1, visited);
+            BigDecimal[] r = aggregateUpstreamLaborSeasoning(
+                    factoryId, u, depth + 1, visited, unapportionedSourceBatchIds);
             labor = labor.add(r[0]);
             seasoning = seasoning.add(r[1]);
             byproductCredit = byproductCredit.add(r[2]);
@@ -1671,6 +1697,9 @@ public class OrderCostBreakdownService {
             seasoning = seasoning.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
             byproductCredit = byproductCredit.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
             semiFeed = semiFeed.multiply(share).divide(upstreamQty, 4, RoundingMode.HALF_UP);
+        } else if (labor.signum() != 0 || seasoning.signum() != 0 || byproductCredit.signum() != 0
+                || semiFeed.signum() != 0 || semiAny || semiUnknown) {
+            unapportionedSourceBatchIds.add(upstreamBatchId);
         }
         // 缺量 → 取上游全额 (不分摊), 与 traceCost legacy 兜底一致。
         // ★ 严格审计 2026-06-25: 路径作用域出栈 — 允许兄弟 diamond 路径遍历同上游
