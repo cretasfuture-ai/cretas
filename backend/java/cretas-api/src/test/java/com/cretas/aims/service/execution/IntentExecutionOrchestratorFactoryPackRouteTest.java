@@ -32,7 +32,6 @@ import com.cretas.aims.service.QueryPreprocessorService;
 import com.cretas.aims.service.ResultValidatorService;
 import com.cretas.aims.service.RuleEngineService;
 import com.cretas.aims.service.SemanticCacheService;
-import com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -69,7 +68,6 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
         assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_NO_MATCH");
         verify(harness.factoryRepository, times(1)).findById("F001");
         verifyNoInteractions(
-                harness.restaurantSelector,
                 harness.conversationService,
                 harness.analysisRouterService,
                 harness.agentOrchestrator,
@@ -154,7 +152,6 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
                 anyString(), anyString(), anyInt(), anyLong(), anyString(), anyString(), any(), any());
         verifyNoInteractions(
                 harness.conversationService,
-                harness.restaurantSelector,
                 harness.analysisRouterService,
                 harness.agentOrchestrator,
                 harness.ragRouterService,
@@ -190,7 +187,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
         assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_NO_MATCH");
         assertThat(response.getMetadata())
                 .containsEntry("reason", "read-tool-outside-allowlist");
-        verifyNoInteractions(harness.restaurantSelector, harness.toolRegistry, harness.toolDispatchService);
+        verifyNoInteractions(harness.toolRegistry, harness.toolDispatchService);
     }
 
     @Test
@@ -214,7 +211,6 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
         assertThat(response.getMetadata())
                 .containsEntry("reason", "general-analysis-not-allowed");
         verifyNoInteractions(
-                harness.restaurantSelector,
                 harness.analysisRouterService,
                 harness.agentOrchestrator,
                 harness.ragRouterService,
@@ -250,8 +246,6 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
         private final QueryPreprocessorService queryPreprocessorService =
                 mock(QueryPreprocessorService.class);
         private final WriteGuardService writeGuardService = mock(WriteGuardService.class);
-        private final RestaurantGrossMarginChatRouteSelector restaurantSelector =
-                mock(RestaurantGrossMarginChatRouteSelector.class);
         private final ToolExecutionGateway ownerToolGateway = mock(ToolExecutionGateway.class);
         private final AuthenticatedToolPrincipalFactory principalFactory =
                 mock(AuthenticatedToolPrincipalFactory.class);

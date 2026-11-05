@@ -30,7 +30,6 @@ public final class ProductionModuleRegistry {
             new ModuleDefinition("finance_ap", "应付财务", "财务", "finance"),
             new ModuleDefinition("finance_ar", "应收财务", "财务", "finance"),
             new ModuleDefinition("hr_employee", "员工/人事", "人事", "hr"),
-            new ModuleDefinition("restaurant", "餐饮经营", "餐饮", "restaurant"),
             new ModuleDefinition("production", "生产管理", "兼容", "production")
     );
 

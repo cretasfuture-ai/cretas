@@ -157,6 +157,25 @@ class AttachmentPermissionResolverTest {
         verify(permissionService).hasAnyPermission(eq(procurementManager), eq(expected));
     }
 
+    @Test
+    @DisplayName("✅ 报损附件已迁到 inventory，仓储角色可读写")
+    void wastageRecord_usesInventoryPermissions() {
+        User warehouseWorker = userWithRole(104L, FactoryUserRole.warehouse_worker);
+        String[] expected = {"inventory:read_write"};
+        when(permissionService.hasAnyPermission(eq(warehouseWorker), eq(expected))).thenReturn(true);
+        assertDoesNotThrow(() -> resolver.requireWrite(warehouseWorker, EntityType.WASTAGE_RECORD));
+        verify(permissionService).hasAnyPermission(eq(warehouseWorker), eq(expected));
+    }
+
+    @Test
+    @DisplayName("❌ 报损附件无 inventory 权限时拒绝")
+    void wastageRecord_withoutInventoryPermission_forbidden() {
+        User warehouseWorker = userWithRole(104L, FactoryUserRole.warehouse_worker);
+        when(permissionService.hasAnyPermission(eq(warehouseWorker), any(String[].class))).thenReturn(false);
+        assertThrows(BusinessException.class,
+                () -> resolver.requireRead(warehouseWorker, EntityType.WASTAGE_RECORD));
+    }
+
     // ==================== Upload guardrails ====================
 
     @Test

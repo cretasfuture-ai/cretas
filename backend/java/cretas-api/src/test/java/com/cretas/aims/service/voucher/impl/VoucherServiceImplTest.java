@@ -30,7 +30,7 @@ import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
-import com.cretas.aims.repository.restaurant.WastageRecordRepository;
+import com.cretas.aims.repository.inventory.WastageRecordRepository;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.voucher.VoucherGeneratorRegistry;
 import com.cretas.aims.service.voucher.impl.SalesReceiptVoucherGenerator;

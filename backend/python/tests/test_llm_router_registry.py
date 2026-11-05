@@ -5,6 +5,8 @@ _SAFE_MODELS 注册表自身的闸。
 链怎么拼、顺序对不对在 chains 那边。
 """
 import asyncio
+import importlib.util
+import sys
 from unittest import mock
 
 import pytest
@@ -13,6 +15,107 @@ import pytest
 pytestmark = pytest.mark.usefixtures("egress_as_factory_request")
 
 from common import llm_router
+
+
+def _liveness_module():
+    path = __import__("pathlib").Path(__file__).resolve().parents[1] / "smartbi" / "scripts" / "minimal_safe_set_liveness.py"
+    spec = importlib.util.spec_from_file_location("minimal_safe_set_liveness_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_liveness(monkeypatch, tmp_path, pairs, behavior):
+    module = _liveness_module()
+    slots = [module.R.SLOT.REVIEW, module.R.SLOT.CHART, module.R.SLOT.REASONING]
+    monkeypatch.setattr(module.R, "SLOT_MODELS", {slot: list(pairs) for slot in slots})
+    monkeypatch.setattr(module.R, "_MINIMAL_SAFE_SET", frozenset(pairs))
+    monkeypatch.setattr(module.R, "_SAFE_MODELS", frozenset(pairs))
+    calls = []
+
+    async def fake_call_chain(slot, payload, chain=None, timeout=None):
+        account = chain[0]
+        pair = (account, next(model for model in pairs if model[0] == account)[1])
+        assert module.R.SLOT_MODELS[slot] == [pair]
+        calls.append((pair, slot, payload))
+        return behavior(pair, slot, payload)
+
+    monkeypatch.setattr(module.R, "call_chain", fake_call_chain)
+    out = tmp_path / "liveness.json"
+    monkeypatch.setenv("PROBE_OUT", str(out))
+    monkeypatch.setattr(sys, "argv", ["minimal_safe_set_liveness", "--scope", "minimal"])
+    rc = asyncio.run(module.main())
+    return rc, out, calls
+
+
+def test_liveness_probe_executes_exact_pair_and_all_three_profiles_offline(monkeypatch, tmp_path):
+    pair = ("aliyun_a_vl", "qwen3.8-flash")
+
+    def good(_pair, _slot, payload):
+        content = "{}" if "Return one JSON object" in payload["messages"][1]["content"] else "factory ok"
+        return {"choices": [{"message": {"content": content}}]}
+
+    rc, out, calls = _run_liveness(monkeypatch, tmp_path, [pair], good)
+    assert rc == 0
+    assert len(calls) == 6  # 2 queries × 3 profile representatives
+    assert all(call[0] == pair for call in calls)
+    assert out.read_text(encoding="utf-8")
+
+
+def test_liveness_probe_distinguishes_partial_and_instrument_failure(monkeypatch, tmp_path):
+    pair = ("aliyun_a_vl", "qwen3.8-flash")
+    partial = ("factory_partial", "factory-model")
+
+    def one_failed(target, _slot, payload):
+        if target == partial and payload["messages"][1]["content"].startswith("请给出"):
+            raise RuntimeError("mock timeout")
+        return {"choices": [{"message": {"content": "{}" if "Return one JSON object" in payload["messages"][1]["content"] else "ok"}}]}
+
+    rc, out, _ = _run_liveness(monkeypatch, tmp_path, [pair, partial], one_failed)
+    assert rc == 1
+    assert '"partial": 1' in out.read_text(encoding="utf-8")
+
+    def dead(_pair, _slot, _payload):
+        raise RuntimeError("mock unavailable")
+
+    rc, _, _ = _run_liveness(monkeypatch, tmp_path, [pair], dead)
+    assert rc == 2
+
+
+def test_liveness_probe_rejects_orphan_malformed_json_and_output_failure(monkeypatch, tmp_path):
+    pair = ("aliyun_a_vl", "qwen3.8-flash")
+    orphan = ("orphan", "not-on-chain")
+    malformed = ("malformed", "malformed-model")
+
+    def mixed(target, _slot, payload):
+        if target == malformed and "Return one JSON object" in payload["messages"][1]["content"]:
+            return {"choices": [{"message": {"content": "not-json"}}]}
+        return {"choices": [{"message": {"content": "{}" if "Return one JSON object" in payload["messages"][1]["content"] else "ok"}}]}
+
+    # The orphan is in the allowlist but absent from every slot chain.
+    module = _liveness_module()
+    monkeypatch.setattr(module.R, "SLOT_MODELS", {slot: [pair] for slot, _ in module.PROFILE_REPS})
+    monkeypatch.setattr(module.R, "_MINIMAL_SAFE_SET", frozenset([pair, orphan]))
+    monkeypatch.setattr(module.R, "_SAFE_MODELS", frozenset([pair, orphan]))
+    monkeypatch.setattr(module.R, "call_chain", lambda *args, **kwargs: None)
+    monkeypatch.setenv("PROBE_OUT", str(tmp_path / "orphan.json"))
+    monkeypatch.setattr(sys, "argv", ["minimal_safe_set_liveness", "--scope", "minimal"])
+    assert asyncio.run(module.main()) == 2
+
+    rc, _, _ = _run_liveness(monkeypatch, tmp_path, [pair, malformed], mixed)
+    assert rc == 1
+
+    def cannot_write(*_args, **_kwargs):
+        raise OSError("mock disk full")
+
+    monkeypatch.setattr(module, "open", cannot_write, raising=False)
+    # Restore a valid pair-only registry for the output-I/O case.
+    monkeypatch.setattr(module.R, "SLOT_MODELS", {slot: [pair] for slot, _ in module.PROFILE_REPS})
+    monkeypatch.setattr(module.R, "_MINIMAL_SAFE_SET", frozenset([pair]))
+    monkeypatch.setattr(module.R, "_SAFE_MODELS", frozenset([pair]))
+    monkeypatch.setattr(module.R, "call_chain", lambda *args, **kwargs: {"choices": [{"message": {"content": "ok"}}]})
+    monkeypatch.setattr(sys, "argv", ["minimal_safe_set_liveness", "--scope", "minimal"])
+    assert asyncio.run(module.main()) == 2
 
 
 def test_minimal_safe_set_is_subset_of_safe_models():

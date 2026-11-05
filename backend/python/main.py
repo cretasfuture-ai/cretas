@@ -77,7 +77,6 @@ from smartbi.api import (  # noqa: E402
 )
 from smartbi.api import intent_analysis  # noqa: E402
 from smartbi.api import revenue_report  # noqa: E402  (Phase G2, PR #516 — was unwired)
-from smartbi.api import twodfire_ingest  # noqa: E402  (二维火 POS skeleton, 2026-06-04)
 from smartbi.api import sales_preset  # noqa: E402  (Sprint 4 W2 S-REPORTS-PRESETS — top 5 active + 9 Sprint 5 stubs)
 from smartbi.api import upload_status  # noqa: E402  (Phase IIa ops dashboard, 2026-05-14)
 from smartbi.api import platform_callback  # noqa: E402  (外部平台回调, 2026-07-29)
@@ -131,7 +130,6 @@ except ImportError as e:
 # Import Food Knowledge Base API router (optional - requires asyncpg)
 try:
     from food_kb.api import knowledge as food_kb_api
-    from food_kb.api import industry_report as food_kb_industry_report_api
     from food_kb.api import manual_chat as food_kb_manual_chat_api
     _food_kb_available = True
 except ImportError as e:
@@ -930,7 +928,6 @@ app.include_router(materialized_analytics_router, prefix="/api/smartbi", tags=["
 app.include_router(revenue_report.router, tags=["Revenue Report"])
 # 二维火 POS ingest adapter SKELETON (2026-06-04) — router has full prefix baked in.
 # Only the not-configured dead-end is live; configured sync path is a TODO.
-app.include_router(twodfire_ingest.router, tags=["2dfire POS Ingest"])
 # Sprint 4 W2 S-REPORTS-PRESETS (preset sales reports, top 5 active + 9 Sprint 5 stubs)
 app.include_router(sales_preset.router, tags=["Sales Preset Reports"])
 # Upload Status Dashboard (Phase IIa, 2026-05-14) — router has full prefix baked in
@@ -1101,7 +1098,6 @@ else:
 # =====================================================
 if _food_kb_available:
     app.include_router(food_kb_api.router, prefix="/api/food-kb", tags=["Food Knowledge Base"])
-    app.include_router(food_kb_industry_report_api.router, prefix="/api/food-kb/industry-report", tags=["Industry Report RAG"])  # noqa: E501
     app.include_router(food_kb_manual_chat_api.router, prefix="/api/food-kb", tags=["Manual Chat"])
 else:
     logger.warning("Food Knowledge Base routes not registered")

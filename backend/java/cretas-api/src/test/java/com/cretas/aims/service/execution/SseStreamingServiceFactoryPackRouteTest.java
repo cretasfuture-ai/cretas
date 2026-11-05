@@ -21,7 +21,6 @@ import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.SemanticCacheService;
-import com.cretas.aims.service.restaurant.RestaurantGrossMarginChatRouteSelector;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -64,7 +63,6 @@ class SseStreamingServiceFactoryPackRouteTest {
                 .containsEntry("packId", "factory.operator");
         verify(harness.factoryRepository, times(1)).findById("F001");
         verifyNoInteractions(
-                harness.restaurantSelector,
                 harness.knowledgeBase,
                 harness.semanticCacheService,
                 harness.aiIntentService,
@@ -110,7 +108,6 @@ class SseStreamingServiceFactoryPackRouteTest {
                 eq(executor), eq("F001"), any(), eq(intent), eq(7L), eq("operator"), eq(match));
         verify(harness.semanticCacheService, never()).queryCache(anyString(), anyString());
         verifyNoInteractions(
-                harness.restaurantSelector,
                 harness.knowledgeBase,
                 harness.analysisRouterService,
                 harness.dynamicToolSelectionService,
@@ -149,7 +146,6 @@ class SseStreamingServiceFactoryPackRouteTest {
         verify(harness.aiIntentService, never()).recognizeIntentWithConfidence(
                 anyString(), anyString(), anyInt(), anyLong(), anyString(), any(), any(), any(), any());
         verifyNoInteractions(
-                harness.restaurantSelector,
                 harness.semanticCacheService,
                 harness.knowledgeBase,
                 harness.analysisRouterService,
@@ -180,7 +176,6 @@ class SseStreamingServiceFactoryPackRouteTest {
         assertThat(result.getMetadata())
                 .containsEntry("reason", "read-tool-outside-allowlist");
         verifyNoInteractions(
-                harness.restaurantSelector,
                 harness.knowledgeBase,
                 harness.semanticCacheService,
                 harness.analysisRouterService,
@@ -211,7 +206,6 @@ class SseStreamingServiceFactoryPackRouteTest {
         assertThat(result.getMetadata())
                 .containsEntry("reason", "general-analysis-not-allowed");
         verifyNoInteractions(
-                harness.restaurantSelector,
                 harness.knowledgeBase,
                 harness.semanticCacheService,
                 harness.analysisRouterService,
@@ -245,19 +239,6 @@ class SseStreamingServiceFactoryPackRouteTest {
                 .build();
     }
 
-    private static IntentExecuteResponse restaurantResponse() {
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .intentCode("GROSS_MARGIN_DECLINE_ATTRIBUTION")
-                .intentName("本月毛利下降归因")
-                .intentCategory("ANALYSIS")
-                .confidence(1.0d)
-                .matchMethod("DETERMINISTIC")
-                .status("READY")
-                .metadata(Map.of("agentRun", Map.of("autoStart", true)))
-                .build();
-    }
-
     private static final class Harness {
         private final AIIntentService aiIntentService = mock(AIIntentService.class);
         private final SemanticCacheService semanticCacheService = mock(SemanticCacheService.class);
@@ -268,8 +249,6 @@ class SseStreamingServiceFactoryPackRouteTest {
         private final DynamicToolSelectionService dynamicToolSelectionService =
                 mock(DynamicToolSelectionService.class);
         private final DashScopeClient dashScopeClient = mock(DashScopeClient.class);
-        private final RestaurantGrossMarginChatRouteSelector restaurantSelector =
-                mock(RestaurantGrossMarginChatRouteSelector.class);
         private final WriteGuardService writeGuardService = mock(WriteGuardService.class);
         private final BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
         private final FactoryRepository factoryRepository = mock(FactoryRepository.class);

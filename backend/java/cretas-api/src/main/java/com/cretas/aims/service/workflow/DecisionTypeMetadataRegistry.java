@@ -420,17 +420,6 @@ public class DecisionTypeMetadataRegistry {
                 .wired(false)
                 .build());
 
-        register(DecisionTypeMetadata.builder()
-                .decisionType(DecisionType.RESTAURANT_AGENT_ACTION_REVIEW)
-                .chineseName("餐饮智能建议复核")
-                .description("仅复核菜品成本资料补全建议；通过后只允许导航到菜谱资料页")
-                .category(Category.OTHER)
-                .defaultApproverRoles(List.of(
-                        "restaurant_owner", "restaurant_manager", "finance_manager"))
-                .moduleCode("restaurant.dish-cost-data-review.v1")
-                .wired(true)
-                .build());
-
         // ============================================
         // 其他 (1)
         // ============================================
@@ -446,6 +435,11 @@ public class DecisionTypeMetadataRegistry {
 
         // 完整性自检 — 所有 enum 值都必须 register, 否则 admin UI 缺项.
         for (DecisionType dt : DecisionType.values()) {
+            // Historical restaurant value remains readable for old workflow rows,
+            // but is intentionally not registered as a new capability.
+            if (dt == DecisionType.RESTAURANT_AGENT_ACTION_REVIEW) {
+                continue;
+            }
             if (!registry.containsKey(dt)) {
                 throw new IllegalStateException(
                         "DecisionTypeMetadataRegistry 缺少 enum 元数据: " + dt +

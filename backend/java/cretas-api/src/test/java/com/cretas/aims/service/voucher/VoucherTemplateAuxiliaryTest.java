@@ -12,7 +12,7 @@ import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
-import com.cretas.aims.entity.restaurant.WastageRecord;
+import com.cretas.aims.entity.inventory.WastageRecord;
 import com.cretas.aims.repository.finance.VoucherTemplateRepository;
 import com.cretas.aims.service.impl.VoucherTemplateServiceImpl;
 import com.cretas.aims.service.voucher.impl.DepreciationVoucherGenerator;

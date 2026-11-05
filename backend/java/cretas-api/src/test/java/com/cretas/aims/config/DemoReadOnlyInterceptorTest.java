@@ -13,6 +13,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DemoReadOnlyInterceptorTest {
 
     @Test
+    void retiredDemoRestJwtStillCannotMutateBusinessData() throws Exception {
+        DemoReadOnlyInterceptor interceptor = new DemoReadOnlyInterceptor();
+        ReflectionTestUtils.setField(interceptor, "demoEnabled", true);
+        ReflectionTestUtils.setField(interceptor, "demoFactoryIdsCsv", "DEMO_REST,DEMO_FACTORY2,F_DEMO");
+
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "POST", "/api/mobile/DEMO_REST/purchases");
+        request.setAttribute("factoryId", "DEMO_REST");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertFalse(interceptor.preHandle(request, response, new Object()));
+        assertEquals(HttpServletResponse.SC_FORBIDDEN, response.getStatus());
+    }
+
+    @Test
     void demoTenantAllowsExactRestaurantAgentRunStartBecauseItOnlyWritesAiLedger() throws Exception {
         DemoReadOnlyInterceptor interceptor = new DemoReadOnlyInterceptor();
         ReflectionTestUtils.setField(interceptor, "demoEnabled", true);

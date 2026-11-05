@@ -119,7 +119,7 @@ describe('面包屑(router meta.title) 与菜单标签一致', () => {
     const both = [...menu.keys()].filter(p => router.has(p));
     expect(both.length, '两份的交集为空 ⇒ 主断言恒绿').toBeGreaterThan(100);
     // 本 PR 修掉的那 4 处, 必须真的在比对范围里 —— 否则「修好了」是不可判定的
-    for (const p of ['/workdesk/quality-chief', '/system/products', '/crm', '/finance/invoices']) {
+    for (const p of ['/workdesk/quality-chief', '/system/products', '/finance/invoices']) {
       expect(both, `${p} 应在比对范围内`).toContain(p);
     }
   });
@@ -130,7 +130,6 @@ describe('面包屑(router meta.title) 与菜单标签一致', () => {
     for (const [p, why] of [
       ['/workdesk/quality-chief', '原值是另一个菜单项 /workdesk/quality-manager 的名字'],
       ['/system/products', '该屏横幅正在防「SKU vs 采购原料」的混淆, 而面包屑用的就是那个泛称'],
-      ['/crm', '「CRM 商机」与「会员与营销」是两个概念'],
       ['/finance/invoices', '丢了「销售」这个限定 —— 同菜单下还有采购发票'],
     ] as const) {
       expect(router.get(p), `${p}: ${why}`).toBe(menu.get(p));

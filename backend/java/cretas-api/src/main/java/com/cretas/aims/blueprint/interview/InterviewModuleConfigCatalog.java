@@ -176,13 +176,8 @@ public final class InterviewModuleConfigCatalog {
                     List.of()),
             new Entry("system", "系统", "通知设置等系统屏幕", CARRIER_RN,
                     List.of()),
-            // ✅ 2026-08-13 新增: 餐饮是最后一个「后端有门禁、客户却关不掉」的域(46 处)。
-            //    ⛔ 加它必须**先在两个读者侧加**, 否则写进库也永远不生效:
-            //      RN  factoryFeatureStore.SCREEN_TO_MODULE  加了 18 个屏幕
-            //      web-admin views/system/features 的 moduleDescriptions 加了描述
-            //    (见类注释「写错 moduleId 的后果是静默的」——不报错, 只是永远不生效。)
-            new Entry("restaurant", "餐饮", "菜谱、领料、盘点、报损、供应商送货", CARRIER_BOTH,
-                    List.of("restaurant")));
+            new Entry("trace", "溯源", "溯源查询相关屏幕", CARRIER_RN,
+                    List.of()));
 
     /** 本目录能关掉的后端门禁码全集 —— 闸拿它比对 {@code @RequireModule} 的码。 */
     public static java.util.Set<String> allGateCodes() {

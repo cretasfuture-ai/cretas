@@ -25,7 +25,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from smartbi.config import coerce_numeric_columns
 from smartbi.gold.customer_text import (
-    PLANNER_UNAVAILABLE,
     has_displayable_business_result,
     sanitize_customer_ai_text,
 )
@@ -96,66 +95,6 @@ async def _log_template_hit_safe(pool, query, factory_id, upload_id, template_co
         return None
 
 
-async def _try_tiered_restaurant_intent(
-    query: str, pool, factory_id: str, role: Optional[str],
-    *, session_key: Optional[str] = None,
-    history: Optional[Sequence[Dict[str, Any]]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Run the shared immutable restaurant QueryPlan pipeline.
-
-    The restaurant LLM is the first natural-language authority. Deterministic
-    matching only selects and validates tools after the semantic contract has
-    been compiled. A planner or contract failure is returned as a clarification
-    once a v2 plan exists. ``None`` therefore means empty/non-restaurant input
-    or a legacy call-site miss; explicit restaurant call sites must fail closed.
-
-    Return shape:
-      {"kind": "clarification", "answer_text": str, "spec": spec}
-      {"kind": "answer", "answer_text": str, "charts": list, "kpis": list,
-       "title": str, "code": str, "contract_pass": bool, "spec": spec}
-    """
-    from smartbi.gold.restaurant.restaurant_intent import RESTAURANT_AI_RETIRED
-    if RESTAURANT_AI_RETIRED:
-        return {
-            "kind": "unavailable",
-            "answer_text": "餐饮专属 AI 能力已下线；请使用业务页面查看餐饮数据。",
-            "charts": [], "kpis": [], "title": "餐饮 AI 能力已下线",
-            "code": "RESTAURANT_AI_RETIRED", "contract_pass": False, "spec": None,
-        }
-    from smartbi.gold.restaurant.restaurant_intent_service import tiered_answer
-
-    kwargs: Dict[str, Any] = {"session_key": session_key}
-    if history:
-        kwargs["history"] = history
-    return await tiered_answer(query, pool, factory_id, role, **kwargs)
-
-
-def _restaurant_llm_history(
-    parent: Optional[Dict[str, Any]],
-) -> Optional[List[Dict[str, Any]]]:
-    """Return at most 20 trusted prior turns for restaurant semantic planning.
-
-    New session rows expose ``turns_history``. The one-turn fallback keeps
-    older rows useful without rewriting the user's current sentence before the
-    LLM sees it.
-    """
-    if not parent:
-        return None
-    turns = parent.get("turns_history")
-    if isinstance(turns, (list, tuple)):
-        history = [item for item in turns if isinstance(item, dict)][-20:]
-        if history:
-            return history
-    parent_query = parent.get("parent_query")
-    if not isinstance(parent_query, str) or not parent_query.strip():
-        return None
-    return [{
-        "q": parent_query.strip(),
-        "a_summary": str(parent.get("parent_answer_summary") or "").strip(),
-        "context": parent.get("structured_context"),
-    }]
-
-
 def _build_qa_input_text(query: str, data_context: Optional[str]) -> str:
     """Build a self-contained input_text for chat_qa corpus samples.
 
@@ -176,29 +115,9 @@ def _build_qa_input_text(query: str, data_context: Optional[str]) -> str:
     return f"{header}|query:{query}"
 
 
-def _derive_business_type(factory_id: Optional[str], table_type: Optional[str]) -> str:
-    """Derive business_type (restaurant/factory/unknown) from available context.
-
-    Uses the same logic convention as chart_insight_service._map_domain:
-    - factory_ids prefixed with restaurant-domain knowledge (qhj → restaurant)
-    - table_type hint if passed by the Java caller
-    - falls back to "unknown" (honest fallback, never pollutes bucket with wrong type)
-    """
-    if table_type:
-        t = table_type.lower()
-        if "restaurant" in t or "餐" in t:
-            return "restaurant"
-        if "factory" in t or "manufacture" in t or "工厂" in t or "制造" in t:
-            return "factory"
-    # Known restaurant factory prefixes (qhj = 青花椒餐饮)
-    if factory_id:
-        fid = factory_id.upper()
-        if fid.startswith("QHJ") or fid.startswith("RESTAURANT"):
-            return "restaurant"
-        # Default Cretas factory customers → factory
-        if fid.startswith("F") and len(fid) <= 6:
-            return "factory"
-    return "unknown"
+def _derive_business_type(factory_id: Optional[str]) -> str:
+    """Classify the only supported SmartBI chat domain: food factories."""
+    return "factory" if factory_id else "unknown"
 
 
 def _qa_lint_has_data_context(data_context: Optional[str]) -> bool:
@@ -284,14 +203,13 @@ async def _capture_qa_distillation(
     http_request,
     *,
     data_context: Optional[str] = None,
-    table_type: Optional[str] = None,
 ) -> None:
     """Capture an AI Q&A teacher pair into the distillation corpus.
 
     **P0-1 fix (2026-06-11)**:
     - input_text now embeds a data-context summary (not just the bare query)
       so the (input→output) pair teaches FROM data, not hallucination.
-    - business_type derived from factory_id/table_type instead of hard-coded "unknown".
+    - business_type derived from the trusted factory identity.
     - quality assigned: 4 if data context passes lint (substantive numerics), else 3.
 
     Fire-and-forget — NEVER raises, never affects the response.
@@ -306,7 +224,7 @@ async def _capture_qa_distillation(
             getattr(http_request.state, 'factory_id', None)
             if hasattr(http_request, 'state') else None
         )
-        business_type = _derive_business_type(factory_id, table_type)
+        business_type = _derive_business_type(factory_id)
         input_text = _build_qa_input_text(query, data_context)
         quality = 4 if _qa_lint_has_data_context(data_context) else 3
         pool = await get_pg_pool()
@@ -501,98 +419,47 @@ def _trusted_chat_identity(http_request: Request) -> tuple[Optional[str], str, O
     return trusted_role, trusted_user_key, session_user_id, price_view
 
 
-def _trusted_restaurant_session_key(
-    factory_id: str,
-    trusted_user_id: Optional[int],
-    session_id: Optional[str],
-) -> Optional[str]:
-    """Build a bounded clarification key from authenticated identity.
-
-    ``restaurant_pending_clarifications`` stores a ``TEXT`` key scoped by
-    factory. Hashing factory, the positive middleware-authenticated user, and
-    the normalized body session keeps the key fixed at 75 characters, avoids
-    persisting the raw session identifier, and prevents shared-device users
-    from consuming each other's pending clarification. A body session alone
-    never enables clarification persistence.
-    """
-    from smartbi.services.chat_session_service import (
-        build_trusted_restaurant_session_key,
-    )
-    return build_trusted_restaurant_session_key(
-        factory_id, trusted_user_id, session_id,
-    )
-
-
-_RESTAURANT_ANALYSIS_CONTEXT_FIELDS = frozenset({
-    "store_id",
-    "store_name",
-    "start_date",
-    "end_date",
-    "comparison_start_date",
-    "comparison_end_date",
-    "time_anchor_date",
-})
-_RESTAURANT_ANALYSIS_DATE_FIELDS = frozenset({
-    "start_date",
-    "end_date",
-    "comparison_start_date",
-    "comparison_end_date",
-    "time_anchor_date",
-})
-_RESTAURANT_ANALYSIS_FIELD_LABELS = {
-    "store_id": "门店编号",
-    "store_name": "门店名称",
-    "start_date": "开始日期",
-    "end_date": "结束日期",
-    "comparison_start_date": "对比开始日期",
-    "comparison_end_date": "对比结束日期",
-    "time_anchor_date": "时间基准日期",
-}
-
-
-def _validated_restaurant_analysis_context(
+def _validated_analysis_context(
     context: Optional[Dict[str, Any]],
-    table_type: Optional[str],
 ) -> Dict[str, Any]:
-    """Validate the only request-body fields restaurant resolvers may consume.
-
-    Tenant identity is deliberately absent from the allow-list. Authorization,
-    session partitioning, and cache partitioning continue to use middleware state.
-    """
-    if table_type != "restaurant_ops" or not context:
+    """Validate the neutral analysis context used by factory analytics."""
+    if not context:
         return {}
-    unknown = sorted(set(context) - _RESTAURANT_ANALYSIS_CONTEXT_FIELDS)
+    fields = {"store_id", "store_name", "start_date", "end_date", "comparison_start_date", "comparison_end_date", "time_anchor_date"}
+    date_fields = {"start_date", "end_date", "comparison_start_date", "comparison_end_date", "time_anchor_date"}
+    labels = {"store_id": "store id", "store_name": "store name", "start_date": "start date", "end_date": "end date", "comparison_start_date": "comparison start date", "comparison_end_date": "comparison end date", "time_anchor_date": "time anchor date"}
+    unknown = sorted(set(context) - fields)
     if unknown:
-        raise HTTPException(status_code=422, detail="餐饮分析上下文字段不受支持")
+        raise HTTPException(status_code=422, detail="analysis context field is not supported")
 
     validated: Dict[str, Any] = {}
-    for key in _RESTAURANT_ANALYSIS_CONTEXT_FIELDS:
+    for key in fields:
         raw_value = context.get(key)
         if raw_value is None:
             continue
-        field_label = _RESTAURANT_ANALYSIS_FIELD_LABELS[key]
+        field_label = labels[key]
         if not isinstance(raw_value, str):
-            raise HTTPException(status_code=422, detail=f"餐饮分析的{field_label}格式无效")
+                raise HTTPException(status_code=422, detail=f"分析上下文的{field_label}格式无效")
         value = raw_value.strip()
         if not value:
             continue
         max_length = 160 if key == "store_name" else 64
-        if key in _RESTAURANT_ANALYSIS_DATE_FIELDS:
+        if key in date_fields:
             max_length = 10
         if len(value) > max_length:
-            raise HTTPException(status_code=422, detail=f"餐饮分析的{field_label}过长")
-        if key in _RESTAURANT_ANALYSIS_DATE_FIELDS:
+            raise HTTPException(status_code=422, detail=f"分析上下文的{field_label}过长")
+        if key in date_fields:
             try:
                 parsed = date.fromisoformat(value)
             except ValueError:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"餐饮分析的{field_label}必须使用年-月-日格式",
+                    detail=f"分析上下文的{field_label}必须使用年-月-日格式",
                 ) from None
             if parsed.isoformat() != value:
                 raise HTTPException(
                     status_code=422,
-                    detail=f"餐饮分析的{field_label}必须使用年-月-日格式",
+                    detail=f"分析上下文的{field_label}必须使用年-月-日格式",
                 )
             validated[key] = parsed
         else:
@@ -605,18 +472,18 @@ def _validated_restaurant_analysis_context(
         has_start = start_key in validated
         has_end = end_key in validated
         if has_start != has_end:
-            raise HTTPException(status_code=422, detail="餐饮分析日期范围必须同时提供开始和结束日期")
+            raise HTTPException(status_code=422, detail="分析上下文日期范围必须同时提供开始和结束日期")
         if has_start and validated[start_key] > validated[end_key]:
-            raise HTTPException(status_code=422, detail="餐饮分析开始日期不能晚于结束日期")
+            raise HTTPException(status_code=422, detail="分析上下文开始日期不能晚于结束日期")
         if has_start and (validated[end_key] - validated[start_key]).days + 1 > 366:
-            raise HTTPException(status_code=422, detail="餐饮分析的单个日期范围不能超过366天")
+            raise HTTPException(status_code=422, detail="分析上下文的单个日期范围不能超过366天")
     if "comparison_start_date" in validated and "start_date" not in validated:
-        raise HTTPException(status_code=422, detail="对比日期必须与主日期范围同时提供")
+        raise HTTPException(status_code=422, detail="分析上下文对比日期必须与主日期范围同时提供")
 
     has_comparison = "comparison_start_date" in validated
     anchor = validated.get("time_anchor_date")
     if has_comparison and anchor is None:
-        raise HTTPException(status_code=422, detail="日期对比必须提供有效的时间基准日期")
+        raise HTTPException(status_code=422, detail="分析上下文日期对比必须提供有效的时间基准日期")
     if has_comparison:
         primary_start = validated["start_date"]
         primary_end = validated["end_date"]
@@ -644,21 +511,10 @@ def _validated_restaurant_analysis_context(
                 validated["comparison_end_date"],
             ))
         if any(end > anchor for _start, end in ranges):
-            raise HTTPException(status_code=422, detail="餐饮分析日期不能晚于时间基准日期")
+            raise HTTPException(status_code=422, detail="分析上下文日期不能晚于时间基准日期")
         if any(start < earliest_allowed for start, _end in ranges):
-            raise HTTPException(status_code=422, detail="餐饮分析日期不能早于时间基准日期前两年")
+            raise HTTPException(status_code=422, detail="分析上下文日期不能早于时间基准日期前两年")
     return validated
-
-
-def _restaurant_analysis_data_factory_id(
-    trusted_factory_id: str,
-    context: Dict[str, Any],
-) -> str:
-    """Map demo store reads only; never use this value for auth/session/cache."""
-    store_scoped = bool(context.get("store_id") or context.get("store_name"))
-    if store_scoped and trusted_factory_id.upper() == "DEMO_REST":
-        return "RES_3101_009"
-    return trusted_factory_id
 
 
 # ============================================================================
@@ -744,11 +600,9 @@ class GeneralAnalysisRequest(BaseModel):
     data: Optional[List[Dict[str, Any]]] = Field(None, description="Data to analyze")
     context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
     fields: Optional[List[Dict[str, str]]] = Field(None, description="Field mappings")
-    table_type: Optional[str] = Field(None, description="Table type hint")
-    expected_intent: Optional[str] = Field(
-        None,
-        description="Validated restaurant intent selected by the trusted Java router",
-    )
+
+            # W2.2: Try template router first — if user query matches a known analysis,
+            # stream cached result (fast, deterministic) instead of invoking LLM.
     user_id: Optional[str] = Field(None, description="User ID (Java compat)")
     session_id: Optional[str] = Field(None, description="Session ID (Java compat)")
     enable_thinking: Optional[bool] = Field(None, description="Enable thinking mode (Java compat)")
@@ -1347,23 +1201,13 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
     # Trusted tenant and optional upload ownership are established before any
     # response-cache or sheet-cache lookup. Body identity fields are ignored.
     trusted_factory_id = _require_trusted_factory_id(http_request)
-    restaurant_context = _validated_restaurant_analysis_context(
-        request.context,
-        request.table_type,
-    )
-    if request.table_type == "restaurant_ops":
-        raise HTTPException(status_code=410, detail="RESTAURANT_AI_RETIRED")
+    analysis_context = _validated_analysis_context(request.context)
     (
         trusted_role,
         trusted_user_key,
         trusted_session_user_id,
         trusted_price_view,
     ) = _trusted_chat_identity(http_request)
-    trusted_restaurant_session_key = _trusted_restaurant_session_key(
-        trusted_factory_id,
-        trusted_session_user_id,
-        request.session_id,
-    )
     validated_upload_id = await _require_owned_upload_id(
         request.sheet_id,
         trusted_factory_id,
@@ -1389,359 +1233,14 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         thinking_budget=request.thinking_budget,
         query=request.effective_query,
         data=request.data,
-        table_type=request.table_type,
-        expected_intent=request.expected_intent,
-        context=restaurant_context,
+        context=analysis_context,
     )
-    session_sensitive_restaurant = bool(
-        request.table_type == "restaurant_ops" and request.session_id
-    )
-    cached = None if session_sensitive_restaurant else _chat_cache_get(cache_key)
+    cached = _chat_cache_get(cache_key)
     if cached is not None:
         cached["processing_time_ms"] = 0
         return GeneralAnalysisResponse(**cached)
 
     try:
-        query = request.effective_query
-        factory_id_hdr = trusted_factory_id
-        if query and factory_id_hdr:
-            try:
-                from smartbi.gold.restaurant.restaurant_ops_router import (
-                    demo_data_factory_for_code,
-                    extract_store_mention,
-                    is_supported_restaurant_ops_code,
-                    reconcile_restaurant_ops_code,
-                    resolve_by_code,
-                )
-                from smartbi.gold.restaurant.restaurant_intent import contextualize_restaurant_followup
-                from smartbi.config import get_pg_pool as _get_pool
-                expected_ops_code = (
-                    request.expected_intent
-                    if request.table_type == "restaurant_ops"
-                    and is_supported_restaurant_ops_code(request.expected_intent)
-                    else None
-                )
-                pool = await _get_pool()
-                effective_ops_query = query
-                inherited_context = False
-                chat_session_parent = None
-                structured_ops_code = expected_ops_code
-                if (
-                    pool
-                    and request.session_id
-                    and trusted_session_user_id is not None
-                    and request.table_type == "restaurant_ops"
-                ):
-                    from smartbi.services.chat_session_service import ChatSessionService
-                    parent = await ChatSessionService(pool).lookup(
-                        request.session_id,
-                        factory_id_hdr,
-                        user_id=trusted_session_user_id,
-                    )
-                    chat_session_parent = parent
-                    if structured_ops_code:
-                        # A trusted typed intent may still use the legacy slot
-                        # merger. Natural language below stays raw and gives
-                        # the prior turns to the LLM instead.
-                        effective_ops_query, inherited_context = (
-                            contextualize_restaurant_followup(query, parent)
-                        )
-
-                # This direct path is only for an explicit typed intent plus
-                # typed scope. Natural-language requests must use QueryPlan
-                # below; text reconciliation is not an execution authority.
-
-                if pool and structured_ops_code:
-                    scope_context = restaurant_context or {}
-                    primary_range = (
-                        (
-                            scope_context["start_date"],
-                            scope_context["end_date"],
-                        )
-                        if scope_context.get("start_date")
-                        else None
-                    )
-                    comparison_range = (
-                        (
-                            scope_context["comparison_start_date"],
-                            scope_context["comparison_end_date"],
-                        )
-                        if scope_context.get("comparison_start_date")
-                        else None
-                    )
-                    store_mention = None
-                    if (
-                        structured_ops_code == "RESTAURANT_OPS_STORE_MARGIN"
-                        and not scope_context.get("store_id")
-                        and not scope_context.get("store_name")
-                    ):
-                        store_mention = extract_store_mention(effective_ops_query)
-                    mapping_context = (
-                        {**scope_context, "store_name": store_mention}
-                        if store_mention else scope_context
-                    )
-                    analysis_factory_id = demo_data_factory_for_code(
-                        structured_ops_code,
-                        factory_id_hdr,
-                        store_scoped=bool(
-                            mapping_context.get("store_id")
-                            or mapping_context.get("store_name")
-                        ),
-                    )
-                    ops_answer = await resolve_by_code(
-                        structured_ops_code,
-                        pool,
-                        analysis_factory_id,
-                        role=trusted_role,
-                        query=effective_ops_query,
-                        date_range=primary_range,
-                        comparison_date_range=comparison_range,
-                        store_id=scope_context.get("store_id"),
-                        store_name=scope_context.get("store_name"),
-                        store_mention=store_mention,
-                        today=scope_context.get("time_anchor_date"),
-                    )
-                    if ops_answer:
-                        customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
-                        guard_clarification = any(
-                            key in (getattr(ops_answer, "meta", None) or {})
-                            for key in ("missing_reference", "store_not_found",
-                                        "store_mention_ambiguous",
-                                        "dish_not_found", "dish_mention_ambiguous")
-                        )
-                        displayable_result = (
-                            guard_clarification
-                            or has_displayable_business_result(customer_answer)
-                        )
-                        response = GeneralAnalysisResponse(
-                            success=displayable_result,
-                            error=None if displayable_result else "本次没有获得可展示的业务结果",
-                            answer=customer_answer,
-                            aiAnalysis=customer_answer,
-                            sessionId=request.session_id,
-                            thinkingEnabled=request.enable_thinking,
-                            insights=[],
-                            charts=ops_answer.charts,
-                            processing_time_ms=int((time.time() - start_time) * 1000),
-                        )
-                        if request.session_id and trusted_session_user_id is not None:
-                            from smartbi.services.chat_session_service import ChatSessionService
-                            await ChatSessionService(pool).upsert(
-                                session_id=request.session_id,
-                                factory_id=factory_id_hdr,
-                                parent_query=(effective_ops_query if inherited_context else query),
-                                parent_answer_summary=customer_answer,
-                                parent_template_code=structured_ops_code,
-                                parent_upload_id=None,
-                                user_id=trusted_session_user_id,
-                            )
-                        if not session_sensitive_restaurant:
-                            _chat_cache_set(cache_key, response.dict())
-                        return response
-
-                if pool and request.table_type == "restaurant_ops":
-                    # Every restaurant tier now goes through the same structured
-                    # QuerySpec + Answer Contract.  The old keyword shortcut was
-                    # fast but skipped comparison, context, and completeness checks.
-                    tiered = await _try_tiered_restaurant_intent(
-                        effective_ops_query,
-                        pool,
-                        factory_id_hdr,
-                        trusted_role,
-                        session_key=trusted_restaurant_session_key,
-                        history=_restaurant_llm_history(chat_session_parent),
-                    )
-                    if tiered:
-                        answer_text = tiered["answer_text"]
-                        contract_pass = bool(tiered.get("contract_pass", True))
-                        response = GeneralAnalysisResponse(
-                            success=(tiered["kind"] == "clarification" or contract_pass),
-                            error=None if contract_pass else "本次结果未通过完整性校验",
-                            warning=tiered.get("warning"),
-                            answer=answer_text,
-                            aiAnalysis=answer_text,
-                            sessionId=request.session_id,
-                            thinkingEnabled=request.enable_thinking,
-                            insights=[],
-                            charts=tiered.get("charts") or [],
-                            suggestedFollowups=tiered.get("suggested_followups") or [],
-                            queryPlanHash=tiered.get("query_plan_hash"),
-                            executedResolvers=tiered.get("executed_resolvers") or [],
-                            processing_time_ms=int((time.time() - start_time) * 1000),
-                        )
-                        if (
-                            (
-                                tiered["kind"] == "answer"
-                                or tiered.get("structured_context") is not None
-                            )
-                            and request.session_id
-                            and trusted_session_user_id is not None
-                        ):
-                            from smartbi.services.chat_session_service import ChatSessionService
-                            tiered_spec = tiered.get("spec")
-                            await ChatSessionService(pool).upsert(
-                                session_id=request.session_id,
-                                factory_id=factory_id_hdr,
-                                parent_query=(effective_ops_query if inherited_context else query),
-                                parent_answer_summary=answer_text,
-                                parent_template_code=(
-                                    tiered.get("code")
-                                    or getattr(tiered_spec, "intent", None)
-                                    or "RESTAURANT_OPS_CLARIFICATION"
-                                ),
-                                parent_upload_id=None,
-                                user_id=trusted_session_user_id,
-                                structured_context=tiered.get("structured_context"),
-                            )
-                        if tiered["kind"] == "answer" and not session_sensitive_restaurant:
-                            _chat_cache_set(cache_key, response.dict())
-                        return response
-
-                    if request.table_type == "restaurant_ops":
-                        # ⛔ fail-closed 是对的, 但**静默的** fail-closed 让它永远
-                        #    查不出根因。2026-08-11: 同一句拒答有 4 个载体, 上一版
-                        #    (#2485)只给 restaurant_intent 那 2 处装了留痕, 当天
-                        #    电池 [40] 真的走到了**没装的这两处** —— 于是日志里
-                        #    一点痕迹都没有。判据: **载体要算出来, 不能凭印象数。**
-                        # 🔴 2026-08-15: 这里原来打的是 `effective_user_q` ——
-                        #    那个名字**只在流式那条路(:2462 起)的另一个函数里**
-                        #    赋值, 在本函数里根本不存在。⇒ 这条**为了防止静默
-                        #    fail-closed 而写的留痕, 自己会抛 NameError 而不是留痕**。
-                        #
-                        # ⇒ 打**进来的那个** raw query(`query`, :1361 无条件赋值)。
-                        #    理由不是偏好: 改写后的变量在失败点未定义, 恰恰是因为
-                        #    **改写还没发生**。fail-closed 留痕要记的是「进来的是
-                        #    什么」, 不是「处理到一半变成什么」—— 处理到一半的东西
-                        #    在失败点可能根本不存在, 这次就是。
-                        logger.warning(
-                            "[restaurant-intent] planner-outage fail-closed: "
-                            "continuation=False factory=%s session=%s query=%r",
-                            factory_id_hdr, trusted_restaurant_session_key,
-                            str(query)[:80],
-                        )
-                        answer_text = (
-                            PLANNER_UNAVAILABLE
-                        )
-                        return GeneralAnalysisResponse(
-                            success=False,
-                            error="餐饮语义规划不可用",
-                            answer=answer_text,
-                            aiAnalysis=answer_text,
-                            sessionId=request.session_id,
-                            thinkingEnabled=request.enable_thinking,
-                            insights=[],
-                            charts=[],
-                            processing_time_ms=int((time.time() - start_time) * 1000),
-                        )
-
-                # Fail-open compatibility for a parser/contract infrastructure
-                # outage.  Normal restaurant requests return above.
-                ops_code = reconcile_restaurant_ops_code(
-                    effective_ops_query,
-                    expected_ops_code,
-                )
-                if ops_code and pool:
-                    fallback_store_mention = (
-                        extract_store_mention(effective_ops_query)
-                        if ops_code == "RESTAURANT_OPS_STORE_MARGIN" else None
-                    )
-                    fallback_factory_id = demo_data_factory_for_code(
-                        ops_code,
-                        factory_id_hdr,
-                        store_scoped=bool(fallback_store_mention),
-                    )
-                    ops_answer = await resolve_by_code(
-                        ops_code, pool, fallback_factory_id, role=trusted_role,
-                        query=effective_ops_query,
-                        store_mention=fallback_store_mention,
-                    )
-                    if ops_answer:
-                        customer_answer = sanitize_customer_ai_text(ops_answer.answer_text)
-                        displayable_result = any(
-                            key in (getattr(ops_answer, "meta", None) or {})
-                            for key in ("missing_reference", "store_not_found",
-                                        "store_mention_ambiguous",
-                                        "dish_not_found", "dish_mention_ambiguous")
-                        ) or has_displayable_business_result(customer_answer)
-                        response = GeneralAnalysisResponse(
-                            success=displayable_result,
-                            error=None if displayable_result else "本次没有获得可展示的业务结果",
-                            answer=customer_answer,
-                            aiAnalysis=customer_answer,
-                            sessionId=request.session_id,
-                            thinkingEnabled=request.enable_thinking,
-                            insights=[],
-                            charts=ops_answer.charts,
-                            processing_time_ms=int((time.time() - start_time) * 1000),
-                        )
-                        if not session_sensitive_restaurant:
-                            _chat_cache_set(cache_key, response.dict())
-                        return response
-            except Exception as ops_err:
-                logger.warning(f"[general_analysis] restaurant ops fast path failed: {ops_err}")
-
-            if any(k in query for k in ("评价", "口碑", "点评", "美团", "平台")):
-                try:
-                    from smartbi.config import get_pg_pool as _get_pool
-                    from smartbi.gold.review_queries import (
-                        review_summary, review_platform, review_complaints,
-                    )
-                    pool = await _get_pool()
-                    if pool:
-                        summary = await review_summary(pool, factory_id_hdr)
-                        platforms = await review_platform(pool, factory_id_hdr)
-                        complaints = await review_complaints(pool, factory_id_hdr, top_n=3)
-                        if summary.get("connected"):
-                            platform_rows = platforms.get("platforms") or []
-                            low_count = int(summary.get("low_star_count") or 0)
-                            total_reviews = int(summary.get("total_reviews") or 0)
-                            avg_star = float(summary.get("avg_star") or 0)
-                            worst_platform = min(
-                                platform_rows,
-                                key=lambda r: float(r.get("avg_star") or 99),
-                            ) if platform_rows else None
-                            complaint_rows = complaints.get("categories") or []
-                            complaint_text = (
-                                f"差评里最该先看的类型是{complaint_rows[0].get('category')}。"
-                                if complaint_rows else "差评类型样本不多，先看低星原文。"
-                            )
-                            platform_text = (
-                                f"{worst_platform.get('platform')}评分相对低一些，平均{float(worst_platform.get('avg_star') or 0):.2f}分。"
-                                if worst_platform else "平台拆分数据暂时不完整。"
-                            )
-                            answer = (
-                                f"平台评价总体不差，去重后共有 {total_reviews:,} 条评价，平均星级 {avg_star:.2f} 分；"
-                                f"但低星评价有 {low_count:,} 条，不能只看平均分。"
-                                f"{platform_text}{complaint_text}"
-                                "建议：先把低星评价按门店和投诉类型分派到负责人，优先处理服务慢、出品不稳、环境类高频问题；"
-                                "同时盯住评分相对低的平台，避免单个平台拖累整体口碑。"
-                            )
-                            charts = [{
-                                "chartType": "bar",
-                                "title": "平台评价量与评分",
-                                "xAxis": {"data": [r.get("platform") for r in platform_rows[:6]]},
-                                "series": [
-                                    {"name": "评价量", "type": "bar",
-                                     "data": [int(r.get("review_count") or 0) for r in platform_rows[:6]]},
-                                    {"name": "平均星级", "type": "line",
-                                     "data": [float(r.get("avg_star") or 0) for r in platform_rows[:6]]},
-                                ],
-                            }] if platform_rows else []
-                            response = GeneralAnalysisResponse(
-                                success=True,
-                                answer=answer,
-                                aiAnalysis=answer,
-                                sessionId=request.session_id,
-                                thinkingEnabled=request.enable_thinking,
-                                insights=[],
-                                charts=charts,
-                                processing_time_ms=int((time.time() - start_time) * 1000),
-                            )
-                            _chat_cache_set(cache_key, response.dict())
-                            return response
-                except Exception as review_err:
-                    logger.warning(f"[general_analysis] review fast path failed: {review_err}")
-
         # Upload-backed data is an explicit policy choice. Java callers that
         # provide their own context set allow_tenant_data_fallback=false.
         data = request.data
@@ -1832,7 +1331,6 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                         await _capture_qa_distillation(
                             query, answer, http_request,
                             data_context=None,
-                            table_type=request.table_type,
                         )
                     return response
                 except Exception as e:
@@ -2121,7 +1619,6 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         await _capture_qa_distillation(
             query, answer, http_request,
             data_context=_qa_data_ctx,
-            table_type=request.table_type,
         )
 
         return response
@@ -2151,14 +1648,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
     # Run security checks before constructing StreamingResponse so failures are
     # real HTTP 403/404 responses, never HTTP 200 followed by an SSE error.
     trusted_factory_id = _require_trusted_factory_id(http_request)
-    if request.table_type == "restaurant_ops":
-        raise HTTPException(status_code=410, detail="RESTAURANT_AI_RETIRED")
     trusted_role, _, trusted_session_user_id, _ = _trusted_chat_identity(http_request)
-    trusted_restaurant_session_key = _trusted_restaurant_session_key(
-        trusted_factory_id,
-        trusted_session_user_id,
-        request.session_id,
-    )
     validated_upload_id = await _require_owned_upload_id(
         request.sheet_id,
         trusted_factory_id,
@@ -2230,177 +1720,6 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 logger.warning(f"[chat-session] phase 0 lookup failed (non-fatal): {e}")
 
         try:
-            # ── Jun 2026 WS6 routing fix (#5 趋势不出图) ───────────────────────
-            # SURGICAL pre-check: trend / 同比环比 questions MUST reach the gold
-            # trend resolver (trend_bundle, full 2025+2026 history → monthly
-            # trend + peak/trough + MoM/YoY + line chart) BEFORE the P2 synthesis
-            # router below gets a chance. The dashboard 「同比环比分析」 chip sends
-            # "进行同比和环比分析，识别增长和下降趋势"; if synthesis serves it first
-            # it answers from the FactBook (which lacks monthly time-series) and
-            # admits "无法计算同比环比/趋势" — the gold TREND resolver never fires
-            # (verified on prod). We divert ONLY the TREND ops code here; every
-            # other ops code stays in its normal position in the gold-ops block
-            # after synthesis (minimal blast radius — only trend/同比/环比 queries
-            # are re-ordered, all other routing is unchanged). A genuine
-            # "综合分析评价和经营" question does NOT match the TREND ops code
-            # (it has no 同比/环比/趋势/增长/下降/月度变化/走势 keyword) so it still
-            # reaches the synthesis engine untouched.
-            try:
-                user_q = (request.effective_query or "").strip()
-                factory_id_hdr = trusted_factory_id
-                if (
-                    user_q
-                    and factory_id_hdr
-                    and request.table_type != "restaurant_ops"
-                ):
-                    from smartbi.gold.restaurant.restaurant_ops_router import (
-                        demo_data_factory_for_code as _demo_gold_factory_trend,
-                        is_supported_restaurant_ops_code as _is_supported_ops_trend,
-                        reconcile_restaurant_ops_code as _reconcile_ops_trend,
-                        resolve_by_code as _resolve_ops_trend,
-                    )
-                    from smartbi.config import get_pg_pool as _get_pool_trend
-                    _expected_trend_code = (
-                        request.expected_intent
-                        if request.table_type == "restaurant_ops"
-                        and _is_supported_ops_trend(request.expected_intent)
-                        else None
-                    )
-                    _t1_trend_code = _reconcile_ops_trend(user_q, _expected_trend_code)
-                    if _t1_trend_code == "RESTAURANT_OPS_TREND_ANALYSIS":
-                        pool_trend = await _get_pool_trend()
-                        if pool_trend:
-                            trend_answer = await _resolve_ops_trend(
-                                "RESTAURANT_OPS_TREND_ANALYSIS",
-                                pool_trend,
-                                _demo_gold_factory_trend(
-                                    "RESTAURANT_OPS_TREND_ANALYSIS", factory_id_hdr,
-                                ),
-                                role=trusted_role,
-                            )
-                            if trend_answer:
-                                customer_answer = sanitize_customer_ai_text(trend_answer.answer_text)
-                                yield _sse_event("status", "正在计算营业趋势...")
-                                chunk_size = 40
-                                for i in range(0, len(customer_answer), chunk_size):
-                                    yield _sse_event("chunk", customer_answer[i:i + chunk_size])
-                                if trend_answer.charts:
-                                    yield _sse_event("charts", trend_answer.charts)
-                                wall_ms = int((time.time() - start_time) * 1000)
-                                yield _sse_event("done", {
-                                    "success": True,
-                                    "answer": customer_answer,
-                                    "charts": trend_answer.charts,
-                                    "kpis": trend_answer.kpis,
-                                    "source": "restaurant_ops_gold",
-                                    "template_code": "RESTAURANT_OPS_TREND_ANALYSIS",
-                                    "processingTimeMs": wall_ms,
-                                    "log_id": None,
-                                })
-                                if _session_can_persist:
-                                    try:
-                                        from smartbi.services.chat_session_service import (
-                                            ChatSessionService as _CSS_TREND,
-                                        )
-                                        from smartbi.api.materialized_analytics import (
-                                            _spawn_bg as _spawn_trend,
-                                        )
-                                        _spawn_trend(_CSS_TREND(pool_trend).upsert(
-                                            session_id=request.session_id,
-                                            factory_id=_session_factory_id,
-                                            parent_query=user_q,
-                                            parent_answer_summary=customer_answer,
-                                            parent_template_code="RESTAURANT_OPS_TREND_ANALYSIS",
-                                            parent_upload_id=None,
-                                            user_id=_session_user_id,
-                                        ))
-                                    except Exception as _e:
-                                        logger.warning(f"[chat-session] writeback (gold trend) failed: {_e}")
-                                logger.info(
-                                    f"[stream] served via gold trend (pre-synthesis): "
-                                    f"template=RESTAURANT_OPS_TREND_ANALYSIS, wall={wall_ms}ms"
-                                )
-                                return  # early exit — gold trend served the answer
-                    elif not _t1_trend_code:
-                        # 2026-07-07 tiered intent (T2 vector / T3 LLM), kept
-                        # SURGICAL to this pre-check's original scope: only
-                        # escalate here when the resolved intent is
-                        # specifically TREND_ANALYSIS (a paraphrase of
-                        # 同比/环比/趋势 the frozen T1 keyword table missed).
-                        # Any OTHER ops code detected by T2/T3 is deliberately
-                        # NOT served here -- it falls through to the
-                        # synthesis router below exactly as before, and gets
-                        # picked up by the general tiered block in the
-                        # gold-ops section further down. This preserves the
-                        # "minimal blast radius" guarantee of this pre-check.
-                        pool_trend = await _get_pool_trend()
-                        if pool_trend:
-                            from smartbi.gold.restaurant.restaurant_intent import (
-                                parse_restaurant_query as _peek_trend_spec,
-                            )
-                            _trend_spec = await _peek_trend_spec(
-                                user_q, pool_trend, factory_id=factory_id_hdr,
-                            )
-                            if (
-                                _trend_spec is not None
-                                and _trend_spec.intent == "RESTAURANT_OPS_TREND_ANALYSIS"
-                                and not _trend_spec.clarification_needed
-                            ):
-                                tiered_trend = await _try_tiered_restaurant_intent(
-                                    user_q, pool_trend, factory_id_hdr, trusted_role,
-                                    session_key=trusted_restaurant_session_key,
-                                )
-                                if tiered_trend and tiered_trend["kind"] == "answer":
-                                    yield _sse_event(
-                                        "status",
-                                        f"命中餐饮运营模板:{tiered_trend.get('title') or '营收趋势分析'}",
-                                    )
-                                    chunk_size = 40
-                                    trend_text = tiered_trend["answer_text"]
-                                    for i in range(0, len(trend_text), chunk_size):
-                                        yield _sse_event("chunk", trend_text[i:i + chunk_size])
-                                    if tiered_trend.get("charts"):
-                                        yield _sse_event("charts", tiered_trend["charts"])
-                                    wall_ms = int((time.time() - start_time) * 1000)
-                                    yield _sse_event("done", {
-                                        "success": True,
-                                        "answer": trend_text,
-                                        "charts": tiered_trend.get("charts") or [],
-                                        "kpis": tiered_trend.get("kpis") or [],
-                                        "source": "restaurant_ops_gold",
-                                        "template_code": "RESTAURANT_OPS_TREND_ANALYSIS",
-                                        "processingTimeMs": wall_ms,
-                                        "log_id": None,
-                                    })
-                                    if _session_can_persist:
-                                        try:
-                                            from smartbi.services.chat_session_service import (
-                                                ChatSessionService as _CSS_TREND2,
-                                            )
-                                            from smartbi.api.materialized_analytics import (
-                                                _spawn_bg as _spawn_trend2,
-                                            )
-                                            _spawn_trend2(_CSS_TREND2(pool_trend).upsert(
-                                                session_id=request.session_id,
-                                                factory_id=_session_factory_id,
-                                                parent_query=user_q,
-                                                parent_answer_summary=trend_text,
-                                                parent_template_code="RESTAURANT_OPS_TREND_ANALYSIS",
-                                                parent_upload_id=None,
-                                                user_id=_session_user_id,
-                                            ))
-                                        except Exception as _e2:
-                                            logger.warning(
-                                                f"[chat-session] writeback (gold trend tiered) failed: {_e2}"
-                                            )
-                                    logger.info(
-                                        f"[stream] served via gold trend tiered (pre-synthesis): "
-                                        f"tier={_trend_spec.source_tier}, wall={wall_ms}ms"
-                                    )
-                                    return  # early exit — tiered gold trend served the answer
-            except Exception as e:
-                logger.warning(f"[stream] gold trend pre-check failed, falling through: {e}")
-
             # P2 综合分析 (multi-dim synthesis) router — runs FIRST, BEFORE the
             # single-dataset gold-ops + xlsx template routers, so a free-form
             # "综合分析评价和经营" / "VIP和菜品门店的关系" question is served by the
@@ -2416,8 +1735,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 if user_q and factory_id_hdr:
                     from smartbi.agent.synthesis_router import match_comprehensive_synthesis
                     if (
-                        request.table_type != "restaurant_ops"
-                        and match_comprehensive_synthesis(user_q)
+                        match_comprehensive_synthesis(user_q)
                     ):
                         from smartbi.agent.synthesis_engine import (
                             ComprehensiveSynthesisEngine,
@@ -2493,219 +1811,6 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             return  # early exit — synthesis served the answer
             except Exception as e:
                 logger.warning(f"[stream] synthesis router failed, falling through: {e}")
-
-            # Apr 24 2026 Plan C Phase 4: Restaurant daily-ops Gold router (runs
-            # BEFORE xlsx template router). Routes queries about 损耗/盘点/领料/
-            # 配方成本 to pre-aggregated Gold tables. No upload_id needed.
-            try:
-                user_q = (request.effective_query or "").strip()
-                factory_id_hdr = trusted_factory_id
-                if user_q and factory_id_hdr:
-                    from smartbi.gold.restaurant.restaurant_ops_router import (
-                        demo_data_factory_for_code as _demo_gold_factory_stream,
-                        extract_store_mention as _extract_store_mention_stream,
-                        is_supported_restaurant_ops_code,
-                        reconcile_restaurant_ops_code,
-                        resolve_by_code,
-                    )
-                    from smartbi.config import get_pg_pool as _get_pool
-                    expected_ops_code = (
-                        request.expected_intent
-                        if request.table_type == "restaurant_ops"
-                        and is_supported_restaurant_ops_code(request.expected_intent)
-                        else None
-                    )
-                    pool = await _get_pool()
-                    if pool:
-                        if request.table_type == "restaurant_ops":
-                            # The restaurant semantic compiler receives the
-                            # bounded 20-turn history directly. Do not rewrite
-                            # pronouns with keyword rules before the LLM sees
-                            # the user's original sentence.
-                            effective_user_q = user_q
-                        else:
-                            from smartbi.gold.restaurant.restaurant_intent import (
-                                contextualize_restaurant_followup,
-                            )
-                            effective_user_q, _ = contextualize_restaurant_followup(
-                                user_q,
-                                chat_session_parent,
-                            )
-                        ops_code = reconcile_restaurant_ops_code(
-                            effective_user_q,
-                            expected_ops_code,
-                        )
-                        tiered_ops = (
-                            await _try_tiered_restaurant_intent(
-                                effective_user_q, pool, factory_id_hdr, trusted_role,
-                                session_key=trusted_restaurant_session_key,
-                                history=_restaurant_llm_history(chat_session_parent),
-                            )
-                            if request.table_type == "restaurant_ops"
-                            else None
-                        )
-
-                        # ── 飞轮 B: 答不上的也要进飞轮 ────────────────────────
-                        #
-                        # 与 gold_reads.py `post_restaurant_tiered_answer`
-                        # (RN App / Java 委派入口) 同一次调用、同一条纪律 ——
-                        # 那条已接线, 这条 SSE 聊天入口(网页/多端聊天面板的生产
-                        # 入口)之前没有。⛔ 不新起分类逻辑(形态 D)。
-                        #
-                        # 🔑 接在这里(kind 分支之前, `if tiered_ops:` 渲染/
-                        #    contractPass 判断之前)的理由与 gold_reads.py 那处
-                        #    逐字相同: 拒答有两种形状(clarification / 带
-                        #    DATA_GAP·OUT_OF_DOMAIN 码的 answer), 接在分支后面
-                        #    必然漏掉一种。`spec` 已经内嵌在
-                        #    `tiered_ops["spec"]` 里(`_try_tiered_restaurant_intent`
-                        #    → `tiered_answer` 的返回形状), `record_refusal` 的
-                        #    `spec=None` 默认会自动 `result.get("spec")` 兜底,
-                        #    ⛔ 不在这里重复解析一份 spec。
-                        #
-                        # ⚠️ fire-and-forget, 对用户零延迟, `record_refusal`
-                        #    自身 fail-open。用 `_spawn_chat_bg`(不是裸
-                        #    `asyncio.create_task`) —— 本文件顶部这个 helper
-                        #    专门防止后台任务因无人持有引用而被 GC 提前回收。
-                        if tiered_ops is not None:
-                            from smartbi.gold.restaurant.refusal_queue import (
-                                record_refusal,
-                            )
-
-                            _spawn_chat_bg(record_refusal(
-                                pool, factory_id=factory_id_hdr,
-                                query=effective_user_q, result=tiered_ops,
-                            ))
-
-                        if tiered_ops is None and request.table_type == "restaurant_ops":
-                            # 见上一处同样的注释: 这是第 4 个载体, #2485 也漏了它。
-                            logger.warning(
-                                "[restaurant-intent] planner-outage fail-closed: "
-                                "continuation=False factory=%s session=%s query=%r",
-                                factory_id_hdr, trusted_restaurant_session_key,
-                                str(effective_user_q)[:80],
-                            )
-                            answer_text_ops = PLANNER_UNAVAILABLE
-                            yield _sse_event("done", {
-                                "success": False,
-                                "answer": answer_text_ops,
-                                "charts": [],
-                                "kpis": [],
-                                "source": "restaurant_query_plan",
-                                "template_code": None,
-                                "contractPass": False,
-                                "suggestedFollowups": [],
-                                "processingTimeMs": int((time.time() - start_time) * 1000),
-                                "log_id": None,
-                            })
-                            return
-
-                        # Generic SmartBI requests without an explicit
-                        # restaurant table type retain their legacy resolver.
-                        if tiered_ops is None:
-                            stream_fallback_mention = (
-                                _extract_store_mention_stream(effective_user_q)
-                                if ops_code in ("RESTAURANT_OPS_STORE_MARGIN",
-                                                "RESTAURANT_OPS_GROSS_MARGIN")
-                                else None
-                            )
-                            stream_fallback_code = ops_code
-                            if stream_fallback_mention:
-                                stream_fallback_code = "RESTAURANT_OPS_STORE_MARGIN"
-                            stream_fallback_factory = _demo_gold_factory_stream(
-                                stream_fallback_code,
-                                factory_id_hdr,
-                                store_scoped=bool(stream_fallback_mention),
-                            )
-                            ops_answer = (
-                                await resolve_by_code(
-                                    stream_fallback_code, pool, stream_fallback_factory,
-                                    role=trusted_role, query=effective_user_q,
-                                    store_mention=stream_fallback_mention,
-                                )
-                                if ops_code else None
-                            )
-                            if ops_answer:
-                                fallback_answer = sanitize_customer_ai_text(ops_answer.answer_text)
-                                fallback_guard = any(
-                                    key in (getattr(ops_answer, "meta", None) or {})
-                                    for key in ("missing_reference", "store_not_found",
-                                                "store_mention_ambiguous",
-                                                "dish_not_found", "dish_mention_ambiguous")
-                                )
-                                fallback_contract_pass = (
-                                    fallback_guard
-                                    or has_displayable_business_result(fallback_answer)
-                                )
-                                tiered_ops = {
-                                    "kind": "clarification" if fallback_guard else "answer",
-                                    "answer_text": fallback_answer,
-                                    "charts": ops_answer.charts,
-                                    "kpis": ops_answer.kpis,
-                                    "code": ops_code,
-                                    "contract_pass": fallback_contract_pass,
-                                }
-
-                        if tiered_ops:
-                            yield _sse_event("status", "正在整理餐饮经营数据...")
-                            answer_text_ops = tiered_ops["answer_text"]
-                            for i in range(0, len(answer_text_ops), 40):
-                                yield _sse_event("chunk", answer_text_ops[i:i + 40])
-                            charts_ops = tiered_ops.get("charts") or []
-                            if charts_ops:
-                                yield _sse_event("charts", charts_ops)
-                            wall_ms = int((time.time() - start_time) * 1000)
-                            contract_pass = bool(tiered_ops.get("contract_pass", True))
-                            yield _sse_event("done", {
-                                "success": tiered_ops["kind"] == "clarification" or contract_pass,
-                                "answer": answer_text_ops,
-                                "charts": charts_ops,
-                                "kpis": tiered_ops.get("kpis") or [],
-                                "source": "restaurant_ops_gold",
-                                "template_code": tiered_ops.get("code"),
-                                "contractPass": contract_pass,
-                                "queryPlanHash": tiered_ops.get("query_plan_hash"),
-                                "executedResolvers": tiered_ops.get("executed_resolvers") or [],
-                                "suggestedFollowups": tiered_ops.get("suggested_followups") or [],
-                                "warning": tiered_ops.get("warning"),
-                                "processingTimeMs": wall_ms,
-                                "log_id": None,
-                            })
-                            if (
-                                (
-                                    tiered_ops["kind"] == "answer"
-                                    or tiered_ops.get("structured_context") is not None
-                                )
-                                and _session_can_persist
-                            ):
-                                try:
-                                    from smartbi.services.chat_session_service import ChatSessionService as _CSS_OPS
-                                    tiered_spec = tiered_ops.get("spec")
-                                    _spawn_chat_bg(_CSS_OPS(pool).upsert(
-                                        session_id=request.session_id,
-                                        factory_id=_session_factory_id,
-                                        parent_query=user_q,
-                                        parent_answer_summary=answer_text_ops,
-                                        parent_template_code=(
-                                            tiered_ops.get("code")
-                                            or getattr(tiered_spec, "intent", None)
-                                            or "RESTAURANT_OPS_CLARIFICATION"
-                                        ),
-                                        parent_upload_id=None,
-                                        user_id=_session_user_id,
-                                        structured_context=tiered_ops.get("structured_context"),
-                                    ))
-                                except Exception as _e:
-                                    logger.warning(f"[chat-session] writeback (gold ops) failed: {_e}")
-                            logger.info(
-                                f"[stream] served via contract-checked gold ops: kind={tiered_ops['kind']}, "
-                                f"code={tiered_ops.get('code')}, wall={wall_ms}ms"
-                            )
-                            return
-            except Exception as e:
-                logger.warning(f"[stream] gold ops router failed, falling through: {e}")
-
-            # W2.2: Try template router first — if user query matches a known analysis,
-            # stream cached result (fast, deterministic) instead of invoking LLM.
             try:
                 upload_id = (
                     validated_upload_id

@@ -35,7 +35,7 @@ public class CanvasApplyTemplateTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "为工厂应用行业模板，一键配置所有模块。适用场景：新工厂初始化、行业切换或重置配置，如应用食品加工模板、餐饮模板等。";
+        return "为工厂应用行业模板，一键配置所有模块。适用场景：新工厂初始化、行业切换或重置配置，如应用食品加工或冷链模板。";
     }
 
     @Override
@@ -47,7 +47,7 @@ public class CanvasApplyTemplateTool extends AbstractBusinessTool {
 
         Map<String, Object> templateCode = new HashMap<>();
         templateCode.put("type", "string");
-        templateCode.put("description", "行业模板代码，如 FOOD_PROCESSING、RESTAURANT、COLD_CHAIN、GENERAL_MANUFACTURING 等");
+        templateCode.put("description", "行业模板代码，如 FOOD_PROCESSING、COLD_CHAIN、GENERAL_MANUFACTURING 等");
         properties.put("templateCode", templateCode);
 
         schema.put("properties", properties);
@@ -91,7 +91,7 @@ public class CanvasApplyTemplateTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-                "templateCode", "请问要应用哪个行业模板？请提供模板代码（如 FOOD_PROCESSING、RESTAURANT、COLD_CHAIN 等）。"
+                "templateCode", "请问要应用哪个行业模板？请提供模板代码（如 FOOD_PROCESSING、COLD_CHAIN 等）。"
         );
         return questions.getOrDefault(paramName, super.getParameterQuestion(paramName));
     }

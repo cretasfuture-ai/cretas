@@ -35,12 +35,9 @@ import java.util.UUID;
  * actionHint + severity + hintTarget when applicable.
  *
  * <h2>门禁 (2026-08-29)</h2>
- * 保留 {@code @RequireRole} 白名单，<b>只把餐饮角色加进去</b>：
- * 读 = {@code factory_super_admin / permission_admin / restaurant_owner / restaurant_manager}，
- * 写 = 前三个（{@code restaurant_manager} 只读）。
+ * 保留 {@code @RequireRole} 白名单，仅允许食品工厂管理员角色。
  *
- * <p><b>修的是什么</b>: 原白名单没有 {@code restaurant_owner}
- * ⇒ <b>餐饮租户老板配不了任何阈值</b>，尽管 L1 权限表 (V20261029_62) 给了他 {@code system='rw'}。
+ * <p>历史餐饮角色已退役，不能再通过旧字符串白名单访问阈值配置。
  * 同时移除了 {@code factory_admin} —— 它<b>根本不是</b> {@code FactoryUserRole} 的枚举值，
  * 从写下那天起就是一条永远不匹配的死条目。
  *
@@ -50,7 +47,6 @@ import java.util.UUID;
  *   <li>{@code permission_admin} → <b>{@code lsm001} @ LIUSHANMEN（真实客户），活跃</b>。
  *       L1 {@code V20260422_01:394} 给它 {@code system='-'}
  *       ⇒ 换成权限码后<b>它会失去访问</b></li>
- *   <li>{@code restaurant_owner} → 只有 {@code mock_owner} @ MOCK_REST（<b>模拟</b>租户）</li>
  *   <li>平台管理员 ({@code super_admin} / {@code developer} / {@code platform_super_admin})
  *       → {@code RequireRoleInterceptor:73} 有 {@code PLATFORM_ADMIN_ROLES} 放行，
  *       而 {@code PermissionInterceptor} <b>没有</b>，且它按 {@code userRepository.findById}
@@ -101,7 +97,7 @@ public class CanvasThresholdsController {
 
     @GetMapping
     @Operation(summary = "列出工厂的所有阈值 (可按 category 过滤)")
-    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner", "restaurant_manager"})
+    @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<List<FactoryThreshold>> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) String category) {
@@ -202,7 +198,7 @@ public class CanvasThresholdsController {
      */
     @GetMapping("/{key}")
     @Operation(summary = "查询单个阈值 (按 thresholdKey; per-factory 缺失时回落全局默认)")
-    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner", "restaurant_manager"})
+    @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<FactoryThreshold> getByKey(
             @PathVariable String factoryId,
             @PathVariable String key) {
@@ -229,7 +225,7 @@ public class CanvasThresholdsController {
 
     @PostMapping
     @Operation(summary = "创建阈值 (新增 per-factory 配置)")
-    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner"})
+    @RequireRole({"factory_super_admin", "permission_admin"})
     @Transactional
     public ApiResponse<FactoryThreshold> create(
             @PathVariable String factoryId,
@@ -280,7 +276,7 @@ public class CanvasThresholdsController {
 
     @PutMapping("/{id}")
     @Operation(summary = "修改阈值 (partial PATCH, Map body)")
-    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner"})
+    @RequireRole({"factory_super_admin", "permission_admin"})
     @Transactional
     public ApiResponse<FactoryThreshold> update(
             @PathVariable String factoryId,
@@ -368,7 +364,7 @@ public class CanvasThresholdsController {
 
     @DeleteMapping("/{id}")
     @Operation(summary = "软删除阈值")
-    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner"})
+    @RequireRole({"factory_super_admin", "permission_admin"})
     @Transactional
     public ApiResponse<Void> delete(
             @PathVariable String factoryId,
@@ -390,7 +386,7 @@ public class CanvasThresholdsController {
 
     @PostMapping("/reset-to-default")
     @Operation(summary = "按类别批量重置阈值到默认值")
-    @RequireRole({"factory_super_admin", "permission_admin", "restaurant_owner"})
+    @RequireRole({"factory_super_admin", "permission_admin"})
     @Transactional
     public ApiResponse<Integer> resetCategoryToDefault(
             @PathVariable String factoryId,

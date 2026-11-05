@@ -14,14 +14,16 @@ def _lifespan_tree(source):
 def _assert_no_retired_writers(lifespan):
     for node in ast.walk(lifespan):
         if isinstance(node, ast.Name):
-            assert node.id not in {"_reservation_roll_task", "_restaurant_etl_task"}
+            assert node.id not in {"_reservation_roll_task", "_restaurant_etl_task", "_platform_sync_task", "_external_benchmark_task"}
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            assert node.name not in {"_roll_restaurant_reservations_forever", "_run_restaurant_ops_etl_forever"}
+            assert node.name not in {"_roll_restaurant_reservations_forever", "_run_restaurant_ops_etl_forever", "_sync_platforms_forever", "_refresh_external_benchmarks_forever"}
         if isinstance(node, ast.Attribute):
             assert node.attr not in {"roll_simulated_reservations", "run_full_etl_with_retry"}
         if isinstance(node, ast.ImportFrom):
             assert not (node.module or "").startswith("smartbi.services.restaurant")
             assert not (node.module or "").startswith("smartbi.gold.restaurant")
+            assert not (node.module or "").startswith("smartbi.ingestion.platforms")
+            assert not (node.module or "").startswith("smartbi.external_benchmarks")
 
 
 def test_real_lifespan_no_longer_registers_restaurant_background_writers():
@@ -34,6 +36,10 @@ def test_real_lifespan_no_longer_registers_restaurant_background_writers():
     "_reservation_roll_task = asyncio.create_task(service.roll_simulated_reservations())",
     "from smartbi.gold.restaurant.restaurant_ops_etl import run_full_etl_with_retry",
     "renamed_task = asyncio.create_task(service.run_full_etl_with_retry())",
+    "from smartbi.ingestion.platforms.framework import sync_all",
+    "from smartbi.external_benchmarks.service import service",
+    "_platform_sync_task = asyncio.create_task(sync_all())",
+    "_external_benchmark_task = asyncio.create_task(service.collect_and_store('industry_report_seed'))",
 ])
 def test_retirement_guard_rejects_a_reintroduced_writer(writer):
     lifespan = _lifespan_tree(Path(main.__file__).read_text(encoding="utf-8"))
@@ -80,8 +86,10 @@ async def test_real_lifespan_starts_and_stops_shared_factory_tasks(monkeypatch, 
     monkeypatch.setattr(main, "_food_kb_available", True)
     monkeypatch.setattr(main.gc, "collect", Mock())
     monkeypatch.setattr(main.gc, "freeze", Mock())
-    for flag in ("SMARTBI_AGENT_LAYER_ENABLED", "PLATFORM_SYNC_ENABLED", "SMARTBI_EXTERNAL_BENCHMARKS_ENABLED"):
-        monkeypatch.setenv(flag, "false")
+    monkeypatch.setenv("SMARTBI_AGENT_LAYER_ENABLED", "false")
+    # Stale production switches must not resurrect either retired writer.
+    monkeypatch.setenv("PLATFORM_SYNC_ENABLED", "true")
+    monkeypatch.setenv("SMARTBI_EXTERNAL_BENCHMARKS_ENABLED", "true")
     settings = SimpleNamespace(debug=False, llm_model="test", postgres_enabled=False,
         food_kb_db_url="test-only", llm_api_key="", llm_base_url="test-only",
         food_kb_embedding_model="test", food_kb_embedding_dims=1)

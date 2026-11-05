@@ -20,9 +20,8 @@ What this module CLASSIFIES (but does not auto-tolerate without opt-in):
 
 * **Pattern B** — Java legacy fallback structural divergence. The Java
   side emits a different envelope shape (factory mock) while Python
-  emits a new tenant-typed envelope (e.g. restaurant 3-metric). Detected
-  via ``_detect_pattern_b_context`` heuristics (``tenantType`` mismatch
-  / restaurant-signal keys missing on one side). All diverges within a
+  emits a new tenant-typed envelope. Detected
+  via explicit ``tenantType`` mismatch. All diverges within a
   Pattern B context are classified ``PATTERN_B_STRUCTURAL`` so callers
   can opt in to tolerate them via ``--tolerate-divergence-patterns B``
   in ``compare.py``.
@@ -109,22 +108,6 @@ KNOWN_PATTERNS = {
 }
 
 
-# Keys that strongly indicate the restaurant tenant envelope shape (per
-# T6.6 Sub-A spec §1.4 + Sub-B chat4 PR #358). When one side has these
-# and the other doesn't, Pattern B applies — Java factory mock vs
-# Python tenant-typed dispatch.
-_RESTAURANT_SIGNAL_KEYS = frozenset(
-    {
-        "tenantType",
-        "metrics",
-        "dataAvailability",
-        "proxyMetric",
-        "trendChart",
-        "downtimeChart",
-    }
-)
-
-
 def strip_volatile(obj: Any) -> Any:
     """Recursively strip VOLATILE_KEYS from dicts; lists preserve length."""
     if isinstance(obj, dict):
@@ -206,43 +189,12 @@ def _unwrap_envelope(obj: Any) -> Any:
 
 
 def _detect_pattern_b_context(java_response: Any, python_response: Any) -> bool:
-    """Heuristic: are the two responses representing fundamentally different
-    envelope shapes (Java factory mock vs Python tenant-typed dispatch)?
-
-    Returns True when any of:
-      1. ``tenantType`` differs (one is ``"RESTAURANT"`` / ``"BRANCH"``,
-         the other absent or ``"FACTORY"``).
-      2. One side has restaurant-signal keys (``metrics``,
-         ``dataAvailability``, ``proxyMetric``, ``trendChart``,
-         ``downtimeChart``) that the other lacks.
-      3. The top-level key sets symmetrically differ by ≥2 restaurant
-         signal keys (one side has them, other doesn't).
-
-    Returns False otherwise — same-shape responses fall through to per-leaf
-    classification.
-    """
+    """Classify explicit tenant-type mismatch; metric-key differences stay real bugs."""
     java_data = _unwrap_envelope(java_response)
     python_data = _unwrap_envelope(python_response)
-
     if not isinstance(java_data, dict) or not isinstance(python_data, dict):
         return False
-
-    # Strong signal: tenantType mismatch.
-    j_tenant = java_data.get("tenantType")
-    p_tenant = python_data.get("tenantType")
-    if j_tenant != p_tenant:
-        # Genuine mismatch — one side surfaced tenant type, other didn't,
-        # or values differ.
-        return True
-
-    # Top-level restaurant-signal key asymmetry.
-    j_keys = set(java_data.keys()) if isinstance(java_data, dict) else set()
-    p_keys = set(python_data.keys()) if isinstance(python_data, dict) else set()
-    signal_diff = (j_keys ^ p_keys) & _RESTAURANT_SIGNAL_KEYS
-    if signal_diff:
-        return True
-
-    return False
+    return java_data.get("tenantType") != python_data.get("tenantType")
 
 
 def dict_eq_match(java_response: Any, python_response: Any) -> dict:

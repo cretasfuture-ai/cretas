@@ -17,14 +17,7 @@ public enum WorkdeskRole {
 
     WAREHOUSE_KEEPER("仓管员"),
     PURCHASER("采购员"),
-    QUALITY_SUPERVISOR("质量主管"),
-
-    /**
-     * 餐饮店长。系统角色码 {@code restaurant_manager}（prod 有真实用户），
-     * 显示名取自 {@code restaurantRoleExperience.ts} 的 {@code roleLabel: '餐饮店长'}
-     * 与工作台 {@code '今日营运台'}。
-     */
-    RESTAURANT_MANAGER("店长");
+    QUALITY_SUPERVISOR("质量主管");
 
     private final String displayName;
 

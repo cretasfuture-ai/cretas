@@ -10,7 +10,6 @@ import com.cretas.aims.service.impl.FactoryServiceImpl;
 import com.cretas.aims.service.indicator.FactoryIndicatorProvisioner;
 import com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategy;
 import com.cretas.aims.service.indicator.strategy.IndicatorComputationStrategyRegistry;
-import com.cretas.aims.service.restaurant.RestaurantAgentActionWorkflowProvisioner;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,7 +51,6 @@ class FactoryIndicatorRepositoryQueryValidationTest {
     @Autowired PlatformTransactionManager transactions;
     @Autowired EntityManager entityManager;
     @MockBean DroolsRuleRepository rules;
-    @MockBean RestaurantAgentActionWorkflowProvisioner restaurant;
     @MockBean IndicatorComputationStrategyRegistry registry;
 
     @BeforeEach void strategies() {

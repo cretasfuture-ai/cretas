@@ -156,6 +156,27 @@ class SseStreamingServiceExplicitIntentAndPermissionTest {
         verify(h.pythonClient, after(300).never()).recordSelection(any(), any(), any(), any(), any(), any());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"restaurant_owner", "restaurant_manager", "restaurant_chef", "restaurant_purchaser"})
+    void oldRolesStopBeforeAnyFactoryRecognitionOrTool(String role) {
+        Harness h = new Harness();
+        ReflectionTestUtils.invokeMethod(h.service, "executeStreamAsync", h.emitter, "F001",
+                IntentExecuteRequest.builder().userInput("你好").build(), 7L, role);
+        ArgumentCaptor<Object> result = ArgumentCaptor.forClass(Object.class);
+        verify(h.service).sendSseEvent(eq(h.emitter), eq("result"), result.capture());
+        assertThat(((IntentExecuteResponse) result.getValue()).getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
+        org.mockito.Mockito.verifyNoInteractions(h.aiIntentService, h.toolDispatchService, h.pythonClient);
+    }
+
+    @Test
+    void retiredExplicitIntentCannotReachFactoryRecognitionOrConversation() throws Exception {
+        Harness h = new Harness();
+        IntentExecuteResponse response = h.execute(IntentExecuteRequest.builder()
+                .intentCode("RESTAURANT_BESTSELLER_QUERY").userInput("你好").build());
+        assertThat(response.getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
+        org.mockito.Mockito.verifyNoInteractions(h.aiIntentService, h.toolDispatchService, h.pythonClient);
+    }
+
     private static final class Harness {
         private final AIIntentService aiIntentService = mock(AIIntentService.class);
         private final ToolRegistry toolRegistry = mock(ToolRegistry.class);

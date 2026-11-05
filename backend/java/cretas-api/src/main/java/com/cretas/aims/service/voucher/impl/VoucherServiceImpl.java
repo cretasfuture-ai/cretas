@@ -18,7 +18,7 @@ import com.cretas.aims.entity.inventory.InternalTransfer;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
-import com.cretas.aims.entity.restaurant.WastageRecord;
+import com.cretas.aims.entity.inventory.WastageRecord;
 import com.cretas.aims.repository.PayrollRecordRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.VoucherRepository;
@@ -28,7 +28,7 @@ import com.cretas.aims.repository.inventory.InternalTransferRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
-import com.cretas.aims.repository.restaurant.WastageRecordRepository;
+import com.cretas.aims.repository.inventory.WastageRecordRepository;
 import com.cretas.aims.service.LinkArrayService;
 import com.cretas.aims.service.finance.AccountingPeriodService;
 import com.cretas.aims.service.finance.ProductionCostConsistency;
@@ -979,7 +979,7 @@ public class VoucherServiceImpl implements VoucherService {
                 return wastageRecordRepo.findAll().stream()
                         .filter(w -> factoryId.equals(w.getFactoryId())
                                 && isRetryableFlag(w.getVflag())
-                                && w.getStatus() == com.cretas.aims.entity.restaurant.WastageRecord.Status.APPROVED)
+                                && w.getStatus() == com.cretas.aims.entity.inventory.WastageRecord.Status.APPROVED)
                         .map(WastageRecord::getId).toList();
             case "PAYROLL_RECORD":
                 return payrollRecordRepo.findAll().stream()

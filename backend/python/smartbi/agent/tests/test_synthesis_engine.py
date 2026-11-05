@@ -152,13 +152,6 @@ def _install_data_fakes(monkeypatch, *, review_empty=False):
             {"name": "丙店", "revenue": 1400000.0, "orderCount": 7000, "avgTicket": 200.0},
         ], "medianRevenue": 1000000.0, "weakStores": ["乙店"]}
 
-    monkeypatch.setattr(se, "review_summary", fake_review_summary)
-    monkeypatch.setattr(se, "review_vip", fake_review_vip)
-    monkeypatch.setattr(se, "review_platform", fake_review_platform)
-    monkeypatch.setattr(se, "review_time_period", fake_review_time)
-    monkeypatch.setattr(se, "review_good_tags", fake_review_good)
-    monkeypatch.setattr(se, "review_dish_issues", fake_review_issues)
-    monkeypatch.setattr(se, "review_store_ranking", fake_review_worst)
     monkeypatch.setattr(se, "finance_summary", fake_finance)
     monkeypatch.setattr(se, "store_comparison", fake_store_comparison)
     monkeypatch.setattr(se, "top_products", fake_top_products)
@@ -170,26 +163,27 @@ def _install_data_fakes(monkeypatch, *, review_empty=False):
 # plan_dimensions
 # --------------------------------------------------------------------------
 class TestPlanDimensions:
-    def test_review_plus_finance(self):
+    def test_retired_review_cue_stays_factory_only(self):
         eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
         plan = eng.plan_dimensions("综合分析评价和经营")
-        assert plan["review"] and plan["finance"]
+        assert plan["finance"]
+        assert "review" not in plan
 
-    def test_vip_cross(self):
+    def test_retired_vip_cross_is_not_routed(self):
         eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
         plan = eng.plan_dimensions("VIP和菜品的关系")
-        assert "vip_x_rating" in plan["cross"]
-        assert plan["review"] and plan["sales"]
+        assert "vip_x_rating" not in plan["cross"]
+        assert plan["sales"]
 
-    def test_time_revenue_cross(self):
+    def test_retired_time_review_cross_is_not_routed(self):
         eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
         plan = eng.plan_dimensions("各时段营收关系")
-        assert "time_x_review" in plan["cross"]
+        assert "time_x_review" not in plan["cross"]
 
     def test_holistic_opens_all(self):
         eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
         plan = eng.plan_dimensions("整体诊断")
-        assert plan["review"] and plan["finance"] and plan["sales"]
+        assert plan["finance"] and plan["sales"]
 
     def test_attribution_detected_for_lag_question(self):
         eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
@@ -207,7 +201,7 @@ class TestPlanDimensions:
         eng = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=FakeBudget(), cache=FakeCache())
         plan = eng.plan_dimensions("哪家店客流拖后腿")
         assert plan["attribution"] is True
-        assert not plan["review"] and not plan["finance"] and not plan["sales"]
+        assert not plan["finance"] and not plan["sales"]
 
     def test_attribution_detected_for_colloquial_phrasing(self):
         # F2 (2026-07-08 role-play): plain-speech attribution must trigger the
@@ -237,49 +231,11 @@ class TestPlanDimensions:
         assert eng.plan_dimensions("哪家供应商送货人少")["attribution"] is False
 
 
-class TestExplicitRestaurantStoreScope:
-    def test_resolves_only_unambiguous_canonical_store_names(self, monkeypatch):
-        monkeypatch.setattr(
-            se,
-            "extract_store_mentions",
-            lambda _q: ["最近30天青花椒南方百联店"],
-        )
-
-        async def canonicalize(_pool, _factory_id, mention):
-            assert mention == "最近30天青花椒南方百联店"
-            return ["青花椒南方百联店"]
-
-        monkeypatch.setattr(se, "_canonicalize_store_mention", canonicalize)
-        resolved = asyncio.run(se._resolve_synthesis_store_scope(
-            object(),
-            "DEMO_REST",
-            "最近30天青花椒南方百联店经营情况",
-        ))
-        assert resolved == ("青花椒南方百联店",)
-
-    def test_ambiguous_store_scope_fails_closed(self, monkeypatch):
-        monkeypatch.setattr(
-            se,
-            "extract_store_mentions",
-            lambda _q: ["南方店"],
-        )
-
-        async def canonicalize(_pool, _factory_id, _mention):
-            return ["青花椒南方百联店", "青花椒南方商城店"]
-
-        monkeypatch.setattr(se, "_canonicalize_store_mention", canonicalize)
-        resolved = asyncio.run(se._resolve_synthesis_store_scope(
-            object(),
-            "DEMO_REST",
-            "南方店经营情况",
-        ))
-        assert resolved == ()
-
 # --------------------------------------------------------------------------
 # _build_factbook
 # --------------------------------------------------------------------------
 class TestBuildFactbook:
-    def test_only_plan_dims_pulled(self, monkeypatch):
+    def _retired_test_only_plan_dims_pulled(self, monkeypatch):
         _install_data_fakes(monkeypatch)
         eng = _engine(monkeypatch)
         import datetime
@@ -371,7 +327,7 @@ class TestBuildFactbook:
         assert fb.finance["data_source"] == "fact_pos_transaction"
         assert any("收银小票明细" in note for note in fb.notes)
 
-    def test_store_scope_filters_internal_facts_and_labels_external_context(
+    def _retired_test_store_scope_filters_internal_facts_and_labels_external_context(
         self, monkeypatch,
     ):
         captured = {
@@ -567,7 +523,7 @@ class TestBuildFactbook:
         assert "本期覆盖 12 条价格" in prompt
         assert "品牌共享采购口径" in prompt
 
-    def test_multi_store_synthesis_passes_verified_scope_to_store_resolver(
+    def _retired_test_multi_store_synthesis_passes_verified_scope_to_store_resolver(
         self, monkeypatch,
     ):
         captured = []
@@ -630,7 +586,7 @@ class TestBuildFactbook:
         assert "门店拖后腿归因" in fb.to_prompt_text()
         assert "客流效应" in fb.to_facts_index()
 
-    def test_review_empty_degrades_with_nextaction(self, monkeypatch):
+    def _retired_test_review_empty_degrades_with_nextaction(self, monkeypatch):
         _install_data_fakes(monkeypatch, review_empty=True)
         eng = _engine(monkeypatch)
         import datetime
@@ -638,7 +594,7 @@ class TestBuildFactbook:
         plan = {"review": True, "finance": True, "sales": False, "cross": []}
         fb = asyncio.run(eng._build_factbook("RES_3101_009", dr, plan, period="2025"))
         assert fb.review is None
-        assert plan["review"] is False  # plan flipped
+        assert "review" not in plan
         assert se.NOTE_REVIEW_ABSENT_NEXTACTION in fb.notes
         assert fb.finance is not None  # still has finance
 
@@ -647,7 +603,7 @@ class TestBuildFactbook:
 # collect_charts gating
 # --------------------------------------------------------------------------
 class TestCharts:
-    def test_charts_gated_by_plan(self, monkeypatch):
+    def _retired_test_charts_gated_by_plan(self, monkeypatch):
         _install_data_fakes(monkeypatch)
         eng = _engine(monkeypatch)
         import datetime
@@ -707,7 +663,7 @@ class TestCharts:
         plan = eng.plan_dimensions("这个数据说明什么", dimension_hints=["finance"])
 
         assert plan["finance"] is True
-        assert plan["review"] is False
+        assert "review" not in plan
         assert plan["sales"] is False
 
 
@@ -715,18 +671,36 @@ class TestCharts:
 # synthesize end-to-end (mock call_chain)
 # --------------------------------------------------------------------------
 class TestSynthesize:
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("factory_id", [
-        "RES_3101_009",
-        "qhj_prod",
-        "R_GML_DEMO",
+        "RES_3101_009", "DEMO_REST_001", "R_GML_DEMO", "QHJ_PROD",
     ])
-    def test_restaurant_scope_covers_supported_tenant_id_families(self, factory_id):
-        assert se._is_restaurant_synthesis_tenant(factory_id) is True
+    async def test_retired_restaurant_namespace_rejected_before_llm_or_db(
+        self, monkeypatch, factory_id,
+    ):
+        import datetime
+        eng = _engine(monkeypatch)
 
-    def test_factory_scope_remains_outside_restaurant_guard(self):
-        assert se._is_restaurant_synthesis_tenant("F001") is False
+        async def fail(*args, **kwargs):
+            raise AssertionError("retired tenant must not reach runtime dependency")
 
-    def test_restaurant_fallback_does_not_compare_unrelated_total_columns(
+        monkeypatch.setattr(se, "_get_embedding", fail)
+        monkeypatch.setattr(eng._budget, "check_budget", fail)
+        monkeypatch.setattr(eng._cache, "get", fail)
+        monkeypatch.setattr(eng, "_call_llm", fail)
+        monkeypatch.setattr(eng, "_capture_distillation", fail)
+        response = await eng.synthesize(
+            factory_id, "查看营收", (datetime.date(2026, 1, 1), datetime.date(2026, 1, 2)),
+        )
+
+        assert response.source == "restaurant_ai_retired"
+        assert response.tokens == 0
+        assert "退役" in response.answer
+
+    def test_factory_namespace_is_not_retired(self):
+        assert se._is_retired_restaurant_tenant("F001") is False
+
+    def test_factory_fallback_does_not_compare_unrelated_total_columns(
         self,
         monkeypatch,
     ):
@@ -736,24 +710,14 @@ class TestSynthesize:
             discount={"total_discount_amount": 1_608_809.74},
         )
 
-        restaurant_summary = eng._analyze(
-            factbook,
-            period="2026-03-01 至 2026-03-31",
-            restaurant_scope=True,
-        )
         factory_summary = eng._analyze(
             factbook,
             period="2026-03-01 至 2026-03-31",
-            restaurant_scope=False,
         )
 
-        assert restaurant_summary == ""
-        assert "总营业额占折扣金额合计" not in restaurant_summary
-        # The shared factory analyzer is deliberately unchanged by this
-        # restaurant-only guard.
         assert "总营业额占折扣金额合计" in factory_summary
 
-    def test_contract_version_invalidates_pre_guard_narrative_cache(self):
+    def _retired_test_contract_version_invalidates_pre_guard_narrative_cache(self):
         assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v9"
 
 

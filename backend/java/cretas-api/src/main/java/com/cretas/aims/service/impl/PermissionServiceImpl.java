@@ -89,7 +89,7 @@ public class PermissionServiceImpl implements PermissionService {
             "dashboard", "production", "warehouse", "quality",
             "procurement", "sales", "hr", "equipment", "finance", "system", "analytics",
             "scheduling", "work_report", "inventory", "report",
-            "rd", "restaurant", "operations"
+            "rd", "operations"
     );
 
     /**
@@ -336,47 +336,6 @@ public class PermissionServiceImpl implements PermissionService {
         financePerms.put("rd", "read");  // 定价参考
         PERMISSION_MATRIX.put(FactoryUserRole.finance_manager, financePerms);
 
-        // restaurant_manager: 餐饮管理 (跨工厂类型餐饮 domain 角色)
-        Map<String, String> restaurantManagerPerms = new HashMap<>();
-        restaurantManagerPerms.put("dashboard", "read");
-        restaurantManagerPerms.put("restaurant", "read_write");
-        restaurantManagerPerms.put("procurement", "read");
-        restaurantManagerPerms.put("finance", "read");
-        restaurantManagerPerms.put("analytics", "read");
-        PERMISSION_MATRIX.put(FactoryUserRole.restaurant_manager, restaurantManagerPerms);
-
-        // restaurant_owner: 餐饮老板 — 全餐饮运营 + 价格异常审批 + 月对账确认
-        // 涵盖 restaurant/procurement/finance/warehouse/analytics 完整读写
-        // 2026-08-06 Steve 拍板:「保留吧 作为全局RW，也可以替代其它角色做OA」。
-        // 老板要能替各部门执行动作(采购审批 / 月对账确认 / 报货领料审批 / 验收入库),
-        // 所以是全模块 read_write, 而不是逐个列举 —— 逐个列举正是上一版漏掉
-        // production/quality/sales/hr 等模块、老板替不了那些岗位的原因。
-        // L1 权威同步为全局 rw: V20261029_62 (推翻同日 V20261029_56 的全只读)。
-        Map<String, String> restaurantOwnerPerms = new HashMap<>();
-        ALL_MODULES.forEach(m -> restaurantOwnerPerms.put(m, "read_write"));
-        PERMISSION_MATRIX.put(FactoryUserRole.restaurant_owner, restaurantOwnerPerms);
-
-        // restaurant_chef: 厨师长 — 报货/领料(MaterialRequisition) + 验收入库(SupplierDeliveryNote)
-        // 需要 restaurant:rw + warehouse:rw; 不需要 procurement:rw (不审采购单)
-        Map<String, String> restaurantChefPerms = new HashMap<>();
-        restaurantChefPerms.put("dashboard", "read");
-        restaurantChefPerms.put("restaurant", "read_write");   // RestaurantModule 访问
-        restaurantChefPerms.put("warehouse", "read_write");    // 报货/领料 create+submit+approve + 验收入库 confirm
-        restaurantChefPerms.put("procurement", "read");        // 只读采购单 (查看状态)
-        restaurantChefPerms.put("analytics", "read");          // 基础数据查看
-        PERMISSION_MATRIX.put(FactoryUserRole.restaurant_chef, restaurantChefPerms);
-
-        // restaurant_purchaser: 餐饮采购 — 请购单+采购订单 全链路
-        // 需要 restaurant:rw + procurement:rw; 不需要 warehouse:rw (不验收入库)
-        Map<String, String> restaurantPurchaserPerms = new HashMap<>();
-        restaurantPurchaserPerms.put("dashboard", "read");
-        restaurantPurchaserPerms.put("restaurant", "read_write");    // RestaurantModule 访问
-        restaurantPurchaserPerms.put("procurement", "read_write");   // 请购 create/submit/approve + 采购 confirm/approve
-        restaurantPurchaserPerms.put("warehouse", "read");           // 只读仓库 (查看库存状态)
-        restaurantPurchaserPerms.put("finance", "read");             // 查看采购金额 (不能财务审核)
-        restaurantPurchaserPerms.put("analytics", "read");           // 基础数据查看
-        PERMISSION_MATRIX.put(FactoryUserRole.restaurant_purchaser, restaurantPurchaserPerms);
-
         // viewer: 所有模块只读
         Map<String, String> viewerPerms = new HashMap<>();
         ALL_MODULES.stream()
@@ -400,8 +359,8 @@ public class PermissionServiceImpl implements PermissionService {
      * 后端剥离 totalAmount / unitPrice / costUnitPrice 等字段.
      *
      * <p>白名单角色: factory_super_admin / platform_admin / procurement_manager /
-     * finance_manager / sales_manager / dispatcher / production_manager /
-     * restaurant_manager. 其余角色一律不可见.
+     * finance_manager / sales_manager / dispatcher / production_manager.
+     * 其余角色一律不可见.
      */
     private static final Set<FactoryUserRole> PRICE_VIEW_ROLES = Set.of(
             FactoryUserRole.factory_super_admin,
@@ -412,11 +371,6 @@ public class PermissionServiceImpl implements PermissionService {
             // 调度员 / 生产主管 需协调成本预算
             FactoryUserRole.dispatcher,
             FactoryUserRole.production_manager,
-            // 餐饮主管查看食材/菜品成本
-            FactoryUserRole.restaurant_manager,
-            // 餐饮老板/采购需查看采购价格 (价格异常审批需对比价格)
-            FactoryUserRole.restaurant_owner,
-            FactoryUserRole.restaurant_purchaser,
             // 向后兼容
             FactoryUserRole.permission_admin,
             FactoryUserRole.department_admin
@@ -469,8 +423,6 @@ public class PermissionServiceImpl implements PermissionService {
             FactoryUserRole.procurement_manager,
             FactoryUserRole.finance_manager,
             FactoryUserRole.dispatcher,
-            // 餐饮老板需查看财务待审采购单 (采购金额审批)
-            FactoryUserRole.restaurant_owner,
             // 向后兼容
             FactoryUserRole.permission_admin,
             FactoryUserRole.department_admin
@@ -502,6 +454,9 @@ public class PermissionServiceImpl implements PermissionService {
 
         FactoryUserRole role = user.getRoleEnum();
         if (role == null || role == FactoryUserRole.unactivated) {
+            return false;
+        }
+        if (isRetiredRestaurantRole(role)) {
             return false;
         }
 
@@ -590,6 +545,9 @@ public class PermissionServiceImpl implements PermissionService {
         if (role == null || role == FactoryUserRole.unactivated) {
             return false;
         }
+        if (isRetiredRestaurantRole(role)) {
+            return false;
+        }
         if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
             return true;
         }
@@ -661,6 +619,9 @@ public class PermissionServiceImpl implements PermissionService {
         if (role == null || role == FactoryUserRole.unactivated) {
             return Collections.emptyMap();
         }
+        if (isRetiredRestaurantRole(role)) {
+            return Collections.emptyMap();
+        }
         Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), role, !isUnrestrictedRole(role));
         return employeeModulePermissions == null ? levels : employeeModulePermissions.apply(user, levels);
     }
@@ -695,16 +656,22 @@ public class PermissionServiceImpl implements PermissionService {
         return role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin;
     }
 
+    /** Retired restaurant roles remain enum values for historical row decoding, but never authorize. */
+    private static boolean isRetiredRestaurantRole(FactoryUserRole role) {
+        return role != null && role.name().startsWith("restaurant_");
+    }
+
     @Override
     public Map<String, String> resolveModuleLevelsForAuthorization(User user) {
         if (user == null) return Collections.emptyMap();
+        if (isRetiredRestaurantRole(user.getRoleEnum())) return Collections.emptyMap();
         Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), user.getRoleEnum(), true);
         return employeeModulePermissions == null ? levels : employeeModulePermissions.apply(user, levels);
     }
 
     private Map<String, String> resolveRoleModuleLevels(
             String factoryId, FactoryUserRole role, boolean requireAvailable) {
-        if (role == null || role == FactoryUserRole.unactivated) {
+        if (role == null || role == FactoryUserRole.unactivated || isRetiredRestaurantRole(role)) {
             return Collections.emptyMap();
         }
 
@@ -768,6 +735,9 @@ public class PermissionServiceImpl implements PermissionService {
 
     private String resolveEffectiveLevel(String factoryId, FactoryUserRole role, String module,
                                          LayerSnapshot snapshot, boolean requireAvailable) {
+        if (isRetiredRestaurantRole(role)) {
+            return null;
+        }
         String permType = null;
 
         // L2: factory-level override

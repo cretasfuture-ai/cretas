@@ -41,7 +41,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 #: 与 `DynamicConfigResolver` 同一条：key 必须带 domain 前缀，防止跨域取值。
-_ALLOWED_DOMAINS = ("restaurant", "factory")
+_ALLOWED_DOMAINS = ("factory",)
 
 
 async def resolve_config(
@@ -49,7 +49,7 @@ async def resolve_config(
     factory_id: str,
     config_key: str,
     *,
-    domain: str = "restaurant",
+    domain: str = "factory",
     store_id: Optional[str] = None,
     default: Any = None,
 ) -> Any:

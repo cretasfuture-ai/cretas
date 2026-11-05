@@ -158,4 +158,19 @@ def test_the_scanner_actually_finds_things():
             if "__pycache__" in str(path):
                 continue
             total += len(_literal_constants(path))
-    assert total > 200, f"只扫到 {total} 个字面量常量, 扫描器多半坏了"
+    # Restaurant-only fixtures were retired; the scan still has a concrete
+    # factory/router floor rather than an arbitrary historical total.
+    assert total >= 150, f"只扫到 {total} 个字面量常量, 扫描器多半坏了"
+    assert _literal_constants(_ROOT / "smartbi" / "agent" / "synthesis_engine.py")
+    assert _literal_constants(_ROOT / "smartbi" / "scripts" / "factory_ai_eval.py")
+
+
+def test_scanner_synthetic_positive_and_negative_controls(tmp_path):
+    """The gate must detect a real drift and accept an identical mirror."""
+    left = tmp_path / "factory_authority.py"
+    right = tmp_path / "factory_mirror.py"
+    left.write_text("FACTORY_CODES = ('FACTORY_SALES', 'FACTORY_STOCK')\n", encoding="utf-8")
+    right.write_text("FACTORY_CODES = ('FACTORY_SALES', 'FACTORY_STOCK')\n", encoding="utf-8")
+    assert _literal_constants(left)["FACTORY_CODES"] == _literal_constants(right)["FACTORY_CODES"]
+    right.write_text("FACTORY_CODES = ('FACTORY_SALES', 'FACTORY_QUALITY')\n", encoding="utf-8")
+    assert _literal_constants(left)["FACTORY_CODES"] != _literal_constants(right)["FACTORY_CODES"]

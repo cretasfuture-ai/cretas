@@ -80,7 +80,7 @@ public class AttachmentPermissionResolver {
         m.put(EntityType.RETURN_ORDER, "sales");
         m.put(EntityType.SHIPMENT, "sales");
         m.put(EntityType.INVENTORY, "warehouse");
-        m.put(EntityType.WASTAGE_RECORD, "restaurant");
+        m.put(EntityType.WASTAGE_RECORD, "inventory");
         m.put(EntityType.GROUP_LEADER_REPORT, "work_report");
         m.put(EntityType.EXPENSE_REPORT, "finance");
         m.put(EntityType.LEAVE_REQUEST, "hr");

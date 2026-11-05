@@ -128,37 +128,17 @@ from smartbi.agent.orchestrator import (
 from smartbi.gold import (
     channel_breakdown,
     daily_trend,
-    discount_summary,
     discount_breakdown,
     finance_summary,
-    meal_period_breakdown,
-    order_type_breakdown,
     store_comparison,
-    review_dish_issues,
-    review_good_tags,
-    review_platform,
-    review_store_ranking,
-    review_summary,
-    review_time_period,
-    review_vip,
     top_products,
 )
 from smartbi.gold.customer_text import sanitize_customer_ai_text
 from smartbi.gold.price_anomaly import detect_price_anomalies
 from smartbi.gold.queries import (
-    dish_margin,
     period_comparison,
-    restaurant_dimension_signals,
-    restaurant_operations_summary,
     supplier_price_coverage,
     weather_daily,
-)
-from smartbi.gold.restaurant.restaurant_intent_promotion import classify_question_family
-from smartbi.gold.restaurant.restaurant_ops_router import (
-    _canonicalize_store_mention,
-    demo_data_factory_for_code,
-    extract_store_mentions,
-    resolve_by_code,
 )
 from smartbi.services.distillation_capture import persist_distillation_sample
 from smartbi.services.insight_dimensions import (
@@ -581,67 +561,17 @@ HONEST_LABEL_CLAUSE = (
     "例如写'试点参数（建议值，需老板确认）：14天'，不要直接写'试点14天'。"
 )
 
-SYNTHESIS_CONTRACT_VERSION = "restaurant-dimensions-v9"
+SYNTHESIS_CONTRACT_VERSION = "factory-dimensions-v1"
+
+_RETIRED_RESTAURANT_TENANT_PREFIXES = (
+    "RES_", "DEMO_REST", "RESTAURANT_", "R_GML", "QHJ_",
+)
 
 
-def _is_restaurant_synthesis_tenant(factory_id: str) -> bool:
-    """Mirror this engine's existing restaurant/factory tenant split."""
-    fid = str(factory_id or "").strip().upper()
-    return not (fid.startswith("F") and len(fid) <= 6)
-
-
-def _customer_visible_answer(answer: str, *, restaurant_scope: bool) -> str:
-    """Apply the restaurant language boundary without changing factory output."""
-    if not restaurant_scope:
-        return answer
-    return sanitize_customer_ai_text(answer)
-
-
-async def _resolve_synthesis_store_scope(
-    pool: asyncpg.Pool,
-    factory_id: str,
-    question: str,
-) -> Optional[Tuple[str, ...]]:
-    """Resolve explicit restaurant store mentions against ``dim_store``.
-
-    ``None`` means the question contains no concrete store scope.  An empty
-    tuple means a concrete-looking scope was present but could not be resolved
-    unambiguously; callers must fail closed instead of broadening it to all
-    stores.
-    """
-    mentions = extract_store_mentions(question)
-    if not mentions:
-        return None
-
-    resolved: List[str] = []
-    try:
-        for mention in mentions:
-            matches = await _canonicalize_store_mention(
-                pool,
-                factory_id,
-                mention,
-            )
-            if len(matches) != 1:
-                logger.warning(
-                    "[synthesis] explicit store scope is ambiguous: "
-                    "factory=%s mention=%r matches=%r",
-                    factory_id,
-                    mention,
-                    matches,
-                )
-                return ()
-            if matches[0] not in resolved:
-                resolved.append(matches[0])
-    except Exception as exc:
-        logger.warning(
-            "[synthesis] explicit store scope resolution failed closed: "
-            "factory=%s mentions=%r error=%s",
-            factory_id,
-            mentions,
-            exc,
-        )
-        return ()
-    return tuple(resolved)
+def _is_retired_restaurant_tenant(factory_id: str) -> bool:
+    """Recognize only historical restaurant namespaces; never infer from F IDs."""
+    normalized = str(factory_id or "").strip().upper()
+    return normalized.startswith(_RETIRED_RESTAURANT_TENANT_PREFIXES)
 
 
 _CAUSAL_ASSERTION_RE = re.compile(
@@ -1422,18 +1352,14 @@ class ComprehensiveSynthesisEngine:
         t0 = time.monotonic()
         start, end = date_range
         start_iso, end_iso = start.isoformat(), end.isoformat()
-        restaurant_scope = _is_restaurant_synthesis_tenant(factory_id)
-        if restaurant_scope:
+        if _is_retired_restaurant_tenant(factory_id):
             return SynthesisResponse(
-                answer="餐饮专属 AI 能力已下线；请使用业务页面查看餐饮数据。",
+                answer="餐饮专属 AI 能力已退役，请使用工厂经营分析。",
                 source="restaurant_ai_retired",
                 tokens=0,
                 tokens_used_today=0,
                 tokens_cap=0,
                 elapsed_ms=int((time.monotonic() - t0) * 1000),
-                charts=[],
-                alerts=[],
-                dimension_coverage=None,
             )
         scope_store_names: Optional[Tuple[str, ...]] = None
         # Exact cache entries must not cross page-focus contexts. Semantic cache
@@ -1476,10 +1402,7 @@ class ComprehensiveSynthesisEngine:
                 alerts = hit_cfg.get("alerts") or []
                 dimension_coverage = hit_cfg.get("dimension_coverage")
                 return SynthesisResponse(
-                    answer=_customer_visible_answer(
-                        hit["answer"],
-                        restaurant_scope=restaurant_scope,
-                    ),
+                    answer=hit["answer"],
                     source=RESULT_SOURCE_CACHE, tokens=0,
                     tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                     elapsed_ms=int((time.monotonic() - t0) * 1000),
@@ -1538,10 +1461,7 @@ class ComprehensiveSynthesisEngine:
                     sem_alerts = sem_cfg.get("alerts") or []
                     sem_coverage = sem_cfg.get("dimension_coverage")
                     return SynthesisResponse(
-                        answer=_customer_visible_answer(
-                            sem["answer"],
-                            restaurant_scope=restaurant_scope,
-                        ),
+                        answer=sem["answer"],
                         source=RESULT_SOURCE_SEMANTIC_CACHE, tokens=0,
                         tokens_used_today=budget.tokens_used, tokens_cap=budget.tokens_cap,
                         elapsed_ms=int((time.monotonic() - t0) * 1000),
@@ -1575,7 +1495,6 @@ class ComprehensiveSynthesisEngine:
         insight_summary = self._analyze(
             factbook,
             period=f"{start_iso} 至 {end_iso}",
-            restaurant_scope=restaurant_scope,
         )
 
         if budget.blocked:
@@ -1586,7 +1505,6 @@ class ComprehensiveSynthesisEngine:
                 budget,
                 t0,
                 reason="叙述模型预算已用完",
-                plain_language=restaurant_scope,
             )
 
         # 5b. P4 v2: pure-attribution → try a cheap thin restate of the
@@ -1635,16 +1553,11 @@ class ComprehensiveSynthesisEngine:
                         reason="叙述未通过数据因果门禁",
                         tokens=thin_tokens,
                         fact_check=fc_meta,
-                        plain_language=restaurant_scope,
                     )
                 thin_answer = self._append_store_comparison_table(thin_answer, factbook)
                 thin_answer = self._append_traffic_trend(thin_answer, factbook)
                 thin_answer = self._append_investigation_directions(thin_answer, factbook)
                 thin_answer = self._append_dimension_guidance(thin_answer, factbook)
-                thin_answer = _customer_visible_answer(
-                    thin_answer,
-                    restaurant_scope=restaurant_scope,
-                )
                 charts = self.collect_charts(factbook, plan)
                 alerts = self.collect_alerts(factbook)
                 dimension_coverage = factbook.dimension_coverage()
@@ -1693,7 +1606,6 @@ class ComprehensiveSynthesisEngine:
                 budget,
                 t0,
                 reason="叙述模型暂时不可用",
-                plain_language=restaurant_scope,
             )
 
         # 7. Grounding hard-check (backfill真值 + flag fabricated names).
@@ -1727,7 +1639,6 @@ class ComprehensiveSynthesisEngine:
                 reason="叙述未通过数据因果门禁",
                 tokens=tokens,
                 fact_check=fc_meta,
-                plain_language=restaurant_scope,
             )
         # ⑥⑦ 排查方向要排在「还可补充的方面」**之前** —— 它是结论的一部分，
         # 那张 12 条的清单是附录。⚠️ 三处接线数量逐一对应（硬约束 8），
@@ -1737,10 +1648,6 @@ class ComprehensiveSynthesisEngine:
         answer = self._append_traffic_trend(answer, factbook)
         answer = self._append_investigation_directions(answer, factbook)
         answer = self._append_dimension_guidance(answer, factbook)
-        answer = _customer_visible_answer(
-            answer,
-            restaurant_scope=restaurant_scope,
-        )
 
         # 8. Charts + 🔒 反回扣 alerts (both gated by plan/factbook; alerts derive
         # solely from grounded FactBook signals — see collect_alerts).
@@ -1808,66 +1715,14 @@ class ComprehensiveSynthesisEngine:
         decomposition for the prior laggard.
         """
         ql = (q or "").lower()
-        plan = {"review": False, "finance": False, "sales": False,
-                "dish_margin": False, "dish_margin_asked": False,
-                "traffic": False, "operations": False, "staffing": False,
-                "external_signals": False, "holiday": False,
+        plan = {"finance": False, "sales": False,
                 "attribution": False, "weather": False,
-                "channel": False, "meal_period": False, "discount": False,
                 "period_comparison": False, "supplier_anomaly": False,
                 "analysis_mode": "lookup", "auto_expand": False, "cross": []}
-        if any(k in ql for k in ("评价", "口碑", "星级", "好评", "差评", "vip", "投诉", "满意")):
-            plan["review"] = True
         if any(k in ql for k in ("营收", "营业额", "经营", "财务", "客单价", "收入", "业绩", "毛利", "利润")):
             plan["finance"] = True
-        if any(k in ql for k in ("菜品", "商品", "销量", "畅销", "渠道", "折扣", "套餐")):
+        if any(k in ql for k in ("商品", "销量", "畅销")):
             plan["sales"] = True
-        # 单品毛利只在完整成本分摊可确定计算时启用；否则保留请求标记，
-        # _build_factbook 会留空该维度并附上补数说明，不把聚合毛利冒充单品毛利。
-        _wants_dish_margin = any(k in ql for k in (
-            "毛利", "成本构成", "单份成本", "哪道菜", "菜品成本", "单品成本",
-            "dish margin", "gross margin",
-        )) and any(k in ql for k in ("菜", "菜品", "单品", "sku", "商品"))
-        if _wants_dish_margin:
-            plan["dish_margin"] = True
-            plan["dish_margin_asked"] = True
-            plan["finance"] = True
-            plan["sales"] = True
-        # 渠道(点餐方式 堂食/外卖/自提) — NOT the payment-channel breakdown
-        # already embedded in "sales" (微信/美团); this is service-mode split.
-        _wants_channel = ("渠道" in ql) or any(
-            k in ql for k in ("堂食", "外卖", "自提", "外送"))
-        if _wants_channel:
-            plan["channel"] = True
-        # 时段(午市/晚市/夜宵). A bare "几点"/"哪个时间" only counts alongside a
-        # revenue/traffic cue (mirrors the weather "哪天" lesson — avoid over-
-        # triggering on a pure time-word with no business context).
-        _wants_meal_period = any(
-            k in ql for k in ("时段", "餐段", "午市", "晚市", "夜宵", "午餐", "晚餐")
-        ) or (
-            any(k in ql for k in ("几点", "哪个时间"))
-            and any(k in ql for k in ("营收", "客流"))
-        )
-        if _wants_meal_period:
-            plan["meal_period"] = True
-        # 折扣（总额/占营收比/构成 — descriptive only, see discount_summary docstring）
-        _wants_discount = any(k in ql for k in ("折扣", "优惠", "满减", "打折"))
-        if _wants_discount:
-            plan["discount"] = True
-        if any(k in ql for k in ("就餐人数", "用餐人数", "到店人数", "真实客流", "桌均人数", "人均消费")):
-            plan["traffic"] = True
-            plan["finance"] = True
-        if any(k in ql for k in ("库存", "缺货", "积压", "盘点", "盘亏", "盘盈", "损耗", "报损")):
-            plan["operations"] = True
-        if any(k in ql for k in ("排班", "人效", "人手", "员工", "在岗")):
-            plan["staffing"] = True
-        if any(k in ql for k in (
-                "商圈", "周边", "竞品", "竞争", "商场活动", "周边活动", "演出",
-                "赛事", "物理客流", "门前客流", "经过人数", "进店率", "捕获率",
-                "活动效果", "活动roi", "营销活动")):
-            plan["external_signals"] = True
-        if any(k in ql for k in ("节假日", "假期", "调休", "补班")):
-            plan["holiday"] = True
         # 供应商价格异常 (反回扣: 采购端偷涨价威慑, 零理论依赖 — spec P2.1)
         if any(k in ql for k in (
                 "供应商", "进货", "采购", "进价", "涨价", "回扣", "偷偷", "猫腻", "吃差价")):
@@ -1889,10 +1744,8 @@ class ComprehensiveSynthesisEngine:
         if "trend" in hints:
             plan["finance"] = True
             plan["period_comparison"] = True
-        if hints & {"sales", "product", "channel", "discount"}:
+        if hints & {"sales", "product"}:
             plan["sales"] = True
-        if hints & {"review", "member", "rating"}:
-            plan["review"] = True
         # Store 拖后腿 attribution — the per-store 客流×客单价 decomposition. Needs
         # a store reference AND either a lag cue or a traffic/ticket cue, so a
         # generic "门店营收" question stays on the plain finance path.
@@ -1947,16 +1800,7 @@ class ComprehensiveSynthesisEngine:
         ))
         if _wants_weather and _has_revenue_context:
             plan["weather"] = True
-            plan["external_signals"] = True
         # Cross relations.
-        if "vip" in ql and any(k in ql for k in ("菜品", "门店", "评价", "口味")):
-            plan["cross"].append("vip_x_rating")
-        if any(k in ql for k in ("时段", "时间段", "早午晚")) and \
-                any(k in ql for k in ("营收", "营业", "评价", "评分")):
-            plan["cross"].append("time_x_review")
-        if any(k in ql for k in ("平台", "美团", "点评")) and \
-                any(k in ql for k in ("评分", "评价", "口碑")):
-            plan["cross"].append("platform_x_rating")
         decision_cues = (
             "怎么改善", "怎么提升", "怎么优化", "怎么办", "如何改善", "如何提升",
             "如何优化", "给建议", "给方案", "优化方案", "改进方案", "帮助决策",
@@ -2013,18 +1857,12 @@ class ComprehensiveSynthesisEngine:
         # selected by the fully enumerated dish-optimisation question so vague
         # wording cannot silently collapse to only revenue + sales.
         if "菜品经营指标" in ql and "缺失维度" in ql:
-            plan["review"] = True
             plan["finance"] = True
             plan["sales"] = True
-            plan["dish_margin"] = True
-            plan["dish_margin_asked"] = True
-            plan["operations"] = True
         has_specific_dimension = any(
             plan.get(key)
             for key in (
-                "review", "finance", "sales", "dish_margin", "traffic",
-                "operations", "staffing", "external_signals", "holiday",
-                "attribution", "weather", "channel", "meal_period", "discount",
+                "finance", "sales", "attribution", "weather",
                 "period_comparison", "supplier_anomaly",
             )
         )
@@ -2044,9 +1882,7 @@ class ComprehensiveSynthesisEngine:
 
         if plan["auto_expand"]:
             for key in (
-                "review", "finance", "sales", "dish_margin", "traffic",
-                "operations", "staffing", "external_signals", "holiday",
-                "attribution", "weather", "channel", "meal_period", "discount",
+                "finance", "sales", "attribution", "weather",
                 "period_comparison", "supplier_anomaly",
             ):
                 plan[key] = True
@@ -2055,13 +1891,10 @@ class ComprehensiveSynthesisEngine:
         # does NOT trip the open-all fallback. channel/meal_period/discount are
         # explicit dimensions too — a pure "满减花了多少" / "外卖单多不多" must
         # NOT trip open-all (token bloat, I3).
-        if not (plan["review"] or plan["finance"] or plan["sales"]
-                or plan["attribution"] or plan["weather"]
-                or plan["channel"] or plan["meal_period"] or plan["discount"]
-                or plan["supplier_anomaly"] or plan["period_comparison"]
-                or plan["traffic"] or plan["operations"] or plan["staffing"]
-                or plan["external_signals"] or plan["holiday"]):
-            plan["review"] = plan["finance"] = plan["sales"] = True
+        if not any(plan.get(key) for key in (
+                "finance", "sales", "attribution", "weather",
+                "supplier_anomaly", "period_comparison")):
+            plan["finance"] = plan["sales"] = True
         return plan
 
     # =====================================================================
@@ -2076,11 +1909,7 @@ class ComprehensiveSynthesisEngine:
         Never affects the user-facing response."""
         try:
             grounded_clean = not (fc_meta or {}).get("violations")
-            biz_type = (
-                "restaurant"
-                if _is_restaurant_synthesis_tenant(factory_id)
-                else "factory"
-            )
+            biz_type = "factory"
             has_data = any([factbook.review, factbook.finance, factbook.sales,
                             factbook.period_comparison, factbook.supplier_anomaly,
                             factbook.attribution, factbook.channel,
@@ -2094,7 +1923,7 @@ class ComprehensiveSynthesisEngine:
                 system_prompt="comprehensive synthesis", quality=quality,
                 metadata={
                     "query": q_capped,
-                    "question_family": classify_question_family(q_capped),
+                    "question_family": "factory_comprehensive",
                     "plan": plan,
                     "empty_factbook": not has_data,
                     "grounding": {"clean": grounded_clean, **(fc_meta or {})},
@@ -2183,7 +2012,7 @@ class ComprehensiveSynthesisEngine:
         requested_plan = dict(plan)
         fb = FactBook(
             period=period,
-            data_mode="DEMO" if factory_id == "DEMO_REST" else "PRODUCTION",
+            data_mode="PRODUCTION",
         )
         notes: List[str] = []
         has_explicit_store_scope = store_names is not None
@@ -2194,11 +2023,6 @@ class ComprehensiveSynthesisEngine:
                 + "、".join(store_names)
                 + "；没有门店粒度的内部维度保持缺失，不用全部门店数据代替。"
             )
-            if requested_plan.get("external_signals") or requested_plan.get("holiday"):
-                notes.append(
-                    "活动、商场和周边信号为商圈/品牌级描述性背景，"
-                    "不是该门店的因果增量或ROI证据。"
-                )
             if requested_plan.get("supplier_anomaly"):
                 notes.append(
                     "采购价格为品牌共享采购口径，不代表该门店独立采购价格。"
@@ -2245,26 +2069,9 @@ class ComprehensiveSynthesisEngine:
         # same unified data tenant used by the deterministic restaurant tools.
         # Without this source mapping, a direct dish query can see 400+ dishes
         # while comprehensive analysis falsely reports dish sales as missing.
-        gold_sales_factory = demo_data_factory_for_code(
-            "RESTAURANT_OPS_SALES_SUMMARY",
-            factory_id,
-        )
-        gold_margin_factory = demo_data_factory_for_code(
-            "RESTAURANT_OPS_GROSS_MARGIN",
-            factory_id,
-        )
+        gold_sales_factory = factory_id
+        gold_margin_factory = factory_id
         tasks: Dict[str, Any] = {}
-        if plan.get("review"):
-            tasks["review_summary"] = _safe(review_summary(self._pool, factory_id), "review_summary")
-            tasks["review_vip"] = _safe(review_vip(self._pool, factory_id), "review_vip")
-            tasks["review_platform"] = _safe(review_platform(self._pool, factory_id), "review_platform")
-            tasks["review_time"] = _safe(review_time_period(self._pool, factory_id), "review_time")
-            tasks["review_good"] = _safe(review_good_tags(self._pool, factory_id), "review_good")
-            tasks["review_issues"] = _safe(review_dish_issues(self._pool, factory_id), "review_issues")
-            tasks["review_worst"] = _safe(
-                review_store_ranking(self._pool, factory_id, dim="low_star", order="desc", top_n=5),
-                "review_worst",
-            )
         if plan.get("finance"):
             tasks["finance"] = _safe(
                 finance_summary(
@@ -2369,42 +2176,6 @@ class ComprehensiveSynthesisEngine:
                     ),
                     "discounts",
                 )
-        if plan.get("dish_margin"):
-            tasks["dish_margin"] = _safe(
-                dish_margin(
-                    self._pool,
-                    gold_margin_factory,
-                    top_n=5,
-                ),
-                "dish_margin",
-            )
-        if plan.get("channel"):
-            tasks["channel_dim"] = _safe(
-                order_type_breakdown(
-                    self._pool,
-                    gold_sales_factory,
-                    date_range,
-                ),
-                "channel_dim",
-            )
-        if plan.get("meal_period"):
-            tasks["meal_period_dim"] = _safe(
-                meal_period_breakdown(
-                    self._pool,
-                    gold_sales_factory,
-                    date_range,
-                ),
-                "meal_period_dim",
-            )
-        if plan.get("discount"):
-            tasks["discount_dim"] = _safe(
-                discount_summary(
-                    self._pool,
-                    gold_sales_factory,
-                    date_range,
-                ),
-                "discount_dim",
-            )
         if plan.get("weather"):
             tasks["weather_sales"] = _safe(
                 daily_trend(
@@ -2422,30 +2193,6 @@ class ComprehensiveSynthesisEngine:
             tasks["weather_daily"] = _safe(
                 weather_daily(self._pool, factory_id, date_range), "weather_daily",
             )
-        if plan.get("operations") or plan.get("staffing"):
-            tasks["operations"] = _safe(
-                restaurant_operations_summary(self._pool, factory_id, date_range),
-                "operations",
-            )
-        if plan.get("external_signals") or plan.get("holiday"):
-            tasks["external_dimensions"] = _safe(
-                restaurant_dimension_signals(self._pool, factory_id, date_range),
-                "external_dimensions",
-            )
-            if "weather_sales" not in tasks:
-                tasks["external_sales"] = _safe(
-                    daily_trend(
-                        self._pool,
-                        gold_sales_factory,
-                        date_range,
-                        **(
-                            {"store_names": store_names}
-                            if store_names is not None
-                            else {}
-                        ),
-                    ),
-                    "external_sales",
-                )
 
         results: Dict[str, Any] = {}
         if tasks:
@@ -2484,122 +2231,6 @@ class ComprehensiveSynthesisEngine:
                         "因此本次不计算毛利或净利润。"
                     )
 
-        # Demo and recently imported restaurant tenants can have complete POS
-        # item facts before the monthly agg_product projection is populated.
-        # The single-dish Gold route already owns the canonical POS ranking
-        # query and the accessory exclusion contract, so reuse that source of
-        # truth instead of declaring dish sales/revenue missing or duplicating
-        # its SQL here.  Authentication/cache identity stays on factory_id;
-        # only the read-side data tenant is passed to the resolver.
-        if plan.get("sales"):
-            current_top = (
-                (results.get("top_products") or {}).get("top_products") or []
-            )
-            current_bottom = (
-                (results.get("bottom_products") or {}).get("top_products") or []
-            )
-
-            async def _pos_ranking(direction: str):
-                label = "最高" if direction == "best" else "最低"
-                store_scope_text = (
-                    "、".join(store_names)
-                    if store_names
-                    else "全部门店"
-                )
-                resolver_code = (
-                    "RESTAURANT_OPS_STORE_MARGIN"
-                    if store_names
-                    else "RESTAURANT_OPS_GROSS_MARGIN"
-                )
-                resolver_scope = {}
-                if store_names:
-                    if len(store_names) == 1:
-                        resolver_scope["store_name"] = store_names[0]
-                    else:
-                        resolver_scope["store_mentions"] = list(store_names)
-                return await _safe(
-                    resolve_by_code(
-                        resolver_code,
-                        self._pool,
-                        gold_margin_factory,
-                        query=(
-                            f"{date_range[0].isoformat()}至"
-                            f"{date_range[1].isoformat()}{store_scope_text}"
-                            f"销量{label}的5道菜"
-                        ),
-                        date_range=date_range,
-                        # Comprehensive synthesis is permission-gated by the
-                        # Java analysis tool.  Use the restaurant owner read
-                        # role so the shared resolver can return the same
-                        # revenue facts already exposed by finance_summary.
-                        role="restaurant_owner",
-                        **resolver_scope,
-                    ),
-                    f"pos_{direction}_products",
-                )
-
-            missing_rankings = []
-            if not current_top:
-                missing_rankings.append(("top_products", "best"))
-            if not current_bottom:
-                missing_rankings.append(("bottom_products", "worst"))
-            if missing_rankings:
-                fallback_answers = await asyncio.gather(
-                    *(_pos_ranking(direction) for _, direction in missing_rankings)
-                )
-                for (result_key, _), answer in zip(
-                    missing_rankings,
-                    fallback_answers,
-                ):
-                    ranked_entities = (
-                        (getattr(answer, "meta", None) or {}).get("ranked_entities")
-                        if answer is not None else []
-                    ) or []
-                    products = [
-                        {
-                            "product_id": entity.get("id"),
-                            "product_name": entity.get("name"),
-                            "qty_sold": entity.get("sales_volume"),
-                            "revenue": entity.get("revenue"),
-                            "bill_count": entity.get("bill_count"),
-                        }
-                        for entity in ranked_entities
-                        if entity.get("name")
-                        and entity.get("sales_volume") is not None
-                    ]
-                    if products:
-                        results[result_key] = {"top_products": products}
-
-        # ---- assemble review ----
-        if plan.get("review"):
-            summary = results.get("review_summary")
-            total = (summary or {}).get("total_reviews", 0) if summary else 0
-            if summary and total:
-                fb.review = {
-                    "summary": summary,
-                    "vip": results.get("review_vip"),
-                    "platform": results.get("review_platform"),
-                    "time": results.get("review_time"),
-                    "good_tags": results.get("review_good"),
-                    "dish_issues": results.get("review_issues"),
-                    "worst_stores": results.get("review_worst"),
-                }
-                notes.append(NOTE_DISH_TAG_NOT_NAME)
-                if (summary.get("low_star_count") or 0) > 0:
-                    notes.append(NOTE_LOW_STAR_SMALL_SAMPLE)
-                # VIP signal note only when VIP avg < 非VIP avg.
-                vip_groups = (results.get("review_vip") or {}).get("groups") or []
-                vmap = {g.get("group"): g.get("avg_star") for g in vip_groups}
-                if vmap.get("VIP") is not None and vmap.get("非VIP") is not None \
-                        and vmap["VIP"] < vmap["非VIP"]:
-                    notes.append(NOTE_VIP_SIGNAL)
-                if (results.get("review_issues") or {}).get("low_star_count"):
-                    notes.append(NOTE_COMPLAINT_DISPUTE)
-            else:
-                # P1 absent / empty review → degrade, next-action (fool-proof Rule 5).
-                plan["review"] = False
-                notes.append(NOTE_REVIEW_ABSENT_NEXTACTION)
-
         # ---- assemble finance ----
         if plan.get("finance"):
             fin = results.get("finance")
@@ -2607,21 +2238,6 @@ class ComprehensiveSynthesisEngine:
                 fb.finance = fin
             else:
                 plan["finance"] = False
-
-        # ---- dish margin: only complete deterministic SKU/BOM cost rows ----
-        if plan.get("dish_margin"):
-            dm = results.get("dish_margin") or {}
-            if (
-                dm.get("cost_basis_complete") is True
-                and dm.get("dish_count")
-                and (dm.get("top_margin") or dm.get("low_margin"))
-            ):
-                fb.dish_margin = dm
-                notes.append("菜品毛利只包含售价、BOM成本和份量均完整的菜品；缺失菜品不参与排名。")
-            else:
-                plan["dish_margin"] = False
-                if plan.get("dish_margin_asked") or requested_plan.get("auto_expand"):
-                    notes.append(NOTE_DISH_MARGIN_ABSENT)
 
         # ---- assemble 同比环比 (营收+加权毛利率) ----
         if plan.get("period_comparison"):
@@ -2710,33 +2326,6 @@ class ComprehensiveSynthesisEngine:
             else:
                 plan["sales"] = False
 
-        # ---- assemble channel (渠道/点餐方式 堂食/外卖/自提) ----
-        if plan.get("channel"):
-            ch = results.get("channel_dim")
-            if ch and ch.get("order_types"):
-                fb.channel = ch
-            else:
-                plan["channel"] = False
-
-        # ---- assemble meal period (时段 午市/晚市/夜宵) ----
-        if plan.get("meal_period"):
-            mpd = results.get("meal_period_dim")
-            if mpd and mpd.get("meal_periods"):
-                fb.meal_period = mpd
-            else:
-                plan["meal_period"] = False
-
-        # ---- assemble discount (折扣总额/占营收比/构成, descriptive only) ----
-        if plan.get("discount"):
-            dsc = results.get("discount_dim")
-            # Keep the dimension when there's a grounded total (from agg_daily)
-            # OR a per-type composition — the total alone is still valuable even
-            # if agg_discount has no composition rows for this window.
-            if dsc and ((dsc.get("total_discount_amount") or 0) > 0 or dsc.get("discounts")):
-                fb.discount = dsc
-            else:
-                plan["discount"] = False
-
         # ---- cross hints (descriptive relationships, 相关≠因果) ----
         if plan.get("weather"):
             daily_points = (results.get("weather_sales") or {}).get("points") or []
@@ -2778,7 +2367,15 @@ class ComprehensiveSynthesisEngine:
     ) -> None:
         """Build explicit available/missing dimension lists for this answer."""
         if requested_plan.get("auto_expand"):
-            desired = {item.code for item in DIMENSIONS}
+            retired_dimensions = {
+                "physical_traffic", "channel", "meal_period", "review",
+                "holiday", "mall_activity", "nearby_event", "competitor",
+                "dish_margin",
+            }
+            desired = {
+                item.code for item in DIMENSIONS
+                if item.code not in retired_dimensions
+            }
         else:
             desired: set[str] = set()
             if requested_plan.get("finance"):
@@ -2787,35 +2384,12 @@ class ComprehensiveSynthesisEngine:
                 desired.add("period_comparison")
             if requested_plan.get("attribution"):
                 desired.add("store_comparison")
-            if requested_plan.get("traffic"):
-                desired.add("guest_traffic")
             if requested_plan.get("sales"):
                 desired.add("dish_sales")
-            if requested_plan.get("dish_margin"):
-                desired.add("dish_margin")
-            if requested_plan.get("channel"):
-                desired.add("channel")
-            if requested_plan.get("meal_period"):
-                desired.add("meal_period")
-            if requested_plan.get("discount"):
-                desired.add("promotion")
-            if requested_plan.get("review"):
-                desired.add("review")
             if requested_plan.get("supplier_anomaly"):
                 desired.add("supplier_cost")
-            if requested_plan.get("operations"):
-                desired.update({"inventory", "waste", "stocktaking"})
-            if requested_plan.get("staffing"):
-                desired.add("staffing")
             if requested_plan.get("weather"):
                 desired.add("weather")
-            if requested_plan.get("holiday"):
-                desired.add("holiday")
-            if requested_plan.get("external_signals"):
-                desired.update({
-                    "physical_traffic", "mall_activity", "nearby_event",
-                    "competitor", "promotion",
-                })
 
         internal_evidence = (
             EVIDENCE_SIMULATED if factory_id == "DEMO_REST" else EVIDENCE_REAL
@@ -3101,7 +2675,6 @@ class ComprehensiveSynthesisEngine:
         factbook: FactBook,
         *,
         period: str,
-        restaurant_scope: bool = False,
     ) -> str:
         """Run InsightDimensionAnalyzer over the flattened FactBook → summary text.
 
@@ -3109,12 +2682,6 @@ class ComprehensiveSynthesisEngine:
         we only need its executive_summary + top insights as grounding context
         for the LLM (NOT as the final answer).
         """
-        if restaurant_scope:
-            # Restaurant's deterministic FactBook already contains the
-            # dimension-specific calculations and coverage disclosures.  A
-            # one-row snapshot has no valid generic correlation/contribution
-            # semantics, so do not manufacture a second summary from it.
-            return ""
         try:
             df = factbook_to_dataframe(factbook)
             if df is None or df.empty:

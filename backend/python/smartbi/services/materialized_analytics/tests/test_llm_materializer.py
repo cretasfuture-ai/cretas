@@ -256,8 +256,9 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
     # factory domain: restaurant rows are not training data (餐饮废弃, 2026-10-29 待办第 7 条)
     await lm.generate_llm_insights(results, "factory", factory_id="RES_TEST_001")
 
-    assert len(sink) == 1, "exactly one distillation row should be written"
-    sql, args = sink[0]
+    inserts = [(sql, args) for sql, args in sink if "INSERT INTO smart_bi_distillation_samples" in sql]
+    assert len(inserts) == 1, "exactly one distillation row should be written"
+    sql, args = inserts[0]
     assert "smart_bi_distillation_samples" in sql
     assert "ON CONFLICT (input_hash)" in sql
     # positional args (shared helper order): source, business_type, factory_id,
@@ -298,8 +299,9 @@ async def test_distillation_desensitized_for_factory_without_training_consent(mo
     }, ensure_ascii=False))
 
     await lm.generate_llm_insights(results, "factory", factory_id="F_NO_CONSENT")
-    assert len(sink) == 1, "un-authorized factory: stored desensitized"
-    _, args = sink[0]
+    inserts = [(sql, args) for sql, args in sink if "INSERT INTO smart_bi_distillation_samples" in sql]
+    assert len(inserts) == 1, "un-authorized factory: stored desensitized"
+    _, args = inserts[0]
     meta = json.loads(args[11])
     from smartbi.services.training_consent import RULE_VERSION
     assert meta["desensitized"] is True and meta["training_rule"] == RULE_VERSION

@@ -3,13 +3,13 @@ package com.cretas.aims.controller.inventory;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
-import com.cretas.aims.dto.restaurant.SupplierDeliveryNoteDto;
-import com.cretas.aims.entity.restaurant.SupplierDeliveryNote;
-import com.cretas.aims.entity.restaurant.SupplierDeliveryNoteLine;
-import com.cretas.aims.entity.restaurant.enums.DeliveryNoteStatus;
+import com.cretas.aims.dto.inventory.SupplierDeliveryNoteDto;
+import com.cretas.aims.entity.inventory.SupplierDeliveryNote;
+import com.cretas.aims.entity.inventory.SupplierDeliveryNoteLine;
+import com.cretas.aims.entity.inventory.DeliveryNoteStatus;
 import com.cretas.aims.exception.BusinessException;
-import com.cretas.aims.repository.restaurant.SupplierDeliveryNoteRepository;
-import com.cretas.aims.service.restaurant.SupplierDeliveryNoteService;
+import com.cretas.aims.repository.inventory.SupplierDeliveryNoteRepository;
+import com.cretas.aims.service.inventory.SupplierDeliveryNoteService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
@@ -34,19 +34,17 @@ import java.util.stream.Collectors;
 /**
  * 工厂业态-供应商送货单 OCR / 人工录入 Controller (T155-B chunk2, 方案 A1)。
  *
- * <p><b>A1 方案</b>: 这是一个面向 FACTORY 业态的<b>薄 controller</b>, 委托给与餐饮
- * <b>同一个</b> {@link SupplierDeliveryNoteService} bean — 不复制任何 service 逻辑。
+ * <p>这是一个面向 FACTORY 业态的供应链入口，委托给
+ * {@link SupplierDeliveryNoteService} bean — 不复制 service 逻辑。
  * 表 {@code supplier_delivery_notes} 本就是 factory_id-scoped, 过账走工厂自己的
  * {@code PurchaseService} 进共享 {@code material_batches}。耦合是表面的。
  *
- * <p>与餐饮 controller ({@code SupplierDeliveryNoteController}, 路径
- * {@code /restaurant/supplier-delivery-notes}, {@code @RequireModule("restaurant")})
- * 完全独立 — 餐饮 controller 字节不变。本 controller 路径
- * {@code /warehouse/supplier-delivery-notes}, 门控 {@code @RequireModule("warehouse")}。
+ * <p>本 controller 路径 {@code /warehouse/supplier-delivery-notes}，门控
+ * {@code @RequireModule("warehouse")}。
  *
  * <p>业态隔离: factoryId = 租户。OCR prompt 由 service 按 resolveBusinessDomain
  * 自动选 (FACTORY → 物料中性 prompt)。所有查询/写入都按 factoryId scope, 工厂租户
- * 查不到餐饮租户的数据 (天然隔离)。
+ * 查不到其他租户的数据 (天然隔离)。
  *
  * @since 2026-06-08 (T155-B)
  */
@@ -61,7 +59,7 @@ public class FactorySupplierDeliveryController {
     private final SupplierDeliveryNoteRepository noteRepository;
     private final ObjectMapper objectMapper;
 
-    /** 低置信阈值 — 与 service / 餐饮 controller 保持一致 (Rule 5)。 */
+    /** 低置信阈值 — 与 service 保持一致 (Rule 5)。 */
     private static final BigDecimal LOW_CONFIDENCE_THRESHOLD = new BigDecimal("0.75");
 
     // ==================== OCR 解析 ====================
@@ -299,7 +297,7 @@ public class FactorySupplierDeliveryController {
     private SupplierDeliveryNoteDto toDto(SupplierDeliveryNote n) {
         boolean lowConf = n.getOcrConfidence() != null
                 && n.getOcrConfidence().compareTo(LOW_CONFIDENCE_THRESHOLD) < 0
-                && n.getSourceType() == com.cretas.aims.entity.restaurant.enums.DeliveryNoteSourceType.OCR;
+                && n.getSourceType() == com.cretas.aims.entity.inventory.DeliveryNoteSourceType.OCR;
         List<SupplierDeliveryNoteDto.LineDto> lineDtos = n.getLines() == null ? List.of()
                 : n.getLines().stream().map(this::toLineDto).collect(Collectors.toList());
         return SupplierDeliveryNoteDto.builder()
@@ -355,7 +353,7 @@ public class FactorySupplierDeliveryController {
     private SupplierDeliveryNoteDto toSummaryDto(SupplierDeliveryNote n) {
         boolean lowConf = n.getOcrConfidence() != null
                 && n.getOcrConfidence().compareTo(LOW_CONFIDENCE_THRESHOLD) < 0
-                && n.getSourceType() == com.cretas.aims.entity.restaurant.enums.DeliveryNoteSourceType.OCR;
+                && n.getSourceType() == com.cretas.aims.entity.inventory.DeliveryNoteSourceType.OCR;
         return SupplierDeliveryNoteDto.builder()
                 .id(n.getId())
                 .factoryId(n.getFactoryId())

@@ -6,8 +6,6 @@ import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.ai.dto.ChatCompletionRequest;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.ChatMessage;
-import com.cretas.aims.dto.ai.IntentExecuteRequest;
-import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.conversation.ConversationMessage;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.smartbi.*;
@@ -20,17 +18,14 @@ import com.cretas.aims.entity.smartbi.enums.SmartBIIntent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.smartbi.*;
 import com.cretas.aims.service.ConversationMemoryService;
-import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.LlmIntentFallbackClient;
 import com.cretas.aims.service.smartbi.*;
-import com.cretas.aims.util.BusinessDomainUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,7 +40,6 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -128,34 +122,11 @@ public class SmartBIServiceImpl implements SmartBIService {
     private ForecastService forecastService;
 
     /**
-     * Tool-Skill 意图执行器 (P5.6)
-     * 用于把餐饮诊断意图从 legacy SmartBIIntent switch-case 路由到统一的 Tool-Skill 管线.
-     * {@code @Lazy} 打破潜在循环依赖: SmartBIServiceImpl → IntentExecutorService → ... → SmartBIService.
-     * {@code required = false} 保证: 如果 Tool-Skill 模块下线, 整个 SmartBI 仍可降级到 legacy 路径.
-     */
-    @Autowired(required = false)
-    @Lazy
-    private IntentExecutorService intentExecutorService;
-
-    /**
      * Week 5 Agent layer HTTP client — calls Python /api/smartbi/insights/custom.
      * required=false: works even if Python is down (endpoint returns empty list).
      */
     @Autowired(required = false)
     private com.cretas.aims.client.AgentInsightsClient agentInsightsClient;
-
-    /**
-     * Apr 25 Phase 9 backlog (I1): factory metadata for tenant-type aware
-     * dashboard routing. Restaurant tenants have 0 rows in legacy
-     * smart_bi_sales_data; the Apr 22 Gold cutover wired
-     * salesService.getSalesOverview to read from Gold. We need to detect
-     * RESTAURANT here so /dashboard/executive?period=month skips the legacy
-     * salesData precheck and routes directly to the Gold path.
-     * required=false: keep existing tests/wiring functional if a downstream
-     * harness omits this bean.
-     */
-    @Autowired(required = false)
-    private com.cretas.aims.repository.FactoryRepository factoryRepository;
 
     // ==================== 配置参数 ====================
 
@@ -221,46 +192,6 @@ public class SmartBIServiceImpl implements SmartBIService {
     /** 默认每日配额 (Apr 15 2026: 50 → 1000, demo 中老板 30 题就到顶, 远低于 SaaS 业界基线) */
     private static final int DEFAULT_DAILY_QUOTA = 1000;
 
-    /**
-     * 餐饮诊断查询关键词 (P5.6).
-     * 匹配这些关键词的查询走 Tool-Skill 管线 (IntentExecutorService) 而非 legacy switch-case.
-     * 关键词来自 V20260411_01 Flyway migration 注册的 14 个 RESTAURANT_* 意图的 keywords 字段.
-     * 使用简单正则而非 DB 查询以避免额外 IO 成本, 管线内部会再做精确意图识别.
-     */
-    private static final Pattern RESTAURANT_DIAGNOSTIC_KEYWORDS = Pattern.compile(
-        "(成本刚性|刚性|人工成本占比|为什么亏|营收和人工|成本结构" +
-        "|对标|行业基准|行业平均|比别人差|火锅行业|川菜行业|差在哪" +
-        "|渠道毛利|堂食外卖|美团抽成|饿了么抽成|团购|渠道贡献" +
-        "|时段客流|几点最忙|午市晚市|下午时段|空闲时段|热力图" +
-        "|长尾|哪些菜该砍|菜单瘦身|末位淘汰|冗余SKU|冗余菜品" +
-        "|菜单归一|重复菜名|SKU精简|菜名清洗|归一后SKU" +
-        "|同店同比|同比|环比|比上个月|比去年|YoY|MoM" +
-        "|评论|点评|大众点评|美团评论|客户怎么说|差评|好评|评分下降" +
-        "|会员分层|RFM|冠军客户|流失客户|召回|复购|客户留存" +
-        "|储值卡|充值卡|核销率|兑付余额|储值余额|充卡" +
-        "|多店对比|门店排名|17家店|哪家最好|哪家最差|异常店|门店Top" +
-        "|校准历史|BOM校准|食材成本偏移|月度异常|什么时候开始掉" +
-        "|P&L|利润表|完整财务|一页纸|headline|门店诊断报告" +
-        "|BOM精度|数据缺口|还要上传什么|Layer|数据完整度" +
-        "|菜单工程|Kasavana|明星菜|问题菜|谜题菜|瘦狗菜|四象限" +
-        "|横向对比|同业对比|大盘|跨店对比|跨连锁" +
-        "|销售预测|预测下月|预测未来|未来趋势|趋势预测" +
-        "|BOM差异|成本差异归因|供应链差异|管理差异|标准成本差异|采购价变动" +
-        "|销售计划|月度计划|目标营收|设定目标|计划完成|完成度|目标达成|还差多少|进度追踪" +
-        "|人效|人均产出|员工效率|用人多少|人力成本效率|人效比" +
-        "|桌位|占有率|餐位|几人位|两人位|四人位|座位配置" +
-        "|套餐拆|拆单|套餐统计|套餐销量|单点还是套餐" +
-        "|退货异常|反复退货|供应商退货|验收异常|退货率|退货归因" +
-        "|竞品分析|竞品对比|别家做得好|竞争对手|同行对比|评分对比|点评对比" +
-        "|叫货|自动下单|采购单|叫货单|补货|智能下单" +
-        "|日清日结|日盘|今日盘点|库存对账|每日对账|当日损耗" +
-        "|采购预测|明天需要多少|下周要多少|备货|节假日备货" +
-        "|排班|公式制|全职兼职|班次|工时|排班分析|排班优化" +
-        "|计件|提成|迎宾计件|小组计件|绩效提成|按单计算" +
-        "|绩效规则|绩效考核|KPI|考核权重|可控利润考核" +
-        "|店长KPI|三维度|健康度|门店评分|综合评估)"
-    );
-
     // ==================== 经营驾驶舱 ====================
 
     /** Shared thread pool for parallel dashboard queries (bounded to avoid connection pool exhaustion) */
@@ -283,43 +214,6 @@ public class SmartBIServiceImpl implements SmartBIService {
             log.info("命中驾驶舱缓存: factoryId={}, period={}", factoryId, period);
             recordUsage(factoryId, null, ActionType.DASHBOARD.name(), 0, true);
             return (DashboardResponse) cached.get();
-        }
-
-        // ================================================================
-        // Apr 25 Phase 9 backlog (I1): RESTAURANT tenants route through Gold
-        // ----------------------------------------------------------------
-        // Background: legacy 自动检测 (步骤 2.1 below) queries
-        // smart_bi_sales_data which restaurants have 0 rows in. The auto-
-        // fallback then returns invalid range → range stays at current
-        // period → Gold returns empty → empty dashboard. The /custom
-        // endpoint works because user explicitly picks a 2025 range.
-        //
-        // Fix: for RESTAURANT tenants, skip the legacy precheck and route
-        // through salesService.getSalesOverview() (which is Gold-aware via
-        // SMARTBI_GOLD_READ_PRIMARY_ENABLED, Apr 22 Phase B4 cutover).
-        // Add a small fallback chain so first-load with no range still finds
-        // the most recent data window (mirrors Trends/Finance UX).
-        //
-        // Manufacturing tenants (FACTORY/HEADQUARTERS/CENTRAL_KITCHEN) keep
-        // the legacy 4-future parallel path unchanged.
-        // ================================================================
-        if (isRestaurantTenant(factoryId)) {
-            DashboardResponse goldResp = computeRestaurantDashboard(factoryId, period);
-            if (goldResp != null) {
-                Duration ttl = calculateCacheTtl(period);
-                saveToCache(factoryId, cacheKey, goldResp, ttl);
-                long elapsed = System.currentTimeMillis() - startTime;
-                log.info("驾驶舱(RESTAURANT/Gold): factoryId={}, period={}, kpis={}, elapsed={}ms",
-                        factoryId, period,
-                        goldResp.getKpiCards() == null ? 0 : goldResp.getKpiCards().size(),
-                        elapsed);
-                recordUsage(factoryId, null, ActionType.DASHBOARD.name(), 0, false);
-                return goldResp;
-            }
-            // null = restaurant + Gold path failed entirely → fall through
-            // to legacy (will likely be empty for restaurants but at least
-            // keeps the response shape consistent).
-            log.warn("Restaurant Gold dashboard returned null, falling back to legacy: factoryId={}", factoryId);
         }
 
         // 2. 计算日期范围
@@ -465,65 +359,6 @@ public class SmartBIServiceImpl implements SmartBIService {
         return response;
     }
 
-    /**
-     * Apr 25 Phase 9 backlog (I1): is this factory a restaurant tenant?
-     *
-     * Restaurant tenants (RESTAURANT, BRANCH) have 0 rows in legacy
-     * smart_bi_sales_data and must route through Gold (POS-backed).
-     * Defensive: if the FactoryRepository bean is missing or the lookup
-     * throws, return false so manufacturing path is preserved (legacy
-     * dashboard is the existing behavior, no regression).
-     */
-    private boolean isRestaurantTenant(String factoryId) {
-        if (factoryRepository == null || factoryId == null) {
-            return false;
-        }
-        try {
-            return factoryRepository.findById(factoryId)
-                    .map(f -> BusinessDomainUtils.isRestaurantDomain(f.getType()))
-                    .orElse(false);
-        } catch (Exception e) {
-            log.warn("Failed to check tenant type for {}: {}", factoryId, e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Apr 25 Phase 9 backlog (I1): build dashboard for restaurant tenant via
-     * the Gold-aware sales overview path, with a simple fallback chain so
-     * first-load (no date picker) still finds the most recent data window.
-     *
-     * Order: requested period → previous year same month/period → 2024 same period.
-     * Returns null if all attempts produce empty (defensive — caller falls
-     * through to legacy path which will also be empty but preserves shape).
-     */
-    private DashboardResponse computeRestaurantDashboard(String factoryId, String period) {
-        java.time.LocalDate today = java.time.LocalDate.now();
-        java.time.LocalDate[] primary = com.cretas.aims.util.DateRangeUtils.getDateRangeByPeriod(period, today);
-        java.time.LocalDate[] lastYear = com.cretas.aims.util.DateRangeUtils.getDateRangeByPeriod(period, today.minusYears(1));
-        java.time.LocalDate[] twoYearsAgo = com.cretas.aims.util.DateRangeUtils.getDateRangeByPeriod(period, today.minusYears(2));
-
-        java.time.LocalDate[][] attempts = new java.time.LocalDate[][] { primary, lastYear, twoYearsAgo };
-        for (int i = 0; i < attempts.length; i++) {
-            java.time.LocalDate start = attempts[i][0];
-            java.time.LocalDate end = attempts[i][1];
-            try {
-                DashboardResponse resp = salesService.getSalesOverview(factoryId, start, end);
-                if (resp != null && resp.getKpiCards() != null && !resp.getKpiCards().isEmpty()) {
-                    log.info("[restaurant-gold] factory={} period={} attempt={} ({}..{}) returned {} kpis",
-                            factoryId, period, i, start, end, resp.getKpiCards().size());
-                    return resp;
-                }
-                log.debug("[restaurant-gold] factory={} attempt {} ({}..{}) empty, trying next",
-                        factoryId, i, start, end);
-            } catch (Exception e) {
-                log.warn("[restaurant-gold] factory={} attempt {} ({}..{}) failed: {}",
-                        factoryId, i, start, end, e.getMessage());
-            }
-        }
-        return null;
-    }
-
     @Override
     public List<AIInsight> getDashboardLLMInsights(String factoryId, String period) {
         log.info("获取驾驶舱 LLM 洞察: factoryId={}, period={}", factoryId, period);
@@ -631,15 +466,6 @@ public class SmartBIServiceImpl implements SmartBIService {
             log.info("指代消解: '{}' -> '{}'", request.getEffectiveQuery(), resolvedQuery);
         }
 
-        // 2.5. P5.6 · Tool-Skill 路由分流 —— 餐饮诊断意图绕过 legacy switch-case
-        // 关键词命中 + IntentExecutorService 可用时, 把查询交给统一的 Tool-Skill 管线.
-        // 管线内部会进行精确意图识别, 若不是真正的 RESTAURANT_* 意图会回落到 legacy 路径.
-        NLQueryResponse restaurantRouted = tryRouteRestaurantDiagnostic(
-                factoryId, userId, request, resolvedQuery, startTime);
-        if (restaurantRouted != null) {
-            return restaurantRouted;
-        }
-
         // 3. 意图识别
         IntentResult intentResult = intentService.recognizeIntent(resolvedQuery);
         log.info("意图识别结果: intent={}, confidence={}", intentResult.getIntent(), intentResult.getConfidence());
@@ -701,164 +527,6 @@ public class SmartBIServiceImpl implements SmartBIService {
         } catch (Exception e) {
             log.warn("保存查询记录失败 (非关键): {}", e.getMessage());
         }
-    }
-
-    // ==================== P5.6 · Tool-Skill 路由分流 ====================
-
-    /**
-     * 尝试把餐饮诊断意图路由到 Tool-Skill 管线 (P5.6).
-     *
-     * <p>路由条件 (全部必须满足):
-     * <ul>
-     *   <li>{@link #intentExecutorService} 已注入 (Tool-Skill 模块可用)</li>
-     *   <li>查询文本匹配 {@link #RESTAURANT_DIAGNOSTIC_KEYWORDS} 关键词</li>
-     *   <li>IntentExecutorService 返回的 intentCode 以 {@code RESTAURANT_} 开头</li>
-     * </ul>
-     *
-     * <p>不满足任一条件时返回 {@code null}, 调用方 {@link #processQuery} 回落到 legacy switch-case.
-     *
-     * @return 路由成功时返回填充好的 NLQueryResponse; 路由失败/不适用时返回 {@code null}
-     */
-    private NLQueryResponse tryRouteRestaurantDiagnostic(String factoryId,
-                                                          Long userId,
-                                                          NLQueryRequest request,
-                                                          String resolvedQuery,
-                                                          long startTime) {
-        if (intentExecutorService == null) {
-            return null;
-        }
-        if (resolvedQuery == null || resolvedQuery.isBlank()) {
-            return null;
-        }
-        if (!RESTAURANT_DIAGNOSTIC_KEYWORDS.matcher(resolvedQuery).find()) {
-            return null;
-        }
-
-        log.info("P5.6 · 检测到餐饮诊断关键词, 尝试路由到 Tool-Skill 管线: query='{}'", resolvedQuery);
-
-        try {
-            IntentExecuteRequest execRequest = IntentExecuteRequest.builder()
-                    .userInput(resolvedQuery)
-                    .context(buildToolSkillContext(request))
-                    .previewOnly(false)
-                    .skipSlotFilling(false)
-                    .build();
-
-            // userId=0L 表示匿名/系统调用; IntentExecutorService 会做低敏意图免审批.
-            // userRole 默认 restaurant_manager, 管线内部会再基于 factory 权限做校验.
-            Long effectiveUserId = userId != null ? userId : 0L;
-            IntentExecuteResponse execResponse = intentExecutorService.execute(
-                    factoryId, execRequest, effectiveUserId, "restaurant_manager");
-
-            if (execResponse == null
-                    || !Boolean.TRUE.equals(execResponse.getIntentRecognized())
-                    || execResponse.getIntentCode() == null
-                    || !execResponse.getIntentCode().startsWith("RESTAURANT_")) {
-                log.info("P5.6 · Tool-Skill 未识别到餐饮意图 (intentCode={}), 回落到 legacy 路径",
-                        execResponse != null ? execResponse.getIntentCode() : null);
-                return null;
-            }
-
-            log.info("P5.6 · Tool-Skill 路由成功: intentCode={}, elapsed={}ms",
-                    execResponse.getIntentCode(), System.currentTimeMillis() - startTime);
-
-            return mapIntentExecuteResponse(execResponse);
-        } catch (Exception e) {
-            log.warn("P5.6 · Tool-Skill 路由失败, 回落到 legacy 路径: {}", e.getMessage(), e);
-            return null;
-        }
-    }
-
-    /**
-     * 构造 Tool-Skill 执行上下文 (P5.6).
-     *
-     * <p>透传 NLQueryRequest.context 中的 subSector / uploadId 等字段, 同时补充 factoryId
-     * 和 sessionId. 所有字段都用 {@code String.valueOf} 包装避免 null.
-     */
-    private Map<String, Object> buildToolSkillContext(NLQueryRequest request) {
-        Map<String, Object> context = new HashMap<>();
-        if (request.getContext() != null) {
-            context.putAll(request.getContext());
-        }
-        if (request.getSessionId() != null) {
-            context.put("sessionId", request.getSessionId());
-        }
-        if (request.getFactoryId() != null) {
-            context.put("factoryId", request.getFactoryId());
-        }
-        return context;
-    }
-
-    /**
-     * 把 {@link IntentExecuteResponse} 适配为 web-admin / Mobile RN 期望的
-     * {@link NLQueryResponse} 形状 (P5.6).
-     *
-     * <p>核心映射规则:
-     * <ul>
-     *   <li>{@code intentCode} ← {@code execResponse.intentCode}</li>
-     *   <li>{@code toolName} / {@code skillName} ← 从 {@code metadata} 读取 (IntentExecutor 会填充)</li>
-     *   <li>{@code sections[]} ← 从 {@code resultData} map 的 {@code section}/{@code data}
-     *       字段抽取, 包装成单元素 SectionPayload 列表 (每次查询对应 1 个 section)</li>
-     *   <li>{@code followUpChips} ← {@code resultData} map 的 {@code followUpChips} 字段</li>
-     *   <li>{@code responseText} / {@code message} ← {@code execResponse.formattedText}</li>
-     *   <li>{@code intent} 保留 legacy 字段, 填充 RESTAURANT_DIAGNOSTIC 占位以避免 NPE</li>
-     * </ul>
-     *
-     * <p>此方法对任意异常都 fail-safe: 返回包含 intentCode + error 的最小 response,
-     * 避免前端崩溃. 真正的错误细节写入 log.
-     *
-     * <p>Pure function (no instance state access) - static for unit test friendliness.
-     */
-    @SuppressWarnings("unchecked")
-    static NLQueryResponse mapIntentExecuteResponse(IntentExecuteResponse execResponse) {
-        NLQueryResponse.NLQueryResponseBuilder builder = NLQueryResponse.builder()
-                .intent("RESTAURANT_DIAGNOSTIC")  // legacy 兼容字段
-                .intentCode(execResponse.getIntentCode())
-                .confidence(execResponse.getConfidence() != null ? execResponse.getConfidence() : 1.0)
-                .responseText(execResponse.getFormattedText())
-                .message(execResponse.getMessage());
-
-        // 从 metadata 读取 toolName / skillName (IntentExecutorServiceImpl 会填充)
-        Map<String, Object> metadata = execResponse.getMetadata();
-        if (metadata != null) {
-            Object toolName = metadata.get("toolName");
-            Object skillName = metadata.get("skillName");
-            if (toolName instanceof String) {
-                builder.toolName((String) toolName);
-            }
-            if (skillName instanceof String) {
-                builder.skillName((String) skillName);
-            }
-        }
-
-        // 抽取 sections + followUpChips (resultData 是 Tool.formatResult() 返回的 Map)
-        Object resultData = execResponse.getResultData();
-        if (resultData instanceof Map) {
-            Map<String, Object> dataMap = (Map<String, Object>) resultData;
-
-            // 单个 section: 包装成 1 元素列表供前端渲染
-            Object sectionName = dataMap.get("section");
-            Object sectionData = dataMap.get("data");
-            Object sectionWarnings = dataMap.get("warnings");
-            if (sectionName instanceof String) {
-                Map<String, Object> section = new LinkedHashMap<>();
-                section.put("sectionName", sectionName);
-                section.put("status", Boolean.TRUE.equals(dataMap.get("success")) ? "ok" : "failed");
-                section.put("data", sectionData instanceof Map ? sectionData : Collections.emptyMap());
-                section.put("warnings", sectionWarnings instanceof List ? sectionWarnings : Collections.emptyList());
-                section.put("fromCache", false);
-                section.put("computedAtMs", System.currentTimeMillis());
-                builder.sections(Collections.singletonList(section));
-            }
-
-            // followUpChips
-            Object chips = dataMap.get("followUpChips");
-            if (chips instanceof List) {
-                builder.followUpChips((List<String>) chips);
-            }
-        }
-
-        return builder.build();
     }
 
     // ==================== AI Chat 能力集成方法 ====================
@@ -1516,10 +1184,8 @@ public class SmartBIServiceImpl implements SmartBIService {
      * {@code IntentExecutorService.execute()} and can add intents via a Flyway
      * migration + {@code @Component Tool} class alone.
      *
-     * <p>Restaurant diagnostic intents ({@code RESTAURANT_*}) are routed
-     * through the Tool-Skill pipeline via
-     * {@link #tryRouteRestaurantDiagnostic} before reaching this method —
-     * that's the P5.6 patch. For a full fix, the right move is:
+     * <p>Intent execution remains on the factory SmartBI legacy contract. New
+     * capabilities must be added through the shared Tool-Skill registry.
      * <ol>
      *   <li>Convert all 15 legacy handlers (salesService / financeService /
      *       etc) into {@code AbstractBusinessTool} implementations with
@@ -1527,8 +1193,7 @@ public class SmartBIServiceImpl implements SmartBIService {
      *   <li>Add Flyway migrations binding each {@link SmartBIIntent} enum code
      *       to its new tool_name in {@code ai_intent_configs}</li>
      *   <li>Replace this method with a single
-     *       {@code intentExecutorService.execute()} call + NLQueryResponse
-     *       adapter (same pattern as {@link #mapIntentExecuteResponse})</li>
+     *       shared Tool-Skill registry rather than this legacy switch</li>
      *   <li>Delete the {@link SmartBIIntent} enum and this method</li>
      * </ol>
      * Estimated effort: 2-3 weeks, ~2000 LOC touched. Tracked in P6 plan.
@@ -1590,27 +1255,6 @@ public class SmartBIServiceImpl implements SmartBIService {
                 return handleForecastIntent(factoryId, intentResult, startDate, endDate);
 
             default:
-                // P6: 未知 SmartBIIntent → 尝试 Tool-Skill 管线作为 fallback
-                // 这样新增的 RESTAURANT_* Tool 不需要在 switch-case 添加 case
-                if (intentExecutorService != null) {
-                    log.info("P6 fallback: SmartBIIntent={} 无对应 case, 尝试 Tool-Skill 管线", intent);
-                    try {
-                        IntentExecuteRequest fallbackReq = IntentExecuteRequest.builder()
-                                .userInput(intentResult.getOriginalQuery() != null
-                                        ? intentResult.getOriginalQuery() : intent.getName())
-                                .previewOnly(false).skipSlotFilling(false).build();
-                        IntentExecuteResponse fallbackResp = intentExecutorService.execute(
-                                factoryId, fallbackReq, 0L, "restaurant_manager");
-                        if (fallbackResp != null && Boolean.TRUE.equals(fallbackResp.getIntentRecognized())) {
-                            log.info("P6 fallback 成功: intentCode={}", fallbackResp.getIntentCode());
-                            return fallbackResp.getResultData() != null
-                                    ? fallbackResp.getResultData()
-                                    : Map.of("message", fallbackResp.getMessage());
-                        }
-                    } catch (Exception e) {
-                        log.warn("P6 fallback 失败: {}", e.getMessage());
-                    }
-                }
                 log.warn("未支持的意图类型: {}", intent);
                 throw new BusinessException(400, "暂不支持该查询类型: " + intent.getName())
                         .withHint("请尝试其他查询方式, 或联系管理员添加该查询类型支持");
@@ -1738,7 +1382,7 @@ public class SmartBIServiceImpl implements SmartBIService {
         if (!checkQuota(factoryId)) return null;
 
         try {
-            // 数据按结构脱敏 (门店 / 客户 / 人名换代号, 联系方式与备注不发), 老板原话同一套代号; 脱敏不了回退模板
+            // 数据按结构脱敏 (工厂 / 客户 / 人名换代号, 联系方式与备注不发); 脱敏不了回退模板
             LlmEgressRedactor.Result redacted = llmEgressGuard.combined(RESPONSE_TEXT_EGRESS_SITE, factoryId, data,
                     Map.of(), List.of(userQuery == null ? "" : userQuery));
             if (redacted.refused() || redacted.payload() == null) {
@@ -1752,7 +1396,7 @@ public class SmartBIServiceImpl implements SmartBIService {
             }
 
             String intentName = intentResult.getIntent() != null ? intentResult.getIntent().name() : "UNKNOWN";
-            String systemPrompt = "你是青花椒餐饮老板的 AI 经营助手, 用 60-200 字直接回答老板的问题。\n" +
+            String systemPrompt = "你是食品工厂的 AI 经营助手, 用 60-200 字直接回答经营问题。\n" +
                     "要求:\n" +
                     "1. 引用具体业务数字 (金额/百分比/门店名/菜品名), 不要泛泛而谈\n" +
                     "2. 找出 1-2 个关键发现, 给具体可执行建议\n" +
@@ -1760,7 +1404,7 @@ public class SmartBIServiceImpl implements SmartBIService {
                     "4. 如果数据为空或不足以回答, 直接说\"暂无足够数据回答, 请确认上传了 X 报表\"\n" +
                     "5. 不要说\"以下是 XX 分析\"这种空话开头";
             String userPrompt = String.format(
-                    "老板问: %s\n意图: %s\n数据片段(JSON): %s\n请直接回答。",
+                    "用户问: %s\n意图: %s\n数据片段(JSON): %s\n请直接回答。",
                     userQuery, intentName, dataJson
             );
 

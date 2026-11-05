@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 # ── Type aliases ────────────────────────────────────────────
 
-Domain = Literal["restaurant", "factory"]
-"""隔离域: 餐饮 | 工厂"""
+Domain = Literal["factory"]
+"""隔离域: 工厂"""
 
 MergeReason = Literal[
     "rule_layer",       # 规则层匹配 (例: 去 #..# 后相同)
@@ -114,9 +114,9 @@ class AliasNormalizer:
         domain: Domain,
         db_session: Optional[Session] = None,
     ):
-        if domain not in ("restaurant", "factory"):
+        if domain != "factory":
             raise ValueError(
-                f"domain 必须是 'restaurant' 或 'factory', 收到 {domain!r}. "
+                f"domain 必须是 'factory', 收到 {domain!r}. "
                 f"跨 domain 命名归一会污染数据, 拒绝执行."
             )
         if not factory_id:

@@ -39,7 +39,6 @@ from pydantic import BaseModel, Field
 from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
 from smartbi.config import get_pg_pool
 from smartbi.gold import data_range
-from smartbi.gold.restaurant.restaurant_ops_router import _resolve_sales_date_range
 from smartbi.services.chat_session_service import parse_trusted_user_id
 
 logger = logging.getLogger(__name__)
@@ -88,6 +87,25 @@ def _parse_date(s: str, field: str) -> date:
         return datetime.strptime(s, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail=f"{field} must be YYYY-MM-DD, got {s!r}")
+
+
+def _resolve_sales_date_range(question: str, *, today: date) -> Tuple[Tuple[date, date], str]:
+    """Resolve the small, domain-neutral relative-date vocabulary used by synthesis."""
+    text = str(question or "")
+    if "今天" in text or "今日" in text:
+        return (today, today), "今天"
+    if "上个月" in text or "上月" in text:
+        first = today.replace(day=1)
+        end = first - timedelta(days=1)
+        return (end.replace(day=1), end), "上个月"
+    if "两个月" in text or "两个月" in text or "俩月" in text:
+        return (today - timedelta(days=59), today), "最近60天"
+    import re
+    match = re.search(r"最近\s*(\d+)\s*天", text)
+    if match:
+        days = max(1, int(match.group(1)))
+        return (today - timedelta(days=days - 1), today), f"最近{days}天"
+    return (None, None), ""
 
 
 async def _resolve_window(
@@ -229,7 +247,12 @@ def _factory_id(request: Request, override: Optional[str]) -> str:
 def _reject_retired_restaurant_ai(factory_id: str) -> None:
     """The comprehensive synthesis route must not bypass the retired namespace."""
     normalized = str(factory_id or "").strip().upper()
-    if not (normalized.startswith("F") and len(normalized) <= 6):
+    # These are historical tenant namespaces, not a heuristic for factory IDs.
+    # Real factory IDs are allowed regardless of length or prefix.
+    retired_prefixes = (
+        "RES_", "DEMO_REST", "RESTAURANT_", "R_GML", "QHJ_",
+    )
+    if normalized.startswith(retired_prefixes):
         raise HTTPException(status_code=410, detail="RESTAURANT_AI_RETIRED")
 
 

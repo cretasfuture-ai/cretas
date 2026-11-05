@@ -6,18 +6,20 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
+- `SEC-RESTAURANT-CHAT-20261105` — `claimed` — Owner restaurant_chat/root — Base 41f58a822cf — scope smartbi/api/chat.py及专属回归已冻，续food_kb全目录及其专属tests；清餐饮RAG/guard/分类/入库入口，保留factory/OCR/通用食品知识。Python Owner只管其余闭包/registry；四代码执行者隔离。
+
+- `SEC-RESTAURANT-FACTORY-COMPAT-20261105` — `review` — Owner factory_compat/root — Base 41f58a822cf — scope FactoryKpiPanel及其测试(当前)、Finding/Navigation、平台菜单/角色模块/Interview目录、PermissionService仅模块注册、Attachment权限及对应tests；移除餐饮注册并保留工厂能力。root串行Maven权限/启动；禁改Orch/SSE/Supplier/SmartBI/Canvas，详见归档。
+
 - `SEC-RESTAURANT-OPS-20261105` — `review` — Owner restaurant_ops/root — Base 41f58a822cf — scope scripts餐饮cron/ETL/演示/E2E及Python部署引用；清除运行入口/重新生成readonly bundle，保留工厂场景。验收Node/shell/部署契约；4执行者目录产物隔离，冻结即释放。
 
-- `SEC-RESTAURANT-JAVA-20261105` — `claimed` — Owner restaurant_java/root — Base 41f58a822cf — scope backend/java；迁出工厂复用到货/损耗，删除餐饮栈/路由/默认监听；保留工厂BOM/领料和历史SQL。验收真实JPA+MVC/工厂回归；禁止Canvas/Shortage/采购审批变更。
+- `SEC-RESTAURANT-JAVA-20261105` — `review` — Owner root — Base 41f58a822cf — scope backend/java及tests；餐饮退役、工厂供货、权限/配置/模板拦截；Canvas仅退休角色deny，不改DAG/缺料/采购审批业务。验收Maven、真实PG/JPA、factory回归，详归档。
 
 - `SEC-RESTAURANT-PYTHON-20261105` — `claimed` — Owner restaurant_python/root — Base 41f58a822cf — scope backend/python；删除餐饮专属路由/调度/服务及入口，迁出工厂复用逻辑，保留已应用SQL。验收pytest注册/工厂正向；禁止Java/Web/RN。
 
 - `SEC-RESTAURANT-UI-20261105` — `claimed` — Owner restaurant_ui/root — Base 41f58a822cf — scope web-admin及frontend/CretasFoodTrace；删除餐饮专属页面/导航/API/角色入口，迁出工厂复用。验收Web/RN类型/构建/入口契约；禁止Canvas/缺料/演示业务修改。
 
 
-- `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 
-- `SEC-PLAN-AUDIT-1438-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。
 
 
 
@@ -145,3 +147,11 @@
 - 按 AGENTS.md 的唯一协调者、结构化回执与弹性并发规则执行；创建 worktree、派工和合并前核对本表及 `git worktree list`。
 - 仅在飞状态；merged 当次归档释放 scope。每条≤300字、全文≤30000 bytes，不开三级增量段；详细证据进 archive/。PR/push/fastlane 保留 `python scripts/ci/check_dispatch_active.py` 门禁。
 - 原维护规则全文保留在 archive/2026-10-22-s6-b3b-review.md。
+
+- `SEC-RESTAURANT-FACTORY-STORE-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope Python eval/store.py、validation.py、__init__.py及agent_eval旧trace/service/factory/http tests；清餐饮corpus/旧trace，恢复factory ACL/503正向，pytest相关集合。禁止service/runner/legacy/PG测试；独立目录产物，冻结释放。
+
+- `SEC-RESTAURANT-PYTHON-SURFACES-20261105` — `claimed` — Owner restaurant_chat/root — Base 41f58a822cf — scope POS/twodfire闭包、canonical/dish_*、共享队列dish分支、shared诊断及chart-insight API/service/相关tests；保留工厂上传/通用队列/finance/租户。main注册由root移除；禁止AgentOps/legacy/CI/Java/UI。
+
+- `SEC-RESTAURANT-PYTHON-DOMAINS-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope canonical/entity_resolution、knowledge/loader、shared除diagnostics及smartbi_compat/_rbac_strip.py的餐饮分支与相关tests；先核factory消费者，删dish/restaurant配置入口，保留通用实体/工厂配置/ACL；禁改main/AgentOps；pytest对应集合。
+- `SEC-RESTAURANT-AGENTOPS-BOUNDARY-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope Java AgentOpsClient/AgentOpsService及对应tests；仅FACTORY域/显式TrustedContext，拒退休餐饮域；保留FactoryTrace和历史factory重放，禁止Python legacy/PG/Orch/UI；验收root Maven AgentOps/trace目标。
+- `SEC-RESTAURANT-FACTORY-LIVENESS-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope minimal_safe_set_liveness及factory helper、llm-provider-health-daily cron、LLM registry/constant scanner/secrecy/yes-no归因4测试；迁出工厂共享健康探针，保留3profile及fail-closed读数；offline mock pytest，禁生产调用/legacy/Java/UI。

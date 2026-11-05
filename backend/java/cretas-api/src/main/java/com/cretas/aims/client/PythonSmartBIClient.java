@@ -1394,25 +1394,6 @@ public class PythonSmartBIClient {
         }
     }
 
-    /**
-     * 便捷方法：调用餐饮域 section endpoint。
-     *
-     * <p>内部 delegate 到
-     * {@link #callSection(String, String, PythonSectionRequest)} with
-     * {@code domain="restaurant"}。保留为独立入口的原因：餐饮域的 Tool
-     * 调用点更清晰，且未来可能针对餐饮 section 加 typed {@code data} 子 DTO。
-     *
-     * @param sectionName section 名 (如 {@code "cost_rigidity"}, {@code "diagnostics"})
-     * @param request     餐饮 section 请求参数
-     * @return            section 结果; {@link Optional#empty()} 表示 Python
-     *                    服务不可用或熔断中
-     * @since 2026-04-10
-     */
-    public Optional<PythonRestaurantSectionResponse> callRestaurantSection(
-            String sectionName, PythonRestaurantSectionRequest request) {
-        return callSection("restaurant", sectionName, request.toGeneric())
-                .map(PythonRestaurantSectionResponse::fromGeneric);
-    }
 
     // ==================== 新增：图表配置推荐 ====================
 
@@ -2093,41 +2074,6 @@ public class PythonSmartBIClient {
      *         null = 服务不可用或请求失败
      * @since 2026-07-11
      */
-    @SuppressWarnings("unchecked")
-    public Map<String, Object> getRestaurantHealthCheckReport(String factoryId, String month) {
-        if (!config.isEnabled()) {
-            log.debug("Python SmartBI 服务未启用，跳过餐饮经营体检报告调用 factoryId={}", factoryId);
-            return null;
-        }
-
-        final String trustedFactoryId;
-        try {
-            trustedFactoryId = requireFactoryId(factoryId);
-        } catch (IOException invalidFactory) {
-            return null;
-        }
-        HttpUrl.Builder urlBuilder = serviceBaseUrl.newBuilder()
-                .addPathSegments("api/smartbi/restaurant")
-                .addPathSegment(trustedFactoryId)
-                .addPathSegment("health-check-report");
-        if (month != null && !month.isBlank()) {
-            urlBuilder.addQueryParameter("month", month);
-        }
-
-        Request httpRequest = new Request.Builder()
-                .url(urlBuilder.build())
-                .header("X-Factory-Id", trustedFactoryId)
-                .get()
-                .build();
-        log.info("调用 Python 餐饮经营体检报告: factoryId={}, month={}", factoryId, month);
-
-        try {
-            return executeWithRetry(httpRequest, Map.class);
-        } catch (IOException | PythonServiceUnavailableException e) {
-            log.error("餐饮经营体检报告调用失败 factoryId={}: {}", factoryId, e.getMessage());
-            return null;
-        }
-    }
 
     /**
      * 餐饮损耗发现规则 (domain="restaurant" 的 FindingProvider 用).
@@ -2145,44 +2091,6 @@ public class PythonSmartBIClient {
      * @return Python 原始响应 {rule, applicable, skip_reason, findings[]}
      * @throws IllegalStateException 服务未启用 / factoryId 非法 / IO 失败 / 空响应
      */
-    @SuppressWarnings("unchecked")
-    public Map<String, Object> getRestaurantWastageFindings(String factoryId, String rule) {
-        if (!config.isEnabled()) {
-            throw new IllegalStateException("Python SmartBI 服务未启用, 无法执行餐饮损耗发现");
-        }
-
-        final String trustedFactoryId;
-        try {
-            trustedFactoryId = requireFactoryId(factoryId);
-        } catch (IOException invalidFactory) {
-            throw new IllegalStateException(
-                    "factoryId 非法: " + invalidFactory.getMessage(), invalidFactory);
-        }
-
-        HttpUrl url = serviceBaseUrl.newBuilder()
-                .addPathSegments("api/smartbi/gold/restaurant-wastage-findings")
-                .addQueryParameter("factory_id", trustedFactoryId)
-                .addQueryParameter("rule", rule)
-                .build();
-
-        Request httpRequest = new Request.Builder()
-                .url(url)
-                .header("X-Factory-Id", trustedFactoryId)
-                .get()
-                .build();
-        log.info("调用 Python 餐饮损耗发现: factoryId={}, rule={}", trustedFactoryId, rule);
-
-        try {
-            Map<String, Object> body = executeWithRetry(httpRequest, Map.class);
-            if (body == null) {
-                throw new IllegalStateException("餐饮损耗发现返回空响应: rule=" + rule);
-            }
-            return body;
-        } catch (IOException e) {
-            throw new IllegalStateException(
-                    "餐饮损耗发现调用失败: rule=" + rule + ", " + e.getMessage(), e);
-        }
-    }
 
     /**
      * 餐饮**毛利**发现规则。响应契约与上面的损耗发现逐字相同
@@ -2191,44 +2099,6 @@ public class PythonSmartBIClient {
      * <p>另开一个方法而不是给上面那个加参数：路径里带 {@code wastage} 字样，把毛利
      * 规则打到那个路径下，下一个人读日志会以为毛利问题出在损耗链上。
      */
-    @SuppressWarnings("unchecked")
-    public Map<String, Object> getRestaurantMarginFindings(String factoryId, String rule) {
-        if (!config.isEnabled()) {
-            throw new IllegalStateException("Python SmartBI 服务未启用, 无法执行餐饮毛利发现");
-        }
-
-        final String trustedFactoryId;
-        try {
-            trustedFactoryId = requireFactoryId(factoryId);
-        } catch (IOException invalidFactory) {
-            throw new IllegalStateException(
-                    "factoryId 非法: " + invalidFactory.getMessage(), invalidFactory);
-        }
-
-        HttpUrl url = serviceBaseUrl.newBuilder()
-                .addPathSegments("api/smartbi/gold/restaurant-margin-findings")
-                .addQueryParameter("factory_id", trustedFactoryId)
-                .addQueryParameter("rule", rule)
-                .build();
-
-        Request httpRequest = new Request.Builder()
-                .url(url)
-                .header("X-Factory-Id", trustedFactoryId)
-                .get()
-                .build();
-        log.info("调用 Python 餐饮毛利发现: factoryId={}, rule={}", trustedFactoryId, rule);
-
-        try {
-            Map<String, Object> body = executeWithRetry(httpRequest, Map.class);
-            if (body == null) {
-                throw new IllegalStateException("餐饮毛利发现返回空响应: rule=" + rule);
-            }
-            return body;
-        } catch (IOException e) {
-            throw new IllegalStateException(
-                    "餐饮毛利发现调用失败: rule=" + rule + ", " + e.getMessage(), e);
-        }
-    }
 
     /**
      * 通用 GET-style analysis 端点调用 (T6.6 Phase B Sub-A / Sub-B 共享).

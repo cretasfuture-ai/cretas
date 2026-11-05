@@ -17,7 +17,6 @@ import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.KeywordEffectivenessService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
-import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
 import com.cretas.aims.service.impl.IntentConfigRollbackService;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.entity.learning.ParameterExtractionRule;
@@ -311,7 +310,6 @@ public class AIIntentConfigController {
         String userRole = jwtUtil.getRoleFromToken(token);
 
         removeCallerConfirmationAuthority(request);
-        applyRestaurantReportIntentShortcut(factoryId, request);
 
         log.info("执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
                 factoryId, truncateForLog(request.getUserInput()), userId, userRole);
@@ -373,180 +371,6 @@ public class AIIntentConfigController {
             return "没有识别出你要做的操作，请换一种说法，或补充具体的单据号、物料名和时间范围。";
         }
         return "执行失败，请稍后重试；如果反复失败请联系管理员并提供本次操作的时间。";
-    }
-
-    private void applyRestaurantReportIntentShortcut(String factoryId, IntentExecuteRequest request) {
-        if (request == null || (request.getIntentCode() != null && !request.getIntentCode().isBlank())) {
-            return;
-        }
-        if (!isRestaurantFactoryId(factoryId)) {
-            return;
-        }
-        String input = request.getUserInput();
-        if (input == null || input.isBlank() || hasExplicitReadVeto(input)) {
-            return;
-        }
-        String q = input.replaceAll("\\s+", "");
-        if (RestaurantComprehensiveQuestionPolicy.matches(q)) {
-            log.info("[RestaurantDemoIntentShortcut] defer comprehensive question to shared policy: "
-                    + "factoryId={}, input={}", factoryId, input);
-            return;
-        }
-        if (isRestaurantOwnerActionQuestion(q)) {
-            log.info("[RestaurantDemoIntentShortcut] skip report shortcut for owner-action phrase: factoryId={}, input={}",
-                    factoryId, input);
-            return;
-        }
-        boolean salesMetric = containsAny(q,
-                "\u8425\u6536",
-                "\u8425\u4e1a\u989d",
-                "\u9500\u552e\u989d",
-                "\u9500\u552e",
-                "\u5ba2\u5355\u4ef7",
-                "\u8ba2\u5355");
-        boolean reviewMetric = containsAny(q,
-                "\u8bc4\u4ef7",
-                "\u8bc4\u8bba",
-                "\u8bc4\u5206",
-                "\u53e3\u7891",
-                "\u5dee\u8bc4",
-                "\u6295\u8bc9",
-                "\u987e\u5ba2\u6ee1\u610f",
-                "\u5927\u4f17\u70b9\u8bc4");
-        boolean reportMetric = salesMetric || reviewMetric;
-        boolean reportAction = containsAny(q,
-                "\u67e5",
-                "\u67e5\u8be2",
-                "\u770b",
-                "\u770b\u770b",
-                "\u4eca\u5929",
-                "\u672c\u5468",
-                "\u8fd9\u5468",
-                "\u672c\u6708",
-                "\u600e\u4e48\u6837",
-                "\u60c5\u51b5",
-                "\u6c47\u603b",
-                "\u7edf\u8ba1",
-                "\u5206\u6790");
-        boolean reviewAction = reportAction || containsAny(q,
-                "\u662f\u4ec0\u4e48",
-                "\u6709\u54ea\u4e9b",
-                "\u54ea\u4e9b",
-                "\u9ad8\u9891",
-                "\u597d\u8bc4",
-                "\u5206\u522b",
-                "\u5e94\u8be5\u600e\u4e48",
-                "\u600e\u4e48\u6539\u5584",
-                "\u5982\u4f55\u6539\u5584",
-                "\u6539\u5584",
-                "\u6539\u8fdb",
-                "\u5904\u7406",
-                "\u89e3\u51b3",
-                "\u5efa\u8bae");
-        boolean trendAction = containsAny(q,
-                "\u540c\u6bd4",
-                "\u73af\u6bd4",
-                "\u8d8b\u52bf",
-                "\u8d70\u52bf",
-                "\u589e\u957f",
-                "\u4e0b\u964d",
-                "\u6708\u5ea6\u53d8\u5316");
-        boolean reviewReplyProgress = containsAny(q,
-                "\u56de\u590d\u7387",
-                "\u672a\u56de\u590d",
-                "\u8865\u56de\u590d",
-                "\u8865\u54ea\u4e9b\u56de\u590d",
-                "\u56de\u590d\u8fdb\u5ea6");
-        if (reviewMetric && !salesMetric && reviewAction) {
-            if (reviewReplyProgress) {
-                request.setIntentCode("RESTAURANT_REVIEW_REPLY_RATE");
-            } else if (isRestaurantReviewBadStoreQuestion(q)) {
-                request.setIntentCode("RESTAURANT_REVIEW_BAD_STORE");
-            } else if (isRestaurantReviewComplaintRemedyQuestion(q)) {
-                request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
-            } else if (isRestaurantReviewSummaryQuestion(q)) {
-                request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
-            } else if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
-                request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
-            } else if (trendAction) {
-                request.setIntentCode("RESTAURANT_REVIEW_TREND");
-            } else {
-                request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
-            }
-            log.info("[RestaurantDemoIntentShortcut] route review report phrase before intent recognition: factoryId={}, intentCode={}",
-                    factoryId, request.getIntentCode());
-            return;
-        }
-        if (salesMetric && isRestaurantSalesRankingOrComparison(q)) {
-            // The controller shortcut is intentionally limited to plain reports.
-            // Ranking/comparison questions need the orchestrator's object-aware
-            // classifier (store vs month) or the tiered semantic planner. Setting
-            // SALES_SUMMARY here would bypass both layers.
-            log.info("[RestaurantDemoIntentShortcut] defer ranked/comparative sales question: factoryId={}, input={}",
-                    factoryId, input);
-            return;
-        }
-        if (salesMetric && isRestaurantDiagnosticAnalysisQuestion(q)) {
-            // A metric plus a causal/diagnostic action is not a plain report.
-            // Leave it unpinned so the orchestrator can choose its existing
-            // multi-dimension synthesis route (or the tiered semantic planner
-            // for a single-dimension diagnostic). Otherwise phrases such as
-            // "结合天气、客流和活动分析3月营收高峰原因" are prematurely
-            // reduced to SALES_SUMMARY and the available FactBook dimensions
-            // are never consulted.
-            log.info("[RestaurantDemoIntentShortcut] defer diagnostic sales question: factoryId={}, input={}",
-                    factoryId, input);
-            return;
-        }
-        if (reportMetric && trendAction) {
-            request.setIntentCode("RESTAURANT_OPS_TREND_ANALYSIS");
-            log.info("[RestaurantDemoIntentShortcut] route trend report phrase before intent recognition: factoryId={}, intentCode={}",
-                    factoryId, request.getIntentCode());
-            return;
-        }
-        if (reportMetric && reportAction) {
-            request.setIntentCode("RESTAURANT_OPS_SALES_SUMMARY");
-            log.info("[RestaurantDemoIntentShortcut] route report phrase before intent recognition: factoryId={}, intentCode={}",
-                    factoryId, request.getIntentCode());
-        }
-    }
-
-    private boolean isRestaurantSalesRankingOrComparison(String q) {
-        return containsAny(
-                q,
-                "\u6700\u9ad8",
-                "\u6700\u4f4e",
-                "\u6700\u591a",
-                "\u6700\u5c11",
-                "\u6700\u597d",
-                "\u6700\u5dee",
-                "\u6392\u540d",
-                "\u6392\u884c",
-                "\u5bf9\u6bd4",
-                "\u6bd4\u8f83",
-                "\u76f8\u6bd4",
-                "\u9ad8\u4e8e",
-                "\u4f4e\u4e8e",
-                "\u9ad8\u8fd8\u662f\u4f4e",
-                "\u7b2c\u4e00\u540d",
-                "\u51a0\u519b");
-    }
-
-    private boolean isRestaurantDiagnosticAnalysisQuestion(String q) {
-        return containsAny(
-                q,
-                "\u539f\u56e0",
-                "\u4e3a\u4ec0\u4e48",
-                "\u4e3a\u4f55",
-                "\u8bca\u65ad",
-                "\u5f52\u56e0",
-                "\u5f71\u54cd",
-                "\u62c9\u52a8",
-                "\u9a71\u52a8",
-                "\u5efa\u8bae",
-                "\u51b3\u7b56",
-                "\u65b9\u6848",
-                "\u4f18\u5316");
     }
 
     private boolean isRestaurantOwnerActionQuestion(String q) {
