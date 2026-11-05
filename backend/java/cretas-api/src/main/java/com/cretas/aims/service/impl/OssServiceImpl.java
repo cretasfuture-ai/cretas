@@ -16,6 +16,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -372,22 +374,75 @@ public class OssServiceImpl implements OssService {
     }
 
     private String[] parseOssUrl(String ossUrl) {
-        try {
-            // 格式: https://bucket.oss-cn-shanghai.aliyuncs.com/key
-            if (ossUrl.startsWith("https://")) {
-                String withoutProtocol = ossUrl.substring(8);
-                int slashIndex = withoutProtocol.indexOf('/');
-                String hostPart = withoutProtocol.substring(0, slashIndex);
-                String key = withoutProtocol.substring(slashIndex + 1);
-
-                // 从 host 提取 bucket 名
-                String bucket = hostPart.substring(0, hostPart.indexOf('.'));
-                return new String[]{bucket, key};
-            }
-            return null;
-        } catch (Exception e) {
-            log.warn("解析 OSS URL 失败: {}", ossUrl);
+        if (ossUrl == null || ossUrl.isBlank()) {
             return null;
         }
+
+        // A canonical OSS URL is URI-encoded.  URI#getPath() performs one, and
+        // only one, percent-decoding pass while keeping a literal '+' literal
+        // (unlike URLDecoder, which is form-query decoding).  This is the path
+        // that the SDK expects; passing getRawPath() would encode the escapes a
+        // second time and produce NoSuchKey for encoded object names.
+        try {
+            URI uri = new URI(ossUrl);
+            if (isHttpsScheme(uri.getScheme()) && uri.getHost() != null) {
+                String bucket = bucketFromHost(uri.getHost());
+                String path = uri.getPath();
+                if (bucket != null && path != null && path.length() > 1) {
+                    return new String[]{bucket, path.substring(1)};
+                }
+            }
+        } catch (URISyntaxException | IllegalArgumentException ignored) {
+            // Older uploadToOss responses could contain literal spaces,
+            // Unicode, or '%' in the URL path.  They are not legal URI text,
+            // so retain that historical raw key instead of guessing a decode.
+        }
+
+        return parseLegacyRawAbsoluteUrl(ossUrl);
+    }
+
+    private boolean isHttpsScheme(String scheme) {
+        return "https".equalsIgnoreCase(scheme);
+    }
+
+    private String bucketFromHost(String host) {
+        int dot = host.indexOf('.');
+        return dot > 0 ? host.substring(0, dot) : null;
+    }
+
+    /**
+     * Compatibility parser for raw absolute URLs emitted by older uploads.
+     * It deliberately does not decode anything and only removes URL query or
+     * fragment suffixes.  Relative object keys never reach this method and are
+     * therefore preserved by the caller as-is.
+     */
+    private String[] parseLegacyRawAbsoluteUrl(String ossUrl) {
+        int protocolLength;
+        if (ossUrl.regionMatches(true, 0, "https://", 0, 8)) {
+            protocolLength = 8;
+        } else {
+            return null;
+        }
+
+        String withoutSuffix = stripQueryAndFragment(ossUrl);
+        int slashIndex = withoutSuffix.indexOf('/', protocolLength);
+        if (slashIndex <= protocolLength + 1 || slashIndex == withoutSuffix.length() - 1) {
+            return null;
+        }
+        String hostPart = withoutSuffix.substring(protocolLength, slashIndex);
+        String bucket = bucketFromHost(hostPart);
+        if (bucket == null) {
+            return null;
+        }
+        return new String[]{bucket, withoutSuffix.substring(slashIndex + 1)};
+    }
+
+    private String stripQueryAndFragment(String value) {
+        int query = value.indexOf('?');
+        int fragment = value.indexOf('#');
+        int suffix = value.length();
+        if (query >= 0) suffix = Math.min(suffix, query);
+        if (fragment >= 0) suffix = Math.min(suffix, fragment);
+        return value.substring(0, suffix);
     }
 }
