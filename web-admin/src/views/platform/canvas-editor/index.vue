@@ -312,7 +312,13 @@ async function applyChanges() {
   applyingChanges.value = true
   let payload: unknown
   try {
-    const diffs = submitted.map(c => ({ type: c.type, tool: c.path, params: c.after, description: c.description }))
+    const diffs = submitted.map(c => ({
+      type: c.type,
+      tool: c.path,
+      params: c.after,
+      description: c.description,
+      proof: c.proof,
+    }))
     payload = (await aiApplyDiffs(factoryId.value, diffs)).data
   } catch (error) {
     payload = error instanceof ApiError ? error.data : undefined

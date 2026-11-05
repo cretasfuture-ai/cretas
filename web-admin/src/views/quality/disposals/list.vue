@@ -237,8 +237,8 @@ async function openScopedDisposal(expectedRequest: number, expectedFg: string) {
 async function loadBatches() {
   if (!factoryId.value) return;
   try {
-    const response = await get(`/${factoryId.value}/material-batches`, {
-      params: { status: 'AVAILABLE', size: 100 }
+    const response = await get(`/${factoryId.value}/disposal-records/eligible-material-batches`, {
+      params: { size: 100 }
     });
     if (response.success && response.data) {
       batches.value = response.data.content || response.data || [];

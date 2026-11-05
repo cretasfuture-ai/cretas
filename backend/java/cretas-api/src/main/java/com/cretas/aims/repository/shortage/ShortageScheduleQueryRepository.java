@@ -48,17 +48,21 @@ public interface ShortageScheduleQueryRepository extends Repository<LineSchedule
     /** 这条线在 [start, end) 里与之重叠的其它在排 / 在做任务 (不含 exclude 里的)。 */
     @Query("SELECT ls FROM LineSchedule ls WHERE ls.plan.factoryId = :factoryId AND ls.productionLineId = :lineId "
             + "AND ls.status IN :live "
+            + "AND ls.plan.status IN :livePlans "
             + "AND ls.plannedStartTime < :end AND ls.plannedEndTime > :start AND ls.id NOT IN :exclude")
     List<LineSchedule> findOverlappingIn(@Param("factoryId") String factoryId, @Param("lineId") String lineId,
                                          @Param("start") LocalDateTime start, @Param("end") LocalDateTime end,
                                          @Param("exclude") Collection<String> exclude,
-                                         @Param("live") Collection<LineSchedule.ScheduleStatus> live);
+                                         @Param("live") Collection<LineSchedule.ScheduleStatus> live,
+                                         @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans);
 
     default List<LineSchedule> findOverlapping(String factoryId, String lineId, LocalDateTime start, LocalDateTime end,
                                                Collection<String> exclude) {
         return findOverlappingIn(factoryId, lineId, start, end, exclude, java.util.EnumSet.of(
                 LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.in_progress,
-                LineSchedule.ScheduleStatus.delayed));
+                LineSchedule.ScheduleStatus.delayed), java.util.EnumSet.of(
+                SchedulingPlan.PlanStatus.draft, SchedulingPlan.PlanStatus.confirmed,
+                SchedulingPlan.PlanStatus.in_progress));
     }
 
     /**

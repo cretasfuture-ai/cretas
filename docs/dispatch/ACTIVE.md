@@ -6,10 +6,12 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
-- `SEMANTIC-LIVE-PROBE-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base 7650d9c981b360d3c96f7b04c586d61cdd0cf9bc — scope仅外部semantic-live-evaluation/entry-probe；root接管适配器修复与真实入口trace。验收独立javac+Python；保留原失败，禁改target/生产/训练；新增$100账本。
 - `SEMANTIC-SALES-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476修正；订单/库存样板，统一语义上下文、直达准入、参数纠正及修复。scope含Java识别DTO/入口/会话服务、Python ai、专项tests/证据。保留freeze；无生产写/训练/模型替换/部署。
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
 
+
+
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `e976bdc0281ea99fae65e4db9213c825e27c09ec` — #1469已合并部署/业务44通过，回执archive/2026-11-05-tasks-acceptance-closeout.md；仅该切片代码/设备/发布scope释放。继续接手开放#1441质量/#1446返工，当前只读核scope；S6-10本人签署待完成。
 
 - `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 

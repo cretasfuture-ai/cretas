@@ -322,7 +322,7 @@ class ProductProcessWorkflowRuntimeCompilerTest {
     /** 食品 DAG 缺口 10: 联产工序选「固定比例」, 份额随工艺版本冻结进运行时端口。 */
     @Test
     void compilesFixedRatioCostSharesOntoOutputPortsOnly() {
-        ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
+        ProductProcessWorkflowDTO definition = actualIoMultiInputOutputWorkflow();
         processData(definition, "mix").put("costAllocationMethod", "FIXED_RATIO");
         processPorts(definition, "mix").forEach(port -> {
             if ("out-main".equals(port.get("id"))) port.put("fixedCostShare", 80);
@@ -341,18 +341,18 @@ class ProductProcessWorkflowRuntimeCompilerTest {
 
     @Test
     void fixedRatioSharesMustTotalHundredAndCoverEveryOutput() {
-        ProductProcessWorkflowDTO notHundred = multiInputOutputWorkflow();
+        ProductProcessWorkflowDTO notHundred = actualIoMultiInputOutputWorkflow();
         processData(notHundred, "mix").put("costAllocationMethod", "FIXED_RATIO");
         processPorts(notHundred, "mix").forEach(port -> {
             if ("out-main".equals(port.get("id"))) port.put("fixedCostShare", 80);
-            if ("out-side".equals(port.get("id"))) port.put("fixedCostShare", 30);
+            if ("out-side".equals(port.get("id"))) port.put("fixedCostShare", 10);
         });
         com.cretas.aims.exception.BusinessException total = org.junit.jupiter.api.Assertions.assertThrows(
                 com.cretas.aims.exception.BusinessException.class, () -> compiler.compile(notHundred));
-        org.junit.jupiter.api.Assertions.assertTrue(total.getMessage().contains("must total 100, got 110"),
+        org.junit.jupiter.api.Assertions.assertTrue(total.getMessage().contains("must total 100, got 90"),
                 total.getMessage());
 
-        ProductProcessWorkflowDTO missing = multiInputOutputWorkflow();
+        ProductProcessWorkflowDTO missing = actualIoMultiInputOutputWorkflow();
         processData(missing, "mix").put("costAllocationMethod", "FIXED_RATIO");
         processPorts(missing, "mix").forEach(port -> {
             if ("out-main".equals(port.get("id"))) port.put("fixedCostShare", 100);
@@ -360,7 +360,7 @@ class ProductProcessWorkflowRuntimeCompilerTest {
         org.junit.jupiter.api.Assertions.assertThrows(
                 com.cretas.aims.exception.BusinessException.class, () -> compiler.compile(missing));
 
-        ProductProcessWorkflowDTO unknownMethod = multiInputOutputWorkflow();
+        ProductProcessWorkflowDTO unknownMethod = actualIoMultiInputOutputWorkflow();
         processData(unknownMethod, "mix").put("costAllocationMethod", "SALES_VALUE");
         org.junit.jupiter.api.Assertions.assertThrows(
                 com.cretas.aims.exception.BusinessException.class, () -> compiler.compile(unknownMethod));
@@ -368,7 +368,7 @@ class ProductProcessWorkflowRuntimeCompilerTest {
 
     @Test
     void weightMethodIgnoresLeftoverFixedShares() {
-        ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
+        ProductProcessWorkflowDTO definition = actualIoMultiInputOutputWorkflow();
         processData(definition, "mix").put("costAllocationMethod", "WEIGHT");
         processPorts(definition, "mix").forEach(port -> port.put("fixedCostShare", 70));
         compiler.compile(definition).portsFor("mix")
@@ -666,6 +666,17 @@ class ProductProcessWorkflowRuntimeCompilerTest {
         ports.stream().filter(port -> "out-side".equals(port.get("id"))).forEach(port -> {
             port.put("outputRole", "CO_PRODUCT");
             port.put("costAllocationRatio", 30);
+        });
+        return definition;
+    }
+
+    /** New-draft ACTUAL_IO graph: fixedCostShare is the only output allocation carrier. */
+    private ProductProcessWorkflowDTO actualIoMultiInputOutputWorkflow() {
+        ProductProcessWorkflowDTO definition = multiInputOutputWorkflow();
+        processData(definition, "mix").put("reportingSelectionMode", "ACTUAL_IO");
+        processPorts(definition, "mix").forEach(port -> {
+            port.remove("outputRole");
+            port.remove("costAllocationRatio");
         });
         return definition;
     }

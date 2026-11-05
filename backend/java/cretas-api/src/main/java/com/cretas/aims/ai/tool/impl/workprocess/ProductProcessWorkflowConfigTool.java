@@ -29,7 +29,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             "UPSERT_MATERIAL_BINDING", "REMOVE_MATERIAL_BINDING");
     private static final Set<String> ALLOWED_FIELD_ROOTS = Set.of(
             "name", "skuId", "skuCode", "specification", "ports",
-            "conversionRule", "reportingRequired",
+            "conversionRule", "reportingRequired", "costAllocationMethod",
             // 阶段 2: 副产是带标记的普通产出节点(不是第 5 种 kind)
             "isByproduct", "isRework", "isDefective",
             // 阶段 4: BOM 字段进入 AI 可改范围
@@ -68,10 +68,11 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             "workProcessId", "processName", "processCategory", "inputUnit", "outputUnit",
             "standardTime", "ports", "conversionRule", "reportingRequired",
             "allowMultipleUpstreamSources", "allowFinishedGoodsSource",
+            "costAllocationMethod",
             "reworkPolicy", "ccpPoints", "pendingConfirmations");
     private static final Set<String> PORT_KEYS = Set.of(
             "id", "direction", "materialNodeId", "materialName", "skuId",
-            "materialKind", "unit", "ordinal", "inputShareRatio");
+            "materialKind", "unit", "ordinal", "inputShareRatio", "fixedCostShare");
     private static final Pattern SAFE_FIELD_PATH = Pattern.compile(
             "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)*$");
     private final ProductProcessWorkflowValidator workflowValidator;
@@ -86,6 +87,11 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     @Override
     public String getToolName() {
         return TOOL_NAME;
+    }
+
+    @Override
+    public String getVersion() {
+        return "1.1.0";
     }
 
     @Override
@@ -243,7 +249,8 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                 || !isOptionalNullableString(data, "processCategory")
                 || !isOptionalFiniteNumber(data, "standardTime")
                 || !isOptionalBoolean(data, "allowMultipleUpstreamSources")
-                || !isOptionalBoolean(data, "allowFinishedGoodsSource")) return null;
+                || !isOptionalBoolean(data, "allowFinishedGoodsSource")
+                || !isOptionalCostAllocationMethod(data)) return null;
         List<Map<String, Object>> sanitizedPorts = sanitizePorts(ports);
         Map<String, Object> sanitizedRule = sanitizeConversionRule(conversionRule);
         if (sanitizedPorts == null || sanitizedRule == null) return null;
@@ -282,10 +289,21 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
     /** 主料份额(%): 缺省/null = 不参与推算; 给了就必须 (0,100]。越界拒绝, 不截断。 */
     private boolean isValidShare(Map<?, ?> port) {
         Object share = port.get("inputShareRatio");
-        if (share == null) return true;
-        if (!"INPUT".equals(port.get("direction"))) return false;
-        return share instanceof Number n && isFiniteNumber(n)
-                && n.doubleValue() > 0d && n.doubleValue() <= 100d;
+        if (share != null && (!"INPUT".equals(port.get("direction"))
+                || !(share instanceof Number n) || !isFiniteNumber(n)
+                || n.doubleValue() <= 0d || n.doubleValue() > 100d)) return false;
+        if (port.containsKey("fixedCostShare") && !"OUTPUT".equals(port.get("direction"))) return false;
+        Object fixedShare = port.get("fixedCostShare");
+        return fixedShare == null || ("OUTPUT".equals(port.get("direction"))
+                && fixedShare instanceof Number n && isFiniteNumber(n)
+                && n.doubleValue() > 0d && n.doubleValue() <= 100d);
+    }
+
+    private boolean isOptionalCostAllocationMethod(Map<?, ?> data) {
+        return !data.containsKey("costAllocationMethod")
+                || data.get("costAllocationMethod") == null
+                || "WEIGHT".equals(data.get("costAllocationMethod"))
+                || "FIXED_RATIO".equals(data.get("costAllocationMethod"));
     }
 
     private boolean isValidReworkPolicy(Object value) {
@@ -447,6 +465,8 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             case "skuCode", "specification", "conversionRule.expression" ->
                     value == null || value instanceof String;
             case "reportingRequired" -> value instanceof Boolean;
+            case "costAllocationMethod" -> value == null
+                    || "WEIGHT".equals(value) || "FIXED_RATIO".equals(value);
             case "conversionRule.mode" -> value instanceof String mode && CONVERSION_MODES.contains(mode);
             case "conversionRule" -> value instanceof Map<?, ?> rule && sanitizeConversionRule(rule) != null;
             case "ports" -> value instanceof List<?> ports && sanitizePorts(ports) != null;
@@ -613,6 +633,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                     || path.equals("conversionRule")
                     || path.startsWith("conversionRule.")
                     || path.equals("reportingRequired")
+                    || path.equals("costAllocationMethod")
                     // 阶段 4: 调料投入与注射量挂在工序上
                     || path.equals("materialBindings")
                     || path.equals("injectionAmount")

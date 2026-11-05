@@ -15,6 +15,8 @@ import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.shortage.RescheduleProposal;
 import com.cretas.aims.service.scheduling.ScheduleLineLocks;
+import com.cretas.aims.integration.DisposablePostgresTargetGuard;
+import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -64,7 +66,8 @@ class ShortageScheduleRepositoryQueryValidationTest {
     static void database(DynamicPropertyRegistry registry) {
         String url = System.getenv("CRETAS_WORKFLOW_PG_URL");
         if (url != null && !url.isBlank()) {
-            String bound = url.contains("stringtype=") ? url : url + (url.contains("?") ? "&" : "?") + "stringtype=unspecified";
+            String safe = DisposablePostgresTargetGuard.requireSafeUrl(url);
+            String bound = safe + "?stringtype=unspecified";
             registry.add("spring.datasource.url", () -> bound);
             registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
             registry.add("spring.datasource.username", () -> System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_USER", "cretas_ci"));
@@ -242,8 +245,12 @@ class ShortageScheduleRepositoryQueryValidationTest {
     @Test
     void overlapCountsLiveTasksOnTheLineButNotTheOnesBeingMoved() {
         SchedulingPlan f1 = sp("F1", SchedulingPlan.PlanStatus.confirmed);
+        SchedulingPlan cancelled = sp("F1", SchedulingPlan.PlanStatus.cancelled);
+        SchedulingPlan completed = sp("F1", SchedulingPlan.PlanStatus.completed);
         LineSchedule moving = task(f1, null, "L1", 8, 12, LineSchedule.ScheduleStatus.pending);
         LineSchedule busy = task(f1, null, "L1", 10, 14, LineSchedule.ScheduleStatus.in_progress);
+        LineSchedule cancelledParentTask = task(cancelled, null, "L1", 10, 14, LineSchedule.ScheduleStatus.pending);
+        LineSchedule completedParentTask = task(completed, null, "L1", 10, 14, LineSchedule.ScheduleStatus.pending);
         task(f1, null, "L1", 10, 14, LineSchedule.ScheduleStatus.cancelled);
         task(f1, null, "L1", 11, 14, LineSchedule.ScheduleStatus.completed);
         task(f1, null, "L2", 10, 14, LineSchedule.ScheduleStatus.pending);
@@ -253,6 +260,8 @@ class ShortageScheduleRepositoryQueryValidationTest {
         List<LineSchedule> clash = schedules.findOverlapping("F1", "L1", DAY.atTime(9, 0), DAY.atTime(12, 0),
                 Set.of(moving.getId()));
         assertThat(clash).extracting(LineSchedule::getId).containsExactly(busy.getId());
+        assertThat(clash).extracting(LineSchedule::getId)
+                .doesNotContain(cancelledParentTask.getId(), completedParentTask.getId());
         assertThat(schedules.findOverlapping("F2", "L1", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x"))).isEmpty();
     }
 
@@ -287,6 +296,35 @@ class ShortageScheduleRepositoryQueryValidationTest {
             locks.lock("F1", List.of("L1"));   // 同一事务里重入不阻塞
         }).doesNotThrowAnyException();
         assertThat(ScheduleLineLocks.key("F1", "L1")).isEqualTo("line_schedule:F1:L1");
+    }
+
+    @Test
+    void pessimisticQueryKeepsTheManagedSnapshotUntilExplicitRefresh() {
+        assumeTrue(!onH2(), "ProductionPlan JSONB refresh requires PostgreSQL; H2 stores JSONB as a quoted string");
+        ProductionPlan plan = pp("F1", "SO-REFRESH");
+        ProductionPlan otherFactory = pp("F2", "SO-REFRESH");
+        em.flush();
+        // A bulk update models another committed writer without changing this
+        // persistence context. All database predicates remain tenant qualified.
+        int changed = em.getEntityManager().createNativeQuery(
+                        "UPDATE production_plans SET planned_quantity = :quantity WHERE id = :id AND factory_id = :factory")
+                .setParameter("quantity", new BigDecimal("20"))
+                .setParameter("id", plan.getId()).setParameter("factory", "F1")
+                .executeUpdate();
+        assertThat(changed).isEqualTo(1);
+
+        ProductionPlan locked = em.getEntityManager().createQuery(
+                        "SELECT p FROM ProductionPlan p WHERE p.id = :id AND p.factoryId = :factory", ProductionPlan.class)
+                .setParameter("id", plan.getId()).setParameter("factory", "F1")
+                .setLockMode(LockModeType.PESSIMISTIC_WRITE).getSingleResult();
+        assertThat(locked).isSameAs(plan);
+        assertThat(locked.getPlannedQuantity()).isEqualByComparingTo("10");
+
+        em.getEntityManager().refresh(locked, LockModeType.PESSIMISTIC_WRITE);
+        assertThat(locked.getFactoryId()).isEqualTo("F1");
+        assertThat(locked.getPlannedQuantity()).isEqualByComparingTo("20");
+        em.getEntityManager().refresh(otherFactory);
+        assertThat(otherFactory.getPlannedQuantity()).isEqualByComparingTo("10");
     }
 
     @Test

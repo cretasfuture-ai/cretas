@@ -1966,7 +1966,7 @@ descriptors:
     supportsPreview: true
     requiresPermission: false
     requiredPermissions: []
-    version: "1.0.0"
+    version: "1.1.0"
     domainTags: ["product-process", "workflow", "configuration"]
     overrideFlags:
       actionType: true
@@ -1975,7 +1975,7 @@ descriptors:
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
-      version: false
+      version: true
       domainTags: true
     governanceStatus: REVIEW_REQUIRED
   - toolName: "canvas_work_process_catalog"
@@ -1987,7 +1987,7 @@ descriptors:
     requiresPermission: true
     requiredPermissions: []
     allowedRoles: ["factory_super_admin", "permission_admin"]
-    version: "1.0.0"
+    version: "1.1.0"
     domainTags: ["canvas", "production", "work-process", "master-data"]
     overrideFlags:
       actionType: true

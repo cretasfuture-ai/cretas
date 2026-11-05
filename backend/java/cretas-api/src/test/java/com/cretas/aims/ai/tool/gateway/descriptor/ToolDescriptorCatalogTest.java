@@ -42,6 +42,13 @@ class ToolDescriptorCatalogTest {
     }
 
     @Test
+    void workProcessStandardFieldsHaveANewDescriptorVersion() {
+        assertThat(ToolDescriptorCatalog.loadDefault().inventory().descriptors())
+                .filteredOn(entry -> "canvas_work_process_catalog".equals(entry.toolName()))
+                .singleElement().satisfies(entry -> assertThat(entry.version()).isEqualTo("1.1.0"));
+    }
+
+    @Test
     void newPurchaseGrantIsExplicitAuditMetadataAndHasNoRuntimePolicy() {
         var inventory = loader.loadDefault();
         var entries = inventory.descriptors().stream()
@@ -152,7 +159,11 @@ class ToolDescriptorCatalogTest {
                 .allSatisfy(entry -> {
                     boolean controlledPurchase = "purchase_order_create".equals(entry.toolName());
                     boolean supplierComparison = "supplier_price_comparison".equals(entry.toolName());
-                    assertThat(entry.version()).isEqualTo(controlledPurchase || supplierComparison ? "2.0.0" : "1.0.0");
+                    boolean workflowAllocationPreview = "canvas_product_process_workflow_config".equals(entry.toolName());
+                    // A new preview schema is explicitly v1.1; governance remains review-required.
+                    String expectedVersion = controlledPurchase || supplierComparison ? "2.0.0"
+                            : workflowAllocationPreview ? "1.1.0" : "1.0.0";
+                    assertThat(entry.version()).isEqualTo(expectedVersion);
                     if (controlledPurchase) {
                         assertThat(entry.requiredPermissions()).containsExactly("procurement:read_write");
                         assertThat(entry.supportsPreview()).isTrue();

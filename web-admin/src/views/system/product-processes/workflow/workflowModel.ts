@@ -464,7 +464,8 @@ function isPathCompatibleWithNodeKind(kind: ProductProcessNodeKind, path: string
       || path === 'portGroups'
       || path === 'conversionRule'
       || path.startsWith('conversionRule.')
-      || path === 'reportingRequired';
+      || path === 'reportingRequired'
+      || path === 'costAllocationMethod';
   }
   return ['name', 'skuId', 'skuCode', 'specification', 'substituteOfNodeId'].includes(path);
 }
@@ -492,12 +493,14 @@ const processDataKeys = new Set([
   'workProcessId', 'processName', 'processCategory', 'inputUnit', 'outputUnit', 'standardTime',
   'ports', 'conversionRule', 'reportingRequired', 'allowMultipleUpstreamSources',
   'allowFinishedGoodsSource', 'reportingSelectionMode', 'reworkPolicy',
+  'costAllocationMethod',
   // 缺口 20: AI 说不清、留给人补的项, 与发布闸(后端 WorkflowPendingConfirmations)同一份数据
   'ccpPoints', 'pendingConfirmations',
 ]);
 const portKeys = new Set([
   'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
   'conversionRefId', 'conversionVersion', 'ordinal', 'inputShareRatio',
+  'fixedCostShare',
   // 缺口 14: 没有它, 配过时限的图上任何 AI 补丁都会被判「端口不合法」
   'timeLimit',
 ]);
@@ -511,6 +514,7 @@ const portKeys = new Set([
 const fieldPaths = new Set([
   'name', 'skuId', 'skuCode', 'specification', 'ports', 'portGroups', 'conversionRule',
   'conversionRule.mode', 'conversionRule.expression', 'reportingRequired', 'substituteOfNodeId',
+  'costAllocationMethod',
 ]);
 
 function sanitizeWorkflowPatch(raw: unknown): WorkflowPatch | null {
@@ -612,6 +616,10 @@ function isProcessNodeData(value: Record<string, unknown>): value is ProcessNode
     && optionalNullableFiniteNumber(value.standardTime)
     && optionalBoolean(value.allowMultipleUpstreamSources)
     && optionalBoolean(value.allowFinishedGoodsSource)
+    && (value.costAllocationMethod === undefined
+      || value.costAllocationMethod === null
+      || value.costAllocationMethod === 'WEIGHT'
+      || value.costAllocationMethod === 'FIXED_RATIO')
     && isOptionalReworkPolicy(value.reworkPolicy)
     && (value.reportingSelectionMode === undefined || value.reportingSelectionMode === 'ACTUAL_IO');
 }
@@ -686,6 +694,11 @@ function isProcessPort(value: unknown): boolean {
     && optionalNullableString(value.conversionRefId)
     && optionalNullableInteger(value.conversionVersion)
     && optionalNullableFiniteNumber(value.inputShareRatio)
+    && (!Object.prototype.hasOwnProperty.call(value, 'fixedCostShare')
+      || value.direction === 'OUTPUT')
+    && (value.fixedCostShare === undefined || value.fixedCostShare === null
+      || (isFiniteNumber(value.fixedCostShare)
+        && value.fixedCostShare > 0 && value.fixedCostShare <= 100))
     && (value.timeLimit === undefined || value.timeLimit === null || isTimeLimitShape(value.timeLimit))
     && (value.materialKind === undefined
       || (typeof value.materialKind === 'string' && materialNodeKinds.has(value.materialKind)));
@@ -706,6 +719,9 @@ function isAllowedFieldValue(path: string, value: unknown): boolean {
     return value === null || typeof value === 'string';
   }
   if (path === 'reportingRequired') return typeof value === 'boolean';
+  if (path === 'costAllocationMethod') {
+    return value === null || value === 'WEIGHT' || value === 'FIXED_RATIO';
+  }
   if (path === 'conversionRule.mode') return typeof value === 'string' && conversionModes.has(value);
   if (path === 'conversionRule') return isConversionRule(value);
   if (path === 'ports') return Array.isArray(value) && value.every(isProcessPort);
