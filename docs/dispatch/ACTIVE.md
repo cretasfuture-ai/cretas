@@ -111,7 +111,7 @@
 
 
 ## Scope 锁地图
-- `SEMANTIC-SALES-20261105`：ProductSalesRankingTool、dto/conversation/EntitySlot、service/execution/{IntentExecutionOrchestrator,SseStreamingService,ToolDispatchService,SalesRanking*}；SalesRanking*ContractTest及语义审计文档。Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98；独立semantic-sales worktree，review锁保留；不含Repository/Entity/训练/线上。
+- `SEMANTIC-SALES-20261105`：ProductSalesRankingTool、dto/conversation/EntitySlot、execution/{IntentExecutionOrchestrator,SseStreamingService,ToolDispatchService,SalesRanking*}；专项ContractTest/审计文档。Owner同任务行；review锁保留；不含Repository/Entity/训练/线上。
 
 
 
