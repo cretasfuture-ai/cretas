@@ -23,3 +23,5 @@ AI 成本分摊沿用现有画布的 WEIGHT/FIXED_RATIO 与输出 fixedCostShare
 - PR #1481 已提交推送。此记录为合并前冻结证据：最终 CI、合并、正式部署及 F006 业务验收各按其真实回执记录，当前不宣称完成。
 
 原子构建完整结束后归档本切片 scope；后续 main/生产窗口由协调状态与真实锁管理。SOP/物料及其余 Artifact 未完项继续独立执行。
+
+补充验证：最终产品树上的 ProcessSheetServiceImplTest 实跑45/0/0/0，覆盖工序表多报告载体去重。CI head657694a2a7的fast-contracts为7266项、仅JavaPrGateTieringContractTest固定PG前缀断言失败；PG与Web均成功。修复仅把新增PG查询测试从列表开头移到末尾，保留原有选择器与断言；该分层合同4/0/0/0复验通过。产品/测试目录无改动，Java/Web制品hash继续复用，最终head CI仍须完成。
