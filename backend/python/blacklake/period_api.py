@@ -65,6 +65,12 @@ async def history(request: Request, summaries_only: bool=False):
         reports = await asyncio.to_thread(runtime.store().list, runtime.scope(config), 50)
     except Exception:
         raise HTTPException(503, '历史分析暂不可读，请稍后重试') from None
+    from smartbi.services.analysis_supplement import attach_saved
+    try:
+        reports=[await asyncio.to_thread(attach_saved,job,runtime.scope(config),os.environ['BLACKLAKE_PERIOD_REPORT_DB'])
+                 if job.get('result') else job for job in reports]
+    except Exception:
+        raise HTTPException(503,'历史补充分析证据暂未通过读取校验，原报告仍保留') from None
     if summaries_only:
         summaries=[]
         for job in reports:
@@ -73,7 +79,7 @@ async def history(request: Request, summaries_only: bool=False):
                 result=row['result'];ai=result.get('ai') or {}
                 row['result']={k:v for k,v in result.items() if k in ('generatedAt','summary','observations','history')}
                 row['result']['sectionInsights']=[]
-                row['result']['ai']={k:v for k,v in ai.items() if k in ('status','message','model','usage','cacheHit','analysisProfileVersion')}
+                row['result']['ai']={k:v for k,v in ai.items() if k in ('status','message','model','usage','cacheHit','analysisProfileVersion','omittedAnalysisFacts','analysisFactCoverage')}
                 row['summaryOnly']=True
             summaries.append(row)
         reports=summaries

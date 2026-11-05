@@ -96,3 +96,19 @@ async def test_batches_resume_and_account_for_actual_calls(monkeypatch,tmp_path)
     second=await supplement.complete(job,context,scope,path,1,batch_size=4)
     assert calls==[4,4,2]
     assert second['result']['ai']['usage']['totalTokens']==45
+
+
+@pytest.mark.asyncio
+async def test_history_summary_uses_the_same_validated_supplement(monkeypatch,tmp_path):
+    from blacklake import period_api
+    from unittest.mock import AsyncMock
+    config={'tenant_id':'T','source_factory_id':'F'}
+    monkeypatch.setattr(period_api,'context',AsyncMock(return_value=config))
+    monkeypatch.setenv('BLACKLAKE_PERIOD_REPORT_DB',str(tmp_path/'reports.sqlite3'))
+    base={'id':'a'*32,'result':{'ai':{'status':'partial'},'sectionInsights':[]}}
+    monkeypatch.setattr(period_api.runtime,'store',lambda:SimpleNamespace(list=lambda *args:[base]))
+    enriched=deepcopy(base);enriched['result']['ai']={'status':'complete','analysisFactCoverage':{'additionalReviewed':47,'remaining':0}}
+    monkeypatch.setattr(supplement,'attach_saved',lambda *args:enriched)
+    summary=await period_api.history(object(),summaries_only=True)
+    assert summary['data'][0]['result']['ai']['status']=='complete'
+    assert summary['data'][0]['result']['ai']['analysisFactCoverage']['remaining']==0
