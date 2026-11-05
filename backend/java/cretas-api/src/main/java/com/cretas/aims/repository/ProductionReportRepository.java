@@ -613,7 +613,9 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             pr.batch_id AS batch_id,
             pb.batch_number AS batch_number,
             pb.production_plan_id AS plan_id,
+            pp.id AS resolved_plan_id,
             COALESCE(pb.product_type_id, pr.product_type_id, wpt.product_type_id) AS product_type_id,
+            ptp.id AS resolved_product_type_id,
             ptp.name AS product_name,
             pr.report_date AS report_date,
             pr.created_at AS created_at,
@@ -632,6 +634,8 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             AND wp.factory_id = :factoryId AND wp.deleted_at IS NULL
         LEFT JOIN production_batches pb ON pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
             AND pb.factory_id = :factoryId AND pb.deleted_at IS NULL
+        LEFT JOIN production_plans pp ON pp.id = pb.production_plan_id
+            AND pp.factory_id = :factoryId AND pp.deleted_at IS NULL
         LEFT JOIN product_types ptp ON ptp.id = COALESCE(pb.product_type_id, pr.product_type_id, wpt.product_type_id)
             AND ptp.factory_id = :factoryId AND ptp.deleted_at IS NULL
         LEFT JOIN users u ON u.id = pr.worker_id

@@ -19,11 +19,13 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +42,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 /**
  * 工艺参数偏离汇总 —— 真 Spring + H2, 数据走 App 的真实报工入口 ({@link YieldReportController#submitReport}) 产生,
@@ -71,6 +76,7 @@ class ProcessParamDeviationContractTest {
     @Autowired private ProductionBatchRepository batchRepo;
     @Autowired private ProductionReportRepository reportRepo;
     @Autowired private ProductTypeRepository productTypeRepo;
+    @MockBean private ProcessSecretAggregateExclusions aggregateExclusions;
 
     private WorkProcess fry;
     private WorkProcess pack;
@@ -80,6 +86,8 @@ class ProcessParamDeviationContractTest {
 
     @BeforeEach
     void setUp() {
+        when(aggregateExclusions.forCurrentCaller(anyString(), anyString()))
+                .thenReturn(ProcessSecretAggregateExclusions.Scope.EMPTY);
         jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
         seedProduct("PPD-PT-A", "牛肉干");
         seedProduct("PPD-PT-B", "猪肉脯");
@@ -95,6 +103,41 @@ class ProcessParamDeviationContractTest {
         submit(a2, fry, 1, params("oilTemp", 155, "fryMinutes", 15));
         submit(b1, fry, 1, params("oilTemp", 140));
         submit(a1, pack, 2, null);
+    }
+
+    @Test
+    @DisplayName("工艺保密: 有隐藏范围时产品和计划均无法解析的历史脏报工 fail-closed, 可归属的普通产品仍可读")
+    void hiddenScopeFailsClosedForUnresolvedReportOwnership() {
+        seedProduct(OTHER, "PPD-FOREIGN", "他厂产品");
+        seedProduct(F, "PPD-DELETED", "已删产品");
+        ProductType deleted = productTypeRepo.findById("PPD-DELETED").orElseThrow();
+        deleted.setDeletedAt(LocalDateTime.now());
+        productTypeRepo.saveAndFlush(deleted);
+        reportRepo.saveAndFlush(unresolvedParamCheckReport("STALE-X"));
+        reportRepo.saveAndFlush(unresolvedParamCheckReport("PPD-FOREIGN"));
+        reportRepo.saveAndFlush(unresolvedParamCheckReport("PPD-DELETED"));
+        when(aggregateExclusions.forCurrentCaller(F, "process param deviation"))
+                .thenReturn(new ProcessSecretAggregateExclusions.Scope(List.of("PPD-PT-A"), List.of()));
+
+        ProcessParamDeviationDTO.SummaryView view = controller.summary(F, null, null, null, null, null).getData();
+
+        assertThat(view.getTotalChecked()).isEqualTo(1);
+        assertThat(view.getTotalDeviations()).isEqualTo(1);
+        assertThat(view.getRows()).extracting(ProcessParamDeviationDTO.SummaryRow::getParamKey)
+                .containsExactly("oilTemp");
+        assertThat(row(view, "炒制", "oilTemp").getDeviationCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("工艺保密: 排除范围为空时, 历史脏报工仍按普通数据可读")
+    void emptyExclusionScopeKeepsUnresolvedReportVisible() {
+        reportRepo.saveAndFlush(unresolvedParamCheckReport(null));
+
+        ProcessParamDeviationDTO.SummaryView view = controller.summary(F, null, null, null, null, null).getData();
+
+        assertThat(view.getTotalChecked()).isEqualTo(6);
+        assertThat(view.getTotalDeviations()).isEqualTo(4);
+        assertThat(row(view, "炒制", "oilTemp").getReportCount()).isEqualTo(4);
     }
 
     // ------------------------------------------------------------------ 汇总: 分母
@@ -385,10 +428,31 @@ class ProcessParamDeviationContractTest {
                 .reportDate(LocalDate.now()).customFields(custom).build();
     }
 
+    private ProductionReport unresolvedParamCheckReport(String rawProductTypeId) {
+        Map<String, Object> check = new LinkedHashMap<>();
+        check.put("key", "oilTemp");
+        check.put("label", "油温");
+        check.put("unit", "℃");
+        check.put("value", new BigDecimal("170"));
+        check.put("standardValue", new BigDecimal("155"));
+        check.put("min", new BigDecimal("150"));
+        check.put("max", new BigDecimal("160"));
+        check.put("status", "HIGH");
+        Map<String, Object> custom = new LinkedHashMap<>();
+        custom.put("processEntryProcessName", "炒制");
+        custom.put("paramChecks", List.of(check));
+        return ProductionReport.builder().factoryId(F).workerId(9L).reportType("YIELD")
+                .reportDate(LocalDate.now()).productTypeId(rawProductTypeId).customFields(custom).build();
+    }
+
     private void seedProduct(String id, String name) {
+        seedProduct(F, id, name);
+    }
+
+    private void seedProduct(String factory, String id, String name) {
         ProductType p = new ProductType();
         p.setId(id);
-        p.setFactoryId(F);
+        p.setFactoryId(factory);
         p.setCode(id);
         p.setName(name);
         p.setUnit("kg");

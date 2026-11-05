@@ -170,6 +170,7 @@ public class ProcessParamDeviationService {
                 aggregateExclusions.forCurrentCaller(factoryId, "process param deviation");
         Set<String> hiddenProducts = new HashSet<>(hidden.productTypeIds());
         Set<String> hiddenPlans = new HashSet<>(hidden.planIds());
+        boolean hasHiddenScope = !hiddenProducts.isEmpty() || !hiddenPlans.isEmpty();
         String wantProcess = blankToNull(f.processName());
         String wantProduct = blankToNull(f.productTypeId());
         String wantBatch = blankToNull(f.batchNumber());
@@ -187,9 +188,14 @@ public class ProcessParamDeviationService {
             }
             String productTypeId = asString(row.get("product_type_id"));
             String planId = asString(row.get("plan_id"));
-            if ((productTypeId != null && hiddenProducts.contains(productTypeId))
-                    || (planId != null && hiddenPlans.contains(planId))) {
+            String resolvedProductTypeId = asString(row.get("resolved_product_type_id"));
+            String resolvedPlanId = asString(row.get("resolved_plan_id"));
+            if ((resolvedProductTypeId != null && hiddenProducts.contains(resolvedProductTypeId))
+                    || (resolvedPlanId != null && hiddenPlans.contains(resolvedPlanId))) {
                 continue;   // 工艺保密: 无权的保密产品不进
+            }
+            if (hasHiddenScope && isBlank(resolvedProductTypeId) && isBlank(resolvedPlanId)) {
+                continue;   // 无法可靠归属时宁可少读, 不能把历史脏快照泄给受限调用者
             }
             // web 工序表一道工序写多条报工, 每条带同一份快照: 每次填报只算一次
             Long batchId = asLong(row.get("batch_id"));
@@ -325,6 +331,10 @@ public class ProcessParamDeviationService {
 
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s.trim();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private static String firstNonBlank(String... values) {
