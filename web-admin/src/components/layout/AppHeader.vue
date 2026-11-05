@@ -45,7 +45,7 @@ const userInfo = computed(() => ({
   role: authStore.roleMetadata?.displayName || '未知角色',
   factoryId: authStore.factoryId
 }));
-const showF006Demo = computed(() => authStore.factoryId === 'F006' && authStore.currentRole === 'factory_super_admin');
+const showF006Demo = computed(() => authStore.factoryId === 'F006' && authStore.currentRole === 'factory_super_admin' && Number(authStore.user?.id) === 1309);
 
 // 切换侧边栏（桌面折叠 / 移动端打开抽屉）
 function toggleSidebar() {

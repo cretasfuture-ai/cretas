@@ -2,10 +2,11 @@ import {
   assertLiveAdmin, approveWorkflow, attachDemoReceipt, demoTransport, record, rows, scoped,
   type DemoRecord, type DemoTransport,
 } from './f006DemoSupport'
+import { requireSandboxReady, sandboxSession, SANDBOX_FLOW_STORAGE_KEY } from './f006Sandbox'
 export type { DemoTransport } from './f006DemoSupport'
 export const FACTORY_ID = 'F006'
 export const DEMO_RUN_KEY = 'DEMO-F006-FLOW-20261105'
-export const DEMO_STORAGE_KEY = 'cretas:f006-demo-flow:20261105'
+export const DEMO_STORAGE_KEY = SANDBOX_FLOW_STORAGE_KEY
 export type DemoEntity = DemoRecord & { id?: string | number; factoryId?: string }
 export interface DemoSession { factoryId?: string | null; user?: { factoryId?: string | null } | null; username?: string | null }
 export type DemoStepId = 'purchase-create' | 'sales-order-create' | 'purchase-submit' | 'purchase-approve' | 'purchase-receive' | 'purchase-receive-confirm' | 'sales-order-submit' | 'sales-order-approve' | 'production-plan-create' | 'production-batch-create' | 'material-requisition' | `process-report-${1|2|3|4|5|6}` | 'production-settle' | 'finished-goods-receive' | 'sales-delivery-create' | 'sales-shipment-create' | 'sales-batch-allocate' | 'sales-warehouse-confirm' | 'traceability-read'
@@ -17,7 +18,7 @@ export interface DemoContext {
   rawQuantity: number; finishedQuantity: number
 }
 export interface DemoState {
-  schemaVersion: 2; runKey: string; factoryId: 'F006'; currentStep: number
+  schemaVersion: 2; sandboxSessionId?: string; runKey: string; factoryId: 'F006'; currentStep: number
   entities: Record<string, DemoEntity>; completed: DemoStepId[]; readbacks: Record<string, DemoEntity>
   context?: DemoContext
 }
@@ -39,7 +40,7 @@ export const DEMO_STEPS = [
 ] as const
 export function createDemoState(runKey = `${DEMO_RUN_KEY}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`): DemoState {
   if (!runKey.startsWith(DEMO_RUN_KEY)) throw new Error('演示标识不正确')
-  return { schemaVersion:2,runKey,factoryId:FACTORY_ID,currentStep:0,entities:{},completed:[],readbacks:{} }
+  return { schemaVersion:2,sandboxSessionId:sandboxSession.value?.sessionId,runKey,factoryId:FACTORY_ID,currentStep:0,entities:{},completed:[],readbacks:{} }
 }
 export function assertF006Session(session: DemoSession) {
   if ((session.factoryId || session.user?.factoryId) !== FACTORY_ID) throw new Error('流程演示仅允许 F006 身份')
@@ -68,6 +69,7 @@ async function findCreated(t:DemoTransport,p:string,s:DemoState){
   throw new Error('单据列表超过演示核对范围，已停止创建')
 }
 export async function initializeDemo(state:DemoState,transport:DemoTransport=demoTransport):Promise<DemoState>{
+  if(transport===demoTransport && state.sandboxSessionId!==requireSandboxReady().sessionId)throw new Error('演示记录与当前沙盒不一致')
   await assertLiveAdmin(transport)
   if(state.factoryId!==FACTORY_ID || !state.runKey.startsWith(DEMO_RUN_KEY))throw new Error('演示状态不属于F006')
   const result=await Promise.allSettled([
@@ -106,6 +108,7 @@ export function prepareStep(state:DemoState,stepId:DemoStepId){
 }
 
 export async function executeStep(state:DemoState,stepId:DemoStepId,form:DemoRecord={},transport:DemoTransport=demoTransport):Promise<DemoState>{
+  if(transport===demoTransport && state.sandboxSessionId!==requireSandboxReady().sessionId)throw new Error('演示记录与当前沙盒不一致')
   await assertLiveAdmin(transport)
   if(state.factoryId!==FACTORY_ID||!state.runKey.startsWith(DEMO_RUN_KEY))throw new Error('演示状态工厂不正确')
   const index=DEMO_STEPS.findIndex(s=>s.id===stepId);if(index<0||index!==state.currentStep)throw new Error('请按当前步骤推进，失败步骤不能跳过')
@@ -175,7 +178,7 @@ export async function executeStep(state:DemoState,stepId:DemoStepId,form:DemoRec
     if(String(r.productionPlanId)!==id(plan()))throw new Error('领料单不属于本次计划')
     if(r.status==='PENDING')await put(transport,path(`material-requisitions/${id(r)}/start-picking`),{})
     r=scoped(record(await transport.get(path(`material-requisitions/${id(r)}`))))
-    if(['PICKING','PENDING','DRAFT'].includes(String(r.status))){
+    if(['PICKING','PENDING','DRAFT'].includes(String(r.status)) && !r.pickedAt){
       const receipt=await readDocument(transport,path(`warehouse/receiving/receipts/${id(ent(state,'purchaseReceipt'))}`),state)
       const picks=[]
       for(const item of rows(r.items)){
