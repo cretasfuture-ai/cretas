@@ -20,6 +20,93 @@ import static org.mockito.Mockito.*;
 
 /** Actual parameter/state merge with simulated transport output; NOT real LLM acceptance. */
 class SemanticReadTurnResolverContractTest {
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void resolverAdvertisesOnlyReferencesSupportedByTheCurrentTool(boolean detail) throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            previous(h,"ORDER_LIST",Map.of("toolName","order_list","taskStatus","COMPLETED",
+                    "resultReferences",List.of(Map.of("reference","order-result-1","entityType","ORDER","id","actual-order-1",
+                            "ordinal",1,"ranked",false))));
+            var request=request(h,"查看刚才结果");
+            var client=model(h,"CLARIFY",Map.of());
+            ToolExecutor tool=detail ? new com.cretas.aims.ai.tool.impl.crm.OrderQueryTool(mock(SalesService.class),
+                    mock(com.cretas.aims.repository.inventory.SalesOrderRepository.class)) : new OrderListTool(mock(SalesService.class));
+            h.dispatch.resolveReadTurn("F006",7L,request,bind(h,tool,detail ? "ORDER_STATUS" : "ORDER_LIST"));
+            var capture=org.mockito.ArgumentCaptor.forClass(List.class);
+            verify(client).chatWithTools(anyString(),anyString(),capture.capture());
+            var function=(com.cretas.aims.ai.dto.Tool)capture.getValue().get(0);
+            var fields=(Map<?,?>)function.getFunction().getParameters().get("properties");
+            if(detail) assertThat(((Map<?,?>)fields.get("objectReference")).get("enum"))
+                    .isEqualTo(List.of("order-result-1"));
+            else assertThat(fields.containsKey("objectReference")).isFalse();
+            assertThat(fields.containsKey("selectionOrdinal")).isFalse();
+            assertThat(fields.containsKey("selectionEvidence")).isFalse();
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings={"CONTINUE","CORRECT"})
+    void copiedStringDefaultCannotReplaceConfirmedQueryScope(String action) throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            previous(h,"ORDER_STATUS",Map.of("queryType","ORDER_TODAY","toolName","order_query"));
+            var request=request(h,"其他不变");model(h,action,Map.of("queryType","ORDER_STATUS","page",1,"size",20));
+            var tool=new com.cretas.aims.ai.tool.impl.crm.OrderQueryTool(mock(SalesService.class),
+                    mock(com.cretas.aims.repository.inventory.SalesOrderRepository.class));
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,bind(h,tool,"ORDER_STATUS")).getStatus()).isEqualTo("NEED_MORE_INFO");
+            assertThat(request.getSemanticParameters()).isNull();
+            assertThat(h.owner.getSlot(EntitySlot.SlotType.READ_QUERY).getMetadata()).containsEntry("queryType","ORDER_TODAY");
+        }
+    }
+
+    @Test void explicitStringDefaultCorrectionStillWins() throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            previous(h,"ORDER_STATUS",Map.of("queryType","ORDER_TODAY","toolName","order_query"));
+            var request=request(h,"queryType改成ORDER_STATUS");model(h,"CORRECT",Map.of("queryType","ORDER_STATUS","page",1,"size",20));
+            var tool=new com.cretas.aims.ai.tool.impl.crm.OrderQueryTool(mock(SalesService.class),
+                    mock(com.cretas.aims.repository.inventory.SalesOrderRepository.class));
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,bind(h,tool,"ORDER_STATUS"))).isNull();
+            assertThat(request.getSemanticParameters()).containsEntry("queryType","ORDER_STATUS");
+            assertThat(request.getSemanticParameterSources()).containsEntry("queryType","CURRENT_EXPLICIT");
+        }
+    }
+
+    @Test void schemaPaginationDefaultsRemainOwnedByTheActualOrderTool() throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            var sales=mock(SalesService.class);
+            when(sales.getSalesOrders("F006",1,20)).thenReturn(com.cretas.aims.dto.common.PageResponse.of(
+                    List.<com.cretas.aims.entity.inventory.SalesOrder>of(),1,20,0L));
+            var tool=new OrderListTool(sales);ReflectionTestUtils.setField(tool,"objectMapper",h.mapper);
+            var request=request(h,"列出所有销售订单");model(h,"NEW",Map.of("page",1,"size",20));
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,bind(h,tool,"ORDER_LIST"))).isNull();
+            assertThat(request.getSemanticParameters()).isEmpty();
+            var result=tool.execute(com.cretas.aims.ai.dto.ToolCall.of("defaults","order_list",
+                    h.mapper.writeValueAsString(request.getSemanticParameters())),Map.of("factoryId","F006","userId",7L));
+            assertThat(h.mapper.readTree(result).path("success").asBoolean()).isTrue();
+            verify(sales).getSalesOrders("F006",1,20);
+        }
+    }
+
+    @Test void modelDefaultDatesAreNotMistakenForAnExplicitUnchangedDateCorrection() throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            var request=request(h,"看看销售排行");
+            model(h,"NEW",Map.of("startDate","2026-11-01","endDate","2026-11-05","limit",20),"UNCHANGED");
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
+                    IntentMatchResult.builder().bestMatch(h.intent).confidence(1.0).build())).isNull();
+            assertThat(request.getSemanticParameters()).isEmpty();
+            Map<String,Object> actual=new LinkedHashMap<>(request.getSemanticParameters());
+            h.support.applyCurrentParameters(request,actual);
+            assertThat(actual).containsEntry("startDate","2026-11-01").containsEntry("endDate","2026-11-05")
+                    .containsEntry("limit",20).containsEntry("metric","amount");
+        }
+    }
+
+    @Test void unknownPaginationGuessIsRejectedRatherThanTreatedAsADefault() throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            var request=request(h,"列出所有销售订单");model(h,"NEW",Map.of("page",4));
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
+                    bind(h,new OrderListTool(mock(SalesService.class)),"ORDER_LIST")).getStatus()).isEqualTo("NEED_MORE_INFO");
+            assertThat(request.getSemanticParameters()).isNull();
+        }
+    }
+
     @Test void repeatedUngroundedNumericDefaultIsAppliedOnlyAfterSemanticMerge() throws Exception {
         try (var h = new SalesRankingSemanticContractTest.Harness()) {
             var request = request(h, "看看销售排行");

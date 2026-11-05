@@ -29,7 +29,9 @@ RN/Web → 普通/SSE Controller → Facade → 现有服务端会话快照 → 
 
 ## 必要验证与证据分层
 
-最终本地 package12：32 套相关测试、585 tests，0 failures/errors/skips，JAR 构建成功。主代码已在 package11 完整编译；package11 唯一失败是新增测试的泛型断言编译，已修正为更强的字段值断言。package12 复用相同主源码与 10,064 个主类，逐类哈希未变化，完整编译测试并执行全部选择器。真实 PostgreSQL 会话/预览并发与回滚、同一持久化上下文的迟到防复活、H2 真实 Repository Context 都包含在本地门禁。Python 当前切片 90 项通过，未变源码复用；旧 Web 目标测试/构建证据与最终远程 CI 分开。
+最终本地验证由 package17、package18 与 package20 恢复证据组成：44 套相关测试、706 个唯一用例最终均无 failures/errors/skips，package20 JAR 构建成功。package17 完整编译主代码；package18/20 逐类哈希确认复用未变主代码；18完整编译测试并重跑9套，20仅编译并重跑最后1套原生确认并发测试。35套未变成功套件的原报告保留，不伪造单次全绿运行。覆盖只读参数/上下文/对象引用、既有消费者、原生 PostgreSQL 会话/预览并发与回滚、原生 claim 并发，以及 H2 真实 Repository Context。H2 兼容 fixture 仅替代 PostgreSQL 专属 actor mutex，要求真实事务并在 afterCompletion 释放；PG 路径没有锁 stub。package15 的 SSE fixture、package16 的 runner 安全参数、package17 的测试引用缺字段及隔离库连接数耗尽，以及18/19新增PG测试的重复注册/清理事务失败均保留；修测试数据和本次测试池上限，不改产品安全约束。Python 当前切片90项通过，未变源码复用；旧 Web 证据与最终远程 CI 分开。
+
+追加修复：程序默认值不再被模型复制为显式修改，数字、字符串和布尔值均受参数来源规则约束；日期仍允许真实日历归一化。objectReference 菜单只向支持对象详情的 Tool 提供实际结果枚举，任务 reference 不能当作对象。CI 旧消费者补齐真实会话 Repository/实体依赖，SSE 测试改为观察真实 typed JSON/worker actor 路径，未减弱权限、价格脱敏或取消版本断言。
 
 受控服务测试、真实模型服务测试、真实本地 HTTP、UI、独立用户验收和部署分别记录。普通/SSE 的真实本地 HTTP 回放使用实际 Controller/Facade/入口、Python Orchestrator、Luna Decisions、mini、Java resolver 和实际 Tool；目录、认证/权限、业务服务返回及任务服务依赖受控。真实模型输出没有被固定返回替代；真实 PG 门禁另跑，不能把该 HTTP fixture 当成完整真实业务数据库。
 

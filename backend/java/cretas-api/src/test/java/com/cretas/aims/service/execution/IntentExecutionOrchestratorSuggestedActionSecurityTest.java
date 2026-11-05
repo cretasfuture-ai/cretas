@@ -107,6 +107,11 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
 
     @Test
     void conversationCandidateKeepsIntentAndSessionWithoutForceExecute() {
+        ConversationSession pending=ConversationSession.builder().sessionId("session-1")
+                .factoryId(FACTORY_ID).userId(1L).status(ConversationSession.SessionStatus.ACTIVE)
+                .sessionMode(ConversationSession.SessionMode.INTENT_RECOGNITION)
+                .lastActiveAt(java.time.LocalDateTime.now()).timeoutMinutes(10).build();
+        when(conversationService.getSession(FACTORY_ID,1L,"session-1")).thenReturn(java.util.Optional.of(pending));
         ConversationService.ConversationResponse conversationResponse =
                 ConversationService.ConversationResponse.builder()
                         .sessionId("session-1")

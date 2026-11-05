@@ -117,10 +117,14 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 
-- `SEMANTIC-PREVIEW-REVISION-20261106` — `review` — Owner /root/preview_revision — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PreviewToken revision invalidation + contract/JPA gates; root runs Maven; no production writes/deploy/train.
-- `SEMANTIC-CONVERSATION-STATE-20261106` — `review` — Owner /root/conversation_state — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — scope ConversationSession/Repository及ConversationService/Impl，持久化暂停恢复；不建平行库。验收PauseResumeContractTest及真实JPA StartupGuard；root统一Maven，保留安全门禁。
-- `SEMANTIC-FOLLOWUP-SAFETY-20261106` — `review` — Owner /root/followup_safety — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — scope FollowUpResolver及其测试；堵成功写后SET/SUB累计重放与未知单位丢失。验收FollowUpResolverTest、FollowUpSubmittedWriteSafetyContractTest；root统一Maven，禁止生产/训练/部署。
-- `SEMANTIC-SALES-20261105` — `review` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476修正；订单/库存样板，统一语义上下文、直达准入、参数纠正及修复。scope含Java识别DTO/入口/会话服务、Python ai、专项tests/证据。保留freeze；无生产写/训练/模型替换/部署。
+- `SEMANTIC-PREVIEW-REVISION-20261106` — `review` — Owner /root/preview_revision — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
+- `SEMANTIC-CONVERSATION-STATE-20261106` — `review` — Owner /root/conversation_state — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
+- `SEMANTIC-FOLLOWUP-SAFETY-20261106` — `review` — Owner /root/followup_safety — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
+- `SEMANTIC-SALES-20261105` — `review` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476; root verifies; no prod/train/deploy.
+
+- `SEMANTIC-PREVIEW-FIXTURES-20261106` — `review` — Owner /root/preview_revision — Base a6737c0a9218b43f7dedd3b738087ca68e6271d2 — PR1476; root verifies; no prod/train/deploy.
+
+- `SEMANTIC-SSE-FIXTURES-20261106` — `review` — Owner /root/followup_safety — Base a6737c0a9218b43f7dedd3b738087ca68e6271d2 — PR1476; root verifies; no prod/train/deploy.
 
 ## Scope 锁地图
 
@@ -143,6 +147,10 @@
 - `SEMANTIC-CONVERSATION-STATE-20261106`：精确scope见archive/2026-11-06-semantic-conversation-scope.json；Owner /root/conversation_state；含短事务/actor锁和相关fixture更新，不写其他文件/ACTIVE/迁移/target；JPA必验，root统一Maven。
 - `SEMANTIC-FOLLOWUP-SAFETY-20261106`：execution/FollowUpResolver.java、FollowUpResolverTest.java、FollowUpSubmittedWriteSafetyContractTest.java；Owner /root/followup_safety；不改其他文件/ACTIVE/target，root统一验证。
 - `SEMANTIC-SALES-20261105`：Java execution/识别DTO/会话、crm/OrderQueryTool及身份契约测试；Python ai/{api,dto,orchestrator,registry,matcher/decision}；Web AIQuery/intent-chat；专项tests/证据。Owner同任务行；独立worktree；Entity/Repo由子任务锁定；禁训练/线上。
+
+- `SEMANTIC-PREVIEW-FIXTURES-20261106`：archive/2026-11-06-semantic-preview-fixtures-20261106-scope.json；Owner /root/preview_revision。
+
+- `SEMANTIC-SSE-FIXTURES-20261106`：archive/2026-11-06-semantic-sse-fixtures-20261106-scope.json；Owner /root/followup_safety。
 
 ## 阻塞项
 

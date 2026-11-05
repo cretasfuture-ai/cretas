@@ -130,6 +130,7 @@ public class ToolDispatchService {
                     requiredWithoutSystemDefault为空且当前目标明确时，不能只因未说日期、条数等默认参数而CLARIFY。
                     销售金额排行不支持数量/销量排行。禁止编造ID、结果、权限或授权。
                     objectReference只能选任务快照中的真实结果引用。单条结果可指“刚才那条”；多条且未明确对象或序号必须CLARIFY。
+                    READ_QUERY自身的reference是任务标识，不是结果对象。只有当前函数明确提供objectReference字段时才能引用其中允许的真实结果。
                     列表序号不代表排名。ORDER对象不能当成产品或原料；不支持的关联查询必须明确说明。
                     对引用只返回objectReference，不猜测或输出数据库ID；程序会按当前权限绑定。
                     多条结果选择时同时返回selectionOrdinal及本轮原话中的selectionEvidence；没有明确序号就澄清，不能任取第一条。
@@ -145,6 +146,12 @@ public class ToolDispatchService {
             input.put("toolDescription", pilot ? tool.getDescription() : "没有选定业务功能，不能执行查询");
             input.put("toolSchema", schema);
             Map<String,Object> defaults = new java.util.LinkedHashMap<>();
+            if (schema.get("properties") instanceof Map<?,?> fields) fields.forEach((key,value) -> {
+                if (key instanceof String name && value instanceof Map<?,?> definition
+                        && (definition.get("default") instanceof Number || definition.get("default") instanceof Boolean
+                        || definition.get("default") instanceof String))
+                    defaults.put(name,definition.get("default"));
+            });
             if (pilot && SalesRankingParameters.TOOL.equals(tool.getToolName()))
                 SalesRankingParameters.defaults(defaults, referenceTime.toLocalDate());
             input.put("systemDefaults",defaults);
@@ -170,13 +177,27 @@ public class ToolDispatchService {
                 });
                 deltaSchema.put("properties", partial);
             }
-            Map<String,Object> turnSchema = Map.of("type", "object", "properties", Map.of(
+            Map<String,Object> turnProperties = new java.util.LinkedHashMap<>(Map.of(
                     "action", Map.of("type", "string", "enum", List.of("NEW", "CONTINUE", "CORRECT", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")),
                     "dateScope", Map.of("type", "string", "enum", List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED")),
-                    "objectReference", Map.of("type","string","description","已提供的受控结果引用；无需引用时省略"),
-                    "selectionOrdinal", Map.of("type","integer","minimum",1,"maximum",20),
-                    "selectionEvidence", Map.of("type","string","maxLength",64),
-                    "parameters", deltaSchema, "message", Map.of("type", "string")), "required", List.of("action", "dateScope", "parameters", "message"));
+                    "parameters", deltaSchema, "message", Map.of("type", "string")));
+            if (pilot && "order_query".equals(tool.getToolName())
+                    && previous.get("resultReferences") instanceof List<?> resultReferences) {
+                List<String> allowedReferences = resultReferences.stream()
+                        .filter(value -> value instanceof Map<?,?> ref && "ORDER".equals(ref.get("entityType"))
+                                && ref.get("reference") instanceof String && LastActionContract.safeValue("orderId",ref.get("id")) != null)
+                        .map(value -> (String)((Map<?,?>)value).get("reference")).distinct().toList();
+                if (!allowedReferences.isEmpty()) {
+                    turnProperties.put("objectReference", Map.of("type","string","enum",allowedReferences,
+                            "description","仅供当前订单详情查询使用的真实结果对象；任务标识不能当作对象"));
+                    if (resultReferences.size() > 1) {
+                        turnProperties.put("selectionOrdinal", Map.of("type","integer","minimum",1,"maximum",20));
+                        turnProperties.put("selectionEvidence", Map.of("type","string","maxLength",64));
+                    }
+                }
+            }
+            Map<String,Object> turnSchema = Map.of("type", "object", "properties", turnProperties,
+                    "required", List.of("action", "dateScope", "parameters", "message"));
             LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, factoryId,
                     system, objectMapper.writeValueAsString(input));
             if (redacted.refused()) return readTurnReply("NEED_MORE_INFO", "当前任务上下文无法安全解析，请明确查询目标和条件。");
@@ -244,6 +265,33 @@ public class ToolDispatchService {
             if ("order_query".equals(tool.getToolName()) && referencedOrder == null && rawDelta.containsKey("orderId")
                     && (request.getUserInput() == null || !request.getUserInput().contains(String.valueOf(rawDelta.get("orderId")))))
                 return readTurnReply("NEED_MORE_INFO","订单标识没有本轮输入或真实结果引用依据，请选择具体订单。");
+            Map<String,Object> copiedDefaults = new java.util.LinkedHashMap<>();
+            defaults.forEach((key,value) -> {
+                if (Objects.equals(value,rawDelta.get(key))) copiedDefaults.put(key,value);
+            });
+            Map<String,Object> currentCalendarEvidence = new java.util.LinkedHashMap<>();
+            for (String key : List.of("startDate","endDate")) {
+                Object value = rawDelta.get(key);
+                if (value instanceof String date && timeRanges.stream().anyMatch(range -> range.isValid()
+                        && date.equals(("startDate".equals(key)?range.getStart():range.getEnd()).toLocalDate().toString())))
+                    currentCalendarEvidence.put(key,value);
+            }
+            // Remove model copies of absent defaults before evaluating a date delta.
+            // The actual Tool still applies its own defaults after semantic merging.
+            for (var entry : copiedDefaults.entrySet()) {
+                Object definition=properties.get(entry.getKey());
+                boolean date=definition instanceof Map<?,?> field && "date".equals(field.get("format"));
+                if (!date && (entry.getValue() instanceof String || entry.getValue() instanceof Boolean)
+                        && (request.getUserInput()==null || !request.getUserInput().toLowerCase(java.util.Locale.ROOT)
+                            .contains(String.valueOf(entry.getValue()).toLowerCase(java.util.Locale.ROOT)))) {
+                    Object previousValue=merged.get(entry.getKey());
+                    if (previousValue!=null && !Objects.equals(previousValue,entry.getValue()))
+                        return readTurnReply("NEED_MORE_INFO","本轮查询范围与此前条件不一致，请明确是否更改查询范围，其他条件会保留。");
+                    rawDelta.remove(entry.getKey());
+                }
+            }
+            LlmParameterGrounding.ground(copiedDefaults,currentCalendarEvidence,request.getUserInput(),schema)
+                    .dropped().keySet().forEach(rawDelta::remove);
             boolean changesDate = rawDelta.containsKey("startDate") || rawDelta.containsKey("endDate");
             String dateScope = turn.get("dateScope") instanceof String value ? value : changesDate ? "UNRESOLVED" : "UNCHANGED";
             if ("CLOSED".equals(dateScope)) {
