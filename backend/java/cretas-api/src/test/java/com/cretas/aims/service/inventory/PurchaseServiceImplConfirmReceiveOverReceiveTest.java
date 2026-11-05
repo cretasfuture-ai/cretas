@@ -1,6 +1,7 @@
 package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
+import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
@@ -10,6 +11,7 @@ import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.repository.AttachmentRepository;
+import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -56,6 +58,7 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
     @Mock private MaterialBatchService materialBatchService;
     @Mock private com.cretas.aims.repository.MaterialBatchRepository materialBatchRepository;
     @Mock private AttachmentRepository attachmentRepository;
+    @Mock private RawMaterialTypeRepository materialTypeRepository;
 
     private com.cretas.aims.service.inventory.impl.PurchaseServiceImpl service;
 
@@ -67,15 +70,14 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
 
     @BeforeEach
     void setUp() {
-        // confirmReceive fail-fast 路径只触达 receiveRecordRepository (getReceiveRecordById)
-        // 和 purchaseOrderItemRepository (cap 查询). materialBatchService / materialBatchRepository
-        // 作为 mock 传入, 用于 verify 它们在超收时从未被调用 (证明 fail-fast).
+        // 确认前先锁父单和活动物料；保留真实 material guard，补齐其只读夹具。
+        // 库存服务仍用于证明超收拒绝发生在任何库存写入之前。
         service = new com.cretas.aims.service.inventory.impl.PurchaseServiceImpl(
                 purchaseOrderRepository,
                 purchaseOrderItemRepository,
                 receiveRecordRepository,
                 /* supplierRepository       */ null,
-                /* materialTypeRepository   */ null,
+                materialTypeRepository,
                 materialBatchRepository,
                 /* bomItemRepository        */ null,
                 /* arApService              */ null,
@@ -141,6 +143,20 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
         poItem.setQuantity(orderedQty);
         poItem.setReceivedQuantity(alreadyReceived);
         lenient().when(purchaseOrderItemRepository.findByPurchaseOrderId(PO_ID)).thenReturn(List.of(poItem));
+
+        RawMaterialType material = new RawMaterialType();
+        material.setId(MAT_ID);
+        material.setFactoryId(FACTORY_ID);
+        material.setName(MAT_NAME);
+        material.setUnit("kg");
+        RawMaterialTypeRepository.WriteStateProjection state =
+                mock(RawMaterialTypeRepository.WriteStateProjection.class);
+        lenient().when(state.getId()).thenReturn(MAT_ID);
+        lenient().when(state.getIsActive()).thenReturn(true);
+        lenient().when(materialTypeRepository.lockByFactoryIdAndIdIn(FACTORY_ID, List.of(MAT_ID)))
+                .thenReturn(List.of(material));
+        lenient().when(materialTypeRepository.findFreshWriteStateByFactoryIdAndIdIn(
+                FACTORY_ID, List.of(MAT_ID))).thenReturn(List.of(state));
     }
 
     @Test
@@ -200,6 +216,11 @@ class PurchaseServiceImplConfirmReceiveOverReceiveTest {
                 && thrown.getMessage().contains("超出可入库上限");
         assertFalse(isOverReceive409,
                 "边界 130 == 上限不应被超收 cap 拦截, got: " + thrown.getMessage());
+        verify(materialTypeRepository).lockByFactoryIdAndIdIn(FACTORY_ID, List.of(MAT_ID));
+        verify(materialTypeRepository).findFreshWriteStateByFactoryIdAndIdIn(
+                FACTORY_ID, List.of(MAT_ID));
+        // 行选择校验一次，真正进入 cap 校验后再查一次；上游 guard 异常不能假冒阳性。
+        verify(purchaseOrderItemRepository, times(2)).findByPurchaseOrderId(PO_ID);
     }
 
     @Test
