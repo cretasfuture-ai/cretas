@@ -53,6 +53,7 @@ import com.cretas.aims.annotation.Loggable;
 import com.cretas.aims.security.DataScopeContext;
 import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.inventory.OverReceiveLimit;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.rules.annotation.RuleEvaluate;
@@ -147,6 +148,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     private final com.cretas.aims.service.finance.ArApService arApService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final MaterialBatchService materialBatchService;
+    private final MaterialReferenceWriteGuard materialReferenceWriteGuard;
 
     /**
      * SP6 — 采购异常单生成（SP6 新增 bean）。@Lazy 防止循环依赖（PurchaseService ↔ PurchaseExceptionService）。
@@ -315,6 +317,7 @@ public class PurchaseServiceImpl implements PurchaseService {
     @org.springframework.context.annotation.Lazy
     private PurchaseService self;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public PurchaseServiceImpl(PurchaseOrderRepository purchaseOrderRepository,
                                PurchaseOrderItemRepository purchaseOrderItemRepository,
                                PurchaseReceiveRecordRepository receiveRecordRepository,
@@ -324,7 +327,8 @@ public class PurchaseServiceImpl implements PurchaseService {
                                BomRecipeItemRepository bomRecipeItemRepository,
                                com.cretas.aims.service.finance.ArApService arApService,
                                ApplicationEventPublisher applicationEventPublisher,
-                               MaterialBatchService materialBatchService) {
+                               MaterialBatchService materialBatchService,
+                               MaterialReferenceWriteGuard materialReferenceWriteGuard) {
         this.purchaseOrderRepository = purchaseOrderRepository;
         this.purchaseOrderItemRepository = purchaseOrderItemRepository;
         this.receiveRecordRepository = receiveRecordRepository;
@@ -335,6 +339,28 @@ public class PurchaseServiceImpl implements PurchaseService {
         this.arApService = arApService;
         this.applicationEventPublisher = applicationEventPublisher;
         this.materialBatchService = materialBatchService;
+        this.materialReferenceWriteGuard = materialReferenceWriteGuard;
+    }
+
+    /** Compatibility constructor for narrow legacy unit tests without Spring wiring. */
+    public PurchaseServiceImpl(PurchaseOrderRepository purchaseOrderRepository,
+                               PurchaseOrderItemRepository purchaseOrderItemRepository,
+                               PurchaseReceiveRecordRepository receiveRecordRepository,
+                               SupplierRepository supplierRepository,
+                               RawMaterialTypeRepository materialTypeRepository,
+                               MaterialBatchRepository materialBatchRepository,
+                               BomRecipeItemRepository bomRecipeItemRepository,
+                               com.cretas.aims.service.finance.ArApService arApService,
+                               ApplicationEventPublisher applicationEventPublisher,
+                               MaterialBatchService materialBatchService) {
+        this(purchaseOrderRepository, purchaseOrderItemRepository, receiveRecordRepository,
+                supplierRepository, materialTypeRepository, materialBatchRepository,
+                bomRecipeItemRepository, arApService, applicationEventPublisher,
+                materialBatchService, new MaterialReferenceWriteGuard(materialTypeRepository));
+    }
+
+    private void lockActiveMaterials(String factoryId, Collection<String> materialIds) {
+        materialReferenceWriteGuard.lockActive(factoryId, materialIds);
     }
 
     // ==================== 采购订单 ====================
@@ -357,6 +383,14 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (request.getSupplierId() != null && !request.getSupplierId().isBlank()) {
             requireActiveSupplier(factoryId, request.getSupplierId());
         }
+
+        // A new PO has no header row to lock yet. Acquire the raw-material
+        // reference lock before inserting the header/lines so a merge that wins
+        // first cannot be followed by a stale duplicate reference.
+        lockActiveMaterials(factoryId,
+                request.getItems().stream()
+                        .map(CreatePurchaseOrderRequest.PurchaseOrderItemDTO::getMaterialTypeId)
+                        .toList());
 
         // 防呆 R4 (幂等防双击, edge-case 审计 2026-06-24): 60s 内同买手对同供应商重复建 DRAFT 单 → 409。
         //
@@ -1140,6 +1174,7 @@ public class PurchaseServiceImpl implements PurchaseService {
         }
         for (PurchaseOrderItem item : items) {
             assertSupplierMaterialActive(factoryId, order.getSupplierId(), item.getMaterialTypeId());
+            validateProvidedSupplierMaterialIdentity(factoryId, order.getSupplierId(), item);
             if (item.getUnitPrice() == null || item.getUnitPrice().compareTo(BigDecimal.ZERO) <= 0) {
                 // ⚠️ 走到这里之前, refreshMissingLinePricesFromMasterData 已经按主数据回解过一次。
                 //    所以提示要说清「刚查过、确实没有」, ⛔ 不能再让用户以为"配一下就好"而
@@ -1174,6 +1209,40 @@ public class PurchaseServiceImpl implements PurchaseService {
                 }
             }
         }
+    }
+
+    /**
+     * An old PO may omit both supplierMaterialId and purchasePackagingSpecId; that
+     * legacy shape remains approvable.  When the PO does carry the relation ID,
+     * however, validating only that some active relation exists for the material
+     * would allow a stale/cross-material ID to survive approval.
+     */
+    private void validateProvidedSupplierMaterialIdentity(String factoryId, String supplierId,
+                                                          PurchaseOrderItem item) {
+        String relationId = item.getSupplierMaterialId();
+        if (relationId == null || relationId.isBlank()) {
+            return;
+        }
+        if (supplierMaterialRepository == null) {
+            throw new BusinessException(409, "采购单缺少可验证的供应关系").withCode("SUPPLIER_MATERIAL_IDENTITY_INVALID")
+                    .withHint("请重新选择当前供应商与物料的生效供应关系")
+                    .withHintTarget("supplierMaterialId");
+        }
+        com.cretas.aims.entity.SupplierMaterial relation = supplierMaterialRepository
+                .findByIdAndFactoryId(relationId, factoryId)
+                .orElseThrow(() -> new BusinessException(409, "采购单引用的供应关系不存在或不属于当前工厂")
+                        .withHint("请重新选择当前工厂的供应商与生效供应关系")
+                        .withCode("SUPPLIER_MATERIAL_IDENTITY_INVALID")
+                        .withHintTarget("supplierMaterialId"));
+        if (!Boolean.TRUE.equals(relation.getActive())
+                || !Objects.equals(supplierId, relation.getSupplierId())
+                || !Objects.equals(item.getMaterialTypeId(), relation.getMaterialTypeId())) {
+            throw new BusinessException(409, "采购单引用的供应关系已停用或与供应商/物料不一致")
+                    .withCode("SUPPLIER_MATERIAL_IDENTITY_INVALID")
+                    .withHint("请重新选择当前供应商与物料的生效供应关系")
+                    .withHintTarget("supplierMaterialId");
+        }
+        requireActiveSupplier(factoryId, relation.getSupplierId());
     }
 
     private Map<String, Object> buildPurchaseWorkflowContext(String factoryId, PurchaseOrder order) {
@@ -1802,7 +1871,19 @@ public class PurchaseServiceImpl implements PurchaseService {
     @Loggable(module = "PURCHASE_ORDER", action = "UPDATE", entityType = "PurchaseOrder",
               entityIdParam = "orderId")
     public PurchaseOrder updateDraftOrder(String factoryId, String orderId, UpdatePurchaseOrderRequest request) {
-        PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
+        // Stable caller order: PO header first, then every old/new raw row.
+        PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+        List<String> referencedMaterialIds = new ArrayList<>(purchaseOrderItemRepository
+                .findByPurchaseOrderId(orderId).stream()
+                .map(PurchaseOrderItem::getMaterialTypeId)
+                .toList());
+        if (request.getItems() != null) {
+            referencedMaterialIds.addAll(request.getItems().stream()
+                    .map(CreatePurchaseOrderRequest.PurchaseOrderItemDTO::getMaterialTypeId)
+                    .toList());
+        }
+        lockActiveMaterials(factoryId, referencedMaterialIds);
         if (order.getStatus() != PurchaseOrderStatus.DRAFT) {
             throw new BusinessException(409, "只有草稿状态的订单可以编辑")
                     .withHint("请刷新订单列表查看最新状态");
@@ -1902,7 +1983,18 @@ public class PurchaseServiceImpl implements PurchaseService {
                                                String expectedUnit, BigDecimal expectedQuantity,
                                                String supplierId, BigDecimal unitPrice, String priceUnit,
                                                BigDecimal taxRate, String purchasePackagingSpecId) {
-        PurchaseOrder order = getPurchaseOrderById(factoryId, orderId);
+        // Quote callbacks mutate an existing draft.  Serialize on the same PO header
+        // lock used by receiving before taking the material locks; otherwise a merge
+        // can retire the duplicate between this read and the contract write.
+        PurchaseOrder order = purchaseOrderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+        List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(orderId);
+        lockActiveMaterials(factoryId, java.util.stream.Stream.concat(
+                        items.stream().map(PurchaseOrderItem::getMaterialTypeId),
+                        java.util.stream.Stream.of(materialTypeId))
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList());
         if (order.getStatus() != PurchaseOrderStatus.DRAFT) {
             throw new BusinessException(409, String.format(
                     "采购单 %s 当前状态为 %s, 只有草稿可以回填报价",
@@ -1910,7 +2002,6 @@ public class PurchaseServiceImpl implements PurchaseService {
                     .withCode("PURCHASE_DRAFT_NOT_EDITABLE")
                     .withHint("请刷新采购单查看最新状态");
         }
-        List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPurchaseOrderId(orderId);
         List<PurchaseOrderItem> targets = items.stream()
                 .filter(i -> materialTypeId.equals(i.getMaterialTypeId()))
                 .collect(Collectors.toList());
@@ -2011,6 +2102,11 @@ public class PurchaseServiceImpl implements PurchaseService {
         PurchaseOrder source = getPurchaseOrderById(factoryId, sourceOrderId);
         // 强制初始化 items (lazy collection)
         org.hibernate.Hibernate.initialize(source.getItems());
+
+        // Copy creates a new reference, including when the source is a closed
+        // historical PO whose old material identity was intentionally retained.
+        lockActiveMaterials(factoryId, source.getItems().stream()
+                .map(PurchaseOrderItem::getMaterialTypeId).toList());
 
         String newOrderNumber = generateOrderNumber(factoryId);
 
@@ -2422,6 +2518,17 @@ public class PurchaseServiceImpl implements PurchaseService {
                     request.getWarehouseId(), factoryId, "RAW");
         }
 
+        // A standalone receipt has no PO header to serialize the material write.
+        // Take the same fresh material lock before allocating/saving its DRAFT so a
+        // merge cannot retire the duplicate after validation but before the row exists.
+        if (order == null) {
+            lockActiveMaterials(factoryId, request.getItems().stream()
+                    .map(CreateReceiveRecordRequest.ReceiveItemDTO::getMaterialTypeId)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList());
+        }
+
         // 生成入库单号: RCV-YYYYMMDD-序号
         String receiveNumber = generateReceiveNumber(factoryId);
 
@@ -2581,6 +2688,12 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (record.getPurchaseOrderId() != null) {
             purchaseOrderRepository.findByIdAndFactoryIdForUpdate(record.getPurchaseOrderId(), factoryId)
                     .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在或不属于当前组织"));
+            // Receipt confirmation writes batches and moving-average prices below.
+            // Keep the same PO-header -> raw-material order used by merge/receiving.
+            lockActiveMaterials(factoryId,
+                    record.getItems().stream()
+                            .map(PurchaseReceiveItem::getMaterialTypeId)
+                            .toList());
             List<PurchaseOrderItem> poLines = purchaseOrderItemRepository
                     .findByPurchaseOrderId(record.getPurchaseOrderId());
             for (PurchaseReceiveItem receiveItem : record.getItems()) {
@@ -2589,6 +2702,13 @@ public class PurchaseServiceImpl implements PurchaseService {
                 validatePersistedReceiptSelection(factoryId, poLine, receiveItem);
             }
             validateOverReceiveCapForConfirm(record);
+        } else {
+            // Standalone receipts have no PO header; still serialize their raw
+            // references before creating batches.
+            lockActiveMaterials(factoryId,
+                    record.getItems().stream()
+                            .map(PurchaseReceiveItem::getMaterialTypeId)
+                            .toList());
         }
 
         // 确认入库：为每个行项目创建 MaterialBatch

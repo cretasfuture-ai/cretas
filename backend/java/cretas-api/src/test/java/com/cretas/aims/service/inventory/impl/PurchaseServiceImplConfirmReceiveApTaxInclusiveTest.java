@@ -11,6 +11,7 @@ import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
@@ -80,6 +81,7 @@ class PurchaseServiceImplConfirmReceiveApTaxInclusiveTest {
     @Mock private ArApService arApService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
 
     private PurchaseServiceImpl service;
 
@@ -88,7 +90,8 @@ class PurchaseServiceImplConfirmReceiveApTaxInclusiveTest {
         service = new PurchaseServiceImpl(
                 purchaseOrderRepository, purchaseOrderItemRepository, receiveRecordRepository,
                 supplierRepository, materialTypeRepository, materialBatchRepository,
-                bomItemRepository, arApService, applicationEventPublisher, materialBatchService);
+                bomItemRepository, arApService, applicationEventPublisher, materialBatchService,
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
         ReflectionTestUtils.setField(service, "attachmentRepository", attachmentRepository);
         org.mockito.Mockito.lenient().when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(

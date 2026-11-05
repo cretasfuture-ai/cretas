@@ -18,6 +18,7 @@ import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository;
 import com.cretas.aims.repository.inventory.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.MaterialBatchService;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.impl.PurchaseServiceImpl;
 import com.cretas.aims.service.inventory.impl.InventoryPostingServiceImpl;
@@ -56,6 +57,7 @@ class InventoryPostingRealPurchaseContractTest {
     @Mock private com.cretas.aims.service.finance.ArApService arApService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private com.cretas.aims.repository.AttachmentRepository attachmentRepository;
 
@@ -77,7 +79,8 @@ class InventoryPostingRealPurchaseContractTest {
                 bomItemRepository,
                 arApService,
                 applicationEventPublisher,
-                materialBatchService);
+                materialBatchService,
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(purchaseService, "warehouseResolver", warehouseResolver);
         // 收货凭证门禁 (confirmReceive 里新加的 @Autowired(required=false) 校验): field-injected
         // 依赖, 构造函数没带, new PurchaseServiceImpl(...) 出来时默认是 null，会在

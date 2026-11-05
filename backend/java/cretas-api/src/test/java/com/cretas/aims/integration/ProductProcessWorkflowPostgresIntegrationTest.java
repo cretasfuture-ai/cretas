@@ -8,6 +8,7 @@ import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.impl.ProductProcessWorkflowServiceImpl;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
@@ -167,7 +168,8 @@ class ProductProcessWorkflowPostgresIntegrationTest {
                 catalogValidator,
                 unitValidator,
                 productTypeRepository,
-                mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
+                mock(com.cretas.aims.repository.RawMaterialTypeRepository.class),
+                mock(MaterialReferenceWriteGuard.class));
 
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new ProductProcessWorkflowController(workflowService))
