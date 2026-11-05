@@ -1,0 +1,26 @@
+[Unit]
+Description=Cretas F006 demo sandbox manager (review-only template)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/cretas/f006-demo-sandbox/code
+ExecStart=/opt/cretas/f006-demo-sandbox/venv/bin/python /opt/cretas/f006-demo-sandbox/code/runtime.py --config /var/lib/cretas/f006-demo-sandbox/runtime/runtime.private.json
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+UMask=0077
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/cretas/f006-demo-sandbox/code
+ReadWritePaths=/var/lib/cretas/f006-demo-sandbox/runtime
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
