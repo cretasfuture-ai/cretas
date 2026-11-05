@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `APS-WORKER-SHIFT-CONSTRAINT-20261106` — `in-progress` — Owner `01a1a954/root` — Base `4e6e6d036bae37a4bd55cff5629f4aa4b4232ae3` — scope UrgentInsertServiceImpl、ConfirmUrgentInsertRequest说明、WorkerShiftAvailabilityCheck及专测；真实HR三态/显式名单确认重核，空名单后配，不冒称预留；目标Contract+PG/CI后PR，避开食品/审计锁。
+
 
 
 
