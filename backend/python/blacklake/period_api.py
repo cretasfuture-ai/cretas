@@ -89,6 +89,12 @@ async def report(report_id: str, request: Request):
         raise HTTPException(503, '分析任务暂不可读，请稍后重试') from None
     if job is None:
         raise HTTPException(404, '当前工厂和来源中没有这份分析')
+    if job.get('result'):
+        from smartbi.services.analysis_supplement import attach_saved
+        try:
+            job=await asyncio.to_thread(attach_saved,job,runtime.scope(config),os.environ['BLACKLAKE_PERIOD_REPORT_DB'])
+        except Exception:
+            raise HTTPException(503,'补充分析证据暂未通过读取校验，原报告和原始数据仍保留') from None
     retry=job.get('nextAttemptAt')
     if job['status'] in ('queued', 'running') and (not retry or datetime.fromisoformat(retry)<=datetime.now(timezone.utc)):
         runtime.ensure_worker(config)

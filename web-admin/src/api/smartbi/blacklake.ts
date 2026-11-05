@@ -116,6 +116,7 @@ export interface BlacklakePeriodJob {
 export interface BlacklakePeriodSchedule { enabled: boolean; timezone: string; rules: { label: string; description: string }[]; lastTick?: string; message?: string; }
 
 export interface SectionInsightReport {
+  supplementalReviews?: SupplementalFactReview[];
   localAnalysis?: import('./local-analysis').LocalAnalysisSection;
   ruleSummary?: string;
   sectionId: string; title: string; summary: string; observations: string[]; calculation: string[];
@@ -152,6 +153,10 @@ export async function saveBlacklakeAlertFollowup(alertId: string, payload: {
   return response.data;
 }
 
+export interface SupplementalFactReview {
+  factId:string;sectionId:string;whatItMeans:string;nextStep:string;cannotConclude:string;owner:string;
+  statistics:{id:string;text:string;entityRefs?:Record<string,unknown>[]}[];
+}
 export interface CostDataAlert {
   id: string; type: string; family: 'data_quality' | 'business_signal' | 'readiness'; severity: 'blocking' | 'warning' | 'info';
   blocksUnitCost: boolean; title: string; message: string; owner: string; action: string; fields: string[];
@@ -165,7 +170,7 @@ export interface LocalAIUsage {
 export interface CostAlertReport {
   schema: string; ruleVersion: string; summary: { projects: number; costEligible: number; costBlocked: number; alerts: number; byFamily: Record<string, number>; byType: Record<string, number> };
   items: CostDataAlert[]; limitations: string[];
-  ai: { status: string; message: string; model?: string; host?: string; analysisProfileVersion?: string; analysisSections?: import('./local-analysis').LocalAnalysisSection[]; usage?: LocalAIUsage; currentRequestUsage?: LocalAIUsage; cacheHit?: boolean; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[] };
+  ai: { status: string; message: string; model?: string; host?: string; analysisProfileVersion?: string; analysisSections?: import('./local-analysis').LocalAnalysisSection[]; usage?: LocalAIUsage; currentRequestUsage?: LocalAIUsage; cacheHit?: boolean; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[]; omittedAnalysisFacts?:number;analysisFactCoverage?:{total:number;baseProvided:number;additionalReviewed:number;remaining:number;scope:string} };
 }
 export interface EligibleCostReview {
   eligibleProjects: number; products: number; limitations: string[];

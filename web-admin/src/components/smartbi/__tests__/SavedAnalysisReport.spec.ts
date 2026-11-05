@@ -31,4 +31,23 @@ describe('SavedAnalysisReport', () => {
     const wrapper = mount(SavedAnalysisReport, { props: { report: report({ result: undefined }) } });
     expect(wrapper.text()).toContain('本次报告尚未提供可读的数据概况');
   });
+  it('distinguishes unsent facts from failed model validation',()=>{
+    const saved=report();saved.result!.ai={status:'partial',message:'coverage',omittedAnalysisFacts:47};
+    const wrapper=mount(SavedAnalysisReport,{props:{report:saved}});
+    expect(wrapper.text()).toContain('AI 解读通过核验，另有 47 项分析尚未覆盖');
+  });
+  it('keeps supplemental analysis folded and opens only one fact at a time',async()=>{
+    const saved=report();saved.result!.ai.analysisFactCoverage={total:111,baseProvided:64,additionalReviewed:47,remaining:0,scope:'program_generated_facts_not_all_source_records'};
+    saved.result!.sectionInsights[0]!.supplementalReviews=['甲','乙'].map((name,i)=>({factId:`F${i}`,sectionId:'coverage',whatItMeans:`${name}的补充解释`,nextStep:'核对原始领料单',cannotConclude:'尚不能确认原因',owner:'仓库',statistics:[{id:`F${i}`,text:`${name}产品的资料覆盖`}]}));
+    const wrapper=mount(SavedAnalysisReport,{props:{report:saved}});
+    expect(wrapper.text()).toContain('已补充核对 47 项分析');
+    expect(wrapper.text()).not.toContain('甲的补充解释');
+    const details=wrapper.get('.supplement-list');(details.element as HTMLDetailsElement).open=true;await details.trigger('toggle');
+    const buttons=wrapper.findAll('.supplement-row > button');await buttons[0]!.trigger('click');
+    expect(wrapper.text()).toContain('甲的补充解释');await buttons[1]!.trigger('click');
+    expect(wrapper.text()).not.toContain('甲的补充解释');expect(wrapper.text()).toContain('乙的补充解释');
+    expect(wrapper.findAll('.supplement-detail')).toHaveLength(1);
+    await wrapper.findAll('.section-nav button')[1]!.trigger('click');
+    expect(wrapper.find('.supplement-list').exists()).toBe(false);
+  });
 });
