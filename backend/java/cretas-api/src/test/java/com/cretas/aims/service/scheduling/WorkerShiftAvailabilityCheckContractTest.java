@@ -32,6 +32,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
 class WorkerShiftAvailabilityCheckContractTest {
@@ -53,8 +55,9 @@ class WorkerShiftAvailabilityCheckContractTest {
         check = new WorkerShiftAvailabilityCheck(shiftAssignments, shifts, users,
                 leaveRequests, workerAssignments);
         when(users.findByFactoryIdAndIsActive(FACTORY, true)).thenReturn(List.of(worker(1L, "operator")));
-        when(leaveRequests.findOverlappingActive(eq(FACTORY), any(Long.class), any(), any())).thenReturn(List.of());
-        when(workerAssignments.findRecentByFactoryIdAndUserId(eq(FACTORY), any(Long.class))).thenReturn(List.of());
+        // Invalid/missing roster tests deliberately stop before these optional fact reads.
+        lenient().when(leaveRequests.findOverlappingActive(eq(FACTORY), any(Long.class), any(), any())).thenReturn(List.of());
+        lenient().when(workerAssignments.findRecentByFactoryIdAndUserId(eq(FACTORY), any(Long.class))).thenReturn(List.of());
     }
 
     @Test
@@ -87,19 +90,42 @@ class WorkerShiftAvailabilityCheckContractTest {
 
     @Test
     void adjacentSegmentsCoverButGapDoesNot() {
-        AttendanceShift morning = shift("MORNING", LocalTime.of(8, 0), LocalTime.of(12, 0), false);
-        AttendanceShift afternoon = shift("AFTERNOON", LocalTime.of(12, 0), LocalTime.of(16, 0), false);
+        // One row per (factory,user,workDate), matching the real HR unique constraint.
+        AttendanceShift morning = shift("MORNING", LocalTime.of(23, 0), LocalTime.of(2, 0), true);
+        AttendanceShift afternoon = shift("AFTERNOON", LocalTime.of(2, 0), LocalTime.of(6, 0), false);
         when(shifts.findByIdAndFactoryId("MORNING", FACTORY)).thenReturn(Optional.of(morning));
         when(shifts.findByIdAndFactoryId("AFTERNOON", FACTORY)).thenReturn(Optional.of(afternoon));
         when(shiftAssignments.findByFactoryIdAndWorkDateBetween(
-                FACTORY, START.toLocalDate().minusDays(1), END.toLocalDate()))
+                eq(FACTORY), any(), any()))
                 .thenReturn(List.of(
-                        assignment(1L, START.toLocalDate(), "MORNING", ShiftAssignmentStatus.SCHEDULED),
+                        assignment(1L, START.toLocalDate().minusDays(1), "MORNING", ShiftAssignmentStatus.SCHEDULED),
                         assignment(1L, START.toLocalDate(), "AFTERNOON", ShiftAssignmentStatus.SCHEDULED)));
 
-        assertThat(check.check(FACTORY, START, END, 1).available()).isTrue();
-        assertThat(check.check(FACTORY, START, LocalDateTime.of(2026, 11, 6, 16, 1), 1).verified())
-                .isFalse();
+        LocalDateTime from = START.toLocalDate().minusDays(1).atTime(23, 0);
+        LocalDateTime to = START.toLocalDate().atTime(6, 0);
+        assertThat(check.check(FACTORY, from, to, 1).available()).isTrue();
+        afternoon.setStartTime(LocalTime.of(2, 1));
+        var gap = check.check(FACTORY, from, to, 1);
+        assertThat(gap.verified()).isTrue();
+        assertThat(gap.available()).isFalse();
+        assertThat(gap.message()).startsWith("人员不足");
+    }
+
+    @Test
+    void midnightEndExcludesNextDayFromRosterLeaveAndContractChecks() {
+        User employee = worker(1L, "operator");employee.setContractEndDate(START.toLocalDate());
+        when(users.findByFactoryIdAndIsActive(FACTORY, true)).thenReturn(List.of(employee));
+        AttendanceShift night = shift("NIGHT", LocalTime.of(22, 0), LocalTime.of(6, 0), true);
+        when(shifts.findByIdAndFactoryId("NIGHT", FACTORY)).thenReturn(Optional.of(night));
+        when(shiftAssignments.findByFactoryIdAndWorkDateBetween(FACTORY,
+                START.toLocalDate().minusDays(1), START.toLocalDate()))
+                .thenReturn(List.of(assignment(1L, START.toLocalDate(), "NIGHT", ShiftAssignmentStatus.SCHEDULED)));
+        var result = check.check(FACTORY, START.toLocalDate().atTime(22, 0),
+                START.toLocalDate().plusDays(1).atStartOfDay(), 1);
+        assertThat(result.available()).isTrue();
+        verify(shiftAssignments).findByFactoryIdAndWorkDateBetween(FACTORY,
+                START.toLocalDate().minusDays(1), START.toLocalDate());
+        verify(leaveRequests).findOverlappingActive(FACTORY, 1L, START.toLocalDate(), START.toLocalDate());
     }
 
     @Test

@@ -167,6 +167,7 @@ class UrgentInsertWorkerShiftContractTest {
     void omittedSelectionPreservesExistingPendingPlanForLaterAssignmentPath() {
         service.confirmInsert(F, 1L, request(null));
         verifyNoInteractions(shifts);
-        verify(plans).save(any(ProductionPlan.class));
+        verify(plans).save(argThat(plan -> plan.getStatus()
+                == com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING));
     }
 }

@@ -104,17 +104,55 @@ class WorkerShiftAvailabilityJpaContractTest {
 
     @Test
     void realScheduledOverlapBlocksAndCancelledLineReleasesIt() {
-        SchedulingPlan parent = new SchedulingPlan();parent.setId(UUID.randomUUID().toString());parent.setFactoryId(F);
+        LineSchedule line = occupy(F, worker.getId());
+        em.flush();em.clear();
+        assertThat(check.check(F, START, START.plusHours(2), 1).availableWorkers()).isZero();
+        LineSchedule persisted = em.find(LineSchedule.class, line.getId());persisted.setStatus(LineSchedule.ScheduleStatus.cancelled);
+        em.flush();em.clear();
+        assertThat(check.check(F, START, START.plusHours(2), 1).available()).isTrue();
+    }
+
+    @Test
+    void softDeletedRosterOrShiftCannotSupplyAWorker() {
+        int removed = em.getEntityManager().createNativeQuery(
+                        "update employee_shift_assignments set deleted_at = CURRENT_TIMESTAMP where factory_id = :factory and user_id = :user")
+                .setParameter("factory", F).setParameter("user", worker.getId()).executeUpdate();
+        assertThat(removed).isEqualTo(1);em.clear();
+        assertThat(check.check(F, START, START.plusHours(2), 1).available()).isFalse();
+        em.getEntityManager().createNativeQuery(
+                        "update employee_shift_assignments set deleted_at = NULL where factory_id = :factory and user_id = :user")
+                .setParameter("factory", F).setParameter("user", worker.getId()).executeUpdate();
+        int retired = em.getEntityManager().createNativeQuery(
+                        "update attendance_shifts set deleted_at = CURRENT_TIMESTAMP where factory_id = :factory")
+                .setParameter("factory", F).executeUpdate();
+        assertThat(retired).isEqualTo(1);em.clear();
+        var result = check.check(F, START, START.plusHours(2), 1);
+        assertThat(result.verified()).isFalse();assertThat(result.availableWorkerIds()).isEmpty();
+    }
+
+    @Test
+    void anotherFactoryAssignmentUsingTheSameGlobalUserIdDoesNotAffectOwnRoster() {
+        occupy(OTHER, worker.getId());em.flush();em.clear();
+        assertThat(check.check(F, START, START.plusHours(2), 1).availableWorkerIds()).containsExactly(worker.getId());
+    }
+
+    @Test
+    void softDeletedSchedulingParentDoesNotRemainAnActiveOccupancy() {
+        LineSchedule line = occupy(F, worker.getId());
+        em.flush();
+        line.getPlan().setDeletedAt(START.minusDays(1));em.flush();em.clear();
+        assertThat(check.check(F, START, START.plusHours(2), 1).available()).isTrue();
+    }
+
+    private LineSchedule occupy(String factory, Long userId) {
+        SchedulingPlan parent = new SchedulingPlan();parent.setId(UUID.randomUUID().toString());parent.setFactoryId(factory);
         parent.setPlanDate(START.toLocalDate());parent.setStatus(SchedulingPlan.PlanStatus.confirmed);em.persist(parent);
         LineSchedule line = new LineSchedule();line.setId(UUID.randomUUID().toString());line.setPlan(parent);
         line.setProductionLineId("TEST-LINE");line.setPlannedStartTime(START.plusMinutes(30));
         line.setPlannedEndTime(START.plusHours(3));line.setStatus(LineSchedule.ScheduleStatus.pending);em.persist(line);
         WorkerAssignment assignment = new WorkerAssignment();assignment.setId(UUID.randomUUID().toString());
-        assignment.setSchedule(line);assignment.setUserId(worker.getId());assignment.setStatus(WorkerAssignment.AssignmentStatus.assigned);
-        em.persistAndFlush(assignment);em.clear();
-        assertThat(check.check(F, START, START.plusHours(2), 1).availableWorkers()).isZero();
-        LineSchedule persisted = em.find(LineSchedule.class, line.getId());persisted.setStatus(LineSchedule.ScheduleStatus.cancelled);
-        em.flush();em.clear();
-        assertThat(check.check(F, START, START.plusHours(2), 1).available()).isTrue();
+        assignment.setSchedule(line);assignment.setUserId(userId);assignment.setStatus(WorkerAssignment.AssignmentStatus.assigned);
+        em.persist(assignment);
+        return line;
     }
 }

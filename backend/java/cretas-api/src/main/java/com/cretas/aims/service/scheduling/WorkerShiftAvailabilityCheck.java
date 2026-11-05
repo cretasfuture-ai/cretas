@@ -15,6 +15,7 @@ import com.cretas.aims.repository.hr.AttendanceShiftRepository;
 import com.cretas.aims.repository.hr.EmployeeShiftAssignmentRepository;
 import com.cretas.aims.repository.hr.LeaveRequestRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -42,6 +43,7 @@ import java.util.Set;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class WorkerShiftAvailabilityCheck {
 
     private static final String UNVERIFIED = "人员未验证：无法确认人员排班数据";
@@ -66,13 +68,14 @@ public class WorkerShiftAvailabilityCheck {
         }
 
         LocalDate queryStart = start.toLocalDate().minusDays(1);
-        LocalDate queryEnd = end.toLocalDate();
+        LocalDate queryEnd = end.minusNanos(1).toLocalDate();
         final List<EmployeeShiftAssignment> assignments;
         final List<User> activeUsers;
         try {
             assignments = shiftAssignments.findByFactoryIdAndWorkDateBetween(factoryId, queryStart, queryEnd);
             activeUsers = users.findByFactoryIdAndIsActive(factoryId, true);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            log.warn("人员核验读取失败: factoryId={}, source=roster, type={}", factoryId, failure.getClass().getSimpleName());
             return Result.unverified(required, UNVERIFIED);
         }
         if (assignments == null || assignments.isEmpty()) {
@@ -137,7 +140,8 @@ public class WorkerShiftAvailabilityCheck {
                     shift = shifts.findByIdAndFactoryId(shiftId, factoryId);
                     shift = shift == null ? Optional.empty() : shift;
                     shiftCache.put(shiftId, shift);
-                } catch (RuntimeException ignored) {
+                } catch (RuntimeException failure) {
+                    log.warn("人员核验读取失败: factoryId={}, source=shift, type={}", factoryId, failure.getClass().getSimpleName());
                     candidate.unknown = true;
                     continue;
                 }
@@ -222,7 +226,8 @@ public class WorkerShiftAvailabilityCheck {
             leaves = leaveRequests.findOverlappingActive(factoryId, userId,
                     start.toLocalDate(), effectiveEndDate);
             occupied = workerAssignments.findRecentByFactoryIdAndUserId(factoryId, userId);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            log.warn("人员核验读取失败: factoryId={}, source=leave-or-assignment, type={}", factoryId, failure.getClass().getSimpleName());
             return CandidateEvidence.UNKNOWN;
         }
         if (leaves == null || occupied == null) {
