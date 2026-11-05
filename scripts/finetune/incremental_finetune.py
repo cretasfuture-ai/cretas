@@ -64,6 +64,8 @@ class FinetuneConfig:
     label_mapping_path: Optional[str] = None
     validation_data_path: Optional[str] = None
     protected_test_path: Optional[str] = None
+    label_smoothing_factor: float = 0.0
+    metric_for_best_model: str = "f1_weighted"
     eval_steps: int = 50
     save_steps: int = 100
     early_stopping_patience: int = 3
@@ -330,7 +332,8 @@ def run_finetuning(config: FinetuneConfig):
         save_steps=config.save_steps,
         save_total_limit=2,
         load_best_model_at_end=True,
-        metric_for_best_model="f1_weighted",
+        metric_for_best_model=getattr(config, 'metric_for_best_model', 'f1_weighted'),
+        label_smoothing_factor=getattr(config, 'label_smoothing_factor', 0.0),
         greater_is_better=True,
         seed=config.seed,
         fp16=torch.cuda.is_available(),  # 如果有 GPU 则使用混合精度

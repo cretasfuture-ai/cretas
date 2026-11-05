@@ -5,7 +5,7 @@ import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
 import { ElMessageBox, ElMessage } from 'element-plus';
-import { Fold, Expand, User, SwitchButton, Refresh, Moon, Sunny, Box, ArrowLeft } from '@element-plus/icons-vue';
+import { Fold, Expand, User, SwitchButton, Refresh, Moon, Sunny, Box, ArrowLeft, VideoPlay } from '@element-plus/icons-vue';
 import ReminderBell from '@/components/notifications/ReminderBell.vue';
 import AlertNotificationBell from '@/components/notifications/AlertNotificationBell.vue';
 
@@ -45,6 +45,7 @@ const userInfo = computed(() => ({
   role: authStore.roleMetadata?.displayName || '未知角色',
   factoryId: authStore.factoryId
 }));
+const showF006Demo = computed(() => authStore.factoryId === 'F006' && authStore.currentRole === 'factory_super_admin');
 
 // 切换侧边栏（桌面折叠 / 移动端打开抽屉）
 function toggleSidebar() {
@@ -113,6 +114,11 @@ async function handleLogout() {
           <el-icon><ArrowLeft /></el-icon> 返回平台
         </el-button>
       </div>
+      <el-tooltip v-if="showF006Demo" content="流程演示" placement="bottom">
+        <el-button class="demo-flow-entry" type="primary" plain size="small" @click="router.push('/demo-flow')">
+          <el-icon><VideoPlay /></el-icon><span>流程演示</span>
+        </el-button>
+      </el-tooltip>
       <!-- 暗色模式切换 -->
       <el-tooltip :content="appStore.theme === 'light' ? '暗色模式' : '亮色模式'" placement="bottom">
         <el-icon class="header-action" @click="appStore.toggleTheme()">

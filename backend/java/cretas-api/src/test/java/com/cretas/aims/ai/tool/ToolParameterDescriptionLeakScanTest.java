@@ -198,11 +198,22 @@ class ToolParameterDescriptionLeakScanTest {
         List<Class<?>> out = new ArrayList<>();
         for (BeanDefinition bd : scanner.findCandidateComponents("com.cretas.aims")) {
             Class<?> c = Class.forName(bd.getBeanClassName());
-            if (!java.lang.reflect.Modifier.isAbstract(c.getModifiers())) {
+            if (!java.lang.reflect.Modifier.isAbstract(c.getModifiers()) && isProductionToolType(c)) {
                 out.add(c);
             }
         }
         assertThat(out).as("扫描到的工具类数 (仪器活着)").hasSizeGreaterThan(400);
         return out;
+    }
+
+    static boolean isProductionToolType(Class<?> candidate) {
+        // This scanner's origin is the test output. Keep production tools from every other
+        // module/JAR, but exclude test fixtures even when they extend a real business tool.
+        var testOrigin = java.util.Objects.requireNonNull(
+                ToolParameterDescriptionLeakScanTest.class.getProtectionDomain().getCodeSource(),
+                "INSTRUMENT DEAD: cannot identify the test output");
+        var origin = candidate.getProtectionDomain().getCodeSource();
+        // Unknown origins stay in the scan: they must not become a silent coverage exemption.
+        return origin == null || !testOrigin.getLocation().equals(origin.getLocation());
     }
 }

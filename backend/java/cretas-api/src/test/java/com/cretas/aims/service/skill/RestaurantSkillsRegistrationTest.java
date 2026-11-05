@@ -10,14 +10,14 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Collections;
-import java.util.Optional;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit test for 2 new restaurant skills added in P2.7.
+ * Retired restaurant skills remain absent and cannot be registered at runtime.
  *
  * Constructs {@link SkillRegistryImpl} directly with mocked dependencies
  * and invokes the private {@code initializeDefaultSkills()} via reflection.
@@ -51,57 +51,32 @@ class RestaurantSkillsRegistrationTest {
     }
 
     @Test
-    void restaurantDiagnosticsSkillRegistered() {
-        Optional<SkillDefinition> skill = registry.getSkill("restaurant-diagnostics");
-        assertThat(skill).isPresent();
-
-        SkillDefinition def = skill.get();
-        assertThat(def.getDisplayName()).isEqualTo("餐饮经营深度诊断");
-        assertThat(def.getTriggers()).contains("经营诊断", "深度分析", "为什么亏损", "刚性", "对标");
-        assertThat(def.getTools()).contains(
-                "restaurant_cost_rigidity_analysis",
-                "restaurant_benchmark_alert",
-                "restaurant_channel_margin",
-                "restaurant_dining_heatmap",
-                "restaurant_long_tail_sku",
-                "restaurant_menu_normalization",
-                "restaurant_review_analysis",
-                "restaurant_member_rfm",
-                "restaurant_stored_value",
-                "restaurant_store_pnl_one_pager",
-                "restaurant_bom_layer_status",
-                "restaurant_menu_engineering",
-                "restaurant_forecast"
-        );
-        assertThat(def.getContextNeeded()).contains("factoryId");
-        assertThat(def.isEnabled()).isTrue();
+    void retiredRestaurantDiagnosticsSkillIsRejected() {
+        assertRetiredSkillCannotRegister("restaurant-diagnostics");
     }
 
     @Test
-    void restaurantChainAnalysisSkillRegistered() {
-        Optional<SkillDefinition> skill = registry.getSkill("restaurant-chain-analysis");
-        assertThat(skill).isPresent();
-
-        SkillDefinition def = skill.get();
-        assertThat(def.getDisplayName()).isEqualTo("餐饮连锁分析");
-        assertThat(def.getTriggers()).contains("连锁", "多店对比", "门店排名", "同店同比");
-        assertThat(def.getTools()).containsExactlyInAnyOrder(
-                "restaurant_multi_store_comparison",
-                "restaurant_calibration_history",
-                "restaurant_temporal_comparison",
-                "restaurant_cross_chain_benchmark"
-        );
-        assertThat(def.getContextNeeded()).contains("factoryId");
-        assertThat(def.isEnabled()).isTrue();
+    void retiredRestaurantChainAnalysisSkillIsRejected() {
+        assertRetiredSkillCannotRegister("restaurant-chain-analysis");
     }
 
     @Test
-    void existingRestaurantOperationsSkillStillRegistered() {
-        // Regression: adding new skills must not break existing ones.
-        Optional<SkillDefinition> opsSkill = registry.getSkill("restaurant-operations");
-        assertThat(opsSkill).isPresent();
+    void retiredRestaurantOperationsAndWastageSkillsAreRejected() {
+        assertRetiredSkillCannotRegister("restaurant-operations");
+        assertRetiredSkillCannotRegister("restaurant-wastage");
+    }
 
-        Optional<SkillDefinition> wastageSkill = registry.getSkill("restaurant-wastage");
-        assertThat(wastageSkill).isPresent();
+    private void assertRetiredSkillCannotRegister(String name) {
+        assertThat(registry.getSkill(name)).isEmpty();
+        SkillDefinition candidate = SkillDefinition.builder().name(name).enabled(true)
+                .tools(List.of("batch_full_trace")).triggers(List.of("退役能力探针")).build();
+        registry.register(candidate);
+        assertThat(registry.getSkill(name)).as("retired names cannot re-enter through register")
+                .isEmpty();
+
+        SkillDefinition allowed = SkillDefinition.builder().name("factory-retirement-positive-control")
+                .enabled(true).tools(List.of("batch_full_trace")).triggers(List.of("工厂追溯探针")).build();
+        registry.register(allowed);
+        assertThat(registry.getSkill(allowed.getName())).containsSame(allowed);
     }
 }

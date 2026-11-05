@@ -1,0 +1,9 @@
+# F006 连续演示就绪门禁
+
+任务 DEMO-F006-READY-20261105；Owner Codex root；Base df325d3504fa68b2c0cb5bdad53d3805d2c4f3da。复用已合并、干净的本任务隔离 worktree。
+
+发布前主线前进，已合并主线并登记 Release Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76。本补丁对该 Base 的产品差异仅 Web，复用相同 Web tree 的已验证制品；其他主线后端和运维变更由其 Owner 发布。
+
+正式 Web 连续演示验证发现加载期间可点击连续演示，executeCurrent 的就绪守卫拒绝执行后没有后续调度，页面停在第一步。将按钮在资料未就绪或步骤不匹配时禁用，startAutoplay 同时拒绝未就绪调用。新增延迟初始化行为测试，验证就绪前零业务执行、就绪后可播放。不改后端、身份或业务数据契约。
+
+目标测试、类型、可信 Web 构建、发布和正式页面连续/暂停/继续/24步完成证据保留在本机 `Documents/F006演示-20261105`，各事实分开记录。单一 root 写 Owner；合并收尾释放实现 scope。

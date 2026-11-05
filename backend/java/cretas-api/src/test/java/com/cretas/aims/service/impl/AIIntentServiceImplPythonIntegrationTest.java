@@ -14,7 +14,8 @@ import org.mockito.MockitoAnnotations;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -100,6 +101,25 @@ class AIIntentServiceImplPythonIntegrationTest {
                 .build();
     }
 
+    /** Catalog filtering returns a safe copy, so compare the contract rather than object identity. */
+    private static void assertSemanticMatch(IntentMatchResult expected, IntentMatchResult actual) {
+        assertNotNull(actual);
+        assertNotNull(actual.getBestMatch());
+        assertEquals(expected.getBestMatch().getIntentCode(), actual.getBestMatch().getIntentCode());
+        assertEquals(expected.getConfidence(), actual.getConfidence());
+        assertEquals(expected.getMatchMethod(), actual.getMatchMethod());
+        assertEquals(expected.getUserInput(), actual.getUserInput());
+        assertNotNull(actual.getTopCandidates());
+    }
+
+    private static void assertCatalogNoMatch(IntentMatchResult actual, String userInput) {
+        assertNotNull(actual);
+        assertFalse(actual.hasMatch());
+        assertNull(actual.getBestMatch());
+        assertNotNull(actual.getTopCandidates());
+        assertEquals(userInput, actual.getUserInput());
+    }
+
     @Test
     void cacheHit_skipsBothPythonAndLegacy() {
         IntentMatchResult cached = buildRealMatch("CACHED_INTENT", "查询订单");
@@ -109,7 +129,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "查询订单", "F001", 3, 22L, "admin", null);
 
-        assertSame(cached, result, "cache hit must be returned verbatim");
+        assertSemanticMatch(cached, result);
         verifyNoInteractions(pythonClient);
         verify(pipelineService, never())
                 .recognizeIntentWithConfidence(anyString(), anyString(), anyInt(),
@@ -125,7 +145,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "查询订单", "F001", 3, 22L, "admin", null);
 
-        assertSame(py, result, "real Python match must be returned");
+        assertSemanticMatch(py, result);
         verify(cache, times(1))
                 .put(eq("查询订单"), eq("F001"), eq("admin"), eq("FACTORY"), eq(py));
         verify(pipelineService, never())
@@ -147,7 +167,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "好了", "F001", 3, 22L, "admin", null, null, null, turns);
 
-        assertSame(py, result);
+        assertSemanticMatch(py, result);
         // The egress boundary forwards only user turns; assistant answers may contain restored names.
         org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of(turns.get(0)), sent.getValue().getHistory());
         verify(cache, never()).get(anyString(), anyString(), anyString(), anyString());
@@ -169,7 +189,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "查询订单", "F001", 3, 22L, "admin", null);
 
-        assertSame(legacy, result, "legacy result must surface when Python returns empty");
+        assertSemanticMatch(legacy, result);
         verify(cache, never()).put(anyString(), anyString(), anyString(), anyString(), any());
         verify(pipelineService, times(1))
                 .recognizeIntentWithConfidence(anyString(), anyString(), anyInt(),
@@ -189,7 +209,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "先别入库", "F001", 3, 22L, "admin", null);
 
-        assertSame(none, result);
+        assertCatalogNoMatch(result, "先别入库");
         verify(pipelineService, never())
                 .recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), anyString(), any());
         verify(cache, never()).put(anyString(), anyString(), anyString(), anyString(), any());
@@ -209,7 +229,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "q", "F001", 3, 22L, "admin", null);
 
-        assertSame(legacy, result, "Python throw must not propagate; legacy must surface");
+        assertSemanticMatch(legacy, result);
         verify(pipelineService, times(1))
                 .recognizeIntentWithConfidence(anyString(), anyString(), anyInt(),
                         any(), anyString(), any());
@@ -227,7 +247,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "q", "F001", 3, 22L, "admin", null);
 
-        assertSame(legacy, result);
+        assertSemanticMatch(legacy, result);
         verifyNoInteractions(pythonClient);
         verifyNoInteractions(cache);
     }
@@ -244,7 +264,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "q", "F001", 3, 22L, "admin", null);
 
-        assertSame(legacy, result);
+        assertSemanticMatch(legacy, result);
         verifyNoInteractions(cache);
     }
 
@@ -262,7 +282,7 @@ class AIIntentServiceImplPythonIntegrationTest {
                 "那它的毛利率也是第一吗？", "RES_3101_009", 3,
                 22L, "restaurant_owner", "sid-store-followup");
 
-        assertSame(legacy, result);
+        assertCatalogNoMatch(result, "那它的毛利率也是第一吗？");
         verifyNoInteractions(pythonClient);
         verifyNoInteractions(cache);
         verify(pipelineService).recognizeIntentWithConfidence(
@@ -300,7 +320,7 @@ class AIIntentServiceImplPythonIntegrationTest {
                 "最近30天", "RES_3101_009", 3,
                 22L, "restaurant_owner", "sid-store-time");
 
-        assertSame(legacy, result);
+        assertCatalogNoMatch(result, "最近30天");
         verifyNoInteractions(pythonClient);
         verifyNoInteractions(cache);
         verify(pipelineService).recognizeIntentWithConfidence(
@@ -320,7 +340,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "q", "F001", 3, 22L, "admin", null);
 
-        assertSame(legacy, result);
+        assertSemanticMatch(legacy, result);
         verifyNoInteractions(pythonClient);
     }
 
@@ -342,7 +362,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "q", "F001", 3, 22L, "admin", null);
 
-        assertSame(legacy, result, "non-whitelisted factory must surface legacy result");
+        assertSemanticMatch(legacy, result);
         verifyNoInteractions(pythonClient);
         verifyNoInteractions(cache);
     }
@@ -362,7 +382,7 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "q", "F001", 3, 22L, "admin", null);
 
-        assertSame(py, result, "whitelisted factory must dispatch to Python");
+        assertSemanticMatch(py, result);
         verify(pipelineService, never())
                 .recognizeIntentWithConfidence(anyString(), anyString(), anyInt(),
                         any(), anyString(), any());
@@ -380,6 +400,6 @@ class AIIntentServiceImplPythonIntegrationTest {
         IntentMatchResult result = service.recognizeIntentWithConfidence(
                 "q", "F001", 3, 22L, "admin", null);
 
-        assertSame(py, result, "businessType resolution failure must not block Python matcher");
+        assertSemanticMatch(py, result);
     }
 }

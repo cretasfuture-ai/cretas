@@ -263,6 +263,21 @@ def _build_qa_data_context(
         return None
 
 
+NO_CAPTURE_HEADER = "x-no-training-capture"
+
+
+def _no_capture_requested(http_request) -> bool:
+    """Java 内部调用明确要求这次的问答不留存 (平台授权 AI 分析入口, 提示词里有保密产品的成本)。
+
+    只认内部调用: 拿 JWT 来的请求带这个头不算数, 工厂侧默认照旧采集。
+    """
+    state = getattr(http_request, "state", None)
+    if getattr(state, "auth_method", None) != "internal":
+        return False
+    headers = getattr(http_request, "headers", None)
+    return headers is not None and headers.get(NO_CAPTURE_HEADER) == "1"
+
+
 async def _capture_qa_distillation(
     query: str,
     answer: str,
@@ -283,7 +298,7 @@ async def _capture_qa_distillation(
     Only called on freshly-generated LLM answers (cache-hit returns upstream).
     """
     try:
-        if not query or not answer:
+        if not query or not answer or _no_capture_requested(http_request):
             return
         from smartbi.config import get_pg_pool
         from smartbi.services.distillation_capture import persist_distillation_sample
@@ -437,8 +452,13 @@ def _make_chat_cache_key(query_type: str, **kwargs) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
-def _chat_cache_get(key: str) -> Optional[Any]:
-    """Look up a chat result in InsightCache. Returns payload or None."""
+def _chat_cache_get(key: Optional[str]) -> Optional[Any]:
+    """Look up a chat result in InsightCache. Returns payload or None.
+
+    ``key=None`` means this request must not touch the cache (no-capture signal).
+    """
+    if key is None:
+        return None
     entry = get_insight_cache().get(key)
     if entry is not None:
         logger.info(f"[ChatCache] HIT key={key[:12]}...")
@@ -446,8 +466,10 @@ def _chat_cache_get(key: str) -> Optional[Any]:
     return None
 
 
-def _chat_cache_set(key: str, payload: Any) -> None:
-    """Store a chat result in InsightCache."""
+def _chat_cache_set(key: Optional[str], payload: Any) -> None:
+    """Store a chat result in InsightCache. ``key=None``: see ``_chat_cache_get``."""
+    if key is None:
+        return
     get_insight_cache().set(key, payload)
     logger.info(f"[ChatCache] SET key={key[:12]}...")
 
@@ -1353,7 +1375,8 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
     # factory_id, so two tenants sending empty data would otherwise collide
     # on an identical cache key and leak each other's results (cross-tenant
     # cache pollution).
-    cache_key = _make_chat_cache_key(
+    # No-capture signal: no cache key at all, so every cache read / write below is a no-op.
+    cache_key = None if _no_capture_requested(http_request) else _make_chat_cache_key(
         "general_analysis",
         factory_id=trusted_factory_id,
         trusted_user_id=trusted_user_key,

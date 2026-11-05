@@ -62,10 +62,9 @@ public final class RequestAuditSupport {
         if (!SAFE_FACTORY.matcher(pathFactory).matches()) return null;
         if (pathFactory.equals(factoryId)) return factoryId;
         // This marker is set only by our order-100 interceptor after JWT/RBAC.
-        String role = String.valueOf(request.getAttribute("role")).toLowerCase(java.util.Locale.ROOT);
         if (Boolean.TRUE.equals(request.getAttribute(POST_AUTH_ATTRIBUTE)) && userId(request) != null
-                && ("PLATFORM".equals(factoryId)
-                || java.util.Set.of("platform_admin", "super_admin", "developer").contains(role))) {
+                && ("PLATFORM".equals(factoryId) || com.cretas.aims.security.AuthenticatedActor.current(request)
+                        .filter(com.cretas.aims.security.AuthenticatedActor::hasFactoryBypass).isPresent())) {
             return pathFactory;
         }
         return null;
