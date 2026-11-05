@@ -272,6 +272,18 @@ function shortTime(iso: string) {
   return iso.replace('T', ' ').slice(0, 16);
 }
 
+function candidateBasis(candidate: RescheduleProposal['candidates'][number]) {
+  return candidate.basis ?? [];
+}
+
+function basisText(basis: NonNullable<RescheduleProposal['candidates'][number]['basis']>[number]) {
+  const source = basis.capacitySource === 'MANUAL' ? '人工日产能' : '历史估算日产能';
+  const bom = basis.bomFamilyId
+    ? `BOM 配方族 ${basis.bomFamilyId}`
+    : `BOM 配方 ${basis.bomRecipeId} v${basis.bomVersion}`;
+  return `依据：Workflow ID ${basis.workflowId} / v${basis.workflowVersion} / 修订 ${basis.workflowRevisionId}；${bom}；APS ${source} ${basis.capacityPerDay} ${basis.unit}/天（仅日期窗口，未验证工序级精确耗时）`;
+}
+
 async function propose() {
   if (!detail.value) return;
   proposing.value = true;
@@ -477,8 +489,8 @@ onMounted(load);
                 <div class="candidate-head">
                   <strong>{{ c.label }}</strong>
                   <el-tag v-if="!c.applicable" size="small" type="info">不可直接应用</el-tag>
-                  <el-button
-                    v-else
+                <el-button
+                  v-else-if="c.applicable && candidateBasis(c).length"
                     size="small"
                     type="primary"
                     :loading="applying === c.key"
@@ -487,7 +499,11 @@ onMounted(load);
                     应用此方案
                   </el-button>
                 </div>
-                <el-table v-if="c.moves.length" :data="c.moves" size="small">
+                <div v-if="candidateBasis(c).length" class="basis-list">
+                  <div v-for="(b, i) in candidateBasis(c)" :key="`${b.productionPlanId}-${i}`" class="basis">{{ basisText(b) }}</div>
+                </div>
+                <div v-else class="hint">{{ c.basis === undefined ? '该方案来自旧版本，缺少正式排程依据，请重新生成' : c.notes.join('；') }}</div>
+                <el-table v-if="candidateBasis(c).length && c.moves.length" :data="c.moves" size="small">
                   <el-table-column label="产线" min-width="140">
                     <template #default="{ row }">
                       {{ row.fromLineName }}<span v-if="row.toLineId !== row.fromLineId"> → {{ row.toLineName }}</span>
@@ -558,6 +574,8 @@ onMounted(load);
 .gap { color: var(--el-color-danger); font-weight: 600; }
 .decision-bar { display: flex; gap: 8px; margin: 12px 0; }
 .candidate { margin: 8px 0; }
+.basis-list { margin: 4px 0 8px; }
+.basis { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
 .verdict { display: flex; gap: 8px; align-items: center; }
 .verdict-detail { margin: 6px 0 4px; font-size: 13px; }
 .check-history { margin-top: 8px; }
