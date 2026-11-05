@@ -482,15 +482,16 @@ public class MobileController {
             @RequestParam String newPassword) {
         // 验证调用者是管理员
         String role = (String) request.getAttribute("role");
-        if (role == null || (!role.equals("factory_super_admin") && !role.equals("platform_admin")
-                && !role.equals("super_admin") && !role.equals("hr_admin"))) {
+        // 平台权限只看身份, 不看 role 字符串: users.role_code 是工厂侧可写的, 工厂账号带着
+        // platform_admin 也既不是平台身份, 也不是工厂管理员。
+        boolean isPlatformRole = com.cretas.aims.security.PlatformRoleBoundary.hasCrossFactoryAuthority(request);
+        if (!isPlatformRole && !"factory_super_admin".equals(role) && !"hr_admin".equals(role)) {
             throw new BusinessException(403, "无权重置密码，需要管理员权限").withSeverity("error");
         }
         // 🔒 多租户隔离 (2026-06-17 实测确认跨租户账号接管漏洞): /auth/* 被 JwtAuthInterceptor 的
         // path-factoryId gate 排除, 而本端点用**入参** factoryId 定位用户。若不校验, 工厂级管理员
         // (factory_super_admin/hr_admin) 可传别家 factoryId 重置别家用户密码 = 跨租户账号接管。
-        // 平台级角色 (platform_admin/super_admin) 可跨工厂 (by design); 工厂级角色必须本厂。
-        boolean isPlatformRole = role.equals("platform_admin") || role.equals("super_admin");
+        // 平台身份可跨工厂 (by design); 工厂级角色必须本厂。
         if (!isPlatformRole) {
             String callerFactoryId = (String) request.getAttribute("factoryId");
             if (callerFactoryId == null || !callerFactoryId.equals(factoryId)) {

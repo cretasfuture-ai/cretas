@@ -600,6 +600,9 @@ public class MobileAuthServiceImpl implements MobileAuthService {
                 ? invitedRole : FactoryUserRole.unactivated;
         boolean trustedInvitation = invitedRole != null;
 
+        com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(effectiveRole.name(), null);
+        com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(whitelist.getPosition(), null);
+
         // 创建用户
         User user = new User();
         user.setFactoryId(factoryId);
