@@ -343,6 +343,35 @@ def test_scheduler_reads_new_source_revision_and_revises_saved_windows_without_r
         asyncio.run(period_runtime.tick(anchor,now))
 
 
+def test_operational_file_revision_requeues_once_without_changing_baseline_config(period_client,monkeypatch,tmp_path):
+    import json
+    from smartbi.services import period_schedule
+    client,headers,raw,config,*_=period_client
+    db=period_runtime.store();key=period_runtime.scope(config)
+    window=parse_window('2026-11-03','2026-11-03',kind='day')
+    initial=period_analysis(raw,window)
+    first=db.submit(key,window.wire(),initial['periodMetadata']['fingerprint'],initial)
+    path=tmp_path/'operational.json'
+    observation={'tenant_id':config['tenant_id'],'source_factory_id':config['source_factory_id'],'run_id':config['run_id'],'probeId':'one'}
+    path.write_text(json.dumps(observation),encoding='utf8')
+    monkeypatch.setenv('BLACKLAKE_OPERATIONAL_SOURCE_FILE',str(path))
+    monkeypatch.delenv('BLACKLAKE_OPERATIONAL_BOM_FILE',raising=False)
+    monkeypatch.setattr(period_runtime,'settings',lambda p:dict(config))
+    monkeypatch.setattr(period_schedule,'due_periods',lambda *a,**kw:[])
+    def read_current(c,w):
+        current=json.loads(path.read_text(encoding='utf8'))
+        return period_analysis(raw,w,{**META,'run_id':current['probeId']})
+    monkeypatch.setattr(period_runtime,'read',read_current)
+    now=datetime(2026,11,6,tzinfo=timezone.utc)
+    asyncio.run(period_runtime.tick(dict(config),now))
+    observation['probeId']='two';path.write_text(json.dumps(observation),encoding='utf8')
+    asyncio.run(period_runtime.tick(dict(config),now))
+    latest=db.windows(key)[0]
+    assert latest['revision']==3 and latest['fingerprint']!=first['fingerprint']
+    asyncio.run(period_runtime.tick(dict(config),now))
+    assert db.windows(key)[0]['id']==latest['id']
+
+
 def test_transient_worker_failure_respects_backoff_instead_of_burning_attempts(period_client,monkeypatch):
     client,headers,raw,config,*_=period_client
     from smartbi.services import period_reports

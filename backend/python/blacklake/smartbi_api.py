@@ -146,12 +146,20 @@ async def followup(payload: Followup, request: Request):
     if payload.run_id != data['runId']:
         raise HTTPException(409,'数据归档已变化，请刷新该分析后再继续追问')
     if not payload.question.strip():raise HTTPException(422,'请输入需要核对的问题')
-    from .section_insights import answer, section_alerts
+    from .section_insights import answer, section_alerts, operational_answer
     section=next(s for s in data['sectionInsights'] if s['sectionId']==payload.section_id)
     context_alert=None
     if payload.alert_id is not None:
         context_alert=next((a for a in section_alerts(data,payload.section_id) if a['id']==payload.alert_id),None)
         if context_alert is None:raise HTTPException(404,'该异常不属于当前板块或归档，请刷新后重试')
+    focused=operational_answer(data,payload.section_id,payload.question)
+    if focused and context_alert is None:
+        # Current-row checks are complete without waiting for a model. Local AI
+        # period reports keep their independent persistent queue and token log.
+        return {'success':True,'data':{'answer':focused,'sectionId':payload.section_id,'runId':data['runId'],
+                'alertId':None,'engine':'当前明细规则核对',
+                'ai':{'status':'not_requested','message':'本项由当前明细计算；本地AI周期报告独立生成。'}},
+                'message':'已按当前明细核对，不执行业务修改'}
     report=data['dataAlerts']
     if payload.period and os.environ.get('SMARTBI_LOCAL_ANALYST_ENABLED')=='1':
         from . import period_runtime
@@ -173,7 +181,7 @@ async def followup(payload: Followup, request: Request):
         if report.get('ai',{}).get('status')=='complete' and payload.period is None:
             from .section_review import save
             await asyncio.to_thread(save,report,Path(path).resolve().parent/'cost-common-ai.dpapi')
-    text=answer(section,payload.question,[h.model_dump() for h in payload.history])
+    text=answer(section,payload.question,[h.model_dump() for h in payload.history],analysis=data)
     if context_alert:
         from .presentation import readable_text
         text='当前跟进：'+readable_text(context_alert['title'])+'\n'+readable_text(context_alert['message'])+'\n责任角色：'+context_alert['owner']+'\n下一步：'+readable_text(context_alert['action'])+'\n\n'+text

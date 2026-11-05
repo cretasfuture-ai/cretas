@@ -166,6 +166,23 @@ describe('Blacklake prototype page', () => {
     expect(vi.mocked(getBlacklakePeriodReport)).toHaveBeenCalledTimes(1);
   });
 
+  it('publishes a follow-up status update without mutating the loaded snapshot',async()=>{
+    const loaded={...analysis,alertFollowups:{}};vi.mocked(getBlacklakeAnalysis).mockResolvedValue(loaded);
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});await flushPromises();
+    const vm=wrapper.vm as unknown as {data:BlacklakeAnalysis;updateProgress:(value:import('@/api/smartbi/blacklake').AlertFollowup)=>void};
+    vm.updateProgress({alertId:'A1',status:'awaiting_data',note:'待仓库核对',revision:1,updatedBy:1,updatedAt:'2026-11-05T00:00:00Z'});await nextTick();
+    expect(vm.data).not.toBe(loaded);expect(vm.data.alertFollowups?.A1?.status).toBe('awaiting_data');expect(loaded.alertFollowups).toEqual({});wrapper.unmount();
+  });
+
+  it('locates a stock problem outside the selected unit without retaining an incompatible filter',async()=>{
+    vi.mocked(getBlacklakeAnalysis).mockResolvedValue({...analysis,inventory:{...analysis.inventory,records:[{product:'甲',warehouse:'A',unit:'箱',quantity:1},{product:'乙',warehouse:'A',unit:'kg',quantity:-1}]}});
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});await flushPromises();
+    const vm=wrapper.vm as unknown as {inventoryUnit:string;inventoryFocus:string[];locateOperational:(finding:import('../operationsGuidance').OperationsFinding,section:'inventory')=>Promise<void>};
+    vm.inventoryUnit='箱';await nextTick();
+    await vm.locateOperational({code:'stock_negative',kind:'check',title:'负余额',summary:'待核',possibleCauses:'先出后入',owner:'仓库',action:'核原单',keys:['1']},'inventory');await nextTick();
+    expect(vm.inventoryUnit).toBe('__all__');expect(vm.inventoryFocus).toEqual(['1']);wrapper.unmount();
+  });
+
   it('clears the old factory snapshot when auth identity changes', async () => {
     let resolveSecond!: (value: BlacklakeAnalysis) => void;
     vi.mocked(getBlacklakeAnalysis).mockImplementationOnce(() => Promise.resolve({ ...analysis }))

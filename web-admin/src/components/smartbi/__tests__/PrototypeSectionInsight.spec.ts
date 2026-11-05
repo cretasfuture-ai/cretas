@@ -238,6 +238,25 @@ describe('SectionInsight', () => {
     expect(wrapper.text()).not.toContain('领退料与工单关联三元组');
   });
 
+  it('prefills the selected diagnostic and discards an answer from the previous diagnostic',async()=>{
+    let finish:((value:{answer:string;sectionId:string;runId:string;engine:string})=>void)|undefined;
+    askMock.mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+    const wrapper=mount(SectionInsight,{props:{report:makeReport(),contextKey:'stock:negative'}});
+    await wrapper.setProps({openRequest:1,initialQuestion:'负库存找谁核对？'});
+    expect((wrapper.get('input').element as HTMLInputElement).value).toBe('负库存找谁核对？');
+    await wrapper.get('form').trigger('submit');
+    await wrapper.setProps({contextKey:'stock:zero',openRequest:2,initialQuestion:'零余额是否要补货？'});
+    finish?.({answer:'旧负库存回答',sectionId:'material',runId:'run-1',engine:'test'});await flushPromises();
+    expect(wrapper.text()).not.toContain('旧负库存回答');
+    expect((wrapper.get('input').element as HTMLInputElement).value).toBe('零余额是否要补货？');
+  });
+
+  it('opens and prefills a diagnostic when a lazy section mounts after the request',()=>{
+    const wrapper=mount(SectionInsight,{props:{report:makeReport(),contextKey:'period:missing',openRequest:1,initialQuestion:'已完工工单缺什么？'}});
+    expect((wrapper.get('input').element as HTMLInputElement).value).toBe('已完工工单缺什么？');
+    expect(wrapper.get('[aria-expanded="true"]').exists()).toBe(true);
+  });
+
   it('rejects questions longer than 500 characters', async () => {
     const wrapper = mount(SectionInsight, { props: { report: makeReport() } });
     await wrapper.get('[aria-expanded="false"]').trigger('click');

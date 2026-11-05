@@ -36,6 +36,12 @@ def build(analysis):
     cost, production = analysis['cost'], analysis['production']
     review = analysis['eligibleCostReview']
     eligible = review['eligibleProjects']; total = production['projectCount']
+    from .period_projection import instant
+    from zoneinfo import ZoneInfo
+    inventory=analysis['inventory']
+    balance_time=instant(inventory.get('balanceAsOf')) if inventory['records'] else None
+    balance_label=(balance_time.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M')+' 采集的库存余额'
+                   if balance_time else '所选范围暂无已注明采集时间的库存余额')
     common = ['黑湖未说明金额是什么币种，需要财务确认。这里仅包含已记录的材料和人工，未包含所有制造费用，不能用来算完整制造成本或毛利。',
               '还缺每批原料、半成品与成品的对应记录，以及期初尚未做完的货。半成品领料金额若已含上游成本，就不能再加一次上游工单成本。']
     result = {}
@@ -63,7 +69,7 @@ def build(analysis):
                 if alert['title'] not in entry['reasons']:
                     entry['reasons'].append(alert['title'])
         scope = (f'本次采集的全部 {total} 张工单；其中 {eligible} 张资料具备，可展示单位材料加人工成本。'
-                 if key != 'inventory' else '本次采集时的库存余额，以及账号可见的历史出入库记录。')
+                 if key != 'inventory' else balance_label+'；出入库单另按单据时间查看。')
         result[key] = {'sectionId': key, 'title': SECTIONS[key][0], 'summary': summary,
             'observations': observations, 'calculation': calculation, 'hypotheses': hypotheses,
             'limitations': limitations, 'nextSteps': steps,
@@ -132,8 +138,8 @@ def build(analysis):
         ['缺少已核实的标准工时、班次和计划交期，暂时不能确定哪里效率低，或为什么延期。'],
         ['检查审批状态、任务持续时长和最终工序；再补标准工时与排程基准。'])
     inventory = analysis['inventory']
-    add('inventory', f'当前库存返回 {len(inventory["records"])} 行余额，历史出入库单 {inventory["movementOrders"]} 张。',
-        [f'{inventory["pairsNotReturned"]} 个产品/仓库查询组合未返回余额；这不等于零库存。',
+    add('inventory', f'{balance_label}：{len(inventory["records"])} 行；可见历史出入库单 {inventory["movementOrders"]} 张。',
+        [(f'{inventory["pairsNotReturned"]} 个产品/仓库查询组合未返回余额；这不等于零库存。' if inventory['pairsNotReturned'] is not None else '未返回余额的物料与仓库组合数量未知，不能当作零库存。'),
          '库存是采集时点快照；领退料历史与快照不在同一时间粒度。'],
         ['库存按仓库、产品、来源单位分别看；材料成本只使用具备关联且符合状态的领退料单。'],
         ['未返回可能是无记录、查询可见范围或仓库产品组合不适用，不能直接归因。'],
@@ -151,7 +157,49 @@ def build(analysis):
     return list(result.values())
 
 
-def answer(report, question, history=()):
+def operational_answer(analysis, section, question):
+    """Interpret question topics, but derive every fact from authorized current rows."""
+    if not analysis:return ''
+    rows=[];message=owner=action=boundary=''
+    if section=='inventory':
+        records=analysis['inventory']['records']
+        if '负' in question:
+            rows=[r for r in records if isinstance(r.get('quantity'),(int,float)) and r['quantity']<0]
+            message=f'当前范围有 {len(rows)} 行负余额。';owner='仓库负责人'
+            action='按物料、仓库、批次和单位核对实物及最近入出库单，先查是否先出后入、漏入库或错仓。'
+            boundary='这是账面核对线索，尚不能认定实物短缺、丢失或确认原因。'
+        elif '零余额' in question or '补货' in question:
+            rows=[r for r in records if r.get('quantity')==0]
+            message=f'当前范围有 {len(rows)} 行零余额。';owner='仓库 / 生产计划负责人'
+            action='先对照近期生产需求、在途采购和安全库存，再决定是否补货。'
+            boundary='零余额不直接等于缺料；没有需求与到货资料，不能给采购数量。'
+        if message:
+            examples='；'.join(f"{r['product']} / {r['warehouse']}：{fmt(r['quantity'])} {r.get('unit') or '单位待补'}" for r in rows[:5])
+    elif section=='production':
+        if '单位' in question or '良品率' in question or '不良率' in question:
+            rows=[r for r in analysis['production']['quality'] if not r.get('unit') or r.get('missingRecords')]
+            message=f'当前有 {len(rows)} 组报工的单位或数量资料待核。';owner='质量负责人 / 车间主管'
+            action='补对应原始报工的良品数、不良品数及报工单位，再按同产品、同工序、同单位核对。'
+            boundary='不能把最终成品单位套到中间工序；资料未核实前不发布这些分组的良品率或不良率。'
+        elif '低于计划' in question or '超过计划' in question:
+            below='低于计划' in question
+            rows=[r for r in analysis['production']['planActual'] if r.get('unit') and r.get('actual') is not None and r.get('planned') is not None and (r['actual']<r['planned'] if below else r['actual']>r['planned'])]
+            message=f"当前有 {len(rows)} 组产品实际产量{'低于' if below else '超过'}计划。";owner='生产主管 / 计划负责人'
+            action='先核在制状态、计划变更、报工审批和计量单位；已完工工单再对照最终良品和成品入库。'
+            boundary='数量差额本身不证明延期、损耗、超耗或重复报工。'
+        if message:examples='；'.join(str(r.get('productCode') or r.get('product') or '产品待核')+' / '+str(r.get('process') or r.get('unit') or '单位待补') for r in rows[:5])
+    elif section=='finished' and ('成本' in question or '完工' in question):
+        rows=[r for r in analysis['cost']['projects'] if not r['unitCostAvailable'] and str(r['status'])=='20']
+        unfinished=[r for r in analysis['cost']['projects'] if str(r['status'])!='20']
+        message=f'当前有 {len(rows)} 张已完工工单暂不能核算单位成本，另有 {len(unfinished)} 张未完工或未确认完工。'
+        owner='生产 / 仓库 / 财务负责人';action='逐张打开工单缺项：生产核良品与审批，仓库核领退料归属，财务核历史计价及任务工资。'
+        boundary='未完工不等于漏数据；缺失金额不按零计，补齐后才能判断单位成本和同产品差异。'
+        examples='、'.join(r['projectCode'] for r in rows[:5])
+    if not message:return ''
+    return '\n\n'.join([message,'找谁处理：'+owner+'。'+action,('先核这些明细（最多列五项）：'+examples) if examples else '当前范围没有命中明细。',boundary])
+
+
+def answer(report, question, history=(), analysis=None):
     """Choose disclosed evidence, never guess missing facts or execute actions."""
     q = question.strip()
     if q in ('继续', '详细一点', '展开说说'):
@@ -166,6 +214,8 @@ def answer(report, question, history=()):
         groups = [('建议核对', report['nextSteps']), ('当前限制', report['limitations'])]
     else:
         groups = [('当前可回答的证据', report['observations']), ('可继续问', report['suggestedQuestions'])]
+    focused=operational_answer(analysis,report['sectionId'],q)
+    if focused:return focused
     text = [report['title']+'：'+report['summary']]
     if report.get('scopeDescription'):
         text.append('分析范围：'+report['scopeDescription'])

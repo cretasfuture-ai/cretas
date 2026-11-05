@@ -156,7 +156,7 @@ def build(data, metadata):
         complete = [r for r in rows if number(r.get('numberofgoodProducts')) is not None and number(r.get('numberofDefectives')) is not None]
         good = amount([number(r['numberofgoodProducts']) for r in complete]) if len(complete)==len(rows) else None
         bad = amount([number(r['numberofDefectives']) for r in complete]) if len(complete)==len(rows) else None
-        quality_rows.append({'productCode':code,'product':product,'process':process_names.get(process) or str(process),'unit':unit,
+        quality_rows.append({'productCode':code,'product':product,'processId':process,'process':process_names.get(process) or str(process),'unit':unit,
                              'good':good,'defective':bad,'goodRate':good/(good+bad) if good is not None and good+bad>0 else None,
                              'records':len(rows),'missingRecords':len(rows)-len(complete)})
     process_groups = defaultdict(list)
@@ -166,9 +166,10 @@ def build(data, metadata):
     for (process_id,name),rows in process_groups.items():
         seconds = complete_amount([number(r.get('outputDurationForSecond')) for r in rows])
         process_rows.append({'processId':process_id,'process':name,'tasks':len(rows),'hours':seconds/3600 if seconds is not None else None,
+                             'projectIds':sorted({r['projectId'] for r in rows if r.get('projectId') in project_by_id},key=str),
                              'inProgress':sum(str(r.get('processStatus'))=='10' for r in rows),
                              'missingDurationTasks':sum(number(r.get('outputDurationForSecond')) is None for r in rows)})
-    balances = [{'product':r.get('productName') or r.get('productCode'),'warehouse':r.get('warehouseName') or r.get('warehouseCode'),
+    balances = [{'product':r.get('productName') or r.get('productCode'),'productCode':r.get('productCode'),'warehouse':r.get('warehouseName') or r.get('warehouseCode'),
                  'warehouseKey':r.get('warehouseId') or r.get('warehouseCode') or 'unknown:'+str(i),
                  'warehouseCode':r.get('warehouseCode'),'unit':r.get('unitName'),'quantity':number(r.get('qtyInWarehouse'))} for i,r in enumerate(data.get('stock',[]))]
     inventory_groups=defaultdict(list)
@@ -180,6 +181,7 @@ def build(data, metadata):
     material_rows=[{'materialCode':code,'material':name,'unit':unit,
                    'netConsumption':complete_amount([r['netConsumption'] for r in rows]),
                    'recognizedCost':amount([r['recognizedCost'] for r in rows]),'lines':len(rows),
+                   'missingCostLines':sum(r['recognizedCost'] is None for r in rows),
                    'missingQuantityLines':sum(r['netConsumption'] is None for r in rows),
                    'knownCostLines':sum(r['recognizedCost'] is not None for r in rows)}
                    for (code,name,unit),rows in material_totals.items()]
@@ -203,9 +205,13 @@ def build(data, metadata):
     return serial({'factoryName':'六膳门','snapshotAt':snapshot,'runId':metadata['run_id'],
                    'catalog':[{'resource':key,'count':len(rows)} for key,rows in sorted(data.items())],
                    'production':{'projectCount':len(projects),'taskCount':len(tasks),'outputCount':len(outputs),
+                                 'approvedOutputCount':sum(str(r.get('approvalStatus'))=='10' for r in outputs),
+                                 'unapprovedOutputCount':sum(str(r.get('approvalStatus'))!='10' for r in outputs),
                                  'statuses':dict(status),'completionRate':status['20']/len(projects) if projects else None,
                                  'planActual':plan_actual,'quality':quality_rows,'processes':process_rows},
                    'inventory':{'records':balances,'byWarehouseUnit':inventory_totals,
+                                'balanceAsOf':metadata.get('stock_finished_at',metadata.get('finished_at')) if balances else None,
+                                'lastAvailableBalanceAt':metadata.get('stock_finished_at',metadata.get('finished_at')),
                                 'pairsNotReturned':metadata['stock_pairs_not_returned'],'movementOrders':len(orders)},
                    'cost':{'projects':cost_rows,'materials':material_rows,'linkedMaterialLines':linked_lines,
                            'unlinkedMaterialLines':unlinked,'excludedUnapprovedOrders':excluded_orders,

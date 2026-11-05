@@ -262,7 +262,12 @@ async def reconcile_windows(config, db, key, limit=10):
     from smartbi.services.period_windows import parse_window
     from smartbi.services.period_reports import DEFINITION_VERSION
     from .full_archive import digest
-    done_key = 'reconcile:' + config['run_id'] + ':' + DEFINITION_VERSION
+    revision=config['run_id']
+    if os.environ.get('BLACKLAKE_OPERATIONAL_SOURCE_FILE'):
+        if await authorized_actor(config) is None:raise RuntimeError('PERIOD_COST_AUTHORITY_UNAVAILABLE')
+        from .operational_source import source_revision
+        revision=source_revision(config,os.environ['BLACKLAKE_OPERATIONAL_SOURCE_FILE'],os.environ.get('BLACKLAKE_OPERATIONAL_BOM_FILE'))
+    done_key = 'reconcile:' + revision + ':' + DEFINITION_VERSION
     if await asyncio.to_thread(db.schedule_seen, key, done_key):
         return 0
     if await authorized_actor(config) is None:
@@ -299,6 +304,11 @@ async def tick(anchor, now=None):
     from .period_projection import instant
     import math
     config = live_config(anchor)
+    revision=config['run_id']
+    if os.environ.get('BLACKLAKE_OPERATIONAL_SOURCE_FILE'):
+        if await authorized_actor(config) is None:raise RuntimeError('PERIOD_COST_AUTHORITY_UNAVAILABLE')
+        from .operational_source import source_revision
+        revision=source_revision(config,os.environ['BLACKLAKE_OPERATIONAL_SOURCE_FILE'],os.environ.get('BLACKLAKE_OPERATIONAL_BOM_FILE'))
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     db = store(); key = scope(config)
     checkpoint = await asyncio.to_thread(db.schedule_checkpoint, key)
@@ -307,7 +317,7 @@ async def tick(anchor, now=None):
     days = math.ceil((end-lower).total_seconds()/86400) + 1
     events = [e for e in due_periods(end,lookback_days=days,preview=True) if instant(e['dueAt']) >= lower]
     for event in events:
-        event['storageKey'] = event['key'] + ':source:' + config['run_id'] + ':definition:' + DEFINITION_VERSION
+        event['storageKey'] = event['key'] + ':source:' + revision + ':definition:' + DEFINITION_VERSION
     pending = [e for e in events if not await asyncio.to_thread(db.schedule_seen, key, e['storageKey'])]
     if pending:
         if await authorized_actor(config) is None:
@@ -321,7 +331,7 @@ async def tick(anchor, now=None):
         await asyncio.to_thread(db.mark_schedule, key, event['storageKey'], result['id'])
     await reconcile_windows(config, db, key)
     await asyncio.to_thread(db.schedule_checkpoint, key, end)
-    _last_tick = end.isoformat(); _schedule_error = None; _source_run = config['run_id']
+    _last_tick = end.isoformat(); _schedule_error = None; _source_run = revision
     ensure_worker(config)
     return len(pending)
 

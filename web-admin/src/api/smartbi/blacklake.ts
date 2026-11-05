@@ -74,6 +74,8 @@ export interface CostProject {
   materialLinesDetail: MaterialLine[]; processes: ProcessLine[]; issues: string[]; unitCostAvailable: boolean;
 }
 export interface BlacklakeAnalysis {
+  latestCompletedDate?:string|null;
+  operationalSource?:{workOrdersCheckedAt:string;inventoryCheckedAt:string|null;baselineAnchor:string;observationId:string};
   alertFollowups?: Record<string, AlertFollowup>;
   periodMetadata?: BlacklakePeriodMetadata;
   sectionInsights?: SectionInsightReport[];
@@ -82,13 +84,13 @@ export interface BlacklakeAnalysis {
   costIntelligence: BlacklakeCostIntelligence;
   factoryName: string; snapshotAt: string; runId: string; coverageComplete: boolean;
   catalog: { resource: string; count: number }[]; findings: string[]; limitations: string[];
-  production: { projectCount: number; taskCount: number; outputCount: number; completionRate: number | null; statuses: Record<string, number>;
-    planActual: { product: string; unit: string; planned: number | null; actual: number | null; projects: number; plannedMissing: number; actualMissing: number }[];
-    quality: { product: string; process: string; unit: string; good: number | null; defective: number | null; goodRate: number | null; records: number; missingRecords: number }[];
-    processes: { process: string; tasks: number; hours: number | null; inProgress: number; missingDurationTasks: number }[]; };
-  inventory: { records: { product: string; warehouse: string; unit: string; quantity: number | null }[];
-    byWarehouseUnit: { warehouse: string; unit: string; quantity: number | null; records: number; missing: number }[]; pairsNotReturned: number | null; movementOrders: number; };
-  cost: { projects: CostProject[]; projectDates?: Record<string, { completedAt: string | null; createdAt: string | null }>; materials: { materialCode: string; material: string; unit: string; netConsumption: number | null; recognizedCost: number | null; lines: number }[];
+  production: { projectCount: number; taskCount: number; outputCount: number; completionRate: number | null; statuses: Record<string, number>;approvedOutputCount?:number;unapprovedOutputCount?:number;completionRateApplicable?:boolean;
+    planActual: { productCode?:string|null;product: string; unit: string; planned: number | null; actual: number | null; projects: number; plannedMissing: number; actualMissing: number }[];
+    quality: { productCode?:string|null;processId?:number|string|null;product: string; process: string; unit: string; good: number | null; defective: number | null; goodRate: number | null; records: number; missingRecords: number }[];
+    processes: { processId?:number|string|null;projectIds?:(number|string)[];process: string; tasks: number; hours: number | null; inProgress: number; missingDurationTasks: number }[]; };
+  inventory: { records: { productCode?:string|null;warehouseKey?:string;warehouseCode?:string;product: string; warehouse: string; unit: string; quantity: number | null }[];
+    byWarehouseUnit: { warehouseKey?:string;warehouse: string; unit: string; quantity: number | null; records: number; missing: number }[]; pairsNotReturned: number | null; movementOrders: number;balanceAsOf?:string|null;lastAvailableBalanceAt?:string|null; };
+  cost: { projects: CostProject[]; projectDates?: Record<string, { completedAt: string | null; createdAt: string | null }>; materials: { materialCode: string; material: string; unit: string; netConsumption: number | null; recognizedCost: number | null; lines: number;missingCostLines?:number }[];
     linkedMaterialLines: number; unlinkedMaterialLines: number; excludedUnapprovedOrders: number; knownMaterialCostLines: number; sourceZeroCostLines: number; knownLaborTasks: number; unitCostAvailableProjects: number; fullManufacturingCost: null; grossProfit: null; };
 }
 
@@ -99,6 +101,9 @@ export interface BlacklakePeriodMetadata {
   startDate: string; endDate: string; kind: BlacklakePeriodKind; basis: BlacklakePeriodBasis; timezone: string;
   fingerprint: string; scopeDescription: string; dataAsOf: string; unassignedProjects: number; selectedProjects: number;
   coverageStatus: string; inventoryStatus: string; unassignedMovementOrders?: number;
+  unassignedCompletedProjects?:number;inventoryAsOf?:string|null;lastAvailableInventoryAsOf?:string|null;latestCompletedDate?:string|null;
+  unassignedCompletedProjectIds?:(number|string)[];
+  unassignedProjectIds?:(number|string)[];
 }
 export interface BlacklakePeriodJob {
   id: string; status: 'queued' | 'running' | 'ready' | 'failed'; period: Omit<BlacklakePeriodMetadata, 'fingerprint' | 'scopeDescription' | 'dataAsOf' | 'unassignedProjects' | 'selectedProjects' | 'coverageStatus' | 'inventoryStatus'>;

@@ -16,6 +16,8 @@ const props = withDefaults(defineProps<{
   period?: BlacklakePeriodQuery | null;
   focusAlert?: CostDataAlert | null;
   openRequest?: number;
+  initialQuestion?:string;
+  contextKey?:string;
 }>(), {
   focusAlert: null,
   openRequest: undefined,
@@ -26,7 +28,7 @@ const emit = defineEmits<{
   (event: 'locate-order', projectId: number): void;
 }>();
 
-const question = ref('');
+const question = ref((props.openRequest??0)>0?(props.initialQuestion??'').slice(0,500):'');
 const history = ref<ChatMessage[]>([]);
 const loading = ref(false);
 const error = ref('');
@@ -46,6 +48,7 @@ const sectionIdentity = computed(() => [
   authIdentity.value,
   props.report.scope.runId,
   props.report.sectionId,
+  props.contextKey??'',
   JSON.stringify(props.period ?? null),
   props.focusAlert?.id ?? '',
   JSON.stringify(props.report),
@@ -72,18 +75,17 @@ function resetConversation() {
 }
 
 const previousFocusAlertId = ref(focusAlertId.value);
-watch(sectionIdentity, () => {
-  const focusChanged = previousFocusAlertId.value !== focusAlertId.value;
-  previousFocusAlertId.value = focusAlertId.value;
-  resetConversation();
-  chatOpen.value = Boolean(focusChanged && focusAlertId.value);
-  if (chatOpen.value) nextTick(() => questionInput.value?.focus());
-});
-
-watch(() => props.openRequest, (value, previous) => {
-  if (value === undefined || value === previous || value <= 0) return;
-  chatOpen.value = true;
-  nextTick(() => questionInput.value?.focus());
+watch([sectionIdentity,()=>props.openRequest], ([identity,value],[previousIdentity,previous]) => {
+  if(identity!==previousIdentity){
+    const focusChanged=previousFocusAlertId.value!==focusAlertId.value;
+    previousFocusAlertId.value=focusAlertId.value;
+    resetConversation();chatOpen.value=Boolean(focusChanged&&focusAlertId.value);
+  }
+  if(value!==undefined&&value!==previous&&value>0){
+    chatOpen.value=true;
+    if(props.initialQuestion)question.value=props.initialQuestion.slice(0,500);
+  }
+  if(chatOpen.value)nextTick(()=>questionInput.value?.focus());
 });
 
 function toggleChat() {

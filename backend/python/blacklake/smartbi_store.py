@@ -60,6 +60,14 @@ def read(value, period=None):
             raise RuntimeError('SMARTBI_DATASET_INTEGRITY_FAILED')
         data=defaultdict(list)
         for resource,_,_,payload in records: data[resource].append(payload)
+        operational = os.environ.get('BLACKLAKE_OPERATIONAL_SOURCE_FILE')
+        if operational:
+            from .operational_source import load_observation
+            data,metadata=load_observation(data,metadata,value,operational,os.environ.get('BLACKLAKE_OPERATIONAL_BOM_FILE'))
+        from .period_projection import instant
+        from zoneinfo import ZoneInfo
+        completed=[instant(p.get('actualEndTime')) for p in data['project'] if str(p.get('status'))=='20']
+        metadata={**metadata,'latest_completed_date':max((d.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat() for d in completed if d is not None),default=None)}
         evidence=None
         if value.get('gap_evidence_file'):
             evidence=load_local_secret(value['gap_evidence_file'])
@@ -69,8 +77,13 @@ def read(value, period=None):
         trusted=evidence and evidence.get('status')=='complete' and evidence.get('negativeControlVerified') is True
         if trusted:
             for row in evidence.get('verifiedMaterialParents',[]):parents[row['projectId']].append(row['materialId'])
+        if operational:
+            # The archived recheck has separately verified parent-query controls.
+            parents=defaultdict(list,{p['projectId']:p['materialIds'] for p in metadata['operational_parent_controls']})
+            trusted=True
+            evidence=None  # Baseline supplemental evidence is not a current probe.
         controls=[{'projectId':pid,'dualQueryEqual':True,'materialIds':ids} for pid,ids in parents.items()]
-        trace=mapped(data,build(data,metadata),scope[:2],value['run_id'],metadata.get('finished_at'),controls,bool(trusted))
+        trace=mapped(data,build(data,metadata),scope[:2],metadata['run_id'],metadata.get('finished_at'),controls,bool(trusted))
         period_metadata=None
         if period is not None:
             from .period_projection import project_period
@@ -78,6 +91,8 @@ def read(value, period=None):
             # Whole-history supplemental evidence is never relabeled as a period probe.
             evidence=None
         analysis=build(data,metadata)
+        analysis['operationalSource']=metadata.get('operational_source')
+        analysis['latestCompletedDate']=metadata.get('latest_completed_date')
         analysis['costTraceability']=subset(trace,[p['id'] for p in data['project']],analysis['runId']) if period is not None else trace
         analysis['costIntelligence']=enrich(analysis,data,metadata,evidence)
         if period_metadata is not None:

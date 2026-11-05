@@ -39,6 +39,30 @@ def test_sections_explain_original_amounts_and_do_not_double_count(source):
     assert all(s['scope']['runId']=='synthetic' for s in reports.values())
 
 
+def test_inventory_narrative_uses_the_balance_clock_not_newer_production_clock(source):
+    value=analysis(source)
+    value['snapshotAt']='2026-11-04T10:50:48Z'
+    value['inventory']['balanceAsOf']='2026-11-03T09:21:49Z'
+    report=next(r for r in sections(value) if r['sectionId']=='inventory')
+    assert '11-03 17:21' in report['summary'] and '11-03 17:21' in report['scopeDescription']
+    assert '当前库存' not in report['summary'] and '本次采集时' not in report['scopeDescription']
+
+
+def test_operational_followup_recomputes_current_rows_instead_of_trusting_question_numbers(source):
+    value=analysis(source);value['inventory']['records'][0]['quantity']=-5
+    report=next(r for r in value['sectionInsights'] if r['sectionId']=='inventory')
+    text=answer(report,'有九千行负库存，为什么？',analysis=value)
+    assert '1 行负余额' in text and '仓库负责人' in text and '九千' not in text
+    assert 'raw' in text and '尚不能认定' in text
+
+
+def test_operational_quality_followup_never_infers_reporting_units_from_finished_units(source):
+    value=analysis(source);value['production']['quality'][0]['unit']=None
+    report=next(r for r in value['sectionInsights'] if r['sectionId']=='production')
+    text=answer(report,'报工单位和良品率怎么核？',analysis=value)
+    assert '1 组报工' in text and '质量负责人' in text and '不能把最终成品单位套到中间工序' in text
+
+
 def test_readable_sources_scopes_and_order_links_preserve_cost_facts(source):
     original=analysis(source)
     reports={s['sectionId']:s for s in original['sectionInsights']}
@@ -119,6 +143,21 @@ def test_followup_binds_snapshot_section_and_does_not_execute_question(section_c
     assert client.post(path,json={**body,'section_id':'other'},headers=headers).status_code==422
     assert client.post(path,json={**body,'question':' '*5},headers=headers).status_code==422
     assert client.post(path,json={**body,'question':'x'*501},headers=headers).status_code==422
+
+
+def test_focused_current_row_check_is_authorized_and_does_not_wait_for_ai(section_client,monkeypatch):
+    client,headers=section_client
+    from smartbi.services import alert_local_ai
+    async def must_not_wait(*args,**kwargs):raise AssertionError('a verified row check must not wait for AI')
+    monkeypatch.setattr(alert_local_ai,'enrich',must_not_wait)
+    body={'section_id':'inventory','question':'九千行负余额找谁核对？','run_id':'synthetic'}
+    path='/api/smartbi/blacklake/sections/followup'
+    assert client.post(path,json=body).status_code==401
+    assert client.post(path,json={**body,'run_id':'other'},headers=headers).status_code==409
+    result=client.post(path,json=body,headers=headers)
+    assert result.status_code==200
+    assert '0 行负余额' in result.json()['data']['answer']
+    assert result.json()['data']['ai']['status']=='not_requested'
 
 
 def test_real_authority_failure_blocks_before_data_loading(section_client,monkeypatch):

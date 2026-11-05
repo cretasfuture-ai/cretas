@@ -19,12 +19,16 @@ def project_period(data, metadata, window):
     """Return a new scoped source view. Dates are inclusive in UI, half-open in UTC."""
     source = deepcopy(data)
     selected, unassigned, unassigned_completed = [], 0, 0
+    undated_completed_ids=[]
+    undated_ids=[]
     date_field = 'actualEndTime' if window.basis == 'completed' else 'createTime'
     for project in data.get('project', []):
         when = instant(project.get(date_field))
         if when is None:
             unassigned += 1
+            undated_ids.append(project['id'])
             unassigned_completed += str(project.get('status')) == '20'
+            if str(project.get('status'))=='20':undated_completed_ids.append(project['id'])
         if (when is not None and window.start_at <= when < window.end_at
                 and (window.basis != 'completed' or str(project.get('status')) == '20')):
             selected.append(project)
@@ -53,30 +57,36 @@ def project_period(data, metadata, window):
     source['stock_order'] = movements
     # Reference definitions are not additive period facts. Keep them for identity checks.
     # Snapshot balances cannot reconstruct historical closing balances.
-    snapshot = instant(metadata.get('finished_at'))
+    snapshot = instant(metadata.get('stock_finished_at',metadata.get('finished_at')))
     snapshot_in_period = snapshot is not None and window.start_at <= snapshot < window.end_at
     if not snapshot_in_period:
         source['stock'] = []
     for resource in ('materials', 'project_expand'):
         source[resource] = [p for p in source.get(resource, []) if str(p.get('projectId')) in ids]
     semantic_period = {k: v for k, v in window.wire().items() if k not in ('kind', 'canonicalRange')}
-    fingerprint = digest({'period': semantic_period, 'projectionVersion': 1, 'data': source,
-                          'sourceRun': metadata['run_id'], 'dataAsOf': metadata['finished_at']})
+    fingerprint = digest({'period': semantic_period, 'projectionVersion': 2, 'data': source,
+                          'sourceRun': metadata['run_id'], 'dataAsOf': metadata['finished_at'],
+                          'inventoryAsOf':metadata.get('stock_finished_at',metadata.get('finished_at'))})
     scoped_metadata = {**metadata, 'run_id': metadata['run_id'] + ':period:' + fingerprint[:20],
                        'stock_pairs_not_returned': metadata.get('stock_pairs_not_returned') if snapshot_in_period else None}
     basis = '实际完工日期' if window.basis == 'completed' else '工单创建日期'
     scope_description = (f'{window.start_date.isoformat()} 至 {window.end_date.isoformat()}（北京时间，含首尾日期），'
                          f'按{basis}选择 {len(selected)} 张工单。材料与人工取这些工单在本次快照中记录的完整生命周期成本，'
                          '包括跨天领退料和后续补录；不是期间实际发生费用，也不是当时已知的历史关账结果。')
-    coverage = ('source_snapshot_before_period_end' if snapshot is None or snapshot < window.end_at
-                else 'source_completeness_unverified')
+    source_checked=instant(metadata.get('finished_at'))
+    coverage = ('source_time_unknown' if source_checked is None else 'source_snapshot_before_period_end'
+                if source_checked < window.end_at else 'source_completeness_unverified')
     return source, scoped_metadata, {
         **window.wire(), 'fingerprint': fingerprint, 'scopeDescription': scope_description,
         'dataAsOf': metadata['finished_at'], 'baseRunId': metadata['run_id'],
         'unassignedProjects': unassigned, 'unassignedCompletedProjects': unassigned_completed,
+        'unassignedCompletedProjectIds':undated_completed_ids,
+        'unassignedProjectIds':undated_ids,
         'selectedProjects': len(selected), 'coverageStatus': coverage,
         'inventoryStatus': 'snapshot_within_period' if snapshot_in_period else 'historical_balance_unavailable',
-        'inventoryAsOf': metadata['finished_at'] if snapshot_in_period else None,
+        'inventoryAsOf': metadata.get('stock_finished_at',metadata.get('finished_at')) if snapshot_in_period else None,
+        'lastAvailableInventoryAsOf':metadata.get('stock_finished_at',metadata.get('finished_at')),
+        'latestCompletedDate':metadata.get('latest_completed_date'),
         'periodMovementOrders': len(period_movements),
         'unassignedMovementOrders': undated_movements,
         'sourceDateField': date_field,
