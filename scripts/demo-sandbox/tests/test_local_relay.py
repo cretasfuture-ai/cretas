@@ -80,6 +80,8 @@ class RelayTests(unittest.TestCase):
             self.assertEqual(call({'Origin':'http://localhost.evil:5186'})[0],403)
             self.assertEqual(call({'Content-Length':str(MAX_BODY+1)},method='POST')[0],403)
             self.assertEqual(call({'Transfer-Encoding':'chunked'},method='POST')[0],403)
+            self.o.open=lambda req,timeout=20:(_ for _ in ()).throw(OSError('test upstream down'))
+            self.assertEqual(call({})[0],503)
         finally: server.shutdown();server.server_close();worker.join(2)
     def test_only_own_authorization_reads_survive_preparation(self):
         original=self.o.open

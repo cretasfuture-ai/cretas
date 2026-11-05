@@ -10,6 +10,7 @@ from urllib.error import HTTPError
 MAX_BODY=16*1024*1024; ACTOR='1309'; PROD='https://admin.cretaceousfuture.com'
 UUID=r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 class RelayError(RuntimeError): pass
+class RelayUnavailable(RelayError): pass
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self,*a): return None
 class Relay:
@@ -28,7 +29,7 @@ class Relay:
             data=e.read(MAX_BODY+1)
             if len(data)>MAX_BODY or 300<=e.code<400: raise RelayError('upstream response denied')
             return e.code,dict(e.headers),data
-        except Exception as e: raise RelayError('upstream unavailable') from e
+        except Exception as e: raise RelayUnavailable('upstream unavailable') from e
     def _caller(self,headers):
         h={k:v for k,v in headers.items() if k.lower() in {'authorization','cookie','accept'}}
         status,_,raw=self._json(PROD+'/api/mobile/auth/me',h)
@@ -47,7 +48,7 @@ class Relay:
             value=json.loads(raw)
             if status!=200 or value.get('success') is not True or 'data' not in value: raise ValueError()
             return value['data']
-        except (ValueError,TypeError,AttributeError): raise RelayError('upstream state unverified') from None
+        except (ValueError,TypeError,AttributeError): raise RelayUnavailable('upstream state unverified') from None
     def request(self,path,method='GET',headers=None,body=None):
         headers=headers or {}; parsed=urlsplit(path); route=parsed.path; suffix=parsed.query
         if parsed.scheme or parsed.netloc or parsed.fragment or re.search(r'%2f|%5c|%2e|\\|//',route,re.I) or any(p in {'.','..'} for p in route.split('/')): raise RelayError('ambiguous route denied')
@@ -112,8 +113,8 @@ class Handler(BaseHTTPRequestHandler):
             status,h,data=self.relay.request(self.path,self.command,self.headers,body)
             self.send_response(status); self.send_header('Cache-Control','no-store'); self.send_header('Content-Type',h.get('Content-Type','application/json')); self.send_header('Content-Length',str(len(data))); self.end_headers()
             if self.command!='HEAD': self.wfile.write(data)
-        except Exception:
-            data=json.dumps({'success':False,'message':'本机演示请求未完成，请核对账号与隔离状态'},ensure_ascii=False).encode(); self.send_response(403); self.send_header('Content-Type','application/json'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Length',str(len(data))); self.end_headers()
+        except Exception as error:
+            data=json.dumps({'success':False,'message':'本机演示请求未完成，请核对账号与隔离状态'},ensure_ascii=False).encode(); self.send_response(503 if isinstance(error,RelayUnavailable) else 403); self.send_header('Content-Type','application/json'); self.send_header('Cache-Control','no-store'); self.send_header('Content-Length',str(len(data))); self.end_headers()
             if self.command!='HEAD': self.wfile.write(data)
     do_GET=do_POST=do_PUT=do_PATCH=do_DELETE=do_HEAD=_handle
     def log_message(self,*a): pass
