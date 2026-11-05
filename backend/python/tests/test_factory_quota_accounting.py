@@ -53,6 +53,33 @@ def test_model_aliases_and_snapshots_use_the_documented_shared_group(model,group
     assert quota_group(model)==group
 
 
+def test_http_requests_share_the_large_bucket_without_borrowing_from_mini(tmp_path,monkeypatch):
+    from .test_factory_accuracy_protocol import fake_client
+    api,root,requests=fake_client(tmp_path,monkeypatch)
+    async def scenario():
+        client=api.SyntheticClient(root)
+        await client.ask('luna','gpt-6-luna','classify','synthetic',{'type':'object'},20)
+        await client.ask('large',LARGE,'classify','synthetic',{'type':'object'},20)
+        await client.ask('mini',SMALL,'classify','synthetic',{'type':'object'},20)
+        assert client.used=={LARGE:24,SMALL:12} and len(requests)==3
+        client.used[LARGE]=api.CAPS[LARGE]-1
+        with pytest.raises(ValueError,match='ceiling'):await client.ask('too-much','gpt-6-luna','classify','synthetic',{'type':'object'},20)
+        assert len(requests)==3
+        await client.close()
+    asyncio.run(scenario())
+
+
+def test_full_large_group_does_not_block_a_mini_request(tmp_path,monkeypatch):
+    from .test_factory_accuracy_protocol import fake_client
+    api,root,requests=fake_client(tmp_path,monkeypatch)
+    async def scenario():
+        client=api.SyntheticClient(root);client.used[LARGE]=api.CAPS[LARGE]+100
+        await client.ask('mini',SMALL,'classify','synthetic',{'type':'object'},20)
+        assert len(requests)==1 and client.used[SMALL]==12
+        await client.close()
+    asyncio.run(scenario())
+
+
 def test_closing_client_drains_inflight_responses_instead_of_making_them_unknown(tmp_path,monkeypatch):
     import factory_accuracy_api as api
     monkeypatch.setattr(Path,'home',classmethod(lambda cls:tmp_path))

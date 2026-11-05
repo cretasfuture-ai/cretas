@@ -82,6 +82,7 @@ class SyntheticClient:
         await self.http.aclose()
 
     async def ask(self,id,model,instructions,content,schema,max_output=4096,effort='low'):
+        group=quota_group(model)
         payload=dict(model=model,store=False,reasoning=dict(effort=effort),instructions=instructions,input=content,max_output_tokens=max_output,text=dict(format=dict(type='json_schema',name='synthetic_intent_data',strict=True,schema=schema)))
         encoded=json.dumps(payload,ensure_ascii=False)
         fingerprint=hashlib.sha256(encoded.encode()).hexdigest()
@@ -95,10 +96,10 @@ class SyntheticClient:
             if dt.datetime.now(dt.timezone.utc).date().isoformat()!=self.budget_day:
                 self.stop=True;raise ValueError('UTC day changed; reopen client after pending requests settle')
             reserve=len(encoded.encode('utf-8'))+max_output
-            if self.used[model]+self.reserved[model]+reserve>CAPS[model]:
+            if self.used[group]+self.reserved[group]+reserve>CAPS[group]:
                 self.stop=True;raise ValueError('Known daily token ceiling reached')
-            reservation=dict(id=id,model=model,day=dt.datetime.now(dt.timezone.utc).date().isoformat(),state='pending',payload_sha256=fingerprint,reserved_tokens=reserve)
-            self.ledger.append(reservation);self.reserved[model]+=reserve;self.persist()
+            reservation=dict(id=id,model=model,quota_group=group,day=dt.datetime.now(dt.timezone.utc).date().isoformat(),state='pending',payload_sha256=fingerprint,reserved_tokens=reserve)
+            self.ledger.append(reservation);self.reserved[group]+=reserve;self.persist()
             task=asyncio.current_task();self.active.add(task)
             start=time.perf_counter();result=dict(id=id,model=model,day=dt.datetime.now(dt.timezone.utc).date().isoformat(),payload_sha256=fingerprint)
             try:
@@ -116,13 +117,13 @@ class SyntheticClient:
                     texts=[part.get('text','') for item in body.get('output',[]) for part in item.get('content',[]) if part.get('type')=='output_text']
                     result['parsed']=json.loads(''.join(texts))
                     if not result['usage']:raise ValueError('Missing usage')
-                    self.used[model]+=result['usage']['input_tokens']+result['usage'].get('output_tokens',0)
+                    self.used[group]+=result['usage']['input_tokens']+result['usage'].get('output_tokens',0)
                 reservation['state']='completed'
             except Exception as exc:
                 result['error']=type(exc).__name__;self.stop=True
                 if 'status' in result:reservation['state']='completed'
             finally:
-                self.reserved[model]-=reserve;self.persist()
+                self.reserved[group]-=reserve;self.persist()
                 serialized=json.dumps(result,ensure_ascii=False)
                 if self.key in serialized:raise ValueError('Credential in output')
                 with self.path.open('a',encoding='utf-8') as f:f.write(serialized+'\n')
