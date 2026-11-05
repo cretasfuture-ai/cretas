@@ -4,6 +4,7 @@ import StockReconciliation from '@/components/smartbi/StockReconciliation.vue';
 import LiveMonitor from '@/components/smartbi/LiveMonitor.vue';
 import SavedAnalysisReport from '@/components/smartbi/SavedAnalysisReport.vue';
 import {getBlacklakeLiveMonitor,type LiveMonitorReport} from '@/api/smartbi/blacklake-live';
+import type { PythonServiceError } from '@/api/smartbi/common';
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import { createBlacklakePeriodReport, getBlacklakeAnalysis, getBlacklakePeriodReport, getBlacklakePeriodSchedule, listBlacklakePeriodReports, type AlertFollowup, type BlacklakeAnalysis, type BlacklakePeriodJob, type BlacklakePeriodQuery, type BlacklakePeriodSchedule, type CostDataAlert, type CostProject, type SectionInsightReport } from '@/api/smartbi/blacklake';
 import DynamicChartRenderer from '@/components/smartbi/DynamicChartRenderer.vue';
@@ -35,6 +36,7 @@ let liveTimer:number|undefined;
 let liveOffset=0;
 let liveReading=false;
 let liveSuccess:string|null=null;
+let liveChanges:number|null=null;
 async function refreshLive(offset=liveOffset){
   if(liveReading)return;
   liveReading=true;
@@ -43,15 +45,12 @@ async function refreshLive(offset=liveOffset){
     const report=await getBlacklakeLiveMonitor(offset);
     if(!mounted.value||identity!==authIdentity.value)return;
     liveOffset=offset;liveMonitor.value=report;liveError.value='';
-    if(liveSuccess&&report.lastSuccessAt!==liveSuccess&&!loading.value){
-      const generation=periodRequestGeneration.value;
-      const facts=await getBlacklakeAnalysis(periodQuery.value);
-      if(isCurrentRequest(generation,identity)){
-        data.value=facts;
-        if(periodJob.value?.fingerprint!==facts.periodMetadata?.fingerprint){periodJob.value=null;lastAppliedPeriodResultKey.value='';}
-      }
+    if(liveSuccess&&report.lastSuccessAt!==liveSuccess&&!loading.value
+      &&(!periodQuery.value||report.changedCycles!==liveChanges)){
+      await loadForPeriod(periodQuery.value,false,true);
     }
     liveSuccess=report.lastSuccessAt;
+    liveChanges=report.changedCycles;
   }catch(cause){if(mounted.value&&identity===authIdentity.value)liveError.value=cause instanceof Error?cause.message:'持续采集状态暂不可读。';}
   finally{liveReading=false;}
 }
@@ -100,6 +99,9 @@ let initialDateResolved=false;
 const authStore = useAuthStore();
 const authIdentity = computed(() => [authStore.factoryId, authStore.user?.id ?? '', authStore.currentRole].join(':'));
 let periodPollTimer: number | undefined;
+let periodRetryTimer: number | undefined;
+let periodRetryAttempts=0;
+const periodRefreshMessage=ref('');
 function toggleComparison(event:Event){comparisonOpen.value=(event.target as HTMLDetailsElement).open;}
 const viewTitles:Record<string,string>={cost:'原料到成品成本分析',alerts:'异常与跟进',gaps:'关联与估值补查',production:'生产与工序',inventory:'库存与仓库',coverage:'数据覆盖与口径'};
 const viewDescriptions:Record<string,string>={cost:'看本期材料与人工成本，找到需要核对的工单。',alerts:'先看问题、责任人和处理进度，再回到工单核对。',gaps:'逐单看缺什么、找谁补，以及补齐后能解决什么问题。',production:'先看产品产量和工序进度，再查相关工单。',inventory:'按物料和仓库核对库存，没有记录的先补资料。',coverage:'看哪些资料已经齐备，哪些还影响生产和成本分析。'};
@@ -198,10 +200,26 @@ function goTo(section: string) {
 function stopPeriodPolling() {
   if (periodPollTimer !== undefined) window.clearTimeout(periodPollTimer);
   periodPollTimer = undefined;
+  if(periodRetryTimer!==undefined)window.clearTimeout(periodRetryTimer);
+  periodRetryTimer=undefined;
+}
+
+function queuePeriodRefresh(generation:number,identity:string){
+  if(!isCurrentRequest(generation,identity)||!periodQuery.value)return;
+  stopPeriodPolling();
+  periodError.value='';periodLoading.value=true;
+  periodRefreshMessage.value='数据已更新，正在自动更新分析…';
+  const query={...periodQuery.value};
+  const delay=Math.min(30000,1000*2**Math.min(periodRetryAttempts++,5));
+  periodRetryTimer=window.setTimeout(()=>{
+    periodRetryTimer=undefined;
+    if(isCurrentRequest(generation,identity))void loadForPeriod(query,false,true);
+  },delay);
 }
 
 function resetPeriodView() {
   stopPeriodPolling();
+  periodRefreshMessage.value='';periodRetryAttempts=0;
   data.value = null; periodJob.value = null; lastAppliedPeriodResultKey.value = ''; periodHistory.value = []; historyDrawerJob.value = null; periodSchedule.value = null; error.value = ''; periodError.value = ''; periodAuxError.value = ''; periodLoading.value = false; selected.value = null; focusedAlert.value = null; focusedSection.value = ''; openRequest.value = 0;
 }
 
@@ -214,7 +232,7 @@ function applyPeriodInsights(job: BlacklakePeriodJob): boolean {
     && job.period.basis === query.basis
     && job.period.timezone === metadata.timezone;
   if (!valid) {
-    periodError.value = '分析结果与当前数据快照或周期范围不一致，未装载旧结果，请刷新后重试。';
+    queuePeriodRefresh(periodRequestGeneration.value,authIdentity.value);
     return false;
   }
   if (!data.value || !job.result) return false;
@@ -262,7 +280,7 @@ async function pollPeriodReport(jobId: string, generation: number, identity: str
     const next = await getBlacklakePeriodReport(jobId);
     if (!isCurrentRequest(generation, identity)) return;
     periodJob.value = next;
-    if (next.result) applyPeriodInsights(next);
+    if (next.result&&!applyPeriodInsights(next)) return;
     if (next.status === 'ready') { periodLoading.value = false; void refreshPeriodHistory(generation, identity); return; }
     if (next.status === 'failed') { periodLoading.value = false; periodError.value = next.error || '周期分析失败，可重试。'; return; }
     periodPollTimer = window.setTimeout(() => { void pollPeriodReport(jobId, generation, identity); }, periodPollDelay(next.nextAttemptAt));
@@ -272,13 +290,15 @@ async function pollPeriodReport(jobId: string, generation: number, identity: str
   }
 }
 
-async function loadForPeriod(query: BlacklakePeriodQuery | null, force = false) {
+async function loadForPeriod(query: BlacklakePeriodQuery | null, force = false, background = false) {
   const generation = ++periodRequestGeneration.value;
   const identity = authIdentity.value;
-  resetPeriodView();
+  if(background){
+    stopPeriodPolling();periodJob.value=null;lastAppliedPeriodResultKey.value='';periodError.value='';
+  }else resetPeriodView();
   void refreshPeriodHistory(generation, identity);
   void refreshPeriodSchedule(generation, identity);
-  loading.value = true;
+  loading.value = !background;
   try {
     const refreshed = await getBlacklakeAnalysis(query);
     if (!isCurrentRequest(generation, identity)) return;
@@ -300,13 +320,18 @@ async function loadForPeriod(query: BlacklakePeriodQuery | null, force = false) 
     periodLoading.value = true;
     const submitted = await createBlacklakePeriodReport(query, force, refreshed.periodMetadata?.fingerprint);
     if (!isCurrentRequest(generation, identity)) return;
+    periodRetryAttempts=0;periodRefreshMessage.value='';
     periodJob.value = submitted;
-    if (submitted.result) applyPeriodInsights(submitted);
+    if (submitted.result&&!applyPeriodInsights(submitted)) return;
     if (submitted.status === 'ready') { periodLoading.value = false; void refreshPeriodHistory(generation, identity); }
     else if (submitted.status === 'failed') { periodLoading.value = false; periodError.value = submitted.error || '周期分析失败，可重试。'; }
     else void pollPeriodReport(submitted.id, generation, identity);
   } catch (cause) {
     if (!isCurrentRequest(generation, identity)) return;
+    if(cause instanceof Error&&(cause as PythonServiceError).status===409){
+      queuePeriodRefresh(generation,identity);return;
+    }
+    periodLoading.value=false;periodRefreshMessage.value='';
     if (data.value) periodError.value = cause instanceof Error ? cause.message : '周期分析任务未能创建。';
     else error.value = cause instanceof Error ? cause.message : '读取失败，请重试';
   } finally {
@@ -326,7 +351,7 @@ function openHistory(job: BlacklakePeriodJob) { historyDrawerJob.value = job;voi
 watch(authIdentity, (value, previous) => {
   if (!previous || value === previous) return;
   resetPeriodView(); periodRequestGeneration.value += 1; periodHistory.value = []; historyDrawerJob.value = null; periodSchedule.value = null; periodAuxError.value = '';
-  liveMonitor.value=null;liveSuccess=null;liveOffset=0;
+  liveMonitor.value=null;liveSuccess=null;liveChanges=null;liveOffset=0;
   void loadForPeriod(periodQuery.value);
 });
 
@@ -378,6 +403,7 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
     <details v-if="liveMonitor?.dailyStats?.length" class="note"><summary>按天查看本周采集情况</summary><CostDataTable :rows="liveMonitor.dailyStats" :columns="[{key:'date',label:'日期',type:'text'},{key:'cycles',label:'尝试轮次',type:'number',count:true},{key:'successful',label:'成功轮次',type:'number',count:true},{key:'changed',label:'数据变化',type:'number',count:true},{key:'requests',label:'查询请求',type:'number',count:true}]" paginate /></details>
     <el-alert v-if="error" type="error" :closable="false" :title="error" show-icon />
     <el-alert v-if="periodError" type="warning" :closable="false" :title="periodError" show-icon />
+    <p v-if="periodRefreshMessage" role="status" class="note">{{ periodRefreshMessage }}</p>
     <el-alert v-if="periodAuxError" type="info" :closable="false" :title="periodAuxError" show-icon />
     <BlacklakePeriodAnalysis :metadata="data?.periodMetadata" :job="periodJob" :history="periodHistory" :schedule="periodSchedule" @retry="retryPeriod" @open-history="openHistory" />
     <template v-if="data">

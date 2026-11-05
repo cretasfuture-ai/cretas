@@ -2,6 +2,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { flushPromises, shallowMount } from '@vue/test-utils';
 import { nextTick } from 'vue';
+vi.mock('@/api/smartbi/blacklake-live',()=>({getBlacklakeLiveMonitor:vi.fn(()=>new Promise(()=>{}))}));
 
 vi.mock('@nuxt/ui/components/Card.vue', () => ({ default: { template: '<div><slot /></div>' } }));
 vi.mock('@nuxt/ui/components/Button.vue', () => ({ default: { template: '<button><slot /></button>' } }));
@@ -23,6 +24,7 @@ vi.mock('@/api/smartbi/blacklake', async () => {
 import { createBlacklakePeriodReport, getBlacklakeAnalysis, getBlacklakePeriodReport, getBlacklakePeriodSchedule, listBlacklakePeriodReports } from '@/api/smartbi/blacklake';
 import BlacklakePrototypeAnalysis from '../BlacklakePrototypeAnalysis.vue';
 import type { BlacklakeAnalysis, BlacklakePeriodJob } from '@/api/smartbi/blacklake';
+import {getBlacklakeLiveMonitor,type LiveMonitorReport} from '@/api/smartbi/blacklake-live';
 
 const project = {
   projectId: 2, projectCode: 'P2', product: '黑椒鸡胸', productCode: 'SKU-2', unit: 'kg', status: '20', planned: 10, actual: 10,
@@ -59,6 +61,7 @@ describe('Blacklake prototype page', () => {
     vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-11-05T04:00:00Z'));
     authMock.store.factoryId = 'F006'; authMock.store.user = { id: 1 }; authMock.store.currentRole = 'factory_super_admin';
     vi.mocked(getBlacklakeAnalysis).mockReset();
+    vi.mocked(getBlacklakeLiveMonitor).mockReset().mockImplementation(()=>new Promise(()=>{}));
     vi.mocked(createBlacklakePeriodReport).mockReset().mockResolvedValue({ id: 'job-1', status: 'queued', period: { startDate: '2026-11-04', endDate: '2026-11-04', kind: 'day', basis: 'completed', timezone: 'Asia/Shanghai' }, fingerprint: 'f'.repeat(64), revision: 1, createdAt: '2026-11-04T23:00:00+08:00' });
     vi.mocked(getBlacklakePeriodReport).mockReset().mockResolvedValue({ id: 'job-1', status: 'queued', period: { startDate: '2026-11-04', endDate: '2026-11-04', kind: 'day', basis: 'completed', timezone: 'Asia/Shanghai' }, fingerprint: 'f'.repeat(64), revision: 1, createdAt: '2026-11-04T23:00:00+08:00' });
     vi.mocked(listBlacklakePeriodReports).mockReset().mockResolvedValue([]);
@@ -106,6 +109,83 @@ describe('Blacklake prototype page', () => {
     resolveSecond({ ...analysis, runId: 'new' });
     await flushPromises();
     expect(wrapper.text()).not.toContain('old');
+  });
+
+  it('automatically refreshes conflicted facts and submits the new fingerprint without blocking data',async()=>{
+    vi.useFakeTimers();
+    const updated={...analysis,runId:'refreshed',periodMetadata:{...analysis.periodMetadata!,fingerprint:'a'.repeat(64)}};
+    vi.mocked(getBlacklakeAnalysis).mockResolvedValueOnce({...analysis}).mockResolvedValue(updated);
+    vi.mocked(createBlacklakePeriodReport).mockRejectedValueOnce(Object.assign(new Error('conflict'),{status:409}));
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});
+    await flushPromises();
+    expect(wrapper.text()).toContain('正在自动更新分析');
+    expect((wrapper.vm as unknown as {loading:boolean}).loading).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);await flushPromises();
+    expect(vi.mocked(createBlacklakePeriodReport)).toHaveBeenCalledTimes(2);
+    const calls=vi.mocked(createBlacklakePeriodReport).mock.calls;
+    expect(calls[1]?.[0]).toEqual(calls[0]?.[0]);
+    expect(calls[1]?.[2]).toBe('a'.repeat(64));
+    expect(wrapper.text()).not.toContain('正在自动更新分析');
+    expect((wrapper.vm as unknown as {data:BlacklakeAnalysis}).data.runId).toBe('refreshed');
+    wrapper.unmount();
+  });
+
+  it('backs off repeated conflicts without a user retry or an attempt limit',async()=>{
+    vi.useFakeTimers();
+    vi.mocked(getBlacklakeAnalysis).mockResolvedValue({...analysis});
+    vi.mocked(createBlacklakePeriodReport).mockRejectedValue(Object.assign(new Error('conflict'),{status:409}));
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});await flushPromises();
+    for(const delay of [1000,2000,4000]){await vi.advanceTimersByTimeAsync(delay);await flushPromises();}
+    expect(vi.mocked(createBlacklakePeriodReport)).toHaveBeenCalledTimes(4);
+    expect((wrapper.vm as unknown as {periodError:string}).periodError).toBe('');
+    wrapper.unmount();await vi.advanceTimersByTimeAsync(60000);
+    expect(vi.mocked(createBlacklakePeriodReport)).toHaveBeenCalledTimes(4);
+  });
+
+  it('cancels automatic conflict retry when the user changes dates',async()=>{
+    vi.useFakeTimers();
+    vi.mocked(getBlacklakeAnalysis).mockResolvedValue({...analysis});
+    vi.mocked(createBlacklakePeriodReport).mockRejectedValueOnce(Object.assign(new Error('conflict'),{status:409}));
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});await flushPromises();
+    await wrapper.get('[data-testid="period-change"]').trigger('click');await flushPromises();
+    await vi.advanceTimersByTimeAsync(2000);await flushPromises();
+    expect(vi.mocked(createBlacklakePeriodReport)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(createBlacklakePeriodReport).mock.calls[1]?.[0].start_date).toBe('2026-11-02');
+    wrapper.unmount();
+  });
+
+  it('does not retry an authorization rejection as a data refresh',async()=>{
+    vi.useFakeTimers();vi.mocked(getBlacklakeAnalysis).mockResolvedValue({...analysis});
+    vi.mocked(createBlacklakePeriodReport).mockRejectedValue(Object.assign(new Error('forbidden'),{status:403}));
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});await flushPromises();
+    await vi.advanceTimersByTimeAsync(60000);await flushPromises();
+    expect(vi.mocked(createBlacklakePeriodReport)).toHaveBeenCalledTimes(1);
+    expect((wrapper.vm as unknown as {periodError:string;periodLoading:boolean}).periodLoading).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('keeps the queued report when only the collection clock changes',async()=>{
+    const monitor={lastSuccessAt:'2026-11-05T10:00:00Z',changedCycles:2} as LiveMonitorReport;
+    vi.mocked(getBlacklakeLiveMonitor).mockResolvedValue(monitor);
+    vi.mocked(getBlacklakeAnalysis).mockResolvedValue({...analysis});
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});await flushPromises();
+    vi.mocked(getBlacklakeLiveMonitor).mockResolvedValue({...monitor,lastSuccessAt:'2026-11-05T10:01:00Z'});
+    await (wrapper.vm as unknown as {refreshLive:()=>Promise<void>}).refreshLive();
+    expect(vi.mocked(getBlacklakeAnalysis)).toHaveBeenCalledTimes(1);
+    expect((wrapper.vm as unknown as {periodJob:BlacklakePeriodJob}).periodJob.id).toBe('job-1');
+    wrapper.unmount();
+  });
+
+  it('automatically requeues the selected period when source data changes',async()=>{
+    const monitor={lastSuccessAt:'2026-11-05T10:00:00Z',changedCycles:2} as LiveMonitorReport;
+    vi.mocked(getBlacklakeLiveMonitor).mockResolvedValue(monitor);
+    vi.mocked(getBlacklakeAnalysis).mockResolvedValue({...analysis});
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});await flushPromises();
+    vi.mocked(getBlacklakeLiveMonitor).mockResolvedValue({...monitor,lastSuccessAt:'2026-11-05T10:01:00Z',changedCycles:3});
+    await (wrapper.vm as unknown as {refreshLive:()=>Promise<void>}).refreshLive();
+    expect(vi.mocked(createBlacklakePeriodReport)).toHaveBeenCalledTimes(2);
+    const calls=vi.mocked(createBlacklakePeriodReport).mock.calls;expect(calls[1]?.[0]).toEqual(calls[0]?.[0]);
+    wrapper.unmount();
   });
 
   it('passes the GET fingerprint and force=true on failed retry', async () => {
@@ -165,6 +245,7 @@ describe('Blacklake prototype page', () => {
     const wrapper = shallowMount(BlacklakePrototypeAnalysis, { global: { stubs: asyncPageStubs } });
     await flushPromises();
     expect(wrapper.text()).not.toContain('wrong');
+    wrapper.unmount();
   });
 
   it('stops period polling after unmount', async () => {
