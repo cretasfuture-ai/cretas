@@ -58,9 +58,11 @@ def test_operational_followup_recomputes_current_rows_instead_of_trusting_questi
 
 def test_operational_quality_followup_never_infers_reporting_units_from_finished_units(source):
     value=analysis(source);value['production']['quality'][0]['unit']=None
+    value['production']['quality'][0].update(productCode='F1',product='F1')
     report=next(r for r in value['sectionInsights'] if r['sectionId']=='production')
     text=answer(report,'报工单位和良品率怎么核？',analysis=value)
     assert '1 组报工' in text and '质量负责人' in text and '不能把最终成品单位套到中间工序' in text
+    assert 'finished（F1）' in text
 
 
 def test_readable_sources_scopes_and_order_links_preserve_cost_facts(source):

@@ -187,7 +187,15 @@ def operational_answer(analysis, section, question):
             message=f"当前有 {len(rows)} 组产品实际产量{'低于' if below else '超过'}计划。";owner='生产主管 / 计划负责人'
             action='先核在制状态、计划变更、报工审批和计量单位；已完工工单再对照最终良品和成品入库。'
             boundary='数量差额本身不证明延期、损耗、超耗或重复报工。'
-        if message:examples='；'.join(str(r.get('productCode') or r.get('product') or '产品待核')+' / '+str(r.get('process') or r.get('unit') or '单位待补') for r in rows[:5])
+        if message:
+            def product_label(row):
+                code=row.get('productCode')
+                name=row.get('product')
+                if not name or name==code:
+                    candidates={p['product'] for p in analysis['cost']['projects'] if code and p.get('productCode')==code}
+                    name=next(iter(candidates)) if len(candidates)==1 else '产品名称待核'
+                return name+(f'（{code}）' if code else '')
+            examples='；'.join(product_label(r)+' / '+str(r.get('process') or r.get('unit') or '单位待补') for r in rows[:5])
     elif section=='finished' and ('成本' in question or '完工' in question):
         rows=[r for r in analysis['cost']['projects'] if not r['unitCostAvailable'] and str(r['status'])=='20']
         unfinished=[r for r in analysis['cost']['projects'] if str(r['status'])!='20']
