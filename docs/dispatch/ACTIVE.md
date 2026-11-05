@@ -14,6 +14,7 @@
 - `F006-SANDBOX-API-20261105` — `in-progress` — Owner root/real_auth_gate — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope Java service/demo/F006SandboxRealAuthContractTest；真实JwtAuthInterceptor/WebMvcConfig MVC鉴权联测。验收目标Maven test；不改生产/Entity/Repository/迁移/主鉴权实现。
 
 - `F006-SANDBOX-RUNTIME-20261105` — `in-progress` — Owner root — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope create_private_config.py、linux_service.py、linux模板、orchestrator.py及目标测试、README；Linux私有配置/服务生成及安全验证。验收Python unittest；不改runtime HTTP实现；root负责正式预置，原子恢复须核UUID/物理ID。
+
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
 
 

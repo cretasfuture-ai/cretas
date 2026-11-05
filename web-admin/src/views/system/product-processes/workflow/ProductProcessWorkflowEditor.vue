@@ -1155,7 +1155,12 @@ import {
 } from '@/api/processProduction';
 import UnitSelect from '@/components/common/UnitSelect.vue';
 import WorkProcessAIChatPanel from '@/views/system/components/WorkProcessAIChatPanel.vue';
-import { previewWorkflowAiDefinitions, workflowAiStableJson, type WorkflowAiPreview } from './workflowAiPreview';
+import {
+  previewWorkflowAiDefinitions,
+  resolveWorkflowAiAllocation,
+  workflowAiStableJson,
+  type WorkflowAiPreview,
+} from './workflowAiPreview';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
@@ -7164,7 +7169,15 @@ async function applyPreparedWorkflowDefinition(
   return true;
 }
 
-interface WorkflowSpecOutput { kind?: string; name?: string; unit?: string; byproduct?: boolean; rework?: boolean }
+interface WorkflowSpecOutput {
+  kind?: string;
+  name?: string;
+  unit?: string;
+  byproduct?: boolean;
+  rework?: boolean;
+  /** Fixed output cost share (%), only when the step explicitly uses FIXED_RATIO. */
+  fixedCostShare?: number | null;
+}
 /** 缺口 20: 副产与回料互斥(同一个产出不能既是副产又是回料); 两个都标时按回料。 */
 function outputFlags(output: WorkflowSpecOutput | undefined): { isByproduct?: true; isRework?: true } {
   if (output?.rework === true) return { isRework: true };
@@ -7183,6 +7196,8 @@ interface WorkflowSpecStep {
   processCategory?: string;
   inputs?: string[];
   outputs?: WorkflowSpecOutput[];
+  /** Omitted/WEIGHT keeps the existing reported-weight allocation behavior. */
+  costAllocationMethod?: 'WEIGHT' | 'FIXED_RATIO';
   seasonings?: WorkflowSpecSeasoning[];
   injectionAmount?: number;
   /** 主料份额: 按投入原料名给相对份额(%), 写到 INPUT 端口的 inputShareRatio。 */
@@ -7419,6 +7434,16 @@ async function compileWorkflowSpec(
         ...toPlainWorkflowValue(branch.processNode.data),
         kind: branch.processNode.kind,
       } as ProcessNodeData & { kind: 'PROCESS' };
+      const outputPortNames: Array<{ portId: string; name: string }> = [];
+      const firstOutputPort = processData.ports.find(
+        (port) => port.direction === 'OUTPUT' && port.materialNodeId === branch.outputNode.id,
+      );
+      if (firstOutputPort) {
+        outputPortNames.push({
+          portId: firstOutputPort.id,
+          name: String(firstOut?.name || outData.name || ''),
+        });
+      }
       // #5 首产出若已自动绑定, 同步写工序 OUTPUT 端口 (端口↔物料一致, 同 bindOutputSku 语义)。
       if (firstSku) {
         const firstPort = processData.ports.find(
@@ -7467,6 +7492,10 @@ async function compileWorkflowSpec(
             ordinal: processData.ports.filter((p) => p.direction === 'OUTPUT').length,
           },
         ];
+        outputPortNames.push({
+          portId,
+          name: String(extra?.name || `产出 ${extraIdx + 2}`),
+        });
         edges.push({
           ...flowEdge(branch.processNode.id, portId, matId, 'input'),
           markerEnd: MarkerType.ArrowClosed,
@@ -7531,6 +7560,30 @@ async function compileWorkflowSpec(
           processData.ports = processData.ports.map((p) => (shareByPort.has(p.id)
             ? { ...p, inputShareRatio: shareByPort.get(p.id)! } : p));
         }
+      }
+      const allocation = resolveWorkflowAiAllocation(
+        step.costAllocationMethod,
+        outputPortNames,
+        (Array.isArray(step.outputs) ? step.outputs : []) as Array<{ name?: unknown; fixedCostShare?: unknown }>,
+      );
+      if (allocation.method) {
+        processData.costAllocationMethod = allocation.method;
+      }
+      if (allocation.method === 'FIXED_RATIO' && Object.keys(allocation.shares).length) {
+        processData.ports = processData.ports.map((port) => (
+          Object.prototype.hasOwnProperty.call(allocation.shares, port.id)
+            ? { ...port, fixedCostShare: allocation.shares[port.id] }
+            : port
+        ));
+      }
+      if (allocation.pending.length) {
+        allocation.pending.forEach((notice) => {
+          specNotices.push(`工序「${processData.processName}」${notice}`);
+          pendingMarks.push({
+            code: `COST_ALLOCATION:${processData.processName}:${pendingMarks.length}`,
+            label: notice,
+          });
+        });
       }
       const ccpPoints = buildCcpPointsFromSpec(
         String(processData.processName), step.ccps, () => `ccp:${nextCompileGraphId()}`, specNotices);
