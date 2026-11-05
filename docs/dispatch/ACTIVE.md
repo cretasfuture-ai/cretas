@@ -7,8 +7,6 @@
 
 ## 在飞任务
 
-- `F006-PROD-ROLLOUT-20261105` — `in-progress` — Owner root — Base bb42aea1680695ff54234f643aaba9e28176d0a5 — scope 正式隔离slot/manager预置、新快照/真实启动与重置验证；用户已授权先准备，冻结解除后合并部署及f006_admin完整验收。不改active正式流量，不抢冻结窗口。
-
 
 
 
