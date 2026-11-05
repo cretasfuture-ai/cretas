@@ -69,9 +69,9 @@ const conclusion=computed(()=>{
           <summary>补充核对（{{supplements.length}} 项）</summary>
           <template v-if="supplementOpen">
             <div v-for="review in supplementRows" :key="review.factId" class="supplement-row">
-              <button type="button" :aria-expanded="selectedSupplement===review.factId" @click="selectedSupplement=selectedSupplement===review.factId?'':review.factId">{{clean(review.statistics[0]?.text||'查看这项统计').slice(0,160)}}</button>
+              <button type="button" :aria-expanded="selectedSupplement===review.factId" @click="selectedSupplement=selectedSupplement===review.factId?'':review.factId">{{review.label||clean(review.statistics[0]?.text||'查看这项统计').split('：')[0]}}</button>
               <div v-if="selectedSupplement===review.factId" class="supplement-detail">
-                <p>{{clean(review.whatItMeans)}}</p><p><b>找谁处理：</b>{{review.owner}}</p><p><b>下一步：</b>{{clean(review.nextStep)}}</p><p class="muted">{{clean(review.cannotConclude)}}</p>
+                <p>{{clean(review.whatItMeans)}}</p><p><b>找谁处理：</b>{{review.owner}}</p><p><b>下一步：</b>{{clean(review.nextStep)}}</p><p class="muted">{{clean(review.cannotConclude)}}</p><details><summary>涉及数字与单据</summary><p>{{clean(review.statistics[0]?.text||'统计暂未提供')}}</p></details>
               </div>
             </div>
             <div v-if="supplements.length>8" class="supplement-pages"><button :disabled="supplementPage===1" @click="supplementPage--;selectedSupplement=''">上一页</button><span>{{supplementPage}} / {{Math.ceil(supplements.length/8)}}</span><button :disabled="supplementPage*8>=supplements.length" @click="supplementPage++;selectedSupplement=''">下一页</button></div>

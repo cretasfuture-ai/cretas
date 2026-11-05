@@ -154,7 +154,7 @@ export async function saveBlacklakeAlertFollowup(alertId: string, payload: {
 }
 
 export interface SupplementalFactReview {
-  factId:string;sectionId:string;whatItMeans:string;nextStep:string;cannotConclude:string;owner:string;
+  factId:string;sectionId:string;label?:string;whatItMeans:string;nextStep:string;cannotConclude:string;owner:string;
   statistics:{id:string;text:string;entityRefs?:Record<string,unknown>[]}[];
 }
 export interface CostDataAlert {

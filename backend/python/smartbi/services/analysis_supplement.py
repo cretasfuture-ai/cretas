@@ -71,7 +71,12 @@ def validate_review(raw,fact,full):
     one={**full,'sectionIds':[sid],'requiredConsiderations':{sid:fact['considerations']},
         'requiredFactRefs':{sid:[fact['id']]},'narrativeRequirements':{sid:[]}}
     _,accepted=analyst.validate({'reviews':[],'sections':[section]},one,[])
-    return {**raw,'sectionId':sid,'statistics':accepted[0]['statistics']}
+    label={'weighted_unit_cost':'单位成本','product_coverage':'资料覆盖',
+        'upstream_unit_conversion':'原料与成品单位换算','material_quantity_valuation_split':'领料数量与估值',
+        'common_input_price_check':'相同材料单价','same_product_bridge':'同产品工单差异',
+        'material_link_coverage':'领退料关联'}.get(fact['kind'],'补充核对')
+    title=full['displayFacts'][fact['id']]['text'].split('：',1)[0]
+    return {**raw,'sectionId':sid,'label':title+' · '+label,'statistics':accepted[0]['statistics']}
 
 
 def payload(full,batch,model,feedback=None):
