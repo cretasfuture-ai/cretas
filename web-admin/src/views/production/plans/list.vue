@@ -2862,9 +2862,10 @@ async function submitComplete() {
             : null,
           actualSemiFinishedQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
           quantityUnit: completeRow.value.unit || completeRow.value.quantityUnit || null,
-          quantityVarianceReason: completeForm.value.varianceReason === '其他'
+          quantityVarianceReason: completeForm.value.varianceReason,
+          quantityVarianceNote: completeForm.value.varianceReason === '其他'
             ? completeForm.value.otherVarianceReason.trim()
-            : completeForm.value.varianceReason,
+            : null,
           rawMaterialConsumptions: buildRawConsumptionPayload(),
           semiFinishedConsumptions: buildWipConsumptionPayload(),
           auxiliaryConsumptions: [] as Array<Record<string, unknown>>,

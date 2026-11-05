@@ -7,6 +7,11 @@ import { parse as parseTemplate, NodeTypes, type ElementNode, type TemplateChild
 const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
 
 describe('clean settlement external WIP contract', () => {
+  it('keeps the bounded variance reason code separate from its free-text explanation', () => {
+    expect(source).toContain('quantityVarianceReason: completeForm.value.varianceReason,');
+    expect(source).toContain("quantityVarianceNote: completeForm.value.varianceReason === '其他'");
+    expect(source).not.toContain("quantityVarianceReason: completeForm.value.varianceReason === '其他'");
+  });
   it('renders the actual semi-output input outside both clean and exception-only branches', () => {
     const template = parse(source).descriptor.template!.content;
     const matches: Array<{ node: ElementNode; ancestors: ElementNode[] }> = [];
