@@ -257,7 +257,8 @@ async function loadBatches() {
 
 // 加载可报损成品余量；接口排除已发货、预留占用和已撤回的部分。
 async function loadFgBatches(expectedRequest = contextRequestSequence.value, expectedFg = scopedFinishedGoodsBatchId.value) {
-  if (!factoryId.value) return;
+  // 成品候选属于质检新建申请；财务审批页即使带有旧的批次上下文，也不能读取这个受限接口。
+  if (!factoryId.value || !canWrite.value) return;
   fgLoading.value = true;
   fgBatches.value = [];
   try {
