@@ -34,6 +34,41 @@ beforeEach(() => {
 });
 
 describe('异常复核真实组件批次初始化', () => {
+  it('FAILED 批次 PASS 复检可进入人工处置，仍提交到既有审批流程', async () => {
+    const regularGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((path: string, options?: { params?: { batchId?: string } }) => {
+      if (path.includes('/processing/batches/')) return Promise.resolve({ success: true,
+        data: { id: 7, batchNumber: 'PB-7', qualityStatus: 'FAILED' } });
+      if (path.endsWith('/quality/inspections')) return Promise.resolve({ success: true,
+        data: { content: [{ ...inspection(7), result: 'PASS', passCount: 2, failCount: 0, passRate: 100 }] } });
+      return regularGet(path, options);
+    });
+    mocks.evaluate.mockResolvedValue({ recommendedAction: 'RELEASE', requiresApproval: true,
+      reason: '隔离批次复检合格，须另一人审批', alternativeActions: [], inspectionSummary: {} });
+    const wrapper = mount(Page, { global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    expect(mocks.get).toHaveBeenCalledWith('/VISION-ENTRY-A/processing/quality/inspections',
+      { params: expect.objectContaining({ batchId: '7', result: 'FAIL,CONDITIONAL,PASS' }) });
+    expect(mocks.evaluate).toHaveBeenCalledWith('VISION-ENTRY-A', expect.objectContaining({ inspectionId: 'qi-7', result: 'PASS' }));
+    expect(wrapper.text()).toContain('复检合格');
+    await wrapper.findAll('button').find(button => button.text() === '确认处置')!.trigger('click');
+    await flushPromises();
+    expect(mocks.execute).toHaveBeenCalledWith('VISION-ENTRY-A', expect.objectContaining({ actionCode: 'RELEASE', batchId: 7, inspectionId: 'qi-7', executorId: 93001 }));
+    wrapper.unmount();
+  });
+
+  it('普通已合格批次不将 PASS 混入待处置列表', async () => {
+    const regularGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((path: string, options?: { params?: { batchId?: string } }) => path.includes('/processing/batches/')
+      ? Promise.resolve({ success: true, data: { id: 7, batchNumber: 'PB-7', qualityStatus: 'PASSED' } })
+      : regularGet(path, options));
+    const wrapper = mount(Page, { global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    expect(mocks.get).toHaveBeenCalledWith('/VISION-ENTRY-A/processing/quality/inspections',
+      { params: expect.objectContaining({ batchId: '7', result: 'FAIL,CONDITIONAL' }) });
+    wrapper.unmount();
+  });
+
   it('首次从批次入口挂载即加载当前质检并自动打开，提交使用当前登录人', async () => {
     const wrapper = mount(Page, { global: { plugins: [ElementPlus] } });
     await flushPromises();

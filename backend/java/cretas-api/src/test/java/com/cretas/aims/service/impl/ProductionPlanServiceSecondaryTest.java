@@ -71,12 +71,24 @@ class ProductionPlanServiceSecondaryTest {
 
     // --- Optional SP2 dependency ---
     @Mock private WipInventoryService wipInventoryService;
+    @Mock private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
 
     // --- Optional R2/修1 dependency: 检测 YIELD 报工 ---
     @Mock private ProductionReportRepository productionReportRepo;
 
     /** Build a service instance wiring the optional wipInventoryService via reflection. */
     private ProductionPlanServiceImpl buildService(WipInventoryService wipSvc) throws Exception {
+        ProductionPlanServiceImpl svc = newService(wipSvc);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "secondaryPlanFeedService", secondaryPlanFeedService);
+        when(secondaryPlanFeedService.forPlan(any(), any())).thenAnswer(inv -> {
+            ProductionPlan p = inv.getArgument(1);
+            return Optional.of(new com.cretas.aims.service.production.SecondaryPlanFeedService.Source(
+                    p, WIP_ID, "CLK-SEMI-1", "SEMI-1", p.getPlannedQuantity(), "kg"));
+        });
+        return svc;
+    }
+
+    private ProductionPlanServiceImpl newService(WipInventoryService wipSvc) throws Exception {
         Constructor<?> ctor = ProductionPlanServiceImpl.class.getDeclaredConstructors()[0];
         ctor.setAccessible(true);
         Object[] args = new Object[ctor.getParameterCount()];
@@ -269,9 +281,8 @@ class ProductionPlanServiceSecondaryTest {
 
             svc.cancelProductionPlan(FACTORY_ID, PLAN_ID, "不做了");
 
-            // 反冲 WIP 被调用 (还回开工扣的 30)
-            verify(wipInventoryService).reverseSecondaryDeduct(
-                    eq(WIP_ID), eq(new BigDecimal("30")), eq(FACTORY_ID), any());
+            // 占用全部还回 (quantity=null 表示按流水里还占着的量还)
+            verify(secondaryPlanFeedService).closeHold(eq(FACTORY_ID), eq(plan), any());
             // 计划置 CANCELLED, 不卡 IN_PROGRESS
             assertThat(plan.getStatus())
                     .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
@@ -302,7 +313,7 @@ class ProductionPlanServiceSecondaryTest {
                     .hasMessageContaining("报工");
 
             // 有报工 → 不走反冲 (走报工撤回), 计划不被置 CANCELLED
-            verify(wipInventoryService, never()).reverseSecondaryDeduct(any(), any(), any(), any());
+            verify(secondaryPlanFeedService, never()).closeHold(any(), any(), any());
             assertThat(plan.getStatus())
                     .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS);
         }
@@ -323,7 +334,7 @@ class ProductionPlanServiceSecondaryTest {
 
             svc.cancelProductionPlan(FACTORY_ID, "NORMAL-PLAN-001", "空计划取消");
 
-            verify(wipInventoryService, never()).reverseSecondaryDeduct(any(), any(), any(), any());
+            verify(secondaryPlanFeedService, never()).closeHold(any(), any(), any());
             assertThat(plan.getStatus())
                     .isEqualTo(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
         }

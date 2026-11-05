@@ -28,6 +28,8 @@ export interface FifoBatchCandidate {
   storageLocation?: string | null;
   availableQuantity?: number;
   unit?: string;
+  /** 这批的规格和发货行不一致: 系统不会自动换算, 要在电脑端确认。 */
+  packagingMismatch?: boolean;
   [k: string]: unknown;
 }
 
@@ -65,7 +67,14 @@ class SalesDeliveryBatchAllocationApiClient {
   /** FIFO 推荐（按生产日期升序）—— 手机端「一键分配」的数据来源。 */
   async recommendFifo(
     deliveryItemId: string,
-    params: { productTypeId: string; requiredQty: number; unit?: string; sourceWarehouseCode?: string },
+    params: {
+      productTypeId: string;
+      requiredQty: number;
+      unit?: string;
+      sourceWarehouseCode?: string;
+      /** 只要系统自动发货时真正会挑的批次 (跳过规格不一致的)。 */
+      skipPackagingMismatch?: boolean;
+    },
     factoryId?: string,
   ): Promise<ApiResponse<FifoBatchCandidate[]>> {
     return apiClient.get<ApiResponse<FifoBatchCandidate[]>>(

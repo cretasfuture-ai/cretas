@@ -60,6 +60,14 @@ public interface SalesDeliveryBatchAllocationService {
      *
      * @return true = 已分配至满足数量; false = 可用库存不足, 未写入任何分配
      */
+    /**
+     * 同 {@link #recommendFifo}, 但跳过规格和发货行不一致的批次 —— 也就是系统自动分配时真正会挑的那些。
+     * 手机端用它显示「该搬哪一批」, 否则显示的批次和确认发货时扣的不是一批。
+     */
+    List<Map<String, Object>> recommendFifoSkippingPackagingMismatch(
+            String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
+            String unit, String sourceWarehouseCode);
+
     boolean autoAllocateFifo(String factoryId, String deliveryItemId, String productTypeId,
                              java.math.BigDecimal requiredQty, String unit, String sourceWarehouseCode);
 

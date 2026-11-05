@@ -2551,6 +2551,41 @@ class YieldReportServiceImplTest {
     }
 
     @Test
+    void submitReport_secondarySource_onlyChecksStockBeyondTheHold() {
+        WorkProcessTask t = task(104L, 2, "WP-P4");
+        t.setProductTypeId("PT-LU");
+        setupWipSubmitTask(t);
+        SemiFinishedInventory source = SemiFinishedInventory.builder()
+                .id(9L).factoryId("F006").batchId(1L)
+                .intermediateBatchNo("PT-LU-B1-S1-100").processOrder(1)
+                .producedQuantity(new BigDecimal("500"))
+                .consumedQuantity(new BigDecimal("400"))
+                .availableQuantity(new BigDecimal("100"))
+                .unit("kg").status(SemiFinishedInventory.Status.AVAILABLE)
+                .build();
+        com.cretas.aims.service.production.SecondaryPlanFeedService feed =
+                org.mockito.Mockito.mock(com.cretas.aims.service.production.SecondaryPlanFeedService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "secondaryPlanFeedService", feed);
+        when(feed.coveredByHold("F006", 1L, "PT-LU-B1-S1-100", new BigDecimal("500"), null))
+                .thenReturn(new BigDecimal("400"));
+        when(wipInventoryService.validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("100"), "kg", null))
+                .thenReturn(source);
+
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(104L);
+        req.setSourceWipNo("PT-LU-B1-S1-100");
+        req.setInputQuantity(new BigDecimal("500"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("480"));
+        req.setOutputUnit("kg");
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        // 500 里 400 已被开工占用盖住, 只有 100 要看库存余额
+        verify(wipInventoryService).validateSourceWip("F006", null, "PT-LU-B1-S1-100", new BigDecimal("100"), "kg", null);
+    }
+
+    @Test
     void submitReport_consumeSourceWip_partialLeavesCarryover() {
         WorkProcessTask t = task(103L, 2, "WP-P4");
         t.setProductTypeId("PT-LU");

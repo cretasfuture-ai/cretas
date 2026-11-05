@@ -115,9 +115,11 @@ public interface WipInventoryService {
      * @param qty        扣减数量 (必须 > 0, 且 ≤ availableQuantity)
      * @param factoryId  工厂 ID (幂等守卫 + 流水账写入)
      * @param operatorId 操作人 ID (可为 null)
+     * @param planId     占用这笔量的计划: 写进流水号, 占用还剩多少按计划算
      * @throws org.springframework.web.server.ResponseStatusException 409 如余量不足
      */
-    void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId, Owner consumer);
+    void deductForSecondaryPlan(Long wipId, BigDecimal qty, String factoryId, Long operatorId, Owner consumer,
+                                String planId);
 
     /**
      * 修1 (🔴) 二次加工反冲 — {@link #deductForSecondaryPlan} 的逆操作。
@@ -132,9 +134,10 @@ public interface WipInventoryService {
      * @param qty        反冲数量 (必须 > 0, 通常 = 开工时扣减的 plannedQuantity)
      * @param factoryId  工厂 ID (越权守卫 + 流水账写入)
      * @param operatorId 操作人 ID (可为 null)
+     * @param planId     还这笔量的计划, 与开工扣减的流水号成对
      * @throws com.cretas.aims.exception.BusinessException 404 WIP 不存在 / 403 工厂不匹配 / 400 qty 非法
      */
-    void reverseSecondaryDeduct(Long wipId, BigDecimal qty, String factoryId, Long operatorId);
+    void reverseSecondaryDeduct(Long wipId, BigDecimal qty, String factoryId, Long operatorId, String planId);
 
     /**
      * SP2 二次加工 — 列出工厂所有 AVAILABLE 且 availableQuantity > 0 的 WIP 行。

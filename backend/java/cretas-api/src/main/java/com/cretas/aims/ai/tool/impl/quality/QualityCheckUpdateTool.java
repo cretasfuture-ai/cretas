@@ -147,7 +147,9 @@ public class QualityCheckUpdateTool extends AbstractBusinessTool {
             throw new IllegalArgumentException("未找到指定的质检任务: " + checkId);
         }
 
-        // 3. 更新字段
+        // 3. 更新字段。只写进 patch, 不碰 existing: open-in-view 下 existing 是托管实体, 改了它
+        //    service 再查回来就是改过的值, 「原记录不可改」的比较和 PENDING 判定都会失效。
+        QualityInspection patch = new QualityInspection();
         List<String> updatedFields = new ArrayList<>();
 
         if (finalResult != null && !finalResult.trim().isEmpty()) {
@@ -161,38 +163,44 @@ public class QualityCheckUpdateTool extends AbstractBusinessTool {
                 default -> throw new IllegalArgumentException(
                         "检验结果只能是 PASS/FAIL/CONDITIONAL, 收到: " + finalResult);
             };
-            existing.setResult(canonical);
+            // D-S302-02: 这个工具能把待检任务直接判 FAIL, 判不合格必须本次写明原因。
+            // ⛔ 不看原记录的备注: 自动建的待检任务自带「批次完成自动创建…」, 那不是原因。
+            if ("FAIL".equals(canonical) && (notes == null || notes.isBlank())) {
+                throw new IllegalArgumentException("判定不合格必须说明原因");
+            }
+            patch.setResult(canonical);
             updatedFields.add("检验结果");
         }
 
         if (inspectorId != null) {
-            existing.setInspectorId(inspectorId);
+            patch.setInspectorId(inspectorId);
             updatedFields.add("检验员");
         }
 
         if (sampleSize != null) {
-            existing.setSampleSize(sampleSize);
+            patch.setSampleSize(sampleSize);
             updatedFields.add("样本数量");
         }
 
         if (passCount != null) {
-            existing.setPassCount(passCount);
+            patch.setPassCount(passCount);
             updatedFields.add("合格数量");
         }
 
         if (failCount != null) {
-            existing.setFailCount(failCount);
+            patch.setFailCount(failCount);
             updatedFields.add("不合格数量");
         }
 
-        // 自动计算合格率
-        if (existing.getSampleSize() != null &&
-            existing.getSampleSize().compareTo(BigDecimal.ZERO) > 0 &&
-            existing.getPassCount() != null) {
-            BigDecimal passRate = existing.getPassCount()
+        // 自动计算合格率 (样本或合格数变了才算; 没传的取原值)
+        BigDecimal effectiveSample = sampleSize != null ? sampleSize : existing.getSampleSize();
+        BigDecimal effectivePass = passCount != null ? passCount : existing.getPassCount();
+        if ((sampleSize != null || passCount != null)
+                && effectiveSample != null && effectiveSample.compareTo(BigDecimal.ZERO) > 0
+                && effectivePass != null) {
+            patch.setPassRate(effectivePass
                     .multiply(BigDecimal.valueOf(100))
-                    .divide(existing.getSampleSize(), 2, RoundingMode.HALF_UP);
-            existing.setPassRate(passRate);
+                    .divide(effectiveSample, 2, RoundingMode.HALF_UP));
             updatedFields.add("合格率(自动计算)");
         }
 
@@ -200,9 +208,9 @@ public class QualityCheckUpdateTool extends AbstractBusinessTool {
         if (notes != null && !notes.trim().isEmpty()) {
             String existingNotes = existing.getNotes();
             if (existingNotes != null && !existingNotes.isEmpty()) {
-                existing.setNotes(existingNotes + " | " + notes);
+                patch.setNotes(existingNotes + " | " + notes);
             } else {
-                existing.setNotes(notes);
+                patch.setNotes(notes);
             }
             updatedFields.add("备注");
         }
@@ -215,7 +223,7 @@ public class QualityCheckUpdateTool extends AbstractBusinessTool {
         }
 
         // 4. 调用服务更新
-        QualityInspection updated = qualityInspectionService.updateInspection(factoryId, checkId, existing);
+        QualityInspection updated = qualityInspectionService.updateInspection(factoryId, checkId, patch);
 
         // 5. 构建返回结果
         Map<String, Object> result = new HashMap<>();

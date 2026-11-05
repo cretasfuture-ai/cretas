@@ -136,6 +136,12 @@ class ProcessSheetInventoryTest {
         // Plan
         planId = "INV-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
         ProductionPlan plan = new ProductionPlan();
+        // Unused single-product snapshots: H2 JsonBinaryType double-encodes empty JSON.
+        // Real PostgreSQL refresh/snapshot coverage stays in SecondaryHoldPostgresContractTest.
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
+        plan.setSourceOrderIds(null);
         plan.setId(planId);
         plan.setFactoryId(FACTORY_ID);
         plan.setPlanNumber("INV-PN-" + System.currentTimeMillis() % 100000);
@@ -294,6 +300,12 @@ class ProcessSheetInventoryTest {
         // 另一个 plan (同 factory)
         String otherPlanId = "INV-PLAN-OTHER-" + UUID.randomUUID().toString().substring(0, 8);
         ProductionPlan other = new ProductionPlan();
+        // Unused single-product snapshots: H2 JsonBinaryType double-encodes empty JSON.
+        // Real PostgreSQL refresh/snapshot coverage stays in SecondaryHoldPostgresContractTest.
+        other.setWorkflowOutputUnitsByProduct(null);
+        other.setSelectedBomRecipeIdsByProduct(null);
+        other.setSelectedBomVersionsByProduct(null);
+        other.setSourceOrderIds(null);
         other.setId(otherPlanId);
         other.setFactoryId(FACTORY_ID);
         other.setPlanNumber("INV-OPN-" + System.currentTimeMillis() % 100000);

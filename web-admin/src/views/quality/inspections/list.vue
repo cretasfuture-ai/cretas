@@ -16,6 +16,7 @@ import type { ListSummaryRequest } from '@/types/listSummary';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import DynamicQualityInspectionForm from './DynamicQualityInspectionForm.vue';
+import { canReviewPassingReinspection } from '../reinspectionRelease';
 import { hasDynamicItems, type DynamicQualityForm, type DynamicQualitySubmitResponse } from './dynamicQualityInspection';
 
 const authStore = useAuthStore();
@@ -485,7 +486,7 @@ function registerDefect(row: TableRow) {
         <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="showDetail(row)">查看详情</el-button>
-            <el-button v-if="canWrite && ['FAIL', 'FAILED', 'CONDITIONAL'].includes(String(row.result))" type="primary" link @click="reviewException(row)">异常复核</el-button>
+            <el-button v-if="canWrite && (['FAIL', 'FAILED', 'CONDITIONAL'].includes(String(row.result)) || canReviewPassingReinspection(scopedBatch, row))" type="primary" link @click="reviewException(row)">{{ row.result === 'PASS' ? '复检放行复核' : '异常复核' }}</el-button>
             <el-button v-if="canWrite && row.id" type="warning" link @click="registerDefect(row)">登记不良</el-button>
           </template>
         </el-table-column>

@@ -139,6 +139,12 @@ class InterimSettleRawDeductionIntegrationTest {
         // 存货生产计划 (SAFETY_STOCK — 仅此类可小结)
         planId = "IT-SPLAN-" + UUID.randomUUID().toString().substring(0, 8);
         ProductionPlan plan = new ProductionPlan();
+        // Unused single-product snapshots: H2 JsonBinaryType double-encodes empty JSON.
+        // Real PostgreSQL refresh/snapshot coverage stays in SecondaryHoldPostgresContractTest.
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
+        plan.setSourceOrderIds(null);
         plan.setId(planId);
         plan.setFactoryId(FACTORY_ID);
         plan.setPlanNumber("IT-SPP-" + System.currentTimeMillis() % 100000);

@@ -171,6 +171,12 @@ class ProcessSheetServiceImplTest {
         // Plan (belongs to FACTORY_ID)
         planId = "PSF-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
         ProductionPlan plan = new ProductionPlan();
+        // Unused single-product snapshots: H2 JsonBinaryType double-encodes empty JSON.
+        // Real PostgreSQL refresh/snapshot coverage stays in SecondaryHoldPostgresContractTest.
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
+        plan.setSourceOrderIds(null);
         plan.setId(planId);
         plan.setFactoryId(FACTORY_ID);
         plan.setPlanNumber("PSF-PN-" + System.currentTimeMillis() % 100000);
@@ -1107,6 +1113,12 @@ class ProcessSheetServiceImplTest {
         // A plan belonging to OTHER_FACTORY_ID
         String otherPlanId = "PSF-OTHERPLAN-" + UUID.randomUUID().toString().substring(0, 8);
         ProductionPlan op = new ProductionPlan();
+        // Unused single-product snapshots: H2 JsonBinaryType double-encodes empty JSON.
+        // Real PostgreSQL refresh/snapshot coverage stays in SecondaryHoldPostgresContractTest.
+        op.setWorkflowOutputUnitsByProduct(null);
+        op.setSelectedBomRecipeIdsByProduct(null);
+        op.setSelectedBomVersionsByProduct(null);
+        op.setSourceOrderIds(null);
         op.setId(otherPlanId);
         op.setFactoryId(OTHER_FACTORY_ID);
         op.setPlanNumber("PSF-OPN-" + System.currentTimeMillis() % 100000);

@@ -1028,6 +1028,7 @@ public class ProcessingServiceImpl implements ProcessingService {
             row.put("effectiveMinValue", binding.getOverrideMinValue() != null ? binding.getOverrideMinValue() : item.getMinValue());
             row.put("effectiveMaxValue", binding.getOverrideMaxValue() != null ? binding.getOverrideMaxValue() : item.getMaxValue());
             row.put("effectiveIsRequired", binding.getOverrideIsRequired() != null ? binding.getOverrideIsRequired() : item.getIsRequired());
+            row.put("requireNoteOnFail", Boolean.TRUE.equals(item.getRequireNoteOnFail()));
             items.add(row);
         }
         form.put("items", items);
@@ -1059,6 +1060,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         for (QualityCheckItemBinding b : bindings) byBinding.put(b.getId(), b);
         Set<String> seen = new HashSet<>();
         List<Map<String, Object>> snapshotItems = new ArrayList<>();
+        List<String> failedWithoutReason = new ArrayList<>();
         boolean sampleFailed = false;
         for (var answer : answers) {
             if (answer == null || answer.getBindingId() == null || answer.getItemId() == null) {
@@ -1114,12 +1116,18 @@ public class ProcessingServiceImpl implements ProcessingService {
                 itemFailed = !answer.getValue().toString().trim().equals(standardValue.trim());
             }
             sampleFailed |= itemFailed;
+            // D-S302-02: 不合格项要原因时, 本项备注或本次备注有一个写了就算 (手机只有一个备注框)
+            if (itemFailed && Boolean.TRUE.equals(item.getRequireNoteOnFail())
+                    && !hasReason(answer.getNote()) && !hasReason(request.getNotes())) {
+                failedWithoutReason.add(item.getItemName());
+            }
             Map<String, Object> saved = new LinkedHashMap<>();
             saved.put("bindingId", b.getId()); saved.put("itemId", item.getId()); saved.put("itemVersion", item.getVersion());
             saved.put("label", item.getItemName()); saved.put("valueType", valueType); saved.put("unit", item.getUnit());
             saved.put("effectiveStandardValue", standardValue); saved.put("value", answered ? answer.getValue() : null);
             saved.put("minValue", min); saved.put("maxValue", max); saved.put("isRequired", b.getOverrideIsRequired() != null ? b.getOverrideIsRequired() : item.getIsRequired());
             saved.put("status", answered ? (itemFailed ? "FAIL" : "PASS") : "NOT_ANSWERED");
+            if (hasReason(answer.getNote())) saved.put("note", answer.getNote().trim());
             snapshotItems.add(saved);
         }
         for (QualityCheckItemBinding b : bindings) {
@@ -1137,6 +1145,11 @@ public class ProcessingServiceImpl implements ProcessingService {
             }
             if (required && !seen.contains(b.getId())) throw new BusinessException(400, "存在未填写的必检项目");
         }
+        if (!failedWithoutReason.isEmpty()) {
+            throw new BusinessException(400, "不合格项目必须填写原因：" + String.join("、", failedWithoutReason))
+                    .withCode("QUALITY_FAIL_NOTE_REQUIRED")
+                    .withHint("请在备注里写明不合格的原因后重新提交").withHintTarget("notes");
+        }
         BigDecimal failures = sampleFailed ? BigDecimal.ONE : BigDecimal.ZERO;
         BigDecimal passes = sampleSize.subtract(failures);
         QualityInspection inspection = new QualityInspection();
@@ -1148,7 +1161,34 @@ public class ProcessingServiceImpl implements ProcessingService {
         customFields.put("standardBasis", "DYNAMIC_PRODUCT_BINDING"); customFields.put("standardRevision", revision); customFields.put("items", snapshotItems);
         inspection.setCustomFields(customFields);
         QualityInspection savedInspection = qualityInspectionService.createInspection(factoryId, inspection);
-        return Map.of("inspection", savedInspection, "standardRevision", revision);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("inspection", savedInspection);
+        result.put("standardRevision", revision);
+        putBatchQualityOutcome(result, factoryId, savedInspection);
+        return result;
+    }
+
+    /** 全空白 (含全角空格、不换行空格) 不算写了原因。 */
+    private static boolean hasReason(String text) {
+        return text != null && text.codePoints().anyMatch(
+                c -> !Character.isWhitespace(c) && !Character.isSpaceChar(c));
+    }
+
+    /**
+     * D-S302-01: 检验记录留下了, 批次状态不一定跟着变。把批次实际状态写进响应,
+     * 否则质检员看到「合格」会以为批次已经放行, 而它还在等处置复核。
+     */
+    private void putBatchQualityOutcome(Map<String, Object> result, String factoryId, QualityInspection saved) {
+        if (saved == null || saved.getProductionBatchId() == null) {
+            return;
+        }
+        productionBatchRepository.findById(saved.getProductionBatchId())
+                .filter(batch -> factoryId.equals(batch.getFactoryId()) && batch.getQualityStatus() != null)
+                .ifPresent(batch -> {
+                    result.put("batchQualityStatus", batch.getQualityStatus().name());
+                    result.put("dispositionRequired", batch.getQualityStatus().isDispositionLocked()
+                            && !"FAIL".equalsIgnoreCase(saved.getResult()));
+                });
     }
 
     private List<QualityCheckItemBinding> dynamicBindings(String factoryId, ProductionBatch batch) {
@@ -1247,6 +1287,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         Map<String, Object> result = new HashMap<>();
         result.put("inspection", saved);
         result.put("passRate", passRate);
+        putBatchQualityOutcome(result, factoryId, saved);
         return result;
     }
 
