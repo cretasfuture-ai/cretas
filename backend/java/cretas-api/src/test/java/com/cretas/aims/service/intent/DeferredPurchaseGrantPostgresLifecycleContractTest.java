@@ -169,6 +169,28 @@ class DeferredPurchaseGrantPostgresLifecycleContractTest {
         when(suppliers.findByIdAndFactoryId("SUP", FACTORY)).thenAnswer(inv -> Optional.ofNullable(em.find(com.cretas.aims.entity.Supplier.class, "SUP")));
         when(materials.findByIdAndFactoryId("MAT", FACTORY)).thenAnswer(inv -> Optional.ofNullable(em.find(com.cretas.aims.entity.RawMaterialType.class, "MAT")));
         when(materials.findById("MAT")).thenAnswer(inv -> Optional.ofNullable(em.find(com.cretas.aims.entity.RawMaterialType.class, "MAT")));
+        when(materials.lockByFactoryIdAndIdIn(eq(FACTORY), anyCollection())).thenAnswer(inv -> {
+            Collection<?> ids = inv.getArgument(1);
+            return ids.stream()
+                    .map(String.class::cast)
+                    .map(id -> em.find(com.cretas.aims.entity.RawMaterialType.class, id))
+                    .filter(Objects::nonNull)
+                    .toList();
+        });
+        when(materials.findFreshWriteStateByFactoryIdAndIdIn(eq(FACTORY), anyCollection())).thenAnswer(inv -> {
+            Collection<?> ids = inv.getArgument(1);
+            return ids.stream().map(String.class::cast).map(id -> {
+                var state = mock(RawMaterialTypeRepository.WriteStateProjection.class);
+                when(state.getId()).thenReturn(id);
+                when(state.getIsActive()).thenReturn(jdbc.queryForObject(
+                        "SELECT is_active FROM raw_material_types WHERE factory_id=? AND id=?",
+                        Boolean.class, FACTORY, id));
+                when(state.getMergedIntoId()).thenReturn(jdbc.queryForObject(
+                        "SELECT merged_into_id FROM raw_material_types WHERE factory_id=? AND id=?",
+                        String.class, FACTORY, id));
+                return state;
+            }).toList();
+        });
         var relation = new com.cretas.aims.entity.SupplierMaterial(); relation.setId("REL"); relation.setFactoryId(FACTORY); relation.setSupplierId("SUP"); relation.setMaterialTypeId("MAT"); relation.setPurchaseUnit("kg"); relation.setActive(true);
         when(supplierMaterials.existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue(FACTORY, "SUP", "MAT")).thenReturn(true);
         when(supplierMaterials.findByFactoryIdAndSupplierIdAndMaterialTypeId(FACTORY, "SUP", "MAT")).thenReturn(Optional.of(relation));

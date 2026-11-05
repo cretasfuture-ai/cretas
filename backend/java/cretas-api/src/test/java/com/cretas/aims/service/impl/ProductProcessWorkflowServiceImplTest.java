@@ -25,6 +25,7 @@ import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.service.validation.ProductProcessWorkflowCatalogValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.ProductionPlanService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -129,7 +130,8 @@ class ProductProcessWorkflowServiceImplTest {
                 workflowBomSynchronizationService, workflowActivationService,
                 activationRepository, productionPlanService,
                 objectMapper, validator, catalogValidator, unitValidator,
-                productTypeRepository, rawMaterialTypeRepository);
+                productTypeRepository, rawMaterialTypeRepository,
+                mock(MaterialReferenceWriteGuard.class));
         try {
             var field = ProductProcessWorkflowServiceImpl.class.getDeclaredField("actorResolver");
             field.setAccessible(true);
@@ -493,6 +495,7 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflow draft = persistedDraft(request, 3L);
         draft.setId(91L);
         draft.setDefinitionVersion(2);
+        when(repository.lockByIdAndFactoryId(91L, FACTORY_ID)).thenReturn(Optional.of(draft));
         when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
                 .thenReturn(Optional.of(draft));
@@ -540,6 +543,7 @@ class ProductProcessWorkflowServiceImplTest {
         ProductProcessWorkflow draft = persistedDraft(request, 3L);
         draft.setId(91L);
         draft.setDefinitionVersion(2);
+        when(repository.lockByIdAndFactoryId(91L, FACTORY_ID)).thenReturn(Optional.of(draft));
         when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
                 FACTORY_ID, PRODUCT_ID, ProductProcessWorkflow.Status.DRAFT))
                 .thenReturn(Optional.of(draft));
@@ -627,9 +631,18 @@ class ProductProcessWorkflowServiceImplTest {
         rawOwner.setCode("0010030002000001");
         rawOwner.setUnit("只");
         rawOwner.setCreatedBy(77L);
+        rawOwner.setIsActive(true);
+        ProductType rawOwnerAnchor = new ProductType();
+        rawOwnerAnchor.setId(rawOwnerId);
+        rawOwnerAnchor.setFactoryId(FACTORY_ID);
+        rawOwnerAnchor.setProductCategory(ProductCategory.RAW_MATERIAL);
+        rawOwnerAnchor.setIsActive(false);
         when(productTypeRepository.findByIdAndFactoryId(rawOwnerId, FACTORY_ID))
                 .thenReturn(Optional.empty());
-        when(rawMaterialTypeRepository.findById(rawOwnerId)).thenReturn(Optional.of(rawOwner));
+        when(productTypeRepository.findByIdAndFactoryIdForUpdate(rawOwnerId, FACTORY_ID))
+                .thenReturn(Optional.of(rawOwnerAnchor));
+        when(rawMaterialTypeRepository.findByIdAndFactoryId(rawOwnerId, FACTORY_ID))
+                .thenReturn(Optional.of(rawOwner));
         when(productTypeRepository.saveAndFlush(any(ProductType.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(repository.findFirstByFactoryIdAndProductTypeIdAndStatusOrderByDefinitionVersionDesc(
@@ -946,7 +959,8 @@ class ProductProcessWorkflowServiceImplTest {
                 repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
                 workflowBomSynchronizationService, workflowActivationService,
                 activationRepository, productionPlanService, new ObjectMapper(), validator,
-                realCatalogValidator, unitValidator, productTypeRepository, rawMaterialTypeRepository);
+                realCatalogValidator, unitValidator, productTypeRepository, rawMaterialTypeRepository,
+                mock(MaterialReferenceWriteGuard.class));
 
         when(repository.lockByIdAndFactoryId(draft.getId(), FACTORY_ID)).thenReturn(Optional.of(draft));
         when(repository.saveAndFlush(any(ProductProcessWorkflow.class)))
@@ -1415,7 +1429,8 @@ class ProductProcessWorkflowServiceImplTest {
                 workflowBomSynchronizationService, workflowActivationService,
                 activationRepository, productionPlanService,
                 new ObjectMapper(), validator, realCatalogValidator, unitValidator,
-                productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class));
+                productTypeRepository, mock(com.cretas.aims.repository.RawMaterialTypeRepository.class),
+                mock(MaterialReferenceWriteGuard.class));
 
         BusinessException error = assertThrows(BusinessException.class,
                 () -> realService.publish(FACTORY_ID, PRODUCT_ID, 3L));

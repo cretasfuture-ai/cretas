@@ -6,10 +6,15 @@ import com.cretas.aims.dto.material.MaterialMergeDTO;
 import com.cretas.aims.dto.material.MaterialSuggestDTO;
 import com.cretas.aims.dto.material.RawMaterialTypeDTO;
 import com.cretas.aims.entity.RawMaterialType;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.RawMaterialTypeService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +22,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
 
 import java.util.List;
 import java.util.Map;
@@ -45,13 +51,36 @@ class MaterialAliasMergeContractTest {
     @Autowired private RawMaterialTypeService materialTypeService;
     @Autowired private MaterialAliasMergeService aliasMergeService;
     @Autowired private RawMaterialTypeRepository materialRepo;
+    @Autowired private UserRepository userRepo;
+    @jakarta.persistence.PersistenceContext private jakarta.persistence.EntityManager entityManager;
+    private AuthenticatedActor.ActorScope actorScope;
 
     @BeforeEach
     void setUp() {
+        RequestContextHolder.resetRequestAttributes();
         jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
+        jdbc.update("INSERT INTO factories (id, name, type, level, is_active, manually_verified, ai_weekly_quota, "
+                        + "created_at, updated_at) VALUES (?, ?, 'FACTORY', 0, TRUE, FALSE, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                        + "(?, ?, 'FACTORY', 0, TRUE, FALSE, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                F, "Alias Merge Factory", OTHER, "Alias Merge Other Factory");
+        User actor = new User();
+        actor.setFactoryId(F);
+        actor.setUsername("alias-merge-admin");
+        actor.setPasswordHash("test");
+        actor.setIsActive(true);
+        actor.setRoleCode("factory_super_admin");
+        actor = userRepo.saveAndFlush(actor);
+        actorScope = AuthenticatedActor.trustedAsyncScope(new AuthenticatedActor(
+                AuthenticatedActorType.FACTORY_USER, actor.getId(), F, actor.getRoleCode()));
         material("M-MASTER", F, "LY-001", "酱油", "kg");
         material("M-DUP", F, "LY-002", "生抽酱油", "kg");
         material("M-OTHER-FACTORY", OTHER, "LY-001", "大骨", "kg");
+    }
+
+    @AfterEach
+    void clearActor() {
+        if (actorScope != null) actorScope.close();
+        RequestContextHolder.resetRequestAttributes();
     }
 
     @Test
@@ -93,7 +122,7 @@ class MaterialAliasMergeContractTest {
     }
 
     @Test
-    @DisplayName("合并前: 库存 / 配方 / 工艺图 / 供应商 / 在途采购 各自拦住并列出位置; 已了结的引用不拦")
+    @DisplayName("合并前: 库存 / 当前配方 / 已发布工艺图 / 已开始收货的采购单各自拦住并列出位置; 已了结的引用不拦")
     void mergeIsBlockedByEveryLiveReference() {
         // 阴性对照先铺: 这些都不该拦
         batch("B-USED-UP", F, "M-DUP", 10, 10, "USED_UP");
@@ -109,26 +138,152 @@ class MaterialAliasMergeContractTest {
         workflow(F, "PUBLISHED", "M-DUP");
         supplierMaterial("SM-ON", F, "S-2", "M-DUP", true);
         purchaseOrder("PO-OPEN", F, "APPROVED", "M-DUP");
+        purchaseOrder("PO-PART", F, "PARTIAL_RECEIVED", "M-DUP", 3);
 
         MaterialMergeDTO.MergeCheck check = check();
         assertThat(check.isCanMerge()).isFalse();
         Map<String, MaterialMergeDTO.Blocker> byCode = check.getBlockers().stream()
                 .collect(java.util.stream.Collectors.toMap(MaterialMergeDTO.Blocker::getCode, b -> b));
-        assertThat(byCode).containsOnlyKeys("STOCK", "BOM", "WORKFLOW", "SUPPLIER", "PURCHASE_ORDER");
+        assertThat(byCode).containsOnlyKeys("STOCK", "BOM", "WORKFLOW", "PURCHASE_ORDER");
         assertThat(byCode.get("STOCK").getMessage()).isEqualTo("还有库存 10 kg（1 个批次）");
         assertThat(byCode.get("BOM").getItems()).containsExactly("卤牛肉");
         assertThat(byCode.get("WORKFLOW").getItems()).containsExactly("卤牛肉产品");
-        assertThat(byCode.get("SUPPLIER").getItems()).containsExactly("供应商S-2");
-        assertThat(byCode.get("PURCHASE_ORDER").getItems()).containsExactly("PO-OPEN");
+        assertThat(byCode.get("PURCHASE_ORDER").getItems()).containsExactly("PO-PART");
 
         assertThatThrownBy(() -> controller.merge(F, "M-DUP", new MaterialMergeDTO.MergeRequest("M-MASTER", null)))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("现在还不能合并")
                 .hasMessageContaining("还有库存 10 kg")
-                .hasMessageContaining("还有 1 张采购单没完成");
+                .hasMessageContaining("还有 1 张采购单已开始收货");
         RawMaterialType dup = materialRepo.findById("M-DUP").orElseThrow();
         assertThat(dup.getMergedIntoId()).isNull();
         assertThat(dup.getIsActive()).isTrue();
+    }
+
+    @Test
+    @DisplayName("单位等价: 草稿工艺图 / 供货关系 / 没收货的采购单行换到主物料; 已发布、已完成、别厂的一行不动")
+    void mergeReplacesDraftsSuppliersAndUnreceivedOrderLines() {
+        long draft = realWorkflow(F, "DRAFT", "M-DUP", "LY-002", "生抽酱油");
+        long snapshot = realWorkflow(F, "SNAPSHOT", "M-DUP", "LY-002", "生抽酱油");
+        long otherFactory = realWorkflow(OTHER, "DRAFT", "M-DUP", "LY-002", "生抽酱油");
+        supplierMaterial("SM-MOVE", F, "S-1", "M-DUP", true);
+        supplierMaterial("SM-OLD", F, "S-2", "M-DUP", true);
+        supplierMaterial("SM-KEEP", F, "S-2", "M-MASTER", true);
+        supplierMaterial("SM-OFF", F, "S-3", "M-DUP", true);
+        supplierMaterial("SM-BACK", F, "S-3", "M-MASTER", false);
+        supplierMaterial("SM-PREF-DUP", F, "S-4", "M-DUP", true);
+        supplierMaterial("SM-PREF-MASTER", F, "S-5", "M-MASTER", true);
+        jdbc.update("UPDATE supplier_materials SET preferred = TRUE WHERE id IN ('SM-PREF-DUP', 'SM-PREF-MASTER')");
+        supplierMaterial("SM-OTHER", OTHER, "S-9", "M-DUP", true);
+        purchaseOrder("PO-OPEN", F, "APPROVED", "M-DUP");
+        purchaseOrder("PO-DONE", F, "COMPLETED", "M-DUP");
+        purchaseOrder("PO-OTHER", OTHER, "APPROVED", "M-DUP");
+
+        MaterialMergeDTO.MergeCheck check = check();
+        assertThat(check.isCanMerge()).isTrue();
+        assertThat(check.getReplacements()).extracting(MaterialMergeDTO.Replacement::getMessage)
+                .containsExactly("1 张草稿工艺图", "4 家供应商的供货关系", "1 张没收货的采购单");
+
+        MaterialMergeDTO.ReplacementResult replaced = controller
+                .merge(F, "M-DUP", new MaterialMergeDTO.MergeRequest("M-MASTER", null)).getData().getReplaced();
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(replaced.getDraftWorkflows()).isEqualTo(1);
+        assertThat(replaced.getSuppliers()).isEqualTo(4);
+        assertThat(replaced.getPurchaseOrderItems()).isEqualTo(1);
+
+        String nodes = nodes(draft);
+        assertThat(nodes).doesNotContain("M-DUP").doesNotContain("LY-002").doesNotContain("生抽酱油");
+        assertThat(nodes).contains("M-MASTER").contains("LY-001").contains("酱油");
+        // 同一张图里别的物料不受影响
+        assertThat(nodes).contains("M-BEEF").contains("NR-1").contains("牛肉");
+        assertThat(nodes(snapshot)).contains("M-DUP");
+        assertThat(nodes(otherFactory)).contains("M-DUP");
+
+        assertThat(supplierRow("SM-MOVE")).containsEntry("MATERIAL_TYPE_ID", "M-MASTER").containsEntry("ACTIVE", true);
+        // 这家已在供主物料: 不能有两条, 旧的停用, 主物料的价格不动
+        assertThat(supplierRow("SM-OLD")).containsEntry("MATERIAL_TYPE_ID", "M-DUP").containsEntry("ACTIVE", false);
+        assertThat(supplierRow("SM-KEEP")).containsEntry("ACTIVE", true);
+        // 主物料那条是停用的: 重新启用, 否则这家就不供了
+        assertThat(supplierRow("SM-OFF")).containsEntry("ACTIVE", false);
+        assertThat(supplierRow("SM-BACK")).containsEntry("ACTIVE", true);
+        // 一个物料只能有一条首选
+        assertThat(supplierRow("SM-PREF-DUP")).containsEntry("MATERIAL_TYPE_ID", "M-MASTER").containsEntry("PREFERRED", false);
+        assertThat(supplierRow("SM-PREF-MASTER")).containsEntry("PREFERRED", true);
+        assertThat(supplierRow("SM-OTHER")).containsEntry("MATERIAL_TYPE_ID", "M-DUP");
+        assertThat(replaced.getNotes()).hasSize(3);
+
+        assertThat(orderItem("PO-OPEN")).containsEntry("MATERIAL_TYPE_ID", "M-MASTER").containsEntry("MATERIAL_NAME", "酱油");
+        assertThat(orderItem("PO-DONE")).containsEntry("MATERIAL_TYPE_ID", "M-DUP");
+        assertThat(orderItem("PO-OTHER")).containsEntry("MATERIAL_TYPE_ID", "M-DUP");
+    }
+
+    @Test
+    @DisplayName("工艺图 JSON 只替换物料身份字段; id/source/target 等自由文本即使同值也不动")
+    void mergeDoesNotRewriteUnrelatedJsonIds() {
+        long draft = realWorkflow(F, "DRAFT", "M-DUP", "LY-002", "生抽酱油");
+        String nodes = "[{\"id\":\"M-DUP\",\"source\":\"M-DUP\",\"target\":\"M-DUP\","
+                + "\"data\":{\"skuId\":\"M-DUP\",\"skuCode\":\"LY-002\",\"name\":\"生抽酱油\"}}]";
+        jdbc.update("UPDATE product_process_workflows SET nodes_json = ? FORMAT JSON WHERE id = ?", nodes, draft);
+
+        controller.merge(F, "M-DUP", new MaterialMergeDTO.MergeRequest("M-MASTER", null));
+
+        String replaced = nodes(draft);
+        assertThat(replaced).contains("\"id\":\"M-DUP\"")
+                .contains("\"source\":\"M-DUP\"")
+                .contains("\"target\":\"M-DUP\"")
+                .contains("\"skuId\":\"M-MASTER\"")
+                .contains("\"skuCode\":\"LY-001\"")
+                .contains("\"name\":\"酱油\"");
+    }
+
+    @Test
+    @DisplayName("主物料存在同供应商软删记录时预检拒绝, 不停用重复物料; 无软删记录的正向迁移由已有用例覆盖")
+    void mergeBlocksSupplierTombstoneWithoutMutatingDuplicate() {
+        supplierMaterial("SM-TOMBSTONE", F, "S-1", "M-MASTER", true);
+        jdbc.update("UPDATE supplier_materials SET deleted_at = CURRENT_TIMESTAMP WHERE id = 'SM-TOMBSTONE'");
+        supplierMaterial("SM-DUP", F, "S-1", "M-DUP", true);
+
+        MaterialMergeDTO.MergeCheck check = check();
+        assertThat(check.isCanMerge()).isFalse();
+        assertThat(check.getBlockers()).extracting(MaterialMergeDTO.Blocker::getCode)
+                .contains("SUPPLIER_TOMBSTONE");
+
+        assertThatThrownBy(() -> controller.merge(F, "M-DUP",
+                new MaterialMergeDTO.MergeRequest("M-MASTER", null)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("现在还不能合并")
+                .hasMessageContaining("主物料供货记录已删除");
+        assertThat(materialRepo.findById("M-DUP").orElseThrow().getMergedIntoId()).isNull();
+        assertThat(supplierRow("SM-DUP"))
+                .containsEntry("MATERIAL_TYPE_ID", "M-DUP")
+                .containsEntry("ACTIVE", true);
+    }
+
+    @Test
+    @DisplayName("阴性对照: 单位不同不自动替换, 草稿 / 供应商 / 采购单都拦住, 一行不动")
+    void differentUnitsKeepBlocking() {
+        RawMaterialType bottled = materialRepo.findById("M-DUP").orElseThrow();
+        bottled.setUnit("瓶");
+        materialRepo.saveAndFlush(bottled);
+        long draft = realWorkflow(F, "DRAFT", "M-DUP", "LY-002", "生抽酱油");
+        supplierMaterial("SM-ON", F, "S-2", "M-DUP", true);
+        purchaseOrder("PO-OPEN", F, "APPROVED", "M-DUP");
+
+        MaterialMergeDTO.MergeCheck check = check();
+        assertThat(check.isCanMerge()).isFalse();
+        assertThat(check.getReplacements()).isEmpty();
+        assertThat(check.getBlockers()).extracting(MaterialMergeDTO.Blocker::getCode)
+                .containsExactly("DRAFT_WORKFLOW", "SUPPLIER", "OPEN_PURCHASE_ORDER");
+        assertThat(check.getBlockers().get(1).getHint()).contains("单位不同");
+
+        assertThatThrownBy(() -> controller.merge(F, "M-DUP", new MaterialMergeDTO.MergeRequest("M-MASTER", null)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("现在还不能合并");
+        entityManager.flush();
+        assertThat(nodes(draft)).contains("M-DUP");
+        assertThat(supplierRow("SM-ON")).containsEntry("MATERIAL_TYPE_ID", "M-DUP");
+        assertThat(orderItem("PO-OPEN")).containsEntry("MATERIAL_TYPE_ID", "M-DUP");
     }
 
     @Test
@@ -231,6 +386,32 @@ class MaterialAliasMergeContractTest {
                 factoryId, status, "[{\"id\":\"n1\",\"data\":{\"materialTypeId\":\"" + materialId + "\"}}]");
     }
 
+    /** 线上真实节点形态: 物料节点 data 带 skuId / skuCode / name, 工序节点 ports 带 skuId / materialName。 */
+    private long realWorkflow(String factoryId, String status, String materialId, String code, String name) {
+        workflow(factoryId, status, "IGNORED");
+        Long id = jdbc.queryForObject("SELECT MAX(id) FROM product_process_workflows", Long.class);
+        String nodes = "[{\"id\":\"material:raw\",\"kind\":\"RAW_MATERIAL\",\"data\":{\"name\":\"" + name
+                + "\",\"bound\":true,\"skuId\":\"" + materialId + "\",\"skuCode\":\"" + code + "\",\"baseUnit\":\"kg\"}},"
+                + "{\"id\":\"material:other\",\"kind\":\"RAW_MATERIAL\",\"data\":{\"name\":\"牛肉\",\"skuId\":\"M-BEEF\",\"skuCode\":\"NR-1\"}},"
+                + "{\"id\":\"process:1\",\"data\":{\"ports\":[{\"id\":\"in\",\"unit\":\"kg\",\"skuId\":\"" + materialId
+                + "\",\"materialName\":\"" + name + "\"}]}}]";
+        jdbc.update("UPDATE product_process_workflows SET nodes_json = ? FORMAT JSON WHERE id = ?", nodes, id);
+        return id;
+    }
+
+    private String nodes(long workflowId) {
+        return jdbc.queryForObject("SELECT CAST(nodes_json AS VARCHAR) FROM product_process_workflows WHERE id = ?",
+                String.class, workflowId);
+    }
+
+    private Map<String, Object> supplierRow(String id) {
+        return jdbc.queryForMap("SELECT material_type_id, active, preferred FROM supplier_materials WHERE id = ?", id);
+    }
+
+    private Map<String, Object> orderItem(String orderId) {
+        return jdbc.queryForMap("SELECT material_type_id, material_name FROM purchase_order_items WHERE purchase_order_id = ?", orderId);
+    }
+
     private void supplierMaterial(String id, String factoryId, String supplierId, String materialId, boolean active) {
         jdbc.update("INSERT INTO suppliers (id, factory_id, supplier_code, code, name, is_active, created_by, version, created_at, updated_at) "
                 + "SELECT ?, ?, ?, ?, ?, TRUE, 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP "
@@ -243,13 +424,17 @@ class MaterialAliasMergeContractTest {
     }
 
     private void purchaseOrder(String id, String factoryId, String status, String materialId) {
+        purchaseOrder(id, factoryId, status, materialId, 0);
+    }
+
+    private void purchaseOrder(String id, String factoryId, String status, String materialId, double received) {
         jdbc.update("INSERT INTO purchase_orders (id, factory_id, order_number, purchase_type, order_date, status, "
                         + "created_by, version, purchase_invoice_status, vflag, created_at, updated_at) "
                         + "VALUES (?, ?, ?, 'DIRECT', CURRENT_DATE, ?, 1, 0, 'NOT_RECEIVED', 'UNCREATED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 id, factoryId, id, status);
         jdbc.update("INSERT INTO purchase_order_items (purchase_order_id, material_type_id, quantity, unit, price_unit, "
                         + "quantity_to_price_factor, received_quantity, created_at, updated_at) "
-                        + "VALUES (?, ?, 10, 'kg', 'kg', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                id, materialId);
+                        + "VALUES (?, ?, 10, 'kg', 'kg', 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                id, materialId, received);
     }
 }

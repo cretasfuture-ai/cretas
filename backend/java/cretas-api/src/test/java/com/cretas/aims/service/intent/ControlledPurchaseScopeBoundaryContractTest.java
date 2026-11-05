@@ -313,6 +313,28 @@ class ControlledPurchaseScopeBoundaryContractTest {
         var lookup = mock(RawMaterialTypeRepository.class);
         when(lookup.findById(anyString())).thenAnswer(call -> Optional.ofNullable(
                 entityManager.getEntityManager().find(RawMaterialType.class, call.getArgument(0))));
+        when(lookup.lockByFactoryIdAndIdIn(eq(FACTORY), anyCollection())).thenAnswer(inv -> {
+            Collection<?> ids = inv.getArgument(1);
+            return ids.stream()
+                    .map(String.class::cast)
+                    .map(id -> entityManager.getEntityManager().find(RawMaterialType.class, id))
+                    .filter(Objects::nonNull)
+                    .toList();
+        });
+        when(lookup.findFreshWriteStateByFactoryIdAndIdIn(eq(FACTORY), anyCollection())).thenAnswer(inv -> {
+            Collection<?> ids = inv.getArgument(1);
+            return ids.stream().map(String.class::cast).map(id -> {
+                var state = mock(RawMaterialTypeRepository.WriteStateProjection.class);
+                when(state.getId()).thenReturn(id);
+                when(state.getIsActive()).thenReturn(jdbc.queryForObject(
+                        "SELECT is_active FROM raw_material_types WHERE factory_id=? AND id=?",
+                        Boolean.class, FACTORY, id));
+                when(state.getMergedIntoId()).thenReturn(jdbc.queryForObject(
+                        "SELECT merged_into_id FROM raw_material_types WHERE factory_id=? AND id=?",
+                        String.class, FACTORY, id));
+                return state;
+            }).toList();
+        });
         var relations = mock(SupplierMaterialRepository.class);
         var relation = new SupplierMaterial();
         relation.setId("SCOPE-REL"); relation.setFactoryId(FACTORY); relation.setSupplierId(SUPPLIER);

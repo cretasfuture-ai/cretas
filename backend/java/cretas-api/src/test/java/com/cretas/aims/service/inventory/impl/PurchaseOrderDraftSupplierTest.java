@@ -9,6 +9,7 @@ import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.TaxRate;
 import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
@@ -38,6 +39,7 @@ class PurchaseOrderDraftSupplierTest {
     private PurchaseOrderRepository orderRepository;
     private SupplierRepository supplierRepository;
     private RawMaterialTypeRepository materialTypeRepository;
+    private MaterialReferenceWriteGuard materialReferenceWriteGuard;
     private PurchaseServiceImpl service;
 
     @BeforeEach
@@ -45,6 +47,7 @@ class PurchaseOrderDraftSupplierTest {
         orderRepository = mock(PurchaseOrderRepository.class);
         supplierRepository = mock(SupplierRepository.class);
         materialTypeRepository = mock(RawMaterialTypeRepository.class);
+        materialReferenceWriteGuard = mock(MaterialReferenceWriteGuard.class);
         service = new PurchaseServiceImpl(
                 orderRepository,
                 mock(PurchaseOrderItemRepository.class),
@@ -55,7 +58,8 @@ class PurchaseOrderDraftSupplierTest {
                 mock(BomRecipeItemRepository.class),
                 mock(com.cretas.aims.service.finance.ArApService.class),
                 mock(ApplicationEventPublisher.class),
-                mock(MaterialBatchService.class));
+                mock(MaterialBatchService.class),
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(service, "self", service);
     }
 
