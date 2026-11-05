@@ -110,6 +110,11 @@ class PurchaseSubmitPriceBackfillContractTest {
         relation.setActive(true);
         // 生产复现的第 2 步: owner 事后把默认采购价填成 8.85。
         relation.setDefaultPurchasePrice(new BigDecimal("8.85"));
+        // The spec-price path carries the persisted relation id. Production
+        // validates that identity before entering the OA stage, so keep the
+        // fixture on the same factory-scoped repository method.
+        when(relationRepository.findByIdAndFactoryId("relation-1", FACTORY))
+                .thenReturn(Optional.of(relation));
         when(relationRepository.findByFactoryIdAndSupplierIdAndMaterialTypeId(FACTORY, SUPPLIER, MATERIAL))
                 .thenReturn(Optional.of(relation));
         when(relationRepository.existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue(

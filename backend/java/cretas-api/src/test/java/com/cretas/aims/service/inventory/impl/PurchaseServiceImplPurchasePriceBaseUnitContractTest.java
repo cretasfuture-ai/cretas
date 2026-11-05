@@ -2,6 +2,7 @@ package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.Supplier;
+import com.cretas.aims.entity.SupplierMaterial;
 import com.cretas.aims.entity.enums.PurchaseOrderStatus;
 import com.cretas.aims.entity.bom.BomRecipe.Status;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -153,6 +154,41 @@ class PurchaseServiceImplPurchasePriceBaseUnitContractTest {
         verify(workflowEngine).startWorkflowIfConfigured(eq(FACTORY), eq("PURCHASE_ORDER"), eq(ORDER_ID),
                 context.capture(), eq(1309L));
         assertThat(context.getValue()).containsEntry("priceVarianceItemCount", 0);
+    }
+
+    @Test
+    void submitRejectsProvidedSupplierRelationFromAnotherMaterialEvenWhenMaterialRelationExists() {
+        PurchaseOrder order = order();
+        order.setStatus(PurchaseOrderStatus.DRAFT);
+        order.setSupplierId("supplier-1");
+        PurchaseOrderItem item = line("flour", "面粉", "kg", "kg", BigDecimal.ONE,
+                "kg", "kg", BigDecimal.ONE, new BigDecimal("4.66"));
+        item.setSupplierMaterialId("stale-relation");
+        when(orderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY)).thenReturn(Optional.of(order));
+        when(itemRepository.findByPurchaseOrderId(ORDER_ID)).thenReturn(List.of(item));
+        Supplier supplier = new Supplier();
+        supplier.setId("supplier-1");
+        supplier.setFactoryId(FACTORY);
+        supplier.setIsActive(true);
+        when(supplierRepository.findByIdAndFactoryId("supplier-1", FACTORY)).thenReturn(Optional.of(supplier));
+        when(supplierMaterialRepository.existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue(
+                FACTORY, "supplier-1", "flour")).thenReturn(true);
+        SupplierMaterial stale = new SupplierMaterial();
+        stale.setId("stale-relation");
+        stale.setFactoryId(FACTORY);
+        stale.setSupplierId("supplier-1");
+        stale.setMaterialTypeId("other-material");
+        stale.setActive(true);
+        when(supplierMaterialRepository.findByIdAndFactoryId("stale-relation", FACTORY))
+                .thenReturn(Optional.of(stale));
+
+        assertThatThrownBy(() -> service.submitOrder(FACTORY, ORDER_ID, 1309L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode")
+                .isEqualTo("SUPPLIER_MATERIAL_IDENTITY_INVALID");
+        verify(workflowEngine, never()).startWorkflowIfConfigured(anyString(), anyString(), anyString(), anyMap(), any());
+        verify(orderRepository, never()).save(any());
+        assertThat(order.getStatus()).isEqualTo(PurchaseOrderStatus.DRAFT);
     }
 
     @Test

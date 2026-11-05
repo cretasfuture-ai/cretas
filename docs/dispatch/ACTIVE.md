@@ -7,15 +7,15 @@
 
 ## 在飞任务
 
-- `ARTIFACT-PARAM-CASE-20261106` — `in-progress` — Owner food/root+param_executor；Base2de52fb66e；scope param case Entity/Repo/service/controller、报工两个写接点及专测；兼容迁移V20261106_1+缺省禁写，后启用。验收：真实JPA/PG、幂等/回滚/权限与报工fanout；无Supplier/Material/SOP/发布脚本改动。
+- `ARTIFACT-PARAM-CASE-20261106` — `in-progress` — Owner food/root；Base56a93c20e5；scope param case Entity/Repo/service/controller、两报工接点、Web及专测；兼容V20261106_1+缺省禁写后启用。Service7/JPA1/PG1+4、Web最终增量9已过，风险4项已修；待组合制品/CI。
+
+- `APS-WORKER-SHIFT-CONSTRAINT-20261106` — `in-progress` — Owner `01a1a954/root` — Base `342dc816fd24deecb85ea0cdbe60a0ae9247daf4` — scope UrgentInsertServiceImpl、ConfirmUrgentInsertRequest说明、WorkerShiftAvailabilityCheck及专测；真实HR三态/显式名单确认重核，空名单后配，不冒称预留；目标Contract+PG/CI后PR，避开食品/审计锁。
 
 
 
 
 
 
-
-- `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
 
 
 

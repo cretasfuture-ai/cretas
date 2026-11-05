@@ -30,9 +30,9 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.workflow.WorkflowRevisionSnapshotService;
 import com.cretas.aims.service.workflow.WorkflowActualIoSemantics;
 import com.cretas.aims.service.workflow.ProductProcessWorkflowActivationService;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.blueprint.activation.AssemblyActivationActorResolver;
 import com.cretas.aims.dto.workflow.WorkflowPlanRebindSummaryDTO;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,7 +45,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflowService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -65,6 +64,64 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     private final ProductProcessWorkflowUnitValidator unitValidator;
     private final ProductTypeRepository productTypeRepository;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
+    private final MaterialReferenceWriteGuard materialReferenceWriteGuard;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ProductProcessWorkflowServiceImpl(
+            ProductProcessWorkflowRepository repository,
+            ProductProcessWorkflowRevisionRepository revisionRepository,
+            WorkflowRevisionSnapshotService revisionSnapshotService,
+            BomWorkflowRevisionService bomWorkflowRevisionService,
+            WorkflowBomSynchronizationService workflowBomSynchronizationService,
+            ProductProcessWorkflowActivationService workflowActivationService,
+            ProductProcessWorkflowActivationRepository activationRepository,
+            ProductionPlanService productionPlanService,
+            ObjectMapper objectMapper,
+            ProductProcessWorkflowValidator validator,
+            ProductProcessWorkflowCatalogValidator catalogValidator,
+            ProductProcessWorkflowUnitValidator unitValidator,
+            ProductTypeRepository productTypeRepository,
+            RawMaterialTypeRepository rawMaterialTypeRepository,
+            MaterialReferenceWriteGuard materialReferenceWriteGuard) {
+        this.repository = repository;
+        this.revisionRepository = revisionRepository;
+        this.revisionSnapshotService = revisionSnapshotService;
+        this.bomWorkflowRevisionService = bomWorkflowRevisionService;
+        this.workflowBomSynchronizationService = workflowBomSynchronizationService;
+        this.workflowActivationService = workflowActivationService;
+        this.activationRepository = activationRepository;
+        this.productionPlanService = productionPlanService;
+        this.objectMapper = objectMapper;
+        this.validator = validator;
+        this.catalogValidator = catalogValidator;
+        this.unitValidator = unitValidator;
+        this.productTypeRepository = productTypeRepository;
+        this.rawMaterialTypeRepository = rawMaterialTypeRepository;
+        this.materialReferenceWriteGuard = materialReferenceWriteGuard;
+    }
+
+    /** Compatibility constructor for narrow legacy unit tests without Spring wiring. */
+    public ProductProcessWorkflowServiceImpl(
+            ProductProcessWorkflowRepository repository,
+            ProductProcessWorkflowRevisionRepository revisionRepository,
+            WorkflowRevisionSnapshotService revisionSnapshotService,
+            BomWorkflowRevisionService bomWorkflowRevisionService,
+            WorkflowBomSynchronizationService workflowBomSynchronizationService,
+            ProductProcessWorkflowActivationService workflowActivationService,
+            ProductProcessWorkflowActivationRepository activationRepository,
+            ProductionPlanService productionPlanService,
+            ObjectMapper objectMapper,
+            ProductProcessWorkflowValidator validator,
+            ProductProcessWorkflowCatalogValidator catalogValidator,
+            ProductProcessWorkflowUnitValidator unitValidator,
+            ProductTypeRepository productTypeRepository,
+            RawMaterialTypeRepository rawMaterialTypeRepository) {
+        this(repository, revisionRepository, revisionSnapshotService, bomWorkflowRevisionService,
+                workflowBomSynchronizationService, workflowActivationService, activationRepository,
+                productionPlanService, objectMapper, validator, catalogValidator, unitValidator,
+                productTypeRepository, rawMaterialTypeRepository,
+                new MaterialReferenceWriteGuard(rawMaterialTypeRepository));
+    }
 
     /**
      * 工艺保密 (写入侧): 路由闸只看所属产品和已存的图; 一张新草稿把受保护产品画进来 (多产出锚点的图),
@@ -110,6 +167,18 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 .toList());
         Optional<ProductProcessWorkflow> existingDraft = find(
                 factoryId, productTypeId, ProductProcessWorkflow.Status.DRAFT);
+        if (existingDraft.isPresent()) {
+            ProductProcessWorkflow lockedDraft = repository
+                    .lockByIdAndFactoryId(existingDraft.get().getId(), factoryId)
+                    .filter(row -> row.getStatus() == ProductProcessWorkflow.Status.DRAFT)
+                    .orElseThrow(() -> new BusinessException(409, "Workflow 草稿状态已变化，请刷新后重试")
+                            .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
+                            .withHint("请刷新当前工厂的工艺草稿后重新操作")
+                            .withSeverity("warning"));
+            existingDraft = Optional.of(lockedDraft);
+        }
+        // Owner/workflow lock above is followed by one deterministic raw lock.
+        lockActiveMaterials(factoryId, rawMaterialIds(factoryId, productTypeId, definition));
 
         ProductProcessWorkflow entity;
         boolean autoForked = false;
@@ -530,6 +599,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                         .withSeverity("warning"));
         assertCurrentVersion(lockVersion, draft);
         ProductProcessWorkflowDTO definition = toDTO(draft);
+        // publishInternal already owns the workflow row; raw references are the
+        // second and final lock class in the stable workflow -> raw order.
+        lockActiveMaterials(factoryId, rawMaterialIds(factoryId, productTypeId, definition));
         validator.validateForPublish(definition);
         // 🔴 2026-08-08: 这里【必须】按 synchronizeBom 分叉, 否则 3-3 的 BOM 投影是空转的。
         //
@@ -678,16 +750,82 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
                 factoryId, productTypeId, status);
     }
 
+    private List<String> rawMaterialIds(
+            String factoryId, String ownerId, ProductProcessWorkflowDTO definition) {
+        java.util.Set<String> ids = new java.util.TreeSet<>();
+        if (ProductCategory.RAW_MATERIAL.equals(
+                productTypeRepository.findByIdAndFactoryId(ownerId, factoryId)
+                        .map(ProductType::getProductCategory).orElse(null))) {
+            ids.add(ownerId);
+        }
+        if (definition == null || definition.getNodes() == null) return List.copyOf(ids);
+
+        java.util.Map<String, ProductProcessWorkflowDTO.Node> nodesById = definition.getNodes().stream()
+                .filter(Objects::nonNull)
+                .filter(node -> node.getId() != null)
+                .collect(java.util.stream.Collectors.toMap(
+                        ProductProcessWorkflowDTO.Node::getId, node -> node, (left, right) -> left));
+        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
+            if (node == null || node.getData() == null) continue;
+            java.util.Map<String, Object> data = node.getData();
+            if ("RAW_MATERIAL".equals(node.getKind())) {
+                addMaterialId(ids, data.get("skuId"));
+            }
+            addMaterialBindings(ids, data.get("materialBindings"));
+            if (data.get("materialTypeId") != null) {
+                addMaterialId(ids, data.get("materialTypeId"));
+            }
+            if (data.get("ports") instanceof List<?> ports) {
+                for (Object portValue : ports) {
+                    if (!(portValue instanceof java.util.Map<?, ?> port)) continue;
+                    Object materialNodeId = port.get("materialNodeId");
+                    ProductProcessWorkflowDTO.Node materialNode = nodesById.get(
+                            materialNodeId == null ? null : materialNodeId.toString());
+                    if (materialNode != null && "RAW_MATERIAL".equals(materialNode.getKind())) {
+                        addMaterialId(ids, port.get("skuId"));
+                    }
+                }
+            }
+        }
+        return List.copyOf(ids);
+    }
+
+    private void addMaterialBindings(java.util.Set<String> ids, Object rawBindings) {
+        if (!(rawBindings instanceof List<?> bindings)) return;
+        for (Object bindingValue : bindings) {
+            if (bindingValue instanceof java.util.Map<?, ?> binding) {
+                addMaterialId(ids, binding.get("materialTypeId"));
+            }
+        }
+    }
+
+    private void addMaterialId(java.util.Set<String> ids, Object value) {
+        if (value != null && !value.toString().isBlank()) ids.add(value.toString());
+    }
+
+    private void lockActiveMaterials(String factoryId, List<String> materialIds) {
+        materialReferenceWriteGuard.lockActive(factoryId, materialIds);
+    }
+
 
     private void requireWorkflowOwner(String factoryId, String ownerId) {
-        if (productTypeRepository.findByIdAndFactoryId(ownerId, factoryId).isPresent()) return;
+        Optional<ProductType> productOwner = productTypeRepository.findByIdAndFactoryId(ownerId, factoryId);
+        if (productOwner.isPresent()) {
+            // Raw-owner workflows use an inactive ProductType anchor with the
+            // same id. Validate the underlying raw row when that anchor exists.
+            if (ProductCategory.RAW_MATERIAL.equals(productOwner.get().getProductCategory())) {
+                rawMaterialTypeRepository.findByIdAndFactoryId(ownerId, factoryId)
+                        .ifPresent(raw -> requireActiveRawOwner(raw));
+            }
+            return;
+        }
 
-        RawMaterialType rawOwner = rawMaterialTypeRepository.findById(ownerId)
-                .filter(raw -> factoryId.equals(raw.getFactoryId()))
+        RawMaterialType rawOwner = rawMaterialTypeRepository.findByIdAndFactoryId(ownerId, factoryId)
                 .orElseThrow(() -> new BusinessException(400, "Workflow 所属成品或原料不存在于当前工厂")
                         .withCode("PRODUCT_PROCESS_WORKFLOW_OWNER_INVALID")
                         .withHint("请重新选择当前工厂内的有效成品或入口原料")
                         .withSeverity("warning"));
+        requireActiveRawOwner(rawOwner);
 
         // 运行时与历史外键仍以 product_type_id 作为通用 owner key。为真正的 RawMaterialType
         // 创建一个 inactive 内部锚点，前端产品目录会过滤 RAW_MATERIAL，不再把原料伪装成 SKU。
@@ -711,9 +849,17 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         }
     }
 
+    private void requireActiveRawOwner(RawMaterialType rawOwner) {
+        if (!Boolean.TRUE.equals(rawOwner.getIsActive()) || rawOwner.getMergedIntoId() != null) {
+            throw new BusinessException(409, "Workflow 所属原料已停用或已合并，不能继续编辑")
+                    .withCode("MATERIAL_REFERENCE_CONFLICT")
+                    .withHint("请改用当前有效的原料主数据");
+        }
+    }
+
     /** Product-row lock serializes the first draft as well, when no Workflow row exists yet. */
     private void lockWorkflowOwner(String factoryId, String ownerId) {
-        productTypeRepository.findByIdAndFactoryIdForUpdate(ownerId, factoryId)
+        ProductType owner = productTypeRepository.findByIdAndFactoryIdForUpdate(ownerId, factoryId)
                 .orElseThrow(() -> new BusinessException(409, "Workflow 所属对象正在变化，请刷新后重试")
                         .withCode("PRODUCT_PROCESS_WORKFLOW_CONFLICT")
                         .withHint("请重新加载后再次保存")

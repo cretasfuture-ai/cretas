@@ -9,6 +9,7 @@ import com.cretas.aims.entity.enums.TaxTreatment;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
@@ -21,12 +22,17 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -49,6 +55,7 @@ class PurchaseDraftQuoteFillContractTest {
     private final SupplierMaterialRepository relationRepository = mock(SupplierMaterialRepository.class);
     private final SupplierMaterialPurchaseSpecRepository specRepository =
             mock(SupplierMaterialPurchaseSpecRepository.class);
+    private final Map<String, RawMaterialType> materials = new HashMap<>();
     private PurchaseServiceImpl service;
     private PurchaseOrder draft;
     private PurchaseOrderItem quotedLine;
@@ -70,6 +77,19 @@ class PurchaseDraftQuoteFillContractTest {
         }
         material("material-1");
         material("material-2");
+        // applyQuoteToDraftLine now uses the owner-header lock plus the raw
+        // material lock/fresh-state contract. Keep this fixture on those real
+        // repository methods instead of the old bare findById shortcut.
+        when(materialRepository.lockByFactoryIdAndIdIn(eq(FACTORY), any()))
+                .thenAnswer(invocation -> {
+                    Collection<String> ids = invocation.getArgument(1);
+                    return ids.stream().map(materials::get).filter(Objects::nonNull).toList();
+                });
+        when(materialRepository.findFreshWriteStateByFactoryIdAndIdIn(eq(FACTORY), any()))
+                .thenAnswer(invocation -> {
+                    Collection<String> ids = invocation.getArgument(1);
+                    return ids.stream().map(this::activeWriteState).toList();
+                });
         relation("supplier-1", "material-1");
         relation("supplier-1", "material-2");
         relation("supplier-2", "material-1");
@@ -81,6 +101,8 @@ class PurchaseDraftQuoteFillContractTest {
         draft.setFactoryId(FACTORY);
         draft.setSupplierId("supplier-1");
         draft.setStatus(PurchaseOrderStatus.DRAFT);
+        when(orderRepository.findByIdAndFactoryIdForUpdate("PO-DRAFT", FACTORY))
+                .thenReturn(Optional.of(draft));
         when(orderRepository.findById("PO-DRAFT")).thenReturn(Optional.of(draft));
         when(orderRepository.save(any(PurchaseOrder.class))).thenAnswer(i -> i.getArgument(0));
 
@@ -148,11 +170,16 @@ class PurchaseDraftQuoteFillContractTest {
     @Test
     void otherFactoryDraftIsRejected() {
         draft.setFactoryId("F999");
+        // The production path uses the factory-scoped pessimistic lookup, so a
+        // cross-tenant row is absent at the lock boundary rather than loaded
+        // through a bare findById and rejected later.
+        when(orderRepository.findByIdAndFactoryIdForUpdate("PO-DRAFT", FACTORY))
+                .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.applyQuoteToDraftLine(FACTORY, "PO-DRAFT", "material-1", "kg", new BigDecimal("5"),
                 "supplier-1", new BigDecimal("8"), "kg", new BigDecimal("13"), null))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("无权访问");
+                .isInstanceOf(ResourceNotFoundException.class)
+                .hasMessageContaining("不存在或不属于当前组织");
         verify(orderRepository, never()).save(any(PurchaseOrder.class));
     }
 
@@ -188,7 +215,17 @@ class PurchaseDraftQuoteFillContractTest {
         material.setUnit("kg");
         material.setTaxTreatment(TaxTreatment.TAXABLE);
         material.setTaxRate(TaxRate.TAX_13);
+        materials.put(id, material);
         when(materialRepository.findById(id)).thenReturn(Optional.of(material));
+    }
+
+    private RawMaterialTypeRepository.WriteStateProjection activeWriteState(String id) {
+        RawMaterialTypeRepository.WriteStateProjection state =
+                mock(RawMaterialTypeRepository.WriteStateProjection.class);
+        when(state.getId()).thenReturn(id);
+        when(state.getIsActive()).thenReturn(true);
+        when(state.getMergedIntoId()).thenReturn(null);
+        return state;
     }
 
     private void relation(String supplierId, String materialId) {

@@ -50,6 +50,8 @@ export type AttachmentEntityType =
   | 'ECN'
   | 'CALL_RECORD'
   | 'PRODUCTION_REPORT'
+  | 'WORK_PROCESS'
+  | 'EQUIPMENT'
   | 'GENERIC';
 
 export type AttachmentFileCategory =
@@ -83,6 +85,24 @@ export interface Attachment {
   updatedAt?: string;
 }
 
+/** SOP-only metadata; server responses intentionally omit file and thumbnail URLs. */
+export interface SopAttachmentMetadata {
+  id: string;
+  factoryId: string;
+  entityType: 'WORK_PROCESS' | 'EQUIPMENT';
+  entityId: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  fileCategory: AttachmentFileCategory;
+  fileStorage: string;
+  fileHash?: string;
+  businessTag?: string;
+  description?: string;
+  uploadedAt: string;
+  uploadedByActor?: { type: 'FACTORY_USER' | 'PLATFORM_ADMIN'; id: number };
+}
+
 export interface RegisterAttachmentRequest {
   entityType: AttachmentEntityType;
   entityId: string;
@@ -108,6 +128,7 @@ export interface UpdateAttachmentRequest {
 export interface UploadUrlResponse {
   uploadUrl: string;
   fileUrl: string;
+  requiredHeaders?: Record<string, string>;
 }
 
 class AttachmentApi {
@@ -118,9 +139,11 @@ class AttachmentApi {
   }
 
   /** 1. 列表 — 某实体的所有附件. */
-  async list(entityType: AttachmentEntityType, entityId: string, factoryId?: string): Promise<Attachment[]> {
+  async list(entityType: 'WORK_PROCESS' | 'EQUIPMENT', entityId: string, factoryId?: string): Promise<SopAttachmentMetadata[]>;
+  async list(entityType: AttachmentEntityType, entityId: string, factoryId?: string): Promise<Attachment[]>;
+  async list(entityType: AttachmentEntityType, entityId: string, factoryId?: string): Promise<Array<Attachment | SopAttachmentMetadata>> {
     // apiClient 拦截器已 unwrap response.data — 返 ApiResponse envelope { success, data, ... }
-    const r = await apiClient.get<{ data: Attachment[] }>(
+    const r = await apiClient.get<{ data: Array<Attachment | SopAttachmentMetadata> }>(
       `${this.base(factoryId)}?entityType=${entityType}&entityId=${encodeURIComponent(entityId)}`
     );
     return r.data ?? [];
@@ -137,11 +160,25 @@ class AttachmentApi {
     return `${this.base(factoryId)}/${id}/download`;
   }
 
+  /**
+   * 3b. 取一个刚签好的临时下载地址 (私有文件用; 地址会过期, 不要缓存或落盘).
+   * 对应 GET /attachments/{id}/download-url, 返回 { url }.
+   */
+  async getSignedDownloadUrl(id: string, factoryId?: string): Promise<string> {
+    const r = await apiClient.get<{ data?: { url?: string } }>(
+      `${this.base(factoryId)}/${encodeURIComponent(id)}/download-url`
+    );
+    const url = r.data?.url;
+    if (!url) throw new Error('没有拿到文件地址');
+    return url;
+  }
+
   /** 4. 取 OSS pre-signed PUT URL — 5min. 返 { uploadUrl, fileUrl }. */
-  async getUploadUrl(fileName: string, fileType: string, factoryId?: string): Promise<UploadUrlResponse> {
+  async getUploadUrl(fileName: string, fileType: string, factoryId?: string,
+                     target?: { entityType: AttachmentEntityType; entityId: string; fileSize?: number }): Promise<UploadUrlResponse> {
     const r = await apiClient.post<{ data: UploadUrlResponse }>(
       `${this.base(factoryId)}/upload-url`,
-      { fileName, fileType }
+      target ? { fileName, fileType, ...target } : { fileName, fileType }
     );
     return r.data;
   }
@@ -151,11 +188,12 @@ class AttachmentApi {
     file: { uri: string; name: string; type: string },
     factoryId?: string,
   ): Promise<string> {
-    const { uploadUrl, fileUrl } = await this.getUploadUrl(file.name, file.type, factoryId);
+    const response = await this.getUploadUrl(file.name, file.type, factoryId);
+    const { uploadUrl, fileUrl, requiredHeaders = {} } = response;
     const blob = await (await fetch(file.uri)).blob();
     const putRes = await fetch(uploadUrl, {
       method: 'PUT',
-      headers: { 'Content-Type': file.type },
+      headers: { 'Content-Type': file.type, ...requiredHeaders },
       body: blob,
     });
     if (!putRes.ok) throw new Error(`OSS 上传失败 HTTP ${putRes.status}`);
@@ -203,13 +241,19 @@ class AttachmentApi {
     extras?: { businessTag?: string; description?: string; fileCategory?: AttachmentFileCategory },
     factoryId?: string
   ): Promise<Attachment> {
-    const { uploadUrl, fileUrl } = await this.getUploadUrl(file.name, file.type, factoryId);
+    const response = await this.getUploadUrl(
+      file.name, file.type, factoryId,
+      entityType === 'WORK_PROCESS' || entityType === 'EQUIPMENT'
+        ? { entityType, entityId, fileSize: file.size }
+        : undefined,
+    );
+    const { uploadUrl, fileUrl, requiredHeaders = {} } = response;
 
     const blob = await (await fetch(file.uri)).blob();
     const fileHash = sha256(await readBlobAsArrayBuffer(blob));
     const putRes = await fetch(uploadUrl, {
       method: 'PUT',
-      headers: { 'Content-Type': file.type },
+      headers: { 'Content-Type': file.type, ...requiredHeaders },
       body: blob,
     });
     if (!putRes.ok) throw new Error(`OSS 上传失败 HTTP ${putRes.status}`);
