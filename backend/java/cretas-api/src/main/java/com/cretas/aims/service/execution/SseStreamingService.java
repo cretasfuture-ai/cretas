@@ -142,6 +142,8 @@ public class SseStreamingService {
 
     /** 追问解读规则表 (纯函数, 无依赖)。 */
     private final FollowUpResolver followUpResolver = new FollowUpResolver();
+    @Autowired(required = false)
+    private SalesRankingConversationSupport salesRankingConversationSupport;
 
     /**
      * 参数收集会话 (缺参追问) 的读写。缺席时 (裸构造的单测) 不做缺参续轮, 行为同旧版。
@@ -326,6 +328,14 @@ public class SseStreamingService {
                 return;
             }
             boolean factoryPackConstrained = factoryPackRoute.isConstrained();
+
+            if (salesRankingConversationSupport != null) {
+                IntentExecuteResponse readContinuation = salesRankingConversationSupport.prepare(factoryId, userId, request);
+                if (readContinuation != null) {
+                    streamTerminalResponse(emitter, readContinuation, startTime);
+                    return;
+                }
+            }
 
             if (isPaginationRequest(request)) {
                 executePaginationRequest(emitter, factoryId, request, userId, userRole,

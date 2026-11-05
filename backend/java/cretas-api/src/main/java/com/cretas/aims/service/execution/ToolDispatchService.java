@@ -76,6 +76,8 @@ public class ToolDispatchService {
             com.cretas.aims.service.consent.LlmEgressGuard.standalone();
 
     static final String PARAM_EGRESS_SITE = "tool-param-extraction";
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesRankingConversationSupport salesRankingConversationSupport;
     private final ToolCallRedundancyService redundancyService;
     private final SelfCorrectionService selfCorrectionService;
     private final CorrectionAgentService correctionAgentService;
@@ -344,6 +346,9 @@ public class ToolDispatchService {
             // extract new parameters from the synthetic confirmation text after this boundary.
             boolean writeOperation = writeGuardService.isWriteTool(tool)
                     || writeGuardService.isWriteIntent(intent);
+            if (!writeOperation && salesRankingConversationSupport != null) {
+                salesRankingConversationSupport.rememberOtherRead(tool.getToolName(), factoryId, userId, request);
+            }
 
             // 2. 构建 ToolCall
             if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
@@ -430,6 +435,16 @@ public class ToolDispatchService {
                 }
             }
 
+            // Reserve before optional model work; a late result cannot revive a cancelled read.
+            if (SalesRankingParameters.TOOL.equals(tool.getToolName())) {
+                if (salesRankingConversationSupport != null) {
+                    salesRankingConversationSupport.parameters(factoryId, userId, request, params);
+                } else {
+                    SalesRankingParameters.apply(request.getUserInput(), params,
+                            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")));
+                }
+            }
+
             // 2.7. 优先使用已学习的规则提取参数
             Map<String, Object> parametersSchema = tool.getParametersSchema();
             @SuppressWarnings("unchecked")
@@ -477,6 +492,9 @@ public class ToolDispatchService {
                 }
             }
 
+            IntentExecuteResponse rankingDecision = applySalesRankingParameters(tool, factoryId, userId, request, params);
+            if (rankingDecision != null) return rankingDecision;
+
             // Learned rules, LLM extraction and resolved references are all untrusted inputs.
             // Re-bind the authenticated principal immediately before hashing and Tool execution.
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
@@ -519,6 +537,7 @@ public class ToolDispatchService {
             // 4. 冗余检查 (ET-Agent 行为校准)
             String sessionId = request.getSessionId() != null ? request.getSessionId() : "default";
             if (!writeOperation && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                    && !SalesRankingParameters.TOOL.equals(tool.getToolName())
                     && redundancyService.isRedundant(sessionId, tool.getToolName(), params)) {
                 log.info("检测到冗余调用，跳过执行: tool={}, session={}", tool.getToolName(), sessionId);
                 Optional<String> cachedResult = redundancyService.getCachedResult(sessionId, tool.getToolName(), params);
@@ -582,6 +601,12 @@ public class ToolDispatchService {
                             visiblePriceKeys = com.cretas.aims.security.PriceSensitiveContext.stopRecordingVisible();
                         }
                     }
+                    if (SalesRankingParameters.TOOL.equals(tool.getToolName())
+                            && salesRankingConversationSupport != null
+                            && !salesRankingConversationSupport.isCurrent(factoryId, userId, request)) {
+                        return IntentExecuteResponse.builder().status("CANCELLED")
+                                .message("查询条件已更新，已丢弃旧查询结果。").build();
+                    }
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
                     boolean toolSucceeded = isToolResultSuccessful(resultJson);
@@ -606,7 +631,8 @@ public class ToolDispatchService {
                                 .build();
                         ToolCallRecord savedRecord = redundancyService.recordToolCall(record);
                         if (!writeOperation && toolSucceeded && savedRecord != null && resultJson != null
-                                && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())) {
+                                && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                                && !SalesRankingParameters.TOOL.equals(tool.getToolName())) {
                             // cacheResult stores into tool_call_cache.cached_result (JSONB).
                             // Don't substring-truncate — that splits tokens and produces
                             // invalid JSON like `{..."previous` which PG rejects at INSERT.
@@ -969,6 +995,12 @@ public class ToolDispatchService {
                 log.warn("Preview 路径参数抽取失败 (继续用已有 params): {}", ex.getMessage());
             }
 
+            // Preview shares the read policy, but never admits a stale model result.
+            if (SalesRankingParameters.TOOL.equals(tool.getToolName()) && salesRankingConversationSupport != null) {
+                salesRankingConversationSupport.parameters(factoryId, userId, request, params);
+            }
+            IntentExecuteResponse rankingDecision = applySalesRankingParameters(tool, factoryId, userId, request, params);
+            if (rankingDecision != null) return rankingDecision;
             // Preview must expose the same principal-bound arguments as real execution.
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
             if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
@@ -1695,6 +1727,37 @@ public class ToolDispatchService {
 
     /** 工具 schema 顶层开关: 只有可选参数的工具要不要在执行前让大模型抽可选参数 (默认不抽)。 */
     public static final String EXTRACT_OPTIONAL_FLAG = "x-llm-extract-optional";
+
+    private IntentExecuteResponse applySalesRankingParameters(ToolExecutor tool, String factoryId, Long userId,
+                                             IntentExecuteRequest request, Map<String, Object> params) {
+        if (!SalesRankingParameters.TOOL.equals(tool.getToolName())) return null;
+        if (salesRankingConversationSupport != null
+                && !salesRankingConversationSupport.isCurrent(factoryId, userId, request)) {
+            return IntentExecuteResponse.builder().status("CANCELLED").aiMode("READ")
+                    .message("查询已取消或条件已更新，未执行旧查询。").build();
+        }
+        // Resolved read-query parameters cannot be overwritten by a later optional LLM pass.
+        if (request.getContext() != null) {
+            for (String key : java.util.List.of("startDate", "endDate", "limit", "metric")) {
+                if (request.getContext().get(key) != null) params.put(key, request.getContext().get(key));
+            }
+        }
+        if (salesRankingConversationSupport != null) {
+            salesRankingConversationSupport.applyCurrentParameters(request, params);
+        } else {
+            SalesRankingParameters.apply(request.getUserInput(), params,
+                    java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")));
+        }
+        // Unsupported metric is a capability boundary, not a failed call for a correction
+        // agent to "repair" by changing quantity back into amount.
+        if (!"amount".equals(params.get("metric"))) {
+            return IntentExecuteResponse.builder().status("UNSUPPORTED_CAPABILITY").aiMode("READ")
+                    .intentCode(SalesRankingParameters.INTENT)
+                    .message("当前产品排行仅支持销售订单金额排序，不支持销量排名；请确认是否改看金额排行。")
+                    .build();
+        }
+        return null;
+    }
 
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
                                                           Map<String, Object> existingParams) {

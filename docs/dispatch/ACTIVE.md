@@ -6,6 +6,7 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
+- `SEMANTIC-SALES-20261105` — `review` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — scope 排行Tool、execution普通/SSE/dispatch、会话槽DTO及专项tests/审计；197目标通过+package，新语义19项。保留freeze，待审分支不合main/部署；模型/训练/35/796不改。证据 archive/2026-11-05-semantic-sales-audit.md。
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
 
 
@@ -110,6 +111,7 @@
 
 
 ## Scope 锁地图
+- `SEMANTIC-SALES-20261105`：ProductSalesRankingTool、dto/conversation/EntitySlot、service/execution/{IntentExecutionOrchestrator,SseStreamingService,ToolDispatchService,SalesRanking*}；SalesRanking*ContractTest及语义审计文档。Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98；独立semantic-sales worktree，review锁保留；不含Repository/Entity/训练/线上。
 
 
 

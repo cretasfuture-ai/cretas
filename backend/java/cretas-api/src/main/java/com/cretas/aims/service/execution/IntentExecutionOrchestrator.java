@@ -83,6 +83,8 @@ public class IntentExecutionOrchestrator {
     private com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService controlledPurchase;
     @Autowired(required = false)
     private FactoryFollowUpService factoryFollowUpService;
+    @Autowired(required = false)
+    private SalesRankingConversationSupport salesRankingConversationSupport;
     /**
      * AI 数据访问审计: 一次意图执行一条; 期间的工具调用 / 成本分析并进这一条 (同一线程, 请求外也合并)。
      * 单测直接构造时不记录。
@@ -380,6 +382,10 @@ public class IntentExecutionOrchestrator {
             return sessionAdmissionDeniedResponse();
         }
 
+        if (salesRankingConversationSupport != null) {
+            IntentExecuteResponse readContinuation = salesRankingConversationSupport.prepare(factoryId, userId, request);
+            if (readContinuation != null) return readContinuation;
+        }
         if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
             hydrateRestaurantComparisonContext(factoryId, userId, request);
         }

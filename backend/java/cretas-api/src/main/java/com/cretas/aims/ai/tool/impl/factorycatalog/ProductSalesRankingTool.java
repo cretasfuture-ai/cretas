@@ -22,7 +22,7 @@ public class ProductSalesRankingTool extends AbstractBusinessTool {
 
     @Override public String getToolName() { return "product_sales_ranking"; }
     @Override public String getDescription() {
-        return "按真实客户销售订单行聚合产品销售数量和金额，支持日期范围、包装换算和数据权限";
+        return "按真实销售订单金额排序（不是实收收入）；支持日期范围和前N名，数量仅按单位分桶展示，不支持按销量排序";
     }
 
     @Override
@@ -30,6 +30,7 @@ public class ProductSalesRankingTool extends AbstractBusinessTool {
         return Map.of("type", "object", "properties", Map.of(
                 "startDate", Map.of("type", "string", "format", "date"),
                 "endDate", Map.of("type", "string", "format", "date"),
+                "metric", Map.of("type", "string", "enum", List.of("amount"), "description", "仅支持销售订单金额排序；quantity不可执行"),
                 "limit", Map.of("type", "integer", "minimum", 1, "maximum", 100)
         ), "required", List.of("startDate", "endDate"));
     }
@@ -43,7 +44,10 @@ public class ProductSalesRankingTool extends AbstractBusinessTool {
         LocalDate start = parseDate(getString(params, "startDate"), "startDate");
         LocalDate end = parseDate(getString(params, "endDate"), "endDate");
         if (start.isAfter(end)) throw new IllegalArgumentException("startDate不能晚于endDate");
+        String metric = getString(params, "metric", "amount");
+        if (!"amount".equals(metric)) throw new IllegalArgumentException("当前产品排行仅支持销售订单金额排序，不支持销量排名；数量按单位分桶，不能跨单位相加。请确认是否改看金额排行。");
         int limit = getInteger(params, "limit", 20);
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("排行条数必须在1到100之间");
         List<SalesOrderItemRepository.SalesRankingRow> rows = rankingService.rank(factoryId, start, end);
         List<Map<String, Object>> ranking = new ArrayList<>();
         for (int i = 0; i < Math.min(limit, rows.size()); i++) {
@@ -61,7 +65,9 @@ public class ProductSalesRankingTool extends AbstractBusinessTool {
         return Map.of("status", preview ? "PREVIEW" : "COMPLETED",
                 "startDate", start, "endDate", end, "ranking", ranking,
                 "source", "SALES_ORDER_ITEMS", "quantityGrouping", "PRODUCT_AND_NORMALIZED_UNIT",
-                "message", "按产品销售总金额排序；无法换算的数量按单位分桶，数量不跨单位相加。", "willWrite", false);
+                "metric", "amount", "limit", limit,
+                "message", "口径：" + start + "至" + end + "，按销售订单金额降序，前" + limit
+                        + "名（非实收收入）；数量按单位分桶，不跨单位相加。", "willWrite", false);
     }
 
     private LocalDate parseDate(String value, String name) {

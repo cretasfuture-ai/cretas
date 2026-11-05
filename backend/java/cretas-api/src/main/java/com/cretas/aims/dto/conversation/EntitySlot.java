@@ -50,7 +50,9 @@ public class EntitySlot {
         /** 订单 */
         ORDER,
         /** 菜品 */
-        DISH
+        DISH,
+        /** Last read-query parameters, scoped to this existing conversation memory. */
+        READ_QUERY
     }
 
     /**
