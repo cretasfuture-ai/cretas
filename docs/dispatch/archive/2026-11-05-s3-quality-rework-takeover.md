@@ -9,6 +9,8 @@ Owner: 01a1a954/root. Base SHA: 91bfa2c9b42ac5e98ca67b02e0de6686339b5913.
 范围排除：其他组SOP/参数偏离/物料替换、附件/全局inventory迁移、发布脚本/AI配置、他人业务数据与设备。共享router/menu只保留本组入口，整合最新main时保留他组原Owner变化。
 
 允许文件（两冻结PR原diff并集，对应修复限同scope）：
+
+补充对应测试scope：`backend/java/cretas-api/src/test/java/com/cretas/aims/service/wip/WipOutputCorrectionPostgresContractTest.java`。原PR1446新增mandatory持久化注入导致此既有JDBC-only PG fixture启动失败；仅补测试注入依赖，禁止删生产refresh或把该fixture称为Hibernate验证。真实缓存/锁并发由SecondaryHoldPostgresContractTest执行。
 - `.github/workflows/java-gate-pr.yml`
 - `backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/quality/QualityCheckUpdateTool.java`
 - `backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/quality/QualityDispositionExecuteTool.java`

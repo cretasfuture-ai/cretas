@@ -185,6 +185,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /** 返工计划的来源半成品: 超量闸与「被自己占用的来源不算领空」(D-S315-01)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
+
     /**
      * 缺口 16 跨客户领料: 半成品 / 在制批次的归属闸。字段注入只为既有单测装配;
      * 走到领用点却没有它 ⇒ {@link #ownershipGuard()} 500, ⛔ 不当作「不查」放行。
@@ -272,6 +276,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         assertColumnLimits(req);
         // 缺口 04: 同理放在最前面 —— 下面的端口校验 / 领料分配都不该在上游没料时先跑。
         assertWorkflowUpstreamReady(factoryId, planId, req);
+        assertSecondaryFeedWithinPlan(factoryId, planId, req);
         if (req.getProcessDate() == null) {
             throw new BusinessException(400, "正式报工必须填写生产日期")
                     .withCode("PROCESS_SHEET_PROCESS_DATE_REQUIRED")
@@ -1216,6 +1221,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 1b. 缺口 04: 按工艺图解锁。有正数产出的行会把这道工序记成已报 (WorkflowTaskProgressWriter),
         //     所以上游产出的料还没到时在这里拒绝; 草稿 (saveDraft) 不走本方法, 照常可存。
         assertWorkflowUpstreamReady(factoryId, planId, req);
+        assertSecondaryFeedWithinPlan(factoryId, planId, req);
 
         // 1c. 缺口 14: 工序间 / 投料时限。放在多产出分支之前。正式提交已在扣回料之前判过 (见 submitRow)。
         if (!req.isTimeLimitChecked()) {
@@ -1713,6 +1719,21 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .filter(t -> nodeId.equals(t.getWorkflowNodeId()))
                 .findFirst()
                 .ifPresent(task -> unlockGuard.assertUnlocked(factoryId, task));
+    }
+
+    /** D-S315-01: 返工计划报到来源半成品上的量不能超过计划量 (这一行重存时不算它自己旧的量)。 */
+    private void assertSecondaryFeedWithinPlan(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (secondaryPlanFeedService != null) {
+            secondaryPlanFeedService.assertRowWithinPlan(factoryId, planId, req);
+        }
+    }
+
+    /** 这批料是不是本返工计划自己占着的来源: 占用让余额变 0 时, 不能当成被别的计划领空了。 */
+    private boolean isOwnSecondarySource(String factoryId, String planId, String sourceBatchNumber) {
+        return secondaryPlanFeedService != null && secondaryPlanFeedService.forPlanId(factoryId, planId)
+                .filter(source -> source.batchNo().equals(sourceBatchNumber))
+                .filter(source -> secondaryPlanFeedService.heldQuantity(factoryId, source).signum() > 0)
+                .isPresent();
     }
 
     private void stampWorkflowTaskIfApplicable(
@@ -4185,7 +4206,9 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                                     .withHint("请重新选择仍有库存的半成品批次")
                                     .withSeverity("BLOCKING")
                                     .withHintTarget(req.getProcessCode()));
-                    assertLiveSemiSourceStatus(source, ur.getSourceBatchNumber(), req.getProcessCode());
+                    if (!isOwnSecondarySource(factoryId, planId, ur.getSourceBatchNumber())) {
+                        assertLiveSemiSourceStatus(source, ur.getSourceBatchNumber(), req.getProcessCode());
+                    }
                     // 跨客户领料 (缺口 16): 保存即拦, 不留到小结 / 结单才发现
                     ownershipGuard().assertSemiDrawable(factoryId, ownershipGuard().ofPlanId(factoryId, planId),
                             source, req.getProcessCode());

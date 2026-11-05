@@ -16,6 +16,7 @@ import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.workflow.WorkflowTaskPortRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.production.SecondaryPlanFeedService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -29,6 +30,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -53,6 +55,8 @@ import java.util.stream.Collectors;
  *       分组的工序自动套的「实际投入」组就是 AT_LEAST_ONE); ALL_REQUIRED 每个成员都要可用;
  *       OPTIONAL 或最少选 0 个不设闸。端口自己的 required 只对无组端口 (旧快照) 有意义。</li>
  *   <li>只认 {@code processOrder} 比本道小的生产者: 回投 / 回料边不能让上下游互相等死。</li>
+ *   <li>返工计划 (D-S315-01): 来源半成品算作上游已产出, 只解锁物料对得上的投入端口;
+ *       普通计划没有来源, 这条不起作用 (见 {@link SecondaryPlanFeedService})。</li>
  * </ul>
  * 没有工艺图快照的旧式任务 (无 workflowInstanceId): 上游 = 同批次 processOrder 紧挨着的前一道。
  *
@@ -71,6 +75,7 @@ public class WorkflowStepUnlockGuard {
     private final ProcessSheetRowRepository processSheetRowRepository;
     private final ProductionReportRepository productionReportRepository;
     private final ObjectMapper objectMapper;
+    private final SecondaryPlanFeedService secondaryPlanFeedService;
 
     /** 判定结果。{@code waitingFor} 是还没有产出的上游工序名 (去重、按工序顺序)。 */
     public record Readiness(boolean unlocked, List<String> waitingFor) {
@@ -268,8 +273,9 @@ public class WorkflowStepUnlockGuard {
                 List<WorkflowTaskPort> from = producers.getOrDefault(in.getMaterialNodeId(), List.of());
                 if (from.isEmpty() || from.stream().anyMatch(out -> producedMaterial(
                         taskById.get(out.getTaskId()), out,
-                        outputCount.getOrDefault(out.getTaskId(), 1L), evidence))) {
-                    // 没有上游工序产出它 (原料 / 外购) 或者上游已经出了这种料
+                        outputCount.getOrDefault(out.getTaskId(), 1L), evidence))
+                        || evidence.secondarySourceFeeds(task, in)) {
+                    // 没有上游工序产出它 (原料 / 外购), 上游已经出了这种料, 或者返工计划的来源半成品就是这种料
                     satisfiedMembers++;
                 } else {
                     from.forEach(out -> groupWaiting.add(taskById.get(out.getTaskId())));
@@ -355,9 +361,22 @@ public class WorkflowStepUnlockGuard {
         private final String factoryId;
         private final Map<Long, List<ProcessSheetRow>> rows = new HashMap<>();
         private final Map<Long, List<ProductionReport>> reports = new HashMap<>();
+        private final Map<Long, Optional<SecondaryPlanFeedService.Source>> secondarySources = new HashMap<>();
 
         Evidence(String factoryId) {
             this.factoryId = factoryId;
+        }
+
+        /** 只在端口原本要锁时才查, 普通计划上游有料的路径不多读库。 */
+        boolean secondarySourceFeeds(WorkProcessTask task, WorkflowTaskPort in) {
+            if (task.getProductionBatchId() == null) {
+                return false;
+            }
+            return secondarySources
+                    .computeIfAbsent(task.getProductionBatchId(),
+                            batchId -> secondaryPlanFeedService.forBatch(factoryId, batchId))
+                    .filter(source -> source.feeds(in))
+                    .isPresent();
         }
 
         List<ProcessSheetRow> webRows(WorkProcessTask producer) {

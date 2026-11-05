@@ -85,6 +85,11 @@ import java.util.*;
 @RequiredArgsConstructor
 public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
+    /** 逐道录入把返工计划翻成生产中时占用来源半成品; @Lazy 断开经 WIP 服务绕回的环。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
+
     // ¥26/工时 兜底 (当 factory_cost_settings 未配置时使用)
     private static final BigDecimal LABOR_RATE_DEFAULT = new BigDecimal("26");
 
@@ -657,12 +662,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         // ProductionBatch(IN_PROGRESS), 从未回写母 ProductionPlan.status → 计划永远卡在 PENDING,
         // 即便生产已实际进行/完成 (看板/统计按 production_plans.status 过滤 IN_PROGRESS/PENDING 因此口径错)。
         // 只做状态 + startTime 的最小 sync, 不调用 ProductionPlanServiceImpl.startProduction():
-        // 后者除了状态翻转还有 (a) runConfiguredValidation("START") 前置审批门 (b) SP2 二次加工
-        // WIP 半成品扣减副作用 —— 这两者在逐工序场景都不该重放: (a) 文员录入代表生产已完成的
-        // 事后记录 (见本方法起始注释), 不该在事后补录时重新触发前置审批门; (b) 本方法已经通过
-        // materializeBatch 的 edges (含 SEMI_FINISHED 上游) 按批次精确扣减了实际消耗的半成品库存,
-        // 若再调用 startProduction 的 deductForSecondaryPlan 会对同一 SECONDARY 计划的 WIP 源
-        // 二次扣减 (幽灵超扣)。因此只 sync 状态字段, 不搬前置 gate / 副作用。
+        // 后者还有 runConfiguredValidation("START") 前置审批门 —— 文员录入代表生产已完成的事后记录
+        // (见本方法起始注释), 不该在事后补录时重新触发。所以这里只 sync 状态, 再补上开工占用:
+        // 返工计划在这里翻成生产中也是开工, 与 /start 同一笔占用 (同一计划只占一次, 结单时全部还回再按实际投料扣)。
         // factory-scoped 查找 (🔒 防跨租户写): 与 plannedQty 读取分开一次查询, 不改动上面既有读取行为。
         if (planRepository != null && ctx.getPlanId() != null) {
             planRepository.findByIdAndFactoryId(ctx.getPlanId(), ctx.getFactoryId())
@@ -672,6 +674,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         //    拦下时整次录入回滚, 带原因放行时原因记入缺料实例处理记录。
                         if (shortageStartGate != null) {
                             shortageStartGate.check(ctx.getFactoryId(), p, ctx.getForceStartReason(), ctx.getUserId());
+                        }
+                        if (secondaryPlanFeedService != null) {
+                            secondaryPlanFeedService.takeHold(ctx.getFactoryId(), p, ctx.getUserId());
                         }
                         p.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS);
                         if (p.getStartTime() == null) {

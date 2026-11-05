@@ -301,6 +301,7 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/warehouse/unordered-inbound-applications', title: '无订单入库申请', icon: '', module: 'warehouse', groupLabel: '仓储作业', badgeKey: 'unorderedInbound' },
       { path: '/warehouse/materials', title: '入库任务与批次', icon: '', module: 'warehouse', badgeKey: 'warehouseReceiving' },
       { path: '/warehouse/shipments', title: '出货管理', icon: '', module: 'warehouse' },
+      { path: '/warehouse/material-requisitions', title: '领料单', icon: '', module: 'warehouse' },
       { path: '/transfer/list', title: '调拨单', icon: '', module: 'inventory' },  // 🔴 2026-08-22: warehouse -> inventory, 端点要 inventory:write, 与 /rd/* 同形
       // SP7 六扇门 ERP-lite 报损管理 (仓库→财务 / 生产→厂长 双轨)
       { path: '/warehouse/wastage-reports', title: '报损管理', icon: '', module: 'warehouse' },

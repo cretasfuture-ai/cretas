@@ -24,6 +24,28 @@ import java.util.Optional;
 @Repository
 public interface SemiFinishedInventoryRepository extends JpaRepository<SemiFinishedInventory, Long> {
 
+    /** 只读身份字段, 不带余额。 */
+    interface SourceRef {
+        Long getId();
+
+        String getFactoryId();
+
+        String getIntermediateBatchNo();
+
+        String getProductTypeId();
+
+        String getUnit();
+    }
+
+    /**
+     * 查身份用这个, ⛔ 不用 findById: 那会把实体放进持久化上下文, 表没有 @Version,
+     * 之后同一事务的悲观锁查询拿到的是这份旧余额, 改完写回就覆盖了别人的提交。
+     */
+    @Query("SELECT w.id AS id, w.factoryId AS factoryId, w.intermediateBatchNo AS intermediateBatchNo, "
+            + "w.productTypeId AS productTypeId, w.unit AS unit "
+            + "FROM SemiFinishedInventory w WHERE w.id = :id AND w.deletedAt IS NULL")
+    Optional<SourceRef> findSourceRefById(@Param("id") Long id);
+
     /**
      * 按工序批次号查 WIP 行 (幂等 upsert 锚点)。
      * intermediate_batch_no 工厂内唯一 (partial unique uq_sfi_intermediate_batch_no), 故返 Optional。

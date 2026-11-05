@@ -577,6 +577,13 @@ const businessRoutes: RouteRecordRaw[] = [
             meta: { requiresAuth: true, title: '源头个体档案', module: 'warehouse' }
           },
           {
+            // 仓管在仓储菜单里用领料单: 退料记录那半还是生产的, 所以不进 /production/material-flow
+            path: 'material-requisitions',
+            name: 'WarehouseMaterialRequisitions',
+            component: () => import('@/views/factory/material-requisitions/list.vue'),
+            meta: { requiresAuth: true, title: '领料单', module: 'warehouse' }
+          },
+          {
             path: 'wip-batches',
             name: 'WarehouseWipBatches',
             component: () => import('@/views/warehouse/materials/wip-list.vue'),

@@ -1535,7 +1535,7 @@ class WipInventoryServiceImplTest {
         when(wipRepo.findByIdForUpdate(wipId)).thenReturn(Optional.of(wip));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L);
+        service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L, "PLAN-1");
 
         verify(wipRepo).save(wipCaptor.capture());
         SemiFinishedInventory saved = wipCaptor.getValue();
@@ -1568,7 +1568,7 @@ class WipInventoryServiceImplTest {
         when(wipRepo.findByIdForUpdate(wipId)).thenReturn(Optional.of(wip));
         when(wipRepo.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L);
+        service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L, "PLAN-1");
 
         verify(wipRepo).save(wipCaptor.capture());
         SemiFinishedInventory saved = wipCaptor.getValue();
@@ -1591,7 +1591,7 @@ class WipInventoryServiceImplTest {
         when(wipRepo.findByIdForUpdate(wipId)).thenReturn(Optional.of(wip));
 
         assertThrows(BusinessException.class,
-                () -> service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L));
+                () -> service.reverseSecondaryDeduct(wipId, new BigDecimal("30"), FACTORY_ID, 7L, "PLAN-1"));
         verify(wipRepo, never()).save(any());
         verify(txnRepo, never()).save(any());
     }
@@ -1602,7 +1602,7 @@ class WipInventoryServiceImplTest {
         when(wipRepo.findByIdForUpdate(91L)).thenReturn(Optional.empty());
 
         assertThrows(BusinessException.class,
-                () -> service.reverseSecondaryDeduct(91L, new BigDecimal("30"), FACTORY_ID, 7L));
+                () -> service.reverseSecondaryDeduct(91L, new BigDecimal("30"), FACTORY_ID, 7L, "PLAN-1"));
         verify(txnRepo, never()).save(any());
     }
 }

@@ -597,7 +597,8 @@ public class ProductionPlanController {
         log.info("核对生产结单: factoryId={}, planId={}, userId={}", factoryId, planId, userId);
         ProductionSettlementResponse response =
                 productionPlanService.settleProduction(factoryId, planId, request, userId);
-        return ApiResponse.success("生产结单已提交", response);
+        return ApiResponse.success(
+                Boolean.TRUE.equals(response.getSettled()) ? "生产结单已提交" : "结单预览，未写入任何数据", response);
     }
 
     @RequirePermission({"production:read_write", "scheduling:read_write"})

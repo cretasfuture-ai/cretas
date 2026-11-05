@@ -58,7 +58,8 @@ public class UserModuleAccessServiceImpl implements UserModuleAccessService {
 
     @Override
     public boolean isExplicitlyDenied(User user, String moduleCode) {
-        if (user == null || user.getId() == null || user.getFactoryId() == null) {
+        if (user == null || user.getFactoryId() == null || user.getId() == null
+                || moduleCode == null || moduleCode.isBlank()) {
             return false;
         }
         return repository.findActive(user.getFactoryId(), String.valueOf(user.getId()), moduleCode)
