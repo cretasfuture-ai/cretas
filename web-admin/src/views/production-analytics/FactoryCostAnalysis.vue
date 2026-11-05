@@ -31,6 +31,7 @@ import {
   type ProductCostCompareData,
 } from '@/api/smartbi/factoryGold';
 import { toDateString } from '@/utils/dateFormat';
+import request from '@/api/request';
 
 // ── Stores ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,21 @@ const loadError = ref('');
 const costData   = ref<CostStructureData | null>(null);
 const yieldData  = ref<YieldTrendData   | null>(null);
 const productData = ref<ProductCostCompareData | null>(null);
+const productTypes = ref<Record<string, { name: string; unit?: string | null }>>({});
+
+function unwrapProductTypes(value: unknown): Array<Record<string, unknown>> {
+  const outer = (value as { data?: unknown } | null)?.data ?? value;
+  const inner = (outer as { content?: unknown } | null)?.content ?? outer;
+  return Array.isArray(inner) ? inner as Array<Record<string, unknown>> : [];
+}
+
+function productLabel(productTypeId: string, inlineName?: string | null): string {
+  return inlineName || productTypes.value[productTypeId]?.name || productTypeId;
+}
+
+function productUnit(product: { productTypeId: string; unit?: string | null }): string {
+  return product.unit || '单位未提供';
+}
 
 // ── Derived empty checks ──────────────────────────────────────────────────────
 
@@ -215,7 +231,7 @@ function renderProductBar() {
   }
   const prods = productData.value!.products.slice(0, 10); // top 10
   // Use productTypeId as label if product name not available (gold uses ID)
-  const labels = prods.map(p => p.productTypeId);
+  const labels = prods.map(p => productLabel(p.productTypeId, p.productName));
   const canShow = canViewPrice.value;
 
   if (canShow) {
@@ -226,10 +242,10 @@ function renderProductBar() {
         formatter: (params: Array<{ name: string; value: number; dataIndex?: number }>) => {
           const p = prods[params[0]?.dataIndex ?? 0];
           if (!p) return '';
-          return `${p.productTypeId}<br/>
+          return `${productLabel(p.productTypeId, p.productName)}<br/>
             总成本: ¥${(p.totalCost ?? 0).toFixed(0)}<br/>
             批次: ${p.batchCount}<br/>
-            实际产出: ${(p.totalActualQty ?? 0).toFixed(1)} kg<br/>
+            实际产出: ${(p.totalActualQty ?? 0).toFixed(1)} ${productUnit(p)}<br/>
             出成率: ${p.avgYieldRate?.toFixed(1) ?? '—'}%`;
         },
       },
@@ -294,11 +310,19 @@ async function loadData() {
   const { startDate, endDate } = getQueryDates();
 
   try {
-    const [costRes, yieldRes, productRes] = await Promise.all([
+    const [costRes, yieldRes, productRes, typeRes] = await Promise.all([
       getFactoryCostStructure({ factoryId: fid, startDate, endDate }),
       getFactoryYieldTrend({ factoryId: fid, startDate, endDate }),
       getFactoryProductCostCompare({ factoryId: fid, startDate, endDate }),
+      request.get<unknown>(`/${fid}/product-types/active`).catch((): null => null),
     ]);
+
+    productTypes.value = Object.fromEntries(unwrapProductTypes(typeRes).map(row => {
+      const id = String(row.id || row.productTypeId || '');
+      const name = String(row.productName || row.name || row.code || id);
+      const unit = row.unit == null ? null : String(row.unit);
+      return [id, { name, unit }];
+    }).filter(([id]) => id));
 
     if (costRes.success) {
       costData.value = costRes.data;
@@ -343,13 +367,17 @@ const summaryKpis = computed(() => {
   const rows = costData.value?.rows ?? [];
   const batchCount = 'batchCount' in s ? (s as { batchCount: number }).batchCount : 0;
   const totalActualQty = 'totalActualQty' in s ? (s as { totalActualQty: number | null }).totalActualQty : null;
+  const quantityByUnit = 'quantityByUnit' in s ? (s as { quantityByUnit?: Record<string, number> }).quantityByUnit : undefined;
+  const quantityText = quantityByUnit && Object.keys(quantityByUnit).length === 1
+    ? Object.keys(quantityByUnit)[0]
+    : quantityByUnit && Object.keys(quantityByUnit).length > 1 ? '多单位' : '单位未提供';
   const avgYield = rows.length
     ? rows.reduce((sum, r) => sum + (r.avgYieldRate ?? 0), 0) / rows.filter(r => r.avgYieldRate !== null).length
     : null;
 
   return [
     { label: '生产批次', value: batchCount, unit: '批', color: 'purple', showAlways: true },
-    { label: '实际产出', value: totalActualQty, unit: 'kg', color: 'blue', showAlways: true },
+    { label: '实际产出', value: totalActualQty, unit: quantityText, color: 'blue', showAlways: true },
     { label: '平均出成率', value: avgYield != null ? Number(avgYield.toFixed(1)) : null, unit: '%', color: 'green', showAlways: true },
   ];
 });
@@ -664,9 +692,17 @@ onBeforeUnmount(() => {
       <div class="fca-section fca-detail-section" v-if="hasProducts">
         <div class="fca-section-title">产品明细</div>
         <el-table :data="productData!.products" stripe border size="small" empty-text="暂无数据">
-          <el-table-column prop="productTypeId" label="产品" min-width="140" />
+          <el-table-column label="产品" min-width="180">
+            <template #default="{ row }">
+              <span>{{ productLabel(row.productTypeId, row.productName) }}</span>
+              <small class="fca-product-code">{{ row.productTypeId }}</small>
+            </template>
+          </el-table-column>
           <el-table-column prop="batchCount" label="批次数" width="80" align="right" />
-          <el-table-column label="实际产出(kg)" width="110" align="right">
+          <el-table-column label="单位" width="90" align="center">
+            <template #default="{ row }">{{ productUnit(row) }}</template>
+          </el-table-column>
+          <el-table-column label="实际产出" width="110" align="right">
             <template #default="{ row }">
               {{ row.totalActualQty != null ? row.totalActualQty.toFixed(1) : '—' }}
             </template>
@@ -693,9 +729,9 @@ onBeforeUnmount(() => {
                 {{ row.totalCost != null ? row.totalCost.toFixed(0) : '—' }}
               </template>
             </el-table-column>
-            <el-table-column label="单位成本(¥/kg)" width="120" align="right">
+            <el-table-column label="单位成本" width="120" align="right">
               <template #default="{ row }">
-                {{ row.costPerUnit != null ? row.costPerUnit.toFixed(2) : '—' }}
+                {{ row.costPerUnit != null ? `¥${row.costPerUnit.toFixed(2)}/${productUnit(row)}` : '—' }}
               </template>
             </el-table-column>
           </template>
