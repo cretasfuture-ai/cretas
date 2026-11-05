@@ -1,10 +1,35 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse } from '@vue/compiler-sfc';
+import { parse as parseTemplate, NodeTypes, type ElementNode, type TemplateChildNode } from '@vue/compiler-dom';
 
 const source = readFileSync(resolve(__dirname, '../list.vue'), 'utf8');
 
 describe('clean settlement external WIP contract', () => {
+  it('renders the actual semi-output input outside both clean and exception-only branches', () => {
+    const template = parse(source).descriptor.template!.content;
+    const matches: Array<{ node: ElementNode; ancestors: ElementNode[] }> = [];
+    function visit(nodes: TemplateChildNode[], ancestors: ElementNode[] = []) {
+      for (const node of nodes) {
+        if (node.type !== NodeTypes.ELEMENT) continue;
+        if (node.props.some(p => p.type === NodeTypes.ATTRIBUTE
+          && p.name === 'data-testid' && p.value?.content === 'settlement-semi-output')) {
+          matches.push({ node, ancestors });
+        }
+        visit(node.children, [...ancestors, node]);
+      }
+    }
+    visit(parseTemplate(template).children);
+    expect(matches).toHaveLength(1);
+    const { node, ancestors } = matches[0]!;
+    expect(ancestors.some(n => n.tag === 'el-form')).toBe(true);
+    expect([...ancestors, node].flatMap(n => n.props).some(p =>
+      p.type === NodeTypes.DIRECTIVE && ['if', 'else', 'else-if'].includes(p.name)
+        && (p.name === 'else' || (p.exp?.type === NodeTypes.SIMPLE_EXPRESSION
+          && p.exp.content.includes('settlementPrefillClean'))))).toBe(false);
+    expect(node.loc.source).toContain('v-model="completeForm.semiFinishedOutputQuantity"');
+  });
   it('keeps clean settlement on confirm=true when no manual WIP exists', () => {
     expect(source).toContain('settlementPrefillClean.value && !hasManualWip');
     expect(source).toContain('confirm: true');
