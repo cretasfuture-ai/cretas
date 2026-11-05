@@ -66,7 +66,7 @@ class DecisionHistoryRoleGateMvcTest {
         when(comparison.compare("F006", "current", "baseline")).thenReturn(new DecisionSnapshotComparison(
                 "current", "baseline", Status.SAME_RESULT, "RECORDED_OUTPUT_EQUAL", "a", "a",
                 "rule", 2, "rule", 1, false, true,
-                DecisionSnapshotComparison.RecordedOutputRelation.SAME, "PERSISTED_COLUMNS_SEMANTIC_ONLY"));
+                DecisionSnapshotComparison.RecordedOutputRelation.SAME, DecisionSnapshotComparison.ComparisonBasis.CHECKSUM_AND_COLUMNS));
         mvc.perform(get(URL).requestAttr("role", "factory_super_admin").requestAttr("userId", 1L))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.status").value("SAME_RESULT"))

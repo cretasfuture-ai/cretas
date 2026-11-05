@@ -7,7 +7,8 @@ public record DecisionSnapshotComparison(
         String currentRuleConfigId, Integer currentRuleConfigVersion,
         String baselineRuleConfigId, Integer baselineRuleConfigVersion,
         boolean businessExecutionPerformed, boolean integrityVerified,
-        RecordedOutputRelation recordedOutputRelation, String comparisonBasis) {
+        RecordedOutputRelation recordedOutputRelation, ComparisonBasis comparisonBasis) {
     public enum Status { SAME_RESULT, DIFFERENT_RESULT, NOT_COMPARABLE }
     public enum RecordedOutputRelation { SAME, DIFFERENT, NOT_EVALUATED }
+    public enum ComparisonBasis { CHECKSUM_AND_COLUMNS, PERSISTED_COLUMNS_SEMANTIC_ONLY, NOT_EVALUATED }
 }

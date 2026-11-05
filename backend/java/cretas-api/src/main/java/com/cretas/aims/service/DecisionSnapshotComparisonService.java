@@ -3,6 +3,7 @@ package com.cretas.aims.service;
 import com.cretas.aims.dto.decision.DecisionSnapshotComparison;
 import com.cretas.aims.dto.decision.DecisionSnapshotComparison.Status;
 import com.cretas.aims.dto.decision.DecisionSnapshotComparison.RecordedOutputRelation;
+import com.cretas.aims.dto.decision.DecisionSnapshotComparison.ComparisonBasis;
 import com.cretas.aims.entity.DecisionAuditLog;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
@@ -68,7 +69,7 @@ public class DecisionSnapshotComparisonService {
                 current.getRuleConfigId(), current.getRuleConfigVersion(), baseline.getRuleConfigId(),
                 baseline.getRuleConfigVersion(), false, integrityVerified,
                 same ? RecordedOutputRelation.SAME : RecordedOutputRelation.DIFFERENT,
-                "PERSISTED_COLUMNS_SEMANTIC_ONLY");
+                integrityVerified ? ComparisonBasis.CHECKSUM_AND_COLUMNS : ComparisonBasis.PERSISTED_COLUMNS_SEMANTIC_ONLY);
     }
 
     private DecisionAuditLog own(String factoryId, String id) {
@@ -106,7 +107,7 @@ public class DecisionSnapshotComparisonService {
         return new DecisionSnapshotComparison(current.getId(), baseline.getId(), status, reason,
                 currentHash, baselineHash, current.getRuleConfigId(), current.getRuleConfigVersion(),
                 baseline.getRuleConfigId(), baseline.getRuleConfigVersion(), false, false,
-                RecordedOutputRelation.NOT_EVALUATED, "PERSISTED_COLUMNS_SEMANTIC_ONLY");
+                RecordedOutputRelation.NOT_EVALUATED, ComparisonBasis.NOT_EVALUATED);
     }
 
     private static boolean blank(String value) { return value == null || value.isBlank(); }
