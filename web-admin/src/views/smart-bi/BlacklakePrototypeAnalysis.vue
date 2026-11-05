@@ -93,6 +93,26 @@ const periodLoading = ref(false);
 const periodRequestGeneration = ref(0);
 const lastAppliedPeriodResultKey = ref('');
 const historyDrawerJob = ref<BlacklakePeriodJob | null>(null);
+const isBlacklakeAuthorizationError=(cause:unknown)=>cause instanceof Error&&[401,403,404].includes((cause as PythonServiceError).status||0);
+let drawerPollTimer:number|undefined;
+watch(()=>historyDrawerJob.value?.id,id=>{
+  if(drawerPollTimer!==undefined)window.clearTimeout(drawerPollTimer);
+  if(!id)return;
+  const identity=authIdentity.value;
+  const poll=async()=>{
+    if(!mounted.value||identity!==authIdentity.value||historyDrawerJob.value?.id!==id)return;
+    if(!['queued','running'].includes(historyDrawerJob.value.status))return;
+    try{
+      const report=await getBlacklakePeriodReport(id);
+      if(!mounted.value||identity!==authIdentity.value||historyDrawerJob.value?.id!==id)return;
+      historyDrawerJob.value=report;
+    }catch(cause){
+      if(isBlacklakeAuthorizationError(cause))return;
+    }
+    if(mounted.value&&historyDrawerJob.value?.id===id)drawerPollTimer=window.setTimeout(()=>{void poll();},5000);
+  };
+  drawerPollTimer=window.setTimeout(()=>{void poll();},5000);
+});
 const periodAuxError = ref('');
 const mounted = ref(false);
 let initialDateResolved=false;
@@ -236,7 +256,7 @@ function applyPeriodInsights(job: BlacklakePeriodJob): boolean {
     return false;
   }
   if (!data.value || !job.result) return false;
-  const resultKey = `${job.id}:${job.result.generatedAt || JSON.stringify(job.result)}`;
+  const resultKey = `${job.id}:${job.result.generatedAt || ''}:${job.result.ai.analysisFactCoverage?.reviewed??''}:${job.status}`;
   if (lastAppliedPeriodResultKey.value === resultKey) return true;
   const nextCostAlerts = data.value.costAlerts && job.result.ai
     ? { ...data.value.costAlerts, ai: { ...data.value.costAlerts.ai, ...job.result.ai } }
@@ -286,7 +306,9 @@ async function pollPeriodReport(jobId: string, generation: number, identity: str
     periodPollTimer = window.setTimeout(() => { void pollPeriodReport(jobId, generation, identity); }, periodPollDelay(next.nextAttemptAt));
   } catch (cause) {
     if (!isCurrentRequest(generation, identity)) return;
-    periodLoading.value = false; periodError.value = cause instanceof Error ? cause.message : '读取周期分析状态失败。';
+    if(isBlacklakeAuthorizationError(cause)){periodLoading.value=false;periodError.value='报告访问权限或来源已变化，已停止读取。';return;}
+    periodError.value='分析状态暂未读到，正在自动重连。';
+    periodPollTimer=window.setTimeout(()=>{void pollPeriodReport(jobId,generation,identity);},5000);
   }
 }
 
@@ -385,7 +407,7 @@ onMounted(() => {
   void loadForPeriod(periodQuery.value);
   void pollLive();
 });
-onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; stopPeriodPolling();if(liveTimer!==undefined)window.clearTimeout(liveTimer); });
+onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; stopPeriodPolling();if(liveTimer!==undefined)window.clearTimeout(liveTimer);if(drawerPollTimer!==undefined)window.clearTimeout(drawerPollTimer); });
 </script>
 
 <template>

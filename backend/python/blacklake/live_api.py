@@ -42,10 +42,15 @@ async def analysis_tick(configured):
         info=json.loads(state[0]) if state[0] else {}
         ended=live.instant(live.now())>=live.instant(state['ends'])
         store=runtime.store();scope=runtime.scope(configured)
+        policy_upgrade=False
         if info.get('reportId'):
             job=await asyncio.to_thread(store.get,scope,info['reportId'])
             if job:
+                policy_upgrade=job.get('definitionVersion',runtime.DEFINITION_VERSION)!=runtime.DEFINITION_VERSION and not ended
+                from smartbi.services.analysis_supplement import attach_saved
+                if job.get('result'):job=await asyncio.to_thread(attach_saved,job,scope,store.path)
                 ai=(job.get('result') or {}).get('ai') or {}
+                info.update(progress=ai.get('analysisFactCoverage'),stage=ai.get('analysisStage'))
                 info.update(status=job['status'],lastCompletedAt=job.get('finishedAt'),tokens=(ai.get('usage') or {}).get('totalTokens'),
                             message='分析已保存；未通过校验的AI段落不作为结论。' if job['status']=='ready' else
                             '本次分析失败，数据已保存，两分钟后自动重试。' if job['status']=='failed' else
@@ -62,7 +67,7 @@ async def analysis_tick(configured):
         # Drain the final unseen snapshot even if collection finished at the deadline.
         # Once submitted, an ended campaign never creates retry revisions for it.
         if ended and info.get('analyzedDataHash')==data_hash:return
-        if info.get('analyzedDataHash')==data_hash and info.get('status')=='ready':
+        if info.get('analyzedDataHash')==data_hash and info.get('status')=='ready' and not policy_upgrade:
             info['message']='数据未变化，复用已保存的分析；每轮规则核对与库存对账继续更新。'
             with db:
                 db.execute('UPDATE monitor SET analysis=? WHERE scope=?',(json.dumps(info,ensure_ascii=False),live.binding(v)))

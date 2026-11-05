@@ -1,6 +1,13 @@
 import { pythonFetch } from './common';
 import type { FactoryRecommendation } from './factory-charts';
 
+export interface AnalysisFactProgress {
+  total:number; baseProvided:number; additionalReviewed:number; reviewed?:number; remaining:number;
+  mode?:'all_facts'|'omitted_only'; phase?:string; scope:string;
+  currentFacts?:{id:string;label:string}[]; blocker?:{code:string;message:string;facts?:{id:string;label:string}[]}|null;
+  retryAt?:string|null; attempts?:number; updatedAt?:string;
+}
+
 export interface CostDataRequest {
   id: string; code: string; workOrderId: number | string; workOrderCode: string;
   missingData: string; responsibleRole: string; afterProvided: string; sourceStatus: string;
@@ -170,7 +177,7 @@ export interface LocalAIUsage {
 export interface CostAlertReport {
   schema: string; ruleVersion: string; summary: { projects: number; costEligible: number; costBlocked: number; alerts: number; byFamily: Record<string, number>; byType: Record<string, number> };
   items: CostDataAlert[]; limitations: string[];
-  ai: { status: string; message: string; model?: string; host?: string; analysisProfileVersion?: string; analysisSections?: import('./local-analysis').LocalAnalysisSection[]; usage?: LocalAIUsage; currentRequestUsage?: LocalAIUsage; cacheHit?: boolean; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[]; omittedAnalysisFacts?:number;analysisFactCoverage?:{total:number;baseProvided:number;additionalReviewed:number;remaining:number;scope:string} };
+  ai: { status: string; message: string; model?: string; host?: string; analysisProfileVersion?: string; analysisSections?: import('./local-analysis').LocalAnalysisSection[]; usage?: LocalAIUsage; currentRequestUsage?: LocalAIUsage; cacheHit?: boolean; sourceRecordsSent?: number; externalProviderCalls?: number; sectionRepresentativeFacts?: number; reviewedSectionFacts?: number; representativeOnly?: boolean; reviews?: { alertId: string; check: string; priority: string; suggestion: string }[]; omittedAnalysisFacts?:number;analysisFactCoverage?:AnalysisFactProgress;analysisStage?:{phase:string;message:string} };
 }
 export interface EligibleCostReview {
   eligibleProjects: number; products: number; limitations: string[];

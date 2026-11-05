@@ -180,7 +180,7 @@ async def enrich(report,requester=None,analysis_context=None):
     if cached and time.monotonic()-cached[0]<600:
         report['ai']=deepcopy(cached[1]);report['ai'].update(cacheHit=True,currentRequestUsage={'inputTokens':0,'outputTokens':0,'totalTokens':0,'source':'cache','estimated':False})
         return report
-    calls=[];feedback=None;learning_ids=[]
+    calls=[];feedback=(analysis_context or {}).get('analysisValidationFeedback');learning_ids=[]
     learning_status='enabled_no_candidate' if os.getenv('SMARTBI_ANALYST_FLYWHEEL_DB') else 'disabled'
     try:
         for attempt in range(2):

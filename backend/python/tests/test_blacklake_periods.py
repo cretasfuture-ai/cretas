@@ -128,7 +128,8 @@ def test_facts_are_immediate_and_diagnosis_persists_and_reuses_exact_version(per
     assert submitted['status']=='queued' and 'facts' not in submitted and 'leaseToken' not in submitted
     assert asyncio.run(period_runtime.run_one(config)) is True
     saved=client.get(path+'/period-reports/'+submitted['id'],headers=headers).json()['data']
-    assert saved['status']=='ready' and saved['result']['sectionInsights']
+    assert saved['status']=='queued' and saved['result']['sectionInsights']
+    assert saved['result']['ai']['analysisStage']['phase']=='retrying'  # Disabled model cannot finish full verification.
     again=client.post(path+'/period-reports',json=request,headers=headers).json()['data']
     assert again['id']==saved['id'] and again['fromCache'] is True
     raw['stock_order'][0]['orderDetails'][0]['changedCostAmountSigned']=-60
@@ -170,8 +171,11 @@ def test_explicit_profile_upgrade_preserves_old_ready_and_reuses_new_revision(pe
     path='/api/smartbi/blacklake/period-reports'
     body={'start_date':'2026-11-03','end_date':'2026-11-03'}
     old=client.post(path,json=body,headers=headers).json()['data']
-    assert asyncio.run(period_runtime.run_one(config))
-    old_ready=period_runtime.store().get(period_runtime.scope(config),old['id'])
+    db=period_runtime.store();scope=period_runtime.scope(config)
+    lease=db.claim(scope,old['id'])
+    old_result=asyncio.run(period_runtime.compile_report(lease,[],33))
+    db.complete(scope,old['id'],lease['leaseToken'],old_result)  # Existing pre-policy rules-only report.
+    old_ready=db.get(scope,old['id'])
     monkeypatch.setenv('SMARTBI_LOCAL_ANALYST_ENABLED','1')
     upgraded=client.post(path,json=body,headers=headers).json()['data']
     assert upgraded['id']!=old['id'] and upgraded['revision']==old['revision']+1
@@ -179,7 +183,7 @@ def test_explicit_profile_upgrade_preserves_old_ready_and_reuses_new_revision(pe
     assert same['id']==upgraded['id']
     assert asyncio.run(period_runtime.run_one(config))
     ready=client.post(path,json=body,headers=headers).json()['data']
-    assert ready['id']==upgraded['id'] and ready['status']=='ready'
+    assert ready['id']==upgraded['id'] and ready['status']=='queued'
     assert period_runtime.store().get(period_runtime.scope(config),old['id'])==old_ready
 
 
@@ -416,7 +420,7 @@ def test_transient_worker_failure_respects_backoff_instead_of_burning_attempts(p
     current += timedelta(seconds=61)
     monkeypatch.setattr(period_runtime,'compile_report',original)
     assert asyncio.run(period_runtime.run_one(config)) is True
-    assert period_runtime.store().get(period_runtime.scope(config),job['id'])['status']=='ready'
+    assert period_runtime.store().get(period_runtime.scope(config),job['id'])['status']=='queued'
 
 
 def test_worker_and_reconciliation_authorize_before_loading_saved_cost_facts(period_client,monkeypatch):
@@ -433,6 +437,67 @@ def test_worker_and_reconciliation_authorize_before_loading_saved_cost_facts(per
         def windows(self,*a):pytest.fail('must not load report history before authority')
     with pytest.raises(RuntimeError,match='AUTHORITY'):
         asyncio.run(period_runtime.reconcile_windows(config,SafeMarkerStore(),period_runtime.scope(config)))
+
+
+def test_full_fact_queue_resumes_without_regenerating_overview_and_only_then_finishes(period_client,monkeypatch):
+    from smartbi.services import period_reports,analysis_supplement
+    client,headers,_,config,*_=period_client
+    now=datetime(2026,11,5,tzinfo=timezone.utc)
+    monkeypatch.setattr(period_reports,'_utc_now',lambda:now)
+    created=client.post('/api/smartbi/blacklake/period-reports',headers=headers,
+        json={'start_date':'2026-11-03','end_date':'2026-11-03'}).json()['data']
+    original=period_runtime.compile_report;overviews=[];batches=[]
+    async def overview(*args):
+        overviews.append(1);result=await original(*args)
+        result['ai'].update(status='partial',validation={'allSections':True})
+        return result
+    def attached(job,*args):
+        from copy import deepcopy
+        value=deepcopy(job)
+        value['result']['ai']['analysisFactCoverage']={'total':12,'reviewed':8,'remaining':4,'phase':'retrying'}
+        return value
+    async def batch(job,facts,scope,path,actor,**options):
+        options['guard']();assert options['exhaustive'] and options['max_batches']==1
+        assert period_runtime.store().get(scope,job['id'])['result']  # Overview visible before inference.
+        batches.append(1)
+        if len(batches)==1:raise analysis_supplement.SupplementRetry('ANALYST_OWNER')
+        value=attached(job);value['result']['ai']['analysisFactCoverage'].update(reviewed=12,remaining=0,phase='ready')
+        return value
+    monkeypatch.setattr(period_runtime,'compile_report',overview)
+    monkeypatch.setattr(analysis_supplement,'complete',batch)
+    monkeypatch.setattr(analysis_supplement,'attach',attached)
+    assert asyncio.run(period_runtime.run_one(config))
+    db=period_runtime.store();scope=period_runtime.scope(config)
+    waiting=db.get(scope,created['id'])
+    assert waiting['status']=='queued' and waiting['result']['ai']['analysisFactCoverage']['remaining']==4
+    assert waiting['nextAttemptAt']
+    with db._connect() as connection:
+        assert connection.execute('SELECT attempts FROM period_reports WHERE id=?',(created['id'],)).fetchone()[0]==0
+    assert not asyncio.run(period_runtime.run_one(config))
+    now+=__import__('datetime').timedelta(seconds=61)
+    assert asyncio.run(period_runtime.run_one(config))
+    assert len(overviews)==1 and len(batches)==2
+    finished=db.get(scope,created['id'])
+    assert finished['status']=='ready' and finished['result']['ai']['analysisFactCoverage']['remaining']==0
+
+
+@pytest.mark.asyncio
+async def test_background_pump_recovers_configuration_error_without_a_browser(monkeypatch):
+    from types import SimpleNamespace
+    turns=[];woken=[]
+    def current(config):
+        if not turns:raise ValueError('temporary config problem')
+        return config
+    async def sleep(seconds):
+        turns.append(seconds)
+        if len(turns)==2:raise asyncio.CancelledError
+    monkeypatch.setattr(period_runtime,'live_config',current)
+    monkeypatch.setattr(period_runtime,'store',lambda:SimpleNamespace(has_due=lambda scope:True))
+    monkeypatch.setattr(period_runtime,'ensure_worker',lambda config:woken.append(config))
+    monkeypatch.setattr(period_runtime.asyncio,'sleep',sleep)
+    config={'tenant_id':'T','source_factory_id':'F'}
+    with pytest.raises(asyncio.CancelledError):await period_runtime.worker_loop(config)
+    assert woken==[config] and turns==[5,5]
 
 
 def test_raw_completed_cohort_completion_rate_is_not_a_factory_completion_rate(period_client):
@@ -478,4 +543,4 @@ def test_rate_limited_local_ai_keeps_saved_rules_pending_and_resumes_automatical
     now += timedelta(seconds=3601)
     monkeypatch.setattr(period_runtime,'compile_report',original)
     assert asyncio.run(period_runtime.run_one(config)) is True
-    assert period_runtime.store().get(period_runtime.scope(config),job['id'])['status']=='ready'
+    assert period_runtime.store().get(period_runtime.scope(config),job['id'])['status']=='queued'

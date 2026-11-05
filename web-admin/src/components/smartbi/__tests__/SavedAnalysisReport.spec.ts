@@ -40,7 +40,7 @@ describe('SavedAnalysisReport', () => {
     const saved=report();saved.result!.ai.analysisFactCoverage={total:111,baseProvided:64,additionalReviewed:47,remaining:0,scope:'program_generated_facts_not_all_source_records'};
     saved.result!.sectionInsights[0]!.supplementalReviews=['甲','乙'].map((name,i)=>({factId:`F${i}`,sectionId:'coverage',whatItMeans:`${name}的补充解释`,nextStep:'核对原始领料单',cannotConclude:'尚不能确认原因',owner:'仓库',statistics:[{id:`F${i}`,text:`${name}产品的资料覆盖`}]}));
     const wrapper=mount(SavedAnalysisReport,{props:{report:saved}});
-    expect(wrapper.text()).toContain('已补充核对 47 项分析');
+    expect(wrapper.text()).toContain('已补充核对 47 项');
     expect(wrapper.text()).not.toContain('甲的补充解释');
     const details=wrapper.get('.supplement-list');(details.element as HTMLDetailsElement).open=true;await details.trigger('toggle');
     const buttons=wrapper.findAll('.supplement-row > button');await buttons[0]!.trigger('click');

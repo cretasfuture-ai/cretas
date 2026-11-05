@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-DEFINITION_VERSION = "smartbi-period-report/2026-11-04.2"
+DEFINITION_VERSION = "smartbi-period-report/2026-11-05.3"
 REQUIRED_SCOPE_KEYS = ("tenant_id", "source_factory_id", "connector")
 
 
@@ -347,6 +347,27 @@ class ReportStore:
             updated = db.execute("SELECT * FROM period_reports WHERE id=?", (job_id,)).fetchone()
             db.execute("COMMIT")
             return self._public(updated)
+
+    def assert_lease(self, scope: Mapping[str, Any], job_id: str, lease_token: str) -> None:
+        """Protect per-batch file checkpoints with the same durable queue ownership."""
+        _,scope_key=_scope(scope)
+        with self._connect() as db:self._lease_row(db,scope_key,job_id,lease_token)
+
+    def save_progress(self, scope, job_id, lease_token, result):
+        _,scope_key=_scope(scope)
+        with self._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._lease_row(db,scope_key,job_id,lease_token)
+            db.execute('UPDATE period_reports SET result_json=? WHERE id=?',(_json(result),job_id))
+            db.execute('COMMIT')
+
+    def has_due(self, scope: Mapping[str, Any]) -> bool:
+        _,scope_key=_scope(scope);self._ensure();now=_utc_now().timestamp()
+        with self._connect() as db:
+            return db.execute("""SELECT 1 FROM period_reports WHERE scope_key=?
+                AND ((status='queued' AND (definition_version<>? OR next_attempt_at IS NULL OR next_attempt_at<=?))
+                     OR (status='running' AND lease_expires<=?)) LIMIT 1""",
+                (scope_key,DEFINITION_VERSION,now,now)).fetchone() is not None
 
     def defer(self, scope: Mapping[str, Any], job_id: str, lease_token: str, result: Any,
               retry_seconds: int = 60, refund_attempt: bool = True) -> dict[str, Any]:

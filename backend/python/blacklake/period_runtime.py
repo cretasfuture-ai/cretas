@@ -207,6 +207,7 @@ async def run_one(config):
     if actor is None:
         return False
     db = store(); key = scope(config)
+    if not await asyncio.to_thread(db.has_due,key):return False
     job = await asyncio.to_thread(db.claim, key, None, 1400)
     if job is None:
         return False
@@ -214,8 +215,15 @@ async def run_one(config):
         from .full_archive import digest
         if job['facts']['costAlerts']['scope'] != digest((config['tenant_id'],config['source_factory_id'])):
             raise ValueError('PERIOD_REPORT_SOURCE_SCOPE_MISMATCH')
-        history = await asyncio.to_thread(db.history, key, job, 100)
-        result = await compile_report(job, history, actor)
+        from copy import deepcopy
+        previous=job.get('result') or {}
+        base_valid=bool(previous.get('sectionInsights') and previous.get('ai',{}).get('validation',{}).get('allSections'))
+        if base_valid:
+            result=deepcopy(previous)
+        else:
+            job['facts']['analysisValidationFeedback']=previous.get('ai',{}).get('validationFeedback')
+            history = await asyncio.to_thread(db.history, key, job, 100)
+            result = await compile_report(job, history, actor)
         from smartbi.services.local_analyst import retain_usage
         retain_usage(result['ai'],(job.get('result') or {}).get('ai',{}))
         ai_status=result['ai'].get('status')
@@ -224,13 +232,32 @@ async def run_one(config):
             await asyncio.to_thread(db.defer,key,job['id'],job['leaseToken'],result,
                                     15,True)
         elif ai_status=='unavailable':
-            if job.get('attempts',1)>=3:
-                await asyncio.to_thread(db.fail,key,job['id'],job['leaseToken'],
-                                        {'code':'LOCAL_AI_UNAVAILABLE','message':'规则分析已保存，本地AI暂不可用；系统退避重试，仍失败时可手动重试。'})
-            else:
-                await asyncio.to_thread(db.defer,key,job['id'],job['leaseToken'],result,120*job.get('attempts',1),False)
+            result['ai']['analysisStage']={'phase':'retrying','message':'概要尚未通过校验或模型连接暂不可用，稍后自动纠正重试。',
+                'code':result['ai'].get('validationFeedback')}
+            await asyncio.to_thread(db.defer,key,job['id'],job['leaseToken'],result,120,True)
         else:
-            await asyncio.to_thread(db.complete, key, job['id'], job['leaseToken'], result)
+            from smartbi.services.analysis_supplement import complete,attach,SupplementRetry
+            if not result.get('ai',{}).get('validation',{}).get('allSections'):
+                # Empty periods do not invent model commentary for nonexistent production.
+                if not job['facts']['production']['projectCount']:
+                    await asyncio.to_thread(db.complete,key,job['id'],job['leaseToken'],result);return True
+                result['ai']['analysisStage']={'phase':'retrying','message':'概要尚未通过核验，稍后自动纠正重试。'}
+                await asyncio.to_thread(db.defer,key,job['id'],job['leaseToken'],result,120,True);return True
+            path=db.path.parent/'analysis-supplements'/(job['id']+'.json')
+            await asyncio.to_thread(db.save_progress,key,job['id'],job['leaseToken'],result)
+            current={**job,'result':result}
+            try:
+                reviewed=await complete(current,job['facts'],key,path,actor,exhaustive=True,max_batches=1,
+                    guard=lambda:db.assert_lease(key,job['id'],job['leaseToken']))
+                result=reviewed['result']
+                progress=result['ai']['analysisFactCoverage']
+                if not progress['remaining']:
+                    await asyncio.to_thread(db.complete,key,job['id'],job['leaseToken'],result)
+                else:
+                    await asyncio.to_thread(db.defer,key,job['id'],job['leaseToken'],result,5,True)
+            except SupplementRetry:
+                result=attach(current,job['facts'],key,path)['result']
+                await asyncio.to_thread(db.defer,key,job['id'],job['leaseToken'],result,60,True)
     except asyncio.CancelledError:
         # A durable lease expires and can be reclaimed after a process restart.
         raise
@@ -259,6 +286,18 @@ def ensure_worker(config):
     task = asyncio.create_task(drain())
     _workers[key] = task
     return task
+
+
+async def worker_loop(config):
+    """Drain all durable period work even when no browser is open."""
+    global _schedule_error
+    while True:
+        try:
+            current=live_config(config)
+            if await asyncio.to_thread(store().has_due,scope(current)):ensure_worker(current)
+        except asyncio.CancelledError:raise
+        except Exception:_schedule_error='自动分析配置或队列暂不可读，五秒后重新检查；未读取其他来源数据。'
+        await asyncio.sleep(5)
 
 
 async def reconcile_windows(config, db, key, limit=10):

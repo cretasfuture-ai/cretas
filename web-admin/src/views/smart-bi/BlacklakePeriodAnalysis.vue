@@ -2,6 +2,7 @@
 import type { BlacklakePeriodJob, BlacklakePeriodMetadata, BlacklakePeriodSchedule } from '@/api/smartbi/blacklake';
 import { localizeBlacklakeText } from './blacklakePresentation';
 import { formatBlacklakeDateTime } from './blacklakePeriod';
+import AnalysisProgress from '@/components/smartbi/AnalysisProgress.vue';
 
 withDefaults(defineProps<{
   metadata?: BlacklakePeriodMetadata;
@@ -25,7 +26,7 @@ const tokenText = (value: number | null | undefined) => value == null ? '未知'
       <span v-if="job" role="status">{{ job.status==='ready'?'分析已完成':jobStatusText(job.status) }}</span>
       <button v-if="job?.status==='failed'" type="button" @click="emit('retry')">重新分析</button>
     </div>
-    <p v-if="job?.status==='queued'||job?.status==='running'" class="period-hint">数据可以先看，分析完成后会显示在对应图表下方。</p>
+    <AnalysisProgress v-if="job" :progress="job.result?.ai.analysisFactCoverage" :status="job.status" :stage="job.result?.ai.analysisStage" />
     <p v-if="job?.status==='failed'" role="alert">{{ localizeBlacklakeText(job.error, '分析暂未完成，请重试。') }}</p>
     <details v-if="history.length" class="period-history"><summary>查看其他日期的分析</summary><button v-for="item in history" :key="item.id" type="button" class="history-row" @click="emit('open-history', item)"><span>{{ item.period.startDate.slice(5) }} 至 {{ item.period.endDate.slice(5) }}</span><small>{{ jobStatusText(item.status) }} · {{ formatDate(item.finishedAt || item.createdAt) }}</small></button></details>
     <details v-if="metadata || job?.result" class="period-history"><summary>数据说明与用量</summary>

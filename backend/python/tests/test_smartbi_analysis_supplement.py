@@ -112,3 +112,74 @@ async def test_history_summary_uses_the_same_validated_supplement(monkeypatch,tm
     summary=await period_api.history(object(),summaries_only=True)
     assert summary['data'][0]['result']['ai']['status']=='complete'
     assert summary['data'][0]['result']['ai']['analysisFactCoverage']['remaining']==0
+
+
+@pytest.mark.asyncio
+async def test_full_mode_reviews_base_facts_too_and_resumes_after_repair_failure(monkeypatch,tmp_path):
+    from smartbi.services import alert_local_ai,alert_ai_coordination
+    job,context,original,more=fixture(monkeypatch)
+    # Homogeneous bound facts isolate batching from the per-kind validators tested above.
+    base=original['facts'][0]
+    all_facts=[base,*more]
+    pack={**original,'facts':all_facts,'omittedFacts':0}
+    monkeypatch.setattr(supplement,'build',lambda report,context,include_all=False:pack if include_all else {**pack,'facts':[base]})
+    monkeypatch.setattr(alert_local_ai,'provider_config',lambda:{'transport':'ssh','model':'local'})
+    seen=[];bad=True
+    def infer(_infer,payload,*args):
+        prompt=json.loads(payload['messages'][1]['content']);seen.append(prompt)
+        return {'reviews':[{**review(f),**({'owner':'不存在的部门'} if bad else {})} for f in prompt['facts']]}
+    monkeypatch.setattr(alert_ai_coordination,'run',infer)
+    path=tmp_path/'full.json';scope={'tenant_id':'T','source_factory_id':'F','connector':'blacklake'}
+    with pytest.raises(supplement.SupplementRetry):
+        await supplement.complete(job,context,scope,path,1,exhaustive=True,max_batches=1,batch_size=4)
+    failed=supplement.attach(job,context,scope,path)['result']['ai']['analysisFactCoverage']
+    assert failed['reviewed']==0 and failed['remaining']==11 and failed['phase']=='retrying'
+    assert failed['blocker']['facts'] and failed['retryAt']
+    bad=False
+    first=await supplement.complete(job,context,scope,path,1,exhaustive=True,max_batches=1,batch_size=4)
+    assert seen[-1]['validationFeedback']  # Previous rejection is fed back across durable claims.
+    progress=first['result']['ai']['analysisFactCoverage']
+    assert progress['reviewed']==4 and progress['remaining']==7 and progress['additionalReviewed']==3
+    accepted={f['factId'] for f in first['result']['ai']['supplementalReviews']}
+    final=await supplement.complete(job,context,scope,path,1,exhaustive=True,batch_size=4)
+    assert not accepted.intersection(f['id'] for call in seen[-2:] for f in call['facts'])
+    assert final['result']['ai']['analysisFactCoverage']['reviewed']==11
+    assert final['result']['ai']['analysisFactCoverage']['remaining']==0
+    assert final['result']['ai']['status']=='complete'
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_waits_and_expired_owner_cannot_checkpoint(monkeypatch,tmp_path):
+    from smartbi.services import alert_local_ai,alert_ai_coordination
+    from smartbi.services.period_reports import LeaseError
+    job,context,_,_=fixture(monkeypatch);scope={'tenant_id':'T','source_factory_id':'F','connector':'blacklake'}
+    monkeypatch.setattr(alert_local_ai,'provider_config',lambda:{'transport':'ssh','model':'local'})
+    def offline(*args):raise OSError('private transport detail')
+    monkeypatch.setattr(alert_ai_coordination,'run',offline)
+    path=tmp_path/'offline.json'
+    with pytest.raises(supplement.SupplementRetry):await supplement.complete(job,context,scope,path,1,exhaustive=True,max_batches=1)
+    state=json.loads(path.read_text(encoding='utf8'))
+    assert state['status']=='waiting_model' and 'private' not in state['lastError']
+    before=path.read_bytes()
+    def expired():raise LeaseError('lost')
+    with pytest.raises(LeaseError):await supplement.complete(job,context,scope,path,1,exhaustive=True,guard=expired)
+    assert path.read_bytes()==before
+
+
+@pytest.mark.asyncio
+async def test_one_invalid_fact_keeps_valid_siblings_and_repairs_only_the_invalid_one(monkeypatch,tmp_path):
+    from smartbi.services import alert_local_ai,alert_ai_coordination
+    job,context,original,missing=fixture(monkeypatch)
+    base=original['facts'][0];pack={**original,'facts':[base,*missing],'omittedFacts':0}
+    monkeypatch.setattr(supplement,'build',lambda report,context,include_all=False:pack if include_all else {**pack,'facts':[base]})
+    monkeypatch.setattr(alert_local_ai,'provider_config',lambda:{'transport':'ssh','model':'local'})
+    calls=[]
+    def infer(_infer,payload,*args):
+        facts=json.loads(payload['messages'][1]['content'])['facts'];calls.append([f['id'] for f in facts])
+        return {'reviews':[{**review(f),**({'owner':'invalid'} if f['id']==missing[0]['id'] else {})} for f in facts]}
+    monkeypatch.setattr(alert_ai_coordination,'run',infer)
+    path=tmp_path/'partial-batch.json';scope={'tenant_id':'T','source_factory_id':'F','connector':'blacklake'}
+    with pytest.raises(supplement.SupplementRetry):await supplement.complete(job,context,scope,path,1,exhaustive=True,max_batches=1)
+    state=json.loads(path.read_text(encoding='utf8'))
+    assert len(state['accepted'])==7
+    assert calls[-1]==[missing[0]['id']]

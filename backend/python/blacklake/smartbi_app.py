@@ -37,14 +37,17 @@ def create_app():
     os.environ['SMARTBI_ALERT_AI_STATE_FILE']=str((Path(os.environ['LOCALAPPDATA'])/'Cretas/SmartBIAlerts/local-ai-state.sqlite3').resolve())
     @asynccontextmanager
     async def lifespan(app):
-        from .period_runtime import schedule_loop, ensure_worker, stop_workers
+        from .period_runtime import schedule_loop, ensure_worker, stop_workers,worker_loop
         ensure_worker(configured)
+        worker=asyncio.create_task(worker_loop(configured))
         scheduler=asyncio.create_task(schedule_loop(configured)) if os.environ.get('BLACKLAKE_PERIOD_SCHEDULER_ENABLED')=='1' else None
         from .live_api import analysis_loop
         live_task=asyncio.create_task(analysis_loop(configured)) if os.environ.get('BLACKLAKE_LIVE_CONFIG') else None
         try:
             yield
         finally:
+            worker.cancel()
+            await asyncio.gather(worker,return_exceptions=True)
             if scheduler is not None:
                 scheduler.cancel()
                 await asyncio.gather(scheduler,return_exceptions=True)

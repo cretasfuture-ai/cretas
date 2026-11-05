@@ -318,17 +318,20 @@ async def test_latest_submission_failure_cannot_label_previous_summary_current(c
 @pytest.mark.asyncio
 async def test_final_unseen_snapshot_is_submitted_once_after_deadline_without_endless_retry(cfg,monkeypatch):
     from blacklake import live_api,period_runtime,smartbi_store
+    from smartbi.services import analysis_supplement
     from unittest.mock import AsyncMock
     assert live.cycle(cfg,lambda v,p:(payload(),3))
     c=live.connect(cfg['db'])
     with c:c.execute("UPDATE monitor SET ends='2000-01-01T00:00:00Z',analysis=?",(json.dumps({'reportId':'old','analyzedDataHash':'old'}),))
     c.close();submissions=[]
     class Store:
+        path=__import__('pathlib').Path(cfg['db']).parent/'period-reports.sqlite3'
         def get(self,scope,id):return {'status':'ready','result':{'summary':'old','observations':[]}} if id=='old' else {'status':'failed'}
         def submit(self,*args):submissions.append(args);return {'id':'final','status':'queued'}
     monkeypatch.setenv('BLACKLAKE_LIVE_CONFIG','synthetic');monkeypatch.setattr(live,'config',lambda _:cfg)
     monkeypatch.setattr(period_runtime,'store',Store);monkeypatch.setattr(period_runtime,'authorized_actor',AsyncMock(return_value=1))
     monkeypatch.setattr(period_runtime,'ensure_worker',lambda _:None)
+    monkeypatch.setattr(analysis_supplement,'attach_saved',lambda job,*args:job)
     monkeypatch.setattr(smartbi_store,'read',lambda *_,**kwargs:{'periodMetadata':{'fingerprint':'f'*64}})
     configured={'tenant_id':cfg['tenant_id'],'source_factory_id':'factory','run_id':'baseline'}
     await live_api.analysis_tick(configured)

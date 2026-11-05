@@ -2,6 +2,7 @@
 import type { BlacklakePeriodJob, SectionInsightReport } from '@/api/smartbi/blacklake';
 import { localizeBlacklakeText } from '@/views/smart-bi/blacklakePresentation';
 import { computed, ref, watch } from 'vue';
+import AnalysisProgress from './AnalysisProgress.vue';
 
 const props = defineProps<{ report: BlacklakePeriodJob | null }>();
 const selectedId = ref('');
@@ -52,7 +53,7 @@ const conclusion=computed(()=>{
     <template v-else>
       <header class="report-header"><div><p class="eyebrow">已保存分析</p><h2>本次数据概况</h2><p class="period">{{ periodDate(props.report.period.startDate) }} 至 {{ periodDate(props.report.period.endDate) }}</p></div><span class="state">{{ props.report.status === 'ready' ? '已生成' : props.report.status }}</span></header>
       <div class="metrics" v-if="metrics.length"><div v-for="metric in metrics" :key="metric.label" class="metric"><strong>{{ metric.value }}</strong><span>{{ metric.label }}</span></div></div>
-      <p v-if="coverage" class="supplement-status">已补充核对 {{coverage.additionalReviewed}} 项分析{{coverage.remaining?`，另有 ${coverage.remaining} 项待补`:'；单据缺项仍需按建议处理'}}。</p>
+      <AnalysisProgress v-if="coverage||props.report.status!=='ready'" :progress="coverage" :status="props.report.status" :stage="props.report.result?.ai.analysisStage" />
       <p v-else-if="props.report.result?.ai.status==='partial'&&omitted" class="supplement-status">已提供的 AI 解读通过核验，另有 {{omitted}} 项分析尚未覆盖。</p>
       <p v-if="!metrics.length" class="summary-fallback">{{ clean(props.report.result?.summary || '本次报告尚未提供可读的数据概况。').slice(0, 180) }}</p>
       <nav v-if="sections.length" class="section-nav" aria-label="报告内容"><button v-for="section in sections" :key="section.sectionId" type="button" :class="{active: activeSection?.sectionId === section.sectionId}" @click="selectedId = section.sectionId">{{ sectionName(section) }}</button></nav>
@@ -66,7 +67,7 @@ const conclusion=computed(()=>{
         </div>
         <details class="evidence"><summary>查看数字与依据</summary><p v-for="item in fallbackEvidence(activeSection)" :key="item">{{item}}</p><p v-for="item in activeSection.evidenceSources||[]" :key="item.label"><b>{{item.label}}</b>：{{clean(item.description)}}</p><p v-for="item in activeSection.localAnalysis?.hypotheses||activeSection.hypotheses||[]" :key="item" class="hypothesis">可能原因，尚未确认：{{clean(item)}}</p><p v-if="!fallbackEvidence(activeSection).length&&!activeSection.hypotheses?.length" class="muted">暂无更多依据。</p></details>
         <details v-if="supplements.length" class="supplement-list" :open="supplementOpen" @toggle="supplementOpen=($event.target as HTMLDetailsElement).open">
-          <summary>补充核对（{{supplements.length}} 项）</summary>
+          <summary>{{coverage?.mode==='all_facts'?'逐项核对':'补充核对'}}（{{supplements.length}} 项）</summary>
           <template v-if="supplementOpen">
             <div v-for="review in supplementRows" :key="review.factId" class="supplement-row">
               <button type="button" :aria-expanded="selectedSupplement===review.factId" @click="selectedSupplement=selectedSupplement===review.factId?'':review.factId">{{review.label||clean(review.statistics[0]?.text||'查看这项统计').split('：')[0]}}</button>

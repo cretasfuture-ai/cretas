@@ -79,7 +79,7 @@ async def history(request: Request, summaries_only: bool=False):
                 result=row['result'];ai=result.get('ai') or {}
                 row['result']={k:v for k,v in result.items() if k in ('generatedAt','summary','observations','history')}
                 row['result']['sectionInsights']=[]
-                row['result']['ai']={k:v for k,v in ai.items() if k in ('status','message','model','usage','cacheHit','analysisProfileVersion','omittedAnalysisFacts','analysisFactCoverage')}
+                row['result']['ai']={k:v for k,v in ai.items() if k in ('status','message','model','usage','cacheHit','analysisProfileVersion','omittedAnalysisFacts','analysisFactCoverage','analysisStage')}
                 row['summaryOnly']=True
             summaries.append(row)
         reports=summaries

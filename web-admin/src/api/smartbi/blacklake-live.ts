@@ -1,4 +1,5 @@
 import { pythonFetch } from './common';
+import type {AnalysisFactProgress} from './blacklake';
 
 export interface StockReconciliationRow {
   key: string; productId: string; productCode: string; product: string; warehouseKey: string; warehouse: string;
@@ -17,7 +18,7 @@ export interface LiveMonitorReport {
   enabled: boolean; status: string; startedAt: string; endsAt: string; intervalSeconds: number;
   lastAttemptAt: string | null; lastSuccessAt: string | null; nextRunAt: string | null; cycles: number;
   successfulCycles: number; changedCycles: number; error: string | null;
-  analysis: { status: string; reportId?: string | null; lastCompletedAt?: string | null; message: string; tokens?: number; summary?: string; findings?: string[]; sectionInsights?: unknown[] };
+  analysis: { status: string; reportId?: string | null; lastCompletedAt?: string | null; message: string; tokens?: number; summary?: string; findings?: string[]; sectionInsights?: unknown[];progress?:AnalysisFactProgress;stage?:{phase:string;message:string} };
   historyOffset?: number; historyHasMore?: boolean;
   history: { id: string; startedAt: string; finishedAt: string | null; status: string; requests: number;
     changed: boolean; counts: Record<string, number>; totals?: Record<string, number>; error: string | null; analysisReportId?: string | null }[];
