@@ -9,6 +9,7 @@ import com.cretas.aims.entity.enums.PurchaseReceiveStatus;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
@@ -57,6 +58,7 @@ class PurchaseServiceImplConfirmReceiveQcQuarantineTest {
     @Mock private com.cretas.aims.service.finance.ArApService arApService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private AttachmentRepository attachmentRepository;
 
@@ -79,7 +81,8 @@ class PurchaseServiceImplConfirmReceiveQcQuarantineTest {
                 bomItemRepository,
                 arApService,
                 applicationEventPublisher,
-                materialBatchService);
+                materialBatchService,
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         // PR #1577 起 confirmReceive 前置「收货凭证门」: attachmentRepository 为 null 直接 503
         // (fail-closed, 无凭证服务不写库存), 有服务但零附件则 409。本用例验证的是 QC/差异逻辑,

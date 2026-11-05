@@ -10,6 +10,7 @@ import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.repository.AttachmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
@@ -63,6 +64,7 @@ class PurchaseServiceImplReceiveVarianceNotifyTest {
     @Mock private com.cretas.aims.service.finance.ArApService arApService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
     @Mock private WarehouseResolver warehouseResolver;
     @Mock private AttachmentRepository attachmentRepository;
     @Mock private NotificationService notificationService;
@@ -135,7 +137,8 @@ class PurchaseServiceImplReceiveVarianceNotifyTest {
                 bomItemRepository,
                 arApService,
                 applicationEventPublisher,
-                materialBatchService);
+                materialBatchService,
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
         ReflectionTestUtils.setField(service, "warehouseResolver", warehouseResolver);
         ReflectionTestUtils.setField(service, "notificationService", notificationService);

@@ -11,6 +11,7 @@ import com.cretas.aims.entity.inventory.PurchaseReceiveItem;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
@@ -67,6 +68,7 @@ class PurchaseServiceImplConfirmReceiveApIdempotentTest {
     @Mock private ArApService arApService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private MaterialBatchService materialBatchService;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
 
     private PurchaseServiceImpl service;
 
@@ -88,7 +90,8 @@ class PurchaseServiceImplConfirmReceiveApIdempotentTest {
                 bomItemRepository,
                 arApService,
                 applicationEventPublisher,
-                materialBatchService);
+                materialBatchService,
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(service, "overReceiveRate", new BigDecimal("0.30"));
         // 2026-08-15 补夹具: confirmReceive 后来加了「必须先有收货凭证」这道闸,
         // attachmentRepository 是可选注入, 夹具没装 → null → 503「收货凭证服务暂不可用」。

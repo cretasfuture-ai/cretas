@@ -11,6 +11,7 @@ import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.repository.SupplierRepository;
@@ -59,6 +60,7 @@ class PurchaseOrderIdempotencyContentDimensionContractTest {
     private final PurchaseOrderItemRepository itemRepository = mock(PurchaseOrderItemRepository.class);
     private final SupplierRepository supplierRepository = mock(SupplierRepository.class);
     private final RawMaterialTypeRepository materialRepository = mock(RawMaterialTypeRepository.class);
+    private final MaterialReferenceWriteGuard materialReferenceWriteGuard = mock(MaterialReferenceWriteGuard.class);
     private final SupplierMaterialRepository relationRepository = mock(SupplierMaterialRepository.class);
     private final SupplierMaterialPurchaseSpecRepository specRepository =
             mock(SupplierMaterialPurchaseSpecRepository.class);
@@ -68,7 +70,8 @@ class PurchaseOrderIdempotencyContentDimensionContractTest {
     @BeforeEach
     void setUp() {
         service = new PurchaseServiceImpl(orderRepository, itemRepository, null,
-                supplierRepository, materialRepository, null, null, null, null, null);
+                supplierRepository, materialRepository, null, null, null, null, null,
+                materialReferenceWriteGuard);
         ReflectionTestUtils.setField(service, "supplierMaterialRepository", relationRepository);
         ReflectionTestUtils.setField(service, "supplierMaterialPurchaseSpecRepository", specRepository);
 
