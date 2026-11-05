@@ -303,6 +303,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
             ReflectionTestUtils.setField(
                     orchestrator, "authenticatedToolPrincipalFactory", principalFactory);
             ReflectionTestUtils.setField(orchestrator, "businessTypeGate", mock(BusinessTypeGate.class));
+            FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
         }
     }
 }

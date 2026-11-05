@@ -23,8 +23,32 @@ class RetiredAnalysisContextContractTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"DEMO_REST", "RES_OLD", "REST_OLD", "R_QINGHUAJIAO_REAL"})
+    @ValueSource(strings = {"MOCK_REST", "DEMO_REST", "RES_OLD", "REST_OLD",
+            "R_DONGMENKOU_REAL", "R_QINGHUAJIAO_REAL", "R_YUJIUJING_REAL"})
     void knownRetiredIdsFailClosedWhenMetadataIsUnavailable(String id) {
         assertThat(RetiredAnalysisContext.isRetired(id, null, "factory_super_admin")).isTrue();
+    }
+
+    @Test
+    void branchDomainIsRetiredEvenForNonRestaurantRole() {
+        assertThat(RetiredAnalysisContext.isRetired("BRANCH-1", "BRANCH", "finance_manager")).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"FACTORY", "HEADQUARTERS", "CENTRAL_KITCHEN"})
+    void knownFactoryMetadataRemainsAvailableWithoutBroadRPrefixRetirement(String domain) {
+        org.assertj.core.api.Assertions.assertThatCode(() ->
+                RetiredAnalysisContext.requireFactory("R_FACTORY_CUSTOM_REAL", domain, "finance_manager"))
+                .doesNotThrowAnyException();
+        assertThat(RetiredAnalysisContext.isRetired("R_FACTORY_CUSTOM_REAL", null, "finance_manager")).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "UNKNOWN", "RETAIL"})
+    void unknownMetadataCannotBecomeManufacturing(String domain) {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                RetiredAnalysisContext.requireFactory("F006", domain, "finance_manager"))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        failure -> assertThat(failure.getCode()).isEqualTo(503));
     }
 }

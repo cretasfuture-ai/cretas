@@ -32,6 +32,8 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
@@ -162,7 +164,7 @@ class MobileAuthPhoneRegistrationContractTest {
                         .phoneNumber(phone).factoryId("LIUSHANMEN").build()))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("餐饮专属角色已退役");
-        verify(tempTokenService, never()).generateTempToken(any(), any());
+        verify(tempTokenService, never()).generateTempToken(anyString(), anyInt());
     }
 
     @ParameterizedTest

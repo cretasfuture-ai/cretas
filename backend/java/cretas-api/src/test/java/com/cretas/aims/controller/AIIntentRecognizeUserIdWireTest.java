@@ -138,6 +138,9 @@ class AIIntentRecognizeUserIdWireTest {
         when(jwtUtil.getUserIdFromToken("no-user-token")).thenReturn(null);
         when(jwtUtil.getRoleFromToken("no-user-token")).thenReturn("FACTORY_ADMIN");
 
+        IntentConfigManagementService configManagement = mock(IntentConfigManagementService.class);
+        when(configManagement.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
+
         AIIntentConfigController controller = new AIIntentConfigController(
                 intentService,
                 mock(IntentExecutorService.class),
@@ -145,7 +148,7 @@ class AIIntentRecognizeUserIdWireTest {
                 mock(IntentConfigRollbackService.class),
                 mock(ParameterExtractionLearningService.class),
                 jwtUtil,
-                null);
+                configManagement);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

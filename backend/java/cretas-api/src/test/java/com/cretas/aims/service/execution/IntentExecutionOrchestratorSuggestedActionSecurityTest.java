@@ -73,6 +73,7 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
 
         configService = mock(IntentConfigManagementService.class);
         ReflectionTestUtils.setField(orchestrator, "configService", configService);
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     @Test

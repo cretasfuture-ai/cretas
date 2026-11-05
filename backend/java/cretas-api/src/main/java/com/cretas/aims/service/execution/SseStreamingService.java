@@ -284,13 +284,17 @@ public class SseStreamingService {
                 streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
                 return;
             }
-            if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())
-                    || com.cretas.aims.util.RetiredAnalysisContext.isRetired(
-                            factoryId, resolveFactoryDomainForTenantCheck(factoryId), userRole)) {
-                streamTerminalResponse(emitter, IntentExecuteResponse.builder()
-                        .intentRecognized(false).status("UNSUPPORTED_CAPABILITY")
-                        .message("该业务能力已退役，请使用工厂业务功能。")
-                        .executedAt(java.time.LocalDateTime.now()).build(), startTime);
+            if (com.cretas.aims.util.RetiredAnalysisContext.isRetiredIdentity(factoryId, userRole)
+                    || com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
+                streamTerminalResponse(emitter, retiredTenantResponse(), startTime);
+                return;
+            }
+            String tenantDomain = resolveFactoryDomainForTenantCheck(factoryId);
+            try {
+                com.cretas.aims.util.RetiredAnalysisContext.requireFactory(factoryId, tenantDomain, userRole);
+            } catch (com.cretas.aims.exception.BusinessException unavailable) {
+                streamTerminalResponse(emitter, unavailable.getCode() == 410
+                        ? retiredTenantResponse() : tenantTypeUnavailableResponse(), startTime);
                 return;
             }
             boolean trustedFactoryActor = hasBoundFactoryActor(factoryId, userId);
@@ -1187,7 +1191,7 @@ public class SseStreamingService {
         persistSuccessfulReadPagination(factoryId, userId, request, intent, toolName, response);
 
         if (factoryFollowUpService != null
-                && !com.cretas.aims.util.RetiredAnalysisContext.isRetired(factoryId, resolveFactoryDomainForTenantCheck(factoryId), userRole)) {
+                && com.cretas.aims.util.RetiredAnalysisContext.isKnownFactoryDomain(resolveFactoryDomainForTenantCheck(factoryId))) {
             try {
                 response.setFollowUps(factoryFollowUpService.suggest(
                         factoryId, userId, userRole, intent, response.getStatus()));
@@ -2253,6 +2257,27 @@ public class SseStreamingService {
 
     /** Resolve server-owned metadata before admitting an analysis request. */
     private String resolveFactoryDomainForTenantCheck(String factoryId) {
-        return businessTypeGate == null ? null : businessTypeGate.resolveDomain(factoryId);
+        if (businessTypeGate == null) return null;
+        try {
+            return businessTypeGate.resolveDomain(factoryId);
+        } catch (RuntimeException e) {
+            log.warn("SSE tenant domain resolution failed: factoryId={}", factoryId, e);
+            return null;
+        }
+    }
+
+    private IntentExecuteResponse tenantTypeUnavailableResponse() {
+        return IntentExecuteResponse.builder().intentRecognized(false)
+                .status("TENANT_TYPE_UNAVAILABLE")
+                .message("无法确认租户业务类型，暂不可执行意图")
+                .metadata(Map.of("errorCode", "TENANT_TYPE_UNAVAILABLE", "httpStatus", 503))
+                .executedAt(LocalDateTime.now()).build();
+    }
+
+    private IntentExecuteResponse retiredTenantResponse() {
+        return IntentExecuteResponse.builder().intentRecognized(false)
+                .status("UNSUPPORTED_CAPABILITY")
+                .message("该业务能力已退役，请使用工厂业务功能。")
+                .executedAt(LocalDateTime.now()).build();
     }
 }

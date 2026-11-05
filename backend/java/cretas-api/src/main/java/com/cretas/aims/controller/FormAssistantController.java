@@ -95,7 +95,6 @@ public class FormAssistantController {
     private static final String P_WAREHOUSE = "warehouse:write";
     private static final String P_INVENTORY = "inventory:write";
     private static final String P_SYSTEM = "system:write";
-    private static final String P_RESTAURANT = "restaurant:write";
 
     // ==================== DTO定义 ====================
 
@@ -320,7 +319,7 @@ public class FormAssistantController {
      * @return 解析后的字段值
      */
     @RequirePermission({P_ANALYTICS, P_PRODUCTION, P_PROCUREMENT, P_SALES,
-                        P_WAREHOUSE, P_INVENTORY, P_SYSTEM, P_RESTAURANT})
+                        P_WAREHOUSE, P_INVENTORY, P_SYSTEM})
     @RateLimit(count = 60, period = 60, limitType = RateLimit.LimitType.USER,
                message = "AI 解析请求过于频繁，请稍后再试")
     @PostMapping("/parse")
@@ -413,7 +412,7 @@ public class FormAssistantController {
      * 事件: processing → result → done
      */
     @RequirePermission({P_ANALYTICS, P_PRODUCTION, P_PROCUREMENT, P_SALES,
-                        P_WAREHOUSE, P_INVENTORY, P_SYSTEM, P_RESTAURANT})
+                        P_WAREHOUSE, P_INVENTORY, P_SYSTEM})
     @PostMapping(value = "/parse/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "流式 AI 表单解析 (SSE)",
                description = "SSE 流式输出。事件: processing, result, done, error")

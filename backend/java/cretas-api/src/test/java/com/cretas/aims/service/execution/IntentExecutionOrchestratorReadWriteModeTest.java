@@ -95,7 +95,8 @@ class IntentExecutionOrchestratorReadWriteModeTest {
         ReflectionTestUtils.setField(gate, "rbacGuard", rbacGuard);
         ReflectionTestUtils.setField(orchestrator, "intentPermissionGate", gate);
         // 与 DemoReadOnlyInterceptor 默认名单一致 (@Value 单测不生效, 手动注入)
-        ReflectionTestUtils.setField(orchestrator, "demoFactoryIdsCsv", "DEMO_REST,DEMO_FACTORY");
+        ReflectionTestUtils.setField(orchestrator, "demoFactoryIdsCsv", "DEMO_FACTORY2,DEMO_FACTORY");
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     // ==================== 意图夹具 ====================
@@ -240,12 +241,12 @@ class IntentExecutionOrchestratorReadWriteModeTest {
     // ==================== 6. demo 写闸 (confirm 二阶段) ====================
 
     @Test
-    @DisplayName("confirm() + factoryId=DEMO_REST → DEMO_WRITE_BLOCKED, 工具零执行, claim 已终结")
+    @DisplayName("confirm() + factoryId=DEMO_FACTORY2 → DEMO_WRITE_BLOCKED, 工具零执行, claim 已终结")
     void demoFactoryConfirmIsBlockedWithoutExecution() {
-        when(tokenService.claimToken(TOKEN, "DEMO_REST", USER, DIGEST))
-                .thenReturn(claimResult("DEMO_REST"));
+        when(tokenService.claimToken(TOKEN, "DEMO_FACTORY2", USER, DIGEST))
+                .thenReturn(claimResult("DEMO_FACTORY2"));
 
-        IntentExecuteResponse response = orchestrator.confirm("DEMO_REST", proof(), USER, ROLE);
+        IntentExecuteResponse response = orchestrator.confirm("DEMO_FACTORY2", proof(), USER, ROLE);
 
         assertThat(response.getStatus()).isEqualTo("DEMO_WRITE_BLOCKED");
         assertThat(response.getAiMode()).isEqualTo("WRITE");

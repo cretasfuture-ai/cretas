@@ -71,8 +71,9 @@ class SseStreamingServiceFactoryPackRouteTest {
                 harness.dashScopeClient,
                 harness.toolRegistry,
                 harness.toolDispatchService,
-                harness.writeGuardService,
-                harness.businessTypeGate);
+                harness.writeGuardService);
+        verify(harness.businessTypeGate).resolveDomain("F001");
+        verify(harness.businessTypeGate, never()).check(any(), any());
     }
 
     @Test
@@ -111,8 +112,9 @@ class SseStreamingServiceFactoryPackRouteTest {
                 harness.knowledgeBase,
                 harness.analysisRouterService,
                 harness.dynamicToolSelectionService,
-                harness.dashScopeClient,
-                harness.businessTypeGate);
+                harness.dashScopeClient);
+        verify(harness.businessTypeGate).resolveDomain("F001");
+        verify(harness.businessTypeGate, never()).check(any(), any());
         verify(harness.factoryRepository, times(1)).findById("F001");
     }
 
@@ -152,8 +154,9 @@ class SseStreamingServiceFactoryPackRouteTest {
                 harness.dynamicToolSelectionService,
                 harness.dashScopeClient,
                 harness.toolRegistry,
-                harness.toolDispatchService,
-                harness.businessTypeGate);
+                harness.toolDispatchService);
+        verify(harness.businessTypeGate).resolveDomain("F001");
+        verify(harness.businessTypeGate, never()).check(any(), any());
     }
 
     @Test
@@ -182,8 +185,9 @@ class SseStreamingServiceFactoryPackRouteTest {
                 harness.dynamicToolSelectionService,
                 harness.dashScopeClient,
                 harness.toolRegistry,
-                harness.toolDispatchService,
-                harness.businessTypeGate);
+                harness.toolDispatchService);
+        verify(harness.businessTypeGate).resolveDomain("F001");
+        verify(harness.businessTypeGate, never()).check(any(), any());
     }
 
     @Test
@@ -213,8 +217,9 @@ class SseStreamingServiceFactoryPackRouteTest {
                 harness.dashScopeClient,
                 harness.toolRegistry,
                 harness.toolDispatchService,
-                harness.writeGuardService,
-                harness.businessTypeGate);
+                harness.writeGuardService);
+        verify(harness.businessTypeGate).resolveDomain("F001");
+        verify(harness.businessTypeGate, never()).check(any(), any());
     }
 
     private static IntentMatchResult match(
@@ -281,6 +286,7 @@ class SseStreamingServiceFactoryPackRouteTest {
             ReflectionTestUtils.setField(service, "writeGuardService", writeGuardService);
             ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
             doNothing().when(service).sendSseEvent(any(), anyString(), any());
+            FactoryAnalysisTestMetadata.bindNamedFactories(service);
         }
 
         private IntentExecuteResponse execute(

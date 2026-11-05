@@ -88,3 +88,14 @@ PR #1451、#1457、#1438、#1475 已合并；原安全链部署 commit ecfb04cba
 2026-11-05 完整 CI 选择集合实际执行：5983 passed、0 failed、183 skipped、82 deselected，428.42秒，commandExit=0、own PostgreSQL stopExit=0。既有ci-gate-excludes及跳过条件未扩展。1264文件冻结快照SHA256 `80bda23a50c305d49a5d13e68008fa6554c0174971e7366493a8cb554dcd5da9`；证据 `python-full-retirement-v7.log/.xml`、`native-pg-20261105-201651-321-88576/result.json`（本机私有证据目录）。v6中断无最终结果，未当通过。
 
 真实shared tenant解析拒绝缺失/NULL/未知metadata，四HTTP入口均503且handler零调用；明确FACTORY/HQ/CENTRAL保留。历史14个精确R_*_REAL与MOCK_REST/DEMO_REST在API/engine前拒绝，保留R_FACTORY_CUSTOM等合法工厂ID。KPI/保密fixture显式提供FACTORY metadata，保留admin价格可见、warehouse null、调用者Bearer及保密产品排除计数断言；周期比较[30,34]/实际参考线与缺值负向分别保留。上述为Python测试证据，不是Java/Web全绿、部署或线上业务验收。
+## Supplier 冻结与餐饮 Java 收口
+
+食品第二次冻结 `eb908e5550c653ab2aedeea938348377e95f6bcb` 的 Guard/RawMaterialTypeRepository 两文件已完整接入，签名 `lockActive(String, Collection<String>)` 不变。新增 native scalar fresh-state 查询实际在 PostgreSQL 执行，拒绝一级缓存仍active而数据库已inactive的物料。旧31a的6PG不作为新版SQL证据。
+
+SupplierMaterialService create/update先锁raw；SupplierMaterialPurchaseSpecService create/update先捕获父引用、锁raw、悲观刷新父关系并核对factory/supplier/active/deleted/materialId，再读取/写入spec且核同ID。锁序raw→Supplier父关系→spec，不追加raw→PO/workflow。父实体消失转409 MATERIAL_REFERENCE_CONFLICT。独立冻结commit731c05ee09516f151dbf1306d5cd03565f6a4cb5，主PR精确取入070af768e7。
+
+原生PG v2：11真实PG +15规格单测+15主关系单测，共41，0fail/error/skip，commandExit=0、own stopExit=0、productionAccess=false。覆盖新版原生查询字段/租户/删除过滤、一级缓存旧active、主关系和采购规格两入口等merge锁后拒绝写、旧报价不变、父关系重定向零新增。独立风险复核无新P0/P1，7文件内容哈希一致。
+
+餐饮Java v11完整目标960项出现10fail/2error，不能报通过；生产源码终审无新P0/P1。失败为工厂夹具缺少新增准入metadata、旧角色遍历把退休角色当可授权，以及新测试无用stub，保持原业务/provider断言修复。仅重跑5失败类，完整结果与最终PR CI待回执；不扩基线。Python/UI已冻结证据复用，不因文档重跑。
+
+当前main/生产HOLD未解除，无发布锁，不合main、不部署；本批未做线上验证或生产业务写入。旧制品回滚可能恢复餐饮入口，服务恢复和退役验收须分别判断。

@@ -83,6 +83,7 @@ class IntentExecutionOrchestratorConfirmationContractTest {
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
         when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(true);
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     @Test

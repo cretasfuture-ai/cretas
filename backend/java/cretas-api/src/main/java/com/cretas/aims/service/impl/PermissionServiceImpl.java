@@ -459,6 +459,9 @@ public class PermissionServiceImpl implements PermissionService {
         if (isRetiredRestaurantRole(role)) {
             return false;
         }
+        if (isRetiredRestaurantPermission(permissionCode)) {
+            return false;
+        }
 
         // 超级管理员拥有所有权限
         if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
@@ -548,6 +551,9 @@ public class PermissionServiceImpl implements PermissionService {
         if (isRetiredRestaurantRole(role)) {
             return false;
         }
+        if (isRetiredRestaurantPermission(permissionCode)) {
+            return false;
+        }
         if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
             return true;
         }
@@ -623,17 +629,19 @@ public class PermissionServiceImpl implements PermissionService {
             return Collections.emptyMap();
         }
         Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), role, !isUnrestrictedRole(role));
-        return employeeModulePermissions == null ? levels : employeeModulePermissions.apply(user, levels);
+        return filterRetiredRestaurantModules(employeeModulePermissions == null ? levels
+                : employeeModulePermissions.apply(user, levels));
     }
 
     @Override
     public List<String> knownModuleAxis() {
         Set<String> axis = new TreeSet<>(ALL_MODULES);
+        axis.removeIf(PermissionServiceImpl::isRetiredRestaurantModule);
         if (platformRepo != null) {
             try {
                 for (PlatformRolePermission row : platformRepo.findByDeletedAtIsNull()) {
                     if (row.getModuleCode() != null) {
-                        axis.add(row.getModuleCode());
+                        if (!isRetiredRestaurantModule(row.getModuleCode())) axis.add(row.getModuleCode());
                     }
                 }
             } catch (Exception e) {
@@ -661,12 +669,30 @@ public class PermissionServiceImpl implements PermissionService {
         return role != null && role.name().startsWith("restaurant_");
     }
 
+    private static boolean isRetiredRestaurantModule(String module) {
+        return module != null && module.trim().toLowerCase(Locale.ROOT).startsWith("restaurant");
+    }
+
+    private static boolean isRetiredRestaurantPermission(String permissionCode) {
+        int separator = permissionCode.indexOf(':');
+        return isRetiredRestaurantModule(separator < 0 ? permissionCode : permissionCode.substring(0, separator));
+    }
+
+    private static Map<String, String> filterRetiredRestaurantModules(Map<String, String> levels) {
+        if (levels == null) throw new BusinessException(503, "权限配置暂时无法读取，请稍后重试");
+        if (levels.isEmpty()) return levels;
+        Map<String, String> filtered = new LinkedHashMap<>(levels);
+        filtered.keySet().removeIf(PermissionServiceImpl::isRetiredRestaurantModule);
+        return filtered;
+    }
+
     @Override
     public Map<String, String> resolveModuleLevelsForAuthorization(User user) {
         if (user == null) return Collections.emptyMap();
         if (isRetiredRestaurantRole(user.getRoleEnum())) return Collections.emptyMap();
         Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), user.getRoleEnum(), true);
-        return employeeModulePermissions == null ? levels : employeeModulePermissions.apply(user, levels);
+        return filterRetiredRestaurantModules(employeeModulePermissions == null ? levels
+                : employeeModulePermissions.apply(user, levels));
     }
 
     private Map<String, String> resolveRoleModuleLevels(
@@ -696,12 +722,14 @@ public class PermissionServiceImpl implements PermissionService {
         if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
             levels.put(MODULE_LEVEL_WILDCARD, "rw");
             for (String module : modules) {
+                if (isRetiredRestaurantModule(module)) continue;
                 levels.put(module, "rw");
             }
             return levels;
         }
 
         for (String module : modules) {
+            if (isRetiredRestaurantModule(module)) continue;
             String level = normalizeLevel(resolveEffectiveLevel(factoryId, role, module, snapshot, true));
             if (level == null) continue;
             levels.put(module, level);
@@ -735,6 +763,9 @@ public class PermissionServiceImpl implements PermissionService {
 
     private String resolveEffectiveLevel(String factoryId, FactoryUserRole role, String module,
                                          LayerSnapshot snapshot, boolean requireAvailable) {
+        if (isRetiredRestaurantModule(module)) {
+            return null;
+        }
         if (isRetiredRestaurantRole(role)) {
             return null;
         }
@@ -984,6 +1015,9 @@ public class PermissionServiceImpl implements PermissionService {
     @Override
     public boolean canAccessModule(User user, String module) {
         if (user == null || module == null) {
+            return false;
+        }
+        if (isRetiredRestaurantModule(module)) {
             return false;
         }
 

@@ -28,7 +28,7 @@ class DemoReadOnlyInterceptorTest {
     }
 
     @Test
-    void demoTenantAllowsExactRestaurantAgentRunStartBecauseItOnlyWritesAiLedger() throws Exception {
+    void demoTenantBlocksRetiredRestaurantAgentRunStart() throws Exception {
         DemoReadOnlyInterceptor interceptor = new DemoReadOnlyInterceptor();
         ReflectionTestUtils.setField(interceptor, "demoEnabled", true);
         ReflectionTestUtils.setField(interceptor, "demoFactoryIdsCsv", "DEMO_REST,DEMO_FACTORY");
@@ -41,12 +41,12 @@ class DemoReadOnlyInterceptorTest {
 
         boolean allowed = interceptor.preHandle(request, response, new Object());
 
-        assertTrue(allowed);
-        assertEquals(HttpServletResponse.SC_OK, response.getStatus());
+        assertFalse(allowed);
+        assertEquals(HttpServletResponse.SC_FORBIDDEN, response.getStatus());
     }
 
     @Test
-    void demoTenantAllowsExactRestaurantAgentRunCancelBecauseItOnlyWritesAiLedger() throws Exception {
+    void demoTenantBlocksRetiredRestaurantAgentRunCancel() throws Exception {
         DemoReadOnlyInterceptor interceptor = new DemoReadOnlyInterceptor();
         ReflectionTestUtils.setField(interceptor, "demoEnabled", true);
         ReflectionTestUtils.setField(interceptor, "demoFactoryIdsCsv", "DEMO_REST,DEMO_FACTORY");
@@ -59,8 +59,8 @@ class DemoReadOnlyInterceptorTest {
 
         boolean allowed = interceptor.preHandle(request, response, new Object());
 
-        assertTrue(allowed);
-        assertEquals(HttpServletResponse.SC_OK, response.getStatus());
+        assertFalse(allowed);
+        assertEquals(HttpServletResponse.SC_FORBIDDEN, response.getStatus());
     }
 
     @Test

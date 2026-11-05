@@ -220,6 +220,7 @@ class SseStreamingServiceFollowUpTest {
             ReflectionTestUtils.setField(service, "businessTypeGate", mock(BusinessTypeGate.class));
             ReflectionTestUtils.setField(service, "pythonAiMatcherClient", pythonAiMatcherClient);
             doNothing().when(service).sendSseEvent(any(), anyString(), any());
+            FactoryAnalysisTestMetadata.bindNamedFactories(service);
         }
 
         private void recognizes(String input, String code) {

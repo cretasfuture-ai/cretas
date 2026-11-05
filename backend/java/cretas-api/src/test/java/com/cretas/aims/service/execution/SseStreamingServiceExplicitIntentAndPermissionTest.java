@@ -158,7 +158,7 @@ class SseStreamingServiceExplicitIntentAndPermissionTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"restaurant_owner", "restaurant_manager", "restaurant_chef", "restaurant_purchaser"})
-    void oldRolesStopBeforeAnyFactoryRecognitionOrTool(String role) {
+    void oldRolesStopBeforeAnyFactoryRecognitionOrTool(String role) throws Exception {
         Harness h = new Harness();
         ReflectionTestUtils.invokeMethod(h.service, "executeStreamAsync", h.emitter, "F001",
                 IntentExecuteRequest.builder().userInput("你好").build(), 7L, role);
@@ -209,6 +209,7 @@ class SseStreamingServiceExplicitIntentAndPermissionTest {
             ReflectionTestUtils.setField(service, "intentPermissionGate", permissionGate);
             ReflectionTestUtils.setField(service, "pythonAiMatcherClient", pythonClient);
             doNothing().when(service).sendSseEvent(any(), anyString(), any());
+            FactoryAnalysisTestMetadata.bindNamedFactories(service);
         }
 
         private AIIntentConfig readIntent(String code, String tool, String permission) {

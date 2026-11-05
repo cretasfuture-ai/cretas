@@ -37,6 +37,7 @@ class IntentExecutionOrchestratorMemoryPersistTest {
                 mock(AgenticRAGRouterService.class), mock(ResultValidatorService.class),
                 mock(ToolDispatchService.class), mock(DynamicToolSelectionService.class),
                 mock(QueryPreprocessorService.class));
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     @Test

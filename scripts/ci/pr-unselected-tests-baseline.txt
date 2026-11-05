@@ -170,7 +170,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/Factor
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/InterviewModuleCatalogParityTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/blueprint/interview/InterviewSessionOwnershipMessageTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/cache/IntentResultCacheTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/client/GoldFinanceClientAchievementTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/GoldFinanceClientTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/IsapiClientTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/client/LabelQcAnalysisClientTest.java
@@ -184,7 +183,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/config/DemoFactoryGateConf
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/DemoReadOnlyInterceptorTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/EnumCoercionJacksonConfigTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/FlywayLineageBackfillValidateOnlyTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/config/IntentKnowledgeBaseTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/JacksonBigDecimalForFloatsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/JwtAuthInterceptorDisabledUserTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/config/JwtAuthInterceptorFactoryClosedTest.java
@@ -836,7 +834,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/RawMaterialTy
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/RejectReversesInventoryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ReportServiceImplProfitDetailTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ReporterNameFallbackTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/RestaurantDomainPrefixTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ResultFormatterMaterialInventoryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/ResultFormatterToolListEnvelopeTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/SemanticCacheProcessSecretTest.java

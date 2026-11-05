@@ -297,9 +297,9 @@ public class IntentExecutionOrchestrator {
 
     private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
                                           Long userId, String userRole) {
-        if (com.cretas.aims.util.RetiredAnalysisContext.isRetired(
-                factoryId, resolveFactoryDomainSafe(factoryId), userRole)
-                || com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
+        IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
+        if (tenantGate != null) return tenantGate;
+        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
         }
 
@@ -789,8 +789,9 @@ public class IntentExecutionOrchestrator {
 
     private IntentExecuteResponse executeWithExplicitIntentInScope(String factoryId, IntentExecuteRequest request,
                                                              Long userId, String userRole) {
-        if (com.cretas.aims.util.RetiredAnalysisContext.isRetired(
-                factoryId, resolveFactoryDomainSafe(factoryId), userRole)) {
+        IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
+        if (tenantGate != null) return tenantGate;
+        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
         }
         if (hasNamedSession(request) && !hasTrustedConversationIdentity(
@@ -974,10 +975,8 @@ public class IntentExecutionOrchestrator {
 
     private IntentExecuteResponse confirmInScope(String factoryId, ConfirmationProof confirmationProof,
                                           Long userId, String userRole) {
-        if (com.cretas.aims.util.RetiredAnalysisContext.isRetired(
-                factoryId, resolveFactoryDomainSafe(factoryId), userRole)) {
-            return retiredCapabilityResponse();
-        }
+        IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
+        if (tenantGate != null) return tenantGate;
         if (previewTokenService == null) {
             return IntentExecuteResponse.builder()
                     .status("FAILED")
@@ -2496,17 +2495,33 @@ public class IntentExecutionOrchestrator {
     // ==================== C1 业态过滤 helpers (restaurant-chat-qa) ====================
 
     /**
-     * Resolve a factory's business domain ("RESTAURANT" / "FACTORY"), fail-soft.
-     * Returns {@code null} if resolution throws — callers treat null as "unknown" and
-     * keep the original (unfiltered) behavior so the clarification path never crashes.
+     * Resolve authoritative metadata; admission rejects null instead of assuming manufacturing.
      */
     String resolveFactoryDomainSafe(String factoryId) {
         try {
             return configService.resolveBusinessDomain(factoryId);
         } catch (Exception e) {
-            log.warn("[C1业态过滤] resolveBusinessDomain failed for factoryId={} — skip filter: {}",
+            log.warn("[C1业态过滤] resolveBusinessDomain failed for factoryId={} — metadata unavailable: {}",
                     factoryId, e.getMessage());
             return null;
+        }
+    }
+
+    private IntentExecuteResponse analysisAdmissionResponse(String factoryId, String userRole) {
+        if (com.cretas.aims.util.RetiredAnalysisContext.isRetiredIdentity(factoryId, userRole)) {
+            return retiredCapabilityResponse();
+        }
+        String domain = resolveFactoryDomainSafe(factoryId);
+        try {
+            com.cretas.aims.util.RetiredAnalysisContext.requireFactory(factoryId, domain, userRole);
+            return null;
+        } catch (com.cretas.aims.exception.BusinessException unavailable) {
+            if (unavailable.getCode() == 410) return retiredCapabilityResponse();
+            return IntentExecuteResponse.builder().intentRecognized(false)
+                    .status("TENANT_TYPE_UNAVAILABLE")
+                    .message(unavailable.getMessage())
+                    .metadata(java.util.Map.of("errorCode", "TENANT_TYPE_UNAVAILABLE", "httpStatus", 503))
+                    .executedAt(LocalDateTime.now()).build();
         }
     }
 

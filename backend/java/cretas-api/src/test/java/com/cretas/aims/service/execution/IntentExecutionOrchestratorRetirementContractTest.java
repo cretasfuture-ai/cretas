@@ -66,6 +66,7 @@ class IntentExecutionOrchestratorRetirementContractTest {
                 mock(ToolDispatchService.class),
                 mock(DynamicToolSelectionService.class),
                 mock(QueryPreprocessorService.class));
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     @org.junit.jupiter.params.ParameterizedTest

@@ -79,11 +79,11 @@ class AgentOpsServiceTest {
 
     @Test
     void nonAdminAndUnsupportedDomainFailBeforeNetwork() {
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "operator", "corr"))
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "operator", "corr"))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(403));
-        when(domains.resolveBusinessDomain("R001")).thenReturn("UNKNOWN_DOMAIN");
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+        when(domains.resolveBusinessDomain("F006")).thenReturn("UNKNOWN_DOMAIN");
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(403));
     }
@@ -101,7 +101,7 @@ class AgentOpsServiceTest {
     @Test
     void unknownUpstreamConflictRemainsSafeGenericConflict() throws Exception {
         when(client.listEvalSets(any())).thenThrow(new AgentOpsClient.UpstreamException(409));
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> {
                     ResponseStatusException status = (ResponseStatusException) ex;
@@ -119,7 +119,7 @@ class AgentOpsServiceTest {
 
         for (String code : new String[]{"EVAL_SET_VERSION_EXISTS", "IDEMPOTENCY_KEY_REUSED",
                 "EVALUATOR_BUILD_UNAVAILABLE"}) {
-            assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+            assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                     .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
                         assertThat(status.getStatusCode().value()).isEqualTo(409);
                         assertThat(status.getReason()).isEqualTo(code);
@@ -153,7 +153,7 @@ class AgentOpsServiceTest {
                 .thenThrow(new AgentOpsClient.UpstreamException(503))
                 .thenThrow(new AgentOpsClient.UpstreamException(500))
                 .thenThrow(new AgentOpsClient.UpstreamException(502));
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> {
                     ResponseStatusException status = (ResponseStatusException) ex;
@@ -162,7 +162,7 @@ class AgentOpsServiceTest {
                 });
         // 404/422 are controlled rejections and stay 4xx (see upstreamValidationAndNotFound...)
         for (int upstream : new int[]{500, 502}) {
-            assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+            assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                     .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
                         assertThat(status.getStatusCode().value()).as("upstream %s", upstream).isEqualTo(502);
                         assertThat(status.getReason()).isEqualTo("AGENT_OPS_BAD_UPSTREAM");
@@ -177,13 +177,13 @@ class AgentOpsServiceTest {
                         403, "AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED"))
                 .thenThrow(new AgentOpsClient.UpstreamException(403, "UNSAFE_DETAIL"));
 
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
                     assertThat(status.getStatusCode().value()).isEqualTo(403);
                     assertThat(status.getReason())
                             .isEqualTo("AGENT_OPS_RUNTIME_SHADOW_CANARY_DENIED");
                 });
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
                     assertThat(status.getStatusCode().value()).isEqualTo(502);
                     assertThat(status.getReason()).isEqualTo("AGENT_OPS_BAD_UPSTREAM");
@@ -196,17 +196,17 @@ class AgentOpsServiceTest {
                 .thenThrow(new AgentOpsClient.UpstreamException(422, "UNSUPPORTED_EXPECTED_ROUTE"))
                 .thenThrow(new AgentOpsClient.UpstreamException(404, "RUN_NOT_FOUND"))
                 .thenThrow(new AgentOpsClient.UpstreamException(422, null));
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+            assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
                     assertThat(status.getStatusCode().value()).isEqualTo(422);
                     assertThat(status.getReason()).contains("期望路由").contains("UNSUPPORTED_EXPECTED_ROUTE");
                 });
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
                     assertThat(status.getStatusCode().value()).isEqualTo(404);
                     assertThat(status.getReason()).contains("未找到");
                 });
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, status -> {
                     assertThat(status.getStatusCode().value()).isEqualTo(422);
                     assertThat(status.getReason()).isEqualTo("请求内容不符合要求");
@@ -216,7 +216,7 @@ class AgentOpsServiceTest {
     @Test
     void realUpstreamOutageStillMapsTo502() throws Exception {
         when(client.listEvalSets(any())).thenThrow(new AgentOpsClient.UpstreamException(500));
-        assertThatThrownBy(() -> service.listEvalSets("R001", "42", "platform_admin", "corr"))
+        assertThatThrownBy(() -> service.listEvalSets("F006", "42", "platform_admin", "corr"))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         status -> assertThat(status.getStatusCode().value()).isEqualTo(502));
     }

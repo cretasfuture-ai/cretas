@@ -16,7 +16,6 @@ import com.cretas.aims.repository.inventory.SupplierDeliveryNoteLineRepository;
 import com.cretas.aims.repository.inventory.SupplierDeliveryNoteRepository;
 import com.cretas.aims.service.OssService;
 import com.cretas.aims.service.finance.ArApService;
-import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.inventory.InventoryPostingService;
 import com.cretas.aims.service.inventory.impl.SupplierDeliveryNoteServiceImpl;
 import org.junit.jupiter.api.DisplayName;
@@ -68,19 +67,10 @@ class SupplierDeliveryNoteServiceContractTest {
     @Mock InventoryPostingService postingService;
     @Mock ArApService arApService;
     @Mock NotificationService notificationService;
-    @Mock IntentConfigManagementService intentConfigManagementService;
-
     @InjectMocks SupplierDeliveryNoteServiceImpl service;
 
     private static final String FACTORY = "F006";
     private static final byte[] PHOTO = "fake-jpeg-bytes".getBytes();
-
-    @org.junit.jupiter.api.BeforeEach
-    void wireLazyField() {
-        // @Lazy @Autowired 字段不是构造器参数 → Mockito @InjectMocks 不会注入, 手动注入。
-        org.springframework.test.util.ReflectionTestUtils.setField(
-                service, "intentConfigManagementService", intentConfigManagementService);
-    }
 
     // ---- 1. duplicate hash → 409 ----
     @Test
@@ -157,30 +147,6 @@ class SupplierDeliveryNoteServiceContractTest {
         when(ossService.isAvailable()).thenReturn(true);
         when(ossService.uploadBytes(any(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn("https://oss/x.jpg");
-        when(intentConfigManagementService.resolveBusinessDomain("F999")).thenReturn("FACTORY");
-        when(visionClient.analyzeImage(anyString(), anyString()))
-                .thenReturn("{\"items\":[],\"confidence\":0.9}");
-        when(noteRepository.save(any(SupplierDeliveryNote.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
-
-        service.parseAndDraft("F999", 1L, PHOTO, "image/jpeg", LocalDate.now(), null);
-
-        org.mockito.ArgumentCaptor<String> promptCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(visionClient).analyzeImage(anyString(), promptCaptor.capture());
-        String prompt = promptCaptor.getValue();
-        assertTrue(prompt.contains("物料名称"), "工厂 prompt 应含『物料名称』");
-        assertFalse(prompt.contains("中餐厅供应链单据识别专家"), "工厂 prompt 不应含中餐厅措辞");
-    }
-
-    @Test
-    @DisplayName("parseAndDraft RESTAURANT 业态保持中餐厅 prompt (字节不变)")
-    void parseAndDraft_restaurantDomain_usesRestaurantPrompt() {
-        when(noteRepository.findByFactoryIdAndPhotoHash(eq(FACTORY), anyString())).thenReturn(Optional.empty());
-        when(visionClient.isAvailable()).thenReturn(true);
-        when(ossService.isAvailable()).thenReturn(true);
-        when(ossService.uploadBytes(any(), anyString(), anyString(), anyString(), anyString()))
-                .thenReturn("https://oss/x.jpg");
-        when(intentConfigManagementService.resolveBusinessDomain(FACTORY)).thenReturn("RESTAURANT");
         when(visionClient.analyzeImage(anyString(), anyString()))
                 .thenReturn("{\"items\":[],\"confidence\":0.9}");
         when(noteRepository.save(any(SupplierDeliveryNote.class)))
@@ -190,7 +156,9 @@ class SupplierDeliveryNoteServiceContractTest {
 
         org.mockito.ArgumentCaptor<String> promptCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(visionClient).analyzeImage(anyString(), promptCaptor.capture());
-        assertTrue(promptCaptor.getValue().contains("中餐厅供应链单据识别专家"));
+        String prompt = promptCaptor.getValue();
+        assertTrue(prompt.contains("物料名称"), "工厂 prompt 应含『物料名称』");
+        assertFalse(prompt.contains("中餐厅供应链单据识别专家"), "工厂 prompt 不应含中餐厅措辞");
     }
 
     // ---- 5 & 6. confirm calls gold; gold failure does not roll back confirm ----
@@ -213,7 +181,7 @@ class SupplierDeliveryNoteServiceContractTest {
         assertEquals(9L, result.getConfirmedBy());
         assertEquals("AP1", result.getPayableTransactionId());
         verify(arApService).recordPayableFromSource(eq(FACTORY), eq("SUP1"), eq("SUPPLIER_DELIVERY_NOTE"),
-                eq("N1"), any(), any(), eq(9L), contains("餐饮送货验收入库自动挂账"));
+                eq("N1"), any(), any(), eq(9L), contains("工厂送货验收入库自动挂账"));
         verify(goldClient).upsertSupplierPriceBatch(eq(FACTORY), eq("N1"), anyList());
     }
 

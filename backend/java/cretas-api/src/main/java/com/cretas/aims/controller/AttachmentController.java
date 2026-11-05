@@ -82,7 +82,6 @@ public class AttachmentController {
             "warehouse:read", "warehouse:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
-            "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
             "system:read", "system:read_write"
     })
@@ -108,7 +107,6 @@ public class AttachmentController {
             "warehouse:read", "warehouse:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
-            "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
             "system:read", "system:read_write"
     })
@@ -133,7 +131,6 @@ public class AttachmentController {
             "warehouse:read", "warehouse:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
-            "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
             "system:read", "system:read_write"
     })
@@ -160,7 +157,6 @@ public class AttachmentController {
             "warehouse:read", "warehouse:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
-            "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
             "system:read", "system:read_write"
     })
@@ -185,7 +181,6 @@ public class AttachmentController {
             "warehouse:read_write",
             "hr:read_write",
             "work_report:read_write",
-            "restaurant:read_write",
             "rd:read_write",
             "system:read_write"
     })
@@ -212,7 +207,6 @@ public class AttachmentController {
             "warehouse:read_write",
             "hr:read_write",
             "work_report:read_write",
-            "restaurant:read_write",
             "rd:read_write",
             "system:read_write"
     })
@@ -247,7 +241,6 @@ public class AttachmentController {
             "warehouse:read_write",
             "hr:read_write",
             "work_report:read_write",
-            "restaurant:read_write",
             "rd:read_write",
             "system:read_write"
     })
@@ -280,7 +273,6 @@ public class AttachmentController {
             "warehouse:read_write",
             "hr:read_write",
             "work_report:read_write",
-            "restaurant:read_write",
             "rd:read_write",
             "system:read_write"
     })
@@ -305,7 +297,6 @@ public class AttachmentController {
             "warehouse:read", "warehouse:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
-            "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
             "system:read", "system:read_write"
     })
@@ -345,7 +336,6 @@ public class AttachmentController {
             "warehouse:read", "warehouse:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
-            "restaurant:read", "restaurant:read_write",
             "rd:read", "rd:read_write",
             "system:read", "system:read_write"
     })

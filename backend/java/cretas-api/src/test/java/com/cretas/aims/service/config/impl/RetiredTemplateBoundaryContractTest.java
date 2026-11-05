@@ -5,6 +5,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.*;
 import com.cretas.aims.util.RetiredTemplatePolicy;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -26,6 +27,11 @@ class RetiredTemplateBoundaryContractTest {
     @Mock FactoryModuleConfigRepository modules;
     @Mock ConfigChangeLogRepository changes;
     @InjectMocks FactoryConfigServiceImpl service;
+
+    @BeforeEach
+    void injectOptionalTemplateRepository() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "factoryTemplateRepository", templates);
+    }
 
     @ParameterizedTest
     @ValueSource(strings = {"RESTAURANT", "BRANCH"})

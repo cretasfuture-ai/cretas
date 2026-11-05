@@ -6,15 +6,15 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
-- `SEC-RESTAURANT-CHAT-20261105` — `review` — Owner root — Base 41f58a822cf — scope Python chat/food_kb；保留factory/OCR/法律通用知识，删除餐饮RAG和专属入口；pytest/no-capture/secrecy。
+- `SEC-RESTAURANT-SSE-FIXTURE-20261105` — `in-progress` — Owner restaurant_chat/root — Base 9dbacd599a — scope 仅SseStreamingClarificationOptionsContractTest及SseStreamingFoodFallbackContractTest；显式绑定F006工厂元数据，保持业务与provider断言；root Maven。
 
-- `SEC-RESTAURANT-FACTORY-COMPAT-20261105` — `review` — Owner root — Base 41f58a822cf — scope Java模块/菜单/finding/附件退役及工厂KPI迁出；对应factory权限/界面测试，详归档；root最终集成。
+- `SEC-RESTAURANT-FACTORY-COMPAT-20261105` — `review` — Owner root — Base 41f58a822cf — scope Python warmup及materialized共享模板tests；已冻结f883/Python full5983pass，PR1479最终交付，详归档。
 
 - `SEC-RESTAURANT-OPS-20261105` — `review` — Owner restaurant_ops/root — Base 41f58a822cf — scope scripts餐饮cron/ETL/演示/E2E及Python部署引用；清除运行入口/重新生成readonly bundle，保留工厂场景。验收Node/shell/部署契约；4执行者目录产物隔离，冻结即释放。
 
 - `SEC-RESTAURANT-JAVA-20261105` — `review` — Owner root — Base 41f58a822cf — scope backend/java及tests；餐饮退役、工厂供货、权限/配置/模板拦截；Canvas仅退休角色deny，不改DAG/缺料/采购审批业务。验收Maven、真实PG/JPA、factory回归，详归档。
 
-- `SEC-RESTAURANT-PYTHON-20261105` — `claimed` — Owner restaurant_python/root — Base 41f58a822cf — scope backend/python；删除餐饮专属路由/调度/服务及入口，迁出工厂复用逻辑，保留已应用SQL。验收pytest注册/工厂正向；禁止Java/Web/RN。
+- `SEC-RESTAURANT-PYTHON-20261105` — `in-progress` — Owner restaurant_python/root — Base 41f58a822cf — scope synthesis_engine tests与test_synthesis_auto_dimensions/dish_margin_plan；恢复被改名隐藏的factory断言，删纯餐饮case，禁改生产源码/其他tests；pytest目标及_retired_test零扫描。
 
 - `SEC-RESTAURANT-UI-20261105` — `claimed` — Owner restaurant_ui/root — Base 41f58a822cf — scope web-admin及frontend/CretasFoodTrace；删除餐饮专属页面/导航/API/角色入口，迁出工厂复用。验收Web/RN类型/构建/入口契约；禁止Canvas/缺料/演示业务修改。
 
@@ -155,8 +155,8 @@
 
 - `SEC-RESTAURANT-FACTORY-STORE-20261105` — `review` — Owner root — Base 41f58a822cf — scope Python AgentOps store/validation及factory ACL/trace回归；保留旧factory精确重放，pytest+独立PG证据见归档。
 
-- `SEC-RESTAURANT-PYTHON-SURFACES-20261105` — `review` — Owner root — Base 41f58a822cf — scope Python POS/canonical-dish/队列/图表入口退役，factory上传/finance/租户保留；pytest及注册门禁。
+- `SEC-SUPPLIER-SPEC-LOCK-20261105` — `in-progress` — Owner restaurant_chat/root — Base 80ba92ace2 — scope 独立supplier-guard-verify WT的SupplierMaterialPurchaseSpecServiceImpl及其单测/PG引用契约/JPA查询测试；接eb guard、锁后父关系复核；root独占Maven/commit。
 
-- `SEC-RESTAURANT-PYTHON-DOMAINS-20261105` — `review` — Owner root — Base 41f58a822cf — scope Python canonical/entity/knowledge/shared/price ACL；退役餐饮域、保留工厂实体/配置/权限；目标pytest。
-- `SEC-RESTAURANT-AGENTOPS-BOUNDARY-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope Java AgentOpsClient/AgentOpsService及对应tests；仅FACTORY域/显式TrustedContext，拒退休餐饮域；保留FactoryTrace和历史factory重放，禁止Python legacy/PG/Orch/UI；验收root Maven AgentOps/trace目标。
-- `SEC-RESTAURANT-FACTORY-LIVENESS-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope minimal_safe_set_liveness及factory helper、llm-provider-health-daily cron、LLM registry/constant scanner/secrecy/yes-no归因4测试；迁出工厂共享健康探针，保留3profile及fail-closed读数；offline mock pytest，禁生产调用/legacy/Java/UI。
+- `SEC-RESTAURANT-MODULE-MAP-FINAL-20261105` — `in-progress` — Owner restaurant_chat/root — Base 0a2e015c95 — scope PermissionServiceImpl/PlatformEmployeeModulePermissions及ToolPrincipalPolicy相关tests；修超管历史模块与employee覆盖回注，平台PUT拒退休模块，保留factory阳性；root Maven。
+- `SEC-RESTAURANT-AI-FAILCLOSED-20261105` — `in-progress` — Owner root — Base 980ff20b28 — scope Orchestrator/SSE/RetiredAnalysisContext及IntentConfigManagementServiceImpl域解析、AIIntentConfigController/MultiIntentExecutionService及tests；域未知/异常前置503，拒退休exact身份，保留显式FACTORY正向；验收目标由root串行Maven/PG，执行者不跑Maven。
+- `SEC-RESTAURANT-JAVA-CLIENTS-20261105` — `in-progress` — Owner root — Base 5fa4d12c5d — scope PythonSmartBIClient/GoldFinanceClient、KB/SemanticMatcher、IndicatorQueryServiceImpl/LlmIntentFallbackClientImpl及tests；迁工厂共用、删餐饮HTTP/phrase/domain闭包；root Maven，禁Orch/权限/Supplier。
