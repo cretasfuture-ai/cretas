@@ -1,0 +1,5 @@
+# Product creation with failed source-chain copy
+
+Task ARTIFACT-PRODUCT-CREATE-COPY-FAILURE-20261106; initial Base24c7a1e13398693a9d9b7ab205b09f9a545ff5b0; Food DAG/root unique Owner. Scope only ProductCreateTool and its new behavior ContractTest. A product and chain copy use separate service transactions: copy failure now returns explicit failure with the unique already-created product ID, source identity and manual reconciliation instruction, without raw exception details or automatic retry. No false rollback or success claim.
+
+Targeted selector ProductCreateToolContractTest,AiProductCreateControllerGatewayTest,DefaultToolExecutionGatewayTest,ProcessSecretAiToolExitsTest passed56/0fail/0error/0skip. Actual Gateway generic mutating failure test proves OUTCOME_UNKNOWN. Source hash97A2AF38BB35AAE24E0ADDD15F290399C4595ECB557729D8A32578CA811E2422; new test3685BC9D4AA70F4F91DD455CD86A8C8769F7EB2678E4BED84115900DDCB80B33. Root will integrate currentmain and run official artifact/requiredCI before normalmerge/release; no production call or defect injection was performed. Entity/Repo/DDL/policy untouched. Other Owner scope preserved.
