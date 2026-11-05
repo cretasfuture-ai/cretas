@@ -21,6 +21,20 @@ describe('workflow AI complete change projection', () => {
     ], [])).toEqual({ shares: {}, pending: [] });
   });
 
+  it.each([undefined, null, 'WEIGHT'])(
+    'does not silently downgrade explicit 80/20 shares when method is %s',
+    method => {
+      const result = resolveWorkflowAiAllocation(method, [
+        { portId: 'out-a', name: '主品' }, { portId: 'out-b', name: '副品' },
+      ], [
+        { name: '主品', fixedCostShare: 80 }, { name: '副品', fixedCostShare: 20 },
+      ]);
+      expect(result.shares).toEqual({});
+      expect(result.pending).toHaveLength(1);
+      expect(result.pending[0]).toContain('FIXED_RATIO');
+    },
+  );
+
   it.each([
     ['negative share', [{ name: '主品', fixedCostShare: -1 }, { name: '副品', fixedCostShare: 101 }]],
     ['sum is not 100', [{ name: '主品', fixedCostShare: 80 }, { name: '副品', fixedCostShare: 10 }]],

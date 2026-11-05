@@ -62,6 +62,16 @@ export function resolveWorkflowAiAllocation(
   requestedOutputs: WorkflowAiAllocationRequest[],
 ): WorkflowAiAllocationResolution {
   if (method === undefined || method === null || method === 'WEIGHT') {
+    const explicitShares = requestedOutputs.filter((output) => (
+      output.fixedCostShare !== undefined && output.fixedCostShare !== null
+    ));
+    if (explicitShares.length) {
+      return {
+        ...(method === 'WEIGHT' ? { method: 'WEIGHT' as const } : {}),
+        shares: {},
+        pending: ['输出已声明固定成本分摊份额，但成本分摊方式未明确为 FIXED_RATIO，待确认'],
+      };
+    }
     return { ...(method === 'WEIGHT' ? { method: 'WEIGHT' as const } : {}), shares: {}, pending: [] };
   }
   if (method !== 'FIXED_RATIO') {
