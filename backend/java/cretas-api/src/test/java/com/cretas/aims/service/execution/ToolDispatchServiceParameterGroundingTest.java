@@ -49,6 +49,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -234,7 +235,7 @@ class ToolDispatchServiceParameterGroundingTest {
         IntentExecuteResponse r = dispatch.executeWithTool(completeTool, FACTORY,
                 confirmed("1827", Map.of("taskId", 1827)), completeIntent, 42L, "operator", null);
 
-        verify(llm, times(1)).chatWithTools(anyString(), eq("1827"), anyList());
+        verifyNoInteractions(llm);
         assertThat(r.getStatus()).isEqualTo("NEED_MORE_INFO");
         verify(service, never()).complete(anyString(), anyLong(), any(), any());
         verify(learning, never()).learnFromLLMExtraction(anyString(), anyString(), anyString(), anyMap());
@@ -246,7 +247,7 @@ class ToolDispatchServiceParameterGroundingTest {
         llmReturns("{\"actualQuantity\":50,\"notes\":\"" + INVENTED_NOTE + "\"}");
 
         IntentExecuteResponse r = dispatch.executeWithTool(completeTool, FACTORY,
-                confirmed("产量50", Map.of("taskId", 1827)), completeIntent, 42L, "operator", null);
+                confirmed("产量50", Map.of("taskId", 1827, "actualQuantity", 50)), completeIntent, 42L, "operator", null);
 
         assertThat(r.getStatus()).isEqualTo("SUCCESS");
         ArgumentCaptor<WorkProcessTaskDTO.CompleteRequest> req =
@@ -264,7 +265,8 @@ class ToolDispatchServiceParameterGroundingTest {
         List<Map<String, Object>> seen = new ArrayList<>();
         int[] calls = {0};
         ToolExecutor flaky = new ToolExecutor() {
-            @Override public String getToolName() { return "material_batch_use"; }
+            @Override public String getToolName() { return "material_batch_query"; }
+            @Override public AccessMode getAccessMode() { return AccessMode.READ; }
             @Override public String getDescription() { return "test"; }
             @Override public Map<String, Object> getParametersSchema() {
                 return Map.of("type", "object",
@@ -287,10 +289,10 @@ class ToolDispatchServiceParameterGroundingTest {
         when(correctionAgent.analyzeAndCorrect(anyString(), anyString(), anyMap(), anyString(), any(), anyInt()))
                 .thenReturn(new CorrectionAgentService.CorrectionResult(true, "x", corrected, "RETRY", null, 0.9));
         AIIntentConfig intent = AIIntentConfig.builder().intentCode("MATERIAL_BATCH_QUERY").intentName("q")
-                .intentCategory("MATERIAL").toolName("material_batch_use").build();
+                .intentCategory("MATERIAL").toolName("material_batch_query").build();
 
         dispatch.executeWithTool(flaky, FACTORY, IntentExecuteRequest.builder().userInput("领 30 公斤")
-                .context(writeGuard.withServerConfirmation(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30))))
+                .context(new HashMap<>(Map.of("batchId", "MB-7", "quantity", 30)))
                 .build(), intent, 42L, "operator", null);
 
         assertThat(seen).as("工具确实被重试了一次").hasSize(2);
@@ -307,7 +309,7 @@ class ToolDispatchServiceParameterGroundingTest {
         Map<String, Object> ctx = new HashMap<>(Map.of("batchId", "MB-7", "quantity", 3));
         calls[0] = 0;
         dispatch.executeWithTool(flaky, FACTORY, IntentExecuteRequest.builder().userInput("领 30 公斤")
-                .context(writeGuard.withServerConfirmation(ctx)).build(), intent, 42L, "operator", null);
+                .context(ctx).build(), intent, 42L, "operator", null);
         assertThat(seen).hasSize(2);
         assertThat(seen.get(1)).containsEntry("quantity", 30);
     }

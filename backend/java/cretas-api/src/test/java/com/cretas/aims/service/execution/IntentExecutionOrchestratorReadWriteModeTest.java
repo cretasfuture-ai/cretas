@@ -257,6 +257,7 @@ class IntentExecutionOrchestratorReadWriteModeTest {
     @Test
     @DisplayName("confirm() + 非 demo 工厂 (F006) → 正常执行")
     void nonDemoFactoryConfirmExecutes() {
+        when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(true);
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult(FACTORY));
         AIIntentConfig config = writeIntent();
         config.setIntentCode("ORDER_CREATE");
