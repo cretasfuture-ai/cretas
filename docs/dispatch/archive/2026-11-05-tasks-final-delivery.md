@@ -35,3 +35,9 @@ Owner：01a1a954/root。状态：review（代码冻结、最终PR门禁待跑，
 单位比较改为既有 UnitContractService.areEquivalent，使用真实字典实现验证公斤/kg 别名、g 与 kg 不等、袋同单位且换线产能仍拒绝；Service 24/24 通过。BareUnit 5、HintCoverage 5、F006DemoApproval 7 项通过。独立复核无 P0/P1/P2。共享 hint 仅一行消息链，冻结独立 commit 97d7252dc6fcb5b86fa54a3c214377f52a7825f9，已通知审计 Owner 复用；不改变审批业务或权限。
 
 8fec 的最终 build/stage 为 15 类 143/0/0/0、Java/Web 构建成功且仅预上传。后续源码修复需新 HEAD 的可信制品与新 CI；不能把旧制品称为修后部署。
+
+## 转向 main 后的同内容门禁复用
+
+审计依赖1438已合入main/e40ee26673ae6df68f503aecc0664f903186dd9b，本PR已转main。同步仅处理main元数据、评测脚本及Python测试修正；保留其他Owner全部在飞行，PG selector为main64类加本组1类，无删除。dispatch校验通过。
+
+同步前后Java（包括完整测试与资源）tree均5744d636cb929e519ed234b038c2ebe68f665509，Web tree均144753ffaefdf7f9ca9037742a06171ad4cb80e4。因此直接复用dbd547b868的可信18类161项、Web12项/typecheck及完整CI run41979193999（19422总、19128pass、294条件skip、0fail/0error）；不因仅main历史同步重复产品全量。新提交的常规fast/PG仍按workflow执行。仍未合并本PR或部署，业务缺陷继续按真实上线验收关闭。

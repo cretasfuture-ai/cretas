@@ -9,11 +9,9 @@
 
 - `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner: `01a1a954/root` — Base `5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f` — 仅本组部署后业务复测/私有场景表；代码冻结统一交付并归档至archive/2026-11-05-tasks-final-delivery.md，合入即释放代码scope；不占其他组main/发布锁。
 
-- `SEC-PLAN-AUDIT-1457-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f — #1457 Unicode边界修复及注册/导入闸；63目标全绿、风险终审无高/中阻塞；等最终Java门禁，scope同前；不写生产。
+- `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
+
 - `SEC-PLAN-AUDIT-1438-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。
-- `SEC-INVENTORY-FIXTURE-GATE-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 072bf5681969a55029d929d00a6101a28ec92a15 — 仅InventoryLedgerServiceTest及归档，隔离新增FREE_GIFT查询与旧顺序夹具，保留8项失败的原业务断言；验收完整该类，不改生产库存/查询。
-- `SEC-PARAM-SCHEMA-GATE-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 072bf5681969a55029d929d00a6101a28ec92a15 — 参数扫描排除测试产物、3处描述业务化；scope LeakScanTest/ScopeContractTest/UserDisable/CustomerCrmStatus/InvoiceStatus及归档；验收两扫描类，阈值不增。
-- `SEC-FACTORY-CATALOG-TEST-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 072bf5681969a55029d929d00a6101a28ec92a15 — 维护AIIntentPython/WriteGuardWiring/RestaurantSkills/FoodSafetySkill四测试类，按main已发布目录守卫更新21项旧期待；只改测试；目标四类+目录两Contract；不改库存。
 
 
 
