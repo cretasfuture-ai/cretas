@@ -39,13 +39,28 @@ class SyntheticClient:
                     u=r.get('usage') or {};self.used[r['model']]+=u.get('input_tokens',0)+u.get('output_tokens',0)
         today=dt.datetime.now(dt.timezone.utc).date().isoformat()
         budget_root=self.root.parent if (self.root/'shared-budget-root').exists() else self.root
-        receipts=[]
-        for path in budget_root.rglob('api-results.jsonl'):
-            receipts.extend(json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip())
+        roots=[budget_root]
+        previous_roots=budget_root/'budget-previous-roots.json'
+        if previous_roots.exists():
+            extra=json.loads(previous_roots.read_text(encoding='utf-8'))
+            if not isinstance(extra,list) or any(not isinstance(p,str) for p in extra):
+                raise ValueError('Invalid prior budget roots')
+            for p in extra:
+                prior_root=Path(p).resolve()
+                if not prior_root.is_dir():raise ValueError('Prior budget root missing')
+                roots.append(prior_root)
+        receipts=[];paths=set()
+        for directory in roots:
+            for path in directory.rglob('api-results.jsonl'):
+                resolved=path.resolve()
+                if resolved in paths:continue
+                paths.add(resolved)
+                receipts.extend((str(directory.resolve()),json.loads(line)) for line in path.read_text(encoding='utf-8').splitlines() if line.strip())
         known=set()
-        for r in receipts:
-            if r['id'] in known:raise ValueError('Duplicate cross-phase receipt')
-            known.add(r['id'])
+        for directory,r in receipts:
+            identity=(directory,r['id'])
+            if identity in known:raise ValueError('Duplicate cross-phase receipt')
+            known.add(identity)
             if r['day']==today and r.get('usage'):
                 self.used[r['model']]+=r['usage']['input_tokens']+r['usage'].get('output_tokens',0)
 

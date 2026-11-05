@@ -92,6 +92,46 @@ def test_api_daily_budget_blocks_before_network(tmp_path,monkeypatch):
     asyncio.run(scenario())
 
 
+def test_api_budget_includes_prior_experiment_roots_once_and_filters_day(tmp_path,monkeypatch):
+    api,root,requests=fake_client(tmp_path,monkeypatch)
+    previous=tmp_path/'prior';previous.mkdir()
+    today=api.dt.datetime.now(api.dt.timezone.utc).date().isoformat()
+    records=[dict(id='same-case-id',model=api.MINI,day=today,usage=dict(input_tokens=100,output_tokens=20)),dict(id='old',model=api.MINI,day='2000-01-01',usage=dict(input_tokens=9999999,output_tokens=0))]
+    (previous/'api-results.jsonl').write_text('\n'.join(json.dumps(r) for r in records),encoding='utf-8')
+    (root/'budget-previous-roots.json').write_text(json.dumps([str(previous),str(previous)]),encoding='utf-8')
+    async def scenario():
+        client=api.SyntheticClient(root)
+        assert client.used[api.MINI]==120
+        await client.ask('same-case-id',api.MINI,'classify','synthetic',{'type':'object'},20)
+        assert client.used[api.MINI]==132 and len(requests)==1
+        await client.close()
+    asyncio.run(scenario())
+
+
+def test_followup_fitting_forbidden_after_confirmation_open(tmp_path,monkeypatch):
+    import factory_generalization as followup
+    (tmp_path/'confirmation-opened.json').write_text('{}',encoding='utf-8')
+    monkeypatch.setattr(followup,'verify',lambda _:pytest.fail('Must reject before loading data/models'))
+    for run in [lambda:followup.train(tmp_path),lambda:asyncio.run(followup.calibrate(tmp_path)),lambda:followup.curate(tmp_path)]:
+        with pytest.raises(ValueError,match='fitting is forbidden'):run()
+
+
+def test_followup_mini_receives_no_gold_or_family_metadata(tmp_path,monkeypatch):
+    import factory_generalization as followup
+    payloads=[]
+    class Client:
+        def __init__(self,*_,**__):pass
+        async def close(self):pass
+        async def ask(self,*args):payloads.append(args[3]);return {'label':'A','confidence':.9}
+    monkeypatch.setattr(followup,'SyntheticClient',Client)
+    pool=SimpleNamespace(choices=lambda *_:[dict(value='A',description='read fixture')])
+    rows=[dict(record_id='sample',text='synthetic request',label='SECRET_LABEL',group_id='SECRET_FAMILY',logits=[2,1])]
+    output=asyncio.run(followup.mini_many(tmp_path,'fixture',rows,pool))
+    assert set(json.loads(payloads[0]))=={'text','candidates'}
+    assert 'SECRET_LABEL' not in payloads[0] and 'SECRET_FAMILY' not in payloads[0]
+    assert output['sample']['prediction']=='A'
+
+
 @pytest.mark.parametrize('text,ambiguous',[('库存还有多少',True),('上次那张排行呢',True),('今天异常情况怎么样',True),('上班打卡',False),('确认这张采购单收货',False),('这批原料来自哪个供应商',False),('本周产品销售排名',False),('库存周转率是多少',False)])
 def test_clarification_rules_check_objects_not_sentence_length(text,ambiguous):
     from factory_accuracy_eval import needs_clarification
