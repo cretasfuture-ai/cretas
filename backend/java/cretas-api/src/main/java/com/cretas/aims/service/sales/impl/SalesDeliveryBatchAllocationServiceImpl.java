@@ -19,6 +19,7 @@ import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationReposito
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.inventory.FgReservationLedgerService;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
@@ -607,14 +608,15 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     }
 
     private static String packagingLabel(String packagingUnit, String baseUnit, BigDecimal factor) {
-        return "1" + packagingUnit + "=" + factor.stripTrailingZeros().toPlainString() + baseUnit;
+        return "1" + UnitDisplayNames.display(packagingUnit) + "="
+                + factor.stripTrailingZeros().toPlainString() + UnitDisplayNames.display(baseUnit);
     }
 
     private static BusinessException packagingMismatchError(FinishedGoodsBatch batch, SalesDeliveryItem item) {
+        String batchLabel = packagingLabel(batch.getPackagingUnit(), batch.getPackagingBaseUnit(), batch.getPackagingFactor());
+        String lineLabel = packagingLabel(item.getPackagingUnit(), item.getPackagingBaseUnit(), item.getPackagingFactor());
         return new BusinessException(409, "成品批次 " + batch.getBatchNumber() + " 的规格（"
-                + packagingLabel(batch.getPackagingUnit(), batch.getPackagingBaseUnit(), batch.getPackagingFactor())
-                + "）与发货行规格（"
-                + packagingLabel(item.getPackagingUnit(), item.getPackagingBaseUnit(), item.getPackagingFactor())
+                + batchLabel + "）与发货行规格（" + lineLabel
                 + "）不一致，需要确认换算后才能分配")
                 .withCode("BATCH_PACKAGING_SPEC_MISMATCH")
                 .withHint("请换一个规格一致的批次；确需用这批，核对换算后确认再分配")

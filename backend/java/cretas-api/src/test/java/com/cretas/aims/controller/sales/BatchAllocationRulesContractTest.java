@@ -235,6 +235,21 @@ class BatchAllocationRulesContractTest {
     }
 
     @Test
+    @DisplayName("存量包装英文码经同一展示映射变成中文，错误仍阻断分配")
+    void historicalCodesAreTranslatedInMismatchMessage() throws Exception {
+        line = line("case", "case", "box", new BigDecimal("8"));
+        batch("FG-CODES", "box", "case", "box", "96", FinishedGoodsBatch.Status.AVAILABLE);
+
+        as(WAREHOUSE_MANAGER, allocate("FG-CODES", "1", null))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("BATCH_PACKAGING_SPEC_MISMATCH"))
+                .andExpect(jsonPath("$.message").value(Matchers.allOf(
+                        Matchers.containsString("1箱=96盒"), Matchers.containsString("1箱=8盒"),
+                        Matchers.not(Matchers.containsString("case")), Matchers.not(Matchers.containsString("box")))));
+        verify(allocations, never()).saveAll(anyList());
+    }
+
+    @Test
     @DisplayName("确认换算后放行, 分配量仍按发货行单位记")
     @SuppressWarnings("unchecked")
     void confirmedConversionGoesThrough() throws Exception {

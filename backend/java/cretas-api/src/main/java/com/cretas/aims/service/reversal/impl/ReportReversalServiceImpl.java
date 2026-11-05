@@ -2074,7 +2074,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 throw new BusinessException(409, String.format(
                         "撤回失败: 半成品入库对应的在制批次恢复失败 (materialBatchId=%s, qty=%s) — 已回滚",
                         slice.materialBatchId(), slice.storageQuantity()))
-                        .withCode("SETTLEMENT_SEMI_WIP_RESTORE_FAILED");
+                        .withCode("SETTLEMENT_SEMI_WIP_RESTORE_FAILED")
+                        .withHint("请刷新原结单和在制批次库存，核对半成品入库记录后再重试撤回；仍不一致请联系管理员");
             }
         }
     }
