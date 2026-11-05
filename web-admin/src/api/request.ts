@@ -275,6 +275,7 @@ request.interceptors.request.use(
       if (isolatedUrl !== effectiveUrl) {
         config.url = isolatedUrl;
         config.baseURL = undefined;
+        config.params = undefined;
       }
     } catch (error) {
       return Promise.reject(new AxiosError(error instanceof Error ? error.message : '演示沙盒请求已停止', 'SANDBOX_NOT_READY', config));
