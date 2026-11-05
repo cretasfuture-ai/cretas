@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `F006-DEMO-COST-20261106` — `review` — Owner root — Base 2de52fb66e7caaf892d9430afba23e8b81d5e57d — scope f006Flow.ts及独立cost-capture测试；第19步可见设备12.80/其他7.20费用，真实成本API/COMPLETE回读。35目标测试通过，构建/WebCI/正式UI完整成本及END待完成。root独占台账和生产操作。
 
 
 
