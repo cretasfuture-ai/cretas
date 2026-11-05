@@ -7,6 +7,18 @@
 
 ## 在飞任务
 
+- `F006-SANDBOX-LOCAL-RELAY-20261105` — `in-progress` — Owner root/sandbox_runtime_executor — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/local_relay.py、tests/test_local_relay.py；本机UI认证桥接，仅F006/1309，生产业务零写；验收python unittest。不改共享白名单、不发布。
+
+- `F006-SANDBOX-BASELINE-20261105` — `in-progress` — Owner root — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/baseline_export.py及独立测试；F006只读FK闭包投影/敏感字段清除/本机独立PG恢复验证；不写生产，不复制整库业务数据。
+
+- `F006-SANDBOX-API-20261105` — `in-progress` — Owner root/backend_demo — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope Java controller/demo、service/demo、对应测试；F006超管沙盒生命周期及隔离代理；验收 F006SandboxGatewayContractTest。不改Entity/Repository/迁移，不合并发布。
+
+- `F006-SANDBOX-RUNTIME-20261105` — `in-progress` — Owner root — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/实现及配置；隔离实例管理与重置；验收python unittest。禁止生产变更/删除，不合并发布；旧Owner已停止，测试独立委派。
+
+- `F006-SANDBOX-TESTS-20261105` — `in-progress` — Owner root/sandbox_runtime_executor — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope scripts/demo-sandbox/tests/{test_runtime.py,test_orchestrator.py}；strict fixtures和真实HTTP/恢复控制流测试；验收python unittest。不改实现/台账，不启资源。
+
+- `F006-SANDBOX-WEB-20261105` — `in-progress` — Owner root — Base 41f58a822cf3a739db8b9c2a8c1ea281522d4913 — scope web-admin/src/{demo,views/demo-flow,api/request.ts,components/layout}及对应测试；显式进入、隔离路由、结束后清理；验收Vitest目标+vue-tsc -b。等待主线冻结解除后发布。
+
 - `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 
 - `SEC-PLAN-AUDIT-1438-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。

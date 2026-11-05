@@ -8,6 +8,8 @@ import { ApiResponse, ApiError } from '@/types/api';
 import type { ApiData } from '@/types/api';
 import { markClientErrorReported, reportClientError, reportRequestFailure } from '@/utils/clientErrorReporter';
 import { currentActionId } from '@/utils/activityTracker';
+import { sandboxRequestUrl } from '@/demo/f006Sandbox';
+import { installSandboxNetworkBoundary } from '@/demo/f006SandboxNetwork';
 import {
   factoryViewTokenForRequest,
   isFactoryViewRequest,
@@ -15,6 +17,7 @@ import {
 } from '@/store/modules/platformFactoryContext';
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+installSandboxNetworkBoundary();
 
 function newCorrelationId(): string {
   const uuid = globalThis.crypto?.randomUUID?.();
@@ -268,6 +271,15 @@ request.interceptors.request.use(
     if (viewToken) {
       config.headers['X-Factory-View-Token'] = 'true';
       config.headers['X-Client-Type'] = 'platform-factory-view';
+    }
+    try {
+      const isolatedUrl = sandboxRequestUrl(effectiveUrl, method);
+      if (isolatedUrl !== effectiveUrl) {
+        config.url = isolatedUrl;
+        config.baseURL = undefined;
+      }
+    } catch (error) {
+      return Promise.reject(new AxiosError(error instanceof Error ? error.message : '演示沙盒请求已停止', 'SANDBOX_NOT_READY', config));
     }
     config.headers['X-Correlation-ID'] = correlationIdFrom(config.headers) || newCorrelationId();
     config.headers['X-Activity-Client'] = 'web-admin';

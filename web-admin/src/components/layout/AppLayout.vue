@@ -16,6 +16,9 @@ import WorkspaceReferencePane from './WorkspaceReferencePane.vue';
 import WorkspaceRouteCache from './WorkspaceRouteCache.vue';
 import InlineCustomerService from '@/components/support/InlineCustomerService.vue';
 import ReturnBanner from './ReturnBanner.vue';
+import F006SandboxBanner from './F006SandboxBanner.vue';
+import { recoverActiveSandbox, sandboxSession, selectSandboxActor } from '@/demo/f006Sandbox';
+import request from '@/api/request';
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -23,6 +26,25 @@ const workspace = useWorkspaceStore();
 const route = useRoute();
 const router = useRouter();
 const workspaceTabs = ref<InstanceType<typeof WorkspaceTabs>>();
+const workspaceScope = computed(() => sandboxSession.value ? `F006:sandbox:${sandboxSession.value.sessionId}` : `${authStore.factoryId || authStore.currentRole || 'authenticated'}:${authStore.user?.id || ''}`);
+const sandboxBootstrapDone = ref(false);
+const sandboxBootstrapError = ref('');
+let sandboxBootstrapGeneration = 0;
+const sandboxReady = computed(() => (authStore.factoryId !== 'F006' || sandboxBootstrapDone.value) && (!sandboxSession.value || sandboxSession.value.status === 'READY'));
+async function bootstrapSandbox(): Promise<void> {
+  const generation = ++sandboxBootstrapGeneration;
+  sandboxBootstrapDone.value = false;
+  selectSandboxActor(authStore.user?.id, authStore.factoryId);
+  sandboxBootstrapError.value = '';
+  if (authStore.factoryId === 'F006' && !authStore.user?.id) return;
+  if (authStore.factoryId !== 'F006' || Number(authStore.user?.id) !== 1309) { sandboxBootstrapDone.value = true; return; }
+  try {
+    await recoverActiveSandbox(request, () => generation === sandboxBootstrapGeneration);
+    if (generation !== sandboxBootstrapGeneration) return;
+    sandboxBootstrapDone.value = true;
+  } catch { if (generation === sandboxBootstrapGeneration) sandboxBootstrapError.value = '无法核对演示状态，请重试'; }
+}
+watch(() => [authStore.factoryId, authStore.user?.id, authStore.currentRole], () => void bootstrapSandbox(), { immediate: true });
 
 function closeReference(): void {
   workspace.closeReference();
@@ -38,8 +60,8 @@ const isReferenceFrame = computed(() => String(route.query._workspaceReference |
 const workspaceCacheKeys = computed(() => workspace.tabs.map(tab => workspace.cacheKeyFor(tab.key)));
 
 watch(
-  () => authStore.factoryId,
-  (factoryId) => workspace.setScope(factoryId || authStore.currentRole || 'authenticated'),
+  () => workspaceScope.value,
+  (scope) => workspace.setScope(scope),
   { immediate: true },
 );
 
@@ -111,6 +133,7 @@ function pinDraggedReference(event: DragEvent): void {
     <div class="app-main" :style="mainStyle">
       <!-- 顶部栏 -->
       <AppHeader v-if="!isReferenceFrame" />
+      <F006SandboxBanner v-if="sandboxSession" />
 
       <WorkspaceTabs v-if="!isReferenceFrame" ref="workspaceTabs" />
 
@@ -120,7 +143,8 @@ function pinDraggedReference(event: DragEvent): void {
       <!-- 内容区 -->
       <div class="workspace-content-shell" :class="{ 'has-reference': workspace.referenceTab && !isReferenceFrame }">
         <main class="app-content" :class="{ 'reference-frame-content': isReferenceFrame }">
-          <router-view v-slot="{ Component }">
+          <el-result v-if="!sandboxReady" icon="info" title="正在核对演示状态" :sub-title="sandboxBootstrapError || '沙盒准备或清理完成后，即可继续。'"><template v-if="sandboxBootstrapError" #extra><el-button @click="bootstrapSandbox">重试</el-button></template></el-result>
+          <router-view v-else v-slot="{ Component }">
             <!--
               每个活标签保留一个缓存实例；关闭或失效后旧缓存连同实例一起释放。
               cacheKeyFor 保留原有的刷新代次；工厂变化清空整个缓存边界。
@@ -129,7 +153,7 @@ function pinDraggedReference(event: DragEvent): void {
             <component v-if="isReferenceFrame" :is="Component" />
             <WorkspaceRouteCache
               v-else
-              :key="authStore.factoryId"
+              :key="workspaceScope"
               :component="Component"
               :cache-keys="workspaceCacheKeys"
               :active-key="workspace.cacheKeyFor(workspaceRouteKey({ path: route.path, query: route.query }))"
