@@ -302,7 +302,7 @@ async def auto_parse_status(upload_id: int, request: Request):
                 from smartbi.database.models import SmartBiDynamicData
                 preview_rows = (
                     db.query(SmartBiDynamicData.row_data)
-                    .filter_by(upload_id=upload_id)
+                    .filter_by(upload_id=upload_id, factory_id=caller_factory_id)
                     .order_by(SmartBiDynamicData.row_index.asc())
                     .limit(20)
                     .all()

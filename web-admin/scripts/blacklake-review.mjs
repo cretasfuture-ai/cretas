@@ -1,0 +1,22 @@
+// Private, persistent review window. Uses real local Java login, never logs credentials.
+import { chromium } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { join, resolve } from 'node:path';
+import { writeFileSync } from 'node:fs';
+const root=resolve(import.meta.dirname,'../..');
+const directory=join(process.env.LOCALAPPDATA,'Cretas','Blacklake');
+const script="import json,os;from pathlib import Path;from blacklake.secrets import load_local_secret;s=load_local_secret(Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/smartbi-test.dpapi');print(json.dumps({'username':s['username'],'password':s['password']}))";
+const credentials=JSON.parse(execFileSync('python',['-c',script],{cwd:join(root,'backend/python'),encoding:'utf8'}));
+const context=await chromium.launchPersistentContext(join(directory,'smartbi-review-profile'),{headless:false,viewport:{width:1500,height:1000}});
+const page=context.pages()[0]||await context.newPage();
+await page.goto('http://127.0.0.1:5178/blacklake-smartbi.html');
+await page.evaluate(()=>{localStorage.removeItem('blacklake_test_signed_in');localStorage.removeItem('cretas_access_token');});
+await page.reload();
+await page.getByPlaceholder('请输入测试账号').fill(credentials.username);
+await page.getByPlaceholder('请输入密码').fill(credentials.password);
+await page.getByRole('button',{name:'登录分析'}).click();
+await page.getByText('逐工单成本链路',{exact:true}).waitFor({timeout:60000});
+await page.bringToFront();
+writeFileSync(join(directory,'validation','smartbi-review-ready.json'),JSON.stringify({ready:true,url:page.url(),factory:'BLACKLAKE_POC_TEST'}));
+console.log('SMARTBI_REVIEW_READY');
+await new Promise(resolve=>context.on('close',resolve));

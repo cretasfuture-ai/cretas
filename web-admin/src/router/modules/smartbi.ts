@@ -25,6 +25,11 @@ const smartBIRoutes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: '数据与分析', icon: 'TrendCharts', module: 'analytics' },
     children: [
       {
+        path: 'blacklake', name: 'BlacklakeSmartBI',
+        component: () => import('@/views/smart-bi/BlacklakeAnalysis.vue'),
+        meta: { requiresAuth: true, title: '黑湖成本分析', icon: 'DataAnalysis', module: 'analytics', roles: ['factory_super_admin'] },
+      },
+      {
         path: 'dashboard',
         name: 'SmartBIDashboard',
         component: () => import('@/views/smart-bi/Dashboard.vue'),

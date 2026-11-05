@@ -1398,6 +1398,8 @@ app.include_router(restaurant_value.router, prefix="/api/smartbi", tags=["Restau
 app.include_router(restaurant_cost_card.router, prefix="/api/smartbi", tags=["Restaurant Cost Card"])
 app.include_router(production_ai.router, prefix="/api/smartbi", tags=["Production AI"])
 app.include_router(financial_dashboard.router, prefix="/api/smartbi/financial-dashboard", tags=["Financial Dashboard"])
+from smartbi.api.blacklake import router as blacklake_smartbi_router
+app.include_router(blacklake_smartbi_router, prefix="/api/smartbi/blacklake", tags=["Blacklake SmartBI"])
 app.include_router(layout.router, prefix="/api/smartbi", tags=["Dashboard Layout"])
 app.include_router(nl_to_sql.router, prefix="/api/smartbi", tags=["NL2SQL"])
 app.include_router(whatif.router, prefix="/api/smartbi/whatif", tags=["WhatIf Simulator"])
@@ -1613,6 +1615,8 @@ else:
 # Database analysis endpoints (PostgreSQL)
 # Note: db_analysis.router already has /api/smartbi/analysis/db prefix
 app.include_router(db_analysis.router, tags=["Database Analysis"])
+from smartbi.api import data_alerts as smartbi_data_alerts
+app.include_router(smartbi_data_alerts.router)
 
 # =====================================================
 # Efficiency Recognition API Routes (optional)

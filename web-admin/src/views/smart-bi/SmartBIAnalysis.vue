@@ -236,6 +236,7 @@
 
             <!-- 普通 Sheet 展示 -->
             <template v-else>
+              <DataAlertsPanel v-if="sheet.uploadId" :upload-id="sheet.uploadId" :active="activeTab === String(sheet.sheetIndex)" :can-review="canViewPrice" />
               <!-- Sheet 信息 — extracted to analysis/SheetInfoStrip.vue (Item 1 phase 5) -->
               <SheetInfoStrip
                 :detected-data-type="sheet.detectedDataType"
@@ -499,6 +500,7 @@
 <script setup lang="ts">
 defineOptions({ name: 'SmartBIAnalysis' });
 import { ref, reactive, computed, onMounted, onBeforeUnmount, onDeactivated, onActivated, nextTick, watch } from 'vue';
+import DataAlertsPanel from '@/components/smartbi/DataAlertsPanel.vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { useAppStore } from '@/store/modules/app';

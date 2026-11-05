@@ -18,7 +18,8 @@ from services.analysis import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+from smartbi.api.alert_analysis_route import AlertAnalysisRoute
+router = APIRouter(route_class=AlertAnalysisRoute)
 
 # Initialize services
 finance_service = FinanceAnalysisService()

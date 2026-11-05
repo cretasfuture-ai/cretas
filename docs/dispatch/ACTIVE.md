@@ -7,6 +7,26 @@
 
 ## 在飞任务
 
+- BLACKLAKE-AI-QUEUE-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-blacklake-ai-queue.md；PR#1390 draft，未生产。
+
+- BLACKLAKE-PERIOD-CORE-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
+- BLACKLAKE-PERIOD-UI-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-blacklake-period-analysis.md；PR#1390 draft。
+
+- SMARTBI-LOCAL-ANALYST-20261104 — review — Owner Codex/root；346后端/29前端；Base及scope见archive/2026-11-04-smartbi-local-analyst.md；PR#1390。
+- SMARTBI-CLAUDE-TEACHER-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-smartbi-claude-teacher.md；PR#1390。
+- SMARTBI-TEACHER-FLYWHEEL-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-smartbi-teacher-flywheel.md；PR#1390 draft；359主链/19新增通过；.9七板块partial；不改长期云路由/生产。
+- BLACKLAKE-PERIOD-ADAPTER-20261104 — review — Owner Codex/root；Base/scope/验收见archive/2026-11-04-blacklake-period-analysis.md；仅隔离测试，原夜间计划保留。
+- BLACKLAKE-PRODUCT-UX-20261105 — review — Owner root；Base b302ccf7be；scope/验收见archive/2026-11-05-blacklake-product-cost-ux.md；产品→工单→分析，25测试通过；仅测试，PR#1390。
+
+- BLACKLAKE-PLAIN-PAGE-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope 隔离PrototypeAnalysis/Intelligence及comparison helper/spec；两位小数、问题工单与冲突组阻断；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。
+- BLACKLAKE-PLAIN-INSIGHT-20261104 — review — Owner Codex/root — Base 837bfb7b6500167a3e2634a374f592ea5f24ea7c — Scope PrototypeSectionInsight/CostAlerts、presentation helper/spec；中文证据、范围和工单核对；已集成验证，回执archive/2026-11-04-blacklake-readable-analysis.md；PR#1390 draft。
+
+- BLACKLAKE-READONLY-20261103 — review — Owner Codex/root — Base 090f5f7140380e2a2f3a67295fef7bde615f0716 — Scope 黑湖/SmartBI、Web、tests、docs及独立测试环境；PR#1390 draft；七组真实浏览器追问、白话证据/工单核对、后端269/前端50/类型检查/双构建通过；不生产部署/黑湖写入。
+- BLACKLAKE-PROTOTYPE-PAGE-20261104 — review — Owner Codex/root — Base f015b1f07ead743d0f4dcaa48207a01517bbd0bc — Scope 隔离PrototypeAnalysis与costOverview/spec；执行者4测试，root集成5分组测试/35前端/双构建/E2E通过；回执archive/2026-11-04-prototype-ui.md；待PR合并。
+- BLACKLAKE-PROTOTYPE-INSIGHT-20261104 — review — Owner Codex/root — Base f015b1f07ead743d0f4dcaa48207a01517bbd0bc — Scope 隔离PrototypeSectionInsight/spec；执行者8测试，root事实版本负测后9测试及E2E通过；回执archive/2026-11-04-prototype-ui.md；待PR合并。
+- BLACKLAKE-SECTION-UI-20261103 — review — Owner Codex/root — Base 29fde108334e58f70a76aa6badcbe6da0debd3c6 — Scope BlacklakeAnalysis.vue、SectionInsight.vue及对应spec；执行者5测试通过，root18前端/构建/七板块E2E通过；回执archive/2026-11-03-shared-alerts.md；待PR合并。
+- SMARTBI-DATASET-ALERTS-20261103 — review — Owner Codex/root — Base 907c3fc790 — Scope backend/python/smartbi/services/dataset_alerts.py、backend/python/tests/test_smartbi_dataset_alerts.py；执行者回执见archive/2026-11-03-shared-alerts.md；18单测通过并纳入257测试；尚未合并。
+
 
 
 

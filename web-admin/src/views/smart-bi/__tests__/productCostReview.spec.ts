@@ -1,0 +1,38 @@
+import { expect, it } from 'vitest';
+import type { CostProject } from '@/api/smartbi/blacklake';
+import { buildProductCostReviews } from '../productCostReview';
+
+function row(id:number, changes:Partial<CostProject>={}):CostProject {
+  return {projectId:id,projectCode:`ORDER-${id}`,product:'合成成品',productCode:'SYN',unit:'包',status:'20',planned:10,actual:10,finishedGood:10,materialCost:20,laborCost:5,identifiedDirectCost:25,unitIdentifiedDirectCost:2.5,materialLines:1,materialCostKnownLines:1,sourceZeroCostLines:0,taskCount:1,laborCostKnownTasks:1,issues:[],unitCostAvailable:true,
+    materialLinesDetail:[{material:'合成半成品',materialCode:'M',unit:'kg',netConsumption:2,recognizedCost:20,unitPrice:10,orderCode:'OUT-'+id,date:'2026-11-03',bizType:'32'}],
+    processes:[{process:'包装',status:'20',good:10,hours:1,laborCost:5}],...changes};
+}
+
+it('weights product costs by actual output, retains member orders and sums components once',()=>{
+  const large=row(2,{finishedGood:90,materialCost:450,laborCost:90});
+  large.materialLinesDetail[0]!.recognizedCost=450;large.materialLinesDetail[0]!.netConsumption=45;
+  large.processes[0]!.hours=9;large.processes[0]!.laborCost=90;
+  const result=buildProductCostReviews([row(1),large])[0]!;
+  expect(result.sampleCount).toBe(2);expect(result.orders.map(r=>r.projectId)).toEqual([1,2]);
+  expect(result.finishedGood).toBe(100);expect(result.materialCost).toBe(470);expect(result.laborCost).toBe(95);
+  expect(result.weightedUnitCost).toBe(5.65);expect(result.weightedMaterialUnitCost).toBe(4.7);expect(result.weightedLaborUnitCost).toBe(.95);
+  expect(result.minimumUnitCost).toBe(2.5);expect(result.maximumUnitCost).toBe(6);
+  expect(result.materials[0]).toMatchObject({quantity:47,amount:470});
+  expect(result.processes[0]).toEqual({process:'包装',hours:10,amount:95});
+});
+
+it('keeps finished goods, semi-finished goods, different units and codes separate',()=>{
+  const results=buildProductCostReviews([row(1),row(2,{product:'合成半成品'}),row(3,{unit:'kg'}),row(4,{productCode:'OTHER'})]);
+  expect(results).toHaveLength(4);
+  expect(results.find(r=>r.orders[0]?.projectId===1)?.identityConflict).toBe(true);
+  expect(results.every(r=>r.sampleCount===1)).toBe(true);
+});
+
+it('does not merge missing product identities or treat missing material/process values as zero',()=>{
+  const first=row(1,{productCode:null});const second=row(2,{productCode:null});
+  first.materialLinesDetail[0]!.recognizedCost=null;first.processes[0]!.hours=null;
+  const results=buildProductCostReviews([first,second]);
+  expect(results).toHaveLength(2);
+  const selected=results.find(r=>r.orders[0]?.projectId===1)!;
+  expect(selected.materials[0]!.amount).toBeNull();expect(selected.processes[0]!.hours).toBeNull();
+});

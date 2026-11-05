@@ -9,6 +9,7 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-blacklake-prototype
 dist-ssr
 *.local
 
