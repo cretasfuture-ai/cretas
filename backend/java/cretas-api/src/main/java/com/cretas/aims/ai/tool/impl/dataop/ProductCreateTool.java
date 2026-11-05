@@ -183,7 +183,18 @@ public class ProductCreateTool extends AbstractBusinessTool {
             try {
                 copiedProcesses = productWorkProcessService.copyChain(factoryId, plan.source.getId(), created.getId());
             } catch (Exception e) {
-                log.warn("[PRODUCT-CREATE] copyChain 失败 (新产品已建, 工序需手动配): {}", e.getMessage());
+                // ProductTypeServiceImpl and copyChain are separate transactions.  The
+                // product therefore remains committed; reporting a normal success here
+                // would make the caller believe the source chain was inherited.  Keep the
+                // response safe (no storage/SQL exception detail) but preserve the two
+                // business facts needed for reconciliation.
+                log.warn("[PRODUCT-CREATE] 工序链复制失败，产品已创建，需人工配置: productId={}, sourceProductId={}",
+                        created.getId(), plan.source.getId());
+                throw new com.cretas.aims.exception.BusinessException(502,
+                        "产品「" + created.getName() + "」（ID: " + created.getId() + "）已创建，但相似产品「" + plan.sourceName
+                                + "」的工序链复制失败，未完成继承；请人工配置。")
+                        .withCode("PRODUCT_CHAIN_COPY_FAILED")
+                        .withHint("请检查源产品工序链后重新配置；系统不会自动重试");
             }
         }
 
@@ -198,7 +209,10 @@ public class ProductCreateTool extends AbstractBusinessTool {
         r.put("message", copiedProcesses > 0
                 ? "产品「" + created.getName() + "」已建, 已继承「" + plan.sourceName + "」的 " + copiedProcesses
                     + " 道工序链作为大框架; BOM/调料见建议, 请调细节"
-                : "产品「" + created.getName() + "」已建 (飞轮无相似工序链可继承, 工序请手动配)");
+                : plan.source == null
+                    ? "产品「" + created.getName() + "」已建 (飞轮无相似工序链可继承, 工序请手动配)"
+                    : "产品「" + created.getName() + "」已建 (相似产品「" + plan.sourceName
+                        + "」没有可继承的工序链, 工序请手动配)");
         return r;
     }
 
