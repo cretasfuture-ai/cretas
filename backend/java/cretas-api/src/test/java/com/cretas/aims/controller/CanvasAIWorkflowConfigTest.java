@@ -311,6 +311,8 @@ class CanvasAIWorkflowConfigTest {
 
         assertFalse(response.isApplied());
         assertEquals(1, response.getDiffs().size());
+        assertFalse(response.getDiffs().get(0).containsKey("proof"),
+                "product work-process draft is saved by its own human-reviewed flow");
         ArgumentCaptor<ToolExecutionCommand> captor =
                 ArgumentCaptor.forClass(ToolExecutionCommand.class);
         verify(toolExecutionGateway).execute(captor.capture());

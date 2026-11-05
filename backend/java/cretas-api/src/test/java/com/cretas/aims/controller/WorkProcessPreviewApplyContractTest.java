@@ -7,6 +7,7 @@ import com.cretas.aims.ai.tool.impl.workprocess.WorkProcessCatalogTool;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.*;
+import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.repository.ai.*;
 import com.cretas.aims.repository.bom.*;
@@ -34,6 +35,7 @@ class WorkProcessPreviewApplyContractTest {
     final ObjectMapper mapper = new ObjectMapper();
     final WorkProcessRepository repository = mock(WorkProcessRepository.class);
     final DashScopeClient llm = mock(DashScopeClient.class);
+    final PreviewTokenService previewTokens = mock(PreviewTokenService.class);
     CanvasAIController controller;
 
     @BeforeEach void setUp() {
@@ -70,7 +72,37 @@ class WorkProcessPreviewApplyContractTest {
         when(mobile.getUserFromToken("local-token")).thenReturn(UserDTO.builder().id(42L)
                 .factoryId("F006").factoryType("FACTORY").roleCode(FactoryUserRole.factory_super_admin).build());
         controller = new CanvasAIController(registry, mapper, llm, mobile, gateway);
+        ReflectionTestUtils.setField(controller, "previewTokenService", previewTokens);
+        when(previewTokens.resolveClaim(anyString(), anyString(), anyBoolean(), anyString())).thenReturn(true);
+        when(previewTokens.createBoundToken(any())).thenAnswer(invocation -> {
+            PreviewTokenService.BoundTokenRequest request = invocation.getArgument(0);
+            return IntentPreviewToken.builder()
+                    .token("canvas-proof")
+                    .factoryId(request.factoryId()).tenantId(request.factoryId()).userId(request.userId())
+                    .toolName(request.toolName()).descriptorVersion(request.descriptorVersion())
+                    .commandDigest("canvas-command-digest").parametersHash("canvas-parameters-hash")
+                    .build();
+        });
+        when(previewTokens.claimToken(anyString(), eq("F006"), eq(42L), anyString()))
+                .thenAnswer(invocation -> {
+                    PreviewTokenService.BoundTokenRequest request =
+                            new PreviewTokenService.BoundTokenRequest(
+                                    "F006", 42L, null, "test", "test", "canvas_work_process_catalog", "1.0.0",
+                                    ToolExecutionMode.EXECUTE, "CANVAS_DIFF", "test", "UPDATE", paramsForClaim,
+                                    Map.of(), paramsForClaim, 300);
+                    IntentPreviewToken claimed = IntentPreviewToken.builder()
+                            .token("canvas-proof").factoryId("F006").tenantId("F006").userId(42L)
+                    .intentCode("CANVAS_DIFF_123e4567-e89b-12d3-a456-426614174000")
+                    .entityType("CANVAS_DIFF").entityId("canvas_work_process_catalog").operation("UPDATE")
+                    .executionMode(ToolExecutionMode.EXECUTE)
+                            .toolName(request.toolName()).descriptorVersion(request.descriptorVersion())
+                            .commandDigest("canvas-command-digest").parametersHash("canvas-parameters-hash")
+                            .build();
+                    return PreviewTokenService.ClaimResult.success(claimed, "canvas-claim", request.parameters());
+                });
     }
+
+    Map<String, Object> paramsForClaim = Map.of();
 
     CanvasAIController.AIResponse preview(String extraction, String sentence) {
         when(llm.chatLowTemp(anyString(), anyString())).thenReturn(extraction);
@@ -78,6 +110,7 @@ class WorkProcessPreviewApplyContractTest {
         request.setModuleCode("work_process_catalog"); request.setMode("plan"); request.setMessage(sentence);
         var response = controller.chat("F006", "Bearer local-token", request).getData();
         assertEquals(1, response.getDiffs().size(), response.getReply());
+        paramsForClaim = params(response);
         verify(repository, never()).save(any());
         return response;
     }
@@ -88,7 +121,7 @@ class WorkProcessPreviewApplyContractTest {
     }
 
     WorkProcess apply(CanvasAIController.AIResponse preview) {
-        var receipt = controller.applyDiffsWithProtocol("F006", "Bearer local-token", "2", preview.getDiffs());
+        var receipt = controller.applyDiffsWithProtocol("F006", "Bearer local-token", "3", preview.getDiffs());
         assertTrue(receipt.getSuccess(), receipt.getMessage());
         assertEquals(1, receipt.getData().applied());
         var saved = ArgumentCaptor.forClass(WorkProcess.class);

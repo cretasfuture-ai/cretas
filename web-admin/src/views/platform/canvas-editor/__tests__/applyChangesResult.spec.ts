@@ -55,6 +55,31 @@ describe('receipt shape gate', () => {
 
 describe('batch consumer prevents replay', () => {
   beforeEach(() => vi.clearAllMocks());
+  it('preserves each server proof through the real staged-change submission mapping', async () => {
+    api.aiApplyDiffs.mockResolvedValue({ data: result(['SUCCESS', 'SUCCESS']) });
+    const wrapper = shallowMount(CanvasEditor);
+    await flushPromises();
+    const vm = wrapper.vm as unknown as EditorVm;
+    const firstProof = { token: 'test-stage-first', commandDigest: 'test-digest-first', descriptorVersion: 'v1' };
+    const secondProof = { token: 'test-stage-second', commandDigest: 'test-digest-second', descriptorVersion: 'v1' };
+    const proposals: ConfigDiff[] = [
+      { type: 'TOOL_TOGGLE', path: 'canvas_tool_toggle', before: null, after: { enabled: false },
+        description: '第一项', proof: firstProof },
+      { type: 'FIELD_CHANGE', path: 'canvas_field', before: null, after: { required: true },
+        description: '第二项', proof: secondProof },
+    ];
+    vm.handleAIDiff(proposals);
+    expect(api.aiApplyDiffs).not.toHaveBeenCalled();
+    await vm.applyChanges();
+    expect(api.aiApplyDiffs).toHaveBeenCalledTimes(1);
+    expect(api.aiApplyDiffs).toHaveBeenCalledWith('LOCAL_B05', [
+      { type: 'TOOL_TOGGLE', tool: 'canvas_tool_toggle', params: { enabled: false },
+        description: '第一项', proof: firstProof },
+      { type: 'FIELD_CHANGE', tool: 'canvas_field', params: { required: true },
+        description: '第二项', proof: secondProof },
+    ]);
+    wrapper.unmount();
+  });
   it('allows a new enable-disable-enable proposal while blocking the old proposal', async () => {
     api.aiApplyDiffs.mockResolvedValue({ data: result(['SUCCESS']) });
     const wrapper = shallowMount(CanvasEditor);

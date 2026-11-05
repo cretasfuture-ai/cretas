@@ -8,6 +8,6 @@ describe('Canvas client/server result protocol', () => {
     const diffs = [{ tool: 'canvas_test', params: { enabled: true } }];
     await aiApplyDiffs('LOCAL', diffs);
     expect(post).toHaveBeenCalledWith('/LOCAL/config/v2/ai/apply-diffs', diffs,
-      { headers: { 'X-Canvas-Result-Protocol': '2' } });
+      { headers: { 'X-Canvas-Result-Protocol': '3' } });
   });
 });
