@@ -10,7 +10,7 @@
 ⛔ 目标租户不再是 DEMO_FACTORY2（租户收敛后已不存在），改为 F006「六膳门食品科技」——
    团队自己的测试/演示租户。⚠️ LIUSHANMEN 是真客户，评测账号必须指向 F006。
 
-凭证只从环境变量取（服务器上由 scripts/cron/restaurant-ai-eval.sh 从 .env.prod 注入），
+凭证只从环境变量取（服务器上由部署环境从 .env.prod 注入），
 绝不落进仓库：FACTORY_EVAL_USERNAME / FACTORY_EVAL_PASSWORD。缺了或登录失败返回 None，
 调用方按「没量到」退 2，⛔ 不回落到任何免密路径。
 """

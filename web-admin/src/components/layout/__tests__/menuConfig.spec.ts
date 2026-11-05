@@ -45,9 +45,6 @@ describe('menuConfig — baseline structure (pre-merge)', () => {
     }
   });
 
-  it('当前存在 /restaurant 组 (回归基线)', () => {
-    expect(findGroup('/restaurant')).toBeDefined();
-  });
 });
 
 describe('menuConfig - Liushanmen department workflow entries', () => {
@@ -496,7 +493,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '排线工作台', '调度记录', '门店与订单', '车辆与司机',
     ]);
     for (const path of paths) {
-      expect(findDescendant('/scheduling', path)?.hideForFactoryTypes).toEqual(['FACTORY', 'RESTAURANT']);
+      expect(findDescendant('/scheduling', path)?.hideForFactoryTypes).toEqual(['FACTORY']);
     }
     expect(findDescendant('/scheduling', '/scheduling/logistics-demo')).toBeUndefined();
 
@@ -698,35 +695,19 @@ describe('menuConfig — 业态门控方向 (WS4)', () => {
   const group = () => menuConfig.find((m) => m.path === '/smart-bi')!;
   const child = (p: string) => group().children!.find((c) => c.path === p)!;
 
-  it.each([
-    '/analytics/supply-chain',
-  ])('制造专属项 %s 对餐饮隐藏 (hideForFactoryTypes 含 RESTAURANT)', (p) => {
-    expect(child(p).hideForFactoryTypes).toContain('RESTAURANT');
-  });
-
   // 2026-09-02 LIUSHANMEN 生产管理菜单收拢: 车间实时生产报表/生产数据分析/
   // 成品出厂核算已合并进 /production/analysis-query hub, 该菜单项自己不再单独
   // 携带 hideForFactoryTypes (RESTAURANT 靠父级 /production 组的 hideForFactoryTypes
   // 挡住, 见下一条; FACTORY 那部分门控挪到组件内部按 tab 各自 v-if, 见
   // productionAnalysisTab.ts)。/production-analytics/cost-summary 不在合并范围内,
   // 仍保留原样的菜单级 hideForFactoryTypes。
-  it.each([
-    '/production-analytics/cost-summary',
-  ])('生产分析项 %s 对餐饮隐藏 (hideForFactoryTypes 含 RESTAURANT)', (p) => {
-    expect(findDescendant('/production', p)!.hideForFactoryTypes).toContain('RESTAURANT');
-  });
-
-  it('生产分析 hub 本身不单独门控业态 —— RESTAURANT 靠父级 /production 组挡住', () => {
-    expect(findDescendant('/production', '/production/analysis-query')!.hideForFactoryTypes).toBeUndefined();
-    expect(findGroup('/production')!.hideForFactoryTypes).toContain('RESTAURANT');
-  });
-
   it('经营分析 hub 不门控 (双业态自适应 — 财务/销售/趋势/KPI 各 tab 内部自适应)', () => {
     expect(child('/smart-bi/analysis-hub').hideForFactoryTypes).toBeUndefined();
   });
 
-  it('生产异常预警仅服务工厂，餐饮租户隐藏', () => {
-    expect(child('/analytics/alert-dashboard').hideForFactoryTypes).toContain('RESTAURANT');
+  it('生产异常预警保留工厂入口且不依赖餐饮租户过滤', () => {
+    expect(child('/analytics/alert-dashboard')).toBeDefined();
+    expect(child('/analytics/alert-dashboard').hideForFactoryTypes ?? []).not.toContain('RESTAURANT');
   });
 
   it('收入管理报表对制造隐藏 (FACTORY)', () => {
@@ -743,63 +724,6 @@ describe('menuConfig — 业态门控方向 (WS4)', () => {
   });
 });
 
-describe('menuConfig — 餐饮运营组 3 层重组 (Task 1)', () => {
-  const group = () => menuConfig.find((m) => m.path === '/restaurant')!;
-  const paths = () => group().children!.map((c) => c.path);
-
-  it('餐饮组仍存在且仅 RESTAURANT 可见', () => {
-    const g = group();
-    expect(g).toBeDefined();
-    expect(g.hideForFactoryTypes).toEqual(['FACTORY']);
-  });
-
-  // ⚠️ 2026-07-31 **改过期望值**。原来断言的是按数据对象分的三段
-  //    ['深度分析', '日常录入', '数据与系统']。
-  //    餐饮板块已改为**按部门**组织（产品定位是中台分析, 使用者是四类后台数据分析
-  //    人员）, 功能页跟着归到运营/市场/财务名下, 旧分段不复存在。
-  //    旧期望没有在编码缺陷, 只是钉住了当时的 IA —— 这次是 IA 本身变了。
-  //    人事没有出现在这里: 它暂时只有驾驶舱一页, 没有独立功能页。
-  it('groupLabel 段按部门组织: 部门驾驶舱 / 运营 / 市场 / 财务 / 数据与系统', () => {
-    const labels = group().children!.filter((c) => c.groupLabel).map((c) => c.groupLabel);
-    expect(labels).toEqual(['部门驾驶舱', '运营', '市场', '财务', '数据与系统']);
-  });
-
-  it('运营总览菜单项已移除 (病症: Excel 浏览器, 驾驶舱在数据与分析组)', () => {
-    expect(paths()).not.toContain('/restaurant/analytics');
-  });
-
-  it('菜品四象限+毛利合并为单一 菜品分析 (无独立菜品两项)', () => {
-    const p = paths();
-    expect(p).toContain('/restaurant/analytics/dishes');
-    expect(p).not.toContain('/restaurant/analytics/menu');
-    expect(p).not.toContain('/restaurant/analytics/gross-margin');
-  });
-
-  it('点评口碑显性入口 → /analytics/platform (无旧 dianping)', () => {
-    const p = paths();
-    expect(p).toContain('/restaurant/analytics/platform');
-    expect(p).not.toContain('/restaurant/analytics/dianping');
-    const platform = group().children!.find((c) => c.path === '/restaurant/analytics/platform')!;
-    expect(platform.title).toBe('平台分析');
-    expect(platform.icon).toBeTruthy();
-  });
-
-  it('深度分析段含 菜品分析/门店对比/平台分析; 日常录入段含 配方/领料/损耗/盘点; 数据与系统段含 数据完整度/ETL', () => {
-    const p = paths();
-    for (const x of [
-      '/restaurant/analytics/dishes', '/restaurant/analytics/stores', '/restaurant/analytics/platform',
-      '/restaurant/recipes', '/restaurant/supplier-delivery', '/restaurant/requisitions', '/restaurant/wastage', '/restaurant/stocktaking',
-      '/restaurant/data-completeness', '/restaurant/admin/etl-status',
-    ]) {
-      expect(p, `缺餐饮项 ${x}`).toContain(x);
-    }
-  });
-
-  it('admin 段 (ETL状态) 保留 roles 门控', () => {
-    const etl = group().children!.find((c) => c.path === '/restaurant/admin/etl-status')!;
-    expect(etl.roles).toContain('factory_super_admin');
-  });
-});
 
 
 describe('menuConfig - platform-only governance entries', () => {

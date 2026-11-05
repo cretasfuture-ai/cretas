@@ -10,7 +10,6 @@ from .runner import (
     compute_evaluator_build,
 )
 from .service import AgentOpsService
-from .runtime_shadow import RuntimeShadowBatchRunner, RuntimeShadowBounds
 from .store import InMemoryAgentOpsStore, PostgresAgentOpsStore
 
 __all__ = [
@@ -25,7 +24,5 @@ __all__ = [
     "OfflineBatchRunner",
     "PostgresAgentOpsStore",
     "RunnerBounds",
-    "RuntimeShadowBatchRunner",
-    "RuntimeShadowBounds",
     "compute_evaluator_build",
 ]

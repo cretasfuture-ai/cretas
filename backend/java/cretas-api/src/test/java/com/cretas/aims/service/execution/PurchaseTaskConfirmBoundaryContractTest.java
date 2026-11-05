@@ -84,6 +84,7 @@ class PurchaseTaskConfirmBoundaryContractTest {
                 mock(com.cretas.aims.service.intent.IntentConfigManagementService.class);
         when(domainConfig.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", new BusinessTypeGate(domainConfig));
+        ReflectionTestUtils.setField(orchestrator, "configService", domainConfig);
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
         AIIntentConfig config = new AIIntentConfig();
         config.setIntentCode("PURCHASE_ORDER_CREATE");

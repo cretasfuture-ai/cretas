@@ -25,8 +25,6 @@ import echarts from '@/utils/echarts';
 import DynamicChartRenderer from '@/components/smartbi/DynamicChartRenderer.vue';
 import ChartTypeSelector from '@/components/smartbi/ChartTypeSelector.vue';
 import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
-import RestaurantPhaseIIPlaceholder from '@/components/smartbi/RestaurantPhaseIIPlaceholder.vue';
-import RestaurantSalesContent from '@/components/smartbi/RestaurantSalesContent.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import type { ChartConfig as SmartBIChartConfig } from '@/types/smartbi';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
@@ -1544,16 +1542,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- Phase IIa (2026-05-14): real restaurant analytics replace the placeholder.
-       Rollback path (spec §5.7): VITE_PHASE_IIA_ENABLED=false falls back to the
-       placeholder without a code revert. RestaurantPhaseIIPlaceholder.vue stays
-       in repo so this flag flip works. -->
-  <RestaurantPhaseIIPlaceholder
-    v-if="isRestaurantTenant && !phaseIIaEnabled"
-    pageName="销售数据分析"
-  />
-  <RestaurantSalesContent v-else-if="isRestaurantTenant && phaseIIaEnabled" />
-  <div v-else ref="rootRef" class="sales-analysis-page">
+  <div ref="rootRef" class="sales-analysis-page">
     <div class="page-header">
       <div class="header-left">
         <h1>销售分析</h1>

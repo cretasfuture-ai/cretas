@@ -77,7 +77,9 @@ class SupplierComparisonMultiIntentContractTest {
                     .intentCode(invocation.<IntentExecuteRequest>getArgument(1).getIntentCode())
                     .build();
         }).when(orchestrator).executeWithExplicitIntent(any(), any(), any(), any());
-        service = new MultiIntentExecutionService(aiIntentService, orchestrator, streaming);
+        IntentConfigManagementService config = mock(IntentConfigManagementService.class);
+        when(config.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
+        service = new MultiIntentExecutionService(aiIntentService, orchestrator, streaming, config);
         ReflectionTestUtils.setField(service, "multiIntentEnabled", true);
     }
 
@@ -137,7 +139,10 @@ class SupplierComparisonMultiIntentContractTest {
     void realSupplierToolRunsThroughMultiIntentAndRejectsUnboundActorsBeforeTool() throws Exception {
         SupplierFixture fixture = realSupplierFixture();
         AIIntentService ai = mock(AIIntentService.class);
-        MultiIntentExecutionService realMulti = new MultiIntentExecutionService(ai, fixture.orchestrator, streaming(executor));
+        IntentConfigManagementService config = mock(IntentConfigManagementService.class);
+        when(config.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
+        MultiIntentExecutionService realMulti = new MultiIntentExecutionService(
+                ai, fixture.orchestrator, streaming(executor), config);
         ReflectionTestUtils.setField(realMulti, "multiIntentEnabled", true);
         when(ai.recognizeMultiIntent("请比较供应商价格", FACTORY)).thenReturn(parallelSupplierResult());
 
@@ -272,6 +277,7 @@ class SupplierComparisonMultiIntentContractTest {
         ReflectionTestUtils.setField(orchestrator, "queryPreprocessorService",
                 mock(QueryPreprocessorServiceImpl.class, org.mockito.Answers.CALLS_REAL_METHODS));
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", mock(BusinessTypeGate.class));
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
         return new SupplierFixture(orchestrator, tool, supplierService, records);
     }
 

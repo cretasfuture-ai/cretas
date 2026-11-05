@@ -79,6 +79,13 @@ class PlatformFactoryMenuContractTest {
     }
 
     @Test
+    void retiredRestaurantMenuModuleIsRejected() {
+        assertThatThrownBy(() -> service.update("F001", "restaurantOps",
+                new PlatformFactoryMenuDTO.Update(true, List.of("/restaurant/ops"))))
+                .hasMessageContaining("不支持的网页模块");
+    }
+
+    @Test
     void legacySmartbiRowIsReadAsAnalyticsMenuState() {
         FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("smartbi")
                 .moduleName("SmartBI").config(new HashMap<>(Map.of("showInSidebar", false))).build();

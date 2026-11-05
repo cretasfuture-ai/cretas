@@ -60,9 +60,6 @@ FINANCE_ROLES: frozenset[str] = frozenset({
     "sales_manager",
     "dispatcher",
     "production_manager",
-    "restaurant_manager",
-    "restaurant_owner",
-    "restaurant_purchaser",
     "permission_admin",
     "department_admin",
 })
@@ -92,7 +89,7 @@ class ChartInsightContext:
     x_dim: str               # "time"|"store"|"product"|"channel"|"category"|"other"
     y_metric: str            # "revenue"|"quantity"|"margin"|"cost"|"count"|"pct"|"other"
     aggregation: str         # "sum"|"avg"|"max"|"count"
-    domain: str              # "restaurant"|"factory"|"finance"
+    domain: str              # "factory"|"finance"
     data_pattern: str        # canonical bucket string e.g. "ranking:top-share:65-80:cat-count:4-8"
     permission_tier: str     # "finance_visible"|"price_hidden"|"finance_hidden"
     factory_id: str          # tenant identifier (from request body — OVERRIDDEN by JWT)
@@ -678,16 +675,14 @@ def _nearest_label_in_prose(prose: str, target_pos: int, labels: List[str]) -> O
 # ---------------------------------------------------------------------------
 
 _DOMAIN_TO_BUSINESS_TYPE: dict = {
-    "restaurant": "restaurant",
-    "finance":    "factory",
-    "factory":    "factory",
+    "finance": "factory",
+    "factory": "factory",
 }
 
 
 def _map_domain(domain: Optional[str]) -> str:
     """Map chart domain to corpus business_type bucket.
 
-    restaurant → "restaurant"
     finance    → "factory"   (finance charts are factory-side)
     factory    → "factory"
     anything else / None → "unknown"
@@ -807,6 +802,10 @@ class ChartInsightService:
         jwt_factory_id: factory_id from verified JWT; if provided, OVERRIDES ctx.factory_id.
         caller_role: role string from JWT for RBAC permission gating.
         """
+        if ctx.domain not in {"factory", "finance"}:
+            logger.warning("[chart-insight] unsupported domain=%s", ctx.domain)
+            return None
+
         # 🔒 RBAC: JWT factory_id overrides body factory_id
         effective_factory_id = jwt_factory_id if jwt_factory_id is not None else ctx.factory_id
 
@@ -837,7 +836,7 @@ class ChartInsightService:
         # even when teacher-model budget is blocked, and repeat calls become cache hits.
         input_text = _corpus_input_text(resolved_ctx)
         input_hash = compute_input_hash(input_text)
-        if resolved_ctx.factory_id == "DEMO_REST" or os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1":
+        if os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1":
             cache_result = await self._read_corpus_cache(input_hash)
             if cache_result is not None:
                 cached_teacher_output, cached_row_hash = cache_result
@@ -940,7 +939,7 @@ class ChartInsightService:
 
         deterministic = (
             _deterministic_insight(resolved_ctx)
-            if resolved_ctx.factory_id == "DEMO_REST" or os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1"
+            if os.getenv("CHART_INSIGHT_DETERMINISTIC_FIRST") == "1"
             else None
         )
         if deterministic is not None:

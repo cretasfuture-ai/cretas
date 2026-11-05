@@ -337,7 +337,7 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
         String domain;
         try { domain = configService.resolveBusinessDomain(factoryId); }
         catch (Exception e) { return Optional.empty(); }
-        if (!"FACTORY".equalsIgnoreCase(domain) && !"RESTAURANT".equalsIgnoreCase(domain)) return Optional.empty();
+        if (!"FACTORY".equalsIgnoreCase(domain)) return Optional.empty();
         long now = System.currentTimeMillis();
         IntentMatchResult result = tryEarlyPhraseMatch(userInput, factoryId, domain, expectedCodes).orElse(null);
         if (result == null) return Optional.empty();

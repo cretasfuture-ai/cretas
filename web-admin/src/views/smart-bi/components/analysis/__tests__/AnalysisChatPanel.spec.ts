@@ -5,14 +5,12 @@ const mocks = vi.hoisted(() => ({
   askIntent: vi.fn(),
 }));
 
-vi.mock('@/api/smartbi/restaurant-synthesis', () => ({
-  askRestaurantIntent: (...args: unknown[]) => mocks.askIntent(...args),
+vi.mock('@/api/smartbi/intent-chat', () => ({
+  executeIntent: (...args: unknown[]) => mocks.askIntent(...args),
 }));
 
-// 面板按租户分流版式 (useAuthStore().businessDomain)。这三条测的是餐饮问题的路由与失败文案,
-// 所以固定成餐饮租户; 工厂租户的新版式见 AnalysisChatPanel.standard.spec.ts。
 vi.mock('@/store/modules/auth', () => ({
-  useAuthStore: () => ({ factoryId: 'DEMO_REST', businessDomain: 'RESTAURANT' }),
+  useAuthStore: () => ({ factoryId: 'F001', businessDomain: 'FACTORY' }),
 }));
 
 vi.mock('element-plus', () => ({
@@ -35,8 +33,8 @@ import AnalysisChatPanel from '../AnalysisChatPanel.vue';
 
 const mountPanel = () => mount(AnalysisChatPanel, {
   props: {
-    factoryId: 'DEMO_REST',
-    pageTitle: '运营分析',
+    factoryId: 'F001',
+    pageTitle: '经营分析',
     contexts: [{
       key: 'void-audit',
       title: '撤单稽核',
@@ -63,84 +61,65 @@ describe('AnalysisChatPanel unified intent routing', () => {
     }
   });
 
-  it('routes a narrow restaurant question through the Java READ orchestrator without polluting the question', async () => {
+  it('routes a factory question through the Java READ orchestrator without polluting the question', async () => {
     mocks.askIntent.mockResolvedValue({
-      success: true,
-      answer: '你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。',
-      charts: [],
-      alerts: [],
-      source: 'restaurant_ops_gold',
-      followUpActions: [
-        { label: '最近30天', question: '最近30天哪家店业绩最好' },
-      ],
-    });
-
-    const wrapper = mountPanel();
-    const vm = wrapper.vm as unknown as { sendMessage: (text?: string) => Promise<void> };
-    await vm.sendMessage('哪家店业绩最好');
-    await flushPromises();
-
-    expect(mocks.askIntent).toHaveBeenCalledTimes(1);
-    const [factoryId, question, sessionId, context] = mocks.askIntent.mock.calls[0];
-    expect(factoryId).toBe('DEMO_REST');
-    expect(question).toBe('哪家店业绩最好');
-    expect(sessionId).toEqual(expect.any(String));
-    expect(context).toMatchObject({
-      dimensionHints: ['void-audit'],
-    });
-    expect(context.pageContext).toContain('撤单率 0.55%');
-    expect(question).not.toContain('撤单率');
-
-    const aiBubble = wrapper.find('.stub-bubble[data-role="ai"]');
-    expect(aiBubble.text()).toContain('时间范围');
-
-    const followUp = wrapper.findAll('button')
-      .find((button) => button.text() === '最近30天');
-    expect(followUp).toBeDefined();
-    await followUp!.trigger('click');
-    await flushPromises();
-    expect(mocks.askIntent.mock.calls[1][1]).toBe('最近30天哪家店业绩最好');
-  });
-
-  it('keeps comprehensive answers and charts returned by the same orchestrator', async () => {
-    mocks.askIntent.mockResolvedValue({
-      success: true,
-      answer: '### 本轮已纳入维度\n- 营收与订单\n### 尚缺但可补充的维度\n- 物理客流',
-      charts: [{ type: 'bar', title: '门店营收', option: { series: [] } }],
-      alerts: [],
+      status: 'SUCCESS',
+      formattedText: '你想看哪个时间范围？请选择本月、上个月、最近7天或最近30天。',
       source: 'deterministic_fallback',
     });
 
     const wrapper = mountPanel();
     const vm = wrapper.vm as unknown as { sendMessage: (text?: string) => Promise<void> };
-    await vm.sendMessage('请综合分析最近30天全部门店经营情况');
+    await vm.sendMessage('哪些工厂指标需要关注');
+    await flushPromises();
+
+    expect(mocks.askIntent).toHaveBeenCalledTimes(1);
+    const [factoryId, question, options] = mocks.askIntent.mock.calls[0];
+    expect(factoryId).toBe('F001');
+    expect(question).toBe('哪些工厂指标需要关注');
+    expect(options).toMatchObject({ sessionId: expect.any(String), mode: 'READ' });
+    expect(options.context).toMatchObject({ dimensionHints: ['void-audit'] });
+    expect(options.context.pageContext).toContain('撤单率 0.55%');
+    expect(question).not.toContain('撤单率');
+
+    const aiBubble = wrapper.find('.stub-bubble[data-role="ai"]');
+    expect(aiBubble.text()).toContain('时间范围');
+
+  });
+
+  it('keeps comprehensive answers and charts returned by the same orchestrator', async () => {
+    mocks.askIntent.mockResolvedValue({
+      status: 'SUCCESS',
+      formattedText: '### 本轮已纳入维度\n- 产量与质量\n### 尚缺但可补充的维度\n- 设备稼动',
+      source: 'deterministic_fallback',
+    });
+
+    const wrapper = mountPanel();
+    const vm = wrapper.vm as unknown as { sendMessage: (text?: string) => Promise<void> };
+    await vm.sendMessage('请综合分析工厂生产与质量情况');
     await flushPromises();
 
     expect(mocks.askIntent).toHaveBeenCalledWith(
-      'DEMO_REST',
-      '请综合分析最近30天全部门店经营情况',
-      expect.any(String),
-      expect.objectContaining({ dimensionHints: ['void-audit'] }),
+      'F001',
+      '请综合分析工厂生产与质量情况',
+      expect.objectContaining({ sessionId: expect.any(String), mode: 'READ' }),
     );
     expect(wrapper.find('.stub-bubble[data-role="ai"]').text()).toContain('尚缺但可补充的维度');
   });
 
   it('renders an honest failure instead of fabricating a fallback answer', async () => {
     mocks.askIntent.mockResolvedValue({
-      success: false,
-      answer: '',
-      charts: [],
-      alerts: [],
-      error: 'Java intent service unavailable',
+      status: 'FAILED',
+      message: 'Java intent service unavailable',
     });
 
     const wrapper = mountPanel();
     const vm = wrapper.vm as unknown as { sendMessage: (text?: string) => Promise<void> };
-    await vm.sendMessage('哪家店业绩最好');
+    await vm.sendMessage('哪些工厂指标需要关注');
     await flushPromises();
 
     const aiBubble = wrapper.find('.stub-bubble[data-role="ai"]');
-    expect(aiBubble.text()).toContain('请求失败');
-    expect(aiBubble.text()).toContain('Java intent service unavailable');
+    expect(aiBubble.text()).toContain('这次没分析完');
+    expect(aiBubble.text()).not.toContain('Java intent service unavailable');
   });
 });

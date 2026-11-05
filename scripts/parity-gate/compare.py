@@ -4,7 +4,7 @@ Usage examples:
 
     # Single endpoint
     python scripts/parity-gate/compare.py \\
-        --factory R_QINGHUAJIAO_REAL \\
+        --factory F006 \\
         --endpoint '/api/mobile/{factory_id}/smart-bi/analysis/production' \\
         --params 'analysisType=overview&startDate=2026-01-01&endDate=2026-01-31' \\
         --java-base http://47.100.235.168:10010 \\
@@ -13,13 +13,13 @@ Usage examples:
 
     # Batch from preset file or spec doc
     python scripts/parity-gate/compare.py \\
-        --factory R_ILTEATRO_REAL \\
+        --factory F006 \\
         --endpoint-list scripts/parity-gate/presets/production.txt \\
         --output-dir reports/
 
     # Offline self-test using local JSON fixtures (no HTTP needed)
     python scripts/parity-gate/compare.py \\
-        --factory R_TEST_MOCK \\
+        --factory QATEST_FACTORY \\
         --endpoint '/api/mobile/{factory_id}/smart-bi/analysis/production' \\
         --params 'analysisType=overview&startDate=2026-01-01&endDate=2026-01-31' \\
         --fixtures-java fixtures/java/prod-overview.json \\
@@ -261,7 +261,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         description="Phase 2A dict-eq parity-gate compare harness.",
     )
-    p.add_argument("--factory", required=True, help="factory_id (e.g. R_TEST_MOCK)")
+    p.add_argument("--factory", required=True, help="factory_id (e.g. QATEST_FACTORY)")
     p.add_argument(
         "--endpoint",
         help="Single endpoint path (with optional ?params or use --params)",

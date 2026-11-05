@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """CI lint: ensure manual chapters' last-verified meta is not older than 6 weeks.
 
-Restaurant manual: §1, §2, §11 (Tier 1 chapters)
 Factory manual: §0A, §0B, §6, §7, §10 (Tier 1 chapters)
 """
 import re, sys
@@ -9,10 +8,6 @@ from datetime import datetime
 from pathlib import Path
 
 MANUALS = {
-    "restaurant-product-manual.html": {
-        "path": Path("docs/plans/restaurant-product-manual.html"),
-        "chapters": ["ch1", "ch2", "ch11"],
-    },
     "factory-operation-manual.html": {
         "path": Path("docs/plans/factory-operation-manual.html"),
         "chapters": ["ch0a", "ch0b", "ch6a", "ch7a", "ch10a"],

@@ -78,9 +78,9 @@ class PriceViewPermissionTest {
     }
 
     @Test
-    @DisplayName("restaurant_manager: HAS procurement:price:view (菜品成本)")
-    void restaurantManager_hasPermission() {
-        assertTrue(permissionService.hasPermission(
+    @DisplayName("restaurant_manager: LACKS procurement:price:view after retirement")
+    void restaurantManager_lacksPermission() {
+        assertFalse(permissionService.hasPermission(
                 userWithRole(FactoryUserRole.restaurant_manager.name()), PERM));
     }
 

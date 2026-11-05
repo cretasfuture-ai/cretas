@@ -297,7 +297,7 @@ public enum FactoryUserRole {
      * 检查是否为管理层角色 (Level 0-20)
      */
     public boolean isManager() {
-        return level <= 20;
+        return !isRetiredRestaurantRole() && level <= 20;
     }
 
     /**
@@ -311,7 +311,7 @@ public enum FactoryUserRole {
      * 检查是否有效角色 (非未激活)
      */
     public boolean isActive() {
-        return this != unactivated;
+        return this != unactivated && !isRetiredRestaurantRole();
     }
 
     /**
@@ -320,7 +320,8 @@ public enum FactoryUserRole {
      * @return 如果当前角色级别更高返回true
      */
     public boolean canManage(FactoryUserRole target) {
-        return this.level < target.level;
+        return target != null && !isRetiredRestaurantRole() && !target.isRetiredRestaurantRole()
+                && this.level < target.level;
     }
 
     /**
@@ -337,7 +338,7 @@ public enum FactoryUserRole {
             case restaurant_owner:
             case restaurant_chef:
             case restaurant_purchaser:
-                return "restaurant";
+                return "none";
             case hr_admin:
                 return "hr";
             case procurement_manager:
@@ -372,6 +373,14 @@ public enum FactoryUserRole {
             default:
                 return "none";
         }
+    }
+
+    /**
+     * Historical restaurant role values remain readable for old database rows/JWTs,
+     * but must not confer active identity or management capability.
+     */
+    public boolean isRetiredRestaurantRole() {
+        return name().startsWith("restaurant_");
     }
 
     /**

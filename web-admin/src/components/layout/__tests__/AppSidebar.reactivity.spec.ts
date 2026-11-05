@@ -146,26 +146,6 @@ describe('sidebar filteredMenu — reactivity (WS6, no manual refresh)', () => {
     expect(topPaths(filteredMenu.value)).toContain('/system'); // appears after DB load
   });
 
-  it('re-evaluates when factoryType changes (RESTAURANT hides manufacturing groups)', async () => {
-    const auth = useAuthStore();
-    const perm = usePermissionStore();
-    const filteredMenu = buildFilteredMenu();
-
-    auth.setUser(factoryUser('factory_super_admin', 'F001', 'FACTORY'));
-    perm.setRole('factory_super_admin', 'F001', 'FACTORY');
-    await nextTick();
-    expect(topPaths(filteredMenu.value)).toContain('/production');
-    expect(topPaths(filteredMenu.value)).not.toContain('/restaurant');
-
-    auth.setUser(factoryUser('factory_super_admin', 'R001', 'RESTAURANT'));
-    perm.setRole('factory_super_admin', 'R001', 'RESTAURANT');
-    await nextTick();
-
-    const after = topPaths(filteredMenu.value);
-    expect(after).not.toContain('/production'); // hideForFactoryTypes RESTAURANT
-    expect(after).toContain('/restaurant');
-  });
-
   it('finance_manager simplified menu reacts to role transition both ways', async () => {
     const auth = useAuthStore();
     const perm = usePermissionStore();
@@ -185,31 +165,6 @@ describe('sidebar filteredMenu — reactivity (WS6, no manual refresh)', () => {
     expect(topPaths(filteredMenu.value)).toContain('/system');
   });
 
-  it('applies factory-type hiding to the finance_manager simplified menu without hiding restaurant finance pages', async () => {
-    const auth = useAuthStore();
-    const perm = usePermissionStore();
-    const filteredMenu = buildFilteredMenu();
-
-    auth.setUser(factoryUser('finance_manager', 'F001', 'FACTORY'));
-    perm.setRole('finance_manager', 'F001', 'FACTORY');
-    await nextTick();
-
-    const factoryPaths = topPaths(filteredMenu.value);
-    expect(factoryPaths).not.toContain('/smart-bi/dashboard');
-    expect(factoryPaths).not.toContain('/restaurant/supplier-reconciliation');
-    expect(factoryPaths).not.toContain('/restaurant/cost-attribution');
-    expect(factoryPaths).toContain('/finance/invoices?status=REQUESTED');
-    expect(factoryPaths).toContain('/finance/payments');
-
-    auth.setUser(factoryUser('finance_manager', 'R001', 'RESTAURANT'));
-    perm.setRole('finance_manager', 'R001', 'RESTAURANT');
-    await nextTick();
-
-    const restaurantPaths = topPaths(filteredMenu.value);
-    expect(restaurantPaths).toContain('/smart-bi/dashboard');
-    expect(restaurantPaths).toContain('/restaurant/supplier-reconciliation');
-    expect(restaurantPaths).toContain('/restaurant/cost-attribution');
-  });
 });
 
 // ── Guard: component source must keep the fixed reactive shape ──────────────

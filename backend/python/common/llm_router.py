@@ -574,7 +574,7 @@ def _expiry_of(account: str, model: str) -> datetime.date:
 # ═══════════════════════════════════════════════════════════════════════════
 # 实测能力表 —— `_build_chain` 的**主**排序键 (owner 2026-08-10 拍板「按能力排」)
 #
-# 产出方式: `python -m smartbi.scripts.llm_capability_rank --slot review --emit-table`
+# 历史模型能力评测脚本已退休；运行时注册链以本模块配置为准。
 #   · prompt 同源: 生产自己的 `_build_t3_prompt`
 #   · 判据同源: 生产自己的 `_t3_contract_violation` (call_chain 真正用来接受/
 #     拒绝一次应答的那个函数), ⛔ 没有手写答案表
@@ -621,7 +621,7 @@ _CAPABILITY_PASS_FLOOR = 0.5
 #    连累后面 4 个健康候选被熔断)。一次好读数推翻不了那条判据。
 _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
     # 2026-10-07: aistore ×2 / zhipu ×1 的读数随账号出局一并删除(见 _REGISTRY_AUDIT_DATE)。
-    # ── 2026-08-13 重测: `python -m smartbi.scripts.llm_capability_rank
+    # ── 2026-08-13 重测记录已归档；此处仅保留运行时链配置。
     #    --slot review` + `--slot reasoning`, 生产凭证、生产 prompt、生产判据 ──
     #
     # 🔴 本轮最贵的一条读数: **tencent 的 kimi-k2.7-code 与 -highspeed 都是 0/6
@@ -658,7 +658,7 @@ _CAPABILITY: Dict[Tuple[str, str], Tuple[float, float]] = {
 # 计划合法性 —— 「按能力排」真正用得上的那把尺子 (2026-08-10 实测)
 #
 # 值 = 在 7 道真实电池问句上, 模型**编造提示词里没有的枚举值**的处数。
-# 产出: `python -m smartbi.scripts.llm_capability_rank --schema --slot review`
+# schema 由运行时注册链直接提供。
 #       (合法值从 `_build_t3_prompt` 现解析, ⛔ 不在任何地方另写一份枚举)
 #
 # 🔑 为什么是这把尺子, 前两把为什么不行:

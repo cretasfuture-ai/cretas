@@ -9,7 +9,7 @@ policies:
     requiredPermissions: ["hr:read_write"]
     allowedRoles: []
     # User administration is tenant-generic and has no organization-type branch in UserDisableTool.
-    allowedBusinessTypes: [FACTORY, RESTAURANT, HEADQUARTERS, BRANCH, CENTRAL_KITCHEN, LOGISTICS]
+    allowedBusinessTypes: [FACTORY, HEADQUARTERS, CENTRAL_KITCHEN, LOGISTICS]
     domainTags: ["user", "hr", "identity"]
     version: "2.0.0"
     supportsPreview: false
@@ -83,7 +83,7 @@ policies:
     toolName: "material_stock_summary"
     actionType: READ
     riskLevel: LOW
-    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"]
+    requiredPermissions: ["inventory:read", "inventory:read_write"]
     allowedRoles: []
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["material"]

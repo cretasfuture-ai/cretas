@@ -83,9 +83,14 @@ class RuntimeToolPolicyLoaderTest {
                     com.cretas.aims.ai.tool.ToolExecutor.RiskLevel.LOW);
             assertThat(policy.version()).isEqualTo("1.0.0");
             assertThat(policy.supportsPreview()).isFalse();
-            assertThat(policy.requiredPermissions()).containsExactlyInAnyOrder(
-                    "warehouse:read", "warehouse:read_write",
-                    "inventory:read", "inventory:read_write");
+            if (policy.toolName().equals("material_stock_summary")) {
+                assertThat(policy.requiredPermissions()).containsExactlyInAnyOrder(
+                        "inventory:read", "inventory:read_write");
+            } else {
+                assertThat(policy.requiredPermissions()).containsExactlyInAnyOrder(
+                        "warehouse:read", "warehouse:read_write",
+                        "inventory:read", "inventory:read_write");
+            }
             assertThat(policy.allowedBusinessTypes())
                     .containsExactlyInAnyOrder(FactoryType.FACTORY, FactoryType.CENTRAL_KITCHEN);
             assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);

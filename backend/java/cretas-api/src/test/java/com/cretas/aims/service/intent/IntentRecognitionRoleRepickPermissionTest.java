@@ -10,7 +10,10 @@ import com.cretas.aims.config.IntentMatchingConfig;
 import com.cretas.aims.dto.SemanticMatchResult;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
+import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
+import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.SemanticIntentMatcher;
 import com.cretas.aims.service.impl.AIIntentServiceImpl;
 import com.cretas.aims.cache.IntentResultCache;
@@ -135,6 +138,13 @@ class IntentRecognitionRoleRepickPermissionTest {
         when(repo.findByIntentCodeAndIsActiveTrueAndDeletedAtIsNull(anyString()))
                 .thenAnswer(inv -> Optional.ofNullable(catalog.get(inv.getArgument(0, String.class))));
         configService = new IntentConfigManagementServiceImpl(repo);
+        FactoryRepository factories = mock(FactoryRepository.class);
+        Factory factory = new Factory();
+        factory.setId(FACTORY);
+        factory.setType(FactoryType.FACTORY);
+        factory.setIsActive(true);
+        when(factories.findById(FACTORY)).thenReturn(Optional.of(factory));
+        configService.setFactoryRepository(factories);
 
         ToolRegistry registry = mock(ToolRegistry.class);
         Map<String, ToolExecutor> tools = Map.ofEntries(

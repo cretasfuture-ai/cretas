@@ -14,13 +14,12 @@ Tables written:
     * agg_daily              (gold-primary KPI path)
     * dim_store              (store dimension, if FK constraint present)
 
-Tenants seeded (all 4, unified full-replace):
+Tenants seeded (all 3, unified full-replace):
   DEMO_FACTORY  -- manufacturing demo
   DEMO_FACTORY2 -- manufacturing demo #2
-  DEMO_REST     -- restaurant demo
   F004          -- manufacturing demo (smaller scale)
 
-All 4 tenants get a FULL DELETE + RESEED for every table.
+All 3 tenants get a FULL DELETE + RESEED for every table.
 No "gap fill" logic -- guarantees consistency across tables and tenants.
 
 Date range: 2025-01-01 to --end date (capped to today, no future data).
@@ -98,10 +97,10 @@ ENVS: Dict[str, Dict[str, Any]] = {
 
 # ---------------------------------------------------------------------------
 # DEMO TENANT REGISTRY
-# Safe guard: only these 4 IDs may be touched; never real customer data.
+# Safe guard: only these 3 IDs may be touched; never real customer data.
 # ---------------------------------------------------------------------------
 
-DEMO_TENANT_IDS = frozenset({"DEMO_FACTORY", "DEMO_FACTORY2", "DEMO_REST", "F004"})
+DEMO_TENANT_IDS = frozenset({"DEMO_FACTORY", "DEMO_FACTORY2", "F004"})
 
 # ---------------------------------------------------------------------------
 # DATA GENERATORS
@@ -119,10 +118,6 @@ MFG_CUSTOMERS = [
     "盟新信息有限公司", "创汇传媒有限公司", "华联超市有限公司", "大润发商业有限公司",
     "沃尔玛中国有限公司", "家乐福商业有限公司", "永辉超市股份有限公司",
 ]
-REST_CATEGORIES = ["堂食", "外卖", "团餐", "外卖平台", "自营外卖"]
-REST_STORES = ["总店", "分店1", "分店2", "旗舰店"]
-REST_DEPARTMENTS = ["厨房部", "服务部", "外卖部", "运营部"]
-
 rng = random.Random(42)
 
 
@@ -184,42 +179,6 @@ def _sales_row_mfg(factory_id: str, d: date, upload_id: Optional[int] = None) ->
         None,                     # province
         None,                     # monthly_target
         upload_id,                # upload_id
-    )
-
-
-def _sales_row_rest(factory_id: str, d: date, upload_id: Optional[int] = None) -> tuple:
-    """Generate one restaurant-style smart_bi_sales_data row."""
-    cat = rng.choice(REST_CATEGORIES)
-    region = rng.choice(REST_STORES)
-    sp = f"收银员{rng.randint(1,8)}"
-    cust = rng.choice(["散客", "会员客户", "企业团餐", "外卖平台"])
-    # Restaurant ticket sizes are smaller
-    qty = rng.randint(5, 80)
-    unit_price = rng.uniform(30, 200)
-    amount = round(qty * unit_price, 2)
-    gm = round(rng.uniform(0.55, 0.72), 4)
-    cost = round(amount * (1 - gm), 2)
-    profit = round(amount - cost, 2)
-    return (
-        factory_id,
-        d,
-        cat,
-        f"DISH-{rng.randint(1000,9999)}",
-        cat,
-        region,
-        sp,
-        f"CA{rng.randint(100,999)}",
-        cust,
-        "散客",
-        round(float(amount), 2),
-        round(float(qty), 4),
-        round(float(unit_price), 4),
-        round(float(cost), 2),
-        round(float(profit), 2),
-        float(gm),
-        rng.choice(REST_DEPARTMENTS),
-        None, None, None,
-        upload_id,
     )
 
 
@@ -290,16 +249,6 @@ def gen_sales_data_mfg(factory_id: str, start: date, end: date) -> List[tuple]:
     return rows
 
 
-def gen_sales_data_rest(factory_id: str, start: date, end: date) -> List[tuple]:
-    """Restaurant sales: ~8-15 rows per day (more transactions)."""
-    rows = []
-    for d in _dates_in_range(start, end):
-        n = rng.randint(8, 15)
-        for _ in range(n):
-            rows.append(_sales_row_rest(factory_id, d))
-    return rows
-
-
 # ---------------------------------------------------------------------------
 # FINANCE DATA GENERATION
 # ---------------------------------------------------------------------------
@@ -311,7 +260,6 @@ def gen_finance_data(
     monthly_revenue: float,
     revenue_growth: float = 0.005,  # 0.5% MoM growth
     margin: float = 0.33,
-    is_restaurant: bool = False,
 ) -> List[tuple]:
     """
     Generate monthly REVENUE and COST records for smart_bi_finance_data.
@@ -323,8 +271,8 @@ def gen_finance_data(
     for i, m in enumerate(months):
         rev_month = round(rev * (1 + revenue_growth) ** i, 2)
         cost_month = round(rev_month * (1 - margin), 2)
-        cat_rev = "餐饮收入" if is_restaurant else "产品销售收入"
-        cat_cost = "餐饮成本" if is_restaurant else "生产成本"
+        cat_rev = "产品销售收入"
+        cat_cost = "生产成本"
         rows.append(_finance_row(factory_id, m, "REVENUE", rev_month, cat_rev))
         rows.append(_finance_row(factory_id, m, "COST", cost_month, cat_cost))
     return rows
@@ -422,16 +370,6 @@ DEMO_STORES: Dict[str, List[Tuple[int, str, str]]] = {
         (2100000005, "DEMO_FACTORY2", "太极科技有限公司"),
         (2100000006, "DEMO_FACTORY2", "巨奥传媒有限公司"),
     ],
-    "DEMO_REST": [
-        (1000000009, "DEMO_REST", "示范门店01"),
-        (1000000010, "DEMO_REST", "示范门店02"),
-        (1000000011, "DEMO_REST", "示范门店03"),
-        (1000000012, "DEMO_REST", "示范门店04"),
-        (1000000013, "DEMO_REST", "示范门店05"),
-        (1000000014, "DEMO_REST", "示范门店06"),
-        (1000000015, "DEMO_REST", "示范门店07"),
-        (1000000016, "DEMO_REST", "示范门店08"),
-    ],
     "F004": [
         (4100000000, "F004", "F004门店01"),
         (4100000001, "F004", "F004门店02"),
@@ -442,7 +380,6 @@ DEMO_STORES: Dict[str, List[Tuple[int, str, str]]] = {
 AGG_DAILY_REVENUE_BASE: Dict[str, float] = {
     "DEMO_FACTORY": 80000.0,
     "DEMO_FACTORY2": 65000.0,
-    "DEMO_REST": 30000.0,
     "F004": 40000.0,
 }
 
@@ -453,28 +390,18 @@ TENANT_PROFILES: Dict[str, Dict[str, Any]] = {
         "monthly_revenue": 12_000_000.0,
         "revenue_growth": 0.004,
         "margin": 0.34,
-        "is_restaurant": False,
     },
     "DEMO_FACTORY2": {
         "type": "mfg",
         "monthly_revenue": 8_500_000.0,
         "revenue_growth": 0.003,
         "margin": 0.32,
-        "is_restaurant": False,
-    },
-    "DEMO_REST": {
-        "type": "rest",
-        "monthly_revenue": 850_000.0,
-        "revenue_growth": 0.006,
-        "margin": 0.62,
-        "is_restaurant": True,
     },
     "F004": {
         "type": "mfg",
         "monthly_revenue": 3_200_000.0,
         "revenue_growth": 0.004,
         "margin": 0.29,
-        "is_restaurant": False,
     },
 }
 
@@ -742,17 +669,14 @@ def seed(env: str, end_date: date, dry_run: bool, tenant: Optional[str] = None) 
         _assert_demo_tenant(tenant)
         tenant_ids = [tenant]
     else:
-        tenant_ids = list(DEMO_TENANT_IDS)  # order doesn't matter; process all 4
+        tenant_ids = list(DEMO_TENANT_IDS)  # order doesn't matter; process all 3
 
     for factory_id in sorted(tenant_ids):
         profile = TENANT_PROFILES[factory_id]
         print(f"\n[{factory_id}] Full reseed ({profile['type']})...")
 
         # ---- smart_bi_sales_data ----
-        if profile["type"] == "rest":
-            sales_rows = gen_sales_data_rest(factory_id, seed_start, seed_end)
-        else:
-            sales_rows = gen_sales_data_mfg(factory_id, seed_start, seed_end)
+        sales_rows = gen_sales_data_mfg(factory_id, seed_start, seed_end)
         total_rows += upsert_sales_data(cretas_conn, factory_id, sales_rows, dry_run)
 
         # ---- smart_bi_finance_data ----
@@ -761,7 +685,6 @@ def seed(env: str, end_date: date, dry_run: bool, tenant: Optional[str] = None) 
             monthly_revenue=profile["monthly_revenue"],
             revenue_growth=profile["revenue_growth"],
             margin=profile["margin"],
-            is_restaurant=profile["is_restaurant"],
         )
         total_rows += upsert_finance_data(cretas_conn, factory_id, finance_rows, dry_run)
 

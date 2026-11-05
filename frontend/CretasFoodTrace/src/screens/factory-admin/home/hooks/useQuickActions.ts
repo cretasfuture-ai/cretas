@@ -1,5 +1,5 @@
 /**
- * useQuickActions - Computes quick action items based on factory/restaurant mode
+ * useQuickActions - Computes factory quick actions from enabled screens and permissions.
  */
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -7,6 +7,8 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { FAHomeStackParamList } from '../../../../types/navigation';
 import { useFactoryFeatureStore } from '../../../../store/factoryFeatureStore';
+import { useAuthStore } from '../../../../store/authStore';
+import { hasModulePermission } from '../../../../utils/permissionHelper';
 import type { QuickActionItem } from '../types';
 
 type NavigationProp = NativeStackNavigationProp<FAHomeStackParamList, 'FAHome'>;
@@ -20,78 +22,21 @@ const QUICK_ACTION_SCREEN_GUARD: Record<string, string> = {
   systemConfig: 'SystemSettings',
   newPurchase: 'PurchaseOrderList',
   newSales: 'SalesOrderList',
-  chefRequisition: 'ChefRequisitionList',
   supplierDelivery: 'SupplierDeliveryList',
   priceAnomalyApproval: 'PriceAnomalyApproval',
-  requisitionApproval: 'RequisitionApproval',
-  wastage: 'WastageList',
-  stocktaking: 'StocktakingList',
 };
 
-export function useQuickActions(isRestaurantMode: boolean) {
+export function useQuickActions() {
   const navigation = useNavigation<NavigationProp>();
   const { t } = useTranslation('home');
   const { isScreenEnabled } = useFactoryFeatureStore();
+  const user = useAuthStore((state) => state.user);
+  const roleCode = user?.userType === 'platform' ? user.platformUser?.role : user?.factoryUser?.role;
+  const canReadWarehouse = hasModulePermission(user, 'warehouse', 'read');
+  const canApprovePriceAnomaly = ['factory_super_admin', 'finance_manager', 'procurement_manager', 'platform_admin'].includes(roleCode || '');
 
   const allQuickActions = useMemo((): QuickActionItem[] => {
-    const raw: QuickActionItem[] = isRestaurantMode
-      ? [
-          {
-            id: 'chefRequisition',
-            icon: 'clipboard-text-outline',
-            label: t('quickActions.chefRequisition', 'Stall requisition'),
-            color: '#1B65A8',
-            onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'ChefRequisitionList' });
-            },
-          },
-          {
-            id: 'supplierDelivery',
-            icon: 'truck-delivery',
-            label: t('quickActions.supplierDelivery', 'Delivery check'),
-            color: '#409eff',
-            onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'SupplierDeliveryList' });
-            },
-          },
-          {
-            id: 'priceAnomalyApproval',
-            icon: 'cash-multiple',
-            label: t('quickActions.priceAnomalyApproval', 'Price anomaly approval'),
-            color: '#e6a23c',
-            onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'PriceAnomalyApproval' });
-            },
-          },
-          {
-            id: 'requisitionApproval',
-            icon: 'clipboard-check-outline',
-            label: t('quickActions.requisitionApproval', 'Requisition approval'),
-            color: '#67c23a',
-            onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'RequisitionApproval' });
-            },
-          },
-          {
-            id: 'wastage',
-            icon: 'delete-alert-outline',
-            label: t('quickActions.wastage', 'Wastage'),
-            color: '#38b2ac',
-            onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'WastageList' });
-            },
-          },
-          {
-            id: 'stocktaking',
-            icon: 'clipboard-list-outline',
-            label: t('quickActions.stocktaking', 'Stocktaking'),
-            color: '#ed8936',
-            onPress: () => {
-              navigation.getParent()?.navigate('FAManagementTab', { screen: 'StocktakingList' });
-            },
-          },
-        ]
-      : [
+    const raw: QuickActionItem[] = [
           {
             id: 'newBatch',
             icon: 'plus-circle',
@@ -164,13 +109,31 @@ export function useQuickActions(isRestaurantMode: boolean) {
               navigation.getParent()?.navigate('FAManagementTab', { screen: 'SalesOrderList' });
             },
           },
+          ...(canReadWarehouse ? [{
+            id: 'supplierDelivery',
+            icon: 'truck-delivery',
+            label: t('quickActions.supplierDelivery', 'Delivery check'),
+            color: '#409eff',
+            onPress: () => {
+              navigation.getParent()?.navigate('FAManagementTab', { screen: 'SupplierDeliveryList' });
+            },
+          }] : []),
+          ...(canApprovePriceAnomaly ? [{
+            id: 'priceAnomalyApproval',
+            icon: 'cash-multiple',
+            label: t('quickActions.priceAnomalyApproval', 'Price anomaly approval'),
+            color: '#e6a23c',
+            onPress: () => {
+              navigation.getParent()?.navigate('FAManagementTab', { screen: 'PriceAnomalyApproval' });
+            },
+          }] : []),
         ];
 
     return raw.filter(action => {
       const screenName = QUICK_ACTION_SCREEN_GUARD[action.id];
       return !screenName || isScreenEnabled(screenName);
     });
-  }, [isRestaurantMode, navigation, t, isScreenEnabled]);
+  }, [navigation, t, isScreenEnabled, user, canReadWarehouse, canApprovePriceAnomaly]);
 
   return { allQuickActions, quickActionScreenGuard: QUICK_ACTION_SCREEN_GUARD };
 }

@@ -43,35 +43,6 @@ export const CARD_MANIFEST: CardManifestEntry[] = [
     requires: ['store_name', 'combo_string'],
     description: 'TemplateGrid-rendered (page-key=dashboard)' },
 
-  // === Restaurant analytics overview (3) ===
-  // 3 wrapped (Day 9). 2 entries removed Apr 26 (avg + traffic 在 overview 页无对应卡;
-  // 客单价 实际在 Dashboard 包装为 dashboard_avg_bill, 客流量 此页无 customer_count 卡).
-  { id: 'restaurant_overview_revenue', page: '/restaurant/analytics/overview', title: '总营收',
-    requires: ['date', 'net_amount'] },
-  { id: 'restaurant_overview_stores', page: '/restaurant/analytics/overview', title: '门店数',
-    requires: ['store_name'] },
-  { id: 'restaurant_overview_top_dish', page: '/restaurant/analytics/overview', title: '热销菜品',
-    requires: ['combo_string', 'qty_sold'] },
-
-  // === Restaurant analytics menu-board (6) ===
-  // 2 wrapped (Day 9), 4 TemplateGrid-rendered or live in different page
-  { id: 'menu_top_dishes', page: '/restaurant/analytics/menu-board', title: '菜品销量 Top',
-    requires: ['combo_string'] },
-  { id: 'menu_dish_revenue', page: '/restaurant/analytics/menu-board', title: '菜品营收',
-    requires: ['combo_string', 'net_amount'] },
-  { id: 'menu_slow_movers', page: '/restaurant/analytics/menu-board', title: '滞销菜品',
-    requires: ['combo_string'],
-    description: 'TemplateGrid-rendered (page-key=menu); 实际由 v-for sub-element of summary row 显示' },
-  { id: 'menu_category_breakdown', page: '/restaurant/analytics/menu-board', title: '品类占比',
-    requires: ['combo_string'],
-    description: 'TemplateGrid-rendered; 在 overview 页而非 menu-board' },
-  { id: 'menu_combo_usage', page: '/restaurant/analytics/menu-board', title: '套餐使用率',
-    requires: ['combo_string'],
-    description: 'TemplateGrid-rendered (page-key=menu)' },
-  { id: 'menu_dish_by_table', page: '/restaurant/analytics/menu-board', title: '桌型菜品',
-    requires: ['table_no', 'combo_string'],
-    description: 'TemplateGrid-rendered (page-key=menu)' },
-
   // === Trends (4) ===
   // 1 wrapped (Day 9), 3 TemplateGrid-rendered
   { id: 'trends_monthly', page: '/smart-bi/analytics/trends', title: '月度趋势',
@@ -103,27 +74,6 @@ export const CARD_MANIFEST: CardManifestEntry[] = [
     requires: ['source_bill_no'],
     fallbackMode: 'placeholder',
     description: 'TemplateGrid-rendered (page-key=finance); B-stage adds SVC card canonical fields' },
-
-  // === Phase IIa Restaurant (2) — wrapped in RestaurantSalesContent.vue / RestaurantFinanceContent.vue ===
-  // Gate restaurant tenant 总营收 KPI cards behind canViewPrice + Gold field availability.
-  // Mirrors finance_revenue_mgmt requires shape (POS Gold-derived revenue).
-  { id: 'restaurant_sales_revenue', page: '/smart-bi/sales', title: '餐饮总营收 (销售页)',
-    requires: ['date', 'gross_amount'] },
-  { id: 'restaurant_finance_revenue', page: '/smart-bi/finance', title: '餐饮总营收 (财务页)',
-    requires: ['date', 'gross_amount'] },
-
-  // === Phase IIb Restaurant Kitchen Cost (4) — wrapped in RestaurantKitchenCostContent.vue ===
-  // Gate restaurant kitchen-cost KPI cards behind canViewPrice + Gold field availability.
-  // Cards: 食材成本占比 / 总损耗成本 / 总领料成本 / 净盘点差异
-  // Requires gross_amount (POS denominator for ratio) + date (range filter); aligns with IIa pattern.
-  { id: 'restaurant_kitchen_cost_ratio', page: '/smart-bi/finance', title: '食材成本占比 (厨房成本)',
-    requires: ['date', 'gross_amount'] },
-  { id: 'restaurant_kitchen_cost_wastage', page: '/smart-bi/finance', title: '总损耗成本 (厨房成本)',
-    requires: ['date', 'gross_amount'] },
-  { id: 'restaurant_kitchen_cost_requisition', page: '/smart-bi/finance', title: '总领料成本 (厨房成本)',
-    requires: ['date', 'gross_amount'] },
-  { id: 'restaurant_kitchen_cost_variance', page: '/smart-bi/finance', title: '净盘点差异 (厨房成本)',
-    requires: ['date', 'gross_amount'] },
 
   // Total: 34 entries (28 pre-Phase-IIa + 2 restaurant cards 2026-05-14 + 4 Phase IIb kitchen-cost 2026-05-15)
 ];

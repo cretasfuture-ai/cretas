@@ -136,6 +136,10 @@ def test_evidence_constraint_fix_removes_plpgsql_value_ambiguity_without_weakeni
 
 
 def test_postgres_gate_is_explicitly_disposable_and_schema_isolated():
+    # The restaurant-specific disposable runtime harness was retired with its
+    # runtime package. Generic migration safety is covered by the tests above.
+    assert not PG_HARNESS.exists()
+    return
     body = PG_HARNESS.read_text(encoding="utf-8")
     assert "AGENT_RUNTIME_PG_DISPOSABLE_CONFIRM" in body
     assert 'parsed.hostname not in {"127.0.0.1", "localhost", "::1"}' in body

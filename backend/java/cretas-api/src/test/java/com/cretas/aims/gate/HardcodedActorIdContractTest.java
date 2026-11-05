@@ -200,8 +200,9 @@ class HardcodedActorIdContractTest {
      *       那是另一件事。⇒ 登记留痕，不硬改（登记是留痕，不是豁免）。</li>
      * </ul>
      */
-    private static final Set<String> KNOWN_ACTOR_ARG_SITES = Set.of(
-            "SmartBIServiceImpl#executeIntent -> execute(arg2)");
+    // The only frozen actor-argument site belonged to the deleted retired SmartBI execution path.
+    // Keep the AST detector active; new constant actors are still forbidden.
+    private static final Set<String> KNOWN_ACTOR_ARG_SITES = Set.of();
 
     /** 两份冻结名单的并集 —— 主断言与防烂断言都用它。 */
     private static Set<String> frozen() {

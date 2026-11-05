@@ -6,6 +6,7 @@ import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.intent.MultiIntentResult;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.AIIntentService;
+import com.cretas.aims.service.intent.IntentConfigManagementService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
+import com.cretas.aims.util.RetiredAnalysisContext;
 
 /**
  * 多意图执行服务
@@ -33,16 +35,34 @@ public class MultiIntentExecutionService {
     private final AIIntentService aiIntentService;
     private final IntentExecutionOrchestrator orchestrator;
     private final SseStreamingService sseStreamingService;
+    private final IntentConfigManagementService intentConfigManagementService;
 
     @Value("${cretas.ai.multi-intent.enabled:true}")
     private boolean multiIntentEnabled;
 
     public MultiIntentExecutionService(@Lazy AIIntentService aiIntentService,
                                        @Lazy IntentExecutionOrchestrator orchestrator,
-                                       SseStreamingService sseStreamingService) {
+                                       SseStreamingService sseStreamingService,
+                                       IntentConfigManagementService intentConfigManagementService) {
         this.aiIntentService = aiIntentService;
         this.orchestrator = orchestrator;
         this.sseStreamingService = sseStreamingService;
+        this.intentConfigManagementService = intentConfigManagementService;
+    }
+
+    private void requireFactoryIntentAccess(String factoryId, String userRole) {
+        if (RetiredAnalysisContext.isRetiredIdentity(factoryId, userRole)) {
+            RetiredAnalysisContext.requireFactory(factoryId, "RESTAURANT", userRole);
+        }
+        final String domain;
+        try {
+            domain = intentConfigManagementService.resolveBusinessDomain(factoryId);
+        } catch (RuntimeException e) {
+            throw new com.cretas.aims.exception.BusinessException(503,
+                    "无法确认租户业务类型，暂不可执行意图")
+                    .withCode("TENANT_TYPE_UNAVAILABLE");
+        }
+        RetiredAnalysisContext.requireFactory(factoryId, domain, userRole);
     }
 
     // ==================== 公开方法 ====================
@@ -52,6 +72,7 @@ public class MultiIntentExecutionService {
      */
     public IntentExecuteResponse executeMultiIntent(String factoryId, IntentExecuteRequest request,
                                                      Long userId, String userRole) {
+        requireFactoryIntentAccess(factoryId, userRole);
         AuthenticatedActor trustedActor = AuthenticatedActor.fromCurrentExecution().orElse(null);
         log.info("执行多意图识别: factoryId={}, userInput='{}'",
                 factoryId,
@@ -134,6 +155,7 @@ public class MultiIntentExecutionService {
                                                                     String factoryId,
                                                                     Long userId,
                                                                     String userRole) {
+        requireFactoryIntentAccess(factoryId, userRole);
         List<IntentMatchResult.IntentMatch> intents = intentResult.getAdditionalIntents();
         AuthenticatedActor trustedActor = AuthenticatedActor.fromCurrentExecution().orElse(null);
         if (intents == null || intents.isEmpty()) {

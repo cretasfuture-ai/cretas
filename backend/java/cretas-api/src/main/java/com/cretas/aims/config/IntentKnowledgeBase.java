@@ -108,7 +108,6 @@ public class IntentKnowledgeBase {
      * 餐饮业态专用短语映射
      * 餐饮用户优先匹配此 Map，包含餐饮独有短语和冲突短语的餐饮版本
      */
-    private Map<String, String> restaurantPhraseMapping = new LinkedHashMap<>();
 
     /**
      * 公共短语映射（两种业态共享）
@@ -594,8 +593,7 @@ public class IntentKnowledgeBase {
                     "创建", "新建", "添加", "新增", "录入", "登记", "建立", "生成",
                     // v4.3新增：操作类动词
                     "入库", "发货", "出货", "发给", "到货",
-                    // v12.1新增：餐饮场景操作词
-                    "上架", "补货", "点菜", "加菜"
+                    "上架", "补货"
             ));
         }
 
@@ -603,8 +601,7 @@ public class IntentKnowledgeBase {
         if (deleteIndicators.isEmpty()) {
             deleteIndicators.addAll(Set.of(
                     "删除", "移除", "清除", "取消", "作废", "去掉",
-                    // v12.1新增：餐饮场景删除词
-                    "下架", "停售", "退菜"
+                    "下架", "停售"
             ));
         }
 
@@ -4281,7 +4278,6 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("供应商审核", "FOOD_KNOWLEDGE_QUERY");
         phraseToIntentMapping.put("食品防护", "FOOD_KNOWLEDGE_QUERY");
         phraseToIntentMapping.put("中央厨房", "FOOD_KNOWLEDGE_QUERY");
-        phraseToIntentMapping.put("餐饮管理", "FOOD_KNOWLEDGE_QUERY");
         phraseToIntentMapping.put("食品包装", "FOOD_KNOWLEDGE_QUERY");
         phraseToIntentMapping.put("食品出口", "FOOD_KNOWLEDGE_QUERY");
         phraseToIntentMapping.put("食品进口", "FOOD_KNOWLEDGE_QUERY");
@@ -6753,7 +6749,6 @@ public class IntentKnowledgeBase {
         // WORKER_IN_SHOP_REALTIME_COUNT (3)
         phraseToIntentMapping.put("worker count", "WORKER_IN_SHOP_REALTIME_COUNT");
         phraseToIntentMapping.put("几个人在岗", "WORKER_IN_SHOP_REALTIME_COUNT");
-        phraseToIntentMapping.put("后厨几个人", "WORKER_IN_SHOP_REALTIME_COUNT");
         // ========== Wave-11: 补充UNMATCHED短语映射 — 覆盖方言/typo/中英混合/系统帮助/离职等 ==========
 
         // --- 系统帮助/功能查询 ---
@@ -6850,744 +6845,7 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("今天的质检", "QUALITY_CHECK_QUERY");
 
         log.debug("短语映射初始化完成，共 {} 条映射", phraseToIntentMapping.size());
-
-        // ========== v32/v33: 业态隔离 — 餐饮专用短语映射 ==========
-        // v33: P0 短语加厚 — 每意图15-25条，含时间/数量/口语/反问/否定/场景变体
-
-        // ---- 菜品查询域 ----
-
-        // RESTAURANT_DISH_LIST — 菜品列表查询
-        restaurantPhraseMapping.put("菜品列表", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("菜品查询", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("有哪些菜品", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("菜单", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("看看菜", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("有啥菜", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("今日菜品", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("都有什么菜", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("菜品", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("看下菜单", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("我们有什么菜", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("在售菜品", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("上架菜品", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("午市菜品", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("晚市菜品", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("菜品有哪些", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("给客人推荐什么", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("有什么特色菜", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("现在有什么菜", "RESTAURANT_DISH_LIST");
-        restaurantPhraseMapping.put("菜谱", "RESTAURANT_DISH_LIST");
-
-        // RESTAURANT_BESTSELLER_QUERY — 畅销菜品查询
-        restaurantPhraseMapping.put("畅销菜", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("畅销菜品", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("爆款菜品", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("最受欢迎的菜", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("热门菜", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("招牌菜", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("明星菜品", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("客人最爱点什么", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("什么菜最火", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("本月畅销", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("本周热销菜", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("好卖的菜", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("点单率最高的", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("爆款", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("哪道菜客人最喜欢", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("最近什么菜卖得好", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("菜品销售排名", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("本月菜品销售排名", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("菜品销售排名前十", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("外卖点什么多", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("外卖什么菜卖得多", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("外卖热销菜", "RESTAURANT_BESTSELLER_QUERY");
-
-        // RESTAURANT_DISH_SALES_RANKING — 菜品销量排行
-        restaurantPhraseMapping.put("销量最好的菜", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("菜品销量", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("菜品排行", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("哪个菜卖得好", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("销售排行", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("菜品销售排行", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("菜品排名", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("销量排行榜", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("哪些菜卖得最多", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("今天菜品销量", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("本月销量前十", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("菜品销售额排名", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("卖了多少份", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("点单排行", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("每道菜卖了多少", "RESTAURANT_DISH_SALES_RANKING");
-        restaurantPhraseMapping.put("top菜品", "RESTAURANT_DISH_SALES_RANKING");
-        // P1.1 餐饮时间修复: "哪个菜卖得最好"(含"最")等问法之前只走 SEMANTIC, 时间前缀剥离后落不到
-        // 短语表 → 掉 LLM/dynamic 路径返推理文字。加问法变体, 让 stripLeadingTimePhrase 回退命中。
-        // ⚠️ 必须绑 RESTAURANT_BESTSELLER_QUERY(它才是绑了 gold 工具 restaurant_dish_bestseller_gold 的意图,
-        //    executeWithExplicitIntent 能执行); RESTAURANT_DISH_SALES_RANKING 无 tool_name → "暂未配置执行器"。
-        restaurantPhraseMapping.put("哪个菜卖得最好", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("哪道菜卖得最好", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("什么菜卖得最好", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("哪个菜最畅销", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("卖得最好的菜", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("最畅销的菜", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("哪个菜卖得最多", "RESTAURANT_BESTSELLER_QUERY");
-        restaurantPhraseMapping.put("销量最高的菜", "RESTAURANT_BESTSELLER_QUERY");
-
-        // Track A (2026-06-03): 堂食外卖 → order_type_mix_gold (服务模式真数据)
-        restaurantPhraseMapping.put("堂食外卖对比", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("堂食外卖占比", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("内用外卖对比", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("堂食和外卖", "RESTAURANT_ORDER_STATISTICS");
-        // Track A: 客单价 → store_revenue_rank_gold (派生客单价列)
-        restaurantPhraseMapping.put("哪家店客单价最高", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("客单价排行", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("客单价最高的门店", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("人均消费最高", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("客单价", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("客单价呢", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("人均消费", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("人均消费呢", "RESTAURANT_STORE_REVENUE_RANK");
-        // QA-fix R1 (2026-06-04): route comparative/review queries to working gold intents
-        restaurantPhraseMapping.put("周末周中对比", "RESTAURANT_WEEKDAY_WEEKEND");
-        restaurantPhraseMapping.put("周末与工作日营收对比", "RESTAURANT_WEEKDAY_WEEKEND");
-        restaurantPhraseMapping.put("周末与工作日对比", "RESTAURANT_WEEKDAY_WEEKEND");
-        restaurantPhraseMapping.put("各门店客单价对比", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("客单价对比", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("平台评价回复率", "RESTAURANT_REVIEW_REPLY_RATE");
-        restaurantPhraseMapping.put("评价回复率", "RESTAURANT_REVIEW_REPLY_RATE");
-        restaurantPhraseMapping.put("低星评价回复率", "RESTAURANT_REVIEW_REPLY_RATE");
-        restaurantPhraseMapping.put("低星评价回复率差", "RESTAURANT_REVIEW_REPLY_RATE");
-        restaurantPhraseMapping.put("低星评价回复率差今天要先补哪些回复", "RESTAURANT_REVIEW_REPLY_RATE");
-        restaurantPhraseMapping.put("低星评价今天要先补哪些回复", "RESTAURANT_REVIEW_REPLY_RATE");
-        restaurantPhraseMapping.put("VIP客户分析", "RESTAURANT_REVIEW_VIP");
-
-        // RESTAURANT_SLOW_SELLER_QUERY — 滞销菜品查询
-        restaurantPhraseMapping.put("哪个菜卖不动", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("滞销菜", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("冷门菜品", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("不好卖的菜", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("卖不出去", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("滞销菜品", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("没人点的菜", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("销量最差的菜", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("哪些菜该下架", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("最不受欢迎的", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("需要下架的菜", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("点单率最低", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("退菜率最高的", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("有没有菜该淘汰了", "RESTAURANT_SLOW_SELLER_QUERY");
-        restaurantPhraseMapping.put("哪些菜考虑下架", "RESTAURANT_SLOW_SELLER_QUERY");
-
-        // RESTAURANT_DISH_COST_ANALYSIS — 菜品成本分析
-        restaurantPhraseMapping.put("菜品成本", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("每道菜花多少钱", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("菜品利润", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("成本核算", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("菜品成本构成", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("哪道菜最赚钱", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("食材占比多少", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("成本最高的菜", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("菜品毛利", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("单品利润", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("哪个菜利润最高", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("出品成本", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("菜品定价合不合理", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("食材成本占售价多少", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("哪些菜亏钱", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("单品成本分析", "RESTAURANT_DISH_COST_ANALYSIS");
-
-        // ---- 食材管理域 ----
-
-        // RESTAURANT_INGREDIENT_STOCK — 食材库存查询
-        restaurantPhraseMapping.put("食材库存", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("食材还剩", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("原料还有多少", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("食材够不够", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("库存查询", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("看看库存", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("食材剩多少", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("原材料库存", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("仓库里还有什么", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("今天食材够用吗", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("冷库库存", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("干货库存", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("鱼还有多少", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("肉类库存", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("蔬菜还够吗", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("调料库存", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("食材盘点", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("原料够不够用", "RESTAURANT_INGREDIENT_STOCK");
-
-        // RESTAURANT_INGREDIENT_EXPIRY_ALERT — 食材保质期预警
-        restaurantPhraseMapping.put("食材过期", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("食材快过期", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("临期食材", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("保质期提醒", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("快到期的", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("过期预警", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("哪些食材要过期了", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("有没有临期的", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("保质期快到了", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("食材保质期", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("冷冻食材到期", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("调料过期没", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("今天有到期的吗", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("临期预警", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-        restaurantPhraseMapping.put("需要先用掉的食材", "RESTAURANT_INGREDIENT_EXPIRY_ALERT");
-
-        // RESTAURANT_INGREDIENT_LOW_STOCK — 食材低库存提醒
-        restaurantPhraseMapping.put("低库存食材", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("食材不够了", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("需要补货的食材", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("缺货食材", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("什么食材快用完了", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("库存不足", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("缺什么食材", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("哪些原料要补了", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("食材告急", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("库存预警", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("快没了的食材", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("食材缺货提醒", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("哪些东西不够了", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("原料缺货", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        restaurantPhraseMapping.put("需要补货", "RESTAURANT_INGREDIENT_LOW_STOCK");
-
-        // RESTAURANT_INGREDIENT_COST_TREND — 食材成本趋势
-        restaurantPhraseMapping.put("食材成本趋势", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("食材成本", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("进货价变化", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("原料涨价了吗", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("食材价格走势", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("进价趋势", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("食材涨价", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("原材料价格", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("肉价变化", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("蔬菜价格趋势", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("进货成本对比", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("上个月和这个月进价差多少", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("食材采购成本", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("原料成本波动", "RESTAURANT_INGREDIENT_COST_TREND");
-        restaurantPhraseMapping.put("进货价对比", "RESTAURANT_INGREDIENT_COST_TREND");
-
-        // ---- 营业分析域 ----
-
-        // RESTAURANT_DAILY_REVENUE — 日营业额查询
-        restaurantPhraseMapping.put("今天营业额", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今天赚了多少", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("日收入", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今日流水", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今天收入多少", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今日营收", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今天的流水", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("昨天营业额", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今天赚了多少钱", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今天进了多少", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今天做了多少业绩", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("日营收", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今天生意怎么样", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("堂食收入", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("外卖收入", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今天堂食多少", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("外卖做了多少", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("实收额", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("今日实收", "RESTAURANT_DAILY_REVENUE");
-
-        // RESTAURANT_REVENUE_TREND — 营业额趋势
-        restaurantPhraseMapping.put("营业额趋势", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("收入走势", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("营收曲线", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("这个月营业额变化", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("收入趋势", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("月度收入明细", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("营业额对比", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("这周和上周比", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("本月和上月比", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("环比收入", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("同比营业额", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("最近生意怎么样", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("近一个月营业额", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("每天营业额", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("收入变化", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("日营业汇总", "RESTAURANT_REVENUE_TREND");
-
-        // REVENUE_REPORT_GENERATE — QHJ 收入管理报表 (Phase I, 2026-05-13)
-        // 4 张表 xlsx: 可比同比 + 环比 + 堂食外卖占比 + 客单人数分析
-        // 走 revenue_report_generate Tool → Python /prepare → 返回 download_url
-        restaurantPhraseMapping.put("收入管理报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("收入报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("生成收入报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("生成收入管理报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("导出收入报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("导出收入管理报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("下载收入报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("下载收入管理报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("拉收入报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("拉一份收入报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("门店收入报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("门店收入分析", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("门店收入分析报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("营业收入分析", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("堂食外卖占比报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("客单人数分析", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("环比报表", "REVENUE_REPORT_GENERATE");
-        restaurantPhraseMapping.put("同比报表", "REVENUE_REPORT_GENERATE");
-
-        // RESTAURANT_ORDER_STATISTICS — 订单统计
-        restaurantPhraseMapping.put("接了多少单", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("今天出了多少单", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("日订单量", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("点单数量", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("今天多少桌", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("今天来了多少桌客人", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("客流量", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("今天接待了多少客人", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("堂食订单量", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("外卖订单量", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("今天外卖几单", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("本月订单量", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("人均消费", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("客单价", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("平均每桌消费", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("今天客单价多少", "RESTAURANT_STORE_REVENUE_RANK");
-
-        // RESTAURANT_PEAK_HOURS_ANALYSIS — 高峰时段分析
-        restaurantPhraseMapping.put("高峰时段", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("客人最多", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("什么时候最忙", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("饭点客流", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("就餐高峰", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("午市高峰", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("晚市高峰", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("几点客人最多", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("翻台率", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("翻台率多少", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("座位利用率", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        // 注: "时段营业额" 类短语 NOT 绑到 RESTAURANT_PEAK_HOURS_ANALYSIS —— 该意图的工具
-        // (restaurant_peak_hours_analysis) 查 sales_orders(餐饮 gold 租户为空)→ 执行报"暂未配置执行器/无数据"。
-        // 待建 gold-backed 时段工具(参照 restaurant_store_revenue_rank_gold)后再绑。当前回退 DAILY_REVENUE(有图)。
-        restaurantPhraseMapping.put("排队情况", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("等位多久", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("午市和晚市哪个好", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("哪个时段人最多", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        restaurantPhraseMapping.put("周末客流", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-
-        // ---- 损耗管理域 ----
-
-        // RESTAURANT_WASTAGE_SUMMARY — 损耗汇总
-        restaurantPhraseMapping.put("损耗汇总", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("食材损耗", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("浪费食材", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("今天浪费了多少", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("废料统计", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("报废汇总", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("损耗统计", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("本月损耗", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("今天报损了多少", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("食材浪费汇总", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("退菜统计", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("浪费了多少钱的食材", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("后厨损耗", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("备菜浪费", "RESTAURANT_WASTAGE_SUMMARY");
-        restaurantPhraseMapping.put("厨余垃圾量", "RESTAURANT_WASTAGE_SUMMARY");
-
-        // RESTAURANT_WASTAGE_RATE — 损耗率分析
-        restaurantPhraseMapping.put("损耗率", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("浪费占比", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("报损比例", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("损耗百分比", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("损耗率多少", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("浪费比例", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("食材利用率", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("原料利用率", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("损耗率高吗", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("浪费比例大不大", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("每月损耗率", "RESTAURANT_WASTAGE_RATE");
-        restaurantPhraseMapping.put("损耗率趋势", "RESTAURANT_WASTAGE_RATE");
-
-        // RESTAURANT_WASTAGE_ANOMALY — 损耗异常检测
-        restaurantPhraseMapping.put("异常损耗", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("损耗异常检测", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("哪些食材损耗高", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("浪费异常", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("损耗异常", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("哪些菜退得多", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("浪费最严重的食材", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("不正常的损耗", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("损耗突然变高了", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("损耗异常高的菜", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("哪个食材浪费最多", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("退菜率异常", "RESTAURANT_WASTAGE_ANOMALY");
-
-        // ---- 采购/毛利域 ----
-
-        // RESTAURANT_PROCUREMENT_SUGGESTION — 采购建议
-        restaurantPhraseMapping.put("进货建议", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("该买什么", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("需要进什么货", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("补货清单", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("采购清单", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("明天要进什么货", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("补什么货", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("进货量建议", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("今天要订什么货", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("智能采购", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("自动补货", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("需要采购什么", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("采购计划", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("这周要进多少货", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("缺什么要进货", "RESTAURANT_PROCUREMENT_SUGGESTION");
-
-        // RESTAURANT_MARGIN_ANALYSIS — 毛利分析
-        restaurantPhraseMapping.put("利润率多少", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("毛利分析", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("赚了多少", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("毛利多少", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("净利润", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("利润分析", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("盈利情况", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("赚不赚钱", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("本月毛利", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("上个月利润", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("利润率变化", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("毛利润趋势", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("有没有亏钱", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("综合毛利", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("总利润", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("亏了多少", "RESTAURANT_MARGIN_ANALYSIS");
-
-        // ---- 冲突短语 — 在餐饮语境下指向餐饮意图（工厂语境下由 phraseToIntentMapping 处理） ----
-        restaurantPhraseMapping.put("营业额", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("营收", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("流水", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("总收入", "RESTAURANT_DAILY_REVENUE");
-        restaurantPhraseMapping.put("毛利率", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("利润率", "RESTAURANT_MARGIN_ANALYSIS");
-        restaurantPhraseMapping.put("成本分析", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("成本对比", "RESTAURANT_DISH_COST_ANALYSIS");
-        restaurantPhraseMapping.put("订单统计", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("订单数量", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("外卖订单占比", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("外卖占比多少", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("外卖占比", "RESTAURANT_ORDER_STATISTICS");
-        restaurantPhraseMapping.put("采购建议", "RESTAURANT_PROCUREMENT_SUGGESTION");
-        restaurantPhraseMapping.put("库存盘点", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("库存", "RESTAURANT_INGREDIENT_STOCK");
-        restaurantPhraseMapping.put("报表", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("数据分析", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("经营分析", "RESTAURANT_MARGIN_ANALYSIS");
-
-        // === Wave-7e-sync: 从备份JAR恢复缺失短语 (29条餐饮意图) ===
-        // QA-fix R1 (2026-06-04): RESTAURANT_AVG_TICKET 是孤儿意图(tool_name=null 无执行器),
-        // 这两条曾覆盖上面 ~7079 的 R1 改动(LinkedHashMap 后者胜)→ 人均消费 仍落空 orphan。
-        // 改指 STORE_REVENUE_RANK(其 gold 工具输出客单价=营收/单数, 真数据)。
-        restaurantPhraseMapping.put("人均消费", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("人均消费是多少", "RESTAURANT_STORE_REVENUE_RANK");
-        // RESTAURANT_DISH_CREATE — Wave-11 扩充 (含自然语言新增菜品)
-        restaurantPhraseMapping.put("新增菜品", "RESTAURANT_DISH_CREATE");
-        restaurantPhraseMapping.put("添加新菜品", "RESTAURANT_DISH_CREATE");
-        restaurantPhraseMapping.put("添加菜", "RESTAURANT_DISH_CREATE");
-        restaurantPhraseMapping.put("新增一道菜", "RESTAURANT_DISH_CREATE");
-        restaurantPhraseMapping.put("上架一道", "RESTAURANT_DISH_CREATE");
-        restaurantPhraseMapping.put("菜单里加一个", "RESTAURANT_DISH_CREATE");
-        restaurantPhraseMapping.put("加一道新菜", "RESTAURANT_DISH_CREATE");
-        restaurantPhraseMapping.put("上架新菜", "RESTAURANT_DISH_CREATE");
-        restaurantPhraseMapping.put("加个菜", "RESTAURANT_DISH_CREATE");
-        // RESTAURANT_DISH_DELETE (4)
-        restaurantPhraseMapping.put("下架菜品", "RESTAURANT_DISH_DELETE");
-        restaurantPhraseMapping.put("停售菜品", "RESTAURANT_DISH_DELETE");
-        restaurantPhraseMapping.put("下架这道菜", "RESTAURANT_DISH_DELETE");
-        restaurantPhraseMapping.put("菜品下架", "RESTAURANT_DISH_DELETE");
-        restaurantPhraseMapping.put("下架这道", "RESTAURANT_DISH_DELETE");
-        restaurantPhraseMapping.put("停售这道菜", "RESTAURANT_DISH_DELETE");
-        // RESTAURANT_DISH_LIST (1)
-        restaurantPhraseMapping.put("今天有哪些菜品", "RESTAURANT_DISH_LIST");
-        // RESTAURANT_DISH_PRODUCT_SALES_RANKING (2)
-        restaurantPhraseMapping.put("菜是哪几道", "RESTAURANT_DISH_PRODUCT_SALES_RANKING");
-        restaurantPhraseMapping.put("销量最好的菜", "RESTAURANT_DISH_PRODUCT_SALES_RANKING");
-        // RESTAURANT_DISH_UPDATE — Wave-11 扩充 (含价格/描述修改)
-        restaurantPhraseMapping.put("修改菜品", "RESTAURANT_DISH_UPDATE");
-        restaurantPhraseMapping.put("更新菜品价格", "RESTAURANT_DISH_UPDATE");
-        restaurantPhraseMapping.put("改价格", "RESTAURANT_DISH_UPDATE");
-        restaurantPhraseMapping.put("改售价", "RESTAURANT_DISH_UPDATE");
-        restaurantPhraseMapping.put("价格改为", "RESTAURANT_DISH_UPDATE");
-        restaurantPhraseMapping.put("修改售价", "RESTAURANT_DISH_UPDATE");
-        restaurantPhraseMapping.put("改成", "RESTAURANT_DISH_UPDATE");
-        restaurantPhraseMapping.put("把描述改成", "RESTAURANT_DISH_UPDATE");
-        // RESTAURANT_INGREDIENT_LOW_STOCK (1)
-        restaurantPhraseMapping.put("食材不够", "RESTAURANT_INGREDIENT_LOW_STOCK");
-        // RESTAURANT_PEAK_HOURS_ANALYSIS (1)
-        restaurantPhraseMapping.put("时段客人", "RESTAURANT_PEAK_HOURS_ANALYSIS");
-        // RESTAURANT_PROCUREMENT_CREATE (2)
-        restaurantPhraseMapping.put("生成采购单", "RESTAURANT_PROCUREMENT_CREATE");
-        restaurantPhraseMapping.put("食材采购单", "RESTAURANT_PROCUREMENT_CREATE");
-        // RESTAURANT_RETURN_RATE — Wave-11 扩充 (退菜/退单)
-        restaurantPhraseMapping.put("哪个菜退单", "RESTAURANT_RETURN_RATE");
-        restaurantPhraseMapping.put("退单率", "RESTAURANT_RETURN_RATE");
-        restaurantPhraseMapping.put("退菜比例", "RESTAURANT_RETURN_RATE");
-        restaurantPhraseMapping.put("退菜率", "RESTAURANT_RETURN_RATE");
-        restaurantPhraseMapping.put("退菜比例高不高", "RESTAURANT_RETURN_RATE");
-        restaurantPhraseMapping.put("哪些菜品被退得最多", "RESTAURANT_RETURN_RATE");
-        restaurantPhraseMapping.put("退菜排名", "RESTAURANT_RETURN_RATE");
-        restaurantPhraseMapping.put("退得最多", "RESTAURANT_RETURN_RATE");
-        // RESTAURANT_TABLE_TURNOVER — Wave-10b: 扩充短语 (2→8)
-        restaurantPhraseMapping.put("中午翻台率", "RESTAURANT_TABLE_TURNOVER");
-        restaurantPhraseMapping.put("翻台率", "RESTAURANT_TABLE_TURNOVER");
-        restaurantPhraseMapping.put("午餐翻台率", "RESTAURANT_TABLE_TURNOVER");
-        restaurantPhraseMapping.put("午餐时段翻台率", "RESTAURANT_TABLE_TURNOVER");
-        restaurantPhraseMapping.put("今天翻台率", "RESTAURANT_TABLE_TURNOVER");
-        restaurantPhraseMapping.put("上周翻台率", "RESTAURANT_TABLE_TURNOVER");
-        restaurantPhraseMapping.put("翻台率对比", "RESTAURANT_TABLE_TURNOVER");
-        restaurantPhraseMapping.put("翻台率怎么样", "RESTAURANT_TABLE_TURNOVER");
-        restaurantPhraseMapping.put("中午的翻台率是多少", "RESTAURANT_TABLE_TURNOVER");
-        // RESTAURANT_WASTAGE_ANOMALY (4)
-        restaurantPhraseMapping.put("损耗太大", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("损耗太大了要查原因", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("损耗查原因", "RESTAURANT_WASTAGE_ANOMALY");
-        restaurantPhraseMapping.put("有没有异常损耗", "RESTAURANT_WASTAGE_ANOMALY");
-        // RESTAURANT_WASTAGE_RECORD (4)
-        restaurantPhraseMapping.put("今天的食材损耗", "RESTAURANT_WASTAGE_RECORD");
-        restaurantPhraseMapping.put("记录今天的食材损耗", "RESTAURANT_WASTAGE_RECORD");
-        restaurantPhraseMapping.put("记录损耗", "RESTAURANT_WASTAGE_RECORD");
-        restaurantPhraseMapping.put("记录食材损耗", "RESTAURANT_WASTAGE_RECORD");
-        // RESTAURANT_WASTAGE_SUMMARY (1)
-        restaurantPhraseMapping.put("浪费了多少食材", "RESTAURANT_WASTAGE_SUMMARY");
-
-        // ===== Phase 1: Financial Analytics (v33 青花椒) =====
-        restaurantPhraseMapping.put("bom差异", "RESTAURANT_BOM_VARIANCE");
-        restaurantPhraseMapping.put("bom差异归因", "RESTAURANT_BOM_VARIANCE");
-        restaurantPhraseMapping.put("bom成本差异", "RESTAURANT_BOM_VARIANCE");
-        restaurantPhraseMapping.put("成本差异归因", "RESTAURANT_BOM_VARIANCE");
-        restaurantPhraseMapping.put("供应链差异", "RESTAURANT_BOM_VARIANCE");
-        restaurantPhraseMapping.put("管理差异", "RESTAURANT_BOM_VARIANCE");
-        restaurantPhraseMapping.put("标准成本差异", "RESTAURANT_BOM_VARIANCE");
-        restaurantPhraseMapping.put("销售计划", "RESTAURANT_SALES_PLAN_TRACK");
-        restaurantPhraseMapping.put("销售计划完成度", "RESTAURANT_SALES_PLAN_TRACK");
-        restaurantPhraseMapping.put("目标达成", "RESTAURANT_SALES_PLAN_TRACK");
-        restaurantPhraseMapping.put("计划完成", "RESTAURANT_SALES_PLAN_TRACK");
-        restaurantPhraseMapping.put("进度追踪", "RESTAURANT_SALES_PLAN_TRACK");
-        restaurantPhraseMapping.put("还差多少", "RESTAURANT_SALES_PLAN_TRACK");
-        restaurantPhraseMapping.put("创建销售计划", "RESTAURANT_SALES_PLAN_CREATE");
-        restaurantPhraseMapping.put("设定目标", "RESTAURANT_SALES_PLAN_CREATE");
-        restaurantPhraseMapping.put("月度目标", "RESTAURANT_SALES_PLAN_CREATE");
-        restaurantPhraseMapping.put("人效", "RESTAURANT_LABOR_PRODUCTIVITY");
-        restaurantPhraseMapping.put("人效分析", "RESTAURANT_LABOR_PRODUCTIVITY");
-        restaurantPhraseMapping.put("人均产出", "RESTAURANT_LABOR_PRODUCTIVITY");
-        restaurantPhraseMapping.put("员工效率", "RESTAURANT_LABOR_PRODUCTIVITY");
-        restaurantPhraseMapping.put("人效比", "RESTAURANT_LABOR_PRODUCTIVITY");
-        restaurantPhraseMapping.put("用人多少", "RESTAURANT_LABOR_PRODUCTIVITY");
-
-        // ===== Phase 2: Operational Intelligence (v33) =====
-        restaurantPhraseMapping.put("桌位", "RESTAURANT_SEAT_OCCUPANCY");
-        restaurantPhraseMapping.put("桌位占有率", "RESTAURANT_SEAT_OCCUPANCY");
-        restaurantPhraseMapping.put("桌位配置分析", "RESTAURANT_SEAT_OCCUPANCY");
-        restaurantPhraseMapping.put("座位配置", "RESTAURANT_SEAT_OCCUPANCY");
-        restaurantPhraseMapping.put("几人位", "RESTAURANT_SEAT_OCCUPANCY");
-        restaurantPhraseMapping.put("两人位", "RESTAURANT_SEAT_OCCUPANCY");
-        restaurantPhraseMapping.put("录入桌位", "RESTAURANT_SEAT_CONFIG_MANAGE");
-        restaurantPhraseMapping.put("配置桌位", "RESTAURANT_SEAT_CONFIG_MANAGE");
-        restaurantPhraseMapping.put("套餐拆单", "RESTAURANT_COMBO_SPLIT");
-        restaurantPhraseMapping.put("套餐拆", "RESTAURANT_COMBO_SPLIT");
-        restaurantPhraseMapping.put("拆单统计", "RESTAURANT_COMBO_SPLIT");
-        restaurantPhraseMapping.put("单点还是套餐", "RESTAURANT_COMBO_SPLIT");
-        restaurantPhraseMapping.put("退货异常", "RESTAURANT_RETURN_ANOMALY");
-        restaurantPhraseMapping.put("反复退货", "RESTAURANT_RETURN_ANOMALY");
-        restaurantPhraseMapping.put("退货归因", "RESTAURANT_RETURN_ANOMALY");
-        restaurantPhraseMapping.put("验收异常", "RESTAURANT_RETURN_ANOMALY");
-        restaurantPhraseMapping.put("竞品分析", "RESTAURANT_REVIEW_COMPETITIVE");
-        restaurantPhraseMapping.put("竞品对比", "RESTAURANT_REVIEW_COMPETITIVE");
-        restaurantPhraseMapping.put("竞争对手", "RESTAURANT_REVIEW_COMPETITIVE");
-        restaurantPhraseMapping.put("同行对比", "RESTAURANT_REVIEW_COMPETITIVE");
-        restaurantPhraseMapping.put("评分对比", "RESTAURANT_REVIEW_COMPETITIVE");
-
-        // ===== Phase 3: Supply Chain Automation (v33) =====
-        restaurantPhraseMapping.put("叫货", "RESTAURANT_SMART_REORDER");
-        restaurantPhraseMapping.put("叫货单", "RESTAURANT_SMART_REORDER");
-        restaurantPhraseMapping.put("智能叫货", "RESTAURANT_SMART_REORDER");
-        restaurantPhraseMapping.put("自动下单", "RESTAURANT_SMART_REORDER");
-        restaurantPhraseMapping.put("补货", "RESTAURANT_SMART_REORDER");
-        restaurantPhraseMapping.put("日清日结", "RESTAURANT_DAILY_RECONCILIATION");
-        restaurantPhraseMapping.put("日盘", "RESTAURANT_DAILY_RECONCILIATION");
-        restaurantPhraseMapping.put("库存对账", "RESTAURANT_DAILY_RECONCILIATION");
-        restaurantPhraseMapping.put("每日对账", "RESTAURANT_DAILY_RECONCILIATION");
-        restaurantPhraseMapping.put("当日损耗", "RESTAURANT_DAILY_RECONCILIATION");
-        restaurantPhraseMapping.put("今日盘点", "RESTAURANT_DAILY_RECONCILIATION");
-        restaurantPhraseMapping.put("采购预测", "RESTAURANT_PROCUREMENT_FORECAST");
-        restaurantPhraseMapping.put("备货", "RESTAURANT_PROCUREMENT_FORECAST");
-        restaurantPhraseMapping.put("节假日备货", "RESTAURANT_PROCUREMENT_FORECAST");
-        restaurantPhraseMapping.put("明天需要多少", "RESTAURANT_PROCUREMENT_FORECAST");
-
-        // ===== Phase 4: Workforce Management (v33) =====
-        restaurantPhraseMapping.put("排班", "RESTAURANT_SHIFT_ANALYSIS");
-        restaurantPhraseMapping.put("排班分析", "RESTAURANT_SHIFT_ANALYSIS");
-        restaurantPhraseMapping.put("全职兼职", "RESTAURANT_SHIFT_ANALYSIS");
-        restaurantPhraseMapping.put("兼职比例", "RESTAURANT_SHIFT_ANALYSIS");
-        restaurantPhraseMapping.put("公式制", "RESTAURANT_SHIFT_ANALYSIS");
-        restaurantPhraseMapping.put("创建排班", "RESTAURANT_SHIFT_CREATE");
-        restaurantPhraseMapping.put("排班模板", "RESTAURANT_SHIFT_CREATE");
-        restaurantPhraseMapping.put("计件", "RESTAURANT_PIECEWORK_CALC");
-        restaurantPhraseMapping.put("计件提成", "RESTAURANT_PIECEWORK_CALC");
-        restaurantPhraseMapping.put("迎宾计件", "RESTAURANT_PIECEWORK_CALC");
-        restaurantPhraseMapping.put("小组计件", "RESTAURANT_PIECEWORK_CALC");
-        restaurantPhraseMapping.put("提成计算", "RESTAURANT_PIECEWORK_CALC");
-        restaurantPhraseMapping.put("计件配置", "RESTAURANT_PIECEWORK_CONFIG");
-        restaurantPhraseMapping.put("计件规则", "RESTAURANT_PIECEWORK_CONFIG");
-        restaurantPhraseMapping.put("绩效评估", "RESTAURANT_PERFORMANCE_EVAL");
-        restaurantPhraseMapping.put("绩效考核", "RESTAURANT_PERFORMANCE_EVAL");
-        restaurantPhraseMapping.put("kpi得分", "RESTAURANT_PERFORMANCE_EVAL");
-        restaurantPhraseMapping.put("考核结果", "RESTAURANT_PERFORMANCE_EVAL");
-        restaurantPhraseMapping.put("绩效规则", "RESTAURANT_PERFORMANCE_RULE");
-        restaurantPhraseMapping.put("kpi权重", "RESTAURANT_PERFORMANCE_RULE");
-        restaurantPhraseMapping.put("考核指标", "RESTAURANT_PERFORMANCE_RULE");
-        restaurantPhraseMapping.put("店长kpi", "RESTAURANT_STORE_KPI_DASHBOARD");
-        restaurantPhraseMapping.put("三维度", "RESTAURANT_STORE_KPI_DASHBOARD");
-        restaurantPhraseMapping.put("健康度", "RESTAURANT_STORE_KPI_DASHBOARD");
-        restaurantPhraseMapping.put("综合评估", "RESTAURANT_STORE_KPI_DASHBOARD");
-        restaurantPhraseMapping.put("门店评估", "RESTAURANT_STORE_KPI_DASHBOARD");
-
-        // ========== 餐饮评价/评分-营收/综合分析 短语短路 (2026-06-02) ==========
-        // 补 review/synthesis/rating 类意图的精确短语短路。这些意图本会话上线但只配关键词,
-        // 用户自由输入 "客户评价怎么样/服务怎么样/环境怎么样" 这类以"怎么样"结尾的短问句被
-        // 归为 GENERAL_QUESTION 触发 0.88/0.90 高阈值, 短而泛的问句多个评价子意图竞争语义分
-        // 达不到被拒, 落 LLM 兜底编造制造业。短语层 (matchPhrase) 在模糊阈值前短路, 确定性路由。
-        // 与 FuzzyExpressionSeeder 的语义种子互补: 短语 = 确定性命中典型说法; 种子 = 泛化变体。
-        // 全部用完整、有区分度的问句 (避免裸话题词经 isLongPhrase>=4 过度匹配)。
-
-        // 评价总览
-        restaurantPhraseMapping.put("客户评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("顾客评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("用户评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("客户评价情况", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("评价情况怎么样", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("整体评价怎么样", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("口碑怎么样", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("顾客满意度怎么样", "RESTAURANT_REVIEW_SUMMARY");
-        // 餐饮路由修复: "平台口碑如何" recognize 正确但 execute 经 orchestrator 误入工厂成本报告;
-        // 绑定平台口碑变体, 让 orchestrator 短语短路也命中评价总览(以"如何"结尾不被"怎么样"短语覆盖)。
-        restaurantPhraseMapping.put("平台口碑如何", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("平台口碑怎么样", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("平台口碑", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("口碑如何", "RESTAURANT_REVIEW_SUMMARY");
-
-        // 服务 (标签/评分)
-        restaurantPhraseMapping.put("服务怎么样", "RESTAURANT_REVIEW_SERVICE_TAGS");
-        restaurantPhraseMapping.put("服务评价怎么样", "RESTAURANT_REVIEW_SERVICE_TAGS");
-        restaurantPhraseMapping.put("服务态度怎么样", "RESTAURANT_REVIEW_SERVICE_TAGS");
-        restaurantPhraseMapping.put("服务分怎么样", "RESTAURANT_REVIEW_SERVICE_SCORE");
-        restaurantPhraseMapping.put("服务评分怎么样", "RESTAURANT_REVIEW_SERVICE_SCORE");
-
-        // 环境 (标签/评分)
-        restaurantPhraseMapping.put("环境怎么样", "RESTAURANT_REVIEW_ENV_TAGS");
-        restaurantPhraseMapping.put("用餐环境怎么样", "RESTAURANT_REVIEW_ENV_TAGS");
-        restaurantPhraseMapping.put("环境评价怎么样", "RESTAURANT_REVIEW_ENV_TAGS");
-        restaurantPhraseMapping.put("环境分怎么样", "RESTAURANT_REVIEW_ENV_SCORE");
-        restaurantPhraseMapping.put("环境评分怎么样", "RESTAURANT_REVIEW_ENV_SCORE");
-
-        // VIP / 会员
-        restaurantPhraseMapping.put("vip客户评价怎么样", "RESTAURANT_REVIEW_VIP");
-        restaurantPhraseMapping.put("会员评价怎么样", "RESTAURANT_REVIEW_VIP");
-        restaurantPhraseMapping.put("vip顾客关注什么", "RESTAURANT_REVIEW_VIP_TAGS");
-
-        // 投诉 / 差评门店 / 菜品差评
-        restaurantPhraseMapping.put("投诉情况怎么样", "RESTAURANT_REVIEW_COMPLAINT");
-        restaurantPhraseMapping.put("顾客投诉多不多", "RESTAURANT_REVIEW_COMPLAINT");
-        restaurantPhraseMapping.put("哪家店评价差", "RESTAURANT_REVIEW_BAD_STORE");
-        restaurantPhraseMapping.put("评价最差的门店", "RESTAURANT_REVIEW_BAD_STORE");
-        restaurantPhraseMapping.put("哪些门店差评最多", "RESTAURANT_REVIEW_BAD_STORE");
-        restaurantPhraseMapping.put("差评最多的门店", "RESTAURANT_REVIEW_BAD_STORE");
-        restaurantPhraseMapping.put("哪个门店差评最多", "RESTAURANT_REVIEW_BAD_STORE");
-        restaurantPhraseMapping.put("哪家店差评最多", "RESTAURANT_REVIEW_BAD_STORE");
-        restaurantPhraseMapping.put("哪些菜被吐槽", "RESTAURANT_REVIEW_DISH_ISSUE");
-        restaurantPhraseMapping.put("菜品差评怎么样", "RESTAURANT_REVIEW_DISH_ISSUE");
-
-        // 好评 / 趋势 / 回复率 / 平台 / 城市 / 时段
-        restaurantPhraseMapping.put("高频好评词", "RESTAURANT_REVIEW_GOOD_TAGS");
-        restaurantPhraseMapping.put("顾客最满意什么", "RESTAURANT_REVIEW_GOOD_TAGS");
-        restaurantPhraseMapping.put("评价趋势怎么样", "RESTAURANT_REVIEW_TREND");
-        restaurantPhraseMapping.put("口碑趋势怎么样", "RESTAURANT_REVIEW_TREND");
-        restaurantPhraseMapping.put("评价回复率怎么样", "RESTAURANT_REVIEW_REPLY_RATE");
-        restaurantPhraseMapping.put("各平台评价怎么样", "RESTAURANT_REVIEW_PLATFORM");
-        restaurantPhraseMapping.put("各城市评价怎么样", "RESTAURANT_REVIEW_CITY");
-        restaurantPhraseMapping.put("各时段评价怎么样", "RESTAURANT_REVIEW_TIME_PERIOD");
-
-        // 评分-营收相关性
-        restaurantPhraseMapping.put("高分门店是不是更赚钱", "RESTAURANT_RATING_REVENUE_CORRELATION");
-        restaurantPhraseMapping.put("评分和营收有关系吗", "RESTAURANT_RATING_REVENUE_CORRELATION");
-        restaurantPhraseMapping.put("评分高的店营收怎么样", "RESTAURANT_RATING_REVENUE_CORRELATION");
-        restaurantPhraseMapping.put("口碑好的店赚得多吗", "RESTAURANT_RATING_REVENUE_CORRELATION");
-
-        // 综合分析
-        restaurantPhraseMapping.put("综合分析一下", "COMPREHENSIVE_SYNTHESIS");
-        restaurantPhraseMapping.put("综合经营分析", "COMPREHENSIVE_SYNTHESIS");
-        restaurantPhraseMapping.put("全面分析一下经营", "COMPREHENSIVE_SYNTHESIS");
-        restaurantPhraseMapping.put("整体经营分析", "COMPREHENSIVE_SYNTHESIS");
-
-        // 门店营收排行 (2026-06-02) — prod 扫描发现高频 chip 路由到坏意图:
-        // "门店营收对比"→RESTAURANT_DAILY_REVENUE(无工具 FAILED); "哪家店业绩最好"→STORE_KPI(qhj 降级)。
-        // 短语短路到专用意图 RESTAURANT_STORE_REVENUE_RANK(绑 restaurant_store_revenue_rank_gold gold 工具)。
-        // 仅 "最好/排行/对比/最赚钱" 类 (工具取营收 top, 不收 "最差" 避免 top 当 bottom 答错)。
-        restaurantPhraseMapping.put("哪家店业绩最好", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("门店营收对比", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("门店营收排行", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("门店营收排名", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("门店业绩排名", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("哪家店最赚钱", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("哪家店营收最高", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("各门店营收对比", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("哪家店生意最好", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("门店销售排行", "RESTAURANT_STORE_REVENUE_RANK");
-        // 餐饮路由修复: "门店销售对比" 之前命中 REPORT_TRENDS(语义), 绑定销售/对比变体到门店营收排行。
-        restaurantPhraseMapping.put("门店销售对比", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("门店销售排名", "RESTAURANT_STORE_REVENUE_RANK");
-        restaurantPhraseMapping.put("各店销售对比", "RESTAURANT_STORE_REVENUE_RANK");
-
-        // ===== GAP-06-A (QA 组5): 营业收入 → gold 分析层 =====
-        // "本月营业收入" 和 "营业收入" 不在 restaurantPhraseMapping 中 → 落入关键词/语义评分
-        // → 命中制造业意图(REPORT_KPI/MONTHLY_FINANCIAL_CLOSE) → FAILED → 前端回落 CSV session
-        // 修: 餐饮 tenant 的营收/营业收入类查询锁定 RESTAURANT_REVENUE_TREND(绑 gold 工具)
-        restaurantPhraseMapping.put("本月营业收入", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("营业收入", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("本月总收入", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("总营业额", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("今年营收", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("本季度营收", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("这个月营业额", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("营收多少", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("营业额多少", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("总收入多少", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("收入多少", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("营收是多少", "RESTAURANT_REVENUE_TREND");
-        restaurantPhraseMapping.put("月营业额", "RESTAURANT_REVENUE_TREND");
-
-        // ===== GAP-06-C (QA 组5): 应付 → 供应商 AP (ArApTransaction PAYABLE) =====
-        // "应付多少" 不在 restaurantPhraseMapping → 语义命中 RESTAURANT_REP_COMMISSION_QUERY (提成)
-        // → 返回佣金应付 ¥0 而非供应商应付账款 (ArApTransaction AP-20260608-7699 ¥458.30)
-        // 修: 餐饮 tenant 应付/欠款类查询路由到专用意图 RESTAURANT_ARAP_PAYABLE_QUERY
-        restaurantPhraseMapping.put("应付多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("应付账款", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("欠款多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("供应商应付", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("需要付多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("要付多少钱", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("还欠多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("未付款多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("应付供应商多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
-        restaurantPhraseMapping.put("欠供应商多少", "RESTAURANT_ARAP_PAYABLE_QUERY");
-
-        // Restaurant demo review routes: keep public-review questions out of sales/factory fallbacks.
-        restaurantPhraseMapping.put("\u5927\u4f17\u70b9\u8bc4\u53e3\u7891\u600e\u4e48\u6837", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("\u5927\u4f17\u70b9\u8bc4\u8bc4\u4ef7\u600e\u4e48\u6837", "RESTAURANT_REVIEW_SUMMARY");
-        restaurantPhraseMapping.put("\u54ea\u51e0\u4e2a\u83dc\u54c1\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
-        restaurantPhraseMapping.put("\u54ea\u4e9b\u83dc\u54c1\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
-        restaurantPhraseMapping.put("\u83dc\u54c1\u53e3\u7891\u6700\u597d\u7684\u662f\u54ea\u4e9b", "RESTAURANT_REVIEW_GOOD_TAGS");
-        restaurantPhraseMapping.put("\u83dc\u54c1\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
-        restaurantPhraseMapping.put("\u54ea\u51e0\u4e2a\u83dc\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
-        restaurantPhraseMapping.put("\u54ea\u4e9b\u83dc\u53e3\u7891\u6700\u597d", "RESTAURANT_REVIEW_GOOD_TAGS");
-        restaurantPhraseMapping.put("\u4f4e\u661f\u8bc4\u4ef7\u5e94\u8be5\u600e\u4e48\u6539\u5584", "RESTAURANT_REVIEW_COMPLAINT");
-        restaurantPhraseMapping.put("\u4f4e\u661f\u8bc4\u4ef7\u600e\u4e48\u6539\u5584", "RESTAURANT_REVIEW_COMPLAINT");
-        restaurantPhraseMapping.put("\u4f4e\u661f\u8bc4\u4ef7\u6539\u5584\u5efa\u8bae", "RESTAURANT_REVIEW_COMPLAINT");
-        restaurantPhraseMapping.put("\u5dee\u8bc4\u5e94\u8be5\u600e\u4e48\u6539\u5584", "RESTAURANT_REVIEW_COMPLAINT");
-        restaurantPhraseMapping.put("\u5dee\u8bc4\u600e\u4e48\u6539\u5584", "RESTAURANT_REVIEW_COMPLAINT");
-
-        log.debug("v33 餐饮短语映射初始化完成，共 {} 条映射", restaurantPhraseMapping.size());
+        // Restaurant-specific phrase mappings were retired; shared factory/common mappings continue below.
 
         // ========== v32: 业态隔离 — 公共短语映射（两种业态共享） ==========
         // OUT_OF_DOMAIN: 噪音/闲聊/非业务
@@ -7744,100 +7002,6 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("审核采购单", "PURCHASE_FINANCE_APPROVE");
         commonPhraseMapping.put("采购财务审核", "PURCHASE_FINANCE_APPROVE");
 
-        // ========== Sprint 11 Round 6 — RESTAURANT_ECONOMICS_ANALYSIS phrase mappings ==========
-        //
-        // Round 5 root cause: LLM tier of /recognize multi-stage pipeline picks ALERT_ACTIVE
-        // (confidence 0.78) for literal "帮我看上月损溢异常" because the keyword "异常" matches
-        // ALERT_ACTIVE.keywords broader list. RESTAURANT_ECONOMICS_ANALYSIS had ZERO phrase
-        // entries before this change — so phrase-match layer never short-circuited the LLM
-        // tier, leaving the misroute live.
-        //
-        // V20260522_51 already seeded the DB keywords; this Java-side mapping bypasses the
-        // LLM tier ambiguity by hitting Layer 1 phrase match earlier in the pipeline.
-        //
-        // Scope: ONLY phrases that do NOT collide with existing intent mappings.
-        //   - "成本分析" already → COST_TREND_ANALYSIS (factory) / RESTAURANT_DISH_COST_ANALYSIS
-        //     (restaurant) — NOT overridden here to avoid factory regression
-        //   - "食材损耗" → RESTAURANT_WASTAGE_SUMMARY, "损耗异常" → RESTAURANT_WASTAGE_ANOMALY
-        //     — NOT overridden (wastage is a separate intent)
-        //   - "哪些菜亏钱" → RESTAURANT_DISH_COST_ANALYSIS — kept; "哪个菜亏钱" (singular) is
-        //     net-new and routed to economics-analysis per spec §2.11 Phase 4 DOD #1
-        //
-        // Added to BOTH phraseToIntentMapping (factory map) AND restaurantPhraseMapping
-        // (restaurant map) because matchPhrase(input, businessDomain) routes by factory type
-        // — RES_3101_009 is RESTAURANT, F006 super_admin testing is FACTORY.
-        //
-        // 验收 (Phase 4 DOD #1): qhj_warehouse_mgr 输入 "帮我看上月损溢异常" →
-        //   intentCode === RESTAURANT_ECONOMICS_ANALYSIS (no longer ALERT_ACTIVE).
-        //
-        // ========== Sprint 11 Round 7 — Prod-confirmed misroute sweep (2026-05-23) ==========
-        // Round 6 shipped phrase mappings BUT prod /execute still misroutes 3/4 phrases:
-        //   - "帮我看上月损溢异常" → RESTAURANT_WASTAGE_ANOMALY (LLM, 0.95) — BUG
-        //   - "损益分析"          → RESTAURANT_OPS_GROSS_MARGIN          — BUG (sister)
-        //   - "上月成本"          → RESTAURANT_INGREDIENT_COST_TREND     — NO mapping at all
-        //   - "哪个菜亏钱"        → RESTAURANT_ECONOMICS_ANALYSIS        — OK (only one works)
-        //
-        // Root cause: /recognize hits v33.1-EarlyPhrase short-circuit and returns
-        // RESTAURANT_ECONOMICS_ANALYSIS correctly. /execute somehow bypasses the EarlyPhrase
-        // tier and hits LLM at the end. Defense-in-depth fix lives in
-        // IntentExecutionOrchestrator (pre-recognition phrase shortcut), this entry just
-        // ensures the phrase data is complete.
-        //
-        // Round 7 additions: "上月成本" / "本月成本" / "上月损益" / "上月损溢" prefix variants
-        // that customer naturally uses to ask about period-bounded P&L diagnostics. None of
-        // these prefix variants collide with existing 成本-class intents because the existing
-        // mappings are unprefixed ("成本") or differently-prefixed ("本月成本控制").
-        String[] economicsPhrases = {
-                // Round 6 entries
-                "帮我看上月损溢异常",
-                "帮我看上月损溢",
-                "损溢异常",
-                "损溢分析",
-                "损益分析",
-                "损益异常",
-                "哪个菜亏钱",
-                "菜品损溢",
-                // Round 7 additions — prod-confirmed missing
-                "上月成本",
-                "本月成本",
-                "上月损益",
-                "上月损溢",
-                "本月损益",
-                "本月损溢",
-                // Sprint 12 P0 (2026-05-23) — 30+ NL variations per UI audit feedback.
-                // Per AI 工厂 Goal v5 verdict 9/12 cases misrouted to DAILY_CUSTOMER_FOLLOWUP
-                // via LLM conversational fallback. Adding NL coverage that customers naturally
-                // type to ensure phrase shortcut catches them before LLM fallback.
-                //
-                // EXCLUDED to avoid regression on existing mappings:
-                //   - "成本分析" (FACTORY: COST_TREND_ANALYSIS, RESTAURANT: RESTAURANT_DISH_COST_ANALYSIS)
-                //   - "哪些菜亏钱" (Round 6 owns → RESTAURANT_DISH_COST_ANALYSIS)
-                //   - "成本情况" / "菜品成本分析" / "损耗情况" / "毛利分析" / "毛利率" (potential collisions)
-                //
-                // "上月/这个月/本月/上周/本周" period variants
-                "上月亏", "上月赚多少", "上月亏多少", "上月赔多少", "上月经营",
-                "本月亏", "本月赚多少", "本月经营", "本月亏多少",
-                "这个月亏", "这个月赚多少", "这个月成本",
-                "上个月损益", "上个月成本", "上个月亏",
-                "上周损益", "本周损益",
-                // 损溢/损益/利润 variants
-                "损溢报告", "损溢情况", "损益情况", "损益报表",
-                "利润分析", "利润情况", "利润报告",
-                // 哪个/哪些菜 variants (NOT 哪些菜亏钱 - Round 6 owns)
-                "哪个菜在亏", "哪个菜赔钱", "哪些菜赔钱", "哪些菜不赚钱",
-                "哪个菜成本最高", "哪个菜利润最低", "哪个菜毛利低", "哪些菜毛利低",
-                // 经营分析 phrases
-                "经营分析", "经营诊断", "经营情况怎么样", "门店经营情况",
-                "餐厅经营", "店面经营", "本店经营", "餐厅经营分析", "店铺经营",
-                "今天生意怎么样", "门店经营",
-                // 餐厅/门店 成本/毛利 specific phrases (avoid generic "成本分析" / "毛利率")
-                "餐饮成本", "餐厅成本", "厨房成本", "门店成本"
-        };
-        for (String phrase : economicsPhrases) {
-            phraseToIntentMapping.put(phrase, "RESTAURANT_ECONOMICS_ANALYSIS");
-            restaurantPhraseMapping.put(phrase, "RESTAURANT_ECONOMICS_ANALYSIS");
-        }
-
         log.debug("v33 公共短语映射初始化完成，共 {} 条映射", commonPhraseMapping.size());
     }
 
@@ -7899,7 +7063,7 @@ public class IntentKnowledgeBase {
 
         // 库存领域
         domainKeywords.put(Domain.INVENTORY, new HashSet<>(Set.of(
-                "库存", "存货", "储存", "仓库", "入库", "库位",
+                "库存", "存货", "储存", "仓库", "入库", "库位", "损耗", "报废",
                 "inventory", "stock", "warehouse"
         )));
 
@@ -7938,17 +7102,8 @@ public class IntentKnowledgeBase {
         // 财务/成本领域
         domainKeywords.put(Domain.FINANCE, new HashSet<>(Set.of(
                 "成本", "费用", "花销", "开支", "钱", "花费", "支出",
-                "预算", "财务", "账目", "账单", "金额",
+                "预算", "财务", "账目", "账单", "金额", "毛利", "营业额",
                 "cost", "expense", "budget", "finance", "money"
-        )));
-
-        // 餐饮领域
-        domainKeywords.put(Domain.RESTAURANT, new HashSet<>(Set.of(
-                "菜品", "菜单", "菜", "餐", "堂食", "外卖", "翻台", "翻台率",
-                "点菜", "上菜", "退菜", "加菜", "备菜", "菜谱", "食材",
-                "畅销菜", "毛利", "营业额", "客单价", "出餐", "门店",
-                "浪费", "损耗", "报废", "厨房", "后厨", "前厅",
-                "dish", "menu", "restaurant", "table", "turnover"
         )));
 
         // 通用领域（兜底）
@@ -8177,8 +7332,6 @@ public class IntentKnowledgeBase {
         PAGE_DESIGN("页面设计", "PAGE"),
         /** 财务/成本领域 */
         FINANCE("财务", "COST"),
-        /** 餐饮领域 */
-        RESTAURANT("餐饮", "RESTAURANT"),
         /** 通用/未分类 */
         GENERAL("通用", "REPORT_DASHBOARD_OVERVIEW");
 
@@ -8738,7 +7891,7 @@ public class IntentKnowledgeBase {
     /**
      * v32: 业态感知的短语匹配
      * @param input 用户输入
-     * @param businessDomain "FACTORY" 或 "RESTAURANT"
+     * @param businessDomain legacy domain hint; shared factory mappings are used
      */
     /** 「够具体」的短语至少几个字: 2 字的「质检」这类泛词只配做候选, 不配跳过后面的识别直接定意图。 */
     public static final int SPECIFIC_PHRASE_MIN_LENGTH = 4;
@@ -8752,8 +7905,7 @@ public class IntentKnowledgeBase {
         if (input == null || input.trim().isEmpty()) {
             return Optional.empty();
         }
-        Map<String, String> businessSpecificMap = "RESTAURANT".equals(businessDomain)
-                ? restaurantPhraseMapping : phraseToIntentMapping;
+        Map<String, String> businessSpecificMap = phraseToIntentMapping;
         Optional<Map.Entry<String, String>> hit = doMatchPhraseEntry(input, businessSpecificMap);
         if (hit.isEmpty()) {
             hit = doMatchPhraseEntry(input, commonPhraseMapping);
@@ -8766,36 +7918,13 @@ public class IntentKnowledgeBase {
             return Optional.empty();
         }
 
-        // 1. 根据业态选择专用 Map
-        Map<String, String> businessSpecificMap = "RESTAURANT".equals(businessDomain)
-                ? restaurantPhraseMapping
-                : phraseToIntentMapping;  // 工厂用原来的 map
+        // 1. Use the shared factory phrase map. Restaurant-specific mappings
+        // were retired; the domain argument remains source-compatible.
+        Map<String, String> businessSpecificMap = phraseToIntentMapping;
 
         // 2. 先在业态专用 Map 中匹配
         Optional<String> result = doMatchPhrase(input, businessSpecificMap);
         if (result.isPresent()) {
-            // 📊 [NarrowPath] 埋点 3/3 —— 只打 taken=true 一侧, 且只打餐饮那张表。
-            //
-            // 🔴 2026-08-15 订正: 原文写「这条是『601 条到底有没有人走』的**唯一**
-            //    读数来源」—— **那句是假的**, 而且它差点让我们删掉一张在用的表。
-            //    `restaurantPhraseMapping` 有**三个**读点:
-            //      1. 本方法(有埋点)              实测 0 次命中
-            //      2. 覆盖率计算(本文件 :9027)     无埋点, 未量
-            //      3. SemanticIntentMatcher :130  无埋点 —— 它把整张表灌进
-            //         **embedding 向量索引**(实测「Loaded 653 restaurant phrase
-            //         mappings (total: 4805)」× 241 次启动), 命中时只打
-            //         「Semantic match found」, **一行 [NarrowPath] 都没有**。
-            //    实测那条路真的命中过: `'菜品级别' -> '菜品'`, 而 `菜品` **只在**
-            //    餐饮这张表里(工厂表 0 处)。
-            // ⛔ 所以本埋点读到 0 **不能**推出「这张表没人用」。删表的依据见
-            //    docs/decisions/2026-08-15-601短语表与飞轮盖章-挂账.md —— 结论是**不删**。
-            // ⚠️ factoryId 打 "n/a": 本方法没有租户在作用域里, 而它有 11 个调用点,
-            //    为一个观察窗给它加参数不划算。需要按租户拆时再说。
-            if ("RESTAURANT".equals(businessDomain)) {
-                log.info("[NarrowPath] gate=restaurantPhrase taken=true factoryId=n/a "
-                        + "intentCode={} q={}", result.get(),
-                        input.length() <= 40 ? input : input.substring(0, 40));
-            }
             return result;
         }
 
@@ -9102,17 +8231,6 @@ public class IntentKnowledgeBase {
                 }
             }
         }
-        if (businessDomain != null && businessDomain.equals("RESTAURANT") && this.restaurantPhraseMapping != null) {
-            for (Map.Entry<String, String> entry : this.restaurantPhraseMapping.entrySet()) {
-                if (!entry.getValue().equals(matchedIntentCode)) continue;
-                String phrase = entry.getKey().toLowerCase();
-                if (!normalizedInput.contains(phrase)) continue;
-                double coverage = (double) phrase.length() / (double) inputLength;
-                if (coverage > bestCoverage) {
-                    bestCoverage = coverage;
-                }
-            }
-        }
         return bestCoverage;
     }
 
@@ -9319,15 +8437,6 @@ public class IntentKnowledgeBase {
      */
     public Map<String, String> getPhraseToIntentMapping() {
         return Collections.unmodifiableMap(phraseToIntentMapping);
-    }
-
-    /**
-     * Wave-10: 获取餐饮短语映射
-     *
-     * @return 餐饮短语到意图的映射
-     */
-    public Map<String, String> getRestaurantPhraseMapping() {
-        return Collections.unmodifiableMap(restaurantPhraseMapping);
     }
 
     /**

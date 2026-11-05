@@ -34,7 +34,6 @@ export type AlertType =
   | 'SALES_DECLINE'
   | 'CUSTOMER_PAYMENT_OVERDUE'
   | 'SUPPLIER_PAYABLE_DUE'
-  | 'RESTAURANT_HEALTH_CHECK'
 
 /**
  * UI 用 label map — 用户面显示中文.
@@ -48,9 +47,6 @@ export const ALERT_TYPE_LABELS: Record<AlertType, string> = {
   SALES_DECLINE: '销售下滑',
   CUSTOMER_PAYMENT_OVERDUE: '客户应收逾期',
   SUPPLIER_PAYABLE_DUE: '供应商应付到期',
-  // 2026-07-11: 反回扣/经营异常预警 — 由 Python 餐饮经营体检报告驱动, 自动创建
-  // + 定时扫描 (AlertRestaurantHealthCheckScheduler), 无 SpEL (built-in 逻辑).
-  RESTAURANT_HEALTH_CHECK: '经营体检预警(反回扣/异常)',
 }
 
 /**
@@ -65,8 +61,6 @@ export const ALERT_TYPE_SPEL_HINTS: Record<AlertType, string> = {
   SALES_DECLINE: '#context.declineRate >= 20',
   CUSTOMER_PAYMENT_OVERDUE: '#context.agingDays > 60',
   SUPPLIER_PAYABLE_DUE: '#context.daysToDue <= 7',
-  // 内置逻辑 (RestaurantHealthAlertBridgeService 按 Python 诊断结果驱动), 无需 SpEL.
-  RESTAURANT_HEALTH_CHECK: '',
 }
 
 export const ALERT_TYPES: AlertType[] = [
@@ -78,7 +72,6 @@ export const ALERT_TYPES: AlertType[] = [
   'SALES_DECLINE',
   'CUSTOMER_PAYMENT_OVERDUE',
   'SUPPLIER_PAYABLE_DUE',
-  'RESTAURANT_HEALTH_CHECK',
 ]
 
 /**

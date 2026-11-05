@@ -21,7 +21,8 @@ class ApprovedToolSourceMetadataTest {
                 "warehouse:read_write",
                 "inventory:read",
                 "inventory:read_write");
-        assertInventoryReadTool(new MaterialStockSummaryTool(), permissions);
+        assertInventoryReadTool(new MaterialStockSummaryTool(), Set.of(
+                "inventory:read", "inventory:read_write"));
         assertInventoryReadTool(new MaterialBatchQueryTool(), permissions);
         assertInventoryReadTool(new MaterialExpiredQueryTool(), permissions);
     }

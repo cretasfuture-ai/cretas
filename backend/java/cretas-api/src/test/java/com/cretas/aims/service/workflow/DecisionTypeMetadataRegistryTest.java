@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * DecisionTypeMetadataRegistry 单元测试 — Sprint 6 W3-B (2026-05-19).
  *
- * <p>验证 32 个 DecisionType 全部注册 + 元数据正确 + moduleCode 反向 lookup +
+ * <p>验证当前可用 DecisionType 全部注册 + 元数据正确 + moduleCode 反向 lookup +
  * wired 数量统计.
  *
  * <p>Sprint 5 PR #55 H 扩 enum 14→32, 之前 admin UI hardcode 12 个 dropdown 选项, 这
@@ -35,11 +35,12 @@ class DecisionTypeMetadataRegistryTest {
     // ==================== Cross-cutting framework tests (4) ====================
 
     @Test
-    @DisplayName("UT-MR-01: 全部 32 个 enum 都注册 (registry 完整性自检)")
+    @DisplayName("UT-MR-01: 全部可用 enum 都注册 (退役餐饮 enum 仅供历史 decode)")
     void allEnumValuesRegistered() {
-        assertEquals(DecisionType.values().length, registry.size(),
-                "registry size 必须等于 enum 总数 (包含 CUSTOM)");
+        assertEquals(DecisionType.values().length - 1, registry.size(),
+                "registry size 必须排除仅供历史 decode 的退役餐饮 enum");
         for (DecisionType dt : DecisionType.values()) {
+            if (dt == DecisionType.RESTAURANT_AGENT_ACTION_REVIEW) continue;
             assertNotNull(registry.get(dt),
                     "DecisionType " + dt + " 元数据未注册 — 检查 init() 是否漏 register");
         }
@@ -59,6 +60,7 @@ class DecisionTypeMetadataRegistryTest {
     @DisplayName("UT-MR-03: 每个 metadata 必有 chineseName / description / category / approverRoles")
     void allMetadataHasRequiredFields() {
         for (DecisionType dt : DecisionType.values()) {
+            if (dt == DecisionType.RESTAURANT_AGENT_ACTION_REVIEW) continue;
             DecisionTypeMetadata m = registry.get(dt);
             assertNotNull(m.getChineseName(), dt + " chineseName null");
             assertFalse(m.getChineseName().isBlank(), dt + " chineseName blank");
@@ -88,14 +90,14 @@ class DecisionTypeMetadataRegistryTest {
     }
 
     @Test
-    @DisplayName("UT-MR-04: wiredCount + unwired 之和 = 32")
+    @DisplayName("UT-MR-04: wiredCount + unwired 之和 = 当前注册总数")
     void wiredCountConsistent() {
         int wired = registry.getWiredCount();
         int unwired = (int) registry.getAll().values().stream().filter(m -> !m.isWired()).count();
         assertEquals(registry.size(), wired + unwired,
                 "wired + unwired 必须 = 总数");
         assertTrue(wired >= 7,
-                "已 wired DecisionType 应至少覆盖采购/销售/付款/预算/调拨/盘点/餐饮复核, 实际=" + wired);
+                "已 wired DecisionType 应至少覆盖采购/销售/付款/预算/调拨/盘点等工厂能力, 实际=" + wired);
     }
 
     // ==================== 17 NEW DecisionType (Sprint 5 PR #55 H 加) ====================
@@ -357,15 +359,10 @@ class DecisionTypeMetadataRegistryTest {
     }
 
     @Test
-    @DisplayName("Restaurant Agent action review is wired to the exact allowlisted module")
-    void restaurantAgentActionReviewMetadata() {
-        DecisionTypeMetadata metadata = registry.get(DecisionType.RESTAURANT_AGENT_ACTION_REVIEW);
-        assertNotNull(metadata);
-        assertEquals(Category.OTHER, metadata.getCategory());
-        assertTrue(metadata.isWired());
-        assertEquals("restaurant.dish-cost-data-review.v1", metadata.getModuleCode());
-        assertEquals(DecisionType.RESTAURANT_AGENT_ACTION_REVIEW,
-                registry.lookupByModuleCode("restaurant.dish-cost-data-review.v1"));
+    @DisplayName("退役餐饮 Agent action review 仅保留 enum decode，不注册为能力")
+    void retiredRestaurantAgentActionReviewIsNotRegistered() {
+        assertNull(registry.get(DecisionType.RESTAURANT_AGENT_ACTION_REVIEW));
+        assertNull(registry.lookupByModuleCode("restaurant.dish-cost-data-review.v1"));
     }
 
     @Test

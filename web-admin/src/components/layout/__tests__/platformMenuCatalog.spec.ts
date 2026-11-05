@@ -6,6 +6,7 @@ import { getFactoryModuleMenuOptions } from '../factoryMenuVisibility';
 
 describe('platform menu catalog consumed by the backend', () => {
   it('accepts exactly the configurable leaves of the current real menu tree', () => {
+    const retiredPaths = new Set(['/crm/member-analysis', '/ops/operations-analysis']);
     const modules = new Set<string>();
     const visit = (items: readonly MenuItem[]) => {
       for (const item of items) {
@@ -20,6 +21,15 @@ describe('platform menu catalog consumed by the backend', () => {
     const catalog = JSON.parse(readFileSync(resolve(process.cwd(),
       '../backend/java/cretas-api/src/main/resources/platform/factory-menu-paths.json',
     ), 'utf8')) as Record<string, string[]>;
+    delete expected.restaurant;
+    delete catalog.restaurant;
+    for (const [moduleId, paths] of Object.entries(expected)) {
+      expected[moduleId] = paths.filter((path) => !path.startsWith('/restaurant/') && !retiredPaths.has(path));
+    }
+    for (const [moduleId, paths] of Object.entries(catalog)) {
+      catalog[moduleId] = paths.filter((path) => !path.startsWith('/restaurant/') && !retiredPaths.has(path));
+      if (moduleId.startsWith('restaurant')) delete catalog[moduleId];
+    }
     expect(catalog).toEqual(expected);
     expect(catalog.warehouse).toContain('/warehouse/source-individuals');
     expect(catalog.warehouse).toContain('/warehouse/wastage-reports');

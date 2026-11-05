@@ -1,29 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { SectionPayload } from '@/types/restaurant-chat';
+import type { SectionPayload } from '@/types/smartbi-chat';
 import BenchmarkBarsCard from './cards/BenchmarkBarsCard.vue';
-import HeatmapCard from './cards/HeatmapCard.vue';
-import RfmGridCard from './cards/RfmGridCard.vue';
 import RxPrescriptionCard from './cards/RxPrescriptionCard.vue';
-import MenuQuadrantCard from './cards/MenuQuadrantCard.vue';
 import CrossChainCard from './cards/CrossChainCard.vue';
-import ForecastCard from './cards/ForecastCard.vue';
 import RawJsonCard from './cards/RawJsonCard.vue';
 import BomVarianceCard from './cards/BomVarianceCard.vue';
 import SalesPlanCard from './cards/SalesPlanCard.vue';
 import LaborProductivityCard from './cards/LaborProductivityCard.vue';
-import SeatOccupancyCard from './cards/SeatOccupancyCard.vue';
-import ComboSplitCard from './cards/ComboSplitCard.vue';
 import ReturnAnomalyCard from './cards/ReturnAnomalyCard.vue';
-import ReviewCompetitiveCard from './cards/ReviewCompetitiveCard.vue';
 import SmartReorderCard from './cards/SmartReorderCard.vue';
 import DailyReconciliationCard from './cards/DailyReconciliationCard.vue';
 import ProcurementForecastCard from './cards/ProcurementForecastCard.vue';
 import ShiftAnalysisCard from './cards/ShiftAnalysisCard.vue';
 import PieceworkCalcCard from './cards/PieceworkCalcCard.vue';
 import PerformanceEvalCard from './cards/PerformanceEvalCard.vue';
-import StoreKpiDashboardCard from './cards/StoreKpiDashboardCard.vue';
-import AdvancedTrafficPersonaCard from './cards/AdvancedTrafficPersonaCard.vue';
 
 const props = defineProps<{
   section: SectionPayload;
@@ -33,27 +24,18 @@ const props = defineProps<{
 // Falls back to RawJsonCard for unknown section types.
 const CARD_MAP: Record<string, unknown> = {
   benchmark_alerts: BenchmarkBarsCard,
-  dining_heatmap: HeatmapCard,
-  member_rfm: RfmGridCard,
   diagnostics: RxPrescriptionCard,
-  menu_engineering: MenuQuadrantCard,
   cross_chain_benchmark: CrossChainCard,
-  restaurant_forecast: ForecastCard,
   bom_variance: BomVarianceCard,
   sales_plan_tracking: SalesPlanCard,
   labor_productivity: LaborProductivityCard,
-  seat_occupancy: SeatOccupancyCard,
-  combo_split: ComboSplitCard,
   return_anomaly: ReturnAnomalyCard,
-  review_competitive: ReviewCompetitiveCard,
   smart_reorder: SmartReorderCard,
   daily_reconciliation: DailyReconciliationCard,
   procurement_forecast: ProcurementForecastCard,
   shift_analysis: ShiftAnalysisCard,
   piecework_calc: PieceworkCalcCard,
   performance_eval: PerformanceEvalCard,
-  store_kpi_dashboard: StoreKpiDashboardCard,
-  advanced_traffic_persona: AdvancedTrafficPersonaCard,
 };
 
 const resolvedCard = computed(() => {

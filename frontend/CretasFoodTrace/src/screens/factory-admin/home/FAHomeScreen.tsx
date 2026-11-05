@@ -141,7 +141,7 @@ export function FAHomeScreen() {
     workReportSummary,
   });
 
-  const { allQuickActions } = useQuickActions(isRestaurantMode);
+  const { allQuickActions } = useQuickActions();
 
   // --- Derived layout data ---
   const layoutModules = layout?.modules || DEFAULT_HOME_LAYOUT;

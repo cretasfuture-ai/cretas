@@ -17,7 +17,6 @@ import com.cretas.aims.service.AIIntentService;
 import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.KeywordEffectivenessService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
-import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
 import com.cretas.aims.service.impl.IntentConfigRollbackService;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.entity.learning.ParameterExtractionRule;
@@ -29,6 +28,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import com.cretas.aims.annotation.RateLimit;
 import com.cretas.aims.annotation.RateLimit.LimitType;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.util.RetiredAnalysisContext;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -69,8 +69,6 @@ public class AIIntentConfigController {
     private final IntentConfigRollbackService rollbackService;
     private final ParameterExtractionLearningService parameterExtractionLearningService;
     private final JwtUtil jwtUtil;
-    // 餐饮租户判定改问 domain (task-1): MOCK_REST 这类 id 不带 RES_/REST_ 前缀,
-    // 只能靠 factories.type 解析出的业态认出来, isRestaurantFactoryId 需要这个能力。
     private final IntentConfigManagementService intentConfigManagementService;
 
     /** 意图配置写入只按路径工厂落行 (复审 H-A, 2026-10-29); 字段注入, 不改既有构造参数。 */
@@ -103,6 +101,21 @@ public class AIIntentConfigController {
             }
         }
         return CookieAuthHelper.extractCookieValue(request, CookieAuthHelper.ACCESS_TOKEN_COOKIE);
+    }
+
+    private String requireFactoryIntentAccess(String factoryId, String userRole) {
+        if (RetiredAnalysisContext.isRetiredIdentity(factoryId, userRole)) {
+            RetiredAnalysisContext.requireFactory(factoryId, "RESTAURANT", userRole);
+        }
+        final String domain;
+        try {
+            domain = intentConfigManagementService.resolveBusinessDomain(factoryId);
+        } catch (RuntimeException e) {
+            throw new BusinessException(503, "无法确认租户业务类型，暂不可执行意图")
+                    .withCode("TENANT_TYPE_UNAVAILABLE");
+        }
+        RetiredAnalysisContext.requireFactory(factoryId, domain, userRole);
+        return domain;
     }
 
     // ==================== 意图查询 ====================
@@ -199,8 +212,7 @@ public class AIIntentConfigController {
     // Intent recognition is read-only diagnostic — gated by JWT auth alone.
     // Per-intent sensitivity is enforced by AIIntentService.hasPermission() in
     // IntentExecutionOrchestrator (line 240) — controller-level system:read_write
-    // was blocking ALL non-super-admin roles (e.g. qhj_warehouse_mgr) from even
-    // PROBING what they can do. See docs/superpowers/handoffs/2026-05-22-mealclaw-e2e-rounds.md
+    // was blocking all non-super-admin roles from even probing what they can do.
     @PostMapping("/recognize")
     @Operation(summary = "测试意图识别", description = "输入文本测试意图识别结果（支持操作类型检测）")
     public ResponseEntity<ApiResponse<IntentRecognitionResult>> recognizeIntent(
@@ -221,6 +233,7 @@ public class AIIntentConfigController {
                     .withHint("请重新登录后再试");
         }
         String userRole = jwtUtil.getRoleFromToken(token);
+        requireFactoryIntentAccess(factoryId, userRole);
 
         // 使用带操作类型检测的增强版识别方法 (BUG-001/002 修复)
         IntentMatchResult matchResult = aiIntentService.recognizeIntentWithConfidence(
@@ -253,7 +266,17 @@ public class AIIntentConfigController {
     @Operation(summary = "识别所有匹配意图", description = "获取所有可能匹配的意图列表")
     public ResponseEntity<ApiResponse<List<AIIntentConfig>>> recognizeAllIntents(
             @Parameter(description = "工厂ID") @PathVariable String factoryId,
-            @RequestBody IntentRecognitionRequest request) {
+            @RequestBody IntentRecognitionRequest request,
+            HttpServletRequest httpRequest) {
+
+        String token = extractToken(httpRequest);
+        Long userId = token == null ? null : jwtUtil.getUserIdFromToken(token);
+        if (userId == null) {
+            throw new BusinessException(401, "无法确定当前登录用户，意图识别已取消")
+                    .withHint("请重新登录后再试");
+        }
+        String userRole = jwtUtil.getRoleFromToken(token);
+        requireFactoryIntentAccess(factoryId, userRole);
 
         List<AIIntentConfig> matchedIntents = aiIntentService.recognizeAllIntents(factoryId, request.getUserInput());
         return ResponseEntity.ok(ApiResponse.success(matchedIntents));
@@ -277,9 +300,7 @@ public class AIIntentConfigController {
      * {@code request.getUserInput().length() > 30 ? ... : ...} 直接写在 log.info
      * 的参数里。请求体缺 {@code userInput} 时 NPE → GlobalExceptionHandler 兜成
      * <b>500「系统处理异常」</b>，而**下游全是 null 安全的**
-     * ({@code isRestaurantDerivedDishSelectionWrite} /
-     * {@code extractExplicitRestaurantDishDeleteTarget} 都以
-     * {@code userInput == null || isBlank()} 开头) —— 也就是说这个 500 完全来自
+     * 下游处理对空 userInput 均有 null-safe 保护 —— 也就是说这个 500 完全来自
      * 一行日志。
      *
      * <p>🔑 判据: <b>日志语句永远不该有能力让请求失败。</b> 它在旁路上，
@@ -311,7 +332,6 @@ public class AIIntentConfigController {
         String userRole = jwtUtil.getRoleFromToken(token);
 
         removeCallerConfirmationAuthority(request);
-        applyRestaurantReportIntentShortcut(factoryId, request);
 
         log.info("执行AI意图: factoryId={}, userInput={}, userId={}, role={}",
                 factoryId, truncateForLog(request.getUserInput()), userId, userRole);
@@ -373,309 +393,6 @@ public class AIIntentConfigController {
             return "没有识别出你要做的操作，请换一种说法，或补充具体的单据号、物料名和时间范围。";
         }
         return "执行失败，请稍后重试；如果反复失败请联系管理员并提供本次操作的时间。";
-    }
-
-    private void applyRestaurantReportIntentShortcut(String factoryId, IntentExecuteRequest request) {
-        if (request == null || (request.getIntentCode() != null && !request.getIntentCode().isBlank())) {
-            return;
-        }
-        if (!isRestaurantFactoryId(factoryId)) {
-            return;
-        }
-        String input = request.getUserInput();
-        if (input == null || input.isBlank() || hasExplicitReadVeto(input)) {
-            return;
-        }
-        String q = input.replaceAll("\\s+", "");
-        if (RestaurantComprehensiveQuestionPolicy.matches(q)) {
-            log.info("[RestaurantDemoIntentShortcut] defer comprehensive question to shared policy: "
-                    + "factoryId={}, input={}", factoryId, input);
-            return;
-        }
-        if (isRestaurantOwnerActionQuestion(q)) {
-            log.info("[RestaurantDemoIntentShortcut] skip report shortcut for owner-action phrase: factoryId={}, input={}",
-                    factoryId, input);
-            return;
-        }
-        boolean salesMetric = containsAny(q,
-                "\u8425\u6536",
-                "\u8425\u4e1a\u989d",
-                "\u9500\u552e\u989d",
-                "\u9500\u552e",
-                "\u5ba2\u5355\u4ef7",
-                "\u8ba2\u5355");
-        boolean reviewMetric = containsAny(q,
-                "\u8bc4\u4ef7",
-                "\u8bc4\u8bba",
-                "\u8bc4\u5206",
-                "\u53e3\u7891",
-                "\u5dee\u8bc4",
-                "\u6295\u8bc9",
-                "\u987e\u5ba2\u6ee1\u610f",
-                "\u5927\u4f17\u70b9\u8bc4");
-        boolean reportMetric = salesMetric || reviewMetric;
-        boolean reportAction = containsAny(q,
-                "\u67e5",
-                "\u67e5\u8be2",
-                "\u770b",
-                "\u770b\u770b",
-                "\u4eca\u5929",
-                "\u672c\u5468",
-                "\u8fd9\u5468",
-                "\u672c\u6708",
-                "\u600e\u4e48\u6837",
-                "\u60c5\u51b5",
-                "\u6c47\u603b",
-                "\u7edf\u8ba1",
-                "\u5206\u6790");
-        boolean reviewAction = reportAction || containsAny(q,
-                "\u662f\u4ec0\u4e48",
-                "\u6709\u54ea\u4e9b",
-                "\u54ea\u4e9b",
-                "\u9ad8\u9891",
-                "\u597d\u8bc4",
-                "\u5206\u522b",
-                "\u5e94\u8be5\u600e\u4e48",
-                "\u600e\u4e48\u6539\u5584",
-                "\u5982\u4f55\u6539\u5584",
-                "\u6539\u5584",
-                "\u6539\u8fdb",
-                "\u5904\u7406",
-                "\u89e3\u51b3",
-                "\u5efa\u8bae");
-        boolean trendAction = containsAny(q,
-                "\u540c\u6bd4",
-                "\u73af\u6bd4",
-                "\u8d8b\u52bf",
-                "\u8d70\u52bf",
-                "\u589e\u957f",
-                "\u4e0b\u964d",
-                "\u6708\u5ea6\u53d8\u5316");
-        boolean reviewReplyProgress = containsAny(q,
-                "\u56de\u590d\u7387",
-                "\u672a\u56de\u590d",
-                "\u8865\u56de\u590d",
-                "\u8865\u54ea\u4e9b\u56de\u590d",
-                "\u56de\u590d\u8fdb\u5ea6");
-        if (reviewMetric && !salesMetric && reviewAction) {
-            if (reviewReplyProgress) {
-                request.setIntentCode("RESTAURANT_REVIEW_REPLY_RATE");
-            } else if (isRestaurantReviewBadStoreQuestion(q)) {
-                request.setIntentCode("RESTAURANT_REVIEW_BAD_STORE");
-            } else if (isRestaurantReviewComplaintRemedyQuestion(q)) {
-                request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
-            } else if (isRestaurantReviewSummaryQuestion(q)) {
-                request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
-            } else if (containsAny(q, "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f")) {
-                request.setIntentCode("RESTAURANT_REVIEW_COMPLAINT");
-            } else if (trendAction) {
-                request.setIntentCode("RESTAURANT_REVIEW_TREND");
-            } else {
-                request.setIntentCode("RESTAURANT_REVIEW_SUMMARY");
-            }
-            log.info("[RestaurantDemoIntentShortcut] route review report phrase before intent recognition: factoryId={}, intentCode={}",
-                    factoryId, request.getIntentCode());
-            return;
-        }
-        if (salesMetric && isRestaurantSalesRankingOrComparison(q)) {
-            // The controller shortcut is intentionally limited to plain reports.
-            // Ranking/comparison questions need the orchestrator's object-aware
-            // classifier (store vs month) or the tiered semantic planner. Setting
-            // SALES_SUMMARY here would bypass both layers.
-            log.info("[RestaurantDemoIntentShortcut] defer ranked/comparative sales question: factoryId={}, input={}",
-                    factoryId, input);
-            return;
-        }
-        if (salesMetric && isRestaurantDiagnosticAnalysisQuestion(q)) {
-            // A metric plus a causal/diagnostic action is not a plain report.
-            // Leave it unpinned so the orchestrator can choose its existing
-            // multi-dimension synthesis route (or the tiered semantic planner
-            // for a single-dimension diagnostic). Otherwise phrases such as
-            // "结合天气、客流和活动分析3月营收高峰原因" are prematurely
-            // reduced to SALES_SUMMARY and the available FactBook dimensions
-            // are never consulted.
-            log.info("[RestaurantDemoIntentShortcut] defer diagnostic sales question: factoryId={}, input={}",
-                    factoryId, input);
-            return;
-        }
-        if (reportMetric && trendAction) {
-            request.setIntentCode("RESTAURANT_OPS_TREND_ANALYSIS");
-            log.info("[RestaurantDemoIntentShortcut] route trend report phrase before intent recognition: factoryId={}, intentCode={}",
-                    factoryId, request.getIntentCode());
-            return;
-        }
-        if (reportMetric && reportAction) {
-            request.setIntentCode("RESTAURANT_OPS_SALES_SUMMARY");
-            log.info("[RestaurantDemoIntentShortcut] route report phrase before intent recognition: factoryId={}, intentCode={}",
-                    factoryId, request.getIntentCode());
-        }
-    }
-
-    private boolean isRestaurantSalesRankingOrComparison(String q) {
-        return containsAny(
-                q,
-                "\u6700\u9ad8",
-                "\u6700\u4f4e",
-                "\u6700\u591a",
-                "\u6700\u5c11",
-                "\u6700\u597d",
-                "\u6700\u5dee",
-                "\u6392\u540d",
-                "\u6392\u884c",
-                "\u5bf9\u6bd4",
-                "\u6bd4\u8f83",
-                "\u76f8\u6bd4",
-                "\u9ad8\u4e8e",
-                "\u4f4e\u4e8e",
-                "\u9ad8\u8fd8\u662f\u4f4e",
-                "\u7b2c\u4e00\u540d",
-                "\u51a0\u519b");
-    }
-
-    private boolean isRestaurantDiagnosticAnalysisQuestion(String q) {
-        return containsAny(
-                q,
-                "\u539f\u56e0",
-                "\u4e3a\u4ec0\u4e48",
-                "\u4e3a\u4f55",
-                "\u8bca\u65ad",
-                "\u5f52\u56e0",
-                "\u5f71\u54cd",
-                "\u62c9\u52a8",
-                "\u9a71\u52a8",
-                "\u5efa\u8bae",
-                "\u51b3\u7b56",
-                "\u65b9\u6848",
-                "\u4f18\u5316");
-    }
-
-    private boolean isRestaurantOwnerActionQuestion(String q) {
-        if (q == null || q.isBlank()) {
-            return false;
-        }
-        if (isPureRestaurantReviewRemedyQuestion(q)) {
-            return false;
-        }
-        boolean hasTopic = containsAny(q,
-                "\u8001\u677f", "\u5e97\u957f", "\u533a\u57df\u7ecf\u7406", "\u4ed3\u7ba1", "\u53a8\u5e08\u957f", "\u524d\u53f0",
-                "\u8425\u6536", "\u8425\u4e1a\u989d", "\u6536\u5165", "\u5ba2\u5355", "\u8ba2\u5355",
-                "\u684c\u578b", "\u684c\u5b50", "\u4e8c\u4eba\u684c", "\u56db\u4eba\u684c", "\u7ffb\u53f0", "\u6392\u961f",
-                "\u6392\u73ed", "\u5458\u5de5", "\u4eba\u624b", "\u524d\u5385", "\u540e\u53a8", "\u53a8\u623f", "\u51fa\u9910",
-                "\u5907\u8d27", "\u5907\u83dc", "\u5e93\u5b58", "\u635f\u8017", "\u62a5\u635f", "\u6708\u76d8\u70b9",
-                "\u6bdb\u5229", "\u6210\u672c", "BOM", "bom", "\u7406\u8bba\u7528\u91cf", "\u5b9e\u9645\u7528\u91cf",
-                "\u5957\u9910", "\u5c0f\u5957\u9910", "\u83dc\u54c1", "\u5916\u5356", "\u5e73\u53f0", "\u7f8e\u56e2",
-                "\u6296\u97f3", "\u56e2\u8d2d", "\u66dd\u5149", "\u6838\u9500", "\u627f\u63a5",
-                "\u5546\u5708", "\u5546\u573a", "\u6d3b\u52a8", "\u5929\u6c14", "\u5ba2\u6d41", "\u753b\u50cf",
-                "\u95e8\u53e3", "\u4eb2\u5b50", "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u5dee\u8bc4");
-        boolean hasDecision = containsAny(q,
-                "\u600e\u4e48", "\u5982\u4f55", "\u5e94\u8be5", "\u6700\u5e94\u8be5", "\u9002\u5408",
-                "\u52a8\u4f5c", "\u54ea\u4e09\u4e2a", "\u4e09\u4e2a\u52a8\u4f5c", "\u5148\u505a",
-                "\u5148\u6539", "\u5148\u7ba1", "\u5148\u67e5", "\u5148\u770b", "\u5148\u8bad\u7ec3",
-                "\u505a\u4ec0\u4e48", "\u770b\u4ec0\u4e48", "\u5206\u522b",
-                "\u4e0d\u8981\u591a\u5907", "\u4e0d\u60f3\u6253\u6298", "\u62c9\u8d77\u6765", "\u522b\u4e8f",
-                "\u8be5\u6539", "\u914d\u5408", "\u53ea\u80fd", "\u8fd8\u662f", "\u4e0d\u7528\u7b49",
-                "\u63a8", "\u8c03", "\u6392", "\u6539", "\u63d0\u9ad8", "\u63d0\u5347", "\u4f18\u5316",
-                "\u5efa\u8bae", "\u89e3\u51b3", "\u57f9\u8bad", "\u5e2e\u6211\u7b97", "\u8981\u8003\u8651");
-        boolean reviewOnly = containsAny(q, "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u5dee\u8bc4", "\u53e3\u7891", "\u6295\u8bc9")
-                && !containsAny(q,
-                "\u8001\u677f", "\u5e97\u957f", "\u52a8\u4f5c", "\u5148\u6539", "\u54ea\u4e09\u4e2a",
-                "\u684c\u578b", "\u6392\u73ed", "\u5458\u5de5", "\u524d\u5385", "\u540e\u53a8",
-                "\u53a8\u623f", "\u51fa\u9910", "\u5957\u9910", "\u6210\u672c", "\u6bdb\u5229",
-                "\u5916\u5356", "\u5e73\u53f0", "\u7f8e\u56e2", "\u6296\u97f3", "\u56e2\u8d2d",
-                "\u5907\u8d27", "\u5e93\u5b58", "\u5546\u5708", "\u5546\u573a", "\u5ba2\u6d41");
-        if (reviewOnly) {
-            return false;
-        }
-        return hasTopic && hasDecision;
-    }
-
-    private boolean isRestaurantReviewBadStoreQuestion(String q) {
-        boolean hasStoreSignal = containsAny(q,
-                "\u95e8\u5e97", "\u54ea\u5bb6\u5e97", "\u54ea\u4e2a\u95e8\u5e97", "\u5dee\u8bc4\u6700\u591a",
-                "\u8bc4\u4ef7\u6700\u5dee", "\u53e3\u7891\u5dee");
-        boolean hasReviewSignal = containsAny(q,
-                "\u5dee\u8bc4", "\u4f4e\u661f", "\u8bc4\u4ef7", "\u53e3\u7891");
-        return hasStoreSignal && hasReviewSignal;
-    }
-
-    private boolean isRestaurantReviewComplaintRemedyQuestion(String q) {
-        boolean hasComplaintSignal = containsAny(q,
-                "\u5dee\u8bc4", "\u6295\u8bc9", "\u5410\u69fd", "\u4f4e\u661f");
-        if (!hasComplaintSignal) {
-            return false;
-        }
-        return containsAny(q,
-                "\u600e\u4e48\u5904\u7406", "\u600e\u4e48\u6539\u5584", "\u5982\u4f55\u6539\u5584",
-                "\u600e\u4e48\u6539", "\u5904\u7406", "\u6539\u5584", "\u6539\u8fdb", "\u89e3\u51b3",
-                "\u5efa\u8bae", "\u5e97\u957f\u4eca\u5929");
-    }
-
-    private boolean isRestaurantReviewSummaryQuestion(String q) {
-        boolean hasReviewSignal = containsAny(q,
-                "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u8bc4\u5206", "\u53e3\u7891",
-                "\u5927\u4f17\u70b9\u8bc4", "\u597d\u8bc4", "\u5dee\u8bc4");
-        if (!hasReviewSignal) {
-            return false;
-        }
-        return containsAny(q,
-                "\u600e\u4e48\u6837", "\u60c5\u51b5", "\u6c47\u603b", "\u7edf\u8ba1",
-                "\u9ad8\u9891", "\u597d\u8bc4", "\u662f\u4ec0\u4e48", "\u6709\u54ea\u4e9b",
-                "\u54ea\u4e9b", "\u5206\u522b");
-    }
-
-    private boolean isPureRestaurantReviewRemedyQuestion(String q) {
-        boolean hasReviewSignal = containsAny(q,
-                "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u5dee\u8bc4", "\u6295\u8bc9",
-                "\u53e3\u7891", "\u4f4e\u661f", "\u5927\u4f17\u70b9\u8bc4");
-        if (!hasReviewSignal) {
-            return false;
-        }
-        boolean hasOpsSignal = containsAny(q,
-                "\u684c\u578b", "\u6392\u73ed", "\u5458\u5de5", "\u4eba\u624b", "\u524d\u5385", "\u540e\u53a8",
-                "\u53a8\u623f", "\u51fa\u9910", "\u5957\u9910", "\u5916\u5356", "\u5e73\u53f0", "\u56e2\u8d2d",
-                "\u5907\u8d27", "\u5e93\u5b58", "\u6210\u672c", "\u6bdb\u5229", "\u7f8e\u56e2", "\u6296\u97f3",
-                "\u5546\u5708", "\u5546\u573a", "\u6d3b\u52a8", "\u5ba2\u6d41", "\u8425\u6536", "\u83dc\u54c1",
-                "\u52a8\u4f5c", "\u98ce\u9669");
-        boolean asksRemedy = containsAny(q,
-                "\u600e\u4e48\u6539\u5584", "\u5982\u4f55\u6539\u5584", "\u5e94\u8be5\u600e\u4e48",
-                "\u600e\u4e48\u5904\u7406", "\u89e3\u51b3", "\u5efa\u8bae", "\u6539\u8fdb");
-        return asksRemedy && !hasOpsSignal;
-    }
-
-    /**
-     * 餐饮租户判定的唯一语义: domain 是权威, ID 前缀只是 domain 拿不到时的兜底。
-     * public static 因为测试 {@code RestaurantTenantDetectionContractTest} 在
-     * {@code com.cretas.aims.service.execution} 包, 与本类不同包不可见 package-private。
-     */
-    public static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
-        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
-            return true;
-        }
-        if (factoryId == null || factoryId.isBlank()) {
-            return false;
-        }
-        String normalized = factoryId.trim().toUpperCase(java.util.Locale.ROOT);
-        return "DEMO_REST".equals(normalized)
-                || normalized.startsWith("RES_")
-                || normalized.startsWith("REST_");
-    }
-
-    private boolean isRestaurantFactoryId(String factoryId) {
-        return isRestaurantTenantId(factoryId, resolveFactoryDomainSafe(factoryId));
-    }
-
-    /** Fail-soft domain lookup: 服务未注入(如部分单测直接 new 控制器)或解析失败都退回 null。 */
-    private String resolveFactoryDomainSafe(String factoryId) {
-        if (intentConfigManagementService == null) {
-            return null;
-        }
-        try {
-            return intentConfigManagementService.resolveBusinessDomain(factoryId);
-        } catch (Exception e) {
-            log.warn("[RestaurantDemoIntentShortcut] resolveBusinessDomain failed for factoryId={}: {}",
-                    factoryId, e.getMessage());
-            return null;
-        }
     }
 
     private boolean hasExplicitReadVeto(String input) {

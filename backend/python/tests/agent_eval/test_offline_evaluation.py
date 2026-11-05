@@ -2,8 +2,8 @@ import re
 from pathlib import Path
 
 from smartbi.agent.eval.runner import EVALUATOR_BUILD, compute_evaluator_build
-from smartbi.agent.runtime import evaluation as runtime_evaluation
-from smartbi.agent.runtime.evaluation import (
+from smartbi.agent.eval import offline_evaluation as runtime_evaluation
+from smartbi.agent.eval.offline_evaluation import (
     OfflineCaseExpectation,
     OfflineCaseSnapshot,
     evaluate_offline_case,
@@ -15,7 +15,7 @@ def test_evaluator_build_is_the_lowercase_source_artifact_sha256_and_drifts():
         "runner.py": Path(__file__).parents[2].joinpath(
             "smartbi/agent/eval/runner.py"
         ).read_bytes(),
-        "runtime/evaluation.py": Path(runtime_evaluation.__file__).read_bytes(),
+        "eval/offline_evaluation.py": Path(runtime_evaluation.__file__).read_bytes(),
     }
     assert EVALUATOR_BUILD == compute_evaluator_build(artifacts)
     assert re.fullmatch(r"[0-9a-f]{64}", EVALUATOR_BUILD)

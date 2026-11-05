@@ -506,6 +506,10 @@ export type FAManagementStackParamList = {
   PurchaseOrderList: undefined;
   PurchaseOrderCreate: undefined;
   PurchaseOrderDetail: { orderId: string };
+  SupplierDeliveryList: undefined;
+  SupplierDeliveryCreate: undefined;
+  SupplierDeliveryDetail: { noteId: string };
+  PriceAnomalyApproval: undefined;
   ProcessTaskApproval: undefined;
   SalesOrderList: undefined;
   SalesOrderCreate: undefined;
@@ -536,27 +540,6 @@ export type FAManagementStackParamList = {
   ProcessRunOverview: { productionRunId: string };
   YieldBatchSelect: undefined;
   YieldStepReport: YieldStepReportParams;
-  // 餐饮模块 (restaurant mode)
-  RecipeList: undefined;
-  RecipeDetail: { productTypeId: string; dishName: string };
-  RecipeEdit: { productTypeId?: string; dishName?: string } | undefined;
-  RequisitionList: undefined;
-  RequisitionCreate: undefined;
-  ChefRequisitionList: undefined;
-  ChefRequisitionCreate: undefined;
-  RequisitionApproval: undefined;
-  RequisitionDetail: { requisitionId: string };
-  WastageList: undefined;
-  WastageCreate: undefined;
-  StocktakingList: undefined;
-  StocktakingExecute: { recordId?: string } | undefined;
-  StocktakingSummary: undefined;
-  ProcurementDeliveryConfirm: undefined;
-  SupplierDeliveryList: undefined;
-  SupplierDeliveryCreate: undefined;
-  SupplierDeliveryDetail: { noteId: string };
-  PriceAnomalyApproval: undefined;
-
   // Track D2 — 工序管理 (M-WP-1) + 产品工序配置 (M-WP-2)
   WorkProcessList: undefined;
   WorkProcessCreate: { mode?: 'create' | 'edit'; id?: string } | undefined;
@@ -575,12 +558,6 @@ export type FAProfileStackParamList = {
   Membership: undefined;
   DataExport: { reportType?: 'production' | 'cost' | 'attendance' };
 };
-
-// Restaurant module type aliases (screens live inside FAManagementStack)
-export type RRecipeStackParamList = FAManagementStackParamList;
-export type RWastageStackParamList = FAManagementStackParamList;
-export type RStocktakingStackParamList = FAManagementStackParamList;
-export type RRequisitionStackParamList = FAManagementStackParamList;
 
 // Factory Admin 屏幕Props
 export type FAHomeScreenProps<T extends keyof FAHomeStackParamList> =

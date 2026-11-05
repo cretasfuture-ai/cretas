@@ -66,7 +66,6 @@ public final class UnsupportedCapabilityRegistry {
         // 证据（2026-08-26 全仓实测）：controlChart / control_chart / Cpk /
         // 统计过程控制 命中数均为 0（Cpk 的少量命中全部是 pnpm-lock 里的
         // base64 噪声）。SPC 的核心就是控制图 + 过程能力指数，两样都没有。
-        // 另有旁证：tests/restaurant-full-e2e.py 的负面用例里
         // ('SPC控制图', False) —— 测试早就假定它不该命中任何意图。
         register(new UnsupportedCapability(
                 "spc",

@@ -63,8 +63,6 @@ const SCENARIOS = [
   require('../scenarios/f006-demo-menu-readonly'),
   require('../scenarios/f006-demo-menu-readonly').existing,
   require('../scenarios/label-qc-readonly'),
-  require('../scenarios/restaurant-live-command-readonly'),
-  require('../scenarios/restaurant-staffing-readonly'),
   require('../scenarios/sales-order-lifecycle-readonly'),
   require('../scenarios/ui-stability'),
   require('../scenarios/visual-page-census-readonly'),

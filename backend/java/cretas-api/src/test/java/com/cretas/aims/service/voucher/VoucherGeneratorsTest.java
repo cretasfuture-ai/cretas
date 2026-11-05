@@ -11,7 +11,7 @@ import com.cretas.aims.entity.inventory.InternalTransferItem;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
-import com.cretas.aims.entity.restaurant.WastageRecord;
+import com.cretas.aims.entity.inventory.WastageRecord;
 import com.cretas.aims.dto.finance.VoucherSubjectMappingDTO;
 import com.cretas.aims.entity.enums.SettlementType;
 import com.cretas.aims.service.finance.VoucherSubjectMappingService;

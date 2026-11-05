@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 审计批 2 (docs/ops/cron-scripts-path-audit-2026-09-06.md) 的 7 个 venv 定时脚本, 每个各一条最小测试:
+# 审计批 2 (docs/ops/cron-scripts-path-audit-2026-09-06.md) 的 2 个存活 venv 定时脚本, 每个各一条最小测试:
 #   ① 假 PATH 缺 systemctl ⇒ rc=2 + reason=cmd-not-found:systemctl   (forecast 不用 systemctl, 跳过此项)
 #   ② venv 不在            ⇒ rc=2 + reason=venv-missing, python 零调用 (⛔ 不掉回系统 python)
 #   ③ .env.prod 不在       ⇒ rc=2 + reason=env-file-missing:env.prod
 #   ④ 阳性对照: 三样都在 ⇒ rc=0, 告警里没有上面三个 reason, python 被调到
 #
-# 为什么值得每个都测一遍而不是只测 cron-common.sh: 这 7 个脚本共用同一个未守卫的
+# 为什么值得每个都测一遍而不是只测 cron-common.sh: 这 2 个脚本共用同一个未守卫的
 # `source venv-current/bin/activate`, venv-current 链接坏掉那天会**同时**掉回 3.6.8; 其中两态的
 # 会把崩溃写成业务失败。测的是「每个脚本真的接上了守卫」(形态 B), 不是守卫本身。
 #
-# 假 python 只做两件事: 记调用、消费 stdin (ledger 那段是 `python - <<PY`)、exit 0。它不产出
+# 假 python 只做两件事: 记调用、消费 stdin、exit 0。它不产出
 # 各脚本的 /tmp 产出文件, 所以阳性对照里可能出现脚本**自己**的 INSTRUMENT DEAD(产出没写) ——
 # 那是脚本原有的三态, 不是本批的三个 reason; 断言只看本批的三个键。
 set -uo pipefail
@@ -24,13 +24,8 @@ BASH_ABS=$(command -v bash) || fail "本机缺 bash"
 
 # 脚本 | 环境变量前缀 | 告警措辞前缀 | 是否 require systemctl
 CASES=(
-  "daily-close-push.sh|DAILY_CLOSE|DAILY CLOSE|1"
-  "flywheel-promotion-staleness-daily.sh|FLYWHEEL_STALE|FLYWHEEL PROMOTION STALENESS|1"
   "forecast-backtest-watch.sh|FORECAST_BT|FORECAST BACKTEST|0"
   "llm-provider-health-daily.sh|LLM_HEALTH|LLM HEALTH|1"
-  "margin-parity-daily.sh|MARGIN_PARITY|MARGIN PARITY|1"
-  "replay-equivalence-daily.sh|REPLAY_EQ|REPLAY EQUIV|1"
-  "restaurant-unfreeze-watch.sh|UNFREEZE|UNFREEZE WATCH|1"
 )
 
 FAKEBIN="$TMP/bin"; STUB="$TMP/stub"; PYBIN="$TMP/pyvenv/bin"
@@ -118,29 +113,7 @@ for entry in "${CASES[@]}"; do
     ok "$script .env.prod 不在 ⇒ rc=2 reason=env-file-missing:env.prod"
 done
 
-# 可选 env 文件: 不在只记一句, ⛔ 不 rc=2 (daily-close / margin-parity 两个有 ENV_EXTRA)
-for entry in "daily-close-push.sh|DAILY_CLOSE" "margin-parity-daily.sh|MARGIN_PARITY"; do
-    IFS='|' read -r script prefix <<< "$entry"
-    mk_pydir; printf 'X=1\n' > "$TMP/env.prod"; rm -f "$TMP/env.extra"
-    run_script "$script" "$prefix"
-    [ "$RC" = 0 ] || fail "[$script 可选] 期望 rc=0 实得 $RC"
-    grep -q "INFO optional env file absent: $TMP/env.extra" "$TMP/log" || fail "[$script 可选] 日志里没有「可选文件不在」那一句"
-    ok "$script 可选 env 不在 ⇒ 记一句, rc=0"
-done
-
-# 2026-10-29 MOCK_REST AI writes stopped, owner-approved: replay-equivalence-daily.sh 默认停用。
-# 不设 REPLAY_EQ_ENABLED ⇒ rc=0、python 零调用、日志记「已停」、不告警。
-# (上面那组用 REPLAY_EQ_ENABLED=1 跑, 守的是将来恢复时守卫还在。)
-mk_pydir; printf 'X=1\n' > "$TMP/env.prod"
-ENABLED_OVERRIDE=0 run_script "replay-equivalence-daily.sh" "REPLAY_EQ"
-[ "$RC" = 0 ] || fail "[replay 默认停用] 期望 rc=0 实得 $RC"
-# ⚠️ 不用 *python* 通配: systemctl 的参数 cretas-python.service 也会命中。停用时一个桩都不该被调。
-[ -s "$STUB/calls.log" ] && fail "[replay 默认停用] 停用时不许调到 systemctl/python: $(tr '\n' '|' < "$STUB/calls.log")"
-grep -q "replay equivalence: 已停 (2026-10-29 MOCK_REST AI writes stopped, owner-approved)" "$TMP/log" \
-    || fail "[replay 默认停用] 日志里没有「已停」那一句: $(cat "$TMP/log" 2>/dev/null)"
-[ -f "$ALERTS" ] && fail "[replay 默认停用] 停用不该告警: $(cat "$ALERTS")"
-ok "replay-equivalence-daily.sh 默认停用 ⇒ rc=0, systemctl/python 零调用, 日志记「已停」"
-
-echo "READING: RC2_CONSTRUCTED=$N_RC2 (7 脚本 × {venv-missing, env-file-missing} + 6 × cmd-not-found:systemctl)"
-[ "$N_RC2" -eq 20 ] || fail "rc=2 构造次数应为 20, 实得 $N_RC2"
+echo "READING: RC2_CONSTRUCTED=$N_RC2"
+# 两个存活脚本: forecast 的 venv/env 两态 + LLM health 的 systemctl/venv/env 三态。
+[ "$N_RC2" -eq 5 ] || fail "rc=2 构造次数应为 5, 实得 $N_RC2"
 echo "PASS: test-cron-venv-scripts-batch2.sh ($PASSED 组断言)"

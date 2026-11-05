@@ -768,6 +768,7 @@ class SupplierComparisonStreamingContractTest {
             when(intentPermissionGate.check(any(), any(), anyString()))
                     .thenReturn(IntentPermissionGate.PermissionCheck.allowed());
             when(businessTypeGate.check(anyString(), any())).thenReturn(Optional.empty());
+            when(businessTypeGate.resolveDomain("F-SUP")).thenReturn("FACTORY");
             when(semanticCacheService.queryCache(anyString(), anyString())).thenReturn(SemanticCacheHit.miss(0L));
             ConversationContext defaultOwner = ConversationContext.builder()
                     .sessionId(SESSION).factoryId(FACTORY).userId(USER_ID)

@@ -171,11 +171,11 @@ describe('分支可达性（棘轮：空转的权限分支只许变少）', () =
     // 不必跟着调。⛔ 这不是分析器读不懂了(`阳性对照：路由表 → 视图文件的连接
     // 一条都没漏` 那条仍然全绿，namedRoutesMissingFile 仍是 []) —— 是真的减少了
     // 可达面, 按本闸自己的说明「确认后把这几个数一起调小」。
-    // 调小后 (2026-09-02 实测 253 / 242 / 4024 / 20746，留 ~3% 余量):
+    // 餐饮告警/体检分支已退役后 (2026-11-05 实测 253 / 242 / 4024 / 20746，留 ~3% 余量):
     expect(s.routesWithFile).toBeGreaterThanOrEqual(245);
     expect(s.reachableViewFiles).toBeGreaterThanOrEqual(234);
     expect(s.allowedPairs).toBeGreaterThanOrEqual(3903);
-    expect(s.branchesExamined).toBeGreaterThanOrEqual(232);
+    expect(s.branchesExamined).toBeGreaterThanOrEqual(228);
     expect(s.guardCalls).toBeGreaterThanOrEqual(20123);
 
     // 三态都得有人 —— 全落进一态说明分类器退化了。
@@ -412,24 +412,13 @@ describe('分支可达性（棘轮：空转的权限分支只许变少）', () =
 
   // ==================== 真实用例 ====================
 
-  it('真实用例：AlertDashboard 的「餐饮租户」分支从不执行', () => {
-    // `/analytics/alerts` 在路由上对 RESTAURANT 隐藏 ⇒ 走得到它的 13 个主体
-    // 没有一个是餐饮租户，而页面里还写着 `factoryType === 'RESTAURANT'` 的分支。
-    // 这是本闸的第一个真实用例，也是「必须把工厂类型算进主体」的证明：
-    // 只按角色量，这一条根本判不出来。
-    // ⚠️ 按**完整 key** 取，⛔ 不用 `includes('RESTAURANT')` ——
-    //    同一个文件里还有一条 `(!auth.factoryType === 'RESTAURANT' && canWrite('equipment'))`，
-    //    它按 key 排序排在前面且是 EFFECTIVE。第一版用 includes，`find` 拿到的是它，
-    //    断言红在「EFFECTIVE ≠ VACUOUS」上，看起来像分析器错了 —— 是**选择器**错了。
+  it('真实用例：AlertDashboard 不再暴露餐饮体检分支', () => {
     const f = RESULT.findings.find(
       (x) =>
         x.relFile.endsWith('analytics/AlertDashboard.vue') &&
         x.key === "auth.factoryType === 'RESTAURANT'",
     );
-    expect(f).toBeDefined();
-    expect(f?.verdict).toBe('VACUOUS');
-    expect(f?.detail).toContain('恒为假');
-    expect(f?.principals.every((p) => !p.endsWith('@RESTAURANT'))).toBe(true);
+    expect(f).toBeUndefined();
   });
 
   it('真实用例：路由 meta.module 已经拦过一次，页面里再判一次就是空转', () => {

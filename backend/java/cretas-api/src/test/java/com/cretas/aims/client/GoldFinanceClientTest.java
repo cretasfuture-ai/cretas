@@ -65,66 +65,9 @@ class GoldFinanceClientTest {
         server.shutdown();
     }
 
-    @Test
-    void fetchRestaurantOpsAnalysisUsesTypedTransportAndTrustedHeaders() throws Exception {
-        server.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setHeader("Content-Type", "application/json")
-                .setBody("{\"success\":true,\"answer\":\"ops answer\",\"charts\":[]}"));
-        MockHttpServletRequest servletRequest = new MockHttpServletRequest();
-        servletRequest.setAttribute("userId", 88L);
-        servletRequest.setAttribute("role", "restaurant_manager");
-        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
 
-        Map<String, Object> analysisContext = Map.of(
-                "store_id", "44",
-                "store_name", "鲜行者打浦桥日月光店",
-                "start_date", "2026-07-20",
-                "end_date", "2026-07-20",
-                "comparison_start_date", "2026-07-19",
-                "comparison_end_date", "2026-07-19",
-                "time_anchor_date", "2026-07-21");
-        Map<String, Object> result = client.fetchRestaurantOpsAnalysis(
-                "REST-OPS", "show restaurant costs", "session-ops",
-                "RESTAURANT_OPS_GROSS_MARGIN", analysisContext);
 
-        assertEquals("ops answer", result.get("answer"));
-        RecordedRequest request = server.takeRequest();
-        assertEquals("/api/chat/general-analysis", request.getPath());
-        assertEquals("typed-secret-xyz", request.getHeader("X-Internal-Secret"));
-        assertEquals("REST-OPS", request.getHeader("X-Factory-Id"));
-        assertEquals("88", request.getHeader("X-User-Id"));
-        assertEquals("restaurant_manager", request.getHeader("X-User-Role"));
-        JsonNode body = new ObjectMapper().readTree(request.getBody().readUtf8());
-        assertEquals("show restaurant costs", body.path("query").asText());
-        assertEquals("restaurant_ops", body.path("table_type").asText());
-        assertEquals("session-ops", body.path("session_id").asText());
-        assertEquals("RESTAURANT_OPS_GROSS_MARGIN", body.path("expected_intent").asText());
-        assertFalse(body.path("allow_tenant_data_fallback").asBoolean(true));
-        assertEquals("44", body.path("context").path("store_id").asText());
-        assertEquals("鲜行者打浦桥日月光店", body.path("context").path("store_name").asText());
-        assertEquals("2026-07-20", body.path("context").path("start_date").asText());
-        assertEquals("2026-07-19", body.path("context").path("comparison_start_date").asText());
-        assertEquals("2026-07-21", body.path("context").path("time_anchor_date").asText());
-        assertFalse(body.has("factory_id"));
-        assertFalse(body.has("user_id"));
-        assertFalse(body.path("context").has("factory_id"));
-        assertFalse(body.path("context").has("user_id"));
-    }
 
-    @Test
-    void fetchRestaurantOpsAnalysisRejectsEmptySuccessfulResponse() {
-        server.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setHeader("Content-Type", "application/json")
-                .setBody("{\"success\":true,\"answer\":\"  \"}"));
-
-        IOException failure = assertThrows(IOException.class, () ->
-                client.fetchRestaurantOpsAnalysis("REST-OPS", "question", null));
-
-        assertEquals("Python SmartBI general analysis is unavailable", failure.getMessage());
-        assertEquals(1, server.getRequestCount());
-    }
 
     @Test
     void fetchFinanceSummary_happyPath_parsesResponse() throws Exception {
@@ -235,90 +178,5 @@ class GoldFinanceClientTest {
         RecordedRequest req = server.takeRequest();
         assertNull(req.getHeader("X-Internal-Secret"));
         assertNull(req.getHeader("X-Factory-Id"));
-    }
-
-    // =========================================================================
-    // fetchTieredIntentAnswer — 2026-07-08 clarification-loop v1 session_id
-    // overload (4-arg). Mirrors the RecordedRequest body-inspection pattern
-    // used elsewhere in this file.
-    // =========================================================================
-
-    @Test
-    void tieredAnswerTimeoutNeverReusesLegacySixOrTenSecondBudget() {
-        PythonSmartBIConfig config =
-                (PythonSmartBIConfig) ReflectionTestUtils.getField(client, "config");
-        assertNotNull(config);
-
-        // 2026-08-12 二次调整 (owner: 「前期不考虑这个, 后面再优化」): floor 从
-        // 30s 提到 60s, 与 nginx 默认 upstream 超时对齐 (见
-        // GoldFinanceClient.MIN_TIERED_ANSWER_TIMEOUT_MS 的注释)。
-        // 30_000 是这条常量的旧值 —— 断言必须跟着常量一起更新, 不能钉在历史上。
-        config.setRestaurantTieredAnswerTimeout(6_000);
-        assertEquals(60_000L, client.tieredAnswerTimeoutMs());
-
-        // 45s 曾经高于旧 floor(30s) 因此原样透传；现在低于新 floor(60s)，
-        // 同样被拉到地板值 —— 地板线本身上移了，不是这个配置值变了。
-        config.setRestaurantTieredAnswerTimeout(45_000);
-        assertEquals(60_000L, client.tieredAnswerTimeoutMs());
-
-        // 阴性对照: 高于新 floor 的配置值仍然原样透传，证明这不是恒等于 60_000 的常量。
-        config.setRestaurantTieredAnswerTimeout(90_000);
-        assertEquals(90_000L, client.tieredAnswerTimeoutMs());
-    }
-
-    @Test
-    void fetchTieredIntentAnswer_4arg_withSessionId_includesSessionIdInBody() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
-        MockHttpServletRequest servletRequest = new MockHttpServletRequest();
-        servletRequest.setAttribute("userId", 88L);
-        servletRequest.setAttribute("role", "restaurant_manager");
-        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
-
-        client.fetchTieredIntentAnswer("F001", "最近两个月", "restaurant_peak_month_gold", "sess-abc-123");
-
-        RecordedRequest req = server.takeRequest();
-        String body = req.getBody().readUtf8();
-        assertEquals("88", req.getHeader("X-User-Id"));
-        assertEquals("restaurant_manager", req.getHeader("X-User-Role"));
-        assertTrue(body.contains("\"session_id\":\"sess-abc-123\""), body);
-        assertTrue(body.contains("\"factory_id\":\"F001\""), body);
-        assertTrue(body.contains("\"query\":\"最近两个月\""), body);
-    }
-
-    @Test
-    void fetchTieredIntentAnswer_4arg_withNullSessionId_omitsSessionIdField() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
-
-        client.fetchTieredIntentAnswer("F001", "营收趋势", "restaurant_revenue_trend_gold", null);
-
-        RecordedRequest req = server.takeRequest();
-        String body = req.getBody().readUtf8();
-        assertFalse(body.contains("session_id"), body);
-    }
-
-    @Test
-    void fetchTieredIntentAnswer_4arg_withBlankSessionId_omitsSessionIdField() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
-
-        client.fetchTieredIntentAnswer("F001", "营收趋势", "restaurant_revenue_trend_gold", "   ");
-
-        RecordedRequest req = server.takeRequest();
-        String body = req.getBody().readUtf8();
-        assertFalse(body.contains("session_id"), body);
-    }
-
-    @Test
-    void fetchTieredIntentAnswer_3arg_overload_stillOmitsSessionIdField() throws Exception {
-        // The pre-existing 3-arg overload (used by every call site that has
-        // no session id available) must produce a byte-identical request
-        // body to before this feature existed -- no session_id key at all.
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"delegate\":false}"));
-
-        client.fetchTieredIntentAnswer("F001", "营收趋势", "restaurant_revenue_trend_gold");
-
-        RecordedRequest req = server.takeRequest();
-        String body = req.getBody().readUtf8();
-        assertFalse(body.contains("session_id"), body);
-        assertTrue(body.contains("\"factory_id\":\"F001\""), body);
     }
 }

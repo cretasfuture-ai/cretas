@@ -91,6 +91,7 @@ class IntentExecutionOrchestratorFreeTextWorkdeskTest {
         ReflectionTestUtils.setField(orchestrator, "numberProvenance", gate);
         // 调用者是老板 / 超管: 价格判定原样放行 (看不到的一侧见 FinanceReportLlmPromptPriceContractTest)
         OrchestratorPriceViewTestSupport.callerSeesAllAmounts(orchestrator);
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     private static AIIntentConfig workdeskIntent() {

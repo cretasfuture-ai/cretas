@@ -48,7 +48,7 @@ import java.util.Map;
  * <h3>列序</h3>
  * 按侧边栏顶层菜单的出现顺序 (首页 → 研发 → 生产 → 仓储 → 质量 → 采购 → 销售 → 人事 →
  * 设备 → 财务 → 系统 → 智能调度), 侧边栏上没有顶层菜单的码 (report / work_report /
- * inventory / analytics / operations / restaurant) 排在其后。⛔ 不按字典序: 那会把
+ * inventory / analytics / operations) 排在其后。⛔ 不按字典序: 那会把
  * 「首页」排到中间, 与用户的心智模型不一致。
  */
 public final class PermissionModuleCatalog {
@@ -79,7 +79,6 @@ public final class PermissionModuleCatalog {
         // FactoryUserRole.operations_coordinator = "运营协调员" / "跨部门来源单、到料预告与履约协调"
         // —— 是引用而不是现编。
         m.put("operations", "运营协调");
-        m.put("restaurant", "餐饮管理");
         LABELS = Collections.unmodifiableMap(m);
     }
 

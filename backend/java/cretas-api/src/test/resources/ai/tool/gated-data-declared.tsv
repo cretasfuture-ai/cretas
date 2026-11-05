@@ -21,9 +21,9 @@ attendance_monthly	CODES	hr:read,hr:read_write
 attendance_stats	CODES	hr:read,hr:read_write
 attendance_stats_by_dept	CODES	hr:read,hr:read_write
 balance_sheet_query	CODES	finance:read,finance:read_write
-batch_consumption_adjust	BASE	-	REQ_ROLES:factory_super_admin,permission_admin,restaurant_owner
+batch_consumption_adjust	BASE	-	REQ_ROLES:factory_super_admin,permission_admin
 batch_consumption_query	CODES	procurement:price:view,production:read,production:read_write
-call_record_followup_pending	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,restaurant_owner,sales_manager
+call_record_followup_pending	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,sales_manager
 canvas_product_work_process_recommend	CODES	production:read,production:read_write,warehouse:read,warehouse:read_write
 canvas_set_user_permission	ROLES	factory_super_admin,permission_admin
 cashflow_statement_query	CODES	finance:read,finance:read_write
@@ -35,7 +35,7 @@ cold_chain_temp_query	CODES	equipment:read,inventory:read,inventory:read_write,q
 commission_pending_total	CODES	sales:view
 customer_active	CODES	finance:read,finance:read_write,sales:read,sales:read_write,warehouse:read_write
 customer_notify_batch	ROLES	factory_super_admin,permission_admin
-customer_priority_query	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,restaurant_owner,sales_manager
+customer_priority_query	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,sales_manager
 customer_quality_standard	CODES	quality:read,quality:read_write
 customer_revenue_trend	CODES	finance:read,procurement:read,sales:read,sales:read_write
 customer_stats	CODES	finance:read,finance:read_write,sales:read,sales:read_write
@@ -90,6 +90,7 @@ material_expiring_alert	CODES	inventory:read,inventory:read_write,warehouse:read
 material_low_stock_alert	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
 material_pending_quantity	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
 material_rejection_reason	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
+material_stock_summary	CODES	inventory:read,inventory:read_write
 material_today_receiving_query	CODES	finance:read,inventory:write,procurement:read,procurement:read_write,sales:read,warehouse:read,warehouse:read_write
 notify_log_query	ROLES	factory_super_admin,permission_admin
 notify_send	ROLES	factory_super_admin,permission_admin
@@ -101,7 +102,7 @@ nutrition_label_lookup	CODES	quality:read,quality:read_write
 online_staff_count	CODES	dashboard:read,production:read
 operation_log_query	ROLES	factory_super_admin,permission_admin
 opportunity_funnel_stats	CODES	sales:view
-opportunity_stage_alert	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,restaurant_owner,sales_manager
+opportunity_stage_alert	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,sales_manager
 order_list	CODES	finance:read,sales:read,sales:read_write
 order_query	CODES	finance:read,sales:read,sales:read_write
 order_today	CODES	finance:read,procurement:read,sales:read,sales:read_write
@@ -178,12 +179,13 @@ scheduled_task_update	BASE	-	REQ_ROLES:factory_super_admin,permission_admin
 shipment_confirm_create	CODES	sales:read_write
 shortage_analyze	CODES	procurement:read,procurement:read_write,production:read,production:read_write,quality:read,quality:read_write,sales:read,sales:read_write,warehouse:read,warehouse:read_write
 source_individual_query	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
-split_order	ROLES	department_admin,dispatcher,factory_super_admin,permission_admin,restaurant_owner,sales_manager
+split_order	ROLES	department_admin,dispatcher,factory_super_admin,permission_admin,sales_manager
 ssop_execute_complete	CODES	quality:read_write
 ssop_execution_today	CODES	quality:read,quality:read_write
 ssop_monthly_audit_report	CODES	quality:read,quality:read_write
 ssop_procedure_create	CODES	quality:read_write
 ssop_production_gate_check	CODES	production:read,production:read_write,quality:read,quality:read_write
+system_finding_action_plan	CODES	inventory:read,inventory:read_write
 stock_alert	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
 supplier_can_order_check	CODES	procurement:read,procurement:read_write
 supplier_delivery_eta	ROLES	factory_super_admin,permission_admin,procurement_manager
@@ -195,7 +197,7 @@ transfer_list	CODES	inventory:read,inventory:write
 transfer_statistics	CODES	inventory:read,inventory:write,report:read
 wage_cost_summary	CODES	hr:read,hr:read_write
 wage_policy_query	CODES	hr:read,hr:read_write
-wechat_record_recent_query	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,restaurant_owner,sales_manager
+wechat_record_recent_query	BASE	-	REQ_ROLES:department_admin,dispatcher,factory_super_admin,permission_admin,sales_manager
 workreport_checkin	CODES	work_report:read
 workreport_daily_summary	CODES	work_report:read
 workreport_hours	CODES	work_report:read

@@ -9,7 +9,6 @@ export { default as DashboardProduction } from './DashboardProduction.vue';
 export { default as DashboardWarehouse } from './DashboardWarehouse.vue';
 export { default as DashboardFinance } from './DashboardFinance.vue';
 export { default as DashboardDefault } from './DashboardDefault.vue';
-export { default as DashboardRestaurant } from './DashboardRestaurant.vue';
 
 /**
  * 角色到 Dashboard 组件的映射
@@ -45,7 +44,6 @@ export const ROLE_DASHBOARD_MAP: Record<string, string> = {
   // warehouse_worker: 'BLOCKED',
 
   // Level 20 - 餐饮经理
-  restaurant_manager: 'DashboardRestaurant',
 
   // Level 50 - 只读用户
   viewer: 'DashboardDefault',
@@ -61,17 +59,7 @@ export const ROLE_DASHBOARD_MAP: Record<string, string> = {
  * hr_admin 仍走 DashboardHR，不扩大 FACTORY 租户的餐饮权限。
  */
 const FACTORY_TYPE_DASHBOARD_OVERRIDE: Record<string, string> = {
-  'RESTAURANT': 'DashboardRestaurant',
 };
-
-/** 餐饮 Dashboard 仅对这些角色开启 override, 其余角色保留 ROLE_DASHBOARD_MAP 分派 */
-const RESTAURANT_DASHBOARD_ELIGIBLE_ROLES = new Set([
-  'super_admin',
-  'factory_super_admin',
-  'restaurant_owner',
-  'restaurant_manager',
-  'hr_admin',
-]);
 
 /**
  * 根据角色获取对应的 Dashboard 组件名称
@@ -79,8 +67,7 @@ const RESTAURANT_DASHBOARD_ELIGIBLE_ROLES = new Set([
  * @param factoryType - 工厂类型，用于业务类型覆盖
  */
 export function getDashboardComponent(role: string, factoryType?: string): string {
-  if (factoryType && FACTORY_TYPE_DASHBOARD_OVERRIDE[factoryType]
-      && RESTAURANT_DASHBOARD_ELIGIBLE_ROLES.has(role)) {
+  if (factoryType && FACTORY_TYPE_DASHBOARD_OVERRIDE[factoryType]) {
     return FACTORY_TYPE_DASHBOARD_OVERRIDE[factoryType];
   }
   return ROLE_DASHBOARD_MAP[role] || ROLE_DASHBOARD_MAP['default'];

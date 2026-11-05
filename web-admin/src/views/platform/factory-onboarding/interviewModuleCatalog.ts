@@ -1,6 +1,6 @@
 /**
  * 「前端模块裁剪」里能选的模块。必须与后端 InterviewModuleConfigCatalog 的 moduleId 逐字一致
- * （后端不认的 id 写进去只会 400）；Java 侧 InterviewModuleCatalogParityTest 钉住两份一致。
+ * （后端不认的 id 写进去只会 400）；Java 侧 InterviewModuleCatalogParityContractTest 钉住两份一致。
  */
 export const INTERVIEW_MODULE_OPTIONS: ReadonlyArray<{ moduleId: string; label: string }> = [
   { moduleId: 'production', label: '生产' },
@@ -16,7 +16,6 @@ export const INTERVIEW_MODULE_OPTIONS: ReadonlyArray<{ moduleId: string; label: 
   { moduleId: 'logistics', label: '物流' },
   { moduleId: 'trace', label: '溯源' },
   { moduleId: 'system', label: '系统' },
-  { moduleId: 'restaurant', label: '餐饮' },
 ]
 
 export function isKnownInterviewModule(moduleId: string | undefined): boolean {

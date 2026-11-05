@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { SectionPayload } from '@/types/restaurant-chat';
+import type { SectionPayload } from '@/types/smartbi-chat';
 
 const props = defineProps<{ section: SectionPayload }>();
 

@@ -3,6 +3,7 @@ package com.cretas.aims.security;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.service.ConversationMemoryService;
 import com.cretas.aims.service.execution.SseStreamingService;
+import com.cretas.aims.service.execution.BusinessTypeGate;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -29,6 +30,9 @@ class PaymentSseActorPropagationContractTest {
             return call.callRealMethod();
         }).when(mapper).writeValueAsString(any());
         var service=new SseStreamingService(null,null,null,null,mapper,null,null,null,null,null);
+        var businessTypeGate = mock(BusinessTypeGate.class);
+        when(businessTypeGate.resolveDomain("F1")).thenReturn("FACTORY");
+        ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
         var executor=Executors.newSingleThreadExecutor();
         ReflectionTestUtils.setField(service,"sseExecutor",executor);
         var memory=mock(ConversationMemoryService.class);

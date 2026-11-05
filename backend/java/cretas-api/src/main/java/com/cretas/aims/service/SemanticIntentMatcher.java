@@ -115,7 +115,7 @@ public class SemanticIntentMatcher {
         boolean previouslyInitialized = initialized;
         Map<String, String> nextMappings = new LinkedHashMap<>();
 
-        // 复制短语映射 (工厂 + 餐饮)
+        // 复制共享工厂短语映射
         Map<String, String> phraseMappings = knowledgeBase.getPhraseToIntentMapping();
         if (phraseMappings != null && !phraseMappings.isEmpty()) {
             nextMappings.putAll(phraseMappings);
@@ -124,14 +124,6 @@ public class SemanticIntentMatcher {
             log.warn("No phrase mappings found in IntentKnowledgeBase");
             initFailureReason = "No phrase mappings available";
             throw new IllegalStateException(initFailureReason);
-        }
-
-        // Wave-10: 加载餐饮短语映射，提升餐饮意图语义匹配能力
-        Map<String, String> restaurantMappings = knowledgeBase.getRestaurantPhraseMapping();
-        if (restaurantMappings != null && !restaurantMappings.isEmpty()) {
-            nextMappings.putAll(restaurantMappings);
-            log.info("Loaded {} restaurant phrase mappings (total: {})",
-                    restaurantMappings.size(), nextMappings.size());
         }
 
         // 检查 Embedding 服务是否可用

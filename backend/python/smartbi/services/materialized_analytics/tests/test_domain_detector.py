@@ -1,24 +1,22 @@
 """test_domain_detector.py"""
-from smartbi.services.materialized_analytics.domain_detector import (
-    RestaurantRuleDetector,
-)
+from smartbi.services.materialized_analytics.domain_detector import FactorySafeDetector
 from smartbi.services.materialized_analytics.schema import (
     Domain, Field, FieldRole,
 )
 
 
-def test_detect_restaurant_from_dim_and_measure():
-    detector = RestaurantRuleDetector()
+def test_retired_restaurant_shape_is_not_detected_as_restaurant():
+    detector = FactorySafeDetector()
     fields = [
         Field(name="门店名称", role=FieldRole.DIMENSION, dtype="string"),
         Field(name="菜品名称", role=FieldRole.DIMENSION, dtype="string"),
         Field(name="销售金额", role=FieldRole.MEASURE, dtype="float"),
     ]
-    assert detector.detect(fields, []) == Domain.RESTAURANT
+    assert detector.detect(fields, []) == Domain.UNKNOWN
 
 
 def test_detect_unknown_for_generic_data():
-    detector = RestaurantRuleDetector()
+    detector = FactorySafeDetector()
     fields = [
         Field(name="column_a", role=FieldRole.DIMENSION, dtype="string"),
         Field(name="column_b", role=FieldRole.MEASURE, dtype="float"),
@@ -27,7 +25,7 @@ def test_detect_unknown_for_generic_data():
 
 
 def test_detect_unknown_when_only_dim_hits():
-    detector = RestaurantRuleDetector()
+    detector = FactorySafeDetector()
     fields = [
         Field(name="门店名称", role=FieldRole.DIMENSION, dtype="string"),
         Field(name="菜品名称", role=FieldRole.DIMENSION, dtype="string"),
@@ -38,5 +36,5 @@ def test_detect_unknown_when_only_dim_hits():
 
 
 def test_detect_empty_fields_returns_unknown():
-    detector = RestaurantRuleDetector()
+    detector = FactorySafeDetector()
     assert detector.detect([], []) == Domain.UNKNOWN

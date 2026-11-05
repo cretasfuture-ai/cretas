@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
+from pathlib import Path
+import hashlib
+import importlib.util
+import json
+import sys
+import logging
 
 from .contracts import AgentOpsContext, EvalSetRecord, ExperimentRecord
 from .runner import (
     FACTORY_EVALUATOR_VERSION,
     EvaluatorRegistry,
+    EvaluatorBuildUnavailableError,
+    EvaluatorRegistration,
     FactoryOfflineBatchRunner,
     OfflineBatchRunner,
     RunnerBounds,
 )
-from .runtime_shadow import RuntimeShadowBatchRunner, RuntimeShadowBounds
 from .store import AgentOpsStore, new_eval_set_record, new_experiment_record
 from .validation import (
     AgentOpsValidationError,
@@ -23,8 +30,36 @@ from .validation import (
     validate_actual_snapshots,
     validate_name,
     validate_request_id,
-    validate_runtime_shadow_cases,
 )
+
+_LEGACY_BUILD = "31999b828125844a2fcbbc75edef466bd24756bd2c85d35258c75d5bebe3ac47"
+_LEGACY_MODULE_SHA = "f4050294e9b1f453cfe139aeaaa5aaf782736d542ac62f775ba0e4adecb49d92"
+_LEGACY_MANIFEST_SHA = "35bd89c9fba96ae5fd5197cdae661ec27e9987cda1c0b6376c2252dc8851bdc3"
+logger = logging.getLogger(__name__)
+
+
+def _load_verified_legacy_runner():
+    """Load the frozen historical runner only after raw bytes are pinned."""
+    artifact = Path(__file__).parent / "legacy"
+    manifest_bytes = (artifact / "provenance.json").read_bytes()
+    module_bytes = (artifact / "factory_31999.py").read_bytes()
+    if hashlib.sha256(manifest_bytes).hexdigest() != _LEGACY_MANIFEST_SHA:
+        raise AgentOpsValidationError("LEGACY_ARTIFACT_TAMPERED")
+    if hashlib.sha256(module_bytes).hexdigest() != _LEGACY_MODULE_SHA:
+        raise AgentOpsValidationError("LEGACY_ARTIFACT_TAMPERED")
+    manifest = json.loads(manifest_bytes)
+    if manifest.get("historical", {}).get("evaluatorBuild") != _LEGACY_BUILD:
+        raise AgentOpsValidationError("LEGACY_ARTIFACT_IDENTITY_MISMATCH")
+    spec = importlib.util.spec_from_file_location("smartbi_factory_legacy_31999", artifact / "factory_31999.py")
+    if spec is None or spec.loader is None:
+        raise AgentOpsValidationError("LEGACY_ARTIFACT_UNAVAILABLE")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    # Execute the already-verified bytes; never re-open the path or consume a
+    # stale pyc after the raw digest check.
+    code = compile(module_bytes, str(artifact / "factory_31999.py"), "exec")
+    exec(code, module.__dict__)
+    return module.FactoryOfflineBatchRunner()
 
 
 class AgentOpsService:
@@ -34,43 +69,17 @@ class AgentOpsService:
         runner: OfflineBatchRunner | None = None,
         *,
         registry: EvaluatorRegistry | None = None,
-        runtime_shadow_runner: RuntimeShadowBatchRunner | None = None,
     ) -> None:
         if runner is not None and registry is not None:
             raise ValueError("provide runner or registry, not both")
         self._store = store
-        self._registry = registry or EvaluatorRegistry(
-            (runner or OfflineBatchRunner(), FactoryOfflineBatchRunner())
-        )
-        self._runtime_shadow_runner = runtime_shadow_runner
-
-    async def import_runtime_corpus(
-        self,
-        context: AgentOpsContext,
-        *,
-        request_id: str,
-        name: str,
-        version: int,
-        description: str,
-        max_cases: int,
-    ) -> EvalSetRecord:
-        if isinstance(max_cases, bool) or not 1 <= max_cases <= 20:
-            raise AgentOpsValidationError("RUNTIME_CORPUS_LIMIT_OUT_OF_BOUNDS")
-        if context.business_type != "RESTAURANT":
-            raise AgentOpsValidationError("RUNTIME_SHADOW_RESTAURANT_ONLY")
-        cases = await self._store.load_runtime_corpus(context, limit=max_cases)
-        if not cases:
-            raise AgentOpsValidationError("TRUSTED_RUNTIME_CORPUS_EMPTY")
-        validate_runtime_shadow_cases(cases)
-        return await self.create_eval_set(
-            context,
-            request_id=request_id,
-            name=name,
-            version=version,
-            description=description,
-            cases=cases,
-        )
-
+        if registry is not None:
+            self._registry = registry
+        else:
+            current_runner = FactoryOfflineBatchRunner() if runner is None else runner
+            self._registry = EvaluatorRegistry(
+                (current_runner,),
+            )
     async def create_eval_set(
         self,
         context: AgentOpsContext,
@@ -161,56 +170,6 @@ class AgentOpsService:
             return self._registry.current_for(FACTORY_EVALUATOR_VERSION)
         return self._registry.current()
 
-    async def run_runtime_shadow(
-        self,
-        context: AgentOpsContext,
-        *,
-        request_id: str,
-        eval_set_id: str,
-        config_snapshot: Mapping[str, Any],
-        bounds: RuntimeShadowBounds,
-    ) -> ExperimentRecord:
-        if context.business_type != "RESTAURANT":
-            raise AgentOpsValidationError("RUNTIME_SHADOW_RESTAURANT_ONLY")
-        if self._runtime_shadow_runner is None:
-            raise AgentOpsValidationError("RUNTIME_SHADOW_RUNNER_UNAVAILABLE")
-        eval_set = await self._store.get_eval_set(context, eval_set_id)
-        validate_runtime_shadow_cases(eval_set.cases)
-        config = validate_config_snapshot(config_snapshot)
-        bounds_snapshot = bounds.snapshot()
-        safe_request_id = validate_request_id(request_id)
-        request_digest = canonical_digest({
-            "schemaVersion": "1.0",
-            "operationKind": "RUNTIME_SHADOW",
-            "evalSetId": eval_set.eval_set_id,
-            "configSnapshot": config,
-            "runnerBounds": bounds_snapshot,
-        })
-        existing = await self._store.preflight_experiment_request(
-            context, safe_request_id, request_digest
-        )
-        if existing is not None:
-            return existing
-        aggregate, case_results, normalized_actual = (
-            await self._runtime_shadow_runner.run(
-                eval_set, context, bounds=bounds
-            )
-        )
-        return await self._save_evaluated(
-            context,
-            runner=self._runtime_shadow_runner,
-            eval_set=eval_set,
-            config=config,
-            normalized_actual=normalized_actual,
-            bounds_snapshot=bounds_snapshot,
-            aggregate=aggregate,
-            case_results=case_results,
-            request_id=safe_request_id,
-            request_digest=request_digest,
-            operation_kind="RUNTIME_SHADOW",
-            source_experiment_id=None,
-        )
-
     async def _run_with(
         self,
         context: AgentOpsContext,
@@ -260,10 +219,18 @@ class AgentOpsService:
         operation_kind: str,
         source_experiment_id: str | None,
     ) -> ExperimentRecord:
+        registration = self._registry.registration_for(runner)
+        evaluator_version = registration.source_version
+        evaluator_build = registration.source_build
+        logger.info(
+            "AgentOps evaluator source_version=%s source_build=%s implementation_sha256=%s provenance_sha256=%s current=%s",
+            evaluator_version, evaluator_build, registration.implementation_sha256,
+            registration.provenance_sha256, registration.is_current,
+        )
         snapshot_digest = canonical_digest({
             "evalSetDigest": eval_set.content_digest,
-            "evaluatorVersion": runner.evaluator_version,
-            "evaluatorBuild": runner.evaluator_build,
+            "evaluatorVersion": evaluator_version,
+            "evaluatorBuild": evaluator_build,
             "configSnapshot": config,
             "actualSnapshots": normalized_actual,
             "runnerBounds": bounds_snapshot,
@@ -271,8 +238,8 @@ class AgentOpsService:
         record = new_experiment_record(
             context,
             eval_set=eval_set,
-            evaluator_version=runner.evaluator_version,
-            evaluator_build=runner.evaluator_build,
+            evaluator_version=evaluator_version,
+            evaluator_build=evaluator_build,
             snapshot_digest=snapshot_digest,
             request_id=request_id,
             request_digest=request_digest,
@@ -304,9 +271,19 @@ class AgentOpsService:
         )
         if existing is not None:
             return existing
-        runner = self._registry.resolve(
-            source.evaluator_version, source.evaluator_build
-        )
+        try:
+            runner = self._registry.resolve(source.evaluator_version, source.evaluator_build)
+        except EvaluatorBuildUnavailableError:
+            if (source.evaluator_version, source.evaluator_build) != ("factory-offline-v1", _LEGACY_BUILD):
+                raise
+            try:
+                runner = _load_verified_legacy_runner()
+            except (OSError, ValueError, KeyError, AgentOpsValidationError) as exc:
+                raise EvaluatorBuildUnavailableError() from exc
+            runner = self._registry.register_compatibility(EvaluatorRegistration(
+                source.evaluator_version, source.evaluator_build,
+                _LEGACY_MODULE_SHA, _LEGACY_MANIFEST_SHA, runner,
+            ))
         eval_set = await self._store.get_eval_set(context, source.eval_set_id)
         config = validate_config_snapshot(source.config_snapshot)
         normalized_actual = validate_actual_snapshots(source.actual_snapshots)

@@ -27,11 +27,13 @@ class RestaurantLegacyAiRouteClosureContractTest {
                 "service/execution/DynamicToolSelectionService.java"));
         String sse = read(MAIN.resolve(
                 "service/execution/SseStreamingService.java"));
-        String delegate = read(MAIN.resolve(
-                "ai/tool/impl/restaurant/TieredIntentDelegate.java"));
+        Path retiredRestaurantToolPackage = MAIN.resolve("ai/tool/impl/restaurant");
 
-        assertThat(orchestrator).contains(
-                "RESTAURANT_LEGACY_AI_ROUTES_ENABLED = false");
+        // The production restaurant Agent/Tool package was removed entirely. Keep this
+        // as a filesystem assertion so a deleted class cannot be resurrected silently.
+        assertThat(Files.exists(retiredRestaurantToolPackage))
+                .as("restaurant Agent/Tool package must remain retired")
+                .isFalse();
         assertThat(orchestrator).doesNotContain(
                 "restaurantGrossMarginChatRouteSelector.select(",
                 "tieredIntentDelegate.tryDelegate(");
@@ -39,8 +41,9 @@ class RestaurantLegacyAiRouteClosureContractTest {
         assertThat(sse).doesNotContain(
                 "restaurantGrossMarginChatRouteSelector.select(",
                 "sseTieredIntentDelegate.tryDelegate(");
-        assertThat(delegate).doesNotContain(
-                "GoldFinanceClient", "fetchTieredIntentAnswer");
+        assertThat(orchestrator + dynamic + sse).doesNotContain(
+                "GoldFinanceClient", "fetchTieredIntentAnswer",
+                "sseTieredIntentDelegate.tryDelegate(");
     }
 
     @Test

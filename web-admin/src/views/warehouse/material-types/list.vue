@@ -93,7 +93,7 @@ const canManageClassification = computed(() => permissionStore.canWrite('system'
 //   unknown 操作数直接丢掉 —— `canWrite && canManageMaterialTypes(role)` 被它读成只剩
 //   `canWrite`, 取反后与原式拼成 `canWrite && !canWrite`, 被误判成一条恒假的空转分支
 //   (棘轮预算 18→19, 2026-09-04 CI 实测)。改用本地 Set 字面量 + `.has()`
-//   (与 SupplierDeliveryNoteList.vue 的 SUPPLIER_DELIVERY_WRITE_ROLES 同一形状, 分析器认得出),
+//   (与工厂供货验收列表的 SUPPLIER_DELIVERY_WRITE_ROLES 同一形状, 分析器认得出),
 //   与 materialTypeWriteRoles.ts 的 MATERIAL_TYPE_WRITE_ROLES 是否一致由
 //   materialTypeWriteRolesMatchBackend.spec.ts 从两处源码分别解析后钉住。
 const MATERIAL_TYPE_WRITE_ROLE_SET = new Set([

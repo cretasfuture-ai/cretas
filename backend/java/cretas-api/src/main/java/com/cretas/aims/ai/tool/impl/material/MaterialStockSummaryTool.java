@@ -75,8 +75,6 @@ public class MaterialStockSummaryTool extends AbstractBusinessTool {
     @Override
     public Set<String> getRequiredPermissions() {
         return Set.of(
-                "warehouse:read",
-                "warehouse:read_write",
                 "inventory:read",
                 "inventory:read_write");
     }

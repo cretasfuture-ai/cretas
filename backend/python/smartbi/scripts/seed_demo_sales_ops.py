@@ -18,7 +18,6 @@ computation (correctly) returned 0. This seeds a handful of recent rows.
 
 Tenants: DEMO_FACTORY, DEMO_FACTORY2 only.
   * F004 has 0 customers / 0 sales_orders (retail tenant, no FK source) → SKIPPED.
-  * DEMO_REST is a restaurant tenant → not applicable.
 
 FK sources are resolved at runtime from REAL existing rows (customers.id, users.id)
 per tenant — no synthetic FK values invented. Tenant skipped if it lacks them.

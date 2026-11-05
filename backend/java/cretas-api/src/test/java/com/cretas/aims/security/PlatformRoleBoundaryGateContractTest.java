@@ -79,7 +79,6 @@ class PlatformRoleBoundaryGateContractTest {
             Map.entry("service/permission/PlatformRolePermissionWriteService", PLATFORM_IDENTITY_FIRST),
             Map.entry("service/permission/PermissionMatrixViewService", "labels a role in a matrix view, grants nothing"),
             Map.entry("controller/FormAssistantController", IN_FACTORY),
-            Map.entry("controller/restaurant/RestaurantCrmController", IN_FACTORY),
             Map.entry("security/DataScopeResolver", IN_FACTORY),
             Map.entry("security/RoleDataScopeService", IN_FACTORY),
             Map.entry("service/DisposalRecordService", IN_FACTORY),
@@ -88,7 +87,6 @@ class PlatformRoleBoundaryGateContractTest {
             Map.entry("service/factory/impl/SemiFinishedStocktakeServiceImpl", IN_FACTORY),
             Map.entry("service/impl/MaterialBatchServiceImpl", IN_FACTORY),
             Map.entry("service/inventory/impl/WastageReportServiceImpl", IN_FACTORY),
-            Map.entry("service/restaurant/RestaurantAgentRunService", IN_FACTORY),
             Map.entry("service/yield/impl/InterimSettleReversalRequestServiceImpl", IN_FACTORY));
 
     private record Scan(int classes, Map<String, Integer> writers, Set<String> roleLiteralClasses, Set<String> aiTools) {

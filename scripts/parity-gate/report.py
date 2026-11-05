@@ -3,7 +3,7 @@
 Top-level report shape (per Steve's spec):
 
     {
-      "factory": "R_QINGHUAJIAO_REAL",
+      "factory": "F006",
       "java_base": "http://...:10010",
       "python_base": "http://...:8083",
       "endpoints_tested": 15,

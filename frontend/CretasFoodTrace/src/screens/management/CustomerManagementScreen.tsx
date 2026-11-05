@@ -89,7 +89,6 @@ export default function CustomerManagementScreen() {
 
   // 行业选项
   const industryOptions = [
-    { label: t('customerManagement.industries.restaurant'), value: 'restaurant' },
     { label: t('customerManagement.industries.supermarket'), value: 'supermarket' },
     { label: t('customerManagement.industries.ecommerce'), value: 'ecommerce' },
     { label: t('customerManagement.industries.foodProcessing'), value: 'food_processing' },
@@ -243,7 +242,7 @@ export default function CustomerManagementScreen() {
         isEdit: !!editingCustomer,
         customerCode: formData.customerCode,
       });
-      Alert.alert(t('common.error'), getErrorMsg(error) || t('restaurant:common.operationFailed'));
+      Alert.alert(t('common.error'), getErrorMsg(error) || t('common:error.general'));
     }
   };
 
@@ -297,7 +296,7 @@ export default function CustomerManagementScreen() {
         customerId,
         currentStatus,
       });
-      Alert.alert(t('common.error'), getErrorMsg(error) || t('restaurant:common.operationFailed'));
+      Alert.alert(t('common.error'), getErrorMsg(error) || t('common:error.general'));
     }
   };
 

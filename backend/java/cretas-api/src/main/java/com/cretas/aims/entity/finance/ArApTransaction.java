@@ -92,10 +92,6 @@ public class ArApTransaction extends BaseEntity {
     @Column(name = "purchase_order_id", length = 191)
     private String purchaseOrderId;
 
-    /** 关联POS订单同步ID（POS来源时） */
-    @Column(name = "pos_order_sync_id")
-    private Long posOrderSyncId;
-
     /** Business source type for non-SO/PO finance posting, e.g. SUPPLIER_DELIVERY_NOTE. */
     @Column(name = "source_type", length = 50)
     private String sourceType;

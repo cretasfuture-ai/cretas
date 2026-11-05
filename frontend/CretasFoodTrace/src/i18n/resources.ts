@@ -19,7 +19,6 @@ import zhAlerts from './locales/zh-CN/alerts.json';
 import zhErrors from './locales/zh-CN/errors.json';
 import zhPlatform from './locales/zh-CN/platform.json';
 import zhWorkshop from './locales/zh-CN/workshop.json';
-import zhRestaurant from './locales/zh-CN/restaurant.json';
 import zhSmartbi from './locales/zh-CN/smartbi.json';
 import zhLogistics from './locales/zh-CN/logistics.json';
 import zhVoice from './locales/zh-CN/voice.json';
@@ -40,7 +39,6 @@ import enAlerts from './locales/en-US/alerts.json';
 import enErrors from './locales/en-US/errors.json';
 import enPlatform from './locales/en-US/platform.json';
 import enWorkshop from './locales/en-US/workshop.json';
-import enRestaurant from './locales/en-US/restaurant.json';
 import enSmartbi from './locales/en-US/smartbi.json';
 import enLogistics from './locales/en-US/logistics.json';
 import enVoice from './locales/en-US/voice.json';
@@ -66,7 +64,6 @@ export const resources = {
     errors: zhErrors,
     platform: zhPlatform,
     workshop: zhWorkshop,
-    restaurant: zhRestaurant,
     smartbi: zhSmartbi,
     logistics: zhLogistics,
     voice: zhVoice,
@@ -87,7 +84,6 @@ export const resources = {
     errors: enErrors,
     platform: enPlatform,
     workshop: enWorkshop,
-    restaurant: enRestaurant,
     smartbi: enSmartbi,
     logistics: enLogistics,
     voice: enVoice,

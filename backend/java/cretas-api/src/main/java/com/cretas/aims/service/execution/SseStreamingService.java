@@ -284,6 +284,19 @@ public class SseStreamingService {
                 streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
                 return;
             }
+            if (com.cretas.aims.util.RetiredAnalysisContext.isRetiredIdentity(factoryId, userRole)
+                    || com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
+                streamTerminalResponse(emitter, retiredTenantResponse(), startTime);
+                return;
+            }
+            String tenantDomain = resolveFactoryDomainForTenantCheck(factoryId);
+            try {
+                com.cretas.aims.util.RetiredAnalysisContext.requireFactory(factoryId, tenantDomain, userRole);
+            } catch (com.cretas.aims.exception.BusinessException unavailable) {
+                streamTerminalResponse(emitter, unavailable.getCode() == 410
+                        ? retiredTenantResponse() : tenantTypeUnavailableResponse(), startTime);
+                return;
+            }
             boolean trustedFactoryActor = hasBoundFactoryActor(factoryId, userId);
             boolean requestNamesSession = request != null && request.getSessionId() != null
                     && !request.getSessionId().isBlank();
@@ -411,21 +424,17 @@ public class SseStreamingService {
                 return;
             }
 
-            // Dedicated restaurant semantic/runtime routes are retired. Continue through the
-            // same catalog-backed recognition path as factory requests.
-            boolean restaurantTenant = !factoryPackConstrained
-                    && isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId));
 
             // 2026-10-04 追问解读: 「好了 / 下一个 / 再加十公斤 / 批了吧」+ App 带回的 lastAction
             // → 确认按钮 (不执行)。在早期问题类型检测之前 —— 否则「好了」会被当闲聊流式回复;
             // 显式意图码 (点了按钮回来) 已在上面处理, 不会再进这里。能力包受限路由与餐饮租户不走。
             // 2026-10-06 缺参续轮在它前面: 上一轮刚问了「请提供工序任务ID」, 「1827」是在回答那个问题。
-            if (!factoryPackConstrained && !restaurantTenant
+            if (!factoryPackConstrained
                     && streamSlotContinuation(emitter, factoryId, request, userId, userRole, startTime,
                             factoryPackRoute)) {
                 return;
             }
-            if (!factoryPackConstrained && !restaurantTenant
+            if (!factoryPackConstrained
                     && streamFollowUpConfirmation(emitter, factoryId, request, userId, userRole, startTime)) {
                 return;
             }
@@ -453,16 +462,14 @@ public class SseStreamingService {
             }
 
             // 2. 查询语义缓存
-            // Restaurant tenants do not read the semantic cache on the SSE channel. Keep this
-            // freshness boundary while the dedicated restaurant execution lane is retired.
             // 第 3b 步: 带最近对话的轮次也不读语义缓存 (缓存键只有工厂+原话, 不含上下文)。
-            boolean skipCacheForRestaurant = factoryPackConstrained || restaurantTenant
+            boolean skipCacheForScopedRequest = factoryPackConstrained
                     || !recentTurns(request).isEmpty();
-            SemanticCacheHit cacheHit = skipCacheForRestaurant
+            SemanticCacheHit cacheHit = skipCacheForScopedRequest
                     ? SemanticCacheHit.miss(0L)
                     : semanticCacheService.queryCache(factoryId, userInput);
 
-            if (!skipCacheForRestaurant && cacheHit.isHit()) {
+            if (!skipCacheForScopedRequest && cacheHit.isHit()) {
                 sendSseEvent(emitter, "cache_hit", Map.of(
                         "hitType", cacheHit.getHitType(),
                         "similarity", cacheHit.getSimilarity() != null ? cacheHit.getSimilarity() : 1.0,
@@ -1147,7 +1154,7 @@ public class SseStreamingService {
                 attachPreviewParams(response, request, toolOpt.get());
             } else {
                 log.warn("[SSE] Tool 未找到: toolName={}", toolName);
-                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
+                response = toolDispatchService.buildNoToolResponse(intent);
             }
         } else {
             // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL — 走 explicit Skill fallback (cover
@@ -1160,7 +1167,7 @@ public class SseStreamingService {
                 response = explicitSkillFallback;
             } else {
                 log.warn("[SSE] 无 Tool 绑定 + 无 Skill 匹配: intentCode={}", intent.getIntentCode());
-                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
+                response = toolDispatchService.buildNoToolResponse(intent);
             }
         }
 
@@ -1184,7 +1191,7 @@ public class SseStreamingService {
         persistSuccessfulReadPagination(factoryId, userId, request, intent, toolName, response);
 
         if (factoryFollowUpService != null
-                && !isRestaurantTenantId(factoryId, resolveFactoryDomainForTenantCheck(factoryId))) {
+                && com.cretas.aims.util.RetiredAnalysisContext.isKnownFactoryDomain(resolveFactoryDomainForTenantCheck(factoryId))) {
             try {
                 response.setFollowUps(factoryFollowUpService.suggest(
                         factoryId, userId, userRole, intent, response.getStatus()));
@@ -2248,83 +2255,29 @@ public class SseStreamingService {
         return index == 1 ? "" : line.toString();
     }
 
-    /** Retired restaurant lane: use the ordinary catalog no-tool response. */
-    private IntentExecuteResponse noToolResponseWithRestaurantFallback(
-            AIIntentConfig intent, String factoryId, IntentExecuteRequest request) {
-        return toolDispatchService.buildNoToolResponse(intent);
-    }
-
-    /**
-     * 写动词判成写 → 语义权威被跳过, 而 Java 解析出来的是个【读】意图 —— 两个判据矛盾。
-     * 这条路上没有 Python 的 request_coverage 契约, 继续执行等于猜用户问的是什么
-     * (2026-08-11 实测: 「要不要下架」被猜成慢销榜, 用销量答毛利问题)。fail closed。
-     *
-     * <p>判定与话术都取自 {@link IntentExecutionOrchestrator} —— 同一句话在流式与非流式
-     * 入口必须走出同一条路, 这正是 card4 立下「never copy this logic again」的原因。
-     *
-     * @return true 表示已经把澄清响应流出去了, 调用方必须就地 return
-     */
-    private boolean streamRestaurantWriteReadAmbiguity(SseEmitter emitter,
-                                                       boolean writeVerbSuppressedPlan,
-                                                       AIIntentConfig intent,
-                                                       IntentExecuteRequest request,
-                                                       long startTime) throws IOException {
-        if (!writeVerbSuppressedPlan || intent == null
-                || IntentExecutionOrchestrator.isWriteIntentDeclarationAware(
-                        intent, intentAccessModeFilter, writeGuardService)) {
-            return false;
-        }
-        log.warn("[SSE][Branch:RestaurantWriteReadAmbiguity] 写判定与读意图矛盾, fail closed: "
-                        + "candidateIntent={}, input='{}'",
-                intent.getIntentCode(), request != null ? request.getUserInput() : null);
-        String message = IntentExecutionOrchestrator.RESTAURANT_WRITE_READ_AMBIGUITY_MESSAGE;
-        streamTerminalResponse(emitter, IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .status("NEED_CLARIFICATION")
-                .message(message)
-                .formattedText(message)
-                .sessionId(request != null ? request.getSessionId() : null)
-                .executedAt(LocalDateTime.now())
-                .build(), startTime);
-        return true;
-    }
-
-    /**
-     * Task-1 (2026-08-05, restaurant-tenant-consolidation): now domain-aware, matching
-     * {@link IntentExecutionOrchestrator#isRestaurantTenantId} /
-     * {@link DynamicToolSelectionService#isRestaurantTenantId} /
-     * {@code AIIntentConfigController#isRestaurantTenantId}. Domain is authoritative;
-     * the RES_/REST_/DEMO_REST id-prefix check is only the fallback for when domain
-     * resolution is unavailable or fails.
-     *
-     * <p>Card4 (2026-07-28) history: this used to be an ID-only check ("no factory-domain
-     * DB lookup is wired into SseStreamingService") and its Javadoc explicitly warned "a
-     * factory whose id doesn't match RES_/REST_/DEMO_REST but whose domain IS resolved as
-     * RESTAURANT would take a different execution path — do not assume the two checks always
-     * agree." MOCK_REST is exactly that factory; task-1 closes the gap by
-     * resolving domain via {@link BusinessTypeGate#resolveDomain} (already-injected
-     * dependency, reused instead of wiring a new one) at the call sites and passing it in.
-     */
-    static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
-        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
-            return true;
-        }
-        if (factoryId == null || factoryId.isBlank()) {
-            return false;
-        }
-        String normalized = factoryId.trim().toUpperCase(java.util.Locale.ROOT);
-        return "DEMO_REST".equals(normalized)
-                || normalized.startsWith("RES_")
-                || normalized.startsWith("REST_");
-    }
-
-    /**
-     * Fail-soft domain lookup for {@link #isRestaurantTenantId}: {@code businessTypeGate} is
-     * null in older unit tests built via {@code new SseStreamingService(...)} that never call
-     * {@code ReflectionTestUtils.setField(service, "businessTypeGate", ...)} — those keep the
-     * pre-task-1 ID-prefix-only behavior by getting a null domain here.
-     */
+    /** Resolve server-owned metadata before admitting an analysis request. */
     private String resolveFactoryDomainForTenantCheck(String factoryId) {
-        return businessTypeGate == null ? null : businessTypeGate.resolveDomain(factoryId);
+        if (businessTypeGate == null) return null;
+        try {
+            return businessTypeGate.resolveDomain(factoryId);
+        } catch (RuntimeException e) {
+            log.warn("SSE tenant domain resolution failed: factoryId={}", factoryId, e);
+            return null;
+        }
+    }
+
+    private IntentExecuteResponse tenantTypeUnavailableResponse() {
+        return IntentExecuteResponse.builder().intentRecognized(false)
+                .status("TENANT_TYPE_UNAVAILABLE")
+                .message("无法确认租户业务类型，暂不可执行意图")
+                .metadata(Map.of("errorCode", "TENANT_TYPE_UNAVAILABLE", "httpStatus", 503))
+                .executedAt(LocalDateTime.now()).build();
+    }
+
+    private IntentExecuteResponse retiredTenantResponse() {
+        return IntentExecuteResponse.builder().intentRecognized(false)
+                .status("UNSUPPORTED_CAPABILITY")
+                .message("该业务能力已退役，请使用工厂业务功能。")
+                .executedAt(LocalDateTime.now()).build();
     }
 }
