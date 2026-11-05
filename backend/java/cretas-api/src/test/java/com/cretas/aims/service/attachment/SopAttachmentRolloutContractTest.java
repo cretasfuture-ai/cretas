@@ -2,6 +2,8 @@ package com.cretas.aims.service.attachment;
 
 import com.cretas.aims.exception.BusinessException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -28,11 +30,12 @@ class SopAttachmentRolloutContractTest {
                         .doesNotThrowAnyException());
     }
 
-    @Test
-    void productionProfileEnablesTheCompatibleWritePhase() {
+    @ParameterizedTest
+    @ValueSource(strings = {"prod", "pg-prod"})
+    void productionProfileEnablesTheCompatibleWritePhase(String profile) {
         new ApplicationContextRunner()
                 .withInitializer(new ConfigDataApplicationContextInitializer())
-                .withPropertyValues("spring.profiles.active=prod")
+                .withPropertyValues("spring.profiles.active=" + profile)
                 .withUserConfiguration(SopAttachmentRollout.class)
                 .run(context -> {
                     assertThat(context.getEnvironment().getProperty("cretas.sop-attachments.write-enabled"))
@@ -42,11 +45,12 @@ class SopAttachmentRolloutContractTest {
                 });
     }
 
-    @Test
-    void explicitDisabledOverrideStillClosesProductionWrites() {
+    @ParameterizedTest
+    @ValueSource(strings = {"prod", "pg-prod"})
+    void explicitDisabledOverrideStillClosesProductionWrites(String profile) {
         new ApplicationContextRunner()
                 .withInitializer(new ConfigDataApplicationContextInitializer())
-                .withPropertyValues("spring.profiles.active=prod", "cretas.sop-attachments.write-enabled=false")
+                .withPropertyValues("spring.profiles.active=" + profile, "cretas.sop-attachments.write-enabled=false")
                 .withUserConfiguration(SopAttachmentRollout.class)
                 .run(context -> assertThat(catchBusinessException(context.getBean(SopAttachmentRollout.class))
                         .getErrorCode()).isEqualTo("SOP_WRITE_ROLLOUT_PENDING"));
