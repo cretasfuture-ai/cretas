@@ -239,6 +239,34 @@ class SecondaryHoldPostgresContractTest {
                 BigDecimal.class, f.wipId());
     }
 
+    @Test
+    void ordinaryPlanRefreshPreservesPinnedJsonSnapshotsWithoutTakingHold() {
+        Fixture f = fixture(ProductionPlanStatus.PENDING, false);
+        tx.executeWithoutResult(state -> {
+            ProductionPlan plan = plans.findById(f.planId()).orElseThrow();
+            plan.setPlanSourceType("NORMAL");
+            plan.setSecondarySourceWipId(null);
+            plan.setWorkflowOutputUnitsByProduct(Map.of("FG-1", "盒"));
+            plan.setSelectedBomRecipeIdsByProduct(Map.of("FG-1", "RECIPE-PINNED"));
+            plan.setSelectedBomVersionsByProduct(Map.of("FG-1", 7));
+            plan.setSourceOrderIds(List.of("QA-ORDER-A", "QA-ORDER-B"));
+            plans.saveAndFlush(plan);
+        });
+        tx.executeWithoutResult(state -> {
+            ProductionPlan plan = plans.findById(f.planId()).orElseThrow();
+            feed.takeHold(F, plan, 7L);
+            assertThat(plan.getWorkflowOutputUnitsByProduct()).containsExactlyEntriesOf(Map.of("FG-1", "盒"));
+            assertThat(plan.getSelectedBomRecipeIdsByProduct()).containsExactlyEntriesOf(Map.of("FG-1", "RECIPE-PINNED"));
+            assertThat(plan.getSelectedBomVersionsByProduct()).containsExactlyEntriesOf(Map.of("FG-1", 7));
+            assertThat(plan.getSourceOrderIds()).containsExactly("QA-ORDER-A", "QA-ORDER-B");
+        });
+        assertThat(consumed(f)).isEqualByComparingTo("0");
+        assertThat(jdbc.queryForObject("select count(*) from semi_finished_inventory_transactions "
+                + "where factory_id = ? and semi_finished_id = ? and source_ref = ?",
+                Integer.class, F, f.wipId(), SecondaryPlanFeedService.deductRef(f.wipId(), f.planId())))
+                .isZero();
+    }
+
     private BigDecimal held(Fixture f) {
         return tx.execute(state -> {
             ProductionPlan plan = plans.findById(f.planId()).orElseThrow();

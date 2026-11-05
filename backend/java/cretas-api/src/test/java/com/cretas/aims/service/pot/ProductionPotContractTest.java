@@ -118,6 +118,12 @@ class ProductionPotContractTest {
 
         planId = "POTT-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
         ProductionPlan plan = new ProductionPlan();
+        // Unused single-product snapshots: H2 JsonBinaryType double-encodes empty JSON.
+        // Real PostgreSQL refresh/snapshot coverage stays in SecondaryHoldPostgresContractTest.
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
+        plan.setSourceOrderIds(null);
         plan.setId(planId);
         plan.setFactoryId(F);
         plan.setPlanNumber("POTT-PN-" + UUID.randomUUID().toString().substring(0, 6));

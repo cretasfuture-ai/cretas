@@ -131,3 +131,8 @@ Owner: 01a1a954/root. Base SHA: 91bfa2c9b42ac5e98ca67b02e0de6686339b5913.
 原PG启动修复首跑：JDBC WipOutput5通过，SecondaryHold8仍缺最新main财务required bean，新增两项测试依赖后待复验；未删生产refresh。质量原API断言适配1469新窄API且保留旧API阴性，3项重测通过。Web九套首轮55通过/1旧API断言失败原件保留，其余同内容证据复用；新报废菜单正式catalog补齐。RN五套43项通过，typecheck和原生UI待做。
 
 子任务TASKS-S3-QC-PG-20261105仅新增五场景真实库存测试文件，静态diff检查通过、未运行Maven或连接数据库，未commit；root已收回唯一写Owner并统一纳入待运行36类选择器。原未发布迁移61已顺延93，增加实际Flyway/PG/SpringJPA旧行/新行两场景，明确仅结单表投影验证，不冒称全应用迁移回放。
+# 最终全量新增的 H2 仪器修复范围
+
+538 最终全量运行 19643 项，58 error + 1 fail，集中于 8 类 H2 集成 fixture；公共原因是新增的真实计划 refresh 触发 JsonBinaryType 在 H2 中的空 Map/List 双编码。真实 PG 同 head 门禁成功。保留生产锁/refresh 和全部原断言，仅把这些单产品 fixture 未使用的四个默认 JSON 快照置 null；另以真实 PG 验证非空快照刷新不变。范围为 CcpMonitoringContractTest、ProductionPotContractTest、ClerkProcessEntryIntegrationTest、ProcessSheetInventoryTest、ProcessSheetRowsTest、ProcessSheetServiceImplTest、QcReleaseWebDrawContractTest、InterimSettleRawDeductionIntegrationTest，以及 SecondaryHoldPostgresContractTest 新增用例。Root 为此 H2 修复唯一写者；不改食品组新增参数用例或其 worktree，合并时保留其冻结增量。
+
+修后 9 类目标实测 91 tests / 0 failures / 0 errors / 0 skipped（含真实 PG 10、H2 81），TARGET_EXIT=0；临时 PG15442 已停止。原 59 红日志/棘轮/归一化清单保留，不扩基线、不跳原测试。独立复核确认 null 只用于本批未使用快照；真实 PG 非空 Map/List 刷新及无扣账断言已执行成功。最终整合候选需新 CI 和扩大至 44 类的官方制品门禁。
