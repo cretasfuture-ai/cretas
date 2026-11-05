@@ -60,6 +60,8 @@ const SCENARIOS = [
   require('../scenarios/production-plan-routing-readonly'),
   require('../scenarios/material-consumption-price-mask-readonly'),
   require('../scenarios/role-menu-census-readonly'),
+  require('../scenarios/f006-demo-menu-readonly'),
+  require('../scenarios/f006-demo-menu-readonly').existing,
   require('../scenarios/label-qc-readonly'),
   require('../scenarios/sales-order-lifecycle-readonly'),
   require('../scenarios/ui-stability'),

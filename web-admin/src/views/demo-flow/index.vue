@@ -7,6 +7,7 @@ import request from '@/api/request'
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue'
 import { PURCHASE_ORDER_CONFIG, SALES_ORDER_CONFIG } from '@/components/ai-entry/types'
 import { DEMO_STEPS, assertF006Session, createDemoState, executeStep, initializeDemo, prepareStep, type DemoField, type DemoState } from '@/demo/f006Flow'
+import { beginSandbox, requireSandboxReady, sandboxSession, SANDBOX_FLOW_STORAGE_KEY } from '@/demo/f006Sandbox'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -23,11 +24,13 @@ const optionMap = ref<Record<string, Array<{ id: string; name: string }>>>({})
 const demoInitialized = ref(false)
 const aiDrawerVisible = ref(false)
 const aiFilling = ref(false)
+const enteringSandbox = ref(false)
+const sandboxError = ref('')
 let autoplayTimer: ReturnType<typeof setTimeout> | undefined
 const DEMO_SKU_ID = '2a6f37c4-b0e1-55ae-b31a-ddc6815829cd'
-const SESSION_KEY = 'cretas:f006-demo-flow:20261105'
+const SESSION_KEY = SANDBOX_FLOW_STORAGE_KEY
 // The authenticated route owns the role restriction; the page checks the tenant.
-const isF006Admin = computed(() => authStore.factoryId === 'F006')
+const isF006Admin = computed(() => authStore.factoryId === 'F006' && Number(authStore.user?.id) === 1309)
 const currentStep = computed(() => DEMO_STEPS[currentIndex.value])
 const currentFields = computed<DemoField[]>(() => currentStep.value ? prepareStep(state.value, currentStep.value.id).fields : [])
 const progress = computed(() => Math.round(((currentIndex.value + 1) / DEMO_STEPS.length) * 100))
@@ -57,7 +60,7 @@ function stopPlayback() { autoplay.value = false; paused.value = false; if (auto
 function pausePlayback() { paused.value = true; if (autoplayTimer) clearTimeout(autoplayTimer) }
 function scheduleAutoplay() { if (active.value && autoplay.value && !paused.value) autoplayTimer = setTimeout(() => void executeCurrent(), 1400) }
 function persistState() { try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(state.value)) } catch { /* sessionStorage is optional */ } }
-function restoreState() { try { const raw = sessionStorage.getItem(SESSION_KEY); if (!raw) return; const saved = JSON.parse(raw) as DemoState; if (saved.schemaVersion === 2 && saved.factoryId === 'F006' && saved.runKey?.startsWith('DEMO-F006-FLOW-20261105')) { state.value = saved; currentIndex.value = Math.min(saved.currentStep, DEMO_STEPS.length - 1) } else sessionStorage.removeItem(SESSION_KEY) } catch { sessionStorage.removeItem(SESSION_KEY) } }
+function restoreState() { try { const raw = sessionStorage.getItem(SESSION_KEY); if (!raw) return; const saved = JSON.parse(raw) as DemoState; if (saved.schemaVersion === 2 && saved.sandboxSessionId === sandboxSession.value?.sessionId && saved.factoryId === 'F006' && saved.runKey?.startsWith('DEMO-F006-FLOW-20261105')) { state.value = saved; currentIndex.value = Math.min(saved.currentStep, DEMO_STEPS.length - 1) } else sessionStorage.removeItem(SESSION_KEY) } catch { sessionStorage.removeItem(SESSION_KEY) } }
 function uniqueOptionId(field: string, name: unknown): string | undefined { const value = String(name || '').trim(); if (!value) return undefined; const options = optionMap.value[field] || []; const hits = options.filter(option => option.name === value || option.name.includes(value) || value.includes(option.name)); return hits.length === 1 ? hits[0].id : undefined }
 async function handleAiFill(params: Record<string, unknown>) {
   if (aiFilling.value || !active.value) return
@@ -80,7 +83,13 @@ async function handleAiFill(params: Record<string, unknown>) {
   try { for (const [key, value] of Object.entries(updates)) { if (!active.value) return; form.value[key] = value; await new Promise(resolve => setTimeout(resolve, 140)) } addLog('AI 已逐字段预填当前表单，请确认后再执行') } finally { aiFilling.value = false }
 }
 async function initializeDemoDefaults() { state.value = await initializeDemo(state.value); currentIndex.value = Math.min(state.value.currentStep, DEMO_STEPS.length - 1); demoInitialized.value = true }
-async function startNewRound() { if (running.value) return; demoInitialized.value = false; lastResult.value = null; currentIndex.value = 0; state.value = createDemoState(); await initializeDemoDefaults(); fillStep(); addLog('已准备新一轮 F006 演示') }
+async function enterSandbox() {
+  if (enteringSandbox.value || sandboxSession.value) return
+  enteringSandbox.value = true; sandboxError.value = ''
+  try { await beginSandbox(request); window.location.replace('/demo-flow') }
+  catch (error) { sandboxError.value = error instanceof Error ? error.message : '暂时无法准备演示沙盒，请重试' }
+  finally { enteringSandbox.value = false }
+}
 
 function unwrapList(value: unknown): Array<Record<string, unknown>> {
   const outer = (value as { data?: unknown } | null)?.data ?? value
@@ -118,6 +127,7 @@ async function executeCurrent() {
   if (!active.value || !demoInitialized.value || !currentStep.value || running.value || state.value.currentStep !== currentIndex.value) return
   running.value = true; paused.value = false; addLog(`执行：${currentStep.value.label}`)
   try {
+    requireSandboxReady()
     assertF006Session({ factoryId: authStore.factoryId })
     const nextState = await executeStep(state.value, currentStep.value.id, form.value)
     if (!active.value) return
@@ -136,7 +146,7 @@ function nextStep() {
 }
 function startAutoplay() { if (!demoInitialized.value || running.value || state.value.currentStep !== currentIndex.value) return; autoplay.value = true; paused.value = false; void executeCurrent() }
 function continueAutoplay() { paused.value = false; void executeCurrent() }
-onMounted(() => { active.value = true; restoreState(); void initializeDemoDefaults().then(() => { fillStep(); void loadBootstrapOptions() }).catch(error => { addLog(error instanceof Error ? error.message : '演示资料加载失败', 'error'); ElMessage.error('演示资料加载失败，已停止') }); addLog(`已加载 ${DEMO_STEPS.length} 个真实业务步骤`) })
+onMounted(() => { active.value = true; if (sandboxSession.value?.status !== 'READY') return; restoreState(); void initializeDemoDefaults().then(() => { fillStep(); void loadBootstrapOptions() }).catch(error => { addLog(error instanceof Error ? error.message : '演示资料加载失败', 'error'); ElMessage.error('演示资料加载失败，已停止') }); addLog(`已加载 ${DEMO_STEPS.length} 个真实业务步骤`) })
 onActivated(() => { active.value = true; autoplay.value = false; paused.value = false; if (autoplayTimer) { clearTimeout(autoplayTimer); autoplayTimer = undefined }; restoreState(); currentIndex.value = Math.min(state.value.currentStep, DEMO_STEPS.length - 1); fillStep(); lastResult.value = currentStep.value ? state.value.readbacks[currentStep.value.entity] || state.value.entities[currentStep.value.entity] || null : null })
 onDeactivated(() => { active.value = false; stopPlayback() })
 onBeforeUnmount(() => { active.value = false; stopPlayback(); aiDrawerVisible.value = false })
@@ -145,7 +155,10 @@ defineExpose({ handleAiFill, form, executeCurrent })
 
 <template>
   <main v-if="isF006Admin" class="demo-flow-page">
-    <section class="hero"><div><div class="eyebrow"><span class="live-dot" /> F006 · 现场演示控制台</div><h1>从采购到反向追溯</h1><p>演示单据仅在 F006 工厂内创建，接口失败会立即停止连续演示。</p></div><el-tag type="warning" effect="dark">演示标识 · 真实写入</el-tag></section>
+    <section class="hero"><div><div class="eyebrow"><span class="live-dot" /> F006 · 现场演示控制台</div><h1>从采购到反向追溯</h1><p>逐步展示采购、仓库、生产、报工和销售联动；完成后可继续查看溯源和成本。</p></div><el-tag type="warning" effect="dark">{{ sandboxSession ? '隔离沙盒 · 本轮可清空' : '可重复演示' }}</el-tag></section>
+    <el-card v-if="!sandboxSession" shadow="never" class="sandbox-start"><h2>准备一轮全流程演示</h2><p>演示使用独立数据。点击全局“结束演示并清空”后，本轮新增单据、库存变化和凭证会一起清理，历史演示样例保留。</p><el-alert v-if="sandboxError" :title="sandboxError" type="error" :closable="false" /><el-button type="primary" :loading="enteringSandbox" @click="enterSandbox">进入隔离演示</el-button></el-card>
+    <section v-if="!sandboxSession" class="quick-links"><div class="quick-title">历史演示样例</div><el-button plain @click="router.push('/quality/label-qc')">图片质检</el-button><el-button plain @click="router.push('/smart-bi/dashboard')">SmartBI 分析</el-button><el-button plain @click="router.push('/production/traceability?batchNumber=DEMO-20261105-PB-022')">历史全链追溯</el-button></section>
+    <template v-else>
     <section class="stepper-card"><div class="phase-stepper"><div v-for="(phase, index) in phases" :key="phase.label" class="phase-item" :class="{ active: index === phaseIndex, done: index < phaseIndex }"><span>{{ index + 1 }}</span><strong>{{ phase.label }}</strong></div></div><el-progress :percentage="progress" :show-text="false" status="success" /><div class="progress-caption">第 {{ currentIndex + 1 }} / {{ DEMO_STEPS.length }} 步 · 当前阶段：{{ currentPhase.label }} · {{ currentStep.label }}</div></section>
     <section v-if="currentStep" class="work-grid">
       <el-card shadow="never" class="form-card">
@@ -154,16 +167,17 @@ defineExpose({ handleAiFill, form, executeCurrent })
         <div v-if="currentStep.id === 'purchase-create' && state.context?.packaging" class="packaging-line"><strong>同时采购包材</strong><span>{{ state.context.packaging.name }} · {{ state.context.finishedQuantity }}{{ state.context.packaging.unit }} · 单价 {{ state.context.packaging.unitPrice }}</span></div>
         <div v-if="currentStep.id === 'purchase-receive'" class="receipt-proof"><span class="proof-icon">▣</span><div><strong>收货凭证</strong><small>本步骤将生成 DEMO 示意凭证并关联收货单，执行后显示缩略图。</small></div></div>
          <el-form label-position="top" class="demo-form"><el-form-item v-for="field in currentFields" :key="field.name" :label="field.label"><el-select v-if="optionMap[field.name]" v-model="form[field.name]" :disabled="running" class="field-control"><el-option v-for="option in optionMap[field.name]" :key="option.id" :label="option.name" :value="option.id" /></el-select><el-input v-else-if="/Id$|Ids$/.test(field.name) && form[field.name]" :model-value="'系统自动带入'" disabled class="field-control" /><el-input v-else v-model="form[field.name]" :disabled="running" :placeholder="field.required ? '必填' : '请选择或填写'" class="field-control" /></el-form-item></el-form>
-         <div class="controls"><el-button v-if="currentStep.id === 'purchase-create' || currentStep.id === 'sales-order-create'" plain type="info" :disabled="running || aiFilling" @click="aiDrawerVisible = true">AI 帮我填写</el-button><el-button type="primary" :loading="running" :disabled="!demoInitialized || isComplete" @click="executeCurrent">{{ isApprovalStep ? '执行演示审批' : '执行当前步骤' }}</el-button><el-button :disabled="running || currentIndex >= DEMO_STEPS.length - 1 || state.currentStep !== currentIndex + 1" @click="nextStep">下一步</el-button><el-button v-if="!autoplay" type="success" plain :disabled="running || !demoInitialized || isComplete || state.currentStep !== currentIndex" @click="startAutoplay">连续演示</el-button><el-button v-else type="warning" plain :disabled="false" @click="paused ? continueAutoplay() : pausePlayback()">{{ paused ? '继续演示' : '暂停演示' }}</el-button><el-button v-if="isComplete" type="primary" plain :disabled="running" @click="startNewRound">开始新一轮</el-button></div>
+         <div class="controls"><el-button v-if="currentStep.id === 'purchase-create' || currentStep.id === 'sales-order-create'" plain type="info" :disabled="running || aiFilling" @click="aiDrawerVisible = true">AI 帮我填写</el-button><el-button type="primary" :loading="running" :disabled="!demoInitialized || isComplete" @click="executeCurrent">{{ isApprovalStep ? '执行演示审批' : '执行当前步骤' }}</el-button><el-button :disabled="running || currentIndex >= DEMO_STEPS.length - 1 || state.currentStep !== currentIndex + 1" @click="nextStep">下一步</el-button><el-button v-if="!autoplay" type="success" plain :disabled="running || !demoInitialized || isComplete || state.currentStep !== currentIndex" @click="startAutoplay">连续演示</el-button><el-button v-else type="warning" plain :disabled="false" @click="paused ? continueAutoplay() : pausePlayback()">{{ paused ? '继续演示' : '暂停演示' }}</el-button><span v-if="isComplete" class="pause-hint">本轮已完成，可继续查看溯源与成本；点击顶部“结束演示并清空”后再开始下一轮。</span></div>
         <div v-if="autoplay && paused" class="pause-hint">已暂停：字段已预填，可先向观众解释，再继续执行。</div>
       </el-card>
       <el-card shadow="never" class="result-card"><template #header><div class="card-heading"><span>真实结果回读</span><el-tag v-if="lastResult" type="success">已成功</el-tag></div></template><div v-if="safeResult.length" class="result-grid"><div v-for="item in safeResult" :key="item.label"><small>{{ item.label }}</small><strong>{{ item.value }}</strong></div></div><el-empty v-else description="执行后显示真实单号、数量、成本与库存回读" :image-size="80" /><el-button v-if="lastResult && detailRoute" text type="primary" @click="router.push(detailRoute)">打开对应业务页 →</el-button></el-card>
     </section>
-    <section class="quick-links"><div class="quick-title">演示延伸</div><el-button plain @click="router.push('/quality/label-qc')">图片质检</el-button><el-button plain @click="router.push('/smart-bi/dashboard')">SmartBI 分析</el-button><el-button plain @click="router.push('/production/traceability?batchNumber=DEMO-20261105-PB-022')">历史全链追溯</el-button></section>
+    <section class="quick-links"><div class="quick-title">本轮业务数据</div><el-button plain @click="router.push('/production/traceability')">反向溯源</el-button><el-button plain @click="router.push('/production/batches')">报工与批次成本</el-button><span>结束并清空后，可继续查看历史 SmartBI 和图片质检样例。</span></section>
     <AiEntryDrawer :key="currentStep.id" v-model="aiDrawerVisible" :config="aiConfig" @fill-form="handleAiFill" />
     <section class="log-card"><div class="log-title">演示日志 <span>只显示业务动作与结果</span></div><div v-for="log in logs" :key="`${log.time}-${log.text}`" class="log-row" :class="`is-${log.kind}`"><time>{{ log.time }}</time><span>{{ log.text }}</span></div></section>
+    </template>
   </main>
-  <el-result v-else icon="warning" title="仅限 F006 工厂管理员" sub-title="请切换到 F006 工厂管理员账号后访问此页面" />
+  <el-result v-else icon="warning" title="仅限 F006 演示账号" sub-title="请使用 f006_admin 访问此页面" />
 </template>
 
 <style scoped lang="scss">
