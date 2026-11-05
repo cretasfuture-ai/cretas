@@ -44,6 +44,7 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowValidator;
 import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.UserModuleAccessServiceImpl;
 import com.cretas.aims.service.config.impl.FactoryConfigServiceImpl;
@@ -56,6 +57,8 @@ import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -112,7 +115,7 @@ import static org.mockito.Mockito.mock;
 @Import({MaterialAliasMergeService.class, MaterialMergeReferenceReplacer.class, MaterialReferenceWriteGuard.class,
         MaterialMergeWorkflowWriteGuard.class, ProcessSecretAccessService.class,
         ProcessSecretAuditRecorder.class, ProcessSecretRecipeGuard.class,
-        FactoryConfigServiceImpl.class, UserModuleAccessServiceImpl.class,
+        FactoryConfigServiceImpl.class, UserModuleAccessServiceImpl.class, UnitContractServiceImpl.class,
         MaterialMergeConcurrencyPostgresContractTest.JacksonTestConfiguration.class})
 class MaterialMergeConcurrencyPostgresContractTest {
 
@@ -179,7 +182,7 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Autowired private MaterialAliasMergeService mergeService;
     @Autowired private MaterialReferenceWriteGuard materialReferenceWriteGuard;
     @Autowired private PlatformTransactionManager transactionManager;
-    @MockBean private UnitContractService unitContractService;
+    @Autowired private UnitContractService unitContractService;
     @MockBean private PermissionService permissionService;
     @MockBean private DDLExecutor ddlExecutor;
     @MockBean private DynamicFieldService dynamicFieldService;
@@ -190,7 +193,6 @@ class MaterialMergeConcurrencyPostgresContractTest {
 
     @BeforeEach
     void configureUnitContract() {
-        when(unitContractService.areEquivalent(anyString(), anyString(), anyString())).thenReturn(true);
         when(permissionService.hasPermission(any(User.class), org.mockito.ArgumentMatchers.eq("production:read_write")))
                 .thenReturn(true);
         when(permissionService.hasAnyPermission(any(User.class), any(String[].class))).thenReturn(true);
@@ -533,6 +535,93 @@ class MaterialMergeConcurrencyPostgresContractTest {
                 String.class, po)).isEqualTo(masterMaterialSpec);
         assertThat(jdbc.queryForObject("SELECT material_type_id FROM supplier_material_purchase_specs WHERE id=?",
                 String.class, duplicateSpec)).isEqualTo(f.duplicateId);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"bag,袋", "box,盒", "case,箱"})
+    void unitAliasesMapBothPackagingIdentitiesWithoutChangingPrice(String sourceUnit, String targetUnit) {
+        Fixture f = fixture(false);
+        String supplier = insertSupplier(f, "PG Alias Spec Supplier");
+        String duplicateRelation = insertSupplierMaterial(f, supplier, f.duplicateId, "MM-SM-D-", true);
+        String masterRelation = insertSupplierMaterial(f, supplier, f.masterId, "MM-SM-M-", true);
+        String duplicateSpec = insertSpec(f, duplicateRelation, "D-SPEC", "10.00");
+        String masterSpec = insertSpec(f, masterRelation, "M-SPEC", "10.00");
+        String duplicateMaterialSpec = insertMaterialPackagingSpec(f, f.duplicateId, "D-MAT", "1");
+        String masterMaterialSpec = insertMaterialPackagingSpec(f, f.masterId, "M-MAT", "1");
+        jdbc.update("UPDATE supplier_material_purchase_specs SET purchase_package_unit=?, inventory_base_unit='公斤' WHERE id=?",
+                sourceUnit, duplicateSpec);
+        jdbc.update("UPDATE supplier_material_purchase_specs SET purchase_package_unit=? WHERE id=?", targetUnit, masterSpec);
+        jdbc.update("UPDATE material_packaging_specs SET package_unit=?, base_unit='公斤' WHERE id=?", sourceUnit, duplicateMaterialSpec);
+        jdbc.update("UPDATE material_packaging_specs SET package_unit=? WHERE id=?", targetUnit, masterMaterialSpec);
+        String po = insertOpenPurchaseOrder(f);
+        jdbc.update("INSERT INTO purchase_order_items (purchase_order_id, material_type_id, material_name, quantity, unit, "
+                        + "unit_price, price_unit, quantity_to_price_factor, received_quantity, supplier_material_id, "
+                        + "purchase_packaging_spec_id, material_packaging_spec_id, created_at, updated_at) "
+                        + "VALUES (?, ?, '重复物料', 1, ?, 10, ?, 1, 0, ?, ?, ?, now(), now())",
+                po, f.duplicateId, sourceUnit, sourceUnit, duplicateRelation, duplicateSpec, duplicateMaterialSpec);
+
+        assertThat(unitContractService.storageUnit(f.factoryFactory, sourceUnit))
+                .isEqualTo(unitContractService.storageUnit(f.factoryFactory, targetUnit));
+        transaction(() -> mergeService.merge(f.factoryFactory, f.duplicateId, f.request()));
+
+        Map<String, Object> actual = jdbc.queryForMap("SELECT material_type_id,supplier_material_id,purchase_packaging_spec_id,"
+                + "material_packaging_spec_id,unit_price,unit FROM purchase_order_items WHERE purchase_order_id=?", po);
+        assertThat(actual).containsEntry("material_type_id", f.masterId)
+                .containsEntry("supplier_material_id", masterRelation)
+                .containsEntry("purchase_packaging_spec_id", masterSpec)
+                .containsEntry("material_packaging_spec_id", masterMaterialSpec)
+                .containsEntry("unit", sourceUnit);
+        assertThat((BigDecimal) actual.get("unit_price")).isEqualByComparingTo("10");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"只,个", "个,件", "kg,g"})
+    void distinctCountAndScaleUnitsCannotBeGuessedEquivalent(String sourceUnit, String targetUnit) {
+        Fixture f = fixture(false);
+        String supplier = insertSupplier(f, "PG Distinct Spec Supplier");
+        String duplicateRelation = insertSupplierMaterial(f, supplier, f.duplicateId, "MM-SM-D-", true);
+        String masterRelation = insertSupplierMaterial(f, supplier, f.masterId, "MM-SM-M-", true);
+        String duplicateSpec = insertSpec(f, duplicateRelation, "D-SPEC", "10.00");
+        String masterSpec = insertSpec(f, masterRelation, "M-SPEC", "10.00");
+        jdbc.update("UPDATE supplier_material_purchase_specs SET purchase_package_unit=? WHERE id=?", sourceUnit, duplicateSpec);
+        jdbc.update("UPDATE supplier_material_purchase_specs SET purchase_package_unit=? WHERE id=?", targetUnit, masterSpec);
+        String po = insertOpenPurchaseOrder(f);
+        jdbc.update("INSERT INTO purchase_order_items (purchase_order_id,material_type_id,material_name,quantity,unit,"
+                        + "unit_price,price_unit,quantity_to_price_factor,received_quantity,supplier_material_id,purchase_packaging_spec_id,created_at,updated_at) "
+                        + "VALUES (?,?,'重复物料',1,?,10,?,1,0,?,?,now(),now())",
+                po, f.duplicateId, sourceUnit, sourceUnit, duplicateRelation, duplicateSpec);
+
+        Throwable failure = capture(() -> transaction(() -> mergeService.merge(f.factoryFactory, f.duplicateId, f.request())));
+        assertThat(failure).isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("MATERIAL_MERGE_CONFLICT"));
+        assertThat(jdbc.queryForObject("SELECT material_type_id FROM purchase_order_items WHERE purchase_order_id=?", String.class, po))
+                .isEqualTo(f.duplicateId);
+        assertThat(jdbc.queryForObject("SELECT is_active FROM raw_material_types WHERE id=?", Boolean.class, f.duplicateId)).isTrue();
+        assertThat(jdbc.queryForObject("SELECT active FROM supplier_materials WHERE id=?", Boolean.class, duplicateRelation)).isTrue();
+    }
+
+    @Test
+    void twoCanonicallyEquivalentMasterSpecsRemainAmbiguous() {
+        Fixture f = fixture(false);
+        String supplier = insertSupplier(f, "PG Ambiguous Alias Supplier");
+        String duplicateRelation = insertSupplierMaterial(f, supplier, f.duplicateId, "MM-SM-D-", true);
+        String masterRelation = insertSupplierMaterial(f, supplier, f.masterId, "MM-SM-M-", true);
+        String duplicateSpec = insertSpec(f, duplicateRelation, "D-SPEC", "10.00");
+        insertSpec(f, masterRelation, "M-SPEC-1", "10.00");
+        String secondMasterSpec = insertSpec(f, masterRelation, "M-SPEC-2", "10.00");
+        jdbc.update("UPDATE supplier_material_purchase_specs SET purchase_package_unit='公斤' WHERE id=?", secondMasterSpec);
+        String po = insertOpenPurchaseOrder(f);
+        jdbc.update("INSERT INTO purchase_order_items (purchase_order_id,material_type_id,material_name,quantity,unit,"
+                        + "unit_price,price_unit,quantity_to_price_factor,received_quantity,supplier_material_id,purchase_packaging_spec_id,created_at,updated_at) "
+                        + "VALUES (?,?,'重复物料',1,'kg',10,'kg',1,0,?,?,now(),now())",
+                po, f.duplicateId, duplicateRelation, duplicateSpec);
+
+        Throwable failure = capture(() -> transaction(() -> mergeService.merge(f.factoryFactory, f.duplicateId, f.request())));
+        assertThat(failure).isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                e -> assertThat(e.getMessage()).contains("多个"));
+        assertThat(jdbc.queryForObject("SELECT material_type_id FROM purchase_order_items WHERE purchase_order_id=?", String.class, po))
+                .isEqualTo(f.duplicateId);
+        assertThat(jdbc.queryForObject("SELECT is_active FROM raw_material_types WHERE id=?", Boolean.class, f.duplicateId)).isTrue();
     }
 
     @Test
