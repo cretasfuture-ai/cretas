@@ -131,3 +131,43 @@ def test_mini_payload_does_not_depend_on_expected_label(tmp_path,monkeypatch):
     assert content[0]==content[1]
     assert 'SECRET_EXPECTED' not in content[0]
     assert set(json.loads(content[0]))=={'text','candidates'}
+
+
+def test_inventory_stops_at_inline_description_and_preserves_quoted_braces(tmp_path,monkeypatch):
+    import factory_accuracy_support as support
+    directory=tmp_path/'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/demo'
+    directory.mkdir(parents=True)
+    (directory/'DemoTool.java').write_text('public String getToolName(){return "read";}\npublic String getDescription(){return "查询 {完整} 单据";}\npublic String unrelated(){return "do not include schema";}\npublic AccessMode getAccessMode(){return AccessMode.READ;}',encoding='utf-8')
+    monkeypatch.setattr(support,'WORK',tmp_path)
+    rows=support.source_inventory({'canonical_intents':[{'intent_code':'P','tool_name':'read'}]})
+    assert rows[0]['tool_contract']['description']=='查询 {完整} 单据'
+    assert rows[0]['tool_contract']['declared_access_mode']=='READ'
+
+
+def test_lexical_ambiguity_signal_routes_to_mini_instead_of_forcing_refusal():
+    from factory_accuracy_eval import decision
+    row={'text':'库存还有多少','logits':[10.,0.]}
+    mapping={'A':0,'B':1};policy={'temperature':1.,'confidence':.8,'margin':.1,'mini_confidence':.65}
+    assert decision(row,mapping,policy)==('__CLARIFY__','abstain')
+    assert decision(row,mapping,policy,{'prediction':'B','confidence':.95})==('B','mini')
+
+
+def test_selective_review_has_no_gold_and_is_optional_at_runtime(tmp_path,monkeypatch):
+    import factory_accuracy_critic as critic
+    from factory_accuracy_eval import decision
+    payloads=[]
+    class Client:
+        def __init__(self,*_,**__):pass
+        async def close(self):pass
+        async def ask(self,id,model,instructions,payload,schema,max_output,effort):
+            assert effort=='medium';payloads.append(payload)
+            return {'label':'A','confidence':.95}
+    monkeypatch.setattr(critic,'SyntheticClient',Client)
+    rows=[{'record_id':'fixture','text':'synthetic text','label':'SECRET_GOLD','prediction':'A','logits':[1.,0.]}]
+    cloud={'fixture':{'prediction':'B','confidence':.9,'candidates':['A','B','__CLARIFY__']}}
+    pool=SimpleNamespace(defs={k:{'name':k,'meaning':'source contract'} for k in ['A','B']})
+    output=asyncio.run(critic.review_disagreements(tmp_path,'fixture',rows,cloud,pool))
+    assert 'SECRET_GOLD' not in payloads[0]
+    policy={'temperature':1.,'confidence':.99,'margin':.1,'mini_confidence':.8,'critic_confidence':.8}
+    assert decision(rows[0],{'A':0,'B':1},dict(policy,critic_enabled=False),output['fixture'])==('B','mini')
+    assert decision(rows[0],{'A':0,'B':1},dict(policy,critic_enabled=True),output['fixture'])==('A','mini-review')

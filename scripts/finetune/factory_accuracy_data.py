@@ -6,9 +6,11 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from factory_accuracy_support import WORK,BOUNDARIES,semantics,OverlapIndex,verify_disjoint
+import subprocess
+from factory_accuracy_support import WORK,BOUNDARIES,semantics,OverlapIndex,verify_disjoint,source_inventory
 from factory_experiment import read,write,save,sha,OLD
 from factory_accuracy_api import SyntheticClient,MINI,BIG
+from flywheel_reviewed import normalized
 
 PREVIOUS=Path.home()/'Documents/Cretas意图微调-266-20261105'
 PRIVATE=('OPENAI_API_KEY','Bearer ')
@@ -27,6 +29,7 @@ def initialize(root):
     if (root/'generation-protocol.json').exists():raise ValueError('Experiment already initialized')
     catalog=json.loads((WORK/'backend/python/ai/data/factory-intent-catalog.json').read_text(encoding='utf-8'))
     policy,aliases=semantics(catalog)
+    if not (root/'inventory.json').exists():save(root/'inventory.json',source_inventory(catalog))
     inventory=json.loads((root/'inventory.json').read_text(encoding='utf-8'))
     bycode={r['intent_code']:r for r in inventory}
     definitions=[]
@@ -40,7 +43,7 @@ def initialize(root):
     for i,row in enumerate(definitions):row['neighbors']=[definitions[j]['code'] for j in similarity[i].argsort()[::-1] if j!=i][:6]
     save(root/'definitions.json',definitions);save(root/'catalog.json',catalog)
     save(root/'boundary-policy.json',policy)
-    protocol=dict(seed=20261105,source_base='072bf5681969a55029d929d00a6101a28ec92a15',physical_head=266,effective_intents=len(definitions),aliases=aliases,
+    protocol=dict(seed=20261105,source_base=subprocess.check_output(['git','rev-parse','HEAD'],cwd=WORK,text=True).strip(),physical_head=266,effective_intents=len(definitions),aliases=aliases,
         counts=dict(train=40,development=8,test=6),selection=dict(validation_per_class=4,calibration_per_class=2,test_per_class=4,test_minimum=2),
         generators=dict(train=MINI,development=MINI,test=BIG),semantic_policy_sha256=sha(BOUNDARIES),definitions_sha256=sha(root/'definitions.json'),
         locked_old_test_sha256=sha(PREVIOUS/'test.jsonl'),locked_old_review_sha256=sha(PREVIOUS/'reviewed-35.jsonl'),
@@ -186,7 +189,7 @@ def curate(root):
         guard=OverlapIndex(old_protected+old_training+test+validation+calibration)
         negative_seen=set()
         for row in read(negative_root/('raw-negative-'+name+'.jsonl')):
-            key=''.join(row['text'].split()).casefold()
+            key=normalized(row['text'])
             if key not in negative_seen and structural(row,labels) and not guard.overlaps(row):
                 target.append(row);negative_seen.add(key)
             else:excluded.append(dict(row,reason='negative_structural_or_overlap'))
@@ -210,7 +213,7 @@ def curate(root):
     for row in read(root/'audited-train.jsonl'):
         if not structural(row,labels) or trainindex.overlaps(row):
             excluded.append(dict(row,reason='train_structural_or_protected_overlap'));continue
-        key=''.join(row['text'].split()).casefold()
+        key=normalized(row['text'])
         if key in seen:
             if seen[key]!=row['label']:raise ValueError('Conflicting labels in generated training')
             continue

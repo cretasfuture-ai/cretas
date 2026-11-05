@@ -70,12 +70,11 @@ class HoldoutGuard:
             raise ValueError('Holdout must contain nonempty text rows')
         self.texts = [normalized(r['text']) for r in self.rows]
         self.groups = {r['group_id'] for r in self.rows if r.get('group_id')}
+        from factory_accuracy_support import OverlapIndex
+        self._index = OverlapIndex(self.rows)
 
     def overlaps(self, row: Dict) -> bool:
-        if row.get('group_id') in self.groups:
-            return True
-        text = normalized(row['text'])
-        return any(text == held or SequenceMatcher(None, text, held).ratio() >= .85 for held in self.texts)
+        return self._index.overlaps(row)
 
 
 def load_reviewed(path: Path, labels_path: Path, holdout_path: Path) -> List[Dict]:

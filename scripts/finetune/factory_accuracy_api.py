@@ -54,8 +54,8 @@ class SyntheticClient:
 
     async def close(self):await self.http.aclose()
 
-    async def ask(self,id,model,instructions,content,schema,max_output=4096):
-        payload=dict(model=model,store=False,reasoning=dict(effort='low'),instructions=instructions,input=content,max_output_tokens=max_output,text=dict(format=dict(type='json_schema',name='synthetic_intent_data',strict=True,schema=schema)))
+    async def ask(self,id,model,instructions,content,schema,max_output=4096,effort='low'):
+        payload=dict(model=model,store=False,reasoning=dict(effort=effort),instructions=instructions,input=content,max_output_tokens=max_output,text=dict(format=dict(type='json_schema',name='synthetic_intent_data',strict=True,schema=schema)))
         encoded=json.dumps(payload,ensure_ascii=False)
         fingerprint=hashlib.sha256(encoded.encode()).hexdigest()
         if id in self.done:

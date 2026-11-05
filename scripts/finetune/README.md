@@ -193,3 +193,11 @@ A: 减小 `--batch-size` (如 4) 或增加 `--freeze-layers`
 `factory_cloud_shadow.py --evidence <目录>` 只把合成文本和无真值的候选提交给三个已指定的OpenAI模型；使用本机已有 `.codex/secrets/cretas-openai-eval.env`，不打印密钥。最多500次计划请求，最多3并发，不自动重试，未决请求先检查回执；不能据此确认账户剩余额度。TF-IDF候选是离线替代实验，不代表线上BM25/向量召回效果。
 
 35条原始审核和所有已评测文本只用于保护诊断；训练只能接收独立新样本。禁止按测试成绩修改阈值、补真值候选、重标测试标签，或用教师一致作为自动训练批准。生成的权重/业务语料/请求回执保存在Git以外；具体结果与局限见 `docs/dispatch/archive/2026-11-05-intent266-local-experiment.md`。本入口不部署、不替换生产模型。
+
+## 全目录均衡训练与冻结盲测
+
+`factory_accuracy_data.py` 从当前Java Tool/Skill目录和 `data/factory_semantic_boundaries.json` 读取业务边界；同一单Tool的历史入口只在离线训练语义中归一，266个物理head ID不改，不代替租户启用/权限校验。`initialize` 冻结定义和生成计划；独立生成长/短训练、开发与盲测候选，`audit` 的混合候选复核不提供原标签，`curate` 优先保护测试再筛开发/训练。生成与请求原始回执留在 `--evidence` Git外目录。复用本机已有API Key文件，不打印或复制密钥。训练运行环境需torch、transformers、numpy、scikit-learn；CI契约不要求下载模型或执行真实云调用。
+
+`factory_accuracy_train.py --evidence <目录>` 复用真实增量Trainer，按验证宏F1选择最多三组预登记配置，默认标签平滑、冻结前层、权重衰减与早停。`factory_accuracy_eval.py calibrate --evidence <目录>` 只用独立校准集选择全局分流阈值，并测量可选的同Mini分歧复核；没有净增益就关闭。`blind` 锁定数据、权重和路由实现哈希后才打开盲测，之后训练和校准入口拒绝再次拟合。候选融合是离线代理，不是线上完整召回验收。`factory_accuracy_regression.py` 只允许在主盲测冻结后执行旧保护集诊断，不能用它反向选模型。
+
+本轮数值达到本地81.80%／混合96.46%，但验证到正向盲测差10.09点、35边界难例仅26/35，完整泛化门禁未通过；严禁把它表述为无过拟合或直接生产可用。完整证据与剩余质量缺口见 `docs/dispatch/archive/2026-11-05-intent266-accuracy.md`。权重仅本地保存，不部署、不替换线上。

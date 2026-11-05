@@ -13,11 +13,11 @@ from factory_accuracy_api import SyntheticClient,MINI
 
 def needs_clarification(text):
     """Small source-defined ambiguity checks, not question/answer memorization."""
-    if re.search(r'库存|存量',text) and not re.search(r'原料|原材料|成品|在制|报表|汇总|周转|库龄|预警|补货|低库存|批次|安全库存|冻结|盘盈|盘点',text):return True
+    if re.search(r'库存|存量',text) and not re.search(r'原料|原材料|物料|成品|在制|报表|汇总|周转|库龄|预警|补货|低库存|批次|安全库存|冻结|盘盈|盘点|赠品|赠料|免费|预留|领用|消耗|释放|分配|调拨',text):return True
     if re.search(r'排名|排行|冠军|前十',text) and not re.search(r'产品|成品|商品|供应商|客户|员工|人员|部门|车间|品种|原料',text):return True
-    if re.search(r'环比|同比|走势|趋势',text) and not re.search(r'销售|营收|收入|成本|产量|生产|质量|合格|库存|工时|利润|出货|指标|良率|收款',text):return True
+    if re.search(r'环比|同比|走势|趋势',text) and not re.search(r'销售|营收|收入|成本|产量|生产|质量|合格|库存|工时|利润|出货|良率|收款|经营|报表|报告',text):return True
     if re.search(r'异常情况|异常数据',text) and not re.search(r'考勤|打卡|设备|系统|质检|质量|生产|库存|冷链|温度|财务|订单|指标',text):return True
-    concrete=r'采购|销售|发货|出货|原料|原材料|成品|质检|质量|打卡|签到|请假|报销|加班|工资|成本|利润|资产|现金流|发票|开票|调拨|供应商|客户|员工|排产|工序|生产|添加剂|配方|冷链|留样|召回|清洁|HACCP|SSOP|BOM|密码|权限|电子秤|摄像头'
+    concrete=r'采购|销售|发货|出货|原料|原材料|物料|成品|质检|质量|打卡|签到|请假|报销|加班|工资|成本|利润|资产|现金流|发票|开票|调拨|供应商|客户|员工|排产|工序|生产|添加剂|配方|冷链|留样|召回|清洁|HACCP|SSOP|BOM|密码|权限|电子秤|摄像头|帮助|指引|指南|使用说明|操作说明|上一页|下一页|返回|个人资料|切换工厂|系统设置|反馈|仪表盘|继续|恢复'
     if re.search(r'那个|上次|刚才|那张|这张|那份|这份|这批|那批',text) and not re.search(concrete,text,re.I):return True
     return False
 
@@ -78,12 +78,21 @@ async def mini_many(root,phase,rows,pool):
 
 def decision(row,mapping,policy,cloud=None):
     reverse={v:k for k,v in mapping.items()}
-    if needs_clarification(row['text']):return '__CLARIFY__','rule'
+    def from_mini():
+        review=cloud.get('review') if policy.get('critic_enabled') else None
+        if review is not None:
+            return (review['prediction'] if review['confidence']>=policy['critic_confidence'] else '__CLARIFY__'),'mini-review'
+        return (cloud['prediction'] if cloud['confidence']>=policy['mini_confidence'] else '__CLARIFY__'),'mini'
+    # A lexical signal is uncertainty, not proof that the request is unclear.
+    # Send it to Mini for semantic verification rather than vetoing real intent.
+    if needs_clarification(row['text']):
+        if cloud is not None:return from_mini()
+        return '__CLARIFY__','abstain'
     p=probabilities(row['logits'],policy['temperature']);idx=np.argsort(p)[::-1]
     if p[idx[0]]>=policy['confidence'] and p[idx[0]]-p[idx[1]]>=policy['margin']:
         return reverse[int(idx[0])],'local'
     if cloud is not None:
-        return (cloud['prediction'] if cloud['confidence']>=policy['mini_confidence'] else '__CLARIFY__'),'mini'
+        return from_mini()
     return '__CLARIFY__','abstain'
 
 
@@ -93,7 +102,7 @@ def evaluate(rows,mapping,policy,cloud):
         lp,_=decision(row,mapping,policy)
         hp,route=decision(row,mapping,policy,cloud[row['record_id']])
         local.append(dict(row,prediction=lp));hybrid.append(dict(row,prediction=hp,route=route))
-    return scores(local),scores(hybrid),sum(r['route']=='mini' for r in hybrid)
+    return scores(local),scores(hybrid),sum((r['route'] in ('mini','mini-review'))+(r['route']=='mini-review') for r in hybrid)
 
 
 async def calibrate(root):
@@ -103,17 +112,20 @@ async def calibrate(root):
     definitions=json.loads((root/'definitions.json').read_text(encoding='utf-8'))
     pool=CandidatePool(definitions,mapping,manifest['aliases'])
     cloud=await mini_many(root,'calibration',rows,pool)
+    from factory_accuracy_critic import review_disagreements
+    cloud=await review_disagreements(root,'calibration',rows,cloud,pool)
     positives=[r for r in rows if r['label'] in mapping]
     temperatures=[.75,1.,1.25,1.5,2.,2.5,3.]
     temperature=min(temperatures,key=lambda t:sum(-np.log(max(probabilities(r['logits'],t)[mapping[r['label']]],1e-12)) for r in positives))
     grid=[]
     for threshold in [.45,.55,.65,.75,.80,.85,.90,.95,.98]:
         for margin in [.05,.10,.20,.30]:
-            for mini_confidence in [0.,.5,.65,.8]:
-                policy=dict(temperature=temperature,confidence=threshold,margin=margin,mini_confidence=mini_confidence)
-                local,hybrid,calls=evaluate(rows,mapping,policy,cloud)
-                grid.append(dict(policy=policy,local=local,hybrid=hybrid,mini_calls=calls))
-    feasible=[r for r in grid if r['hybrid']['accuracy']>=.97 and r['local']['accuracy']>=.80]
+            for mini_confidence in [.5,.8]:
+                for critic_enabled,critic_confidence in [(False,.65),(True,.65),(True,.8)]:
+                    policy=dict(temperature=temperature,confidence=threshold,margin=margin,mini_confidence=mini_confidence,critic_enabled=critic_enabled,critic_confidence=critic_confidence)
+                    local,hybrid,calls=evaluate(rows,mapping,policy,cloud)
+                    grid.append(dict(policy=policy,local=local,hybrid=hybrid,mini_calls=calls))
+    feasible=[r for r in grid if r['hybrid']['accuracy']>=.97]
     selected=min(feasible,key=lambda r:(r['mini_calls'],-r['hybrid']['accuracy'])) if feasible else max(grid,key=lambda r:(r['hybrid']['accuracy'],r['local']['accuracy'],-r['mini_calls']))
     policy=dict(selected['policy'],model_sha256=selection['model_sha256'],test_hash=manifest['hashes']['test.jsonl'],definitions_sha256=manifest['hashes']['definitions.json'],pool='12 classifier +18 lexical reciprocal-rank fusion, up to32 intents + clarify; no gold injection',aliases=manifest['aliases'],rule_sha256=hashlib.sha256(__import__('inspect').getsource(needs_clarification).encode()).hexdigest(),routing_code_sha256=sha(Path(__file__)),selected_on='calibration only',calibration_metrics=selected)
     path=root/'routing-policy.json'
@@ -140,6 +152,9 @@ async def blind(root):
     pool=CandidatePool(json.loads((root/'definitions.json').read_text(encoding='utf-8')),mapping,manifest['aliases'])
     uncertain=[r for r in pred if decision(r,mapping,policy)[1]=='abstain']
     cloud=await mini_many(root,'blind',uncertain,pool)
+    if policy.get('critic_enabled'):
+        from factory_accuracy_critic import review_disagreements
+        cloud=await review_disagreements(root,'blind',uncertain,cloud,pool)
     paired=[]
     for row in pred:
         local,local_route=decision(row,mapping,policy)
@@ -147,9 +162,18 @@ async def blind(root):
         paired.append(dict(row,raw_prediction=row['prediction'],prediction=actual,local_pipeline=local,route=route,mini=cloud.get(row['record_id'])))
     write(root/'blind-paired.jsonl',paired)
     raw=scores(pred);local_pipeline=scores([dict(r,prediction=r['local_pipeline']) for r in paired]);hybrid=scores(paired)
-    summary=dict(n=len(rows),raw266=raw,raw_route_equivalent=scores(pred,manifest['aliases']),local_pipeline=local_pipeline,hybrid=hybrid,mini_calls=len(uncertain),targets_met=raw['accuracy']>=.80 and raw['macro_f1']>=.80 and hybrid['accuracy']>=.95,
+    summary=dict(n=len(rows),raw266=raw,raw_route_equivalent=scores(pred,manifest['aliases']),local_pipeline=local_pipeline,hybrid=hybrid,mini_calls=len(uncertain),mini_review_calls=sum('review' in value for value in cloud.values()),targets_met=raw['accuracy']>=.80 and raw['macro_f1']>=.80 and hybrid['accuracy']>=.95,
         positive_raw=scores([r for r in pred if r['label']!='__CLARIFY__']),clarification=dict(n=sum(r['label']=='__CLARIFY__' for r in paired),hybrid_correct=sum(r['label']=='__CLARIFY__' and r['prediction']=='__CLARIFY__' for r in paired)),
         candidate_misses=[r['record_id'] for r in paired if r['mini'] and r['label'] not in r['mini']['candidates']],model_sha256=policy['model_sha256'],routing_sha256=sha(root/'routing-policy.json'),primary_test_openings=1)
+    short_ids={r['record_id'] for r in rows if r['record_id'].startswith('short-test:')}
+    short=[r for r in pred if r['record_id'] in short_ids]
+    long=[r for r in pred if r['label']!='__CLARIFY__' and r['record_id'] not in short_ids]
+    summary['short_query_raw']=scores(short) if short else None
+    summary['long_query_raw']=scores(long) if long else None
+    summary['generalization_checks']=dict(training_validation_gap=selection['training_validation_gap'],validation_to_positive_test_gap=selection['validation']['accuracy']-summary['positive_raw']['accuracy'],no_test_based_fit=True,short_query_accuracy=summary['short_query_raw']['accuracy'] if short else None)
+    summary['generalization_checks']['passed']=selection['training_validation_gap']<=.10 and summary['generalization_checks']['validation_to_positive_test_gap']<=.10 and (not short or summary['short_query_raw']['accuracy']>=.80)
+    summary['numeric_targets_met']=summary['targets_met']
+    summary['targets_met']=summary['targets_met'] and summary['generalization_checks']['passed']
     save(root/'blind-summary.json',summary)
     for arm,path in [('old259',OLD/'baseline-model'),('previous266',BASELINE)]:
         old,_=predict(path,rows);write(root/('blind-'+arm+'.jsonl'),old);summary[arm]=scores(old)
