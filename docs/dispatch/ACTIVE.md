@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `CLAUDE-TASKS-S4-PG-PO-20261105` — `review` — Owner: `01a1a954/root` — Base `072bf5681969a55029d929d00a6101a28ec92a15` — S4自动采购PG参数/取消排程幽灵占线已修；真实JPA与PG通过、独立终审无阻塞，待PR/CI；见archive/2026-11-05-s4-po-postgres.md。
+
 
 
 

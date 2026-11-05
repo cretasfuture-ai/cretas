@@ -44,7 +44,7 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
      * 撞号自然也从没发生过。修好 supplier 之后它才变得<b>可达</b> —— 一个缺陷被另一个缺陷遮住了。
      */
     @Query(value = "SELECT COUNT(*) FROM purchase_orders WHERE factory_id = :factoryId "
-            + "AND order_number LIKE CONCAT('PO-AUTO-', :dateStr, '-%')",
+            + "AND order_number LIKE ('PO-AUTO-' || CAST(:dateStr AS VARCHAR) || '-%')",
             nativeQuery = true)
     long countAutoSuggestionsOn(@Param("factoryId") String factoryId,
                                 @Param("dateStr") String dateStr);
