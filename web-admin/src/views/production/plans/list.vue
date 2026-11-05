@@ -2862,9 +2862,10 @@ async function submitComplete() {
             : null,
           actualSemiFinishedQuantity: Number(completeForm.value.semiFinishedOutputQuantity || 0),
           quantityUnit: completeRow.value.unit || completeRow.value.quantityUnit || null,
-          quantityVarianceReason: completeForm.value.varianceReason === '其他'
+          quantityVarianceReason: completeForm.value.varianceReason,
+          quantityVarianceNote: completeForm.value.varianceReason === '其他'
             ? completeForm.value.otherVarianceReason.trim()
-            : completeForm.value.varianceReason,
+            : null,
           rawMaterialConsumptions: buildRawConsumptionPayload(),
           semiFinishedConsumptions: buildWipConsumptionPayload(),
           auxiliaryConsumptions: [] as Array<Record<string, unknown>>,
@@ -6095,17 +6096,6 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           />
           <div class="settlement-help">这张结单会标记为人工补录，原因和操作人都会留痕。</div>
         </el-form-item>
-        <el-form-item label="半成品产量">
-          <el-input-number
-            v-model="completeForm.semiFinishedOutputQuantity"
-            :min="0"
-            :precision="2"
-            style="width: 100%"
-          />
-          <div class="settlement-help">
-            同一生产计划可以同时产成品和半成品；提交结单会按实际领用扣减原料/半成品，成品需仓库确认实收后才入库。
-          </div>
-        </el-form-item>
         <el-alert
           type="warning"
           show-icon
@@ -6314,6 +6304,17 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           仅在上方出现异常时才需要补录或调整；正常计划会直接展示逐道报工汇总。
         </div>
         </template>
+        <el-form-item label="半成品产量" data-testid="settlement-semi-output">
+          <el-input-number
+            v-model="completeForm.semiFinishedOutputQuantity"
+            :min="0"
+            :precision="2"
+            style="width: 100%"
+          />
+          <div class="settlement-help">
+            填写本计划剩余、需转入半成品库的实际数量；已被下道领用或已入半成品库的数量不要重复填写。成品需仓库确认实收后才入库。
+          </div>
+        </el-form-item>
         <el-alert
           v-if="!settlementPrefillClean && completeSubmitDisabledReason"
           :title="completeSubmitDisabledReason"
