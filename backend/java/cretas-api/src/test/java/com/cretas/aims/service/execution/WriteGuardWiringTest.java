@@ -49,6 +49,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -234,8 +235,8 @@ class WriteGuardWiringTest {
     }
 
     @Test
-    @DisplayName("收入管理报表生成是非破坏性报表产物生成，不应被 _GENERATE 写保护误拦")
-    void revenueReportGenerate_isNotBlockedByGenerateSuffix() {
+    @DisplayName("已退役的餐饮报表生成能力返回 UNSUPPORTED_CAPABILITY 且不派发")
+    void revenueReportGenerate_isRetiredAndNeverDispatches() {
         AIIntentConfig intent = AIIntentConfig.builder()
                 .intentCode("REVENUE_REPORT_GENERATE")
                 .intentName("生成收入管理报表")
@@ -244,8 +245,6 @@ class WriteGuardWiringTest {
                 .requiresApproval(false)
                 .toolName("revenue_report_generate")
                 .build();
-        stubIntent(intent);
-        stubDispatchReturns();
 
         IntentExecuteRequest request = IntentExecuteRequest.builder()
                 .intentCode(intent.getIntentCode())
@@ -255,9 +254,8 @@ class WriteGuardWiringTest {
         IntentExecuteResponse response =
                 orchestrator.executeWithExplicitIntent(FACTORY, request, USER_ID, ROLE);
 
-        assertThat(response.getStatus()).isNotEqualTo("WRITE_CONFIRM_REQUIRED");
-        verify(toolDispatchService, times(1))
-                .executeWithTool(any(), anyString(), any(), any(), anyLong(), anyString(), any());
+        assertThat(response.getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
+        verifyNoInteractions(toolDispatchService);
     }
 
     // ================= (d) previewOnly write → not blocked =================
