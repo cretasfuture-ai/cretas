@@ -1,0 +1,25 @@
+# 餐饮退役 Java 最终门禁修复
+
+任务 SEC-RESTAURANT-JAVA-20261105，PR #1479；Owner 为方案审计组。代码在独立 codex/restaurant-complete-removal-20261105 worktree，未写主仓工作树。生产发布与合入 main 仍 HOLD，不持 release lock。
+
+## 实现
+
+- 工厂库存汇总与异常行动建议沿用直接接口 inventory 权限；库存工具、生产 runtime policy、descriptor 三方精确一致。真实 Registry 阳性与 warehouse-only 用户拒绝测试覆盖接线。
+- 工厂保留的 SupplierDeliveryNote/WastageRecord 增加实体级 SQLDelete；两个实体无 Version，删除 SQL 各只绑定一个 ID。保留实体级 Where。新 PG 测试实际 remove、原生回读 deleted_at，并清空 JPA 缓存后验证 Repository 不可见；子项历史级联行为未更改，未宣称子项保留。
+- 原餐饮审批审计测试迁为 FactoryWorkflowAuditRepositoryQueryValidationTest，保留真实 Hibernate 查询启动、审批审计持久化及八张业务表无变化断言。
+- 删除已不存在的餐饮类、字段与角色清册登记，不吸收新软删除缺陷。保留历史演示身份只读禁写 fence，断言餐饮 demo 登录配置不存在。精确 override 数量随新增权限声明从 177 到 178，其他计数和安全阈值不变。
+- Supplier Hint 单独交付源为 323f1db35c50dcbcd4dbf4d11179e5206749d8f6；本分支已精确集成 19923121a6。仅补下一步 hint 与拒写分支断言，锁序/409/code 未变。
+- V20261105_92 已放弃并释放。本批无 DDL、生产删除、真实业务审批或新设备验收。
+
+## 验证与限制
+
+证据根目录为本机 cretas-restaurant-removal-evidence-20261105；完整日志不入 Git。
+
+- v20 34 项中 33 过/1 Demo 旧断言失败；失败未记通过。修正后 Demo 五项于 v22 通过。
+- v21 新 Mockito 重载匹配编译失败、零测试；独立 PG stopExitCode=0。改为显式 anyString 后复验。
+- v22 九类 48 项、4 个 Gateway 描述/fixture 失败。真实 PG 软删除一项通过，commandExitCode=1/stopExitCode=0/productionAccess=false；不将此轮整体称为成功。
+- v23 三个受影响 Gateway 类 19 项全部通过，退出码 0、零失败/错误/跳过。结合未变内容 v20/v22 XML，本轮 14 类 65 项取得最终目标通过证据。
+- Supplier 独立 Spec 单测 15 + 真实 PG 11 + 409 Hint 契约 5，共 31 项通过、独立 PG 正常停止。食品可精确取入冻结源，不等待本 PR。
+- 前候选 7e704084fc 的远端 PG 门禁 342 项零失败/错误、2 既有跳过；全量 Java 有 12 个归一化失败，本轮按根因修复，不扩失败基线。最终提交仍须重新取得必需 CI，通过前保持 draft。
+
+本批实现、目标测试、commit/push/PR、部署、线上验证和业务验收是独立状态。尚未合入 main、部署或进行本批线上业务验收。

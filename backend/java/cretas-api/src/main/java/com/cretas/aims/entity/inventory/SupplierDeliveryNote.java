@@ -7,6 +7,7 @@ import com.cretas.aims.entity.inventory.DeliveryPostingStatus;
 import com.cretas.aims.entity.inventory.PriceAnomalyApprovalStatus;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import jakarta.persistence.*;
@@ -44,6 +45,7 @@ import java.util.UUID;
                 @Index(name = "idx_sdn_supplier", columnList = "factory_id,supplier_id"),
                 @Index(name = "idx_sdn_status", columnList = "factory_id,status")
         })
+@SQLDelete(sql = "UPDATE supplier_delivery_notes SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class SupplierDeliveryNote extends BaseEntity {
 

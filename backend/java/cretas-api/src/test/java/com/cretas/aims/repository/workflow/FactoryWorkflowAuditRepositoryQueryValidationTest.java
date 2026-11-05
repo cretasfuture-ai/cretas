@@ -27,20 +27,20 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Real Hibernate startup and persistence gate for the Restaurant Agent workflow slice. */
+/** Real Hibernate startup and persistence gate for the factory purchase workflow audit slice. */
 @DataJpaTest(showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class RestaurantAgentActionWorkflowRepositoryQueryValidationTest {
+class FactoryWorkflowAuditRepositoryQueryValidationTest {
 
-    private static final String FACTORY_ID = "R-JPA-ACTION";
-    private static final String MODULE = "restaurant.dish-cost-data-review.v1";
+    private static final String FACTORY_ID = "F-JPA-AUDIT";
+    private static final String MODULE = "PURCHASE_ORDER";
     private static final String ENTITY_ID =
-            "restaurant-agent:00000000-0000-0000-0000-000000000001:COMPLETE_DISH_COST_DATA_PROPOSAL";
+            "factory-purchase-audit:00000000-0000-0000-0000-000000000001";
     private static final List<String> FORBIDDEN_BUSINESS_TABLES = List.of(
-            "recipes", "recipe_versions", "bom_recipes", "bom_recipe_items",
+            "purchase_orders", "sales_orders", "bom_recipes", "bom_recipe_items",
             "price_lists", "price_list_items", "product_types", "material_batches");
 
     @Autowired ApprovalWorkflowRepository workflowRepository;
@@ -52,13 +52,13 @@ class RestaurantAgentActionWorkflowRepositoryQueryValidationTest {
     void repositoryQueriesParseAndEnginePersistsOnlyWorkflowAuditTables() {
         ApprovalWorkflow workflow = workflowRepository.saveAndFlush(ApprovalWorkflow.builder()
                 .factoryId(FACTORY_ID)
-                .decisionType(DecisionType.RESTAURANT_AGENT_ACTION_REVIEW)
+                .decisionType(DecisionType.PURCHASE_ORDER_APPROVAL)
                 .name(MODULE)
-                .description("Human-only dish cost data review")
+                .description("Factory purchase workflow audit")
                 .nodesJson("""
                         [
                           {"id":"start","type":"start","label":"Start","position":{"x":0,"y":0},"config":{}},
-                          {"id":"human_review","type":"approval","label":"Review","position":{"x":1,"y":0},"config":{"approverRoles":["restaurant_owner"],"requiredApprovers":1}},
+                          {"id":"human_review","type":"approval","label":"Review","position":{"x":1,"y":0},"config":{"approverRoles":["factory_super_admin"],"requiredApprovers":1}},
                           {"id":"approved","type":"end","label":"Approved","position":{"x":2,"y":0},"config":{"outcome":"APPROVED"}}
                         ]
                         """)
@@ -76,7 +76,7 @@ class RestaurantAgentActionWorkflowRepositoryQueryValidationTest {
                 .build());
 
         assertThat(workflowRepository.findActiveByDecisionType(
-                FACTORY_ID, DecisionType.RESTAURANT_AGENT_ACTION_REVIEW))
+                FACTORY_ID, DecisionType.PURCHASE_ORDER_APPROVAL))
                 .extracting(ApprovalWorkflow::getId)
                 .containsExactly(workflow.getId());
 
@@ -107,9 +107,8 @@ class RestaurantAgentActionWorkflowRepositoryQueryValidationTest {
         ApprovalWorkflowInstance started = engine.startWorkflow(
                 FACTORY_ID, MODULE, ENTITY_ID,
                 Map.of(
-                        "proposalCode", "COMPLETE_DISH_COST_DATA_PROPOSAL",
-                        "executionMode", "READ_ONLY_PROPOSAL",
-                        "outcomeDigest", "a".repeat(64)),
+                        "purchaseOrderId", ENTITY_ID,
+                        "source", "factory-workflow-query-validation"),
                 42L);
         instanceRepository.flush();
         historyRepository.flush();
@@ -131,7 +130,7 @@ class RestaurantAgentActionWorkflowRepositoryQueryValidationTest {
                 .nodeId("human_review")
                 .action(ApprovalHistory.HistoryAction.APPROVE)
                 .actorId(42L)
-                .actorRole("restaurant_owner")
+                .actorRole("factory_super_admin")
                 .notes("repository query gate")
                 .build());
         assertThat(instanceRepository.findActedBy(

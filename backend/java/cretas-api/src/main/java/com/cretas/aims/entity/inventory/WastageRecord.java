@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -40,6 +41,7 @@ import org.hibernate.annotations.Where;
                 @Index(name = "idx_wastage_factory_date", columnList = "factory_id,wastage_date")
         }
 )
+@SQLDelete(sql = "UPDATE wastage_records SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class WastageRecord extends BaseEntity {
 

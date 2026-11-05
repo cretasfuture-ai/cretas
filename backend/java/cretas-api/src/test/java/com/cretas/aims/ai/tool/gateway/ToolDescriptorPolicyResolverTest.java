@@ -114,7 +114,7 @@ class ToolDescriptorPolicyResolverTest {
             String version,
             ToolExecutionSource source,
             Set<String> permissions) {
-        return command(toolName, version, source, "RESTAURANT", "factory_admin", permissions);
+        return command(toolName, version, source, "FACTORY", "factory_admin", permissions);
     }
 
     private ToolExecutionCommand command(

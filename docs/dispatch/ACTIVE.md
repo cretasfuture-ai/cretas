@@ -157,6 +157,6 @@
 
 - `SEC-SUPPLIER-SPEC-LOCK-20261105` — `review` — Owner root — Base 80ba92ace2 — scope 独立supplier-guard-verify WT的SupplierMaterialPurchaseSpecServiceImpl及其单测/PG引用契约/JPA查询测试；接eb guard、锁后父关系复核；root独占Maven/commit。
 
-- `SEC-RESTAURANT-INTENT-FIXTURE-20261105` — `review` — Owner root — Base 35b1803e6c — scope IntentRecognitionRoleRepickPermissionTest/ProductionPhrasePythonContractTest/QualityPhrasePythonContractTest/IntentParityTest及纯餐饮golden行；真实Factory元数据，保持factory正负断言；root Maven。
-- `SEC-RESTAURANT-RETIRED-TESTS-20261105` — `review` — Owner root — Base 35b1803e6c — scope NarrowPathTelemetryTest/RestaurantLegacyAiRouteClosureContractTest/PlatformRolePermissionWriteServiceContractTest/DecisionTypeMetadataRegistryTest；迁旧预期，保留工厂positive/拒退休；root Maven。
+- `SEC-RESTAURANT-INTENT-FIXTURE-20261105` — `review` — Owner root — Base 19923121a6 — scope 两库存工具Java、gateway双YAML/declared清单及GatedData/Demo/DescriptorPolicyResolver/ToolGatewayPriceBoundary/RuntimeToolPolicyLoader/ToolDescriptorInventoryDrift测试；最小权限与精确描述，root Maven/SCM。
+- `SEC-RESTAURANT-RETIRED-TESTS-20261105` — `review` — Owner root — Base 19923121a6 — scope inventory的SupplierDeliveryNote/WastageRecord及FactoryInventorySoftDeleteRepositoryQueryValidationTest、soft-delete-known-violations.txt；补类级软删除并真实PG验证；root Maven/SCM。
 - `SEC-RESTAURANT-JAVA-CLIENTS-20261105` — `review` — Owner root — Base 5fa4d12c5d — scope PythonSmartBIClient/GoldFinanceClient、KB/SemanticMatcher、IndicatorQueryServiceImpl/LlmIntentFallbackClientImpl及tests；迁工厂共用、删餐饮HTTP/phrase/domain闭包；root Maven，禁Orch/权限/Supplier。
