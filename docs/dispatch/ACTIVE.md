@@ -9,19 +9,11 @@
 
 - `F006-PROD-ROLLOUT-20261105` — `in-progress` — Owner root — Base bb42aea1680695ff54234f643aaba9e28176d0a5 — scope 正式隔离slot/manager预置、新快照/真实启动与重置验证；用户已授权先准备，冻结解除后合并部署及f006_admin完整验收。不改active正式流量，不抢冻结窗口。
 
-- `F006-SANDBOX-BASELINE-20261105` — `review` — Owner root — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope 新版F006只读快照/独立库真实JPA启动与全表重置证据；生产零业务写。旧618表证据不作新版证明。local relay旧切片已归档。
-
-- `F006-SANDBOX-API-20261105` — `review` — Owner root/real_auth_gate — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope Java service/demo/F006SandboxRealAuthContractTest；真实JwtAuthInterceptor/WebMvcConfig MVC鉴权联测。验收目标Maven test；不改生产/Entity/Repository/迁移/主鉴权实现。
-
-- `F006-SANDBOX-RUNTIME-20261105` — `review` — Owner root — Base 91bfa2c9b42ac5e98ca67b02e0de6686339b5913 — scope create_private_config.py、linux_service.py、linux模板、orchestrator.py及目标测试、README；Linux私有配置/服务生成及安全验证。验收Python unittest；不改runtime HTTP实现；root负责正式预置，原子恢复须核UUID/物理ID。
-
 - `SEC-RESTAURANT-BACKGROUND-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base e40ee26673ae6df68f503aecc0664f903186dd9b — scope Python main lifespan/专项tests；删除餐饮预约模拟与默认ETL写入任务，保留其他工厂生命周期。25目标通过；Python CI后供原安全发布前置，不清生产数据。
 
 
 
 - `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `e976bdc0281ea99fae65e4db9213c825e27c09ec` — #1469已合并部署/业务44通过，回执archive/2026-11-05-tasks-acceptance-closeout.md；仅该切片代码/设备/发布scope释放。继续接手开放#1441质量/#1446返工，当前只读核scope；S6-10本人签署待完成。
-
-- `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 
 
 

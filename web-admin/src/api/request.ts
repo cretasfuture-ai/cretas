@@ -9,7 +9,6 @@ import type { ApiData } from '@/types/api';
 import { markClientErrorReported, reportClientError, reportRequestFailure } from '@/utils/clientErrorReporter';
 import { currentActionId } from '@/utils/activityTracker';
 import { sandboxRequestUrl } from '@/demo/f006Sandbox';
-import { installSandboxNetworkBoundary } from '@/demo/f006SandboxNetwork';
 import {
   factoryViewTokenForRequest,
   isFactoryViewRequest,
@@ -17,7 +16,6 @@ import {
 } from '@/store/modules/platformFactoryContext';
 
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
-installSandboxNetworkBoundary();
 
 function newCorrelationId(): string {
   const uuid = globalThis.crypto?.randomUUID?.();
