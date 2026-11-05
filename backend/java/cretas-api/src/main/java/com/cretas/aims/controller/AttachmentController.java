@@ -125,6 +125,7 @@ public class AttachmentController {
             "quality:read", "quality:read_write",
             "production:read", "production:read_write",
             "warehouse:read", "warehouse:read_write",
+            "inventory:read", "inventory:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
             "rd:read", "rd:read_write",
@@ -156,6 +157,7 @@ public class AttachmentController {
             "quality:read", "quality:read_write",
             "production:read", "production:read_write",
             "warehouse:read", "warehouse:read_write",
+            "inventory:read", "inventory:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
             "rd:read", "rd:read_write",
@@ -186,6 +188,7 @@ public class AttachmentController {
             "quality:read", "quality:read_write",
             "production:read", "production:read_write",
             "warehouse:read", "warehouse:read_write",
+            "inventory:read", "inventory:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
             "rd:read", "rd:read_write",
@@ -218,6 +221,7 @@ public class AttachmentController {
             "quality:read", "quality:read_write",
             "production:read", "production:read_write",
             "warehouse:read", "warehouse:read_write",
+            "inventory:read", "inventory:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
             "rd:read", "rd:read_write",
@@ -248,6 +252,7 @@ public class AttachmentController {
             "quality:read_write",
             "production:read_write",
             "warehouse:read_write",
+            "inventory:read_write", "inventory:write",
             "hr:read_write",
             "work_report:read_write",
             "rd:read_write",
@@ -266,6 +271,9 @@ public class AttachmentController {
         } else {
             // Content-type whitelist + size hint check (BEFORE signed URL issue —
             // refuses oversize / executable uploads at the OSS boundary).
+            if (req.getEntityType() != null) {
+                permissionResolver.requireWrite(permissionResolver.resolveCurrentUser(request), req.getEntityType());
+            }
             permissionResolver.validateUploadRequest(req.getFileType(), req.getFileSize());
         }
         if (AttachmentPermissionResolver.isSopType(req.getEntityType())) {
@@ -286,6 +294,7 @@ public class AttachmentController {
             "quality:read_write",
             "production:read_write",
             "warehouse:read_write",
+            "inventory:read_write", "inventory:write",
             "hr:read_write",
             "work_report:read_write",
             "rd:read_write",
@@ -334,6 +343,7 @@ public class AttachmentController {
             "quality:read_write",
             "production:read_write",
             "warehouse:read_write",
+            "inventory:read_write", "inventory:write",
             "hr:read_write",
             "work_report:read_write",
             "rd:read_write",
@@ -372,6 +382,7 @@ public class AttachmentController {
             "quality:read_write",
             "production:read_write",
             "warehouse:read_write",
+            "inventory:read_write", "inventory:write",
             "hr:read_write",
             "work_report:read_write",
             "rd:read_write",
@@ -404,6 +415,7 @@ public class AttachmentController {
             "quality:read", "quality:read_write",
             "production:read", "production:read_write",
             "warehouse:read", "warehouse:read_write",
+            "inventory:read", "inventory:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
             "rd:read", "rd:read_write",
@@ -448,6 +460,7 @@ public class AttachmentController {
             "quality:read", "quality:read_write",
             "production:read", "production:read_write",
             "warehouse:read", "warehouse:read_write",
+            "inventory:read", "inventory:read_write",
             "hr:read", "hr:read_write",
             "work_report:read", "work_report:read_write",
             "rd:read", "rd:read_write",

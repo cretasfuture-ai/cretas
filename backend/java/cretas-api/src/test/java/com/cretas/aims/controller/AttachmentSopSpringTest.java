@@ -9,6 +9,7 @@ import com.cretas.aims.config.OssConfig;
 import com.cretas.aims.config.PermissionInterceptor;
 import com.cretas.aims.entity.Attachment.EntityType;
 import com.cretas.aims.entity.FactoryEquipment;
+import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.repository.EquipmentRepository;
@@ -62,7 +63,10 @@ import jakarta.persistence.EntityManager;
 
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import org.mockito.ArgumentCaptor;
 
@@ -72,12 +76,14 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 /**
  * 工序 SOP / 设备 SOP 附件: 真实 Spring 容器 (H2 + 真 JPA + 真 AttachmentController / Service / 权限解析 /
@@ -125,6 +131,7 @@ class AttachmentSopSpringTest {
     @MockBean OSS ossClient;
     @MockBean FactorySecrecyConfig secrecy;
     @SpyBean ProcessSecretAuditRecorder secretAudit;
+    @SpyBean PermissionServiceImpl permissionService;
     @Autowired ProcessSecretPolicyRepository policies;
     @Autowired ProcessSecretGrantRepository grants;
     @Autowired ProcessSecretAccessService secretAccess;
@@ -134,9 +141,22 @@ class AttachmentSopSpringTest {
     String processF2;
     Long equipmentF1;
     Long equipmentF2;
+    final Map<Long, Set<String>> exactPermissionGrants = new HashMap<>();
 
     @BeforeEach
     void setUp() throws Exception {
+        exactPermissionGrants.clear();
+        // 真实 PermissionServiceImpl / PermissionInterceptor 仍运行；仅为本测试用户提供
+        // 精确的权限集合，避免 warehouse_worker 的默认 warehouse 权限掩盖 inventory 闸。
+        doAnswer(invocation -> {
+            User principal = invocation.getArgument(0, User.class);
+            Set<String> granted = principal == null ? null : exactPermissionGrants.get(principal.getId());
+            if (granted == null) return invocation.callRealMethod();
+            for (String required : invocation.getArgument(1, String[].class)) {
+                if (granted.contains(required)) return true;
+            }
+            return false;
+        }).when(permissionService).hasAnyPermission(any(), any(String[].class));
         when(secrecy.isOn(anyString(), any(SecrecyItem.class))).thenReturn(true);
         secretAccess.invalidate(F1);
         secretAccess.invalidate(F2);
@@ -194,6 +214,10 @@ class AttachmentSopSpringTest {
         jdbc.update("insert into users (id, factory_id, username, password_hash, role_code, is_active, created_at, updated_at)"
                 + " values (?,?,?,?,?,true,now(),now())", id, factoryId, role + "-" + id, "x", role);
         return id;
+    }
+
+    private void grantOnly(long userId, String... permissions) {
+        exactPermissionGrants.put(userId, Set.of(permissions));
     }
 
     private long platformAdmin() {
@@ -658,6 +682,7 @@ class AttachmentSopSpringTest {
         long platform = platformAdmin();
         String id = registerOk(F1, platform, EntityType.WORK_PROCESS, processF1, "platform.pdf");
 
+        entityManager.flush();
         Map<String, Object> persisted = jdbc.queryForMap(
                 "select uploaded_by, uploaded_actor_type, uploaded_actor_id from attachments where id = ?", id);
         assertThat(column(persisted, "uploaded_by")).isNull();
@@ -669,6 +694,113 @@ class AttachmentSopSpringTest {
         assertThat(row.at("/uploadedByActor/id").asLong()).isEqualTo(platform);
         assertThat(row.has("fileUrl")).isFalse();
         assertThat(row.has("thumbnailUrl")).isFalse();
+    }
+
+    @Test
+    @DisplayName("真实 PermissionInterceptor: inventory 权限覆盖报损读写与两个批量入口")
+    void inventoryPermissionCoversWastageReadWriteAndBatch() throws Exception {
+        long worker = user(F1, "warehouse_worker");
+        grantOnly(worker, "inventory:read", "inventory:read_write");
+        String entityId = "wastage-" + IDS.incrementAndGet();
+        String base = "/api/mobile/" + F1 + "/attachments";
+
+        MvcResult upload = send(post(base + "/upload-url").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("fileName", "wastage.pdf", "fileType", "application/pdf",
+                        "fileSize", 10, "entityType", "WASTAGE_RECORD", "entityId", entityId))), worker);
+        assertThat(upload.getResponse().getStatus()).isEqualTo(200);
+        MvcResult registered = register(F1, worker, registerBody(EntityType.WASTAGE_RECORD, entityId,
+                MEDIA + "/" + F1 + "/attachments/wastage/" + entityId + ".pdf", "application/pdf", 10));
+        assertThat(registered.getResponse().getStatus()).isEqualTo(200);
+        String attachmentId = body(registered).at("/data/id").asText();
+
+        assertThat(send(put(base + "/" + attachmentId).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("description", "报损凭证已复核"))), worker)
+                .getResponse().getStatus()).isEqualTo(200);
+
+        assertThat(send(get(base).param("entityType", "WASTAGE_RECORD").param("entityId", entityId), worker)
+                .getResponse().getStatus()).isEqualTo(200);
+        String batchBody = json.writeValueAsString(Map.of("entityType", "WASTAGE_RECORD",
+                "entityIds", List.of(entityId)));
+        assertThat(send(post(base + "/batch-by-entity").contentType(MediaType.APPLICATION_JSON)
+                .content(batchBody), worker).getResponse().getStatus()).isEqualTo(200);
+        assertThat(send(post(base + "/batch-3chip-counts").contentType(MediaType.APPLICATION_JSON)
+                .content(batchBody), worker).getResponse().getStatus()).isEqualTo(200);
+        assertThat(send(delete(base + "/" + attachmentId), worker).getResponse().getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("真实 PermissionInterceptor: inventory 写权限可通过采购/客供收货凭证上传闸")
+    void inventoryWritePermissionCoversReceiptUploadGates() throws Exception {
+        long legacyGenericUser = user(F1, "warehouse_worker");
+        MvcResult legacyUpload = send(post("/api/mobile/" + F1 + "/attachments/upload-url")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("fileName", "legacy.pdf", "fileType", "application/pdf",
+                        "fileSize", 10))), legacyGenericUser);
+        assertThat(legacyUpload.getResponse().getStatus()).as("旧三参数 generic upload-url 仍兼容")
+                .isEqualTo(200);
+
+        long worker = user(F1, "warehouse_worker");
+        grantOnly(worker, "inventory:write");
+        String base = "/api/mobile/" + F1 + "/attachments/upload-url";
+        for (String entityType : List.of("PURCHASE_RECEIPT", "CUSTOMER_SUPPLIED_RECEIPT")) {
+            MvcResult result = send(post(base).contentType(MediaType.APPLICATION_JSON)
+                    .content(json.writeValueAsString(Map.of("fileName", "receipt.pdf", "fileType", "application/pdf",
+                            "fileSize", 10, "entityType", entityType,
+                            "entityId", "receipt-" + IDS.incrementAndGet()))), worker);
+            assertThat(result.getResponse().getStatus()).as(entityType).isEqualTo(200);
+        }
+    }
+
+    @Test
+    @DisplayName("真实 PermissionInterceptor: restaurant-only 与跨模块角色不能借用 inventory 附件入口")
+    void nonInventoryPermissionCannotBorrowInventoryAttachmentRoutes() throws Exception {
+        long restaurant = user(F1, "restaurant_manager");
+        long worker = user(F1, "warehouse_worker");
+        grantOnly(worker, "inventory:write");
+        String entityId = "wastage-denied-" + IDS.incrementAndGet();
+        String base = "/api/mobile/" + F1 + "/attachments";
+
+        assertThat(send(get(base).param("entityType", "WASTAGE_RECORD").param("entityId", entityId), restaurant)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(post(base + "/upload-url").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("fileName", "wastage.pdf", "fileType", "application/pdf",
+                        "fileSize", 10, "entityType", "WASTAGE_RECORD", "entityId", entityId))), restaurant)
+                .getResponse().getStatus()).isEqualTo(403);
+
+        long reader = user(F1, "warehouse_worker");
+        grantOnly(reader, "inventory:read", "inventory:read_write");
+        String existingId = body(register(F1, reader, registerBody(EntityType.WASTAGE_RECORD, entityId,
+                MEDIA + "/" + F1 + "/attachments/wastage/" + entityId + ".pdf", "application/pdf", 10)))
+                .at("/data/id").asText();
+        assertThat(register(F1, restaurant, registerBody(EntityType.WASTAGE_RECORD, "restaurant-write-" + IDS.incrementAndGet(),
+                MEDIA + "/restaurant.pdf", "application/pdf", 10)).getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(put(base + "/" + existingId).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("description", "restaurant"))), restaurant)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(delete(base + "/" + existingId), restaurant).getResponse().getStatus()).isEqualTo(403);
+
+        assertThat(send(get(base).param("entityType", "PURCHASE_ORDER").param("entityId", "po-1"), worker)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(get(base).param("entityType", "WASTAGE_RECORD").param("entityId", entityId), worker)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(post(base + "/upload-url").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("fileName", "sop.pdf", "fileType", "application/pdf",
+                        "fileSize", 10, "entityType", "WORK_PROCESS", "entityId", processF1))), worker)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(post(base + "/upload-url").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("fileName", "wastage.pdf", "fileType", "application/pdf",
+                        "fileSize", 10, "entityType", "WASTAGE_RECORD", "entityId", entityId))), worker)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(register(F1, worker, registerBody(EntityType.WASTAGE_RECORD, "writer-register-" + IDS.incrementAndGet(),
+                MEDIA + "/writer.pdf", "application/pdf", 10)).getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(put(base + "/" + existingId).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("description", "inventory write only"))), worker)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(delete(base + "/" + existingId), worker).getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(post(base + "/upload-url").contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("fileName", "po.pdf", "fileType", "application/pdf",
+                        "fileSize", 10, "entityType", "PURCHASE_ORDER", "entityId", "po-1"))), worker)
+                .getResponse().getStatus()).isEqualTo(403);
     }
 
     @Test
