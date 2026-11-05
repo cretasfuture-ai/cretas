@@ -11,29 +11,29 @@ import org.junit.jupiter.api.Test;
  * 四个部门 module 的白名单有两个承载点(L2 工厂级 / L1 平台级)。这组断言
  * 分别打这两处 —— 只改一个的话另一个会红。
  */
-class RestaurantDepartmentModuleAllowlistTest {
+class DepartmentModuleRetirementContractTest {
 
     private static final List<String> DEPARTMENT_MODULES = List.of(
             "restaurantOps", "restaurantMarketing", "restaurantHr", "restaurantFinance");
 
     @Test
-    @DisplayName("L2 工厂级覆盖接受四个部门 module")
-    void factoryOverrideAcceptsDepartmentModules() {
+    @DisplayName("L2 工厂级覆盖拒绝四个退休餐饮部门 module")
+    void factoryOverrideRejectsRetiredDepartmentModules() {
         for (String module : DEPARTMENT_MODULES) {
-            assertThatCode(() -> FactoryRoleModuleOverrideController.assertModuleAllowed(module))
-                    .as("L2 应接受 %s", module)
-                    .doesNotThrowAnyException();
+            assertThatThrownBy(() -> FactoryRoleModuleOverrideController.assertModuleAllowed(module))
+                    .as("L2 应拒绝 %s", module)
+                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 
     @Test
-    @DisplayName("L1 平台级接受四个部门 module")
-    void platformPermissionAcceptsDepartmentModules() {
+    @DisplayName("L1 平台级拒绝四个退休餐饮部门 module")
+    void platformPermissionRejectsRetiredDepartmentModules() {
         for (String module : DEPARTMENT_MODULES) {
-            assertThatCode(() -> com.cretas.aims.controller.platform.PlatformRolePermissionController
+            assertThatThrownBy(() -> com.cretas.aims.controller.platform.PlatformRolePermissionController
                     .assertModuleAllowed(module))
-                    .as("L1 应接受 %s", module)
-                    .doesNotThrowAnyException();
+                    .as("L1 应拒绝 %s", module)
+                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 

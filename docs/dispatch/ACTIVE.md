@@ -157,6 +157,6 @@
 
 - `SEC-SUPPLIER-SPEC-LOCK-20261105` — `review` — Owner root — Base 80ba92ace2 — scope 独立supplier-guard-verify WT的SupplierMaterialPurchaseSpecServiceImpl及其单测/PG引用契约/JPA查询测试；接eb guard、锁后父关系复核；root独占Maven/commit。
 
-- `SEC-RESTAURANT-MODULE-MAP-FINAL-20261105` — `review` — Owner root — Base 0a2e015c95 — scope PermissionServiceImpl/PlatformEmployeeModulePermissions及ToolPrincipalPolicy相关tests；修超管历史模块与employee覆盖回注，平台PUT拒退休模块，保留factory阳性；root Maven。
-- `SEC-RESTAURANT-AI-FAILCLOSED-20261105` — `review` — Owner root — Base 980ff20b28 — scope Orchestrator/SSE/RetiredAnalysisContext及IntentConfigManagementServiceImpl域解析、AIIntentConfigController/MultiIntentExecutionService及tests；域未知/异常前置503，拒退休exact身份，保留显式FACTORY正向；验收目标由root串行Maven/PG，执行者不跑Maven。
+- `SEC-RESTAURANT-INTENT-FIXTURE-20261105` — `review` — Owner root — Base 35b1803e6c — scope IntentRecognitionRoleRepickPermissionTest/ProductionPhrasePythonContractTest/QualityPhrasePythonContractTest/IntentParityTest及纯餐饮golden行；真实Factory元数据，保持factory正负断言；root Maven。
+- `SEC-RESTAURANT-RETIRED-TESTS-20261105` — `review` — Owner root — Base 35b1803e6c — scope NarrowPathTelemetryTest/RestaurantLegacyAiRouteClosureContractTest/PlatformRolePermissionWriteServiceContractTest/DecisionTypeMetadataRegistryTest；迁旧预期，保留工厂positive/拒退休；root Maven。
 - `SEC-RESTAURANT-JAVA-CLIENTS-20261105` — `review` — Owner root — Base 5fa4d12c5d — scope PythonSmartBIClient/GoldFinanceClient、KB/SemanticMatcher、IndicatorQueryServiceImpl/LlmIntentFallbackClientImpl及tests；迁工厂共用、删餐饮HTTP/phrase/domain闭包；root Maven，禁Orch/权限/Supplier。

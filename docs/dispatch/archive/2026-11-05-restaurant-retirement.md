@@ -113,3 +113,12 @@ c21远端PG共325项，0failure/1error/2skip；唯一错误是模块正式启用
 原失败PG启用用例与新Parity契约v15实际2/0/0/0，native command/stop均0，productionAccess=false。Web目录/保存错误显示2套7项通过。未改原启用用例的发布/读回成功判据；未使用去重fallback掩盖目录错误。工厂客户性质RESTAURANT保留，属于工厂B2B客户资料，并非餐饮功能入口。
 
 完整Java CI仍执行，最终修复将统一推送并核验最终HEAD；main/发布HOLD保持。
+## 全量部分清单暴露的剩余回归实修
+
+旧c21取消时产物留下15894个case observations（非完整通过）：176 normalized新增红、334 failed/error observations。保持失败基线0，不将任何新红加入基线。此前205项修复之外，补齐IntentRecognition共享F006和Parity F001显式Factory metadata；Parity不mock Java/Python匹配结果，golden仅删4条纯RESTAURANT_DISH_DELETE/UPDATE，66条工厂原样保留。采购确认复用现有domainConfig接到实际configService入口，原canonical/permission/token/零legacy写断言不变。
+
+删除SmartBI旧执行出口已不存在的Actor参数冻结项（冻结名单只收缩1，AST检测不改）；部门白名单旧测试升级DepartmentModuleRetirementContractTest，明确L1/L2拒4餐饮部门且工厂报工修正仍接受；Registry保留退休DecisionType历史decode但不注册元数据/模块；遥测与旧路由闭包仅验证已删除能力不得复活，保留工厂阳性。L1权限测试按真实拒绝路径区分无效模块与退休角色，零权限/审计写入和operations工厂写阳性均保留。
+
+v16显式11类213项，212通过1失败，native command1/own stop0；唯一Quality失败追出recognizeExpectedEarlyPhrase仍允许RESTAURANT提前命中的生产残留，实修为仅FACTORY。保留原域隔离断言，未改成接受误路由。v17对受影响3类实际62项（11+26+25）全部0fail/error/skip，command/ownPG stop0。其余未变测试通过证据复用；最终全量仍由最终HEAD CI证明。生产变更仅该一行旧域移除，未改工厂路径、不加provider fallback、不改Repository/迁移。
+
+证据java/root-final-invocation-v16/v17.json、v17-reports/v17-verified-summary.json、各native result与ci-c21-partial-full-artifact；候选35b的Ops实际79/79、Python/RN/Web和通用门禁通过，Java PG收尾与全量待最终候选结果。main/发布HOLD保持，无生产写入。

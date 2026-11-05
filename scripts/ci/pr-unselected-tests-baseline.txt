@@ -269,7 +269,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/controller/ProductionWareh
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/PurchaseRequisitionControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/RawMaterialTypeFoolproofMvcTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/ReferenceDataControllerTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/RestaurantDepartmentModuleAllowlistTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/RestockBoardControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/ReusableContainerControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/RoleControllerListRolesTest.java
