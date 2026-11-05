@@ -8,6 +8,7 @@
 ## 在飞任务
 
 - `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner: `01a1a954/root` — Base `5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f` — S2–S6接手续验；场景表/精确scope/命令见 archive/2026-11-05-tasks-acceptance.md；独立WT，不碰其他组main/发布锁。
+- `CLAUDE-TASKS-S4-PG-PO-20261105` — `review` — Owner: `01a1a954/root` — Base `072bf5681969a55029d929d00a6101a28ec92a15` — S4自动采购PG参数/取消排程幽灵占线已修；真实JPA与PG通过、独立终审无阻塞，待PR/CI；见archive/2026-11-05-s4-po-postgres.md。
 
 
 

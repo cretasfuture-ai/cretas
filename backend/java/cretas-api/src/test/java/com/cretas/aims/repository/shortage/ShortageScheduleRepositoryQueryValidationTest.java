@@ -242,8 +242,12 @@ class ShortageScheduleRepositoryQueryValidationTest {
     @Test
     void overlapCountsLiveTasksOnTheLineButNotTheOnesBeingMoved() {
         SchedulingPlan f1 = sp("F1", SchedulingPlan.PlanStatus.confirmed);
+        SchedulingPlan cancelled = sp("F1", SchedulingPlan.PlanStatus.cancelled);
+        SchedulingPlan completed = sp("F1", SchedulingPlan.PlanStatus.completed);
         LineSchedule moving = task(f1, null, "L1", 8, 12, LineSchedule.ScheduleStatus.pending);
         LineSchedule busy = task(f1, null, "L1", 10, 14, LineSchedule.ScheduleStatus.in_progress);
+        LineSchedule cancelledParentTask = task(cancelled, null, "L1", 10, 14, LineSchedule.ScheduleStatus.pending);
+        LineSchedule completedParentTask = task(completed, null, "L1", 10, 14, LineSchedule.ScheduleStatus.pending);
         task(f1, null, "L1", 10, 14, LineSchedule.ScheduleStatus.cancelled);
         task(f1, null, "L1", 11, 14, LineSchedule.ScheduleStatus.completed);
         task(f1, null, "L2", 10, 14, LineSchedule.ScheduleStatus.pending);
@@ -253,6 +257,8 @@ class ShortageScheduleRepositoryQueryValidationTest {
         List<LineSchedule> clash = schedules.findOverlapping("F1", "L1", DAY.atTime(9, 0), DAY.atTime(12, 0),
                 Set.of(moving.getId()));
         assertThat(clash).extracting(LineSchedule::getId).containsExactly(busy.getId());
+        assertThat(clash).extracting(LineSchedule::getId)
+                .doesNotContain(cancelledParentTask.getId(), completedParentTask.getId());
         assertThat(schedules.findOverlapping("F2", "L1", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x"))).isEmpty();
     }
 
