@@ -7,9 +7,7 @@
 
 ## 在飞任务
 
-- `F006-DEMO-COST-20261106` — `in-progress` — Owner root/network_bootstrap — Base 0bb30b1773e886020d1c1679b18a1fd59336b2f1 — scope f006Flow.ts及独立cost-capture真实transport测试；第19步显示模拟设备/其他费，沿现有成本补录接口核算并回读，不造COMPLETE。验收目标Vitest/vue-tsc/WebCI及正式UI完整成本/END。root独占台账和所有生产/沙盒操作。
-
-- `TASKS-S315-SEMI-ENTRY-20261106` — `review` — Owner `01a1a954/root` — Base `eacf526cf33daa707f4f45f86eae471d076cf4a5` — scope production/plans/list.vue与对应tests；PR1486修clean半成品输入/差异说明错列，21/type/原CI通过；整合最新沙盒main后组合Web构建/必需CI，Java沿用main不重发。继续同QA计划364ea余0.4与de598877返工结单验收。
+- `F006-DEMO-COST-20261106` — `review` — Owner root — Base 2de52fb66e7caaf892d9430afba23e8b81d5e57d — scope f006Flow.ts及独立cost-capture测试；第19步可见设备12.80/其他7.20费用，真实成本API/COMPLETE回读。35目标测试通过，构建/WebCI/正式UI完整成本及END待完成。root独占台账和生产操作。
 
 
 
@@ -19,7 +17,7 @@
 
 
 
-- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `in-progress` — Owner `01a1a954/root` — Base `c24e11bb0a2c8e2714981d51b86849bd6fa2a8de` — #1469已发/44业务通过；#1480代码已合，两个S3代码scope归档释放。继续官方发布/OTA及F006自有S302/309/315业务；QA对象/5558独占详本机协调状态，S610本人签署待。
+- `CLAUDE-TASKS-ACCEPTANCE-20261105` — `blocked` — Owner `01a1a954/root` — Base `898877a2a981159291b16c523f99f822d7c4a2f0` — 软件修复/发布/实收47通过，2原成本豁免；仅S6-10业务代表与QA本人试点签署未提供，禁止代签。代码scope/生产锁/设备均释放；证据及对象保留见archive/2026-11-06-tasks-business-final-closeout.md。
 
 
 
