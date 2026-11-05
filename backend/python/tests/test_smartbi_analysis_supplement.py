@@ -138,6 +138,8 @@ async def test_full_mode_reviews_base_facts_too_and_resumes_after_repair_failure
     bad=False
     first=await supplement.complete(job,context,scope,path,1,exhaustive=True,max_batches=1,batch_size=4)
     assert seen[-1]['validationFeedback']  # Previous rejection is fed back across durable claims.
+    assert seen[-1]['previousRejectedReviews']
+    assert all(r['factId'] in {f['id'] for f in seen[-1]['facts']} for r in seen[-1]['previousRejectedReviews'])
     progress=first['result']['ai']['analysisFactCoverage']
     assert progress['reviewed']==4 and progress['remaining']==7 and progress['additionalReviewed']==3
     accepted={f['factId'] for f in first['result']['ai']['supplementalReviews']}

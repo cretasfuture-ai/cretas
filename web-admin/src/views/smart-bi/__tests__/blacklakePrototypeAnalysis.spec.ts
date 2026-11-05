@@ -233,9 +233,9 @@ describe('Blacklake prototype page', () => {
     await flushPromises();
     const vm = wrapper.vm as unknown as { data: BlacklakeAnalysis | null; refreshEpoch: number };
     expect(vm.data?.sectionInsights?.[0]?.title).toBe('规则草稿');
-    expect(vm.refreshEpoch).toBe(2);
+    expect(vm.refreshEpoch).toBe(1); // Applying report progress must preserve mounted tables and open analysis.
     await flushPromises();
-    expect(vm.refreshEpoch).toBe(2);
+    expect(vm.refreshEpoch).toBe(1);
     wrapper.unmount();
   });
 

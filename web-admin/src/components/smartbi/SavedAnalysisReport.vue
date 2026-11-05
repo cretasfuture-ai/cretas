@@ -15,7 +15,7 @@ const preferred = ['coverage', 'product_cost', 'production', 'inventory', 'quali
 const activeSection = computed(() => sections.value.find(section => section.sectionId === selectedId.value) || sections.value.find(section => preferred.includes(section.sectionId)) || sections.value[0] || null);
 const supplements=computed(()=>activeSection.value?.supplementalReviews||[]);
 const supplementRows=computed(()=>supplements.value.slice((supplementPage.value-1)*8,supplementPage.value*8));
-watch(activeSection,()=>{supplementOpen.value=false;supplementPage.value=1;selectedSupplement.value='';});
+watch(()=>activeSection.value?.sectionId,()=>{supplementOpen.value=false;supplementPage.value=1;selectedSupplement.value='';});
 watch(sections, value => { if (!value.some(section => section.sectionId === selectedId.value)) selectedId.value = ''; }, { immediate: true });
 
 const periodDate = (value: string | null | undefined) => value ? `${value.slice(5, 7)}-${value.slice(8, 10)}` : '未提供';
@@ -51,7 +51,7 @@ const conclusion=computed(()=>{
   <section class="saved-report" aria-label="已保存分析报告">
     <div v-if="!props.report" class="empty">暂无已保存报告。</div>
     <template v-else>
-      <header class="report-header"><div><p class="eyebrow">已保存分析</p><h2>本次数据概况</h2><p class="period">{{ periodDate(props.report.period.startDate) }} 至 {{ periodDate(props.report.period.endDate) }}</p></div><span class="state">{{ props.report.status === 'ready' ? '已生成' : props.report.status }}</span></header>
+      <header class="report-header"><div><p class="eyebrow">已保存分析</p><h2>本次数据概况</h2><p class="period">{{ periodDate(props.report.period.startDate) }} 至 {{ periodDate(props.report.period.endDate) }}</p></div><span class="state">{{ {ready:'已生成',running:'正在分析',queued:'等候续跑',failed:'暂未完成'}[props.report.status] }}</span></header>
       <div class="metrics" v-if="metrics.length"><div v-for="metric in metrics" :key="metric.label" class="metric"><strong>{{ metric.value }}</strong><span>{{ metric.label }}</span></div></div>
       <AnalysisProgress v-if="coverage||props.report.status!=='ready'" :progress="coverage" :status="props.report.status" :stage="props.report.result?.ai.analysisStage" />
       <p v-else-if="props.report.result?.ai.status==='partial'&&omitted" class="supplement-status">已提供的 AI 解读通过核验，另有 {{omitted}} 项分析尚未覆盖。</p>

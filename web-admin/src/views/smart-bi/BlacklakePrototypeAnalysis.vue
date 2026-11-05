@@ -256,14 +256,13 @@ function applyPeriodInsights(job: BlacklakePeriodJob): boolean {
     return false;
   }
   if (!data.value || !job.result) return false;
-  const resultKey = `${job.id}:${job.result.generatedAt || ''}:${job.result.ai.analysisFactCoverage?.reviewed??''}:${job.status}`;
+  const resultKey = `${job.id}:${job.result.generatedAt || ''}:${job.result.ai.analysisFactCoverage?.reviewed??''}`;
   if (lastAppliedPeriodResultKey.value === resultKey) return true;
   const nextCostAlerts = data.value.costAlerts && job.result.ai
     ? { ...data.value.costAlerts, ai: { ...data.value.costAlerts.ai, ...job.result.ai } }
     : data.value.costAlerts;
   data.value = { ...data.value, sectionInsights: job.result.sectionInsights, costAlerts: nextCostAlerts };
   lastAppliedPeriodResultKey.value = resultKey;
-  refreshEpoch.value += 1;
   return true;
 }
 

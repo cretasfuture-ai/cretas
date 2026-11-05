@@ -28,3 +28,20 @@ it('loads the selected full saved report instead of the compact history row',asy
   page.findComponent({name:'LiveMonitor'}).vm.$emit('open-report','saved');await flushPromises();
   expect(getBlacklakePeriodReport).toHaveBeenCalledWith('saved');page.unmount();
 });
+it('updates an open running report automatically and stops polling it once ready',async()=>{
+  vi.useFakeTimers();vi.mocked(getBlacklakePeriodReport).mockClear();
+  const job={id:'active',status:'running',period:{startDate:'2026-11-01',endDate:'2026-11-05'},result:{summary:'正在分析',sectionInsights:[]}} as Awaited<ReturnType<typeof getBlacklakePeriodReport>>;
+  vi.mocked(getBlacklakePeriodReport).mockResolvedValue(job);
+  const page=shallowMount(Panel);await flushPromises();
+  page.findComponent({name:'LiveMonitor'}).vm.$emit('open-report','active');await flushPromises();
+  vi.mocked(getBlacklakePeriodReport).mockRejectedValueOnce(new Error('temporary network failure'));
+  await vi.advanceTimersByTimeAsync(30000);await flushPromises();
+  expect(page.text()).toContain('报告状态暂不可读，稍后自动重试');
+  vi.mocked(getBlacklakePeriodReport).mockResolvedValue({...job,status:'ready'});
+  await vi.advanceTimersByTimeAsync(30000);await flushPromises();
+  expect(page.findComponent({name:'SavedAnalysisReport'}).props('report').status).toBe('ready');
+  const before=vi.mocked(getBlacklakePeriodReport).mock.calls.length;
+  await vi.advanceTimersByTimeAsync(30000);await flushPromises();
+  expect(vi.mocked(getBlacklakePeriodReport).mock.calls.length).toBe(before);
+  page.unmount();
+});

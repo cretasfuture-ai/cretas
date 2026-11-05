@@ -17,8 +17,9 @@ describe('full analysis progress',()=>{
     expect(wrapper.text()).toContain('牛肋条 · 资料覆盖');
   });
   it('does not invent a percentage before the evidence plan exists',()=>{
-    const wrapper=mount(AnalysisProgress,{props:{status:'running'}});
+    const wrapper=mount(AnalysisProgress,{props:{status:'running',stage:{phase:'retrying',message:'旧的等待提示'}}});
     expect(wrapper.text()).toContain('正在生成概览');
+    expect(wrapper.text()).not.toContain('旧的等待提示');
     expect(wrapper.find('progress').exists()).toBe(false);
   });
 });

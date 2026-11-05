@@ -5,7 +5,7 @@ import { formatBlacklakeDateTime } from '@/views/smart-bi/blacklakePeriod';
 const props=defineProps<{progress?:AnalysisFactProgress;status?:string;stage?:{phase:string;message:string}}>();
 const reviewed=computed(()=>props.progress?.reviewed??props.progress?.additionalReviewed??0);
 const full=computed(()=>props.progress?.mode==='all_facts');
-const phase=computed(()=>props.progress?.phase||props.stage?.phase||props.status);
+const phase=computed(()=>!props.progress&&props.status==='running'?'running':props.progress?.phase||props.stage?.phase||props.status);
 const phaseText=computed(()=>({generating:'正在逐项分析',correcting:'正在纠正说明',retrying:'等待自动重试',waiting_model:'等待本地模型恢复',waiting_source:'等待补齐分析事实',queued:'排队继续分析',running:'正在生成概览',ready:'全部分析事实已核对'}[phase.value||'']||'正在准备分析'));
 const names=computed(()=>(props.progress?.blocker?.facts||props.progress?.currentFacts||[]).map(f=>f.label));
 </script>
@@ -15,7 +15,7 @@ const names=computed(()=>(props.progress?.blocker?.facts||props.progress?.curren
     <progress v-if="progress&&full" :value="reviewed" :max="Math.max(progress.total,1)" :aria-label="`已核对 ${reviewed}，共 ${progress.total} 项`" />
     <p v-if="progress?.blocker">{{progress.blocker.message}}<span v-if="progress.retryAt"> 下次尝试 {{formatBlacklakeDateTime(progress.retryAt)}}。</span></p>
     <p v-else-if="progress?.remaining">{{phaseText}}，已完成的内容可以先看。</p>
-    <p v-else-if="stage">{{stage.message}}</p>
+    <p v-else-if="stage&&status!=='running'">{{stage.message}}</p>
     <details v-if="names.length"><summary>查看当前核对项（{{names.length}} 项）</summary><ul><li v-for="(name,index) in names" :key="index">{{name}}</li></ul></details>
   </section>
 </template>

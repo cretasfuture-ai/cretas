@@ -87,7 +87,7 @@ def validate_review(raw,fact,full):
     return {**raw,'sectionId':sid,'label':title+' · '+label,'statistics':accepted[0]['statistics']}
 
 
-def payload(full,batch,model,feedback=None):
+def payload(full,batch,model,feedback=None,previous=None):
     from .analysis_playbook import HAZARDS
     ids={f['id'] for f in batch};groups={f.get('groupId') for f in batch if f.get('groupId')}
     # Context is explicitly separate from facts that require individual answers.
@@ -96,6 +96,12 @@ def payload(full,batch,model,feedback=None):
         'riskDefinitions':HAZARDS,'allowedOwners':sorted(analyst.OWNERS),
         'requiredRiskWording':{f['id']:[RISK_WORDING.get(c,HAZARDS.get(c,c)) for c in f['considerations']] for f in batch},
         'validationFeedback':feedback,
+        'previousRejectedReviews':[{k:r[k][:1000] for k in FIELDS if isinstance(r.get(k),str)}
+            for r in (previous or []) if isinstance(r,dict) and r.get('factId') in ids],
+        'repairInstructions':'若有校验反馈，只改写本批未通过项。previousRejectedReviews是未通过的草稿，不是已确认事实。'
+        '删除全部文字字段中的数字和中文数量，包括一条、两条、一张、一个、一次；不改写成其他数量。'
+        '样本数量统一改写为“样本少”，具体数字会单独显示。不要把资料缺失直接写成已发生的成本低估、浪费或异常。'
+        '保留原factId；owner只从allowedOwners选择；逐项对照requiredRiskWording补齐限制。',
         'instruction':'逐条解释facts，不遗漏、不合并。groupId相同才可讨论关联；relatedContext只作背景，不新增待核对项。'
         '每条返回factId、whatItMeans、nextStep、cannotConclude、owner五个字段。'
         'owner必须从allowedOwners原样选择一个值，不能把多个选项拼接成新的部门组合。'
@@ -125,6 +131,7 @@ def stamp():return datetime.now(timezone.utc).isoformat()
 
 
 def blocker_message(code):
+    if 'IMPACT' in code or 'CERTAINTY' in code:return '说明对成本影响或原因下结论过早，正在改写后重新核对。'
     if 'OWNER' in code:return '处理部门没有按规定填写，正在纠正后重试。'
     if 'NUMBER' in code or 'QUANTITY' in code:return '说明中出现未绑定的数字或数量，正在重写。'
     if 'RISK' in code:return '风险或样本限制没有讲清楚，正在补充说明。'
@@ -167,7 +174,8 @@ async def complete(job,facts,scope,path,requester,*,batch_size=8,exhaustive=Fals
                 state.update(status='generating' if not feedback else 'correcting',updatedAt=stamp(),
                     currentFacts=[{'id':f['id'],'label':full['displayFacts'][f['id']]['text'].split('：',1)[0]} for f in batch])
                 save(path,state,guard)
-                raw=await asyncio.to_thread(run,provider.infer,payload(full,batch,config['model'],feedback),
+                previous=(state.get('rejections') or [{}])[-1].get('candidate') or {}
+                raw=await asyncio.to_thread(run,provider.infer,payload(full,batch,config['model'],feedback,previous.get('reviews',[]) if isinstance(previous,dict) else []),
                                            config,facts['costAlerts']['scope'],requester)
                 if getattr(raw,'usage',None):state['calls'].append(raw.usage)
                 if not isinstance(raw,dict) or set(raw)!={'reviews'} or not isinstance(raw['reviews'],list):

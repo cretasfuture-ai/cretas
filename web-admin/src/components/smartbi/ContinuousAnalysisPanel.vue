@@ -7,6 +7,7 @@ import {getBlacklakePeriodReport,type BlacklakePeriodJob} from '@/api/smartbi/bl
 import {formatBlacklakeDateTime} from '@/views/smart-bi/blacklakePeriod';
 import {localizeBlacklakeText} from '@/views/smart-bi/blacklakePresentation';
 import {useAuthStore} from '@/store/modules/auth';
+import type {PythonServiceError} from '@/api/smartbi/common';
 const emit=defineEmits<{(event:'data-updated'):void}>();
 const state=ref<LiveMonitorReport|null>(null),report=ref<BlacklakePeriodJob|null>(null),error=ref('');
 const auth=useAuthStore(),identity=computed(()=>[auth.factoryId,auth.user?.id,auth.currentRole].join(':'));
@@ -19,7 +20,19 @@ async function refresh(page=offset){
   }catch(cause){if(mounted&&key===identity.value)error.value=cause instanceof Error?cause.message:'采集状态暂不可读';}
   finally{busy=false;}
 }
-async function poll(){await refresh();if(mounted)timer=window.setTimeout(()=>{void poll();},30000);}
+async function refreshOpenReport(){
+  const current=report.value,key=identity.value;
+  if(!current||!['queued','running'].includes(current.status))return;
+  try{
+    const next=await getBlacklakePeriodReport(current.id);
+    if(mounted&&key===identity.value&&report.value?.id===current.id)report.value=next;
+  }catch(cause){
+    if(!mounted||key!==identity.value||report.value?.id!==current.id)return;
+    if(cause instanceof Error&&[401,403,404].includes((cause as PythonServiceError).status||0)){report.value=null;return;}
+    error.value='报告状态暂不可读，稍后自动重试。';
+  }
+}
+async function poll(){await Promise.allSettled([refresh(),refreshOpenReport()]);if(mounted)timer=window.setTimeout(()=>{void poll();},30000);}
 async function open(id:string){const key=identity.value;try{const next=await getBlacklakePeriodReport(id);if(mounted&&key===identity.value)report.value=next;}catch(cause){error.value=cause instanceof Error?cause.message:'报告暂不可读';}}
 watch(identity,()=>{state.value=null;report.value=null;offset=0;});
 onMounted(()=>{mounted=true;void poll();});

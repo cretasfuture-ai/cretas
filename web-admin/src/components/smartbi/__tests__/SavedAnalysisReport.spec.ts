@@ -47,6 +47,8 @@ describe('SavedAnalysisReport', () => {
     expect(wrapper.text()).toContain('甲的补充解释');await buttons[1]!.trigger('click');
     expect(wrapper.text()).not.toContain('甲的补充解释');expect(wrapper.text()).toContain('乙的补充解释');
     expect(wrapper.findAll('.supplement-detail')).toHaveLength(1);
+    await wrapper.setProps({report:JSON.parse(JSON.stringify(saved))});
+    expect(wrapper.text()).toContain('乙的补充解释'); // Live progress must not collapse the fact being read.
     await wrapper.findAll('.section-nav button')[1]!.trigger('click');
     expect(wrapper.find('.supplement-list').exists()).toBe(false);
   });
