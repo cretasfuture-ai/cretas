@@ -85,14 +85,16 @@ class MaterialMergeWorkflowWriteGuardContractTest {
     void warehouseOnlyCallerIsDeniedEvenWhenWarehouseWouldAllowMaterialMerge() {
         userOnly("warehouse_manager");
 
-        assertDenied("warehouse_manager", plan(1L));
+        assertProductionDenied("warehouse_manager");
+        verifyNoInteractions(permissionService, userModuleAccessService);
     }
 
     @Test
     void productionPermissionWithoutNormalWorkflowRoleIsDenied() {
         userOnly("operator");
 
-        assertDenied("operator", plan(1L));
+        assertProductionDenied("operator");
+        verifyNoInteractions(permissionService, userModuleAccessService);
     }
 
     @Test
@@ -110,14 +112,25 @@ class MaterialMergeWorkflowWriteGuardContractTest {
         userOnly("workshop_supervisor");
         when(permissionService.hasPermission(any(User.class), eq("production:read_write"))).thenReturn(false);
 
-        assertDenied("workshop_supervisor", plan(1L));
+        assertProductionDenied("workshop_supervisor");
+        verify(permissionService).hasPermission(any(User.class), eq("production:read_write"));
+        verifyNoInteractions(userModuleAccessService);
     }
 
     @Test
-    void disabledProductionModuleRejectsBeforeUserOrPlatformAuthority() {
+    void disabledProductionModuleRejectsBeforeFactoryAuthority() {
         when(factoryConfigService.isModuleEnabled(FACTORY, "production_plan")).thenReturn(false);
 
         assertDenied("factory_super_admin", plan(1L));
+        verifyNoInteractions(userRepository, permissionService, userModuleAccessService,
+                platformAdminRepository, workflowRepository);
+    }
+
+    @Test
+    void disabledProductionModuleRejectsBeforePlatformBypass() {
+        when(factoryConfigService.isModuleEnabled(FACTORY, "production_plan")).thenReturn(false);
+
+        assertDeniedPlatform("super_admin", plan(1L));
         verifyNoInteractions(userRepository, permissionService, userModuleAccessService,
                 platformAdminRepository, workflowRepository);
     }
@@ -257,6 +270,13 @@ class MaterialMergeWorkflowWriteGuardContractTest {
     private void assertDenied(String role, MaterialMergeReferenceReplacer.Plan plan) {
         assertThatThrownBy(() -> withActor(role, () -> guard.require(FACTORY, plan)))
                 .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(403));
+    }
+
+    private void assertProductionDenied(String role) {
+        assertThatThrownBy(() -> withActor(role, () -> guard.require(FACTORY, plan(1L))))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("当前账号没有工艺草稿的生产读写权限")
                 .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(403));
     }
 
