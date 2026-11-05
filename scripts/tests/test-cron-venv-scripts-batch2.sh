@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 审计批 2 (docs/ops/cron-scripts-path-audit-2026-09-06.md) 的 3 个 venv 定时脚本, 每个各一条最小测试:
+# 审计批 2 (docs/ops/cron-scripts-path-audit-2026-09-06.md) 的 2 个存活 venv 定时脚本, 每个各一条最小测试:
 #   ① 假 PATH 缺 systemctl ⇒ rc=2 + reason=cmd-not-found:systemctl   (forecast 不用 systemctl, 跳过此项)
 #   ② venv 不在            ⇒ rc=2 + reason=venv-missing, python 零调用 (⛔ 不掉回系统 python)
 #   ③ .env.prod 不在       ⇒ rc=2 + reason=env-file-missing:env.prod
 #   ④ 阳性对照: 三样都在 ⇒ rc=0, 告警里没有上面三个 reason, python 被调到
 #
-# 为什么值得每个都测一遍而不是只测 cron-common.sh: 这 7 个脚本共用同一个未守卫的
+# 为什么值得每个都测一遍而不是只测 cron-common.sh: 这 2 个脚本共用同一个未守卫的
 # `source venv-current/bin/activate`, venv-current 链接坏掉那天会**同时**掉回 3.6.8; 其中两态的
 # 会把崩溃写成业务失败。测的是「每个脚本真的接上了守卫」(形态 B), 不是守卫本身。
 #
-# 假 python 只做两件事: 记调用、消费 stdin (ledger 那段是 `python - <<PY`)、exit 0。它不产出
+# 假 python 只做两件事: 记调用、消费 stdin、exit 0。它不产出
 # 各脚本的 /tmp 产出文件, 所以阳性对照里可能出现脚本**自己**的 INSTRUMENT DEAD(产出没写) ——
 # 那是脚本原有的三态, 不是本批的三个 reason; 断言只看本批的三个键。
 set -uo pipefail
@@ -114,5 +114,6 @@ for entry in "${CASES[@]}"; do
 done
 
 echo "READING: RC2_CONSTRUCTED=$N_RC2"
-[ "$N_RC2" -eq 8 ] || fail "rc=2 构造次数应为 8, 实得 $N_RC2"
+# 两个存活脚本: forecast 的 venv/env 两态 + LLM health 的 systemctl/venv/env 三态。
+[ "$N_RC2" -eq 5 ] || fail "rc=2 构造次数应为 5, 实得 $N_RC2"
 echo "PASS: test-cron-venv-scripts-batch2.sh ($PASSED 组断言)"

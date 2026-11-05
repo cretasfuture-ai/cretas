@@ -99,3 +99,10 @@ SupplierMaterialService create/update先锁raw；SupplierMaterialPurchaseSpecSer
 餐饮Java v11完整目标960项出现10fail/2error，不能报通过；生产源码终审无新P0/P1。失败为工厂夹具缺少新增准入metadata、旧角色遍历把退休角色当可授权，以及新测试无用stub，保持原业务/provider断言修复。仅重跑5失败类，完整结果与最终PR CI待回执；不扩基线。Python/UI已冻结证据复用，不因文档重跑。
 
 当前main/生产HOLD未解除，无发布锁，不合main、不部署；本批未做线上验证或生产业务写入。旧制品回滚可能恢复餐饮入口，服务恢复和退役验收须分别判断。
+## 最终候选回归补齐
+
+在已推送c21afba0f7上，Python/RN/Web、Source Hygiene、Soft-delete、Factory AgentOps、跨语言和Secret CI均通过。Ops 79项中78通过，唯一失败为删除餐饮cron后计数仍为8；保留存活forecast/LLM health全部正负路径，精确计数改5，本地7组断言exit0。不改变失败基线。
+
+独立窄复核确认另外10组工厂正向夹具未接新增strict metadata，按精确ID补齐，未改生产源码或业务断言。完整编译后显式11类（含复用Facade）实际205项，0failure/error/skip，所选类XML逐一存在；native commandExit0/stopExit0/productionAccess=false。涵盖角色受众、SSE分页/缓存/actor、金额脱敏、供应商工具、确认后续和WriteGuard。证据root-final-invocation-v14.json、java-final-source-snapshot-v14.json、v14-reports及v14-verified-summary.json，当前内容冻结。
+
+c21 Java全量/PG作业42041027518仍执行，先取得完整结果再集中push，避免反复取消；不能把205项局部目标当全量CI通过。各子scope源冻结转review，root父任务继续持有唯一Owner；未合main、不发布，生产写入0。
