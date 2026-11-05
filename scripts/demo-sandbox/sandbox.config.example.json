@@ -1,0 +1,16 @@
+{
+  "listen_host": "127.0.0.1",
+  "listen_port": 10041,
+  "allowed_actor_id": 1309,
+  "strict_security": true,
+  "control_key": "GENERATE_WITH_create_private_config.py",
+  "sandbox_bearer_token": "GENERATE_WITH_create_private_config.py",
+  "sandbox_base_url": "http://127.0.0.1:10040",
+  "java_base_url": "http://127.0.0.1:10040",
+  "sandbox_db_name": "f006_demo_sandbox",
+  "pg_access_mode": "DOCKER_EXEC_ONLY",
+  "sandbox_redis_port": 6387,
+  "manifest_path": "C:/private-f006-sandbox/sessions.private.json",
+  "sandbox_file_root": "C:/private-f006-sandbox/files",
+  "orchestrator_config_path": "C:/private-f006-sandbox/orchestrator.private.json"
+}

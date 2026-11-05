@@ -10,10 +10,12 @@ import './style.css';
 import { registerEChartsTheme } from './utils/echarts-theme';
 import { installClientErrorReporter } from './utils/clientErrorReporter';
 import { installPlatformFactoryViewNetworkGuard } from './utils/platformFactoryViewNetwork';
+import { installSandboxNetworkBoundary } from './demo/f006SandboxNetwork';
 
 // Install before async app bootstrap so pages that still use native fetch/XHR
 // cannot issue an unscoped request during initial route/component effects.
 installPlatformFactoryViewNetworkGuard();
+installSandboxNetworkBoundary();
 
 // 异步引导函数
 async function bootstrap() {
