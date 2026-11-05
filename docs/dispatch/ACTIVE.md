@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `TASKS-S3-REINSPECTION-UI-20261105` — `in-progress` — Owner `01a1a954/root` — Base `538f71ad9a72a1bcf0025553efbe0291bd76aa97` — scope质量两页面/helper及tests，明细archive/2026-11-05-s3-reinspection-ui.md；隔离批次PASS复检人工入口。独立WT quality-review-ui；24 tests/typecheck通过，build待；1480 Java冻结不改。
+
 
 - `TASKS-S3-QUALITY-REWORK-20261105` — `in-progress` — Owner `01a1a954/root` — Base `91bfa2c9b42ac5e98ca67b02e0de6686339b5913` — WT cretas-quality-rework-20261105整合#1441/#1446；scope两PR原diff及测试，明细archive/2026-11-05-s3-quality-rework-takeover.md；CI/冲突修复→PG/JPA/安全复核→发布/F006 UI。共享入口保留他组变更；无发布/设备占用。
 

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { dispositionResultFilter } from '../reinspectionRelease';
 
 /**
  * 「不良品处置」屏的待处置列表：**一次请求 + 由数据源过滤**，
@@ -84,7 +85,8 @@ describe('不良品处置: 在数据源过滤, 且那个参数后端真的声明
     const ctrl = readFileSync(CONTROLLER, 'utf8');
 
     // 前端确实在传 result
-    expect(screen, '这个屏应按 FAIL,CONDITIONAL 过滤').toMatch(/result:\s*'FAIL,CONDITIONAL'/);
+    expect(screen).toContain('result: dispositionResultFilter(expectedBatchId ? scopedBatch.value : null)');
+    expect(dispositionResultFilter(null), '全厂列表仍按 FAIL,CONDITIONAL 服务端过滤').toBe('FAIL,CONDITIONAL');
 
     // 后端 getInspections 的签名里必须有 result
     const sig = ctrl.match(/@GetMapping\("\/quality\/inspections"\)[\s\S]*?\)\s*\{/)?.[0] ?? '';
