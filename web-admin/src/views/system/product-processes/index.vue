@@ -62,6 +62,7 @@ interface WorkflowOwnerOption {
 const products = ref<WorkflowOwnerOption[]>([]);
 const rawMaterials = ref<WorkflowOwnerOption[]>([]);
 const selectedProductId = ref('');
+const routeOwnerError = ref('');
 const productsLoading = ref(false);
 // 兼容链只在需要核对旧报工链路时展开，默认不占用 Workflow 画布的工作高度。
 const legacyCompatibilityExpanded = ref<string[]>([]);
@@ -414,15 +415,13 @@ async function loadProducts() {
     if (productRes.success && productRes.data?.content && rawRes.success && Array.isArray(rawRes.data)) {
       products.value = productRes.data.content;
       rawMaterials.value = rawRes.data.filter(isRawMaterialOption);
-      if (finishedWorkflowOptions.value.length > 0 || rawMaterials.value.length > 0) {
-        const selectedFromRoute = applyRouteProductSelection(route.query.productTypeId, true);
-        if (!selectedFromRoute && !selectedProductId.value) {
-          suppressNextWatch = true;
-          // 兼容旧 ?ownerMode=RAW 深链，但它只影响初始定位，不再切换或锁定编辑模式。
-          selectedProductId.value = routeQueryString(route.query.ownerMode) === 'RAW'
-            ? rawMaterials.value[0]?.id || ''
-            : workflowOwnerOptions.value[0]?.id || '';
-        }
+      const selectedFromRoute = applyRouteProductSelection(route.query.productTypeId, true);
+      if (!selectedFromRoute && !selectedProductId.value) {
+        suppressNextWatch = true;
+        // 兼容旧 ?ownerMode=RAW 深链，但它只影响初始定位，不再切换或锁定编辑模式。
+        selectedProductId.value = routeQueryString(route.query.ownerMode) === 'RAW'
+          ? rawMaterials.value[0]?.id || ''
+          : workflowOwnerOptions.value[0]?.id || '';
       }
     }
   } catch (e) {
@@ -445,11 +444,22 @@ function routeQueryString(value: unknown): string {
  */
 function applyRouteProductSelection(value: unknown, suppressReload = false): boolean {
   const preferredProductId = routeQueryString(value);
-  if (!preferredProductId) return false;
+  if (value === undefined) {
+    routeOwnerError.value = '';
+    return false;
+  }
   const preferredProduct = finishedWorkflowOptions.value.find((product) => product.id === preferredProductId);
   const preferredRaw = rawMaterials.value.find((material) => material.id === preferredProductId);
   const preferred = preferredProduct || preferredRaw;
-  if (!preferred) return false;
+  if (!preferred || (Array.isArray(value) && value.length !== 1)) {
+    routeOwnerError.value = '链接指定的归属对象不可用，请重新选择成品或原料';
+    if (selectedProductId.value) {
+      suppressNextWatch = suppressReload;
+      selectedProductId.value = '';
+    }
+    return true; // Explicit but unavailable: never default to another object.
+  }
+  routeOwnerError.value = '';
   if (selectedProductId.value !== preferred.id) {
     suppressNextWatch = suppressReload;
     selectedProductId.value = preferred.id;
@@ -458,7 +468,7 @@ function applyRouteProductSelection(value: unknown, suppressReload = false): boo
 }
 
 watch(() => route.query.productTypeId, (value) => {
-  if (workflowOwnerOptions.value.length > 0) applyRouteProductSelection(value);
+  applyRouteProductSelection(value);
 });
 
 async function loadAllProcesses() {
@@ -710,6 +720,7 @@ async function handleProductChange(newId: string) {
     }
     return;
   }
+  if (workflowOwnerOptions.value.some((option) => option.id === newId)) routeOwnerError.value = '';
   // ok — proceed; the watch will fire and load the new product
 }
 
@@ -1260,8 +1271,18 @@ async function onCustomFieldsSaved() {
       </el-alert>
     </el-card>
 
+    <el-alert
+      v-if="routeOwnerError"
+      data-testid="workflow-owner-unavailable"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="routeOwnerError"
+    />
+
     <section class="workflow-viewport">
       <ProductProcessWorkflowEditor
+        v-if="selectedProductId && !routeOwnerError"
         class="workflow-section"
         :factory-id="factoryId || ''"
         :product-type-id="selectedProductId"
