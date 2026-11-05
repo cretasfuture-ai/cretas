@@ -20,6 +20,8 @@ import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.security.PlatformFactoryViewReadPolicy;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.UserModuleAccessService;
+import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
@@ -60,6 +62,8 @@ class MaterialMergeWorkflowWriteGuardContractTest {
     @Mock private PlatformAdminRepository platformAdminRepository;
     @Mock private UserRepository userRepository;
     @Mock private PermissionService permissionService;
+    @Mock private FactoryConfigService factoryConfigService;
+    @Mock private UserModuleAccessService userModuleAccessService;
     @Mock private ProcessSecretPolicyRepository policyRepository;
     @Mock private ProcessSecretGrantRepository grantRepository;
     @Mock private ProcessSecretAuditRecorder auditRecorder;
@@ -73,6 +77,7 @@ class MaterialMergeWorkflowWriteGuardContractTest {
                 policyRepository, grantRepository, auditRecorder);
         guard = new MaterialMergeWorkflowWriteGuard(
                 workflowRepository, platformAdminRepository, userRepository, permissionService,
+                factoryConfigService, userModuleAccessService,
                 new ProcessSecretRecipeGuard(recipeRepository, access));
     }
 
@@ -101,7 +106,37 @@ class MaterialMergeWorkflowWriteGuardContractTest {
     }
 
     @Test
+    void normalRoleWithoutProductionPermissionIsDenied() {
+        userOnly("workshop_supervisor");
+        when(permissionService.hasPermission(any(User.class), eq("production:read_write"))).thenReturn(false);
+
+        assertDenied("workshop_supervisor", plan(1L));
+    }
+
+    @Test
+    void disabledProductionModuleRejectsBeforeUserOrPlatformAuthority() {
+        when(factoryConfigService.isModuleEnabled(FACTORY, "production_plan")).thenReturn(false);
+
+        assertDenied("factory_super_admin", plan(1L));
+        verifyNoInteractions(userRepository, permissionService, userModuleAccessService,
+                platformAdminRepository, workflowRepository);
+    }
+
+    @Test
+    void explicitAccountModuleDenyRejectsAnOtherwiseValidWorkflowWriter() {
+        moduleEnabled();
+        User user = user("workshop_supervisor");
+        when(userRepository.findByIdAndFactoryId(ACTOR_ID, FACTORY)).thenReturn(Optional.of(user));
+        when(permissionService.hasPermission(user, "production:read_write")).thenReturn(true);
+        when(userModuleAccessService.canAccessModule(user, "production_plan")).thenReturn(false);
+
+        assertDenied("workshop_supervisor", plan(1L));
+        verifyNoInteractions(workflowRepository);
+    }
+
+    @Test
     void platformBypassStillRequiresActiveMatchingPlatformAdmin() {
+        moduleEnabled();
         when(platformAdminRepository.findById(ACTOR_ID))
                 .thenReturn(Optional.of(platformAdmin(PlatformRole.super_admin, true)));
         when(workflowRepository.findByIdAndFactoryId(1L, FACTORY))
@@ -112,6 +147,7 @@ class MaterialMergeWorkflowWriteGuardContractTest {
 
     @Test
     void inactiveOrChangedPlatformAdminCannotUseFactoryBypass() {
+        moduleEnabled();
         when(platformAdminRepository.findById(ACTOR_ID))
                 .thenReturn(Optional.of(platformAdmin(PlatformRole.super_admin, false)));
         assertDeniedPlatform("super_admin", plan(1L));
@@ -123,12 +159,14 @@ class MaterialMergeWorkflowWriteGuardContractTest {
 
     @Test
     void collidingFactoryUserIdCannotSatisfyPlatformIdentity() {
+        moduleEnabled();
         when(platformAdminRepository.findById(ACTOR_ID)).thenReturn(Optional.empty());
         assertDeniedPlatform("super_admin", plan(1L));
     }
 
     @Test
     void platformFactoryReadViewCannotWriteEvenForAnActiveAdmin() {
+        moduleEnabled();
         AuthenticatedActor actor = new AuthenticatedActor(
                 AuthenticatedActorType.PLATFORM_ADMIN, ACTOR_ID, null, "super_admin");
         MockHttpServletRequest request = new MockHttpServletRequest();
@@ -208,11 +246,12 @@ class MaterialMergeWorkflowWriteGuardContractTest {
 
     @Test
     void missingTrustedActorIsDenied() {
+        moduleEnabled();
         assertThatThrownBy(() -> guard.require(FACTORY, plan(1L)))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(403));
         verifyNoInteractions(workflowRepository, platformAdminRepository, userRepository, permissionService,
-                recipeRepository, policyRepository, grantRepository, auditRecorder);
+                userModuleAccessService, recipeRepository, policyRepository, grantRepository, auditRecorder);
     }
 
     private void assertDenied(String role, MaterialMergeReferenceReplacer.Plan plan) {
@@ -228,14 +267,21 @@ class MaterialMergeWorkflowWriteGuardContractTest {
     }
 
     private void allow(String role) {
+        moduleEnabled();
         User user = user(role);
         when(userRepository.findByIdAndFactoryId(ACTOR_ID, FACTORY)).thenReturn(Optional.of(user));
         when(permissionService.hasPermission(user, "production:read_write")).thenReturn(true);
+        when(userModuleAccessService.canAccessModule(user, "production_plan")).thenReturn(true);
     }
 
     private void userOnly(String role) {
+        moduleEnabled();
         User user = user(role);
         when(userRepository.findByIdAndFactoryId(ACTOR_ID, FACTORY)).thenReturn(Optional.of(user));
+    }
+
+    private void moduleEnabled() {
+        when(factoryConfigService.isModuleEnabled(FACTORY, "production_plan")).thenReturn(true);
     }
 
     private User user(String role) {

@@ -7,6 +7,10 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.UserModuleAccess;
+import com.cretas.aims.entity.config.FactoryConfiguration;
+import com.cretas.aims.entity.config.FactoryModuleConfig;
+import com.cretas.aims.entity.config.ModuleSchema;
 import com.cretas.aims.entity.processsecret.ProcessSecretPolicy;
 import com.cretas.aims.entity.processsecret.ProcessSecretStorageMode;
 import com.cretas.aims.entity.enums.TaxTreatment;
@@ -15,6 +19,10 @@ import com.cretas.aims.integration.DisposablePostgresTargetGuard;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
 import com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.UserModuleAccessRepository;
+import com.cretas.aims.repository.config.FactoryConfigurationRepository;
+import com.cretas.aims.repository.config.FactoryModuleConfigRepository;
+import com.cretas.aims.repository.config.ModuleSchemaRepository;
 import com.cretas.aims.repository.processsecret.ProcessSecretPolicyRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
@@ -36,6 +44,10 @@ import com.cretas.aims.service.validation.ProductProcessWorkflowUnitValidator;
 import com.cretas.aims.service.ProductionPlanService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.impl.UserModuleAccessServiceImpl;
+import com.cretas.aims.service.config.impl.FactoryConfigServiceImpl;
+import com.cretas.aims.engine.DDLExecutor;
+import com.cretas.aims.engine.DynamicFieldService;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
@@ -66,6 +78,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.util.UUID;
+import java.util.List;
+import java.util.Map;
 import java.time.LocalDate;
 import java.math.BigDecimal;
 import java.util.concurrent.CountDownLatch;
@@ -97,6 +111,7 @@ import static org.mockito.Mockito.mock;
 @Import({MaterialAliasMergeService.class, MaterialMergeReferenceReplacer.class, MaterialReferenceWriteGuard.class,
         MaterialMergeWorkflowWriteGuard.class, ProcessSecretAccessService.class,
         ProcessSecretAuditRecorder.class, ProcessSecretRecipeGuard.class,
+        FactoryConfigServiceImpl.class, UserModuleAccessServiceImpl.class,
         MaterialMergeConcurrencyPostgresContractTest.JacksonTestConfiguration.class})
 class MaterialMergeConcurrencyPostgresContractTest {
 
@@ -150,6 +165,10 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Autowired private ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
     @Autowired private ProductTypeRepository productTypeRepository;
     @Autowired private ProcessSecretPolicyRepository processSecretPolicyRepository;
+    @Autowired private ModuleSchemaRepository moduleSchemaRepository;
+    @Autowired private FactoryConfigurationRepository factoryConfigurationRepository;
+    @Autowired private FactoryModuleConfigRepository factoryModuleConfigRepository;
+    @Autowired private UserModuleAccessRepository userModuleAccessRepository;
     @Autowired private PurchaseOrderItemRepository purchaseOrderItemRepository;
     @Autowired private PurchaseOrderRepository purchaseOrderRepository;
     @Autowired private SupplierMaterialRepository supplierMaterialRepository;
@@ -161,6 +180,8 @@ class MaterialMergeConcurrencyPostgresContractTest {
     @Autowired private PlatformTransactionManager transactionManager;
     @MockBean private UnitContractService unitContractService;
     @MockBean private PermissionService permissionService;
+    @MockBean private DDLExecutor ddlExecutor;
+    @MockBean private DynamicFieldService dynamicFieldService;
     @MockBean private org.springframework.context.ApplicationEventPublisher eventPublisher;
     @SpyBean private ProcessSecretAuditRecorder processSecretAuditRecorder;
     private AuthenticatedActor.ActorScope actorScope;
@@ -171,6 +192,8 @@ class MaterialMergeConcurrencyPostgresContractTest {
         when(unitContractService.areEquivalent(anyString(), anyString(), anyString())).thenReturn(true);
         when(permissionService.hasPermission(any(User.class), org.mockito.ArgumentMatchers.eq("production:read_write")))
                 .thenReturn(true);
+        when(permissionService.hasAnyPermission(any(User.class), any(String[].class))).thenReturn(true);
+        when(dynamicFieldService.getActiveFields(anyString(), anyString())).thenReturn(List.of());
     }
 
     @AfterEach
@@ -255,6 +278,29 @@ class MaterialMergeConcurrencyPostgresContractTest {
         addReferenceSnapshotData(f);
         MergeSnapshot before = snapshot(f, f.workflowId);
         setActorRole(f, "warehouse_manager");
+
+        assertMergeForbidden(f);
+        assertThat(snapshot(f, f.workflowId)).isEqualTo(before);
+    }
+
+    @Test
+    void disabledProductionPlanModuleRejectsMergeBeforeAnyReferenceWrite() {
+        Fixture f = fixture(true);
+        addReferenceSnapshotData(f);
+        configureProductionPlanModule(f, false);
+        MergeSnapshot before = snapshot(f, f.workflowId);
+
+        assertMergeForbidden(f);
+        assertThat(snapshot(f, f.workflowId)).isEqualTo(before);
+    }
+
+    @Test
+    void explicitProductionPlanAccountDenyRejectsMergeBeforeAnyReferenceWrite() {
+        Fixture f = fixture(true);
+        addReferenceSnapshotData(f);
+        configureProductionPlanModule(f, true);
+        denyProductionPlanForAccount(f);
+        MergeSnapshot before = snapshot(f, f.workflowId);
 
         assertMergeForbidden(f);
         assertThat(snapshot(f, f.workflowId)).isEqualTo(before);
@@ -1024,6 +1070,44 @@ class MaterialMergeConcurrencyPostgresContractTest {
         ReflectionTestUtils.setField(purchaseService, "supplierMaterialPurchaseSpecRepository",
                 supplierMaterialPurchaseSpecRepository);
         return purchaseService;
+    }
+
+    private void configureProductionPlanModule(Fixture fixture, boolean enabled) {
+        transaction(() -> {
+            if (moduleSchemaRepository.findByModuleCode("production_plan").isEmpty()) {
+                moduleSchemaRepository.saveAndFlush(ModuleSchema.builder()
+                        .moduleCode("production_plan")
+                        .moduleName("生产计划")
+                        .moduleCategory("production")
+                        .fieldSchema(Map.of("fields", List.of()))
+                        .defaultConfig(Map.of())
+                        .build());
+            }
+            factoryConfigurationRepository.saveAndFlush(FactoryConfiguration.builder()
+                    .factoryId(fixture.factoryFactory)
+                    .configVersion(1)
+                    .status("PUBLISHED")
+                    .publishedAt(java.time.LocalDateTime.now())
+                    .build());
+            factoryModuleConfigRepository.saveAndFlush(FactoryModuleConfig.builder()
+                    .factoryId(fixture.factoryFactory)
+                    .moduleCode("production_plan")
+                    .configVersion(1)
+                    .enabled(enabled)
+                    .build());
+        });
+    }
+
+    private void denyProductionPlanForAccount(Fixture fixture) {
+        transaction(() -> {
+            UserModuleAccess access = new UserModuleAccess();
+            access.setId(UUID.randomUUID().toString());
+            access.setFactoryId(fixture.factoryFactory);
+            access.setUserId(String.valueOf(fixture.actorId));
+            access.setModuleCode("production_plan");
+            access.setAccessType(UserModuleAccess.AccessType.DENY);
+            userModuleAccessRepository.saveAndFlush(access);
+        });
     }
 
     private void assertMergeForbidden(Fixture fixture) {

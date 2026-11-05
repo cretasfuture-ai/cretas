@@ -13,6 +13,8 @@ import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.security.PlatformFactoryViewReadPolicy;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.UserModuleAccessService;
+import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import com.cretas.aims.service.processsecret.ProcessSecretWorkflowOutputs;
 import com.cretas.aims.entity.processsecret.ProcessSecretAction;
@@ -32,6 +34,8 @@ import java.util.Set;
 @Service
 public class MaterialMergeWorkflowWriteGuard {
 
+    private static final String WORKFLOW_MODULE = "production_plan";
+
     private static final Set<FactoryUserRole> WORKFLOW_WRITE_ROLES = EnumSet.of(
             FactoryUserRole.factory_super_admin,
             FactoryUserRole.workshop_supervisor,
@@ -41,17 +45,23 @@ public class MaterialMergeWorkflowWriteGuard {
     private final PlatformAdminRepository platformAdminRepository;
     private final UserRepository userRepository;
     private final PermissionService permissionService;
+    private final FactoryConfigService factoryConfigService;
+    private final UserModuleAccessService userModuleAccessService;
     private final ProcessSecretRecipeGuard processSecretGuard;
 
     public MaterialMergeWorkflowWriteGuard(ProductProcessWorkflowRepository workflowRepository,
                                            PlatformAdminRepository platformAdminRepository,
                                            UserRepository userRepository,
                                            PermissionService permissionService,
+                                           FactoryConfigService factoryConfigService,
+                                           UserModuleAccessService userModuleAccessService,
                                            ProcessSecretRecipeGuard processSecretGuard) {
         this.workflowRepository = workflowRepository;
         this.platformAdminRepository = platformAdminRepository;
         this.userRepository = userRepository;
         this.permissionService = permissionService;
+        this.factoryConfigService = factoryConfigService;
+        this.userModuleAccessService = userModuleAccessService;
         this.processSecretGuard = processSecretGuard;
     }
 
@@ -75,6 +85,9 @@ public class MaterialMergeWorkflowWriteGuard {
     }
 
     private void requireProductionWorkflowWrite(String factoryId, AuthenticatedActor actor) {
+        if (!factoryConfigService.isModuleEnabled(factoryId, WORKFLOW_MODULE)) {
+            throw forbidden("生产计划模块未启用，不能自动修改工艺草稿");
+        }
         if (actor.type() == AuthenticatedActorType.PLATFORM_ADMIN) {
             if (!actor.hasFactoryBypass() || PlatformFactoryViewReadPolicy.isCurrentView()) {
                 throw forbidden("当前平台身份只能读取工厂数据，不能自动修改工艺草稿");
@@ -104,6 +117,9 @@ public class MaterialMergeWorkflowWriteGuard {
                 || !WORKFLOW_WRITE_ROLES.contains(role)
                 || !permissionService.hasPermission(user, "production:read_write")) {
             throw forbidden("当前账号没有工艺草稿的生产读写权限");
+        }
+        if (!userModuleAccessService.canAccessModule(user, WORKFLOW_MODULE)) {
+            throw forbidden("当前账号没有生产计划模块访问权限");
         }
     }
 
