@@ -201,3 +201,9 @@ A: 减小 `--batch-size` (如 4) 或增加 `--freeze-layers`
 `factory_accuracy_train.py --evidence <目录>` 复用真实增量Trainer，按验证宏F1选择最多三组预登记配置，默认标签平滑、冻结前层、权重衰减与早停。`factory_accuracy_eval.py calibrate --evidence <目录>` 只用独立校准集选择全局分流阈值，并测量可选的同Mini分歧复核；没有净增益就关闭。`blind` 锁定数据、权重和路由实现哈希后才打开盲测，之后训练和校准入口拒绝再次拟合。候选融合是离线代理，不是线上完整召回验收。`factory_accuracy_regression.py` 只允许在主盲测冻结后执行旧保护集诊断，不能用它反向选模型。
 
 本轮数值达到本地81.80%／混合96.46%，但验证到正向盲测差10.09点、35边界难例仅26/35，完整泛化门禁未通过；严禁把它表述为无过拟合或直接生产可用。完整证据与剩余质量缺口见 `docs/dispatch/archive/2026-11-05-intent266-accuracy.md`。权重仅本地保存，不部署、不替换线上。
+
+## 独立泛化确认与额度中断恢复
+
+`factory_generalization.py --evidence <新目录>` 依次执行 `initialize`、`generate-train`、`generate-development`、`generate-confirmation`、`audit`、`negatives`、`curate`、`train`、`calibrate`、`confirm`。独立训练与确认只输入能力定义，不输入旧错题；均衡旧训练回放，验证集选模，新确认集打开后拒绝再次训练/校准。沿用266个输出ID与已声明的260个语义目标。`budget-previous-roots.json` 将前轮回执纳入同日已知用量，不代表组织余额可见。未知请求不能通过新目录重发或忽略其预留额度。
+
+额度中断后先停止原进程，再用 `factory_generalization_recovery.py freeze --evidence <原目录>` 保存原始ledger、锁定本地预测并隔离无完整HTTP回执的请求。它们永不重发、按预留上界计额度，最终保守计错（即使真值是澄清也不算答对），所有题保留在分母。额度允许后才执行 `recover`：仅发送原先未发送的请求，完成请求按原payload哈希缓存复用，保持同一权重、策略、候选、提示词与确认集。恢复入口不提高每日额度、不授予额外付费许可。完整确认后才允许 `regression` 打开旧保护集；诊断结果不得反向拟合。第二轮状态见 `docs/dispatch/archive/2026-11-05-intent266-generalization.md`。

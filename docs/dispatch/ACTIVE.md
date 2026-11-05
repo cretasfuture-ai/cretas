@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `INTENT266-GENERALIZATION-20261105` — `in-progress` — Owner Codex/root；Base `9e6f576a7c02fe68f2f5a1cb9af9185e8d2cd3f6`；scope: scripts/finetune泛化训练/跨轮额度保护、对应Python测试/holdout及本任务archive；独立长句/边界样本、验证选模、新确认集一次打开；验收目标测试+冻结评测+CI，不替换线上。
+- `INTENT266-GENERALIZATION-20261105` — `blocked` — Owner Codex/root；Base `9e6f576a7c02fe68f2f5a1cb9af9185e8d2cd3f6`；scope: scripts/finetune泛化训练/跨轮额度/恢复、对应测试/holdout及archive；新确认796本地87.94%，93目标通过；mini日额度止步，114未发送、2未知计错，待重置或额外付费答复。权重/路由锁定，不换线上。
 - `SEC-PLAN-AUDIT-1457-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 5e59baa7e9f6a798cd66cd0032cc34aa2b27dd4f — #1457 Unicode边界修复及注册/导入闸；63目标全绿、风险终审无高/中阻塞；等最终Java门禁，scope同前；不写生产。
 - `SEC-PLAN-AUDIT-1438-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base a294f1078d02d33d76a3065a4a81fcf2e34790d1 — #1438迁移升V20261105_91、平台AI账号限流；scope grant迁移/平台AI controller及ContractTest/保密文档；独立PG/Maven+Python；不写生产。
 - `SEC-INVENTORY-FIXTURE-GATE-20261105` — `review` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 072bf5681969a55029d929d00a6101a28ec92a15 — 仅InventoryLedgerServiceTest及归档，隔离新增FREE_GIFT查询与旧顺序夹具，保留8项失败的原业务断言；验收完整该类，不改生产库存/查询。
