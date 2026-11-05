@@ -41,21 +41,19 @@ class WorkdeskRoleTest {
     }
 
     @Test
-    @DisplayName("UT-WR-05: 枚举只含这四个岗位 —— 新增岗位必须显式改测试")
-    void exactlyFourRoles() {
-        assertEquals(4, WorkdeskRole.values().length,
-                "岗位集合来自代码里的显式标记 (工厂三岗 Sprint 8 P4a/P4b/P4c; "
-                        + "餐饮只有店长 restaurant_manager), 不能随手扩");
+    @DisplayName("UT-WR-05: 枚举只含工厂三个岗位 —— 新增岗位必须显式改测试")
+    void exactlyThreeFactoryRoles() {
+        assertEquals(3, WorkdeskRole.values().length,
+                "岗位集合来自工厂代码里的显式标记，不能随手扩");
     }
 
     @Test
-    @DisplayName("UT-WR-06: 🔴 厨师长不是工作台岗位 —— 餐饮四部门是 运营/市场/财务/人事")
-    void headChefIsNotAWorkdeskRole() {
+    @DisplayName("UT-WR-06: 🔴 退役餐饮岗位不是工作台岗位")
+    void retiredRestaurantRolesAreNotWorkdeskRoles() {
         assertThrows(IllegalArgumentException.class,
                 () -> WorkdeskRole.fromDisplayName("厨师长"),
-                "厨师长(restaurant_chef)已随餐饮租户收敛停用: prod 仅存 2 个账号且均 is_active=f, "
-                        + "唯一活跃餐饮租户 MOCK_REST 无该角色。代码里 FactoryUserRole 等处仍有残留, "
-                        + "但那是未清理的历史包袱, 不是它还活着的证据 —— 本断言就是防止再被当成活岗位加回来");
-        assertEquals(WorkdeskRole.RESTAURANT_MANAGER, WorkdeskRole.fromDisplayName("店长"));
+                "退役餐饮岗位不得重新注册");
+        assertThrows(IllegalArgumentException.class,
+                () -> WorkdeskRole.fromDisplayName("店长"));
     }
 }

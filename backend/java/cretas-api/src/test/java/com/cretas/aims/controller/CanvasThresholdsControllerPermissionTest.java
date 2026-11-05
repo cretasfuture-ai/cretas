@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h2>它守的是什么</h2>
  * 原白名单是 {@code {"factory_super_admin", "permission_admin", "factory_admin"}}，
- * 餐饮租户的 {@code restaurant_owner} 不在里面 ⇒ <b>餐饮老板配不了任何阈值</b>。
+ * 退休餐饮角色不在里面，避免旧 JWT 借字符串白名单继续写阈值。
  *
  * <h2>🔴 为什么不改成 {@code @RequirePermission("system:*")}</h2>
  * 那是最初的方案，<b>生产实测后撤回了</b>。按角色查生产账号：
@@ -37,11 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *           且它按 {@code userRepository.findById} 解析用户，平台管理员根本不在那张表里</td></tr>
  * </table>
  *
- * ⇒ 那笔交易是「**为了让一个模拟租户的账号能配，代价是真实客户的账号配不了**」，
- * 还顺带给 3 个账号开了原本没有的读权限。<b>不划算。</b>
- *
- * <p>⇒ 保留 {@code @RequireRole}（它自带平台管理员放行），只把餐饮角色加进白名单 ——
- * 刀口最小，且正好解决原问题。
+ * ⇒ 保留 {@code @RequireRole}，只允许实际食品工厂管理员角色。
  *
  * <h2>⛔ 这一类只能证明「注解写对了」</h2>
  * 它<b>不能</b>证明拦截器真的按注解放行/拒绝 —— 那要跑真实请求。
@@ -58,7 +54,7 @@ class CanvasThresholdsControllerPermissionTest {
 
     /** 这些角色<b>必须</b>在白名单里；少任何一个都是一次真实回归。 */
     private static final List<String> MUST_BE_ALLOWED =
-            List.of("factory_super_admin", "permission_admin", "restaurant_owner");
+            List.of("factory_super_admin", "permission_admin");
 
     private Method endpoint(String name) {
         return Arrays.stream(CanvasThresholdsController.class.getDeclaredMethods())
@@ -77,14 +73,15 @@ class CanvasThresholdsControllerPermissionTest {
     }
 
     @Test
-    @DisplayName("🔴 6 个端点都带 @RequireRole, 且都含 restaurant_owner (原缺陷: 餐饮老板配不了)")
-    void allEndpointsAllowRestaurantOwner() {
+    @DisplayName("6 个端点都带 @RequireRole, 且不含退休餐饮角色")
+    void allEndpointsDenyRetiredRestaurantRoles() {
         List<String> all = new java.util.ArrayList<>(READ_ENDPOINTS);
         all.addAll(WRITE_ENDPOINTS);
         for (String name : all) {
             RequireRole ann = endpoint(name).getAnnotation(RequireRole.class);
             assertThat(ann).as("%s 上没有 @RequireRole ⇒ 这个端点没有门禁", name).isNotNull();
-            assertThat(ann.value()).as(name).contains("restaurant_owner");
+            assertThat(ann.value()).as(name).doesNotContain("restaurant_owner", "restaurant_manager",
+                    "restaurant_chef", "restaurant_purchaser");
         }
     }
 
@@ -106,24 +103,23 @@ class CanvasThresholdsControllerPermissionTest {
         String[] read = endpoint("list").getAnnotation(RequireRole.class).value();
         String[] write = endpoint("create").getAnnotation(RequireRole.class).value();
         for (String denied : List.of("operator", "viewer", "warehouse_worker",
-                "quality_inspector", "restaurant_chef", "unactivated")) {
+                "quality_inspector", "restaurant_owner", "restaurant_manager", "restaurant_chef",
+                "restaurant_purchaser", "unactivated")) {
             assertThat(read).as("读端点不该放行 %s", denied).doesNotContain(denied);
             assertThat(write).as("写端点不该放行 %s", denied).doesNotContain(denied);
         }
     }
 
     @Test
-    @DisplayName("⛔ 阴性对照: 读比写宽 —— 否则「读写分级」只是句口号")
+    @DisplayName("⛔ 阴性对照: 读写端点均不包含退休餐饮角色")
     void readIsWiderThanWrite() {
         List<String> read = List.of(endpoint("list").getAnnotation(RequireRole.class).value());
         List<String> write = List.of(endpoint("create").getAnnotation(RequireRole.class).value());
         assertThat(read).as("写端点的每个角色都该能读").containsAll(write);
-        assertThat(read.size())
-                .as("读白名单必须严格更宽; 一样宽说明分级没做")
-                .isGreaterThan(write.size());
+        assertThat(read).hasSameElementsAs(write);
         assertThat(write)
-                .as("restaurant_manager 只读不写 —— 改阈值是老板的事")
-                .doesNotContain("restaurant_manager");
+                .as("退休餐饮角色不能写阈值")
+                .doesNotContain("restaurant_owner", "restaurant_manager", "restaurant_chef", "restaurant_purchaser");
     }
 
     @Test

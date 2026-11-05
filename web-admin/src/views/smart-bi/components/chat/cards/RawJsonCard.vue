@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SectionPayload } from '@/types/restaurant-chat';
+import type { SectionPayload } from '@/types/smartbi-chat';
 
 defineProps<{ section: SectionPayload }>();
 </script>

@@ -124,10 +124,10 @@ jest.mock('../../../screens/warehouse/inbound/WHReceiptCreateScreen', () => ({ _
 jest.mock('../../../screens/warehouse/inbound/WHPurchaseReceiveListScreen', () => ({ __esModule: true, default: () => null }));
 jest.mock('../../../screens/warehouse/inbound/WHUnorderedInboundReceiveScreen', () => ({ __esModule: true, default: () => null }));
 jest.mock('../../../screens/warehouse/shared/WHScanOperationScreen', () => ({ __esModule: true, default: () => null }));
-jest.mock('../../../screens/restaurant/supplier-delivery/SupplierDeliveryListScreen', () => ({ __esModule: true, default: () => null }));
-jest.mock('../../../screens/restaurant/supplier-delivery/SupplierDeliveryCreateScreen', () => ({ __esModule: true, default: () => null }));
-jest.mock('../../../screens/restaurant/supplier-delivery/SupplierDeliveryDetailScreen', () => ({ __esModule: true, default: () => null }));
-jest.mock('../../../screens/restaurant/supplier-delivery/PriceAnomalyApprovalScreen', () => ({ __esModule: true, default: () => null }));
+jest.mock('../../../screens/inventory/supplier-delivery/SupplierDeliveryListScreen', () => ({ __esModule: true, default: () => null }));
+jest.mock('../../../screens/inventory/supplier-delivery/SupplierDeliveryCreateScreen', () => ({ __esModule: true, default: () => null }));
+jest.mock('../../../screens/inventory/supplier-delivery/SupplierDeliveryDetailScreen', () => ({ __esModule: true, default: () => null }));
+jest.mock('../../../screens/inventory/supplier-delivery/PriceAnomalyApprovalScreen', () => ({ __esModule: true, default: () => null }));
 jest.mock('../../../screens/warehouse/inventory/WHTransitLedgerScreen', () => ({ __esModule: true, default: () => null }));
 
 // 网络层：首页都落到「已加载、空列表」

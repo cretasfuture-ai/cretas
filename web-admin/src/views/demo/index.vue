@@ -19,11 +19,6 @@
           <div class="demo-choice-name">生产工厂演示</div>
           <div class="demo-choice-desc">食品加工厂 · 生产 / 采购 / 进销存 / 经营驾驶舱 / AI 分析</div>
         </button>
-        <button class="demo-choice demo-choice--rest" @click="enter('rest')">
-          <div class="demo-choice-icon">🍽️</div>
-          <div class="demo-choice-name">餐饮工厂演示</div>
-          <div class="demo-choice-desc">连锁餐饮 · 营收 / 损耗 / 配方 / 经营驾驶舱 / AI 问答</div>
-        </button>
         <button class="demo-choice demo-choice--logistics" @click="enter('logistics', '/scheduling/logistics/workbench')">
           <div class="demo-choice-icon">🚚</div>
           <div class="demo-choice-name">物流公司演示</div>
@@ -61,7 +56,7 @@ async function enter(tenant: DemoTenant, redirectTo = '/dashboard') {
     ? '生产工厂演示'
     : tenant === 'logistics'
       ? '物流公司演示'
-      : '餐饮工厂演示';
+    : '生产工厂演示';
   loading.value = true;
   try {
     // 清掉任何已有登录态, 保证以演示账号进入 (避免上一个访客的缓存身份)

@@ -5,13 +5,13 @@ Pre-II ETL Backfill — Track B (per spec
 
 Use case: a restaurant chain has rows in `fact_pos_transaction` and
 `fact_pos_item` (Silver) but no rows in `agg_daily`, `agg_product`,
-`agg_channel`, `agg_daily_order_type_meal` (Gold). This typically
+`agg_channel` (Gold). This typically
 happens when the chain's upload predates the
 `SMARTBI_ENABLE_SILVER_DUAL_WRITE=1` env flag, OR when a one-off
 ingestion script wrote Silver without invoking `ingest_and_materialize`.
 
 This script queries Silver to find the date range per factory_id, then
-calls `GoldMaterializer` + `materialize_daily_order_type_meal` to refresh
+calls `GoldMaterializer` to refresh
 Gold for that range.
 
 Usage (CLI, admin-triggered on server):
@@ -51,9 +51,6 @@ async def backfill_one_factory(pool: asyncpg.Pool, factory_id: str) -> dict:
     """Materialize all Gold tables for one factory_id over its full Silver
     date range. Returns per-table affected row counts."""
     from smartbi.gold.materializer import GoldMaterializer
-    from smartbi.services.materialized_analytics.daily_order_type_meal import (
-        materialize_daily_order_type_meal,
-    )
     from smartbi.tenant_ctx import set_factory_id
 
     set_factory_id(factory_id)
@@ -86,11 +83,6 @@ async def backfill_one_factory(pool: asyncpg.Pool, factory_id: str) -> dict:
         else:
             cur_month = cur_month.replace(month=cur_month.month + 1)
 
-    # QHJ revenue Gold table (堂食/外卖 × 午/晚市 split)
-    order_type_meal_affected = await materialize_daily_order_type_meal(
-        pool, factory_id, start, end
-    )
-
     return {
         "factory_id": factory_id,
         "date_range": f"{start}..{end}",
@@ -98,7 +90,6 @@ async def backfill_one_factory(pool: asyncpg.Pool, factory_id: str) -> dict:
         "agg_channel": channel_stats.rows_upserted,
         "agg_product": product_total,
         "agg_discount": discount_total,
-        "agg_daily_order_type_meal": order_type_meal_affected,
     }
 
 

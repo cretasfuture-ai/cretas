@@ -16,7 +16,6 @@
     "/smart-bi/data-completeness",
     "/smart-bi/fallback-log",
     "/smart-bi/food-kb-feedback",
-    "/smart-bi/health-report",
     "/smart-bi/mapping-review",
     "/smart-bi/query-templates",
     "/smart-bi/revenue-report",
@@ -25,7 +24,6 @@
   "dashboard": [
     "/dashboard",
     "/dashboard/ai-value",
-    "/restaurant/supplier-delivery",
     "/workflow/acted",
     "/workflow/copied",
     "/workflow/my-created",
@@ -75,7 +73,6 @@
     "/procurement/requisitions/pending-approval",
     "/procurement/shortage-cases",
     "/procurement/suppliers",
-    "/restaurant/purchase-plan",
     "/workdesk/purchaser"
   ],
   "production": [
@@ -119,39 +116,6 @@
     "/rd/converted",
     "/rd/samples"
   ],
-  "restaurant": [
-    "/restaurant/admin/etl-status",
-    "/restaurant/admin/name-resolution",
-    "/restaurant/data-completeness"
-  ],
-  "restaurantFinance": [
-    "/restaurant/cost-attribution",
-    "/restaurant/finance",
-    "/restaurant/price-anomaly",
-    "/restaurant/supplier-reconciliation"
-  ],
-  "restaurantHr": [
-    "/restaurant/hr",
-    "/restaurant/staffing"
-  ],
-  "restaurantMarketing": [
-    "/restaurant/analytics/dishes",
-    "/restaurant/analytics/platform",
-    "/restaurant/analytics/role-kpi",
-    "/restaurant/analytics/stores",
-    "/restaurant/commission",
-    "/restaurant/marketing"
-  ],
-  "restaurantOps": [
-    "/restaurant/ops",
-    "/restaurant/recipes",
-    "/restaurant/requisitions",
-    "/restaurant/stocktaking",
-    "/restaurant/wastage"
-  ],
-  "restaurantProcurement": [
-    "/restaurant/procurement"
-  ],
   "sales": [
     "/sales/customers",
     "/sales/delivery-risks",
@@ -182,7 +146,6 @@
     "/factory-onboarding",
     "/factory-readiness",
     "/factory-review",
-    "/system/ai-flywheel",
     "/system/ai-frontline-grants",
     "/system/ai-intents",
     "/system/ai-quota",

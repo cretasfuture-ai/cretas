@@ -41,6 +41,7 @@
 
 
 
+
 - `ERP-S0S3-ACCEPTANCE-20261023` — `in-progress` — Owner Root/原QA — Base eb299396dc7c0a27ca22f24efe73112c2e130289 — PR1131；集成Base/范围/验收见archive/2026-10-24-s3-combined-release.md。
 
 
@@ -79,7 +80,6 @@
 - `HOTFIX-LIUSHANMEN-QC-CAPTURE-UPLOAD-20260829` — `in-progress` — Owner: `/root` — Base `0ed3f10da8` — Label QC 拍照本地压缩后立即添加；远程清晰度检查只作后台建议，5s 超时/断网/失败/拒绝均不删照片不阻塞提交，不伪称「已自动检查」。验收含 Android OTA 与真机上传回读。
 - `ML-LIUSHANMEN-WORK-AREA-ROI-20260811` — `blocked` — Owner: `/root` — 正式 audit 因 `trayal_0e5a259f_030` unjudgeable fail closed；计划任务已迁到 clean exact-main 树（LastResult=0）。剩余仅该 ROI 人工裁决；模型/人工真值/原图/生产不改。
 - `LLM-PROVIDER-CLIFF-20260815` — `blocked` — Owner: 等 Steve — 🔴 09-13 aistore 三条硬到期, 之后 7 个槽全只剩 `[deepseek, zhipu]` —— 而**这两个现在都是坏的**(401/429)。⚠️ 09-09 04:40 生产上**已真发生过一次** `All providers exhausted for review` ⇒ 09-13 后那次偶发会变成七槽常态。详见 `archive/2026-09-07-new-tickets-detail.md`
-- `UX-RN-RESTAURANT-PROCUREMENT-DELIVERY-20260802` — `blocked` — Owner: `/root` — 实现已入 main，Expo Web 验收可核销；餐饮 RN OTA runtime 与真机验收未确认。实现 scope 已释放，如继续只新建 exact-commit 的 OTA/设备验收项。
 - `SEC-CREDENTIAL-ROTATION-20260719` — `blocked` — Owner: `/root` — 仓内/服务器副本/DB/JWT/internal/BaoTa/OSS RAM 已轮换；仍需各控制台吊销旧 Aliyun 主账号 AK、旧模型供应商 key、微信长期凭证并验证失效。⚠️ 09-05 新增：47 宝塔面板口令曾在 tracked 文件与 git 历史，待轮换。
 - `ENH-F006-MATERIAL-TAXONOMY-SUGGESTION-001` — `blocked` — Owner: `/root` — 分类建议契约测试已补（`MaterialTaxonomySuggestionContractTest` 10 条，在 CI 选择器内）。「Excel preview 复用」实测是未实现而非未证明（`suggestFields` 唯一调用点是 Controller），需 owner 裁定是否要接。无执行者。
 - `ARCH-F006-UNIFIED-MATERIAL-RECEIPT-SOURCE-001` — `blocked` — Owner: `/root` — 两个真缺口已清零（`TransferServiceImpl` 补 `TRANSFER_IN` 来源；并行入库端点 `POST material-receipt` 已下线）并上闸 `MaterialBatchSourceDocContractTest`。待 owner 裁定 `InboundType` 死字段：接真实消费方还是删除；裁定前不扩枚举。
@@ -138,7 +138,6 @@
 - LIUSHANMEN：21 条空 `storage_type` 等待 Owner 向客户取得真实储存类型；结论到达前保持零写入，不猜填。
 - VisionLab：正式 ROI audit 仍有 1 个 unjudgeable；计划任务迁移与运行失败已核销。
 - LLM 运营：2026-09-13 aistore 续期换 key，以及 2026-09-04/2026-11-15 复审需要 Owner/供应商控制台动作。
-- 餐饮 RN：实现已入 main，但当前 OTA runtime 与真实设备验收未确认。
 - 凭证：旧 Aliyun 主账号 AK、旧模型供应商 key、Mall 微信长期凭证仍需各控制台吊销/重置并验证失效。
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
 

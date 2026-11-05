@@ -232,42 +232,6 @@ describe.each(COUNT_DIALOGS)('盲盘源码闸 · $name', ({ file }) => {
   });
 });
 
-// ────────────────────────────────────────────────────────────────────────────
-// 餐饮盘点「完成盘点」弹窗 —— 单记录录入, 形状不同但纪律相同。
-// 它不走 stocktakeCount 模块(字段名是 systemQuantity/actualQuantity), 所以
-// 单独扫源码。⚠️ 只扫这几个**精确**的字面量, 不做宽泛匹配 ——
-// 详情抽屉里 `detailData.systemQuantity` 是审批/查看视图, 本来就该显示。
-// ────────────────────────────────────────────────────────────────────────────
-
-describe('盲盘源码闸 · restaurant/stocktaking 完成盘点弹窗', () => {
-  const file = resolve(VIEWS, 'restaurant/stocktaking/list.vue');
-  const raw = readFileSync(file, 'utf8');
-  const code = stripComments(raw);
-  const RESTAURANT_SENTINEL = '不要把 row.systemQuantity 带进 completeForm';
-
-  it('仪器自检：文件读到了, 且注释确实被剥掉了', () => {
-    expect(raw.length).toBeGreaterThan(1000);
-    expect(code).toContain('submitComplete');
-    expect(raw).toContain(RESTAURANT_SENTINEL);
-    expect(code).not.toContain(RESTAURANT_SENTINEL);
-  });
-
-  it('实盘数量不拿账面数预填 —— 预填等于把答案先写进输入框', () => {
-    expect(code).not.toMatch(/actualQuantity:\s*row\.systemQuantity/);
-  });
-
-  it('录入表单里不带账面库存字段', () => {
-    // completeForm 一旦带上 systemQuantity, 它就会被渲染出来
-    expect(code).not.toMatch(/completeForm\.systemQuantity/);
-  });
-
-  it('提交后才揭示, 且揭示走服务端返回的记录', () => {
-    // 阳性对照 + 行为: 录入表单只在未提交时渲染, 揭示块读 completeResult
-    expect(code).toContain('v-if="!completeResult"');
-    expect(code).toContain('completeResult.differenceQuantity');
-  });
-});
-
 describe('单位展示未受影响', () => {
   it.each([
     ['box', '盒'],

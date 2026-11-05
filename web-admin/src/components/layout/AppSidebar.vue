@@ -15,7 +15,7 @@ import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram, KnifeFork
+  Histogram
 } from '@element-plus/icons-vue';
 import { menuConfig, platformMenuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
 import SidebarMenuNode from './SidebarMenuNode.vue';
@@ -52,14 +52,13 @@ const MODULE_CODE_TO_SIDEBAR: Record<string, string> = {
   sales_order: 'sales', purchase_order: 'procurement', production_plan: 'production',
   quality_inspection: 'quality', hr_employee: 'hr', equipment: 'equipment',
   finance_ar: 'finance', finance_ap: 'finance', warehouse: 'warehouse',
-  scheduling: 'scheduling', restaurant: 'restaurant',
+  scheduling: 'scheduling',
 };
 
 // 路演 demo 租户 (DEMO_*) 侧边栏策展: 隐藏内部/无数据模块, 让可见模块都有充足数据。
 // 工厂 demo (DEMO_FACTORY2, 源 F006 六扇门 卤味加工厂) 以生产报工链为核心 — 财务无凭证 →
 // 藏 finance; 餐饮 demo (DEMO_REST) 无工厂销售订单 → 藏 sales。system 内部管理两业态都藏。
 const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
-  RESTAURANT: ['sales', 'system'],
   // 财务模块已补数据 (ar_ap_transactions 204 / invoice 97 / payment 97 → 财务概览/应收应付/
   // 开票/收款 有数据) → 不再整组藏 finance, 只藏空的 reports/adjustments 子页 (见 PATHS)。
   FACTORY: ['quality', 'equipment', 'scheduling', 'system'],
@@ -76,15 +75,6 @@ const DEMO_HIDE_MODULES_BY_TYPE: Record<string, string[]> = {
 //     配方/损耗。藏 AI体检(降级)/异常预警(空)/经营看板role-kpi(毛利计算异常)/平台口碑(无点评)/
 //     ETL状态·菜品名称匹配·数据完整度(内部工具) + 数据管理/AI运维工具组。
 const DEMO_HIDE_PATHS_BY_TYPE: Record<string, string[]> = {
-  RESTAURANT: [
-    '/workdesk', '/sales/finished-goods',
-    '/smart-bi/health-report', '/analytics/alert-dashboard',
-    '/restaurant/analytics/role-kpi',
-    '/restaurant/data-completeness', '/restaurant/admin/etl-status', '/restaurant/admin/name-resolution',
-    '/smart-bi/upload', '/smart-bi/query-templates', '/smart-bi/data-completeness',
-    '/analytics/overview', '/smart-bi/food-kb-feedback', '/smart-bi/fallback-log',
-    '/smart-bi/calibration',
-  ],
   FACTORY: [
     '/hr/attendance', '/hr/departments', '/hr/work-types', '/hr/whitelist',
     '/sales/payment-requests', '/sales/returns',
@@ -206,7 +196,7 @@ const iconMap: Record<string, any> = {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram, KnifeFork
+  Histogram
 };
 
 // 菜单配置已抽到 ./menuConfig.ts (可单测) — MenuItem / menuConfig / financeManagerMenu 由顶部 import 引入
@@ -255,13 +245,6 @@ function canSeeMenuItem(item: MenuItem): boolean {
   if (item.hideForFactoryTypes?.includes(factoryType) && !factoryAnalyticsVisible) {
     return false;
   }
-  if (
-    factoryType === 'RESTAURANT'
-    && item.restaurantRoles?.length
-    && !item.restaurantRoles.includes(currentRole)
-  ) {
-    return false;
-  }
   // R19: Canvas module enable/disable — hide disabled modules
   if (disabledSet.has(item.module)) {
     return false;
@@ -300,14 +283,6 @@ const filteredMenu = computed(() => {
     .filter((item): item is MenuItem => item !== null);
 });
 
-// Apr 24 2026 Plan C: restaurant-specific sidebar title overrides for
-// manufacturing-origin pages that stay shared. "产品" makes no sense in
-// restaurant context — dishes are the product. One-line map kept close to
-// filteredMenu so it's obvious how to add more overrides.
-const RESTAURANT_TITLE_OVERRIDES: Record<string, string> = {
-  '/system/products': '菜品信息管理',
-};
-
 const LOGISTICS_TITLE_OVERRIDES: Record<string, string> = {
   '/scheduling': '物流调度',
   '/scheduling/logistics/workbench': '排线工作台',
@@ -317,9 +292,6 @@ const LOGISTICS_TITLE_OVERRIDES: Record<string, string> = {
 };
 
 function titleForItem(item: MenuItem): string {
-  if (authStore.factoryType === 'RESTAURANT' && RESTAURANT_TITLE_OVERRIDES[item.path]) {
-    return RESTAURANT_TITLE_OVERRIDES[item.path];
-  }
   if (authStore.factoryType === 'LOGISTICS' && LOGISTICS_TITLE_OVERRIDES[item.path]) {
     return LOGISTICS_TITLE_OVERRIDES[item.path];
   }

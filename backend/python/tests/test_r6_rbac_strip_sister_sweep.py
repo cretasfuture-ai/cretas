@@ -284,12 +284,8 @@ def test_production_factory_viewer_role_strips_money(
     _assert_money_stripped(r.json()["data"])
 
 
-def test_production_restaurant_viewer_role_strips_envelope_data(monkeypatch):
-    """R6 strip-wrap lock for /analysis/production restaurant branch.
-
-    Restaurant dispatch returns an already-wrapped envelope. The route
-    handler strips envelope["data"] in-place before returning.
-    """
+def test_production_retired_restaurant_viewer_is_rejected(monkeypatch):
+    """Retired restaurant analysis returns 410 and never reaches dispatch."""
     monkeypatch.setenv("JWT_SECRET", _JWT_SECRET)
     import smartbi.config
 
@@ -299,21 +295,13 @@ def test_production_restaurant_viewer_role_strips_envelope_data(monkeypatch):
     monkeypatch.setattr(smartbi.config, "get_cretas_pool", _fake_get_cretas_pool)
 
     from smartbi_compat.api import analysis_production as mod
-    from smartbi_compat.schema_compat import wrap_response
-
-    async def _fake_restaurant(factory_id, start_date, end_date, analysis_type):
-        return wrap_response(_money_payload())
-
-    monkeypatch.setattr(mod, "_restaurant_production_dispatch", _fake_restaurant)
-
     client = _build_client(mod.router, monkeypatch)
     r = client.get(
-        "/api/mobile/F001/smart-bi/analysis/production"
+        "/api/mobile/MOCK_REST/smart-bi/analysis/production"
         "?startDate=2026-04-12&endDate=2026-05-12",
-        headers=_auth_header(role="viewer"),
+        headers=_auth_header(factory_id="MOCK_REST", role="viewer"),
     )
-    assert r.status_code == 200, r.text
-    _assert_money_stripped(r.json()["data"])
+    assert r.status_code == 410, r.text
 
 
 # ============================================================

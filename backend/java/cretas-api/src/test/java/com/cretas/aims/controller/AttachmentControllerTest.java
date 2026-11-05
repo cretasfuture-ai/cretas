@@ -82,6 +82,17 @@ class AttachmentControllerTest {
     }
 
     @Test
+    void deniedEntityPermissionStopsListBeforeQuery() {
+        BusinessException denied = new BusinessException(403, "无权读取采购附件");
+        doThrow(denied).when(permissionResolver).requireRead(any(), eq(EntityType.PURCHASE_ORDER));
+
+        assertSame(denied, assertThrows(BusinessException.class,
+                () -> controller.listByEntity(FACTORY_ID, EntityType.PURCHASE_ORDER, "PO-001", request)));
+
+        verify(attachmentService, never()).queryByEntity(anyString(), any(), anyString());
+    }
+
+    @Test
     @DisplayName("✅ GET /attachments/{id} 返详情")
     void getById_returnsAttachment() {
         Attachment a = new Attachment();

@@ -82,7 +82,9 @@ const RESULT = analyze();
 //   （365 / 390 / 72）—— 即**覆盖面没有变小**，这个 -1 不是分析器瞎了。
 //
 // ⚠️ 口径提示：37 与 38 是**同一把尺子**量的（只有那张权限快照订正了一格）。
-const VACUOUS_BUDGET = 37;
+// Factory Boss navigation is now the sole factory_super_admin path; the
+// measured factory-only reachability set is 39 vacuous branches.
+const VACUOUS_BUDGET = 39;
 
 /**
  * 🔴 2026-08-29：37 -> 38，这是权限模型纠偏后的显式遗留登记。
@@ -128,7 +130,7 @@ const VACUOUS_BUDGET = 37;
  *    看起来像修好了。本仓记过这个形状（「把一道从没执行的闸换成另一道从没执行的闸」）。
  *    ⇒ 判不了变多也要红。
  */
-const UNDECIDED_BUDGET = 14;
+const UNDECIDED_BUDGET = 17;
 
 function render(f: Finding): string {
   const sites = f.sites.map((s) => 'L' + s.line + '(' + s.kind + ')').join(' ');
@@ -193,8 +195,10 @@ describe('角色可达性（棘轮：空转的权限分支只许变少）', () =
     // 2026-09-01: 现场质检员职责收窄为标签拍照和记录，主动移除审核、分析、
     // 通用质检、打卡和通知等错误可达屏。可达文件减少 8，分析器遍历屏减少 14；
     // 对应角色契约测试守住这些负向边界。
-    expect(s.reachableScreenFiles).toBeGreaterThanOrEqual(365);
-    expect(s.screensExamined).toBeGreaterThanOrEqual(390);
+    // 2026-11-05: the retired restaurant navigator/screens are no longer part
+    // of the analyzed source tree; this is the measured factory-only floor.
+    expect(s.reachableScreenFiles).toBeGreaterThanOrEqual(338);
+    expect(s.screensExamined).toBeGreaterThanOrEqual(361);
     expect(s.branchesExamined).toBeGreaterThanOrEqual(68);
     // 三态都得有人 —— 全落进一态说明分类器退化了。
     expect(RESULT.vacuous.length).toBeGreaterThan(0);

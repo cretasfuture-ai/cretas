@@ -1,0 +1,237 @@
+{
+  "format": "factory-legacy-projection-v1",
+  "generation": {
+    "algorithmExpressionChanges": [],
+    "mechanicalBindings": [
+      "EvalSetRecord annotation -> Any",
+      "runtime_evaluation -> current factory-only module",
+      "RouteCode historical validation sentinel -> immutable scalar namespace"
+    ],
+    "omittedIdentityDeclarations": [
+      "OfflineBatchRunner.evaluator_version",
+      "OfflineBatchRunner.evaluator_build"
+    ],
+    "projection": [
+      {
+        "node": "MAX_CASES",
+        "projectedTextSha256": "60b3252800d907aea714720c1f6fc558f89eb718d0611997efa8426a22a0bf32",
+        "source": "validation.py",
+        "sourceAstSha256": "20947ff7072825164bad9c9b69e47a0430e8f54d5a5a6da5699b2bad14efd70b",
+        "sourceTextSha256": "60b3252800d907aea714720c1f6fc558f89eb718d0611997efa8426a22a0bf32"
+      },
+      {
+        "node": "MAX_SNAPSHOT_BYTES",
+        "projectedTextSha256": "a453bf9c81f894afb0c145fd55bfd21c98bb603f17bc4cc602c8791395eddd66",
+        "source": "validation.py",
+        "sourceAstSha256": "fbe9d13a907299bc46f2aa1a3668463b2d7a5f5d0b89aed67ca5f34b21275255",
+        "sourceTextSha256": "a453bf9c81f894afb0c145fd55bfd21c98bb603f17bc4cc602c8791395eddd66"
+      },
+      {
+        "node": "MAX_AGENT_OPS_PAYLOAD_BYTES",
+        "projectedTextSha256": "085f0af857852d1b81a70c20dbeee20bfd0743ce6d8799a942035469cbc20ab3",
+        "source": "validation.py",
+        "sourceAstSha256": "89b21a49a11b0bd45268ba8391103a7f92db006b593b4a8d98d72b1cd7ccd993",
+        "sourceTextSha256": "085f0af857852d1b81a70c20dbeee20bfd0743ce6d8799a942035469cbc20ab3"
+      },
+      {
+        "node": "MAX_TOOLS",
+        "projectedTextSha256": "da2c4aeacaa3ae69139088d5cc95618e7f38671024393f08ec0df50be746fdbd",
+        "source": "validation.py",
+        "sourceAstSha256": "161356c291e73505be54d9077da952eb610acf93047c9c296b732e1723b6c205",
+        "sourceTextSha256": "da2c4aeacaa3ae69139088d5cc95618e7f38671024393f08ec0df50be746fdbd"
+      },
+      {
+        "node": "MAX_NUMERIC_REFS",
+        "projectedTextSha256": "b66054ce9f6188b54c4415b285cfcb15568407f37b71e29b1931ef27071626d6",
+        "source": "validation.py",
+        "sourceAstSha256": "0738ec86df1dc719e259448c50b2169935b23f16157fefb9a43edcb6d2486603",
+        "sourceTextSha256": "b66054ce9f6188b54c4415b285cfcb15568407f37b71e29b1931ef27071626d6"
+      },
+      {
+        "node": "_ID",
+        "projectedTextSha256": "f54dbd6924176b65bc745059dccb323aa7829ba9126ab39a710bbcec51711185",
+        "source": "validation.py",
+        "sourceAstSha256": "2fbca95a6dc730aa47ab1316518f670c98d73771c3be25e4e3b4fc68e7f36311",
+        "sourceTextSha256": "f54dbd6924176b65bc745059dccb323aa7829ba9126ab39a710bbcec51711185"
+      },
+      {
+        "node": "AgentOpsValidationError",
+        "projectedTextSha256": "11d7211daf6e2a9d99cade264a6694fd6f1d714e22e869fd5884760123da0d5f",
+        "source": "validation.py",
+        "sourceAstSha256": "48b79953a7d2bd560a53b3e7dcdfbee6aa6e6ecd4232e56061d2938cd3667680",
+        "sourceTextSha256": "11d7211daf6e2a9d99cade264a6694fd6f1d714e22e869fd5884760123da0d5f"
+      },
+      {
+        "node": "validate_actual_snapshot",
+        "projectedTextSha256": "058651e1cb137588a97ada721dbc33444d8e39eccba960d8dfef6f153ef83e3c",
+        "source": "validation.py",
+        "sourceAstSha256": "f2607e9972c891f8e33b6e91ae3736a1dd28bae29f81eec049d7ed6ee2474bdf",
+        "sourceTextSha256": "058651e1cb137588a97ada721dbc33444d8e39eccba960d8dfef6f153ef83e3c"
+      },
+      {
+        "node": "validate_actual_snapshots",
+        "projectedTextSha256": "4e958149309a507bc35104649f2715ec77f7e0f5820e808d3c8236d94a189166",
+        "source": "validation.py",
+        "sourceAstSha256": "6fc104f7f3bb29843ebd019fa8cfba2a10262a8c8035576726ba64dede114ef9",
+        "sourceTextSha256": "4e958149309a507bc35104649f2715ec77f7e0f5820e808d3c8236d94a189166"
+      },
+      {
+        "node": "validate_runner_bounds_snapshot",
+        "projectedTextSha256": "3ac8823054e44449706adadf26f7a699fe07d3cbc69cae39aac742cb701db9f6",
+        "source": "validation.py",
+        "sourceAstSha256": "80878a27ca411ed84e34abb64c728349ec5e632f8bedcfe49057e2c767f09a2b",
+        "sourceTextSha256": "3ac8823054e44449706adadf26f7a699fe07d3cbc69cae39aac742cb701db9f6"
+      },
+      {
+        "node": "_tools",
+        "projectedTextSha256": "3e7249e6a6f2cbe7c0f5a2ae31ecfd772b2f79aa02d570ddc5b3b33889e9dcd2",
+        "source": "validation.py",
+        "sourceAstSha256": "a60ba30dd70464cec8c1bd35e9a19942b317312091b32add38b0829c548a733a",
+        "sourceTextSha256": "3e7249e6a6f2cbe7c0f5a2ae31ecfd772b2f79aa02d570ddc5b3b33889e9dcd2"
+      },
+      {
+        "node": "_numeric_refs",
+        "projectedTextSha256": "d0f6b139b22ff0927f7b78f6c681b1635c9fd1eaad51a96f8b4c01909af98ec3",
+        "source": "validation.py",
+        "sourceAstSha256": "f82d3d2548efda807a55b0e96f1a739a4462ba4ccc42f12ee4fd82d6e24dfe16",
+        "sourceTextSha256": "d0f6b139b22ff0927f7b78f6c681b1635c9fd1eaad51a96f8b4c01909af98ec3"
+      },
+      {
+        "node": "_identifier",
+        "projectedTextSha256": "a9bd1943c26a796f00bd9aec61ddfd6a28653971853dbcda6b767bdd18c7689f",
+        "source": "validation.py",
+        "sourceAstSha256": "09db2f0bd165e281f73d386c6ae29d1f2a10789859dae3667bddc5ec81128b40",
+        "sourceTextSha256": "a9bd1943c26a796f00bd9aec61ddfd6a28653971853dbcda6b767bdd18c7689f"
+      },
+      {
+        "node": "_bounded_int",
+        "projectedTextSha256": "5e26ae84140e8b6b80ebfc17cd9a51cf92e4045e4a7225ea63b3fd46b51d3036",
+        "source": "validation.py",
+        "sourceAstSha256": "f3468016e753b30eedf5b817b21b94b8486030ef6eda1471bed0fb1b8dad56b4",
+        "sourceTextSha256": "5e26ae84140e8b6b80ebfc17cd9a51cf92e4045e4a7225ea63b3fd46b51d3036"
+      },
+      {
+        "node": "_bounded_json",
+        "projectedTextSha256": "ecd283d5e57ddb96b263dce9d0b40290af3400f97a19e71dfc7c8da23e8d2ca7",
+        "source": "validation.py",
+        "sourceAstSha256": "09088f32d006f00c3ed2deb3c803d52ecdcaaac7e90a363b97d35cbfb03d8ca4",
+        "sourceTextSha256": "ecd283d5e57ddb96b263dce9d0b40290af3400f97a19e71dfc7c8da23e8d2ca7"
+      },
+      {
+        "node": "OfflineEvaluation",
+        "projectedTextSha256": "066807dfdba2becb88eb031eef02b8efeab198c170e13934f5c741780f0787a3",
+        "source": "runtime/evaluation.py",
+        "sourceAstSha256": "30ac343bd8e3046e1802bf6ac4f2a7d511b61bbbd30814edc03128c2a6ac6aec",
+        "sourceTextSha256": "066807dfdba2becb88eb031eef02b8efeab198c170e13934f5c741780f0787a3"
+      },
+      {
+        "node": "OfflineCaseExpectation",
+        "projectedTextSha256": "ab80992348cd3f33500ea65d0657e086a16a84aa61d2e7d8c2fc4c020adf9df7",
+        "source": "runtime/evaluation.py",
+        "sourceAstSha256": "7f7e3e69d22faa7984677ee7ac3cfdc257822ab2b3637107051a4451a6f1aa48",
+        "sourceTextSha256": "ab80992348cd3f33500ea65d0657e086a16a84aa61d2e7d8c2fc4c020adf9df7"
+      },
+      {
+        "node": "OfflineCaseSnapshot",
+        "projectedTextSha256": "25af6a4e5f3f95f312f047c862a3180e2dd2e55c332e5dffb868ff9aa5669bd4",
+        "source": "runtime/evaluation.py",
+        "sourceAstSha256": "d4f6c102816fbb64657900096a0fe86c222f93e4f9dd7de1c9a60c4f05aa3ec3",
+        "sourceTextSha256": "25af6a4e5f3f95f312f047c862a3180e2dd2e55c332e5dffb868ff9aa5669bd4"
+      },
+      {
+        "node": "evaluate_offline_case",
+        "projectedTextSha256": "c41a510099e38d60ed2bf1ff88c86b5c2eb0066ba2479ee9e7beb538810d73e0",
+        "source": "runtime/evaluation.py",
+        "sourceAstSha256": "b65056daa7a8968dccbaf5f0bd0dba322cdc441b85ff5a40a7d3b0de291231c8",
+        "sourceTextSha256": "c41a510099e38d60ed2bf1ff88c86b5c2eb0066ba2479ee9e7beb538810d73e0"
+      },
+      {
+        "node": "_numeric_refs_match",
+        "projectedTextSha256": "9c77c5d12c689587e073b0df4f36ee71ee638acadd9e0905bc0062b7805d3c5d",
+        "source": "runtime/evaluation.py",
+        "sourceAstSha256": "8143b1d70148e5b7a7afdd57552fe16489098f98b2ca9a2b160cac69ec577ea4",
+        "sourceTextSha256": "9c77c5d12c689587e073b0df4f36ee71ee638acadd9e0905bc0062b7805d3c5d"
+      },
+      {
+        "node": "_is_subsequence",
+        "projectedTextSha256": "a7a3611f7c46a2db507daff32f08f18a125d6202db7e02f98eaa660e4d2ee3ae",
+        "source": "runtime/evaluation.py",
+        "sourceAstSha256": "9f46bdaf87e04acdce3b20de10d0268c009e4ff814be2a26205353a01657952c",
+        "sourceTextSha256": "a7a3611f7c46a2db507daff32f08f18a125d6202db7e02f98eaa660e4d2ee3ae"
+      },
+      {
+        "node": "FACTORY_EVALUATOR_VERSION",
+        "projectedTextSha256": "63ef54fa50d64acef95b6aee62b5400c8b6be49550a5bb51bf82fb04c8d832d4",
+        "source": "runner.py",
+        "sourceAstSha256": "49c819c08da02e95dc521a57e2f8e77dbfb08aca8366136ce50b5ec356fa021f",
+        "sourceTextSha256": "63ef54fa50d64acef95b6aee62b5400c8b6be49550a5bb51bf82fb04c8d832d4"
+      },
+      {
+        "node": "RunnerBounds",
+        "projectedTextSha256": "7290698760fb119e3966c6764dc1679511fae6938a23b8169c26738ce2edf7f9",
+        "source": "runner.py",
+        "sourceAstSha256": "72323cb4ea150c34425426fb16700a1b29db92503801077ce2facc075e2988e2",
+        "sourceTextSha256": "7290698760fb119e3966c6764dc1679511fae6938a23b8169c26738ce2edf7f9"
+      },
+      {
+        "node": "OfflineBatchRunner",
+        "projectedTextSha256": "0bb926e90ee239e6b10adc483f65081032d64a4cd87ae784f4ae1fff72fae951",
+        "source": "runner.py",
+        "sourceAstSha256": "ce52a9533c0e265d10a899dc59780df420054ab9d79b4b9a7df62e5db30245cd",
+        "sourceTextSha256": "d8892db3445ee4a7c3e8ae32c0ee84403eee29996ff9431b84e956e8121029f3"
+      },
+      {
+        "node": "FactoryOfflineBatchRunner",
+        "projectedTextSha256": "63e21505c9ab778047b508e52d412f3d7512195e9eee4902118718ba08e00475",
+        "source": "runner.py",
+        "sourceAstSha256": "e268562e313576527dd256f09249b88ddd438bac6a6b030e9ce133578fdf482c",
+        "sourceTextSha256": "63e21505c9ab778047b508e52d412f3d7512195e9eee4902118718ba08e00475"
+      },
+      {
+        "node": "aggregate_case_results",
+        "projectedTextSha256": "2932d93e2d7e547dad9bd7b42f3ffe82cc6bc7049a08327e78b7a911b0a5c6f1",
+        "source": "runner.py",
+        "sourceAstSha256": "18da01df3acbeb4da4558f55f23508e05e4bacadebabea1f07b7e4ab0ec1726a",
+        "sourceTextSha256": "2932d93e2d7e547dad9bd7b42f3ffe82cc6bc7049a08327e78b7a911b0a5c6f1"
+      }
+    ],
+    "version": 1
+  },
+  "historical": {
+    "commit": "cc7a68879116df17c7306e55ad5aab441af54ac2",
+    "evaluatorBuild": "31999b828125844a2fcbbc75edef466bd24756bd2c85d35258c75d5bebe3ac47",
+    "evaluatorVersion": "factory-offline-v1",
+    "sources": {
+      "contracts.py": {
+        "blob": "921078cae274bb8c6dde83d75a5562beb04f9b9a",
+        "path": "backend/python/smartbi/agent/eval/contracts.py",
+        "sha256": "6a2f0da3bdf61efd565caae63a196bc5a293ca12cc2e7261c3d782117e740516"
+      },
+      "runner.py": {
+        "blob": "bb3ed8f72f594eaba45d3b1f218a2b164c9df650",
+        "path": "backend/python/smartbi/agent/eval/runner.py",
+        "sha256": "be8801c412de4f3134e73be4306141c17a337d961a78f2f698328addd7556938"
+      },
+      "runtime/evaluation.py": {
+        "blob": "8c320485740acc2983a804f5b00f04169c7c95ad",
+        "path": "backend/python/smartbi/agent/runtime/evaluation.py",
+        "sha256": "d78120a0dbc8fa1be395668ba30ca714631c9217941571899b9b721e7a536c1a"
+      },
+      "runtime/run_contracts.py": {
+        "blob": "ab86e26177a1606eea945d48fe6c9b00df643ccf",
+        "path": "backend/python/smartbi/agent/runtime/run_contracts.py",
+        "sha256": "93fc65c1033d765a36c49963b2b0588a0da81fb59deb2f56aa4844e092417324"
+      },
+      "validation.py": {
+        "blob": "72ac1abb14472911f347eef137a9b273c36f1faf",
+        "path": "backend/python/smartbi/agent/eval/validation.py",
+        "sha256": "a181869fbb242e90195f138a29f2d48a641bc788b699c61a125bddf2cfff443c"
+      }
+    }
+  },
+  "implementation": {
+    "identityKind": "verified-compatibility-implementation",
+    "module": "factory_31999.py",
+    "moduleSha256": "f4050294e9b1f453cfe139aeaaa5aaf782736d542ac62f775ba0e4adecb49d92"
+  }
+}

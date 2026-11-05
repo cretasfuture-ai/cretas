@@ -74,6 +74,31 @@ def _jwt_env(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _factory_tenant_lookup(monkeypatch):
+    """Route tests must state the persisted FACTORY type explicitly."""
+    class _Acquire:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def factory_pool():
+        return _Pool()
+
+    async def factory_type(*_args, **_kwargs):
+        from smartbi_compat.tenant import TenantType
+        return TenantType.FACTORY
+
+    monkeypatch.setattr("smartbi.config.get_cretas_pool", factory_pool)
+    monkeypatch.setattr(mod, "get_tenant_type", factory_type)
+
+
 def _make_token(
     *,
     user_id: int = 22,
@@ -397,6 +422,147 @@ def test_endpoint_empty_analysis_type_dispatches_to_composite(client, monkeypatc
         "profitMetrics",
         "receivableAging",
     }
+
+
+def test_endpoint_retired_tenant_returns_410_without_finance_handler(monkeypatch, client):
+    """Retired restaurant identities cannot reach finance handlers or DB."""
+    async def fail_handler(*_args, **_kwargs):
+        raise AssertionError("retired tenant reached finance handler")
+
+    async def fail_pool(*_args, **_kwargs):
+        raise AssertionError("retired tenant reached database pool")
+
+    monkeypatch.setattr(mod, "_get_comprehensive_finance_analysis", fail_handler)
+    monkeypatch.setattr("smartbi.config.get_cretas_pool", fail_pool)
+    response = client.get(
+        "/api/mobile/MOCK_REST/smart-bi/analysis/finance",
+        params=_DEFAULT_QS,
+        headers=_auth_header(factory_id="MOCK_REST"),
+    )
+    assert response.status_code == 410
+    assert response.json()["detail"] == "RESTAURANT_ANALYTICS_RETIRED"
+
+
+def test_endpoint_db_branch_type_returns_410_before_finance_handler(monkeypatch, client):
+    """Persisted BRANCH type is retired even without a legacy ID prefix."""
+    from smartbi_compat.tenant import TenantType
+
+    class _Acquire:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def fake_pool():
+        return _Pool()
+
+    async def fake_tenant(*_args, **_kwargs):
+        return TenantType.BRANCH
+
+    async def fail_handler(*_args, **_kwargs):
+        raise AssertionError("branch tenant reached finance handler")
+
+    monkeypatch.setattr("smartbi.config.get_cretas_pool", fake_pool)
+    monkeypatch.setattr(mod, "get_tenant_type", fake_tenant)
+    monkeypatch.setattr(mod, "_get_comprehensive_finance_analysis", fail_handler)
+    response = client.get(
+        "/api/mobile/TENANT_42/smart-bi/analysis/finance",
+        params=_DEFAULT_QS,
+        headers=_auth_header(factory_id="TENANT_42"),
+    )
+    assert response.status_code == 410
+    assert response.json()["detail"] == "RESTAURANT_ANALYTICS_RETIRED"
+
+
+@pytest.mark.parametrize("pool_mode", ["none", "exception"])
+def test_endpoint_unknown_tenant_metadata_returns_503_without_handler(
+    monkeypatch, client, pool_mode
+):
+    async def fail_handler(*_args, **_kwargs):
+        raise AssertionError("unknown tenant reached finance handler")
+
+    async def unavailable_pool():
+        if pool_mode == "exception":
+            raise RuntimeError("metadata backend unavailable")
+        return None
+
+    monkeypatch.setattr("smartbi.config.get_cretas_pool", unavailable_pool)
+    monkeypatch.setattr(mod, "_get_comprehensive_finance_analysis", fail_handler)
+    response = client.get(
+        "/api/mobile/TENANT_42/smart-bi/analysis/finance",
+        params=_DEFAULT_QS,
+        headers=_auth_header(factory_id="TENANT_42"),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "TENANT_TYPE_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("row", [None, {"type": None}, {"type": "UNKNOWN"}])
+def test_endpoint_invalid_persisted_tenant_metadata_returns_503(
+    monkeypatch, client, row
+):
+    from smartbi_compat.tenant import get_tenant_type
+
+    class _Conn:
+        async def fetchrow(self, *_args):
+            return row
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def fake_pool():
+        return _Pool()
+
+    async def fail_handler(*_args, **_kwargs):
+        raise AssertionError("invalid metadata reached finance handler")
+
+    monkeypatch.setattr("smartbi.config.get_cretas_pool", fake_pool)
+    monkeypatch.setattr(mod, "get_tenant_type", get_tenant_type)
+    monkeypatch.setattr(mod, "_get_comprehensive_finance_analysis", fail_handler)
+    response = client.get(
+        "/api/mobile/TENANT_42/smart-bi/analysis/finance",
+        params=_DEFAULT_QS,
+        headers=_auth_header(factory_id="TENANT_42"),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "TENANT_TYPE_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("tenant_value", ["FACTORY", "HEADQUARTERS", "CENTRAL_KITCHEN"])
+def test_endpoint_known_factory_tenant_types_reach_factory_handler(
+    monkeypatch, client, tenant_value
+):
+    from smartbi_compat.tenant import TenantType
+
+    async def factory_type(*_args, **_kwargs):
+        return TenantType(tenant_value)
+
+    async def fake_handler(*_args, **_kwargs):
+        return {"overview": {}, "costStructure": {}, "dateRange": {},
+                "generatedAt": "2026-01-01", "profitMetrics": [],
+                "receivableAging": {}}
+
+    monkeypatch.setattr(mod, "get_tenant_type", factory_type)
+    monkeypatch.setattr(mod, "_get_comprehensive_finance_analysis", fake_handler)
+    response = client.get(
+        _FINANCE_PATH,
+        params=_DEFAULT_QS,
+        headers=_auth_header(factory_id="F001"),
+    )
+    assert response.status_code == 200
 
 
 def test_endpoint_analysis_type_payable_dispatches(client, monkeypatch):

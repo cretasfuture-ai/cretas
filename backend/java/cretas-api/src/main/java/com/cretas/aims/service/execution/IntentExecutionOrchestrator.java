@@ -41,7 +41,7 @@ import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.*;
 import com.cretas.aims.service.calibration.BehaviorCalibrationService;
 import com.cretas.aims.service.consent.LlmEgressRedactor;
-import com.cretas.aims.service.restaurant.RestaurantComprehensiveQuestionPolicy;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -77,8 +77,6 @@ import java.util.stream.Collectors;
 @Service
 public class IntentExecutionOrchestrator {
 
-    /** Dedicated restaurant AI routes were retired with the intent catalog. */
-    private static final boolean RESTAURANT_LEGACY_AI_ROUTES_ENABLED = false;
     @Autowired
     private com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService controlledPurchase;
     @Autowired(required = false)
@@ -92,59 +90,6 @@ public class IntentExecutionOrchestrator {
             com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.disabled();
 
     private static final Pattern COMMAND_DIGEST_PATTERN = Pattern.compile("^[0-9a-f]{64}$");
-
-    private static final Pattern STORE_REFERENCE_PATTERN = Pattern.compile(
-            "那家店|这家店|该店|那个店|这个店|该门店|那家|这家");
-
-    private static final Pattern DISH_REFERENCE_PATTERN = Pattern.compile(
-            "那道菜|这道菜|该菜品|这个菜|那个菜|这款菜|那款菜|它");
-
-    private static final Pattern RESTAURANT_COMPARISON_REFERENCE_PATTERN = Pattern.compile(
-            "沿用刚才.*(?:两个日期|日期范围)|刚才比较的两个日期|刚才的两个日期|这两个日期|这两天|同样两个日期");
-    private static final Pattern RESTAURANT_EXPLICIT_TIME_OVERRIDE_PATTERN = Pattern.compile(
-            "今天|今日|昨天|昨日|前天|前日|本周|上周|本月|上月|近\\d+天|\\d{4}-\\d{2}-\\d{2}");
-
-    private static final Pattern RESTAURANT_EXPLICIT_DISH_DELETE_WITH_OBJECT_MARKER = Pattern.compile(
-            "^(?:请(?:帮我)?|麻烦)?(?:把|将)\\s*(?<name>[^，。！？!?]{1,60}?)\\s*"
-                    + "(?:(?:这道菜|这个菜|该菜品|这道菜品)?\\s*(?:下架|停售|删除)"
-                    + "|从(?:当前)?菜单(?:里|中)?\\s*(?:移除|删除))\\s*(?:一下)?[。！？!?]?$");
-    private static final Pattern RESTAURANT_EXPLICIT_DISH_DELETE_WITH_NOUN = Pattern.compile(
-            "^(?:请(?:帮我)?|麻烦)?(?:删除|下架|停售)\\s*"
-                    + "(?<name>[^，。！？!?]{1,60}?)\\s*(?:这道菜|这个菜|这道菜品|菜品)"
-                    + "\\s*(?:一下)?[。！？!?]?$");
-    private static final Pattern RESTAURANT_EXPLICIT_DISH_DELETE_DIRECT = Pattern.compile(
-            "^(?:请(?:帮我)?|麻烦)?(?:删除|下架|停售)\\s*"
-                    + "(?<name>[^，。！？!?]{1,40}?)\\s*(?:一下)?[。！？!?]?$");
-    private static final Pattern RESTAURANT_DERIVED_DISH_SELECTION_WRITE = Pattern.compile(
-            "(?:(?:销量|营收|毛利|成本).{0,16}(?:最高|最低|前\\s*\\d+|后\\s*\\d+|排名)"
-                    + "|(?:最高|最低|前\\s*\\d+|后\\s*\\d+).{0,16}(?:道菜|菜品))");
-    private static final Pattern RESTAURANT_DISH_DELETE_ADVICE_OR_READ = Pattern.compile(
-            "哪些|哪道|什么|是否|能否|可不可以|应该|建议|考虑|要不要|适合|查询|查看|"
-                    + "已下架|下架记录|下架情况|停售记录|为什么");
-
-    private static final Pattern RESTAURANT_OWNER_ACTION_DIRECT_PATTERN = Pattern.compile(
-            "老板|店长|区域经理|今天.*动作|今天.*应该|今天.*最应该|今天.*怎么|今天.*要不要|今天.*适合|今天.*查|今天.*调|今天.*改|今天.*提高|"
-                    + "具体动作|提高营收|提升营收|提高营业额|提高客单价|怎么提高|怎么提升|应该怎么|应该先|怎么处理|怎么培训|先改|先做|"
-                    + "今天.*做|今天.*推|今天.*放|今天.*讲|今天.*带着推|今晚.*排班|要怎么备货|怎么调|怎么排班|哪个时间段|最需要加人|加前厅|加后厨|帮我算.*套餐|能不能复制|应该复制|复制哪家店|复制.*做法|哪家店.*做法|连锁内部|排名不高|"
-                    + "指定门店下滑|第[一二三四五六七八九0-9]+种.*继续分析|"
-                    + "主推|值得主推|低价值|加购|拉动加购|首屏|短视频|最值得学习|"
-                    + "怎么优化|怎么解决|优化.*营收|优化.*收入|解决方案|改进建议|怎么做生意|增加营收|增加营业额|提高收入|提升收入|先看哪|先不要|先别做|暂时不要做|暂时别做|不要做|先训练|训练哪|"
-                    + "哪三个动作|三个动作|先管|先查|先看|该改|拉起来|别亏|亏毛利|怎么别亏|怎么配合|不能多备|不要多备|"
-                    + "哪些菜.*备|不适合.*备|少备|备太多|继续备|不能多备|不应该.*推|继续重点推|BOM.*查|理论用量|实际用量|成本毛利|毛利掉|月盘点|损耗高");
-
-    private static final Pattern RESTAURANT_OWNER_ACTION_TOPIC_PATTERN = Pattern.compile(
-            "二人桌|两人桌|四人桌|桌型|桌子|翻台|翻台率|排队|等位|小套餐|套餐|排班|加人|前厅|后厨|员工|厨房|出餐|上菜慢|服务差评|"
-                    + "商圈|商场|客流|画像|进店|转化|曝光|核销|活动|天气|备货|少备|备太多|不能多备|推品|主推|单品|爆品|低价值|加购|毛利|成本|BOM|理论用量|实际用量|月盘点|损耗高|原料|采购|价格|门店|同商圈门店|连锁|排名|品牌|单店|复购|复杂菜|"
-                    + "评论|顾客|差评|好评|库存|销量|风险|菜|菜品|服务问题|营收|收入|营业额|利润|评价|口碑|体验|平台|美团|大众点评|抖音|短视频|团购|菜单|桌数|哪家店|门口|路过|下单|订单|入口|页面|首图|首屏|服务员|话术|开班前|训练");
-
-    private static final Pattern RESTAURANT_OWNER_ACTION_DECISION_PATTERN = Pattern.compile(
-            "今天|今晚|这个星期|本周|怎么|如何|为什么|要不要|有没有|哪些问题|问题|最在意|最应该|影响|风险|建议|适合|带动|一起卖|比|补|推|调|排|改|提高|提升|优化|解决|安排|算|做什么|动作|先查|先看|先不要|处理|培训|复制|学习|表现|差在哪里");
-
-    private static final Pattern RESTAURANT_OWNER_ACTION_FORCE_PATTERN = Pattern.compile(
-            "厨师长|仓管|前台|门迎|员工工时|几段班|人效|午市|晚市|分别盯什么|具体补什么|"
-                    + "配什么小菜|小菜饮品|别只看销量|厨房备菜|备菜怎么调|商场今天有活动|门口和套餐|"
-                    + "外卖平台|美团曝光|抖音团购|核销少|门口承接|亲子活动|不用等月底|"
-                    + "天气热|品类更合适|厨房慢|服务慢");
 
     // ===== 依赖 =====
     private final AIIntentService aiIntentService;
@@ -352,6 +297,8 @@ public class IntentExecutionOrchestrator {
 
     private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
                                           Long userId, String userRole) {
+        IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
+        if (tenantGate != null) return tenantGate;
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
         }
@@ -380,9 +327,7 @@ public class IntentExecutionOrchestrator {
             return sessionAdmissionDeniedResponse();
         }
 
-        if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
-            hydrateRestaurantComparisonContext(factoryId, userId, request);
-        }
+        {}
 
         // 0. 显式意图代码
         if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
@@ -393,53 +338,17 @@ public class IntentExecutionOrchestrator {
         }
 
         String userInput = request.getUserInput();
-        if (!factoryPackConstrained
-                && isRestaurantTenant(factoryId)
-                && isRestaurantDerivedDishSelectionWrite(userInput)) {
-            return buildRestaurantDerivedDishWriteClarification(request);
-        }
-        Optional<String> explicitDishDeleteTarget =
-                extractExplicitRestaurantDishDeleteTarget(userInput);
-        if (!factoryPackConstrained
-                && isRestaurantTenant(factoryId)
-                && explicitDishDeleteTarget.isPresent()) {
-            Map<String, Object> writeContext = new LinkedHashMap<>();
-            if (request.getContext() != null) {
-                writeContext.putAll(request.getContext());
-            }
-            writeContext.putIfAbsent("name", explicitDishDeleteTarget.get());
-            IntentExecuteRequest dishDeleteRequest = IntentExecuteRequest.builder()
-                    .userInput(userInput)
-                    .intentCode("RESTAURANT_DISH_DELETE")
-                    .entityType(request.getEntityType())
-                    .entityId(request.getEntityId())
-                    .context(writeContext)
-                    .previewOnly(request.getPreviewOnly())
-                    .forceExecute(request.getForceExecute())
-                    .sessionId(request.getSessionId())
-                    .enableThinking(request.getEnableThinking())
-                    .thinkingBudget(request.getThinkingBudget())
-                    .preprocessedQuery(request.getPreprocessedQuery())
-                    .skipSlotFilling(request.getSkipSlotFilling())
-                    .mode(request.getMode())
-                    .build();
-            log.info("[RestaurantDishDelete] explicit governed write route: factoryId={}, dish={}",
-                    factoryId, explicitDishDeleteTarget.get());
-            return executeWithExplicitIntent(
-                    factoryId, dishDeleteRequest, userId, userRole, factoryPackRoute);
-        }
+        {}
+
+        {}
         // 📊 [NarrowPath] 埋点 2/3 —— 只打 taken=true 一侧。
         // ⚠️ 单独一个 if, 不合进上面的表达式: 那是短路求值, 走到 `isRestaurantTenant`
         //    为 false 时 `hasExplicitReadVeto` 根本不会被求值, 顺带记一笔就会漏。
         //    多调一次是纯字符串判断, 没有副作用。
-        if (userInput != null && !userInput.isEmpty()
-                && isRestaurantTenant(factoryId) && hasExplicitReadVeto(userInput)) {
-            log.info("[NarrowPath] gate=readVeto taken=true factoryId={} intentCode={} q={}",
-                    factoryId, request.getIntentCode(), truncateForTelemetry(userInput));
-        }
+        {}
         // 写动词是唯一让语义权威被跳过的那个原因时记下来 —— 后面识别层要靠它判「闸说改、
         // 解析器说看」的矛盾。两个布尔从同一个前提推导, 不各写一遍, 免得日后只改一处。
-        boolean restaurantWriteVerbSuppressedPlan = false;
+
 
         // 0.1. W1b: early VETO gate in the execution layer. The orchestrator's own phrase shortcut
         // (#0.2 below) is contains-based and would execute "看订单" inside "别给我看订单" — bypassing
@@ -450,33 +359,11 @@ public class IntentExecutionOrchestrator {
         //                  recognizeIntentWithConfidence, which already handles VETO_WRITE safely
         //                  (OUT_OF_DOMAIN / read-twin, never an executed write).
         boolean negationVetoWrite = false;
-        if (!factoryPackConstrained
-                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
-                && isAmbiguousRestaurantTurnoverMetricQuestion(userInput)) {
-            return buildRestaurantTurnoverMetricClarificationResponse(request);
-        }
-        if (!factoryPackConstrained
-                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
-                && isUnsupportedRestaurantStoreNetProfitQuestion(userInput)) {
-            return buildRestaurantStoreNetProfitGapResponse(request);
-        }
-        if (!factoryPackConstrained
-                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
-                && isUnsupportedRestaurantPriceElasticityQuestion(userInput)) {
-            return buildRestaurantPriceElasticityGapResponse(request);
-        }
-        if (!factoryPackConstrained
-                && userInput != null
-                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
-                && isCostMarginClarificationQuestion(userInput)) {
-            return buildRestaurantCostMarginCheckOrderResponse(request);
-        }
-        if (!factoryPackConstrained
-                && userInput != null
-                && isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))
-                && isMarginProhibitedActionAnalysis(userInput)) {
-            return buildRestaurantMarginProhibitedActionsResponse(request);
-        }
+        {}
+        {}
+        {}
+        {}
+        {}
         // The comprehensive synthesis engine is an existing deterministic
         // multi-dimension path (FactBook + optional narrative LLM). Route
         // explicit synthesis wording, or a genuine multi-dimension analysis
@@ -486,55 +373,13 @@ public class IntentExecutionOrchestrator {
         // The multi-dimension form needs at least three distinct business
         // dimensions plus analysis/cause/advice wording, so ordinary
         // revenue/dish/margin questions remain under the immutable QueryPlan.
-        if (!factoryPackConstrained
-                && isRestaurantTenant(factoryId)
-                && isRestaurantComprehensiveSynthesisQuestion(userInput)) {
-            log.info("[RestaurantComprehensive] explicit multi-dimension route before tiered planner: "
-                    + "factoryId={}, input={}", factoryId, userInput);
-            IntentExecuteRequest synthesisRequest = IntentExecuteRequest.builder()
-                    .userInput(userInput)
-                    .intentCode("COMPREHENSIVE_SYNTHESIS")
-                    .sessionId(request.getSessionId())
-                    .enableThinking(request.getEnableThinking())
-                    .thinkingBudget(request.getThinkingBudget())
-                    .context(request.getContext())
-                    .mode(request.getMode())
-                    .previewOnly(request.getPreviewOnly())
-                    .build();
-            return executeWithExplicitIntent(
-                    factoryId, synthesisRequest, userId, userRole, factoryPackRoute);
-        }
-        if (!factoryPackConstrained
-                && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
-            log.info("[restaurant-owner-action] force-route before restaurant report shortcuts: factoryId={}, input={}",
-                    factoryId, userInput);
-            return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
-        }
+        {}
+        {}
         if (!factoryPackConstrained
                 && userInput != null && !userInput.isEmpty()
-                && !hasExplicitReadVeto(userInput)
-                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)
-                && !isRestaurantCompoundQuestion(factoryId, userInput)) {
-            IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
-            if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
-                AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
-                log.info("[RestaurantOpsGoldRoute] Pre-preprocessor phrase shortcut: input='{}', intentCode={}",
-                        userInput, phraseIntent.getIntentCode());
-                IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
-                        .userInput(userInput)
-                        .intentCode(phraseIntent.getIntentCode())
-                        .sessionId(request.getSessionId())
-                        .enableThinking(request.getEnableThinking())
-                        .thinkingBudget(request.getThinkingBudget())
-                        .context(request.getContext())
-                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
-                        .mode(request.getMode())
-                        // P1.5b: previewOnly 是请求级硬契约, 内部重建必须携带 —
-                        // 否则预览请求被 SITE A 误判为执行而拦成确认卡 (实测发现)
-                        .previewOnly(request.getPreviewOnly())
-                        .build();
-                return executeWithExplicitIntent(factoryId, phraseRequest, userId, userRole);
-            }
+                && !hasExplicitReadVeto(userInput)) {
+
+            {}
         }
         String vInput = request.getUserInput();
         if (vInput != null && !vInput.isEmpty()) {
@@ -545,13 +390,7 @@ public class IntentExecutionOrchestrator {
                 log.warn("[W1b] orchestrator detectNegationVeto failed, fail-open NONE for input='{}': {}", vInput, e.toString());
                 vk = QueryPreprocessorService.NegationKind.NONE;
             }
-            if (!factoryPackConstrained
-                    && vk == QueryPreprocessorService.NegationKind.VETO_READ
-                    && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
-                log.info("[restaurant-owner-action] route before VETO_READ clarification: factoryId={}, input={}",
-                        factoryId, userInput);
-                return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
-            }
+            {}
             if (vk == QueryPreprocessorService.NegationKind.VETO_READ) {
                 log.info("[W1b] orchestrator VETO_READ → clarification (no phrase shortcut, no execution): '{}'", vInput);
                 return buildNegationVetoClarificationResponse(vInput);
@@ -566,12 +405,7 @@ public class IntentExecutionOrchestrator {
         // "不要套餐，今天排班和备货怎么调？" through this path even when negation
         // pre-processing marks the wording as VETO_WRITE; otherwise it falls into a
         // low-level report intent and returns "missing month_summary" instead of a decision.
-        if (!factoryPackConstrained
-                && shouldRouteRestaurantOwnerAction(factoryId, userInput, request.getContext())) {
-            log.info("[restaurant-owner-action] route before generic intent matching: factoryId={}, input={}",
-                    factoryId, userInput);
-            return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
-        }
+        {}
 
         // 0.2. Sprint 12 cache-fix Phase C — Phrase shortcut moved AHEAD of conversation
         //      continuation to defeat auto-mount inheritance bug.
@@ -601,33 +435,11 @@ public class IntentExecutionOrchestrator {
         // Phrase confidence is 0.96 (matching v33.1 EarlyPhrase tier so /recognize and /execute
         // produce consistent routing).
         if (!factoryPackConstrained
-                && !negationVetoWrite && userInput != null && !userInput.isEmpty()
-                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)) {
-            IntentMatchResult restaurantOpsMatch = tryRestaurantOpsPhraseShortcut(userInput, factoryId);
-            if (restaurantOpsMatch != null && restaurantOpsMatch.hasMatch()) {
-                AIIntentConfig phraseIntent = restaurantOpsMatch.getBestMatch();
-                log.info("[RestaurantOpsGoldRoute] Pre-bypass phrase shortcut: input='{}', intentCode={}",
-                        userInput, phraseIntent.getIntentCode());
-                IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
-                        .userInput(userInput)
-                        .intentCode(phraseIntent.getIntentCode())
-                        .sessionId(request.getSessionId())
-                        .enableThinking(request.getEnableThinking())
-                        .thinkingBudget(request.getThinkingBudget())
-                        .context(request.getContext())
-                        // P1 读写分块: mode 随短语短路透传, READ 模式在显式意图路径继续生效
-                        .mode(request.getMode())
-                        // P1.5b: previewOnly 是请求级硬契约, 内部重建必须携带 —
-                        // 否则预览请求被 SITE A 误判为执行而拦成确认卡 (实测发现)
-                        .previewOnly(request.getPreviewOnly())
-                        .build();
-                return executeWithExplicitIntent(
-                        factoryId, phraseRequest, userId, userRole, factoryPackRoute);
-            }
+                && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
+
+            {}
         }
-        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()
-                && !shouldBypassEarlyPhraseShortcutForStoreReference(userInput)
-                && !isRestaurantCompoundQuestion(factoryId, userInput)) {
+        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(
                     userInput,
                     factoryId,
@@ -638,19 +450,11 @@ public class IntentExecutionOrchestrator {
                 // 短路 — 放行到 tiered 反转, Python 给餐饮语境的域外诚实拒答;
                 // 此处执行会落到工厂措辞的通用助手回复。
                 IntentExecuteResponse phraseWriteReadAmbiguity =
-                        blockRestaurantWriteVerbReadFallback(
-                                restaurantWriteVerbSuppressedPlan, phraseIntent, request);
+                        null;
                 if (phraseWriteReadAmbiguity != null) {
                     return phraseWriteReadAmbiguity;
                 }
-                if (isRestaurantTenant(factoryId)
-                        && (
-                            "OUT_OF_DOMAIN".equals(phraseIntent.getIntentCode())
-                            || phraseIntent.getIntentCode().startsWith("RESTAURANT_OPS_")
-                        )) {
-                    log.info("[RestaurantQueryPlan] restaurant phrase candidate 放行语义规划: input='{}', candidate={}",
-                            userInput, phraseIntent.getIntentCode());
-                } else {
+                {
                 log.info("[Sprint12-CacheFix-EarlyPhrase] Pre-continuation phrase shortcut: input='{}', intentCode={}",
                         userInput, phraseIntent.getIntentCode());
                 IntentExecuteRequest phraseRequest = IntentExecuteRequest.builder()
@@ -772,7 +576,7 @@ public class IntentExecutionOrchestrator {
                 matchResult.getMatchMethod(), matchResult.getConfidence());
 
         IntentExecuteResponse writeReadAmbiguity =
-                blockRestaurantWriteVerbReadFallback(restaurantWriteVerbSuppressedPlan, intent, request);
+                null;
         if (writeReadAmbiguity != null) {
             return writeReadAmbiguity;
         }
@@ -792,14 +596,6 @@ public class IntentExecutionOrchestrator {
                 return buildFactoryPackNoMatch(
                         factoryPackRoute, "recognizer-confirmation-required");
             }
-        }
-
-        if (requiresStoreReferenceClarification(request, matchResult, intent)) {
-            return buildStoreReferenceClarificationResponse(request);
-        }
-
-        if (requiresDishReferenceClarification(request, matchResult, intent)) {
-            return buildDishReferenceClarificationResponse(request);
         }
 
         // 权限检查 (P1: required_permission 权限码优先, 空回落 requiredRoles 旧逻辑)
@@ -902,7 +698,7 @@ public class IntentExecutionOrchestrator {
                 response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, matchResult);
             } else {
                 log.warn("Tool 未找到: toolName={}, intentCode={}", toolName, intent.getIntentCode());
-                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
+                response = toolDispatchService.buildNoToolResponse(intent);
             }
         } else if (dynamicToolSelectionService.isSkillsEnabled()
                 && dynamicToolSelectionService.requiresDynamicSelection(matchResult)) {
@@ -929,7 +725,7 @@ public class IntentExecutionOrchestrator {
             } else {
                 long count = branchNoMatch.incrementAndGet();
                 log.warn("[Branch:NoMatch] 无路由匹配: intentCode={}, total={}", intent.getIntentCode(), count);
-                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
+                response = toolDispatchService.buildNoToolResponse(intent);
             }
         }
 
@@ -993,6 +789,11 @@ public class IntentExecutionOrchestrator {
 
     private IntentExecuteResponse executeWithExplicitIntentInScope(String factoryId, IntentExecuteRequest request,
                                                              Long userId, String userRole) {
+        IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
+        if (tenantGate != null) return tenantGate;
+        if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
+            return retiredCapabilityResponse();
+        }
         if (hasNamedSession(request) && !hasTrustedConversationIdentity(
                 factoryId, userId, request.getSessionId())) {
             return sessionAdmissionDeniedResponse();
@@ -1128,7 +929,7 @@ public class IntentExecutionOrchestrator {
             if (toolOpt.isPresent()) {
                 response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, null);
             } else {
-                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
+                response = toolDispatchService.buildNoToolResponse(intent);
             }
         } else {
             // Sprint 9 P0.1 fix (2026-05-21): explicit intent path 同 execute() 一样需 Skill fallback.
@@ -1139,7 +940,7 @@ public class IntentExecutionOrchestrator {
                 log.info("[Explicit-Intent] 显式 Skill 路由成功: intentCode={}", intent.getIntentCode());
                 response = explicitSkillFallback;
             } else {
-                response = noToolResponseWithRestaurantFallback(intent, factoryId, request);
+                response = toolDispatchService.buildNoToolResponse(intent);
             }
         }
 
@@ -1174,6 +975,8 @@ public class IntentExecutionOrchestrator {
 
     private IntentExecuteResponse confirmInScope(String factoryId, ConfirmationProof confirmationProof,
                                           Long userId, String userRole) {
+        IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
+        if (tenantGate != null) return tenantGate;
         if (previewTokenService == null) {
             return IntentExecuteResponse.builder()
                     .status("FAILED")
@@ -1225,6 +1028,10 @@ public class IntentExecutionOrchestrator {
         String intentCode = token.getIntentCode();
 
         try {
+            if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(intentCode)) {
+                previewTokenService.resolveClaim(confirmToken, claimId, false, "该业务能力已退役");
+                return retiredCapabilityResponse();
+            }
             // P1 读写分块 §4.5 demo 写闸: 演示租户预览照常 (演示价值), 确认执行阶段拦截真实写入。
             // confirm() 是唯一的 withServerConfirmation 注入点, 此处即全部 AI 写执行的收口。
             if (isDemoFactory(factoryId)) {
@@ -1508,16 +1315,6 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    static boolean isRestaurantSlotClarificationMessage(String message) {
-        if (message == null || message.isBlank()) {
-            return false;
-        }
-        return message.contains("你想看哪个时间范围")
-                || message.contains("请选择本月、上个月、最近7天或最近30天")
-                || message.contains("这项分析要看哪一组门店")
-                || message.contains("请选择“全部门店”");
-    }
-
     private IntentExecuteResponse handleEarlyQuestionTypeDetection(String factoryId, String userInput,
                                                                      IntentExecuteRequest request,
                                                                      Long userId, String userRole) {
@@ -1714,28 +1511,8 @@ public class IntentExecutionOrchestrator {
                     ? trustedBusinessDomain
                     : resolvePhraseBusinessDomain(factoryId);
 
-            Optional<String> restaurantOpsMatch = RESTAURANT_LEGACY_AI_ROUTES_ENABLED
-                    ? matchRestaurantOpsIntent(normalized, businessDomain)
-                    : Optional.empty();
-            if (restaurantOpsMatch.isPresent()) {
-                String matchedCode = restaurantOpsMatch.get();
-                Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, matchedCode);
-                if (intentOpt.isPresent()) {
-                    AIIntentConfig phraseIntent = intentOpt.get();
-                    log.info("[RestaurantOpsGoldRoute] Orchestrator deterministic route: input='{}', intentCode={}, domain={}",
-                            userInput, matchedCode, businessDomain);
-                    return IntentMatchResult.builder()
-                            .userInput(userInput)
-                            .bestMatch(phraseIntent)
-                            .confidence(0.98)
-                            .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
-                            .isStrongSignal(true)
-                            .requiresConfirmation(false)
-                            .build();
-                }
-                log.debug("[RestaurantOpsGoldRoute] matched {} but intent not configured for factory {} — falling through",
-                        matchedCode, factoryId);
-            }
+
+            {}
 
             Optional<String> phraseMatch = knowledgeBase.matchPhrase(normalized, businessDomain);
             if (phraseMatch.isEmpty()) {
@@ -1767,44 +1544,7 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    private IntentMatchResult tryRestaurantOpsPhraseShortcut(String userInput, String factoryId) {
-        if (!RESTAURANT_LEGACY_AI_ROUTES_ENABLED) {
-            return null;
-        }
-        try {
-            String normalized = userInput.toLowerCase().trim();
-            String businessDomain = resolvePhraseBusinessDomain(factoryId);
-            Optional<String> restaurantOpsMatch = matchRestaurantOpsIntent(normalized, businessDomain);
-            if (restaurantOpsMatch.isEmpty()) {
-                return null;
-            }
-            String matchedCode = restaurantOpsMatch.get();
-            Optional<AIIntentConfig> intentOpt = getIntentByCodeWithPlatformFallback(factoryId, matchedCode);
-            if (intentOpt.isEmpty()) {
-                log.debug("[RestaurantOpsGoldRoute] matched {} but intent not configured for factory {} — falling through",
-                        matchedCode, factoryId);
-                return null;
-            }
-            return IntentMatchResult.builder()
-                    .userInput(userInput)
-                    .bestMatch(intentOpt.get())
-                    .confidence(0.98)
-                    .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
-                    .isStrongSignal(true)
-                    .requiresConfirmation(false)
-                    .build();
-        } catch (Exception e) {
-            log.debug("[RestaurantOpsGoldRoute] shortcut failed (fall through): {}", e.getMessage());
-            return null;
-        }
-    }
-
     private String resolvePhraseBusinessDomain(String factoryId) {
-        // Prefer explicit restaurant IDs over metadata because DEMO_REST is the dedicated
-        // passwordless restaurant demo and must not be downgraded by stale factory metadata.
-        if (isRestaurantFactoryId(factoryId)) {
-            return "RESTAURANT";
-        }
         String businessDomain = resolveFactoryDomainSafe(factoryId);
         return businessDomain == null || businessDomain.isBlank() ? "FACTORY" : businessDomain;
     }
@@ -1880,135 +1620,10 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    Optional<String> matchRestaurantOpsIntent(String normalizedInput, String businessDomain) {
-        if (!"RESTAURANT".equalsIgnoreCase(businessDomain) || normalizedInput == null || normalizedInput.isBlank()) {
-            return Optional.empty();
-        }
-        String unicodeSafeInput = normalizedInput.replaceAll("\\s+", "");
-        if (isExplicitRestaurantSalesPeriodComparison(unicodeSafeInput)) {
-            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
-        }
-        if (isEvidenceBasedRestaurantDiagnosis(unicodeSafeInput)) {
-            // The Python tiered parser will return an honest capability result
-            // when service/process timestamps are missing.  SALES_SUMMARY is an
-            // existing, read-only bridge binding; the original question is still
-            // forwarded in full and is not reduced to a revenue report.
-            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
-        }
-        if (isDishOptimizationAnalysis(unicodeSafeInput)) {
-            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
-        }
-        if (isCostMarginClarificationQuestion(unicodeSafeInput)
-                || isRestaurantContextualMarginFollowup(unicodeSafeInput)
-                || isMarginProhibitedActionAnalysis(unicodeSafeInput)) {
-            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
-        }
-        if (isRestaurantStoreRevenueRankQuestion(unicodeSafeInput)) {
-            return Optional.of("RESTAURANT_STORE_REVENUE_RANK");
-        }
-        if (containsAny(unicodeSafeInput, "\u8425\u6536", "\u8425\u4e1a\u989d", "\u9500\u552e\u989d", "\u9500\u552e", "\u5ba2\u5355\u4ef7", "\u8ba2\u5355")
-                && containsAny(unicodeSafeInput, "\u67e5\u8be2", "\u67e5\u4e00\u4e0b", "\u770b\u4e00\u4e0b", "\u770b\u770b",
-                        "\u672c\u5468", "\u8fd9\u5468", "\u4eca\u5929", "\u672c\u6708", "\u8868\u73b0", "\u600e\u4e48\u6837",
-                        "\u60c5\u51b5", "\u6574\u4f53", "\u603b", "\u6c47\u603b", "\u591a\u5c11", "\u5206\u6790")) {
-            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
-        }
-        String q = normalizedInput
-                .replaceAll("\\s+", "")
-                .replace('，', ',')
-                .replace('？', '?');
-
-        if (containsAny(q, "周末", "周中", "工作日")
-                && containsAny(q, "对比", "比较", "差异", "营业额", "营收", "销售额", "销售")) {
-            return Optional.of("RESTAURANT_WEEKDAY_WEEKEND");
-        }
-
-        if (isRestaurantPeakMonthQuestion(q)) {
-            return Optional.of("RESTAURANT_PEAK_MONTH");
-        }
-
-        if (containsAny(q, "慢销", "滞销", "卖得慢", "不好卖")
-                && containsAny(q, "菜", "菜品", "产品", "处理", "优化", "哪些")) {
-            return Optional.of("RESTAURANT_DISH_SLOW");
-        }
-
-        if (containsAny(q, "盘亏", "库存差异", "库存异常", "缺货", "短缺")
-                || (containsAny(q, "库存", "食材") && containsAny(q, "亏", "异常", "不足", "短缺"))) {
-            return Optional.of("RESTAURANT_OPS_STOCK_SHORTAGE");
-        }
-
-        if (containsAny(q, "损耗", "报损", "浪费", "损耗率")
-                || (containsAny(q, "原因占比", "原因分布") && containsAny(q, "食材", "菜品", "门店"))) {
-            return Optional.of("RESTAURANT_OPS_WASTAGE_TOP");
-        }
-
-        if (containsAny(q, "领料", "用料", "食材用得多", "原料用量", "领用")
-                || (containsAny(q, "食材", "原料") && containsAny(q, "趋势", "用得多", "用量", "成本趋势"))) {
-            return Optional.of("RESTAURANT_OPS_REQUISITION_TREND");
-        }
-
-        if (containsAny(q, "门店毛利", "门店利润", "各店毛利")
-                || (containsAny(q, "门店", "店", "分店", "店铺", "哪家")
-                && containsAny(q, "毛利", "毛利率", "利润", "赚钱", "最赚", "净赚"))) {
-            return Optional.of("RESTAURANT_OPS_STORE_MARGIN");
-        }
-
-        if (containsAny(q, "净利率", "净利润率")) {
-            return Optional.of("INCOME_STATEMENT_QUERY");
-        }
-
-        if (containsAny(q, "毛利", "毛利率")
-                && containsAny(q, "趋势", "走势", "曲线", "按月", "月份", "参照线", "计划线", "预警线")) {
-            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
-        }
-
-        if (containsAny(q, "整体毛利率", "总毛利率", "综合毛利率")
-                && containsAny(q, "多少", "怎么样", "查询", "看", "分析", "整体", "总")) {
-            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
-        }
-
-        if (containsAny(q, "毛利", "利润率", "毛利率")
-                && containsAny(q, "菜", "菜品", "产品", "哪些", "排名", "最高", "最低")) {
-            return Optional.of("RESTAURANT_OPS_GROSS_MARGIN");
-        }
-
-        if (containsAny(q, "配方成本", "菜品成本", "单品成本", "成本结构")
-                || (containsAny(q, "菜", "菜品") && containsAny(q, "成本", "核算"))) {
-            return Optional.of("RESTAURANT_OPS_RECIPE_COST");
-        }
-
-        if (containsAny(q, "营收趋势", "销售趋势", "营业额趋势", "订单趋势", "客单价趋势")) {
-            return Optional.of("RESTAURANT_OPS_TREND_ANALYSIS");
-        }
-
-        if (containsAny(q, "营收", "营业额", "销售额", "销售", "客单价", "订单")
-                && containsAny(q, "查询", "查一下", "看一下", "看看", "本周", "这周", "今天", "本月",
-                        "表现", "怎么样", "情况", "整体", "总", "汇总", "多少", "分析")) {
-            return Optional.of("RESTAURANT_OPS_SALES_SUMMARY");
-        }
-
-        return Optional.empty();
-    }
-
     /**
      * 餐饮租户判定的唯一语义: domain 是权威, ID 前缀只是 domain 拿不到时的兜底。
      * MOCK_REST 这类 id 不含 RES_/REST_ 前缀的租户只能靠 domain 认出来。
      */
-    static boolean isRestaurantTenantId(String factoryId, String factoryDomain) {
-        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
-            return true;
-        }
-        if (factoryId == null || factoryId.isBlank()) {
-            return false;
-        }
-        String normalized = factoryId.trim().toUpperCase(Locale.ROOT);
-        return "DEMO_REST".equals(normalized)
-                || normalized.startsWith("RES_")
-                || normalized.startsWith("REST_");
-    }
-
-    private boolean isRestaurantFactoryId(String factoryId) {
-        return isRestaurantTenantId(factoryId, resolveFactoryDomainSafe(factoryId));
-    }
 
     /**
      * Routes a ranking whose comparison object is a store, not a month.
@@ -2018,65 +1633,6 @@ public class IntentExecutionOrchestrator {
      * “哪个月/哪个月份” remain outside this route, as do causal/optimization
      * requests that need the tiered analysis path.
      */
-    private boolean isRestaurantStoreRevenueRankQuestion(String input) {
-        if (input == null || input.isBlank()) {
-            return false;
-        }
-        String q = input.replaceAll("\\s+", "");
-        if (asksForMonthAsComparisonObject(q)
-                || containsAny(q, "为什么", "原因", "怎么改善", "怎么提升", "如何改善", "如何提升", "诊断")) {
-            return false;
-        }
-        boolean hasRevenueMetric = containsAny(
-                q, "营收", "营业额", "销售额", "销售业绩", "门店业绩", "客单价");
-        if (!hasRevenueMetric) {
-            return false;
-        }
-        boolean mentionsStore = containsAny(q, "门店", "分店", "店铺", "哪家店", "哪间店", "哪个店");
-        boolean asksForStoreRank = asksForStoreAsComparisonObject(q)
-                || containsAny(q, "排名", "排行", "对比", "比较", "第一名", "冠军", "最高", "最好", "最多");
-        return mentionsStore && asksForStoreRank;
-    }
-
-    private boolean isRestaurantPeakMonthQuestion(String input) {
-        if (input == null || input.isBlank()) {
-            return false;
-        }
-        String q = input.replaceAll("\\s+", "");
-        if (asksForStoreAsComparisonObject(q)) {
-            return false;
-        }
-        // Follow-up buttons emitted by RestaurantPeakMonthGoldTool refer to
-        // the already-derived peak and runner-up months. daily-trend owns
-        // revenue, bill_count and weighted average ticket for both months, so
-        // this is a complete deterministic read rather than a new T3 problem.
-        if (containsAny(q, "峰值月", "营收峰值月")
-                && containsAny(q, "次高月", "第二高月份")
-                && containsAny(q, "订单量", "订单数", "单量")
-                && containsAny(q, "客单价", "平均客单")) {
-            return true;
-        }
-        boolean hasRevenueMetric = containsAny(q, "营收", "营业额", "销售额", "销售");
-        boolean asksForPeak = containsAny(q, "最高", "最多", "峰值", "最好", "为什么", "原因");
-        return hasRevenueMetric
-                && asksForPeak
-                && (asksForMonthAsComparisonObject(q)
-                || containsAny(q, "峰值月份", "营收峰值月", "销售峰值月", "月度峰值"));
-    }
-
-    private boolean asksForMonthAsComparisonObject(String input) {
-        return containsAny(
-                input,
-                "哪个月", "哪一个月", "哪月", "哪个月份", "哪一个月份", "什么月份",
-                "最高的月份", "最多的月份", "峰值月份");
-    }
-
-    private boolean asksForStoreAsComparisonObject(String input) {
-        return containsAny(
-                input,
-                "哪家", "哪间", "哪个门店", "哪一个门店", "哪个店", "哪一个店",
-                "哪家分店", "哪个分店", "哪一个分店");
-    }
 
     private static boolean containsAny(String input, String... terms) {
         if (input == null || terms == null) {
@@ -2187,21 +1743,9 @@ public class IntentExecutionOrchestrator {
      * → RESTAURANT_DISH_CREATE) 是死胡同出口 — 餐饮租户先问 tiered 路由再放弃,
      * 避免用户拿到"请联系管理员配置"而实际数据可答。
      */
-    private IntentExecuteResponse noToolResponseWithRestaurantFallback(AIIntentConfig intent,
-                                                                       String factoryId,
-                                                                       IntentExecuteRequest request) {
-        return toolDispatchService.buildNoToolResponse(intent);
-    }
+
 
     // R15: 写操作动词 — 命中则不做 slot-filling 前置委托, 保留参数收集流程。
-    private static final java.util.regex.Pattern RESTAURANT_WRITE_VERB =
-            java.util.regex.Pattern.compile(
-                    "创建|新增|新建|添加|录入|登记|修改|更新|删除|作废|取消|审批|"
-                            + "下单|入库|出库|盘点|上架|下架|停售|启用|停用|"
-                            + "调价|改价|涨价|降价|发券|创建活动");
-    private static final java.util.regex.Pattern RESTAURANT_HISTORICAL_WRITE_READ =
-            java.util.regex.Pattern.compile(
-                    "已下架|下架记录|下架情况|已停售|停售记录|调价记录|调价历史|价格调整记录");
 
     /**
      * 征询 / 假设语气 —— 优先级高于写动词。
@@ -2221,25 +1765,6 @@ public class IntentExecutionOrchestrator {
      * 判错成写才会绕开契约去猜答案。真正的写入口 (显式 intentCode / 具名下架语法 /
      * 排行批量操作澄清) 都排在本判据<b>之前</b>, 不受影响。
      */
-    private static final java.util.regex.Pattern RESTAURANT_DELIBERATIVE_MOOD =
-            java.util.regex.Pattern.compile(
-                    "要不要|该不该|需不需要|用不用|应不应该|"
-                            + "是否(?:要|需要|应该|值得|可以|可行)|是不是(?:要|该|应该|需要)|"
-                            + "值不值得|值得吗|有没有必要|有必要吗|"
-                            + "应该|建议|考虑|如果|假如|要是|万一");
-
-    static boolean isRestaurantWriteRequest(String userInput) {
-        if (userInput == null || userInput.isBlank()) {
-            return false;
-        }
-        if (RESTAURANT_HISTORICAL_WRITE_READ.matcher(userInput).find()) {
-            return false;
-        }
-        if (RESTAURANT_DELIBERATIVE_MOOD.matcher(userInput).find()) {
-            return false;
-        }
-        return RESTAURANT_WRITE_VERB.matcher(userInput).find();
-    }
 
     /**
      * 写动词把这句话判成写 → Python 语义权威被跳过。此时若 Java 解析出来的是一个<b>读</b>意图,
@@ -2255,120 +1780,13 @@ public class IntentExecutionOrchestrator {
      *
      * @return 非 null 表示必须就地返回该澄清响应, null 表示放行
      */
-    private IntentExecuteResponse blockRestaurantWriteVerbReadFallback(
-            boolean writeVerbSuppressedPlan, AIIntentConfig intent, IntentExecuteRequest request) {
-        if (!writeVerbSuppressedPlan || intent == null || isWriteIntentDeclarationAware(intent)) {
-            return null;
-        }
-        log.warn("[Branch:RestaurantWriteReadAmbiguity] 写判定与读意图矛盾, fail closed: "
-                        + "candidateIntent={}, input='{}'",
-                intent.getIntentCode(), request != null ? request.getUserInput() : null);
-        return buildRestaurantWriteReadAmbiguityResponse(request);
-    }
+
 
     /** 面向店长的话术: 不出现意图码 / 置信度这类技术内容 (owner 2026-08-11 拍板)。 */
-    static final String RESTAURANT_WRITE_READ_AMBIGUITY_MESSAGE =
-            "这句话里既有要修改的动作，也像是在问数据，我不确定您是想改还是想看。"
-                    + "为避免改错，这次没有执行任何操作，也没有替您猜一个答案。\n"
-                    + "· 想让我改：请直接说清楚对象，例如「下架某道菜」，我会先给预览，您确认后才执行。\n"
-                    + "· 想看数据：请说要看的指标和范围，例如「最近30天各菜品的毛利排名」。";
-
-    private IntentExecuteResponse buildRestaurantWriteReadAmbiguityResponse(
-            IntentExecuteRequest request) {
-        return buildRestaurantDeterministicResponse(
-                request, "NEED_CLARIFICATION", true, RESTAURANT_WRITE_READ_AMBIGUITY_MESSAGE);
-    }
-
-    static Optional<String> extractExplicitRestaurantDishDeleteTarget(String userInput) {
-        if (userInput == null || userInput.isBlank()
-                || RESTAURANT_DISH_DELETE_ADVICE_OR_READ.matcher(userInput).find()
-                || isRestaurantDerivedDishSelectionWrite(userInput)) {
-            return Optional.empty();
-        }
-        for (Pattern pattern : List.of(
-                RESTAURANT_EXPLICIT_DISH_DELETE_WITH_OBJECT_MARKER,
-                RESTAURANT_EXPLICIT_DISH_DELETE_WITH_NOUN,
-                RESTAURANT_EXPLICIT_DISH_DELETE_DIRECT)) {
-            Matcher matcher = pattern.matcher(userInput.trim());
-            if (!matcher.matches()) {
-                continue;
-            }
-            String name = matcher.group("name");
-            if (name == null) {
-                continue;
-            }
-            String normalized = name.trim()
-                    .replaceFirst("^(?:这道|这个|该|菜单里的)", "")
-                    .trim();
-            if (!normalized.isBlank()) {
-                return Optional.of(normalized);
-            }
-        }
-        return Optional.empty();
-    }
-
-    static boolean isRestaurantDerivedDishSelectionWrite(String userInput) {
-        if (userInput == null || userInput.isBlank()
-                || !RESTAURANT_WRITE_VERB.matcher(userInput).find()) {
-            return false;
-        }
-        return RESTAURANT_DERIVED_DISH_SELECTION_WRITE.matcher(userInput).find();
-    }
-
-    private IntentExecuteResponse buildRestaurantDerivedDishWriteClarification(
-            IntentExecuteRequest request) {
-        String message;
-        String status;
-        Map<String, Object> resultData = null;
-        if ("READ".equalsIgnoreCase(request.getMode())) {
-            message = "这是按排行筛选菜品后的操作请求，请切换到【操作】页处理。"
-                    + "系统会先列出候选菜品，不会把排行条件当成菜名，也不会直接批量下架。";
-            status = "READ_MODE_WRITE_BLOCKED";
-        } else {
-            message = "这是按经营数据筛选后的批量操作。为避免误下架，请先查看候选菜品，"
-                    + "再输入要下架的具体菜名；每道菜都会单独生成操作预览，只有确认后才会执行。";
-            status = "NEED_MORE_INFO";
-            resultData = Map.of(
-                    "suggestedFollowups", List.of(Map.of(
-                            "label", "先查看这5道菜",
-                            "question", "最近7天全部门店销量最低的5道菜")));
-        }
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .intentCode("RESTAURANT_DISH_DELETE")
-                .intentName("下架菜品")
-                .intentCategory("RESTAURANT")
-                .status(status)
-                .message(message)
-                .formattedText(message)
-                .resultData(resultData)
-                .aiMode("WRITE")
-                .executedAt(LocalDateTime.now())
-                .build();
-    }
 
     // R28: 餐饮复合句 ("先说说A，再说说B") — 早期 phrase shortcut 的 contains
     // 匹配会把内嵌的预设短语抢走, 只答一半; 复合句放行到 tiered 反转由
     // python agent 拆解回答。与 python restaurant_agent._COMPOUND_HINT_RE 同款。
-    private static final java.util.regex.Pattern RESTAURANT_COMPOUND_PATTERN =
-            java.util.regex.Pattern.compile("，另外|，再|，然后|；|，顺便|，以及|，还有|，同时|先.{2,24}?再");
-
-    boolean isRestaurantComprehensiveSynthesisQuestion(String userInput) {
-        return RestaurantComprehensiveQuestionPolicy.matches(userInput);
-    }
-
-    private boolean isRestaurantCompoundQuestion(String factoryId, String userInput) {
-        return userInput != null && userInput.length() >= 12
-                && isRestaurantTenant(factoryId)
-                && !userInput.contains("继续追问")
-                && RESTAURANT_COMPOUND_PATTERN.matcher(userInput).find();
-    }
-
-    private boolean isRestaurantTenant(String factoryId) {
-        return isRestaurantOwnerActionFactory(
-                factoryId,
-                resolveFactoryDomainSafe(factoryId));
-    }
 
     private IntentExecuteResponse executeAnalysisFlow(String factoryId, String userInput,
                                                        IntentExecuteRequest request,
@@ -2862,334 +2280,7 @@ public class IntentExecutionOrchestrator {
                 .build();
     }
 
-    boolean requiresStoreReferenceClarification(
-            IntentExecuteRequest request, IntentMatchResult matchResult, AIIntentConfig intent) {
-        if (intent == null || !"RESTAURANT_STORE_REVENUE_RANK".equals(intent.getIntentCode())) {
-            return false;
-        }
-        String input = request != null ? request.getUserInput() : null;
-        if (input == null || !STORE_REFERENCE_PATTERN.matcher(input).find()) {
-            return false;
-        }
-        if (matchResult == null || matchResult.getPreprocessedQuery() == null
-                || matchResult.getPreprocessedQuery().getResolvedReferences() == null) {
-            return true;
-        }
-        return matchResult.getPreprocessedQuery().getResolvedReferences().values().stream()
-                .noneMatch(ref -> ref != null
-                        && ref.getEntityType() != null
-                        && "STORE".equalsIgnoreCase(ref.getEntityType()));
-    }
 
-    void hydrateRestaurantComparisonContext(
-            String factoryId, Long userId, IntentExecuteRequest request) {
-        if (!hasBoundSupplierFactoryActor(factoryId, userId)
-                || request == null || request.getSessionId() == null || request.getSessionId().isBlank()
-                || request.getUserInput() == null
-                || !RESTAURANT_COMPARISON_REFERENCE_PATTERN.matcher(request.getUserInput()).find()
-                || RESTAURANT_EXPLICIT_TIME_OVERRIDE_PATTERN.matcher(request.getUserInput()).find()) {
-            return;
-        }
-        String sessionId = request.getSessionId();
-        try {
-            ConversationContext owner = conversationMemoryService.getContext(sessionId);
-            if (!ownsConversationMemory(owner, factoryId, userId, sessionId)) {
-                log.warn("[restaurant-context] rejected foreign session: sessionId={}, factoryId={}, userId={}",
-                        sessionId, factoryId, userId);
-                request.setSessionId(null);
-                return;
-            }
-
-            com.cretas.aims.dto.conversation.EntitySlot slot = conversationMemoryService.getEntitySlot(
-                    sessionId,
-                    com.cretas.aims.dto.conversation.EntitySlot.SlotType.TIME_RANGE);
-            if (slot == null || slot.getMetadata() == null) {
-                return;
-            }
-            Map<String, Object> metadata = slot.getMetadata();
-            String primaryStartValue = valueAsString(metadata.get("primaryStart"));
-            String primaryEndValue = valueAsString(metadata.get("primaryEnd"));
-            String comparisonStartValue = valueAsString(metadata.get("comparisonStart"));
-            String comparisonEndValue = valueAsString(metadata.get("comparisonEnd"));
-            String anchorValue = valueAsString(metadata.get("anchorDate"));
-            if (!validIsoDate(primaryStartValue) || !validIsoDate(primaryEndValue)
-                    || !validIsoDate(comparisonStartValue) || !validIsoDate(comparisonEndValue)
-                    || !validIsoDate(anchorValue)) {
-                return;
-            }
-
-            LocalDate primaryStart = LocalDate.parse(primaryStartValue);
-            LocalDate primaryEnd = LocalDate.parse(primaryEndValue);
-            LocalDate comparisonStart = LocalDate.parse(comparisonStartValue);
-            LocalDate comparisonEnd = LocalDate.parse(comparisonEndValue);
-            LocalDate anchor = LocalDate.parse(anchorValue);
-            boolean overlaps = !primaryEnd.isBefore(comparisonStart)
-                    && !comparisonEnd.isBefore(primaryStart);
-            boolean invalidRange = primaryStart.isAfter(primaryEnd)
-                    || comparisonStart.isAfter(comparisonEnd)
-                    || primaryEnd.isAfter(anchor)
-                    || comparisonEnd.isAfter(anchor)
-                    || ChronoUnit.DAYS.between(primaryStart, primaryEnd) >= 366
-                    || ChronoUnit.DAYS.between(comparisonStart, comparisonEnd) >= 366
-                    || primaryStart.isBefore(anchor.minusYears(2))
-                    || comparisonStart.isBefore(anchor.minusYears(2))
-                    || overlaps;
-            if (invalidRange) {
-                log.warn("[restaurant-context] ignored invalid comparison dates: sessionId={}", sessionId);
-                return;
-            }
-
-            Map<String, Object> hydrated = new LinkedHashMap<>();
-            if (request.getContext() != null) {
-                hydrated.putAll(request.getContext());
-            }
-            hydrated.put("startDate", primaryStartValue);
-            hydrated.put("endDate", primaryEndValue);
-            hydrated.put("comparisonStartDate", comparisonStartValue);
-            hydrated.put("comparisonEndDate", comparisonEndValue);
-            hydrated.put("timeAnchorDate", anchorValue);
-            request.setContext(hydrated);
-            log.info("[restaurant-context] restored comparison dates sessionId={} primary={}..{} baseline={}..{}",
-                    sessionId, primaryStartValue, primaryEndValue,
-                    comparisonStartValue, comparisonEndValue);
-        } catch (Exception e) {
-            request.setSessionId(null);
-            log.warn("[restaurant-context] comparison-date restore failed closed: sessionId={}, error={}",
-                    sessionId, e.getMessage());
-        }
-    }
-    private void persistRestaurantComparisonContext(
-            String sessionId, String userInput, IntentMatchResult intentResult) {
-        if (sessionId == null || sessionId.isBlank() || userInput == null || intentResult == null
-                || intentResult.getBestMatch() == null) {
-            return;
-        }
-        String intentCode = intentResult.getBestMatch().getIntentCode();
-        if (intentCode == null || !intentCode.startsWith("RESTAURANT_")) {
-            return;
-        }
-        boolean compareSignal = containsAny(userInput, "比", "比较", "对比", "高还是低", "高于", "低于");
-        if (!compareSignal) {
-            return;
-        }
-        LocalDate anchor = LocalDate.now(ZoneId.of("Asia/Shanghai"));
-        LocalDate primary;
-        LocalDate comparison;
-        if (containsAny(userInput, "昨天", "昨日") && containsAny(userInput, "前天", "前日")) {
-            primary = anchor.minusDays(1);
-            comparison = anchor.minusDays(2);
-        } else if (containsAny(userInput, "今天", "今日") && containsAny(userInput, "昨天", "昨日")) {
-            primary = anchor;
-            comparison = anchor.minusDays(1);
-        } else {
-            return;
-        }
-        com.cretas.aims.dto.conversation.EntitySlot slot =
-                com.cretas.aims.dto.conversation.EntitySlot.timeRange(
-                        primary + " 与 " + comparison,
-                        comparison.atStartOfDay(),
-                        primary.atTime(LocalTime.MAX));
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("start", comparison.atStartOfDay().toString());
-        metadata.put("end", primary.atTime(LocalTime.MAX).toString());
-        metadata.put("primaryStart", primary.toString());
-        metadata.put("primaryEnd", primary.toString());
-        metadata.put("comparisonStart", comparison.toString());
-        metadata.put("comparisonEnd", comparison.toString());
-        metadata.put("anchorDate", anchor.toString());
-        metadata.put("comparisonKind", "previous_day");
-        slot.setMetadata(metadata);
-        conversationMemoryService.updateEntitySlot(
-                sessionId,
-                com.cretas.aims.dto.conversation.EntitySlot.SlotType.TIME_RANGE,
-                slot);
-    }
-
-    private static boolean validIsoDate(String value) {
-        if (value == null) {
-            return false;
-        }
-        try {
-            LocalDate.parse(value);
-            return true;
-        } catch (java.time.format.DateTimeParseException ignored) {
-            return false;
-        }
-    }
-
-    private static String valueAsString(Object value) {
-        return value == null ? null : value.toString();
-    }
-
-    boolean shouldBypassEarlyPhraseShortcutForStoreReference(String userInput) {
-        return userInput != null && (
-                STORE_REFERENCE_PATTERN.matcher(userInput).find()
-                        || DISH_REFERENCE_PATTERN.matcher(userInput).find()
-        );
-    }
-
-    boolean isAmbiguousRestaurantTurnoverMetricQuestion(String userInput) {
-        if (userInput == null || userInput.isBlank() || !userInput.contains("翻台")) {
-            return false;
-        }
-        boolean namesBothMetrics = userInput.contains("翻台率") && userInput.contains("翻台次数");
-        boolean asksForClarification = containsAny(
-                userInput, "先判断", "先澄清", "无法确定", "还是", "哪个指标", "不要直接");
-        return namesBothMetrics && asksForClarification;
-    }
-
-    IntentExecuteResponse buildRestaurantTurnoverMetricClarificationResponse(IntentExecuteRequest request) {
-        final String msg = "你说的‘翻台’可能指两个不同指标：翻台率，或翻台次数。"
-                + "请先选一个；当前不会拿营业额替代。"
-                + "如果看翻台率，需要桌数或座位数、营业时长和已结账桌次；"
-                + "如果看翻台次数，需要每桌的开台和结账记录。";
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .status("NEED_CLARIFICATION")
-                .message(msg)
-                .formattedText(msg)
-                .sessionId(request != null ? request.getSessionId() : null)
-                .executedAt(LocalDateTime.now())
-                .build();
-    }
-
-    boolean isUnsupportedRestaurantStoreNetProfitQuestion(String userInput) {
-        if (userInput == null || userInput.isBlank()) {
-            return false;
-        }
-        boolean asksNetProfit = containsAny(
-                userInput, "净利润", "净利率", "净利润率", "经营利润", "实际利润", "净赚");
-        boolean asksStoreBreakdown = containsAny(
-                userInput, "各门店", "每家店", "各店", "分店净利润", "门店净利润");
-        boolean forbidsSubstitution = containsAny(
-                userInput, "不要用营业额", "不要用营收", "不要用毛利", "不拿毛利", "不要替代");
-        return asksNetProfit && (asksStoreBreakdown || forbidsSubstitution);
-    }
-
-    IntentExecuteResponse buildRestaurantStoreNetProfitGapResponse(IntentExecuteRequest request) {
-        String input = request != null ? request.getUserInput() : null;
-        String requestedRange = input != null
-                && containsAny(input, "昨天", "昨日")
-                && containsAny(input, "前天", "前日", "前一日")
-                ? "针对你问的昨天和前天，"
-                : "";
-        final String msg = requestedRange + "当前还没有按门店归集的费用、税费及其他收支，"
-                + "因此不能可靠计算各门店净利润，也不会用营业额或毛利替代。"
-                + "补齐门店级费用、税费和其他收支后可以按同一日期范围计算；"
-                + "目前可以单独查看门店营业额，或已覆盖销售的毛利。";
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .status("NEED_CLARIFICATION")
-                .message(msg)
-                .formattedText(msg)
-                .sessionId(request != null ? request.getSessionId() : null)
-                .executedAt(LocalDateTime.now())
-                .build();
-    }
-
-    boolean isUnsupportedRestaurantPriceElasticityQuestion(String userInput) {
-        if (userInput == null || userInput.isBlank()) {
-            return false;
-        }
-        return userInput.contains("价格弹性")
-                || (containsAny(userInput, "调价", "价格变化", "涨价", "降价")
-                && containsAny(userInput, "弹性", "置信区间", "因果效果", "因果影响", "回归估计"))
-                || (containsAny(userInput, "95%", "95％")
-                && containsAny(userInput, "置信区间", "价格", "销量"));
-    }
-
-    IntentExecuteResponse buildRestaurantPriceElasticityGapResponse(IntentExecuteRequest request) {
-        final String msg = "当前数据还不能可靠计算价格弹性、95%置信区间或因果效果，"
-                + "我不会把普通销量波动当成定价结论。缺少的数据包括："
-                + "1. 同一菜品多次真实价格变动；"
-                + "2. 各价格阶段的销量、订单量和曝光；"
-                + "3. 同期促销、折扣、门店和日期；"
-                + "4. 节假日、天气、缺货等控制因素。"
-                + "补齐这些字段后，才能做回归估计并给出区间和适用范围。";
-        return buildRestaurantDeterministicResponse(request, "NEED_CLARIFICATION", true, msg);
-    }
-
-    IntentExecuteResponse buildRestaurantCostMarginCheckOrderResponse(IntentExecuteRequest request) {
-        final String msg = "我理解的目标：用最少的检查，判断毛利下降来自售价与折扣、配方与进价、损耗，"
-                + "还是门店和菜品结构。检查顺序：\n"
-                + "1. 先看收入、订单和折扣，确认是否由售价、折扣或销量变化造成；\n"
-                + "2. 再核对配方用量和最新进价，确认标准成本是否准确；\n"
-                + "3. 再看领料、报损和盘点差异，确认实际损耗是否偏高；\n"
-                + "4. 最后按门店和菜品看已覆盖销售的毛利，定位影响范围。\n"
-                + "如果门店、菜品、日期或成本覆盖不完整，我会明确标出缺口，不给出虚假的整体结论。";
-        return buildRestaurantDeterministicResponse(request, "COMPLETED", true, msg);
-    }
-
-    IntentExecuteResponse buildRestaurantMarginProhibitedActionsResponse(IntentExecuteRequest request) {
-        final String msg = "今天先不要做：\n"
-                + "1. 不要全店统一调价或统一满减。前提：当前只有整体毛利，缺少门店和菜品成本覆盖；"
-                + "风险：误伤高毛利菜和正常门店；最小验证：选1至2家店、3至5道菜观察7天。\n"
-                + "2. 不要一次性下架所有低销量菜。前提：尚未核对单品毛利、引流和搭售作用；"
-                + "风险：误删高毛利或带动加购的菜；最小验证：先核对销量、毛利和连带订单。\n"
-                + "3. 不要扩大采购或备货。前提：损耗、领料和库存差异还没有验证；"
-                + "风险：增加积压和报损；最小验证：先核对近7天库存周转和报损。\n"
-                + "当前先补齐最新门店、菜品成本及损耗覆盖，再决定具体动作；不会凭空估算收益金额。";
-        return buildRestaurantDeterministicResponse(request, "COMPLETED", true, msg);
-    }
-
-    private IntentExecuteResponse buildRestaurantDeterministicResponse(
-            IntentExecuteRequest request, String status, boolean recognized, String message) {
-        return IntentExecuteResponse.builder()
-                .intentRecognized(recognized)
-                .status(status)
-                .message(message)
-                .formattedText(message)
-                .sessionId(request != null ? request.getSessionId() : null)
-                .executedAt(LocalDateTime.now())
-                .build();
-    }
-
-    IntentExecuteResponse buildStoreReferenceClarificationResponse(IntentExecuteRequest request) {
-        final String msg = "请问您指的是哪家店？";
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .status("NEED_CLARIFICATION")
-                .message(msg)
-                .formattedText(msg)
-                .sessionId(request != null ? request.getSessionId() : null)
-                .executedAt(LocalDateTime.now())
-                .build();
-    }
-
-    boolean requiresDishReferenceClarification(
-            IntentExecuteRequest request, IntentMatchResult matchResult, AIIntentConfig intent) {
-        if (intent == null || !"RESTAURANT_BESTSELLER_QUERY".equals(intent.getIntentCode())) {
-            return false;
-        }
-        String input = request != null ? request.getUserInput() : null;
-        if (input == null || !DISH_REFERENCE_PATTERN.matcher(input).find()) {
-            return false;
-        }
-        if (matchResult == null || matchResult.getPreprocessedQuery() == null
-                || matchResult.getPreprocessedQuery().getResolvedReferences() == null) {
-            return true;
-        }
-        return matchResult.getPreprocessedQuery().getResolvedReferences().values().stream()
-                .noneMatch(ref -> ref != null
-                        && ref.getEntityType() != null
-                        && "DISH".equalsIgnoreCase(ref.getEntityType()));
-    }
-
-    boolean shouldBypassEarlyPhraseShortcutForDishReference(String userInput) {
-        return userInput != null && DISH_REFERENCE_PATTERN.matcher(userInput).find();
-    }
-
-    IntentExecuteResponse buildDishReferenceClarificationResponse(IntentExecuteRequest request) {
-        final String msg = "请问您指的是哪道菜？";
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .status("NEED_CLARIFICATION")
-                .message(msg)
-                .formattedText(msg)
-                .sessionId(request != null ? request.getSessionId() : null)
-                .executedAt(LocalDateTime.now())
-                .build();
-    }
 
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
@@ -3235,11 +2326,7 @@ public class IntentExecutionOrchestrator {
                                                        IntentExecuteRequest request,
                                                        Long userId,
                                                        String userRole) {
-        if (request != null && shouldRouteRestaurantOwnerAction(factoryId, request.getUserInput(), request.getContext())) {
-            log.info("[restaurant-owner-action] route from no-match fallback: factoryId={}, input={}",
-                    factoryId, request.getUserInput());
-            return executeRestaurantOwnerActionChat(factoryId, request, userId, userRole);
-        }
+        {}
 
         Map<String, Object> metadata = new HashMap<>();
         if (matchResult.getSessionId() != null && !matchResult.getSessionId().isEmpty()) {
@@ -3408,17 +2495,33 @@ public class IntentExecutionOrchestrator {
     // ==================== C1 业态过滤 helpers (restaurant-chat-qa) ====================
 
     /**
-     * Resolve a factory's business domain ("RESTAURANT" / "FACTORY"), fail-soft.
-     * Returns {@code null} if resolution throws — callers treat null as "unknown" and
-     * keep the original (unfiltered) behavior so the clarification path never crashes.
+     * Resolve authoritative metadata; admission rejects null instead of assuming manufacturing.
      */
     String resolveFactoryDomainSafe(String factoryId) {
         try {
             return configService.resolveBusinessDomain(factoryId);
         } catch (Exception e) {
-            log.warn("[C1业态过滤] resolveBusinessDomain failed for factoryId={} — skip filter: {}",
+            log.warn("[C1业态过滤] resolveBusinessDomain failed for factoryId={} — metadata unavailable: {}",
                     factoryId, e.getMessage());
             return null;
+        }
+    }
+
+    private IntentExecuteResponse analysisAdmissionResponse(String factoryId, String userRole) {
+        if (com.cretas.aims.util.RetiredAnalysisContext.isRetiredIdentity(factoryId, userRole)) {
+            return retiredCapabilityResponse();
+        }
+        String domain = resolveFactoryDomainSafe(factoryId);
+        try {
+            com.cretas.aims.util.RetiredAnalysisContext.requireFactory(factoryId, domain, userRole);
+            return null;
+        } catch (com.cretas.aims.exception.BusinessException unavailable) {
+            if (unavailable.getCode() == 410) return retiredCapabilityResponse();
+            return IntentExecuteResponse.builder().intentRecognized(false)
+                    .status("TENANT_TYPE_UNAVAILABLE")
+                    .message(unavailable.getMessage())
+                    .metadata(java.util.Map.of("errorCode", "TENANT_TYPE_UNAVAILABLE", "httpStatus", 503))
+                    .executedAt(LocalDateTime.now()).build();
         }
     }
 
@@ -3448,599 +2551,12 @@ public class IntentExecutionOrchestrator {
     }
 
     // R20: 域外闲聊词 (天气/新闻/股票/彩票) 与经营关联词。
-    private static final java.util.regex.Pattern RESTAURANT_OOD_SMALLTALK_PATTERN =
-            java.util.regex.Pattern.compile("天气|下雨|气温|新闻|股票|彩票|星座");
-    private static final java.util.regex.Pattern RESTAURANT_OOD_BUSINESS_TOKEN_PATTERN =
-            java.util.regex.Pattern.compile("生意|营收|营业额|客流|影响|备货|经营|销量|门店");
-
-    boolean shouldRouteRestaurantOwnerAction(String factoryId, String userInput, Map<String, Object> context) {
-        if (userInput == null || userInput.isBlank()) {
-            return false;
-        }
-        String factoryDomain = resolveFactoryDomainSafe(factoryId);
-        if (!isRestaurantOwnerActionFactory(factoryId, factoryDomain)) {
-            return false;
-        }
-        // A trusted client-side hint may only choose the read-only restaurant
-        // QueryPlan entry; Python session state remains authoritative for the
-        // actual entity/metric/window.  This prevents dependent phrases such
-        // as "销量怎么提升" / "下一步先做什么" from being stolen by the
-        // generic owner-action route.
-        if (context != null
-                && Boolean.TRUE.equals(context.get("restaurantAnalysisContinuation"))) {
-            return false;
-        }
-        String normalizedInput = userInput.toLowerCase(Locale.ROOT);
-        if (isPureRestaurantReviewRemedyQuestion(normalizedInput)
-                || isPlainRestaurantReadQuestion(normalizedInput)
-                || isRestaurantBusinessMutationRequest(normalizedInput)) {
-            return false;
-        }
-        // R20: 纯外部信息闲聊 ("今天天气怎么样") 不进 owner-action — 该路径
-        // 曾编造"暴雨转多云"等天气事实 (违反零编造)。带经营词的天气问
-        // ("下雨对生意有什么影响") 仍放行。放行后由 tiered 反转给域外拒答。
-        if (RESTAURANT_OOD_SMALLTALK_PATTERN.matcher(userInput).find()
-                && !RESTAURANT_OOD_BUSINESS_TOKEN_PATTERN.matcher(userInput).find()) {
-            return false;
-        }
-        // A fully stated fact request must reach the immutable restaurant
-        // QueryPlan even when its metric words overlap an owner-action
-        // pattern, or when a stale ownerActionSessionId is present. This
-        // guard is deliberately narrower than the general analytical-read
-        // detector: explicit action/advice wording keeps owner-action
-        // authority, while period + metric + requested result stays READ.
-        if (isExplicitRestaurantDataFactRequest(normalizedInput)) {
-            return false;
-        }
-        // A bounded diagnostic that explicitly asks the system to judge
-        // alternative causes from data is still an analytical READ.  It must
-        // reach the restaurant QueryPlan instead of the generic owner-advice
-        // heuristic merely because the wording contains "分别".
-        if (isEvidenceBasedRestaurantDiagnosis(normalizedInput)) {
-            return false;
-        }
-        if (isCostMarginClarificationQuestion(normalizedInput)
-                || isRestaurantContextualMarginFollowup(normalizedInput)
-                || isMarginProhibitedActionAnalysis(normalizedInput)) {
-            return false;
-        }
-        // A short metric + optimisation utterance is normally a dependent
-        // analytical follow-up ("销量怎么优化", "第一名毛利如何提升").
-        // Let the Python restaurant session restore the typed dish/time/store
-        // slots.  The generic owner-action advisor has no access to that typed
-        // result context and otherwise replaces a scoped question with broad
-        // whole-store advice.  Longer role/action plans still belong here.
-        if (isDependentRestaurantMetricOptimization(normalizedInput)) {
-            return false;
-        }
-        if (hasOwnerActionContinuationContext(context)) {
-            return true;
-        }
-        if (RESTAURANT_OWNER_ACTION_DIRECT_PATTERN.matcher(userInput).find()) {
-            return true;
-        }
-        if (matchesOwnerActionKeywordHeuristic(userInput)) {
-            return true;
-        }
-        if (RESTAURANT_OWNER_ACTION_FORCE_PATTERN.matcher(userInput).find()) {
-            return true;
-        }
-        // A metric word such as "营收" or "营业额" does not turn an explicit
-        // owner decision into a plain report.  The direct/role/decision gates
-        // above are read-only advisory routes; only after they decline should
-        // a remaining analytical question stay in the immutable data plan.
-        if (isRestaurantAnalyticalReadQuestion(normalizedInput)) {
-            return false;
-        }
-        return false;
-    }
-
-    private boolean isDependentRestaurantMetricOptimization(String input) {
-        if (input == null || input.isBlank()) {
-            return false;
-        }
-        String compact = input.replaceAll("[\\s，。？！?、,；;：:]", "");
-        if (compact.length() > 28) {
-            return false;
-        }
-        String[] metrics = {
-                "营业收入", "销售收入", "营业额", "销售额", "客单价",
-                "毛利率", "净利润", "销售量", "销量", "营收", "毛利",
-                "利润", "成本", "订单", "单量", "损耗", "人效"
-        };
-        String[] actions = {
-                "怎么优化", "如何优化", "怎么提升", "如何提升",
-                "怎么改善", "如何改善", "怎么提高", "如何提高"
-        };
-        String matchedMetric = null;
-        for (String metric : metrics) {
-            if (compact.contains(metric)) {
-                matchedMetric = metric;
-                break;
-            }
-        }
-        String matchedAction = null;
-        for (String action : actions) {
-            if (compact.contains(action)) {
-                matchedAction = action;
-                break;
-            }
-        }
-        if (matchedMetric == null || matchedAction == null) {
-            return false;
-        }
-        String remainder = compact
-                .replace(matchedMetric, "")
-                .replace(matchedAction, "");
-        remainder = remainder.replaceFirst(
-                "^(?:这个菜|那个菜|这道菜|那道菜|该菜|菜品|它|这个|那个|该|"
-                        + "刚才|上面|前面|第[一二三四五六七八九十百千万两0-9]+名)*",
-                "");
-        remainder = remainder.replaceAll("(?:的|呢|吗|啊|呀|吧|一下)+", "");
-        return remainder.isBlank();
-    }
-
-    private boolean isExplicitRestaurantDataFactRequest(String input) {
-        if (isExplicitRestaurantSalesPeriodComparison(input)) {
-            return true;
-        }
-        boolean asksForAction = containsAny(input,
-                "\u5e94\u8be5\u600e\u4e48", "\u8981\u505a\u4ec0\u4e48", "\u505a\u4ec0\u4e48",
-                "\u600e\u4e48\u63d0\u9ad8", "\u600e\u4e48\u63d0\u5347", "\u600e\u4e48\u4f18\u5316",
-                "\u5982\u4f55\u63d0\u9ad8", "\u5982\u4f55\u63d0\u5347", "\u5982\u4f55\u4f18\u5316",
-                "\u600e\u4e48\u6539", "\u600e\u4e48\u8c03", "\u600e\u4e48\u6392",
-                "\u600e\u4e48\u5904\u7406", "\u600e\u4e48\u57f9\u8bad",
-                "\u5148\u505a", "\u5148\u6539", "\u5148\u7ba1", "\u5efa\u8bae",
-                "\u52a8\u4f5c", "\u4f18\u5316\u65b9\u6848", "\u600e\u4e48\u89e3\u51b3");
-        if (asksForAction) {
-            return false;
-        }
-        boolean hasPeriod = containsAny(input,
-                "\u4eca\u5929", "\u4eca\u65e5", "\u6628\u5929", "\u6628\u65e5",
-                "\u524d\u5929", "\u524d\u65e5", "\u672c\u5468", "\u8fd9\u5468",
-                "\u4e0a\u5468", "\u672c\u6708", "\u8fd9\u4e2a\u6708", "\u4e0a\u6708",
-                "\u6700\u8fd1", "\u8fd1\u671f", "\u8fc7\u53bb", "\u4eca\u5e74", "\u53bb\u5e74");
-        boolean hasMetric = containsAny(input,
-                "\u8425\u6536", "\u8425\u4e1a\u989d", "\u8425\u4e1a\u6536\u5165",
-                "\u9500\u552e\u989d", "\u9500\u552e\u6536\u5165", "\u6d41\u6c34",
-                "\u6bdb\u5229", "\u6bdb\u5229\u7387", "\u51c0\u5229\u6da6", "\u51c0\u5229\u7387",
-                "\u6210\u672c", "\u9500\u91cf", "\u9500\u552e\u91cf",
-                "\u8ba2\u5355", "\u5355\u91cf", "\u5ba2\u5355\u4ef7",
-                "\u7ffb\u53f0\u7387", "\u7ffb\u53f0");
-        boolean asksForFact = containsAny(input,
-                "\u591a\u5c11", "\u662f\u591a\u5c11", "\u5206\u522b\u662f",
-                "\u5dee\u989d", "\u5347\u964d\u7ed3\u8bba", "\u8ba1\u7b97\u53e3\u5f84",
-                "\u5c55\u793a\u8ba1\u7b97", "\u67e5\u8be2", "\u67e5\u4e00\u4e0b",
-                "\u62a5\u8868", "\u6392\u540d", "\u6392\u884c", "\u6700\u9ad8", "\u6700\u4f4e",
-                "\u8d8b\u52bf", "\u66f2\u7ebf", "\u56fe\u8868", "\u53c2\u7167\u7ebf");
-        return hasPeriod && hasMetric && asksForFact;
-    }
-
-    boolean matchesOwnerActionKeywordHeuristic(String userInput) {
-        if (userInput == null || userInput.isBlank()) {
-            return false;
-        }
-        String input = userInput.toLowerCase(Locale.ROOT);
-        if (isPureRestaurantReviewRemedyQuestion(input)) {
-            return false;
-        }
-        boolean hasTopic = containsAny(input,
-                "\u8001\u677f", "\u5e97\u957f", "\u533a\u57df\u7ecf\u7406",
-                "\u4ed3\u7ba1", "\u53a8\u5e08\u957f", "\u524d\u53f0",
-                "\u684c\u578b", "\u684c\u5b50", "\u684c\u6570", "\u4e8c\u4eba\u684c", "\u4e24\u4eba\u684c",
-                "\u56db\u4eba\u684c", "\u7ffb\u53f0", "\u6392\u961f", "\u7b49\u4f4d",
-                "\u6392\u73ed", "\u4eba\u6548", "\u5458\u5de5", "\u5de5\u65f6", "\u524d\u5385", "\u540e\u53a8",
-                "\u5907\u83dc", "\u5907\u8d27", "\u5e93\u5b58", "\u635f\u8017", "bom", "\u6bdb\u5229",
-                "\u6210\u672c", "\u8bc4\u8bba", "\u5dee\u8bc4", "\u5927\u4f17\u70b9\u8bc4",
-                "\u5916\u5356", "\u5e73\u53f0", "\u56e2\u8d2d", "\u66dd\u5149", "\u6838\u9500", "\u627f\u63a5",
-                "\u7f8e\u56e2", "\u6296\u97f3", "\u5ba2\u6d41", "\u753b\u50cf", "\u5546\u5708",
-                "\u5546\u573a", "\u6d3b\u52a8", "\u5929\u6c14", "\u5957\u9910", "\u5c0f\u5957\u9910",
-                "\u83dc\u54c1", "\u8425\u6536", "\u6536\u5165", "\u5ba2\u5355",
-                "\u65e5\u5747", "\u5de5\u4f5c\u65e5", "\u540c\u5546\u5708", "\u8fde\u9501",
-                "\u95e8\u5e97", "\u6392\u540d", "\u505a\u6cd5", "\u4f4e\u4ef7\u503c",
-                "\u4f4e\u4ef7\u503c\u83dc", "\u54ea\u4e9b\u83dc", "\u4e3b\u63a8",
-                "\u5355\u54c1", "\u52a0\u8d2d", "\u62a5\u635f", "\u6708\u76d8\u70b9", "\u7406\u8bba\u7528\u91cf",
-                "\u5b9e\u9645\u7528\u91cf", "\u524d\u5385", "\u540e\u53a8", "\u53a8\u623f", "\u51fa\u9910",
-                "\u4eb2\u5b50", "\u95e8\u53e3", "\u5f15\u6d41", "\u7ade\u54c1", "\u6253\u6298",
-                "demo", "\u6f14\u793a\u6570\u636e", "\u6a21\u62df\u6570\u636e", "mock\u6570\u636e", "pos", "\u771f\u5b9epos");
-        boolean hasDecision = containsAny(input,
-                "\u600e\u4e48\u8c03", "\u600e\u4e48\u6392", "\u600e\u4e48\u6539",
-                "\u600e\u4e48\u63d0\u9ad8", "\u600e\u4e48\u63d0\u5347", "\u600e\u4e48\u4f18\u5316",
-                "\u600e\u4e48\u505a", "\u600e\u4e48\u5b89\u6392", "\u5982\u4f55\u63d0\u9ad8",
-                "\u5982\u4f55\u4f18\u5316", "\u5e94\u8be5\u600e\u4e48", "\u8981\u4e0d\u8981",
-                "\u5148\u505a", "\u5148\u6539", "\u5148\u8bad\u7ec3", "\u5b89\u6392",
-                "\u5904\u7406", "\u89e3\u51b3", "\u5efa\u8bae", "\u76f4\u63a5\u5efa\u8bae",
-                "\u52a8\u4f5c", "\u505a\u4ec0\u4e48", "\u76ef\u4ec0\u4e48", "\u770b\u4ec0\u4e48", "\u5206\u522b", "\u8c03\u6574",
-                "\u63a8\u8350", "\u4e3b\u63a8", "\u5e2e\u6211\u7b97", "\u7b97\u4e00\u4e2a",
-                "\u5f71\u54cd", "\u4f1a\u5f71\u54cd", "\u6709\u4ec0\u4e48\u5f71\u54cd",
-                "\u6709\u4ec0\u4e48\u529e\u6cd5", "\u5e94\u8be5\u590d\u5236",
-                "\u590d\u5236\u54ea\u5bb6\u5e97", "\u590d\u5236", "\u5b66\u4e60",
-                "\u95ee\u9898\u5728", "\u6267\u884c", "\u503c\u5f97\u4e3b\u63a8",
-                "\u8981\u6392\u9664", "\u6392\u9664", "\u600e\u4e48\u5224\u65ad",
-                "\u62c9\u52a8", "\u600e\u4e48\u57f9\u8bad", "\u57f9\u8bad",
-                "\u54ea\u4e09\u4e2a", "\u4e09\u4e2a\u52a8\u4f5c", "\u62c9\u8d77\u6765",
-                "\u5148\u7ba1", "\u5148\u67e5", "\u5148\u770b", "\u4e0d\u8981\u591a\u5907",
-                "\u522b\u4e8f", "\u914d\u5408", "\u8be5\u6539", "\u53ea\u80fd", "\u8fd8\u662f",
-                "\u4e0d\u7528\u7b49", "\u54ea\u51e0\u9879", "\u9002\u5408", "\u8981\u8003\u8651",
-                "\u80fd\u6f14\u793a", "\u6f14\u793a\u4ec0\u4e48", "\u80fd\u505a\u4ec0\u4e48", "\u80fd\u770b\u4ec0\u4e48");
-        return hasTopic && hasDecision;
-    }
-
-    private boolean isPureRestaurantReviewRemedyQuestion(String input) {
-        boolean hasReviewSignal = containsAny(input,
-                "\u8bc4\u4ef7", "\u8bc4\u8bba", "\u5dee\u8bc4", "\u6295\u8bc9",
-                "\u53e3\u7891", "\u4f4e\u661f", "\u5927\u4f17\u70b9\u8bc4");
-        if (!hasReviewSignal) {
-            return false;
-        }
-        boolean hasOpsSignal = containsAny(input,
-                "\u684c\u578b", "\u684c\u5b50", "\u684c\u6570", "\u4e8c\u4eba\u684c", "\u4e24\u4eba\u684c",
-                "\u56db\u4eba\u684c", "\u7ffb\u53f0", "\u6392\u961f", "\u7b49\u4f4d",
-                "\u6392\u73ed", "\u4eba\u6548", "\u5458\u5de5", "\u5de5\u65f6", "\u524d\u5385", "\u540e\u53a8",
-                "\u53a8\u623f", "\u51fa\u9910", "\u4e0a\u83dc", "\u670d\u52a1\u5458", "\u8bad\u7ec3", "\u57f9\u8bad",
-                "\u5907\u83dc", "\u5907\u8d27", "\u5e93\u5b58", "\u635f\u8017", "bom", "\u6bdb\u5229",
-                "\u6210\u672c", "\u5916\u5356", "\u5e73\u53f0", "\u56e2\u8d2d", "\u7f8e\u56e2",
-                "\u6296\u97f3", "\u5ba2\u6d41", "\u753b\u50cf", "\u5546\u5708",
-                "\u5546\u573a", "\u6d3b\u52a8", "\u5929\u6c14", "\u5957\u9910", "\u5c0f\u5957\u9910",
-                "\u83dc\u54c1", "\u8425\u6536", "\u6536\u5165", "\u5ba2\u5355",
-                "\u65e5\u5747", "\u5de5\u4f5c\u65e5", "\u540c\u5546\u5708", "\u8fde\u9501",
-                "\u95e8\u5e97", "\u6392\u540d", "\u4e3b\u63a8", "\u5355\u54c1", "\u52a0\u8d2d",
-                "\u52a8\u4f5c", "\u98ce\u9669", "\u62a5\u635f", "\u6708\u76d8\u70b9");
-        boolean asksRemedy = containsAny(input,
-                "\u600e\u4e48\u6539\u5584", "\u600e\u4e48\u6539", "\u5e94\u8be5\u600e\u4e48",
-                "\u600e\u4e48\u5904\u7406", "\u5982\u4f55\u6539\u5584", "\u89e3\u51b3",
-                "\u5efa\u8bae", "\u6539\u8fdb\u5efa\u8bae");
-        return asksRemedy && !hasOpsSignal;
-    }
-
-    private boolean isPlainRestaurantReadQuestion(String input) {
-        boolean hasReadVerb = containsAny(input,
-                "\u67e5\u8be2", "\u67e5\u4e00\u4e0b", "\u67e5\u770b", "\u67e5");
-        boolean hasPlainReadObject = containsAny(input,
-                "\u8ba2\u5355", "\u8ba2\u5355\u660e\u7ec6", "\u8425\u6536", "\u8425\u4e1a\u989d",
-                "\u9500\u552e\u989d", "\u62a5\u8868");
-        boolean hasReviewSummary = containsAny(input,
-                "\u5ba2\u6237\u8bc4\u4ef7\u600e\u4e48\u6837", "\u8bc4\u4ef7\u600e\u4e48\u6837",
-                "\u8bc4\u8bba\u600e\u4e48\u6837", "\u53e3\u7891\u600e\u4e48\u6837");
-        boolean hasDecisionSignal = containsAny(input,
-                "\u600e\u4e48\u6539", "\u600e\u4e48\u8c03", "\u600e\u4e48\u6392",
-                "\u600e\u4e48\u63d0\u9ad8", "\u600e\u4e48\u63d0\u5347", "\u600e\u4e48\u4f18\u5316",
-                "\u600e\u4e48\u5904\u7406", "\u600e\u4e48\u57f9\u8bad", "\u5e94\u8be5",
-                "\u5efa\u8bae", "\u52a8\u4f5c", "\u5148\u6539", "\u5148\u505a",
-                "\u5148\u7ba1", "\u5148\u67e5\u54ea", "\u54ea\u4e09\u4e2a", "\u5f71\u54cd", "\u98ce\u9669");
-        return ((hasReadVerb && hasPlainReadObject) || hasReviewSummary) && !hasDecisionSignal;
-    }
-
-    private boolean isRestaurantAnalyticalReadQuestion(String input) {
-        return isExplicitRestaurantMetricReadQuestion(input)
-                || isExplicitRestaurantSalesPeriodComparison(input)
-                || isEvidenceBasedRestaurantDiagnosis(input)
-                || isUnsupportedRestaurantPriceElasticityQuestion(input)
-                || isCostMarginClarificationQuestion(input)
-                || isRestaurantContextualMarginFollowup(input)
-                || isMarginProhibitedActionAnalysis(input);
-    }
-
-    private boolean isExplicitRestaurantMetricReadQuestion(String input) {
-        boolean hasPeriod = containsAny(input,
-                "今天", "今日", "昨天", "昨日", "前天", "本周", "上周",
-                "本月", "这个月", "上月", "上个月", "上上月", "近7天", "近30天");
-        boolean hasMetric = containsAny(input,
-                "营收", "营业额", "营业收入", "销售额", "销售收入", "流水",
-                "毛利", "毛利率", "净利润", "净利率", "净利润率",
-                "订单", "单量", "客单价", "经营情况",
-                "销量", "销售量", "菜品销量", "菜品排行", "菜品排名");
-        boolean asksForResult = containsAny(input,
-                "给出", "告诉", "多少", "情况", "怎么样", "如何", "查询", "看一下", "分析",
-                "什么", "哪些", "哪道", "最高", "最低", "最好", "最差", "排名", "排行", "前");
-        return hasPeriod && hasMetric && asksForResult;
-    }
 
     /**
      * Actual menu mutations belong to the governed WRITE intent flow, never to
      * the read-only owner-advice conversation.  In particular, a stale
      * ownerActionSessionId must not turn "删除/下架菜品" into advisory chat.
      */
-    private boolean isRestaurantBusinessMutationRequest(String input) {
-        boolean hasBusinessObject = containsAny(input,
-                "菜品", "菜单", "单品", "套餐", "门店", "店铺");
-        boolean hasMutation = containsAny(input,
-                "删除", "移除", "新增", "新建", "创建", "修改", "更新",
-                "上架", "下架", "调价", "改价", "停用", "启用");
-        return hasBusinessObject && hasMutation;
-    }
-
-    private boolean isExplicitRestaurantSalesPeriodComparison(String input) {
-        boolean hasSalesMetric = containsAny(input,
-                "\u8425\u6536", "\u8425\u4e1a\u989d", "\u8425\u4e1a\u6536\u5165",
-                "\u9500\u552e\u989d", "\u9500\u552e\u6536\u5165", "\u6d41\u6c34",
-                "\u8ba2\u5355", "\u5355\u91cf", "\u5ba2\u5355\u4ef7");
-        boolean hasDirection = containsAny(input,
-                "\u5bf9\u6bd4", "\u6bd4\u8f83", "\u76f8\u6bd4", "\u9ad8\u4e8e", "\u4f4e\u4e8e",
-                "\u9ad8\u8fd8\u662f\u4f4e", "\u4e0a\u5347", "\u4e0b\u964d", "\u66f4\u9ad8", "\u66f4\u4f4e",
-                "\u591a\u8fd8\u662f\u5c11", "\u6bd4");
-        boolean hasPeriodPair = (
-                containsAny(input, "\u6628\u5929", "\u6628\u65e5")
-                        && containsAny(input, "\u524d\u5929", "\u524d\u65e5", "\u524d\u4e00\u5929", "\u524d\u4e00\u65e5"))
-                || (containsAny(input, "\u4eca\u5929", "\u4eca\u65e5")
-                        && containsAny(input, "\u6628\u5929", "\u6628\u65e5"))
-                || (containsAny(input, "\u672c\u6708", "\u8fd9\u4e2a\u6708", "\u5f53\u6708")
-                        && containsAny(input, "\u4e0a\u4e2a\u6708", "\u4e0a\u6708"))
-                || (containsAny(input, "\u672c\u5468", "\u8fd9\u5468", "\u672c\u661f\u671f", "\u8fd9\u661f\u671f")
-                        && containsAny(input, "\u4e0a\u5468", "\u4e0a\u661f\u671f", "\u4e0a\u4e2a\u661f\u671f"))
-                || (containsAny(input, "\u4e0a\u4e2a\u6708", "\u4e0a\u6708")
-                        && containsAny(input, "\u4e0a\u4e0a\u4e2a\u6708", "\u4e0a\u4e0a\u6708"));
-        return hasSalesMetric && hasDirection && hasPeriodPair;
-    }
-
-    private boolean isEvidenceBasedRestaurantDiagnosis(String input) {
-        boolean asksForEvidence = containsAny(input,
-                "\u7528\u6570\u636e\u5224\u65ad", "\u5206\u522b\u7528\u6570\u636e", "\u5206\u522b\u5224\u65ad",
-                "\u6839\u636e\u6570\u636e\u5224\u65ad", "\u9010\u9879\u5224\u65ad");
-        boolean hasDiagnosticAlternatives = containsAny(input,
-                "\u8ba2\u5355\u96c6\u4e2d", "\u4eba\u5458\u4e0d\u8db3", "\u4eba\u624b\u4e0d\u8db3",
-                "\u5de5\u5e8f\u74f6\u9888", "\u6d41\u7a0b\u74f6\u9888", "\u51fa\u9910\u6162", "\u4e0a\u83dc\u6162");
-        return asksForEvidence && hasDiagnosticAlternatives;
-    }
-
-    private boolean isDishOptimizationAnalysis(String input) {
-        boolean hasDishScope = containsAny(input, "\u83dc\u5355", "\u83dc\u54c1", "\u83dc");
-        boolean asksForOptimization = containsAny(input, "\u4f18\u5316", "\u8c03\u6574", "\u6dd8\u6c70", "\u4e0b\u67b6");
-        int dimensions = 0;
-        for (String metric : new String[]{"\u9500\u91cf", "\u9500\u552e\u989d", "\u6bdb\u5229", "\u9000\u83dc", "\u5dee\u8bc4", "\u5236\u4f5c\u65f6\u957f", "\u635f\u8017"}) {
-            if (input.contains(metric)) dimensions++;
-        }
-        return hasDishScope && asksForOptimization && dimensions >= 3;
-    }
-
-    private boolean isCostMarginClarificationQuestion(String input) {
-        return input.contains("\u6210\u672c")
-                && containsAny(input, "\u6bdb\u5229", "\u5229\u6da6")
-                && containsAny(input, "\u5148\u67e5", "\u4f18\u5148", "\u54ea\u51e0\u9879", "\u54ea\u9879")
-                && !containsAny(input, "\u83dc\u54c1\u6210\u672c", "\u98df\u6750\u6210\u672c", "\u98df\u6750\u635f\u8017",
-                        "\u95e8\u5e97\u6bdb\u5229", "\u83dc\u54c1\u6bdb\u5229");
-    }
-
-    private boolean isRestaurantContextualMarginFollowup(String input) {
-        return containsAny(input, "\u6bdb\u5229", "\u6bdb\u5229\u7387", "\u5229\u6da6\u7387")
-                && containsAny(input,
-                        "\u6cbf\u7528", "\u521a\u624d", "\u4e0a\u9762", "\u4e4b\u524d",
-                        "\u540c\u4e00\u65e5\u671f", "\u8fd9\u4e24\u4e2a\u65e5\u671f", "\u90a3\u6bdb\u5229");
-    }
-
-    private boolean isMarginProhibitedActionAnalysis(String input) {
-        return containsAny(input, "\u6bdb\u5229", "\u6bdb\u5229\u7387", "\u5229\u6da6")
-                && containsAny(input, "\u63d0\u5347", "\u63d0\u9ad8", "\u6539\u5584", "\u4f18\u5316")
-                && containsAny(input, "\u5148\u4e0d\u8981\u505a", "\u4e0d\u8981\u505a", "\u5148\u522b\u505a", "\u907f\u514d\u505a");
-    }
-
-    boolean isRestaurantOwnerActionFactory(String factoryId, String factoryDomain) {
-        if (!RESTAURANT_LEGACY_AI_ROUTES_ENABLED) {
-            return false;
-        }
-        if ("RESTAURANT".equalsIgnoreCase(factoryDomain)) {
-            return true;
-        }
-        if (factoryId == null || factoryId.isBlank()) {
-            return false;
-        }
-        String normalized = factoryId.trim().toUpperCase(Locale.ROOT);
-        return "DEMO_REST".equals(normalized)
-                || normalized.startsWith("RES_")
-                || normalized.startsWith("REST_");
-    }
-
-    boolean hasRestaurantOwnerActionSignal(String factoryId, Map<String, Object> context) {
-        if (!RESTAURANT_LEGACY_AI_ROUTES_ENABLED) {
-            return false;
-        }
-        if (isRestaurantOwnerActionFactory(factoryId, resolveFactoryDomainSafe(factoryId))) {
-            return true;
-        }
-        if (context == null || context.isEmpty()) {
-            return false;
-        }
-        String storeName = stringValue(context.get("storeName"));
-        String subSector = stringValue(context.get("subSector"));
-        String businessType = stringValue(context.get("businessType"));
-        String demoTenant = stringValue(context.get("tenant"));
-        return isNonBlank(storeName)
-                || isNonBlank(subSector)
-                || "restaurant".equalsIgnoreCase(businessType)
-                || "rest".equalsIgnoreCase(demoTenant);
-    }
-
-    private boolean isNonBlank(String value) {
-        return value != null && !value.isBlank();
-    }
-
-    private boolean hasOwnerActionContinuationContext(Map<String, Object> context) {
-        if (context == null || context.isEmpty()) {
-            return false;
-        }
-        String sessionId = stringValue(context.get("ownerActionSessionId"));
-        if (sessionId != null && !sessionId.isBlank()) {
-            return true;
-        }
-        String scenario = stringValue(context.get("ownerActionScenario"));
-        return scenario != null && !scenario.isBlank() && !"auto".equalsIgnoreCase(scenario);
-    }
-
-    @SuppressWarnings("unchecked")
-    private IntentExecuteResponse executeRestaurantOwnerActionChat(String factoryId,
-                                                                   IntentExecuteRequest request,
-                                                                   Long userId,
-                                                                   String userRole) {
-        Map<String, Object> context = request.getContext() == null
-                ? Collections.emptyMap()
-                : request.getContext();
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("message", request.getUserInput());
-        putIfPresent(body, "sessionId", stringValue(context.get("ownerActionSessionId")));
-        putIfPresent(body, "demoScenario", stringValue(context.get("ownerActionScenario")));
-        body.put("storeName", stringValueOrDefault(context.get("storeName"), "青花椒上海示范店"));
-        body.put("subSector", stringValueOrDefault(context.get("subSector"), "中餐/川味酸菜鱼"));
-        body.put("period", stringValueOrDefault(context.get("period"), "this_week"));
-
-        Map<String, Object> data;
-        try {
-            String callId = "owner-action-" + UUID.randomUUID();
-            ExecutionPrincipal principal = authenticatedToolPrincipalFactory.create(
-                    factoryId, userId, userRole);
-            ToolExecutionCommand command = new ToolExecutionCommand(
-                    callId,
-                    callId,
-                    callId + "-trace",
-                    "restaurant_owner_action_advisor",
-                    "2.0.0",
-                    objectMapper.valueToTree(body),
-                    principal,
-                    ToolExecutionSource.AI_CHAT,
-                    ToolExecutionMode.EXECUTE,
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    Instant.now().plusSeconds(30));
-            ToolExecutionResult gatewayResult = toolExecutionGateway.execute(command);
-            com.fasterxml.jackson.databind.JsonNode payload = gatewayResult.payload();
-            com.fasterxml.jackson.databind.JsonNode dataNode = payload.get("data");
-            if (gatewayResult.status() != ToolExecutionStatus.SUCCEEDED
-                    || !payload.path("success").isBoolean()
-                    || !payload.path("success").booleanValue()
-                    || dataNode == null
-                    || !dataNode.isObject()) {
-                return buildRestaurantOwnerActionError(
-                        "老板动作分析暂时不可用，请稍后重试。", userId);
-            }
-            data = objectMapper.convertValue(dataNode, Map.class);
-        } catch (Exception ex) {
-            log.warn("餐饮老板动作建议 Gateway 执行失败: type={}",
-                    ex.getClass().getSimpleName());
-            return buildRestaurantOwnerActionError("老板动作分析暂时不可用，请稍后重试。", userId);
-        }
-        if (Boolean.FALSE.equals(data.get("dataAvailable"))) {
-            return buildRestaurantOwnerActionError(
-                    "老板动作分析暂时不可用，请稍后重试。", userId);
-        }
-        normalizeOwnerActionSource(data);
-        data.put("suggestedFollowups", normalizeOwnerActionFollowups(
-                firstNonNull(data.get("suggestedFollowups"), data.get("followUpSuggestions")),
-                stringValue(data.get("scenario"))));
-
-        String answer = firstNonBlank(
-                stringValue(data.get("responseText")),
-                stringValue(data.get("answer")),
-                "已生成老板决策建议。");
-        String sessionId = stringValue(data.get("sessionId"));
-
-        IntentExecuteResponse response = IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .intentCode("RESTAURANT_OWNER_ACTION_CHAT")
-                .intentName("餐饮老板动作建议")
-                .intentCategory("RESTAURANT")
-                .sensitivityLevel("LOW")
-                .confidence(0.99)
-                .matchMethod("JAVA_OWNER_ACTION_TOOL_ROUTE")
-                .status("SUCCESS")
-                .message(answer)
-                .formattedText(answer)
-                .resultData(data)
-                .executedAt(LocalDateTime.now())
-                .sessionId(sessionId)
-                .metadata(ownerActionMetadata(userId))
-                .build();
-        recordOwnerActionIntentMatch(factoryId, request, userId, response);
-        return response;
-    }
-
-    private boolean isDishScopedRestaurantOpsResponse(IntentExecuteResponse response) {
-        if (response == null
-                || response.getIntentCode() == null
-                || !response.getIntentCode().startsWith("RESTAURANT_OPS_")
-                || !(response.getResultData() instanceof Map<?, ?> resultData)
-                || !(resultData.get("conversationContext") instanceof Map<?, ?> conversationContext)
-                || !(conversationContext.get("focus_entity") instanceof Map<?, ?> focusEntity)) {
-            return false;
-        }
-        String entityType = stringValue(focusEntity.get("type"));
-        String entityName = stringValue(focusEntity.get("name"));
-        return "dish".equals(entityType) && entityName != null && !entityName.isBlank();
-    }
-
-    private void recordOwnerActionIntentMatch(String factoryId,
-                                              IntentExecuteRequest request,
-                                              Long userId,
-                                              IntentExecuteResponse response) {
-        if (intentMatchRecordRepository == null || request == null || response == null
-                || request.getUserInput() == null || request.getUserInput().isBlank()) {
-            return;
-        }
-        try {
-            String sessionId = firstNonBlank(
-                    response.getSessionId(),
-                    request.getSessionId(),
-                    stringValue(request.getContext() != null ? request.getContext().get("ownerActionSessionId") : null));
-            IntentMatchRecord record = new IntentMatchRecord();
-            record.setFactoryId(factoryId != null ? factoryId : "DEFAULT");
-            record.setUserId(userId != null ? userId : 0L);
-            record.setSessionId(sessionId);
-            record.setUserInput(request.getUserInput());
-            record.setNormalizedInput(request.getUserInput().toLowerCase(Locale.ROOT).trim());
-            record.setMatchedIntentCode("RESTAURANT_OWNER_ACTION_CHAT");
-            record.setMatchedIntentName("餐饮老板动作建议");
-            record.setMatchedIntentCategory("RESTAURANT");
-            record.setConfidenceScore(BigDecimal.valueOf(0.99));
-            record.setMatchMethod(IntentMatchRecord.MatchMethod.PHRASE_MATCH);
-            record.setLlmCalled(false);
-            record.setExecutionStatus(IntentMatchRecord.ExecutionStatus.EXECUTED);
-            record.setExecutionResult(truncateForRecord(response.getMessage(), 1000));
-            record.setExecutedAt(LocalDateTime.now());
-            intentMatchRecordRepository.save(record);
-        } catch (Exception e) {
-            log.warn("Record restaurant owner-action intent match failed: {}", e.getMessage());
-        }
-    }
-
-    private String truncateForRecord(String value, int maxLength) {
-        if (value == null || value.length() <= maxLength) {
-            return value;
-        }
-        return value.substring(0, maxLength);
-    }
-
-    private IntentExecuteResponse buildRestaurantOwnerActionError(String message, Long userId) {
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .intentCode("RESTAURANT_OWNER_ACTION_CHAT")
-                .intentName("餐饮老板动作建议")
-                .intentCategory("RESTAURANT")
-                .status("ERROR")
-                .message(message)
-                .formattedText(message)
-                .executedAt(LocalDateTime.now())
-                .metadata(ownerActionMetadata(userId))
-                .build();
-    }
-
-    private Map<String, Object> ownerActionMetadata(Long userId) {
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("source", "restaurant_owner_action");
-        if (userId != null) {
-            metadata.put("userId", userId);
-        }
-        return metadata;
-    }
-
-    private void normalizeOwnerActionSource(Map<String, Object> data) {
-        Object source = data.get("source");
-        if ("restaurant_owner_action_advisor".equals(source)) {
-            data.put("advisorSource", "restaurant_owner_action_advisor");
-        } else {
-            data.putIfAbsent("advisorSource", "restaurant_owner_action_advisor");
-        }
-        data.put("source", "restaurant_owner_action");
-    }
 
     private void putIfPresent(Map<String, Object> target, String key, String value) {
         if (value != null && !value.isBlank()) {
@@ -4142,9 +2658,8 @@ public class IntentExecutionOrchestrator {
     }
 
     /**
-     * Factory-aware default clarification choices. A RESTAURANT tenant gets restaurant
-     * defaults (畅销菜品 / 门店营收排行 / 订单统计); all other tenants keep the original
-     * manufacturing defaults (查询原料库存 / 查询生产批次). Package-private for unit testing.
+     * Factory clarification choices: inventory and production batches.
+     * Package-private for unit testing.
      */
     List<IntentExecuteResponse.SuggestedAction> buildDefaultSuggestions(String factoryId) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
@@ -4351,7 +2866,7 @@ public class IntentExecutionOrchestrator {
             String assistantMessage = response.getMessage() != null ? response.getMessage() : "执行完成";
             conversationMemoryService.addMessage(sessionId, ConversationMessage.user(userInput));
             conversationMemoryService.addMessage(sessionId, ConversationMessage.assistant(assistantMessage));
-            persistRestaurantComparisonContext(sessionId, userInput, intentResult);
+            {}
             // Extract entities from response data
             extractAndUpdateEntitySlots(sessionId, response, intentResult);
             if (intentResult != null && intentResult.getBestMatch() != null) {

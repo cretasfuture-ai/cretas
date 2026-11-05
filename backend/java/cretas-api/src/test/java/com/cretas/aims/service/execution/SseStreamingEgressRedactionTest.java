@@ -77,6 +77,7 @@ class SseStreamingEgressRedactionTest {
         when(knowledge.detectQuestionType(QUESTION)).thenReturn(IntentKnowledgeBase.QuestionType.GENERAL_QUESTION);
         when(knowledge.matchPhrase(QUESTION)).thenReturn(Optional.empty());
         when(mini.shouldRoute(any(), any(), any())).thenAnswer(call -> "F006".equals(call.getArgument(0)));
+        FactoryAnalysisTestMetadata.bindNamedFactories(service);
     }
 
     private void execute(String factory) {

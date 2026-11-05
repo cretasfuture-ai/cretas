@@ -83,6 +83,7 @@ class IntentExecutionOrchestratorConfirmationContractTest {
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
         when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(true);
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     @Test
@@ -248,6 +249,19 @@ class IntentExecutionOrchestratorConfirmationContractTest {
         config.setIntentCode("ORDER_CREATE");
         config.setToolName("order_create");
         return config;
+    }
+
+    @Test
+    void aClaimedPreRetirementTokenCannotExecuteForAnOrdinaryFactoryRole() {
+        ClaimResult retired = claimResult();
+        retired.getToken().setIntentCode("RESTAURANT_DISH_CREATE");
+        when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(retired);
+
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
+        verify(tokenService).resolveClaim(TOKEN, CLAIM, false, "该业务能力已退役");
+        verifyNoInteractions(aiIntentService, toolRegistry, dispatchService);
     }
 
     private ClaimResult claimResult() {

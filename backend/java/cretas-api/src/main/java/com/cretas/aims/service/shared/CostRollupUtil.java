@@ -8,7 +8,7 @@ import java.util.List;
  * Single source of truth for the cost-rollup arithmetic shared by the factory
  * BOM domain ({@link com.cretas.aims.entity.bom.BomRecipeItem}) and the
  * restaurant dish-cost domain
- * ({@link com.cretas.aims.service.restaurant.DishCostCardService}).
+ * inventory cost rollups.
  *
  * <p>Both domains historically duplicated the yield-折算 / item-cost / total-sum
  * formulas. Duplication risks divergence (different rounding, different

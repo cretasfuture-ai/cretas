@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from smartbi.agent.runtime import evaluation as runtime_evaluation
+from . import offline_evaluation as runtime_evaluation
 
 from .contracts import EvalSetRecord
 from .validation import (
@@ -18,7 +18,7 @@ from .validation import (
     validate_runner_bounds_snapshot,
 )
 
-EVALUATOR_VERSION = "restaurant-offline-v1"
+EVALUATOR_VERSION = "factory-offline-v1"
 FACTORY_EVALUATOR_VERSION = "factory-offline-v1"
 
 
@@ -29,7 +29,7 @@ def compute_evaluator_build(
 
     sources = artifacts or {
         "runner.py": Path(__file__).read_bytes(),
-        "runtime/evaluation.py": Path(runtime_evaluation.__file__).read_bytes(),
+        "eval/offline_evaluation.py": Path(runtime_evaluation.__file__).read_bytes(),
     }
     digest = hashlib.sha256()
     for name in sorted(sources):
@@ -145,6 +145,18 @@ class FactoryOfflineBatchRunner(OfflineBatchRunner):
     evaluator_version = FACTORY_EVALUATOR_VERSION
 
 
+@dataclass(frozen=True)
+class EvaluatorRegistration:
+    """Lookup/source identity is distinct from the bytes executing that identity."""
+
+    source_version: str
+    source_build: str
+    implementation_sha256: str
+    provenance_sha256: str | None
+    runner: Any
+    is_current: bool = False
+
+
 class EvaluatorRegistry:
     """Resolve an evaluator by immutable identity; reruns never fall forward."""
 
@@ -153,6 +165,7 @@ class EvaluatorRegistry:
         runners: Sequence[OfflineBatchRunner],
         *,
         current: tuple[str, str] | None = None,
+        compatibility: Sequence[EvaluatorRegistration] = (),
     ) -> None:
         if not runners:
             raise ValueError("at least one evaluator runner is required")
@@ -162,6 +175,23 @@ class EvaluatorRegistry:
             if identity in self._runners:
                 raise ValueError("duplicate evaluator identity")
             self._runners[identity] = runner
+        # Compatibility runners are opt-in historical identities. They are
+        # resolvable only by exact source version/build and never eligible for
+        # current_for(), which always selects a current implementation.
+        self._compatibility: dict[tuple[str, str], OfflineBatchRunner] = {}
+        self._registration_by_runner: dict[int, EvaluatorRegistration] = {}
+        for registration in compatibility:
+            identity = (registration.source_version, registration.source_build)
+            if identity in self._runners or identity in self._compatibility:
+                raise ValueError("duplicate evaluator identity")
+            if registration.is_current or not registration.provenance_sha256:
+                raise ValueError("historical implementation requires separate provenance")
+            self._compatibility[identity] = registration.runner
+            self._registration_by_runner[id(registration.runner)] = registration
+        for identity, runner in self._runners.items():
+            self._registration_by_runner[id(runner)] = EvaluatorRegistration(
+                *identity, runner.evaluator_build, None, runner, is_current=True,
+            )
         self._current = current or (
             runners[0].evaluator_version,
             runners[0].evaluator_build,
@@ -172,6 +202,22 @@ class EvaluatorRegistry:
     def current(self) -> OfflineBatchRunner:
         return self._runners[self._current]
 
+    def registration_for(self, runner: Any) -> EvaluatorRegistration:
+        try:
+            return self._registration_by_runner[id(runner)]
+        except KeyError as exc:
+            raise EvaluatorBuildUnavailableError() from exc
+
+    def register_compatibility(self, registration: EvaluatorRegistration) -> Any:
+        identity = (registration.source_version, registration.source_build)
+        if identity in self._runners or registration.is_current or not registration.provenance_sha256:
+            raise ValueError("invalid historical evaluator registration")
+        if identity in self._compatibility:
+            return self._compatibility[identity]
+        self._compatibility[identity] = registration.runner
+        self._registration_by_runner[id(registration.runner)] = registration
+        return registration.runner
+
     def current_for(self, version: str) -> OfflineBatchRunner:
         for (known_version, _build), runner in self._runners.items():
             if known_version == version:
@@ -181,8 +227,11 @@ class EvaluatorRegistry:
     def resolve(self, version: str, build: str) -> OfflineBatchRunner:
         try:
             return self._runners[(version, build)]
-        except KeyError as exc:
-            raise EvaluatorBuildUnavailableError() from exc
+        except KeyError:
+            try:
+                return self._compatibility[(version, build)]
+            except KeyError as exc:
+                raise EvaluatorBuildUnavailableError() from exc
 
 
 def aggregate_case_results(

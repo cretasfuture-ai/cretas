@@ -212,7 +212,7 @@ class ClarificationRoleAudienceTest {
                 mock(ToolRegistry.class), mock(ToolDispatchService.class), mock(DynamicToolSelectionService.class),
                 mock(DashScopeClient.class), mock(DashScopeConfig.class)));
         ReflectionTestUtils.setField(sse, "factoryCapabilityPackRoutingPolicy", packPolicy);
-        ReflectionTestUtils.setField(sse, "businessTypeGate", mock(BusinessTypeGate.class));
+        FactoryAnalysisTestMetadata.bindNamedFactories(sse);
         ReflectionTestUtils.setField(sse, "writeGuardService", new WriteGuardService());
         ReflectionTestUtils.setField(sse, "clarificationCandidateService", service);
 

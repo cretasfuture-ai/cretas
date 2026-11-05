@@ -5,9 +5,14 @@ import com.cretas.aims.service.impl.AIIntentServiceImpl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.cretas.aims.entity.Factory;
+import com.cretas.aims.entity.enums.FactoryType;
+import com.cretas.aims.repository.FactoryRepository;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -42,6 +47,19 @@ class IntentParityTest {
 
     @Autowired
     private AIIntentServiceImpl service;
+
+    @MockBean
+    private FactoryRepository factoryRepository;
+
+    @BeforeEach
+    void bindFactoryDomain() {
+        Factory factory = new Factory();
+        factory.setId("F001");
+        factory.setType(FactoryType.FACTORY);
+        factory.setIsActive(true);
+        org.mockito.Mockito.when(factoryRepository.findById("F001"))
+                .thenReturn(java.util.Optional.of(factory));
+    }
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final double CONFIDENCE_TOLERANCE = 0.05;

@@ -75,6 +75,10 @@ class SseF006BossMiniContractTest {
         doNothing().when(service).sendSseEvent(any(), any(), any());
         ReflectionTestUtils.setField(service, "f006BossQuestionClient", mini);
         ReflectionTestUtils.setField(service, "conversationMemoryService", memory);
+        BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
+        when(businessTypeGate.resolveDomain("F006")).thenReturn("FACTORY");
+        when(businessTypeGate.resolveDomain("F007")).thenReturn("FACTORY");
+        ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
         when(memory.getOrCreateContext(anyString(), anyLong(), any())).thenAnswer(call ->
                 ConversationContext.builder().factoryId(call.getArgument(0)).userId(call.getArgument(1))
                         .sessionId(SESSION).build());
@@ -303,6 +307,8 @@ class SseF006BossMiniContractTest {
         when(registry.getExecutor("material_batch_query")).thenReturn(Optional.of(tool));
         BusinessTypeGate gate = mock(BusinessTypeGate.class);
         when(gate.check(anyString(), any())).thenReturn(Optional.empty());
+        when(gate.resolveDomain("F006")).thenReturn("FACTORY");
+        when(gate.resolveDomain("F007")).thenReturn("FACTORY");
         ReflectionTestUtils.setField(service, "businessTypeGate", gate);
         ToolDispatchService dispatch = (ToolDispatchService) ReflectionTestUtils.getField(service, "toolDispatchService");
         when(dispatch.executeWithTool(eq(tool), eq("F006"), any(), eq(intent), eq(77L),

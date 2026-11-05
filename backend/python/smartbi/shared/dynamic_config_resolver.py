@@ -12,9 +12,9 @@ domain 严格隔离:
   - 不允许跨 domain 查找
 
 使用示例:
-    >>> resolver = DynamicConfigResolver(factory_id="F001", domain="restaurant")
-    >>> resolver.set_session_override("restaurant.cogs.美团外卖", 0.42)
-    >>> result = resolver.resolve("restaurant.cogs.美团外卖", yaml_fallback=0.43)
+    >>> resolver = DynamicConfigResolver(factory_id="F001", domain="factory")
+    >>> resolver.set_session_override("factory.bom.熟食加工", 0.42)
+    >>> result = resolver.resolve("factory.bom.熟食加工", yaml_fallback=0.43)
     >>> assert result.value == 0.42
     >>> assert result.source == "session"
 """
@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 
 # ── Type aliases ────────────────────────────────────────────
 
-Domain = Literal["restaurant", "factory"]
-"""严格隔离: 必填 'restaurant' 或 'factory', 不允许 None / 跨 domain 值"""
+Domain = Literal["factory"]
+"""严格隔离: 仅支持 factory domain, 不允许 None / retired domain 值"""
 
 ConfigSource = Literal["session", "store", "factory", "yaml_default"]
 """配置值来源, 4 层优先级"""
@@ -84,15 +84,15 @@ class DynamicConfigResolver:
         """
         Args:
             factory_id: 工厂 ID, 必填
-            domain: 'restaurant' 或 'factory', 必填, 不允许 None
+            domain: 'factory', 必填, 不允许 None
             db_session: SQLAlchemy session. 如果为 None, 跳过 DB 查找 (仅返回 session/yaml_default)
 
         Raises:
             ValueError: domain 不在合法值内
         """
-        if domain not in ("restaurant", "factory"):
+        if domain != "factory":
             raise ValueError(
-                f"domain 必须是 'restaurant' 或 'factory', 收到 {domain!r}. "
+                f"domain 必须是 'factory', 收到 {domain!r}. "
                 f"跨 domain 查找会导致数据污染, 拒绝执行."
             )
         if not factory_id:
@@ -120,7 +120,7 @@ class DynamicConfigResolver:
           4. yaml_fallback (调用方传入的 YAML 默认值)
 
         Args:
-            config_key: 必须以 domain 前缀开头, 例如 'restaurant.cogs.美团外卖'
+            config_key: 必须以 domain 前缀开头, 例如 'factory.bom.熟食加工'
             store_id: 可选门店 ID, 提供时启用门店级查找
             yaml_fallback: YAML 默认值, 用于第 4 层兜底
 

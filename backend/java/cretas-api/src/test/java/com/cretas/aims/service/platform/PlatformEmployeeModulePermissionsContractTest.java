@@ -9,6 +9,7 @@ import com.cretas.aims.repository.auth.UserMenuPermissionRepository;
 import com.cretas.aims.repository.permission.PlatformRolePermissionRepository;
 import com.cretas.aims.repository.config.FactoryModuleConfigRepository;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.auth.impl.UserMenuPermissionServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -19,9 +20,11 @@ import static org.mockito.ArgumentMatchers.*;
 
 class PlatformEmployeeModulePermissionsContractTest {
     private final UserMenuPermissionRepository repository = mock(UserMenuPermissionRepository.class);
+    private final UserRepository users = mock(UserRepository.class);
     private final PlatformRolePermissionRepository global = mock(PlatformRolePermissionRepository.class);
+    private final PlatformFactoryControlAuthority authority = mock(PlatformFactoryControlAuthority.class);
     private final PlatformEmployeeModulePermissions personal = new PlatformEmployeeModulePermissions(repository,
-        mock(UserRepository.class), global, mock(PlatformFactoryControlAuthority.class));
+        users, global, authority);
 
     private User user(FactoryUserRole role) {
         User value = new User(); value.setId(7L); value.setFactoryId("F1"); value.setRoleCode(role.name()); value.setIsActive(true); return value;
@@ -81,5 +84,33 @@ class PlatformEmployeeModulePermissionsContractTest {
         read.setGrantedBy("factory_super_admin");
         when(repository.findByFactoryIdAndUserId("F1", "7")).thenReturn(List.of(read, write));
         assertThatThrownBy(() -> personal.overrides(user(FactoryUserRole.viewer))).isInstanceOf(BusinessException.class);
+    }
+    @Test void historicalRestaurantRowsAreFilteredAndCannotBeRecreated() {
+        when(repository.findByFactoryIdAndUserId("F1", "7")).thenReturn(List.of(
+                row("restaurant", "read", true), row("restaurant", "write", true),
+                row("restaurantFinance", "read", true), row("restaurantFinance", "write", true)));
+        assertThat(personal.overrides(user(FactoryUserRole.viewer))).isEmpty();
+
+        User target = user(FactoryUserRole.viewer);
+        when(users.findByIdAndFactoryId(7L, "F1")).thenReturn(Optional.of(target));
+        assertThatThrownBy(() -> personal.replace("F1", 7L, "restaurantFinance", "rw",
+                new com.cretas.aims.security.ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 77L)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("餐饮模块已退役");
+        verify(repository, never()).save(any());
+        verify(repository, never()).deleteByFactoryIdAndUserIdAndMenuCode(anyString(), anyString(), anyString());
+    }
+
+    @Test void retiredModuleCannotSurviveEitherApplyOverloadOrBlockFactoryViaAnObsoleteIssuer() {
+        var old = row("restaurant", "read", true);
+        old.setGrantedBy("old-business-admin");
+        when(repository.findByFactoryIdAndUserId("F1", "7")).thenReturn(List.of(old));
+        assertThat(personal.apply(user(FactoryUserRole.viewer), Map.of("production", "r", "restaurant", "rw")))
+                .containsExactlyEntriesOf(Map.of("production", "r"));
+        assertThat(personal.apply(user(FactoryUserRole.factory_super_admin),
+                Map.of("production", "rw", "restaurantFinance", "rw")))
+                .containsExactlyEntriesOf(Map.of("production", "rw"));
+        assertThat(personal.apply(user(FactoryUserRole.factory_super_admin), "restaurantFinance", "rw"))
+                .isEqualTo("-");
     }
 }

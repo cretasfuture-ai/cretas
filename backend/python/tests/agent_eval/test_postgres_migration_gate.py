@@ -23,7 +23,6 @@ from smartbi.agent.eval import (
     OfflineBatchRunner,
     PostgresAgentOpsStore,
     RunnerBounds,
-    RuntimeShadowBounds,
 )
 from smartbi.agent.eval.runner import aggregate_case_results
 from smartbi.agent.eval.store import AgentOpsConflictError
@@ -45,52 +44,8 @@ V04 = MIGRATIONS / "V20261028_04__restaurant_agent_eval_experiments.sql"
 V07 = MIGRATIONS / "V20261028_07__agentops_runtime_shadow_constraints.sql"
 
 
-def _runtime_case():
-    refs = {"ref:" + "1" * 64: "12.5"}
-    tools = ["restaurant_period_comparison_read.v1"]
-    input_snapshot = {
-        "startDate": "2026-01-01",
-        "endDate": "2026-01-31",
-        "storeTopN": 20,
-        "dishTopN": 10,
-    }
-    return {
-        "caseId": "runtime-00000000-0000-4000-8000-000000000010",
-        "inputSnapshot": input_snapshot,
-        "expectedRoute": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
-        "requiredTools": tools,
-        "numericTruthRefs": refs,
-        "maxRounds": 1,
-        "maxToolCalls": 1,
-        "sourceRunId": "00000000-0000-4000-8000-000000000010",
-        "evidenceDigests": {
-            "inputDigest": canonical_digest(input_snapshot),
-            "trajectoryDigest": canonical_digest(tools),
-            "numericTruthDigest": canonical_digest(refs),
-            "evidenceDigest": "4" * 64,
-            "sourceRunDigest": "5" * 64,
-        },
-    }
 
 
-class _RuntimeShadowRunner:
-    evaluator_version = "restaurant-runtime-shadow-v1"
-    evaluator_build = "a" * 64
-
-    async def run(self, eval_set, trusted_context, *, bounds):
-        actuals = {}
-        results = []
-        for eval_case in eval_set.cases:
-            actual_snapshot = {
-                "routeCode": eval_case["expectedRoute"],
-                "tools": list(eval_case["requiredTools"]),
-                "numericTruthRefs": dict(eval_case["numericTruthRefs"]),
-                "roundsUsed": 1,
-                "toolCallsUsed": 1,
-            }
-            actuals[eval_case["caseId"]] = actual_snapshot
-            results.append(OfflineBatchRunner._evaluate(eval_case, actual_snapshot))
-        return aggregate_case_results(results), tuple(results), actuals
 
 
 def _app_dsn(admin_dsn: str, role: str, password: str) -> str:
@@ -286,8 +241,8 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
         assert await app.fetchval("SELECT COUNT(*) FROM smart_bi_agent_eval_set") == 0
         cases = [{
             "caseId": "margin-1",
-            "expectedRoute": "GROSS_MARGIN_DECLINE_ATTRIBUTION",
-            "requiredTools": ["restaurant_margin_read"],
+            "expectedRoute": "FACTORY_MARGIN_ANALYSIS",
+            "requiredTools": ["factory_margin_read"],
             "numericTruthRefs": {"e1:f1": "1"},
             "maxRounds": 2,
             "maxToolCalls": 2,
@@ -460,40 +415,6 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
         assert rerun.operation_kind == "RERUN"
         assert rerun.source_experiment_id == experiment.experiment_id
 
-        shadow_service = AgentOpsService(
-            store, runtime_shadow_runner=_RuntimeShadowRunner()
-        )
-        shadow_eval_set = await shadow_service.create_eval_set(
-            context(),
-            request_id=request_id(205),
-            name="Runtime shadow",
-            version=1,
-            description="PostgreSQL runtime shadow gate",
-            cases=[_runtime_case()],
-        )
-        shadow_experiment = await shadow_service.run_runtime_shadow(
-            context(),
-            request_id=request_id(206),
-            eval_set_id=shadow_eval_set.eval_set_id,
-            config_snapshot=config_snapshot(),
-            bounds=RuntimeShadowBounds(
-                max_cases=20,
-                max_concurrency=2,
-                per_case_timeout_seconds=75.0,
-            ),
-        )
-        assert shadow_experiment.operation_kind == "RUNTIME_SHADOW"
-        assert shadow_experiment.source_experiment_id is None
-        persisted_shadow = await store.get_experiment(
-            context(), shadow_experiment.experiment_id
-        )
-        assert persisted_shadow.experiment_id == shadow_experiment.experiment_id
-        assert persisted_shadow.runner_bounds == {
-            "maxCases": 20,
-            "maxConcurrency": 2,
-            "perCaseTimeoutMs": 75000,
-        }
-
         tenant_experiment = await service.run_experiment(
             context("R002"),
             request_id=request_id(204),
@@ -556,7 +477,7 @@ async def test_v04_fresh_and_v01_v02_upgrade_security_contract():
                 uuid.uuid4().hex + uuid.uuid4().hex,
                 operation_kind,
                 source_experiment_id,
-                shadow_experiment.experiment_id,
+                experiment.experiment_id,
             )
 
         invalid_rows = (

@@ -9,6 +9,8 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WhitelistRepository;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -80,6 +82,26 @@ class WhitelistServiceImplInvitationTest {
         assertThat(result.getFailedCount()).isEqualTo(1);
         assertThat(result.getFailedEntries().get(0).getReason())
                 .contains("不能用于工厂白名单邀请");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = FactoryUserRole.class, names = "restaurant_.*", mode = EnumSource.Mode.MATCH_ALL)
+    void retiredRestaurantRolesCannotBeInvited(FactoryUserRole role) {
+        when(whitelistRepository.existsByFactoryIdAndPhoneNumber("LIUSHANMEN", "13800138039"))
+                .thenReturn(false);
+        WhitelistServiceImpl service = new WhitelistServiceImpl(whitelistRepository, userRepository);
+
+        WhitelistDTO.BatchResult result = service.batchAdd(
+                "LIUSHANMEN", 77L,
+                WhitelistDTO.BatchAddRequest.builder()
+                        .entries(List.of(WhitelistDTO.WhitelistEntry.builder()
+                                .phoneNumber("13800138039").name("退休餐饮角色").build()))
+                        .role(role.name()).build());
+
+        assertThat(result.getSuccessCount()).isZero();
+        assertThat(result.getFailedCount()).isEqualTo(1);
+        assertThat(result.getFailedEntries().get(0).getReason())
+                .contains("餐饮专属角色已退役");
     }
 
     @Test

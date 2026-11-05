@@ -6,12 +6,12 @@ import com.cretas.aims.dto.platform.UpdateFactoryRequest;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.entity.rules.DroolsRule;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.ResourceNotFoundException;
 import com.cretas.aims.repository.DroolsRuleRepository;
 import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.FactoryService;
 import com.cretas.aims.service.indicator.FactoryIndicatorProvisioner;
-import com.cretas.aims.service.restaurant.RestaurantAgentActionWorkflowProvisioner;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,7 +42,6 @@ public class FactoryServiceImpl implements FactoryService {
 
     private final FactoryRepository factoryRepository;
     private final DroolsRuleRepository droolsRuleRepository;
-    private final RestaurantAgentActionWorkflowProvisioner restaurantActionWorkflowProvisioner;
     private final FactoryIndicatorProvisioner factoryIndicatorProvisioner;
 
     /**
@@ -78,6 +77,12 @@ public class FactoryServiceImpl implements FactoryService {
     @Override
     @Transactional
     public FactoryDTO createFactory(CreateFactoryRequest request) {
+        if (request != null && "RESTAURANT".equalsIgnoreCase(request.getIndustryCode())) {
+            throw new BusinessException(400, "餐饮业务类型已退役，不能新建")
+                    .withCode("RETIRED_RESTAURANT_BUSINESS_TYPE")
+                    .withHint("请选择食品工厂业务类型")
+                    .withHintTarget("industryCode");
+        }
         log.info("创建新工厂，name: {}, industryCode: {}, regionCode: {}",
                 request.getName(), request.getIndustryCode(), request.getRegionCode());
 
@@ -174,7 +179,6 @@ public class FactoryServiceImpl implements FactoryService {
         factory.setUpdatedAt(LocalDateTime.now());
 
         Factory updatedFactory = factoryRepository.save(factory);
-        restaurantActionWorkflowProvisioner.provisionIfEligible(updatedFactory);
         log.info("工厂更新成功，factoryId: {}", updatedFactory.getId());
 
         return convertToDTO(updatedFactory);
@@ -207,7 +211,6 @@ public class FactoryServiceImpl implements FactoryService {
         factory.setUpdatedAt(LocalDateTime.now());
 
         Factory updatedFactory = factoryRepository.save(factory);
-        restaurantActionWorkflowProvisioner.provisionIfEligible(updatedFactory);
         log.info("工厂已激活，factoryId: {}", factoryId);
 
         return convertToDTO(updatedFactory);

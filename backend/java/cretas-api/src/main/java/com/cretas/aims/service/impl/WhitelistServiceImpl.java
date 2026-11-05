@@ -591,6 +591,11 @@ public class WhitelistServiceImpl implements WhitelistService {
             throw new BusinessException(400, "该角色不能用于工厂白名单邀请")
                     .withHint("请选择有效的工厂账号角色");
         }
+        if (role.name().startsWith("restaurant_")) {
+            throw new BusinessException(400, "餐饮专属角色已退役，不能用于新邀请")
+                    .withCode("RETIRED_RESTAURANT_ROLE")
+                    .withHint("请选择食品工厂业务角色");
+        }
         return role;
     }
 }

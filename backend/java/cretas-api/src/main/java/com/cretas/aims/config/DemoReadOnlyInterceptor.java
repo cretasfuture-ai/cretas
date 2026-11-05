@@ -38,7 +38,8 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
     // 里的 DEMO_FACTORY 是已废弃的租户 ID (实际是 DEMO_FACTORY2), 且漏了 F_DEMO。
     // 该 fallback 仅在 property key 从所有配置源消失时才生效 (properties 打进 jar, 实际
     // 概率极低), 但陈旧值会误导读者, 且与编排器同源配置的 fallback 不一致。
-    // 2026-08-05: DEMO_REST 随租户收敛停用, 从 fallback 移除 (与 application.properties 同步)。
+    // Keep the retired tenant in this fallback solely to block writes from old JWTs.
+    // This does not restore demo-login or any restaurant identity configuration.
     @Value("${cretas.demo.factory-ids:DEMO_REST,DEMO_FACTORY2,F_DEMO}")
     private String demoFactoryIdsCsv;
 
@@ -66,15 +67,6 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
             "/search"        // 搜索
     );
 
-    /**
-     * Restaurant Agent 的 start/cancel 仅写隔离的 AI run/event 台账，不执行 ERP
-     * 业务写入。使用完整路径匹配，避免把未来新增的 restaurant-agent 写接口
-     * 一并放出演示租户只读锁。
-     */
-    private static final Pattern READ_ONLY_RESTAURANT_AGENT_POST = Pattern.compile(
-            "^/api/mobile/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/restaurant-agent/runs"
-                    + "(?:/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-                    + "-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/cancel)?$");
     // Activity collection writes only the diagnostic timeline, never ERP business records.
     private static final Pattern ACTIVITY_COLLECTION_POST = Pattern.compile(
             "^/api/mobile/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/activity-events$");
@@ -111,8 +103,7 @@ public class DemoReadOnlyInterceptor implements HandlerInterceptor {
                 sendReadOnly(response);
                 return false;
             }
-            if (READ_ONLY_RESTAURANT_AGENT_POST.matcher(uri).matches()
-                    || ACTIVITY_COLLECTION_POST.matcher(uri).matches()) {
+            if (ACTIVITY_COLLECTION_POST.matcher(uri).matches()) {
                 return true;
             }
             for (String allow : READ_POST_ALLOW) {

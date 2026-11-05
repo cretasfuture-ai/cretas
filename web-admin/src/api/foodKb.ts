@@ -1,5 +1,5 @@
 /**
- * 餐饮指数字典 KB chat API client.
+ * 食品工厂手册 KB chat API client.
  * Calls FastAPI: POST /api/food-kb/manual-chat
  *
  * Uses pythonFetch (auto snake_case → camelCase). Server returns

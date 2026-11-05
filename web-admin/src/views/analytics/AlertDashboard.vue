@@ -3,10 +3,6 @@
  * 生产异常预警看板
  * 提供告警汇总、筛选、确认/解决操作和 AI 根因分析详情
  *
- * 餐饮租户 (isRestaurant): 站立式/主动预警看板, 直接调用真实 14 指标阈值引擎
- * (DiagnosticsEngine, 经 GET /health-check-report), 不是聊天问答, 也不是硬编码
- * 3 条规则. 复用 HealthReportView.vue 的同款 API client + DiagnosisCard 渲染,
- * 首屏自动加载上月报告 (fool-proof-design Rule 1 — 主动触达, 不需用户先问).
  */
 import { ref, onMounted, computed } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
@@ -17,59 +13,15 @@ import { usePermissionStore } from '@/store/modules/permission'
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { isAxiosError } from 'axios'
-import {
-  fetchHealthCheckReport,
-  type HealthCheckReport,
-} from '@/api/smartbi/healthCheck'
-import DiagnosisCard from '@/views/smart-bi/components/health/DiagnosisCard.vue'
 
 const authStore = useAuthStore()
 const permissionStore = usePermissionStore()
 const factoryId = computed(() => authStore.factoryId)
-// Apr 24 Plan C Phase 7: restaurant tenants get Gold-derived alerts.
-// Jul 11 2026: 硬编码 3 条阈值规则 → 换成真实 14 指标 DiagnosticsEngine (G4
-// health-check-report), engine-backed 站立式预警 (见 module docstring).
-const isRestaurant = computed(() => authStore.factoryType === 'RESTAURANT')
 // 🔴 2026-08-22: 「手动检测」POST /alerts/detect 要 equipment:read_write ⇒
 //   finance_manager / operations_coordinator / production_clerk 在数据分析菜单里
 //   看得见这个按钮, 点下去必 403。触发设备告警检测是运维动作。
 // ⛔ 不放宽后端。⚠️ 看板本身**照常可看** —— 挡的只有这一个触发按钮。
 const canTriggerDetection = computed(() => permissionStore.canWrite('equipment'))
-
-const healthReport = ref<HealthCheckReport | null>(null)
-const healthReportLoading = ref(false)
-const healthReportError = ref('')
-
-const healthDiagnoses = computed(() => healthReport.value?.diagnoses ?? [])
-const healthSummary = computed(() => healthReport.value?.summary ?? null)
-const healthMeta = computed(() => healthReport.value?.reportMeta ?? null)
-const healthAllClear = computed(
-  () => !healthReportLoading.value && healthReport.value != null && healthDiagnoses.value.length === 0,
-)
-
-async function loadRestaurantAlerts() {
-  if (!factoryId.value) return
-  healthReportLoading.value = true
-  healthReportError.value = ''
-  try {
-    const res = await fetchHealthCheckReport(factoryId.value)
-    if (!res.success || !res.data) {
-      throw new Error(res.message || '预警看板加载失败')
-    }
-    healthReport.value = res.data
-  } catch (e) {
-    const msg = isAxiosError(e)
-      ? (e.response?.data?.message ?? '请求失败')
-      : (e instanceof Error ? e.message : String(e))
-    healthReportError.value = msg
-    healthReport.value = null
-    ElMessage({ message: msg, type: 'error', duration: 0, showClose: true })
-    console.error('[alerts] restaurant health-check load failed:', e)
-  } finally {
-    healthReportLoading.value = false
-  }
-}
 
 // --- State ---
 const loading = ref(false)
@@ -319,7 +271,6 @@ function handlePageChange(page: number) {
 }
 
 onMounted(() => {
-  if (isRestaurant.value) loadRestaurantAlerts()
   loadData()
 })
 </script>
@@ -327,96 +278,14 @@ onMounted(() => {
 <template>
   <div class="alert-dashboard">
     <div class="page-header">
-      <h2>{{ isRestaurant ? '餐饮运营异常预警' : '生产异常预警' }}</h2>
+      <h2>生产异常预警</h2>
       <div class="controls">
-        <el-button v-if="!isRestaurant && canTriggerDetection" type="primary" @click="triggerDetection" :loading="detecting">
+        <el-button v-if="canTriggerDetection" type="primary" @click="triggerDetection" :loading="detecting">
           手动检测
         </el-button>
-        <el-button @click="isRestaurant ? loadRestaurantAlerts() : loadData()" :icon="Refresh">刷新</el-button>
+        <el-button @click="loadData" :icon="Refresh">刷新</el-button>
       </div>
     </div>
-
-    <!-- Jul 11 2026: restaurant engine-backed standing alert dashboard.
-         Replaces the 3 hardcoded client-side rules with the real 14-metric
-         DiagnosticsEngine (via GET /health-check-report) — same data/engine
-         as HealthReportView.vue's AI 经营体检, rendered here as alerts. -->
-    <div v-if="isRestaurant" class="restaurant-alerts" style="margin-bottom:20px" data-test="restaurant-alert-panel">
-      <!-- 加载中 -->
-      <div v-if="healthReportLoading" v-loading="true" element-loading-text="正在检测经营异常..." style="height:160px" />
-
-      <!-- 错误 (4-位一体: sticky toast 已在 loadRestaurantAlerts 内触发, 这里再显式展示) -->
-      <el-alert
-        v-else-if="healthReportError"
-        :title="healthReportError"
-        type="error"
-        :closable="false"
-        show-icon
-        data-test="restaurant-alert-error"
-      />
-
-      <template v-else-if="healthReport">
-        <!-- 摘要徽章 -->
-        <div class="summary-row-restaurant" data-test="restaurant-summary-row">
-          <div class="summary-card critical">
-            <div class="summary-count">{{ healthSummary?.criticalCount ?? 0 }}</div>
-            <div class="summary-label">严重</div>
-          </div>
-          <div class="summary-card warning">
-            <div class="summary-count">{{ healthSummary?.warningCount ?? 0 }}</div>
-            <div class="summary-label">预警</div>
-          </div>
-          <div class="summary-card resolved">
-            <div class="summary-count">{{ healthSummary?.checkedCount ?? 0 }}</div>
-            <div class="summary-label">已检查指标</div>
-          </div>
-          <el-tooltip
-            v-if="healthSummary?.coverageNote"
-            :content="healthSummary.coverageNote"
-            placement="bottom"
-            data-test="restaurant-coverage-tooltip"
-          >
-            <span class="coverage-hint">数据覆盖说明</span>
-          </el-tooltip>
-        </div>
-
-        <!-- 全部健康 — 诚实空态, 不编造告警 -->
-        <el-empty
-          v-if="healthAllClear"
-          description="本期无越界预警,经营指标均在正常范围"
-          style="padding:30px 0"
-          data-test="restaurant-all-clear"
-        />
-
-        <!-- 诊断卡片墙 (复用 AI 经营体检同款 DiagnosisCard) -->
-        <div v-else class="card-wall">
-          <DiagnosisCard
-            v-for="(d, idx) in healthDiagnoses"
-            :key="d.metricKey"
-            :diagnosis="d"
-            :default-expanded="d.severity === 'critical' && idx < 3"
-          />
-        </div>
-
-        <div v-if="healthMeta" class="restaurant-report-footer">
-          周期: {{ healthMeta.period }} · 业态: {{ healthMeta.subSector }} · 快照: {{ healthMeta.snapshotAt }}
-          <span v-if="healthMeta.cacheHit"> · (缓存)</span>
-        </div>
-      </template>
-
-      <el-alert type="info" :closable="false" style="margin-top:16px" show-icon>
-        <template #title>关于本看板</template>
-        <div style="font-size:12px;line-height:1.7">
-          预警来自真实 14 指标经营诊断引擎 (食材成本率/人力成本率/折扣率/外卖依赖度/
-          渠道收款率/评分趋势/食材损耗率/客单价达标率 等), 与"AI 经营体检"共用同一套
-          行业基准阈值, 不是聊天问答也不是固定硬编码规则. 部分指标(如翻台率/充卡赠送
-          依赖度/菜品毛利率)因暂无可靠数据来源而诚实跳过, 不编造数值 — 详见"数据覆盖
-          说明".
-        </div>
-      </el-alert>
-    </div>
-
-    <!-- Factory tenant: manufacturing alerts only (original flow) -->
-    <template v-if="!isRestaurant">
 
     <!-- Summary Cards -->
     <div class="summary-row" v-loading="loading" empty-text="暂无数据">
@@ -581,42 +450,10 @@ onMounted(() => {
         </div>
       </div>
     </el-drawer>
-    </template><!-- /!isRestaurant -->
   </div>
 </template>
 
 <style lang="scss" scoped>
-.restaurant-alerts {
-  .summary-row-restaurant {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-
-    .summary-card {
-      min-width: 100px;
-      padding: 14px 20px;
-    }
-  }
-  .coverage-hint {
-    font-size: 13px;
-    color: #909399;
-    cursor: help;
-    text-decoration: underline dotted;
-  }
-  .card-wall {
-    margin-top: 8px;
-  }
-  .restaurant-report-footer {
-    margin-top: 16px;
-    padding-top: 12px;
-    border-top: 1px solid #ebeef5;
-    font-size: 12px;
-    color: #c0c4cc;
-    text-align: center;
-  }
-}
 .alert-dashboard {
   padding: 20px;
 }

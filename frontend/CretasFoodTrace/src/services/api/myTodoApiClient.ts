@@ -120,7 +120,7 @@ class TodoApprovalApiClient {
       `/api/mobile/${this.fid(factoryId)}/workflow/instances/${instanceId}/actions`,
       {
         action,
-        notes,
+        comment: notes,
         expectedNodeId,
         // 每次点击一个新键。重复点不会重复执行 —— 第一次成功后节点已推进,
         // 第二次会被 expectedNodeId 的乐观锁挡成 409, 而不是批两次。
@@ -183,7 +183,7 @@ class TodoApprovalApiClient {
   ): Promise<{ success: boolean; data: unknown; message?: string }> {
     return apiClient.post(
       `/api/mobile/${this.fid(factoryId)}/warehouse/supplier-delivery-notes/${noteId}/price-anomaly/reject`,
-      { notes },
+      { comment: notes },
     );
   }
 

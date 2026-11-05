@@ -112,8 +112,7 @@ class KnowledgeRetriever:
         Args:
             query: User query text
             categories: Filter by document categories (e.g., ['standard', 'additive'])
-            subcategories: Filter by document subcategory (e.g., ['restaurant'] limits
-                to restaurant manuals only). None = no subcategory filter (legacy behavior).
+            subcategories: Optional tenant subcategory filter. None = no filter.
             top_k: Number of results to return
             similarity_threshold: Minimum cosine similarity threshold
             include_expired: Whether to include expired documents
@@ -342,7 +341,7 @@ class KnowledgeRetriever:
 
             if subcategories:
                 # NULL chunks (通用食品知识 / GB 标准 / 法规) 对所有 category 都该召回
-                # 用 OR IS NULL 让 factory/restaurant 查询都能查到合规章节
+                # 用 OR IS NULL 让工厂域查询也能查到通用合规章节
                 sql += f" AND (subcategory = ANY(${param_idx}::text[]) OR subcategory IS NULL)"
                 params.append(subcategories)
                 param_idx += 1
@@ -613,9 +612,9 @@ class KnowledgeRetriever:
             params.append(categories)
             param_idx += 1
 
-        # Subcategory filter (domain routing — restaurant / factory / NULL)
+        # Subcategory filter (factory / NULL)
         # NULL chunks (通用食品知识 / GB 标准 / 法规) 对所有 category 都该召回
-        # 用 OR IS NULL 让 factory/restaurant 查询都能查到合规章节
+        # 用 OR IS NULL 让工厂域查询也能查到通用合规章节
         if subcategories:
             sql += f" AND (subcategory = ANY(${param_idx}::text[]) OR subcategory IS NULL)"
             params.append(subcategories)
@@ -674,7 +673,7 @@ class KnowledgeRetriever:
 
             if subcategories:
                 # NULL chunks (通用食品知识 / GB 标准 / 法规) 对所有 category 都该召回
-                # 用 OR IS NULL 让 factory/restaurant 查询都能查到合规章节
+                # 用 OR IS NULL 让工厂域查询也能查到通用合规章节
                 sql += f" AND (subcategory = ANY(${param_idx}::text[]) OR subcategory IS NULL)"
                 params.append(subcategories)
                 param_idx += 1

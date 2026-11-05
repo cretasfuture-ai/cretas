@@ -83,12 +83,10 @@
       <el-radio-group v-model="uploadTarget" class="upload-type-list">
         <label
           class="upload-type-option"
-          :class="{ active: uploadTarget === 'restaurantSupplierDelivery' }"
+          :class="{ active: uploadTarget === 'genericImportRule' }"
         >
-          <el-radio value="restaurantSupplierDelivery">
-            供应商送货 / 采购进货 Excel、CSV
-          </el-radio>
-          <span>进入供应商进货导入流程，解析后先生成草稿送货单，不自动入库。</span>
+          <el-radio value="genericImportRule">按系统导入规则处理</el-radio>
+          <span>选择已配置的工厂导入规则，继续执行校验和提交。</span>
         </label>
         <label
           class="upload-type-option"
@@ -287,10 +285,10 @@ const loadingRules = ref(false);
 const jobs = ref<ImportJob[]>([]);
 const loadingJobs = ref(false);
 
-type UniversalUploadTarget = 'restaurantSupplierDelivery' | 'genericImportRule';
+type UniversalUploadTarget = 'genericImportRule';
 
 const uploadClassifierOpen = ref(false);
-const uploadTarget = ref<UniversalUploadTarget>('restaurantSupplierDelivery');
+const uploadTarget = ref<UniversalUploadTarget>('genericImportRule');
 const genericRuleId = ref<number | null>(null);
 const selectableRules = computed(() =>
   rules.value.filter((rule): rule is ImportRule & { id: number } => typeof rule.id === 'number'),
@@ -373,21 +371,12 @@ function openCreate() {
 }
 
 function openUniversalUpload() {
-  uploadTarget.value = 'restaurantSupplierDelivery';
+  uploadTarget.value = 'genericImportRule';
   genericRuleId.value = null;
   uploadClassifierOpen.value = true;
 }
 
 function continueUniversalUpload() {
-  if (uploadTarget.value === 'restaurantSupplierDelivery') {
-    uploadClassifierOpen.value = false;
-    router.push({
-      name: 'SupplierDeliveryNoteList',
-      query: { openImport: 'supplier-delivery' },
-    });
-    return;
-  }
-
   if (!selectedGenericRule.value) {
     ElMessage.warning('请先选择一个导入规则');
     return;

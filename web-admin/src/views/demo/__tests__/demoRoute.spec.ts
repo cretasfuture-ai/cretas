@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { resolveDemoRedirect, resolveDemoTenant, resolveLogisticsDemoRoute } from '../demoRoute';
 
 describe('demoRoute', () => {
-  it('resolves restaurant demo tenants', () => {
-    expect(resolveDemoTenant({ tenant: 'rest' })).toBe('rest');
-    expect(resolveDemoTenant({ tenant: 'restaurant' })).toBe('rest');
-    expect(resolveDemoTenant({ type: 'catering' })).toBe('rest');
+  it('retires restaurant demo tenants instead of issuing a login', () => {
+    expect(resolveDemoTenant({ tenant: 'rest' })).toBeNull();
+    expect(resolveDemoTenant({ tenant: 'restaurant' })).toBeNull();
+    expect(resolveDemoTenant({ type: 'catering' })).toBeNull();
   });
 
   it('resolves factory demo tenants', () => {

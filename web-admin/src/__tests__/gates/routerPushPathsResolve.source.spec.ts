@@ -56,10 +56,8 @@ const PLACEHOLDER = 'x1';
  */
 const REVIEWED_NOT_A_DEFECT: readonly { probe: string; why: string }[] = [
   {
-    probe: '/restaurant/x1',
-    // DeptKey = 'ops'|'marketing'|'hr'|'finance'|'procurement'(departmentConfig.ts),
-    // /restaurant/{ops,marketing,hr,finance,procurement} 五条路由全部存在。
-    why: 'DepartmentDashboard 的 `/restaurant/${key}`，key 是 DeptKey 五选一，五条都在',
+    probe: '/factory/x1',
+    why: 'Factory routes remain handled by the shared router',
   },
   {
     probe: '/system/smartbi-config/x1',

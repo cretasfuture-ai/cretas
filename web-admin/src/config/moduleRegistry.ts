@@ -20,7 +20,6 @@ export const PRODUCTION_MODULE_REGISTRY: ModuleRegistryItem[] = [
   { moduleCode: 'finance_ap', displayName: '应付财务', category: '财务', permissionModule: 'finance', legacyModule: 'finance' },
   { moduleCode: 'finance_ar', displayName: '应收财务', category: '财务', permissionModule: 'finance' },
   { moduleCode: 'hr_employee', displayName: '员工/人事', category: '人事', permissionModule: 'hr', legacyModule: 'hr' },
-  { moduleCode: 'restaurant', displayName: '餐饮经营', category: '餐饮', permissionModule: 'restaurant' },
   { moduleCode: 'production', displayName: '生产管理', category: '兼容', permissionModule: 'production' },
 ];
 

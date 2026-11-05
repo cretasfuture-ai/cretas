@@ -10,19 +10,9 @@
 
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
-  View,
-  StyleSheet,
-  ScrollView,
-  TextInput,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  Animated,
-  AccessibilityInfo,
-  useWindowDimensions,
-  type StyleProp,
-  type ViewStyle,
+  View, StyleSheet, ScrollView, TextInput, TouchableOpacity,
+  KeyboardAvoidingView, Platform, Pressable, Animated, AccessibilityInfo,
+  useWindowDimensions, type StyleProp, type ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp, CommonActions } from '@react-navigation/native';
@@ -42,26 +32,12 @@ import { aiApiClient } from '../../../services/api/aiApiClient';
 import type { IntentSSECallbacks } from '../../../services/api/aiApiClient';
 import { intentConfigApiClient, buildConfirmationProof } from '../../../services/api/intentConfigApiClient';
 import { AIWriteConfirmCard } from '../../../components/ai/AIWriteConfirmCard';
-import {
-  applyPreviewResponse,
-  classifyConfirmError,
-  classifyConfirmResponse,
-  isPreviewExpired,
-  previewRequestFailed,
-  writeConfirmFromStreamResult,
-  CANCELLED_REPLY,
-  EXPIRED_NOTICE,
-  type ConfirmOutcome,
-  type WriteConfirmState,
-} from '../../../components/ai/aiWriteConfirm';
+import { applyPreviewResponse, classifyConfirmError, classifyConfirmResponse, isPreviewExpired, previewRequestFailed, writeConfirmFromStreamResult, CANCELLED_REPLY, EXPIRED_NOTICE, type ConfirmOutcome, type WriteConfirmState } from '../../../components/ai/aiWriteConfirm';
 import type { FAAIStackParamList } from '../../../types/navigation';
 import { QuickActionCardGrid, resolveCardFactory } from '../../../components/ai/QuickActionCardGrid';
 import { feedbackSounds } from '../../../services/audio/feedbackSounds';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import {
-  RESTAURANT_AGENT_RUN_ROUTE,
-} from '../../../types/restaurantAgentRun';
-import { RestaurantGrossMarginRunCard } from '../../../components/ai/RestaurantGrossMarginRunCard';
+const RESTAURANT_AGENT_RUN_ROUTE = 'RESTAURANT_AGENT_RUN';
 import { AI_DEBUG_TELEMETRY, chatFontFamily, withChatFonts } from '../../../components/ai/chatTypography';
 import { isRestaurant } from '../../../utils/factoryType';
 import { currentShanghaiIsoDate } from '../../../utils/shanghaiDate';
@@ -1436,19 +1412,6 @@ function AIChatScreenContent() {
               onConfirm={() => { void handleWriteConfirm(message.id); }}
               onCancel={() => handleWriteCancel(message.id)}
               onRegenerate={() => handleWriteRegenerate(message.id)}
-            />
-          ) : null}
-          {!message.isLoading
-            && message.agentRun
-            && message.agentRunFactoryId === currentFactoryId
-            && message.agentRunOwnerUserId === String(user?.id ?? '') ? (
-            <RestaurantGrossMarginRunCard
-              key={`restaurant-agent:${message.id}:${String(user?.id ?? '')}:${currentFactoryId}`}
-              factoryId={currentFactoryId}
-              ownerUserId={String(user?.id ?? '')}
-              startDate={message.agentRun.startDate}
-              endDate={message.agentRun.endDate}
-              autoStart={message.agentRun.autoStart}
             />
           ) : null}
           {/* 显示建议操作按钮 (当需要澄清时): 竖排、占满正文列、一个样式 (标准 F3) */}

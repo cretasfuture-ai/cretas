@@ -47,7 +47,6 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
-    private static final String SUPPORTED_PYTHON_INDICATOR_CODE = "RESTAURANT_DISH_MARGIN";
 
     private final IndicatorRepository indicatorRepository;
     private final IndicatorVersionRepository indicatorVersionRepository;
@@ -178,11 +177,10 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
                 source = strategySource(ind.getCode(), strategy.get());
             } else if ("PYTHON_ENDPOINT".equals(type)) {
                 source = "PYTHON_ENDPOINT:" + ind.getCode();
-                if (!SUPPORTED_PYTHON_INDICATOR_CODE.equals(ind.getCode())
-                        || !pythonSmartBIClient.supportsIndicatorValueEndpoint(
-                        configured.isEmpty() ? null : configured.get(0).getComputeSource())) {
-                    return new IndicatorValueResult(null, null, false, source, IndicatorValueResult.FAILED);
-                }
+                // The retired restaurant-only Python indicator bridge is no
+                // longer an executable capability. Keep persisted historical
+                // configuration honest: it is unsupported, never synthetic.
+                return new IndicatorValueResult(null, null, false, source, IndicatorValueResult.FAILED);
             } else {
                 return new IndicatorValueResult(null, null, false, "UNKNOWN:" + ind.getCode(),
                         IndicatorValueResult.FAILED);
@@ -278,22 +276,10 @@ public class IndicatorQueryServiceImpl implements IndicatorQueryService {
         }
 
         if ("PYTHON_ENDPOINT".equals(type)) {
-            if (!SUPPORTED_PYTHON_INDICATOR_CODE.equals(ind.getCode())) {
-                log.warn("fetchFromPython: no typed bridge registered for code={} — returning FAILED",
-                        ind.getCode());
-                return new FetchOutcome(null, "PYTHON_ENDPOINT:" + ind.getCode(),
-                        IndicatorValueResult.FAILED);
-            }
-            try {
-                BigDecimal value = pythonSmartBIClient.fetchIndicatorValue(
-                        factoryId, primary.getComputeSource(), start, end);
-                return outcomeFor(value, "PYTHON_ENDPOINT:" + ind.getCode());
-            } catch (RuntimeException ex) {
-                log.warn("fetchFromPython: Python endpoint failed for code={}: {}",
-                        ind.getCode(), ex.getMessage());
-                return new FetchOutcome(null, "PYTHON_ENDPOINT:" + ind.getCode(),
-                        IndicatorValueResult.FAILED);
-            }
+            log.warn("fetchFromPython: Python indicator bridge retired for code={} — returning FAILED",
+                    ind.getCode());
+            return new FetchOutcome(null, "PYTHON_ENDPOINT:" + ind.getCode(),
+                    IndicatorValueResult.FAILED);
         }
 
         log.warn("fetchFromPython: unrecognized computeType={} for code={} — returning FAILED",

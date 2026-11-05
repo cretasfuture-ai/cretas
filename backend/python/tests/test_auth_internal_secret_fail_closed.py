@@ -41,7 +41,7 @@ class _Echo:
         await send({"type": "http.response.body", "body": b"ok"})
 
 
-def _run(middleware, headers, path="/api/smartbi/gold/restaurant/tiered-answer"):
+def _run(middleware, headers, path="/api/chat/general-analysis"):
     """Drive one request through the middleware; return (status, downstream)."""
     downstream = middleware.app  # the _Echo instance
     scope = {
@@ -72,7 +72,7 @@ def _mw(enabled=True, jwt_secret="test-secret-only-for-jwt-branch"):
 
 
 _HARDCODED_OLD_FALLBACK = "cretas-internal-2026"
-_OWNER_ACTION_PATH = "/api/smartbi/restaurant/sections/owner-action-chat"
+_PROTECTED_ANALYSIS_PATH = "/api/internal/smartbi/agent/runs"
 _AGENT_RUN_PATH = "/api/internal/smartbi/agent/runs"
 _LABEL_QC_PATH = "/api/label-qc/analyze"
 _GENERAL_ANALYSIS_PATHS = (
@@ -108,9 +108,9 @@ def test_agent_run_prefix_requires_secret_and_injects_trusted_identity(monkeypat
         _mw(),
         {
             "x-internal-secret": "real-prod-secret-xyz",
-            "x-factory-id": "REST-1",
+            "x-factory-id": "F006",
             "x-user-id": "user-7",
-            "x-user-role": "restaurant_owner",
+            "x-user-role": "factory_super_admin",
             "x-business-type": "RESTAURANT",
         },
         path=_AGENT_RUN_PATH,
@@ -121,11 +121,11 @@ def test_agent_run_prefix_requires_secret_and_injects_trusted_identity(monkeypat
     assert wrong_echo.reached is False
     assert status == 200
     assert echo.state == {
-        "factory_id": "REST-1",
+        "factory_id": "F006",
         "user_id": "user-7",
         "auth_method": "internal",
         "business_type": "RESTAURANT",
-        "role": "restaurant_owner",
+        "role": "factory_super_admin",
     }
 
 
@@ -255,38 +255,38 @@ def test_empty_string_env_is_fail_closed(monkeypatch):
     assert status == 401
 
 
-def test_owner_action_exact_route_rejects_missing_secret_before_public_prefix(monkeypatch):
+def test_protected_analysis_exact_route_rejects_missing_secret_before_public_prefix(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
     mw = _mw()
 
-    status, echo = _run(mw, {}, path=_OWNER_ACTION_PATH)
+    status, echo = _run(mw, {}, path=_PROTECTED_ANALYSIS_PATH)
 
     assert echo.reached is False
     assert status == 401
 
 
-def test_owner_action_exact_route_rejects_wrong_secret_before_public_prefix(monkeypatch):
+def test_protected_analysis_exact_route_rejects_wrong_secret_before_public_prefix(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
     mw = _mw()
 
     status, echo = _run(
         mw,
         {"x-internal-secret": "wrong-secret", "x-factory-id": "F001"},
-        path=_OWNER_ACTION_PATH,
+        path=_PROTECTED_ANALYSIS_PATH,
     )
 
     assert echo.reached is False
     assert status == 401
 
 
-def test_owner_action_exact_route_accepts_correct_internal_identity(monkeypatch):
+def test_protected_analysis_exact_route_accepts_correct_internal_identity(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
     mw = _mw()
 
     status, echo = _run(
         mw,
         {"x-internal-secret": "real-prod-secret-xyz", "x-factory-id": "F001"},
-        path=_OWNER_ACTION_PATH,
+        path=_PROTECTED_ANALYSIS_PATH,
     )
 
     assert echo.reached is True
@@ -295,14 +295,14 @@ def test_owner_action_exact_route_accepts_correct_internal_identity(monkeypatch)
     assert status == 200
 
 
-def test_non_target_restaurant_section_requires_authentication(monkeypatch):
+def test_factory_excel_route_requires_authentication(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
     mw = _mw()
 
     status, echo = _run(
         mw,
         {},
-        path="/api/smartbi/restaurant/sections/list",
+        path="/api/smartbi/excel/auto-parse-status/42",
     )
 
     assert echo.reached is False
@@ -333,7 +333,7 @@ def test_blank_jwt_secret_rejects_token_signed_with_zero_key(monkeypatch):
     status, echo = _run(
         _mw(jwt_secret=""),
         {"authorization": f"Bearer {zero_key_token}"},
-        path="/api/smartbi/restaurant/sections/list",
+        path="/api/smartbi/excel/auto-parse-status/42",
     )
 
     assert echo.reached is False
@@ -346,7 +346,7 @@ def test_blank_jwt_secret_does_not_disable_valid_internal_auth(monkeypatch):
     status, echo = _run(
         _mw(jwt_secret="   "),
         {"x-internal-secret": "real-prod-secret-xyz", "x-factory-id": "F001"},
-        path="/api/smartbi/restaurant/sections/list",
+        path="/api/smartbi/excel/auto-parse-status/42",
     )
 
     assert echo.reached is True
@@ -354,7 +354,7 @@ def test_blank_jwt_secret_does_not_disable_valid_internal_auth(monkeypatch):
     assert status == 200
 
 
-def test_valid_jwt_authenticates_newly_protected_restaurant_prefix(monkeypatch):
+def test_valid_jwt_authenticates_protected_factory_prefix(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
     raw_secret = "jwt-real-secret"
     padded_secret = raw_secret.encode("utf-8") + b"\x00" * (
@@ -362,9 +362,9 @@ def test_valid_jwt_authenticates_newly_protected_restaurant_prefix(monkeypatch):
     )
     token = pyjwt.encode(
         {
-            "factoryId": "REST-1",
+            "factoryId": "F006",
             "userId": 7,
-            "role": "restaurant_manager",
+            "role": "production_manager",
             "exp": int(time.time()) + 300,
         },
         padded_secret,
@@ -374,12 +374,12 @@ def test_valid_jwt_authenticates_newly_protected_restaurant_prefix(monkeypatch):
     status, echo = _run(
         _mw(jwt_secret=raw_secret),
         {"authorization": f"Bearer {token}"},
-        path="/api/smartbi/restaurant/sections/list",
+        path="/api/smartbi/excel/auto-parse-status/42",
     )
 
     assert echo.reached is True
     assert echo.state.get("auth_method") == "jwt"
-    assert echo.state.get("factory_id") == "REST-1"
+    assert echo.state.get("factory_id") == "F006"
     assert status == 200
 
 
@@ -387,27 +387,27 @@ def test_valid_jwt_authenticates_newly_protected_restaurant_prefix(monkeypatch):
     {},
     {"x-internal-secret": "wrong-secret", "x-factory-id": "F001"},
 ])
-def test_owner_action_remains_fail_closed_when_general_auth_is_disabled(
+def test_protected_analysis_remains_fail_closed_when_general_auth_is_disabled(
     monkeypatch,
     headers,
 ):
     monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
     mw = _mw(enabled=False)
 
-    status, echo = _run(mw, headers, path=_OWNER_ACTION_PATH)
+    status, echo = _run(mw, headers, path=_PROTECTED_ANALYSIS_PATH)
 
     assert echo.reached is False
     assert status == 401
 
 
-def test_owner_action_correct_internal_identity_works_when_general_auth_is_disabled(monkeypatch):
+def test_protected_analysis_correct_internal_identity_works_when_general_auth_is_disabled(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "real-prod-secret-xyz")
     mw = _mw(enabled=False)
 
     status, echo = _run(
         mw,
         {"x-internal-secret": "real-prod-secret-xyz", "x-factory-id": "F001"},
-        path=_OWNER_ACTION_PATH,
+        path=_PROTECTED_ANALYSIS_PATH,
     )
 
     assert echo.reached is True

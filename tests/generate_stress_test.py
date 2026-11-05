@@ -2,7 +2,7 @@
 """
 SmartBI 压测数据生成器 — 用于测试系统处理大数据量的能力和上限
 
-生成 L1-L2 两个级别的压力测试文件，分为工厂端和餐饮端：
+生成 L1-L2 两个级别的压力测试文件，仅生成工厂端数据：
 - L1: 50,000 行 (~6MB)   — 上传端测试（10MB 内，含 merge/样式/百分比）
 - L2: 200,000 行 (~24MB) — API 直接测试（超 10MB 上传限制，测 Python 解析性能）
 
@@ -15,7 +15,7 @@ L2 测试方式：直接用 openpyxl 读取后调用 Python /api/smartbi/chart/b
 Usage:
     python tests/generate_stress_test.py --level L1            # 50K 行 (上传端)
     python tests/generate_stress_test.py --level L2            # 200K 行 (API 直接)
-    python tests/generate_stress_test.py --all                 # L1+L2 × factory+restaurant
+    python tests/generate_stress_test.py --all                 # L1+L2 × factory
 """
 import argparse
 import random
@@ -72,26 +72,10 @@ FACTORY_EXPENSE_TYPES = [
 ]
 
 # ============================================================
-# 餐饮端数据模板
 # ============================================================
 
-RESTAURANT_STORES = [
-    "旗舰店-南京西路", "旗舰店-天河城", "旗舰店-三里屯", "旗舰店-春熙路",
-    "标准店-人民广场", "标准店-体育西", "标准店-望京", "标准店-锦里",
-    "社区店-浦东", "社区店-番禺", "社区店-朝阳", "社区店-武侯",
-    "外卖店-虹口", "外卖店-海珠", "外卖店-丰台", "外卖店-金牛",
-    "商场店-静安嘉里", "商场店-太古汇", "商场店-朝阳大悦城", "商场店-IFS",
-]
 
-RESTAURANT_MENU = [
-    "招牌酸菜鱼", "藤椒鱼", "番茄鱼", "金汤酸菜鱼", "麻辣水煮鱼",
-    "酸汤肥牛", "毛血旺", "沸腾虾", "干锅花菜", "口水鸡",
-    "蒜泥白肉", "麻婆豆腐", "宫保鸡丁", "鱼香肉丝", "回锅肉",
-    "米饭", "蛋炒饭", "酸梅汁", "豆浆", "冰粉",
-    "凉拌木耳", "拍黄瓜", "泡椒凤爪", "红糖糍粑", "炸酱面",
-]
 
-RESTAURANT_CHANNELS = ["堂食", "美团外卖", "饿了么", "抖音团购", "小红书团购", "自营小程序"]
 
 PAYMENT_METHODS = ["微信", "支付宝", "现金", "银行卡", "美团余额", "饿了么余额", "储值卡", "信用卡"]
 
@@ -384,305 +368,10 @@ def gen_factory_inventory(wb, n_rows, seed, use_write_only=False):
 # 餐饮端 sheet 生成器
 # ============================================================
 
-def gen_restaurant_orders(wb, n_rows, seed, use_write_only=False):
-    """餐饮订单流水 — 单品级别交易明细 + merge headers + 百分比格式。"""
-    random.seed(seed)
-    ws = wb.create_sheet(title="订单流水")
-
-    headers = [
-        "订单号", "下单时间", "门店", "渠道", "桌号/骑手",
-        "菜品名称", "菜品类别", "数量", "单价", "小计",
-        "折扣", "实收", "支付方式", "顾客类型", "会员等级",
-        "评分", "评价标签", "配送费", "打包费", "优惠券抵扣",
-        "平台抽成率", "平台抽成额", "实际到账", "备注",
-    ]
-
-    data_start_row = 1
-    if not use_write_only:
-        border = Border(left=Side("thin"), right=Side("thin"), top=Side("thin"), bottom=Side("thin"))
-        # Level 1: major groups
-        _style_header(ws, 1, 1, "订单基本信息", merge_end_col=5)
-        _style_header(ws, 1, 6, "菜品信息", merge_end_col=7)
-        _style_header(ws, 1, 8, "金额明细", merge_end_col=12)
-        _style_header(ws, 1, 13, "顾客信息", merge_end_col=17)
-        _style_header(ws, 1, 18, "附加费用", merge_end_col=20)
-        _style_header(ws, 1, 21, "平台结算", merge_end_col=23)
-        _style_header(ws, 1, 24, "备注")
-        # Level 2: sub-groups
-        _style_header(ws, 2, 1, "标识", merge_end_col=2)
-        _style_header(ws, 2, 3, "渠道", merge_end_col=5)
-        _style_header(ws, 2, 6, "品类", merge_end_col=7)
-        _style_header(ws, 2, 8, "原始", merge_end_col=10)
-        _style_header(ws, 2, 11, "折后", merge_end_col=12)
-        _style_header(ws, 2, 13, "属性", merge_end_col=15)
-        _style_header(ws, 2, 16, "评价", merge_end_col=17)
-        _style_header(ws, 2, 18, "费用", merge_end_col=20)
-        _style_header(ws, 2, 21, "抽成", merge_end_col=23)
-        _style_header(ws, 2, 24, "")
-        # Level 3: column headers
-        for ci, h in enumerate(headers, 1):
-            cell = ws.cell(row=3, column=ci, value=h)
-            cell.font = Font(bold=True, size=9)
-            cell.fill = PatternFill("solid", fgColor="D6E4F0")
-            cell.alignment = Alignment(horizontal="center")
-            cell.border = border
-        data_start_row = 4
-    else:
-        ws.append(headers)
-
-    # Percentage columns: 折扣=11, 平台抽成率=21
-    pct_cols = {11, 21}
-
-    categories = {item: ("招牌菜" if "鱼" in item or "虾" in item else
-                         "主食" if "饭" in item or "面" in item else
-                         "饮品" if "汁" in item or "浆" in item or "粉" in item else
-                         "凉菜" if "凉" in item or "拍" in item or "泡" in item else
-                         "热菜") for item in RESTAURANT_MENU}
-    customer_types = ["新客", "回头客", "会员", "团购客"]
-    member_levels = [None, "普通会员", "银卡", "金卡", "钻石卡", "黑卡"]
-    ratings = [None, 3, 3.5, 4, 4, 4.5, 4.5, 5, 5, 5]
-    tags = [None, None, "好评", "味道好", "分量足", "上菜快", "环境好", "服务好", "一般", "偏咸", "等太久"]
-
-    base_date = datetime(2025, 1, 1, 10, 0)
-    order_id = 200000
-    border = Border(left=Side("thin"), right=Side("thin"), top=Side("thin"), bottom=Side("thin"))
-    mixed_notes = [None, None, "加辣", "少盐", 1, 2, True, "催单", 888, False, "不要葱"]
-
-    for i in range(n_rows):
-        order_id += 1
-        order_time = base_date + timedelta(
-            days=random.randint(0, 364),
-            hours=random.randint(0, 13),
-            minutes=random.randint(0, 59),
-        )
-        store = random.choice(RESTAURANT_STORES)
-        channel = random.choice(RESTAURANT_CHANNELS)
-        table = f"T{random.randint(1, 30)}" if channel == "堂食" else f"骑手{random.randint(1001, 9999)}"
-        item = random.choice(RESTAURANT_MENU)
-        cat = categories[item]
-        qty = random.randint(1, 5)
-        price = round(random.uniform(6, 88), 2)
-        subtotal = round(qty * price, 2)
-        discount = round(random.uniform(0.7, 1.0), 4)
-        actual = round(subtotal * discount, 2)
-        payment = random.choice(PAYMENT_METHODS)
-        cust_type = random.choice(customer_types)
-        member = random.choice(member_levels) if cust_type == "会员" else None
-        rating = random.choice(ratings)
-        tag = random.choice(tags) if rating else None
-        delivery_fee = round(random.uniform(0, 8), 2) if channel != "堂食" else 0
-        packing_fee = round(random.uniform(0, 3), 2) if channel != "堂食" else 0
-        coupon = round(random.uniform(0, 15), 2) if random.random() > 0.7 else 0
-        platform_rate = round(random.uniform(0.15, 0.25), 4) if "外卖" in channel or "团购" in channel else 0
-        platform_fee = round(actual * platform_rate, 2)
-        net = round(actual - platform_fee + delivery_fee, 2)
-        note = random.choice(mixed_notes if not use_write_only else ["加辣", "少盐", "不要葱", "打包", "催单", None, None])
-
-        row_data = [
-            f"RO-{order_id}", order_time.strftime("%Y-%m-%d %H:%M"), store, channel, table,
-            item, cat, qty, price, subtotal,
-            discount, actual, payment, cust_type, member,
-            rating, tag, delivery_fee, packing_fee, coupon,
-            platform_rate, platform_fee, net, note,
-        ]
-
-        if use_write_only:
-            ws.append(row_data)
-        else:
-            row_num = data_start_row + i
-            for ci, val in enumerate(row_data, 1):
-                cell = ws.cell(row=row_num, column=ci, value=val)
-                cell.border = border
-                if ci in pct_cols:
-                    cell.number_format = "0.00%"
-
-        if (i + 1) % 50000 == 0:
-            print(f"    订单流水: {i + 1:,}/{n_rows:,} rows...")
 
 
-def gen_restaurant_daily_ops(wb, n_rows, seed, use_write_only=False):
-    """餐饮日运营数据 — 每日每门店运营指标 + merge header + 百分比格式。"""
-    random.seed(seed + 1)
-    ws = wb.create_sheet(title="日运营数据")
-
-    headers = [
-        "日期", "门店", "堂食营业额", "外卖营业额", "团购营业额", "总营业额",
-        "堂食订单数", "外卖订单数", "团购订单数", "总订单数",
-        "堂食客流", "外卖客流", "总客流", "客单价",
-        "食材成本", "人工成本", "租金分摊", "水电费", "其他费用",
-        "总成本", "毛利", "毛利率", "净利润", "净利率",
-        "好评数", "差评数", "好评率", "翻台率", "上座率",
-    ]
-
-    data_start_row = 1
-    if not use_write_only:
-        border = Border(left=Side("thin"), right=Side("thin"), top=Side("thin"), bottom=Side("thin"))
-        # Level 1: major groups
-        _style_header(ws, 1, 1, "基本信息", merge_end_col=2)
-        _style_header(ws, 1, 3, "营业额", merge_end_col=6)
-        _style_header(ws, 1, 7, "订单量", merge_end_col=10)
-        _style_header(ws, 1, 11, "客流", merge_end_col=14)
-        _style_header(ws, 1, 15, "成本明细", merge_end_col=19)
-        _style_header(ws, 1, 20, "利润分析", merge_end_col=24)
-        _style_header(ws, 1, 25, "服务质量", merge_end_col=29)
-        # Level 2: column headers
-        for ci, h in enumerate(headers, 1):
-            cell = ws.cell(row=2, column=ci, value=h)
-            cell.font = Font(bold=True, size=9)
-            cell.fill = PatternFill("solid", fgColor="D6E4F0")
-            cell.alignment = Alignment(horizontal="center")
-            cell.border = border
-        data_start_row = 3
-    else:
-        ws.append(headers)
-
-    # Percentage columns: 毛利率=22, 净利率=24, 好评率=27, 上座率=29
-    pct_cols = {22, 24, 27, 29}
-    border = Border(left=Side("thin"), right=Side("thin"), top=Side("thin"), bottom=Side("thin"))
-
-    # Generate enough days×stores to fill n_rows
-    n_days = max(365, n_rows // len(RESTAURANT_STORES) + 1)
-    base_date = date(2025, 1, 1)
-    count = 0
-
-    for d in range(n_days):
-        if count >= n_rows:
-            break
-        rec_date = base_date + timedelta(days=d % 365)
-        for store in RESTAURANT_STORES:
-            if count >= n_rows:
-                break
-            # Weekend boost
-            is_weekend = rec_date.weekday() >= 5
-            mult = 1.3 if is_weekend else 1.0
-
-            dine_rev = round(random.uniform(8000, 45000) * mult, 2)
-            dlvr_rev = round(random.uniform(3000, 25000) * mult, 2)
-            group_rev = round(random.uniform(1000, 10000) * mult, 2)
-            total_rev = round(dine_rev + dlvr_rev + group_rev, 2)
-            dine_orders = int(random.uniform(40, 200) * mult)
-            dlvr_orders = int(random.uniform(20, 120) * mult)
-            group_orders = int(random.uniform(5, 40) * mult)
-            total_orders = dine_orders + dlvr_orders + group_orders
-            dine_traffic = int(dine_orders * random.uniform(1.5, 3.0))
-            dlvr_traffic = dlvr_orders
-            total_traffic = dine_traffic + dlvr_traffic
-            avg_ticket = round(total_rev / total_orders, 2) if total_orders else 0
-            food_cost = round(total_rev * random.uniform(0.30, 0.42), 2)
-            labor_cost = round(total_rev * random.uniform(0.20, 0.30), 2)
-            rent = round(random.uniform(800, 3000), 2)
-            utility = round(random.uniform(200, 800), 2)
-            other = round(random.uniform(100, 500), 2)
-            total_cost = round(food_cost + labor_cost + rent + utility + other, 2)
-            gross_profit = round(total_rev - food_cost, 2)
-            gross_margin = round(gross_profit / total_rev, 4) if total_rev else 0
-            net_profit = round(total_rev - total_cost, 2)
-            net_margin = round(net_profit / total_rev, 4) if total_rev else 0
-            good_reviews = int(random.uniform(5, 30) * mult)
-            bad_reviews = int(random.uniform(0, 3))
-            good_rate = round(good_reviews / (good_reviews + bad_reviews), 4) if (good_reviews + bad_reviews) else 0
-            turnover = round(random.uniform(2.0, 6.0) * mult, 1)
-            occupancy = round(random.uniform(0.50, 0.95) * mult, 4)
-            occupancy = min(occupancy, 1.0)
-
-            row_data = [
-                rec_date.isoformat(), store, dine_rev, dlvr_rev, group_rev, total_rev,
-                dine_orders, dlvr_orders, group_orders, total_orders,
-                dine_traffic, dlvr_traffic, total_traffic, avg_ticket,
-                food_cost, labor_cost, rent, utility, other,
-                total_cost, gross_profit, gross_margin, net_profit, net_margin,
-                good_reviews, bad_reviews, good_rate, turnover, occupancy,
-            ]
-
-            if use_write_only:
-                ws.append(row_data)
-            else:
-                row_num = data_start_row + count
-                for ci, val in enumerate(row_data, 1):
-                    cell = ws.cell(row=row_num, column=ci, value=val)
-                    cell.border = border
-                    if ci in pct_cols:
-                        cell.number_format = "0.00%"
-            count += 1
-
-        if count % 50000 < len(RESTAURANT_STORES):
-            print(f"    日运营数据: {count:,}/{n_rows:,} rows...")
 
 
-def gen_restaurant_hourly_detail(wb, n_rows, seed, use_write_only=False):
-    """餐饮时段明细 — 每小时每门店客流和销售 + merge header。"""
-    random.seed(seed + 2)
-    ws = wb.create_sheet(title="时段明细")
-
-    headers = [
-        "日期", "门店", "时段", "堂食客流", "外卖订单",
-        "堂食营业额", "外卖营业额", "总营业额",
-        "在岗人数", "人效(元/人)", "翻台次数", "等位数",
-    ]
-
-    data_start_row = 1
-    if not use_write_only:
-        border = Border(left=Side("thin"), right=Side("thin"), top=Side("thin"), bottom=Side("thin"))
-        # Level 1: major groups
-        _style_header(ws, 1, 1, "时间地点", merge_end_col=3)
-        _style_header(ws, 1, 4, "客流量", merge_end_col=5)
-        _style_header(ws, 1, 6, "营业额", merge_end_col=8)
-        _style_header(ws, 1, 9, "人效与翻台", merge_end_col=12)
-        # Level 2: column headers
-        for ci, h in enumerate(headers, 1):
-            cell = ws.cell(row=2, column=ci, value=h)
-            cell.font = Font(bold=True, size=9)
-            cell.fill = PatternFill("solid", fgColor="D6E4F0")
-            cell.alignment = Alignment(horizontal="center")
-            cell.border = border
-        data_start_row = 3
-    else:
-        ws.append(headers)
-
-    border = Border(left=Side("thin"), right=Side("thin"), top=Side("thin"), bottom=Side("thin"))
-    hours = list(range(10, 23))  # 10:00 - 22:00
-    base_date = date(2025, 1, 1)
-    count = 0
-
-    for d in range(366):
-        if count >= n_rows:
-            break
-        rec_date = base_date + timedelta(days=d)
-        for store in RESTAURANT_STORES:
-            for hour in hours:
-                if count >= n_rows:
-                    break
-                # Peak hours: 11-13, 17-20
-                is_peak = hour in (11, 12, 13, 17, 18, 19, 20)
-                mult = 2.5 if is_peak else 1.0
-
-                dine_traffic = int(random.uniform(2, 25) * mult)
-                dlvr_orders = int(random.uniform(1, 15) * mult)
-                dine_rev = round(dine_traffic * random.uniform(35, 85), 2)
-                dlvr_rev = round(dlvr_orders * random.uniform(25, 65), 2)
-                total_rev = round(dine_rev + dlvr_rev, 2)
-                staff = int(random.uniform(3, 12) * (1.5 if is_peak else 1.0))
-                per_person = round(total_rev / staff, 2) if staff else 0
-                turns = round(random.uniform(0, 3) * mult, 1)
-                waiting = int(random.uniform(0, 10) * mult) if is_peak else 0
-
-                row_data = [
-                    rec_date.isoformat(), store, f"{hour}:00-{hour + 1}:00",
-                    dine_traffic, dlvr_orders, dine_rev, dlvr_rev, total_rev,
-                    staff, per_person, turns, waiting,
-                ]
-
-                if use_write_only:
-                    ws.append(row_data)
-                else:
-                    row_num = data_start_row + count
-                    for ci, val in enumerate(row_data, 1):
-                        cell = ws.cell(row=row_num, column=ci, value=val)
-                        cell.border = border
-                count += 1
-
-            if count % 50000 < len(hours):
-                print(f"    时段明细: {count:,}/{n_rows:,} rows...")
 
 
 # ============================================================
@@ -714,16 +403,12 @@ def generate(level="L1", data_type="factory", seed=42):
     # Split rows across sheets (each sheet gets ~33% of total rows)
     rows_per_sheet = n_rows // 3
 
-    if data_type == "factory":
-        print(f"\n生成工厂端数据...")
-        gen_factory_sales_detail(wb, rows_per_sheet, seed, use_write_only)
-        gen_factory_expense_ledger(wb, rows_per_sheet, seed, use_write_only)
-        gen_factory_inventory(wb, n_rows - 2 * rows_per_sheet, seed, use_write_only)
-    else:
-        print(f"\n生成餐饮端数据...")
-        gen_restaurant_orders(wb, rows_per_sheet, seed, use_write_only)
-        gen_restaurant_daily_ops(wb, rows_per_sheet, seed, use_write_only)
-        gen_restaurant_hourly_detail(wb, n_rows - 2 * rows_per_sheet, seed, use_write_only)
+    if data_type != "factory":
+        raise ValueError("Only factory stress data is supported")
+    print(f"\n生成工厂端数据...")
+    gen_factory_sales_detail(wb, rows_per_sheet, seed, use_write_only)
+    gen_factory_expense_ledger(wb, rows_per_sheet, seed, use_write_only)
+    gen_factory_inventory(wb, n_rows - 2 * rows_per_sheet, seed, use_write_only)
 
     # Save
     output_dir = Path(__file__).parent / "test-data" / "stress"
@@ -759,16 +444,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SmartBI 压测数据生成器")
     parser.add_argument("--level", choices=list(LEVELS.keys()), default="L1",
                         help="压测级别: L1=50K, L2=200K, L3=500K, L4=1M")
-    parser.add_argument("--type", choices=["factory", "restaurant"], default="factory",
-                        help="数据类型: factory=工厂, restaurant=餐饮")
+    parser.add_argument("--type", choices=["factory"], default="factory",
+                        help="数据类型: factory=工厂")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--all", action="store_true", help="生成全部级别×类型")
     args = parser.parse_args()
 
     if args.all:
         for lvl in LEVELS:
-            for dt in ["factory", "restaurant"]:
+            for dt in ["factory"]:
                 generate(lvl, dt, args.seed)
-        print(f"\n全部生成完成: {len(LEVELS) * 2} 个文件")
+        print(f"\n全部生成完成: {len(LEVELS)} 个文件")
     else:
         generate(args.level, args.type, args.seed)

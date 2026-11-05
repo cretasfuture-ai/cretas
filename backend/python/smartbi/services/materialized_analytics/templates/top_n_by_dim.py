@@ -10,11 +10,11 @@ from typing import ClassVar
 from smartbi.capability.contract import RequiresSpec
 
 from ..compute.base import ComputeBackend
-from ..restaurant.action_rec_formatter import (
+from ..action_rec_formatter import (
     dim_aware_top_n_action_rec,
     format_action_rec,
 )
-from ..restaurant.schema_helpers import aggregation_for_measure
+from ..action_rec_formatter import aggregation_for_measure
 from ..schema import DataSchema
 from .base import AnalysisTemplate, TemplateResult
 from .registry import register

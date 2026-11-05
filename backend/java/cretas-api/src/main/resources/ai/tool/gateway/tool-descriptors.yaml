@@ -6869,7 +6869,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: true
-    requiredPermissions: ["warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"]
+    requiredPermissions: ["inventory:read", "inventory:read_write"]
     allowedRoles: []
     version: "1.0.0"
     domainTags: ["material"]
@@ -9814,7 +9814,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: []
+    requiredPermissions: ["inventory:read", "inventory:read_write"]
     allowedRoles: []
     version: "1.0.0"
     domainTags: ["system"]
@@ -9824,7 +9824,7 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED

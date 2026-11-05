@@ -91,6 +91,11 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
                     "prod: ukoddtjujjj3qfsb0o2nyqvcddi (factory_id,code) 全量、逐列一致；"
                             + "业务口径「编码不回收」——权威查重路径 findCodeConflictIncludingDeleted 也把已删的算进冲突"),
 
+            Map.entry("SupplierDeliveryNote#column:photo_hash",
+                    "2026-11-06 prod pg_index只读实测：supplier_delivery_notes_photo_hash_key "
+                            + "UNIQUE(photo_hash) 全量、indpred=NULL、valid=true；照片幂等身份不因软删释放，"
+                            + "保留原全局键及旧binary回滚兼容，V92放弃；隔离真实PG验证软删后异厂同hash仍被拒"),
+
             Map.entry("WarehouseTransferMovement#uq_wtm_request_item",
                     "V77 新表尚未发布；隔离 PostgreSQL 13 原样迁移后的 pg_constraint/pg_index 实测："
                             + "UNIQUE(request_key,transfer_item_id) 全量、无部分谓词；"

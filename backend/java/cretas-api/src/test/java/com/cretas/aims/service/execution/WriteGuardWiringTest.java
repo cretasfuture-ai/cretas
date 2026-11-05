@@ -117,6 +117,7 @@ class WriteGuardWiringTest {
         // Field-injected dependencies (set via reflection since they are not constructor args).
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", writeGuard);
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
 
         // hasPermission → always true (permission is NOT what should block a write here).
         when(aiIntentService.hasPermission(anyString(), any())).thenReturn(true);

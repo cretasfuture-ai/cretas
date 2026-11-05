@@ -4,7 +4,7 @@ import com.cretas.aims.entity.enums.AuxiliaryType;
 import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.finance.VoucherEntry;
 import com.cretas.aims.service.voucher.VoucherSubjectResolver;
-import com.cretas.aims.entity.restaurant.WastageRecord;
+import com.cretas.aims.entity.inventory.WastageRecord;
 import com.cretas.aims.service.voucher.AbstractVoucherGenerator;
 import org.springframework.stereotype.Component;
 

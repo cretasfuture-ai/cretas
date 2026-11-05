@@ -27,7 +27,7 @@ from .templates.registry import get_registry, load_all_templates
 
 logger = logging.getLogger(__name__)
 
-# Priority keywords for picking primary_measure (restaurant/sales oriented).
+# Priority keywords for picking the primary measure in generic factory uploads.
 # Matches chat.py Phase B priority for consistency.
 _PRIORITY_MEASURE_KW = [
     '销售金额', '销售额', '营业额', '营业收入', '实收',
@@ -131,7 +131,7 @@ def build_schema(
 
     Domain detection runs last; pass sample_rows (small slice) for
     future detectors that need data inspection (not currently used by
-    RestaurantRuleDetector but kept for interface stability).
+    legacy detector interface while keeping factory uploads fail-closed).
     """
     fields = tuple(
         Field(

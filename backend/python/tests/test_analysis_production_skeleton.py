@@ -106,9 +106,10 @@ def test_from_db_value_parses_canonical_strings(value, expected):
 
 
 @pytest.mark.parametrize("value", [None, "", "UNKNOWN", "garbage"])
-def test_from_db_value_defaults_to_factory_on_missing_or_unknown(value):
-    """Defensive: missing/unknown → FACTORY (mirrors Java repo-failure path)."""
-    assert TenantType.from_db_value(value) is TenantType.FACTORY
+def test_from_db_value_rejects_missing_or_unknown(value):
+    """Missing/unknown metadata cannot silently become FACTORY."""
+    with pytest.raises(ValueError):
+        TenantType.from_db_value(value)
 
 
 # ============================================================
@@ -156,19 +157,19 @@ async def test_get_tenant_type_happy_path_factory():
 
 
 @pytest.mark.asyncio
-async def test_get_tenant_type_missing_row_defaults_to_factory():
-    """Missing factory_id row → FACTORY (preserves legacy manufacturing path)."""
+async def test_get_tenant_type_missing_row_is_rejected():
+    """Missing factory_id row must fail closed for analytics callers."""
     conn = _FakeConn(None)
-    tenant = await get_tenant_type("F_DOES_NOT_EXIST", conn)
-    assert tenant is TenantType.FACTORY
+    with pytest.raises(ValueError, match="metadata missing"):
+        await get_tenant_type("F_DOES_NOT_EXIST", conn)
 
 
 @pytest.mark.asyncio
-async def test_get_tenant_type_null_type_column_defaults_to_factory():
-    """``factories.type`` IS NULL → FACTORY (Java Factory.java default behavior)."""
+async def test_get_tenant_type_null_type_column_is_rejected():
+    """``factories.type`` IS NULL must fail closed."""
     conn = _FakeConn({"type": None})
-    tenant = await get_tenant_type("F_LEGACY", conn)
-    assert tenant is TenantType.FACTORY
+    with pytest.raises(ValueError, match="metadata is missing"):
+        await get_tenant_type("F_LEGACY", conn)
 
 
 # ============================================================
@@ -232,9 +233,9 @@ def test_router_endpoint_methods_are_get_only():
 
 
 def test_module_advertises_dispatch_helpers():
-    """Stable function names for chat-A2 (restaurant) + Phase 2D (factory)."""
+    """Only the factory dispatcher remains after restaurant retirement."""
     assert hasattr(analysis_production, "_factory_production_dispatch")
-    assert hasattr(analysis_production, "_restaurant_production_dispatch")
+    assert not hasattr(analysis_production, "_restaurant_production_dispatch")
     assert hasattr(analysis_production, "get_production_analysis")
 
 
@@ -438,8 +439,8 @@ async def test_factory_dispatch_no_gold_keeps_phase_2d_placeholder(factory_gold_
     assert result["trendChart"] == {}
 
 
-@pytest.fixture
-def endpoint_client(monkeypatch):
+@pytest.fixture(params=["RESTAURANT", "BRANCH"])
+def endpoint_client(monkeypatch, request):
     """FastAPI TestClient with cretas_db + smartbi_db pools patched.
 
     cretas_db pool returns ``{"type": "RESTAURANT"}`` so the router
@@ -456,7 +457,7 @@ def endpoint_client(monkeypatch):
 
     import smartbi.config
 
-    cretas_pool = _RouterFakePool({"type": "RESTAURANT"})
+    cretas_pool = _RouterFakePool({"type": request.param})
     smartbi_pool = _RouterFakePool(
         {"bill_count": 60, "store_count": 2, "day_count": 3}
     )
@@ -479,52 +480,14 @@ def endpoint_client(monkeypatch):
 
 
 def test_production_endpoint_returns_full_envelope(endpoint_client):
-    """Happy path — restaurant tenant returns 8-key wrap_response envelope.
-
-    Audit §4.1 spec ``assert "success" in data and data["success"] is True``
-    + envelope-shape verification. The audit template's literal "21-key"
-    count was approximate; the actual restaurant oee/None branch emits
-    5 inner data keys (tenantType, startDate, endDate, metrics, trendChart)
-    inside an 8-key outer ApiResponse envelope (Rule 9 emit-nulls). Both
-    are asserted explicitly below.
-
-    Rule 4 byte parity: M3 proxy = ``60 / (2 * 3) = Decimal("10")``;
-    ``_decimal_to_number`` collapses integer-valued Decimal to ``int 10``.
-    """
+    """Retired restaurant tenants are rejected instead of falling into factory."""
     headers = {"Authorization": f"Bearer {_make_endpoint_token(factory_id='F001')}"}
     resp = endpoint_client.get(
         "/api/mobile/F001/smart-bi/analysis/production",
         params={"startDate": "2026-05-01", "endDate": "2026-05-03"},
         headers=headers,
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-
-    # Outer ApiResponse envelope — 8 keys (Rule 9 emit-nulls).
-    assert body["success"] is True
-    assert body["code"] == 200
-    assert body["message"] == "操作成功"
-    assert "data" in body
-    assert "timestamp" in body
-    assert body["actionHint"] is None
-    assert body["severity"] is None
-    assert body["hintTarget"] is None
-
-    # Inner restaurant body — oee/None branch.
-    data = body["data"]
-    assert data["tenantType"] == "RESTAURANT"
-    assert data["startDate"] == "2026-05-01"
-    assert data["endDate"] == "2026-05-03"
-    assert data["trendChart"] is None
-    assert len(data["metrics"]) == 3
-    assert data["metrics"][0]["metricCode"] == "KITCHEN_STATION_UTILIZATION"
-    assert data["metrics"][1]["metricCode"] == "AVG_PREP_TIME"
-
-    # Rule 4 — _decimal_to_number int-collapse on integer-valued Decimal.
-    m3 = data["metrics"][2]
-    assert m3["metricCode"] == "TABLE_TURNOVER_RATE"
-    assert m3["proxyMetric"]["value"] == 10
-    assert isinstance(m3["proxyMetric"]["value"], int)
+    assert resp.status_code == 410, resp.text
 
 
 @pytest.fixture

@@ -7,8 +7,6 @@ Covers:
   mismatches, numeric eq edge cases (bool guard, Decimal/float/int interop).
 * endpoint_list parser — preset format + spec-doc auto-extract + error
   cases.
-* mock_data_generator — output is deterministic + valid SQL syntax +
-  contains expected edge cases.
 * CLI ``compare.py`` — args parse, fixtures mode, gate exit codes.
 * fetch_endpoint — network errors surface as ``verdict="network_error"``
   rather than silently swallowed.
@@ -35,7 +33,6 @@ if str(_PARITY_GATE_DIR) not in sys.path:
 import dict_eq           # noqa: E402
 import endpoint_list     # noqa: E402
 import fetch_endpoint    # noqa: E402
-import mock_data_generator  # noqa: E402
 import report            # noqa: E402
 
 
@@ -306,85 +303,18 @@ def test_endpoint_list_file_not_found(tmp_path):
 # ============================================================
 
 
-def test_mock_data_generator_deterministic():
-    """Same seed → identical SQL output."""
-    sql_a = mock_data_generator.generate_sql(seed=42, days=5, txn_per_day=10)
-    sql_b = mock_data_generator.generate_sql(seed=42, days=5, txn_per_day=10)
-    assert sql_a == sql_b
 
 
-def test_mock_data_generator_changes_with_seed():
-    """Different seed → different SQL (bill_no count maybe same but values differ)."""
-    sql_a = mock_data_generator.generate_sql(seed=1, days=2, txn_per_day=5)
-    sql_b = mock_data_generator.generate_sql(seed=2, days=2, txn_per_day=5)
-    assert sql_a != sql_b
 
 
-def test_mock_data_generator_basic_structure():
-    """SQL has BEGIN/COMMIT, DELETE cleanup, INSERTs for both tables."""
-    sql = mock_data_generator.generate_sql(
-        factory_id="R_TEST_MOCK", days=2, txn_per_day=3
-    )
-    assert "BEGIN;" in sql
-    assert "COMMIT;" in sql
-    assert "DELETE FROM dim_store" in sql
-    assert "DELETE FROM fact_pos_transaction" in sql
-    assert "INSERT INTO dim_store" in sql
-    assert "INSERT INTO fact_pos_transaction" in sql
-    assert "R_TEST_MOCK" in sql
 
 
-def test_mock_data_generator_scale_count():
-    """3 stores, 5 days, 10 txn/day, store 0 empty, 1 skip day:
-       (3 - 1) stores × (5 - 1) days × 10 txn/day = 80 transactions.
-    """
-    sql = mock_data_generator.generate_sql(
-        factory_id="R_TEST_MOCK", n_stores=3, days=5, txn_per_day=10, seed=1
-    )
-    # Count MOCK-NNNNNNNN bill numbers — each transaction has unique one.
-    import re
-    bill_nos = re.findall(r"MOCK-\d{8}", sql)
-    # set() to dedupe (each appears once per VALUES tuple).
-    assert len(set(bill_nos)) == 80
 
 
-def test_mock_data_generator_includes_null_table_no():
-    """~5% of rows have NULL table_no — at large scale this is non-zero."""
-    sql = mock_data_generator.generate_sql(
-        factory_id="R_TEST_MOCK", n_stores=3, days=10, txn_per_day=20, seed=42
-    )
-    # 'NULL' as VALUES literal for table_no should appear at least once.
-    assert sql.count(", NULL,") > 0   # NULL appears between commas in VALUES
 
 
-def test_mock_data_generator_include_items_flag():
-    """--include-items produces fact_pos_item rows; default off."""
-    sql_no_items = mock_data_generator.generate_sql(days=2, txn_per_day=3)
-    assert "fact_pos_item" not in sql_no_items or "DELETE FROM fact_pos_item" in sql_no_items
-    # The DELETE always emits — check INSERT
-    assert "INSERT INTO fact_pos_item" not in sql_no_items
-
-    sql_with_items = mock_data_generator.generate_sql(
-        days=2, txn_per_day=3, include_items=True
-    )
-    assert "INSERT INTO fact_pos_item" in sql_with_items
 
 
-def test_mock_data_generator_write_to_disk(tmp_path):
-    """write_mock_sql writes to <factory>/<timestamp>/seed.sql."""
-    path = mock_data_generator.write_mock_sql(
-        output_dir=str(tmp_path),
-        factory_id="R_TEST_MOCK",
-        timestamp="20260512_000000",
-        days=2,
-        txn_per_day=3,
-    )
-    assert path.is_file()
-    assert path.name == "seed.sql"
-    assert "R_TEST_MOCK" in str(path)
-    assert "20260512_000000" in str(path)
-    content = path.read_text(encoding="utf-8")
-    assert content.startswith("-- Mock parity-gate seed")
 
 
 # ============================================================
@@ -425,7 +355,7 @@ def test_fetch_endpoint_jwt_token_shape():
     saved = os.environ.get("JWT_SECRET")
     os.environ["JWT_SECRET"] = "test-secret"
     try:
-        tok = fetch_endpoint.make_jwt_token("R_TEST_MOCK")
+        tok = fetch_endpoint.make_jwt_token("QATEST_FACTORY")
         parts = tok.split(".")
         assert len(parts) == 3
     finally:
@@ -456,7 +386,7 @@ def test_compare_cli_fixtures_mode_match(tmp_path, capsys):
     out_json = tmp_path / "report.json"
 
     rc = compare.main([
-        "--factory", "R_TEST_MOCK",
+        "--factory", "QATEST_FACTORY",
         "--endpoint", "/api/test",
         "--fixtures-java", str(java_fix),
         "--fixtures-python", str(py_fix),
@@ -479,7 +409,7 @@ def test_compare_cli_fixtures_mode_pattern_a_still_matches(tmp_path):
 
     out_json = tmp_path / "report.json"
     rc = compare.main([
-        "--factory", "R_TEST_MOCK",
+        "--factory", "QATEST_FACTORY",
         "--endpoint", "/api/test",
         "--fixtures-java", str(java_fix),
         "--fixtures-python", str(py_fix),
@@ -503,7 +433,7 @@ def test_compare_cli_fixtures_mode_real_bug_fails_gate(tmp_path):
 
     out_json = tmp_path / "report.json"
     rc = compare.main([
-        "--factory", "R_TEST_MOCK",
+        "--factory", "QATEST_FACTORY",
         "--endpoint", "/api/test",
         "--fixtures-java", str(java_fix),
         "--fixtures-python", str(py_fix),
@@ -526,7 +456,7 @@ def test_compare_cli_writes_html_sibling(tmp_path):
 
     out_json = tmp_path / "r.json"
     compare.main([
-        "--factory", "R_TEST_MOCK",
+        "--factory", "QATEST_FACTORY",
         "--endpoint", "/api/test",
         "--fixtures-java", str(java_fix),
         "--fixtures-python", str(py_fix),
@@ -535,7 +465,7 @@ def test_compare_cli_writes_html_sibling(tmp_path):
     assert (tmp_path / "r.html").is_file()
     html_text = (tmp_path / "r.html").read_text(encoding="utf-8")
     assert "Parity Gate Report" in html_text
-    assert "R_TEST_MOCK" in html_text
+    assert "QATEST_FACTORY" in html_text
 
 
 def test_compare_cli_requires_endpoint_or_list():
@@ -586,7 +516,7 @@ def test_report_build_aggregates_counts():
     ok = {"verdict": "ok", "http": 200, "size": 100, "lat_s": 0.1, "error": None}
 
     rep = report.build_report(
-        factory="R_TEST_MOCK",
+        factory="QATEST_FACTORY",
         java_base="java",
         python_base="python",
         results=[
@@ -605,7 +535,7 @@ def test_report_build_aggregates_counts():
 def test_report_html_render_smoke(tmp_path):
     """HTML render doesn't crash + contains expected markers."""
     rep = {
-        "factory": "R_TEST_MOCK",
+        "factory": "QATEST_FACTORY",
         "java_base": "j",
         "python_base": "p",
         "endpoints_tested": 1,
@@ -641,7 +571,7 @@ def test_report_html_render_smoke(tmp_path):
     out = tmp_path / "report.html"
     report.write_html(rep, str(out))
     txt = out.read_text(encoding="utf-8")
-    assert "R_TEST_MOCK" in txt
+    assert "QATEST_FACTORY" in txt
     assert "100.0%" in txt
     assert "verdict-match" in txt
 
@@ -670,13 +600,13 @@ def _factory_mock_body():
     }
 
 
-def _restaurant_envelope_body():
-    """Python restaurant 3-metric envelope (PR #352 chat-A2 shape)."""
+def _typed_tenant_envelope_body():
+    """Python typed tenant 3-metric envelope (PR #352 chat-A2 shape)."""
     return {
         "code": 200, "message": "操作成功", "success": True,
         "data": {
             "startDate": "2026-01-01", "endDate": "2026-01-31",
-            "tenantType": "RESTAURANT",
+            "tenantType": "BRANCH",
             "metrics": [
                 {"metricCode": "KITCHEN_STATION_UTILIZATION", "value": None,
                  "unit": "%", "dataAvailability": "MISSING_KITCHEN_STATION_DATA"},
@@ -696,28 +626,28 @@ def _restaurant_envelope_body():
 
 
 def test_pattern_b_detected_tenant_type_only_python_side():
-    """Java factory mock (no tenantType) vs Python restaurant envelope → Pattern B."""
+    """Java factory mock (no tenantType) vs Python typed tenant envelope → Pattern B."""
     java = _factory_mock_body()
-    py = _restaurant_envelope_body()
+    py = _typed_tenant_envelope_body()
     assert dict_eq._detect_pattern_b_context(java, py) is True
 
 
 def test_pattern_b_detected_tenant_type_value_differs():
     """Both have tenantType but values differ → Pattern B."""
     java = {"data": {"tenantType": "FACTORY", "kpiCards": []}}
-    py = {"data": {"tenantType": "RESTAURANT", "metrics": []}}
+    py = {"data": {"tenantType": "BRANCH", "metrics": []}}
     assert dict_eq._detect_pattern_b_context(java, py) is True
 
 
-def test_pattern_b_detected_restaurant_signal_keys_asymmetric():
-    """Same tenantType (None on both) but restaurant-signal keys asymmetric → Pattern B."""
+def test_metric_key_asymmetry_is_a_real_mismatch():
+    """Same tenantType (None on both) but typed tenant-signal keys asymmetric → Pattern B."""
     java = {"data": {"kpiCards": []}}
     py = {"data": {"metrics": [], "dataAvailability": "OK"}}
-    assert dict_eq._detect_pattern_b_context(java, py) is True
+    assert dict_eq._detect_pattern_b_context(java, py) is False
 
 
 def test_pattern_b_not_detected_same_shape():
-    """Same-shape responses (no restaurant signals, no tenantType differ) → False."""
+    """Same-shape responses (no typed tenant signals, no tenantType differ) → False."""
     java = {"data": {"value": 100, "name": "x"}}
     py = {"data": {"value": 100, "name": "x"}}
     assert dict_eq._detect_pattern_b_context(java, py) is False
@@ -732,7 +662,7 @@ def test_pattern_b_not_detected_when_no_envelope():
 def test_pattern_b_unwraps_envelope():
     """Detector drills past {code, message, data, ...} wrapper to inspect data."""
     java = {"code": 200, "data": {"tenantType": "FACTORY"}}
-    py = {"code": 200, "data": {"tenantType": "RESTAURANT"}}
+    py = {"code": 200, "data": {"tenantType": "BRANCH"}}
     assert dict_eq._detect_pattern_b_context(java, py) is True
 
 
@@ -742,7 +672,7 @@ def test_pattern_b_unwraps_envelope():
 def test_dict_eq_pattern_b_context_flags_diverges_as_structural():
     """When Pattern B context detected, all diverges are PATTERN_B_STRUCTURAL not REAL_BUG."""
     java = _factory_mock_body()
-    py = _restaurant_envelope_body()
+    py = _typed_tenant_envelope_body()
     r = dict_eq.dict_eq_match(java, py)
     assert r["match"] is False
     assert r["pattern_b_context"] is True
@@ -766,7 +696,7 @@ def test_dict_eq_pattern_b_context_false_keeps_real_bug():
 def test_apply_tolerance_all_moves_pattern_b_to_tolerated():
     """tolerate_all=True moves Pattern B diverges to tolerated_byte_diffs and flips match."""
     java = _factory_mock_body()
-    py = _restaurant_envelope_body()
+    py = _typed_tenant_envelope_body()
     r = dict_eq.dict_eq_match(java, py)
     before_diverges = len(r["diverges"])
     assert before_diverges > 0
@@ -783,7 +713,7 @@ def test_apply_tolerance_patterns_B_only_keeps_real_bug():
     """tolerate_patterns={B} tolerates Pattern B but REAL_BUG stays in diverges."""
     # Mix: top-level Pattern B context + a deliberate REAL_BUG injection.
     java = _factory_mock_body()
-    py = _restaurant_envelope_body()
+    py = _typed_tenant_envelope_body()
     r = dict_eq.dict_eq_match(java, py)
     # Manually inject a REAL_BUG entry to verify it survives tolerance.
     r["diverges"].append({
@@ -812,7 +742,7 @@ def test_apply_tolerance_noop_when_no_config():
 def test_apply_tolerance_patterns_A_does_not_affect_pattern_b():
     """tolerate_patterns={A} alone does NOT tolerate Pattern B diverges."""
     java = _factory_mock_body()
-    py = _restaurant_envelope_body()
+    py = _typed_tenant_envelope_body()
     r = dict_eq.dict_eq_match(java, py)
     before_diverges = len(r["diverges"])
     dict_eq.apply_tolerance(r, tolerate_patterns={"A"})
@@ -857,7 +787,7 @@ def test_compare_cli_tolerate_divergence_flag(tmp_path):
     java_fix = tmp_path / "java.json"
     py_fix = tmp_path / "python.json"
     _write_fixture(java_fix, _factory_mock_body())
-    _write_fixture(py_fix, _restaurant_envelope_body())
+    _write_fixture(py_fix, _typed_tenant_envelope_body())
 
     out_json = tmp_path / "report.json"
     rc = compare.main([
@@ -882,7 +812,7 @@ def test_compare_cli_tolerate_patterns_B_only(tmp_path):
     java_fix = tmp_path / "java.json"
     py_fix = tmp_path / "python.json"
     _write_fixture(java_fix, _factory_mock_body())
-    _write_fixture(py_fix, _restaurant_envelope_body())
+    _write_fixture(py_fix, _typed_tenant_envelope_body())
 
     out_json = tmp_path / "report.json"
     rc = compare.main([
@@ -905,7 +835,7 @@ def test_compare_cli_default_strict_fails_on_pattern_b(tmp_path):
     java_fix = tmp_path / "java.json"
     py_fix = tmp_path / "python.json"
     _write_fixture(java_fix, _factory_mock_body())
-    _write_fixture(py_fix, _restaurant_envelope_body())
+    _write_fixture(py_fix, _typed_tenant_envelope_body())
 
     out_json = tmp_path / "report.json"
     rc = compare.main([
@@ -956,7 +886,7 @@ def test_compare_cli_patterns_overrides_tolerate_all(tmp_path):
     java_fix = tmp_path / "java.json"
     py_fix = tmp_path / "python.json"
     _write_fixture(java_fix, _factory_mock_body())
-    _write_fixture(py_fix, _restaurant_envelope_body())
+    _write_fixture(py_fix, _typed_tenant_envelope_body())
 
     out_json = tmp_path / "report.json"
     rc = compare.main([
@@ -979,7 +909,7 @@ def test_compare_cli_patterns_overrides_tolerate_all(tmp_path):
 
 def test_summarize_includes_b_context_marker():
     java = _factory_mock_body()
-    py = _restaurant_envelope_body()
+    py = _typed_tenant_envelope_body()
     r = dict_eq.dict_eq_match(java, py)
     s = dict_eq.summarize(r)
     assert "b_context=true" in s
@@ -1071,7 +1001,7 @@ def test_build_report_java_deleted_counts_as_match():
     )
     python_200 = _fetch_envelope(200, {"data": {"value": 100}, "success": True})
     rep = report.build_report(
-        factory="R_TEST_MOCK",
+        factory="QATEST_FACTORY",
         java_base="java", python_base="python",
         results=[{
             "endpoint": "/api/x", "params": "",
@@ -1096,7 +1026,7 @@ def test_build_report_both_gone_logged_not_matched():
         501, {"code": 501, "message": "尚未 port 到 Python..."}
     )
     rep = report.build_report(
-        factory="R_TEST_MOCK",
+        factory="QATEST_FACTORY",
         java_base="java", python_base="python",
         results=[{
             "endpoint": "/api/analysis/finance?analysisType=overview", "params": "",
@@ -1117,7 +1047,7 @@ def test_build_report_python_not_in_scope_counts_as_match():
     java_200 = _fetch_envelope(200, {"data": {"executive": "..."}})
     python_404 = _fetch_envelope(404, {"status": 404})
     rep = report.build_report(
-        factory="R_TEST_MOCK",
+        factory="QATEST_FACTORY",
         java_base="java", python_base="python",
         results=[{
             "endpoint": "/api/dashboard/executive", "params": "",
@@ -1175,7 +1105,7 @@ def test_build_report_routing_overrides_http_mismatch_verdict():
     verdict='http_mismatch' AND a noisy dict_eq output classified as REAL_BUG.
     """
     rep = report.build_report(
-        factory="R_TEST_MOCK", java_base="java", python_base="python",
+        factory="QATEST_FACTORY", java_base="java", python_base="python",
         results=[{
             "endpoint": "/x", "params": "",
             "java": _fetch_envelope(404, {"status": 404, "error": "Not Found"}),

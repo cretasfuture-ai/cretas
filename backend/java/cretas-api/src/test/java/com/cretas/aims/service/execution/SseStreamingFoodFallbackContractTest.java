@@ -41,6 +41,7 @@ class SseStreamingFoodFallbackContractTest {
     private final SseEmitter emitter = mock(SseEmitter.class);
 
     private void execute(Optional<AIIntentConfig> food, boolean isAnalysis) throws Exception {
+        FactoryAnalysisTestMetadata.bindNamedFactories(service);
         when(knowledge.detectQuestionType(QUESTION)).thenReturn(IntentKnowledgeBase.QuestionType.GENERAL_QUESTION);
         when(knowledge.matchPhrase(QUESTION)).thenReturn(Optional.of("FOOD_KNOWLEDGE_QUERY"));
         when(intents.getIntentByCode("F006", "FOOD_KNOWLEDGE_QUERY")).thenReturn(food);

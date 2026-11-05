@@ -66,6 +66,7 @@ class IntentExecutionOrchestratorNegationTest {
                 mock(ToolDispatchService.class),
                 mock(DynamicToolSelectionService.class),
                 mock(QueryPreprocessorService.class));
+        FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
 
     @Test

@@ -184,11 +184,14 @@ class PlatformRolePermissionWriteServiceContractTest {
     void restaurantCellsAreNotWritable() {
         User admin = user(7000L, "permission_admin");
         for (String[] cell : new String[][]{
-                {"restaurant_owner", "finance"}, {"restaurant_purchaser", "procurement"},
-                {"viewer", "restaurant"}, {"viewer", "restaurantOps"}, {"viewer", "restaurantFinance"}}) {
+                {"restaurant_owner", "finance", "餐饮侧待定"},
+                {"restaurant_purchaser", "procurement", "餐饮侧待定"},
+                {"viewer", "restaurant", "无效模块: restaurant"},
+                {"viewer", "restaurantOps", "无效模块: restaurantOps"},
+                {"viewer", "restaurantFinance", "无效模块: restaurantFinance"}}) {
             assertThatThrownBy(() -> service.write(admin, "F006", cell[0], cell[1], "r", null))
                     .as("%s × %s", cell[0], cell[1])
-                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("餐饮侧待定");
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining(cell[2]);
         }
         verify(l1Repo, never()).save(any());
         verify(auditRepo, never()).save(any());
@@ -266,6 +269,6 @@ class PlatformRolePermissionWriteServiceContractTest {
         assertThatThrownBy(() -> service.write(admin, "F006", "viewer", "ai", "r", null))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("无效模块");
         assertThatThrownBy(() -> service.write(admin, "F006", "viewer", "restaurantOps", "r", null))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("餐饮侧待定");
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("无效模块: restaurantOps");
     }
 }

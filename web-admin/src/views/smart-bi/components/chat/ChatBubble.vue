@@ -3,8 +3,7 @@ import { computed } from 'vue';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { ElAlert } from 'element-plus';
-import type { ChatTurn } from '@/types/restaurant-chat';
-import RestaurantChartBlock from './RestaurantChartBlock.vue';
+import type { ChatTurn } from '@/types/smartbi-chat';
 import { sanitizeCustomerAiText } from './customerAiText';
 
 /**
@@ -112,14 +111,6 @@ function alertType(level: string): 'error' | 'warning' {
         v-html="renderMarkdown(turn.content)"
       />
       <div v-else class="bubble-content">{{ turn.content }}</div>
-
-      <div v-if="turn.charts && turn.charts.length" class="bubble-charts">
-        <RestaurantChartBlock
-          v-for="(chart, idx) in turn.charts"
-          :key="idx"
-          :chart="chart"
-        />
-      </div>
 
       <slot name="sections" />
       <slot name="followups" />

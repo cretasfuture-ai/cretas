@@ -98,7 +98,6 @@ ALL_FACTORIES_EGRESS_PREFIXES = (
 # ordinary authenticated API surface. Keep this list exact so sibling routes
 # cannot accidentally inherit the internal-service bypass.
 INTERNAL_ONLY_PATHS = frozenset({
-    "/api/smartbi/restaurant/sections/owner-action-chat",
     "/api/llm/f006-boss-question-stream",
     # 2026-10-22 隔离排查: 下面两条没有任何调用方, 却在公开前缀下 —— 匿名即可往服务器任意目录写文件 /
     # 从任意本地路径加载模型。收为仅内部 (需 X-Internal-Secret)。

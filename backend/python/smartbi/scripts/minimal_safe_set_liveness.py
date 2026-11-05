@@ -1,69 +1,29 @@
-"""逐条实测**白名单条目的存活性**。⛔ 只读, 不改任何表。
+"""Offline-safe, factory-only liveness probe for the LLM router floor.
 
-    --scope minimal   `_MINIMAL_SAFE_SET`(默认, 8 条)
-    --scope all       `_SAFE_MODELS` 全部(T8)
+This is an operational probe, not an evaluation suite: it exercises the
+registered provider/profile combinations with a small factory prompt and emits
+one JSON decision file for the daily health cron. It intentionally has no
+dependency on retired domain evaluators or capability-scoring scripts.
 
-## 为什么这件事必须做
-
-`_refuse_reason`: registry 超龄后, **不在 `_MINIMAL_SAFE_SET` 里的一律被拒**。
-`_REGISTRY_AUDIT_DATE = 2026-08-13` + `_REGISTRY_MAX_AGE_DAYS = 21`
-⇒ **2026-09-04 起, 那个集合就是全世界**。
-
-而它的注释里记着同一个陷阱**已经踩过两次**:
-    「旧集合 13 个条目里 8 个已实测死亡 —— fail-safe 退守的目标本身是死的」
-    「上一版(08-09 建)的 9 个条目今天实测 6 个已死」
-🔴 它**只在 registry 超龄时才被用到**, 所以它坏了**不会有任何日常信号**。
-
-## ⛔ 不重写判据
-
-复用 `llm_capability_rank._score_one` —— 它用的就是生产接受/拒绝一次应答的那个
-函数 `_t3_contract_violation`。⛔ 不自己"大致等价地"重写一遍。
-
-## 🔴 两条负载判据(都是付过学费的)
-
-1. **必须用真实 T3 prompt**(9633 字符)。玩具 prompt 下 `minimax` 看着正常,
-   真实 prompt 下 p50=13.37s —— 差一个数量级。
-   ▎**验收用的负载必须是被守护的那个负载。**
-   (`_score_one` 内部就是用 `_build_t3_prompt` 建的, 这一条由复用自动满足。)
-
-2. **必须用它实际所在槽的 profile**, ⛔ 不许一律强制关思考。
-   `SLOT.REASONING` 的 profile 是 `{}`(**故意不关思考**), 它的模型清一色
-   `_THINKING_ONLY`; 拿关思考去量它们, 会把「按契约正常」误判成「坏了」。
-   ⇒ 全仓只有 **3 种** profile, 所以按 **profile** 量而不是按槽量(等价且省 2/3 调用):
-       A `{'enable_thinking': False}`                    chat/simple_text/insights/review
-       B `{... json:True, temperature:0, seed:1234}`     chart/mapper   ← 严格契约
-       C `{}`                                            reasoning      ← 不关思考
-
-## 硬约束 9 —— 主读数是「哪几条死了」, 必须配一个「一定会活」的对照
-
-阳性对照 `aliyun_a_vl/qwen3.8-flash`(2026-11-03 prod 探针 200; aliyun_c 同日下线, 原对照 aliyun_c_vl 随之改成它)。
-**它要是也报死, 那是仪器坏了, 不是全都死了。** ⇒ rc=2, 整轮作废。
-⚠️ 2026-10-07 前的对照是 `aistore/DeepSeek-V4-Flash-A` —— 它随 aistore 出局(Steve 复审
-   裁定只留阿里云账号)。⛔ 不改的话对照**永远找不到**(它不在任何链上 ⇒ rows 里没有它),
-   脚本每次都 rc=2, 读数恒作废而不是恒绿 —— 方向是安全的, 但等于这台仪器停了。
-
-## 三态(硬约束 4)
-
-    rc=0 全活   rc=1 有死条目(读数有效)   rc=2 没量到(阳性对照未通过)
+Exit codes: 0 all measured entries alive, 1 measured dead/partial, 2 no valid
+instrument reading (including a dead positive control).
 """
 import argparse
 import asyncio
+import json
+import os
 import sys
 from collections import defaultdict
 
-import httpx
-
 from common import llm_router as R
-from smartbi.scripts.llm_capability_rank import _query_set, _score_one
+from common.process_secret_harness import with_process_secret_harness
 
 POSITIVE_CONTROL = ("aliyun_a_vl", "qwen3.8-flash")
 N_QUERIES = 2
-
-#: profile 指纹 -> (代表槽, 人读的名字)。⛔ 代表槽只用来取 profile, 与槽语义无关。
 PROFILE_REPS = [
-    (R.SLOT.REVIEW, "A 关思考"),
-    (R.SLOT.CHART, "B 关思考+严格JSON"),
-    (R.SLOT.REASONING, "C 不关思考"),
+    (R.SLOT.REVIEW, "A text"),
+    (R.SLOT.CHART, "B JSON"),
+    (R.SLOT.REASONING, "C reasoning"),
 ]
 
 
@@ -72,136 +32,121 @@ def _fingerprint(slot):
 
 
 def build_units():
-    """(account, model) -> {profile 指纹: (代表槽, 名字, [槽名...])}"""
-    rep_by_fp = {}
-    for slot, name in PROFILE_REPS:
-        rep_by_fp[_fingerprint(slot)] = (slot, name)
-
     units = defaultdict(dict)
     slots_of = defaultdict(list)
     for slot, chain in R.SLOT_MODELS.items():
-        fp = _fingerprint(slot)
-        rep = rep_by_fp.get(fp)
-        if rep is None:            # 出现新 profile 就说出来, ⛔ 不静默归并
-            rep = (slot, f"? 未登记 profile {R._SLOT_PARAMS.get(slot)}")
-            rep_by_fp[fp] = rep
         for pair in chain:
-            units[pair][fp] = rep
             slots_of[pair].append(slot.value)
+    # Every registry pair is measured through each of the three representative
+    # slot contracts.  This keeps the instrument stable even when two slots
+    # currently share identical parameter dictionaries.
+    for pair in slots_of:
+        for slot, name in PROFILE_REPS:
+            units[pair][name] = (slot, name)
     return units, slots_of
 
 
+def _content(response):
+    choices = response.get("choices") if isinstance(response, dict) else None
+    first = choices[0] if choices else {}
+    message = first.get("message") if isinstance(first, dict) else {}
+    return message.get("content") if isinstance(message, dict) else None
+
+
+async def _probe(pair, slot, profile, queries):
+    """Probe exactly ``pair``; router account-only filtering is insufficient."""
+    passed = 0
+    reasons = []
+    original_chain = R.SLOT_MODELS.get(slot)
+    # call_chain accepts account names, not (account, model) pairs. Lock the
+    # representative slot to this one pair for the duration of each probe.
+    R.SLOT_MODELS[slot] = [pair]
+    try:
+        for query in queries:
+            wants_json = profile == "B JSON"
+            user_query = query + (" Return one JSON object." if wants_json else "")
+            payload = {
+                "messages": [
+                    {"role": "system", "content": with_process_secret_harness(
+                        "你是工厂经营分析助手。只回答工厂经营数据问题。")},
+                    {"role": "user", "content": user_query},
+                ],
+                "max_tokens": 128,
+            }
+            try:
+                response = await R.call_chain(
+                    slot, payload, chain=[pair[0]], timeout=R._SLOT_HOP_BUDGET_SECONDS,
+                )
+                content = _content(response)
+                if not isinstance(content, str) or not content.strip():
+                    reasons.append("EMPTY_CONTENT")
+                elif wants_json:
+                    try:
+                        json.loads(content)
+                    except (TypeError, ValueError):
+                        reasons.append("MALFORMED_JSON")
+                    else:
+                        passed += 1
+                else:
+                    passed += 1
+            except Exception as exc:  # noqa: BLE001 - instrument failure is rc=2
+                reasons.append(type(exc).__name__)
+    finally:
+        if original_chain is None:
+            R.SLOT_MODELS.pop(slot, None)
+        else:
+            R.SLOT_MODELS[slot] = original_chain
+    return passed, reasons
+
+
 async def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--scope", choices=("minimal", "all"), default="minimal")
-    args = ap.parse_args()
-
-    entries = sorted(R._MINIMAL_SAFE_SET if args.scope == "minimal"
-                     else R._SAFE_MODELS)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--scope", choices=("minimal", "all"), default="minimal")
+    args = parser.parse_args()
+    entries = sorted(R._MINIMAL_SAFE_SET if args.scope == "minimal" else R._SAFE_MODELS)
     units, slots_of = build_units()
-    queries = _query_set(N_QUERIES)
-    budget = R._SLOT_HOP_BUDGET_SECONDS
-
-    orphans = [p for p in entries if p not in units]
-    measured = [p for p in entries if p in units]
-    n_calls = sum(len(units[p]) for p in measured) * len(queries)
-
-    print(f"scope={args.scope}  白名单 {len(entries)} 条")
-    import datetime as _dt
-    _stale_from = R._REGISTRY_AUDIT_DATE + _dt.timedelta(days=R._REGISTRY_MAX_AGE_DAYS + 1)
-    print(f"_REGISTRY_AUDIT_DATE={R._REGISTRY_AUDIT_DATE} "
-          f"+{R._REGISTRY_MAX_AGE_DAYS}d ⇒ {_stale_from} 起收缩到 _MINIMAL_SAFE_SET")
-    print(f"在池/链上的 {len(measured)} 条, 共 {n_calls} 次调用 "
-          f"({len(queries)} 题 × 每条所在的每种 profile)")
-    print(f"⛔ 不在任何池/链上的 {len(orphans)} 条 —— **纯死重, 与存活无关**, 不调用\n")
-
+    queries = [
+        "本月工厂订单和营收概况如何？",
+        "请给出工厂库存风险的简短判断。",
+    ][:N_QUERIES]
     rows = []
-    async with httpx.AsyncClient() as client:
-        for pair in measured:
-            account, model = pair
-            base, key = R._provider_config(account)
-            refuse = R._refuse_reason(account, model)
-            for fp, (rep_slot, pname) in units[pair].items():
-                if not key:
-                    rows.append({"account": account, "model": model,
-                                 "profile": pname, "passed": 0,
-                                 "total": len(queries), "p50": None,
-                                 "reasons": ["NO_API_KEY"], "refuse": refuse})
-                    print(f"  {account}/{model} [{pname}]: ⛔ 没有 api_key")
-                    continue
-                r = await _score_one(client, account, model, rep_slot, queries)
-                r["profile"] = pname
-                r["refuse"] = refuse
-                rows.append(r)
-                p50 = f"{r['p50']:.2f}s" if r["p50"] is not None else "  n/a"
-                over = (r["p50"] is not None and r["p50"] > budget)
-                print(f"  {account}/{model} [{pname}]: {r['passed']}/{r['total']} "
-                      f"p50={p50}{'  ⚠️超预算' if over else ''} "
-                      f"refuse={refuse!r} reasons={r['reasons'][:2]}")
+    orphans = []
+    for pair in entries:
+        if pair not in units:
+            orphans.append(pair)
+            rows.append({"account": pair[0], "model": pair[1], "measured": False,
+                         "passed": 0, "total": len(queries), "reasons": ["NOT_ON_CHAIN"]})
+            continue
+        for _fp, (slot, profile) in units[pair].items():
+            passed, reasons = await _probe(pair, slot, profile, queries)
+            rows.append({"account": pair[0], "model": pair[1], "profile": profile,
+                         "slots": slots_of[pair], "measured": True,
+                         "passed": passed, "total": len(queries), "reasons": reasons})
+            print(f"{pair[0]}/{pair[1]} [{profile}] {passed}/{len(queries)} {reasons}")
 
-    # ── 阳性对照 ──────────────────────────────────────────────────────
-    pc = [r for r in rows if (r["account"], r["model"]) == POSITIVE_CONTROL]
-    pc_ok = any(r["passed"] > 0 for r in pc)
-    print("\n" + "=" * 76)
-    print(f"阳性对照 {POSITIVE_CONTROL[0]}/{POSITIVE_CONTROL[1]}: "
-          f"{'✅ 活着 ⇒ 仪器可信' if pc_ok else '⛔ 也报死 ⇒ 仪器坏了'}")
-    if not pc_ok:
-        print("⛔ 本次读数作废, ⛔ 不许读成「全都死了」。")
-        return 2
-
-    # ── 按 (账号,模型) 汇总: 只要有一种 profile 能过就算活 ────────────
-    by_pair = defaultdict(list)
-    for r in rows:
-        by_pair[(r["account"], r["model"])].append(r)
-    dead = [p for p, rs in by_pair.items() if all(r["passed"] == 0 for r in rs)]
-    partial = [p for p, rs in by_pair.items()
-               if any(r["passed"] == 0 for r in rs) and p not in dead]
-
-    print(f"\n在池条目 {len(by_pair)}: 全活 "
-          f"{len(by_pair) - len(dead) - len(partial)} / 部分 {len(partial)} / 全死 {len(dead)}")
-    print("\n🔴 全死(单列):")
-    for a, m in sorted(dead):
-        why = sorted({x for r in by_pair[(a, m)] for x in r["reasons"]})
-        print(f"    {a}/{m}  slots={sorted(set(slots_of[(a, m)]))}  reasons={why[:3]}")
-    print("    (无)" if not dead else "")
-    print("⚠️ 部分 profile 不过(⇒ 那个槽的契约它满足不了):")
-    for a, m in sorted(partial):
-        for r in by_pair[(a, m)]:
-            if r["passed"] == 0:
-                print(f"    {a}/{m} [{r['profile']}] reasons={r['reasons'][:3]}")
-    print("    (无)" if not partial else "")
-
-    print("\n=== 按账号: 还剩几条活的(在池条目) ===")
-    acct = defaultdict(lambda: [0, 0])
-    for (a, m), rs in by_pair.items():
-        acct[a][1] += 1
-        if any(r["passed"] > 0 for r in rs):
-            acct[a][0] += 1
-    for a in sorted(acct):
-        alive, tot = acct[a]
-        print(f"  {a:<18} {alive}/{tot} 活")
-
-    print(f"\n=== ⛔ 纯死重: 在白名单但不在任何池/链 ({len(orphans)} 条) ===")
-    for a, m in orphans:
-        print(f"    {a}/{m}")
-    print("=" * 76)
-    # 见 deepseek_spend_alert._write_probe_out 的理由: 跑批需要一个
-    # **设计上必然出现**的产出, 才能把「决定不告警」和「根本没跑到那一步」分开。
-    import json as _json
-    import os as _os
-    _out = _os.environ.get("PROBE_OUT")
-    if _out:
+    positive = [row for row in rows if (row["account"], row["model"]) == POSITIVE_CONTROL]
+    instrument_ok = bool(positive) and any(row["passed"] > 0 for row in positive)
+    grouped = defaultdict(list)
+    for row in rows:
+        if row["measured"]:
+            grouped[(row["account"], row["model"])].append(row)
+    dead = [pair for pair, values in grouped.items() if all(v["passed"] == 0 for v in values)]
+    partial = [pair for pair, values in grouped.items()
+               if any(v["passed"] < v["total"] for v in values) and pair not in dead]
+    rc = 2 if not instrument_ok or not grouped or orphans else (1 if dead or partial else 0)
+    output = {"rc": rc, "alive": sum(any(v["passed"] > 0 for v in rows_) for rows_ in grouped.values()),
+              "checked": len(grouped), "dead": len(dead), "partial": len(partial),
+              "positive_control": POSITIVE_CONTROL, "orphans": len(orphans)}
+    out = os.environ.get("PROBE_OUT")
+    if out:
         try:
-            with open(_out, "w", encoding="utf-8", newline="") as _f:
-                _json.dump({
-                    "rc": 1 if dead or partial else 0,
-                    "alive": sum(v[0] for v in acct.values()),
-                    "checked": sum(v[1] for v in acct.values()),
-                    "dead": len(dead), "partial": len(partial),
-                }, _f, ensure_ascii=False)
-        except OSError:
-            pass
-    return 1 if dead or partial else 0
+            with open(out, "w", encoding="utf-8") as handle:
+                json.dump(output, handle, ensure_ascii=False)
+        except OSError as exc:
+            print(f"PROBE_OUT_WRITE_FAILED: {exc}", file=sys.stderr)
+            return 2
+    print(json.dumps(output, ensure_ascii=False))
+    return rc
 
 
 if __name__ == "__main__":

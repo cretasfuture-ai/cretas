@@ -447,7 +447,7 @@ class SkillRouteGuardTest {
                     mock(AnalysisRouterService.class), new ObjectMapper(), toolRegistry, toolDispatch, dynamic,
                     mock(DashScopeClient.class), mock(DashScopeConfig.class)));
             ReflectionTestUtils.setField(service, "factoryCapabilityPackRoutingPolicy", packPolicy);
-            ReflectionTestUtils.setField(service, "businessTypeGate", mock(BusinessTypeGate.class));
+            FactoryAnalysisTestMetadata.bindNamedFactories(service);
             ReflectionTestUtils.setField(service, "writeGuardService", writeGuard);
             ReflectionTestUtils.setField(service, "clarificationCandidateService", candidates);
         }
