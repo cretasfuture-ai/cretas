@@ -6,6 +6,12 @@
 **当前真值**：代码与合并读 origin/main；本页仅在飞摘要（每条≤300字、全页≤30000 bytes，check_dispatch_active.py校验）；历史/判据/增量见 archive/。
 
 ## 在飞任务
+- `SEC-RESTAURANT-JAVA-20261105` — `claimed` — Owner restaurant_java/root — Base 41f58a822cf — scope backend/java；迁出工厂复用到货/损耗，删除餐饮栈/路由/默认监听；保留工厂BOM/领料和历史SQL。验收真实JPA+MVC/工厂回归；禁止Canvas/Shortage/采购审批变更。
+
+- `SEC-RESTAURANT-PYTHON-20261105` — `claimed` — Owner restaurant_python/root — Base 41f58a822cf — scope backend/python；删除餐饮专属路由/调度/服务及入口，迁出工厂复用逻辑，保留已应用SQL。验收pytest注册/工厂正向；禁止Java/Web/RN。
+
+- `SEC-RESTAURANT-UI-20261105` — `claimed` — Owner restaurant_ui/root — Base 41f58a822cf — scope web-admin及frontend/CretasFoodTrace；删除餐饮专属页面/导航/API/角色入口，迁出工厂复用。验收Web/RN类型/构建/入口契约；禁止Canvas/缺料/演示业务修改。
+
 
 - `SEC-PLAN-AUDIT-MAIN-FREEZE-20261105` — `in-progress` — Owner 01a1a954-e8fa-7a10-8eda-3f5ba0872102 — Base 0b2bdd6b8844ff865f898bcea1cea763d6442d76 — main合并冻结；1438纳入新增main后最终全量/构建/发布中。其他Owner可分支开发测试，暂不合并/推main或发布；已有有效发布锁/原子操作优先。解除条件：本组发布回执或明确交接。
 
