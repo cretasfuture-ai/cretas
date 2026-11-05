@@ -21,3 +21,5 @@ Supplier源码精确来自审计31a3eb0287、731c05ee09、323f1db35c，食品未
 额外角色/production RW/production_plan模块enabled与显式账号DENY封口源码2b51经独立复核clear。官方25类首次因测试fixture失败（502秒）完整保留；无产品改动，修真实持久化User ID/请求上下文、created_by外键、RAW owner anchor及严格OWNER/OUTPUT mock。最终失败三类分两次窄复验：真实PG27+Guard16=43通过，Alias7通过，合计50/0/0/0，非一次组合运行；源码hash/命令/log绑定外部material-auth-fixture-final-target-proof.json。未弱化锁等待/optimistic 409/权限/外键或扩大baseline。Web此前官方80秒成功，树未变应由最终入口校验复用。最终25类可信JAR/build/stage、最新head required CI、合并、部署及F006物料业务验收仍待各自完成；本次物料无DDL，不把已合SOP94算本次新迁移。
 
 2026-11-06 CI七类修复冻结：Replacer按真实UnitContract.storageUnit比较别名身份，bag/袋、box/盒、case/箱与公斤/kg允许；只/个/件及kg/g拒绝，不隐式改数量、价格、计价单位或换算。原料包装与供应规格均要求唯一等价；Supplier文件未改。六个既有fixture补真实排序锁/fresh状态投影、锁PO header及spec relation，不降断言。开发验证分次：BareUnit5、AiGrant15、Quote7、Submit4、Deferred25、Controlled6、Timer22通过；Material PG34中30先通过、4个新负例补齐数据库必填fixture后最终4/0/0/0通过，私有PG均finally stop0。旧687 CI确为失败，旧212制品不能背书新源码；本次需最新main组合官方32类构建及新head必需CI。
+
+最终组合Base更新2de52fb66e7caaf892d9430afba23e8b81d5e57d，已无冲突精确汇合1488/1489/1491；不改其功能。CI修复源码d60b3ddc80，最终官方选择器32类（原25加失败七类），私有PG57047使用测试自身安全契约要求的cretas_workflow_verify_test，非生产；最新必需CI仍待。
