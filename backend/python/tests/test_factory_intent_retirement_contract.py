@@ -40,9 +40,9 @@ def test_generated_migration_does_not_accidentally_open_a_flyway_placeholder():
     assert module.TARGET.read_text(encoding="utf-8") == rendered
 
 
-def test_retired_and_restaurant_rows_are_rejected_but_custom_rows_survive():
+@pytest.mark.parametrize("retained", sorted(catalog.load_catalog()["reclassified"]))
+def test_retired_and_restaurant_rows_are_rejected_but_custom_rows_survive(retained):
     cat = catalog.load_catalog()
-    retained = next(iter(cat["reclassified"]))
     rows = [
         {"intent_code": next(iter(cat["retired"])), "factory_id": None, "business_type": "FACTORY"},
         {"intent_code": "RESTAURANT_CUSTOM", "factory_id": "F1", "business_type": "FACTORY"},
@@ -58,7 +58,7 @@ def test_retired_and_restaurant_rows_are_rejected_but_custom_rows_survive():
     assert "RESTAURANT_CUSTOM" not in codes
     assert "FACTORY_TENANT_CUSTOM" in codes
     assert "EFFICIENCY_COMPARISON" in codes
-    assert retained in codes
+    assert catalog.canonical_code(retained, cat) in codes
 
 
 def test_db_visibility_preserves_tenant_and_active_delete_guards():
