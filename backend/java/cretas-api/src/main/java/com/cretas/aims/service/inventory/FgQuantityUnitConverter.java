@@ -165,6 +165,22 @@ public final class FgQuantityUnitConverter {
         return converted.divide(toPackagingFactor, CONVERSION_CONTEXT);
     }
 
+    /** 规格快照是否完整到可以比较: 包装单位、基础单位、系数缺一个就不知道这批是什么规格。 */
+    public static boolean hasPackagingSpec(String packagingUnit, String baseUnit, BigDecimal factor) {
+        return packagingUnit != null && !packagingUnit.isBlank()
+                && baseUnit != null && !baseUnit.isBlank()
+                && factor != null && factor.signum() > 0;
+    }
+
+    /** 两份完整的规格快照是否是同一个规格 (「箱 = 8 盒」对「箱 = 8 盒」, 单位按内置同义归一)。 */
+    public static boolean samePackagingSpec(
+            String leftUnit, String leftBaseUnit, BigDecimal leftFactor,
+            String rightUnit, String rightBaseUnit, BigDecimal rightFactor) {
+        return sameBuiltInUnit(leftUnit, rightUnit)
+                && sameBuiltInUnit(leftBaseUnit, rightBaseUnit)
+                && leftFactor.compareTo(rightFactor) == 0;
+    }
+
     private static boolean isPackagingMatch(
             String actualUnit, String packagingUnit, String baseUnit, BigDecimal factor) {
         return actualUnit != null

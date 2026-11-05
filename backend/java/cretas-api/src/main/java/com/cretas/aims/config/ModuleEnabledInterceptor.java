@@ -85,12 +85,40 @@ public class ModuleEnabledInterceptor implements HandlerInterceptor {
                     "账号 " + userLabel(user) + " 不属于工厂 " + factoryId + "，无法访问模块 " + moduleCode);
             return false;
         }
-        if (!userModuleAccessService.canAccessModule(user, moduleCode)) {
+        if (!canAccessAnyModule(user, factoryId, moduleCode, annotation.alsoAllowModules())
+                && !allowedByNamedRole(annotation, user, moduleCode)) {
             sendUserModuleDenied(response, user, moduleCode,
                     "账号 " + userLabel(user) + " 缺少模块 " + moduleCode + " 的访问权限");
             return false;
         }
         return true;
+    }
+
+    /** {@link RequireModule#alsoAllowRoles()}: 点名的角色放行这条端点, 账号上显式 DENY 的除外。 */
+    private boolean allowedByNamedRole(RequireModule annotation, User user, String moduleCode) {
+        if (annotation.alsoAllowRoles().length == 0 || user.getRoleEnum() == null) {
+            return false;
+        }
+        return java.util.Arrays.asList(annotation.alsoAllowRoles()).contains(user.getRoleEnum().name())
+                && !userModuleAccessService.isExplicitlyDenied(user, moduleCode);
+    }
+
+    /** 主模块有权限就放行; 否则看 {@code alsoAllowModules} 里本厂已启用且账号有权限的模块。 */
+    private boolean canAccessAnyModule(User user, String factoryId, String moduleCode, String[] alsoAllowModules) {
+        if (userModuleAccessService.canAccessModule(user, moduleCode)) {
+            return true;
+        }
+        // 管理员对主模块显式 DENY 是明确的决定, 不能被别的模块绕过去
+        if (userModuleAccessService.isExplicitlyDenied(user, moduleCode)) {
+            return false;
+        }
+        for (String alternative : alsoAllowModules) {
+            if (configService.isModuleEnabled(factoryId, alternative)
+                    && userModuleAccessService.canAccessModule(user, alternative)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String extractFactoryId(String path) {

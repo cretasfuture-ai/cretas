@@ -61,6 +61,8 @@ export interface DynamicQualityItem {
   effectiveMinValue?: number | null;
   effectiveMaxValue?: number | null;
   effectiveIsRequired?: boolean;
+  /** 判不合格时必须写原因 (后端同样校验)。 */
+  requireNoteOnFail?: boolean;
 }
 
 export interface DynamicQualityForm {
@@ -82,6 +84,10 @@ export interface DynamicQualityAnswer {
 export interface DynamicQualitySubmitResponse {
   inspection: { id: string | number; result: QualityInspectionResult };
   standardRevision: string;
+  /** 提交后批次的实际质量状态 (检验记录留下了, 批次状态不一定跟着变)。 */
+  batchQualityStatus?: string;
+  /** 批次判过不合格、这次检验没有解除它: 还要走处置复核。 */
+  dispositionRequired?: boolean;
 }
 
 // ============================================
@@ -373,7 +379,7 @@ export type QualityInspectorStackParamList = {
     batchNumber: string;
     productionDate: string;
   };
-  QIResult: { recordId: string; passed: boolean };
+  QIResult: { recordId: string; passed: boolean; dispositionRequired?: boolean };
   QIRecords: undefined;
   QIRecordDetail: { recordId: string };
   QIAnalysis: undefined;

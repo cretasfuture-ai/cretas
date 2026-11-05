@@ -133,7 +133,7 @@ async function main() {
   const prefill = prefillResp?.prefill || {};
   const idemKey = `${planNumber}-settle-idem`;
   const settleBody = {
-    ...prefill, idempotencyKey: idemKey,
+    ...prefill, idempotencyKey: idemKey, confirm: true, manualOverride: true, manualOverrideReason: 'e2e 人工补录',
     actualFinishedQuantity: prefill.actualFinishedQuantity ?? 0.13,
     quantityVarianceReason: '现场称重差异', // 超产(0.13>0.05)→ 后端同样强制要求超产原因(API 层防呆 ✓)
     quantityUnit: prefill.quantityUnit || 'kg',

@@ -5,6 +5,7 @@ import ElementPlus from 'element-plus';
 import VoucherDetail from '../VoucherDetail.vue';
 
 const api = vi.hoisted(() => ({
+  canAccess: vi.fn(),
   get: vi.fn(),
   post: vi.fn(),
   void: vi.fn(),
@@ -25,7 +26,7 @@ vi.mock('vue-router', () => ({
 }));
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => identity }));
 vi.mock('@/store/modules/permission', () => ({
-  usePermissionStore: () => ({ canWrite: () => true }),
+  usePermissionStore: () => ({ canWrite: () => true, canAccess: (module: string) => api.canAccess(module) !== false }),
 }));
 vi.mock('@/api/voucher', () => ({
   getVoucherDetail: api.get,
@@ -116,6 +117,16 @@ describe('凭证详情真实挂载行为', () => {
     expect(approval).toBeDefined();await approval!.trigger('click');
     expect(api.push).toHaveBeenLastCalledWith({path:'/quality/disposals',query:{disposalId:'5'}});
     expect(api.byBusiness).not.toHaveBeenCalled();wrapper.unmount();
+  });
+  it('finance manager without the quality module lands on the finance approval page, not a 403', async () => {
+    api.canAccess.mockImplementation((module: string) => module !== 'quality');
+    api.get.mockResolvedValue({...voucher('voucher-a'),sourceBusinessType:'DISPOSAL_RECORD',sourceBusinessId:'5',status:'REVERSED'});
+    const wrapper=render();await flushPromises();
+    const approval=wrapper.findAll('button').find(b=>b.text()==='查看报废审批');
+    await approval!.trigger('click');
+    expect(api.push).toHaveBeenLastCalledWith({path:'/finance/disposal-approvals',query:{disposalId:'5'}});
+    api.canAccess.mockImplementation(() => true);
+    wrapper.unmount();
   });
   it('does not offer standalone void for disposal vouchers and explains the correct workflow', async () => {
     api.get.mockResolvedValue({...voucher('voucher-a'),sourceBusinessType:'DISPOSAL_RECORD',sourceBusinessId:'5',status:'POSTED'});

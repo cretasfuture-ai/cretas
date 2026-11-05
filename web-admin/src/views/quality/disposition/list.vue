@@ -18,6 +18,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh, WarningFilled } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
+import { dispositionResultFilter } from '../reinspectionRelease';
 import {
   getAvailableActions,
   evaluateDisposition,
@@ -150,7 +151,8 @@ async function loadPendingInspections(expectedContextRequest = contextRequest, e
       params: {
         page: 1,
         size: 100,
-        result: 'FAIL,CONDITIONAL',
+        // FAILED 批次的 PASS 复检仍需人工处置；全厂列表保持原结果过滤。
+        result: dispositionResultFilter(expectedBatchId ? scopedBatch.value : null),
         batchId: expectedBatchId || undefined,
       },
     });
@@ -182,6 +184,7 @@ async function loadPendingInspections(expectedContextRequest = contextRequest, e
 }
 
 function getResultLabel(result: unknown): string {
+  if (result === 'PASS') return '复检合格';
   if (result === 'FAIL' || result === 'FAILED') return '不合格';
   if (result === 'CONDITIONAL') return '有条件放行';
   return String(result ?? '-');
@@ -471,7 +474,7 @@ onMounted(() => {
           <el-table
             :data="inspectionRows"
             v-loading="inspectionLoading"
-            empty-text="暂无待处置的不合格/条件放行质检记录"
+            empty-text="暂无待处置质检记录"
             stripe
             border
             style="width: 100%"
@@ -493,7 +496,7 @@ onMounted(() => {
             <el-table-column prop="qualityGrade" label="等级" width="70" align="center" />
             <el-table-column label="检测结果" width="110" align="center">
               <template #default="{ row }">
-                <el-tag :type="row.result === 'CONDITIONAL' ? 'warning' : 'danger'" size="small">
+                <el-tag :type="row.result === 'PASS' ? 'success' : row.result === 'CONDITIONAL' ? 'warning' : 'danger'" size="small">
                   {{ getResultLabel(row.result) }}
                 </el-tag>
               </template>
@@ -609,7 +612,7 @@ onMounted(() => {
           <span>合格率 {{ dispositionRow.passRate != null ? Number(dispositionRow.passRate).toFixed(1) + '%' : '-' }}</span>
         </div>
         <div class="context-row">
-          <el-tag :type="dispositionRow.result === 'CONDITIONAL' ? 'warning' : 'danger'" size="small">
+          <el-tag :type="dispositionRow.result === 'PASS' ? 'success' : dispositionRow.result === 'CONDITIONAL' ? 'warning' : 'danger'" size="small">
             {{ getResultLabel(dispositionRow.result) }}
           </el-tag>
           <span v-if="dispositionRow.notes" class="context-notes">{{ dispositionRow.notes }}</span>

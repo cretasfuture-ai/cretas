@@ -42,10 +42,22 @@ import com.cretas.aims.annotation.RequireModule;
 @RequireModule("quality_inspection")
 public class DisposalController {
 
+    /**
+     * 报废审批要求「财务经理或工厂管理员」(DisposalRecordService#assertApprovalRole), 财务经理却没有
+     * 质检模块 ⇒ 审批链最后一步没人走得到 (Owner 2026-11-04 裁定: 只放开这条路径)。
+     *
+     * <p>⛔ 不给财务质检模块: 只有 审批 / 拒绝 和审批要读的 列表 / 详情 / 待审批 / 凭证 这几条挂这个角色,
+     * 新建、修改、删除、统计仍然只认质检模块; 同持 finance 的出纳也不在内。
+     * 硬约束 8 登记: 本类 14 个端点, 改 6 处; 其余 8 处 (eligible-finished-goods / 新建 / 修改 /
+     * 删除 / date-range / stats 两条 / recyclable) 故意不改, 都不在审批路径上。
+     */
+    private static final String APPROVER_ROLE = "finance_manager";
+
     private final DisposalRecordService disposalRecordService;
 
     @GetMapping("/{id}/vouchers")
     @RequirePermission({"finance:read", "finance:read_write"})
+    @RequireModule(value = "quality_inspection", alsoAllowRoles = APPROVER_ROLE)
     @Operation(summary = "查看报废对应的原始、红字及成本修订凭证")
     public ResponseEntity<?> getAccountingVouchers(@PathVariable String factoryId, @PathVariable Long id) {
         return ResponseEntity.ok(Map.of("success",true,"data",disposalRecordService.getAccountingHistory(factoryId,id)));
@@ -63,6 +75,7 @@ public class DisposalController {
      * 获取报废记录列表（分页）
      */
     @GetMapping
+    @RequireModule(value = "quality_inspection", alsoAllowRoles = APPROVER_ROLE)
     @Operation(summary = "获取报废记录列表", description = "分页查询指定工厂的报废记录，支持按类型筛选。返回分页信息和报废记录列表")
     public ResponseEntity<?> getDisposalRecords(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
@@ -97,6 +110,7 @@ public class DisposalController {
      * 获取单个报废记录
      */
     @GetMapping("/{id}")
+    @RequireModule(value = "quality_inspection", alsoAllowRoles = APPROVER_ROLE)
     @Operation(summary = "获取报废记录详情", description = "根据ID获取单个报废记录的详细信息，包括报废原因、数量、审批状态等")
     public ResponseEntity<?> getDisposalRecord(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId,
@@ -206,7 +220,7 @@ public class DisposalController {
     //     看得见报废入口, 点下去必 403。判定不合格 -> 报废本就是质检流程的一环。
     // ⚠️ 保留 warehouse: 仓储侧盘亏报废是另一条真实入口, ⛔ 不是替换。
     @RequirePermission({"warehouse:read_write", "quality:read_write", "finance:read_write"})
-    @RequireModule("quality_inspection")
+    @RequireModule(value = "quality_inspection", alsoAllowRoles = APPROVER_ROLE)
     @PutMapping("/{id}/approve")
     @Operation(summary = "审批报废记录(通过)", description = "审批通过指定报废记录。审批人从登录态取, 需财务/工厂管理员角色。通过后状态变更为已批准, 库存相应减少")
     public ResponseEntity<?> approveDisposal(
@@ -248,8 +262,8 @@ public class DisposalController {
     //   ⇒ 质检角色(quality_manager / quality_inspector / group_leader)在质检菜单里
     //     看得见报废入口, 点下去必 403。判定不合格 -> 报废本就是质检流程的一环。
     // ⚠️ 保留 warehouse: 仓储侧盘亏报废是另一条真实入口, ⛔ 不是替换。
-    @RequirePermission({"warehouse:read_write", "quality:read_write"})
-    @RequireModule("quality_inspection")
+    @RequirePermission({"warehouse:read_write", "quality:read_write", "finance:read_write"})
+    @RequireModule(value = "quality_inspection", alsoAllowRoles = APPROVER_ROLE)
     @PutMapping("/{id}/reject")
     @Operation(summary = "拒绝报废记录", description = "拒绝指定报废记录。审批人从登录态取, 需财务/工厂管理员角色。拒绝后状态变更为已拒绝, 库存不变")
     public ResponseEntity<?> rejectDisposal(
@@ -319,6 +333,7 @@ public class DisposalController {
      * 获取待审批的报废记录
      */
     @GetMapping("/pending")
+    @RequireModule(value = "quality_inspection", alsoAllowRoles = APPROVER_ROLE)
     @Operation(summary = "获取待审批报废记录", description = "获取指定工厂所有待审批的报废记录列表，用于审批人员查看待处理的审批任务")
     public ResponseEntity<?> getPendingApprovals(
             @PathVariable @Parameter(description = "工厂ID", example = "F001", required = true) String factoryId) {

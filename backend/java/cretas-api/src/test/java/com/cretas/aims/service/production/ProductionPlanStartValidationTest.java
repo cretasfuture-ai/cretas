@@ -96,6 +96,7 @@ class ProductionPlanStartValidationTest {
     @Mock private BomRecipeRepository bomRecipeRepository;
     @Mock private com.cretas.aims.service.workprocess.WorkProcessTaskService workProcessTaskService;
     @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+    @Mock private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
 
     private ProductionPlanServiceImpl service;
 
@@ -113,6 +114,7 @@ class ProductionPlanStartValidationTest {
         // 需要工序任务服务。此前 startProduction 只翻状态, 不碰它。
         setField(service, "workProcessTaskService", workProcessTaskService);
         setField(service, "wipInventoryService", wipInventoryService);
+        setField(service, "secondaryPlanFeedService", secondaryPlanFeedService);
 
         // toDTOWithConversionInfo 的依赖默认 stub — 成功 path 才会用上
         ProductionPlanDTO emptyDto = new ProductionPlanDTO();
@@ -206,8 +208,7 @@ class ProductionPlanStartValidationTest {
 
         service.startProduction(FACTORY_ID, PLAN_ID, 77L);
 
-        verify(wipInventoryService).deductForSecondaryPlan(
-                347L, new BigDecimal("0.04"), FACTORY_ID, 77L, Owner.COMPANY);
+        verify(secondaryPlanFeedService).takeHold(FACTORY_ID, plan, 77L);
     }
 
     @Test

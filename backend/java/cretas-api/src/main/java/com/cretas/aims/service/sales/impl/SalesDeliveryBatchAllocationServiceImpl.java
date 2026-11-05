@@ -19,6 +19,7 @@ import com.cretas.aims.repository.sales.SalesDeliveryItemBatchAllocationReposito
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.inventory.FgReservationLedgerService;
+import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
@@ -208,6 +209,10 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             BigDecimal activeAllocatedNative = activeAllocatedNativeExcludingCurrent(
                     factoryId, batch, deliveryItemId, item.getProductTypeId(), gramsPerUnit);
             BigDecimal allocatableNative = availableNative.subtract(activeAllocatedNative).max(BigDecimal.ZERO);
+            // O-309-1: 规格不一致要人确认换算。排在可售闸之后 (隔离批仍然先报 NOT_SALEABLE)。
+            if (packagingMismatch(batch, item) && !Boolean.TRUE.equals(dto.getPackagingConversionConfirmed())) {
+                throw packagingMismatchError(batch, item);
+            }
             // 🔴 C1: convert batch-native available into the delivery line's unit before comparing
             // against dto.getAllocatedQty() (always item.getUnit()).
             BigDecimal available = convertBatchToDeliveryUnit(
@@ -215,6 +220,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             if (available == null) {
                 throw new BusinessException(409, "成品批次 " + batch.getBatchNumber()
                         + " 的单位（" + batch.getUnit() + "）与发货单位（" + item.getUnit() + "）不一致, 且缺少产品「每盒/份克重」配置无法换算")
+                        .withCode("BATCH_UNIT_CONVERSION_UNRESOLVED")
                         .withHint("请联系管理员在产品资料中补充「每盒/份标准克重」, 或改用与发货单位一致的批次")
                         .withHintTarget("finishedGoodsBatchId");
             }
@@ -322,6 +328,20 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     public List<Map<String, Object>> recommendFifo(
             String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
             String unit, String sourceWarehouseCode) {
+        return recommend(factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode, false);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> recommendFifoSkippingPackagingMismatch(
+            String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
+            String unit, String sourceWarehouseCode) {
+        return recommend(factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode, true);
+    }
+
+    private List<Map<String, Object>> recommend(
+            String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
+            String unit, String sourceWarehouseCode, boolean skipPackagingMismatch) {
         if (factoryId == null || factoryId.isBlank()) {
             throw new BusinessException(400, "factoryId 不能为空")
                     .withHint("请重新登录获取有效的工厂上下文").withHintTarget("factoryId");
@@ -405,6 +425,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
 
         for (var batch : batches) {
             if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
+            boolean specMismatch = packagingMismatch(batch, deliveryItem);
+            if (skipPackagingMismatch && specMismatch) continue;
             BigDecimal availableNative = prestockedCustomerStock
                     ? reservationLedgerService.getActiveReservedForOrderAndBatch(
                             salesOrder.getId(), batch.getId())
@@ -441,6 +463,14 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             rec.put("batchNativeUnit", batch.getUnit());
             rec.put("availableQuantity", availableInTargetUnit);
             rec.put("recommendedQuantity", allocate);
+            // O-309-1: 规格不一致的批次仍然列出来, 但要让人看见要确认什么
+            rec.put("packagingMismatch", specMismatch);
+            if (specMismatch) {
+                rec.put("batchPackagingLabel", packagingLabel(batch.getPackagingUnit(),
+                        batch.getPackagingBaseUnit(), batch.getPackagingFactor()));
+                rec.put("linePackagingLabel", packagingLabel(deliveryItem.getPackagingUnit(),
+                        deliveryItem.getPackagingBaseUnit(), deliveryItem.getPackagingFactor()));
+            }
             result.add(rec);
             remaining = remaining.subtract(allocate);
         }
@@ -559,6 +589,40 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         return total;
     }
 
+    /**
+     * 成品批和发货行都带完整规格快照、且不是同一个规格 (O-309-1)。
+     * 任一方缺规格 ⇒ 不知道算不算一致, 不在这里判: 单位相同照常, 单位不同由下面的换算如实给结果,
+     * 换算不了就报 BATCH_UNIT_CONVERSION_UNRESOLVED, ⛔ 不猜。
+     */
+    private static boolean packagingMismatch(FinishedGoodsBatch batch, SalesDeliveryItem item) {
+        if (item == null
+                || !FgQuantityUnitConverter.hasPackagingSpec(
+                        batch.getPackagingUnit(), batch.getPackagingBaseUnit(), batch.getPackagingFactor())
+                || !FgQuantityUnitConverter.hasPackagingSpec(
+                        item.getPackagingUnit(), item.getPackagingBaseUnit(), item.getPackagingFactor())) {
+            return false;
+        }
+        return !FgQuantityUnitConverter.samePackagingSpec(
+                batch.getPackagingUnit(), batch.getPackagingBaseUnit(), batch.getPackagingFactor(),
+                item.getPackagingUnit(), item.getPackagingBaseUnit(), item.getPackagingFactor());
+    }
+
+    private static String packagingLabel(String packagingUnit, String baseUnit, BigDecimal factor) {
+        return "1" + UnitDisplayNames.display(packagingUnit) + "="
+                + factor.stripTrailingZeros().toPlainString() + UnitDisplayNames.display(baseUnit);
+    }
+
+    private static BusinessException packagingMismatchError(FinishedGoodsBatch batch, SalesDeliveryItem item) {
+        String batchLabel = packagingLabel(batch.getPackagingUnit(), batch.getPackagingBaseUnit(), batch.getPackagingFactor());
+        String lineLabel = packagingLabel(item.getPackagingUnit(), item.getPackagingBaseUnit(), item.getPackagingFactor());
+        return new BusinessException(409, "成品批次 " + batch.getBatchNumber() + " 的规格（"
+                + batchLabel + "）与发货行规格（" + lineLabel
+                + "）不一致，需要确认换算后才能分配")
+                .withCode("BATCH_PACKAGING_SPEC_MISMATCH")
+                .withHint("请换一个规格一致的批次；确需用这批，核对换算后确认再分配")
+                .withHintTarget("finishedGoodsBatchId");
+    }
+
     private BigDecimal convertBatchToDeliveryUnit(
             BigDecimal quantity,
             FinishedGoodsBatch batch,
@@ -614,8 +678,9 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         if (requiredQty == null || requiredQty.signum() <= 0) {
             return true;   // 这一行没有要发的量, 不需要分配
         }
-        List<Map<String, Object>> candidates =
-                recommendFifo(factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+        // O-309-1: 自动分配没有人确认换算, 所以只挑规格一致 (或没有规格信息) 的批次
+        List<Map<String, Object>> candidates = recommend(
+                factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode, true);
 
         List<BatchAllocationDTO> picks = new ArrayList<>();
         BigDecimal remaining = requiredQty;
@@ -647,6 +712,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         if (remaining.signum() > 0 || picks.isEmpty()) {
             log.warn("[自动分配FIFO] 库存不足 factory={} item={} 需要={} 还差={}",
                     factoryId, deliveryItemId, requiredQty, remaining);
+            assertShortfallIsNotPackagingMismatch(
+                    factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
             return false;
         }
 
@@ -654,6 +721,26 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         log.info("[自动分配FIFO] factory={} item={} 已分配 {} 个批次, 合计={}",
                 factoryId, deliveryItemId, picks.size(), requiredQty);
         return true;
+    }
+
+    /**
+     * 货其实在, 只是规格不一致才凑不够时, ⛔ 不能让调用方报「库存不足」: 那会让人去补货,
+     * 而他要做的是确认换算。把真实原因抛出去。
+     */
+    private void assertShortfallIsNotPackagingMismatch(
+            String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
+            String unit, String sourceWarehouseCode) {
+        for (Map<String, Object> row : recommend(
+                factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode, false)) {
+            if (Boolean.TRUE.equals(row.get("packagingMismatch"))) {
+                throw new BusinessException(409, "成品批次 " + row.get("batchNumber") + " 的规格（"
+                        + row.get("batchPackagingLabel") + "）与发货行规格（" + row.get("linePackagingLabel")
+                        + "）不一致，系统不会自动换算")
+                        .withCode("BATCH_PACKAGING_SPEC_MISMATCH")
+                        .withHint("请到电脑端「仓储管理 → 出货管理」确认这一单时核对换算，或换规格一致的货再发")
+                        .withHintTarget("finishedGoodsBatchId");
+            }
+        }
     }
 
     // 🔴 2026-09-02: 这里的 == 特意【没有】跟着缺陷 41 改成 <=。allocateBatches 现在允许

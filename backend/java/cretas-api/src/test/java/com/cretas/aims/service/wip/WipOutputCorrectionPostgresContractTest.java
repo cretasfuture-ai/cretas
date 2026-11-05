@@ -259,6 +259,15 @@ class WipOutputCorrectionPostgresContractTest {
     @EnableTransactionManagement
     @EnableAspectJAutoProxy
     static class PgConfig {
+        /**
+         * This fixture uses JDBC repositories and has no managed persistence context.
+         * Supply only the injection dependency introduced by secondary-plan locking;
+         * real Hibernate refresh/concurrency is covered by SecondaryHoldPostgresContractTest.
+         */
+        @Bean jakarta.persistence.EntityManagerFactory entityManagerFactory() {
+            return mock(jakarta.persistence.EntityManagerFactory.class);
+        }
+
         @Bean DataSourceTransactionManager transactionManager(DataSource dataSource) {
             return new DataSourceTransactionManager(dataSource);
         }

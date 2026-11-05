@@ -102,6 +102,7 @@ class ProductionPlanCancelConcurrencyTest {
     @Mock private WorkProcessTaskRepository workProcessTaskRepository;
     @Mock private ProductionReportRepository productionReportRepository;
     @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
+    @Mock private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
 
     private ProductionPlanServiceImpl service;
 
@@ -117,6 +118,12 @@ class ProductionPlanCancelConcurrencyTest {
         ReflectionTestUtils.setField(service, "workProcessTaskRepository", workProcessTaskRepository);
         ReflectionTestUtils.setField(service, "productionReportRepository", productionReportRepository);
         ReflectionTestUtils.setField(service, "wipInventoryService", wipInventoryService);
+        ReflectionTestUtils.setField(service, "secondaryPlanFeedService", secondaryPlanFeedService);
+        org.mockito.Mockito.lenient().when(secondaryPlanFeedService.forPlan(any(), any())).thenAnswer(inv -> {
+            ProductionPlan p = inv.getArgument(1);
+            return java.util.Optional.of(new com.cretas.aims.service.production.SecondaryPlanFeedService.Source(
+                    p, p.getSecondarySourceWipId(), "CLK-SEMI-1", "SEMI-1", p.getPlannedQuantity(), "kg"));
+        });
         ReflectionTestUtils.setField(service, "intermediateOwnershipGuard", org.mockito.Mockito.mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
         ReflectionTestUtils.setField(service, "workProcessTaskService", workProcessTaskService);
 
@@ -329,9 +336,8 @@ class ProductionPlanCancelConcurrencyTest {
 
         service.cancelProductionPlan(FACTORY_ID, PLAN_ID, "订单取消");
 
-        // 反冲还回开工扣的 WIP (plannedQuantity=100)
-        verify(wipInventoryService).reverseSecondaryDeduct(
-                eq(555L), eq(new BigDecimal("100")), eq(FACTORY_ID), any());
+        // 占用全部还回 (quantity=null 表示按流水里还占着的量还)
+        verify(secondaryPlanFeedService).closeHold(eq(FACTORY_ID), eq(target), any());
         // 计划置 CANCELLED, 不卡 IN_PROGRESS
         assertEquals(ProductionPlanStatus.CANCELLED, target.getStatus());
     }
@@ -356,7 +362,7 @@ class ProductionPlanCancelConcurrencyTest {
         assertEquals(409, ex.getCode());
         assertEquals(ProductionPlanStatus.IN_PROGRESS, target.getStatus());
         // 有报工 → 走报工撤回流, 不反冲
-        verify(wipInventoryService, never()).reverseSecondaryDeduct(any(), any(), any(), any());
+        verify(secondaryPlanFeedService, never()).closeHold(any(), any(), any());
     }
 
     @Test

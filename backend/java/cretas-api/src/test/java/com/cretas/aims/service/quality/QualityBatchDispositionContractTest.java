@@ -1,0 +1,645 @@
+package com.cretas.aims.service.quality;
+
+import com.cretas.aims.ai.tool.impl.quality.QualityCheckUpdateTool;
+import com.cretas.aims.ai.tool.impl.quality.QualityDispositionExecuteTool;
+import com.cretas.aims.ai.tool.impl.quality.QualityResultSubmitTool;
+import com.cretas.aims.controller.QualityDispositionController;
+import com.cretas.aims.dto.quality.DispositionApplyRequest;
+import com.cretas.aims.dto.quality.DispositionApproveRequest;
+import com.cretas.aims.dto.quality.ExecuteDispositionRequest;
+import com.cretas.aims.entity.DecisionAuditLog;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.entity.enums.QualityStatus;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.quality.QcReleaseRecord;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.DecisionAuditLogRepository;
+import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductionAlertRepository;
+import com.cretas.aims.repository.ProductionBatchRepository;
+import com.cretas.aims.repository.QualityInspectionRepository;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
+import com.cretas.aims.repository.quality.QcReleaseRecordRepository;
+import com.cretas.aims.service.ApprovalChainService;
+import com.cretas.aims.service.DecisionAuditService;
+import com.cretas.aims.service.NotificationService;
+import com.cretas.aims.service.PushNotificationService;
+import com.cretas.aims.service.QualityInspectionService;
+import com.cretas.aims.service.StateMachineService;
+import com.cretas.aims.service.impl.QualityDispositionRuleServiceImpl;
+import com.cretas.aims.service.impl.QualityInspectionServiceImpl;
+import com.cretas.aims.service.quality.release.QcInspectionPolicy;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+/**
+ * D-S302-01 (Owner 2026-11-04): 不合格批次只能走处置和复核改状态; 处置结果同步到成品, 批次和成品不分叉;
+ * 原检验记录不可改。
+ *
+ * <p>整条链是真的: 真 QualityDispositionController → 真 QualityDispositionRuleServiceImpl → 真 Guard →
+ * 真 QualityDispositionInventoryService, 检验写入走真 QualityInspectionServiceImpl, 入库状态走真
+ * QcInspectionPolicy。只有仓储是内存桩。
+ *
+ * <p>⚠️ 成品批号用真实形状 (FG-PLAN-…-S1-…, 与生产批号 PB-PLAN-… 永不相等): 旧测试夹具把两边都写成
+ * PB-100, 于是「按批号对」在测试里能翻, 在生产上一个都翻不动 (形态 B‴, 桩的形状要能在生产上出现)。
+ */
+class QualityBatchDispositionContractTest {
+
+    private static final String FACTORY = "F006";
+    private static final String PLAN = "PLAN-1793087414891-94ECD656";
+    private static final Long INSPECTOR = 11L;
+    private static final Long MANAGER = 22L;
+
+    private final List<ProductionBatch> batches = new ArrayList<>();
+    private final List<FinishedGoodsBatch> finishedGoods = new ArrayList<>();
+    private final Map<String, QualityInspection> inspections = new LinkedHashMap<>();
+    private final Map<String, DecisionAuditLog> audits = new LinkedHashMap<>();
+    private LocalDateTime clock = LocalDateTime.of(2026, 11, 4, 9, 0);
+    private int auditSeq;
+
+    private QualityInspectionRepository inspectionRepo;
+    private QcReleaseRecordRepository releaseRecords;
+    private ProductTypeRepository productTypes;
+    private QualityInspectionServiceImpl inspectionService;
+    private QualityDispositionRuleServiceImpl ruleService;
+    private QualityDispositionController controller;
+    private ProductionBatch batch;
+    private FinishedGoodsBatch goods;
+
+    @BeforeEach
+    void setUp() {
+        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        when(batchRepo.findById(any())).thenAnswer(call -> batches.stream()
+                .filter(b -> b.getId().equals(call.getArgument(0))).findFirst());
+        when(batchRepo.findByIdAndFactoryIdForUpdate(any(), eq(FACTORY))).thenAnswer(call -> batches.stream()
+                .filter(b -> b.getId().equals(call.getArgument(0))).findFirst());
+        when(batchRepo.findByFactoryIdAndProductionPlanId(eq(FACTORY), eq(PLAN))).thenAnswer(call -> List.copyOf(batches));
+        when(batchRepo.save(any())).thenAnswer(call -> call.getArgument(0));
+        when(batchRepo.countQcFailedInPlans(eq(FACTORY), any(), anyString())).thenAnswer(call -> batches.stream()
+                .filter(b -> b.getQualityStatus() != null && b.getQualityStatus().isDispositionLocked()).count());
+
+        FinishedGoodsBatchRepository goodsRepo = mock(FinishedGoodsBatchRepository.class);
+        when(goodsRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN))
+                .thenAnswer(call -> List.copyOf(finishedGoods));
+        when(goodsRepo.save(any())).thenAnswer(call -> call.getArgument(0));
+
+        inspectionRepo = mock(QualityInspectionRepository.class);
+        when(inspectionRepo.save(any())).thenAnswer(call -> {
+            QualityInspection row = call.getArgument(0);
+            if (row.getCreatedAt() == null) {
+                clock = clock.plusMinutes(1);
+                row.setCreatedAt(clock);
+            }
+            inspections.put(row.getId(), row);
+            return row;
+        });
+        when(inspectionRepo.findById(anyString())).thenAnswer(call -> Optional.ofNullable(inspections.get(call.getArgument(0))));
+        when(inspectionRepo.findByIdAndFactoryIdForUpdate(eq(FACTORY), anyString()))
+                .thenAnswer(call -> Optional.ofNullable(inspections.get(call.getArgument(1))));
+        when(inspectionRepo.findByFactoryIdAndProductionBatchIdForUpdate(eq(FACTORY), any()))
+                .thenAnswer(call -> List.copyOf(inspections.values()));
+        when(inspectionRepo.findByFactoryIdAndProductionBatchId(eq(FACTORY), any(), any(Pageable.class)))
+                .thenAnswer(call -> new PageImpl<>(List.copyOf(inspections.values())));
+
+        ProductionAlertRepository alerts = mock(ProductionAlertRepository.class);
+        when(alerts.save(any())).thenAnswer(call -> call.getArgument(0));
+        inspectionService = new QualityInspectionServiceImpl(inspectionRepo, alerts, mock(ApplicationEventPublisher.class));
+        ReflectionTestUtils.setField(inspectionService, "productionBatchRepository", batchRepo);
+        ReflectionTestUtils.setField(inspectionService, "finishedGoodsBatchRepository", goodsRepo);
+
+        DecisionAuditLogRepository auditRepo = mock(DecisionAuditLogRepository.class);
+        when(auditRepo.findById(anyString())).thenAnswer(call -> Optional.ofNullable(audits.get(call.getArgument(0))));
+        when(auditRepo.save(any())).thenAnswer(call -> {
+            DecisionAuditLog row = call.getArgument(0);
+            if (row.getId() == null) row.setId("audit-" + (++auditSeq));
+            audits.put(row.getId(), row);
+            return row;
+        });
+        when(auditRepo.findByEntityTypeAndEntityIdOrderByCreatedAtDesc(eq("QualityInspection"), anyString()))
+                .thenAnswer(call -> audits.values().stream()
+                        .filter(a -> call.getArgument(1).equals(a.getEntityId())).toList());
+
+        EntityManager entityManager = mock(EntityManager.class);
+        when(entityManager.find(eq(QualityInspection.class), any()))
+                .thenAnswer(call -> inspections.get(call.getArgument(1)));
+        QualityDispositionDecisionGuard guard = new QualityDispositionDecisionGuard(
+                batchRepo, inspectionRepo, auditRepo, entityManager, new ObjectMapper());
+
+        DecisionAuditService auditService = mock(DecisionAuditService.class);
+        when(auditService.logPendingApproval(anyString(), anyString(), anyString(), anyMap(), anyString(), any(),
+                anyLong(), any(), anyString(), any(), any(), any())).thenAnswer(call -> {
+            DecisionAuditLog row = DecisionAuditLog.builder().id("audit-" + (++auditSeq)).factoryId(FACTORY)
+                    .entityType("QualityInspection").entityId(call.getArgument(2))
+                    .decisionType(DecisionAuditLog.DecisionType.APPROVAL)
+                    .decisionMade(call.getArgument(4)).executorId(call.getArgument(6))
+                    .requiresApproval(true).approvalStatus(DecisionAuditLog.ApprovalStatus.PENDING).build();
+            audits.put(row.getId(), row);
+            return row;
+        });
+        when(auditService.logRuleExecution(anyString(), anyString(), anyString(), anyMap(), anyMap(), anyList(),
+                anyString(), anyLong(), any(), anyString())).thenAnswer(call -> {
+            Map<String, Object> output = call.getArgument(4);
+            DecisionAuditLog row = DecisionAuditLog.builder().id("audit-" + (++auditSeq)).factoryId(FACTORY)
+                    .entityType("QualityInspection").entityId(call.getArgument(2))
+                    .decisionType(DecisionAuditLog.DecisionType.RULE_EXECUTION)
+                    .outputResult(new ObjectMapper().writeValueAsString(output)).build();
+            audits.put(row.getId(), row);
+            return row;
+        });
+
+        ApprovalChainService approvalChain = mock(ApprovalChainService.class);
+        when(approvalChain.requiresApproval(anyString(), any(DecisionType.class), anyMap())).thenReturn(false);
+        when(approvalChain.findMatchingConfig(anyString(), any(DecisionType.class), anyMap())).thenReturn(Optional.empty());
+
+        UserRepository users = mock(UserRepository.class);
+        when(users.findById(any())).thenAnswer(call -> {
+            User user = new User();
+            user.setId(call.getArgument(0));
+            user.setRoleCode("quality_manager");
+            user.setFullName("质量");
+            return Optional.of(user);
+        });
+
+        releaseRecords = mock(QcReleaseRecordRepository.class);
+        productTypes = mock(ProductTypeRepository.class);
+        QcInspectionPolicy policy = new QcInspectionPolicy(productTypes);
+        ReflectionTestUtils.setField(policy, "productionBatchRepository", batchRepo);
+
+        QualityDispositionInventoryService bridge = new QualityDispositionInventoryService();
+        ReflectionTestUtils.setField(bridge, "materialBatchRepository", mock(MaterialBatchRepository.class));
+        ReflectionTestUtils.setField(bridge, "productionBatchRepository", batchRepo);
+        ReflectionTestUtils.setField(bridge, "finishedGoodsBatchRepository", goodsRepo);
+        ReflectionTestUtils.setField(bridge, "factoryRecallService", mock(FactoryRecallService.class));
+        ReflectionTestUtils.setField(bridge, "qcReleaseRecordRepository", releaseRecords);
+        ReflectionTestUtils.setField(bridge, "qcInspectionPolicy", policy);
+
+        ruleService = new QualityDispositionRuleServiceImpl(approvalChain, auditService, users, guard);
+        ReflectionTestUtils.setField(ruleService, "dispositionInventoryService", bridge);
+
+        controller = new QualityDispositionController(guard, ruleService, inspectionRepo, auditRepo,
+                mock(StateMachineService.class), mock(NotificationService.class), mock(PushNotificationService.class));
+
+        batch = productionBatch(100L, "PB-PLAN-1793087414891-94ECD656-88763", "SKU-1", QualityStatus.PENDING_INSPECTION);
+        goods = finishedGoods("FG-PLAN-1793087414891-94ECD656-S1-d2e185aa", "SKU-1", FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    // ==================== 后补合格检验 ====================
+
+    @Test
+    @DisplayName("复现 D-S302-01: 不合格批后补全合格检验, 批次仍 FAILED, 成品仍 DEFECTIVE, 两条记录都在")
+    void laterPassCannotClearFailedBatch() {
+        QualityInspection fail = inspect("qi-fail", "FAIL", "0");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+
+        QualityInspection pass = inspect("qi-pass", "PASS", "100");
+
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(inspections).containsKeys(fail.getId(), pass.getId());
+        assertThat(inspections.get("qi-fail").getResult()).isEqualTo("FAIL");
+    }
+
+    @Test
+    @DisplayName("阳性对照: 没判过不合格的批次, 检验合格照常改 PASSED")
+    void passStillClearsUnfailedBatch() {
+        inspect("qi-pass", "PASS", "100");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PASSED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("绕路也不行: 不合格批写待检 / 条件合格都不动状态, 待检任务补成 PASS 也不动")
+    void pendingAndConditionalCannotClearFailedBatch() {
+        inspect("qi-fail", "FAIL", "0");
+
+        inspect("qi-cond", "CONDITIONAL", "90");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+
+        inspect("qi-pending", "PENDING", null);
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+
+        QualityInspection complete = new QualityInspection();
+        complete.setResult("PASS");
+        complete.setPassRate(new BigDecimal("100"));
+        inspectionService.updateInspection(FACTORY, "qi-pending", complete);
+        assertThat(inspections.get("qi-pending").getResult()).isEqualTo("PASS");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("返工中的批次再判一次 FAIL 回 FAILED 并隔离; 后补合格同样不解除返工状态")
+    void reworkStaysLockedAndAFailStillLands() {
+        batch.setQualityStatus(QualityStatus.REWORK_REQUIRED);
+
+        inspect("qi-pass", "PASS", "100");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.REWORK_REQUIRED);
+
+        inspect("qi-fail", "FAIL", "0");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    // ==================== 处置 + 复核 ====================
+
+    @Test
+    @DisplayName("放行不合格批: 后补合格 + 直接执行 RELEASE 只进待审批, 批次和成品都没动")
+    void directReleaseOfFailedBatchGoesToApproval() {
+        inspect("qi-fail", "FAIL", "0");
+        inspect("qi-pass", "PASS", "100");
+
+        var response = controller.executeDisposition(FACTORY, execute("qi-pass", "RELEASE", INSPECTOR), INSPECTOR);
+
+        assertThat(response.getData().getStatus()).isEqualTo("PENDING_APPROVAL");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("阳性: 另一人复核通过, 批次 PASSED, 成品 (真实批号) 回 AVAILABLE, 响应读的是实际写下的状态")
+    void secondPersonApprovalClearsBatchAndGoods() {
+        inspect("qi-fail", "FAIL", "0");
+        inspect("qi-pass", "PASS", "100");
+        String applicationId = controller.executeDisposition(FACTORY, execute("qi-pass", "RELEASE", INSPECTOR), INSPECTOR)
+                .getData().getApprovalRequestId();
+
+        var approved = controller.approveDisposition(FACTORY, applicationId, approve(MANAGER, true), MANAGER);
+
+        assertThat(approved.getData().getNewBatchStatus()).isEqualTo("PASSED");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PASSED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("阴性: 申请人自批 403, 驳回后批次和成品都不变")
+    void selfApprovalAndRejectionChangeNothing() {
+        inspect("qi-fail", "FAIL", "0");
+        inspect("qi-pass", "PASS", "100");
+        String applicationId = controller.executeDisposition(FACTORY, execute("qi-pass", "RELEASE", INSPECTOR), INSPECTOR)
+                .getData().getApprovalRequestId();
+
+        assertThatThrownBy(() -> controller.approveDisposition(FACTORY, applicationId, approve(INSPECTOR, true), INSPECTOR))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+        assertThatThrownBy(() -> controller.approveDisposition(FACTORY, applicationId, approve(INSPECTOR, true), MANAGER))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(400));
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+
+        controller.approveDisposition(FACTORY, applicationId, approve(MANAGER, false), MANAGER);
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("申请入口: 不合格批的放行能走 /apply 进审批; 没判过不合格的批次放行仍是「无需审批」")
+    void applyAcceptsReleaseOnlyForUnclearedBatch() {
+        inspect("qi-pass", "PASS", "100");
+        assertThatThrownBy(() -> controller.applyDisposition(FACTORY, apply("qi-pass", "RELEASE"), INSPECTOR))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("无需审批");
+
+        batch.setQualityStatus(QualityStatus.FAILED);
+        var application = controller.applyDisposition(FACTORY, apply("qi-pass", "RELEASE"), INSPECTOR);
+        assertThat(application.getData().getStatus()).isEqualTo("PENDING_APPROVAL");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("评估与直接放行判定同口径: 不合格批上全合格检验, 评估说要审批, canDirectRelease 为 false")
+    void evaluationTellsTheSameStory() {
+        inspect("qi-fail", "FAIL", "0");
+        QualityInspection pass = inspect("qi-pass", "PASS", "100");
+
+        assertThat(ruleService.evaluateDisposition(FACTORY, pass).isRequiresApproval()).isTrue();
+        assertThat(ruleService.canDirectRelease(FACTORY, pass)).isFalse();
+    }
+
+    @Test
+    @DisplayName("条件放行通过: 批次 PARTIAL_PASS (枚举里真实存在的值), 成品回 AVAILABLE")
+    void conditionalReleaseSyncsBoth() {
+        inspect("qi-fail", "FAIL", "80");
+        String applicationId = controller.applyDisposition(FACTORY, apply("qi-fail", "CONDITIONAL_RELEASE"), INSPECTOR)
+                .getData().getApplicationId();
+
+        var approved = controller.approveDisposition(FACTORY, applicationId, approve(MANAGER, true), MANAGER);
+
+        assertThat(approved.getData().getNewBatchStatus()).isEqualTo("PARTIAL_PASS");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PARTIAL_PASS);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("返工 / 报废也同步: 批次判定不能卖时, 还可售的成品一起隔离, 不留分叉")
+    void reworkAndScrapQuarantineSellableGoods() {
+        inspect("qi-cond", "CONDITIONAL", "75");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PARTIAL_PASS);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+
+        String rework = controller.applyDisposition(FACTORY, apply("qi-cond", "REWORK"), INSPECTOR)
+                .getData().getApplicationId();
+        controller.approveDisposition(FACTORY, rework, approve(MANAGER, true), MANAGER);
+
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.REWORK_REQUIRED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("报废是终态: 批次 SCRAPPED, 之后放行 409, 成品不回来")
+    void scrappedBatchCannotBeReleased() {
+        inspect("qi-fail", "FAIL", "0");
+        String scrap = controller.applyDisposition(FACTORY, apply("qi-fail", "SCRAP"), INSPECTOR)
+                .getData().getApplicationId();
+        controller.approveDisposition(FACTORY, scrap, approve(MANAGER, true), MANAGER);
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.SCRAPPED);
+
+        inspect("qi-pass", "PASS", "100");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.SCRAPPED);
+
+        String release = controller.applyDisposition(FACTORY, apply("qi-pass", "RELEASE"), INSPECTOR)
+                .getData().getApplicationId();
+        assertThatThrownBy(() -> controller.approveDisposition(FACTORY, release, approve(MANAGER, true), MANAGER))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("QUALITY_BATCH_SCRAPPED"));
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("同计划另一批还不合格: 这批放行, 成品继续隔离, 并如实告诉操作人")
+    void siblingFailureKeepsGoodsQuarantined() {
+        ProductionBatch sibling = productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1", QualityStatus.FAILED);
+        inspect("qi-fail", "FAIL", "80");
+        assertThat(sibling.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+
+        var result = ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PARTIAL_PASS);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(result.getMessage()).contains("1 个成品批次仍在隔离中");
+    }
+
+    @Test
+    @DisplayName("放行不洗白别的货: 退货子批 / 其他 SKU / 质检放行单独判不合格的都留在隔离里")
+    void releaseLeavesUnrelatedDefectiveGoodsAlone() {
+        FinishedGoodsBatch returned = finishedGoods("RTN-R20261101-1", "SKU-1", FinishedGoodsBatch.Status.DEFECTIVE);
+        FinishedGoodsBatch otherSku = finishedGoods("FG-PLAN-1793087414891-94ECD656-S1-aaaaaaaa", "SKU-2",
+                FinishedGoodsBatch.Status.AVAILABLE);
+        FinishedGoodsBatch rejected = finishedGoods("FG-PLAN-1793087414891-94ECD656-S2-d2e185aa", "SKU-1",
+                FinishedGoodsBatch.Status.AVAILABLE);
+        QcReleaseRecord rejection = QcReleaseRecord.builder().decision(QcReleaseRecord.Decision.REJECTED).build();
+        when(releaseRecords.findByTarget(FACTORY, QcReleaseRecord.TargetType.FINISHED_GOODS, rejected.getId()))
+                .thenReturn(List.of(rejection));
+
+        inspect("qi-fail", "FAIL", "80");
+        var result = ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(returned.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(otherSku.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(rejected.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(result.getMessage()).contains("2 个成品批次仍在隔离中");
+    }
+
+    @Test
+    @DisplayName("需检产品解除隔离后回待检, 走质检放行, 处置不替代那一步")
+    void inspectionRequiredProductGoesBackToPending() {
+        ProductType product = new ProductType();
+        product.setInspectionRequired(true);
+        when(productTypes.findByIdAndFactoryId("SKU-1", FACTORY)).thenReturn(Optional.of(product));
+
+        inspect("qi-fail", "FAIL", "80");
+        ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.PENDING_INSPECTION);
+    }
+
+    @Test
+    @DisplayName("先判不合格后入库: 所有成品入库路径共用的状态叠加给 DEFECTIVE, 解除后才恢复")
+    void outputAfterFailureIsQuarantinedOnEveryInboundPath() {
+        QcInspectionPolicy policy = new QcInspectionPolicy(productTypes);
+        ReflectionTestUtils.setField(policy, "productionBatchRepository",
+                ReflectionTestUtils.getField(inspectionService, "productionBatchRepository"));
+
+        batch.setQualityStatus(QualityStatus.REWORK_REQUIRED);
+        assertThat(policy.finishedGoodsStatusForOutput(FACTORY, "SKU-1", PLAN, FinishedGoodsBatch.Status.AVAILABLE, "FG-X"))
+                .isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(policy.finishedGoodsStatusForOutput(FACTORY, "SKU-1", PLAN, FinishedGoodsBatch.Status.DEPLETED, "FG-X"))
+                .isEqualTo(FinishedGoodsBatch.Status.DEPLETED);
+
+        batch.setQualityStatus(QualityStatus.PASSED);
+        assertThat(policy.finishedGoodsStatusForOutput(FACTORY, "SKU-1", PLAN, FinishedGoodsBatch.Status.AVAILABLE, "FG-X"))
+                .isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    // ==================== 原检验记录不可改 ====================
+
+    @Test
+    @DisplayName("已完成记录: 判定 / 数量 / 检验人 / 删原备注都 409; 只追加备注可以")
+    void completedRecordIsImmutable() {
+        QualityInspection fail = inspect("qi-fail", "FAIL", "0");
+        fail.setNotes("温度超标");
+
+        for (java.util.function.Consumer<QualityInspection> change : List.<java.util.function.Consumer<QualityInspection>>of(
+                row -> row.setResult("PASS"),
+                row -> row.setPassRate(new BigDecimal("100")),
+                row -> row.setPassCount(new BigDecimal("1")),
+                row -> row.setInspectorId(MANAGER),
+                row -> row.setNotes(""))) {
+            QualityInspection patch = new QualityInspection();
+            change.accept(patch);
+            assertThatThrownBy(() -> inspectionService.updateInspection(FACTORY, "qi-fail", patch))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                            .isEqualTo("QUALITY_INSPECTION_DECISION_IMMUTABLE"));
+        }
+        assertThat(inspections.get("qi-fail").getResult()).isEqualTo("FAIL");
+        assertThat(inspections.get("qi-fail").getNotes()).isEqualTo("温度超标");
+
+        QualityInspection append = new QualityInspection();
+        append.setNotes("温度超标 | 已通知车间");
+        inspectionService.updateInspection(FACTORY, "qi-fail", append);
+        assertThat(inspections.get("qi-fail").getNotes()).isEqualTo("温度超标 | 已通知车间");
+    }
+
+    @Test
+    @DisplayName("AI 工具入口: 更新 / 提交工具改不了 FAIL 记录, 且没有改到查回来的实体 (open-in-view 下它是托管的)")
+    void aiToolsCannotRewriteCompletedRecord() {
+        inspect("qi-fail", "FAIL", "0");
+        QualityInspectionService viaService = inspectionService;
+
+        QualityCheckUpdateTool update = new QualityCheckUpdateTool();
+        ReflectionTestUtils.setField(update, "qualityInspectionService", viaService);
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(update, "doExecute", FACTORY,
+                new HashMap<>(Map.of("checkId", "qi-fail", "result", "PASS")), new HashMap<String, Object>()))
+                .isInstanceOf(BusinessException.class);
+
+        QualityResultSubmitTool submit = new QualityResultSubmitTool();
+        ReflectionTestUtils.setField(submit, "qualityInspectionService", viaService);
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(submit, "doExecute", FACTORY,
+                new HashMap<>(Map.of("checkId", "qi-fail", "result", "PASS", "conclusion", "复检合格")),
+                new HashMap<String, Object>(Map.of("userId", INSPECTOR))))
+                .isInstanceOf(BusinessException.class);
+
+        assertThat(inspections.get("qi-fail").getResult()).isEqualTo("FAIL");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("AI 提交工具: 判 FAIL 结论全空白不落库 (D-S302-02); 有结论才建记录")
+    void aiSubmitToolNeedsAReasonToFail() {
+        QualityResultSubmitTool submit = new QualityResultSubmitTool();
+        ReflectionTestUtils.setField(submit, "qualityInspectionService", inspectionService);
+        Map<String, Object> blank = new HashMap<>(Map.of("checkId", "qi-ai", "result", "FAIL",
+                "conclusion", "   ", "productionBatchId", 100L));
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(submit, "doExecute", FACTORY, blank,
+                new HashMap<String, Object>(Map.of("userId", INSPECTOR))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("原因");
+        assertThat(inspections).doesNotContainKey("qi-ai");
+    }
+
+    @Test
+    @DisplayName("AI 更新工具: 待检任务判 FAIL 没原因不写, 带原因才写 (D-S302-02)")
+    void aiUpdateToolNeedsAReasonToFail() {
+        // 自动建的待检任务自带这句备注, 它不是不合格原因
+        inspect("qi-pending", "PENDING", null).setNotes("批次完成自动创建质检任务");
+        QualityCheckUpdateTool update = new QualityCheckUpdateTool();
+        ReflectionTestUtils.setField(update, "qualityInspectionService", inspectionService);
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(update, "doExecute", FACTORY,
+                new HashMap<>(Map.of("checkId", "qi-pending", "result", "FAIL", "notes", "  ")),
+                new HashMap<String, Object>()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("原因");
+        assertThat(inspections.get("qi-pending").getResult()).isEqualTo("PENDING");
+
+        ReflectionTestUtils.invokeMethod(update, "doExecute", FACTORY,
+                new HashMap<>(Map.of("checkId", "qi-pending", "result", "FAIL", "notes", "温度超标")),
+                new HashMap<String, Object>());
+        assertThat(inspections.get("qi-pending").getResult()).isEqualTo("FAIL");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+    }
+
+    @Test
+    @DisplayName("AI 处置工具: 放行不合格批只是提交审批, 不说「执行成功」, 批次不动")
+    void aiDispositionToolTellsTheTruthAboutApproval() {
+        inspect("qi-fail", "FAIL", "0");
+        QualityInspection pass = inspect("qi-pass", "PASS", "100");
+        when(inspectionRepo.findFirstByFactoryIdAndProductionBatchIdOrderByInspectionDateDesc(FACTORY, 100L))
+                .thenReturn(Optional.of(pass));
+        QualityDispositionExecuteTool tool = new QualityDispositionExecuteTool();
+        ReflectionTestUtils.setField(tool, "qualityInspectionRepository", inspectionRepo);
+        ReflectionTestUtils.setField(tool, "qualityDispositionRuleService", ruleService);
+
+        Map<String, Object> result = ReflectionTestUtils.invokeMethod(tool, "doExecute", FACTORY,
+                new HashMap<>(Map.of("productionBatchId", 100L, "action", "RELEASE", "reason", "复检合格")),
+                new HashMap<String, Object>(Map.of("userId", INSPECTOR)));
+
+        assertThat(String.valueOf(result.get("message"))).contains("已提交审批").doesNotContain("执行成功");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    // ==================== 夹具 ====================
+
+    private QualityInspection inspect(String id, String result, String passRate) {
+        QualityInspection row = new QualityInspection();
+        row.setId(id);
+        row.setProductionBatchId(batch.getId());
+        row.setInspectorId(INSPECTOR);
+        row.setInspectionDate(LocalDate.of(2026, 11, 4));
+        row.setSampleSize(BigDecimal.ONE);
+        row.setPassCount(BigDecimal.ZERO);
+        row.setFailCount(BigDecimal.ONE);
+        row.setResult(result);
+        row.setPassRate(passRate == null ? null : new BigDecimal(passRate));
+        return inspectionService.createInspection(FACTORY, row);
+    }
+
+    private static ExecuteDispositionRequest execute(String inspectionId, String action, Long executorId) {
+        return ExecuteDispositionRequest.builder().batchId(100L).inspectionId(inspectionId)
+                .actionCode(action).executorId(executorId).operatorComment("复核").build();
+    }
+
+    private static DispositionApplyRequest apply(String inspectionId, String action) {
+        DispositionApplyRequest request = new DispositionApplyRequest();
+        request.setBatchId(100L);
+        request.setInspectionId(inspectionId);
+        request.setActionCode(action);
+        request.setApplicantId(INSPECTOR);
+        request.setApplicantName("质检员");
+        request.setReason("复核");
+        return request;
+    }
+
+    private static DispositionApproveRequest approve(Long approverId, boolean approved) {
+        DispositionApproveRequest request = new DispositionApproveRequest();
+        request.setApproved(approved);
+        request.setApproverId(approverId);
+        request.setApproverName("质量经理");
+        request.setComment("复核");
+        return request;
+    }
+
+    private ProductionBatch productionBatch(Long id, String number, String sku, QualityStatus status) {
+        ProductionBatch row = new ProductionBatch();
+        row.setId(id);
+        row.setFactoryId(FACTORY);
+        row.setBatchNumber(number);
+        row.setProductTypeId(sku);
+        row.setProductionPlanId(PLAN);
+        row.setQualityStatus(status);
+        batches.add(row);
+        return row;
+    }
+
+    private FinishedGoodsBatch finishedGoods(String number, String sku, String status) {
+        FinishedGoodsBatch row = new FinishedGoodsBatch();
+        row.setId("fg-" + (finishedGoods.size() + 1));
+        row.setFactoryId(FACTORY);
+        row.setBatchNumber(number);
+        row.setProductTypeId(sku);
+        row.setProductionPlanId(PLAN);
+        row.setStatus(status);
+        finishedGoods.add(row);
+        return row;
+    }
+}

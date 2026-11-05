@@ -101,6 +101,9 @@ public interface QualityDispositionRuleService {
             String reason
     );
 
+    /** 这条质检对应的批次是否不合格未解除: 放行它必须另一个人复核, 不能直接执行。 */
+    boolean isAwaitingDisposition(QualityInspection inspection);
+
     /**
      * 处置动作枚举
      */
