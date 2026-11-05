@@ -1,7 +1,10 @@
 package com.cretas.aims.service.attachment.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+
+import java.util.Map;
 
 /**
  * Upload URL endpoint 返回 — 给前端直传 OSS 用.
@@ -17,4 +20,12 @@ public class UploadUrlResponse {
 
     /** 上传完成后的最终 fileUrl (无签名), 前端调 register 时携带. */
     private String fileUrl;
+
+    /** Headers the client must send verbatim; SOP responses include private ACL binding. */
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private Map<String, String> requiredHeaders;
+
+    public UploadUrlResponse(String uploadUrl, String fileUrl) {
+        this(uploadUrl, fileUrl, Map.of());
+    }
 }
