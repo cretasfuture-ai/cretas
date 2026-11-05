@@ -75,7 +75,7 @@ function stageLabel(row: ProcessParamCaseView): string {
 }
 
 function statusLabel(status: string): string {
-  return status === 'HIGH' ? '偏高' : status === 'LOW' ? '偏低' : status;
+  return status === 'HIGH' ? '偏高' : status === 'LOW' ? '偏低' : status === 'OK' ? '已恢复正常' : '状态待确认';
 }
 
 function valueText(value: number | null, unit: string | null): string {
@@ -320,7 +320,7 @@ onMounted(() => { void loadCases(); });
         <template #default="{ row }">{{ row.batchNumber || '—' }}</template>
       </el-table-column>
       <el-table-column label="偏离" width="85">
-        <template #default="{ row }"><el-tag :type="row.status === 'HIGH' ? 'danger' : 'warning'">{{ statusLabel(row.status) }}</el-tag></template>
+        <template #default="{ row }"><el-tag :type="row.status === 'HIGH' ? 'danger' : row.status === 'OK' ? 'success' : 'warning'">{{ statusLabel(row.status) }}</el-tag></template>
       </el-table-column>
       <el-table-column label="阶段" width="105">
         <template #default="{ row }">{{ stageLabel(row) }}</template>

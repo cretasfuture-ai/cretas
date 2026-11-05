@@ -19,3 +19,6 @@ root最终追加Scope：ProcessParamDeviationCaseRolloutContractTest真实Config
 
 最终review Base为 bfe0f7481be2318e2f598b17a4818f8e91e7d541；source正常整合已发布APS f158及其docs bfe，原dab45的实际第二parent为f158（共享origin ref已由并行fetch推进），并非56a9，最终父链已核。只自有ACTIVE行已归档并释放source写锁，未删他组行。候选将以本组先行SOP编码修复PR1498作为stack base（36138083e0），单独PR只展示参数case；官方组合19类明确包含URI守卫。1498正常入main后再retarget main，必须证明Java/Web tree相等才复用制品，不部署缺main源码的旧jar。
 PhaseA implementation状态review，真实迁移95已线上成功，V20261106_1仍唯一未发布，无out-of-order。默认及prod/pg-prod通过实际writer注入保持禁写，兼容A正式发布/0新source行后再独立启用；此归档不把未完成CI/部署/业务计为完成。
+
+官方可信制品已完成：head7d2819 Java19类272总=270pass+既有ShortageCaseRepo两H2-only seed在PG条件skip，0fail/error；新增迁移1/生命周期4/JPA1/Service7/双profile7全无skip，Java package383秒、Web77秒，PG57048 finally stop0。初次统一stage被审计有效锁58024拒绝，未跑测试；随后官方manifest入口独立构建不占发布锁，未拼生产部署。
+1499首轮scan-surface-in-sync实际FAIL只因新增Entity统计550→551；用canonical --regen-offline在既有476表hasdel快照上重放，只改生成出处stamp/统计注释，扫描62对/手工2条和实际SQL完全不变、drift gate PASS，不改阈值/生成器/数据库快照。最终补齐OK事实恢复中文状态且仍需人工核查，Panel目标10与type/build按新Web内容复验；Java源码/测试树不变复用272证据与JAR，不再Maven。正式head/stage/CI与生产A/B仍待，未称业务通过。

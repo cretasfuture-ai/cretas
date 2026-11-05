@@ -59,6 +59,21 @@ beforeEach(() => {
 });
 
 describe('ProcessParamCasePanel', () => {
+  it('shows an in-range refreshed fact in Chinese without closing its unresolved case', async () => {
+    const recovered = { ...row('DETECTED', 7), status: 'OK' };
+    api.list.mockResolvedValueOnce(ok([recovered]));
+    api.detail.mockResolvedValueOnce(ok({ ...detail('DETECTED', 7), caseView: recovered, measuredValue: 155 }));
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="param-case-table"]').text()).toContain('已恢复正常');
+    await wrapper.find('[data-testid="param-case-open-case-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="param-case-start"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="param-case-closed"]').exists()).toBe(false);
+    expect(api.resolve).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it('loads a non-empty list and detail with current fact', async () => {
     const wrapper = mountPanel();
     await flushPromises();
