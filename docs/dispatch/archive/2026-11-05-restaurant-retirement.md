@@ -75,3 +75,16 @@ PR #1451、#1457、#1438、#1475 已合并；原安全链部署 commit ecfb04cba
 - `SEC-RESTAURANT-FACTORY-STORE-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope Python eval/store.py、validation.py、__init__.py及agent_eval旧trace/service/factory/http tests；清餐饮corpus/旧trace，恢复factory ACL/503正向，pytest相关集合。禁止service/runner/legacy/PG测试；独立目录产物，冻结释放。
 - `SEC-RESTAURANT-PYTHON-SURFACES-20261105` — `claimed` — Owner restaurant_chat/root — Base 41f58a822cf — scope POS/twodfire闭包、canonical/dish_*、共享队列dish分支、shared诊断及chart-insight API/service/相关tests；保留工厂上传/通用队列/finance/租户。main注册由root移除；禁止AgentOps/legacy/CI/Java/UI。
 - `SEC-RESTAURANT-PYTHON-DOMAINS-20261105` — `claimed` — Owner restaurant_ops/root — Base 41f58a822cf — scope canonical/entity_resolution、knowledge/loader、shared除diagnostics及smartbi_compat/_rbac_strip.py的餐饮分支与相关tests；先核factory消费者，删dish/restaurant配置入口，保留通用实体/工厂配置/ACL；禁改main/AgentOps；pytest对应集合。
+
+## PR 1479 修复与跨组边界检查点
+
+候选分支 `codex/restaurant-complete-removal-20261105`，推送检查点 `980ff20b28a22b83dced2e1a1c2f1d7183082e1b`，PR #1479 仍为 draft。Java/native PG、Python完整集合及RN/Web门禁修复未完成，不能将目标通过写成最终绿。先前 Web 根项目 `vue-tsc --noEmit` 未检查 references 下 app；以实际 CI `vue-tsc -b --force` 为准，其失败正在修复。
+
+`V20261105_92` 候选已明确放弃：照片哈希继续保留原全局唯一约束，查询按厂隔离；不通过放宽DDL损害旧制品回滚兼容。当前候选和已汇合main均无92，本批不依赖92，不占用该迁移序号。93/94由相关Owner交付前按实际冻结版本/main/线上重新排序。
+
+验收组e976 FULL-UI原子片段结束前，本组不合main、不发布；无release lock占用。食品组只读整合 Attachment 与供应物料接口，本组保留附件权限迁移及 SupplierMaterial 服务唯一写 Owner。真实 SupplierMaterialService/Impl 当前在 `service/supplier`，并无已落地 inventory 迁移；五个公开方法签名未变。食品拥有 `MaterialReferenceWriteGuard`/Repository/Purchase/Workflow，本组待其冻结接口后接Supplier create/update，在事务内且所有关系写入之前取得相同排序raw-material锁并复核active/mergedInto；不得各自实现不兼容锁序。无生产数据删除、无新生产业务写入。
+## Python 冻结验收
+
+2026-11-05 完整 CI 选择集合实际执行：5983 passed、0 failed、183 skipped、82 deselected，428.42秒，commandExit=0、own PostgreSQL stopExit=0。既有ci-gate-excludes及跳过条件未扩展。1264文件冻结快照SHA256 `80bda23a50c305d49a5d13e68008fa6554c0174971e7366493a8cb554dcd5da9`；证据 `python-full-retirement-v7.log/.xml`、`native-pg-20261105-201651-321-88576/result.json`（本机私有证据目录）。v6中断无最终结果，未当通过。
+
+真实shared tenant解析拒绝缺失/NULL/未知metadata，四HTTP入口均503且handler零调用；明确FACTORY/HQ/CENTRAL保留。历史14个精确R_*_REAL与MOCK_REST/DEMO_REST在API/engine前拒绝，保留R_FACTORY_CUSTOM等合法工厂ID。KPI/保密fixture显式提供FACTORY metadata，保留admin价格可见、warehouse null、调用者Bearer及保密产品排除计数断言；周期比较[30,34]/实际参考线与缺值负向分别保留。上述为Python测试证据，不是Java/Web全绿、部署或线上业务验收。

@@ -20,25 +20,21 @@ def _migrations_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "smartbi" / "database" / "migrations"
 
 
-def _retired_test_comprehensive_or_decision_questions_auto_expand_but_lookup_stays_narrow():
+def test_comprehensive_or_decision_questions_auto_expand_but_lookup_stays_narrow():
     engine = ComprehensiveSynthesisEngine(pool=object())
 
     comprehensive = engine.plan_dimensions("请做一次综合经营分析并给出优化方案")
     assert comprehensive["analysis_mode"] == "decision"
     assert comprehensive["auto_expand"] is True
-    for key in (
-        "review", "finance", "sales", "dish_margin", "traffic", "operations",
-        "staffing", "external_signals", "holiday", "weather", "channel",
-        "meal_period", "discount", "period_comparison", "supplier_anomaly",
-    ):
-        assert comprehensive[key] is True
+    for key in ("finance", "sales"):
+        assert comprehensive.get(key) is True
 
     lookup = engine.plan_dimensions("这个月营收多少")
     assert lookup["analysis_mode"] == "lookup"
     assert lookup["auto_expand"] is False
     assert lookup["finance"] is True
-    assert lookup["external_signals"] is False
-    assert lookup["operations"] is False
+    assert lookup.get("external_signals", False) is False
+    assert lookup.get("operations", False) is False
 
     targeted = engine.plan_dimensions("分析一下本月菜品销量")
     assert targeted["analysis_mode"] == "lookup"
@@ -49,7 +45,7 @@ def _retired_test_comprehensive_or_decision_questions_auto_expand_but_lookup_sta
     assert generic["auto_expand"] is True
 
 
-def _retired_test_conceptual_internal_external_scope_expands_all_dimensions():
+def test_conceptual_internal_external_scope_expands_all_dimensions():
     engine = ComprehensiveSynthesisEngine(pool=object())
 
     plan = engine.plan_dimensions(
@@ -59,32 +55,8 @@ def _retired_test_conceptual_internal_external_scope_expands_all_dimensions():
 
     assert plan["analysis_mode"] == "diagnose"
     assert plan["auto_expand"] is True
-    for key in (
-        "review", "finance", "sales", "dish_margin", "traffic", "operations",
-        "staffing", "external_signals", "holiday", "attribution", "weather",
-        "channel", "meal_period", "discount", "period_comparison",
-        "supplier_anomaly",
-    ):
-        assert plan[key] is True
-
-
-def _retired_test_dish_metric_coverage_wording_expands_relevant_product_dimensions_only():
-    engine = ComprehensiveSynthesisEngine(pool=object())
-
-    plan = engine.plan_dimensions(
-        "不要只把优化理解成滞销。请按最近30天全部门店的销量、销售额"
-        "和其他可用菜品经营指标给出优化候选，并明确缺失维度"
-    )
-
-    assert plan["auto_expand"] is False
-    assert plan["review"] is True
-    assert plan["finance"] is True
-    assert plan["sales"] is True
-    assert plan["dish_margin"] is True
-    assert plan["dish_margin_asked"] is True
-    assert plan["operations"] is True
-    assert plan["external_signals"] is False
-    assert plan["staffing"] is False
+    for key in ("finance", "sales", "attribution"):
+        assert plan.get(key) is True
 
 
 def test_missing_dimension_guidance_is_deterministic_and_never_turns_missing_into_zero():
@@ -143,8 +115,8 @@ def test_adjustable_confirmed_trial_parameters_do_not_trip_narrative_gate():
     ) == []
 
 
-def _retired_test_synthesis_cache_contract_invalidates_pre_guard_v8_answers():
-    assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v9"
+def test_synthesis_cache_contract_invalidates_pre_guard_v8_answers():
+    assert se.SYNTHESIS_CONTRACT_VERSION == "factory-dimensions-v1"
 
 
 def test_single_store_and_missing_comparison_remain_missing_but_stable_supplier_data_is_available():
@@ -310,7 +282,7 @@ async def test_supplier_price_coverage_distinguishes_stable_data_from_no_data():
 
 
 @pytest.mark.asyncio
-async def _retired_test_auto_expand_builds_all_available_dimensions_when_sources_exist(monkeypatch):
+async def test_auto_expand_builds_all_available_dimensions_when_sources_exist(monkeypatch):
     async def value(result):
         return result
 
@@ -344,25 +316,6 @@ async def _retired_test_auto_expand_builds_all_available_dimensions_when_sources
     }))
     monkeypatch.setattr(se, "channel_breakdown", lambda *args, **kwargs: value({"channels": []}))
     monkeypatch.setattr(se, "discount_breakdown", lambda *args, **kwargs: value({"discounts": []}))
-    monkeypatch.setattr(se, "dish_margin", lambda *args, **kwargs: value({
-        "dish_count": 1,
-        "cost_basis_complete": True,
-        "cost_basis": "restaurant_sku_forms",
-        "top_margin": [{"dish_name": "招牌鱼", "selling_price": 88, "unit_cost": 28, "gross_profit": 60, "gross_margin_pct": 68.18}],
-        "low_margin": [],
-    }))
-    monkeypatch.setattr(se, "order_type_breakdown", lambda *args, **kwargs: value({
-        "order_types": [{"order_type": "堂食", "revenue": 7000, "bill_count": 70, "avg_ticket": 100, "revenue_pct": 70}],
-    }))
-    monkeypatch.setattr(se, "meal_period_breakdown", lambda *args, **kwargs: value({
-        "meal_periods": [{"meal_period": "晚市", "revenue": 6000, "bill_count": 60, "avg_ticket": 100, "revenue_pct": 60}],
-    }))
-    monkeypatch.setattr(se, "discount_summary", lambda *args, **kwargs: value({
-        "total_discount_amount": 500,
-        "total_revenue": 10000,
-        "revenue_share_pct": 5,
-        "discounts": [{"discount_name": "满减", "amount": 500, "share_pct": 100}],
-    }))
     monkeypatch.setattr(se, "detect_price_anomalies", lambda *args, **kwargs: value([
         {"ingredientName": "青花椒", "supplierName": "供应商", "deltaPct": 12, "direction": "UP", "oldPrice": 100, "newPrice": 112, "riskLevel": "MEDIUM", "anomalyDeliveryDate": "2026-07-02"},
     ]))
@@ -385,12 +338,6 @@ async def _retired_test_auto_expand_builds_all_available_dimensions_when_sources
             {"date": "2026-07-02", "rain_mm": 10, "source_code": "seed", "source_name": "模拟天气", "evidence_level": "SIMULATED"},
         ],
     }))
-    monkeypatch.setattr(se, "restaurant_operations_summary", lambda *args, **kwargs: value({
-        "waste": {"available": True, "count": 2, "cost": 100},
-        "stocktaking": {"available": True, "count": 1},
-        "inventory": {"available": True, "snapshot_date": "2026-07-02", "high_count": 1, "medium_count": 2, "items": []},
-        "staffing": {"available": True, "items": [{"daypart": "晚市", "weekday_type": "weekday", "avg_orders": 100, "staff_on_duty": 4, "target_orders_per_staff": 22, "actual_orders_per_staff": 25}]},
-    }))
     external_dimensions = {
         code: {
             "dimension_code": code,
@@ -411,33 +358,24 @@ async def _retired_test_auto_expand_builds_all_available_dimensions_when_sources
         ],
         "series": [],
     }
-    monkeypatch.setattr(se, "restaurant_dimension_signals", lambda *args, **kwargs: value({
-        "dimensions": external_dimensions,
-    }))
 
 
     engine = ComprehensiveSynthesisEngine(pool=object(), budget_tracker=object(), cache=object())
     plan = engine.plan_dimensions("请综合分析经营情况并给出优化方案")
     fb = await engine._build_factbook(
-        "DEMO_REST",
+        "F006",
         (date(2026, 7, 1), date(2026, 7, 2)),
         plan,
         period="2026-07-01 至 2026-07-02",
     )
 
-    assert {item["code"] for item in fb.available_dimensions} == {
-        item.code for item in DIMENSIONS
-    }
-    assert fb.missing_dimensions == []
-    assert fb.data_mode == "DEMO"
-    text = fb.to_prompt_text()
-    assert "SIMULATED" in text
-    assert "商场及门前物理客流" in text
-    assert "库存、损耗与人效" in text
+    available = {item["code"] for item in fb.available_dimensions}
+    assert {"revenue", "dish_sales", "period_comparison"}.issubset(available)
+    assert fb.data_mode in {"PRODUCTION", "DEMO"}
 
 
 @pytest.mark.asyncio
-async def _retired_test_demo_comprehensive_uses_factory_tenant_only_for_facts(
+async def test_demo_comprehensive_uses_factory_tenant_only_for_facts(
     monkeypatch,
 ):
     calls: dict[str, list[str]] = {}
@@ -469,21 +407,6 @@ async def _retired_test_demo_comprehensive_uses_factory_tenant_only_for_facts(
     monkeypatch.setattr(se, "top_products", fake_products)
     monkeypatch.setattr(se, "channel_breakdown", capture("channels", {"channels": []}))
     monkeypatch.setattr(se, "discount_breakdown", capture("discounts", {"discounts": []}))
-    monkeypatch.setattr(se, "dish_margin", capture("dish_margin", {
-        "cost_basis_complete": True,
-        "top_margin": [],
-        "low_margin": [],
-    }))
-    monkeypatch.setattr(
-        se,
-        "restaurant_operations_summary",
-        capture("operations", {}),
-    )
-    monkeypatch.setattr(
-        se,
-        "restaurant_dimension_signals",
-        capture("external", {"dimensions": {}}),
-    )
 
     engine = ComprehensiveSynthesisEngine(
         pool=object(),
@@ -491,153 +414,28 @@ async def _retired_test_demo_comprehensive_uses_factory_tenant_only_for_facts(
         cache=object(),
     )
     plan = {
-        "review": True,
         "finance": True,
         "sales": True,
-        "dish_margin": True,
-        "operations": True,
-        "external_signals": True,
         "cross": [],
     }
     await engine._build_factbook(
-        "DEMO_REST",
+        "F006",
         (date(2026, 7, 1), date(2026, 7, 2)),
         plan,
         period="2026-07-01 至 2026-07-02",
     )
 
-    assert calls["finance"] == ["DEMO_REST"]  # 2026-08-17: 演示别名已删(见 test_demo_never_reads_a_production_tenant.py)
-    assert calls["products"] == ["DEMO_REST", "DEMO_REST"]
+    assert calls["finance"] == ["F006"]
+    assert calls["products"] == ["F006", "F006"]
     assert product_orders == ["desc", "asc"]
-    assert calls["channels"] == ["DEMO_REST"]
-    assert calls["discounts"] == ["DEMO_REST"]
-    assert calls["dish_margin"] == ["DEMO_REST"]
-    assert calls["review"] == ["DEMO_REST"]
-    assert calls["operations"] == ["DEMO_REST"]
-    assert calls["external"] == ["DEMO_REST"]
+    assert calls["channels"] == ["F006"]
+    assert calls["discounts"] == ["F006"]
 
     calls.clear()
     await engine._build_factbook(
-        "REAL_RESTAURANT",
+        "F006",
         (date(2026, 7, 1), date(2026, 7, 2)),
         {"finance": True, "cross": []},
         period="2026-07-01 至 2026-07-02",
     )
-    assert calls["finance"] == ["REAL_RESTAURANT"]
-
-
-@pytest.mark.asyncio
-async def _retired_test_sales_dimension_falls_back_to_canonical_pos_rankings(
-    monkeypatch,
-):
-    async def empty_products(*_args, **_kwargs):
-        return {"top_products": []}
-
-    async def empty_breakdown(*_args, **_kwargs):
-        return {}
-
-    ranking_calls: list[dict[str, object]] = []
-
-    async def fake_resolve(code, _pool, factory_id, **kwargs):
-        ranking_calls.append({
-            "code": code,
-            "factory_id": factory_id,
-            **kwargs,
-        })
-        best = "最高" in str(kwargs["query"])
-        return SimpleNamespace(meta={
-            "ranked_entities": [{
-                "type": "dish",
-                "id": "D-BEST" if best else "D-WORST",
-                "name": "招牌藤椒鱼" if best else "清炒时蔬",
-                "rank": 1,
-                "sales_volume": 88.0 if best else 3.0,
-                "revenue": 8800.0 if best else 180.0,
-                "bill_count": 72 if best else 3,
-            }],
-            "excluded_item_count": 4,
-            "excluded_item_reasons": {"accessory": 4},
-        })
-
-    monkeypatch.setattr(se, "top_products", empty_products)
-    monkeypatch.setattr(se, "channel_breakdown", empty_breakdown)
-    monkeypatch.setattr(se, "discount_breakdown", empty_breakdown)
-
-    engine = ComprehensiveSynthesisEngine(
-        pool=object(),
-        budget_tracker=object(),
-        cache=object(),
-    )
-    plan = {"sales": True, "cross": []}
-    fb = await engine._build_factbook(
-        "DEMO_REST",
-        (date(2026, 6, 26), date(2026, 7, 25)),
-        plan,
-        period="2026-06-26 至 2026-07-25",
-    )
-
-    assert len(ranking_calls) == 2
-    assert {call["code"] for call in ranking_calls} == {
-        "RESTAURANT_OPS_GROSS_MARGIN",
-    }
-    assert {call["factory_id"] for call in ranking_calls} == {
-        "DEMO_REST",  # 2026-08-17: 演示别名已删, 不再重映射
-    }
-    assert all(
-        call["date_range"] == (date(2026, 6, 26), date(2026, 7, 25))
-        for call in ranking_calls
-    )
-    assert fb.sales == {
-        "top_products": [{
-            "product_id": "D-BEST",
-            "product_name": "招牌藤椒鱼",
-            "qty_sold": 88.0,
-            "revenue": 8800.0,
-            "bill_count": 72,
-        }],
-        "bottom_products": [{
-            "product_id": "D-WORST",
-            "product_name": "清炒时蔬",
-            "qty_sold": 3.0,
-            "revenue": 180.0,
-            "bill_count": 3,
-        }],
-        "channels": [],
-        "discounts": [],
-    }
-    dish_sales = next(
-        item for item in fb.available_dimensions if item["code"] == "dish_sales"
-    )
-    assert dish_sales["source"] == "agg_product/POS明细+dim_product"
-    assert not any(
-        item["code"] == "dish_sales" for item in fb.missing_dimensions
-    )
-    prompt = fb.to_prompt_text()
-    assert "招牌藤椒鱼" in prompt
-    assert "清炒时蔬" in prompt
-    assert "米饭：" not in prompt
-
-
-def test_demo_seed_has_fixed_long_window_all_dimension_sources_and_demo_isolation():
-    path = _migrations_dir() / "V20261029_01__demo_rest_comprehensive_dimensions.sql"
-    sql = path.read_text(encoding="utf-8")
-
-    assert "DATE '2025-07-01'" in sql
-    assert "DATE '2026-07-31'" in sql
-    assert "generate_series" in sql
-    assert "WHERE a.factory_id = 'DEMO_REST'" in sql
-    assert "internal_seed" in sql
-    for metric in (
-        "mall_footfall", "storefront_passersby", "store_visits",
-        "mall_activity_intensity", "nearby_event_attendance",
-        "competitor_count", "campaign_exposure", "campaign_redemption",
-    ):
-        assert metric in sql
-    assert "INSERT INTO agg_daily_cost" in sql
-    assert "INSERT INTO agg_product" in sql
-    assert "INSERT INTO agg_supplier_price" in sql
-    assert "INSERT INTO agg_restaurant_daily_totals" in sql
-    assert "INSERT INTO fact_inventory_snapshot" in sql
-    assert "INSERT INTO fact_staffing_daypart" in sql
-    assert "米饭" not in sql
-    assert "餐巾纸" not in sql
+    assert calls["finance"] == ["F006"]

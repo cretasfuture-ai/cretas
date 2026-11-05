@@ -35,6 +35,7 @@ from smartbi.api.gold_reads import (
     _get_role,
     _GOLD_EXTRA_MONEY_KEYS,
     _strip_extras,
+    router,
 )
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 
@@ -42,6 +43,11 @@ from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES
 # ============================================================
 # Local helper unit tests
 # ============================================================
+
+
+def test_retired_store_kpi_dashboard_route_is_absent():
+    """The deleted restaurant store dashboard must not remain registered."""
+    assert all(route.path != "/store-kpi-dashboard" for route in router.routes)
 
 
 def test_get_role_reads_request_state_role():

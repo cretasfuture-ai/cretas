@@ -545,10 +545,27 @@ def test_quality_route_wires_the_callers_bearer_into_the_authority(java, gold, m
 
     fake = java(); gold()
 
-    async def no_cretas_pool():
-        raise RuntimeError("tenant lookup unavailable in test → FACTORY")
+    class _FactoryConn:
+        async def fetchrow(self, sql, *args):
+            return {"type": "FACTORY"}
 
-    monkeypatch.setattr(smartbi.config, "get_cretas_pool", no_cretas_pool)
+    class _FactoryPool:
+        def acquire(self):
+            conn = _FactoryConn()
+
+            class _Acquire:
+                async def __aenter__(self_inner):
+                    return conn
+
+                async def __aexit__(self_inner, *exc):
+                    return False
+
+            return _Acquire()
+
+    async def get_cretas_pool():
+        return _FactoryPool()
+
+    monkeypatch.setattr(smartbi.config, "get_cretas_pool", get_cretas_pool)
     app = FastAPI()
     app.include_router(analysis_quality.router)
     token = _token()

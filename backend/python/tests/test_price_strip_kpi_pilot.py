@@ -384,7 +384,7 @@ def test_money_key_detection_pattern():
 
 
 @pytest.fixture
-def fastapi_client():
+def fastapi_client(monkeypatch):
     """Single TestClient bound to a FastAPI app with every endpoint router
     mounted — keeps each integration test self-contained."""
     from fastapi import FastAPI
@@ -399,6 +399,30 @@ def fastapi_client():
         dashboard,
         dashboard_composite,
     )
+
+    class _FactoryConn:
+        async def fetchrow(self, sql, *args):
+            return {"type": "FACTORY"}
+
+    class _FactoryPool:
+        def acquire(self):
+            conn = _FactoryConn()
+
+            class _Acquire:
+                async def __aenter__(self_inner):
+                    return conn
+
+                async def __aexit__(self_inner, *exc):
+                    return False
+
+            return _Acquire()
+
+    async def _get_cretas_pool():
+        return _FactoryPool()
+
+    import smartbi.config
+
+    monkeypatch.setattr(smartbi.config, "get_cretas_pool", _get_cretas_pool)
 
     app = FastAPI()
     app.include_router(analysis_finance.router)

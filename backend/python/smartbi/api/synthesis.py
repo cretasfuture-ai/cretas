@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 
 from smartbi.agent.synthesis_engine import ComprehensiveSynthesisEngine
 from smartbi.config import get_pg_pool
+from smartbi.shared.retired_tenants import is_retired_tenant
 from smartbi.gold import data_range
 from smartbi.services.chat_session_service import parse_trusted_user_id
 
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/synthesis", tags=["Comprehensive Synthesis"])
 
-DEFAULT_QUESTION = "综合分析本店的评价与经营情况"
+DEFAULT_QUESTION = "综合分析本工厂的经营情况"
 
 
 class SynthesisRequest(BaseModel):
@@ -245,14 +246,7 @@ def _factory_id(request: Request, override: Optional[str]) -> str:
 
 
 def _reject_retired_restaurant_ai(factory_id: str) -> None:
-    """The comprehensive synthesis route must not bypass the retired namespace."""
-    normalized = str(factory_id or "").strip().upper()
-    # These are historical tenant namespaces, not a heuristic for factory IDs.
-    # Real factory IDs are allowed regardless of length or prefix.
-    retired_prefixes = (
-        "RES_", "DEMO_REST", "RESTAURANT_", "R_GML", "QHJ_",
-    )
-    if normalized.startswith(retired_prefixes):
+    if is_retired_tenant(factory_id):
         raise HTTPException(status_code=410, detail="RESTAURANT_AI_RETIRED")
 
 

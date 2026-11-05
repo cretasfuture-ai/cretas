@@ -6,6 +6,11 @@ def format_action_rec(object_target: str, benefit_range: str, prerequisite: str,
     return f"建议: 针对【{object_target}】{benefit_range} (前置: {prerequisite}, {timeline}完成)"
 
 
+def format_data_insufficient(needed: str, next_action: str | None = None) -> str:
+    """Honest factory-neutral wording when a template lacks sufficient data."""
+    return f"数据不足: {needed}。下一步: {next_action or '补充数据来源'}。"
+
+
 def dim_aware_top_n_action_rec(primary_dim: str, measure: str, top_label: str, bottom_label: str, gap_pct: float) -> str:
     return format_action_rec(
         object_target=f"末位{primary_dim}「{bottom_label}」 (与 Top「{top_label}」差距 {gap_pct:.0f}%)",

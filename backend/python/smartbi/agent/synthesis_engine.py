@@ -141,6 +141,7 @@ from smartbi.gold.queries import (
     weather_daily,
 )
 from smartbi.services.distillation_capture import persist_distillation_sample
+from smartbi.shared.retired_tenants import is_retired_tenant as _is_retired_restaurant_tenant
 from smartbi.services.insight_dimensions import (
     InsightDimension,
     InsightDimensionAnalyzer,
@@ -563,15 +564,8 @@ HONEST_LABEL_CLAUSE = (
 
 SYNTHESIS_CONTRACT_VERSION = "factory-dimensions-v1"
 
-_RETIRED_RESTAURANT_TENANT_PREFIXES = (
-    "RES_", "DEMO_REST", "RESTAURANT_", "R_GML", "QHJ_",
-)
 
 
-def _is_retired_restaurant_tenant(factory_id: str) -> bool:
-    """Recognize only historical restaurant namespaces; never infer from F IDs."""
-    normalized = str(factory_id or "").strip().upper()
-    return normalized.startswith(_RETIRED_RESTAURANT_TENANT_PREFIXES)
 
 
 _CAUSAL_ASSERTION_RE = re.compile(

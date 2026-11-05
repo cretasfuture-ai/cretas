@@ -235,21 +235,17 @@ class TestPlanDimensions:
 # _build_factbook
 # --------------------------------------------------------------------------
 class TestBuildFactbook:
-    def _retired_test_only_plan_dims_pulled(self, monkeypatch):
+    def test_only_plan_dims_pulled(self, monkeypatch):
         _install_data_fakes(monkeypatch)
         eng = _engine(monkeypatch)
         import datetime
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
-        plan = {"review": True, "finance": True, "sales": False, "cross": ["vip_x_rating"]}
-        fb = asyncio.run(eng._build_factbook("RES_3101_009", dr, plan, period="2025"))
-        assert fb.review is not None
+        plan = {"finance": True, "sales": False, "cross": []}
+        fb = asyncio.run(eng._build_factbook("F001", dr, plan, period="2025"))
+        assert fb.review is None
         assert fb.finance is not None
         assert fb.sales is None  # not in plan
-        # cross hint built
-        assert any("VIP" in h["description"] for h in fb.cross_hints)
         # honest notes
-        assert se.NOTE_DISH_TAG_NOT_NAME in fb.notes
-        assert se.NOTE_VIP_SIGNAL in fb.notes  # VIP 4.50 < 非VIP 4.83
 
     def test_finance_falls_back_to_pos_bills_when_daily_projection_is_empty(
         self,
@@ -327,159 +323,6 @@ class TestBuildFactbook:
         assert fb.finance["data_source"] == "fact_pos_transaction"
         assert any("收银小票明细" in note for note in fb.notes)
 
-    def _retired_test_store_scope_filters_internal_facts_and_labels_external_context(
-        self, monkeypatch,
-    ):
-        captured = {
-            "finance_store_names": None,
-            "trend_store_names": None,
-            "resolver_queries": [],
-            "resolver_codes": [],
-            "resolver_scopes": [],
-        }
-
-        async def finance(
-            _pool,
-            _factory_id,
-            _date_range,
-            *,
-            top_n_stores,
-            store_names,
-        ):
-            captured["finance_store_names"] = store_names
-            return {
-                "total_revenue": 1000.0,
-                "bill_count": 10,
-                "avg_bill_value": 100.0,
-                "store_count": 1,
-                "day_count": 30,
-                "store_names": list(store_names),
-                "top_stores": [{
-                    "store_name": store_names[0],
-                    "revenue": 1000.0,
-                    "bill_count": 10,
-                }],
-            }
-
-        async def trend(
-            _pool,
-            _factory_id,
-            _date_range,
-            *,
-            store_names,
-        ):
-            captured["trend_store_names"] = store_names
-            return {"points": []}
-
-        class GoldAnswer:
-            def __init__(self, name):
-                self.meta = {
-                    "ranked_entities": [{
-                        "id": name,
-                        "name": name,
-                        "sales_volume": 12.5,
-                        "revenue": 625.0,
-                        "bill_count": 10,
-                    }],
-                }
-
-        async def resolver(
-            code,
-            _pool,
-            _factory_id,
-            *,
-            query,
-            date_range,
-            role,
-            store_name=None,
-            store_mentions=None,
-        ):
-            assert date_range
-            assert role == "restaurant_owner"
-            captured["resolver_codes"].append(code)
-            captured["resolver_queries"].append(query)
-            captured["resolver_scopes"].append({
-                "store_name": store_name,
-                "store_mentions": store_mentions,
-            })
-            return GoldAnswer("娃娃菜")
-
-        async def external(_pool, _factory_id, _date_range):
-            return {
-                "dimensions": {
-                    "promotion": {
-                        "evidence_level": "SIMULATED",
-                        "sources": [{
-                            "source_code": "internal_seed_campaign",
-                            "source_name": "Demo月度活动",
-                        }],
-                        "metrics": [{
-                            "metric_code": "campaign_exposure",
-                            "sum": 1000.0,
-                        }],
-                    },
-                },
-            }
-
-        monkeypatch.setattr(se, "finance_summary", finance)
-        monkeypatch.setattr(se, "daily_trend", trend)
-        monkeypatch.setattr(se, "resolve_by_code", resolver)
-        monkeypatch.setattr(se, "restaurant_dimension_signals", external)
-        eng = _engine(monkeypatch)
-
-        import datetime
-        plan = {
-            "review": True,
-            "finance": True,
-            "sales": True,
-            "external_signals": True,
-            "holiday": False,
-            "supplier_anomaly": False,
-            "weather": False,
-            "cross": [],
-        }
-        fb = asyncio.run(eng._build_factbook(
-            "DEMO_REST",
-            (datetime.date(2026, 6, 26), datetime.date(2026, 7, 25)),
-            plan,
-            period=(
-                "2026-06-26 至 2026-07-25；"
-                "门店范围：青花椒南方百联店"
-            ),
-            store_names=("青花椒南方百联店",),
-        ))
-
-        assert captured["finance_store_names"] == ("青花椒南方百联店",)
-        assert captured["trend_store_names"] == ("青花椒南方百联店",)
-        assert all(
-            "青花椒南方百联店" in query
-            and "全部门店" not in query
-            for query in captured["resolver_queries"]
-        )
-        assert len(captured["resolver_queries"]) == 2
-        assert captured["resolver_codes"] == [
-            "RESTAURANT_OPS_STORE_MARGIN",
-            "RESTAURANT_OPS_STORE_MARGIN",
-        ]
-        assert captured["resolver_scopes"] == [
-            {
-                "store_name": "青花椒南方百联店",
-                "store_mentions": None,
-            },
-            {
-                "store_name": "青花椒南方百联店",
-                "store_mentions": None,
-            },
-        ]
-        assert fb.finance["store_count"] == 1
-        assert fb.sales["top_products"][0]["product_name"] == "娃娃菜"
-        assert fb.review is None
-        assert fb.external_dimensions is not None
-        prompt = fb.to_prompt_text()
-        assert "门店范围：青花椒南方百联店" in prompt
-        assert "商圈/品牌级描述性背景" in prompt
-        assert "不用全部门店数据代替" in prompt
-
     def test_demo_supplier_price_facts_use_demo_procurement_tenant(
         self, monkeypatch,
     ):
@@ -523,55 +366,6 @@ class TestBuildFactbook:
         assert "本期覆盖 12 条价格" in prompt
         assert "品牌共享采购口径" in prompt
 
-    def _retired_test_multi_store_synthesis_passes_verified_scope_to_store_resolver(
-        self, monkeypatch,
-    ):
-        captured = []
-
-        class GoldAnswer:
-            meta = {
-                "ranked_entities": [{
-                    "id": "p1",
-                    "name": "娃娃菜",
-                    "sales_volume": 9.0,
-                    "revenue": 180.0,
-                    "bill_count": 7,
-                }],
-            }
-
-        async def resolver(
-            code,
-            _pool,
-            _factory_id,
-            **kwargs,
-        ):
-            captured.append((code, kwargs))
-            return GoldAnswer()
-
-        monkeypatch.setattr(se, "resolve_by_code", resolver)
-        eng = _engine(monkeypatch)
-
-        import datetime
-        stores = ("青花椒南方百联店", "青花椒徐汇光启城店")
-        fb = asyncio.run(eng._build_factbook(
-            "DEMO_REST",
-            (datetime.date(2026, 6, 26), datetime.date(2026, 7, 25)),
-            {"sales": True, "cross": []},
-            period="最近30天；门店范围：" + "、".join(stores),
-            store_names=stores,
-        ))
-
-        assert len(captured) == 2
-        assert {code for code, _ in captured} == {
-            "RESTAURANT_OPS_STORE_MARGIN",
-        }
-        assert all(
-            kwargs["store_mentions"] == list(stores)
-            and "store_name" not in kwargs
-            for _, kwargs in captured
-        )
-        assert fb.sales["top_products"][0]["product_name"] == "娃娃菜"
-
     def test_attribution_dimension_populates_from_store_comparison(self, monkeypatch):
         _install_data_fakes(monkeypatch)
         eng = _engine(monkeypatch)
@@ -586,36 +380,23 @@ class TestBuildFactbook:
         assert "门店拖后腿归因" in fb.to_prompt_text()
         assert "客流效应" in fb.to_facts_index()
 
-    def _retired_test_review_empty_degrades_with_nextaction(self, monkeypatch):
-        _install_data_fakes(monkeypatch, review_empty=True)
-        eng = _engine(monkeypatch)
-        import datetime
-        dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
-        plan = {"review": True, "finance": True, "sales": False, "cross": []}
-        fb = asyncio.run(eng._build_factbook("RES_3101_009", dr, plan, period="2025"))
-        assert fb.review is None
-        assert "review" not in plan
-        assert se.NOTE_REVIEW_ABSENT_NEXTACTION in fb.notes
-        assert fb.finance is not None  # still has finance
-
 
 # --------------------------------------------------------------------------
 # collect_charts gating
 # --------------------------------------------------------------------------
 class TestCharts:
-    def _retired_test_charts_gated_by_plan(self, monkeypatch):
+    def test_charts_gated_by_plan(self, monkeypatch):
         _install_data_fakes(monkeypatch)
         eng = _engine(monkeypatch)
         import datetime
         dr = (datetime.date(2025, 1, 1), datetime.date(2025, 12, 31))
-        plan = {"review": True, "finance": True, "sales": False, "cross": ["vip_x_rating", "time_x_review"]}
-        fb = asyncio.run(eng._build_factbook("RES_3101_009", dr, plan, period="2025"))
+        plan = {"finance": True, "sales": False, "cross": []}
+        fb = asyncio.run(eng._build_factbook("F001", dr, plan, period="2025"))
         charts = eng.collect_charts(fb, plan)
         titles = [c["title"] for c in charts]
-        # review + finance charts present, NO channel pie (sales not in plan)
-        assert any("评价维度" in t for t in titles)
-        assert any("VIP vs 非VIP" in t for t in titles)
+        # finance charts present, no unrequested sales/review charts
         assert any("门店营收" in t for t in titles)
+        assert not any("评价维度" in t or "VIP vs 非VIP" in t for t in titles)
         assert not any("渠道" in t for t in titles)
         # all charts are valid ECharts-ish (type + series)
         for c in charts:
@@ -635,15 +416,13 @@ class TestCharts:
                 "mom_available": False,
             },
         })
-
         charts = eng.collect_charts(fb, {"period_comparison": True})
+        chart = next(c for c in charts if "毛利率" in c["title"])
+        assert chart["series"][0]["data"] == [30.0, 34.0]
+        assert chart["series"][0]["markLine"]["data"][0]["yAxis"] == 30.0
+        assert chart["series"][0]["markLine"]["data"][0]["name"] == "上期实绩"
 
-        margin_chart = next(c for c in charts if "加权毛利率环比" in c["title"])
-        series = margin_chart["series"][0]
-        assert series["data"] == [30.0, 34.0]
-        assert series["markLine"]["data"] == [{"yAxis": 30.0, "name": "上期实绩"}]
-
-    def test_period_chart_absent_when_cost_coverage_is_missing(self, monkeypatch):
+    def test_period_chart_omits_unavailable_current_value(self, monkeypatch):
         eng = _engine(monkeypatch)
         fb = FactBook(period_comparison={
             "gross_margin_pct": {
@@ -674,6 +453,11 @@ class TestSynthesize:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("factory_id", [
         "RES_3101_009", "DEMO_REST_001", "R_GML_DEMO", "QHJ_PROD",
+        "MOCK_REST", "DEMO_REST", "R_DONGMENKOU_REAL", "R_HONGDEJI_REAL",
+        "R_HUOGUO_GENERIC_REAL", "R_ILTEATRO_REAL", "R_JINCHUAN_HG_REAL",
+        "R_JINRINIUSHI_REAL", "R_LINJIAYAN_REAL", "R_QINGHUAJIAO_REAL",
+        "R_SHANGMA_HG_REAL", "R_XIMAXIANG_REAL", "R_XINBASHU_REAL",
+        "R_YONGHE_REAL", "R_YOUZIYOUWEI_REAL", "R_YUJIUJING_REAL",
     ])
     async def test_retired_restaurant_namespace_rejected_before_llm_or_db(
         self, monkeypatch, factory_id,
@@ -717,8 +501,8 @@ class TestSynthesize:
 
         assert "总营业额占折扣金额合计" in factory_summary
 
-    def _retired_test_contract_version_invalidates_pre_guard_narrative_cache(self):
-        assert se.SYNTHESIS_CONTRACT_VERSION == "restaurant-dimensions-v9"
+    def test_contract_version_invalidates_pre_guard_narrative_cache(self):
+        assert se.SYNTHESIS_CONTRACT_VERSION == "factory-dimensions-v1"
 
 
 class TestNarrativeGroundingGate:
