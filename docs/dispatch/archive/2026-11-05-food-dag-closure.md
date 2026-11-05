@@ -67,3 +67,9 @@ App清理：仅本组report24059申请撤回39，PENDING，提交者1309；保�
 候选发布准备完成：统一 release --phase build（31显式类，190/0/0/0，构建rc0）+ YES-STAGE预上传，RELEASE_FINAL_STATUS=built恰好1次，deploy_mode=none，未安装/重启/切流。JAR SHA256 8d387282b1fb41a166118e5befb2c04b706a809e4333501e48c5836d1e5d4c1c，回执 ~/.cache/cretas/release-reports/cretas-1793844464-158.json。
 PR #1460 commit c0f8590975；CI脚本闸发现测试改名配套基线需收缩，按pr-test-selection.py --write仅移除旧ConfirmationTest一行（1325→1324），本地selection gate PASS，不改源码/测试，不重跑产品用例。
 原任务产品59e35032上限3%已恢复null，仅上限/updatedAt变化；撤回39仍PENDING，审计快照保留。
+
+#1440 P1-6实质遗漏补齐scope：ShortageCaseActionController.java、ShortageRescheduleController.java及两者ContractTest；只修写入服务已成功返回后的核对异常回执。写入失败不得吞错，不改权限、DTO/Entity/Repository/迁移。验收：两ControllerContractTest真实HTTP对照，核对抛错但返回原写入ID/明确未知，原写入409保持失败。候选旧制品不冒充包含这次补齐，需最终重构建。
+
+P1-6 HTTP契约首轮实际11 tests、0 failures/errors/skipped；新增最后一条台账异常用例需单独重编译确认后才升级为最终证据；覆盖采购/重排各自的后置台账异常与核对异常，保留原PO/APPLIED结果并明确交期未确认；写服务失败维持409，跨厂/缺身份/缺理由仍原闸。核心190例生产源码未变，已验证证据复用；最终制品选择器扩大为33显式类（202例预计，以实际回执为准）。
+
+P1-6最终证据收齐：ActionController 7/0/0/0，RescheduleController单类重新编译5/0/0/0（shortage-reschedule-final.log），共12唯一HTTP用例；XML包含两个台账读取异常用例。独立窄风险复审无剩余阻塞，可以commit。只有后置核对异常被承认未知，核心写失败未吞。

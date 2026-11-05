@@ -1,6 +1,8 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.exception.GlobalExceptionHandler;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.shortage.ShortageOutcomeCheckService;
 import com.cretas.aims.repository.shortage.ShortageCaseActionRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseRepository;
 import com.cretas.aims.security.ActorRef;
@@ -26,18 +28,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.hamcrest.Matchers.containsString;
 
 /** 生成采购草稿 / 做决定的操作人取 JWT 验过的身份, 别厂的 token 进不来; 决定的原因在入口就必填。 */
 class ShortageCaseActionControllerContractTest {
 
     private final ShortageCaseActionService service = mock(ShortageCaseActionService.class);
+    private final ShortageOutcomeCheckService checks = OutcomeCheckStubs.unknown();
+    private final ShortageCaseActionRepository actions = mock(ShortageCaseActionRepository.class);
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.standaloneSetup(new ShortageCaseActionController(service,
-                        mock(ShortageCaseActionRepository.class), mock(ShortageCaseRepository.class),
-                        OutcomeCheckStubs.unknown()))
+                        actions, mock(ShortageCaseRepository.class),
+                        checks))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
         when(service.createProcurementDraft(any(), any(), any(), any())).thenReturn(
@@ -86,5 +92,48 @@ class ShortageCaseActionControllerContractTest {
                 .andExpect(status().isBadRequest());
 
         verify(service, never()).decide(eq("F1"), anyString(), any(), any(), any(), any());
+    }
+
+    @Test
+    void committedDraftIsAcknowledgedEvenWhenItsLaterOutcomeCheckThrows() throws Exception {
+        when(checks.check(any(), any(), any(), any(), any()))
+                .thenThrow(new BusinessException(409, "核对时订单状态已变化"));
+        mvc.perform(as(post("/api/mobile/F1/shortage-cases/C1/procurement-drafts"), "F1")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"materialTypeId\":\"M1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.purchaseOrderId").value("PO-1"))
+                .andExpect(jsonPath("$.message").value(containsString("采购草稿已生成")))
+                .andExpect(jsonPath("$.message").value(containsString("结果核对未完成")))
+                .andExpect(jsonPath("$.message").value(containsString("交期是否达成尚未确认")))
+                .andExpect(jsonPath("$.message").value(containsString("勿重复生成")));
+        verify(service).createProcurementDraft(eq("F1"), eq("C1"), eq("M1"), any());
+    }
+
+    @Test
+    void failedDraftMutationStillFailsWithoutRunningOutcomeCheck() throws Exception {
+        when(service.createProcurementDraft(any(), any(), any(), any()))
+                .thenThrow(new BusinessException(409, "缺料实例已关闭"));
+        mvc.perform(as(post("/api/mobile/F1/shortage-cases/C1/procurement-drafts"), "F1")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"materialTypeId\":\"M1\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false));
+        verify(checks, never()).check(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void committedDraftIsAcknowledgedWhenPostWriteActionLookupFails() throws Exception {
+        when(actions.findByCaseIdAndMaterialTypeIdAndActionTypeAndStatus(any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("action ledger temporarily unavailable"));
+        mvc.perform(as(post("/api/mobile/F1/shortage-cases/C1/procurement-drafts"), "F1")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"materialTypeId\":\"M1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.purchaseOrderId").value("PO-1"))
+                .andExpect(jsonPath("$.message").value(containsString("结果核对未完成")))
+                .andExpect(jsonPath("$.message").value(containsString("交期是否达成尚未确认")))
+                .andExpect(jsonPath("$.message").value(containsString("勿重复生成")));
+        verify(service).createProcurementDraft(eq("F1"), eq("C1"), eq("M1"), any());
+        verify(checks, never()).check(any(), any(), any(), any(), any());
     }
 }
