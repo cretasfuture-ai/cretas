@@ -1,6 +1,5 @@
 package com.cretas.aims.service.skill;
 
-import com.cretas.aims.dto.skill.SkillDefinition;
 import com.cretas.aims.repository.smartbi.SmartBiSkillRepository;
 import com.cretas.aims.service.skill.impl.SkillRegistryImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,7 +9,6 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Collections;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -51,57 +49,18 @@ class RestaurantSkillsRegistrationTest {
     }
 
     @Test
-    void restaurantDiagnosticsSkillRegistered() {
-        Optional<SkillDefinition> skill = registry.getSkill("restaurant-diagnostics");
-        assertThat(skill).isPresent();
-
-        SkillDefinition def = skill.get();
-        assertThat(def.getDisplayName()).isEqualTo("餐饮经营深度诊断");
-        assertThat(def.getTriggers()).contains("经营诊断", "深度分析", "为什么亏损", "刚性", "对标");
-        assertThat(def.getTools()).contains(
-                "restaurant_cost_rigidity_analysis",
-                "restaurant_benchmark_alert",
-                "restaurant_channel_margin",
-                "restaurant_dining_heatmap",
-                "restaurant_long_tail_sku",
-                "restaurant_menu_normalization",
-                "restaurant_review_analysis",
-                "restaurant_member_rfm",
-                "restaurant_stored_value",
-                "restaurant_store_pnl_one_pager",
-                "restaurant_bom_layer_status",
-                "restaurant_menu_engineering",
-                "restaurant_forecast"
-        );
-        assertThat(def.getContextNeeded()).contains("factoryId");
-        assertThat(def.isEnabled()).isTrue();
+    void retiredRestaurantDiagnosticsSkillIsRejected() {
+        assertThat(registry.getSkill("restaurant-diagnostics")).isEmpty();
     }
 
     @Test
-    void restaurantChainAnalysisSkillRegistered() {
-        Optional<SkillDefinition> skill = registry.getSkill("restaurant-chain-analysis");
-        assertThat(skill).isPresent();
-
-        SkillDefinition def = skill.get();
-        assertThat(def.getDisplayName()).isEqualTo("餐饮连锁分析");
-        assertThat(def.getTriggers()).contains("连锁", "多店对比", "门店排名", "同店同比");
-        assertThat(def.getTools()).containsExactlyInAnyOrder(
-                "restaurant_multi_store_comparison",
-                "restaurant_calibration_history",
-                "restaurant_temporal_comparison",
-                "restaurant_cross_chain_benchmark"
-        );
-        assertThat(def.getContextNeeded()).contains("factoryId");
-        assertThat(def.isEnabled()).isTrue();
+    void retiredRestaurantChainAnalysisSkillIsRejected() {
+        assertThat(registry.getSkill("restaurant-chain-analysis")).isEmpty();
     }
 
     @Test
-    void existingRestaurantOperationsSkillStillRegistered() {
-        // Regression: adding new skills must not break existing ones.
-        Optional<SkillDefinition> opsSkill = registry.getSkill("restaurant-operations");
-        assertThat(opsSkill).isPresent();
-
-        Optional<SkillDefinition> wastageSkill = registry.getSkill("restaurant-wastage");
-        assertThat(wastageSkill).isPresent();
+    void retiredRestaurantOperationsAndWastageSkillsAreRejected() {
+        assertThat(registry.getSkill("restaurant-operations")).isEmpty();
+        assertThat(registry.getSkill("restaurant-wastage")).isEmpty();
     }
 }
