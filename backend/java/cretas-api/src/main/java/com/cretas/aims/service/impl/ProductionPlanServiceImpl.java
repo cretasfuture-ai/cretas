@@ -285,6 +285,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
 
+    /** 结单时把剩余半成品转进半成品库 (D-S315-02); required=false 同上, 真要入库却没有它 ⇒ 500。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.SettlementSemiStockingService settlementSemiStockingService;
+
+    /** 返工计划来源半成品的接料判定与占用 (D-S315-01); required=false 同上, 走到返工计划却没有它 ⇒ 500。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
+
+    /** 人工补录结单的权限判断 (M3); required=false 同上, 走到人工补录却没有它 ⇒ 500, 不放行。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.PermissionService permissionService;
+
+    private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeed() {
+        if (secondaryPlanFeedService == null) {
+            throw new BusinessException(500, "二次加工服务未初始化, 无法处理半成品来源");
+        }
+        return secondaryPlanFeedService;
+    }
+
     /** raw-centric 多成品: 建计划/转批次守卫 —— 断言 owner 启用 workflow 终端覆盖所选成品. required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.workflow.ProductWorkflowResolutionService workflowResolutionService;
@@ -3344,31 +3364,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
         }
 
-        // SP2 二次加工: 开始生产时扣减 WIP 半成品库存
-        // 注: 在事务内执行, 扣减失败直接抛出异常回滚整个 startProduction (fail-closed, 无 fail-soft)
-        // ⛔ 刻意留在这里而不下沉到 createBatchFromPlan: 逐工序录入(ClerkProcessEntryServiceImpl)
-        //    走的是「前端先调 /create-batch, 再由 materializeBatch 按 edges 精确扣半成品」这条路,
-        //    把扣减挪进 createBatchFromPlan 会让同一 SECONDARY 计划被扣两次(幽灵超扣)。
-        //    详见 ClerkProcessEntryServiceImpl 里 "不调用 startProduction" 那段注释。
-        if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
-            if (wipInventoryService == null) {
-                throw new BusinessException(500, "二次加工服务未初始化, 无法扣减半成品库存");
-            }
-            // 缺口 14: 二次加工开工这一刻就是领半成品
-            if (processTimeLimitService != null) {
-                processTimeLimitService.assertSemiFeedForPlan(factoryId, plan,
-                        semiFinishedInventoryRepository.findById(plan.getSecondarySourceWipId()).orElse(null),
-                        plan.getPlannedQuantity(), operatorId);
-            }
-            wipInventoryService.deductForSecondaryPlan(
-                    plan.getSecondarySourceWipId(),
-                    plan.getPlannedQuantity() != null ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO,
-                    factoryId,
-                    operatorId,
-                    com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan));
-            log.info("SP2 二次加工 WIP 扣减完成: planId={}, wipId={}", planId, plan.getSecondarySourceWipId());
-        }
-
         // 🔴 2026-08-02: 「开工」必须同时把批次建出来。
         //
         // 此前 startProduction 只翻状态不建批次, 而报工与结单都需要批次 → 计划进入
@@ -3406,6 +3401,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionBatch createdBatch = materializeBatchForPlan(factoryId, plan);
         log.info("开工已建批次: planId={}, batchId={}, batchNumber={}",
                 planId, createdBatch.getId(), createdBatch.getBatchNumber());
+
+        holdSecondarySource(factoryId, plan, operatorId);
 
         if (applicationEventPublisher != null) {
             try {
@@ -3507,6 +3504,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             "planId", planId,
             "actualQuantity", actualQuantity != null ? actualQuantity : java.math.BigDecimal.ZERO));
 
+        closeSecondaryHold(factoryId, plan, com.cretas.aims.utils.SecurityUtils.currentUserId());
         plan.setStatus(ProductionPlanStatus.COMPLETED);
         if (plan.getStartTime() == null) {
             plan.setStartTime(LocalDateTime.now());
@@ -3627,13 +3625,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新页面后重试, 系统会自动生成结单提交键")
                     .withHintTarget("核对结单");
         }
+        assertSemiFinishedQuantityValid(request);
+        assertManualOverrideAllowed(request, settledBy);
 
-        ProductionPlan plan = request.isConfirm()
-                ? productionPlanRepository.findByIdForUpdate(planId)
-                        .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
-                        .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId))
-                : productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
-                        .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        // D-S315-02: confirm=false 只预览。走独立的只读分支, ⛔ 不靠事务回滚兜底 ——
+        // 结单链路里有独立事务的写点, 回滚挡不住; 下面的库存释放与扣减也一步都不能走。
+        if (!request.isConfirm()) {
+            return previewSettlement(factoryId, planId, request);
+        }
+
+        ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
+                .filter(candidate -> factoryId.equals(candidate.getFactoryId()))
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
         requireVisiblePlan(factoryId, plan);
 
         Optional<ProductionSettlement> sameRequest = productionSettlementRepository
@@ -3674,21 +3677,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         ensureWorkflowSettlementUsesSubmittedReports(factoryId, plan);
-        ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || request.isConfirm()
-                ? deriveConfirmedSettlementRequest(factoryId, planId, request, isWorkflowPlan(plan))
-                : request;
-        if (isWorkflowPlan(plan)
-                && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
-            if (customerSuppliedSettlementCoverageGuard == null) {
-                throw new BusinessException(500, "客供结单完整性校验服务未初始化，不能结单")
-                        .withCode("CUSTOMER_SUPPLIED_SETTLEMENT_GUARD_UNAVAILABLE")
-                        .withHintTarget("rawMaterialConsumptions");
-            }
-            customerSuppliedSettlementCoverageGuard.mergeMissingManualRawConsumptions(
-                    factoryId, plan, effectiveRequest, request);
-        }
+        ProductionSettlementRequest effectiveRequest = resolveEffectiveSettlementRequest(factoryId, planId, plan, request);
 
         validateSettlementRequest(plan, effectiveRequest);
+        assertManualSemiMatchesReportedFeeds(factoryId, plan, effectiveRequest);
+        com.cretas.aims.service.production.SettlementSemiStockingService.Stocking semiStocking =
+                resolveSemiStocking(factoryId, plan, effectiveRequest);
+        releaseSecondaryHoldForSettlement(factoryId, plan, settledBy);
 
         // 缺陷 38 结单热修: 物料大类在这里一次性批量取全 (⛔ 不逐行查),
         // 然后传进下面两个循环调用链 (validation + posting), 避免 N+1。
@@ -3715,6 +3710,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 : zeroIfNull(effectiveRequest.getActualFinishedQuantity()));
         settlement.setActualSemiFinishedQuantity(zeroIfNull(effectiveRequest.getActualSemiFinishedQuantity()));
         settlement.setQuantityUnit(resolveSettlementRequestUnit(effectiveRequest));
+        settlement.setManualOverride(request.isManualOverride());
+        settlement.setManualOverrideReason(request.isManualOverride()
+                ? trimToNull(request.getManualOverrideReason()) : null);
         settlement.setQuantityVarianceReason(trimToNull(effectiveRequest.getQuantityVarianceReason()));
         settlement.setQuantityVarianceNote(trimToNull(effectiveRequest.getQuantityVarianceNote()));
         settlement.setMaterialVarianceReason(trimToNull(effectiveRequest.getMaterialVarianceReason()));
@@ -3727,6 +3725,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setSettledBy(settledBy);
         settlement.setSettledAt(LocalDateTime.now());
         settlement = productionSettlementRepository.save(settlement);
+        // 先入半成品库再分摊产出成本: 转走的那笔成本要先落到结单上, 分摊时才不会算进成品
+        if (semiStocking != null) {
+            settlement.setSemiStockingDetail(
+                    settlementSemiStockingService.stock(factoryId, plan, semiStocking, settlement.getId()));
+            productionSettlementRepository.save(settlement);
+        }
         persistWorkflowSettlementOutputs(factoryId, plan, settlement, effectiveRequest);
 
         for (ProductionSettlementConsumption line : consumptionLines) {
@@ -3794,11 +3798,224 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     settlement.getId(), settlement.getActualFinishedQuantity()));
         }
 
-        List<String> warnings = List.of("已按实际领用扣减原料/半成品库存; 成品需仓库确认实收后再入库");
+        List<String> warnings = new ArrayList<>();
+        warnings.add("已按实际领用扣减原料/半成品库存; 成品需仓库确认实收后再入库");
+        if (semiStocking != null) {
+            warnings.add("剩余半成品 " + stripTrailing(semiStocking.quantity()) + " 已入半成品库, 对应成本已从本计划划转过去");
+        }
         log.info("六扇门生产结单完成: factoryId={}, planId={}, settlementId={}, finished={}, semiFinished={}",
                 factoryId, planId, settlement.getId(),
                 settlement.getActualFinishedQuantity(), settlement.getActualSemiFinishedQuantity());
         return toSettlementResponse(settlement, warnings);
+    }
+
+    /**
+     * 返工计划结单 (D-S315-01): 开工扣下的占用全部还回来源行, 实际投料随后按原路径严格扣减 ——
+     * 没用完的自动留在库存, 用了的只扣一次。必须在下面任何一道读半成品余额的校验之前。
+     */
+    private void releaseSecondaryHoldForSettlement(String factoryId, ProductionPlan plan, Long operatorId) {
+        if (!"SECONDARY".equals(plan.getPlanSourceType()) || plan.getSecondarySourceWipId() == null) {
+            return;
+        }
+        secondaryPlanFeed().settleHold(factoryId, plan, operatorId);
+    }
+
+    /** 不走结单就结束的路径 (取消 / 直接完工): 没用掉的占用还回来源, 认不准的记到计划备注。 */
+    private void closeSecondaryHold(String factoryId, ProductionPlan plan, Long operatorId) {
+        if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
+            secondaryPlanFeed().closeHold(factoryId, plan, operatorId);
+        }
+    }
+
+    /** 半成品量是请求里唯一没有报工事实可对的数, 不合法就拒绝, ⛔ 不当成 0。 */
+    private void assertSemiFinishedQuantityValid(ProductionSettlementRequest request) {
+        BigDecimal semi = request.getActualSemiFinishedQuantity();
+        if (semi == null || semi.signum() < 0) {
+            throw new BusinessException(400, "实际半成品量不合法: " + semi)
+                    .withCode("SETTLEMENT_SEMI_QUANTITY_INVALID")
+                    .withHint("请填写大于等于 0 的数字; 没有要入半成品库的量就填 0")
+                    .withHintTarget("actualSemiFinishedQuantity");
+        }
+    }
+
+    /**
+     * 人工补录绕过报工重算, 所以要留痕 (标记 + 原因 + settledBy) 并收紧权限:
+     * /settle 接口 scheduling:read_write 也能进, 人工补录只认 production:read_write。
+     */
+    private void assertManualOverrideAllowed(ProductionSettlementRequest request, Long settledBy) {
+        if (!request.isManualOverride()) {
+            return;
+        }
+        if (isBlank(request.getManualOverrideReason())) {
+            throw new BusinessException(400, "人工补录结单必须填写原因")
+                    .withCode("SETTLEMENT_MANUAL_REASON_REQUIRED")
+                    .withHint("请选择或填写为什么要按手工数据结单")
+                    .withHintTarget("manualOverrideReason");
+        }
+        if (permissionService == null) {
+            throw new BusinessException(500, "权限服务未初始化，不能人工补录结单")
+                    .withCode("SETTLEMENT_MANUAL_PERMISSION_UNAVAILABLE");
+        }
+        boolean allowed = settledBy != null && userRepository.findById(settledBy)
+                .map(user -> permissionService.hasPermission(user, "production:read_write"))
+                .orElse(false);
+        if (!allowed) {
+            throw new BusinessException(403, "人工补录结单需要生产写权限")
+                    .withCode("SETTLEMENT_MANUAL_OVERRIDE_FORBIDDEN")
+                    .withHint("请联系有生产写权限的人员处理, 或先把报工补全后用普通结单");
+        }
+    }
+
+    /**
+     * 手工半成品领用会替换同一批的逐道投料 (见 deductProcessSheetStockFeeds), 所以量必须对得上:
+     * 手工只填 1 而报工投了 100, 那 99 就没人扣了。⛔ 对不上就拒绝, 不取其一。
+     * 报工里没投过的批次是真正的外部领用, 不在此列。
+     */
+    private void assertManualSemiMatchesReportedFeeds(String factoryId, ProductionPlan plan,
+                                                      ProductionSettlementRequest request) {
+        if (isEmpty(request.getSemiFinishedConsumptions()) || processSheetRowRepository == null
+                || semiFinishedInventoryRepository == null) {
+            return;
+        }
+        Map<String, BigDecimal> manualByBatchNo = new HashMap<>();
+        for (ProductionSettlementRequest.ConsumptionLine line : request.getSemiFinishedConsumptions()) {
+            if (line == null || line.getSemiFinishedInventoryId() == null) {
+                continue;
+            }
+            semiFinishedInventoryRepository.findSourceRefById(line.getSemiFinishedInventoryId())
+                    .filter(ref -> factoryId.equals(ref.getFactoryId()))
+                    .ifPresent(ref -> manualByBatchNo.merge(
+                            ref.getIntermediateBatchNo(), zeroIfNull(line.getQuantity()), BigDecimal::add));
+        }
+        if (manualByBatchNo.isEmpty()) {
+            return;
+        }
+        Map<String, BigDecimal> reportedByBatchNo = new HashMap<>();
+        List<ProductionSettlementPrefillResponse.Issue> ignore = new ArrayList<>();
+        for (ProcessSheetRow row : Optional.ofNullable(processSheetRowRepository
+                .findByFactoryIdAndPlanId(factoryId, plan.getId())).orElseGet(List::of)) {
+            if (!isUsableProcessSheetRow(row)) {
+                continue;
+            }
+            ProcessSheetRowRequest req = parseProcessSheetRowPayload(row, ignore);
+            if (req == null || isEmpty(req.getUpstreamSources())) {
+                continue;
+            }
+            for (ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
+                if (!ref.isSemiFinished() || ref.isStockConsumedAtSubmit()
+                        || !manualByBatchNo.containsKey(ref.getSourceBatchNumber())
+                        || zeroIfNull(ref.getFeedQuantityKg()).signum() <= 0) {
+                    continue;
+                }
+                if (wipInventoryService == null) {
+                    throw new BusinessException(500, "半成品服务未初始化, 不能核对手工领用")
+                            .withHintTarget("半成品领用");
+                }
+                BigDecimal inSourceUnit = wipInventoryService.resolveSemiFeedQtyInSourceUnit(
+                        factoryId, ref.getSourceBatchNumber(), ref.getFeedQuantityKg());
+                if (inSourceUnit == null) {
+                    throw new BusinessException(409, "半成品批次 " + ref.getSourceBatchNumber()
+                            + " 无法折算投料量, 不能核对手工领用")
+                            .withCode("SFI_NO_GRAMS_PER_UNIT")
+                            .withHint("请先在产品配置为该半成品设置标准克重(每盒克重), 再重试")
+                            .withHintTarget("半成品领用");
+                }
+                reportedByBatchNo.merge(ref.getSourceBatchNumber(), inSourceUnit, BigDecimal::add);
+            }
+        }
+        for (Map.Entry<String, BigDecimal> reported : reportedByBatchNo.entrySet()) {
+            BigDecimal manual = manualByBatchNo.get(reported.getKey());
+            if (manual.compareTo(reported.getValue()) != 0) {
+                throw new BusinessException(409, "半成品 " + reported.getKey() + " 手工领用 " + stripTrailing(manual)
+                        + " 与逐道报工投料 " + stripTrailing(reported.getValue()) + " 不一致")
+                        .withCode("SETTLEMENT_MANUAL_SEMI_MISMATCH")
+                        .withHint("报工已记录这批半成品的投料, 请删掉这行手工领用, 或先更正逐道报工再结单")
+                        .withHintTarget("半成品领用");
+            }
+        }
+    }
+
+    /**
+     * 这次结单实际用的事实。Workflow 计划与普通确认都以报工为准;
+     * 只有非 Workflow 计划的人工补录才用请求里的手工事实。预览与正式结单走这同一份。
+     */
+    private ProductionSettlementRequest resolveEffectiveSettlementRequest(
+            String factoryId, String planId, ProductionPlan plan, ProductionSettlementRequest request) {
+        ProductionSettlementRequest effectiveRequest = isWorkflowPlan(plan) || !request.isManualOverride()
+                ? deriveConfirmedSettlementRequest(factoryId, planId, request, isWorkflowPlan(plan))
+                : request;
+        if (isWorkflowPlan(plan)
+                && plan.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
+            if (customerSuppliedSettlementCoverageGuard == null) {
+                throw new BusinessException(500, "客供结单完整性校验服务未初始化，不能结单")
+                        .withCode("CUSTOMER_SUPPLIED_SETTLEMENT_GUARD_UNAVAILABLE")
+                        .withHintTarget("rawMaterialConsumptions");
+            }
+            customerSuppliedSettlementCoverageGuard.mergeMissingManualRawConsumptions(
+                    factoryId, plan, effectiveRequest, request);
+        }
+        return effectiveRequest;
+    }
+
+    private com.cretas.aims.service.production.SettlementSemiStockingService.Stocking resolveSemiStocking(
+            String factoryId, ProductionPlan plan, ProductionSettlementRequest effectiveRequest) {
+        BigDecimal semi = effectiveRequest.getActualSemiFinishedQuantity();
+        if (semi == null || semi.signum() <= 0) {
+            return null;
+        }
+        if (settlementSemiStockingService == null) {
+            throw new BusinessException(500, "半成品入库服务未初始化，不能结单")
+                    .withCode("SETTLEMENT_SEMI_STOCKING_UNAVAILABLE")
+                    .withHintTarget("actualSemiFinishedQuantity");
+        }
+        return settlementSemiStockingService.resolve(factoryId, plan, semi, this::isUsableProcessSheetRow);
+    }
+
+    /**
+     * confirm=false: 与正式结单同样的判定, 但只读 —— 不拿悲观锁、不释放报工占用、不写结单和库存。
+     * 判定不过时报的错与正式结单相同; 过了就返回将要结成的数, {@code settled=false}。
+     */
+    private ProductionSettlementResponse previewSettlement(String factoryId, String planId,
+                                                           ProductionSettlementRequest request) {
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
+        requireVisiblePlan(factoryId, plan);
+
+        Optional<ProductionSettlement> sameRequest = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                        factoryId, planId, request.getIdempotencyKey());
+        if (sameRequest.isPresent()) {
+            return toSettlementResponse(sameRequest.get(), List.of("该结单请求已提交过, 已返回原结单结果"));
+        }
+        if (productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId).isPresent()) {
+            throw new BusinessException(409, "该生产计划已结单, 不能重复完成")
+                    .withCode("PRODUCTION_ALREADY_SETTLED")
+                    .withHint("请刷新生产计划列表查看最新状态")
+                    .withHintTarget("核对结单");
+        }
+        if (productionReportCorrectionService != null) {
+            productionReportCorrectionService.assertNoPendingForPlan(factoryId, planId);
+        }
+        ensureWorkflowSettlementUsesSubmittedReports(factoryId, plan);
+        ProductionSettlementRequest effectiveRequest = resolveEffectiveSettlementRequest(factoryId, planId, plan, request);
+        validateSettlementRequest(plan, effectiveRequest);
+        assertManualSemiMatchesReportedFeeds(factoryId, plan, effectiveRequest);
+        resolveSemiStocking(factoryId, plan, effectiveRequest);
+
+        return ProductionSettlementResponse.builder()
+                .settled(false)
+                .productionPlanId(planId)
+                .planNumber(plan.getPlanNumber())
+                .status(plan.getStatus() == null ? null : plan.getStatus().name())
+                .plannedQuantity(zeroIfNull(plan.getPlannedQuantity()))
+                .actualFinishedQuantity(effectiveRequest.getActualFinishedQuantity())
+                .actualSemiFinishedQuantity(effectiveRequest.getActualSemiFinishedQuantity())
+                .quantityUnit(resolveSettlementRequestUnit(effectiveRequest))
+                .manualOverride(request.isManualOverride())
+                .manualOverrideReason(request.isManualOverride() ? trimToNull(request.getManualOverrideReason()) : null)
+                .warnings(List.of("这是结单预览, 没有结单也没有写入任何数据; 确认无误后用 confirm=true 提交"))
+                .build();
     }
 
     /**
@@ -3817,7 +4034,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionSettlementPrefillResponse latest = getSettlementPrefill(factoryId, planId);
         // Run the same one-click guard inside the locked settlement transaction,
         // after its idempotent return. A retry must not audit already-consumed stock.
-        if (confirmation.isConfirm()) {
+        // 人工补录是文员处理过阻塞项之后的路, 不过一键确认闸; 预览走这里, 判定与正式结单一致。
+        if (!confirmation.isManualOverride()) {
             if (customerSuppliedSettlementCoverageGuard == null) {
                 throw new BusinessException(500, "结单完整性校验服务未初始化，不能结单")
                         .withCode("CUSTOMER_SUPPLIED_SETTLEMENT_GUARD_UNAVAILABLE");
@@ -3830,7 +4048,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 ? List.of(issue("SETTLEMENT_FACTS_UNAVAILABLE", "无法读取当前报工事实，不能结单。", "processSheetRows"))
                 : Optional.ofNullable(latest.getAudit().getIssues()).orElseGet(ArrayList::new).stream()
                         .filter(i -> i.getSeverity() == ProductionSettlementPrefillResponse.Severity.BLOCKER)
-                        .filter(i -> !isResolvedSettlementOverride(i, confirmation))
+                        .filter(i -> !isResolvedSettlementOverride(i, confirmation,
+                                allowManualSemiFinishedConsumptions))
                         .toList();
         if (derived == null || !blockers.isEmpty()) {
             String detail = blockers.stream()
@@ -3842,8 +4061,29 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint(isBlank(detail) ? "请先完成并正式提交逐道报工" : detail)
                     .withHintTarget("核对结单");
         }
+        // 只出半成品的非 Workflow 计划: 非 Workflow 的终端判定是「没被下道投掉的行」, 半成品行也会被当成成品产出,
+        // 同一批料就既算成品又入半成品库。这种计划没有成品, 产量全在半成品量上。
+        if (!allowManualSemiFinishedConsumptions
+                && zeroIfNull(confirmation.getActualSemiFinishedQuantity()).signum() > 0
+                && !hasFinishedProcessSheetRow(factoryId, planId)) {
+            derived.setActualFinishedQuantity(BigDecimal.ZERO);
+            derived.setTerminalOutputs(new ArrayList<>());
+        }
+        // 成品量以报工为准。传了一个对不上的数就拒绝 —— 换成报工的数再结单, 就是把用户的数悄悄改掉。
+        BigDecimal claimedFinished = confirmation.getActualFinishedQuantity();
+        BigDecimal reportedFinished = derived.getActualFinishedQuantity();
+        if (!confirmation.isManualOverride() && claimedFinished != null && reportedFinished != null
+                && claimedFinished.compareTo(reportedFinished) != 0) {
+            throw new BusinessException(409, "结单成品量与报工不一致: 传入 " + stripTrailing(claimedFinished)
+                    + ", 报工 " + stripTrailing(reportedFinished))
+                    .withCode("PRODUCTION_SETTLEMENT_QUANTITY_CONFLICT")
+                    .withHint("成品量以逐道报工为准; 如报工有误, 请先更正报工再结单")
+                    .withHintTarget("actualFinishedQuantity");
+        }
         derived.setIdempotencyKey(confirmation.getIdempotencyKey());
         derived.setConfirm(true);
+        // 报工里没有「剩余半成品」这个事实 (预填恒为 0), 这个数只能来自请求, ⛔ 不能被预填的 0 盖掉。
+        derived.setActualSemiFinishedQuantity(confirmation.getActualSemiFinishedQuantity());
         derived.setQuantityVarianceReason(firstNonBlank(
                 confirmation.getQuantityVarianceReason(), derived.getQuantityVarianceReason()));
         derived.setQuantityVarianceNote(trimToNull(confirmation.getQuantityVarianceNote()));
@@ -3864,14 +4104,30 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return derived;
     }
 
+    private boolean hasFinishedProcessSheetRow(String factoryId, String planId) {
+        if (processSheetRowRepository == null) {
+            return false;
+        }
+        List<ProductionSettlementPrefillResponse.Issue> ignore = new ArrayList<>();
+        return Optional.ofNullable(processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId))
+                .orElseGet(List::of).stream()
+                .filter(this::isUsableProcessSheetRow)
+                .map(row -> parseProcessSheetRowPayload(row, ignore))
+                .anyMatch(req -> req != null && req.isFinished());
+    }
+
     private boolean isResolvedSettlementOverride(ProductionSettlementPrefillResponse.Issue issue,
-                                                 ProductionSettlementRequest confirmation) {
+                                                 ProductionSettlementRequest confirmation,
+                                                 boolean workflowPlan) {
         if (issue == null || issue.getCode() == null) {
             return false;
         }
         return switch (issue.getCode()) {
             case "QUANTITY_VARIANCE_OVER_PLAN" -> !isBlank(confirmation.getQuantityVarianceReason());
             case "MATERIAL_CONSUMPTION_EMPTY" -> !isBlank(confirmation.getMaterialVarianceReason());
+            // 只出半成品的非 Workflow 计划本来就没有成品; Workflow 计划的成品产出必须来自报工, 不放行
+            case "FINISHED_OUTPUT_MISSING" -> !workflowPlan
+                    && zeroIfNull(confirmation.getActualSemiFinishedQuantity()).signum() > 0;
             default -> false;
         };
     }
@@ -3938,7 +4194,13 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             sawAnyTask = true;
+            // 返工计划: 料是来源半成品, 接料工序之前的道本来就不做, 不要求报完 (D-S315-01)
+            int firstRequiredOrder = "SECONDARY".equals(plan.getPlanSourceType())
+                    ? secondaryPlanFeed().firstReceivingOrder(factoryId, plan, tasks) : Integer.MIN_VALUE;
             for (com.cretas.aims.entity.workprocess.WorkProcessTask t : tasks) {
+                if (t.getProcessOrder() != null && t.getProcessOrder() < firstRequiredOrder) {
+                    continue;
+                }
                 if (t.getStatus() != com.cretas.aims.entity.workprocess.WorkProcessTask.Status.COMPLETED) {
                     return false;   // 还有工序没报完 → 不放行
                 }
@@ -7423,6 +7685,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .plannedQuantity(settlement.getPlannedQuantity())
                 .actualFinishedQuantity(settlement.getActualFinishedQuantity())
                 .actualSemiFinishedQuantity(settlement.getActualSemiFinishedQuantity())
+                .manualOverride(settlement.isManualOverride())
+                .manualOverrideReason(settlement.getManualOverrideReason())
                 .quantityUnit(resolveSettlementQuantityUnit(settlement))
                 .postingStatus(settlement.getPostingStatus())
                 .postingMessage(settlement.getPostingMessage())
@@ -8681,29 +8945,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //     → 此处在同一事务内先反冲还回开工扣的 WIP, 再直接取消, 不导向报工撤回。
         //   - 已有报工: 仍走报工撤回流 (ReportReversalService 冲报工产生的 WIP)。
         boolean hasYields = hasYieldReports(factoryId, plan);
-        boolean isSecondaryInProgress = plan.getStatus() == ProductionPlanStatus.IN_PROGRESS
-                && "SECONDARY".equals(plan.getPlanSourceType())
-                && plan.getSecondarySourceWipId() != null;
-        boolean hasProductionActivity = hasRealProductionActivity(factoryId, planId)
-                || hasYields
-                || isSecondaryInProgress;
+        boolean hasProductionActivity = hasRealProductionActivity(factoryId, planId) || hasYields;
 
-        if (isSecondaryInProgress && !hasYields) {
-            // 反冲开工扣的半成品 WIP (还回 plannedQuantity), 然后直接取消 (不卡 IN_PROGRESS, 不导向报工撤回)。
-            if (wipInventoryService == null) {
-                throw new BusinessException(500, "二次加工服务未初始化, 无法反冲半成品库存");
-            }
-            BigDecimal reverseQty = plan.getPlannedQuantity() != null
-                    ? plan.getPlannedQuantity() : java.math.BigDecimal.ZERO;
-            if (reverseQty.compareTo(java.math.BigDecimal.ZERO) > 0) {
-                wipInventoryService.reverseSecondaryDeduct(
-                        plan.getSecondarySourceWipId(), reverseQty, factoryId,
-                        operatorId);
-                log.info("修1 SECONDARY 取消反冲 WIP: planId={}, wipId={}, qty={}",
-                        planId, plan.getSecondarySourceWipId(), reverseQty);
-            }
+        if (!hasProductionActivity) {
+            // 还回本计划还占着的半成品, 然后直接取消 (不卡住, 不导向报工撤回)。什么状态取消都一样: 暂停的计划也占着料。
+            // ⛔ 还的是占用余额, 不是计划量: /create-batch 开工的计划没有占用; 报工撤回过的那部分早已转成库存。
+            closeSecondaryHold(factoryId, plan, operatorId);
             // 落入下方直接取消逻辑 (置 CANCELLED + 级联空批次/任务)。
-        } else if (hasProductionActivity) {
+        } else {
             // 无论计划当前处于 PENDING / IN_PROGRESS / PAUSED 等何种非终态，
             // 一旦存在正式报工、消耗、产出或小结，都必须走报工撤回，不能靠状态值绕过。
             String batchHint = buildReversalBatchHint(planBatches);
@@ -8918,6 +9167,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 用报工撤回服务 (自包含恢复逻辑), 审批已在 PRODUCTION_REVERSAL 流完成, 故直接 submit→execute。
         // reportReversalService 未注入 (单测/旧 context) → 跳过, 仅做状态收尾 (旧行为, 由有注入路径覆盖)。
         reverseBatchReportsForApprovedCancel(plan.getFactoryId(), planId, planBatches);
+        closeSecondaryHold(plan.getFactoryId(), plan, com.cretas.aims.utils.SecurityUtils.currentUserId());
 
         plan.setStatus(ProductionPlanStatus.CANCELLED);
         productionPlanRepository.save(plan);
@@ -9730,7 +9980,28 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (shortageStartGate != null) {
             shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
         }
-        return materializeBatchForPlan(factoryId, plan);
+        ProductionBatch batch = materializeBatchForPlan(factoryId, plan);
+        holdSecondarySource(factoryId, plan, operatorId);
+        return batch;
+    }
+
+    /**
+     * 返工计划开工占用来源半成品。/start 和 /create-batch 都走这里 (Owner 2026-11-04),
+     * 消耗和回补在两条路上是同一套: 报工转消耗, 结单和取消还回没用的。
+     * ⛔ 必须在建批次之后: 建批次时才知道工艺图接不接得住这份料 (D-S315-01), 接不住要在扣库存之前拦下。
+     * 在事务内执行, 占用失败回滚整个开工 (fail-closed)。
+     */
+    private void holdSecondarySource(String factoryId, ProductionPlan plan, Long operatorId) {
+        if (!"SECONDARY".equals(plan.getPlanSourceType()) || plan.getSecondarySourceWipId() == null) {
+            return;
+        }
+        // 缺口 14: 二次加工开工这一刻就是领半成品
+        if (processTimeLimitService != null) {
+            processTimeLimitService.assertSemiFeedForPlan(factoryId, plan,
+                    semiFinishedInventoryRepository.findById(plan.getSecondarySourceWipId()).orElse(null),
+                    plan.getPlannedQuantity(), operatorId);
+        }
+        secondaryPlanFeed().takeHold(factoryId, plan, operatorId);
     }
 
     /**
@@ -9855,6 +10126,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         plan.getSkipProcessReporting(), responsibleId, responsibleId);
         log.info("转批次已 spawn 报工任务: batchId={}, productTypeId={}, skipProcessReporting={}, taskCount={}",
                 saved.getId(), saved.getProductTypeId(), plan.getSkipProcessReporting(), spawnedTasks.size());
+
+        // D-S315-01: 两个开工入口都走这里。工艺图接不住来源半成品 ⇒ 拦下, 事务回滚, 批次和任务都不留。
+        if ("SECONDARY".equals(plan.getPlanSourceType())) {
+            secondaryPlanFeed().assertAcceptedBy(factoryId, plan, saved.getId());
+        }
 
         // 更新计划状态为 IN_PROGRESS
         plan.setStatus(ProductionPlanStatus.IN_PROGRESS);

@@ -243,6 +243,16 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
                 .orElseThrow(() -> new EntityNotFoundException("ProductionBatch", batchId.toString()));
         QualityStatus newStatus = mapInspectionResultToBatchQuality(inspection.getResult());
         if (newStatus == null) return;
+        // D-S302-01 (Owner 2026-11-04): 不合格批次只能走处置和复核改状态。后补的合格 / 条件合格 / 待检
+        // 记录照常留档 (真实复检历史), 但不碰批次状态 —— 否则批 PASSED、成品还 DEFECTIVE, 两边分叉。
+        // 再判一次 FAIL 可以把返工中的批次打回 FAILED; 已报废是终态, 不再动。
+        QualityStatus current = batch.getQualityStatus();
+        if (current != null && current.isDispositionLocked()
+                && (newStatus != QualityStatus.FAILED || current == QualityStatus.SCRAPPED)) {
+            log.warn("批次质量状态未改变: batchId={}, 当前={}, 本次检验={} (不合格批次须走处置复核)",
+                    batchId, current, inspection.getResult());
+            return;
+        }
         batch.setQualityStatus(newStatus);
         productionBatchRepository.save(batch);
         // 🔒🔒 QC 生产门 (食品安全, 2026-07-04): 质检判 FAILED → 该生产计划已入库的可售成品批次
@@ -266,19 +276,8 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
      */
     private void quarantineFinishedGoodsForFailedBatch(ProductionBatch batch) {
         String planId = batch.getProductionPlanId();
-        if (planId == null || planId.isBlank()) return;
-        var fgBatches = finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(batch.getFactoryId(), planId);
-        int quarantined = 0;
-        for (var fg : fgBatches) {
-            // 缺口 11: 待检 (PENDING_INSPECTION) 的同样隔离 —— 否则质检员之后一放行, 失败计划的成品就成了可售。
-            if ("AVAILABLE".equals(fg.getStatus())
-                    || com.cretas.aims.entity.inventory.FinishedGoodsBatch.Status.PENDING_INSPECTION.equals(fg.getStatus())) {
-                fg.setStatus("DEFECTIVE");
-                finishedGoodsBatchRepository.save(fg);
-                quarantined++;
-            }
-        }
+        int quarantined = com.cretas.aims.service.quality.FinishedGoodsQuarantine.quarantinePlan(
+                finishedGoodsBatchRepository, batch.getFactoryId(), planId);
         if (quarantined > 0) {
             log.warn("QC 失败隔离成品: productionBatchId={}, planId={}, 隔离 {} 个可售成品批次 → DEFECTIVE (不可售, 待质检复核)",
                     batch.getId(), planId, quarantined);
@@ -327,6 +326,14 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
                     "动态标准质检记录的判定字段不可修改，请通过重新质检产生新记录")
                     .withCode("QUALITY_INSPECTION_DECISION_IMMUTABLE")
                     .withHint("仅可补充备注或非判定扩展字段").withHintTarget("质检记录");
+        }
+        // D-S302-01: 原检验记录保持不可改。REST 上没有改写入口, 这里挡的是 AI 工具走到 updateInspection
+        // 的那条路 —— 改掉一条 FAIL 记录等于绕过处置。待检任务 (PENDING) 不算完成记录, 照常填结论。
+        if (isTerminalInspectionResult(previousResult) && rewritesCompletedRecord(existing, inspection)) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "已完成的质检记录不可修改，请通过重新质检产生新记录")
+                    .withCode("QUALITY_INSPECTION_DECISION_IMMUTABLE")
+                    .withHint("只能在原备注后追加说明；结论有误请重新质检，不合格批次走处置复核").withHintTarget("质检记录");
         }
 
         // 更新允许修改的字段
@@ -394,6 +401,25 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
         }
 
         return updated;
+    }
+
+    /** 这次更新有没有改到已完成记录的判定、检验人, 或删掉了原备注 (追加不算改)。 */
+    private boolean rewritesCompletedRecord(QualityInspection existing, QualityInspection incoming) {
+        boolean decisionChanged = (incoming.getResult() != null
+                        && !incoming.getResult().equalsIgnoreCase(existing.getResult()))
+                || (incoming.getInspectorId() != null
+                        && !incoming.getInspectorId().equals(existing.getInspectorId()))
+                || numberChanged(incoming.getSampleSize(), existing.getSampleSize())
+                || numberChanged(incoming.getPassCount(), existing.getPassCount())
+                || numberChanged(incoming.getFailCount(), existing.getFailCount())
+                || numberChanged(incoming.getPassRate(), existing.getPassRate());
+        boolean notesRewritten = incoming.getNotes() != null && existing.getNotes() != null
+                && !incoming.getNotes().startsWith(existing.getNotes());
+        return decisionChanged || notesRewritten;
+    }
+
+    private boolean numberChanged(java.math.BigDecimal incoming, java.math.BigDecimal stored) {
+        return incoming != null && (stored == null || incoming.compareTo(stored) != 0);
     }
 
     private boolean isPendingResult(String result) {

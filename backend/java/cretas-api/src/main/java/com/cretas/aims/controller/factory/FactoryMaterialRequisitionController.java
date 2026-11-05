@@ -71,6 +71,8 @@ public class FactoryMaterialRequisitionController {
         }
     }
 
+    // 仓管要先看到领料单才能备料 (Owner 2026-11-04): 列表和详情也认 warehouse 模块; 其余读写范围不变。
+    @RequireModule(value = "production_plan", alsoAllowModules = {"warehouse"})
     @GetMapping
     public ResponseEntity<?> list(
             @PathVariable String factoryId,
@@ -82,6 +84,7 @@ public class FactoryMaterialRequisitionController {
         return ResponseEntity.ok(Map.of("success", true, "data", result));
     }
 
+    @RequireModule(value = "production_plan", alsoAllowModules = {"warehouse"})
     @GetMapping("/{id}")
     public ResponseEntity<?> detail(@PathVariable String factoryId, @PathVariable String id) {
         return ResponseEntity.ok(Map.of("success", true, "data", service.getById(factoryId, id)));
@@ -93,6 +96,9 @@ public class FactoryMaterialRequisitionController {
         return ResponseEntity.ok(Map.of("success", true, "data", list));
     }
 
+    // 备料 / 确认领料 / 调拨是仓管的活 (D-S315-03): 账号有 warehouse 模块也放行, 工厂开关仍看 production_plan。
+    // ⛔ 只这三个写动作: 生成 / 签收 / 关单 / 取消的模块范围不变。
+    @RequireModule(value = "production_plan", alsoAllowModules = {"warehouse"})
     @RequirePermission({"warehouse:read_write", "production:read_write"})
     @PutMapping("/{id}/start-picking")
     public ResponseEntity<?> startPicking(
@@ -102,6 +108,7 @@ public class FactoryMaterialRequisitionController {
         return ResponseEntity.ok(Map.of("success", true, "data", service.startPicking(factoryId, id, userId)));
     }
 
+    @RequireModule(value = "production_plan", alsoAllowModules = {"warehouse"})
     @RequirePermission({"warehouse:read_write", "production:read_write"})
     @PutMapping("/{id}/confirm-picking")
     @SuppressWarnings("unchecked")
@@ -114,6 +121,7 @@ public class FactoryMaterialRequisitionController {
         return ResponseEntity.ok(Map.of("success", true, "data", service.confirmPicking(factoryId, id, userId, items)));
     }
 
+    @RequireModule(value = "production_plan", alsoAllowModules = {"warehouse"})
     @RequirePermission({"warehouse:read_write", "production:read_write"})
     @PutMapping("/{id}/transfer")
     public ResponseEntity<?> transfer(

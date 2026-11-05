@@ -128,6 +128,8 @@ export function WHDeliveryConfirmScreen() {
             const need = Number(row.actualQtyText) || row.plannedQty;
             const rec = await salesDeliveryBatchAllocationApiClient.recommendFifo(row.id, {
               productTypeId: row.productTypeId, requiredQty: need, unit: row.unit,
+              // 确认发货时系统不会自动换算规格不一致的货, 这里显示的必须是它真正会扣的那几批。
+              skipPackagingMismatch: true,
             });
             const picks = (rec?.data ?? [])
               .map((c) => ({
@@ -176,6 +178,8 @@ export function WHDeliveryConfirmScreen() {
 
   // 库存不足时的出路对话框(⛔ 不是只弹一句他做不到的话)
   const [shortageDialogVisible, setShortageDialogVisible] = useState(false);
+  // 规格对不上时手机上没有下一步能做 (App 不写分配, 2026-08-20 owner 拍板), 所以说清去哪, ⛔ 不用会消失的提示条。
+  const [specMismatchNotice, setSpecMismatchNotice] = useState<string | null>(null);
   /**
    * 去调拨 —— **同栈**跳转。
    *
@@ -207,8 +211,10 @@ export function WHDeliveryConfirmScreen() {
       // 4 位一体: 原样透传后端 message。
       let message = '发货确认失败，请重试';
       let stockShortage = false;
+      let specMismatch = false;
       if (isAxiosError(error)) {
-        const data = error.response?.data as { message?: string; actionHint?: string } | undefined;
+        const data = error.response?.data as { message?: string; actionHint?: string; errorCode?: string } | undefined;
+        specMismatch = data?.errorCode === 'BATCH_PACKAGING_SPEC_MISMATCH';
         if (data?.message) {
           message = data.actionHint ? `${data.message}（${data.actionHint}）` : data.message;
           // 🔴 2026-08-20: 库存不足这一条要给**手机上走得通**的下一步。
@@ -217,7 +223,9 @@ export function WHDeliveryConfirmScreen() {
           stockShortage = data.message.includes('可用库存不足');
         }
       }
-      if (stockShortage) {
+      if (specMismatch) {
+        setSpecMismatchNotice(message);
+      } else if (stockShortage) {
         setSnackbar({ visible: true, message, error: true });
         setShortageDialogVisible(true);
       } else {
@@ -476,6 +484,17 @@ export function WHDeliveryConfirmScreen() {
             <Button mode="contained" onPress={goToTransfer} testID="wh-confirm-go-transfer">
               去调拨
             </Button>
+          </Dialog.Actions>
+        </Dialog>
+        <Dialog visible={specMismatchNotice != null} onDismiss={() => setSpecMismatchNotice(null)}>
+          <Dialog.Title>规格对不上，这单先不能发</Dialog.Title>
+          <Dialog.Content>
+            <Text style={{ color: '#606266', lineHeight: 20 }} testID="wh-confirm-spec-mismatch">
+              {specMismatchNotice}
+            </Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setSpecMismatchNotice(null)}>知道了</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>

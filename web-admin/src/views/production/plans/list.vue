@@ -2087,6 +2087,8 @@ interface SettlementCompleteForm {
   defectCountOutcome: '' | 'COUNTED' | 'NONE_CONFIRMED' | 'NOT_COUNTED';
   defectQuantity: number;
   semiFinishedOutputQuantity: number;
+  manualOverrideReason: string;
+  otherManualOverrideReason: string;
   rawMaterialConsumptions: SettlementRawConsumptionForm[];
   semiFinishedConsumptions: SettlementWipConsumptionForm[];
   workerCount: number;
@@ -2292,6 +2294,8 @@ const completeForm = ref<SettlementCompleteForm>({
   defectCountOutcome: '',
   defectQuantity: 0,
   semiFinishedOutputQuantity: 0,
+  manualOverrideReason: '',
+  otherManualOverrideReason: '',
   rawMaterialConsumptions: [],
   semiFinishedConsumptions: [],
   workerCount: 0,
@@ -2405,8 +2409,24 @@ const firstWipLineError = computed(() => {
   }
   return '';
 });
+// 人工补录结单: 事实来自手填而不是报工, 后端要求原因并只认生产写权限 (审计落在结单上)。
+const MANUAL_OVERRIDE_REASON_OPTIONS = ['报工数据缺失，人工补录', '外部半成品领用补录', '报工与实际不符，人工核对', '其他'];
+const settlementNeedsManualReason = computed(
+  () => !settlementPrefillClean.value || completeForm.value.semiFinishedConsumptions.length > 0,
+);
+const settlementManualReason = computed(() => (
+  completeForm.value.manualOverrideReason === '其他'
+    ? completeForm.value.otherManualOverrideReason.trim()
+    : completeForm.value.manualOverrideReason
+));
+const settlementManualBlockedReason = computed(() => {
+  if (!settlementNeedsManualReason.value) return '';
+  // 权限在后端判 (production:read_write, 403 文案说得清); 这里混进权限会抬「判不了的分支」上限
+  return settlementManualReason.value ? '' : '请选择人工补录原因';
+});
 const completeSubmitDisabledReason = computed(() => {
   if (settlementPrefillClean.value && firstWipLineError.value) return firstWipLineError.value;
+  if (settlementManualBlockedReason.value) return settlementManualBlockedReason.value;
   if (completeActualQuantity.value + completeSemiFinishedOutputQuantity.value <= 0) return '请填写有效的成品或半成品实际产量';
   if (!completeVarianceReasonReady.value) return '实际产量超过计划时必须选择差异原因';
   const hasMaterialLines = completeForm.value.rawMaterialConsumptions.length > 0
@@ -2422,7 +2442,7 @@ const completeSubmitDisabledReason = computed(() => {
 });
 const completeCanSubmit = computed(
   () => settlementPrefillClean.value
-    ? !firstWipLineError.value
+    ? !firstWipLineError.value && !settlementManualBlockedReason.value
     : completeSubmitDisabledReason.value === '',
 );
 
@@ -2764,6 +2784,8 @@ async function handleComplete(row: TableRow) {
     defectCountOutcome: '',
     defectQuantity: 0,
     semiFinishedOutputQuantity: 0,
+    manualOverrideReason: '',
+    otherManualOverrideReason: '',
     rawMaterialConsumptions: [],
     semiFinishedConsumptions: [],
     workerCount: Number(row.estimatedWorkers || 0),
@@ -2820,12 +2842,19 @@ async function submitComplete() {
       ? {
           idempotencyKey: settlementIdempotencyKey.value,
           confirm: true,
+          // 报工里没有剩余半成品这个事实, 只能来自这个输入框; 填了就要发, 否则后端按 0 结单 (H5)。
+          ...(completeSemiFinishedOutputQuantity.value > 0
+            ? { actualSemiFinishedQuantity: completeSemiFinishedOutputQuantity.value }
+            : {}),
         }
       : {
-          // Legacy-compatible exception override path. The normal path above never
-          // echoes server facts back; only a human-resolved blocker uses these fields.
+          // Exception override path. The normal path above never echoes server facts
+          // back; only a human-resolved blocker uses these fields.
+          // confirm 必须是 true: 后端 confirm=false 只预览不结单 (D-S315-02)。
           idempotencyKey: settlementIdempotencyKey.value,
-          confirm: false,
+          confirm: true,
+          manualOverride: true,
+          manualOverrideReason: settlementManualReason.value,
           actualFinishedQuantity: completeActualQuantity.value,
           defectCountOutcome: completeForm.value.defectCountOutcome || null,
           defectQuantity: completeForm.value.defectCountOutcome === 'COUNTED'
@@ -6050,6 +6079,21 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             留空不影响提交，但这批会被标记为「未清点不良品」，盘点时需要补录。
             ⛔ 请不要用「已清点，无不良品」代替「未清点」—— 前者会被当成真实读数计入良品率。
           </div>
+        </el-form-item>
+        <el-form-item v-if="settlementNeedsManualReason" label="人工补录原因" required>
+          <el-select v-model="completeForm.manualOverrideReason" placeholder="请选择" style="width: 100%">
+            <el-option v-for="reason in MANUAL_OVERRIDE_REASON_OPTIONS" :key="reason" :label="reason" :value="reason" />
+          </el-select>
+          <el-input
+            v-if="completeForm.manualOverrideReason === '其他'"
+            v-model="completeForm.otherManualOverrideReason"
+            type="textarea"
+            :rows="2"
+            maxlength="255"
+            placeholder="请填写原因"
+            style="margin-top: 8px"
+          />
+          <div class="settlement-help">这张结单会标记为人工补录，原因和操作人都会留痕。</div>
         </el-form-item>
         <el-form-item label="半成品产量">
           <el-input-number

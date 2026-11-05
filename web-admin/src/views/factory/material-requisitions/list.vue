@@ -72,6 +72,8 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
+// 备料 / 确认领料 / 调拨也是仓管的活 (D-S315-03, 后端同样只放这三个动作); 其它按钮仍按 canWrite。
+const canPick = computed(() => permissionStore.canWrite('production') || permissionStore.canWrite('warehouse'));
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -848,9 +850,9 @@ async function submitCancel() {
           <template #default="{ row }">
             <el-button type="primary" link size="small" :icon="View" @click="openDetail(row)">详情</el-button>
             <el-button type="info" link size="small" :icon="Printer" :loading="printingIds.has(row.id)" @click="handlePrint(row)">打印</el-button>
-            <el-button v-if="row.status === 'PENDING' && canWrite" type="primary" link size="small" @click="handleStartPicking(row)">备料</el-button>
-            <el-button v-if="row.status === 'PICKING' && canWrite" type="primary" link size="small" @click="openConfirmDialog(row)">确认领料</el-button>
-            <el-button v-if="row.status === 'PICKING' && canWrite" type="primary" link size="small" @click="handleTransfer(row)">调拨</el-button>
+            <el-button v-if="row.status === 'PENDING' && canPick" type="primary" link size="small" @click="handleStartPicking(row)">备料</el-button>
+            <el-button v-if="row.status === 'PICKING' && canPick" type="primary" link size="small" @click="openConfirmDialog(row)">确认领料</el-button>
+            <el-button v-if="row.status === 'PICKING' && canPick" type="primary" link size="small" @click="handleTransfer(row)">调拨</el-button>
             <el-button v-if="row.status === 'TRANSFERRED' && canWrite" type="success" link size="small" @click="handleReceive(row)">签收</el-button>
             <el-button v-if="['ISSUED','IN_USE'].includes(row.status) && canWrite" type="warning" link size="small" @click="openCloseDialog(row)">关单</el-button>
             <el-button v-if="['PENDING','PICKING'].includes(row.status) && canWrite" type="danger" link size="small" @click="openCancelDialog(row)">取消</el-button>

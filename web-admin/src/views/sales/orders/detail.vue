@@ -17,6 +17,7 @@ import type { Attachment } from '@/api/attachment';
 import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { confirmPackagingConversion, mismatchConfirmLines } from '@/views/sales/packagingConversion';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
 import { displayUnit } from '@/utils/unitPricing';
@@ -349,7 +350,7 @@ const batchAllocLoading = ref(false);
 // 🔴 C1 (2026-07-05): unit = 该行数量的计量单位 (与发货行 item.unit 同口径, 后端已按此换算过
 // availableQuantity/allocatedQty — 见 recommendFifo unit 参数)。batchNativeUnit = 该批次入库时
 // 记录的原生单位, 与 unit 不同时说明后端做了跨单位换算 (如批次按 kg 入库, 发货按 盒 结算)。
-type AllocRow = { finishedGoodsBatchId: string; batchNumber: string; productionDate: string; availableQuantity: number; allocatedQty: number; unit: string; batchNativeUnit: string };
+type AllocRow = { finishedGoodsBatchId: string; batchNumber: string; productionDate: string; availableQuantity: number; allocatedQty: number; unit: string; batchNativeUnit: string; packagingMismatch?: boolean; batchPackagingLabel?: string; linePackagingLabel?: string };
 // 🔴 G1: sourceWarehouseCode (发货行声明的来源仓, 空=未声明) + stockWarehouses (该产品实际有货的仓库 code,
 // 仅在无推荐批次时查, 用于诚实空态提示「成品在 X 仓」而非误导的「请先生产」)。
 type AllocItem = { deliveryItemId: string; productName: string; productTypeId: string; deliveredQuantity: number; unit: string; sourceWarehouseCode: string; allocations: AllocRow[]; stockWarehouses: string[]; isMaterial: boolean; ineligibleNotice: string };
@@ -1399,6 +1400,9 @@ async function openBatchAllocDialog(deliveryId: string, deliveryNumber: string) 
               allocatedQty: Number(r.recommendedQuantity || 0),
               unit: String(r.unit || unit || ''),
               batchNativeUnit: String(r.batchNativeUnit || ''),
+              packagingMismatch: r.packagingMismatch === true,
+              batchPackagingLabel: String(r.batchPackagingLabel || ''),
+              linePackagingLabel: String(r.linePackagingLabel || ''),
             }));
           }
         }
@@ -1473,6 +1477,9 @@ async function handleBatchAllocate() {
       return ElMessage.warning(`${item.productName}: 同一批次不能重复分配`);
     }
   }
+  // O-309-1: 规格不一致的批次在提交前一次问清, 确认过的行才带上确认标记
+  const mismatchLines = activeItems.flatMap(item => item.isMaterial ? [] : mismatchConfirmLines(item.productName, item.allocations));
+  if (mismatchLines.length > 0 && !(await confirmPackagingConversion(mismatchLines))) return;
   submitting.value = true;
   let success = 0, failed = 0;
   const errors: string[] = [];
@@ -1491,7 +1498,11 @@ async function handleBatchAllocate() {
     try {
       const allocations = item.allocations
         .filter(a => Number(a.allocatedQty) > 0)
-        .map(a => ({ finishedGoodsBatchId: a.finishedGoodsBatchId, allocatedQty: Number(a.allocatedQty) }));
+        .map(a => ({
+          finishedGoodsBatchId: a.finishedGoodsBatchId,
+          allocatedQty: Number(a.allocatedQty),
+          ...(a.packagingMismatch ? { packagingConversionConfirmed: true } : {}),
+        }));
       const res = await post(
         `/${factoryId.value}/sales-deliveries/items/${item.deliveryItemId}/batch-allocations`,
         { allocations },
@@ -2940,6 +2951,9 @@ async function handleQuickPayFull() {
               {{ row.availableQuantity }}{{ displayUnit(row.unit || item.unit) }}
               <div v-if="row.batchNativeUnit && row.batchNativeUnit !== (row.unit || item.unit)" style="font-size: 12px; color: #909399;">
                 (批次入库单位: {{ displayUnit(row.batchNativeUnit) }})
+              </div>
+              <div v-if="row.packagingMismatch" style="font-size: 12px; color: #e6a23c;">
+                规格不一致: 批次 {{ row.batchPackagingLabel }}, 本行 {{ row.linePackagingLabel }}
               </div>
             </template>
           </el-table-column>

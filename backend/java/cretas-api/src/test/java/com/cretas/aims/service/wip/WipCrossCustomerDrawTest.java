@@ -167,7 +167,7 @@ class WipCrossCustomerDrawTest {
     @DisplayName("二次加工开工扣减: 客户 A 的料不能扣进本厂的二次加工计划")
     void deductForSecondaryPlan() {
         SemiFinishedInventory a = stock("S-A", InventoryOwnership.CUSTOMER_OWNED, CUST_A, "10");
-        assertCrossOwner(() -> svc.deductForSecondaryPlan(a.getId(), new BigDecimal("1"), F, 1L, Owner.COMPANY));
+        assertCrossOwner(() -> svc.deductForSecondaryPlan(a.getId(), new BigDecimal("1"), F, 1L, Owner.COMPANY, "PLAN-1"));
         assertThat(a.getConsumedQuantity()).isEqualByComparingTo("0");
     }
 

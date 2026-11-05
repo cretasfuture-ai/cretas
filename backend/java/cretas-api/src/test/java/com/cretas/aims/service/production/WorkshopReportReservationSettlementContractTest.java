@@ -166,6 +166,13 @@ class WorkshopReportReservationSettlementContractTest {
                 productTypeRepository, productionPlanMapper, conversionRepository, schedulingService,
                 productionLineRepository, userRepository, excelUtil,
                 salesOrderRepository, salesOrderItemRepository);
+        // 人工补录要 production:read_write; 这里的用例不测权限本身
+        com.cretas.aims.service.PermissionService permissionService =
+                org.mockito.Mockito.mock(com.cretas.aims.service.PermissionService.class);
+        org.mockito.Mockito.lenient().when(permissionService.hasPermission(any(), org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
+        org.mockito.Mockito.lenient().when(userRepository.findById(any()))
+                .thenReturn(Optional.of(new com.cretas.aims.entity.User()));
+        ReflectionTestUtils.setField(service, "permissionService", permissionService);
         ReflectionTestUtils.setField(service, "productionSettlementRepository", productionSettlementRepository);
         ReflectionTestUtils.setField(service, "productionSettlementConsumptionRepository",
                 productionSettlementConsumptionRepository);
@@ -494,6 +501,9 @@ class WorkshopReportReservationSettlementContractTest {
     /** 结单请求: 单行原料领用 = 报工 materialBatchRefs 聚合出来的那一笔。 */
     private ProductionSettlementRequest requestConsuming(BigDecimal quantity) {
         return ProductionSettlementRequest.builder()
+                .confirm(true)
+                .manualOverride(true)
+                .manualOverrideReason("测试人工补录")
                 .idempotencyKey("idem-reserve-1")
                 .actualFinishedQuantity(new BigDecimal("90"))
                 .actualSemiFinishedQuantity(BigDecimal.ZERO)
@@ -515,6 +525,7 @@ class WorkshopReportReservationSettlementContractTest {
     private void wireSettlement(MaterialBatch batch) {
         ProductionPlan plan = plan();
         when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+        when(productionPlanRepository.findByIdForUpdate(PLAN_ID)).thenReturn(Optional.of(plan));
         when(productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
                         FACTORY_ID, PLAN_ID, "idem-reserve-1")).thenReturn(Optional.empty());

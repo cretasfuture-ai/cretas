@@ -53,6 +53,8 @@ public class SemiSourceBatchResolver {
 
     /** 解析方式 —— 写进边的 meta，事后能分清每条边的来源是怎么定的。 */
     public static final String BY_ROW_BATCH = "SFI_ROW_BATCH";
+    /** 结单转入半成品库的行, 来源批记在 materialBatchRefs 上。 */
+    public static final String BY_STOCKED_REF = "SFI_STOCKED_REF";
     public static final String BY_SOURCE_TASK = "SFI_SOURCE_TASK";
     public static final String BY_TASK_BATCH_NO = "APP_TASK_BATCH_NO";
     public static final String BY_PRODUCTION_BATCH_NUMBER = "PRODUCTION_BATCH_NUMBER";
@@ -113,6 +115,10 @@ public class SemiSourceBatchResolver {
         if (sfi.getBatchId() != null) {
             return Resolution.resolved(sfi.getBatchId(), BY_ROW_BATCH);
         }
+        Long stockedFrom = stockedProductionBatch(sfi);
+        if (stockedFrom != null) {
+            return Resolution.resolved(stockedFrom, BY_STOCKED_REF);
+        }
         if (sfi.getSourceWorkProcessTaskId() != null && !isBlank(factoryId)) {
             Optional<Long> viaTask = workProcessTaskRepository
                     .findByFactoryIdAndId(factoryId, sfi.getSourceWorkProcessTaskId())
@@ -129,6 +135,15 @@ public class SemiSourceBatchResolver {
         String reason = no != null && no.startsWith("CLK-SEMI-")
                 ? REASON_POOLED_CLERK_ANCHOR : REASON_NO_PRODUCER_KEY;
         return unresolved(factoryId, no, reason, origin);
+    }
+
+    /** 结单转入半成品库的行: 一行只有一个来源批, 记在 materialBatchRefs 上 (见 SettlementSemiStockingService)。 */
+    private static Long stockedProductionBatch(SemiFinishedInventory sfi) {
+        if (sfi.getMaterialBatchRefs() == null || sfi.getMaterialBatchRefs().size() != 1) {
+            return null;
+        }
+        Object batchId = sfi.getMaterialBatchRefs().get(0).get("productionBatchId");
+        return batchId instanceof Number number ? Long.valueOf(number.longValue()) : null;
     }
 
     private Resolution resolveByKeys(String factoryId, String intermediateBatchNo, SemiFinishedInventory sfi) {

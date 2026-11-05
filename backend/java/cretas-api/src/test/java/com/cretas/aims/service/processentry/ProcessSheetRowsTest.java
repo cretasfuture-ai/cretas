@@ -109,6 +109,12 @@ class ProcessSheetRowsTest {
         // Plan
         planId = "ROWS-PLAN-" + UUID.randomUUID().toString().substring(0, 8);
         ProductionPlan plan = new ProductionPlan();
+        // Unused single-product snapshots: H2 JsonBinaryType double-encodes empty JSON.
+        // Real PostgreSQL refresh/snapshot coverage stays in SecondaryHoldPostgresContractTest.
+        plan.setWorkflowOutputUnitsByProduct(null);
+        plan.setSelectedBomRecipeIdsByProduct(null);
+        plan.setSelectedBomVersionsByProduct(null);
+        plan.setSourceOrderIds(null);
         plan.setId(planId);
         plan.setFactoryId(FACTORY_ID);
         plan.setPlanNumber("ROWS-PN-" + System.currentTimeMillis() % 100000);
@@ -268,6 +274,12 @@ class ProcessSheetRowsTest {
         warehouseRepo.saveAndFlush(otherRawWarehouse);
 
         ProductionPlan otherPlan = new ProductionPlan();
+        // Unused single-product snapshots: H2 JsonBinaryType double-encodes empty JSON.
+        // Real PostgreSQL refresh/snapshot coverage stays in SecondaryHoldPostgresContractTest.
+        otherPlan.setWorkflowOutputUnitsByProduct(null);
+        otherPlan.setSelectedBomRecipeIdsByProduct(null);
+        otherPlan.setSelectedBomVersionsByProduct(null);
+        otherPlan.setSourceOrderIds(null);
         otherPlan.setId(otherPlanId);
         otherPlan.setFactoryId(otherFactory);
         otherPlan.setPlanNumber("ROWS-OPN-" + System.currentTimeMillis() % 100000);

@@ -67,6 +67,17 @@ public class ProductionSettlement extends BaseEntity {
     @Column(name = "quantity_unit", length = 20)
     private String quantityUnit;
 
+    /** 这张结单是不是人工补录出来的 (事实来自文员手填, 不是报工重算); 操作人看 settledBy。 */
+    @Column(name = "manual_override", nullable = false)
+    private boolean manualOverride = false;
+
+    @Column(name = "manual_override_reason", length = 255)
+    private String manualOverrideReason;
+
+    /** 结单转入半成品库的明细 (JSON, 见 SettlementSemiStockingService); 整单撤回照着把两边都还回去。 */
+    @Column(name = "semi_stocking_detail", columnDefinition = "TEXT")
+    private String semiStockingDetail;
+
     @Column(name = "quantity_variance_reason", length = 64)
     private String quantityVarianceReason;
 
