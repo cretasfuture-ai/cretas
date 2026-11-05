@@ -12,15 +12,19 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
+import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.consent.LlmEgressGuard;
 import com.cretas.aims.service.consent.LlmEgressRedactor;
+import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.utils.TokenUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -46,6 +50,10 @@ public class CanvasAIController {
     private final DashScopeClient dashScopeClient;
     private final MobileService mobileService;
     private final ToolExecutionGateway toolExecutionGateway;
+
+    /** Optional for direct unit-test construction; Spring injects the persistent proof issuer. */
+    @Autowired(required = false)
+    private PreviewTokenService previewTokenService;
 
     /** 发给模型前脱敏; 单测直接 new 本类时用默认实例 (不查保密产品名)。 */
     @Autowired
@@ -331,13 +339,17 @@ public class CanvasAIController {
         log.info("Canvas AI [{}] factory={}: {}", mode, factoryId, message);
         try {
             if (PRODUCT_WORK_PROCESS_MODULE.equals(request.getModuleCode())) {
-                return ApiResponse.success(handleProductWorkProcessConfigChat(
-                        request, authenticatedPrincipal(factoryId, authorization)));
+                AIResponse productWorkProcess = handleProductWorkProcessConfigChat(
+                        request, authenticatedPrincipal(factoryId, authorization));
+                // This route returns a local product/work-process draft. The later human
+                // save flow owns its authorization; do not mint a generic Canvas EXECUTE proof.
+                return ApiResponse.success(productWorkProcess);
             }
             // D3: work_process_catalog narrow route — bypasses LLM prompt entirely
             if (WORK_PROCESS_CATALOG_MODULE.equals(request.getModuleCode())) {
-                return ApiResponse.success(handleWorkProcessCatalogChat(
-                        request, authenticatedPrincipal(factoryId, authorization)));
+                AIResponse workProcessCatalog = handleWorkProcessCatalogChat(
+                        request, authenticatedPrincipal(factoryId, authorization));
+                return ApiResponse.success(bindApplyableDiffs(factoryId, authorization, workProcessCatalog));
             }
             if (APPROVAL_WORKFLOW_MODULE.equals(request.getModuleCode())) {
                 return ApiResponse.success(handleApprovalWorkflowConfigChat(request, factoryId));
@@ -351,6 +363,7 @@ public class CanvasAIController {
             switch (mode) {
                 case "autopilot" -> {
                     List<Map<String, Object>> diffs = generatePlan(factoryId, message);
+                    diffs = bindApplyableDiffs(factoryId, authorization, diffs);
                     response.setDiffs(diffs);
                     response.setReply("自动模式已生成 " + diffs.size()
                             + " 项候选变更。首次请求不会写入，请明确确认后执行。");
@@ -358,6 +371,7 @@ public class CanvasAIController {
                 }
                 case "plan" -> {
                     List<Map<String, Object>> diffs = generatePlan(factoryId, message);
+                    diffs = bindApplyableDiffs(factoryId, authorization, diffs);
                     response.setDiffs(diffs);
                     response.setReply("已生成 " + diffs.size() + " 项变更方案，请逐项审核后应用。");
                     response.setApplied(false);
@@ -537,6 +551,80 @@ public class CanvasAIController {
             }
         });
         return result;
+    }
+
+    private AIResponse bindApplyableDiffs(
+            String factoryId, String authorization, AIResponse response) {
+        if (response == null) {
+            return null;
+        }
+        response.setDiffs(bindApplyableDiffs(factoryId, authorization, response.getDiffs()));
+        return response;
+    }
+
+    /** Issue one persistent proof per selectable diff; sibling intent codes are never reused. */
+    private List<Map<String, Object>> bindApplyableDiffs(
+            String factoryId, String authorization, List<Map<String, Object>> diffs) {
+        if (diffs == null || diffs.isEmpty() || previewTokenService == null) {
+            return diffs;
+        }
+        ExecutionPrincipal principal = authenticatedPrincipal(factoryId, authorization);
+        Long userId = Long.valueOf(principal.principalId());
+        List<Map<String, Object>> bound = new ArrayList<>(diffs.size());
+        for (Map<String, Object> diff : diffs) {
+            if (diff == null) {
+                bound.add(null);
+                continue;
+            }
+            String toolName = diff.get("tool") instanceof String name ? name : "";
+            Map<String, Object> params = readStringObjectMap(diff.get("params"));
+            if (toolName.isBlank()
+                    || PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)
+                    || PRODUCT_WORK_PROCESS_TOOL.equals(toolName)
+                    || !(diff.get("params") instanceof Map<?, ?>)) {
+                bound.add(diff);
+                continue;
+            }
+            Map<String, Object> canonicalParams = canonicalJsonMap(params);
+            if (canonicalParams == null) {
+                bound.add(diff);
+                continue;
+            }
+            Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
+            if (executor.isEmpty() || !CANVAS_TOOL_PATTERN.matcher(toolName).matches()) {
+                bound.add(diff);
+                continue;
+            }
+            IntentPreviewToken token = previewTokenService.createBoundToken(
+                    new PreviewTokenService.BoundTokenRequest(
+                            factoryId,
+                            userId,
+                            null,
+                            "CANVAS_DIFF_" + UUID.randomUUID(),
+                            "Canvas AI configuration diff",
+                            toolName,
+                            executor.get().getVersion(),
+                            ToolExecutionMode.EXECUTE,
+                            "CANVAS_DIFF",
+                            toolName,
+                            "UPDATE",
+                            canonicalParams,
+                            Map.of(),
+                            canonicalParams,
+                            300));
+            if (token == null || token.getToken() == null || token.getCommandDigest() == null) {
+                bound.add(diff);
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>(diff);
+            copy.put("params", canonicalParams);
+            copy.put("proof", Map.of(
+                    "token", token.getToken(),
+                    "commandDigest", token.getCommandDigest(),
+                    "descriptorVersion", executor.get().getVersion()));
+            bound.add(copy);
+        }
+        return bound;
     }
 
     /**
@@ -809,78 +897,204 @@ public class CanvasAIController {
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Canvas-Result-Protocol", required = false) String resultProtocol,
             @RequestBody List<Map<String, Object>> diffs) {
-        if (!"2".equals(resultProtocol)) {
+        if (!"3".equals(resultProtocol)) {
             return ApiResponse.error("页面版本已更新，请刷新页面后重新确认；本次未执行任何变更");
         }
-        return applyDiffs(factoryId, authorization, diffs);
+        return applyBoundDiffs(factoryId, authorization, diffs);
     }
 
-    // Internal execution entry; only the protocol-aware method is HTTP-mapped.
-    @RequireRole({"factory_super_admin", "permission_admin"})
-    public ApiResponse<ApplyDiffsResult> applyDiffs(
+    /**
+     * Secure HTTP confirmation path. The request body is only an index/receipt carrier;
+     * the claimed, persisted token is the sole source of tool name and parameters.
+     */
+    private ApiResponse<ApplyDiffsResult> applyBoundDiffs(
             String factoryId, String authorization, List<Map<String, Object>> diffs) {
-
-        Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
+        if (previewTokenService == null) {
+            return ApiResponse.error("Canvas 确认凭据服务不可用，本次未执行任何变更");
+        }
+        ExecutionPrincipal principal;
+        try {
+            principal = authenticatedPrincipal(factoryId, authorization);
+        } catch (Exception e) {
+            return ApiResponse.error("登录身份无效，本次未执行任何变更");
+        }
+        Long userId = Long.valueOf(principal.principalId());
         String operationId = "canvas-confirm-" + UUID.randomUUID();
+        Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
         toolContext.put("operationId", operationId);
         toolContext.put("confirmationSource", "explicit-user-confirmation");
         List<ApplyDiffResult> items = new ArrayList<>();
         int total = diffs == null ? 0 : diffs.size();
+
         for (int index = 0; index < total; index++) {
             Map<String, Object> diff = diffs.get(index);
-            String toolName = diff != null && diff.get("tool") instanceof String name ? name : "";
-            if (toolName.isBlank() || (diff.containsKey("params") && !(diff.get("params") instanceof Map))) {
-                items.add(new ApplyDiffResult(index, "FAILURE", "变更格式无效，未执行"));
+            Map<String, Object> proof = diff == null ? null : readStringObjectMap(diff.get("proof"));
+            String token = proof == null ? null : Objects.toString(proof.get("token"), null);
+            String commandDigest = proof == null ? null : Objects.toString(proof.get("commandDigest"), null);
+            if (token == null || token.isBlank()) {
+                items.add(new ApplyDiffResult(index, "FAILURE", "缺少服务端确认凭据，未执行"));
                 continue;
             }
-            if (PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)) {
-                items.add(new ApplyDiffResult(index, "FAILURE", "WORKFLOW_AI_PREVIEW_ONLY"));
+
+            PreviewTokenService.ClaimResult claim;
+            try {
+                claim = previewTokenService.claimToken(token, factoryId, userId, commandDigest);
+            } catch (Exception claimError) {
+                log.warn("Canvas confirmation claim failed before lease: index={}", index);
+                items.add(new ApplyDiffResult(index, "UNKNOWN",
+                        "确认状态不明，请核对实际记录，勿重复执行"));
                 continue;
             }
-            ToolExecutor executor;
-            String argsJson;
+            if (!claim.isSuccess() || claim.getToken() == null || claim.getParameters() == null) {
+                items.add(new ApplyDiffResult(index, "FAILURE",
+                        claim.getMessage() == null ? "确认凭据无效或已处理，未执行" : claim.getMessage()));
+                continue;
+            }
+
+            IntentPreviewToken claimedToken = claim.getToken();
+            String toolName = claimedToken.getToolName();
+            String descriptorVersion = claimedToken.getDescriptorVersion();
+            String claimId = claim.getClaimId();
+            String submittedTool = diff != null && diff.get("tool") instanceof String name ? name : "";
+            Map<String, Object> submittedParams = diff == null
+                    ? Map.of() : readStringObjectMap(diff.get("params"));
+            boolean proofPurposeMatches = isCanvasDiffProofToken(claimedToken, toolName);
+            boolean toolMatches = toolName.equals(submittedTool);
+            boolean paramsShapeMatches = diff != null && diff.get("params") instanceof Map<?, ?>;
+            boolean paramsMatch = sameJsonValue(claim.getParameters(), submittedParams);
+            if (!proofPurposeMatches || !toolMatches || !paramsShapeMatches || !paramsMatch) {
+                boolean resolved = resolveClaimSafely(token, claimId, false, "确认内容与预览不一致，请重新生成方案");
+                items.add(new ApplyDiffResult(index, resolved ? "FAILURE" : "UNKNOWN",
+                        resolved ? "确认内容与预览不一致，请重新生成方案"
+                                : "认领后状态无法确认，请核对实际记录，勿重复执行"));
+                continue;
+            }
             try {
                 validateCanvasTool(toolName);
-                executor = toolRegistry.getExecutor(toolName).orElse(null);
-                if (executor == null) {
-                    items.add(new ApplyDiffResult(index, "FAILURE", "工具不存在，未执行"));
-                    continue;
+                if (PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)
+                        || PRODUCT_WORK_PROCESS_TOOL.equals(toolName)) {
+                    throw new BusinessException("该工具仅支持本地预览，禁止执行");
                 }
-                argsJson = objectMapper.writeValueAsString(diff.getOrDefault("params", Map.of()));
-            } catch (Exception e) {
-                items.add(new ApplyDiffResult(index, "FAILURE", "变更校验失败，未执行"));
-                continue;
-            }
-            try {
-                // Returning normally does not mean the tool succeeded: business tools
-                // encode validation and business failures in their JSON result.
-                String raw = executor.execute(ToolCall.of(operationId + "-" + index, toolName, argsJson), toolContext);
+                ToolExecutor executor = toolRegistry.getExecutor(toolName).orElse(null);
+                if (executor == null) {
+                    throw new BusinessException("工具不存在，未执行");
+                }
+                if (!descriptorVersion.equals(executor.getVersion())) {
+                    throw new BusinessException("工具版本已变化，请重新生成方案");
+                }
+                String raw = executor.execute(
+                        ToolCall.of(operationId + "-" + index, toolName,
+                                objectMapper.writeValueAsString(claim.getParameters())),
+                        toolContext);
                 var result = objectMapper.readTree(raw);
                 if (result == null || !result.isObject() || !result.path("success").isBoolean()) {
-                    items.add(new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行"));
-                } else if (!result.path("success").booleanValue()
+                    throw new IllegalStateException("malformed tool result");
+                }
+                if (!result.path("success").booleanValue()
                         || (result.path("data").path("success").isBoolean()
                             && !result.path("data").path("success").booleanValue())) {
                     var failure = result.path("success").booleanValue() ? result.path("data") : result;
                     String message = failure.path("error").asText(failure.path("message").asText("变更未完成"));
-                    // Tool wrappers can catch an exception after a side effect. A false
-                    // response cannot prove rollback or make replay safe.
+                    resolveClaimSafely(token, claimId, false, message);
                     items.add(new ApplyDiffResult(index, "UNKNOWN", message));
-                } else if ("DUPLICATE".equals(result.path("data").path("status").asText())) {
-                    items.add(new ApplyDiffResult(index, "REUSED", "已存在相同工序，复用已有记录，未新增"));
+                    continue;
+                }
+                if ("DUPLICATE".equals(result.path("data").path("status").asText())) {
+                    boolean resolved = resolveClaimSafely(token, claimId, true, "已复用现有记录");
+                    items.add(new ApplyDiffResult(index, resolved ? "REUSED" : "UNKNOWN",
+                            resolved ? "已存在相同记录，复用已有记录，未新增"
+                                    : "认领后状态无法确认，请核对实际记录，勿重复执行"));
                 } else if ("PENDING_DDL".equals(result.path("data").path("status").asText())
                         || "PENDING_DDL".equals(result.path("data").path("data").path("status").asText())) {
+                    resolveClaimSafely(token, claimId, false, "字段仍待数据库变更");
                     items.add(new ApplyDiffResult(index, "UNKNOWN", "字段仍待数据库变更，尚未完成，请核对处理进度，勿重复执行"));
                 } else {
-                    items.add(new ApplyDiffResult(index, "SUCCESS", "变更已完成"));
+                    boolean resolved = resolveClaimSafely(token, claimId, true, "变更已完成");
+                    items.add(new ApplyDiffResult(index, resolved ? "SUCCESS" : "UNKNOWN",
+                            resolved ? "变更已完成"
+                                    : "认领后状态无法确认，请核对实际记录，勿重复执行"));
                 }
             } catch (Exception e) {
-                // The executor may already have written before throwing or returning
-                // malformed JSON. Never describe this as definitely not executed.
-                log.warn("Canvas apply result unknown: operationId={}, index={}, tool={}", operationId, index, toolName);
+                // The lease is terminal even when the executor threw after a possible side effect.
+                resolveClaimSafely(token, claimId, false,
+                        "认领后执行结果不明，请核对实际记录，勿重复执行");
+                log.warn("Canvas bound apply result unknown: operationId={}, index={}, tool={}",
+                        operationId, index, toolName);
                 items.add(new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行"));
             }
         }
+        return applyDiffsReceipt(operationId, total, items);
+    }
+
+    private boolean resolveClaimSafely(String token, String claimId, boolean success, String message) {
+        try {
+            return previewTokenService.resolveClaim(token, claimId, success, message);
+        } catch (Exception resolveError) {
+            log.warn("Canvas confirmation resolution failed: claimFingerprint={}",
+                    ToolCommandDigest.tokenFingerprint(claimId));
+            return false;
+        }
+    }
+
+    /**
+     * Make the issued command and its persisted digest use the same JSON scalar representation
+     * that a claim will read back from storage. A non-equivalent round-trip is never made
+     * executable; the original diff remains a local, unbound preview.
+     */
+    private Map<String, Object> canonicalJsonMap(Map<String, Object> params) {
+        try {
+            JsonNode tree = objectMapper.valueToTree(params);
+            String json = objectMapper.writeValueAsString(tree);
+            Map<String, Object> canonical = objectMapper.readValue(json,
+                    new TypeReference<Map<String, Object>>() {});
+            return sameJsonValue(params, canonical) ? canonical : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean isCanvasDiffProofToken(IntentPreviewToken token, String toolName) {
+        return token.getExecutionMode() == ToolExecutionMode.EXECUTE
+                && token.getIntentCode() != null
+                && token.getIntentCode().matches("CANVAS_DIFF_[0-9a-fA-F-]{36}")
+                && "CANVAS_DIFF".equals(token.getEntityType())
+                && "UPDATE".equals(token.getOperation())
+                && toolName.equals(token.getEntityId());
+    }
+
+    /** JSON semantic comparison for the client round-trip; the persisted values remain execution truth. */
+    private boolean sameJsonValue(Object persisted, Object submitted) {
+        return sameJsonNode(objectMapper.valueToTree(persisted), objectMapper.valueToTree(submitted));
+    }
+
+    private boolean sameJsonNode(JsonNode left, JsonNode right) {
+        if (left == null || right == null || left.isNull() || right.isNull()) {
+            return left == right || (left != null && right != null && left.isNull() && right.isNull());
+        }
+        if (left.isNumber() && right.isNumber()) {
+            return left.decimalValue().compareTo(right.decimalValue()) == 0;
+        }
+        if (left.isObject() && right.isObject()) {
+            if (left.size() != right.size()) return false;
+            Iterator<String> fields = left.fieldNames();
+            while (fields.hasNext()) {
+                String field = fields.next();
+                if (!right.has(field) || !sameJsonNode(left.get(field), right.get(field))) return false;
+            }
+            return true;
+        }
+        if (left.isArray() && right.isArray()) {
+            if (left.size() != right.size()) return false;
+            for (int i = 0; i < left.size(); i++) {
+                if (!sameJsonNode(left.get(i), right.get(i))) return false;
+            }
+            return true;
+        }
+        return left.equals(right);
+    }
+
+    private ApiResponse<ApplyDiffsResult> applyDiffsReceipt(
+            String operationId, int total, List<ApplyDiffResult> items) {
         int applied = (int) items.stream().filter(item -> "SUCCESS".equals(item.status())).count();
         int reused = (int) items.stream().filter(item -> "REUSED".equals(item.status())).count();
         boolean complete = total > 0 && applied + reused == total;
@@ -892,6 +1106,12 @@ public class CanvasAIController {
         return response;
     }
 
+    // Internal callers use the same proof-bound engine as HTTP; no legacy raw execution path.
+    @RequireRole({"factory_super_admin", "permission_admin"})
+    public ApiResponse<ApplyDiffsResult> applyDiffs(
+            String factoryId, String authorization, List<Map<String, Object>> diffs) {
+        return applyBoundDiffs(factoryId, authorization, diffs);
+    }
     public record ApplyDiffResult(int index, String status, String message) {}
     public record ApplyDiffsResult(String operationId, int total, int applied, int reused, List<ApplyDiffResult> items) {}
 

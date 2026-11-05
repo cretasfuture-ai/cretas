@@ -953,7 +953,8 @@ public class PurchaseServiceImpl implements PurchaseService {
                 || instance.getCurrentNodeIds().isEmpty()
                 || !expectedNodeId.equals(instance.getCurrentNodeIds().get(0)))) {
             throw new BusinessException(409, "审批节点已变化，请刷新待办后重试")
-                    .withCode("OA_TASK_NODE_CHANGED");
+                    .withCode("OA_TASK_NODE_CHANGED")
+                    .withHint("请刷新审批待办并打开当前审批节点，确认节点仍有效后再提交。");
         }
         if (demoSelfApprovalBypass) {
             validateDemoApprovalEligibility(order, factoryId, actorId, actorRole, action);
