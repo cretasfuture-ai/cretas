@@ -7,9 +7,8 @@
 
 ## 在飞任务
 
-- `ARTIFACT-PARAM-CASE-20261106` — `in-progress` — Owner food/root；Base56a93c20e5；scope param case Entity/Repo/service/controller、两报工接点、Web及专测；兼容V20261106_1+缺省禁写后启用。Service7/JPA1/PG1+4、Web最终增量9已过，风险4项已修；待组合制品/CI。
+- `ARTIFACT-PARAM-CASE-20261106` — `in-progress` — Owner food/root；Basebfe0f7481b；scope param case Entity/Repo/service/controller、两报工接点、Web及专测；兼容V20261106_1+缺省禁写后启用。Service7/JPA1/PG1+4及Web目标已过，风险4项已修；待组合制品/CI。
 
-- `APS-WORKER-SHIFT-CONSTRAINT-20261106` — `in-progress` — Owner `01a1a954/root` — Base `342dc816fd24deecb85ea0cdbe60a0ae9247daf4` — scope UrgentInsertServiceImpl、ConfirmUrgentInsertRequest说明、WorkerShiftAvailabilityCheck及专测；真实HR三态/显式名单确认重核，空名单后配，不冒称预留；目标Contract+PG/CI后PR，避开食品/审计锁。
 
 
 
