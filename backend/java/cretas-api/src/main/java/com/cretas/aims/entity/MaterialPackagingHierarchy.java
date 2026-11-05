@@ -47,7 +47,7 @@ public class MaterialPackagingHierarchy extends BaseEntity {
     @Column(name = "factory_id", nullable = false, length = 50)
     private String factoryId;
 
-    @Column(name = "material_type_id", nullable = false, length = 36)
+    @Column(name = "material_type_id", nullable = false, length = 191)
     private String materialTypeId;
 
     /** 一级单位 (基础, 与 raw_material_types.unit 一致). */
