@@ -264,7 +264,7 @@ async def _query_fact_product_rows(
                     f"""
                     SELECT product_type_id, unit, planned_qty, actual_qty, good_qty,
                            yield_rate, material_cost, labor_cost, equipment_cost,
-                           other_cost, total_cost, stat_date, batch_count
+                           other_cost, total_cost, stat_date, 1 AS batch_count
                     FROM fact_production_batch
                     WHERE {' AND '.join(conditions)}
                     ORDER BY product_type_id, unit, stat_date
@@ -341,6 +341,8 @@ async def cost_structure(
     # Gold has no unit column. Reconcile quantity against Silver so mixed-unit
     # production is never presented as one (usually kg) total.
     fact_rows, fact_err = await _query_fact_product_rows(factory_id, startDate, endDate)
+    if fact_err:
+        return {"success": False, "data": None, "message": fact_err}
     quantity_by_date: dict[str, dict[str, float]] = {}
     if not fact_err and fact_rows:
         for fact in fact_rows:
@@ -385,6 +387,8 @@ async def cost_structure(
             for unit in sorted({unit for values in quantity_by_date.values() for unit in values})
         },
     }
+    if len(summary["quantityByUnit"]) != 1:
+        summary["totalActualQty"] = None
 
     data = {"rows": items, "summary": summary}
     if cost_scope is not None:

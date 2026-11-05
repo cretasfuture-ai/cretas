@@ -26,6 +26,23 @@ const purchaseForm = { supplierId: 'sup', materialTypeId: 'raw', quantity: 1.25,
 const form = (s: DemoState, step: typeof DEMO_STEPS[number]['id']) => Object.fromEntries(prepareStep(s, step).fields.map(f => [f.name, f.value]))
 
 describe('F006 demo flow business boundaries', () => {
+  it('confirms a sales draft before review and reads the resulting status before deciding to submit', async () => {
+    for (const autoApprove of [true, false]) {
+      const s = at(state(), 'sales-order-submit')
+      let status = 'DRAFT'
+      const order = () => master('so', { remark: s.runKey, status })
+      s.entities.salesOrder = order()
+      const t = {
+        get: vi.fn(async (p: string) => p === '/auth/me' ? admin : order()),
+        post: vi.fn(async (p: string) => { status = p.endsWith('/confirm') && !autoApprove ? 'CONFIRMED' : 'FINANCE_APPROVED'; return order() }),
+      } as DemoTransport
+      await executeStep(s, 'sales-order-submit', {}, t)
+      expect(t.post).toHaveBeenNthCalledWith(1, '/F006/sales/orders/so/confirm', {}, expect.anything())
+      expect(t.post).toHaveBeenCalledTimes(autoApprove ? 1 : 2)
+      if (!autoApprove) expect(t.post).toHaveBeenNthCalledWith(2, '/F006/sales/orders/so/submit-for-review', {}, expect.anything())
+      expect(s.entities.salesOrder.status).toBe('FINANCE_APPROVED')
+    }
+  })
   it('blocks other live tenants before a business mutation', async () => {
     const post = vi.fn()
     await expect(executeStep(state(), 'purchase-create', purchaseForm, { get: vi.fn().mockResolvedValue({ ...admin, factoryId: 'F005' }), post })).rejects.toThrow(/F006/)
