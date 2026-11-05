@@ -106,9 +106,6 @@ python scripts/parity-gate/compare.py \
   --java-bg-fallback \
   ...
 
-# record-restaurant-goldens.sh defaults to JAVA_BG_FALLBACK=1.
-# Disable with:
-JAVA_BG_FALLBACK=0 ./scripts/parity-gate/record-restaurant-goldens.sh
 ```
 
 The resolved port is cached per process so a 50-endpoint batch only probes once. If both ports refuse, the input URL is kept as-is and a WARN line goes to stderr — the actual fetch will surface a `network_error` verdict rather than this helper silently substituting a different host.

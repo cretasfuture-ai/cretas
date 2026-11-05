@@ -336,18 +336,11 @@ ssh "$SERVER" "chmod +x /www/wwwroot/cretas/scripts/t6-dryrun-compare.sh /www/ww
 # had no file on the server — the promote leg of the loop was un-runnable.
 # v2 (2026-06-01): renamed promote_field_mappings.py -> promote_learnings.py
 # (generalized multi-domain). Remove the stale old CLI from the server too.
-# v3 (2026-08-01): 同一个病复发了一次。餐饮飞轮的
-# `restaurant-intent-promote.py` 是后加的, 加它的 cron wrapper 时进了 3d 的白名单,
-# 但**它本身没进这里的白名单** —— 服务器上那份冻在 Jul 23, 每天报
-# `ModuleNotFoundError: smartbi.gold.restaurant_intent_promotion`(域包重构漏改,
-# 修复 #1957 早已在 main), 飞轮日报连续 5 天零产出。
-# wrapper 第 80 行还写着「不存在 (需 scp 同步)」—— 把「要手工同步」写进注释,
-# 等于把它变成一条没人执行的纪律。所以下面 3c2 把它变成部署时的硬检查。
-log "INFO" "[3c/5] 同步 学习毕业 CLI (多域 + 餐饮飞轮)..."
+# v3 (2026-08-01): CLI synchronization remains a generic multi-domain path.
+log "INFO" "[3c/5] 同步 学习毕业 CLI (多域)..."
 ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts && rm -f /www/wwwroot/cretas/code/scripts/promote_field_mappings.py"
 run_rsync "学习毕业 CLI" -az --timeout=60 \
     "$PROJECT_ROOT/scripts/promote_learnings.py" \
-    "$PROJECT_ROOT/scripts/restaurant-intent-promote.py" \
     "$SERVER:/www/wwwroot/cretas/code/scripts/"
 
 # 3c3. 监控脚本 (2026-08-10 加).
@@ -372,8 +365,7 @@ ssh "$SERVER" "chmod +x /www/wwwroot/cretas/capability-watch.sh"
 # and secrets; only the tracked scripts are synchronized.
 log "INFO" "[3d/5] 同步 Python 定时任务入口..."
 ssh "$SERVER" "mkdir -p /www/wwwroot/cretas/code/scripts/cron"
-# ⚠️ 2026-08-10: 这里曾是**逐文件的白名单**(restaurant-ai-eval / refresh-demo-rest /
-#    probe-llm-registry 三行硬编)。新增一个 cron 脚本时忘了加进来, 结果是:
+# ⚠️ 2026-08-10: 这里曾是**逐文件的白名单**。新增一个 cron 脚本时忘了加进来, 结果是:
 #      · 仓里有、服务器上没有 → crontab 每天报 "No such file"
 #      · 而 crontab 的错误没人看 → **那道闸等于从来没上线过**
 #    本轮实测踩到: forecast-backtest-watch.sh 写好、cron 装好, 但同步不过去。
@@ -386,11 +378,10 @@ run_rsync "Python 定时任务入口(整目录)" -az --timeout=60 \
     "$SERVER:/www/wwwroot/cretas/code/scripts/cron/"
 ssh "$SERVER" "chmod +x /www/wwwroot/cretas/code/scripts/cron/*.sh"
 
-# 3c2. 闭合 3c/3d 的白名单缺口 (2026-08-01).
+# 3c2. 闭合 3c/3d 的 CLI 引用检查 (2026-08-01).
 #
 # 3c 和 3d 都是**逐文件的白名单**。cron wrapper 进了 3d, 而它调用的 CLI 要单独记得
-# 加进 3c —— 这条纪律已经漏过两次(promote_learnings.py 一次、
-# restaurant-intent-promote.py 一次, 后者让飞轮日报静默坏了 5 天)。
+# 加进 3c —— 这条纪律曾导致 CLI 在服务器上缺失而静默失败。
 #
 # 漏掉时的症状特别不显眼: wrapper 是新的、能跑、退出码还是 0(它对飞轮日报是
 # best-effort `|| true`), 只有日志深处一行 traceback。**部署侧没有任何东西会发现**。
@@ -413,15 +404,13 @@ log "INFO" "[3c2/5] 校验 cron 入口引用的 CLI 都已落到服务器..."
 # ⇒ 让代码去迁就闸, ⛔ 不是把闸改宽。语义逐字不变(cat 拼接 == grep -h 多文件)。
 #
 # ⚠️ grep 没命中时退出码是 1, 在 set -eo pipefail 下会让整个部署**无日志地**
-# exit 1 (#1322 删掉 restaurant-ai-eval.sh 里最后一处 scripts/*.py 引用后,
-# 每次 Python 发布都死在这一步)。⇒ 1 = 没有引用, 照常走下面「跳过」分支;
+# exit 1 (没有 CLI 引用时也必须正常到达「跳过」分支)。⇒ 1 = 没有引用,
+# 照常走下面「跳过」分支;
 # ≥2 = 入口文件缺失/读不了, 明确报错停下。
 # >>> CRON_CLI_EXTRACT
 _cron_grep_rc=0
 _cron_referenced_clis="$(
     { grep -hoE '(\$CODEDIR/|[[:space:]"'"'"'=])scripts/[A-Za-z0-9_.-]+\.py' \
-        "$PROJECT_ROOT/scripts/cron/restaurant-ai-eval.sh" \
-        "$PROJECT_ROOT/scripts/cron/refresh-demo-rest.sh" \
         "$PROJECT_ROOT/scripts/cron/probe-llm-registry.sh" || { _r=$?; [ "$_r" -eq 1 ] || exit "$_r"; }; } \
     | sed -E 's#^(\$CODEDIR/|.)##' | sort -u
 )" || _cron_grep_rc=$?
@@ -949,10 +938,6 @@ for unit in cretas-python cretas-gold-etl-refresh cretas-corpus-refresh; do
     unit_exec_start="$(systemctl show "$unit" -p ExecStart --value)"
     grep -Fq -- '/venv-current/bin/python' <<<"$unit_exec_start"
 done
-grep -Fq 'venv-current/bin/activate' \
-    /www/wwwroot/cretas/code/scripts/cron/restaurant-ai-eval.sh
-grep -Fq 'venv-current/bin/activate' \
-    /www/wwwroot/cretas/code/scripts/cron/refresh-demo-rest.sh
 grep -Fq 'venv-current/bin/activate' \
     /www/wwwroot/cretas/code/scripts/cron/probe-llm-registry.sh
 RUNTIME_VERIFY

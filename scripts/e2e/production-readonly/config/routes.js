@@ -12,7 +12,6 @@ const ROUTES = Object.freeze({
   productionPlans: '/production/plans',
   bomAchievement: '/production/bom-achievement',
   labelQc: '/quality/label-qc',
-  restaurantStaffing: '/restaurant/staffing',
   salesOrders: '/sales/orders',
 });
 

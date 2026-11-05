@@ -21,8 +21,6 @@ require('./skill-drift.test');
 require('./production-plan-routing.test');
 require('./material-consumption-price-mask-readonly.test');
 require('./role-menu-census-readonly.test');
-require('./restaurant-live-command-readonly.test');
-require('./restaurant-staffing-readonly.test');
 require('./sales-order-lifecycle-readonly.test');
 require('./url-utils.test');
 require('./ui-login.test');

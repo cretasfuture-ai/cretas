@@ -6,15 +6,14 @@
 # 机制是 backend/python/scripts/probe_llm_registry.py。2026-08-09 之前这套机制
 # 只是一个可以手动跑的脚本, 没有 cron 包装、没有 crontab 条目、没有告警通道,
 # 相当于"这个分支存在的理由"从没真正跑起来过。本文件补上这三样, 抄
-# restaurant-ai-eval.sh 的形状(venv-current 原子链接、日志、alerts 文件)。
+# 其他 Python cron 的形状(venv-current 原子链接、日志、alerts 文件)。
 #
 # 2026-08-10 补记: 本文件首次真跑就在生产凭证下抓到 3 条 08-09 当天还 OK 的
 # 条目 24 小时内变成 403 —— 机制第一次跑就抓到了真实漂移, 见
 # llm_router.py `_SAFE_MODELS` 后面的 "2026-08-10 探针复审剔除" 段落。
 #
 # 本文件由 deploy-smartbi-python.sh 的 3d 步同步到服务器; 运行时通过
-# venv-current 原子链接切换, 避免定时任务与主服务使用不同 Python(与
-# restaurant-ai-eval.sh / refresh-demo-rest.sh 同一约定)。
+# venv-current 原子链接切换, 避免定时任务与主服务使用不同 Python。
 #
 # 退出码语义(见 probe_llm_registry.main() 的实现与注释):
 #   0 = 无「注册表说活、实测不可用」的条目(已过期的条目算「已过期, 待清理」,
@@ -23,8 +22,7 @@
 #
 # Install (on server 47, as root):
 #   crontab -e
-# 建议在餐饮日报评测(见 restaurant-ai-eval.sh, 无固定 crontab 时间戳可查, 按
-# 惯例排在业务低峰)之外找一个不冲突的时段, 例如凌晨:
+# 建议找一个不冲突的时段, 例如凌晨:
 #   17 3 * * *  /www/wwwroot/cretas/code/scripts/cron/probe-llm-registry.sh
 #
 set -uo pipefail
@@ -54,7 +52,7 @@ mkdir -p "$(dirname "$LOG")"
   cd "$PYDIR" || cron_dead "$ALERTS" "$PFX" "pydir-missing" "no $PYDIR"
   cron_activate_venv "$PYDIR/venv-current/bin/activate" "$ALERTS" "$PFX"
 
-  # 凭证只从 .env.prod 注入, 绝不落进仓库(与 refresh-demo-rest.sh 同一规范)。
+  # 凭证只从 .env.prod 注入, 绝不落进仓库。
   # 文件不在 ⇒ rc=2 (原来 exit 1, 与「有 dead 条目」同码)。
   [ -r "$ENV_FILE" ] || cron_dead "$ALERTS" "$PFX" "env-file-missing:$(basename "$ENV_FILE")" "$ENV_FILE 不存在或不可读"
   set -a
