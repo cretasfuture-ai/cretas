@@ -34,7 +34,7 @@ export const DEMO_STEPS = [
   step('production-plan-create','按销售需求排产','productionPlan',[field('plannedDate','计划日期'),field('batchDate','生产日期')]),
   step('production-batch-create','开始生产并创建批次','productionBatch'),step('material-requisition','领料并送达生产仓','materialRequisition'),
   ...['原料解冻修整','称量腌制','熟制杀菌','快速冷却','定量包装','金检贴标'].map((name,i)=>step(`process-report-${i+1}` as DemoStepId,`工序${i+1} · ${name}`,`processReport${i+1}`,[field('inputQuantity','投入数量'),field('inputUnit','投入单位'),field('outputQuantity','产出数量'),field('outputUnit','产出单位'),field('workerCount','操作人数'),field('workMinutes','操作分钟')])),
-  step('production-settle','完工结算与成本核算','productionSettlement'),step('finished-goods-receive','确认成品入库','productionWarehouseReceipt'),
+  step('production-settle','完工结算与成本核算','productionSettlement'),step('finished-goods-receive','确认成品入库','productionWarehouseReceipt',[field('equipmentCost','模拟设备费用（元）'),field('otherCost','模拟其他费用（元）')]),
   step('sales-delivery-create','创建销售发货安排','salesDelivery'),step('sales-shipment-create','生成本次发运单','salesShipment',[field('logisticsCompany','物流公司'),field('trackingNumber','物流单号'),field('deliveryAddress','收货地址')]),
   step('sales-batch-allocate','分配本次成品批次','salesBatchAllocation'),step('sales-warehouse-confirm','仓库确认出库','salesShipment'),step('traceability-read','从销售单反向溯源','traceability'),
 ] as const
@@ -53,6 +53,10 @@ function id(r: DemoRecord) { const v=r.id; if (v===undefined || v===null || v===
 function ent(s: DemoState,key:string) { const r=s.entities[key]; if(!r)throw new Error(`请先完成${key}步骤`);return r }
 function str(r:DemoRecord,k:string){return String(r[k]??'')}
 function positive(v:unknown,label:string){const n=Number(v);if(!Number.isFinite(n)||n<=0)throw new Error(`${label}必须大于零`);return n}
+function nonNegativeCost(v:unknown,label:string){
+  if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '') || (typeof v !== 'number' && typeof v !== 'string')) throw new Error(`${label}必须是有限非负数`)
+  const n=Number(v);if(!Number.isFinite(n)||n<0)throw new Error(`${label}必须是有限非负数`);return n
+}
 function day(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 const path=(p:string)=>`/F006/${p}`
 function owned(r:DemoRecord,s:DemoState){scoped(r);const marker=String(r.remark??r.notes??'');if(!marker.includes(s.runKey))throw new Error('该单据不是本次演示创建的单据');return r}
@@ -104,6 +108,7 @@ export function prepareStep(state:DemoState,stepId:DemoStepId){
     const outputs=[c.rawQuantity*.96,c.rawQuantity*.94,kg+.04,kg,c.finishedQuantity,c.finishedQuantity]
     values.inputQuantity=order===1?c.rawQuantity:outputs[order-2];values.outputQuantity=outputs[order-1];values.inputUnit=process.input.unit;values.outputUnit=process.output.unit;values.workerCount=1;values.workMinutes=2
   }
+  if(stepId==='finished-goods-receive'){values.equipmentCost=12.8;values.otherCost=7.2}
   return {step:stepId,fields:spec.fields.map(f=>({...f,value:values[f.name]??f.value})),entityIds:Object.fromEntries(Object.entries(state.entities).filter(([,v])=>v.id).map(([k,v])=>[k,v.id!]))}
 }
 
@@ -224,11 +229,20 @@ export async function executeStep(state:DemoState,stepId:DemoStepId,form:DemoRec
     const settlement=record(await transport.get(path(`production-plans/${id(plan())}/settlement`)))
     result={...posted,...settlement};if(!result.postingStatus)throw new Error('结单未返回库存入账状态')
   }else if(stepId==='finished-goods-receive'){
-    const final=ent(state,'processReport6'),settlement=record(await transport.get(path(`production-plans/${id(plan())}/settlement`)))
-    if(!['POSTED','POSTED_WITH_TOLERANCE'].includes(String(settlement.postingStatus)))save('productionWarehouseReceipt',record(await send(`production-plans/${id(plan())}/warehouse-receipt`,{idempotencyKey:key('warehouse-receipt'),outputLines:[{productTypeId:id(c.product),batchNumber:final.batchNumber,receivedQuantity:c.finishedQuantity,quantityUnit:c.product.unit}]})))
-    const fresh=record(await transport.get(path(`production-plans/${id(plan())}/settlement`)))
+    const equipmentCost=nonNegativeCost(form.equipmentCost,'设备费用'),otherCost=nonNegativeCost(form.otherCost,'其他费用')
+    const currentPlan=await readDocument(transport,path(`production-plans/${id(plan())}`),state)
+    const currentBatch=scoped(record(await transport.get(path(`processing/batches/${id(ent(state,'productionBatch'))}`))))
+    if(String(currentBatch.productionPlanId)!==id(currentPlan))throw new Error('本次生产批次不属于本次生产计划')
+    const final=ent(state,'processReport6')
+    if(String(currentBatch.batchNumber)!==String(final.batchNumber))throw new Error('本次成品批次与本次报工批次不一致')
+    const settlement=record(await transport.get(path(`production-plans/${id(currentPlan)}/settlement`)))
+    if(!['POSTED','POSTED_WITH_TOLERANCE'].includes(String(settlement.postingStatus))&&!state.entities.productionWarehouseReceipt)save('productionWarehouseReceipt',record(await send(`production-plans/${id(currentPlan)}/warehouse-receipt`,{idempotencyKey:key('warehouse-receipt'),outputLines:[{productTypeId:id(c.product),batchNumber:final.batchNumber,receivedQuantity:c.finishedQuantity,quantityUnit:c.product.unit}]})))
+    const fresh=record(await transport.get(path(`production-plans/${id(currentPlan)}/settlement`)))
     if(!['POSTED','POSTED_WITH_TOLERANCE'].includes(String(fresh.postingStatus)))throw new Error('成品尚未确认入库')
+    const costPath=`production-plans/${encodeURIComponent(id(currentPlan))}/costs?equipmentCost=${encodeURIComponent(String(equipmentCost))}&otherCost=${encodeURIComponent(String(otherCost))}`
+    await put(transport,path(costPath))
     const cost=record(await transport.get(path(`production/batches/${encodeURIComponent(String(final.batchNumber))}/cost-breakdown`)))
+    if(cost.calculationStatus!=='COMPLETE'||cost.costComplete!==true||cost.missingCostItemCount!==0)throw new Error('本次成品成本尚未完整核算')
     const outputs=Array.isArray(fresh.outputLines)?rows(fresh.outputLines):Array.isArray(fresh.outputs)?rows(fresh.outputs):[]
     const fg=outputs.find(v=>v.productTypeId===id(c.product))||{}
     result={...fresh,...(state.entities.productionWarehouseReceipt||{}),finishedGoodsBatchId:fg.finishedGoodsBatchId||fresh.finishedGoodsBatchId,finishedGoodsBatchNumber:final.batchNumber,totalCost:cost.totalCost,unitCost:cost.perBoxCost,knownCostSubtotal:cost.knownCostSubtotal,missingCostItemCount:cost.missingCostItemCount,calculationStatus:cost.calculationStatus,unit:c.product.unit}
