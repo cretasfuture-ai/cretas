@@ -161,10 +161,14 @@ async def compile_report(job, history, actor):
     summary = (f"{period['startDate']} 至 {period['endDate']}归入 {projects} 张工单；"
                f'{eligible} 张资料具备，{projects-eligible} 张仍需核对材料、人工或成品记录。'
                if projects else '所选日期没有已同步且能按当前日期口径归属的工单；这不表示工厂没有生产，也不表示成本为零。')
+    from .period_projection import instant
+    def clock(value):
+        when=instant(value)
+        return when.astimezone(ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M') if when else '未提供'
     observations = [period['scopeDescription'],
-                    '分析使用的数据截至 ' + datetime.fromisoformat(period['dataAsOf'].replace('Z','+00:00')).astimezone(
-                        ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S') +
-                    '（北京时间）；生成报告不会自动补齐未同步或未记录的数据。']
+                    '生产与工单成本资料采集：'+clock(period['dataAsOf'])+'（北京时间）。',
+                    '库存余额采集：'+clock(period['inventoryAsOf'])+'（北京时间）。' if period.get('inventoryAsOf') else
+                    '所选期间没有已保存的库存余额；不能用最新余额倒推该期库存。']
     if period['unassignedProjects']:
         observations.append(f"全快照另有 {period['unassignedProjects']} 张工单尚未完工或未提供所选归属日期，未猜测分配到本期。")
     if period['coverageStatus'] == 'source_snapshot_before_period_end':
@@ -266,7 +270,7 @@ async def reconcile_windows(config, db, key, limit=10):
     if os.environ.get('BLACKLAKE_OPERATIONAL_SOURCE_FILE'):
         if await authorized_actor(config) is None:raise RuntimeError('PERIOD_COST_AUTHORITY_UNAVAILABLE')
         from .operational_source import source_revision
-        revision=source_revision(config,os.environ['BLACKLAKE_OPERATIONAL_SOURCE_FILE'],os.environ.get('BLACKLAKE_OPERATIONAL_BOM_FILE'))
+        revision=source_revision(config,os.environ['BLACKLAKE_OPERATIONAL_SOURCE_FILE'],os.environ.get('BLACKLAKE_OPERATIONAL_BOM_FILE'),os.environ.get('BLACKLAKE_OPERATIONS_SUPPLEMENT_FILE'))
     done_key = 'reconcile:' + revision + ':' + DEFINITION_VERSION
     if await asyncio.to_thread(db.schedule_seen, key, done_key):
         return 0
@@ -308,7 +312,7 @@ async def tick(anchor, now=None):
     if os.environ.get('BLACKLAKE_OPERATIONAL_SOURCE_FILE'):
         if await authorized_actor(config) is None:raise RuntimeError('PERIOD_COST_AUTHORITY_UNAVAILABLE')
         from .operational_source import source_revision
-        revision=source_revision(config,os.environ['BLACKLAKE_OPERATIONAL_SOURCE_FILE'],os.environ.get('BLACKLAKE_OPERATIONAL_BOM_FILE'))
+        revision=source_revision(config,os.environ['BLACKLAKE_OPERATIONAL_SOURCE_FILE'],os.environ.get('BLACKLAKE_OPERATIONAL_BOM_FILE'),os.environ.get('BLACKLAKE_OPERATIONS_SUPPLEMENT_FILE'))
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     db = store(); key = scope(config)
     checkpoint = await asyncio.to_thread(db.schedule_checkpoint, key)

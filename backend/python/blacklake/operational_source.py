@@ -87,7 +87,7 @@ def load_observation(data, metadata, config, path, bom_path=None):
     return project_observation(data, metadata, config, observation, bom)
 
 
-def source_revision(config, path, bom_path=None):
+def source_revision(config, path, bom_path=None, supplement_path=None):
     """Queue/cache identity only; facts still pass the full reader validation."""
     source=Path(path)
     if not source.is_absolute():raise ValueError('OPERATIONAL_SOURCE_ABSOLUTE_PATH_REQUIRED')
@@ -99,4 +99,11 @@ def source_revision(config, path, bom_path=None):
         candidate=Path(bom_path)
         if not candidate.is_absolute():raise ValueError('OPERATIONAL_BOM_ABSOLUTE_PATH_REQUIRED')
         bom=json.loads(candidate.read_text(encoding='utf8'))
-    return config['run_id']+':operations:'+digest({'observation':observation,'bom':bom,'projection':2})
+    supplement=None
+    if supplement_path:
+        candidate=Path(supplement_path)
+        if not candidate.is_absolute():raise ValueError('OPERATIONS_SUPPLEMENT_ABSOLUTE_PATH_REQUIRED')
+        supplement=json.loads(candidate.read_text(encoding='utf8'))
+        if (supplement.get('tenant_id'),str(supplement.get('source_factory_id')),supplement.get('baselineRunId'),supplement.get('parentObservationId')) != (config['tenant_id'],str(config['source_factory_id']),config['run_id'],observation['probeId']):
+            raise ValueError('OPERATIONS_SUPPLEMENT_SCOPE_MISMATCH')
+    return config['run_id']+':operations:'+digest({'observation':observation,'bom':bom,'supplement':supplement,'projection':3})

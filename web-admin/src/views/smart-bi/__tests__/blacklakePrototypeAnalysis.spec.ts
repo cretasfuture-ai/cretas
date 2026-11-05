@@ -166,6 +166,15 @@ describe('Blacklake prototype page', () => {
     expect(vi.mocked(getBlacklakePeriodReport)).toHaveBeenCalledTimes(1);
   });
 
+  it('opens inventory on the latest full snapshot and displays the supplement outcome',async()=>{
+    const supplemented:BlacklakeAnalysis={...analysis,periodMetadata:undefined,operationsSupplement:{checkedAt:'2026-11-05T07:38:37Z',reportingUnitsRecovered:1,outputRecords:1,unresolvedOutputs:[],inventoryRecords:2,stockPairsQueried:3,stockPairsNotReturned:1,requests:[{code:'stock_history',status:'requires_historical_records',missing:'期间起止库存',owner:'仓库 / 财务',action:'补库存表',afterProvided:'核对收发存'}]}};
+    vi.mocked(getBlacklakeAnalysis).mockResolvedValueOnce({...analysis}).mockResolvedValue(supplemented);
+    const wrapper=shallowMount(BlacklakePrototypeAnalysis,{props:{activeView:'inventory'},global:{stubs:asyncPageStubs}});await flushPromises();await flushPromises();
+    expect(vi.mocked(getBlacklakeAnalysis).mock.calls.at(-1)?.[0]).toBeNull();
+    expect(wrapper.get('[data-testid="operations-supplement"]').text()).toContain('报工单位已补齐');
+    expect(wrapper.get('[data-testid="operations-supplement"]').text()).toContain('最新库存 2 行');wrapper.unmount();
+  });
+
   it('publishes a follow-up status update without mutating the loaded snapshot',async()=>{
     const loaded={...analysis,alertFollowups:{}};vi.mocked(getBlacklakeAnalysis).mockResolvedValue(loaded);
     const wrapper=shallowMount(BlacklakePrototypeAnalysis,{global:{stubs:asyncPageStubs}});await flushPromises();

@@ -152,6 +152,7 @@ watch(() => props.activeView, value => {
 }, { immediate: true });
 watch(tab, value => {
   if (value !== props.activeView) emit('update:activeView', value);
+  if(value==='inventory'&&data.value&&periodQuery.value)onPeriodChange(null);
 });
 function goTo(section: string) {
   tab.value = section;
@@ -247,6 +248,7 @@ async function loadForPeriod(query: BlacklakePeriodQuery | null, force = false) 
     if (!isCurrentRequest(generation, identity)) return;
     if(!initialDateResolved){
       initialDateResolved=true;
+      if(tab.value==='inventory'&&query){periodQuery.value=null;void loadForPeriod(null);return;}
       const parsed=new Date(refreshed.snapshotAt);
       const latest=refreshed.latestCompletedDate||(!Number.isNaN(parsed.getTime())?beijingDate(parsed):null);
       if(query?.kind==='day'&&!refreshed.production.projectCount&&latest&&query.start_date>latest){
@@ -335,7 +337,12 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
     <el-alert v-if="periodAuxError" type="info" :closable="false" :title="periodAuxError" show-icon />
     <BlacklakePeriodAnalysis :metadata="data?.periodMetadata" :job="periodJob" :history="periodHistory" :schedule="periodSchedule" @retry="retryPeriod" @open-history="openHistory" />
     <template v-if="data">
-      <p class="snapshot">资料更新 {{ formatBlacklakeDateTime(data.snapshotAt) }}</p>
+      <el-card v-if="data.operationsSupplement&&['production','inventory','cost'].includes(tab)" shadow="never" class="section-card" data-testid="operations-supplement">
+        <h3>本次补查与待补资料</h3>
+        <p class="note">{{ formatBlacklakeDateTime(data.operationsSupplement.checkedAt) }} 已核对 {{ data.operationsSupplement.outputRecords }} 条报工，补回 {{ data.operationsSupplement.reportingUnitsRecovered }} 条单位；{{ data.operationsSupplement.unresolvedOutputs.length ? `${data.operationsSupplement.unresolvedOutputs.length} 条仍需核对` : '报工单位已补齐' }}。最新库存 {{ data.operationsSupplement.inventoryRecords }} 行。工单产量与成本仍按原来的采集范围核算。</p>
+        <details><summary>还有什么需要补，找谁补</summary><CostDataTable :rows="data.operationsSupplement.requests" :columns="[{key:'missing',label:'待核对资料',minWidth:230},{key:'owner',label:'找谁处理',minWidth:150},{key:'action',label:'先做什么',minWidth:240},{key:'afterProvided',label:'补齐后能判断什么',minWidth:240}]" paginate /></details>
+      </el-card>
+      <p class="snapshot">工单资料更新 {{ formatBlacklakeDateTime(data.snapshotAt) }}</p>
       <section v-show="tab === 'cost'" class="overview-shell" aria-label="成本分析概览">
         <OperationsReviewPanel v-if="periodReview" title="本期先核什么" summary="按所选日期看这些工单的材料与人工；尚未完工、资料待补和真正的数值矛盾分别处理。" :findings="periodReview.findings" :allow-ask="!!insightFor('finished')" @locate="locatePeriodFinding" @ask="askOperational($event,'finished')" />
         <UCard class="overview-card overview-summary">
@@ -426,7 +433,7 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
           <el-alert type="info" :closable="false" :title="data.periodMetadata && data.periodMetadata.inventoryStatus !== 'snapshot_within_period' ? '这段时间没有库存余额记录。请仓库补当期库存表，不能据此判断库存为零。' : `已返回 ${data.inventory.records.length} 条采集时点余额；未返回的产品与仓库组合${data.inventory.pairsNotReturned == null ? '数量未知' : `有 ${data.inventory.pairsNotReturned} 个`}，保持未知，不是期末余额。`" />
             <el-card shadow="never" class="section-card"><div class="section-heading"><h3>仓库余额 · 同单位比较</h3><el-select v-model="inventoryUnit" aria-label="库存数量单位"><el-option v-for="u in inventoryUnits" :key="u" :label="u==='__all__'?'全部单位（逐行查看）':u==='__missing__'?'单位待补':u" :value="u" /></el-select></div>
               <p class="note">库存余额采集：{{ inventoryReview?.snapshotAt?formatBlacklakeDateTime(inventoryReview.snapshotAt):'本期没有可用快照' }}。库存覆盖当时可见物料，不只限于上面工单的用料。</p>
-              <UButton v-if="!data.inventory.records.length&&inventoryReview?.lastAvailableAt" color="primary" variant="outline" @click="viewLatestStock">查看最近一次库存快照</UButton>
+              <UButton v-if="inventoryReview?.lastAvailableAt&&inventoryReview.snapshotAt!==inventoryReview.lastAvailableAt" color="primary" variant="outline" @click="viewLatestStock">查看最新库存快照</UButton>
               <p v-if="inventoryFocus.length" class="note">已定位 {{ stockRows.length }} 行问题明细，库存汇总仍按当前单位。<UButton color="neutral" variant="ghost" @click="inventoryFocus=[]">恢复全部库存明细</UButton></p>
               <details><summary>按仓库比较库存数量</summary><p v-if="inventoryUnit==='__all__'||inventoryUnit==='__missing__'" class="note">请先选择同一个计量单位，再比较仓库数量。</p><DynamicChartRenderer v-else :config="stockChart" :number-precision="2" /></details>
               <CostDataTable :rows="stockRows" :columns="[{key:'product',label:'物料 / 产品',type:'text',minWidth:190},{key:'productCode',label:'物料编码',minWidth:140},{key:'warehouse',label:'仓库',type:'select'},{key:'warehouseCode',label:'仓库编码'},{key:'unit',label:'单位',type:'select',width:75},{key:'quantity',label:'采集时余额',type:'number'},{key:'reviewStatus',label:'核对提示',type:'select',minWidth:150}]" paginate stripe data-testid="stock-records"><template #quantity="{row}">{{ fmt(row.quantity) }}</template></CostDataTable>

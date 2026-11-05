@@ -15,7 +15,7 @@ from .secrets import load_local_secret
 TASK_FIELDS={'id','orgId','projectId','processId','processName','productCode','planAmount','fineAmount','defectsAmount',
              'approvedFineAmount','outputDurationForSecond','sumOutputSalary','updatedAt','processStatus'}
 OUTPUT_FIELDS={'id','projectId','taskId','processId','productCode','numberofgoodProducts','numberofDefectives',
-               'starttimeofReport','endtimeofReport','approvalStatus','updatedAt'}
+               'starttimeofReport','endtimeofReport','approvalStatus','updatedAt','stockUnit','productName'}
 PERSON_FIELDS={'applierId','applierName','approverId','approverName','creatorId','creatorName','updatorId','updatorName',
                'operatorId','operatorName','userId','userName','phone','mobile','password','token'}
 

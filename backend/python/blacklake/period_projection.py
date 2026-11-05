@@ -58,6 +58,13 @@ def project_period(data, metadata, window):
     # Reference definitions are not additive period facts. Keep them for identity checks.
     # Snapshot balances cannot reconstruct historical closing balances.
     snapshot = instant(metadata.get('stock_finished_at',metadata.get('finished_at')))
+    candidates=[s for s in metadata.get('stock_snapshots',[]) if instant(s['at']) is not None and window.start_at<=instant(s['at'])<window.end_at]
+    if metadata.get('stock_snapshots'):
+        chosen=max(candidates,key=lambda s:instant(s['at'])) if candidates else None
+        source['stock']=deepcopy(chosen['records']) if chosen else []
+        metadata={**metadata,'stock_finished_at':chosen['at'] if chosen else metadata.get('stock_latest_finished_at'),
+                  'stock_pairs_not_returned':chosen['pairsNotReturned'] if chosen else None}
+        snapshot=instant(chosen['at']) if chosen else None
     snapshot_in_period = snapshot is not None and window.start_at <= snapshot < window.end_at
     if not snapshot_in_period:
         source['stock'] = []
@@ -66,7 +73,8 @@ def project_period(data, metadata, window):
     semantic_period = {k: v for k, v in window.wire().items() if k not in ('kind', 'canonicalRange')}
     fingerprint = digest({'period': semantic_period, 'projectionVersion': 2, 'data': source,
                           'sourceRun': metadata['run_id'], 'dataAsOf': metadata['finished_at'],
-                          'inventoryAsOf':metadata.get('stock_finished_at',metadata.get('finished_at'))})
+                          'inventoryAsOf':metadata.get('stock_finished_at',metadata.get('finished_at')),
+                          'latestInventoryAsOf':metadata.get('stock_latest_finished_at')})
     scoped_metadata = {**metadata, 'run_id': metadata['run_id'] + ':period:' + fingerprint[:20],
                        'stock_pairs_not_returned': metadata.get('stock_pairs_not_returned') if snapshot_in_period else None}
     basis = '实际完工日期' if window.basis == 'completed' else '工单创建日期'
@@ -85,7 +93,7 @@ def project_period(data, metadata, window):
         'selectedProjects': len(selected), 'coverageStatus': coverage,
         'inventoryStatus': 'snapshot_within_period' if snapshot_in_period else 'historical_balance_unavailable',
         'inventoryAsOf': metadata.get('stock_finished_at',metadata.get('finished_at')) if snapshot_in_period else None,
-        'lastAvailableInventoryAsOf':metadata.get('stock_finished_at',metadata.get('finished_at')),
+        'lastAvailableInventoryAsOf':metadata.get('stock_latest_finished_at',metadata.get('stock_finished_at',metadata.get('finished_at'))),
         'latestCompletedDate':metadata.get('latest_completed_date'),
         'periodMovementOrders': len(period_movements),
         'unassignedMovementOrders': undated_movements,

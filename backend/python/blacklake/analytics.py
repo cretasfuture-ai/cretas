@@ -211,7 +211,7 @@ def build(data, metadata):
                                  'planActual':plan_actual,'quality':quality_rows,'processes':process_rows},
                    'inventory':{'records':balances,'byWarehouseUnit':inventory_totals,
                                 'balanceAsOf':metadata.get('stock_finished_at',metadata.get('finished_at')) if balances else None,
-                                'lastAvailableBalanceAt':metadata.get('stock_finished_at',metadata.get('finished_at')),
+                                'lastAvailableBalanceAt':metadata.get('stock_latest_finished_at',metadata.get('stock_finished_at',metadata.get('finished_at'))),
                                 'pairsNotReturned':metadata['stock_pairs_not_returned'],'movementOrders':len(orders)},
                    'cost':{'projects':cost_rows,'materials':material_rows,'linkedMaterialLines':linked_lines,
                            'unlinkedMaterialLines':unlinked,'excludedUnapprovedOrders':excluded_orders,

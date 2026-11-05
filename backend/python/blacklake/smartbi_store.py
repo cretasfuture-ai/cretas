@@ -64,6 +64,10 @@ def read(value, period=None):
         if operational:
             from .operational_source import load_observation
             data,metadata=load_observation(data,metadata,value,operational,os.environ.get('BLACKLAKE_OPERATIONAL_BOM_FILE'))
+        if os.environ.get('BLACKLAKE_OPERATIONS_SUPPLEMENT_FILE'):
+            if not operational:raise ValueError('OPERATIONS_PARENT_OBSERVATION_REQUIRED')
+            from .operations_supplement import load
+            data,metadata=load(data,metadata,value,os.environ['BLACKLAKE_OPERATIONS_SUPPLEMENT_FILE'])
         from .period_projection import instant
         from zoneinfo import ZoneInfo
         completed=[instant(p.get('actualEndTime')) for p in data['project'] if str(p.get('status'))=='20']
@@ -93,6 +97,7 @@ def read(value, period=None):
         analysis=build(data,metadata)
         analysis['operationalSource']=metadata.get('operational_source')
         analysis['latestCompletedDate']=metadata.get('latest_completed_date')
+        analysis['operationsSupplement']=metadata.get('operations_supplement')
         analysis['costTraceability']=subset(trace,[p['id'] for p in data['project']],analysis['runId']) if period is not None else trace
         analysis['costIntelligence']=enrich(analysis,data,metadata,evidence)
         if period_metadata is not None:

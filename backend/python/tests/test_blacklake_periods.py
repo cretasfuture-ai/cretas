@@ -183,6 +183,17 @@ def test_explicit_profile_upgrade_preserves_old_ready_and_reuses_new_revision(pe
     assert period_runtime.store().get(period_runtime.scope(config),old['id'])==old_ready
 
 
+def test_report_distinguishes_new_inventory_from_older_production_clock(source):
+    raw=dated(source)
+    metadata={**META,'finished_at':'2026-11-04T10:00:00Z','stock_finished_at':'2026-11-05T07:38:00Z'}
+    data=period_analysis(raw,parse_window('2026-11-05','2026-11-05',kind='day'),metadata)
+    result=asyncio.run(period_runtime.compile_report({'id':'clock','period':data['periodMetadata'],'fingerprint':data['periodMetadata']['fingerprint'],'facts':data},[],33))
+    observations=' '.join(result['observations'])
+    assert '生产与工单成本资料采集：11-04 18:00' in observations
+    assert '库存余额采集：11-05 15:38' in observations
+    assert '分析使用的数据截至' not in observations
+
+
 def test_empty_period_profile_never_requeues_forever(period_client,monkeypatch):
     client,headers,raw,config,*_=period_client
     monkeypatch.setenv('SMARTBI_LOCAL_ANALYST_ENABLED','1')
