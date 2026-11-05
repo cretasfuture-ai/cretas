@@ -42,6 +42,13 @@ class ToolDescriptorCatalogTest {
     }
 
     @Test
+    void workProcessStandardFieldsHaveANewDescriptorVersion() {
+        assertThat(ToolDescriptorCatalog.loadDefault().inventory().descriptors())
+                .filteredOn(entry -> "canvas_work_process_catalog".equals(entry.toolName()))
+                .singleElement().satisfies(entry -> assertThat(entry.version()).isEqualTo("1.1.0"));
+    }
+
+    @Test
     void newPurchaseGrantIsExplicitAuditMetadataAndHasNoRuntimePolicy() {
         var inventory = loader.loadDefault();
         var entries = inventory.descriptors().stream()

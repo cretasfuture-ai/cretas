@@ -68,7 +68,7 @@
 <script setup lang="ts">
 import { ref, nextTick, onBeforeUnmount } from 'vue'
 import request from '@/api/request'
-import type { AIAgentMode, AIMessage, ConfigDiff } from '@/types/canvas'
+import type { AIAgentMode, AIMessage, CanvasDiffProof, ConfigDiff } from '@/types/canvas'
 import {
   AI_MODE_LABELS,
   AI_TIMEOUT_MESSAGE,
@@ -141,9 +141,9 @@ async function send() {
       role: 'assistant',
       content: data.reply,
       timestamp: Date.now(),
-      diffPreview: data.diffs?.map((d: any): ConfigDiff => ({
+      diffPreview: data.diffs?.map((d: { type?: unknown; tool?: unknown; params?: unknown; description?: unknown; proof?: CanvasDiffProof }): ConfigDiff => ({
         type: d.type as ConfigDiff['type'], path: String(d.tool ?? ''), before: null, after: d.params,
-        description: d.description,
+        description: String(d.description ?? ''), proof: d.proof,
       })),
     })
   } catch {

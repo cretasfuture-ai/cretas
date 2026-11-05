@@ -59,6 +59,10 @@ class SopAgentOrchestratorImplTest {
         omField.setAccessible(true);
         omField.set(orchestrator, new ObjectMapper());
 
+        Field writeGuardField = SopAgentOrchestratorImpl.class.getDeclaredField("writeGuardService");
+        writeGuardField.setAccessible(true);
+        writeGuardField.set(orchestrator, new com.cretas.aims.ai.tool.WriteGuardService());
+
         // Get reference to private evaluateCondition method
         evaluateConditionMethod = SopAgentOrchestratorImpl.class.getDeclaredMethod(
                 "evaluateCondition", String.class, Map.class);
@@ -172,6 +176,9 @@ class SopAgentOrchestratorImplTest {
                 org.mockito.Mockito.mock(com.cretas.aims.repository.smartbi.AiAgentRuleRepository.class);
         com.cretas.aims.ai.tool.ToolRegistry registry = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolRegistry.class);
         com.cretas.aims.ai.tool.ToolExecutor tool = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolExecutor.class);
+        org.mockito.Mockito.when(tool.getToolName()).thenReturn("balance_sheet_query");
+        org.mockito.Mockito.when(tool.getAccessMode())
+                .thenReturn(com.cretas.aims.ai.tool.ToolExecutor.AccessMode.READ);
         org.mockito.Mockito.when(tool.execute(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyMap()))
                 .thenReturn("{\"success\":true}");
         org.mockito.Mockito.when(registry.getExecutor("balance_sheet_query")).thenReturn(java.util.Optional.of(tool));

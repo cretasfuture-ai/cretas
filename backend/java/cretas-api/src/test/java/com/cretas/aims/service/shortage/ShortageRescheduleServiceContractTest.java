@@ -2,6 +2,7 @@ package com.cretas.aims.service.shortage;
 
 import com.cretas.aims.entity.LineSchedule;
 import com.cretas.aims.entity.ProductionLine;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -26,7 +27,14 @@ import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.cretas.aims.service.scheduling.ScheduleLineLocks;
 import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
+import com.cretas.aims.repository.config.UnitOfMeasurementRepository;
+import com.cretas.aims.repository.unit.ProductUnitConversionRepository;
+import com.cretas.aims.repository.MaterialPackagingHierarchyRepository;
+import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
 import com.cretas.aims.entity.SchedulingPlan;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.mockito.InOrder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -62,7 +70,10 @@ class ShortageRescheduleServiceContractTest {
     private final SalesOrderRepository orders = mock(SalesOrderRepository.class);
     private final LineCapacityEquipmentCheck capacity = mock(LineCapacityEquipmentCheck.class);
     private final ScheduleLineLocks lineLocks = mock(ScheduleLineLocks.class);
-    private final UnitContractService units = mock(UnitContractService.class);
+    private final UnitContractService units = spy(new UnitContractServiceImpl(
+            mock(UnitOfMeasurementRepository.class), mock(ProductUnitConversionRepository.class),
+            mock(MaterialPackagingHierarchyRepository.class), mock(MaterialPackagingSpecRepository.class)));
+    private final EntityManager entityManager = mock(EntityManager.class);
     private ShortageRescheduleService service;
 
     private ShortageCase theCase;
@@ -80,7 +91,7 @@ class ShortageRescheduleServiceContractTest {
     @BeforeEach
     void setUp() {
         service = new ShortageRescheduleService(cases, lines, events, actions, proposals, schedules, plans,
-                productionLines, orders, capacity, lineLocks, units);
+                productionLines, orders, capacity, lineLocks, units, entityManager);
 
         theCase = new ShortageCase();
         theCase.setId("C1");
@@ -120,6 +131,15 @@ class ShortageRescheduleServiceContractTest {
         task.setStatus(LineSchedule.ScheduleStatus.pending);
         task.setUpdatedAt(LocalDateTime.now().minusHours(1));
         task.setAdjustmentCount(0);
+        task.setDailyAllocations(new LinkedHashMap<>(Map.of(
+                "unit", "KG",
+                "capacityPerDay", new BigDecimal("100"),
+                "capacitySource", "MANUAL",
+                "plannedQuantity", new BigDecimal("100"),
+                "reportedQuantity", new BigDecimal("0"),
+                "remainingQuantity", new BigDecimal("100"),
+                "days", List.of(new LinkedHashMap<>(Map.of(
+                        "date", TODAY.plusDays(2).toString(), "quantity", new BigDecimal("100"), "shareOfDay", 1))))));
         when(schedules.findNotStartedForSalesOrder("F1", "SO-1")).thenAnswer(i -> List.of(task));
         when(schedules.lockByIds(eq("F1"), anyCollection())).thenAnswer(i -> List.of(task));
         when(schedules.findOverlapping(eq("F1"), anyString(), any(), any(), anyCollection()))
@@ -132,11 +152,21 @@ class ShortageRescheduleServiceContractTest {
 
         pp = new ProductionPlan();
         pp.setId("PP-1");
+        pp.setFactoryId("F1");
         pp.setPlanNumber("PP-NO-1");
         pp.setProductTypeId("P1");
         pp.setPlannedQuantity(new BigDecimal("100"));
         pp.setPlannedUnit("KG");
+        pp.setWorkflowSelectionMode(ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        pp.setWorkflowOutputUnitsByProduct(new LinkedHashMap<>(Map.of("P1", "KG")));
+        pp.setSelectedWorkflowId(377L);
+        pp.setSelectedWorkflowVersion(1);
+        pp.setSelectedWorkflowRevisionId(541L);
+        pp.setSelectedWorkflowRevisionHash("workflow-revision-hash");
+        pp.setSelectedBomRecipeId("BOM-395");
+        pp.setSelectedBomVersion(1);
         when(plans.findByIdAndFactoryId("PP-1", "F1")).thenReturn(Optional.of(pp));
+        when(plans.findByIdForUpdate("PP-1")).thenReturn(Optional.of(pp));
         when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("KG"), eq("L2"), any(), any()))
                 .thenReturn(ResourceCheckResult.available("CAPACITY", new BigDecimal("200"), new BigDecimal("100"), "二号线够"));
 
@@ -266,6 +296,185 @@ class ShortageRescheduleServiceContractTest {
     }
 
     @Test
+    void sameLineCandidateRequiresAFactoryScopedProductionPlanAndFormalSnapshots() {
+        when(plans.findByIdAndFactoryId("PP-1", "F1")).thenReturn(Optional.empty());
+        RescheduleProposal missingPlan = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(missingPlan, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(false);
+        assertThat(candidate(missingPlan, ShortageRescheduleService.SAME_LINE).get("notes").toString())
+                .contains("生产计划不存在");
+
+        when(plans.findByIdAndFactoryId("PP-1", "F1")).thenReturn(Optional.of(pp));
+        pp.setSelectedWorkflowRevisionHash(null);
+        RescheduleProposal missingWorkflow = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(missingWorkflow, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(false);
+        assertThat(candidate(missingWorkflow, ShortageRescheduleService.SAME_LINE).get("notes").toString())
+                .contains("Workflow revision");
+    }
+
+    @Test
+    void sameLineCandidateBlocksMissingOrMismatchedDailyCapacityWithoutUnitGuessing() {
+        task.setDailyAllocations(null);
+        RescheduleProposal missing = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(missing, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(false);
+        assertThat(candidate(missing, ShortageRescheduleService.SAME_LINE).get("notes").toString())
+                .contains("APS 日产能依据");
+
+        task.setDailyAllocations(new LinkedHashMap<>(Map.of(
+                "unit", "袋", "capacityPerDay", new BigDecimal("100"), "capacitySource", "MANUAL",
+                "days", List.of(Map.of("date", TODAY.plusDays(2).toString(), "quantity", 100, "shareOfDay", 1)))));
+        RescheduleProposal mismatched = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(mismatched, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(false);
+        assertThat(candidate(mismatched, ShortageRescheduleService.SAME_LINE).get("notes").toString())
+                .contains("不能猜测袋/盒换算");
+    }
+
+    @Test
+    void crossFactoryPlanIsNotAcceptedAsRescheduleBasis() {
+        pp.setFactoryId("F2");
+        RescheduleProposal p = service.propose("F1", "C1", PLANNER);
+        Map<String, Object> same = candidate(p, ShortageRescheduleService.SAME_LINE);
+        assertThat(same.get("applicable")).isEqualTo(false);
+        assertThat(same.get("notes").toString()).contains("不属于本厂");
+    }
+
+    @Test
+    void basisDriftAfterProposalMakesApplyStaleBeforeAnyWrite() {
+        RescheduleProposal p = service.propose("F1", "C1", PLANNER);
+        task.getDailyAllocations().put("capacityPerDay", new BigDecimal("101"));
+
+        assertThatThrownBy(() -> service.apply("F1", "C1", p.getId(), ShortageRescheduleService.SAME_LINE, PLANNER))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("排程依据");
+        assertThat(task.getAdjustmentCount()).isZero();
+        verify(actions, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void invalidApsDayDoesNotExposeAConcreteMove() {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> days = (List<Map<String, Object>>) task.getDailyAllocations().get("days");
+        days.get(0).put("quantity", new BigDecimal("101"));
+
+        Map<String, Object> same = candidate(service.propose("F1", "C1", PLANNER), ShortageRescheduleService.SAME_LINE);
+
+        assertThat(same.get("applicable")).isEqualTo(false);
+        assertThat(same.get("moves")).isEqualTo(List.of());
+        assertThat(same.get("notes").toString()).contains("日量或占比");
+    }
+
+    @Test
+    void refreshAfterThePlanLockDetectsAConcurrentChangeHiddenByTheManagedInstance() {
+        RescheduleProposal p = service.propose("F1", "C1", PLANNER);
+        LocalDateTime start = task.getPlannedStartTime();
+        LocalDateTime end = task.getPlannedEndTime();
+        clearInvocations(proposals, actions, events);
+        // Both repository reads return the same managed instance. Only a refresh
+        // exposes the value committed between the scoped read and lock acquisition.
+        doAnswer(i -> {
+            pp.setPlannedQuantity(new BigDecimal("101"));
+            return null;
+        }).when(entityManager).refresh(same(pp), eq(LockModeType.PESSIMISTIC_WRITE));
+
+        assertThatThrownBy(() -> service.apply("F1", "C1", p.getId(), ShortageRescheduleService.SAME_LINE, PLANNER))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("排程依据");
+
+        verify(entityManager).refresh(same(pp), eq(LockModeType.PESSIMISTIC_WRITE));
+        assertThat(task.getPlannedStartTime()).isEqualTo(start);
+        assertThat(task.getPlannedEndTime()).isEqualTo(end);
+        assertThat(task.getAdjustmentCount()).isZero();
+        assertThat(p.getAppliedAt()).isNull();
+        verify(proposals, never()).saveAndFlush(any());
+        verify(actions, never()).saveAndFlush(any());
+        verify(events, never()).save(any());
+    }
+
+    @Test
+    void refreshedPlanWithoutTheExactFactoryIsRejectedBeforeAnyWrite() {
+        RescheduleProposal p = service.propose("F1", "C1", PLANNER);
+        clearInvocations(proposals, actions, events);
+        doAnswer(i -> {
+            pp.setFactoryId(null);
+            return null;
+        }).when(entityManager).refresh(same(pp), eq(LockModeType.PESSIMISTIC_WRITE));
+
+        assertThatThrownBy(() -> service.apply("F1", "C1", p.getId(), ShortageRescheduleService.SAME_LINE, PLANNER))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("不属于本厂");
+
+        assertThat(task.getAdjustmentCount()).isZero();
+        assertThat(p.getAppliedAt()).isNull();
+        verify(proposals, never()).saveAndFlush(any());
+        verify(actions, never()).saveAndFlush(any());
+        verify(events, never()).save(any());
+    }
+
+    @Test
+    void allocatedRawMaterialsAreNotSubtractedAgainFromPartiallyReportedOutput() {
+        pp.setAllocatedQuantity(new BigDecimal("30"));
+        assertThat(pp.getRemainingQuantity()).isEqualByComparingTo("70");
+        task.setPlannedQuantity(80);
+        task.getDailyAllocations().put("reportedQuantity", new BigDecimal("20"));
+        task.getDailyAllocations().put("remainingQuantity", new BigDecimal("80"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> days = (List<Map<String, Object>>) task.getDailyAllocations().get("days");
+        days.get(0).put("quantity", new BigDecimal("80"));
+        days.get(0).put("shareOfDay", new BigDecimal("0.8"));
+
+        RescheduleProposal p = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(p, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(true);
+        service.apply("F1", "C1", p.getId(), ShortageRescheduleService.SAME_LINE, PLANNER);
+        assertThat(task.getAdjustmentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void apsBasisUsesTheUnitDictionaryForAliasesButDoesNotConvertDifferentUnits() {
+        pp.setPlannedUnit("kg");
+        task.getDailyAllocations().put("unit", "公斤");
+        when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("kg"), eq("L2"), any(), any()))
+                .thenReturn(ResourceCheckResult.available("CAPACITY", new BigDecimal("200"), new BigDecimal("100"), "二号线够"));
+        RescheduleProposal aliases = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(aliases, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(true);
+        verify(units, atLeastOnce()).areEquivalent("F1", "公斤", "kg");
+
+        task.getDailyAllocations().put("unit", "g");
+        Map<String, Object> different = candidate(service.propose("F1", "C1", PLANNER), ShortageRescheduleService.SAME_LINE);
+        assertThat(different.get("applicable")).isEqualTo(false);
+        assertThat(different.get("moves")).isEqualTo(List.of());
+
+        pp.setPlannedUnit("袋");
+        pp.setWorkflowOutputUnitsByProduct(Map.of("P1", "袋"));
+        task.getDailyAllocations().put("unit", "袋");
+        when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("袋"), anyString(), any(), any()))
+                .thenReturn(ResourceCheckResult.unverified("CAPACITY", "包装产能未验证", new BigDecimal("100")));
+        RescheduleProposal packaging = service.propose("F1", "C1", PLANNER);
+        assertThat(candidate(packaging, ShortageRescheduleService.SAME_LINE).get("applicable")).isEqualTo(true);
+        assertThat(candidate(packaging, ShortageRescheduleService.OTHER_LINE).get("applicable")).isEqualTo(false);
+    }
+
+    @Test
+    void invalidScheduleWindowDoesNotExposeAConcreteMove() {
+        task.setPlannedEndTime(task.getPlannedStartTime());
+
+        Map<String, Object> same = candidate(service.propose("F1", "C1", PLANNER), ShortageRescheduleService.SAME_LINE);
+
+        assertThat(same.get("applicable")).isEqualTo(false);
+        assertThat(same.get("moves")).isEqualTo(List.of());
+        assertThat(same.get("notes").toString()).contains("日期窗口");
+    }
+
+    @Test
+    void familyBasisChangeMakesApplyStaleWithoutWriting() {
+        pp.setSelectedBomFamilyId("FAMILY-395");
+        pp.setSelectedBomRecipeIdsByProduct(new LinkedHashMap<>(Map.of("P1", "BOM-395")));
+        pp.setSelectedBomVersionsByProduct(new LinkedHashMap<>(Map.of("P1", 1)));
+        RescheduleProposal proposal = service.propose("F1", "C1", PLANNER);
+        pp.getSelectedBomRecipeIdsByProduct().put("P1", "BOM-396");
+
+        assertThatThrownBy(() -> service.apply("F1", "C1", proposal.getId(), ShortageRescheduleService.SAME_LINE, PLANNER))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("排程依据");
+        assertThat(task.getAdjustmentCount()).isZero();
+        verify(actions, never()).saveAndFlush(any());
+    }
+
+    @Test
     void aLateFinishAgainstTheRequiredDeliveryDateIsSpelledOut() {
         order.setRequiredDeliveryDate(TODAY.plusDays(3));
 
@@ -290,9 +499,24 @@ class ShortageRescheduleServiceContractTest {
 
     @Test
     void applyShiftsTheApsDailyAllocationAndTimelineByTheSameDelta() {
-        task.setDailyAllocations(new LinkedHashMap<>(Map.of("unit", "KG", "days", List.of(
-                new LinkedHashMap<>(Map.of("date", TODAY.plusDays(2).toString(), "quantity", 60)),
-                new LinkedHashMap<>(Map.of("date", TODAY.plusDays(3).toString(), "quantity", 40))))));
+        Map<String, Object> shiftedDaily = new LinkedHashMap<>();
+        shiftedDaily.put("unit", "KG");
+        shiftedDaily.put("capacityPerDay", new BigDecimal("100"));
+        shiftedDaily.put("capacitySource", "MANUAL");
+        shiftedDaily.put("plannedQuantity", new BigDecimal("100"));
+        shiftedDaily.put("reportedQuantity", new BigDecimal("0"));
+        shiftedDaily.put("remainingQuantity", new BigDecimal("100"));
+        Map<String, Object> dayOne = new LinkedHashMap<>();
+        dayOne.put("date", TODAY.plusDays(2).toString());
+        dayOne.put("quantity", new BigDecimal("60"));
+        dayOne.put("shareOfDay", new BigDecimal("0.6"));
+        Map<String, Object> dayTwo = new LinkedHashMap<>();
+        dayTwo.put("date", TODAY.plusDays(3).toString());
+        dayTwo.put("quantity", new BigDecimal("40"));
+        dayTwo.put("shareOfDay", new BigDecimal("0.4"));
+        shiftedDaily.put("days", List.of(dayOne, dayTwo));
+        task.setDailyAllocations(shiftedDaily);
+        task.setPlannedEndTime(TODAY.plusDays(3).atTime(16, 0));
         task.setTaskTimeline(List.of(new LinkedHashMap<>(Map.of("taskName", "解冻",
                 "start", TODAY.plusDays(2).atTime(8, 0).toString(), "end", TODAY.plusDays(2).atTime(10, 0).toString()))));
         SchedulingPlan sp = new SchedulingPlan();
@@ -306,7 +530,8 @@ class ShortageRescheduleServiceContractTest {
         List<Map<String, Object>> days = (List<Map<String, Object>>) task.getDailyAllocations().get("days");
         assertThat(days).extracting(d -> d.get("date"))
                 .containsExactly(TODAY.plusDays(4).toString(), TODAY.plusDays(5).toString());
-        assertThat(days).extracting(d -> d.get("quantity")).containsExactly(60, 40);
+        assertThat(days).extracting(d -> d.get("quantity"))
+                .containsExactly(new BigDecimal("60"), new BigDecimal("40"));
         assertThat(task.getTaskTimeline().get(0).get("start")).isEqualTo(TODAY.plusDays(4).atTime(8, 0).toString());
         assertThat(task.getTaskTimeline().get(0).get("end")).isEqualTo(TODAY.plusDays(4).atTime(10, 0).toString());
         assertThat(sp.getPlanDate()).isEqualTo(TODAY.plusDays(2));                    // 排程计划日期不改
@@ -323,6 +548,7 @@ class ShortageRescheduleServiceContractTest {
         second.setPlannedEndTime(TODAY.plusDays(2).atTime(16, 0));
         second.setStatus(LineSchedule.ScheduleStatus.pending);
         second.setUpdatedAt(LocalDateTime.now().minusHours(1));
+        second.setDailyAllocations(new LinkedHashMap<>(task.getDailyAllocations()));
         when(schedules.findNotStartedForSalesOrder("F1", "SO-1")).thenAnswer(i -> List.of(task, second));
         when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("KG"), anyString(), any(), any()))
                 .thenReturn(ResourceCheckResult.available("CAPACITY", new BigDecimal("200"), new BigDecimal("100"), "够"));
@@ -353,7 +579,7 @@ class ShortageRescheduleServiceContractTest {
         busyLines.add("L1");
         task.setPlannedQuantity(40);
         pp.setPlannedUnit("公斤");
-        when(units.areEquivalent("F1", "公斤", "kg")).thenReturn(true);
+        task.getDailyAllocations().put("unit", "公斤");
         // 原样「公斤」也给一个结果: 若没映射成 KG, 流程照常跑完, 由下面的 verify 抓出 (而不是 NPE)
         when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("公斤"), anyString(), any(), any()))
                 .thenReturn(ResourceCheckResult.unverified("CAPACITY", "产能未验证", new BigDecimal("40")));
@@ -363,6 +589,7 @@ class ShortageRescheduleServiceContractTest {
                 eq("KG"), eq("L2"), any(), any());
 
         pp.setPlannedUnit("盒");                                  // 包装单位: 不猜, 原样交给产能核对判未验证
+        task.getDailyAllocations().put("unit", "盒");
         when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("盒"), anyString(), any(), any()))
                 .thenReturn(ResourceCheckResult.unverified("CAPACITY", "产能未验证", new BigDecimal("40")));
         service.propose("F1", "C1", PLANNER);

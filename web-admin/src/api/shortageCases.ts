@@ -167,12 +167,30 @@ export interface RescheduleMove {
   toEnd: string;
 }
 
+export interface RescheduleBasis {
+  productionPlanId: string;
+  workflowId: string;
+  workflowVersion: string;
+  workflowRevisionId: string;
+  bomRecipeId?: string;
+  bomVersion?: string;
+  bomFamilyId?: string;
+  bomRecipeIdsByProduct?: Record<string, string>;
+  bomVersionsByProduct?: Record<string, number>;
+  capacityPerDay: string;
+  capacitySource: 'MANUAL' | 'EXPERIENCE';
+  unit: string;
+  dateBasis: 'APS_DAILY_CAPACITY';
+  days: Array<{ date: string; quantity: string; shareOfDay: string }>;
+}
+
 export interface RescheduleCandidate {
   key: string;
   label: string;
   applicable: boolean;
   moves: RescheduleMove[];
   notes: string[];
+  basis?: RescheduleBasis[];
 }
 
 export interface RescheduleProposal {

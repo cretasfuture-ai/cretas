@@ -34,19 +34,23 @@ class ToolDescriptorPolicyResolverTest {
     void canvasPreviewRequiresTrustedCurrentAllowedRoleAndBusinessType() {
         ToolExecutionCommand factoryCommand = command(
                 "canvas_work_process_catalog",
-                "1.0.0",
+                "1.1.0",
                 ToolExecutionSource.HTTP_CONTROLLER,
                 "FACTORY",
                 "permission_admin",
                 Set.of());
         assertThat(resolver.resolve(factoryCommand, factoryCommand.principal())).isPresent();
+        ToolExecutionCommand oldVersion = command(
+                "canvas_work_process_catalog", "1.0.0", ToolExecutionSource.HTTP_CONTROLLER,
+                "FACTORY", "permission_admin", Set.of());
+        assertThat(resolver.resolve(oldVersion, oldVersion.principal())).isEmpty();
 
         ExecutionPrincipal operator = principal("FACTORY", "operator", Set.of());
         assertThat(resolver.resolve(factoryCommand, operator)).isEmpty();
 
         ToolExecutionCommand restaurantCommand = command(
                 "canvas_work_process_catalog",
-                "1.0.0",
+                "1.1.0",
                 ToolExecutionSource.HTTP_CONTROLLER,
                 "RESTAURANT",
                 "permission_admin",
