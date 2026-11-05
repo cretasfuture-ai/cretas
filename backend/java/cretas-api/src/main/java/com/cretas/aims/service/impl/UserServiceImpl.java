@@ -467,6 +467,7 @@ public class UserServiceImpl implements UserService {
         }
 
         // 更新职位字段（roleCode已删除）
+        com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(newRole.name(), user.getPosition());
         user.setPosition(newRole.name());
         userRepository.save(user);
 
@@ -640,10 +641,13 @@ public class UserServiceImpl implements UserService {
         // User实体没有email字段，跳过
         user.setPhone(dto.getPhone());
         user.setDepartment(dto.getDepartmentDisplayName());
+        com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(dto.getPosition(), null);
         user.setPosition(dto.getPosition());
 
         // 解析角色（roleDisplayName转roleCode）
-        user.setRoleCode(parseRoleCode(dto.getRoleDisplayName()));
+        String importedRole = parseRoleCode(dto.getRoleDisplayName());
+        com.cretas.aims.security.PlatformRoleBoundary.refuseOnFactoryUser(importedRole, null);
+        user.setRoleCode(importedRole);
 
         user.setMonthlySalary(dto.getMonthlySalary());
         user.setExpectedWorkMinutes(dto.getExpectedWorkMinutes());
