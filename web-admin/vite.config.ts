@@ -14,7 +14,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [elementPlusTableResize(), elementPlusTableColumnResize(), vue(),
       ...(mode==='blacklake'?[blacklakeLocalPreview()]:[]),
-      ...(['blacklake','smartbi-alerts'].includes(mode) ? [ui({colorMode:false,router:false,dts:false,
+      ...(['blacklake','blacklake-public','smartbi-alerts'].includes(mode) ? [ui({colorMode:false,router:false,dts:false,
         icon:{clientBundle:{scan:true}},ui:{colors:{primary:'blue',neutral:'slate'}},
         experimental:{componentDetection:true}})] : [])],
     optimizeDeps: { esbuildOptions: { plugins: [elementPlusTableResizePrebundle(), elementPlusTableColumnResizePrebundle()] } },
@@ -73,7 +73,7 @@ export default defineConfig(({ mode }) => {
         },
       },
       rollupOptions: {
-        input: ['blacklake', 'smartbi-alerts'].includes(mode) ? { main: resolve(__dirname, 'index.html'), blacklake: resolve(__dirname, 'blacklake-smartbi.html'), dataAlerts: resolve(__dirname, 'smartbi-data-alerts.html') } : undefined,
+          input: ['blacklake', 'blacklake-public', 'smartbi-alerts'].includes(mode) ? { main: resolve(__dirname, 'index.html'), blacklake: resolve(__dirname, 'blacklake-smartbi.html'), dataAlerts: resolve(__dirname, 'smartbi-data-alerts.html') } : undefined,
         output: {
           // 注意: 不要拆 element-plus / vue / pinia / vue-router (会 TDZ)
           // UX Round 6: 只拆独立重包 + icons (纯 SVG, 无循环依赖)

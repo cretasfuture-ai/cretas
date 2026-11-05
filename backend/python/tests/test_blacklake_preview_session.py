@@ -57,3 +57,14 @@ def test_preview_rejects_large_clock_skew_before_authority_request(monkeypatch):
     monkeypatch.setattr(preview_session.time,'time',lambda:100)
     with pytest.raises(RuntimeError,match='TEST_SESSION_CLOCK_SKEW'):preview_session.session()
     assert len(calls)==1
+
+
+def test_preview_can_read_explicit_existing_encrypted_config_without_copying_it(monkeypatch):
+    from pathlib import Path
+    setup(monkeypatch)
+    seen=[]
+    original=preview_session.load_local_secret
+    monkeypatch.setattr(preview_session,'load_local_secret',lambda p:(seen.append(p),original(p))[1])
+    path=Path('synthetic-resolved-package-config.dpapi')
+    assert preview_session.session(path)['success'] is True
+    assert seen==[path]

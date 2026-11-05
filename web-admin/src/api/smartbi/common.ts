@@ -113,7 +113,9 @@ export function abortSmartBIRequest(key: string): void {
  * Dev: Vite proxy (/smartbi-api -> localhost:8083/api) for CORS
  * Prod: VITE_SMARTBI_URL direct
  */
-export const PYTHON_SMARTBI_URL = import.meta.env.VITE_SMARTBI_URL || '/smartbi-api';
+export const PYTHON_SMARTBI_URL = import.meta.env.MODE === 'blacklake-public'
+  ? `${import.meta.env.BASE_URL.replace(/\/$/, '')}/smartbi-api`
+  : import.meta.env.VITE_SMARTBI_URL || '/smartbi-api';
 const PYTHON_TIMEOUT_MS = 30000;
 // Apr 18 2026 bug #56: 从 200s → 300s. Doc3 #16/#17 用户报告"财务看板/智能数据分析
 // 超时", 大 dashboard + 多图片 LLM 链调用在负载高时会超 200s. 300s 兜底给 Python 侧

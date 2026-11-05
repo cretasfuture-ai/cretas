@@ -14,8 +14,8 @@ import jwt
 from .secrets import load_local_secret
 
 
-def session():
-    config=load_local_secret(Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/smartbi-test.dpapi')
+def session(config_path: Path | None = None):
+    config=load_local_secret(config_path or Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake/smartbi-test.dpapi')
     if config.get('tenant_id')!='BLACKLAKE_POC_TEST':raise RuntimeError('TEST_FACTORY_REQUIRED')
     with httpx.Client(timeout=12,trust_env=False,follow_redirects=False) as client:
         result=client.post('http://127.0.0.1:11210/api/mobile/auth/unified-login',

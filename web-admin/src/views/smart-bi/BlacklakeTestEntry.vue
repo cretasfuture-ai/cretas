@@ -14,6 +14,7 @@ const SharedAlertsTestView = defineAsyncComponent(() => import('./SharedAlertsTe
 const CompleteCostAnalysis = defineAsyncComponent(() => import('./BlacklakeCompleteCostAnalysis.vue'));
 const sessionKey = props.mode === 'shared-alerts' ? 'smartbi_shared_test_signed_in' : 'blacklake_test_signed_in';
 const auth = useAuthStore();
+const publicPreview = import.meta.env.MODE === 'blacklake-public';
 const signedIn = ref(props.mode!=='blacklake' && !!localStorage.getItem(sessionKey));
 const username = ref('');
 const password = ref('');
@@ -40,6 +41,14 @@ function navigate(id:string){activeView.value=id;mobileOpen.value=false;window.s
 async function login() {
   error.value = ''; busy.value = true;
   try {
+    if(publicPreview && props.mode==='blacklake'){
+      const response=await fetch(`${import.meta.env.BASE_URL}__blacklake/preview-session`,{method:'POST'});
+      const result=await response.json();
+      if(!response.ok||result.success!==true||result.data?.factoryId!=='BLACKLAKE_POC_TEST'||result.data?.previewOnly!==true)throw new Error(result.message||'预览暂不可用');
+      localStorage.removeItem('cretas_access_token');
+      auth.setUser({id:-1,username:'公开原型查看者',email:'',isActive:true,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),userType:'factory',factoryUser:{factoryId:'BLACKLAKE_POC_TEST',role:'viewer',permissions:[]}});
+      signedIn.value=true;return;
+    }
     const response = props.mode==='blacklake'
       ? await fetch('/__blacklake/local-session',{method:'POST',headers:{'X-Cretas-Local-Preview':'1'}})
       : await fetch('/api/mobile/auth/unified-login', { method: 'POST', credentials: 'include',
@@ -95,7 +104,7 @@ function logout() {
     <BlacklakeAnalysis v-else-if="signedIn" v-model:active-view="activeView" />
     <UCard v-else-if="mode==='blacklake'" class="login-card">
       <h2>{{ busy?'正在连接六膳门分析…':'连接六膳门分析' }}</h2>
-      <p>使用本机测试会话自动进入。</p>
+      <p>{{ publicPreview?'正在打开只读原型，无需账号密码。':'使用本机测试会话自动进入。' }}</p>
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
       <UButton v-if="!busy" @click="login">重新连接</UButton>
     </UCard>
