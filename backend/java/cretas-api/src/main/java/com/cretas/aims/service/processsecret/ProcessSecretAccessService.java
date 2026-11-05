@@ -48,7 +48,8 @@ import java.util.stream.Collectors;
  *       {@link #decide} 返回 NOT_PROTECTED。策略与授权留在库里不动, 重新开启后原样生效。</li>
  *   <li>客户侧保管 (e) 与 a 无关: e 开着时 B 档产品照旧受保护 (即使 a 关); e 关时 B 档按 A 档处理 (a 也关则不保护)。</li>
  *   <li>平台看不到配方 (b) 只在 a 开时起作用: a 开、b 关时平台账号对该厂按 FULL 处理 (照样记审计),
- *       本厂无权账号照旧被遮。</li>
+ *       本厂无权账号照旧被遮。b 只管平台人员看 / 改配方和成本, 不管平台授权的 AI 分析入口
+ *       (Steve 2026-11-04; 那条放行只在 {@link #permitsPlatformAiRead} 一处)。</li>
  *   <li>训练数据过滤 (d) 不在这里判: 只按<b>样本所属的工厂</b>判 ({@code ProcessSecretSampleFilter.trainingFilterOff})。
  *       写给所有工厂的共享内容用的全厂并集 {@link #factoriesWithPolicyProducts} <b>不看任何开关</b> —— 跨厂保护不受开关影响
  *       (第四 / 五轮复审; 以前那份按 d 剔工厂的并集已删)。</li>
@@ -462,6 +463,43 @@ public class ProcessSecretAccessService {
             log.error("[process-secret] audit write failed, hiding {}/{} from platform view", factoryId, productTypeId);
         }
         return recorded;
+    }
+
+    /** 平台 AI 分析入口读保密产品时写的留痕 (与入口那一条同一个 resource_ref, 这一条带产品)。 */
+    static final String PLATFORM_AI_RESOURCE = "ai:platform-analysis";
+
+    /**
+     * 平台 AI 分析入口对受保护产品的读取 (Steve 2026-11-04)。只在当前线程的 {@link ProcessSecretPlatformAiScope}
+     * 覆盖这个账号和这家工厂时才可能为 true, 其余一律 false ——「谁能看」的判定 ({@link #decide} /
+     * {@link #permitsViewFull}) 不因此改变, 平台账号走别的接口结果不变。
+     *
+     * <p>客户侧保管 (B 档) 返回 false: 云端没有完整工艺。每个读到的产品记一条 AI_ACCESS (同一次分析只记一次);
+     * 记不进去就抛 403, 这次分析不往下走 (调用方在发给模型之前就会走到这里)。
+     */
+    public boolean permitsPlatformAiRead(AuthenticatedActor actor, String factoryId, String productTypeId) {
+        ProcessSecretPlatformAiScope scope = ProcessSecretPlatformAiScope.covering(actor, factoryId);
+        if (scope == null) return false;
+        Decision decision = decide(actor, factoryId, productTypeId, ProcessSecretAction.VIEW_FULL);
+        if (decision.storageMode() == ProcessSecretStorageMode.CUSTOMER_HELD) return false;
+        if (!decision.isProtected() || scope.alreadyRecorded(productTypeId)) return true;
+        if (!audit(factoryId, productTypeId, actor, ProcessSecretAction.AI_ACCESS, "ALLOW", "平台 AI 分析入口读取",
+                PLATFORM_AI_RESOURCE)) {
+            log.error("[process-secret] audit write failed, stopping platform AI read of {}/{}", factoryId, productTypeId);
+            throw new BusinessException(403, "保密访问记录暂时写不进去，已暂停平台 AI 分析");
+        }
+        scope.markRecorded(productTypeId);
+        return true;
+    }
+
+    /**
+     * 在读批次之前把这次分析可读的保密产品逐个记下 (名单来自保密策略, 不依赖批次)。
+     * 口径是「本次可读范围」: 提示词还带最近 30 天的统计, 这里拿不到精确的逐产品名单, 按审计宁可多记。
+     * 必须在作用域里调用; 作用域外什么也不记。
+     */
+    public void recordPlatformAiReads(AuthenticatedActor actor, String factoryId) {
+        for (String productTypeId : protectedProductTypeIds(factoryId)) {
+            permitsPlatformAiRead(actor, factoryId, productTypeId);
+        }
     }
 
     /** 写审计; 失败只返回 false (不吞掉判定), 由调用方决定是否 fail-closed。 */
