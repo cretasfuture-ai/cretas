@@ -7,6 +7,7 @@ import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Search, Refresh } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+import SopFilesDrawer from '@/components/attachment/SopFilesDrawer.vue';
 
 const router = useRouter();
 
@@ -14,6 +15,15 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('equipment'));
+
+// SOP 文件: 读 = 能看设备页的人；上传 / 删除 = 设备可写 (equipment:read_write，后端同口径)
+const sopDrawerVisible = ref(false);
+const sopRow = ref<TableRow | null>(null);
+function openSop(row: TableRow): void {
+  if (!row.id) return;
+  sopRow.value = row;
+  sopDrawerVisible.value = true;
+}
 
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -265,9 +275,10 @@ async function handleDelete(row: TableRow) {
           </template>
         </el-table-column>
         <el-table-column prop="lastMaintenanceDate" label="上次维护" width="120" />
-        <el-table-column label="操作" width="280" fixed="right" align="center">
+        <el-table-column label="操作" width="340" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
+            <el-button type="primary" link size="small" data-testid="equipment-sop-button" @click="openSop(row)">SOP 文件</el-button>
             <el-button v-if="canWrite" type="primary" link size="small" @click="handleMaintenance(row)">维护</el-button>
             <el-button v-if="canWrite" type="primary" link size="small" :icon="Edit" @click="handleEdit(row)">编辑</el-button>
             <el-button v-if="canWrite" type="danger" link size="small" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
@@ -287,6 +298,16 @@ async function handleDelete(row: TableRow) {
         />
       </div>
     </el-card>
+
+    <SopFilesDrawer
+      v-if="sopRow"
+      v-model="sopDrawerVisible"
+      entity-type="EQUIPMENT"
+      :entity-id="String(sopRow.id)"
+      :target-name="String(sopRow.name ?? sopRow.equipmentName ?? sopRow.equipmentCode ?? '')"
+      :can-write="canWrite"
+      :factory-id="factoryId"
+    />
 
     <el-dialog v-model="formDialogVisible" :title="dialogTitle" width="600px" destroy-on-close>
       <el-form :model="form" label-width="100px">
