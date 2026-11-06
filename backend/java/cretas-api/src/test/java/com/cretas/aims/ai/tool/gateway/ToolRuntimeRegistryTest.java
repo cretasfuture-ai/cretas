@@ -132,12 +132,12 @@ class ToolRuntimeRegistryTest {
     void failsClosedForDescriptorVersionSourceAndCurrentPermissionDrift() {
         // The asserted principal claims broad authority, but live permissions are authoritative.
         assertThat(runtimeRegistry.resolve(
-                command("2.0.0", ToolExecutionSource.AI_CHAT), current(Set.of()))).isEmpty();
+                command("3.0.0", ToolExecutionSource.AI_CHAT), current(Set.of()))).isEmpty();
         assertThat(runtimeRegistry.resolve(
                 command("9.9.9", ToolExecutionSource.AI_CHAT),
                 current(Set.of("hr:read_write")))).isEmpty();
         assertThat(runtimeRegistry.resolve(
-                command("2.0.0", ToolExecutionSource.HTTP_CONTROLLER),
+                command("3.0.0", ToolExecutionSource.HTTP_CONTROLLER),
                 current(Set.of("hr:read_write")))).isEmpty();
     }
 
@@ -288,7 +288,7 @@ class ToolRuntimeRegistryTest {
     }
 
     private static ToolExecutionCommand command() {
-        return command("2.0.0", ToolExecutionSource.AI_CHAT);
+        return command("3.0.0", ToolExecutionSource.AI_CHAT);
     }
 
     private static ExecutionPrincipal current(Set<String> permissions) {

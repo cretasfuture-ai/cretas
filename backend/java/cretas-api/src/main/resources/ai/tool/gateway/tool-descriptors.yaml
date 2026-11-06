@@ -1552,11 +1552,11 @@ descriptors:
     provenance: EXPLICIT
     actionType: UPDATE
     riskLevel: HIGH
-    supportsPreview: false
+    supportsPreview: true
     requiresPermission: true
     requiredPermissions: ["hr:read_write"]
     allowedRoles: []
-    version: "2.0.0"
+    version: "3.0.0"
     domainTags: ["user", "hr", "identity"]
     overrideFlags:
       actionType: true
