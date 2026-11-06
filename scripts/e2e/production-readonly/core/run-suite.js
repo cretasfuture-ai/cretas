@@ -26,6 +26,8 @@ const SCENARIOS = [
   require('../scenarios/smartbi-scale-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
   require('../scenarios/scheduling-capabilities-readonly').workers,
+  require('../scenarios/proposal-comparison-readonly'),
+  require('../scenarios/proposal-comparison-readonly').denied,
   require('../scenarios/table-top-scroll-readonly').sales,
   require('../scenarios/table-top-scroll-readonly').purchase,
   require('../scenarios/table-top-scroll-readonly').transfer,

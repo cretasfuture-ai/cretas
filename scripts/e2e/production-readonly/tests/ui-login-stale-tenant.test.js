@@ -28,6 +28,9 @@ function fakePage({ pageText, stored, loginBody }) {
       json: async () => loginBody,
     }),
     waitForURL: async () => {},
+    // A mounted factory shell is a prerequisite for the tenant-residue canary.
+    // Keep this fixture aligned with the existing waitForFactoryShell gate.
+    waitForFunction: async () => {},
     evaluate: async () => stored,
   };
 }

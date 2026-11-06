@@ -140,6 +140,7 @@
     "/scheduling/logistics/workbench",
     "/scheduling/overview",
     "/scheduling/plans",
+    "/scheduling/proposal-comparison",
     "/scheduling/realtime",
     "/scheduling/settings",
     "/scheduling/workers"
