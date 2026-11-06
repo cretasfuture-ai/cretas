@@ -121,6 +121,9 @@ public class ToolDispatchService {
                     本轮明确的新目标优先；结束旧查询并提出新目标属于SWITCH，不能只取消、不能当成旧目标的参数纠正。
                     parameters仅返回本轮明确给出或明确纠正的值，不填旧值或默认值。已填字段也必须允许纠正。
                     参数应符合当前真实Tool描述/参数；时间按日期边界规范化，状态按真实枚举识别。
+                    本轮明确设置枚举字段时，同时在parameterEvidence返回该值在currentInput中的最小连续原词片段。
+                    例如枚举的业务原词与代码由程序按当前Tool词表绑定；不要把旧枚举值当成本轮新值。
+                    未修改、否定不要修改、仅在历史中出现的字段不提供parameterEvidence；CONTINUE保持既有枚举条件。
                     dateScope描述本轮时间变化：CLOSED为单日或封闭区间，FROM为只有起点，UNTIL为只有终点，
                     UNCHANGED为没有修改时间，UNRESOLVED为无法确定边界。不要把封闭单日变成无限未来。
                     CLOSED应给出startDate和endDate；FROM/UNTIL只给相应一边，不继承此前另一边。
@@ -188,6 +191,14 @@ public class ToolDispatchService {
                     "parameters", deltaSchema, "message", Map.of("type", "string")));
             turnProperties.put("pageAction", Map.of("type", "string", "enum", List.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED")));
             turnProperties.put("pageEvidence", Map.of("type", "string", "maxLength", 200));
+            Map<String,Object> enumEvidenceFields = new java.util.LinkedHashMap<>();
+            if (schema.get("properties") instanceof Map<?,?> fields) fields.forEach((key,value) -> {
+                if (key instanceof String name && value instanceof Map<?,?> definition && definition.get("enum") instanceof Collection<?>)
+                    enumEvidenceFields.put(name,Map.of("type","string","maxLength",200));
+            });
+            if (!enumEvidenceFields.isEmpty()) turnProperties.put("parameterEvidence",Map.of("type","object",
+                    "properties",enumEvidenceFields,"additionalProperties",false,
+                    "description","本轮明确设置枚举的原词；不含否定保持或历史值"));
             if (pilot && "order_query".equals(tool.getToolName())
                     && previous.get("resultReferences") instanceof List<?> resultReferences) {
                 List<String> allowedReferences = resultReferences.stream()
@@ -253,6 +264,8 @@ public class ToolDispatchService {
                 return readTurnReply("NEED_MORE_INFO", "返回了无法校验的查询字段，请明确查询条件。");
             Map<String,Object> rawDelta = new java.util.LinkedHashMap<>();
             delta.forEach((k,v) -> rawDelta.put(String.valueOf(k), v));
+            Map<String,Object> boundEnumEvidence = bindReadEnumEvidence(properties,rawDelta,
+                    turn.get("parameterEvidence"),request.getUserInput(),action,merged);
             String pageAction = Objects.toString(turn.get("pageAction"), "UNCHANGED");
             Object computedPage = null;
             if (!Set.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED").contains(pageAction))
@@ -311,6 +324,7 @@ public class ToolDispatchService {
                 if (Objects.equals(value,rawDelta.get(key))) copiedDefaults.put(key,value);
             });
             Map<String,Object> currentCalendarEvidence = new java.util.LinkedHashMap<>();
+            currentCalendarEvidence.putAll(boundEnumEvidence);
             if (computedPage != null) currentCalendarEvidence.put("page", computedPage);
             for (String key : List.of("startDate","endDate")) {
                 Object value = rawDelta.get(key);
@@ -364,6 +378,7 @@ public class ToolDispatchService {
                 sources.put(key, "CURRENT_EXPLICIT");
             }
             Map<String,Object> computedEvidence = new java.util.LinkedHashMap<>();
+            computedEvidence.putAll(boundEnumEvidence);
             if (computedPage != null) computedEvidence.put("page", computedPage);
             if (referencedOrder != null) computedEvidence.put("orderId",referencedOrder);
             for (String dateKey : List.of("startDate", "endDate")) {
@@ -430,6 +445,34 @@ public class ToolDispatchService {
                 && properties.get("status") instanceof Map<?,?> definition
                 && definition.get("enum") instanceof Collection<?> allowed && allowed.contains(s)) effective.put("status",s);
         return effective;
+    }
+
+    /** Bind only model-selected current value fragments through the actual Tool's existing vocabulary.
+     * No scan of the utterance, intent selection, new synonym table, or permission grant. */
+    static Map<String,Object> bindReadEnumEvidence(Map<?,?> properties, Map<String,Object> delta,
+            Object rawEvidence, String input, String action, Map<String,Object> previous) {
+        if (rawEvidence == null) return Map.of();
+        if (!(rawEvidence instanceof Map<?,?> evidence)) throw new IllegalArgumentException("参数原词格式无效");
+        Map<String,Object> bound = new java.util.LinkedHashMap<>();
+        for (var entry : evidence.entrySet()) {
+            if (!(entry.getKey() instanceof String key) || !(entry.getValue() instanceof String text)
+                    || text.isBlank() || text.length()>200 || input==null || !input.contains(text)
+                    || !(properties.get(key) instanceof Map<?,?> field)
+                    || !(field.get("enum") instanceof Collection<?> allowed))
+                throw new IllegalArgumentException("参数原词缺少本轮输入或Tool定义依据");
+            Map<?,?> words = field.get(com.cretas.aims.ai.tool.StatusFilter.WORDS) instanceof Map<?,?> labels ? labels : Map.of();
+            List<String> candidates = allowed.stream().filter(String.class::isInstance).map(String.class::cast)
+                    .filter(code -> code.equalsIgnoreCase(text.trim()) || words.get(code) instanceof Collection<?> labels
+                            && labels.stream().anyMatch(label -> label instanceof String s && s.equalsIgnoreCase(text.trim())))
+                    .distinct().toList();
+            if (candidates.size()>1) throw new IllegalArgumentException("参数原词对应多个选项，请明确口径");
+            if (candidates.isEmpty()) continue; // Unlisted paraphrases still use the existing semantic grounding contract.
+            String value=candidates.getFirst();
+            if ("CONTINUE".equals(action) && !Objects.equals(previous.get(key),value))
+                throw new IllegalArgumentException("本轮参数修改动作尚不明确");
+            delta.put(key,value);bound.put(key,value);
+        }
+        return bound;
     }
 
     /** Normalize a model-selected conversation action onto its owned read task.
