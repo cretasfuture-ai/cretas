@@ -423,6 +423,7 @@ onUnmounted(() => { mounted.value = false; periodRequestGeneration.value += 1; s
     <details v-if="liveMonitor?.gaps?.length" class="note"><summary>查看没有连续采集的时间段（{{ liveMonitor.gaps.length }} 段）</summary><ul><li v-for="gap in liveMonitor.gaps" :key="gap.from">{{ formatBlacklakeDateTime(gap.from) }} 至 {{ formatBlacklakeDateTime(gap.to) }} 没有连续记录，不能当作每分钟均已采集。</li></ul></details>
     <details v-if="liveMonitor?.dailyStats?.length" class="note"><summary>按天查看本周采集情况</summary><CostDataTable :rows="liveMonitor.dailyStats" :columns="[{key:'date',label:'日期',type:'text'},{key:'cycles',label:'尝试轮次',type:'number',count:true},{key:'successful',label:'成功轮次',type:'number',count:true},{key:'changed',label:'数据变化',type:'number',count:true},{key:'requests',label:'查询请求',type:'number',count:true}]" paginate /></details>
     <el-alert v-if="error" type="error" :closable="false" :title="error" show-icon />
+    <details v-if="data?.sourceGaps?.length" class="section-card"><summary>来源待核：{{data.sourceGaps.length}} 张此前工单本轮未返回，历史已保留</summary><p v-for="gap in data.sourceGaps" :key="gap.id">{{gap.projectCode}} · 找{{gap.owner}}：{{gap.action}} 补齐后：{{gap.afterProvided}}</p></details>
     <el-alert v-if="periodError" type="warning" :closable="false" :title="periodError" show-icon />
     <p v-if="periodRefreshMessage" role="status" class="note">{{ periodRefreshMessage }}</p>
     <el-alert v-if="periodAuxError" type="info" :closable="false" :title="periodAuxError" show-icon />

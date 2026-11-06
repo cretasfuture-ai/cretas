@@ -222,4 +222,5 @@ def build(data, metadata):
                            'knownMaterialCostLines':known_material,'sourceZeroCostLines':source_zero,
                            'knownLaborTasks':known_wages,'unitCostAvailableProjects':unit_available,
                            'fullManufacturingCost':None,'grossProfit':None},
+                   **({'sourceGaps':data['unreturned_project']} if data.get('unreturned_project') else {}),
                    'findings':findings,'limitations':limitations,'coverageComplete':False})

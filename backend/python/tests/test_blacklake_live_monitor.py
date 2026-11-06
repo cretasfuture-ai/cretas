@@ -5,6 +5,19 @@ from blacklake import live_monitor as live
 from blacklake.stock_reconciliation import reconcile
 
 
+def test_unreturned_parent_is_visible_separately_and_reappearance_closes_gap_without_rewriting_history():
+    prior={'cycleId':'old','workOrdersAt':'2026-11-01T00:00:00Z','data':{'project':[{'id':1,'projectCode':'OLD'},{'id':2,'projectCode':'KEEP'}]}}
+    current=[{'id':2,'projectCode':'KEEP'},{'id':3,'projectCode':'NEW'}]
+    gaps=live.unreturned_projects(prior,current)
+    assert len(gaps)==1 and gaps[0]['projectCode']=='OLD'
+    assert gaps[0]['status']=='not_returned_unverified' and gaps[0]['previousCycleId']=='old'
+    assert '权限' in gaps[0]['action'] and '历史' in gaps[0]['action']
+    assert len(prior['data']['project'])==2 and len(current)==2
+    later={'data':{'project':current,'unreturned_project':gaps}}
+    assert live.unreturned_projects(later,current)==gaps
+    assert live.unreturned_projects(later,[*current,{'id':1,'projectCode':'OLD'}])==[]
+
+
 def balance(q=-5,unit='个'):
     return {'productId':1,'warehouseId':2,'productName':'材料','productCode':'P1','warehouseName':'线边仓','qtyInWarehouse':str(q),'unitName':unit}
 

@@ -103,6 +103,7 @@ async function ask(){
     <el-alert v-if="error" type="warning" :closable="false" :title="error"/>
     <p v-if="loading&&!report" role="status">正在读取成本…</p>
     <template v-if="report">
+      <details v-if="report.analysis.sourceGaps?.length" class="technical"><summary>来源待核：{{report.analysis.sourceGaps.length}} 张此前工单本轮未返回，历史已保留</summary><p>本轮统计只计当前可见工单，不将未返回记录直接认定为已删除。</p><p v-for="gap in report.analysis.sourceGaps" :key="gap.id"><b>{{gap.projectCode}}</b> · 找{{gap.owner}}：{{gap.action}} 补齐后：{{gap.afterProvided}}</p></details>
       <UCard><div class="filters filter-grid">
         <label>完工时间<el-select v-model="dateMode" aria-label="工单完工时间"><el-option value="recent" label="最近有数据的7天"/><el-option value="custom" label="自定义日期"/><el-option value="all" label="全部已采集"/><el-option value="undated" label="缺少完工日期"/></el-select></label>
         <label>产品<el-select v-model="product" clearable filterable placeholder="全部产品" aria-label="筛选成本产品"><el-option v-for="name in products" :key="name" :value="name" :label="name"/></el-select></label>

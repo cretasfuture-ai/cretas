@@ -83,6 +83,7 @@ export interface CostProject {
   materialLinesDetail: MaterialLine[]; processes: ProcessLine[]; issues: string[]; unitCostAvailable: boolean;
 }
 export interface BlacklakeAnalysis {
+  sourceGaps?:{id:number|string;projectCode:string;lastSeenAt:string|null;status:string;owner:string;action:string;afterProvided:string}[];
   operationsSupplement?:{checkedAt:string;reportingUnitsRecovered:number;outputRecords:number;unresolvedOutputs:{outputId:number|string;projectId:number|string;reason:string}[];inventoryRecords:number;stockPairsQueried:number;stockPairsNotReturned:number;requests:{code:string;status:string;missing:string;owner:string;action:string;afterProvided:string}[]};
   latestCompletedDate?:string|null;
   operationalSource?:{workOrdersCheckedAt:string;inventoryCheckedAt:string|null;materialReferencesCheckedAt?:string;bomReferencesCheckedAt?:string;referenceExplanation?:string;baselineAnchor:string;observationId:string};

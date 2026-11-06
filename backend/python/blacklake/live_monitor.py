@@ -199,6 +199,20 @@ def seeded(v,baseline_projects=None):
             'referenceAt':b['finishedAt'],'materialAt':o['finished_at'],'stockAt':s['finishedAt']}
 
 
+def unreturned_projects(prior,projects):
+    visible={str(p['id']) for p in projects}
+    retained={str(p['id']):p for p in prior['data'].get('unreturned_project',[])}
+    for row in prior['data']['project']:
+        if str(row['id']) not in visible:
+            retained[str(row['id'])]={'id':row['id'],'projectCode':row['projectCode'],
+                'lastSeenAt':prior.get('workOrdersAt',prior.get('checkedAt')),
+                'previousCycleId':prior.get('cycleId'),'status':'not_returned_unverified',
+                'owner':'黑湖管理员 / 生产计划负责人',
+                'action':'核对是否归档、隐藏、权限变化或删除；确认前保留历史，不计入本轮可见工单。',
+                'afterProvided':'恢复来源可见性，或核实历史处置原因后完成工单数量及成本对账。'}
+    return [row for id,row in retained.items() if id not in visible]
+
+
 def collect(v, previous=None, max_requests=1000):
     from .full_probe import context
     directory,client,store,cache=context();requests=0
@@ -234,9 +248,10 @@ def collect(v, previous=None, max_requests=1000):
                 projects.extend(rows)
             ids={str(p['id']) for p in projects}
             if len(ids)!=len(projects):raise BlacklakeError('LIVE_PROJECT_DUPLICATE')
-            # Disappeared parents remain a visible completeness issue; never silently delete history.
-            missing={str(p['id']) for p in data['project']}-ids
-            if missing:raise BlacklakeError('LIVE_PREVIOUS_PARENT_NOT_RETURNED')
+            # Historical content stays immutable in SQLite. Missing parents are
+            # separately flagged, never fabricated as deleted or counted current.
+            unreturned=unreturned_projects(prior,projects)
+            if unreturned or 'unreturned_project' in data:data['unreturned_project']=unreturned
             projects=minimized(projects)
             data['project']=projects
             labor_key=None
