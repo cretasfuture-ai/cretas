@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class ProposalComparisonRoleGateMvcTest {
     private static final String URL = "/api/mobile/F006/proposal-comparisons/evaluate";
-    private static final String BODY = """
+    static final String BODY = """
         {"comparisonBasisId":"batch-1","currency":"CNY","costUnit":"PER_BATCH","resourceUnit":"PERSON_HOUR",
          "windowStart":"2027-01-01T08:00:00Z","windowEnd":"2027-01-01T20:00:00Z",
          "requiredBy":"2027-01-01T18:00:00Z","availableResource":10,
@@ -46,7 +46,7 @@ class ProposalComparisonRoleGateMvcTest {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         access = spy(new FactoryAccessValidator(users));
         comparison = spy(new ProposalComparisonService(validators.getValidator()));
-        mvc = MockMvcBuilders.standaloneSetup(new ProposalComparisonController(access, comparison))
+        mvc = MockMvcBuilders.standaloneSetup(new ProposalComparisonController(access, comparison, mapper))
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .addInterceptors(new PermissionInterceptor(permissions, users, mapper), new RequireRoleInterceptor(mapper)).build();

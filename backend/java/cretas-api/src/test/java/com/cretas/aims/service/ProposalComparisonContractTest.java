@@ -111,7 +111,7 @@ class ProposalComparisonContractTest {
     @Test void candidateCountIsBounded() {
         List<Candidate> many = new ArrayList<>();
         for (int i = 0; i < 21; i++) many.add(candidate("id" + i, "1", 10, "1"));
-        assertThatThrownBy(() -> service.compare(basis(bd("10"), many))).isInstanceOf(ConstraintViolationException.class);
+        assertThatThrownBy(() -> service.compare(basis(bd("10"), many))).isInstanceOf(BusinessException.class).hasMessageContaining("2至20");
     }
     @Test void invalidWindowIsRejected() {
         var request = new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", END, START,
@@ -140,6 +140,30 @@ class ProposalComparisonContractTest {
     }
     @Test void noEligibleAlternativesDoesNotProduceAFrontier() {
         assertThat(compare(candidate("a", "1", 10, "11"), candidate("b", "2", 11, "12")).nonDominatedCandidateIds()).isEmpty();
+    }
+
+    @Test void oversizedListIsRejectedBeforeCascadingValidation() {
+        Validator validator = org.mockito.Mockito.mock(Validator.class);
+        var guarded = new ProposalComparisonService(validator);
+        assertThatThrownBy(() -> guarded.compare(basis(bd("10"), Collections.nCopies(21, null))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("2至20");
+        org.mockito.Mockito.verifyNoInteractions(validator);
+    }
+    @Test void maximumTwentyCandidatesCanBeCompared() {
+        List<Candidate> twenty = new ArrayList<>();
+        for (int i = 0; i < 20; i++) twenty.add(candidate("id" + i, "1", 10, "1"));
+        assertThat(service.compare(basis(bd("10"), twenty)).nonDominatedCandidateIds()).hasSize(20);
+    }
+    @Test void resourceWindowUsesInclusiveInstantBoundariesAcrossOffsets() {
+        Candidate atStart = new Candidate("start", "batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", bd("2"),
+                OffsetDateTime.parse("2027-01-01T16:00:00+08:00"), bd("2"));
+        Candidate atEnd = new Candidate("end", "batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", bd("1"),
+                OffsetDateTime.parse("2027-01-02T04:00:00+08:00"), bd("1"));
+        var withoutDeadline = new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", START, END,
+                null, bd("10"), List.of(atStart, atEnd));
+        var result = service.compare(withoutDeadline);
+        assertThat(result.status()).isEqualTo(ComparisonStatus.SUPPLIED_FACTS_COMPARABLE);
+        assertThat(result.candidates()).allSatisfy(item -> assertThat(item.status()).isEqualTo(CandidateStatus.ELIGIBLE_BY_SUPPLIED_FACTS));
     }
 
     private static void assertMismatch(Candidate mismatch, Reason reason) {

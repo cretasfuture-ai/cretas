@@ -20,6 +20,10 @@ public class ProposalComparisonService {
 
     public ProposalComparisonResult compare(ProposalComparisonRequest request) {
         if (request == null) throw new BusinessException(400, "请提供比较口径和至少两个候选方案");
+        // Reject an oversized list before Bean Validation traverses its elements.
+        if (request.candidates() == null || request.candidates().size() < 2 || request.candidates().size() > 20) {
+            throw new BusinessException(400, "候选方案数量必须为2至20个");
+        }
         var violations = validator.validate(request);
         if (!violations.isEmpty()) throw new ConstraintViolationException(violations);
         if (!request.windowEnd().isAfter(request.windowStart())) {

@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `GENERIC-PROPOSAL-PARETO-20261106` — `in-progress` — Owner `01a1a954/root` — Base `7872d98a83c370a4d284a071e9c65601cf4f5cbf` — 新ProposalComparisonController/Service、dto/decision/ProposalComparison{Request,Result}与Contract/MVC/StartupGuard专测；同口径成本/交期/资源非支配比较，无Repo/Entity/DDL/业务执行，不碰食品/审计锁。
+- `GENERIC-PROPOSAL-PARETO-20261106` — `in-progress` — Owner `01a1a954/root` — Base `7872d98a83c370a4d284a071e9c65601cf4f5cbf` — 新ProposalComparisonController/Service、dto/decision/ProposalComparison{Request,Result}与Contract/MVC/StartupGuard/HTTP字节上限专测；同口径成本/交期/资源非支配比较，无Repo/Entity/DDL/业务执行，不碰食品/审计锁。
 
 
 
