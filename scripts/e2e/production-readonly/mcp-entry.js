@@ -8899,24 +8899,27 @@ async function inspect(page, _body, ctx) {
   await row.locator('[data-test="row-supply-impact"]').click();
   const dialog = page.locator('[data-test="supply-impact-dialog"]');
   await dialog.waitFor({state:'visible'});
-  const awaited = page.waitForResponse(response => {
+  const [response] = await Promise.all([page.waitForResponse(response => {
     const url = new URL(response.url());
     return response.request().method() === 'GET' && url.pathname === '/api/mobile/F006/supply-impact/quality'
       && url.searchParams.get('materialTypeId') === target.materialTypeId;
-  }, {timeout:30000});
-  await dialog.getByRole('radio', {name:'质量问题', exact:true}).check();
-  const response = await awaited; const body = await response.json();
+  }, {timeout:30000}),
+  dialog.locator('[data-test="supply-impact-event"]').getByText('质量问题', {exact:true}).click()]);
+  requireCondition(await dialog.getByRole('radio', {name:'质量问题', exact:true}).isChecked(),
+    'Visible quality selection did not update the actual radio');
+  const body = await response.json();
   requireCondition(response.ok() && body.success === true && body.data.subject.id === target.materialTypeId,
     'Quality response is not the selected actual material');
   assertBoxExposure(body.data.boxExposure);
   const exposure = body.data.boxExposure;
   const panel = dialog.getByTestId('impact-box-exposure'); await panel.waitFor({state:'visible'});
+  await dialog.locator('.el-loading-mask').waitFor({state:'hidden',timeout:15000});
   requireCondition((await panel.innerText()).includes('在库实物含预留'), 'Physical inventory basis is not visible');
   for (const [kind, testId] of [['stock','box-stock-total'], ['shipped','box-shipped-total']]) {
     const text = (await panel.getByTestId(testId).innerText()).trim();
     requireCondition(text === (exposure[kind].complete ? exposure[kind].totalBoxQuantity : '待核对'), 'UI total differs from server uncertainty');
   }
-  await panel.scrollIntoViewIfNeeded();
+  await panel.getByTestId('box-stock-total').scrollIntoViewIfNeeded();
   return {factoryId:'F006',actorId:1309,materialTypeId:target.materialTypeId,
     sourceBatchCount:body.data.sourceBatches.length,finishedBatchCount:body.data.finishedBatches.length,
     stockSources:exposure.stockSources.length,shipmentSources:exposure.shipmentSources.length,
