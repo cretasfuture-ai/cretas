@@ -10,6 +10,15 @@ const { SCENARIOS } = require('../core/run-suite');
 const { VISUAL_PAGES, runVisualCensus } = require('../scenarios/visual-page-census-readonly');
 const { createScenarioResult } = require('../core/result-schema');
 const guidedScenario = require('../scenarios/smartbi-guided-readonly');
+const { resourceUnitControl } = require('../scenarios/proposal-comparison-readonly');
+
+test('comparison resource selectors accept native wrapped label option text', async ({ page }) => {
+  await page.setContent('<main><section id="budget"><label>资源预算单位<select><option value="PERSON_HOUR">人时</option><option value="MACHINE_HOUR">机时</option></select></label></section><section id="candidate"><label>资源单位<select><option value="PERSON_HOUR">人时</option><option value="MACHINE_HOUR">机时</option></select></label></section></main>');
+  await resourceUnitControl(page.locator('#budget'), true).selectOption('MACHINE_HOUR');
+  await resourceUnitControl(page.locator('#candidate')).selectOption('MACHINE_HOUR');
+  await expect(page.locator('#budget select')).toHaveValue('MACHINE_HOUR');
+  await expect(page.locator('#candidate select')).toHaveValue('MACHINE_HOUR');
+});
 
 const WORKSPACE_FIXTURE = Object.freeze([
   { path: '/workspaces/overview', title: '经营总览', targetPath: '/dashboard', targetTitle: '首页驾驶舱', targetLandmark: '今日生产概览' },
