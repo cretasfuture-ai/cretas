@@ -223,4 +223,3 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
   const all = [plan('production-plan-create'), plan('production-batch-create'), requisition, process(1), process(2), process(3), process(4), process(5), process(6), settle, receive, costs]
   return requestedSteps ? all.filter((item) => requestedSteps.includes(item.step)) : all
 }
-
