@@ -10,6 +10,7 @@ import com.cretas.aims.exception.AuthorizationException;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.DecisionSnapshotComparisonService;
 import com.cretas.aims.service.DecisionHistoryQueryService;
+import com.cretas.aims.service.DecisionRecommendationReplayService;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.utils.FactoryAccessValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,6 +24,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.AdditionalMatchers.aryEq;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -32,6 +34,7 @@ class DecisionHistoryRoleGateMvcTest {
     private final FactoryAccessValidator access = mock(FactoryAccessValidator.class);
     private final DecisionSnapshotComparisonService comparison = mock(DecisionSnapshotComparisonService.class);
     private final DecisionHistoryQueryService history = mock(DecisionHistoryQueryService.class);
+    private final DecisionRecommendationReplayService replay = mock(DecisionRecommendationReplayService.class);
     private final PermissionService permissions = mock(PermissionService.class);
     private final UserRepository users = mock(UserRepository.class);
     private MockMvc mvc;
@@ -39,7 +42,7 @@ class DecisionHistoryRoleGateMvcTest {
 
     @BeforeEach void setup() {
         var mapper = new ObjectMapper();
-        controller = new DecisionHistoryController(access, comparison, history);
+        controller = new DecisionHistoryController(access, comparison, history, replay);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(new PermissionInterceptor(permissions, users, mapper),
                         new RequireRoleInterceptor(mapper)).build();
@@ -100,6 +103,43 @@ class DecisionHistoryRoleGateMvcTest {
                 .andExpect(status().isOk());
         verify(access).validateAccess("F006");
         verify(comparison).compare("F006", "current", "baseline");
+    }
+
+    @Test void replayRequiresBothPermissionsAndNeverFallsBackToAnyPermission() throws Exception {
+        String[] required = {"system:read", "quality:read"};
+        for (String grantedAlone : required) {
+            reset(permissions, users, access, replay);
+            when(users.findById(1L)).thenReturn(Optional.of(user()));
+            when(permissions.hasAnyPermission(any(User.class), any(String[].class))).thenReturn(true);
+            when(permissions.hasAllPermissions(any(User.class), any(String[].class))).thenAnswer(invocation -> {
+                String[] requested = (String[]) invocation.getRawArguments()[1];
+                return java.util.Arrays.equals(required, requested)
+                        && java.util.Set.of(grantedAlone).containsAll(java.util.Set.of(required));
+            });
+            mvc.perform(get("/api/mobile/F006/decision-history/current/replay-evaluation")
+                            .requestAttr("role", "factory_super_admin").requestAttr("userId", 1L))
+                    .andExpect(status().isForbidden());
+            verify(permissions).hasAllPermissions(any(User.class), aryEq(required));
+            verifyNoInteractions(access, replay);
+        }
+    }
+
+    @Test void replayChecksFactoryBeforeReaderAndRemainsReadOnly() throws Exception {
+        allowSystemRead();
+        when(permissions.hasAllPermissions(any(User.class), any(String[].class))).thenReturn(true);
+        when(replay.replay("F006", "current")).thenReturn(
+                com.cretas.aims.dto.decision.DecisionRecommendationReplay.unavailable(
+                        "current", "SNAPSHOT_MISSING_OR_INVALID"));
+        mvc.perform(get("/api/mobile/F006/decision-history/current/replay-evaluation")
+                        .requestAttr("role", "factory_super_admin").requestAttr("userId", 1L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.businessExecutionPerformed").value(false))
+                .andExpect(jsonPath("$.data.approvalEvaluated").value(false));
+        var ordered = inOrder(access, replay);
+        ordered.verify(access).validateAccess("F006");
+        ordered.verify(replay).replay("F006", "current");
+        verify(permissions).hasAllPermissions(any(User.class), aryEq(new String[]{"system:read", "quality:read"}));
     }
 
     @Test void metadataListChecksFactoryBeforeReadingAndUsesBoundedDefaults() throws Exception {

@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { usePermissionStore } from '@/store/modules/permission'
 import {
   compareDecisionHistory,
+  isDecisionRecommendationReplay,
   isDecisionHistoryPage,
   isDecisionSnapshotComparison,
   listDecisionHistory,
+  replayDecisionHistory,
   type DecisionHistoryRecord,
+  type DecisionRecommendationReplay,
   type DecisionSnapshotComparison,
 } from '@/api/decisionHistory'
 
 const props = defineProps<{ factoryId: string; role: string }>()
+const permissionStore = usePermissionStore()
 const supportedRoles = new Set(['factory_super_admin', 'permission_admin'])
 const decisionTypeLabels: Record<DecisionHistoryRecord['decisionType'], string> = {
   RULE_EXECUTION: '规则执行', STATE_TRANSITION: '状态变更', FORCE_INSERT: '强制插入',
@@ -17,6 +22,11 @@ const decisionTypeLabels: Record<DecisionHistoryRecord['decisionType'], string> 
 }
 const statusLabels = {
   SAME_RESULT: '记录结果一致（已核验）', DIFFERENT_RESULT: '记录结果不同（已核验）', NOT_COMPARABLE: '不可比较',
+} as const
+const replayStatusLabels = {
+  REPLAY_MATCH: '建议复算一致（已核验）',
+  REPLAY_DIFFERENT: '建议复算不同（已核验）',
+  UNAVAILABLE: '不可复算',
 } as const
 const reasonLabels: Record<string, string> = {
   INVALID_HISTORICAL_BASELINE: '基线不是当前记录之前的同一历史范围',
@@ -45,27 +55,41 @@ const baselineId = ref('')
 const comparison = ref<DecisionSnapshotComparison | null>(null)
 const comparisonLoading = ref(false)
 const comparisonError = ref('')
+const replay = ref<DecisionRecommendationReplay | null>(null)
+const replayLoading = ref(false)
+const replayError = ref('')
 let contextEpoch = 0
 let comparisonEpoch = 0
+let replayEpoch = 0
 
 const hasAccess = computed(() => /^[A-Za-z0-9_-]{1,64}$/.test(props.factoryId) && supportedRoles.has(props.role))
+const canReplayAccess = computed(() => hasAccess.value
+  && permissionStore.isDbLoaded
+  && permissionStore.canAccess('system')
+  && permissionStore.canAccess('quality'))
+const replayAccessDenied = computed(() => hasAccess.value && !canReplayAccess.value)
 const currentRecord = computed(() => records.value.find(record => record.id === currentId.value) || null)
 const baselineRecord = computed(() => records.value.find(record => record.id === baselineId.value) || null)
 const canCompare = computed(() => Boolean(currentRecord.value && baselineRecord.value)
   && currentId.value !== baselineId.value && !comparisonLoading.value)
 
 function resetContext() {
-  contextEpoch += 1; comparisonEpoch += 1
+  contextEpoch += 1; comparisonEpoch += 1; replayEpoch += 1
   records.value = []; page.value = 0; totalElements.value = 0; totalPages.value = 0
   listLoaded.value = false; listLoading.value = false; listError.value = ''
   currentId.value = ''; baselineId.value = ''; comparison.value = null
   comparisonLoading.value = false; comparisonError.value = ''
+  replay.value = null; replayLoading.value = false; replayError.value = ''
 }
 function invalidateComparison() {
   comparisonEpoch += 1; comparison.value = null; comparisonError.value = ''; comparisonLoading.value = false
 }
+function invalidateReplay() {
+  replayEpoch += 1; replay.value = null; replayError.value = ''; replayLoading.value = false
+}
 watch(() => [props.factoryId, props.role], resetContext)
-watch([currentId, baselineId], invalidateComparison)
+watch([currentId, baselineId], () => { invalidateComparison(); invalidateReplay() })
+watch(canReplayAccess, () => invalidateReplay())
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error && typeof error === 'object') {
@@ -78,6 +102,7 @@ function errorMessage(error: unknown, fallback: string): string {
 async function loadRecords(targetPage = page.value) {
   if (listLoading.value || !hasAccess.value) return
   invalidateComparison()
+  invalidateReplay()
   currentId.value = ''
   baselineId.value = ''
   records.value = []
@@ -135,6 +160,31 @@ async function compareSelected() {
     if (requestEpoch === comparisonEpoch) comparisonLoading.value = false
   }
 }
+
+async function replaySelected() {
+  if (replayLoading.value || listLoading.value || !listLoaded.value || !canReplayAccess.value) return
+  const selected = records.value.find(record => record.id === currentId.value)
+  if (!selected) { replayError.value = '请先选择当前记录。'; return }
+  const requestEpoch = ++replayEpoch
+  const requestedFactory = props.factoryId
+  const requestedRole = props.role
+  const requestedDecisionId = selected.id
+  replayLoading.value = true; replayError.value = ''; replay.value = null
+  try {
+    const response = await replayDecisionHistory(requestedFactory, requestedDecisionId)
+    if (requestEpoch !== replayEpoch || requestedFactory !== props.factoryId || requestedRole !== props.role
+      || requestedDecisionId !== currentId.value) return
+    if (!response.success || !isDecisionRecommendationReplay(response.data, requestedDecisionId)) {
+      replayError.value = response.message || '复算结果无法核验，未展示旧结果。'; return
+    }
+    replay.value = response.data
+  } catch (error) {
+    if (requestEpoch === replayEpoch && requestedFactory === props.factoryId && requestedRole === props.role
+      && requestedDecisionId === currentId.value) replayError.value = errorMessage(error, '建议复算读取失败，未展示旧结果。')
+  } finally {
+    if (requestEpoch === replayEpoch) replayLoading.value = false
+  }
+}
 function formatCreatedAt(value: string | null): string {
   if (!value) return '时间未提供'
   const date = new Date(value); return Number.isNaN(date.getTime()) ? '时间格式无法核验' : date.toLocaleString()
@@ -158,24 +208,27 @@ function reasonLabel(reason: string): string { return reasonLabels[reason] ? `${
           <tr v-for="record in records" :key="record.id" :data-testid="`history-record-${record.id}`"><td><strong>{{ recordLabel(record) }}</strong><code>{{ record.id }}</code></td><td>{{ decisionTypeLabels[record.decisionType] }}</td><td>{{ record.ruleConfigId || '规则配置未提供' }}<span v-if="record.ruleConfigVersion !== null"> · v{{ record.ruleConfigVersion }}</span></td><td>{{ formatCreatedAt(record.createdAt) }}</td><td><input :checked="currentId === record.id" :data-testid="`history-current-${record.id}`" type="radio" name="decision-history-current" :aria-label="`选择${record.id}为当前记录`" @change="selectCurrent(record.id)" /></td><td><input :checked="baselineId === record.id" :data-testid="`history-baseline-${record.id}`" type="radio" name="decision-history-baseline" :aria-label="`选择${record.id}为基线记录`" @change="selectBaseline(record.id)" /></td></tr>
         </tbody></table></div>
         <div class="pagination" aria-label="历史记录分页"><button class="secondary-button" type="button" :disabled="listLoading || page <= 0" @click="loadRecords(page - 1)">上一页</button><span>第 {{ page + 1 }} 页<span v-if="totalPages"> / 共 {{ totalPages }} 页</span> · {{ totalElements }} 条</span><button class="secondary-button" type="button" :disabled="listLoading || totalPages === 0 || page + 1 >= totalPages" @click="loadRecords(page + 1)">下一页</button></div>
-        <section class="compare-controls" aria-label="历史记录对照操作"><div><p v-if="currentRecord">当前：{{ recordLabel(currentRecord) }}</p><p v-else>当前：尚未选择</p><p v-if="baselineRecord">基线：{{ recordLabel(baselineRecord) }}</p><p v-else>基线：尚未选择</p></div><button class="primary-button" data-testid="history-compare" type="button" :disabled="!canCompare" @click="compareSelected">{{ comparisonLoading ? '正在对照…' : '读取对照结果' }}</button></section>
+        <section class="compare-controls" aria-label="历史记录对照操作"><div><p v-if="currentRecord">当前：{{ recordLabel(currentRecord) }}</p><p v-else>当前：尚未选择</p><p v-if="baselineRecord">基线：{{ recordLabel(baselineRecord) }}</p><p v-else>基线：尚未选择</p><p v-if="replayAccessDenied" class="permission-note">当前账号缺少系统读取或质量读取权限，建议复算不可用。</p></div><div class="action-buttons"><button class="primary-button" data-testid="history-compare" type="button" :disabled="!canCompare" @click="compareSelected">{{ comparisonLoading ? '正在对照…' : '读取对照结果' }}</button><button class="secondary-button" data-testid="history-replay" type="button" :disabled="!currentRecord || replayLoading || listLoading || !canReplayAccess" @click="replaySelected">{{ replayLoading ? '正在复算…' : '复算记录建议' }}</button></div></section>
       </template>
       <section v-if="comparisonError" class="state-panel error-state" role="alert"><strong>对照未完成</strong><p>{{ comparisonError }}</p></section>
       <section v-if="comparison" class="comparison-card" data-testid="history-result" aria-live="polite"><div class="comparison-title"><div><p class="eyebrow">只读历史对照</p><h3>{{ statusLabels[comparison.status] }}</h3></div><span class="status-pill" :class="comparison.status.toLowerCase()">{{ comparison.reason }}</span></div><p class="reason-copy">{{ reasonLabel(comparison.reason) }}</p><div class="provenance-grid"><div><span>对照基础</span><strong>{{ basisLabels[comparison.comparisonBasis] }}</strong></div><div><span>记录关系</span><strong>{{ comparison.recordedOutputRelation }}</strong></div><div><span>当前规则配置</span><strong>{{ comparison.currentRuleConfigId || '未提供' }}<span v-if="comparison.currentRuleConfigVersion !== null"> · v{{ comparison.currentRuleConfigVersion }}</span></strong></div><div><span>基线规则配置</span><strong>{{ comparison.baselineRuleConfigId || '未提供' }}<span v-if="comparison.baselineRuleConfigVersion !== null"> · v{{ comparison.baselineRuleConfigVersion }}</span></strong></div></div><div class="hash-grid"><div><span>当前输出摘要</span><code>{{ comparison.canonicalRecordedOutputHash || '未提供' }}</code></div><div><span>基线输出摘要</span><code>{{ comparison.canonicalBaselineOutputHash || '未提供' }}</code></div></div><div class="truth-grid"><span>{{ comparison.integrityVerified ? '校验和已核验' : '校验和未核验' }}</span><span>不会重新执行规则</span><span>不会审批、保存或预留资源</span></div><p v-if="comparison.status === 'NOT_COMPARABLE'" class="warning-copy">不可比较结果保持原样展示；语义相同但校验和未核验时，也不会显示为已核验成功。</p></section>
       <p v-if="comparison" class="warning-copy" data-testid="history-integrity-limit">完整性核验仅表示记录与存储的校验和内部一致，不是防篡改签名；历史记录对照不代替业务审批。</p>
+      <section v-if="replayError" class="state-panel error-state" role="alert"><strong>建议复算未完成</strong><p>{{ replayError }}</p></section>
+      <section v-if="replay" class="comparison-card replay-card" data-testid="history-replay-result" aria-live="polite"><div class="comparison-title"><div><p class="eyebrow">只读建议复算</p><h3>{{ replayStatusLabels[replay.status] }}</h3></div><span class="status-pill" :class="replay.status.toLowerCase()">{{ replay.reason }}</span></div><p class="reason-copy">仅针对当前记录的质量建议快照；旧记录缺失或不支持快照时保持不可复算。</p><div class="provenance-grid"><div><span>评估器</span><strong>{{ replay.evaluatorId || '未提供' }}<span v-if="replay.evaluatorVersion"> · {{ replay.evaluatorVersion }}</span></strong></div><div><span>规则包摘要</span><code>{{ replay.ruleBundleHash || '未提供' }}</code></div><div><span>快照摘要</span><code>{{ replay.snapshotHash || '未提供' }}</code></div><div><span>记录建议 / 复算建议</span><strong>{{ replay.recordedRecommendation || '未提供' }} / {{ replay.replayedRecommendation || '未提供' }}</strong></div><div><span>记录置信度 / 复算置信度</span><strong>{{ replay.recordedConfidence || '未提供' }} / {{ replay.replayedConfidence || '未提供' }}</strong></div></div><div class="truth-grid"><span>{{ replay.snapshotConsistencyVerified ? '快照内部一致性已核验' : '快照内部一致性未核验' }}</span><span>{{ replay.ruleEvaluationPerformed ? '已执行纯建议复算' : '未执行建议复算' }}</span><span>仅质量建议，不审批、不执行业务</span></div><p class="warning-copy">动作与置信度均为纯输出对比；内部一致性核验不是防篡改签名，本结果不会审批、释放、执行、保存或预留资源。</p></section>
     </template>
   </section>
 </template>
 
 <style scoped>
 .decision-history-panel { padding: 20px; color: var(--el-text-color-primary, #1a2332); }
-.panel-header, .toolbar, .comparison-title, .pagination, .compare-controls { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.panel-header, .toolbar, .comparison-title, .pagination, .compare-controls, .action-buttons { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .panel-header { align-items: flex-start; margin-bottom: 16px; }
 .eyebrow { margin: 0 0 6px; color: var(--el-text-color-secondary, #7a8599); font-size: 12px; }
 h2, h3, p { margin: 0; }
 h2 { font-size: 20px; }
 h3 { font-size: 17px; }
 .subtitle, .privacy-note, .selection-hint, .compare-controls p { color: var(--el-text-color-secondary, #7a8599); }
+.permission-note { color: var(--el-color-warning, #b88230) !important; }
 .subtitle { margin-top: 6px; line-height: 1.5; }
 .scope-badge, .status-pill { padding: 5px 9px; border: 1px solid var(--el-border-color-lighter, #edf2f7); border-radius: 999px; font-size: 12px; }
 .toolbar, .selection-hint, .pagination, .compare-controls { margin-bottom: 16px; }
@@ -196,9 +249,11 @@ input[type='radio'] { width: 16px; height: 16px; accent-color: var(--el-color-pr
 .pagination { justify-content: center; margin-top: 14px; }
 .compare-controls { flex-wrap: wrap; padding: 14px 0 0; }
 .comparison-card { margin-top: 16px; }
+.replay-card { border-color: rgb(64 158 255 / 28%); }
 .comparison-title { align-items: flex-start; }
 .status-pill.not_comparable { color: var(--el-color-warning, #e6a23c); }
-.status-pill.same_result, .status-pill.different_result { color: var(--el-color-primary, #1b65a8); }
+.status-pill.same_result, .status-pill.different_result, .status-pill.replay_match, .status-pill.replay_different { color: var(--el-color-primary, #1b65a8); }
+.status-pill.unavailable { color: var(--el-color-warning, #b88230); }
 .reason-copy { color: var(--el-text-color-regular, #303133); }
 .provenance-grid, .hash-grid, .truth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
 .provenance-grid div, .hash-grid div { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--el-border-color-lighter, #edf2f7); border-radius: 6px; }
@@ -206,5 +261,5 @@ input[type='radio'] { width: 16px; height: 16px; accent-color: var(--el-color-pr
 .truth-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); color: var(--el-text-color-secondary, #7a8599); font-size: 13px; }
 .warning-copy { color: var(--el-color-warning, #b88230); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-@media (max-width: 760px) { .panel-header, .toolbar, .comparison-title { display: block; } .scope-badge { display: inline-block; margin-top: 12px; } .privacy-note { display: block; margin-top: 10px; } .provenance-grid, .hash-grid, .truth-grid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .panel-header, .toolbar, .comparison-title, .action-buttons { display: block; } .scope-badge { display: inline-block; margin-top: 12px; } .privacy-note { display: block; margin-top: 10px; } .action-buttons button { width: 100%; margin-top: 8px; } .provenance-grid, .hash-grid, .truth-grid { grid-template-columns: 1fr; } }
 </style>

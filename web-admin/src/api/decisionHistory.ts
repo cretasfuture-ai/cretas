@@ -46,6 +46,31 @@ export interface DecisionSnapshotComparison {
   comparisonBasis: ComparisonBasis
 }
 
+export const QUALITY_RECOMMENDATION_ACTIONS = [
+  'RELEASE', 'CONDITIONAL_RELEASE', 'REWORK', 'SCRAP', 'SPECIAL_APPROVAL', 'HOLD',
+] as const
+export type QualityRecommendationAction = (typeof QUALITY_RECOMMENDATION_ACTIONS)[number]
+export type DecisionRecommendationReplayStatus = 'REPLAY_MATCH' | 'REPLAY_DIFFERENT' | 'UNAVAILABLE'
+
+export interface DecisionRecommendationReplay {
+  decisionId: string
+  status: DecisionRecommendationReplayStatus
+  reason: string
+  evaluationScope: 'QUALITY_RECOMMENDATION_ONLY'
+  evaluatorId: string | null
+  evaluatorVersion: string | null
+  ruleBundleHash: string | null
+  snapshotHash: string | null
+  recordedRecommendation: QualityRecommendationAction | null
+  replayedRecommendation: QualityRecommendationAction | null
+  recordedConfidence: string | null
+  replayedConfidence: string | null
+  snapshotConsistencyVerified: boolean
+  ruleEvaluationPerformed: boolean
+  businessExecutionPerformed: false
+  approvalEvaluated: false
+}
+
 const FACTORY_ID = /^[A-Za-z0-9_-]{1,64}$/
 const RECORD_ID = /^[A-Za-z0-9_-]{1,128}$/
 const DECISION_REASONS = new Set([
@@ -60,7 +85,15 @@ const COMPARISON_KEYS = new Set([
   'currentRuleConfigId', 'currentRuleConfigVersion', 'baselineRuleConfigId', 'baselineRuleConfigVersion',
   'businessExecutionPerformed', 'integrityVerified', 'recordedOutputRelation', 'comparisonBasis',
 ])
+const REPLAY_KEYS = new Set([
+  'decisionId', 'status', 'reason', 'evaluationScope', 'evaluatorId', 'evaluatorVersion', 'ruleBundleHash',
+  'snapshotHash', 'recordedRecommendation', 'replayedRecommendation', 'snapshotConsistencyVerified',
+  'recordedConfidence', 'replayedConfidence',
+  'ruleEvaluationPerformed', 'businessExecutionPerformed', 'approvalEvaluated',
+])
 const HASH = /^[0-9a-f]{64}$/i
+const REPLAY_REASON = /^[A-Z][A-Z0-9_]{1,79}$/
+const PLAIN_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/
 
 function assertFactoryId(factoryId: string): void {
   if (!FACTORY_ID.test(factoryId)) throw new Error('工厂标识不合法，已阻止历史记录请求')
@@ -176,6 +209,55 @@ export function isDecisionSnapshotComparison(
     && comparison.canonicalBaselineOutputHash === null
 }
 
+function nullableHash(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && HASH.test(value))
+}
+
+function nullableQualityAction(value: unknown): value is QualityRecommendationAction | null {
+  return value === null || (typeof value === 'string' && QUALITY_RECOMMENDATION_ACTIONS.includes(value as QualityRecommendationAction))
+}
+
+function nullablePlainDecimal(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && PLAIN_DECIMAL.test(value))
+}
+
+export function isDecisionRecommendationReplay(value: unknown, decisionId: string): value is DecisionRecommendationReplay {
+  if (!value || typeof value !== 'object') return false
+  const replay = value as Partial<DecisionRecommendationReplay>
+  if (!Object.keys(replay).every(key => REPLAY_KEYS.has(key))
+    || replay.decisionId !== decisionId
+    || !['REPLAY_MATCH', 'REPLAY_DIFFERENT', 'UNAVAILABLE'].includes(replay.status as string)
+    || typeof replay.reason !== 'string' || !REPLAY_REASON.test(replay.reason)
+    || replay.evaluationScope !== 'QUALITY_RECOMMENDATION_ONLY'
+    || (replay.evaluatorId !== null && typeof replay.evaluatorId !== 'string')
+    || (replay.evaluatorVersion !== null && typeof replay.evaluatorVersion !== 'string')
+    || !nullableHash(replay.ruleBundleHash) || !nullableHash(replay.snapshotHash)
+    || !nullableQualityAction(replay.recordedRecommendation) || !nullableQualityAction(replay.replayedRecommendation)
+    || !nullablePlainDecimal(replay.recordedConfidence) || !nullablePlainDecimal(replay.replayedConfidence)
+    || typeof replay.snapshotConsistencyVerified !== 'boolean'
+    || typeof replay.ruleEvaluationPerformed !== 'boolean'
+    || replay.businessExecutionPerformed !== false || replay.approvalEvaluated !== false) return false
+
+  if (replay.status === 'REPLAY_MATCH' || replay.status === 'REPLAY_DIFFERENT') {
+    const hashes = typeof replay.ruleBundleHash === 'string' && typeof replay.snapshotHash === 'string'
+    const recommendations = replay.recordedRecommendation !== null && replay.replayedRecommendation !== null
+    const confidence = replay.recordedConfidence !== null && replay.replayedConfidence !== null
+    return hashes && recommendations && confidence && replay.evaluatorId !== null && replay.evaluatorVersion !== null
+      && replay.snapshotConsistencyVerified === true && replay.ruleEvaluationPerformed === true
+      && (replay.status === 'REPLAY_MATCH'
+        ? replay.reason === 'RECORDED_RECOMMENDATION_MATCHES_REPLAY'
+          && replay.recordedRecommendation === replay.replayedRecommendation
+          && replay.recordedConfidence === replay.replayedConfidence
+        : replay.recordedRecommendation !== replay.replayedRecommendation
+          ? replay.reason === 'RECORDED_RECOMMENDATION_DIFFERS_FROM_REPLAY'
+          : replay.reason === 'RECORDED_CONFIDENCE_DIFFERS_FROM_REPLAY'
+            && replay.recordedConfidence !== replay.replayedConfidence)
+  }
+  return replay.recordedRecommendation === null && replay.replayedRecommendation === null
+    && replay.recordedConfidence === null && replay.replayedConfidence === null
+    && replay.snapshotConsistencyVerified === false && replay.ruleEvaluationPerformed === false
+}
+
 export function listDecisionHistory(
   factoryId: string,
   page = 0,
@@ -198,5 +280,16 @@ export function compareDecisionHistory(
   const query = encodeURIComponent(baselineId)
   return get<DecisionSnapshotComparison>(
     `/${factoryId}/decision-history/${encodeURIComponent(decisionId)}/comparison?baselineId=${query}`,
+  )
+}
+
+export function replayDecisionHistory(
+  factoryId: string,
+  decisionId: string,
+): Promise<ApiResponse<DecisionRecommendationReplay>> {
+  assertFactoryId(factoryId)
+  assertRecordId(decisionId)
+  return get<DecisionRecommendationReplay>(
+    `/${factoryId}/decision-history/${encodeURIComponent(decisionId)}/replay-evaluation`,
   )
 }

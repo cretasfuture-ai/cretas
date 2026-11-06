@@ -150,3 +150,5 @@
 - 按 AGENTS.md 的唯一协调者、结构化回执与弹性并发规则执行；创建 worktree、派工和合并前核对本表及 `git worktree list`。
 - 仅在飞状态；merged 当次归档释放 scope。每条≤300字、全文≤30000 bytes，不开三级增量段；详细证据进 archive/。PR/push/fastlane 保留 `python scripts/ci/check_dispatch_active.py` 门禁。
 - 原维护规则全文保留在 archive/2026-10-22-s6-b3b-review.md。
+
+- `FOOD-QUALITY-REPLAY-CAPTURE-20261107` — `in-progress` — Owner `Food Root` — Base `cf64e37840ecc435b0d48893a5ea094a19103623` — 未来质检建议完整输入/规则版本快照+纯只读复算；不回补旧历史/不执行审批库存。精确backend/Web锁及验收见archive/2026-11-07-quality-recommendation-replay.md。

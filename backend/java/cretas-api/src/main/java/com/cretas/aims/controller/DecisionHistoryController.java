@@ -5,6 +5,8 @@ import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.decision.DecisionSnapshotComparison;
 import com.cretas.aims.dto.decision.DecisionHistoryPage;
+import com.cretas.aims.dto.decision.DecisionRecommendationReplay;
+import com.cretas.aims.service.DecisionRecommendationReplayService;
 import com.cretas.aims.service.DecisionHistoryQueryService;
 import com.cretas.aims.service.DecisionSnapshotComparisonService;
 import com.cretas.aims.utils.FactoryAccessValidator;
@@ -21,6 +23,7 @@ public class DecisionHistoryController {
     private final FactoryAccessValidator factoryAccess;
     private final DecisionSnapshotComparisonService comparison;
     private final DecisionHistoryQueryService history;
+    private final DecisionRecommendationReplayService replay;
 
     @GetMapping
     @Operation(summary = "读取当前工厂历史决策索引", description = "只返回分页元数据，不返回输入、输出、回放原文或人员信息，不执行或更新决策")
@@ -39,5 +42,14 @@ public class DecisionHistoryController {
             @RequestParam String baselineId) {
         factoryAccess.validateAccess(factoryId);
         return ApiResponse.success(comparison.compare(factoryId, decisionId, baselineId));
+    }
+
+    @GetMapping("/{decisionId}/replay-evaluation")
+    @RequirePermission(value = {"system:read", "quality:read"}, requireAll = true)
+    @Operation(summary = "只读回放质检处置建议", description = "仅重执行已保存的未来质检建议快照，不审批、不放行、不执行库存或其他业务动作")
+    public ApiResponse<DecisionRecommendationReplay> replay(
+            @PathVariable String factoryId, @PathVariable String decisionId) {
+        factoryAccess.validateAccess(factoryId);
+        return ApiResponse.success(replay.replay(factoryId, decisionId));
     }
 }
