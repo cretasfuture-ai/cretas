@@ -1270,6 +1270,15 @@ async function tryJavaIntentChat(
   const idx = () => chatHistory.value.findIndex((m) => m.id === assistantId);
   const factoryId = authStore.factoryId;
   if (!factoryId) return 'fall-through';
+  // Built-in analysis templates describe the selected dataset. A generic
+  // operational report can otherwise consume a sales question as production KPI.
+  // Keep this exact allowlist read-only; ordinary questions and 操作 still use
+  // the intent gateway and its confirmation/permission checks.
+  const hasAnalysisData = Boolean(selectedUploadId.value) || currentData.value.length > 0;
+  if (activeAiTab.value === 'consult' && hasAnalysisData
+      && queryTemplates.some(template => template.query === query)) {
+    return 'fall-through';
+  }
   try {
     // AI 读写分离: 操作 tab 用独立 session (咨询会话不得污染操作 slot-filling)。
     const isOperateTab = activeAiTab.value === 'operate' && hasAnyWrite.value;

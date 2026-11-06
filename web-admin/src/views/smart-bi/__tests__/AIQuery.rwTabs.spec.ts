@@ -87,7 +87,9 @@ const globalStubs = {
 interface AIQueryVm {
   inputQuery: string;
   activeAiTab: 'consult' | 'operate';
+  selectedUploadId: number | null;
   handleSendMessage: () => Promise<void>;
+  setAnalysisContext: (data: unknown[], fields: Array<{ original: string; standard: string }>) => void;
 }
 
 function mountWithRole(role: string): Promise<VueWrapper> {
@@ -121,6 +123,54 @@ describe('AIQuery AI read/write tabs (P2)', () => {
     confirmIntentActionMock.mockReset();
     chatAnalysisStreamMock.mockReset();
     chatAnalysisStreamMock.mockImplementation(() => ({ abort: vi.fn() }));
+  });
+
+  it.each([
+    '分析销售额的月度变化趋势，标注增长和下降的关键月份',
+    '按产品或品类统计销售额排名，找出TOP5和末位产品',
+  ])('analyses the selected dataset for the built-in template: %s', async question => {
+    const wrapper = await mountWithRole('factory_super_admin');
+    const vm = wrapper.vm as unknown as AIQueryVm;
+    vm.setAnalysisContext([{ product: '演示产品', revenue: 120 }], []);
+    await send(wrapper, question);
+    expect(executeIntentMock).not.toHaveBeenCalled();
+    expect(chatAnalysisStreamMock).toHaveBeenCalledOnce();
+    expect((chatAnalysisStreamMock.mock.calls[0] as unknown[])[0]).toMatchObject({
+      query: question, data: [{ product: '演示产品', revenue: 120 }],
+    });
+    wrapper.unmount();
+  });
+
+  it('keeps templates without a dataset on the business intent gateway', async () => {
+    executeIntentMock.mockResolvedValue(successResponse);
+    const wrapper = await mountWithRole('factory_super_admin');
+    await send(wrapper, '分析销售额的月度变化趋势，标注增长和下降的关键月份');
+    expect(executeIntentMock).toHaveBeenCalledOnce();
+    expect(chatAnalysisStreamMock).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('passes the selected upload ID to dataset analysis without requiring inline rows', async () => {
+    const wrapper = await mountWithRole('factory_super_admin');
+    (wrapper.vm as unknown as AIQueryVm).selectedUploadId = 77;
+    await send(wrapper, '分析销售额的月度变化趋势，标注增长和下降的关键月份');
+    expect(executeIntentMock).not.toHaveBeenCalled();
+    expect((chatAnalysisStreamMock.mock.calls[0] as unknown[])[0]).toMatchObject({ uploadId: '77' });
+    wrapper.unmount();
+  });
+
+  it('keeps operation requests and ordinary consultation behind the intent gateway with data loaded', async () => {
+    executeIntentMock.mockResolvedValue(successResponse);
+    const wrapper = await mountWithRole('factory_super_admin');
+    const vm = wrapper.vm as unknown as AIQueryVm;
+    vm.setAnalysisContext([{ revenue: 120 }], []);
+    await send(wrapper, '给五花肉入库 200kg');
+    expect(executeIntentMock.mock.calls[0][2].mode).toBe('READ');
+    vm.activeAiTab = 'operate';
+    await send(wrapper, '分析销售额的月度变化趋势，标注增长和下降的关键月份');
+    expect(executeIntentMock.mock.calls[1][2].mode).toBe('OPERATE');
+    expect(chatAnalysisStreamMock).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 
   it('sends mode=READ on 咨询 tab and mode=OPERATE on 操作 tab with separate sessions', async () => {
