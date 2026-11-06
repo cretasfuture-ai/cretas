@@ -24,6 +24,8 @@ import java.time.LocalDate;
 import java.util.List;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.utils.FactoryAccessValidator;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * 智能调度控制器
@@ -39,6 +41,9 @@ public class SchedulingController {
     private final SchedulingService schedulingService;
     private final UrgentInsertService urgentInsertService;
     private final LinUCBService linUCBService;
+    /** Explicit tenant check for the preview write boundary; legacy routes keep their constructor. */
+    @Autowired
+    private FactoryAccessValidator factoryAccessValidator;
 
     // ==================== 调度计划 CRUD ====================
 
@@ -895,6 +900,27 @@ public class SchedulingController {
 
         java.util.Map<String, Object> impact = urgentInsertService.analyzeInsertImpact(factoryId, slotId, request);
         return ApiResponse.success("分析完成", impact);
+    }
+
+    /**
+     * Create the immutable server-owned preview used by confirm/force.
+     * GET impact above intentionally remains read-only; this endpoint is the
+     * explicit write boundary for a fifteen-minute confirmation snapshot.
+     */
+    @RequirePermission({"scheduling:read_write"})
+    @RequireModule("scheduling")
+    @PostMapping("/urgent-insert/slots/{slotId}/preview")
+    @Operation(summary = "创建插单确认预览", description = "按真实产品单位、产线和资源状态创建不可变插单预览")
+    public ApiResponse<java.util.Map<String, Object>> createInsertPreview(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable String factoryId,
+            @Parameter(description = "时段ID", example = "SLOT-2025-001")
+            @PathVariable String slotId,
+            @Valid @RequestBody GetInsertSlotsRequest request) {
+        factoryAccessValidator.validateAccess(factoryId);
+        java.util.Map<String, Object> preview = urgentInsertService.createInsertPreview(
+                factoryId, slotId, request);
+        return ApiResponse.success("预览创建成功", preview);
     }
 
     /**

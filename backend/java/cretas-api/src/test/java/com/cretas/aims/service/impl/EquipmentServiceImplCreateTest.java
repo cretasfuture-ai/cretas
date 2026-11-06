@@ -36,6 +36,7 @@ class EquipmentServiceImplCreateTest {
     @Mock private EquipmentMaintenanceRepository maintenanceRepository;
     @Mock private BatchEquipmentUsageRepository usageRepository;
     @Mock private UserRepository userRepository;
+    @Mock private com.cretas.aims.service.scheduling.SchedulingResourceWriteLock resourceWriteLock;
 
     @InjectMocks
     private EquipmentServiceImpl service;

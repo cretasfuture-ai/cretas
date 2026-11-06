@@ -13,6 +13,7 @@ import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.ScaleBrandModelRepository;
 import com.cretas.aims.repository.ScaleProtocolConfigRepository;
 import com.cretas.aims.service.ScaleProtocolAdapterService;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.cretas.aims.util.ErrorSanitizer;
 import com.cretas.aims.utils.SecurityUtils;
 import io.swagger.v3.oas.annotations.Operation;
@@ -26,6 +27,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.validation.Valid;
 import java.util.List;
@@ -52,6 +54,7 @@ public class ScaleDeviceController {
     private final ScaleProtocolConfigRepository protocolRepository;
     private final ScaleBrandModelRepository brandModelRepository;
     private final ScaleProtocolAdapterService protocolAdapterService;
+    private final SchedulingResourceWriteLock resourceWriteLock;
 
     // ==================== 设备列表查询 ====================
 
@@ -123,11 +126,14 @@ public class ScaleDeviceController {
     // ==================== 创建设备 ====================
 
     @RequirePermission({"equipment:read_write"})
+    @Transactional
     @PostMapping
     @Operation(summary = "创建秤设备", description = "添加新的 IoT 电子秤设备")
     public ApiResponse<ScaleDeviceDTO> createScaleDevice(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @RequestBody @Valid ScaleDeviceDTO.CreateRequest request) {
+
+        resourceWriteLock.lockFactory(factoryId);
 
         log.info("创建秤设备: factoryId={}, request={}", factoryId, request);
 
@@ -196,12 +202,15 @@ public class ScaleDeviceController {
     // ==================== 更新设备 ====================
 
     @RequirePermission({"equipment:read_write"})
+    @Transactional
     @PutMapping("/{equipmentId}")
     @Operation(summary = "更新秤设备", description = "更新 IoT 电子秤设备信息")
     public ApiResponse<ScaleDeviceDTO> updateScaleDevice(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "设备ID") Long equipmentId,
             @RequestBody @Valid ScaleDeviceDTO.UpdateRequest request) {
+
+        resourceWriteLock.lockFactory(factoryId);
 
         log.info("更新秤设备: factoryId={}, equipmentId={}, request={}", factoryId, equipmentId, request);
 
@@ -254,11 +263,14 @@ public class ScaleDeviceController {
     // ==================== 删除设备 ====================
 
     @RequirePermission({"equipment:read_write"})
+    @Transactional
     @DeleteMapping("/{equipmentId}")
     @Operation(summary = "删除秤设备", description = "删除指定的 IoT 电子秤设备")
     public ApiResponse<Void> deleteScaleDevice(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "设备ID") Long equipmentId) {
+
+        resourceWriteLock.lockFactory(factoryId);
 
         log.info("删除秤设备: factoryId={}, equipmentId={}", factoryId, equipmentId);
 
@@ -284,12 +296,15 @@ public class ScaleDeviceController {
     // ==================== 绑定协议 ====================
 
     @RequirePermission({"equipment:read_write"})
+    @Transactional
     @PostMapping("/{equipmentId}/bind-protocol")
     @Operation(summary = "绑定协议", description = "为设备绑定通信协议")
     public ApiResponse<ScaleDeviceDTO> bindProtocol(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "设备ID") Long equipmentId,
             @RequestBody @Valid ScaleDeviceDTO.BindProtocolRequest request) {
+
+        resourceWriteLock.lockFactory(factoryId);
 
         log.info("绑定协议: factoryId={}, equipmentId={}, protocolId={}", factoryId, equipmentId, request.getProtocolId());
 

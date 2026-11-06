@@ -37,6 +37,12 @@ public interface UrgentInsertService {
     Map<String, Object> analyzeInsertImpact(String factoryId, String slotId, GetInsertSlotsRequest request);
 
     /**
+     * Create an immutable server-owned preview snapshot for confirmation.
+     * Unlike the GET impact analysis this is an explicit write operation.
+     */
+    Map<String, Object> createInsertPreview(String factoryId, String slotId, GetInsertSlotsRequest request);
+
+    /**
      * 确认紧急插单（创建生产计划）
      *
      * @param factoryId 工厂ID
