@@ -180,8 +180,10 @@ class DecisionSnapshotComparisonRepositoryQueryValidationTest {
         QualityInspection inspection = replayInspection();
         QualityDispositionRuleServiceImpl quality = dispositionService(approval, inspection);
         var executed = quality.executeDisposition(inspection.getFactoryId(), inspection,
-                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.HOLD, 1L, "synthetic PostgreSQL fixture");
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.RELEASE, 1L, "synthetic PostgreSQL fixture");
+        assertThat(executed.isApprovalInitiated()).isFalse();
         var row = repository.findByIdAndFactoryId(executed.getAuditLogId(), inspection.getFactoryId()).orElseThrow();
+        assertThat(row.getDecisionType()).isEqualTo(DecisionAuditLog.DecisionType.RULE_EXECUTION);
         String beforeJsonb = row.getInputContext();
         em.flush(); em.clear(); clearInvocations(approval);
         var persisted = repository.findByIdAndFactoryId(row.getId(), inspection.getFactoryId()).orElseThrow();
@@ -246,7 +248,9 @@ class DecisionSnapshotComparisonRepositoryQueryValidationTest {
         var executed = quality.executeDisposition(inspection.getFactoryId(), inspection,
                 com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE,
                 1L, "synthetic PostgreSQL fixture");
+        assertThat(executed.isApprovalInitiated()).isTrue();
         var row = repository.findByIdAndFactoryId(executed.getAuditLogId(), inspection.getFactoryId()).orElseThrow();
+        assertThat(row.getDecisionType()).isEqualTo(DecisionAuditLog.DecisionType.APPROVAL);
         em.flush(); em.clear(); long count = repository.count();
         var result = recommendationReplay.replay(inspection.getFactoryId(), row.getId());
         assertThat(result.status()).isEqualTo(DecisionRecommendationReplay.Status.REPLAY_MATCH);
