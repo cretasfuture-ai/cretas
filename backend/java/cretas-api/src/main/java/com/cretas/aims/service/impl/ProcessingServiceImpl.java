@@ -17,6 +17,7 @@ import com.cretas.aims.service.quality.QualityStandardValueResolver;
 import com.cretas.aims.service.AIAnalysisService;
 import com.cretas.aims.service.CacheService;
 import com.cretas.aims.service.WageRecordTriggerService;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.cretas.aims.entity.config.QualityCheckItemBinding;
 import com.cretas.aims.repository.QualityCheckItemBindingRepository;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
@@ -55,6 +56,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ProcessingServiceImpl implements ProcessingService {
     private static final Logger log = LoggerFactory.getLogger(ProcessingServiceImpl.class);
+
+    @Autowired
+    private SchedulingResourceWriteLock resourceWriteLock;
 
     /**
      * 统计摘要只需要识别明显的存储单位；它不负责把不同单位换算成同一单位。
@@ -1652,10 +1656,12 @@ public class ProcessingServiceImpl implements ProcessingService {
         return trends;
     }
     // ========== 设备监控 ==========
+    @Transactional
     public void recordEquipmentUsage(String factoryId, String batchId, Long equipmentId,
                                     LocalDate startTime, LocalDate endTime) {
+        resourceWriteLock.lockFactory(factoryId);
         // equipmentId 现在是 Long 类型，与 FactoryEquipment.id 一致
-        FactoryEquipment equipment = equipmentRepository.findById(equipmentId)
+        FactoryEquipment equipment = equipmentRepository.findByIdAndFactoryId(equipmentId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("设备不存在"));
         // 使用 BatchEquipmentUsage 替代 EquipmentUsage
         BatchEquipmentUsage usage = new BatchEquipmentUsage();
@@ -1701,7 +1707,7 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
     public Map<String, Object> getEquipmentMetrics(String factoryId, Long equipmentId, Integer days) {
         // equipmentId 现在是 Long 类型，与 FactoryEquipment.id 一致
-        FactoryEquipment equipment = equipmentRepository.findById(equipmentId)
+        FactoryEquipment equipment = equipmentRepository.findByIdAndFactoryId(equipmentId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("设备不存在"));
         LocalDateTime startDate = LocalDateTime.now().minusDays(days);
         // 使用 BatchEquipmentUsage 替代 EquipmentUsage
@@ -1720,9 +1726,11 @@ public class ProcessingServiceImpl implements ProcessingService {
         metrics.put("averageUsageHours", avgUsageHours);
         return metrics;
     }
+    @Transactional
     public void recordEquipmentMaintenance(String factoryId, Long equipmentId, Map<String, Object> maintenance) {
+        resourceWriteLock.lockFactory(factoryId);
         // equipmentId 现在是 Long 类型，与 FactoryEquipment.id 一致
-        FactoryEquipment equipment = equipmentRepository.findById(equipmentId)
+        FactoryEquipment equipment = equipmentRepository.findByIdAndFactoryId(equipmentId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("设备不存在"));
         equipment.setLastMaintenanceDate(LocalDate.now());
         equipment.setStatus("running");

@@ -12,6 +12,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 
 import java.util.*;
 
@@ -26,7 +28,11 @@ import java.util.*;
  */
 @Slf4j
 @Component
+@Transactional
 public class ScaleAddDeviceTool extends AbstractBusinessTool {
+
+    @Autowired
+    private SchedulingResourceWriteLock resourceWriteLock;
 
     @Autowired
     private EquipmentRepository equipmentRepository;
@@ -168,7 +174,9 @@ public class ScaleAddDeviceTool extends AbstractBusinessTool {
     }
 
     @Override
+    @Transactional
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("执行添加电子秤设备 - 工厂ID: {}, 参数: {}", factoryId, params);
 
         // 解析参数

@@ -8,6 +8,8 @@ import com.cretas.aims.dto.scheduling.ConfirmUrgentInsertRequest;
 import com.cretas.aims.dto.scheduling.GetInsertSlotsRequest;
 import com.cretas.aims.entity.FactoryEquipment;
 import com.cretas.aims.entity.InsertSlot;
+import com.cretas.aims.entity.InsertSlotPreview;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductEquipmentRequirement;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionLineCapacityConfig;
@@ -16,6 +18,8 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.InsertSlotRepository;
+import com.cretas.aims.repository.InsertSlotPreviewRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductEquipmentRequirementRepository;
 import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
@@ -26,6 +30,7 @@ import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
 import com.cretas.aims.service.orchestration.BomExpansionService;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -59,6 +64,7 @@ import static org.mockito.Mockito.when;
 class UrgentInsertResourceGuardContractTest {
 
     private static final String F = "F-UI-1";
+    private static final LocalDateTime SLOT_START = LocalDateTime.of(2027, 1, 5, 9, 0);
 
     private BomExpansionService bom;
     private ImpactAnalysisServiceImpl impact;
@@ -208,11 +214,12 @@ class UrgentInsertResourceGuardContractTest {
     // ------------------------------------------------- analyzeInsertImpact entry
 
     private InsertSlot slot() {
-        LocalDateTime start = LocalDateTime.now().plusHours(2);
-        return InsertSlot.builder().id("S-1").factoryId(F).productionLineId("default")
-                .startTime(start).endTime(start.plusHours(2))
+        InsertSlot slot = InsertSlot.builder().id("S-1").factoryId(F).productionLineId("L1")
+                .startTime(SLOT_START).endTime(SLOT_START.plusHours(2))
                 .availableCapacity(new BigDecimal("200")).impactLevel("none")
                 .requiredWorkers(4).availableWorkers(4).status("available").build();
+        slot.setUpdatedAt(SLOT_START.minusMinutes(5));
+        return slot;
     }
 
     private static GetInsertSlotsRequest analyzeReq() {
@@ -226,7 +233,7 @@ class UrgentInsertResourceGuardContractTest {
     private ImpactAnalysisService impactWithRealResourceChecks() {
         ImpactAnalysisService svc = mock(ImpactAnalysisService.class);
         when(svc.calculateChainImpact(anyString(), any(), any(), any(), any()))
-                .thenReturn(ChainImpactResult.builder().impactLevel("none").build());
+                .thenReturn(completeImpact());
         when(svc.calculateRecommendScore(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(new RecommendScoreResult());
         when(svc.checkMaterialAvailability(anyString(), any(), any()))
@@ -236,11 +243,34 @@ class UrgentInsertResourceGuardContractTest {
         return svc;
     }
 
-    private UrgentInsertServiceImpl urgent(InsertSlotRepository slots, ImpactAnalysisService svc, ProductionPlanRepository plans) {
+    private UrgentInsertServiceImpl urgent(InsertSlotRepository slots, ImpactAnalysisService svc,
+                                           ProductionPlanRepository plans) {
+        return urgent(slots, svc, plans, "件");
+    }
+
+    private UrgentInsertServiceImpl urgent(InsertSlotRepository slots, ImpactAnalysisService svc,
+                                           ProductionPlanRepository plans, String productUnit) {
+        InsertSlotPreviewRepository previews = mock(InsertSlotPreviewRepository.class);
+        InsertSlotPreview preview = InsertSlotPreview.builder().id("PV-1").factoryId(F).slotId("S-1")
+                .productTypeId("PT-1").previewQuantity(new BigDecimal("50"))
+                .quantityUnit("KG".equals(productUnit) ? "KG" : "PIECE")
+                .plannedUnit(productUnit).productionLineId("L1").windowStart(SLOT_START)
+                .windowEnd(SLOT_START.plusHours(2)).slotUpdatedAt(slot().getUpdatedAt())
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).build();
+        preview.setCreatedAt(LocalDateTime.now());
+        when(previews.findByIdAndFactoryId("PV-1", F)).thenReturn(Optional.of(preview));
+        ProductTypeRepository products = mock(ProductTypeRepository.class);
+        ProductType product = new ProductType();
+        product.setId("PT-1"); product.setFactoryId(F); product.setUnit(productUnit);
+        when(products.findByIdAndFactoryId("PT-1", F)).thenReturn(Optional.of(product));
+        when(products.findByIdAndFactoryIdForUpdate("PT-1", F)).thenReturn(Optional.of(product));
         return UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
                 InsertSlotRepository.class, slots,
                 ImpactAnalysisService.class, svc,
                 ProductionPlanRepository.class, plans,
+                InsertSlotPreviewRepository.class, previews,
+                ProductTypeRepository.class, products,
+                SchedulingResourceWriteLock.class, mock(SchedulingResourceWriteLock.class),
                 LineCapacityEquipmentCheck.class, lineChecks,
                 ObjectMapper.class, new ObjectMapper()));
     }
@@ -283,7 +313,7 @@ class UrgentInsertResourceGuardContractTest {
     private ImpactAnalysisService impactWithEnoughMaterial() {
         ImpactAnalysisService svc = mock(ImpactAnalysisService.class);
         when(svc.calculateChainImpact(anyString(), any(), any(), any(), any()))
-                .thenReturn(ChainImpactResult.builder().impactLevel("none").build());
+                .thenReturn(completeImpact());
         when(svc.calculateRecommendScore(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(new RecommendScoreResult());
         when(svc.checkMaterialAvailability(anyString(), any(), any()))
@@ -296,7 +326,8 @@ class UrgentInsertResourceGuardContractTest {
         when(slots.findByIdAndFactoryId("S-1", F)).thenReturn(Optional.of(slot()));
         GetInsertSlotsRequest req = analyzeReq();
         req.setQuantityUnit(unit);
-        return urgent(slots, impactWithEnoughMaterial(), mock(ProductionPlanRepository.class))
+        return urgent(slots, impactWithEnoughMaterial(), mock(ProductionPlanRepository.class),
+                "KG".equals(unit) ? "kg" : "件")
                 .analyzeInsertImpact(F, "S-1", req);
     }
 
@@ -356,7 +387,9 @@ class UrgentInsertResourceGuardContractTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> rs = (Map<String, Object>) out.get("resourceStatus");
         assertThat(rs.get("capacityStatus")).isEqualTo("MISSING");
-        assertThat((String) rs.get("capacityMessage")).contains("包装线 配的是 件/小时");
+        assertThat((String) rs.get("capacityMessage"))
+                .contains("指定产线配置该产品按kg计的每小时产能")
+                .contains("包装线 配的是 件/小时");
     }
 
     @Test
@@ -372,11 +405,20 @@ class UrgentInsertResourceGuardContractTest {
 
     // ------------------------------------------------------------ confirm/force
 
+    private static ChainImpactResult completeImpact() {
+        return ChainImpactResult.builder().impactLevel("none").requiresApproval(false)
+                .totalAffectedPlans(0).directConflicts(0).cascadeDelays(0)
+                .maxDelayMinutes(0).totalDelayMinutes(0).affectedVipCustomers(0)
+                .criticalCrPlans(0).exceedingDeadlinePlans(0).impactScore(0).build();
+    }
+
     private static ConfirmUrgentInsertRequest confirmReq(boolean force) {
         ConfirmUrgentInsertRequest r = new ConfirmUrgentInsertRequest();
         r.setSlotId("S-1");
+        r.setPreviewId("PV-1");
         r.setProductTypeId("PT-1");
         r.setPlannedQuantity(new BigDecimal("50"));
+        r.setQuantityUnit("PIECE");
         r.setForceInsert(force);
         return r;
     }
@@ -402,6 +444,7 @@ class UrgentInsertResourceGuardContractTest {
 
     @Test
     void lostClaimIs409AndNoPlanIsSaved() {
+        configuredInPieces("30");
         InsertSlotRepository slots = mock(InsertSlotRepository.class);
         when(slots.findByIdAndFactoryId("S-1", F)).thenReturn(Optional.of(slot()));
         when(slots.claimAvailableSlot(eq("S-1"), eq(F), any())).thenReturn(0);

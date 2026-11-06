@@ -24,6 +24,60 @@ describe('schedulingApiClient', () => {
     resetApiMock(mock);
   });
 
+  describe('urgent insert preview binding', () => {
+    it('issues the immutable preview through an explicit POST, keeping the analysis GET read-only', async () => {
+      mock.onPost(`${BASE}/urgent-insert/slots/SLOT/preview`).reply(200, { success: true, data: { previewId: 'P' } });
+      const context = { productTypeId: 'PRODUCT', requiredQuantity: 17, quantityUnit: 'PIECE', deadline: '2027-01-05T18:00:00' };
+      await schedulingApiClient.createInsertPreview('SLOT', context);
+      expect(JSON.parse(mock.history.post[0].data)).toEqual(context);
+      expect(mock.history.get).toHaveLength(0);
+    });
+    it('transports the selected product unit and quantity when loading slots', async () => {
+      mock.onGet(`${BASE}/urgent-insert/slots`).reply(200, { success: true, data: [] });
+      await schedulingApiClient.getAvailableSlots(3, undefined, {
+        productTypeId: 'COUNT-PRODUCT', requiredQuantity: 17,
+        quantityUnit: 'PIECE', deadline: '2027-01-05T18:00:00',
+      });
+      expect(mock.history.get[0].params).toMatchObject({
+        productTypeId: 'COUNT-PRODUCT', quantity: 17, quantityUnit: 'PIECE',
+        deadline: '2027-01-05T18:00:00',
+      });
+    });
+
+    it('does not invent a capacity unit for an unknown packaging unit', async () => {
+      mock.onGet(`${BASE}/urgent-insert/slots/SLOT/impact`).reply(200, { success: true, data: {} });
+      await schedulingApiClient.analyzeSlotImpact('SLOT', 'BAG-PRODUCT', 17, undefined, null);
+      expect(mock.history.get[0].params).not.toHaveProperty('quantityUnit');
+    });
+
+    it.each(['confirmUrgentInsert', 'forceUrgentInsert'])('%s preserves the immutable preview and unit', async method => {
+      const route = method === 'forceUrgentInsert' ? 'force' : 'confirm';
+      mock.onPost(`${BASE}/urgent-insert/${route}`).reply(200, { success: true, data: {} });
+      const request = {
+        slotId: 'SLOT', previewId: 'SERVER-PREVIEW', productTypeId: 'COUNT-PRODUCT',
+        plannedQuantity: 17, quantityUnit: 'PIECE', urgentReason: 'test',
+      };
+      await schedulingApiClient[method](request);
+      expect(JSON.parse(mock.history.post[0].data)).toMatchObject(request);
+    });
+
+    it('legacy analysis and confirm preserve the explicitly supplied unit and preview', async () => {
+      mock.onGet(`${BASE}/urgent-insert/slots/SLOT/impact`).reply(200, { success: true, data: {} });
+      await schedulingApiClient.analyzeInsertImpact('SLOT', {
+        productTypeId: 'BATCH-PRODUCT', quantity: 3, quantityUnit: 'BATCH',
+      });
+      expect(mock.history.get[0].params.quantityUnit).toBe('BATCH');
+      mock.onPost(`${BASE}/urgent-insert/confirm`).reply(200, { success: true, data: {} });
+      await schedulingApiClient.confirmInsert({
+        slotId: 'SLOT', productTypeId: 'BATCH-PRODUCT', quantity: 3,
+        previewId: 'BATCH-PREVIEW', quantityUnit: 'BATCH', deadline: '',
+      });
+      expect(JSON.parse(mock.history.post[0].data)).toMatchObject({
+        previewId: 'BATCH-PREVIEW', quantityUnit: 'BATCH', plannedQuantity: 3,
+      });
+    });
+  });
+
   // ========== 调度计划 CRUD ==========
 
   describe('createPlan', () => {

@@ -5,6 +5,7 @@ import com.cretas.aims.entity.*;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.aps.APSAdaptiveSchedulingService;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -12,6 +13,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -44,6 +47,10 @@ public class APSAdaptiveSchedulingServiceImpl implements APSAdaptiveSchedulingSe
     private final FactorySchedulingConfigRepository factorySchedulingConfigRepository;
     private final WeightHistoryRepository weightHistoryRepository;
     private final ObjectMapper objectMapper;
+    private final SchedulingResourceWriteLock schedulingResourceWriteLock;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     // ==================== 实时进度追踪 ====================
 
@@ -297,13 +304,28 @@ public class APSAdaptiveSchedulingServiceImpl implements APSAdaptiveSchedulingSe
     @Override
     @Transactional
     public void updateLineEfficiencyFactor(String lineId) {
-        double rollingEfficiency = calculateRollingEfficiency(lineId);
+        // Bootstrap only the immutable factory key; the mutable line state is re-read after the mutex.
+        ProductionLine bootstrap = productionLineRepository.findById(lineId).orElse(null);
+        if (bootstrap == null || bootstrap.getFactoryId() == null) {
+            return;
+        }
+        schedulingResourceWriteLock.lockFactory(bootstrap.getFactoryId());
 
-        productionLineRepository.findById(lineId).ifPresent(line -> {
-            line.setRollingEfficiency(BigDecimal.valueOf(rollingEfficiency));
-            productionLineRepository.save(line);
-            log.info("Updated line {} rolling efficiency to {}", lineId, rollingEfficiency);
-        });
+        ProductionLine line = productionLineRepository
+                .findByIdAndFactoryIdAndDeletedAtIsNull(lineId, bootstrap.getFactoryId())
+                .orElse(null);
+        if (line == null) {
+            return;
+        }
+        entityManager.refresh(line);
+        if (line.getDeletedAt() != null) {
+            return;
+        }
+
+        double rollingEfficiency = calculateRollingEfficiency(lineId);
+        line.setRollingEfficiency(BigDecimal.valueOf(rollingEfficiency));
+        productionLineRepository.save(line);
+        log.info("Updated line {} rolling efficiency to {}", lineId, rollingEfficiency);
     }
 
     @Override

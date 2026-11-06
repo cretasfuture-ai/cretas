@@ -44,6 +44,7 @@ public class LineCapacityConfigService {
     private final ProductionLineRepository productionLines;
     private final ProductTypeRepository productTypes;
     private final EquipmentRepository equipment;
+    private final SchedulingResourceWriteLock resourceWriteLock;
 
     @Transactional(readOnly = true)
     public List<ProductionLineCapacityConfig> listCapacity(String factoryId) {
@@ -59,6 +60,7 @@ public class LineCapacityConfigService {
     public ProductionLineCapacityConfig setCapacity(String factoryId, String productionLineId, String productTypeId,
                                                     BigDecimal capacityPerHour, String unit, Source source,
                                                     ActorRef actor) {
+        resourceWriteLock.lockFactory(factoryId);
         if (actor == null) {
             throw new BusinessException(401, "无法识别当前操作人, 未保存");
         }
@@ -99,6 +101,7 @@ public class LineCapacityConfigService {
     /** 软删一条在用的产能配置 (本厂之外 / 不存在 ⇒ 404)。 */
     @Transactional
     public void retireCapacity(String factoryId, Long configId) {
+        resourceWriteLock.lockFactory(factoryId);
         ProductionLineCapacityConfig row = capacityConfigs.findByIdAndFactoryId(configId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "产能配置不存在或不属于本厂: " + configId));
         row.setDeletedAt(LocalDateTime.now());
@@ -118,6 +121,7 @@ public class LineCapacityConfigService {
     public List<ProductEquipmentRequirement> replaceEquipment(String factoryId, String productTypeId,
                                                               Collection<Long> equipmentIds, Source source,
                                                               ActorRef actor) {
+        resourceWriteLock.lockFactory(factoryId);
         if (actor == null) {
             throw new BusinessException(401, "无法识别当前操作人, 未保存");
         }

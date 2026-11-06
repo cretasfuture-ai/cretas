@@ -28,14 +28,27 @@ public class ConfirmUrgentInsertRequest {
     @NotBlank(message = "时段ID不能为空")
     private String slotId;
 
+    @Schema(description = "影响分析返回的不可变预览ID", required = true)
+    @NotBlank(message = "预览ID不能为空")
+    private String previewId;
+
     @Schema(description = "产品类型ID", required = true)
     @NotNull(message = "产品类型不能为空")
     private String productTypeId;
 
-    @Schema(description = "计划数量 (kg)", required = true)
+    @Schema(description = "计划数量，必须与服务端预览快照一致", required = true)
     @NotNull(message = "计划数量不能为空")
     @DecimalMin(value = "0.01", message = "计划数量必须大于0")
+    @Digits(integer = 8, fraction = 2, message = "计划数量最多8位整数、2位小数")
     private BigDecimal plannedQuantity;
+
+    @Schema(description = "产能核对单位 PIECE / KG / BATCH", required = true,
+            allowableValues = {"PIECE", "KG", "BATCH"})
+    @NotBlank(message = "数量单位不能为空")
+    @jakarta.validation.constraints.Pattern(
+            regexp = "(?i)PIECE|KG|BATCH",
+            message = "数量单位只能是 PIECE / KG / BATCH")
+    private String quantityUnit;
 
     @Schema(description = "客户订单号")
     private String customerOrderNumber;
