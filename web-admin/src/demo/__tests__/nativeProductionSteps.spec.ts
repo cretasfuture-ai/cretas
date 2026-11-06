@@ -50,12 +50,14 @@ describe('native production adapters', () => {
     const node = document.createElement('div');node.append(document.createElement('input')); node.setAttribute('data-process-code', 'workflow-real-code');
     const panel=document.createElement('div');
     for(const count of [24,60]){const list=document.createElement('ul');for(let n=0;n<count;n++){const choice=document.createElement('li');choice.className='el-time-spinner__item';choice.textContent=String(n).padStart(2,'0');list.append(choice)}list.className='el-time-spinner__list';panel.append(list)}
-    testUi.waitFor = async (selector) => selector==='.el-time-panel'?panel:node;
+    const confirmation=document.createElement('div');confirmation.innerHTML='<span class="el-message-box__title">确认正式报工</span>';
+    testUi.waitFor = async (selector) => selector==='.el-time-panel'?panel:selector==='.el-message-box'?confirmation:node;
     testUi.read = vi.fn(async (path: string) => path.includes('/rows') ? { data: [{ clientRowId: `${s.runKey}:p1`, submissionStatus: 'SUBMITTED' }] } : { data: [] });
     await adapter.prepare({ state: s, context: s.context!, ui: testUi });
     const result = await adapter.commit({ state: s, context: s.context!, ui: testUi });
     expect(result?.processReport1?.clientRowId).toBe(`${s.runKey}:p1`);
     expect(result?.processReport1?.submissionStatus).toBe('SUBMITTED');
+    expect(testUi.calls).toContain('click:.el-message-box__btns .el-button--primary');
     expect(testUi.calls.filter(call=>call==='click:.el-time-panel__btn.confirm')).toHaveLength(2);
     expect(testUi.calls.some(call=>call.startsWith('input:[data-testid="output-start-time"]'))).toBe(false);
   });
