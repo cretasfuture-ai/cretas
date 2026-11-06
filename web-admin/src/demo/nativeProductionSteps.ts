@@ -51,6 +51,18 @@ export async function selectNativeTime(ui: NativeDemoContext['ui'], selector: st
   await ui.until(()=>input.value===value,'时间控件实际保存选择')
 }
 
+async function closeSubmittedProcessDrawer(ui: NativeDemoContext['ui']): Promise<void> {
+  const headings=Array.from(document.querySelectorAll<HTMLElement>('[data-testid="process-sheet-product-name"]')).filter(node=>node.getBoundingClientRect().width>0)
+  if(!headings.length)return
+  if(headings.length!==1)throw new Error('当前报工窗口不唯一，请核对原页面')
+  const heading=headings[0]!
+  const close=heading.closest('.el-drawer')?.querySelector<HTMLElement>('.el-drawer__close-btn')
+  if(!close)throw new Error('原报工窗口没有关闭按钮')
+  close.setAttribute('data-native-process-close','true')
+  await ui.click('[data-native-process-close="true"]','关闭已提交工序结果')
+  await ui.until(()=>heading.getBoundingClientRect().width===0,'原报工窗口关闭')
+}
+
 function adapter(step: NativeDemoStepId, canUse: Capability, prepare: NativeDemoAdapter['prepare'], commit: NativeDemoAdapter['commit']): NativeDemoAdapter {
   return { step, canUse, prepare, commit }
 }
@@ -173,7 +185,7 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
     })
 
   const settle = adapter('production-settle', write,
-    async ({ ui, state }) => { const planId = id(state.entities.productionPlan?.id); await ui.navigate('/production/plans'); await ui.click(`[data-testid="production-settle-${planId}"]`, '核对结单'); await ui.waitFor('[data-testid="production-settle-dialog"]', 15000); const prefill=entity(await ui.read(`/production-plans/${planId}/settlement-prefill`)); if(entity(prefill.audit).clean!==true)throw new Error('本轮报工未通过结单审计，已停止原生演示'); await ui.until(() => !document.querySelector('[data-testid="settlement-blocker"]'), '结单 clean prefill') },
+    async ({ ui, state }) => { const planId = id(state.entities.productionPlan?.id); await ui.navigate('/production/plans'); await closeSubmittedProcessDrawer(ui); await ui.click(`[data-testid="production-settle-${planId}"]`, '核对结单'); await ui.waitFor('[data-testid="production-settle-dialog"]', 15000); const prefill=entity(await ui.read(`/production-plans/${planId}/settlement-prefill`)); if(entity(prefill.audit).clean!==true)throw new Error('本轮报工未通过结单审计，已停止原生演示'); await ui.until(() => !document.querySelector('[data-testid="settlement-blocker"]'), '结单 clean prefill') },
     async ({ state, ui }) => {
       const planId = id(state.entities.productionPlan?.id)
       const response = await ui.capture({ method: 'POST', path: /production-plans\/[^/]+\/settle/ }, async () => {
