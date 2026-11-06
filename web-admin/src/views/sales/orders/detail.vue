@@ -59,6 +59,8 @@ import {
 import { toDateString } from '@/utils/dateFormat';
 import { formatUnitPrice, salesOrderDisplayMoney, salesOrderReceivableAmount, salesOrderRemainingAmount, warehouseNameById, type WarehouseIdNameLike } from './salesOrderDisplay';
 import { createAutoFullChildShipment } from './deliveryAutoChild';
+import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 
 const route = useRoute();
 const router = useRouter();
@@ -1875,6 +1877,85 @@ async function handleCreatePayment() {
   finally { submitting.value = false; }
 }
 
+useNativeDemoAdapters('sales-order-detail', [
+  commerceAdapter('sales-order-submit', () => canWrite.value, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'POST', path: /\/sales\/orders\/[^/]+\/(confirm|submit-for-review)/ }, async () => {
+      await ui.click('[data-testid="sales-order-submit"]', '原生提交销售审批');
+      await ui.click('.el-message-box__btns .el-button--primary', '确认提交销售审批');
+    });
+    await ui.hold('销售提交后');
+    const created = entityFromResponse(response);
+    let entity = entityFromResponse(await ui.read(`/sales/orders/${created?.id || state.entities.salesOrder?.id || orderId.value}`));
+    if(entity?.status==='CONFIRMED'){
+      await ui.capture({method:'POST',path:`/sales/orders/${entity.id}/submit-for-review`},async()=>{
+        await ui.click('[data-testid="sales-order-resubmit"]','提交原生销售 OA 审批');
+        await ui.click('.el-message-box__btns .el-button--primary','确认提交销售 OA 审批');
+      });
+      entity=entityFromResponse(await ui.read(`/sales/orders/${entity.id}`));
+    }
+    if (entity) ui.remember('salesOrder', entity);
+    return entity;
+  },async ({ui})=>{await ui.waitFor('[data-testid="sales-order-submit"]')}),
+  commerceAdapter('sales-delivery-create', () => canWrite.value, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'POST', path: '/sales/deliveries' }, () => ui.click('[data-testid="sales-delivery-create"]', '原生创建发货单'));
+    await ui.hold('销售发货单创建后');
+    const created = entityFromResponse(response);
+    if (!created?.id) throw new Error('原生发货单响应缺少 ID');
+    const entity = entityFromResponse(await ui.read(`/sales/deliveries/${created.id}`));
+    if (entity) ui.remember('salesDelivery', entity);
+    return entity;
+  }, async ({ state, ui }) => {
+    await loadOrder();
+    await loadDeliveries();
+    await ui.until(()=>String(order.value?.id)===String(state.entities.salesOrder?.id),'本轮销售订单详情加载');
+    openDeliveryDialog();
+    deliveryForm.value.deliveryMode = 'PARTIAL';
+    await ui.fill('发货地址', () => { deliveryForm.value.deliveryAddress = '演示·上海连锁餐饮收货中心' });
+    await ui.fill('物流公司', () => { deliveryForm.value.logisticsCompany = '演示冷链配送' });
+    await ui.fill('运单号', () => { deliveryForm.value.trackingNumber = state.runKey });
+    for (const item of deliveryForm.value.items) item.deliveredQuantity = Number(item.maxDeliverableQuantity);
+    if (!deliveryDialogVisible.value) throw new Error('原生销售发货弹窗未打开');
+  }),
+  commerceAdapter('sales-shipment-create', () => canWrite.value, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'POST', path: /\/sales\/deliveries\/[^/]+\/shipments/ }, () => ui.click('[data-testid="sales-shipment-create"]', '原生创建子发运单'));
+    await ui.hold('子发运单创建后');
+    const created = entityFromResponse(response);
+    if (!created?.id) throw new Error('原生子发运单响应缺少 ID');
+    const entity = entityFromResponse(await ui.read(`/sales/deliveries/${created.id}`));
+    if (entity) ui.remember('salesShipment', entity);
+    return entity;
+  }, async ({ state, context, ui }) => {
+    const parent = state.entities.salesDelivery;
+    if (!parent?.id) throw new Error('缺少本次销售发货单 ID');
+    await ui.until(()=>deliveries.value.some(row=>String(row.id)===String(parent.id)),'本轮母发货单加载');
+    const source = deliveries.value.find(row => String(row.id) === String(parent.id))!;
+    openShipmentDialog(source);
+    await ui.fill('物流公司', () => { shipmentForm.value.logisticsCompany = '演示冷链配送' });
+    await ui.fill('运单号', () => { shipmentForm.value.trackingNumber = state.runKey });
+    await ui.fill('收货地址', () => { shipmentForm.value.deliveryAddress = '演示·上海连锁餐饮收货中心' });
+    for (const item of shipmentForm.value.items) item.quantity = Number(item.remaining);
+    if (!shipmentDialogVisible.value) throw new Error('原生子发运弹窗未打开');
+  }),
+  commerceAdapter('sales-batch-allocate', () => canWrite.value, async ({ state, ui }) => {
+    await ui.capture({ method: 'POST', path: /\/sales-deliveries\/items\/[^/]+\/batch-allocations/ }, () => ui.click('[data-testid="sales-batch-allocate"]', '原生确认批次分配'));
+    await ui.hold('批次分配后');
+    const delivery = state.entities.salesShipment || state.entities.salesDelivery;
+    if (!delivery?.id) throw new Error('缺少本次发运单 ID');
+    const detail = entityFromResponse(await ui.read(`/sales/deliveries/${delivery.id}`));
+    const lines = Array.isArray(detail?.items) ? detail.items as Array<{ id?: string }> : [];
+    const allocations = (await Promise.all(lines.map(line => ui.read(`/sales-deliveries/items/${line.id}/batch-allocations`)))).flatMap(value => Array.isArray(value) ? value : []);
+    const result = { id: String(delivery.id), allocations };
+    ui.remember('salesBatchAllocation', result);
+    return result;
+  }, async ({ state,ui }) => {
+    await ui.until(()=>String(order.value?.id)===String(state.entities.salesOrder?.id),'本轮销售订单详情加载');
+    const delivery = state.entities.salesShipment;
+    if (!delivery?.id) throw new Error('缺少本次销售子发运单 ID');
+    await openBatchAllocDialog(String(delivery.id), String(delivery.deliveryNumber || delivery.orderNumber || delivery.id));
+    if (!batchAllocDialogVisible.value) throw new Error('原生批次分配弹窗未打开');
+  }),
+])
+
 // T-INV (issue: F006 客户反馈 — "一键收款"): one-click full-amount payment record.
 // Customer's transcript wording was "一键收" — the 登记收款 dialog already auto-fills
 // remaining amount, so a true "一键" UX is dialog-less: confirm modal → POST.
@@ -1939,8 +2020,8 @@ async function handleQuickPayFull() {
             </el-tag>
           </div>
           <div class="header-right" v-if="order && canWrite">
-            <el-button v-if="order.status === 'DRAFT'" type="success" :loading="submitting" @click="handleAction('confirm')">确认并提交 OA 审批</el-button>
-            <el-button v-if="order.status === 'CONFIRMED'" type="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交 OA 审批</el-button>
+            <el-button data-testid="sales-order-submit" v-if="order.status === 'DRAFT'" type="success" :loading="submitting" @click="handleAction('confirm')">确认并提交 OA 审批</el-button>
+            <el-button data-testid="sales-order-resubmit" v-if="order.status === 'CONFIRMED'" type="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交 OA 审批</el-button>
             <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="primary" plain @click="goToApprovalProgress">前往 OA 审批中心</el-button>
             <el-tooltip
               v-if="order.status === 'FINANCE_APPROVED'"
@@ -2633,7 +2714,7 @@ async function handleQuickPayFull() {
       </div>
       <template #footer>
         <el-button @click="deliveryDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" :disabled="deliveryAddressMissing" @click="handleCreateDelivery">创建发货单</el-button>
+        <el-button data-testid="sales-delivery-create" type="primary" :loading="submitting" :disabled="deliveryAddressMissing" @click="handleCreateDelivery">创建发货单</el-button>
       </template>
     </el-dialog>
 
@@ -2669,7 +2750,7 @@ async function handleQuickPayFull() {
       </el-table>
       <template #footer>
         <el-button @click="shipmentDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreateShipment">创建子发运单</el-button>
+        <el-button data-testid="sales-shipment-create" type="primary" :loading="submitting" @click="handleCreateShipment">创建子发运单</el-button>
       </template>
     </el-dialog>
 
@@ -2974,7 +3055,7 @@ async function handleQuickPayFull() {
       </div>
       <template #footer>
         <el-button @click="batchAllocDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleBatchAllocate">确认分配</el-button>
+        <el-button data-testid="sales-batch-allocate" type="primary" :loading="submitting" @click="handleBatchAllocate">确认分配</el-button>
       </template>
     </el-dialog>
 

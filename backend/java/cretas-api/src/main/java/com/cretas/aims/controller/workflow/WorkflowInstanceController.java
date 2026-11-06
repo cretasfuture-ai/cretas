@@ -36,6 +36,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -89,6 +90,14 @@ public class WorkflowInstanceController {
     private final SalesService salesService;
     private final TransferService transferService;
     private final FactoryStocktakeService stocktakeService;
+
+    /**
+     * The demo approval endpoint is fail-closed on the primary service.  Only
+     * the explicitly enabled isolated sandbox node may use the self-approval
+     * exception; ordinary OA actions do not consult this switch.
+     */
+    @Value("${cretas.demo-sandbox.node.enabled:false}")
+    private boolean demoSandboxNodeEnabled;
 
     @Autowired(required = false)
     private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
@@ -374,6 +383,14 @@ public class WorkflowInstanceController {
         User user = resolveCurrentUser(authorization);
         if (user == null) {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
+        }
+        if (!demoSandboxNodeEnabled) {
+            throw new BusinessException(403, "演示审批隔离 Node 未启用")
+                    .withCode("F006_DEMO_SANDBOX_DISABLED");
+        }
+        if (!Long.valueOf(1309L).equals(user.getId())) {
+            throw new BusinessException(403, "演示审批仅限绑定演示账号")
+                    .withCode("F006_DEMO_ACTOR_REQUIRED");
         }
         if (!"F006".equals(factoryId) || !"F006".equals(user.getFactoryId())) {
             throw new BusinessException(403, "演示审批仅限 F006 工厂")
