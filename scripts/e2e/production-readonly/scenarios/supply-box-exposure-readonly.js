@@ -66,13 +66,15 @@ async function inspect(page, _body, ctx) {
   await row.locator('[data-test="row-supply-impact"]').click();
   const dialog = page.locator('[data-test="supply-impact-dialog"]');
   await dialog.waitFor({state:'visible'});
-  const awaited = page.waitForResponse(response => {
+  const [response] = await Promise.all([page.waitForResponse(response => {
     const url = new URL(response.url());
     return response.request().method() === 'GET' && url.pathname === '/api/mobile/F006/supply-impact/quality'
       && url.searchParams.get('materialTypeId') === target.materialTypeId;
-  }, {timeout:30000});
-  await dialog.getByRole('radio', {name:'质量问题', exact:true}).check();
-  const response = await awaited; const body = await response.json();
+  }, {timeout:30000}),
+  dialog.locator('[data-test="supply-impact-event"]').getByText('质量问题', {exact:true}).click()]);
+  requireCondition(await dialog.getByRole('radio', {name:'质量问题', exact:true}).isChecked(),
+    'Visible quality selection did not update the actual radio');
+  const body = await response.json();
   requireCondition(response.ok() && body.success === true && body.data.subject.id === target.materialTypeId,
     'Quality response is not the selected actual material');
   assertBoxExposure(body.data.boxExposure);
