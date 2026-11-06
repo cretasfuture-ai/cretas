@@ -376,7 +376,7 @@
       "success": "Insert Successful",
       "approvalSuccess": "Submitted for Approval",
       "approvalMessage": "Urgent plan {{planNumber}} created, awaiting factory manager approval.\n\nImpact Level: {{level}}\nAffected Plans: {{count}}",
-      "successMessage": "Urgent plan {{planNumber}} created and ready to execute.",
+      "successMessage": "Urgent plan {{planNumber}} created and pending scheduling. Workflow, materials and staffing must still be checked before execution.",
       "failed": "Insert failed"
     },
     "impactAnalysis": {

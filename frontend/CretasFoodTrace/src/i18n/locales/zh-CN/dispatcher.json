@@ -754,7 +754,7 @@
       "success": "插单成功",
       "approvalSuccess": "提交审批成功",
       "approvalMessage": "紧急计划 {{planNumber}} 已创建，等待工厂经理审批。\n\n影响等级: {{level}}\n受影响计划: {{count}} 个",
-      "successMessage": "紧急计划 {{planNumber}} 已创建，可立即执行。",
+      "successMessage": "紧急计划 {{planNumber}} 已创建，当前待排产。执行前仍需完成流程、原料和人员核对。",
       "failed": "插单失败"
     },
     "impactAnalysis": {
