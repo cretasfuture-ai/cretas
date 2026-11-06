@@ -4024,7 +4024,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 @update:model-value="(v: number) => row.fields[col.key] = v"
                 :min="0" :precision="fieldPrecision(col.key)"
                 controls-position="right"
-                :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
+                :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : isSingleSource && ['input', 'before'].includes(col.key) ? 'single-source-input-quantity' : undefined"
                 style="width:160px" size="small" />
               <div
                 v-if="isCustomFieldCol(col.key) && paramStandardText(col.key)"
@@ -4643,7 +4643,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     @update:model-value="(v: number) => row.fields[col.key] = v"
                     :min="0" :precision="fieldPrecision(col.key)"
                     controls-position="right"
-                    :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
+                    :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : isSingleSource && ['input', 'before'].includes(col.key) ? 'single-source-input-quantity' : undefined"
                     style="width:110px" size="small" />
                   <div
                     v-if="col.type === 'number' && isCustomFieldCol(col.key) && paramStandardText(col.key)"

@@ -145,7 +145,10 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
       const prepared = nativeProcessPrepared.get(state.runKey) || {}; prepared[n] = values; nativeProcessPrepared.set(state.runKey, prepared)
       await ui.input('[data-testid="production-date"]', toDateString(new Date()))
       if (n === 1) await ui.input('[data-testid="material-input-total"]', String(values.inputQuantity))
-      else await ui.input('[data-testid="input-source-quantity"]', String(values.inputQuantity))
+      else {
+        const inputSelector=node.querySelector('[data-testid="single-source-input-quantity"]')?'[data-testid="single-source-input-quantity"]':node.querySelector('[data-testid="finished-input-kg"]')?'[data-testid="finished-input-kg"]':'[data-testid="input-source-quantity"]'
+        await ui.input(inputSelector,String(values.inputQuantity))
+      }
       await ui.input('[data-testid="output-quantity"]', String(values.outputQuantity))
       await selectNativeTime(ui,'[data-testid="output-start-time"]', `08:${String(n*3).padStart(2,'0')}`)
       await selectNativeTime(ui,'[data-testid="output-end-time"]', `08:${String(n*3+2).padStart(2,'0')}`)
