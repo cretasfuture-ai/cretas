@@ -2,7 +2,7 @@
   "taskId": "SEMANTIC-SALES-20261105",
   "owner": "01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98",
   "originalBaseSHA": "ecfb04cbac6283ac4e1b70592f4643be5feb44b8",
-  "upstreamSyncSHA": "d0125690610f56025b28f5568f1b0b743edab734",
+  "upstreamSyncSHA": "f531957072c4d34b1f195957de74a5ef5751e3df",
   "existingScope": [
     "Java service/execution, recognition DTO and existing Conversation/preview integration",
     "Java ai/tool/impl/crm read tools",
@@ -14,7 +14,11 @@
     "tests/semantic-read evidence producers"
   ],
   "additionalTestOnlyFile": "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateReceiptPostgresContractTest.java",
-  "reason": "Upstream PR1516 adds a real-PG consumer of PreviewTokenServiceImpl. CI integration failed because its explicit JPA slice omitted the required ConversationSessionRepository. Register the real entity/repository; retain native locks, claims and product/receipt transaction assertions.",
-  "acceptance": "Related Java171 tests/package plus real PostgreSQL ProductCreateReceiptPostgresContractTest, applicable CI and frozen real-model/read-only HTTP corpus",
+  "additionalTestOnlyFiles": [
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateReceiptPostgresContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateActualToolGatewayPostgresContractTest.java"
+  ],
+  "reason": "Upstream PR1516 and PR1519 add real-PG consumers of PreviewTokenServiceImpl. Their explicit JPA slices omitted the required ConversationSessionRepository. Register the real entity/repository; retain native locks, claims and product/receipt transaction assertions.",
+  "acceptance": "Related Java183 tests/package plus both real PostgreSQL product receipt/gateway fixtures, applicable CI and frozen real-model/read-only HTTP corpus",
   "boundaries": "No new production Entity/Repository/JPQL edits in this increment; no training, protected-gold edits, production business mutation, PR merge, deployment or online model replacement. Upstream synchronized only into candidate branch."
 }
