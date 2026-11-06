@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAgainstCommit": null,
+  "catalogVersion": null,
+  "catalogDigest": null,
+  "targetFactoryId": null,
+  "status": "UNCONFIRMED",
+  "payload": {"industryCode": null, "industryName": null, "schemas": [], "suggestedData": {"productTypes": [], "materialTypes": [], "conversionRates": [], "workProcesses": [], "haccpCheckpoints": [], "modules": {}, "thresholds": [], "warehouses": [], "productionLines": [], "productProcesses": [], "provisionDefaultUsers": false, "codeSegments": [], "alerts": [], "metricWatches": [], "moduleConfigs": [], "indicatorOptOut": []}, "overwrite": false, "draftCapabilityIntents": [], "notBuilt": []},
+  "evidenceByJsonPointer": {},
+  "unresolved": ["missing facts"],
+  "limitations": []
+}

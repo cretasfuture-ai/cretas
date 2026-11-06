@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAgainstCommit": "402d284f38b47e1a5c3b56b2da62f5b0323738e6",
+  "catalogVersion": "qa-catalog",
+  "catalogDigest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "targetFactoryId": null,
+  "status": "CONFIRMED",
+  "testOnly": true,
+  "payload": {
+    "industryCode": "qa-food",
+    "industryName": "QA food factory",
+    "schemas": [{"entityType": "product", "entityName": "QA product", "description": "fixture", "fields": [{"key": "batch", "label": "Batch", "type": "text"}]}],
+    "suggestedData": {
+      "productTypes": [{"code": "QA-P-001", "name": "QA product", "unit": "kg", "description": "fixture", "productCategory": "FINISHED_PRODUCT"}],
+      "materialTypes": [{"code": "QA-M-001", "name": "QA material", "unit": "kg", "description": "fixture", "storageType": "DRY", "category": "RAW_MATERIAL"}],
+      "conversionRates": [{"fromCode": "QA-M-001", "toCode": "QA-P-001", "rate": 1.25, "note": "fixture"}],
+      "workProcesses": [{"name": "QA process", "category": "加工", "sortOrder": 1, "unit": "kg", "outputUnit": "kg", "yieldMin": 0.9, "yieldMax": 1.1, "outputKind": "FINISHED_GOOD", "description": "fixture", "customFields": [{"key": "temperature", "label": "Temperature", "type": "number", "enabled": true, "unit": "C", "standardValue": 5, "min": 0, "max": 10}], "byproducts": [], "auxMaterials": [], "packMaterials": []}],
+      "haccpCheckpoints": [{"name": "QA check", "hazardType": "PHYSICAL", "criticalLimitMin": 0, "criticalLimitMax": 10, "unit": "C", "monitoringProcedure": "fixture"}],
+      "modules": {"enableProduction": true},
+      "thresholds": [{"key": "inventory.low", "value": "1"}],
+      "warehouses": [{"code": "QA-RAW", "name": "QA raw", "type": "RAW", "remarks": "fixture"}],
+      "productionLines": [{"name": "QA line", "capacities": [{"productCode": "QA-P-001", "capacityPerHour": 10, "capacityUnit": "KG"}]}],
+      "productProcesses": [{"productCode": "QA-P-001", "processNames": ["QA process"], "routeNodes": [{"id": "n1", "label": "QA process"}], "routeEdges": []}],
+      "provisionDefaultUsers": false,
+      "codeSegments": [{"code": "001", "label": "QA raw"}],
+      "alerts": [{"alertType": "INVENTORY_LOW", "enabled": true}],
+      "metricWatches": [{"metricName": "yield_rate", "enabled": true, "threshold": 0.9}],
+      "moduleConfigs": [{"moduleId": "production", "moduleName": "Production", "enabled": true, "config": {"analysisDimensions": ["product"]}}],
+      "indicatorOptOut": []
+    },
+    "overwrite": false,
+    "draftCapabilityIntents": ["hygienic-zones"],
+    "notBuilt": []
+  },
+  "evidenceByJsonPointer": {
+    "/payload": {"status": "CONFIRMED", "sourceRef": "fixture:qa-interview"},
+    "/payload/suggestedData": {"status": "CONFIRMED", "sourceRef": "fixture:qa-assembly"},
+    "/payload/industryCode": {"status": "CONFIRMED", "sourceRef": "fixture:qa-industry"},
+    "/payload/suggestedData/productTypes/0": {"status": "CONFIRMED", "sourceRef": "fixture:qa-product"},
+    "/payload/suggestedData/materialTypes/0": {"status": "CONFIRMED", "sourceRef": "fixture:qa-material"},
+    "/payload/suggestedData/workProcesses/0": {"status": "CONFIRMED", "sourceRef": "fixture:qa-process"},
+    "/catalogVersion": {"status": "CONFIRMED", "sourceRef": "fixture:qa-catalog"},
+    "/catalogDigest": {"status": "CONFIRMED", "sourceRef": "fixture:qa-catalog"}
+  },
+  "unresolved": [],
+  "limitations": ["test-only fixture; never apply"]
+}

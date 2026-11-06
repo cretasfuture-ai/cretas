@@ -8,12 +8,11 @@
 ## 在飞任务
 
 - `F006-NATIVE-APPROVAL-GUARD-20261106` — `claimed` — Owner backend_demo — Base ec638d2a39f5f0ea2a6e4f51d708c19c0c1acdd5 — scope WorkflowInstanceController、F006DemoWorkflowApprovalContractTest；demo-actions仅显式sandbox node+actor1309，正式主库默认拒绝。验收F006DemoWorkflowApprovalContractTest，禁改Entity/Repo/迁移/配置。
-
 - `F006-NATIVE-UI-CORE-20261106` — `in-progress` — Owner root — Base ec638d2a39f5f0ea2a6e4f51d708c19c0c1acdd5 — scope native bridge/runtime/toolbar、AppLayout、demo-flow、api/attachment.ts及相关tests；原生页面DOM按钮/可见字段驱动，顶栏仅开始暂停下一模块，旧右栏方案已回退。验收native目标/type/完整WebCI及正式全链/清空。
 - `F006-NATIVE-UI-COMMERCE-20261106` — `claimed` — Owner native_commerce — Base ec638d2a39f5f0ea2a6e4f51d708c19c0c1acdd5 — scope nativeCommerceSteps.ts、采购list/detail、销售new/detail、PendingPurchaseReceivingPanel、warehouse/shipments、workflow/pending及窄tests；原生DOM handler驱动，禁直写API。验收Vitest。
 - `F006-NATIVE-UI-PRODUCTION-20261106` — `claimed` — Owner native_production — Base ec638d2a39f5f0ea2a6e4f51d708c19c0c1acdd5 — scope nativeProductionSteps.ts、plans/list、ProcessSheet/ProcessDataTable、material-requisitions/list、batches/detail/SupplementalCostsDialog；原生handler；保留clean/缺料/CCP；Vitest。
 
-
+- `GENERIC-PROPOSAL-PARETO-20261106` — `blocked` — Owner `01a1a954/root` — Base `7872d98a83c370a4d284a071e9c65601cf4f5cbf` — PR1509已合/正式177s；53目标/full19685零红；线上1/4，3格受共用沙盒阻塞。代码scope及全部锁释放；见archive/2026-11-06-generic-proposal-pareto-closeout.md。
 
 
 

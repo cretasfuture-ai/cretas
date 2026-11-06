@@ -66,6 +66,7 @@ async function main() {
       expectedRole: process.env.E2E_EXPECTED_ROLE || null,
       factoryAccessFactoryId: process.env.E2E_FACTORY_ACCESS_TARGET || null,
       factoryAccessCases: process.env.E2E_FACTORY_ACCESS_CASES ? JSON.parse(process.env.E2E_FACTORY_ACCESS_CASES) : null,
+      materialRequisition: process.env.E2E_MATERIAL_REQUISITION ? JSON.parse(process.env.E2E_MATERIAL_REQUISITION) : null,
       allowMobileOnlyLanding: process.env.E2E_EXPECT_MOBILE_ONLY === '1',
       productionReadonly,
     });
