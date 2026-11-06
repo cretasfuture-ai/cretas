@@ -17,7 +17,18 @@ const WORKSPACE_TARGETS = Object.freeze([
 ]);
 
 function visibleState(state) {
-  return state && typeof state === 'object' ? String(state.visible || '') : '';
+  const visible = state && typeof state === 'object' ? String(state.visible || '') : '';
+  return visible === 'link' ? 'ready' : visible;
+}
+
+async function waitForBusinessLandmark(page, label, timeoutMs = 15000) {
+  try {
+    await page.locator('main.app-content').getByText(label, { exact: true })
+      .filter({ visible: true }).first().waitFor({ state: 'visible', timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function assertWorkspacePositive(snapshot, expected) {
@@ -113,8 +124,8 @@ async function inspect(page, _body, ctx) {
           const rect = node.getBoundingClientRect();
           return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
         };
-        const visible = ['loading', 'error', 'unavailable', 'denied', 'empty', 'link'].find(value => pick(`workspace-${value}`)) || 'ready';
-        return { visible };
+        const visible = ['loading', 'error', 'unavailable', 'denied', 'empty', 'link'].find(value => pick(`workspace-${value}`)) || 'unknown';
+        return { visible: visible === 'link' ? 'ready' : visible };
       });
       const links = page.locator('[data-testid="workspace-link"]');
       const linkCount = await links.count();
@@ -146,9 +157,8 @@ async function inspect(page, _body, ctx) {
       await firstLink.click();
       await page.waitForURL(url => url.pathname === expected.targetPath, { timeout: 20000 });
       await waitForAppMount(page);
-      await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
       snapshot.targetPath = new URL(page.url()).pathname;
-      snapshot.targetLandmarkFound = await page.getByText(expected.targetLandmark, { exact: true }).first().isVisible().catch(() => false);
+      snapshot.targetLandmarkFound = await waitForBusinessLandmark(page, expected.targetLandmark);
       const targetSemanticErrors = await page.evaluate(() => ({
         errorTestIds: [...document.querySelectorAll('.el-alert--error,[data-testid*="error" i],[data-testid="permission-denied"],[data-testid="not-found"]')]
           .filter(node => {
@@ -169,6 +179,14 @@ async function inspect(page, _body, ctx) {
       snapshot.targetErrorMarkers = hasSemanticTargetError(targetSemanticErrors)
         ? [...targetSemanticErrors.errorTestIds, 'error-heading'].filter((value, index, values) => values.indexOf(value) === index)
         : [];
+      if (!snapshot.targetLandmarkFound) {
+        snapshot.assessment = snapshot.targetErrorMarkers.length
+          ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend' }
+          : { result: 'TOOL_ERROR', rootCauseClass: 'tool' };
+        snapshots.push(snapshot);
+        screenshots.push(await ctx.screenshot(`${expected.path.slice(1).replaceAll('/', '-')}-target-missing`));
+        return { snapshots, screenshots, assessment: snapshot.assessment };
+      }
       snapshot.assessment = { result: 'PASS', rootCauseClass: 'none' };
       assertWorkspacePositive(snapshot, expected);
       snapshots.push(snapshot);
@@ -178,6 +196,9 @@ async function inspect(page, _body, ctx) {
       workspaceTitles: snapshots.map(snapshot => snapshot.heading),
       visibleTargetCount: snapshots.reduce((count, snapshot) => count + snapshot.linkCount, 0),
       targetPaths: snapshots.map(snapshot => snapshot.targetPath),
+      targetLandmarks: WORKSPACE_TARGETS.map(expected => expected.targetLandmark),
+      targetLandmarkResults: snapshots.map(snapshot => snapshot.targetLandmarkFound),
+      workspaceStates: snapshots.map(snapshot => visibleState(snapshot.state)),
       snapshots,
       screenshots,
       assessment: { result: 'PASS', rootCauseClass: 'none' },
@@ -219,12 +240,23 @@ async function inspectDenied(page, _body, ctx) {
         linkCount,
         denied: finalPath === '/403' || (finalPath === expected.path && explicitDenied),
         explicitDenied,
+        authStatus: auth.status,
+        authFactoryId: auth.factoryId,
         authenticatedSameFactory: auth.status === 200 && auth.success && auth.factoryId === 'F006',
       });
     }
     const snapshot = { role: ctx.loginEvidence?.role || null, workspaceMenuVisible, routes };
     assertDeniedSnapshot(snapshot);
-    return { ...snapshot, assessment: { result: 'PASS', rootCauseClass: 'none' } };
+    return {
+      ...snapshot,
+      routePaths: routes.map(route => route.path),
+      routeFinalPaths: routes.map(route => route.finalPath),
+      routeDenials: routes.map(route => route.denied),
+      routeAuthStatuses: routes.map(route => route.authStatus),
+      routeFactoryIds: routes.map(route => route.authFactoryId),
+      routeLinkCounts: routes.map(route => route.linkCount),
+      assessment: { result: 'PASS', rootCauseClass: 'none' },
+    };
   } catch (error) {
     return { routes, error: String(error?.message || error), assessment: { result: 'TOOL_ERROR', rootCauseClass: 'tool' } };
   }
@@ -235,6 +267,8 @@ module.exports = {
   defaultEnabled: false,
   path: WORKSPACE_TARGETS[0].path,
   WORKSPACE_TARGETS,
+  visibleState,
+  waitForBusinessLandmark,
   assertWorkspacePositive,
   assertDeniedSnapshot,
   hasSemanticTargetError,
