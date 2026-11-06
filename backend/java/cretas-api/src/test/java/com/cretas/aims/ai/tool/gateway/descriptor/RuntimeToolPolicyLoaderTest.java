@@ -85,7 +85,7 @@ class RuntimeToolPolicyLoaderTest {
                     com.cretas.aims.ai.tool.ToolExecutor.ActionType.UPDATE);
             assertThat(policy.riskLevel()).isEqualTo(
                     com.cretas.aims.ai.tool.ToolExecutor.RiskLevel.LOW);
-            assertThat(policy.version()).isEqualTo("1.0.0");
+            assertThat(policy.version()).isEqualTo("2.0.0");
             assertThat(policy.supportsPreview()).isFalse();
             assertThat(policy.requiredPermissions()).isEmpty();
             assertThat(policy.allowedBusinessTypes())

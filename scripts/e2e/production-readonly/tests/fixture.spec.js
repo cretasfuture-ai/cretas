@@ -10,6 +10,40 @@ const { SCENARIOS } = require('../core/run-suite');
 const { VISUAL_PAGES, runVisualCensus } = require('../scenarios/visual-page-census-readonly');
 const { createScenarioResult } = require('../core/result-schema');
 const guidedScenario = require('../scenarios/smartbi-guided-readonly');
+const { resourceUnitControl } = require('../scenarios/proposal-comparison-readonly');
+const comparisonDenied = require('../scenarios/proposal-comparison-readonly').denied;
+
+test('comparison resource selectors accept native wrapped label option text', async ({ page }) => {
+  await page.setContent('<main><section id="budget"><label>资源预算单位<select><option value="PERSON_HOUR">人时</option><option value="MACHINE_HOUR">机时</option></select></label></section><section id="candidate"><label>资源单位<select><option value="PERSON_HOUR">人时</option><option value="MACHINE_HOUR">机时</option></select></label></section></main>');
+  await resourceUnitControl(page.locator('#budget'), true).selectOption('MACHINE_HOUR');
+  await resourceUnitControl(page.locator('#candidate')).selectOption('MACHINE_HOUR');
+  await expect(page.locator('#budget select')).toHaveValue('MACHINE_HOUR');
+  await expect(page.locator('#candidate select')).toHaveValue('MACHINE_HOUR');
+});
+
+test('comparison denial verifies the short explicit 403 page without a generic body-length exemption', async ({ page }) => {
+  await page.route('http://comparison-fixture.invalid/**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    const html = pathname === '/scheduling/proposal-comparison'
+      ? '<script>location.replace("/403")</script>'
+      : pathname === '/403'
+        ? '<main><h1>403</h1><h2>访问被拒绝</h2></main>'
+        : pageHtml('/dashboard');
+    await route.fulfill({contentType:'text/html; charset=utf-8',body:html});
+  });
+  const ctx = {
+    page,baseUrl:'http://comparison-fixture.invalid',loginEvidence:{factoryId:'F006',role:'warehouse_manager'},
+    scenarioRef:{value:''},screenshot:async()=> 'fixture-short-denial.png',
+    network:{snapshot:()=>({apiEvidence:[],httpErrors:[],bodyReadErrors:[]}),flush:async()=>{}},
+    consoleRecorder:{snapshot:()=>({consoleErrors:[],consoleWarnings:[],pageErrors:[]})},
+    mutationGuard:{snapshot:()=>({readonlyPostRequests:[],blockedMutationAttempts:[],actualBusinessWrites:0})},
+  };
+  const result = await comparisonDenied.run(ctx);
+  expect(result.result, JSON.stringify(result.pageEvidence)).toBe('PASS');
+  expect(result.pageEvidence.some(row=>row.finalPath==='/403' && row.calculationRequests===0)).toBe(true);
+  expect((await page.locator('body').innerText()).length).toBeLessThanOrEqual(40);
+  expect(result.actualBusinessWrites).toBe(0);
+});
 
 const WORKSPACE_FIXTURE = Object.freeze([
   { path: '/workspaces/overview', title: '经营总览', targetPath: '/dashboard', targetTitle: '首页驾驶舱', targetLandmark: '今日生产概览' },

@@ -54,6 +54,13 @@ function factoryAnalysisBodyMatches(body) {
 // execute tools with side effects behind a single HTTP request.
 const READONLY_POST_WHITELIST = [
   {
+    id: 'proposal-comparison-evaluate',
+    method: 'POST',
+    path: /^\/api\/mobile\/[A-Za-z0-9_-]{1,64}\/proposal-comparisons\/evaluate\/?$/,
+    bodyMatches: proposalComparisonBodyMatches,
+    rationale: 'PR1509 typed pure supplied-facts comparison; no business reads/writes, execution, reservation, Tool or approval. Strict bounded body only.',
+  },
+  {
     id: 'smartbi-factory-analysis',
     method: 'POST',
     path: /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/,
@@ -372,4 +379,29 @@ module.exports = {
   matchesEntry,
   findAuthRequest,
   findReadonlyPost,
+  proposalComparisonBodyMatches,
 };
+
+function proposalComparisonBodyMatches(body) {
+  const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  const text = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+  const unit = value => ['PERSON_HOUR', 'MACHINE_HOUR'].includes(value);
+  const amount = value => value === null || (typeof value === 'number' && Number.isFinite(value)
+    && value >= 0 && value < 1e12);
+  const time = value => typeof value === 'string' && value.length <= 64
+    && /T.*(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value));
+  const common = value => text(value.comparisonBasisId, 64) && typeof value.currency === 'string'
+    && /^[A-Z]{3}$/.test(value.currency)
+    && text(value.costUnit, 32) && unit(value.resourceUnit);
+  if (!exact(body, ['comparisonBasisId', 'currency', 'costUnit', 'resourceUnit', 'windowStart',
+    'windowEnd', 'requiredBy', 'availableResource', 'candidates']) || !common(body)
+    || !time(body.windowStart) || !time(body.windowEnd)
+    || !(body.requiredBy === null || time(body.requiredBy)) || !amount(body.availableResource)
+    || !Array.isArray(body.candidates) || body.candidates.length < 2 || body.candidates.length > 20) return false;
+  return body.candidates.every(candidate => exact(candidate, ['id', 'comparisonBasisId', 'currency',
+    'costUnit', 'resourceUnit', 'cost', 'completionTime', 'requiredResource'])
+    && typeof candidate.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(candidate.id)
+    && common(candidate) && amount(candidate.cost) && amount(candidate.requiredResource)
+    && (candidate.completionTime === null || time(candidate.completionTime)));
+}

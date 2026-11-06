@@ -561,6 +561,8 @@ const rawMenuConfig: MenuItem[] = [
         hideForFactoryTypes: ['LOGISTICS'] },
       { path: '/scheduling/plans', title: '调度计划', icon: '', module: 'scheduling',
         hideForFactoryTypes: ['LOGISTICS'] },
+      { path: '/scheduling/proposal-comparison', title: '多方案比较', icon: '', module: 'scheduling',
+        roles: ['factory_super_admin', 'permission_admin'], hideForFactoryTypes: ['LOGISTICS'] },
       { path: '/scheduling/realtime', title: '实时监控', icon: '', module: 'scheduling',
         hideForFactoryTypes: ['LOGISTICS'] },
       { path: '/scheduling/workers', title: '人员分配', icon: '', module: 'scheduling', groupLabel: '资源与预警',

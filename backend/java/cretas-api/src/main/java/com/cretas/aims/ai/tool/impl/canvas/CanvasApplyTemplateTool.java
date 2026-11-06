@@ -22,11 +22,7 @@ import java.util.*;
  */
 @Slf4j
 @Component
-public class CanvasApplyTemplateTool extends AbstractBusinessTool {
-
-    @Autowired
-    @Qualifier("canvasFactoryConfigService")
-    private FactoryConfigService configService;
+public class CanvasApplyTemplateTool extends AbstractBoundCanvasConfigTool {
 
     @Override
     public String getToolName() {
@@ -59,33 +55,6 @@ public class CanvasApplyTemplateTool extends AbstractBusinessTool {
     @Override
     protected List<String> getRequiredParameters() {
         return Collections.singletonList("templateCode");
-    }
-
-    @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        String templateCode = getString(params, "templateCode");
-
-        log.info("Canvas 应用行业模板 - 工厂ID: {}, 模板: {}", factoryId, templateCode);
-
-        // operatorId 原来写死 0L。prod 的 users 表里没有 id=0 (79 行, min(id)=1309),
-        // 那个 0 只是「没人填」伪装成一个用户 id; 它顺着 getOrCreateDraft 进
-        // factory_configurations.created_by。
-        //
-        // ⚠️ 那一列是 **NOT NULL**(prod 实测, 无外键) —— 所以这里**不能**简单换成
-        //    getUserId(context): 它取不到会返回 null, 落到 NOT NULL 列上是一次
-        //    数据库约束违例(500), 报的是 not-null constraint, 与「没有操作人」对不上。
-        //    而这条路真的会走到: CanvasAIController#buildToolContext 解析 token 失败时
-        //    只 log.warn, userId 根本不进 context。
-        // ⇒ 显式失败(requireUserId), ⛔ 不兜底假 id 也不让 null 漏到 DB。
-        configService.applyTemplate(factoryId, templateCode,
-                requireUserId(context, "应用工厂配置模板"));
-
-        log.info("Canvas 行业模板应用完成 - 工厂ID: {}, 模板: {}", factoryId, templateCode);
-
-        return buildSimpleResult(
-                "行业模板 " + templateCode + " 已成功应用到工厂 " + factoryId,
-                Map.of("factoryId", factoryId, "templateCode", templateCode)
-        );
     }
 
     @Override
@@ -123,7 +92,7 @@ public class CanvasApplyTemplateTool extends AbstractBusinessTool {
     }
 
     @Override public boolean supportsPreview() { return false; }
-    @Override public String getVersion() { return "1.0.0"; }
+    @Override public String getVersion() { return "2.0.0"; }
     @Override public Set<String> getDomainTags() { return Set.of("canvas"); }
 
     @Override

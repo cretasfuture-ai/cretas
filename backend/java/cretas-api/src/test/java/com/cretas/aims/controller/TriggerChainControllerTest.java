@@ -8,6 +8,7 @@ import com.cretas.aims.repository.config.FactoryToolConfigRepository;
 import com.cretas.aims.repository.config.FactoryTriggerChainRepository;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -58,6 +59,7 @@ class TriggerChainControllerTest {
     @Mock FactoryToolConfigRepository toolConfigRepo;
     @Mock FactorySkillConfigRepository skillConfigRepo;
     @Mock FactoryTriggerChainRepository triggerChainRepo;
+    @Mock FactoryFeatureMenuWriteLock featureWriteLock;
     @InjectMocks TriggerChainController controller;
 
     @BeforeEach

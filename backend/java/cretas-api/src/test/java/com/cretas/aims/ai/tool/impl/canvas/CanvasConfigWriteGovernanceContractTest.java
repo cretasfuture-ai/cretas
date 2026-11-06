@@ -24,7 +24,7 @@ class CanvasConfigWriteGovernanceContractTest {
             assertThat(tool.hasPermission("permission_admin")).isTrue();
             assertThat(tool.hasPermission("operator")).isFalse();
             assertThat(tool.supportsPreview()).isFalse();
-            assertThat(tool.getVersion()).isEqualTo("1.0.0");
+        assertThat(tool.getVersion()).isEqualTo("2.0.0");
             assertThat(tool.getDomainTags()).containsExactly("canvas");
         });
     }
