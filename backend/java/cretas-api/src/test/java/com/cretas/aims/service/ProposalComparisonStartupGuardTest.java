@@ -17,7 +17,7 @@ class ProposalComparisonStartupGuardTest {
                 .withUserConfiguration(ProposalComparisonService.class)
                 .run(context -> {
                     assertThat(context).hasSingleBean(Validator.class).hasSingleBean(ProposalComparisonService.class);
-                    var invalid = new ProposalComparisonRequest("", "", "", "", null, null, null, null, java.util.Collections.nCopies(2, null));
+                    var invalid = new ProposalComparisonRequest("", "", "", null, null, null, null, null, java.util.Collections.nCopies(2, null));
                     assertThatThrownBy(() -> context.getBean(ProposalComparisonService.class).compare(invalid))
                             .isInstanceOf(ConstraintViolationException.class);
                 });

@@ -13,6 +13,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Validation;
 import jakarta.validation.ValidatorFactory;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
@@ -72,6 +74,30 @@ class ProposalComparisonRoleGateMvcTest {
         mvc.perform(post(URL).requestAttr("role", "permission_admin").requestAttr("userId", 1L)
                 .contentType(MediaType.APPLICATION_JSON).content(BODY)).andExpect(status().isOk());
         verify(comparison).compare(any());
+    }
+    @Test void machineHourBudgetRemainsComparableWithoutConvertingToLabor() throws Exception {
+        allowRead();
+        mvc.perform(post(URL).requestAttr("role", "factory_super_admin").requestAttr("userId", 1L)
+                .contentType(MediaType.APPLICATION_JSON).content(BODY.replace("PERSON_HOUR", "MACHINE_HOUR")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("SUPPLIED_FACTS_COMPARABLE"))
+                .andExpect(jsonPath("$.data.nonDominatedCandidateIds[0]").value("a"));
+    }
+    @ParameterizedTest
+    @ValueSource(strings = {"\"HOUR\"", "0", "\"0\""})
+    void ambiguousOrOrdinalResourceUnitsAreRejectedBeforeComparison(String invalidUnit) throws Exception {
+        allowRead();
+        String field = "\"resourceUnit\":\"PERSON_HOUR\"";
+        // Exercise both the common budget and a nested candidate independently.
+        for (boolean commonBudget : new boolean[]{true, false}) {
+            int position = commonBudget ? BODY.indexOf(field) : BODY.lastIndexOf(field);
+            String invalid = BODY.substring(0, position) + "\"resourceUnit\":" + invalidUnit
+                    + BODY.substring(position + field.length());
+            mvc.perform(post(URL).requestAttr("role", "factory_super_admin").requestAttr("userId", 1L)
+                    .contentType(MediaType.APPLICATION_JSON).content(invalid))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.success").value(false));
+        }
+        verifyNoInteractions(comparison);
     }
     @Test void unapprovedRoleCannotRunComparisonEvenWhenModuleReadIsGranted() throws Exception {
         allowRead();

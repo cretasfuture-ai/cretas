@@ -1,6 +1,7 @@
 package com.cretas.aims.service;
 
 import com.cretas.aims.dto.decision.ProposalComparisonRequest;
+import com.cretas.aims.dto.decision.ProposalComparisonRequest.ResourceBudgetUnit;
 import com.cretas.aims.dto.decision.ProposalComparisonRequest.Candidate;
 import com.cretas.aims.dto.decision.ProposalComparisonResult;
 import com.cretas.aims.dto.decision.ProposalComparisonResult.*;
@@ -49,7 +50,7 @@ class ProposalComparisonContractTest {
     }
 
     @Test void missingCompletionIsNotAnEarlyDate() {
-        Candidate unknown = new Candidate("unknown", "batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", bd("1"), null, bd("1"));
+        Candidate unknown = new Candidate("unknown", "batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, bd("1"), null, bd("1"));
         assertBlocked(compare(unknown, candidate("a", "10", 10, "1")), "unknown", Reason.MISSING_COMPLETION_TIME);
     }
 
@@ -65,16 +66,16 @@ class ProposalComparisonContractTest {
     }
 
     @Test void incompatibleBusinessBasisBlocksWholeFrontier() {
-        assertMismatch(new Candidate("b", "another-batch", "CNY", "PER_BATCH", "PERSON_HOUR", bd("1"), time(10), bd("1")), Reason.BASIS_MISMATCH);
+        assertMismatch(new Candidate("b", "another-batch", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, bd("1"), time(10), bd("1")), Reason.BASIS_MISMATCH);
     }
     @Test void mixedCurrenciesAreNotConvertedImplicitly() {
-        assertMismatch(new Candidate("b", "batch-1", "USD", "PER_BATCH", "PERSON_HOUR", bd("1"), time(10), bd("1")), Reason.CURRENCY_MISMATCH);
+        assertMismatch(new Candidate("b", "batch-1", "USD", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, bd("1"), time(10), bd("1")), Reason.CURRENCY_MISMATCH);
     }
     @Test void costPerUnitAndCostPerBatchCannotCompare() {
-        assertMismatch(new Candidate("b", "batch-1", "CNY", "PER_KG", "PERSON_HOUR", bd("1"), time(10), bd("1")), Reason.COST_UNIT_MISMATCH);
+        assertMismatch(new Candidate("b", "batch-1", "CNY", "PER_KG", ResourceBudgetUnit.PERSON_HOUR, bd("1"), time(10), bd("1")), Reason.COST_UNIT_MISMATCH);
     }
     @Test void differentResourceUnitsCannotCompare() {
-        assertMismatch(new Candidate("b", "batch-1", "CNY", "PER_BATCH", "MACHINE_HOUR", bd("1"), time(10), bd("1")), Reason.RESOURCE_UNIT_MISMATCH);
+        assertMismatch(new Candidate("b", "batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.MACHINE_HOUR, bd("1"), time(10), bd("1")), Reason.RESOURCE_UNIT_MISMATCH);
     }
     @Test void outsideCapacityWindowIsUnknownRatherThanFeasible() {
         assertBlocked(compare(candidate("outside", "1", 21, "1"), candidate("a", "10", 10, "1")), "outside", Reason.COMPLETION_OUTSIDE_WINDOW);
@@ -86,7 +87,7 @@ class ProposalComparisonContractTest {
         assertThat(result.nonDominatedCandidateIds()).containsExactly("zero");
     }
     @Test void equalValuesDifferentDecimalScalesAndTimeOffsetsAreTies() {
-        Candidate b = new Candidate("b", "batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", bd("1.000000"),
+        Candidate b = new Candidate("b", "batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, bd("1.000000"),
                 OffsetDateTime.parse("2027-01-01T18:00:00+08:00"), bd("2.000000"));
         var result = compare(candidate("a", "1", 10, "2"), b);
         assertThat(result.nonDominatedCandidateIds()).containsExactly("a", "b");
@@ -114,12 +115,12 @@ class ProposalComparisonContractTest {
         assertThatThrownBy(() -> service.compare(basis(bd("10"), many))).isInstanceOf(BusinessException.class).hasMessageContaining("2至20");
     }
     @Test void invalidWindowIsRejected() {
-        var request = new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", END, START,
+        var request = new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, END, START,
                 DEADLINE, bd("10"), List.of(candidate("a", "1", 10, "1"), candidate("b", "2", 11, "1")));
         assertThatThrownBy(() -> service.compare(request)).isInstanceOf(BusinessException.class).hasMessageContaining("结束时间");
     }
     @Test void invalidDeadlineBeforeWindowIsRejected() {
-        var request = new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", START, END,
+        var request = new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, START, END,
                 time(7), bd("10"), List.of(candidate("a", "1", 10, "1"), candidate("b", "2", 11, "1")));
         assertThatThrownBy(() -> service.compare(request)).isInstanceOf(BusinessException.class).hasMessageContaining("截止时间");
     }
@@ -155,11 +156,11 @@ class ProposalComparisonContractTest {
         assertThat(service.compare(basis(bd("10"), twenty)).nonDominatedCandidateIds()).hasSize(20);
     }
     @Test void resourceWindowUsesInclusiveInstantBoundariesAcrossOffsets() {
-        Candidate atStart = new Candidate("start", "batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", bd("2"),
+        Candidate atStart = new Candidate("start", "batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, bd("2"),
                 OffsetDateTime.parse("2027-01-01T16:00:00+08:00"), bd("2"));
-        Candidate atEnd = new Candidate("end", "batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", bd("1"),
+        Candidate atEnd = new Candidate("end", "batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, bd("1"),
                 OffsetDateTime.parse("2027-01-02T04:00:00+08:00"), bd("1"));
-        var withoutDeadline = new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", START, END,
+        var withoutDeadline = new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, START, END,
                 null, bd("10"), List.of(atStart, atEnd));
         var result = service.compare(withoutDeadline);
         assertThat(result.status()).isEqualTo(ComparisonStatus.SUPPLIED_FACTS_COMPARABLE);
@@ -182,10 +183,10 @@ class ProposalComparisonContractTest {
         return service.compare(basis(bd("10"), List.of(candidates)));
     }
     private static ProposalComparisonRequest basis(BigDecimal capacity, List<Candidate> candidates) {
-        return new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", START, END, DEADLINE, capacity, candidates);
+        return new ProposalComparisonRequest("batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, START, END, DEADLINE, capacity, candidates);
     }
     private static Candidate candidate(String id, String cost, int hour, String resource) {
-        return new Candidate(id, "batch-1", "CNY", "PER_BATCH", "PERSON_HOUR", bd(cost), time(hour), bd(resource));
+        return new Candidate(id, "batch-1", "CNY", "PER_BATCH", ResourceBudgetUnit.PERSON_HOUR, bd(cost), time(hour), bd(resource));
     }
     private static BigDecimal bd(String value) { return value == null ? null : new BigDecimal(value); }
     private static OffsetDateTime time(int hour) { return OffsetDateTime.parse("2027-01-01T" + String.format("%02d", hour) + ":00:00Z"); }

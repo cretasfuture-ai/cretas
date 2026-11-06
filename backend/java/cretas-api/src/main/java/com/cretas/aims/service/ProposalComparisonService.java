@@ -74,7 +74,7 @@ public class ProposalComparisonService {
         if (!basis.comparisonBasisId().equals(candidate.comparisonBasisId())) unknown.add(Reason.BASIS_MISMATCH);
         if (!basis.currency().equals(candidate.currency())) unknown.add(Reason.CURRENCY_MISMATCH);
         if (!basis.costUnit().equals(candidate.costUnit())) unknown.add(Reason.COST_UNIT_MISMATCH);
-        if (!basis.resourceUnit().equals(candidate.resourceUnit())) unknown.add(Reason.RESOURCE_UNIT_MISMATCH);
+        if (basis.resourceUnit() != candidate.resourceUnit()) unknown.add(Reason.RESOURCE_UNIT_MISMATCH);
         if (candidate.cost() == null) unknown.add(Reason.MISSING_COST);
         if (candidate.completionTime() == null) unknown.add(Reason.MISSING_COMPLETION_TIME);
         if (candidate.requiredResource() == null) unknown.add(Reason.MISSING_RESOURCE_DEMAND);

@@ -34,7 +34,7 @@ public class ProposalComparisonController {
 
     @PostMapping(value = "/evaluate", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "对照同口径候选方案的成本、交期与资源取舍",
-            description = "请求最多64KiB，最多20候选。仅计算调用方未验证事实和同一资源池共同窗口的总量预算；窗口[start,end]双端包含。最小化成本、完成时间和资源需求，返回非支配集合而非排序或赢家。缺失/混合口径不生成集合；不查业务数据、不执行方案或预留资源，POST不持久化业务数据。",
+            description = "请求最多64KiB，最多20候选。仅计算调用方未验证事实和同一资源池共同窗口的总量预算，v1资源预算单位仅PERSON_HOUR人时或MACHINE_HOUR机时，不接受别名或隐式换算；窗口[start,end]双端包含。最小化成本、完成时间和资源需求，返回非支配集合而非排序或赢家。缺失/混合口径不生成集合；不查业务数据、不执行方案或预留资源，POST不持久化业务数据。",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE,
                             schema = @Schema(implementation = ProposalComparisonRequest.class))))
@@ -53,7 +53,8 @@ public class ProposalComparisonController {
         if (bytes.length > MAX_JSON_BYTES) throw tooLarge();
         try {
             ProposalComparisonRequest facts = mapper.readerFor(ProposalComparisonRequest.class)
-                    .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readValue(bytes);
+                    .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS,
+                            DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS).readValue(bytes);
             return ApiResponse.success(comparison.compare(facts));
         } catch (IOException malformed) {
             throw new BusinessException(400, "比较数据格式无效，请提交一个完整的JSON对象");
