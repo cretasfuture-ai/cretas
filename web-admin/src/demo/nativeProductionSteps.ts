@@ -142,7 +142,7 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
     async ({ state, context, ui }) => {
       const processCode = nativeProcessCodes.get(state.runKey)?.[n]
       if (!processCode) throw new Error(`工序${n}缺少真实 workflow processCode`)
-      await ui.capture({ method: 'POST', path: /process-sheet/ }, async () => {
+      await ui.capture({ method: 'POST', path: /\/process-sheet\/row\/submit$/ }, async () => {
         await ui.click('[data-testid="process-report-submit"]', `提交工序${n}`)
         const confirmation=await ui.waitFor('.el-message-box')
         if(!confirmation.querySelector('.el-message-box__title')?.textContent?.includes('确认正式报工'))throw new Error('报工存在其他待核对事项，请先核对原页面')

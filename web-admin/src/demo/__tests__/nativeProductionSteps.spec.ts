@@ -54,6 +54,15 @@ describe('native production adapters', () => {
     testUi.waitFor = async (selector) => selector==='.el-time-panel'?panel:selector==='.el-message-box'?confirmation:node;
     testUi.read = vi.fn(async (path: string) => path.includes('/rows') ? { data: [{ clientRowId: `${s.runKey}:p1`, submissionStatus: 'SUBMITTED' }] } : { data: [] });
     await adapter.prepare({ state: s, context: s.context!, ui: testUi });
+    const capture=testUi.capture;
+    testUi.capture=async(match,action)=>{
+      expect(match.path).toBeInstanceOf(RegExp);
+      const path=match.path as RegExp;
+      expect(path.test('/production-plans/plan-id/process-sheet/row/submit')).toBe(true);
+      expect(path.test('/production-plans/plan-id/process-sheet/input-availability')).toBe(false);
+      expect(path.test('/production-plans/plan-id/process-sheet/row/draft')).toBe(false);
+      return capture(match,action);
+    };
     const result = await adapter.commit({ state: s, context: s.context!, ui: testUi });
     expect(result?.processReport1?.clientRowId).toBe(`${s.runKey}:p1`);
     expect(result?.processReport1?.submissionStatus).toBe('SUBMITTED');
