@@ -138,6 +138,43 @@ class ReadQueryContinuationContractTest {
             assertThat(h.dispatch.resolveReadTurn("F006",7L,request,SemanticReadTurnResolverContractTest.bind(h,new OrderListTool(mock(SalesService.class)),"ORDER_LIST")).getStatus()).isEqualTo("NEED_MORE_INFO");
         }
     }
+    @ParameterizedTest @ValueSource(strings={"第4页","第四页","第１页"})
+    void absolutePageBindsSelectedCurrentSpanWhenCanonicalValueIsMissing(String evidence) throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            var request=previous(h,"改看"+evidence+"，其他条件不变");
+            var sales=mock(SalesService.class);
+            response(h,"CORRECT","ABSOLUTE",evidence,Map.of());
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
+                    SemanticReadTurnResolverContractTest.bind(h,new OrderListTool(sales),"ORDER_LIST"))).isNull();
+            assertThat(request.getSemanticParameters()).containsEntry("page",evidence.equals("第１页")?1:4)
+                    .containsEntry("size",3).containsEntry("status","FINANCE_APPROVED");
+            assertThat(request.getSemanticParameterSources()).containsEntry("page","CURRENT_EXPLICIT")
+                    .containsEntry("status","PREVIOUS_VALUE");
+            verifyNoInteractions(sales);
+        }
+    }
+    @ParameterizedTest @ValueSource(strings={"","第3页","第0页","第-1页","第2.5页","第2147483648页","第3页或第4页","末页"})
+    void ambiguousInvalidOrForgedAbsolutePageCannotSilentlyReuseOldPage(String evidence) throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            var input=evidence.equals("第3页")?"再看看结果":"改看"+evidence;
+            var request=previous(h,input);var sales=mock(SalesService.class);
+            response(h,"CONTINUE","ABSOLUTE",evidence,Map.of());
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
+                    SemanticReadTurnResolverContractTest.bind(h,new OrderListTool(sales),"ORDER_LIST")).getStatus())
+                    .isEqualTo("NEED_MORE_INFO");
+            assertThat(request.getSemanticParameters()).isNull();
+            verifyNoInteractions(sales);
+        }
+    }
+    @Test void absolutePageCannotContradictItsSelectedEvidence() throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            var request=previous(h,"看看第4页");response(h,"CORRECT","ABSOLUTE","第4页",Map.of("page",2));
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
+                    SemanticReadTurnResolverContractTest.bind(h,new OrderListTool(mock(SalesService.class)),"ORDER_LIST")).getStatus())
+                    .isEqualTo("NEED_MORE_INFO");
+            assertThat(request.getSemanticParameters()).isNull();
+        }
+    }
     private static IntentExecuteRequest previous(SalesRankingSemanticContractTest.Harness h,String input) {
         SemanticReadTurnResolverContractTest.previous(h,"ORDER_LIST",Map.of("toolName","order_list","taskStatus","COMPLETED","page",2,"size",3,"status","FINANCE_APPROVED"));
         return SemanticReadTurnResolverContractTest.request(h,input);

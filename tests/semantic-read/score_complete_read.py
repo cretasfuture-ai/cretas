@@ -50,7 +50,9 @@ for r in rows:
      and r['expected']['size']==previous['expected']['size'] and r['expected']['page']==previous['expected']['page']+1):
   overlap=set(r['returned_id_hashes'])&set(previous['returned_id_hashes'])
   r['cross_page_duplicate_count']=len(overlap)
-  if overlap:r.update(real_result_correct=False,task_success=False,category='BUSINESS_PAGE_OVERLAP')
+  # A repeated wrong page is a parameter error, not evidence of unstable sorting.
+  if overlap and r['parameters_correct'] and previous['parameters_correct']:
+   r.update(real_result_correct=False,task_success=False,category='BUSINESS_PAGE_OVERLAP')
 summaries={}
 for ch in ['normal','sse']:
  selected=[r for r in rows if r['channel']==ch];lat=sorted(r['latency_ms'] for r in selected)

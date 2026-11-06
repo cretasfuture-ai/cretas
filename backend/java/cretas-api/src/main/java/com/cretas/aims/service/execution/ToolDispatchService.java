@@ -285,6 +285,27 @@ public class ToolDispatchService {
                 computedPage = (int) target;
                 rawDelta.put("page", computedPage);
             }
+            if ("ABSOLUTE".equals(pageAction)) {
+                String evidence = turn.get("pageEvidence") instanceof String s ? s.trim() : "";
+                if (evidence.isBlank() || request.getUserInput() == null
+                        || !request.getUserInput().contains(evidence) || !properties.containsKey("page"))
+                    return readTurnReply("NEED_MORE_INFO", "缺少可核验的页码依据，请明确要看的页码。");
+                // The LLM selects the parameter and its current-input span; the existing
+                // numeric resolver binds its value. Never inherit an old page for ABSOLUTE.
+                var mentions = LlmParameterGrounding.numberMentions(evidence);
+                if (mentions.size() != 1)
+                    return readTurnReply("NEED_MORE_INFO", "页码依据不唯一，请明确一个目标页码。");
+                int target;
+                try { target = mentions.get(0).value().intValueExact(); }
+                catch (ArithmeticException invalidPage) {
+                    return readTurnReply("NEED_MORE_INFO", "目标页码必须是有效的正整数。");
+                }
+                if (target < 1 || rawDelta.containsKey("page")
+                        && (!(rawDelta.get("page") instanceof Number n) || n.doubleValue() != target))
+                    return readTurnReply("NEED_MORE_INFO", "目标页码与本轮页码依据不一致，请确认页码。");
+                computedPage = target;
+                rawDelta.put("page", computedPage);
+            }
             Object referencedOrder = null;
             if (turn.get("objectReference") instanceof String reference && !reference.isBlank()) {
                 if (!"order_query".equals(tool.getToolName()) || !(previous.get("resultReferences") instanceof List<?> refs))
@@ -407,7 +428,8 @@ public class ToolDispatchService {
                     .isAfter(java.time.LocalDate.parse(String.valueOf(rawDelta.get("endDate")))))
                 return readTurnReply("NEED_MORE_INFO", "查询开始日期不能晚于结束日期，请确认时间范围。");
             if (referencedOrder != null) sources.put("orderId","SERVER_RESULT_REFERENCE");
-            if (computedPage != null) sources.put("page", "SERVER_RELATIVE_PAGE");
+            if (computedPage != null) sources.put("page", "ABSOLUTE".equals(pageAction)
+                    ? "CURRENT_EXPLICIT" : "SERVER_RELATIVE_PAGE");
             if ("order_query".equals(tool.getToolName()) && merged.get("orderId") != null
                     && previous.get("resultReferences") instanceof List<?> refs
                     && refs.stream().anyMatch(value -> value instanceof Map<?,?> ref

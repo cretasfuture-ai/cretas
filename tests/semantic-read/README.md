@@ -40,3 +40,9 @@ optional fields nullable on the wire, and drops only optional nulls on return. I
 not fill defaults, invent values, repair undeclared fields, grant permissions or change
 the production provider. Required values and explicit0/false remain unchanged. Each
 strict schema hash is recorded; strict structure does not guarantee business correctness.
+
+The existing read resolver binds ABSOLUTE page actions only from the model-selected
+current-input evidence span using the shared numeric parser. Missing, ambiguous,
+nonpositive or conflicting pages fail closed instead of silently reusing the old page.
+The scorer retains wrong-page errors as parameters; overlapping IDs become an ordering
+failure only when both observed page parameter sets match the expected consecutive pages.
