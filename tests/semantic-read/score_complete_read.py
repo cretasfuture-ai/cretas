@@ -31,7 +31,7 @@ for channel in ['normal','sse']:
    lookup={r['id']:r for r in pre};target=pre[(expected['page']-1)*expected['size']:expected['page']*expected['size']]
    allowed={r['id'] for r in target} if expiry_scope else {r['id'] for r in pre if target[-1]['createdAt']<=r['createdAt']<=target[0]['createdAt']} if target else set()
    exp_count=max(0,min(expected['size'],len(pre)-(expected['page']-1)*expected['size']))
-   data_ok=values is not None and len(ids)==len(set(ids)) and all(v in lookup for v in ids) and all(predicate(r) if expiry_scope else r.get('status')==requested for r in values) and set(ids)<=allowed and len(ids)==exp_count and total==len(pre)
+   data_ok=actual_expiry==expiry_scope and values is not None and len(ids)==len(set(ids)) and all(v in lookup for v in ids) and all(predicate(r) if expiry_scope else r.get('status')==requested for r in values) and set(ids)<=allowed and len(ids)==exp_count and total==len(pre)
    goal_ok=response.get('intentCode') in ({'MATERIAL_EXPIRED_QUERY'} if expiry_scope else {'ORDER_LIST','ORDER_STATUS'} if domain=='orders' else {'MATERIAL_BATCH_QUERY'})
    params_ok=(dict(page=page,size=size)==expected and (data.get('queryConditions') or {}).get('basis')=='EXPIRY_DATE') if expiry_scope else dict(page=page,size=size,status=status)==expected
    selected=response.get('intentCode');tool=(catalog.get(selected) or {}).get('toolName')
