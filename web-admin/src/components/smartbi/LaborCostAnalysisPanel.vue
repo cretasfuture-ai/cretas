@@ -5,11 +5,14 @@ import type {PythonServiceError} from '@/api/smartbi/common';
 import { analyzeLaborCosts, type LaborCostInput } from '@/utils/laborCostAnalysis';
 import CostDataTable from './CostDataTable.vue';
 import type {CostTableColumn} from '@/utils/costTableQuery';
+import LaborSupplementEditor from './LaborSupplementEditor.vue';
+import type {LaborSupplementStatus} from '@/api/smartbi/laborSupplement';
 const props=defineProps<{input:LaborCostInput;scopeLabel:string}>();
 const registered=ref<BlacklakeLaborSummary|null>(null),summaryError=ref(''),summaryLoading=ref(false);
+const supplements=ref<LaborSupplementStatus|null>(null);
 let generation=0,retryTimer:number|undefined;
 watch(()=>`${props.input.sourceRunId||''}:${props.input.blacklakeOrderIds?.join(',')||''}`,()=>{
-  const current=++generation;registered.value=null;summaryError.value='';summaryLoading.value=false;if(retryTimer!==undefined)window.clearTimeout(retryTimer);
+  const current=++generation;registered.value=null;supplements.value=null;summaryError.value='';summaryLoading.value=false;if(retryTimer!==undefined)window.clearTimeout(retryTimer);
   const ids=props.input.blacklakeOrderIds,run=props.input.sourceRunId;
   if(!ids?.length||!run?.startsWith('live:'))return;
   const load=async()=>{
@@ -23,12 +26,21 @@ watch(()=>`${props.input.sourceRunId||''}:${props.input.blacklakeOrderIds?.join(
 onBeforeUnmount(()=>{generation++;if(retryTimer!==undefined)window.clearTimeout(retryTimer);});
 const model=computed(()=>{
   const value=analyzeLaborCosts(props.input),summary=registered.value;
-  if(!summary)return value;
-  const aligned=summary.total!==null&&value.total!==null&&Math.abs(summary.total-value.total)<0.005;
-  return {...value,registeredParticipants:summary.participants,registeredCoverage:summary.complete&&aligned,
-    registeredPerPerson:summary.complete&&aligned?summary.perRegisteredPerson:null,
-    rows:value.rows.map(row=>({...row,registeredCount:summary.processes.find(p=>p.process===row.process)?.participants??null}))};
+  const aligned=summary?.total!=null&&value.total!==null&&Math.abs(summary.total-value.total)<0.005;
+  const extra=supplements.value?.sourceRunId===props.input.sourceRunId?supplements.value:null;
+  const confirmed=extra?.summary;
+  const complete=!!confirmed?.complete&&confirmed.total!==null&&value.total!==null&&Math.abs(confirmed.total-value.total)<0.005;
+  const allocations=complete&&confirmed.processes.length===value.rows.length&&confirmed.processes.every(p=>p.allocated!==null);
+  return {...value,
+    ...(summary?{registeredParticipants:summary.participants,registeredCoverage:summary.complete&&aligned,registeredPerPerson:summary.complete&&aligned?summary.perRegisteredPerson:null}:{}),
+    ...(complete?{participants:confirmed.participants,personHours:confirmed.personHours,perPerson:confirmed.perPerson,perPersonHour:confirmed.perPersonHour,
+      canAllocate:allocations,needs:value.needs.filter(n=>!(n.key==='people'&&confirmed.perPerson!==null)&&!(n.key==='hours'&&confirmed.personHours!==null))}:{}),
+    rows:value.rows.map(row=>{const process=confirmed?.processes.find(p=>p.process===row.process);return {...row,
+      ...(summary?{registeredCount:summary.processes.find(p=>p.process===row.process)?.participants??null}:{}),
+      ...(complete&&process?{personHours:process.personHours,allocated:process.allocated}:{}),
+    };})};
 });
+const remainingRequests=computed(()=>props.input.requests?.filter(r=>!supplements.value?.tasks.some(t=>supplements.value?.sourceRunId===props.input.sourceRunId&&t.status==='ready'&&t.rosterComplete&&r.id===`${t.projectId}:${t.taskId}`)));
 const mode=ref('recorded');
 watch(()=>props.input,()=>{mode.value='recorded';});
 const fmt=(value:number|null|undefined)=>value==null?'待补资料':value.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -61,6 +73,7 @@ const columns=computed<CostTableColumn<LaborRow>[]>(()=>[
   <section class="labor-analysis" aria-label="人工与工序成本分析">
     <h3>人工花在哪里</h3><p class="scope">{{ scopeLabel }}</p>
     <div class="labor-metrics"><div v-for="metric in metrics" :key="metric.label"><span>{{metric.label}}</span><strong>{{fmt(metric.value)}}</strong><small v-if="metric.value===null">{{metric.hint}}</small></div></div>
+    <LaborSupplementEditor v-if="input.blacklakeOrderIds?.length" :order-ids="input.blacklakeOrderIds" :source-run-id="input.sourceRunId" @updated="supplements=$event"/>
     <div v-if="model.sourceAvailable" class="source-evidence">
       <b>黑湖已补到的记录</b>
       <p v-if="summaryError" class="warning">{{summaryError}}</p>
@@ -73,10 +86,10 @@ const columns=computed<CostTableColumn<LaborRow>[]>(()=>[
     <p v-if="model.total===0" class="warning">工资记录为零，请先确认是工资另记、漏记，还是确实不计薪。</p>
     <p v-if="!model.reconciled" class="warning">工序明细还没有与人工费合计对齐，先核对金额，再做分摊。</p>
     <div class="mode" v-if="model.canAllocate"><label>查看方式<select v-model="mode" aria-label="人工分摊查看方式"><option value="recorded">已记录的工序人工</option><option value="person_hours">按人时分摊测算</option></select></label></div>
-    <p v-if="mode==='person_hours'" class="warning">按各工序人时分配同一笔人工费，仅供比较，不改变工资或账目。</p>
+    <p v-if="mode==='person_hours'" class="warning">先按每张工单各工序人时分配本单人工费，再汇总到产品。仅供比较，不改变工资或账目。</p>
     <CostDataTable :rows="model.rows" :columns="columns" row-key="id" missing-label="待补资料" paginate/>
     <div v-if="model.needs.length" class="missing"><h4>还需要补什么</h4><article v-for="need in model.needs" :key="need.key"><strong>{{ need.missing }}</strong><p>找{{ need.owner }}：{{ need.action }}。</p><p class="scope">补齐后：{{ need.benefit }}。</p></article></div>
-    <details v-if="input.requests?.length" class="explain"><summary>逐工单、逐工序补充清单（{{input.requests.length}} 项）</summary><CostDataTable :rows="input.requests" :columns="[{key:'orderCode',label:'工单',minWidth:160},{key:'process',label:'工序',minWidth:95},{key:'missing',label:'还缺什么',minWidth:230},{key:'owner',label:'找谁补',minWidth:150},{key:'action',label:'具体核对动作',minWidth:270},{key:'benefit',label:'补齐后能算什么',minWidth:220}]" row-key="id" paginate/></details>
+    <details v-if="remainingRequests?.length" class="explain"><summary>逐工单、逐工序补充清单（{{remainingRequests.length}} 项）</summary><CostDataTable :rows="remainingRequests" :columns="[{key:'orderCode',label:'工单',minWidth:160},{key:'process',label:'工序',minWidth:95},{key:'missing',label:'还缺什么',minWidth:230},{key:'owner',label:'找谁补',minWidth:150},{key:'action',label:'具体核对动作',minWidth:270},{key:'benefit',label:'补齐后能算什么',minWidth:220}]" row-key="id" paginate/></details>
     <details class="explain"><summary>怎么算</summary><p>计时人工＝每段时长 × 该段人数 × 费率；计件人工沿用已核定的计件工资。同一笔工资只记一次。</p><p>人均人工费＝所选工单人工费 ÷ 去重后的参与人数；同一人做多道工序只算一个人。时段人均费用只针对该段，不代表整个范围的人均费用。</p><p>人时分摊＝所选工单人工费 × 工序人时 ÷ 总人时，尾差留在最后一个有工时的工序。已报时长不直接当作人时，资料不齐时保持待补。</p></details>
   </section>
 </template>

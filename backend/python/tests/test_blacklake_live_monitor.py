@@ -98,6 +98,30 @@ def test_unchanged_minute_retains_both_receipts_and_deduplicates_content(cfg):
     c=live.connect(cfg['db']);assert c.execute('SELECT count(*) FROM content').fetchone()[0]==1;c.close()
 
 
+@pytest.mark.asyncio
+async def test_labor_supplement_revision_requeues_analysis_even_when_blacklake_source_does_not_change(cfg,monkeypatch):
+    from blacklake import live_api,period_runtime,smartbi_store,labor_supplements
+    from smartbi.services import analysis_supplement
+    from unittest.mock import AsyncMock
+    assert live.cycle(cfg,lambda v,p:(payload(),3))
+    source=live.latest(cfg);db=live.connect(cfg['db'])
+    with db:db.execute('UPDATE monitor SET analysis=?',(json.dumps({'reportId':'old','analyzedDataHash':live.digest(source['data'])}),))
+    db.close();submitted=[];version=['0']
+    class Store:
+        path=__import__('pathlib').Path(cfg['db']).parent/'period-reports.sqlite3'
+        def get(self,scope,id):return {'status':'ready','result':{'summary':'old','observations':[]}} if id=='old' else {'status':'queued'}
+        def submit(self,*args):submitted.append(args);return {'id':'new','status':'queued'}
+    monkeypatch.setenv('BLACKLAKE_LIVE_CONFIG','synthetic');monkeypatch.setattr(live,'config',lambda _:cfg)
+    monkeypatch.setattr(period_runtime,'store',Store);monkeypatch.setattr(period_runtime,'authorized_actor',AsyncMock(return_value=1));monkeypatch.setattr(period_runtime,'ensure_worker',lambda _:None)
+    monkeypatch.setattr(analysis_supplement,'attach_saved',lambda job,*args:job)
+    monkeypatch.setattr(smartbi_store,'read',lambda *args,**kwargs:{'periodMetadata':{'fingerprint':'f'*64}})
+    monkeypatch.setattr(labor_supplements,'revision',lambda _:version[0])
+    configured={'tenant_id':cfg['tenant_id'],'source_factory_id':'factory','run_id':'baseline','labor_supplements_path':'synthetic'}
+    await live_api.analysis_tick(configured);assert not submitted
+    version[0]='1';await live_api.analysis_tick(configured);assert len(submitted)==1
+    await live_api.analysis_tick(configured);assert len(submitted)==1
+
+
 def test_fresh_schema_initialization_is_serialized_across_workers(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     value={'tenant_id':'BLACKLAKE_POC_TEST','source_factory_id':'factory','baselineRunId':'baseline','db':str(tmp_path/'parallel.sqlite3')}

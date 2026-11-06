@@ -22,14 +22,21 @@ from .period_contract import PeriodSelection
 TENANT = 'BLACKLAKE_POC_TEST'
 UPSTREAM = 'http://127.0.0.1:8095'
 PREFIX = '/smartbi-api/api/smartbi/blacklake/'
-GET_ROUTES = {'analysis', 'complete-cost-analysis', 'cost-traceability', 'period-reports', 'period-schedule', 'live-monitor', 'labor-summary'}
+GET_ROUTES = {'analysis', 'complete-cost-analysis', 'cost-traceability', 'period-reports', 'period-schedule', 'live-monitor', 'labor-summary', 'labor-supplements'}
 POST_ROUTES = {'sections/followup', 'complete-cost-analysis/followup', 'period-reports'}
 QUERY_KEYS = {'start_date', 'end_date', 'basis', 'kind', 'mode'}
 SECRET_KEYS = {'accesstoken', 'refreshtoken', 'token', 'password', 'jwtsecret', 'apikey', 'authorization',
                'email', 'phone', 'mobile', 'username', 'updatedby', 'createdby', 'userid', 'host',
-               'workerids', 'employees', 'workers', 'personnel', 'salarydetails', 'payrolldetails'}
+               'workerids', 'employees', 'workers', 'personnel', 'salarydetails', 'payrolldetails', 'reference'}
 PERSON_KEYS = re.compile(r'employee|personnel|contact|worker|staff|reporter|operator|username|userid|phone|mobile|email|address|idcard|identitycard|bank|credential|password|secret|authorization|createdby|updatedby|wechat|weixin|landline', re.I)
 BUSINESS_NAME_KEYS = {'factoryName', 'productName', 'materialName', 'processName', 'feedProcessName', 'warehouseName', 'unitName'}
+
+
+def local_editor(request):
+    """The anonymous reverse tunnel cannot obtain local administrator writes."""
+    return (request.client is not None and request.client.host in {'127.0.0.1','::1'}
+        and request.headers.get('host') in {'127.0.0.1:5188','localhost:5188'}
+        and not any(name in request.headers for name in ('x-preview-client-ip','x-forwarded-for','x-forwarded-host','x-forwarded-proto','forwarded')))
 
 
 class PreviewTurn(BaseModel):
@@ -126,7 +133,8 @@ def create_app(dist: Path, origin: str, broker=None, transport=None):
         nonlocal pending_total
         if request.method not in {'GET', 'HEAD', 'POST'}:
             return failure('公开预览不支持此操作', 405)
-        if request.method == 'POST' and request.headers.get('origin') != origin:
+        local_origin=local_editor(request) and request.headers.get('origin') in {'http://127.0.0.1:5188','http://localhost:5188'}
+        if request.method == 'POST' and request.headers.get('origin') != origin and not local_origin:
             return failure('仅支持从预览页面操作', 403)
         local_path = request.url.path.removeprefix(request.scope.get('root_path', ''))
         tracked = local_path.startswith('/smartbi-api/') or local_path.startswith('/__blacklake/')
@@ -165,15 +173,17 @@ def create_app(dist: Path, origin: str, broker=None, transport=None):
 
     @app.api_route('/smartbi-api/api/smartbi/blacklake/{resource:path}', methods=['GET', 'POST'])
     async def analytical_proxy(resource: str, request: Request):
-        allowed = (resource in GET_ROUTES or bool(re.fullmatch(r'period-reports/[A-Za-z0-9_-]{1,160}', resource))) if request.method == 'GET' else resource in POST_ROUTES
+        local_write=resource=='labor-supplements' and request.method=='POST' and local_editor(request)
+        allowed = (resource in GET_ROUTES or bool(re.fullmatch(r'period-reports/[A-Za-z0-9_-]{1,160}', resource))) if request.method == 'GET' else resource in POST_ROUTES or local_write
         if not allowed:
             return failure('公开预览仅支持查看和分析，不保存跟进或修改业务数据', 403)
         summary_query=request.method=='GET' and resource=='period-reports'
         live_query=request.method=='GET' and resource=='live-monitor'
         allowed_query=({'history_offset'} if live_query else QUERY_KEYS)|({'summaries_only'} if summary_query else set())
-        if resource=='labor-summary':
-            allowed_query={'project_ids','source_run_id'}
-            for name,pattern in (('project_ids',r'\d+(,\d+){0,999}'),('source_run_id',r'live:[a-f0-9]{32}')):
+        if resource in {'labor-summary','labor-supplements'}:
+            allowed_query={'project_ids','source_run_id'} if resource=='labor-summary' else {'project_ids'} if request.method=='GET' else set()
+            patterns=[('project_ids',r'\d+(,\d+){0,999}')]+([('source_run_id',r'live:[a-f0-9]{32}')] if resource=='labor-summary' else []) if request.method=='GET' else []
+            for name,pattern in patterns:
                 values=request.query_params.getlist(name)
                 if len(values)!=1 or len(values[0])>20000 or not re.fullmatch(pattern,values[0]):return failure('人工统计范围无效',400)
         if 'history_offset' in request.query_params:
@@ -187,7 +197,7 @@ def create_app(dist: Path, origin: str, broker=None, transport=None):
         body = b''
         async for chunk in request.stream():
             body += chunk
-            if len(body) > 32768:
+            if len(body) > (524288 if local_write else 32768):
                 return failure('问题内容过长，请缩短后重试', 413)
         if request.method == 'POST':
             import json
@@ -199,6 +209,9 @@ def create_app(dist: Path, origin: str, broker=None, transport=None):
                 # importing the full application/runtime into this small gateway.
                 models = {'sections/followup': PreviewFollowup, 'complete-cost-analysis/followup': PreviewCompleteFollowup,
                           'period-reports': PreviewPeriodRequest}
+                if local_write:
+                    from .labor_supplements import Batch
+                    models['labor-supplements']=Batch
                 parsed = models[resource].model_validate(payload)
                 if resource == 'period-reports':
                     parsed.force = False  # Reuse the existing queue/cache.
@@ -218,7 +231,13 @@ def create_app(dist: Path, origin: str, broker=None, transport=None):
                         response = await client.request(request.method, UPSTREAM + '/api/smartbi/blacklake/' + resource, **kwargs)
                 if response.status_code >= 500:
                     return failure('分析服务暂不可用，请稍后重试', 503)
-                return JSONResponse(clean_response(response.json()), status_code=response.status_code)
+                value=clean_response(response.json())
+                if resource=='labor-supplements' and isinstance(value.get('data'),dict):
+                    value['data']['editable']=local_editor(request)
+                    # References may contain personnel information supplied by an admin.
+                    if not local_editor(request):
+                        for task in value['data'].get('tasks',[]):task.pop('reference',None)
+                return JSONResponse(value, status_code=response.status_code)
             except Exception:
                 return failure('分析服务暂不可用，请稍后重试', 503)
 

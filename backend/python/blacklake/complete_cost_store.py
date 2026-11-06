@@ -42,6 +42,10 @@ def read_live(config):
     analysis['cost']['projects']=eligible
     analysis['cost']['projectDates']=project_dates([p for p in source['data']['project'] if str(p['id']) in ids])
     analysis['costAlerts']=evaluate(eligible,scope=digest((config['tenant_id'],config['source_factory_id'])),run_id=current['runId'])
+    if config.get('labor_supplements_path'):
+        from .labor_supplements import attach
+        from .labor_supplement_analysis import apply_alerts
+        attach(analysis,config);apply_alerts(analysis)
     from .traceability import subset
     analysis['costTraceability']=subset(current['costTraceability'],list(ids),current['runId'])
     archived=read_archived(config)

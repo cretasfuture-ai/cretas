@@ -35,6 +35,10 @@ async def analysis_tick(configured):
     p=await asyncio.to_thread(live.latest,v)
     if not p:return
     data_hash=live.digest(p['data'])
+    if configured.get('labor_supplements_path'):
+        from .labor_supplements import revision
+        labor_revision=await asyncio.to_thread(revision,configured)
+        if labor_revision!='0':data_hash=live.digest({'source':data_hash,'laborSupplementRevision':labor_revision})
     db=live.connect(v['db'])
     try:
         state=db.execute('SELECT analysis,ends FROM monitor WHERE scope=?',(live.binding(v),)).fetchone()

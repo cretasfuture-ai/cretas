@@ -2,6 +2,7 @@
 import { mount,flushPromises } from '@vue/test-utils';
 import { expect,it,vi } from 'vitest';
 vi.mock('@/api/smartbi/blacklake',()=>({getBlacklakeLaborSummary:vi.fn()}));
+vi.mock('../LaborSupplementEditor.vue',()=>({default:{name:'LaborSupplementEditor',template:'<div/>'}}));
 import {getBlacklakeLaborSummary} from '@/api/smartbi/blacklake';
 import {computed,defineComponent,h,provide,inject,type Ref} from 'vue';
 import Component from '../LaborCostAnalysisPanel.vue';
@@ -44,4 +45,10 @@ it('labels the person-hour allocation as a read-only comparison and resets it on
   expect(page.get('[data-label="人工占比"]').text()).toBe('40.00%60.00%');
   expect(page.get('[data-label="每包人工"]').text()).toBe('4.006.00');
   await page.setProps({input:{...base(),rows:[]}});expect(page.find('select').exists()).toBe(false);expect(page.text()).not.toContain('仅供比较，不改变工资或账目');
+});
+it('uses verified per-order server allocations after supplementation instead of pooling product wages again',async()=>{
+  const input=base();input.sourceRunId='live:'+'a'.repeat(32);input.blacklakeOrderIds=[1];input.rows=input.rows.map(r=>({...r,personHours:null}));
+  const page=render(input);await flushPromises();page.findComponent({name:'LaborSupplementEditor'}).vm.$emit('updated',{sourceRunId:input.sourceRunId,revision:'1',editable:true,tasks:[],summary:{complete:true,total:100,participants:2,personHours:5,perPerson:50,perPersonHour:20,processes:[{process:'加工',personHours:4,participants:2,allocated:80},{process:'包装',personHours:1,participants:1,allocated:20}],orders:[]}});await flushPromises();
+  expect(page.findAll('.labor-metrics strong').map(n=>n.text())).toEqual(['100.00','10.00','50.00','20.00']);
+  await page.get('select').setValue('person_hours');expect(page.get('[data-label="测算分摊额"]').text()).toBe('80.0020.00');page.unmount();
 });

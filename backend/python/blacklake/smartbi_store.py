@@ -34,6 +34,7 @@ def settings(path):
     if value.get('gap_evidence_file'):
         if Path(value['gap_evidence_file']).resolve()!=Path(path).resolve().parent/'gap-evidence.dpapi':
             raise RuntimeError('SMARTBI_EVIDENCE_PATH_INVALID')
+    value['labor_supplements_path']=str(Path(path).resolve().parent/'labor-supplements.sqlite3')
     return value
 
 
@@ -98,6 +99,14 @@ def read(value, period=None, *, live_cycle_id=None):
             # Whole-history supplemental evidence is never relabeled as a period probe.
             evidence=None
         analysis=build(data,metadata)
+        if value.get('labor_supplements_path'):
+            from .labor_supplements import attach
+            attach(analysis,value)
+            if period_metadata is not None and any(t['status']!='missing' for t in analysis['laborSupplements']['tasks']):
+                supplementary=[{k:t.get(k) for k in ('taskId','revision','status','signature')} for t in analysis['laborSupplements']['tasks']]
+                period_metadata['fingerprint']=digest({'source':period_metadata['fingerprint'],'labor':supplementary})
+                analysis['runId']=period_metadata['baseRunId']+':period:'+period_metadata['fingerprint'][:20]
+                analysis['laborSupplements']['sourceRunId']=analysis['runId']
         analysis['operationalSource']=metadata.get('operational_source')
         analysis['latestCompletedDate']=metadata.get('latest_completed_date')
         analysis['operationsSupplement']=metadata.get('operations_supplement')
@@ -108,6 +117,8 @@ def read(value, period=None, *, live_cycle_id=None):
         from smartbi.services.cost_data_alerts import evaluate
         from .cost_review import review
         analysis['costAlerts']=evaluate(analysis['cost']['projects'],scope=digest(scope[:2]),run_id=analysis['runId'])
+        from .labor_supplement_analysis import apply_alerts
+        apply_alerts(analysis)
         # A former 8B review is historical evidence, not the selected runtime.
         # Only attach a current, fully validated shared 27B review.
         if period is None and os.environ.get('LOCALAPPDATA'):
@@ -118,6 +129,8 @@ def read(value, period=None, *, live_cycle_id=None):
         analysis['dataAlerts']=analysis['costAlerts']
         from .section_insights import build as build_sections
         analysis['sectionInsights']=build_sections(analysis)
+        from .labor_supplement_analysis import explain
+        explain(analysis)
         if period_metadata is not None:
             from .period_projection import describe_period
             describe_period(analysis,period_metadata)

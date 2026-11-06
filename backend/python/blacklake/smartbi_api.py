@@ -72,6 +72,48 @@ class Turn(BaseModel):
     content: str = Field(min_length=1,max_length=12000)
 
 
+@router.get('/labor-supplements')
+async def labor_supplements_get(request:Request,project_ids:str=Query(...,pattern=r'^\d+(,\d+)*$',max_length=20000)):
+    from .period_api import context
+    from .labor_supplements import status
+    import asyncio
+    configured=await context(request)
+    ids=[int(i) for i in project_ids.split(',')]
+    if len(ids)>1000 or len(ids)!=len(set(ids)):raise HTTPException(422,'工单范围无效')
+    data=await asyncio.to_thread(read,configured)
+    if set(ids)-{p['projectId'] for p in data['cost']['projects']}:raise HTTPException(404,'工单不属于当前工厂或已不可见')
+    result=await asyncio.to_thread(status,configured,data,ids)
+    result['editable']=True
+    return {'success':True,'data':result,'message':'补充资料与原始报工分开保留；仅返回人数和人时汇总'}
+
+
+from .labor_supplements import Batch as LaborSupplementBatch
+
+
+@router.post('/labor-supplements')
+async def labor_supplements_save(body:LaborSupplementBatch,request:Request):
+    from .period_api import context
+    from .labor_supplements import store,status
+    import asyncio
+    configured=await context(request)
+    data=await asyncio.to_thread(read,configured)
+    if body.sourceRunId!=data['runId']:raise HTTPException(409,'工单数据已更新，请重新打开补充入口，原填写内容尚未保存')
+    try:
+        receipt=await asyncio.to_thread(store,configured,body.sourceRunId,body.entries,data,str(getattr(request.state,'user_id','test_admin')))
+    except ValueError as exc:
+        message={'REVISION_CONFLICT':'资料已被更新，请重新打开后核对，避免覆盖他人修改',
+                 'WORKER_SEGMENT_OVERLAP':'同一人员的作业时段重叠，请核对人员代码或拆分时段',
+                 'TASK_PROJECT_MISMATCH':'工单和工序未对应，请重新下载模板核对'}.get(str(exc),'补充资料未通过校验，本批未保存，请核对时段、人员及工序对应关系')
+        raise HTTPException(409,message) from None
+    # The transaction has committed. A failed readback must never claim rollback.
+    try:result=await asyncio.to_thread(status,configured,data,sorted({e.projectId for e in body.entries}))
+    except Exception:
+        return {'success':True,'data':{'saved':True,'savedRevision':receipt['revision'],'savedCount':receipt['count'],'editable':True,'readbackPending':True},'message':'资料已保存，汇总暂未回读；页面会自动重新读取，请勿重复提交'}
+    result['editable']=True
+    result.update(saved=True,savedRevision=receipt['revision'],savedCount=receipt['count'])
+    return {'success':True,'data':result,'message':'本机补充资料已保存；指标已重算，本地AI会自动排队更新'}
+
+
 @router.get('/complete-cost-analysis')
 async def complete_cost_analysis(request:Request):
     path=os.environ.get('BLACKLAKE_SMARTBI_CONFIG')
