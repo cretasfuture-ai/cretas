@@ -1,13 +1,22 @@
 package com.cretas.aims.service.impl;
 
 import com.cretas.aims.dto.scheduling.ConfirmUrgentInsertRequest;
+import com.cretas.aims.dto.scheduling.ChainImpactResult;
 import com.cretas.aims.entity.InsertSlot;
+import com.cretas.aims.entity.InsertSlotPreview;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.InsertSlotRepository;
+import com.cretas.aims.repository.InsertSlotPreviewRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.PushNotificationService;
+import com.cretas.aims.service.ImpactAnalysisService;
+import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
+import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -72,6 +81,8 @@ class UrgentInsertSlotClaimConcurrencyJpaTest {
     private final List<String> createdSlotIds = new ArrayList<>();
     private final AtomicInteger planSaves = new AtomicInteger();
     private final List<ProductionPlan> savedPlans = new CopyOnWriteArrayList<>();
+    private String currentFactoryId;
+    private String currentSlotId;
     private PushNotificationService push;
     /** 释放时段时「本厂有没有从这个时刻开始的未取消计划」的答案 */
     private volatile boolean planOccupiesSlot;
@@ -106,21 +117,60 @@ class UrgentInsertSlotClaimConcurrencyJpaTest {
         when(planRepo.existsByFactoryIdAndStartTimeAndStatusNot(any(), any(), any()))
                 .thenAnswer(inv -> planOccupiesSlot);
         push = mock(PushNotificationService.class);
+        InsertSlot slot = insertSlotRepository.findByIdAndFactoryId(currentSlotId, currentFactoryId)
+                .orElseThrow();
+        InsertSlotPreviewRepository previews = mock(InsertSlotPreviewRepository.class);
+        InsertSlotPreview preview = InsertSlotPreview.builder()
+                .id("PV-UI-CC").factoryId(currentFactoryId).slotId(currentSlotId)
+                .productTypeId("PT-UI-TEST").previewQuantity(new BigDecimal("50"))
+                .quantityUnit("PIECE").plannedUnit("件")
+                .productionLineId(slot.getProductionLineId()).windowStart(slot.getStartTime())
+                .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0)
+                .candidateNumber(1).build();
+        preview.setCreatedAt(LocalDateTime.now());
+        when(previews.findByIdAndFactoryId("PV-UI-CC", currentFactoryId))
+                .thenReturn(java.util.Optional.of(preview));
+        ProductTypeRepository products = mock(ProductTypeRepository.class);
+        ProductType product = new ProductType();
+        product.setId("PT-UI-TEST");
+        product.setFactoryId(currentFactoryId);
+        product.setUnit("件");
+        when(products.findByIdAndFactoryId("PT-UI-TEST", currentFactoryId))
+                .thenReturn(java.util.Optional.of(product));
+        when(products.findByIdAndFactoryIdForUpdate("PT-UI-TEST", currentFactoryId))
+                .thenReturn(java.util.Optional.of(product));
+        ImpactAnalysisService impact = mock(ImpactAnalysisService.class);
+        when(impact.calculateChainImpact(anyString(), any(), any(), any(), any()))
+                .thenReturn(completeImpact());
+        LineCapacityEquipmentCheck lines = mock(LineCapacityEquipmentCheck.class);
+        ResourceCheckResult ready = ResourceCheckResult.available("TEST", BigDecimal.TEN, BigDecimal.ONE);
+        when(lines.checkEquipment(anyString(), anyString())).thenReturn(ready);
+        when(lines.checkCapacity(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+                .thenReturn(ready);
+        SchedulingResourceWriteLock factoryLock = mock(SchedulingResourceWriteLock.class);
         return UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
                 InsertSlotRepository.class, insertSlotRepository,
                 ProductionPlanRepository.class, planRepo,
                 ObjectMapper.class, new ObjectMapper(),
-                PushNotificationService.class, push));
+                PushNotificationService.class, push,
+                InsertSlotPreviewRepository.class, previews,
+                ProductTypeRepository.class, products,
+                ImpactAnalysisService.class, impact,
+                LineCapacityEquipmentCheck.class, lines,
+                SchedulingResourceWriteLock.class, factoryLock));
     }
 
     private String insertCommittedSlot(String factoryId) {
         String id = UUID.randomUUID().toString();
         createdSlotIds.add(id);
+        currentFactoryId = factoryId;
+        currentSlotId = id;
         new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
             LocalDateTime start = LocalDateTime.now().plusHours(2).withNano(0);
             insertSlotRepository.saveAndFlush(InsertSlot.builder()
                     .id(id).factoryId(factoryId)
-                    .productionLineId("default").productionLineName("动态分配")
+                    .productionLineId("LINE-UI-CC").productionLineName("真实产线")
                     .startTime(start).endTime(start.plusHours(2))
                     .availableCapacity(new BigDecimal("200")).impactLevel("none")
                     .requiredWorkers(4).availableWorkers(4).switchCostMinutes(0).recommendScore(80)
@@ -139,9 +189,18 @@ class UrgentInsertSlotClaimConcurrencyJpaTest {
         r.setSlotId(slotId);
         r.setProductTypeId("PT-UI-TEST");
         r.setPlannedQuantity(new BigDecimal("50"));
+        r.setPreviewId("PV-UI-CC");
+        r.setQuantityUnit("PIECE");
         r.setPriority(9);
         r.setForceInsert(false);
         return r;
+    }
+
+    private static ChainImpactResult completeImpact() {
+        return ChainImpactResult.builder().impactLevel("none").requiresApproval(false)
+                .totalAffectedPlans(0).directConflicts(0).cascadeDelays(0)
+                .maxDelayMinutes(0).totalDelayMinutes(0).affectedVipCustomers(0)
+                .criticalCrPlans(0).exceedingDeadlinePlans(0).impactScore(0).build();
     }
 
     @Test

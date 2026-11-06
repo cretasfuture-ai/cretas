@@ -14,6 +14,8 @@ import com.cretas.aims.repository.EquipmentMaintenanceRepository;
 import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.EquipmentService;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
+import com.cretas.aims.service.scheduling.SchedulingResourceRowWriter;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +55,10 @@ public class EquipmentServiceImpl implements EquipmentService {
     private final EquipmentMaintenanceRepository maintenanceRepository;
     private final BatchEquipmentUsageRepository usageRepository;
     private final UserRepository userRepository;
+    private final SchedulingResourceWriteLock resourceWriteLock;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private SchedulingResourceRowWriter resourceRowWriter;
 
     /** Canvas V2: DB-driven validation rules */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -72,6 +78,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Override
     @Transactional
     public EquipmentDTO createEquipment(String factoryId, CreateEquipmentRequest request, Long userId) {
+        resourceWriteLock.lockFactory(factoryId);
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "equipmentName", request.getName() != null ? request.getName() : "",
             "status", request.getStatus() != null ? request.getStatus() : "active"));
@@ -136,6 +143,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Override
     @Transactional
     public EquipmentDTO updateEquipment(String factoryId, String equipmentId, CreateEquipmentRequest request) {
+        resourceWriteLock.lockFactory(factoryId);
         runConfiguredValidation(factoryId, "UPDATE", java.util.Map.of(
             "equipmentId", equipmentId,
             "equipmentName", request.getName() != null ? request.getName() : "",
@@ -186,6 +194,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Override
     @Transactional
     public void deleteEquipment(String factoryId, String equipmentId) {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("删除设备: factoryId={}, equipmentId={}", factoryId, equipmentId);
 
         Long equipmentIdLong = Long.parseLong(equipmentId);
@@ -282,6 +291,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Override
     @Transactional
     public EquipmentDTO updateEquipmentStatus(String factoryId, String equipmentId, String status) {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("更新设备状态: factoryId={}, equipmentId={}, status={}", factoryId, equipmentId, status);
 
         Long equipmentIdLong = Long.parseLong(equipmentId);
@@ -305,6 +315,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Override
     @Transactional
     public EquipmentDTO startEquipment(String factoryId, String equipmentId) {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("启动设备: factoryId={}, equipmentId={}", factoryId, equipmentId);
 
         Long equipmentIdLong = Long.parseLong(equipmentId);
@@ -332,6 +343,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Override
     @Transactional
     public EquipmentDTO stopEquipment(String factoryId, String equipmentId, Integer runningHours) {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("停止设备: factoryId={}, equipmentId={}, runningHours={}", factoryId, equipmentId, runningHours);
 
         Long equipmentIdLong = Long.parseLong(equipmentId);
@@ -360,6 +372,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Transactional
     public EquipmentDTO recordMaintenance(String factoryId, String equipmentId, LocalDate maintenanceDate,
                                          BigDecimal cost, String description) {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("记录设备维护: factoryId={}, equipmentId={}, date={}", factoryId, equipmentId, maintenanceDate);
 
         Long equipmentIdLong = Long.parseLong(equipmentId);
@@ -607,6 +620,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Override
     @Transactional
     public List<EquipmentDTO> importEquipment(String factoryId, List<CreateEquipmentRequest> requests, Long userId) {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("批量导入设备: factoryId={}, count={}", factoryId, requests.size());
 
         List<EquipmentDTO> importedEquipment = new ArrayList<>();
@@ -700,20 +714,15 @@ public class EquipmentServiceImpl implements EquipmentService {
                     continue;
                 }
 
-                // 2.2 验证编码唯一性（如果提供了编码）
-                if (exportDTO.getEquipmentCode() != null && !exportDTO.getEquipmentCode().trim().isEmpty()) {
-                    if (equipmentRepository.existsByFactoryIdAndEquipmentCode(factoryId, exportDTO.getEquipmentCode())) {
-                        result.addFailure(rowNumber, "设备编码已存在: " + exportDTO.getEquipmentCode(),
-                                toJsonString(exportDTO));
-                        continue;
+                // Uniqueness read and save share the row transaction and factory mutex.
+                FactoryEquipment saved = resourceRowWriter.writeRow(factoryId, () -> {
+                    if (exportDTO.getEquipmentCode() != null && !exportDTO.getEquipmentCode().trim().isEmpty()
+                            && equipmentRepository.existsByFactoryIdAndEquipmentCode(factoryId, exportDTO.getEquipmentCode())) {
+                        throw new BusinessException(409, "设备编码已存在: " + exportDTO.getEquipmentCode())
+                                .withHint("请使用不同的设备编码，或删除导入表中与现有设备重复的行后重试");
                     }
-                }
-
-                // 2.3 转换为Entity
-                FactoryEquipment equipment = convertFromExportDTO(exportDTO, factoryId);
-
-                // 2.4 保存
-                FactoryEquipment saved = equipmentRepository.save(equipment);
+                    return equipmentRepository.save(convertFromExportDTO(exportDTO, factoryId));
+                });
 
                 // 2.5 转换为DTO并记录成功
                 EquipmentDTO dto = toDTO(saved);
@@ -802,6 +811,7 @@ public class EquipmentServiceImpl implements EquipmentService {
     @Override
     @Transactional
     public EquipmentDTO scrapEquipment(String factoryId, String equipmentId, String reason) {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("报废设备: factoryId={}, equipmentId={}, reason={}", factoryId, equipmentId, reason);
 
         Long equipmentIdLong = Long.parseLong(equipmentId);

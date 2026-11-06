@@ -5,10 +5,12 @@ import com.cretas.aims.entity.FactoryEquipment;
 import com.cretas.aims.entity.common.UnifiedDeviceType;
 import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.ScaleProtocolConfigRepository;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 
@@ -23,6 +25,7 @@ import java.util.*;
  */
 @Slf4j
 @Component
+@Transactional
 public class ScaleUpdateDeviceTool extends AbstractBusinessTool {
 
     @Autowired
@@ -33,6 +36,9 @@ public class ScaleUpdateDeviceTool extends AbstractBusinessTool {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private SchedulingResourceWriteLock resourceWriteLock;
 
     @Override
     public String getToolName() {
@@ -158,7 +164,9 @@ public class ScaleUpdateDeviceTool extends AbstractBusinessTool {
 
     @Override
     @SuppressWarnings("unchecked")
+    @Transactional
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
+        resourceWriteLock.lockFactory(factoryId);
         log.info("执行更新电子秤设备 - 工厂ID: {}, 参数: {}", factoryId, params);
 
         Long deviceId = getLong(params, "deviceId");
