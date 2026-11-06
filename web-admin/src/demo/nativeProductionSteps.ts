@@ -127,6 +127,8 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
       const node = await ui.waitFor(`[data-testid="process-report-${n}"]`, 15000)
       const processCode = node.getAttribute('data-process-code')
       if (!processCode) throw new Error(`工序${n}未读取真实 workflow processCode`)
+      await ui.hold('展示本工序录入界面',1)
+      if(!node.querySelector('[data-testid="production-date"]'))await ui.click('[data-testid="add-process-row"]','新增本工序原生报工行')
       const codes = nativeProcessCodes.get(state.runKey) || {}
       codes[n] = processCode; nativeProcessCodes.set(state.runKey, codes)
       const values = Object.fromEntries(prepareStep(state, `process-report-${n}` as DemoStepId).fields.map((item) => [item.name, item.value]))
