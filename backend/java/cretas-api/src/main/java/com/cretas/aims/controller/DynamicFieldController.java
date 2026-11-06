@@ -84,6 +84,7 @@ public class DynamicFieldController {
         validateIdentifier(fieldCode, "fieldCode");
         if (fieldRepo.findByFactoryIdAndModuleCodeAndFieldCode(factoryId, moduleCode, fieldCode).isPresent()) {
             throw new BusinessException(409, "本厂该模块已存在同名动态字段，请刷新后编辑已有字段")
+                    .withHint("请刷新当前模块的字段列表，编辑已有同名字段；如需新字段，请更换字段编码。")
                     .withHintTarget("fieldCode");
         }
 

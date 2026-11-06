@@ -72,6 +72,8 @@ class CanvasDynamicFieldWriteLockContractTest {
         assertThatThrownBy(() -> controller.createDynamicField(FACTORY, Map.of(
                 "moduleCode", MODULE, "fieldCode", FIELD, "fieldType", "TEXT", "label", "Duplicate")))
                 .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("actionHint", "请刷新当前模块的字段列表，编辑已有同名字段；如需新字段，请更换字段编码。")
+                .hasFieldOrPropertyWithValue("hintTarget", "fieldCode")
                 .hasMessageContaining("已存在");
         verify(lock).lock(FACTORY);
         verify(fields, never()).save(any());
