@@ -43,7 +43,7 @@ export function useNativeDemoAdapters(owner: string, definitions: readonly Nativ
 export function nativeAdapterFor(step: NativeDemoStepId, state: DemoState): NativeDemoAdapter | undefined {
   assertNativeDemoScope(state)
   const adapter = Array.from(adapters.get(step)?.values()||[]).at(-1)
-  if (!adapter) return undefined
+  if (!adapter || !adapter.canUse()) return undefined
   const ensure = () => { assertNativeDemoScope(state); if (!adapter.canUse()) throw new Error('当前原生页面没有此操作权限，演示已停止') }
   return { step, canUse: adapter.canUse, prepare: async context => { ensure(); await adapter.prepare(context) }, commit: async context => { ensure(); return adapter.commit(context) } }
 }

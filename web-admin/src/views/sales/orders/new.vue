@@ -388,6 +388,7 @@ useNativeDemoAdapters('sales-order-new', [
     if (entity) ui.remember('salesOrder', entity);
     return entity;
   }, async ({ state, context, ui }) => {
+    await ui.until(()=>customers.value.some(row=>String(row.id)===String(context.customer.id))&&products.value.some(row=>String(row.id)===String(context.product.id))&&sourceWarehouses.value.some(row=>String(row.code).toUpperCase()==='WH-FG'),'客户、成品与成品仓资料加载');
     await ui.fill('客户', () => { form.value.customerId = String(context.customer.id) });
     form.value.remark = state.runKey;
     form.value.deliveryAddress = '演示·上海连锁餐饮收货中心';

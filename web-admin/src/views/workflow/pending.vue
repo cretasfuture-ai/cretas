@@ -230,11 +230,7 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
 }
 
 useNativeDemoAdapters('workflow-pending', [
-  commerceAdapter('purchase-approve', () => {
-    const ownedPurchase = rows.value.find(row => row.moduleCode === 'PURCHASE_ORDER'
-      && nativePurchaseApprovalContext(row.businessEntityId));
-    return Boolean(ownedPurchase && authStore.hasRole(['factory_super_admin']));
-  }, async ({ state, ui }) => {
+  commerceAdapter('purchase-approve', () => authStore.hasRole(['factory_super_admin']), async ({ state, ui }) => {
     const purchaseId=state.entities.purchaseOrder?.id;
     if(!purchaseId)throw new Error('缺少本轮采购单编号');
     for(let attempt=0;attempt<8;attempt++){
@@ -252,12 +248,8 @@ useNativeDemoAdapters('workflow-pending', [
     const entity = entityFromResponse(await ui.read(`/purchase/orders/${state.entities.purchaseOrder?.id || ''}`));
     if (entity) ui.remember('purchaseOrder', entity);
     return entity;
-  }),
-  commerceAdapter('sales-order-approve', () => {
-    const salesId = nativeDemoState.value?.entities.salesOrder?.id;
-    return Boolean(salesId && rows.value.some(row => row.moduleCode === 'SALES_ORDER'
-      && String(row.businessEntityId) === String(salesId)) && authStore.hasRole(['factory_super_admin']));
-  }, async ({ state, ui }) => {
+  },async ({state,ui})=>{if(state.entities.purchaseOrder?.status!=='FINANCE_APPROVED')await ui.until(()=>rows.value.some(row=>row.moduleCode==='PURCHASE_ORDER'&&String(row.businessEntityId)===String(state.entities.purchaseOrder?.id)),'本轮采购 OA 待办加载')}),
+  commerceAdapter('sales-order-approve', () => authStore.hasRole(['factory_super_admin']), async ({ state, ui }) => {
     const salesId = state.entities.salesOrder?.id;
     if (!salesId) throw new Error('缺少本次销售订单 ID');
     let approved = false;
@@ -283,7 +275,7 @@ useNativeDemoAdapters('workflow-pending', [
     const entity = entityFromResponse(await ui.read(`/sales/orders/${salesId}`));
     if (entity) ui.remember('salesOrder', entity);
     return entity;
-  }),
+  },async ({state,ui})=>{if(!['FINANCE_APPROVED','PROCESSING','COMPLETED','PARTIAL_DELIVERED'].includes(String(state.entities.salesOrder?.status)))await ui.until(()=>rows.value.some(row=>row.moduleCode==='SALES_ORDER'&&String(row.businessEntityId)===String(state.entities.salesOrder?.id)),'本轮销售 OA 待办加载')}),
 ])
 
 /**

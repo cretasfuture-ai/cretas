@@ -1878,7 +1878,7 @@ async function handleCreatePayment() {
 }
 
 useNativeDemoAdapters('sales-order-detail', [
-  commerceAdapter('sales-order-submit', () => canWrite.value && Boolean(order.value), async ({ state, ui }) => {
+  commerceAdapter('sales-order-submit', () => canWrite.value, async ({ state, ui }) => {
     const response = await ui.capture({ method: 'POST', path: /\/sales\/orders\/[^/]+\/(confirm|submit-for-review)/ }, async () => {
       await ui.click('[data-testid="sales-order-submit"]', '原生提交销售审批');
       await ui.click('.el-message-box__btns .el-button--primary', '确认提交销售审批');
@@ -1895,8 +1895,8 @@ useNativeDemoAdapters('sales-order-detail', [
     }
     if (entity) ui.remember('salesOrder', entity);
     return entity;
-  }),
-  commerceAdapter('sales-delivery-create', () => canWrite.value && Boolean(order.value), async ({ state, ui }) => {
+  },async ({ui})=>{await ui.waitFor('[data-testid="sales-order-submit"]')}),
+  commerceAdapter('sales-delivery-create', () => canWrite.value, async ({ state, ui }) => {
     const response = await ui.capture({ method: 'POST', path: '/sales/deliveries' }, () => ui.click('[data-testid="sales-delivery-create"]', '原生创建发货单'));
     await ui.hold('销售发货单创建后');
     const created = entityFromResponse(response);
@@ -1905,6 +1905,7 @@ useNativeDemoAdapters('sales-order-detail', [
     if (entity) ui.remember('salesDelivery', entity);
     return entity;
   }, async ({ state, ui }) => {
+    await ui.until(()=>String(order.value?.id)===String(state.entities.salesOrder?.id),'本轮销售订单详情加载');
     openDeliveryDialog();
     deliveryForm.value.deliveryMode = 'PARTIAL';
     await ui.fill('发货地址', () => { deliveryForm.value.deliveryAddress = '演示·上海连锁餐饮收货中心' });
@@ -1913,7 +1914,7 @@ useNativeDemoAdapters('sales-order-detail', [
     for (const item of deliveryForm.value.items) item.deliveredQuantity = Number(item.maxDeliverableQuantity);
     if (!deliveryDialogVisible.value) throw new Error('原生销售发货弹窗未打开');
   }),
-  commerceAdapter('sales-shipment-create', () => canWrite.value && Boolean(order.value), async ({ state, ui }) => {
+  commerceAdapter('sales-shipment-create', () => canWrite.value, async ({ state, ui }) => {
     const response = await ui.capture({ method: 'POST', path: /\/sales\/deliveries\/[^/]+\/shipments/ }, () => ui.click('[data-testid="sales-shipment-create"]', '原生创建子发运单'));
     await ui.hold('子发运单创建后');
     const created = entityFromResponse(response);
@@ -1924,7 +1925,8 @@ useNativeDemoAdapters('sales-order-detail', [
   }, async ({ state, context, ui }) => {
     const parent = state.entities.salesDelivery;
     if (!parent?.id) throw new Error('缺少本次销售发货单 ID');
-    const source = deliveries.value.find(row => String(row.id) === String(parent.id)) || parent;
+    await ui.until(()=>deliveries.value.some(row=>String(row.id)===String(parent.id)),'本轮母发货单加载');
+    const source = deliveries.value.find(row => String(row.id) === String(parent.id))!;
     openShipmentDialog(source);
     await ui.fill('物流公司', () => { shipmentForm.value.logisticsCompany = '演示冷链配送' });
     await ui.fill('运单号', () => { shipmentForm.value.trackingNumber = state.runKey });
@@ -1932,7 +1934,7 @@ useNativeDemoAdapters('sales-order-detail', [
     for (const item of shipmentForm.value.items) item.quantity = Number(item.remaining);
     if (!shipmentDialogVisible.value) throw new Error('原生子发运弹窗未打开');
   }),
-  commerceAdapter('sales-batch-allocate', () => canWrite.value && Boolean(order.value), async ({ state, ui }) => {
+  commerceAdapter('sales-batch-allocate', () => canWrite.value, async ({ state, ui }) => {
     await ui.capture({ method: 'POST', path: /\/sales-deliveries\/items\/[^/]+\/batch-allocations/ }, () => ui.click('[data-testid="sales-batch-allocate"]', '原生确认批次分配'));
     await ui.hold('批次分配后');
     const delivery = state.entities.salesShipment || state.entities.salesDelivery;
@@ -1943,7 +1945,8 @@ useNativeDemoAdapters('sales-order-detail', [
     const result = { id: String(delivery.id), allocations };
     ui.remember('salesBatchAllocation', result);
     return result;
-  }, async ({ state }) => {
+  }, async ({ state,ui }) => {
+    await ui.until(()=>String(order.value?.id)===String(state.entities.salesOrder?.id),'本轮销售订单详情加载');
     const delivery = state.entities.salesShipment;
     if (!delivery?.id) throw new Error('缺少本次销售子发运单 ID');
     await openBatchAllocDialog(String(delivery.id), String(delivery.deliveryNumber || delivery.orderNumber || delivery.id));

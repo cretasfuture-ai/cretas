@@ -371,7 +371,7 @@ async function handleAction(action: string) {
 }
 
 useNativeDemoAdapters('procurement-order-detail', [
-  commerceAdapter('purchase-submit', () => canWrite.value && order.value?.status === 'DRAFT', async ({ state, ui }) => {
+  commerceAdapter('purchase-submit', () => canWrite.value, async ({ state, ui }) => {
     const response = await ui.capture({ method: 'POST', path: /\/purchase\/orders\/[^/]+\/submit/ }, async () => {
       await ui.click('[data-testid="purchase-submit"]', '原生提交采购审批');
       await ui.click('.el-message-box__btns .el-button--primary', '确认提交采购审批');
@@ -381,7 +381,7 @@ useNativeDemoAdapters('procurement-order-detail', [
     const entity = entityFromResponse(await ui.read(`/purchase/orders/${submitted?.id || state.entities.purchaseOrder?.id || orderId.value}`));
     if (entity) ui.remember('purchaseOrder', entity);
     return entity;
-  }),
+  },async ({ui})=>{await ui.waitFor('[data-testid="purchase-submit"]')}),
 ])
 
 function goWarehouseReceive(): void {

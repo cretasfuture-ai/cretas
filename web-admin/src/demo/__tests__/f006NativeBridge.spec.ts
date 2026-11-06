@@ -50,3 +50,11 @@ it('retains the live page when a temporary cached instance registers and then un
  try{await nativeAdapterFor('purchase-create',state)!.commit({state} as NativeDemoContext);expect(commit).toHaveBeenCalledTimes(1)}finally{active.unmount()}
  expect(nativeAdapterFor('purchase-create',state)).toBeUndefined()
 })
+
+it('waits for page permissions to finish loading without invoking a native handler',()=>{
+ let ready=false
+ const commit=vi.fn()
+ const Host=defineComponent({setup(){useNativeDemoAdapters('loading-page',[{step:'purchase-create',canUse:()=>ready,prepare:async()=>{},commit}]);return()=>h('div')}})
+ const host=mount(Host)
+ try{expect(nativeAdapterFor('purchase-create',state)).toBeUndefined();ready=true;expect(nativeAdapterFor('purchase-create',state)).toBeDefined();expect(commit).not.toHaveBeenCalled()}finally{host.unmount()}
+})
