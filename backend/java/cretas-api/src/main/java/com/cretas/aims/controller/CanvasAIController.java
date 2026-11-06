@@ -34,6 +34,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.Instant;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -44,6 +46,9 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 @Tag(name = "Canvas AI Agent", description = "Canvas AI 配置助手 (DashScope Qwen)")
 public class CanvasAIController {
+
+    private static final BigDecimal JS_MAX_SAFE_INTEGER = BigDecimal.valueOf(9_007_199_254_740_991L);
+    private static final Object INVALID_CANONICAL_VALUE = new Object();
 
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
@@ -949,6 +954,11 @@ public class CanvasAIController {
                 items.add(new ApplyDiffResult(index, "FAILURE", "确认内容不完整，未执行"));
                 continue;
             }
+            Map<String, Object> canonicalSubmittedParams = canonicalJsonMap(submittedParams);
+            if (canonicalSubmittedParams == null) {
+                items.add(new ApplyDiffResult(index, "FAILURE", "确认内容包含无法安全重建的数值，未执行"));
+                continue;
+            }
 
             Optional<PreviewTokenService.BoundTokenSnapshot> snapshot;
             try {
@@ -975,7 +985,7 @@ public class CanvasAIController {
             try {
                 submittedDigest = ToolCommandDigest.commandDigest(
                         factoryId, userId, submittedTool, descriptorVersion, ToolExecutionMode.EXECUTE,
-                        objectMapper.valueToTree(submittedParams));
+                        objectMapper.valueToTree(canonicalSubmittedParams));
             } catch (RuntimeException invalidParams) {
                 submittedDigest = null;
             }
@@ -994,7 +1004,7 @@ public class CanvasAIController {
                         "canvas-trace-" + UUID.randomUUID(),
                         bound.toolName(),
                         descriptorVersion,
-                        objectMapper.valueToTree(submittedParams),
+                        objectMapper.valueToTree(canonicalSubmittedParams),
                         principal,
                         ToolExecutionSource.HTTP_CONTROLLER,
                         ToolExecutionMode.EXECUTE,
@@ -1067,36 +1077,103 @@ public class CanvasAIController {
     private Map<String, Object> canonicalJsonMap(Map<String, Object> params) {
         try {
             JsonNode tree = objectMapper.valueToTree(params);
-            String json = objectMapper.writeValueAsString(tree);
-            Map<String, Object> canonical = objectMapper.readValue(json,
+            Object normalized = canonicalJsonValue(tree);
+            if (!(normalized instanceof Map<?, ?> map)) {
+                return null;
+            }
+            Map<String, Object> canonical = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (!(entry.getKey() instanceof String key)) {
+                    return null;
+                }
+                canonical.put(key, entry.getValue());
+            }
+            String serialized = objectMapper.writeValueAsString(canonical);
+            Map<String, Object> persistedReadback = objectMapper.readValue(serialized,
                     new TypeReference<Map<String, Object>>() {});
-            return sameJsonValue(params, canonical) ? canonical : null;
+            return sameJsonValue(canonical, persistedReadback) ? persistedReadback : null;
         } catch (Exception e) {
             return null;
         }
     }
 
-    private boolean isCanvasDiffProofToken(
-            PreviewTokenService.BoundTokenSnapshot token, String toolName) {
-        return token.executionMode() == ToolExecutionMode.EXECUTE
-                && token.intentCode() != null
-                && token.intentCode().matches("CANVAS_DIFF_[0-9a-fA-F-]{36}")
-                && "CANVAS_DIFF".equals(token.entityType())
-                && "UPDATE".equals(token.operation())
-                && toolName.equals(token.entityId())
-                && isExecutableCanvasTool(toolName);
+    /**
+     * Normalize every JSON number to the exact finite decimal that a browser
+     * JavaScript number can round-trip.  The controller deliberately rejects a
+     * non-equivalent double conversion and integers outside Number.MAX_SAFE_INTEGER;
+     * those values must never receive a proof or reach the execution gateway.
+     */
+    private Object canonicalJsonValue(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isNumber()) {
+            return canonicalJsonNumber(node.numberValue());
+        }
+        if (node.isTextual()) {
+            return node.textValue();
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue();
+        }
+        if (node.isObject()) {
+            Map<String, Object> object = new LinkedHashMap<>();
+            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                Object value = canonicalJsonValue(field.getValue());
+                if (value == INVALID_CANONICAL_VALUE) {
+                    return INVALID_CANONICAL_VALUE;
+                }
+                object.put(field.getKey(), value);
+            }
+            return object;
+        }
+        if (node.isArray()) {
+            List<Object> array = new ArrayList<>(node.size());
+            for (JsonNode element : node) {
+                Object value = canonicalJsonValue(element);
+                if (value == INVALID_CANONICAL_VALUE) {
+                    return INVALID_CANONICAL_VALUE;
+                }
+                array.add(value);
+            }
+            return array;
+        }
+        return INVALID_CANONICAL_VALUE;
     }
 
-    private boolean isExecutableCanvasTool(String toolName) {
-        return Set.of(
-                "canvas_toggle_module", "canvas_toggle_tool", "canvas_toggle_skill",
-                "canvas_update_field", "canvas_update_trigger_chain", "canvas_apply_template",
-                "canvas_work_process_catalog").contains(toolName);
+    private Object canonicalJsonNumber(Number number) {
+        try {
+            BigDecimal source = number instanceof BigDecimal decimal
+                    ? decimal
+                    : number instanceof BigInteger integer
+                            ? new BigDecimal(integer)
+                            : new BigDecimal(number.toString());
+            double asJavaScriptNumber = source.doubleValue();
+            if (!Double.isFinite(asJavaScriptNumber)) {
+                return INVALID_CANONICAL_VALUE;
+            }
+            BigDecimal canonical = BigDecimal.valueOf(asJavaScriptNumber);
+            if (source.compareTo(canonical) != 0) {
+                return INVALID_CANONICAL_VALUE;
+            }
+            BigDecimal normalized = canonical.stripTrailingZeros();
+            if (normalized.scale() < 0) {
+                normalized = normalized.setScale(0);
+            }
+            if (normalized.scale() == 0 && normalized.abs().compareTo(JS_MAX_SAFE_INTEGER) > 0) {
+                return INVALID_CANONICAL_VALUE;
+            }
+            return normalized.signum() == 0 ? BigDecimal.ZERO : normalized;
+        } catch (RuntimeException invalidNumber) {
+            return INVALID_CANONICAL_VALUE;
+        }
     }
 
-    /** JSON semantic comparison for the client round-trip; the persisted values remain execution truth. */
-    private boolean sameJsonValue(Object persisted, Object submitted) {
-        return sameJsonNode(objectMapper.valueToTree(persisted), objectMapper.valueToTree(submitted));
+    /** Numeric values may change Java scalar class during JSON persistence (e.g. 1E-7 -> Double). */
+    private boolean sameJsonValue(Object expected, Object actual) {
+        return sameJsonNode(objectMapper.valueToTree(expected), objectMapper.valueToTree(actual));
     }
 
     private boolean sameJsonNode(JsonNode left, JsonNode right) {
@@ -1123,6 +1200,24 @@ public class CanvasAIController {
             return true;
         }
         return left.equals(right);
+    }
+
+    private boolean isCanvasDiffProofToken(
+            PreviewTokenService.BoundTokenSnapshot token, String toolName) {
+        return token.executionMode() == ToolExecutionMode.EXECUTE
+                && token.intentCode() != null
+                && token.intentCode().matches("CANVAS_DIFF_[0-9a-fA-F-]{36}")
+                && "CANVAS_DIFF".equals(token.entityType())
+                && "UPDATE".equals(token.operation())
+                && toolName.equals(token.entityId())
+                && isExecutableCanvasTool(toolName);
+    }
+
+    private boolean isExecutableCanvasTool(String toolName) {
+        return Set.of(
+                "canvas_toggle_module", "canvas_toggle_tool", "canvas_toggle_skill",
+                "canvas_update_field", "canvas_update_trigger_chain", "canvas_apply_template",
+                "canvas_work_process_catalog").contains(toolName);
     }
 
     private ApiResponse<ApplyDiffsResult> applyDiffsReceipt(
