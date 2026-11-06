@@ -979,6 +979,10 @@ export async function fetchTier2Insight(
   factoryId: string,
 ): Promise<InsightResult | null> {
   if (!chart.meta) return null;
+  // The authenticated Tier 2 endpoint accepts factory/finance only. Restaurant
+  // charts can still use Tier 1; do not issue a known-invalid request or relabel
+  // their domain to obtain an unrelated template.
+  if (chart.meta.domain === 'restaurant') return null;
 
   try {
     const meta = chart.meta;
