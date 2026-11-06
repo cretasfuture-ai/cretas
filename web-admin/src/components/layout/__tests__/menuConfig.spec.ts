@@ -47,6 +47,29 @@ describe('menuConfig — baseline structure (pre-merge)', () => {
 
 });
 
+describe('menuConfig — factory management workspaces', () => {
+  it('exposes exactly the four workspace entries and their registered routes', () => {
+    const workspace = findGroup('/workspaces');
+    expect(workspace).toMatchObject({
+      title: '工厂管理工作区',
+      module: 'dashboard',
+      roles: ['factory_super_admin', 'permission_admin'],
+      hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
+      allowedFactoryTypes: ['FACTORY', 'CENTRAL_KITCHEN'],
+      requiresFactoryContext: true,
+    });
+    expect(workspace?.children?.map((item) => [item.path, item.title])).toEqual([
+      ['/workspaces/overview', '经营总览'],
+      ['/workspaces/exceptions', '异常中心'],
+      ['/workspaces/plans-approvals', '方案与审批'],
+      ['/workspaces/trace-review', '追溯与复盘'],
+    ]);
+    for (const path of workspace?.children?.map((item) => item.path) ?? []) {
+      expect(router.resolve(path).matched.length, path).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('menuConfig - Liushanmen department workflow entries', () => {
   function childPaths(groupPath: string): string[] {
     return findGroup(groupPath)?.children?.map((c) => c.path) ?? [];

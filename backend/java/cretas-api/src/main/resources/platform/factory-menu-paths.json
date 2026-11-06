@@ -27,7 +27,11 @@
     "/workflow/acted",
     "/workflow/copied",
     "/workflow/my-created",
-    "/workflow/pending"
+    "/workflow/pending",
+    "/workspaces/exceptions",
+    "/workspaces/overview",
+    "/workspaces/plans-approvals",
+    "/workspaces/trace-review"
   ],
   "equipment": [
     "/equipment/alerts",
