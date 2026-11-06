@@ -29,6 +29,8 @@ import { isRouteReachable, PEEKABLE_BY_MODULE } from './approvalDocReach';
  */
 import { handleCatchError } from '@/utils/errorToast';
 import { formatDateTime } from '@/utils/dateFormat';
+import { nativeDemoState, nativePurchaseApprovalContext, useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 
 interface PendingApproval {
   instanceId: string;
@@ -174,11 +176,16 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
   }
   operatingId.value = row.instanceId;
   try {
+    const nativePurchase = row.moduleCode === 'PURCHASE_ORDER'
+      ? nativePurchaseApprovalContext(row.businessEntityId)
+      : undefined;
     const res = await post(
-      `/${factoryId.value}/workflow/instances/${row.instanceId}/actions`,
+      nativePurchase
+        ? `/${factoryId.value}/workflow/instances/${row.instanceId}/demo-actions`
+        : `/${factoryId.value}/workflow/instances/${row.instanceId}/actions`,
       {
         action,
-        notes,
+        notes: nativePurchase ? nativePurchase.runKey : notes,
         idempotencyKey: `oa-${action.toLowerCase()}-${row.instanceId}-${row.currentNodeId}`,
         expectedNodeId: row.currentNodeId,
       },
@@ -221,6 +228,63 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
     operatingId.value = '';
   }
 }
+
+useNativeDemoAdapters('workflow-pending', [
+  commerceAdapter('purchase-approve', () => {
+    const ownedPurchase = rows.value.find(row => row.moduleCode === 'PURCHASE_ORDER'
+      && nativePurchaseApprovalContext(row.businessEntityId));
+    return Boolean(ownedPurchase && authStore.hasRole(['factory_super_admin']));
+  }, async ({ state, ui }) => {
+    const purchaseId=state.entities.purchaseOrder?.id;
+    if(!purchaseId)throw new Error('缺少本轮采购单编号');
+    for(let attempt=0;attempt<8;attempt++){
+      const pending=await ui.read('/workflow/instances/pending?moduleCode=PURCHASE_ORDER');
+      const list=Array.isArray(pending)?pending:((pending as {content?:unknown[]}|null)?.content||[]);
+      rows.value=list as PendingApproval[];
+      const row=rows.value.find(item=>item.moduleCode==='PURCHASE_ORDER'&&String(item.businessEntityId)===String(purchaseId));
+      if(!row)break;
+      await ui.capture({method:'POST',path:`/workflow/instances/${row.instanceId}/demo-actions`},async()=>{
+        await ui.click(`[data-testid="workflow-approve-purchase-${purchaseId}"]`,'原生采购审批通过');
+        await ui.click('.el-message-box__btns .el-button--primary','确认采购审批');
+      });
+      await ui.hold(`采购审批节点${attempt+1}完成`);
+    }
+    const entity = entityFromResponse(await ui.read(`/purchase/orders/${state.entities.purchaseOrder?.id || ''}`));
+    if (entity) ui.remember('purchaseOrder', entity);
+    return entity;
+  }),
+  commerceAdapter('sales-order-approve', () => {
+    const salesId = nativeDemoState.value?.entities.salesOrder?.id;
+    return Boolean(salesId && rows.value.some(row => row.moduleCode === 'SALES_ORDER'
+      && String(row.businessEntityId) === String(salesId)) && authStore.hasRole(['factory_super_admin']));
+  }, async ({ state, ui }) => {
+    const salesId = state.entities.salesOrder?.id;
+    if (!salesId) throw new Error('缺少本次销售订单 ID');
+    let approved = false;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const row = rows.value.find(item => item.moduleCode === 'SALES_ORDER'
+        && String(item.businessEntityId) === String(salesId));
+      if (!row) { approved = true; break; }
+      await ui.capture({ method: 'POST', path: /\/workflow\/instances\/[^/]+\/actions/ }, async () => {
+        await ui.click(`[data-testid="workflow-approve-sales-${salesId}"]`, '原生销售审批通过');
+        await ui.click('.el-message-box__btns .el-button--primary', '确认销售审批');
+      });
+      await ui.hold(`销售审批节点${attempt + 1}完成`);
+      await ui.until(async () => {
+        const pending = await ui.read('/workflow/instances/pending?moduleCode=SALES_ORDER');
+        const list = Array.isArray(pending) ? pending : ((pending as { content?: unknown[] } | null)?.content || []);
+        rows.value = list as PendingApproval[];
+        return !rows.value.some(item => item.moduleCode === 'SALES_ORDER' && String(item.businessEntityId) === String(salesId));
+      }, '等待销售审批节点刷新', 15000).catch((): void => undefined);
+    }
+    if (!approved && rows.value.some(item => item.moduleCode === 'SALES_ORDER' && String(item.businessEntityId) === String(salesId))) {
+      throw new Error('销售审批节点未完成');
+    }
+    const entity = entityFromResponse(await ui.read(`/sales/orders/${salesId}`));
+    if (entity) ui.remember('salesOrder', entity);
+    return entity;
+  }),
+])
 
 /**
  * 缺陷 27 —— 「点了没反应」的那条路。
@@ -641,7 +705,7 @@ onMounted(async () => {
         <el-table-column label="操作" width="220">
           <template #default="{ row }">
             <template v-if="canAct(row)">
-              <el-button link type="primary" :loading="operatingId === row.instanceId" @click="act(row, 'APPROVE')">通过</el-button>
+              <el-button :data-testid="row.moduleCode === 'PURCHASE_ORDER' ? `workflow-approve-purchase-${row.businessEntityId}` : row.moduleCode === 'SALES_ORDER' ? `workflow-approve-sales-${row.businessEntityId}` : undefined" link type="primary" :loading="operatingId === row.instanceId" @click="act(row, 'APPROVE')">通过</el-button>
               <el-button link type="danger" :disabled="Boolean(operatingId)" @click="act(row, 'REJECT')">驳回</el-button>
             </template>
             <el-tooltip v-else content="该业务域正在接入统一 OA，当前仅可查看审批进度">

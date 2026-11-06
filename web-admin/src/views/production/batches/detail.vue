@@ -16,6 +16,8 @@ import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentUploadButton from '@/components/attachment/AttachmentUploadButton.vue';
 import type { TableRow } from '@/types/api';
 import SupplementalCostsDialog from './SupplementalCostsDialog.vue';
+import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { createNativeProductionAdapters } from '@/demo/nativeProductionSteps';
 import ProductionPotsPanel from '@/components/pot/ProductionPotsPanel.vue';
 import {
   assignTasksWithReadback,
@@ -34,6 +36,10 @@ const factoryId = computed(() => authStore.factoryId);
 const batchId = computed(() => route.params.id as string);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canWrite = computed(() => permissionStore.canWrite('production'));
+useNativeDemoAdapters('production-batch-detail-native-demo', createNativeProductionAdapters({
+  canWrite: () => canWrite.value,
+  canViewPrice: () => canViewPrice.value,
+}, ['supplemental-costs']));
 const canViewBatchQuality = computed(() => permissionStore.canAccess('quality')
   && Boolean(factoryId.value) && batch.value?.factoryId === factoryId.value
   && Number.isSafeInteger(batch.value?.id) && Number(batch.value?.id) > 0
@@ -804,6 +810,18 @@ const efficiencyDisplay = computed(() =>
   isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
 const costEvidenceState = computed(() => batchCostState(costBatchMatches.value ? batchCost.value : null, batchCostLoading.value, batchCostError.value));
 const costAmountsVisible = computed(() => costEvidenceState.value === 'COMPLETE' || costEvidenceState.value === 'PARTIAL');
+// 补录入口的资格与“完整金额可展示”是两件事：PARTIAL/UNVERIFIED 且服务明确缺少
+// 设备/其他成本时，允许有价格权限的本批次生产负责人打开原生 dialog 补齐；金额展示仍由
+// batchCostState 严格门控，不在这里伪造 COMPLETE 或成本数值。
+const costSupplementalEditable = computed(() => {
+  const evidence = batchCost.value;
+  if (!evidence || evidence.priceMasked === true || !costBatchMatches.value) return false;
+  if (costEvidenceState.value === 'COMPLETE') return true;
+  if (!['PARTIAL', 'UNVERIFIED'].includes(String(costEvidenceState.value))) return false;
+  const missing = evidence.missingCostItems || [];
+  return missing.some((item) => ['EQUIPMENT_COST', 'OTHER_COST'].includes(item.split(':')[0] || ''))
+    || (evidence.calculationStatus === 'PARTIAL' && (evidence.equipmentCost == null || evidence.otherCost == null));
+});
 const closedLoopCost = computed(() => costAmountsVisible.value ? batchCost.value : null);
 const costIsPartial = computed(() => costEvidenceState.value === 'PARTIAL');
 const missingCostLabels = computed(() => missingBatchCostLabels(closedLoopCost.value?.missingCostItems));
@@ -1120,8 +1138,8 @@ function goToReversalList() {
               </div>
               <el-button
                 v-if="canWrite && batch.productionPlanId && batch.status === 'COMPLETED'"
-                :disabled="!costAmountsVisible"
-                type="primary" plain size="small" @click="supplementalCostsVisible = true"
+                :disabled="!costSupplementalEditable"
+                data-testid="supplemental-costs-open" type="primary" plain size="small" @click="supplementalCostsVisible = true"
               >补录设备和其他成本</el-button>
             </div>
           </template>
@@ -2002,7 +2020,7 @@ function goToReversalList() {
     </el-dialog>
 
     <SupplementalCostsDialog
-      v-if="canWrite && canViewPrice && costBatchMatches && costAmountsVisible && batch?.productionPlanId && batch.status === 'COMPLETED'"
+      v-if="canWrite && canViewPrice && costBatchMatches && costSupplementalEditable && batch?.productionPlanId && batch.status === 'COMPLETED'"
       v-model="supplementalCostsVisible"
       :factory-id="factoryId || ''"
       :production-plan-id="String(batch.productionPlanId)"

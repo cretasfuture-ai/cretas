@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue';
 import { deriveByShare } from '@/views/system/product-processes/workflow/workflowInputShare';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { createNativeProductionAdapters } from '@/demo/nativeProductionSteps';
 import { showSingletonNotification } from '@/utils/singletonNotification';
 import { Plus, Refresh, View, Tickets, Printer } from '@element-plus/icons-vue';
 import request, { get, post, put } from '@/api/request';
@@ -72,6 +74,9 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('production'));
+useNativeDemoAdapters('material-requisitions-native-demo', createNativeProductionAdapters({
+  canWrite: () => canWrite.value,
+}, ['material-requisition']));
 // 备料 / 确认领料 / 调拨也是仓管的活 (D-S315-03, 后端同样只放这三个动作); 其它按钮仍按 canWrite。
 const canPick = computed(() => permissionStore.canWrite('production') || permissionStore.canWrite('warehouse'));
 
@@ -819,7 +824,7 @@ async function submitCancel() {
         </el-select>
         <el-button :icon="Tickets" @click="router.push('/production/material-returns')">退料记录</el-button>
         <el-button :icon="Refresh" @click="loadData">刷新</el-button>
-        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">按计划生成</el-button>
+        <el-button data-testid="material-requisition-create" v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">按计划生成</el-button>
       </div>
     </div>
 
@@ -850,10 +855,10 @@ async function submitCancel() {
           <template #default="{ row }">
             <el-button type="primary" link size="small" :icon="View" @click="openDetail(row)">详情</el-button>
             <el-button type="info" link size="small" :icon="Printer" :loading="printingIds.has(row.id)" @click="handlePrint(row)">打印</el-button>
-            <el-button v-if="row.status === 'PENDING' && canPick" type="primary" link size="small" @click="handleStartPicking(row)">备料</el-button>
-            <el-button v-if="row.status === 'PICKING' && canPick" type="primary" link size="small" @click="openConfirmDialog(row)">确认领料</el-button>
-            <el-button v-if="row.status === 'PICKING' && canPick" type="primary" link size="small" @click="handleTransfer(row)">调拨</el-button>
-            <el-button v-if="row.status === 'TRANSFERRED' && canWrite" type="success" link size="small" @click="handleReceive(row)">签收</el-button>
+            <el-button :data-testid="`material-requisition-start-${row.id}`" v-if="row.status === 'PENDING' && canPick" type="primary" link size="small" @click="handleStartPicking(row)">备料</el-button>
+            <el-button :data-testid="`material-requisition-confirm-${row.id}`" v-if="row.status === 'PICKING' && canPick" type="primary" link size="small" @click="openConfirmDialog(row)">确认领料</el-button>
+            <el-button :data-testid="`material-requisition-transfer-${row.id}`" v-if="row.status === 'PICKING' && canPick" type="primary" link size="small" @click="handleTransfer(row)">调拨</el-button>
+            <el-button :data-testid="`material-requisition-receive-${row.id}`" v-if="row.status === 'TRANSFERRED' && canWrite" type="success" link size="small" @click="handleReceive(row)">签收</el-button>
             <el-button v-if="['ISSUED','IN_USE'].includes(row.status) && canWrite" type="warning" link size="small" @click="openCloseDialog(row)">关单</el-button>
             <el-button v-if="['PENDING','PICKING'].includes(row.status) && canWrite" type="danger" link size="small" @click="openCancelDialog(row)">取消</el-button>
           </template>
@@ -875,6 +880,7 @@ async function submitCancel() {
       <el-form label-width="100px">
         <el-form-item label="生产计划" required>
           <el-select
+            data-testid="material-requisition-plan"
             v-model="createForm.productionPlanId"
             placeholder="搜索产品名 / 计划单号"
             filterable
@@ -884,6 +890,7 @@ async function submitCancel() {
             <el-option
               v-for="plan in planOptions"
               :key="plan.id"
+              :data-testid="`material-requisition-plan-option-${plan.id}`"
               :label="`${plan.productName || '-'} · ${plan.plannedDate || '未定日期'} · ${plan.planNumber || plan.id}`"
               :value="plan.id"
             />
@@ -895,6 +902,7 @@ async function submitCancel() {
         </el-form-item>
         <el-form-item label="计划投入原料量">
           <el-input-number
+            data-testid="material-requisition-amount"
             v-model="createForm.plannedRawInputKg"
             :min="0.001"
             :precision="3"
@@ -912,7 +920,7 @@ async function submitCancel() {
       </el-form>
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" :disabled="!createForm.productionPlanId" @click="handleCreate">生成</el-button>
+        <el-button data-testid="material-requisition-generate" type="primary" :loading="submitting" :disabled="!createForm.productionPlanId" @click="handleCreate">生成</el-button>
       </template>
     </el-dialog>
 
@@ -991,7 +999,7 @@ async function submitCancel() {
                 :step="0.001"
                 controls-position="right"
                 class="qty-input"
-                data-testid="picked-input"
+                :data-testid="`picked-input-${row.id}`"
                 :placeholder="row.autoLocked && !row.manuallyTouched ? '按原料自动计算' : undefined"
                 @change="handlePickedInputChange(row)"
               />
@@ -1009,7 +1017,7 @@ async function submitCancel() {
       </el-table>
       <template #footer>
         <el-button @click="confirmDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submitConfirm">确认领料</el-button>
+        <el-button data-testid="material-requisition-submit" type="primary" :loading="submitting" @click="submitConfirm">确认领料</el-button>
       </template>
     </el-dialog>
 
