@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.config.PermissionInterceptor;
+import com.cretas.aims.config.ModuleEnabledInterceptor;
 import com.cretas.aims.config.RequireRoleInterceptor;
 import com.cretas.aims.dto.decision.DecisionSnapshotComparison;
 import com.cretas.aims.dto.decision.DecisionHistoryPage;
@@ -12,6 +13,8 @@ import com.cretas.aims.service.DecisionSnapshotComparisonService;
 import com.cretas.aims.service.DecisionHistoryQueryService;
 import com.cretas.aims.service.DecisionRecommendationReplayService;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.UserModuleAccessService;
+import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.utils.FactoryAccessValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,15 +40,20 @@ class DecisionHistoryRoleGateMvcTest {
     private final DecisionRecommendationReplayService replay = mock(DecisionRecommendationReplayService.class);
     private final PermissionService permissions = mock(PermissionService.class);
     private final UserRepository users = mock(UserRepository.class);
+    private final FactoryConfigService moduleConfig = mock(FactoryConfigService.class);
+    private final UserModuleAccessService moduleAccess = mock(UserModuleAccessService.class);
     private MockMvc mvc;
     private DecisionHistoryController controller;
 
     @BeforeEach void setup() {
         var mapper = new ObjectMapper();
+        when(moduleConfig.isModuleEnabled("F006", "quality_inspection")).thenReturn(true);
+        when(moduleAccess.canAccessModule(any(User.class), eq("quality_inspection"))).thenReturn(true);
         controller = new DecisionHistoryController(access, comparison, history, replay);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(new PermissionInterceptor(permissions, users, mapper),
-                        new RequireRoleInterceptor(mapper)).build();
+                        new RequireRoleInterceptor(mapper),
+                        new ModuleEnabledInterceptor(moduleConfig, moduleAccess, users, mapper)).build();
     }
 
     @Test void operatorCannotReadEvenWithGuessableIds() throws Exception {
@@ -142,6 +150,29 @@ class DecisionHistoryRoleGateMvcTest {
         verify(permissions).hasAllPermissions(any(User.class), aryEq(new String[]{"system:read", "quality:read"}));
     }
 
+    @Test void disabledQualityModuleRejectsReplayBeforeAnySnapshotRead() throws Exception {
+        allowSystemRead();
+        when(permissions.hasAllPermissions(any(User.class), any(String[].class))).thenReturn(true);
+        when(moduleConfig.isModuleEnabled("F006", "quality_inspection")).thenReturn(false);
+        mvc.perform(get("/api/mobile/F006/decision-history/current/replay-evaluation")
+                        .requestAttr("role", "factory_super_admin").requestAttr("userId", 1L))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.success").value(false));
+        verify(moduleConfig).isModuleEnabled("F006", "quality_inspection");
+        verifyNoInteractions(access, replay, history, comparison);
+    }
+
+    @Test void explicitQualityModuleDenyRejectsReplayEvenWithBothReadPermissions() throws Exception {
+        allowSystemRead();
+        when(permissions.hasAllPermissions(any(User.class), any(String[].class))).thenReturn(true);
+        when(moduleAccess.canAccessModule(any(User.class), eq("quality_inspection"))).thenReturn(false);
+        when(moduleAccess.isExplicitlyDenied(any(User.class), eq("quality_inspection"))).thenReturn(true);
+        mvc.perform(get("/api/mobile/F006/decision-history/current/replay-evaluation")
+                        .requestAttr("role", "factory_super_admin").requestAttr("userId", 1L))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.success").value(false));
+        verify(moduleAccess).isExplicitlyDenied(any(User.class), eq("quality_inspection"));
+        verifyNoInteractions(access, replay, history, comparison);
+    }
+
     @Test void metadataListChecksFactoryBeforeReadingAndUsesBoundedDefaults() throws Exception {
         allowSystemRead();
         when(history.list("F006", 0, 20)).thenReturn(new DecisionHistoryPage(List.of(), 0, 20, 0, 0));
@@ -192,6 +223,7 @@ class DecisionHistoryRoleGateMvcTest {
     }
 
     private static User user() {
-        var user = new User(); user.setId(1L); user.setFactoryId("F006"); return user;
+        var user = new User(); user.setId(1L); user.setFactoryId("F006");
+        user.setRoleCode("factory_super_admin"); user.setIsActive(true); return user;
     }
 }

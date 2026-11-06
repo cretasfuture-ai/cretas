@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.decision.DecisionSnapshotComparison;
@@ -46,6 +47,7 @@ public class DecisionHistoryController {
 
     @GetMapping("/{decisionId}/replay-evaluation")
     @RequirePermission(value = {"system:read", "quality:read"}, requireAll = true)
+    @RequireModule("quality_inspection")
     @Operation(summary = "只读回放质检处置建议", description = "仅重执行已保存的未来质检建议快照，不审批、不放行、不执行库存或其他业务动作")
     public ApiResponse<DecisionRecommendationReplay> replay(
             @PathVariable String factoryId, @PathVariable String decisionId) {
