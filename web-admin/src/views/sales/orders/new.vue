@@ -392,7 +392,7 @@ useNativeDemoAdapters('sales-order-new', [
     await ui.fill('客户', () => { form.value.customerId = String(context.customer.id) });
     form.value.remark = state.runKey;
     form.value.deliveryAddress = '演示·上海连锁餐饮收货中心';
-    form.value.requiredDeliveryDate = new Date().toISOString().slice(0, 10);
+    form.value.requiredDeliveryDate = toDateString(new Date());
     if (!form.value.items.length) {
       const product = products.value.find(item => String(item.id) === String(context.product.id));
       if (product) await addProduct(product);

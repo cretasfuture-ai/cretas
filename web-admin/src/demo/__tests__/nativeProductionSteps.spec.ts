@@ -34,16 +34,18 @@ function ui(): NativeDemoUi & { calls: string[] } {
 }
 
 describe('native production adapters', () => {
-  it('opens the real sales-order deep link and carries runKey into the native plan form', async () => {
-    const adapter = createNativeProductionAdapters({ canWrite: () => true }, ['production-plan-create'])[0];
+  it('uses the original page opener even when the plan page is already cached', async () => {
+    const preparePlan=vi.fn().mockResolvedValue(undefined);
+    const adapter = createNativeProductionAdapters({ canWrite: () => true,preparePlan }, ['production-plan-create'])[0];
     const testUi = ui(); const s = state();
     await adapter.prepare({ state: s, context: s.context!, ui: testUi });
-    expect(testUi.calls).toContain('navigate:/production/plans?action=create&salesOrderId=so-1');
+    expect(preparePlan).toHaveBeenCalledWith(expect.objectContaining({state:s}));
+    expect(testUi.calls.some(call=>call.startsWith('navigate:'))).toBe(false);
     expect(testUi.calls).toContain(`input:[data-testid="production-plan-notes"]=${s.runKey}`);
   });
 
   it('keeps the process adapter on a persisted SUBMITTED row and never advances from a batch response', async () => {
-    const adapter = createNativeProductionAdapters({ canWrite: () => true }, ['process-report-1'])[0];
+    const adapter = createNativeProductionAdapters({ canWrite: () => true,openProcessEntry:async()=>undefined }, ['process-report-1'])[0];
     const s = state(); const testUi = ui();
     const node = document.createElement('div'); node.setAttribute('data-process-code', 'workflow-real-code');
     const panel=document.createElement('div');

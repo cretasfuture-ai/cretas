@@ -1,3 +1,4 @@
+import { toDateString } from '@/utils/dateFormat'
 import { prepareStep, type DemoEntity, type DemoStepId } from './f006Flow'
 import type { NativeDemoAdapter, NativeDemoContext, NativeDemoStepId } from './f006NativeBridge'
 
@@ -12,6 +13,8 @@ type AdapterOptions = {
   canWrite: Capability
   canConfirmReceiptWrite?: Capability
   canViewPrice?: Capability
+  preparePlan?: NativeDemoAdapter['prepare']
+  openProcessEntry?: NativeDemoAdapter['prepare']
 }
 
 const id = (value: unknown): string => String(value ?? '')
@@ -54,12 +57,13 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
   const receipt = options.canConfirmReceiptWrite ?? write
   const price = options.canViewPrice ?? write
   const plan = (step: DemoStepId): NativeDemoAdapter => adapter(step, write,
-    async ({ ui, state }) => {
+    async packet => {
+      const {ui,state}=packet
       if (step === 'production-plan-create') {
-        const soId = id(state.entities.salesOrder?.id)
-        await ui.navigate(`/production/plans?action=create&salesOrderId=${encodeURIComponent(soId)}`)
-        await ui.input('[data-testid="production-plan-planned-date"]', new Date().toISOString().slice(0, 10))
-        await ui.input('[data-testid="production-plan-batch-date"]', new Date().toISOString().slice(0, 10))
+        if(!options.preparePlan)throw new Error('当前页面没有接入原生排产表单')
+        await options.preparePlan(packet)
+        await ui.input('[data-testid="production-plan-planned-date"]', toDateString(new Date()))
+        await ui.input('[data-testid="production-plan-batch-date"]', toDateString(new Date()))
         await ui.input('[data-testid="production-plan-notes"]', state.runKey)
       } else {
         await ui.navigate('/production/plans')
@@ -112,8 +116,10 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
 
   const process = (n: 1 | 2 | 3 | 4 | 5 | 6): NativeDemoAdapter => adapter(`process-report-${n}`,
     write,
-    async ({ ui, state }) => {
-      await ui.navigate(`/production/plans?openProcessEntryPlan=${encodeURIComponent(id(state.entities.productionPlan?.id))}`)
+    async packet => {
+      const {ui,state}=packet
+      if(!options.openProcessEntry)throw new Error('当前页面没有接入原生工序报工表单')
+      await options.openProcessEntry(packet)
       await ui.click(`[data-testid="process-tab-${n}"]`, `打开工序${n}`)
       const node = await ui.waitFor(`[data-testid="process-report-${n}"]`, 15000)
       const processCode = node.getAttribute('data-process-code')
@@ -122,7 +128,7 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
       codes[n] = processCode; nativeProcessCodes.set(state.runKey, codes)
       const values = Object.fromEntries(prepareStep(state, `process-report-${n}` as DemoStepId).fields.map((item) => [item.name, item.value]))
       const prepared = nativeProcessPrepared.get(state.runKey) || {}; prepared[n] = values; nativeProcessPrepared.set(state.runKey, prepared)
-      await ui.input('[data-testid="production-date"]', String(values.inputQuantity ? new Date().toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)))
+      await ui.input('[data-testid="production-date"]', toDateString(new Date()))
       if (n === 1) await ui.input('[data-testid="material-input-total"]', String(values.inputQuantity))
       else await ui.input('[data-testid="input-source-quantity"]', String(values.inputQuantity))
       await ui.input('[data-testid="output-quantity"]', String(values.outputQuantity))

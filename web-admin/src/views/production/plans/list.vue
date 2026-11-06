@@ -159,6 +159,21 @@ useNativeDemoAdapters('production-plans-native-demo', createNativeProductionAdap
   canWrite: () => canWrite.value,
   canConfirmReceiptWrite: () => canConfirmReceiptWrite.value,
   canViewPrice: () => canViewPrice.value,
+  preparePlan: async ({state,ui}) => {
+    await ui.click('[data-testid="production-plan-open-create"]','打开原生新建计划');
+    const soId=String(state.entities.salesOrder?.id||'');
+    await ui.until(()=>selectableSalesOrders.value.some(row=>String(row.id)===soId),'本轮销售需求加载');
+    await ui.fill('来源销售订单',()=>{planForm.value.sourceType='CUSTOMER_ORDER';planForm.value.sourceOrderId=soId;handleSalesOrderSelect(soId)});
+    await ui.until(()=>planForm.value.sourceOrderItemIds.length>0&&hasActiveWorkflow.value&&planForm.value.skipProcessReporting===false&&Boolean(planForm.value.processName),'销售产品与逐工序工艺加载');
+  },
+  openProcessEntry: async ({state,ui}) => {
+    const plan=await ui.read(`/production-plans/${state.entities.productionPlan?.id||''}`);
+    const batch=await ui.read(`/processing/batches/${state.entities.productionBatch?.id||''}`);
+    if(!plan||typeof plan!=='object'||Array.isArray(plan)||!batch||typeof batch!=='object'||Array.isArray(batch))throw new Error('本轮计划或批次无法回读');
+    const actualPlan=plan as Record<string,unknown>, actualBatch=batch as Record<string,unknown>;
+    if(String(actualPlan.id)!==String(state.entities.productionPlan?.id)||String(actualBatch.productionPlanId)!==String(actualPlan.id)||actualPlan.skipProcessReporting!==false)throw new Error('本轮计划与逐工序生产批次不一致');
+    await ui.fill('打开本轮逐道报工',()=>showProcessEntry(actualPlan));
+  },
 }, ['production-plan-create', 'production-batch-create', 'process-report-1', 'process-report-2', 'process-report-3', 'process-report-4', 'process-report-5', 'process-report-6', 'production-settle', 'finished-goods-receive']));
 const productionColumnMax = 6;
 const {
@@ -2032,6 +2047,10 @@ async function openProcessEntry(row: any) {
       entryPreparingPlanId.value = null;
     }
   }
+  showProcessEntry(row);
+}
+
+function showProcessEntry(row: TableRow): void {
   entryRow.value = row;
   entryDrawerVisible.value = true;
 }
@@ -4403,7 +4422,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               title="审批待处理的撤销小结申请（财务经理/工厂超管）">
               撤销审批
             </el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate" style="margin-left: 8px;">
+            <el-button data-testid="production-plan-open-create" v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate" style="margin-left: 8px;">
               新建计划
             </el-button>
           </div>
