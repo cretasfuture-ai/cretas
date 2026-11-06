@@ -1,0 +1,12 @@
+# Ordinary parameter writer Phase B preparation
+
+FOOD-PROCESS-PARAM-WRITER-B-20261106; Base da1bad6796eafa9b65fd4a7cbf7f8299196b548b; root/Food DAG owns this isolated branch. Phase A1499 and product1502 are normal merged, but Phase A production deployment is still in flight. This is candidate-only preparation. No live writer enabling, normal merge, deploy or production API is allowed from this task. Root must obtain successful Phase A official receipt, live V20261106_1 in order after95, and zero new source rows before enabling B.
+
+Allowed executor source paths only:
+- backend/java/cretas-api/src/main/resources/application-prod.properties
+- backend/java/cretas-api/src/main/resources/application-pg-prod.properties
+- backend/java/cretas-api/src/test/java/com/cretas/aims/service/shortage/ProcessParamDeviationCaseRolloutContractTest.java
+
+Set cretas.process-param-deviation.case.write-enabled=true explicitly in BOTH actual production profiles, retain all existing SOP flags and unrelated config. Unconfigured default stays disabled. The profile test must prove the REAL service gets enabled in prod and pg-prod (recordReport(null) returns IGNORED); explicit false override must close both, explicit true still works, and unconfigured context remains DISABLED. No Entity/Repo/query/SQL/new migration/policy or Web changes. No credentials, APIs, SQL, devices, deploy, commit or push by executor. Same worktree Maven sequential; target test ProcessParamDeviationCaseRolloutContractTest only (7 current cases). Root controls final review, official combined artifact, CI/PR, sequential rollout and own F006 business verification. Rollback after any new enum rows must use Phase A or later compatible code; disabling writer must preserve readable existing cases and audit.
+
+Candidate preparation complete: both actual production profiles explicitly enable the real writer; unconfigured context remains disabled and explicit false closes both. Actual ConfigData/real-service RolloutContractTest7/0fail/0error/0skip passed; no API/SQL/credentials/production changes by executor. Root review confirms only those three product paths; added comments do not alter tested property values. This candidate remains merge/deploy-blocked until successful Phase A official receipt, live ordered V20261106_1 after95 and zero new source/detail rows. Root owns this delivery gate; preparing a draft PR does not enable production.

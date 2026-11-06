@@ -1,0 +1,16 @@
+# DECISION-HISTORY-COMPARE-20261106
+
+Status: merged; implementation scope released. Owner: 01a1a954/root.
+Initial dispatch Base: 24c7a1e13398693a9d9b7ab205b09f9a545ff5b0.
+Registered integrated Java release Base: 3a377b0a05c7a37ed4a93feb90c3d6f5076deb40 (parent Java/Web already deployed by its Owner).
+PR1501 head72d1a56cbf149c73d5639cabe549ed70f618bbe7 normally squashed as 0a2c584bb533ca9e711c9ebab668e160cffbefb0. Whole tree5b4c2e5f09a36009e90bc11b4fdcd2511fbb738c exactly matches the tested combination e53ebaef28bb252255a47f57dbe5702c03549731.
+
+GET /api/mobile/{factoryId}/decision-history/{decisionId}/comparison?baselineId=... compares existing historical snapshots without running rules, approvals or business writes. SQL reads are factory-scoped. Existing admin roles plus dynamic system:read and factory access are required. No raw input/output or personnel fields are returned. Self/future/missing-time baselines, different business scope or inputs, missing/contradictory snapshots are not comparable.
+
+A legacy checksum mismatch is not attributed to JSONB and is never called verified integrity: primary NOT_COMPARABLE, integrityVerified=false; recordedOutputRelation separately reports observed semantic SAME/DIFFERENT. ComparisonBasis distinguishes stored checksum-and-column consistency, semantic-only relation, and not evaluated. Same-row unkeyed checksums are not tamper-proof signatures. No old writer, Entity, DDL or shared policy changes; only DecisionAuditLogRepository.findByIdAndFactoryId is added.
+
+Final integrated main3a verification: five classes / 33 tests, zero failures/errors/skips, full compilation/package and trusted manifest. Four real-JPA cases include startup plus three isolated PostgreSQL unchanged-writer persistence/flush-clear-reload and tenant/write-negative cases. Initial72d also passed33; failures from the first test-fixture compilation and a private PG launch wrapper remain evidence, not passes. Independent risk review has no unresolved code findings; own source/tests/direct permission dependencies are unchanged in the main3a combination.
+
+PR CI42123616807: fast7619 total, zero failures/errors,285 conditional skips; PG379 total, zero failures/errors,2 conditional skips; full suite skipped by configuration. New query-validation class actually ran in fast:4 total/0 failures/errors/3 PostgreSQL-conditional skips; one real H2 startup passed. Local PostgreSQL ran all three separately, no skipped local targets. Initial candidate stage15s succeeded; it is not the integrated artifact. Integrated Java treebe7ee0f7d4359835a993e46c1df50ada3afcf5a1, JAR SHA256c66fc4fd7a4ba637da35fe2be4e9c8caa2a890093f6ac0529500aa53fd3fa7a7.
+
+Production outcomes are separate facts recorded by the official release receipt and coordinator evidence under execution/takeover-tasks-20261105/decision-history-comparison-20261106. F006 seed has17 existing decisions and no eligible same-input historical pair; no production decision is created to manufacture positive evidence. Full history replay/evaluation and generic proposal scoring remain outside this delivered slice. Original human signoff blocked row and Pixel preservation HOLD remain unchanged. Private PG57052 stopped normally; no device occupied. Do not infer deployment or business acceptance from this implementation archive.
