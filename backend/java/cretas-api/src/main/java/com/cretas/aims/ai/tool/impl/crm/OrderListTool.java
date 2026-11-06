@@ -60,7 +60,7 @@ public class OrderListTool extends AbstractBusinessTool {
         properties.put("startDate", TimeRangeFilter.dateProperty("订单日期开始 (含), YYYY-MM-DD"));
         properties.put("endDate", TimeRangeFilter.dateProperty("订单日期结束 (含), YYYY-MM-DD"));
         return Map.of(
-                "type", "object", "x-llm-extract-optional", true,
+                "type", "object",
                 "properties", properties,
                 "required", Collections.emptyList());
     }
