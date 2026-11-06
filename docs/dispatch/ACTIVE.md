@@ -127,7 +127,7 @@
 
 - `SEMANTIC-SSE-FIXTURES-20261106` — `review` — Owner /root/followup_safety — Base a6737c0a9218b43f7dedd3b738087ca68e6271d2 — PR1476; root verifies; no prod/train/deploy.
 
-- `SEMANTIC-REPAIR-QUALITY-20261106` — `review` — Owner /root/conversation_state — Base 06741c02088073a393e671eb44d4be038e1d4ef9 — 修复taskAction契约及current-read中断；root统一验证；不训练/上线。
+- `SEMANTIC-REPAIR-QUALITY-20261106` — `review` — Owner /root — Base 06741c02088073a393e671eb44d4be038e1d4ef9 — 复跑发现输入契约及恢复字段遗漏；root接管两文件；不训练/合并/上线。
 
 ## Scope 锁地图
 
@@ -155,7 +155,7 @@
 
 - `SEMANTIC-SSE-FIXTURES-20261106`：archive/2026-11-06-semantic-sse-fixtures-20261106-scope.json；Owner /root/followup_safety。
 
-- `SEMANTIC-REPAIR-QUALITY-20261106`：archive/2026-11-06-semantic-repair-quality-scope.json；Owner /root/conversation_state；仅两文件，禁止Maven/ACTIVE/生产。
+- `SEMANTIC-REPAIR-QUALITY-20261106`：archive/2026-11-06-semantic-repair-quality-scope.json；Owner /root；仅两文件，禁止Maven/ACTIVE/生产。
 
 ## 阻塞项
 

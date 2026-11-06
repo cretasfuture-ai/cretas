@@ -68,6 +68,18 @@ class ConversationTaskRepairContractTest {
     }
 
     @Test
+    void repairSchemaRequiresExplicitResumeDispositionWithoutInventingEvidence() {
+        var schema = ((com.cretas.aims.ai.dto.Tool) ReflectionTestUtils.invokeMethod(
+                support, "repairTool", List.of(), false)).getFunction().getParameters();
+        assertThat(schema.get("required"))
+                .isEqualTo(List.of("taskAction", "resumeAfterRead", "resumeEvidence"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
+        assertThat(((Map<?, ?>) properties.get("resumeAfterRead")).containsKey("default")).isFalse();
+        assertThat(((Map<?, ?>) properties.get("resumeEvidence")).containsKey("default")).isFalse();
+    }
+
+    @Test
     void ordinaryQueryWithoutDraftDoesNotCallModel() {
         IntentExecuteRequest request = request("查询今天订单");
         withActor(() -> {

@@ -319,8 +319,9 @@ def test_history_block_is_rendered_into_the_prompts():
     without = build_choice_messages("好了", "operator", ROWS)[1]["content"]
     assert "最近对话" in with_h and "用户：今天包装线的任务" in with_h and "系统：包装线今天有 3 个任务" in with_h
     assert with_h.index("最近对话") < with_h.index("用户说：好了")
-    # 不带上下文时提示词与改动前逐字相同 (离线评测的读数仍可比)
-    assert "最近对话" not in without and without.splitlines()[1] == "用户说：好了"
+    # 新旧提示词不是逐字相同；无历史也显式分隔本轮，不能复用旧离线读数。
+    assert "最近对话" not in without
+    assert without.index("本轮待判断的用户输入") < without.index("用户说：好了")
     short = build_shortlist_messages("好了", "operator", ROWS, 8, TURNS)[1]["content"]
     assert "用户：今天包装线的任务" in short
 

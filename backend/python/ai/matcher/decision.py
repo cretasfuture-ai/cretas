@@ -48,6 +48,7 @@ REQUEST_PURPOSE_RULES = (
     "是否应该采取某个动作，不能改解成现在查询或更改业务数据。"
     "这类话选择 NONE（当前没有要调用的业务功能），意愿或指代仍不清楚则选 CLARIFY；"
     "不要擅自补出用户未表达的操作意愿。"
+    "历史里的否定或取消只约束当时的任务；当前明确提出新请求时，不继承旧否定。"
     "明确询问整个系统有什么功能可以选择使用帮助；它不是具体业务操作教程的替代答案。"
     "条件已经满足且明确要求现在办理，或上下文已确认要办理的请求，应选择对应业务功能。"
     "对当前业务请求，保留用户要处理的具体对象、动作和范围；"
@@ -149,7 +150,18 @@ def build_shortlist_messages(query: str, role: Optional[str], visible: List[Dict
     system = ("你是食品加工厂业务系统的意图粗筛器。下面是全部意图目录（代码｜名称）：\n" + catalog +
               f'\n\n只输出 JSON：{{"candidates": ["代码1", "代码2", ...]}}，最多 {size} 个，按可能性从高到低；都不像就输出空数组。')
     return [{"role": "system", "content": system},
-            {"role": "user", "content": f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
+            {"role": "user", "content": build_decision_input(query, role, history)}]
+
+
+def build_decision_input(query: str, role: Optional[str],
+                         history: Optional[List[Dict[str, Any]]] = None) -> str:
+    """One input contract for probability, purpose and native decision transports.
+
+    Keep the current turn last and explicitly separate from older cancellation,
+    while retaining the server snapshot for references and compatibility checks.
+    """
+    return (f"{role_line(role)}\n{history_block(history)}"
+            f"本轮待判断的用户输入（历史不是本轮指令）：\n用户说：{query}")
 
 
 def parse_shortlist(raw: str, visible_codes: set, size: int = 8) -> Optional[List[str]]:
@@ -175,7 +187,7 @@ def build_choice_messages(query: str, role: Optional[str], options: List[Dict[st
                           history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     letters = LETTERS[: len(options)]
     opts = "\n".join(f"{L}. {r['intent_code']}：{intent_text(r)}" for L, r in zip(letters, options))
-    user = f"{role_line(role)}\n{history_block(history)}用户说：{query}\n\n问题：{INSTR}\n选项：\n{opts}\n\n只输出一个选项字母。"
+    user = f"{build_decision_input(query, role, history)}\n\n问题：{INSTR}\n选项：\n{opts}\n\n只输出一个选项字母。"
     return [{"role": "system", "content": STRICT_SYSTEM + ROUTING_BOUNDARY_RULES},
             {"role": "user", "content": user},
             {"role": "assistant", "content": "答案：", "partial": True}]
@@ -239,7 +251,7 @@ def build_purpose_messages(query: str, role: Optional[str],
               "INFORMATION_ONLY=只咨询教程、讨论未触发条件/建议/愿望、否定或报告已完成操作；"
               "UNRESOLVED=无法判断当前是否要办理或对话指代仍不明。")
     return [{"role":"system", "content":system},
-            {"role":"user", "content":f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
+            {"role":"user", "content":build_decision_input(query, role, history)}]
 
 
 class DecisionMatcher:

@@ -1,5 +1,6 @@
 """Choice rendering contracts; simulated scores never establish live accuracy."""
-from ai.matcher.decision import build_choice_messages, intent_text, ROUTING_BOUNDARY_RULES
+from ai.matcher.decision import (build_choice_messages, build_purpose_messages, build_shortlist_messages,
+                                 build_decision_input, intent_text, ROUTING_BOUNDARY_RULES)
 from dataclasses import replace
 from tests.test_ai_decision_layer import _orch, _run, FakeDecision, _empty_registry, CFG
 
@@ -30,3 +31,18 @@ def test_prompt_change_does_not_promote_low_probability_to_execution():
     assert result.bestMatch.intentCode == "MATERIAL_BATCH_QUERY"
     assert result.confidence == .79
     assert result.topCandidates[0].confidence == .79
+
+
+def test_transports_share_current_turn_and_retain_server_evidence_after_old_cancel():
+    history = [{"role": "user", "content": "停止之前的任务"},
+               {"role": "task_context", "content": "contextStatus=PRESENT; taskStatus=CANCELLED"}]
+    query = "读取另一个业务对象"
+    row = dict(intent_code="GENERIC", intent_name="对象读取")
+    common = build_decision_input(query, None, history)
+    assert common.endswith("用户说：" + query)
+    assert "停止之前的任务" in common and "taskStatus=CANCELLED" in common
+    for messages in [build_choice_messages(query, None, [row], history),
+                     build_purpose_messages(query, None, history),
+                     build_shortlist_messages(query, None, [row], history=history)]:
+        assert common in messages[1]["content"]
+        assert messages[1]["content"].index("停止之前的任务") < messages[1]["content"].index("用户说：" + query)

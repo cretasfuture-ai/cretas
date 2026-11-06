@@ -469,6 +469,8 @@ public class ConversationTaskRepairSupport {
                 SWITCH仅表示明确更换目标且不保留当前草稿。恢复对象不唯一时澄清，不能任意选择暂停任务。
                 spokenUnit只表示用户本轮明确说出的单位；resumeAfterRead仅表示读操作成功后是否恢复已选暂停草稿。
                 只有用户本轮明确要求读完继续时才设置resumeAfterRead=true，并把resumeEvidence填写为本轮原话中不超过80字符的连续原文；不能自行推断恢复。
+                每次都必须返回resumeAfterRead和resumeEvidence；不要求读完恢复时返回false和空字符串，不能省略这两个字段。
+                当前节点只识别任务动作与恢复约定；其他只读目标的对象和参数由主识别链及resolver处理，不要在这里提前要求用户补齐它们。
                 本轮原话没有单位时spokenUnit必须为空字符串，不能从旧参数补入单位；未修改的值由程序保留，不应重复填写changes。
                 """;
         String user = "用户本轮输入: " + Optional.ofNullable(request.getUserInput()).orElse("")
@@ -537,12 +539,14 @@ public class ConversationTaskRepairSupport {
         properties.put("taskReference", referenceSchema);
         properties.put("changes", Map.of("type", "object", "additionalProperties", Map.of("type", "string")));
         properties.put("spokenUnit", Map.of("type", "string"));
-        properties.put("resumeAfterRead", Map.of("type", "boolean"));
-        properties.put("resumeEvidence", Map.of("type", "string", "maxLength", 80));
+        properties.put("resumeAfterRead", Map.of("type", "boolean", "description",
+                "必须显式判断：仅当本轮要求临时查询完成后恢复所选草稿时为true；否则为false。"));
+        properties.put("resumeEvidence", Map.of("type", "string", "maxLength", 80, "description",
+                "恢复约定的本轮连续原文；未约定时为空字符串。不得从历史或旧参数补造。"));
         properties.put("message", Map.of("type", "string"));
         return Tool.of("conversation_task_repair", "选择当前对话任务动作，不执行任何业务。",
                 Map.of("type", "object", "properties", properties,
-                        "required", List.of("taskAction"), "additionalProperties", false));
+                        "required", List.of("taskAction", "resumeAfterRead", "resumeEvidence"), "additionalProperties", false));
     }
 
     private List<Draft> findDrafts(String factoryId, Long userId, IntentExecuteRequest request) {
