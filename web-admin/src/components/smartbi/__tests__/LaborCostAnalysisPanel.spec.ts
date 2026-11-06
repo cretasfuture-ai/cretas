@@ -11,6 +11,7 @@ const render=(input:LaborCostInput)=>mount(Component,{props:{input,scopeLabel:'�
 it('shows missing staff as a specific request with an owner instead of zero people cost',()=>{
   const data=base();data.rows=data.rows.map(r=>({...r,personHours:null}));const page=render(data);
   expect(page.text()).toContain('实际参与人员名单');expect(page.text()).toContain('生产主管 / 考勤负责人');expect(page.text()).toContain('有效人时');expect(page.text()).toContain('待补资料');expect(page.find('select').exists()).toBe(false);
+  expect(page.findAll('.labor-metrics small').map(item=>item.text())).toEqual(['缺实际参与人员名单','缺各工序的有效人时']);
 });
 it('labels the person-hour allocation as a read-only comparison and resets it on scope change',async()=>{
   const page=render(base());expect(page.find('select').exists()).toBe(true);
