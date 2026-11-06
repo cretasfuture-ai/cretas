@@ -16,7 +16,7 @@ class ToolDescriptorPolicyResolverTest {
     @Test
     void resolvesOnlyExactVersionSourceAndPermissionMatches() {
         ToolExecutionCommand allowed = command(
-                "user_disable", "2.0.0", ToolExecutionSource.AI_CHAT, Set.of("hr:read_write"));
+                "user_disable", "3.0.0", ToolExecutionSource.AI_CHAT, Set.of("hr:read_write"));
 
         assertThat(resolver.resolve(allowed, allowed.principal()))
                 .get()
@@ -24,9 +24,9 @@ class ToolDescriptorPolicyResolverTest {
                 .isEqualTo("user_disable");
         assertDenied(command("user_disable", "2.0.1", ToolExecutionSource.AI_CHAT,
                 Set.of("hr:read_write")));
-        assertDenied(command("user_disable", "2.0.0", ToolExecutionSource.WORKFLOW,
+        assertDenied(command("user_disable", "3.0.0", ToolExecutionSource.WORKFLOW,
                 Set.of("hr:read_write")));
-        assertDenied(command("user_disable", "2.0.0", ToolExecutionSource.AI_CHAT,
+        assertDenied(command("user_disable", "3.0.0", ToolExecutionSource.AI_CHAT,
                 Set.of("hr:read")));
     }
 
@@ -62,7 +62,7 @@ class ToolDescriptorPolicyResolverTest {
     void multiPermissionPoliciesAcceptAnyCurrentDbPermissionAndFailClosedWithoutAMatch() {
         ToolExecutionCommand productWithSystemPermission = command(
                 "product_create",
-                "1.0.0",
+                "2.0.0",
                 ToolExecutionSource.HTTP_CONTROLLER,
                 "FACTORY",
                 "permission_admin",
@@ -77,7 +77,7 @@ class ToolDescriptorPolicyResolverTest {
         // 上方已用 system:read_write 覆盖其一, 这里用另一个 production:read_write。
         ToolExecutionCommand productWithProductionPermission = command(
                 "product_create",
-                "1.0.0",
+                "2.0.0",
                 ToolExecutionSource.HTTP_CONTROLLER,
                 "FACTORY",
                 "production_manager",
@@ -88,7 +88,7 @@ class ToolDescriptorPolicyResolverTest {
 
         ToolExecutionCommand productWithoutAnyRequiredPermission = command(
                 "product_create",
-                "1.0.0",
+                "2.0.0",
                 ToolExecutionSource.HTTP_CONTROLLER,
                 "FACTORY",
                 "production_manager",

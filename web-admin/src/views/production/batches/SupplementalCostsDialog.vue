@@ -30,7 +30,7 @@
 
     <el-form label-width="110px" @submit.prevent="submit">
       <el-form-item label="设备成本">
-        <el-input
+        <el-input data-testid="supplemental-equipment-cost"
           v-model="equipmentInput"
           :disabled="saving"
           type="number"
@@ -43,7 +43,7 @@
         </el-input>
       </el-form-item>
       <el-form-item label="其他成本">
-        <el-input
+        <el-input data-testid="supplemental-other-cost"
           v-model="otherInput"
           :disabled="saving"
           type="number"
@@ -59,7 +59,7 @@
 
     <template #footer>
       <el-button :disabled="saving" @click="visible = false">{{ savedParamsKey !== null ? '稍后核算' : '取消' }}</el-button>
-      <el-button type="primary" :loading="saving" @click="submit">
+      <el-button data-testid="supplemental-costs-submit" type="primary" :loading="saving" @click="submit">
         {{ costsSaved ? '重试重新核算' : '保存并重新核算' }}
       </el-button>
     </template>

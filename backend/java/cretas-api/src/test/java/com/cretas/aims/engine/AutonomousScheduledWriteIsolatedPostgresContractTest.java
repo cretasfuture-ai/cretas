@@ -26,6 +26,8 @@ import com.cretas.aims.service.governance.ToolSimilarityService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
 import com.cretas.aims.service.impl.PreviewTokenServiceImpl;
 import com.cretas.aims.service.impl.UserServiceImpl;
+import com.cretas.aims.service.UserModuleAccessService;
+import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.utils.ExcelUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
@@ -58,6 +60,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 
 /**
  * Isolated real-time check of scheduled delegated writes on PostgreSQL. Two scheduler instances
@@ -116,6 +122,8 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
     }
 
     @MockBean ToolSimilarityService toolSimilarityService;
+    @MockBean UserModuleAccessService userModuleAccessService;
+    @MockBean FactoryConfigService factoryConfigService;
 
     @Autowired DynamicSchedulerService instanceA;
     @Autowired AutonomousToolRunner runner;
@@ -138,6 +146,8 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
     private Long configId;
 
     @BeforeEach void fixtures() throws Exception {
+        when(factoryConfigService.isModuleEnabled(anyString(), eq("hr_employee"))).thenReturn(true);
+        when(userModuleAccessService.canAccessModule(any(User.class), eq("hr_employee"))).thenReturn(true);
         jdbc.execute("DROP TABLE IF EXISTS autonomous_write_switches");
         try (var connection = dataSource.getConnection()) {
             org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(connection,
@@ -246,13 +256,13 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
                 objectMapper);
         // The fire read the config; then, before consumption, someone edits it.
         tx.executeWithoutResult(status -> entityManager.createNativeQuery(
-                "UPDATE factory_scheduler_configs SET params = '{\"username\":\"iso-bystander\"}' WHERE id = :id")
+                "UPDATE factory_scheduler_configs SET params = '{\"targetUserId\":" + bystander + "}' WHERE id = :id")
                 .setParameter("id", configId).executeUpdate());
         assertThat(runner.run("F-ISO", operator, TOOL, fired.getParams(), ToolExecutionSource.SCHEDULER, "c2-edit",
                 fireBinding, "slot:2026-10-22T01:00:00Z").status()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
         // Restored, but now disabled before consumption.
         tx.executeWithoutResult(status -> entityManager.createNativeQuery(
-                "UPDATE factory_scheduler_configs SET params = '{\"username\":\"iso-target\"}', enabled = false"
+                "UPDATE factory_scheduler_configs SET params = '{\"targetUserId\":" + target + "}', enabled = false"
                         + " WHERE id = :id").setParameter("id", configId).executeUpdate());
         assertThat(runner.run("F-ISO", operator, TOOL, fired.getParams(), ToolExecutionSource.SCHEDULER, "c2-disable",
                 fireBinding, "slot:2026-10-22T01:01:00Z").status()).isEqualTo(AutonomousToolRunner.GRANT_DENIED);
@@ -410,7 +420,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         // After this fire read the config, it is edited to another target and a grant is issued for
         // the edited config. The fire still carries the old parameters: it must not spend the new grant.
         tx.executeWithoutResult(status -> entityManager.createNativeQuery(
-                "UPDATE factory_scheduler_configs SET params = '{\"username\":\"iso-bystander\"}' WHERE id = :id")
+                "UPDATE factory_scheduler_configs SET params = '{\"targetUserId\":" + bystander + "}' WHERE id = :id")
                 .setParameter("id", configId).executeUpdate());
         assertThat(grants.revoke("F-ISO", oldGrant, operator, LocalDateTime.now())).isPresent();
         String newGrant = grant(schedules.findById(configId).orElseThrow(), 3);
@@ -482,7 +492,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         grant(changed, 3);
         FactorySchedulerConfig control = schedules.saveAndFlush(FactorySchedulerConfig.builder().factoryId("F-ISO")
                 .taskCode("control-" + System.nanoTime()).cronExpression(changed.getCronExpression()).enabled(true)
-                .toolOrMethod(TOOL).params(Map.of("username", "iso-bystander")).runAsUserId(operator).build());
+                .toolOrMethod(TOOL).params(Map.of("targetUserId", bystander)).runAsUserId(operator).build());
         grant(control, 3);
         instanceA.scheduleTask(changed);
         instanceA.scheduleTask(control);
@@ -598,7 +608,7 @@ class AutonomousScheduledWriteIsolatedPostgresContractTest {
         int second = (LocalTime.now().getSecond() + 6) % 60;
         FactorySchedulerConfig config = schedules.saveAndFlush(FactorySchedulerConfig.builder().factoryId("F-ISO")
                 .taskCode("disable-" + System.nanoTime()).cronExpression(second + " * * * * ?").enabled(true)
-                .toolOrMethod(TOOL).params(Map.of("username", "iso-target")).runAsUserId(operator).build());
+                .toolOrMethod(TOOL).params(Map.of("targetUserId", target)).runAsUserId(operator).build());
         configId = config.getId();
         entityManager.clear();
         return schedules.findById(configId).orElseThrow();

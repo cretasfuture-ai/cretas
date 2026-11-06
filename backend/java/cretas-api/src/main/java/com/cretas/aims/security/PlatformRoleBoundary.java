@@ -34,6 +34,21 @@ public final class PlatformRoleBoundary {
     }
 
     /**
+     * Deny-only legacy account protection for factory-side deactivation. This does not establish
+     * platform identity or grant authority. Keep the exact set aligned with the atomic update in
+     * UserRepository.deactivateIfEligible; broader platform-tier assignment rules are separate.
+     */
+    public static boolean isProtectedFromFactoryDeactivation(String role) {
+        if (role == null) {
+            return false;
+        }
+        return switch (role.trim().toLowerCase(Locale.ROOT)) {
+            case "factory_super_admin", "platform_admin", "超级管理员", "平台管理员", "平台超级管理员" -> true;
+            default -> false;
+        };
+    }
+
+    /**
      * Refuses turning a factory user's role or position into a platform-tier value. Keeping the
      * value it already holds is not a grant, so it passes.
      */

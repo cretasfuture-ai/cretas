@@ -17,8 +17,10 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { Refresh, Search } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { handleCatchError } from '@/utils/errorToast';
+import ProcessParamCasePanel from './ProcessParamCasePanel.vue';
 import {
   getParamDeviationDetails,
   getParamDeviationSummary,
@@ -34,8 +36,10 @@ interface ProductTypeOption {
 }
 
 const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
 const router = useRouter();
 const factoryId = computed(() => authStore.factoryId || '');
+const canWrite = computed(() => permissionStore.canWrite('quality') || permissionStore.canWrite('production'));
 
 /** 本地日历日 YYYY-MM-DD（⛔ 不用 toISOString 截断：东八区凌晨会差一天）。 */
 function localDate(d: Date): string {
@@ -362,6 +366,8 @@ onMounted(() => {
       :current-page="detailPage"
       @current-change="onPageChange"
     />
+
+    <ProcessParamCasePanel :factory-id="factoryId" :can-write="canWrite" />
   </div>
 </template>
 

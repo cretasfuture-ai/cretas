@@ -4,9 +4,14 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 
 import java.util.Collections;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.time.LocalDateTime;
 
 /**
  * 预览令牌服务 - TCC (Try-Confirm-Cancel) 模式
@@ -99,6 +104,16 @@ public interface PreviewTokenService {
      * @return 有效的令牌实体，如果无效或用户不匹配返回 empty
      */
     Optional<IntentPreviewToken> validateTokenForUser(String token, Long userId);
+
+    /**
+     * Reads only the immutable command binding for a token owned by this tenant/user.
+     * Unlike {@link #validateTokenForUser(String, Long)}, this deliberately includes terminal
+     * states so the gateway can classify safe replays without treating them as a new claim.
+     */
+    Optional<BoundTokenSnapshot> readBoundSnapshot(String token, String factoryId, Long userId);
+
+    /** Owner-scoped read of the immutable token row for terminal replay classification. */
+    Optional<BoundTokenExecution> readBoundExecution(String token, String factoryId, Long userId);
 
     /**
      * 确认令牌并执行操作 (Confirm 阶段)
@@ -210,6 +225,98 @@ public interface PreviewTokenService {
             return source == null
                     ? Collections.emptyMap()
                     : Collections.unmodifiableMap(new LinkedHashMap<>(source));
+        }
+    }
+
+    /** Immutable, non-secret token metadata; preview payload and mutable claim state are excluded. */
+    record BoundTokenSnapshot(
+            String intentCode,
+            String entityType,
+            String entityId,
+            String operation,
+            String toolName,
+            String descriptorVersion,
+            ToolExecutionMode executionMode,
+            String commandDigest,
+            LocalDateTime expiresAt,
+            IntentPreviewToken.TokenStatus status) {
+    }
+
+    /**
+     * Full in-memory binding read.  It is a scalar snapshot rather than an entity
+     * reference so callers cannot mutate the issued token or reuse a mutable
+     * preview-data graph during confirmation.
+     */
+    record BoundTokenExecution(
+            String token,
+            String factoryId,
+            String tenantId,
+            Long userId,
+            String toolName,
+            String descriptorVersion,
+            ToolExecutionMode executionMode,
+            String parametersHash,
+            String commandDigest,
+            String previewData,
+            IntentPreviewToken.TokenStatus status,
+            LocalDateTime expiresAt,
+            Map<String, Object> parameters) {
+
+        public BoundTokenExecution {
+            parameters = deepImmutableMap(parameters);
+        }
+
+        public IntentPreviewToken toToken() {
+            return IntentPreviewToken.builder()
+                    .token(token)
+                    .factoryId(factoryId)
+                    .tenantId(tenantId)
+                    .userId(userId)
+                    .toolName(toolName)
+                    .descriptorVersion(descriptorVersion)
+                    .executionMode(executionMode)
+                    .parametersHash(parametersHash)
+                    .commandDigest(commandDigest)
+                    .previewData(previewData)
+                    .status(status)
+                    .expiresAt(expiresAt)
+                    .build();
+        }
+
+        private static Map<String, Object> deepImmutableMap(Map<String, Object> source) {
+            if (source == null) {
+                return Collections.emptyMap();
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            source.forEach((key, value) -> {
+                if (key == null) {
+                    throw new IllegalArgumentException("bound parameter key is null");
+                }
+                copy.put(key, deepImmutable(value));
+            });
+            return Collections.unmodifiableMap(copy);
+        }
+
+        private static Object deepImmutable(Object value) {
+            if (value instanceof Map<?, ?> rawMap) {
+                Map<String, Object> copy = new LinkedHashMap<>();
+                rawMap.forEach((key, nested) -> {
+                    if (!(key instanceof String stringKey)) {
+                        throw new IllegalArgumentException("bound parameter key is not text");
+                    }
+                    copy.put(stringKey, deepImmutable(nested));
+                });
+                return Collections.unmodifiableMap(copy);
+            }
+            if (value instanceof List<?> list) {
+                return Collections.unmodifiableList(new ArrayList<>(list.stream()
+                        .map(BoundTokenExecution::deepImmutable).toList()));
+            }
+            if (value instanceof Set<?> set) {
+                return Collections.unmodifiableSet(new HashSet<>(set.stream()
+                        .map(BoundTokenExecution::deepImmutable).toList()));
+            }
+            return value;
         }
     }
 

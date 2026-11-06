@@ -86,6 +86,17 @@ it('keeps a partial known subtotal separate and translates missing evidence into
   expect(text).not.toContain('SOME_NEW_CODE'); expect(wrapper.text()).not.toContain('666,666');
 });
 
+it('keeps the native supplemental-costs entry available for partial equipment/other costs', async () => {
+  access.canWrite = true;
+  costResult = { ...complete(), calculationStatus: 'PARTIAL', costComplete: true,
+    totalCost: null, perBoxCost: null, equipmentCost: null, otherCost: null,
+    missingCostItems: ['EQUIPMENT_COST', 'OTHER_COST'] };
+  const wrapper = await openPage();
+  const button = wrapper.find('[data-testid="supplemental-costs-open"]');
+  expect(button.exists()).toBe(true);
+  expect(button.attributes('disabled')).toBeUndefined();
+});
+
 it('retries a failed read and replaces the error with the current authoritative evidence', async () => {
   costFailure = new Error('读取失败'); const wrapper = await openPage();
   expect(card(wrapper).text()).toContain('读取失败'); costFailure = null;

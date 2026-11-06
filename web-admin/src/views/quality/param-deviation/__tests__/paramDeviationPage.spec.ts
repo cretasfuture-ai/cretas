@@ -9,6 +9,7 @@ import ElementPlus from 'element-plus';
 const state = vi.hoisted(() => ({ get: vi.fn(), push: vi.fn(), toast: vi.fn() }));
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }), useRouter: () => ({ push: state.push }) }));
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: 'F-PD' }) }));
+vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canWrite: () => true }) }));
 vi.mock('@/utils/errorToast', () => ({ handleCatchError: (...args: unknown[]) => state.toast(...args) }));
 vi.mock('@/api/request', () => ({
   default: { get: vi.fn() },
@@ -40,6 +41,8 @@ function route(summary: unknown, details: unknown) {
   state.get.mockImplementation((url: string) => {
     if (url.endsWith('/param-deviation/summary')) return Promise.resolve(ok(summary));
     if (url.endsWith('/param-deviation/details')) return Promise.resolve(ok(details));
+    if (url.includes('/quality/process-param-deviation/cases/assignees')) return Promise.resolve(ok([]));
+    if (url.includes('/quality/process-param-deviation/cases')) return Promise.resolve(ok([]));
     if (url.endsWith('/product-types/active')) return Promise.resolve(ok([{ id: 'PT-A', name: '牛肉干' }]));
     return Promise.reject(new Error(`unexpected GET ${url}`));
   });

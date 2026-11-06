@@ -44,6 +44,7 @@ class ApprovedToolSourceMetadataTest {
     void fixedWriteToolsPublishExplicitAnyOfPermissionsAndPreviewMetadata() {
         ProductCreateTool productCreate = new ProductCreateTool();
 
+        assertThat(productCreate.getVersion()).isEqualTo("2.0.0");
         assertThat(productCreate.getActionType()).isEqualTo(ToolExecutor.ActionType.WRITE);
         assertThat(productCreate.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.MEDIUM);
         assertThat(productCreate.getRequiredPermissions())
@@ -66,8 +67,8 @@ class ApprovedToolSourceMetadataTest {
         assertThat(tool.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.HIGH);
         assertThat(tool.getRequiredPermissions()).containsExactly("hr:read_write");
         assertThat(tool.getDomainTags()).isEqualTo(Set.of("user", "hr", "identity"));
-        assertThat(tool.getVersion()).isEqualTo("2.0.0");
-        assertThat(tool.supportsPreview()).isFalse();
+        assertThat(tool.getVersion()).isEqualTo("3.0.0");
+        assertThat(tool.supportsPreview()).isTrue();
         assertThat(tool.requiresPermission()).isTrue();
         assertThat(tool.hasPermission("factory_super_admin")).isFalse();
     }

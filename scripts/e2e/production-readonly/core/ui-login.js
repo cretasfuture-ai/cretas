@@ -37,6 +37,34 @@ function allowsMissingFactoryName(pageUrl, allowMobileOnlyLanding) {
   return Boolean(allowMobileOnlyLanding) && pathnameOf(pageUrl) === '/mobile-only';
 }
 
+async function waitForFactoryShell(page, timeoutMs = 30_000) {
+  const startedAt = Date.now();
+  try {
+    await page.waitForFunction(() => {
+      const visible = (selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return false;
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      const name = document.querySelector('.app-sidebar .logo-title');
+      return visible('.app-layout')
+        && visible('.app-header')
+        && visible('.app-sidebar')
+        && visible('.app-sidebar .sidebar-logo')
+        && visible('.app-sidebar .logo-title')
+        && Boolean(String(name?.textContent || '').trim());
+    }, null, { timeout: timeoutMs });
+    return { factoryShellReady: true, factoryShellMs: Date.now() - startedAt };
+  } catch {
+    return { factoryShellReady: false, factoryShellMs: Date.now() - startedAt };
+  }
+}
+
 async function performUiLogin(page, options) {
   const username = options.username;
   const password = options.password;
@@ -88,27 +116,35 @@ async function performUiLogin(page, options) {
       return {};
     }
   });
+  const actualUsername = stored.username || login.username;
+  const platformSession = isPlatformSession(login, stored);
+  const actualFactoryId = platformSession ? 'PLATFORM' : stored.factoryId || login.factoryId;
+  const actualFactoryName = stored.factoryName || login.factoryName;
+  const actualRole = String(stored.platformRole || stored.role || login.role || '').toLowerCase();
+  if (actualUsername !== expectedUsername) throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
+  if (actualFactoryId !== expectedFactoryId) throw new Error(`Tenant factory mismatch: expected ${expectedFactoryId}, got ${actualFactoryId}`);
+  if (expectedRole && actualRole !== expectedRole) throw new Error(`Tenant role mismatch: expected ${expectedRole}, got ${actualRole || 'missing'}`);
+
   // 🔴 落地页也必须等应用挂载完再取样 —— 这是同一个缺陷的第二处, 而且更阴:
   //    闪屏阶段的 body 只有二十来个字符, 于是下面
   //      · 工厂名比对必然失败 -> 整个 suite 在 bootstrap 就 TOOL_ERROR
   //      · 「跨租户残留」那条 canary 变成恒真式(闪屏里永远不会出现别的租户名)
   //    判据见 core/app-mount.js。
   const landingMount = await waitForAppMount(page, options.appMountTimeoutMs);
+  const mobileOnlyLanding = allowsMissingFactoryName(page.url(), options.allowMobileOnlyLanding);
+  const factoryShell = mobileOnlyLanding
+    ? { factoryShellReady: false, factoryShellMs: 0 }
+    : await waitForFactoryShell(page, options.appMountTimeoutMs);
+  if (!mobileOnlyLanding && !factoryShell.factoryShellReady) {
+    throw new Error(`Authenticated factory shell did not become observable within ${options.appMountTimeoutMs || 30_000}ms`);
+  }
   const pageText = await page.locator('body').innerText().catch(() => '');
-  const actualUsername = stored.username || login.username;
-  const platformSession = isPlatformSession(login, stored);
-  const actualFactoryId = platformSession ? 'PLATFORM' : stored.factoryId || login.factoryId;
-  const actualFactoryName = stored.factoryName || login.factoryName;
   const businessSuccess = login.success ?? Boolean(actualUsername && actualFactoryId);
   // 这道 canary 抓的是「别的租户残留在本次会话的页面上」。租户名写死成字面量时,
   // 一旦该账号自己成为被测账号, 合法登录会被判成泄漏(本条实测拦下过 liushanmen_admin
   // 的正常登录)。先排除「标记就是当前已认证用户」, 跨租户残留的语义不变。
   const staleTenantDetected = !STALE_TENANT_MARKER.test(String(actualUsername || ''))
     && STALE_TENANT_MARKER.test(pageText);
-  if (actualUsername !== expectedUsername) throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
-  if (actualFactoryId !== expectedFactoryId) throw new Error(`Tenant factory mismatch: expected ${expectedFactoryId}, got ${actualFactoryId}`);
-  const actualRole = String(stored.platformRole || stored.role || login.role || '').toLowerCase();
-  if (expectedRole && actualRole !== expectedRole) throw new Error(`Tenant role mismatch: expected ${expectedRole}, got ${actualRole || 'missing'}`);
   if (staleTenantDetected) throw new Error('Stale tenant marker liushanmen_admin detected after clean UI login');
   if (actualFactoryName && !pageText.includes(actualFactoryName)
       && !allowsMissingFactoryName(page.url(), options.allowMobileOnlyLanding)) {
@@ -130,6 +166,8 @@ async function performUiLogin(page, options) {
     // ⚠️ 记下来, 否则「落地页没挂载」和「落地页缺东西」在证据里长得一样。
     landingAppMounted: landingMount.appMounted,
     landingAppMountMs: landingMount.appMountMs,
+    factoryShellReady: factoryShell.factoryShellReady,
+    factoryShellMs: factoryShell.factoryShellMs,
     loginAppMounted: loginMount.appMounted,
     loginAppMountMs: loginMount.appMountMs,
   };
@@ -140,4 +178,11 @@ function isPlatformSession(login, stored) {
     && !login.factoryId && !stored.factoryId && login.role === stored.platformRole
     && ['super_admin', 'system_admin', 'operation_admin', 'auditor', 'platform_admin'].includes(login.role);
 }
-module.exports = { allowsMissingFactoryName, compactLoginData, performUiLogin, waitForLoginOutcome, isPlatformSession };
+module.exports = {
+  allowsMissingFactoryName,
+  compactLoginData,
+  performUiLogin,
+  waitForFactoryShell,
+  waitForLoginOutcome,
+  isPlatformSession,
+};

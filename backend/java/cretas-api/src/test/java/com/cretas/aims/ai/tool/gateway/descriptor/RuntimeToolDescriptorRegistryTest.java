@@ -29,8 +29,14 @@ class RuntimeToolDescriptorRegistryTest {
         assertThat(registry.approvedToolNames())
                 .containsExactlyInAnyOrder(
                         "user_disable",
-                        "canvas_product_work_process_config",
+                        "canvas_product_work_process_draft_preview",
                         "canvas_work_process_catalog",
+                        "canvas_toggle_module",
+                        "canvas_toggle_tool",
+                        "canvas_toggle_skill",
+                        "canvas_update_field",
+                        "canvas_update_trigger_chain",
+                        "canvas_apply_template",
                         "product_create",
                         // 2026-08-14: bom_adjust 随 9 个老式 BOM 写入工具退役, 从 P0 集合摘除。
                         // 下面三条只读物料工具不受影响, 必须保留。
@@ -65,7 +71,7 @@ class RuntimeToolDescriptorRegistryTest {
                     assertThat(descriptor.egressPolicy().allowedDestinations())
                             .containsExactly("python-smartbi.factory-chart-analysis.v1");
                 });
-        assertThat(registry.findApproved("canvas_product_work_process_config").orElseThrow())
+        assertThat(registry.findApproved("canvas_product_work_process_draft_preview").orElseThrow())
                 .satisfies(descriptor -> {
                     assertThat(descriptor.version()).isEqualTo("1.0.0");
                     assertThat(descriptor.supportsPreview()).isTrue();

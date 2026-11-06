@@ -19,6 +19,9 @@ import ReturnBanner from './ReturnBanner.vue';
 import F006SandboxBanner from './F006SandboxBanner.vue';
 import { recoverActiveSandbox, sandboxSession, selectSandboxActor } from '@/demo/f006Sandbox';
 import request from '@/api/request';
+import F006NativeToolbar from './F006NativeToolbar.vue';
+import { nativePlayback } from '@/demo/f006NativeRuntime';
+import { serializeSandboxLifecycle } from '@/demo/f006SandboxLifecycle';
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -39,7 +42,7 @@ async function bootstrapSandbox(): Promise<void> {
   if (authStore.factoryId === 'F006' && !authStore.user?.id) return;
   if (authStore.factoryId !== 'F006' || Number(authStore.user?.id) !== 1309) { sandboxBootstrapDone.value = true; return; }
   try {
-    await recoverActiveSandbox(request, () => generation === sandboxBootstrapGeneration);
+    await serializeSandboxLifecycle(() => recoverActiveSandbox(request, () => generation === sandboxBootstrapGeneration));
     if (generation !== sandboxBootstrapGeneration) return;
     sandboxBootstrapDone.value = true;
   } catch { if (generation === sandboxBootstrapGeneration) sandboxBootstrapError.value = '无法核对演示状态，请重试'; }
@@ -133,7 +136,8 @@ function pinDraggedReference(event: DragEvent): void {
     <div class="app-main" :style="mainStyle">
       <!-- 顶部栏 -->
       <AppHeader v-if="sandboxReady && !isReferenceFrame" />
-      <F006SandboxBanner v-if="sandboxSession" />
+      <F006NativeToolbar v-if="nativePlayback.enabled && authStore.factoryId === 'F006' && Number(authStore.user?.id) === 1309 && authStore.currentRole === 'factory_super_admin'" :bootstrap-ready="sandboxBootstrapDone" />
+      <F006SandboxBanner v-if="sandboxSession && !nativePlayback.enabled" />
 
       <WorkspaceTabs v-if="sandboxReady && !isReferenceFrame" ref="workspaceTabs" />
 
@@ -182,6 +186,7 @@ function pinDraggedReference(event: DragEvent): void {
 </template>
 
 <style lang="scss" scoped>
+
 .app-layout {
   min-height: 100vh;
   width: 100%;

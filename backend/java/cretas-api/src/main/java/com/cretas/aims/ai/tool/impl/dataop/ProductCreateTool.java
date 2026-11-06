@@ -7,8 +7,10 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductTypeService;
+import com.cretas.aims.service.ProductCreateCommandReceiptService;
 import com.cretas.aims.service.ProductWorkProcessService;
 import com.cretas.aims.service.bom.BomRecipeService;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -18,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -35,6 +38,13 @@ import java.util.Set;
 @Component
 public class ProductCreateTool extends AbstractBusinessTool {
 
+    /** Internal-only token parameter. Controller strips it from the public preview response. */
+    public static final String SERVER_BINDING_KEY = "_serverProductCreateBinding";
+    private static final ThreadLocal<PreviewBindingCapture> PREVIEW_BINDING_CAPTURE = new ThreadLocal<>();
+    private static final ThreadLocal<ExecutionCapture> EXECUTION_CAPTURE = new ThreadLocal<>();
+    private static final com.fasterxml.jackson.databind.ObjectMapper BINDING_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private static final List<String> SKU_CATEGORIES = List.of(
             "FINISHED_PRODUCT", "SEMI_FINISHED", "CUSTOMER_MATERIAL", "CONTRACT_MANUFACTURING");
 
@@ -48,6 +58,8 @@ public class ProductCreateTool extends AbstractBusinessTool {
     private BomRecipeService bomRecipeService;
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+    @Autowired
+    private ProductCreateCommandReceiptService commandReceiptService;
 
     private boolean mayInheritFrom(String factoryId, String sourceProductId) {
         String ref = "AI tool product_create inherit " + sourceProductId;
@@ -121,7 +133,153 @@ public class ProductCreateTool extends AbstractBusinessTool {
 
     @Override
     public String getVersion() {
-        return "1.0.0";
+        return "2.0.0";
+    }
+
+    /** Opens the only supported bridge for the HTTP controller to receive its server-bound plan. */
+    public static PreviewBindingCapture openPreviewBindingCapture(String factoryId) {
+        if (factoryId == null || factoryId.isBlank() || PREVIEW_BINDING_CAPTURE.get() != null) {
+            throw new IllegalStateException("product preview binding capture scope is invalid");
+        }
+        PreviewBindingCapture capture = new PreviewBindingCapture(factoryId);
+        PREVIEW_BINDING_CAPTURE.set(capture);
+        return capture;
+    }
+
+    /** Opens the HTTP-only reconciliation bridge for a product created before a later failure. */
+    public static ExecutionCapture openExecutionCapture(String factoryId) {
+        if (factoryId == null || factoryId.isBlank() || EXECUTION_CAPTURE.get() != null) {
+            throw new IllegalStateException("product execution capture scope is invalid");
+        }
+        ExecutionCapture capture = new ExecutionCapture(factoryId);
+        EXECUTION_CAPTURE.set(capture);
+        return capture;
+    }
+
+    public static void capturePreviewBindingJson(String factoryId, String bindingJson) {
+        PreviewBindingCapture capture = PREVIEW_BINDING_CAPTURE.get();
+        if (capture == null) {
+            throw new IllegalStateException("product preview binding capture scope is missing");
+        }
+        capture.captureJson(factoryId, bindingJson);
+    }
+
+    /** Read-only classification helper for the HTTP reconciliation path. */
+    public static boolean hasNonEmptyPreparedChain(String bindingJson) {
+        if (bindingJson == null || bindingJson.isBlank()) {
+            return false;
+        }
+        try {
+            Map<String, Object> binding = BINDING_MAPPER.readValue(
+                    bindingJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() {});
+            Object rawChain = binding.get("chain");
+            if (!(rawChain instanceof Map<?, ?> chain)) {
+                return false;
+            }
+            Object processes = chain.get("processes");
+            return processes instanceof List<?> list && !list.isEmpty();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    public static final class PreviewBindingCapture implements AutoCloseable {
+        private final String factoryId;
+        private String json;
+        private boolean closed;
+
+        private PreviewBindingCapture(String factoryId) {
+            this.factoryId = factoryId;
+        }
+
+        private void capture(String factoryId, Map<String, Object> binding) {
+            if (!this.factoryId.equals(factoryId) || json != null || closed) {
+                throw new IllegalStateException("product preview binding capture is invalid");
+            }
+            try {
+                json = BINDING_MAPPER.writeValueAsString(binding);
+            } catch (Exception exception) {
+                throw new IllegalStateException("product preview binding could not be serialized");
+            }
+        }
+
+        public void captureJson(String factoryId, String bindingJson) {
+            if (!this.factoryId.equals(factoryId) || bindingJson == null || bindingJson.isBlank()
+                    || json != null || closed) {
+                throw new IllegalStateException("product preview binding capture is invalid");
+            }
+            try {
+                if (!BINDING_MAPPER.readTree(bindingJson).isObject()) {
+                    throw new IllegalStateException("product preview binding capture is invalid");
+                }
+            } catch (Exception exception) {
+                throw new IllegalStateException("product preview binding capture is invalid");
+            }
+            json = bindingJson;
+        }
+
+        public String requireJson() {
+            if (json == null || json.isBlank()) {
+                throw new com.cretas.aims.exception.BusinessException(502,
+                        "AI 建产品预览缺少服务端绑定计划")
+                        .withCode("PRODUCT_CREATE_BINDING_MISSING")
+                        .withHint("请稍后重新发起预览");
+            }
+            return json;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            if (PREVIEW_BINDING_CAPTURE.get() == this) {
+                PREVIEW_BINDING_CAPTURE.remove();
+            }
+        }
+    }
+
+    public static final class ExecutionCapture implements AutoCloseable {
+        private final String factoryId;
+        private String createdProductId;
+        private String phase;
+        private boolean closed;
+
+        private ExecutionCapture(String factoryId) {
+            this.factoryId = factoryId;
+        }
+
+        private void recordCreated(String factoryId, String productId) {
+            if (!this.factoryId.equals(factoryId) || productId == null || productId.isBlank()
+                    || closed || createdProductId != null) {
+                throw new IllegalStateException("product execution capture is invalid");
+            }
+            createdProductId = productId;
+            phase = "PRODUCT_CREATED";
+        }
+
+        private void recordPhase(String factoryId, String phase) {
+            if (!this.factoryId.equals(factoryId) || phase == null || phase.isBlank() || closed
+                    || createdProductId == null) {
+                throw new IllegalStateException("product execution capture is invalid");
+            }
+            this.phase = phase;
+        }
+
+        public String createdProductId() {
+            return createdProductId;
+        }
+
+        public String phase() {
+            return phase;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            if (EXECUTION_CAPTURE.get() == this) {
+                EXECUTION_CAPTURE.remove();
+            }
+        }
     }
 
     @Override
@@ -142,6 +300,7 @@ public class ProductCreateTool extends AbstractBusinessTool {
         r.put("suggestedProcessChain", plan.processNames);
         r.put("suggestedBom", plan.bomSuggestion);
         r.put("suggestedSeasoning", plan.seasoningSuggestion);
+        capturePreviewBinding(factoryId, bindingFor(plan, productCategory));
         r.put("message", plan.source == null
                 ? "将新建产品「" + plan.name + "」(飞轮未找到可继承工序链的相似产品, 工序需手动配)"
                 : "将新建产品「" + plan.name + "」, 大框架沿用最相似产品「" + plan.sourceName + "」的 "
@@ -151,8 +310,21 @@ public class ProductCreateTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        Plan plan = resolvePlan(factoryId, params);
+        ProductCreateCommandReceiptService.requireScope();
+        Plan plan = resolveBoundPlan(factoryId, params);
         String productCategory = validatedCategory(params);
+        if (!Objects.equals(productCategory, plan.productCategory)) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "确认参数与已预览的产品类别不一致，请重新预览")
+                    .withHint("请重新发起产品创建预览");
+        }
+        if (plan.source != null && plan.preparedChain != null) {
+            // This is deliberately before createProductType: source/master drift must not
+            // leave a product shell behind. copyPreparedChain repeats the check after create
+            // to close the race between this read and the actual copy transaction.
+            productWorkProcessService.validatePreparedChain(
+                    factoryId, plan.source.getId(), plan.preparedChain);
+        }
 
         // 1. 建产品 (属性默认来自飞轮)
         ProductTypeDTO dto = new ProductTypeDTO();
@@ -162,8 +334,8 @@ public class ProductCreateTool extends AbstractBusinessTool {
         dto.setProductCategory(productCategory);
         dto.setSpecification(getString(params, "specification"));
         Object gpu = plan.defaults.get("gramsPerUnit");
-        if (gpu instanceof BigDecimal) {
-            dto.setGramsPerUnit((BigDecimal) gpu);
+        if (gpu != null) {
+            dto.setGramsPerUnit(decimal(gpu));
         }
         String customer = getString(params, "customerName");
         if (customer != null) {
@@ -175,15 +347,67 @@ public class ProductCreateTool extends AbstractBusinessTool {
         if (uid instanceof Number) {
             dto.setCreatedBy(((Number) uid).longValue());
         }
-        ProductTypeDTO created = productTypeService.createProductType(factoryId, dto);
+        ProductTypeDTO created = commandReceiptService.createProductAndAttach(factoryId, dto);
+        captureCreatedProduct(factoryId, created.getId());
 
         // 2. 飞轮继承: 自动复制最相似产品的工序链 (大框架)
         int copiedProcesses = 0;
-        if (plan.source != null && !plan.processNames.isEmpty()) {
+        if (plan.source != null && plan.preparedChain != null
+                && !plan.preparedChain.processes().isEmpty()) {
             try {
-                copiedProcesses = productWorkProcessService.copyChain(factoryId, plan.source.getId(), created.getId());
+                copiedProcesses = commandReceiptService.copyPreparedAndAdvance(
+                        factoryId, plan.source.getId(), created.getId(), plan.preparedChain);
             } catch (Exception e) {
-                log.warn("[PRODUCT-CREATE] copyChain 失败 (新产品已建, 工序需手动配): {}", e.getMessage());
+                // The wrapper is atomic with its CAS.  Read the durable stage before
+                // deciding whether this is a known partial product, a committed copy
+                // whose acknowledgement was lost, or an unknown outcome.
+                ProductCreateCommandReceiptService.ReceiptSnapshot receipt;
+                try {
+                    receipt = commandReceiptService.readCurrent().orElse(null);
+                } catch (Exception readFailure) {
+                    receipt = null;
+                }
+                if (receipt != null && ProductCreateCommandReceiptService.COPY_COMMITTED
+                        .equals(receipt.stage())) {
+                    copiedProcesses = plan.preparedChain.processes().size();
+                } else if (receipt != null && ProductCreateCommandReceiptService.PRODUCT_CREATED
+                        .equals(receipt.stage())) {
+                    log.warn("[PRODUCT-CREATE] 工序链复制失败，产品已创建，需人工配置: productId={}, sourceProductId={}",
+                            created.getId(), plan.source.getId());
+                    throw new com.cretas.aims.exception.BusinessException(502,
+                            "产品「" + created.getName() + "」（ID: " + created.getId()
+                                    + "）已创建，但相似产品「" + plan.sourceName
+                                    + "」的工序链复制失败，未完成继承；请人工配置。")
+                            .withCode("PRODUCT_CHAIN_COPY_FAILED")
+                            .withHint("请检查源产品工序链后重新配置；系统不会自动重试");
+                } else {
+                    throw new com.cretas.aims.exception.BusinessException(502,
+                            "产品「" + created.getName() + "」（ID: " + created.getId()
+                                    + "）的创建结果无法核对，需人工检查；系统不会自动重试。")
+                            .withCode("PRODUCT_CREATE_OUTCOME_UNKNOWN")
+                            .withHint("请根据产品ID核对产品和工序链，不要重复提交创建请求");
+                }
+            }
+            captureExecutionPhase(factoryId, "CHAIN_COPY_COMMITTED");
+            try {
+                commandReceiptService.verifyPreparedReadbackAndAdvance(
+                        factoryId, created.getId(), plan.preparedChain);
+            } catch (Exception e) {
+                throw new com.cretas.aims.exception.BusinessException(502,
+                        "产品「" + created.getName() + "」（ID: " + created.getId()
+                                + "）的工序链复制结果无法核对，需人工检查；系统不会自动重试。")
+                        .withCode("PRODUCT_CHAIN_READBACK_UNKNOWN")
+                        .withHint("请根据产品ID核对工序链，不要重复提交创建请求");
+            }
+        } else {
+            try {
+                commandReceiptService.verifyEmptyReadbackAndAdvance(factoryId, created.getId());
+            } catch (Exception e) {
+                throw new com.cretas.aims.exception.BusinessException(502,
+                        "产品「" + created.getName()
+                                + "」（ID: " + created.getId() + "）的空工序链结果无法核对，需人工检查；系统不会自动重试。")
+                        .withCode("PRODUCT_CHAIN_READBACK_UNKNOWN")
+                        .withHint("请根据产品ID核对工序链，不要重复提交创建请求");
             }
         }
 
@@ -198,7 +422,10 @@ public class ProductCreateTool extends AbstractBusinessTool {
         r.put("message", copiedProcesses > 0
                 ? "产品「" + created.getName() + "」已建, 已继承「" + plan.sourceName + "」的 " + copiedProcesses
                     + " 道工序链作为大框架; BOM/调料见建议, 请调细节"
-                : "产品「" + created.getName() + "」已建 (飞轮无相似工序链可继承, 工序请手动配)");
+                : plan.source == null
+                    ? "产品「" + created.getName() + "」已建 (飞轮无相似工序链可继承, 工序请手动配)"
+                    : "产品「" + created.getName() + "」已建 (相似产品「" + plan.sourceName
+                        + "」没有可继承的工序链, 工序请手动配)");
         return r;
     }
 
@@ -253,11 +480,8 @@ public class ProductCreateTool extends AbstractBusinessTool {
 
         // 源的工序链 + BOM + 调料 (建议)
         if (p.source != null) {
-            try {
-                productWorkProcessService.listByProduct(factoryId, p.source.getId())
-                        .forEach(pwp -> p.processNames.add(
-                                pwp.getProcessName() != null ? pwp.getProcessName() : pwp.getWorkProcessId()));
-            } catch (Exception ignore) { /* 工序链可选 */ }
+            p.preparedChain = productWorkProcessService.prepareChain(factoryId, p.source.getId());
+            p.processNames = new ArrayList<>(p.preparedChain.processNames());
             try {
                 bomRecipeService.getCurrentRecipe(factoryId, p.source.getId())
                         .map(recipe -> bomRecipeService.getRecipe(factoryId, recipe.getId()))
@@ -290,6 +514,249 @@ public class ProductCreateTool extends AbstractBusinessTool {
         return p;
     }
 
+    /** Reconstructs only from the server-issued token snapshot; no current source defaults are re-resolved. */
+    private Plan resolveBoundPlan(String factoryId, Map<String, Object> params) {
+        Object raw = params.get(SERVER_BINDING_KEY);
+        if (!(raw instanceof String rawBinding) || rawBinding.isBlank()) {
+            throw new com.cretas.aims.exception.BusinessException(409,
+                    "产品创建确认凭证缺少服务端计划绑定，请重新预览")
+                    .withCode("PRODUCT_CREATE_BINDING_REQUIRED")
+                    .withHint("请重新发起产品创建预览");
+        }
+        Map<String, Object> binding;
+        try {
+            binding = objectMapper.reader()
+                    .with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                    .forType(new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() {})
+                    .readValue(rawBinding);
+        } catch (Exception invalidBinding) {
+            throw bindingRejected();
+        }
+        if (!(binding.get("version") instanceof Number version) || version.intValue() != 1) {
+            throw bindingRejected();
+        }
+        Plan plan = new Plan();
+        plan.name = requiredBindingText(binding, "productName");
+        plan.productCategory = requiredBindingText(binding, "productCategory");
+        if (!Objects.equals(plan.name, getString(params, "productName"))) {
+            throw bindingRejected();
+        }
+        plan.defaults = mapBinding(binding.get("defaults"));
+        plan.processNames = stringList(binding.get("processNames"));
+        plan.bomSuggestion = List.of();
+        plan.seasoningSuggestion = List.of();
+        plan.sourceName = nullableBindingText(binding.get("sourceName"));
+        String sourceId = nullableBindingText(binding.get("sourceProductId"));
+        Object rawChain = binding.get("chain");
+        if (sourceId != null) {
+            plan.source = productTypeRepository.findByIdAndFactoryId(sourceId, factoryId)
+                    .orElseThrow(() -> bindingRejected());
+            if (!Objects.equals(plan.sourceName, plan.source.getName())
+                    || !Objects.equals(plan.productCategory, plan.source.getProductCategory())) {
+                throw bindingRejected();
+            }
+            if (!mayInheritFrom(factoryId, sourceId)) {
+                throw new com.cretas.aims.exception.BusinessException(403,
+                        "继承来源当前不可导出，无法确认产品创建")
+                        .withHint("请重新预览并确认当前可授权的来源");
+            }
+            plan.preparedChain = parsePreparedChain(sourceId, rawChain);
+            plan.processNames = new ArrayList<>(plan.preparedChain.processNames());
+        } else if (rawChain != null) {
+            throw bindingRejected();
+        }
+        return plan;
+    }
+
+    private Map<String, Object> bindingFor(Plan plan, String productCategory) {
+        Map<String, Object> binding = new LinkedHashMap<>();
+        binding.put("version", 1);
+        binding.put("productName", plan.name);
+        binding.put("productCategory", productCategory);
+        binding.put("defaults", new LinkedHashMap<>(plan.defaults));
+        binding.put("sourceName", plan.sourceName);
+        binding.put("sourceProductId", plan.source == null ? null : plan.source.getId());
+        binding.put("processNames", new ArrayList<>(plan.processNames));
+        if (plan.preparedChain != null) {
+            Map<String, Object> chain = new LinkedHashMap<>();
+            chain.put("sourceProductId", plan.preparedChain.sourceProductId());
+            chain.put("digest", plan.preparedChain.digest());
+            chain.put("processNames", new ArrayList<>(plan.preparedChain.processNames()));
+            chain.put("processCount", plan.preparedChain.processes().size());
+            chain.put("processes", plan.preparedChain.processes().stream()
+                    .map(this::preparedProcessMap).toList());
+            chain.put("masters", plan.preparedChain.masters().stream().map(master -> {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("id", master.id());
+                row.put("lockVersion", master.lockVersion());
+                row.put("selectable", master.selectable());
+                return row;
+            }).toList());
+            binding.put("chain", chain);
+        }
+        return binding;
+    }
+
+    private Map<String, Object> preparedProcessMap(
+            ProductWorkProcessService.PreparedProcess row) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("workProcessId", row.workProcessId());
+        values.put("processOrder", row.processOrder());
+        values.put("unitOverride", row.unitOverride());
+        values.put("estimatedMinutesOverride", row.estimatedMinutesOverride());
+        values.put("reportingRequired", row.reportingRequired());
+        values.put("allowSemiFinishedInjection", row.allowSemiFinishedInjection());
+        values.put("allowMultipleUpstreamSources", row.allowMultipleUpstreamSources());
+        values.put("allowFinishedGoodsSource", row.allowFinishedGoodsSource());
+        values.put("defaultCostCategory", row.defaultCostCategory());
+        values.put("packagingTemplate", row.packagingTemplate());
+        values.put("auxAllocMethod", row.auxAllocMethod());
+        values.put("standardYieldRate", row.standardYieldRate());
+        values.put("auxUnitPrice", row.auxUnitPrice());
+        values.put("auxBasis", row.auxBasis());
+        return values;
+    }
+
+    private ProductWorkProcessService.PreparedChain parsePreparedChain(
+            String sourceId, Object rawChain) {
+        if (!(rawChain instanceof Map<?, ?> raw)) {
+            throw bindingRejected();
+        }
+        Map<String, Object> chain = objectMapper.convertValue(raw,
+                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        if (!Objects.equals(sourceId, nullableBindingText(chain.get("sourceProductId")))) {
+            throw bindingRejected();
+        }
+        String digest = requiredBindingText(chain, "digest");
+        List<ProductWorkProcessService.PreparedProcess> processes = new ArrayList<>();
+        Object rawProcesses = chain.get("processes");
+        if (!(rawProcesses instanceof List<?> processList)) {
+            throw bindingRejected();
+        }
+        for (Object rawProcess : processList) {
+            if (!(rawProcess instanceof Map<?, ?>)) {
+                throw bindingRejected();
+            }
+            Map<String, Object> row = objectMapper.convertValue(rawProcess,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            processes.add(new ProductWorkProcessService.PreparedProcess(
+                    requiredBindingText(row, "workProcessId"), integer(row.get("processOrder")),
+                    nullableBindingText(row.get("unitOverride")), integer(row.get("estimatedMinutesOverride")),
+                    bool(row.get("reportingRequired")), bool(row.get("allowSemiFinishedInjection")),
+                    bool(row.get("allowMultipleUpstreamSources")), bool(row.get("allowFinishedGoodsSource")),
+                    nullableBindingText(row.get("defaultCostCategory")),
+                    listMap(row.get("packagingTemplate")), nullableBindingText(row.get("auxAllocMethod")),
+                    decimal(row.get("standardYieldRate")), decimal(row.get("auxUnitPrice")),
+                    nullableBindingText(row.get("auxBasis"))));
+        }
+        List<ProductWorkProcessService.PreparedMaster> masters = new ArrayList<>();
+        Object rawMasters = chain.get("masters");
+        if (!(rawMasters instanceof List<?> masterList)) {
+            throw bindingRejected();
+        }
+        for (Object rawMaster : masterList) {
+            if (!(rawMaster instanceof Map<?, ?>)) {
+                throw bindingRejected();
+            }
+            Map<String, Object> row = objectMapper.convertValue(rawMaster,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            masters.add(new ProductWorkProcessService.PreparedMaster(
+                    requiredBindingText(row, "id"), longValue(row.get("lockVersion")),
+                    Boolean.TRUE.equals(row.get("selectable"))));
+        }
+        List<String> processNames = stringList(chain.get("processNames"));
+        return new ProductWorkProcessService.PreparedChain(sourceId, processes, masters, digest, processNames);
+    }
+
+    private Map<String, Object> mapBinding(Object value) {
+        if (value == null) return new LinkedHashMap<>();
+        if (!(value instanceof Map<?, ?>)) throw bindingRejected();
+        return objectMapper.convertValue(value,
+                new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() {});
+    }
+
+    private List<String> stringList(Object value) {
+        if (!(value instanceof List<?> list)) throw bindingRejected();
+        return list.stream().map(this::nullableBindingText).toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> listMap(Object value) {
+        if (value == null) return null;
+        if (!(value instanceof List<?> list)) throw bindingRejected();
+        return list.stream().map(item -> {
+            if (!(item instanceof Map<?, ?>)) throw bindingRejected();
+            return objectMapper.convertValue(item,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        }).toList();
+    }
+
+    private Integer integer(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number number) return number.intValue();
+        try { return Integer.valueOf(String.valueOf(value)); }
+        catch (NumberFormatException ex) { throw bindingRejected(); }
+    }
+
+    private Long longValue(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number number) return number.longValue();
+        try { return Long.valueOf(String.valueOf(value)); }
+        catch (NumberFormatException ex) { throw bindingRejected(); }
+    }
+
+    private Boolean bool(Object value) {
+        if (value == null) return null;
+        if (value instanceof Boolean bool) return bool;
+        throw bindingRejected();
+    }
+
+    private BigDecimal decimal(Object value) {
+        if (value == null) return null;
+        try { return new BigDecimal(String.valueOf(value)); }
+        catch (NumberFormatException ex) { throw bindingRejected(); }
+    }
+
+    private static void capturePreviewBinding(String factoryId, Map<String, Object> binding) {
+        PreviewBindingCapture capture = PREVIEW_BINDING_CAPTURE.get();
+        if (capture != null) {
+            capture.capture(factoryId, binding);
+        }
+    }
+
+    private static void captureCreatedProduct(String factoryId, String productId) {
+        ExecutionCapture capture = EXECUTION_CAPTURE.get();
+        if (capture != null) {
+            capture.recordCreated(factoryId, productId);
+        }
+    }
+
+    private static void captureExecutionPhase(String factoryId, String phase) {
+        ExecutionCapture capture = EXECUTION_CAPTURE.get();
+        if (capture != null) {
+            capture.recordPhase(factoryId, phase);
+        }
+    }
+
+    private String requiredBindingText(Map<String, Object> binding, String key) {
+        String value = nullableBindingText(binding.get(key));
+        if (value == null) throw bindingRejected();
+        return value;
+    }
+
+    private String nullableBindingText(Object value) {
+        if (value == null) return null;
+        String text = String.valueOf(value);
+        return text.isBlank() ? null : text;
+    }
+
+    private com.cretas.aims.exception.BusinessException bindingRejected() {
+        return new com.cretas.aims.exception.BusinessException(409,
+                "产品创建确认计划已失效，请重新预览")
+                .withCode("PRODUCT_CREATE_BINDING_INVALID")
+                .withHint("请重新发起产品创建预览");
+    }
+
     private String validatedCategory(Map<String, Object> params) {
         String category = getString(params, "productCategory", "FINISHED_PRODUCT").trim().toUpperCase();
         if (!SKU_CATEGORIES.contains(category)) {
@@ -307,6 +774,8 @@ public class ProductCreateTool extends AbstractBusinessTool {
         ProductType source;
         Map<String, Object> defaults;
         List<String> processNames;
+        String productCategory;
+        ProductWorkProcessService.PreparedChain preparedChain;
         List<Map<String, Object>> bomSuggestion;
         List<Map<String, Object>> seasoningSuggestion;
     }

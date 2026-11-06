@@ -137,6 +137,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private BackdateWindowValidator backdateWindowValidator;
 
+    /** Process-parameter deviation case hook; optional for old constructor-based unit fixtures. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.shortage.ProcessParamDeviationCaseService processParamDeviationCaseService;
+
     /**
      * 生产仓「报工即占用」——{@code material_batches.reserved_quantity} 的唯一写入方。
      *
@@ -589,6 +593,12 @@ public class YieldReportServiceImpl implements YieldReportService {
                     req.getReworkRatio(), r);
         }
         ProductionReport saved = reportRepo.save(r);
+
+        // Keep the report and its ordinary LOW/HIGH deviation case in the same transaction.
+        // The service is feature-gated off during the compatibility rollout.
+        if (processParamDeviationCaseService != null) {
+            processParamDeviationCaseService.recordReport(saved, costWp == null ? null : costWp.getProcessName());
+        }
 
         // 🔴 生产仓占用 (占用点 1/2): 提交即把引用量记进 material_batches.reserved_quantity,
         //    让「可用 = 在手 − 已提交报工引用量」在同一事务内成立 —— 否则同一批料能被别的计划再领一次。

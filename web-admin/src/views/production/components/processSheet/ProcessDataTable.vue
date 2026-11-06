@@ -77,6 +77,8 @@ const props = withDefaults(defineProps<{
   planId: string;
   processCode: string;
   processOrder: number;
+  /** Native F006 demo only: stable id reused across refresh/retry. */
+  nativeClientRowId?: string;
   productTypeId: string;
   /** 本工序真实显示名 (来自 G0 动态工序链 ProductWorkProcess.processName, 如"去舌胎膜"); 与
    * archetype processCode 不同 —— processCode 只是列定义 key, 可能多个真实工序共享同一 archetype。 */
@@ -881,7 +883,11 @@ function blankRow(): SheetRow {
     }
   }
   return {
-    clientRowId: genClientRowId(props.processCode),
+    // Native demo prepares exactly one target row; subsequent operator-created rows
+    // must retain the normal generated id and never collide with `${runKey}:pN`.
+    clientRowId: props.nativeClientRowId && rows.value.length === 0
+      ? props.nativeClientRowId
+      : genClientRowId(props.processCode),
     batchNumber: null,
     rowStatus: 'UNSAVED',
     savedSnapshot: null,
@@ -3490,7 +3496,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 </script>
 
 <template>
-  <div class="sp-grid-wrap">
+  <div class="sp-grid-wrap" :data-testid="`process-report-${processOrder}`" :data-process-code="processCode">
     <CcpEntryDialog ref="ccpDialogRef" />
     <ReworkRatioReasonDialog ref="reworkDialogRef" />
 
@@ -4018,7 +4024,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                 @update:model-value="(v: number) => row.fields[col.key] = v"
                 :min="0" :precision="fieldPrecision(col.key)"
                 controls-position="right"
-                :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
+                :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : isSingleSource && ['input', 'before'].includes(col.key) ? 'single-source-input-quantity' : undefined"
                 style="width:160px" size="small" />
               <div
                 v-if="isCustomFieldCol(col.key) && paramStandardText(col.key)"
@@ -4188,7 +4194,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             <span class="sp-submit-wrap">
               <el-button
                 type="primary" size="large" :icon="Check"
-                class="sp-submit-primary"
+                class="sp-submit-primary" data-testid="process-report-submit"
                 :loading="row.saving"
                 :disabled="!!submitDisabledReason(row) || row.saving"
                 @click="handleSave(row, 'submit')"
@@ -4637,7 +4643,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     @update:model-value="(v: number) => row.fields[col.key] = v"
                     :min="0" :precision="fieldPrecision(col.key)"
                     controls-position="right"
-                    :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : undefined"
+                    :data-testid="isCustomFieldCol(col.key) ? `custom-field-${col.key}` : isSingleSource && ['input', 'before'].includes(col.key) ? 'single-source-input-quantity' : undefined"
                     style="width:110px" size="small" />
                   <div
                     v-if="col.type === 'number' && isCustomFieldCol(col.key) && paramStandardText(col.key)"
@@ -4760,7 +4766,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       type="primary" size="small" :icon="Check"
                       :loading="row.saving"
                       :disabled="!!submitDisabledReason(row) || row.saving"
-                      @click="handleSave(row, 'submit')"
+                      data-testid="process-report-submit" @click="handleSave(row, 'submit')"
                       style="padding:3px 6px;margin-left:4px">正式报工</el-button>
                   </span>
                 </el-tooltip>
@@ -4932,7 +4938,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       <span class="sp-submit-wrap">
                         <el-button
                           type="primary" size="large" :icon="Check"
-                          class="sp-submit-primary"
+                          class="sp-submit-primary" data-testid="process-report-submit"
                           :loading="row.saving"
                           :disabled="!!submitDisabledReason(row) || row.saving"
                           @click="handleSave(row, 'submit')"

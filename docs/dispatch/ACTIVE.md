@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `DECISION-HISTORY-COMPARE-20261106` — `in-progress` — Owner `01a1a954/root` — Base `24c7a1e13398693a9d9b7ab205b09f9a545ff5b0` — 新DecisionHistoryController/ComparisonService/DTO及专测，追加DecisionAuditLogRepository厂域findByIdAndFactoryId与真实JPA/PG；历史语义只读对照，无writer/DDL/业务执行，避开食品与审计锁。
+
 
 
 

@@ -13,15 +13,26 @@ import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductWorkProcessService;
+import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.DecimalNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.springframework.transaction.annotation.Propagation;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -37,6 +48,9 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
     private final ProductWorkProcessAssigneeRepository assigneeRepository;
     private final UserRepository userRepository;
     private final com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+    @PersistenceContext
+    private EntityManager entityManager;
+    private static final ObjectMapper BINDING_MAPPER = new ObjectMapper();
 
     @Override
     @Transactional
@@ -316,6 +330,243 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         log.info("[COPY-CHAIN] factory={} {} -> {} copied {} processes (assignees not copied)",
                 factoryId, sourceProductId, targetProductId, copied);
         return copied;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ProductWorkProcessService.PreparedChain prepareChain(String factoryId, String sourceProductId) {
+        if (sourceProductId == null || sourceProductId.isBlank()) {
+            throw new BusinessException(400, "继承来源产品无效");
+        }
+        if (entityManager != null) {
+            entityManager.clear();
+        }
+        productTypeRepository.findByIdAndFactoryId(sourceProductId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("ProductType", "id", sourceProductId));
+        List<ProductWorkProcess> source = repository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, sourceProductId);
+        List<String> processIds = source.stream()
+                .map(ProductWorkProcess::getWorkProcessId)
+                .distinct()
+                .toList();
+        List<WorkProcess> masterRows = processIds.isEmpty() ? List.of()
+                : entityManager == null
+                ? workProcessRepository.findByFactoryIdAndIdIn(factoryId, processIds)
+                : processIds.stream()
+                        .map(id -> entityManager.find(WorkProcess.class, id))
+                        .filter(Objects::nonNull)
+                        .toList();
+        Map<String, WorkProcess> masters = masterRows
+                .stream()
+                .collect(Collectors.toMap(WorkProcess::getId, Function.identity()));
+        List<ProductWorkProcessService.PreparedProcess> processes = source.stream()
+                .map(this::toPreparedProcess)
+                .toList();
+        List<ProductWorkProcessService.PreparedMaster> masterPins = processIds.stream()
+                .map(id -> {
+                    WorkProcess master = masters.get(id);
+                    if (master == null || !Objects.equals(factoryId, master.getFactoryId())
+                            || master.getDeletedAt() != null || !master.isSelectableForNew()) {
+                        throw new BusinessException(409, "源产品包含已停用或已合并工序，不能确认继承链")
+                                .withHint("请重新预览并选择当前可用的主工序");
+                    }
+                    return new ProductWorkProcessService.PreparedMaster(
+                            id, master.getLockVersion(), master.isSelectableForNew());
+                })
+                .toList();
+        List<String> processNames = source.stream()
+                .map(row -> {
+                    WorkProcess master = masters.get(row.getWorkProcessId());
+                    return master == null || master.getProcessName() == null
+                            ? row.getWorkProcessId() : master.getProcessName();
+                })
+                .toList();
+        return new ProductWorkProcessService.PreparedChain(
+                sourceProductId, processes, masterPins, digest(processes), processNames);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public void validatePreparedChain(String factoryId, String sourceProductId,
+                                      ProductWorkProcessService.PreparedChain preparedChain) {
+        if (preparedChain == null || !Objects.equals(sourceProductId, preparedChain.sourceProductId())) {
+            throw new BusinessException(409, "继承链确认凭证无效，请重新预览").withHint("请重新发起产品创建预览");
+        }
+        if (preparedChain.digest() == null
+                || !Objects.equals(digest(preparedChain.processes()), preparedChain.digest())) {
+            throw new BusinessException(409, "继承链确认凭证内容已损坏，请重新预览")
+                    .withHint("请重新发起产品创建预览");
+        }
+        ProductWorkProcessService.PreparedChain current = prepareChain(factoryId, sourceProductId);
+        if (!Objects.equals(current.digest(), preparedChain.digest())
+                || current.processes().size() != preparedChain.processes().size()
+                || !current.masters().equals(preparedChain.masters())
+                || !current.processNames().equals(preparedChain.processNames())) {
+            throw new BusinessException(409, "源产品工序链或主工序版本已变化，请重新预览")
+                    .withHint("未创建产品；请刷新源产品后重新发起预览");
+        }
+    }
+
+    @Override
+    @Transactional
+    public int copyPreparedChain(String factoryId, String sourceProductId, String targetProductId,
+                                 ProductWorkProcessService.PreparedChain preparedChain) {
+        if (sourceProductId == null || targetProductId == null || sourceProductId.equals(targetProductId)) {
+            throw new BusinessException(400, "源产品与目标产品必须是两个不同的产品");
+        }
+        processSecretGuard.requireCopySource(factoryId, sourceProductId,
+                "copy-chain-bound " + sourceProductId + " -> " + targetProductId);
+        processSecretGuard.requireProduct(factoryId, targetProductId,
+                com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
+                "copy-chain-bound target " + targetProductId);
+        validatePreparedChain(factoryId, sourceProductId, preparedChain);
+        if (preparedChain.processes().isEmpty()) {
+            return 0;
+        }
+        lockPreparedMastersForWrite(factoryId, preparedChain);
+        List<ProductWorkProcess> existing = repository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, targetProductId);
+        if (!existing.isEmpty()) {
+            throw new BusinessException(409, "目标产品已有工序, 复制前请先清空目标工序链")
+                    .withHint("如需覆盖, 请先删除目标产品现有工序再复制");
+        }
+        for (ProductWorkProcessService.PreparedProcess src : preparedChain.processes()) {
+            repository.save(ProductWorkProcess.builder()
+                    .factoryId(factoryId)
+                    .productTypeId(targetProductId)
+                    .workProcessId(src.workProcessId())
+                    .processOrder(src.processOrder())
+                    .unitOverride(src.unitOverride())
+                    .estimatedMinutesOverride(src.estimatedMinutesOverride())
+                    .responsibleWorkerId(null)
+                    .reportingRequired(src.reportingRequired())
+                    .allowSemiFinishedInjection(src.allowSemiFinishedInjection())
+                    .allowMultipleUpstreamSources(src.allowMultipleUpstreamSources())
+                    .allowFinishedGoodsSource(src.allowFinishedGoodsSource())
+                    .defaultCostCategory(src.defaultCostCategory())
+                    .packagingTemplate(src.packagingTemplate())
+                    .auxAllocMethod(src.auxAllocMethod())
+                    .standardYieldRate(src.standardYieldRate())
+                    .auxUnitPrice(src.auxUnitPrice())
+                    .auxBasis(src.auxBasis())
+                    .build());
+        }
+        repository.flush();
+        return preparedChain.processes().size();
+    }
+
+    private void lockPreparedMastersForWrite(
+            String factoryId, ProductWorkProcessService.PreparedChain preparedChain) {
+        if (entityManager == null || preparedChain.masters().isEmpty()) {
+            return;
+        }
+        entityManager.clear();
+        List<String> ids = preparedChain.masters().stream()
+                .map(ProductWorkProcessService.PreparedMaster::id)
+                .sorted()
+                .toList();
+        Map<String, WorkProcess> locked = workProcessRepository
+                .lockByFactoryIdAndIdIn(factoryId, ids)
+                .stream()
+                .collect(Collectors.toMap(WorkProcess::getId, Function.identity()));
+        if (locked.size() != preparedChain.masters().size()
+                || preparedChain.masters().stream().anyMatch(pin -> {
+                    WorkProcess master = locked.get(pin.id());
+                    return master == null || !Objects.equals(factoryId, master.getFactoryId())
+                            || master.getDeletedAt() != null || !master.isSelectableForNew()
+                            || !Objects.equals(pin.lockVersion(), master.getLockVersion());
+                })) {
+            throw new BusinessException(409, "源产品工序链或主工序版本已变化，请重新预览")
+                    .withHint("未创建产品；请刷新源产品后重新发起预览");
+        }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public void verifyPreparedChainReadback(String factoryId, String targetProductId,
+                                            ProductWorkProcessService.PreparedChain preparedChain) {
+        if (entityManager != null) {
+            entityManager.clear();
+        }
+        List<ProductWorkProcess> readback = repository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, targetProductId);
+        List<ProductWorkProcessService.PreparedProcess> actual = readback.stream()
+                .map(this::toPreparedProcess)
+                .toList();
+        if (preparedChain == null || actual.size() != preparedChain.processes().size()
+                || !Objects.equals(digest(actual), preparedChain.digest())) {
+            throw new BusinessException(502, "产品已创建但工序链复制结果无法核对，请人工检查")
+                    .withCode("PRODUCT_CHAIN_READBACK_UNKNOWN")
+                    .withHint("系统不会自动重试；请根据产品ID核对工序链");
+        }
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public void verifyEmptyChainReadback(String factoryId, String targetProductId) {
+        if (entityManager != null) {
+            entityManager.clear();
+        }
+        List<ProductWorkProcess> readback = repository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, targetProductId);
+        if (!readback.isEmpty()) {
+            throw new BusinessException(502, "产品已创建但空工序链核对失败，请人工检查")
+                    .withCode("PRODUCT_CHAIN_READBACK_UNKNOWN")
+                    .withHint("系统不会自动重试；请根据产品ID核对工序链");
+        }
+    }
+
+    private ProductWorkProcessService.PreparedProcess toPreparedProcess(ProductWorkProcess row) {
+        return new ProductWorkProcessService.PreparedProcess(
+                row.getWorkProcessId(), row.getProcessOrder(), row.getUnitOverride(),
+                row.getEstimatedMinutesOverride(), row.getReportingRequired(),
+                row.getAllowSemiFinishedInjection(), row.getAllowMultipleUpstreamSources(),
+                row.getAllowFinishedGoodsSource(), row.getDefaultCostCategory(),
+                row.getPackagingTemplate(), row.getAuxAllocMethod(), row.getStandardYieldRate(),
+                row.getAuxUnitPrice(), row.getAuxBasis());
+    }
+
+    private String digest(List<ProductWorkProcessService.PreparedProcess> processes) {
+        List<Map<String, Object>> rows = processes.stream().map(row -> {
+            Map<String, Object> values = new LinkedHashMap<>();
+            values.put("workProcessId", row.workProcessId());
+            values.put("processOrder", row.processOrder());
+            values.put("unitOverride", row.unitOverride());
+            values.put("estimatedMinutesOverride", row.estimatedMinutesOverride());
+            values.put("reportingRequired", row.reportingRequired());
+            values.put("allowSemiFinishedInjection", row.allowSemiFinishedInjection());
+            values.put("allowMultipleUpstreamSources", row.allowMultipleUpstreamSources());
+            values.put("allowFinishedGoodsSource", row.allowFinishedGoodsSource());
+            values.put("defaultCostCategory", row.defaultCostCategory());
+            values.put("packagingTemplate", row.packagingTemplate());
+            values.put("auxAllocMethod", row.auxAllocMethod());
+            values.put("standardYieldRate", row.standardYieldRate());
+            values.put("auxUnitPrice", row.auxUnitPrice());
+            values.put("auxBasis", row.auxBasis());
+            return values;
+        }).toList();
+        JsonNode normalized = normalizeNumbers(BINDING_MAPPER.valueToTree(rows));
+        return ToolCommandDigest.parametersHash(
+                BINDING_MAPPER.valueToTree(Map.of("processes", normalized)));
+    }
+
+    private JsonNode normalizeNumbers(JsonNode value) {
+        if (value == null || value.isNull()) return value;
+        if (value.isFloatingPointNumber() || value.isBigDecimal()) {
+            return DecimalNode.valueOf(value.decimalValue().stripTrailingZeros());
+        }
+        if (value.isArray()) {
+            ArrayNode array = BINDING_MAPPER.createArrayNode();
+            value.forEach(item -> array.add(normalizeNumbers(item)));
+            return array;
+        }
+        if (value.isObject()) {
+            ObjectNode object = BINDING_MAPPER.createObjectNode();
+            value.fields().forEachRemaining(entry ->
+                    object.set(entry.getKey(), normalizeNumbers(entry.getValue())));
+            return object;
+        }
+        return value;
     }
 
     /** Legacy overload — called from batchSort / delete (no assignee enrichment needed). */

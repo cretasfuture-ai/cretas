@@ -195,37 +195,37 @@ class ToolDescriptorInventoryDriftTest {
         // getActionType()=UPDATE (原先按工具名后缀推断成 READ, 确认卡影响说明措辞不对); 下面 actions 桶
         // READ 445 → 443 / UPDATE 26 → 28 是同一处改动。
         // 2026-10-29 S6-04: alert_rule_toggle declares UPDATE/MEDIUM/v2/roles and gets the first SCHEDULER write policy.
-        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(75);
-        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(46);
+        assertThat(countOverride(tools, flags -> flags.actionType())).isEqualTo(81);
+        assertThat(countOverride(tools, flags -> flags.riskLevel())).isEqualTo(52);
         // 2026-10-04: +2 work_process_task_start / work_process_task_complete 只读预览 (报工对话确认) → 44
         // 2026-10-06: 44 → 52 (+8): 一线默认开放的 8 个日常写工具补只读预览 (clock_in / clock_out / material_batch_create /
         // material_batch_use / reusable_container_ship_out / reusable_container_return_in / quality_check_create /
         // quality_defect_record)。此前它们 supportsPreview=false, 一线点了只会看到「预览模式暂不支持此意图类型」。
         // 2026-10-20: canonical purchase_order_create adds preview/permission/version (+1 each).
-        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(59);
+        assertThat(countOverride(tools, flags -> flags.supportsPreview())).isEqualTo(65);
         // 2026-10-06: 52 → 53 / 12 → 13 (+1): report_sku_gross_margin 声明 procurement:price:view (售价/收入/成本门)
         // 2026-10-20: supplier_price_comparison declares the existing supplier READ matrix and v2 (+1 each).
         // 2026-10-29 S6 gated-data rule: 107 tools declare the codes / role gate of the direct API serving their data; S5-12 adds purchase_statistics requiresPermission.
         // Re-review: lineage_query loses its role gate (-1 / -1); the 2 HACCP tools swap role gate for codes (-2 / -2 / +2).
         // 2026-11-03 strict sweep + organizer rulings: role gates and declared codes per GatedDataToolAiPathPermissionTest.
-        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(85);
-        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(65);
-        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(178);
+        assertThat(countOverride(tools, flags -> flags.requiresPermission())).isEqualTo(91);
+        assertThat(countOverride(tools, flags -> flags.hasPermission())).isEqualTo(71);
+        assertThat(countOverride(tools, flags -> flags.requiredPermissions())).isEqualTo(184);
         // 2026-11-05: canvas_product_process_workflow_config explicitly versions fixed-share preview (v1.1.0).
-        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(13);
-        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(24);
+        assertThat(countOverride(tools, flags -> flags.version())).isEqualTo(19);
+        assertThat(countOverride(tools, flags -> flags.domainTags())).isEqualTo(30);
 
         assertThat(countActions(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 362L,
-                ToolExecutor.ActionType.WRITE, 63L,
-                ToolExecutor.ActionType.UPDATE, 27L,
+                ToolExecutor.ActionType.READ, 358L,
+                ToolExecutor.ActionType.WRITE, 62L,
+                ToolExecutor.ActionType.UPDATE, 31L,
                 ToolExecutor.ActionType.DELETE, 11L,
-                ToolExecutor.ActionType.ANALYZE, 10L,
+                ToolExecutor.ActionType.ANALYZE, 11L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 5L));
         assertThat(countRisks(tools)).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 416L,
-                ToolExecutor.RiskLevel.MEDIUM, 69L,
+                ToolExecutor.RiskLevel.LOW, 417L,
+                ToolExecutor.RiskLevel.MEDIUM, 68L,
                 ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
     }

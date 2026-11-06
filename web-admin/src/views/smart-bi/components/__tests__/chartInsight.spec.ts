@@ -1280,11 +1280,21 @@ describe('fetchTier2Insight', () => {
 
   const pieChart: ChartWithMeta = {
     chartType: 'PIE',
-    meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'restaurant' },
+    meta: { xDim: 'channel', yMetric: 'revenue', aggregation: 'sum', domain: 'factory' },
     config: {
       series: [{ type: 'pie', data: [{ name: '堂食', value: 600000 }, { name: '外卖', value: 400000 }] }],
     },
   };
+
+  it('does not send restaurant charts to the factory/finance-only endpoint', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const restaurantChart: ChartWithMeta = {
+      ...pieChart,
+      meta: { ...pieChart.meta!, domain: 'restaurant' },
+    };
+    await expect(fetchTier2Insight(restaurantChart, finPerms, 'F006')).resolves.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 
   it('success path: maps response to InsightResult with tier:2 and correct source', async () => {
     // Mock the Python fetch used by fetchTier2Insight
@@ -1320,7 +1330,7 @@ describe('fetchTier2Insight', () => {
     expect(body.chart_type).toBe('PIE');
     expect(body.x_dim).toBe('channel');
     expect(body.y_metric).toBe('revenue');
-    expect(body.domain).toBe('restaurant');
+    expect(body.domain).toBe('factory');
     expect(typeof body.data_pattern).toBe('string');
     expect(body.data_pattern.length).toBeGreaterThan(0);
 
@@ -1429,14 +1439,12 @@ describe('browser authentication for chart insight requests', () => {
         json: async () => ({ success: true, data: null }),
       } as unknown as Response);
 
-      await fetchTier2Insight(
-        makePie([
+      const chart = makePie([
           { name: 'Dine-in', value: 600_000 },
           { name: 'Delivery', value: 400_000 },
-        ]),
-        financePerms,
-        'F001',
-      );
+      ]);
+      chart.meta = { ...chart.meta!, domain: 'factory' };
+      await fetchTier2Insight(chart, financePerms, 'F001');
 
       const options = fetchSpy.mock.calls[0][1] as RequestInit;
       expect(options.headers).toMatchObject({

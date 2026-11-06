@@ -12,6 +12,7 @@ import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -195,6 +196,56 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Optional<BoundTokenSnapshot> readBoundSnapshot(String token, String factoryId, Long userId) {
+        if (token == null || token.isBlank() || factoryId == null || factoryId.isBlank() || userId == null) {
+            return Optional.empty();
+        }
+        return tokenRepository.findByToken(token)
+                .filter(row -> factoryId.equals(row.getFactoryId())
+                        && factoryId.equals(row.getTenantId())
+                        && userId.equals(row.getUserId())
+                        && row.isBoundForExecution())
+                .map(row -> new BoundTokenSnapshot(
+                        row.getIntentCode(), row.getEntityType(), row.getEntityId(), row.getOperation(),
+                        row.getToolName(), row.getDescriptorVersion(), row.getExecutionMode(),
+                        row.getCommandDigest(), row.getExpiresAt(), row.getStatus()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<BoundTokenExecution> readBoundExecution(String token, String factoryId, Long userId) {
+        if (token == null || token.isBlank() || factoryId == null || factoryId.isBlank() || userId == null) {
+            return Optional.empty();
+        }
+        return tokenRepository.findByToken(token)
+                .filter(row -> factoryId.equals(row.getFactoryId())
+                        && factoryId.equals(row.getTenantId())
+                        && userId.equals(row.getUserId())
+                        && row.isBoundForExecution())
+                .flatMap(row -> {
+                    try {
+                        return Optional.of(new BoundTokenExecution(
+                                row.getToken(),
+                                row.getFactoryId(),
+                                row.getTenantId(),
+                                row.getUserId(),
+                                row.getToolName(),
+                                row.getDescriptorVersion(),
+                                row.getExecutionMode(),
+                                row.getParametersHash(),
+                                row.getCommandDigest(),
+                                row.getPreviewData(),
+                                row.getStatus(),
+                                row.getExpiresAt(),
+                                parseParameters(row.getPreviewData())));
+                    } catch (IllegalArgumentException invalidPayload) {
+                        return Optional.empty();
+                    }
+                });
+    }
+
+    @Override
     @Deprecated(forRemoval = false)
     public ConfirmResult confirmToken(String token, Long userId) {
         log.warn("拒绝旧版非原子确认入口: tokenFingerprint={}, user={}", fingerprint(token), userId);
@@ -281,7 +332,7 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
 
         JsonNode parametersNode;
         try {
-            parametersNode = objectMapper.readTree(existing.getPreviewData());
+            parametersNode = parseParameterTree(existing.getPreviewData());
         } catch (Exception e) {
             log.warn("确认认领失败: tokenFingerprint={}, reason=invalid-parameters", tokenFingerprint);
             return ClaimResult.failure("预览参数无效，请重新发起预览");
@@ -327,7 +378,7 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
         IntentPreviewToken claimedToken = claimedTokenOpt.get();
         JsonNode claimedParametersNode;
         try {
-            claimedParametersNode = objectMapper.readTree(claimedToken.getPreviewData());
+            claimedParametersNode = parseParameterTree(claimedToken.getPreviewData());
         } catch (Exception e) {
             resolveClaim(token, claimId, false, "认领后参数解析失败");
             return ClaimResult.failure("预览参数无效，请重新发起预览");
@@ -767,7 +818,20 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
             return new HashMap<>();
         }
         try {
-            return new HashMap<>(objectMapper.readValue(json, new TypeReference<Map<String, Object>>() { }));
+            return new HashMap<>(objectMapper.reader()
+                    .with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                    .forType(new TypeReference<Map<String, Object>>() { })
+                    .readValue(json));
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid preview parameters", e);
+        }
+    }
+
+    private JsonNode parseParameterTree(String json) {
+        try {
+            return objectMapper.reader()
+                    .with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                    .readTree(json);
         } catch (Exception e) {
             throw new IllegalArgumentException("Invalid preview parameters", e);
         }
