@@ -67,6 +67,7 @@ class ProcessSecretAiToolExitsTest {
     ProcessSecretAccessService access;
     ProcessSecretRecipeGuard guard;
     ProcessSecretToolOutputAspect aspect;
+    ProductWorkProcessService productCreateWorkProcesses;
 
     @BeforeEach
     void setUp() {
@@ -261,7 +262,10 @@ class ProcessSecretAiToolExitsTest {
         when(productTypes.findByFactoryIdAndName(F, "秘制牛肉")).thenReturn(Optional.of(source));
         ReflectionTestUtils.setField(tool, "productTypeService", mock(ProductTypeService.class));
         ReflectionTestUtils.setField(tool, "productTypeRepository", productTypes);
-        ReflectionTestUtils.setField(tool, "productWorkProcessService", mock(ProductWorkProcessService.class));
+        productCreateWorkProcesses = mock(ProductWorkProcessService.class);
+        when(productCreateWorkProcesses.prepareChain(F, SECRET)).thenReturn(
+                new ProductWorkProcessService.PreparedChain(SECRET, List.of(), List.of(), "test-empty-chain"));
+        ReflectionTestUtils.setField(tool, "productWorkProcessService", productCreateWorkProcesses);
         ReflectionTestUtils.setField(tool, "bomRecipeService", bomRecipeService);
         ReflectionTestUtils.setField(tool, "processSecretGuard", guard);
         ReflectionTestUtils.setField(tool, "objectMapper", json);
@@ -281,6 +285,7 @@ class ProcessSecretAiToolExitsTest {
                     context(OPERATOR));
         }
         assertThat(raw).contains("工艺已设为保密").doesNotContain("suggestedBom");
+        verify(productCreateWorkProcesses, never()).prepareChain(F, SECRET);
         verify(bomRecipeService, never()).getCurrentRecipe(any(), any());
         verify(recorder).record(eq(F), eq(SECRET), eq(actor(OPERATOR)), eq(ProcessSecretAction.VIEW_FULL),
                 eq("DENY"), anyString(), contains("product_create"));
@@ -295,6 +300,7 @@ class ProcessSecretAiToolExitsTest {
                     context(OWNER));
         }
         assertThat(json.readTree(raw).at("/data/inheritFromProduct").asText()).isEqualTo("秘制牛肉");
+        verify(productCreateWorkProcesses).prepareChain(F, SECRET);
         verify(bomRecipeService).getCurrentRecipe(F, SECRET);
     }
 }
