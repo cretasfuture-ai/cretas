@@ -11,6 +11,13 @@ const { VISUAL_PAGES, runVisualCensus } = require('../scenarios/visual-page-cens
 const { createScenarioResult } = require('../core/result-schema');
 const guidedScenario = require('../scenarios/smartbi-guided-readonly');
 
+const WORKSPACE_FIXTURE = Object.freeze([
+  { path: '/workspaces/overview', title: '经营总览', targetPath: '/dashboard', targetTitle: '首页驾驶舱', targetLandmark: '今日生产概览' },
+  { path: '/workspaces/exceptions', title: '异常中心', targetPath: '/production/shortage-cases', targetTitle: '缺料异常', targetLandmark: '缺料异常' },
+  { path: '/workspaces/plans-approvals', title: '方案与审批', targetPath: '/production/plans', targetTitle: '生产计划', targetLandmark: '生产计划管理' },
+  { path: '/workspaces/trace-review', title: '追溯与复盘', targetPath: '/production/traceability', targetTitle: '批次追溯', targetLandmark: '溯源查询' },
+]);
+
 function pageHtml(pathname) {
   if (pathname === '/login') {
     return `<!doctype html><html><body>
@@ -48,7 +55,13 @@ function pageHtml(pathname) {
         document.querySelectorAll('[role=option]').forEach(option => option.onclick = () => { document.querySelector('#subject-options').hidden = true; load(option.dataset.value || null); });
       </script></main>`);
   }
-  const content = pathname === '/quality/label-qc'
+  const workspace = WORKSPACE_FIXTURE.find(item => item.path === pathname);
+  const workspaceTarget = WORKSPACE_FIXTURE.find(item => item.targetPath === pathname);
+  const content = workspace
+    ? `<main><h1>${workspace.title}</h1><a data-testid="workspace-link" href="${workspace.targetPath}"><strong>${workspace.targetTitle}</strong> 打开</a></main>`
+    : workspaceTarget
+      ? `<main><h1>${workspaceTarget.targetTitle}</h1><p data-testid="fixture-target-landmark">${workspaceTarget.targetLandmark}</p></main>`
+      : pathname === '/quality/label-qc'
     ? '<main><h1>包装标签拍检</h1><p>AI 初筛只提供疑点，人工审核形成最终结论。</p><div class="el-table"></div><button>待人工审核</button><button>已审核整理</button><button>归档记录</button><button>人工审核</button></main>'
     : pathname === '/system/product-processes' || pathname === '/production/process-hub'
     ? `<main><h1>Workflow 工序管理</h1>
@@ -102,7 +115,7 @@ function pageHtml(pathname) {
             }));
           </script>
         </main>`
-        : '<main><h1>工作台</h1><p>f006_admin 六膳门食品科技 F006</p></main>';
+    : '<main><h1>工作台</h1><p>f006_admin 六膳门食品科技 F006</p></main>';
   return wrapWithBootSplash(pathname, content);
 }
 
@@ -123,6 +136,26 @@ function wrapWithBootSplash(pathname, content, delayMs = 250) {
   if (pathname === '/login' || pathname === '/sales/orders' || pathname === '/smart-bi/analysis-hub') {
     return `<!doctype html><html><body>${content}</body></html>`;
   }
+  const shell = `<div class="app-layout">
+    <aside class="app-sidebar"><div class="sidebar-logo"><span class="logo-title">六膳门食品科技</span></div>
+      <nav class="sidebar-menu">
+        ${WORKSPACE_FIXTURE.map(item => `<a class="el-menu-item" href="${item.path}"><span class="menu-title-copy">${item.title}</span></a>`).join('')}
+      </nav>
+    </aside>
+    <div class="app-main"><header class="app-header"><span class="user-name">f006_admin</span></header>
+      <div class="workspace-content-shell"><main class="app-content">${content}</main></div>
+    </div>
+  </div>`;
+  const delayedTarget = WORKSPACE_FIXTURE.find(item => item.targetPath === pathname);
+  const pendingShell = delayedTarget
+    ? shell.replace(
+      `data-testid="fixture-target-landmark">${delayedTarget.targetLandmark}`,
+      'data-testid="fixture-target-landmark">目标页面正在加载',
+    )
+    : shell;
+  const settleTarget = delayedTarget
+    ? `setTimeout(function () { const node = document.querySelector('[data-testid="fixture-target-landmark"]'); if (node) node.textContent = ${JSON.stringify(delayedTarget.targetLandmark)}; }, 180);`
+    : '';
   return `<!doctype html><html><head><style>
     #app:not(:empty) + #app-loader { display: none; }
   </style></head><body>
@@ -130,7 +163,11 @@ function wrapWithBootSplash(pathname, content, delayMs = 250) {
     <div id="app-loader"><div class="logo">白垩纪 AI Agent</div><div class="sub">正在加载应用…</div></div>
     <script>
       setTimeout(function () {
-        document.getElementById('app').innerHTML = ${JSON.stringify(content)};
+        document.getElementById('app').innerHTML = '<div class="app-layout" data-testid="sandbox-status">正在核对演示状态</div>';
+        setTimeout(function () {
+          document.getElementById('app').innerHTML = ${JSON.stringify(pendingShell)};
+          ${settleTarget}
+        }, 80);
       }, ${delayMs});
     </script>
   </body></html>`;
@@ -145,6 +182,17 @@ test.describe('production read-only harness local fixture', () => {
   let concurrentSalesOrderReads;
   let maxConcurrentSalesOrderReads;
   let loginStatus;
+  let loginFactoryName;
+
+  test('business landmark ignores sidebar copies and hidden cached pages', async ({ page }) => {
+    const { waitForBusinessLandmark } = require('../scenarios/factory-management-workspaces-readonly');
+    await page.setContent('<aside>缺料异常</aside><main class="app-content"><h1 hidden>缺料异常</h1><div id="live-target">目标页面正在加载</div></main>');
+    expect(await waitForBusinessLandmark(page, '缺料异常', 100)).toBe(false);
+    await page.evaluate(() => {
+      setTimeout(() => { document.getElementById('live-target').textContent = '缺料异常'; }, 100);
+    });
+    expect(await waitForBusinessLandmark(page, '缺料异常', 2000)).toBe(true);
+  });
 
   test.beforeEach(async () => {
     businessWriteCount = 0;
@@ -153,6 +201,7 @@ test.describe('production read-only harness local fixture', () => {
     concurrentSalesOrderReads = 0;
     maxConcurrentSalesOrderReads = 0;
     loginStatus = 200;
+    loginFactoryName = '六膳门食品科技';
     server = http.createServer((request, response) => {
       const url = new URL(request.url, 'http://fixture');
       if (request.method === 'POST' && url.pathname === '/api/mobile/auth/unified-login') {
@@ -160,7 +209,7 @@ test.describe('production read-only harness local fixture', () => {
         request.on('end', () => {
           response.writeHead(loginStatus, { 'content-type': 'application/json' });
           response.end(JSON.stringify(loginStatus === 200
-            ? { success: true, message: 'ok', data: { username: 'f006_admin', factoryId: 'F006', factoryName: '六膳门食品科技', role: 'factory_admin' } }
+            ? { success: true, message: 'ok', data: { username: 'f006_admin', factoryId: 'F006', factoryName: loginFactoryName, role: 'factory_admin' } }
             : { success: false, message: 'fixture login rejected' }));
         });
         return;
@@ -381,6 +430,31 @@ test.describe('production read-only harness local fixture', () => {
     expect(report.actualBusinessWrites).toBe(0);
   });
 
+  test('waits past a pending shell and accepts only real workspace links as ready', async ({ page }) => {
+    const evidenceDir = path.resolve('test-results', 'production-readonly-workspaces-fixture');
+    const report = await runSuiteWithPage(page, {
+      baseUrl,
+      evidenceDir,
+      scenarios: ['factory-management-workspaces-readonly'],
+      username: 'f006_admin',
+      password: 'fixture-only',
+      expectedUsername: 'f006_admin',
+      expectedFactoryId: 'F006',
+      productionReadonly: true,
+    });
+    expect(report.scenarios).toHaveLength(1);
+    expect(report.scenarios[0].result).toBe('PASS');
+    const workspaceEvidence = report.scenarios[0].pageEvidence.find(entry => Array.isArray(entry.snapshots));
+    expect(workspaceEvidence).toBeTruthy();
+    expect(workspaceEvidence.visibleTargetCount).toBe(4);
+    expect(workspaceEvidence.targetPaths).toEqual(WORKSPACE_FIXTURE.map(item => item.targetPath));
+    expect(workspaceEvidence.targetLandmarkResults).toEqual([true, true, true, true]);
+    expect(workspaceEvidence.workspaceStates).toEqual(['ready', 'ready', 'ready', 'ready']);
+    expect(report.actualBusinessWrites).toBe(0);
+    expect(report.blockedMutationAttempts).toHaveLength(0);
+    expect(businessWriteCount).toBe(0);
+  });
+
   test('verifies the sales order lifecycle workspace without business writes', async ({ page }) => {
     const evidenceDir = path.resolve('test-results', 'production-readonly-sales-order-fixture');
     const report = await runSuiteWithPage(page, {
@@ -455,6 +529,27 @@ test.describe('production read-only harness local fixture', () => {
     const persisted = require('node:fs').readFileSync(path.join(evidenceDir, 'report.json'), 'utf8');
     expect(persisted).not.toContain('f006_admin');
     expect(persisted).not.toContain('fixture-only');
+  });
+
+  test('rejects a genuine authenticated factory-name mismatch after the shell is ready', async ({ page }) => {
+    loginFactoryName = '另一工厂';
+    const report = await runSuiteWithPage(page, {
+      baseUrl,
+      evidenceDir: path.resolve('test-results', 'production-readonly-factory-name-mismatch'),
+      scenarios: ['tenant-isolation'],
+      username: 'f006_admin',
+      password: 'fixture-only',
+      expectedUsername: 'f006_admin',
+      expectedFactoryId: 'F006',
+      productionReadonly: true,
+    });
+    expect(report.scenarios).toHaveLength(1);
+    expect(report.scenarios[0].scenario).toBe('ui-login');
+    expect(report.scenarios[0].result).toBe('TOOL_ERROR');
+    expect(report.scenarios[0].pageEvidence.some(entry => /Factory display name does not match/.test(entry.error || ''))).toBe(true);
+    expect(report.actualBusinessWrites).toBe(0);
+    expect(report.blockedMutationAttempts).toHaveLength(0);
+    expect(businessWriteCount).toBe(0);
   });
 });
 

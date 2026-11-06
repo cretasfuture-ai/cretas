@@ -34,6 +34,13 @@ test('positive workspace evidence requires a ready page, visible target, and usa
   }, expected), true);
 });
 
+test('a visible workspace link is the ready state, while the other terminal states stay distinct', () => {
+  assert.equal(scenario.visibleState({ visible: 'link' }), 'ready');
+  for (const visible of ['loading', 'error', 'unavailable', 'denied', 'empty', 'unknown']) {
+    assert.equal(scenario.visibleState({ visible }), visible);
+  }
+});
+
 test('loading, error, denied, unavailable, empty, and unknown targets cannot pass', () => {
   for (const visible of ['loading', 'error', 'denied', 'unavailable', 'empty']) {
     assert.equal(scenario.invalidState({ state: { visible }, linkCount: 0 }), true, visible);
@@ -48,6 +55,16 @@ test('loading, error, denied, unavailable, empty, and unknown targets cannot pas
     linkTitles: ['首页驾驶舱'],
     targetPath: '/unknown',
     targetLandmarkFound: true,
+    targetErrorMarkers: [],
+  }, scenario.WORKSPACE_TARGETS[0]));
+  assert.throws(() => scenario.assertWorkspacePositive({
+    path: scenario.WORKSPACE_TARGETS[0].path,
+    heading: scenario.WORKSPACE_TARGETS[0].title,
+    state: { visible: 'ready' },
+    linkCount: 1,
+    linkTitles: [scenario.WORKSPACE_TARGETS[0].targetTitle],
+    targetPath: scenario.WORKSPACE_TARGETS[0].targetPath,
+    targetLandmarkFound: false,
     targetErrorMarkers: [],
   }, scenario.WORKSPACE_TARGETS[0]));
 });
