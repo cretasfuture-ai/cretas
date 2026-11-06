@@ -5653,14 +5653,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </el-form-item>
         <!-- A5/E3: batchDate 已被后端消费 (ProductionProgressDashboard 按批次日期过滤)，保留；加说明区分两个日期 -->
         <el-form-item label="批次日期">
+          <div data-testid="production-plan-batch-date" style="width:100%">
           <el-date-picker
-            data-testid="production-plan-batch-date"
             v-model="planForm.batchDate"
             type="date"
             placeholder="实际转批次日期（默认今日）"
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
+          </div>
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
             批次日期 = 实际开工/转批次日；计划日期 = 预期完成生产日
           </div>
@@ -5712,14 +5713,15 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </div>
         </el-form-item>
         <el-form-item label="计划生产日" required>
+          <div data-testid="production-plan-planned-date" style="width:100%">
           <el-date-picker
-            data-testid="production-plan-planned-date"
             v-model="planForm.plannedDate"
             type="date"
             placeholder="预期完成生产日期（默认今日）"
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
+          </div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input data-testid="production-plan-notes" v-model="planForm.notes" type="textarea" :rows="3" />

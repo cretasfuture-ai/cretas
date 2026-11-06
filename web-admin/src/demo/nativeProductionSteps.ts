@@ -31,7 +31,10 @@ async function read(ui: NativeDemoContext['ui'], path: string): Promise<DemoEnti
 }
 
 /** The original time pickers are intentionally readonly: use their real panels. */
-async function selectNativeTime(ui: NativeDemoContext['ui'], selector: string, value: string): Promise<void> {
+export async function selectNativeTime(ui: NativeDemoContext['ui'], selector: string, value: string): Promise<void> {
+  const field=await ui.waitFor(selector)
+  const input=field.querySelector<HTMLInputElement>('input')
+  if(!input)throw new Error('当前工序的时间控件尚未加载')
   await ui.click(`${selector} .el-input__wrapper`, '展开原生时间选择器')
   const panel=await ui.waitFor('.el-time-panel',15000)
   const lists=panel.querySelectorAll<HTMLElement>('.el-time-spinner__list')
@@ -45,7 +48,7 @@ async function selectNativeTime(ui: NativeDemoContext['ui'], selector: string, v
     await ui.click('[data-native-clock-target="current"]',index===0?'选择小时':'选择分钟')
   }
   await ui.click('.el-time-panel__btn.confirm','确认原生时间')
-  await ui.until(()=>document.querySelector<HTMLInputElement>(`${selector} input`)?.value===value,'时间控件实际保存选择')
+  await ui.until(()=>input.value===value,'时间控件实际保存选择')
 }
 
 function adapter(step: NativeDemoStepId, canUse: Capability, prepare: NativeDemoAdapter['prepare'], commit: NativeDemoAdapter['commit']): NativeDemoAdapter {
