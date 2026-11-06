@@ -23,8 +23,10 @@ import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.processsecret.ProcessSecretAuditRecorder;
 import com.cretas.aims.security.PlatformFactoryViewReadPolicy;
 import com.cretas.aims.service.OssService;
+import com.cretas.aims.service.UserModuleAccessService;
 import com.cretas.aims.service.attachment.SopAttachmentRollout;
 import com.cretas.aims.service.attachment.impl.AttachmentServiceImpl;
+import com.cretas.aims.service.config.FactoryConfigService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -130,6 +132,8 @@ class AttachmentSopSpringTest {
     @MockBean OssService ossService;
     @MockBean OssConfig ossConfig;
     @MockBean OSS ossClient;
+    @MockBean FactoryConfigService factoryConfigService;
+    @MockBean UserModuleAccessService userModuleAccessService;
     @MockBean FactorySecrecyConfig secrecy;
     @SpyBean ProcessSecretAuditRecorder secretAudit;
     @SpyBean PermissionServiceImpl permissionService;
@@ -175,6 +179,8 @@ class AttachmentSopSpringTest {
                 .build();
         when(ossConfig.getMediaUrlPrefix()).thenReturn(MEDIA);
         when(ossConfig.getMediaBucket()).thenReturn("sop-test-bucket");
+        when(factoryConfigService.isModuleEnabled(anyString(), eq("equipment"))).thenReturn(true);
+        when(userModuleAccessService.canAccessModule(any(User.class), eq("equipment"))).thenReturn(true);
         when(ossService.generatePresignedUrl(anyString(), anyInt()))
                 .thenAnswer(inv -> inv.getArgument(0) + "?Signature=test");
         when(ossClient.generatePresignedUrl(any(GeneratePresignedUrlRequest.class)))
@@ -372,6 +378,113 @@ class AttachmentSopSpringTest {
                 .isEqualTo(1);
         verify(ossClient, never()).putObject(anyString(), anyString(), any(java.io.InputStream.class),
                 any(ObjectMetadata.class));
+    }
+
+    @Test
+    @DisplayName("设备 SOP 动态入口: 工厂模块关闭时列表/详情/下载/签名/注册全部拒绝且不再触发 OSS")
+    void equipmentModuleDisabledClosesEveryDynamicAttachmentEntryPoint() throws Exception {
+        long admin = user(F1, "equipment_admin");
+        String entityId = String.valueOf(equipmentF1);
+        String attachmentId = registerOk(F1, admin, EntityType.EQUIPMENT, entityId, "before-disable.pdf");
+        long before = liveSops(F1);
+        org.mockito.Mockito.clearInvocations(attachmentService, ossService, ossClient);
+        when(factoryConfigService.isModuleEnabled(F1, "equipment")).thenReturn(false);
+
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments")
+                .param("entityType", "EQUIPMENT").param("entityId", entityId), admin)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments/" + attachmentId), admin)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments/" + attachmentId + "/download-url"), admin)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(post("/api/mobile/" + F1 + "/attachments/upload-url")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("fileName", "blocked.pdf", "fileType", "application/pdf",
+                        "fileSize", 10, "entityType", "EQUIPMENT", "entityId", entityId))), admin)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(register(F1, admin, registerBody(EntityType.EQUIPMENT, entityId,
+                sopUrl(F1, EntityType.EQUIPMENT, entityId, "blocked.pdf"), "application/pdf", 10)).getResponse().getStatus()).isEqualTo(403);
+
+        assertThat(liveSops(F1)).isEqualTo(before);
+        verify(attachmentService, never()).registerAsActor(anyString(), any(), any());
+        verify(ossClient, never()).getObjectAcl(anyString(), anyString());
+        verify(ossClient, never()).getObjectMetadata(anyString(), anyString());
+        verify(ossService, never()).generatePresignedUrl(anyString(), anyInt());
+        verify(ossClient, never()).generatePresignedUrl(any(GeneratePresignedUrlRequest.class));
+    }
+
+    @Test
+    @DisplayName("设备 SOP 动态入口: 账号显式模块拒绝不能被设备角色权限绕过")
+    void equipmentAccountModuleDenyClosesDynamicAttachmentAccess() throws Exception {
+        long admin = user(F1, "equipment_admin");
+        String entityId = String.valueOf(equipmentF1);
+        String attachmentId = registerOk(F1, admin, EntityType.EQUIPMENT, entityId, "account-deny.pdf");
+        long before = liveSops(F1);
+        org.mockito.Mockito.clearInvocations(attachmentService, ossService, ossClient);
+        when(userModuleAccessService.canAccessModule(any(User.class), eq("equipment"))).thenReturn(false);
+
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments")
+                .param("entityType", "EQUIPMENT").param("entityId", entityId), admin)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments/" + attachmentId), admin)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments/" + attachmentId + "/download-url"), admin)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(post("/api/mobile/" + F1 + "/attachments/upload-url")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(Map.of("fileName", "blocked.pdf", "fileType", "application/pdf",
+                        "fileSize", 10, "entityType", "EQUIPMENT", "entityId", entityId))), admin)
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(register(F1, admin, registerBody(EntityType.EQUIPMENT, entityId,
+                sopUrl(F1, EntityType.EQUIPMENT, entityId, "blocked.pdf"), "application/pdf", 10))
+                .getResponse().getStatus()).isEqualTo(403);
+        assertThat(liveSops(F1)).isEqualTo(before);
+        verify(attachmentService, never()).registerAsActor(anyString(), any(), any());
+        verify(ossClient, never()).getObjectAcl(anyString(), anyString());
+        verify(ossClient, never()).getObjectMetadata(anyString(), anyString());
+        verify(ossService, never()).generatePresignedUrl(anyString(), anyInt());
+        verify(ossClient, never()).generatePresignedUrl(any(GeneratePresignedUrlRequest.class));
+    }
+
+    @Test
+    @DisplayName("设备 SOP 动态入口: 已刷新且有效的平台管理员在模块开启时可写，关闭后同一入口拒绝")
+    void activePlatformEquipmentAccessStillRequiresFactoryModule() throws Exception {
+        long platform = platformAdmin();
+        String entityId = String.valueOf(equipmentF1);
+        String id = registerOk(F1, platform, EntityType.EQUIPMENT, entityId, "platform-equipment.pdf");
+        assertThat(count("id = ? and uploaded_actor_type = 'PLATFORM_ADMIN' and uploaded_actor_id = ?", id, platform))
+                .isEqualTo(1);
+
+        when(factoryConfigService.isModuleEnabled(F1, "equipment")).thenReturn(false);
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments")
+                .param("entityType", "EQUIPMENT").param("entityId", entityId), platform)
+                .getResponse().getStatus()).isEqualTo(403);
+    }
+
+    @Test
+    @DisplayName("设备 SOP 动态入口: 模块/账号查询异常与停用账号均 fail-closed，未触发签名")
+    void equipmentGateLookupFailuresAndInactiveActorAreClosed() throws Exception {
+        long inactive = user(F1, "equipment_admin");
+        jdbc.update("update users set is_active=false where id = ?", inactive);
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments")
+                .param("entityType", "EQUIPMENT").param("entityId", String.valueOf(equipmentF1)), inactive)
+                .getResponse().getStatus()).isEqualTo(401);
+
+        long admin = user(F1, "equipment_admin");
+        when(factoryConfigService.isModuleEnabled(F1, "equipment"))
+                .thenThrow(new IllegalStateException("module lookup unavailable"));
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments")
+                .param("entityType", "EQUIPMENT").param("entityId", String.valueOf(equipmentF1)), admin)
+                .getResponse().getStatus()).isEqualTo(503);
+
+        org.mockito.Mockito.doReturn(true).when(factoryConfigService).isModuleEnabled(F1, "equipment");
+        when(userModuleAccessService.canAccessModule(any(User.class), eq("equipment")))
+                .thenThrow(new IllegalStateException("account module lookup unavailable"));
+        assertThat(send(get("/api/mobile/" + F1 + "/attachments")
+                .param("entityType", "EQUIPMENT").param("entityId", String.valueOf(equipmentF1)), admin)
+                .getResponse().getStatus()).isEqualTo(503);
+        verify(ossService, never()).generatePresignedUrl(anyString(), anyInt());
+        verify(ossClient, never()).generatePresignedUrl(any(GeneratePresignedUrlRequest.class));
     }
 
     @Test
