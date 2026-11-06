@@ -151,6 +151,23 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Modifying
     @Query("UPDATE User u SET u.lastLogin = :lastLogin WHERE u.id = :userId")
     void updateLastLogin(@Param("userId") Long userId, @Param("lastLogin") LocalDateTime lastLogin);
+
+    /**
+     * Confirmation-only user deactivation.  The role/position predicate is
+     * deliberately repeated in the UPDATE: a read-then-save check is not
+     * sufficient when HR changes the target's role concurrently.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE User u SET u.isActive = false, u.updatedAt = :updatedAt " +
+           "WHERE u.id = :userId AND u.factoryId = :factoryId " +
+           "AND u.deletedAt IS NULL AND u.isActive = true " +
+                "AND COALESCE(LOWER(TRIM(u.roleCode)), '') NOT IN " +
+           "('factory_super_admin', 'platform_admin', '超级管理员', '平台管理员', '平台超级管理员') " +
+                "AND COALESCE(LOWER(TRIM(u.position)), '') NOT IN " +
+           "('factory_super_admin', 'platform_admin', '超级管理员', '平台管理员', '平台超级管理员')")
+    int deactivateIfEligible(@Param("factoryId") String factoryId,
+                             @Param("userId") Long userId,
+                             @Param("updatedAt") LocalDateTime updatedAt);
     /**
      * 统计工厂用户数量
      */

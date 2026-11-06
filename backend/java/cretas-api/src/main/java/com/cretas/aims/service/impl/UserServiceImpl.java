@@ -445,27 +445,50 @@ public class UserServiceImpl implements UserService {
     @Override
     @Transactional
     public void deactivateUser(String factoryId, Long userId) {
+        LocalDateTime now = LocalDateTime.now();
+        int changed = userRepository.deactivateIfEligible(factoryId, userId, now);
+        if (changed == 1) {
+            log.info("停用用户成功: factoryId={}, userId={}", factoryId, userId);
+            return;
+        }
+
+        // The conditional update is authoritative.  Re-read only to produce
+        // a safe, distinguishable outcome; never save this stale entity.
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new EntityNotFoundException("User", String.valueOf(userId)));
-
-        // 验证工厂ID
-        if (!user.getFactoryId().equals(factoryId)) {
+        if (!factoryId.equals(user.getFactoryId())) {
             throw new BusinessException(403, "无权操作该用户")
                     .withHint("当前用户不属于该工厂, 无法操作");
         }
-
-        // 不允许停用超级管理员（通过职位判断）
-        if (user.getPosition() != null &&
-            (user.getPosition().equals("factory_super_admin") ||
-             user.getPosition().equals("超级管理员"))) {
-            throw new BusinessException(403, "不能停用超级管理员")
-                    .withHint("超级管理员账号受系统保护, 无法停用");
+        if (user.getDeletedAt() != null) {
+            throw new EntityNotFoundException("User", String.valueOf(userId));
         }
+        if (isProtectedDeactivationTarget(user)) {
+            throw new BusinessException(403, "不能停用受保护的管理员账号")
+                    .withHint("工厂超级管理员和平台管理员账号受系统保护, 无法停用");
+        }
+        if (Boolean.FALSE.equals(user.getIsActive())) {
+            // Same-factory, unprotected, already-disabled targets are the one
+            // intentional idempotent success case.
+            log.info("停用用户幂等成功: factoryId={}, userId={}", factoryId, userId);
+            return;
+        }
+        throw new BusinessException(409, "用户状态在确认期间发生变化, 未执行停用")
+                .withHint("请重新预览并确认后再试");
+    }
 
-        user.setIsActive(false);
-        userRepository.save(user);
+    private boolean isProtectedDeactivationTarget(User user) {
+        return isProtectedRole(user.getRoleCode()) || isProtectedRole(user.getPosition());
+    }
 
-        log.info("停用用户成功: userId={}", userId);
+    private boolean isProtectedRole(String value) {
+        if (value == null) {
+            return false;
+        }
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "factory_super_admin", "platform_admin", "超级管理员", "平台管理员", "平台超级管理员" -> true;
+            default -> false;
+        };
     }
 
     @Override
