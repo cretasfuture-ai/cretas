@@ -51,7 +51,7 @@ const countdown = createPresentationCountdown({
   },
   onError: error => { stopPlayback(); addLog(error instanceof Error ? error.message : '讲解播放失败', 'error') },
 })
-const removeReadTracking = request.interceptors ? installPresentationReadTracking(request, {
+const removeReadTracking: () => void = request.interceptors ? installPresentationReadTracking(request, {
   isActive: () => active.value && sandboxSession.value?.status === 'READY',
   onStart: () => { pendingReads.value++; lastNetworkActivity = Date.now() },
   onFailure: handleReadFailure,
@@ -59,7 +59,7 @@ const removeReadTracking = request.interceptors ? installPresentationReadTrackin
     pendingReads.value--; lastNetworkActivity = Date.now()
     if (failed) handleReadFailure()
   },
-}) : () => undefined
+}) : () => {}
 const DEMO_SKU_ID = '2a6f37c4-b0e1-55ae-b31a-ddc6815829cd'
 const SESSION_KEY = SANDBOX_FLOW_STORAGE_KEY
 // The authenticated route owns the role restriction; the page checks the tenant.

@@ -47,7 +47,7 @@ export function presentationRoute(step: string, entities: Record<string, Record<
 
 const originalAdapters = new WeakMap<AxiosAdapter, AxiosAdapter>()
 // Track raw transport completion: the shared response interceptor unwraps response.config away.
-export function installPresentationReadTracking(client: AxiosInstance, options: { isActive: () => boolean; onStart: () => void; onFinish: (failed: boolean) => void; onFailure?: () => void }) {
+export function installPresentationReadTracking(client: Pick<AxiosInstance, 'interceptors' | 'defaults'>, options: { isActive: () => boolean; onStart: () => void; onFinish: (failed: boolean) => void; onFailure?: () => void }) {
   const interceptor = client.interceptors.request.use(config => {
     const url = config.url || ''
     if (!options.isActive() || (config.method || 'get').toLowerCase() !== 'get' || !/\/F006\//.test(url) || (url.includes('/demo-sandbox/') && !url.includes('/proxy/'))) return config
