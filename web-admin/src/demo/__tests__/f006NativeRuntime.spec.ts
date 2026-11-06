@@ -104,6 +104,14 @@ describe('native presentation requires an explicit next-module click',()=>{
     expect(router.currentRoute.value.path).toBe('/procurement/orders')
   })
 
+  it('allows the production input availability query outside commit without allowing a document write',async()=>{
+    fixture.prepare.mockImplementation(async()=>{await request.post('/F006/production-plans/plan-id/process-sheet/input-availability',[])})
+    const run=startNativeDemo();await flushPromises();await vi.advanceTimersByTimeAsync(10000);await run
+    expect(nativePlayback.error).toBe('');expect(nativePlayback.awaitingNext).toBe(true)
+    expect(sessionStorage.getItem('cretas:f006:native-demo-unverified:v1')).toBeNull()
+    await expect(request.post('/F006/production-plans/plan-id/process-sheet/rows',{})).rejects.toThrow('当前不在原生演示提交阶段')
+  })
+
   it('refuses cleanup while an atomic native submission is in flight',async()=>{
     nativePlayback.atomicRequests=1
     await expect(endNativeDemo()).rejects.toThrow('原子提交')

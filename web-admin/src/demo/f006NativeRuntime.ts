@@ -274,7 +274,7 @@ export function installNativeDemoRuntime(value: Router): () => void {
       // interceptor has rewritten the URL and applied the sandbox fence.
       const path=canonicalPath(actual);if(!path)return adapter(actual)
       // These existing endpoints are page summaries/telemetry, not document submission.
-      if(method==='POST'&&(/^\/list-summary\/[A-Za-z]+$/.test(path)||path==='/activity-events'||path==='/attachments/batch-3chip-counts'))return adapter(actual)
+      if(method==='POST'&&(/^\/list-summary\/[A-Za-z]+$/.test(path)||path==='/activity-events'||path==='/attachments/batch-3chip-counts'||/^\/production-plans\/[^/]+\/process-sheet\/input-availability$/.test(path)))return adapter(actual)
       if(method==='GET'){pendingReads++;lastRead=Date.now()}else {
         scope()
         if(!committing) { pauseNativeDemo('请通过顶部演示控制提交当前表单'); throw new Error('当前不在原生演示提交阶段，已阻止重复或提前操作') }
