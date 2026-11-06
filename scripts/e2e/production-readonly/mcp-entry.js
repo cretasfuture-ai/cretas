@@ -3921,7 +3921,9 @@ async function inspectDenied(page, _body, ctx) {
   requireCondition(ctx.loginEvidence.factoryId === 'F006'
     && !['factory_super_admin', 'permission_admin', 'platform_admin'].includes(ctx.loginEvidence.role),
   'Denied scenario requires a real non-comparison factory role');
+  await page.goto(`${ctx.baseUrl}${route}`, {waitUntil: 'domcontentloaded', timeout: 45000});
   await page.waitForURL(url => url.pathname === '/403', {timeout: 15000});
+  await page.getByRole('heading', {name: '访问被拒绝', exact: true}).waitFor({state: 'visible'});
   requireCondition(await page.locator('.comparison-form').count() === 0, 'Denied role sees comparison input');
   requireCondition(ctx.mutationGuard.snapshot().readonlyPostRequests
     .filter(request => request.classificationId === 'proposal-comparison-evaluate').length === 0,
@@ -3934,7 +3936,7 @@ module.exports = {id, defaultEnabled: false, assertCalculation, assertCoordinate
   run: ctx => runReadOnlyPageScenario(ctx, {id, path: route, screenshot: false, inspect}),
   denied: {id: 'proposal-comparison-denied-readonly', defaultEnabled: false,
     run: ctx => runReadOnlyPageScenario(ctx, {id: 'proposal-comparison-denied-readonly',
-      path: route, screenshot: true, inspect: inspectDenied})},
+      path: '/dashboard', screenshot: true, inspect: inspectDenied})},
 };
 
 },
