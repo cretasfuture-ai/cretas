@@ -149,7 +149,7 @@
 - `SEMANTIC-PREVIEW-REVISION-20261106`：PreviewTokenService/Impl、IntentPreviewTokenRepository、PreviewRevisionInvalidationContractTest/StartupGuardTest；Owner /root/preview_revision；root统一Maven。
 - `SEMANTIC-CONVERSATION-STATE-20261106`：精确scope见archive/2026-11-06-semantic-conversation-scope.json；Owner /root/conversation_state；含短事务/actor锁和相关fixture更新，不写其他文件/ACTIVE/迁移/target；JPA必验，root统一Maven。
 - `SEMANTIC-FOLLOWUP-SAFETY-20261106`：execution/FollowUpResolver.java、FollowUpResolverTest.java、FollowUpSubmittedWriteSafetyContractTest.java；Owner /root/followup_safety；不改其他文件/ACTIVE/target，root统一验证。
-- `SEMANTIC-SALES-20261105`：Java execution/识别DTO/会话、crm查询Tool、material/{MaterialBatchQueryTool,MaterialExpiredQueryTool}；SalesServiceImpl仅列表排序；对应契约测试；Python ai/{api,dto,orchestrator,registry,matcher/decision}；Web AIQuery/intent-chat；tests/semantic-read/证据。Owner同任务行；不改Entity/Repo；禁训练/合并部署。
+- `SEMANTIC-SALES-20261105`：scope见archive/2026-11-06-semantic-read-scope.json；Owner同任务行；保留既有Java/Python/Web语义范围，补产品创建PG消费fixture；禁新生产Entity/Repo改动、训练、PR合并及部署。
 
 - `SEMANTIC-PREVIEW-FIXTURES-20261106`：archive/2026-11-06-semantic-preview-fixtures-20261106-scope.json；Owner /root/preview_revision。
 
