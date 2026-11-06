@@ -232,7 +232,10 @@ class Orchestrator:
         t0 = time.time()
         timing: Dict[str, int] = {"decisionLayer": 1, "historyTurns": len(history or [])}
         standalone = _standalone_context(task_context, history)
-        has_dialogue_context = not standalone or bool(history)
+        # Candidate reranking is not an exact/direct route. Legacy callers without
+        # a snapshot keep their existing local candidate path; an explicitly
+        # UNKNOWN/EXPIRED/PRESENT snapshot still requires contextual shortlisting.
+        has_dialogue_context = bool(history) or task_context is not None and not standalone
         history = _with_task_context(history, task_context)
         by_code = {str(r.get("intent_code")): r for r in visible_intents}
         if not by_code:

@@ -14,9 +14,10 @@ for channel in ['normal','sse']:
    row=next(x for x in trace if x['case_id']==plan['id'] and x['turn']==i and x['channel']==channel)
    response=row.get('result') or {};data=response.get('resultData') or {};expected=gold['parameters'];domain=gold.get('domain',plan['domain'])
    expiry_scope=gold.get('basis')=='EXPIRY_DATE'
-   values=data.get('batches' if expiry_scope else 'orders' if domain=='orders' else 'content');values=values if isinstance(values,list) else None
+   actual_expiry=(data.get('queryConditions') or {}).get('basis')=='EXPIRY_DATE'
+   values=data.get('batches' if actual_expiry else 'orders' if domain=='orders' else 'content');values=values if isinstance(values,list) else None
    ids=[r.get('id') for r in values] if values is not None else []
-   total=data.get('total' if domain=='orders' or expiry_scope else 'totalElements');page=data.get('page' if domain=='orders' or expiry_scope else 'currentPage');size=data.get('size')
+   total=data.get('total' if domain=='orders' or actual_expiry else 'totalElements');page=data.get('page' if domain=='orders' or actual_expiry else 'currentPage');size=data.get('size')
    status=(data.get('appliedStatusFilter') or {}).get('code') or (data.get('queryConditions') or {}).get('status')
    requested=expected.get('status')
    if expiry_scope:
