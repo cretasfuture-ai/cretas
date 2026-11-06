@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {classifyMutation} = require('../core/mutation-guard');
 const {proposalComparisonBodyMatches} = require('../config/readonly-post-whitelist');
-const {assertCalculation} = require('../scenarios/proposal-comparison-readonly');
+const {assertCalculation, assertCoordinatedActor} = require('../scenarios/proposal-comparison-readonly');
 
 function request() {
   const common = {comparisonBasisId: 'QA', currency: 'CNY', costUnit: '每批', resourceUnit: 'PERSON_HOUR'};
@@ -13,6 +13,20 @@ function request() {
       completionTime: '2026-11-08T00:00:00Z', requiredResource: 8}))};
 }
 const endpoint = 'https://admin.example/api/mobile/F006/proposal-comparisons/evaluate';
+
+test('accepts the actual flat auth/me UserDTO with exact active coordinated actor', () => {
+  assert.deepEqual(assertCoordinatedActor({factoryId:'F006',id:1309,username:'f006_admin',
+    roleCode:'factory_super_admin',isActive:true},'f006_admin'),
+  {factoryId:'F006',actorId:1309,role:'factory_super_admin',active:true});
+});
+
+for (const patch of [{factoryId:'F001'},{id:1310},{username:'other'},{roleCode:'platform_admin'},
+  {isActive:false},{isActive:'true'}]) {
+  test('rejects independently altered flat identity: '+JSON.stringify(patch), () => {
+    assert.throws(() => assertCoordinatedActor({factoryId:'F006',id:1309,username:'f006_admin',
+      roleCode:'factory_super_admin',isActive:true,...patch},'f006_admin'));
+  });
+}
 
 test('exact bounded pure calculation remains readonly, including absent and mixed supplied facts', () => {
   const body = request();

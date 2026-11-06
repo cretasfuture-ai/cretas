@@ -46,14 +46,20 @@ async function scopedRead(page, suffix) {
   }, suffix);
 }
 
+function assertCoordinatedActor(me, expectedUsername) {
+  const role = typeof me?.roleCode === 'string' ? me.roleCode.toLowerCase() : '';
+  requireCondition(me && me.factoryId === 'F006' && me.id === 1309 && me.isActive === true
+    && me.username === expectedUsername && expectedUsername === 'f006_admin'
+    && ['factory_super_admin', 'permission_admin'].includes(role),
+  'Coordinated flat auth/me UserDTO identity changed');
+  return {factoryId: me.factoryId, actorId: me.id, role, active: true};
+}
+
 async function inspect(page, _body, ctx) {
   requireCondition(ctx.expectedFactoryId === 'F006' && ctx.loginEvidence.factoryId === 'F006',
     'Synthetic UI acceptance requires the coordinated F006 factory');
   const me = await scopedRead(page, '/api/mobile/auth/me');
-  requireCondition(me?.factoryUser?.factoryId === 'F006'
-    && me.factoryUser.id === 1309
-    && ['factory_super_admin', 'permission_admin'].includes(me.factoryUser.roleCode),
-  'Coordinated actor identity changed');
+  assertCoordinatedActor(me, ctx.expectedUsername);
   requireCondition(await scopedRead(page, '/api/mobile/F006/demo-sandbox/active-session') === null,
     'Shared sandbox is active; do not run comparison');
   await page.getByRole('heading', {name: '多方案比较', exact: true}).waitFor({state: 'visible'});
@@ -122,7 +128,7 @@ async function inspectDenied(page, _body, ctx) {
     assessment: {result: 'PASS', rootCauseClass: 'none'}};
 }
 
-module.exports = {id, defaultEnabled: false, assertCalculation, inspect,
+module.exports = {id, defaultEnabled: false, assertCalculation, assertCoordinatedActor, inspect,
   run: ctx => runReadOnlyPageScenario(ctx, {id, path: route, screenshot: false, inspect}),
   denied: {id: 'proposal-comparison-denied-readonly', defaultEnabled: false,
     run: ctx => runReadOnlyPageScenario(ctx, {id: 'proposal-comparison-denied-readonly',
