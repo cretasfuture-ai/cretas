@@ -8,6 +8,7 @@ import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.enums.*;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
+import com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.repository.ai.*;
 import com.cretas.aims.repository.bom.*;
@@ -19,13 +20,16 @@ import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.impl.PermissionServiceImpl;
 import com.cretas.aims.service.impl.WorkProcessServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -36,6 +40,11 @@ class WorkProcessPreviewApplyContractTest {
     final WorkProcessRepository repository = mock(WorkProcessRepository.class);
     final DashScopeClient llm = mock(DashScopeClient.class);
     final PreviewTokenService previewTokens = mock(PreviewTokenService.class);
+    final ToolExecutionAuditEventRepository auditRepository = mock(ToolExecutionAuditEventRepository.class);
+    final ToolExecutionIdempotencyRepository idempotencyRepository = mock(ToolExecutionIdempotencyRepository.class);
+    final AtomicReference<ToolExecutionIdempotencyRecord> ledgerRecord = new AtomicReference<>();
+    final AtomicReference<PreviewTokenService.BoundTokenRequest> issuedRequest = new AtomicReference<>();
+    final AtomicReference<String> issuedDigest = new AtomicReference<>();
     CanvasAIController controller;
 
     @BeforeEach void setUp() {
@@ -62,12 +71,31 @@ class WorkProcessPreviewApplyContractTest {
         var permissions = new PermissionServiceImpl();
         ReflectionTestUtils.setField(permissions, "platformRepo", mock(PlatformRolePermissionRepository.class));
         ReflectionTestUtils.setField(permissions, "factoryConfigRepo", mock(FactoryModuleConfigRepository.class));
-        var audit = mock(ToolExecutionAuditEventRepository.class);
-        when(audit.completeStarted(anyString(), any(), any(), any(), anyString(), any())).thenReturn(1);
+        when(auditRepository.completeStarted(anyString(), any(), any(), any(), anyString(), any())).thenReturn(1);
+        when(auditRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(auditRepository.bindSecurityEvidence(anyString(), anyString(), anyString(), anyString(), any())).thenReturn(1);
+        when(idempotencyRepository.findByTenantIdAndPrincipalTypeAndPrincipalIdAndToolNameAndDescriptorVersionAndIdempotencyKeyHash(
+                anyString(), any(), anyString(), anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> Optional.ofNullable(ledgerRecord.get()));
+        when(idempotencyRepository.saveAndFlush(any())).thenAnswer(invocation -> {
+            ToolExecutionIdempotencyRecord record = invocation.getArgument(0);
+            if (record.getId() == null) ReflectionTestUtils.setField(record, "id", 1L);
+            ledgerRecord.set(record);
+            return record;
+        });
+        when(idempotencyRepository.completeFromState(anyString(), any(), any(), any(), anyString(), any()))
+                .thenAnswer(invocation -> {
+                    ToolExecutionIdempotencyRecord record = ledgerRecord.get();
+                    if (record != null) {
+                        ReflectionTestUtils.setField(record, "state", invocation.getArgument(2));
+                        ReflectionTestUtils.setField(record, "outcomeStatus", invocation.getArgument(3));
+                    }
+                    return 1;
+                });
         var gateway = new DefaultToolExecutionGateway(new ToolPrincipalPolicy(users, factories, permissions),
                 new ToolRuntimeRegistry(registry, mock(FactoryToolConfigRepository.class)),
-                new ToolConfirmationLease(mock(PreviewTokenService.class), mapper),
-                new ToolExecutionLedgerService(audit, mock(ToolExecutionIdempotencyRepository.class)), mapper);
+                new ToolConfirmationLease(previewTokens, mapper),
+                new ToolExecutionLedgerService(auditRepository, idempotencyRepository), mapper);
         var mobile = mock(MobileService.class);
         when(mobile.getUserFromToken("local-token")).thenReturn(UserDTO.builder().id(42L)
                 .factoryId("F006").factoryType("FACTORY").roleCode(FactoryUserRole.factory_super_admin).build());
@@ -76,33 +104,52 @@ class WorkProcessPreviewApplyContractTest {
         when(previewTokens.resolveClaim(anyString(), anyString(), anyBoolean(), anyString())).thenReturn(true);
         when(previewTokens.createBoundToken(any())).thenAnswer(invocation -> {
             PreviewTokenService.BoundTokenRequest request = invocation.getArgument(0);
+            Map<String, Object> frozenParameters = deepCopy(request.parameters());
+            Map<String, Object> frozenCurrentValues = deepCopy(request.currentValues());
+            Map<String, Object> frozenNewValues = deepCopy(request.newValues());
+            PreviewTokenService.BoundTokenRequest frozen = new PreviewTokenService.BoundTokenRequest(
+                    request.factoryId(), request.userId(), request.username(), request.intentCode(),
+                    request.intentName(), request.toolName(), request.descriptorVersion(), request.executionMode(),
+                    request.entityType(), request.entityId(), request.operation(), frozenParameters,
+                    frozenCurrentValues, frozenNewValues, request.expiresInSeconds());
+            String digest = ToolCommandDigest.commandDigest(
+                    frozen.factoryId(), frozen.userId(), frozen.toolName(), frozen.descriptorVersion(),
+                    frozen.executionMode(), mapper.valueToTree(frozen.parameters()));
+            issuedRequest.set(frozen);
+            issuedDigest.set(digest);
             return IntentPreviewToken.builder()
                     .token("canvas-proof")
-                    .factoryId(request.factoryId()).tenantId(request.factoryId()).userId(request.userId())
-                    .toolName(request.toolName()).descriptorVersion(request.descriptorVersion())
-                    .commandDigest("canvas-command-digest").parametersHash("canvas-parameters-hash")
+                    .factoryId(frozen.factoryId()).tenantId(frozen.factoryId()).userId(frozen.userId())
+                    .toolName(frozen.toolName()).descriptorVersion(frozen.descriptorVersion())
+                    .commandDigest(digest)
+                    .parametersHash(ToolCommandDigest.parametersHash(mapper.valueToTree(frozen.parameters())))
+                    .expiresAt(LocalDateTime.now().plusMinutes(5))
+                    .status(IntentPreviewToken.TokenStatus.PENDING)
                     .build();
         });
+        when(previewTokens.readBoundSnapshot(eq("canvas-proof"), eq("F006"), eq(42L)))
+                .thenAnswer(invocation -> Optional.of(boundSnapshot(issuedRequest.get(), issuedDigest.get())));
         when(previewTokens.claimToken(anyString(), eq("F006"), eq(42L), anyString()))
                 .thenAnswer(invocation -> {
-                    PreviewTokenService.BoundTokenRequest request =
-                            new PreviewTokenService.BoundTokenRequest(
-                                    "F006", 42L, null, "test", "test", "canvas_work_process_catalog", "1.1.0",
-                                    ToolExecutionMode.EXECUTE, "CANVAS_DIFF", "test", "UPDATE", paramsForClaim,
-                                    Map.of(), paramsForClaim, 300);
+                    String expectedDigest = invocation.getArgument(3);
+                    PreviewTokenService.BoundTokenRequest request = issuedRequest.get();
+                    if (request == null || !Objects.equals(expectedDigest, issuedDigest.get())) {
+                        return PreviewTokenService.ClaimResult.failure("issued proof mismatch");
+                    }
                     IntentPreviewToken claimed = IntentPreviewToken.builder()
-                            .token("canvas-proof").factoryId("F006").tenantId("F006").userId(42L)
-                    .intentCode("CANVAS_DIFF_123e4567-e89b-12d3-a456-426614174000")
-                    .entityType("CANVAS_DIFF").entityId("canvas_work_process_catalog").operation("UPDATE")
-                    .executionMode(ToolExecutionMode.EXECUTE)
+                            .token("canvas-proof").factoryId(request.factoryId()).tenantId(request.factoryId()).userId(request.userId())
+                            .intentCode(request.intentCode()).entityType(request.entityType())
+                            .entityId(request.entityId()).operation(request.operation())
+                            .executionMode(request.executionMode())
                             .toolName(request.toolName()).descriptorVersion(request.descriptorVersion())
-                            .commandDigest("canvas-command-digest").parametersHash("canvas-parameters-hash")
+                            .commandDigest(issuedDigest.get())
+                            .parametersHash(ToolCommandDigest.parametersHash(mapper.valueToTree(request.parameters())))
+                            .expiresAt(LocalDateTime.now().plusMinutes(5))
+                            .status(IntentPreviewToken.TokenStatus.EXECUTING)
                             .build();
-                    return PreviewTokenService.ClaimResult.success(claimed, "canvas-claim", request.parameters());
+                    return PreviewTokenService.ClaimResult.success(claimed, "canvas-claim", deepCopy(request.parameters()));
                 });
     }
-
-    Map<String, Object> paramsForClaim = Map.of();
 
     CanvasAIController.AIResponse preview(String extraction, String sentence) {
         when(llm.chatLowTemp(anyString(), anyString())).thenReturn(extraction);
@@ -110,7 +157,6 @@ class WorkProcessPreviewApplyContractTest {
         request.setModuleCode("work_process_catalog"); request.setMode("plan"); request.setMessage(sentence);
         var response = controller.chat("F006", "Bearer local-token", request).getData();
         assertEquals(1, response.getDiffs().size(), response.getReply());
-        paramsForClaim = params(response);
         verify(repository, never()).save(any());
         return response;
     }
@@ -121,11 +167,41 @@ class WorkProcessPreviewApplyContractTest {
     }
 
     WorkProcess apply(CanvasAIController.AIResponse preview) {
-        var receipt = controller.applyDiffsWithProtocol("F006", "Bearer local-token", "3", preview.getDiffs());
+        return apply(preview, null);
+    }
+
+    WorkProcess apply(CanvasAIController.AIResponse preview, Map<String, Object> submittedParams) {
+        List<Map<String, Object>> diffs = preview.getDiffs();
+        if (submittedParams != null) {
+            Map<String, Object> diff = new LinkedHashMap<>(diffs.get(0));
+            diff.put("params", submittedParams);
+            diffs = List.of(diff);
+        }
+        var receipt = controller.applyDiffsWithProtocol("F006", "Bearer local-token", "3", diffs);
         assertTrue(receipt.getSuccess(), receipt.getMessage());
         assertEquals(1, receipt.getData().applied());
         var saved = ArgumentCaptor.forClass(WorkProcess.class);
-        verify(repository).save(saved.capture()); return saved.getValue();
+        verify(repository).save(saved.capture());
+        verify(previewTokens, times(1)).claimToken(eq("canvas-proof"), eq("F006"), eq(42L), anyString());
+        verify(previewTokens, times(1)).resolveClaim(eq("canvas-proof"), eq("canvas-claim"), eq(true), anyString());
+        return saved.getValue();
+    }
+
+    private PreviewTokenService.BoundTokenSnapshot boundSnapshot(
+            PreviewTokenService.BoundTokenRequest request, String digest) {
+        return new PreviewTokenService.BoundTokenSnapshot(
+                request.intentCode(), request.entityType(), request.entityId(), request.operation(),
+                request.toolName(), request.descriptorVersion(), request.executionMode(), digest,
+                LocalDateTime.now().plusMinutes(5),
+                IntentPreviewToken.TokenStatus.PENDING);
+    }
+
+    private Map<String, Object> deepCopy(Map<String, Object> source) {
+        try {
+            return mapper.readValue(mapper.writeValueAsString(source), new TypeReference<>() {});
+        } catch (Exception exception) {
+            throw new AssertionError("fixture JSON snapshot failed", exception);
+        }
     }
 
     @Test void allDeclaredFieldsAreVisibleAndPersistFromTheExactPreview() {
@@ -145,7 +221,11 @@ class WorkProcessPreviewApplyContractTest {
             assertTrue(response.getReply().contains(label), response.getReply());
         assertEquals("1.1.0", assertInstanceOf(Map.class, response.getDiffs().get(0).get("proof"))
                 .get("descriptorVersion"));
-        var saved = apply(response);
+        // Simulate the browser JSON round-trip: an integral rate is sent as JS number 25,
+        // while the issued server snapshot remains the exact frozen preview parameters.
+        Map<String, Object> httpParams = new LinkedHashMap<>(params);
+        httpParams.put("standardHourlyRate", Integer.valueOf(25));
+        var saved = apply(response, httpParams);
         assertEquals(params.get("estimatedMinutes"), saved.getEstimatedMinutes());
         assertEquals(0, new BigDecimal(params.get("standardHourlyRate").toString()).compareTo(saved.getStandardHourlyRate()));
         assertEquals(new BigDecimal(params.get("standardYieldMin").toString()), saved.getStandardYieldMin());

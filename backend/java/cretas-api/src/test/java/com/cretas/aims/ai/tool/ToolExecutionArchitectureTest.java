@@ -59,10 +59,10 @@ class ToolExecutionArchitectureTest {
                 .isEqualTo(new Counts(1, 1, 2));
         ScanResult actual = completeScan.without(SANCTIONED_GATEWAY);
 
-        assertThat(baseline.files()).hasSize(10);
-        assertThat(baseline.totalLines()).isEqualTo(11);
-        assertThat(baseline.totalExpressions()).isEqualTo(11);
-        assertThat(baseline.totalExecute()).isEqualTo(10);
+        assertThat(baseline.files()).hasSize(9);
+        assertThat(baseline.totalLines()).isEqualTo(10);
+        assertThat(baseline.totalExpressions()).isEqualTo(10);
+        assertThat(baseline.totalExecute()).isEqualTo(9);
         assertThat(baseline.totalPreview()).isEqualTo(1);
 
         assertNoGrowth(baseline, actual);

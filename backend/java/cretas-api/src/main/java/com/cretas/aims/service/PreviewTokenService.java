@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 /**
  * 预览令牌服务 - TCC (Try-Confirm-Cancel) 模式
@@ -83,6 +84,13 @@ public interface PreviewTokenService {
      * @return 有效的令牌实体，如果无效或用户不匹配返回 empty
      */
     Optional<IntentPreviewToken> validateTokenForUser(String token, Long userId);
+
+    /**
+     * Reads only the immutable command binding for a token owned by this tenant/user.
+     * Unlike {@link #validateTokenForUser(String, Long)}, this deliberately includes terminal
+     * states so the gateway can classify safe replays without treating them as a new claim.
+     */
+    Optional<BoundTokenSnapshot> readBoundSnapshot(String token, String factoryId, Long userId);
 
     /**
      * 确认令牌并执行操作 (Confirm 阶段)
@@ -181,6 +189,20 @@ public interface PreviewTokenService {
                     ? Collections.emptyMap()
                     : Collections.unmodifiableMap(new LinkedHashMap<>(source));
         }
+    }
+
+    /** Immutable, non-secret token metadata; preview payload and mutable claim state are excluded. */
+    record BoundTokenSnapshot(
+            String intentCode,
+            String entityType,
+            String entityId,
+            String operation,
+            String toolName,
+            String descriptorVersion,
+            ToolExecutionMode executionMode,
+            String commandDigest,
+            LocalDateTime expiresAt,
+            IntentPreviewToken.TokenStatus status) {
     }
 
     @lombok.Data
