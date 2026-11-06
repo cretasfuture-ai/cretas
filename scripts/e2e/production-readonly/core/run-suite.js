@@ -28,6 +28,7 @@ const SCENARIOS = [
   require('../scenarios/scheduling-capabilities-readonly').workers,
   require('../scenarios/proposal-comparison-readonly'),
   require('../scenarios/proposal-comparison-readonly').denied,
+  require('../scenarios/decision-history-review-readonly'),
   require('../scenarios/supply-box-exposure-readonly'),
   require('../scenarios/table-top-scroll-readonly').sales,
   require('../scenarios/table-top-scroll-readonly').purchase,
