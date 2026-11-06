@@ -231,6 +231,9 @@ class ProcessSecretDataLayerContractTest {
 
     /** Map 里拼出来的响应字段 (DTO 扫描看不见): 与配方无关的键。 */
     static final Set<String> NOT_RECIPE_MAP_KEYS = Set.of(
+            // 质量处置 V1 的固定合格率/缺陷率判定阈值与空值动作，不是物料配比或标准出成。
+            "releasePassRateMin", "conditionalPassRateMin", "reworkPassRateMin",
+            "scrapDefectRateMin", "nullPassRateAction",
             // 质量 / 运营 / 系统监控 / 意图识别 / 人事薪资 / 财务指标 / 设备 / 计划进度
             "percent", // 影响分析 Tool 参数: 涨价假设百分比, 不是配方份额
             "availabilityRate", "averagePassRate", "averageUsageHours", "avgMatchRate", "avgStrongSignalRate",
