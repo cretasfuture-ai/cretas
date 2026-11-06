@@ -30,6 +30,8 @@ import { purchaseTaxIncludedUnitPrice } from './purchaseOrderTaxInclusivePricing
 // PurchaseOrderStatus 全部 11 个值), 详情页本身仍显示精确状态、不做归类, 所以不引入
 // 归类相关的常量/函数, 也不改这份 statusMap 自带的 financeReviewedBy 特判逻辑。
 import type { PurchaseOrderStatusValue } from '@/constants/purchaseOrderStatus';
+import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 
 const route = useRoute();
 const router = useRouter();
@@ -368,6 +370,20 @@ async function handleAction(action: string) {
   finally { submitting.value = false; }
 }
 
+useNativeDemoAdapters('procurement-order-detail', [
+  commerceAdapter('purchase-submit', () => canWrite.value, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'POST', path: /\/purchase\/orders\/[^/]+\/submit/ }, async () => {
+      await ui.click('[data-testid="purchase-submit"]', '原生提交采购审批');
+      await ui.click('.el-message-box__btns .el-button--primary', '确认提交采购审批');
+    });
+    await ui.hold('采购提交后');
+    const submitted = entityFromResponse(response);
+    const entity = entityFromResponse(await ui.read(`/purchase/orders/${submitted?.id || state.entities.purchaseOrder?.id || orderId.value}`));
+    if (entity) ui.remember('purchaseOrder', entity);
+    return entity;
+  },async ({ui})=>{await ui.waitFor('[data-testid="purchase-submit"]')}),
+])
+
 function goWarehouseReceive(): void {
   router.push({
     path: '/warehouse/materials',
@@ -520,7 +536,7 @@ async function handleDownloadSupplyOrderPdf() {
             <el-button v-if="canWrite && canDownloadSupplyOrder(order.status)" type="primary" :icon="Download" :loading="pdfDownloading" @click="handleDownloadSupplyOrderPdf()">对外供货单</el-button>
             <template v-if="canWrite">
             <el-button v-if="order.status === 'DRAFT'" :icon="Edit" @click="goEditDraft">编辑草稿</el-button>
-            <el-button v-if="order.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('submit')">提交审批</el-button>
+            <el-button data-testid="purchase-submit" v-if="order.status === 'DRAFT'" type="warning" :loading="submitting" @click="handleAction('submit')">提交审批</el-button>
             <el-button v-if="['DRAFT','SUBMITTED'].includes(order.status)" type="danger" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
             </template>
             <el-button v-if="order.status !== 'DRAFT'" plain @click="goApprovalProgress">查看审批进度 / 前往 OA</el-button>

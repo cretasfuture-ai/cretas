@@ -1,6 +1,7 @@
 package com.cretas.aims.service.inventory.impl;
 
 import com.cretas.aims.controller.workflow.WorkflowInstanceController;
+import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.inventory.PurchaseOrder;
@@ -42,6 +43,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -95,6 +97,9 @@ class F006DemoWorkflowApprovalContractTest {
                 transferService, stocktakeService);
         ReflectionTestUtils.setField(controller, "purchaseOrderRepository", orderRepository);
         ReflectionTestUtils.setField(controller, "oaActionIdempotencyService", oaActionIdempotencyService);
+        // Existing controller negative cases exercise the enabled isolated node;
+        // a separate test proves the production-default false fail-closed gate.
+        ReflectionTestUtils.setField(controller, "demoSandboxNodeEnabled", true);
         lenient().when(workflowEngine.canTransition(any(ApprovalWorkflowInstance.class), any(User.class)))
                 .thenReturn(true);
 
@@ -233,6 +238,71 @@ class F006DemoWorkflowApprovalContractTest {
         markedInstance.setCurrentNodeIds(List.of("node-2"));
         assertControllerCode(new WorkflowInstanceController.WorkflowActionRequest(
                 "APPROVE", null, "id-6", "node-1"), "OA_TASK_NODE_CHANGED");
+        verify(controllerPurchaseService, never()).applyDemoApproveAction(
+                anyString(), anyString(), anyString(), any(), anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    void primaryDefaultRejectsDemoApprovalBeforeAnyWorkflowOrBusinessWrite() {
+        ReflectionTestUtils.setField(controller, "demoSandboxNodeEnabled", false);
+        UserDTO tokenUser = new UserDTO();
+        tokenUser.setId(1309L);
+        when(mobileService.getUserFromToken("demo-token")).thenReturn(tokenUser);
+        when(userRepository.findById(1309L)).thenReturn(Optional.of(controllerUser("F006", "factory_super_admin")));
+
+        assertControllerCode(new WorkflowInstanceController.WorkflowActionRequest(
+                "APPROVE", "演示通过", "disabled-1", "node-1"), "F006_DEMO_SANDBOX_DISABLED");
+
+        verify(workflowEngine, never()).getInstance(anyString(), anyString());
+        verify(controllerPurchaseService, never()).applyDemoApproveAction(
+                anyString(), anyString(), anyString(), any(), anyString(), anyString(), any(), any());
+    }
+
+    @Test
+    void explicitlyEnabledSandboxAllowsOnlyBoundF006AdminThroughController() {
+        ReflectionTestUtils.setField(controller, "demoSandboxNodeEnabled", true);
+        UserDTO tokenUser = new UserDTO();
+        tokenUser.setId(1309L);
+        when(mobileService.getUserFromToken("demo-token")).thenReturn(tokenUser);
+        when(userRepository.findById(1309L)).thenReturn(Optional.of(controllerUser("F006", "factory_super_admin")));
+        when(orderRepository.findByIdAndFactoryId("po-demo", "F006")).thenReturn(Optional.of(order));
+        when(controllerPurchaseService.applyDemoApproveAction(
+                eq("F006"), eq("po-demo"), eq("instance-demo"), eq(1309L),
+                eq("factory_super_admin"), eq("node-1"), eq(HistoryAction.APPROVE), eq("演示通过")))
+                .thenReturn(order);
+        when(workflowEngine.getLatestInstance("F006", "PURCHASE_ORDER", "po-demo"))
+                .thenReturn(Optional.of(copyWithStatus(ApprovalWorkflowInstance.InstanceStatus.APPROVED)));
+        when(oaActionIdempotencyService.execute(any(), any()))
+                .thenAnswer(invocation -> ((Supplier<Map<String, Object>>) invocation.getArgument(1)).get());
+
+        ApiResponse<Map<String, Object>> response = controller.executeDemoAction(
+                "F006", "instance-demo", "Bearer demo-token",
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "演示通过", "enabled-1", "node-1"));
+
+        assertThat(response.getSuccess()).isTrue();
+        verify(controllerPurchaseService).applyDemoApproveAction(
+                "F006", "po-demo", "instance-demo", 1309L, "factory_super_admin",
+                "node-1", HistoryAction.APPROVE, "演示通过");
+    }
+
+    @Test
+    void explicitlyEnabledSandboxRejectsSameRoleDifferentActorBeforeAnyLookup() {
+        ReflectionTestUtils.setField(controller, "demoSandboxNodeEnabled", true);
+        UserDTO tokenUser = new UserDTO();
+        tokenUser.setId(1310L);
+        when(mobileService.getUserFromToken("demo-token")).thenReturn(tokenUser);
+        User otherAdmin = controllerUser("F006", "factory_super_admin");
+        otherAdmin.setId(1310L);
+        otherAdmin.setUsername("f006_other_admin");
+        when(userRepository.findById(1310L)).thenReturn(Optional.of(otherAdmin));
+        order.setCreatedBy(1310L);
+
+        assertControllerCode(new WorkflowInstanceController.WorkflowActionRequest(
+                "APPROVE", "演示通过", "actor-1310", "node-1"), "F006_DEMO_ACTOR_REQUIRED");
+
+        verify(workflowEngine, never()).getInstance(anyString(), anyString());
+        verify(orderRepository, never()).findByIdAndFactoryId(anyString(), anyString());
         verify(controllerPurchaseService, never()).applyDemoApproveAction(
                 anyString(), anyString(), anyString(), any(), anyString(), anyString(), any(), any());
     }

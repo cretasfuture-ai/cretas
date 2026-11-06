@@ -115,6 +115,9 @@ import {
   plannedQuantityRequired,
 } from './productionPlanQuantity';
 import { finishedGoodPlanOptions } from './productionPlanProductOptions';
+import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { nativeDemoState } from '@/demo/f006NativeBridge';
+import { createNativeProductionAdapters } from '@/demo/nativeProductionSteps';
 import { productionPlanType, productionPlanTypeLabel } from './productionPlanType';
 import {
   productionPlanCustomerLabel,
@@ -152,6 +155,27 @@ const canConfirmReceiptWrite = computed(() =>
   || permissionStore.canWrite('scheduling')
 );
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+useNativeDemoAdapters('production-plans-native-demo', createNativeProductionAdapters({
+  canWrite: () => canWrite.value,
+  canConfirmReceiptWrite: () => canConfirmReceiptWrite.value,
+  canViewPrice: () => canViewPrice.value,
+  preparePlan: async ({state,ui}) => {
+    await ui.click('[data-testid="production-plan-open-create"]','打开原生新建计划');
+    await loadSelectableSalesOrders();
+    const soId=String(state.entities.salesOrder?.id||'');
+    await ui.until(()=>selectableSalesOrders.value.some(row=>String(row.id)===soId),'本轮销售需求加载');
+    await ui.fill('来源销售订单',()=>{planForm.value.sourceType='CUSTOMER_ORDER';planForm.value.sourceOrderId=soId;handleSalesOrderSelect(soId)});
+    await ui.until(()=>planForm.value.sourceOrderItemIds.length>0&&hasActiveWorkflow.value&&planForm.value.skipProcessReporting===false&&Boolean(planForm.value.processName),'销售产品与逐工序工艺加载');
+  },
+  openProcessEntry: async ({state,ui}) => {
+    const plan=await ui.read(`/production-plans/${state.entities.productionPlan?.id||''}`);
+    const batch=await ui.read(`/processing/batches/${state.entities.productionBatch?.id||''}`);
+    if(!plan||typeof plan!=='object'||Array.isArray(plan)||!batch||typeof batch!=='object'||Array.isArray(batch))throw new Error('本轮计划或批次无法回读');
+    const actualPlan=plan as Record<string,unknown>, actualBatch=batch as Record<string,unknown>;
+    if(String(actualPlan.id)!==String(state.entities.productionPlan?.id)||String(actualBatch.productionPlanId)!==String(actualPlan.id)||actualPlan.skipProcessReporting!==false)throw new Error('本轮计划与逐工序生产批次不一致');
+    await ui.fill('打开本轮逐道报工',()=>showProcessEntry(actualPlan));
+  },
+}, ['production-plan-create', 'production-batch-create', 'process-report-1', 'process-report-2', 'process-report-3', 'process-report-4', 'process-report-5', 'process-report-6', 'production-settle', 'finished-goods-receive']));
 const productionColumnMax = 6;
 const {
   columns: productionColumnOptions,
@@ -2024,6 +2048,10 @@ async function openProcessEntry(row: any) {
       entryPreparingPlanId.value = null;
     }
   }
+  showProcessEntry(row);
+}
+
+function showProcessEntry(row: TableRow): void {
   entryRow.value = row;
   entryDrawerVisible.value = true;
 }
@@ -4395,7 +4423,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
               title="审批待处理的撤销小结申请（财务经理/工厂超管）">
               撤销审批
             </el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate" style="margin-left: 8px;">
+            <el-button data-testid="production-plan-open-create" v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate" style="margin-left: 8px;">
               新建计划
             </el-button>
           </div>
@@ -4693,6 +4721,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <template #default="{ row }">
             <div class="plan-action-cell business-action-row">
               <el-button
+                :data-testid="`production-plan-create-batch-${row.id}`"
                 v-if="canShowProductionActions(row)"
                 type="warning"
                 link
@@ -4702,6 +4731,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 @click="openProcessEntry(row)"
               >{{ processEntryActionLabel(row) }}</el-button>
               <el-button
+                :data-testid="`production-settle-${row.id}`"
                 v-if="canShowProductionActions(row)"
                 type="success"
                 link
@@ -4722,6 +4752,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
                 判据复用既有的 postingStatus, 不新造一套。
               -->
               <el-button
+                :data-testid="`finished-goods-receive-${row.id}`"
                 v-if="needsWarehouseReceipt(row)"
                 type="warning"
                 link
@@ -5269,6 +5300,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           :class="{ 'field-error': sourceOrderIdError }"
         >
           <el-select
+            data-testid="production-plan-source-order"
             ref="sourceOrderSelectRef"
             v-model="planForm.sourceOrderId"
             placeholder="选择关联的销售订单"
@@ -5621,6 +5653,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </el-form-item>
         <!-- A5/E3: batchDate 已被后端消费 (ProductionProgressDashboard 按批次日期过滤)，保留；加说明区分两个日期 -->
         <el-form-item label="批次日期">
+          <div data-testid="production-plan-batch-date" style="width:100%">
           <el-date-picker
             v-model="planForm.batchDate"
             type="date"
@@ -5628,6 +5661,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
+          </div>
           <div style="font-size: 12px; color: var(--text-color-secondary, #909399); margin-top: 2px;">
             批次日期 = 实际开工/转批次日；计划日期 = 预期完成生产日
           </div>
@@ -5679,6 +5713,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           </div>
         </el-form-item>
         <el-form-item label="计划生产日" required>
+          <div data-testid="production-plan-planned-date" style="width:100%">
           <el-date-picker
             v-model="planForm.plannedDate"
             type="date"
@@ -5686,9 +5721,10 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             value-format="YYYY-MM-DD"
             style="width: 100%"
           />
+          </div>
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="planForm.notes" type="textarea" :rows="3" />
+          <el-input data-testid="production-plan-notes" v-model="planForm.notes" type="textarea" :rows="3" />
         </el-form-item>
         <el-form-item label="预计工人数">
           <el-input-number v-model="planForm.estimatedWorkers" :min="1" :max="100" placeholder="可选" style="width: 100%" />
@@ -5703,7 +5739,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       </el-form>
       <template #footer>
         <el-button @click="handleDialogClose">取消</el-button>
-        <el-button type="primary" :loading="dialogLoading" :disabled="nonSoSubmitBlocked" @click="submitPlan">确定</el-button>
+        <el-button data-testid="production-plan-submit" type="primary" :loading="dialogLoading" :disabled="nonSoSubmitBlocked" @click="submitPlan">确定</el-button>
       </template>
     </el-dialog>
 
@@ -5815,7 +5851,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       append-to-body
       :before-close="handleCompleteDialogBeforeClose"
     >
-      <el-form label-width="118px" class="settlement-form">
+      <el-form data-testid="production-settle-dialog" label-width="118px" class="settlement-form">
         <div v-if="completeAdvisory?.hasWarning" class="settlement-advisory-alert">
           <el-alert
             :title="completeAdvisory.message"
@@ -5850,7 +5886,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           :closable="false"
           style="margin-bottom: 12px"
         />
-        <el-alert
+        <el-alert data-testid="settlement-blocker"
           v-else-if="settlementBlockerIssues.length > 0"
           type="warning"
           show-icon
@@ -6330,6 +6366,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           type="primary"
           :loading="actionLoading"
           :disabled="!completeCanSubmit"
+          data-testid="production-settle-dialog-submit"
           @click="submitComplete"
         >确认结单并结束计划</el-button>
       </template>
@@ -6345,7 +6382,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
       destroy-on-close
       append-to-body
     >
-      <el-form v-loading="receiptLoading" label-width="124px" class="settlement-form">
+      <el-form data-testid="finished-goods-receive-dialog" v-loading="receiptLoading" label-width="124px" class="settlement-form">
         <div v-if="!receiptHasOutputLines" class="settlement-context">
           <div>
             <div class="settlement-context-label">计划单号</div>
@@ -6391,7 +6428,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             </div>
             <el-form-item label="仓库实收" required class="receipt-output-line__input">
               <el-input-number
-                v-model="line.receivedQuantity"
+                data-testid="native-receipt-quantity" v-model="line.receivedQuantity"
                 :min="0"
                 :precision="4"
                 :step="0.0001"
@@ -6420,7 +6457,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         <template v-if="!receiptHasOutputLines">
         <el-form-item label="仓库实收" required>
           <el-input-number
-            v-model="receiptForm.receivedQuantity"
+            data-testid="native-receipt-quantity" v-model="receiptForm.receivedQuantity"
             :min="0"
             :max="receiptReportedQuantity"
             :precision="2"
@@ -6522,6 +6559,7 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         <el-button
           type="primary"
           :loading="actionLoading"
+          data-testid="finished-goods-receive-dialog-submit"
           :disabled="!receiptCanSubmit"
           @click="submitWarehouseReceipt"
         >确认入库</el-button>

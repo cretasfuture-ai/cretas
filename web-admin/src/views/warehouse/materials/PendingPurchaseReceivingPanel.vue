@@ -38,6 +38,8 @@ import {
   type ReceivingLifecycleCounts,
   type ReceivingTaskFilter,
 } from './warehouseInboundLifecycle';
+import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 
 const props = withDefaults(defineProps<{
   factoryId: string;
@@ -661,6 +663,48 @@ async function updateAndConfirmReceipt(): Promise<void> {
   }
 }
 
+useNativeDemoAdapters('pending-purchase-receiving', [
+  commerceAdapter('purchase-receive', () => props.canWrite, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'POST', path: '/warehouse/receiving/receipts' }, () => ui.click('[data-testid="purchase-receive-save"]', '原生保存收货草稿'));
+    await ui.hold('收货草稿保存后');
+    const created = entityFromResponse(response);
+    if (!created?.id) throw new Error('原生收货草稿响应缺少收货单 ID');
+    const entity = entityFromResponse(await ui.read(`/warehouse/receiving/receipts/${created.id}`));
+    if (entity) ui.remember('purchaseReceipt', entity);
+    return entity;
+  }, async ({ state, context, ui }) => {
+    const taskId = state.entities.purchaseOrder?.id || '';
+    const task = tasks.value.find((item): item is PurchaseReceivingTask =>
+      item.sourceType === 'PURCHASE' && String(item.purchaseOrderId) === String(taskId));
+    if (!task) throw new Error('未找到本次采购单对应的原生收货任务');
+    await openReceive(task);
+    await ui.fill('收货日期', () => { form.value.receiveDate = localDateText() });
+    await ui.fill('入库仓库', () => { form.value.warehouseId = String(context.rawWarehouse.id) });
+    await ui.fill('本次实收', () => { for (const item of form.value.items) item.receivedQuantity = Number(item.receivedQuantity) });
+  }),
+  commerceAdapter('purchase-receive-confirm', () => props.canWrite, async ({ state, ui }) => {
+    await ui.upload('[data-testid="purchase-receive-file"]', await ui.receiptFile(String(state.entities.purchaseOrder?.orderNumber || '')));
+    await ui.until(() => attachmentCount.value > 0 && String(receipt.value?.id) === String(state.entities.purchaseReceipt?.id), '本轮收货凭证上传并真实回读', 90000);
+    const response = await ui.capture({ method: 'POST', path: /\/warehouse\/receiving\/receipts\/[^/]+\/confirm/ }, async () => {
+      await ui.click('[data-testid="purchase-receive-confirm"]', '原生确认收货入库');
+      await ui.click('.el-message-box__btns .el-button--primary', '确认收货入库');
+    });
+    await ui.hold('收货确认后');
+    const confirmed = entityFromResponse(response);
+    const entity = entityFromResponse(await ui.read(`/warehouse/receiving/receipts/${confirmed?.id || state.entities.purchaseReceipt?.id || receipt.value?.id || ''}`));
+    if (entity) ui.remember('purchaseReceipt', entity);
+    return entity;
+  }, async ({ state }) => {
+    const receiptId = state.entities.purchaseReceipt?.id;
+    if (!receiptId) throw new Error('缺少本次收货单 ID');
+    const task = tasks.value.find((item): item is PurchaseReceivingTask =>
+      item.sourceType === 'PURCHASE' && String(item.activeReceiptId) === String(receiptId));
+    if (!task) throw new Error('未找到本次收货草稿任务');
+    await openReceive(task);
+    if (!receipt.value || String(receipt.value.id) !== String(receiptId)) throw new Error('原生收货草稿未打开');
+  }),
+])
+
 /**
  * M-15 (2026-08-20): 作废一张建错/不再需要的草稿 —— 释放它占用的预留量,
  * 使该采购单可以重新创建收货单（解开"建错→改不了→删不掉"的死锁）。
@@ -1121,6 +1165,7 @@ defineExpose({ loadTasks });
           <AttachmentDropZone
             v-if="canWrite"
             ref="stagingAttachmentRef"
+            data-testid="purchase-receive-file"
             entity-type="PURCHASE_RECEIPT"
             :factory-id="factoryId"
             business-tag="RECEIVE_PHOTO"
@@ -1163,7 +1208,7 @@ defineExpose({ loadTasks });
           <AttachmentList entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
             :refresh-key="attachmentRefreshKey" empty-text="必须上传供应商供货单或收货凭证才能确认入库"
             @count-change="attachmentCount = $event" />
-          <AttachmentDropZone v-if="canWrite" entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
+          <AttachmentDropZone v-if="canWrite" data-testid="purchase-receive-file" entity-type="PURCHASE_RECEIPT" :entity-id="receipt.id" :factory-id="factoryId"
             business-tag="RECEIVE_PHOTO" file-category="PHOTO" accept="image/*,.pdf,.xlsx,.xls"
             @uploaded="attachmentRefreshKey++"
             @queue-change="attachmentQueue = { pending: $event.pending, failed: $event.failed }" />
@@ -1182,7 +1227,7 @@ defineExpose({ loadTasks });
         <el-button @click="dialogVisible = false">关闭</el-button>
         <template v-if="!receipt">
           <!-- M-14: 「仅保存草稿」是可选的中途退出出口, 不是必经之路 -->
-          <el-button link :disabled="confirming" :loading="submitting" @click="createReceipt">仅保存草稿（暂不上传/确认）</el-button>
+          <el-button data-testid="purchase-receive-save" link :disabled="confirming" :loading="submitting" @click="createReceipt">仅保存草稿（暂不上传/确认）</el-button>
           <el-button type="primary" :loading="confirming" :disabled="!!createBlockReason"
                 :title="createBlockReason || undefined"
                 @click="createAndConfirmReceipt">确认收货入库</el-button>
@@ -1190,7 +1235,7 @@ defineExpose({ loadTasks });
         <template v-else-if="receipt.status === 'DRAFT'">
           <!-- M-15: 建错的草稿不再是死胡同, 可以作废后重新收货 -->
           <el-button type="danger" link :loading="cancelling" :disabled="confirming" @click="cancelDraftReceipt">作废本次收货</el-button>
-          <el-button type="success" :loading="confirming"
+            <el-button data-testid="purchase-receive-confirm" type="success" :loading="confirming"
                 :disabled="!!receiptBlockReason" :title="receiptBlockReason || undefined"
                 @click="updateAndConfirmReceipt">确认收货入库</el-button>
         </template>

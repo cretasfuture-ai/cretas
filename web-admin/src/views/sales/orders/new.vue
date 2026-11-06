@@ -33,6 +33,8 @@ import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
 import SalesPackagingSelect from './components/SalesPackagingSelect.vue';
 import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import { canOrderFromQuote, type OrderQuote } from '../quotes/quoteOrderContract';
+import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 const deliveryDatePicker = ref<InstanceType<typeof OrderDeliveryDatePicker>>();
 
 type Warehouse = TableRow & { id: string; code: string; name: string; type?: string; isActive?: boolean };
@@ -376,6 +378,34 @@ async function submit(): Promise<void> {
   }
 }
 
+useNativeDemoAdapters('sales-order-new', [
+  commerceAdapter('sales-order-create', () => canWrite.value, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'POST', path: '/sales/orders' }, () => ui.click('[data-testid="sales-order-create-submit"]', '原生保存销售草稿'));
+    await ui.hold('销售草稿保存后');
+    const created = entityFromResponse(response);
+    if (!created?.id) throw new Error('原生销售保存响应缺少订单 ID');
+    const entity = entityFromResponse(await ui.read(`/sales/orders/${created.id}`));
+    if (entity) ui.remember('salesOrder', entity);
+    return entity;
+  }, async ({ state, context, ui }) => {
+    await ui.until(()=>customers.value.some(row=>String(row.id)===String(context.customer.id))&&products.value.some(row=>String(row.id)===String(context.product.id))&&sourceWarehouses.value.some(row=>String(row.code).toUpperCase()==='WH-FG'),'客户、成品与成品仓资料加载');
+    await ui.fill('客户', () => { form.value.customerId = String(context.customer.id) });
+    form.value.remark = state.runKey;
+    form.value.deliveryAddress = '演示·上海连锁餐饮收货中心';
+    form.value.requiredDeliveryDate = toDateString(new Date());
+    if (!form.value.items.length) {
+      const product = products.value.find(item => String(item.id) === String(context.product.id));
+      if (product) await addProduct(product);
+    }
+    const line = form.value.items[0];
+    if (line) await ui.fill('成品数量', () => { line.quantity = context.finishedQuantity; line.unitPrice = Number(context.product.unitPrice || 27); line.taxIncludedUnitPrice = line.unitPrice });
+    const warehouse = sourceWarehouses.value.find(candidate => String(candidate.code).toUpperCase() === 'WH-FG'
+      && String(candidate.type).toUpperCase() === 'FINISHED');
+    if (!warehouse) throw new Error('销售原生表单缺少 WH-FG 成品仓选项');
+    if (line && warehouse) line.sourceWarehouseCode = warehouse.code;
+  }),
+])
+
 async function leave(): Promise<void> {
   if (!dirty.value) { await router.push('/sales/orders'); return; }
   try {
@@ -446,7 +476,7 @@ onMounted(async () => {
       </div>
       <div class="page-actions">
         <el-button @click="leave">取消</el-button>
-        <el-button type="primary" :loading="loading" @click="submit">保存草稿</el-button>
+        <el-button data-testid="sales-order-create-submit" type="primary" :loading="loading" @click="submit">保存草稿</el-button>
       </div>
     </div>
 

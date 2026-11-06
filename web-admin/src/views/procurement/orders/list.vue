@@ -73,6 +73,8 @@ import {
   type SupplierMaterialRelation,
   type SupplierPurchaseSpec,
 } from '@/api/supplierManagement';
+import { nativeDemoState, useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 
 const router = useRouter();
 const route = useRoute();
@@ -245,6 +247,7 @@ const summaryRequest = computed<ListSummaryRequest>(() => ({
 const { summary: footerSummary, loading: footerLoading } = useListSummary('purchaseOrder', summaryRequest);
 
 interface ProcurementOrderItem {
+  materialName?: string;
   supplierMaterialId?: string;
   purchasePackagingSpecId?: string | null;
   materialPackagingSpecId?: string | null;
@@ -576,6 +579,8 @@ async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<voi
   item.unit = purchaseUnit;
   item.quantityUnit = purchaseUnit;
   const material = materials.value.find((row) => String(row.id) === relation.materialTypeId);
+  if (!relation.materialName && material?.name) relation.materialName = String(material.name);
+  item.materialName = relation.materialName || undefined;
   item.taxRate = materialTaxRate(material?.taxRate);
   applyRelationPrice(item, relation, purchaseUnit);
   syncTaxIncludedPrice(item);
@@ -910,7 +915,7 @@ async function handleCreate() {
     if (form.value.relatedSalesOrderId) {
       const so = salesOrders.value.find((o: TableRow) => o.id === form.value.relatedSalesOrderId);
       const soRef = so ? `[关联销售订单: ${so.orderNumber}]` : '';
-      remark = soRef ? (remark ? `${soRef} ${remark}` : soRef) : remark;
+      remark = soRef ? (remark ? (nativeDemoState.value?.runKey === remark ? `${remark} ${soRef}` : `${soRef} ${remark}`) : soRef) : remark;
     }
     const { relatedSalesOrderId: _unused, items, ...formData } = form.value;
     const payload = {
@@ -966,6 +971,55 @@ async function handleCreate() {
     submitting.value = false;
   }
 }
+
+useNativeDemoAdapters('procurement-orders-list', [
+  commerceAdapter('purchase-create', () => canWrite.value, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'POST', path: '/purchase/orders' }, () => ui.click('[data-testid="purchase-create-submit"]', '原生保存采购草稿'));
+    await ui.hold('采购草稿保存后');
+    const created = entityFromResponse(response);
+    if (!created?.id) throw new Error('原生采购保存响应缺少订单 ID');
+    const order = entityFromResponse(await ui.read(`/purchase/orders/${created.id}`));
+    if (order) ui.remember('purchaseOrder', order);
+    return order;
+  }, async ({ state, context, ui }) => {
+    openCreateDialog();
+    await ui.fill('供应商', () => { form.value.supplierId = String(context.supplier.id) });
+    await onSupplierChange();
+    const materialRelation = supplierMaterialRelations.value.find(row => String(row.materialTypeId) === String(context.material.id));
+    const packagingRelation = supplierMaterialRelations.value.find(row => String(row.materialTypeId) === String(context.packaging.id));
+    if (!materialRelation || !packagingRelation) throw new Error('演示供应商缺少原料或包材供应关系');
+    await ui.fill('主原料', () => { form.value.items[0].supplierMaterialId = String(materialRelation.id) });
+    await onSupplierMaterialChange(form.value.items[0]);
+    form.value.items[0].quantity = context.rawQuantity;
+    form.value.items[0].unitPrice = Number(context.material.unitPrice);
+    form.value.items[0].taxIncludedUnitPrice = Number(context.material.unitPrice);
+    form.value.items[0].taxRate = 0;
+    if (form.value.items.length < 2) addItem();
+    await ui.fill('包材', () => { form.value.items[1].supplierMaterialId = String(packagingRelation.id) });
+    await onSupplierMaterialChange(form.value.items[1]);
+    form.value.items[1].quantity = context.finishedQuantity;
+    form.value.items[1].unitPrice = Number(context.packaging.unitPrice);
+    form.value.items[1].taxIncludedUnitPrice = Number(context.packaging.unitPrice);
+    form.value.items[1].taxRate = 0;
+    form.value.remark = state.runKey;
+  }),
+  commerceAdapter('purchase-link-sales', () => canWrite.value, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'PUT', path: /\/purchase\/orders\/[^/]+$/ }, () => ui.click('[data-testid="purchase-link-sales-submit"]', '原生保存采购关联销售订单'));
+    await ui.hold('采购关联保存后');
+    const saved = entityFromResponse(response);
+    if (!saved?.id || String(saved.salesOrderId) !== String(state.entities.salesOrder?.id)) throw new Error('采购关联响应未返回本次销售订单 ID');
+    const entity = entityFromResponse(await ui.read(`/purchase/orders/${saved.id}`));
+    if (entity) ui.remember('purchaseOrder', entity);
+    return entity;
+  }, async ({ state, ui }) => {
+    const purchaseId = state.entities.purchaseOrder?.id;
+    const salesId = state.entities.salesOrder?.id;
+    if (!purchaseId || !salesId) throw new Error('缺少本次采购单或销售单 ID，不能建立关联');
+    await openEditDialog(String(purchaseId));
+    await ui.fill('关联销售订单', () => { form.value.relatedSalesOrderId = String(salesId) });
+    form.value.remark = state.runKey;
+  }),
+])
 
 function resetForm() {
   editingOrderId.value = '';
@@ -1089,6 +1143,7 @@ async function openEditDialog(orderId: string) {
             : null,
         materialPackagingSpecId: item.materialPackagingSpecId ? String(item.materialPackagingSpecId) : null,
         materialTypeId: String(item.materialTypeId || ''),
+        materialName: item.materialName == null ? undefined : String(item.materialName),
         quantity: Number(item.quantity || 0),
         unit: quantityUnit,
         quantityUnit,
@@ -1771,7 +1826,7 @@ function handleAiFill(params: TableRow) {
       </el-form>
       <template #footer>
         <el-button @click="closeOrderEditor">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreate">
+        <el-button :data-testid="isEditing ? 'purchase-link-sales-submit' : 'purchase-create-submit'" type="primary" :loading="submitting" @click="handleCreate">
           {{ createdOrderId ? (attachmentQueue.failed ? '重试附件并完成' : '完成') : (isEditing ? '保存修改' : '创建') }}
         </el-button>
       </template>
