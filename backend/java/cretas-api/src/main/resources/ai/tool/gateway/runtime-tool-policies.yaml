@@ -182,7 +182,7 @@ policies:
     allowedRoles: []
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["product"]
-    version: "1.0.0"
+    version: "2.0.0"
     supportsPreview: true
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED

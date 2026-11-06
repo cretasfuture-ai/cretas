@@ -92,6 +92,16 @@ public class ToolExecutionIdempotencyRecord {
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
 
+    /** Opaque business reference for a governed command result; never a payload or token. */
+    @Column(name = "result_entity_type", length = 64, updatable = false)
+    private String resultEntityType;
+
+    @Column(name = "result_entity_id", length = 128, updatable = false)
+    private String resultEntityId;
+
+    @Column(name = "result_reference_stage", length = 32, updatable = false)
+    private String resultReferenceStage;
+
     public static ToolExecutionIdempotencyRecord reserve(
             String id,
             String tenantId,
