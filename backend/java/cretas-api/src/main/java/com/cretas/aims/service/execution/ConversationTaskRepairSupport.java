@@ -170,6 +170,20 @@ public class ConversationTaskRepairSupport {
             return reply("UNSUPPORTED", "上一项业务已经提交，当前没有可修订的对话草稿。", null,
                     metadata(decision, null, Map.of()));
         }
+        if (selected.session().getStatus() == ConversationSession.SessionStatus.PAUSED
+                && "INTERRUPT".equals(decision.action())) {
+            // A paused draft is not the active task to interrupt. A carried
+            // transport session and a model-selected draft do not authorize
+            // resuming it after a different read, even if arbitrary words from
+            // this turn were copied into resumeEvidence.
+            if (currentReadPresent && !explicitDraftSelection(request, selected)) {
+                request.setSemanticTaskAction("READ_CONTINUE");
+                return null;
+            }
+            request.setSemanticTaskAction("CLARIFY");
+            return reply("NEED_MORE_INFO", "该草稿已经暂停，请明确是处理当前查询还是恢复草稿。", null,
+                    Map.of("taskAction", "CLARIFY", "taskReference", selected.opaqueId()));
+        }
         if (currentReadPresent && "CANCEL".equals(decision.action())
                 && !explicitDraftSelection(request, selected)) {
             return reply("NEED_MORE_INFO", "当前同时存在只读任务和对话草稿，请明确要取消哪一个。", null,

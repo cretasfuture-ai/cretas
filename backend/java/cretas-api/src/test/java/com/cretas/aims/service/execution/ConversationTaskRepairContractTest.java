@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
@@ -123,6 +124,37 @@ class ConversationTaskRepairContractTest {
         verify(conversations, never()).pauseConversation(anyString(), anyLong(), anyString(), anyBoolean());
         verify(conversations, never()).resumeConversation(anyString(), anyLong(), anyString());
         verify(conversations, never()).cancelConversation(anyString(), anyLong(), anyString(), anyBoolean());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void pausedDraftCannotBeInterruptedOrGainResumeFromModelSelectedReference(boolean currentRead) {
+        ConversationSession paused = draft("paused-read", ConversationSession.SessionStatus.PAUSED,
+                Map.of("quantity", "50", "unit", "kg"));
+        when(conversations.getActiveSession(FACTORY, USER)).thenReturn(Optional.empty());
+        when(conversations.getSession(FACTORY, USER, paused.getSessionId())).thenReturn(Optional.of(paused));
+        when(conversations.getPausedSessions(FACTORY, USER)).thenReturn(List.of(paused));
+        llmResponse("{\"taskAction\":\"INTERRUPT\",\"taskReference\":\"draft-1\",\"resumeAfterRead\":true,\"resumeEvidence\":\"不用的原料还有多少\"}");
+        IntentExecuteRequest request = request("不用的原料还有多少");
+        request.setSessionId(paused.getSessionId());
+        request.setSemanticContext(currentRead ? Map.of("contextStatus", "PRESENT", "references", List.of(
+                Map.of("type", "READ_QUERY", "taskStatus", "ACTIVE", "id", "MATERIAL_BATCH_QUERY",
+                        "reference", "entity-0"))) : Map.of("contextStatus", "PRESENT"));
+
+        IntentExecuteResponse result = withActorResult(() -> support.prepare(FACTORY, USER, request));
+        if (currentRead) {
+            assertThat(result).isNull();
+            assertThat(request.getSemanticTaskAction()).isEqualTo("READ_CONTINUE");
+        } else {
+            assertThat(result.getStatus()).isEqualTo("NEED_MORE_INFO");
+            assertThat(request.getSemanticTaskAction()).isEqualTo("CLARIFY");
+        }
+        assertThat(request.getSemanticResumeDraftId()).isNull();
+        assertThat(request.getSemanticResumeDraftRevision()).isNull();
+        verify(conversations, never()).pauseConversation(anyString(), anyLong(), anyString(), anyBoolean());
+        verify(conversations, never()).resumeConversation(anyString(), anyLong(), anyString());
+        verify(conversations, never()).cancelConversation(anyString(), anyLong(), anyString(), anyBoolean());
+        verifyNoInteractions(previews);
     }
 
     @ParameterizedTest

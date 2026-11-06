@@ -127,7 +127,7 @@
 
 - `SEMANTIC-SSE-FIXTURES-20261106` — `review` — Owner /root/followup_safety — Base a6737c0a9218b43f7dedd3b738087ca68e6271d2 — PR1476; root verifies; no prod/train/deploy.
 
-- `SEMANTIC-REPAIR-QUALITY-20261106` — `review` — Owner /root — Base 06741c02088073a393e671eb44d4be038e1d4ef9 — 复跑发现输入契约及恢复字段遗漏；root接管两文件；不训练/合并/上线。
+- `SEMANTIC-REPAIR-QUALITY-20261106` — `review` — Owner /root — Base 06741c02088073a393e671eb44d4be038e1d4ef9 — R5发现PAUSED误中断及臆造恢复；root补状态约束并复验；不训练/合并/上线。
 
 ## Scope 锁地图
 
