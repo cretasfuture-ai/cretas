@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAgainstCommit": null,
+  "catalogVersion": null,
+  "catalogDigest": null,
+  "targetFactoryId": null,
+  "status": "UNCONFIRMED",
+  "payload": {
+    "industryCode": null,
+    "industryName": null,
+    "schemas": [],
+    "suggestedData": {
+      "productTypes": [],
+      "materialTypes": [],
+      "conversionRates": [],
+      "workProcesses": [],
+      "haccpCheckpoints": [],
+      "modules": {},
+      "thresholds": [],
+      "warehouses": [],
+      "productionLines": [],
+      "productProcesses": [],
+      "provisionDefaultUsers": false,
+      "codeSegments": [],
+      "alerts": [],
+      "metricWatches": [],
+      "moduleConfigs": [],
+      "indicatorOptOut": []
+    },
+    "overwrite": false,
+    "draftCapabilityIntents": [],
+    "notBuilt": []
+  },
+  "evidenceByJsonPointer": {},
+  "unresolved": [
+    "Customer facts, source references, target tenant, and catalog pins are not confirmed.",
+    "Route, unit, catalog, permissions, workflow, and account semantics require authoritative server preview."
+  ],
+  "limitations": [
+    "Offline validation is structural only; it never creates a factory, applies configuration, provisions users, or publishes Workflow.",
+    "No customer contacts, SKUs, limits, factory IDs, credentials, URLs, or source business rows belong in this package."
+  ]
+}

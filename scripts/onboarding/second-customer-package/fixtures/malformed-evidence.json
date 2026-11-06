@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "1.0", "generatedAgainstCommit": "402d284f38b47e1a5c3b56b2da62f5b0323738e6", "catalogVersion": "qa", "catalogDigest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "targetFactoryId": null, "status": "CONFIRMED", "testOnly": true,
+  "payload": {"industryCode": "qa", "industryName": "qa", "schemas": [], "suggestedData": {"productTypes": [], "materialTypes": [], "conversionRates": [], "workProcesses": [], "haccpCheckpoints": [], "modules": {}, "thresholds": [], "warehouses": [], "productionLines": [], "productProcesses": [], "provisionDefaultUsers": false, "codeSegments": [], "alerts": [], "metricWatches": [], "moduleConfigs": [], "indicatorOptOut": []}, "overwrite": false, "draftCapabilityIntents": [], "notBuilt": []},
+  "evidenceByJsonPointer": {"/payload": null, "/payload/industryName": {"status": "UNCONFIRMED", "sourceRef": ""}}, "unresolved": [], "limitations": []
+}
