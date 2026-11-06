@@ -248,7 +248,12 @@ public class ToolDispatchService {
                     return readTurnReply("NEED_MORE_INFO", "当前查询不能使用这个对象引用，请明确要查询的对象。");
                 for (Object value : refs) if (value instanceof Map<?,?> ref && reference.equals(ref.get("reference"))
                         && "ORDER".equals(ref.get("entityType"))) referencedOrder = LastActionContract.safeValue("orderId",ref.get("id"));
-                if (refs.size() > 1) {
+                if (!"SERVER_TOOL_RESULT".equals(previous.get("resultProvenance")))
+                    return readTurnReply("NEED_MORE_INFO","上次结果来源无法核验，请重新选择订单或提供编号。");
+                boolean singleReturned = previous.get("resultSummary") instanceof Map<?,?> summary
+                        && Boolean.TRUE.equals(summary.get("referencesComplete"))
+                        && summary.get("returnedCount") instanceof Number count && count.longValue()==1 && refs.size()==1;
+                if (!singleReturned) {
                     Object selected = turn.get("selectionOrdinal");
                     String evidence = turn.get("selectionEvidence") instanceof String text ? text : "";
                     if (!(selected instanceof Number n) || n.doubleValue()!=n.intValue() || n.intValue()<1 || n.intValue()>20
@@ -511,7 +516,8 @@ public class ToolDispatchService {
                 return readTurnReply("CANCELLED", "查询已停止或条件已更新，已丢弃旧查询结果。");
             if (request.getSemanticReadVersion() != null && salesRankingConversationSupport != null
                     && !salesRankingConversationSupport.finishRead(factoryId, userId, request, response == null ? "FAILED" : response.getStatus(),
-                        response == null ? List.of() : LastActionContract.orderResultReferences(tool.getToolName(),response.getResultData())))
+                        response == null ? List.of() : LastActionContract.orderResultReferences(tool.getToolName(),response.getResultData()),
+                        response == null ? Map.of() : LastActionContract.orderResultSummary(tool.getToolName(),response.getResultData())))
                 return readTurnReply("CANCELLED", "查询状态已变化，已丢弃旧查询结果。");
             if (salesRankingConversationSupport!=null && (writeGuardService.isWriteTool(tool) || writeGuardService.isWriteIntent(intent))) {
                 try { salesRankingConversationSupport.rememberCommittedAction(factoryId,userId,request,intent,tool.getToolName(),response); }

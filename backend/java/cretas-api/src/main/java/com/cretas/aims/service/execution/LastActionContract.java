@@ -98,6 +98,31 @@ final class LastActionContract {
         return List.copyOf(refs);
     }
 
+    /** Counts describe the actual returned page, never an inferred business total. */
+    static Map<String,Object> orderResultSummary(String toolName,Object resultData) {
+        if(toolName==null || !Set.of("order_list","order_query").contains(toolName)
+                || !(resultData instanceof Map<?,?> raw))return Map.of();
+        Map<?,?> body=raw.get("data") instanceof Map<?,?> nested?nested:raw;
+        if(!(body.get("orders") instanceof List<?>)
+                && !("order_query".equals(toolName) && body.get("order") instanceof Map<?,?>))return Map.of();
+        List<?> rows=orderResultRows(toolName,resultData);
+        int references=orderResultReferences(toolName,resultData).size();
+        Map<String,Object> summary=new LinkedHashMap<>();
+        summary.put("returnedCount",rows.size());summary.put("referenceCount",references);
+        summary.put("referencesComplete",references==rows.size());
+        if(body.get("total") instanceof Number n && n.longValue()>=rows.size() && n.doubleValue()==n.longValue())
+            summary.put("totalCount",n.longValue());
+        return Map.copyOf(summary);
+    }
+
+    private static List<?> orderResultRows(String toolName,Object resultData) {
+        if(toolName==null || !Set.of("order_list","order_query").contains(toolName)
+                || !(resultData instanceof Map<?,?> raw))return List.of();
+        Map<?,?> body=raw.get("data") instanceof Map<?,?> nested?nested:raw;
+        if("order_query".equals(toolName) && body.get("order") instanceof Map<?,?> order)return List.of(order);
+        return body.get("orders") instanceof List<?> rows?rows:List.of();
+    }
+
     /**
      * 工具执行成功之后产出 lastAction。intentCode 不合规时返回 null (不产出)。
      *

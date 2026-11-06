@@ -35,7 +35,7 @@ SPECIAL_OPTIONS = [
     {"intent_code": "NONE", "intent_name": "以上都不是",
      "description": "这句话和上面的功能都对不上，或者用户明确说不要做、先别做"},
     {"intent_code": "CLARIFY", "intent_name": "需要先问清楚",
-     "description": "上面有两个以上的功能都说得通，或者缺了关键信息必须先问用户"},
+     "description": "业务目标或对象类型仍不确定，无法区分候选功能。已明确功能但缺少具体对象ID、日期等执行参数时，由后续resolver补槽，不等于功能路由不明。"},
 ]
 _SPECIAL_KEYS = {"NONE": NONE_KEY, "CLARIFY": CLARIFY_KEY}
 INSTR = "用户这句话应该交给下面哪个系统功能来处理？"
@@ -52,6 +52,21 @@ REQUEST_PURPOSE_RULES = (
     "条件已经满足且明确要求现在办理，或上下文已确认要办理的请求，应选择对应业务功能。"
     "对当前业务请求，保留用户要处理的具体对象、动作和范围；"
     "不要把具体对象的数据查询扩大成全局总览，也不要把明确的登记或修改改解成查询已有记录。"
+)
+ROUTING_BOUNDARY_RULES = (
+    "这里只判断哪个功能应承接当前目标，不判断权限、不绑定对象ID，也不表示已经执行。"
+    "必须区分功能路由、执行参数和能力校验：功能已明确时，缺少具体对象ID、时间等参数交给后续resolver；"
+    "同一目标的条件或指标纠正仍交给该目标对应功能，即使其能力需要随后明确拒绝，也不能偷换为别的功能。"
+    "用户改变目标、对象类型或查询范围时，按本轮目标重新选择，不能仅因历史意图相同就继承。"
+    "集合查询与一笔确定对象的详情是不同范围；上下文已有真实结果引用且本轮请求该对象详情时，应选详情功能，"
+    "不能把详情当作再次列出集合。具体对象不唯一时仍由resolver定向确认，不得猜ID或任取第一条。"
+    "只有业务目标/功能类型本身无法确定时才选择CLARIFY；所有候选都不承接当前目标时选择NONE。"
+    "历史只作上下文证据，不能沿用历史取消、历史授权或把候选ID当执行许可。"
+    "只读任务COMPLETED表示查询完成，其真实结果仍可被追问，不等于已提交了写业务。"
+    "resultProvenance=SERVER_TOOL_RESULT表示结果引用来自服务器实际Tool；parameterSource只描述旧参数来源，"
+    "旧参数来源未追溯不等于服务器结果不存在。来源UNKNOWN时不能补造真实结果或对象。"
+    "resultSummary.returnedCount是上次实际返回的行数，totalCount是总数，referenceCount只表示可用引用数量。"
+    "referencesComplete=true且returnedCount=1才说明上次返回了唯一对象；只有一个引用不等于只有一条结果。"
 )
 
 # 角色码 -> (称呼, 说明)。说明进提示词, 帮模型理解「同一句话不同人说意思不同」。
@@ -77,7 +92,9 @@ def role_line(role: Optional[str]) -> str:
 
 def intent_text(row: Dict[str, Any]) -> str:
     kws = "、".join(_keywords(row)[:8])
-    desc = " ".join(str(row.get("description") or "").split())[:80]
+    # Capability boundaries often occur after the introductory sentence. Retain
+    # the bounded description instead of dropping those boundaries from choices.
+    desc = " ".join(str(row.get("description") or "").split())[:512]
     name = row.get("intent_name") or row.get("intent_code")
     return f"{name}：{desc}" + (f" 常见说法：{kws}" if kws else "")
 
@@ -157,9 +174,9 @@ def parse_shortlist(raw: str, visible_codes: set, size: int = 8) -> Optional[Lis
 def build_choice_messages(query: str, role: Optional[str], options: List[Dict[str, Any]],
                           history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     letters = LETTERS[: len(options)]
-    opts = "\n".join(f"{L}. {r['intent_code']}：{intent_text(r)[:60]}" for L, r in zip(letters, options))
+    opts = "\n".join(f"{L}. {r['intent_code']}：{intent_text(r)}" for L, r in zip(letters, options))
     user = f"{role_line(role)}\n{history_block(history)}用户说：{query}\n\n问题：{INSTR}\n选项：\n{opts}\n\n只输出一个选项字母。"
-    return [{"role": "system", "content": STRICT_SYSTEM},
+    return [{"role": "system", "content": STRICT_SYSTEM + ROUTING_BOUNDARY_RULES},
             {"role": "user", "content": user},
             {"role": "assistant", "content": "答案：", "partial": True}]
 
@@ -212,6 +229,9 @@ def parse_request_purpose(content: str) -> Optional[RequestPurpose]:
 def build_purpose_messages(query: str, role: Optional[str],
                            history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
     system = ("判断用户当前的交际目的，不选业务功能，也不判定操作权限。" + REQUEST_PURPOSE_RULES +
+              "应读取受控任务快照里的结果引用。已完成只读查询的结果仍可被追问，不能当成用户仅在汇报已完成操作。"
+              "旧参数来源与真实Tool结果来源是不同证据，不要因前者未知而忽略后者。" +
+              "resultSummary给出实际返回行数与引用是否完整；完整且仅返回一条时，已有唯一结果可供指代。" +
               "礼貌、委婉和间接表达的实际办理请求仍是 CURRENT；已经确定办理意愿但缺少业务参数也仍是 CURRENT。"
               "只有对象和事情都清楚，且只是讲述已完成的事或致谢，才不是再次办理。"
               "简短状态回复若没有可用上文、无法判断在说哪件事，属于 UNRESOLVED，不能认定为单纯汇报。"
@@ -318,4 +338,4 @@ class DecisionMatcher:
 
 __all__ = ["DecisionMatcher", "Decision", "letter_probs", "parse_shortlist", "build_choice_messages",
            "NONE_KEY", "CLARIFY_KEY", "SPECIAL_OPTIONS",
-           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block"]
+           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block", "ROUTING_BOUNDARY_RULES"]

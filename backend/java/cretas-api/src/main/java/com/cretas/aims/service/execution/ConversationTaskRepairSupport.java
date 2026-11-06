@@ -121,7 +121,7 @@ public class ConversationTaskRepairSupport {
                         metadata(decision, null, Map.of()));
             }
             if (currentReadPresent
-                    && Set.of("CONTINUE", "CORRECT", "CANCEL", "SWITCH").contains(decision.action())) {
+                    && Set.of("CONTINUE", "CORRECT", "CANCEL", "SWITCH", "INTERRUPT").contains(decision.action())) {
                 request.setSemanticTaskAction("READ_CONTINUE");
                 // This is the existing Memory read, not a new draft. The caller
                 // refreshes context immediately; retain its owner/session/version.
@@ -460,7 +460,7 @@ public class ConversationTaskRepairSupport {
                               Map<String, Object> committed) {
         String system = """
                 你是现有对话任务的状态修复协调器，只返回一次 conversation_task_repair 工具调用，不执行任何业务。
-                action只能是 CONTINUE、CORRECT、INTERRUPT、SWITCH、CANCEL、RESUME、CLARIFY、UNSUPPORTED。
+                taskAction只能是 CONTINUE、CORRECT、INTERRUPT、SWITCH、CANCEL、RESUME、CLARIFY、UNSUPPORTED。
                 taskReference只能使用给出的 draft-1 等不透明引用，或 current-read 表示当前 READ_QUERY；changes只能是当前真实工具 schema 字段的本轮明确修改。
                 只有受控语义上下文明确给出 currentRead.present=true 时，才允许选择 current-read；否则不得凭空制造当前只读目标。
                 不猜业务ID、手机号、客户名、价格、权限、单位换算或未给出的参数；取消必须针对当前任务，不要按孤立否定词取消。
@@ -493,7 +493,9 @@ public class ConversationTaskRepairSupport {
                     if (e.getValue().isValueNode() && !e.getValue().isNull()) changes.put(e.getKey(), e.getValue().asText());
                 });
             }
-            return new Decision(text(node, "taskAction").toUpperCase(Locale.ROOT),
+            String action = parseAction(node);
+            if (action == null) return null;
+            return new Decision(action,
                     text(node, "taskReference"), changes, text(node, "spokenUnit"),
                     node.path("resumeAfterRead").asBoolean(false), text(node, "resumeEvidence"),
                     text(node, "message"));
@@ -501,6 +503,26 @@ public class ConversationTaskRepairSupport {
             log.warn("conversation task repair model response rejected: {}", e.getClass().getSimpleName());
             return null;
         }
+    }
+
+    /** Accept the old field only as a strict, non-conflicting compatibility alias. */
+    private String parseAction(JsonNode node) {
+        boolean hasTaskAction = node.has("taskAction");
+        boolean hasActionAlias = node.has("action");
+        String taskAction = strictText(node, "taskAction");
+        String actionAlias = strictText(node, "action");
+        if ((hasTaskAction && taskAction == null) || (hasActionAlias && actionAlias == null)) return null;
+        String normalizedTask = taskAction == null ? null : taskAction.toUpperCase(Locale.ROOT);
+        String normalizedAlias = actionAlias == null ? null : actionAlias.toUpperCase(Locale.ROOT);
+        if (normalizedTask != null && !ACTIONS.contains(normalizedTask)) return null;
+        if (normalizedAlias != null && !ACTIONS.contains(normalizedAlias)) return null;
+        if (normalizedTask != null && normalizedAlias != null && !normalizedTask.equals(normalizedAlias)) return null;
+        return normalizedTask != null ? normalizedTask : normalizedAlias;
+    }
+
+    private String strictText(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() || !value.isTextual() ? null : value.asText();
     }
 
     private Tool repairTool(List<Draft> drafts, boolean currentReadPresent) {

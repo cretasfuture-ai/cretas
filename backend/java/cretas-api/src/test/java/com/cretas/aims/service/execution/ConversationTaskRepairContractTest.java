@@ -17,12 +17,15 @@ import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -71,6 +74,81 @@ class ConversationTaskRepairContractTest {
             assertThat(support.prepare(FACTORY, USER, request)).isNull();
             verifyNoInteractions(llm);
         });
+    }
+
+    @Test
+    void legacyActionAliasSupportsTheObservedInterruptPayload() {
+        ConversationSession session = draft("draft-real", ConversationSession.SessionStatus.ACTIVE,
+                Map.of("quantity", "50", "unit", "kg"));
+        when(conversations.getActiveSession(FACTORY, USER)).thenReturn(Optional.of(session));
+        when(conversations.getPausedSessions(FACTORY, USER)).thenReturn(List.of());
+        when(conversations.pauseConversation(FACTORY, USER, session.getSessionId(), false)).thenReturn(true);
+        llmResponse("{\"action\":\"INTERRUPT\",\"taskReference\":\"draft-1\",\"spokenUnit\":\"\",\"resumeAfterRead\":true,\"resumeEvidence\":\"先查库存，再继续刚才的草稿\"}");
+
+        IntentExecuteRequest request = request("先查库存，再继续刚才的草稿");
+        IntentExecuteResponse result = withActorResult(() -> support.prepare(FACTORY, USER,
+                request));
+        assertThat(result).isNull();
+        assertThat(request.getSemanticTaskAction()).isEqualTo("INTERRUPT");
+        verify(conversations).pauseConversation(FACTORY, USER, session.getSessionId(), false);
+    }
+
+    @Test
+    void currentReadInterruptDelegatesWithoutTouchingPausedDraft() {
+        ConversationSession paused = draft("paused-read", ConversationSession.SessionStatus.PAUSED,
+                Map.of("quantity", "50", "unit", "kg"));
+        when(conversations.getActiveSession(FACTORY, USER)).thenReturn(Optional.empty());
+        when(conversations.getPausedSessions(FACTORY, USER)).thenReturn(List.of(paused));
+        llmResponse("{\"taskAction\":\"INTERRUPT\",\"taskReference\":\"current-read\",\"resumeAfterRead\":true,\"resumeEvidence\":\"不用的原料还有多少\"}");
+        IntentExecuteRequest request = request("不用的原料还有多少");
+        request.setSemanticContext(Map.of("contextStatus", "PRESENT", "references", List.of(
+                Map.of("type", "READ_QUERY", "taskStatus", "ACTIVE", "id", "MATERIAL_BATCH_QUERY",
+                        "reference", "entity-0"))));
+
+        IntentExecuteResponse result = withActorResult(() -> support.prepare(FACTORY, USER, request));
+        assertThat(result).isNull();
+        assertThat(request.getSemanticTaskAction()).isEqualTo("READ_CONTINUE");
+        verify(conversations, never()).pauseConversation(anyString(), anyLong(), anyString(), anyBoolean());
+        verify(conversations, never()).resumeConversation(anyString(), anyLong(), anyString());
+        verify(conversations, never()).cancelConversation(anyString(), anyLong(), anyString(), anyBoolean());
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidActionPayloads")
+    void malformedOrConflictingActionFieldsFailClosed(String payload) {
+        ConversationSession session = draft("draft-real", ConversationSession.SessionStatus.ACTIVE,
+                Map.of("quantity", "50", "unit", "kg"));
+        when(conversations.getActiveSession(FACTORY, USER)).thenReturn(Optional.of(session));
+        when(conversations.getPausedSessions(FACTORY, USER)).thenReturn(List.of());
+        llmResponse(payload);
+
+        IntentExecuteResponse result = withActorResult(() -> support.prepare(FACTORY, USER, request("继续说明")));
+        assertThat(result).isNotNull();
+        assertThat(result.getStatus()).isEqualTo("UNSUPPORTED");
+        verify(conversations, never()).pauseConversation(anyString(), anyLong(), anyString(), anyBoolean());
+        verify(conversations, never()).cancelConversation(anyString(), anyLong(), anyString(), anyBoolean());
+    }
+
+    static Stream<String> invalidActionPayloads() {
+        return Stream.of(
+                "{\"taskAction\":\"INTERRUPT\",\"action\":\"CANCEL\"}",
+                "{\"taskAction\":42}",
+                "{\"taskAction\":\"NOT_REAL\"}",
+                "{\"message\":\"missing action\"}");
+    }
+
+    @Test
+    void currentReadReferenceWithoutCurrentReadFailsClosed() {
+        ConversationSession paused = draft("paused-read", ConversationSession.SessionStatus.PAUSED,
+                Map.of("quantity", "50", "unit", "kg"));
+        when(conversations.getActiveSession(FACTORY, USER)).thenReturn(Optional.empty());
+        when(conversations.getPausedSessions(FACTORY, USER)).thenReturn(List.of(paused));
+        llmResponse("{\"taskAction\":\"INTERRUPT\",\"taskReference\":\"current-read\"}");
+
+        IntentExecuteResponse result = withActorResult(() -> support.prepare(FACTORY, USER, request("先处理别的")));
+        assertThat(result).isNotNull();
+        assertThat(result.getStatus()).isEqualTo("NEED_MORE_INFO");
+        verify(conversations, never()).pauseConversation(anyString(), anyLong(), anyString(), anyBoolean());
     }
 
     @Test

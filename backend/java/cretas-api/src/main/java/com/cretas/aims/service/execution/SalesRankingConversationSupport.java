@@ -163,6 +163,12 @@ public class SalesRankingConversationSupport {
             metadata.put("reason", reason);
         if (request.getSemanticPreviousRead() != null && request.getSemanticPreviousRead().get("resultReferences") instanceof java.util.List<?> refs)
             metadata.put("resultReferences", refs);
+        if (request.getSemanticPreviousRead() != null
+                && "SERVER_TOOL_RESULT".equals(request.getSemanticPreviousRead().get("resultProvenance")))
+            metadata.put("resultProvenance", "SERVER_TOOL_RESULT");
+        if (request.getSemanticPreviousRead() != null
+                && request.getSemanticPreviousRead().get("resultSummary") instanceof Map<?,?> summary)
+            metadata.put("resultSummary",summary);
         if (request.getSemanticPreviousRead() != null && request.getSemanticPreviousRead().get("toolName") instanceof String sourceTool)
             metadata.put("toolName", sourceTool);
         boolean reserved = memory.compareAndSetReadQuery(factoryId, userId, request.getSessionId(), observed,
@@ -218,6 +224,11 @@ public class SalesRankingConversationSupport {
 
     boolean finishRead(String factoryId, Long userId, IntentExecuteRequest request, String status,
                        java.util.List<Map<String,Object>> resultReferences) {
+        return finishRead(factoryId,userId,request,status,resultReferences,Map.of());
+    }
+
+    boolean finishRead(String factoryId, Long userId, IntentExecuteRequest request, String status,
+                       java.util.List<Map<String,Object>> resultReferences,Map<String,Object> resultSummary) {
         if (request.getSemanticReadVersion() == null) return true;
         ConversationContext owner = memory.getContext(request.getSessionId());
         if (!owned(owner, factoryId, userId, request.getSessionId()) || !isCurrent(factoryId, userId, request)) return false;
@@ -229,8 +240,11 @@ public class SalesRankingConversationSupport {
         if ("UNSUPPORTED_CAPABILITY".equals(status)) values.put("reason", status);
         if ("UNSUPPORTED_CAPABILITY".equals(values.get("reason"))) values.put("taskStatus", "BLOCKED");
         if (request.getSemanticParameters() != null && resultReferences != null
-                && Set.of("SUCCESS","COMPLETED").contains(String.valueOf(status)))
+                && Set.of("SUCCESS","COMPLETED").contains(String.valueOf(status))) {
             values.put("resultReferences",resultReferences);
+            values.put("resultProvenance", "SERVER_TOOL_RESULT");
+            values.put("resultSummary",resultSummary==null?Map.of():resultSummary);
+        }
         String previousVersion = (String) values.get(TURN_KEY);
         String terminalVersion = UUID.randomUUID().toString(); values.put(TURN_KEY, terminalVersion);
         boolean completed = memory.compareAndSetReadQuery(factoryId, userId, request.getSessionId(), previousVersion,

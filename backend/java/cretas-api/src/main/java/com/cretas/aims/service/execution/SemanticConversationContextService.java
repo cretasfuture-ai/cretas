@@ -185,6 +185,19 @@ public class SemanticConversationContextService {
                                     actual.put("id",item.get("id")); localRefs.add(actual); summaries.add(summary);
                                 }
                                 local.put("resultReferences",List.copyOf(localRefs)); ref.put("resultReferences",List.copyOf(summaries));
+                                String provenance = "SERVER_TOOL_RESULT".equals(slot.getMetadata().get("resultProvenance"))
+                                        ? "SERVER_TOOL_RESULT" : "UNKNOWN";
+                                local.put("resultProvenance",provenance); ref.put("resultProvenance",provenance);
+                                if("SERVER_TOOL_RESULT".equals(provenance)
+                                        && slot.getMetadata().get("resultSummary") instanceof Map<?,?> storedSummary) {
+                                    Map<String,Object> summary=new LinkedHashMap<>();
+                                    for(String key:List.of("returnedCount","referenceCount","totalCount"))
+                                        if(storedSummary.get(key) instanceof Number n && n.longValue()>=0 && n.doubleValue()==n.longValue())
+                                            summary.put(key,n.longValue());
+                                    if(storedSummary.get("referencesComplete") instanceof Boolean complete)
+                                        summary.put("referencesComplete",complete);
+                                    local.put("resultSummary",Map.copyOf(summary));ref.put("resultSummary",Map.copyOf(summary));
+                                }
                             }
                             for (String key : List.of("taskStatus", "reason")) {
                                 if (slot.getMetadata().get(key) instanceof String value) local.put(key, value);
@@ -195,7 +208,8 @@ public class SemanticConversationContextService {
                             Map<String,Object> egressParams = new LinkedHashMap<>(params);
                             egressParams.keySet().removeIf(k -> k.endsWith("Id") || "batchNumber".equals(k));
                             ref.put("parameters", egressParams);
-                            ref.put("parameterSource", "PREVIOUS_EXECUTION_UNCONFIRMED_PROVENANCE");
+                            ref.put("parameterSource", egressParams.isEmpty() ? "NO_STORED_PARAMETERS"
+                                    : "PREVIOUS_EXECUTION_UNCONFIRMED_PROVENANCE");
                             for (String key : List.of("taskStatus", "reason")) {
                                 if (slot.getMetadata().get(key) instanceof String s) ref.put(key, s);
                             }
