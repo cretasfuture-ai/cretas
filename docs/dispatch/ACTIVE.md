@@ -146,6 +146,8 @@
 - 凭证：旧 Aliyun 主账号 AK、旧模型供应商 key、Mall 微信长期凭证仍需各控制台吊销/重置并验证失效。
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
 
+- `FOOD-QUALITY-REPLAY-QA-HELPER-20261107` — `in-progress` — Owner `artifact_param_isolation` — Base `d2347e08ae644fec8ea7377d45fd10c64963d33f` — 仅私有合成QA runner及离线测试，禁网络/凭据/生产/源码改动；精确scope与命令见archive/2026-11-07-quality-recommendation-replay.md，Root保留执行/Git。
+
 ## 维护规则
 
 - 按 AGENTS.md 的唯一协调者、结构化回执与弹性并发规则执行；创建 worktree、派工和合并前核对本表及 `git worktree list`。
