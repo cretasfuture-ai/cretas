@@ -80,12 +80,13 @@ async function inspect(page, _body, ctx) {
   assertBoxExposure(body.data.boxExposure);
   const exposure = body.data.boxExposure;
   const panel = dialog.getByTestId('impact-box-exposure'); await panel.waitFor({state:'visible'});
+  await dialog.locator('.el-loading-mask').waitFor({state:'hidden',timeout:15000});
   requireCondition((await panel.innerText()).includes('在库实物含预留'), 'Physical inventory basis is not visible');
   for (const [kind, testId] of [['stock','box-stock-total'], ['shipped','box-shipped-total']]) {
     const text = (await panel.getByTestId(testId).innerText()).trim();
     requireCondition(text === (exposure[kind].complete ? exposure[kind].totalBoxQuantity : '待核对'), 'UI total differs from server uncertainty');
   }
-  await panel.scrollIntoViewIfNeeded();
+  await panel.getByTestId('box-stock-total').scrollIntoViewIfNeeded();
   return {factoryId:'F006',actorId:1309,materialTypeId:target.materialTypeId,
     sourceBatchCount:body.data.sourceBatches.length,finishedBatchCount:body.data.finishedBatches.length,
     stockSources:exposure.stockSources.length,shipmentSources:exposure.shipmentSources.length,
