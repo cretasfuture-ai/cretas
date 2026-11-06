@@ -42,6 +42,8 @@ const SCENARIOS = [
   require('../scenarios/workspace-capacity-readonly'),
   require('../scenarios/workspace-duplicate-readonly'),
   require('../scenarios/workspace-r3-readonly'),
+  require('../scenarios/factory-management-workspaces-readonly'),
+  require('../scenarios/factory-management-workspaces-readonly').denied,
   require('../scenarios/yield-header-r3-readonly'),
   require('../scenarios/finished-inventory-filter-readonly'),
   require('../scenarios/sales-date-draft-readonly'),

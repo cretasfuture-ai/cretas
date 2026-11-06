@@ -6,6 +6,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
 import { useWorkspaceStore } from '@/store/modules/workspace';
+import { useNavigationVisibilityStore, type NavigationVisibilityIdentity } from '@/store/modules/navigationVisibility';
 import { usePlatformFactoryContextStore, isFactoryViewPageRoute } from '@/store/modules/platformFactoryContext';
 import type { User as AuthUser } from '@/types/auth';
 import { get } from '@/api/request';
@@ -18,6 +19,7 @@ import {
   Histogram
 } from '@element-plus/icons-vue';
 import { menuConfig, platformMenuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
+import { resolveWorkspaceFactoryType, resolveWorkspaceFactoryTypeFromUser } from '@/config/workspaces';
 import SidebarMenuNode from './SidebarMenuNode.vue';
 import { getF006DemoMenu } from './f006DemoMenu';
 import {
@@ -33,12 +35,18 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const taskBadges = useTaskBadgeStore();
 const workspace = useWorkspaceStore();
+const navigationVisibility = useNavigationVisibilityStore();
 const factoryView = usePlatformFactoryContextStore();
 
 // 当前用户角色
 const roleCode = computed(() => authStore.currentRole);
 const effectiveFactoryId = computed(() => factoryView.factoryId || authStore.factoryId);
 const effectiveFactoryType = computed(() => factoryView.context?.factoryType || authStore.factoryType);
+const workspaceFactoryType = computed(() => resolveWorkspaceFactoryType(
+  factoryView.isViewingFactory
+    ? factoryView.context?.factoryType
+    : resolveWorkspaceFactoryTypeFromUser(authStore.user),
+));
 
 // R19: Canvas module enable/disable — hide disabled modules from sidebar
 const disabledModuleCodes = ref<string[]>([]);
@@ -107,15 +115,15 @@ function isDemoTenant(factoryId: string | undefined): boolean {
 // and re-runs again if the user/factory identity changes (re-login). Updates
 // the reactive `disabledModuleCodes` ref so `disabledSidebarModules` (and thus
 // `filteredMenu`) recompute automatically.
-let disabledFetchToken = 0;
 async function fetchDisabledModules(factoryId: string) {
-  const token = ++disabledFetchToken;
+  const token = navigationVisibility.beginLoading();
   factoryAnalyticsMenuEnabled.value = false;
   // 保密配置读到 `=== true` 之前, 依赖它的菜单 (工艺保密) 一律不显示
   hiddenFactoryMenuPaths.value = secrecyHiddenMenuPaths({});
   hiddenFactoryMenuModules.value = [];
   if (!factoryId || isDemoTenant(factoryId)) {
     disabledModuleCodes.value = [];
+    navigationVisibility.markUnavailableIfCurrent(token);
     return;
   }
   try {
@@ -124,31 +132,36 @@ async function fetchDisabledModules(factoryId: string) {
       get(`/${factoryId}/feature-config`),
     ]);
     // Guard against stale responses if factoryId changed mid-flight (re-login).
-    if (token !== disabledFetchToken) return;
+    if (!navigationVisibility.isCurrentLoad(token)) return;
     const res = disabledResult.status === 'fulfilled' ? disabledResult.value : null;
-    if (res?.success && Array.isArray(res.data)) {
+    const disabledPayloadValid = res?.success === true && Array.isArray(res.data);
+    const featuresPayload = featuresResult.status === 'fulfilled' ? featuresResult.value : null;
+    const featuresPayloadValid = featuresPayload?.success === true && Array.isArray(featuresPayload.data);
+    if (disabledPayloadValid) {
       disabledModuleCodes.value = res.data;
     } else {
       disabledModuleCodes.value = [];
     }
-    factoryAnalyticsMenuEnabled.value = featuresResult.status === 'fulfilled'
-      && featuresResult.value.success
-      && hasFactoryAnalyticsSidebarOptIn(featuresResult.value.data);
+    if (!disabledPayloadValid || !featuresPayloadValid) {
+      hiddenFactoryMenuModules.value = [];
+      navigationVisibility.markErrorIfCurrent(token);
+      return;
+    }
+    factoryAnalyticsMenuEnabled.value = hasFactoryAnalyticsSidebarOptIn(featuresPayload.data);
     // 工厂级保密配置 (平台设置, 只读): 「工艺保密」不是明确开启 (=== true) 时隐藏工艺保密菜单
-    const secrecyFlags = featuresResult.status === 'fulfilled' && featuresResult.value.success
-      ? secrecyFromFeatureConfig(featuresResult.value.data) : {};
+    const secrecyFlags = secrecyFromFeatureConfig(featuresPayload.data);
     hiddenFactoryMenuPaths.value = [
-      ...(featuresResult.status === 'fulfilled' && featuresResult.value.success
-        ? getDisabledFactoryMenuPaths(featuresResult.value.data) : []),
+      ...getDisabledFactoryMenuPaths(featuresPayload.data),
       ...secrecyHiddenMenuPaths(secrecyFlags),
     ];
-    hiddenFactoryMenuModules.value = featuresResult.status === 'fulfilled' && featuresResult.value.success
-      ? getHiddenFactoryMenuModules(featuresResult.value.data) : [];
+    hiddenFactoryMenuModules.value = getHiddenFactoryMenuModules(featuresPayload.data);
+    navigationVisibility.markReadyIfCurrent(token);
   } catch {
     /* config not set up for this factory */
-    if (token === disabledFetchToken) {
+    if (navigationVisibility.isCurrentLoad(token)) {
       disabledModuleCodes.value = [];
       hiddenFactoryMenuModules.value = [];
+      navigationVisibility.markErrorIfCurrent(token);
     }
   }
 }
@@ -231,6 +244,10 @@ function canSeeMenuItem(item: MenuItem): boolean {
 
   if (hiddenByFactory || hiddenByModule) return false;
 
+  const itemFactoryType = item.requiresFactoryContext ? workspaceFactoryType.value : factoryType;
+  if (item.allowedFactoryTypes && !item.allowedFactoryTypes.includes(itemFactoryType)) return false;
+  if (item.requiresFactoryContext && (!effectiveFactoryId.value?.trim() || authStore.isPlatform || !workspaceFactoryType.value)) return false;
+
   // 路演 demo 租户策展: 隐藏内部/无数据模块 (按业态)
   if (isDemoTenant(effectiveFactoryId.value)) {
     const hidePaths = DEMO_HIDE_PATHS_BY_TYPE[factoryType] || [];
@@ -282,6 +299,34 @@ const filteredMenu = computed(() => {
     .map(item => filterMenuItem(item))
     .filter((item): item is MenuItem => item !== null);
 });
+
+function collectVisiblePaths(items: readonly MenuItem[]): string[] {
+  return items.flatMap((item) => [
+    item.path,
+    ...(item.children ? collectVisiblePaths(item.children) : []),
+  ]);
+}
+
+const navigationIdentity = computed<NavigationVisibilityIdentity>(() => ({
+  factoryId: effectiveFactoryId.value || '',
+  role: roleCode.value,
+  factoryType: workspaceFactoryType.value,
+  isPlatform: authStore.isPlatform,
+}));
+
+// Publish only the already fully filtered sidebar paths. Consumers must match
+// this identity exactly; a missing or stale snapshot fails closed.
+watch(
+  [filteredMenu, navigationIdentity, () => navigationVisibility.status],
+  ([visibleMenu, identity, status]) => {
+    if (status !== 'ready') return;
+    navigationVisibility.publish({
+      ...identity,
+      paths: collectVisiblePaths(visibleMenu),
+    });
+  },
+  { immediate: true, deep: true },
+);
 
 const LOGISTICS_TITLE_OVERRIDES: Record<string, string> = {
   '/scheduling': '物流调度',
@@ -351,6 +396,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  navigationVisibility.clear();
   stopBadgeTimer?.();
   if (badgeRefreshTimer) clearTimeout(badgeRefreshTimer);
   badgeRefreshForced = false;

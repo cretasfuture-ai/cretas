@@ -7,6 +7,10 @@ export interface MenuItem {
   module: ModuleName;
   roles?: string[];
   hideForFactoryTypes?: string[];
+  /** Additive allowlist used only by the factory workspace navigation group. */
+  allowedFactoryTypes?: string[];
+  /** Require a concrete non-platform factory context before showing this item. */
+  requiresFactoryContext?: boolean;
   children?: MenuItem[];
   groupLabel?: string;
   /** Backend-authoritative feature gate for platform-only assembly surfaces. */
@@ -59,6 +63,22 @@ export const financeManagerMenu: MenuItem[] = [
 const rawMenuConfig: MenuItem[] = [
   { path: '/analytics/ai-reports', title: 'AI经营报告', icon: 'Document', module: 'analytics', roles: ['factory_super_admin', 'finance_manager'], hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] },
   { path: '/dashboard', title: '首页', icon: 'House', module: 'dashboard', hideForFactoryTypes: ['LOGISTICS'] },
+  {
+    path: '/workspaces',
+    title: '工厂管理工作区',
+    icon: 'Odometer',
+    module: 'dashboard',
+    roles: ['factory_super_admin', 'permission_admin'],
+    hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
+    allowedFactoryTypes: ['FACTORY', 'CENTRAL_KITCHEN'],
+    requiresFactoryContext: true,
+    children: [
+      { path: '/workspaces/overview', title: '经营总览', icon: '', module: 'dashboard', roles: ['factory_super_admin', 'permission_admin'], hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], allowedFactoryTypes: ['FACTORY', 'CENTRAL_KITCHEN'], requiresFactoryContext: true },
+      { path: '/workspaces/exceptions', title: '异常中心', icon: '', module: 'dashboard', roles: ['factory_super_admin', 'permission_admin'], hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], allowedFactoryTypes: ['FACTORY', 'CENTRAL_KITCHEN'], requiresFactoryContext: true },
+      { path: '/workspaces/plans-approvals', title: '方案与审批', icon: '', module: 'dashboard', roles: ['factory_super_admin', 'permission_admin'], hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], allowedFactoryTypes: ['FACTORY', 'CENTRAL_KITCHEN'], requiresFactoryContext: true },
+      { path: '/workspaces/trace-review', title: '追溯与复盘', icon: '', module: 'dashboard', roles: ['factory_super_admin', 'permission_admin'], hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], allowedFactoryTypes: ['FACTORY', 'CENTRAL_KITCHEN'], requiresFactoryContext: true },
+    ],
+  },
   // 🔴 2026-08-07: 这一项此前**只有路由没有菜单入口** —— `router/index.ts` 里
   // `dashboard/ai-value` 声明齐全(title/icon/module 都有)，但 menuConfig 里零命中，
   // 于是用户**点不到它**。小蓝店长第 ③ 块「AI 价值汇总」的页面一直在，却够不着。
@@ -599,6 +619,7 @@ const rawMenuConfig: MenuItem[] = [
 
 const TOP_LEVEL_FLOW_ORDER: Record<string, number> = {
   '/dashboard': 10,
+  '/workspaces': 15,
   '/workdesk': 20,
   '/workflow': 25,
   '/procurement': 30,
