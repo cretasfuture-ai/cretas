@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `FOOD-SUPPLY-BOX-EXPOSURE-20261107` — `in-progress` — Owner `Food Root/artifact_param_isolation` — Base `63e8d235e6b2570054c7ac6f14bc08acea9e93d7` — quality影响查询接FG物理在库/实际发货快照折合箱数，缺事实unknown；backend/query/测试与Root Web精确锁见archive/2026-11-07-supply-impact-box-exposure.md。不碰已锁血缘Assembler/DTO/RN、APS/迁移。
 
 
 
