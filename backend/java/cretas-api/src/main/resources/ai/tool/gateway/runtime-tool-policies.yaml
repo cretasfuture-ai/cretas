@@ -11,8 +11,8 @@ policies:
     # User administration is tenant-generic and has no organization-type branch in UserDisableTool.
     allowedBusinessTypes: [FACTORY, HEADQUARTERS, CENTRAL_KITCHEN, LOGISTICS]
     domainTags: ["user", "hr", "identity"]
-    version: "2.0.0"
-    supportsPreview: false
+    version: "3.0.0"
+    supportsPreview: true
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED
     idempotencyPolicy: REQUIRED_FOR_EXECUTION

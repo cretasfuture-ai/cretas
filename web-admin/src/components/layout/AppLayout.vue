@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   queryWithoutReturnScroll,
@@ -19,6 +19,9 @@ import ReturnBanner from './ReturnBanner.vue';
 import F006SandboxBanner from './F006SandboxBanner.vue';
 import { recoverActiveSandbox, sandboxSession, selectSandboxActor } from '@/demo/f006Sandbox';
 import request from '@/api/request';
+import { presentationEnabled } from '@/demo/f006Presentation';
+const DemoFlowConsole = defineAsyncComponent(() => import('@/views/demo-flow/index.vue').then(module => module.default));
+const showDemoConsole = computed(() => authStore.factoryId === 'F006' && Number(authStore.user?.id) === 1309 && authStore.currentRole === 'factory_super_admin' && (route.path === '/demo-flow' || (sandboxSession.value?.status === 'READY' && presentationEnabled.value)));
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -32,6 +35,7 @@ const sandboxBootstrapError = ref('');
 let sandboxBootstrapGeneration = 0;
 const sandboxReady = computed(() => (authStore.factoryId !== 'F006' || sandboxBootstrapDone.value) && (!sandboxSession.value || sandboxSession.value.status === 'READY'));
 async function bootstrapSandbox(): Promise<void> {
+  presentationEnabled.value = false;
   const generation = ++sandboxBootstrapGeneration;
   sandboxBootstrapDone.value = false;
   selectSandboxActor(authStore.user?.id, authStore.factoryId);
@@ -45,6 +49,10 @@ async function bootstrapSandbox(): Promise<void> {
   } catch { if (generation === sandboxBootstrapGeneration) sandboxBootstrapError.value = '无法核对演示状态，请重试'; }
 }
 watch(() => [authStore.factoryId, authStore.user?.id, authStore.currentRole], () => void bootstrapSandbox(), { immediate: true });
+
+function refreshDemoBusinessPage(): void {
+  if (sandboxSession.value?.status === 'READY' && authStore.factoryId === 'F006' && Number(authStore.user?.id) === 1309) workspace.invalidateModules([...new Set(workspace.tabs.map(tab => tab.module).filter((module): module is string => typeof module === 'string' && module.length > 0))]);
+}
 
 function closeReference(): void {
   workspace.closeReference();
@@ -61,7 +69,7 @@ const workspaceCacheKeys = computed(() => workspace.tabs.map(tab => workspace.ca
 
 watch(
   () => workspaceScope.value,
-  (scope) => workspace.setScope(scope),
+  (scope) => { presentationEnabled.value = false; workspace.setScope(scope); },
   { immediate: true },
 );
 
@@ -142,7 +150,8 @@ function pinDraggedReference(event: DragEvent): void {
 
       <!-- 内容区 -->
       <div class="workspace-content-shell" :class="{ 'has-reference': workspace.referenceTab && !isReferenceFrame }">
-        <main class="app-content" :class="{ 'reference-frame-content': isReferenceFrame }">
+        <main class="app-content" :class="{ 'reference-frame-content': isReferenceFrame, 'has-demo-guide': showDemoConsole && route.path !== '/demo-flow' }">
+          <DemoFlowConsole v-if="sandboxReady && !isReferenceFrame && showDemoConsole" :key="workspaceScope" :compact="route.path !== '/demo-flow'" :refresh-business-page="refreshDemoBusinessPage" class="f006-demo-console" />
           <el-result v-if="!sandboxReady" icon="info" title="正在核对演示状态" :sub-title="sandboxBootstrapError || '沙盒准备或清理完成后，即可继续。'"><template v-if="sandboxBootstrapError" #extra><el-button @click="bootstrapSandbox">重试</el-button></template></el-result>
           <router-view v-else v-slot="{ Component }">
             <!--
@@ -154,7 +163,7 @@ function pinDraggedReference(event: DragEvent): void {
             <WorkspaceRouteCache
               v-else
               :key="workspaceScope"
-              :component="Component"
+              :component="route.path === '/demo-flow' ? undefined : Component"
               :cache-keys="workspaceCacheKeys"
               :active-key="workspace.cacheKeyFor(workspaceRouteKey({ path: route.path, query: route.query }))"
             />
@@ -182,6 +191,11 @@ function pinDraggedReference(event: DragEvent): void {
 </template>
 
 <style lang="scss" scoped>
+.app-content.has-demo-guide { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 16px; align-items: start; }
+.has-demo-guide > .f006-demo-console { grid-column: 2; grid-row: 1; position: sticky; top: 12px; max-height: calc(100vh - 160px); overflow: auto; }
+.has-demo-guide > :not(.f006-demo-console) { grid-column: 1; grid-row: 1; min-width: 0; }
+@media (max-width: 1100px) { .app-content.has-demo-guide { grid-template-columns: minmax(0, 1fr); } .has-demo-guide > .f006-demo-console { grid-column: 1; grid-row: 1; position: static; max-height: 440px; } .has-demo-guide > :not(.f006-demo-console) { grid-row: 2; } }
+
 .app-layout {
   min-height: 100vh;
   width: 100%;

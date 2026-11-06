@@ -16,7 +16,7 @@ class ToolDescriptorPolicyResolverTest {
     @Test
     void resolvesOnlyExactVersionSourceAndPermissionMatches() {
         ToolExecutionCommand allowed = command(
-                "user_disable", "2.0.0", ToolExecutionSource.AI_CHAT, Set.of("hr:read_write"));
+                "user_disable", "3.0.0", ToolExecutionSource.AI_CHAT, Set.of("hr:read_write"));
 
         assertThat(resolver.resolve(allowed, allowed.principal()))
                 .get()
@@ -24,9 +24,9 @@ class ToolDescriptorPolicyResolverTest {
                 .isEqualTo("user_disable");
         assertDenied(command("user_disable", "2.0.1", ToolExecutionSource.AI_CHAT,
                 Set.of("hr:read_write")));
-        assertDenied(command("user_disable", "2.0.0", ToolExecutionSource.WORKFLOW,
+        assertDenied(command("user_disable", "3.0.0", ToolExecutionSource.WORKFLOW,
                 Set.of("hr:read_write")));
-        assertDenied(command("user_disable", "2.0.0", ToolExecutionSource.AI_CHAT,
+        assertDenied(command("user_disable", "3.0.0", ToolExecutionSource.AI_CHAT,
                 Set.of("hr:read")));
     }
 

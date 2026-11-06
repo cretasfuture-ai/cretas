@@ -122,7 +122,8 @@ class ToolDescriptorCatalogTest {
         // 2026-10-06: 39 → 47 (+8): 一线默认开放的 8 个日常写工具补只读 doPreview() (打卡 2 / 原料入库 + 领用 /
         // 周转框发出 + 归还 / 质检任务 + 不良登记), 同 ToolDescriptorInventoryDriftTest 的 override supportsPreview 44 → 52。
         // Controlled purchase now requires a real preview and current procurement permission.
-        assertThat(statistics.previewSupported()).isEqualTo(53);
+        // user_disable v3 adds a zero-write preview; its FACTORY chat intent stays retired.
+        assertThat(statistics.previewSupported()).isEqualTo(54);
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.

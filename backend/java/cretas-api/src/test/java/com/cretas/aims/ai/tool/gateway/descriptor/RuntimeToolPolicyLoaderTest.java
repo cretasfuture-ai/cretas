@@ -54,14 +54,14 @@ class RuntimeToolPolicyLoaderTest {
                     .isEqualTo(ApprovalPolicy.NOT_REQUIRED);
         });
         assertThat(manifest.policies().get(0)).satisfies(policy -> {
-            assertThat(policy.version()).isEqualTo("2.0.0");
+            assertThat(policy.version()).isEqualTo("3.0.0");
             assertThat(policy.confirmationPolicy())
                     .isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.idempotencyPolicy())
                     .isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.AI_CHAT);
         });
-        assertThat(manifest.policies().get(0).supportsPreview()).isFalse();
+        assertThat(manifest.policies().get(0).supportsPreview()).isTrue();
         assertThat(manifest.policies().get(1).supportsPreview()).isTrue();
         assertThat(manifest.policies().subList(1, 2)).allSatisfy(policy -> {
             assertThat(policy.toolName()).isEqualTo("canvas_product_work_process_draft_preview");

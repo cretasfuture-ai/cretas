@@ -8,6 +8,7 @@
 ## 在飞任务
 
 - `FOOD-PRODUCT-CREATE-PLAN-BINDING-20261106` — `in-progress` — Owner 食品root/artifact_param_isolation — Base `7872d98a83c370a4d284a071e9c65601cf4f5cbf` — AI产品预览绑定源链/默认值、执行前重验/同快照复制/提交后回读；4 Java及专测scope见archive/2026-11-06-product-create-plan-binding-scope.md；metadata仅root待1510收尾后整合，无生产写。
+- `GENERIC-PROPOSAL-PARETO-20261106` — `blocked` — Owner `01a1a954/root` — Base `7872d98a83c370a4d284a071e9c65601cf4f5cbf` — PR1509已合/正式177s；53目标/full19685零红；线上1/4，3格受共用沙盒阻塞。代码scope及全部锁释放；见archive/2026-11-06-generic-proposal-pareto-closeout.md。
 
 
 
