@@ -35,6 +35,8 @@ describe('presentation pace', () => {
     expect(presentationRoute('process-report-2', entities)).toBe('/production/batches/3')
     expect(presentationRoute('finished-goods-receive', entities)).toBe('/sales/finished-goods')
     expect(presentationRoute('sales-warehouse-confirm', entities)).toBe('/warehouse/shipments')
+    expect(presentationRoute('sales-warehouse-confirm', {...entities,salesShipment:{status:'SHIPPED'}})).toBe('/sales/shipments')
+    expect(presentationRoute('purchase-receive-confirm', {...entities,purchaseReceipt:{status:'CONFIRMED'}})).toBe('/warehouse/materials?view=batches')
     expect(presentationRoute('traceability-read', entities)).toBe('/production/traceability?batchNumber=PB%2Fcurrent')
   })
 })

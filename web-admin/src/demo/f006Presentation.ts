@@ -33,12 +33,12 @@ export function createPresentationCountdown(options: {
 
 export function presentationRoute(step: string, entities: Record<string, Record<string, unknown>>): string {
   const encoded = (entity: string, field = 'id') => entities[entity]?.[field] == null ? '' : encodeURIComponent(String(entities[entity]![field]))
-  if (step.startsWith('purchase-')) return step.includes('receive') ? '/warehouse/materials?view=receiving' : encoded('purchaseOrder') ? `/procurement/orders/${encoded('purchaseOrder')}` : '/procurement/orders'
+  if (step.startsWith('purchase-')) return step.includes('receive') ? entities.purchaseReceipt?.status === 'CONFIRMED' ? '/warehouse/materials?view=batches' : '/warehouse/materials?view=receiving' : encoded('purchaseOrder') ? `/procurement/orders/${encoded('purchaseOrder')}` : '/procurement/orders'
   if (step.startsWith('sales-order') || ['sales-delivery-create', 'sales-shipment-create', 'sales-batch-allocate'].includes(step)) return encoded('salesOrder') ? `/sales/orders/${encoded('salesOrder')}` : '/sales/orders'
   if (step === 'production-plan-create' || step === 'production-settle') return '/production/plans'
   if (step === 'material-requisition') return '/production/material-flow?tab=requisitions'
   if (step === 'finished-goods-receive') return '/sales/finished-goods'
-  if (step === 'sales-warehouse-confirm') return '/warehouse/shipments'
+  if (step === 'sales-warehouse-confirm') return ['SHIPPED', 'DELIVERED'].includes(String(entities.salesShipment?.status)) ? '/sales/shipments' : '/warehouse/shipments'
   if (step === 'traceability-read') return `/production/traceability${encoded('processReport6', 'batchNumber') ? `?batchNumber=${encoded('processReport6', 'batchNumber')}` : ''}`
   const report = step.startsWith('process-report-') ? `processReport${step.split('-').at(-1)}` : ''
   const batchId = report ? encoded(report, 'batchId') : encoded('productionBatch')
