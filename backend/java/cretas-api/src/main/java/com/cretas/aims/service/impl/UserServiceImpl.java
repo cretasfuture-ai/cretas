@@ -478,17 +478,8 @@ public class UserServiceImpl implements UserService {
     }
 
     private boolean isProtectedDeactivationTarget(User user) {
-        return isProtectedRole(user.getRoleCode()) || isProtectedRole(user.getPosition());
-    }
-
-    private boolean isProtectedRole(String value) {
-        if (value == null) {
-            return false;
-        }
-        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
-            case "factory_super_admin", "platform_admin", "超级管理员", "平台管理员", "平台超级管理员" -> true;
-            default -> false;
-        };
+        return com.cretas.aims.security.PlatformRoleBoundary.isProtectedFromFactoryDeactivation(user.getRoleCode())
+                || com.cretas.aims.security.PlatformRoleBoundary.isProtectedFromFactoryDeactivation(user.getPosition());
     }
 
     @Override

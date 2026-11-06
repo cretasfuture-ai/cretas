@@ -291,6 +291,40 @@ class UserDisableConfirmationContractTest {
     }
 
     @Test
+    void centralDeactivationBoundaryPreservesBothAtomicRoleFieldsAndExactLegacyAliases() {
+        UserServiceImpl service = new UserServiceImpl(userRepository, mock(FactoryRepository.class),
+                mock(UserMapper.class), mock(PasswordEncoder.class), mock(ExcelUtil.class));
+        when(userRepository.deactivateIfEligible(eq("F-CONFIRM"), eq(11L), any())).thenReturn(0);
+        when(userRepository.findById(11L)).thenReturn(Optional.of(target));
+        target.setIsActive(false);
+        for (String protectedRole : Set.of("factory_super_admin", "platform_admin", "超级管理员", "平台管理员", "平台超级管理员")) {
+            String normalizedAlias = " " + protectedRole.toUpperCase(java.util.Locale.ROOT) + " ";
+            assertThat(com.cretas.aims.security.PlatformRoleBoundary
+                    .isProtectedFromFactoryDeactivation(normalizedAlias)).isTrue();
+            target.setRoleCode(normalizedAlias);
+            target.setPosition("operator");
+            assertThatThrownBy(() -> service.deactivateUser("F-CONFIRM", 11L))
+                    .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                    .hasMessageContaining("保护");
+            target.setRoleCode("operator");
+            target.setPosition(normalizedAlias);
+            assertThatThrownBy(() -> service.deactivateUser("F-CONFIRM", 11L))
+                    .isInstanceOf(com.cretas.aims.exception.BusinessException.class)
+                    .hasMessageContaining("保护");
+        }
+        assertThat(com.cretas.aims.security.PlatformRoleBoundary.isProtectedFromFactoryDeactivation(null)).isFalse();
+        // Preserve this boundary's exact policy; platform-tier classification never grants authority.
+        for (String ordinaryRole : Set.of("permission_admin", "operator", "developer", "super_admin")) {
+            assertThat(com.cretas.aims.security.PlatformRoleBoundary
+                    .isProtectedFromFactoryDeactivation(ordinaryRole)).isFalse();
+        }
+        target.setRoleCode("permission_admin");
+        target.setPosition(null);
+        service.deactivateUser("F-CONFIRM", 11L);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
     void realGatewayLeaseAndLedgerExecuteBoundTargetOnceThenReplayWithoutSecondBusinessWrite()
             throws Exception {
         stubValidActor();
