@@ -631,6 +631,7 @@ defineExpose({ hasUnsavedRows });
       </div>
       <!-- View-mode toggle: applies to all process tabs simultaneously -->
       <el-segmented
+        data-testid="process-sheet-view-mode"
         :model-value="viewMode"
         :options="[{ label: '表格', value: 'grid' }, { label: '卡片', value: 'card' }]"
         size="small"

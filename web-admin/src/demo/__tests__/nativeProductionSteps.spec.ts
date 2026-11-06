@@ -61,7 +61,8 @@ describe('native production adapters', () => {
     const panel=document.createElement('div');
     for(const count of [24,60]){const list=document.createElement('ul');for(let n=0;n<count;n++){const choice=document.createElement('li');choice.className='el-time-spinner__item';choice.textContent=String(n).padStart(2,'0');list.append(choice)}list.className='el-time-spinner__list';panel.append(list)}
     const confirmation=document.createElement('div');confirmation.innerHTML='<span class="el-message-box__title">确认正式报工</span>';
-    testUi.waitFor = async (selector) => selector==='.el-time-panel'?panel:selector==='.el-message-box'?confirmation:node;
+    const modes=document.createElement('div');modes.innerHTML='<label>表格</label><label>卡片</label>';
+    testUi.waitFor = async (selector) => selector==='[data-testid="process-sheet-view-mode"]'?modes:selector==='.el-time-panel'?panel:selector==='.el-message-box'?confirmation:node;
     testUi.read = vi.fn(async (path: string) => path.includes('/rows') ? { data: [{ clientRowId: `${s.runKey}:p1`, submissionStatus: 'SUBMITTED' }] } : { data: [] });
     await adapter.prepare({ state: s, context: s.context!, ui: testUi });
     const capture=testUi.capture;

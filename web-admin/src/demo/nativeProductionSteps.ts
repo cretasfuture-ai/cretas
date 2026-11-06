@@ -127,6 +127,12 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
       const {ui,state}=packet
       if(!options.openProcessEntry)throw new Error('当前页面没有接入原生工序报工表单')
       await options.openProcessEntry(packet)
+      await ui.hold('展示原有报工界面',1)
+      const modes=await ui.waitFor('[data-testid="process-sheet-view-mode"]')
+      const cards=Array.from(modes.querySelectorAll<HTMLElement>('label')).filter(label=>label.textContent?.trim()==='卡片')
+      if(cards.length!==1)throw new Error('原页面缺少唯一的卡片报工切换')
+      cards[0]!.setAttribute('data-native-process-card','true')
+      await ui.click('[data-native-process-card="true"]','切换原有卡片报工视图')
       await ui.click(`[data-testid="process-tab-${n}"]`, `打开工序${n}`)
       const node = await ui.waitFor(`[data-testid="process-report-${n}"]`, 15000)
       const processCode = node.getAttribute('data-process-code')
