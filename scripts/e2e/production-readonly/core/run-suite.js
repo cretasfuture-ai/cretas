@@ -66,6 +66,7 @@ const SCENARIOS = [
   require('../scenarios/f006-demo-menu-readonly').existing,
   require('../scenarios/label-qc-readonly'),
   require('../scenarios/sales-order-lifecycle-readonly'),
+  require('../scenarios/material-requisition-closed-readonly'),
   require('../scenarios/ui-stability'),
   require('../scenarios/visual-page-census-readonly'),
 ];
@@ -162,6 +163,7 @@ async function runSuiteWithPage(page, options = {}) {
         smartbiPurchaseInventory: options.smartbiPurchaseInventory,
         smartbiLegacyKpi: options.smartbiLegacyKpi,
         smartbiScale: options.smartbiScale,
+        materialRequisition: options.materialRequisition,
         scenarioRef,
         mutationGuard,
         network,
