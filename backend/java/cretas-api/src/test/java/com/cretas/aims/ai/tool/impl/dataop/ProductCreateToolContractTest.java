@@ -19,10 +19,12 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -68,7 +70,8 @@ class ProductCreateToolContractTest {
     @Test
     void similarNonEmptyChainIsCopiedAndCountIsReported() throws Exception {
         configureSource(List.of(process("切片", "wp-slice"), process("腌制", "wp-marinate")));
-        when(productWorkProcessService.copyChain(FACTORY_ID, SOURCE_ID, TARGET_ID)).thenReturn(2);
+        when(productWorkProcessService.copyPreparedChain(eq(FACTORY_ID), eq(SOURCE_ID),
+                eq(TARGET_ID), any(ProductWorkProcessService.PreparedChain.class))).thenReturn(2);
         configureCreatedProduct();
 
         JsonNode result = execute();
@@ -76,8 +79,34 @@ class ProductCreateToolContractTest {
         assertThat(result.path("success").asBoolean()).isTrue();
         assertThat(result.at("/data/copiedProcessCount").asInt()).isEqualTo(2);
         assertThat(result.at("/data/inheritedFromProduct").asText()).isEqualTo(SOURCE_NAME);
-        verify(productWorkProcessService).copyChain(FACTORY_ID, SOURCE_ID, TARGET_ID);
+        verify(productWorkProcessService).copyPreparedChain(eq(FACTORY_ID), eq(SOURCE_ID),
+                eq(TARGET_ID), any(ProductWorkProcessService.PreparedChain.class));
         verify(productTypeService).createProductType(eq(FACTORY_ID), any(ProductTypeDTO.class));
+    }
+
+    @Test
+    void directNativePreviewDoesNotExposeServerBinding() throws Exception {
+        JsonNode preview = objectMapper.readTree(tool.preview(
+                com.cretas.aims.ai.dto.ToolCall.of(
+                        "product-create-native-preview", "product_create",
+                        objectMapper.writeValueAsString(Map.of("productName", TARGET_NAME))),
+                Map.of("factoryId", FACTORY_ID, "userId", 42L)));
+
+        assertThat(preview.at("/data/" + ProductCreateTool.SERVER_BINDING_KEY).isMissingNode())
+                .isTrue();
+    }
+
+    @Test
+    void previewCaptureScopeIsRemovedWhenCaptureFails() {
+        try (ProductCreateTool.PreviewBindingCapture capture =
+                     ProductCreateTool.openPreviewBindingCapture(FACTORY_ID)) {
+            assertThatThrownBy(capture::requireJson)
+                    .isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+        }
+
+        ProductCreateTool.PreviewBindingCapture reopened =
+                ProductCreateTool.openPreviewBindingCapture(FACTORY_ID);
+        reopened.close();
     }
 
     @Test
@@ -109,7 +138,8 @@ class ProductCreateToolContractTest {
     void copyFailureIsAnExplicitUnknownOutcomeWithSourceFacts() throws Exception {
         configureSource(List.of(process("切片", "wp-slice")));
         doThrow(new IllegalStateException("database secret must not escape"))
-                .when(productWorkProcessService).copyChain(FACTORY_ID, SOURCE_ID, TARGET_ID);
+                .when(productWorkProcessService).copyPreparedChain(eq(FACTORY_ID), eq(SOURCE_ID),
+                        eq(TARGET_ID), any(ProductWorkProcessService.PreparedChain.class));
         configureCreatedProduct();
 
         JsonNode result = execute();
@@ -119,7 +149,23 @@ class ProductCreateToolContractTest {
                 .contains(TARGET_ID, TARGET_NAME, SOURCE_NAME, "已创建", "未完成继承")
                 .doesNotContain("database secret", "无相似", "已继承");
         verify(productTypeService).createProductType(eq(FACTORY_ID), any(ProductTypeDTO.class));
-        verify(productWorkProcessService).copyChain(FACTORY_ID, SOURCE_ID, TARGET_ID);
+        verify(productWorkProcessService).copyPreparedChain(eq(FACTORY_ID), eq(SOURCE_ID),
+                eq(TARGET_ID), any(ProductWorkProcessService.PreparedChain.class));
+    }
+
+    @Test
+    void sourceChainDriftIsRejectedBeforeProductWrite() throws Exception {
+        configureSource(List.of(process("切片", "wp-slice")));
+        doThrow(new com.cretas.aims.exception.BusinessException(409,
+                "源产品工序链或主工序版本已变化"))
+                .when(productWorkProcessService).validatePreparedChain(
+                        eq(FACTORY_ID), eq(SOURCE_ID), any(ProductWorkProcessService.PreparedChain.class));
+
+        JsonNode result = execute();
+
+        assertThat(result.path("success").asBoolean()).isFalse();
+        assertThat(result.path("error").asText()).contains("已变化");
+        verify(productTypeService, never()).createProductType(eq(FACTORY_ID), any(ProductTypeDTO.class));
     }
 
     private void configureSource(List<ProductWorkProcessDTO> chain) {
@@ -132,9 +178,11 @@ class ProductCreateToolContractTest {
                 .thenReturn(ProductTypeSuggestionDTO.builder().baseProductName(SOURCE_NAME).build());
         when(productTypeRepository.findByFactoryIdAndName(FACTORY_ID, SOURCE_NAME))
                 .thenReturn(Optional.of(source));
+        when(productTypeRepository.findByIdAndFactoryId(SOURCE_ID, FACTORY_ID))
+                .thenReturn(Optional.of(source));
         when(processSecretGuard.permitsProduct(anyString(), anyString(), any(), anyString()))
                 .thenReturn(true);
-        when(productWorkProcessService.listByProduct(FACTORY_ID, SOURCE_ID)).thenReturn(chain);
+        when(productWorkProcessService.prepareChain(FACTORY_ID, SOURCE_ID)).thenReturn(prepared(chain));
         when(bomRecipeService.getCurrentRecipe(FACTORY_ID, SOURCE_ID)).thenReturn(Optional.empty());
         when(bomRecipeService.getSeasoningByProduct(FACTORY_ID, SOURCE_ID)).thenReturn(Optional.empty());
     }
@@ -157,13 +205,39 @@ class ProductCreateToolContractTest {
                 .build();
     }
 
+    private ProductWorkProcessService.PreparedChain prepared(List<ProductWorkProcessDTO> chain) {
+        return new ProductWorkProcessService.PreparedChain(
+                SOURCE_ID,
+                chain.stream().map(row -> new ProductWorkProcessService.PreparedProcess(
+                        row.getWorkProcessId(), row.getProcessOrder(), row.getUnitOverride(),
+                        row.getEstimatedMinutesOverride(), row.getReportingRequired(),
+                        row.getAllowSemiFinishedInjection(), row.getAllowMultipleUpstreamSources(),
+                        row.getAllowFinishedGoodsSource(), row.getDefaultCostCategory(),
+                        row.getPackagingTemplate(), row.getAuxAllocMethod(), row.getStandardYieldRate(),
+                        row.getAuxUnitPrice(), row.getAuxBasis())).toList(),
+                List.of(), "digest");
+    }
+
     private JsonNode execute() throws Exception {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("productName", TARGET_NAME);
+        params.put("productCategory", "FINISHED_PRODUCT");
+        String bindingJson;
+        try (ProductCreateTool.PreviewBindingCapture capture =
+                     ProductCreateTool.openPreviewBindingCapture(FACTORY_ID)) {
+            objectMapper.readTree(tool.preview(
+                    com.cretas.aims.ai.dto.ToolCall.of(
+                            "product-create-preview-contract", "product_create",
+                            objectMapper.writeValueAsString(params)),
+                    Map.of("factoryId", FACTORY_ID, "userId", 42L)));
+            bindingJson = capture.requireJson();
+        }
+        params.put(ProductCreateTool.SERVER_BINDING_KEY, bindingJson);
         return objectMapper.readTree(tool.execute(
                 com.cretas.aims.ai.dto.ToolCall.of(
                         "product-create-contract",
                         "product_create",
-                        "{\"productName\":\"" + TARGET_NAME
-                                + "\",\"productCategory\":\"FINISHED_PRODUCT\"}"),
+                        objectMapper.writeValueAsString(params)),
                 Map.of("factoryId", FACTORY_ID, "userId", 42L)));
     }
 }

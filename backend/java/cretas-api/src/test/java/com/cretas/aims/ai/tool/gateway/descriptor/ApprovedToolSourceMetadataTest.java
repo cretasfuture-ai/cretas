@@ -44,6 +44,7 @@ class ApprovedToolSourceMetadataTest {
     void fixedWriteToolsPublishExplicitAnyOfPermissionsAndPreviewMetadata() {
         ProductCreateTool productCreate = new ProductCreateTool();
 
+        assertThat(productCreate.getVersion()).isEqualTo("2.0.0");
         assertThat(productCreate.getActionType()).isEqualTo(ToolExecutor.ActionType.WRITE);
         assertThat(productCreate.getRiskLevel()).isEqualTo(ToolExecutor.RiskLevel.MEDIUM);
         assertThat(productCreate.getRequiredPermissions())

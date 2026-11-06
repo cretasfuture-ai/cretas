@@ -10,6 +10,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
+import com.cretas.aims.ai.tool.impl.dataop.ProductCreateTool;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.PreviewTokenService;
@@ -24,6 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Optional;
 import java.util.Set;
 
@@ -72,8 +74,11 @@ class AiProductCreateControllerGatewayTest {
     @Test
     void cookieBackedTrustedAttributesPreviewThroughGatewayAndIssueOpaqueProof() {
         trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
-        when(gateway.execute(any())).thenReturn(gatewaySuccess(
-                ToolExecutionMode.PREVIEW, Map.of("status", "PREVIEW", "productName", "SKU-A")));
+        when(gateway.execute(any())).thenAnswer(invocation -> {
+            ProductCreateTool.capturePreviewBindingJson(
+                    FACTORY_ID, writeJson(bindingFor(Map.of("productName", "SKU-A"))));
+            return gatewaySuccess(ToolExecutionMode.PREVIEW, previewData("SKU-A"));
+        });
         IntentPreviewToken token = boundToken(
                 Map.of("productName", "SKU-A"), "proof-product");
         when(previewTokenService.createBoundToken(any())).thenReturn(token);
@@ -83,6 +88,7 @@ class AiProductCreateControllerGatewayTest {
 
         assertThat(data.get("confirmationToken")).isEqualTo("proof-product");
         assertThat(data.get("confirmationExpiresAt")).isEqualTo(token.getExpiresAt().toString());
+        assertThat(data.containsKey(ProductCreateTool.SERVER_BINDING_KEY)).isFalse();
         ArgumentCaptor<ToolExecutionCommand> command =
                 ArgumentCaptor.forClass(ToolExecutionCommand.class);
         verify(gateway).execute(command.capture());
@@ -94,6 +100,10 @@ class AiProductCreateControllerGatewayTest {
                 ArgumentCaptor.forClass(PreviewTokenService.BoundTokenRequest.class);
         verify(previewTokenService).createBoundToken(tokenRequest.capture());
         assertThat(tokenRequest.getValue().parameters()).containsEntry("productName", "SKU-A");
+        assertThat(tokenRequest.getValue().parameters())
+                .containsKey(ProductCreateTool.SERVER_BINDING_KEY);
+        assertThat(tokenRequest.getValue().parameters().get(ProductCreateTool.SERVER_BINDING_KEY))
+                .isInstanceOf(String.class);
         assertThat(tokenRequest.getValue().executionMode()).isEqualTo(ToolExecutionMode.EXECUTE);
     }
 
@@ -171,26 +181,56 @@ class AiProductCreateControllerGatewayTest {
     }
 
     private IntentPreviewToken boundToken(Map<String, Object> body, String proofToken) {
+        Map<String, Object> persisted = new LinkedHashMap<>(body);
+        persisted.put(ProductCreateTool.SERVER_BINDING_KEY, writeJson(bindingFor(body)));
         String digest = ToolCommandDigest.commandDigest(
                 FACTORY_ID,
                 USER_ID,
                 "product_create",
-                "1.0.0",
+                "2.0.0",
                 ToolExecutionMode.EXECUTE,
-                objectMapper.valueToTree(body));
+                objectMapper.valueToTree(persisted));
         return IntentPreviewToken.builder()
                 .token(proofToken)
                 .factoryId(FACTORY_ID)
                 .tenantId(FACTORY_ID)
                 .userId(USER_ID)
                 .toolName("product_create")
-                .descriptorVersion("1.0.0")
+                .descriptorVersion("2.0.0")
                 .executionMode(ToolExecutionMode.EXECUTE)
                 .parametersHash("b".repeat(64))
                 .commandDigest(digest)
+                .previewData(writeJson(persisted))
                 .status(IntentPreviewToken.TokenStatus.PENDING)
                 .expiresAt(LocalDateTime.now().plusMinutes(5))
                 .build();
+    }
+
+    private Map<String, Object> previewData(String productName) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("status", "PREVIEW");
+        data.put("productName", productName);
+        return data;
+    }
+
+    private Map<String, Object> bindingFor(Map<String, Object> body) {
+        Map<String, Object> binding = new LinkedHashMap<>();
+        binding.put("version", 1);
+        binding.put("productName", body.get("productName"));
+        binding.put("productCategory", "FINISHED_PRODUCT");
+        binding.put("defaults", Map.of());
+        binding.put("sourceName", null);
+        binding.put("sourceProductId", null);
+        binding.put("processNames", java.util.List.of());
+        return binding;
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception exception) {
+            throw new AssertionError(exception);
+        }
     }
 
     private ToolExecutionResult gatewaySuccess(
@@ -199,7 +239,7 @@ class AiProductCreateControllerGatewayTest {
         return new ToolExecutionResult(
                 "request-" + mode,
                 "product_create",
-                "1.0.0",
+                "2.0.0",
                 "audit-" + mode,
                 "trace-" + mode,
                 ToolExecutionStatus.SUCCEEDED,

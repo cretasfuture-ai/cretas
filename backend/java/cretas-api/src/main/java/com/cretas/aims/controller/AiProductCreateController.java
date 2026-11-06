@@ -1,5 +1,6 @@
 package com.cretas.aims.controller;
 
+import com.cretas.aims.ai.tool.impl.dataop.ProductCreateTool;
 import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
 import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
@@ -47,7 +48,7 @@ import java.util.regex.Pattern;
 public class AiProductCreateController {
 
     private static final String TOOL_NAME = "product_create";
-    private static final String DESCRIPTOR_VERSION = "1.0.0";
+    private static final String DESCRIPTOR_VERSION = "2.0.0";
     private static final int CONFIRMATION_TTL_SECONDS = 300;
     private static final Pattern SAFE_FACTORY_ID =
             Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$");
@@ -65,10 +66,20 @@ public class AiProductCreateController {
             @PathVariable String factoryId,
             @RequestBody Map<String, Object> body,
             HttpServletRequest request) {
+        Map<String, Object> publicBody = publicBody(body);
         AuthenticatedIdentity identity = authenticatedIdentity(factoryId, request);
-        ToolExecutionResult result = executeGateway(
-                body, ToolExecutionMode.PREVIEW, identity, Optional.empty());
-        Map<String, Object> data = successfulPayload(result, "AI product preview failed");
+        String bindingJson;
+        ToolExecutionResult result;
+        Map<String, Object> data;
+        try (ProductCreateTool.PreviewBindingCapture capture =
+                     ProductCreateTool.openPreviewBindingCapture(factoryId)) {
+            result = executeGateway(
+                    publicBody, ToolExecutionMode.PREVIEW, identity, Optional.empty());
+            data = successfulPayload(result, "AI product preview failed");
+            bindingJson = capture.requireJson();
+        }
+        Map<String, Object> persistedParameters = new LinkedHashMap<>(publicBody);
+        persistedParameters.put(ProductCreateTool.SERVER_BINDING_KEY, bindingJson);
 
         IntentPreviewToken token = previewTokenService.createBoundToken(
                 new PreviewTokenService.BoundTokenRequest(
@@ -81,11 +92,11 @@ public class AiProductCreateController {
                         DESCRIPTOR_VERSION,
                         ToolExecutionMode.EXECUTE,
                         "PRODUCT_TYPE",
-                        text(body.get("productName")),
+                        text(publicBody.get("productName")),
                         "CREATE",
-                        body,
+                        persistedParameters,
                         Map.of(),
-                        body,
+                        persistedParameters,
                         CONFIRMATION_TTL_SECONDS));
         data.put("confirmationToken", token.getToken());
         data.put("confirmationExpiresAt", token.getExpiresAt().toString());
@@ -103,17 +114,34 @@ public class AiProductCreateController {
         AuthenticatedIdentity identity = authenticatedIdentity(factoryId, request);
         IntentPreviewToken token = requireBoundToken(
                 confirmationToken, factoryId, body, identity.userId());
+        Map<String, Object> persistedParameters = boundParameters(token);
         ConfirmationProof proof = new ConfirmationProof(
                 token.getToken(),
                 token.getCommandDigest(),
                 token.getExpiresAt().atZone(ZoneId.systemDefault()).toInstant());
         String idempotencyKey = "fixed-http-"
                 + ToolCommandDigest.persistentSecretFingerprint(token.getToken());
-        ToolExecutionResult result = executeGateway(
-                body,
-                ToolExecutionMode.EXECUTE,
-                identity,
-                Optional.of(new ExecutionEvidence(idempotencyKey, proof)));
+        ProductCreateTool.ExecutionCapture capture =
+                ProductCreateTool.openExecutionCapture(factoryId);
+        ToolExecutionResult result;
+        try {
+            result = executeGateway(
+                    persistedParameters,
+                    ToolExecutionMode.EXECUTE,
+                    identity,
+                    Optional.of(new ExecutionEvidence(idempotencyKey, proof)));
+        } finally {
+            capture.close();
+        }
+        if (result.status() != ToolExecutionStatus.SUCCEEDED
+                && capture.createdProductId() != null) {
+            throw new BusinessException(502,
+                    "产品已创建（ID: " + capture.createdProductId()
+                            + "），后续工序链状态为 " + capture.phase()
+                            + "，结果需人工核对；系统不会自动重试。")
+                    .withCode("PRODUCT_CREATE_OUTCOME_UNKNOWN")
+                    .withHint("请根据产品ID核对创建结果和工序链，不要重复提交");
+        }
         return ApiResponse.success(successfulPayload(result, "AI product creation failed"));
     }
 
@@ -199,17 +227,54 @@ public class AiProductCreateController {
                 .filter(candidate -> DESCRIPTOR_VERSION.equals(candidate.getDescriptorVersion()))
                 .filter(candidate -> candidate.getExecutionMode() == ToolExecutionMode.EXECUTE)
                 .orElseThrow(this::confirmationRejected);
+        Map<String, Object> persistedParameters = boundParameters(token);
+        if (body.containsKey(ProductCreateTool.SERVER_BINDING_KEY)) {
+            throw confirmationRejected();
+        }
+        Map<String, Object> publicParameters = new LinkedHashMap<>(persistedParameters);
+        Object binding = publicParameters.remove(ProductCreateTool.SERVER_BINDING_KEY);
+        if (!(binding instanceof String)
+                || !objectMapper.valueToTree(publicParameters).equals(objectMapper.valueToTree(body))) {
+            throw confirmationRejected();
+        }
         String expectedDigest = ToolCommandDigest.commandDigest(
                 factoryId,
                 userId,
                 TOOL_NAME,
                 DESCRIPTOR_VERSION,
                 ToolExecutionMode.EXECUTE,
-                objectMapper.valueToTree(body));
+                objectMapper.valueToTree(persistedParameters));
         if (!expectedDigest.equals(token.getCommandDigest())) {
             throw confirmationRejected();
         }
         return token;
+    }
+
+    private Map<String, Object> boundParameters(IntentPreviewToken token) {
+        String previewData = token.getPreviewData();
+        if (previewData == null || previewData.isBlank()) {
+            throw confirmationRejected();
+        }
+        try {
+            Map<String, Object> parameters = objectMapper.readValue(
+                    previewData, new TypeReference<LinkedHashMap<String, Object>>() {});
+            if (!(parameters.get(ProductCreateTool.SERVER_BINDING_KEY) instanceof String binding)
+                    || binding.isBlank()) {
+                throw confirmationRejected();
+            }
+            return parameters;
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw confirmationRejected();
+        }
+    }
+
+    private Map<String, Object> publicBody(Map<String, Object> body) {
+        if (body == null || body.containsKey(ProductCreateTool.SERVER_BINDING_KEY)) {
+            throw confirmationRejected();
+        }
+        return new LinkedHashMap<>(body);
     }
 
     private BusinessException confirmationRejected() {

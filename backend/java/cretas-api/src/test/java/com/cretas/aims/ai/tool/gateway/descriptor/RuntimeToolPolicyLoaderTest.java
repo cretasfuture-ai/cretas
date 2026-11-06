@@ -98,7 +98,7 @@ class RuntimeToolPolicyLoaderTest {
         });
         assertThat(manifest.policies().subList(9, 10)).allSatisfy(policy -> {
             assertThat(policy.actionType()).isEqualTo(com.cretas.aims.ai.tool.ToolExecutor.ActionType.WRITE);
-            assertThat(policy.version()).isEqualTo("1.0.0");
+            assertThat(policy.version()).isEqualTo("2.0.0");
             assertThat(policy.supportsPreview()).isTrue();
             assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
             assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
