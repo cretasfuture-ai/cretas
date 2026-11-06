@@ -1905,6 +1905,8 @@ useNativeDemoAdapters('sales-order-detail', [
     if (entity) ui.remember('salesDelivery', entity);
     return entity;
   }, async ({ state, ui }) => {
+    await loadOrder();
+    await loadDeliveries();
     await ui.until(()=>String(order.value?.id)===String(state.entities.salesOrder?.id),'本轮销售订单详情加载');
     openDeliveryDialog();
     deliveryForm.value.deliveryMode = 'PARTIAL';

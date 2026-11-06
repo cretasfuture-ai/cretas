@@ -92,7 +92,7 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
 
   const requisition = adapter('material-requisition', write,
     async ({ ui, state, context }) => { await ui.navigate('/production/material-flow?tab=requisitions'); await ui.click('[data-testid="material-requisition-create"]', '按计划生成'); await ui.click('[data-testid="material-requisition-plan"] .el-select__wrapper','展开本轮领料计划'); await ui.click(`[data-testid="material-requisition-plan-option-${id(state.entities.productionPlan?.id)}"]`,'选择本轮真实生产计划'); await ui.input('[data-testid="material-requisition-amount"]', String(context.rawQuantity)) },
-    async ({ state, ui }) => {
+    async ({ state, context, ui }) => {
       await ui.click('[data-testid="material-requisition-generate"]', '生成领料单')
       await ui.hold('展示领料单生成结果')
       const rows = await ui.read('/material-requisitions') as { content?: unknown[] } | unknown[]
@@ -104,7 +104,11 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
       await ui.click('.el-message-box__btns .el-button--primary', '确认开始备料')
       await ui.hold('展示备料状态')
       await ui.click(`[data-testid="material-requisition-confirm-${id(row.id)}"]`, '打开确认领料')
-      for (const item of Array.isArray(row.items) ? row.items : []) { const picked = Number(item.requiredQty ?? item.requestedQty ?? item.quantity ?? 0); if (picked > 0) await ui.input(`[data-testid="picked-input-${id(item.id)}"]`, String(picked)) }
+      for (const item of Array.isArray(row.items) ? row.items : []) {
+        const preset=id(item.materialTypeId)===id(context.material.id)?context.rawQuantity:id(item.materialTypeId)===id(context.packaging.id)?context.finishedQuantity:item.requiredQty??item.requestedQty??item.quantity
+        if(preset==null||!Number.isFinite(Number(preset))||Number(preset)<0)throw new Error('本轮领料存在未设定实际数量的物料，请核对原页面')
+        await ui.input(`[data-testid="picked-input-${id(item.id)}"]`,String(preset))
+      }
       await ui.capture({ method: 'PUT', path: /material-requisitions\/[^/]+\/confirm-picking/ }, () => ui.click('[data-testid="material-requisition-submit"]', '确认领料'))
       await ui.hold('展示领料数量')
       await ui.click(`[data-testid="material-requisition-transfer-${id(row.id)}"]`, '调拨到生产仓')

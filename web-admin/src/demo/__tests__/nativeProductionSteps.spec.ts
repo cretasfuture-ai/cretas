@@ -44,6 +44,16 @@ describe('native production adapters', () => {
     expect(testUi.calls).toContain(`input:[data-testid="production-plan-notes"]=${s.runKey}`);
   });
 
+  it('fills the configured actual raw quantity when BOM reference quantity is pending',async()=>{
+    const s=state();s.entities.productionPlan={id:'plan-1'};
+    const row={id:'req-1',productionPlanId:'plan-1',items:[{id:'raw-line',materialTypeId:'mat',requiredQty:null},{id:'pack-line',materialTypeId:'pack',requiredQty:4}]};
+    const testUi=ui();testUi.read=async()=>({content:[row]});
+    const adapter=createNativeProductionAdapters({canWrite:()=>true},['material-requisition'])[0];
+    await adapter.commit({state:s,context:s.context!,ui:testUi});
+    expect(testUi.calls).toContain('input:[data-testid="picked-input-raw-line"]=1.25');
+    expect(testUi.calls).toContain('input:[data-testid="picked-input-pack-line"]=4');
+  });
+
   it('keeps the process adapter on a persisted SUBMITTED row and never advances from a batch response', async () => {
     const adapter = createNativeProductionAdapters({ canWrite: () => true,openProcessEntry:async()=>undefined }, ['process-report-1'])[0];
     const s = state(); const testUi = ui();
