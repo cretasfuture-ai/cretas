@@ -179,7 +179,10 @@ class PreviewTokenServiceImplTest {
     }
 
     private IntentPreviewToken boundToken(String token, LocalDateTime expiresAt) throws Exception {
-        JsonNode parameters = objectMapper.readTree("{\"amount\":1.00,\"label\":\"x\"}");
+        Map<String, Object> persisted = new java.util.LinkedHashMap<>();
+        persisted.put("amount", new java.math.BigDecimal("1.00"));
+        persisted.put("label", "x");
+        JsonNode parameters = objectMapper.valueToTree(persisted);
         return IntentPreviewToken.builder()
                 .token(token)
                 .factoryId("F001")
@@ -193,7 +196,7 @@ class PreviewTokenServiceImplTest {
                 .commandDigest(ToolCommandDigest.commandDigest(
                         "F001", 9L, "order_create", "1.4.0",
                         ToolExecutionMode.EXECUTE, parameters))
-                .previewData(objectMapper.writeValueAsString(parameters))
+                .previewData(objectMapper.writeValueAsString(persisted))
                 .status(TokenStatus.PENDING)
                 .expiresAt(expiresAt)
                 .build();

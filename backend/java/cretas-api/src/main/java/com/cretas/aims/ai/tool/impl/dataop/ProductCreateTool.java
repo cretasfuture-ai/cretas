@@ -7,6 +7,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductTypeService;
+import com.cretas.aims.service.ProductCreateCommandReceiptService;
 import com.cretas.aims.service.ProductWorkProcessService;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -57,6 +58,8 @@ public class ProductCreateTool extends AbstractBusinessTool {
     private BomRecipeService bomRecipeService;
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
+    @Autowired
+    private ProductCreateCommandReceiptService commandReceiptService;
 
     private boolean mayInheritFrom(String factoryId, String sourceProductId) {
         String ref = "AI tool product_create inherit " + sourceProductId;
@@ -159,6 +162,26 @@ public class ProductCreateTool extends AbstractBusinessTool {
             throw new IllegalStateException("product preview binding capture scope is missing");
         }
         capture.captureJson(factoryId, bindingJson);
+    }
+
+    /** Read-only classification helper for the HTTP reconciliation path. */
+    public static boolean hasNonEmptyPreparedChain(String bindingJson) {
+        if (bindingJson == null || bindingJson.isBlank()) {
+            return false;
+        }
+        try {
+            Map<String, Object> binding = BINDING_MAPPER.readValue(
+                    bindingJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() {});
+            Object rawChain = binding.get("chain");
+            if (!(rawChain instanceof Map<?, ?> chain)) {
+                return false;
+            }
+            Object processes = chain.get("processes");
+            return processes instanceof List<?> list && !list.isEmpty();
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     public static final class PreviewBindingCapture implements AutoCloseable {
@@ -287,6 +310,7 @@ public class ProductCreateTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
+        ProductCreateCommandReceiptService.requireScope();
         Plan plan = resolveBoundPlan(factoryId, params);
         String productCategory = validatedCategory(params);
         if (!Objects.equals(productCategory, plan.productCategory)) {
@@ -323,7 +347,7 @@ public class ProductCreateTool extends AbstractBusinessTool {
         if (uid instanceof Number) {
             dto.setCreatedBy(((Number) uid).longValue());
         }
-        ProductTypeDTO created = productTypeService.createProductType(factoryId, dto);
+        ProductTypeDTO created = commandReceiptService.createProductAndAttach(factoryId, dto);
         captureCreatedProduct(factoryId, created.getId());
 
         // 2. 飞轮继承: 自动复制最相似产品的工序链 (大框架)
@@ -331,30 +355,57 @@ public class ProductCreateTool extends AbstractBusinessTool {
         if (plan.source != null && plan.preparedChain != null
                 && !plan.preparedChain.processes().isEmpty()) {
             try {
-                copiedProcesses = productWorkProcessService.copyPreparedChain(
+                copiedProcesses = commandReceiptService.copyPreparedAndAdvance(
                         factoryId, plan.source.getId(), created.getId(), plan.preparedChain);
-                captureExecutionPhase(factoryId, "CHAIN_COPY_COMMITTED");
             } catch (Exception e) {
-                // ProductTypeServiceImpl and copyChain are separate transactions.  The
-                // product therefore remains committed; reporting a normal success here
-                // would make the caller believe the source chain was inherited.  Keep the
-                // response safe (no storage/SQL exception detail) but preserve the two
-                // business facts needed for reconciliation.
-                log.warn("[PRODUCT-CREATE] 工序链复制失败，产品已创建，需人工配置: productId={}, sourceProductId={}",
-                        created.getId(), plan.source.getId());
-                throw new com.cretas.aims.exception.BusinessException(502,
-                        "产品「" + created.getName() + "」（ID: " + created.getId() + "）已创建，但相似产品「" + plan.sourceName
-                                + "」的工序链复制失败，未完成继承；请人工配置。")
-                        .withCode("PRODUCT_CHAIN_COPY_FAILED")
-                        .withHint("请检查源产品工序链后重新配置；系统不会自动重试");
+                // The wrapper is atomic with its CAS.  Read the durable stage before
+                // deciding whether this is a known partial product, a committed copy
+                // whose acknowledgement was lost, or an unknown outcome.
+                ProductCreateCommandReceiptService.ReceiptSnapshot receipt;
+                try {
+                    receipt = commandReceiptService.readCurrent().orElse(null);
+                } catch (Exception readFailure) {
+                    receipt = null;
+                }
+                if (receipt != null && ProductCreateCommandReceiptService.COPY_COMMITTED
+                        .equals(receipt.stage())) {
+                    copiedProcesses = plan.preparedChain.processes().size();
+                } else if (receipt != null && ProductCreateCommandReceiptService.PRODUCT_CREATED
+                        .equals(receipt.stage())) {
+                    log.warn("[PRODUCT-CREATE] 工序链复制失败，产品已创建，需人工配置: productId={}, sourceProductId={}",
+                            created.getId(), plan.source.getId());
+                    throw new com.cretas.aims.exception.BusinessException(502,
+                            "产品「" + created.getName() + "」（ID: " + created.getId()
+                                    + "）已创建，但相似产品「" + plan.sourceName
+                                    + "」的工序链复制失败，未完成继承；请人工配置。")
+                            .withCode("PRODUCT_CHAIN_COPY_FAILED")
+                            .withHint("请检查源产品工序链后重新配置；系统不会自动重试");
+                } else {
+                    throw new com.cretas.aims.exception.BusinessException(502,
+                            "产品「" + created.getName() + "」（ID: " + created.getId()
+                                    + "）的创建结果无法核对，需人工检查；系统不会自动重试。")
+                            .withCode("PRODUCT_CREATE_OUTCOME_UNKNOWN")
+                            .withHint("请根据产品ID核对产品和工序链，不要重复提交创建请求");
+                }
             }
+            captureExecutionPhase(factoryId, "CHAIN_COPY_COMMITTED");
             try {
-                productWorkProcessService.verifyPreparedChainReadback(
+                commandReceiptService.verifyPreparedReadbackAndAdvance(
                         factoryId, created.getId(), plan.preparedChain);
             } catch (Exception e) {
                 throw new com.cretas.aims.exception.BusinessException(502,
                         "产品「" + created.getName() + "」（ID: " + created.getId()
                                 + "）的工序链复制结果无法核对，需人工检查；系统不会自动重试。")
+                        .withCode("PRODUCT_CHAIN_READBACK_UNKNOWN")
+                        .withHint("请根据产品ID核对工序链，不要重复提交创建请求");
+            }
+        } else {
+            try {
+                commandReceiptService.verifyEmptyReadbackAndAdvance(factoryId, created.getId());
+            } catch (Exception e) {
+                throw new com.cretas.aims.exception.BusinessException(502,
+                        "产品「" + created.getName()
+                                + "」（ID: " + created.getId() + "）的空工序链结果无法核对，需人工检查；系统不会自动重试。")
                         .withCode("PRODUCT_CHAIN_READBACK_UNKNOWN")
                         .withHint("请根据产品ID核对工序链，不要重复提交创建请求");
             }

@@ -501,6 +501,21 @@ public class ProductWorkProcessServiceImpl implements ProductWorkProcessService 
         }
     }
 
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    public void verifyEmptyChainReadback(String factoryId, String targetProductId) {
+        if (entityManager != null) {
+            entityManager.clear();
+        }
+        List<ProductWorkProcess> readback = repository
+                .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(factoryId, targetProductId);
+        if (!readback.isEmpty()) {
+            throw new BusinessException(502, "产品已创建但空工序链核对失败，请人工检查")
+                    .withCode("PRODUCT_CHAIN_READBACK_UNKNOWN")
+                    .withHint("系统不会自动重试；请根据产品ID核对工序链");
+        }
+    }
+
     private ProductWorkProcessService.PreparedProcess toPreparedProcess(ProductWorkProcess row) {
         return new ProductWorkProcessService.PreparedProcess(
                 row.getWorkProcessId(), row.getProcessOrder(), row.getUnitOverride(),

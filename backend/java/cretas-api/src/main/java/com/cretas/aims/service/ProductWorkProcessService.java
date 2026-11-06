@@ -49,6 +49,9 @@ public interface ProductWorkProcessService {
     void verifyPreparedChainReadback(String factoryId, String targetProductId,
                                      PreparedChain preparedChain);
 
+    /** Freshly verifies that a target with no prepared source has an empty chain. */
+    void verifyEmptyChainReadback(String factoryId, String targetProductId);
+
     record PreparedChain(
             String sourceProductId,
             List<PreparedProcess> processes,

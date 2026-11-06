@@ -5,9 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.cretas.aims.dto.ProductWorkProcessDTO;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.dto.producttype.ProductTypeSuggestionDTO;
+import com.cretas.aims.ai.tool.gateway.PrincipalType;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.service.ProductTypeService;
+import com.cretas.aims.service.ProductCreateCommandReceiptService;
 import com.cretas.aims.service.ProductWorkProcessService;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
@@ -29,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -52,6 +57,8 @@ class ProductCreateToolContractTest {
     private BomRecipeService bomRecipeService;
     @Mock
     private ProcessSecretRecipeGuard processSecretGuard;
+    @Mock
+    private ProductCreateCommandReceiptService commandReceiptService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private ProductCreateTool tool;
@@ -64,7 +71,16 @@ class ProductCreateToolContractTest {
         ReflectionTestUtils.setField(tool, "productWorkProcessService", productWorkProcessService);
         ReflectionTestUtils.setField(tool, "bomRecipeService", bomRecipeService);
         ReflectionTestUtils.setField(tool, "processSecretGuard", processSecretGuard);
+        ReflectionTestUtils.setField(tool, "commandReceiptService", commandReceiptService);
         ReflectionTestUtils.setField(tool, "objectMapper", objectMapper);
+        lenient().when(commandReceiptService.createProductAndAttach(anyString(), any(ProductTypeDTO.class)))
+                .thenAnswer(invocation -> productTypeService.createProductType(
+                        invocation.getArgument(0), invocation.getArgument(1)));
+        lenient().when(commandReceiptService.copyPreparedAndAdvance(
+                anyString(), anyString(), anyString(), any(ProductWorkProcessService.PreparedChain.class)))
+                .thenAnswer(invocation -> productWorkProcessService.copyPreparedChain(
+                        invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+                        invocation.getArgument(3)));
     }
 
     @Test
@@ -140,6 +156,8 @@ class ProductCreateToolContractTest {
         doThrow(new IllegalStateException("database secret must not escape"))
                 .when(productWorkProcessService).copyPreparedChain(eq(FACTORY_ID), eq(SOURCE_ID),
                         eq(TARGET_ID), any(ProductWorkProcessService.PreparedChain.class));
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(receipt(
+                ProductCreateCommandReceiptService.PRODUCT_CREATED)));
         configureCreatedProduct();
 
         JsonNode result = execute();
@@ -151,6 +169,24 @@ class ProductCreateToolContractTest {
         verify(productTypeService).createProductType(eq(FACTORY_ID), any(ProductTypeDTO.class));
         verify(productWorkProcessService).copyPreparedChain(eq(FACTORY_ID), eq(SOURCE_ID),
                 eq(TARGET_ID), any(ProductWorkProcessService.PreparedChain.class));
+    }
+
+    @Test
+    void copyCommitAcknowledgementLossUsesDurableStageAndContinuesReadback() throws Exception {
+        configureSource(List.of(process("切片", "wp-slice"), process("腌制", "wp-marinate")));
+        configureCreatedProduct();
+        when(commandReceiptService.copyPreparedAndAdvance(
+                anyString(), anyString(), anyString(), any(ProductWorkProcessService.PreparedChain.class)))
+                .thenThrow(new IllegalStateException("ack lost"));
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(receipt(
+                ProductCreateCommandReceiptService.COPY_COMMITTED)));
+
+        JsonNode result = execute();
+
+        assertThat(result.path("success").asBoolean()).isTrue();
+        assertThat(result.at("/data/copiedProcessCount").asInt()).isEqualTo(2);
+        verify(commandReceiptService).verifyPreparedReadbackAndAdvance(
+                eq(FACTORY_ID), eq(TARGET_ID), any(ProductWorkProcessService.PreparedChain.class));
     }
 
     @Test
@@ -218,6 +254,13 @@ class ProductCreateToolContractTest {
                 List.of(), "digest");
     }
 
+    private ProductCreateCommandReceiptService.ReceiptSnapshot receipt(String stage) {
+        return new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                "receipt-1", ToolExecutionIdempotencyRecord.State.IN_PROGRESS,
+                ToolExecutionStatus.SUCCEEDED, ProductCreateCommandReceiptService.ENTITY_TYPE,
+                TARGET_ID, stage, null);
+    }
+
     private JsonNode execute() throws Exception {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("productName", TARGET_NAME);
@@ -233,11 +276,18 @@ class ProductCreateToolContractTest {
             bindingJson = capture.requireJson();
         }
         params.put(ProductCreateTool.SERVER_BINDING_KEY, bindingJson);
-        return objectMapper.readTree(tool.execute(
-                com.cretas.aims.ai.dto.ToolCall.of(
-                        "product-create-contract",
-                        "product_create",
-                        objectMapper.writeValueAsString(params)),
-                Map.of("factoryId", FACTORY_ID, "userId", 42L)));
+        try (ProductCreateCommandReceiptService.CommandScope ignored =
+                     ProductCreateCommandReceiptService.openScope(
+                             FACTORY_ID, "FACTORY", PrincipalType.USER, "42",
+                             ProductCreateCommandReceiptService.TOOL_NAME,
+                             ProductCreateCommandReceiptService.DESCRIPTOR_VERSION,
+                             "idem-hash", "command-hash", "confirmation-hash")) {
+            return objectMapper.readTree(tool.execute(
+                    com.cretas.aims.ai.dto.ToolCall.of(
+                            "product-create-contract",
+                            "product_create",
+                            objectMapper.writeValueAsString(params)),
+                    Map.of("factoryId", FACTORY_ID, "userId", 42L)));
+        }
     }
 }

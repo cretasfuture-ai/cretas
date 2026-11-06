@@ -3,6 +3,7 @@ package com.cretas.aims.integration;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductWorkProcess;
+import com.cretas.aims.entity.ProductWorkProcessAssignee;
 import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductWorkProcessAssigneeRepository;
@@ -17,10 +18,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Propagation;
@@ -29,10 +32,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -43,19 +48,28 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.when;
 
 /** Opt-in real PostgreSQL/JPA proof for the prepared product-chain binding. */
 @DataJpaTest(properties = {
         "spring.flyway.enabled=false",
-        "spring.jpa.hibernate.ddl-auto=create-drop",
+        "spring.jpa.hibernate.ddl-auto=create",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect",
         "spring.datasource.hikari.maximum-pool-size=6",
         "spring.datasource.hikari.minimum-idle=1"
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
+@EntityScan(basePackageClasses = {
+        ProductWorkProcess.class, ProductWorkProcessAssignee.class, WorkProcess.class})
+@EnableJpaRepositories(basePackageClasses = {
+        ProductWorkProcessRepository.class, ProductWorkProcessAssigneeRepository.class,
+        WorkProcessRepository.class})
 @Import(ProductWorkProcessServiceImpl.class)
 class ProductCreatePlanBindingPostgresContractTest {
+
+    private static final String PRIVATE_SCHEMA =
+            "pc_plan_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
     private String factoryId;
 
@@ -63,7 +77,9 @@ class ProductCreatePlanBindingPostgresContractTest {
     static void postgresProperties(DynamicPropertyRegistry registry) {
         String url = DisposablePostgresTargetGuard.requireSafeUrl(
                 requiredEnv("CRETAS_WORKFLOW_PG_URL"));
-        registry.add("spring.datasource.url", () -> url);
+        createPrivateSchema(url);
+        registry.add("spring.datasource.url", () -> appendQuery(url,
+                "currentSchema=" + PRIVATE_SCHEMA + "&stringtype=unspecified&ApplicationName=cretas_product_plan_binding_test"));
         registry.add("spring.datasource.username", () -> requiredEnv("CRETAS_WORKFLOW_PG_USER"));
         registry.add("spring.datasource.password",
                 () -> System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", ""));
@@ -71,10 +87,37 @@ class ProductCreatePlanBindingPostgresContractTest {
         registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
     }
 
+    @org.junit.jupiter.api.AfterAll
+    static void dropPrivateSchema() throws Exception {
+        String rawUrl = DisposablePostgresTargetGuard.requireSafeUrl(
+                requiredEnv("CRETAS_WORKFLOW_PG_URL"));
+        try (Connection connection = DriverManager.getConnection(
+                rawUrl, requiredEnv("CRETAS_WORKFLOW_PG_USER"),
+                System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", ""));
+             Statement statement = connection.createStatement()) {
+            statement.execute("DROP SCHEMA IF EXISTS \"" + PRIVATE_SCHEMA + "\" CASCADE");
+        }
+    }
+
+    private static void createPrivateSchema(String rawUrl) {
+        try (Connection connection = DriverManager.getConnection(
+                rawUrl, requiredEnv("CRETAS_WORKFLOW_PG_USER"),
+                System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", ""));
+             Statement statement = connection.createStatement()) {
+            statement.execute("CREATE SCHEMA IF NOT EXISTS \"" + PRIVATE_SCHEMA + "\"");
+        } catch (Exception exception) {
+            throw new IllegalStateException("Unable to create private PostgreSQL test schema", exception);
+        }
+    }
+
+    private static String appendQuery(String url, String query) {
+        return url + (url.contains("?") ? "&" : "?") + query;
+    }
+
     @Autowired private DataSource dataSource;
     @Autowired private EntityManager entityManager;
     @Autowired private org.springframework.transaction.PlatformTransactionManager transactionManager;
-    @Autowired private ProductTypeRepository productTypes;
+    @MockBean private ProductTypeRepository productTypes;
     @Autowired private ProductWorkProcessRepository productProcesses;
     @Autowired private WorkProcessRepository workProcesses;
     @Autowired private ProductWorkProcessService service;
@@ -112,6 +155,8 @@ class ProductCreatePlanBindingPostgresContractTest {
 
         insertProduct(sourceId, "PB source");
         insertProduct(targetId, "PB target");
+        when(productTypes.findByIdAndFactoryId(sourceId, factoryId))
+                .thenReturn(Optional.of(product(sourceId, "PB source")));
 
         WorkProcess master = WorkProcess.builder()
                 .id(workProcessId).factoryId(factoryId).processName("PG 切片")
@@ -193,7 +238,9 @@ class ProductCreatePlanBindingPostgresContractTest {
         while (System.nanoTime() < deadline) {
             try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement();
                  ResultSet rows = statement.executeQuery(
-                         "select count(*) from pg_stat_activity where wait_event_type = 'Lock'")) {
+                         "select count(*) from pg_stat_activity where datname = current_database() "
+                                 + "and application_name = 'cretas_product_plan_binding_test' "
+                                 + "and pid <> pg_backend_pid() and wait_event_type = 'Lock'")) {
                 rows.next();
                 if (rows.getInt(1) > 0) return true;
             }
@@ -204,6 +251,9 @@ class ProductCreatePlanBindingPostgresContractTest {
 
     private String databaseProduct() {
         try (Connection connection = dataSource.getConnection()) {
+            if (!PRIVATE_SCHEMA.equals(connection.getSchema())) {
+                throw new AssertionError("PostgreSQL proof escaped its private schema");
+            }
             return connection.getMetaData().getDatabaseProductName();
         } catch (Exception exception) {
             throw new AssertionError("database metadata unavailable", exception);

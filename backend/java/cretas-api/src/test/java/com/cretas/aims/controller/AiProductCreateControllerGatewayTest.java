@@ -14,6 +14,7 @@ import com.cretas.aims.ai.tool.impl.dataop.ProductCreateTool;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.PreviewTokenService;
+import com.cretas.aims.service.ProductCreateCommandReceiptService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +52,8 @@ class AiProductCreateControllerGatewayTest {
     @Mock
     private PreviewTokenService previewTokenService;
     @Mock
+    private ProductCreateCommandReceiptService commandReceiptService;
+    @Mock
     private HttpServletRequest request;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -60,7 +63,20 @@ class AiProductCreateControllerGatewayTest {
     @BeforeEach
     void setUp() {
         controller = new AiProductCreateController(
-                gateway, principalFactory, previewTokenService, objectMapper);
+                gateway, principalFactory, previewTokenService, commandReceiptService, objectMapper);
+        lenient().when(commandReceiptService.classifyTerminal(any()))
+                .thenReturn(new ProductCreateCommandReceiptService.ReplayDecision(
+                        ProductCreateCommandReceiptService.ReplayDecision.Kind.NEW_EXECUTION,
+                        null, null, null));
+        lenient().when(commandReceiptService.readCurrent())
+                .thenReturn(Optional.of(new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                        "receipt-1",
+                        com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.State.SUCCEEDED,
+                        ToolExecutionStatus.SUCCEEDED,
+                        ProductCreateCommandReceiptService.ENTITY_TYPE,
+                        "P-1",
+                        ProductCreateCommandReceiptService.READBACK_VERIFIED,
+                        null)));
         principal = new ExecutionPrincipal(
                 FACTORY_ID,
                 "FACTORY",
@@ -112,8 +128,8 @@ class AiProductCreateControllerGatewayTest {
         Map<String, Object> body = Map.of("productName", "SKU-A");
         trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
         IntentPreviewToken token = boundToken(body, "proof-product");
-        when(previewTokenService.validateTokenForUser("proof-product", USER_ID))
-                .thenReturn(Optional.of(token));
+        when(previewTokenService.readBoundExecution("proof-product", FACTORY_ID, USER_ID))
+                .thenReturn(Optional.of(boundExecution(token, body)));
         when(gateway.execute(any())).thenReturn(gatewaySuccess(
                 ToolExecutionMode.EXECUTE, Map.of("productId", "P-1", "productName", "SKU-A")));
 
@@ -139,8 +155,8 @@ class AiProductCreateControllerGatewayTest {
         Map<String, Object> previewBody = Map.of("productName", "SKU-A");
         trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
         IntentPreviewToken token = boundToken(previewBody, "proof-product");
-        when(previewTokenService.validateTokenForUser("proof-product", USER_ID))
-                .thenReturn(Optional.of(token), Optional.empty());
+        when(previewTokenService.readBoundExecution("proof-product", FACTORY_ID, USER_ID))
+                .thenReturn(Optional.of(boundExecution(token, previewBody)), Optional.empty());
 
         assertThatThrownBy(() -> controller.create(
                 FACTORY_ID,
@@ -171,6 +187,131 @@ class AiProductCreateControllerGatewayTest {
         verify(gateway, never()).execute(any());
     }
 
+    @Test
+    void terminalReplayStillRunsGatewayAndDeniedDoesNotDiscloseReceiptId() {
+        Map<String, Object> body = Map.of("productName", "SKU-A");
+        trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
+        IntentPreviewToken token = boundToken(body, "proof-product");
+        bindToken(token, body);
+        when(commandReceiptService.classifyTerminal(any())).thenReturn(new ProductCreateCommandReceiptService.ReplayDecision(
+                ProductCreateCommandReceiptService.ReplayDecision.Kind.REPLAY, null, null, null));
+        when(gateway.execute(any())).thenReturn(gatewayResult(ToolExecutionStatus.DENIED,
+                Map.of("message", "当前权限已撤销", "productId", "P-1")));
+
+        assertThatThrownBy(() -> controller.create(FACTORY_ID, "proof-product", body, request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException business = (BusinessException) error;
+                    assertThat(business.getCode()).isEqualTo(403);
+                    assertThat(business.getMessage()).doesNotContain("P-1");
+                });
+        verify(gateway).execute(any());
+        verify(commandReceiptService, never()).readCurrent();
+    }
+
+    @Test
+    void failedTerminalStillUsesGatewayAndReturnsStableFailureWithoutToolReplay() {
+        Map<String, Object> body = Map.of("productName", "SKU-A");
+        trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
+        IntentPreviewToken token = boundToken(body, "proof-product");
+        bindToken(token, body);
+        when(gateway.execute(any())).thenReturn(gatewayResult(ToolExecutionStatus.IDEMPOTENT_REPLAY,
+                Map.of("originalStatus", "FAILED", "message", "原命令失败")));
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                "receipt-failed", com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.State.FAILED,
+                ToolExecutionStatus.FAILED, ProductCreateCommandReceiptService.ENTITY_TYPE,
+                null, null, null)));
+
+        assertThatThrownBy(() -> controller.create(FACTORY_ID, "proof-product", body, request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(400));
+        verify(gateway).execute(any());
+    }
+
+    @Test
+    void receiptReadFailureIsAnExplicitUnknownOutcome() {
+        Map<String, Object> body = Map.of("productName", "SKU-A");
+        trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
+        IntentPreviewToken token = boundToken(body, "proof-product");
+        bindToken(token, body);
+        when(gateway.execute(any())).thenReturn(gatewaySuccess(
+                ToolExecutionMode.EXECUTE, Map.of("productId", "P-1", "productName", "SKU-A")));
+        when(commandReceiptService.readCurrent()).thenThrow(new IllegalStateException("database secret"));
+
+        assertThatThrownBy(() -> controller.create(FACTORY_ID, "proof-product", body, request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException business = (BusinessException) error;
+                    assertThat(business.getCode()).isEqualTo(502);
+                    assertThat(business.getErrorCode()).isEqualTo("PRODUCT_CREATE_OUTCOME_UNKNOWN");
+                    assertThat(business.getMessage()).doesNotContain("database secret");
+                });
+    }
+
+    @Test
+    void productCreatedWithPreparedChainMapsUnknownToCopyFailure() {
+        Map<String, Object> body = Map.of("productName", "SKU-A");
+        trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
+        IntentPreviewToken token = boundTokenWithChain(body, "proof-product");
+        bindToken(token, body, true);
+        when(gateway.execute(any())).thenReturn(gatewayResult(ToolExecutionStatus.OUTCOME_UNKNOWN,
+                Map.of("message", "工具结果未知")));
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                "receipt-created", com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.State.IN_PROGRESS,
+                ToolExecutionStatus.OUTCOME_UNKNOWN, ProductCreateCommandReceiptService.ENTITY_TYPE,
+                "P-1", ProductCreateCommandReceiptService.PRODUCT_CREATED, null)));
+
+        assertThatThrownBy(() -> controller.create(FACTORY_ID, "proof-product", body, request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException business = (BusinessException) error;
+                    assertThat(business.getErrorCode()).isEqualTo("PRODUCT_CHAIN_COPY_FAILED");
+                    assertThat(business.getMessage()).contains("P-1");
+                });
+    }
+
+    @Test
+    void copyCommittedWithUnknownMapsToReadbackUnknown() {
+        Map<String, Object> body = Map.of("productName", "SKU-A");
+        trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
+        IntentPreviewToken token = boundToken(body, "proof-product");
+        bindToken(token, body);
+        when(gateway.execute(any())).thenReturn(gatewayResult(ToolExecutionStatus.OUTCOME_UNKNOWN,
+                Map.of("message", "工具结果未知")));
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                "receipt-copy", com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.State.IN_PROGRESS,
+                ToolExecutionStatus.OUTCOME_UNKNOWN, ProductCreateCommandReceiptService.ENTITY_TYPE,
+                "P-1", ProductCreateCommandReceiptService.COPY_COMMITTED, null)));
+
+        assertThatThrownBy(() -> controller.create(FACTORY_ID, "proof-product", body, request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("PRODUCT_CHAIN_READBACK_UNKNOWN"));
+    }
+
+    @Test
+    void preUnknownStillReplaysVerifiedGatewayResultWithoutSecondExecution() {
+        Map<String, Object> body = Map.of("productName", "SKU-A");
+        trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
+        IntentPreviewToken token = boundToken(body, "proof-product");
+        bindToken(token, body);
+        when(commandReceiptService.classifyTerminal(any())).thenReturn(new ProductCreateCommandReceiptService.ReplayDecision(
+                ProductCreateCommandReceiptService.ReplayDecision.Kind.UNKNOWN, null,
+                "需核对", "PRODUCT_CREATE_OUTCOME_UNKNOWN"));
+        when(gateway.execute(any())).thenReturn(gatewayResult(ToolExecutionStatus.IDEMPOTENT_REPLAY,
+                Map.of("originalStatus", "SUCCEEDED")));
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                "receipt-ok", com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.State.SUCCEEDED,
+                ToolExecutionStatus.SUCCEEDED, ProductCreateCommandReceiptService.ENTITY_TYPE,
+                "P-1", ProductCreateCommandReceiptService.READBACK_VERIFIED, null)));
+
+        Map<?, ?> data = (Map<?, ?>) controller.create(FACTORY_ID, "proof-product", body, request).getData();
+
+        assertThat(data.get("productId")).isEqualTo("P-1");
+        assertThat(data.get("replayed")).isEqualTo(true);
+        verify(gateway).execute(any());
+    }
+
     private void trustedAttributes(String factoryId, long userId, String role) {
         lenient().when(request.getAttribute("factoryId")).thenReturn(factoryId);
         lenient().when(request.getAttribute("userId")).thenReturn(userId);
@@ -181,8 +322,20 @@ class AiProductCreateControllerGatewayTest {
     }
 
     private IntentPreviewToken boundToken(Map<String, Object> body, String proofToken) {
+        return boundToken(body, proofToken, false);
+    }
+
+    private IntentPreviewToken boundTokenWithChain(Map<String, Object> body, String proofToken) {
+        return boundToken(body, proofToken, true);
+    }
+
+    private IntentPreviewToken boundToken(Map<String, Object> body, String proofToken, boolean withChain) {
         Map<String, Object> persisted = new LinkedHashMap<>(body);
-        persisted.put(ProductCreateTool.SERVER_BINDING_KEY, writeJson(bindingFor(body)));
+        Map<String, Object> binding = bindingFor(body);
+        if (withChain) {
+            binding.put("chain", Map.of("processes", java.util.List.of(Map.of("workProcessId", "wp-1"))));
+        }
+        persisted.put(ProductCreateTool.SERVER_BINDING_KEY, writeJson(binding));
         String digest = ToolCommandDigest.commandDigest(
                 FACTORY_ID,
                 USER_ID,
@@ -204,6 +357,36 @@ class AiProductCreateControllerGatewayTest {
                 .status(IntentPreviewToken.TokenStatus.PENDING)
                 .expiresAt(LocalDateTime.now().plusMinutes(5))
                 .build();
+    }
+
+    private void bindToken(IntentPreviewToken token, Map<String, Object> body) {
+        bindToken(token, body, false);
+    }
+
+    private void bindToken(IntentPreviewToken token, Map<String, Object> body, boolean withChain) {
+        Map<String, Object> persisted = new LinkedHashMap<>(body);
+        Map<String, Object> binding = bindingFor(body);
+        if (withChain) {
+            binding.put("chain", Map.of("processes", java.util.List.of(Map.of("workProcessId", "wp-1"))));
+        }
+        persisted.put(ProductCreateTool.SERVER_BINDING_KEY, writeJson(binding));
+        when(previewTokenService.readBoundExecution("proof-product", FACTORY_ID, USER_ID))
+                .thenReturn(Optional.of(new PreviewTokenService.BoundTokenExecution(
+                        token.getToken(), token.getFactoryId(), token.getTenantId(), token.getUserId(),
+                        token.getToolName(), token.getDescriptorVersion(), token.getExecutionMode(),
+                        token.getParametersHash(), token.getCommandDigest(), token.getPreviewData(),
+                        token.getStatus(), token.getExpiresAt(), persisted)));
+    }
+
+    private PreviewTokenService.BoundTokenExecution boundExecution(
+            IntentPreviewToken token, Map<String, Object> body) {
+        Map<String, Object> persisted = new LinkedHashMap<>(body);
+        persisted.put(ProductCreateTool.SERVER_BINDING_KEY, writeJson(bindingFor(body)));
+        return new PreviewTokenService.BoundTokenExecution(
+                token.getToken(), token.getFactoryId(), token.getTenantId(), token.getUserId(),
+                token.getToolName(), token.getDescriptorVersion(), token.getExecutionMode(),
+                token.getParametersHash(), token.getCommandDigest(), token.getPreviewData(),
+                token.getStatus(), token.getExpiresAt(), persisted);
     }
 
     private Map<String, Object> previewData(String productName) {
@@ -246,5 +429,28 @@ class AiProductCreateControllerGatewayTest {
                 objectMapper.valueToTree(Map.of("success", true, "data", data)),
                 "Tool succeeded",
                 false);
+    }
+
+    private ToolExecutionResult gatewayResult(
+            ToolExecutionStatus status, Map<String, Object> data) {
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("success", status == ToolExecutionStatus.SUCCEEDED);
+        envelope.put("data", data);
+        if (data.containsKey("originalStatus")) {
+            envelope.put("originalStatus", data.get("originalStatus"));
+        }
+        if (data.containsKey("message")) {
+            envelope.put("message", data.get("message"));
+        }
+        return new ToolExecutionResult(
+                "request-" + status,
+                "product_create",
+                "2.0.0",
+                "audit-" + status,
+                "trace-" + status,
+                status,
+                objectMapper.valueToTree(envelope),
+                status.name(),
+                status == ToolExecutionStatus.IDEMPOTENT_REPLAY);
     }
 }
