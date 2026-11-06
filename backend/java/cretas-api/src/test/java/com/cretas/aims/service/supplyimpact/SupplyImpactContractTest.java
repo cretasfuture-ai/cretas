@@ -1,6 +1,7 @@
 package com.cretas.aims.service.supplyimpact;
 
 import com.cretas.aims.dto.supplyimpact.SupplyImpactDTO;
+import com.cretas.aims.dto.supplyimpact.SupplyImpactBoxExposure;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
@@ -41,6 +42,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -65,12 +67,14 @@ class SupplyImpactContractTest {
     private final PurchaseOrderItemRepository poItemRepo = mock(PurchaseOrderItemRepository.class);
     private final LineageGraphAssembler lineage = mock(LineageGraphAssembler.class);
     private final UnitConversionService units = mock(UnitConversionService.class);
+    private final SupplyImpactBoxExposureService boxExposure = mock(SupplyImpactBoxExposureService.class);
     private SupplyImpactService service;
 
     @BeforeEach
     void setUp() {
         service = new SupplyImpactService(supplierRepo, materialRepo, supplierMaterialRepo, batchRepo, itemRepo,
-                substituteRepo, planRepo, lineRepo, orderRepo, orderItemRepo, poRepo, poItemRepo, lineage, units);
+                substituteRepo, planRepo, lineRepo, orderRepo, orderItemRepo, poRepo, poItemRepo, lineage, units,
+                boxExposure);
         Supplier s = new Supplier();
         s.setId("S1");
         s.setName("供应商甲");
@@ -90,6 +94,8 @@ class SupplyImpactContractTest {
         when(batchRepo.findByFactoryIdAndMaterialTypeId(F, "M1")).thenReturn(List.of());
         when(poRepo.findByFactoryIdAndStatusIn(eq(F), any())).thenReturn(List.of());
         when(units.toKg(any(), any())).thenAnswer(i -> i.getArgument(0));
+        when(boxExposure.evaluate(any(), any(), any(), anyBoolean()))
+                .thenReturn(SupplyImpactBoxExposure.builder().gaps(List.of()).build());
 
         BomRecipe r1 = new BomRecipe();
         r1.setId("R1");

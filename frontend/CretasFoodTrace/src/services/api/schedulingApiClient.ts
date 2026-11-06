@@ -959,11 +959,18 @@ class SchedulingApiClient {
    */
   async getAvailableSlots(
     days: number = 3,
-    factoryId?: string
+    factoryId?: string,
+    context?: GetInsertSlotsRequest
   ): Promise<ApiResponse<InsertSlot[]>> {
     return await apiClient.get(
       `${this.getPath(factoryId)}/urgent-insert/slots`,
-      { params: { days } }
+      { params: { days, ...(context ? {
+        productTypeId: context.productTypeId,
+        quantity: context.requiredQuantity,
+        quantityUnit: context.quantityUnit ?? undefined,
+        deadline: context.deadline || undefined,
+        preferredProductionLineId: context.preferredProductionLineId,
+      } : {}) } }
     );
   }
 
@@ -983,12 +990,22 @@ class SchedulingApiClient {
     productTypeId: string,
     quantity: number,
     factoryId?: string,
-    quantityUnit?: CapacityUnitCode | null
+    quantityUnit?: CapacityUnitCode | null,
+    deadline?: string
   ): Promise<ApiResponse<UrgentInsertImpactAnalysis>> {
     return await apiClient.get(
       `${this.getPath(factoryId)}/urgent-insert/slots/${slotId}/impact`,
-      { params: { productTypeId, quantity, ...(quantityUnit ? { quantityUnit } : {}) } }
+      { params: { productTypeId, quantity, ...(quantityUnit ? { quantityUnit } : {}), ...(deadline ? { deadline } : {}) } }
     );
+  }
+
+  /** 签发供确认使用的不可变预览；读取影响分析的 GET 不创建预览。 */
+  async createInsertPreview(
+    slotId: string,
+    context: GetInsertSlotsRequest,
+    factoryId?: string
+  ): Promise<ApiResponse<UrgentInsertImpactAnalysis>> {
+    return await apiClient.post(`${this.getPath(factoryId)}/urgent-insert/slots/${slotId}/preview`, context);
   }
 
   /**
@@ -1036,7 +1053,7 @@ class SchedulingApiClient {
     factoryId?: string
   ): Promise<ApiResponse<InsertSlot[]>> {
     console.warn('[DEPRECATED] getInsertSlots is deprecated. Use getAvailableSlots instead.');
-    return this.getAvailableSlots(3, factoryId);
+    return this.getAvailableSlots(3, factoryId, data);
   }
 
   /**
@@ -1045,11 +1062,11 @@ class SchedulingApiClient {
    */
   async analyzeInsertImpact(
     slotId: string,
-    data: { productTypeId: string; quantity: number },
+    data: { productTypeId: string; quantity: number; quantityUnit?: CapacityUnitCode | null; deadline?: string },
     factoryId?: string
   ): Promise<ApiResponse<UrgentInsertImpactAnalysis>> {
     console.warn('[DEPRECATED] analyzeInsertImpact is deprecated. Use analyzeSlotImpact instead.');
-    return this.analyzeSlotImpact(slotId, data.productTypeId, data.quantity, factoryId);
+    return this.analyzeSlotImpact(slotId, data.productTypeId, data.quantity, factoryId, data.quantityUnit, data.deadline);
   }
 
   /**
@@ -1064,6 +1081,8 @@ class SchedulingApiClient {
     // 转换旧格式到新格式
     const request: ConfirmUrgentInsertRequest = {
       slotId: data.slotId,
+      previewId: data.previewId,
+      quantityUnit: data.quantityUnit,
       productTypeId: data.productTypeId,
       plannedQuantity: data.quantity,
       urgentReason: data.reason ?? '紧急订单',

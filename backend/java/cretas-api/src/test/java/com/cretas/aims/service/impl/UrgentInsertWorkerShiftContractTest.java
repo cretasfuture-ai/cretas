@@ -4,13 +4,18 @@ import com.cretas.aims.dto.scheduling.ChainImpactResult;
 import com.cretas.aims.dto.scheduling.ConfirmUrgentInsertRequest;
 import com.cretas.aims.dto.scheduling.GetInsertSlotsRequest;
 import com.cretas.aims.entity.InsertSlot;
+import com.cretas.aims.entity.InsertSlotPreview;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.InsertSlotRepository;
+import com.cretas.aims.repository.InsertSlotPreviewRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.service.ImpactAnalysisService;
 import com.cretas.aims.service.ImpactAnalysisService.ResourceCheckResult;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.cretas.aims.service.scheduling.WorkerShiftAvailabilityCheck;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,6 +42,9 @@ class UrgentInsertWorkerShiftContractTest {
     private InsertSlotRepository slots;
     private ProductionPlanRepository plans;
     private WorkerShiftAvailabilityCheck shifts;
+    private InsertSlotPreviewRepository previews;
+    private ProductTypeRepository products;
+    private SchedulingResourceWriteLock factoryLock;
     private UrgentInsertServiceImpl service;
 
     @BeforeEach
@@ -46,39 +54,65 @@ class UrgentInsertWorkerShiftContractTest {
         shifts = mock(WorkerShiftAvailabilityCheck.class);
         ImpactAnalysisService impact = mock(ImpactAnalysisService.class);
         LineCapacityEquipmentCheck lines = mock(LineCapacityEquipmentCheck.class);
-        InsertSlot slot = InsertSlot.builder().id("S1").factoryId(F)
+        InsertSlot slot = InsertSlot.builder().id("S1").factoryId(F).productionLineId("L1")
                 .startTime(start).endTime(start.plusHours(2)).requiredWorkers(2)
                 .availableWorkers(99).availableCapacity(BigDecimal.TEN)
                 .impactLevel("none").status("available").build();
+        slot.setUpdatedAt(start.minusMinutes(5));
         when(slots.findByIdAndFactoryId("S1", F)).thenReturn(Optional.of(slot));
         when(slots.claimAvailableSlot(eq("S1"), eq(F), any())).thenReturn(1);
         when(plans.save(any(ProductionPlan.class))).thenAnswer(i -> i.getArgument(0));
         when(impact.calculateChainImpact(anyString(), any(), any(), any(), any()))
-                .thenReturn(ChainImpactResult.builder().impactLevel("none").build());
+                .thenReturn(completeImpact());
         when(impact.calculateRecommendScore(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(new ImpactAnalysisService.RecommendScoreResult());
         ResourceCheckResult ready = ResourceCheckResult.available("TEST", BigDecimal.TEN, BigDecimal.ONE);
         when(impact.checkMaterialAvailability(anyString(), anyString(), any())).thenReturn(ready);
         when(lines.checkEquipment(anyString(), anyString())).thenReturn(ready);
         when(lines.checkCapacity(anyString(), anyString(), any(), any(), any(), any(), any())).thenReturn(ready);
+        previews = mock(InsertSlotPreviewRepository.class);
+        InsertSlotPreview preview = InsertSlotPreview.builder().id("PV1").factoryId(F).slotId("S1")
+                .productTypeId("P1").previewQuantity(BigDecimal.TEN).quantityUnit("PIECE")
+                .plannedUnit("件").productionLineId("L1").windowStart(start)
+                .windowEnd(start.plusHours(2)).slotUpdatedAt(slot.getUpdatedAt())
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).build();
+        preview.setCreatedAt(LocalDateTime.now());
+        when(previews.findByIdAndFactoryId("PV1", F)).thenReturn(Optional.of(preview));
+        products = mock(ProductTypeRepository.class);
+        ProductType product = new ProductType();
+        product.setId("P1"); product.setFactoryId(F); product.setUnit("件");
+        when(products.findByIdAndFactoryId("P1", F)).thenReturn(Optional.of(product));
+        when(products.findByIdAndFactoryIdForUpdate("P1", F)).thenReturn(Optional.of(product));
+        factoryLock = mock(SchedulingResourceWriteLock.class);
         service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
                 InsertSlotRepository.class, slots, ProductionPlanRepository.class, plans,
                 WorkerShiftAvailabilityCheck.class, shifts, ImpactAnalysisService.class, impact,
-                LineCapacityEquipmentCheck.class, lines, ObjectMapper.class, new ObjectMapper()));
+                LineCapacityEquipmentCheck.class, lines, ObjectMapper.class, new ObjectMapper(),
+                InsertSlotPreviewRepository.class, previews, ProductTypeRepository.class, products,
+                SchedulingResourceWriteLock.class, factoryLock));
     }
 
     private WorkerShiftAvailabilityCheck.Result ready() {
         return new WorkerShiftAvailabilityCheck.Result(true, 2, 2, Set.of(11L, 12L), "人员排班可用: 2人");
     }
 
+    private static ChainImpactResult completeImpact() {
+        return ChainImpactResult.builder().impactLevel("none").requiresApproval(false)
+                .totalAffectedPlans(0).directConflicts(0).cascadeDelays(0)
+                .maxDelayMinutes(0).totalDelayMinutes(0).affectedVipCustomers(0)
+                .criticalCrPlans(0).exceedingDeadlinePlans(0).impactScore(0).build();
+    }
+
     private Map<String, Object> analyze() {
         GetInsertSlotsRequest request = new GetInsertSlotsRequest();
         request.setProductTypeId("P1");request.setRequiredQuantity(BigDecimal.TEN);
+        request.setQuantityUnit("PIECE");
         return service.analyzeInsertImpact(F, "S1", request);
     }
 
     private ConfirmUrgentInsertRequest request(List<Long> selected) {
         return ConfirmUrgentInsertRequest.builder().slotId("S1").productTypeId("P1")
+                .previewId("PV1").quantityUnit("PIECE")
                 .plannedQuantity(BigDecimal.TEN).assignedWorkerIds(selected).build();
     }
 

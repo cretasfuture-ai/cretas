@@ -54,7 +54,8 @@ class APSAdaptiveFactoryScopeContractTest {
     void setUp() {
         service = new APSAdaptiveSchedulingServiceImpl(schedules, lines, mock(EfficiencyHistoryRepository.class),
                 mock(PredictionModelWeightRepository.class), mock(FactorySchedulingConfigRepository.class),
-                mock(WeightHistoryRepository.class), new ObjectMapper());
+                mock(WeightHistoryRepository.class), new ObjectMapper(),
+                mock(com.cretas.aims.service.scheduling.SchedulingResourceWriteLock.class));
         when(schedules.findByIdAndFactoryId(anyString(), anyString())).thenReturn(Optional.empty());
         when(schedules.findByIdAndFactoryId("T-A", "F-A")).thenReturn(Optional.of(task("T-A")));
         // 两个任务按裸 id 都查得到 (T-B 属于别的厂): 只有按工厂取才分得出, 退回 findById 的实现会把 T-B 也改了

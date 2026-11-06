@@ -7,6 +7,8 @@
  * @since 2025-12-28
  */
 
+import type { CapacityUnitCode } from '../utils/capacityUnit';
+
 // ==================== 枚举类型 ====================
 
 /** 排程状态 */
@@ -505,6 +507,8 @@ export interface ImpactedPlan {
 /** 确认紧急插单请求 */
 export interface ConfirmUrgentInsertRequest {
   slotId: string;
+  previewId: string;
+  quantityUnit: CapacityUnitCode;
   productTypeId: string;
   plannedQuantity: number;
   priority?: number;  // 1-10, default 9
@@ -528,6 +532,13 @@ export interface ForceInsertRequest extends ConfirmUrgentInsertRequest {
 /** 紧急插单影响分析结果 */
 export interface UrgentInsertImpactAnalysis {
   slotId: string;
+  /** 服务端不可变预览；缺失时不能确认，必须重新分析。 */
+  previewId?: string | null;
+  quantityUnit?: CapacityUnitCode | null;
+  plannedUnit?: string | null;
+  previewQuantity?: number | null;
+  affectedPlanCount?: number | null;
+  expiresAt?: string | null;
   impactLevel: 'none' | 'low' | 'medium' | 'high' | 'critical';
   impactScore: number;
   chainImpact: ChainImpactDetails;
@@ -685,6 +696,8 @@ export interface CompleteFeedbackRequest {
 export interface GetInsertSlotsRequest {
   productTypeId: string;
   requiredQuantity: number;
+  quantityUnit?: CapacityUnitCode | null;
+  preferredProductionLineId?: string;
   deadline: string;
   urgencyLevel?: 'normal' | 'urgent' | 'critical';
 }
@@ -692,6 +705,8 @@ export interface GetInsertSlotsRequest {
 /** 确认插单请求 (已废弃，使用 ConfirmUrgentInsertRequest) */
 export interface ConfirmInsertRequest {
   slotId: string;
+  previewId: string;
+  quantityUnit: CapacityUnitCode;
   productTypeId: string;
   quantity: number;
   deadline: string;

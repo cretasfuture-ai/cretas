@@ -1,6 +1,7 @@
 package com.cretas.aims.service.supplyimpact;
 
 import com.cretas.aims.dto.supplyimpact.SupplyImpactDTO;
+import com.cretas.aims.dto.supplyimpact.SupplyImpactBoxExposure;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.ProductionPlan;
@@ -98,6 +99,7 @@ public class SupplyImpactService {
     private final PurchaseOrderItemRepository purchaseOrderItemRepository;
     private final LineageGraphAssembler lineageGraphAssembler;
     private final UnitConversionService unitConversionService;
+    private final SupplyImpactBoxExposureService boxExposureService;
 
     // ───────────────────────── 1. 断供 ─────────────────────────
 
@@ -172,6 +174,7 @@ public class SupplyImpactService {
         Map<String, DownstreamNode> prod = new LinkedHashMap<>();
         Map<String, DownstreamNode> fin = new LinkedHashMap<>();
         Map<String, DownstreamNode> ship = new LinkedHashMap<>();
+        boolean lineageComplete = true;
         for (MaterialBatch b : batches) {
             BigDecimal remaining = nz(b.getReceiptQuantity()).subtract(nz(b.getUsedQuantity()));
             refs.add(QualityBatchRef.builder().batchId(b.getId()).batchNumber(b.getBatchNumber())
@@ -188,16 +191,24 @@ public class SupplyImpactService {
                 collect(r.getShipments(), ship);
                 if (r.getCompleteness() != null && r.getCompleteness().getGaps() != null
                         && !r.getCompleteness().getGaps().isEmpty()) {
+                    lineageComplete = false;
                     gaps.add(gap("LINEAGE_INCOMPLETE", "批次 " + b.getBatchNumber() + " 的下游追溯不完整: "
                             + r.getCompleteness().getSummary()));
                 }
             } catch (RuntimeException e) {
+                lineageComplete = false;
                 log.warn("[supply-impact] 批次下游追溯失败 factory={} batch={}", factoryId, b.getId(), e);
                 gaps.add(gap("TRACE_FAILED", "批次 " + b.getBatchNumber() + " 下游追溯失败, 该批影响面未计入: " + e.getMessage()));
             }
         }
         List<CustomerExposure> customers = customers(ship.values(), gaps);
-        gaps.add(gap("BOX_COUNT_NOT_IN_LINEAGE", "追溯关系只记录数量与单位, 不含箱数; 箱数请按发货单明细核对"));
+        Set<String> discoveredFinishedBatchIds = fin.values().stream()
+                .map(DownstreamNode::getNodeId).filter(Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<String> discoveredShipmentIds = ship.values().stream()
+                .map(DownstreamNode::getNodeId).filter(Objects::nonNull).collect(Collectors.toCollection(LinkedHashSet::new));
+        SupplyImpactBoxExposure boxExposure = boxExposureService.evaluate(
+                factoryId, discoveredFinishedBatchIds, discoveredShipmentIds, lineageComplete);
+        gaps.addAll(boxExposure.getGaps());
 
         Set<String> productIds = new LinkedHashSet<>();
         for (String mid : scope.materialIds) {
@@ -209,6 +220,7 @@ public class SupplyImpactService {
         return QualityView.builder().subject(scope.subject).from(from).to(to).sourceBatches(refs)
                 .productionBatches(new ArrayList<>(prod.values())).finishedBatches(new ArrayList<>(fin.values()))
                 .shipments(new ArrayList<>(ship.values())).customers(customers).unshippedOrders(unshipped)
+                .boxExposure(boxExposure)
                 .gaps(gaps).build();
     }
 

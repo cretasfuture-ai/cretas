@@ -3,7 +3,10 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.scheduling.*;
 import com.cretas.aims.entity.InsertSlot;
+import com.cretas.aims.entity.InsertSlotPreview;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
@@ -11,8 +14,13 @@ import com.cretas.aims.entity.enums.ProductionPlanType;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.InsertSlotRepository;
+import com.cretas.aims.repository.InsertSlotPreviewRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.ProductEquipmentRequirementRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.EquipmentRepository;
+import com.cretas.aims.repository.ProductionLineRepository;
+import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.entity.config.ApprovalChainConfig;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
@@ -20,6 +28,7 @@ import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.DecisionAuditService;
 import com.cretas.aims.service.ImpactAnalysisService;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.cretas.aims.service.scheduling.WorkerShiftAvailabilityCheck;
 import com.cretas.aims.service.ImpactAnalysisService.*;
 import com.cretas.aims.service.LinkArrayService;
@@ -51,9 +60,17 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class UrgentInsertServiceImpl implements UrgentInsertService {
 
+    private static final int MAX_ACTIVE_PREVIEWS_PER_FACTORY = 100;
+    private static final long PREVIEW_VALID_MINUTES = 15L;
+
     private final InsertSlotRepository insertSlotRepository;
+    private final InsertSlotPreviewRepository insertSlotPreviewRepository;
     private final ProductionPlanRepository productionPlanRepository;
     private final ProductTypeRepository productTypeRepository;
+    private final ProductEquipmentRequirementRepository equipmentRequirements;
+    private final EquipmentRepository equipmentRepository;
+    private final ProductionLineRepository productionLineRepository;
+    private final ProductionLineCapacityConfigRepository capacityConfigRepository;
     private final UserRepository userRepository;
     private final ProductionPlanMapper productionPlanMapper;
     private final ObjectMapper objectMapper;
@@ -61,6 +78,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final ImpactAnalysisService impactAnalysisService;
     private final LineCapacityEquipmentCheck lineChecks;
     private final WorkerShiftAvailabilityCheck workerShifts;
+    private final SchedulingResourceWriteLock resourceWriteLock;
     private final ApprovalChainService approvalChainService;
     private final PushNotificationService pushNotificationService;
 
@@ -112,12 +130,47 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
     @Override
     public Map<String, Object> analyzeInsertImpact(String factoryId, String slotId, GetInsertSlotsRequest request) {
+        return analyzeInsertImpactInternal(factoryId, slotId, request, false);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> createInsertPreview(String factoryId, String slotId, GetInsertSlotsRequest request) {
+        return analyzeInsertImpactInternal(factoryId, slotId, request, true);
+    }
+
+    private Map<String, Object> analyzeInsertImpactInternal(
+            String factoryId, String slotId, GetInsertSlotsRequest request, boolean createPreview) {
         log.info("分析插单影响: factoryId={}, slotId={}, productTypeId={}, quantity={}",
                 factoryId, slotId, request.getProductTypeId(), request.getRequiredQuantity());
+
+        // Only the explicit POST preview path is a write. GET impact remains
+        // retry-safe and read-only for users who only have scheduling access.
+        if (createPreview) {
+            resourceWriteLock.lockFactory(factoryId);
+        }
+        String quantityUnit = tryNormalizeQuantityUnit(request.getQuantityUnit());
+        ProductType product = (createPreview
+                ? productTypeRepository.findByIdAndFactoryIdForUpdate(request.getProductTypeId(), factoryId)
+                : productTypeRepository.findByIdAndFactoryId(request.getProductTypeId(), factoryId))
+                .orElseThrow(() -> new EntityNotFoundException("ProductType", request.getProductTypeId()));
+        String plannedUnit = product.getUnit();
+        String productCapacityUnit = capacityUnitForProduct(plannedUnit);
+        if (createPreview) {
+            validatePreviewQuantity(request.getRequiredQuantity(), false);
+        }
 
         // 只按本厂查: 他厂时段 404, 不泄露他厂排产信息
         InsertSlot slot = insertSlotRepository.findByIdAndFactoryId(slotId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("InsertSlot", slotId));
+        boolean physicalLineBound = slot.getProductionLineId() != null
+                && !slot.getProductionLineId().isBlank()
+                && slot.getStartTime() != null && slot.getEndTime() != null;
+        if (createPreview && !physicalLineBound) {
+            throw new BusinessException(409, "时段没有绑定实际产线或完整时间窗，不能生成确认预览")
+                    .withHint("请刷新时段列表，选择已绑定实际 active 产线的时段")
+                    .withCode("INSERT_SLOT_RESOURCE_UNVERIFIED");
+        }
 
         // 使用 ImpactAnalysisService 进行详细链式影响分析
         ChainImpactResult chainImpact = impactAnalysisService.calculateChainImpact(
@@ -127,6 +180,11 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 request.getProductTypeId(),
                 request.getRequiredQuantity()
         );
+        if (createPreview && !isCompleteChainImpact(chainImpact)) {
+            throw new BusinessException(409, "影响分析未完成，不能创建确认预览")
+                    .withCode("INSERT_IMPACT_PREVIEW_UNVERIFIED")
+                    .withHint("刷新影响分析，取得完整影响等级和受影响计划统计后重试");
+        }
 
         // 计算多维度推荐评分
         RecommendScoreResult scoreResult = impactAnalysisService.calculateRecommendScore(
@@ -143,9 +201,27 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 factoryId, request.getProductTypeId(), request.getRequiredQuantity());
         // S4: 产能与设备只读对话建厂 / 工厂配置写下的配置 (同单位、显式设备), 缺配置 = 未验证
         ResourceCheckResult equipmentCheck = lineChecks.checkEquipment(factoryId, request.getProductTypeId());
-        ResourceCheckResult capacityCheck = lineChecks.checkCapacity(factoryId, request.getProductTypeId(),
-                request.getRequiredQuantity(), request.getQuantityUnit(), request.getPreferredProductionLineId(),
-                slot.getStartTime(), slot.getEndTime());
+        boolean productSpecificCapacityRequired = "个".equals(
+                plannedUnit == null ? null : plannedUnit.trim());
+        boolean productSpecificCapacity = !productSpecificCapacityRequired
+                || !physicalLineBound
+                || hasProductSpecificCapacity(factoryId, request.getProductTypeId(),
+                slot.getProductionLineId(), quantityUnit, slot.getStartTime());
+        boolean unitCompatible = quantityUnit != null
+                && productCapacityUnit != null
+                && sameCapacityDimension(productCapacityUnit, quantityUnit)
+                && productSpecificCapacity;
+        ResourceCheckResult capacityCheck = unitCompatible && physicalLineBound
+                ? lineChecks.checkCapacity(factoryId, request.getProductTypeId(),
+                        request.getRequiredQuantity(), quantityUnit, slot.getProductionLineId(),
+                        slot.getStartTime(), slot.getEndTime())
+                : ResourceCheckResult.unverified("CAPACITY",
+                        productCapacityUnit == null
+                                ? "产能未验证: 产品实际单位无法映射到 PIECE / KG / BATCH"
+                                : !productSpecificCapacity
+                                ? "产能未验证: 个单位必须有该产品在实际产线上的专用 PIECE 产能配置"
+                                : "产能未验证: 产品实际单位与请求数量单位不一致",
+                        request.getRequiredQuantity());
         WorkerShiftAvailabilityCheck.Result workerCheck = checkWorkers(factoryId, slot);
 
         Map<String, Object> result = new HashMap<>();
@@ -161,6 +237,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         result.put("impactLevel", chainImpact.getImpactLevel());
         result.put("impactLevelDisplayName", chainImpact.getImpactLevelDisplayName());
         result.put("impactScore", chainImpact.getImpactScore());
+        result.put("affectedPlanCount", chainImpact.getTotalAffectedPlans());
 
         // 链式影响详情
         Map<String, Object> chainDetails = new HashMap<>();
@@ -204,7 +281,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         resourceStatus.put("capacityVerified", capacityCheck.isVerified());
         resourceStatus.put("capacityMessage", capacityCheck.getMessage());
         resourceStatus.put("capacityStatus", LineCapacityEquipmentCheck.status(capacityCheck));
-        resourceStatus.put("capacityUnit", request.getQuantityUnit());
+        resourceStatus.put("capacityUnit", unitCompatible ? quantityUnit : null);
         resourceStatus.put("hasEnoughWorkers", workerCheck.available());
         resourceStatus.put("workerVerified", workerCheck.verified());
         resourceStatus.put("workerMessage", workerCheck.message());
@@ -258,6 +335,58 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             result.put("infeasibleReason", buildInfeasibleReason(materialCheck, equipmentCheck, capacityCheck, workerCheck));
         }
 
+        // Only a product/unit-compatible analysis may issue a confirmation
+        // preview.  Unknown package units remain UNVERIFIED and never get a
+        // guessed PIECE/KG/BATCH snapshot.
+        if (createPreview && unitCompatible && plannedUnit != null && !plannedUnit.isBlank()) {
+            LocalDateTime validAfter = LocalDateTime.now().minusMinutes(PREVIEW_VALID_MINUTES);
+            List<InsertSlotPreview> recent = insertSlotPreviewRepository
+                    .findByFactoryIdAndCreatedAtAfterOrderByCreatedAtDesc(factoryId, validAfter);
+            InsertSlotPreview preview = recent.stream()
+                    .filter(candidate -> previewMatches(candidate, slot, product, request,
+                            quantityUnit, plannedUnit, chainImpact))
+                    .findFirst()
+                    .orElse(null);
+            if (preview == null) {
+                if (recent.size() >= MAX_ACTIVE_PREVIEWS_PER_FACTORY) {
+                    throw new BusinessException(409, "当前工厂有效插单预览已达上限，未创建新预览")
+                            .withCode("INSERT_PREVIEW_LIMIT")
+                            .withHint("请使用现有预览或等待过期后重新分析");
+                }
+                preview = insertSlotPreviewRepository.save(InsertSlotPreview.builder()
+                        .id(UUID.randomUUID().toString())
+                        .factoryId(factoryId)
+                        .slotId(slot.getId())
+                        .productTypeId(product.getId())
+                        .previewQuantity(request.getRequiredQuantity())
+                        .quantityUnit(quantityUnit)
+                        .plannedUnit(plannedUnit)
+                        .productionLineId(slot.getProductionLineId())
+                        .windowStart(slot.getStartTime())
+                        .windowEnd(slot.getEndTime())
+                        .slotUpdatedAt(slot.getUpdatedAt())
+                        .impactLevel(chainImpact.getImpactLevel())
+                        .requiresApproval(Boolean.TRUE.equals(chainImpact.getRequiresApproval()))
+                        .affectedPlanCount(chainImpact.getTotalAffectedPlans() == null
+                                ? 0 : chainImpact.getTotalAffectedPlans())
+                        .candidateNumber(Math.toIntExact(
+                                insertSlotPreviewRepository.countByFactoryIdAndSlotId(factoryId, slot.getId()) + 1))
+                        .build());
+            }
+            result.put("previewId", preview.getId());
+            result.put("quantityUnit", preview.getQuantityUnit());
+            result.put("plannedUnit", preview.getPlannedUnit());
+            result.put("previewQuantity", preview.getPreviewQuantity());
+            result.put("expiresAt", preview.getCreatedAt() == null
+                    ? null : preview.getCreatedAt().plusMinutes(PREVIEW_VALID_MINUTES));
+        } else {
+            result.put("previewId", null);
+            result.put("quantityUnit", unitCompatible ? quantityUnit : null);
+            result.put("plannedUnit", plannedUnit);
+            result.put("previewQuantity", request.getRequiredQuantity());
+            result.put("expiresAt", null);
+        }
+
         return result;
     }
 
@@ -298,6 +427,269 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     .withCode("INSERT_WORKERS_UNAVAILABLE")
                     .withHint("请重新选择覆盖整个时段、人数满足要求的工人；不可用人员需先确认班次或任务安排");
         }
+    }
+
+    /**
+     * An explicit equipment list is a claim about the configured product
+     * equipment, not a free-form list of factory IDs.  Keep it tenant scoped
+     * and require the complete configured set before confirmation.
+     */
+    private void validateSelectedEquipment(String factoryId, ConfirmUrgentInsertRequest request) {
+        List<String> selected = request.getAssignedEquipmentIds();
+        if (selected == null || selected.isEmpty()) return;
+        if (selected.stream().anyMatch(id -> id == null || id.isBlank())
+                || new HashSet<>(selected).size() != selected.size()) {
+            throw new BusinessException(409, "指定设备名单无效，未创建计划")
+                    .withCode("INSERT_EQUIPMENT_SELECTION_INVALID")
+                    .withHint("重新选择本厂设备，去掉重复或空设备ID");
+        }
+
+        Set<Long> selectedIds = new HashSet<>();
+        try {
+            for (String id : selected) {
+                long parsed = Long.parseLong(id.trim());
+                if (parsed <= 0 || !selectedIds.add(parsed)) {
+                    throw new NumberFormatException(id);
+                }
+            }
+        } catch (NumberFormatException ex) {
+            throw new BusinessException(409, "指定设备名单无效，未创建计划")
+                    .withCode("INSERT_EQUIPMENT_SELECTION_INVALID")
+                    .withHint("重新选择本厂设备，设备ID必须为正整数");
+        }
+
+        Set<Long> requiredIds = equipmentRequirements
+                .findByFactoryIdAndProductTypeId(factoryId, request.getProductTypeId())
+                .stream()
+                .map(com.cretas.aims.entity.ProductEquipmentRequirement::getEquipmentId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (requiredIds.isEmpty() || !selectedIds.equals(requiredIds)) {
+            throw new BusinessException(409, "指定设备与产品要求不一致，未创建计划")
+                    .withCode("INSERT_EQUIPMENT_SELECTION_MISMATCH")
+                    .withHint("按当前产品的设备要求重新选择完整设备名单");
+        }
+        for (Long equipmentId : selectedIds) {
+            equipmentRepository.findByIdAndFactoryId(equipmentId, factoryId)
+                    .orElseThrow(() -> new BusinessException(409, "指定设备不属于本厂或已删除，未创建计划")
+                            .withCode("INSERT_EQUIPMENT_SELECTION_MISMATCH")
+                            .withHint("仅选择当前工厂仍有效的设备"));
+        }
+    }
+
+    private String normalizeQuantityUnit(String unit) {
+        String normalized = tryNormalizeQuantityUnit(unit);
+        if (normalized == null) {
+            throw new BusinessException(400, "数量单位只能是 PIECE / KG / BATCH")
+                    .withHint("请选择与产品实际单位一致的 PIECE、KG 或 BATCH");
+        }
+        return normalized;
+    }
+
+    private String tryNormalizeQuantityUnit(String unit) {
+        com.cretas.aims.entity.ProductionLineCapacityConfig.CapacityUnit parsed =
+                LineCapacityEquipmentCheck.parseUnit(unit);
+        return parsed == null ? null : parsed.name();
+    }
+
+    private String capacityUnitForProduct(String productUnit) {
+        if (productUnit == null) return null;
+        return switch (productUnit.trim().toLowerCase(Locale.ROOT)) {
+            case "件", "个", "piece" -> "PIECE";
+            case "kg", "公斤", "千克" -> "KG";
+            case "批", "batch" -> "BATCH";
+            default -> null;
+        };
+    }
+
+    /** Capacity compatibility is a closed enum contract, never label equality. */
+    private boolean sameCapacityDimension(String left, String right) {
+        var leftDimension = LineCapacityEquipmentCheck.parseUnit(left);
+        var rightDimension = LineCapacityEquipmentCheck.parseUnit(right);
+        return leftDimension != null && leftDimension == rightDimension;
+    }
+
+    /**
+     * Identity of an unchanged product snapshot, not physical unit equivalence.
+     * Even equivalent spellings are a changed stored label and require a new
+     * preview. Never normalize aliases or merge 个/件 when checking this identity.
+     */
+    private record ProductUnitIdentity(String productTypeId, String exactStoredLabel) {
+    }
+
+    private boolean hasProductSpecificCapacity(String factoryId, String productTypeId,
+                                               String productionLineId, String quantityUnit,
+                                               LocalDateTime at) {
+        com.cretas.aims.entity.ProductionLineCapacityConfig.CapacityUnit unit =
+                LineCapacityEquipmentCheck.parseUnit(quantityUnit);
+        return unit != null && capacityConfigRepository.findEffectiveForProduct(
+                        factoryId, productTypeId, at).stream()
+                .anyMatch(config -> productTypeId.equals(config.getProductTypeId())
+                        && productionLineId.equals(config.getProductionLineId())
+                        && unit == config.getCapacityUnit());
+    }
+
+    private void validatePreviewQuantity(BigDecimal quantity, boolean confirmation) {
+        if (quantity == null || quantity.signum() <= 0
+                || quantity.scale() > 2
+                || quantity.precision() - quantity.scale() > 8) {
+            throw new BusinessException(409,
+                    confirmation ? "确认数量必须与预览一致且最多8位整数、2位小数"
+                            : "预览数量必须最多8位整数、2位小数")
+                    .withCode("INSERT_QUANTITY_PRECISION_INVALID")
+                    .withHint("调整数量后重新分析并创建预览");
+        }
+    }
+
+    private boolean previewMatches(InsertSlotPreview preview, InsertSlot slot, ProductType product,
+                                   GetInsertSlotsRequest request, String quantityUnit, String plannedUnit,
+                                   ChainImpactResult chainImpact) {
+        return Objects.equals(preview.getSlotId(), slot.getId())
+                && Objects.equals(preview.getProductTypeId(), product.getId())
+                && preview.getPreviewQuantity() != null && request.getRequiredQuantity() != null
+                && preview.getPreviewQuantity().compareTo(request.getRequiredQuantity()) == 0
+                && sameCapacityDimension(preview.getQuantityUnit(), quantityUnit)
+                && new ProductUnitIdentity(preview.getProductTypeId(), preview.getPlannedUnit())
+                        .equals(new ProductUnitIdentity(product.getId(), plannedUnit))
+                && Objects.equals(preview.getProductionLineId(), slot.getProductionLineId())
+                && Objects.equals(preview.getWindowStart(), slot.getStartTime())
+                && Objects.equals(preview.getWindowEnd(), slot.getEndTime())
+                && Objects.equals(preview.getSlotUpdatedAt(), slot.getUpdatedAt())
+                && Objects.equals(preview.getImpactLevel(), chainImpact.getImpactLevel())
+                && Objects.equals(preview.getRequiresApproval(),
+                Boolean.TRUE.equals(chainImpact.getRequiresApproval()))
+                && Objects.equals(preview.getAffectedPlanCount(),
+                chainImpact.getTotalAffectedPlans() == null ? 0 : chainImpact.getTotalAffectedPlans());
+    }
+
+    private String requireProductUnit(ProductType product) {
+        if (product.getUnit() == null || product.getUnit().isBlank()) {
+            throw new BusinessException(409, "产品实际单位未配置，不能创建插单预览或计划")
+                    .withCode("INSERT_PRODUCT_UNIT_UNVERIFIED")
+                    .withHint("先补齐产品实际单位后重新分析");
+        }
+        return product.getUnit();
+    }
+
+    private PreviewValidation validatePreviewAndFreshResources(
+            String factoryId, ConfirmUrgentInsertRequest request) {
+        resourceWriteLock.lockFactory(factoryId);
+        if (request.getPreviewId() == null || request.getPreviewId().isBlank()) {
+            throw new BusinessException(400, "预览ID不能为空，不能确认插单")
+                    .withCode("INSERT_PREVIEW_REQUIRED");
+        }
+        validatePreviewQuantity(request.getPlannedQuantity(), true);
+
+        InsertSlotPreview preview = insertSlotPreviewRepository
+                .findByIdAndFactoryId(request.getPreviewId(), factoryId)
+                .orElseThrow(() -> new EntityNotFoundException("InsertSlotPreview", request.getPreviewId()));
+        if (preview.getCreatedAt() == null
+                || preview.getCreatedAt().isBefore(LocalDateTime.now().minusMinutes(PREVIEW_VALID_MINUTES))) {
+            throw new BusinessException(409, "插单预览已过期，请重新分析，未创建计划")
+                    .withCode("INSERT_PREVIEW_EXPIRED")
+                    .withHint("返回时段影响分析并创建新的确认预览");
+        }
+        if (!Objects.equals(request.getSlotId(), preview.getSlotId())
+                || !Objects.equals(request.getProductTypeId(), preview.getProductTypeId())) {
+            throw new BusinessException(409, "预览快照与当前插单参数不一致，未创建计划")
+                    .withCode("INSERT_PREVIEW_MISMATCH")
+                    .withHint("使用同一份最新预览的时段和产品参数");
+        }
+
+        String quantityUnit = normalizeQuantityUnit(request.getQuantityUnit());
+        if (!sameCapacityDimension(quantityUnit, preview.getQuantityUnit())
+                || request.getPlannedQuantity() == null
+                || request.getPlannedQuantity().compareTo(preview.getPreviewQuantity()) != 0) {
+            throw new BusinessException(409, "预览快照的数量或单位已变化，请重新分析，未创建计划")
+                    .withCode("INSERT_PREVIEW_MISMATCH")
+                    .withHint("返回影响分析并创建新的确认预览");
+        }
+
+        ProductType product = productTypeRepository.findByIdAndFactoryIdForUpdate(
+                        request.getProductTypeId(), factoryId)
+                .orElseThrow(() -> new EntityNotFoundException("ProductType", request.getProductTypeId()));
+        String plannedUnit = requireProductUnit(product);
+        if (!new ProductUnitIdentity(product.getId(), plannedUnit)
+                .equals(new ProductUnitIdentity(preview.getProductTypeId(), preview.getPlannedUnit()))) {
+            throw new BusinessException(409, "产品实际单位已变化，请重新分析，未创建计划")
+                    .withCode("INSERT_PREVIEW_PRODUCT_CHANGED")
+                    .withHint("重新分析当前产品后再确认");
+        }
+
+        // The slot is loaded only after factory and product locks, and all
+        // physical-line/window bindings are checked against the snapshot.
+        InsertSlot slot = loadOwnSlot(factoryId, request.getSlotId());
+        if (!Objects.equals(slot.getProductionLineId(), preview.getProductionLineId())
+                || !Objects.equals(slot.getStartTime(), preview.getWindowStart())
+                || !Objects.equals(slot.getEndTime(), preview.getWindowEnd())
+                || preview.getSlotUpdatedAt() == null
+                || slot.getUpdatedAt() == null
+                || !Objects.equals(slot.getUpdatedAt(), preview.getSlotUpdatedAt())) {
+            throw new BusinessException(409, "时段产线或时间窗已变化，请重新分析，未创建计划")
+                    .withCode("INSERT_PREVIEW_SLOT_CHANGED")
+                    .withHint("刷新时段列表并重新创建确认预览");
+        }
+
+        ResourceCheckResult equipmentCheck = lineChecks.checkEquipment(factoryId, request.getProductTypeId());
+        String productCapacityUnit = capacityUnitForProduct(plannedUnit);
+        boolean productSpecificCapacity = !"个".equals(plannedUnit.trim())
+                || hasProductSpecificCapacity(factoryId, request.getProductTypeId(),
+                slot.getProductionLineId(), quantityUnit, slot.getStartTime());
+        ResourceCheckResult capacityCheck = lineChecks.checkCapacity(
+                factoryId, request.getProductTypeId(), request.getPlannedQuantity(), quantityUnit,
+                slot.getProductionLineId(), slot.getStartTime(), slot.getEndTime());
+        if (!sameCapacityDimension(quantityUnit, productCapacityUnit) || !productSpecificCapacity
+                || !equipmentCheck.isVerified() || !equipmentCheck.isAvailable()
+                || !capacityCheck.isVerified() || !capacityCheck.isAvailable()) {
+            throw new BusinessException(409, "确认前产能或设备复核未通过，未创建计划")
+                    .withCode("INSERT_RESOURCE_RECHECK_FAILED")
+                    .withHint("刷新并重新分析当前产线、时段和资源配置");
+        }
+
+        ChainImpactResult freshChainImpact = impactAnalysisService.calculateChainImpact(
+                factoryId,
+                slot.getStartTime(),
+                slot.getEndTime(),
+                request.getProductTypeId(),
+                request.getPlannedQuantity());
+        if (!isCompleteChainImpact(freshChainImpact)) {
+            throw new BusinessException(409, "确认前影响分析未完成，未创建计划")
+                    .withCode("INSERT_IMPACT_RECHECK_FAILED")
+                    .withHint("刷新影响分析并使用完整的最新预览后重试");
+        }
+        if (!previewImpactMatches(preview, freshChainImpact)) {
+            throw new BusinessException(409, "预览影响快照已变化，请重新分析，未创建计划")
+                    .withCode("INSERT_PREVIEW_IMPACT_CHANGED")
+                    .withHint("刷新影响分析并创建新的确认预览");
+        }
+
+        return new PreviewValidation(slot, plannedUnit, preview, freshChainImpact);
+    }
+
+    private boolean isCompleteChainImpact(ChainImpactResult chainImpact) {
+        return chainImpact != null
+                && chainImpact.getImpactLevel() != null
+                && !chainImpact.getImpactLevel().isBlank()
+                && chainImpact.getRequiresApproval() != null
+                && chainImpact.getTotalAffectedPlans() != null
+                && chainImpact.getDirectConflicts() != null
+                && chainImpact.getCascadeDelays() != null
+                && chainImpact.getMaxDelayMinutes() != null
+                && chainImpact.getTotalDelayMinutes() != null
+                && chainImpact.getAffectedVipCustomers() != null
+                && chainImpact.getCriticalCrPlans() != null
+                && chainImpact.getExceedingDeadlinePlans() != null
+                && chainImpact.getImpactScore() != null;
+    }
+
+    private boolean previewImpactMatches(InsertSlotPreview preview, ChainImpactResult chainImpact) {
+        return Objects.equals(preview.getImpactLevel(), chainImpact.getImpactLevel())
+                && Objects.equals(preview.getRequiresApproval(), chainImpact.getRequiresApproval())
+                && Objects.equals(preview.getAffectedPlanCount(), chainImpact.getTotalAffectedPlans());
+    }
+
+    private record PreviewValidation(InsertSlot slot, String plannedUnit, InsertSlotPreview preview,
+                                     ChainImpactResult chainImpact) {
     }
 
     /**
@@ -353,6 +745,12 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         return "low";
     }
 
+    private boolean requiresForceApproval(ChainImpactResult chainImpact) {
+        return Boolean.TRUE.equals(chainImpact.getRequiresApproval())
+                || "high".equalsIgnoreCase(chainImpact.getImpactLevel())
+                || "critical".equalsIgnoreCase(chainImpact.getImpactLevel());
+    }
+
     /**
      * 构建不可行原因
      */
@@ -386,25 +784,27 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         log.info("确认紧急插单: factoryId={}, slotId={}, quantity={}",
                 factoryId, request.getSlotId(), request.getPlannedQuantity());
 
-        // 验证时段 —— 只按本厂查: 他厂 / 不存在 一律 404, 不改任何数据
-        InsertSlot slot = loadOwnSlot(factoryId, request.getSlotId());
+        PreviewValidation validation = validatePreviewAndFreshResources(factoryId, request);
+        InsertSlot slot = validation.slot();
 
         validateSelectedWorkers(factoryId, slot, request);
+        validateSelectedEquipment(factoryId, request);
 
-        // 检查是否强制插入
-        if (!Boolean.TRUE.equals(request.getForceInsert())) {
-            // 非强制插入，检查影响等级
-            if ("high".equals(slot.getImpactLevel())) {
-                throw new BusinessException(409, "该时段影响等级高，请使用强制插入或选择其他时段")
-                        .withHint("改选影响等级较低的时段，或由有审批权限的人使用「强制插入」");
-            }
+        // Normal confirm must never turn the request's force flag into an
+        // approval bypass.  High/critical or an explicit approval requirement
+        // is only handled by the audited force endpoint.
+        if (requiresForceApproval(validation.chainImpact())) {
+            throw new BusinessException(409, "该时段需要强制插入审批，请使用强制插入流程")
+                    .withCode("INSERT_APPROVAL_REQUIRED")
+                    .withHint("由有审批权限的人使用「强制插入」并提交审批原因");
         }
 
         // 原子占用时段 (条件更新, 0 行 = 被并发请求 / 重复提交抢先) —— 必须在建计划之前
         claimSlotOrThrow(factoryId, slot);
 
         // 创建生产计划
-        ProductionPlan plan = createProductionPlanFromSlot(factoryId, userId, slot, request);
+        ProductionPlan plan = createProductionPlanFromSlot(
+                factoryId, userId, slot, request, validation.plannedUnit());
 
         // 保存计划
         ProductionPlan savedPlan = productionPlanRepository.save(plan);
@@ -440,28 +840,33 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     public ProductionPlanDTO forceInsert(String factoryId, Long userId, ConfirmUrgentInsertRequest request) {
         log.info("强制紧急插单: factoryId={}, slotId={}", factoryId, request.getSlotId());
 
-        // 验证时段 —— 只按本厂查: 他厂 / 不存在 一律 404, 不改任何数据
-        InsertSlot slot = loadOwnSlot(factoryId, request.getSlotId());
+        PreviewValidation validation = validatePreviewAndFreshResources(factoryId, request);
+        InsertSlot slot = validation.slot();
 
         validateSelectedWorkers(factoryId, slot, request);
+        validateSelectedEquipment(factoryId, request);
 
         // 获取操作用户信息
         User operator = userRepository.findById(userId)
                 .orElseThrow(() -> new EntityNotFoundException("User", userId));
 
         // 构建审批上下文，包含影响分析结果
-        Map<String, Object> approvalContext = buildForceInsertApprovalContext(slot, request);
+        Map<String, Object> approvalContext = buildForceInsertApprovalContext(
+                slot, request, validation.preview(), validation.chainImpact());
 
         // 使用配置化的审批链判断是否需要审批
-        boolean needsApproval = approvalChainService.requiresApproval(
+        boolean configuredRequiresApproval = approvalChainService.requiresApproval(
                 factoryId, DecisionType.FORCE_INSERT, approvalContext);
+        boolean needsApproval = requiresForceApproval(validation.chainImpact())
+                || configuredRequiresApproval;
 
         log.debug("强制插单审批判断: factoryId={}, impactLevel={}, affectedPlans={}, needsApproval={}",
-                factoryId, slot.getImpactLevel(),
+                factoryId, validation.preview().getImpactLevel(),
                 approvalContext.get("affectedPlanCount"), needsApproval);
 
         // 创建生产计划
-        ProductionPlan plan = createProductionPlanFromSlot(factoryId, userId, slot, request);
+        ProductionPlan plan = createProductionPlanFromSlot(
+                factoryId, userId, slot, request, validation.plannedUnit());
 
         // 标记为强制插单
         plan.markAsForceInsert(userId, request.getNotes(), needsApproval);
@@ -469,7 +874,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // 如果需要审批，状态设置为待审批
         if (needsApproval) {
             plan.setStatus(ProductionPlanStatus.PENDING);
-            log.info("强制插单需要审批: planId={}, impactLevel={}", plan.getId(), slot.getImpactLevel());
+            log.info("强制插单需要审批: planId={}, impactLevel={}",
+                    plan.getId(), validation.preview().getImpactLevel());
         }
 
         // 原子占用时段 (条件更新, 0 行 = 被并发请求 / 重复提交抢先) —— 必须在保存计划之前
@@ -487,7 +893,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         inputContext.put("productTypeId", request.getProductTypeId());
         inputContext.put("plannedQuantity", request.getPlannedQuantity());
         inputContext.put("priority", request.getPriority());
-        inputContext.put("impactLevel", slot.getImpactLevel());
+        inputContext.put("impactLevel", validation.chainImpact().getImpactLevel());
+        inputContext.put("affectedPlanCount", validation.chainImpact().getTotalAffectedPlans());
+        inputContext.put("previewId", validation.preview().getId());
+        inputContext.put("impactSource", "FRESH_CHAIN_MATCHED_PREVIEW");
         inputContext.put("impactedPlans", parseImpactedPlans(slot.getImpactedPlans()));
         inputContext.put("customerOrderNumber", request.getCustomerOrderNumber());
         inputContext.put("forceInsertReason", request.getNotes());
@@ -551,13 +960,13 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 pushData.put("type", "force_insert_approval");
                 pushData.put("planId", savedPlan.getId());
                 pushData.put("planNumber", savedPlan.getPlanNumber());
-                pushData.put("impactLevel", slot.getImpactLevel());
+                pushData.put("impactLevel", validation.preview().getImpactLevel());
                 pushData.put("screen", "ForceInsertApprovalScreen");
                 pushNotificationService.sendToFactory(
                         factoryId,
                         "强制插单待审批",
                         String.format("强制插单 %s 需要审批，影响等级: %s",
-                                savedPlan.getPlanNumber(), slot.getImpactLevel()),
+                                savedPlan.getPlanNumber(), validation.preview().getImpactLevel()),
                         pushData
                 );
             }
@@ -586,6 +995,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             String factoryId, String planId, Long approverId, boolean approved, String comment) {
 
         log.info("审批强制插单: planId={}, approved={}", planId, approved);
+        resourceWriteLock.lockFactory(factoryId);
 
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new EntityNotFoundException("ProductionPlan", planId));
@@ -693,6 +1103,11 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     @Transactional
     public int generateInsertSlots(String factoryId, int hoursAhead) {
         log.info("生成插单时段: factoryId={}, hoursAhead={}", factoryId, hoursAhead);
+        resourceWriteLock.lockFactory(factoryId);
+        if (hoursAhead <= 0 || hoursAhead > 168) {
+            throw new BusinessException(400, "提前小时数必须在1到168之间")
+                    .withHint("将提前小时数设置为1到168之间后重试");
+        }
 
         // 清理旧的可用时段
         insertSlotRepository.deleteAvailableSlotsByFactoryId(factoryId);
@@ -700,11 +1115,23 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime endTime = now.plusHours(hoursAhead);
 
-        // 获取工厂产能配置
+        // Worker/switch defaults remain part of the existing recommendation
+        // path, but a physical slot must never use a synthetic "default"
+        // production line or present legacy hourly capacity as verified data.
         FactoryCapacityConfig capacityConfig = impactAnalysisService.getFactoryCapacityConfig(factoryId);
-        BigDecimal hourlyCapacity = capacityConfig.getHourlyCapacity();
         int standardWorkers = capacityConfig.getStandardShiftWorkers();
         int maxWorkers = capacityConfig.getMaxWorkers();
+        List<ProductionLine> activeLines = productionLineRepository.findActiveLinesByFactory(factoryId);
+        if (activeLines == null) {
+            activeLines = List.of();
+        }
+        activeLines = activeLines.stream()
+                .filter(line -> line != null && line.getId() != null && !line.getId().isBlank())
+                .toList();
+        if (activeLines.isEmpty()) {
+            log.warn("工厂没有真实 active production line，不生成插单时段: factoryId={}", factoryId);
+            return 0;
+        }
 
         List<InsertSlot> newSlots = new ArrayList<>();
 
@@ -713,9 +1140,6 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         while (slotStart.isBefore(endTime)) {
             LocalDateTime slotEnd = slotStart.plusHours(2);
 
-            // 计算该时段的可用产能 (2小时 × 时产能)
-            BigDecimal slotCapacity = hourlyCapacity.multiply(new BigDecimal("2"));
-
             // 检查工人可用性
             ResourceCheckResult workerCheck = impactAnalysisService.checkWorkerAvailability(
                     factoryId, slotStart, slotEnd, standardWorkers);
@@ -723,59 +1147,60 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     (workerCheck.getAvailableAmount() != null ?
                             workerCheck.getAvailableAmount().intValue() : maxWorkers) : standardWorkers;
 
-            // 检查设备可用性
-            ResourceCheckResult equipmentCheck = impactAnalysisService.checkEquipmentAvailability(
-                    factoryId, slotStart, slotEnd, null);
-
-            // 初步影响分析 (使用默认产品类型做快速评估)
+            // 初步影响分析/评分仍沿用原 APS 逻辑, but with no synthetic
+            // quantity/capacity snapshot attached to the generated slot.
             ChainImpactResult impactResult = impactAnalysisService.calculateChainImpact(
-                    factoryId, slotStart, slotEnd, null, slotCapacity);
+                    factoryId, slotStart, slotEnd, null, null);
 
             // 计算多维度推荐评分
             RecommendScoreResult scoreResult = impactAnalysisService.calculateRecommendScore(
-                    factoryId, slotStart, slotEnd, slotCapacity, null, null);
+                    factoryId, slotStart, slotEnd, null, null, null);
 
-            InsertSlot slot = InsertSlot.builder()
-                    .id(UUID.randomUUID().toString())
-                    .factoryId(factoryId)
-                    .productionLineId("default")  // 动态分配模式，无固定产线
-                    .productionLineName("动态分配")
-                    .startTime(slotStart)
-                    .endTime(slotEnd)
-                    .availableCapacity(slotCapacity)
-                    .impactLevel(impactResult.getImpactLevel())
-                    .requiredWorkers(standardWorkers)
-                    .availableWorkers(availableWorkers)
-                    .switchCostMinutes(capacityConfig.getSwitchCostMinutes())
-                    .recommendScore(scoreResult.getTotalScore())
-                    .recommendationReason(scoreResult.getRecommendationReason())
-                    .status("available")
-                    .build();
+            for (ProductionLine line : activeLines) {
+                InsertSlot slot = InsertSlot.builder()
+                        .id(UUID.randomUUID().toString())
+                        .factoryId(factoryId)
+                        .productionLineId(line.getId())
+                        .productionLineName(line.getName())
+                        .startTime(slotStart)
+                        .endTime(slotEnd)
+                        // This is intentionally null: actual capacity is
+                        // checked later against the product/unit/line config.
+                        .availableCapacity(null)
+                        .impactLevel(impactResult.getImpactLevel())
+                        .requiredWorkers(standardWorkers)
+                        .availableWorkers(availableWorkers)
+                        .switchCostMinutes(capacityConfig.getSwitchCostMinutes())
+                        .recommendScore(scoreResult.getTotalScore())
+                        .recommendationReason(scoreResult.getRecommendationReason())
+                        .status("available")
+                        .build();
 
-            // 存储详细影响分析结果 (JSON)
-            try {
-                if (impactResult.getAffectedPlans() != null && !impactResult.getAffectedPlans().isEmpty()) {
-                    String impactedPlansJson = objectMapper.writeValueAsString(
-                            impactResult.getAffectedPlans().stream()
-                                    .map(ap -> InsertSlotDTO.ImpactedPlanDTO.builder()
-                                            .planId(ap.getPlanId())
-                                            .planNumber(ap.getPlanNumber())
-                                            .planName(ap.getProductName())
-                                            .delayMinutes(ap.getDelayMinutes())
-                                            .originalEndTime(ap.getOriginalEndTime())
-                                            .delayedEndTime(ap.getDelayedEndTime())
-                                            .isVipCustomer(ap.getIsVipCustomer())
-                                            .impactType(ap.getImpactType())
-                                            .impactLevel(ap.getImpactLevel())
-                                            .build())
-                                    .collect(Collectors.toList()));
-                    slot.setImpactedPlans(impactedPlansJson);
+                // 存储详细影响分析结果 (JSON)
+                try {
+                    if (impactResult.getAffectedPlans() != null && !impactResult.getAffectedPlans().isEmpty()) {
+                        String impactedPlansJson = objectMapper.writeValueAsString(
+                                impactResult.getAffectedPlans().stream()
+                                        .map(ap -> InsertSlotDTO.ImpactedPlanDTO.builder()
+                                                .planId(ap.getPlanId())
+                                                .planNumber(ap.getPlanNumber())
+                                                .planName(ap.getProductName())
+                                                .delayMinutes(ap.getDelayMinutes())
+                                                .originalEndTime(ap.getOriginalEndTime())
+                                                .delayedEndTime(ap.getDelayedEndTime())
+                                                .isVipCustomer(ap.getIsVipCustomer())
+                                                .impactType(ap.getImpactType())
+                                                .impactLevel(ap.getImpactLevel())
+                                                .build())
+                                        .collect(Collectors.toList()));
+                        slot.setImpactedPlans(impactedPlansJson);
+                    }
+                } catch (Exception e) {
+                    log.warn("序列化受影响计划失败: {}", e.getMessage());
                 }
-            } catch (Exception e) {
-                log.warn("序列化受影响计划失败: {}", e.getMessage());
-            }
 
-            newSlots.add(slot);
+                newSlots.add(slot);
+            }
             slotStart = slotEnd;
         }
 
@@ -800,6 +1225,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     @Override
     @Transactional
     public void markSlotAsSelected(String factoryId, String slotId) {
+        resourceWriteLock.lockFactory(factoryId);
         // ⛔ 原来 findById 后无条件改成 selected: 已过期 / 已被别人占的时段也能被「选中」,
         //    并发两次都成功。改走与确认插单同一条条件更新。
         InsertSlot slot = loadOwnSlot(factoryId, slotId);
@@ -809,6 +1235,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     @Override
     @Transactional
     public void releaseSlot(String factoryId, String slotId) {
+        resourceWriteLock.lockFactory(factoryId);
         InsertSlot slot = insertSlotRepository.findByIdAndFactoryId(slotId, factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("InsertSlot", slotId));
 
@@ -833,6 +1260,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     @Override
     @Transactional
     public int cleanupExpiredSlots(String factoryId) {
+        resourceWriteLock.lockFactory(factoryId);
         LocalDateTime now = LocalDateTime.now();
         return insertSlotRepository.markExpiredSlots(factoryId, now);
     }
@@ -1033,7 +1461,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     }
 
     private ProductionPlan createProductionPlanFromSlot(
-            String factoryId, Long userId, InsertSlot slot, ConfirmUrgentInsertRequest request) {
+            String factoryId, Long userId, InsertSlot slot, ConfirmUrgentInsertRequest request,
+            String plannedUnit) {
 
         ProductionPlan plan = new ProductionPlan();
         plan.setId(UUID.randomUUID().toString());
@@ -1042,6 +1471,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 UUID.randomUUID().toString().substring(0, 4).toUpperCase());
         plan.setProductTypeId(request.getProductTypeId());
         plan.setPlannedQuantity(request.getPlannedQuantity());
+        plan.setPlannedUnit(plannedUnit);
+        plan.setSuggestedProductionLineId(slot.getProductionLineId());
         plan.setStartTime(slot.getStartTime());
         plan.setEndTime(slot.getEndTime());
         plan.setExpectedCompletionDate(slot.getEndTime().toLocalDate());
@@ -1126,16 +1557,17 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
      * @return 审批上下文Map
      */
     private Map<String, Object> buildForceInsertApprovalContext(
-            InsertSlot slot, ConfirmUrgentInsertRequest request) {
+            InsertSlot slot, ConfirmUrgentInsertRequest request, InsertSlotPreview preview,
+            ChainImpactResult chainImpact) {
 
         Map<String, Object> context = new HashMap<>();
 
         // 基本影响信息
-        context.put("impactLevel", slot.getImpactLevel());
+        context.put("impactLevel", chainImpact.getImpactLevel());
 
         // 解析受影响计划
         List<InsertSlotDTO.ImpactedPlanDTO> impactedPlans = parseImpactedPlans(slot.getImpactedPlans());
-        context.put("affectedPlanCount", impactedPlans.size());
+        context.put("affectedPlanCount", chainImpact.getTotalAffectedPlans());
 
         // 计算受影响产线数
         Set<String> affectedLines = new HashSet<>();
@@ -1154,15 +1586,6 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 vipCustomerCount++;
             }
         }
-
-        // 从影响分析服务获取更详细的链式影响
-        ChainImpactResult chainImpact = impactAnalysisService.calculateChainImpact(
-                slot.getFactoryId(),
-                slot.getStartTime(),
-                slot.getEndTime(),
-                request.getProductTypeId(),
-                request.getPlannedQuantity()
-        );
 
         // 使用链式影响分析的精确数据
         // 注：affectedLines 使用 totalAffectedPlans 作为近似值（每个计划通常对应一条产线）

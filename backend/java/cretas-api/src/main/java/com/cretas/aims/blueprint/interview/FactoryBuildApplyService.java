@@ -125,6 +125,9 @@ public class FactoryBuildApplyService {
     private com.cretas.aims.service.scheduling.LineCapacityConfigService lineCapacityConfigService;
 
     @Autowired
+    private com.cretas.aims.service.scheduling.SchedulingResourceWriteLock schedulingResourceWriteLock;
+
+    @Autowired
     private ProductWorkProcessRepository productWorkProcessRepository;
 
     @Autowired(required = false)
@@ -1151,6 +1154,7 @@ public class FactoryBuildApplyService {
      */
     private void applyProductionLines(String factoryId, ApplyAIInitRequest request, ActorRef actor,
                                       ApplyAIInitResult result) {
+        schedulingResourceWriteLock.lockFactory(factoryId);
         if (request.getSuggestedData() == null || request.getSuggestedData().getProductionLines() == null) {
             return;
         }
