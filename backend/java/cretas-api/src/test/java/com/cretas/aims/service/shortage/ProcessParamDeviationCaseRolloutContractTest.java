@@ -44,11 +44,11 @@ class ProcessParamDeviationCaseRolloutContractTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"prod", "pg-prod"})
-    void publishedProductionProfilesKeepCompatibilityPhaseDisabled(String profile) {
+    void publishedProductionProfilesEnableTheRealWriter(String profile) {
         serviceContext().withInitializer(new ConfigDataApplicationContextInitializer())
                 .withPropertyValues("spring.profiles.active=" + profile)
                 .run(context -> assertThat(context.getBean(ProcessParamDeviationCaseService.class).recordReport(null))
-                        .containsExactly(ProcessParamDeviationCaseService.Applied.DISABLED));
+                        .containsExactly(ProcessParamDeviationCaseService.Applied.IGNORED));
     }
 
     @ParameterizedTest
