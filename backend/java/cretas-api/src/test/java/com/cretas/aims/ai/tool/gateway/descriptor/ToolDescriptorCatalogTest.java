@@ -68,7 +68,7 @@ class ToolDescriptorCatalogTest {
         assertThat(new RuntimeToolPolicyLoader().loadDefault().policies())
                 .extracting(RuntimeToolPolicyEntry::toolName).doesNotContain(PurchaseGrantExecuteTool.NAME);
         assertThat(RuntimeToolDescriptorRegistry.loadDefault().findApproved(PurchaseGrantExecuteTool.NAME)).isEmpty();
-        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(9);
+        assertThat(RuntimeToolDescriptorRegistry.loadDefault().approvedToolNames()).hasSize(15);
     }
 
     @Test
@@ -78,11 +78,11 @@ class ToolDescriptorCatalogTest {
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
         assertThat(catalog.inventory().expectedToolCount()).isEqualTo(493);
-        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(467);
+        assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(461);
         // Existing factory analysis adds one explicit, approved ANALYZE/LOW tool.
         assertThat(statistics.total()).isEqualTo(493);
         // 2026-10-29 S6-04: alert_rule_toggle declares UPDATE/MEDIUM/v2/roles and gets the first SCHEDULER write policy.
-        assertThat(statistics.legacy()).isEqualTo(467);
+        assertThat(statistics.legacy()).isEqualTo(461);
         // 2026-09-15: #815 新增 source_individual_query，EXPLICIT/READ/LOW/REVIEW_REQUIRED；
         // 总数 584 → 585，LEGACY_INFERRED 不变。
         // 2026-08-27: 579 → 584 (+5, legacy 计数不变 — 全部落在 EXPLICIT 一侧)。
@@ -102,16 +102,16 @@ class ToolDescriptorCatalogTest {
         // 确认卡的影响说明要用「将修改……现有数据」措辞)。同 ToolDescriptorInventoryDriftTest 的
         // override actionType 61 → 63。riskLevel 桶不变 (UPDATE 的默认风险仍是 LOW)。
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 362L,
-                ToolExecutor.ActionType.WRITE, 63L,
-                ToolExecutor.ActionType.UPDATE, 27L,
+                ToolExecutor.ActionType.READ, 358L,
+                ToolExecutor.ActionType.WRITE, 62L,
+                ToolExecutor.ActionType.UPDATE, 31L,
                 ToolExecutor.ActionType.DELETE, 11L,
-                ToolExecutor.ActionType.ANALYZE, 10L,
+                ToolExecutor.ActionType.ANALYZE, 11L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 5L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 416L,
-                ToolExecutor.RiskLevel.MEDIUM, 69L,
+                ToolExecutor.RiskLevel.LOW, 417L,
+                ToolExecutor.RiskLevel.MEDIUM, 68L,
                 ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         // previewSupported 36 → 37 (+1): RestaurantDishDeleteTool 新增 doPreview() 实现 —— 安全改进
@@ -130,13 +130,13 @@ class ToolDescriptorCatalogTest {
         // re-review: lineage_query opens again (traceability parity) and the 2 HACCP tools move to codes (-3).
         // 2026-11-03 strict sweep (follow-up of #1316): role gates where the data is only served by role-gated endpoints;
         // after the organizer's rulings (quality / cold chain / procurement / not-stricter) most became permission codes.
-        assertThat(statistics.requiresPermission()).isEqualTo(77);
+        assertThat(statistics.requiresPermission()).isEqualTo(83);
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 472L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 466L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 12L,
-                ToolGovernanceStatus.APPROVED, 9L,
+                ToolGovernanceStatus.APPROVED, 15L,
                 ToolGovernanceStatus.WAIVED, 0L));
 
         // 2026-08-27 (#185 修复解析器盲区后浮现): 这 3 个 LEGACY_INFERRED 的 HIGH 风险 WRITE
@@ -190,8 +190,14 @@ class ToolDescriptorCatalogTest {
                 .extracting(ToolDescriptorInventoryEntry::toolName)
                 .containsExactlyInAnyOrder(
                         "user_disable",
-                        "canvas_product_work_process_config",
+                        "canvas_product_work_process_draft_preview",
                         "canvas_work_process_catalog",
+                        "canvas_toggle_module",
+                        "canvas_toggle_tool",
+                        "canvas_toggle_skill",
+                        "canvas_update_field",
+                        "canvas_update_trigger_chain",
+                        "canvas_apply_template",
                         "product_create",
                         "material_stock_summary",
                         "material_batch_query",

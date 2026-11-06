@@ -29,8 +29,9 @@ import java.util.stream.Collectors;
 /**
  * D1: 产品工序配置页自然语言配工序 Tool.
  *
- * <p>Plan/preview mode returns a draft for the C4 pendingOps UI. Execute only writes
- * when callers pass {@code apply=true}; this keeps the AI chat review-first by default.
+ * <p>Plan/preview mode returns a read-only draft for the C4 pendingOps UI. The legacy
+ * {@code apply} field remains accepted for client compatibility but is ignored; this
+ * retired entry never writes product work-process data.
  */
 @Slf4j
 @Component
@@ -53,13 +54,13 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
 
     @Override
     public String getToolName() {
-        return "canvas_product_work_process_config";
+        return "canvas_product_work_process_draft_preview";
     }
 
     @Override
     public String getDescription() {
-        return "将产品工序配置页的自然语言说明解析为工序链草稿，可按本厂工序 catalog 和操作员名单匹配默认责任小组长。"
-                + "默认只返回草稿；apply=true 时调用 ProductWorkProcessService create/update 写入配置。";
+        return "将产品工序配置页的自然语言说明解析为只读工序链草稿，可按本厂工序 catalog 和操作员名单匹配默认责任小组长。"
+                + "该旧线性绑定入口已停用，不提供写入执行。";
     }
 
     @Override
@@ -76,7 +77,7 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
                 "description", "自然语言工序配置说明，例如：第一步修油，滚揉交给莫云，第三步焯水"));
         properties.put("apply", Map.of(
                 "type", "boolean",
-                "description", "是否直接写库。默认 false，仅返回草稿供前端 pendingOps 预览"));
+                "description", "兼容旧客户端字段；当前忽略该值，只返回只读草稿供 pendingOps 预览"));
 
         schema.put("properties", properties);
         schema.put("required", List.of("productTypeId", "message"));
@@ -95,12 +96,12 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
 
     @Override
     public ActionType getActionType() {
-        return ActionType.WRITE;
+        return ActionType.ANALYZE;
     }
 
     @Override
     public RiskLevel getRiskLevel() {
-        return RiskLevel.MEDIUM;
+        return RiskLevel.LOW;
     }
 
     @Override
@@ -150,60 +151,7 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(
             String factoryId, Map<String, Object> params, Map<String, Object> context) {
-        ProductProcessPlan plan = buildPlan(factoryId, params);
-        boolean apply = Boolean.TRUE.equals(getBoolean(params, "apply", false));
-        if (!apply) {
-            return buildResult(plan, false);
-        }
         throw retired();
-    }
-
-    /** 以下为停用前的写入实现, 不再有调用方; 保留仅为对照, 后续清理时一并删除。 */
-    @SuppressWarnings("unused")
-    private Map<String, Object> legacyApply(String factoryId, ProductProcessPlan plan) {
-
-        // B-3: fail-soft apply — collect per-step errors instead of aborting mid-write
-        // E2: skip "new" steps (workProcessId==null) — those need the process to be
-        // created in the catalog first before they can be linked to a product.
-        List<ProductWorkProcessDTO> applied = new ArrayList<>();
-        List<String> warnings = new ArrayList<>();
-        for (DraftStep step : plan.steps()) {
-            if (step.workProcessId() == null) {
-                warnings.add("工序「" + step.processName() + "」尚未在工序管理中创建，无法写入，请先新建该工序");
-                continue;
-            }
-            try {
-                applied.add(applyStep(factoryId, plan.productTypeId(), step));
-            } catch (Exception e) {
-                String stepLabel = step.processName() != null ? step.processName() : step.workProcessId();
-                String errorDetail = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-                warnings.add("工序「" + stepLabel + "」保存失败: " + errorDetail);
-                log.warn("AI 产品工序配置步骤写入失败: productTypeId={}, step={}, error={}",
-                        plan.productTypeId(), stepLabel, e.getMessage(), e);
-            }
-        }
-
-        log.info("AI 产品工序配置已应用: productTypeId={}, applied={}/{}, missing={}, warnings={}",
-                plan.productTypeId(), applied.size(), plan.steps().size(),
-                plan.missingProcesses().size(), warnings.size());
-
-        Map<String, Object> result = buildResult(plan, true);
-        result.put("appliedRows", applied);
-        if (!warnings.isEmpty()) {
-            result.put("warnings", warnings);
-            // Clarify in message that only some steps succeeded
-            result.put("message", result.get("message")
-                    + "；" + warnings.size() + " 道写入失败: " + String.join("；", warnings));
-        }
-        return result;
-    }
-
-    private ProductWorkProcessDTO applyStep(String factoryId, String productTypeId, DraftStep step) {
-        ProductWorkProcessDTO dto = step.toProductWorkProcessDTO(productTypeId);
-        if (step.productWorkProcessId() != null) {
-            return productWorkProcessService.update(factoryId, step.productWorkProcessId(), dto);
-        }
-        return productWorkProcessService.create(factoryId, dto);
     }
 
     private ProductProcessPlan buildPlan(String factoryId, Map<String, Object> params) {
@@ -547,19 +495,11 @@ public class ProductWorkProcessConfigTool extends AbstractBusinessTool {
             return row;
         }
 
-        private ProductWorkProcessDTO toProductWorkProcessDTO(String productTypeId) {
-            return ProductWorkProcessDTO.builder()
-                    .productTypeId(productTypeId)
-                    .workProcessId(workProcessId)
-                    .processOrder(processOrder)
-                    .responsibleWorkerId(responsibleWorkerId)
-                    .build();
-        }
     }
 
-    /** spec §8.2 有副作用, 须走 W0 写确认闸 */
+    /** Preview-only retired linear binding; never enters the write path. */
     @Override
     public AccessMode getAccessMode() {
-        return AccessMode.WRITE;
+        return AccessMode.READ;
     }
 }

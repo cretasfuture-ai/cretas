@@ -3,7 +3,6 @@ package com.cretas.aims.controller;
 import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
-import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
 import com.cretas.aims.ai.tool.gateway.PrincipalType;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
@@ -13,6 +12,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionSource;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
+import com.cretas.aims.ai.tool.gateway.ConfirmationProof;
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.user.UserDTO;
@@ -34,6 +34,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.Instant;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -44,6 +46,9 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 @Tag(name = "Canvas AI Agent", description = "Canvas AI 配置助手 (DashScope Qwen)")
 public class CanvasAIController {
+
+    private static final BigDecimal JS_MAX_SAFE_INTEGER = BigDecimal.valueOf(9_007_199_254_740_991L);
+    private static final Object INVALID_CANONICAL_VALUE = new Object();
 
     private final ToolRegistry toolRegistry;
     private final ObjectMapper objectMapper;
@@ -65,7 +70,7 @@ public class CanvasAIController {
     static final String EGRESS_REFUSED_REPLY = "内容里有无法脱敏的信息, 未发给 AI, 请手动编辑";
 
     private static final String PRODUCT_WORK_PROCESS_MODULE = "product_work_process_config";
-    private static final String PRODUCT_WORK_PROCESS_TOOL = "canvas_product_work_process_config";
+    private static final String PRODUCT_WORK_PROCESS_TOOL = "canvas_product_work_process_draft_preview";
     private static final String PRODUCT_WORK_PROCESS_VERSION = "1.0.0";
     private static final String PRODUCT_WORK_PROCESS_DRAFT_REPLY = "已生成工序配置草稿";
 
@@ -308,7 +313,7 @@ public class CanvasAIController {
             - canvas_toggle_skill: 启用/禁用AI技能 (参数: skillName, enabled)
             - canvas_update_field: 修改字段属性 (参数: moduleCode, fieldCode, property[visible/required/label/defaultValue], value)
             - canvas_update_trigger_chain: 修改触发链 (参数: chainCode, enabled, stepOrder, stepEnabled)
-            - canvas_apply_template: 应用行业模板 (参数: templateCode[FOOD_PROCESSING/BAKERY/RESTAURANT/AQUACULTURE])
+            - canvas_apply_template: 应用行业模板 (参数: templateCode[FOOD_PROCESSING/BAKERY/AQUACULTURE])
 
             可用模块: sales_order, purchase_order, bom, production_plan, production_report,
             quality_inspection, inventory, inbound, outbound, equipment, customer, supplier,
@@ -334,7 +339,7 @@ public class CanvasAIController {
     @Operation(summary = "Canvas AI 对话 (DashScope Qwen)")
     // Round 7a P0 fix: AI chat in autopilot mode calls arbitrary canvas_* tools via LLM.
     // Previously NO auth check — any authenticated user (viewer/operator/etc) could run
-    // "禁用 production / 应用 RESTAURANT 模板" and the LLM would execute DDL-level changes.
+    // Unsupported cross-domain template instructions must not be turned into DDL-level changes.
     // Now restricted to canvas config admins only.
     @RequireRole({"factory_super_admin", "permission_admin"})
     public ApiResponse<AIResponse> chat(
@@ -590,6 +595,7 @@ public class CanvasAIController {
             if (toolName.isBlank()
                     || PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)
                     || PRODUCT_WORK_PROCESS_TOOL.equals(toolName)
+                    || !isExecutableCanvasTool(toolName)
                     || !(diff.get("params") instanceof Map<?, ?>)) {
                 bound.add(diff);
                 continue;
@@ -929,9 +935,6 @@ public class CanvasAIController {
         }
         Long userId = Long.valueOf(principal.principalId());
         String operationId = "canvas-confirm-" + UUID.randomUUID();
-        Map<String, Object> toolContext = buildToolContext(factoryId, authorization);
-        toolContext.put("operationId", operationId);
-        toolContext.put("confirmationSource", "explicit-user-confirmation");
         List<ApplyDiffResult> items = new ArrayList<>();
         int total = diffs == null ? 0 : diffs.size();
 
@@ -939,110 +942,131 @@ public class CanvasAIController {
             Map<String, Object> diff = diffs.get(index);
             Map<String, Object> proof = diff == null ? null : readStringObjectMap(diff.get("proof"));
             String token = proof == null ? null : Objects.toString(proof.get("token"), null);
-            String commandDigest = proof == null ? null : Objects.toString(proof.get("commandDigest"), null);
+            String submittedTool = diff != null && diff.get("tool") instanceof String name ? name : "";
+            Map<String, Object> submittedParams = diff == null
+                    ? Map.of() : readStringObjectMap(diff.get("params"));
             if (token == null || token.isBlank()) {
                 items.add(new ApplyDiffResult(index, "FAILURE", "缺少服务端确认凭据，未执行"));
                 continue;
             }
-
-            PreviewTokenService.ClaimResult claim;
-            try {
-                claim = previewTokenService.claimToken(token, factoryId, userId, commandDigest);
-            } catch (Exception claimError) {
-                log.warn("Canvas confirmation claim failed before lease: index={}", index);
-                items.add(new ApplyDiffResult(index, "UNKNOWN",
-                        "确认状态不明，请核对实际记录，勿重复执行"));
+            if (diff == null || !(diff.get("params") instanceof Map<?, ?>)
+                    || submittedTool.isBlank()) {
+                items.add(new ApplyDiffResult(index, "FAILURE", "确认内容不完整，未执行"));
                 continue;
             }
-            if (!claim.isSuccess() || claim.getToken() == null || claim.getParameters() == null) {
-                items.add(new ApplyDiffResult(index, "FAILURE",
-                        claim.getMessage() == null ? "确认凭据无效或已处理，未执行" : claim.getMessage()));
+            Map<String, Object> canonicalSubmittedParams = canonicalJsonMap(submittedParams);
+            if (canonicalSubmittedParams == null) {
+                items.add(new ApplyDiffResult(index, "FAILURE", "确认内容包含无法安全重建的数值，未执行"));
                 continue;
             }
 
-            IntentPreviewToken claimedToken = claim.getToken();
-            String toolName = claimedToken.getToolName();
-            String descriptorVersion = claimedToken.getDescriptorVersion();
-            String claimId = claim.getClaimId();
-            String submittedTool = diff != null && diff.get("tool") instanceof String name ? name : "";
-            Map<String, Object> submittedParams = diff == null
-                    ? Map.of() : readStringObjectMap(diff.get("params"));
-            boolean proofPurposeMatches = isCanvasDiffProofToken(claimedToken, toolName);
-            boolean toolMatches = toolName.equals(submittedTool);
-            boolean paramsShapeMatches = diff != null && diff.get("params") instanceof Map<?, ?>;
-            boolean paramsMatch = sameJsonValue(claim.getParameters(), submittedParams);
-            if (!proofPurposeMatches || !toolMatches || !paramsShapeMatches || !paramsMatch) {
-                boolean resolved = resolveClaimSafely(token, claimId, false, "确认内容与预览不一致，请重新生成方案");
-                items.add(new ApplyDiffResult(index, resolved ? "FAILURE" : "UNKNOWN",
-                        resolved ? "确认内容与预览不一致，请重新生成方案"
-                                : "认领后状态无法确认，请核对实际记录，勿重复执行"));
+            Optional<PreviewTokenService.BoundTokenSnapshot> snapshot;
+            try {
+                snapshot = previewTokenService.readBoundSnapshot(token, factoryId, userId);
+            } catch (Exception readError) {
+                log.warn("Canvas confirmation binding read failed: index={}", index);
+                items.add(new ApplyDiffResult(index, "UNKNOWN", "确认状态不明，请核对实际记录，勿重复执行"));
                 continue;
             }
+            if (snapshot.isEmpty()) {
+                items.add(new ApplyDiffResult(index, "FAILURE", "确认凭据无效或未绑定当前工厂用户，未执行"));
+                continue;
+            }
+            PreviewTokenService.BoundTokenSnapshot bound = snapshot.get();
+            String descriptorVersion = bound.descriptorVersion();
+            String proofDigest = proof == null ? null : Objects.toString(proof.get("commandDigest"), null);
+            boolean purposeMatches = isCanvasDiffProofToken(bound, bound.toolName());
+            boolean toolMatches = bound.toolName().equals(submittedTool);
+            String submittedVersion = proof == null ? null
+                    : Objects.toString(proof.get("descriptorVersion"), null);
+            boolean versionMatches = descriptorVersion != null
+                    && descriptorVersion.equals(submittedVersion);
+            String submittedDigest;
             try {
-                validateCanvasTool(toolName);
-                if (PRODUCT_PROCESS_WORKFLOW_TOOL.equals(toolName)
-                        || PRODUCT_WORK_PROCESS_TOOL.equals(toolName)) {
-                    throw new BusinessException("该工具仅支持本地预览，禁止执行");
-                }
-                ToolExecutor executor = toolRegistry.getExecutor(toolName).orElse(null);
-                if (executor == null) {
-                    throw new BusinessException("工具不存在，未执行");
-                }
-                if (!descriptorVersion.equals(executor.getVersion())) {
-                    throw new BusinessException("工具版本已变化，请重新生成方案");
-                }
-                String raw = executor.execute(
-                        ToolCall.of(operationId + "-" + index, toolName,
-                                objectMapper.writeValueAsString(claim.getParameters())),
-                        toolContext);
-                var result = objectMapper.readTree(raw);
-                if (result == null || !result.isObject() || !result.path("success").isBoolean()) {
-                    throw new IllegalStateException("malformed tool result");
-                }
-                if (!result.path("success").booleanValue()
-                        || (result.path("data").path("success").isBoolean()
-                            && !result.path("data").path("success").booleanValue())) {
-                    var failure = result.path("success").booleanValue() ? result.path("data") : result;
-                    String message = failure.path("error").asText(failure.path("message").asText("变更未完成"));
-                    resolveClaimSafely(token, claimId, false, message);
-                    items.add(new ApplyDiffResult(index, "UNKNOWN", message));
-                    continue;
-                }
-                if ("DUPLICATE".equals(result.path("data").path("status").asText())) {
-                    boolean resolved = resolveClaimSafely(token, claimId, true, "已复用现有记录");
-                    items.add(new ApplyDiffResult(index, resolved ? "REUSED" : "UNKNOWN",
-                            resolved ? "已存在相同记录，复用已有记录，未新增"
-                                    : "认领后状态无法确认，请核对实际记录，勿重复执行"));
-                } else if ("PENDING_DDL".equals(result.path("data").path("status").asText())
-                        || "PENDING_DDL".equals(result.path("data").path("data").path("status").asText())) {
-                    resolveClaimSafely(token, claimId, false, "字段仍待数据库变更");
-                    items.add(new ApplyDiffResult(index, "UNKNOWN", "字段仍待数据库变更，尚未完成，请核对处理进度，勿重复执行"));
-                } else {
-                    boolean resolved = resolveClaimSafely(token, claimId, true, "变更已完成");
-                    items.add(new ApplyDiffResult(index, resolved ? "SUCCESS" : "UNKNOWN",
-                            resolved ? "变更已完成"
-                                    : "认领后状态无法确认，请核对实际记录，勿重复执行"));
-                }
-            } catch (Exception e) {
-                // The lease is terminal even when the executor threw after a possible side effect.
-                resolveClaimSafely(token, claimId, false,
-                        "认领后执行结果不明，请核对实际记录，勿重复执行");
-                log.warn("Canvas bound apply result unknown: operationId={}, index={}, tool={}",
-                        operationId, index, toolName);
+                submittedDigest = ToolCommandDigest.commandDigest(
+                        factoryId, userId, submittedTool, descriptorVersion, ToolExecutionMode.EXECUTE,
+                        objectMapper.valueToTree(canonicalSubmittedParams));
+            } catch (RuntimeException invalidParams) {
+                submittedDigest = null;
+            }
+            boolean paramsMatch = Objects.equals(bound.commandDigest(), submittedDigest)
+                    && Objects.equals(bound.commandDigest(), proofDigest);
+            if (!purposeMatches || !toolMatches || !versionMatches || !paramsMatch) {
+                items.add(new ApplyDiffResult(index, "FAILURE", "确认内容与服务端预览不一致，请重新生成方案"));
+                continue;
+            }
+
+            ToolExecutionCommand command;
+            try {
+                command = new ToolExecutionCommand(
+                        operationId + "-" + index,
+                        operationId,
+                        "canvas-trace-" + UUID.randomUUID(),
+                        bound.toolName(),
+                        descriptorVersion,
+                        objectMapper.valueToTree(canonicalSubmittedParams),
+                        principal,
+                        ToolExecutionSource.HTTP_CONTROLLER,
+                        ToolExecutionMode.EXECUTE,
+                        Optional.of(ToolCommandDigest.persistentSecretFingerprint(token)),
+                        Optional.of(new ConfirmationProof(token, bound.commandDigest(),
+                                bound.expiresAt().atZone(java.time.ZoneId.systemDefault()).toInstant())),
+                        Optional.empty(),
+                        Instant.now().plusSeconds(30));
+            } catch (RuntimeException invalidCommand) {
+                items.add(new ApplyDiffResult(index, "FAILURE", "确认命令无效，未执行"));
+                continue;
+            }
+            ToolExecutionResult gatewayResult;
+            try {
+                gatewayResult = toolExecutionGateway.execute(command);
+            } catch (Exception gatewayError) {
+                log.warn("Canvas gateway result unknown: operationId={}, index={}, tool={}",
+                        operationId, index, bound.toolName());
                 items.add(new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行"));
+                continue;
             }
+            items.add(mapGatewayApplyResult(index, gatewayResult));
         }
         return applyDiffsReceipt(operationId, total, items);
     }
 
-    private boolean resolveClaimSafely(String token, String claimId, boolean success, String message) {
-        try {
-            return previewTokenService.resolveClaim(token, claimId, success, message);
-        } catch (Exception resolveError) {
-            log.warn("Canvas confirmation resolution failed: claimFingerprint={}",
-                    ToolCommandDigest.tokenFingerprint(claimId));
-            return false;
+    private ApplyDiffResult mapGatewayApplyResult(int index, ToolExecutionResult result) {
+        if (result == null) {
+            return new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行");
         }
+        if (result.status() == ToolExecutionStatus.SUCCEEDED) {
+            JsonNode payload = result.payload();
+            if (payload.isObject() && payload.has("success")
+                    && (!payload.get("success").isBoolean() || !payload.get("success").asBoolean())) {
+                return new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行");
+            }
+            if ("PENDING_DDL".equals(payload.path("data").path("status").asText())
+                    || "PENDING_DDL".equals(payload.path("data").path("data").path("status").asText())
+                    || "PENDING_DDL".equals(payload.path("status").asText())) {
+                return new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行");
+            }
+            if ("DUPLICATE".equals(result.payload().path("data").path("status").asText())) {
+                return new ApplyDiffResult(index, "REUSED", "已存在相同记录，复用已有记录，未新增");
+            }
+            return new ApplyDiffResult(index, "SUCCESS", "变更已完成");
+        }
+        if (result.status() == ToolExecutionStatus.IDEMPOTENT_REPLAY) {
+            String original = result.payload().path("originalStatus").asText("UNKNOWN");
+            return switch (original) {
+                case "SUCCEEDED" -> new ApplyDiffResult(index, "REUSED", "已复用已有成功记录，未重复执行");
+                case "FAILED" -> new ApplyDiffResult(index, "FAILURE", "已复用已有失败记录，未重复执行");
+                default -> new ApplyDiffResult(index, "UNKNOWN", "历史执行结果不明，请核对实际记录，勿重复执行");
+            };
+        }
+        if (result.status() == ToolExecutionStatus.OUTCOME_UNKNOWN
+                || result.status() == ToolExecutionStatus.TIMEOUT) {
+            return new ApplyDiffResult(index, "UNKNOWN", "执行结果不明，请核对实际记录后再处理，勿重复执行");
+        }
+        String message = result.message() == null || result.message().isBlank()
+                ? "变更未完成，未执行重试"
+                : result.message();
+        return new ApplyDiffResult(index, "FAILURE", message);
     }
 
     /**
@@ -1053,27 +1077,103 @@ public class CanvasAIController {
     private Map<String, Object> canonicalJsonMap(Map<String, Object> params) {
         try {
             JsonNode tree = objectMapper.valueToTree(params);
-            String json = objectMapper.writeValueAsString(tree);
-            Map<String, Object> canonical = objectMapper.readValue(json,
+            Object normalized = canonicalJsonValue(tree);
+            if (!(normalized instanceof Map<?, ?> map)) {
+                return null;
+            }
+            Map<String, Object> canonical = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (!(entry.getKey() instanceof String key)) {
+                    return null;
+                }
+                canonical.put(key, entry.getValue());
+            }
+            String serialized = objectMapper.writeValueAsString(canonical);
+            Map<String, Object> persistedReadback = objectMapper.readValue(serialized,
                     new TypeReference<Map<String, Object>>() {});
-            return sameJsonValue(params, canonical) ? canonical : null;
+            return sameJsonValue(canonical, persistedReadback) ? persistedReadback : null;
         } catch (Exception e) {
             return null;
         }
     }
 
-    private boolean isCanvasDiffProofToken(IntentPreviewToken token, String toolName) {
-        return token.getExecutionMode() == ToolExecutionMode.EXECUTE
-                && token.getIntentCode() != null
-                && token.getIntentCode().matches("CANVAS_DIFF_[0-9a-fA-F-]{36}")
-                && "CANVAS_DIFF".equals(token.getEntityType())
-                && "UPDATE".equals(token.getOperation())
-                && toolName.equals(token.getEntityId());
+    /**
+     * Normalize every JSON number to the exact finite decimal that a browser
+     * JavaScript number can round-trip.  The controller deliberately rejects a
+     * non-equivalent double conversion and integers outside Number.MAX_SAFE_INTEGER;
+     * those values must never receive a proof or reach the execution gateway.
+     */
+    private Object canonicalJsonValue(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isNumber()) {
+            return canonicalJsonNumber(node.numberValue());
+        }
+        if (node.isTextual()) {
+            return node.textValue();
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue();
+        }
+        if (node.isObject()) {
+            Map<String, Object> object = new LinkedHashMap<>();
+            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                Object value = canonicalJsonValue(field.getValue());
+                if (value == INVALID_CANONICAL_VALUE) {
+                    return INVALID_CANONICAL_VALUE;
+                }
+                object.put(field.getKey(), value);
+            }
+            return object;
+        }
+        if (node.isArray()) {
+            List<Object> array = new ArrayList<>(node.size());
+            for (JsonNode element : node) {
+                Object value = canonicalJsonValue(element);
+                if (value == INVALID_CANONICAL_VALUE) {
+                    return INVALID_CANONICAL_VALUE;
+                }
+                array.add(value);
+            }
+            return array;
+        }
+        return INVALID_CANONICAL_VALUE;
     }
 
-    /** JSON semantic comparison for the client round-trip; the persisted values remain execution truth. */
-    private boolean sameJsonValue(Object persisted, Object submitted) {
-        return sameJsonNode(objectMapper.valueToTree(persisted), objectMapper.valueToTree(submitted));
+    private Object canonicalJsonNumber(Number number) {
+        try {
+            BigDecimal source = number instanceof BigDecimal decimal
+                    ? decimal
+                    : number instanceof BigInteger integer
+                            ? new BigDecimal(integer)
+                            : new BigDecimal(number.toString());
+            double asJavaScriptNumber = source.doubleValue();
+            if (!Double.isFinite(asJavaScriptNumber)) {
+                return INVALID_CANONICAL_VALUE;
+            }
+            BigDecimal canonical = BigDecimal.valueOf(asJavaScriptNumber);
+            if (source.compareTo(canonical) != 0) {
+                return INVALID_CANONICAL_VALUE;
+            }
+            BigDecimal normalized = canonical.stripTrailingZeros();
+            if (normalized.scale() < 0) {
+                normalized = normalized.setScale(0);
+            }
+            if (normalized.scale() == 0 && normalized.abs().compareTo(JS_MAX_SAFE_INTEGER) > 0) {
+                return INVALID_CANONICAL_VALUE;
+            }
+            return normalized.signum() == 0 ? BigDecimal.ZERO : normalized;
+        } catch (RuntimeException invalidNumber) {
+            return INVALID_CANONICAL_VALUE;
+        }
+    }
+
+    /** Numeric values may change Java scalar class during JSON persistence (e.g. 1E-7 -> Double). */
+    private boolean sameJsonValue(Object expected, Object actual) {
+        return sameJsonNode(objectMapper.valueToTree(expected), objectMapper.valueToTree(actual));
     }
 
     private boolean sameJsonNode(JsonNode left, JsonNode right) {
@@ -1100,6 +1200,24 @@ public class CanvasAIController {
             return true;
         }
         return left.equals(right);
+    }
+
+    private boolean isCanvasDiffProofToken(
+            PreviewTokenService.BoundTokenSnapshot token, String toolName) {
+        return token.executionMode() == ToolExecutionMode.EXECUTE
+                && token.intentCode() != null
+                && token.intentCode().matches("CANVAS_DIFF_[0-9a-fA-F-]{36}")
+                && "CANVAS_DIFF".equals(token.entityType())
+                && "UPDATE".equals(token.operation())
+                && toolName.equals(token.entityId())
+                && isExecutableCanvasTool(toolName);
+    }
+
+    private boolean isExecutableCanvasTool(String toolName) {
+        return Set.of(
+                "canvas_toggle_module", "canvas_toggle_tool", "canvas_toggle_skill",
+                "canvas_update_field", "canvas_update_trigger_chain", "canvas_apply_template",
+                "canvas_work_process_catalog").contains(toolName);
     }
 
     private ApiResponse<ApplyDiffsResult> applyDiffsReceipt(

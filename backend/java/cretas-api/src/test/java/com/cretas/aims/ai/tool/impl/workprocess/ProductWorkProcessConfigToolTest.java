@@ -66,10 +66,10 @@ class ProductWorkProcessConfigToolTest {
     @Test
     @DisplayName("D1 metadata: canvas tool supports preview and has write semantics")
     void metadata() {
-        assertEquals("canvas_product_work_process_config", tool.getToolName());
+        assertEquals("canvas_product_work_process_draft_preview", tool.getToolName());
         assertTrue(tool.supportsPreview());
-        assertEquals(ToolExecutor.ActionType.WRITE, tool.getActionType());
-        assertEquals(ToolExecutor.RiskLevel.MEDIUM, tool.getRiskLevel());
+        assertEquals(ToolExecutor.ActionType.ANALYZE, tool.getActionType());
+        assertEquals(ToolExecutor.RiskLevel.LOW, tool.getRiskLevel());
         assertTrue(tool.requiresPermission());
         assertTrue(tool.getRequiredPermissions().isEmpty());
         assertTrue(tool.hasPermission(FactoryUserRole.factory_super_admin.name()));
@@ -115,10 +115,6 @@ class ProductWorkProcessConfigToolTest {
     @Test
     @DisplayName("缺口 20: execute apply=true 已停用 —— 线性绑定不再写, 一行都不能落库")
     void executeApplyIsRetired() throws Exception {
-        mockCatalogAndOperators();
-        when(productWorkProcessService.listByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
-                .thenReturn(List.of(existingAssociation(10L, "wp-oil", null)));
-
         com.cretas.aims.exception.BusinessException error = assertThrows(
                 com.cretas.aims.exception.BusinessException.class,
                 () -> invoke("doExecute", paramsWithApply("修油交给莫云，第二步滚揉")));
@@ -179,16 +175,12 @@ class ProductWorkProcessConfigToolTest {
     }
 
     @Test
-    @DisplayName("B-3 no apply: doExecute without apply=true must not write to DB")
+    @DisplayName("B-3 execute path is retired even without apply=true and must not write to DB")
     void executeWithoutApplyDoesNotWrite() throws Exception {
-        mockCatalogAndOperators();
-        when(productWorkProcessService.listByProduct(FACTORY_ID, PRODUCT_TYPE_ID))
-                .thenReturn(List.of());
-
-        Map<String, Object> result = invoke("doExecute", params("第一步修油，第二步滚揉"));
-
-        assertEquals("PREVIEW", result.get("status"),
-                "Without apply=true the result should be PREVIEW status");
+        com.cretas.aims.exception.BusinessException error = assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> invoke("doExecute", params("第一步修油，第二步滚揉")));
+        assertEquals("LEGACY_LINEAR_PROCESS_BINDING_RETIRED", error.getErrorCode());
         verify(productWorkProcessService, never()).create(any(), any());
         verify(productWorkProcessService, never()).update(any(), any(), any());
     }

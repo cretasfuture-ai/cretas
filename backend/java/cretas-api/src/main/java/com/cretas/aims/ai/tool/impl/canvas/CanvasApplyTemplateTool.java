@@ -106,6 +106,27 @@ public class CanvasApplyTemplateTool extends AbstractBusinessTool {
 
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */
     @Override
+    public ActionType getActionType() { return ActionType.UPDATE; }
+
+    @Override
+    public RiskLevel getRiskLevel() { return RiskLevel.LOW; }
+
+    @Override
+    public boolean requiresPermission() { return true; }
+
+    @Override
+    public Set<String> getRequiredPermissions() { return Set.of(); }
+
+    @Override
+    public boolean hasPermission(String userRole) {
+        return "factory_super_admin".equals(userRole) || "permission_admin".equals(userRole);
+    }
+
+    @Override public boolean supportsPreview() { return false; }
+    @Override public String getVersion() { return "1.0.0"; }
+    @Override public Set<String> getDomainTags() { return Set.of("canvas"); }
+
+    @Override
     public AccessMode getAccessMode() {
         return AccessMode.WRITE;
     }

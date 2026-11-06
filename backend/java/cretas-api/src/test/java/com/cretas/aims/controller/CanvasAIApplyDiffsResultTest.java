@@ -6,6 +6,10 @@ import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionResult;
+import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
+import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PreviewTokenService;
@@ -29,6 +33,7 @@ class CanvasAIApplyDiffsResultTest {
     private CanvasAIController controller;
     private MobileService mobile;
     private PreviewTokenService previewTokens;
+    private ToolExecutionGateway gateway;
     private static final String TOOL = "canvas_work_process_catalog";
 
     @BeforeEach void setUp() {
@@ -40,26 +45,44 @@ class CanvasAIApplyDiffsResultTest {
         user.setFactoryType("FACTORY");
         user.setRoleCode(FactoryUserRole.permission_admin);
         when(mobile.getUserFromToken("local-test")).thenReturn(user);
+        gateway = mock(ToolExecutionGateway.class);
         controller = new CanvasAIController(registry, new ObjectMapper(), mock(DashScopeClient.class),
-                mobile, mock(ToolExecutionGateway.class));
+                mobile, gateway);
         previewTokens = mock(PreviewTokenService.class);
         when(previewTokens.resolveClaim(anyString(), anyString(), anyBoolean(), anyString())).thenReturn(true);
         ReflectionTestUtils.setField(controller, "previewTokenService", previewTokens);
+        when(gateway.execute(any())).thenAnswer(invocation -> {
+            ToolExecutionCommand command = invocation.getArgument(0);
+            ToolExecutor tool = registry.getExecutor(command.toolName()).orElseThrow();
+            String raw = tool.execute(ToolCall.of(command.requestId(), command.toolName(),
+                    new ObjectMapper().writeValueAsString(command.parameters())),
+                    Map.of("factoryId", "LOCAL_B05", "userId", 1L, "operatorId", 1L));
+            var payload = new ObjectMapper().readTree(raw);
+            boolean success = payload.path("success").asBoolean(false);
+            ToolExecutionStatus status = success ? ToolExecutionStatus.SUCCEEDED : ToolExecutionStatus.OUTCOME_UNKNOWN;
+            return new ToolExecutionResult(command.requestId(), command.toolName(),
+                    command.expectedDescriptorVersion(), "audit-" + command.requestId(), command.traceId(),
+                    status, payload, success ? "ok" : "unknown", false);
+        });
     }
 
     private Map<String, Object> diff(Map<String, Object> params) {
         String proof = "test-proof-" + UUID.randomUUID();
-        String digest = "test-digest-" + UUID.randomUUID();
-        String claimId = "test-claim-" + UUID.randomUUID();
         Map<String, Object> persisted = Map.copyOf(params);
+        String digest = ToolCommandDigest.commandDigest("LOCAL_B05", 1L, TOOL, "1.0.0",
+                ToolExecutionMode.EXECUTE, new ObjectMapper().valueToTree(persisted));
         IntentPreviewToken row = IntentPreviewToken.builder().token(proof)
                 .factoryId("LOCAL_B05").tenantId("LOCAL_B05").userId(1L)
                 .intentCode("CANVAS_DIFF_" + UUID.randomUUID()).entityType("CANVAS_DIFF")
                 .entityId(TOOL).operation("UPDATE").executionMode(ToolExecutionMode.EXECUTE)
-                .toolName(TOOL).descriptorVersion("1.0.0").commandDigest(digest).build();
-        when(previewTokens.claimToken(proof, "LOCAL_B05", 1L, digest))
-                .thenReturn(PreviewTokenService.ClaimResult.success(row, claimId, persisted))
-                .thenReturn(PreviewTokenService.ClaimResult.failure("令牌已处理"));
+                .toolName(TOOL).descriptorVersion("1.0.0")
+                .parametersHash(ToolCommandDigest.parametersHash(new ObjectMapper().valueToTree(persisted)))
+                .commandDigest(digest).expiresAt(java.time.LocalDateTime.now().plusMinutes(5)).build();
+        when(previewTokens.readBoundSnapshot(proof, "LOCAL_B05", 1L))
+                .thenReturn(Optional.of(new PreviewTokenService.BoundTokenSnapshot(
+                        row.getIntentCode(), row.getEntityType(), row.getEntityId(), row.getOperation(),
+                        row.getToolName(), row.getDescriptorVersion(), row.getExecutionMode(),
+                        row.getCommandDigest(), row.getExpiresAt(), row.getStatus())));
         return Map.of("tool", TOOL, "params", params,
                 "proof", Map.of("token", proof, "commandDigest", digest, "descriptorVersion", "1.0.0"));
     }
@@ -125,7 +148,7 @@ class CanvasAIApplyDiffsResultTest {
         // Both responses arrive after execute(). The controller cannot distinguish
         // wrapper validation from an error caught after a business side effect.
         assertEquals(List.of("UNKNOWN", "UNKNOWN"), response.getData().items().stream().map(CanvasAIController.ApplyDiffResult::status).toList());
-        assertTrue(response.getData().items().get(0).message().contains("信息"));
+        assertTrue(response.getData().items().get(0).message().contains("不明"));
         assertEquals(0, tool.writes);
     }
 
@@ -161,7 +184,7 @@ class CanvasAIApplyDiffsResultTest {
         var response = controller.applyDiffs("LOCAL_B05", "Bearer local-test", List.of(diff(Map.of("action", "pending-ddl"))));
         assertFalse(response.getSuccess());
         assertEquals("UNKNOWN", response.getData().items().get(0).status());
-        assertTrue(response.getData().items().get(0).message().contains("尚未完成"));
+        assertTrue(response.getData().items().get(0).message().contains("不明"));
     }
 
     @ParameterizedTest @NullAndEmptySource

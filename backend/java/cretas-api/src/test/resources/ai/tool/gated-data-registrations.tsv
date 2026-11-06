@@ -24,3 +24,4 @@ ssop_production_gate_check	RULED	CODES:quality:read,quality:read_write,productio
 purchase_statistics	RULED	CODES:procurement:read #1305 (S5-12) 裁定: 采购统计含采购金额, 门 = 配置的采购读; 金额另按 canViewPurchasePrices 脱敏
 report_sku_gross_margin	RULED	CODES:finance:read,finance:read_write 组织者裁定 2026-11-03 (acc-s6 s610k): 与 web SKU 毛利视图 GET /finance/report/shipment-sku-margin (FinanceReportController 类门) 同口径, web 拒整份则对话拒整个工具
 online_staff_count	RULED	CODES:production:read,dashboard:read 组织者裁定 2026-11-03: 只是在岗人数, 按生产/看板读, 不按 hr
+canvas_product_work_process_draft_preview	RULED	ROLES:factory_super_admin,permission_admin 2026-11-06 CanvasAIController#chat 管理员产品工序配置草稿，与该配置页和工具双角色门一致；内部操作员匹配不将配置预览开放为HR名单查询。

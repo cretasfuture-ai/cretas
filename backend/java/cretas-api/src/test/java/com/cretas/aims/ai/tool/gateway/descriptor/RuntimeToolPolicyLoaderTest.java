@@ -21,17 +21,23 @@ class RuntimeToolPolicyLoaderTest {
     private final RuntimeToolPolicyLoader loader = new RuntimeToolPolicyLoader();
 
     @Test
-    void loadsAllNineCompleteExplicitRuntimePolicies() {
+    void loadsAllFifteenCompleteExplicitRuntimePolicies() {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(9);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(15);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
                         "user_disable",
-                        "canvas_product_work_process_config",
+                        "canvas_product_work_process_draft_preview",
                         "canvas_work_process_catalog",
+                        "canvas_toggle_module",
+                        "canvas_toggle_tool",
+                        "canvas_toggle_skill",
+                        "canvas_update_field",
+                        "canvas_update_trigger_chain",
+                        "canvas_apply_template",
                         "product_create",
                         "material_stock_summary",
                         "material_batch_query",
@@ -57,61 +63,52 @@ class RuntimeToolPolicyLoaderTest {
         });
         assertThat(manifest.policies().get(0).supportsPreview()).isTrue();
         assertThat(manifest.policies().get(1).supportsPreview()).isTrue();
-        assertThat(manifest.policies().subList(1, 3)).allSatisfy(policy -> {
-            assertThat(policy.version()).isEqualTo(
-                    "canvas_work_process_catalog".equals(policy.toolName()) ? "1.1.0" : "1.0.0");
+        assertThat(manifest.policies().subList(1, 2)).allSatisfy(policy -> {
+            assertThat(policy.toolName()).isEqualTo("canvas_product_work_process_draft_preview");
+            assertThat(policy.version()).isEqualTo("1.0.0");
             assertThat(policy.supportsPreview()).isTrue();
             assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
             assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);
             assertThat(policy.allowedSources())
                     .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });
-        assertThat(manifest.policies().subList(3, 4)).allSatisfy(policy -> {
-            assertThat(policy.version()).isEqualTo("1.0.0");
+        assertThat(manifest.policies().subList(2, 3)).allSatisfy(policy -> {
+            assertThat(policy.toolName()).isEqualTo("canvas_work_process_catalog");
+            assertThat(policy.version()).isEqualTo("1.1.0");
             assertThat(policy.supportsPreview()).isTrue();
-            assertThat(policy.confirmationPolicy())
-                    .isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
-            assertThat(policy.idempotencyPolicy())
-                    .isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
-            assertThat(policy.allowedSources())
-                    .containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
+            assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
+            assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
+            assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });
-        assertThat(manifest.policies().subList(4, 7)).allSatisfy(policy -> {
+        assertThat(manifest.policies().subList(3, 9)).allSatisfy(policy -> {
             assertThat(policy.actionType()).isEqualTo(
-                    com.cretas.aims.ai.tool.ToolExecutor.ActionType.READ);
+                    com.cretas.aims.ai.tool.ToolExecutor.ActionType.UPDATE);
             assertThat(policy.riskLevel()).isEqualTo(
                     com.cretas.aims.ai.tool.ToolExecutor.RiskLevel.LOW);
             assertThat(policy.version()).isEqualTo("1.0.0");
             assertThat(policy.supportsPreview()).isFalse();
-            if (policy.toolName().equals("material_stock_summary")) {
-                assertThat(policy.requiredPermissions()).containsExactlyInAnyOrder(
-                        "inventory:read", "inventory:read_write");
-            } else {
-                assertThat(policy.requiredPermissions()).containsExactlyInAnyOrder(
-                        "warehouse:read", "warehouse:read_write",
-                        "inventory:read", "inventory:read_write");
-            }
+            assertThat(policy.requiredPermissions()).isEmpty();
             assertThat(policy.allowedBusinessTypes())
                     .containsExactlyInAnyOrder(FactoryType.FACTORY, FactoryType.CENTRAL_KITCHEN);
-            assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.NOT_REQUIRED);
-            assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.NOT_REQUIRED);
-            if (policy.toolName().equals("material_stock_summary")) {
-                assertThat(policy.allowedSources()).containsExactlyInAnyOrder(
-                        ToolExecutionSource.SKILL_WORKFLOW, ToolExecutionSource.AI_INTENT_DISPATCH);
-            } else if (policy.toolName().equals("material_expired_query")) {
-                // S6 pilot: the only tool a cron schedule may run (as its run-as user); event chains and SOP stay out.
-                assertThat(policy.allowedSources()).containsExactlyInAnyOrder(ToolExecutionSource.SKILL_WORKFLOW,
-                        ToolExecutionSource.SCHEDULER);
-            } else {
-                assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.SKILL_WORKFLOW);
-            }
-            assertThat(policy.dataClassification()).isEqualTo(DataClassification.CONFIDENTIAL);
+            assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
+            assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
+            assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
+            assertThat(policy.allowedRoles()).containsExactlyInAnyOrder("factory_super_admin", "permission_admin");
+            assertThat(policy.dataClassification()).isEqualTo(DataClassification.INTERNAL);
+        });
+        assertThat(manifest.policies().subList(9, 10)).allSatisfy(policy -> {
+            assertThat(policy.actionType()).isEqualTo(com.cretas.aims.ai.tool.ToolExecutor.ActionType.WRITE);
+            assertThat(policy.version()).isEqualTo("1.0.0");
+            assertThat(policy.supportsPreview()).isTrue();
+            assertThat(policy.confirmationPolicy()).isEqualTo(ConfirmationPolicy.REQUIRED_FOR_EXECUTION);
+            assertThat(policy.idempotencyPolicy()).isEqualTo(IdempotencyPolicy.REQUIRED_FOR_EXECUTION);
+            assertThat(policy.allowedSources()).containsExactly(ToolExecutionSource.HTTP_CONTROLLER);
         });
         assertThat(manifest.policies().get(0).dataClassification())
                 .isEqualTo(DataClassification.RESTRICTED);
         assertThat(manifest.policies().get(1).dataClassification())
                 .isEqualTo(DataClassification.CONFIDENTIAL);
-        assertThat(manifest.policies().get(7)).satisfies(policy -> {
+        assertThat(manifest.policies().get(13)).satisfies(policy -> {
             assertThat(policy.toolName()).isEqualTo("smartbi_factory_analysis");
             assertThat(policy.implementationClass()).isEqualTo(
                     "com.cretas.aims.ai.tool.impl.smartbi.FactoryChartAnalysisTool");
@@ -142,7 +139,7 @@ class RuntimeToolPolicyLoaderTest {
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .noneMatch(name -> name.startsWith("restaurant_"));
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(9);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(15);
     }
 
     @Test

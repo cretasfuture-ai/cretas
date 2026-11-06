@@ -273,7 +273,7 @@ class CanvasAIWorkflowConfigTest {
 
     @Test
     void productWorkProcessToolWithoutPreviewIsRejectedWithoutAWrite() throws Exception {
-        String productWorkProcessTool = "canvas_product_work_process_config";
+        String productWorkProcessTool = "canvas_product_work_process_draft_preview";
         CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
         request.setModuleCode("product_work_process_config");
         request.setMode("autopilot");
@@ -296,7 +296,7 @@ class CanvasAIWorkflowConfigTest {
 
     @Test
     void productWorkProcessPreviewUsesGatewayAndForcesApplyFalse() throws Exception {
-        String productTool = "canvas_product_work_process_config";
+        String productTool = "canvas_product_work_process_draft_preview";
         CanvasAIController.AIRequest request = new CanvasAIController.AIRequest();
         request.setModuleCode("product_work_process_config");
         request.setMode("autopilot");
