@@ -25,6 +25,7 @@ paths=[ROOT/x for x in subprocess.check_output(['git','-C',str(ROOT),'ls-files',
 paths += list(pathlib.Path(__file__).parent.glob('*.py'))+[source,gold,a.previous_evidence/'real_business.py',a.previous_evidence.parent/'semantic-live-evaluation/entry-probe/verified_loopback.py']
 hashes={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in paths}
 manifest=dict(base_head=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),source_hashes=hashes,
+    openai_read_tool_strict_wire=os.environ.get('CRETAS_EVAL_STRICT_READ_TOOL_ARGS')=='1',
     corpus='OPENED_OR_PUBLIC_DEVELOPMENT_REGRESSION_NOT_INDEPENDENT',dialogues=len(plans),turns_per_channel=turn_count,channels=['normal','sse'],production_business_mutations=0,
     wiring='8 actual Tool implementations;actual catalog;shared candidate semantic resolver;authenticated production GET;one read-only SQL count for QC repository adapter',
     limitations='Controller dependencies include controlled state/auth/RBAC;not full Spring/JPA runtime or production deploy;LLM shortlist fallback without live local classifier',started=datetime.datetime.now(datetime.timezone.utc).isoformat())

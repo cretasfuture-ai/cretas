@@ -33,3 +33,10 @@ independent gold, or count HTTP200/clarification as task success. All turns stay
 denominator. Report missing carrier scope, expired test authentication, real permissions,
 goal/parameter errors and SQL drift separately. Native model sampling can differ between
 channels; disagreement alone does not prove an ordinary/SSE implementation difference.
+
+Set `CRETAS_EVAL_STRICT_READ_TOOL_ARGS=1` only on the isolated OpenAI evaluation bridge
+to compare strict function schemas. The adapter closes every object, makes original
+optional fields nullable on the wire, and drops only optional nulls on return. It does
+not fill defaults, invent values, repair undeclared fields, grant permissions or change
+the production provider. Required values and explicit0/false remain unchanged. Each
+strict schema hash is recorded; strict structure does not guarantee business correctness.

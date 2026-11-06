@@ -3,7 +3,7 @@
 Requires existing private credentials/helper directory, never copies them into Git.
 The service/repository interfaces in the servlet probe remain adapters, not JPA.
 """
-import argparse,concurrent.futures,datetime,json,pathlib,re,sys,time,urllib.parse
+import argparse,concurrent.futures,datetime,json,os,pathlib,re,sys,time,urllib.parse
 p=argparse.ArgumentParser();p.add_argument('--previous-evidence',type=pathlib.Path,required=True);p.add_argument('--output',type=pathlib.Path,required=True);a=p.parse_args()
 sys.path.insert(0,str(a.previous_evidence));sys.path.insert(0,str(a.previous_evidence.parent/'semantic-live-evaluation/entry-probe'))
 import verified_loopback as v
@@ -41,6 +41,9 @@ def snake(k):
 v.ROWS=[{snake(k):x for k,x in r.items()} for r in catalog if r.get('isActive') and not r.get('deletedAt')]
 v.ENGINE=Orchestrator(v.Empty(),v.Empty(),v.Empty(),decision_matcher=v.LiveDecision(timeout_s=60),candidate_retriever=v.Empty(),config=v.CONFIG)
 v.BASE=a.output;v.RUN='complete-real-read-'+a.output.name;v.EFFORT='low'
+if os.environ.get('CRETAS_EVAL_STRICT_READ_TOOL_ARGS')=='1':
+ from openai_strict_tools import enable_read_tool_strict_wire
+ enable_read_tool_strict_wire(v)
 class Handler(v.Handler):
  def do_GET(self):
   uri=urllib.parse.urlsplit(self.path)
