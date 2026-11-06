@@ -61,6 +61,42 @@ public class ProductCreateTool extends AbstractBusinessTool {
     @Autowired
     private ProductCreateCommandReceiptService commandReceiptService;
 
+    /** A stale confirmed plan needs a new preview, before any product was committed. */
+    @Override
+    protected String buildErrorResult(String message, Integer errorCode) {
+        String base = super.buildErrorResult(message, errorCode);
+        if (!Integer.valueOf(409).equals(errorCode)
+                || commandReceiptService == null || !ProductCreateCommandReceiptService.hasScope()) {
+            return base;
+        }
+        try {
+            ProductCreateCommandReceiptService.ReceiptSnapshot receipt =
+                    commandReceiptService.readCurrent().orElse(null);
+            if (receipt == null
+                    || receipt.state() != com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.State.IN_PROGRESS
+                    || receipt.outcomeStatus() != null
+                    || receipt.entityType() != null || receipt.entityId() != null || receipt.stage() != null) {
+                return base;
+            }
+            com.fasterxml.jackson.databind.JsonNode parsed = objectMapper.readTree(base);
+            if (!(parsed instanceof com.fasterxml.jackson.databind.node.ObjectNode result)) {
+                return base;
+            }
+            // Reuse the Gateway's definite pre-write information-required contract.
+            // Copy/readback/commit uncertainty remains on the ordinary error path.
+            result.put("success", false);
+            result.put("status", "NEED_MORE_INFO");
+            result.put("needMoreInfo", true);
+            result.put("requiresNewPreview", true);
+            result.put("recoveryAction", "REPREVIEW");
+            result.put("message", result.path("error").asText("方案已变化，请重新预览后确认"));
+            return objectMapper.writeValueAsString(result);
+        } catch (Exception unavailableProof) {
+            log.warn("[PRODUCT-CREATE] Pre-write rejection proof unavailable; outcome remains uncertain");
+            return base;
+        }
+    }
+
     private boolean mayInheritFrom(String factoryId, String sourceProductId) {
         String ref = "AI tool product_create inherit " + sourceProductId;
         return processSecretGuard.permitsProduct(factoryId, sourceProductId,
