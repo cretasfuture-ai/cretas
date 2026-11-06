@@ -46,14 +46,25 @@ async function scopedRead(page, suffix) {
   }, suffix);
 }
 
+function assertCoordinatedActor(me, expectedUsername) {
+  const role = typeof me?.roleCode === 'string' ? me.roleCode.toLowerCase() : '';
+  requireCondition(me && me.factoryId === 'F006' && me.id === 1309 && me.isActive === true
+    && me.username === expectedUsername && expectedUsername === 'f006_admin'
+    && ['factory_super_admin', 'permission_admin'].includes(role),
+  'Coordinated flat auth/me UserDTO identity changed');
+  return {factoryId: me.factoryId, actorId: me.id, role, active: true};
+}
+
+function resourceUnitControl(scope, budget = false) {
+  // A select nested in a label includes its option text in the accessible name.
+  return scope.getByLabel(budget ? /^资源预算单位/ : /^资源单位/);
+}
+
 async function inspect(page, _body, ctx) {
   requireCondition(ctx.expectedFactoryId === 'F006' && ctx.loginEvidence.factoryId === 'F006',
     'Synthetic UI acceptance requires the coordinated F006 factory');
   const me = await scopedRead(page, '/api/mobile/auth/me');
-  requireCondition(me?.factoryUser?.factoryId === 'F006'
-    && me.factoryUser.id === 1309
-    && ['factory_super_admin', 'permission_admin'].includes(me.factoryUser.roleCode),
-  'Coordinated actor identity changed');
+  assertCoordinatedActor(me, ctx.expectedUsername);
   requireCondition(await scopedRead(page, '/api/mobile/F006/demo-sandbox/active-session') === null,
     'Shared sandbox is active; do not run comparison');
   await page.getByRole('heading', {name: '多方案比较', exact: true}).waitFor({state: 'visible'});
@@ -63,7 +74,7 @@ async function inspect(page, _body, ctx) {
     '窗口开始': '2026-11-07T08:00', '窗口结束': '2026-11-10T18:00',
     '可选交付截止': '2026-11-10T18:00', '可用资源容量': '20' };
   for (const [label, value] of Object.entries(fields)) await common.getByLabel(label, {exact: true}).fill(value);
-  await common.getByLabel('资源预算单位', {exact: true}).selectOption('PERSON_HOUR');
+  await resourceUnitControl(common, true).selectOption('PERSON_HOUR');
   await page.getByRole('button', {name: '增加候选', exact: true}).click();
   const candidates = [
     {id: 'A', cost: '100', demand: '8', completion: '2026-11-08T12:00'},
@@ -75,7 +86,7 @@ async function inspect(page, _body, ctx) {
     const values = {'编号': candidate.id, '比较口径': basis, '币种': 'CNY', '成本单位': '每批',
       '成本': candidate.cost, '资源需求': candidate.demand, '完成时间': candidate.completion};
     for (const [label, value] of Object.entries(values)) await row.getByLabel(label, {exact: true}).fill(value);
-    await row.getByLabel('资源单位', {exact: true}).selectOption('PERSON_HOUR');
+    await resourceUnitControl(row).selectOption('PERSON_HOUR');
   }
   const results = [];
   const screenshots = [];
@@ -113,7 +124,9 @@ async function inspectDenied(page, _body, ctx) {
   requireCondition(ctx.loginEvidence.factoryId === 'F006'
     && !['factory_super_admin', 'permission_admin', 'platform_admin'].includes(ctx.loginEvidence.role),
   'Denied scenario requires a real non-comparison factory role');
+  await page.goto(`${ctx.baseUrl}${route}`, {waitUntil: 'domcontentloaded', timeout: 45000});
   await page.waitForURL(url => url.pathname === '/403', {timeout: 15000});
+  await page.getByRole('heading', {name: '访问被拒绝', exact: true}).waitFor({state: 'visible'});
   requireCondition(await page.locator('.comparison-form').count() === 0, 'Denied role sees comparison input');
   requireCondition(ctx.mutationGuard.snapshot().readonlyPostRequests
     .filter(request => request.classificationId === 'proposal-comparison-evaluate').length === 0,
@@ -122,9 +135,9 @@ async function inspectDenied(page, _body, ctx) {
     assessment: {result: 'PASS', rootCauseClass: 'none'}};
 }
 
-module.exports = {id, defaultEnabled: false, assertCalculation, inspect,
+module.exports = {id, defaultEnabled: false, assertCalculation, assertCoordinatedActor, resourceUnitControl, inspect,
   run: ctx => runReadOnlyPageScenario(ctx, {id, path: route, screenshot: false, inspect}),
   denied: {id: 'proposal-comparison-denied-readonly', defaultEnabled: false,
     run: ctx => runReadOnlyPageScenario(ctx, {id: 'proposal-comparison-denied-readonly',
-      path: route, screenshot: true, inspect: inspectDenied})},
+      path: '/dashboard', screenshot: true, inspect: inspectDenied})},
 };
