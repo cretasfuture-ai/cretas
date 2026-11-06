@@ -15,6 +15,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -28,7 +29,8 @@ public class SalesRankingConversationSupport {
     static final String TURN_KEY = ConversationMemoryService.READ_QUERY_VERSION_KEY;
     private static final Set<String> KEYS = Set.of("startDate", "endDate", "limit", "metric");
     private static final Map<String, String> OTHER_READS = Map.of(
-            "material_batch_query", "MATERIAL_BATCH_QUERY", "order_list", "ORDER_LIST");
+            "material_batch_query", "MATERIAL_BATCH_QUERY", "order_list", "ORDER_LIST",
+            "material_expired_query", "MATERIAL_EXPIRED_QUERY", "receive_quality_check_today", "RECEIVE_QUALITY_CHECK_TODAY");
     private final ConversationMemoryService memory;
     private final ConversationService conversations;
     private final Clock clock;
@@ -229,11 +231,28 @@ public class SalesRankingConversationSupport {
 
     boolean finishRead(String factoryId, Long userId, IntentExecuteRequest request, String status,
                        java.util.List<Map<String,Object>> resultReferences,Map<String,Object> resultSummary) {
+        return finishRead(factoryId,userId,request,status,resultReferences,resultSummary,Map.of());
+    }
+
+    boolean finishRead(String factoryId, Long userId, IntentExecuteRequest request, String status,
+                       java.util.List<Map<String,Object>> resultReferences,Map<String,Object> resultSummary,
+                       Map<String,Object> effectiveParameters) {
         if (request.getSemanticReadVersion() == null) return true;
         ConversationContext owner = memory.getContext(request.getSessionId());
         if (!owned(owner, factoryId, userId, request.getSessionId()) || !isCurrent(factoryId, userId, request)) return false;
         EntitySlot slot = owner.getSlot(EntitySlot.SlotType.READ_QUERY);
         Map<String,Object> values = new LinkedHashMap<>(slot.getMetadata());
+        if (Set.of("SUCCESS","COMPLETED").contains(String.valueOf(status)) && effectiveParameters != null) {
+            Map<String,Object> sources = new LinkedHashMap<>();
+            if (values.get("parameterSources") instanceof Map<?,?> old)
+                old.forEach((k,v)->{if(k instanceof String key)sources.put(key,v);});
+            for (String key : List.of("page","size","status")) {
+                if (effectiveParameters.get(key) != null && !Objects.equals(values.get(key),effectiveParameters.get(key))) {
+                    values.put(key,effectiveParameters.get(key));sources.put(key,"TOOL_RESULT_EFFECTIVE");
+                }
+            }
+            values.put("parameterSources",sources);
+        }
         if (request.getSemanticParameters() != null)
             values.put("taskStatus", Set.of("SUCCESS", "COMPLETED").contains(String.valueOf(status)) ? "COMPLETED" : "BLOCKED");
         values.put("resolutionStatus", request.getSemanticParameters() != null ? "RESOLVED" : "NOT_ACCEPTED");

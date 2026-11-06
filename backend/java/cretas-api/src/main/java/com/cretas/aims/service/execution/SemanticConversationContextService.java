@@ -18,6 +18,8 @@ public class SemanticConversationContextService {
     private final Clock clock;
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.ConversationService conversations;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.ai.tool.ToolRegistry toolRegistry;
     @org.springframework.beans.factory.annotation.Value("${cretas.ai.memory.expire-minutes:60}")
     private int expireMinutes = 60;
     private static final Set<String> PARAMS = Set.of("startDate", "endDate", "status", "page", "size",
@@ -42,6 +44,34 @@ public class SemanticConversationContextService {
         snapshot.put("schemaVersion", 1);
         snapshot.put("contextStatus", "UNKNOWN");
         snapshot.put("provenance", "SERVER_CONVERSATION_MEMORY");
+        if (toolRegistry != null) {
+            List<Map<String,Object>> capabilities = new ArrayList<>();
+            for (String name : List.of("order_list", "order_query", "material_batch_query",
+                    "material_expired_query", "receive_quality_check_today")) {
+                toolRegistry.getExecutor(name).filter(t -> t.getAccessMode() == com.cretas.aims.ai.tool.ToolExecutor.AccessMode.READ)
+                        .ifPresent(tool -> {
+                            Map<String,Object> capability = new LinkedHashMap<>();
+                            capability.put("tool", name);
+                            String description = Objects.toString(tool.getDescription(), "");
+                            capability.put("description", description.substring(0, Math.min(180, description.length())));
+                            Map<String,Object> schema = tool.getParametersSchema();
+                            if (schema != null && schema.get("properties") instanceof Map<?,?> properties) {
+                                capability.put("parameters", properties.keySet().stream().map(String::valueOf).sorted().toList());
+                                if (properties.get("status") instanceof Map<?,?> status
+                                        && status.get("enum") instanceof List<?> codes) {
+                                    Map<String,Object> statuses = new LinkedHashMap<>();
+                                    Map<?,?> words = status.get(com.cretas.aims.ai.tool.StatusFilter.WORDS) instanceof Map<?,?> map ? map : Map.of();
+                                    codes.stream().limit(32).forEach(code -> statuses.put(String.valueOf(code),
+                                            words.get(code) instanceof List<?> labels ? labels.stream().limit(2).map(String::valueOf).toList() : List.of()));
+                                    capability.put("statuses", statuses);
+                                }
+                            }
+                            capabilities.add(capability);
+                        });
+            }
+            // Tool declarations describe capability only, never role permission or business results.
+            snapshot.put("readCapabilities", List.copyOf(capabilities));
+        }
         snapshot.put("referenceTime", priorSnapshot != null && priorSnapshot.get("referenceTime") instanceof String anchor
                 ? anchor : LocalDateTime.now(clock.withZone(java.time.ZoneId.of("Asia/Shanghai"))).toString());
         if (priorSnapshot != null && priorSnapshot.containsKey("selectedIntentCandidate"))

@@ -557,6 +557,8 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        matchResult = ToolDispatchService.bindReadContinuation(matchResult, request,
+                code -> aiIntentService.getIntentByCode(factoryId, code));
         AIIntentConfig semanticReadIntent = matchResult != null && matchResult.hasMatch() ? matchResult.getBestMatch() : null;
         if (semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)
             semanticReadIntent = aiIntentService.getIntentByCode(factoryId,

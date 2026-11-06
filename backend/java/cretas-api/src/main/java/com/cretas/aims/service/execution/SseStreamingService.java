@@ -368,7 +368,9 @@ public class SseStreamingService {
             boolean factoryPackConstrained = factoryPackRoute.isConstrained();
 
 
-            if (isPaginationRequest(request)) {
+            if (isPaginationRequest(request) && (request.getSemanticContext() == null
+                    || SemanticConversationContextService.previousReadIntent(request) == null
+                    || request.getIntentCode() != null && (request.getUserInput() == null || request.getUserInput().isBlank()))) {
                 executePaginationRequest(emitter, factoryId, request, userId, userRole,
                         startTime, factoryPackRoute);
                 return;
@@ -550,6 +552,8 @@ public class SseStreamingService {
                 return;
             }
 
+            matchResult = ToolDispatchService.bindReadContinuation(matchResult, request,
+                    code -> aiIntentService.getIntentByCode(factoryId, code));
             AIIntentConfig semanticReadIntent = matchResult != null && matchResult.hasMatch() ? matchResult.getBestMatch() : null;
             if (semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)
                 semanticReadIntent = aiIntentService.getIntentByCode(factoryId,

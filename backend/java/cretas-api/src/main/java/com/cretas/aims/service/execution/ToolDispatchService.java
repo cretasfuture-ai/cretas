@@ -78,7 +78,8 @@ public class ToolDispatchService {
 
     static final String PARAM_EGRESS_SITE = "tool-param-extraction";
     private static final java.util.Set<String> SEMANTIC_READ_TOOLS = java.util.Set.of(
-            "order_list", "order_query", "material_batch_query", "product_sales_ranking");
+            "order_list", "order_query", "material_batch_query", "product_sales_ranking",
+            "material_expired_query", "receive_quality_check_today");
 
     /** Existing parameter resolver, extended to filled-field corrections for the read pilot.
      * Semantic output is evidence to validate, never an execution or permission grant. */
@@ -110,6 +111,9 @@ public class ToolDispatchService {
                     使用同一个任务快照及最近用户对话理解指代。当前日期以输入为准。
                     currentInput是唯一的本轮动作指令；history只用于指代与兼容条件，不能沿用历史取消、拒绝或不支持动作。
                     action只能为NEW、CONTINUE、CORRECT、SWITCH、CANCEL、CLARIFY、UNSUPPORTED。
+                    continuationAlias存在时，这是已识别的会话动作而不是新的业务目标；只能在本轮确实延续同一只读目标时CONTINUE/CORRECT，否则CLARIFY，不能强行套用旧目标。
+                    pageAction描述本轮分页动作：NEXT、PREVIOUS、ABSOLUTE、UNCHANGED。相对翻页由程序基于已确认页码计算，parameters不要猜页码；pageEvidence必须是本轮原话中的连续片段。
+                    明确页码用ABSOLUTE并给出page；改变每页条数用size。无分页变化用UNCHANGED，不输出分页默认值。
                     NEW/SWITCH是独立目标；CONTINUE/CORRECT仅可用于同一个目标。
                     同一个目标要求selectedIntent与已保存READ_QUERY的id相同；不同意图之间不能用CONTINUE/CORRECT继承参数。
                     canInheritPreviousParameters=false时不能返回CONTINUE/CORRECT；本轮完整独立查询应返回NEW/SWITCH，仅有条件续句而没有已确定目标才澄清。
@@ -159,6 +163,7 @@ public class ToolDispatchService {
                     && "PRESENT".equals(request.getSemanticContext().get("contextStatus")));
             input.put("previousGoal", Objects.toString(previous.get("id"), ""));
             input.put("previousGoalStatus", Objects.toString(previous.get("taskStatus"), "NONE"));
+            input.put("continuationAlias", request.getSemanticContext().getOrDefault("continuationAlias", ""));
             input.put("requiredWithoutSystemDefault", schema.get("required") instanceof List<?> required
                     ? required.stream().filter(key -> !defaults.containsKey(key)).toList() : List.of());
             var timeRanges = new TimeNormalizationRules().extractAndReplace(request.getUserInput(),
@@ -181,6 +186,8 @@ public class ToolDispatchService {
                     "action", Map.of("type", "string", "enum", List.of("NEW", "CONTINUE", "CORRECT", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")),
                     "dateScope", Map.of("type", "string", "enum", List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED")),
                     "parameters", deltaSchema, "message", Map.of("type", "string")));
+            turnProperties.put("pageAction", Map.of("type", "string", "enum", List.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED")));
+            turnProperties.put("pageEvidence", Map.of("type", "string", "maxLength", 200));
             if (pilot && "order_query".equals(tool.getToolName())
                     && previous.get("resultReferences") instanceof List<?> resultReferences) {
                 List<String> allowedReferences = resultReferences.stream()
@@ -221,9 +228,13 @@ public class ToolDispatchService {
                 if (salesRankingConversationSupport != null) salesRankingConversationSupport.finishRead(factoryId, userId, request, "UNSUPPORTED_CAPABILITY");
                 return readTurnReply("UNSUPPORTED_CAPABILITY", message);
             }
-            if ("CLARIFY".equals(action) || !pilot) return readTurnReply("NEED_MORE_INFO", message);
+            if (!pilot) return readTurnReply("NEED_MORE_INFO", "本轮业务目标尚未确定，请说明要继续此前的查询，还是改查其他业务；尚未执行查询。");
+            if ("CLARIFY".equals(action)) return readTurnReply("NEED_MORE_INFO", message);
             if (!java.util.Set.of("NEW", "SWITCH", "CONTINUE", "CORRECT").contains(action))
                 return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询动作，请重试。");
+            if (request.getSemanticContext().containsKey("continuationAlias")
+                    && !java.util.Set.of("CONTINUE", "CORRECT").contains(action))
+                return readTurnReply("NEED_MORE_INFO", "本轮目标与此前查询是否相同尚不明确，请说明要继续的查询。");
             Map<String,Object> merged = new java.util.LinkedHashMap<>();
             Map<String,String> sources = new java.util.LinkedHashMap<>();
             if (java.util.Set.of("CONTINUE", "CORRECT").contains(action)) {
@@ -242,6 +253,25 @@ public class ToolDispatchService {
                 return readTurnReply("NEED_MORE_INFO", "返回了无法校验的查询字段，请明确查询条件。");
             Map<String,Object> rawDelta = new java.util.LinkedHashMap<>();
             delta.forEach((k,v) -> rawDelta.put(String.valueOf(k), v));
+            String pageAction = Objects.toString(turn.get("pageAction"), "UNCHANGED");
+            Object computedPage = null;
+            if (!Set.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED").contains(pageAction))
+                return readTurnReply("NEED_MORE_INFO", "未能确认分页动作，请明确目标页码。");
+            if (Set.of("NEXT", "PREVIOUS").contains(pageAction)) {
+                String evidence = turn.get("pageEvidence") instanceof String s ? s.trim() : "";
+                if (!Set.of("CONTINUE", "CORRECT").contains(action) || evidence.isBlank()
+                        || !request.getUserInput().contains(evidence) || !properties.containsKey("page")
+                        || !(merged.get("page") instanceof Number priorPage) || priorPage.doubleValue() != priorPage.longValue()
+                        || priorPage.longValue() < 1 || priorPage.longValue() >= Integer.MAX_VALUE)
+                    return readTurnReply("NEED_MORE_INFO", "缺少可核验的当前页码或翻页依据，请明确要看的页码。");
+                long target = ((Number) merged.get("page")).longValue() + ("NEXT".equals(pageAction) ? 1 : -1);
+                if (target < 1) return readTurnReply("PAGINATION_REFUSED", "已经是第一页，没有上一页。");
+                if (rawDelta.containsKey("page") && (!(rawDelta.get("page") instanceof Number n)
+                        || n.doubleValue() != target))
+                    return readTurnReply("NEED_MORE_INFO", "目标页码与翻页动作不一致，请确认页码。");
+                computedPage = (int) target;
+                rawDelta.put("page", computedPage);
+            }
             Object referencedOrder = null;
             if (turn.get("objectReference") instanceof String reference && !reference.isBlank()) {
                 if (!"order_query".equals(tool.getToolName()) || !(previous.get("resultReferences") instanceof List<?> refs))
@@ -270,11 +300,18 @@ public class ToolDispatchService {
             if ("order_query".equals(tool.getToolName()) && referencedOrder == null && rawDelta.containsKey("orderId")
                     && (request.getUserInput() == null || !request.getUserInput().contains(String.valueOf(rawDelta.get("orderId")))))
                 return readTurnReply("NEED_MORE_INFO","订单标识没有本轮输入或真实结果引用依据，请选择具体订单。");
+            if (Set.of("CONTINUE","CORRECT").contains(action)) {
+                // A repeated, unchanged value is inherited evidence, not a new numeric claim.
+                // Remove only same-key equality; old size must never ground a different page.
+                rawDelta.entrySet().removeIf(e -> Set.of("page","size","status").contains(e.getKey())
+                        && Objects.equals(merged.get(e.getKey()),e.getValue()));
+            }
             Map<String,Object> copiedDefaults = new java.util.LinkedHashMap<>();
             defaults.forEach((key,value) -> {
                 if (Objects.equals(value,rawDelta.get(key))) copiedDefaults.put(key,value);
             });
             Map<String,Object> currentCalendarEvidence = new java.util.LinkedHashMap<>();
+            if (computedPage != null) currentCalendarEvidence.put("page", computedPage);
             for (String key : List.of("startDate","endDate")) {
                 Object value = rawDelta.get(key);
                 if (value instanceof String date && timeRanges.stream().anyMatch(range -> range.isValid()
@@ -327,6 +364,7 @@ public class ToolDispatchService {
                 sources.put(key, "CURRENT_EXPLICIT");
             }
             Map<String,Object> computedEvidence = new java.util.LinkedHashMap<>();
+            if (computedPage != null) computedEvidence.put("page", computedPage);
             if (referencedOrder != null) computedEvidence.put("orderId",referencedOrder);
             for (String dateKey : List.of("startDate", "endDate")) {
                 Object value = rawDelta.get(dateKey);
@@ -354,6 +392,7 @@ public class ToolDispatchService {
                     .isAfter(java.time.LocalDate.parse(String.valueOf(rawDelta.get("endDate")))))
                 return readTurnReply("NEED_MORE_INFO", "查询开始日期不能晚于结束日期，请确认时间范围。");
             if (referencedOrder != null) sources.put("orderId","SERVER_RESULT_REFERENCE");
+            if (computedPage != null) sources.put("page", "SERVER_RELATIVE_PAGE");
             if ("order_query".equals(tool.getToolName()) && merged.get("orderId") != null
                     && previous.get("resultReferences") instanceof List<?> refs
                     && refs.stream().anyMatch(value -> value instanceof Map<?,?> ref
@@ -373,6 +412,47 @@ public class ToolDispatchService {
 
     static boolean supportsSemanticRead(AIIntentConfig intent) {
         return intent != null && intent.getToolName() != null && SEMANTIC_READ_TOOLS.contains(intent.getToolName());
+    }
+
+    static Map<String,Object> effectiveReadParameters(ToolExecutor tool, IntentExecuteResponse response) {
+        if (response == null || !Set.of("SUCCESS","COMPLETED").contains(String.valueOf(response.getStatus()))
+                || !Set.of("order_list","material_batch_query","material_expired_query").contains(tool.getToolName())
+                || !(response.getResultData() instanceof Map<?,?> data)) return Map.of();
+        Map<String,Object> effective = new java.util.LinkedHashMap<>();
+        Object page = data.get("material_batch_query".equals(tool.getToolName()) ? "currentPage" : "page");
+        if (page instanceof Number n && n.doubleValue()==n.longValue() && n.longValue()>=1 && n.longValue()<=Integer.MAX_VALUE)
+            effective.put("page",n.intValue());
+        if (data.get("size") instanceof Number n && n.doubleValue()==n.longValue() && n.longValue()>=1 && n.longValue()<=100)
+            effective.put("size",n.intValue());
+        Object status = data.get("appliedStatusFilter") instanceof Map<?,?> filter ? filter.get("code") : null;
+        if (status == null && data.get("queryConditions") instanceof Map<?,?> conditions) status=conditions.get("status");
+        if (status instanceof String s && tool.getParametersSchema().get("properties") instanceof Map<?,?> properties
+                && properties.get("status") instanceof Map<?,?> definition
+                && definition.get("enum") instanceof Collection<?> allowed && allowed.contains(s)) effective.put("status",s);
+        return effective;
+    }
+
+    /** Normalize a model-selected conversation action onto its owned read task.
+     * The same semantic resolver must still confirm the action; no text whitelist or execution grant.
+     */
+    static IntentMatchResult bindReadContinuation(IntentMatchResult match, IntentExecuteRequest request,
+            java.util.function.Function<String, Optional<AIIntentConfig>> lookup) {
+        if (match == null || !match.hasMatch() || Boolean.TRUE.equals(match.getRequiresConfirmation())
+                || request.getSemanticContext() == null
+                || !"PRESENT".equals(request.getSemanticContext().get("contextStatus"))) return match;
+        String code = match.getBestMatch().getIntentCode();
+        if (code == null) return match;
+        if (!Set.of("CONTEXT_CONTINUE", "CONTINUE_LAST_OPERATION", "SYSTEM_RESUME_LAST_ACTION",
+                "PAGINATION_NEXT", "PAGINATION_PREVIOUS", "NAVIGATION_NEXT_PAGE", "NAVIGATION_PREVIOUS_PAGE").contains(code)) return match;
+        String previous = SemanticConversationContextService.previousReadIntent(request);
+        if (previous == null || request.getSemanticPreviousRead() == null
+                || !"COMPLETED".equals(request.getSemanticPreviousRead().get("taskStatus"))) return match;
+        AIIntentConfig target = lookup.apply(previous).orElse(null);
+        if (!supportsSemanticRead(target) || Boolean.FALSE.equals(target.getIsActive())
+                || !Objects.equals(target.getToolName(), request.getSemanticPreviousRead().get("toolName"))) return match;
+        Map<String,Object> snapshot = new java.util.LinkedHashMap<>(request.getSemanticContext());
+        snapshot.put("continuationAlias", code); request.setSemanticContext(snapshot);
+        return match.toBuilder().bestMatch(target).build();
     }
 
     private static Map<?,?> previousRead(IntentExecuteRequest request) {
@@ -517,7 +597,8 @@ public class ToolDispatchService {
             if (request.getSemanticReadVersion() != null && salesRankingConversationSupport != null
                     && !salesRankingConversationSupport.finishRead(factoryId, userId, request, response == null ? "FAILED" : response.getStatus(),
                         response == null ? List.of() : LastActionContract.orderResultReferences(tool.getToolName(),response.getResultData()),
-                        response == null ? Map.of() : LastActionContract.orderResultSummary(tool.getToolName(),response.getResultData())))
+                        response == null ? Map.of() : LastActionContract.orderResultSummary(tool.getToolName(),response.getResultData()),
+                        effectiveReadParameters(tool,response)))
                 return readTurnReply("CANCELLED", "查询状态已变化，已丢弃旧查询结果。");
             if (salesRankingConversationSupport!=null && (writeGuardService.isWriteTool(tool) || writeGuardService.isWriteIntent(intent))) {
                 try { salesRankingConversationSupport.rememberCommittedAction(factoryId,userId,request,intent,tool.getToolName(),response); }

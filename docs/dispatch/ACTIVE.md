@@ -121,7 +121,7 @@
 - `SEMANTIC-PREVIEW-REVISION-20261106` — `review` — Owner /root/preview_revision — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
 - `SEMANTIC-CONVERSATION-STATE-20261106` — `review` — Owner /root/conversation_state — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
 - `SEMANTIC-FOLLOWUP-SAFETY-20261106` — `review` — Owner /root/followup_safety — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
-- `SEMANTIC-SALES-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476; root verifies; no prod/train/deploy.
+- `SEMANTIC-SALES-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476冻结；补候选Tool承载、只读分页/续句；已打开样本仅开发回归；不合并部署/训练。
 
 - `SEMANTIC-PREVIEW-FIXTURES-20261106` — `review` — Owner /root/preview_revision — Base a6737c0a9218b43f7dedd3b738087ca68e6271d2 — PR1476; root verifies; no prod/train/deploy.
 
@@ -149,7 +149,7 @@
 - `SEMANTIC-PREVIEW-REVISION-20261106`：PreviewTokenService/Impl、IntentPreviewTokenRepository、PreviewRevisionInvalidationContractTest/StartupGuardTest；Owner /root/preview_revision；root统一Maven。
 - `SEMANTIC-CONVERSATION-STATE-20261106`：精确scope见archive/2026-11-06-semantic-conversation-scope.json；Owner /root/conversation_state；含短事务/actor锁和相关fixture更新，不写其他文件/ACTIVE/迁移/target；JPA必验，root统一Maven。
 - `SEMANTIC-FOLLOWUP-SAFETY-20261106`：execution/FollowUpResolver.java、FollowUpResolverTest.java、FollowUpSubmittedWriteSafetyContractTest.java；Owner /root/followup_safety；不改其他文件/ACTIVE/target，root统一验证。
-- `SEMANTIC-SALES-20261105`：Java execution/识别DTO/会话、crm/OrderQueryTool及身份契约测试；Python ai/{api,dto,orchestrator,registry,matcher/decision}；Web AIQuery/intent-chat；专项tests/证据。Owner同任务行；独立worktree；Entity/Repo由子任务锁定；禁训练/线上。
+- `SEMANTIC-SALES-20261105`：Java execution/识别DTO/会话、crm查询Tool、material/{MaterialBatchQueryTool,MaterialExpiredQueryTool}；SalesServiceImpl仅列表排序；对应契约测试；Python ai/{api,dto,orchestrator,registry,matcher/decision}；Web AIQuery/intent-chat；tests/semantic-read/证据。Owner同任务行；不改Entity/Repo；禁训练/合并部署。
 
 - `SEMANTIC-PREVIEW-FIXTURES-20261106`：archive/2026-11-06-semantic-preview-fixtures-20261106-scope.json；Owner /root/preview_revision。
 

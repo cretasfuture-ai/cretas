@@ -8,9 +8,8 @@
 输出是**概率分布**, 不是一个答案: 置信够高才自动执行, 不够就把前几名交给第③层
 (按钮澄清)。⛔ 拿不到概率时返回 None, 由编排器回落旧路径 —— 不猜「默认第一个」。
 
-提示词起点是 2026-10-02 的离线评测 (scripts/jev-oss-eval/sim/mine_eval.py 的 Shortlist /
-Chooser)。粗选 system 提示至今逐字相同; 之后线上加了最近对话 (#875) 和「以上都不是 /
-需要先问清楚」出口 (#880), 评测脚本没有跟进, 两边已不再逐字一致。改这里要同步重跑评测。
+提示词起点是 2026-10-02 的离线评测。粗选和细选共用当前业务路由边界，
+包括服务器任务上下文和Tool能力声明。历史离线脚本的提示词不代表当前主路径。
 """
 from __future__ import annotations
 
@@ -58,6 +57,9 @@ ROUTING_BOUNDARY_RULES = (
     "这里只判断哪个功能应承接当前目标，不判断权限、不绑定对象ID，也不表示已经执行。"
     "必须区分功能路由、执行参数和能力校验：功能已明确时，缺少具体对象ID、时间等参数交给后续resolver；"
     "同一目标的条件或指标纠正仍交给该目标对应功能，即使其能力需要随后明确拒绝，也不能偷换为别的功能。"
+    "已有确定业务列表及其任务上下文时，翻页、重查、纠正条件仍由该业务列表功能承接；通用继续/翻页功能不代表新的业务目标。"
+    "继续分页列表时保留其列表能力，不因修改状态就改选无分页能力的专用看板或今日待办；状态筛选不等于查询该状态的产生原因或消耗明细。"
+    "受控上下文readCapabilities来自真实Tool声明，仅描述能力，不代表权限；结合其描述和参数支持范围判断，不因标题关键词相同就偷换查询口径。"
     "用户改变目标、对象类型或查询范围时，按本轮目标重新选择，不能仅因历史意图相同就继承。"
     "集合查询与一笔确定对象的详情是不同范围；上下文已有真实结果引用且本轮请求该对象详情时，应选详情功能，"
     "不能把详情当作再次列出集合。具体对象不唯一时仍由resolver定向确认，不得猜ID或任取第一条。"
@@ -97,7 +99,8 @@ def intent_text(row: Dict[str, Any]) -> str:
     # the bounded description instead of dropping those boundaries from choices.
     desc = " ".join(str(row.get("description") or "").split())[:512]
     name = row.get("intent_name") or row.get("intent_code")
-    return f"{name}：{desc}" + (f" 常见说法：{kws}" if kws else "")
+    binding = f" [工具：{row['tool_name']}]" if row.get("tool_name") else ""
+    return f"{name}{binding}：{desc}" + (f" 常见说法：{kws}" if kws else "")
 
 
 def _keywords(row: Dict[str, Any]) -> List[str]:
@@ -114,6 +117,8 @@ def _catalog_line(row: Dict[str, Any], n_keywords: int = 3) -> str:
     # 每行带前 3 个常见说法: 只看名称时「搞起酱鸭腿」找不到「开始工序」。
     # 2026-10-02 history 段离线实测 (未命中精确表的 1,645 次): 候选召回 65.3% -> 74.0%。
     line = f"{row['intent_code']}｜{row.get('intent_name') or ''}"
+    if row.get("tool_name"):
+        line += f" [工具：{row['tool_name']}]"
     kws = _keywords(row)[:n_keywords]
     return line + (f"（{'、'.join(kws)}）" if kws else "")
 
@@ -147,7 +152,7 @@ def build_shortlist_messages(query: str, role: Optional[str], visible: List[Dict
     catalog = "\n".join(
         _catalog_line(r) for r in sorted(visible, key=lambda r: str(r.get("intent_code")))
     )
-    system = ("你是食品加工厂业务系统的意图粗筛器。下面是全部意图目录（代码｜名称）：\n" + catalog +
+    system = ("你是食品加工厂业务系统的意图粗筛器。" + ROUTING_BOUNDARY_RULES + "下面是全部意图目录（代码｜名称）：\n" + catalog +
               f'\n\n只输出 JSON：{{"candidates": ["代码1", "代码2", ...]}}，最多 {size} 个，按可能性从高到低；都不像就输出空数组。')
     return [{"role": "system", "content": system},
             {"role": "user", "content": build_decision_input(query, role, history)}]

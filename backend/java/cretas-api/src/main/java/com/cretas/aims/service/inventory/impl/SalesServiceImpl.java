@@ -947,7 +947,7 @@ public class SalesServiceImpl implements SalesService {
     @Override
     @DataScope("created_by")  // Sprint 5 Track G POC + Sprint 6 W2-B sweep (SELF+keyword DB-side + chain)
     public PageResponse<SalesOrder> getSalesOrders(String factoryId, String keyword, int page, int size) {
-        PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        PageRequest pageRequest = PageRequest.of(page - 1, size, stableOrderReadSort());
         Page<SalesOrder> result;
 
         // Sprint 5 POC + Sprint 6 W2-B sweep:
@@ -1022,15 +1022,20 @@ public class SalesServiceImpl implements SalesService {
             if (createdBy == null || createdBy.isEmpty()) createdBy = List.of(dsCtx.getUserId());
         }
         Page<SalesOrder> result = salesOrderRepository.searchFiltered(factoryId, createdBy, status,
-                orderDateFrom, orderDateTo, PageRequest.of(page - 1, size));
+                orderDateFrom, orderDateTo, PageRequest.of(page - 1, size, stableOrderReadSort()));
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }
 
     @Override
     public PageResponse<SalesOrder> getSalesOrdersByStatus(String factoryId, SalesOrderStatus status, int page, int size) {
-        PageRequest pageRequest = PageRequest.of(page - 1, size);
+        PageRequest pageRequest = PageRequest.of(page - 1, size, stableOrderReadSort());
         Page<SalesOrder> result = salesOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, pageRequest);
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    /** A timestamp alone is not a stable pagination key for bulk-created orders. */
+    public static Sort stableOrderReadSort() {
+        return Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.ASC, "id"));
     }
 
     @Override
