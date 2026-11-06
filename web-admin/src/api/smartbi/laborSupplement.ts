@@ -8,5 +8,10 @@ export interface LaborSupplementSummary {
 export interface LaborSupplementStatus {sourceRunId:string;revision:string;editable:boolean;tasks:LaborTaskStatus[];summary:LaborSupplementSummary}
 export interface LaborSupplementReceipt {saved:true;savedRevision:string;savedCount:number;editable:boolean}
 export type LaborSupplementSaveResult=(LaborSupplementStatus&LaborSupplementReceipt)|(LaborSupplementReceipt&{readbackPending:true});
-export const getLaborSupplements=(ids:number[])=>pythonFetch<LaborSupplementStatus>(`/api/smartbi/blacklake/labor-supplements?project_ids=${ids.join(',')}`);
-export const saveLaborSupplements=(sourceRunId:string,entries:LaborTaskEntry[])=>pythonFetch<LaborSupplementSaveResult>('/api/smartbi/blacklake/labor-supplements',{method:'POST',body:JSON.stringify({sourceRunId,entries})});
+async function call<T>(path:string,options:RequestInit={}):Promise<T>{
+  const response=await pythonFetch<{success:boolean;data:T;message:string}>(path,{...options,preserveResponseKeys:true});
+  if(!response.success)throw new Error(response.message||'人工资料暂不可用');
+  return response.data;
+}
+export const getLaborSupplements=(ids:number[])=>call<LaborSupplementStatus>(`/api/smartbi/blacklake/labor-supplements?project_ids=${ids.join(',')}`);
+export const saveLaborSupplements=(sourceRunId:string,entries:LaborTaskEntry[])=>call<LaborSupplementSaveResult>('/api/smartbi/blacklake/labor-supplements',{method:'POST',body:JSON.stringify({sourceRunId,entries})});
