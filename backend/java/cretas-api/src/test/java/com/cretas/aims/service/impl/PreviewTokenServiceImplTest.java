@@ -137,6 +137,39 @@ class PreviewTokenServiceImplTest {
         assertThat(service.resolveClaim("t", "c-fail", false, "tool failed")).isTrue();
     }
 
+    @Test
+    void boundSnapshotReadsImmutableMetadataForAllTerminalStatesWithoutPayload() throws Exception {
+        IntentPreviewToken bound = boundToken("canvas-proof", LocalDateTime.now().minusMinutes(1));
+        bound.setIntentCode("CANVAS_DIFF_123e4567-e89b-12d3-a456-426614174000");
+        bound.setEntityType("CANVAS_DIFF");
+        bound.setEntityId("canvas_toggle_module");
+        bound.setOperation("UPDATE");
+        bound.setStatus(TokenStatus.CONFIRMED);
+        bound.setPreviewData("{\"secret\":\"must-not-cross\"}");
+        when(repository.findByToken("canvas-proof")).thenReturn(Optional.of(bound));
+
+        var snapshot = service.readBoundSnapshot("canvas-proof", "F001", 9L).orElseThrow();
+
+        assertThat(snapshot.toolName()).isEqualTo("order_create");
+        assertThat(snapshot.commandDigest()).hasSize(64);
+        assertThat(snapshot.status()).isEqualTo(TokenStatus.CONFIRMED);
+        assertThat(snapshot.expiresAt()).isEqualTo(bound.getExpiresAt());
+    }
+
+    @Test
+    void boundSnapshotFailsClosedForCrossTenantUserAndLegacyRows() throws Exception {
+        IntentPreviewToken bound = boundToken("canvas-proof", LocalDateTime.now().plusMinutes(5));
+        when(repository.findByToken("canvas-proof")).thenReturn(Optional.of(bound));
+        assertThat(service.readBoundSnapshot("canvas-proof", "OTHER", 9L)).isEmpty();
+        assertThat(service.readBoundSnapshot("canvas-proof", "F001", 10L)).isEmpty();
+
+        IntentPreviewToken legacy = IntentPreviewToken.builder()
+                .token("legacy").factoryId("F001").userId(9L).status(TokenStatus.PENDING)
+                .expiresAt(LocalDateTime.now().plusMinutes(5)).build();
+        when(repository.findByToken("legacy")).thenReturn(Optional.of(legacy));
+        assertThat(service.readBoundSnapshot("legacy", "F001", 9L)).isEmpty();
+    }
+
     private BoundTokenRequest boundRequest(ToolExecutionMode mode) {
         return new BoundTokenRequest(
                 "F001", 9L, "tester", "ORDER_CREATE", "Create order",

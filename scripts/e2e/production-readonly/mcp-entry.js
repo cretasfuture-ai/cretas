@@ -1608,6 +1608,34 @@ function allowsMissingFactoryName(pageUrl, allowMobileOnlyLanding) {
   return Boolean(allowMobileOnlyLanding) && pathnameOf(pageUrl) === '/mobile-only';
 }
 
+async function waitForFactoryShell(page, timeoutMs = 30_000) {
+  const startedAt = Date.now();
+  try {
+    await page.waitForFunction(() => {
+      const visible = (selector) => {
+        const node = document.querySelector(selector);
+        if (!node) return false;
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      const name = document.querySelector('.app-sidebar .logo-title');
+      return visible('.app-layout')
+        && visible('.app-header')
+        && visible('.app-sidebar')
+        && visible('.app-sidebar .sidebar-logo')
+        && visible('.app-sidebar .logo-title')
+        && Boolean(String(name?.textContent || '').trim());
+    }, null, { timeout: timeoutMs });
+    return { factoryShellReady: true, factoryShellMs: Date.now() - startedAt };
+  } catch {
+    return { factoryShellReady: false, factoryShellMs: Date.now() - startedAt };
+  }
+}
+
 async function performUiLogin(page, options) {
   const username = options.username;
   const password = options.password;
@@ -1659,27 +1687,35 @@ async function performUiLogin(page, options) {
       return {};
     }
   });
+  const actualUsername = stored.username || login.username;
+  const platformSession = isPlatformSession(login, stored);
+  const actualFactoryId = platformSession ? 'PLATFORM' : stored.factoryId || login.factoryId;
+  const actualFactoryName = stored.factoryName || login.factoryName;
+  const actualRole = String(stored.platformRole || stored.role || login.role || '').toLowerCase();
+  if (actualUsername !== expectedUsername) throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
+  if (actualFactoryId !== expectedFactoryId) throw new Error(`Tenant factory mismatch: expected ${expectedFactoryId}, got ${actualFactoryId}`);
+  if (expectedRole && actualRole !== expectedRole) throw new Error(`Tenant role mismatch: expected ${expectedRole}, got ${actualRole || 'missing'}`);
+
   // 🔴 落地页也必须等应用挂载完再取样 —— 这是同一个缺陷的第二处, 而且更阴:
   //    闪屏阶段的 body 只有二十来个字符, 于是下面
   //      · 工厂名比对必然失败 -> 整个 suite 在 bootstrap 就 TOOL_ERROR
   //      · 「跨租户残留」那条 canary 变成恒真式(闪屏里永远不会出现别的租户名)
   //    判据见 core/app-mount.js。
   const landingMount = await waitForAppMount(page, options.appMountTimeoutMs);
+  const mobileOnlyLanding = allowsMissingFactoryName(page.url(), options.allowMobileOnlyLanding);
+  const factoryShell = mobileOnlyLanding
+    ? { factoryShellReady: false, factoryShellMs: 0 }
+    : await waitForFactoryShell(page, options.appMountTimeoutMs);
+  if (!mobileOnlyLanding && !factoryShell.factoryShellReady) {
+    throw new Error(`Authenticated factory shell did not become observable within ${options.appMountTimeoutMs || 30_000}ms`);
+  }
   const pageText = await page.locator('body').innerText().catch(() => '');
-  const actualUsername = stored.username || login.username;
-  const platformSession = isPlatformSession(login, stored);
-  const actualFactoryId = platformSession ? 'PLATFORM' : stored.factoryId || login.factoryId;
-  const actualFactoryName = stored.factoryName || login.factoryName;
   const businessSuccess = login.success ?? Boolean(actualUsername && actualFactoryId);
   // 这道 canary 抓的是「别的租户残留在本次会话的页面上」。租户名写死成字面量时,
   // 一旦该账号自己成为被测账号, 合法登录会被判成泄漏(本条实测拦下过 liushanmen_admin
   // 的正常登录)。先排除「标记就是当前已认证用户」, 跨租户残留的语义不变。
   const staleTenantDetected = !STALE_TENANT_MARKER.test(String(actualUsername || ''))
     && STALE_TENANT_MARKER.test(pageText);
-  if (actualUsername !== expectedUsername) throw new Error(`Tenant login username mismatch: expected ${expectedUsername}, got ${actualUsername}`);
-  if (actualFactoryId !== expectedFactoryId) throw new Error(`Tenant factory mismatch: expected ${expectedFactoryId}, got ${actualFactoryId}`);
-  const actualRole = String(stored.platformRole || stored.role || login.role || '').toLowerCase();
-  if (expectedRole && actualRole !== expectedRole) throw new Error(`Tenant role mismatch: expected ${expectedRole}, got ${actualRole || 'missing'}`);
   if (staleTenantDetected) throw new Error('Stale tenant marker liushanmen_admin detected after clean UI login');
   if (actualFactoryName && !pageText.includes(actualFactoryName)
       && !allowsMissingFactoryName(page.url(), options.allowMobileOnlyLanding)) {
@@ -1701,6 +1737,8 @@ async function performUiLogin(page, options) {
     // ⚠️ 记下来, 否则「落地页没挂载」和「落地页缺东西」在证据里长得一样。
     landingAppMounted: landingMount.appMounted,
     landingAppMountMs: landingMount.appMountMs,
+    factoryShellReady: factoryShell.factoryShellReady,
+    factoryShellMs: factoryShell.factoryShellMs,
     loginAppMounted: loginMount.appMounted,
     loginAppMountMs: loginMount.appMountMs,
   };
@@ -1711,7 +1749,14 @@ function isPlatformSession(login, stored) {
     && !login.factoryId && !stored.factoryId && login.role === stored.platformRole
     && ['super_admin', 'system_admin', 'operation_admin', 'auditor', 'platform_admin'].includes(login.role);
 }
-module.exports = { allowsMissingFactoryName, compactLoginData, performUiLogin, waitForLoginOutcome, isPlatformSession };
+module.exports = {
+  allowsMissingFactoryName,
+  compactLoginData,
+  performUiLogin,
+  waitForFactoryShell,
+  waitForLoginOutcome,
+  isPlatformSession,
+};
 
 },
     "core/url-utils.js": function(module, exports, require) {
@@ -2481,7 +2526,18 @@ const WORKSPACE_TARGETS = Object.freeze([
 ]);
 
 function visibleState(state) {
-  return state && typeof state === 'object' ? String(state.visible || '') : '';
+  const visible = state && typeof state === 'object' ? String(state.visible || '') : '';
+  return visible === 'link' ? 'ready' : visible;
+}
+
+async function waitForBusinessLandmark(page, label, timeoutMs = 15000) {
+  try {
+    await page.locator('main.app-content').getByText(label, { exact: true })
+      .filter({ visible: true }).first().waitFor({ state: 'visible', timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function assertWorkspacePositive(snapshot, expected) {
@@ -2577,8 +2633,8 @@ async function inspect(page, _body, ctx) {
           const rect = node.getBoundingClientRect();
           return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
         };
-        const visible = ['loading', 'error', 'unavailable', 'denied', 'empty', 'link'].find(value => pick(`workspace-${value}`)) || 'ready';
-        return { visible };
+        const visible = ['loading', 'error', 'unavailable', 'denied', 'empty', 'link'].find(value => pick(`workspace-${value}`)) || 'unknown';
+        return { visible: visible === 'link' ? 'ready' : visible };
       });
       const links = page.locator('[data-testid="workspace-link"]');
       const linkCount = await links.count();
@@ -2610,9 +2666,8 @@ async function inspect(page, _body, ctx) {
       await firstLink.click();
       await page.waitForURL(url => url.pathname === expected.targetPath, { timeout: 20000 });
       await waitForAppMount(page);
-      await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
       snapshot.targetPath = new URL(page.url()).pathname;
-      snapshot.targetLandmarkFound = await page.getByText(expected.targetLandmark, { exact: true }).first().isVisible().catch(() => false);
+      snapshot.targetLandmarkFound = await waitForBusinessLandmark(page, expected.targetLandmark);
       const targetSemanticErrors = await page.evaluate(() => ({
         errorTestIds: [...document.querySelectorAll('.el-alert--error,[data-testid*="error" i],[data-testid="permission-denied"],[data-testid="not-found"]')]
           .filter(node => {
@@ -2633,6 +2688,14 @@ async function inspect(page, _body, ctx) {
       snapshot.targetErrorMarkers = hasSemanticTargetError(targetSemanticErrors)
         ? [...targetSemanticErrors.errorTestIds, 'error-heading'].filter((value, index, values) => values.indexOf(value) === index)
         : [];
+      if (!snapshot.targetLandmarkFound) {
+        snapshot.assessment = snapshot.targetErrorMarkers.length
+          ? { result: 'CONFIRMED_DEFECT', rootCauseClass: 'frontend' }
+          : { result: 'TOOL_ERROR', rootCauseClass: 'tool' };
+        snapshots.push(snapshot);
+        screenshots.push(await ctx.screenshot(`${expected.path.slice(1).replaceAll('/', '-')}-target-missing`));
+        return { snapshots, screenshots, assessment: snapshot.assessment };
+      }
       snapshot.assessment = { result: 'PASS', rootCauseClass: 'none' };
       assertWorkspacePositive(snapshot, expected);
       snapshots.push(snapshot);
@@ -2642,6 +2705,9 @@ async function inspect(page, _body, ctx) {
       workspaceTitles: snapshots.map(snapshot => snapshot.heading),
       visibleTargetCount: snapshots.reduce((count, snapshot) => count + snapshot.linkCount, 0),
       targetPaths: snapshots.map(snapshot => snapshot.targetPath),
+      targetLandmarks: WORKSPACE_TARGETS.map(expected => expected.targetLandmark),
+      targetLandmarkResults: snapshots.map(snapshot => snapshot.targetLandmarkFound),
+      workspaceStates: snapshots.map(snapshot => visibleState(snapshot.state)),
       snapshots,
       screenshots,
       assessment: { result: 'PASS', rootCauseClass: 'none' },
@@ -2683,12 +2749,23 @@ async function inspectDenied(page, _body, ctx) {
         linkCount,
         denied: finalPath === '/403' || (finalPath === expected.path && explicitDenied),
         explicitDenied,
+        authStatus: auth.status,
+        authFactoryId: auth.factoryId,
         authenticatedSameFactory: auth.status === 200 && auth.success && auth.factoryId === 'F006',
       });
     }
     const snapshot = { role: ctx.loginEvidence?.role || null, workspaceMenuVisible, routes };
     assertDeniedSnapshot(snapshot);
-    return { ...snapshot, assessment: { result: 'PASS', rootCauseClass: 'none' } };
+    return {
+      ...snapshot,
+      routePaths: routes.map(route => route.path),
+      routeFinalPaths: routes.map(route => route.finalPath),
+      routeDenials: routes.map(route => route.denied),
+      routeAuthStatuses: routes.map(route => route.authStatus),
+      routeFactoryIds: routes.map(route => route.authFactoryId),
+      routeLinkCounts: routes.map(route => route.linkCount),
+      assessment: { result: 'PASS', rootCauseClass: 'none' },
+    };
   } catch (error) {
     return { routes, error: String(error?.message || error), assessment: { result: 'TOOL_ERROR', rootCauseClass: 'tool' } };
   }
@@ -2699,6 +2776,8 @@ module.exports = {
   defaultEnabled: false,
   path: WORKSPACE_TARGETS[0].path,
   WORKSPACE_TARGETS,
+  visibleState,
+  waitForBusinessLandmark,
   assertWorkspacePositive,
   assertDeniedSnapshot,
   hasSemanticTargetError,

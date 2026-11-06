@@ -24,6 +24,7 @@ require('./role-menu-census-readonly.test');
 require('./sales-order-lifecycle-readonly.test');
 require('./url-utils.test');
 require('./ui-login.test');
+require('./factory-management-workspaces-readonly.test');
 require('./visual-page-census-readonly.test');
 require('./smartbi-factory-details.test');
 

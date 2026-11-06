@@ -20,7 +20,9 @@ class ToolRuntimeClassificationContractTest {
                         || d.actionType() == ToolExecutor.ActionType.UPDATE
                         || d.actionType() == ToolExecutor.ActionType.DELETE).toList();
         assertThat(writes).extracting(ToolDescriptor::toolName).containsExactlyInAnyOrder(
-                "user_disable", "canvas_product_work_process_config", "canvas_work_process_catalog",
+                "user_disable", "canvas_work_process_catalog",
+                "canvas_toggle_module", "canvas_toggle_tool", "canvas_toggle_skill",
+                "canvas_update_field", "canvas_update_trigger_chain", "canvas_apply_template",
                 "product_create", "alert_rule_toggle");
         ToolDescriptorPolicyResolver resolver = new ToolDescriptorPolicyResolver(descriptors);
         for (ToolDescriptor descriptor : writes) {
