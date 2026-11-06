@@ -61,6 +61,17 @@ def test_live_history_paging_is_readonly_bounded_and_scope_free(preview):
     assert len(calls)==1
 
 
+def test_labor_summary_only_accepts_bounded_snapshot_and_order_filters(preview):
+    client,calls=preview;path='/smartbi-api/api/smartbi/blacklake/labor-summary'
+    assert client.get(path,params={'project_ids':'1,2','source_run_id':'live:'+'a'*32}).status_code==200
+    assert calls[-1].url.params['project_ids']=='1,2'
+    for params in ({'project_ids':'1','source_run_id':'OTHER'}, {'project_ids':'-1','source_run_id':'live:'+'a'*32},
+                   {'project_ids':'1','source_run_id':'live:'+'a'*32,'tenant_id':'OTHER'}):
+        assert client.get(path,params=params).status_code==400
+    assert client.post(path,json={},headers={'Origin':ORIGIN}).status_code==403
+    assert len(calls)==1
+
+
 def test_browser_auth_is_discarded_and_only_fixed_local_analytical_upstream_is_used(preview):
     client, calls = preview
     response = client.get('/smartbi-api/api/smartbi/blacklake/complete-cost-analysis',

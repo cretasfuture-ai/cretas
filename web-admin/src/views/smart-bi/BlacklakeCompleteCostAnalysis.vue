@@ -59,8 +59,8 @@ const productDifference=computed(()=>activeProduct.value?productCostDifference(a
 const selectedUnitCosts=computed(()=>selected.value?orderUnitCosts(selected.value):null);
 const dataFirstCount=computed(()=>productReviews.value.filter(g=>productReviewPriority(g)==='data_quality').length);
 const costReviewCount=computed(()=>productReviews.value.filter(g=>productReviewPriority(g)==='business_signal').length);
-const productLabor=computed(()=>blacklakeLaborInput(activeProduct.value?.orders||[]));
-const selectedLabor=computed(()=>blacklakeLaborInput(selected.value?[selected.value]:[]));
+const productLabor=computed(()=>blacklakeLaborInput(activeProduct.value?.orders||[],report.value?.sourceRunId));
+const selectedLabor=computed(()=>blacklakeLaborInput(selected.value?[selected.value]:[],report.value?.sourceRunId));
 const productOrders=computed(()=>activeProduct.value?.orders||[]);
 const visibleOrders=computed(()=>productOrders.value.slice((orderPage.value-1)*pageSize.value,orderPage.value*pageSize.value));
 watch(selectedProductKey,()=>{orderPage.value=1;selected.value=null;chatFact.value=null;answer.value='';});

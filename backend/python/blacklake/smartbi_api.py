@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 from typing import Literal
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel, Field, ConfigDict
 
 from blacklake.smartbi_store import read, settings
@@ -84,6 +84,33 @@ async def complete_cost_analysis(request:Request):
         if result is None:raise ValueError('NOT_CONFIGURED')
     except Exception:raise HTTPException(503,'逐条成本分析尚未就绪或与当前工厂不一致') from None
     return {'success':True,'data':result,'message':'当前可核算工单；数值与规则取同一份已保存数据，历史补查另列范围'}
+
+
+@router.get('/labor-summary')
+async def labor_summary(request:Request,project_ids:str=Query(...,pattern=r'^\d+(,\d+)*$',max_length=20000),source_run_id:str=Query(...,pattern=r'^live:[a-f0-9]{32}$')):
+    path=os.environ.get('BLACKLAKE_SMARTBI_CONFIG')
+    if not path:raise HTTPException(404,'测试数据尚未启用')
+    configured=settings(path);authorize(request,configured);await cost_authority(request,configured)
+    ids=project_ids.split(',')
+    if len(ids)>1000 or len(set(ids))!=len(ids):raise HTTPException(422,'工单选择无效')
+    def aggregate():
+        from . import live_monitor
+        from .labor_evidence import summary
+        v=live_monitor.config(os.environ['BLACKLAKE_LIVE_CONFIG'])
+        if (v['tenant_id'],str(v['source_factory_id']),v['baselineRunId'])!=(configured['tenant_id'],str(configured['source_factory_id']),configured['run_id']):raise ValueError('LABOR_SCOPE')
+        db=live_monitor.connect(v['db'])
+        try:row=db.execute("SELECT id FROM cycle WHERE status='success' AND substr(hash,1,32)=? ORDER BY finished DESC LIMIT 1",(source_run_id[5:],)).fetchone()
+        finally:db.close()
+        if row is None:raise ValueError('LABOR_SNAPSHOT')
+        analysis=read(configured,live_cycle_id=row[0])
+        if analysis['runId']!=source_run_id:raise ValueError('LABOR_SNAPSHOT')
+        orders=[p for p in analysis['cost']['projects'] if str(p['projectId']) in set(ids)]
+        if len(orders)!=len(ids):raise ValueError('LABOR_ORDER_SCOPE')
+        return summary(orders)
+    import asyncio
+    try:result=await asyncio.to_thread(aggregate)
+    except Exception:raise HTTPException(409,'人工资料与所选工单范围未能核对，请等待自动更新') from None
+    return {'success':True,'data':result,'message':'只返回所选工单的登记人数和测算值，不返回人员身份'}
 
 
 class CompleteCostFollowup(BaseModel):

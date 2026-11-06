@@ -80,9 +80,30 @@ def evidence(data):
             and sum(seconds,Decimal(0))==effective)
         if not duration_ok:issues.append('有效时长与报工时段或任务累计数未对齐')
         result[str(task['id'])]={'registeredWorkerKeys':keys,'registeredCoverageComplete':bool(coverage),
+            'registeredCount':len(keys),
             'registeredReports':len(rows),'sourceEffectiveHours':float(effective/3600) if duration_ok else None,
             'zeroTimeReports':sum(number(r.get('effectiveTime'))==0 for r in rows),
             'overlapReports':sum(str(r['id']) in overlapping for r in rows),
             'rosterComplete':False,'personHours':None,'issues':issues,
             'source':'blacklake_output_productionStaffId','basis':'registered_staff_not_confirmed_shift_roster'}
     return result
+
+
+def summary(orders):
+    """Exact selected-order aggregation; no person identifiers leave this DTO."""
+    keys=set();groups=defaultdict(set);total=Decimal(0);complete=bool(orders)
+    for order in orders:
+        wage=number(order.get('laborCost'));details=Decimal(0)
+        if wage is None:complete=False
+        else:total+=wage
+        for row in order['processes']:
+            e=row.get('laborEvidence',{});amount=number(row.get('laborCost'))
+            if amount is None:complete=False
+            else:details+=amount
+            complete=complete and e.get('registeredCoverageComplete') is True
+            keys.update(e.get('registeredWorkerKeys',[]));groups[row['process']].update(e.get('registeredWorkerKeys',[]))
+        if wage is not None and abs(details-wage)>=Decimal('.005'):complete=False
+    return {'total':float(total) if complete else None,'participants':len(keys) or None,'complete':complete,
+        'perRegisteredPerson':float(total/len(keys)) if complete and keys else None,
+        'processes':[{'process':name,'participants':len(ids)} for name,ids in groups.items()],
+        'actualRosterConfirmed':False,'personHours':None}

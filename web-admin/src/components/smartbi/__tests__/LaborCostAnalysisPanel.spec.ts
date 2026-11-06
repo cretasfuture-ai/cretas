@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
-import { mount } from '@vue/test-utils';
-import { expect,it } from 'vitest';
+import { mount,flushPromises } from '@vue/test-utils';
+import { expect,it,vi } from 'vitest';
+vi.mock('@/api/smartbi/blacklake',()=>({getBlacklakeLaborSummary:vi.fn()}));
+import {getBlacklakeLaborSummary} from '@/api/smartbi/blacklake';
 import {computed,defineComponent,h,provide,inject,type Ref} from 'vue';
 import Component from '../LaborCostAnalysisPanel.vue';
 import type { LaborCostInput } from '@/utils/laborCostAnalysis';
@@ -21,6 +23,16 @@ it('explains the recovered registered basis without presenting it as actual head
   expect(page.text()).toContain('每段实际参与人数');
   expect(page.text()).toContain('班组长代报');
   expect(page.find('select').exists()).toBe(false);
+});
+it('uses a private server aggregation when the public response contains no person identifiers',async()=>{
+  const input=base();input.blacklakeOrderIds=[1];input.sourceRunId='live:'+'a'.repeat(32);
+  input.rows=input.rows.map(row=>({...row,personHours:null,registeredWorkerKeys:undefined,registeredCoverageComplete:true,registeredReports:1,sourceEffectiveHours:1}));
+  vi.mocked(getBlacklakeLaborSummary).mockResolvedValue({total:100,participants:2,complete:true,perRegisteredPerson:50,processes:[{process:'加工',participants:2},{process:'包装',participants:1}],actualRosterConfirmed:false,personHours:null});
+  const page=render(input);await flushPromises();
+  expect(page.text()).toContain('按登记人员测算人均：50.00');
+  expect(page.text()).toContain('2 名登记生产人员');
+  expect(page.find('select').exists()).toBe(false);
+  expect(getBlacklakeLaborSummary).toHaveBeenCalledWith([1],input.sourceRunId);page.unmount();
 });
 it('labels the person-hour allocation as a read-only comparison and resets it on scope change',async()=>{
   const page=render(base());expect(page.find('select').exists()).toBe(true);

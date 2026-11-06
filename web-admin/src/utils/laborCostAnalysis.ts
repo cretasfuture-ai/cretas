@@ -23,6 +23,7 @@ export interface LaborCostInput {
   output: number | null;
   unit: string | null;
   requests?:LaborDataRequest[];
+  blacklakeOrderIds?:number[];sourceRunId?:string;
 }
 const finite=(v:number|null|undefined):v is number=>typeof v==='number'&&Number.isFinite(v);
 const sum=(values:(number|null|undefined)[])=>{if(!values.length||!values.every(finite))return null;const result=values.reduce<number>((a,b)=>a+(b as number),0);return Number.isFinite(result)?result:null;};

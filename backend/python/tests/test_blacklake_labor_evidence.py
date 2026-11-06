@@ -1,6 +1,6 @@
 from copy import deepcopy
 import pytest
-from blacklake.labor_evidence import evidence,person_key
+from blacklake.labor_evidence import evidence,person_key,summary
 
 
 def data():
@@ -54,3 +54,28 @@ def test_zero_wages_without_reports_are_neutral_but_unknown_wages_do_not_become_
     assert evidence(value)['1']['registeredCoverageComplete'] is True
     value['task'][0]['sumOutputSalary']=None
     assert evidence(value)['1']['registeredCoverageComplete'] is False
+
+
+def test_numeric_summary_deduplicates_privately_and_never_contains_person_ids():
+    e=evidence(data())['1']
+    orders=[{'laborCost':100,'processes':[{'process':'包装','laborCost':100,'laborEvidence':e}]}]*2
+    result=summary(orders)
+    assert result['participants']==1 and result['perRegisteredPerson']==200
+    assert result['processes']==[{'process':'包装','participants':1}]
+    assert 'worker:' not in str(result) and 'registeredWorkerKeys' not in str(result)
+    assert result['actualRosterConfirmed'] is False and result['personHours'] is None
+
+
+@pytest.mark.asyncio
+async def test_summary_cost_authority_is_checked_before_loading_selected_snapshot(monkeypatch):
+    from blacklake import smartbi_api as api
+    from fastapi import HTTPException
+    from unittest.mock import AsyncMock,Mock
+    monkeypatch.setenv('BLACKLAKE_SMARTBI_CONFIG','synthetic')
+    monkeypatch.setattr(api,'settings',lambda _: {'tenant_id':'T','source_factory_id':'F'})
+    monkeypatch.setattr(api,'authorize',lambda *args:None)
+    denied=AsyncMock(side_effect=HTTPException(403,'denied'))
+    monkeypatch.setattr(api,'cost_authority',denied)
+    reader=Mock(side_effect=AssertionError('must authorize first'));monkeypatch.setattr(api,'read',reader)
+    with pytest.raises(HTTPException) as error:await api.labor_summary(object(),'1','live:'+'a'*32)
+    assert error.value.status_code==403;reader.assert_not_called()

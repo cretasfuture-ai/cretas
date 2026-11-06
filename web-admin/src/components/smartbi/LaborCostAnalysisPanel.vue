@@ -1,10 +1,33 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, onBeforeUnmount } from 'vue';
+import {getBlacklakeLaborSummary,type BlacklakeLaborSummary} from '@/api/smartbi/blacklake';
+import type {PythonServiceError} from '@/api/smartbi/common';
 import { analyzeLaborCosts, type LaborCostInput } from '@/utils/laborCostAnalysis';
 import CostDataTable from './CostDataTable.vue';
 import type {CostTableColumn} from '@/utils/costTableQuery';
 const props=defineProps<{input:LaborCostInput;scopeLabel:string}>();
-const model=computed(()=>analyzeLaborCosts(props.input));
+const registered=ref<BlacklakeLaborSummary|null>(null),summaryError=ref('');
+let generation=0,retryTimer:number|undefined;
+watch(()=>`${props.input.sourceRunId||''}:${props.input.blacklakeOrderIds?.join(',')||''}`,()=>{
+  const current=++generation;registered.value=null;summaryError.value='';if(retryTimer!==undefined)window.clearTimeout(retryTimer);
+  const ids=props.input.blacklakeOrderIds,run=props.input.sourceRunId;
+  if(!ids?.length||!run?.startsWith('live:'))return;
+  const load=async()=>{
+    try{const value=await getBlacklakeLaborSummary(ids,run);if(current===generation){registered.value=value;summaryError.value='';}}
+    catch(error){if(current!==generation)return;summaryError.value='登记人数核对暂未完成，稍后自动重试。';
+      if(error instanceof Error&&[401,403,404].includes((error as PythonServiceError).status||0))return;
+      retryTimer=window.setTimeout(()=>{void load();},5000);}
+  };void load();
+},{immediate:true});
+onBeforeUnmount(()=>{generation++;if(retryTimer!==undefined)window.clearTimeout(retryTimer);});
+const model=computed(()=>{
+  const value=analyzeLaborCosts(props.input),summary=registered.value;
+  if(!summary)return value;
+  const aligned=summary.total!==null&&value.total!==null&&Math.abs(summary.total-value.total)<0.005;
+  return {...value,registeredParticipants:summary.participants,registeredCoverage:summary.complete&&aligned,
+    registeredPerPerson:summary.complete&&aligned?summary.perRegisteredPerson:null,
+    rows:value.rows.map(row=>({...row,registeredCount:summary.processes.find(p=>p.process===row.process)?.participants??null}))};
+});
 const mode=ref('recorded');
 watch(()=>props.input,()=>{mode.value='recorded';});
 const fmt=(value:number|null|undefined)=>value==null?'待补资料':value.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -28,7 +51,7 @@ const columns=computed<CostTableColumn<LaborRow>[]>(()=>[
   {key:'personHours',label:'有效人时',type:'number'},
   ...(model.value.sourceAvailable?[
     {key:'sourceEffectiveHours',label:'报工有效时长',type:'number' as const,suffix:' 小时'},
-    {key:'registeredPeople',label:'登记人数',type:'number' as const,value:(row:LaborRow)=>row.registeredWorkerKeys?.length??null},
+    {key:'registeredPeople',label:'登记人数',type:'number' as const,value:(row:LaborRow)=>'registeredCount' in row?row.registeredCount:row.registeredWorkerKeys?.length??null},
   ]:[]),
   ...(mode.value==='recorded'&&model.value.rows.some(r=>r.segmentPerPerson!=null)?[{key:'segmentPerPerson',label:'本时段人均费用',type:'number' as const}]:[]),
 ]);
@@ -39,6 +62,7 @@ const columns=computed<CostTableColumn<LaborRow>[]>(()=>[
     <div class="labor-metrics"><div v-for="metric in metrics" :key="metric.label"><span>{{metric.label}}</span><strong>{{fmt(metric.value)}}</strong><small v-if="metric.value===null">{{metric.hint}}</small></div></div>
     <div v-if="model.sourceAvailable" class="source-evidence">
       <b>黑湖已补到的记录</b>
+      <p v-if="summaryError" class="warning">{{summaryError}}</p>
       <p>{{model.registeredReports}} 条报工，{{model.registeredParticipants??'尚未核实'}} 名登记生产人员；{{model.sourceEffectiveHours===null?'有效时长待核对':`累计报工有效时长 ${fmt(model.sourceEffectiveHours)} 小时`}}。</p>
       <p v-if="model.registeredPerPerson!==null"><b>按登记人员测算人均：{{fmt(model.registeredPerPerson)}}</b>。如由班组长代报，实际人均会不同，需先确认班组名单。</p>
       <p v-else>工资与登记人员的对应关系还未核对完整，暂不能测算登记口径的人均。</p>

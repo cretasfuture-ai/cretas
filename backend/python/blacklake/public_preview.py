@@ -22,7 +22,7 @@ from .period_contract import PeriodSelection
 TENANT = 'BLACKLAKE_POC_TEST'
 UPSTREAM = 'http://127.0.0.1:8095'
 PREFIX = '/smartbi-api/api/smartbi/blacklake/'
-GET_ROUTES = {'analysis', 'complete-cost-analysis', 'cost-traceability', 'period-reports', 'period-schedule', 'live-monitor'}
+GET_ROUTES = {'analysis', 'complete-cost-analysis', 'cost-traceability', 'period-reports', 'period-schedule', 'live-monitor', 'labor-summary'}
 POST_ROUTES = {'sections/followup', 'complete-cost-analysis/followup', 'period-reports'}
 QUERY_KEYS = {'start_date', 'end_date', 'basis', 'kind', 'mode'}
 SECRET_KEYS = {'accesstoken', 'refreshtoken', 'token', 'password', 'jwtsecret', 'apikey', 'authorization',
@@ -171,6 +171,11 @@ def create_app(dist: Path, origin: str, broker=None, transport=None):
         summary_query=request.method=='GET' and resource=='period-reports'
         live_query=request.method=='GET' and resource=='live-monitor'
         allowed_query=({'history_offset'} if live_query else QUERY_KEYS)|({'summaries_only'} if summary_query else set())
+        if resource=='labor-summary':
+            allowed_query={'project_ids','source_run_id'}
+            for name,pattern in (('project_ids',r'\d+(,\d+){0,999}'),('source_run_id',r'live:[a-f0-9]{32}')):
+                values=request.query_params.getlist(name)
+                if len(values)!=1 or len(values[0])>20000 or not re.fullmatch(pattern,values[0]):return failure('人工统计范围无效',400)
         if 'history_offset' in request.query_params:
             offsets=request.query_params.getlist('history_offset')
             if not live_query or len(offsets)!=1 or not re.fullmatch(r'\d{1,7}',offsets[0]) or int(offsets[0])>1000000:
