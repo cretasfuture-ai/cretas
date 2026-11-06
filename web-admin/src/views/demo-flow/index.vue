@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/store/modules/auth'
 import request from '@/api/request'
+import { createPresentationCountdown, PRESENTATION_HOLD_SECONDS, presentationEnabled, presentationRoute, installPresentationReadTracking } from '@/demo/f006Presentation'
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue'
 import { PURCHASE_ORDER_CONFIG, SALES_ORDER_CONFIG } from '@/components/ai-entry/types'
 import { DEMO_STEPS, assertF006Session, createDemoState, executeStep, initializeDemo, prepareStep, type DemoField, type DemoState } from '@/demo/f006Flow'
 import { beginSandbox, requireSandboxReady, sandboxSession, SANDBOX_FLOW_STORAGE_KEY } from '@/demo/f006Sandbox'
 
+const props = defineProps<{ compact?: boolean; refreshBusinessPage?: () => void }>()
 const router = useRouter()
 const authStore = useAuthStore()
 const state = ref<DemoState>(createDemoState())
@@ -26,7 +28,38 @@ const aiDrawerVisible = ref(false)
 const aiFilling = ref(false)
 const enteringSandbox = ref(false)
 const sandboxError = ref('')
-let autoplayTimer: ReturnType<typeof setTimeout> | undefined
+const holdSeconds = ref(10)
+const remainingSeconds = ref(0)
+const showingResult = ref(false)
+const navigating = ref(false)
+const pendingReads = ref(0)
+const loadingBusinessPage = ref(false)
+let navigationGeneration = 0
+let expectedBusinessLocation = ''
+let readFailed = false
+const presentationError = ref('')
+let lastNetworkActivity = 0
+const currentRoutePath = computed(() => router.currentRoute?.value.fullPath || router.currentRoute?.value.path || '/demo-flow')
+const pageIsLoading = () => pendingReads.value > 0 || Array.from(document.querySelectorAll('.app-content .el-loading-mask')).some(mask => (mask as HTMLElement).offsetParent !== null)
+const countdown = createPresentationCountdown({
+  canTick: () => active.value && autoplay.value && !paused.value && !running.value && !navigating.value && !document.hidden && !pageIsLoading() && Date.now() - lastNetworkActivity >= 500,
+  onTick: value => { remainingSeconds.value = value },
+  onElapsed: async () => {
+    if (!active.value || !autoplay.value || paused.value) return
+    if (showingResult.value) { if (isComplete.value) { stopPlayback(); return }; await nextStep(); scheduleAutoplay() }
+    else await executeCurrent()
+  },
+  onError: error => { stopPlayback(); addLog(error instanceof Error ? error.message : '讲解播放失败', 'error') },
+})
+const removeReadTracking: () => void = request.interceptors ? installPresentationReadTracking(request, {
+  isActive: () => active.value && sandboxSession.value?.status === 'READY',
+  onStart: () => { pendingReads.value++; lastNetworkActivity = Date.now() },
+  onFailure: handleReadFailure,
+  onFinish: failed => {
+    pendingReads.value--; lastNetworkActivity = Date.now()
+    if (failed) handleReadFailure()
+  },
+}) : () => {}
 const DEMO_SKU_ID = '2a6f37c4-b0e1-55ae-b31a-ddc6815829cd'
 const SESSION_KEY = SANDBOX_FLOW_STORAGE_KEY
 // The authenticated route owns the role restriction; the page checks the tenant.
@@ -56,9 +89,38 @@ const detailRoute = computed(() => {
 
 function addLog(text: string, kind: 'info' | 'success' | 'error' = 'info') { logs.value.unshift({ time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), text, kind }) }
 function fillStep() { form.value = Object.fromEntries(currentFields.value.map(field => [field.name, field.value ?? ''])) }
-function stopPlayback() { autoplay.value = false; paused.value = false; if (autoplayTimer) { clearTimeout(autoplayTimer); autoplayTimer = undefined } }
-function pausePlayback() { paused.value = true; if (autoplayTimer) clearTimeout(autoplayTimer) }
-function scheduleAutoplay() { if (active.value && autoplay.value && !paused.value) autoplayTimer = setTimeout(() => void executeCurrent(), 1400) }
+function handleReadFailure() {
+  if (!active.value) return
+  stopPlayback(); presentationError.value = '业务页读取失败，连续演示已停止。请检查页面后再继续。'
+  if (!readFailed) addLog(presentationError.value, 'error')
+  readFailed = true
+}
+function stopPlayback() { autoplay.value = false; paused.value = false; countdown.cancel(); remainingSeconds.value = 0 }
+function pausePlayback() { paused.value = true; countdown.cancel(); remainingSeconds.value = 0 }
+function scheduleAutoplay() { if (active.value && autoplay.value && !paused.value) countdown.start(holdSeconds.value) }
+function businessRoute() { return presentationRoute(currentStep.value?.id || '', state.value.entities) }
+async function showBusinessPage() {
+  if (!presentationEnabled.value) return
+  const generation = ++navigationGeneration
+  navigating.value = true; loadingBusinessPage.value = true; countdown.cancel()
+  try {
+    const target = businessRoute()
+    expectedBusinessLocation = router.resolve?.(target).fullPath || target
+    await router.push(target)
+    props.refreshBusinessPage?.()
+    await nextTick()
+    // Read tracking includes deferred view requests. Loading time never consumes a presentation hold.
+    await new Promise(resolve => setTimeout(resolve, 500))
+    const deadline = Date.now() + 90000
+    while (active.value && generation === navigationGeneration && (pageIsLoading() || Date.now() - lastNetworkActivity < 500)) {
+      if (Date.now() >= deadline) throw new Error('业务页加载较慢，演示已暂停；请确认页面后再继续')
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  } finally { if (generation === navigationGeneration) { navigating.value = false; loadingBusinessPage.value = false; expectedBusinessLocation = '' } }
+}
+function onVisibilityChange() { if (document.hidden && autoplay.value) { pausePlayback(); addLog('窗口已切到后台，演示暂停；返回后请手动继续') } }
+watch(currentRoutePath, location => { if (autoplay.value && !(navigating.value && location === expectedBusinessLocation)) { pausePlayback(); addLog('已手动切换菜单，演示暂停') } })
+watch(holdSeconds, () => { if (autoplay.value && !paused.value) scheduleAutoplay() })
 function persistState() { try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(state.value)) } catch { /* sessionStorage is optional */ } }
 function restoreState() { try { const raw = sessionStorage.getItem(SESSION_KEY); if (!raw) return; const saved = JSON.parse(raw) as DemoState; if (saved.schemaVersion === 2 && saved.sandboxSessionId === sandboxSession.value?.sessionId && saved.factoryId === 'F006' && saved.runKey?.startsWith('DEMO-F006-FLOW-20261105')) { state.value = saved; currentIndex.value = Math.min(saved.currentStep, DEMO_STEPS.length - 1) } else sessionStorage.removeItem(SESSION_KEY) } catch { sessionStorage.removeItem(SESSION_KEY) } }
 function uniqueOptionId(field: string, name: unknown): string | undefined { const value = String(name || '').trim(); if (!value) return undefined; const options = optionMap.value[field] || []; const hits = options.filter(option => option.name === value || option.name.includes(value) || value.includes(option.name)); return hits.length === 1 ? hits[0].id : undefined }
@@ -125,7 +187,7 @@ async function loadBootstrapOptions() {
 
 async function executeCurrent() {
   if (!active.value || !demoInitialized.value || !currentStep.value || running.value || state.value.currentStep !== currentIndex.value) return
-  running.value = true; paused.value = false; addLog(`执行：${currentStep.value.label}`)
+  running.value = true; countdown.cancel(); addLog(`执行：${currentStep.value.label}`)
   try {
     requireSandboxReady()
     assertF006Session({ factoryId: authStore.factoryId })
@@ -135,30 +197,52 @@ async function executeCurrent() {
     persistState()
     lastResult.value = state.value.readbacks[currentStep.value.entity] || state.value.entities[currentStep.value.entity] || null
     addLog(`完成：${currentStep.value.label}；已回读真实单据/库存`, 'success')
-    if (autoplay.value && currentIndex.value < DEMO_STEPS.length - 1) { currentIndex.value += 1; fillStep(); addLog('下一步字段已预填，1.4 秒后继续；可立即暂停'); scheduleAutoplay() }
+    showingResult.value = true
+    await showBusinessPage()
+    addLog('已打开对应业务菜单；请展示本轮单据、状态和结果')
+    scheduleAutoplay()
   } catch (error) {
     stopPlayback(); const message = error instanceof Error ? error.message : '执行失败'; addLog(message, 'error'); ElMessage.error(message)
   } finally { running.value = false }
 }
-function nextStep() {
-  if (currentIndex.value >= DEMO_STEPS.length - 1 || state.value.currentStep !== currentIndex.value + 1) return
-  currentIndex.value += 1; fillStep(); lastResult.value = null; addLog(`已切换到：${currentStep.value.label}`)
+async function nextStep() {
+  if (running.value || navigating.value || currentIndex.value >= DEMO_STEPS.length - 1 || state.value.currentStep !== currentIndex.value + 1) return
+  countdown.cancel(); currentIndex.value += 1; fillStep(); lastResult.value = null; showingResult.value = false
+  addLog(`已切换到：${currentStep.value.label}；字段已预填，等待确认`)
+  try { await showBusinessPage() } catch (error) { stopPlayback(); addLog(error instanceof Error ? error.message : '业务页打开失败', 'error') }
 }
-function startAutoplay() { if (!demoInitialized.value || running.value || state.value.currentStep !== currentIndex.value) return; autoplay.value = true; paused.value = false; void executeCurrent() }
-function continueAutoplay() { paused.value = false; void executeCurrent() }
-onMounted(() => { active.value = true; if (sandboxSession.value?.status !== 'READY') return; restoreState(); void initializeDemoDefaults().then(() => { fillStep(); void loadBootstrapOptions() }).catch(error => { addLog(error instanceof Error ? error.message : '演示资料加载失败', 'error'); ElMessage.error('演示资料加载失败，已停止') }); addLog(`已加载 ${DEMO_STEPS.length} 个真实业务步骤`) })
-onActivated(() => { active.value = true; autoplay.value = false; paused.value = false; if (autoplayTimer) { clearTimeout(autoplayTimer); autoplayTimer = undefined }; restoreState(); currentIndex.value = Math.min(state.value.currentStep, DEMO_STEPS.length - 1); fillStep(); lastResult.value = currentStep.value ? state.value.readbacks[currentStep.value.entity] || state.value.entities[currentStep.value.entity] || null : null })
+async function startAutoplay() {
+  if (!demoInitialized.value || running.value || navigating.value || isComplete.value) return
+  const retryRead = readFailed; readFailed = false; presentationError.value = ''; autoplay.value = true; paused.value = false
+  addLog('连续讲解已开始；填写内容与执行结果分别完整停留，随时可暂停')
+  try { if (retryRead) await showBusinessPage(); if (!readFailed) scheduleAutoplay() } catch (error) { handleReadFailure() }
+}
+async function continueAutoplay() {
+  if (running.value || navigating.value) return
+  readFailed = false; presentationError.value = ''; paused.value = false
+  try { await showBusinessPage(); if (!readFailed) scheduleAutoplay() } catch (error) { handleReadFailure() }
+}
+onMounted(() => { active.value = true; document.addEventListener('visibilitychange', onVisibilityChange); if (sandboxSession.value?.status === 'READY') presentationEnabled.value = true; if (sandboxSession.value?.status !== 'READY') return; restoreState(); void initializeDemoDefaults().then(() => { fillStep(); void loadBootstrapOptions() }).catch(error => { addLog(error instanceof Error ? error.message : '演示资料加载失败', 'error'); ElMessage.error('演示资料加载失败，已停止') }); addLog(`已加载 ${DEMO_STEPS.length} 个真实业务步骤`) })
+onActivated(() => { active.value = true; autoplay.value = false; paused.value = false; countdown.cancel(); restoreState(); currentIndex.value = Math.min(state.value.currentStep, DEMO_STEPS.length - 1); fillStep(); lastResult.value = currentStep.value ? state.value.readbacks[currentStep.value.entity] || state.value.entities[currentStep.value.entity] || null : null })
 onDeactivated(() => { active.value = false; stopPlayback() })
-onBeforeUnmount(() => { active.value = false; stopPlayback(); aiDrawerVisible.value = false })
+onBeforeUnmount(() => { active.value = false; navigationGeneration++; stopPlayback(); aiDrawerVisible.value = false; document.removeEventListener('visibilitychange', onVisibilityChange); removeReadTracking() })
 defineExpose({ handleAiFill, form, executeCurrent })
 </script>
 
 <template>
-  <main v-if="isF006Admin" class="demo-flow-page">
+  <main v-if="isF006Admin" class="demo-flow-page" :class="{ compact: props.compact }" data-testid="demo-guide">
     <section class="hero"><div><div class="eyebrow"><span class="live-dot" /> F006 · 现场演示控制台</div><h1>从采购到反向追溯</h1><p>逐步展示采购、仓库、生产、报工和销售联动；完成后可继续查看溯源和成本。</p></div><el-tag type="warning" effect="dark">{{ sandboxSession ? '隔离沙盒 · 本轮可清空' : '可重复演示' }}</el-tag></section>
     <el-card v-if="!sandboxSession" shadow="never" class="sandbox-start"><h2>准备一轮全流程演示</h2><p>演示使用独立数据。点击全局“结束演示并清空”后，本轮新增单据、库存变化和凭证会一起清理，历史演示样例保留。</p><el-alert v-if="sandboxError" :title="sandboxError" type="error" :closable="false" /><el-button type="primary" :loading="enteringSandbox" @click="enterSandbox">进入隔离演示</el-button></el-card>
     <section v-if="!sandboxSession" class="quick-links"><div class="quick-title">历史演示样例</div><el-button plain @click="router.push('/quality/label-qc')">图片质检</el-button><el-button plain @click="router.push('/smart-bi/dashboard')">SmartBI 分析</el-button><el-button plain @click="router.push('/production/traceability?batchNumber=DEMO-20261105-PB-022')">历史全链追溯</el-button></section>
     <template v-else>
+    <section class="presentation-controls" aria-label="演示讲解控制">
+      <strong>菜单逐步讲解 · 默认手动</strong>
+      <el-alert v-if="presentationError" :title="presentationError" type="error" :closable="false" />
+      <div><span>每段停留</span><el-select v-model="holdSeconds" aria-label="每段讲解停留时间" :disabled="running || navigating" style="width:110px"><el-option v-for="seconds in PRESENTATION_HOLD_SECONDS" :key="seconds" :value="seconds" :label="`${seconds} 秒`" /></el-select></div>
+      <p v-if="loadingBusinessPage">正在打开业务菜单并加载本轮数据，加载时间不计入讲解停留。</p>
+      <p v-else-if="autoplay && !paused" data-testid="demo-countdown" aria-live="polite">{{ showingResult ? '执行结果展示' : '预填内容展示' }}：还剩 {{ remainingSeconds }} 秒。{{ showingResult ? '之后展示下一步填写内容' : '之后执行当前步骤' }}。</p>
+      <p v-else>每步执行后停在实际业务页。讲解完毕再点“下一步”；连续模式也可随时暂停。</p>
+    </section>
     <section class="stepper-card"><div class="phase-stepper"><div v-for="(phase, index) in phases" :key="phase.label" class="phase-item" :class="{ active: index === phaseIndex, done: index < phaseIndex }"><span>{{ index + 1 }}</span><strong>{{ phase.label }}</strong></div></div><el-progress :percentage="progress" :show-text="false" status="success" /><div class="progress-caption">第 {{ currentIndex + 1 }} / {{ DEMO_STEPS.length }} 步 · 当前阶段：{{ currentPhase.label }} · {{ currentStep.label }}</div></section>
     <section v-if="currentStep" class="work-grid">
       <el-card shadow="never" class="form-card">
@@ -167,7 +251,7 @@ defineExpose({ handleAiFill, form, executeCurrent })
         <div v-if="currentStep.id === 'purchase-create' && state.context?.packaging" class="packaging-line"><strong>同时采购包材</strong><span>{{ state.context.packaging.name }} · {{ state.context.finishedQuantity }}{{ state.context.packaging.unit }} · 单价 {{ state.context.packaging.unitPrice }}</span></div>
         <div v-if="currentStep.id === 'purchase-receive'" class="receipt-proof"><span class="proof-icon">▣</span><div><strong>收货凭证</strong><small>本步骤将生成 DEMO 示意凭证并关联收货单，执行后显示缩略图。</small></div></div>
          <el-form label-position="top" class="demo-form"><el-form-item v-for="field in currentFields" :key="field.name" :label="field.label"><el-select v-if="optionMap[field.name]" v-model="form[field.name]" :disabled="running" class="field-control"><el-option v-for="option in optionMap[field.name]" :key="option.id" :label="option.name" :value="option.id" /></el-select><el-input v-else-if="/Id$|Ids$/.test(field.name) && form[field.name]" :model-value="'系统自动带入'" disabled class="field-control" /><el-input v-else v-model="form[field.name]" :disabled="running" :placeholder="field.required ? '必填' : '请选择或填写'" class="field-control" /></el-form-item></el-form>
-         <div class="controls"><el-button v-if="currentStep.id === 'purchase-create' || currentStep.id === 'sales-order-create'" plain type="info" :disabled="running || aiFilling" @click="aiDrawerVisible = true">AI 帮我填写</el-button><el-button type="primary" :loading="running" :disabled="!demoInitialized || isComplete" @click="executeCurrent">{{ isApprovalStep ? '执行演示审批' : '执行当前步骤' }}</el-button><el-button :disabled="running || currentIndex >= DEMO_STEPS.length - 1 || state.currentStep !== currentIndex + 1" @click="nextStep">下一步</el-button><el-button v-if="!autoplay" type="success" plain :disabled="running || !demoInitialized || isComplete || state.currentStep !== currentIndex" @click="startAutoplay">连续演示</el-button><el-button v-else type="warning" plain :disabled="false" @click="paused ? continueAutoplay() : pausePlayback()">{{ paused ? '继续演示' : '暂停演示' }}</el-button><span v-if="isComplete" class="pause-hint">本轮已完成，可继续查看溯源与成本；点击顶部“结束演示并清空”后再开始下一轮。</span></div>
+         <div class="controls"><el-button v-if="currentStep.id === 'purchase-create' || currentStep.id === 'sales-order-create'" plain type="info" :disabled="running || aiFilling" @click="aiDrawerVisible = true">AI 帮我填写</el-button><el-button type="primary" :loading="running" :disabled="!demoInitialized || isComplete || navigating || (autoplay && !paused) || state.currentStep !== currentIndex" @click="executeCurrent">{{ isApprovalStep ? '执行演示审批' : '执行当前步骤' }}</el-button><el-button :disabled="running || navigating || (autoplay && !paused) || currentIndex >= DEMO_STEPS.length - 1 || state.currentStep !== currentIndex + 1" @click="nextStep">下一步</el-button><el-button v-if="!autoplay" type="success" plain :disabled="running || navigating || !demoInitialized || isComplete" @click="startAutoplay">连续演示</el-button><el-button v-else type="warning" plain :disabled="paused && (running || navigating)" @click="paused ? continueAutoplay() : pausePlayback()">{{ paused ? '继续演示' : '暂停演示' }}</el-button><span v-if="isComplete" class="pause-hint">本轮已完成，可继续查看溯源与成本；点击顶部“结束演示并清空”后再开始下一轮。</span></div>
         <div v-if="autoplay && paused" class="pause-hint">已暂停：字段已预填，可先向观众解释，再继续执行。</div>
       </el-card>
       <el-card shadow="never" class="result-card"><template #header><div class="card-heading"><span>真实结果回读</span><el-tag v-if="lastResult" type="success">已成功</el-tag></div></template><div v-if="safeResult.length" class="result-grid"><div v-for="item in safeResult" :key="item.label"><small>{{ item.label }}</small><strong>{{ item.value }}</strong></div></div><el-empty v-else description="执行后显示真实单号、数量、成本与库存回读" :image-size="80" /><el-button v-if="lastResult && detailRoute" text type="primary" @click="router.push(detailRoute)">打开对应业务页 →</el-button></el-card>
