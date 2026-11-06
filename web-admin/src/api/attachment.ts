@@ -5,6 +5,7 @@
  * Base: /api/mobile/{factoryId}/attachments (request baseURL='/api/mobile')
  */
 import request from './request';
+import { requireSandboxReady, sandboxSession } from '@/demo/f006Sandbox';
 
 /** 关联实体类型 — 后端 Attachment.EntityType 枚举完整复刻 (18 值). */
 export type AttachmentEntityType =
@@ -281,6 +282,17 @@ export async function putFileWithProgress(
   requiredHeaders: Record<string, string> = {},
 ): Promise<void> {
   const headers = { 'Content-Type': file.type, ...requiredHeaders };
+  if (sandboxSession.value) {
+    requireSandboxReady();
+    if (!/^\/F006\/demo-sandbox-local-files\/[A-Za-z0-9_-]+$/.test(uploadUrl)) {
+      throw new Error('隔离演示文件必须上传至当前沙盒文件目录');
+    }
+    await request.put(uploadUrl, file, { headers, onUploadProgress: (event) => {
+      if (event.total && event.total > 0) onProgress?.(Math.round(event.loaded * 100 / event.total));
+    } });
+    onProgress?.(100);
+    return;
+  }
   if (typeof XMLHttpRequest === 'undefined') {
     const response = await fetch(uploadUrl, {
       method: 'PUT', headers, body: file,

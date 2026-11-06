@@ -11,6 +11,8 @@ import { handleCatchError } from '@/utils/errorToast';
 import { emptyCell } from '@/utils/tableFormatters';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
+import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -159,6 +161,25 @@ async function submitConfirmDelivery() {
     confirmDialogLoading.value = false;
   }
 }
+
+useNativeDemoAdapters('warehouse-shipments-list', [
+  commerceAdapter('sales-warehouse-confirm', () => canWrite.value, async ({ state, ui }) => {
+    const response = await ui.capture({ method: 'POST', path: /\/warehouse\/deliveries\/[^/]+\/confirm/ }, () => ui.click('[data-testid="warehouse-confirm-delivery"]', '原生确认出库'));
+    await ui.hold('仓库确认出库后');
+    const confirmed = entityFromResponse(response);
+    const entity = entityFromResponse(await ui.read(`/sales/deliveries/${confirmed?.id || state.entities.salesShipment?.id || confirmingDelivery.value?.id || ''}`));
+    if (entity) ui.remember('salesShipment', entity);
+    return entity;
+  }, async ({ state, context }) => {
+    const shipmentId = state.entities.salesShipment?.id;
+    const row = pendingData.value.find(candidate => String(candidate.id) === String(shipmentId))
+      || tableData.value.find(candidate => String(candidate.id) === String(shipmentId));
+    if (!row) throw new Error('未找到本次销售发运单');
+    await openConfirmDialog(row);
+    if (!confirmingDelivery.value) throw new Error('原生出库确认弹窗未打开');
+    for (const item of confirmItems.value) item.actualQty = Number(context.finishedQuantity);
+  }),
+])
 
 function postDeliveryConfirm(actualQuantities: Record<string, number>) {
   if (!confirmingDelivery.value) return Promise.resolve(null);
@@ -558,7 +579,7 @@ function getStatusText(status: string) {
       </template>
       <template #footer>
         <el-button @click="confirmDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="confirmDialogLoading" @click="submitConfirmDelivery">
+        <el-button data-testid="warehouse-confirm-delivery" type="primary" :loading="confirmDialogLoading" @click="submitConfirmDelivery">
           确认并扣库存
         </el-button>
       </template>

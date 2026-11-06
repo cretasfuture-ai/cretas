@@ -191,17 +191,84 @@ class ProductCreateToolContractTest {
 
     @Test
     void sourceChainDriftIsRejectedBeforeProductWrite() throws Exception {
+        configureStaleSource();
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                "pending-record", ToolExecutionIdempotencyRecord.State.IN_PROGRESS, null,
+                null, null, null, java.time.LocalDateTime.now())));
+
+        JsonNode result = execute();
+
+        assertThat(result.has("success")).isTrue();
+        assertThat(result.get("success").isBoolean()).isTrue();
+        assertThat(result.get("success").booleanValue()).isFalse();
+        assertThat(result.path("status").asText()).isEqualTo("NEED_MORE_INFO");
+        assertThat(result.path("errorCode").isIntegralNumber()).isTrue();
+        assertThat(result.path("errorCode").intValue()).isEqualTo(409);
+        assertThat(result.path("requiresNewPreview").booleanValue()).isTrue();
+        assertThat(result.path("recoveryAction").asText()).isEqualTo("REPREVIEW");
+        assertThat(result.path("error").asText()).contains("已变化");
+        verify(commandReceiptService, never()).createProductAndAttach(anyString(), any(ProductTypeDTO.class));
+        verify(productTypeService, never()).createProductType(eq(FACTORY_ID), any(ProductTypeDTO.class));
+    }
+
+    @Test
+    void staleWithoutDurableReservationRemainsUncertain() throws Exception {
+        configureStaleSource();
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.empty());
+        assertUncertainStale(execute());
+    }
+
+    @Test
+    void staleWithAProductReferenceCannotBecomeAWriteFreeRejection() throws Exception {
+        configureStaleSource();
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(receipt(
+                ProductCreateCommandReceiptService.PRODUCT_CREATED)));
+        assertUncertainStale(execute());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"TYPE", "ID", "STAGE"})
+    void eachPartialReferenceIndependentlyPreventsRepreviewEvenBeforeOutcomeIsSet(String present) throws Exception {
+        configureStaleSource();
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(
+                new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                        "in-progress-partial-ref", ToolExecutionIdempotencyRecord.State.IN_PROGRESS, null,
+                        "TYPE".equals(present) ? ProductCreateCommandReceiptService.ENTITY_TYPE : null,
+                        "ID".equals(present) ? TARGET_ID : null,
+                        "STAGE".equals(present) ? ProductCreateCommandReceiptService.PRODUCT_CREATED : null, null)));
+        assertUncertainStale(execute());
+    }
+
+    @Test
+    void staleWithATerminalReceiptRemainsUncertain() throws Exception {
+        configureStaleSource();
+        when(commandReceiptService.readCurrent()).thenReturn(Optional.of(new ProductCreateCommandReceiptService.ReceiptSnapshot(
+                "failed-record", ToolExecutionIdempotencyRecord.State.FAILED, ToolExecutionStatus.FAILED,
+                null, null, null, java.time.LocalDateTime.now())));
+        assertUncertainStale(execute());
+    }
+
+    @Test
+    void staleReceiptReadFailureRemainsUncertain() throws Exception {
+        configureStaleSource();
+        when(commandReceiptService.readCurrent()).thenThrow(new IllegalStateException("read unavailable"));
+        assertUncertainStale(execute());
+    }
+
+    private void configureStaleSource() {
         configureSource(List.of(process("切片", "wp-slice")));
         doThrow(new com.cretas.aims.exception.BusinessException(409,
                 "源产品工序链或主工序版本已变化"))
                 .when(productWorkProcessService).validatePreparedChain(
                         eq(FACTORY_ID), eq(SOURCE_ID), any(ProductWorkProcessService.PreparedChain.class));
+    }
 
-        JsonNode result = execute();
-
-        assertThat(result.path("success").asBoolean()).isFalse();
-        assertThat(result.path("error").asText()).contains("已变化");
-        verify(productTypeService, never()).createProductType(eq(FACTORY_ID), any(ProductTypeDTO.class));
+    private void assertUncertainStale(JsonNode result) {
+        assertThat(result.get("success").isBoolean()).isTrue();
+        assertThat(result.get("success").booleanValue()).isFalse();
+        assertThat(result.path("status").asText()).isNotEqualTo("NEED_MORE_INFO");
+        assertThat(result.has("requiresNewPreview")).isFalse();
+        verify(commandReceiptService, never()).createProductAndAttach(anyString(), any(ProductTypeDTO.class));
     }
 
     private void configureSource(List<ProductWorkProcessDTO> chain) {

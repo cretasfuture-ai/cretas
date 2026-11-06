@@ -18,6 +18,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.ProductCreateCommandReceiptService;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -368,7 +369,13 @@ public class AiProductCreateController {
 
     private BusinessException gatewayFailure(ToolExecutionResult result) {
         String message = result.payload().path("message").asText(result.message());
-        int code = result.status() == ToolExecutionStatus.DENIED ? 403 : 400;
+        JsonNode errorCode = result.payload().path("errorCode");
+        boolean requiresNewPreview = result.status() == ToolExecutionStatus.FAILED
+                && "NEED_MORE_INFO".equals(result.payload().path("status").asText())
+                && result.payload().path("requiresNewPreview").isBoolean()
+                && result.payload().path("requiresNewPreview").booleanValue()
+                && errorCode.isIntegralNumber() && errorCode.canConvertToInt() && errorCode.intValue() == 409;
+        int code = result.status() == ToolExecutionStatus.DENIED ? 403 : requiresNewPreview ? 409 : 400;
         return new BusinessException(code, message == null || message.isBlank()
                 ? "AI 建产品未执行"
                 : message)

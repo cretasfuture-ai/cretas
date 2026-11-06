@@ -15,6 +15,7 @@ import InventoryTable from './InventoryTable.vue';
 import YieldCardTable from './YieldCardTable.vue';
 import { formatWorkflowPlannedOutput, resolveProcessSheetUnits, resolveWorkflowProcessSheetUnits } from '@/utils/processSheetUnits';
 import { RAW_WORKFLOW_OWNER_ANCHOR_LABEL, isRawWorkflowOwnerAnchorName } from '@/constants/rawWorkflowOwnerAnchor';
+import { nativeDemoState } from '@/demo/f006NativeBridge';
 
 // -------------------------------------------------------------------------
 // View mode: 'grid' (电子表格) | 'card' (卡片)
@@ -494,6 +495,7 @@ watch(
   },
   { immediate: true },
 );
+const nativeDemoRunKey = computed(() => nativeDemoState.value?.runKey || '');
 
 // -------------------------------------------------------------------------
 // After a row is saved: refresh inventory of this process + active tab inventory table
@@ -629,6 +631,7 @@ defineExpose({ hasUnsavedRows });
       </div>
       <!-- View-mode toggle: applies to all process tabs simultaneously -->
       <el-segmented
+        data-testid="process-sheet-view-mode"
         :model-value="viewMode"
         :options="[{ label: '表格', value: 'grid' }, { label: '卡片', value: 'card' }]"
         size="small"
@@ -670,7 +673,7 @@ defineExpose({ hasUnsavedRows });
         style="height:100%;overflow-y:auto;padding:4px 0"
       >
         <template #label>
-          <span class="process-tab-label">
+            <span class="process-tab-label" :data-testid="`process-tab-${proc.order}`">
             <span>{{ proc.label }}</span>
             <el-tag v-if="processTabState(proc) === 'reported'" type="success" size="small">已报工</el-tag>
             <el-tag v-else-if="processTabState(proc) === 'current'" type="primary" size="small">当前</el-tag>
@@ -717,6 +720,7 @@ defineExpose({ hasUnsavedRows });
             :plan-id="planId"
             :process-code="proc.code"
             :process-order="proc.order"
+            :native-client-row-id="nativeDemoRunKey ? `${nativeDemoRunKey}:p${proc.order}` : undefined"
             :process-label="proc.label"
             :allow-semi-finished-injection="proc.allowInjection"
             :allow-multiple-upstream-sources="proc.allowMultipleUpstreamSources"
