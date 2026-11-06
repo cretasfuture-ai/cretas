@@ -171,6 +171,11 @@ public final class SupplyImpactDTO {
         private List<DownstreamNode> shipments;
         private List<CustomerExposure> customers;
         private List<OrderImpact> unshippedOrders;
+        /**
+         * Read-only packaging-snapshot exposure.  Null quantities are deliberate:
+         * a lineage or snapshot gap must never be rendered as zero.
+         */
+        private SupplyImpactBoxExposure boxExposure;
         @Builder.Default
         private List<Gap> gaps = new ArrayList<>();
     }

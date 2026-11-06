@@ -52,6 +52,132 @@ export interface SupplyImpactQuality {
   sourceBatches: SupplyImpactBatch[]; productionBatches: SupplyImpactNode[];
   finishedBatches: SupplyImpactNode[]; shipments: SupplyImpactNode[];
   customers: SupplyImpactCustomer[]; unshippedOrders: SupplyImpactOrder[]; gaps: SupplyImpactGap[];
+  boxExposure?: SupplyImpactBoxExposure | null;
+}
+export interface SupplyImpactBoxTotals {
+  complete: boolean; totalBoxQuantity: string | null; knownBoxSubtotal: string | null;
+  knownSourceCount: number; unknownSourceCount: number;
+}
+export interface SupplyImpactBoxSource {
+  sourceId: string; finishedGoodsBatchId: string; batchNumber: string | null;
+  sourceQuantity: string | null; sourceUnit: string | null;
+  packagingUnit: string | null; packagingBaseUnit: string | null; packagingFactor: string | null;
+  boxQuantity: string | null; reservedQuantity: string | null;
+  deliveryRecordId: string | null; deliveryItemId: string | null;
+  customerId: string | null; customerName: string | null; gaps: string[];
+}
+export interface SupplyImpactBoxCustomer {
+  customerId: string | null; customerName: string | null; totals: SupplyImpactBoxTotals;
+}
+export interface SupplyImpactBoxExposure {
+  scope: 'DISCOVERED_LINEAGE';
+  inventoryBasis: 'PHYSICAL_ON_HAND_INCLUDING_RESERVED';
+  quantityMeaning: 'PACKAGING_SNAPSHOT_EQUIVALENT';
+  stock: SupplyImpactBoxTotals; shipped: SupplyImpactBoxTotals;
+  stockSources: SupplyImpactBoxSource[]; shipmentSources: SupplyImpactBoxSource[];
+  customers: SupplyImpactBoxCustomer[]; gaps: SupplyImpactGap[];
+}
+
+const BOX_EXPOSURE_KEYS = new Set(['scope', 'inventoryBasis', 'quantityMeaning', 'stock', 'shipped', 'stockSources', 'shipmentSources', 'customers', 'gaps']);
+const BOX_TOTAL_KEYS = new Set(['complete', 'totalBoxQuantity', 'knownBoxSubtotal', 'knownSourceCount', 'unknownSourceCount']);
+const BOX_SOURCE_KEYS = new Set(['sourceId', 'finishedGoodsBatchId', 'batchNumber', 'sourceQuantity', 'sourceUnit', 'packagingUnit', 'packagingBaseUnit', 'packagingFactor', 'boxQuantity', 'reservedQuantity', 'deliveryRecordId', 'deliveryItemId', 'customerId', 'customerName', 'gaps']);
+const BOX_CUSTOMER_KEYS = new Set(['customerId', 'customerName', 'totals']);
+const GAP_KEYS = new Set(['code', 'message']);
+const PLAIN_DECIMAL = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+const nullableText = (value: unknown): value is string | null => value === null || typeof value === 'string';
+const nullableDecimal = (value: unknown): value is string | null => value === null || (typeof value === 'string' && PLAIN_DECIMAL.test(value));
+
+function isBoxTotals(value: unknown): value is SupplyImpactBoxTotals {
+  if (!value || typeof value !== 'object') return false;
+  const totals = value as Partial<SupplyImpactBoxTotals>;
+  if (!Object.keys(totals).every(key => BOX_TOTAL_KEYS.has(key)) || typeof totals.complete !== 'boolean'
+    || !nullableDecimal(totals.totalBoxQuantity) || !nullableDecimal(totals.knownBoxSubtotal)
+    || typeof totals.knownSourceCount !== 'number' || !Number.isSafeInteger(totals.knownSourceCount) || totals.knownSourceCount < 0
+    || typeof totals.unknownSourceCount !== 'number' || !Number.isSafeInteger(totals.unknownSourceCount) || totals.unknownSourceCount < 0) return false;
+  if (totals.complete && (totals.knownSourceCount <= 0 || totals.unknownSourceCount !== 0 || totals.totalBoxQuantity === null
+    || totals.knownBoxSubtotal === null || totals.totalBoxQuantity !== totals.knownBoxSubtotal)) return false;
+  if (!totals.complete && totals.totalBoxQuantity !== null) return false;
+  if (totals.knownSourceCount === 0 && totals.knownBoxSubtotal !== null) return false;
+  if (totals.knownSourceCount > 0 && totals.knownBoxSubtotal === null) return false;
+  return true;
+}
+
+function isBoxSource(value: unknown): value is SupplyImpactBoxSource {
+  if (!value || typeof value !== 'object') return false;
+  const source = value as Partial<SupplyImpactBoxSource>;
+  const textFields = ['sourceId', 'finishedGoodsBatchId'] as const;
+  return Object.keys(source).every(key => BOX_SOURCE_KEYS.has(key))
+    && textFields.every(key => typeof source[key] === 'string' && source[key].length > 0)
+    && nullableText(source.batchNumber) && nullableText(source.sourceUnit)
+    && nullableText(source.packagingUnit) && nullableText(source.packagingBaseUnit)
+    && nullableDecimal(source.sourceQuantity) && nullableDecimal(source.packagingFactor)
+    && nullableDecimal(source.boxQuantity) && nullableDecimal(source.reservedQuantity)
+    && nullableText(source.deliveryRecordId) && nullableText(source.deliveryItemId)
+    && nullableText(source.customerId) && nullableText(source.customerName)
+    && Array.isArray(source.gaps) && source.gaps.every(gap => typeof gap === 'string' && gap.trim().length > 0)
+    && (source.boxQuantity !== null || source.gaps.length > 0);
+}
+
+function isBoxCustomer(value: unknown): value is SupplyImpactBoxCustomer {
+  if (!value || typeof value !== 'object') return false;
+  const customer = value as Partial<SupplyImpactBoxCustomer>;
+  return Object.keys(customer).every(key => BOX_CUSTOMER_KEYS.has(key))
+    && nullableText(customer.customerId) && nullableText(customer.customerName) && isBoxTotals(customer.totals);
+}
+
+export function isSupplyImpactBoxExposure(value: unknown): value is SupplyImpactBoxExposure {
+  if (!value || typeof value !== 'object') return false;
+  const exposure = value as Partial<SupplyImpactBoxExposure>;
+  return Object.keys(exposure).every(key => BOX_EXPOSURE_KEYS.has(key))
+    && exposure.scope === 'DISCOVERED_LINEAGE'
+    && exposure.inventoryBasis === 'PHYSICAL_ON_HAND_INCLUDING_RESERVED'
+    && exposure.quantityMeaning === 'PACKAGING_SNAPSHOT_EQUIVALENT'
+    && isBoxTotals(exposure.stock) && isBoxTotals(exposure.shipped)
+    && Array.isArray(exposure.stockSources) && exposure.stockSources.every(isBoxSource)
+    && Array.isArray(exposure.shipmentSources) && exposure.shipmentSources.every(isBoxSource)
+    && Array.isArray(exposure.customers) && exposure.customers.every(isBoxCustomer)
+    && Array.isArray(exposure.gaps) && exposure.gaps.every(gap => !!gap && typeof gap === 'object'
+      && Object.keys(gap).every(key => GAP_KEYS.has(key))
+      && typeof gap.code === 'string' && gap.code.length > 0 && typeof gap.message === 'string' && gap.message.length > 0)
+    && totalsMatchSources(exposure.stock, exposure.stockSources, true)
+    && totalsMatchSources(exposure.shipped, exposure.shipmentSources, false)
+    && customerGroupsMatch(exposure.shipmentSources, exposure.customers);
+}
+
+function totalsMatchSources(totals: SupplyImpactBoxTotals, sources: SupplyImpactBoxSource[], requireFinishedBatchUniqueness: boolean): boolean {
+  const sourceIds = sources.map(source => source.sourceId);
+  if (new Set(sourceIds).size !== sourceIds.length) return false;
+  if (requireFinishedBatchUniqueness) {
+    const finishedIds = sources.map(source => source.finishedGoodsBatchId);
+    if (new Set(finishedIds).size !== finishedIds.length) return false;
+  }
+  const known = sources.filter(source => source.boxQuantity !== null).length;
+  const unknown = sources.length - known;
+  if (totals.knownSourceCount !== known || totals.unknownSourceCount < unknown) return false;
+  return !totals.complete || (unknown === 0 && totals.unknownSourceCount === 0 && known === sources.length);
+}
+
+function customerGroupsMatch(sources: SupplyImpactBoxSource[], customers: SupplyImpactBoxCustomer[]): boolean {
+  const sourceGroups = new Map<string, SupplyImpactBoxSource[]>();
+  for (const source of sources) {
+    const key = source.customerId || '__UNKNOWN_CUSTOMER__';
+    sourceGroups.set(key, [...(sourceGroups.get(key) || []), source]);
+  }
+  const customerGroups = new Map<string, SupplyImpactBoxCustomer>();
+  for (const customer of customers) {
+    const key = customer.customerId || '__UNKNOWN_CUSTOMER__';
+    if (customerGroups.has(key)) return false;
+    customerGroups.set(key, customer);
+  }
+  if (sourceGroups.size !== customerGroups.size) return false;
+  for (const [key, group] of sourceGroups) {
+    const customer = customerGroups.get(key);
+    if (!customer) return false;
+    const known = group.filter(source => source.boxQuantity !== null).length;
+    const unknown = group.length - known;
+    if (customer.totals.knownSourceCount !== known || customer.totals.unknownSourceCount < unknown) return false;
+  }
+  return true;
 }
 export interface SupplyImpactProductCost {
   productTypeId?: string | null; productName?: string | null; planNumber?: string | null;
