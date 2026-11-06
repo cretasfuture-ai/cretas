@@ -194,4 +194,15 @@ describe('AppSidebar.vue source — keeps WS6 reactive shape', () => {
     expect(readBlock).toContain('permissionStore.currentRole');
     expect(readBlock).toContain('permissionStore.canAccess(item.module)');
   });
+
+  it('adds the workspace factory allowlist and publishes the fully filtered identity-bound paths', () => {
+    expect(src).toContain('item.allowedFactoryTypes');
+    expect(src).toContain('item.requiresFactoryContext');
+    expect(src).toContain('useNavigationVisibilityStore');
+    expect(src).toContain('navigationVisibility.publish');
+    expect(src).toContain('navigationIdentity');
+    expect(src).toContain('navigationVisibility.beginLoading');
+    expect(src).toContain('navigationVisibility.isCurrentLoad');
+    expect(src).toContain("status !== 'ready'");
+  });
 });

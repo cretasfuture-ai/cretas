@@ -103,6 +103,58 @@ const businessRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, title: '首页', icon: 'House', module: 'dashboard' }
       },
       {
+        path: 'workspaces/overview',
+        name: 'FactoryWorkspaceOverview',
+        component: () => import('@/views/workspaces/index.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '经营总览',
+          icon: 'Odometer',
+          module: 'dashboard',
+          roles: ['factory_super_admin', 'permission_admin'],
+          hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
+        },
+      },
+      {
+        path: 'workspaces/exceptions',
+        name: 'FactoryWorkspaceExceptions',
+        component: () => import('@/views/workspaces/index.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '异常中心',
+          icon: 'Warning',
+          module: 'dashboard',
+          roles: ['factory_super_admin', 'permission_admin'],
+          hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
+        },
+      },
+      {
+        path: 'workspaces/plans-approvals',
+        name: 'FactoryWorkspacePlansApprovals',
+        component: () => import('@/views/workspaces/index.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '方案与审批',
+          icon: 'Checked',
+          module: 'dashboard',
+          roles: ['factory_super_admin', 'permission_admin'],
+          hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
+        },
+      },
+      {
+        path: 'workspaces/trace-review',
+        name: 'FactoryWorkspaceTraceReview',
+        component: () => import('@/views/workspaces/index.vue'),
+        meta: {
+          requiresAuth: true,
+          title: '追溯与复盘',
+          icon: 'Search',
+          module: 'dashboard',
+          roles: ['factory_super_admin', 'permission_admin'],
+          hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
+        },
+      },
+      {
         path: 'demo-flow',
         name: 'F006DemoFlow',
         component: () => import('@/views/demo-flow/index.vue'),

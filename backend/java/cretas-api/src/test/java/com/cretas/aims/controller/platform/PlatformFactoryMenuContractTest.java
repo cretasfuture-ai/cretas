@@ -79,6 +79,34 @@ class PlatformFactoryMenuContractTest {
     }
 
     @Test
+    void workspacePathsStayConfigurableOnlyUnderTheirExactDashboardModule() {
+        List<String> paths = List.of("/workspaces/overview", "/workspaces/exceptions",
+                "/workspaces/plans-approvals", "/workspaces/trace-review");
+        FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("dashboard")
+                .moduleName("Dashboard").enabled(false).config(new HashMap<>()).build();
+        when(repository.findByFactoryIdAndModuleIdAndDeletedAtIsNull("F001", "dashboard"))
+                .thenReturn(Optional.of(row));
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.update("F001", "dashboard", new PlatformFactoryMenuDTO.Update(true, paths));
+
+        assertThat(row.getConfig()).containsEntry("disabledMenuPaths", paths);
+        assertThat(row.getEnabled()).isFalse();
+        verify(repository).save(row);
+        for (String path : paths) {
+            assertThatThrownBy(() -> service.update("F001", "analytics",
+                    new PlatformFactoryMenuDTO.Update(true, List.of(path))))
+                    .hasMessageContaining("不受支持");
+            for (String invalid : List.of(path + "-extra", path + "/child", path + "?admin=true")) {
+                assertThatThrownBy(() -> service.update("F001", "dashboard",
+                        new PlatformFactoryMenuDTO.Update(true, List.of(invalid))))
+                        .hasMessageContaining("不受支持");
+            }
+        }
+        verify(repository, times(1)).save(any());
+    }
+
+    @Test
     void retiredRestaurantMenuModuleIsRejected() {
         assertThatThrownBy(() -> service.update("F001", "restaurantOps",
                 new PlatformFactoryMenuDTO.Update(true, List.of("/restaurant/ops"))))
