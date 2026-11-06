@@ -209,7 +209,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 slot.getProductionLineId(), quantityUnit, slot.getStartTime());
         boolean unitCompatible = quantityUnit != null
                 && productCapacityUnit != null
-                && productCapacityUnit.equals(quantityUnit)
+                && sameCapacityDimension(productCapacityUnit, quantityUnit)
                 && productSpecificCapacity;
         ResourceCheckResult capacityCheck = unitCompatible && physicalLineBound
                 ? lineChecks.checkCapacity(factoryId, request.getProductTypeId(),
@@ -502,6 +502,21 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         };
     }
 
+    /** Capacity compatibility is a closed enum contract, never label equality. */
+    private boolean sameCapacityDimension(String left, String right) {
+        var leftDimension = LineCapacityEquipmentCheck.parseUnit(left);
+        var rightDimension = LineCapacityEquipmentCheck.parseUnit(right);
+        return leftDimension != null && leftDimension == rightDimension;
+    }
+
+    /**
+     * Identity of an unchanged product snapshot, not physical unit equivalence.
+     * Even equivalent spellings are a changed stored label and require a new
+     * preview. Never normalize aliases or merge 个/件 when checking this identity.
+     */
+    private record ProductUnitIdentity(String productTypeId, String exactStoredLabel) {
+    }
+
     private boolean hasProductSpecificCapacity(String factoryId, String productTypeId,
                                                String productionLineId, String quantityUnit,
                                                LocalDateTime at) {
@@ -533,8 +548,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 && Objects.equals(preview.getProductTypeId(), product.getId())
                 && preview.getPreviewQuantity() != null && request.getRequiredQuantity() != null
                 && preview.getPreviewQuantity().compareTo(request.getRequiredQuantity()) == 0
-                && Objects.equals(preview.getQuantityUnit(), quantityUnit)
-                && Objects.equals(preview.getPlannedUnit(), plannedUnit)
+                && sameCapacityDimension(preview.getQuantityUnit(), quantityUnit)
+                && new ProductUnitIdentity(preview.getProductTypeId(), preview.getPlannedUnit())
+                        .equals(new ProductUnitIdentity(product.getId(), plannedUnit))
                 && Objects.equals(preview.getProductionLineId(), slot.getProductionLineId())
                 && Objects.equals(preview.getWindowStart(), slot.getStartTime())
                 && Objects.equals(preview.getWindowEnd(), slot.getEndTime())
@@ -581,7 +597,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         }
 
         String quantityUnit = normalizeQuantityUnit(request.getQuantityUnit());
-        if (!quantityUnit.equals(preview.getQuantityUnit())
+        if (!sameCapacityDimension(quantityUnit, preview.getQuantityUnit())
                 || request.getPlannedQuantity() == null
                 || request.getPlannedQuantity().compareTo(preview.getPreviewQuantity()) != 0) {
             throw new BusinessException(409, "预览快照的数量或单位已变化，请重新分析，未创建计划")
@@ -593,7 +609,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         request.getProductTypeId(), factoryId)
                 .orElseThrow(() -> new EntityNotFoundException("ProductType", request.getProductTypeId()));
         String plannedUnit = requireProductUnit(product);
-        if (!plannedUnit.equals(preview.getPlannedUnit())) {
+        if (!new ProductUnitIdentity(product.getId(), plannedUnit)
+                .equals(new ProductUnitIdentity(preview.getProductTypeId(), preview.getPlannedUnit()))) {
             throw new BusinessException(409, "产品实际单位已变化，请重新分析，未创建计划")
                     .withCode("INSERT_PREVIEW_PRODUCT_CHANGED")
                     .withHint("重新分析当前产品后再确认");
@@ -621,7 +638,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         ResourceCheckResult capacityCheck = lineChecks.checkCapacity(
                 factoryId, request.getProductTypeId(), request.getPlannedQuantity(), quantityUnit,
                 slot.getProductionLineId(), slot.getStartTime(), slot.getEndTime());
-        if (!quantityUnit.equals(productCapacityUnit) || !productSpecificCapacity
+        if (!sameCapacityDimension(quantityUnit, productCapacityUnit) || !productSpecificCapacity
                 || !equipmentCheck.isVerified() || !equipmentCheck.isAvailable()
                 || !capacityCheck.isVerified() || !capacityCheck.isAvailable()) {
             throw new BusinessException(409, "确认前产能或设备复核未通过，未创建计划")

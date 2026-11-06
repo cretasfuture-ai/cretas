@@ -20,7 +20,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -264,6 +266,22 @@ class UrgentInsertPreviewContractTest {
         assertThatThrownBy(() -> service.confirmInsert(FACTORY, 1L, request))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(409));
+        verify(slots, never()).claimAvailableSlot(anyString(), anyString(), any());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"kg,公斤,KG", "kg,千克,KG", "件,个,PIECE"})
+    void productSnapshotIdentityRejectsChangedStoredLabelsEvenWithinSameCapacityDimension(
+            String cachedLabel, String changedLabel, String dimension) {
+        product(changedLabel);
+        ReflectionTestUtils.setField(currentPreview, "plannedUnit", cachedLabel);
+        ReflectionTestUtils.setField(currentPreview, "quantityUnit", dimension);
+        ConfirmUrgentInsertRequest request = confirmRequest();
+        request.setQuantityUnit(dimension);
+
+        assertThatThrownBy(() -> service.confirmInsert(FACTORY, 1L, request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("产品实际单位已变化");
         verify(slots, never()).claimAvailableSlot(anyString(), anyString(), any());
     }
 

@@ -11,6 +11,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Immutable;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -36,6 +37,7 @@ import java.time.LocalDateTime;
                         columnNames = {"factory_id", "slot_id", "candidate_number"})
         })
 @Where(clause = "deleted_at IS NULL")
+@SQLDelete(sql = "UPDATE insert_slot_previews SET deleted_at = NOW() WHERE id = ?")
 @Getter
 @Builder
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -89,4 +91,5 @@ public class InsertSlotPreview extends BaseEntity {
 
     @Column(name = "candidate_number", nullable = false, updatable = false)
     private Integer candidateNumber;
+
 }

@@ -86,4 +86,17 @@ class InsertSlotPreviewRepositoryQueryValidationTest {
         assertThat(stored.getPlannedUnit()).isEqualTo("个");
         assertThat(stored.getPreviewQuantity()).isEqualByComparingTo("17");
     }
+
+    @Test
+    void jpaRemovalHidesPreviewButRetainsItsImmutablePhysicalEvidence() {
+        InsertSlotPreview row = fixture("PREVIEW-SOFT-DELETE", 1, LocalDateTime.now().withNano(0));
+        em.remove(row);
+        em.flush();
+        em.clear();
+        assertThat(((Number) em.createNativeQuery(
+                "SELECT count(*) FROM insert_slot_previews WHERE id=:id AND factory_id=:factory AND deleted_at IS NOT NULL")
+                .setParameter("id", row.getId()).setParameter("factory", "PREVIEW-SOFT-DELETE")
+                .getSingleResult()).longValue()).isEqualTo(1);
+        assertThat(previews.findByIdAndFactoryId(row.getId(), "PREVIEW-SOFT-DELETE")).isEmpty();
+    }
 }
