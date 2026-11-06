@@ -68,7 +68,7 @@ policies:
     allowedRoles: [factory_super_admin, permission_admin]
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["canvas"]
-    version: "1.0.0"
+    version: "2.0.0"
     supportsPreview: false
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED
@@ -87,7 +87,7 @@ policies:
     allowedRoles: [factory_super_admin, permission_admin]
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["canvas"]
-    version: "1.0.0"
+    version: "2.0.0"
     supportsPreview: false
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED
@@ -106,7 +106,7 @@ policies:
     allowedRoles: [factory_super_admin, permission_admin]
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["canvas"]
-    version: "1.0.0"
+    version: "2.0.0"
     supportsPreview: false
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED
@@ -125,7 +125,7 @@ policies:
     allowedRoles: [factory_super_admin, permission_admin]
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["canvas"]
-    version: "1.0.0"
+    version: "2.0.0"
     supportsPreview: false
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED
@@ -144,7 +144,7 @@ policies:
     allowedRoles: [factory_super_admin, permission_admin]
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["canvas"]
-    version: "1.0.0"
+    version: "2.0.0"
     supportsPreview: false
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED
@@ -163,7 +163,7 @@ policies:
     allowedRoles: [factory_super_admin, permission_admin]
     allowedBusinessTypes: [FACTORY, CENTRAL_KITCHEN]
     domainTags: ["canvas"]
-    version: "1.0.0"
+    version: "2.0.0"
     supportsPreview: false
     confirmationPolicy: REQUIRED_FOR_EXECUTION
     approvalPolicy: NOT_REQUIRED

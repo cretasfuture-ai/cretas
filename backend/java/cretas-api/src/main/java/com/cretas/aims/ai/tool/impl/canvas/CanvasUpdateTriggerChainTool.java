@@ -22,10 +22,7 @@ import java.util.*;
  */
 @Slf4j
 @Component
-public class CanvasUpdateTriggerChainTool extends AbstractBusinessTool {
-
-    @Autowired(required = false)
-    private FactoryTriggerChainRepository factoryTriggerChainRepo;
+public class CanvasUpdateTriggerChainTool extends AbstractBoundCanvasConfigTool {
 
     @Override
     public String getToolName() {
@@ -73,53 +70,6 @@ public class CanvasUpdateTriggerChainTool extends AbstractBusinessTool {
     @Override
     protected List<String> getRequiredParameters() {
         return Collections.singletonList("chainCode");
-    }
-
-    @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        String chainCode = getString(params, "chainCode");
-        Boolean enabled = getBoolean(params, "enabled");
-        Integer stepOrder = getInteger(params, "stepOrder");
-        Boolean stepEnabled = getBoolean(params, "stepEnabled");
-
-        log.info("Canvas 触发链更新 - 工厂ID: {}, 链: {}, 启用: {}, 步骤: {}, 步骤启用: {}",
-                factoryId, chainCode, enabled, stepOrder, stepEnabled);
-
-        Optional<FactoryTriggerChain> chainOpt = factoryTriggerChainRepo.findByFactoryIdAndChainCode(factoryId, chainCode);
-        if (chainOpt.isEmpty()) {
-            throw new IllegalArgumentException("未找到触发链: " + chainCode + "（工厂: " + factoryId + "）");
-        }
-
-        FactoryTriggerChain chain = chainOpt.get();
-
-        if (stepOrder != null) {
-            // 修改单个步骤的启用状态
-            if (stepEnabled == null) {
-                throw new IllegalArgumentException("指定 stepOrder 时必须同时提供 stepEnabled 参数");
-            }
-            updateStepEnabled(chain, stepOrder, stepEnabled);
-            factoryTriggerChainRepo.save(chain);
-
-            log.info("Canvas 触发链步骤更新完成 - 链: {}, 步骤: {}, 启用: {}", chainCode, stepOrder, stepEnabled);
-            return buildSimpleResult(
-                    "触发链 " + chainCode + " 第 " + stepOrder + " 步已" + (stepEnabled ? "启用" : "禁用"),
-                    Map.of("chainCode", chainCode, "stepOrder", stepOrder, "stepEnabled", stepEnabled)
-            );
-        } else {
-            // 修改整条链的启用状态
-            if (enabled == null) {
-                throw new IllegalArgumentException("未指定 stepOrder 时必须提供 enabled 参数");
-            }
-            chain.setEnabled(enabled);
-            factoryTriggerChainRepo.save(chain);
-
-            String action = Boolean.TRUE.equals(enabled) ? "启用" : "禁用";
-            log.info("Canvas 触发链整链更新完成 - 链: {}, 操作: {}", chainCode, action);
-            return buildSimpleResult(
-                    "触发链 " + chainCode + " 已" + action,
-                    Map.of("chainCode", chainCode, "enabled", enabled)
-            );
-        }
     }
 
     /**
@@ -204,7 +154,7 @@ public class CanvasUpdateTriggerChainTool extends AbstractBusinessTool {
     }
 
     @Override public boolean supportsPreview() { return false; }
-    @Override public String getVersion() { return "1.0.0"; }
+    @Override public String getVersion() { return "2.0.0"; }
     @Override public Set<String> getDomainTags() { return Set.of("canvas"); }
 
     @Override
