@@ -1,6 +1,7 @@
 package com.cretas.aims.repository.inventory;
 
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.repository.projection.SupplyImpactBoxExposureRow;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -643,4 +644,78 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
     List<Object[]> sumProductionOutputByPlan(
             @Param("factoryId") String factoryId,
             @Param("planId") String planId);
+
+    /**
+     * One factory-scoped left join for the quality box-equivalent read.  The
+     * edge predicates deliberately live in the join so a missing shipment edge
+     * leaves the physical stock row present and is reported as an uncertainty,
+     * rather than being silently turned into zero.
+     */
+    @Query(value = """
+            SELECT fg.factory_id AS "factoryId",
+                   fg.id AS "finishedGoodsBatchId",
+                   fg.batch_number AS "batchNumber",
+                   fg.produced_quantity AS "producedQuantity",
+                   fg.shipped_quantity AS "shippedQuantity",
+                   fg.reserved_quantity AS "reservedQuantity",
+                   fg.unit AS "finishedUnit",
+                   fg.packaging_unit AS "finishedPackagingUnit",
+                   fg.packaging_base_unit AS "finishedPackagingBaseUnit",
+                   fg.packaging_factor AS "finishedPackagingFactor",
+                   fg.status AS "finishedStatus",
+                   e.id AS "edgeId",
+                   e.target_id AS "shipmentId",
+                   e.quantity_used AS "edgeQuantity",
+                   e.unit AS "edgeUnit",
+                   dr.id AS "deliveryRecordId",
+                   CAST(di.id AS varchar) AS "deliveryItemId",
+                   di.delivered_quantity AS "deliveredQuantity",
+                   di.unit AS "deliveryUnit",
+                   di.packaging_unit AS "deliveryPackagingUnit",
+                   di.packaging_base_unit AS "deliveryPackagingBaseUnit",
+                   di.packaging_factor AS "deliveryPackagingFactor",
+                   c.id AS "customerId",
+                   c.name AS "customerName"
+            FROM finished_goods_batches fg
+            LEFT JOIN batch_lineage_edges e
+              ON e.factory_id = fg.factory_id
+             AND e.source_id = fg.id
+             AND e.target_id IN (:shipmentIds)
+             AND e.source_type = 'FINISHED_BATCH'
+             AND e.target_type = 'SHIPMENT_RECORD'
+             AND e.edge_type = 'FINISHED_TO_SHIPMENT'
+             AND e.deleted_at IS NULL
+             AND jsonb_extract_path_text(e.meta, 'shipmentCarrier') = 'SALES_DELIVERY_RECORD'
+             AND jsonb_extract_path_text(e.meta, 'origin') = 'SALES_DELIVERY_SHIPMENT'
+             AND jsonb_extract_path_text(e.meta, 'deliveryItemId') IS NOT NULL
+             AND EXISTS (SELECT 1 FROM sales_delivery_records dr0
+                           WHERE dr0.id = e.target_id
+                             AND dr0.factory_id = fg.factory_id
+                             AND COALESCE(dr0.record_role, 'LEGACY') <> 'MASTER'
+                             AND dr0.status IN ('SHIPPED', 'DELIVERED')
+                             AND dr0.deleted_at IS NULL)
+            LEFT JOIN sales_delivery_records dr
+              ON dr.id = e.target_id
+             AND dr.factory_id = fg.factory_id
+             AND COALESCE(dr.record_role, 'LEGACY') <> 'MASTER'
+             AND dr.status IN ('SHIPPED', 'DELIVERED')
+             AND dr.deleted_at IS NULL
+            LEFT JOIN sales_delivery_items di
+              ON di.delivery_record_id = dr.id
+             AND CAST(di.id AS varchar) = jsonb_extract_path_text(e.meta, 'deliveryItemId')
+             AND di.product_type_id = fg.product_type_id
+             AND di.deleted_at IS NULL
+            LEFT JOIN customers c
+              ON c.id = dr.customer_id
+             AND c.factory_id = fg.factory_id
+             AND c.deleted_at IS NULL
+            WHERE fg.factory_id = :factoryId
+              AND fg.deleted_at IS NULL
+              AND fg.id IN (:finishedGoodsBatchIds)
+            ORDER BY fg.id, e.id
+            """, nativeQuery = true)
+    List<SupplyImpactBoxExposureRow> findSupplyImpactBoxExposureRows(
+            @Param("factoryId") String factoryId,
+            @Param("finishedGoodsBatchIds") Collection<String> finishedGoodsBatchIds,
+            @Param("shipmentIds") Collection<String> shipmentIds);
 }

@@ -111,6 +111,7 @@
           <el-table-column prop="batchNumber" label="批次" />
           <el-table-column prop="name" label="名称" />
         </el-table>
+        <SupplyImpactBoxExposure :exposure="quality.boxExposure" />
         <h4>未发订单(同产品)</h4>
         <OrderRows :rows="quality.unshippedOrders" />
         <GapList :gaps="quality.gaps" />
@@ -155,6 +156,7 @@ import {
   type SupplyImpactDisruption, type SupplyImpactGap, type SupplyImpactOrder,
   type SupplyImpactPrice, type SupplyImpactQuality, type SupplyImpactRecipe, type SupplyImpactTarget,
 } from '@/api/supplyImpact';
+import SupplyImpactBoxExposure from './SupplyImpactBoxExposure.vue';
 
 const props = defineProps<{
   modelValue: boolean;
@@ -174,6 +176,7 @@ const error = ref('');
 const disruption = ref<SupplyImpactDisruption | null>(null);
 const quality = ref<SupplyImpactQuality | null>(null);
 const price = ref<SupplyImpactPrice | null>(null);
+let requestEpoch = 0;
 
 function recipeAlt(row: SupplyImpactRecipe): string {
   const alts = [...row.groupAlternatives, ...row.registeredSubstitutes].join('、');
@@ -202,32 +205,76 @@ const GapList = defineComponent({
 const canRunPrice = computed(() => !!props.target.materialTypeId);
 
 async function run(): Promise<void> {
+  const epoch = ++requestEpoch;
+  const signature = requestSignature();
   loading.value = true;
   error.value = '';
+  disruption.value = null;
+  quality.value = null;
+  price.value = null;
   try {
     if (event.value === 'disruption') {
-      disruption.value = await fetchDisruption(props.factoryId, props.target, horizonDays.value);
+      const value = await fetchDisruption(props.factoryId, props.target, horizonDays.value);
+      if (isCurrentRequest(epoch, signature)) disruption.value = value;
     } else if (event.value === 'quality') {
-      quality.value = await fetchQuality(props.factoryId, props.target, range.value?.[0], range.value?.[1]);
+      const value = await fetchQuality(props.factoryId, props.target, range.value?.[0], range.value?.[1]);
+      if (isCurrentRequest(epoch, signature)) quality.value = value;
     } else if (canRunPrice.value) {
-      price.value = await fetchPrice(props.factoryId, props.target.materialTypeId as string, percent.value);
+      const value = await fetchPrice(props.factoryId, props.target.materialTypeId as string, percent.value);
+      if (isCurrentRequest(epoch, signature)) price.value = value;
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '查询失败';
+    if (isCurrentRequest(epoch, signature)) error.value = e instanceof Error ? e.message : '查询失败';
   } finally {
-    loading.value = false;
+    if (isCurrentRequest(epoch, signature)) loading.value = false;
   }
 }
 
+function requestSignature(): string {
+  return JSON.stringify({
+    factoryId: props.factoryId,
+    supplierId: props.target.supplierId || null,
+    materialTypeId: props.target.materialTypeId || null,
+    event: event.value,
+    horizonDays: horizonDays.value,
+    range: range.value,
+    percent: percent.value,
+  });
+}
+
+function isCurrentRequest(epoch: number, signature: string): boolean {
+  return epoch === requestEpoch && signature === requestSignature();
+}
+
+function clearResults(): void {
+  disruption.value = null;
+  quality.value = null;
+  price.value = null;
+  error.value = '';
+  loading.value = false;
+}
+
 watch(() => props.modelValue, (open) => {
+  requestEpoch += 1;
+  clearResults();
   if (open) {
     event.value = 'disruption';
-    disruption.value = null;
-    quality.value = null;
-    price.value = null;
     void run();
   }
 }, { immediate: true });
+
+watch(() => [props.factoryId, props.target.supplierId, props.target.materialTypeId], () => {
+  requestEpoch += 1;
+  clearResults();
+  if (props.modelValue) void run();
+});
+
+watch([event, range, horizonDays, percent], () => {
+  if (requestEpoch > 0) {
+    requestEpoch += 1;
+    clearResults();
+  }
+}, { flush: 'sync' });
 </script>
 
 <style scoped>
