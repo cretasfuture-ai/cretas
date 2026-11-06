@@ -13,9 +13,10 @@ from .gap_evidence import negative_verified
 from .secrets import load_local_secret
 
 TASK_FIELDS={'id','orgId','projectId','processId','processName','productCode','planAmount','fineAmount','defectsAmount',
-             'approvedFineAmount','outputDurationForSecond','sumOutputSalary','updatedAt','processStatus'}
+             'approvedFineAmount','outputDurationForSecond','sumEffectiveTime','sumOutputSalary','updatedAt','processStatus'}
 OUTPUT_FIELDS={'id','projectId','taskId','processId','productCode','numberofgoodProducts','numberofDefectives',
-               'starttimeofReport','endtimeofReport','approvalStatus','updatedAt','stockUnit','productName'}
+               'starttimeofReport','endtimeofReport','approvalStatus','updatedAt','stockUnit','productName',
+               'effectiveTime','planRestTime','overtimeTime','unplanShutdownTime','estimatedSalary','productionWorkerKey'}
 PERSON_FIELDS={'applierId','applierName','approverId','approverName','creatorId','creatorName','updatorId','updatorName',
                'operatorId','operatorName','userId','userName','phone','mobile','password','token'}
 

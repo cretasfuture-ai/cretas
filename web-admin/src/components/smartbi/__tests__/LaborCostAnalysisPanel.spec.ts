@@ -13,6 +13,15 @@ it('shows missing staff as a specific request with an owner instead of zero peop
   expect(page.text()).toContain('实际参与人员名单');expect(page.text()).toContain('生产主管 / 考勤负责人');expect(page.text()).toContain('有效人时');expect(page.text()).toContain('待补资料');expect(page.find('select').exists()).toBe(false);
   expect(page.findAll('.labor-metrics small').map(item=>item.text())).toEqual(['缺实际参与人员名单','缺各工序的有效人时']);
 });
+it('explains the recovered registered basis without presenting it as actual headcount allocation',()=>{
+  const input=base();input.rows=input.rows.map(row=>({...row,personHours:null,registeredWorkerKeys:['opaque'],registeredCoverageComplete:true,registeredReports:1,sourceEffectiveHours:1,zeroTimeReports:1,overlapReports:1}));
+  const page=render(input);
+  expect(page.text()).toContain('按登记人员测算人均：100.00');
+  expect(page.text()).toContain('需确认实际班组名单');
+  expect(page.text()).toContain('每段实际参与人数');
+  expect(page.text()).toContain('班组长代报');
+  expect(page.find('select').exists()).toBe(false);
+});
 it('labels the person-hour allocation as a read-only comparison and resets it on scope change',async()=>{
   const page=render(base());expect(page.find('select').exists()).toBe(true);
   await page.get('select').setValue('person_hours');expect(page.text()).toContain('仅供比较，不改变工资或账目');

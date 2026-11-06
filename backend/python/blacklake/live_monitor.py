@@ -239,13 +239,20 @@ def collect(v, previous=None, max_requests=1000):
             if missing:raise BlacklakeError('LIVE_PREVIOUS_PARENT_NOT_RETURNED')
             projects=minimized(projects)
             data['project']=projects
+            labor_key=None
             for resource,fields in [('task',TASK_FIELDS),('output',OUTPUT_FIELDS)]:
                 rows=[]
                 for offset in range(0,len(projects),50):
                     parents=[p['id'] for p in projects[offset:offset+50]]
                     part=fetch(resource,{'projectIds':parents})
                     if any(str(r.get('projectId')) not in {str(p) for p in parents} for r in part):raise BlacklakeError('LIVE_CHILD_SCOPE_MISMATCH')
-                    rows.extend({k:x for k,x in r.items() if k in fields} for r in part)
+                    for row in part:
+                        clean={k:x for k,x in row.items() if k in fields and k!='productionWorkerKey'}
+                        if resource=='output' and row.get('productionStaffId') is not None:
+                            from .labor_evidence import local_person_key,person_key
+                            if labor_key is None:labor_key=local_person_key(directory)
+                            clean['productionWorkerKey']=person_key(row['productionStaffId'],labor_key,store.scope)
+                        rows.append(clean)
                 if len({str(r['id']) for r in rows})!=len(rows):raise BlacklakeError('LIVE_CHILD_DUPLICATE')
                 data[resource]=rows
             orders=[]

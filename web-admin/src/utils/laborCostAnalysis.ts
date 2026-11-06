@@ -9,12 +9,20 @@ export interface LaborCostRow {
   /** Only actual participant IDs; reporter/operator IDs are not a worker roster. */
   workerIds?: string[];
   rosterComplete?: boolean;
+  registeredWorkerKeys?:string[];
+  registeredCoverageComplete?:boolean;
+  sourceEffectiveHours?:number|null;
+  registeredReports?:number;
+  zeroTimeReports?:number;
+  overlapReports?:number;
 }
+export interface LaborDataRequest {id:string;orderCode:string;process:string;missing:string;owner:string;action:string;benefit:string}
 export interface LaborCostInput {
   rows: LaborCostRow[];
   total: number | null;
   output: number | null;
   unit: string | null;
+  requests?:LaborDataRequest[];
 }
 const finite=(v:number|null|undefined):v is number=>typeof v==='number'&&Number.isFinite(v);
 const sum=(values:(number|null|undefined)[])=>{if(!values.length||!values.every(finite))return null;const result=values.reduce<number>((a,b)=>a+(b as number),0);return Number.isFinite(result)?result:null;};
@@ -43,8 +51,18 @@ export function analyzeLaborCosts(input:LaborCostInput){
   const rosterReady=rows.length>0&&rows.every(row=>row.rosterComplete===true&&!!row.workerIds?.length&&row.workerIds.every(id=>typeof id==='string'&&id.trim().length>0));
   const participants=rosterReady?new Set(rows.flatMap(row=>row.workerIds?.map(id=>id.trim())||[])).size:null;
   const preview=reconciled?allocateLaborByPersonHours(total,rows.map(row=>row.personHours)):rows.map(():null=>null);
+  const sourceAvailable=rows.some(row=>row.registeredCoverageComplete!==undefined);
+  const registeredKeys=new Set(rows.flatMap(row=>row.registeredWorkerKeys||[]));
+  const registeredCoverage=sourceAvailable&&rows.every(row=>row.registeredCoverageComplete===true);
+  const registeredParticipants=registeredKeys.size||null;
   return {
     total,detailTotal,reconciled,personHours,participants,
+    sourceAvailable,registeredParticipants,registeredCoverage,
+    registeredPerPerson:registeredCoverage&&reconciled?divide(total,registeredParticipants):null,
+    sourceEffectiveHours:sum(rows.map(row=>row.sourceEffectiveHours)),
+    registeredReports:rows.reduce((a,r)=>a+(r.registeredReports||0),0),
+    zeroTimeReports:rows.reduce((a,r)=>a+(r.zeroTimeReports||0),0),
+    overlapReports:rows.reduce((a,r)=>a+(r.overlapReports||0),0),
     perPerson:reconciled?divide(total,participants):null,
     perPersonHour:reconciled?divide(total,personHours):null,
     perUnit:input.unit?divide(total,input.output):null,
@@ -56,8 +74,8 @@ export function analyzeLaborCosts(input:LaborCostInput){
       allocated:preview[index]??null,
     })),
     needs:[
-      ...(!rosterReady?[{key:'people',missing:'实际参与人员名单',owner:'生产主管 / 考勤负责人',action:'补齐所选工单的实际参与人员，并按人员去重',benefit:'计算人均人工费，避免同一人跨工序重复计数'}]:[]),
-      ...(personHours===null?[{key:'hours',missing:'各工序的有效人时',owner:'车间主管',action:'补齐每段的起止时间和人数；仅有报工时长不够',benefit:'计算每人时费用，并按人时测算工序分摊'}]:[]),
+      ...(!rosterReady?[{key:'people',missing:sourceAvailable?'登记人员是否覆盖实际班组':'实际参与人员名单',owner:'生产主管 / 考勤负责人',action:sourceAvailable?'核对是否由班组长代报；补齐实际参与名单，同一人跨工序去重':'补齐所选工单的实际参与人员，并按人员去重',benefit:'计算真实人均人工费，避免把班组工资除以代报人数'}]:[]),
+      ...(personHours===null?[{key:'hours',missing:'各工序的有效人时',owner:'车间主管',action:sourceAvailable?'确认每段报工实际有多少人参与，并核对零时长和重叠时段；有效时长不能直接当人时':'补齐每段的起止时间和人数；仅有报工时长不够',benefit:'计算每人时费用，并按人时测算工序分摊'}]:[]),
       ...(rows.some(row=>row.amount===0)?[{key:'zero',missing:'零工资工序的计薪方式',owner:'生产 / 人事',action:'确认这些工序是否合并计薪、工资另记或尚未补录',benefit:'避免把未记工资的工序当成不花钱'}]:[]),
       ...(!reconciled?[{key:'cost',missing:'工序人工明细与工单人工合计的核对结果',owner:'生产 / 财务',action:'检查漏记、重复工序或金额缺失',benefit:'让工序人工相加与本单人工费一致'}]:[]),
     ],

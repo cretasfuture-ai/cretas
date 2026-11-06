@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import type { CostProject } from '@/api/smartbi/blacklake';
 import { blacklakeLaborInput,buildProductCostReviews } from '../productCostReview';
+import {analyzeLaborCosts} from '@/utils/laborCostAnalysis';
 
 function row(id:number, changes:Partial<CostProject>={}):CostProject {
   return {projectId:id,projectCode:`ORDER-${id}`,product:'合成成品',productCode:'SYN',unit:'包',status:'20',planned:10,actual:10,finishedGood:10,materialCost:20,laborCost:5,identifiedDirectCost:25,unitIdentifiedDirectCost:2.5,materialLines:1,materialCostKnownLines:1,sourceZeroCostLines:0,taskCount:1,laborCostKnownTasks:1,issues:[],unitCostAvailable:true,
@@ -13,6 +14,17 @@ it('wires actual Blacklake wages without re-labelling reported duration as perso
   expect(input).toMatchObject({total:10,output:20,unit:'包'});
   expect(input.rows).toHaveLength(1);expect(input.rows[0]).toMatchObject({amount:10,reportedHours:2,personHours:null});
   expect(input.rows[0]!.workerIds).toBeUndefined();
+});
+it('deduplicates registered staff while keeping actual roster and person-hours unconfirmed',()=>{
+  const orders=[row(1),row(2)];
+  for(const order of orders)order.processes[0]!.laborEvidence={registeredWorkerKeys:['opaque-worker'],registeredCoverageComplete:true,registeredReports:1,sourceEffectiveHours:1,zeroTimeReports:0,overlapReports:1,issues:[],source:'blacklake_output_productionStaffId',basis:'registered_staff_not_confirmed_shift_roster'};
+  const input=blacklakeLaborInput(orders),result=analyzeLaborCosts(input);
+  expect(result.registeredParticipants).toBe(1);expect(result.registeredPerPerson).toBe(10);
+  expect(result.sourceEffectiveHours).toBe(2);expect(result.perPerson).toBeNull();expect(result.personHours).toBeNull();expect(result.canAllocate).toBe(false);
+  expect(input.requests?.map(r=>r.orderCode)).toEqual(['ORDER-1','ORDER-2']);
+  expect(input.requests?.[0]?.missing).toContain('重叠报工');
+  expect(input.requests?.[0]?.owner).toContain('班组长');
+  expect(input.requests?.[0]?.benefit).toContain('时长×人数');
 });
 
 it('weights product costs by actual output, retains member orders and sums components once',()=>{

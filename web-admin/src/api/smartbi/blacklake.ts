@@ -73,7 +73,8 @@ export interface BlacklakeCostIntelligence {
 }
 
 export interface MaterialLine { material: string; materialCode: string; unit: string; netConsumption: number | null; recognizedCost: number | null; unitPrice: number | null; orderCode: string; date: string; bizType: string; }
-export interface ProcessLine { process: string; status: string; good: number | null; hours: number | null; laborCost: number | null; }
+export interface ProcessLine { process: string; status: string; good: number | null; hours: number | null; laborCost: number | null;
+  taskId?:number|string;laborEvidence?:{registeredWorkerKeys:string[];registeredCoverageComplete:boolean;registeredReports:number;sourceEffectiveHours:number|null;zeroTimeReports:number;overlapReports:number;issues:string[];source:string;basis:string}; }
 export interface CostProject {
   projectId: number; projectCode: string; product: string; productCode: string | null; unit: string | null; status: string;
   planned: number | null; actual: number | null; finishedGood: number | null;

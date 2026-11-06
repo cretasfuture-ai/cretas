@@ -35,6 +35,8 @@ def serial(value):
 
 def build(data, metadata):
     projects, tasks, outputs, orders = [data.get(k, []) for k in ('project','task','output','stock_order')]
+    from .labor_evidence import evidence
+    labor_evidence=evidence(data)
     project_by_id = {p['id']: p for p in projects}
     by_code = {p['projectCode']: p for p in projects}
     if len(by_code)!=len(projects):
@@ -137,7 +139,8 @@ def build(data, metadata):
                           'processes':[{'process':t.get('processName') or process_names.get(t.get('processId')),
                                         'status':str(t.get('processStatus')),'good':number(t.get('approvedFineAmount')),
                                         'hours':number(t.get('outputDurationForSecond'))/3600 if number(t.get('outputDurationForSecond')) is not None else None,
-                                        'laborCost':number(t.get('sumOutputSalary'))} for t in steps],
+                                        'laborCost':number(t.get('sumOutputSalary')),
+                                        **({'taskId':t['id'],'laborEvidence':labor_evidence[str(t['id'])]} if str(t['id']) in labor_evidence else {})} for t in steps],
                           'issues':missing,'unitCostAvailable':unit_cost is not None})
     status = Counter(str(p.get('status')) for p in projects)
     quantities = defaultdict(list)

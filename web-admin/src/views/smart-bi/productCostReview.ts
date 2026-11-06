@@ -2,14 +2,32 @@ import type { CostDataAlert, CostProject } from '@/api/smartbi/blacklake';
 import { groupEligibleCostProjects, type ProductUnitCostSummary } from './costOverview';
 import type { LaborCostInput, LaborCostRow } from '@/utils/laborCostAnalysis';
 
-/** Blacklake task duration is not proven person-hours, and contains no worker roster. */
+/** Registered production identities remain distinct from a confirmed shift roster. */
 export function blacklakeLaborInput(orders:readonly CostProject[]):LaborCostInput {
   const known=(values:(number|null)[])=>values.length&&values.every(v=>typeof v==='number'&&Number.isFinite(v))?values.reduce<number>((a,b)=>a+(b as number),0):null;
   const groups=new Map<string,CostProject['processes']>();
   for(const order of orders)for(const row of order.processes)groups.set(row.process,[...(groups.get(row.process)||[]),row]);
   const units=new Set(orders.map(row=>row.unit));const unit=units.size===1?orders[0]?.unit??null:null;
   return {total:known(orders.map(r=>r.laborCost)),output:unit?known(orders.map(r=>r.finishedGood)):null,unit,
-    rows:[...groups].map(([process,rows],index):LaborCostRow=>({id:`blacklake:${index}`,process,amount:known(rows.map(r=>r.laborCost)),reportedHours:known(rows.map(r=>r.hours)),personHours:null})),
+    rows:[...groups].map(([process,rows],index):LaborCostRow=>({id:`blacklake:${index}`,process,amount:known(rows.map(r=>r.laborCost)),reportedHours:known(rows.map(r=>r.hours)),personHours:null,
+      ...(rows.some(r=>r.laborEvidence)?{
+        registeredWorkerKeys:[...new Set(rows.flatMap(r=>r.laborEvidence?.registeredWorkerKeys||[]))],
+        registeredCoverageComplete:rows.every(r=>r.laborEvidence?.registeredCoverageComplete===true),
+        sourceEffectiveHours:known(rows.map(r=>r.laborEvidence?.sourceEffectiveHours??null)),
+        registeredReports:rows.reduce((a,r)=>a+(r.laborEvidence?.registeredReports||0),0),
+        zeroTimeReports:rows.reduce((a,r)=>a+(r.laborEvidence?.zeroTimeReports||0),0),
+        overlapReports:rows.reduce((a,r)=>a+(r.laborEvidence?.overlapReports||0),0),
+      }:{}),
+    })),
+    requests:orders.flatMap(order=>order.processes.flatMap(row=>{
+      const e=row.laborEvidence;if(!e||(!e.registeredReports&&row.laborCost===0))return [];
+      const missing=['实际班组人员名单和每段参与人数',...e.issues,
+        ...(e.zeroTimeReports?['零时长报工需确认']:[]),...(e.overlapReports?['同一登记人员的重叠报工需确认']:[])];
+      return [{id:`${order.projectId}:${row.taskId}`,orderCode:order.projectCode,process:row.process,missing:missing.join('；'),
+        owner:e.issues.some(s=>s.includes('工资'))?'车间主管 / 财务':'车间主管 / 班组长',
+        action:`已查到 ${e.registeredReports} 条报工、${e.registeredWorkerKeys.length} 名登记人员。确认是否班组代报，补齐每段实际参与人员和人数；核对本工序的零时长、重叠及金额问题。`,
+        benefit:'按实际人员去重计算人均；按每段时长×人数计算工序人时，再分摊同一笔人工费。'}];
+    })),
   };
 }
 

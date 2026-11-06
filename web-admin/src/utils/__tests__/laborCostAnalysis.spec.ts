@@ -15,6 +15,11 @@ it('never invents headcount or person-hours from Blacklake reported task duratio
   const result=analyzeLaborCosts(data);expect(result.perPerson).toBeNull();expect(result.perPersonHour).toBeNull();expect(result.canAllocate).toBe(false);
   expect(result.perUnit).toBe(5);expect(result.needs.map(r=>r.key)).toEqual(['people','hours']);
 });
+it('does not divide total wages by a partial set of registered staff',()=>{
+  const data=input();data.rows=data.rows.map((row,index)=>({...row,workerIds:undefined,rosterComplete:false,personHours:null,registeredWorkerKeys:['opaque'],registeredCoverageComplete:index===0,sourceEffectiveHours:1}));
+  const result=analyzeLaborCosts(data);
+  expect(result.registeredParticipants).toBe(1);expect(result.registeredPerPerson).toBeNull();expect(result.perPerson).toBeNull();expect(result.canAllocate).toBe(false);
+});
 it('refuses to divide a whole-batch wage by partial staff or partial hours',()=>{
   const data=input();data.rows[1]!.amount=null;
   const result=analyzeLaborCosts(data);expect(result.reconciled).toBe(false);expect(result.perPerson).toBeNull();expect(result.perPersonHour).toBeNull();expect(result.canAllocate).toBe(false);expect(result.perUnit).toBe(5);
