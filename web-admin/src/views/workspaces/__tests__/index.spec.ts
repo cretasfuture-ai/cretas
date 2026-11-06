@@ -36,11 +36,51 @@ vi.mock('@/store/modules/navigationVisibility', () => ({
 import WorkspaceView from '../index.vue';
 
 const stubs = {
+  DecisionHistoryPanel: {
+    props: ['factoryId', 'role'],
+    template: '<section data-testid="history-review-panel" :data-factory="factoryId" :data-role="role"></section>',
+  },
   'el-tag': { template: '<span><slot /></span>' },
   'el-empty': { props: ['description'], template: '<div data-testid="workspace-empty">{{ description }}</div>' },
 };
 
 describe('factory workspace view', () => {
+  it('mounts recorded decision review only in the eligible trace workspace with system access', () => {
+    route.path = '/workspaces/trace-review';
+    canAccess.mockImplementation((module) => module === 'dashboard' || module === 'system');
+    const wrapper = mount(WorkspaceView, { global: { stubs } });
+    const panel = wrapper.find('[data-testid="history-review-panel"]');
+    expect(panel.exists()).toBe(true);
+    expect(panel.attributes('data-factory')).toBe('F006');
+    expect(panel.attributes('data-role')).toBe('factory_super_admin');
+    wrapper.unmount();
+    route.path = '/workspaces/overview';
+    const other = mount(WorkspaceView, { global: { stubs } });
+    expect(other.find('[data-testid="history-review-panel"]').exists()).toBe(false);
+    other.unmount();
+    canAccess.mockImplementation((module) => module === 'dashboard' || module === 'analytics');
+  });
+
+  it.each(['loading', 'error', 'unavailable', 'ready'] as const)(
+    'does not expose decision review with unready navigation or denied system access: %s', (status) => {
+      route.path = '/workspaces/trace-review'; navigationStatus = status;
+      canAccess.mockImplementation((module) => module === 'dashboard');
+      const wrapper = mount(WorkspaceView, { global: { stubs } });
+      expect(wrapper.find('[data-testid="history-review-panel"]').exists()).toBe(false);
+      wrapper.unmount(); route.path = '/workspaces/overview'; navigationStatus = 'ready';
+      canAccess.mockImplementation((module) => module === 'dashboard' || module === 'analytics');
+    },
+  );
+
+  it('does not mount the historical read panel for a warehouse role', () => {
+    route.path = '/workspaces/trace-review'; identity.currentRole = 'warehouse_manager';
+    canAccess.mockImplementation(() => true);
+    const wrapper = mount(WorkspaceView, { global: { stubs } });
+    expect(wrapper.find('[data-testid="history-review-panel"]').exists()).toBe(false);
+    wrapper.unmount(); route.path = '/workspaces/overview'; identity.currentRole = 'factory_super_admin';
+    canAccess.mockImplementation((module) => module === 'dashboard' || module === 'analytics');
+  });
+
   it('shows links from the selected workspace and navigates to the real page', async () => {
     const wrapper = mount(WorkspaceView, { global: { stubs } });
 
