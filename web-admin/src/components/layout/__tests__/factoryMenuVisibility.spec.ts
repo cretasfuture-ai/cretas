@@ -62,10 +62,12 @@ describe('factory analytics sidebar opt-in', () => {
 
   it('wires the real sidebar to the opt-in without skipping its module and role checks', () => {
     const src = readFileSync(resolve(process.cwd(), 'src/components/layout/AppSidebar.vue'), 'utf8');
-    expect(src).toContain('hasFactoryAnalyticsSidebarOptIn(featuresResult.value.data)');
-    expect(src).toContain('if (token !== disabledFetchToken) return;');
+    expect(src).toContain('hasFactoryAnalyticsSidebarOptIn(featuresPayload.data)');
+    expect(src).toContain('if (!navigationVisibility.isCurrentLoad(token)) return;');
+    expect(src).toContain('featuresPayload?.success === true && Array.isArray(featuresPayload.data)');
+    expect(src).toContain('navigationVisibility.markErrorIfCurrent(token)');
     expect(src).toContain('factoryAnalyticsMenuEnabled.value = false;');
-    expect(src).toContain('getHiddenFactoryMenuModules(featuresResult.value.data)');
+    expect(src).toContain('getHiddenFactoryMenuModules(featuresPayload.data)');
     expect(src).toContain('hiddenFactoryMenuModules.value.includes(item.module)');
     expect(src).toContain('item.hideForFactoryTypes?.includes(factoryType) && !factoryAnalyticsVisible');
     expect(src).toContain('return item.roles.includes(currentRole) && canAccess;');
