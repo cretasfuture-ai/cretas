@@ -249,6 +249,54 @@ class AiProductCreateControllerGatewayTest {
     }
 
     @Test
+    void verifiedNewPreviewRejectionKeepsHttp409() {
+        assertGatewayFailureHttp(ToolExecutionStatus.FAILED,
+                Map.of("message", "源产品已变化，请重新预览", "status", "NEED_MORE_INFO",
+                        "requiresNewPreview", true, "errorCode", 409), 409);
+    }
+
+    @Test
+    void numeric409WithoutNewPreviewProofRemainsOrdinaryFailure() {
+        assertGatewayFailureHttp(ToolExecutionStatus.FAILED, Map.of("errorCode", 409), 400);
+    }
+
+    @Test
+    void string409CannotClaimTheNewPreviewHttpContract() {
+        assertGatewayFailureHttp(ToolExecutionStatus.FAILED,
+                Map.of("status", "NEED_MORE_INFO", "requiresNewPreview", true, "errorCode", "409"), 400);
+    }
+
+    @Test
+    void denialCannotBeOverriddenByAConflictPayload() {
+        assertGatewayFailureHttp(ToolExecutionStatus.DENIED,
+                Map.of("status", "NEED_MORE_INFO", "requiresNewPreview", true, "errorCode", 409), 403);
+    }
+
+    @Test
+    void unknownCannotBeOverriddenByAConflictPayload() {
+        assertGatewayFailureHttp(ToolExecutionStatus.OUTCOME_UNKNOWN,
+                Map.of("status", "NEED_MORE_INFO", "requiresNewPreview", true, "errorCode", 409), 502);
+    }
+
+    private void assertGatewayFailureHttp(ToolExecutionStatus status, Map<String, Object> payload, int code) {
+        Map<String, Object> body = Map.of("productName", "SKU-A");
+        trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
+        bindToken(boundToken(body, "proof-product"), body);
+        if (status == ToolExecutionStatus.FAILED) {
+            // A verified prewrite failure has no product reference. The shared success
+            // fixture deliberately has P-1 and therefore must not be reused here.
+            when(commandReceiptService.readCurrent()).thenReturn(Optional.of(
+                    new ProductCreateCommandReceiptService.ReceiptSnapshot("receipt-failed",
+                            com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord.State.FAILED,
+                            ToolExecutionStatus.FAILED, null, null, null, null)));
+        }
+        when(gateway.execute(any())).thenReturn(gatewayResult(status, payload));
+        assertThatThrownBy(() -> controller.create(FACTORY_ID, "proof-product", body, request))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getCode()).isEqualTo(code));
+    }
+
+    @Test
     void productCreatedWithPreparedChainMapsUnknownToCopyFailure() {
         Map<String, Object> body = Map.of("productName", "SKU-A");
         trustedAttributes(FACTORY_ID, USER_ID, "dispatcher");
@@ -441,6 +489,9 @@ class AiProductCreateControllerGatewayTest {
         }
         if (data.containsKey("message")) {
             envelope.put("message", data.get("message"));
+        }
+        for (String key : java.util.List.of("errorCode", "status", "requiresNewPreview")) {
+            if (data.containsKey(key)) envelope.put(key, data.get(key));
         }
         return new ToolExecutionResult(
                 "request-" + status,
