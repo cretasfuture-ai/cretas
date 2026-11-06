@@ -161,6 +161,7 @@ useNativeDemoAdapters('production-plans-native-demo', createNativeProductionAdap
   canViewPrice: () => canViewPrice.value,
   preparePlan: async ({state,ui}) => {
     await ui.click('[data-testid="production-plan-open-create"]','打开原生新建计划');
+    await loadSelectableSalesOrders();
     const soId=String(state.entities.salesOrder?.id||'');
     await ui.until(()=>selectableSalesOrders.value.some(row=>String(row.id)===soId),'本轮销售需求加载');
     await ui.fill('来源销售订单',()=>{planForm.value.sourceType='CUSTOMER_ORDER';planForm.value.sourceOrderId=soId;handleSalesOrderSelect(soId)});
