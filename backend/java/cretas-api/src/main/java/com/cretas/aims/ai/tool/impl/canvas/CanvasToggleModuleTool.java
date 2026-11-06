@@ -22,11 +22,7 @@ import java.util.*;
  */
 @Slf4j
 @Component
-public class CanvasToggleModuleTool extends AbstractBusinessTool {
-
-    @Autowired
-    @Qualifier("canvasFactoryConfigService")
-    private FactoryConfigService configService;
+public class CanvasToggleModuleTool extends AbstractBoundCanvasConfigTool {
 
     @Override
     public String getToolName() {
@@ -67,28 +63,6 @@ public class CanvasToggleModuleTool extends AbstractBusinessTool {
     }
 
     @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        String moduleCode = getString(params, "moduleCode");
-        Boolean enabled = getBoolean(params, "enabled");
-
-        log.info("Canvas 模块开关 - 工厂ID: {}, 模块: {}, 启用: {}", factoryId, moduleCode, enabled);
-
-        // operatorId 原来写死 0L。⛔ 不写死假 id, 也⛔ 不能直接换成 getUserId(context) ——
-        // 它落到的 factory_configurations.created_by 是 NOT NULL, null 会变成一次 500。
-        // 逐条理由见 CanvasApplyTemplateTool 同处注释与 AbstractTool#requireUserId。
-        configService.toggleModule(factoryId, moduleCode, enabled,
-                requireUserId(context, "开关工厂模块"));
-
-        String action = Boolean.TRUE.equals(enabled) ? "启用" : "禁用";
-        log.info("Canvas 模块开关完成 - 工厂ID: {}, 模块: {}, 操作: {}", factoryId, moduleCode, action);
-
-        return buildSimpleResult(
-                "模块 " + moduleCode + " 已" + action,
-                Map.of("factoryId", factoryId, "moduleCode", moduleCode, "enabled", enabled)
-        );
-    }
-
-    @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
                 "moduleCode", "请问要操作哪个功能模块？请提供模块代码（如 PURCHASE、SALES、EQUIPMENT 等）。",
@@ -125,7 +99,7 @@ public class CanvasToggleModuleTool extends AbstractBusinessTool {
     }
 
     @Override public boolean supportsPreview() { return false; }
-    @Override public String getVersion() { return "1.0.0"; }
+    @Override public String getVersion() { return "2.0.0"; }
     @Override public Set<String> getDomainTags() { return Set.of("canvas"); }
 
     @Override

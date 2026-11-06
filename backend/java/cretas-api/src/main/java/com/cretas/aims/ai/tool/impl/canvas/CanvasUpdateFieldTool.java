@@ -23,11 +23,7 @@ import java.util.*;
  */
 @Slf4j
 @Component
-public class CanvasUpdateFieldTool extends AbstractBusinessTool {
-
-    @Autowired
-    @Qualifier("canvasFactoryConfigService")
-    private FactoryConfigService configService;
+public class CanvasUpdateFieldTool extends AbstractBoundCanvasConfigTool {
 
     private static final Set<String> VALID_PROPERTIES = Set.of("visible", "required", "label", "defaultValue");
 
@@ -77,41 +73,6 @@ public class CanvasUpdateFieldTool extends AbstractBusinessTool {
     @Override
     protected List<String> getRequiredParameters() {
         return Arrays.asList("moduleCode", "fieldCode", "property", "value");
-    }
-
-    @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        String moduleCode = getString(params, "moduleCode");
-        String fieldCode = getString(params, "fieldCode");
-        String property = getString(params, "property");
-        Object value = params.get("value");
-
-        log.info("Canvas 字段配置更新 - 工厂ID: {}, 模块: {}, 字段: {}, 属性: {}, 值: {}",
-                factoryId, moduleCode, fieldCode, property, value);
-
-        if (!VALID_PROPERTIES.contains(property)) {
-            throw new IllegalArgumentException("无效的属性名: " + property + "。有效值为: " + String.join(", ", VALID_PROPERTIES));
-        }
-
-        FieldConfigDTO dto = buildFieldConfigDTO(property, value);
-        // operatorId 原来写死 0L。⛔ 不写死假 id, 也⛔ 不能直接换成 getUserId(context) ——
-        // 它落到的 factory_configurations.created_by 是 NOT NULL, null 会变成一次 500。
-        // 逐条理由见 CanvasApplyTemplateTool 同处注释与 AbstractTool#requireUserId。
-        configService.updateFieldConfig(factoryId, moduleCode, fieldCode, dto,
-                requireUserId(context, "修改工厂字段配置"));
-
-        log.info("Canvas 字段配置更新完成 - 工厂ID: {}, 模块: {}, 字段: {}", factoryId, moduleCode, fieldCode);
-
-        return buildSimpleResult(
-                "字段 " + fieldCode + " 的 " + property + " 已更新为: " + value,
-                Map.of(
-                        "factoryId", factoryId,
-                        "moduleCode", moduleCode,
-                        "fieldCode", fieldCode,
-                        "property", property,
-                        "newValue", value
-                )
-        );
     }
 
     /**
@@ -185,7 +146,7 @@ public class CanvasUpdateFieldTool extends AbstractBusinessTool {
     }
 
     @Override public boolean supportsPreview() { return false; }
-    @Override public String getVersion() { return "1.0.0"; }
+    @Override public String getVersion() { return "2.0.0"; }
     @Override public Set<String> getDomainTags() { return Set.of("canvas"); }
 
     @Override

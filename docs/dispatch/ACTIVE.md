@@ -7,6 +7,11 @@
 
 ## 在飞任务
 
+
+
+
+
+
 - `GENERIC-PROPOSAL-PARETO-20261106` — `blocked` — Owner `01a1a954/root` — Base `7872d98a83c370a4d284a071e9c65601cf4f5cbf` — PR1509已合/正式177s；53目标/full19685零红；线上1/4，3格受共用沙盒阻塞。代码scope及全部锁释放；见archive/2026-11-06-generic-proposal-pareto-closeout.md。
 
 
@@ -143,6 +148,8 @@
 - LLM 运营：2026-09-13 aistore 续期换 key，以及 2026-09-04/2026-11-15 复审需要 Owner/供应商控制台动作。
 - 凭证：旧 Aliyun 主账号 AK、旧模型供应商 key、Mall 微信长期凭证仍需各控制台吊销/重置并验证失效。
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
+
+
 
 ## 维护规则
 

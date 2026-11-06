@@ -1168,6 +1168,12 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
                                     copy.setWorkflowConfig(new HashMap<>(src.getWorkflowConfig()));
                                     copy.setValidationConfig(new HashMap<>(src.getValidationConfig()));
                                     copy.setPermissionConfig(new HashMap<>(src.getPermissionConfig()));
+                                    Map<String, Map<String, String>> roleOverrides = new HashMap<>();
+                                    if (src.getRoleModuleOverride() != null) {
+                                        src.getRoleModuleOverride().forEach((role, values) ->
+                                                roleOverrides.put(role, values == null ? null : new HashMap<>(values)));
+                                    }
+                                    copy.setRoleModuleOverride(roleOverrides);
                                     copy.setLayoutConfig(new HashMap<>(src.getLayoutConfig()));
                                     copy.setCustomLabels(new HashMap<>(src.getCustomLabels()));
                                     copy.setComputedFields(new HashMap<>(src.getComputedFields()));
@@ -1183,10 +1189,11 @@ public class FactoryConfigServiceImpl implements FactoryConfigService {
     }
 
     private int getNextVersion(String factoryId) {
-        return factoryConfigurationRepository.findByFactoryIdOrderByConfigVersionDesc(factoryId)
-                .stream().findFirst()
-                .map(c -> c.getConfigVersion() + 1)
-                .orElse(1);
+        int latest = factoryConfigurationRepository.findByFactoryIdOrderByConfigVersionDesc(factoryId)
+                .stream().mapToInt(FactoryConfiguration::getConfigVersion).max().orElse(0);
+        boolean legacyVersionOneExists = latest == 0
+                && !factoryModuleConfigRepository.findByFactoryIdAndConfigVersion(factoryId, 1).isEmpty();
+        return com.cretas.aims.service.config.CanvasDraftVersionPolicy.next(latest, legacyVersionOneExists);
     }
 
     @SuppressWarnings("unchecked")

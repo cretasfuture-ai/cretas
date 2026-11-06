@@ -22,10 +22,7 @@ import java.util.*;
  */
 @Slf4j
 @Component
-public class CanvasToggleSkillTool extends AbstractBusinessTool {
-
-    @Autowired(required = false)
-    private FactorySkillConfigRepository factorySkillConfigRepo;
+public class CanvasToggleSkillTool extends AbstractBoundCanvasConfigTool {
 
     @Override
     public String getToolName() {
@@ -66,40 +63,6 @@ public class CanvasToggleSkillTool extends AbstractBusinessTool {
     }
 
     @Override
-    protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        String skillName = getString(params, "skillName");
-        Boolean enabled = getBoolean(params, "enabled");
-
-        log.info("Canvas AI 技能开关 - 工厂ID: {}, 技能: {}, 启用: {}", factoryId, skillName, enabled);
-
-        Optional<FactorySkillConfig> existing = factorySkillConfigRepo.findByFactoryIdAndSkillName(factoryId, skillName);
-
-        FactorySkillConfig config;
-        boolean isNew = false;
-        if (existing.isPresent()) {
-            config = existing.get();
-            config.setEnabled(enabled);
-        } else {
-            config = FactorySkillConfig.builder()
-                    .factoryId(factoryId)
-                    .skillName(skillName)
-                    .enabled(enabled)
-                    .build();
-            isNew = true;
-        }
-
-        factorySkillConfigRepo.save(config);
-
-        String action = Boolean.TRUE.equals(enabled) ? "启用" : "禁用";
-        log.info("Canvas AI 技能开关完成 - 工厂ID: {}, 技能: {}, 操作: {}, 新建: {}", factoryId, skillName, action, isNew);
-
-        return buildSimpleResult(
-                "AI 技能 " + skillName + " 已" + action,
-                Map.of("factoryId", factoryId, "skillName", skillName, "enabled", enabled, "created", isNew)
-        );
-    }
-
-    @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
                 "skillName", "请问要操作哪个 AI 技能？请提供技能名称（如 inventory-analysis、production-tracking 等）。",
@@ -136,7 +99,7 @@ public class CanvasToggleSkillTool extends AbstractBusinessTool {
     }
 
     @Override public boolean supportsPreview() { return false; }
-    @Override public String getVersion() { return "1.0.0"; }
+    @Override public String getVersion() { return "2.0.0"; }
     @Override public Set<String> getDomainTags() { return Set.of("canvas"); }
 
     @Override
