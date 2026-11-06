@@ -215,6 +215,11 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                         command, idempotencyRecord, auditEventId, lease,
                         GatewayResultCode.TOOL_OUTCOME_UNCERTAIN);
             }
+            if (payload.get("success").booleanValue() && isUncertainSuccessEnvelope(payload)) {
+                return outcomeUnknownAfterClaim(
+                        command, idempotencyRecord, auditEventId, lease,
+                        GatewayResultCode.TOOL_OUTCOME_UNCERTAIN);
+            }
             if (payload.get("success").booleanValue()) {
                 if (!safelyResolve(lease, true)) {
                     return finishReserved(
@@ -378,6 +383,24 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                     toolCall, trustedExecutionContext(command, current, resolved));
             return objectMapper.readTree(rawResponse);
         }
+    }
+
+    private static boolean isUncertainSuccessEnvelope(JsonNode payload) {
+        if (hasPendingDdl(payload) || hasPendingDdl(payload.path("data"))
+                || hasPendingDdl(payload.path("data").path("data"))) {
+            return true;
+        }
+        JsonNode dataSuccess = payload.path("data").get("success");
+        if (dataSuccess != null && dataSuccess.isBoolean() && !dataSuccess.booleanValue()) {
+            return true;
+        }
+        JsonNode nestedSuccess = payload.path("data").path("data").get("success");
+        return nestedSuccess != null && nestedSuccess.isBoolean() && !nestedSuccess.booleanValue();
+    }
+
+    private static boolean hasPendingDdl(JsonNode node) {
+        return node != null && node.isObject()
+                && "PENDING_DDL".equals(node.path("status").asText());
     }
 
     private static boolean isNonMutatingAction(ToolExecutor.ActionType actionType) {

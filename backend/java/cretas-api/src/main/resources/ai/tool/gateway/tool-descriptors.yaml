@@ -3,7 +3,7 @@
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
 expectedToolCount: 493
-expectedLegacyCount: 467
+expectedLegacyCount: 461
 descriptors:
   - toolName: "gate_diagnose_batch"
     implementationClass: "com.cretas.aims.ai.tool.impl.material.GateDiagnoseBatchTool"
@@ -1937,11 +1937,11 @@ descriptors:
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
-  - toolName: "canvas_product_work_process_config"
+  - toolName: "canvas_product_work_process_draft_preview"
     implementationClass: "com.cretas.aims.ai.tool.impl.workprocess.ProductWorkProcessConfigTool"
     provenance: EXPLICIT
-    actionType: WRITE
-    riskLevel: MEDIUM
+    actionType: ANALYZE
+    riskLevel: LOW
     supportsPreview: true
     requiresPermission: true
     requiredPermissions: []
@@ -6164,24 +6164,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "canvas_update_trigger_chain"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasUpdateTriggerChainTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: UPDATE
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["canvas"]
+    allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "business_link_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.common.BusinessLinkQueryTool"
     provenance: LEGACY_INFERRED
@@ -6404,24 +6405,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "canvas_update_field"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasUpdateFieldTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: UPDATE
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["canvas"]
+    allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "camera_unsubscribe"
     implementationClass: "com.cretas.aims.ai.tool.impl.camera.CameraUnsubscribeTool"
     provenance: LEGACY_INFERRED
@@ -6604,24 +6606,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "canvas_toggle_module"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasToggleModuleTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
+    provenance: EXPLICIT
+    actionType: UPDATE
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["canvas"]
+    allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "canvas_set_visibility"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasSetVisibilityTool"
     provenance: LEGACY_INFERRED
@@ -6644,44 +6647,46 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "canvas_toggle_tool"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasToggleToolTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
+    provenance: EXPLICIT
+    actionType: UPDATE
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["canvas"]
+    allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "canvas_toggle_skill"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasToggleSkillTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
+    provenance: EXPLICIT
+    actionType: UPDATE
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["canvas"]
+    allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "canvas_set_user_permission"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasSetUserPermissionTool"
     provenance: LEGACY_INFERRED
@@ -6704,24 +6709,25 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED_P0
   - toolName: "canvas_apply_template"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasApplyTemplateTool"
-    provenance: LEGACY_INFERRED
-    actionType: READ
+    provenance: EXPLICIT
+    actionType: UPDATE
     riskLevel: LOW
     supportsPreview: false
-    requiresPermission: false
+    requiresPermission: true
     requiredPermissions: []
     version: "1.0.0"
     domainTags: ["canvas"]
+    allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
-      actionType: false
-      riskLevel: false
-      supportsPreview: false
-      requiresPermission: false
-      hasPermission: false
-      requiredPermissions: false
-      version: false
-      domainTags: false
-    governanceStatus: REVIEW_REQUIRED
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: true
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: APPROVED
   - toolName: "canvas_add_sub_table"
     implementationClass: "com.cretas.aims.ai.tool.impl.canvas.CanvasAddSubTableTool"
     provenance: LEGACY_INFERRED

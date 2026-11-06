@@ -142,6 +142,23 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Optional<BoundTokenSnapshot> readBoundSnapshot(String token, String factoryId, Long userId) {
+        if (token == null || token.isBlank() || factoryId == null || factoryId.isBlank() || userId == null) {
+            return Optional.empty();
+        }
+        return tokenRepository.findByToken(token)
+                .filter(row -> factoryId.equals(row.getFactoryId())
+                        && factoryId.equals(row.getTenantId())
+                        && userId.equals(row.getUserId())
+                        && row.isBoundForExecution())
+                .map(row -> new BoundTokenSnapshot(
+                        row.getIntentCode(), row.getEntityType(), row.getEntityId(), row.getOperation(),
+                        row.getToolName(), row.getDescriptorVersion(), row.getExecutionMode(),
+                        row.getCommandDigest(), row.getExpiresAt(), row.getStatus()));
+    }
+
+    @Override
     @Deprecated(forRemoval = false)
     public ConfirmResult confirmToken(String token, Long userId) {
         log.warn("拒绝旧版非原子确认入口: tokenFingerprint={}, user={}", fingerprint(token), userId);
