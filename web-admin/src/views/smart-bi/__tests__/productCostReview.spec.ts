@@ -25,6 +25,8 @@ it('deduplicates registered staff while keeping actual roster and person-hours u
   expect(input.requests?.[0]?.missing).toContain('重叠报工');
   expect(input.requests?.[0]?.owner).toContain('班组长');
   expect(input.requests?.[0]?.benefit).toContain('时长×人数');
+  for(const order of orders)delete order.processes[0]!.laborEvidence!.registeredWorkerKeys;
+  expect(blacklakeLaborInput(orders).rows[0]!.registeredWorkerKeys).toBeUndefined(); // Public redaction is unknown, not zero.
 });
 
 it('weights product costs by actual output, retains member orders and sums components once',()=>{

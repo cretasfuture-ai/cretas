@@ -76,7 +76,7 @@ export function analyzeLaborCosts(input:LaborCostInput){
     })),
     needs:[
       ...(!rosterReady?[{key:'people',missing:sourceAvailable?'登记人员是否覆盖实际班组':'实际参与人员名单',owner:'生产主管 / 考勤负责人',action:sourceAvailable?'核对是否由班组长代报；补齐实际参与名单，同一人跨工序去重':'补齐所选工单的实际参与人员，并按人员去重',benefit:'计算真实人均人工费，避免把班组工资除以代报人数'}]:[]),
-      ...(personHours===null?[{key:'hours',missing:'各工序的有效人时',owner:'车间主管',action:sourceAvailable?'确认每段报工实际有多少人参与，并核对零时长和重叠时段；有效时长不能直接当人时':'补齐每段的起止时间和人数；仅有报工时长不够',benefit:'计算每人时费用，并按人时测算工序分摊'}]:[]),
+      ...(personHours===null?[{key:'hours',missing:'各工序的有效人时',owner:'车间主管',action:sourceAvailable?'确认每段实际人数和真正作业时间，核实休息、停机是否扣除；零时长若属于不计时工序可保留为零，重叠时段需确认是否代报':'补齐每段的起止时间和人数；仅有报工时长不够',benefit:'计算每人时费用，并按人时测算工序分摊'}]:[]),
       ...(rows.some(row=>row.amount===0)?[{key:'zero',missing:'零工资工序的计薪方式',owner:'生产 / 人事',action:'确认这些工序是否合并计薪、工资另记或尚未补录',benefit:'避免把未记工资的工序当成不花钱'}]:[]),
       ...(!reconciled?[{key:'cost',missing:'工序人工明细与工单人工合计的核对结果',owner:'生产 / 财务',action:'检查漏记、重复工序或金额缺失',benefit:'让工序人工相加与本单人工费一致'}]:[]),
     ],

@@ -6,15 +6,16 @@ import { analyzeLaborCosts, type LaborCostInput } from '@/utils/laborCostAnalysi
 import CostDataTable from './CostDataTable.vue';
 import type {CostTableColumn} from '@/utils/costTableQuery';
 const props=defineProps<{input:LaborCostInput;scopeLabel:string}>();
-const registered=ref<BlacklakeLaborSummary|null>(null),summaryError=ref('');
+const registered=ref<BlacklakeLaborSummary|null>(null),summaryError=ref(''),summaryLoading=ref(false);
 let generation=0,retryTimer:number|undefined;
 watch(()=>`${props.input.sourceRunId||''}:${props.input.blacklakeOrderIds?.join(',')||''}`,()=>{
-  const current=++generation;registered.value=null;summaryError.value='';if(retryTimer!==undefined)window.clearTimeout(retryTimer);
+  const current=++generation;registered.value=null;summaryError.value='';summaryLoading.value=false;if(retryTimer!==undefined)window.clearTimeout(retryTimer);
   const ids=props.input.blacklakeOrderIds,run=props.input.sourceRunId;
   if(!ids?.length||!run?.startsWith('live:'))return;
   const load=async()=>{
-    try{const value=await getBlacklakeLaborSummary(ids,run);if(current===generation){registered.value=value;summaryError.value='';}}
-    catch(error){if(current!==generation)return;summaryError.value='登记人数核对暂未完成，稍后自动重试。';
+    summaryLoading.value=true;
+    try{const value=await getBlacklakeLaborSummary(ids,run);if(current===generation){registered.value=value;summaryError.value='';summaryLoading.value=false;}}
+    catch(error){if(current!==generation)return;summaryLoading.value=false;summaryError.value='登记人数核对暂未完成，稍后自动重试。';
       if(error instanceof Error&&[401,403,404].includes((error as PythonServiceError).status||0))return;
       retryTimer=window.setTimeout(()=>{void load();},5000);}
   };void load();
@@ -37,7 +38,7 @@ const metrics=computed(()=>{
   return [
     {label:'已记录人工费',value:value.total,hint:'缺工单人工费记录'},
     {label:`每${props.input.unit||'单位成品'}人工费`,value:value.perUnit,hint:[value.total===null?'缺工单人工费记录':'',!props.input.unit?'缺成品单位':'',!Number.isFinite(props.input.output)||!(props.input.output!>0)?'成品产量需核对':''].filter(Boolean).join('；')},
-    {label:'人均人工费',value:value.perPerson,hint:[value.participants===null?(value.sourceAvailable?'已查到登记人员，需确认实际班组名单':'缺实际参与人员名单'):'',amountHint].filter(Boolean).join('；')},
+    {label:'人均人工费',value:value.perPerson,hint:[value.participants===null?(value.sourceAvailable?'需确认实际班组名单':'缺实际参与人员名单'):'',amountHint].filter(Boolean).join('；')},
     {label:'每人时费用',value:value.perPersonHour,hint:[value.personHours===null?(value.sourceAvailable?'需补每段实际参与人数，不能直接用报工时长':'缺各工序的有效人时'):value.personHours===0?'有效人时为零，暂不能计算':'',amountHint].filter(Boolean).join('；')},
   ];
 });
@@ -63,11 +64,11 @@ const columns=computed<CostTableColumn<LaborRow>[]>(()=>[
     <div v-if="model.sourceAvailable" class="source-evidence">
       <b>黑湖已补到的记录</b>
       <p v-if="summaryError" class="warning">{{summaryError}}</p>
-      <p>{{model.registeredReports}} 条报工，{{model.registeredParticipants??'尚未核实'}} 名登记生产人员；{{model.sourceEffectiveHours===null?'有效时长待核对':`累计报工有效时长 ${fmt(model.sourceEffectiveHours)} 小时`}}。</p>
+      <p>{{model.registeredReports}} 条报工，{{model.registeredParticipants===null?(summaryLoading?'正在核对登记人数':'登记人数待补'):`${model.registeredParticipants} 名登记生产人员`}}；{{model.sourceEffectiveHours===null?'有效时长待核对':`累计报工有效时长 ${fmt(model.sourceEffectiveHours)} 小时`}}。</p>
       <p v-if="model.registeredPerPerson!==null"><b>按登记人员测算人均：{{fmt(model.registeredPerPerson)}}</b>。如由班组长代报，实际人均会不同，需先确认班组名单。</p>
-      <p v-else>工资与登记人员的对应关系还未核对完整，暂不能测算登记口径的人均。</p>
+      <p v-else>{{summaryLoading?'正在核对所选工单的登记人数和工资。':'登记口径人均尚未就绪，待完成所选工单核对。'}}</p>
       <p v-if="model.zeroTimeReports||model.overlapReports" class="warning">{{model.zeroTimeReports}} 条零时长报工，{{model.overlapReports}} 条报工与同一登记人员的其他时段重叠；请车间确认是否代报或补录。</p>
-      <p class="scope">表内先看黑湖已记录的各工序工资；登记人员已跨工序去重，实际班组人数确认后才能按人时重新分摊。</p>
+      <p class="scope">表内按黑湖各工序已记工资展示；另做人时分摊，需确认每段实际人数与有效作业时间。</p>
     </div>
     <p v-if="model.total===0" class="warning">工资记录为零，请先确认是工资另记、漏记，还是确实不计薪。</p>
     <p v-if="!model.reconciled" class="warning">工序明细还没有与人工费合计对齐，先核对金额，再做分摊。</p>

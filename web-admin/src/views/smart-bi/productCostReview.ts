@@ -12,7 +12,7 @@ export function blacklakeLaborInput(orders:readonly CostProject[],sourceRunId?:s
     blacklakeOrderIds:orders.map(r=>r.projectId),sourceRunId,
     rows:[...groups].map(([process,rows],index):LaborCostRow=>({id:`blacklake:${index}`,process,amount:known(rows.map(r=>r.laborCost)),reportedHours:known(rows.map(r=>r.hours)),personHours:null,
       ...(rows.some(r=>r.laborEvidence)?{
-        registeredWorkerKeys:[...new Set(rows.flatMap(r=>r.laborEvidence?.registeredWorkerKeys||[]))],
+        registeredWorkerKeys:rows.every(r=>r.laborEvidence?.registeredWorkerKeys!==undefined)?[...new Set(rows.flatMap(r=>r.laborEvidence?.registeredWorkerKeys||[]))]:undefined,
         registeredCoverageComplete:rows.every(r=>r.laborEvidence?.registeredCoverageComplete===true),
         sourceEffectiveHours:known(rows.map(r=>r.laborEvidence?.sourceEffectiveHours??null)),
         registeredReports:rows.reduce((a,r)=>a+(r.laborEvidence?.registeredReports||0),0),
@@ -22,11 +22,11 @@ export function blacklakeLaborInput(orders:readonly CostProject[],sourceRunId?:s
     })),
     requests:orders.flatMap(order=>order.processes.flatMap(row=>{
       const e=row.laborEvidence;if(!e||(!e.registeredReports&&row.laborCost===0))return [];
-      const missing=['实际班组人员名单和每段参与人数',...e.issues,
+      const missing=['实际班组名单、每段人数及有效作业时长',...e.issues,
         ...(e.zeroTimeReports?['零时长报工需确认']:[]),...(e.overlapReports?['同一登记人员的重叠报工需确认']:[])];
       return [{id:`${order.projectId}:${row.taskId}`,orderCode:order.projectCode,process:row.process,missing:missing.join('；'),
         owner:e.issues.some(s=>s.includes('工资'))?'车间主管 / 财务':'车间主管 / 班组长',
-        action:`已查到 ${e.registeredReports} 条报工、${e.registeredCount??e.registeredWorkerKeys?.length??'待核对'} 名登记人员。确认是否班组代报，补齐每段实际参与人员和人数；核对本工序的零时长、重叠及金额问题。`,
+        action:`已查到 ${e.registeredReports} 条报工、${e.registeredCount??e.registeredWorkerKeys?.length??'待核对'} 名登记人员。确认班组代报与实际名单、人数，核实作业时间及休息停机扣除；零时长是否不计时、重叠及金额问题需确认。`,
         benefit:'按实际人员去重计算人均；按每段时长×人数计算工序人时，再分摊同一笔人工费。'}];
     })),
   };
