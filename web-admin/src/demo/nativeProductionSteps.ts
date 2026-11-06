@@ -91,7 +91,7 @@ export function createNativeProductionAdapters(options: AdapterOptions, requeste
     })
 
   const requisition = adapter('material-requisition', write,
-    async ({ ui, state, context }) => { await ui.navigate('/production/material-flow?tab=requisitions'); await ui.click('[data-testid="material-requisition-create"]', '按计划生成'); await ui.click('[data-testid="material-requisition-plan"]','展开本轮领料计划'); await ui.click(`[data-testid="material-requisition-plan-option-${id(state.entities.productionPlan?.id)}"]`,'选择本轮真实生产计划'); await ui.input('[data-testid="material-requisition-amount"]', String(context.rawQuantity)) },
+    async ({ ui, state, context }) => { await ui.navigate('/production/material-flow?tab=requisitions'); await ui.click('[data-testid="material-requisition-create"]', '按计划生成'); await ui.click('[data-testid="material-requisition-plan"] .el-select__wrapper','展开本轮领料计划'); await ui.click(`[data-testid="material-requisition-plan-option-${id(state.entities.productionPlan?.id)}"]`,'选择本轮真实生产计划'); await ui.input('[data-testid="material-requisition-amount"]', String(context.rawQuantity)) },
     async ({ state, ui }) => {
       await ui.click('[data-testid="material-requisition-generate"]', '生成领料单')
       await ui.hold('展示领料单生成结果')
