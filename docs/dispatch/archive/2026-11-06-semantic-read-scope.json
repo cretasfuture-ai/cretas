@@ -3,7 +3,7 @@
   "owner": "01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98",
   "originalBaseSHA": "ecfb04cbac6283ac4e1b70592f4643be5feb44b8",
   "upstreamSyncSHA": "3ed5b7f3c86d5718fce0f3b04d857e14aacf03d4",
-  "currentStage": "2026-11-07: ae8 complete148 retained normal15/24tasks61/74turns,SSE8/24tasks47/74turns;not95. Actual ordinary low-confidence route now shares caller-bound canonical/permission service with SSE; display scope peers survive 3-item menu, model probability order untouched. Page delta no longer advertises a competing page value; explicit targets use ABS,relative evidence retains full action and one-step semantics,Unicode numeric fails closed. Relative checks use exact egress quote while restored raw quote only proves provenance. Java285/package and Python86 pass; freeze final identical62+148 developer regression;no train,gold edit,PR merge/deploy.",
+  "currentStage": "2026-11-07: complete4ee62+148 retained,not95. Final source contract: advertise page actions only with existing Tool/state/source guard eligibility;runtime guards unchanged. Recorded-input software replay proved3/8 missing goals were already recalled then cut for special slots;candidate fit now protects original first/registry/already-added capability/valid previous while only deleting and preserving order. Other5 recall misses not claimed fixed. Java293/23+package;Python93;static review passed. Freeze complete148 final real readonly run;no threshold reduction/train/gold edit/merge/deploy.",
   "existingScope": [
     "Java service/execution, recognition DTO and existing Conversation/preview integration",
     "Java ai/tool/impl/crm read tools",
@@ -21,7 +21,7 @@
     "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/CanvasConfigPlanBindingPostgresContractTest.java"
   ],
   "reason": "Upstream PR1516 and PR1519 add real-PG consumers of PreviewTokenServiceImpl. Their explicit JPA slices omitted the required ConversationSessionRepository. Register the real entity/repository; retain native locks, claims and product/receipt transaction assertions.",
-  "acceptance": "Java285/22 related classes and package; Python86 unchanged-source evidence. Actual local266+BlendRetriever/nativeLuna/mini ordinary+SSE; immutable62+148 developer corpora. Real PG/JPA applicable CI gate kept. All failures/unknowns retained;not independent human gold.",
+  "acceptance": "Java293 tests/23 classes+package;Python93 related;real local266/vector/nativeLuna/mini both entries,unchanged148 developer corpus. Reuse unaffected actual scope-menu trace from prior62 with explicit version;do not pool versions or call opened data independent gold. Keep all failures/unknowns,PG/CI/freeze gates.",
   "boundaries": "No new production Entity/Repository/JPQL edits in this increment; no training, protected-gold edits, production business mutation, PR merge, deployment or online model replacement. Upstream synchronized only into candidate branch.",
   "delegatedTasks": [
     {

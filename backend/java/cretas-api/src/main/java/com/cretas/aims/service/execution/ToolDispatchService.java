@@ -248,18 +248,35 @@ public class ToolDispatchService {
             String safeCurrentInput = objectMapper.readTree(redacted.text(1)).path("currentInput").asText("");
             List<String> sentPageEvidence = new ArrayList<>();
             Set<String> sentRelativePageEvidence = new HashSet<>();
+            boolean hasAbsolutePageEvidence = false;
             var safePageEvidenceOptions = ReadPageEvidence.from(safeCurrentInput);
             for (String quote : safePageEvidenceOptions.values()) {
                 String restoredQuote = objectMapper.readValue(redacted.restoreJsonText(objectMapper.writeValueAsString(quote)), String.class);
                 if (pageEvidenceOptions.allows(request.getUserInput(), restoredQuote)) {
                     sentPageEvidence.add(quote);
+                    Integer wirePage = sourcePositivePageValue(quote);
+                    if (wirePage != null && wirePage.equals(sourcePositivePageValue(restoredQuote)))
+                        hasAbsolutePageEvidence = true;
                     // Step semantics apply to the exact egress quote. A restored
                     // telephone/name is provenance, never a relative page count.
                     if (safePageEvidenceOptions.allowsRelative(safeCurrentInput, quote)) sentRelativePageEvidence.add(quote);
                 }
             }
+            boolean supportsPage = schema.get("properties") instanceof Map<?,?> pageFields && pageFields.containsKey("page");
+            Object priorPageValue = previous.get("parameters") instanceof Map<?,?> priorFields ? priorFields.get("page") : null;
+            boolean hasCurrentPage = Boolean.TRUE.equals(input.get("canInheritPreviousParameters"))
+                    && priorPageValue instanceof Number priorNumber && priorNumber.doubleValue() == priorNumber.longValue()
+                    && priorNumber.longValue() >= 1 && priorNumber.longValue() < Integer.MAX_VALUE;
+            List<String> availablePageActions = new ArrayList<>();
+            if (supportsPage && hasCurrentPage && !sentRelativePageEvidence.isEmpty()) {
+                availablePageActions.add("NEXT"); availablePageActions.add("PREVIOUS");
+            }
+            if (supportsPage && hasAbsolutePageEvidence) availablePageActions.add("ABSOLUTE");
+            availablePageActions.add("UNCHANGED");
             if (sentPageEvidence.isEmpty()) sentPageEvidence.add(""); // Never authorizes a page change.
             var safeSchema = objectMapper.readTree(redacted.text(2));
+            ((com.fasterxml.jackson.databind.node.ObjectNode)safeSchema.path("properties").path("pageAction"))
+                    .set("enum", objectMapper.valueToTree(availablePageActions));
             ((com.fasterxml.jackson.databind.node.ObjectNode)safeSchema.path("properties").path("pageEvidence"))
                     .set("enum", objectMapper.valueToTree(sentPageEvidence));
             ChatCompletionResponse response = dashScopeClient.chatWithTools(redacted.text(0), redacted.text(1),
@@ -596,6 +613,18 @@ public class ToolDispatchService {
                     && !"CLEARED".equals(ref.get("id"))) return ref;
         }
         return Map.of();
+    }
+
+    /** Advertisement only: mirrors the existing ABS numeric binding; not semantic intent proof. */
+    private static Integer sourcePositivePageValue(String quote) {
+        var mentions = LlmParameterGrounding.numberMentions(quote);
+        if (mentions.size() != 1) return null;
+        try {
+            int value = mentions.get(0).value().intValueExact();
+            return value > 0 ? value : null;
+        } catch (ArithmeticException invalid) {
+            return null;
+        }
     }
 
     private static IntentExecuteResponse readTurnReply(String status, String message) {

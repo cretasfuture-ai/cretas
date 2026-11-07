@@ -41,7 +41,7 @@ from ai.dto import (
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
-from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, RequestPurpose, intent_text
+from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, SPECIAL_OPTIONS, RequestPurpose, intent_text
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
@@ -170,6 +170,28 @@ def _one_read_task_only(context):
     return (not context.get("draftTasks") and not context.get("lastActionCommitted")
             and not context.get("hasPageReference") and not context.get("pageReference")
             and not context.get("slotTask"))
+
+
+def _fit_choice_candidates(codes, protected, capacity):
+    """Delete lower-priority candidates without reordering or inventing codes.
+
+    The first current candidate cannot be displaced by an older task when a
+    configured matcher has very little capacity. Explicit additions survive
+    only when space exists; this never chooses an intent or changes a score.
+    """
+    if capacity <= 0 or not codes:
+        return []
+    keep = []
+    for code in [codes[0], *protected]:
+        if code in codes and code not in keep and len(keep) < capacity:
+            keep.append(code)
+    result = list(codes)
+    for index in range(len(result) - 1, -1, -1):
+        if len(result) <= capacity:
+            break
+        if result[index] not in keep:
+            result.pop(index)
+    return result
 
 
 class Orchestrator:
@@ -383,6 +405,7 @@ class Orchestrator:
             codes = codes[:max(0, self.config.decision_k - 1)] + [previous_code]
             timing["contextReadCandidateAdded"] = 1
         expanded = _read_capability_candidates(task_context, codes, by_code, self.config.decision_k)
+        capability_added = [code for code in expanded if code not in codes]
         if len(expanded) > len(codes):
             timing["capabilityReadCandidatesAdded"] = len(expanded) - len(codes)
         codes = expanded
@@ -401,6 +424,26 @@ class Orchestrator:
         # ===== ② 决策: 读概率 =====
         t = time.time()
         special = bool(getattr(self.config, "decision_special_options", False)) or not standalone or registry_code is not None
+        capacity = min(self.config.decision_k, getattr(self.decision_matcher, 'k', self.config.decision_k))
+        capacity -= len(SPECIAL_OPTIONS) if special else 0
+        if capacity <= 0:
+            timing['decisionCandidateBudgetUnavailable'] = 1
+            timing['decisionUnavailable'] = 1
+            purpose_result = await purpose_block()
+            if purpose_result is not None:
+                return purpose_result
+            result = IntentMatchResultDto.empty(userInput=query)
+            result.requiresConfirmation = True
+            result.clarificationQuestion = "暂时无法确认您的请求，请稍后重试；尚未执行业务。"
+            result.timingMs = {**timing, 'totalMs': int((time.time() - t0) * 1000)}
+            return result
+        # choose() reserves the same special-option slots internally. Protect
+        # already recalled registry/context/capability additions from that
+        # mechanical suffix cut. Raw candidate order and all scores survive.
+        before_fit = len(codes)
+        codes = _fit_choice_candidates(codes, [registry_code, *capability_added, previous_code], capacity)
+        if len(codes) < before_fit:
+            timing['decisionCandidatesClipped'] = before_fit - len(codes)
         if special:
             probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history,
                                                        special_options=True)

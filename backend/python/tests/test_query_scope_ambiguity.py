@@ -8,7 +8,9 @@ from ai import registry
 
 from ai.matcher.decision import DecisionMatcher, build_scope_messages
 from ai.orchestrator import _scope_peer_rows, _trusted_read_capabilities
+from ai.orchestrator import _fit_choice_candidates
 from tests.test_ai_decision_layer import FakeDecision, _orch, _empty_registry, CFG
+from tests.test_ai_decision_layer import FakeSemantic
 
 
 ROWS = [dict(id='stock', intent_code='MATERIAL_BATCH_QUERY', intent_name='批次查询', tool_name='stock_list',
@@ -92,6 +94,64 @@ def test_uncertain_route_offers_missing_actual_scope_peer_without_boosting_or_a_
     assert [c.intentCode for c in result.topCandidates]==['MATERIAL_BATCH_QUERY','ORDER_LIST','DUE_LIST']
     assert [c.confidence for c in result.topCandidates]==[.65,.3,None]
     assert not decision.scope_calls
+
+
+@pytest.mark.parametrize('special',[False,True])
+def test_capability_additions_reach_the_actual_chooser_with_special_slots_reserved(special):
+    fillers=[dict(id=f'f{i}',intent_code=f'FILLER_{i}',intent_name=f'其他能力{i}',tool_name=f'other_{i}',
+                  intent_category='MATERIAL',is_active=True) for i in range(17)]
+    codes=[r['intent_code'] for r in fillers]
+    decision=FakeDecision(codes[:8],{codes[0]:.95})
+    sem=FakeSemantic([(c,.4) for c in codes[8:]])
+    cfg=replace(CFG,decision_special_options=special,decision_auto_threshold=.8,decision_k=20)
+    result=asyncio.run(_orch(decision,sem=sem,cfg=cfg).match(query='当前查询',factoryId='F006',businessType='FACTORY',
+        role='operator',userId='7',visible_intents=fillers+ROWS[:2],history=[],task_context=CTX,enable_llm=True,min_confidence=.7))
+    assert len(decision.seen_options)==(18 if special else 19)
+    assert {'MATERIAL_BATCH_QUERY','DUE_LIST'} <= set(decision.seen_options)
+    assert decision.seen_options[0]==codes[0]
+    assert result.bestMatch.intentCode==codes[0] and result.confidence==.95
+    assert not result.requiresConfirmation
+
+
+def test_protected_candidate_overflow_preserves_current_first_and_original_order():
+    assert _fit_choice_candidates(['current','other','scope','previous'],['scope','previous'],1)==['current']
+    assert _fit_choice_candidates(['current','other','scope','previous'],['scope','previous'],2)==['current','scope']
+    assert _fit_choice_candidates(['current'],[],0)==[]
+
+
+@pytest.mark.parametrize('cfg_k,matcher_k',[(20,4),(4,20)])
+def test_real_capacity_uses_the_smaller_matcher_and_config_budget_without_rescaling(cfg_k,matcher_k):
+    rows=[dict(id=f'n{i}',intent_code=f'OTHER_{i}',intent_name=f'其他能力{i}',tool_name=f'other_{i}',intent_category='OTHER',is_active=True) for i in range(6)]
+    decision=FakeDecision([r['intent_code'] for r in rows],{'OTHER_0':.95,'OTHER_1':.03});decision.k=matcher_k
+    engine=_orch(decision,cfg=replace(CFG,decision_special_options=True,decision_k=cfg_k))
+    result=asyncio.run(engine.match(query='当前目标',factoryId='F006',businessType='FACTORY',role='operator',userId='7',
+        visible_intents=rows,history=[],task_context=dict(CTX,readCapabilities=[]),enable_llm=True,min_confidence=.7))
+    assert decision.seen_options==['OTHER_0','OTHER_1']
+    assert [r.confidence for r in result.topCandidates]==[.95,.03]
+
+
+def test_conversation_action_canonicalization_releases_slots_before_candidate_fit():
+    rows=[dict(id='next',intent_code='NEXT_ACTION',tool_name='pagination_next',intent_category='OTHER',is_active=True),
+          ROWS[0],dict(id='n1',intent_code='OTHER_1',tool_name='other1',intent_category='OTHER',is_active=True),
+          dict(id='n2',intent_code='OTHER_2',tool_name='other2',intent_category='OTHER',is_active=True)]
+    decision=FakeDecision([r['intent_code'] for r in rows],{'MATERIAL_BATCH_QUERY':.99})
+    context=dict(CTX,contextStatus='PRESENT',references=[dict(type='READ_QUERY',id='MATERIAL_BATCH_QUERY',
+        toolName='stock_list',taskStatus='COMPLETED',parameters=dict(page=2))])
+    engine=_orch(decision,cfg=replace(CFG,decision_special_options=True,decision_k=4))
+    result=asyncio.run(engine.match(query='继续',factoryId='F006',businessType='FACTORY',role='operator',userId='7',
+        visible_intents=rows,history=[],task_context=context,enable_llm=True,min_confidence=.7))
+    assert result.timingMs['readActionCandidatesCanonicalized']==1
+    assert decision.seen_options==['MATERIAL_BATCH_QUERY','OTHER_1']
+
+
+def test_zero_real_choice_capacity_fails_closed_from_public_match_without_legacy():
+    decision=FakeDecision([r['intent_code'] for r in ROWS],{'MATERIAL_BATCH_QUERY':.99})
+    engine=_orch(decision,cfg=replace(CFG,decision_special_options=True,decision_k=2))
+    result=asyncio.run(engine.match(query='当前查询',factoryId='F006',businessType='FACTORY',role='operator',userId='7',
+        visible_intents=ROWS,history=[],task_context=CTX,enable_llm=True,min_confidence=.7))
+    assert result.requiresConfirmation and result.bestMatch is None
+    assert result.timingMs['decisionUnavailable']==1 and result.timingMs['decisionCandidateBudgetUnavailable']==1
+    assert decision.choose_calls==0 and engine.llm_matcher.calls==0
 
 
 def test_client_metadata_invisible_tools_and_same_tool_aliases_cannot_create_scope_peers():
