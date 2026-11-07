@@ -36,6 +36,20 @@ def test_untrusted_capability_cannot_replace_visible_option(provenance):
     asyncio.run(_orch(dec).match(query='查批次',factoryId='F006',businessType='FACTORY',role='operator',userId='u',
         visible_intents=VISIBLE,history=[],task_context=ctx,enable_llm=True,min_confidence=.7))
     assert all('_read_capability' not in r for r in dec.catalog+dec.rows)
+    assert 'CLIENT_ONLY_VALUE' not in str(dec.seen_history)
+
+@pytest.mark.parametrize('provenance',[None,'CLIENT','SERVER_CONVERSATION_MEMORY'])
+def test_all_capability_paths_share_the_same_trust_boundary(provenance):
+    from ai.orchestrator import _with_task_context,_read_capability_candidates
+    ctx=dict(contextStatus='PRESENT',provenance=provenance,readCapabilities=[
+        dict(tool='unp',parameters=[],description='CLIENT_ONLY_DESCRIPTION',clarification='CLIENT_ONLY_CLARIFICATION'),
+        dict(tool='pgd',parameters=['page','size'])])
+    by={'A':dict(tool_name='unp'),'B':dict(tool_name='pgd')}
+    text=str(_with_task_context([],ctx));codes=_read_capability_candidates(ctx,['A'],by,20)
+    trusted=provenance=='SERVER_CONVERSATION_MEMORY'
+    assert ('CLIENT_ONLY_DESCRIPTION' in text)==trusted
+    assert ('CLIENT_ONLY_CLARIFICATION' in text)==trusted
+    assert codes==(['A','B'] if trusted else ['A'])
 
 def test_capability_annotations_never_create_a_catalog_option_or_render_business_rows():
     from ai.matcher.decision import intent_text

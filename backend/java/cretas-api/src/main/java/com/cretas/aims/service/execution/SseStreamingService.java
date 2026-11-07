@@ -2263,7 +2263,10 @@ public class SseStreamingService {
                                 .actionCode("REPHRASE").actionName("重新描述").build())
                         : clarificationCandidateService.buildCandidateActions(
                                 matchResult, factoryId, userId, userRole, mode);
-        String clarificationMessage = buildSafeClarificationMessage(candidateActions);
+        String clarificationMessage = ClarificationCandidateService.readCapabilityDescription(
+                toolRegistry, matchedIntent.getToolName(), null) != null
+                ? ClarificationCandidateService.buildClarificationMessage(candidateActions)
+                : buildSafeClarificationMessage(candidateActions);
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(matchedIntent.getIntentCode())

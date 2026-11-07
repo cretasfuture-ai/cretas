@@ -59,10 +59,9 @@ def _standalone_context(context, history):
             and not history)
 
 
-def _with_task_context(history, context):
-    turns = list(history or [])
+def _trusted_read_capabilities(context):
     capabilities = []
-    if isinstance(context, dict):
+    if isinstance(context, dict) and context.get("provenance") == "SERVER_CONVERSATION_MEMORY":
         declared = context.get("readCapabilities")
         for item in (declared if isinstance(declared, list) else [])[:5]:
             if not isinstance(item, dict) or not isinstance(item.get("tool"), str):
@@ -76,6 +75,12 @@ def _with_task_context(history, context):
                 cap["statuses"] = {str(k)[:64]: [str(v)[:32] for v in values[:2]]
                         for k, values in list(item["statuses"].items())[:32] if isinstance(values, list)}
             capabilities.append(cap)
+    return capabilities
+
+
+def _with_task_context(history, context):
+    turns = list(history or [])
+    capabilities = _trusted_read_capabilities(context)
     if _standalone_context(context, history) and not capabilities:
         return turns
     if context is not None:
@@ -114,8 +119,8 @@ def _read_capability_candidates(context, codes, by_code, limit):
     These are actual declarations and visible labels, not an inferred user goal.
     The chooser still receives NONE/CLARIFY and performs the semantic decision.
     """
-    declared = context.get("readCapabilities") if isinstance(context, dict) else None
-    if not isinstance(declared, list):
+    declared = _trusted_read_capabilities(context)
+    if not declared:
         return codes
     caps = {c["tool"]: c for c in declared[:5] if isinstance(c, dict) and isinstance(c.get("tool"), str)}
     selected = [caps[by_code[c]["tool_name"]] for c in codes if by_code[c].get("tool_name") in caps]
@@ -241,10 +246,7 @@ class Orchestrator:
         history = _with_task_context(history, task_context)
         # Bind actual read capability to each visible option, not just a distant
         # context paragraph beside generic legacy catalog names. Copies only.
-        declared = task_context.get("readCapabilities") if isinstance(task_context, dict) else None
-        caps = {c["tool"]: c for c in declared[:5]
-                if isinstance(c, dict) and isinstance(c.get("tool"), str)} if (
-                    isinstance(declared, list) and task_context.get("provenance") == "SERVER_CONVERSATION_MEMORY") else {}
+        caps = {c["tool"]: c for c in _trusted_read_capabilities(task_context)}
         visible_intents = [dict(row, _read_capability=caps[row["tool_name"]])
                 if row.get("tool_name") in caps else row for row in visible_intents]
         by_code = {str(r.get("intent_code")): r for r in visible_intents}

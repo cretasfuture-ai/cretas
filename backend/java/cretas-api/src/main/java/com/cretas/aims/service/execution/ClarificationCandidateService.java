@@ -273,4 +273,20 @@ public class ClarificationCandidateService {
                 .parameters(parameters)
                 .build();
     }
+
+    static String buildClarificationMessage(List<IntentExecuteResponse.SuggestedAction> actions) {
+        List<IntentExecuteResponse.SuggestedAction> choices = actions == null ? List.of() : actions.stream()
+                .filter(a -> a != null && "SELECT_INTENT".equals(a.getActionCode())
+                        && a.getActionName() != null && !a.getActionName().isBlank()).limit(3).toList();
+        if (choices.isEmpty()) return "当前没有可安全提供的业务选项，请重新描述您的需求。";
+        StringBuilder text = new StringBuilder(choices.size()==1 ? "请确认您要查询的口径：\n" : "请明确您要查询的口径：\n");
+        int index=1;
+        for (var choice : choices) {
+            text.append(index++).append(". ").append(choice.getActionName());
+            String description=ClarificationButtonText.subtitle(choice.getDescription());
+            if (description!=null && !description.startsWith("置信度")) text.append(" — ").append(description);
+            text.append("\n");
+        }
+        return text.append("请选择对应选项，或明确说明所需口径；尚未执行查询。").toString();
+    }
 }

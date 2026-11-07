@@ -2357,7 +2357,9 @@ public class IntentExecutionOrchestrator {
         // Audit gate requires NEED_CLARIFICATION to include specific 2+ choice question
         // visible in formattedText / message — bare "请确认您想要执行的操作" fails.
         String clarificationMessage = matchResult.getClarificationQuestion();
-        if (clarificationMessage == null || clarificationMessage.isEmpty()) {
+        if (ClarificationCandidateService.readCapabilityDescription(toolRegistry, matchedIntent.getToolName(), null) != null) {
+            clarificationMessage = ClarificationCandidateService.buildClarificationMessage(candidateActions);
+        } else if (clarificationMessage == null || clarificationMessage.isEmpty()) {
             clarificationMessage = buildClarificationWithChoices(candidateActions, factoryId);
         }
 

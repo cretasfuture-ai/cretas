@@ -47,7 +47,7 @@ def test_only_one_visible_completed_matching_binding_can_seed_recall(change):
     assert _context_read_candidate(ctx,by) is None
 
 def test_capability_contract_survives_both_new_and_existing_task_projection_without_grants():
-    for ctx in [context(),dict(contextStatus='NEW')]:
+    for ctx in [context(),dict(contextStatus='NEW',provenance='SERVER_CONVERSATION_MEMORY')]:
         ctx['readCapabilities']=[dict(tool='material_batch_query',description='真实批次列表',parameters=['page','size','status'],
             statuses={'EXPIRED':['已过期'],'DEPLETED':['已耗尽']},authorization='ADMIN',business_rows=[{'price':'private'}])]
         turns=_with_task_context([],ctx);payload=json.loads(turns[-1]['content'].split('：',1)[1])
@@ -73,7 +73,7 @@ def test_unpaged_specialized_read_recall_gets_visible_paged_alternative():
     from ai.orchestrator import _read_capability_candidates
     by={r['intent_code']:r for r in VISIBLE}
     by['MATERIAL_EXPIRED_QUERY']=dict(tool_name='material_expired_query')
-    ctx={'readCapabilities':[dict(tool='material_expired_query',parameters=[]),
+    ctx={'provenance':'SERVER_CONVERSATION_MEMORY','readCapabilities':[dict(tool='material_expired_query',parameters=[]),
         dict(tool='material_batch_query',parameters=['page','size','status'])]}
     assert _read_capability_candidates(ctx,['MATERIAL_EXPIRED_QUERY'],by,20)==['MATERIAL_EXPIRED_QUERY','MATERIAL_BATCH_QUERY']
     assert _read_capability_candidates(ctx,['CLOCK_OUT'],by,20)==['CLOCK_OUT']

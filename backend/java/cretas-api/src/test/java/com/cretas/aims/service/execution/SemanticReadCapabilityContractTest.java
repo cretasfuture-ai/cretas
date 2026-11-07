@@ -71,4 +71,41 @@ class SemanticReadCapabilityContractTest {
         assertThat(ClarificationCandidateService.readCapabilityDescription(registry,"missing","原说明")).isEqualTo("原说明");
         assertThat(ClarificationCandidateService.readCapabilityDescription(null,"missing",null)).isNull();
     }
+
+    @ParameterizedTest @ValueSource(ints={1,2})
+    void actualResponseBuildersShareScopeMessageWithoutAddingDefaultsOrStaleQuestion(int count) {
+        var registry=mock(ToolRegistry.class);
+        when(registry.getExecutor("material_batch_query")).thenReturn(Optional.of(new MaterialBatchQueryTool()));
+        when(registry.getExecutor("material_expired_query")).thenReturn(Optional.of(new MaterialExpiredQueryTool()));
+        var configs=mock(com.cretas.aims.service.intent.IntentConfigManagementService.class);
+        when(configs.resolveBusinessDomain("F006")).thenReturn("FACTORY");
+        var status=com.cretas.aims.entity.config.AIIntentConfig.builder().intentCode("MATERIAL_BATCH_QUERY")
+                .intentName("状态清单").toolName("material_batch_query").businessType("FACTORY").isActive(true).build();
+        var date=com.cretas.aims.entity.config.AIIntentConfig.builder().intentCode("MATERIAL_EXPIRED_QUERY")
+                .intentName("日期清单").toolName("material_expired_query").businessType("FACTORY").isActive(true).build();
+        when(configs.getIntentByCode("F006","MATERIAL_BATCH_QUERY")).thenReturn(Optional.of(status));
+        when(configs.getIntentByCode("F006","MATERIAL_EXPIRED_QUERY")).thenReturn(Optional.of(date));
+        var candidates=new ArrayList<com.cretas.aims.dto.intent.IntentMatchResult.CandidateIntent>();
+        candidates.add(com.cretas.aims.dto.intent.IntentMatchResult.CandidateIntent.builder()
+                .intentCode(status.getIntentCode()).intentName(status.getIntentName()).confidence(.55).build());
+        if(count==2)candidates.add(com.cretas.aims.dto.intent.IntentMatchResult.CandidateIntent.builder()
+                .intentCode(date.getIntentCode()).intentName(date.getIntentName()).confidence(.44).build());
+        var match=com.cretas.aims.dto.intent.IntentMatchResult.builder().bestMatch(status).confidence(.55)
+                .topCandidates(candidates).clarificationQuestion("历史拒绝方向，不是本轮口径").requiresConfirmation(true).build();
+        var actions=candidates.stream().map(c->ClarificationCandidateService.toSelectAction("F006",c.getIntentCode(),c.getIntentName(),
+                ClarificationCandidateService.readCapabilityDescription(registry,c.getIntentCode().equals(status.getIntentCode())?
+                        status.getToolName():date.getToolName(),null),c.getConfidence())).toList();
+        var ordinary=mock(IntentExecutionOrchestrator.class,CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(ordinary,"configService",configs);ReflectionTestUtils.setField(ordinary,"toolRegistry",registry);
+        var stream=mock(SseStreamingService.class,CALLS_REAL_METHODS);ReflectionTestUtils.setField(stream,"toolRegistry",registry);
+        var service=mock(ClarificationCandidateService.class);
+        when(service.buildCandidateActions(eq(match),eq("F006"),eq(7L),anyString(),anyString())).thenReturn(actions);
+        ReflectionTestUtils.setField(stream,"clarificationCandidateService",service);
+        var normal=ordinary.buildClarificationResponse(match,"F006");
+        IntentExecuteResponse sse=ReflectionTestUtils.invokeMethod(stream,"buildClarificationResponseForStream",match,"F006",7L,"factory_super_admin","READ");
+        assertThat(sse.getMessage()).isEqualTo(normal.getMessage()).contains(actions.get(0).getDescription())
+                .doesNotContain("历史拒绝方向","默认");
+        assertThat(sse.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        if(count==1)assertThat(sse.getMessage()).doesNotContain("2.");
+    }
 }

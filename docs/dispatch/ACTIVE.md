@@ -124,7 +124,7 @@
 - `SEMANTIC-PREVIEW-REVISION-20261106` — `review` — Owner /root/preview_revision — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
 - `SEMANTIC-CONVERSATION-STATE-20261106` — `review` — Owner /root/conversation_state — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
 - `SEMANTIC-FOLLOWUP-SAFETY-20261106` — `review` — Owner /root/followup_safety — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
-- `SEMANTIC-SALES-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476冻结；补候选Tool承载、只读分页/续句；已打开样本仅开发回归；不合并部署/训练。
+- `SEMANTIC-SALES-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476冻结；修过期口径澄清/切换方向；核验独立来源；保护测试，不训练/合并/部署。
 
 - `SEMANTIC-PREVIEW-FIXTURES-20261106` — `review` — Owner /root/preview_revision — Base a6737c0a9218b43f7dedd3b738087ca68e6271d2 — PR1476; root verifies; no prod/train/deploy.
 
