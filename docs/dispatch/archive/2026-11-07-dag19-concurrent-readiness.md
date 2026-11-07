@@ -33,3 +33,5 @@ Root 同时负责根据 canonical source 确定性重建 `scripts/e2e/production
 保留原始失败：首次 Root 私有多类编译 include 选择器导致 NO_TESTS；后续数值 0 与 0.0 的表示断言及测试 Repository hook 未触发屏障已修复，原日志/XML未覆盖；测试 helper AOP import 修正后最终 53/53。产品风险修正均在未发布候选内完成，不代表线上曾失败。暂无 Entity/Repository/迁移/RN/OTA 改动。
 
 官方组合补充：首个候选 18b4eb 的 53 类/358 项中，唯一 BareUnitEqualityRatchetContractTest 拒绝纯计算器两处裸单位比较；整体 build 失败，未发布、未取得 Java 可部署制品，PG 正常停止。保持棘轮基线，改为同一单位契约换算系数必须精确等于 1；公斤/kg 同义可同，g/kg 和只/个不能偷换数量。新增正反例后相关 3 类/28 项通过。另真实只读 schema 确认物料名称 varchar255，展示名称支持 512 UTF-16 code units（可容纳 255 个补充字符），ID 边界未扩大；Web 16 项/tsc、Node 297 项通过。canonical 读已取消 QA 时显式选择全部状态。限定源码增量终审 CLEAR；新 head 仍须取得自身必需 CI、53 类官方制品与正式/业务回执，不复用旧失败 head 的完成说法。
+
+CI scope 补充（Root 唯一 Owner）：允许仅在 `.github/workflows/java-gate-pr.yml` 的现有 PG 显式选择器末尾加入 `PlanConcurrentReadinessPostgresContractTest`，不移除任何既有 selector、不改 runner/权限/阈值。head255aab 官方53类360项、实JAR/manifest均已通过；其 PG CI 实际455项日志没有新class（0 hits），不能当作新7项的CI证据。因此补齐固定车道后要求新head实际日志确认新7项执行。此改动仅CI/文档，backend/Web源码与测试树未变，既有官方制品按内容哈希复用，不无理由重建。full当前排除了PG opt-in，不能替代该真实PG车道。
