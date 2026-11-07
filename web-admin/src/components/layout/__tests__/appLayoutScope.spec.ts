@@ -23,7 +23,7 @@ it('registers the unchanged route in a new factory scope and replaces the old dr
   await router.push('/draft'); await router.isReady();
   wrapper = mount(AppLayout, { global: { plugins: [pinia, router], stubs: {
     AppSidebar: true, AppHeader: true, WorkspaceTabs: true, WorkspaceReferencePane: true,
-    ReturnBanner: true, InlineCustomerService: true,
+    ReturnBanner: true, InlineCustomerService: true, GlobalAiControl: true,
   } } });
   await flushPromises();
   await wrapper.get('input').setValue('factory A draft');
