@@ -114,11 +114,14 @@ public class ToolDispatchService {
                     continuationAlias存在时，这是已识别的会话动作而不是新的业务目标；只能在本轮确实延续同一只读目标时CONTINUE/CORRECT，否则CLARIFY，不能强行套用旧目标。
                     pageAction描述本轮分页动作：NEXT、PREVIOUS、ABSOLUTE、UNCHANGED。相对翻页由程序基于已确认页码计算，parameters不要猜页码；pageEvidence必须是本轮原话中的连续片段。
                     明确页码用ABSOLUTE并给出page；改变每页条数用size。无分页变化用UNCHANGED，不输出分页默认值。
+                    ABSOLUTE的pageEvidence取只包含目标页码这一个数字的最小连续片段，不含每页条数、日期或其他数字；相对翻页只引用翻页动作片段。
                     NEW/SWITCH是独立目标；CONTINUE/CORRECT仅可用于同一个目标。
                     readTransition按source→target排列：source是此前已执行任务，target是本轮候选能力，不能颠倒。
                     先结合currentInput判断本轮目标，再按target的真实能力校验；不能用source的限制拒绝target已支持的新查询。
                     历史条件只在canInheritPreviousParameters=true且本轮确实延续该目标时保留；切换时不要把source的状态当成target要求。
                     CLARIFY说明本轮真正未确定的内容；UNSUPPORTED仅说明本轮目标确实超出target能力，不能复述历史方向的拒绝理由。
+                    selectedIntent只是路由候选，不表示用户已确认查询口径。readCapabilities中若有按不同字段或固定条件得到不同集合的能力，本轮与有效任务上下文未区分且无权威口径默认值时CLARIFY，不能用候选或Tool默认值代替用户确认。
+                    已确认任务的续句应保留其确定口径，不重复询问；明确要求但不支持与尚未确定口径是两种情况。
                     同一个目标要求selectedIntent与已保存READ_QUERY的id相同；不同意图之间不能用CONTINUE/CORRECT继承参数。
                     canInheritPreviousParameters=false时不能返回CONTINUE/CORRECT；本轮完整独立查询应返回NEW/SWITCH，仅有条件续句而没有已确定目标才澄清。
                     新对象详情可以通过objectReference复用真实对象，但不能因此沿用列表的筛选条件。旧目标未确定而本轮只改条件时应定向澄清。
@@ -204,7 +207,8 @@ public class ToolDispatchService {
                     "dateScope", Map.of("type", "string", "enum", List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED")),
                     "parameters", deltaSchema, "message", Map.of("type", "string")));
             turnProperties.put("pageAction", Map.of("type", "string", "enum", List.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED")));
-            turnProperties.put("pageEvidence", Map.of("type", "string", "maxLength", 200));
+            turnProperties.put("pageEvidence", Map.of("type", "string", "maxLength", 200,
+                    "description", "本轮原话最小连续片段：ABSOLUTE仅含目标页码一个数字，排除每页条数和日期；NEXT/PREVIOUS仅引用翻页动作。"));
             Map<String,Object> enumEvidenceFields = new java.util.LinkedHashMap<>();
             if (schema.get("properties") instanceof Map<?,?> fields) fields.forEach((key,value) -> {
                 if (key instanceof String name && value instanceof Map<?,?> definition && definition.get("enum") instanceof Collection<?>)

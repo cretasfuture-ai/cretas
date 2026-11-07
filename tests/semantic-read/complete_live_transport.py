@@ -39,7 +39,8 @@ def snake(k):
  import re
  return re.sub(r'(?<!^)(?=[A-Z])','_',k).lower()
 v.ROWS=[{snake(k):x for k,x in r.items()} for r in catalog if r.get('isActive') and not r.get('deletedAt')]
-v.ENGINE=Orchestrator(v.Empty(),v.Empty(),v.Empty(),decision_matcher=v.LiveDecision(timeout_s=60),candidate_retriever=v.Empty(),config=v.CONFIG)
+from openai_decision_transport import decision_type
+v.ENGINE=Orchestrator(v.Empty(),v.Empty(),v.Empty(),decision_matcher=decision_type(v)(timeout_s=60),candidate_retriever=v.Empty(),config=v.CONFIG)
 v.BASE=a.output;v.RUN='complete-real-read-'+a.output.name;v.EFFORT='low'
 if os.environ.get('CRETAS_EVAL_STRICT_READ_TOOL_ARGS')=='1':
  from openai_strict_tools import enable_read_tool_strict_wire

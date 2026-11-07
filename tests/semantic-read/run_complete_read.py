@@ -26,6 +26,8 @@ paths += list(pathlib.Path(__file__).parent.glob('*.py'))+[source,gold,a.previou
 hashes={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in paths}
 manifest=dict(base_head=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),source_hashes=hashes,
     openai_read_tool_strict_wire=os.environ.get('CRETAS_EVAL_STRICT_READ_TOOL_ARGS')=='1',
+    decision_contract='Core system/user choice prompt and deterministic option order;native Luna full-choice output replaces assistant partial/token logprobs;raw probabilities preserved,not production score parity',
+    purpose='LIVE_MINI_REQUEST_PURPOSE_CAN_OVERRIDE_NATIVE_CHOICE;shortlist also live mini;no live local266 classifier/vector',
     corpus='OPENED_OR_PUBLIC_DEVELOPMENT_REGRESSION_NOT_INDEPENDENT',dialogues=len(plans),turns_per_channel=turn_count,channels=['normal','sse'],production_business_mutations=0,
     wiring='8 actual Tool implementations;actual catalog;shared candidate semantic resolver;authenticated production GET;one read-only SQL count for QC repository adapter',
     limitations='Controller dependencies include controlled state/auth/RBAC;not full Spring/JPA runtime or production deploy;LLM shortlist fallback without live local classifier',started=datetime.datetime.now(datetime.timezone.utc).isoformat())

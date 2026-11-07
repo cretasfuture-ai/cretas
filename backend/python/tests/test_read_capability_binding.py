@@ -71,3 +71,29 @@ def test_paged_scope_alternatives_are_recalled_without_picking_a_goal(provenance
     assert _read_capability_candidates(ctx,['E'],by,1)==['E']
     by.pop('S')
     assert _read_capability_candidates(ctx,['E'],by,20)==['E']
+
+@pytest.mark.parametrize('provenance',['CLIENT','SERVER_CONVERSATION_MEMORY'])
+def test_visible_category_can_seed_real_scope_alternatives_when_coarse_tool_has_no_declaration(provenance):
+    from ai.orchestrator import _read_capability_candidates
+    ctx=dict(provenance=provenance,readCapabilities=[
+        dict(tool='status',clarification='按状态',domains=['material']),
+        dict(tool='expiry',clarification='按日期',domains=['material']),
+        dict(tool='order',clarification='按订单',domains=['order'])])
+    by={code:dict(tool_name=tool,intent_category=category) for code,tool,category in
+        [('A','alert','MATERIAL'),('S','status','MATERIAL'),('E','expiry','MATERIAL'),('O','order','ORDER')]}
+    assert _read_capability_candidates(ctx,['A'],by,20)==(['A','S','E'] if provenance=='SERVER_CONVERSATION_MEMORY' else ['A'])
+    assert _read_capability_candidates(ctx,['A'],by,2)==(['A','S'] if provenance=='SERVER_CONVERSATION_MEMORY' else ['A'])
+    by.pop('E')
+    assert 'E' not in _read_capability_candidates(ctx,['A'],by,20)
+
+def test_previous_read_goal_seeds_peers_before_expansion_without_raising_probability():
+    rows=copy.deepcopy(VISIBLE)+[dict(id='expiry',intent_code='MATERIAL_EXPIRED_QUERY',intent_name='日期清单',
+        tool_name='material_expired_query',is_active=True,intent_category='MATERIAL',description='按日期')]
+    ctx=context();ctx['references']=[dict(type='READ_QUERY',id='MATERIAL_BATCH_QUERY',toolName='material_batch_query',taskStatus='COMPLETED')]
+    ctx['readCapabilities']=[dict(tool=tool,parameters=['page','size'],clarification='真实口径',domains=['material'])
+        for tool in ['material_batch_query','material_expired_query']]
+    dec=Capture(['CONTEXT_CONTINUE'],{'MATERIAL_EXPIRED_QUERY':.55})
+    result=asyncio.run(_orch(dec).match(query='更换口径',factoryId='F006',businessType='FACTORY',role='operator',userId='u',
+        visible_intents=rows,history=[],task_context=ctx,enable_llm=True,min_confidence=.7))
+    assert {'MATERIAL_BATCH_QUERY','MATERIAL_EXPIRED_QUERY'}<=set(dec.seen_options)
+    assert result.requiresConfirmation and result.confidence==.55

@@ -37,6 +37,8 @@ class SemanticReadCapabilityContractTest {
             verify(client).chatWithTools(anyString(),anyString(),functions.capture());
             var function=(com.cretas.aims.ai.dto.Tool)functions.getValue().get(0);
             Map<?,?> fields=(Map<?,?>)function.getFunction().getParameters().get("properties");
+            assertThat(Objects.toString(((Map<?,?>)fields.get("pageEvidence")).get("description")))
+                    .contains("目标页码一个数字","排除每页条数和日期");
             assertThat(((List<?>)((Map<?,?>)fields.get("action")).get("enum")).stream().map(String::valueOf).toList())
                     .doesNotContain("CONTINUE","CORRECT");
             var transition=h.mapper.readTree(input.getValue()).path("readTransition");

@@ -126,13 +126,19 @@ def _read_capability_candidates(context, codes, by_code, limit):
         return codes
     caps = {c["tool"]: c for c in declared[:5] if isinstance(c, dict) and isinstance(c.get("tool"), str)}
     selected = [caps[by_code[c]["tool_name"]] for c in codes if by_code[c].get("tool_name") in caps]
-    if not selected:
+    # Coarse recall may only contain a related generic/alert tool. A visible
+    # catalog category can seed real scope declarations without selecting one.
+    categories = {by_code[c].get("intent_category") for c in codes if by_code[c].get("intent_category")}
+    category_tools = {r.get("tool_name") for r in by_code.values() if r.get("intent_category") in categories}
+    scope_seeds = selected + [c for name,c in caps.items()
+                             if name in category_tools and c.get("clarification")]
+    if not scope_seeds:
         return codes
     result = list(codes)
-    scope_domains = {d for c in selected if c.get("clarification") for d in c.get("domains", [])}
+    scope_domains = {d for c in scope_seeds if c.get("clarification") for d in c.get("domains", [])}
     alternatives = {name for name,c in caps.items() if c.get("clarification")
                     and scope_domains.intersection(c.get("domains", []))}
-    if not any({"page", "size"}.issubset(c.get("parameters") or []) for c in selected):
+    if selected and not any({"page", "size"}.issubset(c.get("parameters") or []) for c in selected):
         alternatives.update(name for name,c in caps.items() if {"page", "size"}.issubset(c.get("parameters") or []))
     for code, row in by_code.items():
         if len(result) >= limit:
@@ -353,14 +359,14 @@ class Orchestrator:
                     break
         if registry_code and registry_code not in codes:
             codes = [registry_code] + codes[:max(0, self.config.decision_k - 1)]
-        expanded = _read_capability_candidates(task_context, codes, by_code, self.config.decision_k)
-        if len(expanded) > len(codes):
-            timing["capabilityReadCandidatesAdded"] = len(expanded) - len(codes)
-        codes = expanded
         previous_code = _context_read_candidate(task_context, by_code)
         if previous_code and previous_code not in codes and (not codes or self.config.decision_k > 1):
             codes = codes[:max(0, self.config.decision_k - 1)] + [previous_code]
             timing["contextReadCandidateAdded"] = 1
+        expanded = _read_capability_candidates(task_context, codes, by_code, self.config.decision_k)
+        if len(expanded) > len(codes):
+            timing["capabilityReadCandidatesAdded"] = len(expanded) - len(codes)
+        codes = expanded
         if previous_code and _one_read_task_only(task_context):
             # Conversation actions are resolved by the existing read-turn resolver.
             # Do not ask the chooser to split probability between the same task and

@@ -3,7 +3,7 @@
   "owner": "01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98",
   "originalBaseSHA": "ecfb04cbac6283ac4e1b70592f4643be5feb44b8",
   "upstreamSyncSHA": "49009fd44ad1f348c5599a460744dd7ca177aebe",
-  "currentStage": "2026-11-07: actual Tool descriptions beside coarse/fine options; trusted bounded same-domain scope recall; explicit source-to-target transition; remove impossible inherit actions from function schema; shared normal/SSE read-scope messages. Independent-source provenance audit; all gold immutable. No new intent truth/state store, permission bypass or threshold change.",
+  "currentStage": "2026-11-07: trusted category/domain scope recall after confirmed-goal injection; explicit source-to-target and page-evidence contract; native Decisions evaluation uses the actual choice prompt. All gold immutable, no thresholds or production configuration changes. Isolated Canvas PG fixture must include the session table consumed by existing confirmation locking.",
   "existingScope": [
     "Java service/execution, recognition DTO and existing Conversation/preview integration",
     "Java ai/tool/impl/crm read tools",
@@ -17,7 +17,8 @@
   "additionalTestOnlyFile": "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateReceiptPostgresContractTest.java",
   "additionalTestOnlyFiles": [
     "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateReceiptPostgresContractTest.java",
-    "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateActualToolGatewayPostgresContractTest.java"
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateActualToolGatewayPostgresContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/CanvasConfigPlanBindingPostgresContractTest.java"
   ],
   "reason": "Upstream PR1516 and PR1519 add real-PG consumers of PreviewTokenServiceImpl. Their explicit JPA slices omitted the required ConversationSessionRepository. Register the real entity/repository; retain native locks, claims and product/receipt transaction assertions.",
   "acceptance": "Related Java183 tests/package plus both real PostgreSQL product receipt/gateway fixtures, applicable CI and frozen real-model/read-only HTTP corpus",

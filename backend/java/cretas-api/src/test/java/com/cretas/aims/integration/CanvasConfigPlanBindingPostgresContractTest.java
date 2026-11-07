@@ -1153,7 +1153,8 @@ class CanvasConfigPlanBindingPostgresContractTest {
                 "factory_tool_configs", "factory_skill_configs", "factory_trigger_chains",
                 "factory_templates", "factory_configurations", "config_change_log", "canvas_dynamic_field",
                 "canvas_ddl_log",
-                "intent_preview_tokens", "tool_execution_idempotency", "tool_execution_audit_events");
+                // Preview confirmation locks the actor's real conversation rows.
+                "conversation_sessions", "intent_preview_tokens", "tool_execution_idempotency", "tool_execution_audit_events");
 
         @Override
         public void customize(Map<String, Object> properties) {
