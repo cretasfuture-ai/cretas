@@ -292,10 +292,17 @@ public class IntentExecutionOrchestrator {
              var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
             IntentExecuteResponse response = executeInScope(factoryId, request, userId, userRole);
-            // Clarification/no-match/admission returns also reach the public API. They
-            // must not lose the card mode; preserve any WRITE stamp from a known intent.
-            // No recognized/executed write is inferred from the caller's mode or text.
-            applyAiModeStamp(response, null, null);
+            // Only an unselected, non-executing answer can default to READ. Known
+            // intents must be stamped where their declaration is available; neither
+            // a missing stamp nor caller-supplied text/code proves a read operation.
+            if (response != null && response.getAiMode() == null
+                    && !Boolean.TRUE.equals(response.getIntentRecognized())
+                    && (response.getIntentCode() == null || response.getIntentCode().isBlank())
+                    && response.getConfirmableAction() == null && response.getResultData() == null
+                    && (response.getAffectedEntities() == null || response.getAffectedEntities().isEmpty())
+                    && !Boolean.TRUE.equals(response.getRequiresApproval())) {
+                applyAiModeStamp(response, null, null);
+            }
             return response;
         }
     }
@@ -598,8 +605,10 @@ public class IntentExecutionOrchestrator {
             }
             if (Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
                     && !Boolean.TRUE.equals(request.getForceExecute())) {
-                return buildFactoryPackNoMatch(
+                IntentExecuteResponse clarification = buildFactoryPackNoMatch(
                         factoryPackRoute, "recognizer-confirmation-required");
+                applyAiModeStamp(clarification, intent, intent.getToolName());
+                return clarification;
             }
         }
 
@@ -686,6 +695,7 @@ public class IntentExecutionOrchestrator {
                         && slotFillingResponse.getMessage().length() >= 5) {
                     slotFillingResponse.setFormattedText(slotFillingResponse.getMessage());
                 }
+                applyAiModeStamp(slotFillingResponse, intent, intent.getToolName());
                 return slotFillingResponse;
             }
         }
@@ -1963,12 +1973,14 @@ public class IntentExecutionOrchestrator {
         FactoryCapabilityPackRoutingPolicy.ExecutionDecision decision =
                 factoryCapabilityPackRoutingPolicy.authorize(
                         route, intent.getIntentCode(), intent.getToolName(), writeIntent);
-        return switch (decision.status()) {
+        IntentExecuteResponse response = switch (decision.status()) {
             case ALLOW_READ, NOT_APPLICABLE -> null;
             case GUIDANCE -> buildFactoryPackWorkflowGuidance(
                     route, intent, decision.workflowReference());
             case NO_MATCH -> buildFactoryPackNoMatch(route, decision.reason());
         };
+        applyAiModeStamp(response, intent, intent.getToolName());
+        return response;
     }
 
     private IntentExecuteResponse buildFactoryPackNoMatch(
@@ -2275,7 +2287,9 @@ public class IntentExecutionOrchestrator {
     private IntentExecuteResponse checkBusinessTypeGate(String factoryId, AIIntentConfig intent) {
         // Delegates to the shared BusinessTypeGate so the main execute() flow, the explicit-intent
         // flow, and SseStreamingService all gate identically (Sprint 13 #305).
-        return businessTypeGate.check(factoryId, intent).orElse(null);
+        IntentExecuteResponse response = businessTypeGate.check(factoryId, intent).orElse(null);
+        applyAiModeStamp(response, intent, intent.getToolName());
+        return response;
     }
 
     /**
