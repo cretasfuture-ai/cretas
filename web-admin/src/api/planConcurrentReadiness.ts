@@ -54,9 +54,9 @@ function record(value: unknown): UnknownRecord | null {
     : null
 }
 
-function boundedText(value: unknown, label: string, allowNull = false): string | null {
+function boundedText(value: unknown, label: string, allowNull = false, maxLength = 191): string | null {
   if (allowNull && value === null) return null
-  if (typeof value !== 'string' || value.trim().length === 0 || value.length > 191) {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > maxLength) {
     throw new Error(`同期可用性响应字段无效：${label}`)
   }
   return value
@@ -112,7 +112,7 @@ function material(value: unknown, index: number): PlanConcurrentReadinessMateria
   if (!row) throw new Error(`同期可用性物料行无效：${index}`)
   return {
     materialTypeId: boundedText(row.materialTypeId, `material[${index}].materialTypeId`) as string,
-    materialName: boundedText(row.materialName, `material[${index}].materialName`) as string,
+    materialName: boundedText(row.materialName, `material[${index}].materialName`, false, 512) as string,
     unit: boundedText(row.unit, `material[${index}].unit`) as string,
     required: quantity(row.required, `material[${index}].required`),
     consumed: quantity(row.consumed, `material[${index}].consumed`),

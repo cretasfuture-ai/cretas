@@ -49,6 +49,14 @@ test('accepts numeric readiness and preserves unknown progress as null', () => {
   assert.equal(data.progress.completionPercent, null);
 });
 
+test('accepts full database-sized display names while preserving bounded identities', () => {
+  const payload = validPayload();
+  payload.data.material.items[0].materialName = '🧀'.repeat(255);
+  assert.equal(assertReadinessPayload(payload, 'plan-qa-1').material.items[0].materialName.length, 510);
+  payload.data.material.items[0].materialName = 'x'.repeat(513);
+  assert.throws(() => assertReadinessPayload(payload, 'plan-qa-1'));
+});
+
 test('accepts explicit overproduction without clipping or treating it as a material percentage', () => {
   const payload = validPayload();
   payload.data.progress = { ...payload.data.progress, status: 'VERIFIED', receivedQuantity: 120,

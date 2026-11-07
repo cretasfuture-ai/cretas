@@ -3660,8 +3660,8 @@ function nullableNumber(value, label, max = Number.POSITIVE_INFINITY) {
   return finiteNumber(value, label, max);
 }
 
-function exactString(value, label) {
-  if (typeof value !== 'string' || value.trim() === '' || value.length > 191) fail(`Invalid ${label}`);
+function exactString(value, label, maxLength = 191) {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > maxLength) fail(`Invalid ${label}`);
   return value;
 }
 
@@ -3747,7 +3747,7 @@ function assertReadinessPayload(payload, planId) {
     if (!item || typeof item !== 'object' || materialIds.has(item.materialTypeId)) fail('readiness material identity is invalid');
     materialIds.add(item.materialTypeId);
     exactString(item.materialTypeId, 'materialTypeId');
-    exactString(item.materialName, 'materialName');
+    exactString(item.materialName, 'materialName', 512);
     exactString(item.unit, 'material.unit');
     for (const field of ['required', 'consumed', 'ownHeldReserved', 'otherUnoccupied', 'stockFree']) {
       nullableNumber(item[field], `material.${field}`);
@@ -3784,6 +3784,9 @@ function productionPlansPath(factoryId) {
 }
 
 async function inspectPlan(page, ctx, option, index) {
+  // The real list defaults to UNFINISHED; retained cancelled QA plans require the explicit All filter.
+  await page.locator('.search-bar .el-select').first().click();
+  await page.getByRole('option', { name: '全部', exact: true }).click();
   const search = page.getByPlaceholder('搜索计划编号/产品名称');
   await search.waitFor({ state: 'visible', timeout: 10_000 });
   await search.fill(option.planNumber);

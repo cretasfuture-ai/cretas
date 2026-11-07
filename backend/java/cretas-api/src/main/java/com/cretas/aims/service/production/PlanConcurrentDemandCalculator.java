@@ -10,6 +10,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import com.cretas.aims.service.scheduling.daily.CapacityUnits;
 
 /**
  * Pure reference math for concurrent plan material readiness.
@@ -146,9 +147,9 @@ public final class PlanConcurrentDemandCalculator {
             if (ownRemaining.signum() == 0) continue;
             StockFact available = stockByKey.get(entry.getKey());
             if (available == null) return Result.unverified(Reason.MISSING_STOCK, input.targetPlanId());
-            if (!own.unit().equals(available.unit())) return Result.unverified(Reason.UNIT_CONFLICT, input.targetPlanId());
+            if (!sameNormalizedUnit(own.unit(), available.unit())) return Result.unverified(Reason.UNIT_CONFLICT, input.targetPlanId());
             for (DemandFact fact : active) {
-                if (!own.unit().equals(fact.unit())) return Result.unverified(Reason.UNIT_CONFLICT, input.targetPlanId());
+                if (!sameNormalizedUnit(own.unit(), fact.unit())) return Result.unverified(Reason.UNIT_CONFLICT, input.targetPlanId());
             }
 
             BigDecimal otherUnoccupied = active.stream()
@@ -189,6 +190,11 @@ public final class PlanConcurrentDemandCalculator {
 
     private static boolean nonNegative(BigDecimal value) {
         return value != null && value.signum() >= 0;
+    }
+
+    /** The reader already normalized quantities; only unit identities with factor exactly one may coincide. */
+    private static boolean sameNormalizedUnit(String from, String to) {
+        return CapacityUnits.factor(from, to).filter(factor -> factor.compareTo(BigDecimal.ONE) == 0).isPresent();
     }
 
     private static boolean blank(String value) {

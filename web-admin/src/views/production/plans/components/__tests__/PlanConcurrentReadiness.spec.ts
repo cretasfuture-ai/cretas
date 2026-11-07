@@ -50,6 +50,27 @@ describe('PlanConcurrentReadiness', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
+  it('renders the full database-sized Unicode material display name', async () => {
+    const data = validPayload()
+    data.material.items[0].materialName = '🧀'.repeat(255)
+    mocks.get.mockResolvedValue(response(data))
+    const wrapper = mountComponent()
+    await wrapper.get('[data-testid="plan-concurrent-readiness-refresh"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(data.material.items[0].materialName)
+    expect(wrapper.find('[data-testid="readiness-error"]').exists()).toBe(false)
+  })
+
+  it('still rejects an oversized display name rather than accepting an unbounded payload', async () => {
+    const data = validPayload()
+    data.material.items[0].materialName = 'x'.repeat(513)
+    mocks.get.mockResolvedValue(response(data))
+    const wrapper = mountComponent()
+    await wrapper.get('[data-testid="plan-concurrent-readiness-refresh"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="readiness-error"]').exists()).toBe(true)
+  })
+
   it('does not request until the operator starts a read-only calculation', async () => {
     const wrapper = mountComponent()
     expect(mocks.get).not.toHaveBeenCalled()

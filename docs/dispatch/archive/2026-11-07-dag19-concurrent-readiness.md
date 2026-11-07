@@ -31,3 +31,5 @@ Root 同时负责根据 canonical source 确定性重建 `scripts/e2e/production
 候选源码收尾（2026-11-07）：独立终审 CLEAR；7 类目标 53 项全部通过，含真实 PostgreSQL 7 项（并发 reader 保留旧库存快照、独立 writer 已提交新库存、停用/线边仓、过期和撤回待批等），自有 PG 正常停止并回读无 marker/监听。真实 PG 的保密 guard mock 仅代表隔离测试厂无保密策略，不作为保密授权集成证明；新调用方权限/保密拒绝与审计失败传播由对应 Contract/MVC 测试覆盖。Web 14 项与 vue-tsc 通过；canonical Node 296 项全部通过。源码 task 归档释放随最终候选提交；Root 在协调状态继续独占本切片 CI、构建、合并、发布与业务验收，未将候选验证表述为线上完成。
 
 保留原始失败：首次 Root 私有多类编译 include 选择器导致 NO_TESTS；后续数值 0 与 0.0 的表示断言及测试 Repository hook 未触发屏障已修复，原日志/XML未覆盖；测试 helper AOP import 修正后最终 53/53。产品风险修正均在未发布候选内完成，不代表线上曾失败。暂无 Entity/Repository/迁移/RN/OTA 改动。
+
+官方组合补充：首个候选 18b4eb 的 53 类/358 项中，唯一 BareUnitEqualityRatchetContractTest 拒绝纯计算器两处裸单位比较；整体 build 失败，未发布、未取得 Java 可部署制品，PG 正常停止。保持棘轮基线，改为同一单位契约换算系数必须精确等于 1；公斤/kg 同义可同，g/kg 和只/个不能偷换数量。新增正反例后相关 3 类/28 项通过。另真实只读 schema 确认物料名称 varchar255，展示名称支持 512 UTF-16 code units（可容纳 255 个补充字符），ID 边界未扩大；Web 16 项/tsc、Node 297 项通过。canonical 读已取消 QA 时显式选择全部状态。限定源码增量终审 CLEAR；新 head 仍须取得自身必需 CI、53 类官方制品与正式/业务回执，不复用旧失败 head 的完成说法。

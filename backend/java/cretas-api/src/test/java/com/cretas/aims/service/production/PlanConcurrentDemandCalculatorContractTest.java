@@ -138,6 +138,21 @@ class PlanConcurrentDemandCalculatorContractTest {
         return PlanConcurrentDemandCalculator.calculate(new PlanConcurrentDemandCalculator.Input("own", demands, stock, true));
     }
 
+    @Test
+    void normalizedAliasesShareIdentityWithoutImplicitlyConvertingDifferentQuantities() {
+        var own = new PlanConcurrentDemandCalculator.DemandFact("own", "RAW", POOL, "公斤", "PENDING", bd(80), bd(0), bd(0));
+        assertVerified(calculate(own, demand("other", "RAW", 80, 0, 0), stock("RAW", 100)), "25.000000", "100.000000");
+        var grams = new PlanConcurrentDemandCalculator.StockFact("RAW", POOL, "g", bd(100));
+        assertUnverified(calculate(own, grams), PlanConcurrentDemandCalculator.Reason.UNIT_CONFLICT);
+    }
+
+    @Test
+    void distinctCountUnitsNeverBecomeInterchangeable() {
+        var own = new PlanConcurrentDemandCalculator.DemandFact("own", "RAW", POOL, "只", "PENDING", bd(80), bd(0), bd(0));
+        var count = new PlanConcurrentDemandCalculator.StockFact("RAW", POOL, "个", bd(100));
+        assertUnverified(calculate(own, count), PlanConcurrentDemandCalculator.Reason.UNIT_CONFLICT);
+    }
+
     private static PlanConcurrentDemandCalculator.DemandFact demand(String plan, String material, double required, double consumed, double held) {
         return new PlanConcurrentDemandCalculator.DemandFact(plan, material, POOL, "kg", "PLANNED", bd(required), bd(consumed), bd(held));
     }
