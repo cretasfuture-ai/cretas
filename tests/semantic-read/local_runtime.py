@@ -8,6 +8,20 @@ LLM decision matcher still chooses the final intent.
 """
 from __future__ import annotations
 
+
+def request_visible_rows(rows, body):
+    """Reuse the real intent/match route's catalog policy, never a pilot allow-list.
+
+    Route authentication remains a separate servlet/transport proof. This is
+    only the factory, business-type and mode filtering used before matching.
+    """
+    from ai.db import filter_intents_for_request, filter_rows_by_rw_mode
+    visible = filter_intents_for_request(rows, body.factoryId, body.businessType)
+    visible = filter_rows_by_rw_mode(visible, body.mode, body.userPermissions)
+    if (body.businessType or "").upper() == "RESTAURANT":
+        visible = [row for row in visible if not str(row.get("intent_code", "")).startswith("RESTAURANT_OPS_")]
+    return visible
+
 import asyncio
 import contextvars
 import hashlib

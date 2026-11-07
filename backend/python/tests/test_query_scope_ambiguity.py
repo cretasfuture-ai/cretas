@@ -84,6 +84,16 @@ def test_uncertain_goal_keeps_other_domain_choices_instead_of_narrowing_to_scope
     assert [c.intentCode for c in result.topCandidates]==['MATERIAL_BATCH_QUERY','ORDER_LIST','DUE_LIST']
 
 
+def test_uncertain_route_offers_missing_actual_scope_peer_without_boosting_or_a_second_model_call():
+    decision=ScopeDecision(.99)
+    decision.probs={'MATERIAL_BATCH_QUERY':.65,'ORDER_LIST':.3}
+    result=run(decision)
+    assert result.requiresConfirmation and result.confidence==.65
+    assert [c.intentCode for c in result.topCandidates]==['MATERIAL_BATCH_QUERY','ORDER_LIST','DUE_LIST']
+    assert [c.confidence for c in result.topCandidates]==[.65,.3,None]
+    assert not decision.scope_calls
+
+
 def test_client_metadata_invisible_tools_and_same_tool_aliases_cannot_create_scope_peers():
     by={r['intent_code']:r for r in ROWS}
     assert len(_scope_peer_rows(CTX,by,'MATERIAL_BATCH_QUERY'))==2
@@ -120,6 +130,21 @@ def test_scope_prompt_uses_actual_declarations_and_existing_context_without_a_se
     assert '按保存状态筛选' in messages[1]['content'] and '按到期日条件筛选' in messages[1]['content']
     assert '已确认的历史' in messages[1]['content']
     assert '业务请求' not in messages[0]['content'] or '普通缺参' in messages[0]['content']
+
+
+def test_actual_status_contract_is_visible_to_shortlist_choice_and_scope_without_defaults():
+    from ai.matcher.decision import build_shortlist_messages,build_choice_messages
+    cap=dict(tool='stock_list',domains=['material'],description='查询保存的状态',clarification='按保存状态筛选',
+             parameters=['status'],statuses={'DEPLETED':['已耗尽'],'INSPECTING':['检验中','待检验','待质检']})
+    projected=_trusted_read_capabilities(dict(CTX,readCapabilities=[cap]))[0]
+    row=dict(ROWS[0],_read_capability=projected)
+    groups=[build_shortlist_messages('当前问题','operator',[row]),
+            build_choice_messages('当前问题','operator',[row]),
+            build_scope_messages('当前问题','operator',[row])]
+    for messages in groups:
+        text=str(messages)
+        assert 'DEPLETED(已耗尽)' in text and 'INSPECTING(检验中/待检验)' in text
+        assert '待质检' not in text
 
 
 def test_default_provider_scope_read_reuses_existing_slot_and_requires_model_probability():

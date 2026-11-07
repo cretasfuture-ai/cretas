@@ -2,8 +2,8 @@
   "taskId": "SEMANTIC-SALES-20261105",
   "owner": "01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98",
   "originalBaseSHA": "ecfb04cbac6283ac4e1b70592f4643be5feb44b8",
-  "upstreamSyncSHA": "49009fd44ad1f348c5599a460744dd7ca177aebe",
-  "currentStage": "2026-11-07: scoped predicate in existing decision slot; scoped approved-exact candidates do not bypass scope understanding; multi-number page sources pruned with complete action prefixes, bare page fragments cannot authorize relative moves. Frozen local266 plus actual BlendRetriever/readonly PG and embedding wired only in isolated primary-path evaluation. Evaluation spans preserve protocol/late/fallback failures; Java package classpath byte binding enforced. No threshold reduction, gold edits, training, merge or deployment.",
+  "upstreamSyncSHA": "3ed5b7f3c86d5718fce0f3b04d857e14aacf03d4",
+  "currentStage": "2026-11-07: a1de cold-cache local266+vector focus62 retained (normal19/31,SSE21/31 steps); isolated carrier missed real Python factory/business/READ filters, now reused (223/266 visible). Scope choices preserve low confidence, append actual missing peers without boosting. Real bounded status declarations reach shortlist/choice/scope. Fixed Tool date scope is not an adjustable date parameter. Java274 package and Python86 related contracts pass; freeze next source for immutable62+148 real readonly HTTP evaluation. No train, threshold reduction, protected-gold edit, PR merge or deployment.",
   "existingScope": [
     "Java service/execution, recognition DTO and existing Conversation/preview integration",
     "Java ai/tool/impl/crm read tools",
@@ -21,7 +21,7 @@
     "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/CanvasConfigPlanBindingPostgresContractTest.java"
   ],
   "reason": "Upstream PR1516 and PR1519 add real-PG consumers of PreviewTokenServiceImpl. Their explicit JPA slices omitted the required ConversationSessionRepository. Register the real entity/repository; retain native locks, claims and product/receipt transaction assertions.",
-  "acceptance": "Related Java272 tests/package; corresponding Python contracts; exact frozen local266 model/mapping and readonly embedding/pgvector preflight; immutable developer corpora plus source-only preregistered synthetic confirmation. Capture real HTTP/normal/SSE traces and all dependency/model unknowns; retain CI and freeze.",
+  "acceptance": "Java274 tests/package; Python67 scope/local/span/decision +19 purpose/native transport. Real local266/BlendRetriever in cold-cache immutable62+148 developer regression; every failure/unknown retained. No independent human acceptance claim.",
   "boundaries": "No new production Entity/Repository/JPQL edits in this increment; no training, protected-gold edits, production business mutation, PR merge, deployment or online model replacement. Upstream synchronized only into candidate branch.",
   "delegatedTasks": [
     {

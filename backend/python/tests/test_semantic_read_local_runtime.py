@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
 
 from ai.dto import CandidateIntentDto, MatchMethod
 
@@ -18,6 +19,26 @@ def load_local_runtime():
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("mode,permissions", [("READ",None),("OPERATE",[]),("OPERATE",["material:write"]),(None,None)])
+def test_request_catalog_reuses_factory_business_and_read_write_filters(mode, permissions):
+    module=load_local_runtime()
+    from ai.db import filter_intents_for_request, filter_rows_by_rw_mode
+    base=dict(business_type='COMMON',factory_id=None,is_active=True,deleted_at=None)
+    rows=[dict(base,intent_code='MATERIAL_BATCH_QUERY',required_permission='material:read'),
+          dict(base,intent_code='MATERIAL_BATCH_CREATE',required_permission='material:write'),
+          dict(base,intent_code='ORDER_LIST',factory_id='OTHER'),
+          dict(base,intent_code='ORDER_STATUS',business_type='RESTAURANT'),
+          dict(base,intent_code='MATERIAL_EXPIRED_QUERY',is_active=False)]
+    body=SimpleNamespace(factoryId='F006',businessType='FACTORY',mode=mode,userPermissions=permissions)
+    expected=filter_rows_by_rw_mode(filter_intents_for_request(rows,'F006','FACTORY'),mode,permissions)
+    assert module.request_visible_rows(rows,body)==expected
+    codes={r['intent_code'] for r in expected}
+    assert 'ORDER_LIST' not in codes and 'ORDER_STATUS' not in codes
+    assert 'MATERIAL_EXPIRED_QUERY' not in codes
+    if mode=='READ':
+        assert codes=={'MATERIAL_BATCH_QUERY'}
 
 
 class _FakeClassifier:

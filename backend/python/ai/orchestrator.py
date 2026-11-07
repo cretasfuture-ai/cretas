@@ -471,6 +471,20 @@ class Orchestrator:
                 intentCategory=row.get("intent_category"), confidence=round(float(p), 4) if p is not None else None,
                 matchMethod=MatchMethod.LLM, description=row.get("description"),
             ))
+        if force_clarify or top_real < self.config.decision_auto_threshold:
+            # A low-confidence route must not hide an unscored actual scope
+            # alternative. Preserve all original choices and their probabilities;
+            # add only visible, server-declared peers, never an execution default.
+            offered = {candidate.intentCode for candidate in candidates}
+            for row in _scope_peer_rows(task_context, by_code, ranked[0][0] if ranked else None):
+                if len(candidates) >= 5:
+                    break
+                if row['intent_code'] not in offered:
+                    candidates.append(CandidateIntentDto(
+                        intentCode=row['intent_code'], intentName=row.get('intent_name') or row['intent_code'],
+                        intentCategory=row.get('intent_category'),confidence=probs.get(row['intent_code']),
+                        matchMethod=MatchMethod.LLM,description=row.get('description')))
+                    offered.add(row['intent_code'])
         timing["totalMs"] = int((time.time() - t0) * 1000)
         # ③ 置信不够 → requiresConfirmation=true, Java 走 buildClarificationResponse 出候选按钮
         return self._build_result(query=query, top_candidates=candidates, method=MatchMethod.LLM,

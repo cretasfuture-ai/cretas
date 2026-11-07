@@ -141,6 +141,7 @@ public class ToolDispatchService {
                     不支持的指标、范围或动作返回UNSUPPORTED及原因，不能偷换成Tool支持的口径。
                     systemDefaults是程序在语义合并后才补缺的权威默认值。不要在parameters输出默认值，也不要因缺少这些值而拒绝或追问。
                     没有本轮时间修改时用UNCHANGED；执行Tool的必填字段可由systemDefaults补齐不等于能力不足。
+                    dateScope仅描述toolSchema中可修改的startDate/endDate，不描述工具自身固定的日期条件。没有这两个参数时只能UNCHANGED；用户要求改变该固定条件则UNSUPPORTED，不能假装修改成功。
                     requiredWithoutSystemDefault为空且当前目标明确时，不能只因未说日期、条数等默认参数而CLARIFY。
                     销售金额排行不支持数量/销量排行。禁止编造ID、结果、权限或授权。
                     objectReference只能选任务快照中的真实结果引用。单条结果可指“刚才那条”；多条且未明确对象或序号必须CLARIFY。
@@ -200,11 +201,14 @@ public class ToolDispatchService {
                 });
                 deltaSchema.put("properties", partial);
             }
+            boolean supportsDateDelta = schema.get("properties") instanceof Map<?,?> dateFields
+                    && (dateFields.containsKey("startDate") || dateFields.containsKey("endDate"));
             Map<String,Object> turnProperties = new java.util.LinkedHashMap<>(Map.of(
                     "action", Map.of("type", "string", "enum", Boolean.TRUE.equals(input.get("canInheritPreviousParameters"))
                             ? List.of("NEW", "CONTINUE", "CORRECT", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")
                             : List.of("NEW", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")),
-                    "dateScope", Map.of("type", "string", "enum", List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED")),
+                    "dateScope", Map.of("type", "string", "enum", supportsDateDelta
+                            ? List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED") : List.of("UNCHANGED")),
                     "parameters", deltaSchema, "message", Map.of("type", "string")));
             turnProperties.put("pageAction", Map.of("type", "string", "enum", List.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED")));
             var pageEvidenceOptions = ReadPageEvidence.from(request.getUserInput());

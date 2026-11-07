@@ -92,7 +92,8 @@ SCOPE_AMBIGUITY_RULES = (
 
 def build_scope_messages(query, role, options, history=None):
     declarations = [{"tool": row.get("tool_name"),
-                     "description": row.get("_read_capability", {}).get("clarification", "")}
+                     "description": row.get("_read_capability", {}).get("clarification", ""),
+                     "capability": _read_capability_text(row)}
                     for row in options]
     evidence = build_decision_input(query, role, history)
     evidence += "\n真实查询集合声明：" + json.dumps(declarations, ensure_ascii=False)
@@ -137,7 +138,11 @@ def _read_capability_text(row):
         return ""
     description = str(cap.get("description") or "")[:180]
     names = cap.get("parameters") if isinstance(cap.get("parameters"), list) else []
-    return description + " 支持参数：" + "、".join(v[:64] for v in names[:32] if isinstance(v, str))
+    states = cap.get("statuses") if isinstance(cap.get("statuses"), dict) else {}
+    state_text = "、".join(str(code)[:64] + "(" + "/".join(str(v)[:32] for v in labels[:2]) + ")"
+                          for code, labels in list(states.items())[:32] if isinstance(labels, list))
+    return (description + " 支持参数：" + "、".join(v[:64] for v in names[:32] if isinstance(v, str))
+            + (" 支持状态：" + state_text if state_text else ""))
 
 
 def _keywords(row: Dict[str, Any]) -> List[str]:

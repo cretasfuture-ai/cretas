@@ -21,6 +21,22 @@ import static org.mockito.Mockito.*;
 /** Actual parameter/state merge with simulated transport output; NOT real LLM acceptance. */
 class SemanticReadTurnResolverContractTest {
     @ParameterizedTest @ValueSource(booleans={false,true})
+    void dateScopeSchemaOnlyAdvertisesDatesActuallySupportedByTheTool(boolean adjustable) throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            ToolExecutor tool=adjustable ? new OrderListTool(mock(SalesService.class))
+                    : new com.cretas.aims.ai.tool.impl.material.MaterialExpiredQueryTool();
+            var client=model(h,"CLARIFY",Map.of());
+            h.dispatch.resolveReadTurn("F006",7L,request(h,"查询原料"),bind(h,tool,adjustable?"ORDER_LIST":"MATERIAL_EXPIRED_QUERY"));
+            var capture=org.mockito.ArgumentCaptor.forClass(List.class);
+            verify(client).chatWithTools(anyString(),anyString(),capture.capture());
+            var function=(com.cretas.aims.ai.dto.Tool)capture.getValue().get(0);
+            var fields=(Map<?,?>)function.getFunction().getParameters().get("properties");
+            var date=(Map<?,?>)fields.get("dateScope");
+            assertThat((List<?>)date.get("enum")).hasSize(adjustable?5:1);
+            if(!adjustable) assertThat(date.get("enum")).isEqualTo(List.of("UNCHANGED"));
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans={false,true})
     void resolverAdvertisesOnlyReferencesSupportedByTheCurrentTool(boolean detail) throws Exception {
         try(var h=new SalesRankingSemanticContractTest.Harness()) {
             previous(h,"ORDER_LIST",Map.of("toolName","order_list","taskStatus","COMPLETED",

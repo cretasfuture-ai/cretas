@@ -77,15 +77,20 @@ class _MainPathEvaluationOrchestrator(Orchestrator):
 
 async def _local_transport_match(raw):
  from ai.embedding import _request_embedding_cache
+ from local_runtime import request_visible_rows
  from evaluation_spans import bind_span,mark_error,reset_span,model_evidence_failures
  body=v.IntentMatchRequest(**raw)
  if body.factoryId!='F006' or body.mode!='READ':raise ValueError('controlled read scope only')
  span_token=bind_span()
  cache_token=_request_embedding_cache.set({})
  try:
+  visible_rows=request_visible_rows(v.ROWS,body)
+  v.log('evaluation_request_catalog',dict(factoryId=body.factoryId,businessType=body.businessType,
+        mode=body.mode,visible_codes=[row['intent_code'] for row in visible_rows],
+        source='ai.db.filter_intents_for_request+filter_rows_by_rw_mode'))
   await _LOCAL_RUNTIME.prefetch(body.query,body.factoryId,body.businessType)
   result=await v.ENGINE.match(query=body.query,factoryId=body.factoryId,businessType=body.businessType,userId=body.userId,
-                               role=body.role,visible_intents=v.ROWS,history=body.history,min_confidence=.7,enable_llm=True,
+                               role=body.role,visible_intents=visible_rows,history=body.history,min_confidence=.7,enable_llm=True,
                                task_context=body.taskContext)
   timing=result.timingMs or {}
   for failure in model_evidence_failures(timing):mark_error(failure)
