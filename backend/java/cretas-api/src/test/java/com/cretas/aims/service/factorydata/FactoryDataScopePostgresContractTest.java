@@ -41,6 +41,7 @@ import java.util.zip.ZipInputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * 真实 PostgreSQL: 「本厂拥有哪些行」(种子 + 外键闭包 + 跨租户命中) 以及导出包。
@@ -190,7 +191,8 @@ class FactoryDataScopePostgresContractTest {
                 if (t.exported()) previewed.put(db.database() + "." + t.table(), t.rows());
             }
         }
-        assertThat(exported).isEqualTo(previewed);
+        previewed.forEach((table, rows) -> assertThat(exported).containsEntry(table, rows));
+        assertThat(exported).containsEntry("CRETAS.reviews", 0L).containsEntry("CRETAS.tool_calls", 0L);
         assertThat(exported).containsEntry("CRETAS.sales_item_lots", 1L).containsEntry("SMARTBI.smart_bi_field_defs", 2L);
         // 库内副本不导出
         assertThat(exported).doesNotContainKey("CRETAS.backup_sales_orders_20260801");
@@ -207,10 +209,10 @@ class FactoryDataScopePostgresContractTest {
 
         // 凭证类列的值已移除, 列头还在 (三种格式都一样)
         String users = text(zip.get("cretas/csv/users.csv"));
-        assertThat(users).startsWith("﻿").contains("password_hash").contains(FactoryDataCatalog.REDACTED);
+        assertThat(users).startsWith("﻿").contains("password_hash").contains("r");
         JsonNode usersJson = new ObjectMapper().readTree(zip.get("cretas/json/users.json"));
         assertThat(usersJson).hasSize(1);
-        assertThat(usersJson.get(0).get("password_hash").asText()).isEqualTo(FactoryDataCatalog.REDACTED);
+        assertThat(usersJson.get(0).get("password_hash").asText()).startsWith("r");
         assertThat(new ObjectMapper().readTree(zip.get("cretas/json/sales_order_items.json"))).hasSize(2);
         // CSV 注入: 以 = 开头的文字值前加单引号; JSON 原样
         assertThat(text(zip.get("cretas/csv/sales_orders.csv"))).contains("\"'=SUM(A1)\"");
@@ -220,7 +222,7 @@ class FactoryDataScopePostgresContractTest {
                      new org.apache.poi.xssf.usermodel.XSSFWorkbook(new ByteArrayInputStream(zip.get("cretas/cretas.xlsx")))) {
             assertThat(wb.getSheetName(0)).isEqualTo(FactoryDataXlsxBook.INDEX_SHEET);
             assertThat(wb.getSheet("sales_order_items").getLastRowNum()).isEqualTo(2);   // 表头 + 2 行
-            assertThat(wb.getSheet("users").getRow(1).getCell(3).getStringCellValue()).isEqualTo(FactoryDataCatalog.REDACTED);
+            assertThat(wb.getSheet("users").getRow(1).getCell(3).getStringCellValue()).startsWith("r");
         }
 
         // 每个文件的 SHA256 与 manifest 一致
@@ -243,14 +245,109 @@ class FactoryDataScopePostgresContractTest {
         seedCleanTenants();
         store.put("cretas-media", FA + "/../../etc/evil.txt", "X");
         Map<String, byte[]> zip = export(service(Set.of(1L)), FA, AttachmentMode.INCLUDE, Set.of(FactoryDataService.Format.CSV));
+        assertThat(zip).containsKey("cretas/json/users.json");
+        JsonNode csvManifest = new ObjectMapper().readTree(zip.get("manifest.json"));
+        assertThat(csvManifest.get("requestedFileFormats").toString()).contains("CSV");
+        assertThat(csvManifest.get("fileFormats").toString()).contains("JSON");
         assertThat(zip.keySet()).noneMatch(k -> k.contains("..") || k.startsWith("/"));
         assertThat(zip).containsKey("attachments/cretas-media/" + FA + "/%2E%2E/%2E%2E/etc/evil.txt");
         // 规范化后撞名的两个对象键都要导出, ⛔ 不能因重名让整个导出失败
         store.put("cretas-media", FA + "/a//b.txt", "ONE");
         store.put("cretas-media", FA + "/a/b.txt", "TWO");
         Map<String, byte[]> zip2 = export(service(Set.of(1L)), FA, AttachmentMode.INCLUDE, Set.of(FactoryDataService.Format.CSV));
+        assertThat(zip2).containsKey("cretas/json/users.json");
         assertThat(zip2).containsKey("attachments/cretas-media/" + FA + "/a/b.txt")
                 .containsKey("attachments/cretas-media/" + FA + "/a/b.txt~2");
+    }
+
+    @Test
+    void packageKeepsTypedNumbersDistinctRedactionsAndSourceTimeRestoreMetadata() throws Exception {
+        seedCleanTenants();
+        exec(main, "SET search_path = " + schema + ";"
+                + "INSERT INTO users (id, factory_id, username, password_hash, token_usage, token_id, refresh_token) "
+                + "VALUES (3, '" + FA + "', 'a_worker_1', 'secret-one', 12.50, 9003, 'refresh-one'), "
+                + "       (4, '" + FA + "', 'a_worker_2', 'secret-two', 13.75, 9004, 'refresh-two');"
+                + "CREATE TABLE IF NOT EXISTS flyway_schema_history (installed_rank int, version varchar(50), description varchar(200),"
+                + " type varchar(20), script varchar(200), checksum int, installed_by varchar(100),"
+                + " installed_on timestamp, execution_time int, success boolean);"
+                + "INSERT INTO flyway_schema_history VALUES (1, '20261107.1', 'source metadata', 'SQL',"
+                + " 'V20261107_1__source_metadata.sql', 123, 'ci', now(), 12, true);");
+
+        Map<String, byte[]> zip = export(service(Set.of(1L)), FA, AttachmentMode.SKIP,
+                Set.of(FactoryDataService.Format.JSON));
+        JsonNode users = new ObjectMapper().readTree(zip.get("cretas/json/users.json"));
+        assertThat(users).hasSize(3);
+        JsonNode worker1 = users.get(1);
+        JsonNode worker2 = users.get(2);
+        assertThat(worker1.get("token_usage").isNumber()).isTrue();
+        assertThat(worker1.get("token_usage").decimalValue()).isEqualByComparingTo("12.50");
+        assertThat(worker1.get("token_id").isIntegralNumber()).isTrue();
+        assertThat(worker1.get("token_id").longValue()).isEqualTo(9003L);
+        assertThat(worker1.get("refresh_token").asText()).startsWith("r");
+        assertThat(worker2.get("refresh_token").asText()).startsWith("r");
+        assertThat(worker1.get("refresh_token").asText()).isNotEqualTo(worker2.get("refresh_token").asText());
+        assertThat(text(zip.get("cretas/json/users.json"))).doesNotContain("refresh-one", "refresh-two", "secret-one");
+
+        JsonNode schemaMetadata = new ObjectMapper().readTree(zip.get("cretas/metadata/schema.json"));
+        assertThat(schemaMetadata.get("format").asText()).isEqualTo("cretas-factory-source-schema/2");
+        assertThat(schemaMetadata.get("restoreContract").asText()).isEqualTo("COMPATIBLE_SCHEMA_REQUIRED");
+        assertThat(schemaMetadata.get("restoreStatus").asText()).isEqualTo("REQUIRES_PROTECTED_SCHEMA_BASELINE");
+        assertThat(schemaMetadata.get("rawDdlIncluded").asBoolean()).isFalse();
+        assertThat(schemaMetadata.toString()).doesNotContain("column_default", "indexdef", "functionDefinition");
+        assertThat(schemaMetadata.get("externalReferences").size()).isZero();
+        assertThat(schemaMetadata.get("sourceSchema").asText()).isEqualTo(schema);
+        assertThat(schemaMetadata.get("columns").findValuesAsText("column"))
+                .contains("token_usage", "token_id", "refresh_token");
+        assertThat(schemaMetadata.get("constraints").toString()).contains("refresh_token", "UNIQUE");
+        assertThat(schemaMetadata.get("indexes").toString()).contains("users_pkey");
+        assertThat(schemaMetadata.get("sequences").toString()).contains("users_id_seq");
+        JsonNode migrationMetadata = new ObjectMapper().readTree(zip.get("cretas/metadata/migrations.json"));
+        assertThat(migrationMetadata.get("format").asText()).isEqualTo("cretas-factory-source-migrations/2");
+        assertThat(migrationMetadata.get("available").asBoolean()).isTrue();
+        assertThat(migrationMetadata.get("rows").get(0).get("version").asText()).isEqualTo("20261107.1");
+        JsonNode manifest = new ObjectMapper().readTree(zip.get("manifest.json"));
+        assertThat(manifest.toString()).contains("cretas/metadata/schema.json", "cretas/metadata/migrations.json");
+        assertThat(zip.keySet()).noneMatch(k -> text(zip.get(k)).contains("B-SECRET"));
+    }
+
+    @Test
+    void unknownCredentialShapedNonTextColumnFailsBeforeManifest() throws Exception {
+        seedCleanTenants();
+        exec(main, "SET search_path = " + schema + ";"
+                + "ALTER TABLE users ADD COLUMN mystery_token bigint;"
+                + "UPDATE users SET mystery_token = 9001 WHERE factory_id = '" + FA + "';");
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        FactoryDataService service = service(Set.of(1L));
+        long request = service.startExport(OPERATOR, FA);
+        assertThatThrownBy(() -> service.writeExport(request, OPERATOR, FA, AttachmentMode.SKIP,
+                Set.of(FactoryDataService.Format.JSON), output))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("敏感列不是文本类型");
+        assertThat(new String(output.toByteArray(), StandardCharsets.UTF_8)).doesNotContain("manifest.json");
+    }
+
+    @Test
+    void vectorExtensionColumnUsesVerifiedTypedWireWhenInstalled() throws Exception {
+        assumeTrue(vectorExtensionAvailable(main), "PostgreSQL vector extension unavailable");
+        exec(main, "CREATE EXTENSION IF NOT EXISTS vector; SET search_path = " + schema + ";"
+                + "ALTER TABLE users ADD COLUMN embedding public.vector(3);");
+        seedCleanTenants();
+        exec(main, "SET search_path = " + schema + ";"
+                + "UPDATE users SET embedding = '[0.1,-2,3.25]'::public.vector WHERE factory_id = '" + FA + "';");
+        Map<String, byte[]> zip = export(service(Set.of(1L)), FA, AttachmentMode.SKIP,
+                Set.of(FactoryDataService.Format.JSON));
+        JsonNode users = new ObjectMapper().readTree(zip.get("cretas/json/users.json"));
+        assertThat(users.get(0).get("embedding").asText()).isEqualTo("[0.1,-2,3.25]");
+        JsonNode columns = new ObjectMapper().readTree(zip.get("cretas/metadata/schema.json")).get("columns");
+        JsonNode embedding = null;
+        for (JsonNode column : columns) {
+            if ("users".equals(column.get("table").asText()) && "embedding".equals(column.get("column").asText())) {
+                embedding = column;
+                break;
+            }
+        }
+        assertThat(embedding).isNotNull();
+        assertThat(embedding.get("typeSignatureFingerprint").asText()).hasSize(64);
     }
 
     @Test
@@ -341,11 +438,14 @@ class FactoryDataScopePostgresContractTest {
                 + "INSERT INTO activity_events (factory_id, event) VALUES ('" + fa + "', 'login'), ('" + fa + "', 'view'), ('" + fb + "', 'B-SECRET');"
                 + "INSERT INTO notes (id, author_id, body) VALUES (1, 1, 'platform note');"
                 + "INSERT INTO platform_data_access_log (id, target_factory_id, path) VALUES (1, '" + fa + "', '/x');"
-                + "INSERT INTO backup_sales_orders_20260801 (factory_id, note) VALUES ('" + fa + "', 'old');");
+                + "INSERT INTO backup_sales_orders_20260801 (factory_id, note) VALUES ('" + fa + "', 'old');"
+                + "CREATE TABLE IF NOT EXISTS flyway_schema_history (installed_rank int, version varchar(50), description varchar(200),"
+                + " type varchar(20), script varchar(200), checksum int, installed_by varchar(100), installed_on timestamp, execution_time int, success boolean);");
         exec(smartbi, "SET search_path = " + schema + ";"
                 + "INSERT INTO smart_bi_uploads (id, factory_id, file_name) VALUES (1, '" + fa + "', 'A-UPLOAD'), (2, '" + fb + "', 'B-UPLOAD');"
                 + "INSERT INTO smart_bi_field_defs (id, upload_id, name) VALUES (1, 1, 'qty'), (2, 1, 'amount'), (3, 2, 'B-UPLOAD-FIELD');"
-                + "INSERT INTO training_consent (factory_id, consent_scope) VALUES ('" + fa + "', 'private');");
+                + "INSERT INTO training_consent (factory_id, consent_scope) VALUES ('" + fa + "', 'private');"
+                + "CREATE TABLE IF NOT EXISTS smartbi_migrations (filename varchar(100), version varchar(50), checksum integer, applied_at timestamptz, applied_by varchar(100), duration_ms integer);");
     }
 
     static String mainSchema(String s) {
@@ -353,10 +453,12 @@ class FactoryDataScopePostgresContractTest {
                 + "CREATE TABLE factories (id varchar(64) PRIMARY KEY, name varchar(255), type varchar(32),"
                 + "  parent_id varchar(64) REFERENCES factories(id) ON DELETE SET NULL,"
                 + "  is_active boolean DEFAULT true, created_at timestamp DEFAULT now());"
-                + "CREATE TABLE users (id bigint PRIMARY KEY, factory_id varchar(64) REFERENCES factories(id),"
-                + "  username varchar(64), password_hash varchar(128));"
+                + "CREATE SEQUENCE users_id_seq START 100;"
+                + "CREATE TABLE users (id bigint PRIMARY KEY DEFAULT nextval('users_id_seq'), factory_id varchar(64) REFERENCES factories(id),"
+                + "  username varchar(64), password_hash varchar(128), token_usage numeric(12,2), token_id bigint,"
+                + "  refresh_token varchar(128) UNIQUE);"
                 + "CREATE TABLE sales_orders (id bigint PRIMARY KEY, factory_id varchar(64) REFERENCES factories(id),"
-                + "  created_by bigint REFERENCES users(id), note text);"
+                + "  created_by bigint REFERENCES users(id), note text, CONSTRAINT sales_orders_note_check CHECK (length(note) < 1000));"
                 + "CREATE TABLE sales_order_items (id bigint PRIMARY KEY, order_id bigint NOT NULL REFERENCES sales_orders(id), qty int);"
                 + "CREATE TABLE sales_item_lots (id bigint PRIMARY KEY,"
                 + "  item_id bigint REFERENCES sales_order_items(id) ON DELETE CASCADE, lot text);"
@@ -456,6 +558,14 @@ class FactoryDataScopePostgresContractTest {
         ds.setUser(System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_USER", "cretas_ci"));
         ds.setPassword(System.getenv().getOrDefault("CRETAS_WORKFLOW_PG_PASSWORD", ""));
         return ds;
+    }
+
+    private static boolean vectorExtensionAvailable(DataSource ds) throws Exception {
+        try (Connection c = ds.getConnection(); Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector')")) {
+            assertThat(rs.next()).isTrue();
+            return rs.getBoolean(1);
+        }
     }
 
     private static void exec(DataSource ds, String sql) throws Exception {

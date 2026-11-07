@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.sql.Types;
 import java.util.regex.Pattern;
 
 /**
@@ -107,11 +108,31 @@ public final class FactoryDataCatalog {
     private static final Pattern LEDGER_TABLE = Pattern.compile(
             "^(migration_.*|flyway_schema_history|smartbi_migrations|smart_bi_schema_history|shedlock)$");
 
-    /** 导出包会离开平台: 这些列的值一律替换成 {@link #REDACTED}。 */
+    /** 导出包会离开平台: 这些列默认按敏感字段处理。 */
     private static final Pattern CREDENTIAL_COLUMN = Pattern.compile(
-            "(password|passwd|secret|token|api_?key|app_?key|access_?key|aes_?key|credential|private_?key|salt|(^|_)otp($|_))",
+            "(^|_)(password|passwd|secret|api_?key|app_?key|access_?key|aes_?key|credential|private_?key|salt|otp)(_|$)",
             Pattern.CASE_INSENSITIVE);
-    public static final String REDACTED = "[已移除]";
+    /** Exact token names that may be ordinary data only when their JDBC type is numeric. */
+    private static final Pattern TOKEN_CREDENTIAL_COLUMN = Pattern.compile(
+            "^(token|access_token|refresh_token|oauth_token|session_token|csrf_token|bearer_token|"
+                    + "idempotency_token|token_value|token_secret|token_hash|token_key)$",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern TOKEN_LIKE_COLUMN = Pattern.compile("token", Pattern.CASE_INSENSITIVE);
+    private static final Map<String, Set<String>> NUMERIC_TOKEN_COLUMNS = Map.ofEntries(
+            Map.entry("users", Set.of("token_id", "token_usage", "token_count")),
+            Map.entry("ai_intent_configs", Set.of("max_tokens")),
+            Map.entry("ai_report_prompt_configs", Set.of("max_tokens")),
+            Map.entry("ai_usage_log", Set.of("tokens_used")),
+            Map.entry("behavior_calibration_metrics", Set.of("total_input_tokens", "total_output_tokens")),
+            Map.entry("production_process_prompt_configs", Set.of("max_tokens")),
+            Map.entry("scheduler_run_results", Set.of("prompt_tokens", "completion_tokens", "total_tokens")),
+            Map.entry("smart_bi_analysis_cache", Set.of("token_count")),
+            Map.entry("smart_bi_llm_usage", Set.of("input_tokens", "output_tokens", "total_tokens")),
+            Map.entry("smart_bi_usage_records", Set.of("token_count")),
+            Map.entry("tool_call_records", Set.of("input_tokens", "output_tokens")),
+            Map.entry("agent_budget_daily", Set.of("tokens_used", "tokens_cap")),
+            Map.entry("efficiency_cost_records", Set.of("input_tokens", "output_tokens", "total_tokens")),
+            Map.entry("narrative_cache", Set.of("tokens")));
 
     /** 以 factory_id 结尾或叫 tenant_id 的列: 用于把「疑似租户列」列出来。 */
     private static final Pattern FACTORY_LIKE_COLUMN = Pattern.compile("(.*factory_id|tenant_id)", Pattern.CASE_INSENSITIVE);
@@ -146,7 +167,46 @@ public final class FactoryDataCatalog {
     }
 
     public static boolean isCredentialColumn(String column) {
-        return CREDENTIAL_COLUMN.matcher(column).find();
+        if (column == null) return false;
+        String normalized = column.trim().toLowerCase(Locale.ROOT);
+        return CREDENTIAL_COLUMN.matcher(normalized).find()
+                || TOKEN_CREDENTIAL_COLUMN.matcher(normalized).matches();
+    }
+
+    /** Unknown token-shaped columns are secret by default; numeric exceptions are explicit. */
+    public static boolean shouldRedactColumn(String column, int jdbcType) {
+        return shouldRedactColumn(null, column, jdbcType, null);
+    }
+
+    public static boolean shouldRedactColumn(String table, String column, int jdbcType, Integer numericScale) {
+        if (isCredentialColumn(column)) return true;
+        if (column == null) return false;
+        String normalized = column.trim().toLowerCase(Locale.ROOT);
+        if (!TOKEN_LIKE_COLUMN.matcher(normalized).find()) return false;
+        String tableName = table == null ? "" : table.trim().toLowerCase(Locale.ROOT);
+        if ("scheduler_run_results".equals(tableName) && "token_usage_state".equals(normalized)
+                && jdbcType == Types.VARCHAR) return false;
+        if ("pos_connections".equals(tableName) && "token_expires_at".equals(normalized)
+                && (jdbcType == Types.TIMESTAMP || jdbcType == Types.TIMESTAMP_WITH_TIMEZONE)) return false;
+        if ("ai_purchase_task_grants".equals(tableName) && "preview_token_id".equals(normalized)
+                && (jdbcType == Types.BIGINT || jdbcType == Types.INTEGER)) return false;
+        Set<String> numericColumns = table == null ? Set.of() : NUMERIC_TOKEN_COLUMNS.getOrDefault(tableName, Set.of());
+        if (!numericColumns.contains(normalized)) return true;
+        // Existing users.token_usage is a measured decimal in the production
+        // schema and remains an explicit compatibility exception.
+        if ("users".equals(tableName) && "token_usage".equals(normalized)) {
+            return !isNumericJdbcType(jdbcType) || (numericScale != null && numericScale < 0);
+        }
+        if (jdbcType != Types.INTEGER && jdbcType != Types.BIGINT) return true;
+        return numericScale != null && numericScale != 0;
+    }
+
+    public static boolean isNumericJdbcType(int jdbcType) {
+        return switch (jdbcType) {
+            case Types.TINYINT, Types.SMALLINT, Types.INTEGER, Types.BIGINT,
+                    Types.NUMERIC, Types.DECIMAL, Types.REAL, Types.FLOAT, Types.DOUBLE -> true;
+            default -> false;
+        };
     }
 
     /**

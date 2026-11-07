@@ -353,12 +353,17 @@ public class FactoryDataService {
         DigestOutputStream out = new DigestOutputStream(counted, whole);
         try {
             Map<String, Object> manifest = new LinkedHashMap<>();
-            manifest.put("format", "cretas-factory-export/1");
+            manifest.put("format", "cretas-factory-export/2");
+            manifest.put("redaction", Map.of("algorithm", "HMAC-SHA256", "mapping", "package-scoped",
+                    "keyExported", false));
             manifest.put("factoryId", factoryId);
             manifest.put("factoryName", factory.name());
             manifest.put("generatedAt", now().toString());
             manifest.put("requestId", requestId);
             manifest.put("operator", Map.of("type", actor.type().name(), "id", actor.id()));
+            Set<Format> requestedFormats = EnumSet.copyOf(fmt);
+            fmt.add(Format.JSON);
+            manifest.put("requestedFileFormats", requestedFormats.stream().map(Enum::name).toList());
             manifest.put("fileFormats", fmt.stream().map(Enum::name).toList());
             FactoryDataPackageWriter writer = new FactoryDataPackageWriter(out);
             List<Map<String, Object>> dbManifests = new ArrayList<>();
@@ -404,8 +409,11 @@ public class FactoryDataService {
         List<Map<String, Object>> notExported = new ArrayList<>();
         long rows = 0;
         Map<String, Object> m = new LinkedHashMap<>();
-        try (FactoryDataXlsxBook book = formats.contains(Format.XLSX) ? new FactoryDataXlsxBook() : null) {
-            for (TableScope ts : scope.nonEmpty()) {
+        FactoryDataSchemaMetadata.Snapshot sourceMetadata =
+                FactoryDataSchemaMetadata.capture(conn, db, schema, new ArrayList<>(scope.tables().values()));
+        try (FactoryDataXlsxBook book = formats.contains(Format.XLSX)
+                ? new FactoryDataXlsxBook(writer.redactionKey()) : null) {
+            for (TableScope ts : scope.tables().values()) {
                 if (!ts.category().exported()) {
                     notExported.add(Map.of("table", ts.table(), "category", ts.category().name(), "rows", ts.rows()));
                     continue;
@@ -441,6 +449,9 @@ public class FactoryDataService {
                         "sheetNameChars", FactoryDataXlsxBook.MAX_SHEET_NAME, "cellChars", FactoryDataXlsxBook.MAX_CELL_CHARS));
                 m.put("xlsx", x);
             }
+            m.put("sourceSchema", writeMetadata(writer, dir + "/metadata/schema.json", sourceMetadata.schema()));
+            m.put("migrationMetadata", writeMetadata(writer, dir + "/metadata/migrations.json",
+                    sourceMetadata.migrations()));
         } catch (IOException e) {
             throw new IllegalStateException(db + " 库写出失败: " + e.getMessage(), e);
         }
@@ -450,10 +461,21 @@ public class FactoryDataService {
         m.put("notExported", notExported);
         m.put("foreignHitCount", scope.foreignHits().size());
         Map<String, Object> ordered = new LinkedHashMap<>();
-        for (String k : List.of("database", "rows", "tables", "xlsx", "notExported", "foreignHitCount")) {
+        for (String k : List.of("database", "rows", "tables", "xlsx", "sourceSchema",
+                "migrationMetadata", "notExported", "foreignHitCount")) {
             if (m.containsKey(k)) ordered.put(k, m.get(k));
         }
         return ordered;
+    }
+
+    private Map<String, Object> writeMetadata(FactoryDataPackageWriter writer, String path,
+                                              Map<String, Object> metadata) {
+        try {
+            FactoryDataPackageWriter.Entry entry = writer.writeText(path, toJson(metadata));
+            return Map.of("path", entry.path(), "sha256", entry.sha256(), "sourceTime", true);
+        } catch (IOException e) {
+            throw new IllegalStateException("写出源结构元数据失败: " + path, e);
+        }
     }
 
     private static void requireRows(Database db, TableScope ts, long written) {
@@ -497,7 +519,9 @@ public class FactoryDataService {
                 "manifest.json   清单: 每张表的行数与每个文件的 SHA256, 附件数量。没有这个文件说明包不完整, 请重新导出。",
                 "cretas/         业务主库; smartbi/  经营分析库。"));
         if (formats.contains(Format.CSV)) lines.add("  csv/           每张表一个 CSV (UTF-8 带 BOM, Excel 可直接打开)。");
-        if (formats.contains(Format.JSON)) lines.add("  json/          每张表一个 JSON 数组, 值都是文本或 null。");
+        if (formats.contains(Format.JSON)) lines.add("  json/          每张表一个保留 JDBC 数字/布尔类型的 JSON 数组。");
+        lines.add("  <库名>/metadata/  导出时源库的表结构、约束定义、索引、序列、触发器与迁移历史快照。");
+        lines.add("                 这是源时点快照，不是整库逻辑备份；恢复器必须先校验格式与结构指纹。");
         if (formats.contains(Format.XLSX)) {
             lines.add("  <库名>.xlsx    每个库一个 Excel, 每张表一个工作表; 第一个工作表「目录」列出工作表与表名的对应。");
             lines.add("                 超过 104 万行的表拆成多个工作表, 超过 31 字的表名缩短, 超长单元格截断 —— 见 manifest。");
@@ -507,7 +531,7 @@ public class FactoryDataService {
         lines.addAll(List.of(
                 "",
                 "说明:",
-                "1. 密码、令牌、密钥类字段的值已替换为 " + FactoryDataCatalog.REDACTED + "。",
+                "1. 密码、令牌、密钥类字段使用包级 HMAC-SHA256 不可逆占位符替换, 映射 key 不随包导出。",
                 "2. CSV 里以 = + - @ 开头的文字值前加了一个单引号, 防止 Excel 把它当公式执行。",
                 "3. 根据《食品安全法》, 进货查验与出厂检验记录须保存至产品保质期满后六个月 (没有明确保质期的不少于二年),",
                 "   请工厂自行妥善保存本包。",
@@ -713,6 +737,13 @@ public class FactoryDataService {
                 // 客户端慢时这个只读事务会「空闲」超过 30 秒被服务器杀掉。本事务内放宽到 15 分钟。
                 try (PreparedStatement ps = conn.prepareStatement("SET LOCAL idle_in_transaction_session_timeout = '15min'")) {
                     ps.execute();
+                }
+                // Keep pg_get_* name resolution identical to the protected
+                // baseline while retaining a parameterized tenant schema.
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT set_config('search_path', quote_ident(?) || ', pg_catalog', true)")) {
+                    ps.setString(1, schema);
+                    ps.executeQuery().close();
                 }
                 // SmartBI 行级安全的租户变量由 FactoryDataScopeResolver.resolveVisible 在本事务内设置
                 return work.run(conn);

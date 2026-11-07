@@ -64,6 +64,46 @@ class FactoryDataCatalogContractTest {
         for (String c : new String[]{"keyword", "key_points", "remarks", "hotpot_flag", "factory_id"}) {
             assertThat(FactoryDataCatalog.isCredentialColumn(c)).as(c).isFalse();
         }
+        for (String c : new String[]{"token_id", "token_usage", "token_count", "usage_token"}) {
+            assertThat(FactoryDataCatalog.isCredentialColumn(c)).as(c).isFalse();
+        }
+        for (String c : new String[]{"token", "access_token", "refresh_token", "token_value", "idempotency_token"}) {
+            assertThat(FactoryDataCatalog.isCredentialColumn(c)).as(c).isTrue();
+        }
+        assertThat(FactoryDataCatalog.shouldRedactColumn("token_label", java.sql.Types.VARCHAR)).isTrue();
+        for (String unknownToken : new String[]{"tokenid", "input_tokens", "tokens", "auth_token", "reset_token"}) {
+            assertThat(FactoryDataCatalog.shouldRedactColumn(unknownToken, java.sql.Types.VARCHAR)).as(unknownToken).isTrue();
+        }
+        assertThat(FactoryDataCatalog.shouldRedactColumn("token_id", java.sql.Types.BIGINT)).isTrue();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("users", "token_id", java.sql.Types.BIGINT, 0)).isFalse();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("users", "token_id", java.sql.Types.VARCHAR, 0)).isTrue();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("users", "token_usage", java.sql.Types.NUMERIC, 2)).isFalse();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("ai_intent_configs", "max_tokens",
+                java.sql.Types.BIGINT, 0)).isFalse();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("ai_intent_configs", "max_tokens",
+                java.sql.Types.NUMERIC, 2)).isTrue();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("smart_bi_llm_usage", "input_tokens",
+                java.sql.Types.INTEGER, 0)).isFalse();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("unknown_usage", "input_tokens",
+                java.sql.Types.BIGINT, 0)).isTrue();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("scheduler_run_results", "token_usage_state",
+                java.sql.Types.VARCHAR, null)).isFalse();
+        assertThat(FactoryDataCatalog.shouldRedactColumn("pos_connections", "token_expires_at",
+                java.sql.Types.TIMESTAMP, null)).isFalse();
+    }
+
+    @Test
+    void redactionPreservesUniqueColumnShapeWithoutRetainingSecrets() {
+        byte[] key = FactoryDataRedaction.newKey();
+        assertThat(FactoryDataRedaction.value("users", "refresh_token", "source-secret-a", key, 64))
+                .startsWith("r");
+        assertThat(FactoryDataRedaction.value("users", "refresh_token", "source-secret-b", key, 64))
+                .startsWith("r")
+                .doesNotContain("source-secret");
+        assertThat(FactoryDataRedaction.value("users", "refresh_token", "source-secret-a", key, 64))
+                .isEqualTo(FactoryDataRedaction.value("users", "refresh_token", "source-secret-a", key, 64));
+        assertThat(FactoryDataRedaction.value("users", "refresh_token", "source-secret-a", key, 64))
+                .isNotEqualTo(FactoryDataRedaction.value("users", "refresh_token", "source-secret-b", key, 64));
     }
 
     @Test
@@ -79,5 +119,20 @@ class FactoryDataCatalogContractTest {
         assertThat(FactoryDataPackageWriter.csv("\t=cmd")).startsWith("\"'");
         assertThat(FactoryDataPackageWriter.csv("-5")).isEqualTo("-5");
         assertThat(FactoryDataPackageWriter.csv("plain")).isEqualTo("plain");
+    }
+
+    @Test
+    void jsonWireTypeContractIsExplicitForLosslessAndUnknownPostgresTypes() {
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.ARRAY, "_int4")).isTrue();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.ARRAY, "_int8")).isTrue();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.ARRAY, "_text")).isTrue();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.ARRAY, "_numeric")).isFalse();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.TIMESTAMP_WITH_TIMEZONE,
+                "timestamptz")).isTrue();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.BINARY, "bytea")).isTrue();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.OTHER, "jsonb")).isTrue();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.OTHER, "uuid")).isTrue();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.OTHER, "vector")).isTrue();
+        assertThat(FactoryDataPackageWriter.supportedJsonType(java.sql.Types.OTHER, "mystery_type")).isFalse();
     }
 }
