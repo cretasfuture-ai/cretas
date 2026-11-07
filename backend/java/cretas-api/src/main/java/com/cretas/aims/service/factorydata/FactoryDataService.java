@@ -410,7 +410,7 @@ public class FactoryDataService {
         long rows = 0;
         Map<String, Object> m = new LinkedHashMap<>();
         FactoryDataSchemaMetadata.Snapshot sourceMetadata =
-                FactoryDataSchemaMetadata.capture(conn, db, schema, new ArrayList<>(scope.tables().values()));
+                FactoryDataSchemaMetadata.capture(conn, db, schema, new ArrayList<>(scope.tables().values()), factoryId);
         try (FactoryDataXlsxBook book = formats.contains(Format.XLSX)
                 ? new FactoryDataXlsxBook(writer.redactionKey()) : null) {
             for (TableScope ts : scope.tables().values()) {
