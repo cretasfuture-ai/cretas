@@ -291,7 +291,12 @@ public class IntentExecutionOrchestrator {
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId);
              var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
-            return executeInScope(factoryId, request, userId, userRole);
+            IntentExecuteResponse response = executeInScope(factoryId, request, userId, userRole);
+            // Clarification/no-match/admission returns also reach the public API. They
+            // must not lose the card mode; preserve any WRITE stamp from a known intent.
+            // No recognized/executed write is inferred from the caller's mode or text.
+            applyAiModeStamp(response, null, null);
+            return response;
         }
     }
 
@@ -908,9 +913,12 @@ public class IntentExecutionOrchestrator {
         if (Boolean.TRUE.equals(request.getPreviewOnly()) && intent.getToolName() != null && !intent.getToolName().isEmpty()) {
             Optional<ToolExecutor> previewToolOpt = toolRegistry.getExecutor(intent.getToolName());
             if (previewToolOpt.isPresent() && previewToolOpt.get().supportsPreview()) {
-                return toolDispatchService.executeToolPreview(previewToolOpt.get(), factoryId, request, intent, userId, userRole);
+                IntentExecuteResponse preview = toolDispatchService.executeToolPreview(
+                        previewToolOpt.get(), factoryId, request, intent, userId, userRole);
+                applyAiModeStamp(preview, intent, intent.getToolName());
+                return preview;
             }
-            return IntentExecuteResponse.builder()
+            IntentExecuteResponse unsupportedPreview = IntentExecuteResponse.builder()
                     .intentRecognized(true)
                     .intentCode(intent.getIntentCode())
                     .intentName(intent.getIntentName())
@@ -918,6 +926,8 @@ public class IntentExecutionOrchestrator {
                     .message("预览模式暂不支持此意图类型")
                     .executedAt(LocalDateTime.now())
                     .build();
+            applyAiModeStamp(unsupportedPreview, intent, intent.getToolName());
+            return unsupportedPreview;
         }
 
         // Tool 执行
@@ -2057,7 +2067,6 @@ public class IntentExecutionOrchestrator {
             if (check.isDenied()) {
                 IntentExecuteResponse denied = buildNoPermissionResponse(intent);
                 denied.setRequiredPermission(check.requiredPermission());
-                denied.setAiMode(writeGuardService.isWriteIntent(intent) ? "WRITE" : "READ");
                 // 权限码路径的拒绝文案按码提示 (旧文案基于 requiredRoles, 此路径下可能为 null)
                 String deniedMsg = "您没有权限执行此操作。需要权限: " + check.requiredPermission()
                         + "，请联系工厂管理员开通。";
@@ -2129,7 +2138,7 @@ public class IntentExecutionOrchestrator {
         if (response == null || response.getAiMode() != null) {
             return;
         }
-        boolean write = intent != null && writeGuardService.isWriteIntent(intent);
+        boolean write = intent != null && writeGuardService != null && writeGuardService.isWriteIntent(intent);
         if (!write && matchedToolName != null && !matchedToolName.isEmpty()) {
             try {
                 write = toolRegistry.getExecutor(matchedToolName)
@@ -2211,34 +2220,40 @@ public class IntentExecutionOrchestrator {
 
     private IntentExecuteResponse buildNoPermissionResponse(AIIntentConfig intent) {
         String msg = "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
-        return IntentExecuteResponse.builder()
+        IntentExecuteResponse response = IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
                 .sensitivityLevel(intent.getSensitivityLevel())
                 .status("NO_PERMISSION").message(msg).formattedText(msg)
                 .executedAt(LocalDateTime.now()).build();
+        applyAiModeStamp(response, intent, intent.getToolName());
+        return response;
     }
 
     private IntentExecuteResponse buildApprovalResponse(AIIntentConfig intent) {
         String msg = "此操作需要审批，当前 AI 入口尚不支持提交和核验审批。未提交审批、未执行操作，请通过业务页面完成审批。";
-        return IntentExecuteResponse.builder()
+        IntentExecuteResponse response = IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
                 .sensitivityLevel(intent.getSensitivityLevel())
                 .status("PENDING_APPROVAL").message(msg).formattedText(msg)
                 .requiresApproval(true).approvalChainId(intent.getApprovalChainId())
                 .executedAt(LocalDateTime.now()).build();
+        applyAiModeStamp(response, intent, intent.getToolName());
+        return response;
     }
 
     private IntentExecuteResponse buildDroolsFailureResponse(AIIntentConfig intent, ValidationResult validationResult) {
         String msg = "业务规则验证未通过: " + validationResult.getViolationsSummary();
-        return IntentExecuteResponse.builder()
+        IntentExecuteResponse response = IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
                 .status("VALIDATION_FAILED").message(msg).formattedText(msg)
                 .validationViolations(validationResult.getViolations())
                 .recommendations(validationResult.getRecommendations())
                 .executedAt(LocalDateTime.now()).build();
+        applyAiModeStamp(response, intent, intent.getToolName());
+        return response;
     }
 
     /**
@@ -2318,7 +2333,9 @@ public class IntentExecutionOrchestrator {
                 .executedAt(LocalDateTime.now());
 
         if (!metadata.isEmpty()) builder.metadata(metadata);
-        return builder.build();
+        IntentExecuteResponse response = builder.build();
+        applyAiModeStamp(response, matchedIntent, matchedIntent.getToolName());
+        return response;
     }
 
     private IntentExecuteResponse buildNoMatchResponse(IntentMatchResult matchResult,
