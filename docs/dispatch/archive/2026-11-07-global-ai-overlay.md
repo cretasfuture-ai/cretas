@@ -1,6 +1,6 @@
 # GLOBAL-AI-OVERLAY-20261107
 
-Base: 5c3a1192030c1a9625b9af1f7d4bf5cb94524f4a. Owner /root. Status: reviewed candidate, merge and final formal acceptance pending. Scope: pageAgentDom/Runtime/Readback and corresponding tests only. Scope release takes effect on merge; the coordinator retains the authorized production business acceptance and cleanup responsibility.
+Release Base: 5d25f4d52f40e4b037d63c17ee1a7ce98ec6a862. Original discovery Base: 5c3a1192030c1a9625b9af1f7d4bf5cb94524f4a. Integration of current main preserves the validated Web tree 38a610cd9f4ac4a7b6c1868e00f2bfe075952fdb and keeps this release Web-only; unrelated Java/Python changes are outside this deployment. Owner /root. Status: reviewed candidate, merge and final formal acceptance pending. Scope: pageAgentDom/Runtime/Readback and corresponding tests only. Scope release takes effect on merge; the coordinator retains the authorized production business acceptance and cleanup responsibility.
 
 Real-model formal UI verification of #1536 exposed an empty optional purchase-order dropdown covering the next date input. The protection correctly stopped before any ERP write, and the owned round was ended. Local frontend verification against the real authenticated planner additionally identified Element Plus input-versus-arrow toggle semantics, delegated calendar day cells, unlabeled div-based purchase-detail rows, hidden radio inputs, and missing manual-Next context. These are actual original-page behaviors, not a request to bypass the visibility or tenant checks.
 
