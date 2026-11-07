@@ -334,6 +334,148 @@ describe('pageAgentDom', () => {
     expect(assertCurrent).not.toHaveBeenCalled();
   });
 
+  it('keeps an empty linked dropdown and its real close toggle in the foreground', async () => {
+    document.body.innerHTML = `<main class="app-content"><button>后台提交</button></main>
+      <div class="el-dialog"><label>关联销售订单<span class="el-select"><input role="combobox" aria-expanded="true" aria-controls="order-options" /><span class="el-select__suffix"><i class="el-select__caret"></i><i class="el-select__caret el-select__clear" aria-label="清空"></i></span></span></label>
+      <label>期望交货<input aria-label="期望交货" /></label><button>创建</button></div>
+      <div class="el-popper" style="z-index:2200"><ul id="order-options" role="listbox"><li>暂无数据</li></ul></div>`;
+    const page = observeCurrentPage();
+    expect(page.page.routes).toEqual([]);
+    expect(page.page.controls).toHaveLength(2);
+    expect(page.page.controls[0]).toMatchObject({ role: 'combobox', expanded: true });
+    expect(page.page.controls[0]!.label).toContain('收起下拉');
+    const opener = page.targets.get(page.page.controls[0]!.ref)!;
+    // Real Element Plus filterable input clicks do not close an expanded
+    // dropdown. Only its suffix arrow is a toggle in this state.
+    document.querySelector('.el-select')!.addEventListener('click', event => {
+      if (document.querySelector('.el-select__suffix')!.contains(event.target as Node)) {
+        opener.setAttribute('aria-expanded', 'false');
+        document.querySelector('.el-popper')!.setAttribute('hidden', '');
+      }
+    });
+    const toggle = page.page.controls.find(control => control.label.startsWith('收起下拉：'))!;
+    await executeAgentAction(page, { kind: 'click', target: toggle.ref, message: '收起不关联的空下拉' }, { assertCurrent: () => undefined });
+    const after = observeCurrentPage();
+    expect(after.page.controls.some(control => control.label === '期望交货')).toBe(true);
+    expect(after.page.controls.some(control => control.label === '创建')).toBe(true);
+  });
+
+  it('includes linked popup options and its opener, while excluding background routes and submit', () => {
+    document.body.innerHTML = `<main class="app-content"><input role="combobox" aria-label="供应商" aria-expanded="true" aria-controls="supplier-options" /><button>保存</button></main>
+      <div class="el-popper"><ul id="supplier-options" role="listbox"><li role="option">演示供应商</li></ul></div>`;
+    const page = observeCurrentPage();
+    expect(page.page.controls.some(control => control.label.includes('演示供应商'))).toBe(true);
+    expect(page.page.controls.some(control => control.expanded === true)).toBe(true);
+    expect(page.page.controls.some(control => control.label === '保存')).toBe(false);
+    expect(page.page.routes).toEqual([]);
+  });
+
+  it('does not reopen an old dropdown if pausing closed it before the planned close click', async () => {
+    document.body.innerHTML = `<main class="app-content"><input role="combobox" aria-label="销售订单" aria-expanded="true" aria-controls="order-options" /></main>
+      <div class="el-popper"><ul id="order-options" role="listbox"><li>暂无数据</li></ul></div>`;
+    const page = observeCurrentPage();
+    const control = page.page.controls[0]!;
+    const target = page.targets.get(control.ref)!;
+    target.setAttribute('aria-expanded', 'false');
+    const click = vi.spyOn(target, 'click');
+    await expect(executeAgentAction(page, { kind: 'click', target: control.ref, message: '收起下拉' }, { assertCurrent: () => undefined })).rejects.toThrow(/stale|changed/);
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('exposes actual current-month day cells and confirms a date through the original calendar click', async () => {
+    document.body.innerHTML = `<main class="app-content"><label>期望交货<span class="el-date-editor"><input role="combobox" aria-expanded="true" aria-controls="date-panel" value="2026-11-10" /></span></label></main>
+      <div class="el-popper"><div id="date-panel" class="el-date-picker"><div class="el-date-picker__header"><span class="el-date-picker__header-label">2026年</span><span class="el-date-picker__header-label">11月</span></div>
+      <table class="el-date-table" role="grid"><tbody><tr><td class="available prev-month"><span class="el-date-table-cell__text">29</span></td><td class="available"><span class="el-date-table-cell__text">10</span></td><td class="available disabled"><span class="el-date-table-cell__text">11</span></td><td class="available next-month"><span class="el-date-table-cell__text">1</span></td></tr></tbody></table></div></div>`;
+    const page = observeCurrentPage();
+    const day = page.page.controls.find(control => control.label === '选择日期 2026-11-10')!;
+    expect(day).toBeDefined();
+    expect(page.page.controls.some(control => control.label === '选择日期 2026-11-11')).toBe(false);
+    expect(page.page.controls.some(control => control.label === '选择日期 2026-11-29')).toBe(false);
+    expect(page.page.controls.some(control => control.label === '选择日期 2026-11-01')).toBe(false);
+    expect(page.page.controls.some(control => control.label.includes('点击目标日期确认'))).toBe(true);
+    const picked = vi.fn(() => {
+      document.querySelector('input')!.setAttribute('aria-expanded', 'false');
+      document.querySelector('.el-popper')!.setAttribute('hidden', '');
+    });
+    document.querySelector('.el-date-table')!.addEventListener('click', picked);
+    await expect(executeAgentAction(page, { kind: 'click', target: day.ref, message: '确认交货日期' }, { assertCurrent: () => undefined })).resolves.toMatchObject({ label: '选择日期 2026-11-10' });
+    expect(picked).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a reused calendar cell when the visible month has changed', async () => {
+    document.body.innerHTML = `<main class="app-content"><div class="el-date-picker"><span class="el-date-picker__header-label">2026年</span><span class="el-date-picker__header-label">11月</span><table class="el-date-table"><tbody><tr><td class="available"><span class="el-date-table-cell__text">10</span></td></tr></tbody></table></div></main>`;
+    const page = observeCurrentPage();
+    const control = page.page.controls.find(control => control.label === '选择日期 2026-11-10')!;
+    const target = page.targets.get(control.ref)!;
+    document.querySelectorAll('.el-date-picker__header-label')[1]!.textContent = '12月';
+    const click = vi.spyOn(target, 'click');
+    await expect(executeAgentAction(page, { kind: 'click', target: control.ref, message: '选择日期' }, { assertCurrent: () => undefined })).rejects.toThrow(/stale|changed/);
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('observes the original div-based purchase grid using visible headers, row numbers and selected labels', async () => {
+    document.body.innerHTML = `<main class="app-content"><div class="item-detail-scroll">
+      <div class="item-row item-header"><span>供应原料</span><span>采购数量</span><span>含税单价</span></div>
+      <div class="item-block"><div class="item-row"><div class="el-select"><input role="combobox" aria-expanded="false" /><span class="el-select__placeholder">演示·鲜牛腱</span></div><div><input value="0.010" /></div><div><input value="46" /></div></div></div>
+      <div class="item-block"><div class="item-row"><div class="el-select"><input role="combobox" aria-expanded="false" /><span class="el-select__placeholder is-transparent">选择该供应商的原料</span></div><div><input value="0.010" /></div><div><input value="0" /></div></div></div>
+      </div></main>`;
+    const page = observeCurrentPage();
+    expect(page.page.controls.find(control => control.label === '第1行 供应原料')?.value).toBe('演示·鲜牛腱');
+    expect(page.page.controls.find(control => control.label === '第2行 供应原料')?.value).toBeUndefined();
+    const quantity = page.page.controls.find(control => control.label === '第1行 采购数量')!;
+    expect(quantity).toBeDefined();
+    await expect(executeAgentAction(page, { kind: 'fill', target: quantity.ref, value: '1.25', message: '填写第一行采购数量' }, { assertCurrent: () => undefined })).resolves.toMatchObject({ before: '0.010', after: '1.25' });
+    const changed = observeCurrentPage();
+    const price = changed.page.controls.find(control => control.label === '第1行 含税单价')!;
+    const priceTarget = changed.targets.get(price.ref)!;
+    const click = vi.spyOn(priceTarget, 'click');
+    document.querySelectorAll<HTMLInputElement>('.item-row:not(.item-header) input')[1]!.value = '5';
+    await expect(executeAgentAction(changed, { kind: 'fill', target: price.ref, value: '46', message: '填写价格' }, { assertCurrent: () => undefined })).rejects.toThrow(/stale|changed/);
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('keeps a selected combobox value separate from the native search input while allowing a new search', async () => {
+    document.body.innerHTML = `<main class="app-content"><label>供应商<div class="el-select"><input role="combobox" aria-expanded="false" /><span class="el-select__placeholder">演示供应商A</span></div></label></main>`;
+    const page = observeCurrentPage();
+    const supplier = page.page.controls.find(control => control.role === 'combobox')!;
+    expect(supplier.value).toBe('演示供应商A');
+    const input = page.targets.get(supplier.ref)!;
+    input.addEventListener('input', () => {
+      input.setAttribute('aria-expanded', 'true');
+      document.querySelector('.el-select__placeholder')!.classList.add('is-transparent');
+    });
+    await expect(executeAgentAction(page, { kind: 'fill', target: supplier.ref, value: '演示供应商B', message: '搜索另一供应商' }, { assertCurrent: () => undefined })).resolves.toMatchObject({ after: '演示供应商B' });
+    const beforeChoiceChanged = observeCurrentPage();
+    document.querySelector('.el-select__placeholder')!.textContent = '供应商C';
+    document.querySelector('.el-select__placeholder')!.classList.remove('is-transparent');
+    await expect(executeAgentAction(beforeChoiceChanged, { kind: 'fill', target: beforeChoiceChanged.page.controls[0]!.ref, value: 'D', message: '搜索' }, { assertCurrent: () => undefined })).rejects.toThrow(/stale|changed/);
+  });
+
+  it('observes the visible Element Plus radio labels and default checked state despite hidden native inputs', async () => {
+    document.body.innerHTML = `<main class="app-content"><div role="radiogroup" aria-label="采购类型">
+      <label class="el-radio"><input type="radio" name="purchase-type" value="DIRECT" checked aria-hidden="true" /><span>直接采购</span></label>
+      <label class="el-radio"><input type="radio" name="purchase-type" value="HQ_UNIFIED" aria-hidden="true" /><span>总部统采</span></label>
+      </div><label class="el-checkbox"><input type="checkbox" disabled aria-hidden="true" /><span>不可操作</span></label></main>`;
+    const page = observeCurrentPage();
+    expect(page.page.controls.find(control => control.label === '直接采购')).toMatchObject({ role: 'radio', value: 'DIRECT', checked: true });
+    const other = page.page.controls.find(control => control.label === '总部统采')!;
+    expect(other).toMatchObject({ checked: false });
+    expect(page.page.controls.some(control => control.label === '不可操作')).toBe(false);
+    await executeAgentAction(page, { kind: 'click', target: other.ref, message: '选择总部统采' }, { assertCurrent: () => undefined });
+    expect(observeCurrentPage().page.controls.find(control => control.label === '总部统采')?.checked).toBe(true);
+    expect(observeCurrentPage().page.controls.find(control => control.label === '直接采购')?.checked).toBe(false);
+  });
+
+  it('rejects a stale checkbox click so an already selected choice is not toggled off', async () => {
+    document.body.innerHTML = `<main class="app-content"><label class="el-checkbox-button"><input type="checkbox" aria-hidden="true" /><span>需要发票</span></label></main>`;
+    const page = observeCurrentPage(); const choice = page.page.controls[0]!;
+    expect(choice).toMatchObject({ role: 'checkbox', checked: false });
+    document.querySelector('input')!.checked = true;
+    const click = vi.spyOn(page.targets.get(choice.ref)!, 'click');
+    await expect(executeAgentAction(page, { kind: 'click', target: choice.ref, message: '选择发票' }, { assertCurrent: () => undefined })).rejects.toThrow(/stale|changed/);
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it('keeps the full original value for stale checks while displaying at most 240 characters', async () => {
     const page = snapshot();
     const customer = page.page.controls.find((control) => control.label === '客户')!;

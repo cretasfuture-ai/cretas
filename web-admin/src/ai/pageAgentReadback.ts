@@ -67,7 +67,7 @@ function check(v: unknown, f: string, expected: string, parents: Array<[
 function state(v: Dict): string { return String(v.status ?? v.state ?? v.submissionStatus ?? v.postingStatus ?? ''); }
 function exact(v: Dict, allowed: string[]): void { if (!allowed.includes(state(v)))
     throw new Error(`回读状态不符合本步骤契约：${state(v) || '缺失'}`); }
-function summary(label: string, v: Dict): string { return `${label} ${required(v.id ?? v.settlementId ?? v.productionPlanId ?? v.orderNumber ?? v.receiptNumber ?? v.deliveryNumber ?? v.shipmentNumber ?? v.batchNumber ?? v.finishedBatchNumber, label)}，状态 ${state(v) || '已回读'}`; }
+function summary(label: string, v: Dict): string { return `${label} ${required(v.orderNumber ?? v.receiptNumber ?? v.deliveryNumber ?? v.shipmentNumber ?? v.planNumber ?? v.batchNumber ?? v.finishedBatchNumber ?? v.id ?? v.settlementId ?? v.productionPlanId, label)}，状态 ${state(v) || '已回读'}`; }
 function pathMatch(method: string, re: RegExp, path: string): RegExpMatchArray | null { return re.test(path) ? path.match(re) : null; }
 /** Child collections have no ordering contract. Consume each matching row once,
  * so duplicate lines cannot hide a missing or differently priced line. */

@@ -195,7 +195,7 @@ export function createPageAgentController(state: PageAgentState, ports: AgentCon
         action = planned; actionEpoch = interaction;
         state.phase = 'preview'; state.stage = planned.message;
         const control = snapshot.page.controls.find(item => item.ref === planned.target);
-        const isSubmit = planned.kind === 'click' && /保存|提交|确定|确认|批准|同意|通过|结算|入库|领料|出库|发货|完成/.test(control?.label || '');
+        const isSubmit = planned.kind === 'click' && /保存|提交|确定|确认|批准|同意|通过|结算|入库|领料|出库|发货|完成|^创建$/.test(control?.label || '');
         submitNavigationHeld = isSubmit;
         const outcome = await ports.execute(snapshot, planned, async element => {
           await preview(owner, element, isSubmit ? 10 : planned.kind === 'fill' ? 2 : 1);
@@ -248,7 +248,12 @@ export function createPageAgentController(state: PageAgentState, ports: AgentCon
         return;
       }
       state.uncertain = state.uncertain || wroteThisModule;
-      state.phase = 'error'; state.error = error instanceof Error ? error.message : '页面操作失败，请核对后再继续';
+      const detail = error instanceof Error ? error.message : '页面操作失败，请核对后再继续';
+      const readable = detail.startsWith('Agent action rejected:')
+        ? /offscreen|covered/.test(detail) ? '目标控件被弹出层遮挡或尚未显示，已停住；请收起弹层后再继续'
+          : 'AI未能匹配当前页面的可操作控件，已停住；请核对页面后再继续'
+        : detail;
+      state.phase = 'error'; state.error = state.uncertain ? `${readable}；提交结果尚未确认，请勿重复提交` : readable;
       state.stage = state.error;
       log('error', state.error);
     } finally { action = null; submitNavigationHeld = false; }
@@ -285,6 +290,7 @@ export function createPageAgentController(state: PageAgentState, ports: AgentCon
       if (state.phase !== 'awaiting-next' || !state.active) return;
       state.moduleStep++; submission = null; wroteThisModule = false; paused = false; manualInvalidated = false;
       state.phase = 'planning'; state.stage = '用户已点击下一模块，继续查看原页面';
+      log('action', `用户已点击“下一模块”，现在开始第${state.moduleStep}模块，按原目标继续后续页面操作`);
       return run();
     },
     halt(): void {
@@ -404,7 +410,7 @@ const controller = createPageAgentController(pageAgentState, {
     if (!scope) throw new Error('缺少工厂上下文');
     const response = await parseFormInput(scope.factoryId, {
       entityType: 'UI_PAGE_ACTION',
-      userInput: JSON.stringify({ goal: `${goal}\n本轮隔离演示追踪约束：新建采购订单的备注必须以“${pageAgentState.runKey}”开头，其余用户备注完整保留。该标识也用于本轮同账号演示审批，不代表普通业务的审批权限。`, location: snapshot.route, scope, page: snapshot.page,
+      userInput: JSON.stringify({ goal: `${goal}\n本轮隔离演示追踪约束：新建采购订单的备注必须以“${pageAgentState.runKey}”开头，其余用户备注完整保留。该标识也用于本轮同账号演示审批，不代表普通业务的审批权限。\n当前为第${pageAgentState.moduleStep}模块。${pageAgentState.moduleStep > 1 ? '用户已真实点击顶部“下一模块”，已授权进入原目标的下一项任务；可直接导航到对应原页面并继续填写，不需要再次询问导航确认。下一次业务提交后仍必须停住等待再次点击“下一模块”。' : '当前是用户已开始的第一项任务。'}`, location: snapshot.route, scope, page: snapshot.page,
         history: [ ...completed.map(item => ({ kind: 'verified-module', text: `第${item.moduleStep}模块已核对完成，不能重复提交：${item.summary}` })), ...events ],
       }),
       formFields: [
