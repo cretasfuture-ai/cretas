@@ -86,6 +86,7 @@ import {
 import WorkflowRoutePreview from './components/WorkflowRoutePreview.vue';
 import ProcessSheet from '../components/processSheet/ProcessSheet.vue';
 import ProductionSummaryDialog from '../components/ProductionSummaryDialog.vue';
+import PlanConcurrentReadiness from './components/PlanConcurrentReadiness.vue';
 import {
   documentTraceTarget,
   traceDocumentLabel,
@@ -5263,6 +5264,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             {{ viewPlan.processName || '暂无工序配置' }}
           </div>
         </div>
+
+        <PlanConcurrentReadiness
+          v-if="factoryId && viewPlan.id"
+          :key="`${factoryId}:${viewPlan.id}`"
+          :factory-id="factoryId"
+          :plan-id="String(viewPlan.id)"
+        />
 
         <!-- 备注 -->
         <div v-if="viewPlan.notes" class="detail-section">

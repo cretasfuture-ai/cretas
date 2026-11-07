@@ -332,46 +332,66 @@ public final class PlanCostVarianceCalculator {
     /** 标准用量, 单位折到这一行的单价单位。 */
     private static StandardQty standardQuantity(Inputs in, PlanStandardCostLine line, BigDecimal stdRawInputKg,
                                                 Map<String, BigDecimal> rawShares) {
+        MaterialQuantity raw = materialQuantity(in, line, stdRawInputKg, rawShares);
+        if (raw.quantity() == null) return new StandardQty(null, raw.reason());
+        if (line.getPriceUnit() == null) {
+            return new StandardQty(null, "物料档案没有计量单位");
+        }
+        BigDecimal converted = in.converter().convert(raw.quantity(), raw.unit(), line.getPriceUnit());
+        return converted == null
+                ? new StandardQty(null, "标准用量单位 " + raw.unit() + " 换算不到单价单位 " + line.getPriceUnit())
+                : new StandardQty(converted, null);
+    }
+
+    /** Quantity-only view of the same frozen standard; does not require or return prices. */
+    public record MaterialQuantity(String materialTypeId, BigDecimal quantity, String unit, String reason) { }
+
+    public static List<MaterialQuantity> standardMaterialQuantities(List<PlanStandardCostLine> lines,
+            BigDecimal outputQuantity, BigDecimal outputKg, boolean multiOutput) {
+        Inputs input = new Inputs(lines, Map.of(), outputKg, outputQuantity, null, multiOutput,
+                (quantity, from, to) -> null);
+        BigDecimal rawKg = standardRawInputKg(input, new ArrayList<>());
+        Map<String, BigDecimal> shares = rawShares(lines);
+        return lines.stream().filter(line -> PlanStandardCostLine.TYPE_MATERIAL.equals(line.getLineType()))
+                .map(line -> materialQuantity(input, line, rawKg, shares)).toList();
+    }
+
+    private static MaterialQuantity materialQuantity(Inputs in, PlanStandardCostLine line,
+            BigDecimal stdRawInputKg, Map<String, BigDecimal> rawShares) {
         String basis = line.getStandardBasis();
         BigDecimal qty;
         String unit;
         switch (basis == null ? PlanStandardCostLine.BASIS_NONE : basis) {
             case PlanStandardCostLine.BASIS_RAW_INPUT_SHARE -> {
                 if (stdRawInputKg == null) {
-                    return new StandardQty(null, standardRawInputReason(in, line));
+                    return new MaterialQuantity(line.getMaterialTypeId(), null, null, standardRawInputReason(in, line));
                 }
                 BigDecimal share = rawShares.get(line.getMaterialTypeId());
                 if (share == null) {
-                    return new StandardQty(null, "多个主料但工艺上没配齐投入份额, 算不出各主料标准用量");
+                    return new MaterialQuantity(line.getMaterialTypeId(), null, null, "多个主料但工艺上没配齐投入份额, 算不出各主料标准用量");
                 }
                 qty = stdRawInputKg.multiply(share);
                 unit = "kg";
             }
             case PlanStandardCostLine.BASIS_PER_RAW_INPUT_KG -> {
                 if (stdRawInputKg == null || line.getStandardRate() == null) {
-                    return new StandardQty(null, "算不出主料标准投入, 调料标准用量也算不出");
+                    return new MaterialQuantity(line.getMaterialTypeId(), null, null, "算不出主料标准投入, 调料标准用量也算不出");
                 }
                 qty = stdRawInputKg.multiply(line.getStandardRate());
                 unit = "kg";
             }
             case PlanStandardCostLine.BASIS_PER_OUTPUT_UNIT -> {
                 if (in.outputQuantityInPlanUnit() == null || line.getStandardRate() == null) {
-                    return new StandardQty(null, "没有实际产量, 算不出标准用量");
+                    return new MaterialQuantity(line.getMaterialTypeId(), null, null, "没有实际产量, 算不出标准用量");
                 }
                 qty = in.outputQuantityInPlanUnit().multiply(line.getStandardRate());
                 unit = line.getStandardUnit();
             }
             default -> {
-                return new StandardQty(null, "配方没有登记标准用量, 用量差无法比较");
+                return new MaterialQuantity(line.getMaterialTypeId(), null, null, "配方没有登记标准用量, 用量差无法比较");
             }
         }
-        if (line.getPriceUnit() == null) {
-            return new StandardQty(null, "物料档案没有计量单位");
-        }
-        BigDecimal converted = in.converter().convert(qty, unit, line.getPriceUnit());
-        return converted == null
-                ? new StandardQty(null, "标准用量单位 " + unit + " 换算不到单价单位 " + line.getPriceUnit())
-                : new StandardQty(converted, null);
+        return new MaterialQuantity(line.getMaterialTypeId(), qty, unit, null);
     }
 
     private static String standardRawInputReason(Inputs in, PlanStandardCostLine line) {
