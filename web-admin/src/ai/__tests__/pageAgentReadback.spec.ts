@@ -6,6 +6,13 @@ const request = (path: string, payload: unknown, method = 'POST'): AgentWireRequ
 const result = (path: string, payload: unknown, body: unknown, method = 'POST'): AgentWireResult => ({ ...request(path, payload, method), status: 200, ok: true, body } as AgentWireResult);
 
 describe('page mutation deterministic readback contracts', () => {
+  it('shows a human business number while still checking the immutable entity ID', async () => {
+    const payload = { supplierId: 'sup', items: [{ materialTypeId: 'mat', quantity: 1, unit: 'kg', unitPrice: 3 }] };
+    const wire = result('/purchase/orders', payload, { id: 'uuid-for-linking' });
+    const actual = { id: 'uuid-for-linking', factoryId: 'F006', orderNumber: 'PO-20261107-0001', ...payload };
+    await expect(verifyPageMutation(wire, 'F006', async () => actual)).resolves.toContain('PO-20261107-0001');
+    await expect(verifyPageMutation(wire, 'F006', async () => ({ ...actual, id: 'another-entity' }))).rejects.toThrow('实体ID');
+  });
   it.each([
     ['/purchase/orders', { supplierId: 'sup-1', items: [{ materialTypeId: 'mat-1', quantity: 2, unit: 'kg', unitPrice: 3 }] }, { id: 'po-1', factoryId: 'F006', supplierId: 'sup-1', items: [{ materialTypeId: 'mat-1', quantity: 2, unit: 'kg', unitPrice: 3 }] }, '/purchase/orders/po-1'],
     ['/sales/orders', { customerId: 'cus-1', items: [{ productTypeId: 'sku-1', quantity: 2, unit: 'box', unitPrice: 9 }] }, { id: 'so-1', factoryId: 'F006', customerId: 'cus-1', items: [{ productTypeId: 'sku-1', quantity: 2, unit: 'box', unitPrice: 9 }] }, '/sales/orders/so-1'],

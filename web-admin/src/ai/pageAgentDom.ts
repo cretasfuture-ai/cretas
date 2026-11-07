@@ -28,6 +28,8 @@ export interface AgentControlSnapshot {
   value?: string;
   required?: boolean;
   inputType?: string;
+  expanded?: boolean;
+  checked?: boolean;
 }
 
 export interface AgentRouteSnapshot {
@@ -97,6 +99,8 @@ interface ControlSignature {
   stableLabel: string;
   displaySignature: string;
   rowIdentity: string;
+  expanded: string;
+  selectedValue: string;
   value: string;
   checked: boolean;
   required: boolean;
@@ -168,6 +172,8 @@ function isTopmostAtCenter(element: HTMLElement): boolean {
 function isDisabled(element: HTMLElement): boolean {
   if (element.getAttribute('aria-disabled') === 'true' || element.classList.contains('is-disabled')) return true;
   if (element.closest('fieldset[disabled]')) return true;
+  const wrapped = checkableInput(element);
+  if (wrapped && wrapped !== element && wrapped.disabled) return true;
   if (element instanceof HTMLButtonElement || element instanceof HTMLInputElement
     || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
     return element.disabled;
@@ -193,7 +199,74 @@ function attributeText(element: HTMLElement, name: string): string {
   return element.getAttribute(name)?.trim() || '';
 }
 
+/** Element Plus delegates date picking from its table; day cells are not
+ * native buttons. Derive only a current-month day from the visible Chinese
+ * year/month header, never from a hidden component model or guessed date. */
+function calendarDateLabel(element: HTMLElement): string | undefined {
+  if (!element.matches('.el-date-table td.available') || element.classList.contains('disabled')
+    || element.classList.contains('prev-month') || element.classList.contains('next-month')
+    || element.getAttribute('aria-disabled') === 'true') return undefined;
+  const panel = element.closest('.el-date-picker');
+  if (!panel) return undefined;
+  const header = Array.from(panel.querySelectorAll('.el-date-picker__header-label')).map(textOf).join(' ');
+  const year = Number(header.match(/(\d{4})\s*年/)?.[1]);
+  const month = Number(header.match(/(\d{1,2})\s*月/)?.[1]);
+  const dayText = element.querySelector('.el-date-table-cell__text')?.textContent?.trim() || '';
+  if (!/^\d{1,2}$/.test(dayText) || !year || month < 1 || month > 12) return undefined;
+  const day = Number(dayText), date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) return undefined;
+  return `选择日期 ${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function selectOpenerForToggle(element: HTMLElement): HTMLElement | undefined {
+  if (!element.matches('.el-select__suffix .el-select__caret:not(.el-select__clear)')) return undefined;
+  const opener = element.closest('.el-select')?.querySelector<HTMLElement>('[aria-expanded="true"][aria-controls]');
+  return opener && isVisible(opener) && !isDisabled(opener) ? opener : undefined;
+}
+
+function checkableInput(element: HTMLElement): HTMLInputElement | undefined {
+  if (element instanceof HTMLInputElement && ['radio', 'checkbox'].includes(element.type)) return element;
+  if (!element.matches('label.el-radio, label.el-radio-button, label.el-checkbox, label.el-checkbox-button')) return undefined;
+  return element.querySelector<HTMLInputElement>('input[type="radio"],input[type="checkbox"]') || undefined;
+}
+
+function selectedComboboxText(element: HTMLElement): string {
+  if (element.getAttribute('role') !== 'combobox') return '';
+  const selected = element.closest('.el-select')?.querySelector<HTMLElement>('.el-select__placeholder:not(.is-transparent)');
+  return selected && isVisible(selected) ? (selected.textContent || '').replace(/\s+/g, ' ').trim() : '';
+}
+
+function formGridContext(element: HTMLElement): { row: HTMLElement; header: string; ordinal: number } | undefined {
+  const row = element.closest<HTMLElement>('.item-row:not(.item-header)');
+  const grid = row?.closest<HTMLElement>('.item-detail-scroll');
+  const header = grid?.querySelector<HTMLElement>('.item-row.item-header');
+  if (!row || !grid || !header || row.children.length !== header.children.length) return undefined;
+  let cell: HTMLElement | null = element;
+  while (cell && cell.parentElement !== row) cell = cell.parentElement;
+  const column = cell ? Array.from(row.children).indexOf(cell) : -1;
+  const title = column >= 0 ? header.children[column] : undefined;
+  const rows = Array.from(grid.querySelectorAll<HTMLElement>('.item-row:not(.item-header)'));
+  const ordinal = rows.indexOf(row) + 1;
+  return title && ordinal > 0 ? { row, header: textOf(title), ordinal } : undefined;
+}
+
+const formRowIds = new WeakMap<HTMLElement, number>();
+let formRowSequence = 0;
+function formGridIdentity(element: HTMLElement): string {
+  const context = formGridContext(element);
+  if (!context) return '';
+  if (!formRowIds.has(context.row)) formRowIds.set(context.row, ++formRowSequence);
+  const values = Array.from(context.row.querySelectorAll<HTMLInputElement>('input,textarea,select'))
+    .filter(input => input.type !== 'password' && !hasSensitiveText(`${input.name} ${input.id} ${input.getAttribute('aria-label') || ''}`))
+    .map(input => input === element ? [input.getAttribute('role'), '<current-field>'] : [input.getAttribute('role'), input.value, selectedComboboxText(input)]);
+  return JSON.stringify([formRowIds.get(context.row), context.ordinal, values]);
+}
+
 function associatedLabel(element: HTMLElement): string {
+  const calendar = calendarDateLabel(element);
+  if (calendar) return calendar;
+  const opener = selectOpenerForToggle(element);
+  if (opener) return `收起下拉：${associatedLabel(opener)}`;
   const withRowSummary = (label: string): string => {
     const summary = tableRowSummaryFor(element);
     return summary ? `${label} · ${summary}` : label;
@@ -226,11 +299,16 @@ function associatedLabel(element: HTMLElement): string {
   const tableHeader = tableHeaderForElement(element);
   if (tableHeader) return withRowSummary(tableHeader);
 
+  const grid = formGridContext(element);
+  if (grid?.header) return `第${grid.ordinal}行 ${grid.header}`;
+
   const formItemLabel = element.closest('.el-form-item')?.querySelector('label');
   if (formItemLabel) return withRowSummary(textOf(formItemLabel));
 
   const placeholder = attributeText(element, 'placeholder');
   if (placeholder) return withRowSummary(placeholder);
+  const selectPlaceholder = element.closest('.el-select')?.querySelector<HTMLElement>('.el-select__placeholder');
+  if (selectPlaceholder && isVisible(selectPlaceholder)) return withRowSummary(textOf(selectPlaceholder));
 
   const title = attributeText(element, 'title');
   if (title) return withRowSummary(title);
@@ -239,6 +317,10 @@ function associatedLabel(element: HTMLElement): string {
 }
 
 function directSemanticLabel(element: HTMLElement): string {
+  const calendar = calendarDateLabel(element);
+  if (calendar) return calendar;
+  const opener = selectOpenerForToggle(element);
+  if (opener) return `收起下拉：${associatedLabel(opener)}`;
   const ariaLabel = attributeText(element, 'aria-label');
   if (ariaLabel) return ariaLabel;
   const labelledBy = attributeText(element, 'aria-labelledby');
@@ -258,10 +340,14 @@ function directSemanticLabel(element: HTMLElement): string {
   }
   const parentLabel = element.closest('label');
   if (parentLabel) return textOf(parentLabel);
+  const grid = formGridContext(element);
+  if (grid?.header) return `第${grid.ordinal}行 ${grid.header}`;
   const formItemLabel = element.closest('.el-form-item')?.querySelector('label');
   if (formItemLabel) return textOf(formItemLabel);
   const placeholder = attributeText(element, 'placeholder');
   if (placeholder) return placeholder;
+  const selectPlaceholder = element.closest('.el-select')?.querySelector<HTMLElement>('.el-select__placeholder');
+  if (selectPlaceholder && isVisible(selectPlaceholder)) return textOf(selectPlaceholder);
   const title = attributeText(element, 'title');
   if (title) return title;
   return textOf(element);
@@ -278,6 +364,8 @@ function readValue(element: HTMLElement): string | undefined {
 }
 
 function readRawValue(element: HTMLElement): string | undefined {
+  const wrapped = checkableInput(element);
+  if (wrapped && wrapped !== element) return wrapped.value;
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
     || element instanceof HTMLSelectElement) return element.value;
   const role = element.getAttribute('role');
@@ -400,7 +488,7 @@ function requiresTableIdentity(element: HTMLElement): boolean {
   if (!tableCellFor(element)) return false;
   const tag = element.tagName.toLowerCase();
   const role = element.getAttribute('role')?.toLowerCase() || '';
-  return isEditable(element) || tag === 'button' || tag === 'a'
+  return Boolean(selectOpenerForToggle(element) || checkableInput(element)) || isEditable(element) || tag === 'button' || tag === 'a'
     || ['button', 'link', 'menuitem', 'combobox'].includes(role);
 }
 
@@ -473,7 +561,7 @@ function isEditable(element: HTMLElement): boolean {
 function isPotentialControl(element: HTMLElement): boolean {
   const tag = element.tagName.toLowerCase();
   const role = element.getAttribute('role')?.toLowerCase() || '';
-  return tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button'
+  return Boolean(calendarDateLabel(element) || selectOpenerForToggle(element) || checkableInput(element)) || tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button'
     || tag === 'a' || role === 'button' || role === 'combobox' || role === 'option'
     || role === 'radio' || role === 'checkbox' || role === 'menuitem'
     || element.classList.contains('el-sub-menu__title') || element.classList.contains('el-menu-item');
@@ -495,6 +583,8 @@ function isControlSafe(element: HTMLElement): boolean {
 }
 
 function controlRole(element: HTMLElement): string {
+  const checkable = checkableInput(element);
+  if (checkable) return checkable.type;
   const explicit = element.getAttribute('role')?.trim();
   if (explicit) return explicit;
   const tag = element.tagName.toLowerCase();
@@ -543,11 +633,13 @@ function signatureFor(element: HTMLElement): ControlSignature {
       || ['button', 'link', 'option', 'menuitem'].includes(role)
       || element.classList.contains('el-sub-menu__title') || element.classList.contains('el-menu-item')
       ? textOf(element) : '',
-    rowIdentity: tableRowIdentityFor(element) || '',
+    rowIdentity: tableRowIdentityFor(element) || formGridIdentity(element),
+    expanded: attributeText(element, 'aria-expanded'),
+    selectedValue: selectedComboboxText(element),
     // Keep the complete value for stale-action detection. The serialized
     // snapshot uses readValue(), which deliberately caps disclosure at 240.
     value: readRawValue(element) || '',
-    checked: 'checked' in element && Boolean((element as HTMLInputElement).checked),
+    checked: Boolean(checkableInput(element)?.checked),
     required: element.hasAttribute('required'),
   };
 }
@@ -585,6 +677,26 @@ function visibleElements(doc: Document, selector: string): HTMLElement[] {
 function rootElements(doc: Document): RootSelection {
   const modal = topmost(visibleElements(doc, '.el-message-box, .el-dialog, .el-drawer'));
   const poppers = visibleElements(doc, '.el-popper');
+  // Element Plus links the expanded input to the teleported popup by
+  // aria-controls. Its empty dropdown can cover the next form field. Keep the
+  // actual opener available to close it, rather than suggesting a covered
+  // background field or inventing an option for an empty list.
+  const expanded = visibleElements(doc, '[aria-expanded="true"][aria-controls]')
+    .filter(element => !modal || modal.contains(element));
+  const linked = poppers.map(popper => ({
+    popper,
+    openers: expanded.filter(element => (element.getAttribute('aria-controls') || '').split(/\s+/).some(id => {
+      const controlled = doc.getElementById(id);
+      return controlled && (controlled === popper || popper.contains(controlled));
+    })),
+  })).filter(item => item.openers.length > 0);
+  const foreground = topmost(linked.map(item => item.popper));
+  const active = linked.find(item => item.popper === foreground);
+  if (active) {
+    const toggles = active.openers.flatMap(opener => Array.from(opener.closest('.el-select')?.querySelectorAll<HTMLElement>('.el-select__suffix .el-select__caret:not(.el-select__clear)') || [])
+      .filter(element => selectOpenerForToggle(element) === opener));
+    return { roots: [active.popper, ...active.openers, ...toggles], modalOpen: true };
+  }
   if (modal) {
     // A modal owns the foreground. Background content and routes are not
     // actionable while it is open; visible poppers remain eligible because
@@ -648,7 +760,7 @@ export function observeAgentPage(options: ObserveAgentPageOptions): AgentSnapsho
     const candidates: HTMLElement[] = [];
     if (isPotentialControl(root)) candidates.push(root);
     root.querySelectorAll<HTMLElement>(
-      'input, textarea, select, button, a[href], [role="button"], [role="combobox"], [role="option"], [role="radio"], [role="checkbox"], [role="menuitem"], .el-sub-menu__title, .el-menu-item',
+      'input, textarea, select, button, a[href], [role="button"], [role="combobox"], [role="option"], [role="radio"], [role="checkbox"], [role="menuitem"], .el-sub-menu__title, .el-menu-item, .el-date-table td.available, .el-select__suffix .el-select__caret:not(.el-select__clear), label.el-radio, label.el-radio-button, label.el-checkbox, label.el-checkbox-button',
     ).forEach((element) => candidates.push(element));
 
     candidates.forEach((element) => {
@@ -661,8 +773,13 @@ export function observeAgentPage(options: ObserveAgentPageOptions): AgentSnapsho
       seen.add(element);
 
       const ref = `c${controls.length + 1}`;
-      const label = truncate(associatedLabel(element), MAX_LABEL);
-      const value = readValue(element);
+      const expanded = element.getAttribute('aria-expanded');
+      const expandedHint = expanded === 'true'
+        ? element.closest('.el-date-editor') ? '（日期面板已展开，请点击目标日期确认）'
+          : element.closest('.el-select') ? '（下拉已展开，请点击“收起下拉”箭头或选择选项）' : '（面板已展开，请完成当前面板操作）'
+        : '';
+      const label = truncate(`${associatedLabel(element)}${expandedHint}`, MAX_LABEL);
+      const value = readValue(element) || truncate(selectedComboboxText(element), MAX_VALUE);
       const control: AgentControlSnapshot = {
         ref,
         role: controlRole(element),
@@ -672,6 +789,9 @@ export function observeAgentPage(options: ObserveAgentPageOptions): AgentSnapsho
       if (element.hasAttribute('required')) control.required = true;
       const type = inputType(element);
       if (type) control.inputType = type;
+      if (expanded !== null) control.expanded = expanded === 'true';
+      const checkable = checkableInput(element);
+      if (checkable) control.checked = checkable.checked;
       targets.set(ref, element);
       signatures.set(ref, signatureFor(element));
       controls.push(control);
@@ -763,7 +883,8 @@ function requireLiveTarget(snapshot: AgentSnapshot, ref: string, checkCoverage =
 
 function requireUnchangedValue(element: HTMLElement, expected: ControlSignature): void {
   const current = signatureFor(element);
-  if (current.value !== expected.value || current.checked !== expected.checked) {
+  if (current.value !== expected.value || current.checked !== expected.checked
+    || current.expanded !== expected.expanded || current.selectedValue !== expected.selectedValue) {
     throw new Error('Agent action rejected: control value changed since observation');
   }
 }
