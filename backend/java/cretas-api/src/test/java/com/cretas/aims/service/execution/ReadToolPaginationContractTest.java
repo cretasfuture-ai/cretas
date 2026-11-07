@@ -67,7 +67,7 @@ class ReadToolPaginationContractTest {
     @Test void expiredPaginationIsRememberedByExistingReadStateWithEffectiveToolValues() throws Exception {
         try(var h=new SalesRankingSemanticContractTest.Harness()) {
             var request=SemanticReadTurnResolverContractTest.request(h,"按到期日查过期批次，第1页每页2条");
-            SemanticReadTurnResolverContractTest.model(h,"NEW",Map.of("page",1,"size",2));
+            SemanticReadTurnResolverContractTest.model(h,"NEW",Map.of("page",1,"size",2),"UNCHANGED","ABSOLUTE","第1页");
             var tool=expired();
             assertThat(h.dispatch.resolveReadTurn("F006",7L,request,SemanticReadTurnResolverContractTest.bind(h,tool,"MATERIAL_EXPIRED_QUERY"))).isNull();
             assertThat(h.support.rememberResolvedRead(tool.getToolName(),"F006",7L,request,request.getSemanticParameters())).isTrue();

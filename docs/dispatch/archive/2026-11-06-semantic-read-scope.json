@@ -3,7 +3,7 @@
   "owner": "01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98",
   "originalBaseSHA": "ecfb04cbac6283ac4e1b70592f4643be5feb44b8",
   "upstreamSyncSHA": "49009fd44ad1f348c5599a460744dd7ca177aebe",
-  "currentStage": "2026-11-07: trusted category/domain scope recall after confirmed-goal injection; explicit source-to-target and page-evidence contract; native Decisions evaluation uses the actual choice prompt. All gold immutable, no thresholds or production configuration changes. Isolated Canvas PG fixture must include the session table consumed by existing confirmation locking.",
+  "currentStage": "2026-11-07: native decision prompt contract and trusted scope candidates; final literal page-evidence enum derived after redaction, checked on wire and restored original, UNCHANGED cannot change page; only unmentioned authoritative defaults discarded without new binding. All real gold immutable; no production model/config/Entity/Repository changes, training, merge or deploy.",
   "existingScope": [
     "Java service/execution, recognition DTO and existing Conversation/preview integration",
     "Java ai/tool/impl/crm read tools",

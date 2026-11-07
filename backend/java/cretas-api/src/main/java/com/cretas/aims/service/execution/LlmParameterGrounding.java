@@ -196,7 +196,13 @@ public final class LlmParameterGrounding {
 
     /** 用户这句话里出现过的每一个数 (按出现次数, 一处一条)。 */
     static List<Evidence> numberMentions(String text) {
-        List<Evidence> out = new ArrayList<>();
+        return numberSpans(text).stream().map(n -> new Evidence(n.value())).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+    }
+
+    record NumberSpan(BigDecimal value, int start, int end) {}
+
+    static List<NumberSpan> numberSpans(String text) {
+        List<NumberSpan> out = new ArrayList<>();
         if (text == null || text.isEmpty()) {
             return out;
         }
@@ -205,7 +211,7 @@ public final class LlmParameterGrounding {
         while (a.find()) {
             BigDecimal v = LastActionContract.toDecimal(a.group());
             if (v != null) {
-                out.add(new Evidence(v));
+                out.add(new NumberSpan(v, a.start(), a.end()));
             }
         }
         Matcher c = CHINESE.matcher(t);
@@ -217,13 +223,13 @@ public final class LlmParameterGrounding {
                         || !Character.isIdeographic(after.codePointAt(0))
                         || ZERO_UNIT_AFTER.matcher(after).find();
                 if (standalone) {
-                    out.add(new Evidence(BigDecimal.ZERO));
+                    out.add(new NumberSpan(BigDecimal.ZERO, c.start(), c.end()));
                 }
                 continue;
             }
             BigDecimal v = parseChineseNumber(run);
             if (v != null) {
-                out.add(new Evidence(v));
+                out.add(new NumberSpan(v, c.start(), c.end()));
             }
         }
         return out;

@@ -306,8 +306,13 @@ class SemanticReadTurnResolverContractTest {
         return model(h, action, delta, scope);
     }
     static DashScopeClient model(SalesRankingSemanticContractTest.Harness h, String action, Map<String,Object> delta, String scope) throws Exception {
+        return model(h,action,delta,scope,"UNCHANGED","");
+    }
+    static DashScopeClient model(SalesRankingSemanticContractTest.Harness h, String action, Map<String,Object> delta,
+                                String scope,String pageAction,String evidence) throws Exception {
         var client = mock(DashScopeClient.class);
-        String arguments = h.mapper.writeValueAsString(Map.of("action", action, "dateScope", scope, "parameters", delta, "message", "请明确支持的查询口径。"));
+        String arguments = h.mapper.writeValueAsString(Map.of("action", action, "dateScope", scope, "parameters", delta,
+                "pageAction",pageAction,"pageEvidence",evidence,"message", "请明确支持的查询口径。"));
         var response = h.mapper.convertValue(Map.of("choices", List.of(Map.of("message", Map.of("tool_calls", List.of(Map.of(
                 "id", "fixture", "type", "function", "function", Map.of("name", "resolve_read_turn", "arguments", arguments))))))), ChatCompletionResponse.class);
         when(client.chatWithTools(anyString(), anyString(), anyList())).thenReturn(response);

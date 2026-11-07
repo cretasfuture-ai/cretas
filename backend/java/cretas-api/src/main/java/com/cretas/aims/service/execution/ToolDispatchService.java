@@ -207,6 +207,7 @@ public class ToolDispatchService {
                     "dateScope", Map.of("type", "string", "enum", List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED")),
                     "parameters", deltaSchema, "message", Map.of("type", "string")));
             turnProperties.put("pageAction", Map.of("type", "string", "enum", List.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED")));
+            var pageEvidenceOptions = ReadPageEvidence.from(request.getUserInput());
             turnProperties.put("pageEvidence", Map.of("type", "string", "maxLength", 200,
                     "description", "本轮原话最小连续片段：ABSOLUTE仅含目标页码一个数字，排除每页条数和日期；NEXT/PREVIOUS仅引用翻页动作。"));
             Map<String,Object> enumEvidenceFields = new java.util.LinkedHashMap<>();
@@ -235,16 +236,32 @@ public class ToolDispatchService {
             Map<String,Object> turnSchema = Map.of("type", "object", "properties", turnProperties,
                     "required", List.of("action", "dateScope", "parameters", "message"));
             LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, factoryId,
-                    system, objectMapper.writeValueAsString(input));
+                    system, objectMapper.writeValueAsString(input), objectMapper.writeValueAsString(turnSchema));
             if (redacted.refused()) return readTurnReply("NEED_MORE_INFO", "当前任务上下文无法安全解析，请明确查询目标和条件。");
+            // Derive enum literals from the already-redacted input. Cutting a raw
+            // source into snippets before redaction can expose partial names.
+            String safeCurrentInput = objectMapper.readTree(redacted.text(1)).path("currentInput").asText("");
+            List<String> sentPageEvidence = new ArrayList<>();
+            for (String quote : ReadPageEvidence.from(safeCurrentInput).values()) {
+                String restoredQuote = objectMapper.readValue(redacted.restoreJsonText(objectMapper.writeValueAsString(quote)), String.class);
+                if (pageEvidenceOptions.allows(request.getUserInput(), restoredQuote)) sentPageEvidence.add(quote);
+            }
+            if (sentPageEvidence.isEmpty()) sentPageEvidence.add(""); // Never authorizes a page change.
+            var safeSchema = objectMapper.readTree(redacted.text(2));
+            ((com.fasterxml.jackson.databind.node.ObjectNode)safeSchema.path("properties").path("pageEvidence"))
+                    .set("enum", objectMapper.valueToTree(sentPageEvidence));
             ChatCompletionResponse response = dashScopeClient.chatWithTools(redacted.text(0), redacted.text(1),
-                    List.of(Tool.of("resolve_read_turn", "理解当前只读任务与参数变化", turnSchema)));
+                    List.of(Tool.of("resolve_read_turn", "理解当前只读任务与参数变化", objectMapper.convertValue(safeSchema,
+                            new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}))));
             if (!dashScopeClient.hasToolCalls(response)) return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询条件，请重试或说明要修改的条件。");
             var calls = response.getChoices().get(0).getMessage().getToolCalls();
             if (calls == null || calls.size() != 1 || calls.get(0).getFunction() == null
                     || !"resolve_read_turn".equals(calls.get(0).getFunction().getName()))
                 return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询动作，请重试。");
-            Map<String,Object> turn = objectMapper.readValue(redacted.restoreJsonText(calls.get(0).getFunction().getArguments()),
+            String wireArguments = calls.get(0).getFunction().getArguments();
+            Map<String,Object> wireTurn = objectMapper.readValue(wireArguments,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {});
+            Map<String,Object> turn = objectMapper.readValue(redacted.restoreJsonText(wireArguments),
                     new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {});
             String action = String.valueOf(turn.get("action"));
             String message = turn.get("message") instanceof String s && !s.isBlank() ? s : "请明确查询目标和条件。";
@@ -288,10 +305,27 @@ public class ToolDispatchService {
             Object computedPage = null;
             if (!Set.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED").contains(pageAction))
                 return readTurnReply("NEED_MORE_INFO", "未能确认分页动作，请明确目标页码。");
+            if ("UNCHANGED".equals(pageAction) && rawDelta.containsKey("page")) {
+                Object repeatedPage = rawDelta.get("page"), priorPage = merged.get("page");
+                // A model copy of an unmentioned authoritative default is not a
+                // user change. Discard it; the Tool applies defaults after merge.
+                boolean copiedUngroundedDefault = repeatedPage instanceof Number
+                        && Objects.equals(defaults.get("page"), repeatedPage)
+                        && !ReadPageEvidence.hasNumericContent(request.getUserInput())
+                        && LlmParameterGrounding.ground(Map.of("page",repeatedPage), Map.of(), request.getUserInput(), schema)
+                            .dropped().containsKey("page");
+                if (!copiedUngroundedDefault && (!Set.of("CONTINUE", "CORRECT").contains(action)
+                        || !(repeatedPage instanceof Number n) || !(priorPage instanceof Number old)
+                        || n.doubleValue() != n.longValue() || old.doubleValue() != old.longValue()
+                        || n.longValue() != old.longValue()))
+                    return readTurnReply("NEED_MORE_INFO", "页码变化与分页动作不一致，请明确目标页码；尚未执行查询。");
+                rawDelta.remove("page"); // Preserve confirmed value/default ownership, never bind this as new evidence.
+            }
             if (Set.of("NEXT", "PREVIOUS").contains(pageAction)) {
                 String evidence = turn.get("pageEvidence") instanceof String s ? s.trim() : "";
                 if (!Set.of("CONTINUE", "CORRECT").contains(action) || evidence.isBlank()
-                        || !request.getUserInput().contains(evidence) || !properties.containsKey("page")
+                        || !sentPageEvidence.contains(wireTurn.get("pageEvidence"))
+                        || !request.getUserInput().contains(evidence) || !pageEvidenceOptions.allows(request.getUserInput(), evidence) || !properties.containsKey("page")
                         || !(merged.get("page") instanceof Number priorPage) || priorPage.doubleValue() != priorPage.longValue()
                         || priorPage.longValue() < 1 || priorPage.longValue() >= Integer.MAX_VALUE)
                     return readTurnReply("NEED_MORE_INFO", "缺少可核验的当前页码或翻页依据，请明确要看的页码。");
@@ -306,7 +340,9 @@ public class ToolDispatchService {
             if ("ABSOLUTE".equals(pageAction)) {
                 String evidence = turn.get("pageEvidence") instanceof String s ? s.trim() : "";
                 if (evidence.isBlank() || request.getUserInput() == null
-                        || !request.getUserInput().contains(evidence) || !properties.containsKey("page"))
+                        || !sentPageEvidence.contains(wireTurn.get("pageEvidence"))
+                        || !request.getUserInput().contains(evidence) || !pageEvidenceOptions.allows(request.getUserInput(), evidence)
+                        || !properties.containsKey("page"))
                     return readTurnReply("NEED_MORE_INFO", "缺少可核验的页码依据，请明确要看的页码。");
                 // The LLM selects the parameter and its current-input span; the existing
                 // numeric resolver binds its value. Never inherit an old page for ABSOLUTE.

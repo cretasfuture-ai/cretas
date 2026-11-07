@@ -27,7 +27,7 @@ class SemanticReadCapabilityContractTest {
             var request=SemanticReadTurnResolverContractTest.request(h,"更换查询，第1页，每页6条，目标状态EXPIRED");
             Map<String,Object> delta=new LinkedHashMap<>(Map.of("page",1,"size",6));
             if(!toExpiry) delta.put("status","EXPIRED");
-            var client=SemanticReadTurnResolverContractTest.model(h,"SWITCH",delta);
+            var client=SemanticReadTurnResolverContractTest.model(h,"SWITCH",delta,"UNCHANGED","ABSOLUTE","第1页");
             var tool=toExpiry?new MaterialExpiredQueryTool():new MaterialBatchQueryTool();
             assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
                     SemanticReadTurnResolverContractTest.bind(h,tool,target))).isNull();

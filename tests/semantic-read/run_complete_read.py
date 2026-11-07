@@ -21,10 +21,15 @@ paths=[ROOT/x for x in subprocess.check_output(['git','-C',str(ROOT),'ls-files',
  'backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/SalesServiceImpl.java',
  'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/*.java',
  'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/material/*.java',
+ 'backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/*.java',
  'backend/python/ai/*.py','backend/python/ai/matcher/*.py'],text=True).splitlines()]
 paths += list(pathlib.Path(__file__).parent.glob('*.py'))+[source,gold,a.previous_evidence/'real_business.py',a.previous_evidence.parent/'semantic-live-evaluation/entry-probe/verified_loopback.py']
 hashes={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in paths}
+fixture_dir=ROOT/'backend/java/cretas-api/target/test-classes/com/cretas/aims/service/execution'
+fixture_hashes={str(x):hashlib.sha256(x.read_bytes()).hexdigest() for x in fixture_dir.glob('*.class')}
+if not fixture_hashes:raise RuntimeError('Controlled HTTP harness classes missing;do not call a model')
 manifest=dict(base_head=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),source_hashes=hashes,
+    controlled_fixture_class_hashes=fixture_hashes,
     openai_read_tool_strict_wire=os.environ.get('CRETAS_EVAL_STRICT_READ_TOOL_ARGS')=='1',
     decision_contract='Core system/user choice prompt and deterministic option order;native Luna full-choice output replaces assistant partial/token logprobs;raw probabilities preserved,not production score parity',
     purpose='LIVE_MINI_REQUEST_PURPOSE_CAN_OVERRIDE_NATIVE_CHOICE;shortlist also live mini;no live local266 classifier/vector',
@@ -49,6 +54,7 @@ with (a.output/'transport.log').open('w',encoding='utf-8') as sl,(a.output/'prob
   if r.returncode:raise RuntimeError('HTTP runner failed;no retry;preserve log and partial evidence')
  finally:server.terminate();server.wait(timeout=20)
 assert all(hashlib.sha256(pathlib.Path(k).read_bytes()).hexdigest()==v for k,v in hashes.items()),'Source changed during real inference'
+assert all(hashlib.sha256(pathlib.Path(k).read_bytes()).hexdigest()==v for k,v in fixture_hashes.items()),'Controlled fixture classes changed during real inference'
 if a.preflight:print('8 tools registered;expired and QC Tool actual readonly preflight passed;no model calls');sys.exit(0)
 data=json.loads(result.read_text('utf-8'));assert len(data['trace'])==2*turn_count
 manifest.update(finished=datetime.datetime.now(datetime.timezone.utc).isoformat(),source_unchanged=True,actual_turns=len(data['trace']))
