@@ -81,6 +81,7 @@ public class ClarificationCandidateService {
             String mode) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
         Set<String> seenCodes = new HashSet<>();
+        List<DisplayChoice> selectable = new ArrayList<>();
 
         if (matchResult != null && hasIdentity(factoryId, userId, userRole)) {
             DomainResolution domainResolution = resolveFactoryDomain(factoryId);
@@ -90,8 +91,9 @@ public class ClarificationCandidateService {
             String factoryDomain = domainResolution.domain();
             List<IntentMatchResult.CandidateIntent> candidates = matchResult.getTopCandidates();
             if (candidates != null) {
+                int examined = 0;
                 for (IntentMatchResult.CandidateIntent candidate : candidates) {
-                    if (actions.size() >= MAX_BUSINESS_CHOICES) {
+                    if (++examined > 5) {
                         break;
                     }
                     if (candidate == null) {
@@ -110,9 +112,35 @@ public class ClarificationCandidateService {
                             || !FrontlineReadAudience.offeredTo(code, userRole)) {
                         continue;
                     }
-                    actions.add(toSelectAction(config, factoryId, candidate));
+                    selectable.add(new DisplayChoice(toSelectAction(config, factoryId, candidate),
+                            scopeTool(config.getToolName())));
                 }
             }
+        }
+
+        // Reorder presentation only, after every candidate has passed the same
+        // canonical/tenant/domain/mode/permission checks. Never mutate the
+        // recognizer's confidence-ranked topCandidates or synthesize a peer.
+        if (!selectable.isEmpty()) {
+            List<DisplayChoice> displayed = new ArrayList<>();
+            DisplayChoice first = selectable.get(0);
+            displayed.add(first);
+            if (first.tool() != null) {
+                for (DisplayChoice choice : selectable) {
+                    if (displayed.size() >= MAX_BUSINESS_CHOICES) break;
+                    if (choice != first && choice.tool() != null
+                            && displayed.stream().noneMatch(d -> d.tool() != null && d.tool().name().equals(choice.tool().name()))
+                            && first.tool().domains().stream().anyMatch(choice.tool().domains()::contains))
+                        displayed.add(choice);
+                }
+            }
+            for (DisplayChoice choice : selectable) {
+                if (displayed.size() >= MAX_BUSINESS_CHOICES) break;
+                if (choice.tool() != null && displayed.stream().anyMatch(d -> d.tool() != null
+                        && d.tool().name().equals(choice.tool().name()))) continue;
+                if (!displayed.contains(choice)) displayed.add(choice);
+            }
+            displayed.forEach(choice -> actions.add(choice.action()));
         }
 
         // This is the only fallback that does not claim a business operation can run.
@@ -121,6 +149,24 @@ public class ClarificationCandidateService {
                 .actionName("重新描述")
                 .build());
         return actions;
+    }
+
+    private record ScopeDescription(String name, Set<String> domains) {}
+    private record DisplayChoice(IntentExecuteResponse.SuggestedAction action, ScopeDescription tool) {}
+
+    private ScopeDescription scopeTool(String name) {
+        if (toolRegistry == null || name == null) return null;
+        try {
+            ToolExecutor tool = toolRegistry.getExecutor(name).orElse(null);
+            if (tool == null || tool.getAccessMode() != ToolExecutor.AccessMode.READ
+                    || tool.getToolName() == null || tool.getToolName().isBlank()
+                    || tool.getDomainTags() == null || tool.getDomainTags().stream().noneMatch(d -> d != null && !d.isBlank())
+                    || readCapabilityDescription(toolRegistry, name, null) == null) return null;
+            return new ScopeDescription(tool.getToolName(), tool.getDomainTags().stream()
+                    .filter(d -> d != null && !d.isBlank()).collect(java.util.stream.Collectors.toUnmodifiableSet()));
+        } catch (RuntimeException unavailable) {
+            return null; // Metadata cannot promote an unverifiable choice.
+        }
     }
 
     private List<IntentExecuteResponse.SuggestedAction> rephraseOnly() {

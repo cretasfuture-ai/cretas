@@ -1,6 +1,10 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.tool.WriteGuardService;
+import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.ToolRegistry;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.entity.config.AIIntentConfig;
@@ -20,6 +24,50 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class ClarificationCandidateServiceContractTest {
+
+    @ParameterizedTest @ValueSource(strings={"valid","earlyAlias","denied","foreign","write","alias","noScope"})
+    void promotesOnlyAlreadyOfferedAuthorizedScopePeerWithoutChangingModelRanking(String variant) {
+        var first=config("MATERIAL_BATCH_QUERY","规范库存",null,"FACTORY");first.setToolName("stock");
+        var noise=config("ORDER_LIST","订单",null,"FACTORY");
+        var second=config("QUALITY_CHECK_LIST","质检",null,"FACTORY");
+        var third=config("EXTRA_QUERY","其他",null,"COMMON");
+        var peer=config("MATERIAL_EXPIRED_QUERY","规范过期",null,"FACTORY");peer.setToolName("alias".equals(variant)?"stock":"due");
+        for(var row:List.of(first,noise,second,third,peer))row.setId("test-"+row.getIntentCode());
+        if("earlyAlias".equals(variant)) {noise.setToolName("stock");}
+        if("foreign".equals(variant))peer.setFactoryId("F999");
+        if("denied".equals(variant)) {
+            peer.setRequiredPermission("inventory:read");
+            when(permissionGate.check(org.mockito.ArgumentMatchers.same(peer),eq(7L),eq("manager")))
+                    .thenReturn(IntentPermissionGate.PermissionCheck.denied("inventory:read"));
+        }
+        if("write".equals(variant))when(accessModeFilter.isWriteIntent(org.mockito.ArgumentMatchers.same(peer))).thenReturn(true);
+        whenConfig(first,noise,second,third,peer);
+        var registry=mock(ToolRegistry.class);
+        for(String name:List.of("stock","due")) {
+            var tool=mock(ToolExecutor.class);
+            when(tool.getToolName()).thenReturn(name);
+            when(tool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+            when(tool.getDomainTags()).thenReturn(java.util.Set.of("material"));
+            when(tool.getParametersSchema()).thenReturn("noScope".equals(variant)&&name.equals("due")?java.util.Map.of():
+                    java.util.Map.of("x-clarification-description",name.equals("stock")?"按保存的状态筛选":"按到期日期筛选"));
+            when(registry.getExecutor(name)).thenReturn(Optional.of(tool));
+        }
+        service=new ClarificationCandidateService(configService,permissionGate,accessModeFilter,new WriteGuardService(),null,registry);
+        var match=candidates(first.getIntentCode(),noise.getIntentCode(),second.getIntentCode(),third.getIntentCode(),peer.getIntentCode());
+        var original=match.getTopCandidates();original.get(4).setConfidence(null);
+        var actions=service.buildCandidateActions(match,FACTORY,7L,"manager","READ");
+        boolean promoted="valid".equals(variant)||"earlyAlias".equals(variant);
+        assertThat(actions).filteredOn(a->"SELECT_INTENT".equals(a.getActionCode()))
+                .extracting(a->a.getParameters().get("intentCode"))
+                .containsExactly("MATERIAL_BATCH_QUERY",promoted?"MATERIAL_EXPIRED_QUERY":"ORDER_LIST",
+                        "earlyAlias".equals(variant)?"QUALITY_CHECK_LIST":promoted?"ORDER_LIST":"QUALITY_CHECK_LIST");
+        assertThat(match.getTopCandidates()).isSameAs(original);
+        assertThat(original).extracting(IntentMatchResult.CandidateIntent::getIntentCode)
+                .containsExactly("MATERIAL_BATCH_QUERY","ORDER_LIST","QUALITY_CHECK_LIST","EXTRA_QUERY","MATERIAL_EXPIRED_QUERY");
+        assertThat(original.get(0).getConfidence()).isEqualTo(.7);
+        assertThat(original.get(4).getConfidence()).isNull();
+        assertThat(actions.get(0).getActionName()).isEqualTo("规范库存");
+    }
 
     private static final String FACTORY = "F006";
     private IntentConfigManagementService configService;

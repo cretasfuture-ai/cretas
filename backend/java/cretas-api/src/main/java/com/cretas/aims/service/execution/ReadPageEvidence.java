@@ -14,7 +14,13 @@ final class ReadPageEvidence {
     record Options(List<String> values, Set<String> allowed) {
         boolean allows(String input,String evidence) { return allowed.contains(evidence)&&unique(input,evidence); }
         boolean allowsRelative(String input,String evidence) {
-            return allows(input,evidence) && !barePageQuantity(evidence);
+            if (!allows(input,evidence) || barePageQuantity(evidence)) return false;
+            var numbers=LlmParameterGrounding.numberSpans(evidence);
+            if (numbers.isEmpty()) return !hasNumericContent(evidence);
+            if (numbers.size()!=1) return false;
+            var number=numbers.get(0);
+            return number.value().compareTo(java.math.BigDecimal.ONE)==0
+                    && !evidence.substring(0,number.start()).stripTrailing().endsWith("第");
         }
     }
 
@@ -47,8 +53,12 @@ final class ReadPageEvidence {
             int start=number.start(),end=number.end();
             while(start>0 && Character.isWhitespace(input.charAt(start-1))) start--;
             while(end<input.length() && Character.isWhitespace(input.charAt(end))) end++;
-            if(start>0 && input.charAt(start-1)=='第') start--;
-            if(end<input.length() && input.charAt(end)=='页')
+            boolean ordinal=start>0 && input.charAt(start-1)=='第';
+            if(ordinal) start--;
+            // An embedded bare N页 discards the action. Whole clauses and
+            // complete prefixes above retain it; explicit ordinals remain
+            // useful absolute targets in multi-number inputs.
+            if(ordinal && end<input.length() && input.charAt(end)=='页')
                 add(candidates,input,input.substring(start,end+1),numbers,start,end+1);
             if(candidates.size()>64) return empty();
         }

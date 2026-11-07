@@ -125,7 +125,8 @@ class SemanticReadCapabilityContractTest {
         var service=mock(ClarificationCandidateService.class);
         when(service.buildCandidateActions(eq(match),eq("F006"),eq(7L),anyString(),anyString())).thenReturn(actions);
         ReflectionTestUtils.setField(stream,"clarificationCandidateService",service);
-        var normal=ordinary.buildClarificationResponse(match,"F006");
+        ReflectionTestUtils.setField(ordinary,"clarificationCandidateService",service);
+        var normal=ordinary.buildClarificationResponse(match,"F006",7L,"factory_super_admin","READ");
         IntentExecuteResponse sse=ReflectionTestUtils.invokeMethod(stream,"buildClarificationResponseForStream",match,"F006",7L,"factory_super_admin","READ");
         assertThat(sse.getMessage()).isEqualTo(normal.getMessage()).contains(actions.get(0).getDescription())
                 .doesNotContain("历史拒绝方向","默认");

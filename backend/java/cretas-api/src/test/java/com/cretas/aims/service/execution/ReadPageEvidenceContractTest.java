@@ -15,6 +15,15 @@ import static org.mockito.Mockito.*;
 
 /** Controlled provenance/safety contracts, never a real-model success estimate. */
 class ReadPageEvidenceContractTest {
+    @Test void relativeSourceRetainsItsActionAndDoesNotOfferAnEmbeddedBareQuantity() {
+        String input="再往后翻一页，每页4条";
+        var options=ReadPageEvidence.from(input);
+        assertThat(options.values()).contains("再往后翻一页").doesNotContain("一页");
+        assertThat(options.allowsRelative(input,"再往后翻一页")).isTrue();
+        for(String text:List.of("再翻两页","再看第1页","再看第2页","再看第①页","再看第Ⅱ页"))
+            assertThat(ReadPageEvidence.from(text).allowsRelative(text,text)).isFalse();
+        assertThat(ReadPageEvidence.from("一页").allows("一页","一页")).isTrue();
+    }
     @ParameterizedTest @ValueSource(strings={"第一页","第四页","第１页"})
     void currentOrdinalLiteralIsOfferedAndAcceptedWithoutNormalizingItsSpelling(String evidence) throws Exception {
         try(var h=new SalesRankingSemanticContractTest.Harness()) {
@@ -67,10 +76,10 @@ class ReadPageEvidenceContractTest {
 
     @Test void multiNumberRelativeActionKeepsOnlyTheNarrowPageFragment() {
         String input="再往后翻一页每页4条";var options=ReadPageEvidence.from(input);
-        assertThat(options.values()).contains("再往后翻一页","一页").doesNotContain(input);
+        assertThat(options.values()).contains("再往后翻一页").doesNotContain(input,"一页");
         assertThat(options.allowsRelative(input,"再往后翻一页")).isTrue();
         assertThat(options.allowsRelative(input,"一页")).isFalse();
-        assertThat(options.allows(input,"一页")).isTrue();
+        assertThat(options.allows(input,"一页")).isFalse();
         assertThat(options.allows(input,input)).isFalse();
     }
 
@@ -130,7 +139,7 @@ class ReadPageEvidenceContractTest {
                 assertThat((String)call.getArgument(1)).doesNotContain("赵铁柱","13912345678");
                 Map<?,?> fields=(Map<?,?>)tools.get(0).getFunction().getParameters().get("properties");
                 List<?> values=(List<?>)((Map<?,?>)fields.get("pageEvidence")).get("enum");
-                assertThat(values.stream().map(String::valueOf).toList()).contains("一页")
+                assertThat(values.stream().map(String::valueOf).toList()).doesNotContain("一页")
                         .noneMatch(value->value.contains("再往后翻一页"));
                 assertThat(values).allSatisfy(value->assertThat(String.valueOf(value))
                         .doesNotContain("赵铁柱","铁柱","13912345678"));

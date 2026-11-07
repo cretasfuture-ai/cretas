@@ -195,6 +195,9 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private IntentAccessModeFilter intentAccessModeFilter;
 
+    @Autowired
+    private ClarificationCandidateService clarificationCandidateService;
+
     // C1 clarification business-type filter (restaurant-chat-qa): resolve the factory's business
     // domain + each candidate intent's business_type so the NEED_CLARIFICATION choice list never
     // shows manufacturing options (查询原料库存 / 查询生产批次) to a RESTAURANT tenant.
@@ -604,7 +607,7 @@ public class IntentExecutionOrchestrator {
         if (!factoryPackConstrained
                 && matchResult.hasMatch() && Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
                 && !Boolean.TRUE.equals(request.getForceExecute())) {
-            return buildClarificationResponse(matchResult, factoryId);
+            return buildClarificationResponse(matchResult, factoryId, userId, userRole, request.getMode());
         }
 
         // 2b. 通用咨询/闲聊
@@ -2384,8 +2387,21 @@ public class IntentExecutionOrchestrator {
 
 
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
+        // Legacy direct-test compatibility only. Actual execute uses the caller-bound overload.
+        return buildClarificationResponse(matchResult, factoryId, buildCandidateActions(matchResult, factoryId));
+    }
+
+    IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId,
+                                                     Long userId, String userRole, String mode) {
+        List<IntentExecuteResponse.SuggestedAction> actions = clarificationCandidateService == null
+                ? List.of(IntentExecuteResponse.SuggestedAction.builder().actionCode("REPHRASE").actionName("重新描述").build())
+                : clarificationCandidateService.buildCandidateActions(matchResult, factoryId, userId, userRole, mode);
+        return buildClarificationResponse(matchResult, factoryId, actions);
+    }
+
+    private IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId,
+                                                              List<IntentExecuteResponse.SuggestedAction> candidateActions) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
-        List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
 
         // Sprint 12: enrich clarification message with inline candidate intent names so the
         // formattedText itself carries the choices (not just suggestedActions UI buttons).

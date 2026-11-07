@@ -47,6 +47,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -112,9 +113,9 @@ public class ToolDispatchService {
                     currentInput是唯一的本轮动作指令；history只用于指代与兼容条件，不能沿用历史取消、拒绝或不支持动作。
                     action只能为NEW、CONTINUE、CORRECT、SWITCH、CANCEL、CLARIFY、UNSUPPORTED。
                     continuationAlias存在时，这是已识别的会话动作而不是新的业务目标；只能在本轮确实延续同一只读目标时CONTINUE/CORRECT，否则CLARIFY，不能强行套用旧目标。
-                    pageAction描述本轮分页动作：NEXT、PREVIOUS、ABSOLUTE、UNCHANGED。相对翻页由程序基于已确认页码计算，parameters不要猜页码；pageEvidence必须是本轮原话中的连续片段。
-                    明确页码用ABSOLUTE并给出page；改变每页条数用size。无分页变化用UNCHANGED，不输出分页默认值。
-                    ABSOLUTE的pageEvidence取只包含目标页码这一个数字的最小连续片段，不含每页条数、日期或其他数字；相对翻页只引用翻页动作片段。
+                    pageAction描述本轮分页动作：NEXT、PREVIOUS、ABSOLUTE、UNCHANGED。页码统一由程序根据pageAction和pageEvidence计算，parameters不要输出page；pageEvidence必须是本轮原话中的连续片段。
+                    本轮给出目标页号时用ABSOLUTE，不能因它恰好是当前页的相邻页就改为NEXT/PREVIOUS。改变每页条数用size。无分页变化用UNCHANGED，不输出分页默认值。
+                    ABSOLUTE的pageEvidence取只包含目标页码这一个数字的最小连续片段，不含每页条数、日期或其他数字；相对单页翻页引用完整动作片段，不能只取裸页数量。NEXT/PREVIOUS只支持逐页，其他步长需明确目标页码。
                     NEW/SWITCH是独立目标；CONTINUE/CORRECT仅可用于同一个目标。
                     readTransition按source→target排列：source是此前已执行任务，target是本轮候选能力，不能颠倒。
                     先结合currentInput判断本轮目标，再按target的真实能力校验；不能用source的限制拒绝target已支持的新查询。
@@ -193,7 +194,7 @@ public class ToolDispatchService {
             if (schema.get("properties") instanceof Map<?,?> originalProperties) {
                 Map<String,Object> partial = new java.util.LinkedHashMap<>();
                 originalProperties.forEach((k,v) -> {
-                    if (k instanceof String key && v instanceof Map<?,?> definition) {
+                    if (k instanceof String key && !"page".equals(key) && v instanceof Map<?,?> definition) {
                         Map<String,Object> copy = new java.util.LinkedHashMap<>();
                         definition.forEach((pk,pv) -> { if (pk instanceof String property && !"default".equals(property)) copy.put(property, pv); });
                         partial.put(key, copy);
@@ -246,9 +247,16 @@ public class ToolDispatchService {
             // source into snippets before redaction can expose partial names.
             String safeCurrentInput = objectMapper.readTree(redacted.text(1)).path("currentInput").asText("");
             List<String> sentPageEvidence = new ArrayList<>();
-            for (String quote : ReadPageEvidence.from(safeCurrentInput).values()) {
+            Set<String> sentRelativePageEvidence = new HashSet<>();
+            var safePageEvidenceOptions = ReadPageEvidence.from(safeCurrentInput);
+            for (String quote : safePageEvidenceOptions.values()) {
                 String restoredQuote = objectMapper.readValue(redacted.restoreJsonText(objectMapper.writeValueAsString(quote)), String.class);
-                if (pageEvidenceOptions.allows(request.getUserInput(), restoredQuote)) sentPageEvidence.add(quote);
+                if (pageEvidenceOptions.allows(request.getUserInput(), restoredQuote)) {
+                    sentPageEvidence.add(quote);
+                    // Step semantics apply to the exact egress quote. A restored
+                    // telephone/name is provenance, never a relative page count.
+                    if (safePageEvidenceOptions.allowsRelative(safeCurrentInput, quote)) sentRelativePageEvidence.add(quote);
+                }
             }
             if (sentPageEvidence.isEmpty()) sentPageEvidence.add(""); // Never authorizes a page change.
             var safeSchema = objectMapper.readTree(redacted.text(2));
@@ -329,7 +337,8 @@ public class ToolDispatchService {
                 String evidence = turn.get("pageEvidence") instanceof String s ? s.trim() : "";
                 if (!Set.of("CONTINUE", "CORRECT").contains(action) || evidence.isBlank()
                         || !sentPageEvidence.contains(wireTurn.get("pageEvidence"))
-                        || !request.getUserInput().contains(evidence) || !pageEvidenceOptions.allowsRelative(request.getUserInput(), evidence) || !properties.containsKey("page")
+                        || !sentRelativePageEvidence.contains(wireTurn.get("pageEvidence"))
+                        || !request.getUserInput().contains(evidence) || !pageEvidenceOptions.allows(request.getUserInput(), evidence) || !properties.containsKey("page")
                         || !(merged.get("page") instanceof Number priorPage) || priorPage.doubleValue() != priorPage.longValue()
                         || priorPage.longValue() < 1 || priorPage.longValue() >= Integer.MAX_VALUE)
                     return readTurnReply("NEED_MORE_INFO", "缺少可核验的当前页码或翻页依据，请明确要看的页码。");

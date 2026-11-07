@@ -32,6 +32,9 @@ class SemanticReadTurnResolverContractTest {
             var function=(com.cretas.aims.ai.dto.Tool)capture.getValue().get(0);
             var fields=(Map<?,?>)function.getFunction().getParameters().get("properties");
             var date=(Map<?,?>)fields.get("dateScope");
+            var delta=(Map<?,?>)fields.get("parameters");
+            assertThat(((Map<?,?>)delta.get("properties")).containsKey("page")).isFalse();
+            assertThat(((Map<?,?>)tool.getParametersSchema().get("properties")).containsKey("page")).isTrue();
             assertThat((List<?>)date.get("enum")).hasSize(adjustable?5:1);
             if(!adjustable) assertThat(date.get("enum")).isEqualTo(List.of("UNCHANGED"));
         }
