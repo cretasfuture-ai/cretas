@@ -147,7 +147,7 @@ def test_full_read_battery_always_sends_read_mode(monkeypatch):
 
 def denied_purchase():
     return {"intentCode": "PURCHASE_ORDER_CREATE", "status": "NO_PERMISSION", "aiMode": "WRITE",
-            "requiredPermission": "procurement:read_write", "message": "没有权限"}
+            "requiredPermission": "procurement:read_write", "message": "没有权限，需要 procurement:read_write"}
 
 
 def test_viewer_permission_denial_is_a_strict_negative_not_a_write_success():
@@ -205,7 +205,7 @@ def test_preview_requires_exact_intent_and_all_original_impact_fields():
         assert write._preview_problems(changed)
 
 
-def test_full_write_battery_is_preview_only_and_preserves_both_delete_negatives(monkeypatch):
+def test_full_write_battery_is_preview_or_read_and_preserves_both_delete_negatives(monkeypatch):
     calls = []
     monkeypatch.setattr(write, "factory_login", lambda *a: {})
     monkeypatch.setattr(write.time, "sleep", lambda *a: None)
@@ -217,7 +217,9 @@ def test_full_write_battery_is_preview_only_and_preserves_both_delete_negatives(
     monkeypatch.setattr(write, "_post_json", post)
     assert write.run_eval("https://fixture.invalid") == 1
     assert len(calls) == 8
-    assert all(payload["previewOnly"] is True for _, payload in calls)
+    assert all(payload.get("previewOnly") is True for _, payload in calls[:-1])
+    assert calls[-1][1]["mode"] == "READ"
+    assert "previewOnly" not in calls[-1][1]
     assert all(url.endswith("/ai-intents/execute") for url, _ in calls)
     assert sum(payload["userInput"] == "帮我删除客户张三" for _, payload in calls) == 2
     assert any(payload.get("intentCode") == "PRODUCT_CREATE_FLYWHEEL" and payload.get("mode") == "READ"
@@ -229,3 +231,59 @@ def test_auth_not_measured_stays_exit_two(monkeypatch):
     monkeypatch.setattr(read, "factory_login", lambda *a: None)
     assert write.run_eval("https://fixture.invalid") == 2
     assert read.run_eval("https://fixture.invalid") == 2
+
+
+def test_explicit_ai_refusal_paraphrase_never_accepts_claimed_mutation():
+    message = "删除客户需经严格审批。切勿直接请求AI执行敏感数据变更。"
+    response = {"status": "COMPLETED", "aiMode": "READ", "intentRecognized": False, "message": message}
+    assert write._unsupported_problems(response) == []
+    for suffix in ("已删除客户", "已为您删除客户", "删除成功", "成功禁用", "操作已完成"):
+        assert write._unsupported_problems({**response, "message": message + suffix})
+    assert write._unsupported_problems({**response, "message": "删除客户需经严格审批，请联系管理员"})
+
+
+def live_write_envelopes():
+    unsupported = {"status": "COMPLETED", "aiMode": "READ", "intentRecognized": False,
+                   "message": "不支持此操作，请使用业务页面"}
+    clarification = {"intentCode": "FACTORY_CONFIG_AGENT", "status": "NEED_CLARIFICATION", "aiMode": "WRITE",
+                     "suggestedActions": [{"actionCode": "FACTORY_CONFIG_AGENT", "actionName": "配置向导"},
+                                          {"actionCode": "SYSTEM_SETTINGS", "actionName": "系统设置"}]}
+    preview = {"intentCode": "PRODUCT_CREATE_FLYWHEEL", "status": "PREVIEW", "aiMode": "WRITE",
+               "confirmableAction": {"confirmToken": "fixture", "commandDigest": "digest",
+                                     "impactSummary": "preview only", "actionType": "CREATE"}}
+    responses = [unsupported, denied_purchase(), clarification, unsupported, unsupported,
+                 {"intentCode": "PRODUCT_CREATE_FLYWHEEL", "status": "READ_MODE_WRITE_BLOCKED", "aiMode": "WRITE",
+                  "message": "这是操作类请求"}, preview,
+                 {"intentCode": "MATERIAL_LOW_STOCK_ALERT", "status": "SUCCESS", "aiMode": "READ",
+                  "message": "库存预警0条"}]
+    envelopes = [{"success": True, "code": 200, "data": copy.deepcopy(data)} for data in responses]
+    envelopes[1].update(success=False, code=400, message=envelopes[1]["data"]["message"])
+    return envelopes
+
+
+def run_write_fixture(monkeypatch, envelopes):
+    monkeypatch.setattr(write, "factory_login", lambda *a: {})
+    monkeypatch.setattr(write.time, "sleep", lambda *a: None)
+    answers = iter(envelopes)
+    monkeypatch.setattr(write, "_post_json", lambda *a, **k: next(answers))
+    return write.run_eval("https://fixture.invalid")
+
+
+def test_actual_permission_failure_envelope_is_an_expected_denial(monkeypatch):
+    assert run_write_fixture(monkeypatch, live_write_envelopes()) == 0
+
+
+@pytest.mark.parametrize("change", [
+    {"success": True}, {"success": None}, {"code": 200}, {"code": 403}, {"code": 500},
+    {"message": "无关服务失败"}, {"data": {}}, {"data": None},
+])
+def test_denial_cannot_hide_auth_transport_or_generic_envelope_failure(monkeypatch, change):
+    envelopes = live_write_envelopes()
+    envelopes[1].update(change)
+    assert run_write_fixture(monkeypatch, envelopes) == 1
+
+
+def test_a_read_preview_refusal_is_not_a_completed_read(monkeypatch):
+    envelopes = live_write_envelopes()
+    envelopes[-1]["data"].update(status="PREVIEW_UNSUPPORTED", message="该工具不支持安全预览，未执行任何操作")
+    assert run_write_fixture(monkeypatch, envelopes) == 1
