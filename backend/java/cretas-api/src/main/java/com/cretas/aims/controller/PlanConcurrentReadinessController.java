@@ -15,6 +15,7 @@ import com.cretas.aims.utils.FactoryAccessValidator;
 import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 @Validated
@@ -32,6 +33,9 @@ public class PlanConcurrentReadinessController {
     @GetMapping("/{planId}/concurrent-readiness")
     @ProcessSecretGuard(action = ProcessSecretAction.VIEW_FULL, from = ProcessSecretGuard.Source.PLAN_PATH, name = "planId")
     @RequirePermission({"production:read", "production:read_write", "scheduling:read", "scheduling:read_write"})
+    // Adopt a request-bound OSIV connection at its existing default isolation before the service
+    // suspends it. REQUIRES_NEW then starts the repeatable-read snapshot on a fresh connection.
+    @Transactional(readOnly = true)
     public ApiResponse<PlanConcurrentReadinessDTO> read(@PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String planId) {
         access.validateAccess(factoryId);

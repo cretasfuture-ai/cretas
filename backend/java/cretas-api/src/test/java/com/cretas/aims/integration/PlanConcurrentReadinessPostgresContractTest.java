@@ -23,6 +23,9 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.production.PlanStandardCostLineRepository;
 import com.cretas.aims.service.production.PlanConcurrentReadinessService;
+import com.cretas.aims.controller.PlanConcurrentReadinessController;
+import com.cretas.aims.security.BusinessRowScope;
+import com.cretas.aims.utils.FactoryAccessValidator;
 import com.cretas.aims.service.factory.WarehouseResolver;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -47,6 +50,13 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.orm.jpa.EntityManagerHolder;
+import org.springframework.orm.jpa.support.OpenEntityManagerInViewInterceptor;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.ServletWebRequest;
+import jakarta.persistence.EntityManagerFactory;
+import org.hibernate.Session;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -61,6 +71,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
 
 /**
  * Opt-in real PostgreSQL contract for the concurrent readiness reader.
@@ -83,6 +94,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PlanConcurrentReadinessPostgresContractTest {
     // Random disposable factories have no protected-product policy. Actor-aware denial is tested separately.
     @MockBean ProcessSecretRecipeGuard processSecretRecipeGuard;
+    // This regression exercises real request/transaction wiring; authorization has separate MVC contracts.
+    @MockBean BusinessRowScope businessRowScope;
+    @MockBean FactoryAccessValidator factoryAccessValidator;
 
     private static final LocalDate TODAY = com.cretas.aims.util.InventoryExpiry.today();
 
@@ -90,7 +104,7 @@ class PlanConcurrentReadinessPostgresContractTest {
     @EnableAutoConfiguration(exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
     @EntityScan("com.cretas.aims.entity")
     @EnableJpaRepositories("com.cretas.aims.repository")
-    @Import({PlanConcurrentReadinessService.class, WarehouseResolver.class})
+    @Import({PlanConcurrentReadinessService.class, WarehouseResolver.class, PlanConcurrentReadinessController.class})
     static class Runtime {
         @Bean
         static BeanPostProcessor productionPlanRepositoryReadBarrier() {
@@ -139,6 +153,8 @@ class PlanConcurrentReadinessPostgresContractTest {
     @Autowired MaterialBatchRepository materialBatches;
     @Autowired FactoryWarehouseRepository warehouses;
     @Autowired FinishedGoodsBatchRepository finishedGoods;
+    @Autowired EntityManagerFactory entityManagerFactory;
+    @Autowired PlanConcurrentReadinessController controller;
 
     private TransactionTemplate tx;
 
@@ -150,6 +166,41 @@ class PlanConcurrentReadinessPostgresContractTest {
                 + "FOR r IN SELECT conrelid::regclass AS t, conname FROM pg_constraint "
                 + "WHERE contype = 'f' AND connamespace = 'public'::regnamespace LOOP "
                 + "EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.t, r.conname); END LOOP; END $$");
+    }
+
+    @Test
+    void requestBoundNonAutoCommitQueryBeforeControllerStillGetsFreshRepeatableReadSnapshot() throws Exception {
+        Fixture f = fixture("kg", new BigDecimal("100"));
+        when(businessRowScope.creatorIds(f.factory())).thenReturn(null);
+        DbState before = state();
+        var request = new ServletWebRequest(new MockHttpServletRequest());
+        var osiv = new OpenEntityManagerInViewInterceptor();
+        osiv.setEntityManagerFactory(entityManagerFactory);
+        osiv.preHandle(request);
+        try {
+            var holder = (EntityManagerHolder) TransactionSynchronizationManager.getResource(entityManagerFactory);
+            assertThat(holder).isNotNull();
+            var em = holder.getEntityManager();
+            // Production uses non-autoCommit connections. Security/plan lookups can execute before
+            // the snapshot service, with an OSIV-bound EM but no active Spring/JPA transaction.
+            em.unwrap(Session.class).doWork(connection -> connection.setAutoCommit(false));
+            assertThat(((Number) em.createNativeQuery("SELECT 1").getSingleResult()).intValue()).isEqualTo(1);
+            assertThat(em.getTransaction().isActive()).isFalse();
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+
+            var response = controller.read(f.factory(), f.planId());
+
+            assertThat(response.getSuccess()).isTrue();
+            assertThat(response.getData().material().status()).isEqualTo("VERIFIED");
+            assertThat(response.getData().material().lowerPercent()).isEqualByComparingTo("100");
+            assertThat(response.getData().progress().completionPercent()).isEqualByComparingTo("0");
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            assertThat(TransactionSynchronizationManager.getResource(entityManagerFactory)).isSameAs(holder);
+        } finally {
+            osiv.afterCompletion(request, null);
+        }
+        assertThat(TransactionSynchronizationManager.hasResource(entityManagerFactory)).isFalse();
+        assertThat(state()).isEqualTo(before);
     }
 
     @Test
