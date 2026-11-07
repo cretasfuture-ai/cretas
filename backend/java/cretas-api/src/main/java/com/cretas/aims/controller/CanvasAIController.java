@@ -19,6 +19,7 @@ import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.PreviewTokenService;
+import com.cretas.aims.service.config.CanvasConfigPlanBindingService;
 import com.cretas.aims.service.consent.LlmEgressGuard;
 import com.cretas.aims.service.consent.LlmEgressRedactor;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
@@ -59,6 +60,10 @@ public class CanvasAIController {
     /** Optional for direct unit-test construction; Spring injects the persistent proof issuer. */
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
+
+    /** All six configuration writers require a server-owned state binding. */
+    @Autowired
+    private CanvasConfigPlanBindingService canvasConfigPlanBindingService;
 
     /** 发给模型前脱敏; 单测直接 new 本类时用默认实例 (不查保密产品名)。 */
     @Autowired
@@ -610,6 +615,16 @@ public class CanvasAIController {
                 bound.add(diff);
                 continue;
             }
+            Map<String, Object> persistedParameters = canonicalParams;
+            if (CanvasConfigPlanBindingService.isConfigurationTool(toolName)) {
+                if (canvasConfigPlanBindingService == null) {
+                    // Direct construction must not turn a missing mandatory bean into an unbound proof.
+                    bound.add(diff);
+                    continue;
+                }
+                persistedParameters = canvasConfigPlanBindingService.issue(
+                        factoryId, toolName, canonicalParams);
+            }
             IntentPreviewToken token = previewTokenService.createBoundToken(
                     new PreviewTokenService.BoundTokenRequest(
                             factoryId,
@@ -623,7 +638,7 @@ public class CanvasAIController {
                             "CANVAS_DIFF",
                             toolName,
                             "UPDATE",
-                            canonicalParams,
+                            persistedParameters,
                             Map.of(),
                             canonicalParams,
                             300));
@@ -981,11 +996,35 @@ public class CanvasAIController {
                     : Objects.toString(proof.get("descriptorVersion"), null);
             boolean versionMatches = descriptorVersion != null
                     && descriptorVersion.equals(submittedVersion);
+            Map<String, Object> commandParams = canonicalSubmittedParams;
+            if (CanvasConfigPlanBindingService.isConfigurationTool(submittedTool)) {
+                if (canvasConfigPlanBindingService == null) {
+                    items.add(new ApplyDiffResult(index, "FAILURE", "配置绑定服务不可用，本次未执行"));
+                    continue;
+                }
+                Optional<PreviewTokenService.BoundTokenExecution> execution;
+                try {
+                    execution = previewTokenService.readBoundExecution(token, factoryId, userId);
+                    if (execution.isEmpty()) {
+                        items.add(new ApplyDiffResult(index, "FAILURE", "确认凭据缺少服务器配置绑定，未执行"));
+                        continue;
+                    }
+                    commandParams = canonicalJsonMap(execution.get().parameters());
+                    if (commandParams == null
+                            || !canvasConfigPlanBindingService.publicParametersMatch(commandParams, canonicalSubmittedParams)) {
+                        items.add(new ApplyDiffResult(index, "FAILURE", "确认内容与服务器配置绑定不一致，请重新生成方案"));
+                        continue;
+                    }
+                } catch (RuntimeException bindingError) {
+                    items.add(new ApplyDiffResult(index, "FAILURE", "确认凭据缺少有效服务器配置绑定，未执行"));
+                    continue;
+                }
+            }
             String submittedDigest;
             try {
                 submittedDigest = ToolCommandDigest.commandDigest(
                         factoryId, userId, submittedTool, descriptorVersion, ToolExecutionMode.EXECUTE,
-                        objectMapper.valueToTree(canonicalSubmittedParams));
+                        objectMapper.valueToTree(commandParams));
             } catch (RuntimeException invalidParams) {
                 submittedDigest = null;
             }
@@ -1004,7 +1043,7 @@ public class CanvasAIController {
                         "canvas-trace-" + UUID.randomUUID(),
                         bound.toolName(),
                         descriptorVersion,
-                        objectMapper.valueToTree(canonicalSubmittedParams),
+                        objectMapper.valueToTree(commandParams),
                         principal,
                         ToolExecutionSource.HTTP_CONTROLLER,
                         ToolExecutionMode.EXECUTE,

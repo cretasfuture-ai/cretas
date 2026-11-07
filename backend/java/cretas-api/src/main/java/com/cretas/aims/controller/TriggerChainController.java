@@ -9,12 +9,14 @@ import com.cretas.aims.entity.config.*;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.config.*;
 import com.cretas.aims.service.config.FactoryConfigService;
+import com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -28,6 +30,7 @@ public class TriggerChainController {
     private final FactoryToolConfigRepository toolConfigRepo;
     private final FactorySkillConfigRepository skillConfigRepo;
     private final FactoryTriggerChainRepository triggerChainRepo;
+    private final FactoryFeatureMenuWriteLock featureWriteLock;
 
     @Autowired
     private ToolRegistry toolRegistry;
@@ -78,10 +81,12 @@ public class TriggerChainController {
     @RequirePermission({"system:read_write"})
     @PutMapping("/tools/{toolName}")
     @RequireRole({"factory_super_admin", "permission_admin"})
+    @Transactional
     @Operation(summary = "设置 Tool 开关/参数覆盖")
     public ApiResponse<FactoryToolConfig> setToolConfig(
             @PathVariable String factoryId, @PathVariable String toolName,
             @RequestBody Map<String, Object> body) {
+        featureWriteLock.lock(factoryId);
         FactoryToolConfig config = toolConfigRepo.findByFactoryIdAndToolName(factoryId, toolName)
                 .orElseGet(() -> {
                     FactoryToolConfig c = new FactoryToolConfig();
@@ -109,10 +114,12 @@ public class TriggerChainController {
     @RequirePermission({"system:read_write"})
     @PutMapping("/skills/{skillName}")
     @RequireRole({"factory_super_admin", "permission_admin"})
+    @Transactional
     @Operation(summary = "设置 Skill 开关/自定义 DAG")
     public ApiResponse<FactorySkillConfig> setSkillConfig(
             @PathVariable String factoryId, @PathVariable String skillName,
             @RequestBody Map<String, Object> body) {
+        featureWriteLock.lock(factoryId);
         FactorySkillConfig config = skillConfigRepo.findByFactoryIdAndSkillName(factoryId, skillName)
                 .orElseGet(() -> {
                     FactorySkillConfig c = new FactorySkillConfig();
@@ -149,10 +156,12 @@ public class TriggerChainController {
     @RequirePermission({"system:read_write"})
     @PutMapping("/trigger-chains/{chainCode}")
     @RequireRole({"factory_super_admin", "permission_admin"})
+    @Transactional
     @Operation(summary = "配置触发链步骤")
     public ApiResponse<FactoryTriggerChain> setTriggerChain(
             @PathVariable String factoryId, @PathVariable String chainCode,
             @RequestBody FactoryTriggerChain body) {
+        featureWriteLock.lock(factoryId);
         // AUD-5 B-A3 sister sweep batch 4a: length pre-check for eventType (VARCHAR 100) +
         // errorStrategy (VARCHAR 20) BEFORE persisting to PG.
         validateTriggerChainLengths(body);
@@ -191,23 +200,7 @@ public class TriggerChainController {
      */
     @SuppressWarnings("unchecked")
     private void requireAutonomousSteps(List<Map<String, Object>> steps) {
-        if (steps == null || steps.isEmpty()) return;
-        if (toolRegistry == null) {
-            throw new BusinessException(500, "工具注册表不可用，不能校验事件链步骤");
-        }
-        for (Map<String, Object> step : steps) {
-            if (step == null || Boolean.FALSE.equals(step.get("enabled"))) continue;
-            if (!(step.get("tool") instanceof String toolName) || toolName.isBlank()) continue;
-            var tool = toolRegistry.getExecutor(toolName);
-            if (tool.isEmpty()) continue;
-            Object rawParams = step.getOrDefault("params", Map.of());
-            if (!(rawParams instanceof Map<?, ?> map)) {
-                throw new BusinessException(400, "事件链步骤「" + toolName + "」的参数必须是对象")
-                        .withHint("把 params 改成键值形式，例如 {\"limit\": 10}");
-            }
-            String refusal = AutonomousToolPolicy.rejection(toolName, tool.get(), (Map<String, Object>) map);
-            if (refusal != null) throw AutonomousToolPolicy.refusal(refusal);
-        }
+        com.cretas.aims.service.config.CanvasTriggerChainWritePolicy.validateEnabledSteps(steps, toolRegistry);
     }
 
     // ========== Templates ==========

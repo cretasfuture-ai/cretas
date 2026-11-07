@@ -7,6 +7,7 @@ import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.DecisionAuditService;
 import com.cretas.aims.service.QualityDispositionRuleService;
+import com.cretas.aims.service.decision.QualityRecommendationEvaluatorV1;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.entity.User;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,9 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class QualityDispositionRuleServiceImpl implements QualityDispositionRuleService {
+
+    private static final QualityRecommendationEvaluatorV1 RECOMMENDATION_EVALUATOR =
+            new QualityRecommendationEvaluatorV1();
 
     private final ApprovalChainService approvalChainService;
     private final DecisionAuditService decisionAuditService;
@@ -65,11 +69,12 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
                 factoryId, inspection.getId(), inspection.getPassRate());
 
         // 构建评估上下文
-        Map<String, Object> evalContext = buildEvaluationContext(inspection, context);
+        Map<String, Object> evalContext = buildEvaluationContext(factoryId, inspection, context);
 
         // 基于规则评估处置动作
-        DispositionAction recommendedAction = evaluateAction(inspection);
-        BigDecimal confidence = calculateConfidence(inspection, recommendedAction);
+        QualityRecommendationEvaluatorV1.Evaluation evaluation = RECOMMENDATION_EVALUATOR.evaluate(inspection);
+        DispositionAction recommendedAction = evaluation.recommendedAction();
+        BigDecimal confidence = evaluation.confidence();
 
         // 检查是否需要审批
         boolean requiresApproval = recommendedAction.requiresApproval()
@@ -122,7 +127,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         }
 
         // 检查是否有阻止直接放行的规则
-        Map<String, Object> context = buildEvaluationContext(inspection, new HashMap<>());
+        Map<String, Object> context = buildEvaluationContext(factoryId, inspection, new HashMap<>());
         return !approvalChainService.requiresApproval(
                 factoryId, DecisionType.QUALITY_RELEASE, context);
     }
@@ -148,7 +153,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         // 2. 不合格但请求条件放行
         // 3. 严重缺陷但不报废
 
-        Map<String, Object> context = buildEvaluationContext(inspection, new HashMap<>());
+        Map<String, Object> context = buildEvaluationContext(factoryId, inspection, new HashMap<>());
         context.put("requestedAction", requestedAction.name());
 
         // 检查是否匹配特批规则
@@ -205,7 +210,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
                 .orElseThrow(() -> new EntityNotFoundException("User", executorId));
 
         // 构建上下文
-        Map<String, Object> context = buildEvaluationContext(inspection, new HashMap<>());
+        Map<String, Object> context = buildEvaluationContext(factoryId, inspection, new HashMap<>());
         context.put("requestedAction", action.name());
         context.put("executorId", executorId);
         context.put("reason", reason);
@@ -310,80 +315,10 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
     // ===================== 私有辅助方法 =====================
 
     /**
-     * 基于质检结果评估处置动作
-     */
-    private DispositionAction evaluateAction(QualityInspection inspection) {
-        BigDecimal passRate = inspection.getPassRate();
-        String result = inspection.getResult();
-
-        // 空数据处理
-        if (passRate == null) {
-            return DispositionAction.HOLD;
-        }
-
-        // 直接放行
-        if (passRate.compareTo(PASS_RATE_THRESHOLD_RELEASE) >= 0 &&
-                "PASS".equalsIgnoreCase(result)) {
-            return DispositionAction.RELEASE;
-        }
-
-        // 条件放行
-        if (passRate.compareTo(PASS_RATE_THRESHOLD_CONDITIONAL) >= 0) {
-            return DispositionAction.CONDITIONAL_RELEASE;
-        }
-
-        // 返工
-        if (passRate.compareTo(PASS_RATE_THRESHOLD_REWORK) >= 0) {
-            return DispositionAction.REWORK;
-        }
-
-        // 缺陷率过高 - 报废
-        BigDecimal defectRate = inspection.getDefectRate();
-        if (defectRate != null && defectRate.compareTo(DEFECT_RATE_THRESHOLD_SCRAP) >= 0) {
-            return DispositionAction.SCRAP;
-        }
-
-        // 低合格率但不够报废条件 - 特批申请
-        if (passRate.compareTo(PASS_RATE_THRESHOLD_REWORK) < 0) {
-            return DispositionAction.SPECIAL_APPROVAL;
-        }
-
-        return DispositionAction.HOLD;
-    }
-
-    /**
-     * 计算置信度
-     */
-    private BigDecimal calculateConfidence(QualityInspection inspection, DispositionAction action) {
-        BigDecimal passRate = inspection.getPassRate();
-        if (passRate == null) {
-            return BigDecimal.ZERO;
-        }
-
-        // 基于合格率与阈值的距离计算置信度
-        switch (action) {
-            case RELEASE:
-                // 合格率越高，置信度越高
-                return passRate.min(new BigDecimal("100"));
-            case CONDITIONAL_RELEASE:
-                // 介于85-95之间
-                return new BigDecimal("75").add(
-                        passRate.subtract(PASS_RATE_THRESHOLD_CONDITIONAL)
-                                .divide(new BigDecimal("10"), 2, java.math.RoundingMode.HALF_UP)
-                                .multiply(new BigDecimal("20")));
-            case REWORK:
-                return new BigDecimal("70");
-            case SCRAP:
-                return new BigDecimal("85"); // 报废是明确的决定
-            default:
-                return new BigDecimal("50");
-        }
-    }
-
-    /**
      * 构建评估上下文
      */
     private Map<String, Object> buildEvaluationContext(
+            String factoryId,
             QualityInspection inspection,
             Map<String, Object> additionalContext) {
 
@@ -400,7 +335,55 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         context.put("failCount", inspection.getFailCount());
         context.put("inspectionDate", inspection.getInspectionDate());
 
+        // Reserved server evidence is written last so callers cannot inject or
+        // replace a replayable snapshot through additionalContext.
+        context.put(QualityRecommendationEvaluatorV1.SNAPSHOT_CONTEXT_KEY,
+                buildRecommendationSnapshot(factoryId, inspection));
+
         return context;
+    }
+
+    private Map<String, Object> buildRecommendationSnapshot(
+            String factoryId, QualityInspection inspection) {
+        QualityRecommendationEvaluatorV1.Evaluation evaluation =
+                RECOMMENDATION_EVALUATOR.evaluate(inspection);
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("schemaVersion", QualityRecommendationEvaluatorV1.SNAPSHOT_SCHEMA_VERSION);
+        snapshot.put("evaluatorId", QualityRecommendationEvaluatorV1.EVALUATOR_ID);
+        snapshot.put("evaluatorVersion", QualityRecommendationEvaluatorV1.EVALUATOR_VERSION);
+        snapshot.put("ruleBundleHash", QualityRecommendationEvaluatorV1.RULE_BUNDLE_HASH);
+        snapshot.put("factoryId", factoryId);
+        snapshot.put("inspectionId", inspection.getId());
+        snapshot.put("productionBatchId", inspection.getProductionBatchId() == null
+                ? null : inspection.getProductionBatchId().toString());
+        snapshot.put("inspectionDate", inspection.getInspectionDate() == null
+                ? null : inspection.getInspectionDate().toString());
+        snapshot.put("passRate", decimalText(inspection.getPassRate()));
+        snapshot.put("defectRate", decimalText(inspection.getDefectRate()));
+        snapshot.put("result", inspection.getResult());
+        snapshot.put("qualityGrade", inspection.getQualityGrade());
+        snapshot.put("sampleSize", decimalText(inspection.getSampleSize()));
+        snapshot.put("passCount", decimalText(inspection.getPassCount()));
+        snapshot.put("failCount", decimalText(inspection.getFailCount()));
+        snapshot.put("recordedRecommendation", evaluation.recommendedAction().name());
+        snapshot.put("recordedConfidence", decimalText(evaluation.confidence()));
+        Map<String, String> rules = new LinkedHashMap<>();
+        rules.put("releasePassRateMin", "95.00");
+        rules.put("conditionalPassRateMin", "85.00");
+        rules.put("reworkPassRateMin", "70.00");
+        rules.put("scrapDefectRateMin", "50.00");
+        rules.put("nullPassRateAction", DispositionAction.HOLD.name());
+        snapshot.put("rules", rules);
+        snapshot.put("snapshotHash", snapshotHash(snapshot));
+        return snapshot;
+    }
+
+    private static String decimalText(BigDecimal value) {
+        return value == null ? null : value.toPlainString();
+    }
+
+    private static String snapshotHash(Map<String, Object> snapshot) {
+        return QualityRecommendationEvaluatorV1.canonicalHash(snapshot);
     }
 
     /**

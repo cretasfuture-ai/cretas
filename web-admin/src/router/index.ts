@@ -2251,6 +2251,16 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
             meta: { requiresAuth: true, title: '调度中心', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['LOGISTICS'] }
           },
           {
+            path: 'proposal-comparison',
+            name: 'SchedulingProposalComparison',
+            component: () => import('@/views/scheduling/proposal-comparison/index.vue'),
+            meta: {
+              requiresAuth: true, title: '多方案比较', module: 'scheduling',
+              roles: ['factory_super_admin', 'permission_admin'],
+              hideForFactoryTypes: ['LOGISTICS']
+            }
+          },
+          {
             path: 'plans',
             name: 'SchedulingPlans',
             component: () => import('@/views/scheduling/plans/list.vue'),

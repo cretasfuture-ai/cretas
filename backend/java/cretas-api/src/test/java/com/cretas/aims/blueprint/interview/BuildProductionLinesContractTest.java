@@ -66,6 +66,8 @@ class BuildProductionLinesContractTest {
         ReflectionTestUtils.setField(apply, "productTypeRepository", products);
         ReflectionTestUtils.setField(apply, "productionLineRepository", lines);
         ReflectionTestUtils.setField(apply, "lineCapacityConfigService", writer);
+        ReflectionTestUtils.setField(apply, "schedulingResourceWriteLock",
+                mock(com.cretas.aims.service.scheduling.SchedulingResourceWriteLock.class));
         ReflectionTestUtils.setField(planner, "productTypeRepository", products);
         ReflectionTestUtils.setField(planner, "productionLineRepository", lines);
         ReflectionTestUtils.setField(planner, "lineCapacityConfigRepository", capacity);

@@ -57,6 +57,13 @@ function factoryAnalysisBodyMatches(body) {
 // execute tools with side effects behind a single HTTP request.
 const READONLY_POST_WHITELIST = [
   {
+    id: 'proposal-comparison-evaluate',
+    method: 'POST',
+    path: /^\/api\/mobile\/[A-Za-z0-9_-]{1,64}\/proposal-comparisons\/evaluate\/?$/,
+    bodyMatches: proposalComparisonBodyMatches,
+    rationale: 'PR1509 typed pure supplied-facts comparison; no business reads/writes, execution, reservation, Tool or approval. Strict bounded body only.',
+  },
+  {
     id: 'smartbi-factory-analysis',
     method: 'POST',
     path: /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/,
@@ -375,7 +382,32 @@ module.exports = {
   matchesEntry,
   findAuthRequest,
   findReadonlyPost,
+  proposalComparisonBodyMatches,
 };
+
+function proposalComparisonBodyMatches(body) {
+  const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+  const text = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+  const unit = value => ['PERSON_HOUR', 'MACHINE_HOUR'].includes(value);
+  const amount = value => value === null || (typeof value === 'number' && Number.isFinite(value)
+    && value >= 0 && value < 1e12);
+  const time = value => typeof value === 'string' && value.length <= 64
+    && /T.*(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value));
+  const common = value => text(value.comparisonBasisId, 64) && typeof value.currency === 'string'
+    && /^[A-Z]{3}$/.test(value.currency)
+    && text(value.costUnit, 32) && unit(value.resourceUnit);
+  if (!exact(body, ['comparisonBasisId', 'currency', 'costUnit', 'resourceUnit', 'windowStart',
+    'windowEnd', 'requiredBy', 'availableResource', 'candidates']) || !common(body)
+    || !time(body.windowStart) || !time(body.windowEnd)
+    || !(body.requiredBy === null || time(body.requiredBy)) || !amount(body.availableResource)
+    || !Array.isArray(body.candidates) || body.candidates.length < 2 || body.candidates.length > 20) return false;
+  return body.candidates.every(candidate => exact(candidate, ['id', 'comparisonBasisId', 'currency',
+    'costUnit', 'resourceUnit', 'cost', 'completionTime', 'requiredResource'])
+    && typeof candidate.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(candidate.id)
+    && common(candidate) && amount(candidate.cost) && amount(candidate.requiredResource)
+    && (candidate.completionTime === null || time(candidate.completionTime)));
+}
 
 },
     "config/routes.js": function(module, exports, require) {
@@ -1152,6 +1184,12 @@ const SCENARIOS = [
   require('../scenarios/smartbi-scale-readonly'),
   require('../scenarios/scheduling-capabilities-readonly').create,
   require('../scenarios/scheduling-capabilities-readonly').workers,
+  require('../scenarios/proposal-comparison-readonly'),
+  require('../scenarios/proposal-comparison-readonly').denied,
+  require('../scenarios/decision-history-review-readonly'),
+  require('../scenarios/decision-recommendation-replay-readonly'),
+  require('../scenarios/plan-concurrent-readiness-readonly'),
+  require('../scenarios/supply-box-exposure-readonly'),
   require('../scenarios/table-top-scroll-readonly').sales,
   require('../scenarios/table-top-scroll-readonly').purchase,
   require('../scenarios/table-top-scroll-readonly').transfer,
@@ -1290,6 +1328,9 @@ async function runSuiteWithPage(page, options = {}) {
         smartbiLegacyKpi: options.smartbiLegacyKpi,
         smartbiScale: options.smartbiScale,
         materialRequisition: options.materialRequisition,
+        decisionReplay: options.decisionReplay,
+        planReadiness: options.planReadiness,
+        supplyImpact: options.supplyImpact,
         scenarioRef,
         mutationGuard,
         network,
@@ -2386,6 +2427,229 @@ module.exports = {
 };
 
 },
+    "scenarios/decision-history-review-readonly.js": function(module, exports, require) {
+'use strict';
+
+const {runReadOnlyPageScenario} = require('./_shared');
+const {assertCoordinatedActor} = require('./proposal-comparison-readonly');
+const id = 'decision-history-review-readonly';
+const route = '/workspaces/trace-review';
+const recordKeys = ['id','decisionType','decisionCode','entityType','entityId','ruleConfigId','ruleConfigVersion','createdAt'];
+const reasons = ['INVALID_HISTORICAL_BASELINE','BUSINESS_SCOPE_MISMATCH','SNAPSHOT_MISSING_OR_INVALID','INPUT_MISMATCH'];
+const hash = /^[0-9a-f]{64}$/i;
+function requireCondition(value,message) { if (!value) throw new Error(message); }
+
+function assertMetadataPage(data) {
+  requireCondition(data && Array.isArray(data.records) && data.page===0 && data.pageSize===20,
+    'Expected the actual first bounded history page');
+  requireCondition(Number.isSafeInteger(data.totalElements) && data.totalElements>=0
+    && data.totalPages===Math.ceil(data.totalElements/20) && data.records.length<=20
+    && data.records.length<=data.totalElements
+    && (data.totalElements===0 ? data.records.length===0 : data.records.length>0)
+    && new Set(data.records.map(row=>row.id)).size===data.records.length,'History pagination or identity is inconsistent');
+  for (const row of data.records) {
+    requireCondition(row && Object.keys(row).length===recordKeys.length
+      && Object.keys(row).every(key=>recordKeys.includes(key)),'History exposed unexpected private fields');
+    requireCondition(typeof row.id==='string' && /^[A-Za-z0-9_-]{1,128}$/.test(row.id)
+      && typeof row.entityType==='string' && typeof row.entityId==='string','History record reference is invalid');
+  }
+  return true;
+}
+
+function assertRecordedComparison(data,currentId,baselineId) {
+  requireCondition(data && data.decisionId===currentId && data.baselineId===baselineId
+    && data.businessExecutionPerformed===false,'Comparison identity or nonexecution contract changed');
+  const left=data.canonicalRecordedOutputHash; const right=data.canonicalBaselineOutputHash;
+  if (data.status==='SAME_RESULT' || data.status==='DIFFERENT_RESULT') {
+    const same=data.status==='SAME_RESULT';
+    requireCondition(data.integrityVerified===true && data.comparisonBasis==='CHECKSUM_AND_COLUMNS'
+      && data.recordedOutputRelation===(same?'SAME':'DIFFERENT')
+      && data.reason===(same?'RECORDED_OUTPUT_EQUAL':'RECORDED_OUTPUT_DIFFERENT')
+      && typeof left==='string' && hash.test(left) && typeof right==='string' && hash.test(right)
+      && (left===right)===same,'Verified result does not have consistent recorded hashes');
+  } else {
+    requireCondition(data.status==='NOT_COMPARABLE' && data.integrityVerified===false,
+      'Unknown evidence was promoted to comparable');
+    if (data.reason==='CHECKSUM_MISMATCH_NO_INTEGRITY_PROOF') {
+      requireCondition(['SAME','DIFFERENT'].includes(data.recordedOutputRelation)
+        && data.comparisonBasis==='PERSISTED_COLUMNS_SEMANTIC_ONLY'
+        && typeof left==='string' && hash.test(left) && typeof right==='string' && hash.test(right)
+        && (left===right)===(data.recordedOutputRelation==='SAME'),
+      'Semantic-only comparison lost its integrity limitation');
+    } else {
+      requireCondition(reasons.includes(data.reason) && data.recordedOutputRelation==='NOT_EVALUATED'
+        && data.comparisonBasis==='NOT_EVALUATED' && left===null && right===null,
+      'Unavailable historical evidence has contradictory result fields');
+    }
+  }
+  return true;
+}
+
+function chooseRecordedPair(records) {
+  for (const current of records) for (const baseline of records) {
+    if (current.id!==baseline.id && current.entityType===baseline.entityType && current.entityId===baseline.entityId
+      && current.decisionType===baseline.decisionType && current.createdAt && baseline.createdAt
+      && Date.parse(baseline.createdAt)<Date.parse(current.createdAt)) return {current,baseline,matchingBusinessScope:true};
+  }
+  return records.length>=2 ? {current:records[0],baseline:records[1],matchingBusinessScope:false} : null;
+}
+
+async function scopedRead(page,path) {
+  return page.evaluate(async url=>{
+    const token=localStorage.getItem('cretas_access_token');
+    if (!token) throw new Error('Fresh session missing');
+    const response=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+    const body=await response.json();
+    if (!response.ok || body.success!==true) throw new Error('History context read failed');
+    return body.data;
+  },path);
+}
+
+async function inspect(page,_body,ctx) {
+  requireCondition(ctx.expectedFactoryId==='F006' && ctx.loginEvidence.factoryId==='F006','F006 context required');
+  assertCoordinatedActor(await scopedRead(page,'/api/mobile/auth/me'),ctx.expectedUsername);
+  requireCondition(await scopedRead(page,'/api/mobile/F006/demo-sandbox/active-session')===null,'Active sandbox requires coordination');
+  await page.getByRole('heading',{name:'追溯与复盘',exact:true}).waitFor({state:'visible'});
+  const panel=page.getByTestId('decision-history-panel'); await panel.waitFor({state:'visible'});
+  const listResponse=page.waitForResponse(response=>{
+    const url=new URL(response.url());
+    return response.request().method()==='GET' && url.pathname==='/api/mobile/F006/decision-history'
+      && url.searchParams.get('page')==='0' && url.searchParams.get('size')==='20';
+  },{timeout:30000});
+  await panel.getByTestId('history-load').click();
+  const response=await listResponse; const body=await response.json();
+  requireCondition(response.status()===200 && body.success===true,'Real history list failed');
+  assertMetadataPage(body.data);
+  const pair=chooseRecordedPair(body.data.records);
+  if (!pair) return {factoryId:'F006',recordCount:body.data.records.length,
+    screenshots:[await ctx.screenshot(id,'insufficient-real-history')],
+    assessment:{result:'UNVERIFIED',rootCauseClass:'data'}};
+  await panel.getByTestId(`history-current-${pair.current.id}`).check();
+  await panel.getByTestId(`history-baseline-${pair.baseline.id}`).check();
+  requireCondition(await scopedRead(page,'/api/mobile/F006/demo-sandbox/active-session')===null,'Sandbox changed before read comparison');
+  const comparisonResponse=page.waitForResponse(candidate=>{
+    const url=new URL(candidate.url());
+    return candidate.request().method()==='GET'
+      && url.pathname===`/api/mobile/F006/decision-history/${pair.current.id}/comparison`
+      && url.searchParams.get('baselineId')===pair.baseline.id;
+  },{timeout:30000});
+  await panel.getByTestId('history-compare').click();
+  const compared=await comparisonResponse; const comparedBody=await compared.json();
+  requireCondition(compared.status()===200 && comparedBody.success===true,'Real record comparison failed');
+  assertRecordedComparison(comparedBody.data,pair.current.id,pair.baseline.id);
+  const result=panel.getByTestId('history-result'); await result.waitFor({state:'visible'});
+  const text=await result.innerText();
+  requireCondition(text.includes(comparedBody.data.reason) && text.includes('不会重新执行规则'),
+    'Visible comparison lost its actual reason or nonexecution declaration');
+  if (comparedBody.data.status==='NOT_COMPARABLE') {
+    requireCondition(text.includes('不可比较') && !text.includes('（已核验）'),
+      'Unavailable historical evidence is shown as verified success');
+  }
+  await result.scrollIntoViewIfNeeded();
+  return {factoryId:'F006',actorId:1309,listedRecords:body.data.records.length,
+    decisionId:pair.current.id,baselineId:pair.baseline.id,matchingBusinessScope:pair.matchingBusinessScope,
+    observedStatus:comparedBody.data.status,observedReason:comparedBody.data.reason,
+    businessExecutionPerformed:false,integrityVerified:comparedBody.data.integrityVerified,
+    screenshots:[await ctx.screenshot(id,'recorded-result')],
+    assessment:{result:'PASS',rootCauseClass:'none'}};
+}
+
+module.exports={id,defaultEnabled:false,assertMetadataPage,assertRecordedComparison,chooseRecordedPair,
+  run:ctx=>runReadOnlyPageScenario(ctx,{id,path:route,landmarks:['追溯与复盘'],screenshot:false,inspect})};
+
+},
+    "scenarios/decision-recommendation-replay-readonly.js": function(module, exports, require) {
+'use strict';
+const {runReadOnlyPageScenario}=require('./_shared');
+const {assertCoordinatedActor}=require('./proposal-comparison-readonly');
+const {assertMetadataPage}=require('./decision-history-review-readonly');
+const id='decision-recommendation-replay-readonly';
+const keys=['decisionId','status','reason','evaluationScope','evaluatorId','evaluatorVersion','ruleBundleHash','snapshotHash',
+  'recordedRecommendation','replayedRecommendation','recordedConfidence','replayedConfidence',
+  'snapshotConsistencyVerified','ruleEvaluationPerformed','businessExecutionPerformed','approvalEvaluated'];
+const actions=['RELEASE','CONDITIONAL_RELEASE','REWORK','SCRAP','SPECIAL_APPROVAL','HOLD'];
+const hash=/^[a-f0-9]{64}$/i;
+const decimal=/^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+function requireCondition(value,message){if(!value)throw new Error(message);}
+function assertReplay(data,decisionId){
+  requireCondition(data && Object.keys(data).length===keys.length && Object.keys(data).every(key=>keys.includes(key)),
+    'Replay exposed an unexpected field or omitted its read-only evidence');
+  requireCondition(data.decisionId===decisionId && data.evaluationScope==='QUALITY_RECOMMENDATION_ONLY'
+    && data.businessExecutionPerformed===false && data.approvalEvaluated===false,'Replay scope or nonexecution changed');
+  if(data.status==='UNAVAILABLE'){
+    requireCondition(data.snapshotConsistencyVerified===false && data.ruleEvaluationPerformed===false
+      && typeof data.reason==='string' && /^[A-Z][A-Z0-9_]{1,79}$/.test(data.reason)
+      && ['evaluatorId','evaluatorVersion','ruleBundleHash','snapshotHash','recordedRecommendation','replayedRecommendation',
+        'recordedConfidence','replayedConfidence'].every(key=>data[key]===null),'Missing snapshot was promoted to a verified result');
+    return true;
+  }
+  requireCondition(['REPLAY_MATCH','REPLAY_DIFFERENT'].includes(data.status)
+    && data.snapshotConsistencyVerified===true && data.ruleEvaluationPerformed===true
+    && data.evaluatorId==='QUALITY_RECOMMENDATION' && data.evaluatorVersion==='1.0.0'
+    && typeof data.ruleBundleHash==='string' && hash.test(data.ruleBundleHash)
+    && typeof data.snapshotHash==='string' && hash.test(data.snapshotHash)
+    && actions.includes(data.recordedRecommendation) && actions.includes(data.replayedRecommendation)
+    && typeof data.recordedConfidence==='string' && decimal.test(data.recordedConfidence)
+    && typeof data.replayedConfidence==='string' && decimal.test(data.replayedConfidence),'Supported replay evidence is incomplete');
+  const sameAction=data.recordedRecommendation===data.replayedRecommendation;
+  const equal=sameAction && data.recordedConfidence===data.replayedConfidence;
+  const expectedReason=equal?'RECORDED_RECOMMENDATION_MATCHES_REPLAY':sameAction
+    ?'RECORDED_CONFIDENCE_DIFFERS_FROM_REPLAY':'RECORDED_RECOMMENDATION_DIFFERS_FROM_REPLAY';
+  requireCondition((data.status==='REPLAY_MATCH')===equal && data.reason===expectedReason,
+  'Replay status contradicts its recorded and evaluated pure outputs');
+  return true;
+}
+async function read(page,path){return page.evaluate(async url=>{
+  const token=localStorage.getItem('cretas_access_token');if(!token)throw new Error('Fresh session missing');
+  const response=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});const body=await response.json();
+  if(!response.ok||body.success!==true)throw new Error('Readonly identity context read failed');return body.data;
+},path);}
+async function inspect(page,_body,ctx){
+  requireCondition(ctx.expectedFactoryId==='F006','F006 context required');
+  assertCoordinatedActor(await read(page,'/api/mobile/auth/me'),ctx.expectedUsername);
+  requireCondition(await read(page,'/api/mobile/F006/demo-sandbox/active-session')===null,'Active sandbox requires coordination');
+  const wanted=ctx.decisionReplay;
+  requireCondition(wanted && wanted.syntheticQa===true && typeof wanted.decisionId==='string'
+    && /^[A-Za-z0-9_-]{1,128}$/.test(wanted.decisionId),'An actual owned synthetic QA audit ID is required');
+  const panel=page.getByTestId('decision-history-panel');await panel.waitFor({state:'visible'});
+  const list=page.waitForResponse(response=>{
+    const url=new URL(response.url());return response.request().method()==='GET' && url.pathname==='/api/mobile/F006/decision-history'
+      && url.searchParams.get('page')==='0'&&url.searchParams.get('size')==='20';
+  });
+  await panel.getByTestId('history-load').click();const response=await list;const body=await response.json();
+  requireCondition(response.ok()&&body.success===true,'Actual history list failed');assertMetadataPage(body.data);
+  const current=body.data.records.find(row=>row.id===wanted.decisionId);
+  if(!current)return {expectedDecisionFound:false,sourceIsSyntheticQa:true,
+    screenshots:[await ctx.screenshot(id,'record-unavailable')],assessment:{result:'UNVERIFIED',rootCauseClass:'data'}};
+  const observations=[];
+  const legacy=body.data.records.find(row=>row.id!==current.id && row.entityType!=='QualityInspection');
+  for(const [record,expected] of [[current,'REPLAY_MATCH'],...(legacy?[[legacy,'UNAVAILABLE']]:[])]){
+    await panel.getByTestId(`history-current-${record.id}`).check();
+    const button=panel.getByTestId('history-replay');await button.waitFor({state:'visible'});
+    requireCondition(await button.isEnabled(),'Required system and quality read permission is absent');
+    requireCondition(await read(page,'/api/mobile/F006/demo-sandbox/active-session')===null,'Sandbox changed before replay GET');
+    const awaited=page.waitForResponse(candidate=>candidate.request().method()==='GET'
+      &&new URL(candidate.url()).pathname===`/api/mobile/F006/decision-history/${record.id}/replay-evaluation`);
+    await button.click();const replayResponse=await awaited;const replayBody=await replayResponse.json();
+    requireCondition(replayResponse.ok()&&replayBody.success===true,'Actual replay evaluation GET failed');
+    assertReplay(replayBody.data,record.id);requireCondition(replayBody.data.status===expected,'Unexpected actual replay outcome');
+    const result=panel.getByTestId('history-replay-result');await result.waitFor({state:'visible'});
+    const text=await result.innerText();requireCondition(text.includes(replayBody.data.reason)
+      &&text.includes('不是防篡改签名')&&text.includes('不审批、不执行业务'),'Visible replay lost its scope or integrity limits');
+    if(expected==='REPLAY_MATCH')requireCondition(text.includes(replayBody.data.evaluatorVersion)
+      &&text.includes(replayBody.data.ruleBundleHash)&&text.includes(replayBody.data.recordedConfidence),'Visible pure output/provenance is incomplete');
+    else requireCondition(text.includes('不可复算')&&!text.includes('（已核验）'),'Legacy row is shown as verified replay');
+    await result.scrollIntoViewIfNeeded();observations.push({decisionId:record.id,status:replayBody.data.status,reason:replayBody.data.reason,
+      screenshot:await ctx.screenshot(id,expected==='REPLAY_MATCH'?'actual-match':'legacy-unavailable')});
+  }
+  return {factoryId:'F006',actorId:1309,sourceIsSyntheticQa:true,productionMeasurementsVerified:false,
+    businessExecutionPerformed:false,approvalEvaluated:false,observations,
+    screenshots:observations.map(item=>item.screenshot),assessment:{result:'PASS',rootCauseClass:'none'}};
+}
+module.exports={id,defaultEnabled:false,assertReplay,run:ctx=>runReadOnlyPageScenario(ctx,
+  {id,path:'/workspaces/trace-review',landmarks:['追溯与复盘'],screenshot:false,inspect})};
+
+},
     "scenarios/f006-demo-menu-readonly.js": function(module, exports, require) {
 'use strict';
 
@@ -3370,6 +3634,276 @@ module.exports = {
 };
 
 },
+    "scenarios/plan-concurrent-readiness-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { ROUTES } = require('../config/routes');
+const { runReadOnlyPageScenario } = require('./_shared');
+const { assertCoordinatedActor } = require('./proposal-comparison-readonly');
+
+const id = 'plan-concurrent-readiness-readonly';
+const readinessStatus = new Set(['VERIFIED', 'UNVERIFIED']);
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function finiteNumber(value, label, max = Number.POSITIVE_INFINITY) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > max) {
+    fail(`Invalid ${label}`);
+  }
+  return value;
+}
+
+function nullableNumber(value, label, max = Number.POSITIVE_INFINITY) {
+  if (value === null) return null;
+  return finiteNumber(value, label, max);
+}
+
+function exactString(value, label, maxLength = 191) {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > maxLength) fail(`Invalid ${label}`);
+  return value;
+}
+
+function validatePlanReadinessOptions(value) {
+  if (!value || value.syntheticQa !== true || !Array.isArray(value.plans)
+    || value.plans.length === 0 || value.plans.length > 3) {
+    return { valid: false, reason: 'syntheticQa and one to three fixed plans are required' };
+  }
+  const plans = [];
+  const ids = new Set();
+  const numbers = new Set();
+  for (const raw of value.plans) {
+    if (!raw || typeof raw !== 'object') return { valid: false, reason: 'plan option is not an object' };
+    if (typeof raw.planId !== 'string' || typeof raw.planNumber !== 'string') {
+      return { valid: false, reason: 'fixed plan identity is required' };
+    }
+    if (!raw.planId.trim() || !raw.planNumber.trim() || raw.planId.length > 191 || raw.planNumber.length > 191) {
+      return { valid: false, reason: 'fixed plan identity is invalid' };
+    }
+    const planId = exactString(raw.planId, 'planId');
+    const planNumber = exactString(raw.planNumber, 'planNumber');
+    if (ids.has(planId) || numbers.has(planNumber)) return { valid: false, reason: 'plan options are not unique' };
+    ids.add(planId);
+    numbers.add(planNumber);
+    if (raw.expectedMaterialStatus !== undefined && !readinessStatus.has(raw.expectedMaterialStatus)) {
+      return { valid: false, reason: 'expectedMaterialStatus is invalid' };
+    }
+    const lowerPresent = raw.expectedLowerPercent !== undefined;
+    const upperPresent = raw.expectedUpperPercent !== undefined;
+    if (lowerPresent !== upperPresent) return { valid: false, reason: 'expected material bounds must be paired' };
+    if (lowerPresent) {
+      try {
+        nullableNumber(raw.expectedLowerPercent, 'expectedLowerPercent', 100);
+        nullableNumber(raw.expectedUpperPercent, 'expectedUpperPercent', 100);
+      } catch {
+        return { valid: false, reason: 'expected material bounds are invalid' };
+      }
+      if (raw.expectedLowerPercent !== null && raw.expectedUpperPercent !== null
+        && raw.expectedLowerPercent > raw.expectedUpperPercent) {
+        return { valid: false, reason: 'expected material bounds are reversed' };
+      }
+    }
+    if (raw.expectedProgressPercent !== undefined) {
+      try {
+        nullableNumber(raw.expectedProgressPercent, 'expectedProgressPercent');
+      } catch {
+        return { valid: false, reason: 'expected progress percent is invalid' };
+      }
+    }
+    plans.push({
+      planId,
+      planNumber,
+      ...(raw.expectedMaterialStatus === undefined ? {} : { expectedMaterialStatus: raw.expectedMaterialStatus }),
+      ...(lowerPresent ? { expectedLowerPercent: raw.expectedLowerPercent, expectedUpperPercent: raw.expectedUpperPercent } : {}),
+      ...(raw.expectedProgressPercent === undefined ? {} : { expectedProgressPercent: raw.expectedProgressPercent }),
+    });
+  }
+  return { valid: true, plans };
+}
+
+function assertReadinessPayload(payload, planId) {
+  if (!payload || payload.success !== true || !payload.data || typeof payload.data !== 'object') {
+    fail('concurrent-readiness response is not a successful envelope');
+  }
+  const data = payload.data;
+  if (data.planId !== planId || data.advisoryOnly !== true) fail('readiness identity or advisory flag mismatch');
+  if (typeof data.planNumber !== 'string' || typeof data.planStatus !== 'string') fail('readiness plan metadata is invalid');
+  if (!data.material || !readinessStatus.has(data.material.status)
+    || typeof data.material.reason !== 'string' || !Array.isArray(data.material.items)) {
+    fail('readiness material section is invalid');
+  }
+  const materialLower = nullableNumber(data.material.lowerPercent, 'material.lowerPercent', 100);
+  const materialUpper = nullableNumber(data.material.upperPercent, 'material.upperPercent', 100);
+  if (data.material.status === 'VERIFIED') {
+    if (data.material.reason !== 'OK' || materialLower === null || materialUpper === null || materialLower > materialUpper) {
+      fail('verified material bounds are invalid');
+    }
+  } else if (materialLower !== null || materialUpper !== null) {
+    fail('unverified material must keep bounds null');
+  }
+  const materialIds = new Set();
+  for (const item of data.material.items) {
+    if (!item || typeof item !== 'object' || materialIds.has(item.materialTypeId)) fail('readiness material identity is invalid');
+    materialIds.add(item.materialTypeId);
+    exactString(item.materialTypeId, 'materialTypeId');
+    exactString(item.materialName, 'materialName', 512);
+    exactString(item.unit, 'material.unit');
+    for (const field of ['required', 'consumed', 'ownHeldReserved', 'otherUnoccupied', 'stockFree']) {
+      nullableNumber(item[field], `material.${field}`);
+    }
+    nullableNumber(item.lowerPercent, 'material.item.lowerPercent', 100);
+    nullableNumber(item.upperPercent, 'material.item.upperPercent', 100);
+  }
+  if (!data.progress || !readinessStatus.has(data.progress.status)
+    || data.progress.basis !== 'FINISHED_GOODS_RECEIVED') {
+    fail('readiness progress section is invalid');
+  }
+  const progressPercent = nullableNumber(data.progress.completionPercent, 'progress.completionPercent');
+  if (data.progress.status === 'UNVERIFIED' && progressPercent !== null) fail('unverified progress must keep completion null');
+  if (data.progress.status === 'VERIFIED' && progressPercent === null) fail('verified progress must include completion');
+  return data;
+}
+
+function matchesExpectedReadiness(data, option) {
+  if (data.planId !== option.planId || data.planNumber !== option.planNumber) return false;
+  if (option.expectedMaterialStatus !== undefined && data.material.status !== option.expectedMaterialStatus) return false;
+  if (option.expectedLowerPercent !== undefined
+    && (data.material.lowerPercent !== option.expectedLowerPercent || data.material.upperPercent !== option.expectedUpperPercent)) return false;
+  if (option.expectedProgressPercent !== undefined
+    && data.progress.completionPercent !== option.expectedProgressPercent) return false;
+  return true;
+}
+
+function readinessPath(factoryId, planId) {
+  return `/api/mobile/${encodeURIComponent(factoryId)}/production-plans/${encodeURIComponent(planId)}/concurrent-readiness`;
+}
+
+function productionPlansPath(factoryId) {
+  return `/api/mobile/${encodeURIComponent(factoryId)}/production-plans`;
+}
+
+async function inspectPlan(page, ctx, option, index) {
+  // The real list defaults to UNFINISHED; retained cancelled QA plans require the explicit All filter.
+  await page.locator('.search-bar .el-select').first().click();
+  await page.getByRole('option', { name: '全部', exact: true }).click();
+  const search = page.getByPlaceholder('搜索计划编号/产品名称');
+  await search.waitFor({ state: 'visible', timeout: 10_000 });
+  await search.fill(option.planNumber);
+  const listResponsePromise = page.waitForResponse((response) => {
+    if (response.request().method() !== 'GET') return false;
+    try {
+      const url = new URL(response.url());
+      return url.pathname === productionPlansPath(ctx.expectedFactoryId)
+        && url.searchParams.get('keyword') === option.planNumber;
+    } catch {
+      return false;
+    }
+  }, { timeout: 20_000 });
+  await search.press('Enter');
+  const listResponse = await listResponsePromise;
+  if (!listResponse.ok()) return { ok: false, reason: `plan list returned HTTP ${listResponse.status()}` };
+
+  const planButton = page.getByRole('button', { name: option.planNumber, exact: true });
+  if (await planButton.count() !== 1) return { ok: false, reason: 'fixed QA plan was not uniquely visible in the filtered list' };
+  await planButton.click();
+  const dialog = page.getByRole('dialog', { name: '计划详情' });
+  await dialog.waitFor({ state: 'visible', timeout: 10_000 });
+  const readinessButton = dialog.getByTestId('plan-concurrent-readiness-refresh');
+  await readinessButton.waitFor({ state: 'visible', timeout: 10_000 });
+  const readinessResponsePromise = page.waitForResponse((response) => response.request().method() === 'GET'
+    && (() => {
+      try { return new URL(response.url()).pathname === readinessPath(ctx.expectedFactoryId, option.planId); } catch { return false; }
+    })(), { timeout: 20_000 });
+  await readinessButton.click();
+  const readinessResponse = await readinessResponsePromise;
+  if (readinessResponse.status() !== 200) return { ok: false, reason: 'readiness GET did not return HTTP 200', httpStatus: readinessResponse.status() };
+  const payload = await readinessResponse.json().catch(() => null);
+  let data;
+  try {
+    data = assertReadinessPayload(payload, option.planId);
+  } catch (error) {
+    return { ok: false, reason: String(error?.message || error), httpStatus: readinessResponse.status() };
+  }
+  const card = dialog.getByTestId('plan-concurrent-readiness');
+  await card.waitFor({ state: 'visible', timeout: 10_000 });
+  await card.getByText('成品入库进度', { exact: true }).waitFor({ state: 'visible', timeout: 10_000 });
+  const cardText = await card.innerText();
+  const visibleContract = cardText.includes('只读核算，不改变排程、库存或生产状态')
+    && cardText.includes('不等同于物料匹配或报工实时完工');
+  const expected = matchesExpectedReadiness(data, option);
+  const shot = await ctx.screenshot(`plan-concurrent-readiness-${index + 1}`);
+  const close = dialog.locator('.el-dialog__headerbtn').first();
+  if (await close.isVisible().catch(() => false)) await close.click();
+  return {
+    ok: expected && visibleContract,
+    reason: expected ? (visibleContract ? null : 'readiness UI lost read-only/progress distinction') : 'readiness response differed from fixed QA expectation',
+    httpStatus: readinessResponse.status(),
+    responsePlanId: data.planId,
+    planNumber: data.planNumber,
+    advisoryOnly: data.advisoryOnly,
+    materialStatus: data.material.status,
+    lowerPercent: data.material.lowerPercent,
+    upperPercent: data.material.upperPercent,
+    progressStatus: data.progress.status,
+    progressPercent: data.progress.completionPercent,
+    visibleContract,
+    screenshot: shot,
+  };
+}
+
+async function inspect(page, _body, ctx) {
+  const options = validatePlanReadinessOptions(ctx.planReadiness);
+  if (!options.valid) {
+    return { assessment: { result: 'UNVERIFIED', rootCauseClass: 'config' }, reason: options.reason };
+  }
+  if (ctx.expectedFactoryId !== 'F006' || ctx.loginEvidence?.factoryId !== 'F006') {
+    return { assessment: { result: 'UNVERIFIED', rootCauseClass: 'config' }, reason: 'F006 context required' };
+  }
+  const identity = await page.evaluate(async () => {
+    const read = async path => {
+      const response = await fetch(path, { credentials: 'same-origin' });
+      const payload = await response.json();
+      if (response.status !== 200 || payload.success !== true) throw new Error('Owned readiness context could not be verified');
+      return payload.data;
+    };
+    return { me: await read('/api/mobile/auth/me'), sandbox: await read('/api/mobile/F006/demo-sandbox/active-session') };
+  });
+  assertCoordinatedActor(identity.me, ctx.expectedUsername);
+  if (identity.sandbox !== null) fail('Active sandbox requires coordination');
+  const cases = [];
+  for (let index = 0; index < options.plans.length; index += 1) {
+    cases.push(await inspectPlan(page, ctx, options.plans[index], index));
+  }
+  const complete = cases.length === options.plans.length && cases.every((item) => item.ok);
+  return {
+    planCount: options.plans.length,
+    cases,
+    screenshots: cases.map((item) => item.screenshot).filter(Boolean),
+    assessment: complete
+      ? { result: 'PASS', rootCauseClass: 'none' }
+      : { result: 'UNVERIFIED', rootCauseClass: 'data' },
+  };
+}
+
+module.exports = {
+  id,
+  defaultEnabled: false,
+  validatePlanReadinessOptions,
+  assertReadinessPayload,
+  matchesExpectedReadiness,
+  readinessPath,
+  inspect,
+  run: (ctx) => runReadOnlyPageScenario(ctx, {
+    id,
+    path: ROUTES.productionPlans,
+    landmarks: ['生产计划管理'],
+    timeoutMs: 60_000,
+    inspect: (page, body, scenarioContext) => inspect(page, body, scenarioContext),
+  }),
+};
+
+},
     "scenarios/platform-factory-access-readonly.js": function(module, exports, require) {
 'use strict';
 const { runReadOnlyPageScenario } = require('./_shared');
@@ -3757,6 +4291,152 @@ module.exports = {
       };
     },
   }),
+};
+
+},
+    "scenarios/proposal-comparison-readonly.js": function(module, exports, require) {
+'use strict';
+
+const { runReadOnlyPageScenario } = require('./_shared');
+const id = 'proposal-comparison-readonly';
+const route = '/scheduling/proposal-comparison';
+const basis = 'QA-FOOD-PROPOSAL-UI-20261106';
+
+function requireCondition(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function assertCalculation(data, kind) {
+  requireCondition(data && data.comparisonBasisId === basis, 'Comparison basis changed');
+  requireCondition(data.factsVerified === false && data.businessExecutionPerformed === false
+    && data.resourcesReserved === false, 'Calculation made an unsupported business claim');
+  requireCondition(Array.isArray(data.candidates) && data.candidates.length === 3
+    && ['A', 'B', 'C'].every(candidateId => data.candidates.filter(item => item.id === candidateId).length === 1),
+  'Comparison candidate identity mismatch');
+  if (kind === 'positive') {
+    requireCondition(data.status === 'SUPPLIED_FACTS_COMPARABLE'
+      && data.nonDominatedCandidateIds.length === 2
+      && ['A', 'B'].every(candidateId => data.nonDominatedCandidateIds.includes(candidateId)),
+    'Expected two alternatives with different cost/time/resource tradeoffs');
+    const dominated = data.candidates.find(item => item.id === 'C');
+    requireCondition(dominated.dominatedByCandidateIds.length === 2
+      && ['A', 'B'].every(candidateId => dominated.dominatedByCandidateIds.includes(candidateId)),
+    'Expected C to be dominated by both A and B');
+  } else {
+    requireCondition(data.status === 'NOT_COMPARABLE' && data.nonDominatedCandidateIds.length === 0,
+      'Missing/mixed facts must not form a frontier');
+    const reason = kind === 'missing-cost' ? 'MISSING_COST' : 'CURRENCY_MISMATCH';
+    requireCondition(data.candidates.find(item => item.id === 'A').reasons.includes(reason),
+      'Missing/mixed fact reason is absent');
+  }
+  return true;
+}
+
+async function scopedRead(page, suffix) {
+  return page.evaluate(async path => {
+    const token = localStorage.getItem('cretas_access_token');
+    if (!token) throw new Error('Fresh authenticated token missing');
+    const response = await fetch(path, {headers: {Authorization: `Bearer ${token}`}});
+    const body = await response.json();
+    if (!response.ok || body.success !== true) throw new Error('Scoped acceptance read failed');
+    return body.data;
+  }, suffix);
+}
+
+function assertCoordinatedActor(me, expectedUsername) {
+  const role = typeof me?.roleCode === 'string' ? me.roleCode.toLowerCase() : '';
+  requireCondition(me && me.factoryId === 'F006' && me.id === 1309 && me.isActive === true
+    && me.username === expectedUsername && expectedUsername === 'f006_admin'
+    && ['factory_super_admin', 'permission_admin'].includes(role),
+  'Coordinated flat auth/me UserDTO identity changed');
+  return {factoryId: me.factoryId, actorId: me.id, role, active: true};
+}
+
+function resourceUnitControl(scope, budget = false) {
+  // A select nested in a label includes its option text in the accessible name.
+  return scope.getByLabel(budget ? /^资源预算单位/ : /^资源单位/);
+}
+
+async function inspect(page, _body, ctx) {
+  requireCondition(ctx.expectedFactoryId === 'F006' && ctx.loginEvidence.factoryId === 'F006',
+    'Synthetic UI acceptance requires the coordinated F006 factory');
+  const me = await scopedRead(page, '/api/mobile/auth/me');
+  assertCoordinatedActor(me, ctx.expectedUsername);
+  requireCondition(await scopedRead(page, '/api/mobile/F006/demo-sandbox/active-session') === null,
+    'Shared sandbox is active; do not run comparison');
+  await page.getByRole('heading', {name: '多方案比较', exact: true}).waitFor({state: 'visible'});
+  const form = page.locator('.comparison-form');
+  const common = form.locator('.form-card').first();
+  const fields = { '比较口径': basis, '币种': 'CNY', '成本单位': '每批',
+    '窗口开始': '2026-11-07T08:00', '窗口结束': '2026-11-10T18:00',
+    '可选交付截止': '2026-11-10T18:00', '可用资源容量': '20' };
+  for (const [label, value] of Object.entries(fields)) await common.getByLabel(label, {exact: true}).fill(value);
+  await resourceUnitControl(common, true).selectOption('PERSON_HOUR');
+  await page.getByRole('button', {name: '增加候选', exact: true}).click();
+  const candidates = [
+    {id: 'A', cost: '100', demand: '8', completion: '2026-11-08T12:00'},
+    {id: 'B', cost: '80', demand: '10', completion: '2026-11-09T12:00'},
+    {id: 'C', cost: '120', demand: '12', completion: '2026-11-10T12:00'},
+  ];
+  for (const [index, candidate] of candidates.entries()) {
+    const row = form.locator('.candidate-card').nth(index);
+    const values = {'编号': candidate.id, '比较口径': basis, '币种': 'CNY', '成本单位': '每批',
+      '成本': candidate.cost, '资源需求': candidate.demand, '完成时间': candidate.completion};
+    for (const [label, value] of Object.entries(values)) await row.getByLabel(label, {exact: true}).fill(value);
+    await resourceUnitControl(row).selectOption('PERSON_HOUR');
+  }
+  const results = [];
+  const screenshots = [];
+  for (const kind of ['positive', 'missing-cost', 'mixed-currency']) {
+    const first = form.locator('.candidate-card').first();
+    if (kind === 'missing-cost') await first.getByLabel('成本', {exact: true}).fill('');
+    if (kind === 'mixed-currency') {
+      await first.getByLabel('成本', {exact: true}).fill('100');
+      await first.getByLabel('币种', {exact: true}).fill('USD');
+    }
+    const responsePromise = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/mobile/F006/proposal-comparisons/evaluate', {timeout: 30000});
+    await page.getByRole('button', {name: '查看比较结果', exact: true}).click();
+    const response = await responsePromise;
+    const responseBody = await response.json();
+    requireCondition(response.status() === 200 && responseBody.success === true, 'Calculation did not complete successfully');
+    assertCalculation(responseBody.data, kind);
+    const card = page.locator('.result-card');
+    await card.waitFor({state: 'visible'});
+    const text = await card.innerText();
+    requireCondition(text.includes('输入事实未核实') && text.includes('本次未执行方案')
+      && text.includes('本次未预留资源'), 'Visible supplied-facts declarations missing');
+    const expectedText = kind === 'positive' ? '被以下候选支配' : kind === 'missing-cost' ? '缺少成本' : '币种不同';
+    requireCondition(text.includes(expectedText), 'Visible result does not explain the calculation');
+    await card.scrollIntoViewIfNeeded();
+    screenshots.push(await ctx.screenshot(id, kind));
+    results.push({kind, status: responseBody.data.status, nonDominatedCandidateIds: responseBody.data.nonDominatedCandidateIds,
+      factsVerified: false, businessExecutionPerformed: false, resourcesReserved: false});
+  }
+  return {factoryId: 'F006', actorId: 1309, suppliedSyntheticFacts: true, calculations: results,
+    screenshots, assessment: {result: 'PASS', rootCauseClass: 'none'}};
+}
+
+async function inspectDenied(page, _body, ctx) {
+  requireCondition(ctx.loginEvidence.factoryId === 'F006'
+    && !['factory_super_admin', 'permission_admin', 'platform_admin'].includes(ctx.loginEvidence.role),
+  'Denied scenario requires a real non-comparison factory role');
+  await page.goto(`${ctx.baseUrl}${route}`, {waitUntil: 'domcontentloaded', timeout: 45000});
+  await page.waitForURL(url => url.pathname === '/403', {timeout: 15000});
+  await page.getByRole('heading', {name: '访问被拒绝', exact: true}).waitFor({state: 'visible'});
+  requireCondition(await page.locator('.comparison-form').count() === 0, 'Denied role sees comparison input');
+  requireCondition(ctx.mutationGuard.snapshot().readonlyPostRequests
+    .filter(request => request.classificationId === 'proposal-comparison-evaluate').length === 0,
+  'Denied route issued a calculation');
+  return {role: ctx.loginEvidence.role, finalPath: '/403', calculationRequests: 0,
+    assessment: {result: 'PASS', rootCauseClass: 'none'}};
+}
+
+module.exports = {id, defaultEnabled: false, assertCalculation, assertCoordinatedActor, resourceUnitControl, inspect,
+  run: ctx => runReadOnlyPageScenario(ctx, {id, path: route, screenshot: false, inspect}),
+  denied: {id: 'proposal-comparison-denied-readonly', defaultEnabled: false,
+    run: ctx => runReadOnlyPageScenario(ctx, {id: 'proposal-comparison-denied-readonly',
+      path: '/dashboard', screenshot: true, inspect: inspectDenied})},
 };
 
 },
@@ -8420,6 +9100,110 @@ module.exports = {
     inspect: async (page) => ({ tableCount: await page.locator('.el-table').count() }),
   }),
 };
+
+},
+    "scenarios/supply-box-exposure-readonly.js": function(module, exports, require) {
+'use strict';
+
+const {runReadOnlyPageScenario} = require('./_shared');
+const {assertCoordinatedActor} = require('./proposal-comparison-readonly');
+const id = 'supply-box-exposure-readonly';
+const decimal = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+function requireCondition(value, message) { if (!value) throw new Error(message); }
+function assertTotals(totals) {
+  requireCondition(totals && typeof totals.complete === 'boolean'
+    && Number.isSafeInteger(totals.knownSourceCount) && totals.knownSourceCount >= 0
+    && Number.isSafeInteger(totals.unknownSourceCount) && totals.unknownSourceCount >= 0,
+  'Box source counts are invalid');
+  for (const key of ['totalBoxQuantity', 'knownBoxSubtotal']) requireCondition(totals[key] === null
+    || (typeof totals[key] === 'string' && decimal.test(totals[key])), 'Box quantity must be an exact decimal string or null');
+  requireCondition((totals.knownSourceCount === 0) === (totals.knownBoxSubtotal === null), 'Known subtotal was invented or omitted');
+  requireCondition(totals.complete ? totals.unknownSourceCount === 0 && totals.totalBoxQuantity !== null
+    && totals.totalBoxQuantity === totals.knownBoxSubtotal : totals.totalBoxQuantity === null,
+  'Unknown box totals were promoted to complete');
+}
+function assertBoxExposure(exposure) {
+  requireCondition(exposure && exposure.scope === 'DISCOVERED_LINEAGE'
+    && exposure.inventoryBasis === 'PHYSICAL_ON_HAND_INCLUDING_RESERVED'
+    && exposure.quantityMeaning === 'PACKAGING_SNAPSHOT_EQUIVALENT', 'Box exposure meaning changed');
+  assertTotals(exposure.stock); assertTotals(exposure.shipped);
+  for (const key of ['stockSources', 'shipmentSources', 'customers', 'gaps']) requireCondition(Array.isArray(exposure[key]), 'Box source evidence is absent');
+  for (const source of [...exposure.stockSources, ...exposure.shipmentSources]) {
+    requireCondition(typeof source.sourceId === 'string' && typeof source.finishedGoodsBatchId === 'string'
+      && Array.isArray(source.gaps), 'Box source identity is absent');
+    requireCondition(source.boxQuantity === null ? source.gaps.length > 0
+      : typeof source.boxQuantity === 'string' && decimal.test(source.boxQuantity), 'Unknown source was zero-filled');
+  }
+  for (const [kind, sources] of [['stock',exposure.stockSources], ['shipped',exposure.shipmentSources]]) {
+    const known=sources.filter(source=>source.boxQuantity !== null).length;
+    requireCondition(new Set(sources.map(source=>source.sourceId)).size === sources.length
+      && exposure[kind].knownSourceCount === known
+      && exposure[kind].unknownSourceCount >= sources.length-known,
+    'Box source identities or aggregate counts contradict the actual sources');
+  }
+  for (const customer of exposure.customers) assertTotals(customer.totals);
+  return true;
+}
+async function read(page, path) {
+  return page.evaluate(async url => {
+    const token = localStorage.getItem('cretas_access_token');
+    if (!token) throw new Error('Fresh session missing');
+    const response = await fetch(url, {headers:{Authorization:`Bearer ${token}`}});
+    const body = await response.json();
+    if (!response.ok || body.success !== true) throw new Error('Scoped acceptance context read failed');
+    return body.data;
+  }, path);
+}
+async function inspect(page, _body, ctx) {
+  requireCondition(ctx.expectedFactoryId === 'F006', 'F006 context required');
+  assertCoordinatedActor(await read(page, '/api/mobile/auth/me'), ctx.expectedUsername);
+  requireCondition(await read(page, '/api/mobile/F006/demo-sandbox/active-session') === null, 'Active sandbox requires coordination');
+  const target = ctx.supplyImpact;
+  requireCondition(target && typeof target.materialTypeId === 'string'
+    && /^[A-Za-z0-9_-]{1,128}$/.test(target.materialTypeId)
+    && typeof target.materialName === 'string' && target.materialName.trim().length > 0,
+  'Explicit existing material from scoped readonly preflight is required');
+  await page.getByPlaceholder('搜索原料名称 / 料号', {exact:true}).fill(target.materialName);
+  await page.getByRole('button', {name:'搜索', exact:true}).click();
+  const row = page.locator('.el-table__body tbody tr').filter({hasText:target.materialName});
+  await row.first().waitFor({state:'visible',timeout:30000});
+  requireCondition(await row.count() === 1, 'Material selection must resolve to one actual visible row');
+  await row.locator('[data-test="row-supply-impact"]').click();
+  const dialog = page.locator('[data-test="supply-impact-dialog"]');
+  await dialog.waitFor({state:'visible'});
+  const [response] = await Promise.all([page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === '/api/mobile/F006/supply-impact/quality'
+      && url.searchParams.get('materialTypeId') === target.materialTypeId;
+  }, {timeout:30000}),
+  dialog.locator('[data-test="supply-impact-event"]').getByText('质量问题', {exact:true}).click()]);
+  requireCondition(await dialog.getByRole('radio', {name:'质量问题', exact:true}).isChecked(),
+    'Visible quality selection did not update the actual radio');
+  const body = await response.json();
+  requireCondition(response.ok() && body.success === true && body.data.subject.id === target.materialTypeId,
+    'Quality response is not the selected actual material');
+  assertBoxExposure(body.data.boxExposure);
+  const exposure = body.data.boxExposure;
+  const panel = dialog.getByTestId('impact-box-exposure'); await panel.waitFor({state:'visible'});
+  await dialog.locator('.el-loading-mask').waitFor({state:'hidden',timeout:15000});
+  requireCondition((await panel.innerText()).includes('在库实物含预留'), 'Physical inventory basis is not visible');
+  for (const [kind, testId] of [['stock','box-stock-total'], ['shipped','box-shipped-total']]) {
+    const text = (await panel.getByTestId(testId).innerText()).trim();
+    requireCondition(text === (exposure[kind].complete ? exposure[kind].totalBoxQuantity : '待核对'), 'UI total differs from server uncertainty');
+  }
+  await panel.getByTestId('box-stock-total').scrollIntoViewIfNeeded();
+  return {factoryId:'F006',actorId:1309,materialTypeId:target.materialTypeId,
+    sourceBatchCount:body.data.sourceBatches.length,finishedBatchCount:body.data.finishedBatches.length,
+    stockSources:exposure.stockSources.length,shipmentSources:exposure.shipmentSources.length,
+    stockComplete:exposure.stock.complete,shippedComplete:exposure.shipped.complete,
+    knownStockSources:exposure.stock.knownSourceCount,knownShipmentSources:exposure.shipped.knownSourceCount,
+    observedGapCodes:exposure.gaps.map(gap=>gap.code),sealedCartonsVerified:false,uncertaintyRendered:true,
+    screenshots:[await ctx.screenshot(id,'actual-exposure')],
+    assessment:{result:body.data.finishedBatches.length > 0 && exposure.stock.knownSourceCount+exposure.shipped.knownSourceCount > 0 ? 'PASS' : 'UNVERIFIED',
+      rootCauseClass:body.data.finishedBatches.length > 0 && exposure.stock.knownSourceCount+exposure.shipped.knownSourceCount > 0 ? 'none' : 'data'}};
+}
+module.exports = {id,defaultEnabled:false,assertBoxExposure,
+  run:ctx=>runReadOnlyPageScenario(ctx,{id,path:'/warehouse/material-types',landmarks:['原料'],screenshot:false,inspect})};
 
 },
     "scenarios/table-grid-readonly.js": function(module, exports, require) {

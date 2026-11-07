@@ -11,7 +11,7 @@
  * @since 2025-12-29
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -114,7 +114,32 @@ export default function UrgentInsertScreen() {
   const [selectedImpact, setSelectedImpact] = useState<UrgentInsertImpactAnalysis | null>(null);
   const [impactLoadState, setImpactLoadState] = useState<ImpactLoadState>('idle');
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
+  const [previewInputKey, setPreviewInputKey] = useState<string | null>(null);
+  const inputKey = JSON.stringify([productTypeId, quantity, productUnit, deadline]);
+  const latestInputKey = useRef(inputKey);
+  latestInputKey.current = inputKey;
+  const analysisSequence = useRef(0);
+  const capacityUnit = toCapacityUnit(productUnit);
+  const requestDeadline = deadline.trim().replace(' ', 'T');
+  const previewIsCurrent = previewInputKey === inputKey && impactLoadState === 'loaded' && !!selectedImpact?.previewId
+    && selectedImpact.slotId === selectedSlot?.id
+    && selectedImpact.quantityUnit === capacityUnit
+    && selectedImpact.plannedUnit === productUnit
+    && selectedImpact.previewQuantity === Number(quantity);
   const feasibility = resolveUrgentInsertFeasibility(impactLoadState === 'loaded' ? selectedImpact : null);
+  const previewRequiresApproval = selectedImpact?.requiresApproval === true
+    || selectedImpact?.impactLevel === 'high' || selectedImpact?.impactLevel === 'critical';
+
+  useEffect(() => {
+    analysisSequence.current += 1;
+    setSelectedSlot(null);
+    setSelectedImpact(null);
+    setPreviewInputKey(null);
+    setImpactLoadState('idle');
+    setShowConfirm(false);
+    setHasAnalyzed(false);
+    setInsertSlots([]);
+  }, [inputKey]);
 
   const [showProductPicker, setShowProductPicker] = useState(false);
 
@@ -166,15 +191,23 @@ export default function UrgentInsertScreen() {
   };
 
   const analyzeSlots = async () => {
-    if (!productTypeId || !quantity || isNaN(parseFloat(quantity)) || parseFloat(quantity) <= 0) {
+    if (!productTypeId || !quantity || !Number.isFinite(Number(quantity)) || Number(quantity) <= 0) {
       Alert.alert(t('common.info'), t('urgentInsert.validation.selectProductAndQuantity'));
+      return;
+    }
+    if (!requestDeadline || !Number.isFinite(Date.parse(requestDeadline))) {
+      Alert.alert(t('common.info'), '请填写有效交期后重新分析');
       return;
     }
 
     setAnalyzing(true);
+    const requestedInput = inputKey;
     try {
       // 调用真实 API 获取可用时段
-      const response = await schedulingApiClient.getAvailableSlots(3);
+      const response = await schedulingApiClient.getAvailableSlots(3, undefined, {
+        productTypeId, requiredQuantity: Number(quantity), quantityUnit: capacityUnit, deadline: requestDeadline,
+      });
+      if (latestInputKey.current !== requestedInput) return;
 
       if (response.success && response.data) {
         // 后端返回的 recommendScore 是 0-100，需要转换为 0-1
@@ -197,29 +230,32 @@ export default function UrgentInsertScreen() {
   };
 
   const selectSlot = async (slot: InsertSlot) => {
+    const sequence = ++analysisSequence.current;
+    const requestedInput = inputKey;
     setSelectedSlot(slot);
     // 换时段先清掉上一个时段的分析, 否则会把别的时段的结论显示在这里
     setSelectedImpact(null);
+    setPreviewInputKey(null);
     setImpactLoadState('idle');
 
     // 获取详细影响分析
     if (productTypeId && quantity) {
       setImpactLoadState('loading');
       try {
-        const response = await schedulingApiClient.analyzeSlotImpact(
-          slot.id,
-          productTypeId,
-          parseFloat(quantity),
-          undefined,
-          toCapacityUnit(productUnit)
-        );
+        const response = await schedulingApiClient.createInsertPreview(slot.id, {
+          productTypeId, requiredQuantity: Number(quantity), quantityUnit: capacityUnit,
+          deadline: requestDeadline, preferredProductionLineId: slot.productionLineId,
+        });
+        if (sequence !== analysisSequence.current || requestedInput !== latestInputKey.current) return;
         if (response.success && response.data) {
           setSelectedImpact(response.data);
+          setPreviewInputKey(requestedInput);
           setImpactLoadState('loaded');
         } else {
           setImpactLoadState('failed');
         }
       } catch (error) {
+        if (sequence !== analysisSequence.current || requestedInput !== latestInputKey.current) return;
         console.error('Failed to analyze impact:', error);
         setImpactLoadState('failed');
       }
@@ -237,12 +273,17 @@ export default function UrgentInsertScreen() {
       return;
     }
 
+    if (!previewIsCurrent || !capacityUnit) {
+      Alert.alert(t('common.info'), '预览已失效或数量单位未验证，请重新选择时段并分析');
+      return;
+    }
+
     // 如果影响等级高，显示额外确认
-    if (selectedSlot.impactLevel === 'high' || selectedSlot.impactLevel === 'critical') {
+    if (previewRequiresApproval && selectedImpact) {
       Alert.alert(
         t('common.warning'),
         t('urgentInsert.confirm.highImpactWarning', {
-          level: selectedSlot.impactLevel === 'high' ? t('urgentInsert.slots.impact.high') : 'critical'
+          level: selectedImpact.impactLevel
         }),
         [
           { text: t('common.cancel'), style: 'cancel' },
@@ -255,20 +296,25 @@ export default function UrgentInsertScreen() {
   };
 
   const executeInsert = async () => {
-    if (!selectedSlot) return;
+    if (!selectedSlot || !previewIsCurrent || !selectedImpact?.previewId || !capacityUnit) {
+      Alert.alert(t('common.info'), '预览已失效或数量单位未验证，请重新分析后确认');
+      return;
+    }
 
     setLoading(true);
     try {
       const request: ConfirmUrgentInsertRequest = {
         slotId: selectedSlot.id,
+        previewId: selectedImpact.previewId,
+        quantityUnit: capacityUnit,
         productTypeId,
         plannedQuantity: parseFloat(quantity),
         urgentReason: urgentReason || `${urgencyLevel === 'critical' ? '加急' : '紧急'}订单`,
         priority: urgencyLevel === 'critical' ? 10 : urgencyLevel === 'urgent' ? 8 : 5,
-        requestedDeadline: deadline || undefined,
+        requestedDeadline: requestDeadline || undefined,
         customerName: customerName || undefined,
         notes: notes || undefined,
-        forceInsert: selectedSlot.impactLevel === 'high' || selectedSlot.impactLevel === 'critical',
+        forceInsert: previewRequiresApproval,
       };
 
       let response;
@@ -284,15 +330,16 @@ export default function UrgentInsertScreen() {
         const plan = response.data;
         // 检查是否需要审批（修复：使用 approvalStatus 而非 requiresApproval）
         const needsApproval = plan.approvalStatus === 'PENDING';
+        const approvalMessage = typeof selectedImpact.affectedPlanCount === 'number'
+          ? t('urgentInsert.confirm.approvalMessage', {
+              planNumber: plan.planNumber, level: selectedImpact.impactLevel, count: selectedImpact.affectedPlanCount,
+            })
+          : `计划 ${plan.planNumber} 已提交审批，影响数量尚未验证`;
 
         Alert.alert(
           needsApproval ? t('urgentInsert.confirm.approvalSuccess') : t('urgentInsert.confirm.success'),
           needsApproval
-            ? t('urgentInsert.confirm.approvalMessage', {
-                planNumber: plan.planNumber,
-                level: selectedSlot.impactLevel === 'high' ? t('urgentInsert.slots.impact.high') : 'critical',
-                count: selectedSlot.impactedPlans?.length ?? 0
-              })
+            ? approvalMessage
             : t('urgentInsert.confirm.successMessage', { planNumber: plan.planNumber }),
           [{ text: t('common.confirm'), onPress: () => navigation.goBack() }]
         );
@@ -740,13 +787,13 @@ export default function UrgentInsertScreen() {
             <Text style={styles.confirmTitle}>确认插单？</Text>
             <Text style={styles.confirmDesc}>
               将在 {selectedSlot?.productionLineName} 创建紧急生产计划，
-              可能影响 {selectedSlot?.impactedPlans?.length || 0} 个现有计划。
+              可能影响 {selectedImpact?.affectedPlanCount ?? '未验证'} 个现有计划。
             </Text>
             {feasibility !== 'FEASIBLE' && (
               <Text style={styles.confirmWarn} testID="urgent-insert-confirm-unverified">
                 {feasibility === 'INFEASIBLE'
-                  ? '注意：资源核对结果为不可行，确认后原料 / 设备 / 产能 / 人员可能不到位。'
-                  : '注意：资源未验证（原料 / 设备 / 产能 / 人员没有全部核对），系统不保证到位。'}
+                  ? '资源核对结果为不可行。确认时会重新核对产能和设备；不足或未验证将拒绝创建。'
+                  : '原料或人员尚未全部核对。确认时会重新核对产能和设备；未验证将拒绝创建。'}
               </Text>
             )}
             <View style={styles.confirmButtons}>

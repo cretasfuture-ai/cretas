@@ -32,6 +32,7 @@ import com.cretas.aims.service.NotificationService;
 import com.cretas.aims.service.PushNotificationService;
 import com.cretas.aims.service.scheduling.core.SchedulingAIService;
 import com.cretas.aims.service.scheduling.core.WorkerAssignmentService;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -74,7 +75,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         DailyCapacityScheduleGenerator.class,
         ExperienceCapacityService.class,
         ProductDailyCapacityService.class,
-        SchedulingPlanCrudServiceImpl.class
+        SchedulingPlanCrudServiceImpl.class,
+        SchedulingResourceWriteLock.class
 })
 class DailyCapacityScheduleGeneratorJpaTest {
 

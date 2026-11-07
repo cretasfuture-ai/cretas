@@ -14,6 +14,7 @@ import com.cretas.aims.service.PushNotificationService;
 import com.cretas.aims.service.scheduling.core.SchedulingAIService;
 import com.cretas.aims.service.scheduling.core.SchedulingPlanCrudService;
 import com.cretas.aims.service.scheduling.core.WorkerAssignmentService;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,6 +51,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     private final DroolsRuleRepository droolsRuleRepository;
     private final NotificationService notificationService;
     private final PushNotificationService pushNotificationService;
+    private final SchedulingResourceWriteLock resourceWriteLock;
     private final ProductionLineSupervisorRepository supervisorRepository;
     @Lazy @Autowired
     private WorkerAssignmentService workerAssignmentService;
@@ -417,6 +419,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     @Override
     @Transactional
     public ProductionLineDTO createProductionLine(String factoryId, ProductionLineDTO request) {
+        resourceWriteLock.lockFactory(factoryId);
         ProductionLine line = new ProductionLine();
         line.setFactoryId(factoryId);
         line.setName(request.getName());
@@ -437,6 +440,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     @Override
     @Transactional
     public ProductionLineDTO updateProductionLine(String factoryId, String lineId, ProductionLineDTO request) {
+        resourceWriteLock.lockFactory(factoryId);
         ProductionLine line = lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(lineId, factoryId)
             .orElseThrow(() -> new EntityNotFoundException("ProductionLine", lineId));
 
@@ -457,6 +461,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     @Override
     @Transactional
     public ProductionLineDTO updateProductionLineStatus(String factoryId, String lineId, String status) {
+        resourceWriteLock.lockFactory(factoryId);
         ProductionLine line = lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(lineId, factoryId)
             .orElseThrow(() -> new EntityNotFoundException("ProductionLine", lineId));
 

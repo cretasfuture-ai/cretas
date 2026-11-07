@@ -1,6 +1,7 @@
 package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.FactoryEquipment;
+import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.ProductEquipmentRequirement;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionLine;
@@ -11,6 +12,7 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.security.ActorRef;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.scheduling.LineCapacityConfigService;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,11 +50,11 @@ import static org.mockito.Mockito.when;
 @DataJpaTest(showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
-@EntityScan(basePackageClasses = {ProductionLineCapacityConfig.class, ProductEquipmentRequirement.class})
+@EntityScan(basePackageClasses = {Factory.class, ProductionLineCapacityConfig.class, ProductEquipmentRequirement.class})
 @EnableJpaRepositories(basePackageClasses = ProductionLineCapacityConfigRepository.class, includeFilters = @ComponentScan.Filter(
         type = FilterType.ASSIGNABLE_TYPE,
-        classes = {ProductionLineCapacityConfigRepository.class, ProductEquipmentRequirementRepository.class}))
-@Import(LineCapacityConfigService.class)
+        classes = {FactoryRepository.class, ProductionLineCapacityConfigRepository.class, ProductEquipmentRequirementRepository.class}))
+@Import({LineCapacityConfigService.class, SchedulingResourceWriteLock.class})
 class LineCapacityConfigWriteRepositoryQueryValidationTest {
 
     @DynamicPropertySource
@@ -82,6 +84,7 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
     private static final ActorRef PLATFORM7 = new ActorRef(AuthenticatedActorType.PLATFORM_ADMIN, 7L);
 
     @Autowired TestEntityManager entityManager;
+    @Autowired FactoryRepository factories;
     @Autowired LineCapacityConfigService service;
     @Autowired ProductionLineCapacityConfigRepository capacity;
     @Autowired ProductEquipmentRequirementRepository requirements;
@@ -91,6 +94,13 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        if (factories.findById(F).isEmpty()) {
+            Factory factory = new Factory();
+            factory.setId(F);
+            factory.setName("S4 resource lock fixture");
+            factory.setIsActive(true);
+            factories.saveAndFlush(factory);
+        }
         if (onPostgres()) {
             // the migration's partial unique indexes (ddl-auto=create does not know them)
             String sql = new ClassPathResource("db/flyway/V20261103_92__line_capacity_and_equipment_requirements.sql")

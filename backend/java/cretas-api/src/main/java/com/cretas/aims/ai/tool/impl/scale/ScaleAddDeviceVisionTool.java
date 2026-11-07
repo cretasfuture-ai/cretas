@@ -11,6 +11,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 
 import java.util.*;
 
@@ -26,7 +28,11 @@ import java.util.*;
  */
 @Slf4j
 @Component
+@Transactional
 public class ScaleAddDeviceVisionTool extends AbstractBusinessTool {
+
+    @Autowired
+    private SchedulingResourceWriteLock resourceWriteLock;
 
     @Autowired
     private EquipmentRepository equipmentRepository;
@@ -135,6 +141,7 @@ public class ScaleAddDeviceVisionTool extends AbstractBusinessTool {
 
     @Override
     @SuppressWarnings("unchecked")
+    @Transactional
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         log.info("执行图片识别添加电子秤设备 - 工厂ID: {}", factoryId);
 
@@ -199,6 +206,9 @@ public class ScaleAddDeviceVisionTool extends AbstractBusinessTool {
             brandName = normalizedBrand.getBrandName();
         }
 
+        // Remote recognition must not hold the factory resource mutex.
+        // Lock before the first equipment fact read and retain it through save.
+        resourceWriteLock.lockFactory(factoryId);
         // 生成设备编码
         long count = equipmentRepository.countByFactoryId(factoryId);
         String equipmentCode = "SCALE-" + String.format("%04d", count + 1);

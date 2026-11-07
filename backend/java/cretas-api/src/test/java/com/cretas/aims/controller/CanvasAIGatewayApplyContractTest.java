@@ -65,20 +65,21 @@ class CanvasAIGatewayApplyContractTest {
         when(mobile.getUserFromToken("local-test")).thenReturn(user);
         controller = new CanvasAIController(registry, mapper, mock(DashScopeClient.class), mobile, gateway);
         ReflectionTestUtils.setField(controller, "previewTokenService", tokens);
+        wireBinding(controller, tokens, LocalDateTime.now().plusMinutes(5));
     }
 
     @Test
     void applyBuildsGatewayCommandWithImmutableProofAndTokenDerivedIdempotency() throws Exception {
         Map<String, Object> params = Map.of("moduleCode", "inventory", "enabled", true);
         String token = "proof-" + UUID.randomUUID();
-        String digest = ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "1.0.0",
-                ToolExecutionMode.EXECUTE, mapper.valueToTree(params));
+        String digest = ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "2.0.0",
+                ToolExecutionMode.EXECUTE, mapper.valueToTree(commandParameters(params)));
         when(tokens.readBoundSnapshot(token, FACTORY, 7L)).thenReturn(Optional.of(snapshot(token, digest)));
         when(gateway.execute(any())).thenReturn(result(ToolExecutionStatus.SUCCEEDED, mapper.createObjectNode()));
 
         CanvasAIController.ApplyDiffsResult receipt = controller.applyDiffs(
                 FACTORY, "Bearer local-test", List.of(Map.of("tool", TOOL, "params", params,
-                        "proof", Map.of("token", token, "commandDigest", digest, "descriptorVersion", "1.0.0"))))
+                        "proof", Map.of("token", token, "commandDigest", digest, "descriptorVersion", "2.0.0"))))
                 .getData();
 
         assertThat(receipt.items()).singleElement().extracting(CanvasAIController.ApplyDiffResult::status)
@@ -98,12 +99,12 @@ class CanvasAIGatewayApplyContractTest {
     void tamperedParametersDoNotReachGateway() {
         Map<String, Object> params = Map.of("moduleCode", "inventory", "enabled", true);
         String token = "proof-tampered";
-        String digest = ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "1.0.0",
-                ToolExecutionMode.EXECUTE, mapper.valueToTree(params));
+        String digest = ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "2.0.0",
+                ToolExecutionMode.EXECUTE, mapper.valueToTree(commandParameters(params)));
         when(tokens.readBoundSnapshot(token, FACTORY, 7L)).thenReturn(Optional.of(snapshot(token, digest)));
         var receipt = controller.applyDiffs(FACTORY, "Bearer local-test", List.of(Map.of(
                 "tool", TOOL, "params", Map.of("moduleCode", "finance", "enabled", true),
-                "proof", Map.of("token", token, "commandDigest", digest, "descriptorVersion", "1.0.0")))).getData();
+                "proof", Map.of("token", token, "commandDigest", digest, "descriptorVersion", "2.0.0")))).getData();
         assertThat(receipt.items()).singleElement().extracting(CanvasAIController.ApplyDiffResult::status)
                 .isEqualTo("FAILURE");
         verifyNoInteractions(gateway);
@@ -113,14 +114,14 @@ class CanvasAIGatewayApplyContractTest {
     void replayMapsOnlyOriginalSuccessToReusedAndUnknownStaysUnknown() {
         Map<String, Object> params = Map.of("moduleCode", "inventory", "enabled", true);
         String token = "proof-replay";
-        String digest = ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "1.0.0",
-                ToolExecutionMode.EXECUTE, mapper.valueToTree(params));
+        String digest = ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "2.0.0",
+                ToolExecutionMode.EXECUTE, mapper.valueToTree(commandParameters(params)));
         when(tokens.readBoundSnapshot(token, FACTORY, 7L)).thenReturn(Optional.of(snapshot(token, digest)));
         var replayPayload = mapper.createObjectNode().put("originalStatus", "SUCCEEDED");
         when(gateway.execute(any())).thenReturn(result(ToolExecutionStatus.IDEMPOTENT_REPLAY, replayPayload));
         var receipt = controller.applyDiffs(FACTORY, "Bearer local-test", List.of(Map.of(
                 "tool", TOOL, "params", params,
-                "proof", Map.of("token", token, "commandDigest", digest, "descriptorVersion", "1.0.0")))).getData();
+                "proof", Map.of("token", token, "commandDigest", digest, "descriptorVersion", "2.0.0")))).getData();
         assertThat(receipt.items()).singleElement().extracting(CanvasAIController.ApplyDiffResult::status)
                 .isEqualTo("REUSED");
     }
@@ -144,7 +145,7 @@ class CanvasAIGatewayApplyContractTest {
                 eq(h.token), eq("claim-1"), eq(true), anyString());
         verify(h.idempotencyRepository, times(2)).saveAndFlush(any());
         verify(h.idempotencyRepository, times(1)).findByTenantIdAndPrincipalTypeAndPrincipalIdAndToolNameAndDescriptorVersionAndIdempotencyKeyHash(
-                eq(FACTORY), eq(PrincipalType.USER), eq("7"), eq(TOOL), eq("1.0.0"), anyString());
+                eq(FACTORY), eq(PrincipalType.USER), eq("7"), eq(TOOL), eq("2.0.0"), anyString());
     }
 
     @Test
@@ -254,7 +255,7 @@ class CanvasAIGatewayApplyContractTest {
                         "tool", TOOL,
                         "params", Map.of("moduleCode", "finance", "enabled", true),
                         "proof", Map.of("token", h.token, "commandDigest", h.digest,
-                                "descriptorVersion", "1.0.0")))).getData();
+                                "descriptorVersion", "2.0.0")))).getData();
         assertThat(tampered.items()).singleElement()
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("FAILURE");
         verify(h.executor, never()).execute(any(ToolCall.class), any());
@@ -312,9 +313,8 @@ class CanvasAIGatewayApplyContractTest {
         ToolExecutionIdempotencyRecord existing = mock(ToolExecutionIdempotencyRecord.class);
         when(existing.getBusinessType()).thenReturn("FACTORY");
         when(existing.getCommandDigest()).thenReturn(
-                ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "1.0.0",
-                        ToolExecutionMode.EXECUTE, JsonNodeFactory.instance.objectNode()
-                                .put("moduleCode", "inventory").put("enabled", true)));
+                ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "2.0.0",
+                        ToolExecutionMode.EXECUTE, mapper.valueToTree(commandParameters(Map.of("moduleCode", "inventory", "enabled", true)))));
         when(existing.getConfirmationFingerprint()).thenReturn(
                 ToolCommandDigest.persistentSecretFingerprint("proof-integration"));
         when(existing.getState()).thenReturn(state);
@@ -326,7 +326,7 @@ class CanvasAIGatewayApplyContractTest {
         private final String token = "proof-integration";
         private final Map<String, Object> params = Map.of("moduleCode", "inventory", "enabled", true);
         private final String digest = ToolCommandDigest.commandDigest(
-                FACTORY, 7L, TOOL, "1.0.0", ToolExecutionMode.EXECUTE, mapper.valueToTree(params));
+                FACTORY, 7L, TOOL, "2.0.0", ToolExecutionMode.EXECUTE, mapper.valueToTree(commandParameters(params)));
         private final PreviewTokenService previewTokens = mock(PreviewTokenService.class);
         private final ToolExecutionIdempotencyRepository idempotencyRepository = mock(ToolExecutionIdempotencyRepository.class);
         private final ToolExecutionAuditEventRepository auditRepository = mock(ToolExecutionAuditEventRepository.class);
@@ -349,7 +349,7 @@ class CanvasAIGatewayApplyContractTest {
             ToolDescriptor descriptor = new ToolDescriptor(
                     TOOL, ToolExecutor.ActionType.UPDATE, ToolExecutor.RiskLevel.LOW,
                     Set.of(), Set.of("permission_admin"), Set.of(FactoryType.FACTORY),
-                    Set.of("canvas"), "1.0.0", false,
+                    Set.of("canvas"), "2.0.0", false,
                     ConfirmationPolicy.REQUIRED_FOR_EXECUTION, ApprovalPolicy.NOT_REQUIRED,
                     IdempotencyPolicy.REQUIRED_FOR_EXECUTION, DataClassification.INTERNAL,
                     Set.of(ToolExecutionSource.HTTP_CONTROLLER), ToolEgressPolicy.denyAll(),
@@ -398,6 +398,7 @@ class CanvasAIGatewayApplyContractTest {
             controller = new CanvasAIController(mock(ToolRegistry.class), mapper,
                     mock(DashScopeClient.class), mobile, gateway);
             ReflectionTestUtils.setField(controller, "previewTokenService", previewTokens);
+            wireBinding(controller, previewTokens, expiresAt);
 
             when(previewTokens.readBoundSnapshot(token, FACTORY, 7L)).thenReturn(Optional.of(
                     snapshot(token, digest, expiresAt)));
@@ -405,13 +406,13 @@ class CanvasAIGatewayApplyContractTest {
                     .token(token).factoryId(FACTORY).tenantId(FACTORY).userId(7L)
                     .intentCode("CANVAS_DIFF_123e4567-e89b-12d3-a456-426614174000")
                     .entityType("CANVAS_DIFF").entityId(TOOL).operation("UPDATE")
-                    .toolName(TOOL).descriptorVersion("1.0.0")
+                    .toolName(TOOL).descriptorVersion("2.0.0")
                     .executionMode(ToolExecutionMode.EXECUTE).commandDigest(digest)
                     .expiresAt(expiresAt).status(IntentPreviewToken.TokenStatus.PENDING)
                     .build();
             when(previewTokens.claimToken(token, FACTORY, 7L, digest))
                     .thenReturn(PreviewTokenService.ClaimResult.success(
-                            claimed, "claim-1", params));
+                            claimed, "claim-1", commandParameters(params)));
             when(previewTokens.resolveClaim(eq(token), eq("claim-1"), anyBoolean(), anyString()))
                     .thenReturn(true);
         }
@@ -442,12 +443,52 @@ class CanvasAIGatewayApplyContractTest {
         private Map<String, Object> diff() {
             return Map.of("tool", TOOL, "params", params,
                     "proof", Map.of("token", token, "commandDigest", digest,
-                            "descriptorVersion", "1.0.0"));
+                            "descriptorVersion", "2.0.0"));
         }
 
         private CanvasAIController.ApplyDiffsResult apply() {
             return controller.applyDiffs(FACTORY, "Bearer local-test", List.of(diff())).getData();
         }
+    }
+
+    private Map<String, Object> commandParameters(Map<String, Object> params) {
+        Map<String, Object> internal = new HashMap<>(params);
+        internal.put(com.cretas.aims.service.config.CanvasConfigPlanBindingService.PUBLIC_PARAMETERS, params);
+        internal.put(com.cretas.aims.service.config.CanvasConfigPlanBindingService.BINDING,
+                Map.of("factoryId", FACTORY, "tool", TOOL, "revision", "config:7",
+                        "targetStateDigest", "fixed-state-7", "targetState", Map.of()));
+        return internal;
+    }
+
+    private void wireBinding(CanvasAIController target, PreviewTokenService tokenService, LocalDateTime expiresAt) {
+        var binding = new com.cretas.aims.service.config.CanvasConfigPlanBindingService(
+                mock(com.cretas.aims.service.config.CanvasConfigStateReader.class), mapper);
+        ReflectionTestUtils.setField(target, "canvasConfigPlanBindingService", binding);
+        when(tokenService.readBoundExecution(anyString(), eq(FACTORY), eq(7L))).thenAnswer(invocation -> {
+            Map<String, Object> internal = commandParameters(Map.of("moduleCode", "inventory", "enabled", true));
+            String digest = ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "2.0.0",
+                    ToolExecutionMode.EXECUTE, mapper.valueToTree(internal));
+            return Optional.of(new PreviewTokenService.BoundTokenExecution(invocation.getArgument(0),
+                    FACTORY, FACTORY, 7L, TOOL, "2.0.0", ToolExecutionMode.EXECUTE,
+                    "fixture-parameters-hash", digest, "{}", IntentPreviewToken.TokenStatus.PENDING,
+                    expiresAt, internal));
+        });
+    }
+
+    @Test
+    void missingMandatoryBindingCannotReachGatewayEvenWithOtherwiseValidProof() {
+        ReflectionTestUtils.setField(controller, "canvasConfigPlanBindingService", null);
+        Map<String, Object> params = Map.of("moduleCode", "inventory", "enabled", true);
+        String token = "missing-binding-proof";
+        String digest = ToolCommandDigest.commandDigest(FACTORY, 7L, TOOL, "2.0.0",
+                ToolExecutionMode.EXECUTE, mapper.valueToTree(commandParameters(params)));
+        when(tokens.readBoundSnapshot(token, FACTORY, 7L)).thenReturn(Optional.of(snapshot(token, digest)));
+        var receipt = controller.applyDiffs(FACTORY, "Bearer local-test", List.of(Map.of(
+                "tool", TOOL, "params", params, "proof", Map.of("token", token,
+                        "commandDigest", digest, "descriptorVersion", "2.0.0")))).getData();
+        assertThat(receipt.items()).singleElement().extracting(CanvasAIController.ApplyDiffResult::status)
+                .isEqualTo("FAILURE");
+        verifyNoInteractions(gateway);
     }
 
     private PreviewTokenService.BoundTokenSnapshot snapshot(String token, String digest) {
@@ -458,13 +499,13 @@ class CanvasAIGatewayApplyContractTest {
             String token, String digest, LocalDateTime expiresAt) {
         return new PreviewTokenService.BoundTokenSnapshot(
                 "CANVAS_DIFF_123e4567-e89b-12d3-a456-426614174000", "CANVAS_DIFF", TOOL, "UPDATE",
-                TOOL, "1.0.0", ToolExecutionMode.EXECUTE, digest,
+                TOOL, "2.0.0", ToolExecutionMode.EXECUTE, digest,
                 expiresAt,
                 com.cretas.aims.entity.intent.IntentPreviewToken.TokenStatus.PENDING);
     }
 
     private ToolExecutionResult result(ToolExecutionStatus status, com.fasterxml.jackson.databind.JsonNode payload) {
-        return new ToolExecutionResult("request", TOOL, "1.0.0", "audit", "trace", status,
+        return new ToolExecutionResult("request", TOOL, "2.0.0", "audit", "trace", status,
                 payload, "gateway result", status == ToolExecutionStatus.IDEMPOTENT_REPLAY);
     }
 }

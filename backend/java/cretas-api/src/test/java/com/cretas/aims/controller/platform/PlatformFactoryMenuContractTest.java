@@ -79,6 +79,30 @@ class PlatformFactoryMenuContractTest {
     }
 
     @Test
+    void suppliedFactsComparisonIsConfigurableOnlyAsItsExactSchedulingLeaf() {
+        String path = "/scheduling/proposal-comparison";
+        FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("scheduling")
+                .moduleName("Scheduling").enabled(false)
+                .config(new HashMap<>(Map.of("unrelatedSetting", "keep"))).build();
+        when(repository.findByFactoryIdAndModuleIdAndDeletedAtIsNull("F001", "scheduling"))
+                .thenReturn(Optional.of(row));
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.update("F001", "scheduling", new PlatformFactoryMenuDTO.Update(true, List.of(path)));
+
+        assertThat(row.getConfig()).containsEntry("disabledMenuPaths", List.of(path))
+                .containsEntry("unrelatedSetting", "keep");
+        assertThat(row.getEnabled()).isFalse();
+        assertThatThrownBy(() -> service.update("F001", "system",
+                new PlatformFactoryMenuDTO.Update(true, List.of(path)))).hasMessageContaining("不受支持");
+        for (String invalid : List.of(path + "-extra", path + "/execute", path + "?admin=true")) {
+            assertThatThrownBy(() -> service.update("F001", "scheduling",
+                    new PlatformFactoryMenuDTO.Update(true, List.of(invalid)))).hasMessageContaining("不受支持");
+        }
+        verify(repository, times(1)).save(any());
+    }
+
+    @Test
     void workspacePathsStayConfigurableOnlyUnderTheirExactDashboardModule() {
         List<String> paths = List.of("/workspaces/overview", "/workspaces/exceptions",
                 "/workspaces/plans-approvals", "/workspaces/trace-review");

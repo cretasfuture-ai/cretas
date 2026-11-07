@@ -10,6 +10,10 @@ import com.cretas.aims.repository.config.CanvasDynamicFieldRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.annotation.Transactional;
+import com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock;
+import com.cretas.aims.exception.BusinessException;
 
 import java.util.List;
 import java.util.Map;
@@ -31,6 +35,9 @@ public class DynamicFieldController {
     private final CanvasDDLLogRepository ddlLogRepo;
     private final DynamicFieldService dynamicFieldService;
     private final DynamicTableService dynamicTableService;
+
+    @Autowired
+    private FactoryFeatureMenuWriteLock featureWriteLock;
 
     // Round 5 Fix SEC-3: strict identifier pattern for SQL-bound names
     private static final java.util.regex.Pattern IDENTIFIER_PATTERN =
@@ -65,14 +72,21 @@ public class DynamicFieldController {
     @SuppressWarnings("unchecked")
     @PostMapping("/config/v2/dynamic-fields")
     @RequireRole({"factory_super_admin", "permission_admin"})
+    @Transactional
     public ResponseEntity<CanvasDynamicField> createDynamicField(
             @PathVariable String factoryId,
             @RequestBody Map<String, Object> body) {
+        featureWriteLock.lock(factoryId);
         // Round 5 Fix SEC-3: validate identifiers before using as SQL column name
         String moduleCode = (String) body.get("moduleCode");
         String fieldCode = (String) body.get("fieldCode");
         validateModuleCode(moduleCode);
         validateIdentifier(fieldCode, "fieldCode");
+        if (fieldRepo.findByFactoryIdAndModuleCodeAndFieldCode(factoryId, moduleCode, fieldCode).isPresent()) {
+            throw new BusinessException(409, "本厂该模块已存在同名动态字段，请刷新后编辑已有字段")
+                    .withHint("请刷新当前模块的字段列表，编辑已有同名字段；如需新字段，请更换字段编码。")
+                    .withHintTarget("fieldCode");
+        }
 
         CanvasDynamicField field = CanvasDynamicField.builder()
             .factoryId(factoryId)
@@ -93,10 +107,12 @@ public class DynamicFieldController {
     @SuppressWarnings("unchecked")
     @PutMapping("/config/v2/dynamic-fields/{fieldCode}")
     @RequireRole({"factory_super_admin", "permission_admin"})
+    @Transactional
     public ResponseEntity<CanvasDynamicField> updateDynamicField(
             @PathVariable String factoryId,
             @PathVariable String fieldCode,
             @RequestBody Map<String, Object> body) {
+        featureWriteLock.lock(factoryId);
         String moduleCode = (String) body.get("moduleCode");
         CanvasDynamicField existing = fieldRepo.findByFactoryIdAndModuleCodeAndFieldCode(
             factoryId, moduleCode, fieldCode).orElseThrow();
@@ -110,10 +126,12 @@ public class DynamicFieldController {
 
     @DeleteMapping("/config/v2/dynamic-fields/{fieldCode}")
     @RequireRole({"factory_super_admin", "permission_admin"})
+    @Transactional
     public ResponseEntity<Void> disableDynamicField(
             @PathVariable String factoryId,
             @PathVariable String fieldCode,
             @RequestParam String moduleCode) {
+        featureWriteLock.lock(factoryId);
         CanvasDynamicField existing = fieldRepo.findByFactoryIdAndModuleCodeAndFieldCode(
             factoryId, moduleCode, fieldCode).orElseThrow();
         existing.setStatus("DISABLED");
@@ -155,10 +173,12 @@ public class DynamicFieldController {
      */
     @PostMapping("/config/v2/dynamic-fields/{fieldCode}/change-type")
     @RequireRole({"factory_super_admin"})
+    @Transactional
     public ResponseEntity<?> changeFieldType(
             @PathVariable String factoryId,
             @PathVariable String fieldCode,
             @RequestBody Map<String, Object> body) {
+        featureWriteLock.lock(factoryId);
         String moduleCode = (String) body.get("moduleCode");
         String newType = (String) body.get("newType");
         if (newType == null) {

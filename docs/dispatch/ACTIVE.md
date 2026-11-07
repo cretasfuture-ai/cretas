@@ -18,6 +18,9 @@
 
 
 
+
+
+
 - `CLAUDE-TASKS-ACCEPTANCE-20261105` — `blocked` — Owner `01a1a954/root` — Base `898877a2a981159291b16c523f99f822d7c4a2f0` — 软件修复/发布/实收47通过，2原成本豁免；仅S6-10业务代表与QA本人试点签署未提供，禁止代签。代码scope/生产锁/设备均释放；证据及对象保留见archive/2026-11-06-tasks-business-final-closeout.md。
 
 
@@ -164,6 +167,7 @@
 - LLM 运营：2026-09-13 aistore 续期换 key，以及 2026-09-04/2026-11-15 复审需要 Owner/供应商控制台动作。
 - 凭证：旧 Aliyun 主账号 AK、旧模型供应商 key、Mall 微信长期凭证仍需各控制台吊销/重置并验证失效。
 - F006 产品/架构：taxonomy suggestion、统一收料来源、AP 付款完整边界仍是无执行者 backlog；需求驱动收料与客户渐进创建保留 scope，后者须先裁定必填规则。
+
 
 ## 维护规则
 

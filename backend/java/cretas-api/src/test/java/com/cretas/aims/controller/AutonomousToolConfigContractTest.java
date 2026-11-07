@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Optional;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -39,7 +40,7 @@ class AutonomousToolConfigContractTest {
             new DynamicSchedulerService(schedulerRepo, registry, mock(com.cretas.aims.engine.AutonomousToolRunner.class), new ObjectMapper()), new SandboxedSpelEvaluator(),
             grantIssuer);
     private final TriggerChainController chains = new TriggerChainController(mock(FactoryToolConfigRepository.class),
-            mock(FactorySkillConfigRepository.class), chainRepo);
+            mock(FactorySkillConfigRepository.class), chainRepo, mock(FactoryFeatureMenuWriteLock.class));
 
     @BeforeEach void setup() throws Exception {
         ToolExecutor read = mock(ToolExecutor.class);

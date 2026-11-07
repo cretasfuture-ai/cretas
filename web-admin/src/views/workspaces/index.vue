@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore, type ModuleName } from '@/store/modules/permission';
 import { useNavigationVisibilityStore } from '@/store/modules/navigationVisibility';
+import DecisionHistoryPanel from './components/DecisionHistoryPanel.vue';
 import {
   isEligibleFactoryWorkspaceContext,
   resolveWorkspaceFactoryTypeFromUser,
@@ -62,6 +63,13 @@ const visibilityContext = computed<WorkspaceVisibilityContext>(() => ({
 const workspace = computed(() => workspaceByPath(route.path));
 const isEligible = computed(() => isEligibleFactoryWorkspaceContext(visibilityContext.value));
 const navigationStatus = computed(() => navigationVisibility.status);
+const canReviewHistory = computed(() => (
+  route.path === '/workspaces/trace-review'
+  && isEligible.value
+  && navigationStatus.value === 'ready'
+  && ['factory_super_admin', 'permission_admin'].includes(authStore.currentRole)
+  && permissionStore.canAccess('system')
+));
 const visibleLinks = computed(() => {
   if (!workspace.value || !isEligible.value || navigationStatus.value !== 'ready') return [];
   return visibleWorkspaceLinks(workspace.value, visibilityContext.value);
@@ -122,6 +130,11 @@ function openLink(path: string): void {
           description="当前权限范围内暂无可用入口"
         />
       </section>
+      <DecisionHistoryPanel
+        v-if="canReviewHistory"
+        :factory-id="authStore.factoryId || ''"
+        :role="authStore.currentRole"
+      />
     </template>
   </main>
 </template>

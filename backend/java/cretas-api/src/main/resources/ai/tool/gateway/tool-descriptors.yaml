@@ -6170,7 +6170,7 @@ descriptors:
     supportsPreview: false
     requiresPermission: true
     requiredPermissions: []
-    version: "1.0.0"
+    version: "2.0.0"
     domainTags: ["canvas"]
     allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
@@ -6411,7 +6411,7 @@ descriptors:
     supportsPreview: false
     requiresPermission: true
     requiredPermissions: []
-    version: "1.0.0"
+    version: "2.0.0"
     domainTags: ["canvas"]
     allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
@@ -6612,7 +6612,7 @@ descriptors:
     supportsPreview: false
     requiresPermission: true
     requiredPermissions: []
-    version: "1.0.0"
+    version: "2.0.0"
     domainTags: ["canvas"]
     allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
@@ -6653,7 +6653,7 @@ descriptors:
     supportsPreview: false
     requiresPermission: true
     requiredPermissions: []
-    version: "1.0.0"
+    version: "2.0.0"
     domainTags: ["canvas"]
     allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
@@ -6674,7 +6674,7 @@ descriptors:
     supportsPreview: false
     requiresPermission: true
     requiredPermissions: []
-    version: "1.0.0"
+    version: "2.0.0"
     domainTags: ["canvas"]
     allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
@@ -6715,7 +6715,7 @@ descriptors:
     supportsPreview: false
     requiresPermission: true
     requiredPermissions: []
-    version: "1.0.0"
+    version: "2.0.0"
     domainTags: ["canvas"]
     allowedRoles: ["factory_super_admin", "permission_admin"]
     overrideFlags:
