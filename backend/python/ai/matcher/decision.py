@@ -34,7 +34,7 @@ SPECIAL_OPTIONS = [
     {"intent_code": "NONE", "intent_name": "以上都不是",
      "description": "这句话和上面的功能都对不上，或者用户明确说不要做、先别做"},
     {"intent_code": "CLARIFY", "intent_name": "需要先问清楚",
-     "description": "业务目标或对象类型仍不确定，无法区分候选功能。已明确功能但缺少具体对象ID、日期等执行参数时，由后续resolver补槽，不等于功能路由不明。"},
+     "description": "业务目标、对象类型或实际查询集合口径仍不确定，无法区分候选能力。已明确功能与口径但缺少具体对象ID、日期等执行参数时，由后续resolver补槽，不等于功能路由不明。"},
 ]
 _SPECIAL_KEYS = {"NONE": NONE_KEY, "CLARIFY": CLARIFY_KEY}
 INSTR = "用户这句话应该交给下面哪个系统功能来处理？"
@@ -68,7 +68,7 @@ ROUTING_BOUNDARY_RULES = (
     "用户改变目标、对象类型或查询范围时，按本轮目标重新选择，不能仅因历史意图相同就继承。"
     "集合查询与一笔确定对象的详情是不同范围；上下文已有真实结果引用且本轮请求该对象详情时，应选详情功能，"
     "不能把详情当作再次列出集合。具体对象不唯一时仍由resolver定向确认，不得猜ID或任取第一条。"
-    "只有业务目标/功能类型本身无法确定时才选择CLARIFY；所有候选都不承接当前目标时选择NONE。"
+    "业务目标、功能类型或实际查询集合差异无法确定时选择CLARIFY；所有候选都不承接当前目标时选择NONE。"
     "历史只作上下文证据，不能沿用历史取消、历史授权或把候选ID当执行许可。"
     "只读任务COMPLETED表示查询完成，其真实结果仍可被追问，不等于已提交了写业务。"
     "resultProvenance=SERVER_TOOL_RESULT表示结果引用来自服务器实际Tool；parameterSource只描述旧参数来源，"
@@ -76,6 +76,28 @@ ROUTING_BOUNDARY_RULES = (
     "resultSummary.returnedCount是上次实际返回的行数，totalCount是总数，referenceCount只表示可用引用数量。"
     "referencesComplete=true且returnedCount=1才说明上次返回了唯一对象；只有一个引用不等于只有一条结果。"
 )
+
+# Separate a related function choice from whether its query-set basis was
+# actually specified. Reuses the existing decision slot, not another agent or
+# task state. Tool declarations are evidence, never permissions or defaults.
+SCOPE_AMBIGUITY_RULES = (
+    "当前问题只判断查询集合是否仍有歧义，不选择更常见的功能。真实能力声明给出不同集合。"
+    "是否存在至少两个不同集合都能解释本轮需求，而用户没有表达区分它们的字段或固定条件，也没有有效任务已确认口径？"
+    "共有的业务称呼不能证明用户指定数据库状态或某个固定条件。不能靠常识、候选排序或默认替用户选口径。"
+    "两个集合必须分别是用户实际表达的同一业务概念的合理完整解释；不能仅因一方是另一方的子集就算歧义，"
+    "也不能添加用户未表达的其他筛选概念来制造第二种解释。"
+    "若本轮明确区分、或同一已确认任务只是翻页/重查，条件不成立。无关业务或只有普通缺参时也不成立。"
+)
+
+
+def build_scope_messages(query, role, options, history=None):
+    declarations = [{"tool": row.get("tool_name"),
+                     "description": row.get("_read_capability", {}).get("clarification", "")}
+                    for row in options]
+    evidence = build_decision_input(query, role, history)
+    evidence += "\n真实查询集合声明：" + json.dumps(declarations, ensure_ascii=False)
+    return [{"role": "system", "content": SCOPE_AMBIGUITY_RULES},
+            {"role": "user", "content": evidence}]
 
 # 角色码 -> (称呼, 说明)。说明进提示词, 帮模型理解「同一句话不同人说意思不同」。
 ROLE_LABELS: Dict[str, tuple] = {
@@ -309,6 +331,20 @@ class DecisionMatcher:
             return parse_request_purpose(content)
         except Exception as ex:  # noqa: BLE001
             logger.warning("request purpose unavailable: %s",str(ex)[:200])
+            return None
+
+    async def scope_ambiguity(self, query, role, options, history=None):
+        """Probability of ambiguous query basis; never a replacement intent score."""
+        messages = build_scope_messages(query, role, options, history)
+        messages[0]["content"] += " 条件成立选A，不成立选B。只输出一个选项字母。"
+        messages.append({"role": "assistant", "content": "答案：", "partial": True})
+        try:
+            body = await self._call({"messages": messages, "max_tokens": 1,
+                                     "logprobs": True, "top_logprobs": 5},
+                                    body_validator=lambda body: None if letter_probs(body, 2) else "no_scope_probability")
+            return (letter_probs(body, 2) or {}).get("A")
+        except Exception as ex:
+            logger.warning("query scope unavailable: %s", str(ex)[:200])
             return None
 
     async def shortlist(self, query: str, role: Optional[str], visible: List[Dict[str, Any]],

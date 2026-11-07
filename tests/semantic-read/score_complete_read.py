@@ -36,13 +36,15 @@ for channel in ['normal','sse']:
    params_ok=(dict(page=page,size=size)==expected and (data.get('queryConditions') or {}).get('basis')=='EXPIRY_DATE') if expiry_scope else dict(page=page,size=size,status=status)==expected
    selected=response.get('intentCode');tool=(catalog.get(selected) or {}).get('toolName')
    carrier_unknown=response.get('status')=='FAILED' and tool is not None and tool not in wired
-   success=bool(response.get('status')=='SUCCESS' and goal_ok and params_ok and data_ok and not drift)
-   category='PASS' if success else 'UNKNOWN_DATA_DRIFT' if drift else 'UNKNOWN_CARRIER_OUTSIDE_REGISTERED_SCOPE' if carrier_unknown else 'CLARIFICATION' if response.get('status') in ['NEED_MORE_INFO','NEED_CLARIFICATION'] else 'PERMISSION_DENIED' if response.get('status') in ['DENIED','NO_PERMISSION'] else 'GOAL_OR_CAPABILITY' if not goal_ok else 'PARAMETERS' if not params_ok else 'BUSINESS_RESULT_OR_EXECUTION'
+   evidence_errors=row.get('evaluation_model_evidence',{}).get('errors') or []
+   auth_ok=bool(row.get('local_test_auth_valid_before') and row.get('local_test_auth_valid_after'))
+   success=bool(response.get('status')=='SUCCESS' and goal_ok and params_ok and data_ok and not drift and not evidence_errors and auth_ok and row.get('http_status')==200)
+   category='PASS' if success else 'UNKNOWN_EVALUATION_DEPENDENCY' if evidence_errors else 'UNKNOWN_LOCAL_AUTH' if not auth_ok else 'UNKNOWN_DATA_DRIFT' if drift else 'UNKNOWN_CARRIER_OUTSIDE_REGISTERED_SCOPE' if carrier_unknown else 'CLARIFICATION' if response.get('status') in ['NEED_MORE_INFO','NEED_CLARIFICATION'] else 'PERMISSION_DENIED' if response.get('status') in ['DENIED','NO_PERMISSION'] else 'GOAL_OR_CAPABILITY' if not goal_ok else 'PARAMETERS' if not params_ok else 'BUSINESS_RESULT_OR_EXECUTION'
    rows.append(dict(case_id=plan['id'],turn=i,channel=channel,domain=domain,basis=gold.get('basis','STATUS'),input=gold['input'],expected=expected,
        status=response.get('status'),intent=selected,tool=tool,goal_correct=goal_ok,parameters_correct=params_ok,
        real_result_correct=data_ok,task_success=success,carrier_unknown=carrier_unknown,category=category,
        observed=dict(status=status,page=page,size=size,total=total,rows=len(ids)),oracle_count=len(pre),data_drift=drift,
-       parameter_sources=row.get('sources'),recognition=row.get('recognition'),latency_ms=row.get('latency_ms'),
+       evaluation_errors=evidence_errors,parameter_sources=row.get('sources'),recognition=row.get('recognition'),latency_ms=row.get('latency_ms'),
        returned_id_hashes=[hashlib.sha256(str(v).encode()).hexdigest()[:16] for v in ids]))
 for r in rows:
  previous=next((v for v in rows if v['case_id']==r['case_id'] and v['channel']==r['channel'] and v['turn']==r['turn']-1),None)
@@ -69,6 +71,6 @@ for plan in plans:
 result=dict(kind='ALREADY_OPENED_DEVELOPMENT_REGRESSION_ACTUAL_BUSINESS_READS_NOT_INDEPENDENT',channels=summaries,
     same_dialogue_channel_pairs=len(parity),same_semantic_outcomes=sum(r['same_semantic_outcome'] for r in parity),both_channels_successful=sum(r['both_succeeded'] for r in parity),
     denominator_policy='All turns and channel-conversations retained. Unknown carrier and clarification are not success. Model inference is stochastic; channel differences alone do not prove an entry implementation defect.',
-    model_only_failure_claim=False,independent_gold=False,local_classifier_live=False,training=False,deploy=False,turns=rows,parity=parity)
+    model_only_failure_claim=False,independent_gold=False,local_classifier_live=load(a.output/'run-manifest.json').get('local_runtime',{}).get('enabled',False),training=False,deploy=False,turns=rows,parity=parity)
 (a.output/'complete-read-score.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
 print(json.dumps({k:({ch:{m:v for m,v in s.items() if m!='tasks'} for ch,s in value.items()} if k=='channels' else value) for k,value in result.items() if k not in ['turns','parity']},ensure_ascii=False))

@@ -3,6 +3,7 @@ import asyncio
 import importlib.util
 import pathlib
 import types
+import pytest
 
 from ai.matcher.decision import DecisionMatcher, SPECIAL_OPTIONS, build_choice_messages, NONE_KEY, CLARIFY_KEY
 
@@ -39,3 +40,24 @@ def test_raw_native_probabilities_and_none_clarify_are_preserved_with_one_call()
     assert asyncio.run(dec.choose('查询','operator',ROWS[:1]))=={'0':1.}
     assert asyncio.run(dec.choose('查询','operator',[])) is None
     assert len(calls)==1
+
+
+@pytest.mark.parametrize('answer',[{'type':'predicate','name':'scope_ambiguous','probability':.83},
+    {'type':'predicate','name':'scope_ambiguous','probability':True},
+    {'type':'predicate','name':'scope_ambiguous','probability':float('nan')},
+    {'type':'predicate','name':'scope_ambiguous','probability':1.1},
+    {'type':'refusal','name':'scope_ambiguous'}])
+def test_scope_predicate_uses_the_core_prompt_and_keeps_native_probability_or_unknown(answer):
+    from ai.matcher.decision import build_scope_messages
+    rows=[dict(intent_code='scope-a',tool_name='a',_read_capability={'clarification':'定义甲'}),
+          dict(intent_code='scope-b',tool_name='b',_read_capability={'clarification':'定义乙'})]
+    calls=[]
+    def ask(payload,endpoint,slot):
+        calls.append((payload,endpoint,slot));return {'answers':[answer]}
+    transport=types.SimpleNamespace(LiveDecision=DecisionMatcher,ask=ask,log=lambda *args:None)
+    out=asyncio.run(wire.decision_type(transport)().scope_ambiguity('当前问题','operator',rows))
+    assert out==.83 if answer.get('probability')==.83 else out is None
+    expected=build_scope_messages('当前问题','operator',rows)
+    assert calls[0][0]['input']==expected[1]['content']
+    assert calls[0][0]['questions'][0]['instructions']==expected[0]['content']
+    assert calls[0][1:]==('decisions','query-scope') and len(calls)==1

@@ -52,15 +52,36 @@ class ReadPageEvidenceContractTest {
     @Test void sourceContractPreservesExplicitCorrectionAndFieldSpellingsWithoutChoosingItsMeaning() {
         String input="从第2页改到第4页";var options=ReadPageEvidence.from(input);
         assertThat(options.allows(input,"第4页")).isTrue();
-        assertThat(options.allows(input,input)).isTrue();
+        assertThat(options.values()).contains("第2页","第4页").doesNotContain(input);
+        assertThat(options.allows(input,input)).isFalse();
         for(String input2:List.of("页码4","page 4","翻到4页","看4页"))
             assertThat(ReadPageEvidence.from(input2).allows(input2,input2)).isTrue();
+    }
+
+    @Test void pageEvidenceDoesNotOfferAWholePageAndSizeSentence() {
+        String input="按第1页每页4条";var options=ReadPageEvidence.from(input);
+        assertThat(options.values()).contains("按第1页","第1页").doesNotContain(input);
+        assertThat(options.allows(input,"第1页")).isTrue();
+        assertThat(options.allows(input,input)).isFalse();
+    }
+
+    @Test void multiNumberRelativeActionKeepsOnlyTheNarrowPageFragment() {
+        String input="再往后翻一页每页4条";var options=ReadPageEvidence.from(input);
+        assertThat(options.values()).contains("再往后翻一页","一页").doesNotContain(input);
+        assertThat(options.allowsRelative(input,"再往后翻一页")).isTrue();
+        assertThat(options.allowsRelative(input,"一页")).isFalse();
+        assertThat(options.allows(input,"一页")).isTrue();
+        assertThat(options.allows(input,input)).isFalse();
     }
 
     @Test void relativeEvidenceMustBeAWholeCurrentPhraseAndUnchangedNeedsNoEvidence() throws Exception {
         var options=ReadPageEvidence.from("再往后翻一页");
         assertThat(options.allows("再往后翻一页","再往后翻一页")).isTrue();
         assertThat(options.allows("再往后翻一页","一")).isFalse();
+        assertThat(options.allowsRelative("再往后翻一页","再往后翻一页")).isTrue();
+        assertThat(options.allowsRelative("再往后翻一页","一页")).isFalse();
+        assertThat(ReadPageEvidence.from("继续往后翻页").allows("继续往后翻页","继续往后翻页")).isTrue();
+        assertThat(ReadPageEvidence.from("继续往后翻页").allowsRelative("继续往后翻页","继续往后翻页")).isTrue();
         try(var h=new SalesRankingSemanticContractTest.Harness()) {
             var request=previous(h,"条件不变再看一次");SemanticReadTurnResolverContractTest.model(h,"CONTINUE",Map.of());
             assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
@@ -77,6 +98,29 @@ class ReadPageEvidenceContractTest {
 
     @Test void dynamicSchemaIsRedactedWithTheInputAndRestoredBeforeLiteralValidation() throws Exception {
         try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            String input="质检员赵铁柱13912345678要再往后翻页";var request=previous(h,input);var sales=mock(SalesService.class);
+            var client=mock(DashScopeClient.class);
+            when(client.chatWithTools(anyString(),anyString(),anyList())).thenAnswer(call->{
+                List<Tool> tools=call.getArgument(2);
+                String serialized=h.mapper.writeValueAsString(tools);
+                assertThat(serialized).doesNotContain("赵铁柱","铁柱","13912345678");
+                assertThat((String)call.getArgument(1)).doesNotContain("赵铁柱","13912345678");
+                Map<?,?> fields=(Map<?,?>)tools.get(0).getFunction().getParameters().get("properties");
+                List<?> values=(List<?>)((Map<?,?>)fields.get("pageEvidence")).get("enum");
+                String evidence=values.stream().map(String::valueOf).filter(s->s.contains("再往后翻页")).findFirst().orElseThrow();
+                assertThat(evidence).contains("[电话");
+                return response(h,Map.of("action","CONTINUE","dateScope","UNCHANGED","parameters",Map.of(),
+                        "message","继续查询","pageAction","NEXT","pageEvidence",evidence));
+            });
+            when(client.hasToolCalls(any())).thenReturn(true);ReflectionTestUtils.setField(h.dispatch,"dashScopeClient",client);
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
+                    SemanticReadTurnResolverContractTest.bind(h,new OrderListTool(sales),"ORDER_LIST"))).isNull();
+            assertThat(request.getSemanticParameters()).containsEntry("page",3);verifyNoInteractions(sales);
+        }
+    }
+
+    @Test void redactedSchemaKeepsOnlyTheSingleNumberPageFragmentForPrivateMultiNumberInput() throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
             String input="质检员赵铁柱13912345678要再往后翻一页";var request=previous(h,input);var sales=mock(SalesService.class);
             var client=mock(DashScopeClient.class);
             when(client.chatWithTools(anyString(),anyString(),anyList())).thenAnswer(call->{
@@ -86,15 +130,18 @@ class ReadPageEvidenceContractTest {
                 assertThat((String)call.getArgument(1)).doesNotContain("赵铁柱","13912345678");
                 Map<?,?> fields=(Map<?,?>)tools.get(0).getFunction().getParameters().get("properties");
                 List<?> values=(List<?>)((Map<?,?>)fields.get("pageEvidence")).get("enum");
-                String evidence=values.stream().map(String::valueOf).filter(s->s.contains("再往后翻一页")).findFirst().orElseThrow();
-                assertThat(evidence).contains("[电话");
+                assertThat(values.stream().map(String::valueOf).toList()).contains("一页")
+                        .noneMatch(value->value.contains("再往后翻一页"));
+                assertThat(values).allSatisfy(value->assertThat(String.valueOf(value))
+                        .doesNotContain("赵铁柱","铁柱","13912345678"));
                 return response(h,Map.of("action","CONTINUE","dateScope","UNCHANGED","parameters",Map.of(),
-                        "message","继续查询","pageAction","NEXT","pageEvidence",evidence));
+                        "message","继续查询","pageAction","NEXT","pageEvidence","一页"));
             });
             when(client.hasToolCalls(any())).thenReturn(true);ReflectionTestUtils.setField(h.dispatch,"dashScopeClient",client);
-            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
-                    SemanticReadTurnResolverContractTest.bind(h,new OrderListTool(sales),"ORDER_LIST"))).isNull();
-            assertThat(request.getSemanticParameters()).containsEntry("page",3);verifyNoInteractions(sales);
+            var result=h.dispatch.resolveReadTurn("F006",7L,request,
+                    SemanticReadTurnResolverContractTest.bind(h,new OrderListTool(sales),"ORDER_LIST"));
+            assertThat(result.getStatus()).isEqualTo("NEED_MORE_INFO");
+            assertThat(request.getSemanticParameters()).isNull();verifyNoInteractions(sales);
         }
     }
 

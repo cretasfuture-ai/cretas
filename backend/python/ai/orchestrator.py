@@ -97,6 +97,24 @@ def _with_task_context(history, context):
     return turns
 
 
+def _scope_peer_rows(context, by_code, selected_code):
+    """Actual visible, differently defined READ scopes sharing a declared domain."""
+    selected = by_code.get(selected_code, {})
+    caps = {cap['tool']: cap for cap in _trusted_read_capabilities(context)
+            if cap.get('clarification') and cap.get('domains')}
+    seed = caps.get(selected.get('tool_name'))
+    if seed is None:
+        return []
+    domains = set(seed['domains'])
+    rows = [row for row in by_code.values() if row.get('tool_name') in caps
+            and domains.intersection(caps[row['tool_name']]['domains'])]
+    # Aliases bound to the same Tool do not create another query-set meaning.
+    unique = {selected['tool_name']: selected}
+    for row in rows:
+        unique.setdefault(row['tool_name'], row)
+    return list(unique.values()) if len(unique) > 1 else []
+
+
 def _context_read_candidate(context, by_code):
     """Recall hint from one owned read task; never a selected label or permission."""
     if (not isinstance(context, dict) or context.get("contextStatus") != "PRESENT"
@@ -275,7 +293,8 @@ class Orchestrator:
             if code and code in by_code:
                 registry_code = code
             route_reviewed = (factoryId, (businessType or "").upper(), _key, code) in snap.standalone_routes
-            if code and code in by_code and standalone and route_reviewed:
+            if (code and code in by_code and standalone and route_reviewed
+                    and not _scope_peer_rows(task_context, by_code, code)):
                 row = by_code[code]
                 timing["registryHit"] = 1
                 timing["totalMs"] = int((time.time() - t0) * 1000)
@@ -415,14 +434,41 @@ class Orchestrator:
         force_clarify = special and p_clarify > top_real and p_clarify >= p_none
         if force_clarify:
             timing["decisionClarify"] = 1
+        scope_rows = (_scope_peer_rows(task_context, by_code, ranked[0][0] if ranked else None)
+                      if top_real >= self.config.decision_auto_threshold else [])
+        if scope_rows and not force_clarify:
+            scope_started = time.time()
+            check_scope = getattr(self.decision_matcher, 'scope_ambiguity', None)
+            try:
+                scope_probability = (await check_scope(query, role, scope_rows, history)) if check_scope else None
+            except Exception as exc:
+                logger.warning('query scope check failed: %s', type(exc).__name__)
+                scope_probability = None
+            timing['queryScopeMs'] = int((time.time() - scope_started) * 1000)
+            valid_scope = (not isinstance(scope_probability, bool) and isinstance(scope_probability, (int, float))
+                           and 0 <= scope_probability <= 1)
+            if valid_scope:
+                timing['queryScopeAmbiguousP'] = round(scope_probability * 1000)
+            # A predicate is binary: execution needs sufficiently clear evidence
+            # that its ambiguity condition is false. Keep the existing configured
+            # auto threshold for this additional gate; uncertainty also clarifies.
+            # No predicate score replaces or increases an intent probability.
+            scope_resolved = valid_scope and 1 - scope_probability >= self.config.decision_auto_threshold
+            if not scope_resolved:
+                force_clarify = True
+                timing['queryScopeClarify' if valid_scope else 'queryScopeUnavailable'] = 1
+                # All choices are existing visible bindings. Retain raw decision
+                # probabilities; unscored peers have no model score, not a boost.
+                ranked = sorted([(row['intent_code'], probs.get(row['intent_code'])) for row in scope_rows],
+                                key=lambda pair: -(pair[1] if pair[1] is not None else -1))
         candidates = []
         for i, (code, p) in enumerate(ranked[:5]):
-            if i >= 2 and p < 0.03:  # 澄清按钮至少两个, 其余只留有分量的
+            if i >= 2 and (p is None or p < 0.03):  # 澄清按钮至少两个, 其余只留有分量的
                 break
             row = by_code[code]
             candidates.append(CandidateIntentDto(
                 intentCode=code, intentName=row.get("intent_name") or code,
-                intentCategory=row.get("intent_category"), confidence=round(float(p), 4),
+                intentCategory=row.get("intent_category"), confidence=round(float(p), 4) if p is not None else None,
                 matchMethod=MatchMethod.LLM, description=row.get("description"),
             ))
         timing["totalMs"] = int((time.time() - t0) * 1000)

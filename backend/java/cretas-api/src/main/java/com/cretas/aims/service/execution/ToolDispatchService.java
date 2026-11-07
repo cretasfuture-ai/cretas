@@ -325,7 +325,7 @@ public class ToolDispatchService {
                 String evidence = turn.get("pageEvidence") instanceof String s ? s.trim() : "";
                 if (!Set.of("CONTINUE", "CORRECT").contains(action) || evidence.isBlank()
                         || !sentPageEvidence.contains(wireTurn.get("pageEvidence"))
-                        || !request.getUserInput().contains(evidence) || !pageEvidenceOptions.allows(request.getUserInput(), evidence) || !properties.containsKey("page")
+                        || !request.getUserInput().contains(evidence) || !pageEvidenceOptions.allowsRelative(request.getUserInput(), evidence) || !properties.containsKey("page")
                         || !(merged.get("page") instanceof Number priorPage) || priorPage.doubleValue() != priorPage.longValue()
                         || priorPage.longValue() < 1 || priorPage.longValue() >= Integer.MAX_VALUE)
                     return readTurnReply("NEED_MORE_INFO", "缺少可核验的当前页码或翻页依据，请明确要看的页码。");

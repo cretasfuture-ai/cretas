@@ -12,6 +12,7 @@ import random
 
 from ai.matcher.decision import (
     LETTERS, SPECIAL_OPTIONS, NONE_KEY, CLARIFY_KEY, build_choice_messages, intent_text,
+    build_scope_messages,
 )
 
 
@@ -40,6 +41,19 @@ def choice_plan(query, role, options, history, special_options, k):
 
 def decision_type(transport):
     class PromptContractDecision(transport.LiveDecision):
+        async def scope_ambiguity(self, query, role, options, history=None):
+            messages = build_scope_messages(query, role, options, history)
+            body = await asyncio.to_thread(transport.ask, dict(model='gpt-6-luna', input=messages[1]['content'],
+                questions=[dict(type='predicate', name='scope_ambiguous', instructions=messages[0]['content'])]),
+                'decisions', 'query-scope')
+            answers = [a for a in body.get('answers', []) if a.get('name') == 'scope_ambiguous']
+            if len(answers) != 1 or answers[0].get('type') != 'predicate':
+                return None
+            probability = answers[0].get('probability')
+            if isinstance(probability, bool) or not isinstance(probability, (int, float)) or not math.isfinite(probability):
+                return None
+            return probability if 0 <= probability <= 1 else None
+
         async def choose(self, query, role, options, history=None, special_options=False):
             plan = choice_plan(query,role,options,history,special_options,self.k)
             if plan is None:
