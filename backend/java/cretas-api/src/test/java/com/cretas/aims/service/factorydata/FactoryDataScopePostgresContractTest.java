@@ -438,14 +438,11 @@ class FactoryDataScopePostgresContractTest {
                 + "INSERT INTO activity_events (factory_id, event) VALUES ('" + fa + "', 'login'), ('" + fa + "', 'view'), ('" + fb + "', 'B-SECRET');"
                 + "INSERT INTO notes (id, author_id, body) VALUES (1, 1, 'platform note');"
                 + "INSERT INTO platform_data_access_log (id, target_factory_id, path) VALUES (1, '" + fa + "', '/x');"
-                + "INSERT INTO backup_sales_orders_20260801 (factory_id, note) VALUES ('" + fa + "', 'old');"
-                + "CREATE TABLE IF NOT EXISTS flyway_schema_history (installed_rank int, version varchar(50), description varchar(200),"
-                + " type varchar(20), script varchar(200), checksum int, installed_by varchar(100), installed_on timestamp, execution_time int, success boolean);");
+                + "INSERT INTO backup_sales_orders_20260801 (factory_id, note) VALUES ('" + fa + "', 'old');");
         exec(smartbi, "SET search_path = " + schema + ";"
                 + "INSERT INTO smart_bi_uploads (id, factory_id, file_name) VALUES (1, '" + fa + "', 'A-UPLOAD'), (2, '" + fb + "', 'B-UPLOAD');"
                 + "INSERT INTO smart_bi_field_defs (id, upload_id, name) VALUES (1, 1, 'qty'), (2, 1, 'amount'), (3, 2, 'B-UPLOAD-FIELD');"
-                + "INSERT INTO training_consent (factory_id, consent_scope) VALUES ('" + fa + "', 'private');"
-                + "CREATE TABLE IF NOT EXISTS smartbi_migrations (filename varchar(100), version varchar(50), checksum integer, applied_at timestamptz, applied_by varchar(100), duration_ms integer);");
+                + "INSERT INTO training_consent (factory_id, consent_scope) VALUES ('" + fa + "', 'private');");
     }
 
     static String mainSchema(String s) {
@@ -470,7 +467,9 @@ class FactoryDataScopePostgresContractTest {
                 + "CREATE TABLE reviews (id bigint PRIMARY KEY, factory_id varchar(64),"
                 + "  reviewer_id bigint REFERENCES users(id) ON DELETE SET NULL);"
                 + "CREATE TABLE platform_data_access_log (id bigint PRIMARY KEY, target_factory_id varchar(64), path text);"
-                + "CREATE TABLE backup_sales_orders_20260801 (factory_id varchar(64), note text);";
+                + "CREATE TABLE backup_sales_orders_20260801 (factory_id varchar(64), note text);"
+                + "CREATE TABLE flyway_schema_history (installed_rank int, version varchar(50), description varchar(200),"
+                + " type varchar(20), script varchar(200), checksum int, installed_by varchar(100), installed_on timestamp, execution_time int, success boolean);";
     }
 
     static String smartbiSchema(String s) {
@@ -478,7 +477,8 @@ class FactoryDataScopePostgresContractTest {
                 + "CREATE TABLE smart_bi_uploads (id bigint PRIMARY KEY, factory_id varchar(64), file_name text);"
                 + "CREATE TABLE smart_bi_field_defs (id bigint PRIMARY KEY,"
                 + "  upload_id bigint REFERENCES smart_bi_uploads(id) ON DELETE CASCADE, name text);"
-                + "CREATE TABLE training_consent (factory_id varchar(64) PRIMARY KEY, consent_scope text);";
+                + "CREATE TABLE training_consent (factory_id varchar(64) PRIMARY KEY, consent_scope text);"
+                + "CREATE TABLE smartbi_migrations (filename varchar(100), version varchar(50), checksum integer, applied_at timestamptz, applied_by varchar(100), duration_ms integer);";
     }
 
     private FactoryDataService service(Set<Long> operators) {

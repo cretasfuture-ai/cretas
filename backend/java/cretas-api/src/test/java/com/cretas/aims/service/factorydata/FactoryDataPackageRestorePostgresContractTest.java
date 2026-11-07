@@ -87,7 +87,7 @@ class FactoryDataPackageRestorePostgresContractTest {
                 + "exact_value = 12345678901234567890.123456789012, float_value = '-0.0'::double precision"
                 + " WHERE id = 1;"
                 + "INSERT INTO sales_orders (id, factory_id, created_by, note) VALUES (10, '" + FACTORY + "', 1, 'A-RESTORE'), (20, 'FB_RESTORE', 3, 'B-SECRET');"
-                + "CREATE TABLE flyway_schema_history (installed_rank int, version varchar(50), description varchar(200),"
+                + "CREATE TABLE IF NOT EXISTS flyway_schema_history (installed_rank int, version varchar(50), description varchar(200),"
                 + "type varchar(20), script varchar(200), checksum int, installed_by varchar(100), installed_on timestamp, execution_time int, success boolean);"
                 + "INSERT INTO flyway_schema_history VALUES (1, 'source-1', 'restore source', 'SQL', 'Vsource.sql', 7, 'ci', now(), 4, true);");
         if (vectorProof) exec(source, "SET search_path = " + q(sourceSchema) + ", public;"
@@ -102,7 +102,7 @@ class FactoryDataPackageRestorePostgresContractTest {
         exec(smartbiSource, "SET search_path = " + q(sourceSchema) + ";"
                 + "INSERT INTO smart_bi_uploads (id, factory_id, file_name) VALUES (1, '" + FACTORY + "', 'restore.csv');"
                 + "INSERT INTO smart_bi_field_defs (id, upload_id, name) VALUES (1, 1, 'amount');"
-                + "CREATE TABLE smartbi_migrations (filename varchar(100), version varchar(50), checksum integer, applied_at timestamptz, applied_by varchar(100), duration_ms integer);"
+                + "CREATE TABLE IF NOT EXISTS smartbi_migrations (filename varchar(100), version varchar(50), checksum integer, applied_at timestamptz, applied_by varchar(100), duration_ms integer);"
                 + "INSERT INTO smartbi_migrations VALUES ('Vsource.sql','source-1',7,now(),'ci',4);");
         if (vectorProof) exec(smartbiSource, "SET search_path = " + q(sourceSchema) + ", public;"
                 + "ALTER TABLE smart_bi_field_defs ADD COLUMN embedding public.vector(3);"

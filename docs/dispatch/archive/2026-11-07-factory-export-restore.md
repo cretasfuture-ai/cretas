@@ -6,6 +6,14 @@ Delivery Base SHA: `8d2e9e2ecd3ae39c7818d46b1eba1d305044d308` after normal
 integration of current main; original task-start Base `49009fd44ad1f348c5599a460744dd7ca177aebe`
 is retained below. The final PR diff is limited to this export slice.
 
+CI integration fixture scope: `FactoryDataScopePostgresContractTest` shared
+schema builders create migration ledgers before restricted test-role grants.
+Its dependent `FactoryErasurePostgresContractTest` may adapt only
+factory-independent ledger snapshot classification and add complete-content
+ledger-retention assertions. No production erasure, backup scheduler/repository,
+RLS, permission or migration code is in this extension. The unchanged
+`TenantBackupPostgresContractTest` is a required integration regression.
+
 Owner: 01a1a954/root. The previous BLOCK dispositions below are historical;
 the final candidate implements canonical JSON in every v2 package (CSV/XLSX
 remain optional views), source schema and migration descriptors, package-scoped
@@ -60,3 +68,5 @@ Root integration review requires an actual local baseline-tool round trip before
 Requirement: numeric usage and ID fields must retain their typed values; credentials remain removed, distinct credential values must not collapse unique constraints; include source-time restore structure and migration metadata rather than borrow current schema. Preserve ZIP path/hash integrity, F006 scope closure, fail closed on unsupported restoration. No invented lost original values or production restore. New packages remain protected/private. Genuine PG integration must create a package, restore into independent schema/database and verify types, constraints, sequences, row content and negative tenant scope. Do not label the old failed run14/export22 as repaired.
 
 Acceptance: FactoryDataCatalogContractTest, FactoryDataWiringContractTest, actual FactoryDataScopePostgresContractTest and new FactoryData*PostgresContractTest using an owned disposable PG; target command through release --tests later. Tests reading src/main must use ContractTest naming. Existing real-PG helper reused. No new migration unless independently justified and coordinated. Coordinator reviews risk, integration/CI, commits/push/PR and exact-main production release. No production business writes delegated.
+
+CI integration follow-up: native ledger fixtures are created before restricted-role grants; erasure snapshots exclude factory-independent ledgers and assert their complete contents survive deletion. Freshly compiled factorydata tests passed 42/42 and unchanged TenantBackup tests passed 11/11, all with zero skips. The first CI fixture failure remains preserved in private evidence. Production source and permissions are unchanged; independent supplement review CLEAR. Owned PG 59060 was stopped with identity and zero-client proof.
