@@ -88,9 +88,10 @@ def _orch(decision, sem=None, legacy_sem=None, cfg=CFG):
     )
 
 
-def _run(orch, query="嗯 签个退", business="FACTORY", history=None):
+def _run(orch, query="嗯 签个退", business="FACTORY", history=None, task_context="new"):
     return asyncio.run(orch.match(query=query, factoryId="F006", businessType=business, userId="u", role="operator",
-                                  visible_intents=ROWS, history=history or [], min_confidence=0.7, enable_llm=True))
+                                  visible_intents=ROWS, history=history or [], min_confidence=0.7, enable_llm=True,
+                                  task_context=({"contextStatus": "NEW"} if not history else None) if task_context == "new" else task_context))
 
 
 @pytest.fixture(autouse=True)
@@ -105,6 +106,7 @@ def _empty_registry():
 def test_registry_hit_answers_without_any_llm_call():
     registry.set_registry(registry.build_snapshot(
         [{"factory_id": "F006", "business_type": "FACTORY", "normalized_text": "嗯签个退", "intent_code": "CLOCK_OUT"}], []))
+    registry.get_registry().standalone_routes = frozenset({("F006", "FACTORY", "嗯签个退", "CLOCK_OUT")})
     dec = FakeDecision(["RETURN_ORDER_CREATE"], {"RETURN_ORDER_CREATE": 0.99})
     res = _run(_orch(dec))
     assert res.bestMatch.intentCode == "CLOCK_OUT"
@@ -317,8 +319,9 @@ def test_history_block_is_rendered_into_the_prompts():
     without = build_choice_messages("好了", "operator", ROWS)[1]["content"]
     assert "最近对话" in with_h and "用户：今天包装线的任务" in with_h and "系统：包装线今天有 3 个任务" in with_h
     assert with_h.index("最近对话") < with_h.index("用户说：好了")
-    # 不带上下文时提示词与改动前逐字相同 (离线评测的读数仍可比)
-    assert "最近对话" not in without and without.splitlines()[1] == "用户说：好了"
+    # 新旧提示词不是逐字相同；无历史也显式分隔本轮，不能复用旧离线读数。
+    assert "最近对话" not in without
+    assert without.index("本轮待判断的用户输入") < without.index("用户说：好了")
     short = build_shortlist_messages("好了", "operator", ROWS, 8, TURNS)[1]["content"]
     assert "用户：今天包装线的任务" in short
 

@@ -25,6 +25,8 @@ import java.util.Map;
 @Component
 @RequiredArgsConstructor
 public class OrderQueryTool extends AbstractBusinessTool {
+    /** Canonical server result IDs must never fall back into the order-number namespace. */
+    public static final String SERVER_RESULT_ID = "_serverResultOrderId";
 
     private final SalesService salesService;
     private final SalesOrderRepository salesOrderRepository;
@@ -82,7 +84,8 @@ public class OrderQueryTool extends AbstractBusinessTool {
         result.put("source", "sales_orders");
 
         if (orderId != null && !orderId.isBlank()) {
-            SalesOrder order = resolveOrder(factoryId, orderId);
+            SalesOrder order = orderId.equals(getString(params,SERVER_RESULT_ID))
+                    ? salesService.getSalesOrderById(factoryId,orderId) : resolveOrder(factoryId, orderId);
             result.put("order", order);
             result.put("message", "销售订单查询成功");
             return result;

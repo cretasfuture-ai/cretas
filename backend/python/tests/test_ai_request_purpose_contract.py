@@ -15,7 +15,7 @@ from ai.config import AIConfig
 from ai.db import IntentSnapshot
 from ai.matcher import candidates
 from ai.matcher.candidates import BlendRetriever
-from ai.matcher.decision import DecisionMatcher, STRICT_SYSTEM, parse_request_purpose
+from ai.matcher.decision import DecisionMatcher, STRICT_SYSTEM, ROUTING_BOUNDARY_RULES, parse_request_purpose
 from ai.orchestrator import Orchestrator
 
 ROW={'id':'1','intent_code':'MATERIAL_BATCH_QUERY','intent_name':'原料库存查询',
@@ -64,7 +64,7 @@ def test_request_purpose_in_real_match_entry(monkeypatch,query,model_choice,matc
         system=payload['messages'][0]['content']
         # External model IO contract: distinguish present requests from instructions
         # and untriggered plans, while keeping indirect/contextual requests valid.
-        assert system==STRICT_SYSTEM  # Current business requests keep the old chooser.
+        assert system==STRICT_SYSTEM+ROUTING_BOUNDARY_RULES  # The actual chooser receives both contracts.
         options=payload['messages'][1]['content']
         # The legacy chooser selects a related business function for tutorials too.
         # Removing the purpose guard must expose that real wrong-bestMatch behavior.

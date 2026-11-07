@@ -45,10 +45,12 @@ class ConversationSlotAnswerGroundingContractTest {
             saved.set(inv.getArgument(0));
             return inv.getArgument(0);
         });
-        when(repo.findBySessionIdAndFactoryIdAndUserId(any(), any(), any()))
+        when(repo.findBySessionIdAndFactoryIdAndUserIdForUpdate(any(), any(), any()))
                 .thenAnswer(inv -> Optional.ofNullable(saved.get()));
         service = new ConversationServiceImpl(repo, mock(AIIntentConfigRepository.class),
-                mock(ExpressionLearningService.class), llm);
+                mock(ExpressionLearningService.class), llm,
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
+        ReflectionTestUtils.setField(service, "entityManager", mock(jakarta.persistence.EntityManager.class));
         ReflectionTestUtils.setField(service, "maxRounds", 5);
         ReflectionTestUtils.setField(service, "timeoutMinutes", 10);
     }

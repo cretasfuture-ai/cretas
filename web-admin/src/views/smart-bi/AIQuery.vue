@@ -475,14 +475,17 @@ const CHAT_SESSION_KEY = computed(() => buildChatSessionStorageKey(
   factoryId.value,
   authStore.user?.id,
 ));
+const pendingConversationStarts = new Set<string>();
 function createChatSessionId(): string {
   // Use crypto.randomUUID when available; fallback to RFC4122 v4 polyfill.
-  return (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+  const id = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
     ? crypto.randomUUID()
     : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
         const r = (Math.random() * 16) | 0;
         return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
       });
+  pendingConversationStarts.add(id);
+  return id;
 }
 function getOrCreateChatSessionId(): string {
   try {
@@ -1308,9 +1311,11 @@ async function tryJavaIntentChat(
     }
     const res = await executeIntent(factoryId, query, {
       sessionId: intentSessionForRequest,
+      conversationStart: pendingConversationStarts.has(intentSessionForRequest),
       mode: isOperateTab ? 'OPERATE' : 'READ',
       context: Object.keys(requestContext).length ? requestContext : undefined,
     });
+    pendingConversationStarts.delete(intentSessionForRequest);
 
     const i = idx();
     if (i === -1) return 'handled';

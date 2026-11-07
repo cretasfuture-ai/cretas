@@ -34,8 +34,10 @@ public class MaterialExpiredQueryTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "查询已过期的原材料批次。返回所有过期批次的详细信息，包括批次号、原材料名称、" +
-                "过期日期、当前数量、供应商等。适用于过期物料盘点、库存清理、质量管理等场景。";
+        return "按现有业务口径查询待处理过期清单：到期日期早于今天，且尚未标记为EXPIRED；" +
+                "不等同于按状态字段EXPIRED筛选，状态筛选用material_batch_query。" +
+                "支持page/size分页，按到期日再批次ID稳定排序；不传分页参数仍返回全集。" +
+                "不支持改成其他截止日期或任意状态过滤。";
     }
 
     @Override
@@ -86,10 +88,13 @@ public class MaterialExpiredQueryTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");
+        schema.put("x-clarification-description", "按到期日期早于今天、且尚未标记为过期筛选待处理清单；不是查询已标记过期的状态。");
 
-        // 无必需参数
         Map<String, Object> properties = new HashMap<>();
+        properties.put("page", Map.of("type","integer","minimum",1,"description","页码，从1开始；不提供任何分页参数则保持全集查询"));
+        properties.put("size", Map.of("type","integer","minimum",1,"maximum",100,"description","每页条数；启动分页后未指定则20条"));
         schema.put("properties", properties);
+        schema.put("x-llm-extract-optional",true);
 
         // 无必需字段
         schema.put("required", Collections.emptyList());
@@ -109,16 +114,33 @@ public class MaterialExpiredQueryTool extends AbstractBusinessTool {
 
         // 调用服务获取已过期批次
         List<MaterialBatchDTO> expiredBatches = materialBatchService.getExpiredBatches(factoryId);
+        int total = expiredBatches.size();
+        boolean paged = params.get("page") != null || params.get("size") != null;
+        int page = 1, size = 20;
+        if (paged) {
+            page = getInteger(params,"page",1); size = getInteger(params,"size",20);
+            if (page < 1 || size < 1 || size > 100) throw new IllegalArgumentException("页码须从1开始，每页条数须为1到100。");
+            List<MaterialBatchDTO> sorted = new ArrayList<>(expiredBatches);
+            sorted.sort(Comparator.comparing(MaterialBatchDTO::getExpireDate,Comparator.nullsLast(Comparator.naturalOrder()))
+                    .thenComparing(MaterialBatchDTO::getId,Comparator.nullsLast(Comparator.naturalOrder())));
+            long start = (long)(page-1)*size;
+            expiredBatches = start>=total ? Collections.emptyList() : sorted.subList((int)start,(int)Math.min(start+size,total));
+        }
 
         // 构建返回结果
         Map<String, Object> result = new HashMap<>();
-        result.put("total", expiredBatches.size());
+        result.put("total", total);
+        result.put("queryConditions", Map.of("basis","EXPIRY_DATE","expiryBefore",java.time.LocalDate.now().toString(),"excludedStatus","EXPIRED"));
+        result.put("source","material_batches");
+        if (paged) {
+            result.put("page",page);result.put("size",size);result.put("totalPages",(total+size-1)/size);
+        }
 
         if (expiredBatches.isEmpty()) {
-            result.put("message", "当前没有已过期的原材料批次");
+            result.put("message", total==0 ? "按到期日查询，当前没有尚未标记过期的待处理批次。" : "当前页没有待处理过期批次。");
             result.put("batches", Collections.emptyList());
         } else {
-            result.put("message", String.format("共有 %d 个已过期批次", expiredBatches.size()));
+            result.put("message", String.format("按到期日查询尚未标记过期的批次，共 %d 条，本次返回 %d 条。", total, expiredBatches.size()));
             // 转换为简洁格式
             List<Map<String, Object>> batchList = expiredBatches.stream()
                     .map(this::convertToSimpleFormat)
@@ -134,6 +156,7 @@ public class MaterialExpiredQueryTool extends AbstractBusinessTool {
      */
     private Map<String, Object> convertToSimpleFormat(MaterialBatchDTO batch) {
         Map<String, Object> item = new LinkedHashMap<>();
+        item.put("id",batch.getId());
         item.put("batchNumber", batch.getBatchNumber());
         item.put("materialName", batch.getMaterialName());
         item.put("materialCode", batch.getMaterialCode());

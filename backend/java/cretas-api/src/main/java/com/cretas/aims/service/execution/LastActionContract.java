@@ -64,6 +64,9 @@ final class LastActionContract {
                               String requiredModuleCode) { }
 
     private static final Map<String, ListSource> LIST_SOURCES = Map.of(
+            // SalesOrder Tools return actual persisted IDs, in their displayed result order.
+            "order_list", new ListSource("orders", "id", "orderId", "orderIds", null),
+            "order_query", new ListSource("orders", "id", "orderId", "orderIds", null),
             // PurchaseOrderListTool.buildPageResult → {content:[{id,...}]}
             "purchase_order_list", new ListSource("content", "id", "orderId", "orderIds", null),
             // LeaveRequestQueryTool.buildSimpleResult → {data:{rows:[{id,...}]}}
@@ -74,6 +77,50 @@ final class LastActionContract {
                     "PURCHASE_ORDER"));
 
     private LastActionContract() {
+    }
+
+    /** Server result references never come from caller/executed parameters or inferred names. */
+    static List<Map<String,Object>> orderResultReferences(String toolName, Object resultData) {
+        if (toolName == null || !Set.of("order_list", "order_query").contains(toolName)) return List.of();
+        Map<String,Object> values = listedIds(toolName, resultData);
+        if ("order_query".equals(toolName) && resultData instanceof Map<?,?> result) {
+            Object body = result.get("data") instanceof Map<?,?> nested ? nested : result;
+            if (body instanceof Map<?,?> map && map.get("order") instanceof Map<?,?> order) {
+                Object id = safeId(order.get("id"));
+                if (id != null) values = Map.of("orderId",id);
+            }
+        }
+        List<?> ids = values.get("orderIds") instanceof List<?> many ? many
+                : values.get("orderId") != null ? List.of(values.get("orderId")) : List.of();
+        List<Map<String,Object>> refs = new ArrayList<>();
+        for (int i=0;i<ids.size();i++) refs.add(Map.of("reference","order-result-"+(i+1),
+                "entityType","ORDER","id",ids.get(i),"ordinal",i+1,"sourceTool",toolName,"ranked",false));
+        return List.copyOf(refs);
+    }
+
+    /** Counts describe the actual returned page, never an inferred business total. */
+    static Map<String,Object> orderResultSummary(String toolName,Object resultData) {
+        if(toolName==null || !Set.of("order_list","order_query").contains(toolName)
+                || !(resultData instanceof Map<?,?> raw))return Map.of();
+        Map<?,?> body=raw.get("data") instanceof Map<?,?> nested?nested:raw;
+        if(!(body.get("orders") instanceof List<?>)
+                && !("order_query".equals(toolName) && body.get("order") instanceof Map<?,?>))return Map.of();
+        List<?> rows=orderResultRows(toolName,resultData);
+        int references=orderResultReferences(toolName,resultData).size();
+        Map<String,Object> summary=new LinkedHashMap<>();
+        summary.put("returnedCount",rows.size());summary.put("referenceCount",references);
+        summary.put("referencesComplete",references==rows.size());
+        if(body.get("total") instanceof Number n && n.longValue()>=rows.size() && n.doubleValue()==n.longValue())
+            summary.put("totalCount",n.longValue());
+        return Map.copyOf(summary);
+    }
+
+    private static List<?> orderResultRows(String toolName,Object resultData) {
+        if(toolName==null || !Set.of("order_list","order_query").contains(toolName)
+                || !(resultData instanceof Map<?,?> raw))return List.of();
+        Map<?,?> body=raw.get("data") instanceof Map<?,?> nested?nested:raw;
+        if("order_query".equals(toolName) && body.get("order") instanceof Map<?,?> order)return List.of(order);
+        return body.get("orders") instanceof List<?> rows?rows:List.of();
     }
 
     /**

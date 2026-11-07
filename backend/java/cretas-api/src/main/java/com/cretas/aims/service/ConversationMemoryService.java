@@ -16,6 +16,11 @@ import java.util.List;
  * @since 2026-01-15
  */
 public interface ConversationMemoryService {
+    String READ_QUERY_VERSION_KEY = "salesRankingTurnId";
+
+    /** Atomically replace the existing READ_QUERY slot only if its version and owner still match. */
+    boolean compareAndSetReadQuery(String factoryId, Long userId, String sessionId,
+                                  String expectedVersion, EntitySlot next);
 
     /**
      * 获取或创建对话上下文

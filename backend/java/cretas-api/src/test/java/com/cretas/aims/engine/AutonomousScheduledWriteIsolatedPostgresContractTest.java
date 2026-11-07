@@ -18,6 +18,8 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.FactorySchedulerConfig;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.mapper.UserMapper;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
+import com.cretas.aims.support.ConversationOwnerLockH2TestConfiguration;
 import com.cretas.aims.repository.config.FactorySchedulerConfigRepository;
 import com.cretas.aims.repository.config.FactoryToolConfigRepository;
 import com.cretas.aims.service.governance.ToolSimilarityService;
@@ -43,6 +45,8 @@ import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.MockReset;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
@@ -82,7 +86,9 @@ import static org.mockito.Mockito.when;
         ToolRegistry.class, UserDisableTool.class, UserServiceImpl.class, UserMapper.class, ExcelUtil.class,
         PermissionServiceImpl.class, PreviewTokenServiceImpl.class, AutonomousToolRunner.class,
         AutonomousGrantService.class, AutonomousGrantIssuer.class, DynamicSchedulerService.class,
-        AutonomousWriteSwitch.class, AutonomousScheduledWriteIsolatedPostgresContractTest.Config.class})
+        AutonomousWriteSwitch.class, AutonomousScheduledWriteIsolatedPostgresContractTest.Config.class,
+        ConversationOwnerLockH2TestConfiguration.class})
+@SpyBean(value = ConversationSessionRepository.class, reset = MockReset.NONE)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class AutonomousScheduledWriteIsolatedPostgresContractTest {
 

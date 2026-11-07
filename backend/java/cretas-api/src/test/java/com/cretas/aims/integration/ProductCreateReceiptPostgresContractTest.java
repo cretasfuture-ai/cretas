@@ -24,10 +24,12 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionStatus;
 import com.cretas.aims.entity.ai.ToolExecutionIdempotencyRecord;
 import com.cretas.aims.entity.ai.ToolExecutionAuditEvent;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
+import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.dto.producttype.ProductTypeDTO;
 import com.cretas.aims.repository.ai.ToolExecutionIdempotencyRepository;
 import com.cretas.aims.repository.ai.ToolExecutionAuditEventRepository;
 import com.cretas.aims.repository.intent.IntentPreviewTokenRepository;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
 import com.cretas.aims.controller.AiProductCreateController;
 import com.cretas.aims.ai.tool.impl.dataop.ProductCreateTool;
 import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
@@ -87,10 +89,11 @@ import static org.mockito.Mockito.verify;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 @EntityScan(basePackageClasses = {
-        ToolExecutionIdempotencyRecord.class, ToolExecutionAuditEvent.class, IntentPreviewToken.class})
+        ToolExecutionIdempotencyRecord.class, ToolExecutionAuditEvent.class, IntentPreviewToken.class,
+        ConversationSession.class})
 @EnableJpaRepositories(basePackageClasses = {
         ToolExecutionIdempotencyRepository.class, ToolExecutionAuditEventRepository.class,
-        IntentPreviewTokenRepository.class})
+        IntentPreviewTokenRepository.class, ConversationSessionRepository.class})
 @Import({ProductCreateReceiptPostgresContractTest.JsonConfig.class,
         ProductCreateCommandReceiptService.class, PreviewTokenServiceImpl.class,
         ToolExecutionLedgerService.class, ToolConfirmationLease.class,

@@ -38,7 +38,9 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "查询原料批次列表。支持按批次号、原料类型ID、状态进行筛选，支持分页。" +
+        return "查询原料批次列表，按已保存的状态字段筛选并支持分页。EXPIRED表示已标记过期，" +
+                "不等同于按有效期日期查待处理过期清单；后者用material_expired_query。" +
+                "现有状态列表中的状态纠正由本工具继续处理。支持按批次号、原料类型ID、入库日期、状态筛选。" +
                 "适用场景：查看库存批次、查找特定批次、查询某类原料的所有批次。";
     }
 
@@ -90,6 +92,7 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");
+        schema.put("x-clarification-description", "按已经保存的批次状态筛选，例如已标记过期、检验中或可用；不按到期日判断。");
 
         Map<String, Object> properties = new HashMap<>();
 

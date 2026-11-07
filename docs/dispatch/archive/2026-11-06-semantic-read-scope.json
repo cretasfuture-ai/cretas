@@ -1,0 +1,52 @@
+{
+  "taskId": "SEMANTIC-SALES-20261105",
+  "owner": "01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98",
+  "originalBaseSHA": "ecfb04cbac6283ac4e1b70592f4643be5feb44b8",
+  "upstreamSyncSHA": "3ed5b7f3c86d5718fce0f3b04d857e14aacf03d4",
+  "currentStage": "2026-11-07: complete4ee62+148 retained,not95. Final source contract: advertise page actions only with existing Tool/state/source guard eligibility;runtime guards unchanged. Recorded-input software replay proved3/8 missing goals were already recalled then cut for special slots;candidate fit now protects original first/registry/already-added capability/valid previous while only deleting and preserving order. Other5 recall misses not claimed fixed. Java293/23+package;Python93;static review passed. Freeze complete148 final real readonly run;no threshold reduction/train/gold edit/merge/deploy.",
+  "existingScope": [
+    "Java service/execution, recognition DTO and existing Conversation/preview integration",
+    "Java ai/tool/impl/crm read tools",
+    "Java MaterialBatchQueryTool and MaterialExpiredQueryTool",
+    "Java SalesServiceImpl list ordering only",
+    "Corresponding contract tests",
+    "Python ai/api,dto,orchestrator,registry,matcher/decision and corresponding tests",
+    "Web AIQuery/intent-chat",
+    "tests/semantic-read evidence producers"
+  ],
+  "additionalTestOnlyFile": "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateReceiptPostgresContractTest.java",
+  "additionalTestOnlyFiles": [
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateReceiptPostgresContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/ProductCreateActualToolGatewayPostgresContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/integration/CanvasConfigPlanBindingPostgresContractTest.java"
+  ],
+  "reason": "Upstream PR1516 and PR1519 add real-PG consumers of PreviewTokenServiceImpl. Their explicit JPA slices omitted the required ConversationSessionRepository. Register the real entity/repository; retain native locks, claims and product/receipt transaction assertions.",
+  "acceptance": "Java293 tests/23 classes+package;Python93 related;real local266/vector/nativeLuna/mini both entries,unchanged148 developer corpus. Reuse unaffected actual scope-menu trace from prior62 with explicit version;do not pool versions or call opened data independent gold. Keep all failures/unknowns,PG/CI/freeze gates.",
+  "boundaries": "No new production Entity/Repository/JPQL edits in this increment; no training, protected-gold edits, production business mutation, PR merge, deployment or online model replacement. Upstream synchronized only into candidate branch.",
+  "delegatedTasks": [
+    {
+      "acceptance": "Coordinator serial Maven: -Dtest=ReadPageEvidenceContractTest,SemanticReadTurnResolverContractTest test; retain ordinal/width/privacy/UNCHANGED guards. Worker no Maven.",
+      "state": "review",
+      "scope": [
+        "backend/java/cretas-api/src/main/java/com/cretas/aims/service/execution/ReadPageEvidence.java",
+        "backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/ReadPageEvidenceContractTest.java"
+      ],
+      "owner": "page_evidence_fix",
+      "baseSHA": "07eddbdadab14fa9cb97a836708bb1cd952bdde2",
+      "taskId": "SEMANTIC-PAGE-EVIDENCE-20261107"
+    },
+    {
+      "baseSHA": "07eddbdadab14fa9cb97a836708bb1cd952bdde2",
+      "state": "review",
+      "scope": [
+        "tests/semantic-read/complete_live_transport.py",
+        "tests/semantic-read/run_complete_read.py",
+        "tests/semantic-read/local_runtime.py",
+        "backend/python/tests/test_semantic_read_local_runtime.py"
+      ],
+      "taskId": "SEMANTIC-LOCAL-RECALL-20261107",
+      "owner": "local_recall_wiring",
+      "acceptance": "Python adapter contracts, local frozen266/embedding+real BlendRetriever preflight, then coordinator frozen real HTTP campaign. No production writes/restarts or private test corpus reads."
+    }
+  ]
+}

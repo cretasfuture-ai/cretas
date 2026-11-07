@@ -262,8 +262,23 @@ class ChatReplyPriceTextContractTest {
         try (SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId)) {
             sse.sendSseEvent(emitter, "result", response);
         }
-        String payload = sent.stream().filter(o -> o instanceof String s && s.startsWith("{"))
-                .map(String::valueOf).findFirst().orElseThrow();
-        return json.readTree(payload);
+        // SseEmitter's mock builder also exposes the wire control segment
+        // ("event:result\\ndata:") as an item.  It is not the payload.  Find
+        // the first actual typed JSON object, while retaining compatibility
+        // with a legal pre-serialized JSON string.
+        for (Object payload : sent) {
+            if (payload instanceof String text) {
+                String trimmed = text.trim();
+                if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+                    continue;
+                }
+                return json.readTree(trimmed);
+            }
+            JsonNode candidate = json.valueToTree(payload);
+            if (candidate.isObject() || candidate.isArray()) {
+                return candidate;
+            }
+        }
+        throw new AssertionError("SSE result payload not captured: " + sent);
     }
 }

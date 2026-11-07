@@ -99,10 +99,12 @@ import static org.mockito.Mockito.when;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 @EntityScan(basePackageClasses = {
-        ToolExecutionIdempotencyRecord.class, ToolExecutionAuditEvent.class, IntentPreviewToken.class})
+        ToolExecutionIdempotencyRecord.class, ToolExecutionAuditEvent.class, IntentPreviewToken.class,
+        com.cretas.aims.entity.conversation.ConversationSession.class})
 @EnableJpaRepositories(basePackageClasses = {
         ToolExecutionIdempotencyRepository.class, ToolExecutionAuditEventRepository.class,
-        IntentPreviewTokenRepository.class})
+        IntentPreviewTokenRepository.class,
+        com.cretas.aims.repository.conversation.ConversationSessionRepository.class})
 @Import({ProductCreateActualToolGatewayPostgresContractTest.JsonConfig.class,
         ProductCreateCommandReceiptService.class, PreviewTokenServiceImpl.class,
         com.cretas.aims.ai.tool.gateway.ToolExecutionLedgerService.class,

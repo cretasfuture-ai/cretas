@@ -1,0 +1,17 @@
+{
+  "task": "SEMANTIC-PREVIEW-FIXTURES-20261106",
+  "owner": "/root/preview_revision",
+  "files": [
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/engine/ScheduledDelegatedWritePostgresContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/engine/AutonomousScheduledWriteIsolatedPostgresContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/intent/AiPurchaseTaskGrantServiceContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/intent/ControlledPurchaseScopeBoundaryContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/intent/PurchaseGrantTimerPostgresLifecycleContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/intent/DeferredPurchaseGrantPostgresLifecycleContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/impl/PreviewTokenServiceConcurrencyTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/support/ConversationOwnerLockH2TestConfiguration.java"
+  ],
+  "acceptance": "Seven existing consumer fixture tests, actual PG where configured; root serial Maven",
+  "baseSHA": "a6737c0a9218b43f7dedd3b738087ca68e6271d2",
+  "test_compatibility": "H2-only transaction-bound real in-process owner mutex through repository spy; native PG path delegates unchanged. No product no-op/fallback; all other repository methods real. Needed because legacy fixtures default H2, production SQL is PG advisory lock."
+}

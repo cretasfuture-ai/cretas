@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Exact routing applicability only. Never overrides catalog labels, parameters, results, permissions, or execution policy.",
+  "reviews": []
+}

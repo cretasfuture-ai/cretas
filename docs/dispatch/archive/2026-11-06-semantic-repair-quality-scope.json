@@ -1,0 +1,21 @@
+{
+  "task": "SEMANTIC-REPAIR-QUALITY-20261106",
+  "base": "06741c02088073a393e671eb44d4be038e1d4ef9",
+  "owner": "/root",
+  "allowed": [
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/service/execution/ConversationTaskRepairSupport.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/ConversationTaskRepairContractTest.java"
+  ],
+  "acceptance": "root serial Maven ConversationTaskRepairContractTest,SemanticTaskEntryRepairContractTest plus actual-model development7; no production, no training, no threshold changes",
+  "prohibited": [
+    "ACTIVE",
+    "other files",
+    "Maven/target",
+    "model calls",
+    "production writes/restart/deploy",
+    "subagents"
+  ],
+  "previous_owner": "/root/conversation_state",
+  "handoff": "Previous owner completed and frozen. Root takes two-file scope for explicit repair resume schema; no concurrent child writes.",
+  "continuation_base": "ca593008eb98ec57b9978ac866e8a2aed22b7db6"
+}

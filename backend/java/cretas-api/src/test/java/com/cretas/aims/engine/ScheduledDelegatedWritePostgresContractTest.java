@@ -18,6 +18,8 @@ import com.cretas.aims.entity.config.FactorySchedulerConfig;
 import com.cretas.aims.entity.enums.FactoryType;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.integration.DisposablePostgresTargetGuard;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
+import com.cretas.aims.support.ConversationOwnerLockH2TestConfiguration;
 import com.cretas.aims.repository.config.FactorySchedulerConfigRepository;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.governance.ToolSimilarityService;
@@ -35,6 +37,8 @@ import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.MockReset;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.io.ClassPathResource;
@@ -79,7 +83,9 @@ import static org.mockito.Mockito.when;
         PreviewTokenServiceImpl.class, AutonomousToolRunner.class, AutonomousGrantService.class,
         AutonomousGrantIssuer.class, DynamicSchedulerService.class, AutonomousWriteSwitch.class,
         com.cretas.aims.controller.AutonomousWriteSwitchController.class, SchedulerRunRecorder.class,
-        ScheduledDelegatedWritePostgresContractTest.Json.class})
+        ScheduledDelegatedWritePostgresContractTest.Json.class,
+        ConversationOwnerLockH2TestConfiguration.class})
+@SpyBean(value = ConversationSessionRepository.class, reset = MockReset.NONE)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ScheduledDelegatedWritePostgresContractTest {
 

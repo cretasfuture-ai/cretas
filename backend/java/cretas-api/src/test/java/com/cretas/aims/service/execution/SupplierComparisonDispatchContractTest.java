@@ -1251,8 +1251,15 @@ class SupplierComparisonDispatchContractTest {
                 .thenAnswer(invocation -> Optional.ofNullable(stored.get(invocation.getArgument(0)))
                         .filter(session -> invocation.getArgument(1, String.class).equals(session.getFactoryId()))
                         .filter(session -> invocation.getArgument(2, Long.class).equals(session.getUserId())));
+        when(sessions.findBySessionIdAndFactoryIdAndUserIdForUpdate(anyString(), anyString(), anyLong()))
+                .thenAnswer(invocation -> Optional.ofNullable(stored.get(invocation.getArgument(0)))
+                        .filter(session -> invocation.getArgument(1, String.class).equals(session.getFactoryId()))
+                        .filter(session -> invocation.getArgument(2, Long.class).equals(session.getUserId())));
         ConversationServiceImpl conversations = new ConversationServiceImpl(
-                sessions, mock(AIIntentConfigRepository.class), null, mock(com.cretas.aims.ai.client.DashScopeClient.class));
+                sessions, mock(AIIntentConfigRepository.class), null,
+                mock(com.cretas.aims.ai.client.DashScopeClient.class),
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
+        ReflectionTestUtils.setField(conversations, "entityManager", mock(jakarta.persistence.EntityManager.class));
         ReflectionTestUtils.setField(conversations, "maxRounds", 5);
         ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
         IntentSlotConfiguration slotConfiguration = new IntentSlotConfiguration();

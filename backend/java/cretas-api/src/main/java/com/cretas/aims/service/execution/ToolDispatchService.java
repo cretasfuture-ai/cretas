@@ -47,10 +47,12 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -76,6 +78,584 @@ public class ToolDispatchService {
             com.cretas.aims.service.consent.LlmEgressGuard.standalone();
 
     static final String PARAM_EGRESS_SITE = "tool-param-extraction";
+    private static final java.util.Set<String> SEMANTIC_READ_TOOLS = java.util.Set.of(
+            "order_list", "order_query", "material_batch_query", "product_sales_ranking",
+            "material_expired_query", "receive_quality_check_today");
+
+    /** Existing parameter resolver, extended to filled-field corrections for the read pilot.
+     * Semantic output is evidence to validate, never an execution or permission grant. */
+    IntentExecuteResponse resolveReadTurn(String factoryId, Long userId, IntentExecuteRequest request,
+                                         IntentMatchResult match) {
+        if (request.getSemanticContext() == null) return null;
+        IntentExecuteResponse admissionFailure = SemanticConversationContextService.admissionFailure(request);
+        if (admissionFailure != null) return admissionFailure;
+        if (match != null && match.hasMatch() && Boolean.TRUE.equals(match.getRequiresConfirmation())) return null;
+        AIIntentConfig intent = match != null && match.hasMatch() ? match.getBestMatch() : null;
+        ToolExecutor tool = intent == null || intent.getToolName() == null ? null
+                : toolRegistry.getExecutor(intent.getToolName()).orElse(null);
+        boolean pilot = tool != null && SEMANTIC_READ_TOOLS.contains(tool.getToolName())
+                && tool.getAccessMode() == ToolExecutor.AccessMode.READ;
+        Map<?,?> previous = previousRead(request);
+        if (!pilot && (intent != null || previous.isEmpty())) return null;
+        if (pilot) {
+            var rbac = toolRbacEnforcer.check(tool, TrustedExecutionContext.merge(Map.of(), factoryId, userId,
+                    com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().map(a -> a.role()).orElse("")));
+            if (rbac == null || !rbac.isAllowed()) return readTurnReply("NO_PERMISSION", "您没有执行此查询的权限。");
+            if (salesRankingConversationSupport == null
+                    || !salesRankingConversationSupport.reserveRead(intent.getIntentCode(), factoryId, userId, request))
+                return readTurnReply("TASK_CHANGED", "当前查询状态已变化，请重试；未执行旧请求。");
+        }
+        try {
+            Map<String,Object> schema = pilot ? tool.getParametersSchema() : Map.of("type", "object", "properties", Map.of());
+            String system = """
+                    你是现有业务系统的只读对话参数解析器。识别本轮对话动作和明确修改的参数，不执行业务。
+                    使用同一个任务快照及最近用户对话理解指代。当前日期以输入为准。
+                    currentInput是唯一的本轮动作指令；history只用于指代与兼容条件，不能沿用历史取消、拒绝或不支持动作。
+                    action只能为NEW、CONTINUE、CORRECT、SWITCH、CANCEL、CLARIFY、UNSUPPORTED。
+                    continuationAlias存在时，这是已识别的会话动作而不是新的业务目标；只能在本轮确实延续同一只读目标时CONTINUE/CORRECT，否则CLARIFY，不能强行套用旧目标。
+                    pageAction描述本轮分页动作：NEXT、PREVIOUS、ABSOLUTE、UNCHANGED。页码统一由程序根据pageAction和pageEvidence计算，parameters不要输出page；pageEvidence必须是本轮原话中的连续片段。
+                    本轮给出目标页号时用ABSOLUTE，不能因它恰好是当前页的相邻页就改为NEXT/PREVIOUS。改变每页条数用size。无分页变化用UNCHANGED，不输出分页默认值。
+                    ABSOLUTE的pageEvidence取只包含目标页码这一个数字的最小连续片段，不含每页条数、日期或其他数字；相对单页翻页引用完整动作片段，不能只取裸页数量。NEXT/PREVIOUS只支持逐页，其他步长需明确目标页码。
+                    NEW/SWITCH是独立目标；CONTINUE/CORRECT仅可用于同一个目标。
+                    readTransition按source→target排列：source是此前已执行任务，target是本轮候选能力，不能颠倒。
+                    先结合currentInput判断本轮目标，再按target的真实能力校验；不能用source的限制拒绝target已支持的新查询。
+                    历史条件只在canInheritPreviousParameters=true且本轮确实延续该目标时保留；切换时不要把source的状态当成target要求。
+                    CLARIFY说明本轮真正未确定的内容；UNSUPPORTED仅说明本轮目标确实超出target能力，不能复述历史方向的拒绝理由。
+                    selectedIntent只是路由候选，不表示用户已确认查询口径。readCapabilities中若有按不同字段或固定条件得到不同集合的能力，本轮与有效任务上下文未区分且无权威口径默认值时CLARIFY，不能用候选或Tool默认值代替用户确认。
+                    已确认任务的续句应保留其确定口径，不重复询问；明确要求但不支持与尚未确定口径是两种情况。
+                    同一个目标要求selectedIntent与已保存READ_QUERY的id相同；不同意图之间不能用CONTINUE/CORRECT继承参数。
+                    canInheritPreviousParameters=false时不能返回CONTINUE/CORRECT；本轮完整独立查询应返回NEW/SWITCH，仅有条件续句而没有已确定目标才澄清。
+                    新对象详情可以通过objectReference复用真实对象，但不能因此沿用列表的筛选条件。旧目标未确定而本轮只改条件时应定向澄清。
+                    本轮明确的新目标优先；结束旧查询并提出新目标属于SWITCH，不能只取消、不能当成旧目标的参数纠正。
+                    parameters仅返回本轮明确给出或明确纠正的值，不填旧值或默认值。已填字段也必须允许纠正。
+                    参数应符合当前真实Tool描述/参数；时间按日期边界规范化，状态按真实枚举识别。
+                    本轮明确设置枚举字段时，同时在parameterEvidence返回该值在currentInput中的最小连续原词片段。
+                    例如枚举的业务原词与代码由程序按当前Tool词表绑定；不要把旧枚举值当成本轮新值。
+                    未修改、否定不要修改、仅在历史中出现的字段不提供parameterEvidence；CONTINUE保持既有枚举条件。
+                    dateScope描述本轮时间变化：CLOSED为单日或封闭区间，FROM为只有起点，UNTIL为只有终点，
+                    UNCHANGED为没有修改时间，UNRESOLVED为无法确定边界。不要把封闭单日变成无限未来。
+                    CLOSED应给出startDate和endDate；FROM/UNTIL只给相应一边，不继承此前另一边。
+                    目标切换后不继承不兼容参数；“其他不变”仅保留同一任务已有兼容条件。
+                    取消是对当前任务的明确对话动作，不能按某个词片段决定；修饰对象的否定不是取消。
+                    过期/未知状态不等于新会话；不能据此猜旧对象、日期或状态，依据不足就CLARIFY。
+                    当前意图为空时不得执行或自行补造业务目标，仅允许取消已有查询或定向澄清。
+                    不支持的指标、范围或动作返回UNSUPPORTED及原因，不能偷换成Tool支持的口径。
+                    systemDefaults是程序在语义合并后才补缺的权威默认值。不要在parameters输出默认值，也不要因缺少这些值而拒绝或追问。
+                    没有本轮时间修改时用UNCHANGED；执行Tool的必填字段可由systemDefaults补齐不等于能力不足。
+                    dateScope仅描述toolSchema中可修改的startDate/endDate，不描述工具自身固定的日期条件。没有这两个参数时只能UNCHANGED；用户要求改变该固定条件则UNSUPPORTED，不能假装修改成功。
+                    requiredWithoutSystemDefault为空且当前目标明确时，不能只因未说日期、条数等默认参数而CLARIFY。
+                    销售金额排行不支持数量/销量排行。禁止编造ID、结果、权限或授权。
+                    objectReference只能选任务快照中的真实结果引用。单条结果可指“刚才那条”；多条且未明确对象或序号必须CLARIFY。
+                    READ_QUERY自身的reference是任务标识，不是结果对象。只有当前函数明确提供objectReference字段时才能引用其中允许的真实结果。
+                    列表序号不代表排名。ORDER对象不能当成产品或原料；不支持的关联查询必须明确说明。
+                    对引用只返回objectReference，不猜测或输出数据库ID；程序会按当前权限绑定。
+                    多条结果选择时同时返回selectionOrdinal及本轮原话中的selectionEvidence；没有明确序号就澄清，不能任取第一条。
+                    仅使用resolve_read_turn函数返回结果。message是简短的定向澄清或能力说明。
+                    """;
+            Map<String,Object> input = new java.util.LinkedHashMap<>();
+            LocalDateTime referenceTime = SemanticConversationContextService.referenceTime(request);
+            input.put("today", referenceTime.toLocalDate().toString());
+            input.put("currentInput", request.getUserInput());
+            input.put("history", SemanticConversationContextService.effectiveHistory(request));
+            input.put("taskContext", request.getSemanticContext());
+            input.put("selectedIntent", pilot ? intent.getIntentCode() : "");
+            input.put("toolDescription", pilot ? tool.getDescription() : "没有选定业务功能，不能执行查询");
+            input.put("toolSchema", schema);
+            Map<String,Object> defaults = new java.util.LinkedHashMap<>();
+            if (schema.get("properties") instanceof Map<?,?> fields) fields.forEach((key,value) -> {
+                if (key instanceof String name && value instanceof Map<?,?> definition
+                        && (definition.get("default") instanceof Number || definition.get("default") instanceof Boolean
+                        || definition.get("default") instanceof String))
+                    defaults.put(name,definition.get("default"));
+            });
+            if (pilot && SalesRankingParameters.TOOL.equals(tool.getToolName()))
+                SalesRankingParameters.defaults(defaults, referenceTime.toLocalDate());
+            input.put("systemDefaults",defaults);
+            input.put("canInheritPreviousParameters", pilot && intent.getIntentCode().equals(previous.get("id"))
+                    && "PRESENT".equals(request.getSemanticContext().get("contextStatus")));
+            input.put("previousGoal", Objects.toString(previous.get("id"), ""));
+            input.put("previousGoalStatus", Objects.toString(previous.get("taskStatus"), "NONE"));
+            input.put("readTransition", Map.of("direction", "source_to_target",
+                    "source", Map.of("intent", Objects.toString(previous.get("id"), ""),
+                            "tool", Objects.toString(previous.get("toolName"), ""),
+                            "confirmedParameters", previous.get("parameters") instanceof Map<?,?> p ? p : Map.of()),
+                    "target", Map.of("intent", pilot ? intent.getIntentCode() : "",
+                            "tool", pilot ? tool.getToolName() : "", "description", input.get("toolDescription"),
+                            "parameters", schema),
+                    "canInherit", input.get("canInheritPreviousParameters")));
+            input.put("continuationAlias", request.getSemanticContext().getOrDefault("continuationAlias", ""));
+            input.put("requiredWithoutSystemDefault", schema.get("required") instanceof List<?> required
+                    ? required.stream().filter(key -> !defaults.containsKey(key)).toList() : List.of());
+            var timeRanges = new TimeNormalizationRules().extractAndReplace(request.getUserInput(),
+                    referenceTime).getExtractedRanges();
+            input.put("normalizedCurrentTimeRanges", timeRanges);
+            Map<String,Object> deltaSchema = new java.util.LinkedHashMap<>(schema);
+            deltaSchema.remove("required");
+            if (schema.get("properties") instanceof Map<?,?> originalProperties) {
+                Map<String,Object> partial = new java.util.LinkedHashMap<>();
+                originalProperties.forEach((k,v) -> {
+                    if (k instanceof String key && !"page".equals(key) && v instanceof Map<?,?> definition) {
+                        Map<String,Object> copy = new java.util.LinkedHashMap<>();
+                        definition.forEach((pk,pv) -> { if (pk instanceof String property && !"default".equals(property)) copy.put(property, pv); });
+                        partial.put(key, copy);
+                    }
+                });
+                deltaSchema.put("properties", partial);
+            }
+            boolean supportsDateDelta = schema.get("properties") instanceof Map<?,?> dateFields
+                    && (dateFields.containsKey("startDate") || dateFields.containsKey("endDate"));
+            Map<String,Object> turnProperties = new java.util.LinkedHashMap<>(Map.of(
+                    "action", Map.of("type", "string", "enum", Boolean.TRUE.equals(input.get("canInheritPreviousParameters"))
+                            ? List.of("NEW", "CONTINUE", "CORRECT", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")
+                            : List.of("NEW", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")),
+                    "dateScope", Map.of("type", "string", "enum", supportsDateDelta
+                            ? List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED") : List.of("UNCHANGED")),
+                    "parameters", deltaSchema, "message", Map.of("type", "string")));
+            turnProperties.put("pageAction", Map.of("type", "string", "enum", List.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED")));
+            var pageEvidenceOptions = ReadPageEvidence.from(request.getUserInput());
+            turnProperties.put("pageEvidence", Map.of("type", "string", "maxLength", 200,
+                    "description", "本轮原话最小连续片段：ABSOLUTE仅含目标页码一个数字，排除每页条数和日期；NEXT/PREVIOUS仅引用翻页动作。"));
+            Map<String,Object> enumEvidenceFields = new java.util.LinkedHashMap<>();
+            if (schema.get("properties") instanceof Map<?,?> fields) fields.forEach((key,value) -> {
+                if (key instanceof String name && value instanceof Map<?,?> definition && definition.get("enum") instanceof Collection<?>)
+                    enumEvidenceFields.put(name,Map.of("type","string","maxLength",200));
+            });
+            if (!enumEvidenceFields.isEmpty()) turnProperties.put("parameterEvidence",Map.of("type","object",
+                    "properties",enumEvidenceFields,"additionalProperties",false,
+                    "description","本轮明确设置枚举的原词；不含否定保持或历史值"));
+            if (pilot && "order_query".equals(tool.getToolName())
+                    && previous.get("resultReferences") instanceof List<?> resultReferences) {
+                List<String> allowedReferences = resultReferences.stream()
+                        .filter(value -> value instanceof Map<?,?> ref && "ORDER".equals(ref.get("entityType"))
+                                && ref.get("reference") instanceof String && LastActionContract.safeValue("orderId",ref.get("id")) != null)
+                        .map(value -> (String)((Map<?,?>)value).get("reference")).distinct().toList();
+                if (!allowedReferences.isEmpty()) {
+                    turnProperties.put("objectReference", Map.of("type","string","enum",allowedReferences,
+                            "description","仅供当前订单详情查询使用的真实结果对象；任务标识不能当作对象"));
+                    if (resultReferences.size() > 1) {
+                        turnProperties.put("selectionOrdinal", Map.of("type","integer","minimum",1,"maximum",20));
+                        turnProperties.put("selectionEvidence", Map.of("type","string","maxLength",64));
+                    }
+                }
+            }
+            Map<String,Object> turnSchema = Map.of("type", "object", "properties", turnProperties,
+                    "required", List.of("action", "dateScope", "parameters", "message"));
+            LlmEgressRedactor.Result redacted = llmEgressGuard.texts(PARAM_EGRESS_SITE, factoryId,
+                    system, objectMapper.writeValueAsString(input), objectMapper.writeValueAsString(turnSchema));
+            if (redacted.refused()) return readTurnReply("NEED_MORE_INFO", "当前任务上下文无法安全解析，请明确查询目标和条件。");
+            // Derive enum literals from the already-redacted input. Cutting a raw
+            // source into snippets before redaction can expose partial names.
+            String safeCurrentInput = objectMapper.readTree(redacted.text(1)).path("currentInput").asText("");
+            List<String> sentPageEvidence = new ArrayList<>();
+            Set<String> sentRelativePageEvidence = new HashSet<>();
+            boolean hasAbsolutePageEvidence = false;
+            var safePageEvidenceOptions = ReadPageEvidence.from(safeCurrentInput);
+            for (String quote : safePageEvidenceOptions.values()) {
+                String restoredQuote = objectMapper.readValue(redacted.restoreJsonText(objectMapper.writeValueAsString(quote)), String.class);
+                if (pageEvidenceOptions.allows(request.getUserInput(), restoredQuote)) {
+                    sentPageEvidence.add(quote);
+                    Integer wirePage = sourcePositivePageValue(quote);
+                    if (wirePage != null && wirePage.equals(sourcePositivePageValue(restoredQuote)))
+                        hasAbsolutePageEvidence = true;
+                    // Step semantics apply to the exact egress quote. A restored
+                    // telephone/name is provenance, never a relative page count.
+                    if (safePageEvidenceOptions.allowsRelative(safeCurrentInput, quote)) sentRelativePageEvidence.add(quote);
+                }
+            }
+            boolean supportsPage = schema.get("properties") instanceof Map<?,?> pageFields && pageFields.containsKey("page");
+            Object priorPageValue = previous.get("parameters") instanceof Map<?,?> priorFields ? priorFields.get("page") : null;
+            boolean hasCurrentPage = Boolean.TRUE.equals(input.get("canInheritPreviousParameters"))
+                    && priorPageValue instanceof Number priorNumber && priorNumber.doubleValue() == priorNumber.longValue()
+                    && priorNumber.longValue() >= 1 && priorNumber.longValue() < Integer.MAX_VALUE;
+            List<String> availablePageActions = new ArrayList<>();
+            if (supportsPage && hasCurrentPage && !sentRelativePageEvidence.isEmpty()) {
+                availablePageActions.add("NEXT"); availablePageActions.add("PREVIOUS");
+            }
+            if (supportsPage && hasAbsolutePageEvidence) availablePageActions.add("ABSOLUTE");
+            availablePageActions.add("UNCHANGED");
+            if (sentPageEvidence.isEmpty()) sentPageEvidence.add(""); // Never authorizes a page change.
+            var safeSchema = objectMapper.readTree(redacted.text(2));
+            ((com.fasterxml.jackson.databind.node.ObjectNode)safeSchema.path("properties").path("pageAction"))
+                    .set("enum", objectMapper.valueToTree(availablePageActions));
+            ((com.fasterxml.jackson.databind.node.ObjectNode)safeSchema.path("properties").path("pageEvidence"))
+                    .set("enum", objectMapper.valueToTree(sentPageEvidence));
+            ChatCompletionResponse response = dashScopeClient.chatWithTools(redacted.text(0), redacted.text(1),
+                    List.of(Tool.of("resolve_read_turn", "理解当前只读任务与参数变化", objectMapper.convertValue(safeSchema,
+                            new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {}))));
+            if (!dashScopeClient.hasToolCalls(response)) return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询条件，请重试或说明要修改的条件。");
+            var calls = response.getChoices().get(0).getMessage().getToolCalls();
+            if (calls == null || calls.size() != 1 || calls.get(0).getFunction() == null
+                    || !"resolve_read_turn".equals(calls.get(0).getFunction().getName()))
+                return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询动作，请重试。");
+            String wireArguments = calls.get(0).getFunction().getArguments();
+            Map<String,Object> wireTurn = objectMapper.readValue(wireArguments,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {});
+            Map<String,Object> turn = objectMapper.readValue(redacted.restoreJsonText(wireArguments),
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>() {});
+            String action = String.valueOf(turn.get("action"));
+            String message = turn.get("message") instanceof String s && !s.isBlank() ? s : "请明确查询目标和条件。";
+            if ("CANCEL".equals(action)) {
+                if (previous.isEmpty() || salesRankingConversationSupport == null)
+                    return readTurnReply("NEED_MORE_INFO", "当前没有可确定取消的查询，请说明要停止哪个任务。");
+                return salesRankingConversationSupport.cancelRead(factoryId, userId, request);
+            }
+            if ("UNSUPPORTED".equals(action)) {
+                if (salesRankingConversationSupport != null) salesRankingConversationSupport.finishRead(factoryId, userId, request, "UNSUPPORTED_CAPABILITY");
+                return readTurnReply("UNSUPPORTED_CAPABILITY", message);
+            }
+            if (!pilot) return readTurnReply("NEED_MORE_INFO", "本轮业务目标尚未确定，请说明要继续此前的查询，还是改查其他业务；尚未执行查询。");
+            if ("CLARIFY".equals(action)) return readTurnReply("NEED_MORE_INFO", message);
+            if (!java.util.Set.of("NEW", "SWITCH", "CONTINUE", "CORRECT").contains(action))
+                return readTurnReply("NEED_MORE_INFO", "未能确认本轮查询动作，请重试。");
+            if (request.getSemanticContext().containsKey("continuationAlias")
+                    && !java.util.Set.of("CONTINUE", "CORRECT").contains(action))
+                return readTurnReply("NEED_MORE_INFO", "本轮目标与此前查询是否相同尚不明确，请说明要继续的查询。");
+            Map<String,Object> merged = new java.util.LinkedHashMap<>();
+            Map<String,String> sources = new java.util.LinkedHashMap<>();
+            if (java.util.Set.of("CONTINUE", "CORRECT").contains(action)) {
+                if (!intent.getIntentCode().equals(previous.get("id")) || !(previous.get("parameters") instanceof Map<?,?> old)
+                        || !"PRESENT".equals(request.getSemanticContext().get("contextStatus")))
+                    return readTurnReply("NEED_MORE_INFO", "缺少可沿用的同一查询，请说明目标和条件。");
+                old.forEach((k,v) -> { if (k instanceof String key) { merged.put(key, v); sources.put(key, "PREVIOUS_VALUE"); } });
+            }
+            if (!(turn.get("parameters") instanceof Map<?,?> delta))
+                return readTurnReply("NEED_MORE_INFO", "未能解析查询条件，请重试。");
+            if (SalesRankingParameters.INTENT.equals(intent.getIntentCode())
+                    && "UNSUPPORTED_CAPABILITY".equals(previous.get("reason")) && !delta.containsKey("metric"))
+                return readTurnReply("UNSUPPORTED_CAPABILITY", "上次请求的排行指标尚不受支持，请先明确是否改看金额排行。");
+            Map<?,?> properties = schema.get("properties") instanceof Map<?,?> p ? p : Map.of();
+            if (delta.keySet().stream().anyMatch(key -> !(key instanceof String)))
+                return readTurnReply("NEED_MORE_INFO", "返回了无法校验的查询字段，请明确查询条件。");
+            Map<String,Object> rawDelta = new java.util.LinkedHashMap<>();
+            delta.forEach((k,v) -> rawDelta.put(String.valueOf(k), v));
+            Map<String,Object> boundEnumEvidence = bindReadEnumEvidence(properties,rawDelta,
+                    turn.get("parameterEvidence"),request.getUserInput(),action,merged);
+            String pageAction = Objects.toString(turn.get("pageAction"), "UNCHANGED");
+            Object computedPage = null;
+            if (!Set.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED").contains(pageAction))
+                return readTurnReply("NEED_MORE_INFO", "未能确认分页动作，请明确目标页码。");
+            if ("UNCHANGED".equals(pageAction) && rawDelta.containsKey("page")) {
+                Object repeatedPage = rawDelta.get("page"), priorPage = merged.get("page");
+                // A model copy of an unmentioned authoritative default is not a
+                // user change. Discard it; the Tool applies defaults after merge.
+                boolean copiedUngroundedDefault = repeatedPage instanceof Number
+                        && Objects.equals(defaults.get("page"), repeatedPage)
+                        && !ReadPageEvidence.hasNumericContent(request.getUserInput())
+                        && LlmParameterGrounding.ground(Map.of("page",repeatedPage), Map.of(), request.getUserInput(), schema)
+                            .dropped().containsKey("page");
+                if (!copiedUngroundedDefault && (!Set.of("CONTINUE", "CORRECT").contains(action)
+                        || !(repeatedPage instanceof Number n) || !(priorPage instanceof Number old)
+                        || n.doubleValue() != n.longValue() || old.doubleValue() != old.longValue()
+                        || n.longValue() != old.longValue()))
+                    return readTurnReply("NEED_MORE_INFO", "页码变化与分页动作不一致，请明确目标页码；尚未执行查询。");
+                rawDelta.remove("page"); // Preserve confirmed value/default ownership, never bind this as new evidence.
+            }
+            if (Set.of("NEXT", "PREVIOUS").contains(pageAction)) {
+                String evidence = turn.get("pageEvidence") instanceof String s ? s.trim() : "";
+                if (!Set.of("CONTINUE", "CORRECT").contains(action) || evidence.isBlank()
+                        || !sentPageEvidence.contains(wireTurn.get("pageEvidence"))
+                        || !sentRelativePageEvidence.contains(wireTurn.get("pageEvidence"))
+                        || !request.getUserInput().contains(evidence) || !pageEvidenceOptions.allows(request.getUserInput(), evidence) || !properties.containsKey("page")
+                        || !(merged.get("page") instanceof Number priorPage) || priorPage.doubleValue() != priorPage.longValue()
+                        || priorPage.longValue() < 1 || priorPage.longValue() >= Integer.MAX_VALUE)
+                    return readTurnReply("NEED_MORE_INFO", "缺少可核验的当前页码或翻页依据，请明确要看的页码。");
+                long target = ((Number) merged.get("page")).longValue() + ("NEXT".equals(pageAction) ? 1 : -1);
+                if (target < 1) return readTurnReply("PAGINATION_REFUSED", "已经是第一页，没有上一页。");
+                if (rawDelta.containsKey("page") && (!(rawDelta.get("page") instanceof Number n)
+                        || n.doubleValue() != target))
+                    return readTurnReply("NEED_MORE_INFO", "目标页码与翻页动作不一致，请确认页码。");
+                computedPage = (int) target;
+                rawDelta.put("page", computedPage);
+            }
+            if ("ABSOLUTE".equals(pageAction)) {
+                String evidence = turn.get("pageEvidence") instanceof String s ? s.trim() : "";
+                if (evidence.isBlank() || request.getUserInput() == null
+                        || !sentPageEvidence.contains(wireTurn.get("pageEvidence"))
+                        || !request.getUserInput().contains(evidence) || !pageEvidenceOptions.allows(request.getUserInput(), evidence)
+                        || !properties.containsKey("page"))
+                    return readTurnReply("NEED_MORE_INFO", "缺少可核验的页码依据，请明确要看的页码。");
+                // The LLM selects the parameter and its current-input span; the existing
+                // numeric resolver binds its value. Never inherit an old page for ABSOLUTE.
+                var mentions = LlmParameterGrounding.numberMentions(evidence);
+                if (mentions.size() != 1)
+                    return readTurnReply("NEED_MORE_INFO", "页码依据不唯一，请明确一个目标页码。");
+                int target;
+                try { target = mentions.get(0).value().intValueExact(); }
+                catch (ArithmeticException invalidPage) {
+                    return readTurnReply("NEED_MORE_INFO", "目标页码必须是有效的正整数。");
+                }
+                if (target < 1 || rawDelta.containsKey("page")
+                        && (!(rawDelta.get("page") instanceof Number n) || n.doubleValue() != target))
+                    return readTurnReply("NEED_MORE_INFO", "目标页码与本轮页码依据不一致，请确认页码。");
+                computedPage = target;
+                rawDelta.put("page", computedPage);
+            }
+            Object referencedOrder = null;
+            if (turn.get("objectReference") instanceof String reference && !reference.isBlank()) {
+                if (!"order_query".equals(tool.getToolName()) || !(previous.get("resultReferences") instanceof List<?> refs))
+                    return readTurnReply("NEED_MORE_INFO", "当前查询不能使用这个对象引用，请明确要查询的对象。");
+                for (Object value : refs) if (value instanceof Map<?,?> ref && reference.equals(ref.get("reference"))
+                        && "ORDER".equals(ref.get("entityType"))) referencedOrder = LastActionContract.safeValue("orderId",ref.get("id"));
+                if (!"SERVER_TOOL_RESULT".equals(previous.get("resultProvenance")))
+                    return readTurnReply("NEED_MORE_INFO","上次结果来源无法核验，请重新选择订单或提供编号。");
+                boolean singleReturned = previous.get("resultSummary") instanceof Map<?,?> summary
+                        && Boolean.TRUE.equals(summary.get("referencesComplete"))
+                        && summary.get("returnedCount") instanceof Number count && count.longValue()==1 && refs.size()==1;
+                if (!singleReturned) {
+                    Object selected = turn.get("selectionOrdinal");
+                    String evidence = turn.get("selectionEvidence") instanceof String text ? text : "";
+                    if (!(selected instanceof Number n) || n.doubleValue()!=n.intValue() || n.intValue()<1 || n.intValue()>20
+                            || !reference.equals("order-result-"+n.intValue())
+                            || evidence.isBlank() || evidence.length()>64 || request.getUserInput()==null || !request.getUserInput().contains(evidence)
+                            || !LlmParameterGrounding.ground(Map.of("selectionOrdinal",selected),Map.of(),evidence,
+                                Map.of("properties",Map.of("selectionOrdinal",Map.of("type","integer")))).dropped().isEmpty())
+                        return readTurnReply("NEED_MORE_INFO","上次有多个订单，请说明要查看第几条，或选择具体订单。");
+                }
+                if (referencedOrder == null || rawDelta.containsKey("orderId") && !referencedOrder.equals(rawDelta.get("orderId")))
+                    return readTurnReply("NEED_MORE_INFO", "对象引用已失效或与本轮条件不一致，请重新选择。");
+                rawDelta.put("orderId",referencedOrder);
+            }
+            if ("order_query".equals(tool.getToolName()) && referencedOrder == null && rawDelta.containsKey("orderId")
+                    && (request.getUserInput() == null || !request.getUserInput().contains(String.valueOf(rawDelta.get("orderId")))))
+                return readTurnReply("NEED_MORE_INFO","订单标识没有本轮输入或真实结果引用依据，请选择具体订单。");
+            if (Set.of("CONTINUE","CORRECT").contains(action)) {
+                // A repeated, unchanged value is inherited evidence, not a new numeric claim.
+                // Remove only same-key equality; old size must never ground a different page.
+                rawDelta.entrySet().removeIf(e -> Set.of("page","size","status").contains(e.getKey())
+                        && Objects.equals(merged.get(e.getKey()),e.getValue()));
+            }
+            Map<String,Object> copiedDefaults = new java.util.LinkedHashMap<>();
+            defaults.forEach((key,value) -> {
+                if (Objects.equals(value,rawDelta.get(key))) copiedDefaults.put(key,value);
+            });
+            Map<String,Object> currentCalendarEvidence = new java.util.LinkedHashMap<>();
+            currentCalendarEvidence.putAll(boundEnumEvidence);
+            if (computedPage != null) currentCalendarEvidence.put("page", computedPage);
+            for (String key : List.of("startDate","endDate")) {
+                Object value = rawDelta.get(key);
+                if (value instanceof String date && timeRanges.stream().anyMatch(range -> range.isValid()
+                        && date.equals(("startDate".equals(key)?range.getStart():range.getEnd()).toLocalDate().toString())))
+                    currentCalendarEvidence.put(key,value);
+            }
+            // Remove model copies of absent defaults before evaluating a date delta.
+            // The actual Tool still applies its own defaults after semantic merging.
+            for (var entry : copiedDefaults.entrySet()) {
+                Object definition=properties.get(entry.getKey());
+                boolean date=definition instanceof Map<?,?> field && "date".equals(field.get("format"));
+                if (!date && (entry.getValue() instanceof String || entry.getValue() instanceof Boolean)
+                        && (request.getUserInput()==null || !request.getUserInput().toLowerCase(java.util.Locale.ROOT)
+                            .contains(String.valueOf(entry.getValue()).toLowerCase(java.util.Locale.ROOT)))) {
+                    Object previousValue=merged.get(entry.getKey());
+                    if (previousValue!=null && !Objects.equals(previousValue,entry.getValue()))
+                        return readTurnReply("NEED_MORE_INFO","本轮查询范围与此前条件不一致，请明确是否更改查询范围，其他条件会保留。");
+                    rawDelta.remove(entry.getKey());
+                }
+            }
+            LlmParameterGrounding.ground(copiedDefaults,currentCalendarEvidence,request.getUserInput(),schema)
+                    .dropped().keySet().forEach(rawDelta::remove);
+            boolean changesDate = rawDelta.containsKey("startDate") || rawDelta.containsKey("endDate");
+            String dateScope = turn.get("dateScope") instanceof String value ? value : changesDate ? "UNRESOLVED" : "UNCHANGED";
+            if ("CLOSED".equals(dateScope)) {
+                // The model chooses the meaning; existing calendar rules supply a missing bound.
+                // Never infer a closed period from a partial date alone (e.g. an open-ended query).
+                if (timeRanges.size() == 1 && timeRanges.get(0).isValid()) {
+                    String start = timeRanges.get(0).getStart().toLocalDate().toString();
+                    String end = timeRanges.get(0).getEnd().toLocalDate().toString();
+                    if (start.equals(rawDelta.get("startDate"))) rawDelta.putIfAbsent("endDate", end);
+                    if (end.equals(rawDelta.get("endDate"))) rawDelta.putIfAbsent("startDate", start);
+                }
+                if (!rawDelta.containsKey("startDate") || !rawDelta.containsKey("endDate"))
+                    return readTurnReply("NEED_MORE_INFO", "未能确定完整的查询时间范围，请明确开始和结束日期。");
+            } else if ("FROM".equals(dateScope) && rawDelta.containsKey("startDate") && !rawDelta.containsKey("endDate")) {
+                merged.remove("endDate"); sources.remove("endDate");
+            } else if ("UNTIL".equals(dateScope) && rawDelta.containsKey("endDate") && !rawDelta.containsKey("startDate")) {
+                merged.remove("startDate"); sources.remove("startDate");
+            } else if (!"UNCHANGED".equals(dateScope) || changesDate) {
+                return readTurnReply("NEED_MORE_INFO", "未能确定时间条件的边界，请说明是完整区间还是只有起止一边。");
+            }
+            for (var entry : rawDelta.entrySet()) {
+                String key = entry.getKey();
+                if (!properties.containsKey(key)
+                        || entry.getValue() == null || !(entry.getValue() instanceof String
+                        || entry.getValue() instanceof Number || entry.getValue() instanceof Boolean))
+                    return readTurnReply("NEED_MORE_INFO", "返回了无法校验的查询条件，请明确查询条件。");
+                merged.put(key, entry.getValue());
+                sources.put(key, "CURRENT_EXPLICIT");
+            }
+            Map<String,Object> computedEvidence = new java.util.LinkedHashMap<>();
+            computedEvidence.putAll(boundEnumEvidence);
+            if (computedPage != null) computedEvidence.put("page", computedPage);
+            if (referencedOrder != null) computedEvidence.put("orderId",referencedOrder);
+            for (String dateKey : List.of("startDate", "endDate")) {
+                Object value = rawDelta.get(dateKey);
+                if (value instanceof String date && timeRanges.stream().anyMatch(range -> range.isValid()
+                        && date.equals(("startDate".equals(dateKey) ? range.getStart() : range.getEnd()).toLocalDate().toString())))
+                    computedEvidence.put(dateKey, value);
+            }
+            LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(rawDelta, computedEvidence, request.getUserInput(), schema);
+            for (String key : grounded.dropped().keySet()) {
+                // A model repeating an authoritative default is not explicit user evidence.
+                // Discard it and let the existing late-default merge supply missing values;
+                // never replace a previous confirmed value or accept another guessed value.
+                if (!defaults.containsKey(key) || !Objects.equals(defaults.get(key), rawDelta.get(key)))
+                    return readTurnReply("NEED_MORE_INFO", "部分查询参数缺少本轮输入依据，请明确这些条件后重试。");
+                rawDelta.remove(key);
+                Object oldValue = java.util.Set.of("CONTINUE", "CORRECT").contains(action)
+                        && previous.get("parameters") instanceof Map<?,?> old ? old.get(key) : null;
+                if (oldValue == null) { merged.remove(key); sources.remove(key); }
+                else { merged.put(key, oldValue); sources.put(key, "PREVIOUS_VALUE"); }
+            }
+            String invalid = validateReadParameters(schema, merged, factoryId, false);
+            if (invalid != null) return readTurnReply("NEED_MORE_INFO", invalid);
+            if ("CLOSED".equals(dateScope) && rawDelta.containsKey("startDate") && rawDelta.containsKey("endDate")
+                    && java.time.LocalDate.parse(String.valueOf(rawDelta.get("startDate")))
+                    .isAfter(java.time.LocalDate.parse(String.valueOf(rawDelta.get("endDate")))))
+                return readTurnReply("NEED_MORE_INFO", "查询开始日期不能晚于结束日期，请确认时间范围。");
+            if (referencedOrder != null) sources.put("orderId","SERVER_RESULT_REFERENCE");
+            if (computedPage != null) sources.put("page", "ABSOLUTE".equals(pageAction)
+                    ? "CURRENT_EXPLICIT" : "SERVER_RELATIVE_PAGE");
+            if ("order_query".equals(tool.getToolName()) && merged.get("orderId") != null
+                    && previous.get("resultReferences") instanceof List<?> refs
+                    && refs.stream().anyMatch(value -> value instanceof Map<?,?> ref
+                        && Objects.equals(merged.get("orderId"),ref.get("id"))))
+                sources.put("orderId","SERVER_RESULT_REFERENCE");
+            request.setSemanticParameters(java.util.Collections.unmodifiableMap(merged));
+            request.setSemanticParameterSources(java.util.Collections.unmodifiableMap(sources));
+            return null;
+        } catch (Exception failure) {
+            log.warn("Read turn resolution unavailable: {}", failure.getClass().getSimpleName());
+            return readTurnReply("NEED_MORE_INFO", "当前任务条件未能完整解析，请重试；尚未执行查询。");
+        } finally {
+            if (pilot && request.getSemanticParameters() == null && salesRankingConversationSupport != null)
+                salesRankingConversationSupport.finishRead(factoryId, userId, request, "BLOCKED");
+        }
+    }
+
+    static boolean supportsSemanticRead(AIIntentConfig intent) {
+        return intent != null && intent.getToolName() != null && SEMANTIC_READ_TOOLS.contains(intent.getToolName());
+    }
+
+    static Map<String,Object> effectiveReadParameters(ToolExecutor tool, IntentExecuteResponse response) {
+        if (response == null || !Set.of("SUCCESS","COMPLETED").contains(String.valueOf(response.getStatus()))
+                || !Set.of("order_list","material_batch_query","material_expired_query").contains(tool.getToolName())
+                || !(response.getResultData() instanceof Map<?,?> data)) return Map.of();
+        Map<String,Object> effective = new java.util.LinkedHashMap<>();
+        Object page = data.get("material_batch_query".equals(tool.getToolName()) ? "currentPage" : "page");
+        if (page instanceof Number n && n.doubleValue()==n.longValue() && n.longValue()>=1 && n.longValue()<=Integer.MAX_VALUE)
+            effective.put("page",n.intValue());
+        if (data.get("size") instanceof Number n && n.doubleValue()==n.longValue() && n.longValue()>=1 && n.longValue()<=100)
+            effective.put("size",n.intValue());
+        Object status = data.get("appliedStatusFilter") instanceof Map<?,?> filter ? filter.get("code") : null;
+        if (status == null && data.get("queryConditions") instanceof Map<?,?> conditions) status=conditions.get("status");
+        if (status instanceof String s && tool.getParametersSchema().get("properties") instanceof Map<?,?> properties
+                && properties.get("status") instanceof Map<?,?> definition
+                && definition.get("enum") instanceof Collection<?> allowed && allowed.contains(s)) effective.put("status",s);
+        return effective;
+    }
+
+    /** Bind only model-selected current value fragments through the actual Tool's existing vocabulary.
+     * No scan of the utterance, intent selection, new synonym table, or permission grant. */
+    static Map<String,Object> bindReadEnumEvidence(Map<?,?> properties, Map<String,Object> delta,
+            Object rawEvidence, String input, String action, Map<String,Object> previous) {
+        if (rawEvidence == null) return Map.of();
+        if (!(rawEvidence instanceof Map<?,?> evidence)) throw new IllegalArgumentException("参数原词格式无效");
+        Map<String,Object> bound = new java.util.LinkedHashMap<>();
+        for (var entry : evidence.entrySet()) {
+            if (!(entry.getKey() instanceof String key) || !(entry.getValue() instanceof String text)
+                    || text.isBlank() || text.length()>200 || input==null || !input.contains(text)
+                    || !(properties.get(key) instanceof Map<?,?> field)
+                    || !(field.get("enum") instanceof Collection<?> allowed))
+                throw new IllegalArgumentException("参数原词缺少本轮输入或Tool定义依据");
+            Map<?,?> words = field.get(com.cretas.aims.ai.tool.StatusFilter.WORDS) instanceof Map<?,?> labels ? labels : Map.of();
+            List<String> candidates = allowed.stream().filter(String.class::isInstance).map(String.class::cast)
+                    .filter(code -> code.equalsIgnoreCase(text.trim()) || words.get(code) instanceof Collection<?> labels
+                            && labels.stream().anyMatch(label -> label instanceof String s && s.equalsIgnoreCase(text.trim())))
+                    .distinct().toList();
+            if (candidates.size()>1) throw new IllegalArgumentException("参数原词对应多个选项，请明确口径");
+            if (candidates.isEmpty()) continue; // Unlisted paraphrases still use the existing semantic grounding contract.
+            String value=candidates.getFirst();
+            if ("CONTINUE".equals(action) && !Objects.equals(previous.get(key),value))
+                throw new IllegalArgumentException("本轮参数修改动作尚不明确");
+            delta.put(key,value);bound.put(key,value);
+        }
+        return bound;
+    }
+
+    /** Normalize a model-selected conversation action onto its owned read task.
+     * The same semantic resolver must still confirm the action; no text whitelist or execution grant.
+     */
+    static IntentMatchResult bindReadContinuation(IntentMatchResult match, IntentExecuteRequest request,
+            java.util.function.Function<String, Optional<AIIntentConfig>> lookup) {
+        if (match == null || !match.hasMatch() || Boolean.TRUE.equals(match.getRequiresConfirmation())
+                || request.getSemanticContext() == null
+                || !"PRESENT".equals(request.getSemanticContext().get("contextStatus"))) return match;
+        String code = match.getBestMatch().getIntentCode();
+        if (code == null) return match;
+        if (!Set.of("CONTEXT_CONTINUE", "CONTINUE_LAST_OPERATION", "SYSTEM_RESUME_LAST_ACTION",
+                "PAGINATION_NEXT", "PAGINATION_PREVIOUS", "NAVIGATION_NEXT_PAGE", "NAVIGATION_PREVIOUS_PAGE").contains(code)) return match;
+        String previous = SemanticConversationContextService.previousReadIntent(request);
+        if (previous == null || request.getSemanticPreviousRead() == null
+                || !"COMPLETED".equals(request.getSemanticPreviousRead().get("taskStatus"))) return match;
+        AIIntentConfig target = lookup.apply(previous).orElse(null);
+        if (!supportsSemanticRead(target) || Boolean.FALSE.equals(target.getIsActive())
+                || !Objects.equals(target.getToolName(), request.getSemanticPreviousRead().get("toolName"))) return match;
+        Map<String,Object> snapshot = new java.util.LinkedHashMap<>(request.getSemanticContext());
+        snapshot.put("continuationAlias", code); request.setSemanticContext(snapshot);
+        return match.toBuilder().bestMatch(target).build();
+    }
+
+    private static Map<?,?> previousRead(IntentExecuteRequest request) {
+        if (request.getSemanticPreviousRead() != null
+                && !"CLEARED".equals(request.getSemanticPreviousRead().get("id"))) return request.getSemanticPreviousRead();
+        Object refs = request.getSemanticContext().get("references");
+        if (refs instanceof List<?> values) for (Object value : values) {
+            if (value instanceof Map<?,?> ref && "READ_QUERY".equals(ref.get("type"))
+                    && !"CLEARED".equals(ref.get("id"))) return ref;
+        }
+        return Map.of();
+    }
+
+    /** Advertisement only: mirrors the existing ABS numeric binding; not semantic intent proof. */
+    private static Integer sourcePositivePageValue(String quote) {
+        var mentions = LlmParameterGrounding.numberMentions(quote);
+        if (mentions.size() != 1) return null;
+        try {
+            int value = mentions.get(0).value().intValueExact();
+            return value > 0 ? value : null;
+        } catch (ArithmeticException invalid) {
+            return null;
+        }
+    }
+
+    private static IntentExecuteResponse readTurnReply(String status, String message) {
+        return IntentExecuteResponse.builder().status(status).aiMode("READ").message(message).formattedText(message).build();
+    }
+
+    /** Reuse the existing typed contract validator; the actual Tool schema supplies all rules. */
+    static String validateReadParameters(Map<String,Object> schema, Map<String,Object> params,
+                                                 String factoryId, boolean required) {
+        var specs = new ArrayList<com.cretas.aims.service.skill.contract.SkillParameterContract.ParamSpec>();
+        Map<?,?> properties = schema.get("properties") instanceof Map<?,?> p ? p : Map.of();
+        List<?> requiredNames = schema.get("required") instanceof List<?> values ? values : List.of();
+        for (var entry : properties.entrySet()) {
+            if (!(entry.getKey() instanceof String name) || !(entry.getValue() instanceof Map<?,?> definition)) continue;
+            var type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.STRING;
+            if ("date".equals(definition.get("format"))) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.DATE;
+            else if (definition.get("enum") instanceof List<?>) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.ENUM;
+            else if ("integer".equals(definition.get("type"))) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.INTEGER;
+            else if ("number".equals(definition.get("type"))) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.NUMBER;
+            else if ("boolean".equals(definition.get("type"))) type = com.cretas.aims.service.skill.contract.SkillParameterContract.ParamType.BOOLEAN;
+            List<String> allowed = definition.get("enum") instanceof List<?> values ? values.stream().map(String::valueOf).toList() : List.of();
+            specs.add(new com.cretas.aims.service.skill.contract.SkillParameterContract.ParamSpec(name, type,
+                    required && requiredNames.contains(name), definition.get("minimum") instanceof Number n ? n.doubleValue() : null,
+                    definition.get("maximum") instanceof Number n ? n.doubleValue() : null, 200, allowed, null));
+        }
+        var validation = new com.cretas.aims.service.skill.contract.SkillParameterContractValidator(null).validate(
+                new com.cretas.aims.service.skill.contract.SkillParameterContract(specs), factoryId, params);
+        return validation.ok() ? null : String.join("；", validation.errors());
+    }
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private SalesRankingConversationSupport salesRankingConversationSupport;
     private final ToolCallRedundancyService redundancyService;
     private final SelfCorrectionService selfCorrectionService;
     private final CorrectionAgentService correctionAgentService;
@@ -89,6 +669,9 @@ public class ToolDispatchService {
     /** 预览追问开参数收集会话用 (见 {@link #openPreviewQuestionSession}); 没有它时预览追问照旧、只是没人接答案。 */
     @Autowired(required = false)
     private ConversationService conversationService;
+
+    @Autowired(required = false)
+    private ConversationTaskRepairSupport conversationTaskRepairSupport;
 
     /**
      * 短语直达 / 显式意图分支 (matchResult == null) 没经过识别管线的预处理, 「这个批次」「上个月」
@@ -160,7 +743,31 @@ public class ToolDispatchService {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
-            return executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+            IntentExecuteResponse response = executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+            if (response != null && Set.of("SUCCESS","COMPLETED").contains(String.valueOf(response.getStatus()))
+                    && request.getSemanticParameterSources() != null
+                    && "SERVER_RESULT_REFERENCE".equals(request.getSemanticParameterSources().get("orderId"))) {
+                Object actualId = response.getResultData() instanceof Map<?,?> result
+                        && result.get("order") instanceof Map<?,?> order ? order.get("id") : null;
+                if (actualId == null || !String.valueOf(actualId).equals(String.valueOf(request.getSemanticParameters().get("orderId"))))
+                    response = readTurnReply("FAILED","返回的订单与所选对象不一致，未展示该结果，请重新查询。");
+            }
+            if (SEMANTIC_READ_TOOLS.contains(tool.getToolName()) && salesRankingConversationSupport != null
+                    && !salesRankingConversationSupport.isCurrent(factoryId, userId, request))
+                return readTurnReply("CANCELLED", "查询已停止或条件已更新，已丢弃旧查询结果。");
+            if (request.getSemanticReadVersion() != null && salesRankingConversationSupport != null
+                    && !salesRankingConversationSupport.finishRead(factoryId, userId, request, response == null ? "FAILED" : response.getStatus(),
+                        response == null ? List.of() : LastActionContract.orderResultReferences(tool.getToolName(),response.getResultData()),
+                        response == null ? Map.of() : LastActionContract.orderResultSummary(tool.getToolName(),response.getResultData()),
+                        effectiveReadParameters(tool,response)))
+                return readTurnReply("CANCELLED", "查询状态已变化，已丢弃旧查询结果。");
+            if (salesRankingConversationSupport!=null && (writeGuardService.isWriteTool(tool) || writeGuardService.isWriteIntent(intent))) {
+                try { salesRankingConversationSupport.rememberCommittedAction(factoryId,userId,request,intent,tool.getToolName(),response); }
+                catch (RuntimeException projectionFailure) { log.warn("Committed action context projection unavailable; business result preserved"); }
+            }
+            if (conversationTaskRepairSupport != null && tool.getAccessMode() == ToolExecutor.AccessMode.READ)
+                conversationTaskRepairSupport.afterRead(factoryId,userId,request,response);
+            return response;
         }
     }
 
@@ -170,6 +777,9 @@ public class ToolDispatchService {
                                                   Long userId, String userRole,
                                                   IntentMatchResult matchResult) {
         try {
+            if (request.getSemanticContext() != null && SEMANTIC_READ_TOOLS.contains(tool.getToolName())
+                    && (intent == null || !tool.getToolName().equals(intent.getToolName())))
+                return readTurnReply("UNSUPPORTED_CAPABILITY", "当前意图尚未绑定此查询工具，未执行查询。");
             // Request identity must be checked before parameter extraction or cache lookup.
             // A cached supplier result is subject to the same boundary as a fresh Tool call.
             if ((SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
@@ -344,6 +954,9 @@ public class ToolDispatchService {
             // extract new parameters from the synthetic confirmation text after this boundary.
             boolean writeOperation = writeGuardService.isWriteTool(tool)
                     || writeGuardService.isWriteIntent(intent);
+            if (!writeOperation && salesRankingConversationSupport != null && request.getSemanticContext() == null) {
+                salesRankingConversationSupport.rememberOtherRead(tool.getToolName(), factoryId, userId, request);
+            }
 
             // 2. 构建 ToolCall
             if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
@@ -353,6 +966,12 @@ public class ToolDispatchService {
             }
             Map<String, Object> params = TrustedExecutionContext.merge(
                     request.getContext(), factoryId, userId, userRole);
+            if (!writeOperation && request.getSemanticContext() != null
+                    && SEMANTIC_READ_TOOLS.contains(tool.getToolName()) && request.getSemanticParameters() == null) {
+                IntentExecuteResponse decision = resolveReadTurn(factoryId, userId, request,
+                        IntentMatchResult.builder().bestMatch(intent).confidence(1.0).build());
+                if (decision != null) return decision;
+            }
 
             String userInputToUse = request.getUserInput();
             if (matchResult != null && matchResult.getPreprocessedQuery() != null) {
@@ -430,6 +1049,16 @@ public class ToolDispatchService {
                 }
             }
 
+            // Reserve before optional model work; a late result cannot revive a cancelled read.
+            if (SalesRankingParameters.TOOL.equals(tool.getToolName()) && request.getSemanticContext() == null) {
+                if (salesRankingConversationSupport != null) {
+                    salesRankingConversationSupport.parameters(factoryId, userId, request, params);
+                } else {
+                    SalesRankingParameters.apply(request.getUserInput(), params,
+                            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")));
+                }
+            }
+
             // 2.7. 优先使用已学习的规则提取参数
             Map<String, Object> parametersSchema = tool.getParametersSchema();
             @SuppressWarnings("unchecked")
@@ -437,7 +1066,7 @@ public class ToolDispatchService {
                     (List<String>) parametersSchema.get("required") : null;
 
             Map<String, Object> ruleExtractedParams = new HashMap<>();
-            if (!boundConfirmation && requiredParams != null && !requiredParams.isEmpty()) {
+            if (!boundConfirmation && request.getSemanticParameters() == null && requiredParams != null && !requiredParams.isEmpty()) {
                 List<String> missingParams = requiredParams.stream()
                         .filter(p -> !params.containsKey(p) ||
                                      params.get(p) == null ||
@@ -456,7 +1085,7 @@ public class ToolDispatchService {
             }
 
             // 2.8. LLM 提取剩余参数
-            Map<String, Object> llmExtractedParams = boundConfirmation ? new HashMap<>()
+            Map<String, Object> llmExtractedParams = boundConfirmation || request.getSemanticParameters() != null ? new HashMap<>()
                     : extractParametersWithLLM(factoryId, userInputToUse, tool, params);
             if (!llmExtractedParams.isEmpty() && isFollowUpConfirmation(request)) {
                 // 追问确认按钮带来的参数是用户在按钮上看见并点了的 (「领用 30 公斤」);
@@ -477,7 +1106,35 @@ public class ToolDispatchService {
                 }
             }
 
+            if (request.getSemanticParameters() != null && SEMANTIC_READ_TOOLS.contains(tool.getToolName())) {
+                if (parametersSchema != null && parametersSchema.get("properties") instanceof Map<?,?> properties)
+                    properties.keySet().forEach(params::remove);
+                params.putAll(request.getSemanticParameters());
+                if (request.getSemanticParameters().containsKey("startDate") && request.getSemanticParameters().containsKey("endDate"))
+                    params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID, params.get("startDate") + "~" + params.get("endDate"));
+                else params.remove(com.cretas.aims.ai.tool.TimeRangeFilter.SAID);
+            }
+            IntentExecuteResponse rankingDecision = applySalesRankingParameters(tool, factoryId, userId, request, params);
+            if (rankingDecision != null) return rankingDecision;
+            if (request.getSemanticParameters() != null && SEMANTIC_READ_TOOLS.contains(tool.getToolName())) {
+                Map<String,Object> business = new java.util.LinkedHashMap<>();
+                if (parametersSchema.get("properties") instanceof Map<?,?> properties)
+                    properties.keySet().forEach(k -> { if (k instanceof String key && params.containsKey(key)) business.put(key, params.get(key)); });
+                String invalid = validateReadParameters(parametersSchema, business, factoryId, true);
+                if (invalid != null) return readTurnReply("NEED_MORE_INFO", invalid);
+            }
+            if (!writeOperation && request.getSemanticParameters() != null && salesRankingConversationSupport != null
+                    && !salesRankingConversationSupport.rememberResolvedRead(tool.getToolName(), intent.getIntentCode(), factoryId, userId, request, params))
+                return readTurnReply("CANCELLED", "查询已停止或条件已改变，未执行旧查询。");
+
             // Learned rules, LLM extraction and resolved references are all untrusted inputs.
+            if ("order_query".equals(tool.getToolName())) {
+                String marker = com.cretas.aims.ai.tool.impl.crm.OrderQueryTool.SERVER_RESULT_ID;
+                params.remove(marker);
+                if (request.getSemanticParameterSources()!=null && request.getSemanticParameters()!=null
+                        && "SERVER_RESULT_REFERENCE".equals(request.getSemanticParameterSources().get("orderId")))
+                    params.put(marker,request.getSemanticParameters().get("orderId"));
+            }
             // Re-bind the authenticated principal immediately before hashing and Tool execution.
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
 
@@ -519,6 +1176,8 @@ public class ToolDispatchService {
             // 4. 冗余检查 (ET-Agent 行为校准)
             String sessionId = request.getSessionId() != null ? request.getSessionId() : "default";
             if (!writeOperation && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                    && !SalesRankingParameters.TOOL.equals(tool.getToolName())
+                    && request.getSemanticParameters() == null
                     && redundancyService.isRedundant(sessionId, tool.getToolName(), params)) {
                 log.info("检测到冗余调用，跳过执行: tool={}, session={}", tool.getToolName(), sessionId);
                 Optional<String> cachedResult = redundancyService.getCachedResult(sessionId, tool.getToolName(), params);
@@ -558,6 +1217,9 @@ public class ToolDispatchService {
 
             for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
                 try {
+                    if (SEMANTIC_READ_TOOLS.contains(tool.getToolName()) && salesRankingConversationSupport != null
+                            && !salesRankingConversationSupport.isCurrent(factoryId, userId, request))
+                        return readTurnReply("CANCELLED", "当前查询已停止或条件已改变，未重试旧请求。");
                     log.debug("执行 Tool (尝试 {}/{}): name={}, arguments={}",
                             attempt, MAX_RETRIES, tool.getToolName(), argumentsJson);
 
@@ -582,6 +1244,12 @@ public class ToolDispatchService {
                             visiblePriceKeys = com.cretas.aims.security.PriceSensitiveContext.stopRecordingVisible();
                         }
                     }
+                    if (SEMANTIC_READ_TOOLS.contains(tool.getToolName())
+                            && salesRankingConversationSupport != null
+                            && !salesRankingConversationSupport.isCurrent(factoryId, userId, request)) {
+                        return IntentExecuteResponse.builder().status("CANCELLED")
+                                .message("查询条件已更新，已丢弃旧查询结果。").build();
+                    }
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
                     boolean toolSucceeded = isToolResultSuccessful(resultJson);
@@ -605,8 +1273,9 @@ public class ToolDispatchService {
                                 .recovered(attempt > 1)
                                 .build();
                         ToolCallRecord savedRecord = redundancyService.recordToolCall(record);
-                        if (!writeOperation && toolSucceeded && savedRecord != null && resultJson != null
-                                && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())) {
+                        if (!writeOperation && request.getSemanticParameters() == null && toolSucceeded && savedRecord != null && resultJson != null
+                                && !SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
+                                && !SalesRankingParameters.TOOL.equals(tool.getToolName())) {
                             // cacheResult stores into tool_call_cache.cached_result (JSONB).
                             // Don't substring-truncate — that splits tokens and produces
                             // invalid JSON like `{..."previous` which PG rejects at INSERT.
@@ -949,6 +1618,20 @@ public class ToolDispatchService {
         if (frontlineDenied != null) {
             return frontlineDenied;
         }
+        // Capture before extraction/preview (both can wait on external work). The mint
+        // transaction verifies this exact server draft revision again after the wait.
+        var previewDraft = conversationService == null || request.getSessionId() == null
+                ? Optional.<com.cretas.aims.entity.conversation.ConversationSession>empty()
+                : conversationService.getSession(factoryId,userId,request.getSessionId())
+                    .filter(s -> Objects.equals(intent.getIntentCode(),s.getKnownIntentCode()));
+        String previewDraftId = previewDraft.map(com.cretas.aims.entity.conversation.ConversationSession::getSessionId).orElse(null);
+        String previewDraftRevision = previewDraft.map(ConversationService::draftRevisionFingerprint).orElse(null);
+        if ("DRAFT_READY".equals(request.getSemanticTaskAction()) && (previewDraft.isEmpty()
+                || previewDraft.get().getStatus() != com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.COMPLETED))
+            return readTurnReply("TASK_CHANGED","草稿已变化，未生成确认票据。请重新核对当前任务。");
+        if (previewDraft.isPresent() && (!"DRAFT_READY".equals(request.getSemanticTaskAction())
+                || previewDraft.get().getStatus() != com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.COMPLETED))
+            return readTurnReply("NEED_MORE_INFO","请先完成当前草稿的参数核对；尚未生成新的确认票据。");
         try {
             Map<String, Object> params = TrustedExecutionContext.merge(
                     request.getContext(), factoryId, userId, userRole);
@@ -969,6 +1652,12 @@ public class ToolDispatchService {
                 log.warn("Preview 路径参数抽取失败 (继续用已有 params): {}", ex.getMessage());
             }
 
+            // Preview shares the read policy, but never admits a stale model result.
+            if (SalesRankingParameters.TOOL.equals(tool.getToolName()) && salesRankingConversationSupport != null) {
+                salesRankingConversationSupport.parameters(factoryId, userId, request, params);
+            }
+            IntentExecuteResponse rankingDecision = applySalesRankingParameters(tool, factoryId, userId, request, params);
+            if (rankingDecision != null) return rankingDecision;
             // Preview must expose the same principal-bound arguments as real execution.
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
             if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
@@ -1030,9 +1719,7 @@ public class ToolDispatchService {
                             previewData, "currentValues", "currentValue", "current");
                     Map<String, Object> tokenNewValues = extractPreviewSection(
                             previewData, "newValues", "newValue", "proposed");
-                    com.cretas.aims.entity.intent.IntentPreviewToken boundToken =
-                            previewTokenService.createBoundToken(
-                                    new PreviewTokenService.BoundTokenRequest(
+                    var tokenRequest = new PreviewTokenService.BoundTokenRequest(
                                             factoryId, userId, null,
                                             intent.getIntentCode(), intent.getIntentName(),
                                             tool.getToolName(), tool.getVersion(),
@@ -1041,7 +1728,10 @@ public class ToolDispatchService {
                                             params,
                                             tokenCurrentValues != null ? tokenCurrentValues : java.util.Map.of(),
                                             tokenNewValues != null ? tokenNewValues : java.util.Map.of(),
-                                            300));
+                                            300);
+                    com.cretas.aims.entity.intent.IntentPreviewToken boundToken = previewDraftId == null
+                            ? previewTokenService.createBoundToken(tokenRequest)
+                            : previewTokenService.createDraftBoundToken(tokenRequest,previewDraftId,previewDraftRevision);
                     if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
                         previewData.put("grantId", com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService.grantId(boundToken.getId()));
                         previewResponse.setResultData(java.util.Map.of("grantId",
@@ -1695,6 +2385,45 @@ public class ToolDispatchService {
 
     /** 工具 schema 顶层开关: 只有可选参数的工具要不要在执行前让大模型抽可选参数 (默认不抽)。 */
     public static final String EXTRACT_OPTIONAL_FLAG = "x-llm-extract-optional";
+
+    private IntentExecuteResponse applySalesRankingParameters(ToolExecutor tool, String factoryId, Long userId,
+                                             IntentExecuteRequest request, Map<String, Object> params) {
+        if (!SalesRankingParameters.TOOL.equals(tool.getToolName())) return null;
+        if (salesRankingConversationSupport != null
+                && !salesRankingConversationSupport.isCurrent(factoryId, userId, request)) {
+            return IntentExecuteResponse.builder().status("CANCELLED").aiMode("READ")
+                    .message("查询已取消或条件已更新，未执行旧查询。").build();
+        }
+        // Resolved read-query parameters cannot be overwritten by a later optional LLM pass.
+        if (request.getSemanticContext() == null && request.getContext() != null) {
+            for (String key : java.util.List.of("startDate", "endDate", "limit", "metric")) {
+                if (request.getContext().get(key) != null) params.put(key, request.getContext().get(key));
+            }
+        }
+        if (salesRankingConversationSupport != null) {
+            salesRankingConversationSupport.applyCurrentParameters(request, params);
+        } else {
+            SalesRankingParameters.apply(request.getUserInput(), params,
+                    java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")));
+        }
+        // Unsupported metric is a capability boundary, not a failed call for a correction
+        // agent to "repair" by changing quantity back into amount.
+        if (!"amount".equals(params.get("metric"))) {
+            return IntentExecuteResponse.builder().status("UNSUPPORTED_CAPABILITY").aiMode("READ")
+                    .intentCode(SalesRankingParameters.INTENT)
+                    .message("当前产品排行仅支持销售订单金额排序，不支持销量排名；请确认是否改看金额排行。")
+                    .build();
+        }
+        if (params.get("limit") instanceof Number n
+                && (new java.math.BigDecimal(n.toString()).compareTo(java.math.BigDecimal.ONE) < 0
+                || new java.math.BigDecimal(n.toString()).compareTo(java.math.BigDecimal.valueOf(100)) > 0)) {
+            return IntentExecuteResponse.builder().status("NEED_MORE_INFO").aiMode("READ")
+                    .intentCode(SalesRankingParameters.INTENT)
+                    .message("产品排行支持前1到100名，请提供这个范围内的条数，未执行查询。")
+                    .build();
+        }
+        return null;
+    }
 
     Map<String, Object> extractParametersWithLLM(String userInput, ToolExecutor tool,
                                                           Map<String, Object> existingParams) {

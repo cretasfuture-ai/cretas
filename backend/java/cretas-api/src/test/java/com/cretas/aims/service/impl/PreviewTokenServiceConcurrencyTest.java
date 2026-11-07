@@ -3,6 +3,8 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.entity.intent.IntentPreviewToken.TokenStatus;
 import com.cretas.aims.repository.intent.IntentPreviewTokenRepository;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
+import com.cretas.aims.support.ConversationOwnerLockH2TestConfiguration;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.PreviewTokenService.BoundTokenRequest;
 import com.cretas.aims.service.PreviewTokenService.ClaimResult;
@@ -15,6 +17,8 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.boot.test.mock.mockito.MockReset;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Propagation;
@@ -35,7 +39,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-@Import({PreviewTokenServiceImpl.class, PreviewTokenServiceConcurrencyTest.JacksonConfig.class})
+@Import({PreviewTokenServiceImpl.class, PreviewTokenServiceConcurrencyTest.JacksonConfig.class,
+        ConversationOwnerLockH2TestConfiguration.class})
+@SpyBean(value = ConversationSessionRepository.class, reset = MockReset.NONE)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class PreviewTokenServiceConcurrencyTest {
 

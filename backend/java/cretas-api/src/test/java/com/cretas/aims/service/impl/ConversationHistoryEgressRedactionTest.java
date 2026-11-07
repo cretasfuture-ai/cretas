@@ -166,10 +166,24 @@ class ConversationHistoryEgressRedactionTest {
     @Test
     void intentClarificationConversationSendsTokensAndRestoresTheQuestion() {
         ConversationSessionRepository sessions = mock(ConversationSessionRepository.class);
-        when(sessions.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        Map<String, ConversationSession> stored = new LinkedHashMap<>();
+        when(sessions.save(any())).thenAnswer(inv -> {
+            ConversationSession value = inv.getArgument(0);
+            stored.put(value.getSessionId(), value);
+            return value;
+        });
+        when(sessions.saveAndFlush(any())).thenAnswer(inv -> {
+            ConversationSession value = inv.getArgument(0);
+            stored.put(value.getSessionId(), value);
+            return value;
+        });
+        when(sessions.findBySessionIdAndFactoryIdAndUserIdForUpdate(anyString(), anyString(), anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(stored.get(inv.getArgument(0, String.class))));
         AIIntentConfigRepository intents = mock(AIIntentConfigRepository.class);
         when(intents.findActiveByFactoryIdWithPriority(FACTORY)).thenReturn(List.of());
-        ConversationServiceImpl service = new ConversationServiceImpl(sessions, intents, null, llm);
+        ConversationServiceImpl service = new ConversationServiceImpl(sessions, intents, null, llm,
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
+        ReflectionTestUtils.setField(service, "entityManager", mock(jakarta.persistence.EntityManager.class));
         ReflectionTestUtils.setField(service, "llmEgressGuard", guard);
         ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> user = ArgumentCaptor.forClass(String.class);
@@ -195,10 +209,24 @@ class ConversationHistoryEgressRedactionTest {
                 mock(TimeNormalizationRules.class), mock(ColloquialMappings.class), null, llm, mapper, null, null);
         ReflectionTestUtils.setField(rewrite, "llmEgressGuard", guard);
         ConversationSessionRepository sessions = mock(ConversationSessionRepository.class);
-        when(sessions.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        Map<String, ConversationSession> stored = new LinkedHashMap<>();
+        when(sessions.save(any())).thenAnswer(inv -> {
+            ConversationSession value = inv.getArgument(0);
+            stored.put(value.getSessionId(), value);
+            return value;
+        });
+        when(sessions.saveAndFlush(any())).thenAnswer(inv -> {
+            ConversationSession value = inv.getArgument(0);
+            stored.put(value.getSessionId(), value);
+            return value;
+        });
+        when(sessions.findBySessionIdAndFactoryIdAndUserIdForUpdate(anyString(), anyString(), anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(stored.get(inv.getArgument(0, String.class))));
         AIIntentConfigRepository intents = mock(AIIntentConfigRepository.class);
         when(intents.findActiveByFactoryIdWithPriority(FACTORY)).thenReturn(List.of());
-        ConversationServiceImpl conversation = new ConversationServiceImpl(sessions, intents, null, llm);
+        ConversationServiceImpl conversation = new ConversationServiceImpl(sessions, intents, null, llm,
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
+        ReflectionTestUtils.setField(conversation, "entityManager", mock(jakarta.persistence.EntityManager.class));
         ReflectionTestUtils.setField(conversation, "llmEgressGuard", guard);
 
         ReferenceResult r = coref.resolveWithLLM("那家供应商呢", List.of("那家供应商"), context());
@@ -226,8 +254,12 @@ class ConversationHistoryEgressRedactionTest {
         });
         when(sessions.findBySessionIdAndFactoryIdAndUserId(anyString(), anyString(), anyLong()))
                 .thenAnswer(inv -> Optional.ofNullable(stored.get(inv.getArgument(0, String.class))));
+        when(sessions.findBySessionIdAndFactoryIdAndUserIdForUpdate(anyString(), anyString(), anyLong()))
+                .thenAnswer(inv -> Optional.ofNullable(stored.get(inv.getArgument(0, String.class))));
         ConversationServiceImpl service = new ConversationServiceImpl(
-                sessions, mock(AIIntentConfigRepository.class), null, llm);
+                sessions, mock(AIIntentConfigRepository.class), null, llm,
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
+        ReflectionTestUtils.setField(service, "entityManager", mock(jakarta.persistence.EntityManager.class));
         ReflectionTestUtils.setField(service, "llmEgressGuard", guard);
         ReflectionTestUtils.setField(service, "maxRounds", 5);
         ReflectionTestUtils.setField(service, "timeoutMinutes", 10);

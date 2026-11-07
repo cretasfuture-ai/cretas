@@ -7,7 +7,14 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Comparator;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 /**
  * 多轮对话服务接口
@@ -22,6 +29,96 @@ import java.util.Optional;
  * @since 2026-01-06
  */
 public interface ConversationService {
+
+    /** Stable optimistic-concurrency fingerprint for a parameter draft. */
+    static String draftRevisionFingerprint(ConversationSession session) {
+        if (session == null) return "";
+        StringBuilder canonical = new StringBuilder();
+        part(canonical, "intent", session.getKnownIntentCode());
+        part(canonical, "mode", session.getSessionMode());
+        part(canonical, "status", session.getStatus());
+        part(canonical, "round", session.getCurrentRound());
+        part(canonical, "updatedAt", micros(session.getUpdatedAt()));
+        part(canonical, "lastActiveAt", micros(session.getLastActiveAt()));
+        session.getCollectedParameters().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(e -> {
+                    part(canonical, "collected.key", e.getKey());
+                    part(canonical, "collected.value", e.getValue());
+                });
+        session.getRequiredParameters().stream()
+                .sorted(Comparator.comparing(ConversationSession.RequiredParameter::getName,
+                        Comparator.nullsFirst(Comparator.naturalOrder())))
+                .forEach(p -> {
+                    part(canonical, "required.name", p.getName());
+                    part(canonical, "required.collected", p.isCollected());
+                    part(canonical, "required.type", p.getType());
+                });
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) hex.append(String.format("%02x", b));
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    private static String value(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private static Object micros(LocalDateTime value) {
+        return value == null ? null : value.truncatedTo(ChronoUnit.MICROS);
+    }
+
+    /** Length-prefix every component so delimiter characters cannot create an ABA alias. */
+    private static void part(StringBuilder target, String key, Object value) {
+        String k = value(key);
+        String v = value(value);
+        target.append(k.length()).append(':').append(k)
+                .append(v.length()).append(':').append(v);
+    }
+
+    /** Revision-safe correction of an existing parameter-collection draft. */
+    default boolean reviseDraft(String factoryId, Long userId, String sessionId,
+                                Map<String, String> delta, String expectedFingerprint) {
+        return false;
+    }
+
+    /** Revision repair may include a COMPLETED draft only with an independently verified pending preview. */
+    default boolean reviseDraft(String factoryId, Long userId, String sessionId,
+                                Map<String, String> delta, String expectedFingerprint,
+                                boolean pendingPreviewProof) {
+        return false;
+    }
+
+    /** Pause an owned active conversation without discarding its context. */
+    default boolean pauseConversation(String factoryId, Long userId, String sessionId) {
+        return false;
+    }
+
+    default boolean pauseConversation(String factoryId, Long userId, String sessionId,
+                                     boolean pendingPreviewProof) {
+        return false;
+    }
+
+    /** Resume one explicitly selected owned paused conversation. */
+    default boolean resumeConversation(String factoryId, Long userId, String sessionId) {
+        return false;
+    }
+
+    /** Resume only if the paused draft is still at the revision observed before a read. */
+    default boolean resumeConversation(String factoryId, Long userId, String sessionId,
+                                       String expectedFingerprint) {
+        return false;
+    }
+
+    /** List paused conversations for the owner; selection remains with the caller. */
+    default List<ConversationSession> getPausedSessions(String factoryId, Long userId) {
+        return java.util.Collections.emptyList();
+    }
 
     /**
      * 开始多轮对话 (意图识别模式)
@@ -108,6 +205,11 @@ public interface ConversationService {
      */
     boolean cancelConversation(String factoryId, Long userId, String sessionId);
 
+    default boolean cancelConversation(String factoryId, Long userId, String sessionId,
+                                      boolean pendingPreviewProof) {
+        return false;
+    }
+
     /**
      * 获取活跃会话
      *
@@ -160,6 +262,8 @@ public interface ConversationService {
         private ConversationSession.SessionStatus status;
         /** 是否完成 (成功识别意图) */
         private boolean completed;
+        /** This request lost its state revision; callers must stop rather than recognize it anew. */
+        private boolean taskChanged;
         /** 助手消息 (澄清问题或最终回复) */
         private String message;
         /** 识别的意图代码 (完成时) */

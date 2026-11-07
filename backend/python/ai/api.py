@@ -139,6 +139,7 @@ async def _do_match(
         role=body.role,
         visible_intents=visible_rows,
         history=body.history,
+        task_context=body.taskContext,
         min_confidence=min_confidence,
         enable_llm=enable_llm,
     )

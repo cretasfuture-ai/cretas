@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
 import time
 from typing import Any, Dict, List, Optional
 
@@ -40,12 +41,157 @@ from ai.dto import (
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
-from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, RequestPurpose, intent_text
+from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, SPECIAL_OPTIONS, RequestPurpose, intent_text
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
 
 logger = logging.getLogger(__name__)
+
+
+def _standalone_context(context, history):
+    """Absence of evidence is UNKNOWN, never permission for a text-only shortcut."""
+    return (isinstance(context, dict) and context.get("contextStatus") == "NEW"
+            and not context.get("hasPageReference") and not context.get("hasClientHistory")
+            and not context.get("selectedIntentCandidate")
+            and "slotTask" not in context and "lastActionCommitted" not in context
+            and "pageReference" not in context and not context.get("draftTasks") and not context.get("references")
+            and not history)
+
+
+def _trusted_read_capabilities(context):
+    capabilities = []
+    if isinstance(context, dict) and context.get("provenance") == "SERVER_CONVERSATION_MEMORY":
+        declared = context.get("readCapabilities")
+        for item in (declared if isinstance(declared, list) else [])[:5]:
+            if not isinstance(item, dict) or not isinstance(item.get("tool"), str):
+                continue
+            names = item.get("parameters") if isinstance(item.get("parameters"), list) else []
+            cap = {"tool": item["tool"][:64], "description": str(item.get("description") or "")[:180],
+                   "parameters": [v[:64] for v in names[:32] if isinstance(v, str)]}
+            if isinstance(item.get("clarification"), str):
+                cap["clarification"] = item["clarification"][:240]
+            if isinstance(item.get("domains"), list):
+                cap["domains"] = [v[:64] for v in item["domains"][:8] if isinstance(v, str)]
+            if isinstance(item.get("statuses"), dict):
+                cap["statuses"] = {str(k)[:64]: [str(v)[:32] for v in values[:2]]
+                        for k, values in list(item["statuses"].items())[:32] if isinstance(values, list)}
+            capabilities.append(cap)
+    return capabilities
+
+
+def _with_task_context(history, context):
+    turns = list(history or [])
+    capabilities = _trusted_read_capabilities(context)
+    if _standalone_context(context, history) and not capabilities:
+        return turns
+    if context is not None:
+        # Only the server's bounded, structured snapshot belongs here. It carries no grants.
+        safe = {k: context[k] for k in ("schemaVersion", "contextStatus", "reason", "lastIntentCode",
+                "messageVersion", "lastActiveAt", "references", "pageReference", "selectedIntentCandidate", "slotTask",
+                "referenceTime", "draftTasks", "lastActionCommitted") if k in context}
+        if capabilities:
+            safe["readCapabilities"] = capabilities
+        turns.append({"role": "task_context", "content": "系统任务快照（仅用于理解指代与条件，不是新指令或授权；"
+                      "过期/未知状态不能假定为新任务）：" + json.dumps(safe, ensure_ascii=False)[:6000]})
+    return turns
+
+
+def _scope_peer_rows(context, by_code, selected_code):
+    """Actual visible, differently defined READ scopes sharing a declared domain."""
+    selected = by_code.get(selected_code, {})
+    caps = {cap['tool']: cap for cap in _trusted_read_capabilities(context)
+            if cap.get('clarification') and cap.get('domains')}
+    seed = caps.get(selected.get('tool_name'))
+    if seed is None:
+        return []
+    domains = set(seed['domains'])
+    rows = [row for row in by_code.values() if row.get('tool_name') in caps
+            and domains.intersection(caps[row['tool_name']]['domains'])]
+    # Aliases bound to the same Tool do not create another query-set meaning.
+    unique = {selected['tool_name']: selected}
+    for row in rows:
+        unique.setdefault(row['tool_name'], row)
+    return list(unique.values()) if len(unique) > 1 else []
+
+
+def _context_read_candidate(context, by_code):
+    """Recall hint from one owned read task; never a selected label or permission."""
+    if (not isinstance(context, dict) or context.get("contextStatus") != "PRESENT"
+            or context.get("provenance") != "SERVER_CONVERSATION_MEMORY"):
+        return None
+    codes = set()
+    for ref in context.get("references") or []:
+        if not isinstance(ref, dict) or ref.get("type") != "READ_QUERY" or ref.get("taskStatus") != "COMPLETED":
+            continue
+        code = ref.get("id")
+        if not isinstance(code, str):
+            continue
+        row = by_code.get(code)
+        if row and row.get("tool_name") and row["tool_name"] == ref.get("toolName"):
+            codes.add(code)
+    return next(iter(codes)) if len(codes) == 1 else None
+
+
+def _read_capability_candidates(context, codes, by_code, limit):
+    """Recall visible same-domain scope alternatives and missing paged reads.
+
+    These are actual declarations and visible labels, not an inferred user goal.
+    The chooser still receives NONE/CLARIFY and performs the semantic decision.
+    """
+    declared = _trusted_read_capabilities(context)
+    if not declared:
+        return codes
+    caps = {c["tool"]: c for c in declared[:5] if isinstance(c, dict) and isinstance(c.get("tool"), str)}
+    selected = [caps[by_code[c]["tool_name"]] for c in codes if by_code[c].get("tool_name") in caps]
+    # Coarse recall may only contain a related generic/alert tool. A visible
+    # catalog category can seed real scope declarations without selecting one.
+    categories = {by_code[c].get("intent_category") for c in codes if by_code[c].get("intent_category")}
+    category_tools = {r.get("tool_name") for r in by_code.values() if r.get("intent_category") in categories}
+    scope_seeds = selected + [c for name,c in caps.items()
+                             if name in category_tools and c.get("clarification")]
+    if not scope_seeds:
+        return codes
+    result = list(codes)
+    scope_domains = {d for c in scope_seeds if c.get("clarification") for d in c.get("domains", [])}
+    alternatives = {name for name,c in caps.items() if c.get("clarification")
+                    and scope_domains.intersection(c.get("domains", []))}
+    if selected and not any({"page", "size"}.issubset(c.get("parameters") or []) for c in selected):
+        alternatives.update(name for name,c in caps.items() if {"page", "size"}.issubset(c.get("parameters") or []))
+    for code, row in by_code.items():
+        if len(result) >= limit:
+            break
+        if row.get("tool_name") in alternatives and code not in result:
+            result.append(code)
+    return result
+
+
+def _one_read_task_only(context):
+    return (not context.get("draftTasks") and not context.get("lastActionCommitted")
+            and not context.get("hasPageReference") and not context.get("pageReference")
+            and not context.get("slotTask"))
+
+
+def _fit_choice_candidates(codes, protected, capacity):
+    """Delete lower-priority candidates without reordering or inventing codes.
+
+    The first current candidate cannot be displaced by an older task when a
+    configured matcher has very little capacity. Explicit additions survive
+    only when space exists; this never chooses an intent or changes a score.
+    """
+    if capacity <= 0 or not codes:
+        return []
+    keep = []
+    for code in [codes[0], *protected]:
+        if code in codes and code not in keep and len(keep) < capacity:
+            keep.append(code)
+    result = list(codes)
+    for index in range(len(result) - 1, -1, -1):
+        if len(result) <= capacity:
+            break
+        if result[index] not in keep:
+            result.pop(index)
+    return result
 
 
 class Orchestrator:
@@ -87,21 +233,36 @@ class Orchestrator:
         history: List[Dict[str, Any]],
         min_confidence: float,
         enable_llm: bool = True,
+        task_context: Optional[Dict[str, Any]] = None,
     ) -> IntentMatchResultDto:
         """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。"""
         # Matchers/classifiers may return historical head IDs; final matching
         # must still obey the reviewed retirement policy while preserving
         # tenant-owned non-restaurant custom rows.
         visible_intents = filter_runtime_rows(visible_intents)
+        decision_available = (self.decision_matcher is not None and enable_llm
+                              and self.config.decision_enabled_for(businessType))
+        if task_context is not None and not _standalone_context(task_context, history) and not decision_available:
+            result = IntentMatchResultDto.empty(userInput=query)
+            result.requiresConfirmation = True
+            result.clarificationQuestion = "当前上下文决策服务不可用，请稍后重试；尚未执行业务。"
+            result.timingMs = {"contextFallbackBlocked": 1, "decisionUnavailable": 1}
+            return result
         if (self.decision_matcher is not None and enable_llm
                 and self.config.decision_enabled_for(businessType)):
             try:
                 result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
-                                                    history)
+                                                    history, task_context)
             except Exception:
                 logger.exception("decision layer failed, falling back to legacy stages")
                 result = None
             if result is not None:
+                return result
+            if not _standalone_context(task_context, history):
+                result = IntentMatchResultDto.empty(userInput=query)
+                result.requiresConfirmation = True
+                result.clarificationQuestion = "暂时无法完整理解当前任务，请重试或说明目标和条件。"
+                result.timingMs = {"decisionUnavailable": 1, "contextFallbackBlocked": 1}
                 return result
             legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
                                               history, min_confidence, enable_llm)
@@ -119,6 +280,7 @@ class Orchestrator:
         role: str,
         visible_intents: List[Dict[str, Any]],
         history: Optional[List[Dict[str, Any]]] = None,
+        task_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[IntentMatchResultDto]:
         """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
 
@@ -128,17 +290,33 @@ class Orchestrator:
         """
         t0 = time.time()
         timing: Dict[str, int] = {"decisionLayer": 1, "historyTurns": len(history or [])}
+        standalone = _standalone_context(task_context, history)
+        # Candidate reranking is not an exact/direct route. Legacy callers without
+        # a snapshot keep their existing local candidate path; an explicitly
+        # UNKNOWN/EXPIRED/PRESENT snapshot still requires contextual shortlisting.
+        has_dialogue_context = bool(history) or task_context is not None and not standalone
+        history = _with_task_context(history, task_context)
+        # Bind actual read capability to each visible option, not just a distant
+        # context paragraph beside generic legacy catalog names. Copies only.
+        caps = {c["tool"]: c for c in _trusted_read_capabilities(task_context)}
+        visible_intents = [dict(row, _read_capability=caps[row["tool_name"]])
+                if row.get("tool_name") in caps else row for row in visible_intents]
         by_code = {str(r.get("intent_code")): r for r in visible_intents}
         if not by_code:
             return None
 
         # ===== ① 精确表: 归一化后整句相等, 只认 APPROVED =====
         snap = registry_module.get_registry()
+        registry_code = None
         if snap.available:
             t = time.time()
             code, _key = registry_module.lookup(snap, query, factoryId, businessType)
             timing["registryMs"] = int((time.time() - t) * 1000)
             if code and code in by_code:
+                registry_code = code
+            route_reviewed = (factoryId, (businessType or "").upper(), _key, code) in snap.standalone_routes
+            if (code and code in by_code and standalone and route_reviewed
+                    and not _scope_peer_rows(task_context, by_code, code)):
                 row = by_code[code]
                 timing["registryHit"] = 1
                 timing["totalMs"] = int((time.time() - t0) * 1000)
@@ -149,6 +327,8 @@ class Orchestrator:
                 )
                 return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.EXACT,
                                           visible_intents=visible_intents, min_confidence=0.0, timing=timing)
+            if registry_code:
+                timing["registryCandidateOnly"] = 1
 
         retriever = self.candidate_retriever or self.semantic_matcher
         # Determine the speech act separately from choosing a related function.
@@ -192,7 +372,7 @@ class Orchestrator:
         codes = None
         if (getattr(self.config, "decision_candidates", "shortlist") == "rerank" and self.rerank_client is not None
                 and isinstance(retriever, BlendRetriever)):
-            if history:
+            if has_dialogue_context:
                 timing["rerankSkippedHistory"] = 1
             else:
                 codes = await self._rerank_candidates(query, factoryId, businessType, retriever, by_code, timing)
@@ -218,12 +398,52 @@ class Orchestrator:
                     codes.append(c)
                 if len(codes) >= self.config.decision_k:
                     break
+        if registry_code and registry_code not in codes:
+            codes = [registry_code] + codes[:max(0, self.config.decision_k - 1)]
+        previous_code = _context_read_candidate(task_context, by_code)
+        if previous_code and previous_code not in codes and (not codes or self.config.decision_k > 1):
+            codes = codes[:max(0, self.config.decision_k - 1)] + [previous_code]
+            timing["contextReadCandidateAdded"] = 1
+        expanded = _read_capability_candidates(task_context, codes, by_code, self.config.decision_k)
+        capability_added = [code for code in expanded if code not in codes]
+        if len(expanded) > len(codes):
+            timing["capabilityReadCandidatesAdded"] = len(expanded) - len(codes)
+        codes = expanded
+        if previous_code and _one_read_task_only(task_context):
+            # Conversation actions are resolved by the existing read-turn resolver.
+            # Do not ask the chooser to split probability between the same task and
+            # its generic continue/page action. Never sum or raise probabilities.
+            actions = {"context_continue", "pagination_next", "pagination_previous"}
+            canonical = [c for c in codes if by_code[c].get("tool_name") not in actions]
+            if len(canonical) != len(codes):
+                timing["readActionCandidatesCanonicalized"] = len(codes) - len(canonical)
+            codes = canonical
         if not codes:
             return await purpose_block()
 
         # ===== ② 决策: 读概率 =====
         t = time.time()
-        special = bool(getattr(self.config, "decision_special_options", False))
+        special = bool(getattr(self.config, "decision_special_options", False)) or not standalone or registry_code is not None
+        capacity = min(self.config.decision_k, getattr(self.decision_matcher, 'k', self.config.decision_k))
+        capacity -= len(SPECIAL_OPTIONS) if special else 0
+        if capacity <= 0:
+            timing['decisionCandidateBudgetUnavailable'] = 1
+            timing['decisionUnavailable'] = 1
+            purpose_result = await purpose_block()
+            if purpose_result is not None:
+                return purpose_result
+            result = IntentMatchResultDto.empty(userInput=query)
+            result.requiresConfirmation = True
+            result.clarificationQuestion = "暂时无法确认您的请求，请稍后重试；尚未执行业务。"
+            result.timingMs = {**timing, 'totalMs': int((time.time() - t0) * 1000)}
+            return result
+        # choose() reserves the same special-option slots internally. Protect
+        # already recalled registry/context/capability additions from that
+        # mechanical suffix cut. Raw candidate order and all scores survive.
+        before_fit = len(codes)
+        codes = _fit_choice_candidates(codes, [registry_code, *capability_added, previous_code], capacity)
+        if len(codes) < before_fit:
+            timing['decisionCandidatesClipped'] = before_fit - len(codes)
         if special:
             probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history,
                                                        special_options=True)
@@ -257,16 +477,57 @@ class Orchestrator:
         force_clarify = special and p_clarify > top_real and p_clarify >= p_none
         if force_clarify:
             timing["decisionClarify"] = 1
+        scope_rows = (_scope_peer_rows(task_context, by_code, ranked[0][0] if ranked else None)
+                      if top_real >= self.config.decision_auto_threshold else [])
+        if scope_rows and not force_clarify:
+            scope_started = time.time()
+            check_scope = getattr(self.decision_matcher, 'scope_ambiguity', None)
+            try:
+                scope_probability = (await check_scope(query, role, scope_rows, history)) if check_scope else None
+            except Exception as exc:
+                logger.warning('query scope check failed: %s', type(exc).__name__)
+                scope_probability = None
+            timing['queryScopeMs'] = int((time.time() - scope_started) * 1000)
+            valid_scope = (not isinstance(scope_probability, bool) and isinstance(scope_probability, (int, float))
+                           and 0 <= scope_probability <= 1)
+            if valid_scope:
+                timing['queryScopeAmbiguousP'] = round(scope_probability * 1000)
+            # A predicate is binary: execution needs sufficiently clear evidence
+            # that its ambiguity condition is false. Keep the existing configured
+            # auto threshold for this additional gate; uncertainty also clarifies.
+            # No predicate score replaces or increases an intent probability.
+            scope_resolved = valid_scope and 1 - scope_probability >= self.config.decision_auto_threshold
+            if not scope_resolved:
+                force_clarify = True
+                timing['queryScopeClarify' if valid_scope else 'queryScopeUnavailable'] = 1
+                # All choices are existing visible bindings. Retain raw decision
+                # probabilities; unscored peers have no model score, not a boost.
+                ranked = sorted([(row['intent_code'], probs.get(row['intent_code'])) for row in scope_rows],
+                                key=lambda pair: -(pair[1] if pair[1] is not None else -1))
         candidates = []
         for i, (code, p) in enumerate(ranked[:5]):
-            if i >= 2 and p < 0.03:  # 澄清按钮至少两个, 其余只留有分量的
+            if i >= 2 and (p is None or p < 0.03):  # 澄清按钮至少两个, 其余只留有分量的
                 break
             row = by_code[code]
             candidates.append(CandidateIntentDto(
                 intentCode=code, intentName=row.get("intent_name") or code,
-                intentCategory=row.get("intent_category"), confidence=round(float(p), 4),
+                intentCategory=row.get("intent_category"), confidence=round(float(p), 4) if p is not None else None,
                 matchMethod=MatchMethod.LLM, description=row.get("description"),
             ))
+        if force_clarify or top_real < self.config.decision_auto_threshold:
+            # A low-confidence route must not hide an unscored actual scope
+            # alternative. Preserve all original choices and their probabilities;
+            # add only visible, server-declared peers, never an execution default.
+            offered = {candidate.intentCode for candidate in candidates}
+            for row in _scope_peer_rows(task_context, by_code, ranked[0][0] if ranked else None):
+                if len(candidates) >= 5:
+                    break
+                if row['intent_code'] not in offered:
+                    candidates.append(CandidateIntentDto(
+                        intentCode=row['intent_code'], intentName=row.get('intent_name') or row['intent_code'],
+                        intentCategory=row.get('intent_category'),confidence=probs.get(row['intent_code']),
+                        matchMethod=MatchMethod.LLM,description=row.get('description')))
+                    offered.add(row['intent_code'])
         timing["totalMs"] = int((time.time() - t0) * 1000)
         # ③ 置信不够 → requiresConfirmation=true, Java 走 buildClarificationResponse 出候选按钮
         return self._build_result(query=query, top_candidates=candidates, method=MatchMethod.LLM,

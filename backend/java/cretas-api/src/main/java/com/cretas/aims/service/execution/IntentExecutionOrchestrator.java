@@ -81,6 +81,13 @@ public class IntentExecutionOrchestrator {
     private com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService controlledPurchase;
     @Autowired(required = false)
     private FactoryFollowUpService factoryFollowUpService;
+    @Autowired(required = false)
+    private SalesRankingConversationSupport salesRankingConversationSupport;
+    @org.springframework.beans.factory.annotation.Autowired
+    private SemanticConversationContextService semanticConversationContextService;
+
+    @Autowired(required = false)
+    private ConversationTaskRepairSupport conversationTaskRepairSupport;
     /**
      * AI 数据访问审计: 一次意图执行一条; 期间的工具调用 / 成本分析并进这一条 (同一线程, 请求外也合并)。
      * 单测直接构造时不记录。
@@ -188,6 +195,9 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private IntentAccessModeFilter intentAccessModeFilter;
 
+    @Autowired
+    private ClarificationCandidateService clarificationCandidateService;
+
     // C1 clarification business-type filter (restaurant-chat-qa): resolve the factory's business
     // domain + each candidate intent's business_type so the NEED_CLARIFICATION choice list never
     // shows manufacturing options (查询原料库存 / 查询生产批次) to a RESTAURANT tenant.
@@ -292,6 +302,13 @@ public class IntentExecutionOrchestrator {
              var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
             IntentExecuteResponse response = executeInScope(factoryId, request, userId, userRole);
+            if (response != null && request.getSemanticContext() != null && request.getSessionId() != null
+                    && response.getSessionId() == null && !"NO_PERMISSION".equals(response.getStatus())) {
+                Map<String,Object> metadata = new java.util.LinkedHashMap<>(response.getMetadata() == null ? Map.of() : response.getMetadata());
+                if (!metadata.containsKey("sessionId")) {
+                    metadata.put("sessionId", request.getSessionId()); response.setSessionId(request.getSessionId()); response.setMetadata(metadata);
+                }
+            }
             // Only an unselected, non-executing answer can default to READ. Known
             // intents must be stamped where their declaration is available; neither
             // a missing stamp nor caller-supplied text/code proves a read operation.
@@ -339,7 +356,20 @@ public class IntentExecutionOrchestrator {
             return sessionAdmissionDeniedResponse();
         }
 
-        {}
+        if (semanticConversationContextService != null) {
+            semanticConversationContextService.prepare(factoryId, userId, request);
+            IntentExecuteResponse admissionFailure = SemanticConversationContextService.admissionFailure(request);
+            if (admissionFailure != null) return admissionFailure;
+        }
+        if (conversationTaskRepairSupport != null && !Boolean.TRUE.equals(request.getForceExecute())) {
+            IntentExecuteResponse repair = conversationTaskRepairSupport.prepare(factoryId,userId,request);
+            if (repair != null) return repair;
+            if (semanticConversationContextService != null)
+                semanticConversationContextService.prepare(factoryId,userId,request);
+            conversationTaskRepairSupport.refreshContext(factoryId,userId,request);
+            IntentExecuteResponse failure = SemanticConversationContextService.admissionFailure(request);
+            if (failure != null) return failure;
+        }
 
         // 0. 显式意图代码
         if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
@@ -402,8 +432,8 @@ public class IntentExecutionOrchestrator {
                 log.warn("[W1b] orchestrator detectNegationVeto failed, fail-open NONE for input='{}': {}", vInput, e.toString());
                 vk = QueryPreprocessorService.NegationKind.NONE;
             }
-            {}
-            if (vk == QueryPreprocessorService.NegationKind.VETO_READ) {
+            if (vk == QueryPreprocessorService.NegationKind.VETO_READ
+                    && !SemanticConversationContextService.hasReadContext(request)) {
                 log.info("[W1b] orchestrator VETO_READ → clarification (no phrase shortcut, no execution): '{}'", vInput);
                 return buildNegationVetoClarificationResponse(vInput);
             }
@@ -451,7 +481,8 @@ public class IntentExecutionOrchestrator {
 
             {}
         }
-        if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
+        if ((semanticConversationContextService == null || SemanticConversationContextService.allowsDirectRoute(request))
+                && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(
                     userInput,
                     factoryId,
@@ -491,6 +522,7 @@ public class IntentExecutionOrchestrator {
         // Parameter-filling continuations stay in Java when the semantic-first
         // restaurant path is disabled or the request is an operational write.
         if (!factoryPackConstrained
+                && (request.getSemanticTaskAction() == null || "CONTINUE".equals(request.getSemanticTaskAction()))
                 && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             IntentExecuteResponse conversationResponse = handleConversationContinuation(
                     factoryId, request, userId, userRole);
@@ -500,7 +532,7 @@ public class IntentExecutionOrchestrator {
         }
 
         // 0.3. 早期问题类型检测
-        if (!factoryPackConstrained
+        if ((semanticConversationContextService == null || SemanticConversationContextService.allowsDirectRoute(request)) && !factoryPackConstrained
                 && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentExecuteResponse earlyRouteResponse = handleEarlyQuestionTypeDetection(
                     factoryId, userInput, request, userId, userRole);
@@ -510,7 +542,7 @@ public class IntentExecutionOrchestrator {
         }
 
         // 0.5. 语义缓存
-        if (userInput != null && !userInput.isEmpty()) {
+        if ((semanticConversationContextService == null || SemanticConversationContextService.allowsDirectRoute(request)) && userInput != null && !userInput.isEmpty()) {
             handleSemanticCache(factoryId, userInput, request);
         }
 
@@ -526,13 +558,33 @@ public class IntentExecutionOrchestrator {
                 Long recognizerUserId = hasTrustedConversationIdentity(
                         factoryId, userId, request.getSessionId()) ? userId : null;
                 String recognizerSessionId = recognizerUserId == null ? null : request.getSessionId();
-                matchResult = aiIntentService.recognizeIntentWithConfidence(
+                matchResult = request.getSemanticContext() == null ? aiIntentService.recognizeIntentWithConfidence(
                         request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId));
+                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId))
+                        : aiIntentService.recognizeIntentWithConfidence(
+                        request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId),
+                        SemanticConversationContextService.effectiveHistory(request), request.getSemanticContext());
             } catch (LlmSchemaValidationException e) {
                 log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
                 return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
             }
+        }
+
+        matchResult = ToolDispatchService.bindReadContinuation(matchResult, request,
+                code -> aiIntentService.getIntentByCode(factoryId, code));
+        AIIntentConfig semanticReadIntent = matchResult != null && matchResult.hasMatch() ? matchResult.getBestMatch() : null;
+        if (semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)
+            semanticReadIntent = aiIntentService.getIntentByCode(factoryId,
+                    SemanticConversationContextService.previousReadIntent(request)).orElse(null);
+        if (request.getSemanticContext() != null && (ToolDispatchService.supportsSemanticRead(semanticReadIntent)
+                || semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)) {
+            if (semanticReadIntent != null) {
+                IntentExecuteResponse denied = checkIntentPermission(semanticReadIntent, factoryId, userId, userRole);
+                if (denied != null) return denied;
+            }
+            IntentExecuteResponse readTurn = toolDispatchService.resolveReadTurn(factoryId, userId, request, matchResult);
+            if (readTurn != null) return readTurn;
         }
 
         if (matchResult != null && matchResult.hasMatch()
@@ -555,7 +607,7 @@ public class IntentExecutionOrchestrator {
         if (!factoryPackConstrained
                 && matchResult.hasMatch() && Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
                 && !Boolean.TRUE.equals(request.getForceExecute())) {
-            return buildClarificationResponse(matchResult, factoryId);
+            return buildClarificationResponse(matchResult, factoryId, userId, userRole, request.getMode());
         }
 
         // 2b. 通用咨询/闲聊
@@ -1267,6 +1319,10 @@ public class IntentExecutionOrchestrator {
         try {
             Optional<ConversationSession> pending = conversationService.getSession(
                     factoryId, userId, request.getSessionId());
+            if (pending.isEmpty() && !"CONTINUE".equals(request.getSemanticTaskAction())) return null;
+            if (pending.isPresent() && (pending.get().getStatus() != ConversationSession.SessionStatus.ACTIVE
+                    || pending.get().isExpired())) return "CONTINUE".equals(request.getSemanticTaskAction())
+                    ? IntentExecuteResponse.builder().status("TASK_CHANGED").message("任务已变化，未继续执行旧请求。").build() : null;
             if (pending.isPresent()
                     && SupplierComparisonReadIntent.CODE.equals(pending.get().getKnownIntentCode())) {
                 AIIntentConfig supplier = AIIntentConfig.builder()
@@ -1282,14 +1338,26 @@ public class IntentExecutionOrchestrator {
                     conversationService.continueConversation(
                             factoryId, userId, request.getSessionId(), request.getUserInput());
 
+            if (conversationResp != null && (conversationResp.isTaskChanged()
+                    || "CONTINUE".equals(request.getSemanticTaskAction())
+                    && (conversationResp.getStatus() == ConversationSession.SessionStatus.CANCELLED
+                    || conversationResp.getStatus() == ConversationSession.SessionStatus.TIMEOUT)))
+                return IntentExecuteResponse.builder().status("TASK_CHANGED")
+                        .message("任务已变化，未继续执行旧请求。").sessionId(request.getSessionId()).build();
+
             if (conversationResp == null ||
                 conversationResp.getStatus() == ConversationSession.SessionStatus.CANCELLED) {
                 return null; // Continue normal flow
             }
 
             if (conversationResp.isCompleted() && conversationResp.getIntentCode() != null) {
+                Map<String,Object> collected = new LinkedHashMap<>();
+                conversationService.getSession(factoryId,userId,request.getSessionId())
+                        .map(ConversationSession::getCollectedParameters).ifPresent(collected::putAll);
+                request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(collected));
                 conversationService.endConversation(
                         factoryId, userId, request.getSessionId(), conversationResp.getIntentCode());
+                request.setSemanticTaskAction("DRAFT_READY");
                 request.setIntentCode(conversationResp.getIntentCode());
                 request.setForceExecute(true);
                 return executeWithExplicitIntent(factoryId, request, userId, userRole);
@@ -2319,15 +2387,30 @@ public class IntentExecutionOrchestrator {
 
 
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
+        // Legacy direct-test compatibility only. Actual execute uses the caller-bound overload.
+        return buildClarificationResponse(matchResult, factoryId, buildCandidateActions(matchResult, factoryId));
+    }
+
+    IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId,
+                                                     Long userId, String userRole, String mode) {
+        List<IntentExecuteResponse.SuggestedAction> actions = clarificationCandidateService == null
+                ? List.of(IntentExecuteResponse.SuggestedAction.builder().actionCode("REPHRASE").actionName("重新描述").build())
+                : clarificationCandidateService.buildCandidateActions(matchResult, factoryId, userId, userRole, mode);
+        return buildClarificationResponse(matchResult, factoryId, actions);
+    }
+
+    private IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId,
+                                                              List<IntentExecuteResponse.SuggestedAction> candidateActions) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
-        List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
 
         // Sprint 12: enrich clarification message with inline candidate intent names so the
         // formattedText itself carries the choices (not just suggestedActions UI buttons).
         // Audit gate requires NEED_CLARIFICATION to include specific 2+ choice question
         // visible in formattedText / message — bare "请确认您想要执行的操作" fails.
         String clarificationMessage = matchResult.getClarificationQuestion();
-        if (clarificationMessage == null || clarificationMessage.isEmpty()) {
+        if (ClarificationCandidateService.readCapabilityDescription(toolRegistry, matchedIntent.getToolName(), null) != null) {
+            clarificationMessage = ClarificationCandidateService.buildClarificationMessage(candidateActions);
+        } else if (clarificationMessage == null || clarificationMessage.isEmpty()) {
             clarificationMessage = buildClarificationWithChoices(candidateActions, factoryId);
         }
 
@@ -2673,9 +2756,15 @@ public class IntentExecutionOrchestrator {
                 if (!isCandidateCompatible(factoryId, factoryDomain, candidate.getIntentCode())) {
                     continue; // business-type mismatch — skip noise
                 }
+                String description = candidate.getDescription();
+                try {
+                    AIIntentConfig current = configService.getIntentByCode(factoryId, candidate.getIntentCode()).orElse(null);
+                    if (current != null) description = ClarificationCandidateService.readCapabilityDescription(
+                            toolRegistry, current.getToolName(), description);
+                } catch (RuntimeException unavailable) { /* Existing candidate presentation remains available. */ }
                 actions.add(ClarificationCandidateService.toSelectAction(
                         factoryId, candidate.getIntentCode(), candidate.getIntentName(),
-                        candidate.getDescription(), candidate.getConfidence()));
+                        description, candidate.getConfidence()));
             }
         }
         // C1: if filtering left ZERO data candidates (all incompatible with this domain), fall
@@ -2899,6 +2988,10 @@ public class IntentExecutionOrchestrator {
     private void updateConversationMemory(String sessionId, IntentExecuteRequest request,
                                            IntentExecuteResponse response, IntentMatchResult intentResult,
                                            String factoryId, Long userId) {
+        if (request.getSemanticContext() != null && response != null
+                && java.util.Set.of("CANCELLED", "TASK_CHANGED").contains(String.valueOf(response.getStatus()))) return;
+        if (request.getSemanticReadVersion() != null && salesRankingConversationSupport != null
+                && !salesRankingConversationSupport.isCurrent(factoryId, userId, request)) return;
         try {
             String userInput = request.getUserInput();
             String assistantMessage = response.getMessage() != null ? response.getMessage() : "执行完成";

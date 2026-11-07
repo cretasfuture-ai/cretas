@@ -33,6 +33,22 @@ public interface PreviewTokenService {
     IntentPreviewToken createBoundToken(BoundTokenRequest request);
 
     /**
+     * Issue a command-bound token while pinning it to the server-owned conversation draft.
+     * The compatibility default fails closed because an unpinned draft cannot be trusted.
+     */
+    default IntentPreviewToken createDraftBoundToken(BoundTokenRequest request,
+                                                     String sessionId,
+                                                     String expectedFingerprint) {
+        throw new IllegalStateException("draft-bound preview issuance is unavailable");
+    }
+
+    /** Read-only proof that this exact draft revision already has a pending bound preview. */
+    default boolean hasPendingDraftPreview(String factoryId, Long userId,
+                                           String sessionId, String revision) {
+        return false;
+    }
+
+    /**
      * 创建预览令牌 (Try 阶段)
      *
      * @param factoryId 工厂ID
@@ -137,6 +153,20 @@ public interface PreviewTokenService {
      * @return 是否成功取消
      */
     boolean cancelToken(String token, String factoryId, Long userId, String reason);
+
+    /**
+     * Invalidate pending confirmation tickets before a semantic revision is applied.
+     * Implementations must fail closed when this compatibility contract is unavailable.
+     */
+    default boolean invalidateForRevision(String factoryId, Long userId, String intentCode) {
+        return false;
+    }
+
+    /** Invalidate only one server-bound draft revision; unrelated drafts of the same intent survive. */
+    default boolean invalidateDraftForRevision(String factoryId, Long userId, String intentCode,
+                                               String sessionId, String expectedFingerprint) {
+        return false;
+    }
 
     /** Legacy cancellation lacks the trusted tenant path and therefore fails closed. */
     @Deprecated(forRemoval = false)

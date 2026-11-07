@@ -124,6 +124,17 @@
 - `CI-WEB-ADMIN-VITEST-IS-FLAKY-ON-SELF-HOSTED-20260909` — `queued` — Owner: 迁移任务 — 🔴 同一个 commit 跑两次, 都是 3 files/4 tests failed、都 4691 passed, 而**红的文件一个都不重合** ⇒ 浮动, ⛔ 不是「稳定复现」。本地(串行)main 与 PR 全量都绿; CI 多 worker 并行(注释实测 CPU 350%)。⚠️ 这道闸现在绿和红都只携带有限信息。详见 `archive/2026-09-07-new-tickets-detail.md`
 
 
+- `SEMANTIC-PREVIEW-REVISION-20261106` — `review` — Owner /root/preview_revision — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
+- `SEMANTIC-CONVERSATION-STATE-20261106` — `review` — Owner /root/conversation_state — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
+- `SEMANTIC-FOLLOWUP-SAFETY-20261106` — `review` — Owner /root/followup_safety — Base 8fa0ac5268d98e962a8eb3d19b630507c170bd88 — PR1476; root verifies; no prod/train/deploy.
+- `SEMANTIC-SALES-20261105` — `in-progress` — Owner 01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98 — Base ecfb04cbac6283ac4e1b70592f4643be5feb44b8 — PR1476冻结；修过期口径澄清/切换方向；核验独立来源；保护测试，不训练/合并/部署。
+
+- `SEMANTIC-PREVIEW-FIXTURES-20261106` — `review` — Owner /root/preview_revision — Base a6737c0a9218b43f7dedd3b738087ca68e6271d2 — PR1476; root verifies; no prod/train/deploy.
+
+- `SEMANTIC-SSE-FIXTURES-20261106` — `review` — Owner /root/followup_safety — Base a6737c0a9218b43f7dedd3b738087ca68e6271d2 — PR1476; root verifies; no prod/train/deploy.
+
+- `SEMANTIC-REPAIR-QUALITY-20261106` — `review` — Owner /root — Base 06741c02088073a393e671eb44d4be038e1d4ef9 — R5发现PAUSED误中断及臆造恢复；root补状态约束并复验；不训练/合并/上线。
+
 ## Scope 锁地图
 
 
@@ -140,6 +151,17 @@
 - `BUG-F006-R2-SKU-UNIT-001`：仅 Web SKU 新建/编辑基础规格、displayUnit/净含量单位 helper 与目标测试；Java 净含量契约须另行登记不重叠 scope。
 - `FEATURE-F006-R2-WORKPROCESS-DEDUP-001`：Java WorkProcess/Workflow/SKU 关联、DTO/Repository/Service/Controller、Flyway/JPA tests；Web 工序治理及排序/单位字段移除与目标测试；不得迁移既有业务引用或治理生产重复组。
 - `FEATURE-F006-R2-BOM-SUBSTITUTE-001`：BOM 替代关系的 Web、版本/计划/领料/报工/成本/追溯快照与目标测试；Java CORE 已完成，父任务不得重复修改 CORE Flyway/Entity，必须与统一 Workflow/BOM 任务串行。
+
+- `SEMANTIC-PREVIEW-REVISION-20261106`：PreviewTokenService/Impl、IntentPreviewTokenRepository、PreviewRevisionInvalidationContractTest/StartupGuardTest；Owner /root/preview_revision；root统一Maven。
+- `SEMANTIC-CONVERSATION-STATE-20261106`：精确scope见archive/2026-11-06-semantic-conversation-scope.json；Owner /root/conversation_state；含短事务/actor锁和相关fixture更新，不写其他文件/ACTIVE/迁移/target；JPA必验，root统一Maven。
+- `SEMANTIC-FOLLOWUP-SAFETY-20261106`：execution/FollowUpResolver.java、FollowUpResolverTest.java、FollowUpSubmittedWriteSafetyContractTest.java；Owner /root/followup_safety；不改其他文件/ACTIVE/target，root统一验证。
+- `SEMANTIC-SALES-20261105`：scope见archive/2026-11-06-semantic-read-scope.json；Owner同任务行；保留既有Java/Python/Web语义范围，补产品创建PG消费fixture；禁新生产Entity/Repo改动、训练、PR合并及部署。
+
+- `SEMANTIC-PREVIEW-FIXTURES-20261106`：archive/2026-11-06-semantic-preview-fixtures-20261106-scope.json；Owner /root/preview_revision。
+
+- `SEMANTIC-SSE-FIXTURES-20261106`：archive/2026-11-06-semantic-sse-fixtures-20261106-scope.json；Owner /root/followup_safety。
+
+- `SEMANTIC-REPAIR-QUALITY-20261106`：archive/2026-11-06-semantic-repair-quality-scope.json；Owner /root；仅两文件，禁止Maven/ACTIVE/生产。
 
 ## 阻塞项
 

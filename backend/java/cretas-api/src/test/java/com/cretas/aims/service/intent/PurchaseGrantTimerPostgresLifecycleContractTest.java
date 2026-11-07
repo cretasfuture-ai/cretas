@@ -2,6 +2,7 @@ package com.cretas.aims.service.intent;
 
 import com.cretas.aims.ai.tool.gateway.*;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
+import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
@@ -9,6 +10,8 @@ import com.cretas.aims.repository.ai.AiPurchaseTaskGrantRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.intent.IntentPreviewTokenRepository;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
+import com.cretas.aims.support.ConversationOwnerLockH2TestConfiguration;
 import com.cretas.aims.security.*;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.inventory.PurchaseService;
@@ -22,6 +25,7 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.boot.test.mock.mockito.MockReset;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -64,6 +68,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         IntentPreviewToken.class,
         com.cretas.aims.entity.ai.PurchaseGrantTimerBinding.class,
         com.cretas.aims.entity.cron.ScheduledTask.class,
+        ConversationSession.class,
         com.cretas.aims.entity.Factory.class,
         com.cretas.aims.entity.User.class,
         com.cretas.aims.entity.Supplier.class,
@@ -74,7 +79,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @EnableJpaRepositories(basePackageClasses = {AiPurchaseTaskGrantRepository.class, IntentPreviewTokenRepository.class,
         PurchaseOrderRepository.class, PurchaseOrderItemRepository.class,
         com.cretas.aims.repository.ai.PurchaseGrantTimerBindingRepository.class,
-        com.cretas.aims.repository.cron.ScheduledTaskRepository.class})
+        com.cretas.aims.repository.cron.ScheduledTaskRepository.class, ConversationSessionRepository.class})
 @Import({PurchaseGrantTimerExecutionService.class,PurchaseTaskGrantService.class, ControlledPurchaseTaskExecutionService.class,
         PurchaseGrantCallerService.class, com.cretas.aims.ai.tool.impl.purchase.PurchaseGrantExecuteTool.class,
         com.cretas.aims.controller.PurchaseGrantCallerController.class,
@@ -82,7 +87,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         com.cretas.aims.ai.tool.WriteGuardService.class,
         PurchaseGrantRefusalAuditService.class, com.cretas.aims.controller.AiPurchaseTaskGrantController.class,
         com.cretas.aims.service.impl.PreviewTokenServiceImpl.class,
-        PurchaseGrantTimerPostgresLifecycleContractTest.JsonConfiguration.class})
+        PurchaseGrantTimerPostgresLifecycleContractTest.JsonConfiguration.class,
+        ConversationOwnerLockH2TestConfiguration.class})
+@SpyBean(value = ConversationSessionRepository.class, reset = MockReset.NONE)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class PurchaseGrantTimerPostgresLifecycleContractTest {
     @Autowired com.cretas.aims.controller.AiPurchaseTaskGrantController actualGrantController;

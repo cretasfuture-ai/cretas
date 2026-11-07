@@ -10,6 +10,7 @@ import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.ExpressionLearningService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -43,12 +44,14 @@ class ConversationServiceIsolationTest {
                 sessionRepository,
                 mock(AIIntentConfigRepository.class),
                 learningService,
-                mock(DashScopeClient.class));
+                mock(DashScopeClient.class),
+                mock(org.springframework.transaction.PlatformTransactionManager.class));
+        ReflectionTestUtils.setField(service, "entityManager", mock(jakarta.persistence.EntityManager.class));
     }
 
     @Test
     void foreignSessionMissDoesNotSaveOrLearnAcrossAllMutationPaths() {
-        when(sessionRepository.findBySessionIdAndFactoryIdAndUserId(
+        when(sessionRepository.findBySessionIdAndFactoryIdAndUserIdForUpdate(
                 SESSION_ID, FACTORY_ID, USER_ID)).thenReturn(Optional.empty());
 
         ConversationService.ConversationResponse reply = service.continueConversation(
@@ -98,11 +101,11 @@ class ConversationServiceIsolationTest {
         ConversationSession confirmSession = activeSession("session-owned-confirm");
         ConversationSession cancelSession = activeSession("session-owned-cancel");
 
-        when(sessionRepository.findBySessionIdAndFactoryIdAndUserId(
+        when(sessionRepository.findBySessionIdAndFactoryIdAndUserIdForUpdate(
                 replySession.getSessionId(), FACTORY_ID, USER_ID)).thenReturn(Optional.of(replySession));
-        when(sessionRepository.findBySessionIdAndFactoryIdAndUserId(
+        when(sessionRepository.findBySessionIdAndFactoryIdAndUserIdForUpdate(
                 confirmSession.getSessionId(), FACTORY_ID, USER_ID)).thenReturn(Optional.of(confirmSession));
-        when(sessionRepository.findBySessionIdAndFactoryIdAndUserId(
+        when(sessionRepository.findBySessionIdAndFactoryIdAndUserIdForUpdate(
                 cancelSession.getSessionId(), FACTORY_ID, USER_ID)).thenReturn(Optional.of(cancelSession));
 
         ConversationService.ConversationResponse reply = service.continueConversation(
@@ -116,7 +119,11 @@ class ConversationServiceIsolationTest {
                 FACTORY_ID, USER_ID, cancelSession.getSessionId())).isTrue();
         assertThat(cancelSession.getStatus()).isEqualTo(ConversationSession.SessionStatus.CANCELLED);
 
-        verify(sessionRepository).save(replySession);
+        verify(sessionRepository).save(org.mockito.ArgumentMatchers.argThat(saved ->
+                replySession.getSessionId().equals(saved.getSessionId())
+                        && FACTORY_ID.equals(saved.getFactoryId()) && USER_ID.equals(saved.getUserId())
+                        && saved.getStatus() == ConversationSession.SessionStatus.COMPLETED
+                        && "QUERY".equals(saved.getFinalIntentCode())));
         verify(sessionRepository).save(confirmSession);
         verify(sessionRepository).save(cancelSession);
         verify(learningService).learnExpression(

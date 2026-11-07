@@ -8,6 +8,7 @@ import lombok.*;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -22,9 +23,10 @@ import java.util.Optional;
  *
  * 生命周期:
  * 1. ACTIVE - 对话进行中
- * 2. COMPLETED - 成功识别意图
- * 3. TIMEOUT - 超时未响应
- * 4. CANCELLED - 用户取消
+ * 2. PAUSED - 用户主动暂停，保留完整上下文
+ * 3. COMPLETED - 成功识别意图
+ * 4. TIMEOUT - 超时未响应
+ * 5. CANCELLED - 用户取消
  *
  * @author Cretas Team
  * @version 1.0.0
@@ -189,11 +191,26 @@ public class ConversationSession {
             lastActiveAt = LocalDateTime.now();
         }
         updatedAt = LocalDateTime.now();
+        normalizePersistedTimes();
     }
 
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+        normalizePersistedTimes();
+    }
+
+    /** PostgreSQL timestamp(6) rounds to microseconds; keep the managed entity identical. */
+    private void normalizePersistedTimes() {
+        createdAt = roundToMicros(createdAt);
+        updatedAt = roundToMicros(updatedAt);
+        lastActiveAt = roundToMicros(lastActiveAt);
+        completedAt = roundToMicros(completedAt);
+    }
+
+    private static LocalDateTime roundToMicros(LocalDateTime value) {
+        if (value == null) return null;
+        return value.plusNanos(500).truncatedTo(ChronoUnit.MICROS);
     }
 
     // ========== 会话模式枚举 ==========
@@ -213,6 +230,8 @@ public class ConversationSession {
     public enum SessionStatus {
         /** 对话进行中 */
         ACTIVE,
+        /** 用户主动暂停，保留完整会话上下文 */
+        PAUSED,
         /** 成功识别意图 */
         COMPLETED,
         /** 超时未响应 */
@@ -358,13 +377,13 @@ public class ConversationSession {
      * 检查是否已超时
      */
     public boolean isExpired() {
-        if (status != SessionStatus.ACTIVE) {
+        if (status != SessionStatus.ACTIVE && status != SessionStatus.PAUSED) {
             return false;
         }
         if (lastActiveAt == null) {
             return false;
         }
-        LocalDateTime expireTime = lastActiveAt.plusMinutes(timeoutMinutes);
+        LocalDateTime expireTime = lastActiveAt.plusMinutes(timeoutMinutes == null ? 10 : timeoutMinutes);
         return LocalDateTime.now().isAfter(expireTime);
     }
 
@@ -373,6 +392,18 @@ public class ConversationSession {
      */
     public boolean canContinue() {
         return status == SessionStatus.ACTIVE && currentRound < maxRounds && !isExpired();
+    }
+
+    /** 暂停会话但保留所有参数、消息和候选上下文。 */
+    public void pause() {
+        this.status = SessionStatus.PAUSED;
+        this.lastActiveAt = LocalDateTime.now();
+    }
+
+    /** 恢复会话；业务执行仍由调用方显式触发。 */
+    public void resume() {
+        this.status = SessionStatus.ACTIVE;
+        this.lastActiveAt = LocalDateTime.now();
     }
 
     /**

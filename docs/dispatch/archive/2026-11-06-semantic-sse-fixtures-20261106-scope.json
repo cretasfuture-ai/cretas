@@ -1,0 +1,11 @@
+{
+  "task": "SEMANTIC-SSE-FIXTURES-20261106",
+  "owner": "/root/followup_safety",
+  "files": [
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/ReplyTextPriceSweepContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/ChatReplyPriceTextContractTest.java",
+    "backend/java/cretas-api/src/test/java/com/cretas/aims/security/PaymentSseActorPropagationContractTest.java"
+  ],
+  "acceptance": "Three existing wire/price/typed-actor contract fixtures; root serial Maven",
+  "baseSHA": "a6737c0a9218b43f7dedd3b738087ca68e6271d2"
+}

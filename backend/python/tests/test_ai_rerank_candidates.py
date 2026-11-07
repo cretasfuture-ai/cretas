@@ -124,6 +124,25 @@ def test_default_mode_never_calls_the_reranker():
     assert "rerankOk" not in res.timingMs and "rerankFallback" not in res.timingMs
 
 
+@pytest.mark.parametrize("context,rerank_expected", [
+    (None, True),
+    ({"contextStatus": "NEW", "readCapabilities": [{"tool": "order_list", "parameters": ["page", "size"]}]}, True),
+    ({"contextStatus": "UNKNOWN"}, False),
+    ({"contextStatus": "EXPIRED"}, False),
+    ({"contextStatus": "PRESENT"}, False),
+    ({"contextStatus": "NEW", "pageReference": {"entityType": "ORDER"}}, False),
+])
+def test_candidate_reranking_distinguishes_legacy_absence_from_explicit_context(context, rerank_expected):
+    ret, rr, dec = FakeBlend(VEC), FakeRerank([0.1, 0.0, 0.9, 0.2]), FakeDecision()
+    res = asyncio.run(_orch(ret, rr, dec=dec).match(query="查询订单", factoryId="F006", businessType="FACTORY",
+                    userId="u", role="warehouse_worker", visible_intents=ROWS, history=[],
+                    task_context=context, min_confidence=0.7, enable_llm=True))
+    assert bool(rr.calls) is rerank_expected
+    assert dec.short_calls == (0 if rerank_expected else 1)
+    assert res.timingMs.get("rerankOk", 0) == int(rerank_expected)
+    assert res.timingMs.get("rerankSkippedHistory", 0) == int(not rerank_expected)
+
+
 # ---------------- RerankClient ----------------
 
 class _Resp:

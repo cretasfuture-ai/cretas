@@ -142,6 +142,13 @@ public class SseStreamingService {
 
     /** 追问解读规则表 (纯函数, 无依赖)。 */
     private final FollowUpResolver followUpResolver = new FollowUpResolver();
+    @Autowired(required = false)
+    private SalesRankingConversationSupport salesRankingConversationSupport;
+    @org.springframework.beans.factory.annotation.Autowired
+    private SemanticConversationContextService semanticConversationContextService;
+
+    @Autowired(required = false)
+    private ConversationTaskRepairSupport conversationTaskRepairSupport;
 
     /**
      * 参数收集会话 (缺参追问) 的读写。缺席时 (裸构造的单测) 不做缺参续轮, 行为同旧版。
@@ -307,6 +314,26 @@ public class SseStreamingService {
             // Platform/stateless callers may still use unrelated no-session routes. They must
             // never turn their numeric userId into a conversation lookup; only a typed,
             // factory-scoped actor may establish or access server-owned conversation state.
+            if (semanticConversationContextService != null) {
+                semanticConversationContextService.prepare(factoryId, userId, request);
+                IntentExecuteResponse admissionFailure = SemanticConversationContextService.admissionFailure(request);
+                if (admissionFailure != null) {
+                    streamTerminalResponse(emitter, admissionFailure, startTime);
+                    return;
+                }
+            }
+            if (conversationTaskRepairSupport != null && !Boolean.TRUE.equals(request.getForceExecute())) {
+                IntentExecuteResponse repair = conversationTaskRepairSupport.prepare(factoryId,userId,request);
+                if (repair != null) {
+                    streamTerminalResponse(emitter,repair,startTime);
+                    return;
+                }
+                if (semanticConversationContextService != null)
+                    semanticConversationContextService.prepare(factoryId,userId,request);
+                conversationTaskRepairSupport.refreshContext(factoryId,userId,request);
+                IntentExecuteResponse failure = SemanticConversationContextService.admissionFailure(request);
+                if (failure != null) { streamTerminalResponse(emitter,failure,startTime); return; }
+            }
             ConversationContext sessionContext = trustedFactoryActor
                     ? establishOwnedSession(factoryId, request, userId)
                     : null;
@@ -340,7 +367,10 @@ public class SseStreamingService {
             }
             boolean factoryPackConstrained = factoryPackRoute.isConstrained();
 
-            if (isPaginationRequest(request)) {
+
+            if (isPaginationRequest(request) && (request.getSemanticContext() == null
+                    || SemanticConversationContextService.previousReadIntent(request) == null
+                    || request.getIntentCode() != null && (request.getUserInput() == null || request.getUserInput().isBlank()))) {
                 executePaginationRequest(emitter, factoryId, request, userId, userRole,
                         startTime, factoryPackRoute);
                 return;
@@ -430,6 +460,7 @@ public class SseStreamingService {
             // 显式意图码 (点了按钮回来) 已在上面处理, 不会再进这里。能力包受限路由与餐饮租户不走。
             // 2026-10-06 缺参续轮在它前面: 上一轮刚问了「请提供工序任务ID」, 「1827」是在回答那个问题。
             if (!factoryPackConstrained
+                    && (request.getSemanticTaskAction() == null || "CONTINUE".equals(request.getSemanticTaskAction()))
                     && streamSlotContinuation(emitter, factoryId, request, userId, userRole, startTime,
                             factoryPackRoute)) {
                 return;
@@ -439,7 +470,8 @@ public class SseStreamingService {
                 return;
             }
             // 1.5. 早期问题类型检测
-            if (!factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
+            if ((semanticConversationContextService == null || SemanticConversationContextService.allowsDirectRoute(request))
+                    && !factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
                 QuestionType earlyQuestionType = knowledgeBase.detectQuestionType(userInput);
                 if (earlyQuestionType == QuestionType.GENERAL_QUESTION ||
                     earlyQuestionType == QuestionType.CONVERSATIONAL) {
@@ -464,7 +496,8 @@ public class SseStreamingService {
             // 2. 查询语义缓存
             // 第 3b 步: 带最近对话的轮次也不读语义缓存 (缓存键只有工厂+原话, 不含上下文)。
             boolean skipCacheForScopedRequest = factoryPackConstrained
-                    || !recentTurns(request).isEmpty();
+                    || !recentTurns(request).isEmpty()
+                    || semanticConversationContextService != null && !SemanticConversationContextService.allowsDirectRoute(request);
             SemanticCacheHit cacheHit = skipCacheForScopedRequest
                     ? SemanticCacheHit.miss(0L)
                     : semanticCacheService.queryCache(factoryId, userInput);
@@ -501,9 +534,12 @@ public class SseStreamingService {
                 // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
                 Long recognizerUserId = trustedFactoryActor ? userId : null;
                 String recognizerSessionId = trustedFactoryActor ? request.getSessionId() : null;
-                matchResult = aiIntentService.recognizeIntentWithConfidence(
+                matchResult = request.getSemanticContext() == null ? aiIntentService.recognizeIntentWithConfidence(
                         userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                        request.getMode(), null, recentTurns(request));
+                        request.getMode(), null, recentTurns(request))
+                        : aiIntentService.recognizeIntentWithConfidence(
+                        userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                        request.getMode(), null, SemanticConversationContextService.effectiveHistory(request), request.getSemanticContext());
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
                 sendSseEvent(emitter, "result", validationFailureResponse);
@@ -516,6 +552,27 @@ public class SseStreamingService {
                 return;
             }
 
+            matchResult = ToolDispatchService.bindReadContinuation(matchResult, request,
+                    code -> aiIntentService.getIntentByCode(factoryId, code));
+            AIIntentConfig semanticReadIntent = matchResult != null && matchResult.hasMatch() ? matchResult.getBestMatch() : null;
+            if (semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)
+                semanticReadIntent = aiIntentService.getIntentByCode(factoryId,
+                        SemanticConversationContextService.previousReadIntent(request)).orElse(null);
+            if (request.getSemanticContext() != null && (ToolDispatchService.supportsSemanticRead(semanticReadIntent)
+                    || semanticReadIntent == null && SemanticConversationContextService.previousReadIntent(request) != null)) {
+                if (semanticReadIntent != null) {
+                    String denied = permissionDeniedMessage(factoryId, semanticReadIntent, userId, userRole);
+                    if (denied != null) {
+                        streamNoPermission(emitter, semanticReadIntent, denied, startTime);
+                        return;
+                    }
+                }
+                IntentExecuteResponse readTurn = toolDispatchService.resolveReadTurn(factoryId, userId, request, matchResult);
+                if (readTurn != null) {
+                    streamTerminalResponse(emitter, readTurn, startTime);
+                    return;
+                }
+            }
             // 5. 处理识别结果
             if (!matchResult.hasMatch()) {
                 if (factoryPackConstrained) {
@@ -1426,6 +1483,11 @@ public class SseStreamingService {
         Optional<com.cretas.aims.entity.conversation.ConversationSession> open =
                 openSlotSession(factoryId, userId, request);
         if (open.isEmpty()) {
+            if ("CONTINUE".equals(request.getSemanticTaskAction())) {
+                streamTerminalResponse(emitter,IntentExecuteResponse.builder().status("TASK_CHANGED")
+                        .message("任务已变化，未继续执行旧请求。").sessionId(request.getSessionId()).build(),startTime);
+                return true;
+            }
             return false;
         }
         com.cretas.aims.entity.conversation.ConversationSession session = open.get();
@@ -1437,7 +1499,7 @@ public class SseStreamingService {
         }
         List<com.cretas.aims.entity.conversation.ConversationSession.RequiredParameter> pending =
                 session.getRequiredParameters().stream().filter(p -> !p.isCollected()).toList();
-        if (!SlotAnswerRule.looksLikeAnswer(request.getUserInput(), pending,
+        if (!"CONTINUE".equals(request.getSemanticTaskAction()) && !SlotAnswerRule.looksLikeAnswer(request.getUserInput(), pending,
                 text -> knowledgeBase.matchPhrase(text).isPresent())) {
             log.info("[SSE][SlotContinuation] 这句不像在回答缺参问题, 关闭会话后正常识别: session={}, pending={}",
                     slotSessionId, pending.stream().map(p -> p.getName()).toList());
@@ -1464,6 +1526,14 @@ public class SseStreamingService {
 
         com.cretas.aims.service.ConversationService.ConversationResponse reply =
                 conversationService.continueConversation(factoryId, userId, slotSessionId, request.getUserInput());
+        if (reply != null && (reply.isTaskChanged()
+                || "CONTINUE".equals(request.getSemanticTaskAction())
+                && (reply.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.CANCELLED
+                || reply.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.TIMEOUT))) {
+            streamTerminalResponse(emitter,IntentExecuteResponse.builder().status("TASK_CHANGED")
+                    .message("任务已变化，未继续执行旧请求。").sessionId(request.getSessionId()).build(),startTime);
+            return true;
+        }
         if (reply == null || reply.getStatus() == null
                 || reply.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.CANCELLED
                 || reply.getStatus() == com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.TIMEOUT) {
@@ -1471,10 +1541,8 @@ public class SseStreamingService {
         }
 
         if (reply.isCompleted()) {
+            request.setSemanticTaskAction("DRAFT_READY");
             Map<String, Object> context = new HashMap<>();
-            if (request.getContext() != null) {
-                context.putAll(request.getContext());
-            }
             // 会话里记的是服务端自己收集的值, 盖过同名的客户端字段
             conversationService.getSession(factoryId, userId, slotSessionId)
                     .map(com.cretas.aims.entity.conversation.ConversationSession::getCollectedParameters)
@@ -2093,8 +2161,8 @@ public class SseStreamingService {
             lastStreamedResult.putIfAbsent(emitter, IntentExecuteResponse.builder().status("FAILED").build());
         }
         try {
-            String json = objectMapper.writeValueAsString(priceMaskedWire(eventName, data));
-            emitter.send(SseEmitter.event().name(eventName).data(json));
+            emitter.send(SseEmitter.event().name(eventName)
+                    .data(priceMaskedWire(eventName, data), org.springframework.http.MediaType.APPLICATION_JSON));
         } catch (JsonProcessingException e) {
             log.warn("序列化 SSE 事件数据失败: {}", e.getMessage());
             throw new IOException("Failed to serialize SSE event data", e);
@@ -2195,7 +2263,10 @@ public class SseStreamingService {
                                 .actionCode("REPHRASE").actionName("重新描述").build())
                         : clarificationCandidateService.buildCandidateActions(
                                 matchResult, factoryId, userId, userRole, mode);
-        String clarificationMessage = buildSafeClarificationMessage(candidateActions);
+        String clarificationMessage = ClarificationCandidateService.readCapabilityDescription(
+                toolRegistry, matchedIntent.getToolName(), null) != null
+                ? ClarificationCandidateService.buildClarificationMessage(candidateActions)
+                : buildSafeClarificationMessage(candidateActions);
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(matchedIntent.getIntentCode())
@@ -2247,7 +2318,10 @@ public class SseStreamingService {
                     || action.getActionName() == null || action.getActionName().isBlank()) {
                 continue;
             }
-            line.append(index++).append(". ").append(action.getActionName()).append("\n");
+            line.append(index++).append(". ").append(action.getActionName());
+            String description = ClarificationButtonText.subtitle(action.getDescription());
+            if (description != null && !description.startsWith("置信度")) line.append(" — ").append(description);
+            line.append("\n");
             if (index > 3) {
                 break;
             }

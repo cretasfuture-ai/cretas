@@ -81,6 +81,7 @@ public class ClarificationCandidateService {
             String mode) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
         Set<String> seenCodes = new HashSet<>();
+        List<DisplayChoice> selectable = new ArrayList<>();
 
         if (matchResult != null && hasIdentity(factoryId, userId, userRole)) {
             DomainResolution domainResolution = resolveFactoryDomain(factoryId);
@@ -90,8 +91,9 @@ public class ClarificationCandidateService {
             String factoryDomain = domainResolution.domain();
             List<IntentMatchResult.CandidateIntent> candidates = matchResult.getTopCandidates();
             if (candidates != null) {
+                int examined = 0;
                 for (IntentMatchResult.CandidateIntent candidate : candidates) {
-                    if (actions.size() >= MAX_BUSINESS_CHOICES) {
+                    if (++examined > 5) {
                         break;
                     }
                     if (candidate == null) {
@@ -110,9 +112,35 @@ public class ClarificationCandidateService {
                             || !FrontlineReadAudience.offeredTo(code, userRole)) {
                         continue;
                     }
-                    actions.add(toSelectAction(config, factoryId, candidate));
+                    selectable.add(new DisplayChoice(toSelectAction(config, factoryId, candidate),
+                            scopeTool(config.getToolName())));
                 }
             }
+        }
+
+        // Reorder presentation only, after every candidate has passed the same
+        // canonical/tenant/domain/mode/permission checks. Never mutate the
+        // recognizer's confidence-ranked topCandidates or synthesize a peer.
+        if (!selectable.isEmpty()) {
+            List<DisplayChoice> displayed = new ArrayList<>();
+            DisplayChoice first = selectable.get(0);
+            displayed.add(first);
+            if (first.tool() != null) {
+                for (DisplayChoice choice : selectable) {
+                    if (displayed.size() >= MAX_BUSINESS_CHOICES) break;
+                    if (choice != first && choice.tool() != null
+                            && displayed.stream().noneMatch(d -> d.tool() != null && d.tool().name().equals(choice.tool().name()))
+                            && first.tool().domains().stream().anyMatch(choice.tool().domains()::contains))
+                        displayed.add(choice);
+                }
+            }
+            for (DisplayChoice choice : selectable) {
+                if (displayed.size() >= MAX_BUSINESS_CHOICES) break;
+                if (choice.tool() != null && displayed.stream().anyMatch(d -> d.tool() != null
+                        && d.tool().name().equals(choice.tool().name()))) continue;
+                if (!displayed.contains(choice)) displayed.add(choice);
+            }
+            displayed.forEach(choice -> actions.add(choice.action()));
         }
 
         // This is the only fallback that does not claim a business operation can run.
@@ -121,6 +149,24 @@ public class ClarificationCandidateService {
                 .actionName("重新描述")
                 .build());
         return actions;
+    }
+
+    private record ScopeDescription(String name, Set<String> domains) {}
+    private record DisplayChoice(IntentExecuteResponse.SuggestedAction action, ScopeDescription tool) {}
+
+    private ScopeDescription scopeTool(String name) {
+        if (toolRegistry == null || name == null) return null;
+        try {
+            ToolExecutor tool = toolRegistry.getExecutor(name).orElse(null);
+            if (tool == null || tool.getAccessMode() != ToolExecutor.AccessMode.READ
+                    || tool.getToolName() == null || tool.getToolName().isBlank()
+                    || tool.getDomainTags() == null || tool.getDomainTags().stream().noneMatch(d -> d != null && !d.isBlank())
+                    || readCapabilityDescription(toolRegistry, name, null) == null) return null;
+            return new ScopeDescription(tool.getToolName(), tool.getDomainTags().stream()
+                    .filter(d -> d != null && !d.isBlank()).collect(java.util.stream.Collectors.toUnmodifiableSet()));
+        } catch (RuntimeException unavailable) {
+            return null; // Metadata cannot promote an unverifiable choice.
+        }
     }
 
     private List<IntentExecuteResponse.SuggestedAction> rephraseOnly() {
@@ -240,7 +286,21 @@ public class ClarificationCandidateService {
     private IntentExecuteResponse.SuggestedAction toSelectAction(
             AIIntentConfig config, String factoryId, IntentMatchResult.CandidateIntent candidate) {
         return toSelectAction(factoryId, config.getIntentCode(), config.getIntentName(),
-                config.getDescription(), candidate.getConfidence());
+                readCapabilityDescription(toolRegistry, config.getToolName(), config.getDescription()), candidate.getConfidence());
+    }
+
+    /** Presentation metadata only. Selection, permissions and execution remain unchanged. */
+    static String readCapabilityDescription(ToolRegistry registry, String toolName, String fallback) {
+        if (registry == null || toolName == null) return fallback;
+        try {
+            ToolExecutor tool = registry.getExecutor(toolName).orElse(null);
+            if (tool != null && tool.getAccessMode() == ToolExecutor.AccessMode.READ
+                    && tool.getParametersSchema() != null
+                    && tool.getParametersSchema().get("x-clarification-description") instanceof String text
+                    && ClarificationButtonText.subtitle(text) != null)
+                return text;
+        } catch (RuntimeException unavailable) { /* Keep the existing display when metadata is unavailable. */ }
+        return fallback;
     }
 
     static IntentExecuteResponse.SuggestedAction toSelectAction(
@@ -258,5 +318,21 @@ public class ClarificationCandidateService {
                 .endpoint("/api/mobile/" + factoryId + "/ai-intents/execute")
                 .parameters(parameters)
                 .build();
+    }
+
+    static String buildClarificationMessage(List<IntentExecuteResponse.SuggestedAction> actions) {
+        List<IntentExecuteResponse.SuggestedAction> choices = actions == null ? List.of() : actions.stream()
+                .filter(a -> a != null && "SELECT_INTENT".equals(a.getActionCode())
+                        && a.getActionName() != null && !a.getActionName().isBlank()).limit(3).toList();
+        if (choices.isEmpty()) return "当前没有可安全提供的业务选项，请重新描述您的需求。";
+        StringBuilder text = new StringBuilder(choices.size()==1 ? "请确认您要查询的口径：\n" : "请明确您要查询的口径：\n");
+        int index=1;
+        for (var choice : choices) {
+            text.append(index++).append(". ").append(choice.getActionName());
+            String description=ClarificationButtonText.subtitle(choice.getDescription());
+            if (description!=null && !description.startsWith("置信度")) text.append(" — ").append(description);
+            text.append("\n");
+        }
+        return text.append("请选择对应选项，或明确说明所需口径；尚未执行查询。").toString();
     }
 }

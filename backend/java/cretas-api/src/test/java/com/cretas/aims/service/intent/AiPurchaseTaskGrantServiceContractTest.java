@@ -11,12 +11,15 @@ import com.cretas.aims.entity.SupplierMaterial;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.inventory.PurchaseReceiveRecord;
+import com.cretas.aims.entity.conversation.ConversationSession;
 import com.cretas.aims.repository.ai.AiPurchaseTaskGrantRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderItemRepository;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
 import com.cretas.aims.repository.SupplierRepository;
+import com.cretas.aims.repository.conversation.ConversationSessionRepository;
+import com.cretas.aims.support.ConversationOwnerLockH2TestConfiguration;
 import com.cretas.aims.service.inventory.impl.PurchaseServiceImpl;
 import com.cretas.aims.service.inventory.PurchaseService;
 import org.junit.jupiter.api.Test;
@@ -26,6 +29,8 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.MockReset;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
@@ -57,12 +62,15 @@ import static org.mockito.Mockito.*;
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @ActiveProfiles("test")
 @EntityScan(basePackageClasses = {AiPurchaseTaskGrant.class, PurchaseOrder.class, PurchaseOrderItem.class,
-        Factory.class, Supplier.class, User.class, RawMaterialType.class, PurchaseReceiveRecord.class})
+        Factory.class, Supplier.class, User.class, RawMaterialType.class, PurchaseReceiveRecord.class,
+        ConversationSession.class})
 @EnableJpaRepositories(basePackageClasses = {AiPurchaseTaskGrantRepository.class,
         PurchaseOrderRepository.class, PurchaseOrderItemRepository.class,
-        com.cretas.aims.repository.intent.IntentPreviewTokenRepository.class})
+        com.cretas.aims.repository.intent.IntentPreviewTokenRepository.class, ConversationSessionRepository.class})
 @Import({PurchaseTaskGrantService.class, ControlledPurchaseTaskExecutionService.class,
-        com.cretas.aims.service.impl.PreviewTokenServiceImpl.class, AiPurchaseTaskGrantServiceContractTest.JsonConfiguration.class})
+        com.cretas.aims.service.impl.PreviewTokenServiceImpl.class, AiPurchaseTaskGrantServiceContractTest.JsonConfiguration.class,
+        ConversationOwnerLockH2TestConfiguration.class})
+@SpyBean(value = ConversationSessionRepository.class, reset = MockReset.NONE)
 class AiPurchaseTaskGrantServiceContractTest {
 
     @DynamicPropertySource

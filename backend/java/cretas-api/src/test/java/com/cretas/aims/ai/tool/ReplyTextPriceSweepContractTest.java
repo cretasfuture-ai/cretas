@@ -132,7 +132,11 @@ class ReplyTextPriceSweepContractTest {
         String impl = Files.readString(MAIN.resolve("service/impl/ResultFormatterServiceImpl.java"), StandardCharsets.UTF_8);
         assertThat(impl).as("formatAndSet 从同一个判定取视图再渲染").contains("priceView.maskedViewFor(");
         String sse = Files.readString(MAIN.resolve("service/execution/SseStreamingService.java"), StandardCharsets.UTF_8);
-        assertThat(sse).as("SSE result 推送前按看的人遮蔽").contains("objectMapper.writeValueAsString(priceMaskedWire(eventName, data))");
+        assertThat(sse).as("SSE result 推送前按看的人遮蔽")
+                .contains(".data(priceMaskedWire(eventName, data),")
+                .contains("MediaType.APPLICATION_JSON")
+                .contains("private Object priceMaskedWire(String eventName, Object data)")
+                .contains("objectMapper.valueToTree(response)");
 
         // 持有 ResultFormatterService 的生产类不许绕过 formatAndSet 直接 format(...)
         Pattern field = Pattern.compile("ResultFormatterService\\s+(\\w+)\\s*[;=]");

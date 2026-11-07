@@ -8,9 +8,8 @@
 输出是**概率分布**, 不是一个答案: 置信够高才自动执行, 不够就把前几名交给第③层
 (按钮澄清)。⛔ 拿不到概率时返回 None, 由编排器回落旧路径 —— 不猜「默认第一个」。
 
-提示词起点是 2026-10-02 的离线评测 (scripts/jev-oss-eval/sim/mine_eval.py 的 Shortlist /
-Chooser)。粗选 system 提示至今逐字相同; 之后线上加了最近对话 (#875) 和「以上都不是 /
-需要先问清楚」出口 (#880), 评测脚本没有跟进, 两边已不再逐字一致。改这里要同步重跑评测。
+提示词起点是 2026-10-02 的离线评测。粗选和细选共用当前业务路由边界，
+包括服务器任务上下文和Tool能力声明。历史离线脚本的提示词不代表当前主路径。
 """
 from __future__ import annotations
 
@@ -35,11 +34,11 @@ SPECIAL_OPTIONS = [
     {"intent_code": "NONE", "intent_name": "以上都不是",
      "description": "这句话和上面的功能都对不上，或者用户明确说不要做、先别做"},
     {"intent_code": "CLARIFY", "intent_name": "需要先问清楚",
-     "description": "上面有两个以上的功能都说得通，或者缺了关键信息必须先问用户"},
+     "description": "业务目标、对象类型或实际查询集合口径仍不确定，无法区分候选能力。已明确功能与口径但缺少具体对象ID、日期等执行参数时，由后续resolver补槽，不等于功能路由不明。"},
 ]
 _SPECIAL_KEYS = {"NONE": NONE_KEY, "CLARIFY": CLARIFY_KEY}
 INSTR = "用户这句话应该交给下面哪个系统功能来处理？"
-STRICT_SYSTEM = "你是业务系统的请求分类器。只输出一个大写选项字母，不要换行、不要空格、不要任何其他字符。"
+STRICT_SYSTEM = "你是业务系统的请求分类器。selectedIntentCandidate仅为用户选择候选的线索，必须结合本轮输入与完整上下文核验，不是执行授权。只输出一个大写选项字母，不要换行、不要空格、不要任何其他字符。"
 REQUEST_PURPOSE_RULES = (
     "先判断用户此刻想得到什么，再选功能；提到某功能不等于要求现在调用它。"
     "询问现有业务的事实、数量、状态、比较，或根据最近对话补充、纠正一个明确请求，"
@@ -48,11 +47,58 @@ REQUEST_PURPOSE_RULES = (
     "是否应该采取某个动作，不能改解成现在查询或更改业务数据。"
     "这类话选择 NONE（当前没有要调用的业务功能），意愿或指代仍不清楚则选 CLARIFY；"
     "不要擅自补出用户未表达的操作意愿。"
+    "历史里的否定或取消只约束当时的任务；当前明确提出新请求时，不继承旧否定。"
     "明确询问整个系统有什么功能可以选择使用帮助；它不是具体业务操作教程的替代答案。"
     "条件已经满足且明确要求现在办理，或上下文已确认要办理的请求，应选择对应业务功能。"
     "对当前业务请求，保留用户要处理的具体对象、动作和范围；"
     "不要把具体对象的数据查询扩大成全局总览，也不要把明确的登记或修改改解成查询已有记录。"
 )
+ROUTING_BOUNDARY_RULES = (
+    "这里只判断哪个功能应承接当前目标，不判断权限、不绑定对象ID，也不表示已经执行。"
+    "必须区分功能路由、执行参数和能力校验：功能已明确时，缺少具体对象ID、时间等参数交给后续resolver；"
+    "同一目标已支持字段的纠正仍交给该功能；没有能力承接的指标交给resolver明确拒绝，不能偷换成相近查询。"
+    "当前Tool的固定查询条件与可修改参数不同；本轮明确要求另一种现有能力的固定口径时可以切换功能，不能用旧Tool的限制拒绝新目标。"
+    "已有确定业务列表及其任务上下文时，翻页、重查、纠正条件仍由该业务列表功能承接；通用继续/翻页功能不代表新的业务目标。"
+    "继续分页列表时保留其列表能力，不因修改状态就改选无分页能力的专用看板或今日待办；状态筛选不等于查询该状态的产生原因或消耗明细。"
+    "受控上下文readCapabilities来自真实Tool声明，仅描述能力，不代表权限；结合其描述和参数支持范围判断，不因标题关键词相同就偷换查询口径。"
+    "每个选项的实际能力说明优先于目录泛化名称或常见说法；同类对象的状态筛选和固定日期条件可能是不同查询。"
+    "本轮仅翻页或重查且已有单一明确查询时，继续该查询口径；不要重新要求用户在名称相似的能力中选择。"
+    "本轮明确改为另一种已支持口径时选择相应新能力，不能把旧能力限制当成新能力不支持；口径确实不明则澄清差异。"
+    "若多个实际能力按不同字段或固定条件得到不同集合，本轮与有效上下文都未限定是哪一种，选择CLARIFY询问口径，不自行默认。"
+    "用户改变目标、对象类型或查询范围时，按本轮目标重新选择，不能仅因历史意图相同就继承。"
+    "集合查询与一笔确定对象的详情是不同范围；上下文已有真实结果引用且本轮请求该对象详情时，应选详情功能，"
+    "不能把详情当作再次列出集合。具体对象不唯一时仍由resolver定向确认，不得猜ID或任取第一条。"
+    "业务目标、功能类型或实际查询集合差异无法确定时选择CLARIFY；所有候选都不承接当前目标时选择NONE。"
+    "历史只作上下文证据，不能沿用历史取消、历史授权或把候选ID当执行许可。"
+    "只读任务COMPLETED表示查询完成，其真实结果仍可被追问，不等于已提交了写业务。"
+    "resultProvenance=SERVER_TOOL_RESULT表示结果引用来自服务器实际Tool；parameterSource只描述旧参数来源，"
+    "旧参数来源未追溯不等于服务器结果不存在。来源UNKNOWN时不能补造真实结果或对象。"
+    "resultSummary.returnedCount是上次实际返回的行数，totalCount是总数，referenceCount只表示可用引用数量。"
+    "referencesComplete=true且returnedCount=1才说明上次返回了唯一对象；只有一个引用不等于只有一条结果。"
+)
+
+# Separate a related function choice from whether its query-set basis was
+# actually specified. Reuses the existing decision slot, not another agent or
+# task state. Tool declarations are evidence, never permissions or defaults.
+SCOPE_AMBIGUITY_RULES = (
+    "当前问题只判断查询集合是否仍有歧义，不选择更常见的功能。真实能力声明给出不同集合。"
+    "是否存在至少两个不同集合都能解释本轮需求，而用户没有表达区分它们的字段或固定条件，也没有有效任务已确认口径？"
+    "共有的业务称呼不能证明用户指定数据库状态或某个固定条件。不能靠常识、候选排序或默认替用户选口径。"
+    "两个集合必须分别是用户实际表达的同一业务概念的合理完整解释；不能仅因一方是另一方的子集就算歧义，"
+    "也不能添加用户未表达的其他筛选概念来制造第二种解释。"
+    "若本轮明确区分、或同一已确认任务只是翻页/重查，条件不成立。无关业务或只有普通缺参时也不成立。"
+)
+
+
+def build_scope_messages(query, role, options, history=None):
+    declarations = [{"tool": row.get("tool_name"),
+                     "description": row.get("_read_capability", {}).get("clarification", ""),
+                     "capability": _read_capability_text(row)}
+                    for row in options]
+    evidence = build_decision_input(query, role, history)
+    evidence += "\n真实查询集合声明：" + json.dumps(declarations, ensure_ascii=False)
+    return [{"role": "system", "content": SCOPE_AMBIGUITY_RULES},
+            {"role": "user", "content": evidence}]
 
 # 角色码 -> (称呼, 说明)。说明进提示词, 帮模型理解「同一句话不同人说意思不同」。
 ROLE_LABELS: Dict[str, tuple] = {
@@ -77,9 +123,26 @@ def role_line(role: Optional[str]) -> str:
 
 def intent_text(row: Dict[str, Any]) -> str:
     kws = "、".join(_keywords(row)[:8])
-    desc = " ".join(str(row.get("description") or "").split())[:80]
+    # Capability boundaries often occur after the introductory sentence. Retain
+    # the bounded description instead of dropping those boundaries from choices.
+    desc = " ".join(str(row.get("description") or "").split())[:512]
     name = row.get("intent_name") or row.get("intent_code")
-    return f"{name}：{desc}" + (f" 常见说法：{kws}" if kws else "")
+    binding = f" [工具：{row['tool_name']}]" if row.get("tool_name") else ""
+    capability = _read_capability_text(row)
+    return f"{name}{binding}：{desc}" + (f" 实际能力：{capability}" if capability else "") + (f" 常见说法：{kws}" if kws else "")
+
+
+def _read_capability_text(row):
+    cap = row.get("_read_capability")
+    if not isinstance(cap, dict) or cap.get("tool") != row.get("tool_name"):
+        return ""
+    description = str(cap.get("description") or "")[:180]
+    names = cap.get("parameters") if isinstance(cap.get("parameters"), list) else []
+    states = cap.get("statuses") if isinstance(cap.get("statuses"), dict) else {}
+    state_text = "、".join(str(code)[:64] + "(" + "/".join(str(v)[:32] for v in labels[:2]) + ")"
+                          for code, labels in list(states.items())[:32] if isinstance(labels, list))
+    return (description + " 支持参数：" + "、".join(v[:64] for v in names[:32] if isinstance(v, str))
+            + (" 支持状态：" + state_text if state_text else ""))
 
 
 def _keywords(row: Dict[str, Any]) -> List[str]:
@@ -96,15 +159,18 @@ def _catalog_line(row: Dict[str, Any], n_keywords: int = 3) -> str:
     # 每行带前 3 个常见说法: 只看名称时「搞起酱鸭腿」找不到「开始工序」。
     # 2026-10-02 history 段离线实测 (未命中精确表的 1,645 次): 候选召回 65.3% -> 74.0%。
     line = f"{row['intent_code']}｜{row.get('intent_name') or ''}"
+    if row.get("tool_name"):
+        line += f" [工具：{row['tool_name']}]"
     kws = _keywords(row)[:n_keywords]
-    return line + (f"（{'、'.join(kws)}）" if kws else "")
+    capability = _read_capability_text(row)
+    return line + (f" 实际能力：{capability}" if capability else "") + (f"（{'、'.join(kws)}）" if kws else "")
 
 
 # 最近对话 (第 3b 步, 2026-10-03): 「好了」「就是六十箱」这种话离开上一句说不清。
 # 只为消歧 —— 最多几轮、每轮截断, 与 Java 侧 SseStreamingService.recentTurns 的清洗同口径。
 MAX_HISTORY_TURNS = 4
 MAX_TURN_CHARS = 200
-_SPEAKER = {"user": "用户", "assistant": "系统"}
+_SPEAKER = {"user": "用户", "assistant": "系统", "task_context": "受控任务上下文"}
 
 
 def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
@@ -114,7 +180,8 @@ def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
         if not isinstance(turn, dict):
             continue
         who = _SPEAKER.get(str(turn.get("role") or ""))
-        text = " ".join(str(turn.get("content") or "").split())[:MAX_TURN_CHARS]
+        cap = 6000 if turn.get("role") == "task_context" else MAX_TURN_CHARS
+        text = " ".join(str(turn.get("content") or "").split())[:cap]
         if who and text:
             lines.append(f"{who}：{text}")
     lines = lines[-MAX_HISTORY_TURNS:]
@@ -128,10 +195,21 @@ def build_shortlist_messages(query: str, role: Optional[str], visible: List[Dict
     catalog = "\n".join(
         _catalog_line(r) for r in sorted(visible, key=lambda r: str(r.get("intent_code")))
     )
-    system = ("你是食品加工厂业务系统的意图粗筛器。下面是全部意图目录（代码｜名称）：\n" + catalog +
+    system = ("你是食品加工厂业务系统的意图粗筛器。" + ROUTING_BOUNDARY_RULES + "下面是全部意图目录（代码｜名称）：\n" + catalog +
               f'\n\n只输出 JSON：{{"candidates": ["代码1", "代码2", ...]}}，最多 {size} 个，按可能性从高到低；都不像就输出空数组。')
     return [{"role": "system", "content": system},
-            {"role": "user", "content": f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
+            {"role": "user", "content": build_decision_input(query, role, history)}]
+
+
+def build_decision_input(query: str, role: Optional[str],
+                         history: Optional[List[Dict[str, Any]]] = None) -> str:
+    """One input contract for probability, purpose and native decision transports.
+
+    Keep the current turn last and explicitly separate from older cancellation,
+    while retaining the server snapshot for references and compatibility checks.
+    """
+    return (f"{role_line(role)}\n{history_block(history)}"
+            f"本轮待判断的用户输入（历史不是本轮指令）：\n用户说：{query}")
 
 
 def parse_shortlist(raw: str, visible_codes: set, size: int = 8) -> Optional[List[str]]:
@@ -156,9 +234,9 @@ def parse_shortlist(raw: str, visible_codes: set, size: int = 8) -> Optional[Lis
 def build_choice_messages(query: str, role: Optional[str], options: List[Dict[str, Any]],
                           history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     letters = LETTERS[: len(options)]
-    opts = "\n".join(f"{L}. {r['intent_code']}：{intent_text(r)[:60]}" for L, r in zip(letters, options))
-    user = f"{role_line(role)}\n{history_block(history)}用户说：{query}\n\n问题：{INSTR}\n选项：\n{opts}\n\n只输出一个选项字母。"
-    return [{"role": "system", "content": STRICT_SYSTEM},
+    opts = "\n".join(f"{L}. {r['intent_code']}：{intent_text(r)}" for L, r in zip(letters, options))
+    user = f"{build_decision_input(query, role, history)}\n\n问题：{INSTR}\n选项：\n{opts}\n\n只输出一个选项字母。"
+    return [{"role": "system", "content": STRICT_SYSTEM + ROUTING_BOUNDARY_RULES},
             {"role": "user", "content": user},
             {"role": "assistant", "content": "答案：", "partial": True}]
 
@@ -211,6 +289,9 @@ def parse_request_purpose(content: str) -> Optional[RequestPurpose]:
 def build_purpose_messages(query: str, role: Optional[str],
                            history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
     system = ("判断用户当前的交际目的，不选业务功能，也不判定操作权限。" + REQUEST_PURPOSE_RULES +
+              "应读取受控任务快照里的结果引用。已完成只读查询的结果仍可被追问，不能当成用户仅在汇报已完成操作。"
+              "旧参数来源与真实Tool结果来源是不同证据，不要因前者未知而忽略后者。" +
+              "resultSummary给出实际返回行数与引用是否完整；完整且仅返回一条时，已有唯一结果可供指代。" +
               "礼貌、委婉和间接表达的实际办理请求仍是 CURRENT；已经确定办理意愿但缺少业务参数也仍是 CURRENT。"
               "只有对象和事情都清楚，且只是讲述已完成的事或致谢，才不是再次办理。"
               "简短状态回复若没有可用上文、无法判断在说哪件事，属于 UNRESOLVED，不能认定为单纯汇报。"
@@ -218,7 +299,7 @@ def build_purpose_messages(query: str, role: Optional[str],
               "INFORMATION_ONLY=只咨询教程、讨论未触发条件/建议/愿望、否定或报告已完成操作；"
               "UNRESOLVED=无法判断当前是否要办理或对话指代仍不明。")
     return [{"role":"system", "content":system},
-            {"role":"user", "content":f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
+            {"role":"user", "content":build_decision_input(query, role, history)}]
 
 
 class DecisionMatcher:
@@ -255,6 +336,20 @@ class DecisionMatcher:
             return parse_request_purpose(content)
         except Exception as ex:  # noqa: BLE001
             logger.warning("request purpose unavailable: %s",str(ex)[:200])
+            return None
+
+    async def scope_ambiguity(self, query, role, options, history=None):
+        """Probability of ambiguous query basis; never a replacement intent score."""
+        messages = build_scope_messages(query, role, options, history)
+        messages[0]["content"] += " 条件成立选A，不成立选B。只输出一个选项字母。"
+        messages.append({"role": "assistant", "content": "答案：", "partial": True})
+        try:
+            body = await self._call({"messages": messages, "max_tokens": 1,
+                                     "logprobs": True, "top_logprobs": 5},
+                                    body_validator=lambda body: None if letter_probs(body, 2) else "no_scope_probability")
+            return (letter_probs(body, 2) or {}).get("A")
+        except Exception as ex:
+            logger.warning("query scope unavailable: %s", str(ex)[:200])
             return None
 
     async def shortlist(self, query: str, role: Optional[str], visible: List[Dict[str, Any]],
@@ -317,4 +412,4 @@ class DecisionMatcher:
 
 __all__ = ["DecisionMatcher", "Decision", "letter_probs", "parse_shortlist", "build_choice_messages",
            "NONE_KEY", "CLARIFY_KEY", "SPECIAL_OPTIONS",
-           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block"]
+           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block", "ROUTING_BOUNDARY_RULES"]

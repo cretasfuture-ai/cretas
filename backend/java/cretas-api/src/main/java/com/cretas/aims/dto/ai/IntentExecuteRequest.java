@@ -26,6 +26,28 @@ import java.util.Map;
 @NoArgsConstructor
 @AllArgsConstructor
 public class IntentExecuteRequest {
+    /** Server-only request snapshot. HTTP callers cannot assert a clean/new context. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Map<String, Object> semanticContext;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.List<Map<String, String>> semanticHistory;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Map<String, Object> semanticParameters;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Map<String, String> semanticParameterSources;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Map<String, Object> semanticPreviousRead;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String semanticReadVersion;
+    /** Server-only task repair decision; never accepted from HTTP JSON. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String semanticTaskAction;
+    /** Server-only opaque paused-draft reference to resume after a read. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String semanticResumeDraftId;
+    /** Server-only revision of the paused draft; prevents a late read from reviving a changed task. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String semanticResumeDraftRevision;
 
     /**
      * 用户输入的自然语言文本
@@ -77,6 +99,8 @@ public class IntentExecuteRequest {
      * 后续回复需携带此sessionId以延续对话
      */
     private String sessionId;
+    /** Explicitly start a newly minted session; never resets an existing or foreign session. */
+    private Boolean conversationStart;
 
     /**
      * 是否启用AI思考过程 (可选)

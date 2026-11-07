@@ -4,6 +4,7 @@ import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
 import com.cretas.aims.entity.intent.IntentPreviewToken.TokenStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Repository;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import jakarta.persistence.LockModeType;
 
 /**
  * 意图预览令牌 Repository
@@ -35,6 +37,24 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
      * 根据令牌值和状态查找
      */
     Optional<IntentPreviewToken> findByTokenAndStatus(String token, TokenStatus status);
+
+    List<IntentPreviewToken> findByFactoryIdAndTenantIdAndUserIdAndStatus(
+            String factoryId, String tenantId, Long userId, TokenStatus status);
+
+    /**
+     * Locks the active tickets for one owner and intent so revision invalidation and execution
+     * claim have one database-serialized winner. Terminal history is deliberately not selected.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM IntentPreviewToken t WHERE t.factoryId = :factoryId " +
+           "AND t.userId = :userId AND t.intentCode = :intentCode " +
+           "AND t.status IN (:pendingStatus, :executingStatus) ORDER BY t.id")
+    List<IntentPreviewToken> findActiveByFactoryIdAndUserIdAndIntentCodeForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("userId") Long userId,
+            @Param("intentCode") String intentCode,
+            @Param("pendingStatus") TokenStatus pendingStatus,
+            @Param("executingStatus") TokenStatus executingStatus);
 
     /**
      * Atomically acquires the only execution lease for a confirmation token.
