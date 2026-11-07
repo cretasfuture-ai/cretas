@@ -44,6 +44,7 @@ import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /** Real response construction; neither permissions nor the write executor are replaced by a success stub. */
@@ -265,6 +266,29 @@ class IntentResponseAiModeContractTest {
             assertThat(response.getAiMode()).isEqualTo("WRITE");
             assertThat(response.getConfirmableAction()).isNull();
             assertThat(response.getResultData()).isNull();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void rejectedReadBindingNeverGetsResolvedForModeDecoration(boolean explicitEntry) {
+        bindWorkflowGuidance();
+        var selected = intent("REPORT_INVENTORY", "report_inventory");
+        var recognizer = mock(AIIntentService.class);
+        when(recognizer.getIntentByCode("F006", selected.getIntentCode())).thenReturn(Optional.of(selected));
+        when(recognizer.hasPermission(selected.getIntentCode(), "operator")).thenReturn(true);
+        ReflectionTestUtils.setField(orchestrator, "aiIntentService", recognizer);
+        var request = IntentExecuteRequest.builder().intentCode(selected.getIntentCode()).userInput("我要报工").build();
+        try (var ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "operator"))) {
+            var response = explicitEntry ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "operator")
+                    : orchestrator.execute("F006", request, 1707L, "operator");
+            assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_NO_MATCH");
+            assertThat(response.getMetadata()).containsEntry("reason", "read-tool-outside-allowlist");
+            assertThat(response.getAiMode()).isEqualTo("READ");
+            assertThat(response.getConfirmableAction()).isNull();
+            assertThat(response.getResultData()).isNull();
+            verifyNoInteractions(tools);
         }
     }
 

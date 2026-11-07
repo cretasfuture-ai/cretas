@@ -1977,7 +1977,13 @@ public class IntentExecutionOrchestrator {
             case ALLOW_READ, NOT_APPLICABLE -> null;
             case GUIDANCE -> buildFactoryPackWorkflowGuidance(
                     route, intent, decision.workflowReference());
-            case NO_MATCH -> buildFactoryPackNoMatch(route, decision.reason());
+            case NO_MATCH -> {
+                IntentExecuteResponse rejected = buildFactoryPackNoMatch(route, decision.reason());
+                // The policy already classified this candidate. Do not resolve a
+                // rejected external binding merely to decorate its refusal.
+                rejected.setAiMode(writeIntent ? "WRITE" : "READ");
+                yield rejected;
+            }
         };
         applyAiModeStamp(response, intent, intent.getToolName());
         return response;
