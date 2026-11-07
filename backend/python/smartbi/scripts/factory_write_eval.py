@@ -1,8 +1,8 @@
 """工厂 AI 写路径回归电池 (2026-07-24 验收轮建立)。
 
-锁住读写分块 P1/P1.5 的全部行为契约:
-1. 写意图识别命中 (确定性写短语 → 正确 intentCode + WRITE_CONFIRM_REQUIRED + aiMode=WRITE)
-2. mode=READ 强制只读 (写请求 → READ_MODE_WRITE_BLOCKED 跳转文案)
+锁住当前工厂能力与读写分块契约，不为旧电池恢复不存在的能力:
+1. 旧删除/开关问法保持无能力、无执行；配置问法走现有向导澄清。
+2. viewer 采购写请求必须按精确权限拒绝；mode=READ 的有效写能力必须阻断。
 3. TCC 预览 (previewOnly → PREVIEW + confirmableAction: token/digest/300s)
 4. 读问法 aiMode=READ 标记
 
@@ -23,17 +23,10 @@ import string
 import sys
 import time
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from smartbi.scripts.factory_eval_auth import FACTORY_ID, factory_login
-
-# (短语, 期望 intentCode) — 关键词确定性命中的写意图
-WRITE_INTENT_CASES = [
-    ("帮我删除客户张三", "CUSTOMER_DELETE"),
-    ("创建采购单", "PURCHASE_ORDER_CREATE"),
-    ("重置配置", "CONFIG_RESET"),
-    ("禁用功能开关测试", "FACTORY_FEATURE_TOGGLE"),
-]
+from smartbi.scripts.factory_ai_eval import _choice_code
 
 # TCC 全链探针: 需要 supportsPreview 的写工具 (product_create)
 TCC_INTENT = "PRODUCT_CREATE_FLYWHEEL"
@@ -58,85 +51,138 @@ def _post_json(url: str, payload: Dict[str, Any],
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _no_execution_problems(data):
+    problems = []
+    if data.get("confirmableAction"):
+        problems.append("拒绝/澄清不应铸出确认令牌")
+    if data.get("resultData") or data.get("affectedEntities"):
+        problems.append("拒绝/澄清不应携带已执行业务结果")
+    return problems
+
+
+def _has_choices(data):
+    choices = data.get("suggestedActions") or []
+    return len({_choice_code(c) for c in choices
+                if isinstance(c, dict) and _choice_code(c) and c.get("actionName")}) >= 2
+
+
+def _unsupported_problems(data):
+    problems = _no_execution_problems(data)
+    if data.get("intentCode") or data.get("intentRecognized") is not False:
+        problems.append("不存在的旧能力不应被识别为可执行意图")
+    if data.get("aiMode") != "READ":
+        problems.append("无执行能力的答复必须标记 READ")
+    if (data.get("metadata") or {}).get("toolName"):
+        problems.append("无执行能力的答复不应运行工具")
+    status = data.get("status")
+    if status == "NEED_CLARIFICATION":
+        if not _has_choices(data):
+            problems.append("澄清必须给出至少两个实际候选")
+    elif status in ("COMPLETED", "UNSUPPORTED_CAPABILITY", "FACTORY_PACK_NO_MATCH"):
+        message = str(data.get("message") or "")
+        if not any(word in message for word in ("无法", "不能", "无权", "不支持", "未理解", "退役")):
+            problems.append("缺少能力不可执行的明确说明")
+    else:
+        problems.append(f"旧能力不应返回执行成功: {status}")
+    return problems
+
+
+def _purchase_denial_problems(data):
+    problems = _no_execution_problems(data)
+    for key, expected in (("intentCode", "PURCHASE_ORDER_CREATE"), ("status", "NO_PERMISSION"),
+                          ("aiMode", "WRITE"), ("requiredPermission", "procurement:read_write")):
+        if data.get(key) != expected:
+            problems.append(f"viewer采购拒绝 {key} 应为 {expected}, 实为 {data.get(key)}")
+    return problems
+
+
+def _configuration_problems(data):
+    problems = _no_execution_problems(data)
+    for key, expected in (("intentCode", "FACTORY_CONFIG_AGENT"), ("status", "NEED_CLARIFICATION"),
+                          ("aiMode", "WRITE")):
+        if data.get(key) != expected:
+            problems.append(f"配置向导 {key} 应为 {expected}, 实为 {data.get(key)}")
+    if not _has_choices(data):
+        problems.append("配置澄清缺少两个实际候选")
+    return problems
+
+
+def _read_block_problems(data):
+    problems = _no_execution_problems(data)
+    for key, expected in (("intentCode", TCC_INTENT), ("status", "READ_MODE_WRITE_BLOCKED"), ("aiMode", "WRITE")):
+        if data.get(key) != expected:
+            problems.append(f"READ写阻断 {key} 应为 {expected}, 实为 {data.get(key)}")
+    if "操作" not in str(data.get("message") or ""):
+        problems.append("缺少操作页跳转说明")
+    return problems
+
+
+def _preview_problems(data):
+    problems = []
+    if data.get("intentCode") != TCC_INTENT:
+        problems.append(f"预览意图必须是 {TCC_INTENT}")
+    if data.get("status") != "PREVIEW" or data.get("aiMode") != "WRITE":
+        problems.append("有效写能力必须返回 PREVIEW / WRITE")
+    ca = data.get("confirmableAction") or {}
+    for key in ("confirmToken", "commandDigest", "impactSummary", "actionType"):
+        if not ca.get(key):
+            problems.append(f"预览缺 {key}")
+    return problems
+
+
+def _read_mode_problems(data):
+    problems = []
+    if data.get("aiMode") != "READ" or data.get("confirmableAction"):
+        problems.append("只读问题必须标 READ, 不生成确认令牌")
+    if data.get("status") == "NEED_CLARIFICATION":
+        if not _has_choices(data):
+            problems.append("只读澄清缺少两个实际候选")
+    elif data.get("status") not in ("SUCCESS", "COMPLETED") or not data.get("message"):
+        problems.append("只读问题既未完成也未给出有效澄清")
+    return problems
+
+
 def run_eval(base: str) -> int:
     auth = factory_login(base, _post_json)
     if auth is None:
-        return 2  # 没量到 (≠ 1 断言失败)
-
-    def execute(payload: Dict[str, Any]) -> Dict[str, Any]:
-        resp = _post_json(f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute",
-                          payload, headers=auth)
-        return resp.get("data") or {}
-
-    passed, failed = 0, 0
-    failures: List[str] = []
-
-    def check(name: str, problems: List[str], detail: str = "") -> None:
-        nonlocal passed, failed
+        return 2
+    cases = [
+        ("旧客户删除能力不可执行", {"userInput": "帮我删除客户张三"}, _unsupported_problems),
+        ("viewer采购写权限拒绝", {"userInput": "创建采购单"}, _purchase_denial_problems),
+        ("配置向导必须澄清", {"userInput": "重置配置"}, _configuration_problems),
+        ("旧功能开关能力不可执行", {"userInput": "禁用功能开关测试"}, _unsupported_problems),
+        # Preserve the original deleted-capability negative, then add a real active
+        # write capability to prove READ blocking (a refusal alone cannot prove it).
+        ("READ旧客户删除无执行", {"userInput": "帮我删除客户张三", "mode": "READ"}, _unsupported_problems),
+        ("READ有效写能力阻断", {"userInput": TCC_QUERY, "intentCode": TCC_INTENT, "mode": "READ"},
+         _read_block_problems),
+        ("TCC预览与影响契约", {"userInput": TCC_QUERY, "intentCode": TCC_INTENT}, _preview_problems),
+        ("读问法aiMode=READ", {"userInput": "库存有哪些预警", "mode": "READ"}, _read_mode_problems),
+    ]
+    passed, failures = 0, []
+    for index, (name, payload, validate) in enumerate(cases):
+        # Also protect the natural-language probes: absence of /confirm alone is
+        # insufficient if a future recognizer starts executing a formerly unknown verb.
+        payload = {**payload, "previewOnly": True, "sessionId": _rand_sid(f"c{index}")}
+        try:
+            envelope = _post_json(f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute", payload, headers=auth)
+            data = envelope.get("data")
+            if envelope.get("success") is not True or not isinstance(data, dict) or not data:
+                raise ValueError("评测响应封装失败或为空")
+            problems = validate(data)
+        except Exception as error:  # noqa: BLE001 — record failure, never reinterpret it as denial.
+            problems = [f"未取得有效响应: {type(error).__name__}"]
         if problems:
-            failed += 1
-            failures.append(f"{name}: {'; '.join(problems)}\n     实际: {detail[:150]}")
-            print(f"✗ {name} — {'; '.join(problems)}")
+            failures.append(f"{name}: {'; '.join(problems)}")
+            print(f"✗ {failures[-1]}")
         else:
             passed += 1
             print(f"✓ {name}")
-
-    # ── 1. 写意图命中 + 确认门 (默认 OPERATE) ──
-    for q, expect_intent in WRITE_INTENT_CASES:
-        d = execute({"userInput": q, "sessionId": _rand_sid("op")})
-        problems = []
-        if d.get("intentCode") != expect_intent:
-            problems.append(f"意图应为 {expect_intent}, 实为 {d.get('intentCode')}")
-        if d.get("status") not in ("WRITE_CONFIRM_REQUIRED", "NEED_MORE_INFO", "PENDING_APPROVAL"):
-            problems.append(f"状态应为确认/补参, 实为 {d.get('status')}")
-        if d.get("aiMode") != "WRITE":
-            problems.append(f"aiMode 应为 WRITE, 实为 {d.get('aiMode')}")
-        check(f"写命中: {q}", problems, str(d.get("message") or ""))
         time.sleep(1)
-
-    # ── 2. mode=READ 强制只读 ──
-    d = execute({"userInput": "帮我删除客户张三", "mode": "READ", "sessionId": _rand_sid("rd")})
-    problems = []
-    if d.get("status") != "READ_MODE_WRITE_BLOCKED":
-        problems.append(f"状态应为 READ_MODE_WRITE_BLOCKED, 实为 {d.get('status')}")
-    if "操作" not in str(d.get("message") or ""):
-        problems.append("跳转文案缺失")
-    check("READ 拦截: 删除客户", problems, str(d.get("message") or ""))
-
-    # ── 3. TCC: 预览 → token (只到预览, 不 confirm) ──
-    d = execute({"userInput": TCC_QUERY, "intentCode": TCC_INTENT,
-                 "previewOnly": True, "sessionId": _rand_sid("tcc")})
-    ca = d.get("confirmableAction") or {}
-    problems = []
-    if d.get("status") != "PREVIEW":
-        problems.append(f"状态应为 PREVIEW, 实为 {d.get('status')}")
-    if not ca.get("confirmToken"):
-        problems.append("缺 confirmToken")
-    if not ca.get("commandDigest"):
-        problems.append("缺 commandDigest")
-    # 写操作影响契约 (2026-07-24): 预览必须带影响说明与风险档 —
-    # 前端对比表/二次确认弹窗的数据源, 缺失即契约破坏
-    if not ca.get("impactSummary"):
-        problems.append("缺 impactSummary (影响说明)")
-    if not ca.get("actionType"):
-        problems.append("缺 actionType")
-    check("TCC 预览铸 token", problems, str(d.get("message") or "")[:100])
-
-    # ⛔ 不再驱动 /ai-intents/confirm: 原先靠 DEMO_FACTORY2 的 demo 写闸 (DEMO_WRITE_BLOCKED)
-    #    保证 confirm 不落库; 现在目标是 F006 (真实可写租户, 无 demo 闸), confirm 会真建产品。
-    #    评测不打执行入口写业务数据 —— 到「铸出 token + 影响说明」为止。
-
-    # ── 4. 读问法 aiMode 标记 ──
-    d = execute({"userInput": "库存有哪些预警", "sessionId": _rand_sid("aim")})
-    problems = []
-    if d.get("aiMode") != "READ":
-        problems.append(f"aiMode 应为 READ, 实为 {d.get('aiMode')}")
-    check("读问法 aiMode=READ", problems, str(d.get("message") or "")[:80])
-
-    print(f"\n== {passed} passed, {failed} failed / {passed + failed} run ==")
+    print(f"\n== {passed} passed, {len(failures)} failed / {len(cases)} run ==")
     if failures:
         print("\n".join(["", "── 失败明细 ──", *failures]))
-    return 1 if failed else 0
+    return 1 if failures else 0
 
 
 def main() -> None:
