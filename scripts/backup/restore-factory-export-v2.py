@@ -698,7 +698,41 @@ def import_rows(conn, archive: zipfile.ZipFile, database: str, manifest: dict[st
     # The caller commits all table/ledger rows together before post-data DDL.
 
 
-def verify_target(conn, archive: zipfile.ZipFile, database: str, manifest: dict[str, Any], schema: dict[str, Any]) -> None:
+def validate_restored_constraints(conn, database: str) -> dict[str, Any]:
+    """Prove all loaded rows valid without changing source NOT VALID state."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT n.nspname,r.relname,c.conname,c.contype,c.oid,md5(pg_get_constraintdef(c.oid)) "
+                    "FROM pg_constraint c LEFT JOIN pg_class r ON r.oid=c.conrelid "
+                    "LEFT JOIN pg_namespace n ON n.oid=r.relnamespace "
+                    "WHERE NOT c.convalidated ORDER BY n.nspname,r.relname,c.conname")
+        pending = cur.fetchall()
+        for namespace, table, name, kind, oid, definition_hash in pending:
+            if not namespace or not table or kind not in ("c", "f"):
+                raise fail(f"{database} 不支持未验证约束类型")
+            cur.execute("SAVEPOINT cretas_constraint_integrity")
+            try:
+                cur.execute(sql.SQL("ALTER TABLE {}.{} VALIDATE CONSTRAINT {}").format(
+                    sql.Identifier(namespace), sql.Identifier(table), sql.Identifier(name)))
+            except psycopg2.Error as error:
+                raise fail(f"{database} 导入数据未通过源约束验证 SQLSTATE={error.pgcode}") from None
+            finally:
+                cur.execute("ROLLBACK TO SAVEPOINT cretas_constraint_integrity")
+                cur.execute("RELEASE SAVEPOINT cretas_constraint_integrity")
+            cur.execute("SELECT convalidated,md5(pg_get_constraintdef(oid)) FROM pg_constraint WHERE oid=%s", (oid,))
+            if cur.fetchone() != (False, definition_hash):
+                raise fail(f"{database} 源约束验证状态未保留")
+        cur.execute("SELECT count(*) FROM pg_constraint WHERE NOT convalidated")
+        if cur.fetchone() != (len(pending),):
+            raise fail(f"{database} 存在未覆盖的未验证约束")
+    fingerprint = sha256_bytes(json.dumps([list(row[:4]) + [row[5]] for row in pending],
+        ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    return {"sourceNotValidCount": len(pending), "loadedRowsIntegrityVerified": True,
+            "sourceValidationStatePreserved": True, "expectedCount": len(pending),
+            "validatedCount": len(pending), "stateRestoredCount": len(pending),
+            "definitionsFingerprint": fingerprint}
+
+
+def verify_target(conn, archive: zipfile.ZipFile, database: str, manifest: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
     db_manifest = next(d for d in manifest["databases"] if d["database"] == database)
     if structural_fingerprint(conn, schema) != schema.get("fingerprint"):
         raise fail(f"{database} 目标结构指纹不一致")
@@ -722,9 +756,7 @@ def verify_target(conn, archive: zipfile.ZipFile, database: str, manifest: dict[
             actual_hash = multiset_hash(actual_rows, columns, descriptors)
             if len(actual_rows) != len(expected_rows) or actual_hash != expected_hash:
                 raise fail(f"{database}.{table} 行内容指纹不一致")
-        cur.execute("SELECT count(*) FROM pg_constraint WHERE NOT convalidated")
-        if cur.fetchone()[0]:
-            raise fail(f"{database} 存在未验证约束")
+        constraint_validation = validate_restored_constraints(conn, database)
         cur.execute("SELECT count(*) FROM pg_class WHERE relkind = 'S'")
         sequence_count = cur.fetchone()[0]
         expected_sequences = schema.get("sequences", [])
@@ -737,6 +769,7 @@ def verify_target(conn, archive: zipfile.ZipFile, database: str, manifest: dict[
             if state is None or (sequence.get("lastValue") is not None and str(state[0]) != str(sequence["lastValue"])) \
                     or (sequence.get("isCalled") is not None and bool(state[1]) != bool(sequence["isCalled"])):
                 raise fail(f"{database}.{name} 序列状态不一致")
+    return constraint_validation
 
 
 def ensure_empty_target(conn, database: str) -> None:
@@ -980,7 +1013,7 @@ def main() -> int:
             run_tool(args.pg_bin, "pg_restore", restore_args(args, database, baseline, "post-data"))
             verify_migration_presence(conn, migrations, schema.get("sourceSchema", "public"))
             verify_migration_rows(conn, migrations, schema.get("sourceSchema", "public"))
-            verify_target(conn, archive, database, manifest, schema)
+            states[database]["constraintValidation"] = verify_target(conn, archive, database, manifest, schema)
             conn.commit()
             states[database]["stage"] = "VERIFIED"
             if "explicitMajorUpgrade" in states[database]:
@@ -1000,6 +1033,12 @@ def main() -> int:
             # Only explicitly registered, freshly verified empty databases in
             # the SAME owned cluster are eligible. Never FORCE or terminate
             # another session. A blocked DROP remains an explicit failure.
+            # Both destinations were identity/emptiness checked before any
+            # mutation. A first-database failure must also remove the second
+            # registered empty destination, not leave it silently behind.
+            for state in states.values():
+                if state["initiallyEmptyVerified"]:
+                    state["partialTargetRequiresDestroy"] = True
             control = None
             try:
                 control = psycopg2.connect(host=args.target_host, port=args.target_port,
