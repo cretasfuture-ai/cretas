@@ -30,7 +30,7 @@ const validPayload = () => ({
   progress: {
     status: 'VERIFIED', basis: 'FINISHED_GOODS_RECEIVED', plannedQuantity: 10,
     receivedQuantity: 12, remainingQuantity: 0, completionPercent: 120,
-    unit: 'kg', reason: '实际成品入库口径。',
+    unit: 'kg', reason: 'OK',
   },
   advisoryOnly: true,
 })
@@ -80,10 +80,26 @@ describe('PlanConcurrentReadiness', () => {
     expect(wrapper.text()).toContain('同期计划')
     expect(wrapper.text()).toContain('按已确认的成品入库量核算')
     expect(wrapper.text()).toContain('120%')
+    expect(wrapper.text()).toContain('成品入库记录已核算。')
+    expect(wrapper.text()).not.toContain('成品入库进度原因待核对')
     expect(wrapper.text()).toContain('先满足其他计划时：50%')
     expect(wrapper.text()).not.toContain('FINISHED_GOODS_RECEIVED')
     expect(wrapper.text()).not.toContain('Advisory')
     expect(wrapper.text()).not.toContain('开工')
+  })
+
+  it.each([
+    ['PLANNED', '已计划'],
+    ['PREPARED', '草稿'],
+    ['PAUSED', '暂停'],
+    ['PENDING_APPROVAL', '撤回待审批'],
+  ])('shows the known backend plan status %s in Chinese', async (planStatus, label) => {
+    mocks.get.mockResolvedValue(response({ ...validPayload(), planStatus }))
+    const wrapper = mountComponent()
+    await wrapper.get('[data-testid="plan-concurrent-readiness-refresh"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(label)
+    expect(wrapper.text()).not.toContain('状态待核验')
   })
 
   it('does not request without a complete factory/plan scope', async () => {
