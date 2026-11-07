@@ -35,6 +35,9 @@ it('observes the final owned sandbox destination when the sandbox wrapper was in
   expect(xhrSend).toHaveBeenCalledOnce();
   expect(beforeBusiness).toHaveBeenCalledTimes(2);
   expect(beforeBusiness.mock.calls.every(([request]) => request.path === finalPath && request.canonicalPath === '/purchase/orders')).toBe(true);
+  await window.fetch('/api/mobile/F006/activity-events', { method: 'POST', body: '{}' });
+  expect(fetchSend).toHaveBeenLastCalledWith(`/api/mobile/F006/demo-sandbox/sessions/${sid}/proxy/api/mobile/F006/activity-events`, { method: 'POST', body: '{}' });
+  expect(beforeBusiness).toHaveBeenCalledTimes(2);
   await expect(window.fetch('/api/mobile/F001/purchase/orders', { method: 'POST' })).rejects.toThrow();
-  expect(fetchSend).toHaveBeenCalledTimes(1); expect(blocked).toHaveBeenCalledOnce();
+  expect(fetchSend).toHaveBeenCalledTimes(2); expect(blocked).toHaveBeenCalledOnce();
 });

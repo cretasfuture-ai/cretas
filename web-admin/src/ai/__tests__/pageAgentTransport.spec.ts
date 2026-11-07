@@ -43,6 +43,9 @@ describe('page-agent business scope fencing', () => {
     const path = '/api/mobile/F006/demo-sandbox/sessions/own-round/proxy/api/mobile/F006/production-plans/plan1/process-sheet/input-availability';
     expect(classify(sandbox, 'POST', path).kind).toBe('read');
     expect(classify(ordinary, 'POST', '/api/mobile/F006/activity-events').kind).toBe('activity');
+    const activity = ownPath.replace('/purchase/orders', '/activity-events');
+    expect(classify(sandbox, 'POST', activity).kind).toBe('activity');
+    expect(() => classify(sandbox, 'POST', activity.replace('own-round', 'another-round'))).toThrow('隔离');
   });
   it('permits only the explicitly owned lifecycle control grant', () => {
     const path = '/api/mobile/F006/demo-sandbox/sessions/own-round';

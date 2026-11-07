@@ -97,6 +97,7 @@ export function classifyAgentRequest(
     if (!path.startsWith(`${base}/`) || path.startsWith(`${base}/demo-sandbox/`)) throw new Error('AI 页面操作的工厂或数据区域不一致');
     canonical = path.slice(base.length);
   }
+  if (method === 'POST' && canonical === '/activity-events') return result('activity', canonical);
   if (method === 'POST' && (
     /^\/list-summary\/[A-Za-z]+$/.test(canonical) || canonical === '/attachments/batch-3chip-counts'
     || /^\/production-plans\/[^/]+\/process-sheet\/input-availability$/.test(canonical)
