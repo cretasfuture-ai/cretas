@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import string
 import sys
@@ -33,7 +34,10 @@ _FORBIDDEN_EVERYWHERE = [
 CASES: List[Dict[str, Any]] = [
     {"q": "库存有哪些预警", "contains": ["库存"]},
     {"q": "有哪些设备", "contains": ["设备"]},
-    {"q": "今天的生产情况怎么样", "contains": ["生产批次"]},
+    # Broad production questions legitimately ask for a choice. Complete that choice;
+    # clarification alone is never a passing data query.
+    {"q": "今天的生产情况怎么样", "contains": [],
+     "intents": ["REPORT_PRODUCTION", "PRODUCTION_PROGRESS_DASHBOARD"], "structured": True},
     {"q": "最近的质检合格率怎么样", "contains": ["质检"]},
     # 财务: 会话延续可能路由到利润表(含营业收入)或SKU成本(含成本)两条腿,
     # 两者都是正确答案 — 只锁全局禁词 (查询成功/没有获得可展示 等占位符)
@@ -43,7 +47,10 @@ CASES: List[Dict[str, Any]] = [
     # 2026-07-24 修: 考勤只回"查询成功"四字 → 修后有汇总数字
     {"q": "员工出勤情况", "contains": ["考勤统计"]},
     # 2026-07-24 修: 退货误路由到销售订单列表 → 新建 RETURN_ORDER_LIST 意图
-    {"q": "最近的退货情况", "contains": ["退货"], "excludes": ["销售订单"]},
+    # The real page formatter can show counts without a Chinese heading. Assert its
+    # exact route and actual page, not just a word that a wrong route could repeat.
+    {"q": "最近的退货情况", "contains": [], "excludes": ["销售订单"],
+     "intents": ["RETURN_ORDER_LIST"], "page": True},
     # 2026-07-24 修: 销售订单误路由到生产仪表盘 → ORDER_LIST 补关键词
     {"q": "销售订单情况怎么样", "contains": ["订单"], "excludes": ["仪表盘总览"]},
     {"q": "销售订单有多少", "contains": ["订单"]},
@@ -68,6 +75,102 @@ def _post_json(url: str, payload: Dict[str, Any],
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _read_problems(case: Dict[str, Any], data: Dict[str, Any]) -> List[str]:
+    problems = []
+    if data.get("aiMode") != "READ":
+        problems.append("只读响应缺少 aiMode=READ")
+    if data.get("status") not in ("SUCCESS", "COMPLETED"):
+        problems.append(f"只读查询未完成: {data.get('status')}")
+    if data.get("confirmableAction"):
+        problems.append("只读查询不应生成确认令牌")
+    flat = " ".join(str(data.get("message") or "").split())
+    if not flat:
+        problems.append("缺少用户可见的查询结果")
+    for marker in case.get("contains", []):
+        if marker not in flat:
+            problems.append(f"缺少「{marker}」")
+    for marker in case.get("excludes", []) + _FORBIDDEN_EVERYWHERE:
+        if marker in flat:
+            problems.append(f"不应出现「{marker}」")
+    if case.get("intents") and data.get("intentCode") not in case["intents"]:
+        problems.append(f"错误查询路由: {data.get('intentCode')}")
+    payload = data.get("resultData")
+    if isinstance(payload, dict) and payload.get("success") is False:
+        problems.append("工具执行失败")
+    if case.get("structured") and not _production_payload_valid(data.get("intentCode"), payload):
+        problems.append("缺少类型正确的真实生产统计/进度结果")
+    if case.get("page"):
+        page = payload
+        for _ in range(3):
+            if not isinstance(page, dict) or "content" in page:
+                break
+            page = page.get("data")
+        if not isinstance(page, dict) or not isinstance(page.get("content"), list):
+            problems.append("缺少退货分页数据")
+        else:
+            total, content = page.get("totalElements"), page["content"]
+            if type(total) is not int or total < len(content) or total < 0 or (total > 0 and not content):
+                problems.append("退货分页计数与数据不一致")
+    return problems
+
+
+def _production_payload_valid(code, payload):
+    if not isinstance(payload, dict):
+        return False
+    business = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    for layer in (payload, business):
+        if any(layer.get(key) for key in ("error", "errors", "exception")):
+            return False
+        if layer.get("success") is False or layer.get("status") in ("FAILED", "ERROR"):
+            return False
+    if code == "REPORT_PRODUCTION":
+        output = business.get("totalOutput")
+        return (payload.get("reportType") == "PRODUCTION" and type(output) in (int, float)
+                and math.isfinite(output) and output >= 0 and isinstance(business.get("dailyOutput"), list))
+    if code == "PRODUCTION_PROGRESS_DASHBOARD":
+        summary, plans = business.get("summary"), business.get("plans")
+        counts = ("totalPlans", "totalWorkOrders", "completedWorkOrders", "inProgressWorkOrders", "pendingWorkOrders")
+        return (isinstance(summary, dict) and isinstance(plans, list)
+                and all(type(summary.get(key)) is int and summary[key] >= 0 for key in counts)
+                and summary["totalPlans"] == len(plans))
+    return False
+
+
+def _choice_code(choice):
+    """The real clarification API uses SELECT_INTENT + parameters.intentCode."""
+    if not isinstance(choice, dict):
+        return None
+    code = choice.get("actionCode")
+    if code == "SELECT_INTENT":
+        parameters = choice.get("parameters")
+        code = parameters.get("intentCode") if isinstance(parameters, dict) else None
+    return code if isinstance(code, str) and code else None
+
+
+def _execute_read(base, auth, case, session_id, post=None):
+    post = post or _post_json
+
+    def execute(payload):
+        envelope = post(f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute", payload, headers=auth)
+        data = envelope.get("data")
+        if envelope.get("success") is not True or not isinstance(data, dict) or not data:
+            raise ValueError("查询响应封装失败或为空")
+        return data
+
+    data = execute({"userInput": case["q"], "sessionId": session_id, "mode": "READ"})
+    if data.get("status") == "NEED_CLARIFICATION" and case.get("intents"):
+        choices = data.get("suggestedActions") or []
+        codes = {_choice_code(choice) for choice in choices}
+        if data.get("aiMode") != "READ" or len(codes - {None, ""}) < 2 or data.get("confirmableAction"):
+            raise ValueError("澄清响应缺少两个真实只读候选")
+        selected = next((choice for choice in choices if _choice_code(choice) in case["intents"]), None)
+        if selected is None:
+            raise ValueError("澄清候选不含目标生产查询；不选择其他能力")
+        data = execute({"userInput": selected.get("actionName") or case["q"],
+                        "intentCode": _choice_code(selected), "sessionId": session_id, "mode": "READ"})
+    return data
+
+
 def run_eval(base: str, only: Optional[str] = None) -> int:
     auth = factory_login(base, _post_json)
     if auth is None:
@@ -85,23 +188,13 @@ def run_eval(base: str, only: Optional[str] = None) -> int:
         flat = ""
         for attempt in (1, 2):  # 蓝绿切换窗瞬态失败重试一次
             try:
-                resp = _post_json(
-                    f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute",
-                    {"userInput": q, "sessionId": _rand_sid(f"c{idx}")},
-                    headers=auth,
-                )
-                data = resp.get("data") or {}
+                data = _execute_read(base, auth, case, _rand_sid(f"c{idx}"))
                 message = str(data.get("message") or "")
+                problems = _read_problems(case, data)
             except Exception as exc:  # noqa: BLE001
                 message = f"<TRANSPORT ERROR: {exc}>"
+                problems = ["查询未取得有效响应"]
             flat = " ".join(message.split())
-            problems = []
-            for marker in case.get("contains", []):
-                if marker not in flat:
-                    problems.append(f"缺少「{marker}」")
-            for marker in case.get("excludes", []) + _FORBIDDEN_EVERYWHERE:
-                if marker in flat:
-                    problems.append(f"不应出现「{marker}」")
             if not problems:
                 break
             if attempt == 1:
