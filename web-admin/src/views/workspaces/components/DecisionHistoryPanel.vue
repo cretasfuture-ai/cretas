@@ -244,7 +244,7 @@ table { width: 100%; min-width: 860px; border-collapse: collapse; }
 th, td { padding: 11px 12px; border-bottom: 1px solid var(--el-border-color-lighter, #edf2f7); text-align: left; vertical-align: top; }
 th { background: var(--el-fill-color-light, #f5f7fa); font-size: 13px; }
 td strong, td code { display: block; }
-td code, .hash-grid code { margin-top: 4px; color: var(--el-text-color-secondary, #7a8599); font-size: 12px; overflow-wrap: anywhere; }
+td code, .hash-grid code, .provenance-grid code { margin-top: 4px; color: var(--el-text-color-secondary, #7a8599); font-size: 12px; overflow-wrap: anywhere; }
 input[type='radio'] { width: 16px; height: 16px; accent-color: var(--el-color-primary, #409eff); }
 .pagination { justify-content: center; margin-top: 14px; }
 .compare-controls { flex-wrap: wrap; padding: 14px 0 0; }
@@ -256,7 +256,7 @@ input[type='radio'] { width: 16px; height: 16px; accent-color: var(--el-color-pr
 .status-pill.unavailable { color: var(--el-color-warning, #b88230); }
 .reason-copy { color: var(--el-text-color-regular, #303133); }
 .provenance-grid, .hash-grid, .truth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
-.provenance-grid div, .hash-grid div { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--el-border-color-lighter, #edf2f7); border-radius: 6px; }
+.provenance-grid div, .hash-grid div { display: grid; min-width: 0; gap: 5px; padding: 10px; border: 1px solid var(--el-border-color-lighter, #edf2f7); border-radius: 6px; }
 .provenance-grid span, .hash-grid span { color: var(--el-text-color-secondary, #7a8599); font-size: 12px; }
 .truth-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); color: var(--el-text-color-secondary, #7a8599); font-size: 13px; }
 .warning-copy { color: var(--el-color-warning, #b88230); }
