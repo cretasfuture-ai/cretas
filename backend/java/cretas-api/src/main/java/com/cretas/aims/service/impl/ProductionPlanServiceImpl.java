@@ -5663,6 +5663,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
         requireVisiblePlan(factoryId, plan);
+        // Serialize this factory's receipt/cost writers before taking the settlement
+        // row lock.  The period guard below must remain after replay detection so a
+        // same-key retry can return the already committed result without a new write.
+        if (productionCostConsistency != null && entityManager != null) {
+            com.cretas.aims.service.finance.ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        }
         ProductionSettlement settlement = productionSettlementRepository
                 .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId)
                 .orElseGet(() -> bridgeProductionSettlementForWarehouse(factoryId, planId));
@@ -5681,6 +5687,18 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withCode("PRODUCTION_RECEIPT_ALREADY_CONFIRMED")
                     .withHint("请刷新生产计划列表查看最新入库状态")
                     .withHintTarget("仓库实收");
+        }
+        if (request.getIdempotencyKey().equals(settlement.getWarehouseReceiptIdempotencyKey())) {
+            return toWarehouseReceiptResponse(settlement,
+                    "该仓库分次入库请求已提交过, 已返回当前累计结果",
+                    Collections.emptyList());
+        }
+
+        // Check the period before ordinary receipt output-line or FG mutations.
+        // The SAFETY_STOCK bridge above only mirrors already-posted interim/FG
+        // facts and returns through the already-received branch.
+        if (productionCostConsistency != null) {
+            productionCostConsistency.assertChangeAllowed(factoryId, planId);
         }
 
         if (isWorkflowPlan(plan)) {
@@ -5978,8 +5996,19 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         int completedBatchCount = allReceived
                 ? markReceiptProductionBatchesCompleted(factoryId, plan.getId(), settlement)
                 : 0;
+        flushReceiptCostWritesBeforeResponse();
         return toWarehouseReceiptResponse(settlement, settlement.getPostingMessage(),
                 buildReceiptWarnings(completedBatchCount, costWarning));
+    }
+
+    /**
+     * Surface output, inventory and settlement constraints or optimistic-lock
+     * conflicts before constructing a successful response. A flush failure is
+     * rolled back with the complete receipt transaction. HTTP price masking is
+     * a separate permission boundary and is not changed here.
+     */
+    private void flushReceiptCostWritesBeforeResponse() {
+        productionSettlementOutputLineRepository.flush();
     }
 
     private String outputReceiptKey(String productTypeId, String batchNumber, String unit) {
@@ -6051,6 +6080,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         BigDecimal totalCost = usableTotalCost(breakdown);
         if (totalCost == null) {
             String reason = describeCostUnavailableReason(breakdown);
+            clearWorkflowOutputCosts(lines);
             log.warn("[结单成本] 算不出本计划权威成本, 成品单位成本留空 factory={} plan={} reason={}",
                     factoryId, planId, reason);
             return reason;
@@ -6063,6 +6093,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //    「估算成功时反而不告诉人这是估的」(本仓形态 B: 机制在, 没接到成功那条路上)。
         return joinCostNotes(describeUncollectedOptionalCostNote(breakdown),
                 describeEstimatedAuxNote(breakdown));
+    }
+
+    private static void clearWorkflowOutputCosts(List<ProductionSettlementOutputLine> lines) {
+        for (ProductionSettlementOutputLine line : lines) {
+            line.setAllocatedCost(null);
+            line.setUnitCost(null);
+        }
+    }
+
+    private static boolean sameCost(BigDecimal left, BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
     }
 
     /**
@@ -6522,7 +6563,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             BigDecimal productQuantity = entry.getValue().stream()
-                    .map(ProductionSettlementOutputLine::getReceivedQuantity)
+                    .map(ProductionSettlementOutputLine::getReportedQuantity)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal productCost = authority.getByproductNrvUnitPrice()
                     .multiply(productQuantity)
@@ -6567,7 +6608,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             List<ProductionSettlementOutputLine> productLines = entry.getValue();
             ProductionSettlementOutputLine authority = productLines.getFirst();
             BigDecimal productQuantity = productLines.stream()
-                    .map(ProductionSettlementOutputLine::getReceivedQuantity)
+                    .map(ProductionSettlementOutputLine::getReportedQuantity)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal productCost = productCosts.get(entry.getKey());
             BigDecimal productAllocated = BigDecimal.ZERO.setScale(6, RoundingMode.HALF_UP);
@@ -6575,10 +6616,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 ProductionSettlementOutputLine line = productLines.get(i);
                 BigDecimal allocated = i == productLines.size() - 1
                         ? productCost.subtract(productAllocated)
-                        : productCost.multiply(line.getReceivedQuantity())
+                        : productCost.multiply(line.getReportedQuantity())
                                 .divide(productQuantity, 6, RoundingMode.HALF_UP);
                 line.setAllocatedCost(allocated);
-                line.setUnitCost(allocated.divide(line.getReceivedQuantity(), 6, RoundingMode.HALF_UP));
+                line.setUnitCost(allocated.divide(line.getReportedQuantity(), 6, RoundingMode.HALF_UP));
                 productAllocated = productAllocated.add(allocated);
                 allocatedTotal = allocatedTotal.add(allocated);
             }
@@ -8384,11 +8425,35 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         "Reported output batch number already belongs to another production output")
                         .withCode("FINISHED_GOODS_BATCH_CONFLICT");
             }
-            batch.setProducedQuantity(zeroIfNull(batch.getProducedQuantity()).add(receiptDelta));
+            // A later partial receipt may change the authoritative output-line
+            // allocation from the cumulative-receipt cost to the stable
+            // reported-output cost.  Mirror that value (including null when the
+            // plan cost is unavailable) onto the existing inventory row.
+            BigDecimal previousUnitCost = batch.getUnitCost();
+            BigDecimal previousProducedQuantity = zeroIfNull(batch.getProducedQuantity());
+            if (previousUnitCost != null && output.getUnitCost() == null
+                    && returnedCostSynchronizationService != null) {
+                returnedCostSynchronizationService.assertCanClearAuthoritativeCost(
+                        settlement.getFactoryId(), batch,
+                        zeroIfNull(output.getReceivedQuantity()).subtract(receiptDelta));
+            }
+            batch.setProducedQuantity(previousProducedQuantity.add(receiptDelta));
+            batch.setUnitCost(output.getUnitCost());
             // 质检放行: 同批号追加入库 = 一笔新的产出, 需检产品重新待检 (只动 AVAILABLE)。
             batch.setStatus(finishedGoodsOutputStatus(settlement.getFactoryId(), batch.getProductTypeId(),
                     batch.getBatchNumber(), plan.getId(), batch.getStatus()));
-            return finishedGoodsBatchRepository.save(batch);
+            FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
+            if (!sameCost(previousUnitCost, batch.getUnitCost())) {
+                if (returnedCostSynchronizationService != null && batch.getUnitCost() != null) {
+                    returnedCostSynchronizationService.synchronize(
+                            settlement.getFactoryId(), batch, previousUnitCost,
+                            receivedBy);
+                }
+                if (productionCostConsistency != null) {
+                    productionCostConsistency.invalidateCostIndicators(settlement.getFactoryId());
+                }
+            }
+            return saved;
         }
 
         ProductType productType = productTypeRepository
