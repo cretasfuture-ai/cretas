@@ -3,7 +3,7 @@
   "owner": "01a1a59f-7fcf-76f2-82a2-2cfd0d5fce98",
   "originalBaseSHA": "ecfb04cbac6283ac4e1b70592f4643be5feb44b8",
   "upstreamSyncSHA": "49009fd44ad1f348c5599a460744dd7ca177aebe",
-  "currentStage": "2026-11-07: actual Tool capability descriptions beside coarse/fine options; explicit source-to-target read transition; shared human scope metadata for normal/SSE clarification. Independent-source provenance audit; opened regression gold immutable. No new intent truth, state store, permission bypass or confidence threshold change.",
+  "currentStage": "2026-11-07: actual Tool descriptions beside coarse/fine options; trusted bounded same-domain scope recall; explicit source-to-target transition; remove impossible inherit actions from function schema; shared normal/SSE read-scope messages. Independent-source provenance audit; all gold immutable. No new intent truth/state store, permission bypass or threshold change.",
   "existingScope": [
     "Java service/execution, recognition DTO and existing Conversation/preview integration",
     "Java ai/tool/impl/crm read tools",

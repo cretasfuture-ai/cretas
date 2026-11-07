@@ -33,6 +33,12 @@ class SemanticReadCapabilityContractTest {
                     SemanticReadTurnResolverContractTest.bind(h,tool,target))).isNull();
             var input=ArgumentCaptor.forClass(String.class);
             verify(client).chatWithTools(anyString(),input.capture(),anyList());
+            var functions=ArgumentCaptor.forClass(List.class);
+            verify(client).chatWithTools(anyString(),anyString(),functions.capture());
+            var function=(com.cretas.aims.ai.dto.Tool)functions.getValue().get(0);
+            Map<?,?> fields=(Map<?,?>)function.getFunction().getParameters().get("properties");
+            assertThat(((List<?>)((Map<?,?>)fields.get("action")).get("enum")).stream().map(String::valueOf).toList())
+                    .doesNotContain("CONTINUE","CORRECT");
             var transition=h.mapper.readTree(input.getValue()).path("readTransition");
             assertThat(transition.path("source").path("intent").asText()).isEqualTo(source);
             assertThat(transition.path("target").path("intent").asText()).isEqualTo(target);
@@ -63,6 +69,22 @@ class SemanticReadCapabilityContractTest {
         String sse=ReflectionTestUtils.invokeMethod(mock(SseStreamingService.class,CALLS_REAL_METHODS),"streamChoicesLine",choices);
         assertThat(sse).isEqualTo(normal).contains(status,date).doesNotContain("置信度");
         assertThat(choices).allSatisfy(c->assertThat(c.getParameters()).containsOnlyKeys("intentCode"));
+    }
+
+    @Test void confirmedSameGoalStillAllowsContinuationAndCorrectionInFunctionSchema() throws Exception {
+        try(var h=new SalesRankingSemanticContractTest.Harness()) {
+            SemanticReadTurnResolverContractTest.previous(h,"MATERIAL_BATCH_QUERY",Map.of("toolName","material_batch_query","page",1,"size",4,"status","AVAILABLE"));
+            var request=SemanticReadTurnResolverContractTest.request(h,"继续查现有结果");
+            var client=SemanticReadTurnResolverContractTest.model(h,"CONTINUE",Map.of());
+            assertThat(h.dispatch.resolveReadTurn("F006",7L,request,
+                    SemanticReadTurnResolverContractTest.bind(h,new MaterialBatchQueryTool(),"MATERIAL_BATCH_QUERY"))).isNull();
+            var functions=ArgumentCaptor.forClass(List.class);
+            verify(client).chatWithTools(anyString(),anyString(),functions.capture());
+            var function=(com.cretas.aims.ai.dto.Tool)functions.getValue().get(0);
+            Map<?,?> fields=(Map<?,?>)function.getFunction().getParameters().get("properties");
+            assertThat(((List<?>)((Map<?,?>)fields.get("action")).get("enum")).stream().map(String::valueOf).toList())
+                    .contains("CONTINUE","CORRECT");
+        }
     }
 
     @Test void unavailableMetadataDoesNotInventCapabilityOrPermission() {

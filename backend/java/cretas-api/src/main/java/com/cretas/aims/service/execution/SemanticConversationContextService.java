@@ -52,6 +52,7 @@ public class SemanticConversationContextService {
                         .ifPresent(tool -> {
                             Map<String,Object> capability = new LinkedHashMap<>();
                             capability.put("tool", name);
+                            capability.put("domains", Optional.ofNullable(tool.getDomainTags()).orElse(Set.of()).stream().sorted().limit(8).toList());
                             String description = Objects.toString(tool.getDescription(), "");
                             capability.put("description", description.substring(0, Math.min(180, description.length())));
                             Map<String,Object> schema = tool.getParametersSchema();

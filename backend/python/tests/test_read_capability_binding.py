@@ -57,3 +57,17 @@ def test_capability_annotations_never_create_a_catalog_option_or_render_business
     assert 'PRIVATE' not in intent_text(row)
     row['_read_capability']=dict(tool='real',description='状态列表',parameters=['page'],business_rows=[{'price':'PRIVATE'}],permission='ROOT')
     assert 'PRIVATE' not in intent_text(row) and 'ROOT' not in intent_text(row)
+
+@pytest.mark.parametrize('provenance',['CLIENT','SERVER_CONVERSATION_MEMORY'])
+def test_paged_scope_alternatives_are_recalled_without_picking_a_goal(provenance):
+    from ai.orchestrator import _read_capability_candidates
+    ctx=dict(provenance=provenance,readCapabilities=[
+        dict(tool='status',parameters=['page','size','status'],domains=['material'],clarification='按状态'),
+        dict(tool='expiry',parameters=['page','size'],domains=['material'],clarification='按到期日'),
+        dict(tool='other',parameters=['page','size'],domains=['order'],clarification='按订单')])
+    by={'S':dict(tool_name='status'),'E':dict(tool_name='expiry'),'O':dict(tool_name='other')}
+    expected=['E','S'] if provenance=='SERVER_CONVERSATION_MEMORY' else ['E']
+    assert _read_capability_candidates(ctx,['E'],by,20)==expected
+    assert _read_capability_candidates(ctx,['E'],by,1)==['E']
+    by.pop('S')
+    assert _read_capability_candidates(ctx,['E'],by,20)==['E']

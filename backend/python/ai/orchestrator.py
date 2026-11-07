@@ -71,6 +71,8 @@ def _trusted_read_capabilities(context):
                    "parameters": [v[:64] for v in names[:32] if isinstance(v, str)]}
             if isinstance(item.get("clarification"), str):
                 cap["clarification"] = item["clarification"][:240]
+            if isinstance(item.get("domains"), list):
+                cap["domains"] = [v[:64] for v in item["domains"][:8] if isinstance(v, str)]
             if isinstance(item.get("statuses"), dict):
                 cap["statuses"] = {str(k)[:64]: [str(v)[:32] for v in values[:2]]
                         for k, values in list(item["statuses"].items())[:32] if isinstance(values, list)}
@@ -114,7 +116,7 @@ def _context_read_candidate(context, by_code):
 
 
 def _read_capability_candidates(context, codes, by_code, limit):
-    """Offer paged alternatives when coarse recall only found an unpaged read Tool.
+    """Recall visible same-domain scope alternatives and missing paged reads.
 
     These are actual declarations and visible labels, not an inferred user goal.
     The chooser still receives NONE/CLARIFY and performs the semantic decision.
@@ -124,14 +126,18 @@ def _read_capability_candidates(context, codes, by_code, limit):
         return codes
     caps = {c["tool"]: c for c in declared[:5] if isinstance(c, dict) and isinstance(c.get("tool"), str)}
     selected = [caps[by_code[c]["tool_name"]] for c in codes if by_code[c].get("tool_name") in caps]
-    if not selected or any({"page", "size"}.issubset(c.get("parameters") or []) for c in selected):
+    if not selected:
         return codes
     result = list(codes)
-    paged = {name for name, c in caps.items() if {"page", "size"}.issubset(c.get("parameters") or [])}
+    scope_domains = {d for c in selected if c.get("clarification") for d in c.get("domains", [])}
+    alternatives = {name for name,c in caps.items() if c.get("clarification")
+                    and scope_domains.intersection(c.get("domains", []))}
+    if not any({"page", "size"}.issubset(c.get("parameters") or []) for c in selected):
+        alternatives.update(name for name,c in caps.items() if {"page", "size"}.issubset(c.get("parameters") or []))
     for code, row in by_code.items():
         if len(result) >= limit:
             break
-        if row.get("tool_name") in paged and code not in result:
+        if row.get("tool_name") in alternatives and code not in result:
             result.append(code)
     return result
 

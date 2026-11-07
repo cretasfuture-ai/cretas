@@ -198,7 +198,9 @@ public class ToolDispatchService {
                 deltaSchema.put("properties", partial);
             }
             Map<String,Object> turnProperties = new java.util.LinkedHashMap<>(Map.of(
-                    "action", Map.of("type", "string", "enum", List.of("NEW", "CONTINUE", "CORRECT", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")),
+                    "action", Map.of("type", "string", "enum", Boolean.TRUE.equals(input.get("canInheritPreviousParameters"))
+                            ? List.of("NEW", "CONTINUE", "CORRECT", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")
+                            : List.of("NEW", "SWITCH", "CANCEL", "CLARIFY", "UNSUPPORTED")),
                     "dateScope", Map.of("type", "string", "enum", List.of("UNCHANGED", "CLOSED", "FROM", "UNTIL", "UNRESOLVED")),
                     "parameters", deltaSchema, "message", Map.of("type", "string")));
             turnProperties.put("pageAction", Map.of("type", "string", "enum", List.of("NEXT", "PREVIOUS", "ABSOLUTE", "UNCHANGED")));
