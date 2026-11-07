@@ -33,6 +33,64 @@ class ProductionWorkflowOutputCostAllocationTest {
                 .reduce(BigDecimal.ZERO, BigDecimal::add));
     }
 
+    @Test
+    void partialReceiptUsesStableReportedQuantityAsCostDenominator() {
+        ProductionSettlementOutputLine line = line("A", "0.01", "1");
+        line.setReportedQuantity(new BigDecimal("0.02"));
+
+        ProductionPlanServiceImpl.allocateWorkflowOutputCostsFromTotal(
+                new BigDecimal("0.56"), List.of(line));
+
+        assertDecimal("0.56", line.getAllocatedCost());
+        assertDecimal("28", line.getUnitCost());
+    }
+
+    @Test
+    void partialReceiptSplitsSameSkuByReportedQuantitiesNotCumulativeReceipts() {
+        ProductionSettlementOutputLine first = line("A", "0.01", "1");
+        first.setReportedQuantity(new BigDecimal("0.02"));
+        ProductionSettlementOutputLine second = line("A", "0", "1");
+        second.setReportedQuantity(new BigDecimal("0.02"));
+
+        ProductionPlanServiceImpl.allocateWorkflowOutputCostsFromTotal(
+                new BigDecimal("0.56"), List.of(first, second));
+
+        assertDecimal("0.28", first.getAllocatedCost());
+        assertDecimal("0.28", second.getAllocatedCost());
+        assertDecimal("14", first.getUnitCost());
+        assertDecimal("14", second.getUnitCost());
+        assertDecimal("0.56", first.getAllocatedCost().add(second.getAllocatedCost()));
+    }
+
+    @Test
+    void mainAndByproductNrvConserveAcrossSameSkuBatchesUsingReportedQuantities() {
+        ProductionSettlementOutputLine mainFirst = line("MAIN", "0.02", "3");
+        mainFirst.setReceivedQuantity(new BigDecimal("0.01"));
+        ProductionSettlementOutputLine mainSecond = line("MAIN", "0.02", "3");
+        mainSecond.setReceivedQuantity(BigDecimal.ZERO);
+        ProductionSettlementOutputLine byproductFirst = line("BY", "0.01", "0");
+        byproductFirst.setOutputRole(BomRecipe.OutputRole.BY_PRODUCT);
+        byproductFirst.setByproductNrvUnitPrice(new BigDecimal("5"));
+        byproductFirst.setReceivedQuantity(BigDecimal.ZERO);
+        ProductionSettlementOutputLine byproductSecond = line("BY", "0.01", "0");
+        byproductSecond.setOutputRole(BomRecipe.OutputRole.BY_PRODUCT);
+        byproductSecond.setByproductNrvUnitPrice(new BigDecimal("5"));
+        byproductSecond.setReceivedQuantity(new BigDecimal("0.01"));
+
+        ProductionPlanServiceImpl.allocateWorkflowOutputCostsFromTotal(
+                new BigDecimal("0.56"), List.of(mainFirst, mainSecond, byproductFirst, byproductSecond));
+
+        assertDecimal("0.23", mainFirst.getAllocatedCost());
+        assertDecimal("0.23", mainSecond.getAllocatedCost());
+        assertDecimal("0.05", byproductFirst.getAllocatedCost());
+        assertDecimal("0.05", byproductSecond.getAllocatedCost());
+        assertDecimal("11.5", mainFirst.getUnitCost());
+        assertDecimal("5", byproductSecond.getUnitCost());
+        assertDecimal("0.56", List.of(mainFirst, mainSecond, byproductFirst, byproductSecond).stream()
+                .map(ProductionSettlementOutputLine::getAllocatedCost)
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
+    }
+
     /**
      * 存货多成品(F006【演示L4】8d77ec57): 三个成品小结时已按各自分支追溯出成本
      * 692.46 / 649.20 / 1998.58, 比例取占比, 分摊计划总额后守恒且按同一比例落到各成品。
@@ -73,7 +131,9 @@ class ProductionWorkflowOutputCostAllocationTest {
         line.setProductTypeId(sku);
         line.setOutputRole("A".equals(sku)
                 ? BomRecipe.OutputRole.MAIN : BomRecipe.OutputRole.CO_PRODUCT);
-        line.setReceivedQuantity(new BigDecimal(quantity));
+        BigDecimal quantityValue = new BigDecimal(quantity);
+        line.setReportedQuantity(quantityValue);
+        line.setReceivedQuantity(quantityValue);
         line.setCostAllocationRatio(new BigDecimal(ratio));
         return line;
     }

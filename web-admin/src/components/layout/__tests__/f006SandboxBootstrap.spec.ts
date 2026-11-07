@@ -27,15 +27,18 @@ it('defers API-emitting navigation components until the server isolation boundar
   const wrapper = create()
   expect(wrapper.find('app-sidebar-stub').exists()).toBe(false)
   expect(wrapper.find('app-header-stub').exists()).toBe(false)
+  expect(wrapper.find('global-ai-control-stub').exists()).toBe(false)
   resolve({ success: true, data: null }); await flushPromises()
   expect(wrapper.find('app-sidebar-stub').exists()).toBe(true)
   expect(wrapper.find('app-header-stub').exists()).toBe(true)
+  expect(wrapper.find('global-ai-control-stub').exists()).toBe(true)
   wrapper.unmount()
 })
 it('reopens the current workspace tab when an active session is recovered after reload', async () => {
   let resolve!: (value: unknown) => void
   fixture.get.mockReturnValue(new Promise(r => { resolve = r }))
   const wrapper = create()
+  expect(wrapper.find('global-ai-control-stub').exists()).toBe(false)
   expect(fixture.openWorkspaceRoute).toHaveBeenCalledTimes(1)
   const id = '8ba01349-0595-4fa2-892a-18ce2f99986f'
   resolve({ success: true, data: { sessionId: id, actor: 1309, status: 'READY' } }); await flushPromises()
@@ -44,6 +47,7 @@ it('reopens the current workspace tab when an active session is recovered after 
   const scopeOrder = fixture.setWorkspaceScope.mock.invocationCallOrder.at(-1)!
   expect(fixture.openWorkspaceRoute.mock.invocationCallOrder.at(-1)!).toBeGreaterThan(scopeOrder)
   expect(wrapper.find('app-sidebar-stub').exists()).toBe(true)
+  expect(wrapper.find('global-ai-control-stub').exists()).toBe(true)
   wrapper.unmount()
 })
 it('keeps business views closed while F006 user identity is still loading', async () => {

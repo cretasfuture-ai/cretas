@@ -7,7 +7,6 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.*;
@@ -31,6 +30,7 @@ class ReturnedCostSynchronizationServiceTest {
                         .crossLanguageCode(invocation.getArgument(1)));
         ReflectionTestUtils.setField(service,"unitContractService",unitContractService);
         ReflectionTestUtils.setField(service,"entityManager",em);when(em.createNativeQuery(anyString())).thenReturn(q);
+        when(q.getSingleResult()).thenReturn(0L);
         source=fg("SOURCE","B1","8.0000");child=fg("CHILD","RTN-RO-1","7.0000");child.setReturnOrderItemId(1L);
         var line=new ReturnOrderItem();line.setId(1L);line.setReturnOrderId("RO");line.setBatchNumber("B1");line.setProductTypeId("SKU");line.setQuantity(BigDecimal.ONE);
         var order=new ReturnOrder();order.setId("RO");order.setFactoryId("F");order.setReturnNumber("RO");order.setReturnDate(LocalDate.of(2026,10,1));order.setItems(List.of(line));
@@ -41,7 +41,7 @@ class ReturnedCostSynchronizationServiceTest {
     }
     FinishedGoodsBatch fg(String id,String number,String cost) {
         var b=new FinishedGoodsBatch();b.setId(id);b.setFactoryId("F");b.setBatchNumber(number);b.setProductTypeId("SKU");
-        b.setUnit("盒");b.setUnitCost(new BigDecimal(cost));b.setProducedQuantity(BigDecimal.ONE);b.setShippedQuantity(BigDecimal.ZERO);return b;
+        b.setUnit("盒");b.setUnitCost(new BigDecimal(cost));b.setProducedQuantity(BigDecimal.ONE);b.setShippedQuantity(BigDecimal.ZERO);b.setReservedQuantity(BigDecimal.ZERO);return b;
     }
     @Test void updatesProvenReturnedCostAndPreservesAuditAndRevaluesDisposals() {
         service.synchronize("F",source,new BigDecimal("7"),2L);
@@ -88,5 +88,93 @@ class ReturnedCostSynchronizationServiceTest {
         verify(q).setParameter("nativeUnit","盒");
         verify(em).createNativeQuery(contains("e.unit=:nativeUnit AND e.quantity_used>0"));
         verify(batches,never()).save(any());
+    }
+
+    @Test void clearCostWithoutDownstreamFactsIsAllowed() {
+        when(items.findCompletedPhysicalReturnsForSource("F", "SOURCE", "B1"))
+                .thenReturn(List.of());
+        when(logs.findByBatchIdOrderByCreatedAtDesc("SOURCE")).thenReturn(List.of());
+        when(q.getResultList()).thenReturn(List.of());
+        source.setShippedQuantity(BigDecimal.ZERO);
+        source.setReservedQuantity(BigDecimal.ZERO);
+
+        service.assertCanClearAuthoritativeCost("F", source, BigDecimal.ONE);
+
+        verifyNoInteractions(batches);
+    }
+
+    @Test void clearCostRejectsShipmentReturnScrapOrQuantityMismatchFacts() {
+        when(items.findCompletedPhysicalReturnsForSource("F", "SOURCE", "B1"))
+                .thenReturn(List.of());
+        when(logs.findByBatchIdOrderByCreatedAtDesc("SOURCE")).thenReturn(List.of());
+        when(q.getResultList()).thenReturn(List.of());
+
+        source.setShippedQuantity(BigDecimal.ONE);
+        assertThatThrownBy(() -> service.assertCanClearAuthoritativeCost("F", source,
+                BigDecimal.ONE)).hasMessageContaining("出货");
+
+        source.setShippedQuantity(BigDecimal.ZERO);
+        when(items.findCompletedPhysicalReturnsForSource("F", "SOURCE", "B1"))
+                .thenReturn(List.of(new ReturnOrderItem()));
+        assertThatThrownBy(() -> service.assertCanClearAuthoritativeCost("F", source,
+                BigDecimal.ONE)).hasMessageContaining("实物退货");
+
+        when(items.findCompletedPhysicalReturnsForSource("F", "SOURCE", "B1"))
+                .thenReturn(List.of());
+        FinishedGoodsAdjustmentLog scrap = FinishedGoodsAdjustmentLog.builder()
+                .factoryId("F").batchId("SOURCE").adjustmentQuantity(new BigDecimal("-1"))
+                .referenceType("SCRAP").build();
+        when(logs.findByBatchIdOrderByCreatedAtDesc("SOURCE")).thenReturn(List.of(scrap));
+        assertThatThrownBy(() -> service.assertCanClearAuthoritativeCost("F", source,
+                BigDecimal.ONE)).hasMessageContaining("库存调整");
+
+        when(logs.findByBatchIdOrderByCreatedAtDesc("SOURCE")).thenReturn(List.of());
+        assertThatThrownBy(() -> service.assertCanClearAuthoritativeCost("F", source,
+                new BigDecimal("2.0000"))).hasMessageContaining("证据不一致");
+    }
+
+    @Test void clearCostRejectsCrossFactoryAdjustmentEvidence() {
+        when(items.findCompletedPhysicalReturnsForSource("F", "SOURCE", "B1"))
+                .thenReturn(List.of());
+        when(logs.findByBatchIdOrderByCreatedAtDesc("SOURCE")).thenReturn(List.of(
+                FinishedGoodsAdjustmentLog.builder().factoryId("OTHER").batchId("SOURCE")
+                        .adjustmentQuantity(BigDecimal.ZERO).build()));
+        source.setShippedQuantity(BigDecimal.ZERO);
+        assertThatThrownBy(() -> service.assertCanClearAuthoritativeCost("F", source,
+                BigDecimal.ONE)).hasMessageContaining("跨工厂");
+    }
+
+    @Test void approvedLegacyDisposalWithoutAdjustmentLogStillRejectsCostClear() {
+        when(items.findCompletedPhysicalReturnsForSource("F", "SOURCE", "B1"))
+                .thenReturn(List.of());
+        when(logs.findByBatchIdOrderByCreatedAtDesc("SOURCE")).thenReturn(List.of());
+        Query approved = mock(Query.class, RETURNS_SELF);
+        when(em.createNativeQuery(contains("FROM disposal_records"))).thenReturn(approved);
+        when(approved.getSingleResult()).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.assertCanClearAuthoritativeCost(
+                "F", source, BigDecimal.ONE))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        error -> assertThat(error.getErrorCode())
+                                .isEqualTo("RECEIPT_COST_CLEAR_DOWNSTREAM_FACTS"))
+                .hasMessageContaining("批准处置");
+        verify(approved).setParameter("factory", "F");
+        verify(approved).setParameter("batch", "SOURCE");
+        verifyNoInteractions(batches, disposals);
+    }
+
+    @Test void unreadableApprovedDisposalEvidenceFailsClosedBeforeCostWrites() {
+        when(items.findCompletedPhysicalReturnsForSource("F", "SOURCE", "B1"))
+                .thenReturn(List.of());
+        when(logs.findByBatchIdOrderByCreatedAtDesc("SOURCE")).thenReturn(List.of());
+        when(em.createNativeQuery(contains("FROM disposal_records")))
+                .thenThrow(new IllegalStateException("fixture: unavailable disposal evidence"));
+
+        assertThatThrownBy(() -> service.assertCanClearAuthoritativeCost(
+                "F", source, BigDecimal.ONE))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class,
+                        error -> assertThat(error.getErrorCode())
+                                .isEqualTo("RECEIPT_COST_CLEAR_DOWNSTREAM_FACTS"));
+        verifyNoInteractions(batches, disposals);
     }
 }

@@ -15,7 +15,7 @@ it('preserves each original business page with no side console and removes nativ
  const Original=defineComponent({render:()=>h('form',{'data-testid':'original-business-form'},[h('input')])})
  const router=createRouter({history:createMemoryHistory(),routes:[{path:'/procurement/orders',component:Original},{path:'/warehouse/materials',component:Original}]})
  await router.push('/procurement/orders');await router.isReady()
- const wrapper=mount(Layout,{global:{plugins:[createPinia(),router],stubs:{AppSidebar:true,AppHeader:true,WorkspaceTabs:true,WorkspaceReferencePane:true,ReturnBanner:true,InlineCustomerService:true,F006SandboxBanner:true,F006NativeToolbar:{template:'<div data-testid="native-top-only">正在演示</div>'}}}})
+ const wrapper=mount(Layout,{global:{plugins:[createPinia(),router],stubs:{AppSidebar:true,AppHeader:true,WorkspaceTabs:true,WorkspaceReferencePane:true,ReturnBanner:true,InlineCustomerService:true,GlobalAiControl:true,F006SandboxBanner:true,F006NativeToolbar:{template:'<div data-testid="native-top-only">正在演示</div>'}}}})
  try{
   await flushPromises();expect(wrapper.findAll('form')).toHaveLength(1);expect(wrapper.find('[data-testid="native-top-only"]').exists()).toBe(true)
   expect(wrapper.find('[data-testid="demo-guide"]').exists()).toBe(false)

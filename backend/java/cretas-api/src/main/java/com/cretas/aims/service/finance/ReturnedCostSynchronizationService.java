@@ -4,6 +4,7 @@ import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.finance.AccountingPeriod;
 import com.cretas.aims.entity.inventory.FinishedGoodsAdjustmentLog;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
@@ -40,6 +41,78 @@ public class ReturnedCostSynchronizationService {
                 || (source.getOwnership()!=null && source.getOwnership()!=InventoryOwnership.COMPANY_OWNED) || source.getUnitCost()==null
                 || source.getUnitCost().signum()<0) throw conflict("成本更正的源批次无效");
         walk(factory,source,previousCost,actor,new HashSet<>());
+    }
+
+    /**
+     * Prove that an authoritative receipt cost may be cleared without leaving
+     * physical descendants on a stale cost basis.  This is deliberately a
+     * fail-closed read-only gate; the caller invokes it before mutating the
+     * source batch quantity or cost.
+     */
+    public void assertCanClearAuthoritativeCost(String factory, FinishedGoodsBatch source,
+            BigDecimal expectedProducedBefore) {
+        if (entityManager != null) {
+            ProductionCostConsistency.lockFactory(entityManager, factory);
+        }
+        if (source == null || !Objects.equals(factory, source.getFactoryId())
+                || source.getId() == null || source.getBatchNumber() == null
+                || source.getProductTypeId() == null || source.getUnit() == null
+                || source.getProducedQuantity() == null || expectedProducedBefore == null
+                || source.getProducedQuantity().compareTo(expectedProducedBefore) != 0) {
+            throw clearConflict("源批次工厂、SKU、单位或累计产出证据不一致");
+        }
+        if (source.getReservedQuantity() == null || source.getReservedQuantity().signum() != 0) {
+            throw clearConflict("源批次已有预留库存或预留数量证据缺失");
+        }
+        if (source.getShippedQuantity() == null || source.getShippedQuantity().signum() != 0) {
+            throw clearConflict("源批次已有出货或出货数量证据缺失");
+        }
+        List<ReturnOrderItem> returns = items.findCompletedPhysicalReturnsForSource(
+                factory, source.getId(), source.getBatchNumber());
+        if (returns == null || !returns.isEmpty()) {
+            throw clearConflict("源批次已有实物退货下游");
+        }
+        List<FinishedGoodsAdjustmentLog> adjustmentLogs = logs
+                .findByBatchIdOrderByCreatedAtDesc(source.getId());
+        if (adjustmentLogs == null) {
+            throw clearConflict("源批次库存调整证据缺失");
+        }
+        for (FinishedGoodsAdjustmentLog adjustment : adjustmentLogs) {
+            if (adjustment == null || !Objects.equals(factory, adjustment.getFactoryId())
+                    || adjustment.getAdjustmentQuantity() == null
+                    || adjustment.getAdjustmentQuantity().signum() != 0) {
+                throw clearConflict("源批次存在非成本更正的库存调整或跨工厂证据");
+            }
+        }
+        // Approved legacy disposals may predate the physical adjustment log.
+        // Inspect the same approved-record truth used by disposal revaluation;
+        // absence of an adjustment log does not prove absence of disposal cost.
+        Object approvedDisposals;
+        try {
+            approvedDisposals = entityManager.createNativeQuery("""
+                    SELECT COUNT(*) FROM disposal_records
+                    WHERE factory_id = :factory AND finished_goods_batch_id = :batch
+                      AND is_approved = true AND deleted_at IS NULL
+                    """).setParameter("factory", factory)
+                    .setParameter("batch", source.getId()).getSingleResult();
+        } catch (RuntimeException unavailable) {
+            throw clearConflict("无法核验源批次批准处置证据");
+        }
+        if (!(approvedDisposals instanceof Number)) {
+            throw clearConflict("源批次批准处置证据缺失");
+        }
+        if (new BigDecimal(approvedDisposals.toString()).signum() != 0) {
+            throw clearConflict("源批次已有批准处置成本事实");
+        }
+        // Reuse the existing lineage/ship-date proof query.  It also fails
+        // closed when the shipment quantity cannot be reconstructed exactly.
+        assertShipmentDatesOpen(factory, source);
+    }
+
+    private BusinessException clearConflict(String detail) {
+        return new BusinessException(409, "权威成品成本清空被下游事实阻断: " + detail)
+                .withCode("RECEIPT_COST_CLEAR_DOWNSTREAM_FACTS")
+                .withHint("请补齐权威生产成本并重新确认；系统未改动成品库存");
     }
 
     private void walk(String factory, FinishedGoodsBatch source, BigDecimal previousCost, Long actor, Set<String> seen) {

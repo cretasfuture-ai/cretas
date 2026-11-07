@@ -22,6 +22,8 @@ import request from '@/api/request';
 import F006NativeToolbar from './F006NativeToolbar.vue';
 import { nativePlayback } from '@/demo/f006NativeRuntime';
 import { serializeSandboxLifecycle } from '@/demo/f006SandboxLifecycle';
+import GlobalAiControl from './GlobalAiControl.vue';
+import { pageAgentState } from '@/ai/pageAgentRuntime';
 
 const appStore = useAppStore();
 const authStore = useAuthStore();
@@ -137,7 +139,8 @@ function pinDraggedReference(event: DragEvent): void {
       <!-- 顶部栏 -->
       <AppHeader v-if="sandboxReady && !isReferenceFrame" />
       <F006NativeToolbar v-if="nativePlayback.enabled && authStore.factoryId === 'F006' && Number(authStore.user?.id) === 1309 && authStore.currentRole === 'factory_super_admin'" :bootstrap-ready="sandboxBootstrapDone" />
-      <F006SandboxBanner v-if="sandboxSession && !nativePlayback.enabled" />
+      <GlobalAiControl v-if="!isReferenceFrame && sandboxBootstrapDone && authStore.user?.id" :bootstrap-ready="sandboxBootstrapDone && sandboxReady" />
+      <F006SandboxBanner v-if="sandboxSession && !nativePlayback.enabled && !pageAgentState.scope && pageAgentState.phase !== 'preparing'" />
 
       <WorkspaceTabs v-if="sandboxReady && !isReferenceFrame" ref="workspaceTabs" />
 
