@@ -15,6 +15,7 @@ import com.cretas.aims.entity.inventory.PurchaseOrderItem;
 import com.cretas.aims.entity.purchase.InquiryQuote;
 import com.cretas.aims.entity.purchase.InquiryQuoteSupplierPrice;
 import com.cretas.aims.exception.GlobalExceptionHandler;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
 import com.cretas.aims.repository.SupplierMaterialRepository;
@@ -26,6 +27,7 @@ import com.cretas.aims.repository.purchase.InquiryQuoteRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteSupplierPriceRepository;
 import com.cretas.aims.service.MobileService;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.purchase.impl.InquiryQuoteServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -51,6 +53,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -93,6 +96,7 @@ class InquiryQuoteComparabilityEntryContractTest {
     private final BomRecipeRepository bomRecipeRepo = mock(BomRecipeRepository.class);
     private final com.cretas.aims.service.unit.UnitContractService unitContract =
             mock(com.cretas.aims.service.unit.UnitContractService.class);
+    private final MaterialReferenceWriteGuard materialReferenceWriteGuard = mock(MaterialReferenceWriteGuard.class);
     private final MobileService mobileService = mock(MobileService.class);
 
     private MockMvc mvc;
@@ -102,7 +106,8 @@ class InquiryQuoteComparabilityEntryContractTest {
     @BeforeEach
     void setUp() {
         InquiryQuoteServiceImpl service = new InquiryQuoteServiceImpl(inquiryRepo, priceRepo, supplierRepo, poRepo,
-                purchaseService, materialRepo, relationRepo, specRepo, bomItemRepo, bomRecipeRepo, unitContract);
+                purchaseService, materialRepo, relationRepo, specRepo, bomItemRepo, bomRecipeRepo, unitContract,
+                materialReferenceWriteGuard);
         mvc = MockMvcBuilders.standaloneSetup(new InquiryQuoteController(service, mobileService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
@@ -355,6 +360,24 @@ class InquiryQuoteComparabilityEntryContractTest {
     }
 
     @Test
+    @DisplayName("创建核价单: 物料在提交前已合并/停用 → 409 且不插入 DRAFT")
+    void createRejectsUnavailableMaterialBeforeInsert() throws Exception {
+        doThrow(new BusinessException(409, "物料已停用，不能创建新引用")
+                .withCode("MATERIAL_REFERENCE_CONFLICT"))
+                .when(materialReferenceWriteGuard).lockActive(F, List.of(MAT));
+
+        mvc.perform(post("/api/mobile/" + F + "/purchase/inquiry-quotes")
+                        .header("Authorization", "Bearer t")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"materialTypeId\":\"" + MAT + "\",\"quantity\":100,\"unit\":\"kg\","
+                                + "\"inquiryDate\":\"" + LocalDate.now() + "\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message", containsString("物料已停用")));
+        verify(inquiryRepo, never()).save(any(InquiryQuote.class));
+        verify(inquiryRepo, never()).saveAndFlush(any(InquiryQuote.class));
+    }
+
+    @Test
     @DisplayName("并发创建挂同一草稿行: 先查都过了, 唯一索引兜底 → 干净的 409, 不是 500")
     void concurrentCreateOnSameDraftLineLoserGetsConflict() throws Exception {
         stubDraftWithLine("100");
@@ -394,6 +417,7 @@ class InquiryQuoteComparabilityEntryContractTest {
         line.setQuantity(new BigDecimal(lineQuantity));
         draft.setItems(List.of(line));
         when(purchaseService.getPurchaseOrderById(F, "PO-DRAFT")).thenReturn(draft);
+        when(poRepo.findByIdAndFactoryIdForUpdate("PO-DRAFT", F)).thenReturn(Optional.of(draft));
         when(inquiryRepo.findRecentDuplicates(any(), any(), any(), any(), any())).thenReturn(List.of());
     }
 

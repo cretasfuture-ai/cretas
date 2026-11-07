@@ -33,6 +33,7 @@ import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteSupplierPriceRepository;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import com.cretas.aims.service.purchase.InquiryQuoteComparator;
 import com.cretas.aims.service.shared.CostRollupUtil;
@@ -87,6 +88,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
     private final BomRecipeItemRepository bomRecipeItemRepository;
     private final BomRecipeRepository bomRecipeRepository;
     private final UnitContractService unitContractService;
+    private final MaterialReferenceWriteGuard materialReferenceWriteGuard;
 
     /** 工艺保密: BOM 影响估算只列当前用户有权看的配方。 */
     @Autowired(required = false)
@@ -114,7 +116,8 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                                    SupplierMaterialPurchaseSpecRepository purchaseSpecRepository,
                                    BomRecipeItemRepository bomRecipeItemRepository,
                                    BomRecipeRepository bomRecipeRepository,
-                                   UnitContractService unitContractService) {
+                                   UnitContractService unitContractService,
+                                   MaterialReferenceWriteGuard materialReferenceWriteGuard) {
         this.inquiryQuoteRepository = inquiryQuoteRepository;
         this.supplierPriceRepository = supplierPriceRepository;
         this.supplierRepository = supplierRepository;
@@ -126,6 +129,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         this.bomRecipeItemRepository = bomRecipeItemRepository;
         this.bomRecipeRepository = bomRecipeRepository;
         this.unitContractService = unitContractService;
+        this.materialReferenceWriteGuard = materialReferenceWriteGuard;
     }
 
     // ==================== 核价单 ====================
@@ -133,10 +137,23 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
     @Override
     @Transactional
     public InquiryQuote create(String factoryId, CreateInquiryQuoteRequest request, Long userId) {
-        // 防呆 R4 (幂等防双击): 5min 窗口内同 工厂/创建人/物料类型/数量 的进行中核价单 → 409 + 已有单号 + 跳转提示
-        if (request.getMaterialTypeId() != null) {
+        String materialTypeId = blankToNull(request.getMaterialTypeId());
+        String sourcePurchaseOrderId = blankToNull(request.getSourcePurchaseOrderId());
+        if (sourcePurchaseOrderId != null) {
+            lockSourcePurchaseOrder(factoryId, sourcePurchaseOrderId);
+        }
+        if (materialTypeId != null) {
+            List<RawMaterialType> lockedMaterials = materialReferenceWriteGuard
+                    .lockActive(factoryId, List.of(materialTypeId));
+            if (!lockedMaterials.isEmpty()) {
+                materialTypeId = lockedMaterials.get(0).getId();
+            }
+        }
+
+        // 防呆 R4 (幂等防双击): 在 material lock 后查询，避免两个创建者都在锁前看到空并各自插入。
+        if (materialTypeId != null) {
             List<InquiryQuote> dupes = inquiryQuoteRepository.findRecentDuplicates(
-                    factoryId, userId, request.getMaterialTypeId(), request.getQuantity(),
+                    factoryId, userId, materialTypeId, request.getQuantity(),
                     LocalDateTime.now().minusMinutes(5));
             if (!dupes.isEmpty()) {
                 InquiryQuote existing = dupes.get(0);
@@ -147,10 +164,8 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                         .withHintTarget(existing.getId());
             }
         }
-
-        String sourcePurchaseOrderId = blankToNull(request.getSourcePurchaseOrderId());
         if (sourcePurchaseOrderId != null) {
-            requireSourceDraftLine(factoryId, sourcePurchaseOrderId, request);
+            requireSourceDraftLine(factoryId, sourcePurchaseOrderId, request, materialTypeId);
         }
 
         String inquiryNumber = generateInquiryNumber(factoryId);
@@ -159,7 +174,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         q.setFactoryId(factoryId);
         q.setInquiryNumber(inquiryNumber);
         q.setTitle(request.getTitle());
-        q.setMaterialTypeId(request.getMaterialTypeId());
+        q.setMaterialTypeId(materialTypeId);
         q.setMaterialName(request.getMaterialName());
         q.setSpecification(request.getSpecification());
         q.setQuantity(request.getQuantity());
@@ -605,11 +620,21 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
     // ==================== 内部 ====================
 
     /**
+     * A quote linked to a purchase draft must take the draft header lock before
+     * taking the material lock.  This matches the purchase-side lock ordering
+     * and prevents a merge/quote deadlock from being introduced by this entry.
+     */
+    private void lockSourcePurchaseOrder(String factoryId, String sourcePurchaseOrderId) {
+        purchaseOrderRepository.findByIdAndFactoryIdForUpdate(sourcePurchaseOrderId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("采购订单不存在"));
+    }
+
+    /**
      * 发起比价的采购草稿必须: 本厂、DRAFT、恰好一行是本物料、单位一致,
      * 且这行上没有另一张进行中的核价单。
      */
     private void requireSourceDraftLine(String factoryId, String sourcePurchaseOrderId,
-                                        CreateInquiryQuoteRequest request) {
+                                        CreateInquiryQuoteRequest request, String materialTypeId) {
         PurchaseOrder draft = purchaseService.getPurchaseOrderById(factoryId, sourcePurchaseOrderId);
         if (draft.getStatus() != PurchaseOrderStatus.DRAFT) {
             throw new BusinessException(409, String.format(
@@ -619,7 +644,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
                     .withHint("请新建采购草稿后再从草稿行发起比价, 或不挂草稿直接新建核价单");
         }
         List<PurchaseOrderItem> lines = draft.getItems() == null ? List.of() : draft.getItems().stream()
-                .filter(i -> request.getMaterialTypeId().equals(i.getMaterialTypeId()))
+                .filter(i -> materialTypeId != null && materialTypeId.equals(i.getMaterialTypeId()))
                 .collect(Collectors.toList());
         if (lines.size() != 1) {
             throw new BusinessException(409, String.format(
@@ -645,7 +670,7 @@ public class InquiryQuoteServiceImpl implements InquiryQuoteService {
         }
         List<InquiryQuote> open = inquiryQuoteRepository
                 .findByFactoryIdAndSourcePurchaseOrderIdAndMaterialTypeIdAndStatusIn(
-                        factoryId, sourcePurchaseOrderId, request.getMaterialTypeId(), OPEN_STATUSES);
+                factoryId, sourcePurchaseOrderId, materialTypeId, OPEN_STATUSES);
         if (!open.isEmpty()) {
             InquiryQuote existing = open.get(0);
             throw new BusinessException(409, String.format(
