@@ -1,6 +1,6 @@
 # Export null external reference
 
-Task EXPORT-NULL-EXTERNAL-REFERENCE-20261107, review; implementation frozen.
+Task EXPORT-NULL-EXTERNAL-REFERENCE-20261107, review; CI repair frozen.
 Owner 01a1a954/root; base 9032dd3a51454295c00f587f0a8203b479409c53.
 Independent WT C:/Users/Steve/cretas-factory-export-restore-20261107,
 branch codex/export-null-external-reference-20261107.
@@ -15,6 +15,8 @@ Root Java scope: FactoryDataSchemaMetadata.java, FactoryDataService.java,
 FactoryDataPackageRestorePostgresContractTest.java, ops documentation and this
 dispatch record. Core ScopeResolver, FactoryErasure, Catalog ownership, Entity,
 Repository, migrations, permissions and shared deployment scripts are excluded.
+The existing FactoryErasurePostgresContractTest.java may add a test-only
+restricted-app-role FK descriptor assertion; production erasure stays excluded.
 
 Parallel task EXPORT-NULL-FK-CLI: aps_worker_helper owns only
 scripts/backup/restore-factory-export-v2.py and
@@ -39,3 +41,18 @@ Source descriptors and target structure comparison now bind referencedSchema;
 cross-schema or invisible schema is never guessed. Existing typed/vector,
 credential, migration, constraint and two-target cleanup assertions remain.
 No production shared template values were read, exported, changed or deleted.
+
+First CI head4a15 exposed 15 existing restricted-app-role caller failures:
+information_schema.constraint_column_usage omits parent metadata for non-owners.
+Repair the source and independent target FK descriptor queries using pg_catalog
+with ordinal FK pairing, without changing role privileges or rejection rules.
+The original CI failures remain preserved; broaden the final local regression
+to the related export, erasure and scheduled-backup callers.
+
+CI repair validation: newly compiled factorydata 49/49 plus scheduled backup
+11/11 passed, all zero skips, with Python/owned PG 16/16 also passing. The app
+role test proves it has no parent ownership privilege and independently checks
+exact FK schema/table/column/actions/definition hash in the produced ZIP.
+Reversed composite FK pairing is two exact ordinal pairs, not a Cartesian join.
+No role/grant or production erasure change was used. The owned PG stopped after
+zero-client and identity checks; listener/pidfile absent, data retained.

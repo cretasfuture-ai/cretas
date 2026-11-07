@@ -189,6 +189,42 @@ class FactoryDataPackageRestorePostgresContractTest {
     }
 
     @Test
+    void compositeForeignKeyMetadataPairsParentColumnsByOrdinal() throws Exception {
+        setUpSources();
+        exec(source, "SET search_path=" + q(sourceSchema) + ";"
+                + "CREATE TABLE ordinal_parent(left_id bigint,right_id bigint,factory_id varchar(64),PRIMARY KEY(left_id,right_id));"
+                + "CREATE TABLE ordinal_child(id bigint PRIMARY KEY,factory_id varchar(64),first_ref bigint,second_ref bigint,"
+                + "FOREIGN KEY(first_ref,second_ref) REFERENCES ordinal_parent(right_id,left_id));"
+                + "INSERT INTO ordinal_parent VALUES(10,20,'" + FACTORY + "');"
+                + "INSERT INTO ordinal_child VALUES(1,'" + FACTORY + "',20,10)");
+        var parent = new FactoryDataScope.TableScope("ordinal_parent", FactoryDataCatalog.Category.BUSINESS,
+                List.of("factory_id"), null, 0);
+        parent.setPredicateRows(1);
+        var child = new FactoryDataScope.TableScope("ordinal_child", FactoryDataCatalog.Category.BUSINESS,
+                List.of("factory_id"), "id", 0);
+        child.addKey("1");
+        try (Connection connection = source.getConnection()) {
+            connection.setAutoCommit(false);
+            connection.setReadOnly(true);
+            var snapshot = FactoryDataSchemaMetadata.capture(connection, FactoryDataCatalog.Database.CRETAS,
+                    sourceSchema, List.of(parent, child), FACTORY);
+            @SuppressWarnings("unchecked")
+            var constraints = (List<Map<String, Object>>) snapshot.schema().get("constraints");
+            var foreign = constraints.stream().filter(row -> "FOREIGN KEY".equals(row.get("type"))).toList();
+            assertThat(foreign).hasSize(2);
+            assertThat(foreign).anySatisfy(row -> {
+                assertThat(row.get("column")).isEqualTo("first_ref");
+                assertThat(row.get("referencedColumn")).isEqualTo("right_id");
+                assertThat(row.get("referencedSchema")).isEqualTo(sourceSchema);
+            }).anySatisfy(row -> {
+                assertThat(row.get("column")).isEqualTo("second_ref");
+                assertThat(row.get("referencedColumn")).isEqualTo("left_id");
+            });
+            connection.rollback();
+        }
+    }
+
+    @Test
     void crossSchemaSameNamedParentWithNullReferencesRefusesBeforeManifest() throws Exception {
         setUpSources();
         String externalSchema = sourceSchema + "_external";

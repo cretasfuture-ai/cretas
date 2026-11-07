@@ -68,6 +68,9 @@ JSON child row. Missing/forged proof, a non-NULL value or cross-schema parent
 still refuses before mutation. Parent columns, PK/UNIQUE definitions, indexes
 and triggers remain independently compared against the protected schema archive;
 no shared parent rows enter the package or become tenant-owned.
+FK parent identifiers, schema, ordinal column pairing and update/delete rules
+are read from PostgreSQL catalogs, independently of table ownership. Export
+does not grant privileges to make metadata visible; business-row RLS remains.
 
 Both empty destinations are checked before the first schema restore. Rows and
 migration rows share a transaction per database. PostgreSQL sequence changes

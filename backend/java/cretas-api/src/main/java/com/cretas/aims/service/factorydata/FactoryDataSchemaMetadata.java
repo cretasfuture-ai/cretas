@@ -170,18 +170,23 @@ public final class FactoryDataSchemaMetadata {
             throws SQLException {
         if (tables.isEmpty()) return List.of();
         String sql = "SELECT tc.table_name, tc.constraint_name, tc.constraint_type, kcu.column_name, "
-                + "kcu.ordinal_position, ccu.table_name AS referenced_table, ccu.column_name AS referenced_column, "
-                + "rc.update_rule, rc.delete_rule, ccu.table_schema AS referenced_schema, (SELECT md5(pg_get_constraintdef(pc.oid)) FROM pg_constraint pc "
-                + "JOIN pg_class pr ON pr.oid = pc.conrelid JOIN pg_namespace pn ON pn.oid = pr.relnamespace "
-                + "WHERE pn.nspname = tc.table_schema AND pr.relname = tc.table_name "
-                + "AND pc.conname = tc.constraint_name LIMIT 1) AS definition_fingerprint "
+                + "kcu.ordinal_position, parent.relname AS referenced_table, parent_column.attname AS referenced_column, "
+                + "CASE pc.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' "
+                + "WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS update_rule, "
+                + "CASE pc.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' "
+                + "WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS delete_rule, "
+                + "parent_namespace.nspname AS referenced_schema, md5(pg_get_constraintdef(pc.oid)) AS definition_fingerprint "
                 + "FROM information_schema.table_constraints tc "
                 + "LEFT JOIN information_schema.key_column_usage kcu ON kcu.constraint_schema = tc.constraint_schema "
                 + "AND kcu.constraint_name = tc.constraint_name AND kcu.table_name = tc.table_name "
-                + "LEFT JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_schema = tc.constraint_schema "
-                + "AND ccu.constraint_name = tc.constraint_name "
-                + "LEFT JOIN information_schema.referential_constraints rc ON rc.constraint_schema = tc.constraint_schema "
-                + "AND rc.constraint_name = tc.constraint_name WHERE tc.table_schema = ? AND tc.table_name IN ("
+                + "JOIN pg_namespace child_namespace ON child_namespace.nspname = tc.table_schema "
+                + "JOIN pg_class child ON child.relnamespace = child_namespace.oid AND child.relname = tc.table_name "
+                + "LEFT JOIN pg_constraint pc ON pc.conrelid = child.oid AND pc.conname = tc.constraint_name "
+                + "LEFT JOIN pg_class parent ON pc.contype = 'f' AND parent.oid = pc.confrelid "
+                + "LEFT JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace "
+                + "LEFT JOIN pg_attribute parent_column ON parent_column.attrelid = parent.oid "
+                + "AND parent_column.attnum = pc.confkey[kcu.ordinal_position] AND NOT parent_column.attisdropped "
+                + "WHERE tc.table_schema = ? AND tc.table_name IN ("
                 + placeholders(tables.size()) + ") ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             int i = 1;

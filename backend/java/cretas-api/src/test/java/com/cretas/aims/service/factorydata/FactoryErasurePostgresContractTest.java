@@ -306,12 +306,36 @@ class FactoryErasurePostgresContractTest {
 
     @Test
     void exportUnderTheAppAccountIncludesRowsOfStrictRlsTables() throws Exception {
+        assertThat(count(smartbiApp, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                + "WHERE n.nspname='" + schema + "' AND c.relname='smart_bi_uploads' AND pg_has_role(c.relowner,'USAGE')"))
+                .as("app role has no parent-table ownership privilege").isZero();
         FactoryDataService d = data();
         long id = d.startExport(OPERATOR, FA);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         d.writeExport(id, OPERATOR, FA, AttachmentMode.INDEX_ONLY, Set.of(FactoryDataService.Format.JSON), out);
         String all = new String(out.toByteArray(), java.nio.charset.StandardCharsets.ISO_8859_1);
         assertThat(all).contains("smartbi/json/agg_supplier_price.json");
+        boolean checkedForeignKey = false;
+        try (var zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(out.toByteArray()))) {
+            java.util.zip.ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if (!entry.getName().equals("smartbi/metadata/schema.json")) continue;
+                var metadata = new com.fasterxml.jackson.databind.ObjectMapper().readTree(zip.readAllBytes());
+                for (var constraint : metadata.get("constraints")) {
+                    if (constraint.get("table").asText().equals("smart_bi_field_defs")
+                            && constraint.get("type").asText().equals("FOREIGN KEY")) {
+                        assertThat(constraint.get("referencedSchema").asText()).isEqualTo(schema);
+                        assertThat(constraint.get("referencedTable").asText()).isEqualTo("smart_bi_uploads");
+                        assertThat(constraint.get("referencedColumn").asText()).isEqualTo("id");
+                        assertThat(constraint.get("updateRule").asText()).isEqualTo("NO ACTION");
+                        assertThat(constraint.get("deleteRule").asText()).isEqualTo("CASCADE");
+                        assertThat(constraint.get("definitionFingerprint").asText()).hasSize(32);
+                        checkedForeignKey = true;
+                    }
+                }
+            }
+        }
+        assertThat(checkedForeignKey).as("restricted app role retains exact FK metadata").isTrue();
         var preview = d.preview(OPERATOR, FA);
         assertThat(preview.databases().get(1).tables())
                 .anyMatch(t -> t.table().equals("agg_supplier_price") && t.rows() == 2);
