@@ -163,8 +163,12 @@ function rangeText(lower: number | null, upper: number | null): string {
 
 function planStatusText(status: string): string {
   const labels: Record<string, string> = {
+    PLANNED: '已计划',
+    PREPARED: '草稿',
     PENDING: '待排产',
     IN_PROGRESS: '进行中',
+    PAUSED: '暂停',
+    PENDING_APPROVAL: '撤回待审批',
     COMPLETED: '已完成',
     CANCELLED: '已取消',
   }
@@ -179,7 +183,7 @@ function materialReasonText(reason: string): string {
   const labels: Record<string, string> = {
     OK: '物料来源和可用量已核验。',
     NO_REMAINING_STANDARD_DEMAND: '没有可确认的剩余标准需求。',
-    NO_TARGET_DEMAND: '未找到本计划的标准需求。',
+    NO_TARGET_DEMAND: '本计划不新增同期物料需求。',
     UNKNOWN_COVERAGE: '部分同期计划来源未核验，不能视为确定可用。',
     INVALID_FACT: '物料事实存在异常，暂不能确认可用量。',
     MISSING_STOCK: '库存来源缺失，暂不能确认可用量。',
@@ -194,6 +198,7 @@ function materialSummary(reason: string): string {
 
 function progressReasonText(reason: string): string {
   const labels: Record<string, string> = {
+    OK: '成品入库记录已核算。',
     UNKNOWN_COVERAGE: '成品入库来源待核对。',
     INVALID_FACT: '成品入库事实存在异常，暂不能确认进度。',
     MISSING_FINISHED_GOODS: '缺少已确认的成品入库来源。',
