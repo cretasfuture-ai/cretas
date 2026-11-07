@@ -30,7 +30,7 @@ const validPayload = () => ({
   progress: {
     status: 'VERIFIED', basis: 'FINISHED_GOODS_RECEIVED', plannedQuantity: 10,
     receivedQuantity: 12, remainingQuantity: 0, completionPercent: 120,
-    unit: 'kg', reason: 'OK',
+    unit: 'kg', reason: '实际成品入库口径，排除退货和已冲销入库；不代表尚未入库的报工量，终态不自动等于100%。',
   },
   advisoryOnly: true,
 })
@@ -80,12 +80,26 @@ describe('PlanConcurrentReadiness', () => {
     expect(wrapper.text()).toContain('同期计划')
     expect(wrapper.text()).toContain('按已确认的成品入库量核算')
     expect(wrapper.text()).toContain('120%')
-    expect(wrapper.text()).toContain('成品入库记录已核算。')
+    expect(wrapper.text()).toContain(validPayload().progress.reason)
     expect(wrapper.text()).not.toContain('成品入库进度原因待核对')
     expect(wrapper.text()).toContain('先满足其他计划时：50%')
     expect(wrapper.text()).not.toContain('FINISHED_GOODS_RECEIVED')
     expect(wrapper.text()).not.toContain('Advisory')
     expect(wrapper.text()).not.toContain('开工')
+  })
+
+  it.each([
+    ['OK', '成品入库记录已核算。'],
+    ['UNKNOWN_COVERAGE', '成品入库来源待核对。'],
+    ['FUTURE_REASON', '成品入库进度原因待核对。'],
+  ])('preserves the progress reason contract for %s', async (reason, label) => {
+    const data = validPayload()
+    data.progress.reason = reason
+    mocks.get.mockResolvedValue(response(data))
+    const wrapper = mountComponent()
+    await wrapper.get('[data-testid="plan-concurrent-readiness-refresh"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.progress-reason').text()).toBe(label)
   })
 
   it.each([
@@ -138,8 +152,8 @@ describe('PlanConcurrentReadiness', () => {
     await wrapper.get('[data-testid="plan-concurrent-readiness-refresh"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('未核验')
-    expect(wrapper.text()).not.toContain('0%')
-    expect(wrapper.text()).not.toContain('100%')
+    expect(wrapper.get('.progress-grid').text()).not.toContain('0%')
+    expect(wrapper.get('.progress-grid').text()).not.toContain('100%')
   })
 
   it('keeps retry available after an API error and clears the error on success', async () => {

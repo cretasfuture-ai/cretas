@@ -21,6 +21,7 @@ import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteRepository;
 import com.cretas.aims.repository.purchase.InquiryQuoteSupplierPriceRepository;
 import com.cretas.aims.service.inventory.PurchaseService;
+import com.cretas.aims.service.material.MaterialReferenceWriteGuard;
 import com.cretas.aims.service.purchase.impl.InquiryQuoteServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -67,6 +68,7 @@ class InquiryQuoteServiceImplTest {
     @Mock private BomRecipeItemRepository bomRecipeItemRepository;
     @Mock private BomRecipeRepository bomRecipeRepository;
     @Mock private com.cretas.aims.service.unit.UnitContractService unitContractService;
+    @Mock private MaterialReferenceWriteGuard materialReferenceWriteGuard;
 
     private InquiryQuoteServiceImpl service;
 
@@ -91,7 +93,8 @@ class InquiryQuoteServiceImplTest {
                 purchaseSpecRepository,
                 bomRecipeItemRepository,
                 bomRecipeRepository,
-                unitContractService);
+                unitContractService,
+                materialReferenceWriteGuard);
     }
 
     // ==================== create ====================
@@ -119,6 +122,29 @@ class InquiryQuoteServiceImplTest {
                 "Inquiry number should start with INQ-, was: " + result.getInquiryNumber());
         assertEquals(FACTORY_ID, result.getFactoryId());
         assertEquals(USER_ID, result.getCreatedBy());
+        verify(materialReferenceWriteGuard).lockActive(FACTORY_ID, List.of(MATERIAL_TYPE_ID));
+    }
+
+    @Test
+    @DisplayName("create — 物料已合并/停用时由 fresh guard 拒绝, 不插入 DRAFT")
+    void create_rejectsUnavailableMaterialBeforeInsert() {
+        CreateInquiryQuoteRequest req = new CreateInquiryQuoteRequest();
+        req.setMaterialTypeId(MATERIAL_TYPE_ID);
+        req.setMaterialName("辣椒");
+        req.setQuantity(new BigDecimal("100"));
+        req.setUnit("kg");
+        req.setInquiryDate(LocalDate.now());
+
+        doThrow(new BusinessException(409, "物料已停用，不能创建新引用")
+                .withCode("MATERIAL_REFERENCE_CONFLICT"))
+                .when(materialReferenceWriteGuard).lockActive(FACTORY_ID, List.of(MATERIAL_TYPE_ID));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> service.create(FACTORY_ID, req, USER_ID));
+        assertEquals(409, error.getCode());
+        assertEquals("MATERIAL_REFERENCE_CONFLICT", error.getErrorCode());
+        verify(inquiryQuoteRepository, never()).save(any(InquiryQuote.class));
+        verify(inquiryQuoteRepository, never()).saveAndFlush(any(InquiryQuote.class));
     }
 
     @Test
@@ -143,6 +169,54 @@ class InquiryQuoteServiceImplTest {
         assertTrue(ex.getMessage().contains("INQ-20260618-0001"),
                 "409 message must cite existing inquiry number, was: " + ex.getMessage());
         verify(inquiryQuoteRepository, never()).save(any(InquiryQuote.class));
+    }
+
+    @Test
+    @DisplayName("create — 物料 ID 两侧空格与 canonical ID 视为同一物料, 防止绕过 R4")
+    void create_canonicalizesMaterialIdBeforeDuplicateCheck() {
+        CreateInquiryQuoteRequest req = new CreateInquiryQuoteRequest();
+        req.setMaterialTypeId("  " + MATERIAL_TYPE_ID + "  ");
+        req.setMaterialName("辣椒");
+        req.setQuantity(new BigDecimal("100"));
+        req.setUnit("kg");
+        req.setInquiryDate(LocalDate.now());
+
+        InquiryQuote existing = newInquiry(InquiryQuoteStatus.DRAFT);
+        existing.setInquiryNumber("INQ-20260618-0002");
+        when(inquiryQuoteRepository.findRecentDuplicates(
+                eq(FACTORY_ID), eq(USER_ID), eq(MATERIAL_TYPE_ID), eq(new BigDecimal("100")), any()))
+                .thenReturn(List.of(existing));
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.create(FACTORY_ID, req, USER_ID));
+        assertEquals(409, ex.getCode().intValue());
+        verify(inquiryQuoteRepository).findRecentDuplicates(
+                eq(FACTORY_ID), eq(USER_ID), eq(MATERIAL_TYPE_ID), eq(new BigDecimal("100")), any());
+        verify(materialReferenceWriteGuard).lockActive(FACTORY_ID, List.of(MATERIAL_TYPE_ID));
+        verify(inquiryQuoteRepository, never()).save(any(InquiryQuote.class));
+    }
+
+    @Test
+    @DisplayName("create — 内部 null 物料 ID 分支不触发物料 guard")
+    void create_keepsNullMaterialIdInternalBranchWithoutGuard() {
+        CreateInquiryQuoteRequest req = new CreateInquiryQuoteRequest();
+        req.setMaterialTypeId(null);
+        req.setMaterialName("临时自由文本物料");
+        req.setQuantity(new BigDecimal("2"));
+        req.setUnit("kg");
+        req.setInquiryDate(LocalDate.now());
+
+        when(inquiryQuoteRepository.findMaxInquiryNumberByPrefix(eq(FACTORY_ID), any()))
+                .thenReturn(Optional.empty());
+        when(inquiryQuoteRepository.save(any(InquiryQuote.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        InquiryQuote result = service.create(FACTORY_ID, req, USER_ID);
+
+        assertNull(result.getMaterialTypeId());
+        assertEquals("临时自由文本物料", result.getMaterialName());
+        verify(materialReferenceWriteGuard, never()).lockActive(anyString(), any());
+        verify(inquiryQuoteRepository, never()).findRecentDuplicates(anyString(), anyLong(), any(), any(), any());
     }
 
     // ==================== submit ====================

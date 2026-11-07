@@ -31,6 +31,7 @@ import { handleCatchError } from '@/utils/errorToast';
 import { formatDateTime } from '@/utils/dateFormat';
 import { nativeDemoState, nativePurchaseApprovalContext, useNativeDemoAdapters } from '@/demo/f006NativeBridge';
 import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
+import { withPageAgentWorkflowAction } from '@/ai/pageAgentRuntime';
 
 interface PendingApproval {
   instanceId: string;
@@ -176,20 +177,22 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
   }
   operatingId.value = row.instanceId;
   try {
-    const nativePurchase = row.moduleCode === 'PURCHASE_ORDER'
-      ? nativePurchaseApprovalContext(row.businessEntityId)
-      : undefined;
-    const res = await post(
-      nativePurchase
-        ? `/${factoryId.value}/workflow/instances/${row.instanceId}/demo-actions`
-        : `/${factoryId.value}/workflow/instances/${row.instanceId}/actions`,
-      {
-        action,
-        notes: nativePurchase ? nativePurchase.runKey : notes,
-        idempotencyKey: `oa-${action.toLowerCase()}-${row.instanceId}-${row.currentNodeId}`,
-        expectedNodeId: row.currentNodeId,
-      },
-    );
+    const res = await withPageAgentWorkflowAction(row, action, async globalPurchase => {
+      const nativePurchase = row.moduleCode === 'PURCHASE_ORDER'
+        ? nativePurchaseApprovalContext(row.businessEntityId) || globalPurchase
+        : undefined;
+      return post(
+        nativePurchase
+          ? `/${factoryId.value}/workflow/instances/${row.instanceId}/demo-actions`
+          : `/${factoryId.value}/workflow/instances/${row.instanceId}/actions`,
+        {
+          action,
+          notes: nativePurchase ? nativePurchase.runKey : notes,
+          idempotencyKey: `oa-${action.toLowerCase()}-${row.instanceId}-${row.currentNodeId}`,
+          expectedNodeId: row.currentNodeId,
+        },
+      );
+    });
     if (!res.success) throw new Error(res.message || '审批操作失败');
     ElMessage.success(action === 'APPROVE' ? '审批已通过' : '审批已驳回');
     /*

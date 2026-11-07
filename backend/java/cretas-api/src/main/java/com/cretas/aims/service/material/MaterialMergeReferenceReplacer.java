@@ -61,7 +61,20 @@ public class MaterialMergeReferenceReplacer {
                        List<String> stuckPurchaseOrders,
                        Map<String, String> purchaseOrders,
                        List<String> supplierTombstones,
-                       List<String> openStandaloneReceipts) {
+                       List<String> openStandaloneReceipts,
+                       List<String> openInquiryQuotes) {
+
+        /** Preserve the pre-inquiry plan construction contract for focused merge tests. */
+        public Plan(Map<Long, String> draftWorkflows,
+                    Map<String, String> suppliers,
+                    Map<Long, String> purchaseOrderItems,
+                    List<String> stuckPurchaseOrders,
+                    Map<String, String> purchaseOrders,
+                    List<String> supplierTombstones,
+                    List<String> openStandaloneReceipts) {
+            this(draftWorkflows, suppliers, purchaseOrderItems, stuckPurchaseOrders,
+                    purchaseOrders, supplierTombstones, openStandaloneReceipts, List.of());
+        }
 
         public List<String> purchaseOrderNumbers() {
             return List.copyOf(new LinkedHashSet<>(purchaseOrderItems.values()));
@@ -152,8 +165,17 @@ public class MaterialMergeReferenceReplacer {
                 .setParameter(1, factoryId)
                 .setParameter(2, materialTypeId)
                 .getResultList());
+        List<String> openInquiryQuotes = strings(entityManager.createNativeQuery(
+                        "SELECT inquiry_number FROM inquiry_quotes "
+                                + "WHERE factory_id = ?1 AND material_type_id = ?2 "
+                                + "AND deleted_at IS NULL "
+                                + "AND status IN ('DRAFT', 'INQUIRING', 'QUOTED', 'SELECTED') "
+                                + "ORDER BY inquiry_number")
+                .setParameter(1, factoryId)
+                .setParameter(2, materialTypeId)
+                .getResultList());
         return new Plan(workflows, suppliers, items, new ArrayList<>(stuck), purchaseOrders,
-                supplierTombstones, openStandaloneReceipts);
+                supplierTombstones, openStandaloneReceipts, openInquiryQuotes);
     }
 
     /** 在合并事务里执行; 调用方已锁住两个物料, 并确认过 plan 里没有挡合并的项。 */
@@ -216,7 +238,7 @@ public class MaterialMergeReferenceReplacer {
     private void assertPlanStillSafe(String factoryId, RawMaterialType duplicate, RawMaterialType master,
                                      Plan plan) {
         if (!plan.stuckPurchaseOrders().isEmpty() || !plan.supplierTombstones().isEmpty()
-                || !plan.openStandaloneReceipts().isEmpty()) {
+                || !plan.openStandaloneReceipts().isEmpty() || !plan.openInquiryQuotes().isEmpty()) {
             throw mergeConflict("合并引用在执行前已变为不可安全替换，请刷新后重试");
         }
         for (Long id : plan.draftWorkflows().keySet()) {
