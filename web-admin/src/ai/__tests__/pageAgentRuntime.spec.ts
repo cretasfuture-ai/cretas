@@ -50,6 +50,36 @@ beforeEach(() => {
 });
 
 describe('global page agent submission latch', () => {
+  it('explains a covered original control without exposing internal DOM-driver errors', async () => {
+    const f = fixture([save]);
+    f.ports.execute = vi.fn(async () => { throw new Error('Agent action rejected: target is offscreen or covered'); });
+    await f.controller.start('填写采购单', scope);
+    expect(f.state.phase).toBe('error'); expect(f.state.uncertain).toBe(false);
+    expect(f.state.error).toContain('弹出层遮挡'); expect(f.state.error).not.toContain('Agent action');
+  });
+  it('holds the original 创建 submit for ten visible seconds before sending', async () => {
+    const f = fixture([save]); f.button.textContent = '创建'; f.snapshot.page.controls[0]!.label = '创建';
+    f.ports.execute = vi.fn(async (_snapshot, _action, before) => {
+      await before(f.button); expect(f.clock()).toBe(10000);
+      f.controller.beforeBusiness(write); f.controller.completeBusiness(success); return { label: '创建' };
+    });
+    await f.controller.start('创建采购草稿', scope);
+    expect(f.state.phase).toBe('awaiting-next');
+  });
+
+  it('sends the real manual Next fact to the next plan and never invents it for Continue', async () => {
+    const f = fixture([save]);
+    f.ports.execute = vi.fn(async (_snapshot, _action, before) => {
+      await before(f.button); f.controller.beforeBusiness(write); f.controller.completeBusiness(success); return { label: '保存' };
+    });
+    await f.controller.start('先采购再销售', scope);
+    await f.controller.continue();
+    expect(f.ports.plan).toHaveBeenCalledTimes(1);
+    expect(f.state.events.some(event => event.text.includes('用户已点击“下一模块”'))).toBe(false);
+    await f.controller.next();
+    const plannedEvents = vi.mocked(f.ports.plan).mock.calls.at(-1)![2];
+    expect(plannedEvents.some(event => event.text.includes('用户已点击“下一模块”') && event.text.includes('第2模块'))).toBe(true);
+  });
   it('fills the original control and stops after its real submission; continue cannot skip Next', async () => {
     const f = fixture([{ kind: 'fill', target: 'c1', value: '100', message: '填写数量100' }, save, { kind: 'navigate', target: 'r1', message: '打开销售订单' }]);
     const original = f.ports.execute;
