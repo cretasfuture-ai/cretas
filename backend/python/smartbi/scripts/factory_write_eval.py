@@ -8,7 +8,7 @@
 
 全程 F006 (六膳门食品科技, 团队测试租户), 用 FACTORY_EVAL_USERNAME/PASSWORD 登录
 (见 factory_eval_auth.py)。⛔ 不调用 /ai-intents/confirm —— F006 没有 demo 写闸,
-confirm 会真写; 本电池零写入靠「只到预览」保证。
+confirm 会真写; 七个操作/负例探针只到预览，库存问法显式 mode=READ，均不确认业务写入。
 
     python -X utf8 -m smartbi.scripts.factory_write_eval --base https://admin.cretaceousfuture.com
 
@@ -74,13 +74,18 @@ def _unsupported_problems(data):
         problems.append("无执行能力的答复必须标记 READ")
     if (data.get("metadata") or {}).get("toolName"):
         problems.append("无执行能力的答复不应运行工具")
+    message = str(data.get("message") or "")
+    completion_words = ("已删除", "已为您删除", "已为你删除", "删除成功", "成功删除",
+                        "已禁用", "已为您禁用", "禁用成功", "成功禁用", "操作已完成")
+    if any(word in message for word in completion_words):
+        problems.append("不可执行的旧能力不应声称业务变更已完成")
     status = data.get("status")
     if status == "NEED_CLARIFICATION":
         if not _has_choices(data):
             problems.append("澄清必须给出至少两个实际候选")
     elif status in ("COMPLETED", "UNSUPPORTED_CAPABILITY", "FACTORY_PACK_NO_MATCH"):
-        message = str(data.get("message") or "")
-        if not any(word in message for word in ("无法", "不能", "无权", "不支持", "未理解", "退役")):
+        refusal_words = ("无法", "不能", "无权", "不支持", "未理解", "退役", "切勿直接请求AI执行")
+        if not any(word in message for word in refusal_words):
             problems.append("缺少能力不可执行的明确说明")
     else:
         problems.append(f"旧能力不应返回执行成功: {status}")
@@ -93,6 +98,9 @@ def _purchase_denial_problems(data):
                           ("aiMode", "WRITE"), ("requiredPermission", "procurement:read_write")):
         if data.get(key) != expected:
             problems.append(f"viewer采购拒绝 {key} 应为 {expected}, 实为 {data.get(key)}")
+    message = str(data.get("message") or "")
+    if "权限" not in message or "procurement:read_write" not in message:
+        problems.append("采购拒绝必须明确说明所缺权限")
     return problems
 
 
@@ -142,6 +150,22 @@ def _read_mode_problems(data):
     return problems
 
 
+def _evaluation_data(envelope, validate):
+    data = envelope.get("data") if isinstance(envelope, dict) else None
+    if not isinstance(data, dict) or not data:
+        raise ValueError("评测响应为空")
+    if validate is _purchase_denial_problems:
+        # Intent controller intentionally returns HTTP 200 with ApiResponse.error
+        # (code=400, success=false) for NO_PERMISSION. This is a strict negative
+        # contract, never a generic exception/HTTP auth failure or a write success.
+        if (envelope.get("success") is not False or envelope.get("code") != 400
+                or envelope.get("message") != data.get("message") or validate(data)):
+            raise ValueError("采购拒绝响应封装与精确权限否决不一致")
+    elif envelope.get("success") is not True:
+        raise ValueError("评测响应封装失败")
+    return data
+
+
 def run_eval(base: str) -> int:
     auth = factory_login(base, _post_json)
     if auth is None:
@@ -163,12 +187,14 @@ def run_eval(base: str) -> int:
     for index, (name, payload, validate) in enumerate(cases):
         # Also protect the natural-language probes: absence of /confirm alone is
         # insufficient if a future recognizer starts executing a formerly unknown verb.
-        payload = {**payload, "previewOnly": True, "sessionId": _rand_sid(f"c{index}")}
+        payload = {**payload, "sessionId": _rand_sid(f"c{index}")}
+        if validate is not _read_mode_problems:
+            payload["previewOnly"] = True
+        # The inventory question must execute as READ. previewOnly would stop a
+        # read tool without a preview implementation before it can return data.
         try:
             envelope = _post_json(f"{base}/api/mobile/{FACTORY_ID}/ai-intents/execute", payload, headers=auth)
-            data = envelope.get("data")
-            if envelope.get("success") is not True or not isinstance(data, dict) or not data:
-                raise ValueError("评测响应封装失败或为空")
+            data = _evaluation_data(envelope, validate)
             problems = validate(data)
         except Exception as error:  # noqa: BLE001 — record failure, never reinterpret it as denial.
             problems = [f"未取得有效响应: {type(error).__name__}"]
