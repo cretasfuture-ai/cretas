@@ -60,6 +60,8 @@ import com.cretas.aims.service.SchedulingService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.dto.yield.OrderCostBreakdownDTO;
 import com.cretas.aims.service.factory.WarehouseResolver;
+import com.cretas.aims.service.finance.ProductionCostConsistency;
+import com.cretas.aims.service.finance.ReturnedCostSynchronizationService;
 import com.cretas.aims.service.impl.ProductionPlanServiceImpl;
 import com.cretas.aims.service.wip.WipLedgerEntries;
 import com.cretas.aims.service.yield.OrderCostBreakdownService;
@@ -139,6 +141,8 @@ class ProductionPlanSettlementTest {
     @Mock private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private OrderCostBreakdownService orderCostBreakdownService;
+    @Mock private ProductionCostConsistency productionCostConsistency;
+    @Mock private ReturnedCostSynchronizationService returnedCostSynchronizationService;
     // R2 (2026-07-04): 结单族 process-row SFI/FG 投料扣减依赖 (其它测试不 set → null → deduct no-op, 零回归)
     @Mock private com.cretas.aims.repository.ProcessSheetRowRepository processSheetRowRepository;
     @Mock private com.cretas.aims.service.wip.WipInventoryService wipInventoryService;
@@ -197,6 +201,9 @@ class ProductionPlanSettlementTest {
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
         ReflectionTestUtils.setField(service, "orderCostBreakdownService", orderCostBreakdownService);
+        ReflectionTestUtils.setField(service, "productionCostConsistency", productionCostConsistency);
+        ReflectionTestUtils.setField(service, "returnedCostSynchronizationService",
+                returnedCostSynchronizationService);
         ReflectionTestUtils.setField(service, "processSheetRowRepository", processSheetRowRepository);
         ReflectionTestUtils.setField(service, "workshopReservationService", workshopReservationService);
         ReflectionTestUtils.setField(service, "customerSuppliedSettlementCoverageGuard",
@@ -2203,6 +2210,181 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("Workflow 分次入库按报产数量稳定计算成本并同步既有成品库存与响应")
+    void confirmWarehouseReceipt_workflowPartialReceipt_keepsReportedUnitCostInInventoryAndResponse() {
+        ProductionPlan plan = workflowPlanWithSingleOutput();
+        plan.setWorkflowOutputUnitsByProduct(Map.of("FG-SKU-A", "kg"));
+        ProductionSettlement settlement = settled();
+        settlement.setActualFinishedQuantity(new BigDecimal("0.02"));
+        settlement.setQuantityUnit("kg");
+        ProductionSettlementOutputLine line = workflowOutputLine(
+                settlement, "FG-SKU-A", "FG-COST-001", "kg", "bom-a", new BigDecimal("0.02"));
+        AtomicReference<FinishedGoodsBatch> storedBatch = new AtomicReference<>();
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        when(productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(
+                FACTORY_ID, settlement.getId())).thenReturn(List.of(line));
+        when(productionSettlementOutputLineRepository
+                .findByFactoryIdAndSettlementIdOrderByProductTypeIdAscReportedBatchNumberAsc(
+                        FACTORY_ID, settlement.getId())).thenReturn(List.of(line));
+        when(productTypeRepository.findByIdAndFactoryId("FG-SKU-A", FACTORY_ID))
+                .thenReturn(Optional.of(productType("FG-SKU-A", "kg")));
+        when(warehouseResolver.resolveFinishedGoodsId(FACTORY_ID)).thenReturn("WH-FG-ID");
+        when(orderCostBreakdownService.computeByPlan(FACTORY_ID, PLAN_ID, false))
+                .thenReturn(OrderCostBreakdownDTO.builder().hasData(true)
+                        .totalCost(new BigDecimal("0.56")).build())
+                .thenReturn(OrderCostBreakdownDTO.builder().hasData(false).build());
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-COST-001"))
+                .thenAnswer(invocation -> Optional.ofNullable(storedBatch.get()));
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(invocation -> {
+            FinishedGoodsBatch batch = invocation.getArgument(0);
+            if (batch.getId() == null) batch.setId("fg-cost-001");
+            storedBatch.set(batch);
+            return batch;
+        });
+        when(productionSettlementOutputLineRepository.saveAll(anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(productionSettlementRepository.save(any(ProductionSettlement.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProductionWarehouseReceiptResponse first = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, workflowReceipt("cost-1", "FG-SKU-A", "FG-COST-001", "0.01", "kg"), 11L);
+        assertEquals(0, new BigDecimal("28").compareTo(line.getUnitCost()));
+        assertEquals(0, new BigDecimal("28").compareTo(storedBatch.get().getUnitCost()));
+        assertEquals(0, new BigDecimal("28").compareTo(first.getOutputLines().get(0).getUnitCost()));
+
+        org.mockito.Mockito.doThrow(new BusinessException(409, "期间已关账")
+                        .withCode("COST_PERIOD_NOT_OPEN"))
+                .when(productionCostConsistency).assertChangeAllowed(FACTORY_ID, PLAN_ID);
+        ProductionWarehouseReceiptResponse replay = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, workflowReceipt("cost-1", "FG-SKU-A", "FG-COST-001", "0.01", "kg"), 11L);
+        assertEquals(0, new BigDecimal("28").compareTo(replay.getOutputLines().get(0).getUnitCost()));
+        assertEquals(0, new BigDecimal("0.01").compareTo(storedBatch.get().getProducedQuantity()));
+        org.mockito.Mockito.reset(productionCostConsistency);
+
+        ProductionWarehouseReceiptResponse second = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, workflowReceipt("cost-2", "FG-SKU-A", "FG-COST-001", "0.01", "kg"), 11L);
+        assertEquals(0, new BigDecimal("0.02").compareTo(storedBatch.get().getProducedQuantity()));
+        assertNull(storedBatch.get().getUnitCost());
+        assertNull(second.getOutputLines().get(0).getUnitCost());
+        assertTrue(second.getWarnings().stream().anyMatch(message -> message.contains("单位成本留空")));
+        verify(productionSettlementOutputLineRepository, times(2)).flush();
+    }
+
+    @Test
+    @DisplayName("关账成本变更闸在结单锁和库存写入前拒绝仓库确认")
+    void confirmWarehouseReceipt_costConsistencyGuardRejectsBeforeAnyReceiptWrite() {
+        ProductionPlan plan = workflowPlanWithSingleOutput();
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settled()));
+        org.mockito.Mockito.doThrow(new BusinessException(409, "期间已关账")
+                        .withCode("COST_PERIOD_NOT_OPEN"))
+                .when(productionCostConsistency).assertChangeAllowed(FACTORY_ID, PLAN_ID);
+
+        BusinessException error = assertThrows(BusinessException.class, () -> service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID,
+                workflowReceipt("guarded", "FG-SKU-A", "FG-GUARDED", "0.01"), 11L));
+
+        assertEquals("COST_PERIOD_NOT_OPEN", error.getErrorCode());
+        verify(productionCostConsistency).assertChangeAllowed(FACTORY_ID, PLAN_ID);
+        verify(productionSettlementRepository)
+                .findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID);
+        verify(productionSettlementOutputLineRepository, never())
+                .lockByFactoryIdAndSettlementId(anyString(), anyString());
+        verify(productionSettlementRepository, never()).save(any(ProductionSettlement.class));
+        verify(finishedGoodsBatchRepository, never()).save(any(FinishedGoodsBatch.class));
+    }
+
+    @Test
+    @DisplayName("关账期间同幂等键重放直接返回原结果而不重新触发成本闸")
+    void confirmWarehouseReceipt_sameIdempotencyReplayBypassesPeriodGuard() {
+        ProductionPlan plan = plan();
+        ProductionSettlement settlement = settled();
+        settlement.setWarehouseReceiptIdempotencyKey("already-received");
+        settlement.setWarehouseReceivedQuantity(new BigDecimal("0.01"));
+        settlement.setWarehouseReceivedAt(LocalDateTime.now());
+
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID))
+                .thenReturn(Optional.of(plan));
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(
+                FACTORY_ID, PLAN_ID)).thenReturn(Optional.of(settlement));
+        org.mockito.Mockito.doThrow(new BusinessException(409, "期间已关账")
+                        .withCode("COST_PERIOD_NOT_OPEN"))
+                .when(productionCostConsistency).assertChangeAllowed(FACTORY_ID, PLAN_ID);
+
+        ProductionWarehouseReceiptResponse response = service.confirmWarehouseReceipt(
+                FACTORY_ID, PLAN_ID, receiptRequest("already-received", "0.01", "kg", null, null), 11L);
+
+        assertEquals(settlement.getPostingStatus(), response.getPostingStatus());
+        verify(productionCostConsistency, never()).assertChangeAllowed(FACTORY_ID, PLAN_ID);
+        verify(productionSettlementRepository, never()).save(any(ProductionSettlement.class));
+        verify(finishedGoodsBatchRepository, never()).save(any(FinishedGoodsBatch.class));
+    }
+
+    @Test
+    @DisplayName("既有成品成本数值变更同步退货链，等值 scale 变化不重复同步")
+    void existingFinishedGoodsCostChangeSynchronizesDescendantsButIgnoresScaleOnlyChange() {
+        ProductionPlan plan = workflowPlanWithSingleOutput();
+        plan.setWorkflowOutputUnitsByProduct(Map.of("FG-SKU-A", "kg"));
+        ProductionSettlement settlement = settled();
+        ProductionSettlementOutputLine output = workflowOutputLine(
+                settlement, "FG-SKU-A", "FG-SYNC-001", "kg", "bom-a", new BigDecimal("0.02"));
+        output.setReceivedQuantity(new BigDecimal("0.02"));
+        output.setUnitCost(new BigDecimal("28.000000"));
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        batch.setId("fg-sync-001");
+        batch.setFactoryId(FACTORY_ID);
+        batch.setProductionPlanId(PLAN_ID);
+        batch.setProductTypeId("FG-SKU-A");
+        batch.setBatchNumber("FG-SYNC-001");
+        batch.setUnit("kg");
+        batch.setProducedQuantity(new BigDecimal("0.01"));
+        batch.setUnitCost(new BigDecimal("27.00"));
+        batch.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, "FG-SYNC-001"))
+                .thenReturn(Optional.of(batch));
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ReflectionTestUtils.invokeMethod(service, "createFinishedGoodsForOutputLine",
+                plan, settlement, output, new BigDecimal("0.01"), 11L);
+        verify(returnedCostSynchronizationService).synchronize(
+                eq(FACTORY_ID), eq(batch), eq(new BigDecimal("27.00")), eq(11L));
+        verify(productionCostConsistency).invalidateCostIndicators(FACTORY_ID);
+
+        org.mockito.Mockito.clearInvocations(returnedCostSynchronizationService, productionCostConsistency);
+        batch.setUnitCost(new BigDecimal("28.0000"));
+        output.setUnitCost(new BigDecimal("28.000000"));
+        ReflectionTestUtils.invokeMethod(service, "createFinishedGoodsForOutputLine",
+                plan, settlement, output, new BigDecimal("0.01"), 11L);
+        verify(returnedCostSynchronizationService, never()).synchronize(
+                anyString(), any(FinishedGoodsBatch.class), any(BigDecimal.class), any());
+        verify(productionCostConsistency, never()).invalidateCostIndicators(anyString());
+
+        batch.setProducedQuantity(new BigDecimal("0.01"));
+        output.setReceivedQuantity(new BigDecimal("0.02"));
+        output.setUnitCost(null);
+        org.mockito.Mockito.doThrow(new BusinessException(409, "下游数量证据不一致")
+                        .withCode("RECEIPT_COST_CLEAR_DOWNSTREAM_FACTS"))
+                .when(returnedCostSynchronizationService)
+                .assertCanClearAuthoritativeCost(anyString(), any(FinishedGoodsBatch.class), any(BigDecimal.class));
+        assertThrows(BusinessException.class, () -> ReflectionTestUtils.invokeMethod(
+                service, "createFinishedGoodsForOutputLine", plan, settlement, output,
+                new BigDecimal("0.01"), 11L));
+        verify(returnedCostSynchronizationService).assertCanClearAuthoritativeCost(
+                eq(FACTORY_ID), eq(batch), eq(new BigDecimal("0.01")));
+        assertEquals(0, new BigDecimal("0.01").compareTo(batch.getProducedQuantity()));
+        assertEquals(0, new BigDecimal("28.0000").compareTo(batch.getUnitCost()));
+        verify(finishedGoodsBatchRepository, times(2)).save(any(FinishedGoodsBatch.class));
+    }
+
+    @Test
     @DisplayName("Workflow 分次入库累计超收原子拒绝且库存与结单均不写")
     void confirmWarehouseReceipt_workflowOutput_overReceiptRejectedWithoutPartialWrite() {
         ProductionPlan plan = workflowPlanWithSingleOutput();
@@ -2734,13 +2916,18 @@ class ProductionPlanSettlementTest {
 
     private ProductionWarehouseReceiptRequest workflowReceipt(
             String key, String productTypeId, String batchNumber, String quantity) {
+        return workflowReceipt(key, productTypeId, batchNumber, quantity, "box");
+    }
+
+    private ProductionWarehouseReceiptRequest workflowReceipt(
+            String key, String productTypeId, String batchNumber, String quantity, String unit) {
         ProductionWarehouseReceiptRequest request = new ProductionWarehouseReceiptRequest();
         request.setIdempotencyKey(key);
         request.setOutputLines(List.of(ProductionWarehouseReceiptRequest.ReceiptLine.builder()
                 .productTypeId(productTypeId)
                 .batchNumber(batchNumber)
                 .receivedQuantity(new BigDecimal(quantity))
-                .quantityUnit("box")
+                .quantityUnit(unit)
                 .build()));
         return request;
     }

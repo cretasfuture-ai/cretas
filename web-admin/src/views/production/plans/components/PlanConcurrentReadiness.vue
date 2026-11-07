@@ -198,6 +198,8 @@ function materialSummary(reason: string): string {
 
 function progressReasonText(reason: string): string {
   const labels: Record<string, string> = {
+    '实际成品入库口径，排除退货和已冲销入库；不代表尚未入库的报工量，终态不自动等于100%。':
+      '实际成品入库口径，排除退货和已冲销入库；不代表尚未入库的报工量，终态不自动等于100%。',
     OK: '成品入库记录已核算。',
     UNKNOWN_COVERAGE: '成品入库来源待核对。',
     INVALID_FACT: '成品入库事实存在异常，暂不能确认进度。',

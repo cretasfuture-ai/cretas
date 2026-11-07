@@ -457,6 +457,7 @@ class MultiOutputCostPolicyContractTest {
         line.setOutputRole(role);
         line.setCostAllocationRatio(ratio == null ? null : new BigDecimal(ratio));
         line.setByproductNrvUnitPrice(nrv == null ? null : new BigDecimal(nrv));
+        line.setReportedQuantity(new BigDecimal(quantity));
         line.setReceivedQuantity(new BigDecimal(quantity));
         line.setQuantityUnit("kg");
         return line;
