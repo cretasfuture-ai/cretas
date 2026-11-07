@@ -87,6 +87,8 @@ class FactoryDataPackageRestorePostgresContractTest {
                 + "exact_value = 12345678901234567890.123456789012, float_value = '-0.0'::double precision"
                 + " WHERE id = 1;"
                 + "INSERT INTO sales_orders (id, factory_id, created_by, note) VALUES (10, '" + FACTORY + "', 1, 'A-RESTORE'), (20, 'FB_RESTORE', 3, 'B-SECRET');"
+                + "CREATE TABLE share_links(token varchar(64) PRIMARY KEY, factory_id varchar(64) NOT NULL, note text);"
+                + "INSERT INTO share_links VALUES ('link-a','" + FACTORY + "','A-link'),('link-b','" + FACTORY + "','B-link'),('link-other','FB_RESTORE','other-link');"
                 + "CREATE TABLE IF NOT EXISTS flyway_schema_history (installed_rank int, version varchar(50), description varchar(200),"
                 + "type varchar(20), script varchar(200), checksum int, installed_by varchar(100), installed_on timestamp, execution_time int, success boolean);"
                 + "INSERT INTO flyway_schema_history VALUES (1, 'source-1', 'restore source', 'SQL', 'Vsource.sql', 7, 'ci', now(), 4, true);");
@@ -143,6 +145,12 @@ class FactoryDataPackageRestorePostgresContractTest {
         assertThat(new String(files.get("cretas/json/users.json"), StandardCharsets.UTF_8))
                 .doesNotContain("secret-a", "credential-a", "secret-other");
         JsonNode typed = json.readTree(files.get("cretas/json/users.json")).get(0);
+        JsonNode links = json.readTree(files.get("cretas/json/share_links.json"));
+        assertThat(links.size()).isEqualTo(2);
+        assertThat(links.toString()).doesNotContain("link-a", "link-b", "link-other", "other-link");
+        assertThat(links.get(0).get("token").asText()).matches("r[0-9a-f]{32}")
+                .isNotEqualTo(links.get(1).get("token").asText());
+        assertThat(links.get(1).get("token").asText()).matches("r[0-9a-f]{32}");
         assertThat(typed.get("int_values").get(0).longValue()).isEqualTo(9007199254740993L);
         assertThat(typed.get("text_values").get(1).asText()).isEqualTo("beta");
         assertThat(typed.get("payload").asText()).isEqualTo("\\x00ff10");
@@ -162,6 +170,41 @@ class FactoryDataPackageRestorePostgresContractTest {
         if ("true".equalsIgnoreCase(System.getenv("CRETAS_WORKFLOW_CLI_VERIFY"))) {
             assertThat(typed.get("embedding").asText()).isEqualTo("[0.1,-2,3.25]");
         }
+    }
+
+    @Test
+    void generatedCredentialPrimaryKeyRefusesBeforeManifest() throws Exception {
+        setUpSources();
+        exec(source, "SET search_path = " + q(sourceSchema) + ";"
+                + "ALTER TABLE share_links DROP CONSTRAINT share_links_pkey;"
+                + "ALTER TABLE share_links DROP COLUMN token;"
+                + "ALTER TABLE share_links ADD COLUMN token varchar(64) GENERATED ALWAYS AS (note || '-credential') STORED PRIMARY KEY");
+        assertExportRefusedBeforeManifest("生成列");
+    }
+
+    @Test
+    void compositeCredentialPrimaryKeyRefusesBeforeManifest() throws Exception {
+        setUpSources();
+        exec(source, "SET search_path = " + q(sourceSchema) + ";"
+                + "ALTER TABLE share_links DROP CONSTRAINT share_links_pkey;"
+                + "ALTER TABLE share_links ADD PRIMARY KEY(token,factory_id)");
+        assertExportRefusedBeforeManifest("复合主键");
+    }
+
+    @Test
+    void credentialForeignKeyAliasStillRefusesBeforeManifest() throws Exception {
+        setUpSources();
+        exec(source, "SET search_path = " + q(sourceSchema) + ";"
+                + "CREATE TABLE share_alias_refs(id bigint PRIMARY KEY,factory_id varchar(64),link_ref varchar(64) REFERENCES share_links(token));"
+                + "INSERT INTO share_alias_refs VALUES(1,'" + FACTORY + "','link-a')");
+        assertExportRefusedBeforeManifest("外键");
+    }
+
+    @Test
+    void shortCredentialPrimaryKeyStillRefusesBeforeManifest() throws Exception {
+        setUpSources();
+        exec(source, "SET search_path = " + q(sourceSchema) + ";ALTER TABLE share_links ALTER COLUMN token TYPE varchar(16)");
+        assertExportRefusedBeforeManifest("源列长度");
     }
 
     @Test
