@@ -240,7 +240,21 @@ public class ClarificationCandidateService {
     private IntentExecuteResponse.SuggestedAction toSelectAction(
             AIIntentConfig config, String factoryId, IntentMatchResult.CandidateIntent candidate) {
         return toSelectAction(factoryId, config.getIntentCode(), config.getIntentName(),
-                config.getDescription(), candidate.getConfidence());
+                readCapabilityDescription(toolRegistry, config.getToolName(), config.getDescription()), candidate.getConfidence());
+    }
+
+    /** Presentation metadata only. Selection, permissions and execution remain unchanged. */
+    static String readCapabilityDescription(ToolRegistry registry, String toolName, String fallback) {
+        if (registry == null || toolName == null) return fallback;
+        try {
+            ToolExecutor tool = registry.getExecutor(toolName).orElse(null);
+            if (tool != null && tool.getAccessMode() == ToolExecutor.AccessMode.READ
+                    && tool.getParametersSchema() != null
+                    && tool.getParametersSchema().get("x-clarification-description") instanceof String text
+                    && ClarificationButtonText.subtitle(text) != null)
+                return text;
+        } catch (RuntimeException unavailable) { /* Keep the existing display when metadata is unavailable. */ }
+        return fallback;
     }
 
     static IntentExecuteResponse.SuggestedAction toSelectAction(

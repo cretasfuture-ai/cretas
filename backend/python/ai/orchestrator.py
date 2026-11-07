@@ -70,6 +70,8 @@ def _with_task_context(history, context):
             names = item.get("parameters") if isinstance(item.get("parameters"), list) else []
             cap = {"tool": item["tool"][:64], "description": str(item.get("description") or "")[:180],
                    "parameters": [v[:64] for v in names[:32] if isinstance(v, str)]}
+            if isinstance(item.get("clarification"), str):
+                cap["clarification"] = item["clarification"][:240]
             if isinstance(item.get("statuses"), dict):
                 cap["statuses"] = {str(k)[:64]: [str(v)[:32] for v in values[:2]]
                         for k, values in list(item["statuses"].items())[:32] if isinstance(values, list)}
@@ -237,6 +239,14 @@ class Orchestrator:
         # UNKNOWN/EXPIRED/PRESENT snapshot still requires contextual shortlisting.
         has_dialogue_context = bool(history) or task_context is not None and not standalone
         history = _with_task_context(history, task_context)
+        # Bind actual read capability to each visible option, not just a distant
+        # context paragraph beside generic legacy catalog names. Copies only.
+        declared = task_context.get("readCapabilities") if isinstance(task_context, dict) else None
+        caps = {c["tool"]: c for c in declared[:5]
+                if isinstance(c, dict) and isinstance(c.get("tool"), str)} if (
+                    isinstance(declared, list) and task_context.get("provenance") == "SERVER_CONVERSATION_MEMORY") else {}
+        visible_intents = [dict(row, _read_capability=caps[row["tool_name"]])
+                if row.get("tool_name") in caps else row for row in visible_intents]
         by_code = {str(r.get("intent_code")): r for r in visible_intents}
         if not by_code:
             return None

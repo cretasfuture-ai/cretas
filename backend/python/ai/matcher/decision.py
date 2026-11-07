@@ -60,6 +60,9 @@ ROUTING_BOUNDARY_RULES = (
     "已有确定业务列表及其任务上下文时，翻页、重查、纠正条件仍由该业务列表功能承接；通用继续/翻页功能不代表新的业务目标。"
     "继续分页列表时保留其列表能力，不因修改状态就改选无分页能力的专用看板或今日待办；状态筛选不等于查询该状态的产生原因或消耗明细。"
     "受控上下文readCapabilities来自真实Tool声明，仅描述能力，不代表权限；结合其描述和参数支持范围判断，不因标题关键词相同就偷换查询口径。"
+    "每个选项的实际能力说明优先于目录泛化名称或常见说法；同类对象的状态筛选和固定日期条件可能是不同查询。"
+    "本轮仅翻页或重查且已有单一明确查询时，继续该查询口径；不要重新要求用户在名称相似的能力中选择。"
+    "本轮明确改为另一种已支持口径时选择相应新能力，不能把旧能力限制当成新能力不支持；口径确实不明则澄清差异。"
     "用户改变目标、对象类型或查询范围时，按本轮目标重新选择，不能仅因历史意图相同就继承。"
     "集合查询与一笔确定对象的详情是不同范围；上下文已有真实结果引用且本轮请求该对象详情时，应选详情功能，"
     "不能把详情当作再次列出集合。具体对象不唯一时仍由resolver定向确认，不得猜ID或任取第一条。"
@@ -100,7 +103,17 @@ def intent_text(row: Dict[str, Any]) -> str:
     desc = " ".join(str(row.get("description") or "").split())[:512]
     name = row.get("intent_name") or row.get("intent_code")
     binding = f" [工具：{row['tool_name']}]" if row.get("tool_name") else ""
-    return f"{name}{binding}：{desc}" + (f" 常见说法：{kws}" if kws else "")
+    capability = _read_capability_text(row)
+    return f"{name}{binding}：{desc}" + (f" 实际能力：{capability}" if capability else "") + (f" 常见说法：{kws}" if kws else "")
+
+
+def _read_capability_text(row):
+    cap = row.get("_read_capability")
+    if not isinstance(cap, dict) or cap.get("tool") != row.get("tool_name"):
+        return ""
+    description = str(cap.get("description") or "")[:180]
+    names = cap.get("parameters") if isinstance(cap.get("parameters"), list) else []
+    return description + " 支持参数：" + "、".join(v[:64] for v in names[:32] if isinstance(v, str))
 
 
 def _keywords(row: Dict[str, Any]) -> List[str]:
@@ -120,7 +133,8 @@ def _catalog_line(row: Dict[str, Any], n_keywords: int = 3) -> str:
     if row.get("tool_name"):
         line += f" [工具：{row['tool_name']}]"
     kws = _keywords(row)[:n_keywords]
-    return line + (f"（{'、'.join(kws)}）" if kws else "")
+    capability = _read_capability_text(row)
+    return line + (f" 实际能力：{capability}" if capability else "") + (f"（{'、'.join(kws)}）" if kws else "")
 
 
 # 最近对话 (第 3b 步, 2026-10-03): 「好了」「就是六十箱」这种话离开上一句说不清。

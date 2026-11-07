@@ -2701,9 +2701,15 @@ public class IntentExecutionOrchestrator {
                 if (!isCandidateCompatible(factoryId, factoryDomain, candidate.getIntentCode())) {
                     continue; // business-type mismatch — skip noise
                 }
+                String description = candidate.getDescription();
+                try {
+                    AIIntentConfig current = configService.getIntentByCode(factoryId, candidate.getIntentCode()).orElse(null);
+                    if (current != null) description = ClarificationCandidateService.readCapabilityDescription(
+                            toolRegistry, current.getToolName(), description);
+                } catch (RuntimeException unavailable) { /* Existing candidate presentation remains available. */ }
                 actions.add(ClarificationCandidateService.toSelectAction(
                         factoryId, candidate.getIntentCode(), candidate.getIntentName(),
-                        candidate.getDescription(), candidate.getConfidence()));
+                        description, candidate.getConfidence()));
             }
         }
         // C1: if filtering left ZERO data candidates (all incompatible with this domain), fall

@@ -88,6 +88,7 @@ public class MaterialExpiredQueryTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");
+        schema.put("x-clarification-description", "按到期日期早于今天、且尚未标记为过期筛选待处理清单；不是查询已标记过期的状态。");
 
         Map<String, Object> properties = new HashMap<>();
         properties.put("page", Map.of("type","integer","minimum",1,"description","页码，从1开始；不提供任何分页参数则保持全集查询"));

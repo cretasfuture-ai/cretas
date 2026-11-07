@@ -2315,7 +2315,10 @@ public class SseStreamingService {
                     || action.getActionName() == null || action.getActionName().isBlank()) {
                 continue;
             }
-            line.append(index++).append(". ").append(action.getActionName()).append("\n");
+            line.append(index++).append(". ").append(action.getActionName());
+            String description = ClarificationButtonText.subtitle(action.getDescription());
+            if (description != null && !description.startsWith("置信度")) line.append(" — ").append(description);
+            line.append("\n");
             if (index > 3) {
                 break;
             }

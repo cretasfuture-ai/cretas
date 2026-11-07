@@ -115,6 +115,10 @@ public class ToolDispatchService {
                     pageAction描述本轮分页动作：NEXT、PREVIOUS、ABSOLUTE、UNCHANGED。相对翻页由程序基于已确认页码计算，parameters不要猜页码；pageEvidence必须是本轮原话中的连续片段。
                     明确页码用ABSOLUTE并给出page；改变每页条数用size。无分页变化用UNCHANGED，不输出分页默认值。
                     NEW/SWITCH是独立目标；CONTINUE/CORRECT仅可用于同一个目标。
+                    readTransition按source→target排列：source是此前已执行任务，target是本轮候选能力，不能颠倒。
+                    先结合currentInput判断本轮目标，再按target的真实能力校验；不能用source的限制拒绝target已支持的新查询。
+                    历史条件只在canInheritPreviousParameters=true且本轮确实延续该目标时保留；切换时不要把source的状态当成target要求。
+                    CLARIFY说明本轮真正未确定的内容；UNSUPPORTED仅说明本轮目标确实超出target能力，不能复述历史方向的拒绝理由。
                     同一个目标要求selectedIntent与已保存READ_QUERY的id相同；不同意图之间不能用CONTINUE/CORRECT继承参数。
                     canInheritPreviousParameters=false时不能返回CONTINUE/CORRECT；本轮完整独立查询应返回NEW/SWITCH，仅有条件续句而没有已确定目标才澄清。
                     新对象详情可以通过objectReference复用真实对象，但不能因此沿用列表的筛选条件。旧目标未确定而本轮只改条件时应定向澄清。
@@ -166,6 +170,14 @@ public class ToolDispatchService {
                     && "PRESENT".equals(request.getSemanticContext().get("contextStatus")));
             input.put("previousGoal", Objects.toString(previous.get("id"), ""));
             input.put("previousGoalStatus", Objects.toString(previous.get("taskStatus"), "NONE"));
+            input.put("readTransition", Map.of("direction", "source_to_target",
+                    "source", Map.of("intent", Objects.toString(previous.get("id"), ""),
+                            "tool", Objects.toString(previous.get("toolName"), ""),
+                            "confirmedParameters", previous.get("parameters") instanceof Map<?,?> p ? p : Map.of()),
+                    "target", Map.of("intent", pilot ? intent.getIntentCode() : "",
+                            "tool", pilot ? tool.getToolName() : "", "description", input.get("toolDescription"),
+                            "parameters", schema),
+                    "canInherit", input.get("canInheritPreviousParameters")));
             input.put("continuationAlias", request.getSemanticContext().getOrDefault("continuationAlias", ""));
             input.put("requiredWithoutSystemDefault", schema.get("required") instanceof List<?> required
                     ? required.stream().filter(key -> !defaults.containsKey(key)).toList() : List.of());

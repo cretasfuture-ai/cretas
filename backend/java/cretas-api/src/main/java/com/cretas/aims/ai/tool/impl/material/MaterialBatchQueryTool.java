@@ -92,6 +92,7 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
     public Map<String, Object> getParametersSchema() {
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");
+        schema.put("x-clarification-description", "按已经保存的批次状态筛选，例如已标记过期、检验中或可用；不按到期日判断。");
 
         Map<String, Object> properties = new HashMap<>();
 

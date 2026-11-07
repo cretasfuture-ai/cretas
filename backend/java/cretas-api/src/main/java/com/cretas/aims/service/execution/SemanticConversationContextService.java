@@ -55,6 +55,8 @@ public class SemanticConversationContextService {
                             String description = Objects.toString(tool.getDescription(), "");
                             capability.put("description", description.substring(0, Math.min(180, description.length())));
                             Map<String,Object> schema = tool.getParametersSchema();
+                            if (schema != null && schema.get("x-clarification-description") instanceof String explanation)
+                                capability.put("clarification", explanation.substring(0, Math.min(240, explanation.length())));
                             if (schema != null && schema.get("properties") instanceof Map<?,?> properties) {
                                 capability.put("parameters", properties.keySet().stream().map(String::valueOf).sorted().toList());
                                 if (properties.get("status") instanceof Map<?,?> status
