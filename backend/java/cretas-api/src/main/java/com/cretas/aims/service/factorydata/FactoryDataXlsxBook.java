@@ -41,10 +41,16 @@ final class FactoryDataXlsxBook implements AutoCloseable {
     private final Sheet index;
     private final Set<String> usedNames = new HashSet<>();
     private final List<Map<String, Object>> sheets = new ArrayList<>();
+    private final byte[] redactionKey;
     private int maxDataRows = MAX_DATA_ROWS;
     private long truncatedCells;
 
     FactoryDataXlsxBook() {
+        this(FactoryDataRedaction.newKey());
+    }
+
+    FactoryDataXlsxBook(byte[] redactionKey) {
+        this.redactionKey = redactionKey.clone();
         workbook.setCompressTempFiles(true);
         index = workbook.createSheet(INDEX_SHEET);
         usedNames.add(INDEX_SHEET.toLowerCase(Locale.ROOT));
@@ -68,7 +74,8 @@ final class FactoryDataXlsxBook implements AutoCloseable {
         boolean[] redact = new boolean[n];
         for (int i = 0; i < n; i++) {
             header[i] = md.getColumnName(i + 1);
-            redact[i] = FactoryDataCatalog.isCredentialColumn(header[i]);
+            redact[i] = FactoryDataCatalog.shouldRedactColumn(table, header[i], md.getColumnType(i + 1),
+                    md.getScale(i + 1));
         }
         int part = 1;
         Sheet sheet = null;
@@ -87,7 +94,8 @@ final class FactoryDataXlsxBook implements AutoCloseable {
             for (int i = 0; i < n; i++) {
                 String v = rs.getString(i + 1);
                 if (v == null) continue;
-                if (redact[i]) v = FactoryDataCatalog.REDACTED;
+                if (redact[i]) v = FactoryDataRedaction.value(table, header[i], v, redactionKey,
+                        md.getColumnDisplaySize(i + 1));
                 if (v.length() > MAX_CELL_CHARS) {
                     v = v.substring(0, MAX_CELL_CHARS - TRUNCATED_MARK.length()) + TRUNCATED_MARK;
                     truncatedCells++;

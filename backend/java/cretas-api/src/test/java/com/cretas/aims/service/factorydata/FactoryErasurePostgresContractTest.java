@@ -83,6 +83,7 @@ class FactoryErasurePostgresContractTest {
         exec(smartbiAdmin, "CREATE ROLE " + appRole + " LOGIN PASSWORD 'x' NOSUPERUSER NOBYPASSRLS;"
                 + "GRANT USAGE ON SCHEMA " + schema + " TO " + appRole + ";"
                 + "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA " + schema + " TO " + appRole + ";"
+                + "REVOKE INSERT, UPDATE, DELETE ON " + schema + ".smartbi_migrations FROM " + appRole + ";"
                 + "REVOKE UPDATE, DELETE ON " + schema + ".smart_bi_llm_egress_audit FROM " + appRole + ";");
         // 定义者函数直接用真实的 SmartBI 迁移, 只把 public 换成本用例的 schema (⛔ 不在测试里另写一份)
         exec(smartbiAdmin, Files.readString(Path.of(
@@ -114,6 +115,12 @@ class FactoryErasurePostgresContractTest {
 
     @Test
     void erasureRemovesEveryRowOfTheFactoryAndLeavesOtherFactoriesByteForByteUnchanged() throws Exception {
+        exec(main, "INSERT INTO " + schema + ".flyway_schema_history VALUES"
+                + "(1,'retained-1','retention proof','SQL','Vretained.sql',17,'fixture',now(),1,true)");
+        exec(smartbiAdmin, "INSERT INTO " + schema + ".smartbi_migrations VALUES"
+                + "('Vretained.sql','retained-1',17,now(),'fixture',1)");
+        String mainMigrationBefore = migrationLedgerSnapshot(main, "flyway_schema_history");
+        String smartbiMigrationBefore = migrationLedgerSnapshot(smartbiAdmin, "smartbi_migrations");
         Map<String, String> fbMain = snapshot(main, FB);
         Map<String, String> fbSb = snapshot(smartbiAdmin, FB);
         FactoryErasureService erasure = erasure();
@@ -121,6 +128,8 @@ class FactoryErasurePostgresContractTest {
         long requestId = requestAndWait(erasure, true);
         long previewId = data().preview(OPERATOR, FA).previewId();
         FactoryErasureService.Receipt receipt = erasure.erase(OPERATOR, FA, new EraseBody(FA, requestId, previewId));
+        assertThat(migrationLedgerSnapshot(main, "flyway_schema_history")).isEqualTo(mainMigrationBefore);
+        assertThat(migrationLedgerSnapshot(smartbiAdmin, "smartbi_migrations")).isEqualTo(smartbiMigrationBefore);
 
         // 本厂: 两个库按同一口径重算, 一行不剩; 工厂主记录没了; 附件没了
         assertThat(count(main, "SELECT count(*) FROM " + schema + ".factories WHERE id = '" + FA + "'")).isZero();
@@ -639,7 +648,8 @@ class FactoryErasurePostgresContractTest {
                 while (rs.next()) tables.put(rs.getString(1), rs.getBoolean(2));
             }
             for (Map.Entry<String, Boolean> t : tables.entrySet()) {
-                String cond = t.getValue() ? "x.factory_id::text = " + f : byTable.get(t.getKey());
+                String cond = FactoryDataCatalog.categorize(t.getKey()) == FactoryDataCatalog.Category.LEDGER
+                        ? "FALSE" : t.getValue() ? "x.factory_id::text = " + f : byTable.get(t.getKey());
                 if (cond == null) throw new IllegalStateException("snapshot 没登记怎么认出这张表的工厂行: " + t.getKey());
                 String where = " WHERE " + cond;
                 try (ResultSet rs = st.executeQuery("SELECT count(*), md5(coalesce(string_agg(x::text, '|' ORDER BY x::text), ''))"
@@ -657,6 +667,15 @@ class FactoryErasurePostgresContractTest {
              ResultSet rs = st.executeQuery("SELECT is_active FROM " + schema + ".factories WHERE id = '" + factory + "'")) {
             rs.next();
             return rs.getBoolean(1);
+        }
+    }
+
+    private String migrationLedgerSnapshot(DataSource ds, String table) throws Exception {
+        try (Connection c = ds.getConnection(); Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY to_jsonb(x)::text),'[]'::jsonb)::text FROM "
+                     + schema + "." + table + " x")) {
+            rs.next();
+            return rs.getString(1);
         }
     }
 
