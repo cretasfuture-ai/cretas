@@ -473,12 +473,34 @@ public final class FactoryDataSchemaMetadata {
                 if (sensitive.contains(referenced)) changed |= sensitive.add(local);
             }
         } while (changed);
+        for (Map<String, Object> column : columns) {
+            String key = column.get("table") + "." + column.get("column");
+            if (sensitive.contains(key) && (Boolean.TRUE.equals(column.get("generated"))
+                    || Boolean.TRUE.equals(column.get("identity")))) {
+                throw new IllegalStateException("凭证列为生成列或 identity，无法安全恢复: " + key);
+            }
+        }
+        Map<String, Set<String>> primaryColumns = new java.util.HashMap<>();
+        for (Map<String, Object> constraint : constraints) {
+            if ("PRIMARY KEY".equals(constraint.get("type"))) {
+                primaryColumns.computeIfAbsent(constraint.get("table") + "." + constraint.get("name"),
+                        ignored -> new java.util.HashSet<>()).add(String.valueOf(constraint.get("column")));
+            }
+        }
         for (Map<String, Object> c : constraints) {
             String type = String.valueOf(c.get("type"));
-            if (!("PRIMARY KEY".equals(type) || "FOREIGN KEY".equals(type))) continue;
             String key = c.get("table") + "." + c.get("column");
+            if ("PRIMARY KEY".equals(type) && sensitive.contains(key)
+                    && primaryColumns.get(c.get("table") + "." + c.get("name")).size() != 1) {
+                throw new IllegalStateException("凭证列参与复合主键，无法安全恢复: " + key);
+            }
+            // A standalone textual credential PK uses the same stable,
+            // package-scoped HMAC as a UNIQUE credential column. Type, width
+            // and CHECK safety gates still apply. Credential FK aliases must
+            // refuse until the writer binds their shared redaction identity.
+            if (!"FOREIGN KEY".equals(type)) continue;
             if (sensitive.contains(key)) {
-                throw new IllegalStateException("凭证列或其外键别名参与主键/外键，无法安全恢复: " + key);
+                throw new IllegalStateException("凭证列或其外键别名参与外键，无法安全恢复: " + key);
             }
         }
         Set<String> sensitiveColumns = sensitive;
