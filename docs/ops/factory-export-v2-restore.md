@@ -47,7 +47,11 @@ may the operator repeat with `--apply`:
 4. verify every exported row as a typed multiset (including high-precision
    numeric values), migration-ledger rows, per-sequence last-value/is-called
    state, structure descriptors/fingerprint, and that every constraint is
-   validated.
+   validated against loaded rows. Source `NOT VALID` CHECK/FK constraints keep
+   their exact source definition and validation state: after structure matching,
+   PostgreSQL `VALIDATE CONSTRAINT` runs inside a savepoint and rolls back that
+   catalog change. A violation still refuses the restore and triggers the same
+   two-target cleanup; no constraint or row is disabled, discarded or repaired.
 
 The two databases are separate transactions. The package records
 `crossDatabaseAtomic=false`; a successful restore in one database never claims

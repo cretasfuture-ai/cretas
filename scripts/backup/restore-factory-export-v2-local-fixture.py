@@ -131,6 +131,68 @@ class OwnedPostgresContract(unittest.TestCase):
     def tearDown(self):
         self.conn.rollback()
 
+    def test_source_not_valid_check_and_fk_are_proven_without_state_change(self):
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE TABLE proof_parent(id integer PRIMARY KEY); "
+                        "CREATE TABLE proof_child(id integer PRIMARY KEY,parent_id integer,value integer); "
+                        "INSERT INTO proof_parent VALUES(1); INSERT INTO proof_child VALUES(1,1,2); "
+                        "ALTER TABLE proof_child ADD CONSTRAINT proof_positive CHECK(value>0) NOT VALID; "
+                        "ALTER TABLE proof_child ADD CONSTRAINT proof_parent_fk FOREIGN KEY(parent_id) REFERENCES proof_parent(id) NOT VALID")
+            cur.execute("SELECT conname,convalidated,pg_get_constraintdef(oid) FROM pg_constraint "
+                        "WHERE conrelid='proof_child'::regclass ORDER BY conname")
+            before=cur.fetchall()
+        seed={"sourceSchema":"public","tables":[{"table":name,"rows":1}
+            for name in ("proof_parent","proof_child")]}
+        source=dict(seed,**restore.read_target_structure(self.conn,seed))
+        fingerprint=restore.structural_fingerprint(self.conn,source)
+        result=restore.validate_restored_constraints(self.conn,"fixture")
+        self.assertEqual(result['sourceNotValidCount'],2)
+        self.assertTrue(result['loadedRowsIntegrityVerified'])
+        self.assertTrue(result['sourceValidationStatePreserved'])
+        for count in ('expectedCount','validatedCount','stateRestoredCount'):
+            self.assertEqual(result[count],2)
+        self.assertRegex(result['definitionsFingerprint'],r'^[0-9a-f]{64}$')
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT conname,convalidated,pg_get_constraintdef(oid) FROM pg_constraint "
+                        "WHERE conrelid='proof_child'::regclass ORDER BY conname")
+            self.assertEqual(cur.fetchall(),before)
+        self.assertEqual(restore.structural_fingerprint(self.conn,source),fingerprint)
+
+    def test_source_not_valid_check_rejects_invalid_loaded_row(self):
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE TABLE proof_bad_check(value integer); INSERT INTO proof_bad_check VALUES(-987654321); "
+                        "ALTER TABLE proof_bad_check ADD CONSTRAINT bad_positive CHECK(value>0) NOT VALID")
+        with self.assertRaisesRegex(restore.RestoreRefused,"SQLSTATE=23514") as caught:
+            restore.validate_restored_constraints(self.conn,"fixture")
+        self.assertNotIn("987654321",str(caught.exception))
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT convalidated FROM pg_constraint WHERE conname='bad_positive'")
+            self.assertEqual(cur.fetchone(),(False,))
+            cur.execute("SELECT count(*) FROM proof_bad_check WHERE value=-987654321")
+            self.assertEqual(cur.fetchone(),(1,))
+
+    def test_source_not_valid_fk_rejects_orphan_without_repairing_data(self):
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE TABLE proof_bad_parent(id integer PRIMARY KEY); "
+                        "CREATE TABLE proof_bad_child(parent_id integer); INSERT INTO proof_bad_child VALUES(987654321); "
+                        "ALTER TABLE proof_bad_child ADD CONSTRAINT bad_parent_fk FOREIGN KEY(parent_id) "
+                        "REFERENCES proof_bad_parent(id) NOT VALID")
+        with self.assertRaisesRegex(restore.RestoreRefused,"SQLSTATE=23503") as caught:
+            restore.validate_restored_constraints(self.conn,"fixture")
+        self.assertNotIn("987654321",str(caught.exception))
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT convalidated FROM pg_constraint WHERE conname='bad_parent_fk'")
+            self.assertEqual(cur.fetchone(),(False,))
+            cur.execute("SELECT count(*) FROM proof_bad_parent")
+            self.assertEqual(cur.fetchone(),(0,))
+
+    def test_unvalidated_domain_constraint_is_not_silently_ignored(self):
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE DOMAIN proof_domain AS integer; "
+                        "ALTER DOMAIN proof_domain ADD CONSTRAINT domain_positive CHECK(VALUE>0) NOT VALID")
+        with self.assertRaisesRegex(restore.RestoreRefused,"不支持未验证约束类型"):
+            restore.validate_restored_constraints(self.conn,"fixture")
+
     def test_wide_types_actual_insert_readback(self):
         ddl = "CREATE TEMP TABLE typed_values (n numeric(60,20),i bigint,f double precision,d date,t time,ts timestamptz,b bytea,j jsonb,a bigint[])"
         descriptors = [{"dataType": dtype, "udtName": udt} for dtype, udt in
