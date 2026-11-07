@@ -2034,6 +2034,7 @@ public class IntentExecutionOrchestrator {
                 .intentCategory(intent.getIntentCategory())
                 .sensitivityLevel(intent.getSensitivityLevel())
                 .status("FACTORY_PACK_WORKFLOW_GUIDANCE")
+                .aiMode(mutation ? "WRITE" : "READ")
                 .message(message)
                 .formattedText(message)
                 .requiresApproval(reference.approvalRequired())
