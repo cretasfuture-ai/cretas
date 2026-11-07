@@ -325,6 +325,9 @@ public class MaterialAliasMergeService {
         listBlocker("OPEN_RECEIPT", "还有 %d 张无采购单的收货单未完成",
                 "已有收货草稿或待质检记录引用旧物料，请先完成、退回或作废后再合并",
                 plan.openStandaloneReceipts()).ifPresent(blockers::add);
+        listBlocker("INQUIRY_QUOTE", "还有 %d 张进行中的核价单",
+                "请先取消或完成这些核价单后再合并，历史核价单不会自动改物料",
+                plan.openInquiryQuotes()).ifPresent(blockers::add);
         if (unitsMatch) {
             replacement("WORKFLOW", "%d 张草稿工艺图", List.copyOf(new LinkedHashSet<>(plan.draftWorkflows().values())))
                     .ifPresent(replacements::add);
