@@ -7,11 +7,6 @@
 
 ## 在飞任务
 
-- `GLOBAL-AI-READBACK-20261107` — `in-progress` — Owner `/root`（已收回prep_ui写权）— Base `49009fd44ad1f348c5599a460744dd7ca177aebe`；scope web-admin/src/ai/pageAgentReadback.ts及对应spec；原页面mutation发送前映射、确定性GET与ID/工厂/业务字段校验；验收对应spec、独立终审和F006沙盒实测。
-
-- `GLOBAL-AI-PAGE-20261107` — `in-progress` — Owner `/root` — Base `49009fd44ad1f348c5599a460744dd7ca177aebe`；scope web-admin/src/ai/pageAgent{Runtime,Transport,Identity,Approval}.ts及测试、layout GlobalAiControl/AppLayout及测试、workflow/pending.vue、当日归档；全局原页面操作/提交后人工Next/日志。验收目标测试、Web门禁、构建、F006沙盒实测。
-- `GLOBAL-AI-DOM-20261107` — `claimed` — Owner `/root/network_bootstrap` — Base `49009fd44ad1f348c5599a460744dd7ca177aebe`；scope web-admin/src/ai/pageAgentDom.ts、ai/__tests__/pageAgentDom.spec.ts；只做可见控件快照、typed动作校验和原DOM操作；验收npx vitest run对应spec，不动运行时/台账。
-- `GLOBAL-AI-PROMPT-20261107` — `claimed` — Owner `/root/backend_demo` — Base `49009fd44ad1f348c5599a460744dd7ca177aebe`；scope Java resources/ai/form-prompts/factory/UI_PAGE_ACTION.md、service/UiPageActionPromptContractTest.java；纯页面下一步规划prompt及契约，不加业务执行接口；验收Registry/新契约/脱敏目标测试。
 
 
 
