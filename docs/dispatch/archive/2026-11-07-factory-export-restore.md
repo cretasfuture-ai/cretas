@@ -2,6 +2,10 @@
 
 ## Frozen delivery candidate
 
+Delivery Base SHA: `8d2e9e2ecd3ae39c7818d46b1eba1d305044d308` after normal
+integration of current main; original task-start Base `49009fd44ad1f348c5599a460744dd7ca177aebe`
+is retained below. The final PR diff is limited to this export slice.
+
 Owner: 01a1a954/root. The previous BLOCK dispositions below are historical;
 the final candidate implements canonical JSON in every v2 package (CSV/XLSX
 remain optional views), source schema and migration descriptors, package-scoped
