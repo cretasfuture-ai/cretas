@@ -262,6 +262,7 @@ public class QualityDispositionController {
                 .message(executionResult.getMessage())
                 .nextSteps(buildNextSteps(executionResult))
                 .newBatchStatus(executionResult.getNewBatchStatus())
+                .finishedGoodsHeld(executionResult.getFinishedGoodsHeld())
                 .approvalInitiated(executionResult.isApprovalInitiated())
                 .approvalRequestId(executionResult.getApprovalRequestId())
                 .auditLogId(executionResult.getAuditLogId())
@@ -695,6 +696,8 @@ public class QualityDispositionController {
         Long productionBatchId = null;
         String executionStatus = null;
         String newBatchStatus = null;
+        String executionMessage = null;
+        Integer finishedGoodsHeld = null;
 
         // 如果批准，执行处置动作
         if (request.getApproved()) {
@@ -713,6 +716,9 @@ public class QualityDispositionController {
                 );
                 executionStatus = "EXECUTED";
                 newBatchStatus = executionResult.getNewBatchStatus();
+                // Q2/Q4: 还有成品留在隔离 (同计划还有几批没解除 / 报废召回批次的货 / 分不清归属) 要原话告诉审批人
+                executionMessage = executionResult.getMessage();
+                finishedGoodsHeld = executionResult.getFinishedGoodsHeld();
             } catch (BusinessException be) {
                 throw be;
             } catch (Exception e) {
@@ -785,7 +791,10 @@ public class QualityDispositionController {
                 .approvedAt(auditLog.getApprovedAt())
                 .executionStatus(executionStatus)
                 .newBatchStatus(newBatchStatus)
-                .message(request.getApproved() ? "处置申请已批准" : "处置申请已拒绝")
+                .finishedGoodsHeld(finishedGoodsHeld)
+                .message(request.getApproved()
+                        ? "处置申请已批准" + (executionMessage != null ? "；" + executionMessage : "")
+                        : "处置申请已拒绝")
                 .build();
 
         log.info("处置审批完成 - id={}, approved={}", id, request.getApproved());

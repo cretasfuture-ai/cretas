@@ -56,6 +56,8 @@ class QualityDispositionInventoryServiceTest {
     private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
     @Mock
     private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
+    @Mock
+    private com.cretas.aims.repository.lineage.BatchLineageEdgeRepository batchLineageEdgeRepository;
 
     private QualityInspection inspection;
 
@@ -110,8 +112,13 @@ class QualityDispositionInventoryServiceTest {
         verifyNoInteractions(finishedGoodsBatchRepository, materialBatchRepository);
     }
 
+    /**
+     * Q2 改写 (Owner 2026-11-09): 原名 releaseDoesNotUnfreezeAnotherSkuOrReturnChildSharingThePlan, 钉的是「同计划
+     * 其他 SKU 不放」。裁定改为「计划里所有批次都解除后一次放行这个计划的全部成品」, 不再比 SKU;
+     * 退货子批 (RTN) 是独立的货, 仍不放也不计数 —— 这半条断言原样保留。
+     */
     @Test
-    void releaseDoesNotUnfreezeAnotherSkuOrReturnChildSharingThePlan() {
+    void releaseFreesOtherSkuOfThePlanButNotReturnChild() {
         wirePlan();
         FinishedGoodsBatch current = fg(FinishedGoodsBatch.Status.DEFECTIVE);
         FinishedGoodsBatch returned = fg(FinishedGoodsBatch.Status.DEFECTIVE);
@@ -123,12 +130,12 @@ class QualityDispositionInventoryServiceTest {
 
         InventoryDispositionResult result = service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
-        assertEquals(1, result.getFinishedGoodsReleased());
-        assertEquals(1, result.getFinishedGoodsHeld());
+        assertEquals(2, result.getFinishedGoodsReleased());
+        assertEquals(0, result.getFinishedGoodsHeld());
         assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, returned.getStatus());
-        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, otherSku.getStatus());
+        assertEquals(FinishedGoodsBatch.Status.AVAILABLE, otherSku.getStatus());
         verify(finishedGoodsBatchRepository, never()).save(returned);
-        verify(finishedGoodsBatchRepository, never()).save(otherSku);
+        verify(finishedGoodsBatchRepository).save(otherSku);
     }
 
     @Test

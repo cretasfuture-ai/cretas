@@ -16,6 +16,8 @@ import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.enums.QualityStatus;
 import com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.lineage.BatchLineageEdge;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
 import com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository;
 import com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService;
 import com.cretas.aims.entity.quality.QcReleaseRecord;
@@ -92,11 +94,13 @@ class QualityBatchDispositionContractTest {
     private final Map<String, QualityInspection> inspections = new LinkedHashMap<>();
     private final Map<String, DecisionAuditLog> audits = new LinkedHashMap<>();
     private final List<ProcessTimeLimitEvent> timeLimitRows = new ArrayList<>();
+    private final List<BatchLineageEdge> edgeRows = new ArrayList<>();
     private LocalDateTime clock = LocalDateTime.of(2026, 11, 4, 9, 0);
     private int auditSeq;
 
     private QualityInspectionRepository inspectionRepo;
     private FinishedGoodsBatchRepository goodsRepo;
+    private QualityDispositionInventoryService bridge;
     private ProcessTimeLimitEventRepository timeLimitEvents;
     private FactoryRecallService recalls;
     private QcReleaseRecordRepository releaseRecords;
@@ -208,11 +212,17 @@ class QualityBatchDispositionContractTest {
         QcInspectionPolicy policy = new QcInspectionPolicy(productTypes);
         ReflectionTestUtils.setField(policy, "productionBatchRepository", batchRepo);
 
-        QualityDispositionInventoryService bridge = new QualityDispositionInventoryService();
+        bridge = new QualityDispositionInventoryService();
         ReflectionTestUtils.setField(bridge, "materialBatchRepository", mock(MaterialBatchRepository.class));
         ReflectionTestUtils.setField(bridge, "productionBatchRepository", batchRepo);
         ReflectionTestUtils.setField(bridge, "finishedGoodsBatchRepository", goodsRepo);
         recalls = mock(FactoryRecallService.class);
+        BatchLineageEdgeRepository lineage = mock(BatchLineageEdgeRepository.class);
+        when(lineage.findByFactoryIdAndTargetIdIn(eq(FACTORY), any())).thenAnswer(call -> {
+            java.util.Collection<String> targets = call.getArgument(1);
+            return edgeRows.stream().filter(e -> targets.contains(e.getTargetId())).toList();
+        });
+        ReflectionTestUtils.setField(bridge, "batchLineageEdgeRepository", lineage);
         ReflectionTestUtils.setField(bridge, "factoryRecallService", recalls);
         ReflectionTestUtils.setField(bridge, "qcReleaseRecordRepository", releaseRecords);
         ReflectionTestUtils.setField(bridge, "qcInspectionPolicy", policy);
@@ -429,11 +439,17 @@ class QualityBatchDispositionContractTest {
 
         assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PARTIAL_PASS);
         assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
-        assertThat(result.getMessage()).contains("1 个成品批次仍在隔离中");
+        assertThat(result.getMessage()).contains("1 个成品批次仍在隔离中").contains("还有 1 个批次没有解除隔离");
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
     }
 
+    /**
+     * Q2 改写 (Owner 2026-11-09 裁定「计划里所有批次都解除后, 一次放行这个计划的全部成品」): 旧断言钉的是「同计划
+     * 其他 SKU 不放」—— 联产计划的副产品同样是这个计划的货, 不再比 SKU。退货子批与质检放行单独判不合格的
+     * 仍不放 (那是对那批货本身的结论), 断言保留。
+     */
     @Test
-    @DisplayName("放行不洗白别的货: 退货子批 / 其他 SKU / 质检放行单独判不合格的都留在隔离里")
+    @DisplayName("放行不洗白别的货: 退货子批 / 质检放行单独判不合格的留在隔离; 同计划其他 SKU 一起放行 (Q2)")
     void releaseLeavesUnrelatedDefectiveGoodsAlone() {
         FinishedGoodsBatch returned = finishedGoods("RTN-R20261101-1", "SKU-1", FinishedGoodsBatch.Status.DEFECTIVE);
         FinishedGoodsBatch otherSku = finishedGoods("FG-PLAN-1793087414891-94ECD656-S1-aaaaaaaa", "SKU-2",
@@ -450,9 +466,9 @@ class QualityBatchDispositionContractTest {
 
         assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
         assertThat(returned.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
-        assertThat(otherSku.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(otherSku.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
         assertThat(rejected.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
-        assertThat(result.getMessage()).contains("2 个成品批次仍在隔离中");
+        assertThat(result.getMessage()).contains("1 个成品批次仍在隔离中").contains("质检放行判不合格");
     }
 
     @Test
@@ -554,6 +570,146 @@ class QualityBatchDispositionContractTest {
 
         assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
         assertThat(frozen.getStatus()).isEqualTo(FinishedGoodsBatch.Status.FROZEN);
+    }
+
+    // ==================== Q2: 计划级放行口径 (Owner 2026-11-09 裁定) ====================
+
+    @Test
+    @DisplayName("Q2: 报废的兄弟批不挡整个计划 —— 血缘边分得清时, 报废批的成品留在隔离, 本批成品放行")
+    void scrappedSiblingKeepsOnlyItsOwnGoods() {
+        ProductionBatch scrapped = productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1",
+                QualityStatus.SCRAPPED);
+        FinishedGoodsBatch scrappedGoods = finishedGoods("FG-PLAN-1793087414891-94ECD656-S2-aaaaaaaa", "SKU-1",
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        inspect("qi-fail", "FAIL", "80");
+        edge(batch.getId(), goods.getId());
+        edge(scrapped.getId(), scrappedGoods.getId());
+
+        var result = ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(scrappedGoods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(result.getMessage()).contains("1 个成品批次仍在隔离中").contains("报废批次的成品 1 个");
+    }
+
+    @Test
+    @DisplayName("Q2: 有报废兄弟批但分不清成品归属 (没有血缘、批号对不上) —— 整个计划不放, 如实说分不清, 不猜")
+    void unattributableGoodsWithScrappedSiblingHoldTheWholePlan() {
+        productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1", QualityStatus.SCRAPPED);
+        FinishedGoodsBatch other = finishedGoods("FG-PLAN-1793087414891-94ECD656-S2-aaaaaaaa", "SKU-1",
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        inspect("qi-fail", "FAIL", "80");
+
+        var result = ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(other.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(result.getMessage()).contains("2 个成品批次仍在隔离中").contains("分不清");
+    }
+
+    @Test
+    @DisplayName("Q2: 报废兄弟批 + 没有血缘但批号相同 —— 批号算确定归属, 报废批号那批留下, 本批号那批放行")
+    void sameBatchNumberAttributesWithoutLineage() {
+        ProductionBatch scrapped = productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1",
+                QualityStatus.SCRAPPED);
+        FinishedGoodsBatch scrappedGoods = finishedGoods(scrapped.getBatchNumber(), "SKU-1",
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        goods.setBatchNumber(batch.getBatchNumber());
+        inspect("qi-fail", "FAIL", "80");
+
+        ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(scrappedGoods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("Q2: 血缘不全 (一个成品有边、另一个没有) 只在要区分批次时才挡; 没有报废/召回批次时照常一次放行")
+    void incompleteLineageOnlyMattersWhenBatchesMustBeTold() {
+        ProductionBatch sibling = productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1",
+                QualityStatus.PASSED);
+        FinishedGoodsBatch other = finishedGoods("FG-PLAN-1793087414891-94ECD656-S2-aaaaaaaa", "SKU-1",
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        inspect("qi-fail", "FAIL", "80");
+        edge(sibling.getId(), other.getId());   // goods 没有边
+
+        ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(other.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("Q2: 血缘指向本计划以外的生产批次 —— 归属不明, 整个计划不放")
+    void lineagePointingOutsideThePlanHoldsEverything() {
+        inspect("qi-fail", "FAIL", "80");
+        edge(999L, goods.getId());
+
+        var result = ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(result.getMessage()).contains("本计划以外");
+    }
+
+    @Test
+    @DisplayName("Q2: 先放行这批、后报废另一批 —— 报废复核通过那一刻, 已解除批次的成品放行, 报废批的留下")
+    void scrapAsTheLastClearingActReleasesTheOtherBatches() {
+        ProductionBatch failedSibling = productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1",
+                QualityStatus.FAILED);
+        FinishedGoodsBatch siblingGoods = finishedGoods("FG-PLAN-1793087414891-94ECD656-S2-aaaaaaaa", "SKU-1",
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        edge(batch.getId(), goods.getId());
+        edge(failedSibling.getId(), siblingGoods.getId());
+        inspect("qi-fail", "FAIL", "80");
+        // 本批先复核放行: 兄弟批还 FAILED, 什么都不放
+        ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+
+        // 兄弟批复核报废 (同一桥接, 质检挂在兄弟批上)
+        QualityInspection siblingInspection = new QualityInspection();
+        siblingInspection.setId("qi-sibling");
+        siblingInspection.setFactoryId(FACTORY);
+        siblingInspection.setProductionBatchId(failedSibling.getId());
+        siblingInspection.setResult("FAIL");
+        var scrapped = bridge.applyDisposition(siblingInspection,
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.SCRAP, true);
+
+        assertThat(failedSibling.getQualityStatus()).isEqualTo(QualityStatus.SCRAPPED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(siblingGoods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(scrapped.getFinishedGoodsReleased()).isEqualTo(1);
+        assertThat(scrapped.getFinishedGoodsNotice()).contains("报废批次的成品 1 个");
+    }
+
+    @Test
+    @DisplayName("Q2/审批入口: 批准后的响应原话带上「还有几批没解除」, 前端据此给出不消失的警告")
+    void approvalResponseCarriesHeldGoodsMessage() {
+        productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1", QualityStatus.FAILED);
+        inspect("qi-fail", "FAIL", "80");
+        String applicationId = controller.applyDisposition(FACTORY, apply("qi-fail", "CONDITIONAL_RELEASE"), INSPECTOR)
+                .getData().getApplicationId();
+
+        var approved = controller.approveDisposition(FACTORY, applicationId, approve(MANAGER, true), MANAGER).getData();
+
+        assertThat(approved.getFinishedGoodsHeld()).isEqualTo(1);
+        assertThat(approved.getMessage()).startsWith("处置申请已批准").contains("还有 1 个批次没有解除隔离");
+    }
+
+    private void edge(Long productionBatchId, String finishedGoodsId) {
+        BatchLineageEdge e = new BatchLineageEdge();
+        e.setFactoryId(FACTORY);
+        e.setEdgeType(com.cretas.aims.service.lineage.LineageEdgeRecorder.EDGE_PRODUCTION_TO_FINISHED);
+        e.setSourceType(com.cretas.aims.service.lineage.LineageEdgeRecorder.NODE_PRODUCTION_BATCH);
+        e.setSourceId(String.valueOf(productionBatchId));
+        e.setTargetType(com.cretas.aims.service.lineage.LineageEdgeRecorder.NODE_FINISHED_BATCH);
+        e.setTargetId(finishedGoodsId);
+        edgeRows.add(e);
     }
 
     private ProcessTimeLimitService timeLimitService() {

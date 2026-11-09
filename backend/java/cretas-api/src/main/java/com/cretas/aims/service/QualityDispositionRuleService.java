@@ -253,5 +253,10 @@ public interface QualityDispositionRuleService {
          * 批次新状态
          */
         private String newBatchStatus;
+
+        /**
+         * 执行后本计划仍留在隔离里的成品批次数 (Q2/Q4); 原因在 {@link #message} 里。前端据此把提示做成不自动消失的警告。
+         */
+        private int finishedGoodsHeld;
     }
 }

@@ -326,6 +326,9 @@ async function submitDisposition() {
         duration: 0,
         showClose: true,
       });
+    } else if ((result.finishedGoodsHeld ?? 0) > 0) {
+      // Q2/Q4: 还有成品留在隔离 (要复核 / 同计划还有批次没解除 / 报废召回批次的货等), 原因在 message 里, 不能一闪而过
+      ElMessage({ type: 'warning', message: result.message, duration: 0, showClose: true });
     } else {
       ElMessage.success(`${result.message}${result.nextSteps ? ' — ' + result.nextSteps : ''}`);
     }
@@ -416,7 +419,11 @@ async function submitApprove() {
       approverName: currentUserName.value || undefined,
       comment: approveForm.value.comment.trim() || undefined,
     });
-    ElMessage.success(result.message);
+    if ((result.finishedGoodsHeld ?? 0) > 0) {
+      ElMessage({ type: 'warning', message: result.message, duration: 0, showClose: true });
+    } else {
+      ElMessage.success(result.message);
+    }
     approveDialogVisible.value = false;
     loadPendingApprovals();
     loadPendingInspections();

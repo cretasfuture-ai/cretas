@@ -314,6 +314,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
                                                 + (finishedGoodsNotice != null ? "（" + finishedGoodsNotice + "）" : "")
                                         : ""))
                 .newBatchStatus(newStatus)
+                .finishedGoodsHeld(finishedGoodsHeld)
                 .build();
     }
 

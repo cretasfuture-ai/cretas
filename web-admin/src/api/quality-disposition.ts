@@ -103,6 +103,8 @@ export interface DispositionResultDTO {
   message: string;
   nextSteps: string;
   newBatchStatus?: string | null;
+  /** 处置执行后本计划仍留在隔离里的成品批次数 (Q2/Q4); 原因写在 message 里。 */
+  finishedGoodsHeld?: number | null;
   approvalInitiated: boolean;
   approvalRequestId?: string | null;
   auditLogId: string;
@@ -150,6 +152,8 @@ export interface DispositionApprovalResultDTO {
   approvedAt: string;
   executionStatus?: string | null;
   newBatchStatus?: string | null;
+  /** 批准后执行处置, 本计划仍留在隔离里的成品批次数 (Q2/Q4); 原因写在 message 里。 */
+  finishedGoodsHeld?: number | null;
   message: string;
 }
 

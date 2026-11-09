@@ -8,6 +8,9 @@ import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.QualityStatus;
 import com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.entity.lineage.BatchLineageEdge;
+import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.service.lineage.LineageEdgeRecorder;
 import com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository;
 import com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService;
 import com.cretas.aims.entity.quality.QcReleaseRecord;
@@ -101,6 +104,7 @@ class QualityDispositionInventoryPostgresContractTest {
     @Autowired ProductTypeRepository productTypes;
     @Autowired QualityInspectionRepository inspections;
     @Autowired ProcessTimeLimitEventRepository timeLimitEvents;
+    @Autowired BatchLineageEdgeRepository lineageEdges;
 
     private TransactionTemplate tx;
 
@@ -134,8 +138,13 @@ class QualityDispositionInventoryPostgresContractTest {
         assertInspectionRetained(f.inspectionId());
     }
 
+    /**
+     * Q2 改写 (Owner 2026-11-09 裁定「计划里所有批次都解除后, 一次放行这个计划的全部成品」): 原名
+     * differentSkuAndDifferentFactoryRemainProtected, 钉的是「同计划其他 SKU 不放」—— 联产计划的副产品同样是
+     * 这个计划的货, 现在一起放行。跨工厂保护不变: 别厂同计划号的成品一行不动 (阴性对照)。
+     */
     @Test
-    void differentSkuAndDifferentFactoryRemainProtected() {
+    void otherSkuOfThePlanIsReleasedButOtherFactoryStaysProtected() {
         Fixture f = fixture(false);
         String otherSku = "PT-OTHER-" + suffix();
         String sameFactoryOtherSku = saveFinishedGoods(f.factoryId(), f.planId(), otherSku, "FG-OTHER-" + suffix(),
@@ -145,10 +154,10 @@ class QualityDispositionInventoryPostgresContractTest {
 
         QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
 
-        assertThat(result.getFinishedGoodsReleased()).isEqualTo(1);
-        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
+        assertThat(result.getFinishedGoodsReleased()).isEqualTo(2);
+        assertThat(result.getFinishedGoodsHeld()).isZero();
         assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
-        assertDbFinishedGoods(sameFactoryOtherSku, FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbFinishedGoods(sameFactoryOtherSku, FinishedGoodsBatch.Status.AVAILABLE);
         assertDbFinishedGoods(otherFactory, FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
         assertInspectionRetained(f.inspectionId());
@@ -169,6 +178,7 @@ class QualityDispositionInventoryPostgresContractTest {
 
         assertThat(result.getFinishedGoodsReleased()).isZero();
         assertThat(result.getFinishedGoodsHeld()).isEqualTo(2);
+        assertThat(result.getFinishedGoodsNotice()).contains("还有 1 个批次没有解除隔离");
         assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbFinishedGoods(siblingFg, FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbQualityStatus(f.productionBatchId(), QualityStatus.PASSED);
@@ -272,6 +282,77 @@ class QualityDispositionInventoryPostgresContractTest {
         assertThat(result.getFinishedGoodsNotice()).contains("召回");
         assertDbFinishedGoods(recalledFg, FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbFinishedGoods(frozenFg, FinishedGoodsBatch.Status.FROZEN);
+    }
+
+    /** Q2: 报废兄弟批的成品 (真血缘边读回) 留在隔离, 其余放行; 报废不算「未解除」。 */
+    @Test
+    void scrappedSiblingGoodsStayButTheRestIsReleased() {
+        Fixture f = fixture(false);
+        Long scrappedId = tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), f.planId(), f.productId(), QualityStatus.SCRAPPED, "PB-SCRAPPED-" + suffix())).getId());
+        String scrappedFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-SCRAPPED-" + suffix(),
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        saveEdge(f.factoryId(), f.productionBatchId(), f.firstFgId());
+        saveEdge(f.factoryId(), scrappedId, scrappedFg);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isEqualTo(1);
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
+        assertThat(result.getFinishedGoodsNotice()).contains("报废批次的成品 1 个");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
+        assertDbFinishedGoods(scrappedFg, FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbQualityStatus(scrappedId, QualityStatus.SCRAPPED);
+    }
+
+    /** Q2: 有报废兄弟批、没有血缘、批号对不上 —— 分不清归属, 整个计划不放 (读回仍 DEFECTIVE)。 */
+    @Test
+    void unattributableGoodsWithScrappedSiblingHoldTheWholePlan() {
+        Fixture f = fixture(false);
+        tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), f.planId(), f.productId(), QualityStatus.SCRAPPED, "PB-SCRAPPED-" + suffix())).getId());
+        String otherFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-UNKNOWN-" + suffix(),
+                FinishedGoodsBatch.Status.DEFECTIVE);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(2);
+        assertThat(result.getFinishedGoodsNotice()).contains("分不清");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbFinishedGoods(otherFg, FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    /** Q2: 血缘指向别的计划的生产批次 —— 归属不明, 整个计划不放。 */
+    @Test
+    void lineagePointingOutsideThePlanHoldsEverything() {
+        Fixture f = fixture(false);
+        Long foreignBatch = tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), "PLAN-ELSEWHERE-" + suffix(), f.productId(), QualityStatus.FAILED,
+                "PB-ELSEWHERE-" + suffix())).getId());
+        saveEdge(f.factoryId(), foreignBatch, f.firstFgId());
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsNotice()).contains("本计划以外");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    private void saveEdge(String factoryId, Long productionBatchId, String finishedGoodsId) {
+        tx.executeWithoutResult(state -> {
+            BatchLineageEdge edge = new BatchLineageEdge();
+            edge.setFactoryId(factoryId);
+            edge.setEdgeType(LineageEdgeRecorder.EDGE_PRODUCTION_TO_FINISHED);
+            edge.setSourceType(LineageEdgeRecorder.NODE_PRODUCTION_BATCH);
+            edge.setSourceId(String.valueOf(productionBatchId));
+            edge.setTargetType(LineageEdgeRecorder.NODE_FINISHED_BATCH);
+            edge.setTargetId(finishedGoodsId);
+            edge.setQuantityUsed(BigDecimal.ONE);
+            edge.setUnit("kg");
+            edge.setEventTime(LocalDateTime.of(2026, 11, 9, 9, 0));
+            lineageEdges.saveAndFlush(edge);
+        });
     }
 
     @Test
