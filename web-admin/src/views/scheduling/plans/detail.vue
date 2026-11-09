@@ -17,7 +17,8 @@ import {
   SchedulingPlan,
   LineSchedule,
   CompletionProbability,
-  type ScheduleTaskTimelineEntry
+  type ScheduleTaskTimelineEntry,
+  type DailyAllocationDelay
 } from '@/api/scheduling';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -89,6 +90,11 @@ const dailyRows = computed(() => {
 function formatQty(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
   return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+}
+
+/** 推迟区间: 同一天只写一天, 否则「11-10 至 11-12」。 */
+function delayRangeText(delay: DailyAllocationDelay) {
+  return delay.from === delay.to ? `${delay.from.slice(5)} ` : `${delay.from.slice(5)} 至 ${delay.to.slice(5)} `;
 }
 
 function formatShare(share: number) {
@@ -732,6 +738,24 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
           计划量 {{ formatQty(schedule.dailyAllocations!.plannedQuantity) }}，
           已入库 {{ formatQty(schedule.dailyAllocations!.reportedQuantity) }}，
           本次排 {{ formatQty(schedule.dailyAllocations!.remainingQuantity) }} {{ schedule.dailyAllocations!.unit }}
+          <ul
+            v-if="schedule.dailyAllocations!.delays?.length"
+            class="daily-constraint-list"
+            :data-testid="`daily-delays-${schedule.id}`"
+          >
+            <li v-for="(delay, index) in schedule.dailyAllocations!.delays" :key="`delay-${schedule.id}-${index}`">
+              {{ delayRangeText(delay) }}没排：{{ delay.text }}
+            </li>
+          </ul>
+          <ul
+            v-if="schedule.dailyAllocations!.constraintNotes?.length"
+            class="daily-constraint-list daily-constraint-notes"
+            :data-testid="`daily-notes-${schedule.id}`"
+          >
+            <li v-for="(note, index) in schedule.dailyAllocations!.constraintNotes" :key="`note-${schedule.id}-${index}`">
+              未核对：{{ note }}
+            </li>
+          </ul>
         </li>
       </ul>
       <el-table :data="dailyRows" size="small" border row-key="key">
@@ -958,5 +982,15 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
   color: #606266;
   font-size: 13px;
   line-height: 1.8;
+}
+
+.daily-constraint-list {
+  margin: 2px 0 6px;
+  padding-left: 18px;
+  color: #b88230;
+}
+
+.daily-constraint-notes {
+  color: #909399;
 }
 </style>
