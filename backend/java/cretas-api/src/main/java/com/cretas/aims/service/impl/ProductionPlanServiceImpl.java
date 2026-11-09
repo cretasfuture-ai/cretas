@@ -8206,6 +8206,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setTransitLedgerId(null);
         settlement.setWarehouseReceivedBy(latestSession.getPostedBy());
         settlement.setWarehouseReceivedAt(latestSession.getPostedAt());
+        // 桥接结单本身一笔投料都没扣 (小结扣的, 也只归撤销小结还): 明确写空, 撤回时与「明细上线前的旧结单」分得开。
+        settlement.setStockFeedDetail(com.cretas.aims.service.production.SettlementStockFeedDetail.write(List.of()));
         ProductionSettlement saved = productionSettlementRepository.save(settlement);
         persistByStockSettlementOutputs(factoryId, plan, saved, finishedGoodsBatches);
         log.info("BY_STOCK 结单桥接已对齐小结入库真值: factoryId={}, planId={}, settlementId={}, sessions={}, fgBatches={}, quantity={} {}",

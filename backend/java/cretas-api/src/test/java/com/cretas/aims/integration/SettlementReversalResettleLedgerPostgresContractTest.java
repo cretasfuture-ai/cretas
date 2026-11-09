@@ -141,6 +141,7 @@ class SettlementReversalResettleLedgerPostgresContractTest {
     @Autowired SemiFinishedInventoryRepository wips;
     @Autowired FinishedGoodsBatchRepository finishedGoods;
     @Autowired ProcessSheetRowRepository rows;
+    @Autowired com.cretas.aims.repository.ProductionInterimSettlementRepository interimSessions;
 
     private TransactionTemplate tx;
 
@@ -450,5 +451,89 @@ class SettlementReversalResettleLedgerPostgresContractTest {
         assertThat(stamp(redoRowId)).as("第 2 道的戳没动").isEqualTo(secondStamp);
         assertThat(jdbc.queryForObject("select status from production_plans where id = ?", String.class, f.planId()))
                 .isEqualTo("COMPLETED");
+    }
+
+    /**
+     * 独立审查 #1550 发现 2: 存货生产 (SAFETY_STOCK) 的结单是仓库确认时从小结桥接出来的
+     * ({@code by-stock-interim:}), 结单时刻 = 最后一次小结的过账时刻, 投料是小结扣的、戳也是小结盖的。
+     * 报工撤回走得到这张结单 (计划只有一个正式批次), 此时它 ⛔ 不能按「旧结单没明细」拒绝 (话不对),
+     * 也 ⛔ 不能把小结盖的戳当成结单的戳清掉 (清掉后下一次小结会把这些投料再扣一次)。
+     * 小结扣的料只归「撤销小结」管, 报工撤回一笔不动。
+     */
+    @Test
+    void byStockBridgeSettlementReversalLeavesTheInterimSessionsDeductionsAndStampsAlone() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        LocalDateTime postedAt = LocalDateTime.now().withNano(0).minusHours(1);
+        Fixture f = tx.execute(state -> {
+            // 小结已从常驻半成品扣了 第 1 道 10 + 第 2 道 20
+            SemiFinishedInventory semi = wips.save(SemiFinishedInventory.builder()
+                    .factoryId(F).intermediateBatchNo("BS-SRC-" + suffix).productTypeId("SEMI-1").unit("kg")
+                    .producedQuantity(new BigDecimal("100")).consumedQuantity(new BigDecimal("30"))
+                    .availableQuantity(new BigDecimal("70")).processOrder(1)
+                    .status(SemiFinishedInventory.Status.AVAILABLE).build());
+
+            ProductionPlan plan = new ProductionPlan();
+            plan.setId("PLAN-BS-" + suffix);
+            plan.setFactoryId(F);
+            plan.setPlanNumber("BS-" + suffix);
+            plan.setProductTypeId("FG-1");
+            plan.setPlannedQuantity(new BigDecimal("100"));
+            plan.setPlannedUnit("kg");
+            plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
+            plan.setStatus(ProductionPlanStatus.COMPLETED);
+            plan.setCreatedBy(OPERATOR);
+            plans.save(plan);
+
+            ProductionBatch w1 = batch(plan.getId(), "BS-W-" + suffix, "CLERK_WIP");
+            ProductionBatch fin = batch(plan.getId(), "BS-B-" + suffix, "REGULAR");
+            ProcessSheetRow stepOne = row(plan.getId(), w1, 1, "bs-step1-" + suffix, false,
+                    List.of(semiFeed(semi.getIntermediateBatchNo(), "10")));
+            stepOne.setInterimSettledAt(postedAt);
+            ProcessSheetRow last = row(plan.getId(), fin, 2, "bs-step2-" + suffix, true,
+                    List.of(semiFeed(semi.getIntermediateBatchNo(), "20")));
+            last.setInterimSettledAt(postedAt);
+            Long stepOneRowId = rows.save(stepOne).getId();
+            Long lastRowId = rows.save(last).getId();
+
+            FinishedGoodsBatch out = new FinishedGoodsBatch();
+            out.setFactoryId(F);
+            out.setBatchNumber("BS-FG-" + suffix);
+            out.setProductTypeId("FG-1");
+            out.setProductionPlanId(plan.getId());
+            out.setProducedQuantity(new BigDecimal("90"));
+            out.setUnit("kg");
+            out.setWarehouseId("WH");
+            out.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+            finishedGoods.save(out);
+
+            interimSessions.save(com.cretas.aims.entity.ProductionInterimSettlement.builder()
+                    .id(UUID.randomUUID().toString()).factoryId(F).productionPlanId(plan.getId())
+                    .sessionSeq(1).postedAt(postedAt).postedBy(OPERATOR)
+                    .summary(new java.util.HashMap<>(java.util.Map.of(
+                            "finishedGoodsBatchNumbers", List.of(out.getBatchNumber()),
+                            "finishedQuantity", 90)))
+                    .build());
+            return new Fixture(plan.getId(), w1.getId(), fin.getId(), semi.getId(),
+                    semi.getIntermediateBatchNo(), out.getBatchNumber(), stepOneRowId, lastRowId);
+        });
+
+        // 真入口: 仓库确认前的桥接 (停产也走同一个方法)
+        planService.bridgeByStockSettlement(F, f.planId());
+        assertThat(jdbc.queryForObject("select idempotency_key from production_settlements where production_plan_id = ? "
+                + "and deleted_at is null", String.class, f.planId())).startsWith("by-stock-interim:");
+        assertThat(jdbc.queryForObject("select settled_at from production_settlements where production_plan_id = ? "
+                + "and deleted_at is null", LocalDateTime.class, f.planId())).as("结单时刻 = 小结过账时刻")
+                .isEqualTo(postedAt);
+        assertThat(jdbc.queryForObject("select stock_feed_detail from production_settlements where production_plan_id = ? "
+                + "and deleted_at is null", String.class, f.planId())).as("桥接结单本身一笔投料没扣").isEqualTo("[]");
+
+        reverseFinalStep(f);
+
+        assertThat(jdbc.queryForObject("select count(*) from production_settlements where production_plan_id = ? "
+                + "and deleted_at is null", Integer.class, f.planId())).as("报工撤回走到了这张桥接结单").isZero();
+        assertThat(semiConsumed(f)).as("小结扣的投料报工撤回一笔不动 (只归撤销小结管)").isEqualByComparingTo("30");
+        assertThat(jdbc.queryForObject("select available_quantity from semi_finished_inventory where id = ?",
+                BigDecimal.class, f.semiId())).isEqualByComparingTo("70");
+        assertThat(stamp(f.stepOneRowId())).as("小结盖的戳没被当成结单戳清掉").isEqualTo(postedAt);
     }
 }

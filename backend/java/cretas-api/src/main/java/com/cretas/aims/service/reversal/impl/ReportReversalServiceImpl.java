@@ -544,8 +544,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 factoryId, batchId, log_.getPlanId());
         // N1: 结单按逐道录入行扣掉的常驻半成品/成品投料, 撤回要原样还 —— 能不能还在任何改动之前判定
         //     (被撤那一道的行马上会被软删, 旧结单要靠它们才判得出「扣过但没记」)。
+        // 存货生产 (SAFETY_STOCK) 的结单是从小结桥接出来的: 投料是小结扣的、戳是小结盖的, 都只归撤销小结管。
+        boolean settlementOwnsPlanFeeds = settlementScope == null || !settlementIsInterimMirror(settlementScope.plan());
         List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> settlementStockFeeds =
-                preflightSettlementStockFeeds(factoryId, log_.getPlanId(), involvedSfiIds);
+                preflightSettlementStockFeeds(factoryId, log_.getPlanId(), involvedSfiIds, settlementOwnsPlanFeeds);
         LocalDateTime now = LocalDateTime.now();
         // 🔴 释放路径 2/3 (冲销): 先把这些报工在生产仓占的原料放回去, 再软删。
         //    ⚠️ 顺序不可反 —— findYieldReportsByBatch 带 deletedAt IS NULL, 软删之后
@@ -739,7 +741,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // ③.6 R3 修复: 回扣结单消耗的原料 usedQuantity (+ 恢复被领用的半成品), 并软删结单,
         // 让原料/半成品库存归还且允许重新结单。同一 @Transactional, 禁 fail-soft。
         boolean settlementRestored = restoreSettlementConsumption(
-                factoryId, log_.getPlanId(), batchId, logId, reversalOperatorId(log_), settlementStockFeeds, log_);
+                factoryId, log_.getPlanId(), batchId, logId, reversalOperatorId(log_), settlementStockFeeds,
+                settlementOwnsPlanFeeds, log_);
         for (Long settlementSemiWipId : settlementSemiWipIds) {
             SemiFinishedInventory restored = wipRepo.findByIdForUpdate(settlementSemiWipId)
                     .orElseThrow(() -> malformedWipTransaction(
@@ -1980,6 +1983,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private boolean restoreSettlementConsumption(String factoryId, String planId, Long reversedBatchId,
                                                  Long reversalLogId, Long operatorId,
                                                  List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> stockFeeds,
+                                                 boolean settlementOwnsPlanFeeds,
                                                  ReportReversalLog reversalLog) {
         if (materialBatchRepository == null
                 || productionSettlementRepository == null
@@ -2041,8 +2045,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
 
         // N1: 结单按逐道录入行扣掉的常驻半成品/成品投料原样还回, 再把这张结单盖过戳的行与报工消耗
         //     重新标成待扣 —— 重结时没撤的那几道才会且只会再扣一次; 被撤那一道已扣的量也在这里还回。
+        //     存货生产的桥接结单: 结单时刻就是最后一次小结的过账时刻, 按它清戳清掉的是小结的戳 ——
+        //     下一次小结会把这些投料再扣一次。小结的戳只归撤销小结清。
         int restoredFeeds = restoreSettlementStockFeeds(factoryId, stockFeeds, reversalLogId, operatorId, reversalLog);
-        int unstamped = unstampSettledFacts(factoryId, planId, reversedBatchId, settlement.getSettledAt(), now);
+        int unstamped = settlementOwnsPlanFeeds
+                ? unstampSettledFacts(factoryId, planId, reversedBatchId, settlement.getSettledAt(), now)
+                : 0;
 
         // 全部恢复成功后才软删消耗行 (防重新结单时重复回扣 / 重复统计)
         for (ProductionSettlementConsumption line : lines) {
@@ -2075,7 +2083,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * 必须在任何改动 (软删报工 / 软删逐道行) 之前调用: 旧结单的判定要看被撤那一道还没软删的行。
      */
     private List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> preflightSettlementStockFeeds(
-            String factoryId, String planId, Set<Long> reportSfiIds) {
+            String factoryId, String planId, Set<Long> reportSfiIds, boolean settlementOwnsPlanFeeds) {
         if (planId == null || productionSettlementRepository == null) {
             return null;
         }
@@ -2087,6 +2095,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> entries =
                 com.cretas.aims.service.production.SettlementStockFeedDetail.parse(settlement.getStockFeedDetail());
         if (entries == null) {
+            if (!settlementOwnsPlanFeeds) {
+                return List.of();   // 存货生产: 结单从来不扣逐道投料 (小结扣), 没有「扣过但没记」
+            }
             List<String> unrecorded = legacySettlementStockFeeds(factoryId, planId, settlement);
             if (!unrecorded.isEmpty()) {
                 throw new BusinessException(409, "这张结单在投料明细上线前完成, 结单时按逐道录入扣掉的半成品/成品没有逐笔记录 ("
@@ -2411,6 +2422,16 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     private record SettlementReversalScope(ProductionBatch batch, ProductionPlan plan) {}
+
+    /**
+     * 这张结单是不是小结的镜像: 存货生产 (SAFETY_STOCK) 计划结单不扣逐道投料、不给行和报工消耗盖戳
+     * (都由小结做, 见 {@code ProductionPlanServiceImpl#deductProcessSheetStockFeeds} 与结单打戳的
+     * sourceType 守卫), 仓库确认时的桥接结单 ({@code by-stock-interim:}) 只是把小结的结果抄一份。
+     * 以计划来源判定而不以幂等键前缀判定: 同一计划上无论哪条路写出的结单, 结单本身都没扣过这些料。
+     */
+    private static boolean settlementIsInterimMirror(ProductionPlan plan) {
+        return plan != null && plan.getSourceType() == com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK;
+    }
 
     private Set<Long> preflightSettlementSemiFinished(String factoryId, String planId,
                                                        Set<Long> reportSfiIds) {

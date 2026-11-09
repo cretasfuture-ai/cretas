@@ -245,6 +245,25 @@ class SettlementStockFeedReversalContractTest {
     }
 
     @Test
+    void byStockPlanSettlementNeitherRefusesAsLegacyNorClearsTheInterimStamps() {
+        // 存货生产: 结单 = 小结镜像, 结单时刻 = 小结过账时刻; 行上的戳和投料都是小结的
+        plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
+        settlement.setStockFeedDetail(null);
+        ProcessSheetRow interimRow = stampedRow(11L, ref("SRC", "30", true, false));
+        lenient().when(rowRepo.findByFactoryIdAndPlanId(F, PLAN)).thenReturn(List.of(interimRow));
+        lenient().when(rowRepo.findByFactoryIdAndPlanIdAndInterimSettledAt(F, PLAN, SETTLED_AT))
+                .thenReturn(List.of(interimRow));
+
+        reversal.executeReversal(LOG, F);
+
+        assertThat(interimRow.getInterimSettledAt()).as("小结的戳只归撤销小结清").isEqualTo(SETTLED_AT);
+        verify(rowRepo, never()).findByFactoryIdAndPlanIdAndInterimSettledAt(any(), any(), any());
+        verify(consumptionRepo, never()).findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(any(), anyList(), any());
+        verify(wipService, never()).restoreClerkSemiExact(any(), any(), any(), any(), any());
+        assertThat(settlement.getDeletedAt()).as("撤回照常走完").isNotNull();
+    }
+
+    @Test
     void legacySettlementWhoseRowsOnlyHadSubmitTimeOrManualFeedsStillReverses() {
         settlement.setStockFeedDetail(null);
         ProcessSheetRowRequest.UpstreamRef atSubmit = ref("REWORK", "5", true, false);
