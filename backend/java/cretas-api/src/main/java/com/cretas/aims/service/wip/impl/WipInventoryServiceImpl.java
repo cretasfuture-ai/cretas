@@ -142,9 +142,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     @Lazy
     private com.cretas.aims.service.foodsafety.ccp.CcpMonitoringService ccpMonitoringService;
 
-    @jakarta.persistence.PersistenceContext
-    private jakarta.persistence.EntityManager entityManager;
-
     /** 返工计划来源半成品的占用 (D-S315-01)。⚠️ @Lazy: 它反过来用本类还占用。 */
     @Autowired(required = false)
     @org.springframework.context.annotation.Lazy
@@ -2316,9 +2313,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "扣减数量必须大于 0");
         }
-        // 悲观写锁防并发超扣
-        SemiFinishedInventory wip = refreshedAfterLock(wipRepo.findByIdForUpdate(wipId)
-                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId)));
+        // 悲观写锁防并发超扣 (锁到之后从库里重读, 见 SemiFinishedInventoryLockingRepository)
+        SemiFinishedInventory wip = wipRepo.findByIdForUpdate(wipId)
+                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId));
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
@@ -2361,17 +2358,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
     }
 
     /**
-     * 拿到行锁后强制读库。同一事务里先前读过这一行时, 锁查询返回的是持久化上下文里的旧值,
-     * 表又没有 @Version, 改完写回会覆盖别人已提交的余额。锁查询本身会先 flush, 这里不会丢本事务的改动。
-     */
-    private SemiFinishedInventory refreshedAfterLock(SemiFinishedInventory locked) {
-        if (entityManager != null) {
-            entityManager.refresh(locked);
-        }
-        return locked;
-    }
-
-    /**
      * 修1 (🔴) 二次加工反冲 — {@link #deductForSecondaryPlan} 的逆: 还回开工扣的半成品余量。
      *
      * <p>调用方必须持有 @Transactional。findByIdForUpdate 悲观写锁防并发 (与 deduct 对称)。
@@ -2381,9 +2367,9 @@ public class WipInventoryServiceImpl implements WipInventoryService {
         if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "反冲数量必须大于 0");
         }
-        // 悲观写锁 (与 deductForSecondaryPlan 对称)
-        SemiFinishedInventory wip = refreshedAfterLock(wipRepo.findByIdForUpdate(wipId)
-                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId)));
+        // 悲观写锁 (与 deductForSecondaryPlan 对称; 锁到之后从库里重读)
+        SemiFinishedInventory wip = wipRepo.findByIdForUpdate(wipId)
+                .orElseThrow(() -> new BusinessException(404, "半成品库存行不存在: id=" + wipId));
         if (!factoryId.equals(wip.getFactoryId())) {
             throw new BusinessException(403, "工厂 ID 不匹配，无权操作该 WIP");
         }
