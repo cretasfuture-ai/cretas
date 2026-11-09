@@ -67,8 +67,15 @@ import java.util.Objects;
  * </ul>
  *
  * <p>销售退货使用独立 RTN 批号，不随原生产批次放行；同计划其他 SKU 不释放, 质检放行时单独判了不合格的
- * 成品批也不释放 —— 这几类留在隔离里, 数量写进 {@link InventoryDispositionResult#getFinishedGoodsHeld()}
- * 如实告诉操作人。
+ * 成品批也不释放, 工序时限超时复检判不合格的成品批 (Q7) 也不释放 —— 这几类留在隔离里, 数量写进
+ * {@link InventoryDispositionResult#getFinishedGoodsHeld()} 如实告诉操作人。
+ *
+ * <p>把成品写成 DEFECTIVE 的全部入口 (2026-11-09 数清 7 处) 与放行的关系:
+ * 质检判 FAILED / 处置判返工报废的计划隔离 ({@code FinishedGoodsQuarantine})、先判不合格后入库
+ * ({@code QcInspectionPolicy.finishedGoodsStatusForOutput}、小结 {@code InterimSettleServiceImpl}) —— 这三处是
+ * 计划级质检隔离, 正是放行要解除的; 销售退货子批 ({@code ReturnOrderServiceImpl}, RTN) / 质检放行判不合格
+ * ({@code QcReleaseService}) / 工序时限判废 ({@code ProcessTimeLimitService.writeOff}) —— 这三处是对某一批货
+ * 本身的结论, 放行一律不解除。召回冻结 ({@code FactoryRecallService.create}) 见下面的召回判断。
  *
  * @since 2026-07-05 (feat/quality-disposition-inventory-bridge)
  */
@@ -142,6 +149,13 @@ public class QualityDispositionInventoryService {
     /** 放行时认出「质检放行单独判了不合格」的成品批: 那是对这批货本身的结论, 处置批次不能把它洗掉。 */
     @Autowired
     private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
+    /**
+     * 认出「工序时限超时、复检判不合格」写成 DEFECTIVE 的成品 (缺口 14 {@code ProcessTimeLimitService.writeOff})。
+     * 那是对这批货本身的判废, 与计划级质检隔离无关, 计划放行不能把它放回可售 (Q7, 2026-11-09)。
+     */
+    @Autowired
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
 
     /** 需检产品解除隔离后回待检, 走质检放行, 不直接可售。未注入 (单测) ⇒ 不叠加这一层。 */
     @Autowired(required = false)
@@ -307,7 +321,7 @@ public class QualityDispositionInventoryService {
                 continue;
             }
             if (siblingUncleared || !Objects.equals(pb.getProductTypeId(), fg.getProductTypeId())
-                    || rejectedAtQcRelease(factoryId, fg)) {
+                    || rejectedAtQcRelease(factoryId, fg) || rejectedByTimeLimit(factoryId, fg)) {
                 held++;
                 continue;
             }
@@ -328,6 +342,19 @@ public class QualityDispositionInventoryService {
                 com.cretas.aims.entity.quality.QcReleaseRecord.TargetType.FINISHED_GOODS, fg.getId());
         return !records.isEmpty() && com.cretas.aims.entity.quality.QcReleaseRecord.Decision.REJECTED
                 .equals(records.get(0).getDecision());
+    }
+
+    /**
+     * 工序时限超时、复检判不合格 (事件 REJECTED) 的成品批。判废是对这批货本身的结论, 只要有一条就不放。
+     * ⛔ 仓储没注入时不能当「没有判废」放过去 —— 那正是 Q7 的形状 (放行看不见判废来源)。
+     */
+    private boolean rejectedByTimeLimit(String factoryId, FinishedGoodsBatch fg) {
+        if (processTimeLimitEventRepository == null) {
+            throw new IllegalStateException("工序时限处置记录仓储未注入，无法判断成品是否已因超时判废");
+        }
+        return !processTimeLimitEventRepository.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(factoryId,
+                com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService.TargetType.FINISHED_GOODS,
+                fg.getId(), com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent.Status.REJECTED).isEmpty();
     }
 
     /** 需检产品 / 有未处理偏离: 回待检让质检放行 (缺口 11/13), 处置不替代那一步。 */

@@ -14,7 +14,10 @@ import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
 import com.cretas.aims.entity.enums.QualityStatus;
+import com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository;
+import com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService;
 import com.cretas.aims.entity.quality.QcReleaseRecord;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.DecisionAuditLogRepository;
@@ -88,10 +91,13 @@ class QualityBatchDispositionContractTest {
     private final List<FinishedGoodsBatch> finishedGoods = new ArrayList<>();
     private final Map<String, QualityInspection> inspections = new LinkedHashMap<>();
     private final Map<String, DecisionAuditLog> audits = new LinkedHashMap<>();
+    private final List<ProcessTimeLimitEvent> timeLimitRows = new ArrayList<>();
     private LocalDateTime clock = LocalDateTime.of(2026, 11, 4, 9, 0);
     private int auditSeq;
 
     private QualityInspectionRepository inspectionRepo;
+    private FinishedGoodsBatchRepository goodsRepo;
+    private ProcessTimeLimitEventRepository timeLimitEvents;
     private QcReleaseRecordRepository releaseRecords;
     private ProductTypeRepository productTypes;
     private QualityInspectionServiceImpl inspectionService;
@@ -112,7 +118,7 @@ class QualityBatchDispositionContractTest {
         when(batchRepo.countQcFailedInPlans(eq(FACTORY), any(), anyString())).thenAnswer(call -> batches.stream()
                 .filter(b -> b.getQualityStatus() != null && b.getQualityStatus().isDispositionLocked()).count());
 
-        FinishedGoodsBatchRepository goodsRepo = mock(FinishedGoodsBatchRepository.class);
+        goodsRepo = mock(FinishedGoodsBatchRepository.class);
         when(goodsRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN))
                 .thenAnswer(call -> List.copyOf(finishedGoods));
         when(goodsRepo.save(any())).thenAnswer(call -> call.getArgument(0));
@@ -206,6 +212,15 @@ class QualityBatchDispositionContractTest {
         ReflectionTestUtils.setField(bridge, "factoryRecallService", mock(FactoryRecallService.class));
         ReflectionTestUtils.setField(bridge, "qcReleaseRecordRepository", releaseRecords);
         ReflectionTestUtils.setField(bridge, "qcInspectionPolicy", policy);
+        timeLimitEvents = mock(ProcessTimeLimitEventRepository.class);
+        when(timeLimitEvents.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(anyString(), anyString(), anyString(),
+                anyString())).thenAnswer(call -> timeLimitRows.stream()
+                .filter(e -> e.getFactoryId().equals(call.getArgument(0))
+                        && e.getTargetType().equals(call.getArgument(1))
+                        && e.getTargetId().equals(call.getArgument(2))
+                        && e.getStatus().equals(call.getArgument(3)))
+                .toList());
+        ReflectionTestUtils.setField(bridge, "processTimeLimitEventRepository", timeLimitEvents);
 
         ruleService = new QualityDispositionRuleServiceImpl(approvalChain, auditService, users, guard);
         ReflectionTestUtils.setField(ruleService, "dispositionInventoryService", bridge);
@@ -434,6 +449,63 @@ class QualityBatchDispositionContractTest {
         assertThat(otherSku.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
         assertThat(rejected.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
         assertThat(result.getMessage()).contains("2 个成品批次仍在隔离中");
+    }
+
+    @Test
+    @DisplayName("Q7: 工序时限超时判废的成品 (真 ProcessTimeLimitService.decide 写下的 DEFECTIVE), 计划复核放行后仍留在隔离")
+    void timeLimitRejectedGoodsStayQuarantinedAfterPlanRelease() {
+        FinishedGoodsBatch expired = finishedGoods("FG-PLAN-1793087414891-94ECD656-S2-d2e185aa", "SKU-1",
+                FinishedGoodsBatch.Status.AVAILABLE);
+        inspect("qi-fail", "FAIL", "80");
+        assertThat(expired.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+
+        // 真写入方: 超时事件判不合格, 由 ProcessTimeLimitService.writeOff 把这批成品写成 DEFECTIVE 并留下 REJECTED 事件
+        ProcessTimeLimitEvent open = new ProcessTimeLimitEvent();
+        open.setId(1L);
+        open.setFactoryId(FACTORY);
+        open.setTargetType(ProcessTimeLimitService.TargetType.FINISHED_GOODS);
+        open.setTargetId(expired.getId());
+        open.setBatchNumber(expired.getBatchNumber());
+        open.setStatus(ProcessTimeLimitEvent.Status.OPEN);
+        when(timeLimitEvents.findByIdAndFactoryIdForUpdate(1L, FACTORY)).thenReturn(Optional.of(open));
+        when(timeLimitEvents.save(any())).thenAnswer(call -> {
+            ProcessTimeLimitEvent row = call.getArgument(0);
+            timeLimitRows.removeIf(e -> e.getId().equals(row.getId()));
+            timeLimitRows.add(row);
+            return row;
+        });
+        when(goodsRepo.findByIdAndFactoryIdForUpdate(anyString(), eq(FACTORY))).thenAnswer(call -> finishedGoods.stream()
+                .filter(g -> g.getId().equals(call.getArgument(0))).findFirst());
+        timeLimitService().decide(FACTORY, 1L,
+                new ProcessTimeLimitService.DecisionCommand("REJECTED", "解冻超时，复检判不合格"), MANAGER, "质量经理");
+        assertThat(timeLimitRows).extracting(ProcessTimeLimitEvent::getStatus)
+                .containsExactly(ProcessTimeLimitEvent.Status.REJECTED);
+
+        var result = ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(expired.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(result.getMessage()).contains("1 个成品批次仍在隔离中");
+    }
+
+    private ProcessTimeLimitService timeLimitService() {
+        return new ProcessTimeLimitService(mock(com.cretas.aims.repository.workflow.WorkflowTaskPortRepository.class),
+                mock(com.cretas.aims.repository.workprocess.WorkProcessTaskRepository.class),
+                mock(com.cretas.aims.repository.WorkProcessRepository.class), mock(ProductionBatchRepository.class),
+                mock(com.cretas.aims.repository.ProductionPlanRepository.class),
+                mock(com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository.class),
+                mock(com.cretas.aims.repository.ProductionReportRepository.class),
+                mock(com.cretas.aims.repository.SemiFinishedInventoryRepository.class),
+                mock(com.cretas.aims.repository.SemiFinishedInventoryTransactionRepository.class),
+                mock(MaterialBatchRepository.class), goodsRepo,
+                mock(com.cretas.aims.repository.lineage.BatchLineageEdgeRepository.class),
+                mock(com.cretas.aims.repository.foodsafety.ProcessTimeMarkRepository.class), timeLimitEvents,
+                mock(com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitEventWriter.class),
+                mock(com.cretas.aims.service.quality.release.QcReleaseService.class),
+                mock(com.cretas.aims.service.factory.WarehouseResolver.class),
+                mock(com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository.class),
+                new ObjectMapper());
     }
 
     @Test

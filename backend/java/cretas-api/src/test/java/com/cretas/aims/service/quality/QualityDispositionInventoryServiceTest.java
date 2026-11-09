@@ -54,6 +54,8 @@ class QualityDispositionInventoryServiceTest {
     private FactoryRecallService factoryRecallService;
     @Mock
     private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+    @Mock
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
 
     private QualityInspection inspection;
 

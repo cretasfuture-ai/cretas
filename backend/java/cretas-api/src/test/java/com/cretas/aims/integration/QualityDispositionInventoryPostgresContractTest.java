@@ -6,7 +6,10 @@ import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.QualityStatus;
+import com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
+import com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository;
+import com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService;
 import com.cretas.aims.entity.quality.QcReleaseRecord;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -97,6 +100,7 @@ class QualityDispositionInventoryPostgresContractTest {
     @Autowired QcReleaseRecordRepository releaseRecords;
     @Autowired ProductTypeRepository productTypes;
     @Autowired QualityInspectionRepository inspections;
+    @Autowired ProcessTimeLimitEventRepository timeLimitEvents;
 
     private TransactionTemplate tx;
 
@@ -192,6 +196,47 @@ class QualityDispositionInventoryPostgresContractTest {
         assertDbFinishedGoods(rejectedFg, FinishedGoodsBatch.Status.DEFECTIVE);
         assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
         assertInspectionRetained(f.inspectionId());
+    }
+
+    /** Q7 (2026-11-09): 工序时限复检判不合格写下的 DEFECTIVE 成品, 计划放行时读回 REJECTED 事件留在隔离。 */
+    @Test
+    void timeLimitRejectedFinishedGoodsStayDefective() {
+        Fixture f = fixture(false);
+        String expiredFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-EXPIRED-" + suffix(),
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        saveTimeLimitEvent(f.factoryId(), expiredFg, ProcessTimeLimitEvent.Status.REJECTED);
+        // 阴性对照: 复检放行 (RELEASED) 的事件不是判废, 不挡放行
+        String recheckedFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-RECHECKED-" + suffix(),
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        saveTimeLimitEvent(f.factoryId(), recheckedFg, ProcessTimeLimitEvent.Status.RELEASED);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isEqualTo(2);
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
+        assertDbFinishedGoods(recheckedFg, FinishedGoodsBatch.Status.AVAILABLE);
+        assertDbFinishedGoods(expiredFg, FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    private void saveTimeLimitEvent(String factoryId, String finishedGoodsId, String status) {
+        tx.executeWithoutResult(state -> {
+            LocalDateTime start = LocalDateTime.of(2026, 11, 9, 8, 0);
+            timeLimitEvents.saveAndFlush(ProcessTimeLimitEvent.builder()
+                    .factoryId(factoryId)
+                    .targetType(ProcessTimeLimitService.TargetType.FINISHED_GOODS)
+                    .targetId(finishedGoodsId)
+                    .limitMinutes(30)
+                    .startEvent("OUTPUT_POSTED")
+                    .mixRule("EARLIEST")
+                    .startAt(start)
+                    .deadlineAt(start.plusMinutes(30))
+                    .blockedAt(start.plusMinutes(45))
+                    .coveredUntil(start.plusMinutes(45))
+                    .status(status)
+                    .conclusion("复检结论")
+                    .build());
+        });
     }
 
     @Test
