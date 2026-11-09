@@ -509,6 +509,19 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
                               @Param("planIds") java.util.Collection<String> planIds,
                               @Param("planIdPrefixPattern") String planIdPrefixPattern);
 
+    /**
+     * 同上的计划范围里, 判了报废 (SCRAPPED) 的生产批次 (Owner 2026-11-09: 报废批次不挡同计划其它批次的放行,
+     * 只有它自己的货留下)。质检放行用它把「不合格未解除」里的报废批次挑出来, 再按归属判这次要放的货是不是报废批的。
+     */
+    @Query("SELECT b.id AS id, b.batchNumber AS batchNumber FROM ProductionBatch b "
+           + "WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL "
+           + "AND b.qualityStatus = com.cretas.aims.entity.enums.QualityStatus.SCRAPPED "
+           + "AND (b.productionPlanId IN :planIds OR b.productionPlanId LIKE :planIdPrefixPattern ESCAPE '\\') "
+           + "ORDER BY b.id")
+    java.util.List<ScrappedBatchRef> findScrappedInPlans(@Param("factoryId") String factoryId,
+                                                        @Param("planIds") java.util.Collection<String> planIds,
+                                                        @Param("planIdPrefixPattern") String planIdPrefixPattern);
+
     /** 一次取出这些生产批次的计划 id (质检放行反查计划, 第三轮审查 L-6: 不逐个 findById)。 */
     @Query("SELECT DISTINCT b.productionPlanId FROM ProductionBatch b WHERE b.factoryId = :factoryId "
            + "AND b.id IN :ids AND b.productionPlanId IS NOT NULL")
@@ -669,4 +682,11 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             @Param("factoryId") String factoryId,
             @Param("since") java.time.LocalDateTime since,
             @Param("productTypeId") String productTypeId);
+
+    /** 报废批次的最小投影 (只要 id 和批号; 不取整实体, 免得把 jsonb 等无关列读回来)。 */
+    interface ScrappedBatchRef {
+        Long getId();
+
+        String getBatchNumber();
+    }
 }

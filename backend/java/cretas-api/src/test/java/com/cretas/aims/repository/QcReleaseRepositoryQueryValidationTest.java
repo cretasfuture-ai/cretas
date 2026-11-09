@@ -241,6 +241,25 @@ class QcReleaseRepositoryQueryValidationTest {
     }
 
     @Test
+    @DisplayName("Owner 2026-11-09: 计划范围里的报废批次 —— 只取 SCRAPPED, 按计划 id 或前缀, 工厂隔离")
+    void scrappedInPlans() {
+        productionBatch(F, "PLANSSSS-0001", com.cretas.aims.entity.enums.QualityStatus.SCRAPPED);
+        productionBatch(F, "PLANSSSS-0001", com.cretas.aims.entity.enums.QualityStatus.FAILED);
+        productionBatch(F, "PLANSSSS-0002", com.cretas.aims.entity.enums.QualityStatus.PASSED);
+        productionBatch("OTHER-QRS", "PLANSSSS-0001", com.cretas.aims.entity.enums.QualityStatus.SCRAPPED);
+        em.clear();
+
+        var scrapped = productionBatchRepo.findScrappedInPlans(F, List.of("PLANSSSS-0001"), "#NO-PREFIX#");
+        assertThat(scrapped).hasSize(1);
+        assertThat(scrapped.get(0).getId()).isNotNull();
+        assertThat(scrapped.get(0).getBatchNumber()).startsWith("QCF-");
+        assertThat(productionBatchRepo.findScrappedInPlans(F, List.of("#NO-PLAN#"), "PLANSSSS%")).hasSize(1);
+        assertThat(productionBatchRepo.findScrappedInPlans(F, List.of("PLANSSSS-0002"), "#NO-PREFIX#")).isEmpty();
+        // 与计数同一范围: 计数含报废和 FAILED (2), 报废清单只有 1 —— 质检放行据此分出「非报废的不合格」
+        assertThat(productionBatchRepo.countQcFailedInPlans(F, List.of("PLANSSSS-0001"), "#NO-PREFIX#")).isEqualTo(2L);
+    }
+
+    @Test
     @DisplayName("第三轮审查 L-6: 一次 IN 查询取出这些批次的计划 id (去重, 跳过无计划, 工厂隔离)")
     void planIdsByBatchIds() {
         productionBatch(F, "PLAN-L6-A", null);
