@@ -95,6 +95,14 @@ public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
                 }
                 allocations.add(allocation);
             }
+            // #1548 review finding 4: 换算确认只能由人在 web「分配批次」界面做; 模型给出的确认标记一律拒绝,
+            // 否则留痕会以登录用户的名义记下一次其实是 AI 做的确认。
+            if (allocations.stream().anyMatch(a -> Boolean.TRUE.equals(a.getPackagingConversionConfirmed()))) {
+                throw new com.cretas.aims.exception.BusinessException(409,
+                        "包装规格换算须由操作人在分配批次界面确认，AI 不能代为确认")
+                        .withCode("PACKAGING_CONFIRMATION_HUMAN_ONLY")
+                        .withHint("请到发货单的「分配批次」里核对规格并勾选确认换算");
+            }
             // Q10: 有登录身份就带上 (换算确认要记「谁」); 没有身份走不带身份的入口, 它拒绝任何换算确认
             Long actorUserId = getUserId(context);
             if (actorUserId != null) {
