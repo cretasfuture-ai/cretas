@@ -132,18 +132,33 @@ public class PlanCostVarianceService {
                 .allocationMethods(allocationMethods(factoryId, plan.getId()));
 
         List<PlanStandardCostLine> lines = lineRepository.findByFactoryIdAndPlanIdOrderByIdAsc(factoryId, plan.getId());
+        List<ProductionBatch> batches = batchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId())
+                .stream().filter(b -> b.getStatus() != ProductionBatchStatus.CANCELLED).toList();
+        ReworkSide rework = reworkUsage(factoryId, plan.getId(), batches);
         if (lines.isEmpty()) {
+            // 没有快照: 差异算不出, 但回投了多少、按什么价、从哪来照样列出 (回料行一律无法比较 / 内部转移)
+            List<PlanCostVarianceDTO.Line> reworkLines = PlanCostVarianceCalculator.reworkLines(rework.usages(),
+                    "这张计划没有标准成本快照, 标准回料定不下来, 回料差无法比较");
+            if (maskPrice) {
+                reworkLines.forEach(PlanCostVarianceService::mask);
+            }
+            attachSourcesNotes(reworkLines, rework.sourcesNotes());
+            String status = rework.usages().isEmpty() ? PlanCostVarianceDTO.REWORK_NONE
+                    : rework.usages().stream().allMatch(PlanCostVarianceCalculator.ReworkUsage::internal)
+                            ? PlanCostVarianceDTO.REWORK_INTERNAL_ONLY : PlanCostVarianceDTO.REWORK_INCOMPARABLE;
             return dto.comparable(false)
                     .comparabilityReason("这张计划没有标准成本快照 (开于快照功能上线前, 或没有锁定配方), 无法比较")
-                    .recoveredMaterialNote("没有标准成本快照, 回料差也无法比较")
+                    .reworkStatus(status)
+                    .reworkQuantityText(reworkQuantityText(rework.usages()))
+                    .reworkOutputQuantityText(reworkOutputQuantityText(rework.usages()))
+                    .recoveredMaterialNote(noSnapshotReworkNote(rework.usages(), status))
+                    .customerSuppliedItemCount(rework.customerSupplied())
+                    .lines(reworkLines)
                     .build();
         }
         dto.snapshotCapturedAt(lines.getFirst().getCapturedAt());
 
-        List<ProductionBatch> batches = batchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId())
-                .stream().filter(b -> b.getStatus() != ProductionBatchStatus.CANCELLED).toList();
         ActualSide actual = actualUsage(factoryId, plan.getId(), batches);
-        ReworkSide rework = reworkUsage(factoryId, plan.getId(), batches);
         String reworkStandardUnknown = reworkStandardUnknownReason(factoryId, plan);
         if (rework.usages().isEmpty() && !RECIPE_DECLARES_REWORK_REASON.equals(reworkStandardUnknown)) {
             reworkStandardUnknown = null; // 没回投、配方也没要求回料: 没有回料这一项, 读不到配方的原因不适用
@@ -172,6 +187,7 @@ public class PlanCostVarianceService {
                 PlanBomItems.isMultiOutput(plan), this::convert, rework.usages(), reworkStandardUnknown));
 
         List<PlanCostVarianceDTO.Line> outLines = result.lines();
+        attachSourcesNotes(outLines, rework.sourcesNotes());
         if (maskPrice) {
             outLines.forEach(PlanCostVarianceService::mask);
         }
@@ -193,6 +209,7 @@ public class PlanCostVarianceService {
                 .reworkVariance(result.comparable() ? result.reworkVariance() : null)
                 .reworkStatus(result.reworkStatus())
                 .reworkQuantityText(reworkQuantityText(rework.usages()))
+                .reworkOutputQuantityText(reworkOutputQuantityText(rework.usages()))
                 .recoveredMaterialNote(reworkNote(result, rework.usages()))
                 .comparableItemCount(result.comparableCount())
                 .incomparableItemCount(result.incomparableCount())
@@ -201,7 +218,7 @@ public class PlanCostVarianceService {
                 .build();
     }
 
-    /** 回料口径说明: 回投了多少、按什么价、怎么计入 (给人看的话, 报表与导出同一句)。 */
+    /** 回料口径说明: 回投了多少、转出了多少、按什么价、怎么计入 (给人看的话, 报表与导出同一句)。 */
     static String reworkNote(PlanCostVarianceCalculator.Result result, List<PlanCostVarianceCalculator.ReworkUsage> usages) {
         String status = result.reworkStatus();
         if (PlanCostVarianceDTO.REWORK_NONE.equals(status)) {
@@ -210,37 +227,61 @@ public class PlanCostVarianceService {
         if (usages == null || usages.isEmpty()) {
             return "本计划没有回投回料, 但标准回料定不下来, 回料差无法比较 (见回料行原因)";
         }
+        String what = reworkWhatText(usages);
         if (PlanCostVarianceDTO.REWORK_INTERNAL_ONLY.equals(status)) {
-            return "回投 " + reworkQuantityText(usages) + " 回料, 都是本计划自己产出的: 原料已计入本计划领用, 内部转移不另计";
+            return what + ", 都是本计划自产自用: 原料已计入本计划领用, 内部转移不另计";
         }
-        StringBuilder note = new StringBuilder("回投 ").append(reworkQuantityText(usages))
-                .append(" 回料, 按").append(PlanCostVarianceCalculator.REWORK_PRICE_SOURCE).append("计价");
+        StringBuilder note = new StringBuilder(what)
+                .append(", 按").append(PlanCostVarianceCalculator.REWORK_PRICE_SOURCE).append("计价");
         if (PlanCostVarianceDTO.REWORK_INCOMPARABLE.equals(status)) {
-            note.append("; 有回料无法比较, 未计入合计 (见回料行原因)");
+            note.append("; 回料差无法比较, 未计入合计 (见回料行原因)");
             if (result.reworkVariance() != null) {
                 note.append("; 可比部分回料差 ").append(signed(result.reworkVariance())).append(" 已计入合计");
             }
             return note.toString();
         }
-        note.append("; 配方不含回料, 标准回料用量为 0, 回料差 ").append(signed(result.reworkVariance()))
-                .append(" 已计入合计 (回料顶替的原料体现为主料用量差的节约)");
-        boolean rawIncomparable = result.lines().stream()
-                .anyMatch(l -> PlanStandardCostLine.TYPE_MATERIAL.equals(l.getLineType())
-                        && "RAW".equalsIgnoreCase(l.getMaterialCategory())
-                        && l.getUsageVariance() == null);
-        if (rawIncomparable) {
-            note.append("; 注意: 主料用量差无法比较, 回料顶替原料的那部分节约看不到, 回料差单看会偏高");
+        return note.append("; 配方不含回料, 标准回料用量为 0, 回料差 ").append(signed(result.reworkVariance()))
+                .append(" 已计入合计 (回投为正, 产出转出为负)").toString();
+    }
+
+    /** 没有标准成本快照时的回料说明。 */
+    static String noSnapshotReworkNote(List<PlanCostVarianceCalculator.ReworkUsage> usages, String status) {
+        if (usages == null || usages.isEmpty()) {
+            return REWORK_NONE_NOTE;
         }
-        return note.toString();
+        String what = reworkWhatText(usages);
+        if (PlanCostVarianceDTO.REWORK_INTERNAL_ONLY.equals(status)) {
+            return what + ", 都是本计划自产自用: 内部转移不另计";
+        }
+        return what + ", 按" + PlanCostVarianceCalculator.REWORK_PRICE_SOURCE + "计价; 这张计划没有标准成本快照, 回料差无法比较";
+    }
+
+    /** 「回投 2.5 kg 回料 / 产出回料转出 3 kg」。 */
+    private static String reworkWhatText(List<PlanCostVarianceCalculator.ReworkUsage> usages) {
+        List<String> parts = new ArrayList<>();
+        String in = reworkQuantityText(usages);
+        String out = reworkOutputQuantityText(usages);
+        if (in != null) parts.add("回投 " + in + " 回料");
+        if (out != null) parts.add("产出回料转出 " + out);
+        return String.join(", ", parts);
     }
 
     private static String signed(BigDecimal v) {
         return (v.signum() > 0 ? "+¥" : v.signum() < 0 ? "−¥" : "¥") + v.abs().setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 
-    /** 回投量按单位分列 (同一单位相加; 有折算不了的写明, ⛔ 不当 0 加)。 */
+    /** 回投量 (只算回投, 不含产出转出) 按单位分列; 有折算不了的写明, ⛔ 不当 0 加。 */
     static String reworkQuantityText(List<PlanCostVarianceCalculator.ReworkUsage> usages) {
-        if (usages == null || usages.isEmpty()) {
+        return quantityText(usages == null ? List.of() : usages.stream().filter(u -> !u.output()).toList());
+    }
+
+    /** 产出转出量按单位分列。 */
+    static String reworkOutputQuantityText(List<PlanCostVarianceCalculator.ReworkUsage> usages) {
+        return quantityText(usages == null ? List.of() : usages.stream().filter(PlanCostVarianceCalculator.ReworkUsage::output).toList());
+    }
+
+    private static String quantityText(List<PlanCostVarianceCalculator.ReworkUsage> usages) {
+        if (usages.isEmpty()) {
             return null;
         }
         Map<String, BigDecimal> byUnit = new LinkedHashMap<>();
@@ -261,13 +302,22 @@ public class PlanCostVarianceService {
         return String.join(" + ", parts);
     }
 
-    record ReworkSide(List<PlanCostVarianceCalculator.ReworkUsage> usages, int customerSupplied) {
+    /**
+     * @param sourcesNotes 回料池号 → 来源合计与回投量对不上时的说明 (撤回重报留下的旧追溯边); 只做展示提示
+     */
+    record ReworkSide(List<PlanCostVarianceCalculator.ReworkUsage> usages, int customerSupplied,
+                      Map<String, String> sourcesNotes) {
+        ReworkSide(List<PlanCostVarianceCalculator.ReworkUsage> usages, int customerSupplied) {
+            this(usages, customerSupplied, Map.of());
+        }
     }
 
     private static final class MutableRework {
         final String poolNo;
         final SemiFinishedInventory pool;
         BigDecimal quantity = BigDecimal.ZERO;
+        BigDecimal feedKg = BigDecimal.ZERO;
+        final Set<Long> feedingBatchIds = new HashSet<>();
         final List<String> reasons = new ArrayList<>();
 
         MutableRework(String poolNo, SemiFinishedInventory pool) {
@@ -276,58 +326,98 @@ public class PlanCostVarianceService {
         }
     }
 
+    private SemiFinishedInventory reworkPool(String factoryId, String poolNo) {
+        SemiFinishedInventory pool = sfiRepository
+                .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, poolNo).orElse(null);
+        return pool != null && Boolean.TRUE.equals(pool.getIsRework()) ? pool : null;
+    }
+
     /**
-     * 本计划各批次报工行里回投的回料, 按回料池汇总。
+     * 本计划的回料: 回投 (消耗方) + 产出转出 (产出方), 按回料池汇总。
      *
-     * <p>只看 {@code semiFinished=true} 且来源是回料池 ({@code is_rework}) 的投料; 普通半成品与成品投料不在本项。
-     * 折算/单价与成本核算同源 (见类注释)。客供回料不计我方成本 (与领用口径一致)。</p>
+     * <p>回投: 本计划<b>全部</b>未删、非草稿报工行 (含中间道 CLERK_WIP 批次的行与纯库存 SAVED_SFI 行) 的
+     * {@code upstreamSources} 里 {@code semiFinished=true} 且来源是回料池 ({@code is_rework}) 的投料;
+     * 普通半成品与成品投料不在本项。折算/单价与成本核算同源 (见类注释)。客供回料不计我方成本。</p>
+     *
+     * <p>产出转出: 本计划自己的回料池入账行 (SAVED_SFI) 的产出量, 减去本计划自己又回投的量 (内部转移), 剩下的
+     * 按回料池单位成本转出 (负数) —— 否则同一期间里产出方 (原料全额) 与消耗方 (回投按池价) 会把同一份回料算两次。</p>
      */
-    ReworkSide reworkUsage(String factoryId, String planId, List<ProductionBatch> batches) {
-        if (processSheetRowRepository == null || sfiRepository == null || batches.isEmpty()) {
+    ReworkSide reworkUsage(String factoryId, String planId, List<ProductionBatch> formalBatches) {
+        if (processSheetRowRepository == null || sfiRepository == null) {
             return new ReworkSide(List.of(), 0);
         }
+        List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId).stream()
+                .filter(r -> !ProcessSheetRow.SUBMISSION_DRAFT.equals(r.getSubmissionStatus()))
+                .toList();
         Map<String, MutableRework> pools = new LinkedHashMap<>();
         Set<String> customerSupplied = new HashSet<>();
-        List<Long> batchIds = new ArrayList<>();
-        for (ProductionBatch batch : batches) {
-            batchIds.add(batch.getId());
-            for (ProcessSheetRow row : processSheetRowRepository.findByFactoryIdAndBatchId(factoryId, batch.getId())) {
-                for (JsonNode ref : upstreamSources(row)) {
-                    if (!ref.path("semiFinished").asBoolean(false)) {
-                        continue;
-                    }
-                    String rawNo = ref.path("sourceBatchNumber").asText(null);
-                    BigDecimal feedKg = decimal(ref, "feedQuantityKg");
-                    if (rawNo == null || rawNo.isBlank() || feedKg == null || feedKg.signum() <= 0) {
-                        continue;
-                    }
-                    String poolNo = rawNo.trim();
-                    SemiFinishedInventory pool = sfiRepository
-                            .findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, poolNo).orElse(null);
-                    if (pool == null || !Boolean.TRUE.equals(pool.getIsRework())) {
-                        continue; // 不是回料池 (普通半成品投料不在本项)
-                    }
-                    if (pool.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
-                        customerSupplied.add(poolNo);
-                        continue; // 客供回料不计我方成本 (owner 2026-09-04 口径 a)
-                    }
-                    MutableRework agg = pools.computeIfAbsent(poolNo, k -> new MutableRework(k, pool));
-                    BigDecimal inPoolUnit = wipInventoryService == null ? null
-                            : wipInventoryService.resolveSemiFeedQtyInSourceUnit(factoryId, poolNo, feedKg);
-                    if (inPoolUnit == null) {
-                        agg.reasons.add("有一笔回投 " + feedKg.stripTrailingZeros().toPlainString()
-                                + " kg 折算不到回料池单位 " + pool.getUnit() + " (计数单位缺每件克重)");
-                        agg.quantity = null;
-                    } else if (agg.quantity != null) {
-                        agg.quantity = agg.quantity.add(inPoolUnit);
+        Map<String, BigDecimal> producedByPool = new LinkedHashMap<>();
+        Map<String, List<String>> producedReasons = new LinkedHashMap<>();
+        Map<String, SemiFinishedInventory> producedPools = new LinkedHashMap<>();
+        for (ProcessSheetRow row : rows) {
+            JsonNode payload = payload(row);
+            // 产出方: 本计划写进回料池的入账行
+            if (ProcessSheetRow.STATUS_SAVED_SFI.equals(row.getRowStatus()) && row.getBatchNumber() != null) {
+                String poolNo = row.getBatchNumber().trim();
+                SemiFinishedInventory pool = reworkPool(factoryId, poolNo);
+                if (pool != null && pool.getOwnership() != InventoryOwnership.CUSTOMER_OWNED) {
+                    producedPools.putIfAbsent(poolNo, pool);
+                    BigDecimal out = decimal(payload, "outputQuantity");
+                    if (out == null) {
+                        producedReasons.computeIfAbsent(poolNo, k -> new ArrayList<>())
+                                .add("有一笔回料入账报工读不出产出量, 转出量算不出");
+                        producedByPool.put(poolNo, null);
+                    } else if (!producedByPool.containsKey(poolNo) || producedByPool.get(poolNo) != null) {
+                        producedByPool.merge(poolNo, out, BigDecimal::add);
                     }
                 }
             }
+            // 消耗方: 回投
+            JsonNode ups = payload.path("upstreamSources");
+            if (!ups.isArray()) {
+                continue;
+            }
+            for (JsonNode ref : ups) {
+                if (!ref.path("semiFinished").asBoolean(false)) {
+                    continue;
+                }
+                String rawNo = ref.path("sourceBatchNumber").asText(null);
+                BigDecimal feedKg = decimal(ref, "feedQuantityKg");
+                if (rawNo == null || rawNo.isBlank() || feedKg == null || feedKg.signum() <= 0) {
+                    continue;
+                }
+                String poolNo = rawNo.trim();
+                SemiFinishedInventory pool = reworkPool(factoryId, poolNo);
+                if (pool == null) {
+                    continue; // 不是回料池 (普通半成品投料不在本项)
+                }
+                if (pool.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
+                    customerSupplied.add(poolNo);
+                    continue; // 客供回料不计我方成本 (owner 2026-09-04 口径 a)
+                }
+                MutableRework agg = pools.computeIfAbsent(poolNo, k -> new MutableRework(k, pool));
+                agg.feedKg = agg.feedKg.add(feedKg);
+                if (row.getBatchId() != null) {
+                    agg.feedingBatchIds.add(row.getBatchId());
+                }
+                BigDecimal inPoolUnit = wipInventoryService == null ? null
+                        : wipInventoryService.resolveSemiFeedQtyInSourceUnit(factoryId, poolNo, feedKg);
+                if (inPoolUnit == null) {
+                    agg.reasons.add("有一笔回投 " + feedKg.stripTrailingZeros().toPlainString()
+                            + " kg 折算不到回料池单位 " + pool.getUnit() + " (计数单位缺每件克重)");
+                    agg.quantity = null;
+                } else if (agg.quantity != null) {
+                    agg.quantity = agg.quantity.add(inPoolUnit);
+                }
+            }
         }
-        if (pools.isEmpty()) {
-            return new ReworkSide(List.of(), customerSupplied.size());
-        }
-        Map<String, List<PlanCostVarianceDTO.ReworkSource>> sources = reworkSources(factoryId, batchIds);
+
+        Set<Long> planBatchIds = new HashSet<>();
+        formalBatches.forEach(b -> planBatchIds.add(b.getId()));
+        batchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
+                .forEach(b -> planBatchIds.add(b.getId())); // 含中间道 CLERK_WIP 批次: 回料常投在中间道
+        Map<String, List<PlanCostVarianceDTO.ReworkSource>> sources = reworkSources(factoryId, pools);
+        Map<String, String> sourcesNotes = new LinkedHashMap<>();
         List<PlanCostVarianceCalculator.ReworkUsage> out = new ArrayList<>();
         for (MutableRework agg : pools.values()) {
             Set<String> producingPlans = producingPlans(factoryId, agg.poolNo);
@@ -340,11 +430,61 @@ public class PlanCostVarianceService {
             BigDecimal unitCost = wipInventoryService == null ? null
                     : wipInventoryService.getSemiUnitCost(factoryId, agg.poolNo);
             String name = productName(factoryId, agg.pool.getProductTypeId());
+            List<PlanCostVarianceDTO.ReworkSource> poolSources = sources.getOrDefault(agg.poolNo, List.of());
+            String mismatch = sourcesMismatch(poolSources, agg.feedKg);
+            if (mismatch != null) {
+                sourcesNotes.put(agg.poolNo, mismatch);
+            }
+            // 内部转移按「池子是谁产的」判, 先于折算原因 (折算不了也还是内部转移, 不算无法比较)
             out.add(new PlanCostVarianceCalculator.ReworkUsage(agg.poolNo,
                     (name == null ? agg.poolNo : name) + " (回料)", agg.quantity, agg.pool.getUnit(), unitCost,
-                    internal && agg.reasons.isEmpty(), sources.getOrDefault(agg.poolNo, List.of()), agg.reasons));
+                    internal, poolSources, internal ? new ArrayList<>() : agg.reasons, false));
         }
-        return new ReworkSide(out, customerSupplied.size());
+        for (Map.Entry<String, SemiFinishedInventory> e : producedPools.entrySet()) {
+            String poolNo = e.getKey();
+            SemiFinishedInventory pool = e.getValue();
+            List<String> reasons = new ArrayList<>(producedReasons.getOrDefault(poolNo, List.of()));
+            Set<String> producingPlans = producingPlans(factoryId, poolNo);
+            if (producingPlans.size() > 1) {
+                reasons.add("回料池里既有本计划又有别的计划产出的回料, 本计划转出量拆不开, 无法比较");
+            }
+            BigDecimal produced = producedByPool.get(poolNo);
+            MutableRework self = pools.get(poolNo);
+            BigDecimal selfConsumed = self == null ? BigDecimal.ZERO : self.quantity;
+            if (self != null && selfConsumed == null) {
+                reasons.add("本计划自产又回投的量折算不了, 转出量算不出");
+            }
+            BigDecimal transferred = produced == null || selfConsumed == null ? null : produced.subtract(selfConsumed);
+            if (transferred != null && transferred.signum() <= 0) {
+                continue; // 产出的回料全被本计划自己回投了: 全是内部转移, 没有转出
+            }
+            BigDecimal unitCost = wipInventoryService == null ? null
+                    : wipInventoryService.getSemiUnitCost(factoryId, poolNo);
+            String name = productName(factoryId, pool.getProductTypeId());
+            out.add(new PlanCostVarianceCalculator.ReworkUsage(poolNo,
+                    (name == null ? poolNo : name) + " (回料产出转出)", transferred, pool.getUnit(), unitCost,
+                    false, List.of(), reasons, true));
+        }
+        return new ReworkSide(out, customerSupplied.size(), sourcesNotes);
+    }
+
+    /** 来源边合计 (kg) 与回投 kg 对不上 ⇒ 有撤回重报留下的旧边 (追溯边只增不删), 来源只作参考。 */
+    private static String sourcesMismatch(List<PlanCostVarianceDTO.ReworkSource> sources, BigDecimal feedKg) {
+        if (sources.isEmpty()) {
+            return "这份回料没有归属到产出批次的追溯边 (先进先出归属不了), 来源未知";
+        }
+        BigDecimal sum = BigDecimal.ZERO;
+        for (PlanCostVarianceDTO.ReworkSource s : sources) {
+            if (s.getQuantity() == null || s.getUnit() == null || !"kg".equalsIgnoreCase(s.getUnit().trim())) {
+                return null; // 单位不是 kg: 不比
+            }
+            sum = sum.add(s.getQuantity());
+        }
+        if (sum.subtract(feedKg).abs().compareTo(new BigDecimal("0.01")) <= 0) {
+            return null;
+        }
+        return "来源批次合计 " + sum.stripTrailingZeros().toPlainString() + " kg 与回投 "
+                + feedKg.stripTrailingZeros().toPlainString() + " kg 对不上 (可能有撤回重报的报工), 来源仅供参考";
     }
 
     /** 回料池的入账报工 (SAVED_SFI) 来自哪几张计划 —— 与先进先出归属读同一批入账行。 */
@@ -352,7 +492,7 @@ public class PlanCostVarianceService {
         Set<String> plans = new HashSet<>();
         processSheetRowRepository.findByFactoryIdAndBatchNumberAndRowStatus(factoryId, poolNo, ProcessSheetRow.STATUS_SAVED_SFI)
                 .forEach(r -> {
-                    if (r.getPlanId() != null) {
+                    if (r.getPlanId() != null && !ProcessSheetRow.SUBMISSION_DRAFT.equals(r.getSubmissionStatus())) {
                         plans.add(r.getPlanId());
                     }
                 });
@@ -361,16 +501,20 @@ public class PlanCostVarianceService {
 
     /**
      * 回料来源批次: 读回料池先进先出归属写下的追溯边 ({@code WIP_CONSUME}, meta.rework=true,
-     * sourceResolvedBy=REWORK_POOL_FIFO), 按回料池、产出批次汇总。归属不了的那段本来就没有边, 这里也不补。
+     * sourceResolvedBy=REWORK_POOL_FIFO), 按回料池、产出批次汇总。只看本计划<b>现存</b>报工行投这个池子的那些目标批次
+     * (撤回的行已软删, 它的批次不再算); 归属不了的那段本来就没有边, 这里也不补。
      */
-    private Map<String, List<PlanCostVarianceDTO.ReworkSource>> reworkSources(String factoryId, List<Long> batchIds) {
+    private Map<String, List<PlanCostVarianceDTO.ReworkSource>> reworkSources(String factoryId,
+                                                                             Map<String, MutableRework> pools) {
         Map<String, List<PlanCostVarianceDTO.ReworkSource>> out = new LinkedHashMap<>();
-        if (lineageEdgeRepository == null || batchIds.isEmpty()) {
+        Set<Long> targets = new HashSet<>();
+        pools.values().forEach(p -> targets.addAll(p.feedingBatchIds));
+        if (lineageEdgeRepository == null || targets.isEmpty()) {
             return out;
         }
-        List<String> targets = batchIds.stream().map(String::valueOf).toList();
         Map<String, PlanCostVarianceDTO.ReworkSource> byKey = new LinkedHashMap<>();
-        for (BatchLineageEdge edge : lineageEdgeRepository.findByFactoryIdAndTargetIdIn(factoryId, targets)) {
+        for (BatchLineageEdge edge : lineageEdgeRepository.findByFactoryIdAndTargetIdIn(factoryId,
+                targets.stream().map(String::valueOf).toList())) {
             if (!LineageEdgeRecorder.EDGE_WIP_CONSUME.equals(edge.getEdgeType())
                     || !LineageEdgeRecorder.NODE_PRODUCTION_BATCH.equals(edge.getTargetType())
                     || edge.getMeta() == null || !Boolean.TRUE.equals(edge.getMeta().get("rework"))) {
@@ -378,10 +522,15 @@ public class PlanCostVarianceService {
             }
             Object pool = edge.getMeta().get("sourceWipNo");
             Long producerId = parseLong(edge.getSourceId());
-            if (pool == null || producerId == null) {
+            Long targetId = parseLong(edge.getTargetId());
+            if (pool == null || producerId == null || targetId == null) {
                 continue;
             }
             String poolNo = pool.toString().trim();
+            MutableRework agg = pools.get(poolNo);
+            if (agg == null || !agg.feedingBatchIds.contains(targetId)) {
+                continue; // 这个池子在这个批次上已经没有现存的回投行
+            }
             PlanCostVarianceDTO.ReworkSource src = byKey.computeIfAbsent(poolNo + "|" + producerId, k -> {
                 ProductionBatch producer = batchRepository.findByIdAndFactoryId(producerId, factoryId).orElse(null);
                 String producerPlanId = producer == null ? null : producer.getProductionPlanId();
@@ -405,6 +554,29 @@ public class PlanCostVarianceService {
         return out;
     }
 
+    private static JsonNode payload(ProcessSheetRow row) {
+        if (row.getRowPayload() == null || row.getRowPayload().isBlank()) {
+            return MAPPER.createObjectNode();
+        }
+        try {
+            JsonNode node = MAPPER.readTree(row.getRowPayload());
+            return node == null ? MAPPER.createObjectNode() : node;
+        } catch (Exception e) {
+            log.warn("[cost-variance] 报工行 {} payload 解析不了, 回料读不到: {}", row.getId(), e.getMessage());
+            return MAPPER.createObjectNode();
+        }
+    }
+
+    /** 来源提示挂到对应回料行上 (只做展示)。 */
+    private static void attachSourcesNotes(List<PlanCostVarianceDTO.Line> lines, Map<String, String> notes) {
+        for (PlanCostVarianceDTO.Line line : lines) {
+            if ("REWORK".equals(line.getLineType()) && line.getReworkPoolNo() != null
+                    && !PlanCostVarianceDTO.STATUS_INTERNAL.equals(line.getStatus())) {
+                line.setReworkSourcesNote(notes.get(line.getReworkPoolNo()));
+            }
+        }
+    }
+
     static final String RECIPE_DECLARES_REWORK_REASON =
             "锁定配方登记了回料用量, 但开计划时的快照没有回料标准价, 回料差无法比较";
 
@@ -423,18 +595,6 @@ public class PlanCostVarianceService {
         return items.stream().anyMatch(BomRecipeItem::isSemiFinishedRow) ? RECIPE_DECLARES_REWORK_REASON : null;
     }
 
-    private static JsonNode upstreamSources(ProcessSheetRow row) {
-        if (row.getRowPayload() == null || row.getRowPayload().isBlank()) {
-            return MAPPER.createArrayNode();
-        }
-        try {
-            JsonNode ups = MAPPER.readTree(row.getRowPayload()).path("upstreamSources");
-            return ups.isArray() ? ups : MAPPER.createArrayNode();
-        } catch (Exception e) {
-            log.warn("[cost-variance] 报工行 {} payload 解析不了, 回料投料读不到: {}", row.getId(), e.getMessage());
-            return MAPPER.createArrayNode();
-        }
-    }
 
 
     private static void mask(PlanCostVarianceDTO.Line line) {
@@ -442,6 +602,8 @@ public class PlanCostVarianceService {
         line.setActualUnitPrice(null);
         line.setStandardAmount(null);
         line.setActualAmount(null);
+        // 回料行标准为 0 时回料差就等于金额, 再配上照常显示的数量就能反推回料池单价 ⇒ 一并隐藏
+        line.setReworkVariance(null);
     }
 
     record ActualSide(Map<String, PlanCostVarianceCalculator.ActualUsage> byMaterial, int customerSupplied) {

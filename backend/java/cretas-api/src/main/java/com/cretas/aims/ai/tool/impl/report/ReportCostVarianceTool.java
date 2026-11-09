@@ -191,13 +191,16 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                     .append("、用量差 ¥").append(plain(costVarianceData.getUsageVariance()))
                     .append("、替代料差 ¥").append(plain(costVarianceData.getSubstituteVariance()))
                     .append("、人工差 ¥").append(plain(costVarianceData.getLaborVariance()))
-                    // 回料差 null = 没有可比的回料项 (多半是没回投回料), ⛔ 不写成「回料差 ¥0」也不写成「无法比较」
-                    .append(costVarianceData.getReworkVariance() == null ? "、没有可比的回料项"
+                    // 回料差 null 时不写数字 (⛔ 不写成「回料差 ¥0」), 由下面的回料摘要说清是没有回料还是算不出
+                    .append(costVarianceData.getReworkVariance() == null ? ""
                             : "、回料差 ¥" + plain(costVarianceData.getReworkVariance())).append("。");
+            if (costVarianceData.getReworkSummary() != null) {
+                sum.append("回料: ").append(costVarianceData.getReworkSummary()).append("。");
+            }
             if (costVarianceData.getComparabilityReason() != null) {
                 sum.append(costVarianceData.getComparabilityReason()).append("。");
             }
-            sum.append("回料差 = 从别的计划回投的回料按回料池单位成本计价 (配方不含回料时标准为 0), 本计划自产回投的回料是内部转移不另计。");
+            sum.append("回料差 = 从别的计划回投的回料按回料池单位成本加、本计划产出转给别人的回料按同一单价减 (配方不含回料时标准为 0); 本计划自产自用是内部转移不另计; 主料用量差算不出时回料差无法比较。");
             if (costVarianceData.getProcessSecretNote() != null) sum.append(costVarianceData.getProcessSecretNote());
             result.put("summary", sum.toString());
         }

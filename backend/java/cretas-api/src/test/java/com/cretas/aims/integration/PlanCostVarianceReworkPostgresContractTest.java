@@ -120,13 +120,14 @@ class PlanCostVarianceReworkPostgresContractTest {
 
     @Test
     void reworkFromAnotherPlanIsPricedFromThePoolRowAndTracedToTheProducerBatch() {
-        String producerPlan = plan("A", false);
+        // 快照只有包材 (没有主料行): 回料不需要主料用量差来抵, 可比
+        String producerPlan = plan("A", false, "PACKAGING");
         long producerBatch = batch(producerPlan, "PB-A-" + factory);
         String pool = "CLK-SEMI-A-" + factory;
         reworkPool(pool, "12.9375", true);
         intakeRow(producerPlan, pool);
 
-        String consumerPlan = plan("B", false);
+        String consumerPlan = plan("B", false, "PACKAGING");
         long consumerBatch = batch(consumerPlan, "PB-B-" + factory);
         // 阴性对照: 同一行里还有一条普通半成品投料 (非回料池), 不能算进回料
         String ordinary = "CLK-SEMI-ORD-" + factory;
@@ -156,10 +157,78 @@ class PlanCostVarianceReworkPostgresContractTest {
         assertThat(v.getReworkStatus()).isEqualTo(PlanCostVarianceDTO.REWORK_COMPARABLE);
         assertThat(v.getReworkVariance()).isEqualByComparingTo("32.34");
         assertThat(v.getReworkQuantityText()).isEqualTo("2.5 kg");
-        // F006 形态: 配方没有出成率 ⇒ 主料用量差算不出; 回料照样可比, 并提示回料差单看会偏高
         assertThat(v.isComparable()).isTrue();
         assertThat(v.getTotalVariance()).as("唯一可比的一项就是回料").isEqualByComparingTo("32.34");
-        assertThat(v.getRecoveredMaterialNote()).contains("回投 2.5 kg").contains("+¥32.34").contains("回料差单看会偏高");
+        assertThat(v.getRecoveredMaterialNote()).contains("回投 2.5 kg").contains("+¥32.34");
+        assertThat(line.getReworkSourcesNote()).as("来源合计 = 回投量").isNull();
+
+        // 产出方 A: 入账 10kg, 自己没回投 ⇒ 转出 10kg × 12.9375 = −129.38 (期间里与消耗方相抵, 不双计)
+        PlanCostVarianceDTO a = service.computeForPlan(factory, producerPlan, false);
+        PlanCostVarianceDTO.Line credit = a.getLines().stream()
+                .filter(l -> "REWORK_OUTPUT".equals(l.getLineType())).findFirst().orElseThrow();
+        assertThat(credit.getActualQuantity()).isEqualByComparingTo("10");
+        assertThat(credit.getActualAmount()).isEqualByComparingTo("-129.38");
+        assertThat(a.getReworkVariance()).isEqualByComparingTo("-129.38");
+        assertThat(a.getReworkOutputQuantityText()).isEqualTo("10 kg");
+
+        PlanCostVarianceDTO masked = service.computeForPlan(factory, consumerPlan, true);
+        assertThat(reworkLine(masked, pool).getReworkVariance()).as("脱敏: 行上回料差 = 金额, 一并隐藏").isNull();
+        assertThat(reworkLine(masked, pool).getActualUnitPrice()).isNull();
+    }
+
+    @Test
+    void f006ShapeWithoutYieldRateListsReworkButMarksVarianceIncomparable() {
+        String producerPlan = plan("J", false);
+        String pool = "CLK-SEMI-J-" + factory;
+        reworkPool(pool, "12.9375", true);
+        intakeRow(producerPlan, pool);
+        String p = plan("K", false); // 快照主料没有出成率 (F006 形态)
+        long b = batch(p, "PB-K-" + factory);
+        feedRow(p, b, "[{\"semiFinished\":true,\"sourceBatchNumber\":\"" + pool + "\",\"feedQuantityKg\":2}]");
+
+        PlanCostVarianceDTO v = service.computeForPlan(factory, p, false);
+
+        PlanCostVarianceDTO.Line line = reworkLine(v, pool);
+        assertThat(line.getStatus()).isEqualTo(PlanCostVarianceDTO.STATUS_INCOMPARABLE);
+        assertThat(line.getReasons()).anyMatch(r -> r.contains("主料用量差算不出"));
+        assertThat(line.getActualQuantity()).isEqualByComparingTo("2");
+        assertThat(line.getActualAmount()).isEqualByComparingTo("25.88");
+        assertThat(line.getReworkVariance()).isNull();
+        assertThat(line.getReworkSourcesNote()).as("没写追溯边 ⇒ 来源未知要说出来").contains("来源未知");
+        assertThat(v.getReworkVariance()).isNull();
+        assertThat(v.getReworkStatus()).isEqualTo(PlanCostVarianceDTO.REWORK_INCOMPARABLE);
+        assertThat(v.getRecoveredMaterialNote()).contains("回投 2 kg").contains("回料差无法比较");
+    }
+
+    @Test
+    void reworkFedIntoIntermediateClerkStepAndStockOnlyRowIsCounted() {
+        String producerPlan = plan("L", false, "PACKAGING");
+        String pool = "CLK-SEMI-L-" + factory;
+        reworkPool(pool, "10", true);
+        intakeRow(producerPlan, pool);
+        String p = plan("M", false, "PACKAGING");
+        long clerkWip = batch(p, "PB-M-WIP-" + factory, "CLERK_WIP");
+        // 中间道 (CLERK_WIP 批次) 回投 1kg; 另一道纯库存行 (SAVED_SFI, 没有批次) 回投 0.5kg; 草稿行 9kg 不算
+        feedRow(p, clerkWip, "[{\"semiFinished\":true,\"sourceBatchNumber\":\"" + pool + "\",\"feedQuantityKg\":1}]");
+        jdbc.update("insert into process_sheet_rows (factory_id, plan_id, process_code, client_row_id, batch_number, "
+                        + "row_payload, row_status, submission_status, created_at, updated_at) "
+                        + "values (?, ?, 'mix', ?, ?, cast(? as jsonb), 'SAVED_SFI', 'SUBMITTED', now(), now())",
+                factory, p, "stock-only-M", "CLK-SEMI-ORD-M-" + factory,
+                "{\"outputQuantity\":3,\"upstreamSources\":[{\"semiFinished\":true,\"sourceBatchNumber\":\""
+                        + pool + "\",\"feedQuantityKg\":0.5}]}");
+        jdbc.update("insert into process_sheet_rows (factory_id, plan_id, process_code, client_row_id, "
+                        + "row_payload, row_status, submission_status, created_at, updated_at) "
+                        + "values (?, ?, 'draft', ?, cast(? as jsonb), 'DRAFT', 'DRAFT', now(), now())",
+                factory, p, "draft-M", "{\"upstreamSources\":[{\"semiFinished\":true,\"sourceBatchNumber\":\""
+                        + pool + "\",\"feedQuantityKg\":9}]}");
+        batch(p, "PB-M-FIN-" + factory);
+
+        PlanCostVarianceDTO v = service.computeForPlan(factory, p, false);
+
+        PlanCostVarianceDTO.Line line = reworkLine(v, pool);
+        assertThat(line.getActualQuantity()).as("1 (中间道) + 0.5 (纯库存行), 草稿 9 不算").isEqualByComparingTo("1.5");
+        assertThat(line.getActualAmount()).isEqualByComparingTo("15.00");
+        assertThat(v.getReworkVariance()).isEqualByComparingTo("15.00");
     }
 
     @Test
@@ -225,6 +294,40 @@ class PlanCostVarianceReworkPostgresContractTest {
         assertThat(v.getReworkVariance()).isNull();
     }
 
+    @Test
+    void planWithoutSnapshotStillListsReworkQuantityPriceAndSource() {
+        // F006 形态: 回投回料的计划开于快照上线前 —— 差异算不出, 但回投量、单价、来源照样列出
+        String producerPlan = plan("H", false);
+        long producerBatch = batch(producerPlan, "PB-H-" + factory);
+        String pool = "CLK-SEMI-H-" + factory;
+        reworkPool(pool, "34.3867", true);
+        intakeRow(producerPlan, pool);
+        String p = plan("I", false, false);
+        long b = batch(p, "PB-I-" + factory);
+        feedRow(p, b, "[{\"semiFinished\":true,\"sourceBatchNumber\":\"" + pool + "\",\"feedQuantityKg\":0.5}]");
+        reworkEdge(producerBatch, b, pool, "0.5");
+
+        PlanCostVarianceDTO v = service.computeForPlan(factory, p, false);
+
+        assertThat(v.isComparable()).isFalse();
+        assertThat(v.getComparabilityReason()).contains("没有标准成本快照");
+        PlanCostVarianceDTO.Line line = reworkLine(v, pool);
+        assertThat(line.getStatus()).isEqualTo(PlanCostVarianceDTO.STATUS_INCOMPARABLE);
+        assertThat(line.getActualQuantity()).isEqualByComparingTo("0.5");
+        assertThat(line.getActualUnitPrice()).isEqualByComparingTo("34.3867");
+        assertThat(line.getActualAmount()).isEqualByComparingTo("17.19");
+        assertThat(line.getReworkVariance()).as("没有快照 ⇒ 回料差无法比较, ⛔ 不当 0 也不当全额").isNull();
+        assertThat(line.getReworkSources().getFirst().getProducerPlanNumber()).isEqualTo("PN-H-" + factory);
+        assertThat(v.getReworkStatus()).isEqualTo(PlanCostVarianceDTO.REWORK_INCOMPARABLE);
+        assertThat(v.getReworkVariance()).isNull();
+        assertThat(v.getRecoveredMaterialNote()).contains("回投 0.5 kg").contains("没有标准成本快照");
+
+        PlanCostVarianceDTO masked = service.computeForPlan(factory, p, true);
+        assertThat(reworkLine(masked, pool).getActualUnitPrice()).as("无采购价权限: 回料单价同样隐藏").isNull();
+        assertThat(reworkLine(masked, pool).getActualAmount()).isNull();
+        assertThat(reworkLine(masked, pool).getActualQuantity()).isEqualByComparingTo("0.5");
+    }
+
     private static PlanCostVarianceDTO.Line reworkLine(PlanCostVarianceDTO v, String pool) {
         return v.getLines().stream().filter(l -> pool.equals(l.getReworkPoolNo())).findFirst().orElseThrow();
     }
@@ -233,6 +336,15 @@ class PlanCostVarianceReworkPostgresContractTest {
 
     /** 计划 + 锁定配方 (主料一行, 没有出成率 —— F006 形态) + 标准成本快照 (主料, 有单价)。 */
     private String plan(String tag, boolean recipeHasReworkRow) {
+        return plan(tag, recipeHasReworkRow, "RAW");
+    }
+
+    private String plan(String tag, boolean recipeHasReworkRow, boolean withSnapshot) {
+        return plan(tag, recipeHasReworkRow, withSnapshot ? "RAW" : null);
+    }
+
+    /** snapshotKind: RAW = 主料一行且没有出成率 (F006 形态); PACKAGING = 只有包材一行; null = 没有快照。 */
+    private String plan(String tag, boolean recipeHasReworkRow, String snapshotKind) {
         String id = "PLAN-" + tag + "-" + factory;
         String recipe = "BOM-" + tag + "-" + factory;
         tx.executeWithoutResult(status -> {
@@ -268,12 +380,18 @@ class PlanCostVarianceReworkPostgresContractTest {
             plan.setSelectedBomRecipeId(recipe);
             plan.setSelectedBomVersion(1);
             plans.saveAndFlush(plan);
+            if (snapshotKind == null) {
+                return;
+            }
+            boolean raw = "RAW".equals(snapshotKind);
             standards.saveAndFlush(PlanStandardCostLine.builder()
                     .factoryId(factory).planId(id).lineType(PlanStandardCostLine.TYPE_MATERIAL)
-                    .materialTypeId("MAT-" + factory).materialName("beef").materialCategory("RAW")
+                    .materialTypeId((raw ? "MAT-" : "BOX-") + factory).materialName(raw ? "beef" : "box")
+                    .materialCategory(snapshotKind)
                     .productTypeId("SKU-" + factory).bomRecipeId(recipe).bomVersion(1)
-                    .standardBasis(PlanStandardCostLine.BASIS_RAW_INPUT_SHARE).standardUnit("kg")
-                    .unitPrice(new BigDecimal("10")).priceUnit("kg")
+                    .standardBasis(raw ? PlanStandardCostLine.BASIS_RAW_INPUT_SHARE : PlanStandardCostLine.BASIS_PER_OUTPUT_UNIT)
+                    .standardRate(raw ? null : BigDecimal.ONE).standardUnit(raw ? "kg" : "个")
+                    .unitPrice(new BigDecimal("10")).priceUnit(raw ? "kg" : "个")
                     .capturedAt(LocalDateTime.now()).build());
         });
         return id;
@@ -298,10 +416,14 @@ class PlanCostVarianceReworkPostgresContractTest {
     }
 
     private long batch(String planId, String number) {
+        return batch(planId, number, "NORMAL");
+    }
+
+    private long batch(String planId, String number, String batchType) {
         Long id = jdbc.queryForObject("insert into production_batches (factory_id, batch_number, product_type_id, quantity, "
                         + "unit, status, cost_incomplete, batch_type, production_plan_id, created_at, updated_at) "
-                        + "values (?, ?, ?, 80, 'kg', 'COMPLETED', false, 'NORMAL', ?, now(), now()) returning id",
-                Long.class, factory, number, "SKU-" + factory, planId);
+                        + "values (?, ?, ?, 80, 'kg', 'COMPLETED', false, ?, ?, now(), now()) returning id",
+                Long.class, factory, number, "SKU-" + factory, batchType, planId);
         return id;
     }
 

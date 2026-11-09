@@ -169,18 +169,55 @@ class PlanCostVarianceReworkContractTest {
     }
 
     @Test
-    void reworkStaysComparableEvenWhenRecipeHasNoYieldRateLikeF006() {
-        // F006 配方普遍没有出成率: 主料用量差算不出, 但回料不依赖出成率, 照样可比
+    void f006RecipeWithoutYieldRateMakesReworkVarianceIncomparableButStillListsQuantityAndPrice() {
+        // F006 配方普遍没有出成率: 主料用量差算不出 ⇒ 回料顶替的原料看不到, 单算回料会把顶替当超支 ⇒ 回料差无法比较
+        PlanCostVarianceCalculator.Result without = run(null, List.of(), null);
         PlanCostVarianceCalculator.Result r = run(null, List.of(rework("1", "34.3867", false)), null);
         assertThat(r.lines().stream().filter(l -> "BEEF".equals(l.getMaterialTypeId())).findFirst().orElseThrow()
                 .getUsageVariance()).isNull();
-        assertThat(reworkLine(r).getStatus()).isEqualTo(PlanCostVarianceDTO.STATUS_COMPARABLE);
-        assertThat(r.reworkVariance()).isEqualByComparingTo("34.39");
-        assertThat(sumOfParts(r)).isEqualByComparingTo(r.totalVariance());
+        PlanCostVarianceDTO.Line line = reworkLine(r);
+        assertThat(line.getStatus()).isEqualTo(PlanCostVarianceDTO.STATUS_INCOMPARABLE);
+        assertThat(line.getReasons()).anyMatch(reason -> reason.contains("主料用量差算不出"));
+        assertThat(line.getActualQuantity()).as("回投量照列").isEqualByComparingTo("1");
+        assertThat(line.getActualUnitPrice()).as("单价照列").isEqualByComparingTo("34.3867");
+        assertThat(line.getActualAmount()).as("金额照列").isEqualByComparingTo("34.39");
+        assertThat(line.getReworkVariance()).as("⛔ 不把回投全额当超支").isNull();
+        assertThat(r.reworkVariance()).isNull();
+        assertThat(r.reworkStatus()).isEqualTo(PlanCostVarianceDTO.REWORK_INCOMPARABLE);
+        assertThat(r.actualCost()).as("不进合计").isEqualByComparingTo(without.actualCost());
 
         String note = PlanCostVarianceService.reworkNote(r, List.of(rework("1", "34.3867", false)));
-        assertThat(note).contains("回投 1 kg").contains("回料池单位成本").contains("+¥34.39")
-                .as("主料用量差算不出时要提示回料差单看会偏高").contains("回料差单看会偏高");
+        assertThat(note).contains("回投 1 kg 回料").contains("回料池单位成本").contains("回料差无法比较");
+    }
+
+    @Test
+    void producerSideTransferOutIsCreditedAtThePoolPriceSoThePeriodDoesNotCountReworkTwice() {
+        // 本计划产出、转给别的计划的 4kg 回料, 池价 10 ⇒ 转出 −40; 消耗方那边 +40, 期间合计两相抵消
+        PlanCostVarianceCalculator.ReworkUsage out = new PlanCostVarianceCalculator.ReworkUsage("POOL", "卤牛肉 (回料产出转出)",
+                new BigDecimal("4"), "kg", new BigDecimal("10"), false, List.of(), new ArrayList<>(), true);
+        PlanCostVarianceCalculator.Result producer = run("80", List.of(out), null);
+        PlanCostVarianceCalculator.Result consumer = run("80", List.of(rework("4", "10", false)), null);
+
+        PlanCostVarianceDTO.Line line = producer.lines().stream()
+                .filter(l -> "REWORK_OUTPUT".equals(l.getLineType())).findFirst().orElseThrow();
+        assertThat(line.getStatus()).isEqualTo(PlanCostVarianceDTO.STATUS_COMPARABLE);
+        assertThat(line.getActualAmount()).isEqualByComparingTo("-40");
+        assertThat(line.getReworkVariance()).isEqualByComparingTo("-40");
+        assertThat(producer.reworkVariance()).isEqualByComparingTo("-40");
+        assertThat(sumOfParts(producer)).isEqualByComparingTo(producer.totalVariance());
+        assertThat(producer.reworkVariance().add(consumer.reworkVariance())).as("两头相抵, 期间不双计").isEqualByComparingTo("0");
+        assertThat(PlanCostVarianceService.reworkNote(producer, List.of(out))).contains("产出回料转出 4 kg").contains("−¥40.00");
+    }
+
+    @Test
+    void maskedLineHidesReworkVarianceBecauseItEqualsTheHiddenAmount() {
+        PlanCostVarianceCalculator.Result r = run("80", List.of(rework("2.5", "12.9375", false)), null);
+        PlanCostVarianceDTO.Line line = reworkLine(r);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(PlanCostVarianceService.class, "mask", line);
+        assertThat(line.getActualAmount()).isNull();
+        assertThat(line.getActualUnitPrice()).isNull();
+        assertThat(line.getReworkVariance()).as("标准 0 时回料差 = 金额, 配数量就能反推单价").isNull();
+        assertThat(line.getActualQuantity()).isEqualByComparingTo("2.5");
     }
 
     @Test
@@ -191,5 +228,9 @@ class PlanCostVarianceReworkContractTest {
                 .isEqualTo("2 kg");
         assertThat(PlanCostVarianceService.reworkQuantityText(List.of(rework(null, "1", false), rework("0.5", "1", false))))
                 .isEqualTo("0.5 kg + 另有部分折算不了");
+        PlanCostVarianceCalculator.ReworkUsage out = new PlanCostVarianceCalculator.ReworkUsage("P", "x", new BigDecimal("3"),
+                "kg", BigDecimal.ONE, false, List.of(), new ArrayList<>(), true);
+        assertThat(PlanCostVarianceService.reworkQuantityText(List.of(out))).as("回投量不含产出转出").isNull();
+        assertThat(PlanCostVarianceService.reworkOutputQuantityText(List.of(out, rework("1", "1", false)))).isEqualTo("3 kg");
     }
 }

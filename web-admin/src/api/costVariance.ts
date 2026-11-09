@@ -7,7 +7,8 @@
  * 口径 (Steve 2026-11-03): 标准成本 = 计划锁定配方的标准用量 × 开计划时物料单价快照;
  * 差异拆价格差 / 用量差 / 替代料差 / 人工差 / 回料差; 缺单价/缺快照的项后端给 null + 原因, 前端照写「无法比较」。
  * 回料差 (2026-11-09): 从别的计划回投的回料 × 回料池单位成本 (与成本核算同源), 配方不含回料时标准为 0;
- * 本计划自产回投是内部转移 (INTERNAL), 不另计。
+ * 产出回料转给别的计划按同一池价转出 (REWORK_OUTPUT, 负数); 本计划自产自用是内部转移 (INTERNAL), 不另计;
+ * 主料用量差算不出时 (F006 没有出成率) 回料差无法比较, 但量、价、金额照列。
  */
 import { get } from './request';
 
@@ -26,7 +27,7 @@ export interface ReworkSource {
 }
 
 export interface PlanCostVarianceLine {
-  lineType: 'MATERIAL' | 'SUBSTITUTE' | 'UNPLANNED' | 'LABOR' | 'REWORK';
+  lineType: 'MATERIAL' | 'SUBSTITUTE' | 'UNPLANNED' | 'LABOR' | 'REWORK' | 'REWORK_OUTPUT';
   materialTypeId: string | null;
   materialName: string | null;
   materialCategory: string | null;
@@ -49,6 +50,8 @@ export interface PlanCostVarianceLine {
   /** 回料行: 单价从哪来。 */
   priceSource?: string | null;
   reworkSources?: ReworkSource[];
+  /** 回料行: 来源合计与回投量对不上 / 没有追溯边时的提示 (只做展示)。 */
+  reworkSourcesNote?: string | null;
   status: VarianceLineStatus;
   reasons: string[];
 }
@@ -94,6 +97,8 @@ export interface PlanCostVariance {
   reworkVariance?: number | null;
   reworkStatus?: ReworkStatus | null;
   reworkQuantityText?: string | null;
+  /** 本计划产出、转给别的计划或留在池里的回料量。 */
+  reworkOutputQuantityText?: string | null;
   recoveredMaterialNote: string | null;
   comparableItemCount: number;
   incomparableItemCount: number;
@@ -119,8 +124,10 @@ export interface CostVarianceReport {
   usageVariance: number | null;
   substituteVariance: number | null;
   laborVariance: number | null;
-  /** null = 没有任何可比计划有可比回料, 不是 0。 */
+  /** null = 没有任何可比计划有可比回料, 不是 0 (看 reworkStatus / reworkSummary)。 */
   reworkVariance?: number | null;
+  reworkStatus?: ReworkStatus | null;
+  reworkSummary?: string | null;
   comparedPlanCount: number | null;
   incomparablePlanCount: number | null;
   batchCount: number | null;

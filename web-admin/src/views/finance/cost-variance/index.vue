@@ -29,6 +29,7 @@ import {
   money,
   qty,
   rate,
+  reworkQuantityLine,
   reworkSourcesText,
   reworkVarianceText,
   signedMoney,
@@ -87,7 +88,7 @@ function lineVarianceClass(row: PlanCostVarianceLine): string {
   if (row.lineType === 'UNPLANNED' || row.status === 'INTERNAL') return 'is-na';
   const v = row.lineType === 'LABOR' ? row.laborVariance
     : row.lineType === 'SUBSTITUTE' ? row.substituteVariance
-      : row.lineType === 'REWORK' ? row.reworkVariance
+      : row.lineType === 'REWORK' || row.lineType === 'REWORK_OUTPUT' ? row.reworkVariance
         : row.usageVariance;
   return varianceClass(v);
 }
@@ -209,7 +210,8 @@ onMounted(load);
           </div>
           <div class="summary-card" data-testid="summary-rework-variance">
             <span class="label">回料差</span>
-            <strong :class="varianceClass(report.reworkVariance)">{{ reworkVarianceText(report.reworkVariance) }}</strong>
+            <strong :class="varianceClass(report.reworkVariance)">{{ reworkVarianceText(report.reworkVariance, report.reworkStatus) }}</strong>
+            <small v-if="report.reworkSummary">{{ report.reworkSummary }}</small>
           </div>
           <div class="summary-card">
             <span class="label">期间实际总成本（全部批次）</span>
@@ -246,7 +248,7 @@ onMounted(load);
           <el-table-column label="回料差" min-width="120" align="right">
             <template #default="{ row }">
               <span :class="varianceClass(row.reworkVariance)">{{ reworkVarianceText(row.reworkVariance, row.reworkStatus) }}</span>
-              <div v-if="row.reworkQuantityText" class="sub">回投 {{ row.reworkQuantityText }}</div>
+              <div v-if="reworkQuantityLine(row)" class="sub">{{ reworkQuantityLine(row) }}</div>
             </template>
           </el-table-column>
           <el-table-column label="说明" min-width="220">
@@ -326,7 +328,7 @@ onMounted(load);
               <template #default="{ row }">{{ row.actualAmount == null ? '—' : money(row.actualAmount) }}</template>
             </el-table-column>
             <el-table-column label="价格差" min-width="95" align="right">
-              <template #default="{ row }"><span :class="varianceClass(row.priceVariance)">{{ row.lineType === 'LABOR' || row.lineType === 'REWORK' ? '—' : signedMoney(row.priceVariance) }}</span></template>
+              <template #default="{ row }"><span :class="varianceClass(row.priceVariance)">{{ row.lineType === 'LABOR' || row.lineType === 'REWORK' || row.lineType === 'REWORK_OUTPUT' ? '—' : signedMoney(row.priceVariance) }}</span></template>
             </el-table-column>
             <el-table-column label="用量差 / 替代料差 / 人工差 / 回料差" min-width="160" align="right">
               <template #default="{ row }">
@@ -339,8 +341,8 @@ onMounted(load);
                   {{ STATUS_LABEL[row.status as PlanCostVarianceLine['status']] }}
                 </el-tag>
                 <div v-for="reason in row.reasons" :key="reason" class="sub">{{ reason }}</div>
-                <div v-if="row.reworkSources && row.reworkSources.length" class="sub" data-testid="rework-sources">
-                  来源：{{ reworkSourcesText(row.reworkSources) }}
+                <div v-if="reworkSourcesText(row.reworkSources, row.reworkSourcesNote)" class="sub" data-testid="rework-sources">
+                  来源：{{ reworkSourcesText(row.reworkSources, row.reworkSourcesNote) }}
                 </div>
               </template>
             </el-table-column>

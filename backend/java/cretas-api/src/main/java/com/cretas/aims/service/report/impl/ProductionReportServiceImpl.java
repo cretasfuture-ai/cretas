@@ -1574,6 +1574,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .materialVariance(anyComparable ? scaleOrNull(priceVariance.add(usageVariance).add(substituteVariance)
                         .add(reworkVariance == null ? BigDecimal.ZERO : reworkVariance)) : null)
                 .reworkVariance(scaleOrNull(reworkVariance))
+                .reworkStatus(periodReworkStatus(planVariances.values(), reworkVariance))
+                .reworkSummary(periodReworkSummary(planVariances.values()))
                 .laborVariance(scaleOrNull(laborVariance))
                 .overheadVariance(null)
                 .comparedPlanCount(comparedPlans.size())
@@ -1602,6 +1604,38 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private static BigDecimal sumOrNull(List<PlanCostVarianceDTO> plans,
                                         java.util.function.Function<PlanCostVarianceDTO, BigDecimal> field) {
         return plans.stream().map(field).anyMatch(java.util.Objects::nonNull) ? sumOf(plans, field) : null;
+    }
+
+    /** 期间回料状态: 有计入合计的回料差就是 COMPARABLE, 否则按「有无法比较 > 只有内部转移 > 没有回料」说清。 */
+    static String periodReworkStatus(java.util.Collection<PlanCostVarianceDTO> plans, BigDecimal reworkVariance) {
+        if (reworkVariance != null) {
+            return PlanCostVarianceDTO.REWORK_COMPARABLE;
+        }
+        if (plans.stream().anyMatch(p -> PlanCostVarianceDTO.REWORK_INCOMPARABLE.equals(p.getReworkStatus())
+                || PlanCostVarianceDTO.REWORK_COMPARABLE.equals(p.getReworkStatus()))) {
+            return PlanCostVarianceDTO.REWORK_INCOMPARABLE; // 有回料, 但没有一项进了合计
+        }
+        if (plans.stream().anyMatch(p -> PlanCostVarianceDTO.REWORK_INTERNAL_ONLY.equals(p.getReworkStatus()))) {
+            return PlanCostVarianceDTO.REWORK_INTERNAL_ONLY;
+        }
+        return PlanCostVarianceDTO.REWORK_NONE;
+    }
+
+    /** 期间回料摘要: 「3 个计划有回料: 1 个回料差已计入合计, 2 个无法比较」。 */
+    static String periodReworkSummary(java.util.Collection<PlanCostVarianceDTO> plans) {
+        long counted = plans.stream().filter(p -> p.isComparable() && p.getReworkVariance() != null).count();
+        long incomparable = plans.stream().filter(p -> PlanCostVarianceDTO.REWORK_INCOMPARABLE.equals(p.getReworkStatus())
+                || (PlanCostVarianceDTO.REWORK_COMPARABLE.equals(p.getReworkStatus()) && !p.isComparable())).count();
+        long internal = plans.stream().filter(p -> PlanCostVarianceDTO.REWORK_INTERNAL_ONLY.equals(p.getReworkStatus())).count();
+        long total = counted + incomparable + internal;
+        if (total == 0) {
+            return "期间内没有回投或产出回料";
+        }
+        List<String> parts = new ArrayList<>();
+        if (counted > 0) parts.add(counted + " 个回料差已计入合计");
+        if (incomparable > 0) parts.add(incomparable + " 个回料差无法比较 (见各计划原因)");
+        if (internal > 0) parts.add(internal + " 个只有本计划自产自用 (内部转移)");
+        return total + " 个计划有回料: " + String.join(", ", parts);
     }
 
     /** 差异原因: 由实际算出的分项拼成 (⛔ 不再按 60/30/10 编)。 */

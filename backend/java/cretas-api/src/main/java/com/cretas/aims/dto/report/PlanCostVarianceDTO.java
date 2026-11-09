@@ -87,6 +87,8 @@ public class PlanCostVarianceDTO {
     private String reworkStatus;
     /** 回投回料的量 (按回料池单位分列, 如 "1.0000 kg"); 没有回料时 null。 */
     private String reworkQuantityText;
+    /** 本计划产出、转给别的计划或留在池里的回料量 (产出方转出, 按池价记负); 没有时 null。 */
+    private String reworkOutputQuantityText;
     /** 回料口径说明 (给人看的话): 回投了多少、按什么价、怎么计入。 */
     private String recoveredMaterialNote;
 
@@ -108,7 +110,7 @@ public class PlanCostVarianceDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class Line {
-        /** MATERIAL / SUBSTITUTE / UNPLANNED / LABOR / REWORK。 */
+        /** MATERIAL / SUBSTITUTE / UNPLANNED / LABOR / REWORK (回投) / REWORK_OUTPUT (回料产出转出)。 */
         private String lineType;
         private String materialTypeId;
         private String materialName;
@@ -133,6 +135,8 @@ public class PlanCostVarianceDTO {
         private String reworkPoolNo;
         /** 回料行: 单价从哪来 (给人看的话)。 */
         private String priceSource;
+        /** 回料行: 来源合计与回投量对不上 / 没有来源边时的提示 (只做展示, 不影响可比性)。 */
+        private String reworkSourcesNote;
         /** 回料行: 先进先出归属到的产出批次 (追溯边)。 */
         @Builder.Default
         private List<ReworkSource> reworkSources = new ArrayList<>();

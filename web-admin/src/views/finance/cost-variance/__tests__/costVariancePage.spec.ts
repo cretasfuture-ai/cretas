@@ -34,6 +34,14 @@ const reworkLine = {
   reworkSources: [{ producerBatchNumber: 'PB-A1', producerPlanId: 'PA', producerPlanNumber: 'PLAN-A', quantity: 2.5, unit: 'kg' }],
   status: 'COMPARABLE', reasons: [],
 };
+const reworkOutputLine = {
+  lineType: 'REWORK_OUTPUT', materialTypeId: null, materialName: '卤牛肉 (回料产出转出)', materialCategory: null,
+  parentMaterialTypeId: null, priceUnit: 'kg', snapshotUnitPrice: null, standardQuantity: 0, standardAmount: 0,
+  actualQuantity: 3, actualUnitPrice: 12.9375, actualAmount: -38.81, priceVariance: null, usageVariance: null,
+  substituteVariance: null, laborVariance: null, reworkVariance: null, reworkPoolNo: 'CLK-SEMI-P1',
+  priceSource: '回料池单位成本 (产出回料的工序成本 ÷ 回料量, 与成本核算同源)', reworkSources: [],
+  status: 'INCOMPARABLE', reasons: ['主料用量差算不出 (配方没有出成率 / 缺领用等), 回料顶替或带走的原料看不到, 单算回料会失真, 回料差无法比较'],
+};
 
 beforeEach(() => {
   api.report.mockReset(); api.plan.mockReset(); api.message.mockReset();
@@ -41,7 +49,8 @@ beforeEach(() => {
     comparable: true, comparabilityReason: null, standardCostBasis: '标准成本 = 计划锁定配方的标准用量 × 开计划时物料单价快照',
     processSecretNote: null, startDate: '2026-10-04', endDate: '2026-11-03', totalBomCost: 1000, totalActualCost: 1364,
     totalVariance: 200, totalVarianceRate: 20, varianceStatus: 'CRITICAL', priceVariance: 200, usageVariance: 0,
-    substituteVariance: null, laborVariance: 0, reworkVariance: 32.34, comparedPlanCount: 2, incomparablePlanCount: 0,
+    substituteVariance: null, laborVariance: 0, reworkVariance: 32.34, reworkStatus: 'COMPARABLE',
+    reworkSummary: '1 个计划有回料: 1 个回料差已计入合计', comparedPlanCount: 2, incomparablePlanCount: 0,
     batchCount: 2, planVariances: [planSummary, noReworkSummary],
   } });
   api.plan.mockResolvedValue({ success: true, data: { ...planSummary,
@@ -55,6 +64,7 @@ beforeEach(() => {
         actualUnitPrice: 2, actualAmount: 164, priceVariance: null, usageVariance: null, substituteVariance: null,
         laborVariance: null, status: 'INCOMPARABLE', reasons: ['开计划时物料档案没有单价'] },
       reworkLine,
+      reworkOutputLine,
     ],
     allocationMethods: [{ processCode: 'SPLIT', processOrder: 2, basis: 'FIXED_RATIO', basisLabel: '固定比例 (工艺版本)',
       outputs: [
@@ -99,6 +109,7 @@ describe('成本差异报表 (缺口 09/10)', () => {
   it('回料差: 汇总卡/计划表单列; 有回料的计划写数和回投量, 没回料的写「无回料」不写 ¥0', async () => {
     const wrapper = mountPage(); await flushPromises();
     expect(wrapper.get('[data-testid="summary-rework-variance"]').text()).toContain('+¥32.34');
+    expect(wrapper.get('[data-testid="summary-rework-variance"]').text()).toContain('1 个回料差已计入合计');
     const table = wrapper.get('[data-testid="cost-variance-plans"]').text();
     expect(table).toContain('回投 2.5 kg');
     const rows = Array.from(wrapper.get('[data-testid="cost-variance-plans"]').element.querySelectorAll('.el-table__body tr'));
@@ -121,6 +132,13 @@ describe('成本差异报表 (缺口 09/10)', () => {
     expect(document.body.querySelector('[data-testid="rework-sources"]')?.textContent).toContain('PLAN-A PB-A1 2.5 kg');
     expect(document.body.querySelector('[data-testid="plan-rework-note"]')?.textContent).toContain('回投 2.5 kg');
     expect(document.body.querySelector('[data-testid="detail-rework-variance"]')?.textContent).toContain('+¥32.34');
+    // 产出转出行: 金额照列为负, 主料用量差算不出时回料差写「无法比较」不写 0
+    expect(detail).toContain('卤牛肉 (回料产出转出)');
+    expect(detail).toContain('回料转出');
+    expect(detail).toContain('−¥38.81');
+    expect(detail).not.toContain('¥-');
+    expect(detail).toContain('转出 无法比较');
+    expect(detail).toContain('主料用量差算不出');
     wrapper.unmount();
   });
 
@@ -130,9 +148,9 @@ describe('成本差异报表 (缺口 09/10)', () => {
     const [periodRows, periodSheet] = api.download.mock.calls[0];
     expect(periodSheet).toBe('成本差异');
     const flat = (rows: (string | number)[][]) => rows.map((r) => r.join('|')).join('\n');
-    expect(flat(periodRows)).toContain('回料差|+¥32.34');
+    expect(flat(periodRows)).toContain('回料差|+¥32.34|1 个计划有回料: 1 个回料差已计入合计');
     expect(flat(periodRows)).toContain('PLAN-QA-09');
-    expect(flat(periodRows)).toContain('|+¥32.34|2.5 kg|');
+    expect(flat(periodRows)).toContain('|+¥32.34|回投 2.5 kg|');
     expect(flat(periodRows)).toContain('PLAN-QA-NORW');
     expect(flat(periodRows)).toContain('|无回料|—|本计划没有回投回料|');
 
@@ -144,6 +162,10 @@ describe('成本差异报表 (缺口 09/10)', () => {
     expect(reworkRow).toEqual(['卤牛肉 (回料)', '回料', '配方不含回料', '0 kg', '2.5 kg', '¥12.9375/kg', '¥0.00', '¥32.34', '—',
       '回料 +¥32.34', '可比', '', 'PLAN-A PB-A1 2.5 kg']);
     expect(flat(planRows)).toContain('回料差|+¥32.34');
+    const outRow = planRows.find((r: (string | number)[]) => r[0] === '卤牛肉 (回料产出转出)');
+    expect(outRow?.[1]).toBe('回料转出');
+    expect(outRow?.[9]).toBe('转出 无法比较');
+    expect(outRow?.[10]).toBe('无法比较');
     wrapper.unmount();
   });
 

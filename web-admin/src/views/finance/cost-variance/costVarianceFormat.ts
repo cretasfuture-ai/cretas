@@ -16,7 +16,8 @@ export const INCOMPARABLE = '无法比较';
 
 export function money(v: number | null | undefined): string {
   if (v == null) return INCOMPARABLE;
-  return `¥${Number(v).toFixed(2)}`;
+  const n = Number(v);
+  return `${n < 0 ? '−' : ''}¥${Math.abs(n).toFixed(2)}`;
 }
 
 export function signedMoney(v: number | null | undefined): string {
@@ -57,6 +58,7 @@ export const LINE_TYPE_LABEL: Record<PlanCostVarianceLine['lineType'], string> =
   UNPLANNED: '计划外',
   LABOR: '人工',
   REWORK: '回料',
+  REWORK_OUTPUT: '回料转出',
 };
 
 export const CATEGORY_LABEL: Record<string, string> = {
@@ -64,7 +66,9 @@ export const CATEGORY_LABEL: Record<string, string> = {
 };
 
 export function snapshotPriceText(line: PlanCostVarianceLine, priceMasked: boolean): string {
-  if (line.lineType === 'REWORK') return line.standardQuantity == null ? '—' : '配方不含回料';
+  if (line.lineType === 'REWORK' || line.lineType === 'REWORK_OUTPUT') {
+    return line.standardQuantity == null ? '—' : '配方不含回料';
+  }
   return line.snapshotUnitPrice == null
     ? (priceMasked ? '—' : '无单价')
     : `¥${Number(line.snapshotUnitPrice).toFixed(4)}/${line.priceUnit || ''}`;
@@ -72,7 +76,7 @@ export function snapshotPriceText(line: PlanCostVarianceLine, priceMasked: boole
 
 export function actualPriceText(line: PlanCostVarianceLine): string {
   if (line.actualUnitPrice == null) return '—';
-  const unit = line.lineType === 'REWORK' && line.priceUnit ? `/${line.priceUnit}` : '';
+  const unit = (line.lineType === 'REWORK' || line.lineType === 'REWORK_OUTPUT') && line.priceUnit ? `/${line.priceUnit}` : '';
   return `¥${Number(line.actualUnitPrice).toFixed(4)}${unit}`;
 }
 
@@ -84,16 +88,24 @@ export function lineVarianceText(line: PlanCostVarianceLine): string {
     case 'UNPLANNED': return INCOMPARABLE;
     case 'REWORK':
       return line.status === 'INTERNAL' ? '内部转移' : `回料 ${signedMoney(line.reworkVariance)}`;
+    case 'REWORK_OUTPUT':
+      return `转出 ${signedMoney(line.reworkVariance)}`;
     default: return signedMoney(line.usageVariance);
   }
 }
 
-/** 回料来源: 「计划号 批次号 数量」, 来自追溯边。 */
-export function reworkSourcesText(sources: ReworkSource[] | undefined | null): string {
-  if (!sources || sources.length === 0) return '';
-  return sources
+/** 回料来源: 「计划号 批次号 数量」, 来自追溯边; 对不上 / 没有边时附提示。 */
+export function reworkSourcesText(sources: ReworkSource[] | undefined | null, note?: string | null): string {
+  const text = (sources ?? [])
     .map((s) => `${s.producerPlanNumber || s.producerPlanId || '未知计划'} ${s.producerBatchNumber || ''} ${qty(s.quantity, s.unit)}`.trim())
     .join('；');
+  return [text, note || ''].filter(Boolean).join('；');
+}
+
+/** 计划表里回料一格的副行: 回投 / 转出的量。 */
+export function reworkQuantityLine(p: { reworkQuantityText?: string | null; reworkOutputQuantityText?: string | null }): string {
+  return [p.reworkQuantityText ? `回投 ${p.reworkQuantityText}` : '', p.reworkOutputQuantityText ? `转出 ${p.reworkOutputQuantityText}` : '']
+    .filter(Boolean).join('，');
 }
 
 function lineName(line: PlanCostVarianceLine): string {
@@ -124,10 +136,10 @@ export function buildPeriodRows(report: CostVarianceReport, range: [string, stri
     ['用量差', signedMoney(report.usageVariance)],
     ['替代料差', signedMoney(report.substituteVariance)],
     ['人工差', signedMoney(report.laborVariance)],
-    ['回料差', reworkVarianceText(report.reworkVariance)],
+    ['回料差', reworkVarianceText(report.reworkVariance, report.reworkStatus), report.reworkSummary || ''],
     ['期间实际总成本（全部批次）', money(report.totalActualCost)],
     [],
-    ['计划', '产品', '标准成本', '实际成本', '差异', '差异率', '价格差', '用量差', '人工差', '回料差', '回投回料', '回料说明', '说明'],
+    ['计划', '产品', '标准成本', '实际成本', '差异', '差异率', '价格差', '用量差', '人工差', '回料差', '回料量', '回料说明', '说明'],
   );
   for (const p of report.planVariances ?? []) {
     rows.push([
@@ -141,7 +153,7 @@ export function buildPeriodRows(report: CostVarianceReport, range: [string, stri
       signedMoney(p.usageVariance),
       signedMoney(p.laborVariance),
       reworkVarianceText(p.reworkVariance, p.reworkStatus),
-      p.reworkQuantityText || '—',
+      reworkQuantityLine(p) || '—',
       p.recoveredMaterialNote || '',
       p.comparabilityReason || '全部可比',
     ]);
@@ -184,11 +196,11 @@ export function buildPlanRows(detail: PlanCostVariance): SheetRow[] {
       actualPriceText(line),
       line.standardAmount == null ? '—' : money(line.standardAmount),
       line.actualAmount == null ? '—' : money(line.actualAmount),
-      line.lineType === 'LABOR' || line.lineType === 'REWORK' ? '—' : signedMoney(line.priceVariance),
+      line.lineType === 'LABOR' || line.lineType === 'REWORK' || line.lineType === 'REWORK_OUTPUT' ? '—' : signedMoney(line.priceVariance),
       lineVarianceText(line),
       STATUS_LABEL[line.status] ?? line.status,
       (line.reasons ?? []).join('；'),
-      reworkSourcesText(line.reworkSources),
+      reworkSourcesText(line.reworkSources, line.reworkSourcesNote),
     ]);
   }
   return rows;
