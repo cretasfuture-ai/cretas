@@ -95,7 +95,13 @@ public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
                 }
                 allocations.add(allocation);
             }
-            allocationService.allocateBatches(factoryId, deliveryItemId, allocations);
+            // Q10: 有登录身份就带上 (换算确认要记「谁」); 没有身份走不带身份的入口, 它拒绝任何换算确认
+            Long actorUserId = getUserId(context);
+            if (actorUserId != null) {
+                allocationService.allocateBatchesAsUser(factoryId, deliveryItemId, allocations, actorUserId);
+            } else {
+                allocationService.allocateBatches(factoryId, deliveryItemId, allocations);
+            }
         } else {
             throw new IllegalArgumentException("allocationMode只能是AUTO_FIFO或EXPLICIT");
         }

@@ -28,6 +28,16 @@ public interface SalesDeliveryBatchAllocationService {
      */
     void allocateBatches(String factoryId, String deliveryItemId, List<BatchAllocationDTO> allocations);
 
+    /**
+     * 同 {@link #allocateBatches}, 由登录用户提交 (Q10, 2026-11-09)。规格不一致的批次带着
+     * {@code packagingConversionConfirmed=true} 时, 每个确认换算的批次留一行
+     * {@code sales_packaging_conversion_confirmations}: 谁 (actorUserId)、何时、哪张发货行、哪个成品批、从什么规格到什么规格。
+     * ⛔ 不带登录身份的 {@link #allocateBatches} 拒绝任何换算确认 —— 留不了「谁」, 就不能确认。
+     * 同一份分配重放 (批次和数量都相同) 不重复留痕。
+     */
+    void allocateBatchesAsUser(String factoryId, String deliveryItemId, List<BatchAllocationDTO> allocations,
+                               Long actorUserId);
+
     List<SalesDeliveryItemBatchAllocation> listByDeliveryItem(String factoryId, String deliveryItemId);
 
     /**
