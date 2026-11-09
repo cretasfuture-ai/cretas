@@ -3874,6 +3874,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 手工半成品领用会替换同一批的逐道投料 (见 deductProcessSheetStockFeeds), 所以量必须对得上:
      * 手工只填 1 而报工投了 100, 那 99 就没人扣了。⛔ 对不上就拒绝, 不取其一。
      * 报工里没投过的批次是真正的外部领用, 不在此列。
+     *
+     * <p>R3 (2026-11-09): 「报工投了多少」要算<b>全部</b>已报 —— 逐道录入行 (结单时才扣的、提交时已扣的)
+     * 加上 App 报工过账时已从来源扣掉的量。此前只比逐道行里结单时才扣的那部分: App 已报 30、再手工填 30,
+     * 两边对不上就漏判、对得上又照扣, 来源共扣 60。现在:
+     * <ul>
+     *   <li>手工量 ≠ 全部已报 → 409 SETTLEMENT_MANUAL_SEMI_MISMATCH (说清两条腿各报了多少)。</li>
+     *   <li>手工量 = 全部已报, 但其中有报工时已经扣过的 → 409 SETTLEMENT_MANUAL_SEMI_ALREADY_POSTED:
+     *       这行手工领用只会把已扣的再扣一遍, ⛔ 不静默只扣差额 (那会让结单消耗行和出库流水对不上)。</li>
+     *   <li>全部已报都还没扣 (只有结单时才扣的逐道投料) 且相等 → 放行, 手工行替换这些逐道投料, 只扣一次。</li>
+     * </ul>
+     * 需要补录与报工不同的量时, 先走报工更正 (有审批留痕), 再结单。
      */
     private void assertManualSemiMatchesReportedFeeds(String factoryId, ProductionPlan plan,
                                                       ProductionSettlementRequest request) {
@@ -3882,19 +3893,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return;
         }
         Map<String, BigDecimal> manualByBatchNo = new HashMap<>();
+        Map<String, Set<Long>> semiIdsByBatchNo = new HashMap<>();
         for (ProductionSettlementRequest.ConsumptionLine line : request.getSemiFinishedConsumptions()) {
             if (line == null || line.getSemiFinishedInventoryId() == null) {
                 continue;
             }
             semiFinishedInventoryRepository.findSourceRefById(line.getSemiFinishedInventoryId())
                     .filter(ref -> factoryId.equals(ref.getFactoryId()))
-                    .ifPresent(ref -> manualByBatchNo.merge(
-                            ref.getIntermediateBatchNo(), zeroIfNull(line.getQuantity()), BigDecimal::add));
+                    .ifPresent(ref -> {
+                        manualByBatchNo.merge(ref.getIntermediateBatchNo(), zeroIfNull(line.getQuantity()), BigDecimal::add);
+                        semiIdsByBatchNo.computeIfAbsent(ref.getIntermediateBatchNo(), ignored -> new HashSet<>())
+                                .add(line.getSemiFinishedInventoryId());
+                    });
         }
         if (manualByBatchNo.isEmpty()) {
             return;
         }
+        // 结单时才扣的逐道投料 (手工行替换的就是它) / 报工时已经扣掉的 (逐道提交时扣的 + App 报工过账)
         Map<String, BigDecimal> reportedByBatchNo = new HashMap<>();
+        Map<String, BigDecimal> postedRowsByBatchNo = new HashMap<>();
         List<ProductionSettlementPrefillResponse.Issue> ignore = new ArrayList<>();
         for (ProcessSheetRow row : Optional.ofNullable(processSheetRowRepository
                 .findByFactoryIdAndPlanId(factoryId, plan.getId())).orElseGet(List::of)) {
@@ -3906,7 +3923,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             for (ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
-                if (!ref.isSemiFinished() || ref.isStockConsumedAtSubmit()
+                if (!ref.isSemiFinished()
                         || !manualByBatchNo.containsKey(ref.getSourceBatchNumber())
                         || zeroIfNull(ref.getFeedQuantityKg()).signum() <= 0) {
                     continue;
@@ -3924,19 +3941,94 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHint("请先在产品配置为该半成品设置标准克重(每盒克重), 再重试")
                             .withHintTarget("半成品领用");
                 }
-                reportedByBatchNo.merge(ref.getSourceBatchNumber(), inSourceUnit, BigDecimal::add);
+                (ref.isStockConsumedAtSubmit() ? postedRowsByBatchNo : reportedByBatchNo)
+                        .merge(ref.getSourceBatchNumber(), inSourceUnit, BigDecimal::add);
             }
         }
-        for (Map.Entry<String, BigDecimal> reported : reportedByBatchNo.entrySet()) {
-            BigDecimal manual = manualByBatchNo.get(reported.getKey());
-            if (manual.compareTo(reported.getValue()) != 0) {
-                throw new BusinessException(409, "半成品 " + reported.getKey() + " 手工领用 " + stripTrailing(manual)
-                        + " 与逐道报工投料 " + stripTrailing(reported.getValue()) + " 不一致")
+        Map<String, BigDecimal> postedAppByBatchNo = appReportedSemiConsumption(factoryId, plan, semiIdsByBatchNo);
+        for (Map.Entry<String, BigDecimal> manualEntry : manualByBatchNo.entrySet()) {
+            String batchNo = manualEntry.getKey();
+            BigDecimal manual = manualEntry.getValue();
+            BigDecimal rowsAtSettlement = reportedByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);
+            BigDecimal rowsAtSubmit = postedRowsByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);
+            BigDecimal app = postedAppByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);
+            BigDecimal rows = rowsAtSettlement.add(rowsAtSubmit);
+            BigDecimal reported = rows.add(app);
+            if (reported.signum() == 0) {
+                continue;   // 报工里没投过这批: 真正的外部领用
+            }
+            String unit = semiUnitLabel(semiIdsByBatchNo.get(batchNo));
+            if (manual.compareTo(reported) != 0) {
+                throw new BusinessException(409, "半成品 " + batchNo + " 手工领用 " + stripTrailing(manual) + unit
+                        + " 与已报投料 " + stripTrailing(reported) + unit + " 不一致 (逐道录入 " + stripTrailing(rows) + unit
+                        + ", App 报工 " + stripTrailing(app) + unit + ")")
                         .withCode("SETTLEMENT_MANUAL_SEMI_MISMATCH")
-                        .withHint("报工已记录这批半成品的投料, 请删掉这行手工领用, 或先更正逐道报工再结单")
+                        .withHint("报工已记录这批半成品的投料, 请删掉这行手工领用, 或先更正报工再结单")
+                        .withHintTarget("半成品领用");
+            }
+            BigDecimal alreadyDeducted = rowsAtSubmit.add(app);
+            if (alreadyDeducted.signum() > 0) {
+                throw new BusinessException(409, "半成品 " + batchNo + " 已在报工时扣过 " + stripTrailing(alreadyDeducted) + unit
+                        + " (逐道提交 " + stripTrailing(rowsAtSubmit) + unit + ", App 报工 " + stripTrailing(app) + unit
+                        + "), 这行手工领用会把它再扣一遍")
+                        .withCode("SETTLEMENT_MANUAL_SEMI_ALREADY_POSTED")
+                        .withHint("报工已经从库存扣过这批半成品, 请删掉这行手工领用; 数量不对请先更正报工再结单")
                         .withHintTarget("半成品领用");
             }
         }
+    }
+
+    /**
+     * App 报工过账时已经从这些半成品行扣掉的量 (本计划各批次的活报工, 按出库流水净额: 出库 − 同一报工的还回)。
+     * 流水就是过账本身, ⛔ 不按报工上的数字再算一遍。
+     */
+    private Map<String, BigDecimal> appReportedSemiConsumption(String factoryId, ProductionPlan plan,
+                                                               Map<String, Set<Long>> semiIdsByBatchNo) {
+        Map<String, BigDecimal> result = new HashMap<>();
+        if (productionReportRepository == null || semiFinishedInventoryTransactionRepository == null
+                || semiIdsByBatchNo.isEmpty()) {
+            return result;
+        }
+        Map<Long, String> batchNoBySemiId = new HashMap<>();
+        semiIdsByBatchNo.forEach((batchNo, ids) -> ids.forEach(id -> batchNoBySemiId.put(id, batchNo)));
+        List<ProductionBatch> planBatches = Optional.ofNullable(
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId())).orElseGet(List::of);
+        for (ProductionBatch batch : planBatches) {
+            if (batch == null || batch.getId() == null) {
+                continue;
+            }
+            for (ProductionReport report : Optional.ofNullable(
+                    productionReportRepository.findYieldReportsByBatch(factoryId, batch.getId())).orElseGet(List::of)) {
+                if (report == null || report.getId() == null) {
+                    continue;
+                }
+                for (SemiFinishedInventoryTransaction txn : Optional.ofNullable(semiFinishedInventoryTransactionRepository
+                        .findByFactoryIdAndReportId(factoryId, report.getId())).orElseGet(List::of)) {
+                    String batchNo = txn == null ? null : batchNoBySemiId.get(txn.getSemiFinishedId());
+                    if (batchNo == null || txn.getQuantity() == null) {
+                        continue;
+                    }
+                    if (SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())) {
+                        result.merge(batchNo, txn.getQuantity().abs(), BigDecimal::add);
+                    } else if (SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())
+                            && txn.getQuantity().signum() > 0) {
+                        result.merge(batchNo, txn.getQuantity().negate(), BigDecimal::add);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    private String semiUnitLabel(Set<Long> semiIds) {
+        if (semiIds == null || semiIds.isEmpty() || semiFinishedInventoryRepository == null) {
+            return "";
+        }
+        // 只取身份 (⛔ 不 findById: 会把库存行装进持久化上下文, 之后同一事务的锁内扣减读到旧余额)
+        return semiFinishedInventoryRepository.findSourceRefById(semiIds.iterator().next())
+                .map(SemiFinishedInventoryRepository.SourceRef::getUnit)
+                .map(com.cretas.aims.service.unit.UnitDisplayNames::display)
+                .orElse("");
     }
 
     /**
