@@ -1,5 +1,6 @@
 package com.cretas.aims.service.impl;
 
+import com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor;
 import org.mockito.Mockito;
 
 import java.lang.reflect.Constructor;
@@ -17,6 +18,18 @@ final class UrgentInsertTestSupport {
 
     private UrgentInsertTestSupport() {}
 
+    /** 默认评估器: 原料够, 指纹固定为 {@link #MATERIAL_FP}; 需要别的结果的测试自己传一个进来。 */
+    static final String MATERIAL_FP = "FP-MATERIAL-OK";
+
+    static UrgentInsertMaterialAssessor okAssessor() {
+        UrgentInsertMaterialAssessor assessor = Mockito.mock(UrgentInsertMaterialAssessor.class);
+        Mockito.when(assessor.assess(Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(new UrgentInsertMaterialAssessor.Assessment(
+                        UrgentInsertMaterialAssessor.Status.OK, null, "RECIPE-1", 3,
+                        java.util.List.of(), MATERIAL_FP));
+        return assessor;
+    }
+
     static <T> T construct(Class<T> type, Map<Class<?>, Object> provided) {
         try {
             Constructor<?> ctor = Arrays.stream(type.getDeclaredConstructors())
@@ -25,7 +38,9 @@ final class UrgentInsertTestSupport {
             Class<?>[] params = ctor.getParameterTypes();
             Object[] args = new Object[params.length];
             for (int i = 0; i < params.length; i++) {
-                args[i] = provided.containsKey(params[i]) ? provided.get(params[i]) : Mockito.mock(params[i]);
+                args[i] = provided.containsKey(params[i]) ? provided.get(params[i])
+                        : params[i] == UrgentInsertMaterialAssessor.class ? okAssessor()
+                        : Mockito.mock(params[i]);
             }
             ctor.setAccessible(true);
             return type.cast(ctor.newInstance(args));

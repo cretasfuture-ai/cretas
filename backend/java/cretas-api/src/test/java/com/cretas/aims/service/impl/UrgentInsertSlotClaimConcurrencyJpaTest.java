@@ -127,7 +127,8 @@ class UrgentInsertSlotClaimConcurrencyJpaTest {
                 .productionLineId(slot.getProductionLineId()).windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
                 .impactLevel("none").requiresApproval(false).affectedPlanCount(0)
-                .candidateNumber(1).build();
+                .candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP)
+                .impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).build();
         preview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV-UI-CC", currentFactoryId))
                 .thenReturn(java.util.Optional.of(preview));

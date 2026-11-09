@@ -97,7 +97,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).build();
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));
 
@@ -363,7 +363,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("high").requiresApproval(true).affectedPlanCount(0).candidateNumber(1)
+                .impactLevel("high").requiresApproval(true).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null))
                 .build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));
@@ -385,7 +385,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("low").requiresApproval(true).affectedPlanCount(0).candidateNumber(1)
+                .impactLevel("low").requiresApproval(true).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null))
                 .build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));
