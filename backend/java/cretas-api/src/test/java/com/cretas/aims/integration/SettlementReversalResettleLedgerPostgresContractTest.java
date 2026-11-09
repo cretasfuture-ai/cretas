@@ -398,4 +398,57 @@ class SettlementReversalResettleLedgerPostgresContractTest {
                 Integer.class, f.planId())).as("逐道行一行没删").isEqualTo(2);
         assertThat(stamp(f.stepOneRowId())).as("戳没被清").isNotNull();
     }
+
+    /**
+     * 独立审查 #1550 发现 1: 本 PR 之前的撤回既不还投料也不清戳。「结单 → 旧撤回 → 再结单」之后,
+     * 没撤的那道还挂着第一次结单的戳, 却已被第二次结单 (也是旧结单, 没有明细) 再扣了一次。
+     * 只按「这张结单的戳」找行会漏掉它, 撤回被放行, 再结单时第三次扣。必须拒绝, 且什么都不动。
+     */
+    @Test
+    void legacySettlementAfterAnOldStyleReversalStillRefusesBecauseEveryUsableRowCounts() {
+        Fixture f = fixture(true);
+        settle(f, "k1-" + f.planId());
+        assertConserved(f, "第一次结单", "40", "20");
+        LocalDateTime firstStamp = stamp(f.stepOneRowId());
+        assertThat(firstStamp).isNotNull();
+
+        // 旧撤回 (本 PR 之前): 软删结单与被撤那一道, 计划/批次回到生产中; 投料一笔不还, 戳一个不清
+        assertThat(jdbc.update("update production_settlements set deleted_at = now() where production_plan_id = ? "
+                + "and deleted_at is null", f.planId())).isEqualTo(1);
+        assertThat(jdbc.update("update process_sheet_rows set deleted_at = now() where id = ?", f.finalRowId()))
+                .isEqualTo(1);
+        jdbc.update("update production_plans set status = 'IN_PROGRESS', actual_quantity = null, end_time = null "
+                + "where id = ?", f.planId());
+        jdbc.update("update production_batches set status = 'IN_PROGRESS' where id = ?", f.finalBatchId());
+        assertConserved(f, "旧撤回 (没还)", "40", "20");
+
+        // 第 2 道重新录入, 这回没有投料; 再结单 (也是旧结单): 第 1 道的 10 被再扣一次, 它的戳还是第一次的
+        Long redoRowId = tx.execute(state -> rows.save(row(f.planId(),
+                batches.findById(f.finalBatchId()).orElseThrow(), 2, "step2-redo-" + f.planId(), true,
+                List.of())).getId());
+        settle(f, "k2-" + f.planId());
+        assertConserved(f, "旧撤回后再结单", "50", "20");
+        assertThat(stamp(f.stepOneRowId())).as("第 1 道仍是第一次结单的戳").isEqualTo(firstStamp);
+        LocalDateTime secondStamp = stamp(redoRowId);
+        assertThat(secondStamp).as("第二次结单只给没戳的行盖戳").isNotNull().isNotEqualTo(firstStamp);
+        assertThat(jdbc.update("update production_settlements set stock_feed_detail = null where production_plan_id = ? "
+                + "and deleted_at is null", f.planId())).isEqualTo(1);
+
+        assertThatThrownBy(() -> reverseFinalStep(f))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).getErrorCode()).isEqualTo("SETTLEMENT_STOCK_FEED_DETAIL_MISSING");
+                    assertThat(e.getMessage()).contains(f.semiNo() + "×10kg");
+                });
+
+        assertConserved(f, "拒绝撤回后", "50", "20");
+        assertThat(jdbc.queryForObject("select count(*) from production_settlements where production_plan_id = ? "
+                + "and deleted_at is null", Integer.class, f.planId())).as("第二张结单还在").isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from process_sheet_rows where plan_id = ? and deleted_at is null",
+                Integer.class, f.planId())).as("逐道行一行没删").isEqualTo(2);
+        assertThat(stamp(f.stepOneRowId())).as("第 1 道的戳没动").isEqualTo(firstStamp);
+        assertThat(stamp(redoRowId)).as("第 2 道的戳没动").isEqualTo(secondStamp);
+        assertThat(jdbc.queryForObject("select status from production_plans where id = ?", String.class, f.planId()))
+                .isEqualTo("COMPLETED");
+    }
 }

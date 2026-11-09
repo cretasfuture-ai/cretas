@@ -44,6 +44,39 @@ public final class SettlementStockFeedDetail {
     private SettlementStockFeedDetail() {
     }
 
+    /**
+     * 结单读哪些逐道行: 有载荷、不是草稿; 已提交的一律算; 没有提交状态的旧行按旧的行状态
+     * (空 / SAVED / SUBMITTED) 算。⛔ 不看 {@code interim_settled_at} —— 结单扣投料从来不看戳。
+     *
+     * <p>结单扣料 ({@code deductProcessSheetStockFeeds}) 与撤回判定旧结单扣过什么用的是同一份判定;
+     * 两边各写一份, 一边改了另一边就会漏判 (旧结单撤回放行, 重结再扣一次)。
+     */
+    public static boolean isSettlementRow(com.cretas.aims.entity.processentry.ProcessSheetRow row) {
+        if (row == null || row.getRowPayload() == null || row.getRowPayload().isBlank()) {
+            return false;
+        }
+        String status = trimToNull(row.getRowStatus());
+        String submission = trimToNull(row.getSubmissionStatus());
+        if (com.cretas.aims.entity.processentry.ProcessSheetRow.SUBMISSION_DRAFT.equals(submission)) {
+            return false;
+        }
+        if (com.cretas.aims.entity.processentry.ProcessSheetRow.SUBMISSION_SUBMITTED.equals(submission)) {
+            return true;
+        }
+        // 提交状态这一列出现之前写的行保留旧的行状态语义; 新的草稿行永远进不了结单。
+        boolean legacy = submission == null
+                || com.cretas.aims.entity.processentry.ProcessSheetRow.SUBMISSION_LEGACY.equals(submission);
+        return legacy && (status == null || "SAVED".equals(status) || "SUBMITTED".equals(status));
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     public static String write(List<Entry> entries) {
         try {
             return MAPPER.writeValueAsString(entries == null ? List.of() : entries);

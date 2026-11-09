@@ -213,7 +213,7 @@ class SettlementStockFeedReversalContractTest {
     void legacySettlementThatDeductedFeedsWithoutDetailIsRefusedBeforeAnyChange() {
         settlement.setStockFeedDetail(null);
         ProcessSheetRow stamped = stampedRow(11L, ref("SRC", "30", true, false));
-        when(rowRepo.findByFactoryIdAndPlanIdAndInterimSettledAt(F, PLAN, SETTLED_AT)).thenReturn(List.of(stamped));
+        when(rowRepo.findByFactoryIdAndPlanId(F, PLAN)).thenReturn(List.of(stamped));
 
         assertThatThrownBy(() -> reversal.executeReversal(LOG, F))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
@@ -229,12 +229,27 @@ class SettlementStockFeedReversalContractTest {
     }
 
     @Test
+    void legacySettlementRefusesEvenWhenTheFeedRowStillCarriesAnEarlierSettlementsStamp() {
+        // 本 PR 之前的撤回不清戳: 这一行挂着第一次结单的戳, 第二次结单 (旧结单, 没有明细) 照样扣过它
+        settlement.setStockFeedDetail(null);
+        ProcessSheetRow earlier = stampedRow(11L, ref("SRC", "10", true, false));
+        earlier.setInterimSettledAt(SETTLED_AT.minusDays(1));
+        when(rowRepo.findByFactoryIdAndPlanId(F, PLAN)).thenReturn(List.of(earlier));
+
+        assertThatThrownBy(() -> reversal.executeReversal(LOG, F))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("SETTLEMENT_STOCK_FEED_DETAIL_MISSING");
+                    assertThat(e.getMessage()).contains("SRC×10kg");
+                });
+        assertThat(settlement.getDeletedAt()).isNull();
+    }
+
+    @Test
     void legacySettlementWhoseRowsOnlyHadSubmitTimeOrManualFeedsStillReverses() {
         settlement.setStockFeedDetail(null);
         ProcessSheetRowRequest.UpstreamRef atSubmit = ref("REWORK", "5", true, false);
         atSubmit.setStockConsumedAtSubmit(true);
-        when(rowRepo.findByFactoryIdAndPlanIdAndInterimSettledAt(F, PLAN, SETTLED_AT))
-                .thenReturn(List.of(stampedRow(11L, atSubmit)));
+        when(rowRepo.findByFactoryIdAndPlanId(F, PLAN)).thenReturn(List.of(stampedRow(11L, atSubmit)));
 
         reversal.executeReversal(LOG, F);
 

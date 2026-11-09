@@ -4879,22 +4879,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return buildPrefillResponse(prefill, issues);
     }
 
+    /** 与撤回判定旧结单扣过什么同一份判定, 见 {@link com.cretas.aims.service.production.SettlementStockFeedDetail#isSettlementRow}。 */
     private boolean isUsableProcessSheetRow(ProcessSheetRow row) {
-        if (row == null || isBlank(row.getRowPayload())) {
-            return false;
-        }
-        String status = trimToNull(row.getRowStatus());
-        String submission = trimToNull(row.getSubmissionStatus());
-        if (ProcessSheetRow.SUBMISSION_DRAFT.equals(submission)) {
-            return false;
-        }
-        if (ProcessSheetRow.SUBMISSION_SUBMITTED.equals(submission)) {
-            return true;
-        }
-        // Explicit legacy compatibility: rows written before submission_status existed
-        // retain their historical rowStatus semantics, but new DRAFT rows never enter settlement.
-        boolean legacy = submission == null || ProcessSheetRow.SUBMISSION_LEGACY.equals(submission);
-        return legacy && (status == null || "SAVED".equals(status) || "SUBMITTED".equals(status));
+        return com.cretas.aims.service.production.SettlementStockFeedDetail.isSettlementRow(row);
     }
 
     private ProcessSheetRowRequest parseProcessSheetRowPayload(ProcessSheetRow row,

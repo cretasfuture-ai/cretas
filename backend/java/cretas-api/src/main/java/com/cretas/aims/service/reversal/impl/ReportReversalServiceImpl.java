@@ -2069,7 +2069,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * <ul>
      *   <li>没有活结单 → {@code null} (没有可还的)。</li>
      *   <li>结单带明细 → 照明细还; 要还的半成品同时又是这次报工撤回要动的行 → 409 (两条路同时改同一行, 不猜顺序)。</li>
-     *   <li>旧结单 (明细列为 null): 盖过这张结单戳的逐道行里确实有结单时扣的投料 → 409, ⛔ 不按现在的行和
+     *   <li>旧结单 (明细列为 null): 本计划结单会读的逐道行 (不论戳) 里确实有结单时扣的投料 → 409, ⛔ 不按现在的行和
      *       每盒克重倒推 (倒推出来的量不是当时扣的量); 一笔都没有 → 空, 照常撤回。</li>
      * </ul>
      * 必须在任何改动 (软删报工 / 软删逐道行) 之前调用: 旧结单的判定要看被撤那一道还没软删的行。
@@ -2137,11 +2137,16 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     }
 
     /**
-     * 旧结单 (没有明细) 当时按逐道录入行扣过哪些投料: 盖着这张结单戳、已提交、不是提交时已扣、
+     * 旧结单 (没有明细) 当时按逐道录入行扣过哪些投料: 本计划结单会读的每一行 (与结单扣料同一份判定
+     * {@link com.cretas.aims.service.production.SettlementStockFeedDetail#isSettlementRow}), 不是提交时已扣、
      * 也不是被同批手工领用替换掉的常驻半成品/成品投料。只用来判定「能不能撤」, ⛔ 不拿来还。
+     *
+     * <p>⛔ 不按「盖着这张结单的戳」筛: 结单扣料从来不看戳, 只给还没戳的行盖戳。本 PR 之前的撤回既不还料
+     * 也不清戳, 于是「结单 → 旧撤回 → 再结单」之后, 没撤的那几道还挂着第一次结单的戳, 却已被第二次结单再扣过;
+     * 按戳筛会把它们漏掉, 这张结单就被放行撤回, 再结单时第三次扣。
      */
     private List<String> legacySettlementStockFeeds(String factoryId, String planId, ProductionSettlement settlement) {
-        if (processSheetRowRepository == null || settlement.getSettledAt() == null) {
+        if (processSheetRowRepository == null) {
             return List.of();
         }
         Set<String> manualSemiBatchNos = new HashSet<>();
@@ -2157,10 +2162,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         }
         com.fasterxml.jackson.databind.ObjectMapper mapper = payloadMapper();
         List<String> found = new ArrayList<>();
-        for (ProcessSheetRow row : processSheetRowRepository.findByFactoryIdAndPlanIdAndInterimSettledAt(
-                factoryId, planId, settlement.getSettledAt())) {
-            if (row == null || row.getRowPayload() == null || row.getRowPayload().isBlank()
-                    || ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus())) {
+        for (ProcessSheetRow row : Optional.ofNullable(processSheetRowRepository.findByFactoryIdAndPlanId(
+                factoryId, planId)).orElse(List.of())) {
+            if (!com.cretas.aims.service.production.SettlementStockFeedDetail.isSettlementRow(row)) {
                 continue;
             }
             com.cretas.aims.dto.processentry.ProcessSheetRowRequest req;
