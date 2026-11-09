@@ -55,7 +55,7 @@ import static org.mockito.Mockito.when;
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-class UrgentInsertDryRunJpaTest {
+class UrgentInsertDryRunContractTest {
 
     private static final String F = "F-DRYRUN-JPA";
 
