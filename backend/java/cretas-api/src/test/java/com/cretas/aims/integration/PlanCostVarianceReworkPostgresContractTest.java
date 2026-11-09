@@ -116,6 +116,9 @@ class PlanCostVarianceReworkPostgresContractTest {
         OrderCostBreakdownDTO breakdown = new OrderCostBreakdownDTO();
         breakdown.setConvertedOutputKg(new BigDecimal("80"));
         when(orderCostBreakdownService.computeByPlan(anyString(), anyString(), anyBoolean())).thenReturn(breakdown);
+        // 同单位换算原量返回 (与生产 UnitConversionService 一致; MockBean 默认会回 null)
+        when(unitConversionService.convert(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq("kg"),
+                org.mockito.ArgumentMatchers.eq("kg"))).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
@@ -174,6 +177,10 @@ class PlanCostVarianceReworkPostgresContractTest {
         PlanCostVarianceDTO masked = service.computeForPlan(factory, consumerPlan, true);
         assertThat(reworkLine(masked, pool).getReworkVariance()).as("脱敏: 行上回料差 = 金额, 一并隐藏").isNull();
         assertThat(reworkLine(masked, pool).getActualUnitPrice()).isNull();
+        assertThat(masked.getReworkVariance()).as("脱敏: 计划级回料差 ÷ 回投量 = 池价, 一并隐藏").isNull();
+        assertThat(masked.isReworkPriceMasked()).isTrue();
+        assertThat(masked.getRecoveredMaterialNote()).doesNotContain("¥").contains("金额已隐藏").contains("回投 2.5 kg");
+        assertThat(masked.getReworkQuantityText()).isEqualTo("2.5 kg");
     }
 
     @Test
@@ -221,12 +228,21 @@ class PlanCostVarianceReworkPostgresContractTest {
                         + "values (?, ?, 'draft', ?, cast(? as jsonb), 'DRAFT', 'DRAFT', now(), now())",
                 factory, p, "draft-M", "{\"upstreamSources\":[{\"semiFinished\":true,\"sourceBatchNumber\":\""
                         + pool + "\",\"feedQuantityKg\":9}]}");
-        batch(p, "PB-M-FIN-" + factory);
+        // 旧式 (LEGACY) 未物化 DRAFT 行: 小结从不过账, 回料从没从池里扣过 ⇒ 7kg 不算
+        jdbc.update("insert into process_sheet_rows (factory_id, plan_id, process_code, client_row_id, "
+                        + "row_payload, row_status, submission_status, created_at, updated_at) "
+                        + "values (?, ?, 'legacy', ?, cast(? as jsonb), 'DRAFT', 'LEGACY', now(), now())",
+                factory, p, "legacy-M", "{\"outputQuantity\":0,\"upstreamSources\":[{\"semiFinished\":true,"
+                        + "\"sourceBatchNumber\":\"" + pool + "\",\"feedQuantityKg\":7}]}");
+        // ⚠️ 不建最后一道的正式批次: 逐道录入还没到最后一道的计划, 回料一样要算 (不能早退成「没有回料」)
 
         PlanCostVarianceDTO v = service.computeForPlan(factory, p, false);
 
         PlanCostVarianceDTO.Line line = reworkLine(v, pool);
-        assertThat(line.getActualQuantity()).as("1 (中间道) + 0.5 (纯库存行), 草稿 9 不算").isEqualByComparingTo("1.5");
+        assertThat(line.getActualQuantity()).as("1 (中间道) + 0.5 (纯库存行); 草稿 9、旧式未物化 7 不算")
+                .isEqualByComparingTo("1.5");
+        assertThat(line.getReworkSourcesNote()).as("纯库存行没有批次不写边, 只拿有批次的 1kg 去比 (这里没写边 ⇒ 来源未知)")
+                .contains("来源未知");
         assertThat(line.getActualAmount()).isEqualByComparingTo("15.00");
         assertThat(v.getReworkVariance()).isEqualByComparingTo("15.00");
     }
@@ -447,9 +463,9 @@ class PlanCostVarianceReworkPostgresContractTest {
 
     private void feedRow(String planId, long batchId, String upstreamJson) {
         jdbc.update("insert into process_sheet_rows (factory_id, plan_id, process_code, client_row_id, batch_id, "
-                        + "row_payload, row_status, submission_status, created_at, updated_at) "
-                        + "values (?, ?, 'xiuyou', ?, ?, cast(? as jsonb), 'SAVED', 'SUBMITTED', now(), now())",
-                factory, planId, "feed-" + batchId, batchId,
+                        + "batch_number, row_payload, row_status, submission_status, created_at, updated_at) "
+                        + "values (?, ?, 'xiuyou', ?, ?, ?, cast(? as jsonb), 'SAVED', 'SUBMITTED', now(), now())",
+                factory, planId, "feed-" + batchId, batchId, "CLK-W-" + batchId,
                 "{\"outputQuantity\":9,\"upstreamSources\":" + upstreamJson + "}");
     }
 

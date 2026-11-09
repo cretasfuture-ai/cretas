@@ -113,6 +113,16 @@ class CostVarianceReportReworkContractTest {
     }
 
     @Test
+    void oneSideIncomparableIsSpelledOutBecauseThePeriodNoLongerNets() {
+        PlanCostVarianceDTO producer = plan("P3", "50", "50", "0", null);
+        producer.setReworkStatus(PlanCostVarianceDTO.REWORK_INCOMPARABLE); // 产出转出那头无法比较
+        CostVarianceReportDTO r = report(plan("P1", "100", "140", "10", "30"), producer);
+        assertThat(r.getReworkStatus()).isEqualTo(PlanCostVarianceDTO.REWORK_COMPARABLE);
+        assertThat(r.getReworkSummary()).contains("2 个计划有回料").contains("1 个回料差已计入合计")
+                .contains("1 个回料差无法比较").contains("只计入了一头");
+    }
+
+    @Test
     void noComparableReworkAnywhereIsNullNotZero() {
         CostVarianceReportDTO r = report(plan("P2", "50", "55", "5", null));
         assertThat(r.getReworkVariance()).as("⛔ 不报「回料差 ¥0」").isNull();

@@ -1635,7 +1635,12 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         if (counted > 0) parts.add(counted + " 个回料差已计入合计");
         if (incomparable > 0) parts.add(incomparable + " 个回料差无法比较 (见各计划原因)");
         if (internal > 0) parts.add(internal + " 个只有本计划自产自用 (内部转移)");
-        return total + " 个计划有回料: " + String.join(", ", parts);
+        String text = total + " 个计划有回料: " + String.join(", ", parts);
+        if (counted > 0 && incomparable > 0) {
+            // 回投方和产出转出方可能只有一头进了合计 (另一头无法比较), 期间回料差不一定两相抵消
+            text += "; 回投与产出转出可能只计入了一头, 期间回料差看不全";
+        }
+        return text;
     }
 
     /** 差异原因: 由实际算出的分项拼成 (⛔ 不再按 60/30/10 编)。 */

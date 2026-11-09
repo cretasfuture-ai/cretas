@@ -169,6 +169,20 @@ describe('成本差异报表 (缺口 09/10)', () => {
     wrapper.unmount();
   });
 
+  it('无采购价权限: 回料金额写「已隐藏」, 不写「无法比较」', async () => {
+    api.plan.mockResolvedValueOnce({ success: true, data: { ...planSummary, priceMasked: true, reworkPriceMasked: true,
+      reworkVariance: null, recoveredMaterialNote: '回投 2.5 kg 回料, …; 回料差 (金额已隐藏) 已计入合计',
+      lines: [{ ...reworkLine, actualUnitPrice: null, actualAmount: null, reworkVariance: null }], allocationMethods: [] } });
+    const wrapper = mountPage(); await flushPromises();
+    await wrapper.get('[data-testid="plan-detail-P1"]').trigger('click'); await flushPromises();
+    const detail = document.body.querySelector('[data-testid="plan-cost-variance-detail"]')?.textContent ?? '';
+    expect(document.body.querySelector('[data-testid="detail-rework-variance"]')?.textContent).toContain('已隐藏');
+    expect(detail).toContain('回料 已隐藏');
+    expect(detail).not.toContain('回料 无法比较');
+    expect(detail).not.toContain('12.9375');
+    wrapper.unmount();
+  });
+
   it('读取失败: 原文 sticky 报错, 不留旧数', async () => {
     api.report.mockRejectedValueOnce(new Error('成本差异读取失败: 数据库不可用'));
     const wrapper = mountPage(); await flushPromises();

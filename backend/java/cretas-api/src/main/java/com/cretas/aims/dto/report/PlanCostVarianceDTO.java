@@ -85,6 +85,8 @@ public class PlanCostVarianceDTO {
     private BigDecimal reworkVariance;
     /** NONE / COMPARABLE / INTERNAL_ONLY / INCOMPARABLE。 */
     private String reworkStatus;
+    /** 无采购价权限: 回料金额被隐藏 (reworkVariance 为 null 是「隐藏」不是「算不出」)。 */
+    private boolean reworkPriceMasked;
     /** 回投回料的量 (按回料池单位分列, 如 "1.0000 kg"); 没有回料时 null。 */
     private String reworkQuantityText;
     /** 本计划产出、转给别的计划或留在池里的回料量 (产出方转出, 按池价记负); 没有时 null。 */

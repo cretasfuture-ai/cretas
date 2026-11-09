@@ -96,6 +96,8 @@ export interface PlanCostVariance {
   /** null = 没有可比的回料项 (看 reworkStatus), 不是 0。 */
   reworkVariance?: number | null;
   reworkStatus?: ReworkStatus | null;
+  /** 无采购价权限: 回料金额被隐藏 (reworkVariance 为 null 是隐藏, 不是算不出)。 */
+  reworkPriceMasked?: boolean;
   reworkQuantityText?: string | null;
   /** 本计划产出、转给别的计划或留在池里的回料量。 */
   reworkOutputQuantityText?: string | null;

@@ -149,6 +149,7 @@ public class PlanCostVarianceService {
             return dto.comparable(false)
                     .comparabilityReason("这张计划没有标准成本快照 (开于快照功能上线前, 或没有锁定配方), 无法比较")
                     .reworkStatus(status)
+                    .reworkPriceMasked(maskPrice && !rework.usages().isEmpty())
                     .reworkQuantityText(reworkQuantityText(rework.usages()))
                     .reworkOutputQuantityText(reworkOutputQuantityText(rework.usages()))
                     .recoveredMaterialNote(noSnapshotReworkNote(rework.usages(), status))
@@ -171,8 +172,9 @@ public class PlanCostVarianceService {
             outputKg = unitConversionService.toKg(outputQty, plan.getPlannedUnit());
         }
         dto.outputQuantity(outputQty).outputUnit(plan.getPlannedUnit()).outputKg(outputKg);
-        if (batches.isEmpty() || (actual.byMaterial().isEmpty() && rework.usages().isEmpty()
-                && (outputQty == null || outputQty.signum() <= 0))) {
+        if ((batches.isEmpty() && rework.usages().isEmpty())
+                || (actual.byMaterial().isEmpty() && rework.usages().isEmpty()
+                        && (outputQty == null || outputQty.signum() <= 0))) {
             return dto.comparable(false)
                     .comparabilityReason("还没有实际领用和产出, 暂无可比较的实际成本")
                     .customerSuppliedItemCount(actual.customerSupplied() + rework.customerSupplied())
@@ -191,6 +193,7 @@ public class PlanCostVarianceService {
         if (maskPrice) {
             outLines.forEach(PlanCostVarianceService::mask);
         }
+        boolean hideReworkMoney = maskPrice && !rework.usages().isEmpty();
         String reason = !result.comparable()
                 ? "没有任何一项能完整比较: 见各项原因"
                 : result.incomparableCount() > 0
@@ -206,11 +209,14 @@ public class PlanCostVarianceService {
                 .usageVariance(result.comparable() ? result.usageVariance() : null)
                 .substituteVariance(result.comparable() ? result.substituteVariance() : null)
                 .laborVariance(result.comparable() ? result.laborVariance() : null)
-                .reworkVariance(result.comparable() ? result.reworkVariance() : null)
+                // 脱敏: 回料差 ÷ 回投量 = 池价, 计划级回料金额一并隐藏 (reworkPriceMasked 告诉前端是隐藏不是算不出)
+                .reworkVariance(result.comparable() && !hideReworkMoney ? result.reworkVariance() : null)
+                .reworkPriceMasked(hideReworkMoney)
                 .reworkStatus(result.reworkStatus())
                 .reworkQuantityText(reworkQuantityText(rework.usages()))
                 .reworkOutputQuantityText(reworkOutputQuantityText(rework.usages()))
-                .recoveredMaterialNote(reworkNote(result, rework.usages()))
+                .recoveredMaterialNote(hideReworkMoney ? stripMoney(reworkNote(result, rework.usages()))
+                        : reworkNote(result, rework.usages()))
                 .comparableItemCount(result.comparableCount())
                 .incomparableItemCount(result.incomparableCount())
                 .customerSuppliedItemCount(actual.customerSupplied() + rework.customerSupplied())
@@ -266,6 +272,11 @@ public class PlanCostVarianceService {
         return String.join(", ", parts);
     }
 
+    /** 脱敏时把说明里的金额换成「(金额已隐藏)」。 */
+    static String stripMoney(String note) {
+        return note == null ? null : note.replaceAll("[+−]?¥[0-9.,]+", "(金额已隐藏)");
+    }
+
     private static String signed(BigDecimal v) {
         return (v.signum() > 0 ? "+¥" : v.signum() < 0 ? "−¥" : "¥") + v.abs().setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
@@ -317,6 +328,8 @@ public class PlanCostVarianceService {
         final SemiFinishedInventory pool;
         BigDecimal quantity = BigDecimal.ZERO;
         BigDecimal feedKg = BigDecimal.ZERO;
+        /** 有批次的回投行的 kg (纯库存行没有批次, 不写追溯边, 不拿来比来源合计)。 */
+        BigDecimal tracedFeedKg = BigDecimal.ZERO;
         final Set<Long> feedingBatchIds = new HashSet<>();
         final List<String> reasons = new ArrayList<>();
 
@@ -346,8 +359,12 @@ public class PlanCostVarianceService {
         if (processSheetRowRepository == null || sfiRepository == null) {
             return new ReworkSide(List.of(), 0);
         }
+        // 与小结 InterimSettleServiceImpl 过账同一判据: 草稿不算; 没物化 (batchId 空) 又不是纯半成品行 (SAVED_SFI) 的
+        // 旧式 DRAFT 行, 回料从没从池里扣过, 也不算
         List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId).stream()
                 .filter(r -> !ProcessSheetRow.SUBMISSION_DRAFT.equals(r.getSubmissionStatus()))
+                .filter(r -> (r.getBatchId() != null || ProcessSheetRow.STATUS_SAVED_SFI.equals(r.getRowStatus()))
+                        && r.getBatchNumber() != null)
                 .toList();
         Map<String, MutableRework> pools = new LinkedHashMap<>();
         Set<String> customerSupplied = new HashSet<>();
@@ -362,10 +379,14 @@ public class PlanCostVarianceService {
                 SemiFinishedInventory pool = reworkPool(factoryId, poolNo);
                 if (pool != null && pool.getOwnership() != InventoryOwnership.CUSTOMER_OWNED) {
                     producedPools.putIfAbsent(poolNo, pool);
-                    BigDecimal out = decimal(payload, "outputQuantity");
+                    BigDecimal rawOut = decimal(payload, "outputQuantity");
+                    String rowUnit = payload.hasNonNull("outputUnit") ? payload.get("outputUnit").asText()
+                            : payload.hasNonNull("unit") ? payload.get("unit").asText() : "kg";
+                    BigDecimal out = rawOut == null ? null : convert(rawOut, rowUnit, pool.getUnit());
                     if (out == null) {
                         producedReasons.computeIfAbsent(poolNo, k -> new ArrayList<>())
-                                .add("有一笔回料入账报工读不出产出量, 转出量算不出");
+                                .add(rawOut == null ? "有一笔回料入账报工读不出产出量, 转出量算不出"
+                                        : "有一笔回料入账单位 " + rowUnit + " 折算不到回料池单位 " + pool.getUnit() + ", 转出量算不出");
                         producedByPool.put(poolNo, null);
                     } else if (!producedByPool.containsKey(poolNo) || producedByPool.get(poolNo) != null) {
                         producedByPool.merge(poolNo, out, BigDecimal::add);
@@ -399,6 +420,7 @@ public class PlanCostVarianceService {
                 agg.feedKg = agg.feedKg.add(feedKg);
                 if (row.getBatchId() != null) {
                     agg.feedingBatchIds.add(row.getBatchId());
+                    agg.tracedFeedKg = agg.tracedFeedKg.add(feedKg);
                 }
                 BigDecimal inPoolUnit = wipInventoryService == null ? null
                         : wipInventoryService.resolveSemiFeedQtyInSourceUnit(factoryId, poolNo, feedKg);
@@ -412,10 +434,6 @@ public class PlanCostVarianceService {
             }
         }
 
-        Set<Long> planBatchIds = new HashSet<>();
-        formalBatches.forEach(b -> planBatchIds.add(b.getId()));
-        batchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)
-                .forEach(b -> planBatchIds.add(b.getId())); // 含中间道 CLERK_WIP 批次: 回料常投在中间道
         Map<String, List<PlanCostVarianceDTO.ReworkSource>> sources = reworkSources(factoryId, pools);
         Map<String, String> sourcesNotes = new LinkedHashMap<>();
         List<PlanCostVarianceCalculator.ReworkUsage> out = new ArrayList<>();
@@ -431,7 +449,7 @@ public class PlanCostVarianceService {
                     : wipInventoryService.getSemiUnitCost(factoryId, agg.poolNo);
             String name = productName(factoryId, agg.pool.getProductTypeId());
             List<PlanCostVarianceDTO.ReworkSource> poolSources = sources.getOrDefault(agg.poolNo, List.of());
-            String mismatch = sourcesMismatch(poolSources, agg.feedKg);
+            String mismatch = agg.feedingBatchIds.isEmpty() ? null : sourcesMismatch(poolSources, agg.tracedFeedKg);
             if (mismatch != null) {
                 sourcesNotes.put(agg.poolNo, mismatch);
             }

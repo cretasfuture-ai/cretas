@@ -13,6 +13,8 @@ import type {
 } from '@/api/costVariance';
 
 export const INCOMPARABLE = '无法比较';
+/** 无采购价权限时被隐藏的金额 (⛔ 不写成「无法比较」: 算得出, 只是你看不到)。 */
+export const HIDDEN = '已隐藏';
 
 export function money(v: number | null | undefined): string {
   if (v == null) return INCOMPARABLE;
@@ -35,8 +37,9 @@ export function qty(v: number | null | undefined, unit?: string | null): string 
 }
 
 /** 回料差: 有数写数; null 时按状态说清是没有回料、内部转移还是算不出。 */
-export function reworkVarianceText(v: number | null | undefined, status?: ReworkStatus | null): string {
+export function reworkVarianceText(v: number | null | undefined, status?: ReworkStatus | null, masked?: boolean): string {
   if (v != null) return signedMoney(v);
+  if (masked && status !== 'NONE' && status !== 'INTERNAL_ONLY') return HIDDEN;
   switch (status) {
     case 'NONE': return '无回料';
     case 'INTERNAL_ONLY': return '内部转移 (不另计)';
@@ -81,15 +84,17 @@ export function actualPriceText(line: PlanCostVarianceLine): string {
 }
 
 /** 「用量差 / 替代料差 / 人工差 / 回料差」那一列。 */
-export function lineVarianceText(line: PlanCostVarianceLine): string {
+export function lineVarianceText(line: PlanCostVarianceLine, priceMasked = false): string {
+  const reworkMasked = priceMasked && line.status === 'COMPARABLE' && line.reworkVariance == null;
   switch (line.lineType) {
     case 'LABOR': return signedMoney(line.laborVariance);
     case 'SUBSTITUTE': return `替代 ${signedMoney(line.substituteVariance)}`;
     case 'UNPLANNED': return INCOMPARABLE;
     case 'REWORK':
-      return line.status === 'INTERNAL' ? '内部转移' : `回料 ${signedMoney(line.reworkVariance)}`;
+      if (line.status === 'INTERNAL') return '内部转移';
+      return `回料 ${reworkMasked ? HIDDEN : signedMoney(line.reworkVariance)}`;
     case 'REWORK_OUTPUT':
-      return `转出 ${signedMoney(line.reworkVariance)}`;
+      return `转出 ${reworkMasked ? HIDDEN : signedMoney(line.reworkVariance)}`;
     default: return signedMoney(line.usageVariance);
   }
 }
@@ -152,7 +157,7 @@ export function buildPeriodRows(report: CostVarianceReport, range: [string, stri
       signedMoney(p.priceVariance),
       signedMoney(p.usageVariance),
       signedMoney(p.laborVariance),
-      reworkVarianceText(p.reworkVariance, p.reworkStatus),
+      reworkVarianceText(p.reworkVariance, p.reworkStatus, p.reworkPriceMasked),
       reworkQuantityLine(p) || '—',
       p.recoveredMaterialNote || '',
       p.comparabilityReason || '全部可比',
@@ -180,7 +185,7 @@ export function buildPlanRows(detail: PlanCostVariance): SheetRow[] {
     ['用量差', signedMoney(detail.usageVariance)],
     ['替代料差', signedMoney(detail.substituteVariance)],
     ['人工差', signedMoney(detail.laborVariance)],
-    ['回料差', reworkVarianceText(detail.reworkVariance, detail.reworkStatus)],
+    ['回料差', reworkVarianceText(detail.reworkVariance, detail.reworkStatus, detail.reworkPriceMasked)],
     ['回料说明', detail.recoveredMaterialNote || ''],
     [],
     ['项目', '类型', '开计划时单价', '标准用量', '实际用量', '实际单价', '标准金额', '实际金额', '价格差',
@@ -197,7 +202,7 @@ export function buildPlanRows(detail: PlanCostVariance): SheetRow[] {
       line.standardAmount == null ? '—' : money(line.standardAmount),
       line.actualAmount == null ? '—' : money(line.actualAmount),
       line.lineType === 'LABOR' || line.lineType === 'REWORK' || line.lineType === 'REWORK_OUTPUT' ? '—' : signedMoney(line.priceVariance),
-      lineVarianceText(line),
+      lineVarianceText(line, detail.priceMasked),
       STATUS_LABEL[line.status] ?? line.status,
       (line.reasons ?? []).join('；'),
       reworkSourcesText(line.reworkSources, line.reworkSourcesNote),

@@ -247,7 +247,7 @@ onMounted(load);
           </el-table-column>
           <el-table-column label="回料差" min-width="120" align="right">
             <template #default="{ row }">
-              <span :class="varianceClass(row.reworkVariance)">{{ reworkVarianceText(row.reworkVariance, row.reworkStatus) }}</span>
+              <span :class="varianceClass(row.reworkVariance)">{{ reworkVarianceText(row.reworkVariance, row.reworkStatus, row.reworkPriceMasked) }}</span>
               <div v-if="reworkQuantityLine(row)" class="sub">{{ reworkQuantityLine(row) }}</div>
             </template>
           </el-table-column>
@@ -296,7 +296,7 @@ onMounted(load);
             <div class="summary-card"><span class="label">用量差</span><strong>{{ signedMoney(detail.usageVariance) }}</strong></div>
             <div class="summary-card"><span class="label">替代料差</span><strong>{{ signedMoney(detail.substituteVariance) }}</strong></div>
             <div class="summary-card"><span class="label">人工差</span><strong>{{ signedMoney(detail.laborVariance) }}</strong></div>
-            <div class="summary-card" data-testid="detail-rework-variance"><span class="label">回料差</span><strong :class="varianceClass(detail.reworkVariance)">{{ reworkVarianceText(detail.reworkVariance, detail.reworkStatus) }}</strong></div>
+            <div class="summary-card" data-testid="detail-rework-variance"><span class="label">回料差</span><strong :class="varianceClass(detail.reworkVariance)">{{ reworkVarianceText(detail.reworkVariance, detail.reworkStatus, detail.reworkPriceMasked) }}</strong></div>
           </div>
 
           <el-table :data="detail.lines" border size="small" data-testid="plan-cost-variance-lines">
@@ -332,7 +332,7 @@ onMounted(load);
             </el-table-column>
             <el-table-column label="用量差 / 替代料差 / 人工差 / 回料差" min-width="160" align="right">
               <template #default="{ row }">
-                <span :class="lineVarianceClass(row)">{{ lineVarianceText(row) }}</span>
+                <span :class="lineVarianceClass(row)">{{ lineVarianceText(row, detail.priceMasked) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="状态" min-width="220">
