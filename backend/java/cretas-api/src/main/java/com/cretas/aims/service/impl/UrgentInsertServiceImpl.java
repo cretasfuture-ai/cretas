@@ -29,6 +29,7 @@ import com.cretas.aims.service.DecisionAuditService;
 import com.cretas.aims.service.ImpactAnalysisService;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
+import com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor;
 import com.cretas.aims.service.scheduling.WorkerShiftAvailabilityCheck;
 import com.cretas.aims.service.ImpactAnalysisService.*;
 import com.cretas.aims.service.LinkArrayService;
@@ -81,6 +82,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final SchedulingResourceWriteLock resourceWriteLock;
     private final ApprovalChainService approvalChainService;
     private final PushNotificationService pushNotificationService;
+    /** 缺口 17: 按生效配方版本 + 库存 + 在途评估原料, 并产出确认时比对用的指纹。 */
+    private final UrgentInsertMaterialAssessor materialAssessor;
 
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for urgent-insert path. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -197,8 +200,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         );
 
         // 资源检查
-        ResourceCheckResult materialCheck = impactAnalysisService.checkMaterialAvailability(
+        UrgentInsertMaterialAssessor.Assessment materialPlan = materialAssessor.assess(
                 factoryId, request.getProductTypeId(), request.getRequiredQuantity());
+        ResourceCheckResult materialCheck = toMaterialCheck(materialPlan, request.getRequiredQuantity());
         // S4: 产能与设备只读对话建厂 / 工厂配置写下的配置 (同单位、显式设备), 缺配置 = 未验证
         ResourceCheckResult equipmentCheck = lineChecks.checkEquipment(factoryId, request.getProductTypeId());
         boolean productSpecificCapacityRequired = "个".equals(
@@ -294,6 +298,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         resourceStatus.put("requiredWorkers", slot.getRequiredWorkers());
         resourceStatus.put("availableWorkers", workerCheck.availableWorkers());
         result.put("resourceStatus", resourceStatus);
+        // 缺口 17: 按生效配方版本算的原料需求、缺口 (缺什么/缺多少)、在途; 确认时按同一口径重算比对
+        result.put("materialPlan", materialPlan.toMap());
 
         // 风险评估
         String riskLevel = determineRiskLevel(chainImpact, materialCheck, equipmentCheck, capacityCheck, workerCheck);
@@ -344,7 +350,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     .findByFactoryIdAndCreatedAtAfterOrderByCreatedAtDesc(factoryId, validAfter);
             InsertSlotPreview preview = recent.stream()
                     .filter(candidate -> previewMatches(candidate, slot, product, request,
-                            quantityUnit, plannedUnit, chainImpact))
+                            quantityUnit, plannedUnit, chainImpact, materialPlan))
                     .findFirst()
                     .orElse(null);
             if (preview == null) {
@@ -371,6 +377,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                                 ? 0 : chainImpact.getTotalAffectedPlans())
                         .candidateNumber(Math.toIntExact(
                                 insertSlotPreviewRepository.countByFactoryIdAndSlotId(factoryId, slot.getId()) + 1))
+                        .bomRecipeId(materialPlan.bomRecipeId())
+                        .bomVersion(materialPlan.bomVersion())
+                        .materialFingerprint(materialPlan.fingerprint())
+                        .impactFingerprint(impactFingerprint(chainImpact))
                         .build());
             }
             result.put("previewId", preview.getId());
@@ -543,8 +553,12 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
     private boolean previewMatches(InsertSlotPreview preview, InsertSlot slot, ProductType product,
                                    GetInsertSlotsRequest request, String quantityUnit, String plannedUnit,
-                                   ChainImpactResult chainImpact) {
-        return Objects.equals(preview.getSlotId(), slot.getId())
+                                   ChainImpactResult chainImpact,
+                                   UrgentInsertMaterialAssessor.Assessment materialPlan) {
+        return preview.getMaterialFingerprint() != null
+                && Objects.equals(preview.getMaterialFingerprint(), materialPlan.fingerprint())
+                && Objects.equals(preview.getImpactFingerprint(), impactFingerprint(chainImpact))
+                && Objects.equals(preview.getSlotId(), slot.getId())
                 && Objects.equals(preview.getProductTypeId(), product.getId())
                 && preview.getPreviewQuantity() != null && request.getRequiredQuantity() != null
                 && preview.getPreviewQuantity().compareTo(request.getRequiredQuantity()) == 0
@@ -657,13 +671,60 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     .withCode("INSERT_IMPACT_RECHECK_FAILED")
                     .withHint("刷新影响分析并使用完整的最新预览后重试");
         }
-        if (!previewImpactMatches(preview, freshChainImpact)) {
-            throw new BusinessException(409, "预览影响快照已变化，请重新分析，未创建计划")
+        if (!previewImpactMatches(preview, freshChainImpact)
+                || preview.getImpactFingerprint() == null
+                || !preview.getImpactFingerprint().equals(impactFingerprint(freshChainImpact))) {
+            throw new BusinessException(409, "预览影响快照已变化（被挤的计划或顺延结果与预览不一致），请重新预览，未创建计划")
                     .withCode("INSERT_PREVIEW_IMPACT_CHANGED")
                     .withHint("刷新影响分析并创建新的确认预览");
         }
 
-        return new PreviewValidation(slot, plannedUnit, preview, freshChainImpact);
+        // 缺口 17: 原料按生效配方版本 + 当前库存重算。缺料 / 无法核对一律拦在建计划之前;
+        // 再比对预览时的指纹, 预览之后配方或库存变了就拒绝并要求重新预览。
+        UrgentInsertMaterialAssessor.Assessment material = materialAssessor.assess(
+                factoryId, request.getProductTypeId(), request.getPlannedQuantity());
+        if (material.status() == UrgentInsertMaterialAssessor.Status.SHORT) {
+            throw new BusinessException(409, "原料不足，未创建计划: " + material.message())
+                    .withCode("INSERT_MATERIAL_SHORT")
+                    .withHint("先补足缺口原料（或等在途到货）再插单；也可减少插单数量后重新预览");
+        }
+        if (material.status() != UrgentInsertMaterialAssessor.Status.OK) {
+            throw new BusinessException(409, material.message() + "，未创建计划")
+                    .withCode("INSERT_MATERIAL_UNVERIFIED")
+                    .withHint("补齐该产品的生效配方和原料库存数据后重新预览");
+        }
+        if (preview.getMaterialFingerprint() == null
+                || !preview.getMaterialFingerprint().equals(material.fingerprint())) {
+            throw new BusinessException(409, "预览之后配方或库存已变化，请重新预览，未创建计划")
+                    .withCode("INSERT_PREVIEW_MATERIAL_CHANGED")
+                    .withHint("重新创建确认预览，按最新配方和库存确认");
+        }
+
+        return new PreviewValidation(slot, plannedUnit, preview, freshChainImpact, material);
+    }
+
+    /** 评估结果转成既有的资源核对结构 (feasibility / 风险等级沿用它)。 */
+    private ResourceCheckResult toMaterialCheck(UrgentInsertMaterialAssessor.Assessment a, BigDecimal required) {
+        return switch (a.status()) {
+            case OK -> ResourceCheckResult.available("MATERIAL", null, required);
+            case SHORT -> ResourceCheckResult.unavailable("MATERIAL", a.message(), null, required);
+            case UNVERIFIED -> ResourceCheckResult.unverified("MATERIAL", a.message(), required);
+        };
+    }
+
+    /**
+     * 受影响计划指纹: 每个被挤计划的 id / 原完成 / 顺延后完成 / 顺延分钟。
+     * 只比数量 (affectedPlanCount) 时, 同数量但换了一批计划或顺延幅度变了也会放行。
+     */
+    static String impactFingerprint(ChainImpactResult chainImpact) {
+        List<AffectedPlanDTO> plans = chainImpact == null || chainImpact.getAffectedPlans() == null
+                ? List.of() : chainImpact.getAffectedPlans();
+        String canon = plans.stream()
+                .sorted(Comparator.comparing(p -> String.valueOf(p.getPlanId())))
+                .map(p -> p.getPlanId() + "|" + p.getOriginalEndTime() + "|" + p.getDelayedEndTime()
+                        + "|" + p.getDelayMinutes())
+                .collect(Collectors.joining(";"));
+        return UrgentInsertMaterialAssessor.sha256(canon);
     }
 
     private boolean isCompleteChainImpact(ChainImpactResult chainImpact) {
@@ -689,7 +750,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     }
 
     private record PreviewValidation(InsertSlot slot, String plannedUnit, InsertSlotPreview preview,
-                                     ChainImpactResult chainImpact) {
+                                     ChainImpactResult chainImpact,
+                                     UrgentInsertMaterialAssessor.Assessment material) {
     }
 
     /**
@@ -804,7 +866,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         // 创建生产计划
         ProductionPlan plan = createProductionPlanFromSlot(
-                factoryId, userId, slot, request, validation.plannedUnit());
+                factoryId, userId, slot, request, validation.plannedUnit(), validation.material());
 
         // 保存计划
         ProductionPlan savedPlan = productionPlanRepository.save(plan);
@@ -866,7 +928,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         // 创建生产计划
         ProductionPlan plan = createProductionPlanFromSlot(
-                factoryId, userId, slot, request, validation.plannedUnit());
+                factoryId, userId, slot, request, validation.plannedUnit(), validation.material());
 
         // 标记为强制插单
         plan.markAsForceInsert(userId, request.getNotes(), needsApproval);
@@ -1462,7 +1524,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
     private ProductionPlan createProductionPlanFromSlot(
             String factoryId, Long userId, InsertSlot slot, ConfirmUrgentInsertRequest request,
-            String plannedUnit) {
+            String plannedUnit, UrgentInsertMaterialAssessor.Assessment material) {
 
         ProductionPlan plan = new ProductionPlan();
         plan.setId(UUID.randomUUID().toString());
@@ -1472,6 +1534,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         plan.setProductTypeId(request.getProductTypeId());
         plan.setPlannedQuantity(request.getPlannedQuantity());
         plan.setPlannedUnit(plannedUnit);
+        // 锁定预览时核对原料所用的配方版本, 之后配方改版不影响这张计划
+        plan.setSelectedBomRecipeId(material.bomRecipeId());
+        plan.setSelectedBomVersion(material.bomVersion());
         plan.setSuggestedProductionLineId(slot.getProductionLineId());
         plan.setStartTime(slot.getStartTime());
         plan.setEndTime(slot.getEndTime());
