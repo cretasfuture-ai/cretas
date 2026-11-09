@@ -205,10 +205,66 @@ class DailyCapacityConstraintContractTest {
                 job("B", "PT-B", "50", "100", null, Set.of("A"))));
 
         assertThat(out).allSatisfy(o -> assertThat(o.status()).isEqualTo(Status.SCHEDULED));
-        assertThat(out.get(0).notes()).anySatisfy(n -> assertThat(n).contains("成环"));
+        // A 先排时去排它的前驱 B, B 又指回 A ⇒ 丢掉 B→A 这条边, 提示记在 B 上
+        assertThat(out.get(1).notes()).anySatisfy(n -> assertThat(n).contains("成环").contains("PLAN-A"));
+    }
+
+    @Test
+    void aPinnedUrgentPlanPullsItsProducerForwardInsteadOfFallingToTheBack() {
+        // 审查 #2: 输入 URGENT(要用 S 的半成品)、X、Y、S; 每个都占满一天产线。
+        // 旧算法执行 X、Y、S、URGENT —— 插单掉到最后; 现在 S 继承 URGENT 的优先级: S、URGENT、X、Y
+        List<JobOut> out = run(List.of(
+                job("URGENT", "PT-U", "100", "100", null, Set.of("S")),
+                job("X", "PT-X", "100", "100", null, null),
+                job("Y", "PT-Y", "100", "100", null, null),
+                job("S", "PT-S", "100", "100", null, null)));
+
+        assertThat(dates(out.get(3))).containsExactly(D1);              // S
+        assertThat(dates(out.get(0))).containsExactly(D1.plusDays(1));  // URGENT
+        assertThat(dates(out.get(1))).containsExactly(D1.plusDays(2));  // X
+        assertThat(dates(out.get(2))).containsExactly(D1.plusDays(3));  // Y
+    }
+
+    @Test
+    void plansFollowingEachOtherOnTheLineGetNoLineFullReason() {
+        // 审查 #6: 本次先排的计划用掉产线是正常先后, 不写「产线排满」; 已落库的排程占满才写
+        List<JobOut> plain = run(List.of(job("A", "PT-A", "100", "100", null, null),
+                job("B", "PT-B", "100", "100", null, null)));
+        assertThat(dates(plain.get(1))).containsExactly(D1.plusDays(1));
+        assertThat(plain.get(1).delays()).isEmpty();
+
+        List<JobOut> fixed = DailyCapacityEngine.schedule(new Input(D1,
+                List.of(job("B", "PT-B", "100", "100", null, null)),
+                List.of(new FixedOccupancy(D1, true, n("1"), "PT-X", Set.of(), "计划 OLD-1")), List.of()));
+        assertThat(fixed.get(0).delays()).singleElement().satisfies(d -> {
+            assertThat(d.code()).isEqualTo(DelayCode.LINE_FULL);
+            assertThat(d.detail()).contains("OLD-1");
+        });
+    }
+
+    @Test
+    void purchaseInPackageUnitsIsConvertedWithTheOrderSnapshotFactor() {
+        // 审查 #8: 按「箱」下的单, 用下单时的 1 箱 = 10 kg 折成库存单位
+        assertThat(ScheduleConstraintReader.openInStockUnit(n("3"), "箱", "kg", n("10"), "kg"))
+                .hasValueSatisfying(v -> assertThat(v).isEqualByComparingTo("30"));
+        assertThat(ScheduleConstraintReader.openInStockUnit(n("3"), "箱", null, null, "kg")).isEmpty();
+        assertThat(ScheduleConstraintReader.openInStockUnit(n("500"), "g", null, null, "kg"))
+                .hasValueSatisfying(v -> assertThat(v).isEqualByComparingTo("0.5"));
     }
 
     // ==================== 原料先到先得 ====================
+
+    @Test
+    void anOverduePurchaseIsNotTreatedAsAlreadyArrived() {
+        // 审查 #7: 过了预计到货日还没到的单, 不当已到货 (不给开工日), 提示跟供应商确认
+        Map<String, Ready> ready = MaterialReadiness.compute(List.of("A"),
+                Map.of("A", List.of(new Need("M1", "鸡胸", n("80")))),
+                Map.of("M1", new Supply(n("10"), List.of(), false, true)));
+
+        assertThat(ready.get("A").earliestStart()).isNull();
+        assertThat(ready.get("A").notes()).singleElement().satisfies(s ->
+                assertThat(s).contains("鸡胸").contains("已过预计到货日"));
+    }
 
     @Test
     void stockIsUsedFirstThenArrivalsInDateOrderAndStartIsTheDayAfterArrival() {

@@ -8,7 +8,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -28,7 +27,7 @@ import java.util.Set;
  *
  * <h3>约束 (缺口 18)</h3>
  * <ul>
- *   <li><b>排序</b>: 按传入顺序 (调用方已按优先级排好), 但被依赖的作业一定先排 (稳定拓扑序); 成环的依赖丢掉并标出。</li>
+ *   <li><b>排序</b>: 按传入顺序 (调用方已按优先级排好); 轮到一个作业时先排它的前驱, 前驱继承它的优先级; 成环的依赖丢掉并标出。</li>
  *   <li><b>跨计划依赖</b>: B 依赖 A ⇒ B 最早在 A 最后一天开始, 不留缓冲 (Steve: 留不留时间看工厂自己的纪律)。
  *       A 本次没有排出来 (超期 / 设备不可用 / 自己的依赖没排出) ⇒ B 也不排 ({@link Status#PREDECESSOR_NOT_SCHEDULED});
  *       A 已经做完 ({@link Status#NOTHING_REMAINING}) ⇒ 不约束。</li>
@@ -185,11 +184,14 @@ public final class DailyCapacityEngine {
 
         // 占用表: 产线比例 (本线) / 设备那天被哪个产品用 / 设备那天停用
         Map<LocalDate, BigDecimal> lineUsed = new HashMap<>();
+        // 只记已落库的占用: 「产线排满」只对它们说 (本次排的计划先后接着做是正常的, 不算推迟原因)
         Map<LocalDate, String> lineUsedBy = new HashMap<>();
+        Map<LocalDate, BigDecimal> fixedLineShare = new HashMap<>();
         Map<String, Map<LocalDate, EquipUse>> equipUse = new HashMap<>();
         for (FixedOccupancy f : input.fixed()) {
             if (f.sameLine() && f.shareOfDay() != null && f.shareOfDay().signum() > 0) {
                 lineUsed.merge(f.date(), f.shareOfDay(), BigDecimal::add);
+                fixedLineShare.merge(f.date(), f.shareOfDay(), BigDecimal::add);
                 lineUsedBy.merge(f.date(), f.label(), (a, b) -> a.contains(b) ? a : a + "、" + b);
             }
             for (String e : f.equipmentIds()) {
@@ -204,6 +206,10 @@ public final class DailyCapacityEngine {
 
         Map<String, List<String>> engineNotes = new HashMap<>();
         List<Job> order = executionOrder(input.jobs(), byKey, engineNotes);
+        Map<String, Integer> rank = new HashMap<>();
+        for (int i = 0; i < input.jobs().size(); i++) {
+            rank.putIfAbsent(input.jobs().get(i).key(), i);
+        }
         Map<String, JobOut> results = new HashMap<>();
 
         for (Job job : order) {
@@ -230,10 +236,7 @@ public final class DailyCapacityEngine {
                         firstDay, start.minusDays(1), job.earliestStartText());
             }
             String blockedBy = null;
-            for (String p : job.predecessorKeys()) {
-                if (!byKey.containsKey(p) || p.equals(job.key())) {
-                    continue;
-                }
+            for (String p : predecessorsByRank(job, byKey, rank)) {
                 JobOut pre = results.get(p);
                 if (pre == null) {
                     continue; // 成环被丢掉的边: executionOrder 已记 note
@@ -299,7 +302,8 @@ public final class DailyCapacityEngine {
                         : free.multiply(capacity).setScale(QTY_SCALE, RoundingMode.DOWN);
                 if (producible.signum() <= 0) {
                     String by = lineUsedBy.get(day);
-                    if (by != null && !tentativeLine.containsKey(day)) {
+                    // 只在已落库的排程自己就占满这天时说; 被本次先排的计划用掉是正常先后, 不算推迟原因
+                    if (by != null && fixedLineShare.getOrDefault(day, BigDecimal.ZERO).compareTo(BigDecimal.ONE) >= 0) {
                         delays.add(DelayCode.LINE_FULL, day, day, "产线这天已被「" + by + "」排满");
                     }
                     day = day.plusDays(1);
@@ -327,7 +331,6 @@ public final class DailyCapacityEngine {
             }
             lineUsed.putAll(tentativeLine);
             for (DayOut d : days) {
-                lineUsedBy.merge(d.date(), job.label(), (a, b) -> a.contains(b) ? a : a + "、" + b);
                 for (String e : job.equipmentIds()) {
                     equipUse.computeIfAbsent(e, k -> new HashMap<>())
                             .putIfAbsent(d.date(), new EquipUse(myProduct, job.label()));
@@ -355,45 +358,52 @@ public final class DailyCapacityEngine {
     }
 
     /**
-     * 执行顺序: 尽量保持传入顺序, 但依赖先排 (每轮取传入顺序里第一个「依赖都已排」的作业)。
-     * 卡住 (成环) 时取剩下的第一个, 丢掉它指向还没排的作业的边并记 note。
+     * 执行顺序: 按传入 (优先级) 顺序, 轮到一个作业时先把它还没排的前驱排上 (深度优先后序) ——
+     * 被依赖的计划继承依赖方的优先级 (插单钉在最前、它要用的半成品计划就紧跟在它前面, 不会掉到队尾)。
+     * 成环: 回到「正在排」的作业时丢掉这条边并记 note, 不报错。
      */
     static List<Job> executionOrder(List<Job> jobs, Map<String, Job> byKey, Map<String, List<String>> notes) {
-        List<Job> remaining = new ArrayList<>(jobs);
+        Map<String, Integer> rank = new HashMap<>();
+        for (int i = 0; i < jobs.size(); i++) {
+            rank.putIfAbsent(jobs.get(i).key(), i);
+        }
         Set<String> done = new HashSet<>();
+        Set<String> visiting = new HashSet<>();
         List<Job> order = new ArrayList<>();
-        while (!remaining.isEmpty()) {
-            Job pick = null;
-            for (Job j : remaining) {
-                boolean ready = true;
-                for (String p : j.predecessorKeys()) {
-                    if (byKey.containsKey(p) && !p.equals(j.key()) && !done.contains(p)) {
-                        ready = false;
-                        break;
-                    }
-                }
-                if (ready) {
-                    pick = j;
-                    break;
-                }
-            }
-            if (pick == null) {
-                pick = remaining.get(0);
-                Set<String> dropped = new LinkedHashSet<>();
-                for (String p : pick.predecessorKeys()) {
-                    if (byKey.containsKey(p) && !done.contains(p)) {
-                        dropped.add(p);
-                    }
-                }
-                List<String> droppedLabels = dropped.stream().map(k -> byKey.get(k).label()).toList();
-                notes.computeIfAbsent(pick.key(), k -> new ArrayList<>()).add("和「" + String.join("、", droppedLabels)
-                        + "」互相依赖半成品（成环），没法定先后，这次没按依赖排；请核对配方");
-            }
-            remaining.remove(pick);
-            done.add(pick.key());
-            order.add(pick);
+        for (Job j : jobs) {
+            visit(j, byKey, rank, done, visiting, order, notes);
         }
         return order;
+    }
+
+    private static void visit(Job job, Map<String, Job> byKey, Map<String, Integer> rank, Set<String> done,
+                              Set<String> visiting, List<Job> order, Map<String, List<String>> notes) {
+        if (done.contains(job.key())) {
+            return;
+        }
+        visiting.add(job.key());
+        for (String p : predecessorsByRank(job, byKey, rank)) {
+            if (done.contains(p)) {
+                continue;
+            }
+            if (visiting.contains(p)) {
+                notes.computeIfAbsent(job.key(), k -> new ArrayList<>()).add("和「" + byKey.get(p).label()
+                        + "」互相依赖半成品（成环），没法定先后，这次没按依赖排；请核对配方");
+                continue;
+            }
+            visit(byKey.get(p), byKey, rank, done, visiting, order, notes);
+        }
+        visiting.remove(job.key());
+        done.add(job.key());
+        order.add(job);
+    }
+
+    /** 本批里的前驱, 按传入顺序 (确定性: 同样的输入总是同样的推迟原因)。 */
+    private static List<String> predecessorsByRank(Job job, Map<String, Job> byKey, Map<String, Integer> rank) {
+        return job.predecessorKeys().stream()
+                .filter(p -> byKey.containsKey(p) && !p.equals(job.key()))
+                .sorted(java.util.Comparator.comparing(rank::get))
+                .toList();
     }
 
     /** 把连续同因同话的推迟日子合并成一段。 */

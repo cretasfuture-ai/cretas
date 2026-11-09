@@ -40,9 +40,11 @@ public interface ApsConstraintQueryRepository extends Repository<LineSchedule, S
 
     /**
      * 这种原料在走的采购单 (已提交到部分收货; 草稿不算, 与缺料重排同口径) 上还没到的量:
-     * [预计到货日 (可空), 未到量, 采购单位]。
+     * [预计到货日 (可空), 未到量, 采购单位, 库存基本单位快照, 包装→基本单位系数快照]。
+     * 按包装单位 (箱 / 件) 下的单, 用下单时的快照系数折成库存基本单位。
      */
-    @Query("SELECT o.expectedDeliveryDate, (i.quantity - COALESCE(i.receivedQuantity, 0)), i.unit "
+    @Query("SELECT o.expectedDeliveryDate, (i.quantity - COALESCE(i.receivedQuantity, 0)), i.unit, "
+            + "i.inventoryBaseUnitSnapshot, i.packageToBaseFactorSnapshot "
             + "FROM PurchaseOrder o, PurchaseOrderItem i WHERE i.purchaseOrderId = o.id "
             + "AND o.factoryId = :factoryId AND o.deletedAt IS NULL AND i.deletedAt IS NULL "
             + "AND i.materialTypeId = :materialTypeId "

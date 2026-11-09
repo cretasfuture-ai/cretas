@@ -2,6 +2,8 @@ package com.cretas.aims.service.scheduling.daily;
 
 import com.cretas.aims.entity.FactoryEquipment;
 import com.cretas.aims.entity.LineSchedule;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.ProductionPlanBatchUsage;
 import com.cretas.aims.entity.ProductEquipmentRequirement;
 import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionPlan;
@@ -12,6 +14,7 @@ import com.cretas.aims.repository.EquipmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductEquipmentRequirementRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
+import com.cretas.aims.repository.ProductionPlanBatchUsageRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.SemiFinishedInventoryRepository;
@@ -59,6 +62,7 @@ public class ScheduleConstraintReader {
 
     private static final String SCRAPPED = "scrapped";
     private static final String MAINTENANCE = "maintenance";
+    private static final Set<String> KNOWN_UP = Set.of("idle", "running");
 
     private final ProductEquipmentRequirementRepository equipmentRequirements;
     private final EquipmentRepository equipmentRepository;
@@ -70,6 +74,7 @@ public class ScheduleConstraintReader {
     private final MaterialBatchRepository materialBatchRepository;
     private final BomRecipeItemRepository bomItemRepository;
     private final SemiFinishedInventoryRepository semiFinishedInventoryRepository;
+    private final ProductionPlanBatchUsageRepository planBatchUsages;
 
     /** 本次要排的一个计划。{@code remaining} 是计划单位下的剩余量。 */
     public record PlanInput(ProductionPlan plan, String label, String unit, BigDecimal remaining, boolean joint) {
@@ -126,8 +131,8 @@ public class ScheduleConstraintReader {
                 continue;
             }
             if (ls.getProductionPlanId() != null && planIdsInRun.contains(ls.getProductionPlanId())) {
+                // 仍当固定占用 (不悄悄让出来, 否则新旧两份叠在同几天上); 只提示有重复
                 alreadyScheduled.add(ls.getProductionPlanId());
-                continue;
             }
             ProductionPlan owner = ls.getProductionPlanId() == null ? null
                     : otherPlans.computeIfAbsent(ls.getProductionPlanId(),
@@ -142,8 +147,8 @@ public class ScheduleConstraintReader {
         }
         for (PlanInput p : plans) {
             if (alreadyScheduled.contains(p.plan().getId())) {
-                warnings.add("计划「" + p.label() + "」在别的排程里已经排过（还没做完），这次又排了一遍；"
-                        + "请确认后把旧的那份取消，避免重复");
+                warnings.add("计划「" + p.label() + "」在别的排程里已经排过（还没做完），这次又排了一遍，"
+                        + "新的这份已避开旧的那份占的日子；请确认后把其中一份取消，避免重复");
             }
         }
 
@@ -151,7 +156,7 @@ public class ScheduleConstraintReader {
         Map<String, List<Need>> needs = new LinkedHashMap<>();
         Map<String, Supply> supply = new HashMap<>();
         for (PlanInput p : plans) {
-            needs.put(p.plan().getId(), materialNeeds(factoryId, p, notes.get(p.plan().getId()), supply));
+            needs.put(p.plan().getId(), materialNeeds(factoryId, p, notes.get(p.plan().getId()), supply, firstDay));
         }
 
         // 半成品依赖
@@ -215,6 +220,9 @@ public class ScheduleConstraintReader {
                 }
                 if (MAINTENANCE.equals(status)) {
                     notes.add("设备「" + label(e) + "」现在是检修状态，不知道哪天修好，排程没有避开；请确认");
+                } else if (!KNOWN_UP.contains(status)) {
+                    notes.add("设备「" + label(e) + "」状态是「" + (status.isEmpty() ? "空" : status)
+                            + "」，不知道能不能用，排程照常用它；请确认");
                 }
                 usable.add(String.valueOf(id));
             }
@@ -242,29 +250,37 @@ public class ScheduleConstraintReader {
 
     // ==================== 固定占用 ====================
 
-    /** 已有任务每天占这条线多少。有按天分量用它; 没有的按计划时段内每天占满。只取 [from, to] 范围内。 */
+    /**
+     * 已有任务每天占这条线多少, 只取 [from, to] 范围内。有按天分量且<b>每一天都落在任务的计划起止日内</b>才用它;
+     * 否则 (人工改过起止时间而按天分量没跟着改 / 没有按天分量) 按计划起止内每天占满 —— 以人看得见的起止时间为准。
+     */
     static Map<LocalDate, BigDecimal> occupiedDays(LineSchedule ls, LocalDate from, LocalDate to) {
+        LocalDate start = ls.getPlannedStartTime().toLocalDate();
+        LocalDate end = ls.getPlannedEndTime().toLocalDate();
         Map<LocalDate, BigDecimal> out = new LinkedHashMap<>();
         Map<String, Object> alloc = ls.getDailyAllocations();
         Object days = alloc == null ? null : alloc.get("days");
         if (days instanceof List<?> list && !list.isEmpty()) {
+            Map<LocalDate, BigDecimal> parsed = new LinkedHashMap<>();
+            boolean consistent = true;
             for (Object o : list) {
-                if (!(o instanceof Map<?, ?> d)) {
-                    continue;
+                LocalDate date = o instanceof Map<?, ?> d ? parseDate(d.get("date")) : null;
+                if (date == null || date.isBefore(start) || date.isAfter(end)) {
+                    consistent = false;
+                    break;
                 }
-                LocalDate date = parseDate(d.get("date"));
-                BigDecimal share = toDecimal(d.get("shareOfDay"));
-                if (date == null || date.isBefore(from) || date.isAfter(to)) {
-                    continue;
-                }
-                out.merge(date, share == null || share.signum() <= 0 ? BigDecimal.ONE : share, BigDecimal::add);
+                BigDecimal share = toDecimal(((Map<?, ?>) o).get("shareOfDay"));
+                parsed.merge(date, share == null || share.signum() <= 0 ? BigDecimal.ONE : share, BigDecimal::add);
             }
-            if (!out.isEmpty()) {
+            if (consistent) {
+                parsed.forEach((date, share) -> {
+                    if (!date.isBefore(from) && !date.isAfter(to)) {
+                        out.put(date, share);
+                    }
+                });
                 return out;
             }
         }
-        LocalDate start = ls.getPlannedStartTime().toLocalDate();
-        LocalDate end = ls.getPlannedEndTime().toLocalDate();
         for (LocalDate d = start.isBefore(from) ? from : start; !d.isAfter(end) && !d.isAfter(to); d = d.plusDays(1)) {
             out.put(d, BigDecimal.ONE);
         }
@@ -273,7 +289,8 @@ public class ScheduleConstraintReader {
 
     // ==================== 原料 ====================
 
-    private List<Need> materialNeeds(String factoryId, PlanInput p, List<String> notes, Map<String, Supply> supply) {
+    private List<Need> materialNeeds(String factoryId, PlanInput p, List<String> notes, Map<String, Supply> supply,
+                                     LocalDate firstDay) {
         if (p.remaining() == null || p.remaining().signum() <= 0) {
             return List.of();
         }
@@ -283,6 +300,7 @@ public class ScheduleConstraintReader {
             return List.of();
         }
         BigDecimal kg = CapacityUnits.convert(p.remaining(), p.unit(), "kg").orElse(null);
+        Map<String, BigDecimal> own = ownReservations(factoryId, p.plan().getId());
         List<Need> needs = new ArrayList<>();
         List<String> unknown = new ArrayList<>();
         for (PlanCostVarianceCalculator.MaterialQuantity q
@@ -303,8 +321,10 @@ public class ScheduleConstraintReader {
                 unknown.add(name);
                 continue;
             }
-            needs.add(new Need(q.materialTypeId(), name, converted.get()));
-            supply.computeIfAbsent(q.materialTypeId(), id -> supply(factoryId, id, stockUnit));
+            BigDecimal net = converted.get().subtract(own.getOrDefault(q.materialTypeId(), BigDecimal.ZERO))
+                    .max(BigDecimal.ZERO);
+            needs.add(new Need(q.materialTypeId(), name, net));
+            supply.computeIfAbsent(q.materialTypeId(), id -> supply(factoryId, id, stockUnit, firstDay));
         }
         if (!unknown.isEmpty()) {
             notes.add("原料「" + String.join("、", unknown) + "」的用量算不出来（配方缺出成率或单位对不上），没核对够不够");
@@ -312,22 +332,69 @@ public class ScheduleConstraintReader {
         return needs;
     }
 
-    private Supply supply(String factoryId, String materialTypeId, String stockUnit) {
+    private Supply supply(String factoryId, String materialTypeId, String stockUnit, LocalDate firstDay) {
         BigDecimal free = materialBatchRepository.sumAvailableRawStockQuantityByMaterialType(factoryId, materialTypeId);
         List<Arrival> arrivals = new ArrayList<>();
         boolean unknown = false;
+        boolean overdue = false;
         for (Object[] row : constraintQueries.findOpenPurchaseQuantities(factoryId, materialTypeId)) {
             LocalDate date = parseDate(row[0]);
-            BigDecimal open = toDecimal(row[1]);
-            Optional<BigDecimal> converted = open == null ? Optional.empty()
-                    : CapacityUnits.convert(open, (String) row[2], stockUnit);
+            Optional<BigDecimal> converted = openInStockUnit(toDecimal(row[1]), (String) row[2], (String) row[3],
+                    toDecimal(row[4]), stockUnit);
             if (date == null || converted.isEmpty()) {
                 unknown = true;
                 continue;
             }
+            if (date.isBefore(firstDay)) {
+                overdue = true; // 过了预计到货日还没到: ⛔ 不当已到货
+                continue;
+            }
             arrivals.add(new Arrival(date, converted.get()));
         }
-        return new Supply(free == null ? BigDecimal.ZERO : free, arrivals, unknown);
+        return new Supply(free == null ? BigDecimal.ZERO : free, arrivals, unknown, overdue);
+    }
+
+    /** 采购未到量折成库存单位: 先按采购单位直接换; 换不了 (箱 / 件) 用下单时的「包装→基本单位」快照系数。 */
+    static Optional<BigDecimal> openInStockUnit(BigDecimal open, String purchaseUnit, String baseUnitSnapshot,
+                                                BigDecimal packageToBase, String stockUnit) {
+        if (open == null) {
+            return Optional.empty();
+        }
+        Optional<BigDecimal> direct = CapacityUnits.convert(open, purchaseUnit, stockUnit);
+        if (direct.isPresent()) {
+            return direct;
+        }
+        if (packageToBase == null || packageToBase.signum() <= 0 || baseUnitSnapshot == null) {
+            return Optional.empty();
+        }
+        return CapacityUnits.convert(open.multiply(packageToBase), baseUnitSnapshot, stockUnit);
+    }
+
+    /**
+     * 本计划自己还占着的预留 (计划级预留行, 未删), 按原料汇总并折成该原料的库存单位; 折不了的不算 (保守: 不多给)。
+     * 「可用库存」= 到货 − 已用 − 已预留, 不含它; 这部分是本计划独享的, 要从它的需要量里先扣掉, 否则扣两遍。
+     */
+    private Map<String, BigDecimal> ownReservations(String factoryId, String planId) {
+        Map<String, BigDecimal> out = new HashMap<>();
+        for (ProductionPlanBatchUsage row : planBatchUsages.findByProductionPlanId(planId)) {
+            if (row.getDeletedAt() != null || row.getReservedQuantity() == null
+                    || row.getReservedQuantity().signum() <= 0 || row.getMaterialBatchId() == null) {
+                continue;
+            }
+            MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(row.getMaterialBatchId(), factoryId)
+                    .filter(b -> b.getDeletedAt() == null).orElse(null);
+            if (batch == null || batch.getMaterialTypeId() == null) {
+                continue;
+            }
+            String stockUnit = rawMaterialTypeRepository.findByIdAndFactoryId(batch.getMaterialTypeId(), factoryId)
+                    .map(RawMaterialType::getUnit).orElse(null);
+            if (stockUnit == null) {
+                continue;
+            }
+            CapacityUnits.convert(row.getReservedQuantity(), batch.getQuantityUnit(), stockUnit)
+                    .ifPresent(q -> out.merge(batch.getMaterialTypeId(), q, BigDecimal::add));
+        }
+        return out;
     }
 
     // ==================== 半成品依赖 ====================

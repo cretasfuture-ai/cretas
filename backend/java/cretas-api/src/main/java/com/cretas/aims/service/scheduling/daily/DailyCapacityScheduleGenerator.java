@@ -39,6 +39,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -304,27 +305,46 @@ public class DailyCapacityScheduleGenerator {
                     w.capacity().perDay(), null, null, null, pc.equipmentIds(), pc.predecessorPlanIds(),
                     pc.unavailableReason()));
         }
-        // 原料按执行顺序 (依赖先排) 先到先得
+        // 原料按执行顺序 (依赖先排) 先到先得。已知排不了的 (设备报废) 不分料; 跑完发现排不出的
+        // (超期 / 依赖没排出) 把料让出来再算一遍 —— 排不了的计划不该让别的计划等采购。
         Map<String, Job> byKey = new LinkedHashMap<>();
         jobs.forEach(j -> byKey.put(j.key(), j));
         List<String> execution = DailyCapacityEngine.executionOrder(jobs, byKey, new HashMap<>()).stream()
                 .map(Job::key).toList();
-        Map<String, MaterialReadiness.Ready> ready = MaterialReadiness.compute(execution,
-                constraints.materialNeeds(), constraints.materialSupply());
-        List<Job> constrained = new ArrayList<>();
+        Set<String> noMaterial = new HashSet<>();
+        jobs.stream().filter(j -> j.unavailableReason() != null).forEach(j -> noMaterial.add(j.key()));
+        List<JobOut> outs = null;
+        Map<String, MaterialReadiness.Ready> ready = Map.of();
+        for (int pass = 0; pass < 2; pass++) {
+            Map<String, List<MaterialReadiness.Need>> needs = new LinkedHashMap<>(constraints.materialNeeds());
+            needs.keySet().removeAll(noMaterial);
+            ready = MaterialReadiness.compute(execution, needs, constraints.materialSupply());
+            List<Job> constrained = new ArrayList<>();
+            for (Job j : jobs) {
+                MaterialReadiness.Ready r = ready.get(j.key());
+                constrained.add(r == null || r.earliestStart() == null ? j
+                        : new Job(j.key(), j.label(), j.productTypeId(), j.quantity(), j.capacityPerDay(),
+                        r.earliestStart(), DailyCapacityEngine.DelayCode.MATERIAL_ARRIVAL, r.reason(), j.equipmentIds(),
+                        j.predecessorKeys(), j.unavailableReason()));
+            }
+            outs = DailyCapacityEngine.schedule(new DailyCapacityEngine.Input(firstDay, constrained,
+                    constraints.fixed(), constraints.blocks(), constraints.equipmentLabels()));
+            Set<String> failed = new HashSet<>();
+            for (JobOut out : outs) {
+                if (out.status() == Status.EXCEEDS_HORIZON || out.status() == Status.PREDECESSOR_NOT_SCHEDULED) {
+                    failed.add(out.key());
+                }
+            }
+            if (!noMaterial.addAll(failed)) {
+                break; // 没有新的排不出的计划: 原料分配已稳定
+            }
+        }
         for (int i = 0; i < jobs.size(); i++) {
-            Job j = jobs.get(i);
-            MaterialReadiness.Ready r = ready.get(j.key());
+            MaterialReadiness.Ready r = ready.get(jobs.get(i).key());
             if (r != null) {
                 ordered.get(i).notes().addAll(r.notes());
             }
-            constrained.add(r == null || r.earliestStart() == null ? j
-                    : new Job(j.key(), j.label(), j.productTypeId(), j.quantity(), j.capacityPerDay(), r.earliestStart(),
-                    DailyCapacityEngine.DelayCode.MATERIAL_ARRIVAL, r.reason(), j.equipmentIds(), j.predecessorKeys(),
-                    j.unavailableReason()));
         }
-        List<JobOut> outs = DailyCapacityEngine.schedule(new DailyCapacityEngine.Input(firstDay, constrained,
-                constraints.fixed(), constraints.blocks(), constraints.equipmentLabels()));
         Map<String, JobOut> byPlan = new LinkedHashMap<>();
         for (JobOut out : outs) {
             byPlan.put(out.key(), out);

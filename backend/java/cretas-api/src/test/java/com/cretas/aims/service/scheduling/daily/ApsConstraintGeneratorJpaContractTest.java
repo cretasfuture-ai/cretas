@@ -14,6 +14,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionLineCapacityConfig;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.ProductionPlanBatchUsage;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
@@ -324,6 +325,95 @@ class ApsConstraintGeneratorJpaContractTest {
         });
     }
 
+    // ==================== 独立审查发现的回归 ====================
+
+    @Test
+    void aManuallyMovedScheduleOccupiesItsNewDatesNotItsOldDailySplit() {
+        // 审查 #1: 人工改期只改起止时间, daily_allocations 还写着旧日子; 占用以起止时间为准
+        Long kettle = equipment(F, "1号夹层锅", "GL-01", "idle", null);
+        product(F, "PT-BEEF", "酱牛肉", "100", "袋");
+        product(F, "PT-PORK", "卤猪蹄", "100", "袋");
+        needs(F, "PT-BEEF", kettle);
+        needs(F, "PT-PORK", kettle);
+        plan(F, "PP-1", "PLAN-1", "PT-BEEF", "100", "袋", null);
+        plan(F, "PP-2", "PLAN-2", "PT-PORK", "60", "袋", null);
+        SchedulingPlanDTO first = generator.generate(F, request(DAY, "PP-1"), 7L); // 酱牛肉 DAY
+        LineSchedule moved = lineScheduleRepository.findById(first.getLineSchedules().get(0).getId()).orElseThrow();
+        moved.setPlannedStartTime(DAY.plusDays(1).atStartOfDay());          // 人工拖到 DAY+1
+        moved.setPlannedEndTime(DAY.plusDays(1).atTime(23, 59));
+        lineScheduleRepository.saveAndFlush(moved);
+
+        SchedulingPlanDTO second = generator.generate(F, request(DAY.plusDays(1), "PP-2"), 7L);
+
+        // 锅 DAY+1 被改期后的酱牛肉占着 ⇒ 卤猪蹄 DAY+2 (旧算法按 days 认为 DAY+1 空闲)
+        Map<String, Object> alloc = allocByPlan(second).get("PP-2");
+        assertThat(days(alloc)).containsExactly(DAY.plusDays(2) + "=60");
+        assertThat(delays(alloc)).singleElement().satisfies(d -> assertThat(d.get("code")).isEqualTo("EQUIPMENT_BUSY"));
+    }
+
+    @Test
+    void aPlanThatCannotBeScheduledDoesNotTakeStockFromOthers() {
+        // 审查 #3: A 的设备报废 (排不了) 交期更早, 不应吃掉库存让 B 去等采购
+        materialProductWithSnapshot("PP-B", "PLAN-B", "100");              // B: 50 kg
+        ProductionPlan b = planRepository.findByIdAndFactoryId("PP-B", F).orElseThrow();
+        b.setExpectedCompletionDate(DAY.plusDays(9));
+        planRepository.saveAndFlush(b);
+        Long broken = equipment(F, "旧烤箱", "KX-00", "scrapped", null);
+        product(F, "PT-JERKY", "牛肉干", "100", "袋");
+        needs(F, "PT-JERKY", broken);
+        plan(F, "PP-A", "PLAN-A", "PT-JERKY", "100", "袋", DAY.plusDays(1));
+        snapshot("PP-A", "PT-JERKY");                                      // A 也要 50 kg
+        stock(F, "RM-CHICKEN", "60");
+        purchase(F, "RM-CHICKEN", "100", DAY.plusDays(3), PurchaseOrderStatus.SUBMITTED);
+
+        SchedulingPlanDTO dto = generator.generate(F, request(DAY, "PP-A", "PP-B"), 7L);
+
+        assertThat(allocByPlan(dto)).containsOnlyKeys("PP-B");
+        assertThat(days(allocByPlan(dto).get("PP-B"))).containsExactly(DAY + "=100");
+    }
+
+    @Test
+    void aPlansOwnReservationCountsForItInsteadOfBeingSubtractedTwice() {
+        // 审查 #4: 计划自己预留了 50 kg (可用库存因此是 0), 它自己不应被判缺料去等采购
+        materialProductWithSnapshot("PP-1", "PLAN-1", "100");             // 50 kg
+        String lot = stock(F, "RM-CHICKEN", "50");
+        MaterialBatch batch = em.find(MaterialBatch.class, lot);
+        batch.setReservedQuantity(new BigDecimal("50"));
+        em.flush();
+        ProductionPlanBatchUsage usage = new ProductionPlanBatchUsage();
+        usage.setId("PPBU-1");
+        usage.setProductionPlanId("PP-1");
+        usage.setMaterialBatchId(lot);
+        usage.setPlannedQuantity(new BigDecimal("50"));
+        usage.setReservedQuantity(new BigDecimal("50"));
+        em.persist(usage);
+        em.flush();
+        purchase(F, "RM-CHICKEN", "100", DAY.plusDays(3), PurchaseOrderStatus.SUBMITTED);
+
+        SchedulingPlanDTO dto = generator.generate(F, request(DAY, "PP-1"), 7L);
+
+        Map<String, Object> alloc = allocByPlan(dto).get("PP-1");
+        assertThat(days(alloc)).containsExactly(DAY + "=100");
+        assertThat(delays(alloc)).isEmpty();
+    }
+
+    @Test
+    void aPlansOldLiveScheduleStillOccupiesTheLineWhenItIsScheduledAgain() {
+        // 审查 #5: PP-1 已在 DAY+1 的排程里占满一天; 从 DAY 重排 PP-1 + PP-2 时旧的那份仍算占用
+        product(F, "PT-BEEF", "酱牛肉", "100", "袋");
+        product(F, "PT-PORK", "卤猪蹄", "100", "袋");
+        plan(F, "PP-1", "PLAN-1", "PT-BEEF", "100", "袋", null);
+        plan(F, "PP-2", "PLAN-2", "PT-PORK", "100", "袋", null);
+        generator.generate(F, request(DAY.plusDays(1), "PP-1"), 7L);       // 旧: PP-1 占满 DAY+1
+
+        SchedulingPlanDTO again = generator.generate(F, request(DAY, "PP-1", "PP-2"), 7L);
+
+        Map<String, Map<String, Object>> alloc = allocByPlan(again);
+        assertThat(days(alloc.get("PP-1"))).containsExactly(DAY + "=100");
+        assertThat(days(alloc.get("PP-2"))).containsExactly(DAY.plusDays(2) + "=100");
+        assertThat(again.getWarnings()).anySatisfy(w -> assertThat(w).contains("PLAN-1").contains("已经排过"));
+    }
+
     // ==================== 预览 (给插单用): 不落库 ====================
 
     @Test
@@ -503,13 +593,18 @@ class ApsConstraintGeneratorJpaContractTest {
         raw.setUnit("kg");
         em.persist(raw);
         plan(F, planId, number, "PT-BEEF", quantity, "袋", null);
+        snapshot(planId, "PT-BEEF");
+    }
+
+    /** 开计划时的标准物料快照: 每袋 0.5 kg 鸡胸肉 (原料 RM-CHICKEN 须已存在)。 */
+    private void snapshot(String planId, String productTypeId) {
         PlanStandardCostLine line = new PlanStandardCostLine();
         line.setFactoryId(F);
         line.setPlanId(planId);
         line.setLineType(PlanStandardCostLine.TYPE_MATERIAL);
         line.setMaterialTypeId("RM-CHICKEN");
         line.setMaterialName("鸡胸肉");
-        line.setProductTypeId("PT-BEEF");
+        line.setProductTypeId(productTypeId);
         line.setStandardBasis(PlanStandardCostLine.BASIS_PER_OUTPUT_UNIT);
         line.setStandardRate(new BigDecimal("0.5"));
         line.setStandardUnit("kg");
@@ -518,7 +613,7 @@ class ApsConstraintGeneratorJpaContractTest {
         em.flush();
     }
 
-    private void stock(String factoryId, String materialTypeId, String quantity) {
+    private String stock(String factoryId, String materialTypeId, String quantity) {
         FactoryWarehouse wh = new FactoryWarehouse();
         wh.setId("WH-" + (++seq));
         wh.setFactoryId(factoryId);
@@ -539,6 +634,7 @@ class ApsConstraintGeneratorJpaContractTest {
         b.setCreatedBy(7L);
         em.persist(b);
         em.flush();
+        return b.getId();
     }
 
     private void purchase(String factoryId, String materialTypeId, String quantity, LocalDate expected,

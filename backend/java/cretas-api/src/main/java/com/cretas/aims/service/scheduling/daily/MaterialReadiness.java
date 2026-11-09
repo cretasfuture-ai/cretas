@@ -37,8 +37,13 @@ public final class MaterialReadiness {
      * @param freeStock       现在可用 (库存单位)
      * @param arrivals        有到货日、单位换得过来的在走采购
      * @param unknownArrivals 另有在走采购单没填到货日或单位换不过来 (这部分量不知道哪天到)
+     * @param overdueArrivals 另有在走采购单已过预计到货日还没到 (⛔ 不当作已到货, 也不知道哪天到)
      */
-    public record Supply(BigDecimal freeStock, List<Arrival> arrivals, boolean unknownArrivals) {
+    public record Supply(BigDecimal freeStock, List<Arrival> arrivals, boolean unknownArrivals,
+                         boolean overdueArrivals) {
+        public Supply(BigDecimal freeStock, List<Arrival> arrivals, boolean unknownArrivals) {
+            this(freeStock, arrivals, unknownArrivals, false);
+        }
     }
 
     /**
@@ -108,6 +113,9 @@ public final class MaterialReadiness {
                     if (earliest == null || start.isAfter(earliest)) {
                         earliest = start;
                     }
+                } else if (supply.overdueArrivals()) {
+                    notes.add("原料「" + need.materialName() + "」库存不够，在走的采购单已过预计到货日还没到货，"
+                            + "不知道哪天到，没按到货排；请跟供应商确认到货日");
                 } else if (supply.unknownArrivals()) {
                     notes.add("原料「" + need.materialName() + "」库存不够，在走的采购单有的没填预计到货日（或单位对不上），"
                             + "不知道哪天到，没按到货排；请补到货日");
