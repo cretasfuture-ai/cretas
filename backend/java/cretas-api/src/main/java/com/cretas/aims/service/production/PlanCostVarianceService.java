@@ -46,7 +46,8 @@ import java.util.Set;
  *
  * <p>实际侧口径: 本计划各批次的领用记录 (按领用批次的实际单价计价), 不含本计划自己产出的在制品再投入
  * (那是内部转移, 上游的钱已经算过), 客供料不计我方成本、不参与比较。成品 kg 与实际人工取
- * {@link OrderCostBreakdownService#computeByPlan} (与成本核算同一个内核)。</p>
+ * {@link OrderCostBreakdownService#computeByPlan} (与成本核算同一个内核)。结单转入半成品库的那部分
+ * 按成本核算的同一比例从实际侧扣掉 (净额, 见 {@link SemiTransferShare}), 划转额未知时差异标不完整。</p>
  */
 @Slf4j
 @Service
@@ -135,9 +136,22 @@ public class PlanCostVarianceService {
                     .build();
         }
 
+        // R5 (2026-11-09): 实际侧按净额 —— 结单转进半成品库的那部分成本随货走了, 不能留在成品的实际里
+        //   跟按成品产量算的标准比 (投 100、成品 60、半成品 40 时会多出约 40 的假超支)。
+        //   扣多少只看成本核算 (computeByPlan) 的划转额与净成本, ⛔ 不在这里另算一份; 划转额未知 ⇒ 不完整, ⛔ 不当 0。
+        SemiTransferShare transfer = SemiTransferShare.of(breakdown);
+        dto.semiTransferredCost(maskPrice ? null : transfer.credit());
+        if (transfer.unknownReason() != null) {
+            return dto.comparable(false)
+                    .comparabilityReason(transfer.unknownReason())
+                    .customerSuppliedItemCount(actual.customerSupplied())
+                    .build();
+        }
+        Map<String, PlanCostVarianceCalculator.ActualUsage> netActual = transfer.net(actual.byMaterial());
+        BigDecimal netLabor = transfer.net(breakdown == null ? null : breakdown.getLaborCost());
+
         PlanCostVarianceCalculator.Result result = PlanCostVarianceCalculator.compute(new PlanCostVarianceCalculator.Inputs(
-                lines, actual.byMaterial(), outputKg, outputQty,
-                breakdown == null ? null : breakdown.getLaborCost(),
+                lines, netActual, outputKg, outputQty, netLabor,
                 PlanBomItems.isMultiOutput(plan), this::convert));
 
         List<PlanCostVarianceDTO.Line> outLines = result.lines();
@@ -174,6 +188,61 @@ public class PlanCostVarianceService {
     }
 
     record ActualSide(Map<String, PlanCostVarianceCalculator.ActualUsage> byMaterial, int customerSupplied) {
+    }
+
+    /**
+     * 结单转入半成品库的成本在实际侧怎么扣 (R5)。
+     *
+     * <p>划转额与净成本都取自成本核算 {@link OrderCostBreakdownService#computeByPlan} —— 成品入库单价和毛利用的是
+     * 同一个净成本。留给成品的比例 = 净成本 ÷ (净成本 + 划转额), 各项实际用量、金额和实际人工同比例扣
+     * (单价不变, 所以价格差/用量差/替代料差的恒等式照旧成立)。这样成本差异的实际成本、成品入库单价 × 入库量、
+     * 毛利里扣的成本是同一个数。
+     *
+     * @param credit        划转额; null = 没有划转
+     * @param netFactor     留给成品的比例; 没有划转时为 1
+     * @param unknownReason 非 null = 划转额或净成本未知, 整张差异如实标不完整
+     */
+    record SemiTransferShare(BigDecimal credit, BigDecimal netFactor, String unknownReason) {
+        static final String TRANSFER_UNKNOWN_ITEM = "SETTLEMENT_SEMI_TRANSFER_COST";
+        private static final SemiTransferShare NONE = new SemiTransferShare(null, BigDecimal.ONE, null);
+
+        static SemiTransferShare of(OrderCostBreakdownDTO breakdown) {
+            if (breakdown == null) {
+                return NONE;
+            }
+            BigDecimal credit = breakdown.getSemiTransferredCost();
+            if (breakdown.getMissingCostItems() != null
+                    && breakdown.getMissingCostItems().contains(TRANSFER_UNKNOWN_ITEM)) {
+                return new SemiTransferShare(credit, null,
+                        "结单转入半成品库的那部分成本未知, 成品的实际成本分不出来, 差异不完整");
+            }
+            if (credit == null || credit.signum() == 0) {
+                return NONE;
+            }
+            BigDecimal net = breakdown.getTotalCost();
+            if (!breakdown.isCostComplete() || net == null || net.signum() < 0) {
+                return new SemiTransferShare(credit, null,
+                        "计划成本归集不完整, 结单转入半成品库的那部分无法按比例从实际里扣出, 差异不完整");
+            }
+            BigDecimal gross = net.add(credit);
+            return new SemiTransferShare(credit, net.divide(gross, 12, RoundingMode.HALF_UP), null);
+        }
+
+        Map<String, PlanCostVarianceCalculator.ActualUsage> net(
+                Map<String, PlanCostVarianceCalculator.ActualUsage> gross) {
+            if (netFactor.compareTo(BigDecimal.ONE) == 0) {
+                return gross;
+            }
+            Map<String, PlanCostVarianceCalculator.ActualUsage> out = new LinkedHashMap<>();
+            gross.forEach((id, u) -> out.put(id, new PlanCostVarianceCalculator.ActualUsage(
+                    u.materialTypeId(), u.materialName(), net(u.quantity()), u.unit(), net(u.amount()), u.unitMixed())));
+            return out;
+        }
+
+        BigDecimal net(BigDecimal grossValue) {
+            return grossValue == null || netFactor.compareTo(BigDecimal.ONE) == 0
+                    ? grossValue : grossValue.multiply(netFactor);
+        }
     }
 
     /**
