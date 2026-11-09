@@ -1477,6 +1477,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal usageVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getUsageVariance) : null;
         BigDecimal substituteVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getSubstituteVariance) : null;
         BigDecimal laborVariance = sumOrNull(comparedPlans, PlanCostVarianceDTO::getLaborVariance);
+        // 回料差 (缺口 09 补齐): 没有任何计划有可比回料 → null (⛔ 不报 ¥0); 材料差含回料差, 材料 + 人工 = 合计差
+        BigDecimal reworkVariance = sumOrNull(comparedPlans, PlanCostVarianceDTO::getReworkVariance);
         int partialPlans = (int) comparedPlans.stream().filter(p -> p.getIncomparableItemCount() > 0).count();
         String reportReason = !anyComparable
                 ? (planVariances.isEmpty() ? CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON
@@ -1520,7 +1522,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 BigDecimal prodOutput = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getOutputQuantity) : null;
                 BigDecimal prodMaterialVar = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getPriceVariance)
                         .add(sumOf(productPlans, PlanCostVarianceDTO::getUsageVariance))
-                        .add(sumOf(productPlans, PlanCostVarianceDTO::getSubstituteVariance)) : null;
+                        .add(sumOf(productPlans, PlanCostVarianceDTO::getSubstituteVariance))
+                        .add(sumOf(productPlans, PlanCostVarianceDTO::getReworkVariance)) : null;
+                BigDecimal prodReworkVar = sumOrNull(productPlans, PlanCostVarianceDTO::getReworkVariance);
                 BigDecimal prodLaborVar = sumOrNull(productPlans, PlanCostVarianceDTO::getLaborVariance);
                 BigDecimal bomUnit = productComparable && prodOutput.signum() > 0
                         ? prodStd.divide(prodOutput, 4, RoundingMode.HALF_UP) : null;
@@ -1538,6 +1542,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                         .batchCount(productBatchList.size())
                         .varianceReason(productComparable ? varianceReasonOf(productPlans) : null)
                         .materialVariance(scaleOrNull(prodMaterialVar))
+                        .reworkVariance(scaleOrNull(prodReworkVar))
                         .laborVariance(scaleOrNull(prodLaborVar))
                         .comparable(productComparable)
                         .comparabilityReason(productComparable ? null : productIncomparableReason(entry.getKey(), planVariances))
@@ -1566,7 +1571,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .priceVariance(scaleOrNull(priceVariance))
                 .usageVariance(scaleOrNull(usageVariance))
                 .substituteVariance(scaleOrNull(substituteVariance))
-                .materialVariance(anyComparable ? scaleOrNull(priceVariance.add(usageVariance).add(substituteVariance)) : null)
+                .materialVariance(anyComparable ? scaleOrNull(priceVariance.add(usageVariance).add(substituteVariance)
+                        .add(reworkVariance == null ? BigDecimal.ZERO : reworkVariance)) : null)
+                .reworkVariance(scaleOrNull(reworkVariance))
                 .laborVariance(scaleOrNull(laborVariance))
                 .overheadVariance(null)
                 .comparedPlanCount(comparedPlans.size())
@@ -1604,6 +1611,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         appendVariancePart(parts, "用量差", sumOf(plans, PlanCostVarianceDTO::getUsageVariance));
         appendVariancePart(parts, "替代料差", sumOf(plans, PlanCostVarianceDTO::getSubstituteVariance));
         appendVariancePart(parts, "人工差", sumOf(plans, PlanCostVarianceDTO::getLaborVariance));
+        appendVariancePart(parts, "回料差", sumOf(plans, PlanCostVarianceDTO::getReworkVariance));
         return parts.isEmpty() ? "成本与标准一致" : String.join(", ", parts);
     }
 

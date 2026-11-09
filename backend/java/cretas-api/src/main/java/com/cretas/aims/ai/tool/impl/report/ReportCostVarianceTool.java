@@ -190,11 +190,14 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                     .append("，其中价格差 ¥").append(plain(costVarianceData.getPriceVariance()))
                     .append("、用量差 ¥").append(plain(costVarianceData.getUsageVariance()))
                     .append("、替代料差 ¥").append(plain(costVarianceData.getSubstituteVariance()))
-                    .append("、人工差 ¥").append(plain(costVarianceData.getLaborVariance())).append("。");
+                    .append("、人工差 ¥").append(plain(costVarianceData.getLaborVariance()))
+                    // 回料差 null = 没有可比的回料项 (多半是没回投回料), ⛔ 不写成「回料差 ¥0」也不写成「无法比较」
+                    .append(costVarianceData.getReworkVariance() == null ? "、没有可比的回料项"
+                            : "、回料差 ¥" + plain(costVarianceData.getReworkVariance())).append("。");
             if (costVarianceData.getComparabilityReason() != null) {
                 sum.append(costVarianceData.getComparabilityReason()).append("。");
             }
-            sum.append("回料差异本期不单列。");
+            sum.append("回料差 = 从别的计划回投的回料按回料池单位成本计价 (配方不含回料时标准为 0), 本计划自产回投的回料是内部转移不另计。");
             if (costVarianceData.getProcessSecretNote() != null) sum.append(costVarianceData.getProcessSecretNote());
             result.put("summary", sum.toString());
         }

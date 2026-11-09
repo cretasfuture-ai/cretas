@@ -14,7 +14,12 @@ import java.util.List;
  * 一张生产计划的成本差异 (食品 DAG 缺口 09, Steve 2026-11-03 裁定)。
  *
  * <p>标准成本 = 计划锁定配方版本的标准用量 × 开计划那一刻的物料单价快照。差异拆成
- * 价格差 + 用量差 + 替代料差 + 人工差; 回料本期不单列。</p>
+ * 价格差 + 用量差 + 替代料差 + 人工差 + 回料差。</p>
+ *
+ * <p>回料 (半成品回投, 食品 DAG 缺口 09 补齐, 2026-11-09): 从别的计划的回料池回投的量, 按回料池单位成本计价
+ * (与成本核算 {@code OrderCostBreakdownService} 的 SFI 投料成本同源), 来源批次取追溯里先进先出归属写下的边。
+ * 配方不含回料时标准回料用量就是 0, 回料差 = 回投金额 (它顶替的原料体现为主料用量差的节约)。
+ * 本计划自己产出又回投的回料是内部转移 (原料已在本计划领用里算过), 列出数量, 不另计。</p>
  *
  * <p>合计 ({@link #standardCost} / {@link #actualCost} / 各分项差) <b>只加完全可比的那几项</b>,
  * 所以 {@code 价格差 + 用量差 + 替代料差 + 人工差 = 实际 − 标准} 恒成立; 无法比较的项逐条列在
@@ -29,6 +34,17 @@ public class PlanCostVarianceDTO {
     public static final String STATUS_COMPARABLE = "COMPARABLE";
     public static final String STATUS_PARTIAL = "PARTIAL";
     public static final String STATUS_INCOMPARABLE = "INCOMPARABLE";
+    /** 回料: 本计划自产自用, 内部转移, 不进合计。 */
+    public static final String STATUS_INTERNAL = "INTERNAL";
+
+    /** 计划级回料状态: 没有回投回料。 */
+    public static final String REWORK_NONE = "NONE";
+    /** 回料全部可比, 回料差已计入合计。 */
+    public static final String REWORK_COMPARABLE = "COMPARABLE";
+    /** 只有本计划自产自用的回料 (内部转移, 不另计)。 */
+    public static final String REWORK_INTERNAL_ONLY = "INTERNAL_ONLY";
+    /** 至少一项回料无法比较 (未计入合计)。 */
+    public static final String REWORK_INCOMPARABLE = "INCOMPARABLE";
     public static final String INCOMPARABLE_LABEL = "无法比较";
 
     private String planId;
@@ -62,7 +78,16 @@ public class PlanCostVarianceDTO {
     private BigDecimal usageVariance;
     private BigDecimal substituteVariance;
     private BigDecimal laborVariance;
-    /** 回料差异本期不单列的说明。 */
+    /**
+     * 回料差 (实际回投金额 − 标准回料金额), 只含可比的回料项; null = 没有可比的回料项
+     * (没有回料 / 只有内部转移 / 无法比较, 看 {@link #reworkStatus}), ⛔ 不是 0。
+     */
+    private BigDecimal reworkVariance;
+    /** NONE / COMPARABLE / INTERNAL_ONLY / INCOMPARABLE。 */
+    private String reworkStatus;
+    /** 回投回料的量 (按回料池单位分列, 如 "1.0000 kg"); 没有回料时 null。 */
+    private String reworkQuantityText;
+    /** 回料口径说明 (给人看的话): 回投了多少、按什么价、怎么计入。 */
     private String recoveredMaterialNote;
 
     private int comparableItemCount;
@@ -83,7 +108,7 @@ public class PlanCostVarianceDTO {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class Line {
-        /** MATERIAL / SUBSTITUTE / UNPLANNED / LABOR。 */
+        /** MATERIAL / SUBSTITUTE / UNPLANNED / LABOR / REWORK。 */
         private String lineType;
         private String materialTypeId;
         private String materialName;
@@ -102,11 +127,33 @@ public class PlanCostVarianceDTO {
         private BigDecimal usageVariance;
         private BigDecimal substituteVariance;
         private BigDecimal laborVariance;
-        /** COMPARABLE / PARTIAL / INCOMPARABLE。 */
+        /** 回料行: 实际回投金额 − 标准回料金额。 */
+        private BigDecimal reworkVariance;
+        /** 回料行: 回料池 (常驻半成品库存号)。 */
+        private String reworkPoolNo;
+        /** 回料行: 单价从哪来 (给人看的话)。 */
+        private String priceSource;
+        /** 回料行: 先进先出归属到的产出批次 (追溯边)。 */
+        @Builder.Default
+        private List<ReworkSource> reworkSources = new ArrayList<>();
+        /** COMPARABLE / PARTIAL / INCOMPARABLE / INTERNAL (回料内部转移)。 */
         private String status;
         /** 不可比 / 部分可比的原因 (给人看的话)。 */
         @Builder.Default
         private List<String> reasons = new ArrayList<>();
+    }
+
+    /** 回料的一段来源: 这么多量是哪个生产批次 (哪张计划) 产出的 —— 与追溯 (REWORK_POOL_FIFO 边) 同一份数据。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReworkSource {
+        private String producerBatchNumber;
+        private String producerPlanId;
+        private String producerPlanNumber;
+        private BigDecimal quantity;
+        private String unit;
     }
 
     @Data

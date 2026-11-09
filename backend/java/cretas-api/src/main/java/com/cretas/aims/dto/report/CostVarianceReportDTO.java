@@ -148,9 +148,14 @@ public class CostVarianceReportDTO {
     private BigDecimal overheadCostRatio;
 
     /**
-     * 材料成本差异
+     * 材料成本差异 (价格差 + 用量差 + 替代料差 + 回料差)
      */
     private BigDecimal materialVariance;
+
+    /**
+     * 回料差 (可比计划的回投回料金额 − 标准回料金额); null = 没有任何可比计划有可比的回料项, ⛔ 不是 0
+     */
+    private BigDecimal reworkVariance;
 
     /**
      * 人工成本差异
@@ -259,9 +264,14 @@ public class CostVarianceReportDTO {
         private String comparabilityReason;
 
         /**
-         * 材料成本差异
+         * 材料成本差异 (价格差 + 用量差 + 替代料差 + 回料差)
          */
         private BigDecimal materialVariance;
+
+        /**
+         * 回料差; null = 本产品可比计划都没有可比的回料项
+         */
+        private BigDecimal reworkVariance;
 
         /**
          * 人工成本差异
