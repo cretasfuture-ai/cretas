@@ -1,6 +1,8 @@
 package com.cretas.aims.service.scheduling.daily;
 
 import com.cretas.aims.dto.scheduling.AutoScheduleItem;
+import com.cretas.aims.dto.scheduling.ConstrainedSchedulePreview;
+import com.cretas.aims.dto.scheduling.SchedulePreviewRequest;
 import com.cretas.aims.dto.scheduling.DailyCapacityOverride;
 import com.cretas.aims.dto.scheduling.DailyCapacityRequiredDTO;
 import com.cretas.aims.dto.scheduling.GenerateScheduleRequest;
@@ -22,7 +24,7 @@ import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.service.bom.PlanBomItems;
 import com.cretas.aims.service.scheduling.core.SchedulingPlanCrudService;
 import com.cretas.aims.service.scheduling.daily.DailyCapacityEngine.DayOut;
-import com.cretas.aims.service.scheduling.daily.DailyCapacityEngine.JobIn;
+import com.cretas.aims.service.scheduling.daily.DailyCapacityEngine.Job;
 import com.cretas.aims.service.scheduling.daily.DailyCapacityEngine.JobOut;
 import com.cretas.aims.service.scheduling.daily.DailyCapacityEngine.Status;
 import lombok.RequiredArgsConstructor;
@@ -89,10 +91,11 @@ public class DailyCapacityScheduleGenerator {
     private final ExperienceCapacityService experienceCapacityService;
     private final ProductDailyCapacityService productDailyCapacityService;
     private final SchedulingPlanCrudService crudService;
+    private final ScheduleConstraintReader constraintReader;
 
     /** 一个计划要排的东西。 */
-    private record PlanWork(ProductionPlan plan, String label, String unit, boolean joint,
-                            BigDecimal reported, BigDecimal remaining, Capacity capacity, Long firstBatchId) {
+    record PlanWork(ProductionPlan plan, String label, String unit, boolean joint,
+                    BigDecimal reported, BigDecimal remaining, Capacity capacity, Long firstBatchId, List<String> notes) {
     }
 
     /** 一个 (产品, 计划单位) 的日产能判定。perDay 为空 = 要人补。 */
@@ -106,7 +109,7 @@ public class DailyCapacityScheduleGenerator {
             throw new BusinessException(400, "计划日期不能为空");
         }
         LocalDate firstDay = request.getPlanDate();
-        List<ProductionPlan> plans = resolvePlans(factoryId, request);
+        List<ProductionPlan> plans = resolvePlans(factoryId, request.getPlanIds(), request.getBatchIds());
         ProductionLine line = resolveLine(factoryId, request.getProductionLineId());
         // 先判同日已有调度计划: 不要等人补完日产能才告诉他这天已经排过了
         schedulingPlanRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, firstDay)
@@ -117,6 +120,122 @@ public class DailyCapacityScheduleGenerator {
                 });
 
         List<String> warnings = new ArrayList<>();
+        List<ProductionPlan> active = activePlans(plans, warnings);
+        applyOverrides(factoryId, request.getDailyCapacityOverrides(), active, userId, true);
+
+        Computation c = compute(factoryId, firstDay, line, active, List.of(), Set.of(), Map.of(), warnings);
+        if (!c.required().isEmpty()) {
+            SchedulingPlanDTO pending = new SchedulingPlanDTO();
+            pending.setFactoryId(factoryId);
+            pending.setPlanDate(firstDay);
+            pending.setOutcome(SchedulingPlanDTO.OUTCOME_CAPACITY_REQUIRED);
+            pending.setCapacityRequired(new ArrayList<>(c.required().values()));
+            pending.setLineSchedules(List.of());
+            pending.setWarnings(warnings);
+            log.info("APS 自动排程: factoryId={}, 需补日产能 {} 个产品, 本次不落库", factoryId, c.required().size());
+            return pending;
+        }
+
+        List<AutoScheduleItem> items = new ArrayList<>();
+        for (PlanWork w : c.ordered()) {
+            JobOut out = c.outs().get(w.plan().getId());
+            String text = outcomeWarning(w, out);
+            if (text != null) {
+                warnings.add(text);
+            }
+            if (out.status() != Status.SCHEDULED) {
+                continue;
+            }
+            warnings.addAll(constraintWarnings(w, out));
+            Integer quantity = roundedQuantity(out.totalQuantity());
+            items.add(new AutoScheduleItem(line.getId(), w.plan().getId(), w.firstBatchId(), items.size(),
+                    out.firstDay().atStartOfDay(), out.lastDay().atTime(DAY_END), quantity,
+                    allocationJson(w, out)));
+        }
+
+        if (items.isEmpty()) {
+            throw new BusinessException(422, "没有能排出的计划：" + String.join("；", warnings))
+                    .withCode("APS_NOTHING_SCHEDULABLE")
+                    .withHint("原因见上面每个计划的说明（已完成、已取消、已入库达到计划量、设备报废、依赖的计划没排出，或日产能填得明显不对）")
+                    .withSeverity("warning");
+        }
+
+        String notes = "按产品日产能按天排程，已避开设备占用、原料到货前与半成品依赖（不自动派工）";
+        SchedulingPlanDTO created = crudService.createAutoSchedulePlan(factoryId, firstDay,
+                firstDay + " 自动排程", notes, items, userId);
+        SchedulingPlanDTO result = crudService.getPlan(factoryId, created.getId());
+        result.setWarnings(warnings);
+        result.setOutcome(SchedulingPlanDTO.OUTCOME_SCHEDULED);
+        result.setCapacityRequired(List.of());
+        log.info("APS 自动排程: factoryId={}, schedulingPlanId={}, 排出 {} 个计划, 提示 {} 条",
+                factoryId, result.getId(), items.size(), warnings.size());
+        return result;
+    }
+
+    /**
+     * 只算不落库 (食品 DAG 缺口 18; 插单 / 局部重排调用)。补的日产能只用于这次计算, ⛔ 不写库;
+     * 不判「这天已有调度计划」(预览不建新调度计划)。结果与 {@code planIds} 同序。
+     */
+    @Transactional(readOnly = true)
+    public ConstrainedSchedulePreview preview(String factoryId, SchedulePreviewRequest request) {
+        if (request == null || request.firstDay() == null) {
+            throw new BusinessException(400, "排程开始日期不能为空");
+        }
+        LocalDate firstDay = request.firstDay();
+        List<ProductionPlan> plans = resolvePlans(factoryId, request.planIds(), null);
+        Set<String> planIds = new LinkedHashSet<>();
+        plans.forEach(p -> planIds.add(p.getId()));
+        List<String> pins = request.pinFirstPlanIds() == null ? List.of() : request.pinFirstPlanIds().stream()
+                .filter(id -> id != null && !id.isBlank()).map(String::trim).distinct().toList();
+        for (String pin : pins) {
+            if (!planIds.contains(pin)) {
+                throw new BusinessException(400, "要排在最前面的计划不在本次要排的计划里: " + pin);
+            }
+        }
+        ProductionLine line = resolveLine(factoryId, request.productionLineId());
+        List<String> warnings = new ArrayList<>();
+        List<ProductionPlan> active = activePlans(plans, warnings);
+        Map<String, DailyCapacityOverride> overrides = applyOverrides(factoryId, request.dailyCapacityOverrides(),
+                active, null, false);
+        Set<String> movable = request.movableLineScheduleIds() == null ? Set.of() : request.movableLineScheduleIds();
+
+        Computation c = compute(factoryId, firstDay, line, active, pins, movable, overrides, warnings);
+        if (!c.required().isEmpty()) {
+            return new ConstrainedSchedulePreview(SchedulingPlanDTO.OUTCOME_CAPACITY_REQUIRED, line.getId(), firstDay,
+                    new ArrayList<>(c.required().values()), List.of(), warnings);
+        }
+        Map<String, PlanWork> works = new HashMap<>();
+        c.ordered().forEach(w -> works.put(w.plan().getId(), w));
+        List<ConstrainedSchedulePreview.PlanResult> results = new ArrayList<>();
+        for (ProductionPlan plan : plans) {
+            PlanWork w = works.get(plan.getId());
+            if (w == null) {
+                results.add(new ConstrainedSchedulePreview.PlanResult(plan.getId(), planLabel(plan),
+                        active.contains(plan) ? STATUS_PRODUCT_MISSING : STATUS_PLAN_CLOSED, List.of(), List.of(),
+                        List.of(), null));
+                continue;
+            }
+            JobOut out = c.outs().get(plan.getId());
+            List<ConstrainedSchedulePreview.Day> days = out.days().stream()
+                    .map(d -> new ConstrainedSchedulePreview.Day(d.date(), d.quantity(), d.shareOfDay())).toList();
+            List<ConstrainedSchedulePreview.Delay> delays = out.delays().stream()
+                    .map(d -> new ConstrainedSchedulePreview.Delay(d.code().name(), d.from(), d.to(), d.detail())).toList();
+            results.add(new ConstrainedSchedulePreview.PlanResult(plan.getId(), w.label(), out.status().name(), days,
+                    delays, planNotes(w, out), out.status() == Status.SCHEDULED ? allocationJson(w, out) : null));
+        }
+        return new ConstrainedSchedulePreview(SchedulingPlanDTO.OUTCOME_SCHEDULED, line.getId(), firstDay, List.of(),
+                results, warnings);
+    }
+
+    /** 预览结果里「这个计划没进排程」的两种原因 (引擎状态之外)。 */
+    public static final String STATUS_PLAN_CLOSED = "PLAN_CLOSED";
+    public static final String STATUS_PRODUCT_MISSING = "PRODUCT_MISSING";
+
+    private record Computation(List<PlanWork> ordered, Map<String, JobOut> outs,
+                               Map<String, DailyCapacityRequiredDTO> required) {
+    }
+
+    private List<ProductionPlan> activePlans(List<ProductionPlan> plans, List<String> warnings) {
         List<ProductionPlan> active = new ArrayList<>();
         for (ProductionPlan plan : plans) {
             if (plan.getStatus() == ProductionPlanStatus.COMPLETED || plan.getStatus() == ProductionPlanStatus.CANCELLED) {
@@ -125,9 +244,16 @@ public class DailyCapacityScheduleGenerator {
             }
             active.add(plan);
         }
+        return active;
+    }
 
-        applyOverrides(factoryId, request.getDailyCapacityOverrides(), active, userId);
-
+    /**
+     * 日产能判定 → 剩余量 → 排序 (钉在最前的 → 交期早的 → 没交期的按传入顺序) → 读约束 → 原料到货 → 引擎。
+     * 有产品要补日产能时只返回需补清单, 不跑引擎。
+     */
+    private Computation compute(String factoryId, LocalDate firstDay, ProductionLine line, List<ProductionPlan> active,
+                                List<String> pins, Set<String> movable, Map<String, DailyCapacityOverride> overrides,
+                                List<String> warnings) {
         LocalDate today = LocalDate.now();
         Map<String, Capacity> capacityByKey = new HashMap<>();
         Map<String, DailyCapacityRequiredDTO> required = new LinkedHashMap<>();
@@ -143,7 +269,7 @@ public class DailyCapacityScheduleGenerator {
             }
             // 同一产品同一单位: 联产与单品计划的经验值口径不同 (联产按原料投入且只作建议), 分开判
             Capacity capacity = capacityByKey.computeIfAbsent(capacityKey(product.getId(), unit) + (joint ? "|J" : ""),
-                    k -> resolveCapacity(factoryId, product, unit, joint, today, warnings));
+                    k -> resolveCapacity(factoryId, product, unit, joint, today, overrides.get(product.getId()), warnings));
             if (capacity.perDay() == null) {
                 DailyCapacityRequiredDTO item = required.computeIfAbsent(capacityKey(product.getId(), unit),
                         k -> capacity.required());
@@ -156,79 +282,125 @@ public class DailyCapacityScheduleGenerator {
             BigDecimal planned = plan.getPlannedQuantity() == null ? BigDecimal.ZERO : plan.getPlannedQuantity();
             BigDecimal remaining = planned.subtract(reported.quantity()).max(BigDecimal.ZERO);
             works.add(new PlanWork(plan, planLabel(plan), unit, joint, reported.quantity(), remaining, capacity,
-                    firstOpenBatchId(factoryId, plan)));
+                    firstOpenBatchId(factoryId, plan), new ArrayList<>()));
         }
-
         if (!required.isEmpty()) {
-            SchedulingPlanDTO pending = new SchedulingPlanDTO();
-            pending.setFactoryId(factoryId);
-            pending.setPlanDate(firstDay);
-            pending.setOutcome(SchedulingPlanDTO.OUTCOME_CAPACITY_REQUIRED);
-            pending.setCapacityRequired(new ArrayList<>(required.values()));
-            pending.setLineSchedules(List.of());
-            pending.setWarnings(warnings);
-            log.info("APS 自动排程: factoryId={}, 需补日产能 {} 个产品, 本次不落库", factoryId, required.size());
-            return pending;
+            return new Computation(works, Map.of(), required);
         }
 
-        List<JobIn> jobs = works.stream()
-                .map(w -> new JobIn(w.plan().getId(), w.remaining(), w.capacity().perDay()))
+        List<PlanWork> ordered = priorityOrder(works, pins);
+        List<ScheduleConstraintReader.PlanInput> inputs = ordered.stream()
+                .map(w -> new ScheduleConstraintReader.PlanInput(w.plan(), w.label(), w.unit(), w.remaining(), w.joint()))
                 .toList();
-        List<JobOut> allocated = DailyCapacityEngine.allocate(jobs, firstDay);
+        ScheduleConstraintReader.Constraints constraints = constraintReader.read(factoryId, firstDay, line.getId(),
+                inputs, movable);
+        warnings.addAll(constraints.warnings());
 
-        List<AutoScheduleItem> items = new ArrayList<>();
-        for (int i = 0; i < works.size(); i++) {
-            PlanWork w = works.get(i);
-            JobOut out = allocated.get(i);
-            if (out.status() == Status.NOTHING_REMAINING) {
-                warnings.add("计划「" + w.label() + "」已入库 " + plain(w.reported()) + " " + w.unit()
-                        + "，达到计划量，不需要排");
-                continue;
-            }
-            if (out.status() == Status.EXCEEDS_HORIZON) {
-                warnings.add("计划「" + w.label() + "」按日产能 " + plain(w.capacity().perDay()) + " " + w.unit()
-                        + "/天要排 " + DailyCapacityEngine.MAX_DAYS + " 天以上，没有排；请核对日产能是否填错");
-                continue;
-            }
-            if (out.status() != Status.SCHEDULED) {
-                // NEEDS_CAPACITY 已在上面整体返回需补清单, 走不到这里; 防御: 不静默丢
-                throw new IllegalStateException("unexpected allocation status " + out.status() + " for " + w.label());
-            }
-            Integer quantity = roundedQuantity(out.totalQuantity());
-            items.add(new AutoScheduleItem(line.getId(), w.plan().getId(), w.firstBatchId(), items.size(),
-                    out.firstDay().atStartOfDay(), out.lastDay().atTime(DAY_END), quantity,
-                    allocationJson(w, out)));
+        List<Job> jobs = new ArrayList<>();
+        for (PlanWork w : ordered) {
+            ScheduleConstraintReader.PlanConstraint pc = constraints.byPlan().get(w.plan().getId());
+            w.notes().addAll(pc.notes());
+            jobs.add(new Job(w.plan().getId(), w.label(), w.plan().getProductTypeId(), w.remaining(),
+                    w.capacity().perDay(), null, null, null, pc.equipmentIds(), pc.predecessorPlanIds(),
+                    pc.unavailableReason()));
         }
-
-        if (items.isEmpty()) {
-            throw new BusinessException(422, "没有能排出的计划：" + String.join("；", warnings))
-                    .withCode("APS_NOTHING_SCHEDULABLE")
-                    .withHint("原因见上面每个计划的说明（已完成、已取消、已入库达到计划量，或日产能填得明显不对）")
-                    .withSeverity("warning");
+        // 原料按执行顺序 (依赖先排) 先到先得
+        Map<String, Job> byKey = new LinkedHashMap<>();
+        jobs.forEach(j -> byKey.put(j.key(), j));
+        List<String> execution = DailyCapacityEngine.executionOrder(jobs, byKey, new HashMap<>()).stream()
+                .map(Job::key).toList();
+        Map<String, MaterialReadiness.Ready> ready = MaterialReadiness.compute(execution,
+                constraints.materialNeeds(), constraints.materialSupply());
+        List<Job> constrained = new ArrayList<>();
+        for (int i = 0; i < jobs.size(); i++) {
+            Job j = jobs.get(i);
+            MaterialReadiness.Ready r = ready.get(j.key());
+            if (r != null) {
+                ordered.get(i).notes().addAll(r.notes());
+            }
+            constrained.add(r == null || r.earliestStart() == null ? j
+                    : new Job(j.key(), j.label(), j.productTypeId(), j.quantity(), j.capacityPerDay(), r.earliestStart(),
+                    DailyCapacityEngine.DelayCode.MATERIAL_ARRIVAL, r.reason(), j.equipmentIds(), j.predecessorKeys(),
+                    j.unavailableReason()));
         }
+        List<JobOut> outs = DailyCapacityEngine.schedule(new DailyCapacityEngine.Input(firstDay, constrained,
+                constraints.fixed(), constraints.blocks(), constraints.equipmentLabels()));
+        Map<String, JobOut> byPlan = new LinkedHashMap<>();
+        for (JobOut out : outs) {
+            byPlan.put(out.key(), out);
+        }
+        return new Computation(ordered, byPlan, required);
+    }
 
-        String notes = "按产品日产能按天排程（不自动派工）";
-        SchedulingPlanDTO created = crudService.createAutoSchedulePlan(factoryId, firstDay,
-                firstDay + " 自动排程", notes, items, userId);
-        SchedulingPlanDTO result = crudService.getPlan(factoryId, created.getId());
-        result.setWarnings(warnings);
-        result.setOutcome(SchedulingPlanDTO.OUTCOME_SCHEDULED);
-        result.setCapacityRequired(List.of());
-        log.info("APS 自动排程: factoryId={}, schedulingPlanId={}, 排出 {} 个计划, 提示 {} 条",
-                factoryId, result.getId(), items.size(), warnings.size());
-        return result;
+    /** Steve 2026-11-09: 交期 (计划预计完成日) 早的先; 没有交期的排在后面, 保持传入顺序。钉住的永远最前。 */
+    static List<PlanWork> priorityOrder(List<PlanWork> works, List<String> pins) {
+        List<PlanWork> pinned = new ArrayList<>();
+        for (String id : pins) {
+            works.stream().filter(w -> w.plan().getId().equals(id)).findFirst().ifPresent(pinned::add);
+        }
+        List<PlanWork> rest = new ArrayList<>(works);
+        rest.removeAll(pinned);
+        rest.sort(Comparator.comparing((PlanWork w) -> w.plan().getExpectedCompletionDate(),
+                Comparator.nullsLast(Comparator.naturalOrder()))); // List.sort 稳定: 同交期保持传入顺序
+        List<PlanWork> out = new ArrayList<>(pinned);
+        out.addAll(rest);
+        return out;
+    }
+
+    /** 没排出来的计划给一句话; 排出来的返回 null。 */
+    private static String outcomeWarning(PlanWork w, JobOut out) {
+        return switch (out.status()) {
+            case SCHEDULED -> null;
+            case NOTHING_REMAINING -> "计划「" + w.label() + "」已入库 " + plain(w.reported()) + " " + w.unit()
+                    + "，达到计划量，不需要排";
+            case EXCEEDS_HORIZON -> "计划「" + w.label() + "」按日产能 " + plain(w.capacity().perDay()) + " " + w.unit()
+                    + "/天，加上设备 / 原料 / 依赖的等待，要排 " + DailyCapacityEngine.MAX_DAYS
+                    + " 天以上，没有排；请核对日产能是否填错";
+            case EQUIPMENT_UNAVAILABLE, PREDECESSOR_NOT_SCHEDULED -> "计划「" + w.label() + "」没有排："
+                    + String.join("；", out.notes());
+            // NEEDS_CAPACITY 已在 compute 里整体返回需补清单, 走不到这里; 防御: 不静默丢
+            case NEEDS_CAPACITY -> throw new IllegalStateException("unexpected NEEDS_CAPACITY for " + w.label());
+        };
+    }
+
+    /** 排出来的计划: 推迟原因与没核对的约束, 各一句, 前缀计划号。 */
+    private static List<String> constraintWarnings(PlanWork w, JobOut out) {
+        List<String> list = new ArrayList<>();
+        for (DailyCapacityEngine.Delay d : out.delays()) {
+            list.add("计划「" + w.label() + "」" + delayRange(d) + "没排：" + d.detail());
+        }
+        for (String n : planNotes(w, out)) {
+            list.add("计划「" + w.label() + "」" + n);
+        }
+        return list;
+    }
+
+    private static List<String> planNotes(PlanWork w, JobOut out) {
+        List<String> notes = new ArrayList<>(w.notes());
+        for (String n : out.notes()) {
+            if (!notes.contains(n)) {
+                notes.add(n);
+            }
+        }
+        return notes;
+    }
+
+    private static String delayRange(DailyCapacityEngine.Delay d) {
+        return d.from().equals(d.to()) ? d.from() + " " : d.from() + " 至 " + d.to() + " ";
     }
 
     // ==================== 日产能 ====================
 
     private Capacity resolveCapacity(String factoryId, ProductType product, String unit, boolean joint,
-                                     LocalDate today, List<String> warnings) {
+                                     LocalDate today, DailyCapacityOverride override, List<String> warnings) {
         String name = displayName(factoryId, product);
         BigDecimal manual = null;
         boolean unitMismatch = false;
-        if (product.getDailyCapacity() != null && product.getDailyCapacity().signum() > 0) {
-            Optional<BigDecimal> converted = CapacityUnits.convert(product.getDailyCapacity(),
-                    product.getDailyCapacityUnit(), unit);
+        // 预览时补的日产能不写库, 在这里顶替产品上存的值 (generate 已先保存到产品, 这里为 null)
+        BigDecimal storedQty = override != null ? override.getQuantityPerDay() : product.getDailyCapacity();
+        String storedUnit = override != null ? override.getUnit() : product.getDailyCapacityUnit();
+        if (storedQty != null && storedQty.signum() > 0) {
+            Optional<BigDecimal> converted = CapacityUnits.convert(storedQty, storedUnit, unit);
             if (converted.isPresent()) {
                 manual = converted.get().setScale(DailyCapacityEngine.QTY_SCALE, RoundingMode.HALF_UP);
                 if (manual.signum() <= 0) {
@@ -270,8 +442,8 @@ public class DailyCapacityScheduleGenerator {
                         ? "这个联产计划（" + name + "）一天能做多少 " + unit + "？"
                         : "「" + name + "」一天能做多少 " + unit + "？")
                 .reason(unitMismatch ? "UNIT_MISMATCH" : "MISSING")
-                .currentQuantityPerDay(unitMismatch ? product.getDailyCapacity() : null)
-                .currentUnit(unitMismatch ? product.getDailyCapacityUnit() : null)
+                .currentQuantityPerDay(unitMismatch ? storedQty : null)
+                .currentUnit(unitMismatch ? storedUnit : null)
                 .experienceQuantityPerDay(null)
                 .experienceNote(experience.note())
                 .suggestedPerDay(joint && experience.available() ? experience.perDay() : null)
@@ -304,10 +476,14 @@ public class DailyCapacityScheduleGenerator {
     }
 
     /** 排程页当场补的日产能: 整批校验 (本厂产品 / 本次计划用到 / 单位对得上) 通过后才写, 不留半截。 */
-    private void applyOverrides(String factoryId, List<DailyCapacityOverride> overrides, List<ProductionPlan> plans,
-                                Long userId) {
+    /**
+     * 补的日产能整批校验 (本厂产品 / 本次计划用到 / 单位对得上)。{@code persist} 时通过后才写 (不留半截);
+     * 否则 (预览) 只返回「产品 → 补的值」供本次计算用, ⛔ 不写库。
+     */
+    private Map<String, DailyCapacityOverride> applyOverrides(String factoryId, List<DailyCapacityOverride> overrides,
+                                                              List<ProductionPlan> plans, Long userId, boolean persist) {
         if (overrides == null || overrides.isEmpty()) {
-            return;
+            return Map.of();
         }
         Map<String, Set<String>> unitsByProduct = new HashMap<>();
         for (ProductionPlan plan : plans) {
@@ -336,12 +512,22 @@ public class DailyCapacityScheduleGenerator {
                         + String.join(" / ", planUnits) + "（与计划单位一致），填的是 " + unit)
                         .withHintTarget("dailyCapacityOverrides");
             }
-            validated.add(o);
+            DailyCapacityOverride normalized = new DailyCapacityOverride();
+            normalized.setProductTypeId(product.getId());
+            normalized.setQuantityPerDay(o.getQuantityPerDay());
+            normalized.setUnit(unit);
+            validated.add(normalized);
         }
+        Map<String, DailyCapacityOverride> byProduct = new HashMap<>();
         for (DailyCapacityOverride o : validated) {
-            productDailyCapacityService.save(factoryId, o.getProductTypeId().trim(), o.getQuantityPerDay(), o.getUnit(),
-                    userId);
+            if (persist) {
+                productDailyCapacityService.save(factoryId, o.getProductTypeId(), o.getQuantityPerDay(), o.getUnit(),
+                        userId);
+            } else {
+                byProduct.put(o.getProductTypeId(), o);
+            }
         }
+        return byProduct;
     }
 
     // ==================== 已入库 (已报产出) ====================
@@ -383,17 +569,17 @@ public class DailyCapacityScheduleGenerator {
 
     // ==================== 入参解析 ====================
 
-    private List<ProductionPlan> resolvePlans(String factoryId, GenerateScheduleRequest request) {
+    private List<ProductionPlan> resolvePlans(String factoryId, List<String> planIds, List<Long> batchIds) {
         Set<String> ids = new LinkedHashSet<>();
-        if (request.getPlanIds() != null) {
-            for (String id : request.getPlanIds()) {
+        if (planIds != null) {
+            for (String id : planIds) {
                 if (id != null && !id.isBlank()) {
                     ids.add(id.trim());
                 }
             }
         }
-        if (request.getBatchIds() != null) {
-            for (Long batchId : request.getBatchIds()) {
+        if (batchIds != null) {
+            for (Long batchId : batchIds) {
                 if (batchId == null) {
                     continue;
                 }
@@ -477,6 +663,18 @@ public class DailyCapacityScheduleGenerator {
             days.add(day);
         }
         json.put("days", days);
+        // 缺口 18: 为什么推迟 / 没核对的约束, 详情页逐条显示
+        List<Map<String, Object>> delays = new ArrayList<>();
+        for (DailyCapacityEngine.Delay d : out.delays()) {
+            Map<String, Object> delay = new LinkedHashMap<>();
+            delay.put("code", d.code().name());
+            delay.put("from", d.from().toString());
+            delay.put("to", d.to().toString());
+            delay.put("text", d.detail());
+            delays.add(delay);
+        }
+        json.put("delays", delays);
+        json.put("constraintNotes", planNotes(w, out));
         return json;
     }
 
