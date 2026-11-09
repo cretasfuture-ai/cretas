@@ -203,14 +203,21 @@ public class QualityDispositionController {
     @RequirePermission({"quality:read_write"})
     @RequireModule("quality_inspection")
     @PostMapping("/batches/{batchId}/release-held-goods")
-    @Transactional
     @Operation(summary = "已放行批次申请放行隔离成品")
     public ApiResponse<DispositionResultDTO> releaseHeldGoods(
             @PathVariable String factoryId,
             @PathVariable Long batchId,
             @RequestAttribute("userId") @Parameter(hidden = true) Long authenticatedUserId) {
-        DispositionExecutionResult result =
-                qualityDispositionRuleService.recheckPlanRelease(factoryId, batchId, authenticatedUserId);
+        // ⛔ 这里故意不加 @Transactional: 申请在服务自己的事务里跑, 被拒时那个事务回滚;
+        //    拒绝的审计在另一个事务里写, 才不会跟着回滚掉 (#1548 第二轮审查 5)。
+        DispositionExecutionResult result;
+        try {
+            result = qualityDispositionRuleService.recheckPlanRelease(factoryId, batchId, authenticatedUserId);
+        } catch (BusinessException refused) {
+            qualityDispositionRuleService.recordRefusedPlanRelease(factoryId, batchId, authenticatedUserId,
+                    refused.getErrorCode(), refused.getMessage());
+            throw refused;
+        }
         return ApiResponse.success(DispositionResultDTO.builder()
                 .dispositionId(result.getAuditLogId())
                 .status("EXECUTED")

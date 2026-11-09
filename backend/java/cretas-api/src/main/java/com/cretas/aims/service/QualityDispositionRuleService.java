@@ -112,6 +112,12 @@ public interface QualityDispositionRuleService {
     DispositionExecutionResult recheckPlanRelease(String factoryId, Long productionBatchId, Long userId);
 
     /**
+     * 申请被拒 (批次不在本厂 / 还没放行 / 召回中等) 也留一条审计: 谁、哪个批次、为什么 (#1548 第二轮审查 5)。
+     * 必须在申请本身的事务之外调用 —— 申请那个事务因为拒绝而回滚, 这条审计不能跟着没了。
+     */
+    void recordRefusedPlanRelease(String factoryId, Long productionBatchId, Long userId, String code, String reason);
+
+    /**
      * 处置动作枚举
      */
     enum DispositionAction {

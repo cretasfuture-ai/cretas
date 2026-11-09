@@ -90,11 +90,12 @@ class QcReleaseScrappedBatchContractTest {
         });
         when(productionBatchRepo.findByFactoryIdAndProductionPlanId(eq(F), anyString())).thenAnswer(inv -> batches
                 .stream().filter(b -> b.getProductionPlanId().equals(inv.getArgument(1))).toList());
-        // 与真实查询同一集合: isDispositionLocked (含 SCRAPPED)
-        when(productionBatchRepo.countQcFailedInPlans(eq(F), any(), anyString())).thenAnswer(inv -> {
+        // 与真实查询同一集合: isDispositionLocked 去掉 SCRAPPED
+        when(productionBatchRepo.countUnclearedNotScrappedInPlans(eq(F), any(), anyString())).thenAnswer(inv -> {
             Collection<?> plans = inv.getArgument(1);
             return batches.stream().filter(b -> plans.contains(b.getProductionPlanId())
-                    && b.getQualityStatus().isDispositionLocked()).count();
+                    && b.getQualityStatus().isDispositionLocked()
+                    && b.getQualityStatus() != QualityStatus.SCRAPPED).count();
         });
         when(productionBatchRepo.findScrappedInPlans(eq(F), any(), anyString())).thenAnswer(inv -> {
             Collection<?> plans = inv.getArgument(1);
@@ -165,14 +166,64 @@ class QcReleaseScrappedBatchContractTest {
         assertThat(f.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
     }
 
+    /** #1548 第二轮审查 7: 两条认定路各钉一条, 去掉任何一条都要红。这条只走「血缘指到报废批」。 */
     @Test
-    @DisplayName("阴性: 成品批号就是报废批的批号 —— 拒绝, 仍待检")
-    void finishedGoodsOfScrappedBatchStayHeld() {
-        FinishedGoodsBatch f = fg("PB-999");
+    @DisplayName("阴性: 血缘指到报废批 999 (批号与它不同) —— 拒绝, 仍待检")
+    void finishedGoodsTracedByLineageToScrappedBatchStayHeld() {
+        FinishedGoodsBatch f = fg("FG-P2-S9");
+        edge(999L, f.getId());
         assertThatThrownBy(() -> decide(QcReleaseRecord.TargetType.FINISHED_GOODS, f.getId()))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode())
                         .isEqualTo(QcReleaseService.CODE_BLOCKED_BY_SCRAPPED_BATCH));
         assertThat(f.getStatus()).isEqualTo(FinishedGoodsBatch.Status.PENDING_INSPECTION);
+    }
+
+    /** 这条只走「成品批号就是报废批批号」: 血缘指到合格的 202, 归属判据认的是 202。召回冻结认的也是批号, 同一口径。 */
+    @Test
+    @DisplayName("阴性: 成品批号就是报废批的批号 (血缘却指到 202) —— 仍按报废批的货拒绝")
+    void finishedGoodsWithScrappedBatchNumberStayHeld() {
+        FinishedGoodsBatch f = fg("PB-999");
+        edge(202L, f.getId());
+        assertThatThrownBy(() -> decide(QcReleaseRecord.TargetType.FINISHED_GOODS, f.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode())
+                        .isEqualTo(QcReleaseService.CODE_BLOCKED_BY_SCRAPPED_BATCH));
+        assertThat(f.getStatus()).isEqualTo(FinishedGoodsBatch.Status.PENDING_INSPECTION);
+    }
+
+    /** #1548 第二轮审查 2: 一笔来自 202 (10), 一笔没记批次 (10), 同计划 999 报废 —— 没记的那笔可能就是 999 的, 不放。 */
+    @Test
+    @DisplayName("半成品: 有一笔待检没记生产批次、计划有报废批 —— 分不清, 不放, 仍待检")
+    void semiWithAnUnattributedLotIsNotGuessed() {
+        SemiFinishedInventory s = semi(List.of());
+        SemiQcHoldLots lots = org.mockito.Mockito.mock(SemiQcHoldLots.class);
+        when(lots.openLots(F, 51L)).thenReturn(List.of(lot(202L, "10"), lot(null, "10")));
+        service.setSemiQcHoldLots(lots);
+
+        assertThatThrownBy(() -> decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(QcReleaseService.CODE_OWNERSHIP_UNCLEAR);
+                    assertThat(e.getMessage()).contains("没记来自哪个生产批次");
+                });
+        assertThat(s.getInspectionStatus()).isEqualTo(SemiFinishedInventory.InspectionStatus.PENDING);
+    }
+
+    @Test
+    @DisplayName("阳性对照: 两笔都记了批次 (都是 202) —— 同一行照常放行")
+    void semiWithAllLotsAttributedIsReleased() {
+        SemiFinishedInventory s = semi(List.of());
+        SemiQcHoldLots lots = org.mockito.Mockito.mock(SemiQcHoldLots.class);
+        when(lots.openLots(F, 51L)).thenReturn(List.of(lot(202L, "10"), lot(202L, "10")));
+        service.setSemiQcHoldLots(lots);
+
+        decide(QcReleaseRecord.TargetType.SEMI_FINISHED, "51");
+        assertThat(s.getInspectionStatus()).isNull();
+    }
+
+    private static com.cretas.aims.entity.quality.SemiQcHoldLot lot(Long productionBatchId, String qty) {
+        com.cretas.aims.entity.quality.SemiQcHoldLot lot = new com.cretas.aims.entity.quality.SemiQcHoldLot();
+        lot.setProductionBatchId(productionBatchId);
+        lot.setQuantityOpen(new BigDecimal(qty));
+        return lot;
     }
 
     @Test

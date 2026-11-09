@@ -223,12 +223,23 @@ public class QualityDispositionInventoryService {
         return target.name();
     }
 
-    /** 先给本计划成品加行锁 (按 id 顺序), 再做隔离 / 放行 —— 与召回冻结、时限判废串行。 */
-    private void lockPlanGoods(ProductionBatch pb) {
-        if (pb == null || finishedGoodsBatchRepository == null || pb.getProductionPlanId() == null) {
+    /**
+     * 先锁本计划<b>所有</b>生产批次 (含 CLERK_WIP, 按 id), 再锁本计划成品 (按 id) —— 生产批次 → 成品的顺序与其它路径一致。
+     * 质检判 FAILED 写批次状态要先拿批次锁 (QualityInspectionServiceImpl.propagateToProductionBatch), 所以「放行读兄弟批状态」
+     * 与「兄弟批被判不合格并隔离成品」串行, 不会一边读到合格、一边看到成品已隔离而什么都不做 (#1548 第二轮审查 3)。
+     */
+    private void lockPlan(String factoryId, String planId) {
+        if (planId == null || planId.isBlank() || productionBatchRepository == null || finishedGoodsBatchRepository == null) {
             return;
         }
-        finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdForUpdate(pb.getFactoryId(), pb.getProductionPlanId());
+        productionBatchRepository.lockAllIdsInPlan(factoryId, planId);
+        finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId);
+    }
+
+    private void lockPlanGoods(ProductionBatch pb) {
+        if (pb != null) {
+            lockPlan(pb.getFactoryId(), pb.getProductionPlanId());
+        }
     }
 
     /** 返工 / 报废: 批次已判定不能卖, 同计划还可售 / 待检的成品一起隔离, 否则批次和成品分叉。 */
@@ -315,6 +326,7 @@ public class QualityDispositionInventoryService {
             case REWORK: {
                 ProductionBatch pb = loadBatch(inspection);
                 String batchStatus = writeBatchStatus(pb, QualityStatus.REWORK_REQUIRED);
+                lockPlanGoods(pb);
                 quarantineFinishedGoods(pb);
                 log.info("质检处置库存桥接 — REWORK inspectionId={} 批次→{}", inspection.getId(), batchStatus);
                 return InventoryDispositionResult.builder().action(action).batchQualityStatus(batchStatus).build();
@@ -340,9 +352,22 @@ public class QualityDispositionInventoryService {
         if (productionBatchRepository == null || finishedGoodsBatchRepository == null) {
             throw new IllegalStateException("生产批次 / 成品仓储未注入，不能重新核对放行");
         }
-        ProductionBatch pb = productionBatchRepository.findByIdAndFactoryIdForUpdate(productionBatchId, factoryId)
-                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404, "生产批次不存在或不属于当前工厂"));
-        QualityStatus status = pb.getQualityStatus();
+        ProductionBatch pb = productionBatchRepository.findByIdAndFactoryId(productionBatchId, factoryId)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404, "生产批次不存在或不属于当前工厂")
+                        .withCode("PRODUCTION_BATCH_NOT_FOUND"));
+        // 锁顺序与计划级放行一致: 计划所有批次按 id 一次锁 (含本批), 锁到之后再读本批状态 —— 不先单独锁本批,
+        // 免得和另一个按 id 顺序拿锁的放行交叉。
+        QualityStatus status;
+        if (pb.getProductionPlanId() != null && !pb.getProductionPlanId().isBlank()) {
+            productionBatchRepository.lockAllIdsInPlan(factoryId, pb.getProductionPlanId());
+            status = productionBatchRepository.findQcStatesInPlan(factoryId, pb.getProductionPlanId()).stream()
+                    .filter(st -> Objects.equals(st.getId(), pb.getId()))
+                    .map(com.cretas.aims.repository.ProductionBatchRepository.PlanBatchQcState::getQualityStatus)
+                    .findFirst().orElse(pb.getQualityStatus());
+        } else {
+            status = productionBatchRepository.findByIdAndFactoryIdForUpdate(productionBatchId, factoryId)
+                    .map(ProductionBatch::getQualityStatus).orElse(pb.getQualityStatus());
+        }
         if (status == null || !status.isPassed()) {
             throw new com.cretas.aims.exception.BusinessException(409, "批次 " + pb.getBatchNumber()
                     + " 还没有放行（当前：" + (status == null ? "未检验" : status.getDescription())
@@ -362,35 +387,73 @@ public class QualityDispositionInventoryService {
                 .build();
     }
 
-    /** 已放行、但所在计划还有成品在隔离的批次 (web 端「成品仍在隔离」页签的数据, 按钮只给这些批次)。 */
+    /**
+     * 「成品仍在隔离」页签的数据: 已放行批次所在、而且<b>按一下申请能有用</b>的计划 (#1548 第二轮审查 6)。
+     * 用与放行同一份判断 ({@link #decideRelease}, 只读) 先算一遍:
+     * <ul>
+     *   <li>现在就能放的成品 (releasableNow) &gt; 0 ⇒ 列出;</li>
+     *   <li>整计划因为分不清归属而不放 (unclearOwnership) ⇒ 也列出: 补齐血缘后按按钮就放得出, 这正是这个入口的用途;</li>
+     *   <li>只剩报废 / 召回 / 判废 / 质检放行判不合格的货, 或同计划还有批次没处置 ⇒ 不列: 按钮帮不上, 列着只会永远挂在那里。</li>
+     * </ul>
+     * 一个计划一行, 申请挂在计划里第一个已放行的批次上。
+     */
     @Transactional(readOnly = true)
     public List<HeldGoodsBatch> listPassedBatchesWithHeldGoods(String factoryId) {
         if (productionBatchRepository == null || finishedGoodsBatchRepository == null) {
-            return List.of();
+            throw new IllegalStateException("生产批次 / 成品仓储未注入，查不了成品隔离情况");
         }
-        Map<String, Integer> heldByPlan = new LinkedHashMap<>();
-        for (FinishedGoodsBatch fg : finishedGoodsBatchRepository.findQuarantinedPlanGoods(factoryId)) {
-            if (Objects.equals(factoryId, fg.getFactoryId()) && !isReturnChild(fg)) {
-                heldByPlan.merge(fg.getProductionPlanId(), 1, Integer::sum);
-            }
-        }
-        if (heldByPlan.isEmpty()) {
-            return List.of();
+        Map<String, List<FinishedGoodsBatch>> heldByPlan = new LinkedHashMap<>();
+        for (FinishedGoodsBatch fg : quarantinedCandidates(factoryId,
+                finishedGoodsBatchRepository.findQuarantinedPlanGoods(factoryId))) {
+            heldByPlan.computeIfAbsent(fg.getProductionPlanId(), k -> new ArrayList<>()).add(fg);
         }
         List<HeldGoodsBatch> result = new ArrayList<>();
-        for (ProductionBatch b : productionBatchRepository.findByFactoryIdAndProductionPlanIdIn(factoryId,
-                heldByPlan.keySet())) {
-            if (b.getQualityStatus() != null && b.getQualityStatus().isPassed()) {
-                result.add(new HeldGoodsBatch(b.getId(), b.getBatchNumber(), b.getProductionPlanId(),
-                        b.getProductName(), b.getQualityStatus().name(), heldByPlan.get(b.getProductionPlanId())));
+        for (Map.Entry<String, List<FinishedGoodsBatch>> entry : heldByPlan.entrySet()) {
+            String planId = entry.getKey();
+            List<FinishedGoodsBatch> candidates = entry.getValue();
+            var states = productionBatchRepository.findQcStatesInPlan(factoryId, planId);
+            var passed = states.stream()
+                    .filter(st -> st.getQualityStatus() != null && st.getQualityStatus().isPassed())
+                    .findFirst().orElse(null);
+            if (passed == null) {
+                continue;
             }
+            ProductionBatch pb = new ProductionBatch();
+            pb.setId(passed.getId());
+            pb.setFactoryId(factoryId);
+            pb.setProductionPlanId(planId);
+            pb.setBatchNumber(passed.getBatchNumber());
+            pb.setQualityStatus(passed.getQualityStatus());
+            ReleaseDecision decision = decideRelease(factoryId, pb, true, candidates, planBatches(factoryId, planId, pb));
+            int releasable;
+            int unclear;
+            if (decision.wholePlanHold() != null) {
+                if (!decision.wholePlanUnclear()) {
+                    continue;   // 同计划还有批次没处置: 等那批的处置复核, 这个按钮帮不上
+                }
+                releasable = 0;
+                unclear = candidates.size();
+            } else {
+                releasable = candidates.size() - decision.heldReasons().size();
+                unclear = 0;
+                if (releasable == 0) {
+                    continue;   // 只剩永远不放的货 (报废 / 召回 / 判废 / 质检放行判不合格)
+                }
+            }
+            result.add(new HeldGoodsBatch(passed.getId(), passed.getBatchNumber(), planId,
+                    candidates.get(0).getProductName(), passed.getQualityStatus().name(), releasable, unclear,
+                    decision.wholePlanUnclear() ? decision.wholePlanHold() : null));
         }
         return result;
     }
 
-    /** 一行: 已放行的生产批次 + 它所在计划还在隔离的成品批数。 */
+    /**
+     * 一行: 计划里一个已放行的生产批次 + 这次申请能放的成品批数 / 因分不清归属而卡住的成品批数 (+ 卡住的原因)。
+     * 永远不放的货不计在内。
+     */
     public record HeldGoodsBatch(Long productionBatchId, String batchNumber, String productionPlanId,
-                                 String productName, String qualityStatus, int heldGoods) {
+                                 String productName, String qualityStatus, int releasableNow, int unclearOwnership,
+                                 String unclearReason) {
     }
 
     // ==================== 成品 (FG) — 镜像 #1229 反向 ====================
@@ -400,16 +463,16 @@ public class QualityDispositionInventoryService {
      * 一律不碰 (它们不是质检隔离)。留在隔离里的算进 held 并在 notice 里说原因。
      * 销售退货子批次 (RTN) 是独立的货, 既不解除也不计数。
      *
-     * <p>Q4 (2026-11-09): 成品先按计划加行锁再读, 判断用的是锁后的状态; 只有复核通过的处置才翻转。
+     * <p>Q4 + #1548 第二轮审查 3: 先锁计划所有生产批次、再锁成品, 锁到之后重新读批次状态再判断; 只有复核通过的处置才翻转。
      *
      * <p>Q2 (Owner 2026-11-09 裁定):
      * <ol>
      *   <li>计划里所有批次都解除隔离后, 一次放行这个计划的全部成品 (不再比 SKU: 联产计划的副产品同样是这个计划的货);</li>
-     *   <li>还有批次没解除 ⇒ 都不放, 如实说还有几批;</li>
+     *   <li>还有批次没解除 ⇒ 都不放, 如实说还有几批 (含逐道录入的 CLERK_WIP 批次, 与 countQcFailedInPlans 同一范围);</li>
      *   <li>报废批次不算「未解除」: 它的成品留在隔离, 其余放行; 召回过的批次同样处理 (Q4: 有召回的不放);</li>
      *   <li>要按批次区分 (有报废 / 召回的批次) 而分不清成品属于哪个批次 ⇒ 整个计划不放并如实提示, 不猜。</li>
      * </ol>
-     * 成品归属见 {@link #attribute}。
+     * 判断本身在 {@link #decideRelease} (只读), 这里只负责加锁、读数和落库。
      */
     private FinishedGoodsRelease releaseFinishedGoods(String factoryId, ProductionBatch pb, boolean reviewed) {
         if (finishedGoodsBatchRepository == null || pb == null) {
@@ -419,68 +482,20 @@ public class QualityDispositionInventoryService {
         if (planId == null || planId.isBlank()) {
             return FinishedGoodsRelease.NONE;
         }
-        List<FinishedGoodsBatch> candidates = finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId).stream()
-                .filter(fg -> Objects.equals(factoryId, fg.getFactoryId())
-                        && FinishedGoodsBatch.Status.DEFECTIVE.equals(fg.getStatus()) && !isReturnChild(fg))
-                .toList();
+        productionBatchRepository.lockAllIdsInPlan(factoryId, planId);
+        List<FinishedGoodsBatch> candidates = quarantinedCandidates(factoryId,
+                finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId));
         if (candidates.isEmpty()) {
             return FinishedGoodsRelease.NONE;
         }
-        if (!reviewed) {
-            return FinishedGoodsRelease.allHeld(candidates.size(), "成品解除隔离要经另一人复核通过的处置，这次直接放行只改了批次状态");
-        }
-        List<ProductionBatch> planBatches = planBatches(factoryId, planId, pb);
-        long uncleared = planBatches.stream()
-                .filter(other -> !Objects.equals(other.getId(), pb.getId()) && other.getQualityStatus() != null
-                        && other.getQualityStatus().isDispositionLocked()
-                        && other.getQualityStatus() != QualityStatus.SCRAPPED)
-                .count();
-        if (uncleared > 0) {
-            return FinishedGoodsRelease.allHeld(candidates.size(),
-                    "同计划还有 " + uncleared + " 个批次没有解除隔离，等这些批次处置完，整个计划的成品一次放行");
-        }
-        // 报废 / 召回过的批次: 它们的成品留在隔离, 其余放行 —— 这时才需要分清每个成品属于哪个批次
-        Map<Long, String> keepBack = new LinkedHashMap<>();
-        for (ProductionBatch b : planBatches) {
-            if (b.getId() == null) {
-                continue;
-            }
-            if (b.getQualityStatus() == QualityStatus.SCRAPPED) {
-                keepBack.put(b.getId(), "报废批次的成品");
-            } else if (factoryRecallService.hasRecallRecord(factoryId, b.getId())) {
-                keepBack.put(b.getId(), "召回批次的成品");
-            }
-        }
-        PlanGoodsOwnership.Ownership ownership = PlanGoodsOwnership.attribute(
-                batchLineageEdgeRepository, factoryId, candidates, planBatches);
-        if (ownership.outsidePlan() != null) {
-            return FinishedGoodsRelease.allHeld(candidates.size(),
-                    ownership.outsidePlan() + "，分不清成品归属，整个计划的成品先不放行");
-        }
-        if (!keepBack.isEmpty() && ownership.unknown() != null) {
-            return FinishedGoodsRelease.allHeld(candidates.size(), "本计划有报废或召回的批次，但" + ownership.unknown()
-                    + "，分不清哪些成品属于它们，整个计划的成品先不放行");
+        ReleaseDecision decision = decideRelease(factoryId, pb, reviewed, candidates, planBatches(factoryId, planId, pb));
+        if (decision.wholePlanHold() != null) {
+            return FinishedGoodsRelease.allHeld(candidates.size(), decision.wholePlanHold());
         }
         Map<String, Integer> heldBy = new LinkedHashMap<>();
         int released = 0;
         for (FinishedGoodsBatch fg : candidates) {
-            String reason = null;
-            for (ProductionBatch b : planBatches) {
-                String kept = b.getId() == null ? null : keepBack.get(b.getId());
-                // 归属 (血缘 / 批号 / 单批计划) 指到它, 或成品批号就是它的批号 (召回冻结认的正是批号)
-                if (kept != null && (ownership.of(fg).contains(b.getId())
-                        || Objects.equals(b.getBatchNumber(), fg.getBatchNumber()))) {
-                    reason = kept;
-                    break;
-                }
-            }
-            if (reason == null && rejectedAtQcRelease(factoryId, fg)) {
-                reason = "质检放行判不合格的成品";
-            }
-            if (reason == null && rejectedByTimeLimit(factoryId, fg)) {
-                reason = "工序超时判废的成品";
-            }
+            String reason = decision.heldReasons().get(fg.getId());
             if (reason != null) {
                 heldBy.merge(reason, 1, Integer::sum);
                 continue;
@@ -495,18 +510,109 @@ public class QualityDispositionInventoryService {
         return new FinishedGoodsRelease(released, held, notice);
     }
 
-    /** 计划下本厂的全部生产批次, 本批一定在里面 (用调用方手上这份, 它带着这次刚写的状态)。 */
+    /** 计划里还在隔离、可能由处置放行的成品 (本厂、DEFECTIVE、不是退货子批)。 */
+    private static List<FinishedGoodsBatch> quarantinedCandidates(String factoryId, List<FinishedGoodsBatch> planGoods) {
+        return planGoods.stream()
+                .filter(fg -> Objects.equals(factoryId, fg.getFactoryId())
+                        && FinishedGoodsBatch.Status.DEFECTIVE.equals(fg.getStatus()) && !isReturnChild(fg))
+                .toList();
+    }
+
+    /**
+     * 计划级放行的判断 (只读, 不写库): 整计划不放的原因 / 每个成品留下的原因。放行和「成品仍在隔离」列表共用这一份。
+     *
+     * @param wholePlanUnclear 整计划不放是不是因为分不清归属 (补齐血缘后再申请就可能放得出)
+     */
+    private record ReleaseDecision(String wholePlanHold, boolean wholePlanUnclear, Map<String, String> heldReasons) {
+    }
+
+    /** 每个成品留在隔离里的原因中, 补资料也解不开的那几类 (报废 / 召回 / 质检放行判不合格 / 超时判废)。 */
+    private static final String HELD_SCRAPPED = "报废批次的成品";
+    private static final String HELD_RECALLED = "召回批次的成品";
+    private static final String HELD_QC_REJECTED = "质检放行判不合格的成品";
+    private static final String HELD_TIME_LIMIT = "工序超时判废的成品";
+
+    private ReleaseDecision decideRelease(String factoryId, ProductionBatch pb, boolean reviewed,
+                                          List<FinishedGoodsBatch> candidates, List<ProductionBatch> planBatches) {
+        if (!reviewed) {
+            return new ReleaseDecision("成品解除隔离要经另一人复核通过的处置，这次直接放行只改了批次状态", false, Map.of());
+        }
+        long uncleared = planBatches.stream()
+                .filter(other -> !Objects.equals(other.getId(), pb.getId()) && other.getQualityStatus() != null
+                        && other.getQualityStatus().isDispositionLocked()
+                        && other.getQualityStatus() != QualityStatus.SCRAPPED)
+                .count();
+        if (uncleared > 0) {
+            return new ReleaseDecision(
+                    "同计划还有 " + uncleared + " 个批次没有解除隔离，等这些批次处置完，整个计划的成品一次放行", false, Map.of());
+        }
+        // 报废 / 召回过的批次: 它们的成品留在隔离, 其余放行 —— 这时才需要分清每个成品属于哪个批次
+        Map<Long, String> keepBack = new LinkedHashMap<>();
+        for (ProductionBatch b : planBatches) {
+            if (b.getId() == null) {
+                continue;
+            }
+            if (b.getQualityStatus() == QualityStatus.SCRAPPED) {
+                keepBack.put(b.getId(), HELD_SCRAPPED);
+            } else if (factoryRecallService.hasRecallRecord(factoryId, b.getId())) {
+                keepBack.put(b.getId(), HELD_RECALLED);
+            }
+        }
+        PlanGoodsOwnership.Ownership ownership = PlanGoodsOwnership.attribute(
+                batchLineageEdgeRepository, factoryId, candidates, planBatches);
+        if (ownership.outsidePlan() != null) {
+            return new ReleaseDecision(ownership.outsidePlan() + "，分不清成品归属，整个计划的成品先不放行", true, Map.of());
+        }
+        if (!keepBack.isEmpty() && ownership.unknown() != null) {
+            return new ReleaseDecision("本计划有报废或召回的批次，但" + ownership.unknown()
+                    + "，分不清哪些成品属于它们，整个计划的成品先不放行", true, Map.of());
+        }
+        Map<String, String> heldReasons = new LinkedHashMap<>();
+        for (FinishedGoodsBatch fg : candidates) {
+            String reason = null;
+            for (ProductionBatch b : planBatches) {
+                String kept = b.getId() == null ? null : keepBack.get(b.getId());
+                // 归属 (血缘 / 批号 / 单批计划) 指到它, 或成品批号就是它的批号 (召回冻结认的正是批号)
+                if (kept != null && (ownership.of(fg).contains(b.getId())
+                        || Objects.equals(b.getBatchNumber(), fg.getBatchNumber()))) {
+                    reason = kept;
+                    break;
+                }
+            }
+            if (reason == null && rejectedAtQcRelease(factoryId, fg)) {
+                reason = HELD_QC_REJECTED;
+            }
+            if (reason == null && rejectedByTimeLimit(factoryId, fg)) {
+                reason = HELD_TIME_LIMIT;
+            }
+            if (reason != null) {
+                heldReasons.put(fg.getId(), reason);
+            }
+        }
+        return new ReleaseDecision(null, false, heldReasons);
+    }
+
+    /**
+     * 计划下本厂的<b>全部</b>生产批次 (含逐道录入的 CLERK_WIP: 它们也会被判 FAILED, countQcFailedInPlans 也算它们 ——
+     * #1548 第二轮审查 1), 状态在拿到批次锁之后重新读。本批用调用方手上这份 (带着这次刚写的状态)。
+     */
     private List<ProductionBatch> planBatches(String factoryId, String planId, ProductionBatch pb) {
         List<ProductionBatch> result = new ArrayList<>();
         result.add(pb);
-        for (ProductionBatch b : productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId)) {
-            if (Objects.equals(factoryId, b.getFactoryId()) && !Objects.equals(b.getId(), pb.getId())) {
+        for (com.cretas.aims.repository.ProductionBatchRepository.PlanBatchQcState state
+                : productionBatchRepository.findQcStatesInPlan(factoryId, planId)) {
+            if (!Objects.equals(state.getId(), pb.getId())) {
+                ProductionBatch b = new ProductionBatch();
+                b.setId(state.getId());
+                b.setFactoryId(factoryId);
+                b.setProductionPlanId(planId);
+                b.setBatchNumber(state.getBatchNumber());
+                b.setQualityStatus(state.getQualityStatus());
                 result.add(b);
             }
         }
         return result;
     }
-
 
     private static boolean isReturnChild(FinishedGoodsBatch fg) {
         return fg.getReturnOrderItemId() != null

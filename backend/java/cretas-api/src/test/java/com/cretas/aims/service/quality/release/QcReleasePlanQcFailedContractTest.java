@@ -89,7 +89,7 @@ class QcReleasePlanQcFailedContractTest {
             Collection<?> ids = inv.getArgument(1);
             return ids.stream().map(planOf::get).filter(java.util.Objects::nonNull).distinct().toList();
         });
-        when(productionBatchRepo.countQcFailedInPlans(eq(F), any(), anyString())).thenAnswer(inv -> {
+        when(productionBatchRepo.countUnclearedNotScrappedInPlans(eq(F), any(), anyString())).thenAnswer(inv -> {
             Collection<?> plans = inv.getArgument(1);
             String prefixPattern = inv.getArgument(2);
             long n = failedPlans.stream().filter(p -> plans.contains(p)

@@ -183,6 +183,32 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
     }
 
     @Override
+    @Transactional
+    public void recordRefusedPlanRelease(String factoryId, Long productionBatchId, Long userId, String code,
+                                         String reason) {
+        User executor = userRepository.findById(userId).orElse(null);
+        Map<String, Object> context = new HashMap<>();
+        context.put("productionBatchId", productionBatchId);
+        context.put("executorId", userId);
+        context.put("trigger", "PASSED_BATCH_RELEASE_REQUEST");
+        Map<String, Object> output = new HashMap<>();
+        output.put("refused", true);
+        output.put("code", code);
+        output.put("reason", reason);
+        decisionAuditService.logRuleExecution(
+                factoryId,
+                "ProductionBatch",
+                String.valueOf(productionBatchId),
+                context,
+                output,
+                List.of("PLAN_RELEASE_RECHECK"),
+                "已放行批次申请放行隔离成品被拒: " + reason,
+                userId,
+                executor != null ? executor.getFullName() : null,
+                executor != null && executor.getRole() != null ? executor.getRole() : "UNKNOWN");
+    }
+
+    @Override
     public boolean isAwaitingDisposition(QualityInspection inspection) {
         return dispositionInventoryService != null && dispositionInventoryService.isAwaitingDisposition(inspection);
     }

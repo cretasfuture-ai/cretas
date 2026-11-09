@@ -284,6 +284,24 @@ class QualityDispositionInventoryPostgresContractTest {
         assertDbFinishedGoods(frozenFg, FinishedGoodsBatch.Status.FROZEN);
     }
 
+    /** #1548 第二轮审查 1: 逐道录入的 CLERK_WIP 批次判了不合格, 真 PG 上同样挡住整个计划 (锁 + 锁后重读都含它)。 */
+    @Test
+    void failedClerkWipBatchKeepsThePlanQuarantined() {
+        Fixture f = fixture(false);
+        tx.executeWithoutResult(state -> {
+            ProductionBatch wip = productionBatch(f.factoryId(), f.planId(), f.productId(), QualityStatus.FAILED,
+                    "CLK-B-" + suffix());
+            wip.setBatchType("CLERK_WIP");
+            productionBatches.saveAndFlush(wip);
+        });
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsNotice()).contains("还有 1 个批次没有解除隔离");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
     /** Q2: 报废兄弟批的成品 (真血缘边读回) 留在隔离, 其余放行; 报废不算「未解除」。 */
     @Test
     void scrappedSiblingGoodsStayButTheRestIsReleased() {
