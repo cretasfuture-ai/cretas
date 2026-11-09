@@ -39,7 +39,8 @@ export function qty(v: number | null | undefined, unit?: string | null): string 
 /** 回料差: 有数写数; null 时按状态说清是没有回料、内部转移还是算不出。 */
 export function reworkVarianceText(v: number | null | undefined, status?: ReworkStatus | null, masked?: boolean): string {
   if (v != null) return signedMoney(v);
-  if (masked && status !== 'NONE' && status !== 'INTERNAL_ONLY') return HIDDEN;
+  // 只有真算得出的 (COMPARABLE) 才是「隐藏」; 无法比较就是无法比较, ⛔ 不暗示有个数被藏起来
+  if (masked && status === 'COMPARABLE') return HIDDEN;
   switch (status) {
     case 'NONE': return '无回料';
     case 'INTERNAL_ONLY': return '内部转移 (不另计)';

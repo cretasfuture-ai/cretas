@@ -183,6 +183,17 @@ describe('成本差异报表 (缺口 09/10)', () => {
     wrapper.unmount();
   });
 
+  it('无采购价权限 + 回料本来就无法比较: 写「无法比较」不写「已隐藏」', async () => {
+    api.plan.mockResolvedValueOnce({ success: true, data: { ...planSummary, priceMasked: true, reworkPriceMasked: true,
+      reworkVariance: null, reworkStatus: 'INCOMPARABLE', lines: [], allocationMethods: [] } });
+    const wrapper = mountPage(); await flushPromises();
+    await wrapper.get('[data-testid="plan-detail-P1"]').trigger('click'); await flushPromises();
+    const card = document.body.querySelector('[data-testid="detail-rework-variance"]')?.textContent ?? '';
+    expect(card).toContain('无法比较');
+    expect(card).not.toContain('已隐藏');
+    wrapper.unmount();
+  });
+
   it('读取失败: 原文 sticky 报错, 不留旧数', async () => {
     api.report.mockRejectedValueOnce(new Error('成本差异读取失败: 数据库不可用'));
     const wrapper = mountPage(); await flushPromises();

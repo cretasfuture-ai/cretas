@@ -380,8 +380,8 @@ public class PlanCostVarianceService {
                 if (pool != null && pool.getOwnership() != InventoryOwnership.CUSTOMER_OWNED) {
                     producedPools.putIfAbsent(poolNo, pool);
                     BigDecimal rawOut = decimal(payload, "outputQuantity");
-                    String rowUnit = payload.hasNonNull("outputUnit") ? payload.get("outputUnit").asText()
-                            : payload.hasNonNull("unit") ? payload.get("unit").asText() : "kg";
+                    // 与入池 ProcessSheetServiceImpl#postSfiOutput 同一读法: unit, 缺省 kg (⛔ 不先读 outputUnit, 入池不看它)
+                    String rowUnit = payload.hasNonNull("unit") ? payload.get("unit").asText() : "kg";
                     BigDecimal out = rawOut == null ? null : convert(rawOut, rowUnit, pool.getUnit());
                     if (out == null) {
                         producedReasons.computeIfAbsent(poolNo, k -> new ArrayList<>())
