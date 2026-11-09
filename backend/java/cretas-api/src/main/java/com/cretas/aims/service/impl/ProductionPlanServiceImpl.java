@@ -4147,6 +4147,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .filter(i -> !isResolvedSettlementOverride(i, confirmation,
                                 allowManualSemiFinishedConsumptions))
                         .toList();
+        if (derived != null && !blockers.isEmpty() && blockers.stream()
+                .allMatch(i -> "QUANTITY_VARIANCE_OVER_PLAN".equals(i.getCode()))) {
+            // D-N-01: 只差超产原因时给超产自己的码 (与 validateSettlementRequest 同一个), 前端据此直接落到原因下拉。
+            throw new BusinessException(409, blockers.get(0).getMessage())
+                    .withCode("PRODUCTION_OVER_PLAN_REASON_REQUIRED")
+                    .withHint("请选择超产原因后再提交")
+                    .withHintTarget("quantityVarianceReason");
+        }
         if (derived == null || !blockers.isEmpty()) {
             String detail = blockers.stream()
                     .map(ProductionSettlementPrefillResponse.Issue::getMessage)
@@ -4485,6 +4493,110 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * {@code actualFinished(份)} 与 {@code plan.plannedQuantity(kg)} 不可直接比较, 跳过超产判断,
      * 镜像 batch 层 efficiency=null 的诚实留空做法。</p>
      */
+    /**
+     * D-N-01 (2026-11-09 S3-15 实测): 计划量和产出量必须放到<b>同一个单位</b>里才能比超产。
+     * 返工计划 SEC-F006-20261109-4661D1 计划 0.3 kg (来源半成品), 产出 3 袋 —— 旧代码拿 3 和 0.3 裸比,
+     * 报「超产超过 5%」。
+     *
+     * <p>{@code outputInPlanUnit} 非 null = 已折到计划单位 (同单位 / 单位契约里的换算 / 产品专属换算 /
+     * 计数单位 × 产品每单位克重); {@code unverifiedReason} 非 null = 换不过去, 产量差异<b>未核实</b>,
+     * ⛔ 不当超产、也不猜。计划或产出单位读不到的旧数据沿用批次上的跨单位判定。
+     */
+    private record PlanOutputComparison(BigDecimal outputInPlanUnit, String unverifiedReason) {
+        boolean verified() {
+            return unverifiedReason == null;
+        }
+    }
+
+    private PlanOutputComparison compareOutputWithPlan(String factoryId, ProductionPlan plan,
+                                                       List<ProductionBatch> batches, BigDecimal output,
+                                                       String outputUnit, String outputProductTypeId) {
+        if (output == null) {
+            return new PlanOutputComparison(null, null);
+        }
+        String planUnit = canonicalReceiptUnit(trimToNull(plan.getPlannedUnit()));
+        String outUnit = canonicalReceiptUnit(trimToNull(outputUnit));
+        if (planUnit == null || outUnit == null) {
+            return isCrossUnitPlan(batches)
+                    ? new PlanOutputComparison(null, "末道产出单位与计划单位不同(如 份/盒 vs kg)")
+                    : new PlanOutputComparison(output, null);
+        }
+        if (planUnit.equals(outUnit)
+                || (unitContractService != null && unitContractService.areEquivalent(factoryId, planUnit, outUnit))) {
+            return new PlanOutputComparison(output, null);
+        }
+        String productTypeId = firstNonBlank(trimToNull(outputProductTypeId), trimToNull(plan.getProductTypeId()));
+        BigDecimal converted = convertOutputToPlanUnit(factoryId, productTypeId, output, outUnit, planUnit);
+        if (converted != null) {
+            return new PlanOutputComparison(converted, null);
+        }
+        return new PlanOutputComparison(null, "产出 " + stripTrailing(output) + com.cretas.aims.service.unit.UnitDisplayNames.display(outUnit)
+                + " 与计划单位 " + com.cretas.aims.service.unit.UnitDisplayNames.display(planUnit)
+                + " 之间没有可用的换算 (产品换算或每单位重量都没配)");
+    }
+
+    /** 先走单位契约 (同维度换算 + 产品专属换算), 再走计数单位 × 产品每单位克重; 都不行返回 null。 */
+    private BigDecimal convertOutputToPlanUnit(String factoryId, String productTypeId, BigDecimal output,
+                                               String outUnit, String planUnit) {
+        if (unitContractService != null) {
+            com.cretas.aims.service.unit.UnitConversionResult result = unitContractService.convert(output,
+                    new com.cretas.aims.service.unit.UnitConversionContext(factoryId, productTypeId, outUnit, planUnit,
+                            LocalDateTime.now(), null, 6, RoundingMode.HALF_UP));
+            if (result != null && result.succeeded() && result.quantity() != null) {
+                return result.quantity();
+            }
+        }
+        if (productTypeId == null || productTypeRepository == null
+                || !com.cretas.aims.service.inventory.FeedUnitConverter.isCountUnit(outUnit)) {
+            return null;
+        }
+        BigDecimal gramsPerUnit = productTypeRepository.findById(productTypeId)
+                .map(ProductType::getGramsPerUnit)
+                .filter(grams -> grams.signum() > 0)
+                .orElse(null);
+        if (gramsPerUnit == null) {
+            return null;
+        }
+        BigDecimal kg = output.multiply(gramsPerUnit).divide(new BigDecimal("1000"), 6, RoundingMode.HALF_UP);
+        if ("kg".equals(planUnit)) {
+            return kg;
+        }
+        if ("g".equals(planUnit)) {
+            return kg.movePointRight(3);
+        }
+        if (unitContractService == null) {
+            return null;
+        }
+        com.cretas.aims.service.unit.UnitConversionResult fromKg = unitContractService.convert(kg,
+                new com.cretas.aims.service.unit.UnitConversionContext(factoryId, productTypeId, "kg", planUnit,
+                        LocalDateTime.now(), null, 6, RoundingMode.HALF_UP));
+        return fromKg != null && fromKg.succeeded() ? fromKg.quantity() : null;
+    }
+
+    /** 产出量换成计划单位后与计划比的那句话 (单位走 UnitDisplayNames.display)。 */
+    private String overPlanMessage(ProductionPlan plan, BigDecimal output, String outputUnit, BigDecimal outputInPlanUnit) {
+        String planUnit = trimToNull(plan.getPlannedUnit());
+        String shownPlan = planUnit == null ? "" : com.cretas.aims.service.unit.UnitDisplayNames.display(planUnit);
+        String shownOut = trimToNull(outputUnit) == null ? "" : com.cretas.aims.service.unit.UnitDisplayNames.display(outputUnit);
+        boolean converted = outputInPlanUnit != null && output != null && outputInPlanUnit.compareTo(output) != 0;
+        return "实际产量(" + stripTrailing(output) + shownOut
+                + (converted ? ", 折 " + stripTrailing(outputInPlanUnit) + shownPlan : "")
+                + ")超过计划(" + stripTrailing(zeroIfNull(plan.getPlannedQuantity())) + shownPlan + ")";
+    }
+
+    private static String uniqueProductTypeId(List<ProductionSettlementRequest.OutputLine> outputs) {
+        if (outputs == null) {
+            return null;
+        }
+        Set<String> ids = outputs.stream()
+                .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(id -> !id.isEmpty())
+                .collect(Collectors.toSet());
+        return ids.size() == 1 ? ids.iterator().next() : null;
+    }
+
     private boolean isCrossUnitPlan(List<ProductionBatch> batches) {
         if (batches == null) {
             return false;
@@ -4567,26 +4679,37 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     "laborSegments"));
         }
 
+        // 🔴 2026-08-18: 这条(App 报工)腿原来【不建 terminalOutputs】, 而 web 那条腿建。
+        //    @Builder.Default 让它是空 list ⇒ persistWorkflowSettlementOutputs 看到
+        //    reportedOutputs.isEmpty() 就抛 409 WORKFLOW_OUTPUT_SET_MISMATCH ⇒
+        //    工人在 App 把每道工都报完、审批也过了, 文员点「核对结单」仍然结不了单。
+        //    ⚠️ 那句报错听起来像用户传错了, 实际是服务端自己推导为空(见 deriveTerminalOutputsFromReports)。
+        //    D-N-01: 提到产量差异判断之前 —— 判断要用末道产出的单位和产品。
+        List<ProductionSettlementRequest.OutputLine> terminalOutputs =
+                deriveTerminalOutputsFromReports(factoryId, plan, batches, allReports, issues);
+
         // 5) quantityVarianceReason ← 阈值内自动填, 超阈值留空 + issue
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
-        // A修: 末道产出单位(份/盒) 可能 ≠ plan.plannedQuantity 单位(kg) → 跨单位裸比误报超产.
-        boolean crossUnit = isCrossUnitPlan(batches);
+        // A修 + D-N-01: 末道产出单位(袋/份/盒) 可能 ≠ 计划单位(kg) → 先折到计划单位再比, 折不过去就不比。
+        PlanOutputComparison comparison = compareOutputWithPlan(factoryId, plan, batches, actualFinished,
+                resolveTerminalOutputUnit(terminalOutputs), uniqueProductTypeId(terminalOutputs));
         String varianceReason = null;
-        if (crossUnit) {
-            // 跨单位: 不比较产量差异, 不臆造; 留 INFO 让人核对实际产量 (非 BLOCKER, 不阻一键确认).
+        if (!comparison.verified()) {
+            // 换不过去: 不比较产量差异, 不臆造; 留 INFO 让人核对实际产量 (非 BLOCKER, 不阻一键确认).
             issues.add(infoIssue("QUANTITY_UNIT_CROSS",
-                    "末道产出单位与计划单位不同(如 份/盒 vs kg), 已跳过产量差异自动判断; 请人工核对实际产量。",
+                    comparison.unverifiedReason() + ", 产量差异未核实 (不按超产处理); 请人工核对实际产量。",
                     "quantityVarianceReason"));
-        } else if (actualFinished != null && planned.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal diff = actualFinished.subtract(planned).abs();
+        } else if (comparison.outputInPlanUnit() != null && planned.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal actualInPlanUnit = comparison.outputInPlanUnit();
+            BigDecimal diff = actualInPlanUnit.subtract(planned).abs();
             BigDecimal ratio = diff.divide(planned, 6, RoundingMode.HALF_UP);
             if (ratio.compareTo(SETTLEMENT_VARIANCE_THRESHOLD) <= 0) {
                 varianceReason = "无显著差异";
-            } else if (actualFinished.compareTo(planned) > 0) {
+            } else if (actualInPlanUnit.compareTo(planned) > 0) {
                 // settle 校验: 实际 > 计划 必须有超产原因; 留空让人选 (对齐前端差异原因下拉)
                 issues.add(issue("QUANTITY_VARIANCE_OVER_PLAN",
-                        "实际产量(" + stripTrailing(actualFinished) + ")超过计划("
-                                + stripTrailing(planned) + ")超过 5%, 请选择超产原因后再确认。",
+                        overPlanMessage(plan, actualFinished, resolveTerminalOutputUnit(terminalOutputs),
+                                actualInPlanUnit) + "超过 5%, 请选择超产原因后再确认。",
                         "quantityVarianceReason"));
             }
             // 实际 < 计划 且超阈值: settle 不强制原因, 不阻塞, 不标 issue (留空合法)
@@ -4606,13 +4729,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 "如本次生产领用了其他计划产出的外部半成品库存, 请在“半成品实际领用”处手工添加; 本计划内部自产自耗的中间品无需在此填写。",
                 "semiFinishedConsumptions"));
 
-        // 🔴 2026-08-18: 这条(App 报工)腿原来【不建 terminalOutputs】, 而 web 那条腿建。
-        //    @Builder.Default 让它是空 list ⇒ persistWorkflowSettlementOutputs 看到
-        //    reportedOutputs.isEmpty() 就抛 409 WORKFLOW_OUTPUT_SET_MISMATCH ⇒
-        //    工人在 App 把每道工都报完、审批也过了, 文员点「核对结单」仍然结不了单。
-        //    ⚠️ 那句报错听起来像用户传错了, 实际是服务端自己推导为空(见 deriveTerminalOutputsFromReports)。
-        List<ProductionSettlementRequest.OutputLine> terminalOutputs =
-                deriveTerminalOutputsFromReports(factoryId, plan, batches, allReports, issues);
         if (terminalOutputs.isEmpty()) {
             issues.add(issue("FINISHED_OUTPUT_MISSING",
                     "末道报工没有可用的产出(数量或产品缺失), 无法自动带入实际成品产量; 请在产出核对处手工填写。",
@@ -4706,28 +4822,33 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
-        boolean crossUnit = isCrossUnitPlan(batches)
-                || terminalUnitCount > 1
+        boolean mixedOutputs = terminalUnitCount > 1
                 || terminalOutputs.stream()
                         .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
                         .map(this::trimToNull)
                         .filter(Objects::nonNull)
                         .distinct()
                         .count() > 1;
+        // D-N-01: 单一产出时先把产出折到计划单位再比 (返工计划 0.3 kg 来源 vs 3 袋产出不能裸比)。
+        PlanOutputComparison comparison = mixedOutputs
+                ? new PlanOutputComparison(null, "末道有多个产品或多个单位")
+                : compareOutputWithPlan(factoryId, plan, batches, actualFinished,
+                        resolveTerminalOutputUnit(terminalOutputs), uniqueProductTypeId(terminalOutputs));
         String varianceReason = null;
-        if (crossUnit) {
+        if (!comparison.verified()) {
             issues.add(infoIssue("QUANTITY_UNIT_CROSS",
-                    "末道产出单位与计划单位不同, 已跳过产量差异自动判断; 请人工核对实际产量。",
+                    comparison.unverifiedReason() + ", 产量差异未核实 (不按超产处理); 请人工核对实际产量。",
                     "quantityVarianceReason"));
-        } else if (actualFinished != null && planned.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal diff = actualFinished.subtract(planned).abs();
+        } else if (comparison.outputInPlanUnit() != null && planned.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal actualInPlanUnit = comparison.outputInPlanUnit();
+            BigDecimal diff = actualInPlanUnit.subtract(planned).abs();
             BigDecimal ratio = diff.divide(planned, 6, RoundingMode.HALF_UP);
             if (ratio.compareTo(SETTLEMENT_VARIANCE_THRESHOLD) <= 0) {
                 varianceReason = "无显著差异";
-            } else if (actualFinished.compareTo(planned) > 0) {
+            } else if (actualInPlanUnit.compareTo(planned) > 0) {
                 issues.add(issue("QUANTITY_VARIANCE_OVER_PLAN",
-                        "实际产量(" + stripTrailing(actualFinished) + ")超过计划("
-                                + stripTrailing(planned) + ")超过 5%, 请选择超产原因后再确认。",
+                        overPlanMessage(plan, actualFinished, resolveTerminalOutputUnit(terminalOutputs),
+                                actualInPlanUnit) + "超过 5%, 请选择超产原因后再确认。",
                         "quantityVarianceReason"));
             }
         }
@@ -6915,23 +7036,31 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
-        // A修: 跨单位(份/盒 vs kg)时产量裸比无意义, 跳过超产校验 (prefill 已留 INFO 让人核对).
-        boolean crossUnit = isCrossUnitPlan(
-                productionBatchRepository.findByFactoryIdAndProductionPlanId(plan.getFactoryId(), plan.getId()))
-                || (isWorkflowPlan(plan)
-                        && Optional.ofNullable(request.getTerminalOutputs()).orElseGet(ArrayList::new).stream()
-                                .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
-                                .map(this::trimToNull)
-                                .filter(Objects::nonNull)
-                                .distinct()
-                                .count() > 1);
-        if (!crossUnit
+        // A修 + D-N-01: 先把产出折到计划单位 (同单位 / 单位契约 / 产品每单位克重) 再比;
+        //   折不过去 = 产量差异未核实, 不按超产拦 (prefill 已留 INFO 让人核对), ⛔ 不裸比。
+        boolean multiProduct = isWorkflowPlan(plan)
+                && Optional.ofNullable(request.getTerminalOutputs()).orElseGet(ArrayList::new).stream()
+                        .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
+                        .map(this::trimToNull)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .count() > 1;
+        String outputUnit = firstNonBlank(resolveTerminalOutputUnit(request.getTerminalOutputs()),
+                canonicalReceiptUnit(trimToNull(request.getQuantityUnit())));
+        PlanOutputComparison comparison = multiProduct
+                ? new PlanOutputComparison(null, "末道有多个产品")
+                : compareOutputWithPlan(plan.getFactoryId(), plan,
+                        productionBatchRepository.findByFactoryIdAndProductionPlanId(plan.getFactoryId(), plan.getId()),
+                        finished, outputUnit, uniqueProductTypeId(request.getTerminalOutputs()));
+        if (comparison.verified()
+                && comparison.outputInPlanUnit() != null
                 && planned.compareTo(BigDecimal.ZERO) > 0
-                && finished.compareTo(planned) > 0
+                && comparison.outputInPlanUnit().compareTo(planned) > 0
                 && isBlank(request.getQuantityVarianceReason())) {
             throw new BusinessException(409, "实际产量超过计划产量, 必须选择超产原因")
                     .withCode("PRODUCTION_OVER_PLAN_REASON_REQUIRED")
-                    .withHint("请选择超产原因后再提交; 计划产量: " + planned + ", 实际产量: " + finished)
+                    .withHint(overPlanMessage(plan, finished, outputUnit, comparison.outputInPlanUnit())
+                            + "; 请选择超产原因后再提交")
                     .withHintTarget("超产原因");
         }
 
