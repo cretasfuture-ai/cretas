@@ -67,6 +67,32 @@ fi
 
 simultaneous_left() { sleep 0.1; }
 simultaneous_right() { sleep 0.1; }
+
+# TEMP-DIAG (to be removed): loop the simultaneous case and log every claim attempt.
+DIAG_LOG="$TMP_ROOT/diag.log"
+mkdir() { command mkdir "$@"; local rc=$?; echo "pid=$BASHPID mkdir $* rc=$rc t=$(date +%s.%N)" >> "$DIAG_LOG"; return $rc; }
+mv() { command mv "$@"; local rc=$?; echo "pid=$BASHPID mv $* rc=$rc t=$(date +%s.%N)" >> "$DIAG_LOG"; return $rc; }
+diag_bad=0
+for diag_i in $(seq 1 ${DIAG_N:-400}); do
+    : > "$DIAG_LOG"
+    run_first_success_build_race "$TMP_ROOT/diag" ci simultaneous_left maven simultaneous_right > "$TMP_ROOT/diag.out" 2>&1 || true
+    case "$BUILD_RACE_WINNER" in
+        ci|maven) ;;
+        *)
+            diag_bad=$((diag_bad + 1))
+            echo "DIAG iter=$diag_i winner='$BUILD_RACE_WINNER'"
+            echo "DIAG winner bytes: $(od -c "$TMP_ROOT/diag/winner" 2>&1 | head -3 | tr '\n' ' ')"
+            echo "DIAG ls: $(ls -la "$TMP_ROOT/diag" 2>&1 | tr '\n' ' ')"
+            echo "DIAG out: $(tr '\n' '|' < "$TMP_ROOT/diag.out")"
+            sed 's/^/DIAG log: /' "$DIAG_LOG"
+            ;;
+    esac
+done
+unset -f mkdir mv
+echo "DIAG_RESULT iterations=400 invalid=$diag_bad"
+fail "TEMP-DIAG run finished (forced red so the harness prints this log)"
+# END TEMP-DIAG
+
 run_first_success_build_race "$TMP_ROOT/simultaneous" ci simultaneous_left maven simultaneous_right
 case "$BUILD_RACE_WINNER" in
     ci|maven) ;;
