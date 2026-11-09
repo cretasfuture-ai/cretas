@@ -218,6 +218,64 @@ class SemiFinishedLockRefreshPostgresContractTest {
         }
     }
 
+    /**
+     * 独立审查 #1550 发现 5: 等锁期间这一行被别人硬删。旧写法 {@code refresh(row, PESSIMISTIC_WRITE)}
+     * 抛 EntityNotFoundException, catch 掉也晚了 —— 事务已被标成只能回滚, 调用方一路「成功」走到提交才炸。
+     * 现在: 查不到就是查不到 (空), 调用方的事务照常提交。
+     */
+    @Test
+    void rowHardDeletedWhileWaitingForTheLockIsSkippedAndTheCallerStillCommits() throws Exception {
+        Sfi s = sfi("100");
+        ExecutorService holder = Executors.newSingleThreadExecutor();
+        ExecutorService waiter = Executors.newSingleThreadExecutor();
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Future<Integer> hold = holder.submit(() -> tx.execute(state -> {
+                jdbc.queryForList("select id from semi_finished_inventory where id = ? for update", s.id());
+                locked.countDown();
+                try {
+                    if (!release.await(60, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("等待方一直没排上锁");
+                    }
+                } catch (InterruptedException e) {
+                    throw new IllegalStateException(e);
+                }
+                return jdbc.update("delete from semi_finished_inventory where id = ?", s.id());
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).as("持锁方拿到了行锁").isTrue();
+            int lockWaitersBefore = lockWaiters();
+
+            Future<String> waited = waiter.submit(() -> {
+                try {
+                    Boolean present = tx.execute(state -> wips.findByIdForUpdate(s.id()).isPresent());
+                    return "COMMITTED present=" + present;
+                } catch (RuntimeException e) {
+                    return e.getClass().getSimpleName();
+                }
+            });
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (lockWaiters() <= lockWaitersBefore && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50);
+            }
+            assertThat(lockWaiters()).as("等待方确实卡在这一行的锁上 (否则测的不是「等锁期间被删」)")
+                    .isGreaterThan(lockWaitersBefore);
+            release.countDown();
+
+            assertThat(hold.get(60, TimeUnit.SECONDS)).as("持锁方真的硬删了这一行").isEqualTo(1);
+            assertThat(waited.get(60, TimeUnit.SECONDS)).isEqualTo("COMMITTED present=false");
+        } finally {
+            release.countDown();
+            holder.shutdownNow();
+            waiter.shutdownNow();
+        }
+    }
+
+    private int lockWaiters() {
+        return jdbc.queryForObject("select count(*) from pg_stat_activity where datname = current_database() "
+                + "and wait_event_type = 'Lock'", Integer.class);
+    }
+
     private void readThenConsume(Sfi s, String qty) {
         tx.executeWithoutResult(state -> {
             wipService.resolveSemiFeedQtyInSourceUnit(F, s.no(), BigDecimal.ONE);

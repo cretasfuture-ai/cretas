@@ -2,8 +2,6 @@ package com.cretas.aims.repository;
 
 import com.cretas.aims.entity.SemiFinishedInventory;
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.EntityNotFoundException;
-import jakarta.persistence.LockModeType;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.TypedQuery;
 import org.springframework.dao.IncorrectResultSizeDataAccessException;
@@ -21,9 +19,14 @@ import java.util.function.Predicate;
  *
  * <p>⛔ 不能写成「{@code SELECT … FOR UPDATE} 查实体, 再 refresh」: 那一行已在持久化上下文里时,
  * Hibernate 在锁查询返回前拿库里的版本和旧对象比, 不一致直接抛乐观锁异常 (R6 真库实测), 根本走不到 refresh。
- * 所以先只查 id (不装实体; 这一查会把本事务对这张表的改动先 flush 下去), 再对每一行
- * {@code refresh(row, PESSIMISTIC_WRITE)} —— 加锁并用库里的值覆盖, 不和旧对象比版本。
+ * 所以先只查 id (不装实体; 这一查会把本事务对这张表的改动先 flush 下去), 再对每一行用一条只取 id 的
+ * {@code SELECT … FOR UPDATE} 加锁, 锁到之后 {@code refresh} —— 用库里的值覆盖, 不和旧对象比版本。
  * 锁到之后再核一次条件 (软删 / 工厂 / 批次号), 等锁期间被别人改掉的行不返回。
+ *
+ * <p>⛔ 不用 {@code refresh(row, PESSIMISTIC_WRITE)} 一步加锁: 等锁期间那一行被别人硬删时它抛
+ * {@code EntityNotFoundException}, 这是 PersistenceException, Hibernate 已把整个事务标成只能回滚 ——
+ * 在这里 catch 掉也没用, 调用方一路成功走到提交才炸 {@code UnexpectedRollbackException} (#1550 审查 5)。
+ * 先用加锁查询: 行没了就是查不到 (零行, 不抛), 跳过; 查到了就已经锁住, 之后的 refresh 读的一定是在的行。
  */
 public class SemiFinishedInventoryLockingRepositoryImpl implements SemiFinishedInventoryLockingRepository {
 
@@ -91,15 +94,19 @@ public class SemiFinishedInventoryLockingRepositoryImpl implements SemiFinishedI
         List<Long> ids = idQuery.getResultList().stream().filter(Objects::nonNull).distinct().sorted().toList();
         List<SemiFinishedInventory> rows = new ArrayList<>(ids.size());
         for (Long id : ids) {
+            // 先锁 (只取 id, 不装实体): 等锁期间被硬删的行在这里就是零行, 不抛异常、不污染事务
+            //    (只同步这张表: 与上面的 id 查询同一个 flush 范围, 不把别的表的未提交改动一并刷下去)
+            if (entityManager.createNativeQuery("SELECT id FROM semi_finished_inventory WHERE id = :id FOR UPDATE")
+                    .unwrap(org.hibernate.query.NativeQuery.class)
+                    .addSynchronizedEntityClass(SemiFinishedInventory.class)
+                    .setParameter("id", id).getResultList().isEmpty()) {
+                continue;
+            }
             SemiFinishedInventory row = entityManager.find(SemiFinishedInventory.class, id);
             if (row == null) {
                 continue;
             }
-            try {
-                entityManager.refresh(row, LockModeType.PESSIMISTIC_WRITE);
-            } catch (EntityNotFoundException gone) {
-                continue;
-            }
+            entityManager.refresh(row);   // 已持有行锁, 这一行一定还在; 用库里的值覆盖持久化上下文里的旧对象
             if (row.getDeletedAt() == null && stillMatches.test(row)) {
                 rows.add(row);
             }
