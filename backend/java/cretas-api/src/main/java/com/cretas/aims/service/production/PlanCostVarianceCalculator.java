@@ -21,8 +21,17 @@ import java.util.Set;
  *   替代料差 = Σ_S aq_S × (sp_S − sp_P)                    —— 用替代料顶主料, 按开计划时的价差了多少
  *   用量差   = (Σ_组内 aq − 标准用量 sq_P) × sp_P            —— 多用/少用了多少 (按主料快照价)
  *   人工差   = 实际人工 − 标准人工 (元/kg × 成品 kg)
+ *   回料差   = 回投量 × 回料池单位成本 − 产出转出量 × 回料池单位成本 − 标准回料金额  —— 配方不含回料时标准 = 0
  *   ⇒ 价格差 + 替代料差 + 用量差 = 组实际金额 − sq_P × sp_P   (恒等, 测试钉着)
+ *   ⇒ 价格差 + 用量差 + 替代料差 + 人工差 + 回料差 = 实际 − 标准 (合计只含可比项)
  * </pre>
+ *
+ * <p>两头对称, 期间合计不双计: 回投 (消耗方) 按回料池单位成本加; 产出回料的计划把转给别的计划 / 留在池里的那部分
+ * 按同一单价转出 (产出方抵减, 它的原料已经在本计划领用里)。本计划自产又回投的那部分是内部转移
+ * (状态 INTERNAL, 列量不计金额, 不进合计也不算无法比较), 也不转出。</p>
+ *
+ * <p>主料用量差算不出时 (F006: 配方没有出成率), 回料顶替 / 带走的原料看不到, 单算回料会把顶替当超支、把转出当节约
+ * ⇒ 回料行列量、价、金额, 但回料差标无法比较, 不进合计。</p>
  *
  * <p>任何一个因子缺 (快照没价、实际没价、算不出标准用量、单位换不过去) 那一组就是「无法比较」或「部分可比」,
  * ⛔ 不按 0 计入合计 —— 合计只加完全可比的组, 所以分项之和恒等于合计差。</p>
@@ -49,20 +58,54 @@ public final class PlanCostVarianceCalculator {
                               BigDecimal amount, boolean unitMixed) {
     }
 
+    /**
+     * 一个回料池在这张计划里的回投汇总。
+     *
+     * @param quantity  回投量 (回料池单位); null = 有一笔折算不到回料池单位
+     * @param unitCost  回料池单位成本 (与成本核算同源); null = 未知
+     * @param internal  回料池是本计划自己产出的 (内部转移)
+     * @param reasons   采集时已发现的问题 (例如折算不了), 原样带进行
+     * @param output    true = 产出方转出 (本计划产出、转给别的计划或留在池里的回料), 金额记负
+     */
+    public record ReworkUsage(String poolNo, String name, BigDecimal quantity, String unit, BigDecimal unitCost,
+                              boolean internal, List<PlanCostVarianceDTO.ReworkSource> sources, List<String> reasons,
+                              boolean output) {
+        public ReworkUsage(String poolNo, String name, BigDecimal quantity, String unit, BigDecimal unitCost,
+                           boolean internal, List<PlanCostVarianceDTO.ReworkSource> sources, List<String> reasons) {
+            this(poolNo, name, quantity, unit, unitCost, internal, sources, reasons, false);
+        }
+    }
+
     public record Inputs(List<PlanStandardCostLine> lines,
                          Map<String, ActualUsage> actualByMaterial,
                          BigDecimal outputKg,
                          BigDecimal outputQuantityInPlanUnit,
                          BigDecimal actualLaborCost,
                          boolean multiOutput,
-                         UnitConverter converter) {
+                         UnitConverter converter,
+                         List<ReworkUsage> rework,
+                         /**
+                          * null = 锁定配方不含回料 (标准回料用量就是 0); 非 null = 标准回料定不下来的原因
+                          * (配方登记了回料但快照没有回料标准价 / 读不到锁定配方), 回料行一律无法比较。
+                          */
+                         String reworkStandardUnknownReason) {
+        public Inputs(List<PlanStandardCostLine> lines, Map<String, ActualUsage> actualByMaterial, BigDecimal outputKg,
+                      BigDecimal outputQuantityInPlanUnit, BigDecimal actualLaborCost, boolean multiOutput,
+                      UnitConverter converter) {
+            this(lines, actualByMaterial, outputKg, outputQuantityInPlanUnit, actualLaborCost, multiOutput, converter,
+                    List.of(), null);
+        }
     }
 
     /** 结果: 行明细 + 只含完全可比组的合计。 */
     public record Result(List<PlanCostVarianceDTO.Line> lines, BigDecimal standardCost, BigDecimal actualCost,
                          BigDecimal priceVariance, BigDecimal usageVariance, BigDecimal substituteVariance,
                          /** null = 人工无法比较 (没有标准人工 / 成品折不出 kg / 实际人工未知)。 */
-                         BigDecimal laborVariance, int comparableCount, int incomparableCount, List<String> notes) {
+                         BigDecimal laborVariance, int comparableCount, int incomparableCount, List<String> notes,
+                         /** null = 没有可比的回料项 (见 reworkStatus), ⛔ 不是 0。 */
+                         BigDecimal reworkVariance,
+                         /** PlanCostVarianceDTO.REWORK_*。 */
+                         String reworkStatus) {
         public boolean comparable() {
             return comparableCount > 0;
         }
@@ -180,9 +223,118 @@ public final class PlanCostVarianceCalculator {
         }
         out.add(laborOut);
 
+        // 回料
+        BigDecimal rework = BigDecimal.ZERO;
+        int reworkComparable = 0;
+        int reworkIncomparable = 0;
+        int reworkInternal = 0;
+        List<ReworkUsage> reworkUsages = in.rework() == null ? List.of() : in.rework();
+        if (reworkUsages.isEmpty() && in.reworkStandardUnknownReason() != null) {
+            // 配方要求回料、本计划一点没回投: 标准回料不是 0, 又没有标准价 → 一项无法比较 (⛔ 不当「回料差 0」)
+            out.add(PlanCostVarianceDTO.Line.builder().lineType("REWORK").materialName("回料")
+                    .status(PlanCostVarianceDTO.STATUS_INCOMPARABLE)
+                    .reasons(new ArrayList<>(List.of("本计划没有回投回料; " + in.reworkStandardUnknownReason())))
+                    .build());
+            reworkIncomparable++;
+            incomparable++;
+        }
+        // 主料用量差算不出 ⇒ 回料顶替 / 带走的原料看不到, 回料差不能单算 (F006 配方没有出成率就是这样)
+        boolean rawOffsetUnknown = out.stream().anyMatch(l -> PlanStandardCostLine.TYPE_MATERIAL.equals(l.getLineType())
+                && "RAW".equalsIgnoreCase(l.getMaterialCategory()) && l.getUsageVariance() == null);
+        String offsetReason = rawOffsetUnknown ? RAW_OFFSET_UNKNOWN_REASON : null;
+        for (ReworkUsage r : reworkUsages) {
+            PlanCostVarianceDTO.Line line = reworkLine(r, in.reworkStandardUnknownReason(), offsetReason);
+            out.add(line);
+            if (PlanCostVarianceDTO.STATUS_INTERNAL.equals(line.getStatus())) {
+                reworkInternal++;
+            } else if (PlanCostVarianceDTO.STATUS_COMPARABLE.equals(line.getStatus())) {
+                reworkComparable++;
+                comparable++;
+                // 标准回料金额 0 (配方不含回料), 实际 = ± 回料金额; 用未舍入的量 × 价, 合计恒等式不受行内舍入影响
+                BigDecimal amount = signedAmount(r);
+                act = act.add(amount);
+                rework = rework.add(amount);
+            } else {
+                reworkIncomparable++;
+                incomparable++;
+            }
+        }
+        String reworkStatus = reworkIncomparable > 0 ? PlanCostVarianceDTO.REWORK_INCOMPARABLE
+                : reworkComparable > 0 ? PlanCostVarianceDTO.REWORK_COMPARABLE
+                : reworkInternal > 0 ? PlanCostVarianceDTO.REWORK_INTERNAL_ONLY
+                : PlanCostVarianceDTO.REWORK_NONE;
+
         return new Result(out, scale(std, MONEY), scale(act, MONEY), scale(price, MONEY), scale(usage, MONEY),
                 // 人工不可比 → 人工差是 null (⛔ 不是 0: 「人工差 ¥0.00」读起来是「人工和标准一样」)
-                scale(subst, MONEY), laborComparable ? scale(labor, MONEY) : null, comparable, incomparable, notes);
+                scale(subst, MONEY), laborComparable ? scale(labor, MONEY) : null, comparable, incomparable, notes,
+                // 没有可比的回料项 → null (⛔ 不报「回料差 ¥0.00」)
+                reworkComparable > 0 ? scale(rework, MONEY) : null, reworkStatus);
+    }
+
+    /** 只列回料行 (没有标准成本快照时用): 每行都带 standardUnknownReason, 一律无法比较或内部转移。 */
+    public static List<PlanCostVarianceDTO.Line> reworkLines(List<ReworkUsage> usages, String standardUnknownReason) {
+        List<PlanCostVarianceDTO.Line> out = new ArrayList<>();
+        for (ReworkUsage r : usages == null ? List.<ReworkUsage>of() : usages) {
+            out.add(reworkLine(r, standardUnknownReason, null));
+        }
+        return out;
+    }
+
+    static final String REWORK_PRICE_SOURCE = "回料池单位成本 (产出回料的工序成本 ÷ 回料量, 与成本核算同源)";
+    static final String RAW_OFFSET_UNKNOWN_REASON =
+            "主料用量差算不出 (配方没有出成率 / 缺领用等), 回料顶替或带走的原料看不到, 单算回料会失真, 回料差无法比较";
+
+    /** 回投为正, 产出转出为负。 */
+    private static BigDecimal signedAmount(ReworkUsage r) {
+        BigDecimal amount = r.quantity().multiply(r.unitCost());
+        return r.output() ? amount.negate() : amount;
+    }
+
+    private static PlanCostVarianceDTO.Line reworkLine(ReworkUsage r, String standardUnknownReason, String offsetReason) {
+        List<String> reasons = new ArrayList<>(r.reasons() == null ? List.of() : r.reasons());
+        PlanCostVarianceDTO.Line line = PlanCostVarianceDTO.Line.builder()
+                .lineType(r.output() ? "REWORK_OUTPUT" : "REWORK")
+                .materialName(r.name())
+                .reworkPoolNo(r.poolNo())
+                .priceUnit(r.unit())
+                .actualQuantity(scale(r.quantity(), QTY))
+                .reworkSources(r.sources() == null ? new ArrayList<>() : new ArrayList<>(r.sources()))
+                .build();
+        if (r.internal()) {
+            reasons.add("本计划自己产出又回投的回料: 原料已计入本计划领用, 内部转移不另计");
+            line.setStatus(PlanCostVarianceDTO.STATUS_INTERNAL);
+            line.setReasons(reasons);
+            return line;
+        }
+        line.setPriceSource(REWORK_PRICE_SOURCE);
+        line.setActualUnitPrice(r.unitCost());
+        if (standardUnknownReason != null) {
+            reasons.add(standardUnknownReason);
+        } else {
+            // 配方不含回料: 标准回料用量就是 0 (配方说的, 不是缺数)
+            line.setStandardQuantity(scale(BigDecimal.ZERO, QTY));
+            line.setStandardAmount(scale(BigDecimal.ZERO, MONEY));
+        }
+        if (r.quantity() == null && (r.reasons() == null || r.reasons().isEmpty())) {
+            reasons.add(r.output() ? "转出量算不出" : "回投量折算不到回料池单位");
+        }
+        if (r.unitCost() == null) {
+            reasons.add("回料池没有单位成本 (产出回料的那道工序成本未知), 无法计价");
+        }
+        if (offsetReason != null) {
+            reasons.add(offsetReason);
+        }
+        if (r.quantity() != null && r.unitCost() != null) {
+            BigDecimal amount = signedAmount(r);
+            line.setActualAmount(scale(amount, MONEY));
+            if (standardUnknownReason == null && offsetReason == null) {
+                line.setReworkVariance(scale(amount, MONEY));
+            }
+        }
+        boolean ok = reasons.isEmpty() && line.getReworkVariance() != null;
+        line.setStatus(ok ? PlanCostVarianceDTO.STATUS_COMPARABLE : PlanCostVarianceDTO.STATUS_INCOMPARABLE);
+        line.setReasons(reasons);
+        return line;
     }
 
     private record Group(List<PlanCostVarianceDTO.Line> lines, boolean fullyComparable, BigDecimal standardAmount,
