@@ -196,7 +196,8 @@ class SettlementStockFeedReversalContractTest {
 
         verify(wipService).restoreClerkSemiExact(F, "SRC", new BigDecimal("3"), "reversal-log:" + LOG, 7L);
         verify(wipService, never()).restoreClerkSemiStrict(any(), any(), any(), any(), any());
-        verify(fgFeed).restoreForFeed(F, "FGX", new BigDecimal("20"), 7L);
+        verify(fgFeed).restoreForSettlementReversal(F, "FGX", new BigDecimal("20"), 7L);
+        verify(fgFeed, never()).restoreForFeed(any(), any(), any(), any());
         assertThat(survivor.getInterimSettledAt()).as("没撤的那道重新待扣").isNull();
         assertThat(stampedConsumption.getInterimSettledAt()).as("报工消耗重新待扣").isNull();
         @SuppressWarnings("unchecked")

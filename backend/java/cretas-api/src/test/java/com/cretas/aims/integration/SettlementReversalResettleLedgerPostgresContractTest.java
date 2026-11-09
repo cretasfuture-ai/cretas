@@ -536,4 +536,54 @@ class SettlementReversalResettleLedgerPostgresContractTest {
                 BigDecimal.class, f.semiId())).isEqualByComparingTo("70");
         assertThat(stamp(f.stepOneRowId())).as("小结盖的戳没被当成结单戳清掉").isEqualTo(postedAt);
     }
+
+    /**
+     * 独立审查 #1550 发现 3: 计划 A 产出成品批 X, 计划 B 结单时投了 X 20。先撤 A —— 只拦已出货
+     * (G2 看 shippedQuantity), 投料扣的是 producedQuantity, 所以不拦, X 被标成 REVERSED。再撤 B:
+     * 照明细把 20 还给 X 是对的, 但 ⛔ 不能顺手把 X 改回可用 —— 那是把一批已经作废的产出复活成可售。
+     */
+    @Test
+    void reversingTheFeedingPlanReturnsTheQuantityToAVoidedFinishedBatchButKeepsItVoid() {
+        Fixture b = fixture(false);
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        Long batchA = tx.execute(state -> {
+            ProductionPlan planA = new ProductionPlan();
+            planA.setId("PLAN-A-" + suffix);
+            planA.setFactoryId(F);
+            planA.setPlanNumber("A-" + suffix);
+            planA.setProductTypeId("FG-OLD");
+            planA.setPlannedQuantity(new BigDecimal("50"));
+            planA.setPlannedUnit("kg");
+            planA.setStatus(ProductionPlanStatus.IN_PROGRESS);
+            planA.setCreatedBy(OPERATOR);
+            plans.save(planA);
+            ProductionBatch a = batch(planA.getId(), "A-B-" + suffix, "REGULAR");
+            rows.save(row(planA.getId(), a, 1, "a-step1-" + suffix, true, List.of()));
+            return a.getId();
+        });
+        String planA = "PLAN-A-" + suffix;
+        // X (fixture 的成品来源) 是计划 A 的产出
+        assertThat(jdbc.update("update finished_goods_batches set production_plan_id = ? where batch_number = ? "
+                + "and factory_id = ?", planA, b.finishedNo(), F)).isEqualTo(1);
+
+        settle(b, "k1-" + b.planId());
+        assertThat(finishedProduced(b)).as("B 结单投了 X 20").isEqualByComparingTo("30");
+
+        ReportReversalLog logA = reversalService.submitReversal(F, batchA, OPERATOR, "撤 A");
+        if (logA.getStatus() != ReportReversalLog.ReversalStatus.DONE) {
+            reversalService.executeReversal(logA.getId(), F);
+        }
+        assertThat(jdbc.queryForObject("select status from finished_goods_batches where batch_number = ? and factory_id = ?",
+                String.class, b.finishedNo(), F)).as("A 被撤 (X 已被 B 投过料也没拦), X 作废").isEqualTo("REVERSED");
+
+        reverseFinalStep(b);
+
+        assertThat(finishedProduced(b)).as("B 投的 20 照明细还回 X").isEqualByComparingTo("50");
+        assertThat(jdbc.queryForObject("select status from finished_goods_batches where batch_number = ? and factory_id = ?",
+                String.class, b.finishedNo(), F)).as("X 仍是作废, 没被投料侧的撤回复活").isEqualTo("REVERSED");
+        assertThat(jdbc.queryForObject("select count(*) from finished_goods_adjustment_log l join finished_goods_batches g "
+                + "on g.id = l.batch_id where g.batch_number = ? and l.reference_type = 'SETTLEMENT_REVERSAL' "
+                + "and l.adjustment_quantity = 20", Integer.class, b.finishedNo())).as("还回留痕").isEqualTo(1);
+        assertThat(semiConsumed(b)).as("半成品照常还回").isEqualByComparingTo("0");
+    }
 }

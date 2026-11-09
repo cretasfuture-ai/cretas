@@ -2217,7 +2217,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         for (com.cretas.aims.service.production.SettlementStockFeedDetail.Entry entry : entries) {
             String batchNo = entry.batchNumber().trim();
             if (com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED.equals(entry.kind())) {
-                finishedGoodsFeedService.restoreForFeed(factoryId, batchNo, entry.quantity(), operatorId);
+                // 不复活已作废 (REVERSED) 的成品批次: 产出它的计划可能已被整单撤回 (#1550 审查 3)
+                finishedGoodsFeedService.restoreForSettlementReversal(factoryId, batchNo, entry.quantity(), operatorId);
                 restored++;
                 continue;
             }
