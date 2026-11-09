@@ -225,6 +225,7 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
         boolean approvalInitiated = false;
         String newStatus = null;
         int finishedGoodsHeld = 0;
+        String finishedGoodsNotice = null;
 
         if (needsApproval) {
             // 需要特批 - 记录审计并启动审批流程
@@ -261,9 +262,11 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
             newStatus = mapActionToStatus(action);
             if (dispositionInventoryService != null) {
                 try {
-                    var applied = dispositionInventoryService.applyDisposition(inspection, action);
+                    // 成品只在复核通过的处置里解除隔离 (Q4): approvalGranted = 走过另一人复核
+                    var applied = dispositionInventoryService.applyDisposition(inspection, action, approvalGranted);
                     if (applied != null) {
                         finishedGoodsHeld = applied.getFinishedGoodsHeld();
+                        finishedGoodsNotice = applied.getFinishedGoodsNotice();
                         if (applied.getBatchQualityStatus() != null) newStatus = applied.getBatchQualityStatus();
                     }
                 } catch (Exception e) {
@@ -307,7 +310,9 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
                         ? "处置请求已提交，等待审批"
                         : "处置已执行: " + action.getDescription()
                                 + (finishedGoodsHeld > 0
-                                        ? "；同计划还有 " + finishedGoodsHeld + " 个成品批次仍在隔离中，不可销售" : ""))
+                                        ? "；同计划还有 " + finishedGoodsHeld + " 个成品批次仍在隔离中，不可销售"
+                                                + (finishedGoodsNotice != null ? "（" + finishedGoodsNotice + "）" : "")
+                                        : ""))
                 .newBatchStatus(newStatus)
                 .build();
     }

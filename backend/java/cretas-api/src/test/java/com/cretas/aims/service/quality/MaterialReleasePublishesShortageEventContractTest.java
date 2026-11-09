@@ -50,7 +50,7 @@ class MaterialReleasePublishesShortageEventContractTest {
 
     @Test
     void releasingAnInspectingBatchPublishesTheEvent() {
-        service.applyDisposition(inspection, DispositionAction.RELEASE);
+        service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
         ArgumentCaptor<ApplicationEvent> event = ArgumentCaptor.forClass(ApplicationEvent.class);
         verify(publisher).publishEvent(event.capture());
@@ -63,9 +63,9 @@ class MaterialReleasePublishesShortageEventContractTest {
 
     @Test
     void scrapAndAlreadyAvailableDoNotPublish() {
-        service.applyDisposition(inspection, DispositionAction.SCRAP);
+        service.applyDisposition(inspection, DispositionAction.SCRAP, true);
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
-        service.applyDisposition(inspection, DispositionAction.RELEASE);
+        service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
         verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
         verify(publisher, never()).publishEvent(any(Object.class));

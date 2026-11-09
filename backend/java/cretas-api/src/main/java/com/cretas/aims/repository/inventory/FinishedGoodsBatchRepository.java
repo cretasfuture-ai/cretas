@@ -523,6 +523,17 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("planId") String planId);
 
     /**
+     * 同上, 加行锁 (按 id 排序, 并发方按同一顺序拿锁)。质检处置放行成品用: 先锁再读, 判断用的是锁后的状态,
+     * 与召回冻结 / 工序时限判废 (它们都先锁成品行再写) 串行 (Q4, 2026-11-09)。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.productionPlanId = :planId AND b.deletedAt IS NULL ORDER BY b.id")
+    List<FinishedGoodsBatch> findByFactoryIdAndProductionPlanIdForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("planId") String planId);
+
+    /**
      * 分仓库存查询 (PR #309 B2=B, 2026-05-11 spec).
      * factory_id × warehouse_id composite index (idx_finished_batch_warehouse).
      * 默认 @Where(deleted_at IS NULL) 已在 entity 起作用。

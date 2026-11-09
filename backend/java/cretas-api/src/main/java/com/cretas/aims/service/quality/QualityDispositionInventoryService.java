@@ -17,8 +17,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Set;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 质检处置 → 库存桥接服务 (2026-07-05).
@@ -75,7 +76,8 @@ import java.util.Objects;
  * ({@code QcInspectionPolicy.finishedGoodsStatusForOutput}、小结 {@code InterimSettleServiceImpl}) —— 这三处是
  * 计划级质检隔离, 正是放行要解除的; 销售退货子批 ({@code ReturnOrderServiceImpl}, RTN) / 质检放行判不合格
  * ({@code QcReleaseService}) / 工序时限判废 ({@code ProcessTimeLimitService.writeOff}) —— 这三处是对某一批货
- * 本身的结论, 放行一律不解除。召回冻结 ({@code FactoryRecallService.create}) 见下面的召回判断。
+ * 本身的结论, 放行一律不解除。召回冻结 ({@code FactoryRecallService.create}) 同样不解除: 本批召回中整个放行 409,
+ * 同计划任一批次有过召回 (进行中或已完成) 时成品一律留在隔离 (Q4)。
  *
  * @since 2026-07-05 (feat/quality-disposition-inventory-bridge)
  */
@@ -228,10 +230,16 @@ public class QualityDispositionInventoryService {
      *
      * @param inspection 质检记录 (提供 productionBatchId / materialBatchId 定位隔离批次)
      * @param action     已确定要执行的处置动作
+     * @param reviewed   这次处置是不是另一人复核通过后执行的 ({@code executeApprovedDisposition})。
+     *                   ⛔ 成品只在复核通过的处置里解除隔离 (Q4, 2026-11-09): 未锁定批次的直接放行只改批次状态,
+     *                   不翻转计划里的任何成品 —— 否则一次无人复核的放行就把整个计划的隔离成品放回可售。
+     *                   故意没有不带这个参数的重载: 调用方必须说清楚, Mockito 的 {@code never()} 也不会因为
+     *                   落在另一个重载上而假绿。
      * @return 翻转结果 (供日志/审计, 不改变调用方原有 DispositionExecutionResult 结构)
      */
     @Transactional
-    public InventoryDispositionResult applyDisposition(QualityInspection inspection, DispositionAction action) {
+    public InventoryDispositionResult applyDisposition(QualityInspection inspection, DispositionAction action,
+                                                       boolean reviewed) {
         if (inspection == null || action == null) {
             return InventoryDispositionResult.builder().action(action).build();
         }
@@ -250,12 +258,13 @@ public class QualityDispositionInventoryService {
                 }
                 String batchStatus = writeBatchStatus(pb, action == DispositionAction.RELEASE
                         ? QualityStatus.PASSED : QualityStatus.PARTIAL_PASS);
-                FinishedGoodsRelease fg = releaseFinishedGoods(inspection, pb);
+                FinishedGoodsRelease fg = releaseFinishedGoods(inspection, pb, reviewed);
                 FlipDecision mat = flipMaterial(inspection, MaterialBatchStatus.AVAILABLE);
                 InventoryDispositionResult r = InventoryDispositionResult.builder()
                         .action(action)
                         .finishedGoodsReleased(fg.released())
                         .finishedGoodsHeld(fg.held())
+                        .finishedGoodsNotice(fg.notice())
                         .batchQualityStatus(batchStatus)
                         .materialFlip(mat)
                         .build();
@@ -295,11 +304,15 @@ public class QualityDispositionInventoryService {
     // ==================== 成品 (FG) — 镜像 #1229 反向 ====================
 
     /**
-     * 解除<b>本次质检</b>所在计划的成品隔离。只动 DEFECTIVE, 已放出去的不重复翻。
-     * 留在隔离里的算进 held: 同计划另有批次不合格未解除 / 其他 SKU / 质检放行单独判了不合格。
+     * 解除<b>本次质检</b>所在计划的成品隔离。只动 DEFECTIVE, 已放出去的不重复翻; FROZEN / 待检 / 过期等别的状态
+     * 一律不碰 (它们不是质检隔离)。留在隔离里的算进 held 并在 notice 里说原因。
      * 销售退货子批次 (RTN) 是独立的货, 既不解除也不计数。
+     *
+     * <p>Q4 (2026-11-09): 成品先按计划加行锁再读, 判断用的是锁后的状态; 只有复核通过的处置才翻转;
+     * 计划里任何一个批次有过召回, 召回冻结的那批货和它同计划的成品都不在这里放 (分得清批次归属之前不猜)。
      */
-    private FinishedGoodsRelease releaseFinishedGoods(QualityInspection inspection, ProductionBatch pb) {
+    private FinishedGoodsRelease releaseFinishedGoods(QualityInspection inspection, ProductionBatch pb,
+                                                      boolean reviewed) {
         if (finishedGoodsBatchRepository == null || pb == null || pb.getProductTypeId() == null) {
             return FinishedGoodsRelease.NONE;
         }
@@ -308,18 +321,31 @@ public class QualityDispositionInventoryService {
             return FinishedGoodsRelease.NONE;
         }
         String factoryId = inspection.getFactoryId();
-        boolean siblingUncleared = productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId)
-                .stream()
+        List<FinishedGoodsBatch> candidates = finishedGoodsBatchRepository
+                .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId).stream()
+                .filter(fg -> Objects.equals(factoryId, fg.getFactoryId())
+                        && FinishedGoodsBatch.Status.DEFECTIVE.equals(fg.getStatus()) && !isReturnChild(fg))
+                .toList();
+        if (candidates.isEmpty()) {
+            return FinishedGoodsRelease.NONE;
+        }
+        if (!reviewed) {
+            return FinishedGoodsRelease.allHeld(candidates.size(), "成品解除隔离要经另一人复核通过的处置，这次直接放行只改了批次状态");
+        }
+        List<ProductionBatch> planBatches = productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, planId)
+                .stream().filter(b -> Objects.equals(factoryId, b.getFactoryId())).toList();
+        boolean siblingUncleared = planBatches.stream()
                 .anyMatch(other -> !Objects.equals(other.getId(), pb.getId()) && other.getQualityStatus() != null
                         && other.getQualityStatus().isDispositionLocked());
+        long recalledBatches = planBatches.stream()
+                .filter(b -> b.getId() != null && factoryRecallService.hasRecallRecord(factoryId, b.getId())).count();
+        if (recalledBatches > 0) {
+            return FinishedGoodsRelease.allHeld(candidates.size(),
+                    "同计划有 " + recalledBatches + " 个批次发起过召回，召回冻结的成品不在处置里放行");
+        }
         int released = 0;
         int held = 0;
-        for (FinishedGoodsBatch fg : finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)) {
-            if (!Objects.equals(factoryId, fg.getFactoryId())
-                    || !FinishedGoodsBatch.Status.DEFECTIVE.equals(fg.getStatus()) || isReturnChild(fg)) {
-                continue;
-            }
+        for (FinishedGoodsBatch fg : candidates) {
             if (siblingUncleared || !Objects.equals(pb.getProductTypeId(), fg.getProductTypeId())
                     || rejectedAtQcRelease(factoryId, fg) || rejectedByTimeLimit(factoryId, fg)) {
                 held++;
@@ -329,7 +355,7 @@ public class QualityDispositionInventoryService {
             finishedGoodsBatchRepository.save(fg);
             released++;
         }
-        return new FinishedGoodsRelease(released, held);
+        return new FinishedGoodsRelease(released, held, null);
     }
 
     private static boolean isReturnChild(FinishedGoodsBatch fg) {
@@ -366,8 +392,13 @@ public class QualityDispositionInventoryService {
                 FinishedGoodsBatch.Status.AVAILABLE, fg.getBatchNumber());
     }
 
-    private record FinishedGoodsRelease(int released, int held) {
-        private static final FinishedGoodsRelease NONE = new FinishedGoodsRelease(0, 0);
+    /** @param notice 有成品留在隔离时给操作人的原因 (中文); 没有 = null。 */
+    private record FinishedGoodsRelease(int released, int held, String notice) {
+        private static final FinishedGoodsRelease NONE = new FinishedGoodsRelease(0, 0, null);
+
+        private static FinishedGoodsRelease allHeld(int held, String notice) {
+            return new FinishedGoodsRelease(0, held, notice);
+        }
     }
 
     // ==================== 原料 (MaterialBatch) — 与 ReleaseDecisionTool 共用守卫 ====================
@@ -412,6 +443,8 @@ public class QualityDispositionInventoryService {
         private int finishedGoodsReleased;
         /** 放行后仍留在隔离里的成品批次数 (见 releaseFinishedGoods), 操作人要看到它。 */
         private int finishedGoodsHeld;
+        /** 为什么还有成品留在隔离 (中文, 直接给操作人看); 没有成品留下 = null。 */
+        private String finishedGoodsNotice;
         /** 这次处置写到批次上的质量状态; null = 没有批次或动作不改批次。 */
         private String batchQualityStatus;
         /** 原料翻转判定 (material-scoped 时非 null)。 */

@@ -98,6 +98,7 @@ class QualityBatchDispositionContractTest {
     private QualityInspectionRepository inspectionRepo;
     private FinishedGoodsBatchRepository goodsRepo;
     private ProcessTimeLimitEventRepository timeLimitEvents;
+    private FactoryRecallService recalls;
     private QcReleaseRecordRepository releaseRecords;
     private ProductTypeRepository productTypes;
     private QualityInspectionServiceImpl inspectionService;
@@ -120,6 +121,8 @@ class QualityBatchDispositionContractTest {
 
         goodsRepo = mock(FinishedGoodsBatchRepository.class);
         when(goodsRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN))
+                .thenAnswer(call -> List.copyOf(finishedGoods));
+        when(goodsRepo.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY, PLAN))
                 .thenAnswer(call -> List.copyOf(finishedGoods));
         when(goodsRepo.save(any())).thenAnswer(call -> call.getArgument(0));
 
@@ -209,7 +212,8 @@ class QualityBatchDispositionContractTest {
         ReflectionTestUtils.setField(bridge, "materialBatchRepository", mock(MaterialBatchRepository.class));
         ReflectionTestUtils.setField(bridge, "productionBatchRepository", batchRepo);
         ReflectionTestUtils.setField(bridge, "finishedGoodsBatchRepository", goodsRepo);
-        ReflectionTestUtils.setField(bridge, "factoryRecallService", mock(FactoryRecallService.class));
+        recalls = mock(FactoryRecallService.class);
+        ReflectionTestUtils.setField(bridge, "factoryRecallService", recalls);
         ReflectionTestUtils.setField(bridge, "qcReleaseRecordRepository", releaseRecords);
         ReflectionTestUtils.setField(bridge, "qcInspectionPolicy", policy);
         timeLimitEvents = mock(ProcessTimeLimitEventRepository.class);
@@ -487,6 +491,69 @@ class QualityBatchDispositionContractTest {
         assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
         assertThat(expired.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
         assertThat(result.getMessage()).contains("1 个成品批次仍在隔离中");
+    }
+
+    // ==================== Q4: 未锁定批次的放行、召回货、冻结货 ====================
+
+    @Test
+    @DisplayName("Q4 复现: 批次没锁定时直接放行 (无人复核) 不翻转本计划任何成品, 响应说明要复核")
+    void directReleaseOfUnlockedBatchFlipsNoFinishedGoods() {
+        goods.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);   // 例如召回 / 判废留下的隔离货
+        inspect("qi-pass", "PASS", "100");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PASSED);
+
+        var response = controller.executeDisposition(FACTORY, execute("qi-pass", "RELEASE", INSPECTOR), INSPECTOR);
+
+        assertThat(response.getData().getStatus()).isEqualTo("EXECUTED");
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(response.getData().getMessage()).contains("1 个成品批次仍在隔离中").contains("复核");
+    }
+
+    @Test
+    @DisplayName("Q4 复现: 同计划兄弟批发起过召回, 复核放行这批时召回冻结的成品不放出")
+    void siblingRecallKeepsItsFrozenGoods() {
+        ProductionBatch sibling = productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1",
+                QualityStatus.PASSED);
+        FinishedGoodsBatch recalled = finishedGoods(sibling.getBatchNumber(), "SKU-1", FinishedGoodsBatch.Status.DEFECTIVE);
+        when(recalls.hasRecallRecord(FACTORY, sibling.getId())).thenReturn(true);
+        inspect("qi-fail", "FAIL", "80");
+
+        var result = ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(recalled.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(result.getMessage()).contains("召回");
+    }
+
+    @Test
+    @DisplayName("Q4 阴性对照: 兄弟批没有召回时, 同样的复核放行把这些成品放出 (证明上一条红在召回上)")
+    void withoutRecallTheSameGoodsAreReleased() {
+        ProductionBatch sibling = productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1",
+                QualityStatus.PASSED);
+        FinishedGoodsBatch siblingGoods = finishedGoods(sibling.getBatchNumber(), "SKU-1",
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        inspect("qi-fail", "FAIL", "80");
+
+        ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(siblingGoods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("Q4: 冻结 (FROZEN) 的成品不受放行影响, 放行前后都是 FROZEN")
+    void frozenGoodsAreNotTouchedByRelease() {
+        FinishedGoodsBatch frozen = finishedGoods("FG-PLAN-1793087414891-94ECD656-S3-d2e185aa", "SKU-1",
+                FinishedGoodsBatch.Status.FROZEN);
+        inspect("qi-fail", "FAIL", "80");
+        assertThat(frozen.getStatus()).isEqualTo(FinishedGoodsBatch.Status.FROZEN);
+
+        ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(frozen.getStatus()).isEqualTo(FinishedGoodsBatch.Status.FROZEN);
     }
 
     private ProcessTimeLimitService timeLimitService() {

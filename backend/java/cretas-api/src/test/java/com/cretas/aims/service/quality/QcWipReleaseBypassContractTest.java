@@ -140,7 +140,7 @@ class QcWipReleaseBypassContractTest {
     void dispositionRefusesWip() {
         MaterialBatch wip = batch("W2", QcInspectionGuard.WIP_SOURCE_DOC_TYPE);
         QualityDispositionInventoryService.InventoryDispositionResult r =
-                disposition.applyDisposition(inspectionOf("W2"), DispositionAction.RELEASE);
+                disposition.applyDisposition(inspectionOf("W2"), DispositionAction.RELEASE, true);
         assertThat(r.getMaterialFlip()).isEqualTo(QualityDispositionInventoryService.FlipDecision.QC_RELEASE_REQUIRED);
         assertThat(wip.getStatus()).isEqualTo(MaterialBatchStatus.INSPECTING);
         verify(materialBatchRepository, never()).save(any());
@@ -151,7 +151,7 @@ class QcWipReleaseBypassContractTest {
     void dispositionStillReleasesRawMaterial() {
         MaterialBatch raw = batch("R2", "PURCHASE_RECEIVE");
         QualityDispositionInventoryService.InventoryDispositionResult r =
-                disposition.applyDisposition(inspectionOf("R2"), DispositionAction.RELEASE);
+                disposition.applyDisposition(inspectionOf("R2"), DispositionAction.RELEASE, true);
         assertThat(r.getMaterialFlip()).isEqualTo(QualityDispositionInventoryService.FlipDecision.FLIP);
         assertThat(raw.getStatus()).isEqualTo(MaterialBatchStatus.AVAILABLE);
     }

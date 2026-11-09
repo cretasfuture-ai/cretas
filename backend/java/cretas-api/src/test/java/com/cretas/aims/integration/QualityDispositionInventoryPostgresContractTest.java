@@ -87,7 +87,7 @@ class QualityDispositionInventoryPostgresContractTest {
         registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
     }
 
-    /** 召回判断是本合约明确不测的旁路；其它待测仓储和策略均为真实 bean。 */
+    /** 召回记录查询本身在 FactoryRecallServiceContractTest 里测; 这里桩它的答案, 验证放行按答案处理。其它仓储和策略均为真实 bean。 */
     @MockBean
     FactoryRecallService factoryRecallService;
 
@@ -239,6 +239,41 @@ class QualityDispositionInventoryPostgresContractTest {
         });
     }
 
+    /** Q4: 没有经过复核的放行不翻转任何成品 (批次状态照写)。 */
+    @Test
+    void unreviewedReleaseLeavesAllFinishedGoodsDefective() {
+        Fixture f = fixture(false);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f, false);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsHeld()).isEqualTo(1);
+        assertThat(result.getFinishedGoodsNotice()).contains("复核");
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbQualityStatus(f.productionBatchId(), QualityStatus.PASSED);
+    }
+
+    /** Q4: 同计划兄弟批有召回记录时, 被召回冻结的成品 (批号 = 兄弟批号) 读回仍 DEFECTIVE; FROZEN 成品不受影响。 */
+    @Test
+    void siblingRecallAndFrozenGoodsStayPut() {
+        Fixture f = fixture(false);
+        String siblingNumber = "PB-RECALLED-" + suffix();
+        Long siblingId = tx.execute(state -> productionBatches.saveAndFlush(productionBatch(
+                f.factoryId(), f.planId(), f.productId(), QualityStatus.PASSED, siblingNumber)).getId());
+        String recalledFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), siblingNumber,
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        String frozenFg = saveFinishedGoods(f.factoryId(), f.planId(), f.productId(), "FG-FROZEN-" + suffix(),
+                FinishedGoodsBatch.Status.FROZEN);
+        org.mockito.Mockito.when(factoryRecallService.hasRecallRecord(f.factoryId(), siblingId)).thenReturn(true);
+
+        QualityDispositionInventoryService.InventoryDispositionResult result = release(f);
+
+        assertThat(result.getFinishedGoodsReleased()).isZero();
+        assertThat(result.getFinishedGoodsNotice()).contains("召回");
+        assertDbFinishedGoods(recalledFg, FinishedGoodsBatch.Status.DEFECTIVE);
+        assertDbFinishedGoods(frozenFg, FinishedGoodsBatch.Status.FROZEN);
+    }
+
     @Test
     void inspectionRequiredProductReturnsToPendingInspection() {
         Fixture f = fixture(true);
@@ -364,9 +399,14 @@ class QualityDispositionInventoryPostgresContractTest {
         });
     }
 
+    /** 复核通过后的放行 (executeApprovedDisposition 走的就是 reviewed=true)。 */
     private QualityDispositionInventoryService.InventoryDispositionResult release(Fixture fixture) {
+        return release(fixture, true);
+    }
+
+    private QualityDispositionInventoryService.InventoryDispositionResult release(Fixture fixture, boolean reviewed) {
         return tx.execute(state -> disposition.applyDisposition(
-                inspections.findById(fixture.inspectionId()).orElseThrow(), DispositionAction.RELEASE));
+                inspections.findById(fixture.inspectionId()).orElseThrow(), DispositionAction.RELEASE, reviewed));
     }
 
     private void assertDbFinishedGoods(String id, String expectedStatus) {
