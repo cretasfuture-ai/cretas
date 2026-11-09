@@ -764,9 +764,9 @@ claim_build_race_winner() {
     # contenders "won" and interleaved their writes into one temp file.
     # Each contender also writes its own temp file, so even a broken claim cannot
     # produce a mixed winner.
-    if ( set -o noclobber; : > "$race_dir/claim" ) 2>/dev/null; then
-        printf '%s\n' "$contender" > "$race_dir/winner.$contender.tmp"
-        mv -f "$race_dir/winner.$contender.tmp" "$race_dir/winner"
+    if mkdir "$race_dir/claim" 2>/dev/null; then  # TEMP-MUTATION: old claim, expect red
+        printf '%s\n' "$contender" > "$race_dir/winner.tmp"
+        mv -f "$race_dir/winner.tmp" "$race_dir/winner"
     fi
 }
 
