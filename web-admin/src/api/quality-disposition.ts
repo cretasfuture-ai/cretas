@@ -187,6 +187,32 @@ export async function executeDisposition(
   return res.data;
 }
 
+/** 已放行、但所在计划还有成品在隔离的生产批次 (Owner 2026-11-09). */
+export interface HeldGoodsBatchDTO {
+  productionBatchId: number;
+  batchNumber: string;
+  productionPlanId: string;
+  productName?: string | null;
+  qualityStatus: string;
+  heldGoods: number;
+}
+
+export async function listHeldGoodsBatches(factoryId: string): Promise<HeldGoodsBatchDTO[]> {
+  const res = await get<HeldGoodsBatchDTO[]>(`${basePath(factoryId)}/held-goods-batches`);
+  return res.success && res.data ? res.data : [];
+}
+
+/**
+ * 已放行批次申请放行隔离成品: 后端按现在的数据重跑计划级放行 (归属 / 召回 / 超时判废 / 未解除批次都重查),
+ * 一个人决定, 操作人取登录身份. 仍有成品留下时 finishedGoodsHeld > 0, 原因在 message 里.
+ */
+export async function releaseHeldGoods(factoryId: string, productionBatchId: number): Promise<DispositionResultDTO> {
+  const res = await post<DispositionResultDTO>(
+    `${basePath(factoryId)}/batches/${productionBatchId}/release-held-goods`, {});
+  if (!res.success || !res.data) throw new Error(res.message || '申请放行成品失败');
+  return res.data;
+}
+
 /** 获取待审批处置列表 (可选按处置动作 decisionMade 筛选, 后端新重载不影响不传筛选的旧调用方). */
 export async function getPendingDispositions(
   factoryId: string,

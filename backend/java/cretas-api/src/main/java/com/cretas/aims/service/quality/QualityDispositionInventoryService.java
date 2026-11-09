@@ -276,7 +276,7 @@ public class QualityDispositionInventoryService {
                 }
                 String batchStatus = writeBatchStatus(pb, action == DispositionAction.RELEASE
                         ? QualityStatus.PASSED : QualityStatus.PARTIAL_PASS);
-                FinishedGoodsRelease fg = releaseFinishedGoods(inspection, pb, reviewed);
+                FinishedGoodsRelease fg = releaseFinishedGoods(inspection.getFactoryId(), pb, reviewed);
                 FlipDecision mat = flipMaterial(inspection, MaterialBatchStatus.AVAILABLE);
                 InventoryDispositionResult r = InventoryDispositionResult.builder()
                         .action(action)
@@ -299,7 +299,7 @@ public class QualityDispositionInventoryService {
                 quarantineFinishedGoods(pb);
                 // Q2 (Owner 2026-11-09): 报废批次不算「未解除」。这次报废若是计划里最后一个待处置的批次, 其余批次的成品
                 // 现在就该放行 (报废批的货留在隔离) —— 否则先放行、后报废的顺序下, 别的批次的成品永远没人放。
-                FinishedGoodsRelease fg = releaseFinishedGoods(inspection, pb, reviewed);
+                FinishedGoodsRelease fg = releaseFinishedGoods(inspection.getFactoryId(), pb, reviewed);
                 FlipDecision mat = flipMaterial(inspection, MaterialBatchStatus.SCRAPPED);
                 log.info("质检处置库存桥接 — SCRAP inspectionId={} 批次→{}, 其余批次成品解除隔离 {} 个, 仍隔离 {} 个, 原料报废={}",
                         inspection.getId(), batchStatus, fg.released(), fg.held(), mat);
@@ -326,6 +326,73 @@ public class QualityDispositionInventoryService {
         }
     }
 
+    // ==================== 已放行批次申请放行隔离成品 (Owner 2026-11-09) ====================
+
+    /**
+     * 已放行 (合格 / 条件合格) 的批次, 它所在计划的成品还在隔离 (例如当时分不清归属、后来补齐了血缘) ——
+     * 用现在的数据把计划级放行<b>重新跑一遍</b>: 归属 / 召回 / 工序超时判废 / 未解除批次, 每道检查都重来。
+     * 归属仍分不清就一个不放并说原因。Owner 2026-11-09 明确: 这里一个人决定, 不要另一人复核。
+     *
+     * <p>⛔ 不放宽任何口径: 只有已放行的批次能申请 (不合格的走处置复核); 本批在召回中照旧 409。
+     */
+    @Transactional
+    public InventoryDispositionResult releaseHeldGoodsOfPassedBatch(String factoryId, Long productionBatchId) {
+        if (productionBatchRepository == null || finishedGoodsBatchRepository == null) {
+            throw new IllegalStateException("生产批次 / 成品仓储未注入，不能重新核对放行");
+        }
+        ProductionBatch pb = productionBatchRepository.findByIdAndFactoryIdForUpdate(productionBatchId, factoryId)
+                .orElseThrow(() -> new com.cretas.aims.exception.BusinessException(404, "生产批次不存在或不属于当前工厂"));
+        QualityStatus status = pb.getQualityStatus();
+        if (status == null || !status.isPassed()) {
+            throw new com.cretas.aims.exception.BusinessException(409, "批次 " + pb.getBatchNumber()
+                    + " 还没有放行（当前：" + (status == null ? "未检验" : status.getDescription())
+                    + "），不能申请放行成品")
+                    .withCode("QUALITY_BATCH_NOT_PASSED")
+                    .withHint("不合格的批次请先在「待处置质检」里走处置复核");
+        }
+        factoryRecallService.assertReleaseAllowed(factoryId, productionBatchId);
+        FinishedGoodsRelease fg = releaseFinishedGoods(factoryId, pb, true);
+        log.info("已放行批次重新核对放行 batch={} plan={} 解除隔离 {} 个, 仍隔离 {} 个",
+                pb.getId(), pb.getProductionPlanId(), fg.released(), fg.held());
+        return InventoryDispositionResult.builder()
+                .finishedGoodsReleased(fg.released())
+                .finishedGoodsHeld(fg.held())
+                .finishedGoodsNotice(fg.notice())
+                .batchQualityStatus(status.name())
+                .build();
+    }
+
+    /** 已放行、但所在计划还有成品在隔离的批次 (web 端「成品仍在隔离」页签的数据, 按钮只给这些批次)。 */
+    @Transactional(readOnly = true)
+    public List<HeldGoodsBatch> listPassedBatchesWithHeldGoods(String factoryId) {
+        if (productionBatchRepository == null || finishedGoodsBatchRepository == null) {
+            return List.of();
+        }
+        Map<String, Integer> heldByPlan = new LinkedHashMap<>();
+        for (FinishedGoodsBatch fg : finishedGoodsBatchRepository.findQuarantinedPlanGoods(factoryId)) {
+            if (Objects.equals(factoryId, fg.getFactoryId()) && !isReturnChild(fg)) {
+                heldByPlan.merge(fg.getProductionPlanId(), 1, Integer::sum);
+            }
+        }
+        if (heldByPlan.isEmpty()) {
+            return List.of();
+        }
+        List<HeldGoodsBatch> result = new ArrayList<>();
+        for (ProductionBatch b : productionBatchRepository.findByFactoryIdAndProductionPlanIdIn(factoryId,
+                heldByPlan.keySet())) {
+            if (b.getQualityStatus() != null && b.getQualityStatus().isPassed()) {
+                result.add(new HeldGoodsBatch(b.getId(), b.getBatchNumber(), b.getProductionPlanId(),
+                        b.getProductName(), b.getQualityStatus().name(), heldByPlan.get(b.getProductionPlanId())));
+            }
+        }
+        return result;
+    }
+
+    /** 一行: 已放行的生产批次 + 它所在计划还在隔离的成品批数。 */
+    public record HeldGoodsBatch(Long productionBatchId, String batchNumber, String productionPlanId,
+                                 String productName, String qualityStatus, int heldGoods) {
+    }
+
     // ==================== 成品 (FG) — 镜像 #1229 反向 ====================
 
     /**
@@ -344,8 +411,7 @@ public class QualityDispositionInventoryService {
      * </ol>
      * 成品归属见 {@link #attribute}。
      */
-    private FinishedGoodsRelease releaseFinishedGoods(QualityInspection inspection, ProductionBatch pb,
-                                                      boolean reviewed) {
+    private FinishedGoodsRelease releaseFinishedGoods(String factoryId, ProductionBatch pb, boolean reviewed) {
         if (finishedGoodsBatchRepository == null || pb == null) {
             return FinishedGoodsRelease.NONE;
         }
@@ -353,7 +419,6 @@ public class QualityDispositionInventoryService {
         if (planId == null || planId.isBlank()) {
             return FinishedGoodsRelease.NONE;
         }
-        String factoryId = inspection.getFactoryId();
         List<FinishedGoodsBatch> candidates = finishedGoodsBatchRepository
                 .findByFactoryIdAndProductionPlanIdForUpdate(factoryId, planId).stream()
                 .filter(fg -> Objects.equals(factoryId, fg.getFactoryId())

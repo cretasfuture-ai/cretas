@@ -105,6 +105,13 @@ public interface QualityDispositionRuleService {
     boolean isAwaitingDisposition(QualityInspection inspection);
 
     /**
+     * 已放行批次申请放行它所在计划还在隔离的成品 (Owner 2026-11-09): 用现在的数据重新跑计划级放行
+     * (归属 / 召回 / 工序超时判废 / 未解除批次都重新检查), 一个人决定, 不要另一人复核; 留一条审计
+     * (谁触发、放了几个、还留几个、为什么)。
+     */
+    DispositionExecutionResult recheckPlanRelease(String factoryId, Long productionBatchId, Long userId);
+
+    /**
      * 处置动作枚举
      */
     enum DispositionAction {

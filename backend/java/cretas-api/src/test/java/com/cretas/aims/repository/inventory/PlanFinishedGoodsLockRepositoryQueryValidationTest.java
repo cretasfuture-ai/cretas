@@ -71,6 +71,23 @@ class PlanFinishedGoodsLockRepositoryQueryValidationTest {
         assertThat(locked).extracting(FinishedGoodsBatch::getId).containsExactly("Q-LOCK-A", "Q-LOCK-B");
     }
 
+    /** Owner 2026-11-09: 「成品仍在隔离的已放行批次」列表的数据源 —— 只要本厂、挂在计划上、DEFECTIVE、未删除的。 */
+    @Test
+    void quarantinedPlanGoodsAreThisFactoryDefectiveAndPlanBound() {
+        seedFactory("F-LOCK", "PT-LOCK");
+        seedFactory("F-OTHER", null);
+        goods.saveAndFlush(fg("Q-HELD-1", "F-LOCK", "PLAN-HELD"));
+        FinishedGoodsBatch available = fg("Q-HELD-AVAILABLE", "F-LOCK", "PLAN-HELD");
+        available.setStatus(FinishedGoodsBatch.Status.AVAILABLE);
+        goods.saveAndFlush(available);
+        goods.saveAndFlush(fg("Q-HELD-NO-PLAN", "F-LOCK", null));
+        goods.saveAndFlush(fg("Q-HELD-OTHER-FACTORY", "F-OTHER", "PLAN-HELD"));
+        entityManager.clear();
+
+        assertThat(goods.findQuarantinedPlanGoods("F-LOCK"))
+                .extracting(FinishedGoodsBatch::getId).containsExactly("Q-HELD-1");
+    }
+
     @Test
     void lineageLookupByFinishedGoodsIsFactoryScoped() {
         edges.saveAndFlush(edge("F-LOCK", "101", "Q-EDGE-1"));

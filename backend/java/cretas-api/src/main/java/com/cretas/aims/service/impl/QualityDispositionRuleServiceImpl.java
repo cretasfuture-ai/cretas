@@ -133,6 +133,56 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
     }
 
     @Override
+    @Transactional
+    public DispositionExecutionResult recheckPlanRelease(String factoryId, Long productionBatchId, Long userId) {
+        if (dispositionInventoryService == null) {
+            throw new IllegalStateException("质检处置库存桥接未注入，不能重新核对放行");
+        }
+        User executor = userRepository.findById(userId)
+                .orElseThrow(() -> new EntityNotFoundException("User", userId));
+        var applied = dispositionInventoryService.releaseHeldGoodsOfPassedBatch(factoryId, productionBatchId);
+
+        Map<String, Object> context = new HashMap<>();
+        context.put("productionBatchId", productionBatchId);
+        context.put("executorId", userId);
+        context.put("trigger", "PASSED_BATCH_RELEASE_REQUEST");
+        Map<String, Object> output = new HashMap<>();
+        output.put("finishedGoodsReleased", applied.getFinishedGoodsReleased());
+        output.put("finishedGoodsHeld", applied.getFinishedGoodsHeld());
+        output.put("notice", applied.getFinishedGoodsNotice());
+        var auditLog = decisionAuditService.logRuleExecution(
+                factoryId,
+                "ProductionBatch",
+                String.valueOf(productionBatchId),
+                context,
+                output,
+                List.of("PLAN_RELEASE_RECHECK"),
+                "已放行批次申请放行隔离成品 (单人决定, Owner 2026-11-09)",
+                userId,
+                executor.getFullName(),
+                executor.getRole() != null ? executor.getRole() : "UNKNOWN");
+
+        int released = applied.getFinishedGoodsReleased();
+        int held = applied.getFinishedGoodsHeld();
+        String message = released == 0 && held == 0
+                ? "这个计划没有在隔离中的成品"
+                : "已重新核对: 放行 " + released + " 个成品批次"
+                        + (held > 0 ? "；仍有 " + held + " 个成品批次在隔离中，不可销售"
+                                + (applied.getFinishedGoodsNotice() != null
+                                        ? "（" + applied.getFinishedGoodsNotice() + "）" : "")
+                                : "");
+        return DispositionExecutionResult.builder()
+                .success(true)
+                .executedAction(DispositionAction.RELEASE)
+                .approvalInitiated(false)
+                .auditLogId(auditLog != null ? auditLog.getId() : null)
+                .message(message)
+                .newBatchStatus(applied.getBatchQualityStatus())
+                .finishedGoodsHeld(held)
+                .build();
+    }
+
+    @Override
     public boolean isAwaitingDisposition(QualityInspection inspection) {
         return dispositionInventoryService != null && dispositionInventoryService.isAwaitingDisposition(inspection);
     }

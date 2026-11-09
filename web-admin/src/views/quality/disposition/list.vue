@@ -14,7 +14,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, WarningFilled } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
@@ -25,6 +25,9 @@ import {
   executeDisposition,
   getPendingDispositions,
   approveDisposition,
+  listHeldGoodsBatches,
+  releaseHeldGoods,
+  type HeldGoodsBatchDTO,
   type DispositionActionInfo,
   type DispositionActionCode,
   type DispositionEvaluationDTO,
@@ -46,7 +49,53 @@ const contextError = ref('');
 const contextLoading = ref(false);
 const hasBatchContext = computed(() => route.query.batchId != null);
 
-const activeTab = ref<'inspections' | 'approvals'>('inspections');
+const activeTab = ref<'inspections' | 'approvals' | 'heldGoods'>('inspections');
+
+// ==================== 成品仍在隔离的已放行批次 (Owner 2026-11-09) ====================
+// 批次已经放行, 但当时 (例如分不清成品属于哪个批次) 计划里的成品没放。补齐血缘等之后, 一个人申请即可:
+// 后端按现在的数据重跑一遍计划级放行, 每道检查重新来; 仍分不清就一个不放并说原因。
+const heldBatches = ref<HeldGoodsBatchDTO[]>([]);
+const heldLoading = ref(false);
+const releasingHeldId = ref<number | null>(null);
+
+async function loadHeldBatches() {
+  if (!factoryId.value) return;
+  heldLoading.value = true;
+  try {
+    heldBatches.value = await listHeldGoodsBatches(factoryId.value);
+  } finally {
+    heldLoading.value = false;
+  }
+}
+
+async function handleReleaseHeld(row: HeldGoodsBatchDTO) {
+  if (!factoryId.value || releasingHeldId.value != null) return;
+  try {
+    await ElMessageBox.confirm(
+      `批次 ${row.batchNumber}${row.productName ? '（' + row.productName + '）' : ''} 已放行，`
+        + `所在计划 ${row.productionPlanId} 还有 ${row.heldGoods} 个成品批次在隔离中。\n`
+        + '系统会按现在的数据重新核对（成品归属、召回、超时判废、同计划未处置的批次），能放的才放。',
+      '重新核对并放行成品',
+      { type: 'warning', confirmButtonText: '重新核对并放行', cancelButtonText: '取消', customStyle: { whiteSpace: 'pre-line' } },
+    );
+  } catch {
+    return;
+  }
+  releasingHeldId.value = row.productionBatchId;
+  try {
+    const result = await releaseHeldGoods(factoryId.value, row.productionBatchId);
+    if ((result.finishedGoodsHeld ?? 0) > 0) {
+      ElMessage({ type: 'warning', message: result.message, duration: 0, showClose: true });
+    } else {
+      ElMessage.success(result.message);
+    }
+    await loadHeldBatches();
+  } catch (error) {
+    console.error('申请放行成品失败:', error);
+  } finally {
+    releasingHeldId.value = null;
+  }
+}
 
 // ==================== Tab 1: 待处置质检 ====================
 const inspectionLoading = ref(false);
@@ -438,11 +487,13 @@ function handleRefresh() {
   loadPendingInspections();
   loadPendingApprovals();
   loadBatchLookup();
+  loadHeldBatches();
 }
 
 onMounted(() => {
   loadActionOptions();
   loadPendingApprovals();
+  loadHeldBatches();
 });
 </script>
 
@@ -597,6 +648,33 @@ onMounted(() => {
                   @click="openApproveDialog(row)"
                 >审批</el-button>
                 <span v-else>-</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <!-- 只在「已放行批次的计划里还有成品在隔离」时出现 (Owner 2026-11-09) -->
+        <el-tab-pane v-if="heldBatches.length > 0" name="heldGoods" :label="`成品仍在隔离 (${heldBatches.length})`">
+          <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px"
+            title="这些批次已经放行，但所在计划的成品当时没放（例如分不清成品属于哪个批次）。补齐资料后可申请重新核对，能放的才放。" />
+          <el-table v-loading="heldLoading" :data="heldBatches" border stripe>
+            <el-table-column prop="batchNumber" label="生产批次" min-width="180" />
+            <el-table-column prop="productName" label="品名" min-width="140" />
+            <el-table-column prop="productionPlanId" label="生产计划" min-width="200" />
+            <el-table-column label="隔离中的成品批次" width="150" align="right">
+              <template #default="{ row }">{{ row.heldGoods }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="180" fixed="right">
+              <template #default="{ row }">
+                <el-button
+                  v-if="canWrite"
+                  data-testid="disposition-release-held-goods"
+                  type="primary"
+                  link
+                  :loading="releasingHeldId === row.productionBatchId"
+                  :disabled="releasingHeldId != null"
+                  @click="handleReleaseHeld(row)"
+                >重新核对并放行成品</el-button>
               </template>
             </el-table-column>
           </el-table>

@@ -77,6 +77,10 @@ public class QualityDispositionController {
     private final NotificationService notificationService;
     private final PushNotificationService pushNotificationService;
 
+    /** 列「成品仍在隔离的已放行批次」用; 可选注入只为兼容手工构造控制器的单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.QualityDispositionInventoryService heldGoodsService;
+
     /**
      * 根据质检结果评估处置建议
      *
@@ -177,6 +181,49 @@ public class QualityDispositionController {
      * 3. 记录审计日志
      * 4. 发送通知
      */
+    /**
+     * 已放行、但所在计划还有成品在隔离的批次 (Owner 2026-11-09)。web 端只给这些批次显示「重新核对并放行成品」。
+     */
+    @RequirePermission({"quality:read", "quality:read_write"})
+    @RequireModule("quality_inspection")
+    @GetMapping("/held-goods-batches")
+    @Operation(summary = "成品仍在隔离的已放行批次")
+    public ApiResponse<List<com.cretas.aims.service.quality.QualityDispositionInventoryService.HeldGoodsBatch>>
+            listHeldGoodsBatches(@PathVariable String factoryId) {
+        if (heldGoodsService == null) {
+            throw new IllegalStateException("质检处置库存服务未注入，查不了成品隔离情况");
+        }
+        return ApiResponse.success(heldGoodsService.listPassedBatchesWithHeldGoods(factoryId));
+    }
+
+    /**
+     * 已放行批次申请放行隔离成品 (Owner 2026-11-09): 一个人决定, 不要另一人复核; 用现在的数据把计划级放行重跑一遍,
+     * 每道检查重新来。权限与执行处置相同。操作人取登录身份, 不取请求体。
+     */
+    @RequirePermission({"quality:read_write"})
+    @RequireModule("quality_inspection")
+    @PostMapping("/batches/{batchId}/release-held-goods")
+    @Transactional
+    @Operation(summary = "已放行批次申请放行隔离成品")
+    public ApiResponse<DispositionResultDTO> releaseHeldGoods(
+            @PathVariable String factoryId,
+            @PathVariable Long batchId,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long authenticatedUserId) {
+        DispositionExecutionResult result =
+                qualityDispositionRuleService.recheckPlanRelease(factoryId, batchId, authenticatedUserId);
+        return ApiResponse.success(DispositionResultDTO.builder()
+                .dispositionId(result.getAuditLogId())
+                .status("EXECUTED")
+                .executedAction(result.getExecutedAction().name())
+                .message(result.getMessage())
+                .newBatchStatus(result.getNewBatchStatus())
+                .finishedGoodsHeld(result.getFinishedGoodsHeld())
+                .approvalInitiated(false)
+                .auditLogId(result.getAuditLogId())
+                .executedAt(LocalDateTime.now())
+                .build());
+    }
+
     @RequirePermission({"quality:read_write"})
     @RequireModule("quality_inspection")
     @PostMapping("/execute")

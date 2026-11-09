@@ -119,6 +119,10 @@ class QualityBatchDispositionContractTest {
         when(batchRepo.findByIdAndFactoryIdForUpdate(any(), eq(FACTORY))).thenAnswer(call -> batches.stream()
                 .filter(b -> b.getId().equals(call.getArgument(0))).findFirst());
         when(batchRepo.findByFactoryIdAndProductionPlanId(eq(FACTORY), eq(PLAN))).thenAnswer(call -> List.copyOf(batches));
+        when(batchRepo.findByFactoryIdAndProductionPlanIdIn(eq(FACTORY), any())).thenAnswer(call -> {
+            java.util.Collection<String> plans = call.getArgument(1);
+            return batches.stream().filter(b -> plans.contains(b.getProductionPlanId())).toList();
+        });
         when(batchRepo.save(any())).thenAnswer(call -> call.getArgument(0));
         when(batchRepo.countQcFailedInPlans(eq(FACTORY), any(), anyString())).thenAnswer(call -> batches.stream()
                 .filter(b -> b.getQualityStatus() != null && b.getQualityStatus().isDispositionLocked()).count());
@@ -126,6 +130,8 @@ class QualityBatchDispositionContractTest {
         goodsRepo = mock(FinishedGoodsBatchRepository.class);
         when(goodsRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN))
                 .thenAnswer(call -> List.copyOf(finishedGoods));
+        when(goodsRepo.findQuarantinedPlanGoods(FACTORY)).thenAnswer(call -> finishedGoods.stream()
+                .filter(g -> FinishedGoodsBatch.Status.DEFECTIVE.equals(g.getStatus())).toList());
         when(goodsRepo.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY, PLAN))
                 .thenAnswer(call -> List.copyOf(finishedGoods));
         when(goodsRepo.save(any())).thenAnswer(call -> call.getArgument(0));
@@ -187,7 +193,8 @@ class QualityBatchDispositionContractTest {
                 anyString(), anyLong(), any(), anyString())).thenAnswer(call -> {
             Map<String, Object> output = call.getArgument(4);
             DecisionAuditLog row = DecisionAuditLog.builder().id("audit-" + (++auditSeq)).factoryId(FACTORY)
-                    .entityType("QualityInspection").entityId(call.getArgument(2))
+                    .entityType(call.getArgument(1)).entityId(call.getArgument(2))
+                    .executorId(call.getArgument(7))
                     .decisionType(DecisionAuditLog.DecisionType.RULE_EXECUTION)
                     .outputResult(new ObjectMapper().writeValueAsString(output)).build();
             audits.put(row.getId(), row);
@@ -699,6 +706,89 @@ class QualityBatchDispositionContractTest {
 
         assertThat(approved.getFinishedGoodsHeld()).isEqualTo(1);
         assertThat(approved.getMessage()).startsWith("处置申请已批准").contains("还有 1 个批次没有解除隔离");
+    }
+
+    // ==================== 已放行批次申请放行隔离成品 (Owner 2026-11-09) ====================
+
+    /** 本批复核放行时有报废兄弟批、成品分不清归属 ⇒ 全部留在隔离 (Q2)。返回报废兄弟批的成品。 */
+    private FinishedGoodsBatch heldBecauseOwnershipWasUnclear() {
+        productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1", QualityStatus.SCRAPPED);
+        FinishedGoodsBatch scrappedGoods = finishedGoods("FG-PLAN-1793087414891-94ECD656-S2-aaaaaaaa", "SKU-1",
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        inspect("qi-fail", "FAIL", "80");
+        ruleService.executeApprovedDisposition(FACTORY, inspections.get("qi-fail"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.CONDITIONAL_RELEASE, MANAGER, "复核");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PARTIAL_PASS);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(scrappedGoods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        return scrappedGoods;
+    }
+
+    @Test
+    @DisplayName("Owner: 分不清归属而留下的成品 → 补齐血缘 → 已放行批次单人申请 → 本批成品放行, 报废批的留下, 留审计")
+    void passedBatchRequestReleasesAfterLineageIsFixed() {
+        FinishedGoodsBatch scrappedGoods = heldBecauseOwnershipWasUnclear();
+        assertThat(bridge.listPassedBatchesWithHeldGoods(FACTORY))
+                .extracting(QualityDispositionInventoryService.HeldGoodsBatch::productionBatchId).containsExactly(100L);
+        edge(batch.getId(), goods.getId());
+        edge(101L, scrappedGoods.getId());
+
+        var response = controller.releaseHeldGoods(FACTORY, 100L, INSPECTOR).getData();
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(scrappedGoods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(response.getMessage()).contains("放行 1 个成品批次").contains("报废批次的成品 1 个");
+        assertThat(response.getFinishedGoodsHeld()).isEqualTo(1);
+        // 单人: 申请人自己就执行了, 没有进待审批
+        assertThat(response.getStatus()).isEqualTo("EXECUTED");
+        assertThat(audits.values()).anySatisfy(a -> {
+            assertThat(a.getEntityType()).isEqualTo("ProductionBatch");
+            assertThat(a.getEntityId()).isEqualTo("100");
+            assertThat(a.getExecutorId()).isEqualTo(INSPECTOR);
+            assertThat(a.getOutputResult()).contains("\"finishedGoodsReleased\":1");
+        });
+    }
+
+    @Test
+    @DisplayName("Owner: 归属仍分不清 → 申请一个不放, 说清为什么")
+    void passedBatchRequestStillUnclearReleasesNothing() {
+        FinishedGoodsBatch scrappedGoods = heldBecauseOwnershipWasUnclear();
+
+        var response = controller.releaseHeldGoods(FACTORY, 100L, INSPECTOR).getData();
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(scrappedGoods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(response.getMessage()).contains("放行 0 个成品批次").contains("分不清");
+    }
+
+    @Test
+    @DisplayName("Owner: 召回过的兄弟批的货, 申请放行后仍留在隔离; 本批的照常放")
+    void passedBatchRequestKeepsRecalledGoodsHeld() {
+        ProductionBatch recalled = productionBatch(101L, "PB-PLAN-1793087414891-94ECD656-11111", "SKU-1",
+                QualityStatus.PASSED);
+        FinishedGoodsBatch recalledGoods = finishedGoods(recalled.getBatchNumber(), "SKU-1",
+                FinishedGoodsBatch.Status.DEFECTIVE);
+        when(recalls.hasRecallRecord(FACTORY, 101L)).thenReturn(true);
+        batch.setQualityStatus(QualityStatus.PASSED);
+        goods.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);
+        edge(batch.getId(), goods.getId());
+        edge(101L, recalledGoods.getId());
+
+        var response = controller.releaseHeldGoods(FACTORY, 100L, INSPECTOR).getData();
+
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+        assertThat(recalledGoods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        assertThat(response.getMessage()).contains("召回批次的成品 1 个");
+    }
+
+    @Test
+    @DisplayName("阴性: 还没放行的批次不能用这个入口 (不合格的走处置复核), 什么都不动")
+    void unpassedBatchCannotUseTheRequest() {
+        inspect("qi-fail", "FAIL", "0");
+        assertThatThrownBy(() -> controller.releaseHeldGoods(FACTORY, 100L, INSPECTOR))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("QUALITY_BATCH_NOT_PASSED"));
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
     }
 
     private void edge(Long productionBatchId, String finishedGoodsId) {
