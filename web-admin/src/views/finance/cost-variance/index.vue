@@ -3,8 +3,10 @@
  * 成本差异报表 (食品 DAG 缺口 09 / 10, Steve 2026-11-03)
  *
  * 标准成本 = 计划锁定配方的标准用量 × 开计划时物料单价快照 (之后不随价格变)。
- * 差异拆价格差 / 用量差 / 替代料差 / 人工差; 后端给 null 的项一律显示「无法比较」+ 原因, ⛔ 不在前端补 0。
+ * 差异拆价格差 / 用量差 / 替代料差 / 人工差 / 回料差; 后端给 null 的项一律显示「无法比较」+ 原因, ⛔ 不在前端补 0。
+ * 回料差 (2026-11-09): 回投了多少、按什么价、对总差异贡献多少, 来源批次取追溯 (先进先出归属)。
  * 明细抽屉同时列出多产出工序用的成本分摊方法 (按重量 / 固定比例 / 报工手填)。
+ * 显示文字与 Excel 导出共用 costVarianceFormat.ts —— 页面和导出是同一句话。
  */
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -16,8 +18,23 @@ import {
   type PlanCostVariance,
   type PlanCostVarianceLine,
 } from '@/api/costVariance';
-
-const INCOMPARABLE = '无法比较';
+import {
+  CATEGORY_LABEL,
+  LINE_TYPE_LABEL,
+  STATUS_LABEL,
+  actualPriceText,
+  buildPeriodRows,
+  buildPlanRows,
+  lineVarianceText,
+  money,
+  qty,
+  rate,
+  reworkSourcesText,
+  reworkVarianceText,
+  signedMoney,
+  snapshotPriceText,
+} from './costVarianceFormat';
+import { downloadSheet } from './costVarianceExport';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -62,41 +79,31 @@ async function load() {
   }
 }
 
-/** 金额: null → 「无法比较」(后端说算不出, 前端照写)。 */
-function money(v: number | null | undefined): string {
-  if (v == null) return INCOMPARABLE;
-  return `¥${Number(v).toFixed(2)}`;
-}
-function signedMoney(v: number | null | undefined): string {
-  if (v == null) return INCOMPARABLE;
-  const n = Number(v);
-  return `${n > 0 ? '+' : n < 0 ? '−' : ''}¥${Math.abs(n).toFixed(2)}`;
-}
-function rate(v: number | null | undefined): string {
-  return v == null ? INCOMPARABLE : `${Number(v) > 0 ? '+' : ''}${Number(v).toFixed(2)}%`;
-}
-function qty(v: number | null | undefined, unit?: string | null): string {
-  return v == null ? '—' : `${Number(v.toFixed ? v.toFixed(4) : v)}${unit ? ` ${unit}` : ''}`;
-}
 function varianceClass(v: number | null | undefined): string {
   if (v == null) return 'is-na';
   return Number(v) > 0 ? 'is-over' : Number(v) < 0 ? 'is-under' : '';
 }
+function lineVarianceClass(row: PlanCostVarianceLine): string {
+  if (row.lineType === 'UNPLANNED' || row.status === 'INTERNAL') return 'is-na';
+  const v = row.lineType === 'LABOR' ? row.laborVariance
+    : row.lineType === 'SUBSTITUTE' ? row.substituteVariance
+      : row.lineType === 'REWORK' ? row.reworkVariance
+        : row.usageVariance;
+  return varianceClass(v);
+}
+function tagType(status: PlanCostVarianceLine['status']): 'success' | 'warning' | 'info' {
+  return status === 'COMPARABLE' ? 'success' : status === 'PARTIAL' ? 'warning' : 'info';
+}
 
-const STATUS_LABEL: Record<PlanCostVarianceLine['status'], string> = {
-  COMPARABLE: '可比',
-  PARTIAL: '部分可比',
-  INCOMPARABLE: INCOMPARABLE,
-};
-const LINE_TYPE_LABEL: Record<PlanCostVarianceLine['lineType'], string> = {
-  MATERIAL: '配方物料',
-  SUBSTITUTE: '替代料',
-  UNPLANNED: '计划外',
-  LABOR: '人工',
-};
-const CATEGORY_LABEL: Record<string, string> = {
-  RAW: '主料', AUXILIARY: '辅料', PACKAGING: '包材', SEASONING: '调料',
-};
+// ---- 导出 (与页面同一套文字) ----
+function exportPeriod() {
+  if (!report.value) return;
+  downloadSheet(buildPeriodRows(report.value, range.value), '成本差异', `成本差异-${range.value[0]}至${range.value[1]}.xlsx`);
+}
+function exportDetail() {
+  if (!detail.value) return;
+  downloadSheet(buildPlanRows(detail.value), '成本差异明细', `成本差异明细-${detail.value.planNumber || detail.value.planId}.xlsx`);
+}
 
 // ---- 明细抽屉 ----
 const drawerVisible = ref(false);
@@ -142,6 +149,7 @@ onMounted(load);
           @change="load"
         />
         <el-button type="primary" :loading="loading" @click="load">查询</el-button>
+        <el-button :disabled="!report" data-testid="cost-variance-export" @click="exportPeriod">导出 Excel</el-button>
       </div>
     </div>
 
@@ -199,6 +207,10 @@ onMounted(load);
             <span class="label">人工差</span>
             <strong :class="varianceClass(report.laborVariance)">{{ signedMoney(report.laborVariance) }}</strong>
           </div>
+          <div class="summary-card" data-testid="summary-rework-variance">
+            <span class="label">回料差</span>
+            <strong :class="varianceClass(report.reworkVariance)">{{ reworkVarianceText(report.reworkVariance) }}</strong>
+          </div>
           <div class="summary-card">
             <span class="label">期间实际总成本（全部批次）</span>
             <strong>{{ money(report.totalActualCost) }}</strong>
@@ -231,6 +243,12 @@ onMounted(load);
           <el-table-column label="用量差" min-width="105" align="right">
             <template #default="{ row }">{{ signedMoney(row.usageVariance) }}</template>
           </el-table-column>
+          <el-table-column label="回料差" min-width="120" align="right">
+            <template #default="{ row }">
+              <span :class="varianceClass(row.reworkVariance)">{{ reworkVarianceText(row.reworkVariance, row.reworkStatus) }}</span>
+              <div v-if="row.reworkQuantityText" class="sub">回投 {{ row.reworkQuantityText }}</div>
+            </template>
+          </el-table-column>
           <el-table-column label="说明" min-width="220">
             <template #default="{ row }">
               <span class="reason">{{ row.comparabilityReason || '全部可比' }}</span>
@@ -255,6 +273,18 @@ onMounted(load);
           </div>
           <el-alert v-if="detail.comparabilityReason" type="warning" :closable="false" show-icon :title="detail.comparabilityReason" class="basis-note" />
           <el-alert v-if="detail.priceMasked" type="info" :closable="false" title="你没有采购价查看权限，单价与逐项金额已隐藏" class="basis-note" />
+          <el-alert
+            v-if="detail.recoveredMaterialNote"
+            :type="detail.reworkStatus === 'COMPARABLE' || detail.reworkStatus === 'INCOMPARABLE' ? 'warning' : 'info'"
+            :closable="false"
+            show-icon
+            class="basis-note"
+            data-testid="plan-rework-note"
+            :title="`回料：${detail.recoveredMaterialNote}`"
+          />
+          <div class="detail-actions">
+            <el-button size="small" data-testid="plan-cost-variance-export" @click="exportDetail">导出明细 Excel</el-button>
+          </div>
 
           <div class="summary-grid compact">
             <div class="summary-card"><span class="label">标准成本</span><strong>{{ money(detail.standardCost) }}</strong></div>
@@ -264,6 +294,7 @@ onMounted(load);
             <div class="summary-card"><span class="label">用量差</span><strong>{{ signedMoney(detail.usageVariance) }}</strong></div>
             <div class="summary-card"><span class="label">替代料差</span><strong>{{ signedMoney(detail.substituteVariance) }}</strong></div>
             <div class="summary-card"><span class="label">人工差</span><strong>{{ signedMoney(detail.laborVariance) }}</strong></div>
+            <div class="summary-card" data-testid="detail-rework-variance"><span class="label">回料差</span><strong :class="varianceClass(detail.reworkVariance)">{{ reworkVarianceText(detail.reworkVariance, detail.reworkStatus) }}</strong></div>
           </div>
 
           <el-table :data="detail.lines" border size="small" data-testid="plan-cost-variance-lines">
@@ -274,7 +305,7 @@ onMounted(load);
               </template>
             </el-table-column>
             <el-table-column label="开计划时单价" min-width="110" align="right">
-              <template #default="{ row }">{{ row.snapshotUnitPrice == null ? (detail.priceMasked ? '—' : '无单价') : `¥${Number(row.snapshotUnitPrice).toFixed(4)}/${row.priceUnit || ''}` }}</template>
+              <template #default="{ row }">{{ snapshotPriceText(row, detail.priceMasked) }}</template>
             </el-table-column>
             <el-table-column label="标准用量" min-width="100" align="right">
               <template #default="{ row }">{{ qty(row.standardQuantity, row.lineType === 'LABOR' ? 'kg 成品' : row.priceUnit) }}</template>
@@ -283,7 +314,10 @@ onMounted(load);
               <template #default="{ row }">{{ qty(row.actualQuantity, row.priceUnit) }}</template>
             </el-table-column>
             <el-table-column label="实际单价" min-width="100" align="right">
-              <template #default="{ row }">{{ row.actualUnitPrice == null ? '—' : `¥${Number(row.actualUnitPrice).toFixed(4)}` }}</template>
+              <template #default="{ row }">
+                {{ actualPriceText(row) }}
+                <div v-if="row.priceSource" class="sub">{{ row.priceSource }}</div>
+              </template>
             </el-table-column>
             <el-table-column label="标准金额" min-width="100" align="right">
               <template #default="{ row }">{{ row.standardAmount == null ? '—' : money(row.standardAmount) }}</template>
@@ -292,26 +326,26 @@ onMounted(load);
               <template #default="{ row }">{{ row.actualAmount == null ? '—' : money(row.actualAmount) }}</template>
             </el-table-column>
             <el-table-column label="价格差" min-width="95" align="right">
-              <template #default="{ row }"><span :class="varianceClass(row.priceVariance)">{{ row.lineType === 'LABOR' ? '—' : signedMoney(row.priceVariance) }}</span></template>
+              <template #default="{ row }"><span :class="varianceClass(row.priceVariance)">{{ row.lineType === 'LABOR' || row.lineType === 'REWORK' ? '—' : signedMoney(row.priceVariance) }}</span></template>
             </el-table-column>
-            <el-table-column label="用量差 / 替代料差 / 人工差" min-width="150" align="right">
+            <el-table-column label="用量差 / 替代料差 / 人工差 / 回料差" min-width="160" align="right">
               <template #default="{ row }">
-                <span v-if="row.lineType === 'LABOR'" :class="varianceClass(row.laborVariance)">{{ signedMoney(row.laborVariance) }}</span>
-                <span v-else-if="row.lineType === 'SUBSTITUTE'" :class="varianceClass(row.substituteVariance)">替代 {{ signedMoney(row.substituteVariance) }}</span>
-                <span v-else-if="row.lineType === 'UNPLANNED'" class="is-na">{{ INCOMPARABLE }}</span>
-                <span v-else :class="varianceClass(row.usageVariance)">{{ signedMoney(row.usageVariance) }}</span>
+                <span :class="lineVarianceClass(row)">{{ lineVarianceText(row) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态" min-width="200">
+            <el-table-column label="状态" min-width="220">
               <template #default="{ row }">
-                <el-tag size="small" :type="row.status === 'COMPARABLE' ? 'success' : row.status === 'PARTIAL' ? 'warning' : 'info'">
+                <el-tag size="small" :type="tagType(row.status)">
                   {{ STATUS_LABEL[row.status as PlanCostVarianceLine['status']] }}
                 </el-tag>
                 <div v-for="reason in row.reasons" :key="reason" class="sub">{{ reason }}</div>
+                <div v-if="row.reworkSources && row.reworkSources.length" class="sub" data-testid="rework-sources">
+                  来源：{{ reworkSourcesText(row.reworkSources) }}
+                </div>
               </template>
             </el-table-column>
           </el-table>
-          <p class="sub note">{{ detail.recoveredMaterialNote }}<template v-if="detail.customerSuppliedItemCount > 0">；客供料 {{ detail.customerSuppliedItemCount }} 批不计我方成本，不参与比较</template></p>
+          <p v-if="detail.customerSuppliedItemCount > 0" class="sub note">客供料 {{ detail.customerSuppliedItemCount }} 批不计我方成本，不参与比较</p>
 
           <h3 class="section-title">多产出成本分摊方法</h3>
           <p v-if="!detail.allocationMethods.length" class="sub" data-testid="allocation-methods-empty">本计划没有多产出工序的分摊记录</p>
@@ -360,5 +394,6 @@ onMounted(load);
 .detail-meta { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; color: #606266; font-size: 13px; }
 .section-title { font-size: 15px; margin: 18px 0 8px; }
 .note { margin-top: 8px; }
+.detail-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 .alloc-output { line-height: 1.7; }
 </style>

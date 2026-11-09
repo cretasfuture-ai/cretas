@@ -5,14 +5,28 @@
  * GET /api/mobile/{factoryId}/reports/cost-variance/plans/{planId}        单计划逐项明细 + 多产出分摊方法
  *
  * 口径 (Steve 2026-11-03): 标准成本 = 计划锁定配方的标准用量 × 开计划时物料单价快照;
- * 差异拆价格差 / 用量差 / 替代料差 / 人工差; 缺单价/缺快照的项后端给 null + 原因, 前端照写「无法比较」。
+ * 差异拆价格差 / 用量差 / 替代料差 / 人工差 / 回料差; 缺单价/缺快照的项后端给 null + 原因, 前端照写「无法比较」。
+ * 回料差 (2026-11-09): 从别的计划回投的回料 × 回料池单位成本 (与成本核算同源), 配方不含回料时标准为 0;
+ * 本计划自产回投是内部转移 (INTERNAL), 不另计。
  */
 import { get } from './request';
 
-export type VarianceLineStatus = 'COMPARABLE' | 'PARTIAL' | 'INCOMPARABLE';
+export type VarianceLineStatus = 'COMPARABLE' | 'PARTIAL' | 'INCOMPARABLE' | 'INTERNAL';
+
+/** NONE 没有回料 / COMPARABLE 已计入合计 / INTERNAL_ONLY 只有本计划自产回投 / INCOMPARABLE 有回料无法比较。 */
+export type ReworkStatus = 'NONE' | 'COMPARABLE' | 'INTERNAL_ONLY' | 'INCOMPARABLE';
+
+/** 回料的一段来源 (回料池先进先出归属写下的追溯边)。 */
+export interface ReworkSource {
+  producerBatchNumber: string | null;
+  producerPlanId: string | null;
+  producerPlanNumber: string | null;
+  quantity: number | null;
+  unit: string | null;
+}
 
 export interface PlanCostVarianceLine {
-  lineType: 'MATERIAL' | 'SUBSTITUTE' | 'UNPLANNED' | 'LABOR';
+  lineType: 'MATERIAL' | 'SUBSTITUTE' | 'UNPLANNED' | 'LABOR' | 'REWORK';
   materialTypeId: string | null;
   materialName: string | null;
   materialCategory: string | null;
@@ -28,6 +42,13 @@ export interface PlanCostVarianceLine {
   usageVariance: number | null;
   substituteVariance: number | null;
   laborVariance: number | null;
+  /** 回料行: 实际回投金额 − 标准回料金额。 */
+  reworkVariance?: number | null;
+  /** 回料行: 回料池 (常驻半成品库存号)。 */
+  reworkPoolNo?: string | null;
+  /** 回料行: 单价从哪来。 */
+  priceSource?: string | null;
+  reworkSources?: ReworkSource[];
   status: VarianceLineStatus;
   reasons: string[];
 }
@@ -69,6 +90,10 @@ export interface PlanCostVariance {
   usageVariance: number | null;
   substituteVariance: number | null;
   laborVariance: number | null;
+  /** null = 没有可比的回料项 (看 reworkStatus), 不是 0。 */
+  reworkVariance?: number | null;
+  reworkStatus?: ReworkStatus | null;
+  reworkQuantityText?: string | null;
   recoveredMaterialNote: string | null;
   comparableItemCount: number;
   incomparableItemCount: number;
@@ -94,6 +119,8 @@ export interface CostVarianceReport {
   usageVariance: number | null;
   substituteVariance: number | null;
   laborVariance: number | null;
+  /** null = 没有任何可比计划有可比回料, 不是 0。 */
+  reworkVariance?: number | null;
   comparedPlanCount: number | null;
   incomparablePlanCount: number | null;
   batchCount: number | null;
