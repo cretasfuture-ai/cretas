@@ -90,6 +90,10 @@ public class TraceabilityServiceImpl implements TraceabilityService {
     @Autowired(required = false)
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
+    /** 箱数折算（复用 supply-impact）；单测 @InjectMocks 不 mock 时为 null，此时 boxExposure 留 null。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.supplyimpact.SupplyImpactBoxExposureService boxExposureService;
+
     @Autowired(required = false)
     private SalesDeliveryItemBatchAllocationRepository salesDeliveryItemBatchAllocationRepository;
 
@@ -316,7 +320,19 @@ public class TraceabilityServiceImpl implements TraceabilityService {
             throw new BusinessException(503, "血缘引擎未就绪，无法计算召回影响面")
                     .withHint("请稍后重试；若持续出现请联系管理员检查血缘服务");
         }
-        return lineageGraphAssembler.assembleImpact(factoryId, normalizedType, batchId, maxDepth);
+        TraceabilityDTO.ImpactResponse impact =
+                lineageGraphAssembler.assembleImpact(factoryId, normalizedType, batchId, maxDepth);
+        if (impact != null && boxExposureService != null) {
+            boolean lineageComplete = impact.getCompleteness() != null
+                    && (impact.getCompleteness().getGaps() == null || impact.getCompleteness().getGaps().isEmpty());
+            java.util.function.Function<java.util.List<TraceabilityDTO.LineageNode>, java.util.Set<String>> ids =
+                    nodes -> nodes == null ? java.util.Set.of() : nodes.stream()
+                            .map(TraceabilityDTO.LineageNode::getNodeId).filter(java.util.Objects::nonNull)
+                            .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+            impact.setBoxExposure(boxExposureService.evaluate(factoryId,
+                    ids.apply(impact.getFinishedBatches()), ids.apply(impact.getShipments()), lineageComplete));
+        }
+        return impact;
     }
 
     // ==================== 私有辅助方法 ====================

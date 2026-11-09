@@ -228,4 +228,33 @@ class TraceabilityServiceImplLineageTest {
         verify(lineageGraphAssembler).assembleImpact(FACTORY, "MATERIAL_BATCH", "mb-1", 7);
         assertThat(response.getProductionBatchCount()).isEqualTo(1);
     }
+
+    @Test
+    @DisplayName("召回影响面: 带出箱数；成品批没有包装快照行时是「无法折算」, 不是 0 箱")
+    void impactCarriesBoxExposureAndKeepsUnknownUnknown() {
+        com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository fgRepo =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository.class);
+        when(fgRepo.findSupplyImpactBoxExposureRows(anyString(), any(), any())).thenReturn(List.of());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "boxExposureService",
+                new com.cretas.aims.service.supplyimpact.SupplyImpactBoxExposureService(fgRepo));
+        when(lineageGraphAssembler.assembleImpact(anyString(), anyString(), anyString(), anyInt()))
+                .thenReturn(TraceabilityDTO.ImpactResponse.builder()
+                        .rootType("PRODUCTION_BATCH").rootId("pb-1")
+                        .finishedBatches(List.of(TraceabilityDTO.LineageNode.builder()
+                                .nodeType("FINISHED_BATCH").nodeId("fg-1").build()))
+                        .shipments(List.of(TraceabilityDTO.LineageNode.builder()
+                                .nodeType("SHIPMENT_RECORD").nodeId("sh-1").build()))
+                        .completeness(TraceabilityDTO.LineageCompleteness.builder()
+                                .status(TraceabilityDTO.LineageCompleteness.COMPLETE).gaps(List.of()).build())
+                        .build());
+
+        TraceabilityDTO.ImpactResponse response = service.getImpact(FACTORY, "PRODUCTION_BATCH", "pb-1", 0);
+
+        assertThat(response.getBoxExposure()).isNotNull();
+        assertThat(response.getBoxExposure().getStock().isComplete()).isFalse();
+        assertThat(response.getBoxExposure().getStock().getTotalBoxQuantity()).isNull();
+        assertThat(response.getBoxExposure().getShipped().isComplete()).isFalse();
+        assertThat(response.getBoxExposure().getShipped().getTotalBoxQuantity()).isNull();
+        assertThat(response.getBoxExposure().getGaps()).isNotEmpty();
+    }
 }

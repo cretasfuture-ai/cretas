@@ -203,7 +203,10 @@ describe('scheduling detail real wire mount', () => {
           dailyAllocations: daily('袋', 100, '人工填写', 'MANUAL', [['2026-10-19', 40, 0.4]]) },
         { ...base, id: 'S-B', productionPlanId: 'PP-B', planNumber: 'PLAN-B', sequenceOrder: 1, plannedQuantity: 300,
           plannedStartTime: '2026-10-19T00:00:00', plannedEndTime: '2026-10-20T23:59:00',
-          dailyAllocations: daily('kg', 200, '按历史估算', 'EXPERIENCE', [['2026-10-19', 120, 0.6], ['2026-10-20', 180, 0.9]]) },
+          dailyAllocations: { ...daily('kg', 200, '按历史估算', 'EXPERIENCE', [['2026-10-19', 120, 0.6], ['2026-10-20', 180, 0.9]]),
+            // 缺口 18: 推迟原因与没核对的约束
+            delays: [{ code: 'EQUIPMENT_BUSY', from: '2026-10-17', to: '2026-10-18', text: '设备「1号夹层锅（GL-01）」这天被「PLAN-X」占用' }],
+            constraintNotes: ['原料「鸡胸肉」库存不够，在走的采购单有的没填预计到货日（或单位对不上），不知道哪天到，没按到货排；请补到货日'] } },
       ] } };
     });
     window.history.replaceState(null, '');
@@ -221,6 +224,11 @@ describe('scheduling detail real wire mount', () => {
       expect(card.get('[data-testid="daily-capacity-S-A"]').text()).toContain('人工填写');
       expect(card.get('[data-testid="daily-capacity-S-B"]').text()).toContain('按历史估算');
       expect(card.get('[data-testid="daily-capacity-S-B"]').text()).toContain('已入库 200');
+      // 缺口 18: 推迟原因与未核对提示逐条显示在该计划下; 没有的计划不出这两块 (阴性)
+      expect(card.get('[data-testid="daily-delays-S-B"]').text()).toContain('10-17 至 10-18 没排：设备「1号夹层锅（GL-01）」');
+      expect(card.get('[data-testid="daily-notes-S-B"]').text()).toContain('未核对：原料「鸡胸肉」库存不够');
+      expect(card.find('[data-testid="daily-delays-S-A"]').exists()).toBe(false);
+      expect(card.find('[data-testid="daily-notes-S-A"]').exists()).toBe(false);
       const rows = card.findAll('.el-table__body tr').map(r => r.text().replace(/\s+/g, ' '));
       // 按日期 → 排程顺序: 10-19 先 A 后 B, 10-20 只有 B
       expect(rows).toHaveLength(3);

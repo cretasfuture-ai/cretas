@@ -1477,6 +1477,8 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         BigDecimal usageVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getUsageVariance) : null;
         BigDecimal substituteVariance = anyComparable ? sumOf(comparedPlans, PlanCostVarianceDTO::getSubstituteVariance) : null;
         BigDecimal laborVariance = sumOrNull(comparedPlans, PlanCostVarianceDTO::getLaborVariance);
+        // 回料差 (缺口 09 补齐): 没有任何计划有可比回料 → null (⛔ 不报 ¥0); 材料差含回料差, 材料 + 人工 = 合计差
+        BigDecimal reworkVariance = sumOrNull(comparedPlans, PlanCostVarianceDTO::getReworkVariance);
         int partialPlans = (int) comparedPlans.stream().filter(p -> p.getIncomparableItemCount() > 0).count();
         String reportReason = !anyComparable
                 ? (planVariances.isEmpty() ? CostVarianceReportDTO.NO_INDEPENDENT_STANDARD_REASON
@@ -1520,7 +1522,9 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 BigDecimal prodOutput = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getOutputQuantity) : null;
                 BigDecimal prodMaterialVar = productComparable ? sumOf(productPlans, PlanCostVarianceDTO::getPriceVariance)
                         .add(sumOf(productPlans, PlanCostVarianceDTO::getUsageVariance))
-                        .add(sumOf(productPlans, PlanCostVarianceDTO::getSubstituteVariance)) : null;
+                        .add(sumOf(productPlans, PlanCostVarianceDTO::getSubstituteVariance))
+                        .add(sumOf(productPlans, PlanCostVarianceDTO::getReworkVariance)) : null;
+                BigDecimal prodReworkVar = sumOrNull(productPlans, PlanCostVarianceDTO::getReworkVariance);
                 BigDecimal prodLaborVar = sumOrNull(productPlans, PlanCostVarianceDTO::getLaborVariance);
                 BigDecimal bomUnit = productComparable && prodOutput.signum() > 0
                         ? prodStd.divide(prodOutput, 4, RoundingMode.HALF_UP) : null;
@@ -1538,6 +1542,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                         .batchCount(productBatchList.size())
                         .varianceReason(productComparable ? varianceReasonOf(productPlans) : null)
                         .materialVariance(scaleOrNull(prodMaterialVar))
+                        .reworkVariance(scaleOrNull(prodReworkVar))
                         .laborVariance(scaleOrNull(prodLaborVar))
                         .comparable(productComparable)
                         .comparabilityReason(productComparable ? null : productIncomparableReason(entry.getKey(), planVariances))
@@ -1566,7 +1571,11 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .priceVariance(scaleOrNull(priceVariance))
                 .usageVariance(scaleOrNull(usageVariance))
                 .substituteVariance(scaleOrNull(substituteVariance))
-                .materialVariance(anyComparable ? scaleOrNull(priceVariance.add(usageVariance).add(substituteVariance)) : null)
+                .materialVariance(anyComparable ? scaleOrNull(priceVariance.add(usageVariance).add(substituteVariance)
+                        .add(reworkVariance == null ? BigDecimal.ZERO : reworkVariance)) : null)
+                .reworkVariance(scaleOrNull(reworkVariance))
+                .reworkStatus(periodReworkStatus(planVariances.values(), reworkVariance))
+                .reworkSummary(periodReworkSummary(planVariances.values()))
                 .laborVariance(scaleOrNull(laborVariance))
                 .overheadVariance(null)
                 .comparedPlanCount(comparedPlans.size())
@@ -1597,6 +1606,43 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         return plans.stream().map(field).anyMatch(java.util.Objects::nonNull) ? sumOf(plans, field) : null;
     }
 
+    /** 期间回料状态: 有计入合计的回料差就是 COMPARABLE, 否则按「有无法比较 > 只有内部转移 > 没有回料」说清。 */
+    static String periodReworkStatus(java.util.Collection<PlanCostVarianceDTO> plans, BigDecimal reworkVariance) {
+        if (reworkVariance != null) {
+            return PlanCostVarianceDTO.REWORK_COMPARABLE;
+        }
+        if (plans.stream().anyMatch(p -> PlanCostVarianceDTO.REWORK_INCOMPARABLE.equals(p.getReworkStatus())
+                || PlanCostVarianceDTO.REWORK_COMPARABLE.equals(p.getReworkStatus()))) {
+            return PlanCostVarianceDTO.REWORK_INCOMPARABLE; // 有回料, 但没有一项进了合计
+        }
+        if (plans.stream().anyMatch(p -> PlanCostVarianceDTO.REWORK_INTERNAL_ONLY.equals(p.getReworkStatus()))) {
+            return PlanCostVarianceDTO.REWORK_INTERNAL_ONLY;
+        }
+        return PlanCostVarianceDTO.REWORK_NONE;
+    }
+
+    /** 期间回料摘要: 「3 个计划有回料: 1 个回料差已计入合计, 2 个无法比较」。 */
+    static String periodReworkSummary(java.util.Collection<PlanCostVarianceDTO> plans) {
+        long counted = plans.stream().filter(p -> p.isComparable() && p.getReworkVariance() != null).count();
+        long incomparable = plans.stream().filter(p -> PlanCostVarianceDTO.REWORK_INCOMPARABLE.equals(p.getReworkStatus())
+                || (PlanCostVarianceDTO.REWORK_COMPARABLE.equals(p.getReworkStatus()) && !p.isComparable())).count();
+        long internal = plans.stream().filter(p -> PlanCostVarianceDTO.REWORK_INTERNAL_ONLY.equals(p.getReworkStatus())).count();
+        long total = counted + incomparable + internal;
+        if (total == 0) {
+            return "期间内没有回投或产出回料";
+        }
+        List<String> parts = new ArrayList<>();
+        if (counted > 0) parts.add(counted + " 个回料差已计入合计");
+        if (incomparable > 0) parts.add(incomparable + " 个回料差无法比较 (见各计划原因)");
+        if (internal > 0) parts.add(internal + " 个只有本计划自产自用 (内部转移)");
+        String text = total + " 个计划有回料: " + String.join(", ", parts);
+        if (counted > 0 && incomparable > 0) {
+            // 回投方和产出转出方可能只有一头进了合计 (另一头无法比较), 期间回料差不一定两相抵消
+            text += "; 回投与产出转出可能只计入了一头, 期间回料差看不全";
+        }
+        return text;
+    }
+
     /** 差异原因: 由实际算出的分项拼成 (⛔ 不再按 60/30/10 编)。 */
     static String varianceReasonOf(List<PlanCostVarianceDTO> plans) {
         List<String> parts = new ArrayList<>();
@@ -1604,6 +1650,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         appendVariancePart(parts, "用量差", sumOf(plans, PlanCostVarianceDTO::getUsageVariance));
         appendVariancePart(parts, "替代料差", sumOf(plans, PlanCostVarianceDTO::getSubstituteVariance));
         appendVariancePart(parts, "人工差", sumOf(plans, PlanCostVarianceDTO::getLaborVariance));
+        appendVariancePart(parts, "回料差", sumOf(plans, PlanCostVarianceDTO::getReworkVariance));
         return parts.isEmpty() ? "成本与标准一致" : String.join(", ", parts);
     }
 

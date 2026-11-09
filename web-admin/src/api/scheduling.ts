@@ -99,6 +99,19 @@ export interface DailyAllocations {
   reportedQuantity?: number | null;
   remainingQuantity?: number | null;
   days: DailyAllocationDay[];
+  /** 缺口 18: 为什么比开始日晚开工 / 中途跳过哪几天 (设备被占、原料到货、等半成品、保养、产线排满)。旧排程没有。 */
+  delays?: DailyAllocationDelay[];
+  /** 缺口 18: 缺数据没核对的约束 (没配设备、原料用量算不出、采购没填到货日 等), 照排并提示。旧排程没有。 */
+  constraintNotes?: string[];
+}
+
+export interface DailyAllocationDelay {
+  code: 'MATERIAL_ARRIVAL' | 'PREDECESSOR' | 'EQUIPMENT_BUSY' | 'MAINTENANCE' | 'LINE_FULL' | string;
+  /** yyyy-MM-dd, 含 */
+  from: string;
+  /** yyyy-MM-dd, 含 */
+  to: string;
+  text: string;
 }
 
 /** 自动排程 (按工艺图) 每道工序的排程时间; start / end 为本地时间 ISO 字符串。 */

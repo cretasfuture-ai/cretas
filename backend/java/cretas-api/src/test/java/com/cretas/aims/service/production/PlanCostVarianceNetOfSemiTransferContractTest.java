@@ -231,4 +231,27 @@ class PlanCostVarianceNetOfSemiTransferContractTest {
         assertThat(variance.getSemiTransferredCost()).isNull();
         assertThat(variance.getTotalVariance()).as("差异总额本来就不脱敏, 仍是净额口径").isEqualByComparingTo("0");
     }
+
+    /**
+     * 与 #1549 (回料差) 合并后: 回投的回料成本也在成本核算的总成本里, 划转额里有它一份 ——
+     * 回投量同比例扣 (单价不变); 回料产出转出是产出侧, 不扣; 没有划转时原样。
+     */
+    @Test
+    void reworkFeedIsNettedLikeEveryOtherActualInputButReworkOutputIsNot() {
+        PlanCostVarianceService.SemiTransferShare share =
+                new PlanCostVarianceService.SemiTransferShare(new BigDecimal("40"), new BigDecimal("0.6"), null);
+        PlanCostVarianceCalculator.ReworkUsage fed = new PlanCostVarianceCalculator.ReworkUsage("RW-1", "回料",
+                new BigDecimal("10"), "kg", new BigDecimal("3"), false, List.of(), List.of(), false);
+        PlanCostVarianceCalculator.ReworkUsage out = new PlanCostVarianceCalculator.ReworkUsage("RW-1", "回料",
+                new BigDecimal("5"), "kg", new BigDecimal("3"), false, List.of(), List.of(), true);
+
+        List<PlanCostVarianceCalculator.ReworkUsage> net = share.netRework(List.of(fed, out));
+
+        assertThat(net.get(0).quantity()).as("回投量按留给成品的比例扣").isEqualByComparingTo("6");
+        assertThat(net.get(0).unitCost()).as("单价不变").isEqualByComparingTo("3");
+        assertThat(net.get(1)).as("回料产出转出不扣").isSameAs(out);
+        List<PlanCostVarianceCalculator.ReworkUsage> gross = List.of(fed);
+        assertThat(PlanCostVarianceService.SemiTransferShare.of(null).netRework(gross)).as("没有划转原样")
+                .isSameAs(gross);
+    }
 }

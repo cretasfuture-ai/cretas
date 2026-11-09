@@ -269,6 +269,7 @@ public class CostDeviationCaseController {
         if (nonZero(v.getUsageVariance())) steps.add("用量差: 核对领料记录和实际产出, 看是否多领、错领或产出少报");
         if (nonZero(v.getSubstituteVariance())) steps.add("替代料差: 确认替代料是否经过批准");
         if (nonZero(v.getLaborVariance())) steps.add("人工差: 核对工时和计件记录");
+        if (nonZero(v.getReworkVariance())) steps.add("回料差: 核对回投的回料量和来源批次, 看回料比例是否超出产品上限");
         if (v.getIncomparableItemCount() > 0) {
             steps.add("有 " + v.getIncomparableItemCount() + " 项无法比较: 到「成本差异」看原因 (缺单价、缺标准用量或配方没有出成率)");
         }
