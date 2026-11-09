@@ -1330,6 +1330,41 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(intermediateBatchNo);
         }
+        ClerkSemiRestore receipt = restoreLockedConsumption(factoryId, sfi, intermediateBatchNo, restoreQty,
+                sourceRef, operatorId);
+        log.info("[wip] restoreClerkSemiStrict SFI RESTORE: factory={}, batchNo={}, feedKg={}, restored={}{}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, feedKg, restoreQty, sfi.getUnit() != null ? sfi.getUnit() : "",
+                sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
+        return receipt;
+    }
+
+    @Override
+    @Transactional
+    public ClerkSemiRestore restoreClerkSemiExact(String factoryId, String intermediateBatchNo,
+                                                  BigDecimal quantityInSourceUnit, String sourceRef, Long operatorId) {
+        if (quantityInSourceUnit == null || quantityInSourceUnit.signum() <= 0) {
+            return new ClerkSemiRestore(BigDecimal.ZERO, null);
+        }
+        SemiFinishedInventory sfi = wipRepo
+                .findForUpdateByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(factoryId, intermediateBatchNo)
+                .orElse(null);
+        if (sfi == null) {
+            log.warn("[wip] restoreClerkSemiExact: no SFI row for batchNo={} (factory={}) — nothing to restore",
+                    intermediateBatchNo, factoryId);
+            return null;
+        }
+        ClerkSemiRestore receipt = restoreLockedConsumption(factoryId, sfi, intermediateBatchNo, quantityInSourceUnit,
+                sourceRef, operatorId);
+        log.info("[wip] restoreClerkSemiExact SFI RESTORE: factory={}, batchNo={}, restored={}{}, consumed={}, available={}",
+                factoryId, intermediateBatchNo, quantityInSourceUnit, sfi.getUnit() != null ? sfi.getUnit() : "",
+                sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
+        return receipt;
+    }
+
+    /** 已持有行锁的那一行还回 {@code restoreQty} (原生单位) 的消耗, 并写一条正量 REVERSE 流水。 */
+    private ClerkSemiRestore restoreLockedConsumption(String factoryId, SemiFinishedInventory sfi,
+                                                     String intermediateBatchNo, BigDecimal restoreQty,
+                                                     String sourceRef, Long operatorId) {
         BigDecimal newConsumed = nz(sfi.getConsumedQuantity()).subtract(restoreQty);
         if (newConsumed.signum() < 0) {
             String u = com.cretas.aims.service.unit.UnitDisplayNames.display(sfi.getUnit());
@@ -1360,9 +1395,6 @@ public class WipInventoryServiceImpl implements WipInventoryService {
                 .reportId(null)                         // ⛔ 不挂报工: 批次作用域校验对报工上每条流水都成立
                 .operatorId(operatorId)
                 .build());
-        log.info("[wip] restoreClerkSemiStrict SFI RESTORE: factory={}, batchNo={}, feedKg={}, restored={}{}, consumed={}, available={}",
-                factoryId, intermediateBatchNo, feedKg, restoreQty, sfi.getUnit() != null ? sfi.getUnit() : "",
-                sfi.getConsumedQuantity(), sfi.getAvailableQuantity());
         return new ClerkSemiRestore(restoreQty, revTxn.getId());
     }
 

@@ -195,6 +195,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private com.cretas.aims.repository.MaterialConsumptionRepository materialConsumptionRepository;
 
     /**
+     * N1 (2026-11-09): 还回结单按逐道录入行扣掉的成品投料 (与 consumeForFeedStrict 成对)。
+     * field-inject 同上; 结单明细里有成品投料而它缺失时 loud-fail, ⛔ 不跳过。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
+
+    /**
      * SP12 快速撤回时间窗口 (分钟)。
      * 在此窗口内, 本人提交 + 无下游消费 → 快速撤回无需审批。
      * 超出此窗口 → 退回完整审批流。
@@ -535,6 +542,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 factoryId, log_.getPlanId(), involvedSfiIds);
         SettlementReversalScope settlementScope = validateSettlementReversalScopeIfPresent(
                 factoryId, batchId, log_.getPlanId());
+        // N1: 结单按逐道录入行扣掉的常驻半成品/成品投料, 撤回要原样还 —— 能不能还在任何改动之前判定
+        //     (被撤那一道的行马上会被软删, 旧结单要靠它们才判得出「扣过但没记」)。
+        List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> settlementStockFeeds =
+                preflightSettlementStockFeeds(factoryId, log_.getPlanId(), involvedSfiIds);
         LocalDateTime now = LocalDateTime.now();
         // 🔴 释放路径 2/3 (冲销): 先把这些报工在生产仓占的原料放回去, 再软删。
         //    ⚠️ 顺序不可反 —— findYieldReportsByBatch 带 deletedAt IS NULL, 软删之后
@@ -728,7 +739,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // ③.6 R3 修复: 回扣结单消耗的原料 usedQuantity (+ 恢复被领用的半成品), 并软删结单,
         // 让原料/半成品库存归还且允许重新结单。同一 @Transactional, 禁 fail-soft。
         boolean settlementRestored = restoreSettlementConsumption(
-                factoryId, log_.getPlanId(), batchId, logId, reversalOperatorId(log_));
+                factoryId, log_.getPlanId(), batchId, logId, reversalOperatorId(log_), settlementStockFeeds, log_);
         for (Long settlementSemiWipId : settlementSemiWipIds) {
             SemiFinishedInventory restored = wipRepo.findByIdForUpdate(settlementSemiWipId)
                     .orElseThrow(() -> malformedWipTransaction(
@@ -1967,7 +1978,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      * @param operatorId     记账人 (见 {@link #reversalOperatorId})
      */
     private boolean restoreSettlementConsumption(String factoryId, String planId, Long reversedBatchId,
-                                                 Long reversalLogId, Long operatorId) {
+                                                 Long reversalLogId, Long operatorId,
+                                                 List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> stockFeeds,
+                                                 ReportReversalLog reversalLog) {
         if (materialBatchRepository == null
                 || productionSettlementRepository == null
                 || productionSettlementConsumptionRepository == null) {
@@ -2026,6 +2039,11 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
 
+        // N1: 结单按逐道录入行扣掉的常驻半成品/成品投料原样还回, 再把这张结单盖过戳的行与报工消耗
+        //     重新标成待扣 —— 重结时没撤的那几道才会且只会再扣一次; 被撤那一道已扣的量也在这里还回。
+        int restoredFeeds = restoreSettlementStockFeeds(factoryId, stockFeeds, reversalLogId, operatorId, reversalLog);
+        int unstamped = unstampSettledFacts(factoryId, planId, reversedBatchId, settlement.getSettledAt(), now);
+
         // 全部恢复成功后才软删消耗行 (防重新结单时重复回扣 / 重复统计)
         for (ProductionSettlementConsumption line : lines) {
             BigDecimal qty = line.getQuantity();
@@ -2040,9 +2058,221 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         settlement.setDeletedAt(now);
         productionSettlementRepository.save(settlement);
 
-        log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔, settlement 已软删",
-                planId, settlement.getId(), restoredMaterial, restoredSemi);
+        log.info("[SP2] 撤回回扣结单消耗 planId={} settlementId={} 原料{}笔/半成品{}笔/逐道投料{}笔, 重新待扣{}行, settlement 已软删",
+                planId, settlement.getId(), restoredMaterial, restoredSemi, restoredFeeds, unstamped);
         return true;
+    }
+
+    /**
+     * N1 撤回前置判定: 这张结单按逐道录入行扣掉的常驻半成品/成品投料能不能原样还回。
+     *
+     * <ul>
+     *   <li>没有活结单 → {@code null} (没有可还的)。</li>
+     *   <li>结单带明细 → 照明细还; 要还的半成品同时又是这次报工撤回要动的行 → 409 (两条路同时改同一行, 不猜顺序)。</li>
+     *   <li>旧结单 (明细列为 null): 盖过这张结单戳的逐道行里确实有结单时扣的投料 → 409, ⛔ 不按现在的行和
+     *       每盒克重倒推 (倒推出来的量不是当时扣的量); 一笔都没有 → 空, 照常撤回。</li>
+     * </ul>
+     * 必须在任何改动 (软删报工 / 软删逐道行) 之前调用: 旧结单的判定要看被撤那一道还没软删的行。
+     */
+    private List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> preflightSettlementStockFeeds(
+            String factoryId, String planId, Set<Long> reportSfiIds) {
+        if (planId == null || productionSettlementRepository == null) {
+            return null;
+        }
+        ProductionSettlement settlement = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId).orElse(null);
+        if (settlement == null) {
+            return null;
+        }
+        List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> entries =
+                com.cretas.aims.service.production.SettlementStockFeedDetail.parse(settlement.getStockFeedDetail());
+        if (entries == null) {
+            List<String> unrecorded = legacySettlementStockFeeds(factoryId, planId, settlement);
+            if (!unrecorded.isEmpty()) {
+                throw new BusinessException(409, "这张结单在投料明细上线前完成, 结单时按逐道录入扣掉的半成品/成品没有逐笔记录 ("
+                        + String.join("、", unrecorded) + "), 撤回无法原样还回")
+                        .withCode("SETTLEMENT_STOCK_FEED_DETAIL_MISSING")
+                        .withHint("请联系管理员按结单当时的扣减量人工核对这几批半成品/成品库存后再处理; 直接撤回会让它们在重新结单时再被扣一次")
+                        .withSeverity("BLOCKING")
+                        .withHintTarget(planId);
+            }
+            return List.of();
+        }
+        boolean anyFinished = false;
+        // 只取身份 (⛔ 不把库存行装进持久化上下文: 之后的锁内还原要读的是锁到的那一刻的余额)
+        Set<String> reportSfiBatchNos = new HashSet<>();
+        for (Long sfiId : reportSfiIds == null ? Set.<Long>of() : reportSfiIds) {
+            wipRepo.findSourceRefById(sfiId)
+                    .map(SemiFinishedInventoryRepository.SourceRef::getIntermediateBatchNo)
+                    .ifPresent(no -> reportSfiBatchNos.add(no.trim()));
+        }
+        for (com.cretas.aims.service.production.SettlementStockFeedDetail.Entry entry : entries) {
+            if (entry == null || entry.batchNumber() == null || entry.batchNumber().isBlank()
+                    || entry.quantity() == null || entry.quantity().signum() <= 0
+                    || !(com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_SEMI.equals(entry.kind())
+                        || com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED.equals(entry.kind()))) {
+                throw new BusinessException(409, "结单的投料扣减明细不完整, 不能撤回")
+                        .withCode("SETTLEMENT_STOCK_FEED_DETAIL_INVALID")
+                        .withHint("请联系管理员核对这张结单的投料扣减明细");
+            }
+            if (com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED.equals(entry.kind())) {
+                anyFinished = true;
+                continue;
+            }
+            if (reportSfiBatchNos.contains(entry.batchNumber().trim())) {
+                throw new BusinessException(409, "撤回失败: 半成品 " + entry.batchNumber()
+                        + " 同时是本次撤回的报工产出和结单投料来源, 无法判断先还哪一笔")
+                        .withCode("WIP_SCOPE_INVALID");
+            }
+        }
+        if (!entries.isEmpty() && wipInventoryService == null) {
+            throw new BusinessException(409, "撤回失败: 半成品库存服务未就绪, 无法还回结单投料")
+                    .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING");
+        }
+        if (anyFinished && finishedGoodsFeedService == null) {
+            throw new BusinessException(409, "撤回失败: 成品投料服务未就绪, 无法还回结单投料")
+                    .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING");
+        }
+        return entries;
+    }
+
+    /**
+     * 旧结单 (没有明细) 当时按逐道录入行扣过哪些投料: 盖着这张结单戳、已提交、不是提交时已扣、
+     * 也不是被同批手工领用替换掉的常驻半成品/成品投料。只用来判定「能不能撤」, ⛔ 不拿来还。
+     */
+    private List<String> legacySettlementStockFeeds(String factoryId, String planId, ProductionSettlement settlement) {
+        if (processSheetRowRepository == null || settlement.getSettledAt() == null) {
+            return List.of();
+        }
+        Set<String> manualSemiBatchNos = new HashSet<>();
+        List<ProductionSettlementConsumption> lines = productionSettlementConsumptionRepository == null ? List.of()
+                : Optional.ofNullable(productionSettlementConsumptionRepository
+                        .findBySettlementIdAndDeletedAtIsNull(settlement.getId())).orElse(List.of());
+        for (ProductionSettlementConsumption line : lines) {
+            if (line != null && "SEMI_FINISHED".equals(line.getSourceType()) && line.getSemiFinishedInventoryId() != null) {
+                wipRepo.findSourceRefById(line.getSemiFinishedInventoryId())
+                        .map(SemiFinishedInventoryRepository.SourceRef::getIntermediateBatchNo)
+                        .ifPresent(no -> manualSemiBatchNos.add(no.trim()));
+            }
+        }
+        com.fasterxml.jackson.databind.ObjectMapper mapper = payloadMapper();
+        List<String> found = new ArrayList<>();
+        for (ProcessSheetRow row : processSheetRowRepository.findByFactoryIdAndPlanIdAndInterimSettledAt(
+                factoryId, planId, settlement.getSettledAt())) {
+            if (row == null || row.getRowPayload() == null || row.getRowPayload().isBlank()
+                    || ProcessSheetRow.SUBMISSION_DRAFT.equals(row.getSubmissionStatus())) {
+                continue;
+            }
+            com.cretas.aims.dto.processentry.ProcessSheetRowRequest req;
+            try {
+                req = mapper.readValue(row.getRowPayload(), com.cretas.aims.dto.processentry.ProcessSheetRowRequest.class);
+            } catch (Exception e) {
+                throw malformedWipTransaction("报工行载荷无法解析, 无法判断结单扣过哪些投料: rowId="
+                        + row.getId(), "PROCESS_SHEET_PAYLOAD_INVALID");
+            }
+            for (com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef ref
+                    : req.getUpstreamSources() == null
+                    ? List.<com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef>of()
+                    : req.getUpstreamSources()) {
+                if (ref == null || ref.getFeedQuantityKg() == null || ref.getFeedQuantityKg().signum() <= 0
+                        || ref.getSourceBatchNumber() == null || ref.getSourceBatchNumber().isBlank()) {
+                    continue;
+                }
+                String batchNo = ref.getSourceBatchNumber().trim();
+                boolean deductedAtSettlement = ref.isFinishedGoods()
+                        || (ref.isSemiFinished() && !ref.isStockConsumedAtSubmit()
+                            && !manualSemiBatchNos.contains(batchNo));
+                if (deductedAtSettlement) {
+                    found.add(batchNo + "×" + ref.getFeedQuantityKg().stripTrailingZeros().toPlainString() + "kg");
+                }
+            }
+        }
+        return found;
+    }
+
+    /** 照结单明细原样还回投料; 返回还了几笔。半成品源行已不在时登记在撤回原因里 (⛔ 不造库存), 与回料还回同一口径。 */
+    private int restoreSettlementStockFeeds(String factoryId,
+                                            List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> entries,
+                                            Long reversalLogId, Long operatorId, ReportReversalLog reversalLog) {
+        if (entries == null || entries.isEmpty()) {
+            return 0;
+        }
+        int restored = 0;
+        List<String> skipped = new ArrayList<>();
+        for (com.cretas.aims.service.production.SettlementStockFeedDetail.Entry entry : entries) {
+            String batchNo = entry.batchNumber().trim();
+            if (com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED.equals(entry.kind())) {
+                finishedGoodsFeedService.restoreForFeed(factoryId, batchNo, entry.quantity(), operatorId);
+                restored++;
+                continue;
+            }
+            com.cretas.aims.service.wip.WipInventoryService.ClerkSemiRestore receipt =
+                    wipInventoryService.restoreClerkSemiExact(factoryId, batchNo, entry.quantity(),
+                            "reversal-log:" + reversalLogId, operatorId);
+            if (receipt == null) {
+                skipped.add(batchNo + "×" + entry.quantity().stripTrailingZeros().toPlainString());
+                continue;
+            }
+            restored++;
+        }
+        if (!skipped.isEmpty() && reversalLog != null) {
+            String note = " [撤回还回结单投料: 跳过 " + skipped.size() + " 条(源行不在): " + String.join(", ", skipped) + "]";
+            reversalLog.setReason((reversalLog.getReason() == null ? "" : reversalLog.getReason()) + note);
+            log.warn("[SP2] 撤回还回结单投料: factoryId={} 跳过 {} 条 (源行不在): {}", factoryId, skipped.size(), skipped);
+        }
+        return restored;
+    }
+
+    /**
+     * 结单给本计划逐道行和报工消耗盖的戳 (interim_settled_at = 结单时间) 撤回时一并清掉:
+     * 它们扣的料已经还回, 重新算待扣; 重结时再盖。被撤那一道的报工消耗清戳后已是未过账的行,
+     * 交给与「未结单撤回」同一个清理出口软删 (⛔ 不在这里另写一份软删规则)。
+     *
+     * @return 清掉戳的逐道行 + 报工消耗条数
+     */
+    private int unstampSettledFacts(String factoryId, String planId, Long reversedBatchId,
+                                    LocalDateTime settledAt, LocalDateTime now) {
+        if (settledAt == null) {
+            return 0;
+        }
+        int count = 0;
+        Set<Long> planBatchIds = new HashSet<>();
+        if (reversedBatchId != null) {
+            planBatchIds.add(reversedBatchId);
+        }
+        Optional.ofNullable(batchRepo.findByFactoryIdAndProductionPlanId(factoryId, planId)).orElse(List.of())
+                .stream().filter(Objects::nonNull).map(ProductionBatch::getId).filter(Objects::nonNull)
+                .forEach(planBatchIds::add);
+        if (processSheetRowRepository != null) {
+            List<ProcessSheetRow> stampedRows = Optional.ofNullable(processSheetRowRepository
+                    .findByFactoryIdAndPlanIdAndInterimSettledAt(factoryId, planId, settledAt)).orElse(List.of());
+            for (ProcessSheetRow row : stampedRows) {
+                if (row.getBatchId() != null) {
+                    planBatchIds.add(row.getBatchId());
+                }
+                row.setInterimSettledAt(null);
+            }
+            if (!stampedRows.isEmpty()) {
+                processSheetRowRepository.saveAll(stampedRows);
+            }
+            count += stampedRows.size();
+        }
+        if (materialConsumptionRepository != null && !planBatchIds.isEmpty()) {
+            List<com.cretas.aims.entity.MaterialConsumption> stamped = Optional.ofNullable(materialConsumptionRepository
+                    .findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
+                            factoryId, new ArrayList<>(planBatchIds), settledAt)).orElse(List.of());
+            for (com.cretas.aims.entity.MaterialConsumption consumption : stamped) {
+                consumption.setInterimSettledAt(null);
+            }
+            if (!stamped.isEmpty()) {
+                materialConsumptionRepository.saveAll(stamped);
+            }
+            count += stamped.size();
+        }
+        if (reversalConsumptionCleanupService != null && reversedBatchId != null) {
+            reversalConsumptionCleanupService.softDeleteUnpostedForReversedBatch(factoryId, reversedBatchId, planId, now);
+        }
+        return count;
     }
 
     /**

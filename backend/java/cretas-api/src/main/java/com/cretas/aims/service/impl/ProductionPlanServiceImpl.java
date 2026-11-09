@@ -3745,7 +3745,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //   此前<b>从不扣减</b> = SFI/FG 可用量不降 (幻库存: 消耗了却还在库, 可被重复领用/发货)。此处按 process-row
         //   直接严格扣减 (缺失/不足即抛, 整事务回滚, 禁止降级)。成本侧由 R4 computeByPlan (含 SFI/FG 投料桶)
         //   在仓库确认实收创建 FG 时补入, 此处仅补扣减。仅结单族 (SAFETY_STOCK 走小结扣减, 内部守卫)。
-        deductProcessSheetStockFeeds(factoryId, plan, effectiveRequest);
+        // N1 (2026-11-09): 扣了什么逐笔记在结单上, 整单撤回照着原样还回并把这些行重新标成待扣。
+        //   没有投料也写 "[]" —— 撤回要能分清「没扣过」和「这个功能上线前扣过但没记」。
+        settlement.setStockFeedDetail(com.cretas.aims.service.production.SettlementStockFeedDetail.write(
+                deductProcessSheetStockFeeds(factoryId, plan, effectiveRequest)));
+        productionSettlementRepository.save(settlement);
         productionSettlementLaborRepository.saveAll(toLaborLines(factoryId, planId, settlement.getId(), effectiveRequest.getLaborSegments()));
 
         plan.setStatus(ProductionPlanStatus.COMPLETED);
@@ -7588,20 +7592,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      *   <li><b>防双扣</b>: 若结单请求带手工 {@code semiFinishedConsumptions} (文员手工管理 SFI 领用) → 尊重手工,
      *       跳过 SFI 自动扣; FG 投料无手工字段, 照常自动扣。</li>
      *   <li><b>幂等</b>: {@code settleProduction} 已阻断重复结单 (PRODUCTION_ALREADY_SETTLED + idempotencyKey),
-     *       故本扣减每个计划恰执行一次。</li>
+     *       故每张<b>活</b>结单只扣一次。⚠️ 结单可以被整单撤回再重结 (N1, 2026-11-09): 撤回按返回的明细
+     *       (存在结单 stock_feed_detail 上) 原样还回并把这些行重新标成待扣, 重结时才不会把没撤的那几道再扣一遍。</li>
      * </ul>
+     *
+     * @return 实际扣掉的每一笔 (来源原生单位), 由调用方存到结单上
      */
-    private void deductProcessSheetStockFeeds(String factoryId, ProductionPlan plan,
-                                              ProductionSettlementRequest request) {
+    private List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> deductProcessSheetStockFeeds(
+            String factoryId, ProductionPlan plan, ProductionSettlementRequest request) {
+        List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> deducted = new ArrayList<>();
         if (plan == null || plan.getSourceType() == PlanSourceType.SAFETY_STOCK) {
-            return;   // SAFETY_STOCK 由小结扣减
+            return deducted;   // SAFETY_STOCK 由小结扣减
         }
         if (processSheetRowRepository == null || isBlank(plan.getId())) {
-            return;
+            return deducted;
         }
         List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId());
         if (isEmpty(rows)) {
-            return;
+            return deducted;
         }
         Set<String> manuallyPostedSemiBatchNumbers = resolveManualSemiBatchNumbers(factoryId, request);
         BigDecimal sfiOut = BigDecimal.ZERO;
@@ -7634,6 +7642,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             srcBatchNo, feed, "kg");
                     fgOut = fgOut.add(zeroIfNull(drawn));
                     fgCount++;
+                    deducted.add(new com.cretas.aims.service.production.SettlementStockFeedDetail.Entry(
+                            com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED,
+                            srcBatchNo, feed, drawn, row.getId()));
                 } else if (ref.isSemiFinished()) {
                     if (ref.isStockConsumedAtSubmit()) {
                         continue;   // 回料已在正式报工事务内严格扣减；结单只做一次消费
@@ -7649,6 +7660,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan), srcBatchNo, feed);
                     sfiOut = sfiOut.add(zeroIfNull(drawn));
                     sfiCount++;
+                    deducted.add(new com.cretas.aims.service.production.SettlementStockFeedDetail.Entry(
+                            com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_SEMI,
+                            srcBatchNo, feed, drawn, row.getId()));
                     // 血缘: 产出它的生产批次 → 本行生产批次 (结单只扣一次, 见上方幂等说明)。
                     if (semiFeedLineageRecorder != null) {
                         semiFeedLineageRecorder.recordSemiFeed(factoryId, srcBatchNo, row.getBatchId(), drawn,
@@ -7666,6 +7680,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             ? ""
                             : " [同批次 SFI 手工补录已定点替换]");
         }
+        return deducted;
     }
 
     private Set<String> resolveManualSemiBatchNumbers(String factoryId,
