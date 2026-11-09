@@ -1,0 +1,444 @@
+package com.cretas.aims.service.scheduling;
+
+import com.cretas.aims.dto.scheduling.ConstrainedSchedulePreview;
+import com.cretas.aims.dto.scheduling.ConstrainedSchedulePreview.PlanResult;
+import com.cretas.aims.dto.scheduling.SchedulePreviewRequest;
+import com.cretas.aims.entity.InsertSlot;
+import com.cretas.aims.entity.LineSchedule;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.SchedulingPlan;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.LineScheduleRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.SchedulingPlanRepository;
+import com.cretas.aims.repository.scheduling.ApsConstraintQueryRepository;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.service.scheduling.daily.DailyCapacityScheduleGenerator;
+import com.cretas.aims.service.shortage.DeliveryRiskService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * 紧急插单批准后真正调整排程 (缺口 17 第 2 项)。
+ *
+ * <p>调缺口 18 的约束排程引擎 ({@link DailyCapacityScheduleGenerator#preview}): 插单计划钉在最前,
+ * 同一条线上还没开工的排程当「可挪」一起重排, 开工的 (in_progress) 当固定占用不动。
+ * 结果两处用: 预览 (dry-run, 建一条临时计划算完就回滚, 不留任何行) 和确认 (真计划建好之后重算,
+ * 与预览指纹比对, 不一致整个确认回滚)。
+ *
+ * <p>排不进去 (没填日产能 / 设备报废 / 超期 / 依赖没排出) 一律 BLOCKED, 说清原因, 不把「排不了」
+ * 当成「排进去了」。被挤计划新的完成日写进它的排程行和计划起止时间; 交期被突破的订单在提交之后
+ * 登记到交付风险闭环 (#1443), 不放在确认事务里 (它的评估可能抛业务异常, 会把确认事务标成回滚)。
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class UrgentInsertScheduleService {
+
+    public static final String OK = "OK";
+    /** 引擎说排不进去 / 没填日产能等: 确认必须拦。 */
+    public static final String BLOCKED = "BLOCKED";
+    /** 没有足够信息去排 (没绑产线等) 或没评估 (前置的原料已不满足)。 */
+    public static final String NOT_EVALUATED = "NOT_EVALUATED";
+
+    static final LocalTime DAY_END = LocalTime.of(23, 59);
+    static final int MAX_MOVED_PLANS = 50;
+
+    /** 被挤计划: 原完成日 → 新完成日。 */
+    public record Moved(String planId, String planNumber, LocalDate oldEnd, LocalDate newEnd, long delayDays,
+                        LocalDate dueDate, boolean exceedsDue, List<String> orderIds, List<String> reasons) {
+    }
+
+    public record Proposal(String status, String message, LocalDate insertFirstDay, LocalDate insertLastDay,
+                           List<Moved> moved, List<String> warnings, String fingerprint) {
+
+        public boolean ok() {
+            return OK.equals(status);
+        }
+
+        public static Proposal notEvaluated(String message) {
+            return new Proposal(NOT_EVALUATED, message, null, null, List.of(), List.of(), null);
+        }
+
+        public Map<String, Object> toMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("status", status);
+            m.put("message", message);
+            m.put("insertFirstDay", insertFirstDay);
+            m.put("insertLastDay", insertLastDay);
+            m.put("warnings", warnings);
+            m.put("movedPlans", moved.stream().map(x -> {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("planId", x.planId());
+                row.put("planNumber", x.planNumber());
+                row.put("oldEnd", x.oldEnd());
+                row.put("newEnd", x.newEnd());
+                row.put("delayDays", x.delayDays());
+                row.put("dueDate", x.dueDate());
+                row.put("exceedsDue", x.exceedsDue());
+                row.put("reasons", x.reasons());
+                return row;
+            }).collect(Collectors.toList()));
+            m.put("exceedsDueCount", moved.stream().filter(Moved::exceedsDue).count());
+            return m;
+        }
+    }
+
+    private final DailyCapacityScheduleGenerator generator;
+    private final ApsConstraintQueryRepository constraints;
+    private final ProductionPlanRepository planRepository;
+    private final LineScheduleRepository lineScheduleRepository;
+    private final SchedulingPlanRepository schedulingPlanRepository;
+    private final PlatformTransactionManager transactionManager;
+    private final DeliveryRiskService deliveryRiskService;
+
+    // ---------------------------------------------------------------- 预览: 建临时计划算完回滚
+
+    /**
+     * 只算不留痕: 在独立事务里把临时插单计划存进去 (引擎按计划 id 读计划), 算完标回滚。
+     * 独立事务看不到外层未提交的东西, 外层此时也没有写任何排程相关的行。
+     */
+    public Proposal dryRun(String factoryId, InsertSlot slot, ProductionPlan transientPlan) {
+        TransactionTemplate isolated = new TransactionTemplate(transactionManager);
+        isolated.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        isolated.setName("UrgentInsertScheduleService.dryRun");
+        try {
+            return isolated.execute(status -> {
+                try {
+                    ProductionPlan saved = planRepository.saveAndFlush(transientPlan);
+                    return compute(factoryId, slot, saved).proposal();
+                } finally {
+                    status.setRollbackOnly();
+                }
+            });
+        } catch (BusinessException e) {
+            log.warn("插单排程预览失败: factoryId={}, reason={}", factoryId, e.getMessage());
+            return new Proposal(BLOCKED, "排程无法预览: " + e.getMessage(), null, null, List.of(), List.of(), null);
+        } catch (Exception e) {
+            log.error("插单排程预览异常: factoryId={}", factoryId, e);
+            return Proposal.notEvaluated("排程未验证: 排程引擎读取失败");
+        }
+    }
+
+    // ---------------------------------------------------------------- 确认: 重算、比对、落库
+
+    /**
+     * 在确认 / 批准的事务里调用 (插单计划已保存)。重算排程; {@code expectedFingerprint} 非空时必须与预览一致,
+     * 不一致抛 409 (事务整体回滚, 时段占用和计划都不留)。通过后写入排程。
+     */
+    public Proposal apply(String factoryId, InsertSlot slot, ProductionPlan insertPlan,
+                          String expectedFingerprint, Long userId) {
+        Computation c = compute(factoryId, slot, insertPlan);
+        Proposal p = c.proposal();
+        if (!p.ok()) {
+            throw new BusinessException(409, "排程排不进去，未创建计划: " + p.message())
+                    .withCode("INSERT_SCHEDULE_BLOCKED")
+                    .withHint("按提示补齐日产能或处理设备/依赖后重新预览");
+        }
+        if (expectedFingerprint != null && !expectedFingerprint.equals(p.fingerprint())) {
+            throw new BusinessException(409, "预览之后排程结果已变化（排程、设备占用或原料到货变了），请重新预览，未创建计划")
+                    .withCode("INSERT_PREVIEW_SCHEDULE_CHANGED")
+                    .withHint("重新创建确认预览，按最新排程确认");
+        }
+        write(factoryId, slot, insertPlan, c, userId);
+        registerOverdueReminders(factoryId, c, userId);
+        return p;
+    }
+
+    // ---------------------------------------------------------------- 计算
+
+    private record Computation(Proposal proposal, ConstrainedSchedulePreview raw, ProductionPlan insertPlan,
+                               Map<String, List<LineSchedule>> movableByPlan, Map<String, ProductionPlan> plansById,
+                               LocalDate firstDay) {
+    }
+
+    private Computation compute(String factoryId, InsertSlot slot, ProductionPlan insertPlan) {
+        if (slot.getProductionLineId() == null || slot.getProductionLineId().isBlank() || slot.getStartTime() == null) {
+            return new Computation(Proposal.notEvaluated("排程未验证: 时段没有绑定实际产线"), null, insertPlan,
+                    Map.of(), Map.of(), null);
+        }
+        LocalDate today = LocalDate.now();
+        LocalDate firstDay = slot.getStartTime().toLocalDate().isBefore(today) ? today : slot.getStartTime().toLocalDate();
+
+        // 同一条线、还没开工、结束时间不早于插入日的排程 = 被挤的候选; 开工的当固定占用不动
+        Map<String, List<LineSchedule>> movableByPlan = new LinkedHashMap<>();
+        for (LineSchedule ls : constraints.findLiveEndingFrom(factoryId, firstDay.atStartOfDay())) {
+            if (!Objects.equals(ls.getProductionLineId(), slot.getProductionLineId())
+                    || ls.getStatus() == LineSchedule.ScheduleStatus.in_progress
+                    || ls.getProductionPlanId() == null
+                    || Objects.equals(ls.getProductionPlanId(), insertPlan.getId())) {
+                continue;
+            }
+            movableByPlan.computeIfAbsent(ls.getProductionPlanId(), k -> new ArrayList<>()).add(ls);
+        }
+        if (movableByPlan.size() > MAX_MOVED_PLANS) {
+            return new Computation(new Proposal(BLOCKED, "同一产线上待重排的计划有 " + movableByPlan.size()
+                    + " 个，超过 " + MAX_MOVED_PLANS + " 个，请先缩小范围", null, null, List.of(), List.of(), null),
+                    null, insertPlan, movableByPlan, Map.of(), firstDay);
+        }
+        List<String> planIds = new ArrayList<>();
+        planIds.add(insertPlan.getId());
+        planIds.addAll(movableByPlan.keySet());
+        Set<String> movableIds = movableByPlan.values().stream().flatMap(List::stream).map(LineSchedule::getId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        ConstrainedSchedulePreview raw = generator.preview(factoryId, new SchedulePreviewRequest(firstDay,
+                slot.getProductionLineId(), planIds, List.of(insertPlan.getId()), movableIds, List.of()));
+
+        Map<String, ProductionPlan> plansById = new HashMap<>();
+        plansById.put(insertPlan.getId(), insertPlan);
+        for (String id : movableByPlan.keySet()) {
+            planRepository.findByIdAndFactoryId(id, factoryId).ifPresent(p -> plansById.put(id, p));
+        }
+
+        if (!"SCHEDULED".equals(raw.outcome())) {
+            String products = raw.capacityRequired() == null ? "" : raw.capacityRequired().stream()
+                    .map(Object::toString).collect(Collectors.joining("；"));
+            return new Computation(new Proposal(BLOCKED, "有产品没填日产能，排不出: " + products, null, null,
+                    List.of(), raw.warnings() == null ? List.of() : raw.warnings(), null),
+                    raw, insertPlan, movableByPlan, plansById, firstDay);
+        }
+
+        Map<String, PlanResult> byId = new HashMap<>();
+        raw.plans().forEach(r -> byId.put(r.planId(), r));
+        PlanResult mine = byId.get(insertPlan.getId());
+        if (mine == null || !"SCHEDULED".equals(mine.status())) {
+            return new Computation(new Proposal(BLOCKED, "插单排不进去: " + describe(mine), null, null, List.of(),
+                    raw.warnings() == null ? List.of() : raw.warnings(), null),
+                    raw, insertPlan, movableByPlan, plansById, firstDay);
+        }
+
+        List<Moved> moved = new ArrayList<>();
+        for (Map.Entry<String, List<LineSchedule>> e : movableByPlan.entrySet()) {
+            PlanResult r = byId.get(e.getKey());
+            ProductionPlan plan = plansById.get(e.getKey());
+            String number = plan == null ? e.getKey() : plan.getPlanNumber();
+            if (r == null || "NOTHING_REMAINING".equals(r.status()) || "PLAN_CLOSED".equals(r.status())) {
+                continue; // 已无剩余 / 已关闭: 不动它的排程行
+            }
+            if (!"SCHEDULED".equals(r.status())) {
+                return new Computation(new Proposal(BLOCKED, "被挤的计划 " + number + " 排不进去: " + describe(r), null,
+                        null, List.of(), raw.warnings() == null ? List.of() : raw.warnings(), null),
+                        raw, insertPlan, movableByPlan, plansById, firstDay);
+            }
+            LocalDate oldEnd = e.getValue().stream().map(LineSchedule::getPlannedEndTime).filter(Objects::nonNull)
+                    .max(Comparator.naturalOrder()).map(LocalDateTime::toLocalDate).orElse(null);
+            LocalDate newEnd = lastDay(r);
+            LocalDate due = plan == null ? null : plan.getExpectedCompletionDate();
+            boolean exceeds = due != null && newEnd != null && newEnd.isAfter(due);
+            long delay = oldEnd == null || newEnd == null ? 0 : java.time.temporal.ChronoUnit.DAYS.between(oldEnd, newEnd);
+            moved.add(new Moved(e.getKey(), number, oldEnd, newEnd, delay, due, exceeds, orderIdsOf(plan),
+                    r.delays() == null ? List.of() : r.delays().stream().map(ConstrainedSchedulePreview.Delay::text).toList()));
+        }
+        Proposal proposal = new Proposal(OK, null, firstDayOf(mine), lastDay(mine), moved,
+                raw.warnings() == null ? List.of() : raw.warnings(), fingerprint(mine, raw, moved));
+        return new Computation(proposal, raw, insertPlan, movableByPlan, plansById, firstDay);
+    }
+
+    private static String describe(PlanResult r) {
+        if (r == null) {
+            return "引擎没有返回这个计划的结果";
+        }
+        String delays = r.delays() == null ? "" : r.delays().stream().map(ConstrainedSchedulePreview.Delay::text)
+                .collect(Collectors.joining("；"));
+        String notes = r.notes() == null ? "" : String.join("；", r.notes());
+        return r.status() + (delays.isBlank() ? "" : " — " + delays) + (notes.isBlank() ? "" : " — " + notes);
+    }
+
+    private static LocalDate firstDayOf(PlanResult r) {
+        return r.days() == null || r.days().isEmpty() ? null : r.days().get(0).date();
+    }
+
+    private static LocalDate lastDay(PlanResult r) {
+        return r.days() == null || r.days().isEmpty() ? null : r.days().get(r.days().size() - 1).date();
+    }
+
+    private static List<String> orderIdsOf(ProductionPlan plan) {
+        if (plan == null) {
+            return List.of();
+        }
+        Set<String> ids = new LinkedHashSet<>();
+        if (plan.getSourceOrderIds() != null) {
+            ids.addAll(plan.getSourceOrderIds());
+        }
+        if (plan.getSourceOrderId() != null && !plan.getSourceOrderId().isBlank()) {
+            ids.add(plan.getSourceOrderId());
+        }
+        return new ArrayList<>(ids);
+    }
+
+    /** 指纹: 插单每天做多少 + 每个被挤计划每天做多少 / 状态。 */
+    private static String fingerprint(PlanResult mine, ConstrainedSchedulePreview raw, List<Moved> moved) {
+        Set<String> movedIds = moved.stream().map(Moved::planId).collect(Collectors.toSet());
+        StringBuilder canon = new StringBuilder(daysOf(mine));
+        raw.plans().stream().filter(r -> movedIds.contains(r.planId()))
+                .sorted(Comparator.comparing(PlanResult::planId))
+                .forEach(r -> canon.append('|').append(r.planId()).append('=').append(r.status()).append(':')
+                        .append(daysOf(r)));
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(canon.toString().getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static String daysOf(PlanResult r) {
+        if (r.days() == null) {
+            return "";
+        }
+        return r.days().stream().map(d -> d.date() + ":" + plain(d.quantity())).collect(Collectors.joining(","));
+    }
+
+    private static String plain(BigDecimal v) {
+        return v == null ? "?" : v.stripTrailingZeros().toPlainString();
+    }
+
+    // ---------------------------------------------------------------- 落库
+
+    private void write(String factoryId, InsertSlot slot, ProductionPlan insertPlan, Computation c, Long userId) {
+        Map<String, PlanResult> byId = new HashMap<>();
+        c.raw().plans().forEach(r -> byId.put(r.planId(), r));
+        LocalDateTime now = LocalDateTime.now();
+
+        // 1) 被挤计划: 第一条排程行改成新的起止 / 数量 / 按天分配, 其余行取消 (引擎按计划整体剩余量排, 一行就够)
+        for (Moved m : c.proposal().moved()) {
+            PlanResult r = byId.get(m.planId());
+            List<LineSchedule> rows = c.movableByPlan().get(m.planId());
+            LineSchedule head = rows.get(0);
+            head.setPlannedStartTime(firstDayOf(r).atStartOfDay());
+            head.setPlannedEndTime(lastDay(r).atTime(DAY_END));
+            head.setPlannedQuantity(roundedQuantity(r));
+            head.setDailyAllocations(r.dailyAllocations());
+            head.setAdjustmentCount((head.getAdjustmentCount() == null ? 0 : head.getAdjustmentCount()) + 1);
+            head.setLastAdjustmentTime(now);
+            head.setAdjustmentReason(trim("紧急插单 " + insertPlan.getPlanNumber() + " 挤占，顺延 " + m.delayDays() + " 天", 200));
+            lineScheduleRepository.save(head);
+            for (int i = 1; i < rows.size(); i++) {
+                LineSchedule extra = rows.get(i);
+                extra.setStatus(LineSchedule.ScheduleStatus.cancelled);
+                extra.setAdjustmentReason(trim("紧急插单 " + insertPlan.getPlanNumber() + " 重排，合并到同计划的另一条排程", 200));
+                lineScheduleRepository.save(extra);
+            }
+            ProductionPlan plan = c.plansById().get(m.planId());
+            if (plan != null) {
+                plan.setStartTime(head.getPlannedStartTime());
+                plan.setEndTime(head.getPlannedEndTime());
+                planRepository.save(plan);
+            }
+        }
+
+        // 2) 插单: 挂在插入首日的调度计划下 (没有就建一个), 起止时间也写回计划
+        PlanResult mine = byId.get(insertPlan.getId());
+        LocalDate day = firstDayOf(mine);
+        SchedulingPlan container = schedulingPlanRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, day)
+                .orElse(null);
+        if (container == null) {
+            container = new SchedulingPlan();
+            container.setFactoryId(factoryId);
+            container.setPlanDate(day);
+            container.setPlanName(day + " 紧急插单排程");
+            container.setNotes("紧急插单自动排入");
+            container.setCreatedBy(userId);
+            container.setStatus(SchedulingPlan.PlanStatus.draft);
+            container = schedulingPlanRepository.save(container);
+        } else if (container.getStatus() == SchedulingPlan.PlanStatus.completed
+                || container.getStatus() == SchedulingPlan.PlanStatus.cancelled) {
+            throw new BusinessException(409, "插入首日 " + day + " 的调度计划已" + (container.getStatus()
+                    == SchedulingPlan.PlanStatus.completed ? "完成" : "取消") + "，无法排入")
+                    .withCode("INSERT_SCHEDULE_CONTAINER_CLOSED")
+                    .withHint("先到调度计划页处理该日调度计划，或改选其他时段");
+        }
+        LineSchedule created = new LineSchedule();
+        created.setPlan(container);
+        created.setProductionLineId(slot.getProductionLineId());
+        created.setProductionPlanId(insertPlan.getId());
+        created.setSequenceOrder(0);
+        created.setPlannedStartTime(day.atStartOfDay());
+        created.setPlannedEndTime(lastDay(mine).atTime(DAY_END));
+        created.setPlannedQuantity(roundedQuantity(mine));
+        created.setDailyAllocations(mine.dailyAllocations());
+        created.setStatus(LineSchedule.ScheduleStatus.pending);
+        lineScheduleRepository.save(created);
+        insertPlan.setStartTime(created.getPlannedStartTime());
+        insertPlan.setEndTime(created.getPlannedEndTime());
+        planRepository.save(insertPlan);
+        log.info("插单已排入: planId={}, 日期 {}~{}, 被挤计划 {} 个, 交期被突破 {} 个", insertPlan.getId(), day,
+                lastDay(mine), c.proposal().moved().size(),
+                c.proposal().moved().stream().filter(Moved::exceedsDue).count());
+    }
+
+    private static Integer roundedQuantity(PlanResult r) {
+        BigDecimal total = r.days() == null ? BigDecimal.ZERO : r.days().stream()
+                .map(ConstrainedSchedulePreview.Day::quantity).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return total.setScale(0, java.math.RoundingMode.CEILING).intValue();
+    }
+
+    private static String trim(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max);
+    }
+
+    // ---------------------------------------------------------------- 交期提醒 (提交之后)
+
+    /**
+     * 交期被突破的订单登记到交付风险闭环 (#1443): 它按订单当前排程和交期重新评估, 有风险就开处理实例。
+     * 放在提交之后: 评估里缺料分析可能抛业务异常, 在确认事务里会把整个确认标成回滚。
+     */
+    private void registerOverdueReminders(String factoryId, Computation c, Long userId) {
+        Set<String> orderIds = c.proposal().moved().stream().filter(Moved::exceedsDue)
+                .flatMap(m -> m.orderIds().stream()).collect(Collectors.toCollection(LinkedHashSet::new));
+        if (orderIds.isEmpty()) {
+            return;
+        }
+        if (userId == null || userId <= 0) {
+            log.error("插单交期提醒无法登记: 缺少操作人, factoryId={}, orders={}", factoryId, orderIds);
+            return;
+        }
+        ActorRef actor = new ActorRef(AuthenticatedActorType.FACTORY_USER, userId);
+        Runnable remind = () -> {
+            try {
+                int n = deliveryRiskService.refreshOrders(factoryId, orderIds, actor);
+                log.info("插单交期提醒已登记: factoryId={}, 订单 {} 个, 处理 {} 个", factoryId, orderIds.size(), n);
+            } catch (RuntimeException e) {
+                log.error("插单交期提醒登记失败: factoryId={}, orders={}", factoryId, orderIds, e);
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    remind.run();
+                }
+            });
+        } else {
+            remind.run();
+        }
+    }
+}

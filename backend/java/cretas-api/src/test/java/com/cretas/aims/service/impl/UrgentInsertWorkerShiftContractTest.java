@@ -75,7 +75,7 @@ class UrgentInsertWorkerShiftContractTest {
                 .productTypeId("P1").previewQuantity(BigDecimal.TEN).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("L1").windowStart(start)
                 .windowEnd(start.plusHours(2)).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).build();
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP).build();
         preview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", F)).thenReturn(Optional.of(preview));
         products = mock(ProductTypeRepository.class);

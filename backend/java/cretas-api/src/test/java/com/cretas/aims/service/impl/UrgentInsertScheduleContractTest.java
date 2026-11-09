@@ -1,0 +1,411 @@
+package com.cretas.aims.service.impl;
+
+import com.cretas.aims.dto.scheduling.ConstrainedSchedulePreview;
+import com.cretas.aims.dto.scheduling.ConstrainedSchedulePreview.Day;
+import com.cretas.aims.dto.scheduling.ConstrainedSchedulePreview.Delay;
+import com.cretas.aims.dto.scheduling.ConstrainedSchedulePreview.PlanResult;
+import com.cretas.aims.dto.scheduling.SchedulePreviewRequest;
+import com.cretas.aims.entity.InsertSlot;
+import com.cretas.aims.entity.LineSchedule;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.SchedulingPlan;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.LineScheduleRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.repository.SchedulingPlanRepository;
+import com.cretas.aims.repository.scheduling.ApsConstraintQueryRepository;
+import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.service.scheduling.UrgentInsertScheduleService;
+import com.cretas.aims.service.scheduling.UrgentInsertScheduleService.Proposal;
+import com.cretas.aims.service.scheduling.daily.DailyCapacityScheduleGenerator;
+import com.cretas.aims.service.shortage.DeliveryRiskService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * 缺口 17 第 2 项: 批准后真正调整排程。引擎 (缺口 18) 换成桩, 其余 (挑被挤排程、落库、指纹、提醒)
+ * 走真实的 {@link UrgentInsertScheduleService}。
+ */
+class UrgentInsertScheduleContractTest {
+
+    private static final String F = "F-SCHED";
+    private static final String LINE = "L1";
+    private static final LocalDate DAY = LocalDate.now().plusDays(2);
+
+    private DailyCapacityScheduleGenerator generator;
+    private ApsConstraintQueryRepository constraints;
+    private ProductionPlanRepository plans;
+    private LineScheduleRepository lineSchedules;
+    private SchedulingPlanRepository schedulingPlans;
+    private DeliveryRiskService risk;
+    private PlatformTransactionManager tm;
+    private TransactionStatus txStatus;
+    private UrgentInsertScheduleService service;
+
+    private InsertSlot slot;
+    private ProductionPlan insert;
+    private ProductionPlan planA;
+    private ProductionPlan planB;
+    private LineSchedule rowA;
+    private LineSchedule rowB;
+    private LineSchedule runningRow;
+    private LineSchedule otherLineRow;
+
+    @BeforeEach
+    void setUp() {
+        generator = mock(DailyCapacityScheduleGenerator.class);
+        constraints = mock(ApsConstraintQueryRepository.class);
+        plans = mock(ProductionPlanRepository.class);
+        lineSchedules = mock(LineScheduleRepository.class);
+        schedulingPlans = mock(SchedulingPlanRepository.class);
+        risk = mock(DeliveryRiskService.class);
+        tm = mock(PlatformTransactionManager.class);
+        txStatus = mock(TransactionStatus.class);
+        when(tm.getTransaction(any())).thenReturn(txStatus);
+        service = UrgentInsertTestSupport.construct(UrgentInsertScheduleService.class, Map.of(
+                DailyCapacityScheduleGenerator.class, generator,
+                ApsConstraintQueryRepository.class, constraints,
+                ProductionPlanRepository.class, plans,
+                LineScheduleRepository.class, lineSchedules,
+                SchedulingPlanRepository.class, schedulingPlans,
+                DeliveryRiskService.class, risk,
+                PlatformTransactionManager.class, tm));
+
+        slot = InsertSlot.builder().id("S1").factoryId(F).productionLineId(LINE)
+                .startTime(DAY.atTime(9, 0)).endTime(DAY.atTime(11, 0)).status("selected").build();
+        insert = plan("PLAN-INS", "URGENT-1", DAY.plusDays(1), null);
+        planA = plan("PLAN-A", "PA-1", DAY.plusDays(6), "SO-A");
+        planB = plan("PLAN-B", "PB-1", DAY.plusDays(8), "SO-B");
+        rowA = row("LS-A", "PLAN-A", LINE, LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(5));
+        rowB = row("LS-B", "PLAN-B", LINE, LineSchedule.ScheduleStatus.delayed, DAY.plusDays(6), DAY.plusDays(8));
+        runningRow = row("LS-RUN", "PLAN-RUN", LINE, LineSchedule.ScheduleStatus.in_progress, DAY, DAY.plusDays(1));
+        otherLineRow = row("LS-OTHER", "PLAN-OTHER", "L2", LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(3));
+        when(constraints.findLiveEndingFrom(eq(F), any())).thenReturn(List.of(rowA, runningRow, otherLineRow, rowB));
+        when(plans.findByIdAndFactoryId("PLAN-A", F)).thenReturn(Optional.of(planA));
+        when(plans.findByIdAndFactoryId("PLAN-B", F)).thenReturn(Optional.of(planB));
+        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), any())).thenReturn(Optional.empty());
+        when(schedulingPlans.save(any(SchedulingPlan.class))).thenAnswer(i -> i.getArgument(0));
+    }
+
+    // ------------------------------------------------------------------ fixtures
+
+    private static ProductionPlan plan(String id, String number, LocalDate due, String orderId) {
+        ProductionPlan p = new ProductionPlan();
+        p.setId(id);
+        p.setFactoryId(F);
+        p.setPlanNumber(number);
+        p.setExpectedCompletionDate(due);
+        p.setSourceOrderId(orderId);
+        return p;
+    }
+
+    private static LineSchedule row(String id, String planId, String line, LineSchedule.ScheduleStatus status,
+                                    LocalDate from, LocalDate to) {
+        LineSchedule ls = new LineSchedule();
+        ls.setId(id);
+        ls.setProductionLineId(line);
+        ls.setProductionPlanId(planId);
+        ls.setStatus(status);
+        ls.setPlannedStartTime(from.atStartOfDay());
+        ls.setPlannedEndTime(to.atTime(23, 59));
+        ls.setPlannedQuantity(100);
+        ls.setAdjustmentCount(0);
+        return ls;
+    }
+
+    private static PlanResult scheduled(String planId, LocalDate from, int days, String qtyPerDay) {
+        List<Day> list = new ArrayList<>();
+        for (int i = 0; i < days; i++) {
+            list.add(new Day(from.plusDays(i), new BigDecimal(qtyPerDay), BigDecimal.ONE));
+        }
+        return new PlanResult(planId, planId, "SCHEDULED", list, List.of(), List.of(), Map.of("unit", "kg"));
+    }
+
+    private static PlanResult failed(String planId, String status) {
+        return new PlanResult(planId, planId, status, List.of(),
+                List.of(new Delay("EQUIPMENT_BUSY", DAY, DAY, "设备被占")), List.of(), null);
+    }
+
+    private void engine(PlanResult... results) {
+        when(generator.preview(eq(F), any())).thenReturn(new ConstrainedSchedulePreview("SCHEDULED", LINE, DAY, List.of(),
+                List.of(results), List.of()));
+    }
+
+    /** 插单排在首日 1 天; A 顺延 1 天仍在交期内; B 顺延 4 天突破交期。 */
+    private void happyEngine() {
+        engine(scheduled("PLAN-INS", DAY, 1, "50"),
+                scheduled("PLAN-A", DAY.plusDays(1), 5, "20"),   // 原 DAY+5 完 → 仍 DAY+5 完, 交期 DAY+6
+                scheduled("PLAN-B", DAY.plusDays(7), 5, "20"));  // 原 DAY+8 完 → DAY+11 完, 交期 DAY+8
+    }
+
+    // ------------------------------------------------------------------ 请求形状
+
+    @Test
+    void requestPinsTheInsertFirstAndOnlyMovesNotStartedRowsOnTheSameLine() {
+        happyEngine();
+
+        service.apply(F, slot, insert, null, 7L);
+
+        ArgumentCaptor<SchedulePreviewRequest> req = ArgumentCaptor.forClass(SchedulePreviewRequest.class);
+        verify(generator).preview(eq(F), req.capture());
+        assertThat(req.getValue().planIds()).containsExactly("PLAN-INS", "PLAN-A", "PLAN-B");
+        assertThat(req.getValue().pinFirstPlanIds()).containsExactly("PLAN-INS");
+        assertThat(req.getValue().movableLineScheduleIds()).containsExactlyInAnyOrder("LS-A", "LS-B")
+                .doesNotContain("LS-RUN", "LS-OTHER");
+        assertThat(req.getValue().productionLineId()).isEqualTo(LINE);
+        assertThat(req.getValue().firstDay()).isEqualTo(DAY);
+    }
+
+    // ------------------------------------------------------------------ 批准后排程真的变了
+
+    @Test
+    void applyRewritesBumpedRowsCreatesTheInsertRowAndReportsNewCompletionDates() {
+        happyEngine();
+
+        Proposal p = service.apply(F, slot, insert, null, 7L);
+
+        // 被挤的 A / B: 起止、数量、按天分配、调整记录都变了
+        assertThat(rowA.getPlannedStartTime()).isEqualTo(DAY.plusDays(1).atStartOfDay());
+        assertThat(rowA.getPlannedEndTime()).isEqualTo(DAY.plusDays(5).atTime(23, 59));
+        assertThat(rowA.getPlannedQuantity()).isEqualTo(100);
+        assertThat(rowA.getDailyAllocations()).containsEntry("unit", "kg");
+        assertThat(rowA.getAdjustmentCount()).isEqualTo(1);
+        assertThat(rowA.getAdjustmentReason()).contains("URGENT-1").contains("顺延");
+        assertThat(rowB.getPlannedStartTime()).isEqualTo(DAY.plusDays(7).atStartOfDay());
+        assertThat(rowB.getPlannedEndTime()).isEqualTo(DAY.plusDays(11).atTime(23, 59));
+        // 不被挤的: 开工的、别的线的一行没动
+        assertThat(runningRow.getAdjustmentCount()).isEqualTo(0);
+        assertThat(otherLineRow.getPlannedEndTime()).isEqualTo(DAY.plusDays(3).atTime(23, 59));
+        verify(lineSchedules, never()).save(runningRow);
+        verify(lineSchedules, never()).save(otherLineRow);
+
+        // 插单: 新排程行挂在首日的调度计划下
+        ArgumentCaptor<LineSchedule> saved = ArgumentCaptor.forClass(LineSchedule.class);
+        verify(lineSchedules, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
+        LineSchedule created = saved.getAllValues().stream()
+                .filter(ls -> "PLAN-INS".equals(ls.getProductionPlanId())).findFirst().orElseThrow();
+        assertThat(created.getProductionLineId()).isEqualTo(LINE);
+        assertThat(created.getPlannedStartTime()).isEqualTo(DAY.atStartOfDay());
+        assertThat(created.getPlannedQuantity()).isEqualTo(50);
+        assertThat(created.getPlan()).isNotNull();
+        assertThat(insert.getStartTime()).isEqualTo(DAY.atStartOfDay());
+        assertThat(planB.getEndTime()).isEqualTo(DAY.plusDays(11).atTime(23, 59));
+
+        // 回执: 每个被挤订单新完成日 + 交期是否突破
+        assertThat(p.moved()).hasSize(2);
+        var a = p.moved().stream().filter(m -> m.planId().equals("PLAN-A")).findFirst().orElseThrow();
+        var b = p.moved().stream().filter(m -> m.planId().equals("PLAN-B")).findFirst().orElseThrow();
+        assertThat(a.oldEnd()).isEqualTo(DAY.plusDays(5));
+        assertThat(a.newEnd()).isEqualTo(DAY.plusDays(5));
+        assertThat(a.exceedsDue()).isFalse();
+        assertThat(b.oldEnd()).isEqualTo(DAY.plusDays(8));
+        assertThat(b.newEnd()).isEqualTo(DAY.plusDays(11));
+        assertThat(b.delayDays()).isEqualTo(3);
+        assertThat(b.exceedsDue()).as("新完成日晚于计划交期").isTrue();
+    }
+
+    @Test
+    void onlyOrdersWhoseDueDateIsBrokenAreRegisteredWithTheDeliveryRiskLoop() {
+        happyEngine();
+
+        service.apply(F, slot, insert, null, 7L);
+
+        ArgumentCaptor<java.util.Collection<String>> orders = ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(risk).refreshOrders(eq(F), orders.capture(),
+                eq(new ActorRef(AuthenticatedActorType.FACTORY_USER, 7L)));
+        assertThat(orders.getValue()).containsExactly("SO-B");
+    }
+
+    @Test
+    void noBrokenDueDateMeansNoReminderCall() {
+        engine(scheduled("PLAN-INS", DAY, 1, "50"),
+                scheduled("PLAN-A", DAY.plusDays(1), 5, "20"),
+                scheduled("PLAN-B", DAY.plusDays(6), 3, "20"));   // 新完成日 DAY+8, 交期 DAY+8 (不晚于)
+
+        service.apply(F, slot, insert, null, 7L);
+
+        verify(risk, never()).refreshOrders(anyString(), anyCollection(), any());
+    }
+
+    @Test
+    void reminderFailureDoesNotUndoTheScheduleChange() {
+        happyEngine();
+        when(risk.refreshOrders(anyString(), anyCollection(), any())).thenThrow(new IllegalStateException("boom"));
+
+        Proposal p = service.apply(F, slot, insert, null, 7L);
+
+        assertThat(p.ok()).isTrue();
+        assertThat(rowB.getPlannedEndTime()).isEqualTo(DAY.plusDays(11).atTime(23, 59));
+    }
+
+    // ------------------------------------------------------------------ 预览 == 确认
+
+    @Test
+    void confirmIsRefusedAndNothingIsWrittenWhenScheduleChangedSincePreview() {
+        happyEngine();
+        String previewed = service.apply(F, slot, insert, null, 7L).fingerprint();
+        org.mockito.Mockito.clearInvocations(lineSchedules, plans, schedulingPlans);
+        // 预览之后引擎结果变了: B 多顺延一天
+        engine(scheduled("PLAN-INS", DAY, 1, "50"),
+                scheduled("PLAN-A", DAY.plusDays(1), 5, "20"),
+                scheduled("PLAN-B", DAY.plusDays(8), 5, "20"));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, previewed, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("INSERT_PREVIEW_SCHEDULE_CHANGED");
+                    assertThat(e.getMessage()).contains("请重新预览");
+                });
+        verify(lineSchedules, never()).save(any());
+        verify(schedulingPlans, never()).save(any());
+        verify(plans, never()).save(any());
+    }
+
+    @Test
+    void sameEngineResultMatchesThePreviewFingerprintAndIsApplied() {
+        happyEngine();
+        String previewed = service.apply(F, slot, insert, null, 7L).fingerprint();
+        happyEngine();
+
+        Proposal again = service.apply(F, slot, insert, previewed, 7L);
+
+        assertThat(again.fingerprint()).isEqualTo(previewed);
+    }
+
+    @Test
+    void fingerprintMovesWithEveryBumpedPlansDays() {
+        happyEngine();
+        String base = service.apply(F, slot, insert, null, 7L).fingerprint();
+        engine(scheduled("PLAN-INS", DAY, 1, "50"),
+                scheduled("PLAN-A", DAY.plusDays(1), 5, "21"),   // 每天多 1
+                scheduled("PLAN-B", DAY.plusDays(7), 5, "20"));
+        assertThat(service.apply(F, slot, insert, null, 7L).fingerprint()).isNotEqualTo(base);
+    }
+
+    // ------------------------------------------------------------------ 排不进去: 拦住, 不写
+
+    @Test
+    void insertThatTheEngineCannotScheduleBlocksWithTheReasonAndWritesNothing() {
+        engine(failed("PLAN-INS", "EQUIPMENT_UNAVAILABLE"),
+                scheduled("PLAN-A", DAY, 3, "20"), scheduled("PLAN-B", DAY, 3, "20"));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_BLOCKED");
+                    assertThat(e.getMessage()).contains("EQUIPMENT_UNAVAILABLE").contains("设备被占");
+                });
+        verify(lineSchedules, never()).save(any());
+    }
+
+    @Test
+    void aBumpedPlanThatNoLongerFitsBlocksInsteadOfSilentlyDroppingItsSchedule() {
+        engine(scheduled("PLAN-INS", DAY, 1, "50"), scheduled("PLAN-A", DAY.plusDays(1), 5, "20"),
+                failed("PLAN-B", "EXCEEDS_HORIZON"));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_BLOCKED");
+                    assertThat(e.getMessage()).contains("PB-1").contains("EXCEEDS_HORIZON");
+                });
+        verify(lineSchedules, never()).save(any());
+        assertThat(rowA.getAdjustmentCount()).isEqualTo(0);
+    }
+
+    @Test
+    void missingDailyCapacityBlocks() {
+        when(generator.preview(eq(F), any())).thenReturn(new ConstrainedSchedulePreview("CAPACITY_REQUIRED", LINE, DAY,
+                List.of(), List.of(), List.of()));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getMessage()).contains("日产能"));
+        verify(lineSchedules, never()).save(any());
+    }
+
+    @Test
+    void closedDayContainerRefusesTheInsertAndLeavesBumpedRowsUntouchedByTheCaller() {
+        happyEngine();
+        SchedulingPlan closed = new SchedulingPlan();
+        closed.setStatus(SchedulingPlan.PlanStatus.completed);
+        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), eq(DAY))).thenReturn(Optional.of(closed));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_CONTAINER_CLOSED"));
+    }
+
+    @Test
+    void slotWithoutALineIsNotEvaluatedNeverGuessed() {
+        InsertSlot noLine = InsertSlot.builder().id("S2").factoryId(F).startTime(DAY.atTime(9, 0)).build();
+
+        assertThatThrownBy(() -> service.apply(F, noLine, insert, null, 7L))
+                .isInstanceOf(BusinessException.class);
+        verify(generator, never()).preview(anyString(), any());
+    }
+
+    // ------------------------------------------------------------------ 预览 dry-run
+
+    @Test
+    void dryRunAlwaysRollsBackItsTemporaryPlan() {
+        happyEngine();
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        Proposal p = service.dryRun(F, slot, insert);
+
+        assertThat(p.ok()).isTrue();
+        verify(txStatus).setRollbackOnly();
+        verify(lineSchedules, never()).save(any());
+        verify(schedulingPlans, never()).save(any());
+    }
+
+    @Test
+    void dryRunTurnsEngineBusinessErrorsIntoBlockedWithTheMessage() {
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        when(generator.preview(eq(F), any())).thenThrow(new BusinessException(409, "产线不存在"));
+
+        Proposal p = service.dryRun(F, slot, insert);
+
+        assertThat(p.status()).isEqualTo(UrgentInsertScheduleService.BLOCKED);
+        assertThat(p.message()).contains("产线不存在");
+        verify(txStatus).setRollbackOnly();
+    }
+
+    @Test
+    void unexpectedEngineFailureIsNotEvaluatedNotBlockedAndNotOk() {
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        when(generator.preview(eq(F), any())).thenThrow(new IllegalStateException("db down"));
+
+        Proposal p = service.dryRun(F, slot, insert);
+
+        assertThat(p.status()).isEqualTo(UrgentInsertScheduleService.NOT_EVALUATED);
+        assertThat(p.fingerprint()).isNull();
+    }
+
+    @SuppressWarnings("unused")
+    private static Set<String> unused() {
+        return Set.of();
+    }
+}

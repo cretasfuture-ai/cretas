@@ -30,6 +30,7 @@ import com.cretas.aims.service.ImpactAnalysisService;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor;
+import com.cretas.aims.service.scheduling.UrgentInsertScheduleService;
 import com.cretas.aims.service.scheduling.WorkerShiftAvailabilityCheck;
 import com.cretas.aims.service.ImpactAnalysisService.*;
 import com.cretas.aims.service.LinkArrayService;
@@ -84,6 +85,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final PushNotificationService pushNotificationService;
     /** 缺口 17: 按生效配方版本 + 库存 + 在途评估原料, 并产出确认时比对用的指纹。 */
     private final UrgentInsertMaterialAssessor materialAssessor;
+    /** 缺口 17 第 2 项: 调约束排程引擎, 预览算排程、确认后真正排入并顺延被挤计划。 */
+    private final UrgentInsertScheduleService scheduleService;
 
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for urgent-insert path. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -228,6 +231,18 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         request.getRequiredQuantity());
         WorkerShiftAvailabilityCheck.Result workerCheck = checkWorkers(factoryId, slot);
 
+        // 缺口 17 第 2 项: 排程预览 (引擎算, 临时计划算完回滚)。原料不满足 / 单位或产线没验证时不算,
+        // 状态 NOT_EVALUATED, 原因已在前面的原料 / 产能里说了。
+        boolean scheduleAttempted = materialPlan.ok() && unitCompatible && physicalLineBound
+                && plannedUnit != null && !plannedUnit.isBlank();
+        UrgentInsertScheduleService.Proposal schedulePlan = scheduleAttempted
+                ? scheduleService.dryRun(factoryId, slot, createProductionPlanFromSlot(factoryId, null, slot,
+                        ConfirmUrgentInsertRequest.builder().slotId(slot.getId())
+                                .productTypeId(request.getProductTypeId())
+                                .plannedQuantity(request.getRequiredQuantity()).build(),
+                        plannedUnit, materialPlan))
+                : UrgentInsertScheduleService.Proposal.notEvaluated("排程未评估: 原料、产能或产线信息还没核对通过");
+
         Map<String, Object> result = new HashMap<>();
 
         // 基本信息
@@ -300,6 +315,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         result.put("resourceStatus", resourceStatus);
         // 缺口 17: 按生效配方版本算的原料需求、缺口 (缺什么/缺多少)、在途; 确认时按同一口径重算比对
         result.put("materialPlan", materialPlan.toMap());
+        // 缺口 17 第 2 项: 插单排进去之后插单自己和每个被挤计划的新完成日、交期是否被突破
+        result.put("schedulePlan", schedulePlan.toMap());
 
         // 风险评估
         String riskLevel = determineRiskLevel(chainImpact, materialCheck, equipmentCheck, capacityCheck, workerCheck);
@@ -325,11 +342,16 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (!capacityCheck.isVerified()) {
             unverifiedReasons.add(capacityCheck.getMessage());
         }
+        boolean scheduleBlocked = UrgentInsertScheduleService.BLOCKED.equals(schedulePlan.status());
+        if (scheduleAttempted && !schedulePlan.ok() && !scheduleBlocked) {
+            unverifiedReasons.add(schedulePlan.message());
+        }
         boolean resourcesVerified = unverifiedReasons.isEmpty();
         boolean definitelyShort = (materialCheck.isVerified() && !materialCheck.isAvailable())
                 || (equipmentCheck.isVerified() && !equipmentCheck.isAvailable())
                 || (capacityCheck.isVerified() && !capacityCheck.isAvailable())
-                || (workerCheck.verified() && !workerCheck.available());
+                || (workerCheck.verified() && !workerCheck.available())
+                || scheduleBlocked;
         boolean isFeasible = resourcesVerified && !definitelyShort
                 && materialCheck.isAvailable() && equipmentCheck.isAvailable()
                 && workerCheck.available() && capacityCheck.isAvailable();
@@ -338,7 +360,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         result.put("unverifiedReasons", unverifiedReasons);
         result.put("feasibilityStatus", isFeasible ? "FEASIBLE" : (definitelyShort ? "INFEASIBLE" : "UNVERIFIED"));
         if (!isFeasible) {
-            result.put("infeasibleReason", buildInfeasibleReason(materialCheck, equipmentCheck, capacityCheck, workerCheck));
+            result.put("infeasibleReason", buildInfeasibleReason(materialCheck, equipmentCheck, capacityCheck, workerCheck)
+                    + (scheduleBlocked ? "排程排不进去: " + schedulePlan.message() + "; " : ""));
         }
 
         // Only a product/unit-compatible analysis may issue a confirmation
@@ -346,13 +369,13 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // guessed PIECE/KG/BATCH snapshot.
         // 原料无法核对 (无指纹) 时不签发预览: 确认本来就会拒绝, 而无指纹的预览永远复用不上, 会一条条占满额度
         if (createPreview && unitCompatible && plannedUnit != null && !plannedUnit.isBlank()
-                && materialPlan.fingerprint() != null) {
+                && materialPlan.fingerprint() != null && schedulePlan.fingerprint() != null) {
             LocalDateTime validAfter = LocalDateTime.now().minusMinutes(PREVIEW_VALID_MINUTES);
             List<InsertSlotPreview> recent = insertSlotPreviewRepository
                     .findByFactoryIdAndCreatedAtAfterOrderByCreatedAtDesc(factoryId, validAfter);
             InsertSlotPreview preview = recent.stream()
                     .filter(candidate -> previewMatches(candidate, slot, product, request,
-                            quantityUnit, plannedUnit, chainImpact, materialPlan))
+                            quantityUnit, plannedUnit, chainImpact, materialPlan, schedulePlan))
                     .findFirst()
                     .orElse(null);
             if (preview == null) {
@@ -383,6 +406,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         .bomVersion(materialPlan.bomVersion())
                         .materialFingerprint(materialPlan.fingerprint())
                         .impactFingerprint(impactFingerprint(chainImpact))
+                        .scheduleFingerprint(schedulePlan.fingerprint())
                         .build());
             }
             result.put("previewId", preview.getId());
@@ -556,8 +580,11 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private boolean previewMatches(InsertSlotPreview preview, InsertSlot slot, ProductType product,
                                    GetInsertSlotsRequest request, String quantityUnit, String plannedUnit,
                                    ChainImpactResult chainImpact,
-                                   UrgentInsertMaterialAssessor.Assessment materialPlan) {
+                                   UrgentInsertMaterialAssessor.Assessment materialPlan,
+                                   UrgentInsertScheduleService.Proposal schedulePlan) {
         return preview.getMaterialFingerprint() != null
+                && preview.getScheduleFingerprint() != null
+                && Objects.equals(preview.getScheduleFingerprint(), schedulePlan.fingerprint())
                 && Objects.equals(preview.getMaterialFingerprint(), materialPlan.fingerprint())
                 && Objects.equals(preview.getImpactFingerprint(), impactFingerprint(chainImpact))
                 && Objects.equals(preview.getSlotId(), slot.getId())
@@ -873,6 +900,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // 保存计划
         ProductionPlan savedPlan = productionPlanRepository.save(plan);
 
+        // 缺口 17 第 2 项: 把插单真正排进去并顺延被挤计划。与预览的排程指纹比对, 不一致整个确认回滚。
+        UrgentInsertScheduleService.Proposal applied = scheduleService.apply(
+                factoryId, slot, savedPlan, validation.preview().getScheduleFingerprint(), userId);
+
         log.info("紧急插单创建成功: planId={}, planNumber={}", savedPlan.getId(), savedPlan.getPlanNumber());
 
         // Sprint 3 Track-F (C-LINKARRAY-1): unified BusinessLink for urgent-insert path.
@@ -896,7 +927,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             // 不阻塞主流程
         }
 
-        return productionPlanMapper.toDTO(savedPlan);
+        ProductionPlanDTO dto = productionPlanMapper.toDTO(savedPlan);
+        dto.setScheduleOutcome(applied.toMap());
+        return dto;
     }
 
     @Override
@@ -950,6 +983,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         // Sprint 3 Track-F (C-LINKARRAY-1): unified BusinessLink for force-insert path.
         linkUrgentInsertPlan(factoryId, savedPlan, userId);
+
+        // 不需要审批的强制插入立即排入; 需要审批的等批准那一刻再排 (approveForceInsert)
+        UrgentInsertScheduleService.Proposal applied = needsApproval ? null : scheduleService.apply(
+                factoryId, slot, savedPlan, validation.preview().getScheduleFingerprint(), userId);
 
         // 准备审计日志上下文
         Map<String, Object> inputContext = new HashMap<>();
@@ -1040,7 +1077,11 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             // 不阻塞主流程
         }
 
-        return productionPlanMapper.toDTO(savedPlan);
+        ProductionPlanDTO dto = productionPlanMapper.toDTO(savedPlan);
+        if (applied != null) {
+            dto.setScheduleOutcome(applied.toMap());
+        }
+        return dto;
     }
 
     /**
@@ -1063,6 +1104,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new EntityNotFoundException("ProductionPlan", planId));
+        UrgentInsertScheduleService.Proposal approvalSchedule = null;
 
         // 验证工厂归属
         if (!factoryId.equals(plan.getFactoryId())) {
@@ -1084,6 +1126,16 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             // 批准后可以开始执行
             plan.setStatus(ProductionPlanStatus.PENDING);
             log.info("强制插单已批准: planId={}", planId);
+            // 缺口 17 第 2 项: 批准那一刻按最新数据重算并排入 (审批可能隔了很久, 没有预览指纹可比)。
+            // 排不进去则批准整体失败回滚, 计划仍待审批, 不会出现「批准了但没排进去」。
+            InsertSlot approvedSlot = insertSlotRepository.findByFactoryIdAndStatus(factoryId, "selected").stream()
+                    .filter(s -> Objects.equals(s.getStartTime(), plan.getStartTime())
+                            && Objects.equals(s.getProductionLineId(), plan.getSuggestedProductionLineId()))
+                    .findFirst()
+                    .orElseThrow(() -> new BusinessException(409, "找不到这张计划占用的时段，无法排入")
+                            .withCode("INSERT_APPROVAL_SLOT_MISSING")
+                            .withHint("到插单时段列表确认该时段状态后重试"));
+            approvalSchedule = scheduleService.apply(factoryId, approvedSlot, plan, null, approverId);
         } else {
             // 拒绝
             plan.reject(approverId, approver.getFullName(), comment);
@@ -1140,7 +1192,11 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             // 不阻塞主流程
         }
 
-        return productionPlanMapper.toDTO(updatedPlan);
+        ProductionPlanDTO approvalDto = productionPlanMapper.toDTO(updatedPlan);
+        if (approvalSchedule != null) {
+            approvalDto.setScheduleOutcome(approvalSchedule.toMap());
+        }
+        return approvalDto;
     }
 
     /**
