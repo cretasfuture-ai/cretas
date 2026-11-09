@@ -58,13 +58,23 @@ const heldBatches = ref<HeldGoodsBatchDTO[]>([]);
 const heldLoading = ref(false);
 const releasingHeldId = ref<number | null>(null);
 
+const heldError = ref('');
+
 async function loadHeldBatches() {
   if (!factoryId.value) return;
   heldLoading.value = true;
   try {
     heldBatches.value = await listHeldGoodsBatches(factoryId.value);
+    heldError.value = '';
+  } catch (error) {
+    // 查不到就明说, 不当成「没有」把页签藏掉 (#1548 第二轮审查 6)
+    heldError.value = error instanceof Error ? error.message : '查询成品隔离情况失败';
   } finally {
     heldLoading.value = false;
+  }
+  // 列表空了而页签正开着: 页签会消失, 切回默认页签, 不留一块空白
+  if (heldBatches.value.length === 0 && activeTab.value === 'heldGoods') {
+    activeTab.value = 'inspections';
   }
 }
 
@@ -73,7 +83,9 @@ async function handleReleaseHeld(row: HeldGoodsBatchDTO) {
   try {
     await ElMessageBox.confirm(
       `批次 ${row.batchNumber}${row.productName ? '（' + row.productName + '）' : ''} 已放行，`
-        + `所在计划 ${row.productionPlanId} 还有 ${row.heldGoods} 个成品批次在隔离中。\n`
+        + `所在计划 ${row.productionPlanId}：这次能放 ${row.releasableNow} 个成品批次`
+        + (row.unclearOwnership > 0 ? `，${row.unclearOwnership} 个因分不清归属卡住（补齐血缘后才放得出）` : '')
+        + '。\n'
         + '系统会按现在的数据重新核对（成品归属、召回、超时判废、同计划未处置的批次），能放的才放。',
       '重新核对并放行成品',
       { type: 'warning', confirmButtonText: '重新核对并放行', cancelButtonText: '取消', customStyle: { whiteSpace: 'pre-line' } },
@@ -527,6 +539,8 @@ onMounted(() => {
         </template>
       </el-alert>
 
+      <el-alert v-if="heldError" type="error" :closable="false" show-icon style="margin-bottom: 12px"
+        :title="`成品隔离情况查不到：${heldError}`" />
       <el-tabs v-model="activeTab">
         <el-tab-pane label="待处置质检" name="inspections">
           <el-table
@@ -653,16 +667,22 @@ onMounted(() => {
           </el-table>
         </el-tab-pane>
 
-        <!-- 只在「已放行批次的计划里还有成品在隔离」时出现 (Owner 2026-11-09) -->
+        <!-- 只在「已放行批次的计划里有按一下就有用的隔离成品」时出现 (Owner 2026-11-09, #1548 第二轮审查 6) -->
         <el-tab-pane v-if="heldBatches.length > 0" name="heldGoods" :label="`成品仍在隔离 (${heldBatches.length})`">
           <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px"
-            title="这些批次已经放行，但所在计划的成品当时没放（例如分不清成品属于哪个批次）。补齐资料后可申请重新核对，能放的才放。" />
+            title="这些批次已经放行，但所在计划的成品当时没放。报废、召回、判废的货永远不放，不在这里计数；分不清归属的要先补齐血缘。" />
           <el-table v-loading="heldLoading" :data="heldBatches" border stripe>
             <el-table-column prop="batchNumber" label="生产批次" min-width="180" />
             <el-table-column prop="productName" label="品名" min-width="140" />
             <el-table-column prop="productionPlanId" label="生产计划" min-width="200" />
-            <el-table-column label="隔离中的成品批次" width="150" align="right">
-              <template #default="{ row }">{{ row.heldGoods }}</template>
+            <el-table-column label="这次能放" width="110" align="right">
+              <template #default="{ row }">{{ row.releasableNow }}</template>
+            </el-table-column>
+            <el-table-column label="分不清归属" min-width="220">
+              <template #default="{ row }">
+                <span v-if="row.unclearOwnership > 0">{{ row.unclearOwnership }} 个：{{ row.unclearReason }}</span>
+                <span v-else>-</span>
+              </template>
             </el-table-column>
             <el-table-column label="操作" width="180" fixed="right">
               <template #default="{ row }">

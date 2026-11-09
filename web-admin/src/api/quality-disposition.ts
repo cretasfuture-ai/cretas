@@ -194,12 +194,18 @@ export interface HeldGoodsBatchDTO {
   productionPlanId: string;
   productName?: string | null;
   qualityStatus: string;
-  heldGoods: number;
+  /** 这次申请就能放的成品批数 (报废 / 召回 / 判废等永远不放的不算). */
+  releasableNow: number;
+  /** 因分不清归属卡住的成品批数: 补齐血缘后再申请才放得出. */
+  unclearOwnership: number;
+  unclearReason?: string | null;
 }
 
+/** 查不到就报错, ⛔ 不把失败当成「没有」悄悄藏掉页签. */
 export async function listHeldGoodsBatches(factoryId: string): Promise<HeldGoodsBatchDTO[]> {
   const res = await get<HeldGoodsBatchDTO[]>(`${basePath(factoryId)}/held-goods-batches`);
-  return res.success && res.data ? res.data : [];
+  if (!res.success || !Array.isArray(res.data)) throw new Error(res.message || '查询成品隔离情况失败');
+  return res.data;
 }
 
 /**
