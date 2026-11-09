@@ -1,6 +1,5 @@
 package com.cretas.aims.service.scheduling;
 
-import com.cretas.aims.dto.orchestration.MaterialAllocation;
 import com.cretas.aims.dto.orchestration.MaterialCheckResult;
 import com.cretas.aims.dto.orchestration.MaterialRequirement;
 import com.cretas.aims.dto.orchestration.MaterialShortfall;
@@ -70,7 +69,6 @@ public class UrgentInsertMaterialAssessor {
             m.put("message", message);
             m.put("bomRecipeId", bomRecipeId);
             m.put("bomVersion", bomVersion);
-            m.put("fingerprint", fingerprint);
             m.put("shortLines", lines.stream().map(l -> {
                 Map<String, Object> row = new HashMap<>();
                 row.put("materialTypeId", l.materialTypeId());
@@ -106,7 +104,11 @@ public class UrgentInsertMaterialAssessor {
             return assessIsolated(factoryId, productTypeId, quantity);
         } catch (BusinessException e) {
             log.warn("插单原料无法核对: factoryId={}, productTypeId={}, reason={}", factoryId, productTypeId, e.getMessage());
-            return unverified("原料未验证: " + e.getMessage());
+            // 异常文案可能带配方里的料名 / 单位: 无完整查看权的调用方只给通用说明
+            boolean reveal = processSecretGuard == null || processSecretGuard.permitsProduct(factoryId, productTypeId,
+                    ProcessSecretAction.VIEW_FULL, "urgent-insert material assessment");
+            return unverified(reveal ? "原料未验证: " + e.getMessage()
+                    : "原料未验证: 配方或库存单位配置有问题, 请由有权限的人核对后重试");
         } catch (Exception e) {
             log.error("插单原料核对失败: factoryId={}, productTypeId={}", factoryId, productTypeId, e);
             return unverified("原料未验证: 库存数据读取失败");
@@ -138,20 +140,20 @@ public class UrgentInsertMaterialAssessor {
         if (check == null) {
             return unverified("原料未验证: 原料核对没有返回结果");
         }
+        // 配方头表与明细不是一份快照: 展开之后再读一次生效配方, 变了就当没法核对, 不把旧版本号配新用量
+        BomRecipe after = bomRecipeRepository
+                .findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                        factoryId, productTypeId, BomRecipe.Status.ACTIVE)
+                .orElse(null);
+        if (after == null || !java.util.Objects.equals(after.getId(), recipe.getId())
+                || !java.util.Objects.equals(after.getVersion(), recipe.getVersion())) {
+            return unverified("原料未验证: 核对期间配方被修改, 请重试");
+        }
         boolean reveal = processSecretGuard == null || processSecretGuard.permitsProduct(factoryId, productTypeId,
                 ProcessSecretAction.VIEW_FULL, "urgent-insert material assessment");
 
         List<MaterialShortfall> shortfalls = check.getShortfalls() == null
                 ? Collections.emptyList() : check.getShortfalls();
-        Map<String, BigDecimal> allocatedByMaterial = new HashMap<>();
-        if (check.getAllocations() != null) {
-            for (MaterialAllocation a : check.getAllocations()) {
-                if (a.getMaterialTypeId() != null && a.getAllocatedQuantity() != null) {
-                    allocatedByMaterial.merge(a.getMaterialTypeId(), a.getAllocatedQuantity(), BigDecimal::add);
-                }
-            }
-        }
-
         List<Line> shortLines = new ArrayList<>();
         for (MaterialShortfall sf : shortfalls) {
             String unit = sf.getQuantityUnit();
@@ -184,8 +186,7 @@ public class UrgentInsertMaterialAssessor {
         requirements.stream()
                 .sorted((x, y) -> String.valueOf(x.getMaterialTypeId()).compareTo(String.valueOf(y.getMaterialTypeId())))
                 .forEach(r -> canon.append(r.getMaterialTypeId()).append('=')
-                        .append(plain(r.getRequiredQuantity())).append(':')
-                        .append(plain(allocatedByMaterial.get(r.getMaterialTypeId()))).append(';'));
+                        .append(plain(r.getRequiredQuantity())).append(';'));
         shortfalls.stream()
                 .sorted((x, y) -> String.valueOf(x.getMaterialTypeId()).compareTo(String.valueOf(y.getMaterialTypeId())))
                 .forEach(s -> canon.append("S:").append(s.getMaterialTypeId()).append('=')

@@ -344,7 +344,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // Only a product/unit-compatible analysis may issue a confirmation
         // preview.  Unknown package units remain UNVERIFIED and never get a
         // guessed PIECE/KG/BATCH snapshot.
-        if (createPreview && unitCompatible && plannedUnit != null && !plannedUnit.isBlank()) {
+        // 原料无法核对 (无指纹) 时不签发预览: 确认本来就会拒绝, 而无指纹的预览永远复用不上, 会一条条占满额度
+        if (createPreview && unitCompatible && plannedUnit != null && !plannedUnit.isBlank()
+                && materialPlan.fingerprint() != null) {
             LocalDateTime validAfter = LocalDateTime.now().minusMinutes(PREVIEW_VALID_MINUTES);
             List<InsertSlotPreview> recent = insertSlotPreviewRepository
                     .findByFactoryIdAndCreatedAtAfterOrderByCreatedAtDesc(factoryId, validAfter);

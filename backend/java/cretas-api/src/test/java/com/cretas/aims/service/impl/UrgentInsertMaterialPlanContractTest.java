@@ -289,6 +289,71 @@ class UrgentInsertMaterialPlanContractTest {
         assertThat(assessor.assess(F, PT, new BigDecimal("50")).fingerprint()).as("库存变成不够").isNotEqualTo(base);
     }
 
+    @Test
+    void stockChangeThatKeepsTheVerdictDoesNotMoveTheFingerprint() {
+        stock("80");
+        String base = assessor.assess(F, PT, new BigDecimal("50")).fingerprint();
+        stock("500");
+        assertThat(assessor.assess(F, PT, new BigDecimal("50")).fingerprint())
+                .as("仍然够: 不应误拒确认").isEqualTo(base);
+    }
+
+    @Test
+    void requiredQuantityIsPartOfTheFingerprint() {
+        stock("80");
+        String base = assessor.assess(F, PT, new BigDecimal("50")).fingerprint();
+        when(bom.expandBOM(eq(F), eq(PT), any())).thenReturn(List.of(need("RM-1", "带鱼", "61")));
+        assertThat(assessor.assess(F, PT, new BigDecimal("50")).fingerprint()).isNotEqualTo(base);
+    }
+
+    @Test
+    void recipeChangedWhileAssessingIsUnverifiedNotAMixOfVersions() {
+        stock("80");
+        BomRecipe newer = new BomRecipe();
+        newer.setId("RECIPE-1");
+        newer.setVersion(4);
+        when(recipes.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(F, PT, BomRecipe.Status.ACTIVE))
+                .thenReturn(Optional.of(recipe), Optional.of(newer));
+
+        Assessment a = assessor.assess(F, PT, new BigDecimal("50"));
+
+        assertThat(a.status()).isEqualTo(Status.UNVERIFIED);
+        assertThat(a.message()).contains("配方被修改");
+    }
+
+    @Test
+    void responseNeverExposesTheFingerprint() {
+        stock("20");
+        assertThat(assessor.assess(F, PT, new BigDecimal("50")).toMap()).doesNotContainKey("fingerprint");
+        stock("80");
+        assertThat(assessor.assess(F, PT, new BigDecimal("50")).toMap()).doesNotContainKey("fingerprint");
+    }
+
+    @Test
+    void configErrorMessageDoesNotNameMaterialsForCallersWithoutFullView() {
+        when(bom.expandBOM(eq(F), eq(PT), any())).thenThrow(new BusinessException(409,
+                "原料「带鱼」BOM单位(g)与库存单位(个)无法换算"));
+        assertThat(assessor.assess(F, PT, new BigDecimal("50")).message()).contains("带鱼");
+
+        when(secrets.permitsProduct(anyString(), anyString(), any(), anyString())).thenReturn(false);
+        Assessment hidden = assessor.assess(F, PT, new BigDecimal("50"));
+
+        assertThat(hidden.status()).isEqualTo(Status.UNVERIFIED);
+        assertThat(hidden.message()).doesNotContain("带鱼");
+    }
+
+    @Test
+    void unverifiedMaterialDoesNotIssueAPreviewThatWouldFillTheFactoryQuota() {
+        when(recipes.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(F, PT, BomRecipe.Status.ACTIVE))
+                .thenReturn(Optional.empty());
+
+        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+
+        assertThat(out.get("previewId")).isNull();
+        assertThat(out).containsEntry("feasibilityStatus", "UNVERIFIED");
+        verify(previews, never()).save(any());
+    }
+
     // ------------------------------------------------------------------ 预览: 所有读数都落进快照
 
     @Test
@@ -303,7 +368,9 @@ class UrgentInsertMaterialPlanContractTest {
                 .containsEntry("bomVersion", 3);
         org.mockito.ArgumentCaptor<InsertSlotPreview> saved = org.mockito.ArgumentCaptor.forClass(InsertSlotPreview.class);
         verify(previews).save(saved.capture());
-        assertThat(saved.getValue().getMaterialFingerprint()).isEqualTo(plan.get("fingerprint"));
+        assertThat(plan).doesNotContainKey("fingerprint");
+        assertThat(saved.getValue().getMaterialFingerprint())
+                .isEqualTo(assessor.assess(F, PT, new BigDecimal("50")).fingerprint());
         assertThat(saved.getValue().getBomRecipeId()).isEqualTo("RECIPE-1");
         assertThat(saved.getValue().getBomVersion()).isEqualTo(3);
         assertThat(saved.getValue().getImpactFingerprint()).isEqualTo(UrgentInsertServiceImpl.impactFingerprint(chain));
@@ -400,7 +467,8 @@ class UrgentInsertMaterialPlanContractTest {
         when(previews.findByIdAndFactoryId("PV-OLD", F)).thenReturn(Optional.of(legacy));
 
         assertThatThrownBy(() -> service.confirmInsert(F, 1L, confirmRequest("PV-OLD")))
-                .isInstanceOf(BusinessException.class);
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_PREVIEW_IMPACT_CHANGED"));
         verify(plans, never()).save(any());
     }
 

@@ -93,7 +93,7 @@ public class InsertSlotPreview extends BaseEntity {
     private Integer candidateNumber;
 
     /** 预览时生效配方的 id / 版本: 确认建计划时锁定到计划上, 不跟着之后的配方改动走。 */
-    @Column(name = "bom_recipe_id", length = 36, updatable = false)
+    @Column(name = "bom_recipe_id", length = 191, updatable = false)
     private String bomRecipeId;
 
     @Column(name = "bom_version", updatable = false)
