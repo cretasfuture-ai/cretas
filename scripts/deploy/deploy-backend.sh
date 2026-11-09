@@ -758,9 +758,15 @@ claim_build_race_winner() {
     local race_dir="$1"
     local contender="$2"
 
-    if mkdir "$race_dir/claim" 2>/dev/null; then
-        printf '%s\n' "$contender" > "$race_dir/winner.tmp"
-        mv -f "$race_dir/winner.tmp" "$race_dir/winner"
+    # The claim is bash's own exclusive create (noclobber = O_CREAT|O_EXCL), not an
+    # external `mkdir`: on GitHub's ubuntu-26.04 image two concurrent
+    # `mkdir <same dir>` calls both returned 0 in 142 of 400 runs (#1552), so both
+    # contenders "won" and interleaved their writes into one temp file.
+    # Each contender also writes its own temp file, so even a broken claim cannot
+    # produce a mixed winner.
+    if ( set -o noclobber; : > "$race_dir/claim" ) 2>/dev/null; then
+        printf '%s\n' "$contender" > "$race_dir/winner.$contender.tmp"
+        mv -f "$race_dir/winner.$contender.tmp" "$race_dir/winner"
     fi
 }
 
