@@ -186,17 +186,25 @@ public class UrgentInsertScheduleService {
         LocalDate today = LocalDate.now();
         LocalDate firstDay = slot.getStartTime().toLocalDate().isBefore(today) ? today : slot.getStartTime().toLocalDate();
 
-        // 同一条线、还没开工、结束时间不早于插入日的排程 = 被挤的候选; 开工的当固定占用不动
-        Map<String, List<LineSchedule>> movableByPlan = new LinkedHashMap<>();
+        // 被挤的候选 = 计划名下所有在用排程行都是「还没开工 (pending)」且都在这条线上。
+        // delayed 一定是已开工后超时的行 (只有 in_progress 才会被改成 delayed), 和 in_progress 一样是固定占用;
+        // 同一计划只要有一行已开工 / 在别的线上, 整个计划都不动 (引擎按计划整体剩余量重排, 动一半会重复占量)。
+        Map<String, List<LineSchedule>> livePerPlan = new LinkedHashMap<>();
         for (LineSchedule ls : constraints.findLiveEndingFrom(factoryId, firstDay.atStartOfDay())) {
-            if (!Objects.equals(ls.getProductionLineId(), slot.getProductionLineId())
-                    || ls.getStatus() == LineSchedule.ScheduleStatus.in_progress
-                    || ls.getProductionPlanId() == null
-                    || Objects.equals(ls.getProductionPlanId(), insertPlan.getId())) {
+            if (ls.getProductionPlanId() == null || Objects.equals(ls.getProductionPlanId(), insertPlan.getId())) {
                 continue;
             }
-            movableByPlan.computeIfAbsent(ls.getProductionPlanId(), k -> new ArrayList<>()).add(ls);
+            livePerPlan.computeIfAbsent(ls.getProductionPlanId(), k -> new ArrayList<>()).add(ls);
         }
+        Map<String, List<LineSchedule>> movableByPlan = new LinkedHashMap<>();
+        livePerPlan.forEach((planId, rows) -> {
+            boolean movable = rows.stream().allMatch(ls ->
+                    ls.getStatus() == LineSchedule.ScheduleStatus.pending
+                            && Objects.equals(ls.getProductionLineId(), slot.getProductionLineId()));
+            if (movable) {
+                movableByPlan.put(planId, rows);
+            }
+        });
         if (movableByPlan.size() > MAX_MOVED_PLANS) {
             return new Computation(new Proposal(BLOCKED, "同一产线上待重排的计划有 " + movableByPlan.size()
                     + " 个，超过 " + MAX_MOVED_PLANS + " 个，请先缩小范围", null, null, List.of(), List.of(), null),
@@ -255,6 +263,17 @@ public class UrgentInsertScheduleService {
             long delay = oldEnd == null || newEnd == null ? 0 : java.time.temporal.ChronoUnit.DAYS.between(oldEnd, newEnd);
             moved.add(new Moved(e.getKey(), number, oldEnd, newEnd, delay, due, exceeds, orderIdsOf(plan),
                     r.delays() == null ? List.of() : r.delays().stream().map(ConstrainedSchedulePreview.Delay::text).toList()));
+        }
+        // 插入首日的调度计划已完成 / 取消就排不进去: 预览阶段就说, 不等确认才失败
+        SchedulingPlan container = schedulingPlanRepository
+                .findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, firstDayOf(mine)).orElse(null);
+        if (container != null && (container.getStatus() == SchedulingPlan.PlanStatus.completed
+                || container.getStatus() == SchedulingPlan.PlanStatus.cancelled)) {
+            return new Computation(new Proposal(BLOCKED, "插入首日 " + firstDayOf(mine) + " 的调度计划已"
+                    + (container.getStatus() == SchedulingPlan.PlanStatus.completed ? "完成" : "取消")
+                    + "，无法排入，请先处理该日调度计划或改选其他时段", null, null, List.of(),
+                    raw.warnings() == null ? List.of() : raw.warnings(), null),
+                    raw, insertPlan, movableByPlan, plansById, firstDay);
         }
         Proposal proposal = new Proposal(OK, null, firstDayOf(mine), lastDay(mine), moved,
                 raw.warnings() == null ? List.of() : raw.warnings(), fingerprint(mine, raw, moved));
@@ -346,12 +365,6 @@ public class UrgentInsertScheduleService {
                 extra.setAdjustmentReason(trim("紧急插单 " + insertPlan.getPlanNumber() + " 重排，合并到同计划的另一条排程", 200));
                 lineScheduleRepository.save(extra);
             }
-            ProductionPlan plan = c.plansById().get(m.planId());
-            if (plan != null) {
-                plan.setStartTime(head.getPlannedStartTime());
-                plan.setEndTime(head.getPlannedEndTime());
-                planRepository.save(plan);
-            }
         }
 
         // 2) 插单: 挂在插入首日的调度计划下 (没有就建一个), 起止时间也写回计划
@@ -386,9 +399,8 @@ public class UrgentInsertScheduleService {
         created.setDailyAllocations(mine.dailyAllocations());
         created.setStatus(LineSchedule.ScheduleStatus.pending);
         lineScheduleRepository.save(created);
-        insertPlan.setStartTime(created.getPlannedStartTime());
-        insertPlan.setEndTime(created.getPlannedEndTime());
-        planRepository.save(insertPlan);
+        // ⛔ 不改计划的 startTime / endTime: 影响分析按它们判重叠, 引擎自己的 generate 也不写它们;
+        //    新的完成日以排程行 (LineSchedule) 为准, 交付风险闭环读的也是排程行。
         log.info("插单已排入: planId={}, 日期 {}~{}, 被挤计划 {} 个, 交期被突破 {} 个", insertPlan.getId(), day,
                 lastDay(mine), c.proposal().moved().size(),
                 c.proposal().moved().stream().filter(Moved::exceedsDue).count());
@@ -412,7 +424,9 @@ public class UrgentInsertScheduleService {
      * 放在提交之后: 评估里缺料分析可能抛业务异常, 在确认事务里会把整个确认标成回滚。
      */
     private void registerOverdueReminders(String factoryId, Computation c, Long userId) {
-        Set<String> orderIds = c.proposal().moved().stream().filter(Moved::exceedsDue)
+        // 凡是被顺延的计划所属订单都交给闭环重新评估: 闭环按订单自己的交期和当前排程判风险,
+        // 不能只看计划交期 (计划交期可能为空或晚于订单交期)。没风险的它不开实例。
+        Set<String> orderIds = c.proposal().moved().stream().filter(m -> m.delayDays() > 0)
                 .flatMap(m -> m.orderIds().stream()).collect(Collectors.toCollection(LinkedHashSet::new));
         if (orderIds.isEmpty()) {
             return;
@@ -424,7 +438,10 @@ public class UrgentInsertScheduleService {
         ActorRef actor = new ActorRef(AuthenticatedActorType.FACTORY_USER, userId);
         Runnable remind = () -> {
             try {
-                int n = deliveryRiskService.refreshOrders(factoryId, orderIds, actor);
+                // afterCommit 里原事务已提交, 在它里面做数据写入不会再提交 ⇒ 必须开新事务
+                TransactionTemplate fresh = new TransactionTemplate(transactionManager);
+                fresh.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                Integer n = fresh.execute(s -> deliveryRiskService.refreshOrders(factoryId, orderIds, actor));
                 log.info("插单交期提醒已登记: factoryId={}, 订单 {} 个, 处理 {} 个", factoryId, orderIds.size(), n);
             } catch (RuntimeException e) {
                 log.error("插单交期提醒登记失败: factoryId={}, orders={}", factoryId, orderIds, e);

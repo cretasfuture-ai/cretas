@@ -39,8 +39,11 @@ public interface UrgentInsertService {
     /**
      * Create an immutable server-owned preview snapshot for confirmation.
      * Unlike the GET impact analysis this is an explicit write operation.
+     *
+     * @param operatorId 操作人 (本厂用户 id): 排程预览要用它建一条会被回滚的临时计划 (created_by 非空且外键到 users)
      */
-    Map<String, Object> createInsertPreview(String factoryId, String slotId, GetInsertSlotsRequest request);
+    Map<String, Object> createInsertPreview(String factoryId, Long operatorId, String slotId,
+                                            GetInsertSlotsRequest request);
 
     /**
      * 确认紧急插单（创建生产计划）

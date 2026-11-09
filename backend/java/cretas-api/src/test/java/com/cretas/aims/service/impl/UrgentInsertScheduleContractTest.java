@@ -101,7 +101,7 @@ class UrgentInsertScheduleContractTest {
         planA = plan("PLAN-A", "PA-1", DAY.plusDays(6), "SO-A");
         planB = plan("PLAN-B", "PB-1", DAY.plusDays(8), "SO-B");
         rowA = row("LS-A", "PLAN-A", LINE, LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(5));
-        rowB = row("LS-B", "PLAN-B", LINE, LineSchedule.ScheduleStatus.delayed, DAY.plusDays(6), DAY.plusDays(8));
+        rowB = row("LS-B", "PLAN-B", LINE, LineSchedule.ScheduleStatus.pending, DAY.plusDays(6), DAY.plusDays(8));
         runningRow = row("LS-RUN", "PLAN-RUN", LINE, LineSchedule.ScheduleStatus.in_progress, DAY, DAY.plusDays(1));
         otherLineRow = row("LS-OTHER", "PLAN-OTHER", "L2", LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(3));
         when(constraints.findLiveEndingFrom(eq(F), any())).thenReturn(List.of(rowA, runningRow, otherLineRow, rowB));
@@ -212,8 +212,8 @@ class UrgentInsertScheduleContractTest {
         assertThat(created.getPlannedStartTime()).isEqualTo(DAY.atStartOfDay());
         assertThat(created.getPlannedQuantity()).isEqualTo(50);
         assertThat(created.getPlan()).isNotNull();
-        assertThat(insert.getStartTime()).isEqualTo(DAY.atStartOfDay());
-        assertThat(planB.getEndTime()).isEqualTo(DAY.plusDays(11).atTime(23, 59));
+        // 计划自己的起止时间不动 (影响分析按它们判重叠); 新完成日以排程行为准
+        verify(plans, never()).save(any());
 
         // 回执: 每个被挤订单新完成日 + 交期是否突破
         assertThat(p.moved()).hasSize(2);
@@ -229,7 +229,7 @@ class UrgentInsertScheduleContractTest {
     }
 
     @Test
-    void onlyOrdersWhoseDueDateIsBrokenAreRegisteredWithTheDeliveryRiskLoop() {
+    void onlyOrdersOfPlansThatMovedLaterAreRegisteredWithTheDeliveryRiskLoop() {
         happyEngine();
 
         service.apply(F, slot, insert, null, 7L);
@@ -238,6 +238,16 @@ class UrgentInsertScheduleContractTest {
         verify(risk).refreshOrders(eq(F), orders.capture(),
                 eq(new ActorRef(AuthenticatedActorType.FACTORY_USER, 7L)));
         assertThat(orders.getValue()).containsExactly("SO-B");
+    }
+
+    @Test
+    void ordersOfPlansThatMovedLaterAreRegisteredEvenWhenThePlanDueDateIsEmpty() {
+        planB.setExpectedCompletionDate(null);   // 计划交期为空, 但订单可能有交期: 交给闭环按订单交期判
+        happyEngine();
+
+        service.apply(F, slot, insert, null, 7L);
+
+        verify(risk).refreshOrders(eq(F), org.mockito.ArgumentMatchers.argThat(c -> c.contains("SO-B")), any());
     }
 
     @Test
@@ -346,15 +356,70 @@ class UrgentInsertScheduleContractTest {
     }
 
     @Test
-    void closedDayContainerRefusesTheInsertAndLeavesBumpedRowsUntouchedByTheCaller() {
+    void closedDayContainerBlocksAtPreviewTimeAndWritesNothing() {
         happyEngine();
         SchedulingPlan closed = new SchedulingPlan();
         closed.setStatus(SchedulingPlan.PlanStatus.completed);
         when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), eq(DAY))).thenReturn(Optional.of(closed));
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
 
+        Proposal preview = service.dryRun(F, slot, insert);
+
+        assertThat(preview.status()).as("预览阶段就拦, 不等确认才失败").isEqualTo(UrgentInsertScheduleService.BLOCKED);
+        assertThat(preview.message()).contains("调度计划已完成");
         assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
-                        assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_CONTAINER_CLOSED"));
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_BLOCKED"));
+        verify(lineSchedules, never()).save(any());
+    }
+
+    // ------------------------------------------------------------------ 谁能被挤: 只有整个计划都没开工、都在这条线上
+
+    private java.util.Collection<String> movableIdsOfTheRequest() {
+        ArgumentCaptor<SchedulePreviewRequest> req = ArgumentCaptor.forClass(SchedulePreviewRequest.class);
+        verify(generator).preview(eq(F), req.capture());
+        return req.getValue().movableLineScheduleIds();
+    }
+
+    @Test
+    void aDelayedRowIsAStartedRowAndItsPlanIsNeverMoved() {
+        // delayed 只会由已开工 (in_progress) 的行超时变来, 带实际开工时间和已完成量
+        LineSchedule delayed = row("LS-DELAYED", "PLAN-D", LINE, LineSchedule.ScheduleStatus.delayed, DAY, DAY.plusDays(4));
+        delayed.setActualStartTime(DAY.atTime(8, 0));
+        delayed.setCompletedQuantity(40);
+        when(constraints.findLiveEndingFrom(eq(F), any())).thenReturn(List.of(rowA, delayed, rowB));
+        engine(scheduled("PLAN-INS", DAY, 1, "50"), scheduled("PLAN-A", DAY.plusDays(1), 5, "20"),
+                scheduled("PLAN-B", DAY.plusDays(6), 3, "20"));
+
+        service.apply(F, slot, insert, null, 7L);
+
+        assertThat(movableIdsOfTheRequest()).containsExactlyInAnyOrder("LS-A", "LS-B").doesNotContain("LS-DELAYED");
+        assertThat(delayed.getPlannedEndTime()).isEqualTo(DAY.plusDays(4).atTime(23, 59));
+        assertThat(delayed.getAdjustmentCount()).isEqualTo(0);
+    }
+
+    @Test
+    void aPlanWithOneStartedRowAndOnePendingRowIsNotMovedAtAll() {
+        LineSchedule started = row("LS-P1", "PLAN-MIX", LINE, LineSchedule.ScheduleStatus.in_progress, DAY, DAY.plusDays(1));
+        LineSchedule pending = row("LS-P2", "PLAN-MIX", LINE, LineSchedule.ScheduleStatus.pending, DAY.plusDays(2), DAY.plusDays(3));
+        when(constraints.findLiveEndingFrom(eq(F), any())).thenReturn(List.of(started, pending, rowA));
+        engine(scheduled("PLAN-INS", DAY, 1, "50"), scheduled("PLAN-A", DAY.plusDays(1), 5, "20"));
+
+        service.apply(F, slot, insert, null, 7L);
+
+        assertThat(movableIdsOfTheRequest()).containsExactly("LS-A");
+    }
+
+    @Test
+    void aPlanWithARowOnAnotherLineIsNotMoved() {
+        LineSchedule here = row("LS-H", "PLAN-TWO", LINE, LineSchedule.ScheduleStatus.pending, DAY.plusDays(1), DAY.plusDays(2));
+        LineSchedule there = row("LS-T", "PLAN-TWO", "L2", LineSchedule.ScheduleStatus.pending, DAY.plusDays(1), DAY.plusDays(2));
+        when(constraints.findLiveEndingFrom(eq(F), any())).thenReturn(List.of(here, there, rowA));
+        engine(scheduled("PLAN-INS", DAY, 1, "50"), scheduled("PLAN-A", DAY.plusDays(1), 5, "20"));
+
+        service.apply(F, slot, insert, null, 7L);
+
+        assertThat(movableIdsOfTheRequest()).containsExactly("LS-A");
     }
 
     @Test

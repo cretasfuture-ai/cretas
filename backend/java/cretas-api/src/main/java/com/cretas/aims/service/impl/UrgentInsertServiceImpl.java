@@ -42,7 +42,9 @@ import com.cretas.aims.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -87,6 +89,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final UrgentInsertMaterialAssessor materialAssessor;
     /** 缺口 17 第 2 项: 调约束排程引擎, 预览算排程、确认后真正排入并顺延被挤计划。 */
     private final UrgentInsertScheduleService scheduleService;
+    private final PlatformTransactionManager transactionManager;
 
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for urgent-insert path. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -136,17 +139,69 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
     @Override
     public Map<String, Object> analyzeInsertImpact(String factoryId, String slotId, GetInsertSlotsRequest request) {
-        return analyzeInsertImpactInternal(factoryId, slotId, request, false);
+        return analyzeInsertImpactInternal(factoryId, slotId, request, false, null);
     }
 
+    /**
+     * 创建确认预览。排程预览要建一条临时计划再回滚 (引擎按计划 id 读计划), 它必须在<b>外层事务和行锁之外</b>先算:
+     * 外层 {@code factories} / {@code product_types} 行被 FOR UPDATE 锁住后, 内层插入 production_plans
+     * 的外键检查 (FOR KEY SHARE) 会一直等外层释放, 外层又在 Java 里等内层返回 ⇒ 应用层互等, 数据库死锁检测看不到。
+     * 所以这里不加 {@code @Transactional}: 先算排程, 再用事务模板跑原来的预览事务。预览只是建议,
+     * 确认时会在锁内重算并比对指纹, 两步之间数据变了只会让确认被拒、要求重新预览。
+     */
     @Override
-    @Transactional
-    public Map<String, Object> createInsertPreview(String factoryId, String slotId, GetInsertSlotsRequest request) {
-        return analyzeInsertImpactInternal(factoryId, slotId, request, true);
+    public Map<String, Object> createInsertPreview(String factoryId, Long operatorId, String slotId,
+                                                   GetInsertSlotsRequest request) {
+        UrgentInsertScheduleService.Proposal precomputed = precomputeSchedule(factoryId, operatorId, slotId, request);
+        return new TransactionTemplate(transactionManager).execute(
+                status -> analyzeInsertImpactInternal(factoryId, slotId, request, true, precomputed));
+    }
+
+    /**
+     * 不持锁地读时段 / 产品, 条件齐了才算排程; 任何一项没核对通过返回 null (预览里记为「排程未评估」,
+     * 原因已在原料 / 产能 / 单位里说了)。真正的校验错误由随后的预览事务照原样抛出。
+     */
+    private UrgentInsertScheduleService.Proposal precomputeSchedule(
+            String factoryId, Long operatorId, String slotId, GetInsertSlotsRequest request) {
+        // 临时计划的 created_by 非空且外键到 users: 必须是真实操作人; 没有 (如平台账号) 就不算排程
+        if (operatorId == null || operatorId <= 0) {
+            return null;
+        }
+        try {
+            InsertSlot slot = insertSlotRepository.findByIdAndFactoryId(slotId, factoryId).orElse(null);
+            ProductType product = request.getProductTypeId() == null ? null
+                    : productTypeRepository.findByIdAndFactoryId(request.getProductTypeId(), factoryId).orElse(null);
+            if (slot == null || product == null || product.getUnit() == null || product.getUnit().isBlank()
+                    || slot.getProductionLineId() == null || slot.getProductionLineId().isBlank()
+                    || slot.getStartTime() == null || slot.getEndTime() == null) {
+                return null;
+            }
+            String quantityUnit = tryNormalizeQuantityUnit(request.getQuantityUnit());
+            String productCapacityUnit = capacityUnitForProduct(product.getUnit());
+            if (quantityUnit == null || productCapacityUnit == null
+                    || !sameCapacityDimension(productCapacityUnit, quantityUnit)) {
+                return null;
+            }
+            validatePreviewQuantity(request.getRequiredQuantity(), false);
+            UrgentInsertMaterialAssessor.Assessment material = materialAssessor.assess(
+                    factoryId, request.getProductTypeId(), request.getRequiredQuantity());
+            if (!material.ok()) {
+                return null;
+            }
+            return scheduleService.dryRun(factoryId, slot, createProductionPlanFromSlot(factoryId, operatorId, slot,
+                    ConfirmUrgentInsertRequest.builder().slotId(slot.getId())
+                            .productTypeId(request.getProductTypeId())
+                            .plannedQuantity(request.getRequiredQuantity()).build(),
+                    product.getUnit(), material));
+        } catch (RuntimeException e) {
+            log.warn("插单排程预览前置失败, 按未评估处理: factoryId={}, slotId={}, reason={}", factoryId, slotId, e.getMessage());
+            return null;
+        }
     }
 
     private Map<String, Object> analyzeInsertImpactInternal(
-            String factoryId, String slotId, GetInsertSlotsRequest request, boolean createPreview) {
+            String factoryId, String slotId, GetInsertSlotsRequest request, boolean createPreview,
+            UrgentInsertScheduleService.Proposal precomputedSchedule) {
         log.info("分析插单影响: factoryId={}, slotId={}, productTypeId={}, quantity={}",
                 factoryId, slotId, request.getProductTypeId(), request.getRequiredQuantity());
 
@@ -233,15 +288,14 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         // 缺口 17 第 2 项: 排程预览 (引擎算, 临时计划算完回滚)。原料不满足 / 单位或产线没验证时不算,
         // 状态 NOT_EVALUATED, 原因已在前面的原料 / 产能里说了。
-        boolean scheduleAttempted = materialPlan.ok() && unitCompatible && physicalLineBound
+        // 只读的 GET 影响分析不算排程 (排程预览要建临时计划再回滚, 那是写事务): 只在创建确认预览时算
+        boolean scheduleAttempted = createPreview && materialPlan.ok() && unitCompatible && physicalLineBound
                 && plannedUnit != null && !plannedUnit.isBlank();
-        UrgentInsertScheduleService.Proposal schedulePlan = scheduleAttempted
-                ? scheduleService.dryRun(factoryId, slot, createProductionPlanFromSlot(factoryId, null, slot,
-                        ConfirmUrgentInsertRequest.builder().slotId(slot.getId())
-                                .productTypeId(request.getProductTypeId())
-                                .plannedQuantity(request.getRequiredQuantity()).build(),
-                        plannedUnit, materialPlan))
-                : UrgentInsertScheduleService.Proposal.notEvaluated("排程未评估: 原料、产能或产线信息还没核对通过");
+        UrgentInsertScheduleService.Proposal schedulePlan = scheduleAttempted && precomputedSchedule != null
+                ? precomputedSchedule
+                : UrgentInsertScheduleService.Proposal.notEvaluated(createPreview
+                        ? "排程未评估: 原料、产能或产线信息还没核对通过"
+                        : "排程只在创建确认预览时计算");
 
         Map<String, Object> result = new HashMap<>();
 

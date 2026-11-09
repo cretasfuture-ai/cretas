@@ -42,7 +42,7 @@ class SchedulingInsertPreviewPermissionGateContractTest {
         users = mock(UserRepository.class); permissions = mock(PermissionService.class); service = mock(UrgentInsertService.class);
         User user = new User(); user.setId(1L); user.setFactoryId("F006"); user.setRoleCode("dispatcher"); user.setIsActive(true);
         when(users.findById(1L)).thenReturn(Optional.of(user));
-        when(service.createInsertPreview(eq("F006"), eq("SLOT"), any())).thenReturn(Map.of("previewId", "server-preview"));
+        when(service.createInsertPreview(eq("F006"), any(), eq("SLOT"), any())).thenReturn(Map.of("previewId", "server-preview"));
         SchedulingController controller = new SchedulingController(mock(SchedulingService.class), service, mock(LinUCBService.class));
         ReflectionTestUtils.setField(controller, "factoryAccessValidator", new FactoryAccessValidator(users));
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
@@ -58,7 +58,7 @@ class SchedulingInsertPreviewPermissionGateContractTest {
         mvc.perform(post(URL).requestAttr("userId", 1L).requestAttr("role", "dispatcher")
                         .contentType(MediaType.APPLICATION_JSON).content(BODY))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.previewId").value("server-preview"));
-        verify(service).createInsertPreview(eq("F006"), eq("SLOT"), any());
+        verify(service).createInsertPreview(eq("F006"), any(), eq("SLOT"), any());
     }
 
     @Test

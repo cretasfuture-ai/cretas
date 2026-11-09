@@ -220,7 +220,7 @@ class UrgentInsertMaterialPlanContractTest {
 
     /** 走真实预览入口发一份预览, 并让确认读到它。 */
     private InsertSlotPreview issuePreview() {
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
         assertThat(out.get("previewId")).as("预览应已签发").isNotNull();
         org.mockito.ArgumentCaptor<InsertSlotPreview> saved = org.mockito.ArgumentCaptor.forClass(InsertSlotPreview.class);
         verify(previews).save(saved.capture());
@@ -359,7 +359,7 @@ class UrgentInsertMaterialPlanContractTest {
         when(recipes.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(F, PT, BomRecipe.Status.ACTIVE))
                 .thenReturn(Optional.empty());
 
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         assertThat(out.get("previewId")).isNull();
         assertThat(out).containsEntry("feasibilityStatus", "UNVERIFIED");
@@ -372,7 +372,7 @@ class UrgentInsertMaterialPlanContractTest {
     void previewCarriesMaterialPlanAndStoresFingerprintsAndLockedRecipe() {
         stock("80");
 
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> plan = (Map<String, Object>) out.get("materialPlan");
@@ -392,7 +392,7 @@ class UrgentInsertMaterialPlanContractTest {
     void shortStockPreviewSaysInfeasibleWithTheGap() {
         stock("20");
 
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         assertThat(out).containsEntry("isFeasible", false).containsEntry("feasibilityStatus", "INFEASIBLE");
         assertThat((String) out.get("infeasibleReason")).contains("带鱼").contains("缺 40kg");
@@ -528,7 +528,7 @@ class UrgentInsertMaterialPlanContractTest {
         when(scheduler.dryRun(any(), any(), any())).thenReturn(new UrgentInsertScheduleService.Proposal(
                 UrgentInsertScheduleService.BLOCKED, "设备已报废", null, null, List.of(), List.of(), null));
 
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         assertThat(out.get("previewId")).isNull();
         assertThat(out).containsEntry("isFeasible", false).containsEntry("feasibilityStatus", "INFEASIBLE");
@@ -540,10 +540,35 @@ class UrgentInsertMaterialPlanContractTest {
     }
 
     @Test
+    void readOnlyImpactAnalysisNeverRunsTheEngineBecauseItNeedsAWriteTransaction() {
+        stock("80");
+
+        Map<String, Object> out = service.analyzeInsertImpact(F, "S1", analyzeRequest());
+
+        verify(scheduler, never()).dryRun(any(), any(), any());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sp = (Map<String, Object>) out.get("schedulePlan");
+        assertThat(sp).containsEntry("status", "NOT_EVALUATED");
+        assertThat(out.get("previewId")).isNull();
+    }
+
+    @Test
+    void theTemporaryPlanForTheDryRunCarriesAnOwnerBecauseCreatedByIsNotNull() {
+        stock("80");
+
+        service.createInsertPreview(F, 1L, "S1", analyzeRequest());
+
+        org.mockito.ArgumentCaptor<ProductionPlan> temp = org.mockito.ArgumentCaptor.forClass(ProductionPlan.class);
+        verify(scheduler).dryRun(eq(F), any(), temp.capture());
+        assertThat(temp.getValue().getCreatedBy()).isNotNull();
+        assertThat(temp.getValue().getSelectedBomRecipeId()).isEqualTo("RECIPE-1");
+    }
+
+    @Test
     void shortMaterialDoesNotEvenAskTheEngine() {
         stock("20");
 
-        service.createInsertPreview(F, "S1", analyzeRequest());
+        service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         verify(scheduler, never()).dryRun(any(), any(), any());
     }
@@ -557,7 +582,7 @@ class UrgentInsertMaterialPlanContractTest {
                         start.toLocalDate().plusDays(11), 3, start.toLocalDate().plusDays(8), true, List.of("SO-B"), List.of())),
                 List.of(), "FP-X"));
 
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> sp = (Map<String, Object>) out.get("schedulePlan");

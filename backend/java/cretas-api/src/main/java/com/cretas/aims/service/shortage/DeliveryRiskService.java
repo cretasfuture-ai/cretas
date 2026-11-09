@@ -118,9 +118,14 @@ public class DeliveryRiskService {
             if (o == null) {
                 continue;
             }
-            OrderAssessment a = assess(factoryId, o);
-            store.record(factoryId, a, fingerprint(a), actor);
-            done++;
+            try {
+                OrderAssessment a = assess(factoryId, o);
+                store.record(factoryId, a, fingerprint(a), actor);
+                done++;
+            } catch (RuntimeException e) {
+                // 一个订单评估失败不能让后面的订单都不登记
+                log.error("交付风险: 订单 {} 登记失败: {}", id, e.getMessage(), e);
+            }
         }
         return done;
     }
