@@ -31,6 +31,7 @@ import com.cretas.aims.service.orchestration.BomExpansionService;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import com.cretas.aims.service.scheduling.LineCapacityEquipmentCheck;
 import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
+import com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,6 +74,27 @@ class UrgentInsertResourceGuardContractTest {
     private ProductionLineRepository productionLines;
     private EquipmentRepository equipment;
     private LineCapacityEquipmentCheck lineChecks;
+    /** 非 null 时 urgent(...) 用它做原料评估 (真实评估器 + BOM 桩); null 时用恒「够」的默认桩。 */
+    private UrgentInsertMaterialAssessor realAssessor;
+
+    /** 真实评估器: BOM 展开 / 库存读数走本类的 bom 桩, 生效配方恒为 RECIPE-1 v3。 */
+    private UrgentInsertMaterialAssessor assessorOverBomStub() {
+        com.cretas.aims.repository.bom.BomRecipeRepository recipes =
+                mock(com.cretas.aims.repository.bom.BomRecipeRepository.class);
+        com.cretas.aims.entity.bom.BomRecipe recipe = new com.cretas.aims.entity.bom.BomRecipe();
+        recipe.setId("RECIPE-1");
+        recipe.setVersion(3);
+        when(recipes.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(
+                eq(F), eq("PT-1"), eq(com.cretas.aims.entity.bom.BomRecipe.Status.ACTIVE)))
+                .thenReturn(Optional.of(recipe));
+        ProcessSecretRecipeGuard secrets = mock(ProcessSecretRecipeGuard.class);
+        when(secrets.permitsProduct(anyString(), anyString(), any(), anyString())).thenReturn(true);
+        return UrgentInsertTestSupport.construct(UrgentInsertMaterialAssessor.class, Map.of(
+                BomExpansionService.class, bom,
+                com.cretas.aims.repository.bom.BomRecipeRepository.class, recipes,
+                ProcessSecretRecipeGuard.class, secrets,
+                PlatformTransactionManager.class, mock(PlatformTransactionManager.class)));
+    }
 
     @BeforeEach
     void setUp() {
@@ -256,7 +278,7 @@ class UrgentInsertResourceGuardContractTest {
                 .quantityUnit("KG".equals(productUnit) ? "KG" : "PIECE")
                 .plannedUnit(productUnit).productionLineId("L1").windowStart(SLOT_START)
                 .windowEnd(SLOT_START.plusHours(2)).slotUpdatedAt(slot().getUpdatedAt())
-                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).build();
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).build();
         preview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV-1", F)).thenReturn(Optional.of(preview));
         ProductTypeRepository products = mock(ProductTypeRepository.class);
@@ -264,7 +286,7 @@ class UrgentInsertResourceGuardContractTest {
         product.setId("PT-1"); product.setFactoryId(F); product.setUnit(productUnit);
         when(products.findByIdAndFactoryId("PT-1", F)).thenReturn(Optional.of(product));
         when(products.findByIdAndFactoryIdForUpdate("PT-1", F)).thenReturn(Optional.of(product));
-        return UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
+        Map<Class<?>, Object> deps = new java.util.HashMap<>(Map.of(
                 InsertSlotRepository.class, slots,
                 ImpactAnalysisService.class, svc,
                 ProductionPlanRepository.class, plans,
@@ -273,11 +295,16 @@ class UrgentInsertResourceGuardContractTest {
                 SchedulingResourceWriteLock.class, mock(SchedulingResourceWriteLock.class),
                 LineCapacityEquipmentCheck.class, lineChecks,
                 ObjectMapper.class, new ObjectMapper()));
+        if (realAssessor != null) {
+            deps.put(UrgentInsertMaterialAssessor.class, realAssessor);
+        }
+        return UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, deps);
     }
 
     @Test
     @SuppressWarnings("unchecked")
     void analyzeWithNoActiveBomIsNotFeasibleAndSaysUnverified() {
+        realAssessor = assessorOverBomStub();
         when(bom.expandBOM(anyString(), anyString(), any()))
                 .thenThrow(new BusinessException(409, "产品尚无已激活的新版 BOM 配方: PT-1"));
         InsertSlotRepository slots = mock(InsertSlotRepository.class);
@@ -298,6 +325,7 @@ class UrgentInsertResourceGuardContractTest {
 
     @Test
     void analyzeWithZeroStockIsInfeasible() {
+        realAssessor = assessorOverBomStub();
         stockIsZero();
         InsertSlotRepository slots = mock(InsertSlotRepository.class);
         when(slots.findByIdAndFactoryId("S-1", F)).thenReturn(Optional.of(slot()));

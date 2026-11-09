@@ -75,6 +75,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         DailyCapacityScheduleGenerator.class,
         ExperienceCapacityService.class,
         ProductDailyCapacityService.class,
+        ScheduleConstraintReader.class, // 缺口 18: 生成器读约束 (设备 / 已落库排程 / 原料 / 半成品依赖)
         SchedulingPlanCrudServiceImpl.class,
         SchedulingResourceWriteLock.class
 })

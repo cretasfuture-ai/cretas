@@ -1,4 +1,4 @@
-import { get } from './request';
+import request, { get } from './request';
 
 export interface TraceabilityListItem {
   batchNumber: string;
@@ -316,4 +316,80 @@ export function isTraceNotFound(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const e = error as { status?: unknown; code?: unknown };
   return e.status === 404 || String(e.code) === '404' || e.code === 'NOT_FOUND';
+}
+
+// ========== 验厂证据包（缺口 02） ==========
+
+export interface EvidenceMissingItem {
+  kind: string;
+  batchNumber?: string | null;
+  detail: string;
+}
+
+/** 后端 TraceEvidencePackService.Pack 里本页用到的部分。status=READY 才算证据齐全。 */
+export interface EvidencePackSummary {
+  rootBatchNumber: string;
+  status: 'READY' | 'GAPS' | string;
+  missingEvidence: EvidenceMissingItem[];
+}
+
+/** 证据包 JSON（取状态与缺口）。失败由拦截器 reject，调用方如实展示。 */
+export async function getEvidencePack(factoryId: string, batchNumber: string): Promise<EvidencePackSummary> {
+  const res = await get<EvidencePackSummary>(
+    `/${factoryId}/traceability/evidence-pack/${encodeURIComponent(batchNumber)}`,
+    { _silent: true } as never,
+  );
+  if (!res.success || !res.data) throw new Error(res.message || '证据包查询失败');
+  return { ...res.data, missingEvidence: res.data.missingEvidence ?? [] };
+}
+
+/** 证据包 ZIP（6 个 CSV）。返回 Blob，由调用方触发保存。 */
+export async function exportEvidencePack(factoryId: string, batchNumber: string): Promise<Blob> {
+  const res = await request.get(
+    `/${factoryId}/traceability/evidence-pack/${encodeURIComponent(batchNumber)}/export`,
+    { responseType: 'blob', _keepResponse: true, _silent: true } as object,
+  );
+  const data = (res as unknown as { data: unknown }).data;
+  if (!(data instanceof Blob) || data.size === 0) throw new Error('证据包下载内容为空');
+  return data;
+}
+
+// ========== 召回影响面箱数（缺口 01） ==========
+
+export interface BoxTotals {
+  complete: boolean;
+  totalBoxQuantity?: string | null;
+  knownBoxSubtotal?: string | null;
+  knownSourceCount: number;
+  unknownSourceCount: number;
+}
+
+export interface BoxExposureGap {
+  code?: string;
+  kind?: string;
+  message?: string;
+}
+
+export interface RecallBoxExposure {
+  stock?: BoxTotals | null;
+  shipped?: BoxTotals | null;
+  gaps?: BoxExposureGap[] | null;
+}
+
+export interface RecallImpact {
+  rootType: string;
+  rootId: string;
+  finishedBatchCount?: number;
+  shipmentCount?: number;
+  /** null/缺失 = 本次没算成；⛔ 不要当 0 箱。 */
+  boxExposure?: RecallBoxExposure | null;
+}
+
+export async function getRecallImpact(factoryId: string, batchType: string, batchId: string): Promise<RecallImpact> {
+  const res = await get<RecallImpact>(
+    `/${factoryId}/traceability/impact/${batchType}/${encodeURIComponent(batchId)}`,
+    { _silent: true } as never,
+  );
+  if (!res.success || !res.data) throw new Error(res.message || '召回影响面查询失败');
+  return res.data;
 }
