@@ -3972,7 +3972,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         + " (逐道提交 " + stripTrailing(rowsAtSubmit) + unit + ", App 报工 " + stripTrailing(app) + unit
                         + "), 这行手工领用会把它再扣一遍")
                         .withCode("SETTLEMENT_MANUAL_SEMI_ALREADY_POSTED")
-                        .withHint("报工已经从库存扣过这批半成品, 请删掉这行手工领用; 数量不对请先更正报工再结单")
+                        .withHint("报工已经从库存扣过这批半成品, 请删掉这行手工领用, 数量不对请先更正报工再结单")
                         .withHintTarget("半成品领用");
             }
         }
@@ -4521,8 +4521,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     ? new PlanOutputComparison(null, "末道产出单位与计划单位不同(如 份/盒 vs kg)")
                     : new PlanOutputComparison(output, null);
         }
-        if (planUnit.equals(outUnit)
-                || (unitContractService != null && unitContractService.areEquivalent(factoryId, planUnit, outUnit))) {
+        // 单位同一性问单位契约 (⛔ 不比字符串, BareUnitEqualityRatchet); 契约不在 = 判不了, 如实不比
+        if (unitContractService == null) {
+            return new PlanOutputComparison(null, "单位契约服务未就绪, 产出单位与计划单位是否相同无法核对");
+        }
+        if (unitContractService.areEquivalent(factoryId, planUnit, outUnit)) {
             return new PlanOutputComparison(output, null);
         }
         String productTypeId = firstNonBlank(trimToNull(outputProductTypeId), trimToNull(plan.getProductTypeId()));

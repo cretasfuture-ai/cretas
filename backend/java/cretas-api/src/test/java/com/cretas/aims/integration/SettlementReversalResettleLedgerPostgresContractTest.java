@@ -103,7 +103,9 @@ class SettlementReversalResettleLedgerPostgresContractTest {
     @EnableJpaRepositories("com.cretas.aims.repository")
     @Import({ProductionPlanServiceImpl.class, WipInventoryServiceImpl.class, SecondaryPlanFeedService.class,
             SettlementSemiStockingService.class, FinishedGoodsFeedServiceImpl.class,
-            ReportReversalServiceImpl.class, ReversalConsumptionCleanupService.class})
+            ReportReversalServiceImpl.class, ReversalConsumptionCleanupService.class,
+            com.cretas.aims.service.yield.impl.InterimSettleServiceImpl.class,
+            com.cretas.aims.service.yield.impl.InterimSettleReversalServiceImpl.class})
     static class Runtime { }
 
     @DynamicPropertySource
@@ -131,6 +133,8 @@ class SettlementReversalResettleLedgerPostgresContractTest {
     @MockBean NotificationService notificationService;
     @MockBean PermissionService permissionService;
     @MockBean UserRepository userRepository;
+    @MockBean com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
+    @MockBean com.cretas.aims.service.processentry.ClerkProcessEntryService clerkProcessEntryService;
 
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
@@ -142,6 +146,8 @@ class SettlementReversalResettleLedgerPostgresContractTest {
     @Autowired FinishedGoodsBatchRepository finishedGoods;
     @Autowired ProcessSheetRowRepository rows;
     @Autowired com.cretas.aims.repository.ProductionInterimSettlementRepository interimSessions;
+    @Autowired com.cretas.aims.service.yield.InterimSettleService interimSettle;
+    @Autowired com.cretas.aims.service.yield.InterimSettleReversalService undoInterim;
 
     private TransactionTemplate tx;
 
@@ -156,6 +162,10 @@ class SettlementReversalResettleLedgerPostgresContractTest {
         when(ownershipGuard.ofProductionBatch(any(), any())).thenReturn(IntermediateOwnershipGuard.Owner.COMPANY);
         when(permissionService.hasPermission(any(), anyString())).thenReturn(true);
         when(userRepository.findById(any())).thenReturn(Optional.of(new User()));
+        when(warehouseResolver.resolveFinishedGoodsId(any())).thenReturn("WH");
+        when(warehouseResolver.resolveWorkshopId(any())).thenReturn("WH");
+        when(clerkProcessEntryService.resolveLaborRate(any(), any())).thenReturn(BigDecimal.ZERO);
+        when(clerkProcessEntryService.computeLaborCost(any(), any())).thenReturn(BigDecimal.ZERO);
     }
 
     /** 一张计划: 第 1 道 (在制批次 W1) 投常驻半成品 10; 第 2 道 (正式批次 B, 出成品) 投半成品 30 + 成品 20。 */
@@ -454,35 +464,132 @@ class SettlementReversalResettleLedgerPostgresContractTest {
     }
 
     /**
-     * 独立审查 #1550 发现 2: 存货生产 (SAFETY_STOCK) 的结单是仓库确认时从小结桥接出来的
-     * ({@code by-stock-interim:}), 结单时刻 = 最后一次小结的过账时刻, 投料是小结扣的、戳也是小结盖的。
-     * 报工撤回走得到这张结单 (计划只有一个正式批次), 此时它 ⛔ 不能按「旧结单没明细」拒绝 (话不对),
-     * 也 ⛔ 不能把小结盖的戳当成结单的戳清掉 (清掉后下一次小结会把这些投料再扣一次)。
-     * 小结扣的料只归「撤销小结」管, 报工撤回一笔不动。
+     * 独立审查 #1550 发现 2 + 复审: 存货生产 (SAFETY_STOCK) 的结单是仓库确认时从小结桥接出来的
+     * ({@code by-stock-interim:}), 投料是小结扣的、戳也是小结盖的, 只归「撤销小结」管。
+     *
+     * <p>被撤那一道已被小结盖过 ⇒ 报工撤回 ⛔ 直接拒绝 (要先撤销小结): 放行的话行和报工被软删、本计划成品批全作废,
+     * 小结的扣减却原样留着, 重报再小结会把同一份投料再扣一次。拒绝时 ⛔ 一样不能动: 库存、戳、成品批、结单都原样。</p>
+     *
+     * <p>桥接要求每条已提交的行都已小结 (否则 409「尚未全部正式提交并小结」), 所以有桥接结单的计划里每一道都带戳,
+     * 撤回一律走到这道拒绝; 原先「桥接结单撤回不动小结戳」的放行形状在真实入口上已不可达, 不再单独测。</p>
      */
     @Test
-    void byStockBridgeSettlementReversalLeavesTheInterimSessionsDeductionsAndStampsAlone() {
-        String suffix = UUID.randomUUID().toString().substring(0, 8);
+    void byStockBridgeSettlementRefusesReversalOfAnInterimSettledStepAndChangesNothing() {
         LocalDateTime postedAt = LocalDateTime.now().withNano(0).minusHours(1);
+        Fixture f = byStockBridgeFixture(postedAt, true);
+        planService.bridgeByStockSettlement(F, f.planId());
+        assertThat(jdbc.queryForObject("select stock_feed_detail from production_settlements where production_plan_id = ? "
+                + "and deleted_at is null", String.class, f.planId())).as("桥接结单本身一笔投料没扣").isEqualTo("[]");
+        String before = byStockState(f);
+
+        assertThatThrownBy(() -> reversalService.submitReversal(F, f.finalBatchId(), OPERATOR, "改报工"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("REVERSAL_BLOCKED_BY_INTERIM_SETTLE");
+                    assertThat(e.getActionHint()).as("告诉用户下一步: 先撤销小结").contains("撤销小结");
+                });
+
+        assertThat(byStockState(f)).as("拒绝时库存/戳/成品批/结单/撤回单一样没动").isEqualTo(before);
+        assertThat(jdbc.queryForObject("select count(*) from production_settlements where production_plan_id = ? "
+                + "and deleted_at is null", Integer.class, f.planId())).as("桥接结单还在").isEqualTo(1);
+    }
+
+    /**
+     * 复审给的完整形状, 不经桥接结单 (此前「没结单的存货生产计划」同样漏): 真小结 → 撤回被拒、一样没动 →
+     * 真撤销小结 → 撤回放行 → 第 2 道照原样重报 → 再小结, 半成品只扣真实用量 30 (10 + 20), ⛔ 不是 50。
+     * 撤回单在小结之前就提交了 (待审批), 执行时才被拦 —— 执行那道闸单独有信号; 第 1 道在小结后提交, 提交那道闸拦。
+     */
+    @Test
+    void byStockReversalIsRefusedWhileAnInterimSessionCoversTheStepAndAllowedAfterUndoingIt() {
         Fixture f = tx.execute(state -> {
-            // 小结已从常驻半成品扣了 第 1 道 10 + 第 2 道 20
+            String suffix = UUID.randomUUID().toString().substring(0, 8);
             SemiFinishedInventory semi = wips.save(SemiFinishedInventory.builder()
                     .factoryId(F).intermediateBatchNo("BS-SRC-" + suffix).productTypeId("SEMI-1").unit("kg")
-                    .producedQuantity(new BigDecimal("100")).consumedQuantity(new BigDecimal("30"))
-                    .availableQuantity(new BigDecimal("70")).processOrder(1)
+                    .producedQuantity(new BigDecimal("100")).consumedQuantity(BigDecimal.ZERO)
+                    .availableQuantity(new BigDecimal("100")).processOrder(1)
                     .status(SemiFinishedInventory.Status.AVAILABLE).build());
+            ProductionPlan plan = byStockPlan("PLAN-BSL-" + suffix, ProductionPlanStatus.IN_PROGRESS);
+            ProductionBatch w1 = batch(plan.getId(), "BSL-W-" + suffix, "CLERK_WIP");
+            ProductionBatch fin = batch(plan.getId(), "BSL-B-" + suffix, "REGULAR");
+            Long stepOneRowId = rows.save(row(plan.getId(), w1, 1, "bsl-step1-" + suffix, false,
+                    List.of(semiFeed(semi.getIntermediateBatchNo(), "10")))).getId();
+            Long lastRowId = rows.save(row(plan.getId(), fin, 2, "bsl-step2-" + suffix, true,
+                    List.of(semiFeed(semi.getIntermediateBatchNo(), "20")))).getId();
+            return new Fixture(plan.getId(), w1.getId(), fin.getId(), semi.getId(),
+                    semi.getIntermediateBatchNo(), null, stepOneRowId, lastRowId);
+        });
 
-            ProductionPlan plan = new ProductionPlan();
-            plan.setId("PLAN-BS-" + suffix);
-            plan.setFactoryId(F);
-            plan.setPlanNumber("BS-" + suffix);
-            plan.setProductTypeId("FG-1");
-            plan.setPlannedQuantity(new BigDecimal("100"));
-            plan.setPlannedUnit("kg");
-            plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
-            plan.setStatus(ProductionPlanStatus.COMPLETED);
-            plan.setCreatedBy(OPERATOR);
-            plans.save(plan);
+        ReportReversalLog pending = reversalService.submitReversal(F, f.finalBatchId(), OPERATOR, "改报工");
+        assertThat(pending.getStatus()).as("只有录入行没有报工 ⇒ 待审批, 提交时零改动")
+                .isEqualTo(ReportReversalLog.ReversalStatus.PENDING);
+
+        interimSettle.interimSettle(F, f.planId(), OPERATOR);
+        assertThat(semiConsumed(f)).as("小结扣了 10 + 20").isEqualByComparingTo("30");
+        assertThat(stamp(f.finalRowId())).as("小结盖了第 2 道").isNotNull();
+        assertThat(jdbc.queryForObject("select count(*) from finished_goods_batches where production_plan_id = ? "
+                + "and status = 'AVAILABLE'", Integer.class, f.planId())).as("小结建了成品批").isEqualTo(1);
+        String settled = byStockState(f);
+
+        assertThatThrownBy(() -> reversalService.executeReversal(pending.getId(), F))
+                .as("执行那道闸: 提交在小结之前, 执行时这一道已被小结盖过")
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("REVERSAL_BLOCKED_BY_INTERIM_SETTLE"));
+        assertThat(byStockState(f)).as("执行被拒: 库存/戳/成品批状态/撤回单都没动").isEqualTo(settled);
+
+        assertThatThrownBy(() -> reversalService.submitReversal(F, f.stepOneBatchId(), OPERATOR, "改第 1 道"))
+                .as("提交那道闸: 第 1 道也被小结盖过")
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("REVERSAL_BLOCKED_BY_INTERIM_SETTLE"));
+        assertThat(byStockState(f)).as("提交被拒: 没开撤回单, 一样没动").isEqualTo(settled);
+
+        undoInterim.reverseInterimSettle(F, f.planId(), null, OPERATOR);
+        assertThat(semiConsumed(f)).as("撤销小结还回 30").isEqualByComparingTo("0");
+        assertThat(stamp(f.finalRowId())).as("撤销小结清戳").isNull();
+
+        reversalService.executeReversal(pending.getId(), F);
+        assertThat(jdbc.queryForObject("select status from report_reversal_logs where id = ?", String.class,
+                pending.getId())).as("撤销小结之后放行").isEqualTo("DONE");
+        assertThat(jdbc.queryForObject("select count(*) from process_sheet_rows where id = ? and deleted_at is null",
+                Integer.class, f.finalRowId())).as("第 2 道的行被撤掉").isZero();
+
+        tx.executeWithoutResult(state -> {
+            ProductionBatch fin = batches.findById(f.finalBatchId()).orElseThrow();
+            rows.save(row(f.planId(), fin, 2, "bsl-step2-redo-" + f.planId(), true,
+                    List.of(semiFeed(f.semiNo(), "20"))));
+        });
+        interimSettle.interimSettle(F, f.planId(), OPERATOR);
+
+        assertThat(semiConsumed(f)).as("重报再小结: 只扣真实用量 10 + 20, 不是 50").isEqualByComparingTo("30");
+        assertThat(jdbc.queryForObject("select available_quantity from semi_finished_inventory where id = ?",
+                BigDecimal.class, f.semiId())).isEqualByComparingTo("70");
+        assertThat(jdbc.queryForObject("select count(*) from production_interim_settlement where production_plan_id = ? "
+                + "and deleted_at is null", Integer.class, f.planId())).as("只剩重报后的这一次小结").isEqualTo(1);
+    }
+
+    private ProductionPlan byStockPlan(String id, ProductionPlanStatus status) {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(id);
+        plan.setFactoryId(F);
+        plan.setPlanNumber(id.substring(5));
+        plan.setProductTypeId("FG-1");
+        plan.setPlannedQuantity(new BigDecimal("100"));
+        plan.setPlannedUnit("kg");
+        plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK);
+        plan.setStatus(status);
+        plan.setCreatedBy(OPERATOR);
+        return plans.save(plan);
+    }
+
+    /** 小结 (seq 1, postedAt) 已扣第 1 道 10 (+ 第 2 道 20, 若 finalStepSettled), 已建成品批; 计划已完工待桥接。 */
+    private Fixture byStockBridgeFixture(LocalDateTime postedAt, boolean finalStepSettled) {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String consumed = finalStepSettled ? "30" : "10";
+        return tx.execute(state -> {
+            SemiFinishedInventory semi = wips.save(SemiFinishedInventory.builder()
+                    .factoryId(F).intermediateBatchNo("BS-SRC-" + suffix).productTypeId("SEMI-1").unit("kg")
+                    .producedQuantity(new BigDecimal("100")).consumedQuantity(new BigDecimal(consumed))
+                    .availableQuantity(new BigDecimal("100").subtract(new BigDecimal(consumed))).processOrder(1)
+                    .status(SemiFinishedInventory.Status.AVAILABLE).build());
+            ProductionPlan plan = byStockPlan("PLAN-BS-" + suffix, ProductionPlanStatus.COMPLETED);
 
             ProductionBatch w1 = batch(plan.getId(), "BS-W-" + suffix, "CLERK_WIP");
             ProductionBatch fin = batch(plan.getId(), "BS-B-" + suffix, "REGULAR");
@@ -491,7 +598,9 @@ class SettlementReversalResettleLedgerPostgresContractTest {
             stepOne.setInterimSettledAt(postedAt);
             ProcessSheetRow last = row(plan.getId(), fin, 2, "bs-step2-" + suffix, true,
                     List.of(semiFeed(semi.getIntermediateBatchNo(), "20")));
-            last.setInterimSettledAt(postedAt);
+            if (finalStepSettled) {
+                last.setInterimSettledAt(postedAt);
+            }
             Long stepOneRowId = rows.save(stepOne).getId();
             Long lastRowId = rows.save(last).getId();
 
@@ -516,25 +625,23 @@ class SettlementReversalResettleLedgerPostgresContractTest {
             return new Fixture(plan.getId(), w1.getId(), fin.getId(), semi.getId(),
                     semi.getIntermediateBatchNo(), out.getBatchNumber(), stepOneRowId, lastRowId);
         });
+    }
 
-        // 真入口: 仓库确认前的桥接 (停产也走同一个方法)
-        planService.bridgeByStockSettlement(F, f.planId());
-        assertThat(jdbc.queryForObject("select idempotency_key from production_settlements where production_plan_id = ? "
-                + "and deleted_at is null", String.class, f.planId())).startsWith("by-stock-interim:");
-        assertThat(jdbc.queryForObject("select settled_at from production_settlements where production_plan_id = ? "
-                + "and deleted_at is null", LocalDateTime.class, f.planId())).as("结单时刻 = 小结过账时刻")
-                .isEqualTo(postedAt);
-        assertThat(jdbc.queryForObject("select stock_feed_detail from production_settlements where production_plan_id = ? "
-                + "and deleted_at is null", String.class, f.planId())).as("桥接结单本身一笔投料没扣").isEqualTo("[]");
-
-        reverseFinalStep(f);
-
-        assertThat(jdbc.queryForObject("select count(*) from production_settlements where production_plan_id = ? "
-                + "and deleted_at is null", Integer.class, f.planId())).as("报工撤回走到了这张桥接结单").isZero();
-        assertThat(semiConsumed(f)).as("小结扣的投料报工撤回一笔不动 (只归撤销小结管)").isEqualByComparingTo("30");
-        assertThat(jdbc.queryForObject("select available_quantity from semi_finished_inventory where id = ?",
-                BigDecimal.class, f.semiId())).isEqualByComparingTo("70");
-        assertThat(stamp(f.stepOneRowId())).as("小结盖的戳没被当成结单戳清掉").isEqualTo(postedAt);
+    /** 拒绝时必须原样的一切: 半成品余额、各行戳与软删、成品批状态/数量、撤回单、活小结。 */
+    private String byStockState(Fixture f) {
+        return String.join(" | ",
+                jdbc.queryForObject("select consumed_quantity || '/' || available_quantity from semi_finished_inventory "
+                        + "where id = ?", String.class, f.semiId()),
+                String.join(",", jdbc.queryForList("select id || ':' || coalesce(interim_settled_at::text, '-') || ':' "
+                        + "|| coalesce(deleted_at::text, '-') from process_sheet_rows where plan_id = ? order by id",
+                        String.class, f.planId())),
+                String.join(",", jdbc.queryForList("select batch_number || ':' || status || ':' || produced_quantity "
+                        + "from finished_goods_batches where production_plan_id = ? order by batch_number",
+                        String.class, f.planId())),
+                String.join(",", jdbc.queryForList("select id || ':' || status from report_reversal_logs "
+                        + "where plan_id = ? order by id", String.class, f.planId())),
+                String.valueOf(jdbc.queryForObject("select count(*) from production_interim_settlement "
+                        + "where production_plan_id = ? and deleted_at is null", Integer.class, f.planId())));
     }
 
     /**

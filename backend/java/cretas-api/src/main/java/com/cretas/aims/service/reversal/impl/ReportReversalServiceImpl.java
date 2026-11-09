@@ -240,6 +240,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         .withCode("FG_SHIPPED")
                         .withHint("请确认出货记录后处理退货再申请撤回");
             }
+            refuseWhileInterimSessionCovers(factoryId, batchId, batch.getProductionPlanId());
         }
 
         // G3: 幂等检查
@@ -400,6 +401,8 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (reversalConsumptionCleanupService != null) {
             reversalConsumptionCleanupService.lockReversalScope(factoryId, log_.getBatchId(), log_.getPlanId());
         }
+        // 存货生产: 被小结盖过的这一道只能先撤销小结 (在任何改动之前判; 提交时也判过, 这里防提交后又小结)
+        refuseWhileInterimSessionCovers(factoryId, log_.getBatchId(), log_.getPlanId());
 
         Long batchId = log_.getBatchId();
         List<Long> revertedTxnIds = new ArrayList<>();
@@ -2103,7 +2106,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 throw new BusinessException(409, "这张结单在投料明细上线前完成, 结单时按逐道录入扣掉的半成品/成品没有逐笔记录 ("
                         + String.join("、", unrecorded) + "), 撤回无法原样还回")
                         .withCode("SETTLEMENT_STOCK_FEED_DETAIL_MISSING")
-                        .withHint("请联系管理员按结单当时的扣减量人工核对这几批半成品/成品库存后再处理; 直接撤回会让它们在重新结单时再被扣一次")
+                        .withHint("请联系管理员按结单当时的扣减量人工核对这几批半成品/成品库存后再处理, 直接撤回会让它们在重新结单时再被扣一次")
                         .withSeverity("BLOCKING")
                         .withHintTarget(planId);
             }
@@ -2133,16 +2136,19 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             if (reportSfiBatchNos.contains(entry.batchNumber().trim())) {
                 throw new BusinessException(409, "撤回失败: 半成品 " + entry.batchNumber()
                         + " 同时是本次撤回的报工产出和结单投料来源, 无法判断先还哪一笔")
-                        .withCode("WIP_SCOPE_INVALID");
+                        .withCode("WIP_SCOPE_INVALID")
+                        .withHint("请联系管理员核对这批半成品的入库与结单投料记录, 人工处理后再撤回");
             }
         }
         if (!entries.isEmpty() && wipInventoryService == null) {
             throw new BusinessException(409, "撤回失败: 半成品库存服务未就绪, 无法还回结单投料")
-                    .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING");
+                    .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING")
+                    .withHint("这是系统配置问题, 请联系管理员检查服务部署后再撤回, 本次没有改动任何库存");
         }
         if (anyFinished && finishedGoodsFeedService == null) {
             throw new BusinessException(409, "撤回失败: 成品投料服务未就绪, 无法还回结单投料")
-                    .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING");
+                    .withCode("REVERSAL_SETTLEMENT_DEPENDENCY_MISSING")
+                    .withHint("这是系统配置问题, 请联系管理员检查服务部署后再撤回, 本次没有改动任何库存");
         }
         return entries;
     }
@@ -2432,6 +2438,44 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      */
     private static boolean settlementIsInterimMirror(ProductionPlan plan) {
         return plan != null && plan.getSourceType() == com.cretas.aims.entity.enums.PlanSourceType.SAFETY_STOCK;
+    }
+
+    static final String INTERIM_SETTLED_REVERSAL_CODE = "REVERSAL_BLOCKED_BY_INTERIM_SETTLE";
+
+    /**
+     * 存货生产 (SAFETY_STOCK) 计划: 被撤那一道的录入行或原料消耗带小结戳 (= 有一次已过账的小结盖过它们) 时拒绝撤回。
+     *
+     * <p>小结扣的投料/原料、建的成品批都只归撤销小结管; 报工撤回不还它们 (见 {@link #settlementIsInterimMirror})。
+     * 若放行: 行和报工被软删、本计划成品批全标作废, 而小结的扣减原样留着 —— 重报这一道再小结一次会把同一份投料再扣一遍
+     * (实测形状: 真实用 30, 两次小结共扣 50), 那次小结还指着一个已作废的成品批。有没有桥接结单都一样, 所以按计划来源判,
+     * 不按结单判。⛔ 不在这里替用户撤销小结: 撤销小结有自己的下游已消耗守卫, 要它先过。</p>
+     */
+    private void refuseWhileInterimSessionCovers(String factoryId, Long batchId, String planId) {
+        if (batchId == null || planId == null || planId.isBlank() || productionPlanRepository == null) {
+            return;
+        }
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId).orElse(null);
+        if (!settlementIsInterimMirror(plan)) {
+            return;
+        }
+        long stampedRows = processSheetRowRepository == null ? 0
+                : rowsOfReversedStep(factoryId, batchId, planId).stream()
+                        .filter(row -> row.getDeletedAt() == null && row.getInterimSettledAt() != null)
+                        .count();
+        long stampedConsumptions = materialConsumptionRepository == null ? 0
+                : Optional.ofNullable(materialConsumptionRepository.findByProductionBatchIdAndFactoryId(batchId, factoryId))
+                        .orElse(List.of()).stream()
+                        .filter(c -> c != null && c.getInterimSettledAt() != null)
+                        .count();
+        if (stampedRows == 0 && stampedConsumptions == 0) {
+            return;
+        }
+        throw new BusinessException(409, "这一道已经小结过 (" + stampedRows + " 条录入行、" + stampedConsumptions
+                + " 条原料消耗已结), 小结扣的投料和建的成品只能由撤销小结还回, 不能直接撤回报工")
+                .withCode(INTERIM_SETTLED_REVERSAL_CODE)
+                .withHint("请先在「生产计划」列表该计划的「更多 → 申请撤销小结」撤销盖过这一道的小结 (审批通过后生效), 再撤回这道报工")
+                .withSeverity("BLOCKING")
+                .withHintTarget(planId);
     }
 
     private Set<Long> preflightSettlementSemiFinished(String factoryId, String planId,
