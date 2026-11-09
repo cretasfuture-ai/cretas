@@ -10,6 +10,7 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
+import com.cretas.aims.service.sales.AutoAllocationOutcome;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -57,6 +58,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -372,6 +374,36 @@ class BatchAllocationRulesContractTest {
 
         batches.clear();
         assertThat(service.autoAllocateFifo(FACTORY, "271", PRODUCT, new BigDecimal("1"), "箱", null)).isFalse();
+    }
+
+    // ==================== Q3: 子发运预填按值返回原因 ====================
+
+    @Test
+    @DisplayName("Q3: 子发运预填只剩规格不一致的货 —— 不抛异常, 带回 BATCH_PACKAGING_SPEC_MISMATCH 和两边规格, 不写分配")
+    void prefillReturnsTheMismatchInsteadOfThrowing() {
+        batch("FG02", "盒", "托盘", "盒", "96", FinishedGoodsBatch.Status.AVAILABLE);
+
+        AutoAllocationOutcome outcome = service.prefillFifo(FACTORY, "271", PRODUCT, new BigDecimal("1"), "箱", null);
+
+        assertThat(outcome.allocated()).isFalse();
+        assertThat(outcome.code()).isEqualTo("BATCH_PACKAGING_SPEC_MISMATCH");
+        assertThat(outcome.message()).contains("1托盘=96盒").contains("1箱=8盒");
+        assertThat(outcome.hint()).contains("换算");
+        verify(allocations, never()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("Q3: 真没货时说库存不够 (FIFO_STOCK_SHORTFALL, 带中文单位); 规格一致的货照常预填")
+    void prefillNamesShortfallAndStillAllocatesMatchingStock() {
+        AutoAllocationOutcome empty = service.prefillFifo(FACTORY, "271", PRODUCT, new BigDecimal("1"), "箱", null);
+        assertThat(empty.allocated()).isFalse();
+        assertThat(empty.code()).isEqualTo(AutoAllocationOutcome.CODE_STOCK_SHORTFALL);
+        assertThat(empty.message()).contains("1箱");
+
+        batch("FG-SAME", "盒", "箱", "盒", "8", FinishedGoodsBatch.Status.AVAILABLE);
+        AutoAllocationOutcome ok = service.prefillFifo(FACTORY, "271", PRODUCT, new BigDecimal("1"), "箱", null);
+        assertThat(ok.allocated()).isTrue();
+        verify(allocations).saveAll(anyList());
     }
 
     // ==================== 夹具 ====================

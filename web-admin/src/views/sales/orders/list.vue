@@ -98,6 +98,7 @@ import {
 } from './salesOrderListUx';
 import { toDateString } from '@/utils/dateFormat';
 import { createAutoFullChildShipment, isFullQuickDeliveryPlan } from './deliveryAutoChild';
+import { allocationNoticeLines } from './shipmentAllocationNotices';
 
 // Quick action dialogs
 const deliveryDialogVisible = ref(false);
@@ -2245,6 +2246,14 @@ async function submitQuickDelivery() {
             logisticsCompany: deliveryForm.value.logisticsCompany,
             trackingNumber: deliveryForm.value.trackingNumber,
             deliveryAddress: deliveryForm.value.deliveryAddress,
+            // Q3: 子单建成但有行没自动分配批次 (如规格不一致要确认换算) —— 原因原样告诉用户, 并指到能确认的地方
+            onAllocationNotices: (notices) => ElMessage({
+              type: 'warning',
+              message: `子发运单已创建，下面这些行没有自动分配批次：\n${allocationNoticeLines(notices).join('\n')}\n`
+                + '请打开这张销售订单的详情，在「发货记录」里点「分配批次」确认换算。',
+              duration: 0,
+              showClose: true,
+            }),
           }).catch(() => false)
           : false;
         if (!created) {

@@ -21,6 +21,7 @@ import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.inventory.FgReservationLedgerService;
 import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
+import com.cretas.aims.service.sales.AutoAllocationOutcome;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
 import com.cretas.aims.service.sales.FinishedGoodsBatchSaleabilityGuard;
@@ -678,6 +679,64 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         if (requiredQty == null || requiredQty.signum() <= 0) {
             return true;   // 这一行没有要发的量, 不需要分配
         }
+        List<BatchAllocationDTO> picks = fifoPicks(
+                factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+        if (picks == null) {
+            BusinessException mismatch = packagingMismatchShortfall(
+                    factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+            if (mismatch != null) {
+                throw mismatch;
+            }
+            return false;
+        }
+        allocateBatches(factoryId, deliveryItemId, picks);
+        log.info("[自动分配FIFO] factory={} item={} 已分配 {} 个批次, 合计={}",
+                factoryId, deliveryItemId, picks.size(), requiredQty);
+        return true;
+    }
+
+    @Override
+    @Transactional
+    public AutoAllocationOutcome prefillFifo(String factoryId, String deliveryItemId, String productTypeId,
+                                             BigDecimal requiredQty, String unit, String sourceWarehouseCode) {
+        if (requiredQty == null || requiredQty.signum() <= 0) {
+            return AutoAllocationOutcome.done();
+        }
+        // ⛔ 业务异常必须在本方法里接住: 一旦穿过事务代理, 外层的子发运创建就只能回滚 (Q3)。
+        //    本方法内的调用都是自调用 (不过代理), 写入只在 allocateBatches 全部校验通过之后才发生。
+        try {
+            List<BatchAllocationDTO> picks = fifoPicks(
+                    factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+            if (picks == null) {
+                BusinessException mismatch = packagingMismatchShortfall(
+                        factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+                if (mismatch != null) {
+                    return AutoAllocationOutcome.notAllocated(mismatch.getErrorCode(), mismatch.getMessage(),
+                            mismatch.getActionHint());
+                }
+                return AutoAllocationOutcome.notAllocated(AutoAllocationOutcome.CODE_STOCK_SHORTFALL,
+                        "可用成品库存不够本行数量（需要 " + requiredQty.stripTrailingZeros().toPlainString()
+                                + UnitDisplayNames.display(unit) + "），没有自动分配批次",
+                        "补货或调拨后在「分配批次」里分配；也可以少发");
+            }
+            allocateBatches(factoryId, deliveryItemId, picks);
+            return AutoAllocationOutcome.done();
+        } catch (BusinessException e) {
+            log.warn("[子发运预填] 未自动分配 factory={} item={} code={} reason={}",
+                    factoryId, deliveryItemId, e.getErrorCode(), e.getMessage());
+            return AutoAllocationOutcome.notAllocated(
+                    e.getErrorCode() != null ? e.getErrorCode() : "AUTO_ALLOCATION_REJECTED",
+                    e.getMessage(), e.getActionHint());
+        }
+    }
+
+    /**
+     * 先进先出挑批次 (只挑规格一致或没有规格信息的批次: 自动分配没有人确认换算, O-309-1)。
+     *
+     * @return 凑够发货行数量的挑选结果; 凑不够 = null (⛔ 不做部分分配)
+     */
+    private List<BatchAllocationDTO> fifoPicks(String factoryId, String deliveryItemId, String productTypeId,
+                                               BigDecimal requiredQty, String unit, String sourceWarehouseCode) {
         // O-309-1: 自动分配没有人确认换算, 所以只挑规格一致 (或没有规格信息) 的批次
         List<Map<String, Object>> candidates = recommend(
                 factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode, true);
@@ -712,28 +771,22 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         if (remaining.signum() > 0 || picks.isEmpty()) {
             log.warn("[自动分配FIFO] 库存不足 factory={} item={} 需要={} 还差={}",
                     factoryId, deliveryItemId, requiredQty, remaining);
-            assertShortfallIsNotPackagingMismatch(
-                    factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
-            return false;
+            return null;
         }
-
-        allocateBatches(factoryId, deliveryItemId, picks);
-        log.info("[自动分配FIFO] factory={} item={} 已分配 {} 个批次, 合计={}",
-                factoryId, deliveryItemId, picks.size(), requiredQty);
-        return true;
+        return picks;
     }
 
     /**
      * 货其实在, 只是规格不一致才凑不够时, ⛔ 不能让调用方报「库存不足」: 那会让人去补货,
-     * 而他要做的是确认换算。把真实原因抛出去。
+     * 而他要做的是确认换算。返回描述真实原因的异常 (由调用方决定抛出还是按值带回); 不是规格问题 = null。
      */
-    private void assertShortfallIsNotPackagingMismatch(
+    private BusinessException packagingMismatchShortfall(
             String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
             String unit, String sourceWarehouseCode) {
         for (Map<String, Object> row : recommend(
                 factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode, false)) {
             if (Boolean.TRUE.equals(row.get("packagingMismatch"))) {
-                throw new BusinessException(409, "成品批次 " + row.get("batchNumber") + " 的规格（"
+                return new BusinessException(409, "成品批次 " + row.get("batchNumber") + " 的规格（"
                         + row.get("batchPackagingLabel") + "）与发货行规格（" + row.get("linePackagingLabel")
                         + "）不一致，系统不会自动换算")
                         .withCode("BATCH_PACKAGING_SPEC_MISMATCH")
@@ -741,6 +794,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                         .withHintTarget("finishedGoodsBatchId");
             }
         }
+        return null;
     }
 
     // 🔴 2026-09-02: 这里的 == 特意【没有】跟着缺陷 41 改成 <=。allocateBatches 现在允许

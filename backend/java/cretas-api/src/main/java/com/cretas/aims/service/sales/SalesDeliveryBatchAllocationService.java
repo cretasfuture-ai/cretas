@@ -72,6 +72,15 @@ public interface SalesDeliveryBatchAllocationService {
                              java.math.BigDecimal requiredQty, String unit, String sourceWarehouseCode);
 
     /**
+     * 子发运单创建时的先进先出预填 (Q3, 2026-11-09)。分配规则与 {@link #autoAllocateFifo} 完全相同
+     * (只挑规格一致的批次、凑不齐一个都不写), 区别只在凑不齐时: ⛔ 不抛业务异常, 把真实原因 (规格不一致要确认换算 /
+     * 库存不够 / 其它业务拒绝) 按值返回。调用方在外层事务里, 异常穿过本服务的事务代理会把外层标成只能回滚,
+     * 整张子单跟着回滚。
+     */
+    AutoAllocationOutcome prefillFifo(String factoryId, String deliveryItemId, String productTypeId,
+                                      java.math.BigDecimal requiredQty, String unit, String sourceWarehouseCode);
+
+    /**
      * FIFO 推荐：按生产日期升序返回可用成品批次，附建议分配数量（累计至 requiredQty）。
      * 镜像原材料 FIFO 模式（MaterialFifoRecommendTool）用于成品出库。
      *
