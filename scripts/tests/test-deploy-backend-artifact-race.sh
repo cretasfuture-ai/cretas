@@ -83,7 +83,7 @@ for simultaneous_i in $(seq 1 "$SIMULTANEOUS_ITERATIONS"); do
         *) fail "simultaneous success produced an invalid winner on iteration $simultaneous_i: '$BUILD_RACE_WINNER'" ;;
     esac
     [ "$(wc -l < "$race_dir/winner" | tr -d ' ')" = 1 ] || fail "winner file is not singular on iteration $simultaneous_i"
-    [ -f "$race_dir/claim" ] || fail "atomic claim file is missing on iteration $simultaneous_i"
+    [ -e "$race_dir/claim" ] || fail "atomic claim is missing on iteration $simultaneous_i"
     simultaneous_runs=$((simultaneous_runs + 1))
 done
 # The loop must really have run, not been skipped by an empty seq.
