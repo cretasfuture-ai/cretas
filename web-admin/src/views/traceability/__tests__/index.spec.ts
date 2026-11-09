@@ -45,10 +45,16 @@ const getPlansBySalesOrderMock = vi.fn();
 const getBatchesForProductionPlansMock = vi.fn();
 const getSalesOrderDocumentTraceMock = vi.fn();
 const getHistoryMock = vi.fn();
+const getEvidencePackMock = vi.fn();
+const exportEvidencePackMock = vi.fn();
+const getRecallImpactMock = vi.fn();
 vi.mock('@/api/quality-disposition', () => ({ getDispositionHistory: (...args: unknown[]) => getHistoryMock(...args) }));
 vi.mock('@/api/traceability', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/traceability')>()),
   getFullTrace: (...args: unknown[]) => getFullTraceMock(...args),
+  getEvidencePack: (...args: unknown[]) => getEvidencePackMock(...args),
+  exportEvidencePack: (...args: unknown[]) => exportEvidencePackMock(...args),
+  getRecallImpact: (...args: unknown[]) => getRecallImpactMock(...args),
   getRecentTraceability: (...args: unknown[]) => getRecentTraceabilityMock(...args),
   findSalesOrdersForTrace: (...args: unknown[]) => findSalesOrdersForTraceMock(...args),
   getPlansBySalesOrder: (...args: unknown[]) => getPlansBySalesOrderMock(...args),
@@ -99,6 +105,10 @@ beforeEach(() => {
   getSalesOrderDocumentTraceMock.mockReset();
   getDetailMock.mockReset();
   getHistoryMock.mockReset();
+  getEvidencePackMock.mockReset();
+  exportEvidencePackMock.mockReset();
+  getRecallImpactMock.mockReset();
+  getRecallImpactMock.mockRejectedValue(new Error('impact not stubbed'));
   getHistoryMock.mockResolvedValue([]);
   getRecentTraceabilityMock.mockResolvedValue({ success: true, data: { content: [], totalElements: 0, totalPages: 0, size: 20, number: 0 } });
   getSalesOrderDocumentTraceMock.mockResolvedValue({ success: true, data: { anchorType: 'SALES_ORDER', anchorId: 'SO-1', anchorNumber: 'SO-1', documents: [], missingLinks: [] } });
@@ -771,5 +781,92 @@ describe('溯源查询页 — 带参直开', () => {
     await flushPromises();
     expect(getFullTraceMock).not.toHaveBeenCalled();
     expect(wrapper.find('[data-testid="trace-idle"]').exists()).toBe(true);
+  });
+});
+
+describe('溯源查询页 — 验厂证据包导出与召回箱数', () => {
+  async function loadBatch() {
+    const data = sixCattleTrace();
+    data.production.batchId = 8;
+    getFullTraceMock.mockResolvedValue({ success: true, data });
+    const wrapper = mountPage();
+    await search(wrapper, 'PB-2026-001');
+    return wrapper;
+  }
+  const urlApi = URL as unknown as { createObjectURL: unknown; revokeObjectURL: unknown };
+  beforeEach(() => {
+    urlApi.createObjectURL = vi.fn(() => 'blob:x');
+    urlApi.revokeObjectURL = vi.fn();
+  });
+
+  it('READY ⇒ 下载 ZIP 并提示成功', async () => {
+    getEvidencePackMock.mockResolvedValue({ rootBatchNumber: 'PB-2026-001', status: 'READY', missingEvidence: [] });
+    exportEvidencePackMock.mockResolvedValue(new Blob(['zip']));
+    const wrapper = await loadBatch();
+    await wrapper.get('[data-testid="export-evidence-pack"]').trigger('click');
+    await flushPromises();
+    expect(exportEvidencePackMock).toHaveBeenCalledWith('F006', 'PB-2026-001');
+    expect(wrapper.get('[data-testid="evidence-notice"]').text()).toContain('证据齐全');
+  });
+
+  it('阴性对照: GAPS ⇒ 逐项列出缺口、不下载、不显示成功', async () => {
+    getEvidencePackMock.mockResolvedValue({
+      rootBatchNumber: 'PB-2026-001', status: 'GAPS',
+      missingEvidence: [{ kind: 'NO_QC_RELEASE', batchNumber: 'PB-2026-001', detail: '没有质检放行记录' }],
+    });
+    const wrapper = await loadBatch();
+    await wrapper.get('[data-testid="export-evidence-pack"]').trigger('click');
+    await flushPromises();
+    expect(exportEvidencePackMock).not.toHaveBeenCalled();
+    const text = wrapper.get('[data-testid="evidence-notice"]').text();
+    expect(text).toContain('没有质检放行记录');
+    expect(text).toContain('证据不齐全');
+    expect(text).not.toContain('证据齐全，');
+  });
+
+  it('阴性对照: 接口失败 ⇒ 显示失败原话，不显示成功', async () => {
+    getEvidencePackMock.mockRejectedValue(new Error('服务暂不可用'));
+    const wrapper = await loadBatch();
+    await wrapper.get('[data-testid="export-evidence-pack"]').trigger('click');
+    await flushPromises();
+    const text = wrapper.get('[data-testid="evidence-notice"]').text();
+    expect(text).toContain('服务暂不可用');
+    expect(text).not.toContain('已下载');
+  });
+
+  it('箱数已折算 ⇒ 显示 N 箱', async () => {
+    getRecallImpactMock.mockResolvedValue({
+      rootType: 'PRODUCTION_BATCH', rootId: '8',
+      boxExposure: {
+        stock: { complete: true, totalBoxQuantity: '12', knownSourceCount: 1, unknownSourceCount: 0 },
+        shipped: { complete: true, totalBoxQuantity: '30', knownSourceCount: 2, unknownSourceCount: 0 },
+        gaps: [],
+      },
+    });
+    const wrapper = await loadBatch();
+    expect(wrapper.get('[data-testid="recall-box-stock"]').text()).toContain('12 箱');
+    expect(wrapper.get('[data-testid="recall-box-shipped"]').text()).toContain('30 箱');
+  });
+
+  it('阴性对照: 无箱规 ⇒ 「无法折算」并写原因，⛔ 不显示 0 箱', async () => {
+    getRecallImpactMock.mockResolvedValue({
+      rootType: 'PRODUCTION_BATCH', rootId: '8',
+      boxExposure: {
+        stock: { complete: false, totalBoxQuantity: null, knownBoxSubtotal: null, knownSourceCount: 0, unknownSourceCount: 1 },
+        shipped: { complete: false, totalBoxQuantity: null, knownSourceCount: 0, unknownSourceCount: 1 },
+        gaps: [{ code: 'PACKAGING_SNAPSHOT_MISSING', message: '成品批次 fg-1 没有包装快照' }],
+      },
+    });
+    const wrapper = await loadBatch();
+    const card = wrapper.get('[data-testid="recall-box-card"]').text();
+    expect(card).toContain('无法折算');
+    expect(card).toContain('没有包装快照');
+    expect(card).not.toMatch(/(^|[^\d])0 箱/);
+  });
+
+  it('阴性对照: 影响面接口失败 ⇒ 显示取不到，不显示箱数', async () => {
+    const wrapper = await loadBatch();
+    expect(wrapper.get('[data-testid="recall-box-error"]').text()).toContain('暂时取不到');
+    expect(wrapper.find('[data-testid="recall-box-stock"]').exists()).toBe(false);
   });
 });

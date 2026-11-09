@@ -20,11 +20,17 @@ import { usePermissionStore } from '@/store/modules/permission';
 import {
   findSalesOrdersForTrace,
   getBatchesForProductionPlans,
+  exportEvidencePack,
+  getEvidencePack,
   getFullTrace,
   getPlansBySalesOrder,
+  getRecallImpact,
   getRecentTraceability,
   isTraceNotFound,
+  type EvidenceMissingItem,
   type FullTraceResponse,
+  type RecallImpact,
+  type BoxTotals,
   type ProductionBatchTraceOption,
   type ProcessingStageInfo,
   type ProductionPlanTraceOption,
@@ -286,6 +292,97 @@ async function runQuery(batchNumber: string) {
     }
   }
 }
+
+// ── 验厂证据包导出（缺口 02）──────────────────────────────────────────────
+const evidenceBusy = ref(false);
+const evidenceNotice = ref<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null);
+const evidenceGaps = ref<EvidenceMissingItem[]>([]);
+function saveBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+async function downloadEvidencePack(batchNumber: string, withGaps: boolean) {
+  const fid = factoryId.value;
+  if (!fid) return;
+  evidenceBusy.value = true;
+  try {
+    const blob = await exportEvidencePack(fid, batchNumber);
+    saveBlob(blob, `验厂证据包-${batchNumber}.zip`);
+    evidenceNotice.value = withGaps
+      ? { type: 'warning', text: `已下载带缺口的证据包（共 ${evidenceGaps.value.length} 项缺口，见概要表）。证据尚不齐全，不能当作完整证据使用。` }
+      : { type: 'success', text: '验厂证据包已下载，证据齐全。' };
+  } catch (error) {
+    evidenceNotice.value = { type: 'error', text: `证据包下载失败：${String((error as Error)?.message || '未知错误')}` };
+  } finally {
+    evidenceBusy.value = false;
+  }
+}
+async function handleExportEvidencePack() {
+  const fid = factoryId.value;
+  const batchNumber = trace.value?.production.batchNumber;
+  if (!fid || !batchNumber) return;
+  evidenceBusy.value = true;
+  evidenceNotice.value = null;
+  evidenceGaps.value = [];
+  try {
+    const pack = await getEvidencePack(fid, batchNumber);
+    if (pack.status === 'READY') {
+      evidenceBusy.value = false;
+      await downloadEvidencePack(pack.rootBatchNumber || batchNumber, false);
+      return;
+    }
+    // GAPS 或未知状态：如实列出缺什么，不提示成功
+    evidenceGaps.value = pack.missingEvidence;
+    evidenceNotice.value = {
+      type: 'warning',
+      text: pack.status === 'GAPS'
+        ? `证据不齐全，缺 ${pack.missingEvidence.length} 项。补齐前不建议用于验厂。`
+        : `证据包状态异常（${pack.status}），无法确认证据齐全。`,
+    };
+  } catch (error) {
+    evidenceNotice.value = { type: 'error', text: `证据包导出失败：${String((error as Error)?.message || '未知错误')}` };
+  } finally {
+    evidenceBusy.value = false;
+  }
+}
+
+// ── 召回影响面箱数（缺口 01）──────────────────────────────────────────────
+const recallImpact = ref<RecallImpact | null>(null);
+const recallImpactError = ref('');
+const recallImpactLoading = ref(false);
+let impactSequence = 0;
+async function loadRecallImpact() {
+  const fid = factoryId.value;
+  const batchId = trace.value?.production.batchId;
+  recallImpact.value = null;
+  recallImpactError.value = '';
+  if (!fid || batchId == null) return;
+  const seq = ++impactSequence;
+  recallImpactLoading.value = true;
+  try {
+    const impact = await getRecallImpact(fid, 'PRODUCTION_BATCH', String(batchId));
+    if (seq === impactSequence) recallImpact.value = impact;
+  } catch (error) {
+    if (seq === impactSequence) recallImpactError.value = String((error as Error)?.message || '召回影响面查询失败');
+  } finally {
+    if (seq === impactSequence) recallImpactLoading.value = false;
+  }
+}
+watch(() => trace.value?.production.batchNumber, () => { void loadRecallImpact(); });
+function boxText(totals?: BoxTotals | null): string {
+  if (!totals) return '无法折算：本次没有算出箱数';
+  if (totals.complete && totals.totalBoxQuantity != null) return `${totals.totalBoxQuantity} 箱`;
+  const known = totals.knownBoxSubtotal != null ? `；已能折算的部分 ${totals.knownBoxSubtotal} 箱` : '';
+  return `无法折算（${totals.unknownSourceCount} 项缺少箱规或发货扣减数据）${known}`;
+}
+const boxGapMessages = computed(() =>
+  (recallImpact.value?.boxExposure?.gaps ?? []).map((g) => g.message).filter((m): m is string => !!m));
 
 // ── 生产信息: 空值行不渲染 ──────────────────────────────────────────────────
 const productionRows = computed(() => {
@@ -682,8 +779,34 @@ function openIndividual(id: string) {
         <p v-else>抽检合格率仅反映被抽取的样本，不代替生产良品率或正式放行结论。</p>
         <el-button v-if="canViewQuality" @click="openBatchQuality">查看或登记本批次质检</el-button>
         <el-button v-if="canViewQuality" @click="openBatchRecall">查看退货与召回</el-button>
+        <el-button :loading="evidenceBusy" data-testid="export-evidence-pack"
+          @click="handleExportEvidencePack">导出证据包</el-button>
+        <div v-if="evidenceNotice" class="evidence-notice" data-testid="evidence-notice">
+          <el-alert :type="evidenceNotice.type" :closable="false" show-icon :title="evidenceNotice.text" />
+          <ul v-if="evidenceGaps.length > 0" data-testid="evidence-gaps">
+            <li v-for="(g, i) in evidenceGaps" :key="i">
+              {{ g.kind }}{{ g.batchNumber ? `（${g.batchNumber}）` : '' }}：{{ g.detail }}
+            </li>
+          </ul>
+          <el-button v-if="evidenceGaps.length > 0" size="small" :loading="evidenceBusy" data-testid="export-evidence-pack-anyway"
+            @click="downloadEvidencePack(trace.production.batchNumber, true)">仍然下载（带缺口）</el-button>
+        </div>
         <BatchDispositionEvidence v-if="canViewQuality && qualityInspections.length > 0"
           :factory-id="trace.production.factoryId" :batch-id="trace.production.batchId" />
+      </el-card>
+      <!-- 召回影响面：在库 / 已发箱数 -->
+      <el-card v-if="trace.production.batchId != null" shadow="never" class="content-card" data-testid="recall-box-card">
+        <div class="card-title">召回影响面 · 箱数</div>
+        <p v-if="recallImpactLoading">正在计算箱数…</p>
+        <p v-else-if="recallImpactError" data-testid="recall-box-error">召回影响面暂时取不到：{{ recallImpactError }}</p>
+        <template v-else-if="recallImpact">
+          <p data-testid="recall-box-stock">在库箱数：{{ boxText(recallImpact.boxExposure?.stock) }}</p>
+          <p data-testid="recall-box-shipped">已发箱数：{{ boxText(recallImpact.boxExposure?.shipped) }}</p>
+          <ul v-if="boxGapMessages.length > 0" data-testid="recall-box-gaps">
+            <li v-for="(m, i) in boxGapMessages" :key="i">{{ m }}</li>
+          </ul>
+          <p class="recall-box-hint">箱数按包装快照折算，是记录数量的折算，不代表实物封箱数。</p>
+        </template>
       </el-card>
       <el-card v-if="qualityInspections.length > 0" shadow="never" class="content-card" data-testid="quality-card">
         <template #header>
