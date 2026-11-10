@@ -62,7 +62,11 @@ import { enumLabel } from '@/utils/enumDisplay';
 import { usePinyinFilter } from '@/utils/pinyinSearch';
 import { resolveMaterialDropdownEmpty } from './materialDropdownEmptyState';
 import { canDownloadSupplyOrder, canSubmitPurchaseOrder, purchaseOrderMoreActions } from './purchaseOrderActionIa';
-import { resolveSupplierMaterialRelations } from './purchaseOrderEditPrefill';
+import {
+  isSupplierLockedInEditor,
+  matchDraftLinesToSupplierRelations,
+  resolveSupplierMaterialRelations,
+} from './purchaseOrderEditPrefill';
 import {
   purchaseTaxIncludedUnitPrice,
   purchaseUntaxedUnitPrice,
@@ -304,6 +308,23 @@ const editingOrderId = ref('');
 const editingVersion = ref<number | null>(null);
 const editingOrderDate = ref('');
 const isEditing = computed(() => Boolean(editingOrderId.value));
+// D-S411R-01: 打开编辑时读到的状态与**已保存**的供应商, 供 isSupplierLockedInEditor 判断。
+// ⛔ 不能用 form.supplierId —— 用户选中第一个供应商的瞬间下拉就会锁死。
+const editingOrderStatus = ref('');
+const editingOriginalSupplierId = ref('');
+const supplierLocked = computed(() => isSupplierLockedInEditor({
+  isEditing: isEditing.value,
+  orderStatus: editingOrderStatus.value,
+  originalSupplierId: editingOriginalSupplierId.value,
+}));
+/** 正在给「原本没有供应商」的草稿补录供应商 —— 换供应商时保留明细, 按原料重新对应。 */
+const backfillingDraftSupplier = computed(() => isEditing.value && !supplierLocked.value);
+/** 补录供应商后, 该供应商不供应 (或供应关系不唯一) 的草稿原料, 需用户处理。 */
+const unmatchedDraftMaterials = ref<string[]>([]);
+/** 补录供应商前, 明细行的原料下拉是禁用且空白的 —— 把草稿里有什么原料、多少数量直接说出来。 */
+const draftLineSummary = computed(() => form.value.items
+  .map((item) => `${item.materialName || item.materialTypeId || '未命名原料'} ${Number(item.quantity || 0)} ${displayUnit(item.quantityUnit || item.unit) || ''}`.trim())
+  .join('；'));
 
 function itemAmountPreview(item: ProcurementOrderItem) {
   return pricingAmountPreview(item);
@@ -413,7 +434,52 @@ async function onSupplierChange(): Promise<void> {
   );
   purchaseSpecCache.value = {};
   materialSpecCache.value = {};
+  if (backfillingDraftSupplier.value) {
+    // D-S411R-01: 给没有供应商的草稿补录供应商时, ⛔ 不清空明细 —— 草稿里的原料与缺口数量
+    // 是系统按缺料算出来的, 清空等于让采购员凭记忆重填。
+    await rebindDraftLinesToSupplier();
+    return;
+  }
   form.value.items = [newPurchaseItem()];
+}
+
+/**
+ * 把草稿已有明细按原料对应到刚选的供应商的供应关系。
+ *
+ * - 数量与数量单位**保持草稿原值**, 只补供应关系、原料名、税点与供应商价。
+ * - 价格走 applyRelationPrice: 关系价的单位与草稿行单位对不上时它会把价留空 (MISSING),
+ *   由采购员手填 —— ⛔ 不在前端做单位换算 (utils/unitPricing.ts 的 fail-closed 约定)。
+ * - 对不上的行清掉供应关系并列出来, 提交时既有校验「请选择当前供应商可供的所有原料」会拦住。
+ */
+async function rebindDraftLinesToSupplier(): Promise<void> {
+  const { matched, unmatched } = matchDraftLinesToSupplierRelations(
+    form.value.items,
+    supplierMaterialRelations.value,
+  );
+  for (const item of unmatched) {
+    item.supplierMaterialId = '';
+    item.purchasePackagingSpecId = null;
+    item.materialPackagingSpecId = null;
+  }
+  for (const { line: item, relation } of matched) {
+    item.supplierMaterialId = relation.id;
+    item.purchasePackagingSpecId = null;
+    item.materialPackagingSpecId = null;
+    const material = materials.value.find((row) => String(row.id) === relation.materialTypeId);
+    if (!relation.materialName && material?.name) relation.materialName = String(material.name);
+    item.materialName = item.materialName || relation.materialName || undefined;
+    const masterTaxRate = materialTaxRate(material?.taxRate);
+    if (masterTaxRate !== null) item.taxRate = masterTaxRate;
+    applyRelationPrice(item, relation, item.quantityUnit || item.unit);
+    syncTaxIncludedPrice(item);
+  }
+  unmatchedDraftMaterials.value = form.value.supplierId
+    ? unmatched.map((item) => item.materialName || item.materialTypeId || '未命名原料')
+    : [];
+  await Promise.all(matched.flatMap(({ relation }) => [
+    loadPurchaseSpecs(relation.id),
+    loadMaterialSpecs(relation.materialTypeId, relation.id),
+  ]));
 }
 
 function newPurchaseItem(): ProcurementOrderItem {
@@ -1025,6 +1091,9 @@ function resetForm() {
   editingOrderId.value = '';
   editingVersion.value = null;
   editingOrderDate.value = '';
+  editingOrderStatus.value = '';
+  editingOriginalSupplierId.value = '';
+  unmatchedDraftMaterials.value = [];
   form.value = { supplierId: '', purchaseType: 'DIRECT', expectedDeliveryDate: '', remark: '', relatedSalesOrderId: '', contractNumber: '', settlementType: '', invoiceReminderDays: null, items: [newPurchaseItem()], customFields: {} as TableRow };
   supplierMaterialRelations.value = [];
   purchaseSpecCache.value = {};
@@ -1105,6 +1174,8 @@ async function openEditDialog(orderId: string) {
   editingVersion.value = Number(order.version);
   editingOrderDate.value = String(order.orderDate || factoryToday());
   const orderSupplierId = String(order.supplierId || '');
+  editingOrderStatus.value = String(order.status || '');
+  editingOriginalSupplierId.value = orderSupplierId;
   form.value.supplierId = orderSupplierId;
   // 「开始采购」按销售订单自动生成的草稿单没有供应商 (Sheet 第 22 行), 而编辑入口正是
   // 为「事后补录供应商」而加的. 这里必须容许空 supplierId —— 空 id 直接拼进
@@ -1551,9 +1622,10 @@ function handleAiFill(params: TableRow) {
             placeholder="请选择（支持拼音/首字母，如 bjfx / beijing）"
             filterable
             :filter-method="handleSupplierFilter"
-            :disabled="isEditing"
+            :disabled="supplierLocked"
             :loading="dropdownsRefreshing"
             loading-text="正在更新供应商列表…"
+            data-testid="purchase-supplier-select"
             style="width: 100%"
             @change="onSupplierChange"
             @visible-change="handleSupplierVisibleChange"
@@ -1577,6 +1649,25 @@ function handleAiFill(params: TableRow) {
             action-text="去创建供应商"
             contact-text="请联系采购或管理员先创建供应商"
             @action="goCreate('/procurement/suppliers')"
+          />
+          <!-- D-S411R-01: 缺料自动生成的草稿没有供应商; 告诉采购员这里能补、补了明细不会丢。 -->
+          <el-alert
+            v-if="backfillingDraftSupplier && !form.supplierId"
+            data-testid="purchase-draft-supplier-backfill-hint"
+            type="info"
+            :closable="false"
+            show-icon
+            :title="`这张采购草稿还没有供应商，提交前请先在这里选择。选好后明细（${draftLineSummary}）会按原料自动对应到该供应商，数量保持不变。`"
+            style="margin-top: 8px"
+          />
+          <el-alert
+            v-if="backfillingDraftSupplier && form.supplierId && unmatchedDraftMaterials.length > 0"
+            data-testid="purchase-draft-supplier-unmatched"
+            type="warning"
+            :closable="false"
+            show-icon
+            :title="`该供应商没有启用以下原料的供应关系：${unmatchedDraftMaterials.join('、')}。请换一家供应商，或在下方明细里重新选择/删除这些行。`"
+            style="margin-top: 8px"
           />
         </el-form-item>
         <el-form-item label="采购类型">
