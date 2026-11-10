@@ -60,6 +60,13 @@ class QcWipReleaseBypassContractTest {
         tool = new ReleaseDecisionTool();
         ReflectionTestUtils.setField(tool, "materialBatchRepository", materialBatchRepository);
         ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper());
+        // 纪律排查 A3: release_decision 须有质检权限 (quality:read_write) 并写放行台账
+        com.cretas.aims.ai.tool.ToolRbacGuard qcRbac = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
+        org.mockito.Mockito.lenient().when(qcRbac.hasAnyPermission(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(String[].class))).thenReturn(true);
+        ReflectionTestUtils.setField(tool, "rbacGuard", qcRbac);
+        ReflectionTestUtils.setField(tool, "releaseGuard",
+                org.mockito.Mockito.mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
         disposition = new QualityDispositionInventoryService();
         ReflectionTestUtils.setField(disposition, "materialBatchRepository", materialBatchRepository);
         ReflectionTestUtils.setField(disposition, "productionBatchRepository", productionBatchRepository);
