@@ -7,8 +7,6 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionInputAllocation;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.PlanSourceType;
-import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
-import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
 import com.cretas.aims.entity.processentry.ProcessSheetRow;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
@@ -17,7 +15,7 @@ import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionInterimSettlementRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionInputAllocationRepository;
-import com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository;
+import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
 import com.cretas.aims.service.inventory.FinishedGoodsFeedService;
 import com.cretas.aims.service.wip.WipInventoryService;
 import com.cretas.aims.service.yield.impl.InterimSettleReversalServiceImpl;
@@ -410,16 +408,15 @@ class InterimSettleReversalServiceTest {
                 .hasMessageNotContaining("仅存货生产计划可撤销小结");
     }
 
-    // ── 🔴🔒🔒 sister #4 (settlement-级交叠, 收窄 #1215 plan-级误伤): 撤销的小结消耗命中「已关单领料单划平的
-    //         WKS 批次」→ 拦 (避免生产仓幻库存); 不命中 → 放行 ──
+    // ── C2 (Steve 2026-11-10 裁定 B, 取代 sister #4 的 409): 关单后照样能撤销小结; 还回生产仓的量逐批交给
+    //    领料服务, 由它在锁后判「是否已关单」, 已关单的退回原料仓, 未关单 / 非领料批次原路径 (返回 0) ──
     @Test
-    @DisplayName("sister #4 (交叠命中): 本次小结消耗来源批次 = 已关单领料单划平的 WKS 批次 → 409 (幻库存危险, 库存变更前 loud-block)")
-    void blocksReversalWhenSettlementConsumptionOverlapsClosedRequisition() {
+    @DisplayName("C2 (交叠): 本次小结消耗来源 = 已关单领料单的生产仓批次 → 放行, 还回量交给领料服务退回原料仓")
+    void reversalAfterCloseHandsRestoredQuantityToRequisitionReturn() {
         LocalDateTime postedAt = LocalDateTime.now();
         Map<String, Object> detail = detail(List.of(), List.of(), List.of(), List.of(), List.of());
         stubTarget(1, settlement("s1", 1, postedAt, detail));
 
-        // 本次小结在 555 道扣了一笔消耗, 来源批次 = wks-1 (生产仓批次)。
         ProcessSheetRow row = settledRow(3L, postedAt);
         row.setBatchId(555L);
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
@@ -429,34 +426,34 @@ class InterimSettleReversalServiceTest {
         when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
                 eq(FACTORY), eq(List.of(555L)), eq(postedAt)))
                 .thenReturn(new ArrayList<>(List.of(mc)));
+        MaterialBatch wks1 = workshopBatch("wks-1", "100", MaterialBatchStatus.DEPLETED);
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("wks-1", FACTORY)).thenReturn(Optional.of(wks1));
 
-        // 领料单 R1 已关单, 其 WKS 物化批次 = wks-1 (close 时已划平) → 与本次撤销的消耗来源批次交叠 → 拦。
-        FactoryMaterialRequisitionRepository requisitionRepository =
-                org.mockito.Mockito.mock(FactoryMaterialRequisitionRepository.class);
-        ReflectionTestUtils.setField(service, "requisitionRepository", requisitionRepository);
-        when(requisitionRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN_ID))
-                .thenReturn(List.of(closedRequisitionWithWks("wks-1")));
+        FactoryMaterialRequisitionService requisitionService = org.mockito.Mockito.mock(FactoryMaterialRequisitionService.class);
+        ReflectionTestUtils.setField(service, "requisitionService", requisitionService);
+        when(requisitionService.returnToSourceIfRequisitionClosed(
+                eq(FACTORY), eq("wks-1"), any(BigDecimal.class), eq(7L), eq("interim-reverse:s1")))
+                .thenReturn(new BigDecimal("50"));
 
-        assertThatThrownBy(() -> service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("已关单")
-                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
-                        .isEqualTo("INTERIM_REVERSE_REQUISITION_CLOSED"));
+        Map<String, Object> r = service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L);
 
-        // fail-fast: 拦在任何库存变更前 (未还原料 usedQuantity / 未清消耗戳 / 未硬删小结)。
-        verify(materialBatchRepository, never()).findByIdAndFactoryIdForUpdate(any(), any());
-        assertThat(mc.getInterimSettledAt()).isNotNull();
-        verify(settlementRepository, never()).hardDeleteById(any());
+        assertThat(r.get("reversedSessionSeq")).isEqualTo(1);
+        assertThat(wks1.getUsedQuantity()).as("先照常还回生产仓").isEqualByComparingTo("50");
+        org.mockito.ArgumentCaptor<BigDecimal> qty = org.mockito.ArgumentCaptor.forClass(BigDecimal.class);
+        verify(requisitionService).returnToSourceIfRequisitionClosed(
+                eq(FACTORY), eq("wks-1"), qty.capture(), eq(7L), eq("interim-reverse:s1"));
+        assertThat(qty.getValue()).as("交给领料服务的 = 实际还回量").isEqualByComparingTo("50");
+        assertThat((BigDecimal) r.get("returnedToRawWarehouse")).isEqualByComparingTo("50");
+        verify(settlementRepository, times(1)).hardDeleteById("s1");
     }
 
     @Test
-    @DisplayName("sister #4 反面 (无交叠, 收窄修复核心): 只关过 R1, 但本次撤销 (settle#2) 消耗引用别的 WKS 批次 → 放行 (不再永久误拦)")
-    void allowsReversalWhenSettlementConsumptionDoesNotOverlapClosedRequisition() {
+    @DisplayName("C2 (不交叠): 领料服务判定未关单 / 非领料批次返回 0 → 原路径, 料留在生产仓")
+    void reversalWithoutClosedRequisitionKeepsOriginalPath() {
         LocalDateTime postedAt = LocalDateTime.now();
         Map<String, Object> detail = detail(List.of(sfiIn(ANCHOR, "60", "900")), List.of(), List.of(), List.of(), List.of());
         stubTarget(2, settlement("s2", 2, postedAt, detail));
 
-        // 本次小结 (settle#2) 的消耗来源批次 = wks-2 (R2 的批次, 与已关单 R1 无关)。
         ProcessSheetRow row = settledRow(3L, postedAt);
         row.setBatchId(556L);
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
@@ -466,39 +463,29 @@ class InterimSettleReversalServiceTest {
         when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
                 eq(FACTORY), eq(List.of(556L)), eq(postedAt)))
                 .thenReturn(new ArrayList<>(List.of(mc)));
-        MaterialBatch wks2 = new MaterialBatch();
-        wks2.setId("wks-2");
-        wks2.setFactoryId(FACTORY);
-        wks2.setReceiptQuantity(new BigDecimal("100"));
-        wks2.setUsedQuantity(new BigDecimal("30"));
-        wks2.setReservedQuantity(BigDecimal.ZERO);
-        wks2.setStatus(MaterialBatchStatus.AVAILABLE);
+        MaterialBatch wks2 = workshopBatch("wks-2", "30", MaterialBatchStatus.AVAILABLE);
         when(materialBatchRepository.findByIdAndFactoryIdForUpdate("wks-2", FACTORY)).thenReturn(Optional.of(wks2));
 
-        // R1 已关单, 划平的 WKS 批次 = wks-1 (与本次撤销的 wks-2 无交叠) → 首版 #1215 会误拦, 收窄后放行。
-        FactoryMaterialRequisitionRepository requisitionRepository =
-                org.mockito.Mockito.mock(FactoryMaterialRequisitionRepository.class);
-        ReflectionTestUtils.setField(service, "requisitionRepository", requisitionRepository);
-        when(requisitionRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN_ID))
-                .thenReturn(List.of(closedRequisitionWithWks("wks-1")));
+        FactoryMaterialRequisitionService requisitionService = org.mockito.Mockito.mock(FactoryMaterialRequisitionService.class);
+        ReflectionTestUtils.setField(service, "requisitionService", requisitionService);
+        when(requisitionService.returnToSourceIfRequisitionClosed(any(), any(), any(), any(), any()))
+                .thenReturn(BigDecimal.ZERO);
 
         Map<String, Object> r = service.reverseInterimSettle(FACTORY, PLAN_ID, 2, 7L);
 
         assertThat(r.get("reversedSessionSeq")).isEqualTo(2);
         verify(settlementRepository, times(1)).hardDeleteById("s2");
-        // 撤销正常还回 wks-2 的 usedQuantity (未被误拦): 30 → 0。
-        assertThat(wks2.getUsedQuantity()).isEqualByComparingTo("0");
+        assertThat(wks2.getUsedQuantity()).as("还回生产仓: 30 → 0").isEqualByComparingTo("0");
         assertThat(mc.getInterimSettledAt()).isNull();
+        assertThat((BigDecimal) r.get("returnedToRawWarehouse")).isEqualByComparingTo("0");
     }
 
     @Test
-    @DisplayName("sister #4 反面: 领料单未关单 (ISSUED) → 其 WKS 批次不纳入交叠集 → 撤销正常进行 (不误拦)")
-    void allowsReversalWhenRequisitionNotClosed() {
+    @DisplayName("C2: 领料服务未注入而还回量落在领料单生产仓批次上 → loud-fail, ⛔ 不悄悄留在生产仓")
+    void missingRequisitionServiceFailsLoudForRequisitionBatch() {
         LocalDateTime postedAt = LocalDateTime.now();
-        Map<String, Object> detail = detail(List.of(sfiIn(ANCHOR, "60", "900")), List.of(), List.of(), List.of(), List.of());
+        Map<String, Object> detail = detail(List.of(), List.of(), List.of(), List.of(), List.of());
         stubTarget(1, settlement("s1", 1, postedAt, detail));
-
-        // 本次小结消耗来源批次 = wks-1, 且领料单持有 wks-1, 但领料单是 ISSUED (未关单) → 不纳入交叠集 → 放行。
         ProcessSheetRow row = settledRow(3L, postedAt);
         row.setBatchId(555L);
         when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID))
@@ -508,46 +495,26 @@ class InterimSettleReversalServiceTest {
         when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
                 eq(FACTORY), eq(List.of(555L)), eq(postedAt)))
                 .thenReturn(new ArrayList<>(List.of(mc)));
-        MaterialBatch wks1 = new MaterialBatch();
-        wks1.setId("wks-1");
-        wks1.setFactoryId(FACTORY);
-        wks1.setReceiptQuantity(new BigDecimal("100"));
-        wks1.setUsedQuantity(new BigDecimal("40"));
-        wks1.setReservedQuantity(BigDecimal.ZERO);
-        wks1.setStatus(MaterialBatchStatus.AVAILABLE);
+        MaterialBatch wks1 = workshopBatch("wks-1", "40", MaterialBatchStatus.AVAILABLE);
+        wks1.setSourceDocType("MATERIAL_REQUISITION");
         when(materialBatchRepository.findByIdAndFactoryIdForUpdate("wks-1", FACTORY)).thenReturn(Optional.of(wks1));
 
-        FactoryMaterialRequisitionRepository requisitionRepository =
-                org.mockito.Mockito.mock(FactoryMaterialRequisitionRepository.class);
-        ReflectionTestUtils.setField(service, "requisitionRepository", requisitionRepository);
-        when(requisitionRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY, PLAN_ID))
-                .thenReturn(List.of(requisitionWithStatusAndWks(FactoryMaterialRequisition.Status.ISSUED, "wks-1")));
-
-        Map<String, Object> r = service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L);
-
-        assertThat(r.get("reversedSessionSeq")).isEqualTo(1);
-        verify(settlementRepository, times(1)).hardDeleteById("s1");
+        assertThatThrownBy(() -> service.reverseInterimSettle(FACTORY, PLAN_ID, 1, 7L))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo("INTERIM_REVERSE_REQUISITION_SERVICE_UNAVAILABLE"));
+        verify(settlementRepository, never()).hardDeleteById(any());
     }
 
-    /** 构造持有指定 WKS 物化批次的领料单 (batchNumbers[*].workshopBatchId), 用于 sister #4 交叠守卫测试。 */
-    private FactoryMaterialRequisition closedRequisitionWithWks(String... wksBatchIds) {
-        return requisitionWithStatusAndWks(FactoryMaterialRequisition.Status.CLOSED, wksBatchIds);
-    }
-
-    private FactoryMaterialRequisition requisitionWithStatusAndWks(
-            FactoryMaterialRequisition.Status status, String... wksBatchIds) {
-        FactoryMaterialRequisition r = new FactoryMaterialRequisition();
-        r.setStatus(status);
-        FactoryMaterialRequisitionItem it = new FactoryMaterialRequisitionItem();
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (String wks : wksBatchIds) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("workshopBatchId", wks);
-            rows.add(row);
-        }
-        it.setBatchNumbers(rows);
-        r.setItems(new ArrayList<>(List.of(it)));
-        return r;
+    private MaterialBatch workshopBatch(String id, String used, MaterialBatchStatus status) {
+        MaterialBatch b = new MaterialBatch();
+        b.setId(id);
+        b.setFactoryId(FACTORY);
+        b.setReceiptQuantity(new BigDecimal("100"));
+        b.setUsedQuantity(new BigDecimal(used));
+        b.setReservedQuantity(BigDecimal.ZERO);
+        b.setStatus(status);
+        return b;
     }
 
     // ── 缺省 seq → 撤销最近一次 ──

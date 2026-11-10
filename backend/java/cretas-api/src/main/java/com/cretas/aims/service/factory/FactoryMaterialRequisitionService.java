@@ -102,4 +102,17 @@ public interface FactoryMaterialRequisitionService {
 
     /** 取消. */
     FactoryMaterialRequisition cancel(String factoryId, String id, Long operatorId, String reason);
+
+    /**
+     * C1 (Steve 2026-11-10 裁定 B): 整单撤回报工把 {@code qty} 放回了生产仓批次 {@code workshopBatchId};
+     * 如果这批料属于一张<b>已关单</b>的领料单, 生产仓已没有出路, 就把这 {@code qty} 直接退回原料仓源批次,
+     * 留一笔退料流水 (负数 MATERIAL_RETURN 消耗 + 已执行的生产退料单), 并把生产仓批次重新划平。
+     *
+     * <p>必须在调用方事务内、且调用方<b>已锁住</b>该生产仓批次之后调用 (锁序: 生产仓批次 → 领料单 → 原料批次,
+     * 与关单一致), 这样「是否已关单」读到的是并发关单提交后的状态, 不会重复退料。
+     *
+     * @return 实际退回原料仓的量; 不是领料单物化的生产仓批次、或领料单未关单 ⇒ 0 (料留在生产仓, 原路径不变)
+     */
+    BigDecimal returnToSourceIfRequisitionClosed(String factoryId, String workshopBatchId, BigDecimal qty,
+                                                 Long operatorId, String reasonRef);
 }

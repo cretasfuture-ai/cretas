@@ -859,7 +859,7 @@ public class PlanCostVarianceService {
      * 不是产品), ⛔ 不能把 getName() 原样给人看 (F006 演示 L4/L5, 2026-11-10 统一验收抓到):
      * 与排程页同一份规则 (ScheduleProductNames) —— 显示对应原料的名字, 查不到就去掉前缀。
      */
-    String productName(String factoryId, String productTypeId) {
+    public String productName(String factoryId, String productTypeId) {
         if (productTypeId == null || productTypeRepository == null) {
             return null;
         }

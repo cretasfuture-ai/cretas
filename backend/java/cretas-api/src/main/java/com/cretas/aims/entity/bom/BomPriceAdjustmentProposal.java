@@ -103,6 +103,11 @@ public class BomPriceAdjustmentProposal extends BaseEntity {
     @Column(name = "applied_at")
     private LocalDateTime appliedAt;
 
+    /** 乐观锁: 收货路径原地改写 PENDING 建议与批准并发时, 后写的一方失败而不是覆盖 (V20261110_41)。 */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     public enum Status {
         PENDING, APPROVED, REJECTED
     }
