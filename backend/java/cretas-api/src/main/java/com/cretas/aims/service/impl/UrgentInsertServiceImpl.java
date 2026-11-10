@@ -90,6 +90,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     /** 缺口 17 第 2 项: 调约束排程引擎, 预览算排程、确认后真正排入并顺延被挤计划。 */
     private final UrgentInsertScheduleService scheduleService;
     private final PlatformTransactionManager transactionManager;
+    /** A2: 缺料插单读和开工缺料同一个工厂开关 (block_start_on_open_shortage)。 */
+    private final com.cretas.aims.repository.FactorySettingsRepository settingsRepository;
 
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for urgent-insert path. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -491,6 +493,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             "人员未验证: 未取得完整的HR班次和人员占用核验结果";
 
     private WorkerShiftAvailabilityCheck.Result checkWorkers(String factoryId, InsertSlot slot) {
+        // A1: 产线没配标准人数 => 不比较、不提示 (不拿编出来的人数去比, 也不去读班次)
+        if (slot.getRequiredWorkers() == null || slot.getRequiredWorkers() <= 0) {
+            return WorkerShiftAvailabilityCheck.Result.notConfigured();
+        }
         WorkerShiftAvailabilityCheck.Result checked = workerShifts.check(
                 factoryId, slot.getStartTime(), slot.getEndTime(), slot.getRequiredWorkers());
         // 缺失结果绝不能退回 cached availableWorkers 或把未知当成可派。
@@ -500,8 +506,27 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
     /** 确认 / 批准时没能核对的项, 随结果返回; 现在只有「没有排班数据」一种。 */
     private static List<String> uncheckedWarnings(WorkerShiftAvailabilityCheck.Result workerCheck) {
-        return workerCheck.noScheduleData()
-                ? List.of(WorkerShiftAvailabilityCheck.NO_SCHEDULE_DATA) : List.of();
+        List<String> warnings = new ArrayList<>();
+        if (workerCheck.noScheduleData()) {
+            warnings.add(WorkerShiftAvailabilityCheck.NO_SCHEDULE_DATA);
+        }
+        // A1: 配了标准人数、已核对、人不够 => 只提示, 不拦
+        if (workerCheck.verified() && !workerCheck.isNotConfigured() && !workerCheck.available()) {
+            warnings.add("人员提示：本产线标准人数 " + workerCheck.requiredWorkers() + " 人，该时段已核对可用 "
+                    + workerCheck.availableWorkers() + " 人，人数不足（仅提示，不拦截）");
+        }
+        return warnings;
+    }
+
+    /** A2: 缺料但允许插 (开关关, 或开关开且填了原因) 时, 把缺料随结果提示出来。 */
+    private static List<String> withMaterialWarning(List<String> warnings,
+                                                    UrgentInsertMaterialAssessor.Assessment material) {
+        if (material == null || material.status() != UrgentInsertMaterialAssessor.Status.SHORT) {
+            return warnings;
+        }
+        List<String> all = new ArrayList<>(warnings);
+        all.add("缺料提示：" + material.message());
+        return all;
     }
 
     /**
@@ -523,8 +548,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private void validateSelectedWorkers(WorkerShiftAvailabilityCheck.Result checked, ConfirmUrgentInsertRequest request) {
         List<Long> selected = request.getAssignedWorkerIds();
         if (selected == null || selected.isEmpty()) return;
-        if (checked.noScheduleData()) {
-            // 没有排班数据: 名单无从核对, 照插并在结果里提示未核对 (不编人数); 有数据但读不全仍按原规则拦
+        if (checked.noScheduleData() || checked.isNotConfigured()) {
+            // 没有排班数据 / 产线没配标准人数: 名单无从核对, 照插 (不编人数); 有数据但读不全仍按原规则拦
             return;
         }
         if (!checked.verified()) {
@@ -532,8 +557,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     .withCode("INSERT_WORKERS_UNVERIFIED")
                     .withHint("请先确认该时段的HR班次、请假和任务安排，再刷新人员列表；当前没有预留工人或创建计划");
         }
-        if (!checked.available() || selected.size() < checked.requiredWorkers()
-                || !checked.availableWorkerIds().containsAll(selected)) {
+        // A1: 人数不够只提示 (见 uncheckedWarnings), 不再拦; 只拦「点名的人本身不可派」
+        if (!checked.availableWorkerIds().containsAll(selected)) {
             throw new BusinessException(409, "指定工人不足或在该时段不可派，请刷新班次和人员，未创建计划")
                     .withCode("INSERT_WORKERS_UNAVAILABLE")
                     .withHint("请重新选择覆盖整个时段、人数满足要求的工人；不可用人员需先确认班次或任务安排");
@@ -787,12 +812,15 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // 再比对预览时的指纹, 预览之后配方或库存变了就拒绝并要求重新预览。
         UrgentInsertMaterialAssessor.Assessment material = materialAssessor.assess(
                 factoryId, request.getProductTypeId(), request.getPlannedQuantity());
-        if (material.status() == UrgentInsertMaterialAssessor.Status.SHORT) {
+        if (material.status() == UrgentInsertMaterialAssessor.Status.SHORT
+                && Boolean.TRUE.equals(settingsRepository.findBlockStartOnOpenShortageByFactoryId(factoryId))
+                && (request.getShortageForceReason() == null || request.getShortageForceReason().isBlank())) {
+            // A2: 和开工缺料同一个工厂开关; 开着才拦, 填了原因可强制插; 关着照插并提示 (见 withMaterialWarning)
             throw new BusinessException(409, "原料不足，未创建计划: " + material.message())
                     .withCode("INSERT_MATERIAL_SHORT")
-                    .withHint("先补足缺口原料（或等在途到货）再插单；也可减少插单数量后重新预览");
+                    .withHint("先补足缺口原料（或等在途到货）再插单；也可减少插单数量后重新预览；确需先插，请填写缺料强制插单原因");
         }
-        if (material.status() != UrgentInsertMaterialAssessor.Status.OK) {
+        if (material.status() == UrgentInsertMaterialAssessor.Status.UNVERIFIED) {
             throw new BusinessException(409, material.message() + "，未创建计划")
                     .withCode("INSERT_MATERIAL_UNVERIFIED")
                     .withHint("补齐该产品的生效配方和原料库存数据后重新预览");
@@ -1007,7 +1035,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         ProductionPlanDTO dto = productionPlanMapper.toDTO(savedPlan);
         dto.setScheduleOutcome(applied.toMap());
-        dto.setUncheckedWarnings(uncheckedWarnings(workerCheck));
+        dto.setUncheckedWarnings(withMaterialWarning(uncheckedWarnings(workerCheck), validation.material()));
         return dto;
     }
 
@@ -1162,7 +1190,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (applied != null) {
             dto.setScheduleOutcome(applied.toMap());
         }
-        dto.setUncheckedWarnings(uncheckedWarnings(workerCheck));
+        dto.setUncheckedWarnings(withMaterialWarning(uncheckedWarnings(workerCheck), validation.material()));
         return dto;
     }
 
@@ -1325,8 +1353,6 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // path, but a physical slot must never use a synthetic "default"
         // production line or present legacy hourly capacity as verified data.
         FactoryCapacityConfig capacityConfig = impactAnalysisService.getFactoryCapacityConfig(factoryId);
-        int standardWorkers = capacityConfig.getStandardShiftWorkers();
-        int maxWorkers = capacityConfig.getMaxWorkers();
         List<ProductionLine> activeLines = productionLineRepository.findActiveLinesByFactory(factoryId);
         if (activeLines == null) {
             activeLines = List.of();
@@ -1346,12 +1372,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         while (slotStart.isBefore(endTime)) {
             LocalDateTime slotEnd = slotStart.plusHours(2);
 
-            // 检查工人可用性
-            ResourceCheckResult workerCheck = impactAnalysisService.checkWorkerAvailability(
-                    factoryId, slotStart, slotEnd, standardWorkers);
-            int availableWorkers = workerCheck.isAvailable() ?
-                    (workerCheck.getAvailableAmount() != null ?
-                            workerCheck.getAvailableAmount().intValue() : maxWorkers) : standardWorkers;
+            // A1: 标准人数按产线配置、人员可用性以确认时的真实班次为准; 生成时段时不再用估算人数 (原先写死 6 人)
+            Integer availableWorkers = null;
 
             // 初步影响分析/评分仍沿用原 APS 逻辑, but with no synthetic
             // quantity/capacity snapshot attached to the generated slot.
@@ -1374,7 +1396,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         // checked later against the product/unit/line config.
                         .availableCapacity(null)
                         .impactLevel(impactResult.getImpactLevel())
-                        .requiredWorkers(standardWorkers)
+                        // A1: 标准人数按产线配置; 没配 = null (不比较、不提示)
+                        .requiredWorkers(line.getStandardWorkers() != null && line.getStandardWorkers() > 0
+                                ? line.getStandardWorkers() : null)
                         .availableWorkers(availableWorkers)
                         .switchCostMinutes(capacityConfig.getSwitchCostMinutes())
                         .recommendScore(scoreResult.getTotalScore())
@@ -1690,6 +1714,12 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         plan.setCustomerOrderNumber(request.getCustomerOrderNumber());
         plan.setPriority(request.getPriority() != null ? request.getPriority() : 9);
         plan.setNotes(request.getNotes());
+        if (material.status() == UrgentInsertMaterialAssessor.Status.SHORT
+                && request.getShortageForceReason() != null && !request.getShortageForceReason().isBlank()) {
+            String trail = "[缺料强制插单] " + request.getShortageForceReason().trim() + "（缺料: " + material.message() + "）";
+            plan.setNotes(request.getNotes() == null || request.getNotes().isBlank()
+                    ? trail : request.getNotes() + " | " + trail);
+        }
         plan.setCreatedBy(userId);
 
         // 设置调度员扩展字段
