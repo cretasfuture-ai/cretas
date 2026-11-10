@@ -355,12 +355,17 @@ public class ProductionBatch extends BaseEntity {
      *
      * <p>末道报工产出单位 (份/盒) 与批次原计划单位 (kg) 不同时, completeProduction 会把
      * {@code unit} 覆盖成产出单位 (份), 使 batch/成品入库单位一致。但此时 {@code plannedQuantity}
-     * 仍是原 kg 数 → {@code efficiency = actualQuantity(份)/plannedQuantity(kg)} 与
-     * {@code unitCost = totalCost(kg基)/goodQuantity(份)} 跨单位无意义。</p>
+     * 仍是原 kg 数 → {@code efficiency = actualQuantity(份)/plannedQuantity(kg)} 跨单位无意义。</p>
      *
      * <p>completeProduction 覆盖 unit 前把原单位写入此列; {@link #calculateMetrics()}
-     * 检测到 {@code plannedUnit != null && !plannedUnit.equals(unit)} 时, 把 efficiency / unitCost
+     * 检测到 {@code plannedUnit != null && !plannedUnit.equals(unit)} 时, 把 efficiency
      * 置 null (诚实留空, 镜像 yield 层 cumulative=null 做法), 而非算出垃圾值。</p>
+     *
+     * <p>D-W-01 (2026-11-10): 凡是从计划拷 plannedQuantity 的建批路径 (转批次 / 文员逐道录入)
+     * 都在建批时写此列 = 计划单位, 让「计划量按哪个单位计」跟着批次走, 之后任何一次 save 都不再裸除。
+     * <b>unitCost 不受此列影响</b>: 它是 totalCost (金额) ÷ good/actual (产出单位), 两个操作数里都没有
+     * plannedQuantity —— 跨单位时它就是「元/份」, 有意义。此前跨单位也把 unitCost 置 null, 那会让
+     * 文员录入批次 (产出 袋/盒、计划 kg, 正是本系统的主路径) 一 save 就丢掉单盒成本。</p>
      *
      * <p><b>持久化原因</b>: {@code @PreUpdate onUpdate()} 每次 save 都重算 calculateMetrics —
      * 若仅瞬态, 完工后质检改 qualityStatus 等无关更新会用 plannedUnit=null 重新算出垃圾值,
@@ -384,9 +389,10 @@ public class ProductionBatch extends BaseEntity {
     /**
      * 单位感知的调用方 (仓库实收) 已经用单位契约核过「实际产出」与「计划量」是不是同一个单位:
      * true 时 {@link #calculateMetrics()} 用 {@link #efficiencyActualInPlannedUnit} 算效率,
-     * 该值为 null = 换算不了, 效率留 null。false (默认) = 没人核过, 沿用原来的同单位算法。
+     * 该值为 null = 换算不了, 效率留 null。false (默认) = 没人核过, 走 {@link #plannedUnit} 判跨单位。
      *
-     * <p>瞬态: 只在本次持久化上下文里有效 (含 save 时 {@code @PreUpdate} 那次重算)。</p>
+     * <p>瞬态: 只在本次持久化上下文里有效 (含 save 时 {@code @PreUpdate} 那次重算)。之后别的事务里
+     * 再 save, 由持久化的 {@link #plannedUnit} 兜住: 跨单位 ⇒ null (实体自己不换算, 宁空不假)。</p>
      */
     @Transient
     @lombok.Getter(lombok.AccessLevel.NONE)
@@ -470,8 +476,8 @@ public class ProductionBatch extends BaseEntity {
      */
     public void calculateMetrics() {
         // 报工 P0-2: 末道产出单位 (份/盒) ≠ 原计划单位 (kg) → 跨单位.
-        // actualQuantity/goodQuantity 是产出单位计数, plannedQuantity/成本基是原单位 →
-        // efficiency / unitCost 跨单位无意义, 置 null 诚实留空 (镜像 yield 层 cumulative=null).
+        // actualQuantity/goodQuantity 是产出单位计数, plannedQuantity 是原单位 →
+        // efficiency 跨单位无意义, 置 null 诚实留空 (镜像 yield 层 cumulative=null).
         // 同单位 (plannedUnit 为 null 或与 unit 相同) 行为零变化。
         boolean crossUnit = plannedUnit != null && unit != null && !plannedUnit.equals(unit);
 
@@ -489,15 +495,11 @@ public class ProductionBatch extends BaseEntity {
         }
 
         // 计算单位成本 - 优先使用良品数量，如果没有则使用实际产量
-        // 跨单位时: 成本按原单位 (kg) 归集, 产量是产出单位 (份) → 元/份 但基是 kg, 无意义 → 留空
-        if (crossUnit) {
-            unitCost = null;
-        } else {
-            BigDecimal quantityForUnitCost = goodQuantity != null && goodQuantity.compareTo(BigDecimal.ZERO) > 0
-                    ? goodQuantity : actualQuantity;
-            if (totalCost != null && quantityForUnitCost != null && quantityForUnitCost.compareTo(BigDecimal.ZERO) > 0) {
-                unitCost = totalCost.divide(quantityForUnitCost, 4, RoundingMode.HALF_UP);
-            }
+        // D-W-01: 跨单位也照算 —— 金额 ÷ 产出单位数量 = 元/产出单位, 不涉及 plannedQuantity (见 plannedUnit 注释)
+        BigDecimal quantityForUnitCost = goodQuantity != null && goodQuantity.compareTo(BigDecimal.ZERO) > 0
+                ? goodQuantity : actualQuantity;
+        if (totalCost != null && quantityForUnitCost != null && quantityForUnitCost.compareTo(BigDecimal.ZERO) > 0) {
+            unitCost = totalCost.divide(quantityForUnitCost, 4, RoundingMode.HALF_UP);
         }
 
         // 计算良品率 — good/actual 同为产出单位, 跨单位下仍是同单位比值, 正常计算

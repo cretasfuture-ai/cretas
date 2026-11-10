@@ -157,11 +157,18 @@ class ReceiptEfficiencyUnitPostgresContractTest {
     }
 
     /**
-     * 计划 planned (planUnit) 的产品 P; 转批次后的正式批次计划量 = planned, 末道一行产出 output (outputUnit)。
+     * 计划 planned (planUnit) 的产品 P; 正式批次的计划量从计划拷来 = planned, 并按建批路径
+     * (转批次 / 文员逐道录入) 的做法把计划单位记在批次 plannedUnit 上; 末道一行产出 output (outputUnit)。
      * P 每单位 gramsPerUnit 克 (null = 没配)。
      */
     private Fixture fixture(String planned, String planUnit, String output, String outputUnit,
                             String batchUnit, String gramsPerUnit) {
+        return fixture(planned, planUnit, planned, planUnit, output, outputUnit, batchUnit, gramsPerUnit);
+    }
+
+    /** 批次计划量 / 计划单位与计划不同源时 (手工建批: 计划量按批次自己的单位填, plannedUnit 为 null)。 */
+    private Fixture fixture(String planned, String planUnit, String batchPlanned, String batchPlannedUnit,
+                            String output, String outputUnit, String batchUnit, String gramsPerUnit) {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         return tx.execute(state -> {
             ProductType product = new ProductType();
@@ -187,7 +194,8 @@ class ReceiptEfficiencyUnitPostgresContractTest {
             batch.setFactoryId(F);
             batch.setBatchNumber("PB-DW01-" + suffix);
             batch.setProductTypeId(product.getId());
-            batch.setPlannedQuantity(new BigDecimal(planned));   // 转批次时从计划拷过来, 计划单位
+            batch.setPlannedQuantity(new BigDecimal(batchPlanned));
+            batch.setPlannedUnit(batchPlannedUnit);
             batch.setQuantity(new BigDecimal(output));
             batch.setUnit(batchUnit);
             batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
@@ -284,6 +292,42 @@ class ReceiptEfficiencyUnitPostgresContractTest {
 
         assertThat(finishedGoodsOf(fixture.planId())).isEqualTo(1);
         assertThat(batchRow(fixture.batchId()).get("efficiency")).isNull();
+    }
+
+    @Test
+    void aLaterSaveInAnotherTransactionStillLeavesTheCrossUnitEfficiencyUnknownButKeepsTheUnitCost() {
+        Fixture fixture = fixture("2", "kg", "3", "袋", "袋", null);
+        settleThenReceive(fixture, "3", "袋", null);
+        assertThat(batchRow(fixture.batchId()).get("efficiency")).isNull();
+
+        // 实收之后的另一笔写入 (同 YieldReportServiceImpl 回写人工成本: 读批次 → 改成本 → calculateMetrics → save),
+        // 新事务里没有实收那次的瞬态单位核对, 只剩批次上持久化的 plannedUnit。
+        tx.executeWithoutResult(state -> {
+            ProductionBatch batch = batches.findById(fixture.batchId()).orElseThrow();
+            assertThat(batch.getPlannedUnit()).isEqualTo("kg");
+            batch.setLaborCost(new BigDecimal("12.00"));
+            batch.calculateMetrics();
+            batches.save(batch);
+        });
+
+        Map<String, Object> after = jdbc.queryForMap(
+                "select efficiency, unit_cost, labor_cost from production_batches where id = ?", fixture.batchId());
+        assertThat((BigDecimal) after.get("labor_cost")).as("这笔写入真的落库了").isEqualByComparingTo("12.00");
+        assertThat(after.get("efficiency")).as("3 袋 / 2 kg 不许在后来的 save 里变回 150.00").isNull();
+        // 单位成本 = 金额 ÷ 产出袋数, 与 plannedUnit 无关 —— 跨单位标记不能顺手把单袋成本抹掉
+        assertThat((BigDecimal) after.get("unit_cost")).isEqualByComparingTo("4.0000");
+    }
+
+    @Test
+    void manualBatchPlannedInItsOwnUnitUnderAKilogramPlanIsComparedInTheBatchUnit() {
+        // 手工建批 (ProcessingController.createBatch): 计划量 100 箱、批次单位箱、不记 plannedUnit; 挂的计划按 kg
+        Fixture fixture = fixture("500", "kg", "100", null, "95", "箱", "箱", null);
+
+        settleThenReceive(fixture, "95", "箱", null);
+
+        assertThat(finishedGoodsOf(fixture.planId())).isEqualTo(1);
+        assertThat((BigDecimal) batchRow(fixture.batchId()).get("efficiency"))
+                .as("95 箱 / 100 箱, 不拿计划的 kg 去折").isEqualByComparingTo("95.00");
     }
 
     @Test

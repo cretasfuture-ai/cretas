@@ -38,7 +38,7 @@ class ProductionBatchCalculateMetricsTest {
     }
 
     @Test
-    @DisplayName("P0-2: 跨单位 (份≠kg) → efficiency/unitCost 置 null, 不算垃圾值")
+    @DisplayName("P0-2: 跨单位 (份≠kg) → efficiency 置 null; unitCost 按产出单位算 (元/份)")
     void crossUnit_suppressesEfficiencyAndUnitCost() {
         ProductionBatch b = baseBatch();
         b.setPlannedUnit("kg");   // 原计划单位
@@ -48,8 +48,13 @@ class ProductionBatchCalculateMetricsTest {
 
         assertNull(b.getEfficiency(),
                 "跨单位 efficiency=actualQuantity(份)/plannedQuantity(kg) 无意义, 应置 null");
-        assertNull(b.getUnitCost(),
-                "跨单位 unitCost=totalCost(kg基)/goodQuantity(份) 无意义, 应置 null");
+        // D-W-01: unitCost = 金额 ÷ 产出单位数量, 两个操作数都不碰 plannedQuantity ⇒ 跨单位照样是「元/份」。
+        // 性质: unitCost × 良品份数 ≈ 总成本 (只差四位小数的舍入); 6000 / 382 = 15.7068
+        assertEquals(0, new BigDecimal("15.7068").compareTo(b.getUnitCost()),
+                "跨单位 unitCost 是元/产出单位, 不再随 plannedUnit 置 null");
+        assertEquals(0, b.getUnitCost().multiply(b.getGoodQuantity())
+                        .setScale(0, java.math.RoundingMode.HALF_UP).compareTo(b.getTotalCost()),
+                "unitCost 的分母是产出单位数量 (良品 382 份)");
         // 良品率 good/actual 同为产出单位 → 仍算 (382/382=100%)
         assertEquals(0, new BigDecimal("100.00").compareTo(b.getYieldRate()),
                 "良品率同单位比值, 跨单位下仍正常计算");

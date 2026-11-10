@@ -244,6 +244,28 @@ class ClerkChainLineageConnectivityTest {
         assertThat(wipEdges.get(0).getMeta()).containsEntry(LineageEdgeRecorder.META_REF_KEY, "wipStock:WIP-OLD");
     }
 
+    @Test
+    @DisplayName("D-W-01 (L4): 原地重物化把批次数量换成本次末道产出时, 单位一起换")
+    void rematerializeSyncsTheBatchUnitWithTheNewOutputQuantity() {
+        ProductionBatch existing = new ProductionBatch();
+        existing.setId(778L);
+        existing.setFactoryId(FACTORY);
+        existing.setBatchNumber("CLK-B-OLD");
+        existing.setQuantity(new BigDecimal("0.3"));
+        existing.setUnit("kg");
+        when(batchRepo.findByIdAndFactoryId(778L, FACTORY)).thenReturn(Optional.of(existing));
+
+        MaterializeContext ctx = new MaterializeContext(FACTORY, PLAN_ID, "PT-BAG", "PT-BAG", "CLK-B-OLD",
+                true, new BigDecimal("26"), "WH-WKS-1", null, OPERATOR);
+        StepEntry step = step(1, "0.3", "3");
+        step.setOutputUnit("袋");
+
+        service.rematerializeInPlace(ctx, 778L, null, List.of(step), List.of(), new ArrayList<>());
+
+        assertThat(existing.getQuantity()).isEqualByComparingTo("3");
+        assertThat(existing.getUnit()).as("3 是袋数, 不能还挂着上次的 kg").isEqualTo("袋");
+    }
+
     // ─────────────────────────────────────────────────────────────
 
     /** 从目标节点沿边反向走到底，返回全部祖先 "TYPE:id"。 */

@@ -147,6 +147,13 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
 
+    /**
+     * D-W-01: 建批时判「计划单位与产出单位是不是同一个」(kg / 千克 / 公斤 是同一个)。同上字段注入
+     * required=false; 未注入时按字面记计划单位 —— 写法不同但其实相同的单位会让效率留空, 不会算出假数。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.unit.UnitContractService unitContractService;
+
     /** Process-parameter deviation hook; optional so existing constructor-based unit fixtures remain valid. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.shortage.ProcessParamDeviationCaseService processParamDeviationCaseService;
@@ -582,6 +589,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         "生产批次不存在或无权访问: " + existingBatchId));
         if (lastOutputQty.signum() > 0) {
             pb.setQuantity(lastOutputQty);
+            // D-W-01 (L4): 数量换成这次末道产出, 单位必须跟着换 —— 否则「3」还挂着上次的单位,
+            // 与建批路径 (createProductionBatch 用同一个 resolveBatchOutputUnit) 不一致。
+            pb.setUnit(resolveBatchOutputUnit(steps));
         }
         applyBatchCostSummary(pb, batchMaterialCost, batchLaborCost, batchTotalCost,
                 firstInputQty, lastOutputQty, lastYieldOutputQty, anyUncosted);
@@ -655,13 +665,18 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         }
         // plannedQuantity: FINISHED 批次已挂 planId → 取计划的真实计划数量;
         // WIP 批次 (无 planId 语义) 或计划已不存在 → 退回本批次的产出数量 qty。
-        BigDecimal plannedQty = null;
+        com.cretas.aims.entity.ProductionPlan sourcePlan = null;
         if (planRepository != null && ctx.getPlanId() != null) {
-            plannedQty = planRepository.findById(ctx.getPlanId())
-                    .map(com.cretas.aims.entity.ProductionPlan::getPlannedQuantity)
-                    .orElse(null);
+            sourcePlan = planRepository.findById(ctx.getPlanId()).orElse(null);
         }
+        BigDecimal plannedQty = sourcePlan == null ? null : sourcePlan.getPlannedQuantity();
+        String outputUnit = resolveBatchOutputUnit(steps);
         batch.setPlannedQuantity(plannedQty != null ? plannedQty : qty);
+        // D-W-01: 计划量从计划拷来 ⇒ 它按计划单位计 (例: 计划 0.3 kg, 批次产出按袋)。把计划单位记在批次上,
+        // 之后任何一次 save 重算效率都知道这是两个单位, 留 null 而不是 3 袋 ÷ 0.3 kg 裸除。
+        // 退回 qty 时计划量就是产出量, 与产出同单位, 不记。
+        batch.setPlannedUnit(plannedQty != null ? plannedUnitForBatch(ctx.getFactoryId(),
+                sourcePlan.getPlannedUnit(), outputUnit) : null);
         // 母计划状态同步 (2026-07 修复): 逐工序录入建 FINISHED 批次时 (ctx.planId 非空) 只建了
         // ProductionBatch(IN_PROGRESS), 从未回写母 ProductionPlan.status → 计划永远卡在 PENDING,
         // 即便生产已实际进行/完成 (看板/统计按 production_plans.status 过滤 IN_PROGRESS/PENDING 因此口径错)。
@@ -689,7 +704,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         planRepository.save(p);
                     });
         }
-        batch.setUnit(resolveBatchOutputUnit(steps));
+        batch.setUnit(outputUnit);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);  // 文员录入 = 生产进行中
         // SP-D Fix 1a: 区分 CLERK_WIP 与 REGULAR 批次
         // CLK-W- 前缀 = isFinished=false 中间批次, 不计入仪表盘; CLK-B- 前缀 = 成品批次.
@@ -1621,6 +1636,23 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             }
         }
         return "kg";
+    }
+
+    /**
+     * D-W-01: 从计划拷来的计划量按哪个单位计。与产出单位是同一个单位 (单位契约判, ⛔ 不比字符串)
+     * 就记成产出单位的写法, 实体按同单位算效率; 否则记计划单位, 实体判跨单位、效率留 null。
+     * 计划没写单位 = 判不了, 不记 (旧行为)。
+     */
+    private String plannedUnitForBatch(String factoryId, String planUnit, String outputUnit) {
+        String planned = firstNonBlank(planUnit);
+        if (planned == null) {
+            return null;
+        }
+        if (unitContractService != null && outputUnit != null
+                && unitContractService.areEquivalent(factoryId, planned, outputUnit)) {
+            return outputUnit;
+        }
+        return planned;
     }
 
     private static String firstNonBlank(String... values) {

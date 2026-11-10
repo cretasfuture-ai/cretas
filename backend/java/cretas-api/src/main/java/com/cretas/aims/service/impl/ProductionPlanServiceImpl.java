@@ -6855,7 +6855,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 && hasUniqueReceiptTerminalOutput(factoryId, settlement, batches.getFirst());
         int changed = 0;
         LocalDateTime completedAt = LocalDateTime.now();
-        // D-W-01: 效率要知道计划量的单位; 在改任何批次之前读一次计划
+        // D-W-01: 换算要产品 (每单位克重); 批次没记产品时用计划的。在改任何批次之前读一次
+        // (返回 Optional, 不会因为读不到而抛)
         ProductionPlan receiptPlan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId).orElse(null);
         for (ProductionBatch batch : batches) {
             if (batch == null || batch.getId() == null) {
@@ -6926,46 +6927,40 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * = 1000.00, 写不进 numeric(5,2), 整笔实收 409「数据处理异常」。同形问题 D-N-01 (#1550) 已在超产判断里修过,
      * 这里复用同一条换算 ({@link #convertOutputToPlanUnit}: 单位契约 → 计数单位 × 产品每单位克重)。</p>
      *
+     * <p>计划量的单位: 批次上记了 {@code plannedUnit} 就用它 (转批次 / 文员录入建批时写, P0-2 完工时写);
+     * 没记 = 计划量本来就按批次自己的单位填 (手工建批: 100 箱计划、95 箱实际 ⇒ 95.00)。
+     * ⛔ 不拿计划的单位顶上: 手工批次挂了 kg 计划时, 那会把正确的 95.00 改成 47.50 或 null。</p>
+     *
+     * <p>⛔ 不靠 catch 兜「换算不了」: 仓储调用里抛出的异常已经把事务标成 rollback-only, catch 住也救不回实收。
+     * 这里每一步都先判空, 「换不过去」只走返回 null 这一条路。</p>
+     *
      * @return 折到计划单位后的实际产出; {@code null} = 换算不了 (或计划量 / 单位读不到), 效率留 null。
-     *         ⛔ 这里不抛: 效率只是一个指标, 不能因为它算不出让实收失败。
      */
     private BigDecimal receiptActualInPlannedUnit(String factoryId, ProductionPlan plan, ProductionBatch batch,
                                                   BigDecimal actual, String actualUnit) {
         if (actual == null || batch.getPlannedQuantity() == null || batch.getPlannedQuantity().signum() <= 0) {
             return null;
         }
-        try {
-            // 批次计划量 = 转批次时从计划拷过来的数, 单位是计划单位; P0-2 跨单位批次另记在 plannedUnit 上
-            String plannedUnit = trimToNull(batch.getPlannedUnit());
-            if (plannedUnit == null && plan != null) {
-                plannedUnit = trimToNull(plan.getPlannedUnit());
-            }
-            if (plannedUnit == null) {
-                plannedUnit = trimToNull(batch.getUnit());
-            }
-            String planUnit = canonicalReceiptUnit(plannedUnit);
-            String outUnit = canonicalReceiptUnit(trimToNull(actualUnit));
-            if (planUnit == null || outUnit == null || unitContractService == null) {
-                log.warn("仓库实收批次效率留空: 计划或产出单位读不到 batchId={}, plannedUnit={}, actualUnit={}",
-                        batch.getId(), plannedUnit, actualUnit);
-                return null;
-            }
-            // 单位同一性问单位契约 (⛔ 不比字符串, BareUnitEqualityRatchet)
-            if (sameUnit(factoryId, planUnit, outUnit) || unitContractService.areEquivalent(factoryId, planUnit, outUnit)) {
-                return actual;
-            }
-            String productTypeId = firstNonBlank(trimToNull(batch.getProductTypeId()),
-                    plan == null ? null : trimToNull(plan.getProductTypeId()));
-            BigDecimal converted = convertOutputToPlanUnit(factoryId, productTypeId, actual, outUnit, planUnit);
-            if (converted == null) {
-                log.warn("仓库实收批次效率留空: 产出 {} {} 与计划单位 {} 之间没有可用换算 batchId={}, productTypeId={}",
-                        actual.toPlainString(), outUnit, planUnit, batch.getId(), productTypeId);
-            }
-            return converted;
-        } catch (RuntimeException e) {
-            log.warn("仓库实收批次效率留空: 单位换算失败 batchId={}, err={}", batch.getId(), e.getMessage());
+        String plannedUnit = firstNonBlank(trimToNull(batch.getPlannedUnit()), trimToNull(batch.getUnit()));
+        String planUnit = canonicalReceiptUnit(plannedUnit);
+        String outUnit = canonicalReceiptUnit(trimToNull(actualUnit));
+        if (planUnit == null || outUnit == null || unitContractService == null) {
+            log.warn("仓库实收批次效率留空: 计划或产出单位读不到 batchId={}, plannedUnit={}, actualUnit={}",
+                    batch.getId(), plannedUnit, actualUnit);
             return null;
         }
+        // 单位同一性问单位契约 (⛔ 不比字符串, BareUnitEqualityRatchet)
+        if (sameUnit(factoryId, planUnit, outUnit) || unitContractService.areEquivalent(factoryId, planUnit, outUnit)) {
+            return actual;
+        }
+        String productTypeId = firstNonBlank(trimToNull(batch.getProductTypeId()),
+                plan == null ? null : trimToNull(plan.getProductTypeId()));
+        BigDecimal converted = convertOutputToPlanUnit(factoryId, productTypeId, actual, outUnit, planUnit);
+        if (converted == null) {
+            log.warn("仓库实收批次效率留空: 产出 {} {} 与计划单位 {} 之间没有可用换算 batchId={}, productTypeId={}",
+                    actual.toPlainString(), outUnit, planUnit, batch.getId(), productTypeId);
+        }
+        return converted;
     }
 
     /** Quality is attributable only when receipt output identity is singular and auditable. */
@@ -10426,6 +10421,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             batchNumber = batchNumber + "-" + (int)(Math.random() * 1000);
         }
 
+        String planQuantityUnit = requireProductionUnit(plan.getPlannedUnit(), "生产计划 " + plan.getPlanNumber());
         ProductionBatch batch = ProductionBatch.builder()
                 .factoryId(factoryId)
                 .batchNumber(batchNumber)
@@ -10433,8 +10429,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .productTypeId(plan.getProductTypeId())
                 .productName(productName)
                 .plannedQuantity(batchTargetQuantity)
+                // D-W-01: 计划量从计划来, 按计划单位计 —— 记在批次上, 批次单位以后被改成产出单位
+                // (逐道录入重物化 / P0-2 完工) 时效率仍知道两边不是同一个单位。建批这一刻与 unit 同写法。
+                .plannedUnit(planQuantityUnit)
                 .quantity(batchTargetQuantity)
-                .unit(requireProductionUnit(plan.getPlannedUnit(), "生产计划 " + plan.getPlanNumber()))
+                .unit(planQuantityUnit)
                 .workflowSelectionMode(plan.getWorkflowSelectionMode())
                 .selectedWorkflowId(plan.getSelectedWorkflowId())
                 .selectedWorkflowVersion(plan.getSelectedWorkflowVersion())
