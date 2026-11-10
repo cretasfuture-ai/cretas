@@ -40,6 +40,9 @@ class ShortageCaseListenerContractTest {
                 .doesNotThrowAnyException();
         assertThatCode(() -> listener.onMaterialReceived(new MaterialReceivedEvent(this, "F1", "PO-1", "M1", BigDecimal.ONE)))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> listener.onMaterialBatchInspectionClosed(new com.cretas.aims.event.MaterialBatchInspectionClosedEvent(
+                this, "F1", "M1", "MB-1", com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE)))
+                .doesNotThrowAnyException();
         assertThatCode(() -> listener.onSalesOrderFinanceApproved(
                 new SalesOrderFinanceApprovedEvent(this, "F1", "SO-1", 9L)))
                 .doesNotThrowAnyException();
@@ -57,10 +60,27 @@ class ShortageCaseListenerContractTest {
     }
 
     @Test
+    void aQcRejectionRefreshesTheMaterialAfterCommit() throws Exception {
+        listener.onMaterialBatchInspectionClosed(new com.cretas.aims.event.MaterialBatchInspectionClosedEvent(
+                this, "F1", "M1", "MB-1", com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE));
+        verify(service).refreshForMaterial("F1", "M1", ShortageCaseListener.REASON_BATCH_QC_REJECTED);
+
+        // 与放行同一语义: 事务提交之后才刷新 (回滚的判不合格不该动缺料实例), 无事务时照样执行
+        var tel = ShortageCaseListener.class.getMethod("onMaterialBatchInspectionClosed",
+                        com.cretas.aims.event.MaterialBatchInspectionClosedEvent.class)
+                .getAnnotation(org.springframework.transaction.event.TransactionalEventListener.class);
+        assertThat(tel).isNotNull();
+        assertThat(tel.phase()).isEqualTo(org.springframework.transaction.event.TransactionPhase.AFTER_COMMIT);
+        assertThat(tel.fallbackExecution()).isTrue();
+    }
+
+    @Test
     void listenerMethodsOpenNoTransactionAndTheRefreshRunsInItsOwn() throws Exception {
         for (Method m : List.of(
                 ShortageCaseListener.class.getMethod("onMaterialBatchReleased", MaterialBatchReleasedEvent.class),
                 ShortageCaseListener.class.getMethod("onMaterialReceived", MaterialReceivedEvent.class),
+                ShortageCaseListener.class.getMethod("onMaterialBatchInspectionClosed",
+                        com.cretas.aims.event.MaterialBatchInspectionClosedEvent.class),
                 ShortageCaseListener.class.getMethod("onPurchaseOrderSupplyChanged", PurchaseOrderSupplyChangedEvent.class),
                 ShortageCaseListener.class.getMethod("onSalesOrderFinanceApproved", SalesOrderFinanceApprovedEvent.class))) {
             assertThat(m.getAnnotation(Transactional.class)).as(m.getName()).isNull();
