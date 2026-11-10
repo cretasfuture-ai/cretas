@@ -46,6 +46,8 @@ class WarehouseBatchStatusReleasePublishesShortageEventContractTest {
         when(batches.findById("MB-1")).thenReturn(Optional.of(b));
         when(batches.save(any())).thenAnswer(i -> i.getArgument(0));
         ReflectionTestUtils.setField(service, "applicationEventPublisher", publisher);
+        ReflectionTestUtils.setField(service, "qcReleaseRecordRepository",
+                mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
         return b;
     }
 

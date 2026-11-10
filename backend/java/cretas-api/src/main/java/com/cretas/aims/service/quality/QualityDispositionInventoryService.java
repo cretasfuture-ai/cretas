@@ -684,6 +684,9 @@ public class QualityDispositionInventoryService {
                     materialBatchId, inspection.getFactoryId());
             return null;
         }
+        // D-S411-04 M2: 质检放行判了不合格的原料, 处置放行不能把它改回可用 (409, 不静默跳过)
+        com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
+                qcReleaseRecordRepository, mb, target);
         FlipDecision decision = applyMaterialFlip(materialBatchRepository, eventPublisher, this, mb, target);
         if (decision == FlipDecision.QC_RELEASE_REQUIRED) {
             log.warn("质检处置库存桥接 — 在制批次 {} 待检, 不在处置桥接里放行 (须走质检放行)", mb.getBatchNumber());
@@ -712,6 +715,9 @@ public class QualityDispositionInventoryService {
             repo.save(mb);
             // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
             com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(publisher, source, mb, before);
+            // 判不合格 / 报废: 「质检中」那部分不会再来了, 缺料实例要重算 (D-S411-04 审查 M1)
+            com.cretas.aims.event.MaterialBatchInspectionClosedEvent.publishIfLeftInspectingUnreleased(
+                    publisher, source, mb, before);
         }
         return decision;
     }

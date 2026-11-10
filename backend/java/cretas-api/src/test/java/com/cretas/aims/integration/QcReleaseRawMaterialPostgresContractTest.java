@@ -4,10 +4,14 @@ import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.quality.QcReleaseRecord;
+import com.cretas.aims.event.MaterialBatchInspectionClosedEvent;
 import com.cretas.aims.event.MaterialBatchReleasedEvent;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
+import com.cretas.aims.repository.quality.QcReleaseRecordRepository;
+import com.cretas.aims.repository.shortage.ShortageSupplyQueryRepository;
+import com.cretas.aims.service.quality.release.MaterialQcRejectionGuard;
 import com.cretas.aims.service.quality.release.QcReleaseService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -79,14 +83,20 @@ class QcReleaseRawMaterialPostgresContractTest {
     static class Runtime {
     }
 
-    /** 与 ShortageCaseListener.onMaterialBatchReleased 同一种监听: 事务提交之后才收到。 */
+    /** 与 ShortageCaseListener 同一种监听: 事务提交之后才收到。 */
     @Component
     static class ReleasedEvents {
         final List<MaterialBatchReleasedEvent> received = new CopyOnWriteArrayList<>();
+        final List<MaterialBatchInspectionClosedEvent> closed = new CopyOnWriteArrayList<>();
 
         @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
         public void on(MaterialBatchReleasedEvent event) {
             received.add(event);
+        }
+
+        @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+        public void onClosed(MaterialBatchInspectionClosedEvent event) {
+            closed.add(event);
         }
     }
 
@@ -105,6 +115,8 @@ class QcReleaseRawMaterialPostgresContractTest {
     @Autowired ReleasedEvents events;
     @Autowired MaterialBatchRepository materialBatches;
     @Autowired RawMaterialTypeRepository rawTypes;
+    @Autowired ShortageSupplyQueryRepository supply;
+    @Autowired QcReleaseRecordRepository releaseRecords;
     @Autowired JdbcTemplate jdbc;
 
     @BeforeEach
@@ -115,6 +127,37 @@ class QcReleaseRawMaterialPostgresContractTest {
                 + "WHERE contype = 'f' AND connamespace = 'public'::regnamespace LOOP "
                 + "EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.t, r.conname); END LOOP; END $$");
         events.received.clear();
+        events.closed.clear();
+    }
+
+    /**
+     * 审查 M1 + M2: 判不合格提交之后, 缺料实例读的那条「质检中数量」真查询归零, 且「离开质检中」事件在提交之后送达
+     * (缺料监听器同形); 不发放行事件。M2: 判定读的是真库里的放行记录 —— 这批之后不能经别的入口改回可用。
+     */
+    @Test
+    void qualityRejectionClearsInspectingQtyAfterCommitAndBlocksMakingItUsable() {
+        String token = suffix();
+        String typeId = saveRawType(FACTORY, "RMT-R-" + token, "冻猪蹄-R-" + token);
+        String batchId = saveRawBatch(FACTORY, typeId, "MT-R-" + token, MaterialBatchStatus.INSPECTING);
+        assertThat(supply.sumInspectingQuantity(FACTORY, typeId)).isEqualByComparingTo("50");   // 阳性对照
+
+        releases.decide(FACTORY, new QcReleaseService.DecisionCommand(
+                QcReleaseRecord.TargetType.RAW_MATERIAL_BATCH, batchId, "REJECTED", "感官异常"), USER_ID, "质检员");
+
+        assertThat(jdbc.queryForObject("select status from material_batches where id = ?", String.class, batchId))
+                .isEqualTo(MaterialBatchStatus.DEFECTIVE.name());
+        assertThat(supply.sumInspectingQuantity(FACTORY, typeId)).isEqualByComparingTo("0");
+        assertThat(events.received).isEmpty();
+        assertThat(events.closed).singleElement().satisfies(e -> {
+            assertThat(e.getFactoryId()).isEqualTo(FACTORY);
+            assertThat(e.getMaterialTypeId()).isEqualTo(typeId);
+            assertThat(e.getMaterialBatchId()).isEqualTo(batchId);
+            assertThat(e.getNewStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
+        });
+
+        MaterialBatch reloaded = materialBatches.findById(batchId).orElseThrow();
+        assertThat(MaterialQcRejectionGuard.blocks(releaseRecords, reloaded, MaterialBatchStatus.AVAILABLE)).isTrue();
+        assertThat(MaterialQcRejectionGuard.blocks(releaseRecords, reloaded, MaterialBatchStatus.INSPECTING)).isFalse();
     }
 
     @Test

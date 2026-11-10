@@ -162,8 +162,8 @@ class QcReleaseRawMaterialContractTest {
     }
 
     @Test
-    @DisplayName("b' 判不合格 → DEFECTIVE, 不发放行事件, 写 REJECTED 记录")
-    void rejectMarksDefectiveWithoutReleaseEvent() {
+    @DisplayName("b' 判不合格 → DEFECTIVE, 不发放行事件, 发「离开质检中」事件 (缺料实例清质检中数量, 审查 M1), 写 REJECTED 记录")
+    void rejectMarksDefectiveAndPublishesInspectionClosed() {
         MaterialBatch raw = batch("R1", F, null, MaterialBatchStatus.INSPECTING);   // sourceDocType 为空的老数据也是原料
         lockable(raw);
 
@@ -171,8 +171,16 @@ class QcReleaseRawMaterialContractTest {
 
         assertThat(raw.getStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
         verify(materialBatchRepo).save(raw);
-        verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
+        ArgumentCaptor<ApplicationEvent> event = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(publisher).publishEvent(event.capture());
         verify(publisher, never()).publishEvent(any(Object.class));
+        assertThat(event.getValue()).isNotInstanceOf(MaterialBatchReleasedEvent.class)
+                .isInstanceOfSatisfying(com.cretas.aims.event.MaterialBatchInspectionClosedEvent.class, e -> {
+                    assertThat(e.getFactoryId()).isEqualTo(F);
+                    assertThat(e.getMaterialTypeId()).isEqualTo("RMT-PORK");
+                    assertThat(e.getMaterialBatchId()).isEqualTo("R1");
+                    assertThat(e.getNewStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
+                });
         assertThat(rec.getDecision()).isEqualTo(QcReleaseRecord.Decision.REJECTED);
     }
 

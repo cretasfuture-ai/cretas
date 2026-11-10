@@ -32,6 +32,8 @@ class ReleaseDecisionToolPublishesShortageEventContractTest {
         tool = new ReleaseDecisionTool();
         ReflectionTestUtils.setField(tool, "materialBatchRepository", batches);
         ReflectionTestUtils.setField(tool, "eventPublisher", publisher);
+        ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository",
+                mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
         batch = new MaterialBatch();
         batch.setId("MB-1");
         batch.setFactoryId("F1");

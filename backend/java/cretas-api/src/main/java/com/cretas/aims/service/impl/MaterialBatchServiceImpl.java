@@ -190,6 +190,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     private com.cretas.aims.repository.material.MaterialBatchCostCorrectionRepository
             materialBatchCostCorrectionRepository;
 
+    /**
+     * 质检放行记录 (D-S411-04 M2): 改批次状态前查这批原料是否已被质检判定不合格。
+     * 必注入 —— null 不能当「没判过」放过去。
+     */
+    @Autowired
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
     /** 更正原因落库列是 varchar(255) —— 与 material_batch_adjustments.reason 对齐。 */
     private static final int CORRECTION_REASON_MAX_LENGTH = 255;
 
@@ -2235,6 +2242,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+
+        // D-S411-04 M2: 质检放行判了不合格的原料, 仓库页不能改回可用 (与处置放行 / 放行决策工具同一判定)
+        com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
+                qcReleaseRecordRepository, batch, status);
 
         MaterialBatchStatus before = batch.getStatus();
         batch.setStatus(status);
