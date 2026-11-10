@@ -63,6 +63,9 @@ on:
       - 'backend/java/cretas-api/src/main/resources/db/**'
       - 'backend/java/cretas-api/pom.xml'
   workflow_dispatch:
+  pull_request:  # TEMP-VERIFY: 验证后撤掉
+    paths:
+      - '.github/workflows/jpa-gate-main.yml'
 
 concurrency:
   group: jpa-gate-${{ github.ref }}
@@ -78,6 +81,11 @@ jobs:
     #    见 `.claude/rules/ci-runner-routing.md`。
     runs-on: ubuntu-latest  # java-heavy-any: self-hosted 时要 8G runner, 可溢到 canada-mini
     timeout-minutes: 20
+    env:
+      # 2026-11-10: 迁到托管 runner(#1149)后这里没给堆, surefire fork 用 JVM 默认堆, 自
+      # 2026-10-24 起 main 上每次都 `Java heap space`。与 java-gate-pr.yml 同一个接法:
+      # job env 给值, 下面 -DargLine 传给 fork(pom 里 <argLine>${argLine}</argLine>)。
+      CRETAS_JAVA_FORK_XMX: 6g
 
     # 不起 Postgres 服务容器: 这些 *RepositoryQueryValidationTest 全部标注
     # @ActiveProfiles("test") (33/33 实测), 走的是 H2 内存库。类注解优先级高于
@@ -133,6 +141,7 @@ jobs:
           echo "MVN_USED=$MVN"
           "$MVN" -B test \
             -Dspring.profiles.active=test \
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}" \
             -Dtest='*RepositoryQueryValidationTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
 
