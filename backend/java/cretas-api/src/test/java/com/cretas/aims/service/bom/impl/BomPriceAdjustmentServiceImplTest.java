@@ -50,13 +50,28 @@ class BomPriceAdjustmentServiceImplTest {
     private BomPriceAdjustmentAuditRepository auditRepository;
     @Mock
     private RawMaterialTypeRepository materialRepository;
+    @Mock
+    private com.cretas.aims.service.bom.BomRecipeService bomRecipeService;
 
     private BomPriceAdjustmentServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new BomPriceAdjustmentServiceImpl(
-                itemRepository, recipeRepository, proposalRepository, auditRepository, materialRepository);
+                itemRepository, recipeRepository, proposalRepository, auditRepository, materialRepository,
+                bomRecipeService);
+
+        // 锁读桥接到各用例已打桩的普通读: 这里的用例只关心「读到什么」; 锁序与并发由真 PG 契约测试守。
+        when(proposalRepository.lockByIdAndFactoryId(any(), any())).thenAnswer(inv ->
+                proposalRepository.findByIdAndFactoryId(inv.getArgument(0), inv.getArgument(1)));
+        when(proposalRepository.findMaterialTypeIdByIdAndFactoryId(any(), any())).thenAnswer(inv ->
+                proposalRepository.findByIdAndFactoryId(inv.getArgument(0), inv.getArgument(1))
+                        .map(BomPriceAdjustmentProposal::getMaterialTypeId));
+        when(materialRepository.lockByFactoryIdAndIdIn(any(), any())).thenAnswer(inv -> {
+            java.util.Collection<String> ids = inv.getArgument(1);
+            return ids.stream().map(id -> materialRepository.findById(id))
+                    .flatMap(java.util.Optional::stream).toList();
+        });
         when(proposalRepository.save(any(BomPriceAdjustmentProposal.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
         when(auditRepository.save(any(BomPriceAdjustmentAudit.class)))
@@ -189,6 +204,7 @@ class BomPriceAdjustmentServiceImplTest {
         proposal.setId(77L);
         proposal.setFactoryId("F006");
         proposal.setRecipeItemId(101L);
+        proposal.setMaterialTypeId("RM-BEEF");
         proposal.setCurrentUnitPrice(new BigDecimal("10.0000"));
         proposal.setProposedUnitPrice(new BigDecimal("15.0000"));
         proposal.setStatus(Status.PENDING);
@@ -248,6 +264,7 @@ class BomPriceAdjustmentServiceImplTest {
         proposal.setId(id);
         proposal.setFactoryId("F006");
         proposal.setRecipeItemId(recipeItemId);
+        proposal.setMaterialTypeId("RM-BEEF");
         proposal.setCurrentUnitPrice(new BigDecimal("10.0000"));
         proposal.setProposedUnitPrice(new BigDecimal(proposedUnitPrice));
         proposal.setStatus(Status.PENDING);

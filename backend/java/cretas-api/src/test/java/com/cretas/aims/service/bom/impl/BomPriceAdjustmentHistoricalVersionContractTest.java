@@ -60,13 +60,27 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
     @Mock private BomPriceAdjustmentProposalRepository proposalRepository;
     @Mock private BomPriceAdjustmentAuditRepository auditRepository;
     @Mock private RawMaterialTypeRepository materialRepository;
+    @Mock private com.cretas.aims.service.bom.BomRecipeService bomRecipeService;
 
     private BomPriceAdjustmentServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new BomPriceAdjustmentServiceImpl(
-                itemRepository, recipeRepository, proposalRepository, auditRepository, materialRepository);
+                itemRepository, recipeRepository, proposalRepository, auditRepository, materialRepository,
+                bomRecipeService);
+
+        // 锁读桥接到各用例已打桩的普通读: 这里的用例只关心「读到什么」; 锁序与并发由真 PG 契约测试守。
+        when(proposalRepository.lockByIdAndFactoryId(any(), any())).thenAnswer(inv ->
+                proposalRepository.findByIdAndFactoryId(inv.getArgument(0), inv.getArgument(1)));
+        when(proposalRepository.findMaterialTypeIdByIdAndFactoryId(any(), any())).thenAnswer(inv ->
+                proposalRepository.findByIdAndFactoryId(inv.getArgument(0), inv.getArgument(1))
+                        .map(BomPriceAdjustmentProposal::getMaterialTypeId));
+        when(materialRepository.lockByFactoryIdAndIdIn(any(), any())).thenAnswer(inv -> {
+            java.util.Collection<String> ids = inv.getArgument(1);
+            return ids.stream().map(id -> materialRepository.findById(id))
+                    .flatMap(java.util.Optional::stream).toList();
+        });
         when(proposalRepository.save(any(BomPriceAdjustmentProposal.class))).thenAnswer(inv -> inv.getArgument(0));
         when(auditRepository.save(any(BomPriceAdjustmentAudit.class))).thenAnswer(inv -> inv.getArgument(0));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -134,6 +148,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         verify(itemRepository, never()).save(any(BomRecipeItem.class));
         verify(auditRepository, never()).save(any(BomPriceAdjustmentAudit.class));
         verify(proposalRepository, never()).save(any(BomPriceAdjustmentProposal.class));
+        verify(bomRecipeService, never()).recomputeCostsAfterItemPriceChange(any());
     }
 
     @Test
@@ -166,11 +181,11 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         BomPriceAdjustmentProposal proposal = pending(287L, line, "0.7501");
         when(proposalRepository.findByIdAndFactoryId(287L, F)).thenReturn(Optional.of(proposal));
         when(itemRepository.findByIdForUpdate(1604L)).thenReturn(Optional.of(line));
-        when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F))
-                .thenReturn(Optional.of(recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE)));
+        BomRecipe activeV4 = recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE);
+        when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F)).thenReturn(Optional.of(activeV4));
         when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
 
-        BomPriceAdjustmentProposal approved = service.approve(F, 287L, 9L, "ok");
+        BomPriceAdjustmentProposal approved = service.approve(F, 287L, 9L, "ok", new BigDecimal("0.75010"));
 
         assertThat(approved.getStatus()).isEqualTo(Status.APPROVED);
         assertThat(line.getUnitPrice()).isEqualByComparingTo(proposal.getProposedUnitPrice());
@@ -178,7 +193,79 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         assertThat(line.getItemCost()).as("3 个 × 0.7501").isEqualByComparingTo("2.2503");
         assertThat(approved.getProposedUnitPrice()).as("建议行不被改写").isEqualByComparingTo("0.7501");
         assertThat(approved.getCurrentUnitPrice()).isEqualByComparingTo("0.5");
-        verify(itemRepository).save(line);
+        // 审查 D: 行写完之后, 同一事务里用配方服务那套重算刷新配方头成本
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(itemRepository, bomRecipeService);
+        order.verify(itemRepository).save(line);
+        order.verify(bomRecipeService).recomputeCostsAfterItemPriceChange(activeV4);
+    }
+
+    @Test
+    @DisplayName("A) 配方头先加锁读, 再做工艺保密检查 (保密检查会无锁 findById 配方, 先读进来的托管对象 FOR UPDATE 不刷新)")
+    void approval_locksTheRecipeBeforeTheProcessSecretCheckReadsIt() {
+        BomRecipeItem line = item(1604L, "R-RW-V4", "0.5");
+        BomPriceAdjustmentProposal proposal = pending(287L, line, "0.7501");
+        when(proposalRepository.findByIdAndFactoryId(287L, F)).thenReturn(Optional.of(proposal));
+        when(itemRepository.findByIdForUpdate(1604L)).thenReturn(Optional.of(line));
+        when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F))
+                .thenReturn(Optional.of(recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE)));
+        when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
+        com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard guard =
+                org.mockito.Mockito.mock(com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "processSecretGuard", guard);
+
+        service.approve(F, 287L, 9L, "ok");
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(materialRepository, proposalRepository,
+                itemRepository, recipeRepository, guard);
+        order.verify(materialRepository).lockByFactoryIdAndIdIn(F, List.of(MAT));
+        order.verify(proposalRepository).lockByIdAndFactoryId(287L, F);
+        order.verify(itemRepository).findByIdForUpdate(1604L);
+        order.verify(recipeRepository).lockByIdAndFactoryId("R-RW-V4", F);
+        order.verify(guard).requireRecipe(org.mockito.ArgumentMatchers.eq(F), org.mockito.ArgumentMatchers.eq("R-RW-V4"),
+                any(), any());
+    }
+
+    @Test
+    @DisplayName("C) 审批人传了他看到的建议价, 而建议已被新收货改成别的价 -> 409 STALE, 一行不改")
+    void approvalWithAnExpectedPriceThatNoLongerMatchesTheProposal_isRejected() {
+        BomRecipeItem line = item(1604L, "R-RW-V4", "0.5");
+        BomPriceAdjustmentProposal proposal = pending(287L, line, "0.7501");
+        when(proposalRepository.findByIdAndFactoryId(287L, F)).thenReturn(Optional.of(proposal));
+        when(itemRepository.findByIdForUpdate(1604L)).thenReturn(Optional.of(line));
+        when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F))
+                .thenReturn(Optional.of(recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE)));
+        when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
+
+        BusinessException rejected = catchThrowableOfType(
+                () -> service.approve(F, 287L, 9L, "ok", new BigDecimal("0.7")), BusinessException.class);
+
+        assertThat(rejected).isNotNull();
+        assertThat(rejected.getCode()).isEqualTo(409);
+        assertThat(rejected.getErrorCode()).isEqualTo(BomPriceAdjustmentServiceImpl.ERROR_STALE);
+        assertThat(line.getUnitPrice()).isEqualByComparingTo("0.5");
+        assertThat(proposal.getStatus()).isEqualTo(Status.PENDING);
+        verify(itemRepository, never()).save(any(BomRecipeItem.class));
+        verify(bomRecipeService, never()).recomputeCostsAfterItemPriceChange(any());
+    }
+
+    @Test
+    @DisplayName("配方行已换成别的物料 -> 409 STALE (建议说的不再是这一行)")
+    void approvalWhenTheLineNoLongerUsesTheProposalMaterial_isRejected() {
+        BomRecipeItem line = item(1604L, "R-RW-V4", "0.5");
+        BomPriceAdjustmentProposal proposal = pending(287L, line, "0.7501");
+        line.setMaterialTypeId("RMT-OTHER");
+        when(proposalRepository.findByIdAndFactoryId(287L, F)).thenReturn(Optional.of(proposal));
+        when(itemRepository.findByIdForUpdate(1604L)).thenReturn(Optional.of(line));
+        when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F))
+                .thenReturn(Optional.of(recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE)));
+        when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
+
+        BusinessException rejected = catchThrowableOfType(
+                () -> service.approve(F, 287L, 9L, "ok"), BusinessException.class);
+
+        assertThat(rejected).isNotNull();
+        assertThat(rejected.getErrorCode()).isEqualTo(BomPriceAdjustmentServiceImpl.ERROR_STALE);
+        verify(itemRepository, never()).save(any(BomRecipeItem.class));
     }
 
     @Test
@@ -206,6 +293,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         assertThat(proposal.getStatus()).isEqualTo(Status.PENDING);
         verify(itemRepository, never()).save(any(BomRecipeItem.class));
         verify(auditRepository, never()).save(any(BomPriceAdjustmentAudit.class));
+        verify(bomRecipeService, never()).recomputeCostsAfterItemPriceChange(any());
     }
 
     // ---------------------------------------------------------------- fixtures

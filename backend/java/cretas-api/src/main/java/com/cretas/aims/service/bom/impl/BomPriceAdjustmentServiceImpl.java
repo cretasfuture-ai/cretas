@@ -17,6 +17,7 @@ import com.cretas.aims.repository.bom.BomRecipeItemRepository;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.bom.BomPriceAdjustmentService;
+import com.cretas.aims.service.bom.BomRecipeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -69,6 +70,8 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
     private final BomPriceAdjustmentProposalRepository proposalRepository;
     private final BomPriceAdjustmentAuditRepository auditRepository;
     private final RawMaterialTypeRepository materialRepository;
+    /** 行价改了之后重算配方头成本 —— 与编辑 / 成本更正同一套实现 (审查 D)。 */
+    private final BomRecipeService bomRecipeService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
@@ -110,7 +113,8 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
             return List.of();
         }
 
-        Optional<RawMaterialType> material = findLiveMaterial(factoryId, materialTypeId);
+        // 与批准同一锁序: 先锁物料, 再读/改 PENDING 建议 (确认入库路径里物料已被同一事务锁住, 这里是重入)
+        Optional<RawMaterialType> material = lockLiveMaterial(factoryId, materialTypeId);
         BigDecimal proposedPrice = material.map(this::masterPrice).map(this::scaleMoney).orElse(null);
         if (proposedPrice == null || proposedPrice.compareTo(BigDecimal.ZERO) <= 0) {
             log.info("Skip BOM price adjustment proposals: material master has no valid price, factoryId={}, materialTypeId={}",
@@ -205,13 +209,32 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
     @Override
     @Transactional
     public BomPriceAdjustmentProposal approve(String factoryId, Long proposalId, Long approverId, String comment) {
+        return approve(factoryId, proposalId, approverId, comment, null);
+    }
+
+    @Override
+    @Transactional
+    public BomPriceAdjustmentProposal approve(String factoryId, Long proposalId, Long approverId, String comment,
+                                              BigDecimal expectedUnitPrice) {
         if (approverId == null) {
             throw new BusinessException(400, "审批人不能为空");
         }
-        BomPriceAdjustmentProposal proposal = proposalRepository.findByIdAndFactoryId(proposalId, factoryId)
+        // 🔴 锁序 = 物料 -> 建议 -> 配方行 -> 配方头, 与确认入库 (先锁物料、重算均价、再原地改写 PENDING 建议)
+        // 同一方向, 不互等。每一行都在【加锁读】时第一次进本事务的持久化上下文: 先无锁读进来的托管对象,
+        // 之后的 FOR UPDATE 不会刷新它的字段, 读到的就是旧值 (审查 A/B/C)。所以这里先只取物料 id 这一个标量。
+        String materialTypeId = proposalRepository.findMaterialTypeIdByIdAndFactoryId(proposalId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("BOM调价建议不存在: " + proposalId));
+        RawMaterialType material = lockLiveMaterial(factoryId, materialTypeId)
+                .orElseThrow(() -> new ResourceNotFoundException("物料档案不存在: " + materialTypeId));
+        BomPriceAdjustmentProposal proposal = proposalRepository.lockByIdAndFactoryId(proposalId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("BOM调价建议不存在: " + proposalId));
         if (proposal.getStatus() != Status.PENDING) {
             throw new BusinessException(409, "只有待审批的BOM调价建议可以批准");
+        }
+        // 审批人看到的那个数: 传了就必须还是它 (建议可能在他看完之后被新的收货更新过)。不传不比, 向后兼容。
+        if (expectedUnitPrice != null && (proposal.getProposedUnitPrice() == null
+                || scaleMoney(expectedUnitPrice).compareTo(scaleMoney(proposal.getProposedUnitPrice())) != 0)) {
+            throw stale();
         }
 
         BomRecipeItem item = itemRepository.findByIdForUpdate(proposal.getRecipeItemId())
@@ -219,16 +242,19 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         if (!factoryId.equals(item.getFactoryId())) {
             throw new BusinessException(403, "无权审批该BOM调价建议");
         }
+        if (!materialTypeId.equals(item.getMaterialTypeId())) {
+            throw stale();   // 配方行已换成别的物料: 这条建议说的不再是这一行
+        }
+        // D-S5-10: 历史 (归档) 版本的成本不回写。配方头必须在工艺保密检查【之前】加锁读 ——
+        // 保密检查按配方定位产品, 会无锁 findById 把配方读进上下文, 之后再 FOR UPDATE 拿到的是那份旧对象,
+        // 并发激活新版本把它归档时这里仍会读成 ACTIVE (审查 A)。锁序与 BOM 成本更正一致: 先行后头。
+        BomRecipe recipe = recipeRepository.lockByIdAndFactoryId(item.getRecipeId(), factoryId).orElse(null);
         // 工艺保密 (写入侧): 批准会改写配方行的单价与行成本 (行成本 = 用量 × 单价), 属于改配方, 要编辑权
         if (processSecretGuard != null) {
             processSecretGuard.requireRecipe(factoryId, item.getRecipeId(),
                     com.cretas.aims.entity.processsecret.ProcessSecretAction.EDIT,
                     "bom price-adjustment approve " + proposalId);
         }
-
-        // D-S5-10: 历史 (归档) 版本的成本不回写。加锁读版本状态 (与 BOM 成本更正同一锁序: 先行后头),
-        // 与并发归档串行; 拒绝时一行不改。
-        BomRecipe recipe = recipeRepository.lockByIdAndFactoryId(item.getRecipeId(), factoryId).orElse(null);
         if (recipe == null || !PRICE_WRITABLE_RECIPE_STATUSES.contains(recipe.getStatus())) {
             String version = recipe == null || recipe.getVersion() == null ? "" : " v" + recipe.getVersion();
             String state = recipe == null ? "已删除" : recipe.getStatus() == BomRecipe.Status.ARCHIVED
@@ -240,26 +266,24 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         }
 
         BigDecimal beforePrice = scaleMoney(item.getUnitPrice());
-        RawMaterialType material = findLiveMaterial(factoryId, item.getMaterialTypeId())
-                .orElseThrow(() -> new ResourceNotFoundException("物料档案不存在: " + item.getMaterialTypeId()));
         BigDecimal masterPrice = masterPrice(material);
         if (masterPrice == null || masterPrice.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BusinessException(400, "物料档案未配置有效价格: " + item.getMaterialTypeId());
+            throw new BusinessException(400, "物料档案未配置有效价格: " + materialTypeId);
         }
         // D-S5-11: 写入的就是建议行上审批人看到的那个数。BOM 行只能继承档案价, 所以档案价若已不是这个数,
         // 建议就过期了 —— 拒绝并要求重新生成, ⛔ 不静默换成新价, 也不改写建议行。
         BigDecimal afterPrice = scaleMoney(proposal.getProposedUnitPrice());
         if (afterPrice == null || afterPrice.compareTo(scaleMoney(masterPrice)) != 0) {
-            // 消息里不带两个价: 它们是 @PriceSensitive 字段, 错误消息绕过序列化脱敏
-            throw new BusinessException(409, "调价建议已过期：物料档案价在建议生成后已变化，与建议价不一致，本次未做任何修改")
-                    .withCode(ERROR_STALE)
-                    .withHint("物料价格在建议生成后又变了，请对该物料重新执行调价检查，按新的建议价审批");
+            throw stale();
         }
         item.setUnitPrice(afterPrice);
         item.setTaxRate(material.getTaxRate() == null ? null
                 : material.getTaxRate().getRate().multiply(BigDecimal.valueOf(100)));
         item.setItemCost(item.computeItemCost());
         itemRepository.save(item);
+        // 审查 D: 行价变了, 配方头 total_material_cost / total_cost (标准成本、嵌套 BOM 读的是头) 必须同一事务重算,
+        // 用编辑 / 成本更正那一套 (含同族分摊), ⛔ 不在这里另写一份。
+        bomRecipeService.recomputeCostsAfterItemPriceChange(recipe);
 
         LocalDateTime now = LocalDateTime.now();
         proposal.setStatus(Status.APPROVED);
@@ -284,6 +308,13 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         return proposalRepository.save(proposal);
     }
 
+    private BusinessException stale() {
+        // 消息里不带价: 建议价 / 档案价都是 @PriceSensitive 字段, 错误消息绕过序列化脱敏
+        return new BusinessException(409, "调价建议已过期：建议价已变化或与物料档案当前价不一致，本次未做任何修改")
+                .withCode(ERROR_STALE)
+                .withHint("请刷新调价建议，按最新的建议价重新审批；仍不一致时对该物料重新执行调价检查");
+    }
+
     @Override
     public Page<BomPriceAdjustmentProposal> list(String factoryId, Status status, Pageable pageable) {
         if (status != null) {
@@ -292,9 +323,10 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         return proposalRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageable);
     }
 
-    private Optional<RawMaterialType> findLiveMaterial(String factoryId, String materialTypeId) {
-        return materialRepository.findById(materialTypeId)
-                .filter(found -> factoryId.equals(found.getFactoryId()) && found.getDeletedAt() == null);
+    private Optional<RawMaterialType> lockLiveMaterial(String factoryId, String materialTypeId) {
+        return materialRepository.lockByFactoryIdAndIdIn(factoryId, List.of(materialTypeId)).stream()
+                .filter(found -> factoryId.equals(found.getFactoryId()) && found.getDeletedAt() == null)
+                .findFirst();
     }
 
     /** BOM 行价格的唯一来源: 物料档案移动均价, 没有则档案单价。生成与批准共用这一处。 */
