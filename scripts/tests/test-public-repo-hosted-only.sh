@@ -30,8 +30,8 @@ FORMERLY_SELF_HOSTED = {
     'artifact-reaper.yml', 'reap-orphan-testenvs.yml', 'fresh-db-progress.yml',
 }
 HEAP = {
-    ('java-gate-pr.yml', 'fast-contracts'): 'CRETAS_JAVA_FORK_XMX',
-    ('java-gate-pr.yml', 'postgres-reversal-concurrency'): 'CRETAS_JAVA_FORK_XMX',
+    ('java-gate-pr.yml', 'fast-contracts-shard'): 'CRETAS_JAVA_FORK_XMX',
+    ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'): 'CRETAS_JAVA_FORK_XMX',
     ('java-full-nightly.yml', 'full-suite'): 'CRETAS_JAVA_NIGHTLY_XMX',
 }
 
