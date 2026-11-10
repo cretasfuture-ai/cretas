@@ -250,6 +250,55 @@ class PermissionServiceImplApprovalCodesContractTest {
         assertThat(can(FactoryUserRole.production_manager, F, PermissionServiceImpl.APPROVAL_REPORT_REVERSAL)).isTrue();
     }
 
+    /** 个人覆盖: userId → (模块 → 级别), 与 PlatformEmployeeModulePermissions 的两种 apply 同口径。 */
+    private final Map<Long, Map<String, String>> personalOverrides = new HashMap<>();
+
+    private void wirePersonalOverrides() {
+        com.cretas.aims.service.platform.PlatformEmployeeModulePermissions personal =
+                org.mockito.Mockito.mock(com.cretas.aims.service.platform.PlatformEmployeeModulePermissions.class);
+        when(personal.apply(org.mockito.ArgumentMatchers.any(User.class), anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> personalOverrides.getOrDefault(inv.<User>getArgument(0).getId(), Map.of())
+                        .getOrDefault(inv.<String>getArgument(1), inv.getArgument(2)));
+        when(personal.apply(org.mockito.ArgumentMatchers.any(User.class), org.mockito.ArgumentMatchers.<Map<String, String>>any()))
+                .thenAnswer(inv -> {
+                    Map<String, String> merged = new java.util.LinkedHashMap<>(inv.<Map<String, String>>getArgument(1));
+                    merged.putAll(personalOverrides.getOrDefault(inv.<User>getArgument(0).getId(), Map.of()));
+                    return merged;
+                });
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "employeeModulePermissions", personal);
+    }
+
+    @Test
+    @DisplayName("复核 1: 个人降级 / 个人升权后, 登录快照、AI 工具闸快照与 hasPermission 对审批码逐格一致")
+    void snapshotsFollowPersonalOverridesOfThePrerequisite() {
+        wirePersonalOverrides();
+        // 平台默认 permission_admin.quality = '-' (同线上)
+        fakeL1.put("permission_admin", Map.of("quality", "-"));
+
+        User downgraded = user(FactoryUserRole.production_manager, F);   // 个人把 production 降成只读
+        personalOverrides.put(downgraded.getId(), Map.of("production", "r"));
+        User upgraded = user(FactoryUserRole.permission_admin, F);       // 个人把 quality 升成读写
+        personalOverrides.put(upgraded.getId(), Map.of("quality", "rw"));
+        User financeViaPersonal = user(FactoryUserRole.warehouse_manager, F);   // 个人给了 finance 读写 → 退款默认跟着走
+        personalOverrides.put(financeViaPersonal.getId(), Map.of("finance", "rw"));
+        User plain = user(FactoryUserRole.production_manager, F);         // 对照: 同岗位没有个人覆盖
+
+        for (User u : List.of(downgraded, upgraded, financeViaPersonal, plain)) {
+            Map<String, String> login = service.resolveModuleLevels(u);
+            Map<String, String> authz = service.resolveModuleLevelsForAuthorization(u);
+            for (String module : PermissionServiceImpl.APPROVAL_MODULES) {
+                boolean enforced = service.hasPermission(u, module + ":approve");
+                assertThat("rw".equals(login.get(module))).as("登录快照 %s/%s", u.getRoleCode(), module).isEqualTo(enforced);
+                assertThat("rw".equals(authz.get(module))).as("鉴权快照 %s/%s", u.getRoleCode(), module).isEqualTo(enforced);
+            }
+        }
+        // 读数本身: 降级的不能批撤回, 升权的能批质检, 个人给了 finance 的能批退款, 对照照常能批撤回
+        assertThat(service.hasPermission(downgraded, "approval_report_reversal:approve")).isFalse();
+        assertThat(service.hasPermission(upgraded, "approval_quality_disposition:approve")).isTrue();
+        assertThat(service.hasPermission(financeViaPersonal, "approval_refund:approve")).isTrue();
+        assertThat(service.hasPermission(plain, "approval_report_reversal:approve")).isTrue();
+    }
+
     @Test
     @DisplayName("登录快照 (前端据此显示审批按钮) 与 hasPermission 逐格一致")
     void loginSnapshotMatchesHasPermission() {

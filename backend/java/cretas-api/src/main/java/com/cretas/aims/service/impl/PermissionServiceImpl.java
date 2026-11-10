@@ -682,9 +682,45 @@ public class PermissionServiceImpl implements PermissionService {
         if (isRetiredRestaurantRole(role)) {
             return Collections.emptyMap();
         }
-        Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), role, !isUnrestrictedRole(role));
-        return filterRetiredRestaurantModules(employeeModulePermissions == null ? levels
-                : employeeModulePermissions.apply(user, levels));
+        Set<String> explicitApprovals = new java.util.HashSet<>();
+        Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), role, !isUnrestrictedRole(role),
+                explicitApprovals);
+        return filterRetiredRestaurantModules(overlayPersonalAndRecomputeApprovals(user, role, levels, explicitApprovals));
+    }
+
+    /**
+     * 叠个人覆盖, 再按叠完的级别重算没有显式配置的审批码默认授权 (#1580 权限复核 1)。
+     *
+     * <p>审批码的默认授权依赖前提 / 来源模块 (production / quality / finance / sales) 的有效级别;
+     * {@link #hasPermission} 按<b>个人</b>有效级别算, 这里的登录快照 / AI 工具闸用的快照必须同口径 ——
+     * 否则某人的 production 被个人降成只读时, 按钮和 AI 闸显示能批而真实闸门拒绝 (个人升权时反过来)。
+     * 只多读一次个人覆盖 (与原来 apply 读的是同一次), 不逐格查库 (登录有查询预算闸)。
+     */
+    private Map<String, String> overlayPersonalAndRecomputeApprovals(User user, FactoryUserRole role,
+                                                                     Map<String, String> levels,
+                                                                     Set<String> explicitApprovals) {
+        if (employeeModulePermissions == null) {
+            return levels;
+        }
+        // 保护岗位 (超管 / 平台 / 未激活) 返回空: 与 apply(user, levels) 同口径
+        Map<String, String> personal = employeeModulePermissions.apply(user, Collections.emptyMap());
+        Map<String, String> result = new LinkedHashMap<>(levels);
+        result.putAll(personal);
+        if (personal.isEmpty() || role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
+            return result;
+        }
+        for (String module : APPROVAL_MODULES) {
+            if (explicitApprovals.contains(module) || personal.containsKey(module)) {
+                continue;   // 显式配置 / 个人直接覆盖了审批码本身: 按那个值, 不重算
+            }
+            String level = normalizeLevel(approvalDefaultLevel(role, module, result::get));
+            if (level == null) {
+                result.remove(module);
+            } else {
+                result.put(module, level);
+            }
+        }
+        return result;
     }
 
     @Override
@@ -744,13 +780,21 @@ public class PermissionServiceImpl implements PermissionService {
     public Map<String, String> resolveModuleLevelsForAuthorization(User user) {
         if (user == null) return Collections.emptyMap();
         if (isRetiredRestaurantRole(user.getRoleEnum())) return Collections.emptyMap();
-        Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), user.getRoleEnum(), true);
-        return filterRetiredRestaurantModules(employeeModulePermissions == null ? levels
-                : employeeModulePermissions.apply(user, levels));
+        Set<String> explicitApprovals = new java.util.HashSet<>();
+        Map<String, String> levels = resolveRoleModuleLevels(user.getFactoryId(), user.getRoleEnum(), true,
+                explicitApprovals);
+        return filterRetiredRestaurantModules(
+                overlayPersonalAndRecomputeApprovals(user, user.getRoleEnum(), levels, explicitApprovals));
     }
 
     private Map<String, String> resolveRoleModuleLevels(
             String factoryId, FactoryUserRole role, boolean requireAvailable) {
+        return resolveRoleModuleLevels(factoryId, role, requireAvailable, null);
+    }
+
+    /** @param explicitApprovalsOut 非空时收集「在 L2 / L1 显式配置过的审批码」(给个人覆盖后的重算用) */
+    private Map<String, String> resolveRoleModuleLevels(
+            String factoryId, FactoryUserRole role, boolean requireAvailable, Set<String> explicitApprovalsOut) {
         if (role == null || role == FactoryUserRole.unactivated || isRetiredRestaurantRole(role)) {
             return Collections.emptyMap();
         }
@@ -762,6 +806,13 @@ public class PermissionServiceImpl implements PermissionService {
         LayerSnapshot snapshot = new LayerSnapshot(
                 factoryId == null ? Collections.emptyMap() : layer2LevelsForRole(factoryId, role.name(), requireAvailable),
                 layer1LevelsForRole(role.name(), requireAvailable));
+        if (explicitApprovalsOut != null) {
+            for (String module : APPROVAL_MODULES) {
+                if (snapshot.l2().containsKey(module) || snapshot.l1().containsKey(module)) {
+                    explicitApprovalsOut.add(module);
+                }
+            }
+        }
 
         // 模块全集: 三层里任一层为该角色登记过的模块。owner 2026-09-06 已裁定「以 L1 模块码为准」(#675/#689),
         // 这里取并集是为了让硬编码兜底独有的格 (L1 无行) 也进登录响应, 不是在挑清单。
