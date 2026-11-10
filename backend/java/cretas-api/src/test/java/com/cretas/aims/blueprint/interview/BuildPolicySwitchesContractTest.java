@@ -186,6 +186,26 @@ class BuildPolicySwitchesContractTest {
     }
 
     @Test
+    void valuesBeyondTwoDecimalsAreRejectedBecauseTheColumnWouldRoundThem() {
+        FactoryPolicyItem p = new FactoryPolicyItem();
+        p.setMaterialBalanceWarnPct(new BigDecimal("99.996"));
+        p.setMaterialBalanceRedPct(new BigDecimal("100"));
+        assertThat(validatePolicy(p)).singleElement().asString().contains("两位小数");
+        p.setMaterialBalanceWarnPct(new BigDecimal("5.50"));   // 5.50 == 5.5, 合法
+        p.setMaterialBalanceRedPct(new BigDecimal("15"));
+        assertThat(validatePolicy(p)).isEmpty();
+
+        TypeItem t = new TypeItem();
+        t.setCode("P1");
+        t.setName("x");
+        t.setUnit("kg");
+        t.setMaxReworkRatioPercent(new BigDecimal("0.004"));
+        List<String> problems = new ArrayList<>();
+        ReflectionTestUtils.invokeMethod(validator, "checkTypeItems", problems, "productTypes", List.of(t));
+        assertThat(problems).singleElement().asString().contains("两位小数");
+    }
+
+    @Test
     void reworkLimitOutOfRangeAndMaterialsCarryingProductOnlyFieldsAreRejected() {
         TypeItem bad = new TypeItem();
         bad.setCode("P1");

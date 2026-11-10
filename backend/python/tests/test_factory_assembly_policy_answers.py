@@ -43,3 +43,11 @@ def test_none_answers_and_bad_numbers():
     assert ps == [{"name": "卤牛肉"}]
     assert g._product_policy("回料比例上限：卤牛肉 150%", ps) == ["回料上限:卤牛肉 150%"]
     assert ps == [{"name": "卤牛肉"}]
+
+
+def test_balance_line_in_wrong_order_is_not_written_but_reported_by_the_wiring():
+    import inspect
+    src = inspect.getsource(g)
+    # 解析层不猜(返回空), 接线层必须把「说了没落上」报进 notBuilt
+    assert g._factory_policy("物料平衡提醒线：差15%提醒、差5%报警") == {}
+    assert "物料平衡提醒线:' + _bal_ans" in src

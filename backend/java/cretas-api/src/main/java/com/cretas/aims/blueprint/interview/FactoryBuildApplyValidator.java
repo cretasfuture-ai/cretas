@@ -447,6 +447,10 @@ public class FactoryBuildApplyValidator {
                 problems.add(label + "[" + i + "] 需检/回料上限只对产品有意义, 物料不接收");
             }
             if (it.getMaxReworkRatioPercent() != null
+                    && it.getMaxReworkRatioPercent().stripTrailingZeros().scale() > 2) {
+                problems.add(label + "[" + i + "].maxReworkRatioPercent 最多保留两位小数");
+            }
+            if (it.getMaxReworkRatioPercent() != null
                     && (it.getMaxReworkRatioPercent().signum() <= 0
                     || it.getMaxReworkRatioPercent().compareTo(new BigDecimal("100")) > 0)) {
                 problems.add(label + "[" + i + "].maxReworkRatioPercent 必须大于 0 且不超过 100"
@@ -941,6 +945,12 @@ public class FactoryBuildApplyValidator {
         java.math.BigDecimal warn = policy.getMaterialBalanceWarnPct();
         java.math.BigDecimal red = policy.getMaterialBalanceRedPct();
         if (warn == null && red == null) {
+            return;
+        }
+        // 列是 numeric(5,2): 超过两位小数 PG 会舍入, 舍入后可能 黄=红 或 黄=0, 校验过的值与落库值不一致 → 直接拒绝
+        if ((warn != null && warn.stripTrailingZeros().scale() > 2)
+                || (red != null && red.stripTrailingZeros().scale() > 2)) {
+            problems.add("policy 物料平衡告警线最多保留两位小数");
             return;
         }
         FactorySettings cur = factorySettingsRepository.findByFactoryId(factoryId).orElse(null);

@@ -1343,6 +1343,10 @@ async def generate_configuration(request: FactoryInitRequest):
         if policy:
             parsed['suggestedData']['policy'] = policy
         logger.info('Factory init: policy(问到的厂规)=%s', policy)
+        _bal = _POLICY_BALANCE.search(request.factory_description or '')
+        _bal_ans = _bal.group(1).strip() if _bal else ''
+        if _bal_ans and '默认' not in _bal_ans and _bal_ans not in ('没有', '不用') and 'materialBalanceWarnPct' not in policy:
+            parsed['notBuilt'] = (parsed.get('notBuilt') or []) + _not_built('产品类型', ['物料平衡提醒线:' + _bal_ans], '这条提醒线没对上「先黄后红、两个百分数」', '先说提醒线再说报警线，像「差5%提醒、差15%报警」；也可以建完厂在工厂配置里补')
         policy_skipped = _product_policy(request.factory_description, parsed['suggestedData'].get('productTypes'))
         if policy_skipped:
             parsed['notBuilt'] = (parsed.get('notBuilt') or []) + _not_built('产品类型', policy_skipped, '这条检验/回料说法没对上成品名字或数字', '在「产品类型管理」里手动补；或者用成品清单里的名字再说一遍')
