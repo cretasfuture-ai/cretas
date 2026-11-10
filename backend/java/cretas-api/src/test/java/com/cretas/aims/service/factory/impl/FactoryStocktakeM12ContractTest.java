@@ -244,6 +244,117 @@ class FactoryStocktakeM12ContractTest {
         verify(materialBatchRepo, never()).save(any());
     }
 
+    // ==================== 纪律排查 B2: 工厂级「允许本人审批」开关 (OA 审批路径 = 现网唯一入口) ====================
+
+    private static final String INSTANCE_ID = "WF-STK-1";
+
+    private com.cretas.aims.service.workflow.WorkflowEngineService engineFor(FactoryStocktake stocktake) {
+        com.cretas.aims.service.workflow.WorkflowEngineService engine =
+                mock(com.cretas.aims.service.workflow.WorkflowEngineService.class);
+        com.cretas.aims.entity.workflow.ApprovalWorkflowInstance instance =
+                new com.cretas.aims.entity.workflow.ApprovalWorkflowInstance();
+        instance.setModuleCode("INVENTORY_ADJUSTMENT");
+        instance.setBusinessEntityId(stocktake.getId());
+        instance.setStatus(com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.RUNNING);
+        when(engine.getInstance("F006", INSTANCE_ID)).thenReturn(Optional.of(instance));
+        stocktake.setWorkflowInstanceId(INSTANCE_ID);
+        ReflectionTestUtils.setField(service, "workflowEngine", engine);
+        return engine;
+    }
+
+    private void selfApprovalSwitchIs(boolean on) {
+        com.cretas.aims.repository.FactorySettingsRepository settings =
+                mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+        when(settings.findAllowSelfApprovalByFactoryId("F006")).thenReturn(on);
+        ReflectionTestUtils.setField(service, "selfApprovalGate",
+                new com.cretas.aims.service.workflow.FactorySelfApprovalGate(settings));
+    }
+
+    private FactoryStocktake differenceTaskSubmittedBy(Long submitter) {
+        FactoryStocktake stocktake = stocktake(FactoryStocktake.Status.PENDING_APPROVAL, BigDecimal.TEN, new BigDecimal("9"));
+        stocktake.setInitiatedBy(submitter);
+        stocktake.setCountedBy(submitter);
+        stocktake.setSubmittedBy(submitter);
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate(stocktake.getId(), "F006")).thenReturn(Optional.of(stocktake));
+        return stocktake;
+    }
+
+    @Test
+    @DisplayName("B2 开关关: 有盘盈亏的本人 OA 审批 (带意见也不行) → 409, 不推进审批流, 不写")
+    void selfApprovalSwitchOff_oaApprovalStillForbidden() {
+        FactoryStocktake stocktake = differenceTaskSubmittedBy(1309L);
+        com.cretas.aims.service.workflow.WorkflowEngineService engine = engineFor(stocktake);
+        selfApprovalSwitchIs(false);
+
+        assertThatThrownBy(() -> service.applyWorkflowAction("F006", stocktake.getId(), INSTANCE_ID, 1309L,
+                "factory_super_admin", com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.APPROVE,
+                "只有我一个人"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo("STOCKTAKE_SELF_APPROVAL_FORBIDDEN"));
+        verify(engine, never()).transitionNode(anyString(), any(), any(), any(), any());
+        verify(stocktakeRepo, never()).save(any());
+        assertThat(stocktake.isSelfApproved()).isFalse();
+    }
+
+    @Test
+    @DisplayName("B2 开关开 + 审批意见非空: 本人 OA 审批放行, 盘点任务标本人审批并存原因")
+    void selfApprovalSwitchOn_oaApprovalWithReasonIsTraced() {
+        FactoryStocktake stocktake = differenceTaskSubmittedBy(1309L);
+        com.cretas.aims.service.workflow.WorkflowEngineService engine = engineFor(stocktake);
+        selfApprovalSwitchIs(true);
+        com.cretas.aims.entity.workflow.ApprovalWorkflowInstance approved =
+                new com.cretas.aims.entity.workflow.ApprovalWorkflowInstance();
+        approved.setStatus(com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.APPROVED);
+        when(engine.transitionNode(INSTANCE_ID, 1309L, "factory_super_admin",
+                com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.APPROVE, "本厂只有我盘点"))
+                .thenReturn(approved);
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        FactoryStocktake result = service.applyWorkflowAction("F006", stocktake.getId(), INSTANCE_ID, 1309L,
+                "factory_super_admin", com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.APPROVE,
+                "本厂只有我盘点");
+
+        assertThat(result.getStatus()).isEqualTo(FactoryStocktake.Status.APPROVED);
+        assertThat(result.isSelfApproved()).isTrue();
+        assertThat(result.getSelfApprovalReason()).isEqualTo("本厂只有我盘点");
+        assertThat(result.getApprovedBy()).isEqualTo(1309L);
+    }
+
+    @Test
+    @DisplayName("B2 开关开 + 没写审批意见: 本人 OA 审批 → 422, 不推进审批流, 不写")
+    void selfApprovalSwitchOn_oaApprovalWithoutReasonRejected() {
+        FactoryStocktake stocktake = differenceTaskSubmittedBy(1309L);
+        com.cretas.aims.service.workflow.WorkflowEngineService engine = engineFor(stocktake);
+        selfApprovalSwitchIs(true);
+
+        assertThatThrownBy(() -> service.applyWorkflowAction("F006", stocktake.getId(), INSTANCE_ID, 1309L,
+                "factory_super_admin", com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.APPROVE, " "))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    assertThat(((BusinessException) error).getCode()).isEqualTo(422);
+                    assertThat(((BusinessException) error).getErrorCode())
+                            .isEqualTo(com.cretas.aims.service.workflow.FactorySelfApprovalGate.REASON_REQUIRED);
+                });
+        verify(engine, never()).transitionNode(anyString(), any(), any(), any(), any());
+        verify(stocktakeRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("B2 开关开 + 直接审批入口带原因: 同样放行并留痕")
+    void selfApprovalSwitchOn_directApprovalWithReasonIsTraced() {
+        FactoryStocktake stocktake = differenceTaskSubmittedBy(1309L);
+        stocktake.setVersion(2L);
+        selfApprovalSwitchIs(true);
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.approve(stocktake.getId(), "F006", 1309L, "factory_super_admin", 2L, "只有我一个财务");
+
+        assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.APPROVED);
+        assertThat(stocktake.isSelfApproved()).isTrue();
+        assertThat(stocktake.getSelfApprovalReason()).isEqualTo("只有我一个财务");
+    }
+
     private FactoryStocktake stocktake(FactoryStocktake.Status status, BigDecimal system, BigDecimal actual) {
         FactoryStocktake stocktake = new FactoryStocktake();
         stocktake.setId(UUID.randomUUID().toString());

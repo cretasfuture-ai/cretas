@@ -547,6 +547,97 @@ class SalesPriceAdjustmentServiceTest {
     // Helpers
     // =================================================================
 
+    // =================================================================
+    // 纪律排查 B11: 工厂级「允许本人审批」开关
+    // =================================================================
+
+    private void selfApprovalSwitchIs(boolean on) {
+        com.cretas.aims.repository.FactorySettingsRepository settings =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+        when(settings.findAllowSelfApprovalByFactoryId(FACTORY_ID)).thenReturn(on);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "selfApprovalGate",
+                new com.cretas.aims.service.workflow.FactorySelfApprovalGate(settings));
+    }
+
+    @Test
+    @DisplayName("B11 开关关: 改价人自批 (写了原因也不行) → 403, 行价与记录都不动")
+    void selfApprovalSwitchOff_stillForbidden() {
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-s1", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        when(adjustmentRecordRepository.findById("rec-s1")).thenReturn(Optional.of(pending));
+        selfApprovalSwitchIs(false);
+
+        assertThatThrownBy(() -> service.approvePriceAdjustment(FACTORY_ID, "rec-s1", USER_ID, "只有我一个人"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403))
+                .hasMessageContaining("4 眼原则");
+        verify(salesOrderItemRepository, never()).save(any());
+        verify(adjustmentRecordRepository, never()).save(any());
+        assertThat(pending.isSelfApproved()).isFalse();
+    }
+
+    @Test
+    @DisplayName("B11 开关开 + 写了原因: 改价人自批 → 应用改价, 记录标本人审批并存原因")
+    void selfApprovalSwitchOn_withReason_appliesAndTraces() {
+        SalesOrderItem line = buildLine(LINE_ID, ORDER_ID, new BigDecimal("100.0000"), BigDecimal.ZERO);
+        line.setQuantity(new BigDecimal("10.0000"));
+        SalesOrder order = buildOrder(ORDER_ID, FACTORY_ID, new BigDecimal("1000.00"));
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-s2", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        when(adjustmentRecordRepository.findById("rec-s2")).thenReturn(Optional.of(pending));
+        when(salesOrderItemRepository.findById(LINE_ID)).thenReturn(Optional.of(line));
+        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser(USER_ID, "厂长")));
+        when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(line));
+        when(adjustmentRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        selfApprovalSwitchIs(true);
+
+        var dto = service.approvePriceAdjustment(FACTORY_ID, "rec-s2", USER_ID, "本厂只有我能定价");
+
+        assertThat(dto.approvalStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(line.getUnitPrice()).isEqualByComparingTo("80.0000");
+        assertThat(pending.isSelfApproved()).isTrue();
+        assertThat(pending.getSelfApprovalReason()).isEqualTo("本厂只有我能定价");
+        assertThat(pending.getApprovedBy()).isEqualTo(USER_ID);
+    }
+
+    @Test
+    @DisplayName("B11 开关开 + 没写原因: 改价人自批 → 422, 行价与记录都不动")
+    void selfApprovalSwitchOn_withoutReason_rejected() {
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-s3", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        when(adjustmentRecordRepository.findById("rec-s3")).thenReturn(Optional.of(pending));
+        selfApprovalSwitchIs(true);
+
+        assertThatThrownBy(() -> service.approvePriceAdjustment(FACTORY_ID, "rec-s3", USER_ID, null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).getCode()).isEqualTo(422);
+                    assertThat(((BusinessException) e).getErrorCode())
+                            .isEqualTo(com.cretas.aims.service.workflow.FactorySelfApprovalGate.REASON_REQUIRED);
+                });
+        verify(salesOrderItemRepository, never()).save(any());
+        verify(adjustmentRecordRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("B11 开关开: 驳回自己的改价, 驳回原因即本人审批原因, 记录留痕")
+    void selfApprovalSwitchOn_selfRejectIsTraced() {
+        SalesPriceAdjustmentRecord pending = buildPendingRecord(
+                "rec-s4", new BigDecimal("100.0000"), new BigDecimal("80.0000"), USER_ID);
+        when(adjustmentRecordRepository.findById("rec-s4")).thenReturn(Optional.of(pending));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(buildUser(USER_ID, "厂长")));
+        when(adjustmentRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        selfApprovalSwitchIs(true);
+
+        service.rejectPriceAdjustment(FACTORY_ID, "rec-s4", USER_ID, "价格填错了, 撤回");
+
+        assertThat(pending.getApprovalStatus()).isEqualTo(ApprovalStatus.REJECTED);
+        assertThat(pending.isSelfApproved()).isTrue();
+        assertThat(pending.getSelfApprovalReason()).isEqualTo("价格填错了, 撤回");
+        verify(salesOrderItemRepository, never()).save(any());
+    }
+
     private SalesPriceAdjustmentRecord buildPendingRecord(
             String id, BigDecimal oldPrice, BigDecimal newPrice, Long adjustedBy) {
         SalesPriceAdjustmentRecord r = new SalesPriceAdjustmentRecord();

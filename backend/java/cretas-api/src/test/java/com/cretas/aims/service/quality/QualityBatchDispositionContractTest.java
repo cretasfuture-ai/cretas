@@ -1618,4 +1618,140 @@ class QualityBatchDispositionContractTest {
         finishedGoods.add(row);
         return row;
     }
+    // ==================== 纪律排查 B3: 工厂级「允许本人审批」开关 ====================
+    //
+    // 两个入口都要过: /quality-disposition/{id}/approve (控制器) 与特批 processDecision (App /decision + AI 工具)。
+
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate(boolean on) {
+        com.cretas.aims.repository.FactorySettingsRepository settings =
+                mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+        when(settings.findAllowSelfApprovalByFactoryId(FACTORY)).thenReturn(on);
+        return new com.cretas.aims.service.workflow.FactorySelfApprovalGate(settings);
+    }
+
+    private SpecialApprovalServiceImpl specialApprovalsWithSwitch(boolean on) {
+        SpecialApprovalServiceImpl special = specialApprovals();
+        ReflectionTestUtils.setField(special, "selfApprovalGate", selfApprovalGate(on));
+        return special;
+    }
+
+    private static ApprovalDecisionRequest selfDecision(String comment, String selfReason) {
+        ApprovalDecisionRequest request = new ApprovalDecisionRequest();
+        request.setDecision(ApprovalDecisionRequest.ApprovalDecision.APPROVE);
+        request.setComment(comment);
+        request.setSelfApprovalReason(selfReason);
+        return request;
+    }
+
+    @Test
+    @DisplayName("B3 特批 开关关: 申请人自批 (写了原因也不行) → 403 SPECIAL_APPROVAL_SELF_APPROVAL, 什么都不执行")
+    void specialSelfApprovalForbiddenWhenSwitchOff() {
+        String approvalId = pendingSpecialConditionalRelease();
+        SpecialApprovalServiceImpl special = specialApprovalsWithSwitch(false);
+
+        assertThatThrownBy(() -> special.processDecision(FACTORY, approvalId, selfDecision("同意", "只有我一个人"),
+                INSPECTOR, INSPECTOR, "factory_super_admin"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo(SpecialApprovalServiceImpl.SPECIAL_APPROVAL_SELF_APPROVAL));
+        assertNothingDecided(approvalId);
+        assertThat(audits.get(approvalId).isSelfApproved()).isFalse();
+    }
+
+    @Test
+    @DisplayName("B3 特批 开关开 + 写了原因: 申请人自批放行, 执行一次, 审批行标本人审批并存原因")
+    void specialSelfApprovalAllowedAndTracedWhenSwitchOn() {
+        String approvalId = pendingSpecialConditionalRelease();
+        SpecialApprovalServiceImpl special = specialApprovalsWithSwitch(true);
+
+        special.processDecision(FACTORY, approvalId, selfDecision("同意", "本厂只有我一个人管质量"),
+                INSPECTOR, INSPECTOR, "factory_super_admin");
+
+        DecisionAuditLog row = audits.get(approvalId);
+        assertThat(row.getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.APPROVED);
+        assertThat(row.isSelfApproved()).isTrue();
+        assertThat(row.getSelfApprovalReason()).isEqualTo("本厂只有我一个人管质量");
+        assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
+    }
+
+    @Test
+    @DisplayName("B3 特批 开关开 + 没写原因 (意见也空): 申请人自批 → 422, 什么都不执行")
+    void specialSelfApprovalWithoutReasonRejectedWhenSwitchOn() {
+        String approvalId = pendingSpecialConditionalRelease();
+        SpecialApprovalServiceImpl special = specialApprovalsWithSwitch(true);
+
+        assertThatThrownBy(() -> special.processDecision(FACTORY, approvalId, selfDecision(" ", null),
+                INSPECTOR, INSPECTOR, "factory_super_admin"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).getCode()).isEqualTo(422);
+                    assertThat(((BusinessException) e).getErrorCode())
+                            .isEqualTo(com.cretas.aims.service.workflow.FactorySelfApprovalGate.REASON_REQUIRED);
+                });
+        assertNothingDecided(approvalId);
+    }
+
+    @Test
+    @DisplayName("B3 特批 阴性对照: 开关开 + 他人审批 → 不标本人审批")
+    void specialOtherApproverNotMarkedWhenSwitchOn() {
+        String approvalId = pendingSpecialConditionalRelease();
+        specialApprovalsWithSwitch(true).processDecision(FACTORY, approvalId, selfDecision("同意", null),
+                MANAGER, MANAGER, "quality_manager");
+        assertThat(audits.get(approvalId).isSelfApproved()).isFalse();
+        assertThat(audits.get(approvalId).getSelfApprovalReason()).isNull();
+    }
+
+    private String pendingDispositionRelease() {
+        inspect("qi-fail", "FAIL", "0");
+        inspect("qi-pass", "PASS", "100");
+        return controller.executeDisposition(FACTORY, execute("qi-pass", "RELEASE", INSPECTOR), INSPECTOR)
+                .getData().getApprovalRequestId();
+    }
+
+    private static DispositionApproveRequest selfApprove(String comment, String selfReason) {
+        DispositionApproveRequest request = approve(INSPECTOR, true);
+        request.setComment(comment);
+        request.setSelfApprovalReason(selfReason);
+        return request;
+    }
+
+    @Test
+    @DisplayName("B3 处置审批 开关关: 申请人自批 (写了原因也不行) → 403, 批次不变")
+    void dispositionSelfApprovalForbiddenWhenSwitchOff() {
+        String applicationId = pendingDispositionRelease();
+        ReflectionTestUtils.setField(controller, "selfApprovalGate", selfApprovalGate(false));
+
+        assertThatThrownBy(() -> controller.approveDisposition(FACTORY, applicationId,
+                selfApprove("复核", "只有我一个人"), INSPECTOR))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(audits.get(applicationId).isSelfApproved()).isFalse();
+    }
+
+    @Test
+    @DisplayName("B3 处置审批 开关开 + 写了原因: 申请人自批放行, 批次 PASSED, 审批行标本人审批并存原因")
+    void dispositionSelfApprovalAllowedAndTracedWhenSwitchOn() {
+        String applicationId = pendingDispositionRelease();
+        ReflectionTestUtils.setField(controller, "selfApprovalGate", selfApprovalGate(true));
+
+        controller.approveDisposition(FACTORY, applicationId, selfApprove("复核", "本厂只有我能放行"), INSPECTOR);
+
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PASSED);
+        DecisionAuditLog row = audits.get(applicationId);
+        assertThat(row.isSelfApproved()).isTrue();
+        assertThat(row.getSelfApprovalReason()).isEqualTo("本厂只有我能放行");
+    }
+
+    @Test
+    @DisplayName("B3 处置审批 开关开 + 没写原因 (意见也空): 申请人自批 → 422, 批次不变")
+    void dispositionSelfApprovalWithoutReasonRejectedWhenSwitchOn() {
+        String applicationId = pendingDispositionRelease();
+        ReflectionTestUtils.setField(controller, "selfApprovalGate", selfApprovalGate(true));
+
+        assertThatThrownBy(() -> controller.approveDisposition(FACTORY, applicationId, selfApprove(null, ""), INSPECTOR))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(422));
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+    }
 }
