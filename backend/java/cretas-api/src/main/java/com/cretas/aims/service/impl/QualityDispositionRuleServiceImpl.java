@@ -273,6 +273,8 @@ public class QualityDispositionRuleServiceImpl implements QualityDispositionRule
                 factoryId, inspection.getId(), action, executorId);
 
         inspection = decisionGuard.lockInspection(factoryId, inspection);
+        // Q6: 已报废批次不能返工 —— 在待审批申请 / 库存翻转任何一笔写入之前, 读的是锁后的批次状态
+        decisionGuard.assertReworkAllowed(factoryId, inspection.getProductionBatchId(), action.name());
         if (action == DispositionAction.RELEASE && (!Set.of("PASS", "PASSED", "QUALIFIED")
                 .contains(inspection.getResult() == null ? "" : inspection.getResult().toUpperCase(Locale.ROOT))
                 || inspection.getPassRate() == null || inspection.getPassRate().compareTo(PASS_RATE_THRESHOLD_RELEASE) < 0)) {

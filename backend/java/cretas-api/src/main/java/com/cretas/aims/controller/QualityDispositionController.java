@@ -595,6 +595,8 @@ public class QualityDispositionController {
         } catch (IllegalArgumentException e) {
             throw new BusinessException(400, "无效的处置动作: " + request.getActionCode());
         }
+        // Q6: 已报废批次不能申请返工, 在写申请行之前拒绝 (批次锁已由 lockInspection 拿到)
+        decisionGuard.assertReworkAllowed(factoryId, scopedInspection.getProductionBatchId(), requestedAction.name());
         // 动作本身不用审批的「放行」, 落在不合格未解除的批次上一样要复核 (D-S302-01)
         boolean unclearedRelease = requestedAction == DispositionAction.RELEASE
                 && qualityDispositionRuleService.isAwaitingDisposition(scopedInspection);
@@ -727,7 +729,12 @@ public class QualityDispositionController {
         // Reload the managed audit after waiting so a concurrent winner cannot be overwritten.
         decisionGuard.refreshApproval(auditLog);
         validatePendingApprovalIdentity(auditLog, request, authenticatedUserId);
-        if (request.getApproved()) decisionGuard.assertApprovalCurrent(currentInspection);
+        if (request.getApproved()) {
+            // Q6: 返工申请提交后批次被报废 (或报废前留下的旧申请) —— 批准之前、改审批行之前拒绝
+            decisionGuard.assertReworkAllowed(factoryId, currentInspection.getProductionBatchId(),
+                    auditLog.getDecisionMade());
+            decisionGuard.assertApprovalCurrent(currentInspection);
+        }
 
         // 更新审批状态
         auditLog.setApprovalStatus(request.getApproved()

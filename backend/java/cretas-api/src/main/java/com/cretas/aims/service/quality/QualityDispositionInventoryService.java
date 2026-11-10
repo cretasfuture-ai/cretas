@@ -325,6 +325,8 @@ public class QualityDispositionInventoryService {
             }
             case REWORK: {
                 ProductionBatch pb = loadBatch(inspection);
+                // Q6: 报废是终态, 不许经返工回到生产 / 库存 (与上面放行拒绝报废同一口径); 写批次状态之前拒绝
+                QualityDispositionDecisionGuard.refuseReworkOfScrapped(pb);
                 String batchStatus = writeBatchStatus(pb, QualityStatus.REWORK_REQUIRED);
                 lockPlanGoods(pb);
                 quarantineFinishedGoods(pb);

@@ -4,6 +4,7 @@ import com.cretas.aims.ai.tool.impl.quality.QualityCheckUpdateTool;
 import com.cretas.aims.ai.tool.impl.quality.QualityDispositionExecuteTool;
 import com.cretas.aims.ai.tool.impl.quality.QualityResultSubmitTool;
 import com.cretas.aims.controller.QualityDispositionController;
+import com.cretas.aims.dto.quality.ApprovalDecisionRequest;
 import com.cretas.aims.dto.quality.DispositionApplyRequest;
 import com.cretas.aims.dto.quality.DispositionApproveRequest;
 import com.cretas.aims.dto.quality.ExecuteDispositionRequest;
@@ -39,6 +40,7 @@ import com.cretas.aims.service.QualityInspectionService;
 import com.cretas.aims.service.StateMachineService;
 import com.cretas.aims.service.impl.QualityDispositionRuleServiceImpl;
 import com.cretas.aims.service.impl.QualityInspectionServiceImpl;
+import com.cretas.aims.service.impl.SpecialApprovalServiceImpl;
 import com.cretas.aims.service.quality.release.QcInspectionPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
@@ -99,6 +101,10 @@ class QualityBatchDispositionContractTest {
     private int auditSeq;
 
     private QualityInspectionRepository inspectionRepo;
+    private ProductionBatchRepository batchRepo;
+    private DecisionAuditLogRepository auditRepo;
+    private QualityDispositionDecisionGuard guard;
+    private UserRepository users;
     private FinishedGoodsBatchRepository goodsRepo;
     private QualityDispositionInventoryService bridge;
     private ProcessTimeLimitEventRepository timeLimitEvents;
@@ -113,7 +119,7 @@ class QualityBatchDispositionContractTest {
 
     @BeforeEach
     void setUp() {
-        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        batchRepo = mock(ProductionBatchRepository.class);
         when(batchRepo.findById(any())).thenAnswer(call -> batches.stream()
                 .filter(b -> b.getId().equals(call.getArgument(0))).findFirst());
         when(batchRepo.findByIdAndFactoryIdForUpdate(any(), eq(FACTORY))).thenAnswer(call -> batches.stream()
@@ -169,7 +175,7 @@ class QualityBatchDispositionContractTest {
         ReflectionTestUtils.setField(inspectionService, "productionBatchRepository", batchRepo);
         ReflectionTestUtils.setField(inspectionService, "finishedGoodsBatchRepository", goodsRepo);
 
-        DecisionAuditLogRepository auditRepo = mock(DecisionAuditLogRepository.class);
+        auditRepo = mock(DecisionAuditLogRepository.class);
         when(auditRepo.findById(anyString())).thenAnswer(call -> Optional.ofNullable(audits.get(call.getArgument(0))));
         when(auditRepo.save(any())).thenAnswer(call -> {
             DecisionAuditLog row = call.getArgument(0);
@@ -184,7 +190,7 @@ class QualityBatchDispositionContractTest {
         EntityManager entityManager = mock(EntityManager.class);
         when(entityManager.find(eq(QualityInspection.class), any()))
                 .thenAnswer(call -> inspections.get(call.getArgument(1)));
-        QualityDispositionDecisionGuard guard = new QualityDispositionDecisionGuard(
+        guard = new QualityDispositionDecisionGuard(
                 batchRepo, inspectionRepo, auditRepo, entityManager, new ObjectMapper());
 
         DecisionAuditService auditService = mock(DecisionAuditService.class);
@@ -214,7 +220,7 @@ class QualityBatchDispositionContractTest {
         when(approvalChain.requiresApproval(anyString(), any(DecisionType.class), anyMap())).thenReturn(false);
         when(approvalChain.findMatchingConfig(anyString(), any(DecisionType.class), anyMap())).thenReturn(Optional.empty());
 
-        UserRepository users = mock(UserRepository.class);
+        users = mock(UserRepository.class);
         when(users.findById(any())).thenAnswer(call -> {
             User user = new User();
             user.setId(call.getArgument(0));
@@ -441,6 +447,262 @@ class QualityBatchDispositionContractTest {
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("QUALITY_BATCH_SCRAPPED"));
         assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    // ==================== Q6: 报废是终态, 返工也不能把它带回来 ====================
+    //
+    // 每一个能对生产批次发起 / 执行返工的入口各一条: 409 + BATCH_SCRAPPED_CANNOT_REWORK, 而且在写任何东西之前 ——
+    // 审计行数不变、批次仍 SCRAPPED、成品仍 DEFECTIVE。拿新的一条合格检验 (qi-pass) 去申请, 是为了绕开
+    // 「本次质检已有最终处置」那道旧闸: 用报废那条检验去申请, 旧闸先拦, 这里的断言就在守空气。
+
+    /** 报废批次 (走真实申请 + 复核), 再补一条合格检验 —— 批次仍 SCRAPPED, 返工申请用的就是这条新检验。 */
+    private void scrapThenRecheckPass() {
+        inspect("qi-fail", "FAIL", "0");
+        String scrap = controller.applyDisposition(FACTORY, apply("qi-fail", "SCRAP"), INSPECTOR)
+                .getData().getApplicationId();
+        controller.approveDisposition(FACTORY, scrap, approve(MANAGER, true), MANAGER);
+        inspect("qi-pass", "PASS", "100");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.SCRAPPED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    private void assertReworkRefusedAndNothingWritten(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
+        int auditsBefore = audits.size();
+        Map<String, DecisionAuditLog.ApprovalStatus> statusesBefore = new LinkedHashMap<>();
+        audits.forEach((id, row) -> statusesBefore.put(id, row.getApprovalStatus()));
+
+        assertThatThrownBy(call)
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getErrorCode()).isEqualTo("BATCH_SCRAPPED_CANNOT_REWORK");
+                    assertThat(be.getActionHint()).isNotBlank();
+                });
+
+        assertThat(audits).hasSize(auditsBefore);
+        audits.forEach((id, row) -> assertThat(row.getApprovalStatus()).as("审批行 %s 不许被改", id)
+                .isEqualTo(statusesBefore.get(id)));
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.SCRAPPED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("Q6 /apply: 已报废批次申请返工 409, 不建申请行")
+    void scrappedBatchReworkApplicationIsRefused() {
+        scrapThenRecheckPass();
+        assertReworkRefusedAndNothingWritten(() ->
+                controller.applyDisposition(FACTORY, apply("qi-pass", "REWORK"), INSPECTOR));
+    }
+
+    @Test
+    @DisplayName("Q6 /execute (与 App 处置接口、AI 处置工具同一个 executeDisposition): 已报废批次返工 409, 不建待审批")
+    void scrappedBatchReworkExecutionIsRefused() {
+        scrapThenRecheckPass();
+        assertReworkRefusedAndNothingWritten(() ->
+                controller.executeDisposition(FACTORY, execute("qi-pass", "REWORK", INSPECTOR), INSPECTOR));
+    }
+
+    @Test
+    @DisplayName("Q6 复核通过的执行: executeApprovedDisposition 返工已报废批次 409, 批次不变")
+    void scrappedBatchApprovedReworkIsRefused() {
+        scrapThenRecheckPass();
+        assertReworkRefusedAndNothingWritten(() -> ruleService.executeApprovedDisposition(FACTORY,
+                inspections.get("qi-pass"), com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.REWORK,
+                MANAGER, "复核"));
+    }
+
+    @Test
+    @DisplayName("Q6 库存桥接 (批次 REWORK_REQUIRED 唯一写入方): 已报废批次返工 409")
+    void bridgeRefusesReworkOfScrappedBatch() {
+        scrapThenRecheckPass();
+        assertReworkRefusedAndNothingWritten(() -> bridge.applyDisposition(inspections.get("qi-pass"),
+                com.cretas.aims.service.QualityDispositionRuleService.DispositionAction.REWORK, true));
+    }
+
+    @Test
+    @DisplayName("Q6 特批申请: 已报废批次申请返工 409, 不建申请行")
+    void scrappedBatchReworkSpecialApprovalIsRefused() {
+        scrapThenRecheckPass();
+        assertReworkRefusedAndNothingWritten(() -> specialApprovals().submitSpecialApproval(FACTORY, "qi-pass",
+                specialRequest("REWORK"), INSPECTOR));
+    }
+
+    @Test
+    @DisplayName("Q6 审批: 返工申请提交后批次被报废, 两个审批入口批准都 409, 审批行仍待审批")
+    void reworkApplicationApprovedAfterScrapIsRefusedBeforeTheApprovalRowChanges() {
+        inspect("qi-fail", "FAIL", "60");
+        String application = controller.applyDisposition(FACTORY, apply("qi-fail", "REWORK"), INSPECTOR)
+                .getData().getApplicationId();
+        // 申请挂着时批次经别的路被报废 (或报废前就留下的旧申请)
+        batch.setQualityStatus(QualityStatus.SCRAPPED);
+        goods.setStatus(FinishedGoodsBatch.Status.DEFECTIVE);
+
+        assertReworkRefusedAndNothingWritten(() ->
+                controller.approveDisposition(FACTORY, application, approve(MANAGER, true), MANAGER));
+        assertReworkRefusedAndNothingWritten(() -> specialApprovals().processDecision(FACTORY, application,
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER));
+        assertThat(audits.get(application).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.PENDING);
+    }
+
+    @Test
+    @DisplayName("Q6 阳性对照: 没报废的不合格批次, 同样的入口照常进返工 (申请 → 复核 → REWORK_REQUIRED; 特批同样)")
+    void unscrappedBatchStillGoesToRework() {
+        inspect("qi-fail", "FAIL", "60");
+        String application = controller.applyDisposition(FACTORY, apply("qi-fail", "REWORK"), INSPECTOR)
+                .getData().getApplicationId();
+        controller.approveDisposition(FACTORY, application, approve(MANAGER, true), MANAGER);
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.REWORK_REQUIRED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+
+        // 特批入口: 返工中的批次再判一次不合格, 特批申请返工 → 批准 → 返工
+        inspect("qi-fail-2", "FAIL", "60");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        SpecialApprovalServiceImpl special = specialApprovals();
+        String specialId = special.submitSpecialApproval(FACTORY, "qi-fail-2", specialRequest("REWORK"), INSPECTOR)
+                .getApprovalId();
+        special.processDecision(FACTORY, specialId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER);
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.REWORK_REQUIRED);
+    }
+
+    // ==================== Q11: 特批通过 = 按复核通过执行, 只执行一次 ====================
+
+    private SpecialApprovalServiceImpl specialApprovals() {
+        return new SpecialApprovalServiceImpl(auditRepo, inspectionRepo, batchRepo, users, ruleService,
+                new ObjectMapper(), guard);
+    }
+
+    private static com.cretas.aims.dto.quality.SpecialApprovalRequest specialRequest(String action) {
+        com.cretas.aims.dto.quality.SpecialApprovalRequest request = new com.cretas.aims.dto.quality.SpecialApprovalRequest();
+        request.setRequestedAction(action);
+        request.setReason("客户同意让步接收");
+        return request;
+    }
+
+    private static ApprovalDecisionRequest decision(ApprovalDecisionRequest.ApprovalDecision decision) {
+        ApprovalDecisionRequest request = new ApprovalDecisionRequest();
+        request.setDecision(decision);
+        request.setComment("同意");
+        return request;
+    }
+
+    private List<DecisionAuditLog> pendingApprovals() {
+        return audits.values().stream()
+                .filter(a -> Boolean.TRUE.equals(a.getRequiresApproval())
+                        && a.getApprovalStatus() == DecisionAuditLog.ApprovalStatus.PENDING)
+                .toList();
+    }
+
+    private List<String> executedActions(String inspectionId) {
+        return audits.values().stream()
+                .filter(a -> a.getDecisionType() == DecisionAuditLog.DecisionType.RULE_EXECUTION
+                        && inspectionId.equals(a.getEntityId()))
+                .map(a -> {
+                    try {
+                        return new ObjectMapper().readTree(a.getOutputResult()).path("action").asText();
+                    } catch (Exception e) {
+                        throw new AssertionError("执行审计行读不出 action: " + a.getOutputResult(), e);
+                    }
+                })
+                .toList();
+    }
+
+    @Test
+    @DisplayName("Q11: 特批条件放行通过 —— 执行一次, 不再生出第二条待审批, 批次 PARTIAL_PASS 成品回 AVAILABLE (同普通复核)")
+    void specialApprovalExecutesTheApprovedDispositionOnce() {
+        inspect("qi-fail", "FAIL", "80");
+        SpecialApprovalServiceImpl special = specialApprovals();
+        String approvalId = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("CONDITIONAL_RELEASE"),
+                INSPECTOR).getApprovalId();
+        assertThat(pendingApprovals()).extracting(DecisionAuditLog::getId).containsExactly(approvalId);
+
+        special.processDecision(FACTORY, approvalId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER);
+
+        assertThat(audits.get(approvalId).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.APPROVED);
+        assertThat(pendingApprovals()).isEmpty();
+        assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PARTIAL_PASS);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+
+        // 再批一次: 拒绝, 处置不会执行第二次
+        assertThatThrownBy(() -> special.processDecision(FACTORY, approvalId,
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER));
+        assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
+    }
+
+    @Test
+    @DisplayName("Q11: 特批与普通复核读回同一个结果 (同一批次、同一动作, 两条路的批次 / 成品 / 执行审计一致)")
+    void specialApprovalMatchesNormalApproval() {
+        inspect("qi-fail", "FAIL", "80");
+        String normal = controller.applyDisposition(FACTORY, apply("qi-fail", "CONDITIONAL_RELEASE"), INSPECTOR)
+                .getData().getApplicationId();
+        // 普通审批行同样出现在特批待审批列表里, 用特批入口批它
+        specialApprovals().processDecision(FACTORY, normal,
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER);
+
+        assertThat(pendingApprovals()).isEmpty();
+        assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PARTIAL_PASS);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("Q11: 不改状态的动作 (待定) 特批通过也不再生出第二条待审批")
+    void specialApprovalOfHoldDoesNotSpawnASecondApproval() {
+        inspect("qi-fail", "FAIL", "80");
+        SpecialApprovalServiceImpl special = specialApprovals();
+        String approvalId = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("HOLD"), INSPECTOR)
+                .getApprovalId();
+
+        special.processDecision(FACTORY, approvalId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER);
+
+        assertThat(pendingApprovals()).isEmpty();
+        assertThat(executedActions("qi-fail")).containsExactly("HOLD");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("Q11: 执行失败原样抛给审批人 (不再吞掉), 成品不动; 驳回照常只改审批行")
+    void specialApprovalFailureSurfacesAndRejectionExecutesNothing() {
+        inspect("qi-fail", "FAIL", "80");
+        SpecialApprovalServiceImpl special = specialApprovals();
+        // 不合格检验上申请直接放行: 复核通过的执行同样不放 (与普通复核同口径), 必须报出来
+        String release = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("RELEASE"), INSPECTOR)
+                .getApprovalId();
+        assertThatThrownBy(() -> special.processDecision(FACTORY, release,
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+        assertThat(executedActions("qi-fail")).isEmpty();
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+
+        // 内存桩没有事务: 真库里这一笔连同审批行整体回滚, 审批行仍待审批 (真 PG 上的读回见
+        // QualityDispositionInventoryPostgresContractTest); 这里把它驳回, 腾出位置验证驳回路径
+        audits.get(release).setApprovalStatus(DecisionAuditLog.ApprovalStatus.REJECTED);
+        String rejected = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("CONDITIONAL_RELEASE"),
+                INSPECTOR).getApprovalId();
+        special.processDecision(FACTORY, rejected, decision(ApprovalDecisionRequest.ApprovalDecision.REJECT), MANAGER);
+        assertThat(audits.get(rejected).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.REJECTED);
+        assertThat(executedActions("qi-fail")).isEmpty();
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("Q11 权限不变: 别厂的审批行 403, 什么都不执行")
+    void specialApprovalKeepsFactoryCheck() {
+        inspect("qi-fail", "FAIL", "80");
+        SpecialApprovalServiceImpl special = specialApprovals();
+        String approvalId = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("CONDITIONAL_RELEASE"),
+                INSPECTOR).getApprovalId();
+
+        assertThatThrownBy(() -> special.processDecision("F999", approvalId,
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+        assertThat(audits.get(approvalId).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.PENDING);
+        assertThat(executedActions("qi-fail")).isEmpty();
     }
 
     @Test
