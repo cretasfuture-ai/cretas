@@ -138,6 +138,13 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Value("${cretas.sales.over-ship-rate:#{null}}")
     private BigDecimal salesOverShipRateProperty;
 
+    private static final String CREDIT_MODE_OFF = "OFF";
+    private static final String CREDIT_MODE_WARN = "WARN";
+    private static final String CREDIT_MODE_BLOCK = "BLOCK";
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.PermissionService permissionService;
+
     /**
      * 阈值中心读取器（可选注入）。
      *
@@ -146,6 +153,89 @@ public class SalesServiceImpl implements SalesService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.canvas.ThresholdResolverService thresholdResolverService;
+
+    // ==================== 超信用额度检查 (A17) ====================
+
+    /** 取值 OFF(默认, 整体不检查) / WARN(只提示并留痕) / BLOCK(拦截, 可特批)。 */
+    private String resolveCreditCheckMode(String factoryId) {
+        if (thresholdResolverService == null) {
+            return CREDIT_MODE_OFF;
+        }
+        String raw = thresholdResolverService.getString(factoryId,
+                com.cretas.aims.service.canvas.ThresholdKeys.CREDIT_CHECK_MODE, CREDIT_MODE_OFF);
+        String mode = raw == null ? CREDIT_MODE_OFF : raw.trim().toUpperCase();
+        if (CREDIT_MODE_WARN.equals(mode) || CREDIT_MODE_BLOCK.equals(mode)) {
+            return mode;
+        }
+        if (!CREDIT_MODE_OFF.equals(mode)) {
+            log.warn("CREDIT_CHECK_MODE_INVALID: factoryId={}, 配置值 [{}] 不认识, 按关闭处理", factoryId, raw);
+        }
+        return CREDIT_MODE_OFF;
+    }
+
+    /** 当前用户有没有「信用特批」权限 (默认厂长; 拿不到用户或权限服务 ⇒ 没有)。 */
+    private boolean hasCreditOverrideAuthority(Long userId) {
+        if (userId == null || permissionService == null || userRepository == null) {
+            return false;
+        }
+        return userRepository.findById(userId)
+                .map(u -> permissionService.hasPermission(u,
+                        com.cretas.aims.service.PermissionService.CREDIT_OVERRIDE_PERMISSION))
+                .orElse(false);
+    }
+
+    /**
+     * 返回要写进订单备注的留痕文字 (null = 没有需要留痕的)。BLOCK 且未获特批时抛 409。
+     */
+    private String runCreditCheck(String factoryId, com.cretas.aims.entity.Customer customer,
+                                  CreateSalesOrderRequest request, Long userId, BigDecimal requested) {
+        String mode = resolveCreditCheckMode(factoryId);
+        if (CREDIT_MODE_OFF.equals(mode) || customerCreditCheckService == null) {
+            return null;
+        }
+        boolean block = CREDIT_MODE_BLOCK.equals(mode);
+        String problem;
+        String hint;
+        try {
+            com.cretas.aims.dto.customer.CreditStatusDTO st =
+                    customerCreditCheckService.checkCreditAvailable(factoryId, request.getCustomerId(), requested);
+            if (st.getCreditStatus() == com.cretas.aims.entity.enums.CreditStatus.SUSPENDED) {
+                problem = "客户 " + customer.getName() + " 信用已被冻结";
+                hint = st.getSuggestedAction();
+            } else if (st.isExceeds()) {
+                problem = "本单金额 " + requested + " 超过客户 " + customer.getName()
+                        + " 可用信用额度 " + st.getAvailable();
+                hint = st.getSuggestedAction();
+            } else {
+                return null;
+            }
+        } catch (Exception e) {
+            log.warn("CREDIT_CHECK_FAILED: factoryId={}, customerId={}, error={}",
+                    factoryId, request.getCustomerId(), e.getMessage());
+            problem = "额度未核对 (信用检查出错, 不能当作通过)";
+            hint = "请稍后重试, 或联系有信用特批权限的人确认";
+        }
+        if (!block) {
+            log.warn("CREDIT_WARN: factoryId={}, {}", factoryId, problem);
+            return "[信用提示] " + problem;
+        }
+        String reason = request.getCreditOverrideReason();
+        if (reason != null && !reason.isBlank() && hasCreditOverrideAuthority(userId)) {
+            log.warn("CREDIT_OVERRIDE: factoryId={}, userId={}, {}, 特批原因={}", factoryId, userId, problem, reason);
+            return "[信用特批] " + problem + "; 特批原因: " + reason.trim();
+        }
+        throw new BusinessException(409, problem + ", 无法创建新销售单")
+                .withHint(hint != null ? hint : "需要有信用特批权限的人填写特批原因后才能下单")
+                .withHintTarget("customerId")
+                .withSeverity("ERROR");
+    }
+
+    private static String appendCreditNote(String remark, String note) {
+        if (note == null) {
+            return remark;
+        }
+        return remark == null || remark.isBlank() ? note : remark + " " + note;
+    }
 
     /**
      * 解析本次发货实际生效的超发上限。<b>销售链唯一的取值入口。</b>
@@ -527,35 +617,10 @@ public class SalesServiceImpl implements SalesService {
                 .findByIdAndFactoryId(request.getCustomerId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("客户不存在或不属于当前组织"));
 
-        // P1 #23 S-CREDIT-1: 创建前信用预检 (防呆 R1 + R2 + R5)
-        // SUSPENDED → 硬阻塞 409; WARNING (exceeds) → 仅 log soft warn (后端不阻塞, 前端通过 GET credit-status 预呈现).
-        if (customerCreditCheckService != null) {
-            try {
-                com.cretas.aims.dto.customer.CreditStatusDTO creditStatus =
-                        customerCreditCheckService.checkCreditAvailable(
-                                factoryId, request.getCustomerId(), preComputedTotal);
-                if (creditStatus.getCreditStatus() == com.cretas.aims.entity.enums.CreditStatus.SUSPENDED) {
-                    throw new BusinessException(409,
-                            "客户 " + customer.getName() + " 信用已被冻结, 无法创建新销售单")
-                            .withHint(creditStatus.getSuggestedAction())
-                            .withHintTarget("customerId")
-                            .withSeverity("ERROR");
-                }
-                if (creditStatus.isExceeds()) {
-                    // soft warn — 仅 log, 不阻塞 (按 backlog "超期警告" 语义, 销售有权强制下单)
-                    log.warn("P1-23 信用预警: factoryId={}, customer={}, requested={}, available={}, action={}",
-                            factoryId, customer.getName(), preComputedTotal,
-                            creditStatus.getAvailable(), creditStatus.getSuggestedAction());
-                }
-            } catch (BusinessException be) {
-                // 信用阻塞 — 重新抛出
-                throw be;
-            } catch (Exception e) {
-                // 检查本身失败 (e.g. customer 不存在 — 但上面已 fetch) — 仅 log, 不阻塞 SO 创建
-                log.warn("P1-23 信用检查失败 (跳过, 不阻塞 SO): factoryId={}, customerId={}, error={}",
-                        factoryId, request.getCustomerId(), e.getMessage());
-            }
-        }
+        // 超信用额度检查 (2026-11-10 Steve 裁定, 工厂纪律 A17): 整体是一个功能开关, 默认关。
+        // 开了以后工厂再选「只提示并留痕」(WARN) 还是「拦截, 可特批」(BLOCK)。
+        // 检查本身出错 ≠ 通过: 提示「额度未核对」(WARN 留痕放行, BLOCK 拦截)。
+        String creditNote = runCreditCheck(factoryId, customer, request, userId, preComputedTotal);
 
         String orderNumber = generateSalesOrderNumber(factoryId);
 
@@ -567,7 +632,7 @@ public class SalesServiceImpl implements SalesService {
         order.setRequiredDeliveryDate(request.getRequiredDeliveryDate());
         order.setDeliveryAddress(request.getDeliveryAddress());
         order.setDiscountAmount(request.getDiscountAmount() != null ? request.getDiscountAmount() : BigDecimal.ZERO);
-        order.setRemark(request.getRemark());
+        order.setRemark(appendCreditNote(request.getRemark(), creditNote));
         resolveSalespersonField(order, request.getSalesperson(), factoryId);
         order.setShippingIncluded(request.getShippingIncluded());
         order.setShippingFee(request.getShippingFee());

@@ -13,6 +13,7 @@ import com.cretas.aims.repository.MaterialBatchAdjustmentRepository;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.WastageReportRepository;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
 import com.cretas.aims.service.inventory.WastageReportService;
 import com.cretas.aims.service.voucher.VoucherService;
@@ -33,7 +34,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -84,21 +84,13 @@ public class WastageReportServiceImpl implements WastageReportService {
     @Autowired(required = false)
     private WastageReportVoucherGenerator wastageReportVoucherGenerator;
 
-    // -------------------------------------------------------
-    // W2 角色码修复 (2026-06-10): 真实 FactoryUserRole 码（小写）
-    // -------------------------------------------------------
-    /** WAREHOUSE 轨可审批角色: 财务经理 + 超管 */
-    private static final Set<String> WAREHOUSE_APPROVER_ROLES = Set.of(
-            "finance_manager", "factory_super_admin", "platform_admin");
-
-    /** FACTORY 轨可审批角色: 生产主管 + 超管
-     *  ⚠️ 待 Steve 确认: "厂长" 是否有独立角色码，当前映射 production_manager */
-    private static final Set<String> FACTORY_APPROVER_ROLES = Set.of(
-            "production_manager", "factory_super_admin", "platform_admin");
-
-    /** 超管集合（可见所有轨道待审列表） */
-    private static final Set<String> SUPER_ADMIN_ROLES = Set.of(
-            "factory_super_admin", "platform_admin");
+    /**
+     * 报损审批权限 (2026-11-10 Steve 裁定, 工厂纪律 B9): 按「报损审批」权限判断
+     * ({@link PermissionService#WASTAGE_APPROVE_PERMISSION}), 不再按轨道写死财务经理/生产主管。
+     * 未配置时默认只给厂长 (factory_super_admin); 工厂可在权限矩阵里给别的角色配 wastage 模块读写。
+     * 有权限者看到并可审批 WAREHOUSE + FACTORY 两条轨道; 没权限者审批 403、待审列表为空。
+     */
+    private final PermissionService permissionService;
 
     @Override
     @Transactional
@@ -169,10 +161,8 @@ public class WastageReportServiceImpl implements WastageReportService {
         report.setStatus(WastageReport.Status.PENDING_APPROVAL);
         report.setSubmittedBy(userId);
         report.setSubmittedAt(LocalDateTime.now());
-        // 设置预期审批角色标签（仅展示用途，真实查询按轨道路由而非此字段）
-        // W2 修: 改存真实角色码标签（小写），避免误导
-        report.setApproverRole(report.getTrackType() == WastageReport.TrackType.WAREHOUSE
-                ? "finance_manager" : "production_manager");
+        // 预期审批角色标签（仅展示用途; 真实判定按「报损审批」权限, 默认厂长, 工厂可配置）
+        report.setApproverRole("factory_super_admin");
         wastageReportRepo.save(report);
         log.info("SP7: 报损单已提交审批 reportId={}", reportId);
     }
@@ -239,29 +229,15 @@ public class WastageReportServiceImpl implements WastageReportService {
     }
 
     /**
-     * 按角色推导可见轨道，查询待审批报损单（W2 修）。
-     *
-     * <p>角色 → 轨道映射:
-     * <ul>
-     *   <li>finance_manager              → WAREHOUSE 轨</li>
-     *   <li>production_manager           → FACTORY 轨</li>
-     *   <li>factory_super_admin / platform_admin → WAREHOUSE + FACTORY 双轨</li>
-     *   <li>其他角色                     → 空 Page（无审批权限，不报错）</li>
-     * </ul>
+     * 查询待审批报损单: 有「报损审批」权限者看 WAREHOUSE + FACTORY 双轨, 其他角色空 Page (不报错)。
      */
     @Override
     public Page<WastageReportDTO> listPending(String factoryId, String requestRole, Pageable pageable) {
-        String normalized = requestRole == null ? "" : requestRole.toLowerCase();
-        List<WastageReport.TrackType> visibleTracks;
-        if (SUPER_ADMIN_ROLES.contains(normalized)) {
-            visibleTracks = List.of(WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY);
-        } else if ("finance_manager".equals(normalized)) {
-            visibleTracks = List.of(WastageReport.TrackType.WAREHOUSE);
-        } else if ("production_manager".equals(normalized)) {
-            visibleTracks = List.of(WastageReport.TrackType.FACTORY);
-        } else {
+        if (!canApprove(factoryId, requestRole)) {
             return Page.empty(pageable);
         }
+        List<WastageReport.TrackType> visibleTracks =
+                List.of(WastageReport.TrackType.WAREHOUSE, WastageReport.TrackType.FACTORY);
         Page<WastageReportDTO> page = wastageReportRepo.findByFactoryIdAndStatusAndTrackTypeInOrderBySubmittedAtAsc(
                 factoryId, WastageReport.Status.PENDING_APPROVAL, visibleTracks, pageable)
                 .map(WastageReportDTO::from);
@@ -316,30 +292,19 @@ public class WastageReportServiceImpl implements WastageReportService {
         }
     }
 
+    private boolean canApprove(String factoryId, String requestRole) {
+        return permissionService.roleHasConfiguredPermission(
+                factoryId, requestRole, PermissionService.WASTAGE_APPROVE_PERMISSION);
+    }
+
     /**
-     * 双轨审批路由校验（C1孪生坑：角色来自 requestRole 参数，非 SecurityContext）。
-     *
-     * <p>W2 修 (2026-06-10): 改比对真实 FactoryUserRole 小写码，大小写不敏感兜底。
-     * WAREHOUSE 轨: finance_manager / factory_super_admin / platform_admin
-     * FACTORY 轨:   production_manager / factory_super_admin / platform_admin
-     * （⚠️ 待 Steve 确认 FACTORY 轨"厂长"是否有独立角色码）
+     * 审批权限校验 (角色来自 requestRole 参数, 非 SecurityContext; 判定见 {@link #canApprove})。
      */
     private void routeApproval(WastageReport report, String requestRole) {
-        String normalized = requestRole == null ? "" : requestRole.toLowerCase();
-        if (report.getTrackType() == WastageReport.TrackType.WAREHOUSE) {
-            if (!WAREHOUSE_APPROVER_ROLES.contains(normalized)) {
-                throw new BusinessException(403,
-                        "仓库报损单审批需要财务经理 (finance_manager) 或工厂管理员角色，当前角色：" + requestRole)
-                        .withCode("WRONG_APPROVER_ROLE")
-                        .withHint("请联系财务经理 (finance_manager) 或工厂超管审批");
-            }
-        } else if (report.getTrackType() == WastageReport.TrackType.FACTORY) {
-            if (!FACTORY_APPROVER_ROLES.contains(normalized)) {
-                throw new BusinessException(403,
-                        "工厂报损单审批需要生产主管 (production_manager) 或工厂管理员角色，当前角色：" + requestRole)
-                        .withCode("WRONG_APPROVER_ROLE")
-                        .withHint("请联系生产主管 (production_manager) 或工厂超管审批");
-            }
+        if (!canApprove(report.getFactoryId(), requestRole)) {
+            throw new BusinessException(403, "报损审批需要「报损审批」权限，当前角色：" + requestRole)
+                    .withCode("WRONG_APPROVER_ROLE")
+                    .withHint("请联系厂长审批，或让厂长在权限设置里给你的角色开通「报损审批」");
         }
     }
 

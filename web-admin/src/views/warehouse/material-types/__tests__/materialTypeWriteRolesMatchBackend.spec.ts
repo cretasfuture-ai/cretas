@@ -5,6 +5,11 @@
  * 同一模式) —— MATERIAL_TYPE_WRITE_ROLES 从 Java 源码推导期望值, ⛔ 不在测试里手抄一份角色
  * 名单, 手抄的那份会跟着漂, 而漂了不会有人发现 (measurement-and-wiring 形态 D)。
  *
+ * 2026-11-10 (工厂纪律 B7): RawMaterialTypeController 的写端点不再用写死的 @RequireRole, 改成按
+ * 「原料类型维护」权限 (material_type:maintain) 判断; 前端镜像对的是这个权限的**默认角色**
+ * (PermissionServiceImpl.CONFIGURABLE_DEFAULT_ROLES)。工厂在权限矩阵里改了配置时, 这份镜像
+ * 只是「默认值」, 真正的拦截永远在后端。下面 ① 因此改为读 PermissionServiceImpl。
+ *
  * 四处来源必须两两一致:
  *   ① RawMaterialTypeController#createMaterialType 的 @RequireRole
  *      (updateMaterialType / deleteMaterialType 与其逐字节相同, 由后端
@@ -74,6 +79,14 @@ function requireRoleOf(source: string, methodMarker: string): string[] {
   return [...ann![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
 }
 
+/** PermissionServiceImpl 里「原料类型维护」权限未配置时的默认角色 (EnumSet.of(FactoryUserRole.a, FactoryUserRole.b))。 */
+function materialTypeMaintainDefaultRoles(): string[] {
+  const src = readJava('service/impl/PermissionServiceImpl.java');
+  const m = src.match(/MATERIAL_TYPE_MAINTAIN_PERMISSION,\s*EnumSet\.of\(([^)]*)\)/);
+  expect(m, '读不到 MATERIAL_TYPE_MAINTAIN_PERMISSION 的默认角色 —— 后端换了形态, 本闸必须跟着改').toBeTruthy();
+  return [...m![1].matchAll(/FactoryUserRole\.([a-z_]+)/g)].map((x) => x[1]);
+}
+
 function platformAdminRoles(): string[] {
   const src = readJava('config/RequireRoleInterceptor.java');
   const block = src.match(/PLATFORM_ADMIN_ROLES\s*=\s*Set\.of\(([\s\S]*?)\);/);
@@ -83,45 +96,33 @@ function platformAdminRoles(): string[] {
 
 describe('物料字典写门禁: MATERIAL_TYPE_WRITE_ROLES 必须等于后端实际放行的角色全集', () => {
   it('三个来源都真的解析出了角色(阳性对照 —— 空集会让下面的相等断言恒真)', () => {
-    const src = readJava('controller/RawMaterialTypeController.java');
-    expect(requireRoleOf(src, '@PostMapping').length === 0).toBe(false);
+    expect(materialTypeMaintainDefaultRoles().length).toBeGreaterThan(0);
     expect(platformAdminRoles().length).toBeGreaterThan(0);
     expect(MATERIAL_TYPE_WRITE_ROLES.length).toBeGreaterThan(0);
   });
 
-  it('MATERIAL_TYPE_WRITE_ROLES == RawMaterialTypeController@RequireRole ∪ PLATFORM_ADMIN_ROLES', () => {
-    const rawMaterialSrc = readJava('controller/RawMaterialTypeController.java');
-    // @PostMapping (裸, 无路径) 在这个 controller 里只出现在 createMaterialType 上,
-    // 是它唯一的锚点 —— 与 reportApprovalMenuMatchesBackendRoles.spec.ts 用
-    // @GetMapping("/pending-approval") 做锚点是同一手法: 用一个方法独有、不会撞到
-    // 别的方法的注解字符串, 而不是方法签名本身 (注解顺序是 Mapping → Operation →
-    // RequireRole → 方法签名, 与后端 ProcessWorkReportingController 的写法一致)。
-    const createRoles = requireRoleOf(rawMaterialSrc, '@PostMapping');
-    const expected = [...new Set([...createRoles, ...platformAdminRoles()])].sort();
+  it('MATERIAL_TYPE_WRITE_ROLES == 「原料类型维护」权限的默认角色 ∪ PLATFORM_ADMIN_ROLES', () => {
+    const expected = [...new Set([...materialTypeMaintainDefaultRoles(), ...platformAdminRoles()])].sort();
     const actual = [...MATERIAL_TYPE_WRITE_ROLES].sort();
 
     expect(
       actual,
-      'MATERIAL_TYPE_WRITE_ROLES 与后端放行的角色不是同一批 ⇒ 差集里的角色要么'
+      'MATERIAL_TYPE_WRITE_ROLES 与后端默认放行的角色不是同一批 ⇒ 差集里的角色要么'
         + '「看得见点不开」(前端多), 要么「前端放行、后端仍 403」(前端少)。'
         + `\n  后端: ${expected.join(', ')}\n  前端: ${actual.join(', ')}`,
     ).toEqual(expected);
   });
 
-  it('updateMaterialType / deleteMaterialType 的 @RequireRole 与 createMaterialType 逐字节相同', () => {
-    const rawMaterialSrc = readJava('controller/RawMaterialTypeController.java');
-    const createRoles = requireRoleOf(rawMaterialSrc, '@PostMapping');
-    const updateRoles = requireRoleOf(rawMaterialSrc, '@PutMapping("/{id}")');
-    const deleteRoles = requireRoleOf(rawMaterialSrc, '@DeleteMapping("/{id}")');
-
-    expect([...updateRoles].sort()).toEqual([...createRoles].sort());
-    expect([...deleteRoles].sort()).toEqual([...createRoles].sort());
+  it('RawMaterialTypeController 的写端点按 material_type:maintain 权限判断, 不再有 @RequireRole', () => {
+    const src = readJava('controller/RawMaterialTypeController.java');
+    expect(src).not.toMatch(/@RequireRole\(/);
+    expect(src.match(/@RequirePermission\(PermissionService\.MATERIAL_TYPE_MAINTAIN_PERMISSION\)/g)?.length)
+      .toBe(6);
   });
 
-  it('MaterialPackagingHierarchyController#upsert/delete 的 @RequireRole 与 createMaterialType 逐字节相同', () => {
-    const rawMaterialSrc = readJava('controller/RawMaterialTypeController.java');
+  it('MaterialPackagingHierarchyController#upsert/delete 的 @RequireRole 与原料类型维护的默认角色逐字节相同', () => {
     const packagingSrc = readJava('controller/MaterialPackagingHierarchyController.java');
-    const createRoles = requireRoleOf(rawMaterialSrc, '@PostMapping');
+    const createRoles = materialTypeMaintainDefaultRoles();
     const upsertRoles = requireRoleOf(packagingSrc, '@PutMapping("/by-material/{materialTypeId}")');
     const deleteRoles = requireRoleOf(packagingSrc, '@DeleteMapping("/by-material/{materialTypeId}")');
 

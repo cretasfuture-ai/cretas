@@ -1169,8 +1169,10 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
         }
 
         try {
-            notificationService.sendToAllUsers(
-                factoryId, title, content,
+            notificationService.sendByPolicy(
+                factoryId, com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_NOTIFY_AI_SCHEDULING,
+                java.util.List.of(com.cretas.aims.entity.enums.FactoryUserRole.dispatcher, com.cretas.aims.entity.enums.FactoryUserRole.factory_super_admin),
+                title, content,
                 com.cretas.aims.entity.enums.NotificationType.INFO,
                 "AUTO_SCHEDULING", planId
             );
@@ -1229,8 +1231,10 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
             : String.format("计划 %s 完成概率较低 %d%%，建议检查资源配置", planNumber, (int)(probability * 100));
 
         try {
-            notificationService.sendToAllUsers(
-                factoryId, title, content,
+            notificationService.sendByPolicy(
+                factoryId, com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_NOTIFY_AI_SCHEDULING,
+                java.util.List.of(com.cretas.aims.entity.enums.FactoryUserRole.dispatcher, com.cretas.aims.entity.enums.FactoryUserRole.factory_super_admin),
+                title, content,
                 com.cretas.aims.entity.enums.NotificationType.WARNING,
                 "AUTO_SCHEDULING", planId
             );
@@ -1287,8 +1291,10 @@ public class SchedulingAIServiceImpl implements SchedulingAIService {
         );
 
         try {
-            notificationService.sendToAllUsers(
-                factoryId, title, content,
+            notificationService.sendByPolicy(
+                factoryId, com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_NOTIFY_AI_SCHEDULING,
+                java.util.List.of(com.cretas.aims.entity.enums.FactoryUserRole.dispatcher, com.cretas.aims.entity.enums.FactoryUserRole.factory_super_admin),
+                title, content,
                 com.cretas.aims.entity.enums.NotificationType.ALERT,
                 "AUTO_SCHEDULING", planId
             );

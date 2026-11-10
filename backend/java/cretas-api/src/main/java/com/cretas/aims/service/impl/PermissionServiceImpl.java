@@ -472,6 +472,13 @@ public class PermissionServiceImpl implements PermissionService {
             return false;
         }
 
+        // 可配置默认角色的权限码 (原料类型维护 / 报损审批): 先看工厂配置, 没配才用默认角色。
+        Set<FactoryUserRole> configurableDefaults = CONFIGURABLE_DEFAULT_ROLES.get(permissionCode);
+        if (configurableDefaults != null) {
+            return hasConfiguredPermission(user, permissionCode,
+                    configurableDefaults.stream().map(Enum::name).collect(Collectors.toSet()));
+        }
+
         // procurement:price:view — 价格字段查看权限 (PR #415 Option B)
         // 走独立角色白名单, 不复用 module:action 矩阵 (该矩阵只支持 read/write 二元).
         if (PRICE_VIEW_PERMISSION.equals(permissionCode)) {
@@ -536,6 +543,44 @@ public class PermissionServiceImpl implements PermissionService {
         resolveCache.put(cacheKey, new long[]{now + CACHE_TTL_MS});
         resolveResult.put(cacheKey, result);
         return result;
+    }
+
+    /** 未被工厂配置时, 这两个权限码默认放行的角色 (厂长 = factory_super_admin, 另有恒放行分支)。 */
+    private static final Map<String, Set<FactoryUserRole>> CONFIGURABLE_DEFAULT_ROLES = Map.of(
+            MATERIAL_TYPE_MAINTAIN_PERMISSION,
+            EnumSet.of(FactoryUserRole.warehouse_manager, FactoryUserRole.factory_super_admin),
+            WASTAGE_APPROVE_PERMISSION,
+            EnumSet.of(FactoryUserRole.factory_super_admin),
+            CREDIT_OVERRIDE_PERMISSION,
+            EnumSet.of(FactoryUserRole.factory_super_admin));
+
+    @Override
+    public boolean roleHasConfiguredPermission(String factoryId, String roleCode, String permissionCode) {
+        Set<FactoryUserRole> defaults = permissionCode == null ? null : CONFIGURABLE_DEFAULT_ROLES.get(permissionCode);
+        if (defaults == null || roleCode == null) {
+            return false;
+        }
+        FactoryUserRole role;
+        try {
+            role = FactoryUserRole.valueOf(roleCode.trim().toLowerCase());
+        } catch (IllegalArgumentException unknownRole) {
+            return false;
+        }
+        if (role == FactoryUserRole.unactivated || isRetiredRestaurantRole(role)) {
+            return false;
+        }
+        if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
+            return true;
+        }
+        String[] parts = permissionCode.split(":");
+        String level = factoryId == null ? null : resolveLayer2(factoryId, role.name(), parts[0], true);
+        if (level == null) {
+            level = resolveLayer1(role.name(), parts[0], true);
+        }
+        if (level == null) {
+            return defaults.contains(role);
+        }
+        return checkAction(level, parts[1]);
     }
 
     @Override

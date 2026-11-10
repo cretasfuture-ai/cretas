@@ -63,6 +63,32 @@ public final class ThresholdKeys {
     /** 信用额度接近预警比 (used / limit). Hard-coded default = 0.80. */
     public static final String CREDIT_WARNING_RATIO = "credit.warning_ratio";
 
+    /**
+     * 超信用额度检查模式 (2026-11-10 Steve 裁定, 工厂纪律 A17)。字符串, 取值 OFF / WARN / BLOCK。
+     * OFF (默认) = 整个检查不做; WARN = 只提示并留痕不拦; BLOCK = 拦截, 持「信用特批」权限者填原因可放行。
+     * 挡得住下单 ⇒ 登记为闸门类 key (见 {@link #GATING_KEYS})。
+     */
+    public static final String CREDIT_CHECK_MODE = "credit.check.mode";
+
+    // ==================== 通知接收人 (2026-11-10 Steve 裁定, 工厂纪律 B12) ====================
+    // 每类通知发给谁由工厂配置: 值是逗号分隔的角色码; 没配 / 配的角色全都没有人 ⇒ 默认发给厂长, 不丢。
+    // 归类沿用现有分类 (PRODUCTION / INVENTORY), 不新增分类, 以免前端那份平行 TS 联合类型要跟着改。
+
+    /** 新调度计划已创建 → 默认 dispatcher,factory_super_admin */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_CREATED = "production.notify.schedule_created";
+    /** 调度计划已确认 → 默认 workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_CONFIRMED = "production.notify.schedule_confirmed";
+    /** 调度计划延期预警 → 默认 dispatcher,factory_super_admin,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_DELAYED = "production.notify.schedule_delayed";
+    /** 紧急插单 → 默认 dispatcher,factory_super_admin,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_URGENT_INSERT = "production.notify.urgent_insert";
+    /** 生产进度严重落后预警 (效率检测) → 默认 dispatcher,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_EFFICIENCY_WARNING = "production.notify.efficiency_warning";
+    /** AI 排产结果通知 (原来是全厂广播) → 默认 dispatcher,factory_super_admin */
+    public static final String PRODUCTION_NOTIFY_AI_SCHEDULING = "production.notify.ai_scheduling";
+    /** 低库存双向报警 → 默认 warehouse_manager,procurement_manager */
+    public static final String INVENTORY_NOTIFY_LOW_STOCK = "inventory.notify.low_stock";
+
     // ==================== BOM (BOM) ====================
 
     /** BOM 递归展开最大深度. Hard-coded default = 10. */
@@ -255,7 +281,8 @@ public final class ThresholdKeys {
      * @since 2026-08-29
      */
     public static final java.util.Set<String> GATING_KEYS = java.util.Set.of(
-            SALES_DELIVERY_OVER_SHIP_RATE
+            SALES_DELIVERY_OVER_SHIP_RATE,
+            CREDIT_CHECK_MODE
     );
 
     /**

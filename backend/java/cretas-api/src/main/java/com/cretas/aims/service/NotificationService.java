@@ -81,6 +81,20 @@ public interface NotificationService {
                                    String content, NotificationType type, String source, String sourceId);
 
     /**
+     * 发送通知给一组角色的所有用户 (按用户去重; 这些角色都没有人时改发厂长, 不静默丢弃)。
+     */
+    List<Notification> sendToRoles(String factoryId, List<FactoryUserRole> roles, String title,
+                                    String content, NotificationType type, String source, String sourceId);
+
+    /**
+     * 按工厂配置的接收角色发送 (factory_thresholds, policyKey 见 ThresholdKeys 的 *_NOTIFY_*);
+     * 没配时用 defaultRoles; 找不到接收人时改发厂长。
+     */
+    List<Notification> sendByPolicy(String factoryId, String policyKey, List<FactoryUserRole> defaultRoles,
+                                     String title, String content, NotificationType type,
+                                     String source, String sourceId);
+
+    /**
      * 发送通知给多个用户
      *
      * @param factoryId 工厂ID
