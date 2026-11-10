@@ -478,6 +478,25 @@ public class UrgentInsertScheduleService {
         created.setDailyAllocations(mine.dailyAllocations());
         created.setStatus(LineSchedule.ScheduleStatus.pending);
         lineScheduleRepository.save(created);
+        // 3) 动过的调度计划按名下排程重算批次数 / 派工人数 (缺口 18 后续): 插单挂的那天 (含刚重开的),
+        //    以及被挤计划合并时作废了多余排程的那些天。只写这两列: container 可能是重开前的旧副本, 不整行保存。
+        Set<String> touchedDayPlans = new LinkedHashSet<>();
+        if (container.getId() != null) {
+            touchedDayPlans.add(container.getId());
+        }
+        for (Moved m : c.proposal().moved()) {
+            for (LineSchedule row : c.movableByPlan().get(m.planId())) {
+                String dayPlanId = row.getPlanId() != null ? row.getPlanId()
+                        : row.getPlan() == null ? null : row.getPlan().getId();
+                if (dayPlanId != null) {
+                    touchedDayPlans.add(dayPlanId);
+                }
+            }
+        }
+        com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals totals =
+                new com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals(lineScheduleRepository,
+                        schedulingPlanRepository);
+        touchedDayPlans.forEach(id -> totals.recount(factoryId, id));
         // ⛔ 不改计划的 startTime / endTime: 影响分析按它们判重叠, 引擎自己的 generate 也不写它们;
         //    新的完成日以排程行 (LineSchedule) 为准, 交付风险闭环读的也是排程行。
         log.info("插单已排入: planId={}, 日期 {}~{}, 被挤计划 {} 个, 交期被突破 {} 个", insertPlan.getId(), day,

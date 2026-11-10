@@ -61,6 +61,16 @@ public interface LineScheduleRepository extends JpaRepository<LineSchedule, Stri
     long countByPlanIdAndStatusNot(@Param("planId") String planId,
                                    @Param("cancelled") LineSchedule.ScheduleStatus cancelled);
 
+    /**
+     * 调度计划名下没作废的排程上派了多少个不同的人 (与 SchedulingHeadcountHelper 同口径: 作废的排程上的派工不算)。
+     * 标量查询, 读库现数, 不经持久化上下文里可能过期的排程副本。
+     */
+    @Query("SELECT COUNT(DISTINCT wa.userId) FROM WorkerAssignment wa WHERE wa.userId IS NOT NULL AND wa.scheduleId IN "
+            + "(SELECT ls.id FROM LineSchedule ls WHERE ls.planId = :planId AND ls.plan.factoryId = :factoryId "
+            + "AND ls.status <> :cancelled)")
+    long countDistinctWorkersOnLiveRows(@Param("factoryId") String factoryId, @Param("planId") String planId,
+                                        @Param("cancelled") LineSchedule.ScheduleStatus cancelled);
+
     /** 锁住这条排程并返回它已提交的最新状态 (原生 SQL, 不经持久化上下文)。 */
     @Query(value = "SELECT status FROM line_schedules WHERE id = :id FOR UPDATE", nativeQuery = true)
     Optional<String> lockStatusForUpdate(@Param("id") String id);

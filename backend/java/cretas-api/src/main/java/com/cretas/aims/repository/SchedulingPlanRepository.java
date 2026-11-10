@@ -97,6 +97,16 @@ public interface SchedulingPlanRepository extends JpaRepository<SchedulingPlan, 
         return reopenStatus(id, notes, now, SchedulingPlan.PlanStatus.cancelled, SchedulingPlan.PlanStatus.draft);
     }
 
+    /**
+     * 只写调度计划的两个汇总数 (批次数 / 派工人数), 不碰状态等其他列: 调用方手里的实体可能是重开前的旧副本,
+     * 整行保存会把旧状态写回去。
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE SchedulingPlan sp SET sp.totalBatches = :batches, sp.totalWorkers = :workers "
+            + "WHERE sp.id = :id AND sp.factoryId = :factoryId")
+    int writeTotals(@Param("factoryId") String factoryId, @Param("id") String id,
+                    @Param("batches") Integer batches, @Param("workers") Integer workers);
+
     Page<SchedulingPlan> findByFactoryIdAndDeletedAtIsNullOrderByPlanDateDesc(
         String factoryId, Pageable pageable);
 

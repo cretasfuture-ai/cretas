@@ -175,11 +175,12 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             scheduleRepository.saveAll(schedules);
         }
         if (!schedules.isEmpty() || claimed.reopened()) {
-            // 重开时已开工而保留下来的旧排程也算这一天的排程
-            plan.setTotalBatches(schedules.size() + claimed.keptRows());
-            if (!claimed.reopened()) {
-                plan.setTotalWorkers(0); // 重开时保留的已开工排程可能已派工, 不清零
-            }
+            // 按名下排程现算 (缺口 18 后续): 重开时作废的旧排程不算、保留的已开工排程算;
+            // 派工人数只算没作废的排程上的人 (作废的排程上原来派的人不再算进这一天)。
+            SchedulingPlanTotals.Totals totals = new SchedulingPlanTotals(scheduleRepository, planRepository)
+                    .count(factoryId, plan.getId());
+            plan.setTotalBatches(totals.batches());
+            plan.setTotalWorkers(totals.workers());
             planRepository.save(plan);
         }
 
