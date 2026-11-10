@@ -31,6 +31,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -353,6 +354,104 @@ class FactoryStocktakeM12ContractTest {
         assertThat(stocktake.getStatus()).isEqualTo(FactoryStocktake.Status.APPROVED);
         assertThat(stocktake.isSelfApproved()).isTrue();
         assertThat(stocktake.getSelfApprovalReason()).isEqualTo("只有我一个财务");
+    }
+
+    // ==================== #1580 权限审查 1: 盘点差异审批权限码在现网 OA 入口生效 ====================
+
+    private final Map<String, Map<String, Map<String, String>>> approvalL2 = new java.util.HashMap<>();
+
+    /** 真 ApprovalAuthority + 真 PermissionServiceImpl (假 L2 表), 账号 id → 岗位。 */
+    private void realApprovalAuthority(Map<Long, String> roleById) {
+        com.cretas.aims.repository.config.FactoryModuleConfigRepository factoryRepo =
+                mock(com.cretas.aims.repository.config.FactoryModuleConfigRepository.class);
+        lenient().when(factoryRepo.findByFactoryIdAndConfigVersion(anyString(), org.mockito.ArgumentMatchers.eq(1)))
+                .thenAnswer(inv -> {
+                    Map<String, Map<String, String>> override = approvalL2.get(inv.<String>getArgument(0));
+                    if (override == null) return List.of();
+                    com.cretas.aims.entity.config.FactoryModuleConfig cfg = new com.cretas.aims.entity.config.FactoryModuleConfig();
+                    cfg.setFactoryId(inv.getArgument(0));
+                    cfg.setRoleModuleOverride(override);
+                    return List.of(cfg);
+                });
+        com.cretas.aims.repository.permission.PlatformRolePermissionRepository platformRepo =
+                mock(com.cretas.aims.repository.permission.PlatformRolePermissionRepository.class);
+        lenient().when(platformRepo.findByRoleCodeAndModuleCodeAndDeletedAtIsNull(anyString(), anyString()))
+                .thenReturn(Optional.empty());
+        com.cretas.aims.service.impl.PermissionServiceImpl permissions = new com.cretas.aims.service.impl.PermissionServiceImpl();
+        ReflectionTestUtils.setField(permissions, "platformRepo", platformRepo);
+        ReflectionTestUtils.setField(permissions, "factoryConfigRepo", factoryRepo);
+        com.cretas.aims.repository.UserRepository users = mock(com.cretas.aims.repository.UserRepository.class);
+        lenient().when(users.findById(org.mockito.ArgumentMatchers.anyLong())).thenAnswer(inv -> {
+            String role = roleById.get(inv.<Long>getArgument(0));
+            if (role == null) return Optional.empty();
+            com.cretas.aims.entity.User u = new com.cretas.aims.entity.User();
+            u.setId(inv.getArgument(0));
+            u.setRoleCode(role);
+            u.setFactoryId("F006");
+            return Optional.of(u);
+        });
+        ReflectionTestUtils.setField(service, "approvalAuthority",
+                new com.cretas.aims.service.workflow.ApprovalAuthority(permissions, users));
+    }
+
+    private FactoryStocktake differenceTaskByOtherMaker() {
+        FactoryStocktake stocktake = stocktake(FactoryStocktake.Status.PENDING_APPROVAL, BigDecimal.TEN, new BigDecimal("9"));
+        stocktake.setInitiatedBy(1200L);
+        stocktake.setCountedBy(1200L);
+        stocktake.setSubmittedBy(1200L);
+        when(stocktakeRepo.findByIdAndFactoryIdForUpdate(stocktake.getId(), "F006")).thenReturn(Optional.of(stocktake));
+        return stocktake;
+    }
+
+    @Test
+    @DisplayName("权限审查 1: OA 入口 —— 财务经理默认能批; 本厂取消授权后被拒 (不推进审批流, 不写)")
+    void oaStocktakeApprovalHonoursRevokedPermission() {
+        realApprovalAuthority(Map.of(1500L, "finance_manager"));
+        approvalL2.put("F006", Map.of("finance_manager", Map.of("approval_stocktake", "-")));
+        FactoryStocktake stocktake = differenceTaskByOtherMaker();
+        com.cretas.aims.service.workflow.WorkflowEngineService engine = engineFor(stocktake);
+
+        assertThatThrownBy(() -> service.applyWorkflowAction("F006", stocktake.getId(), INSTANCE_ID, 1500L,
+                "finance_manager", com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.APPROVE, "核对无误"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).getCode()).isEqualTo(403);
+                    assertThat(((BusinessException) e).getErrorCode()).isEqualTo("STOCKTAKE_APPROVAL_PERMISSION_REQUIRED");
+                });
+        // 驳回同一个权限
+        assertThatThrownBy(() -> service.applyWorkflowAction("F006", stocktake.getId(), INSTANCE_ID, 1500L,
+                "finance_manager", com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.REJECT, "数不对"))
+                .isInstanceOf(BusinessException.class);
+        verify(engine, never()).transitionNode(anyString(), any(), any(), any(), any());
+        verify(stocktakeRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("权限审查 1: OA 入口 —— 默认没有权限的仓库主管被拒; 本厂授给仓库主管后能批")
+    void oaStocktakeApprovalHonoursNewGrant() {
+        realApprovalAuthority(Map.of(1600L, "warehouse_manager"));
+        FactoryStocktake stocktake = differenceTaskByOtherMaker();
+        com.cretas.aims.service.workflow.WorkflowEngineService engine = engineFor(stocktake);
+
+        assertThatThrownBy(() -> service.applyWorkflowAction("F006", stocktake.getId(), INSTANCE_ID, 1600L,
+                "warehouse_manager", com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.APPROVE, "核对无误"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+        verify(engine, never()).transitionNode(anyString(), any(), any(), any(), any());
+
+        approvalL2.put("F006", Map.of("warehouse_manager", Map.of("approval_stocktake", "rw")));
+        realApprovalAuthority(Map.of(1601L, "warehouse_manager"));   // 新账号 id, 避开权限缓存
+        com.cretas.aims.entity.workflow.ApprovalWorkflowInstance approved =
+                new com.cretas.aims.entity.workflow.ApprovalWorkflowInstance();
+        approved.setStatus(com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.APPROVED);
+        when(engine.transitionNode(INSTANCE_ID, 1601L, "warehouse_manager",
+                com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.APPROVE, "核对无误")).thenReturn(approved);
+        when(stocktakeRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        FactoryStocktake result = service.applyWorkflowAction("F006", stocktake.getId(), INSTANCE_ID, 1601L,
+                "warehouse_manager", com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction.APPROVE, "核对无误");
+        assertThat(result.getStatus()).isEqualTo(FactoryStocktake.Status.APPROVED);
+        assertThat(result.isSelfApproved()).isFalse();
     }
 
     private FactoryStocktake stocktake(FactoryStocktake.Status status, BigDecimal system, BigDecimal actual) {

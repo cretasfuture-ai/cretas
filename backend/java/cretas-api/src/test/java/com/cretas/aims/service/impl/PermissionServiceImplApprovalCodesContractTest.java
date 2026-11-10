@@ -213,6 +213,44 @@ class PermissionServiceImplApprovalCodesContractTest {
     }
 
     @Test
+    @DisplayName("审查 2: 默认授权与前提模块取交集 —— 线上 L1 permission_admin.quality = '-' ⇒ 默认不能批质检 (与改动前一致)")
+    void defaultGrantRequiresThePrerequisiteModule() {
+        // 2026-11-11 prod 只读读数: platform_role_permissions 里 permission_admin 的 quality / production 都是 '-'
+        fakeL1.put("permission_admin", Map.of("quality", "-", "production", "-"));
+        assertThat(can(FactoryUserRole.permission_admin, F, PermissionServiceImpl.APPROVAL_QUALITY_DISPOSITION)).isFalse();
+        // 工厂把生产经理 production 降成只读 → 默认不能批撤回; 质检经理 quality 降级 → 默认不能批质检
+        fakeL2.put(F, new HashMap<>(Map.of(
+                "production_manager", Map.of("production", "r"),
+                "quality_manager", Map.of("quality", "r"))));
+        assertThat(can(FactoryUserRole.production_manager, F, PermissionServiceImpl.APPROVAL_REPORT_REVERSAL)).isFalse();
+        assertThat(can(FactoryUserRole.quality_manager, F, PermissionServiceImpl.APPROVAL_QUALITY_DISPOSITION)).isFalse();
+        // 阴性对照: 别的厂没降级, 照常能批
+        assertThat(can(FactoryUserRole.production_manager, OTHER, PermissionServiceImpl.APPROVAL_REPORT_REVERSAL)).isTrue();
+        // 显式配置审批码按显式配置走, 不叠模块前提
+        fakeL2.put(F, new HashMap<>(Map.of("production_manager",
+                Map.of("production", "r", PermissionServiceImpl.APPROVAL_REPORT_REVERSAL, "rw"))));
+        assertThat(can(FactoryUserRole.production_manager, F, PermissionServiceImpl.APPROVAL_REPORT_REVERSAL)).isTrue();
+    }
+
+    @Test
+    @DisplayName("审查 2: 个人覆盖把 production 降成只读 → 这个人默认不能批撤回; 同岗位其他人不受影响")
+    void personalDowngradeOfThePrerequisiteRemovesTheDefaultGrant() {
+        com.cretas.aims.service.platform.PlatformEmployeeModulePermissions personal =
+                org.mockito.Mockito.mock(com.cretas.aims.service.platform.PlatformEmployeeModulePermissions.class);
+        User downgraded = user(FactoryUserRole.production_manager, F);
+        when(personal.apply(org.mockito.ArgumentMatchers.any(User.class), anyString(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> {
+                    User who = inv.getArgument(0);
+                    String module = inv.getArgument(1);
+                    return who.getId().equals(downgraded.getId()) && "production".equals(module) ? "r" : inv.getArgument(2);
+                });
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "employeeModulePermissions", personal);
+
+        assertThat(service.hasPermission(downgraded, "approval_report_reversal:approve")).isFalse();
+        assertThat(can(FactoryUserRole.production_manager, F, PermissionServiceImpl.APPROVAL_REPORT_REVERSAL)).isTrue();
+    }
+
+    @Test
     @DisplayName("登录快照 (前端据此显示审批按钮) 与 hasPermission 逐格一致")
     void loginSnapshotMatchesHasPermission() {
         fakeL2.put(F, Map.of("operator", Map.of(PermissionServiceImpl.APPROVAL_REPORT_REVERSAL, "rw")));
