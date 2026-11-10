@@ -77,6 +77,10 @@ public class QualityDispositionController {
     private final NotificationService notificationService;
     private final PushNotificationService pushNotificationService;
 
+    /** 列「成品仍在隔离的已放行批次」用; 可选注入只为兼容手工构造控制器的单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.QualityDispositionInventoryService heldGoodsService;
+
     /**
      * 根据质检结果评估处置建议
      *
@@ -177,6 +181,56 @@ public class QualityDispositionController {
      * 3. 记录审计日志
      * 4. 发送通知
      */
+    /**
+     * 已放行、但所在计划还有成品在隔离的批次 (Owner 2026-11-09)。web 端只给这些批次显示「重新核对并放行成品」。
+     */
+    @RequirePermission({"quality:read", "quality:read_write"})
+    @RequireModule("quality_inspection")
+    @GetMapping("/held-goods-batches")
+    @Operation(summary = "成品仍在隔离的已放行批次")
+    public ApiResponse<List<com.cretas.aims.service.quality.QualityDispositionInventoryService.HeldGoodsBatch>>
+            listHeldGoodsBatches(@PathVariable String factoryId) {
+        if (heldGoodsService == null) {
+            throw new IllegalStateException("质检处置库存服务未注入，查不了成品隔离情况");
+        }
+        return ApiResponse.success(heldGoodsService.listPassedBatchesWithHeldGoods(factoryId));
+    }
+
+    /**
+     * 已放行批次申请放行隔离成品 (Owner 2026-11-09): 一个人决定, 不要另一人复核; 用现在的数据把计划级放行重跑一遍,
+     * 每道检查重新来。权限与执行处置相同。操作人取登录身份, 不取请求体。
+     */
+    @RequirePermission({"quality:read_write"})
+    @RequireModule("quality_inspection")
+    @PostMapping("/batches/{batchId}/release-held-goods")
+    @Operation(summary = "已放行批次申请放行隔离成品")
+    public ApiResponse<DispositionResultDTO> releaseHeldGoods(
+            @PathVariable String factoryId,
+            @PathVariable Long batchId,
+            @RequestAttribute("userId") @Parameter(hidden = true) Long authenticatedUserId) {
+        // ⛔ 这里故意不加 @Transactional: 申请在服务自己的事务里跑, 被拒时那个事务回滚;
+        //    拒绝的审计在另一个事务里写, 才不会跟着回滚掉 (#1548 第二轮审查 5)。
+        DispositionExecutionResult result;
+        try {
+            result = qualityDispositionRuleService.recheckPlanRelease(factoryId, batchId, authenticatedUserId);
+        } catch (BusinessException refused) {
+            qualityDispositionRuleService.recordRefusedPlanRelease(factoryId, batchId, authenticatedUserId,
+                    refused.getErrorCode(), refused.getMessage());
+            throw refused;
+        }
+        return ApiResponse.success(DispositionResultDTO.builder()
+                .dispositionId(result.getAuditLogId())
+                .status("EXECUTED")
+                .executedAction(result.getExecutedAction().name())
+                .message(result.getMessage())
+                .newBatchStatus(result.getNewBatchStatus())
+                .finishedGoodsHeld(result.getFinishedGoodsHeld())
+                .approvalInitiated(false)
+                .auditLogId(result.getAuditLogId())
+                .executedAt(LocalDateTime.now())
+                .build());
+    }
+
     @RequirePermission({"quality:read_write"})
     @RequireModule("quality_inspection")
     @PostMapping("/execute")
@@ -262,6 +316,7 @@ public class QualityDispositionController {
                 .message(executionResult.getMessage())
                 .nextSteps(buildNextSteps(executionResult))
                 .newBatchStatus(executionResult.getNewBatchStatus())
+                .finishedGoodsHeld(executionResult.getFinishedGoodsHeld())
                 .approvalInitiated(executionResult.isApprovalInitiated())
                 .approvalRequestId(executionResult.getApprovalRequestId())
                 .auditLogId(executionResult.getAuditLogId())
@@ -695,6 +750,8 @@ public class QualityDispositionController {
         Long productionBatchId = null;
         String executionStatus = null;
         String newBatchStatus = null;
+        String executionMessage = null;
+        Integer finishedGoodsHeld = null;
 
         // 如果批准，执行处置动作
         if (request.getApproved()) {
@@ -713,6 +770,9 @@ public class QualityDispositionController {
                 );
                 executionStatus = "EXECUTED";
                 newBatchStatus = executionResult.getNewBatchStatus();
+                // Q2/Q4: 还有成品留在隔离 (同计划还有几批没解除 / 报废召回批次的货 / 分不清归属) 要原话告诉审批人
+                executionMessage = executionResult.getMessage();
+                finishedGoodsHeld = executionResult.getFinishedGoodsHeld();
             } catch (BusinessException be) {
                 throw be;
             } catch (Exception e) {
@@ -785,7 +845,10 @@ public class QualityDispositionController {
                 .approvedAt(auditLog.getApprovedAt())
                 .executionStatus(executionStatus)
                 .newBatchStatus(newBatchStatus)
-                .message(request.getApproved() ? "处置申请已批准" : "处置申请已拒绝")
+                .finishedGoodsHeld(finishedGoodsHeld)
+                .message(request.getApproved()
+                        ? "处置申请已批准" + (executionMessage != null ? "；" + executionMessage : "")
+                        : "处置申请已拒绝")
                 .build();
 
         log.info("处置审批完成 - id={}, approved={}", id, request.getApproved());

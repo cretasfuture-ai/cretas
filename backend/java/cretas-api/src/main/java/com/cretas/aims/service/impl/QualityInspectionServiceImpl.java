@@ -238,6 +238,9 @@ public class QualityInspectionServiceImpl implements QualityInspectionService {
         // overwrite the production yield.
         Long batchId = inspection.getProductionBatchId();
         if (batchId == null) return;
+        // #1548 第二轮审查 3: 先拿这批的行锁再改状态、再隔离成品 —— 计划级放行在读兄弟批次状态之前锁住计划所有批次,
+        // 两边因此串行: 放行先拿到锁 ⇒ 这里等它提交后再隔离 (读得到它放出去的成品); 这里先拿到 ⇒ 放行读到 FAILED, 整计划不放。
+        productionBatchRepository.findByIdAndFactoryIdForUpdate(batchId, inspection.getFactoryId());
         ProductionBatch batch = productionBatchRepository.findById(batchId)
                 .filter(candidate -> inspection.getFactoryId().equals(candidate.getFactoryId()))
                 .orElseThrow(() -> new EntityNotFoundException("ProductionBatch", batchId.toString()));

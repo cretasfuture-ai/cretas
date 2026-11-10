@@ -59,6 +59,7 @@ import {
 import { toDateString } from '@/utils/dateFormat';
 import { formatUnitPrice, salesOrderDisplayMoney, salesOrderReceivableAmount, salesOrderRemainingAmount, warehouseNameById, type WarehouseIdNameLike } from './salesOrderDisplay';
 import { createAutoFullChildShipment } from './deliveryAutoChild';
+import { allocationNoticeLines, allocationNoticesOf, needsPackagingConfirmation, type ShipmentAllocationNotice } from './shipmentAllocationNotices';
 import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
 import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 
@@ -1143,6 +1144,7 @@ async function handleCreateDelivery() {
           logisticsCompany: deliveryForm.value.logisticsCompany,
           trackingNumber: deliveryForm.value.trackingNumber,
           deliveryAddress: deliveryForm.value.deliveryAddress,
+          onAllocationNotices: (notices) => { void promptAllocationNotices(notices, null); },
         }) : false;
         if (!created) {
           ElMessage.warning('母发货单已创建，但未能自动建立全量子发运单，请在发货记录中重试');
@@ -1234,6 +1236,10 @@ async function handleCreateShipment() {
       ElMessage.success(`子发运单 ${res.data?.deliveryNumber || ''} 创建成功`);
       shipmentDialogVisible.value = false;
       await loadDeliveries();
+      const notices = allocationNoticesOf(res.data);
+      if (notices.length > 0) {
+        await promptAllocationNotices(notices, res.data as { id?: string; deliveryNumber?: string } | null);
+      }
     }
   } catch (e) { handleCatchError(e, '子发运单创建失败，请检查网络'); }
   finally { submitting.value = false; }
@@ -1326,6 +1332,38 @@ async function submitDeliveredWithSignature() {
     }
   }
   finally { submitting.value = false; }
+}
+
+/**
+ * Q3: 子发运单建成了, 但有的行没能自动分配批次 (只剩规格不一致的批次要确认换算等)。把每行的真实原因
+ * 告诉用户; 知道是哪张子单且需要确认换算时, 直接打开它的「分配批次」(那里逐批确认换算, 防呆 Rule 5)。
+ */
+async function promptAllocationNotices(
+  notices: ShipmentAllocationNotice[],
+  shipment: { id?: string; deliveryNumber?: string } | null,
+) {
+  const number = shipment?.deliveryNumber ? ` ${shipment.deliveryNumber}` : '';
+  const text = `子发运单${number}已创建，下面这些行没有自动分配批次：\n${allocationNoticeLines(notices).join('\n')}`;
+  if (!shipment?.id || !needsPackagingConfirmation(notices)) {
+    ElMessage({
+      type: 'warning',
+      message: `${text}\n请在「发货记录」里这张子发运单上点「分配批次」处理。`,
+      duration: 0,
+      showClose: true,
+    });
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(text, '批次没有自动分配', {
+      type: 'warning',
+      confirmButtonText: '去分配批次并确认换算',
+      cancelButtonText: '稍后在发货记录处理',
+      customStyle: { whiteSpace: 'pre-line' },
+    });
+  } catch {
+    return; // 稍后处理: 发货记录里这张子单仍显示「分配批次」
+  }
+  await openBatchAllocDialog(String(shipment.id), String(shipment.deliveryNumber || shipment.id));
 }
 
 // 批次分配 (P0-13) — /ship endpoint 校验总分配量必须等于发货量, 否则返回
