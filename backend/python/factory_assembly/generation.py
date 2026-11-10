@@ -1037,6 +1037,89 @@ def _metric_watches(description: str):
         out.append({'metricName': metric, 'enabled': True, 'threshold': nums[0]})
     return (out, skipped)
 
+_POLICY_SHORTAGE = re.compile('缺料时能不能开工[：:][ \\t]*([^\\n]*)')
+
+_POLICY_REQUISITION = re.compile('报工前要不要先有领料单[：:][ \\t]*([^\\n]*)')
+
+_POLICY_SKIP_REPORT = re.compile('工序报工能不能默认跳过[：:][ \\t]*([^\\n]*)')
+
+_POLICY_BALANCE = re.compile('物料平衡提醒线[：:][ \\t]*([^\\n]*)')
+
+_POLICY_INSPECT = re.compile('哪些产品要先检验[：:][ \\t]*([^\\n]*)')
+
+_POLICY_REWORK = re.compile('回料比例上限[：:][ \\t]*([^\\n]*)')
+
+_PCT = re.compile('(\\d+(?:\\.\\d+)?)\\s*[%％]?')
+
+def _policy_choice(pattern, description, yes_prefix, no_prefix):
+    """三态: 明确选了「是」→True, 明确选了「否」→False, 其余(含「按系统默认」/没问)→None=不写。
+    ⛔ 只认选项原文开头, 不做同义词归一(替厂长猜)。"""
+    m = pattern.search(description or '')
+    if not m:
+        return None
+    ans = m.group(1).strip()
+    if ans.startswith(yes_prefix):
+        return True
+    if ans.startswith(no_prefix):
+        return False
+    return None
+
+def _factory_policy(description: str):
+    """厂规: 缺料拦截 / 领料单 / 跳过工序报工 / 物料平衡线。没问到的键**不出现**(服务端不覆盖现值)。"""
+    out = {}
+    for key, pat, yes, no in (('blockStartOnOpenShortage', _POLICY_SHORTAGE, '拦住', '不拦'), ('requireRequisitionBeforeReport', _POLICY_REQUISITION, '必须先有', '不用'), ('skipProcessReportingDefault', _POLICY_SKIP_REPORT, '可以默认跳过', '不跳过')):
+        v = _policy_choice(pat, description, yes, no)
+        if v is not None:
+            out[key] = v
+    m = _POLICY_BALANCE.search(description or '')
+    if m:
+        ans = m.group(1).strip()
+        if ans and '默认' not in ans and ans not in ('没有', '不用'):
+            nums = [float(x) for x in _PCT.findall(ans)]
+            # 恰好两个数: 先说的是黄(提醒), 后说的是红(报警); 其余形状不猜
+            if len(nums) == 2 and 0 < nums[0] < nums[1] <= 100:
+                out['materialBalanceWarnPct'] = nums[0]
+                out['materialBalanceRedPct'] = nums[1]
+    return out
+
+def _product_policy(description: str, products):
+    """把「哪些产品要先检验 / 回料比例上限」落到 productTypes 条目上 —— 按产品名逐个匹配, 认不出的跳过。
+    返回跳过的说法列表。没提到的产品不加字段(保持现值)。"""
+    skipped = []
+    by_name = {}
+    for p in products or []:
+        if isinstance(p, dict) and p.get('name'):
+            by_name[_nkey(p['name'])] = p
+    m = _POLICY_INSPECT.search(description or '')
+    if m:
+        ans = m.group(1).strip()
+        if ans and ans not in ('没有', '都不用', '不用'):
+            for seg in _METRIC_SEP.split(ans):
+                seg = seg.strip()
+                if not seg:
+                    continue
+                p = by_name.get(_nkey(seg))
+                if p is None:
+                    skipped.append('需检:' + seg)
+                else:
+                    p['inspectionRequired'] = True
+    m = _POLICY_REWORK.search(description or '')
+    if m:
+        ans = m.group(1).strip()
+        if ans and ans not in ('没有', '不用'):
+            for seg in _METRIC_SEP.split(ans):
+                seg = seg.strip()
+                if not seg:
+                    continue
+                nums = _PCT.findall(seg)
+                name = _PCT.sub(' ', seg).replace('%', '').strip()
+                p = by_name.get(_nkey(name))
+                if p is None or len(nums) != 1 or not 0 < float(nums[0]) <= 100:
+                    skipped.append('回料上限:' + seg)
+                else:
+                    p['maxReworkRatioPercent'] = float(nums[0])
+    return skipped
+
 def _validate_factory_init(obj: object) -> str:
     """返回空串表示合规, 否则返回**具体**的不合规原因。
 
@@ -1256,6 +1339,14 @@ async def generate_configuration(request: FactoryInitRequest):
         indicator_opt_out = _indicator_opt_out(request.factory_description)
         parsed['suggestedData']['indicatorOptOut'] = indicator_opt_out
         logger.info('Factory init: indicatorOptOut(停用的)=%s', indicator_opt_out)
+        policy = _factory_policy(request.factory_description)
+        if policy:
+            parsed['suggestedData']['policy'] = policy
+        logger.info('Factory init: policy(问到的厂规)=%s', policy)
+        policy_skipped = _product_policy(request.factory_description, parsed['suggestedData'].get('productTypes'))
+        if policy_skipped:
+            parsed['notBuilt'] = (parsed.get('notBuilt') or []) + _not_built('产品类型', policy_skipped, '这条检验/回料说法没对上成品名字或数字', '在「产品类型管理」里手动补；或者用成品清单里的名字再说一遍')
+        logger.info('Factory init: 检验/回料没落上的 %s', policy_skipped)
         before_summary = parsed.get('aiSummary') or ''
         parsed['aiSummary'] = _plainify(before_summary, parsed.get('suggestedData'))
         if parsed['aiSummary'] != before_summary:

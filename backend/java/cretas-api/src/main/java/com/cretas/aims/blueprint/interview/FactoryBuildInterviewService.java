@@ -1048,7 +1048,26 @@ public class FactoryBuildInterviewService {
         //    ⚠️ 我最初的措辞写的是「这一项留空」, 那是错的:留空插不进去。
         optionalParam("haccpLimits", "临界限值",
                 "上面每个控制点的临界限值是多少？像「中心温度≥75℃」「金检 Fe≥2.0mm 剔除」这样说。"
-                        + "没说限值的控制点系统不会写入 —— 它不会替你编一个限值。"));
+                        + "没说限值的控制点系统不会写入 —— 它不会替你编一个限值。"),
+        // 厂里的规矩 —— 机制是系统的, 拦还是放由厂长定。
+        // ⛔ 每道都有「按系统默认」: 没问到/不想定的保持现状, 不替厂长选。
+        //    python 侧 generation.py#_factory_policy 按这些题面的 label 解析, 改 label 要同步。
+        choiceParam("shortageGate", "缺料时能不能开工",
+                "某道工序要用的料还没补齐时，要不要拦住不让开工？拦住的话，车间要写明原因才能强行开工。",
+                List.of("拦住，补齐料才能开工", "不拦，只提醒", "按系统默认")),
+        choiceParam("requisitionGate", "报工前要不要先有领料单",
+                "车间报工前，必须先有生产领料单吗？",
+                List.of("必须先有", "不用", "按系统默认")),
+        choiceParam("skipReportingDefault", "工序报工能不能默认跳过",
+                "不需要每道工序都报工的话，可以默认跳过工序报工，只报最终产出。",
+                List.of("可以默认跳过", "不跳过，每道都报", "按系统默认")),
+        optionalParam("balanceLines", "物料平衡提醒线",
+                "投入和产出对不上时，差多少黄色提醒、差多少红色报警？像「差5%提醒、差15%报警」这样说。"
+                        + "不说就用系统默认（5% 提醒、15% 报警）。"),
+        optionalParam("inspectProducts", "哪些产品要先检验",
+                "哪些产品生产出来后，必须先检验放行才能发货或下道使用？用产品名字说，多个用顿号隔开。都不用就说没有。"),
+        optionalParam("reworkLimits", "回料比例上限",
+                "哪些产品允许回料？回料最多占多少比例？像「卤牛肉 10%、卤鸭脖 5%」这样说。没有就说没有。"));
 
     private static final String STEP_TEMPLATE_KEY = "step";
 
