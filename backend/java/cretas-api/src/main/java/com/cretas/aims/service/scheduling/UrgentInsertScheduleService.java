@@ -456,7 +456,8 @@ public class UrgentInsertScheduleService {
         } else {
             SchedulingPlanRepository.DayPlanHead fresh = schedulingPlanRepository
                     .findDayPlanHead(factoryId, day).orElseThrow(() -> new BusinessException(409,
-                            "插入首日 " + day + " 的调度计划刚被改动，请重新预览").withCode("INSERT_SCHEDULE_CONTAINER_CLOSED"));
+                            "插入首日 " + day + " 的调度计划刚被改动，请重新预览")
+                            .withCode("INSERT_SCHEDULE_CONTAINER_CLOSED").withHint("重新创建确认预览"));
             if (fresh.getStatus() == SchedulingPlan.PlanStatus.completed) {
                 throw new BusinessException(409, containerBlockReason(fresh.getId(), fresh.getStatus(), day))
                         .withCode("INSERT_SCHEDULE_CONTAINER_CLOSED")
