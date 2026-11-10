@@ -39,7 +39,7 @@ import static org.mockito.Mockito.when;
  * <p>阈值中心用 mock 模拟「工厂行 &gt; 全局行」: F_WIDE 配了 10 天, 其它工厂取全局 2 天。
  */
 @DisplayName("A14 补录窗口: 工厂级配置 + 报工单入口接入")
-class BackdateWindowFactoryConfigTest {
+class BackdateWindowFactoryConfigContractTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 11, 10);
     private static final String F_DEFAULT = "F001";

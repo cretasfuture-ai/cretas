@@ -42,7 +42,7 @@ import static org.mockito.Mockito.when;
  * 以及 AI 质量主管放行 {@code release_decision}。
  */
 @DisplayName("A3 批次放行: 工厂配置的放行规则 + 放行台账")
-class BatchReleaseDisciplineTest {
+class BatchReleaseDisciplineContractTest {
 
     private static final String F = "F001";
 
