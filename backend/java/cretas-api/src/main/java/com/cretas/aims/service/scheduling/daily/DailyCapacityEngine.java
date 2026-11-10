@@ -298,8 +298,11 @@ public final class DailyCapacityEngine {
                 }
                 BigDecimal used = lineUsed.getOrDefault(day, BigDecimal.ZERO);
                 BigDecimal free = BigDecimal.ONE.subtract(used);
+                // 取最近的 2 位, 不是向下取: 真实剩余量一定是 2 位小数 (都是 2 位小数的量相加), 这里唯一的误差来自
+                // 占用比例向上取到 6 位 (如 8/62 → 0.129033), free×capacity 会落成 53.99999… ; 向下取就把 54 读成 53.99
+                // (统一验收 2026-11-10 实测 53.99 + 6.01)。整天被占满 (share = free) 时占用比例不受这里影响。
                 BigDecimal producible = free.signum() <= 0 ? BigDecimal.ZERO
-                        : free.multiply(capacity).setScale(QTY_SCALE, RoundingMode.DOWN);
+                        : free.multiply(capacity).setScale(QTY_SCALE, RoundingMode.HALF_UP);
                 if (producible.signum() <= 0) {
                     String by = lineUsedBy.get(day);
                     // 只在已落库的排程自己就占满这天时说; 被本次先排的计划用掉是正常先后, 不算推迟原因

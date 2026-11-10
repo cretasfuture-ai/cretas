@@ -72,8 +72,13 @@ public class LineCapacityEquipmentCheck {
         }
         CapacityUnit orderUnit = parseUnit(unit);
         if (orderUnit == null) {
-            return ResourceCheckResult.unverified("CAPACITY",
-                    "产能未验证: 插单数量没有单位 (件 PIECE / 千克 KG / 批 BATCH)", quantity);
+            // D-S4-03-MSG: 单位是「袋」「盒」时旧文案写「没有单位」, 误导人去补单位。
+            // 区分两种: 真没填 vs 填了但产线产能不按这个单位配置 (不换算, Owner 10-28)。
+            String msg = (unit == null || unit.isBlank())
+                    ? "产能未验证: 插单数量没有单位 (件 PIECE / 千克 KG / 批 BATCH)"
+                    : "产能未验证: 产线产能只按 件 / kg / 批 配置, 插单单位「" + unit.trim()
+                            + "」无法核对换线产能 (同线顺延不受影响)";
+            return ResourceCheckResult.unverified("CAPACITY", msg, quantity);
         }
         BigDecimal hours = BigDecimal.valueOf(Duration.between(start, end).toMinutes())
                 .divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP);

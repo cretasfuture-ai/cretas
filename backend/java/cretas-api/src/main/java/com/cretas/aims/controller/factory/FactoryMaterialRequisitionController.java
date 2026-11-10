@@ -44,7 +44,11 @@ public class FactoryMaterialRequisitionController {
         String planId = (String) body.get("productionPlanId");
         BigDecimal plannedRawInputKg = parsePlannedRawInputKg(body.get("plannedRawInputKg"));
         FactoryMaterialRequisition mr = service.generateFromPlan(factoryId, planId, userId, plannedRawInputKg);
-        return ResponseEntity.ok(Map.of("success", true, "data", mr, "message", "material requisition generated"));
+        // 调料表读取失败时单据照常生成, 但没有调料行 —— 明说, 不让它看起来像「配方没有调料」
+        String message = FactoryMaterialRequisitionService.SEASONING_ITEMS_UNAVAILABLE.equals(mr.getSeasoningItemsStatus())
+                ? "领料单已生成, 但配方调料读取失败, 调料行未列入, 请人工补充调料"
+                : "material requisition generated";
+        return ResponseEntity.ok(Map.of("success", true, "data", mr, "message", message));
     }
 
     /**
