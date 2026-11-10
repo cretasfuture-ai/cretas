@@ -561,6 +561,16 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
             LocalDate endDate);
 
     /**
+     * 按状态查「未定日期」(预计完成日为空) 的生产计划。
+     *
+     * <p>D-S411-03: 上面那条 BETWEEN 对 NULL 恒不命中, 没有交期的待处理计划 (如订单没填交期时
+     * 财审自动生成的 PP-AUTO-*) 会被排程候选列表静默丢掉; 排程页用这条把它们单独补上。
+     */
+    List<ProductionPlan> findByFactoryIdAndStatusAndExpectedCompletionDateIsNull(
+            String factoryId,
+            ProductionPlanStatus status);
+
+    /**
      * 统计指定时间范围内创建的生产计划数量
      * 用于预测报表的置信度计算
      *

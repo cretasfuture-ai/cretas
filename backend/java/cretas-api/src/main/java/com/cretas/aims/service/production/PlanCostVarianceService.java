@@ -854,12 +854,19 @@ public class PlanCostVarianceService {
                 .map(RawMaterialType::getName).orElse(materialTypeId);
     }
 
-    private String productName(String factoryId, String productTypeId) {
+    /**
+     * 产品显示名。多产出计划的 productTypeId 指向内部锚点 (名字 {@code __RAW_WORKFLOW_OWNER__<原料id>},
+     * 不是产品), ⛔ 不能把 getName() 原样给人看 (F006 演示 L4/L5, 2026-11-10 统一验收抓到):
+     * 与排程页同一份规则 (ScheduleProductNames) —— 显示对应原料的名字, 查不到就去掉前缀。
+     */
+    String productName(String factoryId, String productTypeId) {
         if (productTypeId == null || productTypeRepository == null) {
             return null;
         }
         return productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
-                .map(p -> p.getName()).orElse(null);
+                .map(p -> com.cretas.aims.service.scheduling.daily.ScheduleProductNames
+                        .displayName(rawMaterialTypeRepository, factoryId, p))
+                .orElse(null);
     }
 
     /** 缺口 10: 报表注明每道多产出工序用的是哪种分法 (取报工落库的分摊凭证)。 */

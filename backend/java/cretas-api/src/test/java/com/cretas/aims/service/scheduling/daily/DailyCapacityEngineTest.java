@@ -120,6 +120,31 @@ class DailyCapacityEngineTest {
     }
 
     @Test
+    void whatIsLeftOfASharedDayIsNotShavedByTheShareRounding() {
+        // 统一验收 2026-11-10 实测: 插单 8kg + 60kg 计划, 日产能 62 → 被挤计划第一天应是 54.00 + 6.00,
+        // 实际是 53.99 + 6.01: 插单的占用比例 8/62 向上取到 6 位 (0.129033), 剩下的比例 × 62 = 53.99999… 再向下取到 2 位
+        List<JobOut> out = DailyCapacityEngine.allocate(List.of(job("INS", "8", "62"), job("X", "60", "62")), D1);
+
+        assertDays(out.get(0), D1, "8", "0.129033");
+        assertDays(out.get(1), D1, "54", "0.870967", D2, "6", "0.096775");
+        assertThat(out.get(1).totalQuantity()).isEqualByComparingTo("60");
+    }
+
+    @Test
+    void theLeftoverIsExactForOtherCapacitiesToo() {
+        // 1/7 向上取 6 位 = 0.142858; 剩余 0.857142 × 7 = 5.999994 → 应是 6.00, 不是 5.99
+        List<JobOut> out = DailyCapacityEngine.allocate(List.of(job("A", "1", "7"), job("B", "6", "7")), D1);
+
+        assertThat(out.get(1).days()).hasSize(1);
+        assertThat(out.get(1).days().get(0).quantity()).isEqualByComparingTo("6");
+        // 3 个计划接着排: 每个都拿到整数量, 不会越往后越少
+        List<JobOut> three = DailyCapacityEngine.allocate(
+                List.of(job("A", "8", "62"), job("B", "8", "62"), job("C", "46", "62")), D1);
+        assertThat(three.get(2).days()).hasSize(1);
+        assertThat(three.get(2).days().get(0).quantity()).isEqualByComparingTo("46");
+    }
+
+    @Test
     void decimalQuantitiesKeepTwoPlacesAndSumToTheRemaining() {
         JobOut out = DailyCapacityEngine.allocate(List.of(job("P", "250.5", "100.25")), D1).get(0);
 

@@ -1,0 +1,24 @@
+# java-gate-pr.yml fast-contracts 的类名模式 (surefire 通配), 一行一个。分片脚本 scripts/ci/shard-tests.py 读它。
+# 新增闸类: 命名命中某个模式, 或在这里加一行 —— ⛔ 不要把模式写回 workflow。
+*ContractTest
+*ContractsTest
+*RepositoryQueryValidationTest
+FlywayVersionUniquenessTest
+*StartupGuardTest
+*RoleGateTest
+*RoleGateMvcTest
+*SecurityTest
+*VulnerabilityTest
+*AuthorizationTest
+*PermissionTest
+*PermissionGateTest
+PermissionServiceImpl*Test
+*ArchitectureTest
+*GuardTest
+*GateTest
+*RbacTest
+*IsolationTest
+*RedactionTest
+*TenantScopeTest
+ProcessSheetMultiOutputUnknownCostTest
+AttachmentSopSpringTest

@@ -272,4 +272,66 @@ class ShortageCaseServiceContractTest {
 
         assertThat(c.getStage()).isEqualTo(Stage.PARTIALLY_RESOLVED);
     }
+
+    /**
+     * D-S411-04 审查 M1: 质检放行里把质检中的原料判「不合格」—— 真的 QcReleaseService.decide → 共用翻转发事件 →
+     * 真的 ShortageCaseListener → 真的 ShortageCaseService 重算。「质检中数量」的桩按批次<b>实际状态</b>作答
+     * (INSPECTING 才算 6), 所以快照能不能清零取决于这条链有没有把重算触发出来。
+     */
+    @Test
+    void aQcRejectionOfTheInspectingBatchClearsInspectingQtyAndHandsTheGapBackToProcurement() {
+        com.cretas.aims.entity.MaterialBatch batch = new com.cretas.aims.entity.MaterialBatch();
+        batch.setId("MB-RAW");
+        batch.setFactoryId("F1");
+        batch.setMaterialTypeId("M1");
+        batch.setBatchNumber("MT-RAW-1");
+        batch.setReceiptQuantity(new BigDecimal("6"));
+        batch.setUsedQuantity(BigDecimal.ZERO);
+        batch.setReservedQuantity(BigDecimal.ZERO);
+        batch.setQuantityUnit("kg");
+        batch.setSourceDocType("PURCHASE_RECEIVE");
+        batch.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING);
+        when(supply.sumInspectingQuantity(eq("F1"), anyString())).thenAnswer(i ->
+                batch.getStatus() == com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING
+                        ? new BigDecimal("6") : BigDecimal.ZERO);
+
+        service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED");
+        ShortageCase c = caseStore.values().iterator().next();
+        assertThat(onlyLine().getInspectingQty()).isEqualByComparingTo("6");
+        assertThat(c.getOwnerRole()).isEqualTo(ShortageCaseService.ROLE_QUALITY);   // 阳性对照: 起点确实是「等质检」
+
+        ShortageCaseListener listener = new ShortageCaseListener(service);
+        List<Object> published = new ArrayList<>();
+        org.springframework.context.ApplicationEventPublisher publisher = event -> {
+            published.add(event);
+            if (event instanceof com.cretas.aims.event.MaterialBatchInspectionClosedEvent closed) {
+                listener.onMaterialBatchInspectionClosed(closed);
+            } else if (event instanceof com.cretas.aims.event.MaterialBatchReleasedEvent released) {
+                listener.onMaterialBatchReleased(released);
+            }
+        };
+        com.cretas.aims.repository.MaterialBatchRepository batches = mock(com.cretas.aims.repository.MaterialBatchRepository.class);
+        when(batches.findByIdAndFactoryIdForUpdate("MB-RAW", "F1")).thenReturn(Optional.of(batch));
+        when(batches.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.cretas.aims.repository.quality.QcReleaseRecordRepository records =
+                mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class);
+        when(records.save(any())).thenAnswer(i -> i.getArgument(0));
+        com.cretas.aims.service.quality.release.QcReleaseService release =
+                new com.cretas.aims.service.quality.release.QcReleaseService(
+                        mock(com.cretas.aims.repository.SemiFinishedInventoryRepository.class), batches,
+                        mock(com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository.class),
+                        mock(com.cretas.aims.repository.ProductTypeRepository.class), records);
+        release.setEventPublisher(publisher);
+
+        release.decide("F1", new com.cretas.aims.service.quality.release.QcReleaseService.DecisionCommand(
+                "RAW_MATERIAL_BATCH", "MB-RAW", "REJECTED", "感官异常"), 9L, "王质检");
+
+        assertThat(batch.getStatus()).isEqualTo(com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE);
+        assertThat(published).as("判不合格只发「离开质检中」, 不发放行")
+                .singleElement().isInstanceOf(com.cretas.aims.event.MaterialBatchInspectionClosedEvent.class);
+        assertThat(onlyLine().getInspectingQty()).isEqualByComparingTo("0");
+        assertThat(onlyLine().getGapQty()).isEqualByComparingTo("6");
+        assertThat(c.getOwnerRole()).isEqualTo(ShortageCaseService.ROLE_PROCUREMENT);
+        assertThat(c.getLastRefreshReason()).isEqualTo(ShortageCaseListener.REASON_BATCH_QC_REJECTED);
+    }
 }

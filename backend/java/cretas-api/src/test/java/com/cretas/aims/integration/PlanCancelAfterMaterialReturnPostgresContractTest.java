@@ -83,7 +83,11 @@ class PlanCancelAfterMaterialReturnPostgresContractTest {
     @Import({ProductionPlanServiceImpl.class, WipInventoryServiceImpl.class,
             SecondaryPlanFeedService.class, SettlementSemiStockingService.class,
             com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl.class,
-            com.cretas.aims.service.scheduling.SchedulingResourceWriteLock.class})
+            com.cretas.aims.service.scheduling.SchedulingResourceWriteLock.class,
+            // 取消之后收掉名下排程的级联 (#1579), 经切面挂在取消入口上 —— 与生产同一条接线
+            com.cretas.aims.service.scheduling.CancelledPlanScheduleCascade.class,
+            com.cretas.aims.service.scheduling.CancelledPlanScheduleCascadeAspect.class})
+    @org.springframework.context.annotation.EnableAspectJAutoProxy
     static class Runtime { }
 
     @DynamicPropertySource

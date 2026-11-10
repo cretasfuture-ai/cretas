@@ -60,8 +60,12 @@ public class MaterialRequisitionGenerateTool extends AbstractBusinessTool {
         Long userId = context != null && context.get("userId") != null
                 ? Long.valueOf(context.get("userId").toString()) : null;
         FactoryMaterialRequisition mr = service.generateFromPlan(factoryId, planId, userId);
+        String seasoningNote = FactoryMaterialRequisitionService.SEASONING_ITEMS_UNAVAILABLE
+                .equals(mr.getSeasoningItemsStatus())
+                ? "; 配方调料读取失败, 调料行未列入, 请人工补充调料"
+                : "";
         return buildSimpleResult(
-                "领料单已生成: " + mr.getRequisitionNo() + " (" + mr.getItems().size() + " 行)",
+                "领料单已生成: " + mr.getRequisitionNo() + " (" + mr.getItems().size() + " 行)" + seasoningNote,
                 mr);
     }
 

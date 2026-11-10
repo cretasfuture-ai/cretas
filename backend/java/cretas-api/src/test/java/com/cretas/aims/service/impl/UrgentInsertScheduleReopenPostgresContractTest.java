@@ -263,7 +263,7 @@ class UrgentInsertScheduleReopenPostgresContractTest {
         // 预览: 独立事务建临时计划算完回滚, 一行不留; 取消的日调度计划不再堵死
         Proposal preview = service.dryRun(factory, slot, insert);
         assertThat(preview.ok()).as("预览: " + preview.message()).isTrue();
-        assertThat(preview.warnings()).anyMatch(w -> w.contains("重新启用"));
+        assertThat(preview.warnings()).anyMatch(w -> w.contains("重开为草稿"));
         assertThat(statusOfContainer(containerId)).as("预览不改调度计划").isEqualTo("cancelled");
         assertThat(jdbc.queryForObject("SELECT count(*) FROM production_plans WHERE id = ?", Long.class, insert.getId()))
                 .as("预览的临时计划已回滚").isZero();

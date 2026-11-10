@@ -36,6 +36,7 @@ class LineScheduleTenantBoundaryContractTest {
     @Mock private PushNotificationService pushNotificationService;
     @Mock private SchedulingAIService schedulingAIService;
     @Mock private SchedulingPlanCrudService schedulingPlanCrudService;
+    @Mock private com.cretas.aims.repository.scheduling.CancelledPlanScheduleRepository cancelledPlanSchedules;
     @InjectMocks private LineScheduleServiceImpl service;
 
     @Test
