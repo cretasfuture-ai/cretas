@@ -107,12 +107,20 @@ class UrgentInsertScheduleContractTest {
         when(constraints.findLiveEndingFrom(eq(F), any())).thenReturn(List.of(rowA, runningRow, otherLineRow, rowB));
         when(plans.findByIdAndFactoryId("PLAN-A", F)).thenReturn(Optional.of(planA));
         when(plans.findByIdAndFactoryId("PLAN-B", F)).thenReturn(Optional.of(planB));
-        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), any())).thenReturn(Optional.empty());
+        when(schedulingPlans.findDayPlanHead(eq(F), any())).thenReturn(Optional.empty());
         when(schedulingPlans.lockDayPlan(eq(F), any())).thenReturn(Optional.empty());
         when(schedulingPlans.save(any(SchedulingPlan.class))).thenAnswer(i -> i.getArgument(0));
+        when(schedulingPlans.saveAndFlush(any(SchedulingPlan.class))).thenAnswer(i -> i.getArgument(0));
     }
 
     // ------------------------------------------------------------------ fixtures
+
+    private static SchedulingPlanRepository.DayPlanHead head(SchedulingPlan p) {
+        return new SchedulingPlanRepository.DayPlanHead() {
+            @Override public String getId() { return p.getId(); }
+            @Override public SchedulingPlan.PlanStatus getStatus() { return p.getStatus(); }
+        };
+    }
 
     private static ProductionPlan plan(String id, String number, LocalDate due, String orderId) {
         ProductionPlan p = new ProductionPlan();
@@ -361,8 +369,9 @@ class UrgentInsertScheduleContractTest {
     void closedDayContainerBlocksAtPreviewTimeAndWritesNothing() {
         happyEngine();
         SchedulingPlan closed = new SchedulingPlan();
+        closed.setId("SP-CLOSED");
         closed.setStatus(SchedulingPlan.PlanStatus.completed);
-        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), eq(DAY))).thenReturn(Optional.of(closed));
+        when(schedulingPlans.findDayPlanHead(eq(F), eq(DAY))).thenReturn(Optional.of(head(closed)));
         when(schedulingPlans.lockDayPlan(eq(F), eq(DAY))).thenReturn(Optional.of(closed));
         when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
 
@@ -382,7 +391,7 @@ class UrgentInsertScheduleContractTest {
         SchedulingPlan cancelled = new SchedulingPlan();
         cancelled.setId("SP-CANCELLED");
         cancelled.setStatus(SchedulingPlan.PlanStatus.cancelled);
-        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), eq(DAY))).thenReturn(Optional.of(cancelled));
+        when(schedulingPlans.findDayPlanHead(eq(F), eq(DAY))).thenReturn(Optional.of(head(cancelled)));
         when(schedulingPlans.lockDayPlan(eq(F), eq(DAY))).thenReturn(Optional.of(cancelled));
         when(lineSchedules.findByPlanId("SP-CANCELLED")).thenReturn(List.of(rows));
         return cancelled;
@@ -460,7 +469,7 @@ class UrgentInsertScheduleContractTest {
         draft.setId("SP-DRAFT");
         draft.setStatus(SchedulingPlan.PlanStatus.draft);
         draft.setNotes("原备注");
-        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), eq(DAY))).thenReturn(Optional.of(draft));
+        when(schedulingPlans.findDayPlanHead(eq(F), eq(DAY))).thenReturn(Optional.of(head(draft)));
         when(schedulingPlans.lockDayPlan(eq(F), eq(DAY))).thenReturn(Optional.of(draft));
 
         service.apply(F, slot, insert, null, 7L);
@@ -522,6 +531,21 @@ class UrgentInsertScheduleContractTest {
     }
 
     @Test
+    void creatingTheDayPlanRacingAnotherCreatorIsA409NotA500AtCommit() {
+        happyEngine();
+        when(schedulingPlans.saveAndFlush(any(SchedulingPlan.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uk_scheduling_plans_factory_date"));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_CONTAINER_RACE");
+                });
+        verify(lineSchedules, never()).save(org.mockito.ArgumentMatchers.argThat(
+                ls -> "PLAN-INS".equals(ls.getProductionPlanId())));
+    }
+
+    @Test
     void theSameStoredStateGivesTheSameFingerprintAtPreviewAndConfirm() {
         happyEngine();
         when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
@@ -547,7 +571,8 @@ class UrgentInsertScheduleContractTest {
 
         assertThat(p.status()).isEqualTo(UrgentInsertScheduleService.BLOCKED);
         assertThat(p.message()).contains("牛肉丸").contains("kg").contains("没填日产能").contains("PA-1、URGENT-1")
-                .doesNotContain("DailyCapacityRequiredDTO");
+                .doesNotContain("DailyCapacityRequiredDTO").doesNotContain("productTypeId=").doesNotContain("PT-9")
+                .doesNotContain("reason=").doesNotContain("jointPlan");
     }
 
     // ------------------------------------------------------------------ 谁能被挤: 只有整个计划都没开工、都在这条线上

@@ -29,6 +29,17 @@ public interface SchedulingPlanRepository extends JpaRepository<SchedulingPlan, 
      * 同一天的调度计划行加悲观写锁 (SELECT ... FOR UPDATE)。重开已取消的日调度计划前先锁, 锁到之后重读状态,
      * 并发的另一条路径 (紧急插单 / 自动排程) 已经重开就按「已存在」处理。
      */
+    /** 当天调度计划的 id 与状态 (标量查询, 不把实体载入持久化上下文: 之后 lockDayPlan 才会读到加锁后的最新状态)。 */
+    interface DayPlanHead {
+        String getId();
+
+        SchedulingPlan.PlanStatus getStatus();
+    }
+
+    @Query("SELECT sp.id AS id, sp.status AS status FROM SchedulingPlan sp WHERE sp.factoryId = :factoryId "
+            + "AND sp.planDate = :planDate AND sp.deletedAt IS NULL")
+    Optional<DayPlanHead> findDayPlanHead(@Param("factoryId") String factoryId, @Param("planDate") LocalDate planDate);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT sp FROM SchedulingPlan sp WHERE sp.factoryId = :factoryId AND sp.planDate = :planDate "
             + "AND sp.deletedAt IS NULL")

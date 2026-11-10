@@ -268,9 +268,10 @@ public class UrgentInsertScheduleService {
         // 插入首日的调度计划: 已完成排不进去; 已取消的可以重新启用 (取消后没有任何入口能重开, 而同一天只能有一个
         // 调度计划, 不重用这一天就永远插不了); 预览阶段就说清, 不等确认才失败
         List<String> warnings = new ArrayList<>(raw.warnings() == null ? List.of() : raw.warnings());
-        SchedulingPlan container = schedulingPlanRepository
-                .findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, firstDayOf(mine)).orElse(null);
-        String blocked = containerBlockReason(container, firstDayOf(mine));
+        SchedulingPlanRepository.DayPlanHead container = schedulingPlanRepository
+                .findDayPlanHead(factoryId, firstDayOf(mine)).orElse(null);
+        String blocked = containerBlockReason(container == null ? null : container.getId(),
+                container == null ? null : container.getStatus(), firstDayOf(mine));
         if (blocked != null) {
             return new Computation(new Proposal(BLOCKED, blocked, null, null, List.of(), warnings, null),
                     raw, insertPlan, movableByPlan, plansById, firstDay);
@@ -287,15 +288,15 @@ public class UrgentInsertScheduleService {
      * 插入首日的调度计划能不能承接插单。null = 能 (没有 / 进行中 / 已取消且名下没有已开工的排程)。
      * 已完成: 整天做完了, 不塞。已取消但名下还有已开工 (in_progress / delayed) 的排程: 动它等于动在做的活, 不碰。
      */
-    private String containerBlockReason(SchedulingPlan container, LocalDate day) {
-        if (container == null) {
+    private String containerBlockReason(String containerId, SchedulingPlan.PlanStatus status, LocalDate day) {
+        if (containerId == null) {
             return null;
         }
-        if (container.getStatus() == SchedulingPlan.PlanStatus.completed) {
+        if (status == SchedulingPlan.PlanStatus.completed) {
             return "插入首日 " + day + " 的调度计划已完成，无法排入，请改选其他时段";
         }
-        if (container.getStatus() == SchedulingPlan.PlanStatus.cancelled) {
-            boolean started = lineScheduleRepository.findByPlanId(container.getId()).stream().anyMatch(ls ->
+        if (status == SchedulingPlan.PlanStatus.cancelled) {
+            boolean started = lineScheduleRepository.findByPlanId(containerId).stream().anyMatch(ls ->
                     ls.getStatus() == LineSchedule.ScheduleStatus.in_progress
                             || ls.getStatus() == LineSchedule.ScheduleStatus.delayed
                             || ls.getActualStartTime() != null && ls.getStatus() != LineSchedule.ScheduleStatus.cancelled
@@ -360,7 +361,7 @@ public class UrgentInsertScheduleService {
      * 手改的日期在确认时被悄悄覆盖 (统一验收 2026-11-10 实测)。
      */
     private static String fingerprint(PlanResult mine, ConstrainedSchedulePreview raw, List<Moved> moved,
-                                      Map<String, List<LineSchedule>> movableByPlan, SchedulingPlan container) {
+                                      Map<String, List<LineSchedule>> movableByPlan, SchedulingPlanRepository.DayPlanHead container) {
         Set<String> movedIds = moved.stream().map(Moved::planId).collect(Collectors.toSet());
         StringBuilder canon = new StringBuilder(daysOf(mine));
         canon.append("|DAY=").append(container == null ? "none" : container.getId() + ":" + container.getStatus());
@@ -439,9 +440,17 @@ public class UrgentInsertScheduleService {
             container.setNotes("紧急插单自动排入");
             container.setCreatedBy(userId);
             container.setStatus(SchedulingPlan.PlanStatus.draft);
-            container = schedulingPlanRepository.save(container);
+            try {
+                // 立刻 flush: 同一天只能有一个调度计划 (唯一约束), 和自动排程在同一个新日子上竞争时,
+                // 在这里就把唯一约束冲突翻成 409, 而不是拖到提交时变成 500
+                container = schedulingPlanRepository.saveAndFlush(container);
+            } catch (org.springframework.dao.DataIntegrityViolationException race) {
+                throw new BusinessException(409, "插入首日 " + day + " 的调度计划刚被另一处创建，请重新预览")
+                        .withCode("INSERT_SCHEDULE_CONTAINER_RACE")
+                        .withHint("重新创建确认预览，会接到那个调度计划下");
+            }
         } else {
-            String blocked = containerBlockReason(container, day);
+            String blocked = containerBlockReason(container.getId(), container.getStatus(), day);
             if (blocked != null) {
                 throw new BusinessException(409, blocked)
                         .withCode("INSERT_SCHEDULE_CONTAINER_CLOSED")
