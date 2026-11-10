@@ -10,7 +10,7 @@
 | A3 批次放行 | `quality.batch_release.mode` | `QC_ONLY` | `QC_ONLY` / `QC_OR_MANUAL` |
 | | `quality.batch_release.manual_roles` | 空（不另限角色） | 角色代码逗号分隔 |
 | | `quality.batch_release.require_reason` | `1` | `1` / `0` |
-| A7 完工必须先结单 | `production.completion.require_settlement` | `1`（存量工厂按原口径回填） | `1` / `0` |
+| A7 完工必须先结单 | `production.completion.require_settlement` | `1`（所有工厂含存量，Steve 2026-11-10） | `1` / `0` |
 | A11 仓库多收 | `production.receipt.over_receive_mode` | `BLOCK` | `BLOCK` / `WITHIN_RATE` / `ALWAYS_WITH_REASON` |
 | | `production.receipt.over_receive_rate` | `0.05` | 小数比率 |
 | A13 解冻补登 | `production.time_limit.thaw_backfill_max_minutes` | `480` | 0 = 不许补登 |
@@ -36,6 +36,7 @@
 - web 入库确认弹窗：本厂允许多收时，实收输入不再封顶报产量；多收与少收一样要选差异原因 + 责任侧（复用原有控件）。
 - web 逐道录入时限面板：「开始解冻」旁加「补登实际时间」，填时间 + 补登原因。
 - RN 计划管理「完成生产」弹窗：实际产量超过计划时出现「超产原因」输入（下方 UX Flow Analysis）。
+- RN 两个完工入口（计划管理、调度计划详情）收到 409 `PRODUCTION_SETTLEMENT_REQUIRED` 时，不弹原始错误，改为专门提示「本厂要求先结单，请到网页端结单」并给出网页端路径「生产管理 → 生产计划」(`/production/plans`)。
 - RN 没有批次放行、生产入库、解冻登记入口，无需改；web 不调直接完工、没有改批次状态的页面，无需改。
 
 ## UX Flow Analysis（ux-flow 门控产出，不可删除）

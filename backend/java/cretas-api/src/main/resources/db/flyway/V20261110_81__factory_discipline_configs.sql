@@ -4,13 +4,13 @@
 -- factory_thresholds (阈值中心: 工厂行 > 全局 '*' 行 > 代码兜底), ⛔ 不新建注册表。
 --
 -- 本迁移只插【全局默认行】(factory_id = '*'), 不给具体工厂插行 —— 「没有工厂行」就是
--- 「跟随全局默认」(同 V20261101_03 的理由)。唯一例外是 A7 的存量按现状回填, 见第 3 节。
+-- 「跟随全局默认」(同 V20261101_03 的理由)。
 --
 -- 默认值 = Steve 裁定的默认:
 --   A3  quality.batch_release.mode                    QC_ONLY   只能走质检放行
 --       quality.batch_release.manual_roles            ''        (改为 QC_OR_MANUAL 时) 谁能手动放行; 空 = 不另限角色
 --       quality.batch_release.require_reason          1         手动放行必须填原因
---   A7  production.completion.require_settlement      1         完工必须先结单 (开)
+--   A7  production.completion.require_settlement      1         完工必须先结单 (开, 所有工厂含存量)
 --   A11 production.receipt.over_receive_mode          BLOCK     入库多收硬拦 (= 现状)
 --       production.receipt.over_receive_rate          0.05      WITHIN_RATE 模式下的比例
 --   A13 production.time_limit.thaw_backfill_max_minutes 480     解冻开始最多往前补登 8 小时
@@ -71,21 +71,9 @@ CREATE INDEX IF NOT EXISTS idx_mbr_factory ON material_batch_releases (factory_i
 COMMENT ON TABLE material_batch_releases IS
   '批次放行台账 (纪律排查 A3): 谁、从什么状态、经哪条路、因为什么把批次改成可投产。released_by 为空仅当调用方确实没有登录人 (系统任务)。';
 
--- 3. A7 存量工厂按现状回填 -------------------------------------------------------
--- 旧口径: 必须结单 = factory_settings.skip_process_reporting_default; 该列为 NULL/无行时写死 F006。
--- 新口径默认开。为不让存量工厂上线即改变行为 (RN 没有结单入口, 默认开会把手机上的计划完工全部拦掉),
--- 今天【不需要】结单的存量工厂显式写一行 0 (= 允许直接完工), 与旧口径逐厂一致; 需要结单的不写行, 跟随默认开。
--- 新建工厂没有行 ⇒ 默认开。
-INSERT INTO factory_thresholds
-  (factory_id, threshold_key, category, value_type, threshold_value, default_value,
-   description, unit, min_value, max_value)
-SELECT f.id, 'production.completion.require_settlement', 'PRODUCTION', 'INTEGER', '0', '1',
-       '计划完工是否必须先核对结单 (上线时按本厂原有口径回填为 0 = 允许直接完工)。',
-       NULL, '0', '1'
-  FROM factories f
-  LEFT JOIN factory_settings fs ON fs.factory_id = f.id
- WHERE COALESCE(fs.skip_process_reporting_default, UPPER(f.id) = 'F006') = FALSE
-ON CONFLICT (factory_id, threshold_key) WHERE deleted_at IS NULL DO NOTHING;
+-- 3. A7 默认开对所有工厂生效 (Steve 2026-11-10 定口径, 含存量工厂与 LIUSHANMEN) ----------
+-- 不逐厂写配置行: 全局行 = 1 即所有工厂默认要求先结单; 工厂想允许直接完工, 自己在阈值中心配一行 0。
+-- RN 没有结单入口, 手机上直接完工会收到 409 PRODUCTION_SETTLEMENT_REQUIRED, App 专门提示去网页端结单。
 
 -- 4. A7 直接完工的超产原因 ------------------------------------------------------
 ALTER TABLE production_plans ADD COLUMN IF NOT EXISTS over_plan_reason VARCHAR(500);

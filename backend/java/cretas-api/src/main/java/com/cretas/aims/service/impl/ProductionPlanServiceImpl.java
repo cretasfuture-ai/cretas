@@ -9273,7 +9273,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
     /**
      * 纪律排查 A7: 「完工必须先结单」是工厂开关 (默认开), 不再看 skip_process_reporting_default + 写死 F006。
-     * 存量工厂的原口径由 V20261110_81 逐厂回填。未注入策略 (只在单测里) 按默认开。
+     * 默认开对所有工厂生效 (Steve 2026-11-10, 含存量); 工厂可显式配成关。未注入策略 (只在单测里) 按默认开。
      */
     private boolean requiresProductionSettlement(String factoryId) {
         return disciplinePolicy == null || disciplinePolicy.requireSettlementBeforeComplete(factoryId);

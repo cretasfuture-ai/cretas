@@ -35,6 +35,7 @@ import { CustomerSelector } from '../../components/common/CustomerSelector';
 import { MaterialBatchSelector, SelectedBatch, AvailableBatch } from '../../components/common/MaterialBatchSelector';
 import { MaterialBatch } from '../../services/api/materialBatchApiClient';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
+import { settlementRequiredNotice } from '../../utils/settlementRequired';
 import { logger } from '../../utils/logger';
 import { formatDate, parseYmdOrToday } from '../../utils/formatters';
 import { settleAllIndependently } from '../../utils/settleAllIndependently';
@@ -657,7 +658,9 @@ export default function ProductionPlanManagementScreen() {
         planId: completingPlan.id,
         actualQuantity: actualQty,
       });
-      appAlert('错误', getErrorMsg(error) || '操作失败');
+      // A7: 本厂要求先结单 → 说清去网页端哪里结单, 不弹原始错误; 弹窗保留不清空
+      const settlement = settlementRequiredNotice(error, completingPlan.planNumber || completingPlan.id);
+      appAlert(settlement ? settlement.title : '错误', settlement ? settlement.message : (getErrorMsg(error) || '操作失败'));
     } finally {
       setCompleteLoading(false);
     }
