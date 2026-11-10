@@ -45,15 +45,20 @@ import java.util.stream.Collectors;
 @Service
 public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentService {
 
-    /** 降价阈值: 超过此比例需审批 */
-    private static final BigDecimal DECREASE_THRESHOLD_PCT = new BigDecimal("10");
-    /** 涨价阈值: 超过此比例需审批 */
-    private static final BigDecimal INCREASE_THRESHOLD_PCT = new BigDecimal("20");
+    // 降价 / 涨价审批阈值按工厂配置 (纪律排查 B11): 见 PriceAdjustmentApprovalThresholds, 默认 10% / 20%。
 
     private final SalesOrderRepository salesOrderRepository;
     private final SalesOrderItemRepository salesOrderItemRepository;
     private final SalesPriceAdjustmentRecordRepository adjustmentRecordRepository;
     private final UserRepository userRepository;
+
+    /** 纪律排查 B11: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
+    /** 纪律排查 B11: 改价审批阈值按工厂配置。未注入 = 默认 10% / 20% (与改动前一致)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds approvalThresholds;
 
     /** N9 optional — factories without approval chain config skip approval flow */
     @Autowired(required = false)
@@ -196,8 +201,15 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
     @Override
     @Transactional
     public SalesPriceAdjustmentRecordDTO approvePriceAdjustment(String factoryId, String recordId, Long approverId) {
+        return approvePriceAdjustment(factoryId, recordId, approverId, null);
+    }
+
+    @Override
+    @Transactional
+    public SalesPriceAdjustmentRecordDTO approvePriceAdjustment(String factoryId, String recordId, Long approverId,
+                                                                String selfApprovalReason) {
         SalesPriceAdjustmentRecord record = loadPendingRecord(factoryId, recordId);
-        ensureFourEyes(record, approverId);
+        ensureFourEyes(factoryId, record, approverId, selfApprovalReason);
 
         // Load the line + order to apply the held price change.
         SalesOrderItem line = salesOrderItemRepository.findById(record.getSalesOrderLineId())
@@ -235,7 +247,8 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
                     .withHintTarget("reason");
         }
         SalesPriceAdjustmentRecord record = loadPendingRecord(factoryId, recordId);
-        ensureFourEyes(record, approverId);
+        // 驳回自己的改价: 驳回原因即本人审批原因
+        ensureFourEyes(factoryId, record, approverId, reason);
 
         // Reject: discard the price change (line price untouched), only mark record.
         record.setApprovalStatus(ApprovalStatus.REJECTED);
@@ -277,13 +290,24 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
 
     /**
      * 🔒 4 眼原则: 审批人不能与改价提交人 (adjustedBy) 相同.
+     *
+     * <p>纪律排查 B11 (Owner 2026-11-10): 工厂开了「允许本人审批」时改价人可自批, 必须写原因;
+     * 放行时在改价记录上留痕 (selfApproved + 原因)。
      */
-    private void ensureFourEyes(SalesPriceAdjustmentRecord record, Long approverId) {
-        if (record.getAdjustedBy() != null && record.getAdjustedBy().equals(approverId)) {
+    private void ensureFourEyes(String factoryId, SalesPriceAdjustmentRecord record, Long approverId,
+                                String selfApprovalReason) {
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate, factoryId,
+                        record.getAdjustedBy() != null && record.getAdjustedBy().equals(approverId),
+                        selfApprovalReason);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(403, "审批人不能与改价提交人相同 (4 眼原则)")
-                    .withHint("请使用其他账号审批")
+                    .withHint("请使用其他账号审批; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT)
                     .withHintTarget("审批人");
         }
+        record.setSelfApproved(selfDecision.selfApproved());
+        record.setSelfApprovalReason(selfDecision.selfApproved() ? selfDecision.reason() : null);
     }
 
     /**
@@ -305,19 +329,23 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
                 .multiply(new BigDecimal("100"))
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // Threshold-based rule
+        // Threshold-based rule (纪律排查 B11: 按工厂配置, 默认 10% / 20%)
+        com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds.Thresholds thresholds =
+                approvalThresholds == null
+                        ? com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds.Thresholds.DEFAULT
+                        : approvalThresholds.forFactory(factoryId);
         if (changePct.compareTo(BigDecimal.ZERO) < 0) {
             // Decrease
-            if (changePct.abs().compareTo(DECREASE_THRESHOLD_PCT) > 0) {
+            if (changePct.abs().compareTo(thresholds.decreasePct()) > 0) {
                 log.debug("降价 {}% > {}% 阈值, 触发审批: orderId={}",
-                        changePct.abs(), DECREASE_THRESHOLD_PCT, order.getId());
+                        changePct.abs(), thresholds.decreasePct(), order.getId());
                 return true;
             }
         } else {
             // Increase
-            if (changePct.compareTo(INCREASE_THRESHOLD_PCT) > 0) {
+            if (changePct.compareTo(thresholds.increasePct()) > 0) {
                 log.debug("涨价 {}% > {}% 阈值, 触发审批: orderId={}",
-                        changePct, INCREASE_THRESHOLD_PCT, order.getId());
+                        changePct, thresholds.increasePct(), order.getId());
                 return true;
             }
         }

@@ -78,10 +78,14 @@ class QualityDispositionControllerSecurityContractTest {
                 "approveDisposition", String.class, String.class,
                 DispositionApproveRequest.class, Long.class);
 
-        RequireRole roleGate = method.getAnnotation(RequireRole.class);
-        assertNotNull(roleGate);
-        assertTrue(Arrays.asList(roleGate.value()).contains("quality_manager"));
-        assertFalse(Arrays.asList(roleGate.value()).contains("quality_inspector"));
+        // 纪律排查 B3: 审批人按权限码 (默认授权 quality_manager / 超管 / permission_admin, 不含 quality_inspector ——
+        // 逐岗位断言在 PermissionServiceImplApprovalCodesContractTest), 不再写死岗位名
+        com.cretas.aims.annotation.RequirePermission gate =
+                method.getAnnotation(com.cretas.aims.annotation.RequirePermission.class);
+        assertNotNull(gate);
+        assertTrue(Arrays.asList(gate.value()).contains("approval_quality_disposition:approve"));
+        assertFalse(Arrays.asList(gate.value()).contains("quality:read_write"));
+        assertNull(method.getAnnotation(RequireRole.class));
         assertNotNull(method.getAnnotation(Transactional.class));
     }
 

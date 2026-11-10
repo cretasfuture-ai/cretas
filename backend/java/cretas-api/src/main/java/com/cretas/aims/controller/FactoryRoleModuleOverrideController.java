@@ -30,6 +30,9 @@ public class FactoryRoleModuleOverrideController {
         "dashboard","production","warehouse","quality","procurement","sales",
         "hr","equipment","finance","system","analytics","scheduling",
         "work_report","inventory","report","rd","production_report_correction",
+        // 纪律排查 B1–B3/B11/B15 审批权限码 (Steve 2026-11-10): 各厂可改授给哪些岗位; 默认见 PermissionServiceImpl.APPROVAL_*
+        "approval_report_reversal","approval_stocktake","approval_quality_disposition",
+        "approval_price_adjustment","approval_refund",
         // 2026-09-07 清单收敛刀 B: 与 PlatformRolePermissionController.ALLOWED_MODULES 逐字相同 (闸钉着), 补 operations。
         "operations");
     private static final Set<String> ALLOWED_LEVELS = Set.of("rw","r","w","-");

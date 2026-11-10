@@ -48,6 +48,14 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
     private final ObjectMapper objectMapper;
     private final QualityDispositionDecisionGuard decisionGuard;
 
+    /** 纪律排查 B3: 审批权限码 (默认 = APPROVER_ROLES, 各厂可改)。未注入 (手工构造的单测) = 按默认名单。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.ApprovalAuthority approvalAuthority;
+
+    /** 纪律排查 B3: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
     public static final String SPECIAL_APPROVAL_SELF_APPROVAL = "SPECIAL_APPROVAL_SELF_APPROVAL";
     public static final String SPECIAL_APPROVAL_ROLE_FORBIDDEN = "SPECIAL_APPROVAL_ROLE_FORBIDDEN";
     public static final String SPECIAL_APPROVAL_ACTOR_UNKNOWN = "SPECIAL_APPROVAL_ACTOR_UNKNOWN";
@@ -201,7 +209,10 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         }
 
         // 审批身份 (与 /approve 同口径, 批准和驳回都要过): 在任何写入之前。所有入口 (App 接口、AI 工具) 都经过这里。
-        assertMayDecide(auditLog, approverId, actingUserId, actingRole);
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                assertMayDecide(auditLog, approverId, actingUserId, actingRole,
+                        firstNonBlank(decision.getSelfApprovalReason(),
+                                decision.isCommentIsPlaceholder() ? null : decision.getComment()));
 
         // 2. 获取审批人信息
         User approver = userRepository.findById(approverId)
@@ -239,6 +250,9 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         auditLog.setApproverName(approver.getName());
         auditLog.setApprovedAt(LocalDateTime.now());
         auditLog.setApprovalComment(decision.getComment());
+        // 纪律排查 B3: 本人审批 (批准或驳回自己的申请) 留痕
+        auditLog.setSelfApproved(selfDecision.selfApproved());
+        auditLog.setSelfApprovalReason(selfDecision.selfApproved() ? selfDecision.reason() : null);
 
         // 4. 更新输出结果
         Map<String, Object> outputResult = new HashMap<>();
@@ -364,7 +378,8 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
      * 谁能对这条申请做决定。身份以已认证的操作人为准 ({@code actingUserId} / {@code actingRole}, 调用方从令牌或 AI 执行上下文取);
      * 记录在审批行上的 {@code approverId} 若等于申请人同样拒绝 —— 否则审批行上会出现「申请人批了自己」。
      */
-    private static void assertMayDecide(DecisionAuditLog auditLog, Long approverId, Long actingUserId, String actingRole) {
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision assertMayDecide(
+            DecisionAuditLog auditLog, Long approverId, Long actingUserId, String actingRole, String selfApprovalReason) {
         if (actingUserId == null) {
             throw new BusinessException(403, "无法确认审批人身份")
                     .withCode(SPECIAL_APPROVAL_ACTOR_UNKNOWN)
@@ -374,17 +389,32 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         // 平台管理员只认已认证的平台身份, 不认角色字符串 (工厂令牌写着平台角色不算数)
         boolean platformApprover = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
                 .filter(com.cretas.aims.security.AuthenticatedActor::hasFactoryBypass).isPresent();
-        if (!platformApprover && (role == null || !APPROVER_ROLES.contains(role))) {
-            throw new BusinessException(403, "当前角色不能审批质检处置申请")
+        boolean mayApprove = approvalAuthority != null
+                ? approvalAuthority.canApprove(actingUserId,
+                        com.cretas.aims.service.impl.PermissionServiceImpl.APPROVAL_QUALITY_DISPOSITION)
+                : role != null && APPROVER_ROLES.contains(role);
+        if (!platformApprover && !mayApprove) {
+            throw new BusinessException(403, "当前账号没有质检处置审批权限")
                     .withCode(SPECIAL_APPROVAL_ROLE_FORBIDDEN)
-                    .withHint("请由质量经理或工厂超级管理员审批");
+                    .withHint("默认由质量经理或工厂超级管理员审批; 工厂管理员可在权限配置里把「质检处置审批」授给其他岗位");
         }
-        if (Objects.equals(auditLog.getExecutorId(), actingUserId)
-                || (approverId != null && Objects.equals(auditLog.getExecutorId(), approverId))) {
+        // 纪律排查 B3 (Owner 2026-11-10): 工厂开了「允许本人审批」时申请人可自批, 必须写原因并留痕。
+        boolean self = Objects.equals(auditLog.getExecutorId(), actingUserId)
+                || (approverId != null && Objects.equals(auditLog.getExecutorId(), approverId));
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
+                        selfApprovalGate, auditLog.getFactoryId(), self, selfApprovalReason);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(403, "申请人与审批人不能为同一用户")
                     .withCode(SPECIAL_APPROVAL_SELF_APPROVAL)
-                    .withHint("请由申请人以外的质量经理审批");
+                    .withHint("请由申请人以外的质量经理审批; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
+        return selfDecision;
+    }
+
+    private static String firstNonBlank(String preferred, String fallback) {
+        return preferred != null && !preferred.isBlank() ? preferred : fallback;
     }
 
     /** 审批行里记的处置动作; 认不出就在写任何东西之前拒绝, 不把一条执行不了的审批标成已批准。 */

@@ -33,12 +33,12 @@ public class OrderApprovalTool extends AbstractBusinessTool {
     private ToolRbacGuard rbacGuard;
 
     /**
-     * 与 App 的审批入口同一份审批角色 (SpecialApprovalService.APPROVER_ROLES): ToolRbacEnforcer 先挡一道;
-     * 真正的权威校验 (角色 + 申请人不能自批) 在 SpecialApprovalService.processDecision 里, 所有入口都过。
+     * 纪律排查 B3: 与 App 两个审批入口同一个审批权限码 (按各厂配置; 默认 = SpecialApprovalService.APPROVER_ROLES)。
+     * ToolRbacEnforcer 先挡一道; 真正的权威校验 (权限码 + 申请人不能自批) 在 SpecialApprovalService.processDecision 里, 所有入口都过。
      */
     @Override
-    public Set<String> getRequiredRoles() {
-        return SpecialApprovalService.APPROVER_ROLES;
+    public Set<String> getRequiredPermissions() {
+        return Set.of("approval_quality_disposition:approve");
     }
 
     @Override
@@ -71,7 +71,7 @@ public class OrderApprovalTool extends AbstractBusinessTool {
 
         Map<String, Object> reason = new HashMap<>();
         reason.put("type", "string");
-        reason.put("description", "拒绝原因（拒绝时需要）");
+        reason.put("description", "拒绝原因（拒绝时需要）；审批的是用户自己提交的申请时，这里填用户说的本人审批原因，不要自己编");
         properties.put("reason", reason);
 
         schema.put("properties", properties);
@@ -97,7 +97,9 @@ public class OrderApprovalTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         String approvalId = getString(params, "transferId");
         boolean isReject = Boolean.TRUE.equals(params.get("reject"));
-        String reason = getString(params, "reason");
+        String rawReason = getString(params, "reason");
+        // 只认模型从用户那里拿到的原因; 空白当没给
+        String reason = rawReason == null || rawReason.isBlank() ? null : rawReason.trim();
 
         // Extract approverId from context if available
         Long approverId = null;
@@ -111,11 +113,25 @@ public class OrderApprovalTool extends AbstractBusinessTool {
                     ? ApprovalDecisionRequest.ApprovalDecision.REJECT
                     : ApprovalDecisionRequest.ApprovalDecision.APPROVE);
             decision.setComment(reason != null ? reason : (isReject ? "拒绝" : "通过"));
+            // 纪律排查 B3 / #1580 审查必修 2: 「通过」「拒绝」是代填的占位词, 不能当本人审批原因
+            decision.setCommentIsPlaceholder(reason == null);
+            decision.setSelfApprovalReason(reason);
 
             // 审批身份 = 执行上下文里的已认证用户 (不是模型给的参数)
             SpecialApprovalDTO result = specialApprovalService.processDecision(factoryId, approvalId, decision,
                     approverId, approverId, rbacGuard.roleOf(context));
             return buildSimpleResult(isReject ? "审批拒绝成功" : "审批通过成功", result);
+        } catch (com.cretas.aims.exception.BusinessException e) {
+            if (com.cretas.aims.service.workflow.FactorySelfApprovalGate.REASON_REQUIRED.equals(e.getErrorCode())) {
+                // 不审批, 回去追问用户本人审批的原因 (不替用户编)
+                throw new com.cretas.aims.exception.BusinessException(422,
+                        "这是你自己提交的申请。本厂允许本人审批，但需要你说明原因：请告诉我为什么由你本人审批，我再提交。")
+                        .withCode(com.cretas.aims.service.workflow.FactorySelfApprovalGate.REASON_REQUIRED)
+                        .withHintTarget("reason");
+            }
+            log.warn("订单审批被拒: factoryId={}, approvalId={}, isReject={}, code={}",
+                    factoryId, approvalId, isReject, e.getErrorCode());
+            throw e;
         } catch (Exception e) {
             log.error("订单审批失败: factoryId={}, approvalId={}, isReject={}", factoryId, approvalId, isReject, e);
             throw e;

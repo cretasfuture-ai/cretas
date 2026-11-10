@@ -127,6 +127,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderItemRepository salesOrderItemRepository;
 
+    /** 纪律排查 B1: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
     /** 缺口 11 第二轮审查 M1: 撤回某次报工时只解除它自己未放行的待检 (分笔账)。未注入 = 不解除 (保守)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.quality.release.SemiQcHoldLots semiQcHoldLots;
@@ -1840,6 +1844,12 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @Override
     @Transactional
     public void approveReversal(String factoryId, Long logId, Long approvedBy) {
+        approveReversal(factoryId, logId, approvedBy, null);
+    }
+
+    @Override
+    @Transactional
+    public void approveReversal(String factoryId, Long logId, Long approvedBy, String selfApprovalReason) {
         ReportReversalLog log_ = findReversalLogForUpdate(logId, factoryId);
         // 跨租户校验: 撤回日志须属于当前工厂 (防止越权批准其它工厂的撤回执行)
         if (log_.getFactoryId() == null || !log_.getFactoryId().equals(factoryId)) {
@@ -1862,11 +1872,21 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         // W6 #27: 4 眼原则 — 审批人不能与提交人相同 (防自批漏洞)。
         // 撤回是高风险写操作 (软删报工 + 回滚库存均价), 提交人自己批准 = 无监督。
         // 参考 ArApServiceImpl 4-eyes 范式 (审批人 ≠ 提交人)。
-        if (log_.getSubmittedBy() != null && log_.getSubmittedBy().equals(approvedBy)) {
+        // 纪律排查 B1 (Owner 2026-11-10): 工厂开了「允许本人审批」时提交人可自批, 必须写原因并留痕。
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate, factoryId,
+                        log_.getSubmittedBy() != null && log_.getSubmittedBy().equals(approvedBy),
+                        selfApprovalReason);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(403, "审批人不能与提交人相同 (4 眼原则)")
                     .withCode("SELF_APPROVAL_FORBIDDEN")
-                    .withHint("请使用其他主管账号审批此撤回申请")
+                    .withHint("请使用其他主管账号审批此撤回申请; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT)
                     .withHintTarget("审批人");
+        }
+        if (selfDecision.selfApproved()) {
+            log_.setSelfApproved(true);
+            log_.setSelfApprovalReason(selfDecision.reason());
         }
         log_.setApprovedBy(approvedBy);
         log_.setApprovedAt(LocalDateTime.now());

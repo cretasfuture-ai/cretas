@@ -109,6 +109,10 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Autowired(required = false)
     private UserRepository userRepository;
 
+    /** 纪律排查 B2: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
     /** SP12 §5.2: optional — 测试时不注入 (required=false 打破构造器注入限制) */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
@@ -658,8 +662,15 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Transactional
     public void approve(String stocktakeId, String factoryId, Long approverId, String requestRole,
             Long expectedVersion) {
+        approve(stocktakeId, factoryId, approverId, requestRole, expectedVersion, null);
+    }
+
+    @Override
+    @Transactional
+    public void approve(String stocktakeId, String factoryId, Long approverId, String requestRole,
+            Long expectedVersion, String selfApprovalReason) {
         // 角色检查（C1 孪生坑：不用 SecurityContext）
-        assertApprovalRole(requestRole);
+        assertApprovalAuthority(approverId, requestRole);
         FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
         assertExpectedVersion(stocktake, expectedVersion);
         assertStatus(stocktake, FactoryStocktake.Status.PENDING_APPROVAL, "审批");
@@ -667,11 +678,17 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         boolean sameMaker = Objects.equals(stocktake.getInitiatedBy(), approverId)
                 || Objects.equals(stocktake.getCountedBy(), approverId)
                 || Objects.equals(stocktake.getSubmittedBy(), approverId);
-        if (hasDifference && sameMaker) {
+        // 纪律排查 B2 (Owner 2026-11-10): 工厂开了「允许本人审批」时可自批, 必须写原因并留痕。
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
+                        selfApprovalGate, factoryId, hasDifference && sameMaker, selfApprovalReason);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(409, "存在盘盈/盘亏时，发起人、盘点录入人或提交人不能审批自己的盘点")
                     .withCode("STOCKTAKE_SELF_APPROVAL_FORBIDDEN")
-                    .withHint("请由另一名财务经理或工厂管理员复核审批");
+                    .withHint("请由另一名财务经理或工厂管理员复核审批; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
+        markSelfApproval(stocktake, selfDecision);
         stocktake.setStatus(FactoryStocktake.Status.APPROVED);
         stocktake.setApprovedBy(approverId);
         stocktake.setApprovedAt(LocalDateTime.now());
@@ -683,7 +700,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public void reject(String stocktakeId, String factoryId, String reason, Long userId, String requestRole) {
-        assertApprovalRole(requestRole);
+        assertApprovalAuthority(userId, requestRole);
         FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
         assertStatus(stocktake, FactoryStocktake.Status.PENDING_APPROVAL, "驳回");
         stocktake.setStatus(FactoryStocktake.Status.REJECTED);
@@ -708,6 +725,23 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
 
     private static final java.util.Set<String> STOCKTAKE_RECOUNT_ROLES = java.util.Set.of(
             "warehouse_manager", "warehouse_worker", "factory_super_admin", "platform_admin");
+
+    /** 纪律排查 B2: 盘点差异审批权限码 (默认 = STOCKTAKE_APPROVAL_ROLES, 各厂可改)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.ApprovalAuthority approvalAuthority;
+
+    private void assertApprovalAuthority(Long approverId, String requestRole) {
+        if (approvalAuthority == null) {
+            // 手工构造的单测没有注入权限服务: 按默认名单 (= 权限码的默认授权)
+            assertApprovalRole(requestRole);
+            return;
+        }
+        if (!approvalAuthority.canApprove(approverId,
+                com.cretas.aims.service.impl.PermissionServiceImpl.APPROVAL_STOCKTAKE)) {
+            throw new BusinessException(403, "当前账号没有盘点差异审批权限")
+                    .withHint("默认由财务经理或工厂管理员审批; 工厂管理员可在权限配置里把「盘点差异审批」授给其他岗位");
+        }
+    }
 
     private void assertApprovalRole(String requestRole) {
         String normalized = requestRole == null ? "" : requestRole.toLowerCase();
@@ -1457,6 +1491,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         stocktake.setSubmittedBy(userId);
         stocktake.setSubmittedAt(LocalDateTime.now());
+        // 驳回后重提: 上一轮的本人审批留痕不带到新一轮
+        stocktake.setSelfApproved(false);
+        stocktake.setSelfApprovalReason(null);
 
         // ⚠️ 2026-08-27: 这一句原本只在下面的 else 分支里(没配审批流时)调。提到这里有两个理由:
         //   ① 它把 differenceQty / differenceType 归一化好 —— 下面构造流程上下文要读它们,
@@ -1552,6 +1589,17 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                     .withCode("STOCKTAKE_WORKFLOW_IDENTITY_MISMATCH");
         }
         if (instance.getStatus() != ApprovalWorkflowInstance.InstanceStatus.RUNNING) return stocktake;
+        // 纪律排查 B2 / #1580 权限审查 1: 现网盘点审批只走这里 (StocktakeController 直接审批恒 410),
+        // 盘点差异审批权限码要在这里判, 否则「谁能批」改了不生效。批准与驳回同一个权限。
+        // 未注入 (手工构造的单测) 时沿用改动前行为: 由 OA 节点的审批角色决定。
+        if (approvalAuthority != null
+                && (action == HistoryAction.APPROVE || action == HistoryAction.REJECT)
+                && !approvalAuthority.canApprove(actorId,
+                        com.cretas.aims.service.impl.PermissionServiceImpl.APPROVAL_STOCKTAKE)) {
+            throw new BusinessException(403, "当前账号没有盘点差异审批权限")
+                    .withCode("STOCKTAKE_APPROVAL_PERMISSION_REQUIRED")
+                    .withHint("默认由财务经理或工厂管理员审批; 工厂管理员可在「系统设置 → 审批规则 → 谁能审批」里调整");
+        }
         if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
             throw new BusinessException(422, "驳回盘点必须填写原因")
                     .withCode("STOCKTAKE_REJECT_REASON_REQUIRED");
@@ -1560,9 +1608,19 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         boolean sameMaker = Objects.equals(stocktake.getInitiatedBy(), actorId)
                 || Objects.equals(stocktake.getCountedBy(), actorId)
                 || Objects.equals(stocktake.getSubmittedBy(), actorId);
-        if (action == HistoryAction.APPROVE && hasDifference && sameMaker) {
+        // 纪律排查 B2: OA 审批意见 (notes) 即本人审批原因。
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate, factoryId,
+                        action == HistoryAction.APPROVE && hasDifference && sameMaker, notes);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(409, "存在盘盈/盘亏时，发起人、录入人或提交人不能审批自己的盘点")
-                    .withCode("STOCKTAKE_SELF_APPROVAL_FORBIDDEN");
+                    .withCode("STOCKTAKE_SELF_APPROVAL_FORBIDDEN")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
+        }
+        if (selfDecision.selfApproved()) {
+            // 多节点审批流里任何一个节点是本人批的都留痕 (不只最后一个节点)
+            stocktake.setSelfApproved(true);
+            stocktake.setSelfApprovalReason(selfDecision.reason());
         }
         ApprovalWorkflowInstance updated = workflowEngine.transitionNode(instanceId, actorId, actorRole, action, notes);
         if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
@@ -1577,6 +1635,13 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             stocktake.setApprovedAt(LocalDateTime.now());
         }
         return stocktakeRepo.save(stocktake);
+    }
+
+    /** 本人审批留痕 (纪律排查 B2)。不是本人审批时清掉, 防止驳回后重提的单带着旧标记。 */
+    private static void markSelfApproval(FactoryStocktake stocktake,
+            com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision decision) {
+        stocktake.setSelfApproved(decision.selfApproved());
+        stocktake.setSelfApprovalReason(decision.selfApproved() ? decision.reason() : null);
     }
 
     private void assertAllItemsCounted(FactoryStocktake stocktake) {

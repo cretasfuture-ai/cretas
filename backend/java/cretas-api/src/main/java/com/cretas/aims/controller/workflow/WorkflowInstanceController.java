@@ -335,8 +335,11 @@ public class WorkflowInstanceController {
         }
         if (instance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING
                 && !workflowEngine.canTransition(instance, user)) {
+            // 审批权限码 (如盘点差异审批) 只管「能不能批」; OA 流程里谁处理哪个节点仍由审批流模板决定。
+            // 给新岗位授了审批权限后, 还要把它加进审批流模板的这个节点 (#1580 复核 2)。
             throw new BusinessException(403, "您不属于当前审批节点的处理角色")
-                    .withCode("OA_TASK_FORBIDDEN");
+                    .withCode("OA_TASK_FORBIDDEN")
+                    .withHint("请工厂管理员在审批流模板里把你的岗位加入当前审批节点; 只在「谁能审批」里授权还不够");
         }
         HistoryAction action;
         try {
@@ -432,8 +435,11 @@ public class WorkflowInstanceController {
         }
         if (instance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.RUNNING
                 && !workflowEngine.canTransition(instance, user)) {
+            // 审批权限码 (如盘点差异审批) 只管「能不能批」; OA 流程里谁处理哪个节点仍由审批流模板决定。
+            // 给新岗位授了审批权限后, 还要把它加进审批流模板的这个节点 (#1580 复核 2)。
             throw new BusinessException(403, "您不属于当前审批节点的处理角色")
-                    .withCode("OA_TASK_FORBIDDEN");
+                    .withCode("OA_TASK_FORBIDDEN")
+                    .withHint("请工厂管理员在审批流模板里把你的岗位加入当前审批节点; 只在「谁能审批」里授权还不够");
         }
         if (purchaseOrderRepository == null) {
             throw new BusinessException(503, "演示订单校验服务不可用")

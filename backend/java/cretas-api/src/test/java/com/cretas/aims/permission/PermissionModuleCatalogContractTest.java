@@ -70,7 +70,13 @@ class PermissionModuleCatalogContractTest {
      * {@code [operations] 模块} 变成 {@code [运营协调] 模块}。
      */
     private static final Map<String, String> CODES_NEWLY_LABELLED_BY_CUT_D = Map.of(
-            "operations", "operations");
+            "operations", "operations",
+            // 纪律排查 B1–B3/B11/B15 (2026-11-10): 新建的审批权限码, 此前不存在, 没有旧 403 文案可变
+            "approval_report_reversal", "approval_report_reversal",
+            "approval_stocktake", "approval_stocktake",
+            "approval_quality_disposition", "approval_quality_disposition",
+            "approval_price_adjustment", "approval_price_adjustment",
+            "approval_refund", "approval_refund");
 
     @Test
     @DisplayName("覆盖面: 表里的码只能是「17 个既有 case」或「显式登记的新增」, 加码不登记就红")

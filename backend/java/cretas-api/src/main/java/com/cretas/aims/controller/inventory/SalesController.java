@@ -1162,16 +1162,20 @@ public class SalesController {
      */
     @PostMapping("/price-adjustments/{recordId}/approve")
     @Operation(summary = "审批通过改价 (PENDING → APPROVED, 应用改价 + 重算总额)")
-    @RequirePermission({"finance:read_write", "sales:read_write"})
+    // 纪律排查 B11: 审批权限码; 默认跟原门槛 finance / sales:read_write 走 (各厂可改)
+    @RequirePermission({"approval_price_adjustment:approve"})
     public ApiResponse<SalesPriceAdjustmentRecordDTO> approvePriceAdjustment(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String recordId,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody(required = false) java.util.Map<String, String> body) {
         Long approverId = extractUserId(authorization);
         log.info("改价审批通过请求: factoryId={}, recordId={}, approverId={}",
                 factoryId, recordId, approverId);
-        SalesPriceAdjustmentRecordDTO result =
-                priceAdjustmentService.approvePriceAdjustment(factoryId, recordId, approverId);
+        // 本人审批原因 (纪律排查 B11): 只在审批人就是改价人、且工厂开了「允许本人审批」时用到
+        String selfApprovalReason = body == null ? null : body.get("selfApprovalReason");
+        SalesPriceAdjustmentRecordDTO result = priceAdjustmentService.approvePriceAdjustment(
+                factoryId, recordId, approverId, selfApprovalReason);
         return ApiResponse.success("改价审批通过", result);
     }
 
@@ -1184,7 +1188,7 @@ public class SalesController {
      */
     @PostMapping("/price-adjustments/{recordId}/reject")
     @Operation(summary = "驳回改价 (PENDING → REJECTED, 丢弃改价)")
-    @RequirePermission({"finance:read_write", "sales:read_write"})
+    @RequirePermission({"approval_price_adjustment:approve"})
     public ApiResponse<SalesPriceAdjustmentRecordDTO> rejectPriceAdjustment(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String recordId,
