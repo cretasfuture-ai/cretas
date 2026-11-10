@@ -554,7 +554,7 @@ public class PermissionServiceImpl implements PermissionService {
     private static final Map<String, ConfigurablePermission> CONFIGURABLE_PERMISSIONS = Map.of(
             MATERIAL_TYPE_MAINTAIN_PERMISSION, new ConfigurablePermission(
                     com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
-                    ""),
+                    "warehouse_manager"),
             WASTAGE_APPROVE_PERMISSION, new ConfigurablePermission(
                     com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE, ""),
             CREDIT_OVERRIDE_PERMISSION, new ConfigurablePermission(

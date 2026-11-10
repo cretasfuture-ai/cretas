@@ -299,6 +299,54 @@ public final class ThresholdKeys {
             CREDIT_PERMISSION_OVERRIDE
     );
 
+    /** 值是「逗号分隔岗位码」的 key (权限岗位名单 + 通知接收人)。保存时按 FactoryUserRole 校验, 打错字不再静默失效。 */
+    public static final java.util.Set<String> ROLE_LIST_KEYS = java.util.Set.of(
+            INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
+            INVENTORY_PERMISSION_WASTAGE_APPROVE,
+            CREDIT_PERMISSION_OVERRIDE,
+            PRODUCTION_NOTIFY_SCHEDULE_CREATED,
+            PRODUCTION_NOTIFY_SCHEDULE_CONFIRMED,
+            PRODUCTION_NOTIFY_SCHEDULE_DELAYED,
+            PRODUCTION_NOTIFY_URGENT_INSERT,
+            PRODUCTION_NOTIFY_EFFICIENCY_WARNING,
+            PRODUCTION_NOTIFY_AI_SCHEDULING,
+            INVENTORY_NOTIFY_LOW_STOCK);
+
+    /**
+     * 保存阈值前的按 key 校验: 岗位名单里每一项必须是真实存在的岗位码 (空串 = 只有厂长, 合法);
+     * {@link #CREDIT_CHECK_MODE} 只能是 OFF / WARN / BLOCK。返回错误说明, 合法返回 null。
+     * 其它 key 不管。
+     */
+    public static String validateSemantics(String thresholdKey, String value) {
+        if (thresholdKey == null || value == null) {
+            return null;
+        }
+        if (CREDIT_CHECK_MODE.equals(thresholdKey)) {
+            String v = value.trim().toUpperCase();
+            return (v.equals("OFF") || v.equals("WARN") || v.equals("BLOCK"))
+                    ? null : "超信用额度检查模式只能是 OFF / WARN / BLOCK";
+        }
+        if (ROLE_LIST_KEYS.contains(thresholdKey)) {
+            for (String code : value.split(",")) {
+                String c = code.trim();
+                if (c.isEmpty()) {
+                    continue;
+                }
+                boolean known = false;
+                for (com.cretas.aims.entity.enums.FactoryUserRole r : com.cretas.aims.entity.enums.FactoryUserRole.values()) {
+                    if (r.name().equals(c)) {
+                        known = true;
+                        break;
+                    }
+                }
+                if (!known) {
+                    return "岗位码不存在: " + c + " (请填 factory_super_admin、warehouse_manager 这类英文岗位码, 逗号分隔)";
+                }
+            }
+        }
+        return null;
+    }
+
     /**
      * 这个 key 是不是闸门类（读到旧值会挡住用户动作）。
      *
