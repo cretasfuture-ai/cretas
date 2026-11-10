@@ -69,6 +69,10 @@ public class ConfirmUrgentInsertRequest {
     @Size(max = 500, message = "备注不能超过500个字符")
     private String notes;
 
+    @Schema(description = "缺料时强制插单的原因。仅当工厂开了「缺料时拦开工」且本次插单缺料时才需要；原因会写进计划备注留痕")
+    @Size(max = 300, message = "强制插单原因不能超过300个字符")
+    private String shortageForceReason;
+
     @Schema(description = "紧急原因", required = true)
     @NotBlank(message = "紧急原因不能为空")
     private String urgentReason;

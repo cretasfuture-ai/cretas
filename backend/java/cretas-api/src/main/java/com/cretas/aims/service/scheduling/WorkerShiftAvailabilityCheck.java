@@ -441,6 +441,15 @@ public class WorkerShiftAvailabilityCheck {
             return new Result(false, safeRequired, 0, Collections.emptySet(), NO_SCHEDULE_DATA, true);
         }
 
+        /** 产线没配标准人数: 没有可比的数, 不是「人够」也不是「人不够」。 */
+        public static Result notConfigured() {
+            return new Result(true, 0, 0, Collections.emptySet(), "未配置标准人数，不核对人数");
+        }
+
+        public boolean isNotConfigured() {
+            return verified && requiredWorkers == 0;
+        }
+
         public static Result unverified(Integer required, String message) {
             int safeRequired = required == null ? 0 : Math.max(0, required);
             return new Result(false, safeRequired, 0, Collections.emptySet(),
