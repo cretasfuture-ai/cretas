@@ -51,6 +51,7 @@ class QcWipReleaseBypassContractTest {
     @Mock private ProductionBatchRepository productionBatchRepository;
     @Mock private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
     @Mock private FactoryRecallService factoryRecallService;
+    @Mock private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
 
     private ReleaseDecisionTool tool;
     private QualityDispositionInventoryService disposition;
@@ -65,6 +66,8 @@ class QcWipReleaseBypassContractTest {
         ReflectionTestUtils.setField(disposition, "productionBatchRepository", productionBatchRepository);
         ReflectionTestUtils.setField(disposition, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
         ReflectionTestUtils.setField(disposition, "factoryRecallService", factoryRecallService);
+        ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository", qcReleaseRecordRepository);
+        ReflectionTestUtils.setField(disposition, "qcReleaseRecordRepository", qcReleaseRecordRepository);
     }
 
     private MaterialBatch batch(String id, String sourceDocType) {

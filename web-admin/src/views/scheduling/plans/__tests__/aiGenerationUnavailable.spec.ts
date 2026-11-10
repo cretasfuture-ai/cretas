@@ -246,6 +246,39 @@ describe('scheduling create: daily-capacity auto-schedule when the server says A
     });
   });
 
+  it('D-S411-03: lists an undated pending plan as 「未定日期」 and lets it be scheduled like any other', async () => {
+    const undated = { id: 'PP-AUTO', planNumber: 'PP-AUTO-20261110-0123', productTypeName: '卤猪蹄', plannedQuantity: 50, expectedCompletionDate: null, status: 'PENDING' };
+    boundary.get.mockImplementation((url: string) => Promise.resolve({ success: true, data:
+      url.includes('/scheduling/capabilities') ? available
+        : url.includes('/scheduling/pending-batches') ? [...pending, undated]
+        : url.includes('/production-lines') ? [{ id: 'LINE-1', name: '一号线' }]
+        : url.includes('/processing/batches') ? { content: [] } : [] }));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="mode-daily-schedule"]').trigger('click');
+
+    const row = wrapper.get('[data-testid="aps-plan-PP-AUTO"]');
+    expect(row.get('[data-testid="aps-plan-undated-PP-AUTO"]').text()).toBe('未定日期');
+    expect(wrapper.get('[data-testid="aps-undated-hint"]').text()).toContain('会排在有交期的计划后面');
+    // 有日期的计划照旧显示交期, 不标「未定日期」
+    expect(wrapper.get('[data-testid="aps-plan-PP-A"]').text()).toContain('交期 2026-10-20');
+    expect(wrapper.find('[data-testid="aps-plan-undated-PP-A"]').exists()).toBe(false);
+
+    await row.trigger('click');
+    await wrapper.findAll('.submit-area button')[1].trigger('click');
+    await flushPromises();
+    expect(boundary.post).toHaveBeenCalledExactlyOnceWith('/F-P05/scheduling/generate', {
+      planDate: '2026-10-19', planIds: ['PP-AUTO'], productionLineId: 'LINE-1',
+    });
+  });
+
+  it('shows no 「未定日期」 hint when every pending plan has a due date (negative control)', async () => {
+    serve([{ id: 'LINE-1', name: '一号线' }]);
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="mode-daily-schedule"]').trigger('click');
+    expect(wrapper.find('[data-testid="aps-undated-hint"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('未定日期');
+  });
+
   it('blocks submission up front when no plan is chosen or several lines exist without a choice', async () => {
     serve([{ id: 'LINE-1', name: '一号线' }, { id: 'LINE-2', name: '二号线' }]);
     const wrapper = await mountPage();

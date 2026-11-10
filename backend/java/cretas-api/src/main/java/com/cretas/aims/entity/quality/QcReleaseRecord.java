@@ -57,6 +57,11 @@ public class QcReleaseRecord extends BaseEntity {
         public static final String WIP_MATERIAL_BATCH = "WIP_MATERIAL_BATCH";
         /** 成品批次 (finished_goods_batches.id) */
         public static final String FINISHED_GOODS = "FINISHED_GOODS";
+        /**
+         * 原料收货批次 (material_batches.id, sourceDocType 不是 PRODUCTION_BATCH) 处于「质检中」(D-S411-04)。
+         * 记录的 product_type_id 留空 (原料没有产品 id, 物料在批次上, 按 target_id 可查)。
+         */
+        public static final String RAW_MATERIAL_BATCH = "RAW_MATERIAL_BATCH";
 
         private TargetType() {
         }
