@@ -27,6 +27,12 @@ const FRONTLINE = new Set([
   'workshop_supervisor', 'warehouse_worker', 'production_clerk',
 ]);
 
+/**
+ * 盘点差异走 OA 审批流: 这里的权限只管「能不能批」, 谁处理哪个节点仍由审批流模板决定 (#1580 复核 2)。
+ * 授给新岗位后还要去审批流模板把它加进审批节点, 否则 OA 待办里批不了。
+ */
+const OA_DRIVEN_APPROVALS = new Set(['approval_stocktake']);
+
 const SOURCE_TEXT: Record<string, string> = {
   FACTORY: '本厂设置',
   PLATFORM: '平台默认',
@@ -75,7 +81,16 @@ async function change(approval: string, approvalLabel: string, role: string, rol
   saving.value = key;
   try {
     await setApprovalGrant(props.factoryId, role, approval, value === 'default' ? null : value === 'grant');
-    ElMessage.success(`已保存：${roleLabel} · ${approvalLabel}`);
+    if (value === 'grant' && OA_DRIVEN_APPROVALS.has(approval)) {
+      ElMessage({
+        type: 'warning',
+        duration: 0,
+        showClose: true,
+        message: `已授给「${roleLabel}」。${approvalLabel}走审批流：还需在「审批流设计」里把「${roleLabel}」加进盘点审批的审批节点，否则在审批中心批不了。`,
+      });
+    } else {
+      ElMessage.success(`已保存：${roleLabel} · ${approvalLabel}`);
+    }
     await load();
   } catch (e) {
     handleCatchError(e, '保存审批权限失败');
@@ -95,6 +110,14 @@ onMounted(load);
       show-icon
       title="每类审批可以授给哪些岗位。「默认」= 系统原来的名单；改成「授给 / 不授给」只影响本厂。"
       class="approval-permission-matrix__tip"
+    />
+    <el-alert
+      type="warning"
+      :closable="false"
+      show-icon
+      class="approval-permission-matrix__tip"
+      data-testid="approval-permission-oa-note"
+      title="盘点差异审批走审批流：这里管「能不能批」，审批流模板管「哪个节点由谁处理」。授给新岗位后，还要在「审批流设计」里把该岗位加进盘点审批的审批节点。"
     />
     <el-table v-if="view" :data="rows" border size="small" max-height="520">
       <el-table-column label="岗位" prop="label" width="140" fixed />

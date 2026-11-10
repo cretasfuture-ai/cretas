@@ -3,7 +3,7 @@ import ElementPlus from 'element-plus';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ApprovalPermissionMatrix from '../ApprovalPermissionMatrix.vue';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), setGrant: vi.fn(), confirm: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), setGrant: vi.fn(), confirm: vi.fn(), message: vi.fn() }));
 
 vi.mock('@/api/approvalPermissions', () => ({
   getApprovalPermissions: mocks.get,
@@ -11,7 +11,8 @@ vi.mock('@/api/approvalPermissions', () => ({
 }));
 vi.mock('element-plus', async () => {
   const actual = await vi.importActual<typeof import('element-plus')>('element-plus');
-  return { ...actual, ElMessageBox: { ...actual.ElMessageBox, confirm: mocks.confirm } };
+  const message = Object.assign(mocks.message, { success: vi.fn(), error: vi.fn(), warning: vi.fn() });
+  return { ...actual, ElMessage: message, ElMessageBox: { ...actual.ElMessageBox, confirm: mocks.confirm } };
 });
 
 const view = {
@@ -79,6 +80,23 @@ describe('谁能审批 (纪律排查: 审批人按权限)', () => {
 
     await vm.change('approval_report_reversal', '报工撤回审批', 'operator', '操作员', 'grant');
     expect(mocks.setGrant).toHaveBeenLastCalledWith('F006', 'operator', 'approval_report_reversal', true);
+    wrapper.unmount();
+  });
+  it('盘点差异审批走审批流: 页面写明还要配审批流节点; 授给新岗位后弹不消失的提醒', async () => {
+    mocks.get.mockResolvedValue({
+      ...view,
+      approvals: [...view.approvals, { code: 'approval_stocktake', label: '盘点差异审批' }],
+      grants: { ...view.grants, approval_stocktake: { production_manager: { granted: false, source: 'DEFAULT' } } },
+    });
+    const wrapper = mount(ApprovalPermissionMatrix, { props: { factoryId: 'F006' }, global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="approval-permission-oa-note"]').text()).toContain('审批流');
+    const vm = wrapper.vm as unknown as Vm;
+    await vm.change('approval_stocktake', '盘点差异审批', 'production_manager', '生产经理', 'grant');
+    expect(mocks.setGrant).toHaveBeenLastCalledWith('F006', 'production_manager', 'approval_stocktake', true);
+    expect(mocks.message).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'warning', duration: 0, message: expect.stringContaining('审批流设计'),
+    }));
     wrapper.unmount();
   });
 });
