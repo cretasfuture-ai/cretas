@@ -428,7 +428,13 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // preview.  Unknown package units remain UNVERIFIED and never get a
         // guessed PIECE/KG/BATCH snapshot.
         // 原料无法核对 (无指纹) 时不签发预览: 确认本来就会拒绝, 而无指纹的预览永远复用不上, 会一条条占满额度
+        // 设备 / 产能没核对过或不够时同样不签发: 确认时 (INSERT_RESOURCE_RECHECK_FAILED) 一定会拒绝, 预览放行、确认再拦是
+        // 口径不一致 (验收: 产品没配设备, 预览照给 previewId, 确认 409; 配上设备同样的流程就是 200)。理由写在
+        // unverifiedReasons / infeasibleReason 里, 用户看得到该补什么。单位对不上 / 个单位缺专用产能本来就不签发, 这是同一条规则。
+        boolean confirmCanPassResourceRecheck = equipmentCheck.isVerified() && equipmentCheck.isAvailable()
+                && capacityCheck.isVerified() && capacityCheck.isAvailable();
         if (createPreview && unitCompatible && plannedUnit != null && !plannedUnit.isBlank()
+                && confirmCanPassResourceRecheck
                 && materialPlan.fingerprint() != null && schedulePlan.fingerprint() != null) {
             LocalDateTime validAfter = LocalDateTime.now().minusMinutes(PREVIEW_VALID_MINUTES);
             List<InsertSlotPreview> recent = insertSlotPreviewRepository
