@@ -54,6 +54,10 @@ class QualityDispositionInventoryServiceTest {
     private FactoryRecallService factoryRecallService;
     @Mock
     private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+    @Mock
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
+    @Mock
+    private com.cretas.aims.repository.lineage.BatchLineageEdgeRepository batchLineageEdgeRepository;
 
     private QualityInspection inspection;
 
@@ -95,7 +99,7 @@ class QualityDispositionInventoryServiceTest {
         doThrow(new com.cretas.aims.exception.BusinessException(409, "召回尚未完成，不能解除隔离"))
                 .when(factoryRecallService).assertReleaseAllowed(FACTORY_ID, PRODUCTION_BATCH_ID);
         assertThrows(com.cretas.aims.exception.BusinessException.class,
-                () -> service.applyDisposition(inspection, DispositionAction.RELEASE));
+                () -> service.applyDisposition(inspection, DispositionAction.RELEASE, true));
         verifyNoInteractions(finishedGoodsBatchRepository, materialBatchRepository);
     }
 
@@ -104,29 +108,34 @@ class QualityDispositionInventoryServiceTest {
         doThrow(new com.cretas.aims.exception.BusinessException(409, "召回尚未完成，不能解除隔离"))
                 .when(factoryRecallService).assertReleaseAllowed(FACTORY_ID, PRODUCTION_BATCH_ID);
         assertThrows(com.cretas.aims.exception.BusinessException.class,
-                () -> service.applyDisposition(inspection, DispositionAction.CONDITIONAL_RELEASE));
+                () -> service.applyDisposition(inspection, DispositionAction.CONDITIONAL_RELEASE, true));
         verifyNoInteractions(finishedGoodsBatchRepository, materialBatchRepository);
     }
 
+    /**
+     * Q2 改写 (Owner 2026-11-09): 原名 releaseDoesNotUnfreezeAnotherSkuOrReturnChildSharingThePlan, 钉的是「同计划
+     * 其他 SKU 不放」。裁定改为「计划里所有批次都解除后一次放行这个计划的全部成品」, 不再比 SKU;
+     * 退货子批 (RTN) 是独立的货, 仍不放也不计数 —— 这半条断言原样保留。
+     */
     @Test
-    void releaseDoesNotUnfreezeAnotherSkuOrReturnChildSharingThePlan() {
+    void releaseFreesOtherSkuOfThePlanButNotReturnChild() {
         wirePlan();
         FinishedGoodsBatch current = fg(FinishedGoodsBatch.Status.DEFECTIVE);
         FinishedGoodsBatch returned = fg(FinishedGoodsBatch.Status.DEFECTIVE);
         returned.setBatchNumber("RTN-R1-1");
         FinishedGoodsBatch otherSku = fg(FinishedGoodsBatch.Status.DEFECTIVE);
         otherSku.setProductTypeId("OTHER-SKU");
-        when(finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+        when(finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(current, returned, otherSku));
 
-        InventoryDispositionResult result = service.applyDisposition(inspection, DispositionAction.RELEASE);
+        InventoryDispositionResult result = service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
-        assertEquals(1, result.getFinishedGoodsReleased());
-        assertEquals(1, result.getFinishedGoodsHeld());
+        assertEquals(2, result.getFinishedGoodsReleased());
+        assertEquals(0, result.getFinishedGoodsHeld());
         assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, returned.getStatus());
-        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, otherSku.getStatus());
+        assertEquals(FinishedGoodsBatch.Status.AVAILABLE, otherSku.getStatus());
         verify(finishedGoodsBatchRepository, never()).save(returned);
-        verify(finishedGoodsBatchRepository, never()).save(otherSku);
+        verify(finishedGoodsBatchRepository).save(otherSku);
     }
 
     @Test
@@ -155,10 +164,10 @@ class QualityDispositionInventoryServiceTest {
         FinishedGoodsBatch defective = fg(FinishedGoodsBatch.Status.DEFECTIVE);
         FinishedGoodsBatch alreadyAvailable = fg(FinishedGoodsBatch.Status.AVAILABLE);
         when(finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+                .findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(defective, alreadyAvailable));
 
-        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE);
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
         assertEquals(1, r.getFinishedGoodsReleased());
         assertEquals(FinishedGoodsBatch.Status.AVAILABLE, defective.getStatus());
@@ -173,13 +182,30 @@ class QualityDispositionInventoryServiceTest {
         wirePlan();
         FinishedGoodsBatch defective = fg(FinishedGoodsBatch.Status.DEFECTIVE);
         when(finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+                .findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(defective));
 
-        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.CONDITIONAL_RELEASE);
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.CONDITIONAL_RELEASE, true);
 
         assertEquals(1, r.getFinishedGoodsReleased());
         assertEquals(FinishedGoodsBatch.Status.AVAILABLE, defective.getStatus());
+    }
+
+    @Test
+    @DisplayName("Q4: 没有经过复核的放行 (reviewed=false) 一个成品都不翻, 全部算留在隔离并说明原因")
+    void unreviewedReleaseFlipsNoFinishedGoods() {
+        wirePlan();
+        FinishedGoodsBatch defective = fg(FinishedGoodsBatch.Status.DEFECTIVE);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
+                .thenReturn(List.of(defective));
+
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE, false);
+
+        assertEquals(0, r.getFinishedGoodsReleased());
+        assertEquals(1, r.getFinishedGoodsHeld());
+        assertTrue(r.getFinishedGoodsNotice().contains("复核"));
+        assertEquals(FinishedGoodsBatch.Status.DEFECTIVE, defective.getStatus());
+        verify(finishedGoodsBatchRepository, never()).save(any());
     }
 
     // ===================== RELEASE — 原料 (material-scoped) =====================
@@ -197,7 +223,7 @@ class QualityDispositionInventoryServiceTest {
         // production batch not set path: no FG resolution
         when(productionBatchRepository.findById(PRODUCTION_BATCH_ID)).thenReturn(Optional.empty());
 
-        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE);
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
         assertNull(r.getBatchQualityStatus());
         assertEquals(FlipDecision.FLIP, r.getMaterialFlip());
@@ -219,7 +245,7 @@ class QualityDispositionInventoryServiceTest {
                 .thenReturn(Optional.of(mb));
         when(productionBatchRepository.findById(PRODUCTION_BATCH_ID)).thenReturn(Optional.empty());
 
-        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.SCRAP);
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.SCRAP, true);
 
         assertEquals(FlipDecision.FLIP, r.getMaterialFlip());
         assertEquals(MaterialBatchStatus.SCRAPPED, mb.getStatus());
@@ -227,7 +253,7 @@ class QualityDispositionInventoryServiceTest {
         // SCRAP 不解析/不翻成品 (物理报废走处置 UI)
         verify(finishedGoodsBatchRepository, never()).save(any());
         verify(finishedGoodsBatchRepository, never())
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(any(), any());
+                .findByFactoryIdAndProductionPlanIdForUpdate(any(), any());
     }
 
     // ===================== HOLD / REWORK — 不翻 =====================
@@ -237,7 +263,7 @@ class QualityDispositionInventoryServiceTest {
     void holdNoFlip() {
         inspection.setMaterialBatchId(MATERIAL_BATCH_ID);
 
-        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.HOLD);
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.HOLD, true);
 
         assertEquals(0, r.getFinishedGoodsReleased());
         assertNull(r.getMaterialFlip());
@@ -248,7 +274,7 @@ class QualityDispositionInventoryServiceTest {
     @DisplayName("UT-DIB-06: REWORK → 不解除隔离, 不碰原料 (批次状态与成品隔离见 QualityBatchDispositionContractTest)")
     void reworkReleasesNothing() {
         when(productionBatchRepository.findById(PRODUCTION_BATCH_ID)).thenReturn(Optional.empty());
-        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.REWORK);
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.REWORK, true);
         assertEquals(0, r.getFinishedGoodsReleased());
         assertNull(r.getMaterialFlip());
         verifyNoInteractions(materialBatchRepository, finishedGoodsBatchRepository);
@@ -263,7 +289,7 @@ class QualityDispositionInventoryServiceTest {
         inspection.setMaterialBatchId(MATERIAL_BATCH_ID);
         // 成品已经全部 AVAILABLE (上一次放行的结果)
         when(finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+                .findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(fg(FinishedGoodsBatch.Status.AVAILABLE)));
         MaterialBatch mb = new MaterialBatch();
         mb.setId(MATERIAL_BATCH_ID);
@@ -272,7 +298,7 @@ class QualityDispositionInventoryServiceTest {
         when(materialBatchRepository.findByIdAndFactoryId(MATERIAL_BATCH_ID, FACTORY_ID))
                 .thenReturn(Optional.of(mb));
 
-        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE);
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
         assertEquals(0, r.getFinishedGoodsReleased());
         assertEquals(FlipDecision.ALREADY_IN_TARGET, r.getMaterialFlip());
@@ -287,16 +313,16 @@ class QualityDispositionInventoryServiceTest {
     void onlyThisInspectionsPlanQueried() {
         wirePlan();
         when(finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+                .findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of());
 
-        service.applyDisposition(inspection, DispositionAction.RELEASE);
+        service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
         // 仅按本 inspection 的 planId 解析, 不用别的 planId
         verify(finishedGoodsBatchRepository)
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID);
+                .findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID);
         verify(finishedGoodsBatchRepository, never())
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(eq(FACTORY_ID), eq("OTHER-PLAN"));
+                .findByFactoryIdAndProductionPlanIdForUpdate(eq(FACTORY_ID), eq("OTHER-PLAN"));
     }
 
     @Test
@@ -304,10 +330,10 @@ class QualityDispositionInventoryServiceTest {
     void nonMaterialScopedSkipsMaterial() {
         wirePlan();
         when(finishedGoodsBatchRepository
-                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+                .findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
                 .thenReturn(List.of(fg(FinishedGoodsBatch.Status.DEFECTIVE)));
 
-        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE);
+        InventoryDispositionResult r = service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
         assertNull(r.getMaterialFlip());
         verify(materialBatchRepository, never()).findByIdAndFactoryId(any(), any());

@@ -10,6 +10,10 @@ import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.sales.SalesDeliveryItemBatchAllocation;
+import com.cretas.aims.entity.sales.SalesPackagingConversionConfirmation;
+import com.cretas.aims.repository.sales.SalesPackagingConversionConfirmationRepository;
+import com.cretas.aims.dto.sales.BatchAllocationDTO;
+import com.cretas.aims.service.sales.AutoAllocationOutcome;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.GlobalExceptionHandler;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -57,6 +61,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -101,6 +106,8 @@ class BatchAllocationRulesContractTest {
     private SalesDeliveryItemBatchAllocationRepository allocations;
     private UserModuleAccessRepository moduleOverrides;
     private SalesDeliveryBatchAllocationServiceImpl service;
+    private SalesPackagingConversionConfirmationRepository confirmations;
+    private final List<SalesPackagingConversionConfirmation> confirmationRows = new ArrayList<>();
     private MockMvc mvc;
 
     @BeforeEach
@@ -146,6 +153,12 @@ class BatchAllocationRulesContractTest {
         service = new SalesDeliveryBatchAllocationServiceImpl(allocations, items, goods, mock(WarehouseResolver.class),
                 productTypes, mock(SalesOrderRepository.class), mock(FgReservationLedgerService.class),
                 mock(SalesDeliveryRecordRepository.class));
+        confirmations = mock(SalesPackagingConversionConfirmationRepository.class);
+        when(confirmations.save(any())).thenAnswer(call -> {
+            confirmationRows.add(call.getArgument(0));
+            return call.getArgument(0);
+        });
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "conversionConfirmationRepository", confirmations);
 
         mvc = MockMvcBuilders.standaloneSetup(new SalesDeliveryBatchAllocationController(service))
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -372,6 +385,125 @@ class BatchAllocationRulesContractTest {
 
         batches.clear();
         assertThat(service.autoAllocateFifo(FACTORY, "271", PRODUCT, new BigDecimal("1"), "箱", null)).isFalse();
+    }
+
+    // ==================== Q10: 换算确认留痕 ====================
+
+    @Test
+    @DisplayName("Q10: 确认换算记下谁 (登录身份)、何时、哪张发货行、哪个成品批、从 1托盘=96盒 确认成 1箱=8盒")
+    void confirmedConversionLeavesATrail() throws Exception {
+        batch("FG02", "盒", "托盘", "盒", "96", FinishedGoodsBatch.Status.AVAILABLE);
+
+        as(WAREHOUSE_MANAGER, allocate("FG02", "1", true)).andExpect(status().isOk());
+
+        assertThat(confirmationRows).hasSize(1);
+        SalesPackagingConversionConfirmation row = confirmationRows.get(0);
+        assertThat(row.getConfirmedBy()).isEqualTo(WAREHOUSE_MANAGER);
+        assertThat(row.getConfirmedAt()).isNotNull();
+        assertThat(row.getFactoryId()).isEqualTo(FACTORY);
+        assertThat(row.getDeliveryItemId()).isEqualTo("271");
+        assertThat(row.getFinishedGoodsBatchId()).isEqualTo("FG02");
+        assertThat(row.getBatchNumber()).isEqualTo("QA-FG02");
+        assertThat(row.getAllocatedQty()).isEqualByComparingTo("1");
+        assertThat(row.getUnit()).isEqualTo("箱");
+        assertThat(List.of(row.getFromPackagingUnit(), row.getFromPackagingBaseUnit())).containsExactly("托盘", "盒");
+        assertThat(row.getFromPackagingFactor()).isEqualByComparingTo("96");
+        assertThat(List.of(row.getToPackagingUnit(), row.getToPackagingBaseUnit())).containsExactly("箱", "盒");
+        assertThat(row.getToPackagingFactor()).isEqualByComparingTo("8");
+    }
+
+    @Test
+    @DisplayName("Q10: 「谁」只取登录身份 —— 请求体里塞 confirmedBy 不起作用")
+    void confirmerComesFromTheLoginNotTheBody() throws Exception {
+        batch("FG02", "盒", "托盘", "盒", "96", FinishedGoodsBatch.Status.AVAILABLE);
+        Map<String, Object> row = new java.util.LinkedHashMap<>();
+        row.put("finishedGoodsBatchId", "FG02");
+        row.put("allocatedQty", new BigDecimal("1"));
+        row.put("packagingConversionConfirmed", true);
+        row.put("confirmedBy", 999);
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("allocations", List.of(row));
+        body.put("confirmedBy", 999);
+        body.put("userId", 999);
+
+        as(SALES, post(BASE).contentType(MediaType.APPLICATION_JSON)
+                .content(new ObjectMapper().writeValueAsString(body))).andExpect(status().isOk());
+
+        assertThat(confirmationRows).extracting(SalesPackagingConversionConfirmation::getConfirmedBy).containsExactly(SALES);
+    }
+
+    @Test
+    @DisplayName("Q10: 同一份分配重放不重复留痕 (幂等); 改了数量是新的一次确认, 再记一行")
+    @SuppressWarnings("unchecked")
+    void replayDoesNotWriteTheTrailTwice() throws Exception {
+        batch("FG02", "盒", "托盘", "盒", "96", FinishedGoodsBatch.Status.AVAILABLE);
+        line.setDeliveredQuantity(new BigDecimal("5"));
+        as(WAREHOUSE_MANAGER, allocate("FG02", "1", true)).andExpect(status().isOk());
+        ArgumentCaptor<List<SalesDeliveryItemBatchAllocation>> saved = ArgumentCaptor.forClass(List.class);
+        verify(allocations).saveAll(saved.capture());
+        when(allocations.findByFactoryIdAndDeliveryItemId(FACTORY, "271")).thenReturn(saved.getValue());
+
+        as(WAREHOUSE_MANAGER, allocate("FG02", "1", true)).andExpect(status().isOk());
+        assertThat(confirmationRows).hasSize(1);
+
+        as(WAREHOUSE_MANAGER, allocate("FG02", "2", true)).andExpect(status().isOk());
+        assertThat(confirmationRows).hasSize(2);
+        assertThat(confirmationRows.get(1).getAllocatedQty()).isEqualByComparingTo("2");
+    }
+
+    @Test
+    @DisplayName("Q10 阴性: 规格一致的批次带了确认标记也不留痕 (没有换算可确认)")
+    void sameSpecLeavesNoTrail() throws Exception {
+        batch("FG-SAME", "盒", "箱", "盒", "8", FinishedGoodsBatch.Status.AVAILABLE);
+        as(SALES, allocate("FG-SAME", "1", true)).andExpect(status().isOk());
+        verifyNoInteractions(confirmations);
+    }
+
+    @Test
+    @DisplayName("Q10: 不带登录身份的分配入口拒绝换算确认 (留不了「谁」就不能确认), 什么都不写")
+    void confirmationWithoutLoginIsRefused() {
+        batch("FG02", "盒", "托盘", "盒", "96", FinishedGoodsBatch.Status.AVAILABLE);
+        BatchAllocationDTO dto = new BatchAllocationDTO();
+        dto.setFinishedGoodsBatchId("FG02");
+        dto.setAllocatedQty(new BigDecimal("1"));
+        dto.setPackagingConversionConfirmed(true);
+
+        assertThatThrownBy(() -> service.allocateBatches(FACTORY, "271", List.of(dto)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo("PACKAGING_CONFIRMATION_ACTOR_REQUIRED"));
+        verify(allocations, never()).saveAll(anyList());
+        verifyNoInteractions(confirmations);
+    }
+
+    // ==================== Q3: 子发运预填按值返回原因 ====================
+
+    @Test
+    @DisplayName("Q3: 子发运预填只剩规格不一致的货 —— 不抛异常, 带回 BATCH_PACKAGING_SPEC_MISMATCH 和两边规格, 不写分配")
+    void prefillReturnsTheMismatchInsteadOfThrowing() {
+        batch("FG02", "盒", "托盘", "盒", "96", FinishedGoodsBatch.Status.AVAILABLE);
+
+        AutoAllocationOutcome outcome = service.prefillFifo(FACTORY, "271", PRODUCT, new BigDecimal("1"), "箱", null);
+
+        assertThat(outcome.allocated()).isFalse();
+        assertThat(outcome.code()).isEqualTo("BATCH_PACKAGING_SPEC_MISMATCH");
+        assertThat(outcome.message()).contains("1托盘=96盒").contains("1箱=8盒");
+        assertThat(outcome.hint()).contains("换算");
+        verify(allocations, never()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("Q3: 真没货时说库存不够 (FIFO_STOCK_SHORTFALL, 带中文单位); 规格一致的货照常预填")
+    void prefillNamesShortfallAndStillAllocatesMatchingStock() {
+        AutoAllocationOutcome empty = service.prefillFifo(FACTORY, "271", PRODUCT, new BigDecimal("1"), "箱", null);
+        assertThat(empty.allocated()).isFalse();
+        assertThat(empty.code()).isEqualTo(AutoAllocationOutcome.CODE_STOCK_SHORTFALL);
+        assertThat(empty.message()).contains("1箱");
+
+        batch("FG-SAME", "盒", "箱", "盒", "8", FinishedGoodsBatch.Status.AVAILABLE);
+        AutoAllocationOutcome ok = service.prefillFifo(FACTORY, "271", PRODUCT, new BigDecimal("1"), "箱", null);
+        assertThat(ok.allocated()).isTrue();
+        verify(allocations).saveAll(anyList());
     }
 
     // ==================== 夹具 ====================

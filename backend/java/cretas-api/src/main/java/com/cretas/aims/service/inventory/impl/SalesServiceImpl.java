@@ -3227,7 +3227,8 @@ public class SalesServiceImpl implements SalesService {
         // 缺陚42 (owner 拍板 「出库照抄入库」): 子发运单创建后自动按 FIFO 预填成品批次分配，
         // 不等用户另外点「分配批次」才看到推荐 —— 镜像入库侧 PendingPurchaseReceivingPanel.vue
         // openReceive() 的原则: 一开对话框就把每行默认填成 remainingReceivableQuantity。
-        autoPrefillFifoAllocations(factoryId, saved);
+        // Q3: 没能自动分配的行把真实原因带回响应 (规格不一致要确认换算 / 库存不够), 子单本身照样建成
+        saved.setAllocationNotices(autoPrefillFifoAllocations(factoryId, saved));
         return saved;
     }
 
@@ -3247,9 +3248,10 @@ public class SalesServiceImpl implements SalesService {
      * 不报错也不让整张子发运单创建失败 —— 缺口留到「分配批次」手工处理或发货时 shipDelivery 的 P0-13 兵底重试。
      * 分配总量恰守 #484 定的 ≤ 发货行数量天花板 —— {@code autoAllocateFifo} 本身按 requiredQty 做上限, 不会超发。
      */
-    private void autoPrefillFifoAllocations(String factoryId, SalesDeliveryRecord shipment) {
+    private List<Map<String, Object>> autoPrefillFifoAllocations(String factoryId, SalesDeliveryRecord shipment) {
+        List<Map<String, Object>> notices = new ArrayList<>();
         if (batchAllocationService == null || shipment == null || shipment.getItems() == null) {
-            return;
+            return notices;
         }
         for (SalesDeliveryItem item : shipment.getItems()) {
             if (item.getDeliveredQuantity() == null || item.getDeliveredQuantity().signum() <= 0) {
@@ -3261,17 +3263,26 @@ public class SalesServiceImpl implements SalesService {
             if (isMaterialLine(factoryId, item.getProductTypeId())) {
                 continue;
             }
-            try {
-                batchAllocationService.autoAllocateFifo(
-                        factoryId, String.valueOf(item.getId()), item.getProductTypeId(),
-                        item.getDeliveredQuantity(), item.getUnit(), item.getSourceWarehouseCode());
-            } catch (BusinessException e) {
-                // 诚实降级: 预填是便利功能, 不是硬闸 —— 预填失败 (比如单位换算冲突) 不该拖垒
-                // 子发运单创建这个更重要的动作。用户仍能去「分配批次」手工处理。
-                log.warn("[缺陚42] 子发运创建后自动FIFO预填失败, 转手工分配: factoryId={}, itemId={}, reason={}",
-                        factoryId, item.getId(), e.getMessage());
+            // 🔴 Q3 (2026-11-09): 原来这里调 autoAllocateFifo 再 catch BusinessException —— 看着是「预填失败不拖垮
+            //    子单」, 实际异常已经穿过分配服务的事务代理, 把本事务标成只能回滚, 提交时整张子单回滚
+            //    (只剩规格不一致库存时必现)。prefillFifo 不抛业务异常, 原因按值带回来给用户看。
+            com.cretas.aims.service.sales.AutoAllocationOutcome outcome = batchAllocationService.prefillFifo(
+                    factoryId, String.valueOf(item.getId()), item.getProductTypeId(),
+                    item.getDeliveredQuantity(), item.getUnit(), item.getSourceWarehouseCode());
+            if (outcome == null || outcome.allocated()) {
+                continue;
             }
+            log.warn("[缺陷42] 子发运创建后未自动分配, 转手工: factoryId={}, itemId={}, code={}",
+                    factoryId, item.getId(), outcome.code());
+            Map<String, Object> notice = new LinkedHashMap<>();
+            notice.put("deliveryItemId", String.valueOf(item.getId()));
+            notice.put("productName", item.getProductName());
+            notice.put("code", outcome.code());
+            notice.put("message", outcome.message());
+            notice.put("hint", outcome.hint());
+            notices.add(notice);
         }
+        return notices;
     }
 
     @Override

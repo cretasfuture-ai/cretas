@@ -509,6 +509,19 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
                               @Param("planIds") java.util.Collection<String> planIds,
                               @Param("planIdPrefixPattern") String planIdPrefixPattern);
 
+    /**
+     * 同上的计划范围里, 判了报废 (SCRAPPED) 的生产批次 (Owner 2026-11-09: 报废批次不挡同计划其它批次的放行,
+     * 只有它自己的货留下)。质检放行用它把「不合格未解除」里的报废批次挑出来, 再按归属判这次要放的货是不是报废批的。
+     */
+    @Query("SELECT b.id AS id, b.batchNumber AS batchNumber FROM ProductionBatch b "
+           + "WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL "
+           + "AND b.qualityStatus = com.cretas.aims.entity.enums.QualityStatus.SCRAPPED "
+           + "AND (b.productionPlanId IN :planIds OR b.productionPlanId LIKE :planIdPrefixPattern ESCAPE '\\') "
+           + "ORDER BY b.id")
+    java.util.List<ScrappedBatchRef> findScrappedInPlans(@Param("factoryId") String factoryId,
+                                                        @Param("planIds") java.util.Collection<String> planIds,
+                                                        @Param("planIdPrefixPattern") String planIdPrefixPattern);
+
     /** 一次取出这些生产批次的计划 id (质检放行反查计划, 第三轮审查 L-6: 不逐个 findById)。 */
     @Query("SELECT DISTINCT b.productionPlanId FROM ProductionBatch b WHERE b.factoryId = :factoryId "
            + "AND b.id IN :ids AND b.productionPlanId IS NOT NULL")
@@ -669,4 +682,50 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             @Param("factoryId") String factoryId,
             @Param("since") java.time.LocalDateTime since,
             @Param("productTypeId") String productTypeId);
+
+    /**
+     * 同上的计划范围里「不合格未解除、且不是报废」的批次数 —— 一条语句 (#1548 第二轮审查 4: 原来拿计数减报废清单长度,
+     * 两条语句之间能被插进来)。质检放行据此整计划拒绝; 报废批次另按归属判。
+     */
+    @Query("SELECT COUNT(b) FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.deletedAt IS NULL "
+           + "AND b.qualityStatus IN (com.cretas.aims.entity.enums.QualityStatus.FAILED, "
+           + "com.cretas.aims.entity.enums.QualityStatus.REWORK_REQUIRED, "
+           + "com.cretas.aims.entity.enums.QualityStatus.REWORKING, "
+           + "com.cretas.aims.entity.enums.QualityStatus.REWORK_COMPLETED) "
+           + "AND (b.productionPlanId IN :planIds OR b.productionPlanId LIKE :planIdPrefixPattern ESCAPE '\\')")
+    long countUnclearedNotScrappedInPlans(@Param("factoryId") String factoryId,
+                                          @Param("planIds") java.util.Collection<String> planIds,
+                                          @Param("planIdPrefixPattern") String planIdPrefixPattern);
+
+    /**
+     * 给计划下<b>所有</b>生产批次 (含逐道录入的 CLERK_WIP, 与 countQcFailedInPlans 同一范围) 加行锁, 按 id 顺序。
+     * 计划级放行在读兄弟批次状态之前先拿这把锁 (#1548 第二轮审查 1/3): 质检判 FAILED 写批次状态要等它, 不会出现
+     * 「放行读到兄弟批合格、同时兄弟批被判不合格」的丢失更新。锁顺序: 生产批次 → 成品行, 与既有路径一致。
+     * 原生 SQL 只取 id: 锁本身不需要实体, 状态在拿到锁之后用 {@link #findQcStatesInPlan} 重新读。
+     */
+    @Query(value = "SELECT id FROM production_batches WHERE factory_id = :factoryId "
+           + "AND production_plan_id = :planId AND deleted_at IS NULL ORDER BY id FOR UPDATE", nativeQuery = true)
+    java.util.List<Long> lockAllIdsInPlan(@Param("factoryId") String factoryId, @Param("planId") String planId);
+
+    /** 计划下所有生产批次 (含 CLERK_WIP) 的质检状态, 拿到 {@link #lockAllIdsInPlan} 的锁之后读。 */
+    @Query("SELECT b.id AS id, b.batchNumber AS batchNumber, b.qualityStatus AS qualityStatus FROM ProductionBatch b "
+           + "WHERE b.factoryId = :factoryId AND b.productionPlanId = :planId AND b.deletedAt IS NULL ORDER BY b.id")
+    java.util.List<PlanBatchQcState> findQcStatesInPlan(@Param("factoryId") String factoryId,
+                                                         @Param("planId") String planId);
+
+    /** 计划内批次的质检状态投影。 */
+    interface PlanBatchQcState {
+        Long getId();
+
+        String getBatchNumber();
+
+        com.cretas.aims.entity.enums.QualityStatus getQualityStatus();
+    }
+
+    /** 报废批次的最小投影 (只要 id 和批号; 不取整实体, 免得把 jsonb 等无关列读回来)。 */
+    interface ScrappedBatchRef {
+        Long getId();
+
+        String getBatchNumber();
+    }
 }

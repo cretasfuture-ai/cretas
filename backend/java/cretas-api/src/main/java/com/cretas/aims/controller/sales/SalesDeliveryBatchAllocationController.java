@@ -71,8 +71,10 @@ public class SalesDeliveryBatchAllocationController {
     public ApiResponse<Map<String, Object>> allocate(
             @PathVariable String factoryId,
             @PathVariable String deliveryItemId,
-            @RequestBody AllocateRequest request) {
-        service.allocateBatches(factoryId, deliveryItemId, request.getAllocations());
+            @RequestBody AllocateRequest request,
+            @RequestAttribute("userId") Long userId) {
+        // Q10: 规格换算确认要记「谁」—— 取登录身份, 不取请求体
+        service.allocateBatchesAsUser(factoryId, deliveryItemId, request.getAllocations(), userId);
         return ApiResponse.success("批次分配成功", Map.of(
                 "deliveryItemId", deliveryItemId,
                 "fullyAllocated", service.isFullyAllocated(factoryId, deliveryItemId)

@@ -21,6 +21,7 @@ import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.inventory.FgReservationLedgerService;
 import com.cretas.aims.service.unit.UnitDisplayNames;
 import com.cretas.aims.entity.enums.CustomerStockFulfillmentMode;
+import com.cretas.aims.service.sales.AutoAllocationOutcome;
 import com.cretas.aims.service.sales.SalesDeliveryBatchAllocationService;
 import com.cretas.aims.service.sales.SalesFinishedGoodsOwnershipGuard;
 import com.cretas.aims.service.sales.FinishedGoodsBatchSaleabilityGuard;
@@ -51,9 +52,31 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
     private final FgReservationLedgerService reservationLedgerService;
     private final SalesDeliveryRecordRepository deliveryRecordRepository;
 
+    /** Q10: 规格换算确认留痕 (只增不删)。字段注入: 不改 Lombok 构造器, 手工构造的单测不确认换算就用不到它。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.repository.sales.SalesPackagingConversionConfirmationRepository conversionConfirmationRepository;
+
     @Override
     @Transactional
     public void allocateBatches(String factoryId, String deliveryItemId, List<BatchAllocationDTO> allocations) {
+        allocate(factoryId, deliveryItemId, allocations, null);
+    }
+
+    @Override
+    @Transactional
+    public void allocateBatchesAsUser(String factoryId, String deliveryItemId, List<BatchAllocationDTO> allocations,
+                                      Long actorUserId) {
+        if (actorUserId == null) {
+            // 400 不是 401: 401 会让前端去刷新令牌重试, 这里是请求上缺登录身份, 重试也一样
+            throw new BusinessException(400, "无法识别当前登录用户，不能分配批次")
+                    .withCode("ACTOR_REQUIRED")
+                    .withHint("请重新登录后再分配");
+        }
+        allocate(factoryId, deliveryItemId, allocations, actorUserId);
+    }
+
+    private void allocate(String factoryId, String deliveryItemId, List<BatchAllocationDTO> allocations,
+                          Long actorUserId) {
         if (factoryId == null || factoryId.isBlank()) {
             throw new BusinessException(400, "factoryId 不能为空")
                     .withHint("请重新登录获取有效的工厂上下文").withHintTarget("factoryId");
@@ -155,6 +178,8 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         // 2. 校验每一条 allocation：batch 存在、同工厂、warehouse 匹配、有足够可用库存
         BigDecimal total = BigDecimal.ZERO;
         List<SalesDeliveryItemBatchAllocation> toPersist = new ArrayList<>();
+        List<com.cretas.aims.entity.sales.SalesPackagingConversionConfirmation> confirmations = new ArrayList<>();
+        java.time.LocalDateTime confirmedAt = java.time.LocalDateTime.now();
         for (BatchAllocationDTO dto : allocations) {
             if (dto.getFinishedGoodsBatchId() == null || dto.getAllocatedQty() == null) {
                 throw new BusinessException(400, "批次分配字段不完整")
@@ -213,6 +238,17 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
             if (packagingMismatch(batch, item) && !Boolean.TRUE.equals(dto.getPackagingConversionConfirmed())) {
                 throw packagingMismatchError(batch, item);
             }
+            if (packagingMismatch(batch, item)) {
+                // Q10: 确认了换算 —— 记下谁、何时、哪行、哪批、从什么规格到什么规格。没有登录身份就不收这个确认。
+                if (actorUserId == null) {
+                    throw new BusinessException(400, "确认规格换算必须由登录用户在分配批次时提交")
+                            .withCode("PACKAGING_CONFIRMATION_ACTOR_REQUIRED")
+                            .withHint("请在电脑端「分配批次」或「出货管理」里核对换算后确认")
+                            .withHintTarget("finishedGoodsBatchId");
+                }
+                confirmations.add(conversionConfirmation(factoryId, itemDelivery, item, batch, dto, actorUserId,
+                        confirmedAt));
+            }
             // 🔴 C1: convert batch-native available into the delivery line's unit before comparing
             // against dto.getAllocatedQty() (always item.getUnit()).
             BigDecimal available = convertBatchToDeliveryUnit(
@@ -258,6 +294,14 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         // (factory, delivery item, batch) key when the operator changes an automatic allocation.
         allocationRepository.flush();
         allocationRepository.saveAll(toPersist);
+        if (!confirmations.isEmpty()) {
+            if (conversionConfirmationRepository == null) {
+                throw new IllegalStateException("规格换算确认留痕仓储未注入，不能接受换算确认");
+            }
+            confirmations.forEach(conversionConfirmationRepository::save);
+            log.info("规格换算确认留痕: factoryId={}, deliveryItemId={}, 批次数={}, by={}",
+                    factoryId, deliveryItemId, confirmations.size(), actorUserId);
+        }
 
         log.info("销售发货批次分配: factoryId={}, deliveryItemId={}, allocations={}, total={}",
                 factoryId, deliveryItemId, toPersist.size(), total);
@@ -607,6 +651,28 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                 item.getPackagingUnit(), item.getPackagingBaseUnit(), item.getPackagingFactor());
     }
 
+    private static com.cretas.aims.entity.sales.SalesPackagingConversionConfirmation conversionConfirmation(
+            String factoryId, SalesDeliveryRecord delivery, SalesDeliveryItem item, FinishedGoodsBatch batch,
+            BatchAllocationDTO dto, Long actorUserId, java.time.LocalDateTime confirmedAt) {
+        var row = new com.cretas.aims.entity.sales.SalesPackagingConversionConfirmation();
+        row.setFactoryId(factoryId);
+        row.setDeliveryRecordId(delivery != null ? delivery.getId() : item.getDeliveryRecordId());
+        row.setDeliveryItemId(String.valueOf(item.getId()));
+        row.setFinishedGoodsBatchId(batch.getId());
+        row.setBatchNumber(batch.getBatchNumber());
+        row.setAllocatedQty(dto.getAllocatedQty());
+        row.setUnit(item.getUnit());
+        row.setFromPackagingUnit(batch.getPackagingUnit());
+        row.setFromPackagingBaseUnit(batch.getPackagingBaseUnit());
+        row.setFromPackagingFactor(batch.getPackagingFactor());
+        row.setToPackagingUnit(item.getPackagingUnit());
+        row.setToPackagingBaseUnit(item.getPackagingBaseUnit());
+        row.setToPackagingFactor(item.getPackagingFactor());
+        row.setConfirmedBy(actorUserId);
+        row.setConfirmedAt(confirmedAt);
+        return row;
+    }
+
     private static String packagingLabel(String packagingUnit, String baseUnit, BigDecimal factor) {
         return "1" + UnitDisplayNames.display(packagingUnit) + "="
                 + factor.stripTrailingZeros().toPlainString() + UnitDisplayNames.display(baseUnit);
@@ -678,6 +744,64 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         if (requiredQty == null || requiredQty.signum() <= 0) {
             return true;   // 这一行没有要发的量, 不需要分配
         }
+        List<BatchAllocationDTO> picks = fifoPicks(
+                factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+        if (picks == null) {
+            BusinessException mismatch = packagingMismatchShortfall(
+                    factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+            if (mismatch != null) {
+                throw mismatch;
+            }
+            return false;
+        }
+        allocateBatches(factoryId, deliveryItemId, picks);
+        log.info("[自动分配FIFO] factory={} item={} 已分配 {} 个批次, 合计={}",
+                factoryId, deliveryItemId, picks.size(), requiredQty);
+        return true;
+    }
+
+    @Override
+    @Transactional
+    public AutoAllocationOutcome prefillFifo(String factoryId, String deliveryItemId, String productTypeId,
+                                             BigDecimal requiredQty, String unit, String sourceWarehouseCode) {
+        if (requiredQty == null || requiredQty.signum() <= 0) {
+            return AutoAllocationOutcome.done();
+        }
+        // ⛔ 业务异常必须在本方法里接住: 一旦穿过事务代理, 外层的子发运创建就只能回滚 (Q3)。
+        //    本方法内的调用都是自调用 (不过代理), 写入只在 allocateBatches 全部校验通过之后才发生。
+        try {
+            List<BatchAllocationDTO> picks = fifoPicks(
+                    factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+            if (picks == null) {
+                BusinessException mismatch = packagingMismatchShortfall(
+                        factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
+                if (mismatch != null) {
+                    return AutoAllocationOutcome.notAllocated(mismatch.getErrorCode(), mismatch.getMessage(),
+                            mismatch.getActionHint());
+                }
+                return AutoAllocationOutcome.notAllocated(AutoAllocationOutcome.CODE_STOCK_SHORTFALL,
+                        "可用成品库存不够本行数量（需要 " + requiredQty.stripTrailingZeros().toPlainString()
+                                + UnitDisplayNames.display(unit) + "），没有自动分配批次",
+                        "补货或调拨后在「分配批次」里分配；也可以少发");
+            }
+            allocateBatches(factoryId, deliveryItemId, picks);
+            return AutoAllocationOutcome.done();
+        } catch (BusinessException e) {
+            log.warn("[子发运预填] 未自动分配 factory={} item={} code={} reason={}",
+                    factoryId, deliveryItemId, e.getErrorCode(), e.getMessage());
+            return AutoAllocationOutcome.notAllocated(
+                    e.getErrorCode() != null ? e.getErrorCode() : "AUTO_ALLOCATION_REJECTED",
+                    e.getMessage(), e.getActionHint());
+        }
+    }
+
+    /**
+     * 先进先出挑批次 (只挑规格一致或没有规格信息的批次: 自动分配没有人确认换算, O-309-1)。
+     *
+     * @return 凑够发货行数量的挑选结果; 凑不够 = null (⛔ 不做部分分配)
+     */
+    private List<BatchAllocationDTO> fifoPicks(String factoryId, String deliveryItemId, String productTypeId,
+                                               BigDecimal requiredQty, String unit, String sourceWarehouseCode) {
         // O-309-1: 自动分配没有人确认换算, 所以只挑规格一致 (或没有规格信息) 的批次
         List<Map<String, Object>> candidates = recommend(
                 factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode, true);
@@ -712,28 +836,22 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
         if (remaining.signum() > 0 || picks.isEmpty()) {
             log.warn("[自动分配FIFO] 库存不足 factory={} item={} 需要={} 还差={}",
                     factoryId, deliveryItemId, requiredQty, remaining);
-            assertShortfallIsNotPackagingMismatch(
-                    factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode);
-            return false;
+            return null;
         }
-
-        allocateBatches(factoryId, deliveryItemId, picks);
-        log.info("[自动分配FIFO] factory={} item={} 已分配 {} 个批次, 合计={}",
-                factoryId, deliveryItemId, picks.size(), requiredQty);
-        return true;
+        return picks;
     }
 
     /**
      * 货其实在, 只是规格不一致才凑不够时, ⛔ 不能让调用方报「库存不足」: 那会让人去补货,
-     * 而他要做的是确认换算。把真实原因抛出去。
+     * 而他要做的是确认换算。返回描述真实原因的异常 (由调用方决定抛出还是按值带回); 不是规格问题 = null。
      */
-    private void assertShortfallIsNotPackagingMismatch(
+    private BusinessException packagingMismatchShortfall(
             String factoryId, String deliveryItemId, String productTypeId, BigDecimal requiredQty,
             String unit, String sourceWarehouseCode) {
         for (Map<String, Object> row : recommend(
                 factoryId, deliveryItemId, productTypeId, requiredQty, unit, sourceWarehouseCode, false)) {
             if (Boolean.TRUE.equals(row.get("packagingMismatch"))) {
-                throw new BusinessException(409, "成品批次 " + row.get("batchNumber") + " 的规格（"
+                return new BusinessException(409, "成品批次 " + row.get("batchNumber") + " 的规格（"
                         + row.get("batchPackagingLabel") + "）与发货行规格（" + row.get("linePackagingLabel")
                         + "）不一致，系统不会自动换算")
                         .withCode("BATCH_PACKAGING_SPEC_MISMATCH")
@@ -741,6 +859,7 @@ public class SalesDeliveryBatchAllocationServiceImpl implements SalesDeliveryBat
                         .withHintTarget("finishedGoodsBatchId");
             }
         }
+        return null;
     }
 
     // 🔴 2026-09-02: 这里的 == 特意【没有】跟着缺陷 41 改成 <=。allocateBatches 现在允许
