@@ -78,6 +78,65 @@ interface ApiErrorShape {
   };
 }
 
+/**
+ * 后端 `ProcessingServiceImpl.getDynamicQualityForm` 在产品没有启用的质检标准时抛
+ * `BusinessException(409, "该产品未配置启用的质检标准")`。这条异常目前**没有** errorCode
+ * (只有 message + actionHint), 所以只能按这段稳定文案识别; 后端将来补了 errorCode
+ * 就改成优先按 code 判。
+ */
+export const NO_QUALITY_STANDARD_MARKER = '未配置启用的质检标准';
+export type QualityBatchLoadErrorKind = 'no-standard' | 'backend-message' | 'unknown';
+
+export interface QualityBatchLoadErrorTexts {
+  /** 未知失败的标题 / 正文 (通用兜底) */
+  genericTitle: string;
+  genericMessage: string;
+  /** 产品没有启用的质检标准: 标题 / 正文 (告诉用户找谁、去哪配) */
+  noStandardTitle: string;
+  noStandardMessage: string;
+}
+
+export interface QualityBatchLoadError {
+  kind: QualityBatchLoadErrorKind;
+  title: string;
+  message: string;
+}
+
+function readBackendMessage(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const raw = (error as ApiErrorShape).response?.data?.message;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+/**
+ * 打开批次(拉批次详情 + 质检标准)失败时, 给检验员看的文案。
+ *
+ * - 产品没配启用的质检标准 → 专门文案 (这是**业务上正确的拦截**, 只是以前被说成「无法加载批次信息」)
+ * - 后端给了别的业务 message → 原样展示 (防呆规范「4 位一体」第 b 条)
+ * - 其余(断网 / 超时 / 没有 message) → 通用兜底。⛔ 不要让通用文案盖住上面两种。
+ */
+export function describeQualityBatchLoadError(
+  error: unknown,
+  texts: QualityBatchLoadErrorTexts,
+): QualityBatchLoadError {
+  const backendMessage = readBackendMessage(error);
+  const errorMessage =
+    typeof error === 'object' && error !== null && typeof (error as ApiErrorShape).message === 'string'
+      ? ((error as ApiErrorShape).message as string)
+      : '';
+
+  if (
+    (backendMessage ?? '').includes(NO_QUALITY_STANDARD_MARKER)
+    || errorMessage.includes(NO_QUALITY_STANDARD_MARKER)
+  ) {
+    return { kind: 'no-standard', title: texts.noStandardTitle, message: texts.noStandardMessage };
+  }
+  if (backendMessage) {
+    return { kind: 'backend-message', title: texts.genericTitle, message: backendMessage };
+  }
+  return { kind: 'unknown', title: texts.genericTitle, message: texts.genericMessage };
+}
+
 export function getQualityInspectionSubmitErrorMessage(
   error: unknown,
   fallback: string,

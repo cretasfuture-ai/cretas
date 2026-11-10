@@ -35,6 +35,8 @@
     "loadingBatch": "加载中...",
     "loadBatchFailed": "加载批次失败",
     "cannotLoadBatch": "无法加载批次信息",
+    "noStandardTitle": "该产品还没有质检标准",
+    "noStandardMessage": "该产品还没有配置质检标准，请联系质量经理在网页端配置后再检验",
     "notScored": "未评分",
     "cannotSubmit": "无法提交",
     "unscoredItems": "还有 {{count}} 项未评分：{{items}}。每一项都需要检验员本人做出判断后才能提交。",
