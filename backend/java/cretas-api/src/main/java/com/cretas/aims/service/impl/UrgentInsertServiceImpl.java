@@ -403,7 +403,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             unverifiedReasons.add(capacityCheck.getMessage());
         }
         boolean scheduleBlocked = UrgentInsertScheduleService.BLOCKED.equals(schedulePlan.status());
-        if (scheduleAttempted && !schedulePlan.ok() && !scheduleBlocked) {
+        // A18: 工厂配了「照插并提示」的排不进原因 (UNSCHEDULED) 不算没核对, 它作为提示随结果返回
+        boolean scheduleUnscheduled = UrgentInsertScheduleService.UNSCHEDULED.equals(schedulePlan.status());
+        if (scheduleAttempted && !schedulePlan.ok() && !scheduleBlocked && !scheduleUnscheduled) {
             unverifiedReasons.add(schedulePlan.message());
         }
         boolean resourcesVerified = unverifiedReasons.isEmpty();
@@ -416,8 +418,14 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 && materialCheck.isAvailable() && equipmentCheck.isAvailable()
                 && workerCheck.available() && capacityCheck.isAvailable();
         result.put("isFeasible", isFeasible);
-        result.put("uncheckedWarnings", workerCheck.noScheduleData()
-                ? List.of(WorkerShiftAvailabilityCheck.NO_SCHEDULE_DATA) : List.of());
+        List<String> previewWarnings = new ArrayList<>();
+        if (workerCheck.noScheduleData()) {
+            previewWarnings.add(WorkerShiftAvailabilityCheck.NO_SCHEDULE_DATA);
+        }
+        if (scheduleUnscheduled) {
+            previewWarnings.add(schedulePlan.message());
+        }
+        result.put("uncheckedWarnings", previewWarnings);
         result.put("resourcesVerified", resourcesVerified);
         result.put("unverifiedReasons", unverifiedReasons);
         result.put("feasibilityStatus", isFeasible ? "FEASIBLE" : (definitelyShort ? "INFEASIBLE" : "UNVERIFIED"));
@@ -516,6 +524,16 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     + workerCheck.availableWorkers() + " 人，人数不足（仅提示，不拦截）");
         }
         return warnings;
+    }
+
+    /** A18: 排不进但工厂配了照插: 把「没排入及原因」随结果提示出来。 */
+    private static List<String> withScheduleWarning(List<String> warnings, UrgentInsertScheduleService.Proposal applied) {
+        if (applied == null || !UrgentInsertScheduleService.UNSCHEDULED.equals(applied.status())) {
+            return warnings;
+        }
+        List<String> all = new ArrayList<>(warnings);
+        all.add(applied.message());
+        return all;
     }
 
     /** A2: 缺料但允许插 (开关关, 或开关开且填了原因) 时, 把缺料随结果提示出来。 */
@@ -1035,7 +1053,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         ProductionPlanDTO dto = productionPlanMapper.toDTO(savedPlan);
         dto.setScheduleOutcome(applied.toMap());
-        dto.setUncheckedWarnings(withMaterialWarning(uncheckedWarnings(workerCheck), validation.material()));
+        dto.setUncheckedWarnings(withScheduleWarning(
+                withMaterialWarning(uncheckedWarnings(workerCheck), validation.material()), applied));
         return dto;
     }
 
@@ -1190,7 +1209,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (applied != null) {
             dto.setScheduleOutcome(applied.toMap());
         }
-        dto.setUncheckedWarnings(withMaterialWarning(uncheckedWarnings(workerCheck), validation.material()));
+        dto.setUncheckedWarnings(withScheduleWarning(
+                withMaterialWarning(uncheckedWarnings(workerCheck), validation.material()), applied));
         return dto;
     }
 

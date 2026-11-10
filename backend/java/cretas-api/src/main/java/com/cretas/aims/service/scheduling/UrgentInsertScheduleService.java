@@ -9,6 +9,7 @@ import com.cretas.aims.entity.LineSchedule;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.SchedulingPlan;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.LineScheduleRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.SchedulingPlanRepository;
@@ -66,6 +67,8 @@ public class UrgentInsertScheduleService {
     public static final String OK = "OK";
     /** 引擎说排不进去 / 没填日产能等: 确认必须拦。 */
     public static final String BLOCKED = "BLOCKED";
+    /** A18: 排不进, 但工厂配了这个原因「照插并提示」: 插单计划照建, 不写排程行、不挪别的计划。 */
+    public static final String UNSCHEDULED = "UNSCHEDULED";
     /** 没有足够信息去排 (没绑产线等) 或没评估 (前置的原料已不满足)。 */
     public static final String NOT_EVALUATED = "NOT_EVALUATED";
 
@@ -119,6 +122,8 @@ public class UrgentInsertScheduleService {
     private final SchedulingPlanRepository schedulingPlanRepository;
     private final PlatformTransactionManager transactionManager;
     private final DeliveryRiskService deliveryRiskService;
+    /** A18: 「排不进」按原因放行的工厂配置。 */
+    private final FactorySettingsRepository settingsRepository;
 
     // ---------------------------------------------------------------- 预览: 建临时计划算完回滚
 
@@ -158,6 +163,15 @@ public class UrgentInsertScheduleService {
                           String expectedFingerprint, Long userId) {
         Computation c = compute(factoryId, slot, insertPlan);
         Proposal p = c.proposal();
+        if (UNSCHEDULED.equals(p.status())) {
+            // A18: 工厂把这个原因配成「照插并提示」: 插单计划照建, 不写排程行、不挪别的计划
+            if (expectedFingerprint != null && !expectedFingerprint.equals(p.fingerprint())) {
+                throw new BusinessException(409, "预览之后排程结果已变化（排程、设备占用或原料到货变了），请重新预览，未创建计划")
+                        .withCode("INSERT_PREVIEW_SCHEDULE_CHANGED")
+                        .withHint("重新创建确认预览，按最新排程确认");
+            }
+            return p;
+        }
         if (!p.ok()) {
             throw new BusinessException(409, "排程排不进去，未创建计划: " + p.message())
                     .withCode("INSERT_SCHEDULE_BLOCKED")
@@ -230,8 +244,8 @@ public class UrgentInsertScheduleService {
         if (!"SCHEDULED".equals(raw.outcome())) {
             String products = raw.capacityRequired() == null ? "" : raw.capacityRequired().stream()
                     .map(UrgentInsertScheduleService::describeCapacityRequired).collect(Collectors.joining("；"));
-            return new Computation(new Proposal(BLOCKED, "有产品没填日产能，排不出: " + products, null, null,
-                    List.of(), raw.warnings() == null ? List.of() : raw.warnings(), null),
+            return new Computation(unscheduledOrBlocked(factoryId, "CAPACITY_MISSING",
+                    "有产品没填日产能，排不出: " + products, raw.warnings()),
                     raw, insertPlan, movableByPlan, plansById, firstDay);
         }
 
@@ -239,8 +253,8 @@ public class UrgentInsertScheduleService {
         raw.plans().forEach(r -> byId.put(r.planId(), r));
         PlanResult mine = byId.get(insertPlan.getId());
         if (mine == null || !"SCHEDULED".equals(mine.status())) {
-            return new Computation(new Proposal(BLOCKED, "插单排不进去: " + describe(mine), null, null, List.of(),
-                    raw.warnings() == null ? List.of() : raw.warnings(), null),
+            return new Computation(unscheduledOrBlocked(factoryId, mine == null ? null : mine.status(),
+                    "插单排不进去: " + describe(mine), raw.warnings()),
                     raw, insertPlan, movableByPlan, plansById, firstDay);
         }
 
@@ -253,8 +267,8 @@ public class UrgentInsertScheduleService {
                 continue; // 已无剩余 / 已关闭: 不动它的排程行
             }
             if (!"SCHEDULED".equals(r.status())) {
-                return new Computation(new Proposal(BLOCKED, "被挤的计划 " + number + " 排不进去: " + describe(r), null,
-                        null, List.of(), raw.warnings() == null ? List.of() : raw.warnings(), null),
+                return new Computation(unscheduledOrBlocked(factoryId, r.status(),
+                        "被挤的计划 " + number + " 排不进去: " + describe(r), raw.warnings()),
                         raw, insertPlan, movableByPlan, plansById, firstDay);
             }
             LocalDate oldEnd = e.getValue().stream().map(LineSchedule::getPlannedEndTime).filter(Objects::nonNull)
@@ -311,6 +325,41 @@ public class UrgentInsertScheduleService {
             }
         }
         return null;
+    }
+
+    /** 可按工厂配置放行的「排不进」原因码 (其余原因, 如一次挪太多计划、首日调度计划已完成, 一律拦)。 */
+    static final Set<String> RELAXABLE_REASONS = Set.of(
+            "CAPACITY_MISSING", "EQUIPMENT_UNAVAILABLE", "EXCEEDS_HORIZON", "PREDECESSOR_NOT_SCHEDULED");
+
+    /**
+     * A18: 这个原因工厂配成「照插并提示」就返回 UNSCHEDULED (指纹只由原因码决定: 预览和确认之间计划号、
+     * 产品名这些文字会变, 原因码不会), 否则 BLOCKED (默认, 现状)。
+     */
+    private Proposal unscheduledOrBlocked(String factoryId, String reasonCode, String message, List<String> engineWarnings) {
+        List<String> warnings = engineWarnings == null ? List.of() : engineWarnings;
+        if (reasonCode != null && RELAXABLE_REASONS.contains(reasonCode) && relaxedReasons(factoryId).contains(reasonCode)) {
+            return new Proposal(UNSCHEDULED, "插单计划会建，但没排入排程（本厂设置为这种情况照插并提示）: " + message,
+                    null, null, List.of(), warnings, unscheduledFingerprint(reasonCode));
+        }
+        return new Proposal(BLOCKED, message, null, null, List.of(), warnings, null);
+    }
+
+    private Set<String> relaxedReasons(String factoryId) {
+        String raw = settingsRepository.findUrgentInsertScheduleWarnReasonsByFactoryId(factoryId);
+        if (raw == null || raw.isBlank()) {
+            return Set.of();
+        }
+        return java.util.Arrays.stream(raw.split(",")).map(String::trim).filter(x -> !x.isEmpty())
+                .collect(Collectors.toSet());
+    }
+
+    private static String unscheduledFingerprint(String reasonCode) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(("UNSCHEDULED|" + reasonCode).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** 给人看的「缺哪个产品的日产能」: 产品名 + 单位 + 缺的原因 + 涉及计划号, 不是 DTO 的 toString。 */
