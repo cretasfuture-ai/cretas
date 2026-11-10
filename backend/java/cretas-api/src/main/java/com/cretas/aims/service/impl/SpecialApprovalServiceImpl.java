@@ -48,6 +48,11 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
     private final ObjectMapper objectMapper;
     private final QualityDispositionDecisionGuard decisionGuard;
 
+    public static final String SPECIAL_APPROVAL_SELF_APPROVAL = "SPECIAL_APPROVAL_SELF_APPROVAL";
+    public static final String SPECIAL_APPROVAL_ROLE_FORBIDDEN = "SPECIAL_APPROVAL_ROLE_FORBIDDEN";
+    public static final String SPECIAL_APPROVAL_ACTOR_UNKNOWN = "SPECIAL_APPROVAL_ACTOR_UNKNOWN";
+    public static final String SPECIAL_APPROVAL_RELEASE_NOT_ELIGIBLE = "SPECIAL_APPROVAL_RELEASE_NOT_ELIGIBLE";
+
     @Override
     @Transactional
     public SpecialApprovalDTO submitSpecialApproval(
@@ -77,8 +82,18 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         User requester = userRepository.findById(requesterId)
                 .orElseThrow(() -> new IllegalArgumentException("申请人不存在"));
 
+        // 申请的动作在写申请行之前就核对: 认不出的动作、批不下来的直接放行, 不留一条永远批不成的待审批
+        QualityDispositionRuleService.DispositionAction requestedAction =
+                parseApprovedAction(request.getRequestedAction());
+        if (requestedAction == QualityDispositionRuleService.DispositionAction.RELEASE
+                && !qualityDispositionRuleService.meetsDirectReleaseCriteria(inspection)) {
+            throw new BusinessException(409, "本次质检未达到直接放行条件，特批也不能直接放行")
+                    .withCode(SPECIAL_APPROVAL_RELEASE_NOT_ELIGIBLE)
+                    .withHint("请改为申请条件放行，由质量经理复核后放行");
+        }
+
         // Q6: 已报废批次不能申请返工, 在写申请行之前拒绝
-        decisionGuard.assertReworkAllowed(factoryId, inspection.getProductionBatchId(), request.getRequestedAction());
+        decisionGuard.assertReworkAllowed(factoryId, inspection.getProductionBatchId(), requestedAction.name());
 
         // 4. 评估处置建议 (获取规则信息)
         QualityDispositionRuleService.DispositionResult dispositionResult =
@@ -163,10 +178,12 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
             String factoryId,
             String approvalId,
             ApprovalDecisionRequest decision,
-            Long approverId
+            Long approverId,
+            Long actingUserId,
+            String actingRole
     ) {
-        log.info("处理审批决策: factoryId={}, approvalId={}, decision={}, approverId={}",
-                factoryId, approvalId, decision.getDecision(), approverId);
+        log.info("处理审批决策: factoryId={}, approvalId={}, decision={}, approverId={}, actingUserId={}, actingRole={}",
+                factoryId, approvalId, decision.getDecision(), approverId, actingUserId, actingRole);
 
         // 1. 获取审批记录
         DecisionAuditLog auditLog = decisionAuditLogRepository.findById(approvalId)
@@ -182,6 +199,9 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         if (auditLog.getApprovalStatus() != ApprovalStatus.PENDING) {
             throw new IllegalStateException("审批已处理，当前状态: " + auditLog.getApprovalStatus());
         }
+
+        // 审批身份 (与 /approve 同口径, 批准和驳回都要过): 在任何写入之前。所有入口 (App 接口、AI 工具) 都经过这里。
+        assertMayDecide(auditLog, approverId, actingUserId, actingRole);
 
         // 2. 获取审批人信息
         User approver = userRepository.findById(approverId)
@@ -338,6 +358,30 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
                     return convertToDTO(auditLog, inspection, batch, requester, approver);
                 })
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 谁能对这条申请做决定。身份以已认证的操作人为准 ({@code actingUserId} / {@code actingRole}, 调用方从令牌或 AI 执行上下文取);
+     * 记录在审批行上的 {@code approverId} 若等于申请人同样拒绝 —— 否则审批行上会出现「申请人批了自己」。
+     */
+    private static void assertMayDecide(DecisionAuditLog auditLog, Long approverId, Long actingUserId, String actingRole) {
+        if (actingUserId == null) {
+            throw new BusinessException(403, "无法确认审批人身份")
+                    .withCode(SPECIAL_APPROVAL_ACTOR_UNKNOWN)
+                    .withHint("请重新登录后再审批");
+        }
+        String role = actingRole == null ? null : actingRole.trim().toLowerCase(Locale.ROOT);
+        if (role == null || !APPROVER_ROLES.contains(role)) {
+            throw new BusinessException(403, "当前角色不能审批质检处置申请")
+                    .withCode(SPECIAL_APPROVAL_ROLE_FORBIDDEN)
+                    .withHint("请由质量经理或工厂超级管理员审批");
+        }
+        if (Objects.equals(auditLog.getExecutorId(), actingUserId)
+                || (approverId != null && Objects.equals(auditLog.getExecutorId(), approverId))) {
+            throw new BusinessException(403, "申请人与审批人不能为同一用户")
+                    .withCode(SPECIAL_APPROVAL_SELF_APPROVAL)
+                    .withHint("请由申请人以外的质量经理审批");
+        }
     }
 
     /** 审批行里记的处置动作; 认不出就在写任何东西之前拒绝, 不把一条执行不了的审批标成已批准。 */

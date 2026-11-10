@@ -438,7 +438,8 @@ class QualityDispositionInventoryPostgresContractTest {
         ApprovalDecisionRequest decision = new ApprovalDecisionRequest();
         decision.setDecision(ApprovalDecisionRequest.ApprovalDecision.APPROVE);
         decision.setComment("同意");
-        specialApprovals.processDecision(f.factoryId(), approvalId, decision, APPROVER_ID);
+        // 审批人 = 已认证的质量经理 (不是申请人 USER_ID)
+        specialApprovals.processDecision(f.factoryId(), approvalId, decision, APPROVER_ID, APPROVER_ID, "quality_manager");
     }
 
     private long pendingApprovals(String inspectionId) {
@@ -481,12 +482,14 @@ class QualityDispositionInventoryPostgresContractTest {
     void specialApprovalFailureSurfacesAndRollsBackTheApproval() {
         stubUsers();
         Fixture f = fixture(false);
-        // 不合格检验上申请直接放行: 复核通过的执行同样拒绝 (同普通复核口径)
-        String approvalId = submitSpecial(f, "RELEASE");
+        // 申请挂着时本批进了召回: 复核通过的执行 (库存桥接) 拒绝放行, 必须原样报给审批人并整体回滚
+        String approvalId = submitSpecial(f, "CONDITIONAL_RELEASE");
+        org.mockito.Mockito.doThrow(new BusinessException(409, "本批次召回中，不能放行").withCode("RECALL_IN_PROGRESS"))
+                .when(factoryRecallService).assertReleaseAllowed(f.factoryId(), f.productionBatchId());
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> approveSpecial(f, approvalId))
                 .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("RECALL_IN_PROGRESS"));
 
         assertThat(approvalStatus(approvalId)).isEqualTo("PENDING");
         assertThat(executions(f.inspectionId())).isZero();

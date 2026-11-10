@@ -541,7 +541,7 @@ class QualityBatchDispositionContractTest {
         assertReworkRefusedAndNothingWritten(() ->
                 controller.approveDisposition(FACTORY, application, approve(MANAGER, true), MANAGER));
         assertReworkRefusedAndNothingWritten(() -> specialApprovals().processDecision(FACTORY, application,
-                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER));
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, MANAGER, "quality_manager"));
         assertThat(audits.get(application).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.PENDING);
     }
 
@@ -561,7 +561,7 @@ class QualityBatchDispositionContractTest {
         SpecialApprovalServiceImpl special = specialApprovals();
         String specialId = special.submitSpecialApproval(FACTORY, "qi-fail-2", specialRequest("REWORK"), INSPECTOR)
                 .getApprovalId();
-        special.processDecision(FACTORY, specialId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER);
+        special.processDecision(FACTORY, specialId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, MANAGER, "quality_manager");
         assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.REWORK_REQUIRED);
     }
 
@@ -616,7 +616,7 @@ class QualityBatchDispositionContractTest {
                 INSPECTOR).getApprovalId();
         assertThat(pendingApprovals()).extracting(DecisionAuditLog::getId).containsExactly(approvalId);
 
-        special.processDecision(FACTORY, approvalId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER);
+        special.processDecision(FACTORY, approvalId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, MANAGER, "quality_manager");
 
         assertThat(audits.get(approvalId).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.APPROVED);
         assertThat(pendingApprovals()).isEmpty();
@@ -626,7 +626,7 @@ class QualityBatchDispositionContractTest {
 
         // 再批一次: 拒绝, 处置不会执行第二次
         assertThatThrownBy(() -> special.processDecision(FACTORY, approvalId,
-                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER));
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, MANAGER, "quality_manager"));
         assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
     }
 
@@ -638,7 +638,7 @@ class QualityBatchDispositionContractTest {
                 .getData().getApplicationId();
         // 普通审批行同样出现在特批待审批列表里, 用特批入口批它
         specialApprovals().processDecision(FACTORY, normal,
-                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER);
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, MANAGER, "quality_manager");
 
         assertThat(pendingApprovals()).isEmpty();
         assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
@@ -654,7 +654,7 @@ class QualityBatchDispositionContractTest {
         String approvalId = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("HOLD"), INSPECTOR)
                 .getApprovalId();
 
-        special.processDecision(FACTORY, approvalId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER);
+        special.processDecision(FACTORY, approvalId, decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, MANAGER, "quality_manager");
 
         assertThat(pendingApprovals()).isEmpty();
         assertThat(executedActions("qi-fail")).containsExactly("HOLD");
@@ -667,22 +667,25 @@ class QualityBatchDispositionContractTest {
     void specialApprovalFailureSurfacesAndRejectionExecutesNothing() {
         inspect("qi-fail", "FAIL", "80");
         SpecialApprovalServiceImpl special = specialApprovals();
-        // 不合格检验上申请直接放行: 复核通过的执行同样不放 (与普通复核同口径), 必须报出来
-        String release = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("RELEASE"), INSPECTOR)
-                .getApprovalId();
+        // 申请挂着时本批进了召回: 复核通过的执行 (库存桥接) 拒绝放行, 必须原样报给审批人
+        String release = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("CONDITIONAL_RELEASE"),
+                INSPECTOR).getApprovalId();
+        org.mockito.Mockito.doThrow(new BusinessException(409, "本批次召回中，不能放行").withCode("RECALL_IN_PROGRESS"))
+                .when(recalls).assertReleaseAllowed(FACTORY, 100L);
         assertThatThrownBy(() -> special.processDecision(FACTORY, release,
-                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER))
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, MANAGER, "quality_manager"))
                 .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("RECALL_IN_PROGRESS"));
         assertThat(executedActions("qi-fail")).isEmpty();
         assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+        org.mockito.Mockito.reset(recalls);
 
         // 内存桩没有事务: 真库里这一笔连同审批行整体回滚, 审批行仍待审批 (真 PG 上的读回见
         // QualityDispositionInventoryPostgresContractTest); 这里把它驳回, 腾出位置验证驳回路径
         audits.get(release).setApprovalStatus(DecisionAuditLog.ApprovalStatus.REJECTED);
         String rejected = special.submitSpecialApproval(FACTORY, "qi-fail", specialRequest("CONDITIONAL_RELEASE"),
                 INSPECTOR).getApprovalId();
-        special.processDecision(FACTORY, rejected, decision(ApprovalDecisionRequest.ApprovalDecision.REJECT), MANAGER);
+        special.processDecision(FACTORY, rejected, decision(ApprovalDecisionRequest.ApprovalDecision.REJECT), MANAGER, MANAGER, "quality_manager");
         assertThat(audits.get(rejected).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.REJECTED);
         assertThat(executedActions("qi-fail")).isEmpty();
         assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
@@ -698,11 +701,183 @@ class QualityBatchDispositionContractTest {
                 INSPECTOR).getApprovalId();
 
         assertThatThrownBy(() -> special.processDecision("F999", approvalId,
-                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER))
+                decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, MANAGER, "quality_manager"))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
         assertThat(audits.get(approvalId).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.PENDING);
         assertThat(executedActions("qi-fail")).isEmpty();
+    }
+
+    // ==================== Q11 审批身份: 与 /approve 同口径 (独立审查高危项) ====================
+    //
+    // 特批通过现在真的会执行处置, 所以「谁能批」必须和 /approve 一样: 只有审批角色, 申请人不能批自己的申请。
+    // 身份以已认证的操作人为准 (HTTP: JWT 拦截器写入的 userId / role; AI 工具: 执行上下文 userId 及其账号角色),
+    // 请求体里的 approverId 不作数 (那一项 —— 审批行记谁 —— 是另行暂缓的安全待办, 这里不动)。
+
+    private org.springframework.test.web.servlet.MockMvc decisionEndpoint() {
+        com.cretas.aims.controller.ProcessingController processing = new com.cretas.aims.controller.ProcessingController(
+                mock(com.cretas.aims.service.ProcessingService.class), mock(com.cretas.aims.service.MobileService.class),
+                mock(com.cretas.aims.service.AIEnterpriseService.class),
+                mock(com.cretas.aims.service.ProcessingStageRecordService.class), ruleService, specialApprovals(),
+                inspectionRepo, mock(com.cretas.aims.service.wip.WipInventoryService.class));
+        return org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(processing)
+                .setControllerAdvice(new com.cretas.aims.exception.GlobalExceptionHandler())
+                .addInterceptors(new com.cretas.aims.config.RequireRoleInterceptor(new ObjectMapper()))
+                .build();
+    }
+
+    private static org.springframework.test.web.servlet.RequestBuilder decide(String approvalId, Long tokenUserId,
+                                                                               String tokenRole, Long bodyApproverId) {
+        return org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                .post("/api/mobile/" + FACTORY + "/processing/quality/approvals/" + approvalId + "/decision")
+                .requestAttr("userId", tokenUserId).requestAttr("role", tokenRole)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"decision\":\"APPROVE\",\"comment\":\"同意\",\"approverId\":" + bodyApproverId + "}");
+    }
+
+    private String pendingSpecialConditionalRelease() {
+        inspect("qi-fail", "FAIL", "80");
+        return specialApprovals().submitSpecialApproval(FACTORY, "qi-fail", specialRequest("CONDITIONAL_RELEASE"),
+                INSPECTOR).getApprovalId();
+    }
+
+    private void assertNothingDecided(String approvalId) {
+        assertThat(audits.get(approvalId).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.PENDING);
+        assertThat(executedActions("qi-fail")).isEmpty();
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    @DisplayName("Q11 /decision: 申请人用自己的令牌批自己的申请 403 —— 请求体里填别人的 approverId 也不行, 什么都不执行")
+    void decisionEndpointRefusesSelfApproval() throws Exception {
+        String approvalId = pendingSpecialConditionalRelease();
+        var mvc = decisionEndpoint();
+
+        for (Long bodyApprover : new Long[]{MANAGER, INSPECTOR}) {
+            mvc.perform(decide(approvalId, INSPECTOR, "quality_manager", bodyApprover))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.errorCode").value("SPECIAL_APPROVAL_SELF_APPROVAL"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.actionHint").isNotEmpty());
+            assertNothingDecided(approvalId);
+        }
+        // 令牌是别人、请求体却写申请人: 审批行上会记成申请人自批, 同样拒绝
+        mvc.perform(decide(approvalId, MANAGER, "quality_manager", INSPECTOR))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.errorCode").value("SPECIAL_APPROVAL_SELF_APPROVAL"));
+        assertNothingDecided(approvalId);
+    }
+
+    @Test
+    @DisplayName("Q11 /decision: 非审批角色 (操作员) 被接口的角色闸 403 拦下, 进不了服务层")
+    void decisionEndpointRefusesNonApproverRole() throws Exception {
+        String approvalId = pendingSpecialConditionalRelease();
+
+        decisionEndpoint().perform(decide(approvalId, MANAGER, "operator", MANAGER))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
+                // RequireRoleInterceptor 的拒绝 (code=FORBIDDEN), 不是服务层的 SPECIAL_APPROVAL_ROLE_FORBIDDEN
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code").value("FORBIDDEN"));
+        assertNothingDecided(approvalId);
+    }
+
+    @Test
+    @DisplayName("Q11 /decision 阳性: 申请人以外的质量经理批准 → 200, 执行一次, 成品回 AVAILABLE")
+    void decisionEndpointLetsAnotherApproverApprove() throws Exception {
+        String approvalId = pendingSpecialConditionalRelease();
+
+        decisionEndpoint().perform(decide(approvalId, MANAGER, "quality_manager", MANAGER))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+
+        assertThat(audits.get(approvalId).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.APPROVED);
+        assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
+        assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.PARTIAL_PASS);
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    private com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool orderApprovalTool(String accountRole) {
+        com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool tool = new com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool();
+        com.cretas.aims.ai.tool.ToolRbacGuard guardForRole = mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
+        when(guardForRole.roleOf(any())).thenReturn(accountRole);
+        ReflectionTestUtils.setField(tool, "specialApprovalService", specialApprovals());
+        ReflectionTestUtils.setField(tool, "rbacGuard", guardForRole);
+        return tool;
+    }
+
+    private static Map<String, Object> approveParams(String approvalId) {
+        return new HashMap<>(Map.of("transferId", approvalId));
+    }
+
+    @Test
+    @DisplayName("Q11 AI 工具 order_approval: 申请人在对话里批自己的申请 403 (服务层拦), 什么都不执行")
+    void orderApprovalToolRefusesSelfApproval() {
+        String approvalId = pendingSpecialConditionalRelease();
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(orderApprovalTool("quality_manager"), "doExecute",
+                FACTORY, approveParams(approvalId), new HashMap<String, Object>(Map.of("userId", INSPECTOR))))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("SPECIAL_APPROVAL_SELF_APPROVAL"));
+        assertNothingDecided(approvalId);
+    }
+
+    @Test
+    @DisplayName("Q11 AI 工具 order_approval: 非审批角色 403 (服务层的角色校验, 不靠工具注册表), 审批角色照常批准")
+    void orderApprovalToolChecksTheApproverRoleInTheService() {
+        String approvalId = pendingSpecialConditionalRelease();
+
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(orderApprovalTool("operator"), "doExecute",
+                FACTORY, approveParams(approvalId), new HashMap<String, Object>(Map.of("userId", MANAGER))))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("SPECIAL_APPROVAL_ROLE_FORBIDDEN"));
+        assertNothingDecided(approvalId);
+
+        ReflectionTestUtils.invokeMethod(orderApprovalTool("quality_manager"), "doExecute",
+                FACTORY, approveParams(approvalId), new HashMap<String, Object>(Map.of("userId", MANAGER)));
+        assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
+        assertThat(goods.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    @Test
+    @DisplayName("Q11 审批角色名单一份: /approve、/decision 的 @RequireRole、order_approval 的角色要求、服务层名单完全相同")
+    void approverRoleListsAreTheSameEverywhere() throws Exception {
+        java.util.function.Function<java.lang.reflect.Method, java.util.Set<String>> rolesOf = m ->
+                java.util.Set.of(m.getAnnotation(com.cretas.aims.config.RequireRole.class).value());
+        java.lang.reflect.Method approve = java.util.Arrays.stream(QualityDispositionController.class.getMethods())
+                .filter(m -> m.getName().equals("approveDisposition")).findFirst().orElseThrow();
+        java.lang.reflect.Method decisionMethod = java.util.Arrays.stream(
+                        com.cretas.aims.controller.ProcessingController.class.getMethods())
+                .filter(m -> m.getName().equals("processApprovalDecision")).findFirst().orElseThrow();
+
+        java.util.Set<String> service = com.cretas.aims.service.SpecialApprovalService.APPROVER_ROLES;
+        assertThat(service).isNotEmpty();
+        assertThat(rolesOf.apply(approve)).isEqualTo(service);
+        assertThat(rolesOf.apply(decisionMethod)).isEqualTo(service);
+        assertThat(new com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool().getRequiredRoles()).isEqualTo(service);
+    }
+
+    @Test
+    @DisplayName("特批提交: 不合格检验上申请直接放行当场 409 (不留一条永远批不成的待审批); 合格检验照常可申请")
+    void releaseSpecialApprovalOnAFailedInspectionIsRefusedAtSubmit() {
+        inspect("qi-fail", "FAIL", "80");
+        int auditsBefore = audits.size();
+
+        assertThatThrownBy(() -> specialApprovals().submitSpecialApproval(FACTORY, "qi-fail", specialRequest("RELEASE"),
+                INSPECTOR))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getErrorCode()).isEqualTo("SPECIAL_APPROVAL_RELEASE_NOT_ELIGIBLE");
+                    assertThat(be.getActionHint()).contains("条件放行");
+                });
+        assertThat(audits).hasSize(auditsBefore);
+
+        inspect("qi-pass", "PASS", "100");
+        String ok = specialApprovals().submitSpecialApproval(FACTORY, "qi-pass", specialRequest("RELEASE"), INSPECTOR)
+                .getApprovalId();
+        assertThat(audits.get(ok).getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.PENDING);
     }
 
     @Test
