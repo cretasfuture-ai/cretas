@@ -512,6 +512,11 @@ public class SupplyChainOrchestrator {
                 salesOrderId, plan.getCustomerId(), plan.getProcessingMode(), plan.getMaterialSupplyMode(),
                 plan.getOutputOwnership());
         plan.setStatus(ProductionPlanStatus.PENDING);
+        // D-S411-03 (2026-11-10): 订单交期 → 计划的预计完成日 (排程候选列表与「交期早的先排」都按这个字段)。
+        //    原来这里一个日期都不设, 自动计划不出现在「按日产能自动排程」的候选里, 生产经理得先进计划编辑手填。
+        //    只用订单上真实的交期; 订单没填交期就保持为空 (候选列表把「未定日期」的待处理计划单独列出),
+        //    ⛔ 不凭空编开始日期 / 完成日期。
+        plan.setExpectedCompletionDate(sourceOrder.getRequiredDeliveryDate());
         plan.setIsFullyMatched(false);
         // ProductionPlan 无 productName 字段；productTypeName 冗余记录在 sourceCustomerName 旁
         // 如业务需要，可将 productTypeName 写入 notes 字段
@@ -573,8 +578,9 @@ public class SupplyChainOrchestrator {
         //    用户是自己发现计划没出来, 在 15:58 / 16:01 / 19:15 手工点了三次「以销定产」。
         //    flush 之后再打日志, 这条 log 才是「它真的落库了」而不是「我提交了一个意图」。
         ProductionPlan saved = productionPlanRepository.saveAndFlush(plan);
-        log.info("自动创建生产计划: PP={}, product={}, qty={}, sourceOrder={}",
-                saved.getPlanNumber(), productTypeId, shortfallQuantity, salesOrderId);
+        log.info("自动创建生产计划: PP={}, product={}, qty={}, sourceOrder={}, expectedCompletionDate={}",
+                saved.getPlanNumber(), productTypeId, shortfallQuantity, salesOrderId,
+                saved.getExpectedCompletionDate() != null ? saved.getExpectedCompletionDate() : "未定日期(订单无交期)");
 
         // Sprint 3 Track-F (C-LINKARRAY-1): unified BusinessLink for auto-cascade path.
         // This path bypasses ProductionPlanService.createProductionPlan, so the link()
