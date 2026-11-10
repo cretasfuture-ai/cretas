@@ -19,7 +19,7 @@ import static org.mockito.Mockito.when;
  * 网页审批页靠 {@code GET /settings/features} 的 allowSelfApproval 决定给不给本人审批原因框
  * (纪律排查 B1–B3/B11/B15)。默认 false; 由 {@code PUT /settings} (DTO) 改后读得到。
  */
-class FactorySettingsSelfApprovalFeatureToggleTest {
+class FactorySettingsSelfApprovalFeatureToggleContractTest {
 
     private static final String FACTORY = "F006";
 
