@@ -387,7 +387,19 @@ async function handleCreate() {
     const res = await post(`/${factoryId.value}/material-requisitions/generate`, payload);
     if (res.success) {
       createDialogVisible.value = false;
-      ElMessage.success('领料单已生成');
+      // 调料表读取失败时后端照常出单, 但没有调料行 (seasoningItemsStatus=UNAVAILABLE)。
+      // 不能报一句「已生成」了事 —— 看起来会像「这个配方没有调料」, 车间就漏调料。
+      const seasoningStatus = (res.data as { seasoningItemsStatus?: string } | undefined)?.seasoningItemsStatus;
+      if (seasoningStatus === 'UNAVAILABLE') {
+        ElMessage({
+          type: 'warning',
+          message: '领料单已生成，但配方调料读取失败，调料行未列入。请打开这张领料单人工补充调料后再领料。',
+          duration: 0,
+          showClose: true,
+        });
+      } else {
+        ElMessage.success('领料单已生成');
+      }
       loadData();
     }
   } finally {
