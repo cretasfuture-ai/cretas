@@ -127,7 +127,8 @@ class FactoryMaterialRequisitionWarehousePickingContractTest {
     void warehouseUserCanReadListAndDetail() throws Exception {
         when(service.list(any(), any(), any())).thenReturn(new org.springframework.data.domain.PageImpl<>(
                 List.of(), org.springframework.data.domain.PageRequest.of(0, 20), 0));
-        when(service.getById("F006", "MR-1")).thenReturn(new FactoryMaterialRequisition());
+        // 详情接口改走 getDetailForPicking (顺带给辅料配比, 2026-11-10); 配比本身见 FactoryMaterialRequisitionPickingDosageContractTest
+        when(service.getDetailForPicking(eq("F006"), eq("MR-1"), any())).thenReturn(new FactoryMaterialRequisition());
 
         mockMvc.perform(asUser(get(BASE))).andExpect(status().isOk());
         mockMvc.perform(asUser(get(BASE + "/MR-1"))).andExpect(status().isOk());

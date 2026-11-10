@@ -81,6 +81,17 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.bom.BomSeasoningItemRepository bomSeasoningItemRepository;
 
+    /**
+     * 详情给辅料配比时判工艺保密 (见 {@link #getDetailForPicking})。required=false 只为兼容既有构造器单测;
+     * 缺失时<b>不给配比</b> (fail-closed), 不是放行。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.processsecret.ProcessSecretAccessService processSecretAccessService;
+
+    /** 计划钉住的配方 → 产品 (多产出计划的成品要一起判保密, 同 ProcessSecretGuardInterceptor)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.bom.BomRecipeRepository bomRecipeRepository;
+
     /** T144: 读库存单位 (回退用 RawMaterialType.unit). required=false. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
@@ -402,24 +413,11 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      */
     private void appendSeasoningItems(String factoryId, List<BomRecipeItem> bomItems,
                                       FactoryMaterialRequisition mr, BigDecimal userPlannedRawInputKg) {
-        if (bomSeasoningItemRepository == null || bomItems == null || bomItems.isEmpty()) {
+        List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings = seasoningsOfPlanBom(bomItems);
+        if (seasonings.isEmpty()) {
             return;
         }
         String recipeId = bomItems.get(0).getRecipeId();
-        if (recipeId == null || recipeId.isBlank()) {
-            return;
-        }
-        List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings;
-        try {
-            seasonings = bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
-        } catch (RuntimeException e) {
-            // ⛔ 调料读不到不能把整张领料单拦掉 —— 原料那几行照样有用。
-            log.warn("[领料单] 调料读取失败 recipe={}: {}", recipeId, e.getMessage());
-            return;
-        }
-        if (seasonings == null || seasonings.isEmpty()) {
-            return;
-        }
         java.util.Set<String> already = mr.getItems().stream()
                 .map(FactoryMaterialRequisitionItem::getMaterialTypeId)
                 .filter(java.util.Objects::nonNull)
@@ -466,6 +464,31 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         }
         if (added > 0) {
             log.info("[领料单] 追加调料 {} 行 recipe={}", added, recipeId);
+        }
+    }
+
+    /**
+     * 计划 BOM 对应的调料表 —— 建单 ({@link #appendSeasoningItems}) 与确认领料的配比 ({@link #getDetailForPicking})
+     * 共用这一份, ⛔ 不各自去找配方 (形态 D)。口径: 取 BOM 第一行所属配方的调料。
+     *
+     * @return 永不为 null; 读不到 (无仓库 / 无配方 / 查询失败) 返回空 list, 调用方不拦单
+     */
+    private List<com.cretas.aims.entity.bom.BomSeasoningItem> seasoningsOfPlanBom(List<BomRecipeItem> bomItems) {
+        if (bomSeasoningItemRepository == null || bomItems == null || bomItems.isEmpty()) {
+            return List.of();
+        }
+        String recipeId = bomItems.get(0).getRecipeId();
+        if (recipeId == null || recipeId.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings =
+                    bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
+            return seasonings == null ? List.of() : seasonings;
+        } catch (RuntimeException e) {
+            // ⛔ 调料读不到不能把整张领料单拦掉 —— 原料那几行照样有用。
+            log.warn("[领料单] 调料读取失败 recipe={}: {}", recipeId, e.getMessage());
+            return List.of();
         }
     }
 
@@ -607,6 +630,104 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // 触发懒加载
         mr.getItems().size();
         return mr;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public FactoryMaterialRequisition getDetailForPicking(String factoryId, String id,
+                                                          com.cretas.aims.security.AuthenticatedActor actor) {
+        FactoryMaterialRequisition mr = getById(factoryId, id);
+        mr.setAuxiliaryAutoCalc(fillAuxiliaryDosage(factoryId, mr, actor));
+        return mr;
+    }
+
+    /**
+     * 给辅料行填确认领料用的配比 ({@code dosagePerKgG}), 返回 {@code auxiliaryAutoCalc}。
+     *
+     * <h3>为什么在这里 (2026-11-10)</h3>
+     * 确认领料弹窗原来自己查「生产计划 → BOM 调料」拿配比; 仓管 (warehouse_worker / warehouse_manager)
+     * 的 production 模块是 none, 两跳都 403 还弹 sticky 错误, 辅料只能手填。仓管读得到的是领料单,
+     * 所以配比由这里带出。⛔ 没有为此给仓管放开生产计划 / BOM 的读权限。
+     *
+     * <h3>口径</h3>
+     * 与建单 {@link #appendSeasoningItems} 同一份调料表 ({@link #seasoningsOfPlanBom}) 与同一条
+     * 「哪些行参与」规则 ({@link com.cretas.aims.service.bom.SeasoningRatioContract}): COOKING 段不计入调料的不给,
+     * 没有可用配比的不给; 同一物料多行时取第一行 (建单也是先到先得)。
+     *
+     * <h3>工艺保密 (按厂开关, 默认关)</h3>
+     * 配比就是配方。计划牵涉的产品 (锚点 + 目标成品 + 钉住配方的产品, 与 {@code ProcessSecretGuardInterceptor}
+     * 同一个集合) 里只要有一个调用者无完整查看权, 就一行都不给、调料表也不读, 返回 {@code PROCESS_SECRET}。
+     * 判定用 {@code permitsViewFull} (与 BOM 调料接口的 {@code @ProcessSecretGuard(VIEW_FULL)} 同一个 decide);
+     * 字段名在出口裁剪的配比词表里, 响应出口再兜一层。保密服务缺失时同样不给 (fail-closed)。
+     */
+    private String fillAuxiliaryDosage(String factoryId, FactoryMaterialRequisition mr,
+                                       com.cretas.aims.security.AuthenticatedActor actor) {
+        List<FactoryMaterialRequisitionItem> auxRows = new ArrayList<>();
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            if (it != null && it.getMaterialCategory() == MaterialCategory.AUXILIARY
+                    && it.getMaterialTypeId() != null && !it.getMaterialTypeId().isBlank()) {
+                auxRows.add(it);
+            }
+        }
+        String planId = mr.getProductionPlanId();
+        if (auxRows.isEmpty() || planId == null || planId.isBlank()) {
+            return AUX_AUTO_CALC_NO_RATIO;
+        }
+        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId).orElse(null);
+        if (plan == null) {
+            return AUX_AUTO_CALC_NO_RATIO;
+        }
+        if (!mayReadPlanRecipe(factoryId, plan, actor, "GET material-requisition:" + mr.getId())) {
+            return AUX_AUTO_CALC_PROCESS_SECRET;
+        }
+        Map<String, BigDecimal> dosageByMaterial = new HashMap<>();
+        for (com.cretas.aims.entity.bom.BomSeasoningItem s
+                : seasoningsOfPlanBom(PlanBomItems.resolve(factoryId, plan, bomRecipeItemRepository))) {
+            String mtId = s.getMaterialTypeId();
+            if (mtId == null || mtId.isBlank()
+                    || !com.cretas.aims.service.bom.SeasoningRatioContract.countsTowardSeasoningCost(s)
+                    || !com.cretas.aims.service.bom.SeasoningRatioContract.hasUsableRatio(s)) {
+                continue;
+            }
+            dosageByMaterial.putIfAbsent(mtId, s.getDosagePerKgG());
+        }
+        boolean any = false;
+        for (FactoryMaterialRequisitionItem it : auxRows) {
+            BigDecimal dosage = dosageByMaterial.get(it.getMaterialTypeId());
+            if (dosage != null) {
+                it.setDosagePerKgG(dosage);
+                any = true;
+            }
+        }
+        return any ? AUX_AUTO_CALC_AVAILABLE : AUX_AUTO_CALC_NO_RATIO;
+    }
+
+    /** 调用者能否看这张计划牵涉的全部产品的完整工艺; 本厂没有保密产品时直接放行 (默认全关)。 */
+    private boolean mayReadPlanRecipe(String factoryId, ProductionPlan plan,
+                                      com.cretas.aims.security.AuthenticatedActor actor, String resourceRef) {
+        if (processSecretAccessService == null) {
+            log.warn("[领料单] 工艺保密服务未注入, 不给辅料配比 factory={}", factoryId);
+            return false;
+        }
+        if (processSecretAccessService.protectedProductTypeIds(factoryId).isEmpty()) {
+            return true;
+        }
+        Set<String> products = com.cretas.aims.service.processsecret.ProcessSecretPlanProducts.of(plan,
+                recipeId -> bomRecipeRepository == null
+                        ? Optional.empty()
+                        : bomRecipeRepository.findById(recipeId)
+                                .filter(r -> factoryId.equals(r.getFactoryId()))
+                                .map(com.cretas.aims.entity.bom.BomRecipe::getProductTypeId));
+        // 钉住的配方解析不了产品 (配方仓库缺失) 而本厂有保密产品: 不能确认牵涉谁, 不给
+        if (bomRecipeRepository == null && !PlanBomItems.pinnedRecipeIds(plan).isEmpty()) {
+            return false;
+        }
+        for (String productTypeId : products) {
+            if (!processSecretAccessService.permitsViewFull(actor, factoryId, productTypeId, resourceRef)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
