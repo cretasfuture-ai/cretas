@@ -139,6 +139,24 @@ describe('退货来源与客户退款 API boundary', () => {
     }, { _silent: true });
   });
 
+  it('本人审批 (B15): 原因字段只在传了时才进请求体', async () => {
+    requestMock.post
+      .mockResolvedValueOnce({ success: true, data: refundView })
+      .mockResolvedValueOnce({ success: true, data: refundView })
+      .mockResolvedValueOnce({ success: true, data: refundView });
+
+    await approveReturnRefund('F001', 'return/7', '', '本厂只有我一个财务');
+    await markReturnRefundPaid('F001', 'return/7', 'CASH', '模拟-7', '现金退回', '本厂只有我一个出纳');
+    await approveReturnRefundReversal('F001', 'return/7', 'RF-7', 'REV-LEDGER-7', { silent: true, selfApprovalReason: '只有我' });
+
+    expect(requestMock.post).toHaveBeenNthCalledWith(1, '/F001/return-orders/return%2F7/refund/approve',
+      { note: '', selfApprovalReason: '本厂只有我一个财务' });
+    expect(requestMock.post).toHaveBeenNthCalledWith(2, '/F001/return-orders/return%2F7/refund/mark-paid',
+      { paymentMethod: 'CASH', paymentReference: '模拟-7', remark: '现金退回', selfPaidReason: '本厂只有我一个出纳' });
+    expect(requestMock.post).toHaveBeenNthCalledWith(3, '/F001/return-orders/return%2F7/refund/reversal/approve',
+      { requestId: 'RF-7', reversalTransactionId: 'REV-LEDGER-7', selfApprovalReason: '只有我' }, { _silent: true });
+  });
+
   it('rejects reversal commands with missing identity fields before sending', async () => {
     await expect(requestReturnRefundReversal('F001', 'return/7', ' ', '收回-7', '原因')).rejects.toThrow('不能为空');
     await expect(approveReturnRefundReversal('F001', 'return/7', 'RF-7', '')).rejects.toThrow('为空');

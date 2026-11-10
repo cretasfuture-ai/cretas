@@ -307,7 +307,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/controller/warehouse/Wareh
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/warehouse/WarehouseReceivingControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/warehouse/WarehouseReceivingCustomerSuppliedControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/controller/workflow/BudgetBusinessSummaryTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/controller/workflow/WorkflowInstanceControllerTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/dev/lineage/LineageBackfillRunnerExitCodeTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/domain/OrderUsageWhitelistsTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/dto/WorkProcessTaskCompleteRequestValidationTest.java
@@ -901,7 +900,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/SalesDel
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/SalesMaterialLineShipmentTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/SalesOrderFulfillmentWarehouseTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/SalesOrderSuppliedMaterialRequirementReceiptTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/SalesPriceAdjustmentServiceTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/SalesServiceImplActualCostSplitSp12Test.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/SalesServiceImplApprovalThresholdN9Test.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/SalesServiceImplCostBreakdownB2Test.java
@@ -1111,7 +1109,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/ReportRev
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/ReportReversalListNamesTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/ReportReversalMaterialRestoreTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/ReportReversalPlanStateTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/ReportReversalServiceTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/WipOutHistoryRepairTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/reversal/WipReversalReviewerRegressionTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/rules/RuleEngineIntegrationTest.java

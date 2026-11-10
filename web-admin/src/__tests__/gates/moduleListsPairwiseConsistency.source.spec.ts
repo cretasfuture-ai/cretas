@@ -149,8 +149,16 @@ const SNAPSHOT: L1Snapshot = JSON.parse(read(L1_SNAPSHOT));
 function isRestaurantCode(m: string): boolean {
   return m === 'restaurant' || m.startsWith('restaurant');
 }
+/**
+ * 审批权限码 (纪律排查 B1–B3/B11/B15, Steve 2026-11-10「审批人按权限」): 是「审批动作权限」, 不是业务模块 ——
+ * 与 production_report_correction 一样只在 L1/L2 写白名单里出现 (供各厂授权), 不进侧边栏、不进 L1 快照轴。
+ * 这里只登记后端真的声明成审批码的那几个 (见下面「审批码登记不放过模块漂移」), 不是按前缀一刀切。
+ */
+const APPROVAL_CODES = ['approval_report_reversal', 'approval_stocktake', 'approval_quality_disposition',
+  'approval_price_adjustment', 'approval_refund'];
+
 /** 内部码: owner 裁定「降为内部码并登记」, 不参与收敛比对 */
-const INTERNAL_CODES = new Set(['production_report_correction', '__permissions__']);
+const INTERNAL_CODES = new Set(['production_report_correction', '__permissions__', ...APPROVAL_CODES]);
 
 const L1_ALL = new Set(Object.values(SNAPSHOT.levels).flatMap((row) => Object.keys(row)));
 const L1_RESTAURANT = [...L1_ALL].filter(isRestaurantCode).sort();
@@ -290,6 +298,19 @@ describe('module lists converge to L1 (ratchet, source-scan)', () => {
       total,
       `模块清单与 L1 的偏离从基线 ${DEVIATION_BASELINE} 涨到 ${total} —— 有人往某份清单加/删了模块而没向 L1 收敛。⛔ 别改基线; 要么收敛, 要么在 PR 里说明。`,
     ).toBeLessThanOrEqual(DEVIATION_BASELINE);
+  });
+
+  it('审批码登记不放过模块漂移: 登记的就是后端声明的那 5 个审批码, 且都不是 L1 业务模块', () => {
+    // 后端唯一来源: PermissionServiceImpl 的 APPROVAL_* 常量
+    const java = read(resolve(JAVA, 'service/impl/PermissionServiceImpl.java'));
+    const declared = [...java.matchAll(/String APPROVAL_[A-Z_]+ = "(approval_[a-z_]+)";/g)].map((m) => m[1]).sort();
+    expect(declared.length).toBe(5);
+    expect([...APPROVAL_CODES].sort()).toEqual(declared);
+    // 真模块不能借这个口子豁免: 登记的审批码一个都不在 L1 轴上
+    expect(APPROVAL_CODES.filter((c) => L1_ALL.has(c))).toEqual([]);
+    // 阴性对照: 一个前缀相同但后端没声明的码仍然计入 extra (不是按 approval_ 前缀放行)
+    const probe = deviation({ ...LISTS[0], modules: [...LISTS[0].modules, 'approval_made_up_module'] });
+    expect(probe.extra).toContain('approval_made_up_module');
   });
 
   it('阴性对照: 往任意一份塞一个 L1 没有的模块 ⇒ 偏离 +1 (证明棘轮量得到 extra)', () => {

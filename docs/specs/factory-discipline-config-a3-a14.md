@@ -2,7 +2,7 @@
 
 来源：`工厂纪律与顺序排查-20261110/报告.md`；Steve 2026-11-10 总原则「是否拦、怎么拦都由工厂自己配置，不写死」。
 配置全部放在阈值中心 `factory_thresholds`（工厂行 > 全局 `'*'` 行 > 代码兜底），唯一读取处
-`service/discipline/FactoryDisciplinePolicy`，迁移 `V20261110_81__factory_discipline_configs.sql`。
+`service/discipline/FactoryDisciplinePolicy`，迁移 `V20261111_81__factory_discipline_configs.sql`。
 工厂在 web「系统设置 → 业务阈值配置」里按类别（质量 / 生产）修改。
 
 | 条目 | 配置键 | 默认 | 可选值 |

@@ -174,7 +174,12 @@ class DailyCapacityConstraintContractTest {
         assertThat(b.firstDay()).isEqualTo(a.lastDay());
         assertThat(b.delays()).singleElement().satisfies(d -> {
             assertThat(d.code()).isEqualTo(DelayCode.PREDECESSOR);
-            assertThat(d.detail()).contains("PLAN-A");
+            assertThat(d.detail()).contains("PLAN-A").contains("它 " + a.lastDay() + " 做完");
+            // 口径 (统一验收 1547-4 疑点): from..to 是「因为等它而没排的日子」, 两头都含;
+            // to = 最早可开始日的前一天, 所以 to 比文案里的「做完」日、比 B 的实际开始日早一天, 不是写错
+            assertThat(d.from()).isEqualTo(D1);
+            assertThat(d.to()).isEqualTo(a.lastDay().minusDays(1));
+            assertThat(d.to().plusDays(1)).isEqualTo(b.firstDay());
         });
     }
 

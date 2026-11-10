@@ -253,6 +253,8 @@ class ProcessSecretDataLayerContractTest {
             "totalPieceRate", "totalPieceRateWage", "totalUsageHours", "usage", "usageAvailable", "usageCount",
             "usageHistory", "usageId", "usageUnit", "usedPct", "variancePercent", "weeklyUtilizationRate",
             "yoyGrowthRate",
+            // 纪律排查 B11: 改价审批阈值 (降价 / 涨价超过多少百分比要审批), 销售价格规则, 不是配方配比
+            "priceDecreaseApprovalPct", "priceIncreaseApprovalPct",
             // 成本构成占比 (金额口径, 价格另受价格权限), 不是用量配比
             "materialRatio", "otherCostRatio", "overheadRatio", "equipmentCostRatio", "rawMaterialPercentage",
             // 「yield」= 首检良品率 (质量), 不是出成; 其余是单位换算 / 排程 / 意图里的同名词

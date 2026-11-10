@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
  * 是否拦、怎么拦都由工厂自己配置, 不写死)。
  *
  * <p>配置存于阈值中心 {@code factory_thresholds} (工厂行 &gt; 全局 {@code '*'} 行 &gt; 本类代码兜底),
- * 全局默认行见 {@code V20261110_81__factory_discipline_configs.sql}。本类的代码兜底与那份迁移的默认值逐一相同,
+ * 全局默认行见 {@code V20261111_81__factory_discipline_configs.sql}。本类的代码兜底与那份迁移的默认值逐一相同,
  * 只在阈值中心整行停用或读不到时才会用到。
  *
  * <p><b>字符串配置写错 (认不出的值) 一律按最严</b>: 放行规则按 {@link ReleaseMode#QC_ONLY}, 多收按

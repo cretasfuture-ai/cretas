@@ -63,6 +63,43 @@ public final class ThresholdKeys {
     /** 信用额度接近预警比 (used / limit). Hard-coded default = 0.80. */
     public static final String CREDIT_WARNING_RATIO = "credit.warning_ratio";
 
+    /**
+     * 超信用额度检查模式 (2026-11-10 Steve 裁定, 工厂纪律 A17)。字符串, 取值 OFF / WARN / BLOCK。
+     * OFF (默认) = 整个检查不做; WARN = 只提示并留痕不拦; BLOCK = 拦截, 持「信用特批」权限者填原因可放行。
+     * 挡得住下单 ⇒ 登记为闸门类 key (见 {@link #GATING_KEYS})。
+     */
+    public static final String CREDIT_CHECK_MODE = "credit.check.mode";
+
+    // ==================== 可配置的权限默认角色 (2026-11-10 Steve 裁定, 工厂纪律 B7 / B9 / A17) ====================
+    // 「谁能做这件事」不写死岗位: 值是逗号分隔的角色码, 存工厂阈值 (没有 per-factory 行就跟随全局默认)。
+    // 厂长 (factory_super_admin) 恒有权限, 不受这里的值影响。读到旧值 = 放行 / 拦住用户动作 ⇒ 登记为闸门类 key。
+
+    /** 原料类型维护 (新建/改/删/别名/合并) 的岗位 → 默认 warehouse_manager */
+    public static final String INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN = "inventory.permission.material_type_maintain";
+    /** 报损审批 (通过/驳回/看待审) 的岗位 → 默认只有厂长 (空) */
+    public static final String INVENTORY_PERMISSION_WASTAGE_APPROVE = "inventory.permission.wastage_approve";
+    /** 信用特批 (超信用额度被拦截时放行) 的岗位 → 默认只有厂长 (空) */
+    public static final String CREDIT_PERMISSION_OVERRIDE = "credit.permission.override";
+
+    // ==================== 通知接收人 (2026-11-10 Steve 裁定, 工厂纪律 B12) ====================
+    // 每类通知发给谁由工厂配置: 值是逗号分隔的角色码; 没配 / 配的角色全都没有人 ⇒ 默认发给厂长, 不丢。
+    // 归类沿用现有分类 (PRODUCTION / INVENTORY), 不新增分类, 以免前端那份平行 TS 联合类型要跟着改。
+
+    /** 新调度计划已创建 → 默认 dispatcher,factory_super_admin */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_CREATED = "production.notify.schedule_created";
+    /** 调度计划已确认 → 默认 workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_CONFIRMED = "production.notify.schedule_confirmed";
+    /** 调度计划延期预警 → 默认 dispatcher,factory_super_admin,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_SCHEDULE_DELAYED = "production.notify.schedule_delayed";
+    /** 紧急插单 → 默认 dispatcher,factory_super_admin,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_URGENT_INSERT = "production.notify.urgent_insert";
+    /** 生产进度严重落后预警 (效率检测) → 默认 dispatcher,workshop_supervisor */
+    public static final String PRODUCTION_NOTIFY_EFFICIENCY_WARNING = "production.notify.efficiency_warning";
+    /** AI 排产结果通知 (原来是全厂广播) → 默认 dispatcher,factory_super_admin */
+    public static final String PRODUCTION_NOTIFY_AI_SCHEDULING = "production.notify.ai_scheduling";
+    /** 低库存双向报警 → 默认 warehouse_manager,procurement_manager */
+    public static final String INVENTORY_NOTIFY_LOW_STOCK = "inventory.notify.low_stock";
+
     // ==================== BOM (BOM) ====================
 
     /** BOM 递归展开最大深度. Hard-coded default = 10. */
@@ -210,7 +247,7 @@ public final class ThresholdKeys {
     public static final String EFFICIENCY_MAX = "efficiency.individual.max";
 
     // ==================== 工厂纪律口径 (2026-11-10 Steve: 是否拦、怎么拦由工厂配置) ====================
-    // 全局默认行见 V20261110_81__factory_discipline_configs.sql; 解析与「认不出按最严」见
+    // 全局默认行见 V20261111_81__factory_discipline_configs.sql; 解析与「认不出按最严」见
     // com.cretas.aims.service.discipline.FactoryDisciplinePolicy (唯一读取处)。
 
     /** A3 批次放行规则: QC_ONLY (默认) | QC_OR_MANUAL。认不出 = QC_ONLY。 */
@@ -285,8 +322,60 @@ public final class ThresholdKeys {
             PRODUCTION_RECEIPT_OVER_RECEIVE_MODE,
             PRODUCTION_RECEIPT_OVER_RECEIVE_RATE,
             PRODUCTION_THAW_BACKFILL_MAX_MINUTES,
-            PRODUCTION_BACKDATE_MAX_DAYS
+            PRODUCTION_BACKDATE_MAX_DAYS,
+            CREDIT_CHECK_MODE,
+            INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
+            INVENTORY_PERMISSION_WASTAGE_APPROVE,
+            CREDIT_PERMISSION_OVERRIDE
     );
+
+    /** 值是「逗号分隔岗位码」的 key (权限岗位名单 + 通知接收人)。保存时按 FactoryUserRole 校验, 打错字不再静默失效。 */
+    public static final java.util.Set<String> ROLE_LIST_KEYS = java.util.Set.of(
+            INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
+            INVENTORY_PERMISSION_WASTAGE_APPROVE,
+            CREDIT_PERMISSION_OVERRIDE,
+            PRODUCTION_NOTIFY_SCHEDULE_CREATED,
+            PRODUCTION_NOTIFY_SCHEDULE_CONFIRMED,
+            PRODUCTION_NOTIFY_SCHEDULE_DELAYED,
+            PRODUCTION_NOTIFY_URGENT_INSERT,
+            PRODUCTION_NOTIFY_EFFICIENCY_WARNING,
+            PRODUCTION_NOTIFY_AI_SCHEDULING,
+            INVENTORY_NOTIFY_LOW_STOCK);
+
+    /**
+     * 保存阈值前的按 key 校验: 岗位名单里每一项必须是真实存在的岗位码 (空串 = 只有厂长, 合法);
+     * {@link #CREDIT_CHECK_MODE} 只能是 OFF / WARN / BLOCK。返回错误说明, 合法返回 null。
+     * 其它 key 不管。
+     */
+    public static String validateSemantics(String thresholdKey, String value) {
+        if (thresholdKey == null || value == null) {
+            return null;
+        }
+        if (CREDIT_CHECK_MODE.equals(thresholdKey)) {
+            String v = value.trim().toUpperCase();
+            return (v.equals("OFF") || v.equals("WARN") || v.equals("BLOCK"))
+                    ? null : "超信用额度检查模式只能是 OFF / WARN / BLOCK";
+        }
+        if (ROLE_LIST_KEYS.contains(thresholdKey)) {
+            for (String code : value.split(",")) {
+                String c = code.trim();
+                if (c.isEmpty()) {
+                    continue;
+                }
+                boolean known = false;
+                for (com.cretas.aims.entity.enums.FactoryUserRole r : com.cretas.aims.entity.enums.FactoryUserRole.values()) {
+                    if (r.name().equals(c)) {
+                        known = true;
+                        break;
+                    }
+                }
+                if (!known) {
+                    return "岗位码不存在: " + c + " (请填 factory_super_admin、warehouse_manager 这类英文岗位码, 逗号分隔)";
+                }
+            }
+        }
+        return null;
+    }
 
     /**
      * 这个 key 是不是闸门类（读到旧值会挡住用户动作）。

@@ -167,19 +167,11 @@ public class DelayDetectionScheduler {
                         efficiency * 100);
 
                     try {
-                        // 发送给调度员和车间主任
-                        notificationService.sendToRole(
+                        // 默认发给调度员和车间主任, 工厂可配置 (找不到人时改发厂长)
+                        notificationService.sendByPolicy(
                             factoryId,
-                            FactoryUserRole.dispatcher,
-                            "生产进度严重落后预警",
-                            warningContent,
-                            NotificationType.WARNING,
-                            "SCHEDULING",
-                            schedule.getId());
-
-                        notificationService.sendToRole(
-                            factoryId,
-                            FactoryUserRole.workshop_supervisor,
+                            com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_NOTIFY_EFFICIENCY_WARNING,
+                            java.util.List.of(FactoryUserRole.dispatcher, FactoryUserRole.workshop_supervisor),
                             "生产进度严重落后预警",
                             warningContent,
                             NotificationType.WARNING,

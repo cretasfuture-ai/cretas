@@ -191,7 +191,7 @@ class SettlementModeNoDoubleConsumptionPostgresContractTest {
         when(warehouseResolver.resolveFinishedGoodsId(anyString())).thenReturn("WH-FG");
         when(warehouseResolver.resolveLogisticsId(anyString())).thenReturn("WH-LOG");
         when(warehouseResolver.isWorkshopWarehouse(anyString(), eq("WH-WKS"))).thenReturn(true);   // 原料已领到生产仓
-        // 工厂开关落真表: 全局默认开 (= 迁移 V20261110_81), A7-PG-OFF 显式关
+        // 工厂开关落真表: 全局默认开 (= 迁移 V20261111_81), A7-PG-OFF 显式关
         threshold("*", "1");
         threshold(F_OFF, "0");
     }

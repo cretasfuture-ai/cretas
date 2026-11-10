@@ -3,7 +3,6 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.dto.MobileDTO;
 import com.cretas.aims.annotation.RequirePermission;
-import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.batch.AssignWorkersDTO;
 import com.cretas.aims.dto.batch.TeamBatchReportRequest;
 import com.cretas.aims.dto.batch.WorkerCheckoutDTO;
@@ -728,9 +727,8 @@ public class ProcessingController {
     /**
      * 处理审批决策
      */
-    @RequirePermission({"quality:read_write"})
-    // 与 /quality-disposition/{id}/approve 同一份审批角色名单 (SpecialApprovalService.APPROVER_ROLES, 几处一致有测试钉住)
-    @RequireRole({"quality_manager", "factory_super_admin", "platform_admin", "permission_admin"})
+    // 与 /quality-disposition/{id}/approve 同一个审批权限码 (纪律排查 B3, 几处一致有测试钉住)
+    @RequirePermission({"approval_quality_disposition:approve"})
     @PostMapping("/quality/approvals/{approvalId}/decision")
     @Operation(summary = "处理审批", description = "审批或拒绝特批申请")
     public ApiResponse<SpecialApprovalDTO> processApprovalDecision(

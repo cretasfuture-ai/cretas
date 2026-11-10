@@ -55,12 +55,12 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
     private final FinishedGoodsFeedService finishedGoodsFeedService;
 
     /**
-     * 🔴🔒🔒 sister #4 防呆: 撤销小结前检测本计划领料单是否已关单。{@code @Autowired(required=false)} 兼容
-     * 既有 7 参构造单测 (Lombok 仅纳入 final 字段, 非 final 不进构造器 → 纯 mock 测试不受影响), 缺失时降级
-     * (不阻断, 与老行为一致 —— 纯原料/无领料闸的计划本无关单交互)。prod Spring 恒注入。
+     * C2 (Steve 2026-11-10 裁定 B): 撤销小结还回的原料若落在<b>已关单</b>领料单的生产仓批次上, 直接退回原料仓
+     * (与 C1 撤回报工同一个出口)。{@code @Autowired(required=false)} 兼容既有 7 参构造单测 (Lombok 仅纳入 final
+     * 字段); 缺失而确有料落在领料单生产仓批次上时 loud-fail, ⛔ 不跳过。prod Spring 恒注入。
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
+    private com.cretas.aims.service.factory.FactoryMaterialRequisitionService requisitionService;
 
     /** New submit allocations are released when a settlement is reversed. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -115,32 +115,11 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
                 : consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAt(
                         factoryId, planBatchIds, postedAt);
 
-        // 🔴🔒🔒 2026-07-04 sister #4 防呆 (关单后撤销小结 → 生产仓幻库存) — 收窄为 settlement-级 交叠判定。
-        //   首版 #1215 用 plan-级 anyMatch(status==CLOSED) 误伤: 只要本计划曾关过任一领料单 (R1), 之后所有小结的
-        //   撤销全被永久拒绝 —— 即使被撤的这次小结 (如 settle#2, 只引用 R2 / raw 批次) 的消耗根本不碰 R1 划平的
-        //   WKS 批次, 撤销它完全安全。
-        //   真实危险: close() 按「WKS 现存 = issued − 已小结实耗」把未消耗料退回原料仓 + drawDown 划平生产仓 WKS
-        //   批次 (归零)。若被撤这次小结的某笔消耗来源批次 (mc.batchId) 命中某张已关单领料单划平的 WKS 批次, step ⑤
-        //   会对它还回 usedQuantity → 生产仓凭空冒出正现存 = CLOSED 领料单上的幻库存。故仅当「本次撤销的消耗来源
-        //   批次集」∩「已关单领料单的 WKS 批次集」非空时才 fail-fast loud-block (任何库存变更前); 无交叠 → 安全放行
-        //   (被撤小结只引用 raw 批次 / 或另一张未关单领料单的 WKS 批次)。无领料闸 (F006 直消耗) / 无已关单领料单 /
-        //   本次消耗为空 → 不触发 (行为不变)。
-        if (requisitionRepository != null && !consumptions.isEmpty()) {
-            java.util.Set<String> closedWorkshopBatchIds = collectClosedRequisitionWorkshopBatchIds(factoryId, planId);
-            if (!closedWorkshopBatchIds.isEmpty()) {
-                boolean overlapsClosedWks = consumptions.stream()
-                        .map(MaterialConsumption::getBatchId)
-                        .anyMatch(closedWorkshopBatchIds::contains);
-                if (overlapsClosedWks) {
-                    throw new BusinessException(409,
-                            "撤销小结失败: 本次小结的消耗涉及已关单退料的生产仓批次, 关单后不可再撤销 (避免生产仓幻库存)")
-                            .withCode("INTERIM_REVERSE_REQUISITION_CLOSED")
-                            .withHint("如需调整, 请新开领料单并重新报工小结; 已关单的领料料流不可逆")
-                            .withHintTarget("撤销小结")
-                            .withSeverity("BLOCKING");
-                }
-            }
-        }
+        // 🔴 2026-07-04 sister #4 曾在这里对「本次撤销的消耗来源批次 ∩ 已关单领料单的生产仓批次」409 拦截
+        //   (INTERIM_REVERSE_REQUISITION_CLOSED)。C2 (Steve 2026-11-10 裁定 B) 改为放行: 交叠的那部分在 ⑤ 还回生产仓
+        //   之后, 由 ⑤.5 直接退回原料仓并留退料流水; 不交叠 (原料仓批次 / 未关单领料单的生产仓批次) 仍走原路径。
+        //   「是否已关单」在锁住生产仓批次之后判 (见 FactoryMaterialRequisitionService#returnToSourceIfRequisitionClosed),
+        //   这里不再预读 —— 预读不加锁, 与并发关单会读到旧状态。
 
         // 被逆转影响的半成品/成品批次号 (供治理层快照 → 半成品盘点撤销告警)。
         java.util.Set<String> affected = new java.util.LinkedHashSet<>();
@@ -220,6 +199,13 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         //   叠加 interim_settled_at = postedAt 精确锁定本次小结扣减的那批行 → 撤销集与扣减侧 deducted 集完全一致。
         //   ⚠️ planBatchIds / consumptions 已在上方 (sister #4 守卫前) 计算, 此处复用同一读 (①-④ 不改这些 raw 消耗行)。
         int rawRestored = 0;
+        // C2: 每个批次实际还回了多少 (clamp 后), ⑤.5 据此把落在已关单领料单生产仓批次上的部分退回原料仓。
+        Map<String, BigDecimal> restoredByBatch = new java.util.TreeMap<>();
+        // 审查 #3: 先按批次 id 排序锁住要还回的批次, 与关单 / 撤回 / 小结同一锁序 (按消耗顺序锁会与关单互相死锁)。
+        for (String lockId : new java.util.TreeSet<>(consumptions.stream()
+                .map(MaterialConsumption::getBatchId).filter(java.util.Objects::nonNull).toList())) {
+            materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
+        }
         for (MaterialConsumption mc : consumptions) {
             MaterialBatch src = materialBatchRepository
                     .findByIdAndFactoryIdForUpdate(mc.getBatchId(), factoryId)
@@ -228,6 +214,10 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
             BigDecimal newUsed = nz(src.getUsedQuantity()).subtract(nz(mc.getQuantity()));
             if (newUsed.signum() < 0) {
                 newUsed = BigDecimal.ZERO; // 防御: 已用量不为负 (数据异常保护, 不静默放大)
+            }
+            BigDecimal restored = nz(src.getUsedQuantity()).subtract(newUsed);
+            if (restored.signum() > 0) {
+                restoredByBatch.merge(src.getId(), restored, BigDecimal::add);
             }
             src.setUsedQuantity(newUsed);
             // 还料后有余量 → 从 USED_UP 恢复 AVAILABLE (其它状态如 DEFECTIVE 不动)。
@@ -241,6 +231,10 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
             consumptionRepository.save(mc);
             rawRestored++;
         }
+
+        // ── ⑤.5 C2: 还回到已关单领料单生产仓批次上的料, 直接退回原料仓 (留退料流水) ──
+        BigDecimal returnedToRawWarehouse = returnRestoredToClosedRequisitions(
+                factoryId, restoredByBatch, userId, "interim-reverse:" + settlement.getId());
 
         // ── ⑥ 行 un-stamp (清 interim_settled_at → 恢复未结, 可再编辑/删除/重新小结) ──
         List<ProcessSheetRow> rows = rowRepository
@@ -273,6 +267,7 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         result.put("sfiOutRestored", sfiOutRestored);
         result.put("fgFeedRestored", fgFeedRestored);
         result.put("rawRestored", rawRestored);
+        result.put("returnedToRawWarehouse", returnedToRawWarehouse);
         result.put("rowsUnstamped", rowsUnstamped);
         result.put("inputAllocationsReleased", allocationsReleased);
         result.put("affectedBatchNumbers", new java.util.ArrayList<>(affected));  // 供治理层盘点告警快照
@@ -291,33 +286,38 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
     // ─────────────────────────────────────────────────────────────
 
     /**
-     * 收集本计划全部「已关单 (CLOSED)」领料单在生产仓 (WKS) 物化的批次 id
-     * ({@code batchNumbers[*].workshopBatchId})。sister #4 settlement-级 交叠守卫据此判断: 本次撤销将
-     * 还回 usedQuantity 的消耗来源批次是否命中某张已被 close() 划平的 WKS 批次 (命中即幻库存危险)。
-     * 未关单 (ISSUED/IN_USE/…) 领料单不纳入 —— 它们的 WKS 批次仍在, 撤销还回不产生幻库存。
+     * C2: 撤销小结还回的料, 凡落在<b>已关单</b>领料单生产仓批次上的, 同量退回原料仓。未关单 / 非领料单批次 → 0 (原路径)。
+     * 生产仓批次已在 ⑤ 被本事务行锁住, 领料单状态在锁后读 ⇒ 与并发关单不会重复退料。
      */
-    private java.util.Set<String> collectClosedRequisitionWorkshopBatchIds(String factoryId, String planId) {
-        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
-        for (com.cretas.aims.entity.factory.FactoryMaterialRequisition r :
-                requisitionRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, planId)) {
-            if (r.getStatus() != com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status.CLOSED
-                    || r.getItems() == null) {
-                continue;
+    private BigDecimal returnRestoredToClosedRequisitions(String factoryId, Map<String, BigDecimal> restoredByBatch,
+                                                          Long userId, String reasonRef) {
+        BigDecimal total = BigDecimal.ZERO;
+        if (restoredByBatch.isEmpty()) {
+            return total;
+        }
+        if (requisitionService == null) {
+            for (String batchId : restoredByBatch.keySet()) {
+                boolean fromRequisition = materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
+                        .map(b -> "MATERIAL_REQUISITION".equals(b.getSourceDocType()))
+                        .orElse(false);
+                if (fromRequisition) {
+                    throw new BusinessException(500, "撤销小结失败: 领料单退料服务未初始化, 无法判断生产仓的料是否要退回原料仓")
+                            .withCode("INTERIM_REVERSE_REQUISITION_SERVICE_UNAVAILABLE")
+                            .withHint("请联系管理员检查后端领料服务配置")
+                            .withHintTarget("撤销小结")
+                            .withSeverity("BLOCKING");
+                }
             }
-            for (com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem it : r.getItems()) {
-                List<Map<String, Object>> rows = it.getBatchNumbers();
-                if (rows == null) {
-                    continue;
-                }
-                for (Map<String, Object> row : rows) {
-                    Object wks = row.get("workshopBatchId");
-                    if (wks != null && !wks.toString().isBlank()) {
-                        ids.add(wks.toString());
-                    }
-                }
+            return total;
+        }
+        for (Map.Entry<String, BigDecimal> entry : restoredByBatch.entrySet()) {
+            BigDecimal returned = requisitionService.returnToSourceIfRequisitionClosed(
+                    factoryId, entry.getKey(), entry.getValue(), userId, reasonRef);
+            if (returned != null && returned.signum() > 0) {
+                total = total.add(returned);
             }
         }
-        return ids;
+        return total;
     }
 
     private static BusinessException settlementNotFound(Integer sessionSeq) {

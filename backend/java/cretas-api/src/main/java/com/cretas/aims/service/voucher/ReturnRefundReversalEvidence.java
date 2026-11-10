@@ -14,6 +14,14 @@ public final class ReturnRefundReversalEvidence {
     public static final String SOURCE = "RETURN_REFUND_REVERSAL";
     private ReturnRefundReversalEvidence() { }
 
+    /**
+     * 撤销申请人自己审批的留痕 (纪律排查 B15, V20261110_47): 只认持久化的标记 + 原因, 不看现在的开关。
+     */
+    public static boolean hasSelfApprovalTrace(ArApTransaction tx) {
+        return tx != null && tx.isSelfApproved()
+                && tx.getSelfApprovalReason() != null && !tx.getSelfApprovalReason().isBlank();
+    }
+
     public static void requireReversal(ReturnOrder order, PaymentRequest request, ArApTransaction tx) {
         if (order == null || request == null || tx == null
                 || request.getId() == null || order.getId() == null || order.getFactoryId() == null
@@ -40,7 +48,7 @@ public final class ReturnRefundReversalEvidence {
         if (tx.getApprovalStatus() == ArApApprovalStatus.PENDING) {
             if (tx.getApprovedBy() != null || tx.getApprovedAt() != null) throw invalid();
         } else if (tx.getApprovedBy() == null || tx.getApprovedBy() <= 0 || tx.getApprovedAt() == null
-                || Objects.equals(tx.getOperatedBy(), tx.getApprovedBy())) throw invalid();
+                || (Objects.equals(tx.getOperatedBy(), tx.getApprovedBy()) && !hasSelfApprovalTrace(tx))) throw invalid();
     }
 
     public static void requireApprovedReversal(ReturnOrder order, PaymentRequest request, ArApTransaction tx) {

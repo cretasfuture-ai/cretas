@@ -12,6 +12,7 @@ import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.SchedulingPlan;
 import com.cretas.aims.entity.User;
+import com.cretas.aims.entity.WorkerAssignment;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.enums.ProductionPlanType;
 import com.cretas.aims.exception.BusinessException;
@@ -280,12 +281,47 @@ class UrgentInsertScheduleReopenPostgresContractTest {
         assertThat(rowStatusesOf(containerId)).as("旧的未开工排程保持取消, 插单排程新建在同一个容器下")
                 .containsExactlyInAnyOrder("cancelled", "pending");
         assertThat(rowsFor(insert.getId(), containerId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT total_batches FROM scheduling_plans WHERE id = ?", Integer.class, containerId))
+                .as("重开后按名下排程重算: 作废的旧排程不算, 插单那条算").isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT confirmed_by FROM scheduling_plans WHERE id = ?", Long.class, containerId))
                 .as("重开为草稿: 旧确认人不留").isNull();
         assertThat(jdbc.queryForObject("SELECT confirmed_at FROM scheduling_plans WHERE id = ?", java.sql.Timestamp.class, containerId))
                 .isNull();
         assertThat(jdbc.queryForObject("SELECT adjustment_reason FROM line_schedules WHERE plan_id = ? AND status = 'cancelled'",
                 String.class, containerId)).contains("调度计划取消后重开").contains("URGENT-PG-1");
+    }
+
+    /**
+     * 缺口 18 后续: 插单重开已取消的那天后, 批次数 / 派工人数按名下剩下的排程现算 (旧代码一直停在取消前的数)。
+     * 作废的旧排程和它上面派的人都不算; 新挂上的插单排程算一条。
+     */
+    @Test
+    void reopeningForAnInsertRecountsTheDayPlansBatchesAndWorkers() {
+        String containerId = cancelledDay(LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.pending);
+        tx(() -> {
+            for (String rowId : jdbc.queryForList("SELECT id FROM line_schedules WHERE plan_id = ?", String.class,
+                    containerId)) {
+                WorkerAssignment a = new WorkerAssignment();
+                a.setSchedule(em.find(LineSchedule.class, rowId));
+                a.setUserId(actor);
+                em.persist(a);
+            }
+            em.flush();
+            jdbc.update("UPDATE scheduling_plans SET total_batches = 2, total_workers = 1 WHERE id = ?", containerId);
+        });
+        ProductionPlan insert = savedInsertPlan("URGENT-PG-T");
+        Proposal preview = service.dryRun(factory, slot, insert);
+        assertThat(preview.ok()).as("预览: " + preview.message()).isTrue();
+
+        new TransactionTemplate(transactions).executeWithoutResult(status ->
+                service.apply(factory, slot, insert, preview.fingerprint(), actor));
+
+        Map<String, Object> totals = jdbc.queryForMap(
+                "SELECT total_batches, total_workers FROM scheduling_plans WHERE id = ?", containerId);
+        System.out.println("INSERT_REOPEN_TOTALS " + totals + " rows=" + rowStatusesOf(containerId));
+        assertThat(rowStatusesOf(containerId)).containsExactlyInAnyOrder("cancelled", "cancelled", "pending");
+        assertThat(((Number) totals.get("total_batches")).intValue()).as("只剩插单那一条").isEqualTo(1);
+        assertThat(((Number) totals.get("total_workers")).intValue()).as("作废排程上派的人不算").isZero();
     }
 
     @Test
@@ -364,5 +400,7 @@ class UrgentInsertScheduleReopenPostgresContractTest {
         assertThat(rowsFor(first.getId(), containerId)).isEqualTo(1);
         assertThat(rowsFor(second.getId(), containerId)).isEqualTo(1);
         assertThat(rowStatusesOf(containerId)).containsExactlyInAnyOrder("cancelled", "pending", "pending");
+        assertThat(jdbc.queryForObject("SELECT total_batches FROM scheduling_plans WHERE id = ?", Integer.class, containerId))
+                .as("两个插单先后挂上, 后一个重算时看得到前一个已提交的那条").isEqualTo(2);
     }
 }

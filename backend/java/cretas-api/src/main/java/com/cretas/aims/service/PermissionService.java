@@ -39,6 +39,24 @@ public interface PermissionService {
      */
     String SELF_WAGE_VIEW_PERMISSION = "hr:self_wage:view";
 
+    /** 原料类型维护 (新建/改/删)。默认仓储主管 + 厂长, 工厂可在阈值设置里改岗位名单 (ThresholdKeys.INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN)。 */
+    String MATERIAL_TYPE_MAINTAIN_PERMISSION = "material_type:maintain";
+
+    /** 报损审批 (通过/驳回/看待审列表)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE)。 */
+    String WASTAGE_APPROVE_PERMISSION = "wastage:approve";
+
+    /** 信用特批 (超信用额度被拦截时放行下单)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.CREDIT_PERMISSION_OVERRIDE)。 */
+    String CREDIT_OVERRIDE_PERMISSION = "credit:override";
+
+    /**
+     * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的判定, 与 {@link #hasPermission} 对上面三个权限码是<b>同一套</b>
+     * 逻辑 (厂长恒有; 其余按工厂阈值里配的岗位名单, 没配用默认名单), 不会给出不同结论。
+     * 其它权限码一律 false。默认实现 false (测试替身用)。
+     */
+    default boolean roleHasConfiguredPermission(String factoryId, String roleCode, String permissionCode) {
+        return false;
+    }
+
     /**
      * 检查用户是否拥有指定权限
      *
@@ -161,6 +179,15 @@ public interface PermissionService {
      * @return module → rw|r|w|-; 永不为 null
      */
     Map<String, String> resolveModuleLevels(User user);
+
+    /**
+     * 本厂审批权限一览 (纪律排查 B1–B3/B11/B15): 审批码 → 岗位 → {@code "<granted>|<source>"},
+     * granted = {@code Y}/{@code N}; source = {@code FACTORY} (本厂改过) / {@code PLATFORM} (平台默认) /
+     * {@code DEFAULT} (系统默认 = 原名单) / {@code ALWAYS} (超管恒有)。走与 {@link #hasPermission} 同一条解析链。
+     */
+    default Map<String, Map<String, String>> approvalGrants(String factoryId) {
+        return Map.of();
+    }
 
     /**
      * Canonical authorization snapshot. Known empty successful queries may use the existing

@@ -421,7 +421,7 @@ public interface ImpactAnalysisService {
             config.factoryId = factoryId;
             config.dailyCapacity = new BigDecimal("5000");    // 5000kg/天
             config.hourlyCapacity = new BigDecimal("500");    // 500kg/小时
-            config.standardShiftWorkers = 6;
+            config.standardShiftWorkers = 0;                  // 0 = 未配置 (标准人数按产线配置, 不再写死)
             config.maxWorkers = 10;
             config.minWorkers = 3;
             config.switchCostMinutes = 30;                    // 30分钟换线
