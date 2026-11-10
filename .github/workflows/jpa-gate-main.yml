@@ -85,7 +85,7 @@ jobs:
       # 2026-11-10: 迁到托管 runner(#1149)后这里没给堆, surefire fork 用 JVM 默认堆, 自
       # 2026-10-24 起 main 上每次都 `Java heap space`。与 java-gate-pr.yml 同一个接法:
       # job env 给值, 下面 -DargLine 传给 fork(pom 里 <argLine>${argLine}</argLine>)。
-      CRETAS_JAVA_FORK_XMX: 6g
+      CRETAS_JAVA_FORK_XMX: 12g
 
     # 不起 Postgres 服务容器: 这些 *RepositoryQueryValidationTest 全部标注
     # @ActiveProfiles("test") (33/33 实测), 走的是 H2 内存库。类注解优先级高于
