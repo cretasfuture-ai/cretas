@@ -1531,7 +1531,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
 
                 productVariances.add(CostVarianceReportDTO.ProductCostVariance.builder()
                         .productTypeId(entry.getKey())
-                        .productName(firstBatch.getProductName() != null ? firstBatch.getProductName() : "未知产品")
+                        .productName(productVarianceName(factoryId, entry.getKey(), firstBatch))
                         .quantity(prodQuantity)
                         .bomUnitCost(bomUnit)
                         .actualUnitCost(scaleOrNull(unitActualCost))
@@ -1658,6 +1658,27 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         if (value != null && value.abs().compareTo(new BigDecimal("0.005")) >= 0) {
             parts.add(label + (value.signum() > 0 ? " +¥" : " −¥") + value.abs().setScale(2, RoundingMode.HALF_UP).toPlainString());
         }
+    }
+
+    /**
+     * 「按产品」一行的显示名。⛔ 不直接取批次上冗余存的名字: 多产出计划的批次挂在内部原料锚点上, 那个名字是
+     * {@code __RAW_WORKFLOW_OWNER__<原料id>} (统一验收 2026-11-10: 汇总层仍漏出占位符)。
+     * 与计划明细同一份规则 (PlanCostVarianceService#productName → ScheduleProductNames); 查不到产品行时,
+     * 批次名也要去掉占位前缀, 都没有才写「未知产品」。
+     */
+    private String productVarianceName(String factoryId, String productTypeId, ProductionBatch firstBatch) {
+        String resolved = planCostVarianceService == null ? null
+                : planCostVarianceService.productName(factoryId, productTypeId);
+        if (resolved != null && !resolved.isBlank()) {
+            return resolved;
+        }
+        String batchName = firstBatch.getProductName();
+        if (batchName != null && batchName.startsWith(
+                com.cretas.aims.service.scheduling.daily.ScheduleProductNames.RAW_OWNER_PREFIX)) {
+            batchName = batchName.substring(
+                    com.cretas.aims.service.scheduling.daily.ScheduleProductNames.RAW_OWNER_PREFIX.length());
+        }
+        return batchName != null && !batchName.isBlank() ? batchName : "未知产品";
     }
 
     private static String productIncomparableReason(String productTypeId, Map<String, PlanCostVarianceDTO> plans) {
