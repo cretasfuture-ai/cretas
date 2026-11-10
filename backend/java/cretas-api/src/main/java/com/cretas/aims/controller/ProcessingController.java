@@ -3,6 +3,7 @@ package com.cretas.aims.controller;
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.dto.MobileDTO;
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.batch.AssignWorkersDTO;
 import com.cretas.aims.dto.batch.TeamBatchReportRequest;
 import com.cretas.aims.dto.batch.WorkerCheckoutDTO;
@@ -728,6 +729,8 @@ public class ProcessingController {
      * 处理审批决策
      */
     @RequirePermission({"quality:read_write"})
+    // 与 /quality-disposition/{id}/approve 同一份审批角色名单 (SpecialApprovalService.APPROVER_ROLES, 几处一致有测试钉住)
+    @RequireRole({"quality_manager", "factory_super_admin", "platform_admin", "permission_admin"})
     @PostMapping("/quality/approvals/{approvalId}/decision")
     @Operation(summary = "处理审批", description = "审批或拒绝特批申请")
     public ApiResponse<SpecialApprovalDTO> processApprovalDecision(
@@ -758,8 +761,14 @@ public class ProcessingController {
             throw new IllegalArgumentException("无法获取审批人信息");
         }
 
+        // 审批身份校验 (角色 / 申请人不能自批) 用 JWT 拦截器写入的已认证身份, 不用请求体里的 approverId
+        Object tokenUserId = httpRequest.getAttribute("userId");
+        Long actingUserId = tokenUserId instanceof Number n ? n.longValue() : null;
+        Object tokenRole = httpRequest.getAttribute("role");
+        String actingRole = tokenRole == null ? null : String.valueOf(tokenRole);
+
         SpecialApprovalDTO result = specialApprovalService.processDecision(
-                factoryId, approvalId, decision, approverId);
+                factoryId, approvalId, decision, approverId, actingUserId, actingRole);
 
         return ApiResponse.success(result);
     }

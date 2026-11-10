@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.dataop;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.ToolRbacGuard;
 import com.cretas.aims.dto.quality.ApprovalDecisionRequest;
 import com.cretas.aims.dto.quality.SpecialApprovalDTO;
 import com.cretas.aims.service.SpecialApprovalService;
@@ -26,6 +27,19 @@ public class OrderApprovalTool extends AbstractBusinessTool {
 
     @Autowired
     private SpecialApprovalService specialApprovalService;
+
+    /** 操作人角色: 按执行上下文里的 userId 读账号角色 (与 ToolRbacEnforcer 的角色判定同一来源)。 */
+    @Autowired
+    private ToolRbacGuard rbacGuard;
+
+    /**
+     * 与 App 的审批入口同一份审批角色 (SpecialApprovalService.APPROVER_ROLES): ToolRbacEnforcer 先挡一道;
+     * 真正的权威校验 (角色 + 申请人不能自批) 在 SpecialApprovalService.processDecision 里, 所有入口都过。
+     */
+    @Override
+    public Set<String> getRequiredRoles() {
+        return SpecialApprovalService.APPROVER_ROLES;
+    }
 
     @Override
     public String getToolName() {
@@ -98,7 +112,9 @@ public class OrderApprovalTool extends AbstractBusinessTool {
                     : ApprovalDecisionRequest.ApprovalDecision.APPROVE);
             decision.setComment(reason != null ? reason : (isReject ? "拒绝" : "通过"));
 
-            SpecialApprovalDTO result = specialApprovalService.processDecision(factoryId, approvalId, decision, approverId);
+            // 审批身份 = 执行上下文里的已认证用户 (不是模型给的参数)
+            SpecialApprovalDTO result = specialApprovalService.processDecision(factoryId, approvalId, decision,
+                    approverId, approverId, rbacGuard.roleOf(context));
             return buildSimpleResult(isReject ? "审批拒绝成功" : "审批通过成功", result);
         } catch (Exception e) {
             log.error("订单审批失败: factoryId={}, approvalId={}, isReject={}", factoryId, approvalId, isReject, e);

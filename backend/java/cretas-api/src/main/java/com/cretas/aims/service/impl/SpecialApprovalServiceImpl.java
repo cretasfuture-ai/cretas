@@ -15,6 +15,7 @@ import com.cretas.aims.repository.QualityInspectionRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.QualityDispositionRuleService;
 import com.cretas.aims.service.SpecialApprovalService;
+import com.cretas.aims.service.quality.QualityDispositionDecisionGuard;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +46,12 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
     private final UserRepository userRepository;
     private final QualityDispositionRuleService qualityDispositionRuleService;
     private final ObjectMapper objectMapper;
+    private final QualityDispositionDecisionGuard decisionGuard;
+
+    public static final String SPECIAL_APPROVAL_SELF_APPROVAL = "SPECIAL_APPROVAL_SELF_APPROVAL";
+    public static final String SPECIAL_APPROVAL_ROLE_FORBIDDEN = "SPECIAL_APPROVAL_ROLE_FORBIDDEN";
+    public static final String SPECIAL_APPROVAL_ACTOR_UNKNOWN = "SPECIAL_APPROVAL_ACTOR_UNKNOWN";
+    public static final String SPECIAL_APPROVAL_RELEASE_NOT_ELIGIBLE = "SPECIAL_APPROVAL_RELEASE_NOT_ELIGIBLE";
 
     @Override
     @Transactional
@@ -74,6 +81,19 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         // 3. 获取申请人信息
         User requester = userRepository.findById(requesterId)
                 .orElseThrow(() -> new IllegalArgumentException("申请人不存在"));
+
+        // 申请的动作在写申请行之前就核对: 认不出的动作、批不下来的直接放行, 不留一条永远批不成的待审批
+        QualityDispositionRuleService.DispositionAction requestedAction =
+                parseApprovedAction(request.getRequestedAction());
+        if (requestedAction == QualityDispositionRuleService.DispositionAction.RELEASE
+                && !qualityDispositionRuleService.meetsDirectReleaseCriteria(inspection)) {
+            throw new BusinessException(409, "本次质检未达到直接放行条件，特批也不能直接放行")
+                    .withCode(SPECIAL_APPROVAL_RELEASE_NOT_ELIGIBLE)
+                    .withHint("请改为申请条件放行，由质量经理复核后放行");
+        }
+
+        // Q6: 已报废批次不能申请返工, 在写申请行之前拒绝
+        decisionGuard.assertReworkAllowed(factoryId, inspection.getProductionBatchId(), requestedAction.name());
 
         // 4. 评估处置建议 (获取规则信息)
         QualityDispositionRuleService.DispositionResult dispositionResult =
@@ -158,10 +178,12 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
             String factoryId,
             String approvalId,
             ApprovalDecisionRequest decision,
-            Long approverId
+            Long approverId,
+            Long actingUserId,
+            String actingRole
     ) {
-        log.info("处理审批决策: factoryId={}, approvalId={}, decision={}, approverId={}",
-                factoryId, approvalId, decision.getDecision(), approverId);
+        log.info("处理审批决策: factoryId={}, approvalId={}, decision={}, approverId={}, actingUserId={}, actingRole={}",
+                factoryId, approvalId, decision.getDecision(), approverId, actingUserId, actingRole);
 
         // 1. 获取审批记录
         DecisionAuditLog auditLog = decisionAuditLogRepository.findById(approvalId)
@@ -178,14 +200,39 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
             throw new IllegalStateException("审批已处理，当前状态: " + auditLog.getApprovalStatus());
         }
 
+        // 审批身份 (与 /approve 同口径, 批准和驳回都要过): 在任何写入之前。所有入口 (App 接口、AI 工具) 都经过这里。
+        assertMayDecide(auditLog, approverId, actingUserId, actingRole);
+
         // 2. 获取审批人信息
         User approver = userRepository.findById(approverId)
                 .orElseThrow(() -> new IllegalArgumentException("审批人不存在"));
 
+        // Q11: 批准 = 执行这条质检处置, 与 /quality-disposition/{id}/approve 走同一条路 (同锁顺序、同复核检查、
+        // 同一个 executeApprovedDisposition)。不是质检处置的审批行这里执行不了, 直接拒绝, 不再「标成已批准却什么都没做」。
+        if (!"QualityInspection".equals(auditLog.getEntityType())) {
+            throw new BusinessException(400, "该审批不是质检处置申请");
+        }
+        boolean approve = decision.getDecision() == ApprovalDecisionRequest.ApprovalDecision.APPROVE;
+        QualityInspection inspection = qualityInspectionRepository.findById(auditLog.getEntityId())
+                .orElseThrow(() -> new com.cretas.aims.exception.ResourceNotFoundException(
+                        "质检记录", "id", auditLog.getEntityId()));
+        // 锁顺序与普通审批一致: 生产批次 → 质检刷新 → 审批行。两人同时批同一条, 后到的读到已处理, 处置只执行一次。
+        inspection = decisionGuard.lockInspection(factoryId, inspection);
+        decisionGuard.refreshApproval(auditLog);
+        if (auditLog.getApprovalStatus() != ApprovalStatus.PENDING) {
+            throw new BusinessException(409, "审批已被处理，当前状态: " + auditLog.getApprovalStatus())
+                    .withHint("请刷新待审批列表查看处理结果");
+        }
+        QualityDispositionRuleService.DispositionAction action = null;
+        if (approve) {
+            action = parseApprovedAction(auditLog.getDecisionMade());
+            // 写审批行之前: 已报废批次不能返工 (Q6), 本次质检已有别的最终处置也不能再批
+            decisionGuard.assertReworkAllowed(factoryId, inspection.getProductionBatchId(), action.name());
+            decisionGuard.assertApprovalCurrent(inspection);
+        }
+
         // 3. 更新审批状态
-        ApprovalStatus newStatus = decision.getDecision() == ApprovalDecisionRequest.ApprovalDecision.APPROVE
-                ? ApprovalStatus.APPROVED
-                : ApprovalStatus.REJECTED;
+        ApprovalStatus newStatus = approve ? ApprovalStatus.APPROVED : ApprovalStatus.REJECTED;
 
         auditLog.setApprovalStatus(newStatus);
         auditLog.setApproverId(approverId);
@@ -207,9 +254,16 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         DecisionAuditLog saved = decisionAuditLogRepository.save(auditLog);
         log.info("审批决策已处理: approvalId={}, status={}", approvalId, newStatus);
 
-        // 5. 如果批准，执行处置动作
-        if (newStatus == ApprovalStatus.APPROVED) {
-            executeApprovedDisposition(auditLog, approver);
+        // 5. 如果批准，执行处置动作: 已复核通过的执行 (不再建第二条待审批), 失败原样抛出、整笔回滚 ——
+        // 不吞异常, 否则内层事务已标记回滚, 外层提交时才炸 UnexpectedRollbackException, 审批人看不到真正原因。
+        if (approve) {
+            String reason = String.format("审批通过: approvalId=%s, approvedBy=%s",
+                    auditLog.getId(), approver.getName());
+            QualityDispositionRuleService.DispositionExecutionResult result =
+                    qualityDispositionRuleService.executeApprovedDisposition(
+                            factoryId, inspection, action, approver.getId(), reason);
+            log.info("特批通过后处置已执行: approvalId={}, action={}, newBatchStatus={}",
+                    approvalId, action, result.getNewBatchStatus());
         }
 
         return enrichAndConvertToDTO(saved);
@@ -307,42 +361,38 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
     }
 
     /**
-     * 执行已批准的处置动作
+     * 谁能对这条申请做决定。身份以已认证的操作人为准 ({@code actingUserId} / {@code actingRole}, 调用方从令牌或 AI 执行上下文取);
+     * 记录在审批行上的 {@code approverId} 若等于申请人同样拒绝 —— 否则审批行上会出现「申请人批了自己」。
      */
-    private void executeApprovedDisposition(DecisionAuditLog auditLog, User approver) {
+    private static void assertMayDecide(DecisionAuditLog auditLog, Long approverId, Long actingUserId, String actingRole) {
+        if (actingUserId == null) {
+            throw new BusinessException(403, "无法确认审批人身份")
+                    .withCode(SPECIAL_APPROVAL_ACTOR_UNKNOWN)
+                    .withHint("请重新登录后再审批");
+        }
+        String role = actingRole == null ? null : actingRole.trim().toLowerCase(Locale.ROOT);
+        // 平台管理员只认已认证的平台身份, 不认角色字符串 (工厂令牌写着平台角色不算数)
+        boolean platformApprover = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(com.cretas.aims.security.AuthenticatedActor::hasFactoryBypass).isPresent();
+        if (!platformApprover && (role == null || !APPROVER_ROLES.contains(role))) {
+            throw new BusinessException(403, "当前角色不能审批质检处置申请")
+                    .withCode(SPECIAL_APPROVAL_ROLE_FORBIDDEN)
+                    .withHint("请由质量经理或工厂超级管理员审批");
+        }
+        if (Objects.equals(auditLog.getExecutorId(), actingUserId)
+                || (approverId != null && Objects.equals(auditLog.getExecutorId(), approverId))) {
+            throw new BusinessException(403, "申请人与审批人不能为同一用户")
+                    .withCode(SPECIAL_APPROVAL_SELF_APPROVAL)
+                    .withHint("请由申请人以外的质量经理审批");
+        }
+    }
+
+    /** 审批行里记的处置动作; 认不出就在写任何东西之前拒绝, 不把一条执行不了的审批标成已批准。 */
+    private static QualityDispositionRuleService.DispositionAction parseApprovedAction(String decisionMade) {
         try {
-            String action = auditLog.getDecisionMade();
-            log.info("执行已批准的处置动作: inspectionId={}, action={}",
-                    auditLog.getEntityId(), action);
-
-            // 获取质检记录
-            QualityInspection inspection = qualityInspectionRepository.findById(auditLog.getEntityId())
-                    .orElseThrow(() -> new IllegalStateException("质检记录不存在: " + auditLog.getEntityId()));
-
-            // 调用处置规则服务执行处置
-            QualityDispositionRuleService.DispositionAction dispositionAction =
-                    QualityDispositionRuleService.DispositionAction.valueOf(action);
-
-            String reason = String.format("审批通过: approvalId=%s, approvedBy=%s",
-                    auditLog.getId(), approver.getName());
-
-            QualityDispositionRuleService.DispositionExecutionResult result =
-                    qualityDispositionRuleService.executeDisposition(
-                            auditLog.getFactoryId(),
-                            inspection,
-                            dispositionAction,
-                            approver.getId(),
-                            reason
-                    );
-
-            if (result.isSuccess()) {
-                log.info("处置动作执行成功: action={}", action);
-            } else {
-                log.warn("处置动作执行失败: action={}, message={}", action, result.getMessage());
-            }
-        } catch (Exception e) {
-            log.error("执行处置动作失败: {}", e.getMessage(), e);
-            // 处置执行失败不影响审批记录，但需要记录日志
+            return QualityDispositionRuleService.DispositionAction.valueOf(decisionMade);
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new BusinessException(400, "审批记录里的处置动作无效: " + decisionMade);
         }
     }
 
