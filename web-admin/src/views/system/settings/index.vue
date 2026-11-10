@@ -6,6 +6,7 @@ import { get, put } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Setting, Bell, Lock, Monitor, Coin, Odometer, Stamp } from '@element-plus/icons-vue';
 import ApprovalPolicySettings from '@/components/approval/ApprovalPolicySettings.vue';
+import ApprovalPermissionMatrix from '@/components/approval/ApprovalPermissionMatrix.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -515,6 +516,8 @@ async function saveCostSettings() {
           </template>
           <div class="settings-section">
             <ApprovalPolicySettings :factory-id="factoryId" />
+            <el-divider content-position="left">谁能审批</el-divider>
+            <ApprovalPermissionMatrix :factory-id="factoryId" />
           </div>
         </el-tab-pane>
       </el-tabs>

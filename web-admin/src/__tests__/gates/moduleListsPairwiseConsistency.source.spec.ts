@@ -150,7 +150,12 @@ function isRestaurantCode(m: string): boolean {
   return m === 'restaurant' || m.startsWith('restaurant');
 }
 /** 内部码: owner 裁定「降为内部码并登记」, 不参与收敛比对 */
-const INTERNAL_CODES = new Set(['production_report_correction', '__permissions__']);
+// 审批权限码 (纪律排查 B1–B3/B11/B15, 2026-11-10): 与 production_report_correction 一样是动作级码, 不进 L1 快照轴
+const INTERNAL_CODES = new Set([
+  'production_report_correction', '__permissions__',
+  'approval_report_reversal', 'approval_stocktake', 'approval_quality_disposition',
+  'approval_price_adjustment', 'approval_refund',
+]);
 
 const L1_ALL = new Set(Object.values(SNAPSHOT.levels).flatMap((row) => Object.keys(row)));
 const L1_RESTAURANT = [...L1_ALL].filter(isRestaurantCode).sort();

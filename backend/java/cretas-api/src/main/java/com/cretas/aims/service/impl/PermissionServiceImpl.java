@@ -655,6 +655,36 @@ public class PermissionServiceImpl implements PermissionService {
     public static final String MODULE_LEVEL_WILDCARD = "*";
 
     @Override
+    public Map<String, Map<String, String>> approvalGrants(String factoryId) {
+        Map<String, Map<String, String>> out = new LinkedHashMap<>();
+        for (String module : APPROVAL_MODULES) {
+            Map<String, String> byRole = new LinkedHashMap<>();
+            for (FactoryUserRole role : FactoryUserRole.values()) {
+                if (role == FactoryUserRole.unactivated || role == FactoryUserRole.platform_admin
+                        || isRetiredRestaurantRole(role)) {
+                    continue;
+                }
+                if (role == FactoryUserRole.factory_super_admin) {
+                    byRole.put(role.name(), "Y|ALWAYS");
+                    continue;
+                }
+                String source;
+                if (factoryId != null && resolveLayer2(factoryId, role.name(), module, true) != null) {
+                    source = "FACTORY";
+                } else if (resolveLayer1(role.name(), module, true) != null) {
+                    source = "PLATFORM";
+                } else {
+                    source = "DEFAULT";
+                }
+                String level = resolveEffectiveLevel(factoryId, role, module, null, true);
+                byRole.put(role.name(), (checkAction(level, "approve") ? "Y" : "N") + "|" + source);
+            }
+            out.put(module, byRole);
+        }
+        return out;
+    }
+
+    @Override
     public Map<String, String> resolveModuleLevels(User user) {
         if (user == null) {
             return Collections.emptyMap();
