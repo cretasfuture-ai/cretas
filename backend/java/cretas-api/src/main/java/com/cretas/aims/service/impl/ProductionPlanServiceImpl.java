@@ -9332,10 +9332,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //     (撤回不还 startProduction 扣的那笔 WIP → 计划永卡 IN_PROGRESS, WIP 孤儿)。
         //     → 此处在同一事务内先反冲还回开工扣的 WIP, 再直接取消, 不导向报工撤回。
         //   - 已有报工: 仍走报工撤回流 (ReportReversalService 冲报工产生的 WIP)。
-        boolean hasYields = hasYieldReports(factoryId, plan);
-        boolean hasProductionActivity = hasRealProductionActivity(factoryId, planId) || hasYields;
+        // 判据与停产 / 菜单 canCancel 同源 (remainingProductionData), 拒绝时把剩下的类别原样说给用户。
+        // 领料单关单的退料流水不算 (见 remainingProductionData), 先关领料单后取消也能取消。
+        List<String> remainingData = remainingProductionData(factoryId, planId, plan, false);
 
-        if (!hasProductionActivity) {
+        if (remainingData.isEmpty()) {
             // 还回本计划还占着的半成品, 然后直接取消 (不卡住, 不导向报工撤回)。什么状态取消都一样: 暂停的计划也占着料。
             // ⛔ 还的是占用余额, 不是计划量: /create-batch 开工的计划没有占用; 报工撤回过的那部分早已转成库存。
             closeSecondaryHold(factoryId, plan, operatorId);
@@ -9344,7 +9345,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             // 无论计划当前处于 PENDING / IN_PROGRESS / PAUSED 等何种非终态，
             // 一旦存在正式报工、消耗、产出或小结，都必须走报工撤回，不能靠状态值绕过。
             String batchHint = buildReversalBatchHint(planBatches);
-            throw new BusinessException(409, "该计划已有正式报工、消耗、产出或小结, 不能直接取消"
+            throw new BusinessException(409, "该计划还有未撤回的生产数据: " + String.join("、", remainingData)
+                    + ", 不能直接取消"
                     + (batchHint.isEmpty() ? "" : " (涉及批次: " + batchHint + ")"))
                     .withCode("PLAN_HAS_PRODUCTION_DATA")
                     .withHint("请先在「报工撤回」中对相关批次提交整单撤回 (经主管审批后自动冲销报工与 WIP 库存恢复原料), "
@@ -10785,30 +10787,67 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 才能支撑“停产→完成”，避免空计划被伪造成已生产。
      */
     private boolean hasRealProductionActivity(String factoryId, String planId) {
+        return !remainingProductionData(factoryId, planId, null, true).isEmpty();
+    }
+
+    /**
+     * 本计划还挂着哪几类生产数据 (人话, 每类一条)。取消 / 停产 / 菜单 canCancel / 换配方 共用这一份判据,
+     * 拒绝时把它原样告诉用户「还剩哪类没撤」, 免得提示语和判断各说各的。
+     *
+     * <p>⛔ 领料单关单写的退料流水 ({@code source_type=MATERIAL_RETURN}, 数量为负) <b>不算</b>生产数据:
+     * 它是「没用完的料退回原料仓」, 不是生产消耗。2026-11-10 F006 计划 f86d2c6d: 报工全部撤回
+     * (真实消耗已软删) 后先关了领料单, 只剩两条退料流水, 取消却一直 409 PLAN_HAS_PRODUCTION_DATA。
+     * 只排除退料, 不按「正负相抵」算净额: 一条没撤回的真实消耗不能被退料流水抵掉而放行取消。
+     *
+     * @param lockedPlan 调用方已加锁读到的计划 (取消路径); 为 null 时按 id 读
+     * @param firstOnly 只要知道「有没有」时, 命中第一类就返回 (列表/菜单路径少查几次库)
+     */
+    private List<String> remainingProductionData(String factoryId, String planId, ProductionPlan lockedPlan,
+                                                 boolean firstOnly) {
+        List<String> remaining = new ArrayList<>();
         if (materialConsumptionRepository != null) {
             List<MaterialConsumption> directConsumptions =
                     materialConsumptionRepository.findByProductionPlanId(planId);
-            if (directConsumptions != null && directConsumptions.stream()
-                    .anyMatch(consumption -> Objects.equals(factoryId, consumption.getFactoryId()))) {
-                return true;
+            long live = directConsumptions == null ? 0 : directConsumptions.stream()
+                    .filter(consumption -> Objects.equals(factoryId, consumption.getFactoryId()))
+                    .filter(consumption -> !com.cretas.aims.service.factory.impl.FactoryMaterialRequisitionServiceImpl.SOURCE_MATERIAL_RETURN
+                            .equals(consumption.getSourceType()))
+                    .count();
+            if (live > 0) {
+                remaining.add(live + " 笔未冲销的物料消耗");
+                if (firstOnly) {
+                    return remaining;
+                }
             }
         }
         if (processSheetRowRepository != null) {
             List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, planId);
-            if (rows != null && rows.stream().anyMatch(row ->
-                    ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus()))) {
-                return true;
+            long submitted = rows == null ? 0 : rows.stream()
+                    .filter(row -> ProcessSheetRow.SUBMISSION_SUBMITTED.equals(row.getSubmissionStatus()))
+                    .count();
+            if (submitted > 0) {
+                remaining.add(submitted + " 道已提交的工序报工");
+                if (firstOnly) {
+                    return remaining;
+                }
             }
         }
         if (productionInterimSettlementRepository != null) {
             List<ProductionInterimSettlement> sessions = productionInterimSettlementRepository
                     .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNullOrderBySessionSeqAsc(factoryId, planId);
             if (sessions != null && !sessions.isEmpty()) {
-                return true;
+                remaining.add(sessions.size() + " 次小结");
+                if (firstOnly) {
+                    return remaining;
+                }
             }
         }
-        ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId).orElse(null);
-        return plan != null && hasYieldReports(factoryId, plan);
+        ProductionPlan plan = lockedPlan != null ? lockedPlan
+                : productionPlanRepository.findByIdAndFactoryId(planId, factoryId).orElse(null);
+        if (plan != null && hasYieldReports(factoryId, plan)) {
+            remaining.add("产量报工");
+        }
+        return remaining;
     }
 
     /**
