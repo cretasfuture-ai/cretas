@@ -178,6 +178,8 @@ class ProcessSecretWriteSliceGuardTest {
             proposal.setFactoryId(F);
             proposal.setRecipeItemId(7L);
             proposal.setStatus(BomPriceAdjustmentProposal.Status.PENDING);
+            // 建议价 = 物料档案价 (批准写入的就是这个数, 不一致会 409 STALE; D-S5-11)
+            proposal.setProposedUnitPrice(new BigDecimal("12"));
             BomPriceAdjustmentProposalRepository proposals = mock(BomPriceAdjustmentProposalRepository.class);
             when(proposals.findByIdAndFactoryId(31L, F)).thenReturn(Optional.of(proposal));
             when(proposals.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -199,8 +201,14 @@ class ProcessSecretWriteSliceGuardTest {
             when(materials.findById("M1")).thenReturn(Optional.of(material));
             BomPriceAdjustmentAuditRepository audits = mock(BomPriceAdjustmentAuditRepository.class);
             when(audits.save(any())).thenAnswer(inv -> inv.getArgument(0));
-            service = new BomPriceAdjustmentServiceImpl(items, mock(BomRecipeRepository.class), proposals, audits,
-                    materials);
+            // 目标配方版本可改 (ACTIVE): 归档版本会在批准端 409 (D-S5-10), 那不是这道闸要测的
+            BomRecipe activeRecipe = new BomRecipe();
+            activeRecipe.setId("r-secret");
+            activeRecipe.setFactoryId(F);
+            activeRecipe.setStatus(BomRecipe.Status.ACTIVE);
+            BomRecipeRepository recipes = mock(BomRecipeRepository.class);
+            when(recipes.lockByIdAndFactoryId("r-secret", F)).thenReturn(Optional.of(activeRecipe));
+            service = new BomPriceAdjustmentServiceImpl(items, recipes, proposals, audits, materials);
             ReflectionTestUtils.setField(service, "processSecretGuard", guard);
         }
 
