@@ -81,6 +81,10 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 
 低技术素养用户（操作员 / 仓管 / 质检员）使用的 RN 屏幕，**提出方案之前先用 `ux-flow` skill 产出「UX Flow Analysis」**，缺失不进入实现。角色 / 路径 / 功能触发词以 `ux-flow` 的 skill description 为唯一清单，不在此重复。
 
+# Compact instructions
+
+压缩摘要必须逐条保留（宁可多保留，不要概括掉）：任务 ID 与目标/完成条件；worktree 路径、分支、HEAD、Base SHA；已开的 PR 号及其 CI 状态、仍在挂的监视与停止条件；合并排队顺序；用户已拍板的决定与原因；待用户裁决的问题；已做完 vs 没做完；下一步第一个动作。organizer 会话另须保留在飞执行会话的 ID 和各自在做什么。
+
 ## Documentation
 
 - [PRD-功能与文件映射-v3.0.md](./docs/prd/PRD-功能与文件映射-v3.0.md)

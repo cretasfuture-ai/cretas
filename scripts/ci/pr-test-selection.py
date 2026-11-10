@@ -65,12 +65,18 @@ def label_only(job_text):
     return "labels" in cond and "contains(" in cond and "!contains(" not in cond.replace(" ", "")
 
 
-def selectors(workflow_text):
+def selectors(workflow_text, repo_root=None):
     """(作业名, 包含模式列表, 排除模式列表), 只取不靠标签的作业。"""
     found = []
     for name, text in jobs_of(workflow_text).items():
         if label_only(text):
             continue
+        # 分片作业: 选择在清单文件里 (shard-tests.py --list <file>), 不在 -Dtest 字面量里。
+        for lf in re.findall(r'shard-tests\.py"? --list "?(?:\$GITHUB_WORKSPACE/)?(scripts/ci/[\w.-]+)', text):
+            lp = os.path.join(repo_root or os.getcwd(), lf)
+            pats = [ln.strip() for ln in open(lp, encoding="utf-8")
+                    if ln.strip() and not ln.lstrip().startswith("#")]
+            found.append((name, pats, []))
         for raw in re.findall(r"-Dtest=['\"]?([^'\"\s\\]+)", text):
             parts = [p.split("#", 1)[0] for p in raw.split(",") if p]
             inc = [p for p in parts if not p.startswith("!")]
@@ -128,7 +134,7 @@ def main():
     allowlist_path = a.allowlist or os.path.join(repo, ALLOWLIST)
 
     try:
-        sels = selectors(open(workflow, encoding="utf-8").read())
+        sels = selectors(open(workflow, encoding="utf-8").read(), repo)
     except OSError as e:
         print(f"NOT MEASURED: 读不到选择器 {workflow}: {e}", file=sys.stderr)
         return 2
