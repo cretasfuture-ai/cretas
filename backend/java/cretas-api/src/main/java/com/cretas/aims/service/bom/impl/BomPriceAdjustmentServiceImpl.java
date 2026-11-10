@@ -28,16 +28,41 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * BOM 调价建议 (B9 BOM 价随采购浮动)。
+ *
+ * <p>两条口径 (2026-11-10, D-S5-10 / D-S5-11):</p>
+ * <ol>
+ *   <li><b>历史版本的成本不回写。</b>只为可改的配方版本 (DRAFT / ACTIVE) 生成建议; 批准时再按
+ *       当时 (加锁读) 的版本状态校验一次 —— 旧建议可能是在版本归档之前生成的。</li>
+ *   <li><b>批准的就是审批人看到的那个数。</b>BOM 行价格只继承物料档案价 (移动均价优先, 否则档案单价;
+ *       与 {@code BomRecipeServiceImpl#applyMaterialMasterPricing} 同一口径, 不形成第二套价格真值),
+ *       所以建议价 = 生成时的档案价; 批准时写入的就是建议行上的 {@code proposedUnitPrice},
+ *       建议行不再改写。若档案价在此期间变了, 拒绝 (409 STALE) 让人重新生成, ⛔ 不静默换成新价。</li>
+ * </ol>
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService {
+
+    /** 批准时目标配方版本不可改 (已归档 / 已删除)。 */
+    public static final String ERROR_RECIPE_NOT_EDITABLE = "BOM_PRICE_PROPOSAL_RECIPE_NOT_EDITABLE";
+    /** 建议价与物料档案当前价不一致: 建议已过期, 须重新生成。 */
+    public static final String ERROR_STALE = "BOM_PRICE_PROPOSAL_STALE";
+
+    /** 价格可被调价建议改写的配方版本状态; ARCHIVED (历史版本) 不在其中。 */
+    private static final Set<BomRecipe.Status> PRICE_WRITABLE_RECIPE_STATUSES =
+            EnumSet.of(BomRecipe.Status.DRAFT, BomRecipe.Status.ACTIVE);
 
     private final BomRecipeItemRepository itemRepository;
     private final BomRecipeRepository recipeRepository;
@@ -78,12 +103,18 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
             SourceType sourceType,
             String sourceReceiveRecordId,
             Long sourceReceiveItemId) {
-        if (materialTypeId == null || materialTypeId.isBlank() || latestPreTaxPrice == null) {
+        // latestPreTaxPrice 是触发信号 (这次收货/核价带了价), 不是建议价: 收货价 0.8 进库后档案移动均价是
+        // 0.7501, BOM 行只能继承后者 —— 建议显示 0.8 而批准写 0.7501 就是 D-S5-11。没有价的收货照旧不出建议。
+        if (materialTypeId == null || materialTypeId.isBlank() || latestPreTaxPrice == null
+                || latestPreTaxPrice.compareTo(BigDecimal.ZERO) <= 0) {
             return List.of();
         }
 
-        BigDecimal proposedPrice = scaleMoney(latestPreTaxPrice);
-        if (proposedPrice.compareTo(BigDecimal.ZERO) <= 0) {
+        Optional<RawMaterialType> material = findLiveMaterial(factoryId, materialTypeId);
+        BigDecimal proposedPrice = material.map(this::masterPrice).map(this::scaleMoney).orElse(null);
+        if (proposedPrice == null || proposedPrice.compareTo(BigDecimal.ZERO) <= 0) {
+            log.info("Skip BOM price adjustment proposals: material master has no valid price, factoryId={}, materialTypeId={}",
+                    factoryId, materialTypeId);
             return List.of();
         }
 
@@ -97,7 +128,11 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
                 .filter(Objects::nonNull)
                 .distinct()
                 .collect(Collectors.toList());
+        // 只有可改的版本 (DRAFT / ACTIVE) 才出建议: 归档版本是历史成本, 不得回写 (D-S5-10)。
+        // 查不到的配方 (已删除) 同样不出建议。
         Map<String, BomRecipe> recipesById = recipeRepository.findAllById(recipeIds).stream()
+                .filter(recipe -> factoryId.equals(recipe.getFactoryId()))
+                .filter(recipe -> PRICE_WRITABLE_RECIPE_STATUSES.contains(recipe.getStatus()))
                 .collect(Collectors.toMap(BomRecipe::getId, recipe -> recipe, (a, b) -> a, LinkedHashMap::new));
         int affectedProductCount = (int) recipesById.values().stream()
                 .map(BomRecipe::getProductTypeId)
@@ -110,11 +145,14 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
             if (item.getUnitPrice() == null || item.getRecipeId() == null) {
                 continue;
             }
+            BomRecipe recipe = recipesById.get(item.getRecipeId());
+            if (recipe == null) {
+                continue;
+            }
             BigDecimal currentPrice = scaleMoney(item.getUnitPrice());
             if (currentPrice.compareTo(proposedPrice) == 0) {
                 continue;
             }
-            BomRecipe recipe = recipesById.get(item.getRecipeId());
             BigDecimal deltaAmount = proposedPrice.subtract(currentPrice).setScale(4, RoundingMode.HALF_UP);
             BigDecimal deltaPercent = calculateDeltaPercent(currentPrice, proposedPrice);
             BomPriceAdjustmentProposal pending = proposalRepository
@@ -188,17 +226,35 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
                     "bom price-adjustment approve " + proposalId);
         }
 
+        // D-S5-10: 历史 (归档) 版本的成本不回写。加锁读版本状态 (与 BOM 成本更正同一锁序: 先行后头),
+        // 与并发归档串行; 拒绝时一行不改。
+        BomRecipe recipe = recipeRepository.lockByIdAndFactoryId(item.getRecipeId(), factoryId).orElse(null);
+        if (recipe == null || !PRICE_WRITABLE_RECIPE_STATUSES.contains(recipe.getStatus())) {
+            String version = recipe == null || recipe.getVersion() == null ? "" : " v" + recipe.getVersion();
+            String state = recipe == null ? "已删除" : recipe.getStatus() == BomRecipe.Status.ARCHIVED
+                    ? "已归档" : "不可修改 (" + recipe.getStatus() + ")";
+            throw new BusinessException(409, "该调价建议对应的配方版本" + version + state
+                    + "，历史版本的成本不能回写，本次未做任何修改")
+                    .withCode(ERROR_RECIPE_NOT_EDITABLE)
+                    .withHint("只有草稿或当前生效的配方版本可以调价；如需调整，请在当前生效版本上重新生成调价建议");
+        }
+
         BigDecimal beforePrice = scaleMoney(item.getUnitPrice());
-        RawMaterialType material = materialRepository.findById(item.getMaterialTypeId())
-                .filter(found -> factoryId.equals(found.getFactoryId()) && found.getDeletedAt() == null)
+        RawMaterialType material = findLiveMaterial(factoryId, item.getMaterialTypeId())
                 .orElseThrow(() -> new ResourceNotFoundException("物料档案不存在: " + item.getMaterialTypeId()));
-        BigDecimal masterPrice = material.getMovingAvgPrice() != null
-                ? material.getMovingAvgPrice()
-                : material.getUnitPrice();
+        BigDecimal masterPrice = masterPrice(material);
         if (masterPrice == null || masterPrice.compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(400, "物料档案未配置有效价格: " + item.getMaterialTypeId());
         }
-        BigDecimal afterPrice = scaleMoney(masterPrice);
+        // D-S5-11: 写入的就是建议行上审批人看到的那个数。BOM 行只能继承档案价, 所以档案价若已不是这个数,
+        // 建议就过期了 —— 拒绝并要求重新生成, ⛔ 不静默换成新价, 也不改写建议行。
+        BigDecimal afterPrice = scaleMoney(proposal.getProposedUnitPrice());
+        if (afterPrice == null || afterPrice.compareTo(scaleMoney(masterPrice)) != 0) {
+            // 消息里不带两个价: 它们是 @PriceSensitive 字段, 错误消息绕过序列化脱敏
+            throw new BusinessException(409, "调价建议已过期：物料档案价在建议生成后已变化，与建议价不一致，本次未做任何修改")
+                    .withCode(ERROR_STALE)
+                    .withHint("物料价格在建议生成后又变了，请对该物料重新执行调价检查，按新的建议价审批");
+        }
         item.setUnitPrice(afterPrice);
         item.setTaxRate(material.getTaxRate() == null ? null
                 : material.getTaxRate().getRate().multiply(BigDecimal.valueOf(100)));
@@ -210,7 +266,6 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         proposal.setApprovedBy(approverId);
         proposal.setApprovedAt(now);
         proposal.setApprovalComment(comment);
-        proposal.setProposedUnitPrice(afterPrice);
         proposal.setAppliedAt(now);
 
         BomPriceAdjustmentAudit audit = new BomPriceAdjustmentAudit();
@@ -235,6 +290,16 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
             return proposalRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, pageable);
         }
         return proposalRepository.findByFactoryIdOrderByCreatedAtDesc(factoryId, pageable);
+    }
+
+    private Optional<RawMaterialType> findLiveMaterial(String factoryId, String materialTypeId) {
+        return materialRepository.findById(materialTypeId)
+                .filter(found -> factoryId.equals(found.getFactoryId()) && found.getDeletedAt() == null);
+    }
+
+    /** BOM 行价格的唯一来源: 物料档案移动均价, 没有则档案单价。生成与批准共用这一处。 */
+    private BigDecimal masterPrice(RawMaterialType material) {
+        return material.getMovingAvgPrice() != null ? material.getMovingAvgPrice() : material.getUnitPrice();
     }
 
     private BigDecimal scaleMoney(BigDecimal value) {

@@ -61,11 +61,15 @@ class BomPriceAdjustmentServiceImplTest {
                 .thenAnswer(inv -> inv.getArgument(0));
         when(auditRepository.save(any(BomPriceAdjustmentAudit.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
+        when(recipeRepository.lockByIdAndFactoryId("R-1", "F006"))
+                .thenReturn(java.util.Optional.of(recipe("R-1", "PT-A", "Meal A")));
     }
 
     @Test
-    @DisplayName("purchase receive pre-tax price change creates pending suggestions with impact preview but does not mutate BOM")
+    @DisplayName("purchase receive creates pending suggestions at the material master price (not the receive line price) without mutating BOM")
     void purchaseReceivePriceChange_createsSuggestionWithoutUpdatingBomItem() {
+        // 收货价 12.5 进库后档案移动均价是 11.8: BOM 行只能继承档案价, 建议显示的必须是将要写入的 11.8 (D-S5-11)
+        when(materialRepository.findById("RM-BEEF")).thenReturn(java.util.Optional.of(material("11.8000")));
         BomRecipeItem beefInMealA = recipeItem(101L, "R-1", "RM-BEEF", "10.0000", "2.0000");
         BomRecipeItem beefInMealB = recipeItem(102L, "R-2", "RM-BEEF", "11.0000", "1.0000");
         BomRecipe recipeA = recipe("R-1", "PT-A", "Meal A");
@@ -94,9 +98,9 @@ class BomPriceAdjustmentServiceImplTest {
             assertThat(proposal.getSourceReceiveRecordId()).isEqualTo("RCV-1");
             assertThat(proposal.getSourceReceiveItemId()).isEqualTo(501L);
             assertThat(proposal.getCurrentUnitPrice()).isEqualByComparingTo("10.0000");
-            assertThat(proposal.getProposedUnitPrice()).isEqualByComparingTo("12.5000");
-            assertThat(proposal.getDeltaAmount()).isEqualByComparingTo("2.5000");
-            assertThat(proposal.getDeltaPercent()).isEqualByComparingTo("25.00");
+            assertThat(proposal.getProposedUnitPrice()).isEqualByComparingTo("11.8000");
+            assertThat(proposal.getDeltaAmount()).isEqualByComparingTo("1.8000");
+            assertThat(proposal.getDeltaPercent()).isEqualByComparingTo("18.00");
             assertThat(proposal.getAffectedProductCount()).isEqualTo(2);
             assertThat(proposal.getProductTypeId()).isEqualTo("PT-A");
             assertThat(proposal.getProductName()).isEqualTo("Meal A");
@@ -128,6 +132,7 @@ class BomPriceAdjustmentServiceImplTest {
     @Test
     @DisplayName("same recipe item receive updates existing pending suggestion instead of creating queue noise")
     void duplicatePendingSuggestion_updatesExistingPendingInsteadOfCreatingNewOne() {
+        when(materialRepository.findById("RM-BEEF")).thenReturn(java.util.Optional.of(material("13.5000")));
         BomRecipeItem beefInMealA = recipeItem(101L, "R-1", "RM-BEEF", "10.0000", "2.0000");
         BomRecipe recipeA = recipe("R-1", "PT-A", "Meal A");
         BomPriceAdjustmentProposal pending = new BomPriceAdjustmentProposal();
@@ -162,7 +167,7 @@ class BomPriceAdjustmentServiceImplTest {
         item.setId(501L);
         item.setMaterialTypeId("RM-BEEF");
         item.setMaterialName("fresh beef");
-        item.setUnitPrice(new BigDecimal("13.5000"));
+        item.setUnitPrice(new BigDecimal("14.2000"));
         receive.setItems(List.of(item));
 
         List<BomPriceAdjustmentProposal> proposals = service.generateFromReceive("F006", receive);
@@ -177,7 +182,7 @@ class BomPriceAdjustmentServiceImplTest {
     }
 
     @Test
-    @DisplayName("approval refreshes BOM from current material master price, never proposal price")
+    @DisplayName("approval writes the proposal price the approver saw (equal to the current material master price) and writes audit")
     void approveSuggestion_refreshesMaterialMasterPriceAndWritesAudit() {
         BomRecipeItem bomItem = recipeItem(101L, "R-1", "RM-BEEF", "10.0000", "2.0000");
         BomPriceAdjustmentProposal proposal = new BomPriceAdjustmentProposal();
@@ -185,7 +190,7 @@ class BomPriceAdjustmentServiceImplTest {
         proposal.setFactoryId("F006");
         proposal.setRecipeItemId(101L);
         proposal.setCurrentUnitPrice(new BigDecimal("10.0000"));
-        proposal.setProposedUnitPrice(new BigDecimal("12.5000"));
+        proposal.setProposedUnitPrice(new BigDecimal("15.0000"));
         proposal.setStatus(Status.PENDING);
 
         when(proposalRepository.findByIdAndFactoryId(77L, "F006")).thenReturn(java.util.Optional.of(proposal));
@@ -198,6 +203,7 @@ class BomPriceAdjustmentServiceImplTest {
         assertThat(approved.getStatus()).isEqualTo(Status.APPROVED);
         assertThat(approved.getApprovedBy()).isEqualTo(9L);
         assertThat(approved.getApprovalComment()).isEqualTo("price checked");
+        assertThat(approved.getProposedUnitPrice()).isEqualByComparingTo("15.0000");
         assertThat(bomItem.getUnitPrice()).isEqualByComparingTo("15.0000");
         assertThat(bomItem.getItemCost()).isEqualByComparingTo("30.0000");
         assertThat(bomItem.getTaxRate()).isEqualByComparingTo("9.00");
@@ -220,8 +226,8 @@ class BomPriceAdjustmentServiceImplTest {
     @DisplayName("approval locks recipe item so concurrent approvals for different suggestions serialize")
     void approveSuggestion_usesPessimisticRecipeItemLock() {
         BomRecipeItem bomItem = recipeItem(101L, "R-1", "RM-BEEF", "10.0000", "2.0000");
-        BomPriceAdjustmentProposal first = pendingProposal(88L, 101L, "11.0000");
-        BomPriceAdjustmentProposal second = pendingProposal(89L, 101L, "12.0000");
+        BomPriceAdjustmentProposal first = pendingProposal(88L, 101L, "14.0000");
+        BomPriceAdjustmentProposal second = pendingProposal(89L, 101L, "14.0000");
 
         when(proposalRepository.findByIdAndFactoryId(88L, "F006")).thenReturn(java.util.Optional.of(first));
         when(proposalRepository.findByIdAndFactoryId(89L, "F006")).thenReturn(java.util.Optional.of(second));
