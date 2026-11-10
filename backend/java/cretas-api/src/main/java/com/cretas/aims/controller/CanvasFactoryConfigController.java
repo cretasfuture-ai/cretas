@@ -647,6 +647,15 @@ public class CanvasFactoryConfigController {
         if (body.containsKey("allowSelfApproval")) {
             settings.setAllowSelfApproval(booleanField(body, "allowSelfApproval", false));
         }
+        // 纪律排查 B11 改价审批阈值 (默认 10% / 20%); 非法值 400, 不静默落成默认
+        if (body.containsKey("priceDecreaseApprovalPct")) {
+            settings.setPriceDecreaseApprovalPct(com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds
+                    .validate(body.get("priceDecreaseApprovalPct"), "降价审批阈值"));
+        }
+        if (body.containsKey("priceIncreaseApprovalPct")) {
+            settings.setPriceIncreaseApprovalPct(com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds
+                    .validate(body.get("priceIncreaseApprovalPct"), "涨价审批阈值"));
+        }
         if (body.containsKey("defaultUserRole")) {
             settings.setDefaultUserRole(stringField(body, "defaultUserRole"));
         }
@@ -804,6 +813,8 @@ public class CanvasFactoryConfigController {
         m.put("requireRequisitionBeforeReport", s.getRequireRequisitionBeforeReport());
         m.put("blockStartOnOpenShortage", s.getBlockStartOnOpenShortage());
         m.put("allowSelfApproval", s.getAllowSelfApproval());
+        m.put("priceDecreaseApprovalPct", s.getPriceDecreaseApprovalPct());
+        m.put("priceIncreaseApprovalPct", s.getPriceIncreaseApprovalPct());
         m.put("defaultUserRole", s.getDefaultUserRole());
         m.put("lastModifiedAt", s.getLastModifiedAt());
         m.put("version", s.getVersion());

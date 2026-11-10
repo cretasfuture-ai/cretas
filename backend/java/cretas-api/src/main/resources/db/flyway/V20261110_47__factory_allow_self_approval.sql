@@ -21,6 +21,17 @@
 ALTER TABLE factory_settings
     ADD COLUMN IF NOT EXISTS allow_self_approval BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- 改价审批阈值 (纪律排查 B11, Owner 2026-11-10 追加): 原写死「降价 > 10% / 涨价 > 20% 需审批」,
+-- 改为按工厂配置, 默认值仍是 10 / 20 —— 现有工厂行为不变。
+ALTER TABLE factory_settings
+    ADD COLUMN IF NOT EXISTS price_decrease_approval_pct NUMERIC(5,2) NOT NULL DEFAULT 10,
+    ADD COLUMN IF NOT EXISTS price_increase_approval_pct NUMERIC(5,2) NOT NULL DEFAULT 20;
+
+COMMENT ON COLUMN factory_settings.price_decrease_approval_pct IS
+    '改价审批阈值: 降价超过此百分比需审批 (默认 10).';
+COMMENT ON COLUMN factory_settings.price_increase_approval_pct IS
+    '改价审批阈值: 涨价超过此百分比需审批 (默认 20).';
+
 COMMENT ON COLUMN factory_settings.allow_self_approval IS
     '工厂级"允许本人审批"开关 (默认 false = 四眼, 审批人不能是提交人). true = 提交人可审批自己的报工撤回/盘点差异/质检处置/改价/退款, 但必须填原因, 审批记录标 self_approved.';
 

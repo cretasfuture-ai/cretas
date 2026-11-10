@@ -638,6 +638,87 @@ class SalesPriceAdjustmentServiceTest {
         verify(salesOrderItemRepository, never()).save(any());
     }
 
+    // =================================================================
+    // 纪律排查 B11: 改价审批阈值按工厂配置 (默认 10% / 20%)
+    // =================================================================
+
+    private void thresholdsConfigured(List<Object[]> rows) {
+        com.cretas.aims.repository.FactorySettingsRepository settings =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+        when(settings.findPriceAdjustmentApprovalThresholdsByFactoryId(FACTORY_ID)).thenReturn(rows);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "approvalThresholds",
+                new PriceAdjustmentApprovalThresholds(settings));
+    }
+
+    /** 原价 100 改成 newPrice, 返回是否需要审批。 */
+    private boolean approvalRequiredFor(String newPrice) {
+        SalesOrderItem line = buildLine(LINE_ID, ORDER_ID, new BigDecimal("100.0000"), BigDecimal.ZERO);
+        SalesOrder order = buildOrder(ORDER_ID, FACTORY_ID, new BigDecimal("1000.00"));
+        lenient().when(salesOrderItemRepository.findById(LINE_ID)).thenReturn(Optional.of(line));
+        lenient().when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        lenient().when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+        lenient().when(adjustmentRecordRepository.findFirstBySalesOrderLineIdAndApprovalStatusOrderByCreatedAtDesc(
+                LINE_ID, ApprovalStatus.PENDING)).thenReturn(Optional.empty());
+        lenient().when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(List.of(line));
+        lenient().when(adjustmentRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        return service.adjustLinePrice(FACTORY_ID, ORDER_ID, LINE_ID,
+                new AdjustPriceRequest(new BigDecimal(newPrice), ReasonType.CUSTOMER_REQUEST, null), USER_ID)
+                .approvalRequired();
+    }
+
+    @Test
+    @DisplayName("B11 默认值不变: 工厂没有配置行 → 仍是降价 >10% / 涨价 >20% 才审批")
+    void thresholds_defaultBehaviourUnchanged_whenNotConfigured() {
+        thresholdsConfigured(List.of());
+        assertThat(approvalRequiredFor("90.00")).as("降 10% 等于阈值").isFalse();
+        assertThat(approvalRequiredFor("85.00")).as("降 15%").isTrue();
+        assertThat(approvalRequiredFor("120.00")).as("涨 20% 等于阈值").isFalse();
+        assertThat(approvalRequiredFor("125.00")).as("涨 25%").isTrue();
+    }
+
+    @Test
+    @DisplayName("B11 默认值不变: 迁移默认行 (10 / 20) 与不配置同结果")
+    void thresholds_migrationDefaultsMatchOldConstants() {
+        thresholdsConfigured(java.util.Collections.singletonList(
+                new Object[]{new BigDecimal("10.00"), new BigDecimal("20.00")}));
+        assertThat(approvalRequiredFor("90.00")).isFalse();
+        assertThat(approvalRequiredFor("85.00")).isTrue();
+        assertThat(approvalRequiredFor("120.00")).isFalse();
+        assertThat(approvalRequiredFor("125.00")).isTrue();
+    }
+
+    @Test
+    @DisplayName("B11 改了配置 (降 20% / 涨 30%) → 按新阈值: 降 15% / 涨 25% 不再审批, 降 25% / 涨 35% 审批")
+    void thresholds_configuredValuesTakeEffect() {
+        thresholdsConfigured(java.util.Collections.singletonList(
+                new Object[]{new BigDecimal("20.00"), new BigDecimal("30.00")}));
+        assertThat(approvalRequiredFor("85.00")).as("降 15% < 20%").isFalse();
+        assertThat(approvalRequiredFor("75.00")).as("降 25% > 20%").isTrue();
+        assertThat(approvalRequiredFor("125.00")).as("涨 25% < 30%").isFalse();
+        assertThat(approvalRequiredFor("135.00")).as("涨 35% > 30%").isTrue();
+    }
+
+    @Test
+    @DisplayName("B11 收紧配置 (降 5%) → 降 8% 也要审批 (默认下不需要)")
+    void thresholds_tighterConfigRequiresApprovalEarlier() {
+        thresholdsConfigured(java.util.Collections.singletonList(
+                new Object[]{new BigDecimal("5.00"), new BigDecimal("20.00")}));
+        assertThat(approvalRequiredFor("92.00")).isTrue();
+    }
+
+    @Test
+    @DisplayName("B11 配置入口校验: 0 / 负数 / 非数字 / 超过 999.99 / 三位小数 → 400; 12.5 合法")
+    void thresholds_validateRejectsInvalidValues() {
+        for (Object bad : new Object[]{0, -1, "abc", "1000", "1.234", null}) {
+            assertThatThrownBy(() -> PriceAdjustmentApprovalThresholds.validate(bad, "降价审批阈值"))
+                    .as(String.valueOf(bad))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                            .isEqualTo(PriceAdjustmentApprovalThresholds.INVALID_CODE));
+        }
+        assertThat(PriceAdjustmentApprovalThresholds.validate("12.5", "降价审批阈值")).isEqualByComparingTo("12.5");
+    }
+
     private SalesPriceAdjustmentRecord buildPendingRecord(
             String id, BigDecimal oldPrice, BigDecimal newPrice, Long adjustedBy) {
         SalesPriceAdjustmentRecord r = new SalesPriceAdjustmentRecord();

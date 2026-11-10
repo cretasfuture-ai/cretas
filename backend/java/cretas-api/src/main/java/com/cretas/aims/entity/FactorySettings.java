@@ -247,6 +247,16 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private Boolean allowSelfApproval = false;
 
+    /** 改价审批阈值: 降价超过此百分比需审批 (纪律排查 B11, V20261110_47), 默认 10。 */
+    @Column(name = "price_decrease_approval_pct", nullable = false, precision = 5, scale = 2)
+    @Builder.Default
+    private java.math.BigDecimal priceDecreaseApprovalPct = new java.math.BigDecimal("10");
+
+    /** 改价审批阈值: 涨价超过此百分比需审批 (纪律排查 B11, V20261110_47), 默认 20。 */
+    @Column(name = "price_increase_approval_pct", nullable = false, precision = 5, scale = 2)
+    @Builder.Default
+    private java.math.BigDecimal priceIncreaseApprovalPct = new java.math.BigDecimal("20");
+
 
     /** 物料平衡黄色阈值 (%), V20261103_140, 默认 5 */
     @Column(name = "material_balance_warn_pct", nullable = false, precision = 5, scale = 2)
