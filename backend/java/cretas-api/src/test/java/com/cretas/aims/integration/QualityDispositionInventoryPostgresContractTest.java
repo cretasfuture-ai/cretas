@@ -88,7 +88,11 @@ class QualityDispositionInventoryPostgresContractTest {
     @EnableJpaRepositories("com.cretas.aims.repository")
     @Import({QualityDispositionInventoryService.class, QcInspectionPolicy.class,
             QualityDispositionDecisionGuard.class, QualityDispositionRuleServiceImpl.class,
-            DecisionAuditServiceImpl.class, SpecialApprovalServiceImpl.class})
+            DecisionAuditServiceImpl.class, SpecialApprovalServiceImpl.class,
+            // 纪律排查 A3: 处置放行原料必须写放行台账 (缺了 fail-closed), 上下文里要有真守卫
+            com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class,
+            com.cretas.aims.service.discipline.FactoryDisciplinePolicy.class,
+            com.cretas.aims.service.canvas.impl.ThresholdResolverServiceImpl.class})
     static class Runtime {
     }
 
@@ -159,6 +163,11 @@ class QualityDispositionInventoryPostgresContractTest {
         assertDbFinishedGoods(secondFg, FinishedGoodsBatch.Status.AVAILABLE);
         assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
         assertInspectionRetained(f.inspectionId());
+        // 纪律排查 A3: 真库里放行台账同一事务落了一行 (不良 → 可用, 质检处置通道, 带质检单号)
+        assertThat(jdbc.queryForObject("select count(*) from material_batch_releases where material_batch_id = ?"
+                        + " and channel = 'QC_DISPOSITION' and from_status = 'DEFECTIVE' and to_status = 'AVAILABLE'"
+                        + " and inspection_id = ?",
+                Long.class, f.materialId(), f.inspectionId())).isEqualTo(1L);
     }
 
     /**

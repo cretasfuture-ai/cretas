@@ -79,7 +79,11 @@ class QcReleaseRawMaterialPostgresContractTest {
     @EnableAutoConfiguration(exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
     @EntityScan("com.cretas.aims.entity")
     @EnableJpaRepositories("com.cretas.aims.repository")
-    @Import({QcReleaseService.class, ReleasedEvents.class})
+    // 纪律排查 A3: 原料放行必须写放行台账 (缺了 fail-closed), 上下文里要有真守卫 + 真策略 + 真阈值解析
+    @Import({QcReleaseService.class, ReleasedEvents.class,
+            com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class,
+            com.cretas.aims.service.discipline.FactoryDisciplinePolicy.class,
+            com.cretas.aims.service.canvas.impl.ThresholdResolverServiceImpl.class})
     static class Runtime {
     }
 
@@ -182,6 +186,11 @@ class QcReleaseRawMaterialPostgresContractTest {
         assertThat(jdbc.queryForObject("select count(*) from qc_release_records where id = ? and factory_id = ?"
                         + " and target_type = 'RAW_MATERIAL_BATCH' and target_id = ? and decision = 'RELEASED'",
                 Long.class, saved.getId(), FACTORY, batchId)).isEqualTo(1L);
+        // 纪律排查 A3: 真库里放行台账同一事务落了一行, 记下谁放的、走的质检放行页
+        assertThat(jdbc.queryForObject("select count(*) from material_batch_releases where factory_id = ?"
+                        + " and material_batch_id = ? and channel = 'QC_RELEASE' and released_by = ?"
+                        + " and from_status = 'INSPECTING' and to_status = 'AVAILABLE'",
+                Long.class, FACTORY, batchId, USER_ID)).isEqualTo(1L);
         assertThat(events.received).singleElement().satisfies(e -> {
             assertThat(e.getFactoryId()).isEqualTo(FACTORY);
             assertThat(e.getMaterialTypeId()).isEqualTo(typeId);
