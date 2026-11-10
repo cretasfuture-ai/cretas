@@ -384,6 +384,22 @@ class QcReleaseRepositoryQueryValidationTest {
                 .extracting(MaterialBatch::getId).containsExactlyInAnyOrder("WIP-INSP", "WIP-OK");
     }
 
+    @Test
+    @DisplayName("D-S411-04 原料待检: 只列本厂、非 PRODUCTION_BATCH (含 sourceDocType 为空的老数据) 的 INSPECTING")
+    void rawBatchPendingQuery() {
+        material("RAWQ-INSP", "PURCHASE_RECEIVE", "PO-9", MaterialBatchStatus.INSPECTING);
+        material("RAWQ-LEGACY", null, null, MaterialBatchStatus.INSPECTING);
+        material("RAWQ-OK", "PURCHASE_RECEIVE", "PO-10", MaterialBatchStatus.AVAILABLE);
+        material("RAWQ-WIP", "PRODUCTION_BATCH", "703", MaterialBatchStatus.INSPECTING);
+        material("RAWQ-OTHER", "PURCHASE_RECEIVE", "PO-11", MaterialBatchStatus.INSPECTING);
+        jdbc.update("UPDATE material_batches SET factory_id = ? WHERE id = 'RAWQ-OTHER'", OTHER);
+
+        assertThat(materialBatchRepo.findRawBatchesByFactoryIdAndStatus(F, MaterialBatchStatus.INSPECTING))
+                .extracting(MaterialBatch::getId).containsExactlyInAnyOrder("RAWQ-INSP", "RAWQ-LEGACY");
+        assertThat(materialBatchRepo.findRawBatchesByFactoryIdAndStatus(OTHER, MaterialBatchStatus.INSPECTING))
+                .extracting(MaterialBatch::getId).containsExactly("RAWQ-OTHER");
+    }
+
     private void fg(String id, String status) {
         FinishedGoodsBatch b = new FinishedGoodsBatch();
         b.setId(id);
@@ -435,6 +451,23 @@ class QcReleaseRepositoryQueryValidationTest {
         assertThat(t1.get(0).getConclusion()).isEqualTo("结论-T1");
         assertThat(t1.get(0).getReleasedBy()).isEqualTo(9L);
         assertThat(recordRepo.findTop200ByFactoryIdOrderByReleasedAtDesc(F)).hasSize(3);
+    }
+
+    /**
+     * D-S411-04 复审 R3: 「最近一条」是原料能不能改回可用的判据 ({@code MaterialQcRejectionGuard})。
+     * 两条记录 releasedAt 相同 (同一秒内先判不合格、再复检放行) 时, 后写入的那条 (id 大) 必须排在前面, 不能看库的心情。
+     */
+    @Test
+    @DisplayName("qc_release_records: releasedAt 相同时按 id 倒序, 后写的那条是「最近一条」")
+    void sameReleasedAtFallsBackToIdDescending() {
+        LocalDateTime same = LocalDateTime.of(2026, 11, 10, 9, 30, 0);
+        QcReleaseRecord first = recordRepo.saveAndFlush(record("T7", "REJECTED", same));
+        QcReleaseRecord second = recordRepo.saveAndFlush(record("T7", "RELEASED", same));
+        em.clear();
+        assertThat(second.getId()).isGreaterThan(first.getId());   // 阳性对照: 后写的 id 确实更大
+
+        List<QcReleaseRecord> t7 = recordRepo.findByTarget(F, QcReleaseRecord.TargetType.SEMI_FINISHED, "T7");
+        assertThat(t7).extracting(QcReleaseRecord::getId).containsExactly(second.getId(), first.getId());
     }
 
     @Test

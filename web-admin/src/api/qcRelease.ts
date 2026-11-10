@@ -2,19 +2,20 @@
  * 质检放行 API (缺口 11)。
  *
  * Backend: QcReleaseController @ /api/mobile/{factoryId}/qc-release
- *   GET  /pending    待检清单 (半成品 / 在制半成品 / 成品)
+ *   GET  /pending    待检清单 (半成品 / 在制半成品 / 成品 / 质检中的原料收货批次)
  *   POST /decisions  放行 / 判不合格 (结论必填; 记录放行人、放行时间)
  *   GET  /records    放行记录
  */
 import { get, post } from './request';
 
-export type QcReleaseTargetType = 'SEMI_FINISHED' | 'WIP_MATERIAL_BATCH' | 'FINISHED_GOODS';
+export type QcReleaseTargetType = 'SEMI_FINISHED' | 'WIP_MATERIAL_BATCH' | 'FINISHED_GOODS' | 'RAW_MATERIAL_BATCH';
 export type QcReleaseDecision = 'RELEASED' | 'REJECTED';
 
 export const QC_RELEASE_TARGET_LABELS: Record<QcReleaseTargetType, string> = {
   SEMI_FINISHED: '半成品',
   WIP_MATERIAL_BATCH: '在制半成品',
   FINISHED_GOODS: '成品',
+  RAW_MATERIAL_BATCH: '原料',
 };
 
 export interface QcPendingItem {
@@ -23,12 +24,16 @@ export interface QcPendingItem {
   formLabel: string;
   batchNumber: string | null;
   productTypeId: string | null;
+  /** 产品名; 原料行是物料名 */
   productName: string | null;
   quantity: number | null;
   unit: string | null;
+  /** 产出时间; 原料行是入库时间 */
   producedAt: string | null;
   /** 挡放行的未处理 CCP 偏离条数; 0 = 可放行 */
   openDeviationCount: number;
+  /** 原料行的物料类型 id; 其它形态为 null (老后端不返回) */
+  materialTypeId?: string | null;
 }
 
 export interface QcReleaseRecord {

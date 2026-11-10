@@ -153,6 +153,56 @@ describe('质检放行页', () => {
     });
   });
 
+  it('D-S411-04 原料收货批次: 行里显示物料名 / 批次号 / 数量单位, 放行发出 RAW_MATERIAL_BATCH', async () => {
+    const rawRow = {
+      targetType: 'RAW_MATERIAL_BATCH', targetId: 'mb-raw-1', formLabel: '原料', batchNumber: 'MT-20261110-0001',
+      productTypeId: null, productName: '冻猪蹄', quantity: 120, unit: 'kg', producedAt: '2026-11-10 08:00',
+      openDeviationCount: 0, materialTypeId: 'RMT-PORK',
+    };
+    state.get.mockImplementation((url: string) =>
+      Promise.resolve(ok(url.endsWith('/pending') ? [...pendingRows, rawRow] : [])));
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.text()).toContain('待检 (3)');
+    const rawTr = wrapper.findAll('[data-testid="qc-pending-table"] tbody tr')
+      .find(tr => tr.text().includes('MT-20261110-0001'));
+    expect(rawTr, '原料行要渲染出来').toBeTruthy();
+    const rowText = rawTr!.text();
+    expect(rowText).toContain('原料');
+    expect(rowText).toContain('冻猪蹄');
+    expect(rowText).toContain('120 kg');
+    expect(rowText).toContain('原料不能领用投产');
+
+    await openFor(wrapper, 'mb-raw-1');
+    expect(document.body.textContent).toContain('放行后原料可以领用投产');
+    const textarea = (document.querySelector('textarea[data-testid="qc-conclusion"]') ?? document.querySelector('[data-testid="qc-conclusion"] textarea')) as HTMLTextAreaElement;
+    textarea.value = '感官检验合格';
+    textarea.dispatchEvent(new Event('input'));
+    await flushPromises();
+    expect(submitButton().disabled).toBe(false);
+    submitButton().click();
+    await flushPromises();
+    expect(state.post).toHaveBeenCalledWith('/F-QC/qc-release/decisions', {
+      targetType: 'RAW_MATERIAL_BATCH', targetId: 'mb-raw-1', decision: 'RELEASED', conclusion: '感官检验合格',
+    });
+    wrapper.unmount();
+  });
+
+  it('放行记录里原料形态显示「原料」, 不是英文码', async () => {
+    state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/records') ? [{
+      id: 9, targetType: 'RAW_MATERIAL_BATCH', targetId: 'mb-raw-1', batchNumber: 'MT-REC-1', productTypeId: null,
+      quantity: 120, unit: 'kg', decision: 'RELEASED', conclusion: '合格', releasedBy: 3, releasedByName: '王质检',
+      releasedAt: '2026-11-10 09:00',
+    }] : [])));
+    const wrapper = mountPage();
+    await flushPromises();
+    const recordsText = wrapper.findAll('.el-table').map(t => t.text()).find(t => t.includes('MT-REC-1'));
+    expect(recordsText).toBeTruthy();
+    expect(recordsText).toContain('原料');
+    expect(recordsText).not.toContain('RAW_MATERIAL_BATCH');
+    wrapper.unmount();
+  });
+
   it('有未处理 CCP 偏离: 默认选「不合格」, 「放行」被禁用, 提示去处理偏离', async () => {
     const wrapper = mountPage();
     await flushPromises();
