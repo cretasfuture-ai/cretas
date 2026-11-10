@@ -103,10 +103,42 @@ public class PermissionServiceImpl implements PermissionService {
         initPermissionMatrix();
     }
 
+    // ==================== 审批权限码 (纪律排查 B1–B3/B11/B15, Steve 2026-11-10) ====================
+    //
+    // 「谁能审批按权限, 不按岗位名」: 每类审批一个专门的权限码 (模块码 + approve 动作), 各厂可在权限配置里
+    // 改授给哪些岗位 (L2 工厂覆盖 / L1 平台默认)。⛔ 不映射到 production:approve / quality:approve 这类宽权限
+    // —— 那会把审批权顺手发给操作员、质检员、班组长。
+    //
+    // 没有任何配置时的默认 = 改动前写死的名单, 谁能批和以前完全一样:
+    //   · 报工撤回 / 盘点差异 / 质检处置特批: 默认写在下面兜底矩阵里 (与旧名单逐个对应);
+    //   · 改价 / 退款: 以前没有岗位名单, 门槛是 finance(/sales):read_write ⇒ 默认「跟着那几个模块走」
+    //     (见 APPROVAL_DEFAULT_FROM_MODULES), 连同各厂对 finance/sales 的现有配置一起原样继承。
+    public static final String APPROVAL_REPORT_REVERSAL = "approval_report_reversal";
+    public static final String APPROVAL_STOCKTAKE = "approval_stocktake";
+    public static final String APPROVAL_QUALITY_DISPOSITION = "approval_quality_disposition";
+    public static final String APPROVAL_PRICE_ADJUSTMENT = "approval_price_adjustment";
+    public static final String APPROVAL_REFUND = "approval_refund";
+
+    /** 五个审批权限码 (模块码), 按审批类型。 */
+    public static final List<String> APPROVAL_MODULES = List.of(
+            APPROVAL_REPORT_REVERSAL, APPROVAL_STOCKTAKE, APPROVAL_QUALITY_DISPOSITION,
+            APPROVAL_PRICE_ADJUSTMENT, APPROVAL_REFUND);
+
+    /**
+     * 没有 L2 / L1 配置时, 这几个审批码的默认 = 「这些模块里任一是 read_write」(改动前接口上的门槛原样)。
+     * 改价: 原 {@code @RequirePermission({"finance:read_write", "sales:read_write"})};
+     * 退款: 原 {@code @RequirePermission("finance:read_write")}。
+     */
+    static final Map<String, List<String>> APPROVAL_DEFAULT_FROM_MODULES = Map.of(
+            APPROVAL_PRICE_ADJUSTMENT, List.of("finance", "sales"),
+            APPROVAL_REFUND, List.of("finance"));
+
     private static void initPermissionMatrix() {
         // factory_super_admin: 所有模块读写
         Map<String, String> superAdminPerms = new HashMap<>();
         ALL_MODULES.forEach(m -> superAdminPerms.put(m, "read_write"));
+        // 审批码默认: 质检处置特批旧名单含 permission_admin (它与超管共用这张表), 撤回 / 盘点的旧名单不含 ⇒ 只放这一个
+        superAdminPerms.put(APPROVAL_QUALITY_DISPOSITION, "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.factory_super_admin, superAdminPerms);
 
         // platform_admin: 平台级, 同 super_admin (所有模块读写)
@@ -154,6 +186,8 @@ public class PermissionServiceImpl implements PermissionService {
         // sales: dispatcher 的 rw 是 Apr 18 2026 bug #45 给调度岗的理由(协调生产发货),
         // 不套用到生产经理 —— 生产经理只需看订单排产, 不提交/审核 SO。
         productionManagerPerms.put("sales", "read");
+        // 报工撤回审批默认 (旧名单: factory_super_admin / production_manager)
+        productionManagerPerms.put(APPROVAL_REPORT_REVERSAL, "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.production_manager, productionManagerPerms);
 
         // production_clerk (生产文员): 2026-08-21 新增. owner 原话「蹲在电脑前审核报工数据、
@@ -178,6 +212,8 @@ public class PermissionServiceImpl implements PermissionService {
         qualityManagerPerms.put("production", "read");
         qualityManagerPerms.put("quality", "read_write");
         qualityManagerPerms.put("rd", "read");  // QA 审核样品但不创建
+        // 质检处置 / 特批审批默认 (旧名单: quality_manager / factory_super_admin / permission_admin)
+        qualityManagerPerms.put(APPROVAL_QUALITY_DISPOSITION, "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.quality_manager, qualityManagerPerms);
 
         // workshop_supervisor
@@ -334,6 +370,8 @@ public class PermissionServiceImpl implements PermissionService {
         financePerms.put("analytics", "read_write");  // SmartBI 完整权限
         financePerms.put("report", "read");
         financePerms.put("rd", "read");  // 定价参考
+        // 盘点差异审批默认 (旧名单: finance_manager / factory_super_admin / platform_admin)
+        financePerms.put(APPROVAL_STOCKTAKE, "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.finance_manager, financePerms);
 
         // viewer: 所有模块只读
@@ -715,6 +753,8 @@ public class PermissionServiceImpl implements PermissionService {
         modules.addAll(snapshot.l2().keySet());
         modules.addAll(snapshot.l1().keySet());
         modules.addAll(PERMISSION_MATRIX.getOrDefault(role, Collections.emptyMap()).keySet());
+        // 默认跟着 finance / sales 走的审批码不在任何一层登记, 也要进登录快照 (前端按它显示审批按钮)
+        modules.addAll(APPROVAL_DEFAULT_FROM_MODULES.keySet());
 
         Map<String, String> levels = new LinkedHashMap<>();
 
@@ -788,6 +828,15 @@ public class PermissionServiceImpl implements PermissionService {
             Map<String, String> rolePerms = PERMISSION_MATRIX.get(role);
             if (rolePerms != null) {
                 permType = rolePerms.get(module);
+            }
+        }
+        // 改价 / 退款审批码: 三层都没配时跟着原门槛模块走 (finance / sales 里任一 read_write)
+        if (permType == null && APPROVAL_DEFAULT_FROM_MODULES.containsKey(module)) {
+            for (String source : APPROVAL_DEFAULT_FROM_MODULES.get(module)) {
+                String sourceLevel = resolveEffectiveLevel(factoryId, role, source, snapshot, requireAvailable);
+                if ("read_write".equals(denormalizeLevel(sourceLevel))) {
+                    return "read_write";
+                }
             }
         }
         return permType;
