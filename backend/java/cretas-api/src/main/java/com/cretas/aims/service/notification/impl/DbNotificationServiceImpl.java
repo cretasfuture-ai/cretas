@@ -43,7 +43,7 @@ public class DbNotificationServiceImpl implements NotificationService {
         String content = body;
         String head = com.cretas.aims.entity.enums.FactoryUserRole.factory_super_admin.name();
         if (roleCode != null && !head.equalsIgnoreCase(roleCode)
-                && userRepository.findByFactoryIdAndRoleCode(factoryId, roleCode).isEmpty()) {
+                && userRepository.findByFactoryIdAndRoleCodeIgnoreCase(factoryId, roleCode).isEmpty()) {
             targetRole = head;
             content = body + "\n(原定接收岗位 " + roleCode + " 没有人, 已转发给厂长)";
             log.warn("[Notification] 角色没有人, 改发厂长: factory={} role={} title={}", factoryId, roleCode, title);

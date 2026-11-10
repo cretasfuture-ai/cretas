@@ -52,7 +52,7 @@ import static org.mockito.Mockito.when;
  * 而不是只看有没有抛异常 (「没发生」的读数要配一个「一定会发生」的读数)。
  */
 @DisplayName("A17 超信用额度检查开关 — createSalesOrder")
-class SalesCreditCheckSwitchTest {
+class SalesCreditCheckSwitchContractTest {
 
     final SalesOrderRepository orders = mock(SalesOrderRepository.class);
     final SalesOrderItemRepository items = mock(SalesOrderItemRepository.class);
@@ -137,27 +137,84 @@ class SalesCreditCheckSwitchTest {
     }
 
     @Test
-    @DisplayName("默认(阈值中心没配 = OFF): 即使客户被冻结/超额, 检查整体不做, 订单照常创建")
-    void defaultOff_checkNeverRuns() {
+    @DisplayName("OFF(默认): 超额检查整体不做, 超额客户照常下单, 备注无留痕")
+    void off_exceeds_notChecked() {
         prepare("OFF");
-        creditStatus(CreditStatus.SUSPENDED, true);
+        creditStatus(CreditStatus.WARNING, true);
 
         SalesOrder created = service.createSalesOrder("F", request(), 1L);
 
-        verifyNoInteractions(creditCheck);
         assertEquals("O", created.getId()); // 阳性对照: 订单真的保存了
         assertNull(created.getRemark());
     }
 
     @Test
-    @DisplayName("没有阈值中心 bean 时也按关闭处理")
+    @DisplayName("🔴 OFF: 冻结(SUSPENDED)是账户状态不归这个开关管 —— 仍然 409, 订单不保存")
+    void off_suspendedCustomer_stillBlocked() {
+        prepare("OFF");
+        creditStatus(CreditStatus.SUSPENDED, false);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createSalesOrder("F", request(), 1L));
+
+        assertEquals(409, ex.getCode());
+        verify(orders, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("没有阈值中心 bean 时按 OFF: 超额放行, 冻结仍拦")
     void noResolver_isOff() {
         prepare(null);
-        creditStatus(CreditStatus.SUSPENDED, true);
+        creditStatus(CreditStatus.WARNING, true);
+        assertEquals("O", service.createSalesOrder("F", request(), 1L).getId());
 
-        service.createSalesOrder("F", request(), 1L);
+        creditStatus(CreditStatus.SUSPENDED, false);
+        assertThrows(BusinessException.class, () -> service.createSalesOrder("F", request(), 1L));
+    }
 
-        verifyNoInteractions(creditCheck);
+    @Test
+    @DisplayName("OFF + 信用检查服务缺失: 原有流程不受影响, 照常下单")
+    void off_noCreditService_savesOrder() {
+        prepare("OFF");
+        ReflectionTestUtils.setField(service, "customerCreditCheckService", null);
+
+        assertEquals("O", service.createSalesOrder("F", request(), 1L).getId());
+    }
+
+    @Test
+    @DisplayName("WARN + 信用检查服务缺失 ⇒ 不静默放行: 订单备注写「额度未核对」")
+    void warn_noCreditService_notesUnverified() {
+        prepare("WARN");
+        ReflectionTestUtils.setField(service, "customerCreditCheckService", null);
+
+        SalesOrder created = service.createSalesOrder("F", request(), 1L);
+
+        assertEquals("O", created.getId());
+        assertTrue(created.getRemark().contains("额度未核对"), created.getRemark());
+    }
+
+    @Test
+    @DisplayName("BLOCK + 信用检查服务缺失 ⇒ 409 额度未核对, 订单不保存")
+    void block_noCreditService_throws409() {
+        prepare("BLOCK");
+        ReflectionTestUtils.setField(service, "customerCreditCheckService", null);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.createSalesOrder("F", request(), 1L));
+
+        assertEquals(409, ex.getCode());
+        assertTrue(ex.getMessage().contains("额度未核对"), ex.getMessage());
+        verify(orders, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("WARN: 冻结客户同样 409 (冻结不是只提示)")
+    void warn_suspended_blocked() {
+        prepare("WARN");
+        creditStatus(CreditStatus.SUSPENDED, false);
+
+        assertThrows(BusinessException.class, () -> service.createSalesOrder("F", request(), 1L));
+        verify(orders, never()).save(any());
     }
 
     @Test

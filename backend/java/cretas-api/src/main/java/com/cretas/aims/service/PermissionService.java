@@ -39,19 +39,19 @@ public interface PermissionService {
      */
     String SELF_WAGE_VIEW_PERMISSION = "hr:self_wage:view";
 
-    /** 原料类型维护 (新建/改/删)。默认仓储主管 + 厂长, 工厂可在权限矩阵里给别的角色配 material_type 模块读写。 */
+    /** 原料类型维护 (新建/改/删)。默认仓储主管 + 厂长, 工厂可在阈值设置里改岗位名单 (ThresholdKeys.INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN)。 */
     String MATERIAL_TYPE_MAINTAIN_PERMISSION = "material_type:maintain";
 
-    /** 报损审批 (通过/驳回/看待审列表)。默认只给厂长, 工厂可在权限矩阵里给别的角色配 wastage 模块读写。 */
+    /** 报损审批 (通过/驳回/看待审列表)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE)。 */
     String WASTAGE_APPROVE_PERMISSION = "wastage:approve";
 
-    /** 信用特批 (超信用额度被拦截时放行下单)。默认只给厂长, 工厂可在权限矩阵里给 credit 模块读写。 */
+    /** 信用特批 (超信用额度被拦截时放行下单)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.CREDIT_PERMISSION_OVERRIDE)。 */
     String CREDIT_OVERRIDE_PERMISSION = "credit:override";
 
     /**
-     * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的同一套「配置权限」判定
-     * (L2 工厂覆盖 → L1 平台默认 → 未配置时落到该权限码的默认角色)。
-     * 只认上面两个可配置默认角色的权限码, 其它码一律 false。默认实现 false (测试替身用)。
+     * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的判定, 与 {@link #hasPermission} 对上面三个权限码是<b>同一套</b>
+     * 逻辑 (厂长恒有; 其余按工厂阈值里配的岗位名单, 没配用默认名单), 不会给出不同结论。
+     * 其它权限码一律 false。默认实现 false (测试替身用)。
      */
     default boolean roleHasConfiguredPermission(String factoryId, String roleCode, String permissionCode) {
         return false;

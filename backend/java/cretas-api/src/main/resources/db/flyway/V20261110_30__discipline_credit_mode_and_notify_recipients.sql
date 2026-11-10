@@ -7,6 +7,12 @@ INSERT INTO factory_thresholds
 VALUES
   ('*', 'credit.check.mode', 'CREDIT', 'STRING', 'OFF', 'OFF',
    '超信用额度检查: OFF=不检查(默认); WARN=只提示并留痕; BLOCK=拦截, 持信用特批权限者填原因可放行'),
+  ('*', 'inventory.permission.material_type_maintain', 'INVENTORY', 'STRING', 'warehouse_manager', 'warehouse_manager',
+   '原料类型维护(新建/改/删/别名/合并)的岗位, 逗号分隔; 厂长恒有权限'),
+  ('*', 'inventory.permission.wastage_approve', 'INVENTORY', 'STRING', '', '',
+   '报损审批(通过/驳回/看待审)的岗位, 逗号分隔; 空=只有厂长'),
+  ('*', 'credit.permission.override', 'CREDIT', 'STRING', '', '',
+   '信用特批(超信用额度被拦截时放行)的岗位, 逗号分隔; 空=只有厂长'),
   ('*', 'production.notify.schedule_created', 'PRODUCTION', 'STRING',
    'dispatcher,factory_super_admin', 'dispatcher,factory_super_admin',
    '新调度计划创建通知的接收角色(逗号分隔); 无人时发厂长'),

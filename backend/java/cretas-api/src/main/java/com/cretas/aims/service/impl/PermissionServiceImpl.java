@@ -38,6 +38,10 @@ public class PermissionServiceImpl implements PermissionService {
     @Autowired(required = false)
     private com.cretas.aims.service.platform.PlatformEmployeeModulePermissions employeeModulePermissions;
 
+    /** 可配置默认岗位的权限码读工厂阈值; 没有这个 bean (单测直接 new) 时按默认名单。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.canvas.ThresholdResolverService thresholdResolver;
+
     // 简易 TTL cache: permissionKey -> [expiresAtMs, Boolean]
     // Key: userId:permissionCode:factoryId
     // TTL: 5 minutes. Cleared on any matrix update via invalidateCache().
@@ -472,11 +476,9 @@ public class PermissionServiceImpl implements PermissionService {
             return false;
         }
 
-        // 可配置默认角色的权限码 (原料类型维护 / 报损审批): 先看工厂配置, 没配才用默认角色。
-        Set<FactoryUserRole> configurableDefaults = CONFIGURABLE_DEFAULT_ROLES.get(permissionCode);
-        if (configurableDefaults != null) {
-            return hasConfiguredPermission(user, permissionCode,
-                    configurableDefaults.stream().map(Enum::name).collect(Collectors.toSet()));
+        // 可配置默认岗位的权限码 (原料类型维护 / 报损审批 / 信用特批): 厂长恒有, 其余按工厂阈值里的岗位名单。
+        if (CONFIGURABLE_PERMISSIONS.containsKey(permissionCode)) {
+            return roleInConfiguredList(user.getFactoryId(), role, permissionCode);
         }
 
         // procurement:price:view — 价格字段查看权限 (PR #415 Option B)
@@ -545,19 +547,46 @@ public class PermissionServiceImpl implements PermissionService {
         return result;
     }
 
-    /** 未被工厂配置时, 这两个权限码默认放行的角色 (厂长 = factory_super_admin, 另有恒放行分支)。 */
-    private static final Map<String, Set<FactoryUserRole>> CONFIGURABLE_DEFAULT_ROLES = Map.of(
-            MATERIAL_TYPE_MAINTAIN_PERMISSION,
-            EnumSet.of(FactoryUserRole.warehouse_manager, FactoryUserRole.factory_super_admin),
-            WASTAGE_APPROVE_PERMISSION,
-            EnumSet.of(FactoryUserRole.factory_super_admin),
-            CREDIT_OVERRIDE_PERMISSION,
-            EnumSet.of(FactoryUserRole.factory_super_admin));
+    /** 可配置岗位的权限码 → (阈值 key, 默认岗位名单, 逗号分隔)。厂长另有恒放行分支, 不必写进默认名单。 */
+    private record ConfigurablePermission(String thresholdKey, String defaultRoles) {
+    }
+
+    private static final Map<String, ConfigurablePermission> CONFIGURABLE_PERMISSIONS = Map.of(
+            MATERIAL_TYPE_MAINTAIN_PERMISSION, new ConfigurablePermission(
+                    com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
+                    ""),
+            WASTAGE_APPROVE_PERMISSION, new ConfigurablePermission(
+                    com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE, ""),
+            CREDIT_OVERRIDE_PERMISSION, new ConfigurablePermission(
+                    com.cretas.aims.service.canvas.ThresholdKeys.CREDIT_PERMISSION_OVERRIDE, ""));
+
+    /** 用户路径与角色路径共用的唯一判定: 厂长恒有; 其余角色在配置名单 (或默认名单) 里才有。 */
+    private boolean roleInConfiguredList(String factoryId, FactoryUserRole role, String permissionCode) {
+        if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
+            return true;
+        }
+        if (role == FactoryUserRole.unactivated || isRetiredRestaurantRole(role)) {
+            return false;
+        }
+        ConfigurablePermission cfg = CONFIGURABLE_PERMISSIONS.get(permissionCode);
+        String raw = cfg.defaultRoles();
+        if (thresholdResolver != null && factoryId != null) {
+            String configured = thresholdResolver.getString(factoryId, cfg.thresholdKey(), null);
+            if (configured != null) {
+                raw = configured; // 配成空串 = 明确「只有厂长」
+            }
+        }
+        for (String code : raw.split(",")) {
+            if (code.trim().equalsIgnoreCase(role.name())) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     @Override
     public boolean roleHasConfiguredPermission(String factoryId, String roleCode, String permissionCode) {
-        Set<FactoryUserRole> defaults = permissionCode == null ? null : CONFIGURABLE_DEFAULT_ROLES.get(permissionCode);
-        if (defaults == null || roleCode == null) {
+        if (permissionCode == null || roleCode == null || !CONFIGURABLE_PERMISSIONS.containsKey(permissionCode)) {
             return false;
         }
         FactoryUserRole role;
@@ -566,21 +595,7 @@ public class PermissionServiceImpl implements PermissionService {
         } catch (IllegalArgumentException unknownRole) {
             return false;
         }
-        if (role == FactoryUserRole.unactivated || isRetiredRestaurantRole(role)) {
-            return false;
-        }
-        if (role == FactoryUserRole.factory_super_admin || role == FactoryUserRole.platform_admin) {
-            return true;
-        }
-        String[] parts = permissionCode.split(":");
-        String level = factoryId == null ? null : resolveLayer2(factoryId, role.name(), parts[0], true);
-        if (level == null) {
-            level = resolveLayer1(role.name(), parts[0], true);
-        }
-        if (level == null) {
-            return defaults.contains(role);
-        }
-        return checkAction(level, parts[1]);
+        return roleInConfiguredList(factoryId, role, permissionCode);
     }
 
     @Override

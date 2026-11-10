@@ -56,14 +56,14 @@ public class RawMaterialTypeController {
      *
      * 2026-11-10 (Steve 裁定, 工厂纪律 B7): 不再写死岗位白名单, 改按「原料类型维护」权限
      * ({@link PermissionService#MATERIAL_TYPE_MAINTAIN_PERMISSION}) 判断。未配置时默认仓储主管
-     * (warehouse_manager) + 厂长 (factory_super_admin); 工厂可在权限矩阵里给 material_type 模块
-     * 配别的角色读写 (L2 工厂覆盖 → L1 平台默认, 见 PermissionServiceImpl.hasPermission)。
+     * (warehouse_manager) + 厂长 (factory_super_admin); 工厂可在阈值设置
+     * (inventory.permission.material_type_maintain) 里改岗位名单, 见 PermissionServiceImpl.hasPermission。
      * 旧的 production:read_write / warehouse:read_write 模块闸 + @RequireRole 白名单由这一个权限取代
      * (旧版两道闸 AND, 实际放行的只有白名单那批, 所以放行面没有变宽)。
      * 前端镜像见 web-admin materialTypeWriteRoles.ts (默认角色), 由
      * materialTypeWriteRolesMatchBackend.spec.ts 对 PermissionServiceImpl 的默认角色集合钉住。
      */
-    @RequirePermission(PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION)
+    @RequirePermission(value = PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION, message = "没有「原料类型维护」权限; 默认仓储主管和厂长可以, 请联系厂长在阈值设置里给你的岗位开通")
     @PostMapping
     @Operation(summary = "创建原材料类型", description = "创建新的原材料类型，需指定名称、编码、类别、单位、存储类型等信息")
     public ApiResponse<RawMaterialTypeDTO> createMaterialType(
@@ -99,7 +99,7 @@ public class RawMaterialTypeController {
      *
      * 2026-11-10 (B7): 同 createMaterialType, 按原料类型维护权限判断。
      */
-    @RequirePermission(PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION)
+    @RequirePermission(value = PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION, message = "没有「原料类型维护」权限; 默认仓储主管和厂长可以, 请联系厂长在阈值设置里给你的岗位开通")
     @PutMapping("/{id}")
     @Operation(summary = "更新原材料类型", description = "更新原材料类型信息，可修改名称、类别、单位、存储条件等")
     public ApiResponse<RawMaterialTypeDTO> updateMaterialType(
@@ -136,7 +136,7 @@ public class RawMaterialTypeController {
      *
      * 2026-11-10 (B7): 同 createMaterialType, 按原料类型维护权限判断。
      */
-    @RequirePermission(PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION)
+    @RequirePermission(value = PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION, message = "没有「原料类型维护」权限; 默认仓储主管和厂长可以, 请联系厂长在阈值设置里给你的岗位开通")
     @DeleteMapping("/{id}")
     @Operation(summary = "删除原材料类型", description = "删除指定的原材料类型，已关联的原材料批次不受影响")
     public ApiResponse<Void> deleteMaterialType(
@@ -408,7 +408,7 @@ public class RawMaterialTypeController {
     }
 
     /** 写权限与 PUT /{id} 一致: 别名是物料字典的一部分, 只让仓储主管改。 */
-    @RequirePermission(PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION)
+    @RequirePermission(value = PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION, message = "没有「原料类型维护」权限; 默认仓储主管和厂长可以, 请联系厂长在阈值设置里给你的岗位开通")
     @PostMapping("/{id}/aliases")
     @Operation(summary = "添加物料别名", description = "配方单 / 供应商单据上的叫法; 同一工厂内别名唯一, 也不能与其它物料名称相同")
     public ApiResponse<MaterialMergeDTO.AliasItem> addAlias(
@@ -417,7 +417,7 @@ public class RawMaterialTypeController {
         return ApiResponse.success(aliasMergeService.addAlias(factoryId, id, request.getAlias()));
     }
 
-    @RequirePermission(PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION)
+    @RequirePermission(value = PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION, message = "没有「原料类型维护」权限; 默认仓储主管和厂长可以, 请联系厂长在阈值设置里给你的岗位开通")
     @DeleteMapping("/{id}/aliases/{aliasId}")
     @Operation(summary = "删除物料别名")
     public ApiResponse<Void> removeAlias(
@@ -434,7 +434,7 @@ public class RawMaterialTypeController {
         return ApiResponse.success(aliasMergeService.checkMerge(factoryId, id, masterId));
     }
 
-    @RequirePermission(PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION)
+    @RequirePermission(value = PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION, message = "没有「原料类型维护」权限; 默认仓储主管和厂长可以, 请联系厂长在阈值设置里给你的岗位开通")
     @PostMapping("/{id}/merge")
     @Operation(summary = "把重复物料合并到主物料", description = "被合并物料停用, 名字变成主物料的别名; 历史单据不动; 有引用或库存时 409")
     public ApiResponse<MaterialMergeDTO.MergeResult> merge(

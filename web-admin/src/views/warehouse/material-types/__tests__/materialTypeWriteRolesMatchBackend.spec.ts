@@ -79,12 +79,18 @@ function requireRoleOf(source: string, methodMarker: string): string[] {
   return [...ann![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
 }
 
-/** PermissionServiceImpl 里「原料类型维护」权限未配置时的默认角色 (EnumSet.of(FactoryUserRole.a, FactoryUserRole.b))。 */
+/**
+ * PermissionServiceImpl 里「原料类型维护」权限未被工厂配置时的默认岗位
+ * (`new ConfigurablePermission(ThresholdKeys.INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN, "a,b")`)
+ * 加上恒有权限的厂长 factory_super_admin (roleInConfiguredList 里的恒放行分支)。
+ */
 function materialTypeMaintainDefaultRoles(): string[] {
   const src = readJava('service/impl/PermissionServiceImpl.java');
-  const m = src.match(/MATERIAL_TYPE_MAINTAIN_PERMISSION,\s*EnumSet\.of\(([^)]*)\)/);
-  expect(m, '读不到 MATERIAL_TYPE_MAINTAIN_PERMISSION 的默认角色 —— 后端换了形态, 本闸必须跟着改').toBeTruthy();
-  return [...m![1].matchAll(/FactoryUserRole\.([a-z_]+)/g)].map((x) => x[1]);
+  const m = src.match(/INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,\s*"([a-z_,\s]*)"\)/);
+  expect(m, '读不到「原料类型维护」的默认岗位 —— 后端换了形态, 本闸必须跟着改').toBeTruthy();
+  expect(src, '厂长恒放行分支不见了').toMatch(/role == FactoryUserRole\.factory_super_admin/);
+  const roles = m![1].split(',').map((x) => x.trim()).filter(Boolean);
+  return [...new Set([...roles, 'factory_super_admin'])];
 }
 
 function platformAdminRoles(): string[] {
@@ -116,7 +122,7 @@ describe('物料字典写门禁: MATERIAL_TYPE_WRITE_ROLES 必须等于后端实
   it('RawMaterialTypeController 的写端点按 material_type:maintain 权限判断, 不再有 @RequireRole', () => {
     const src = readJava('controller/RawMaterialTypeController.java');
     expect(src).not.toMatch(/@RequireRole\(/);
-    expect(src.match(/@RequirePermission\(PermissionService\.MATERIAL_TYPE_MAINTAIN_PERMISSION\)/g)?.length)
+    expect(src.match(/@RequirePermission\(value = PermissionService\.MATERIAL_TYPE_MAINTAIN_PERMISSION/g)?.length)
       .toBe(6);
   });
 

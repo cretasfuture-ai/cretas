@@ -84,6 +84,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
      */
     List<User> findByFactoryIdAndRoleCode(String factoryId, String roleCode);
 
+    /** 角色码不区分大小写 (库里存小写, 但不少调用方传大写常量, 如 QUALITY_MANAGER)。 */
+    List<User> findByFactoryIdAndRoleCodeIgnoreCase(String factoryId, String roleCode);
+
     /**
      * Sprint 6 W2-B (RBAC DataScope SELF_AND_BELOW) — 直接下属 (reports_to = managerUserId).
      * 用于递归构造下属链. Resolver iterative BFS until 闭合.

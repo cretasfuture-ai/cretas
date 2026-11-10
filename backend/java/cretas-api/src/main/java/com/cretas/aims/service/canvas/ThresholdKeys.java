@@ -70,6 +70,17 @@ public final class ThresholdKeys {
      */
     public static final String CREDIT_CHECK_MODE = "credit.check.mode";
 
+    // ==================== 可配置的权限默认角色 (2026-11-10 Steve 裁定, 工厂纪律 B7 / B9 / A17) ====================
+    // 「谁能做这件事」不写死岗位: 值是逗号分隔的角色码, 存工厂阈值 (没有 per-factory 行就跟随全局默认)。
+    // 厂长 (factory_super_admin) 恒有权限, 不受这里的值影响。读到旧值 = 放行 / 拦住用户动作 ⇒ 登记为闸门类 key。
+
+    /** 原料类型维护 (新建/改/删/别名/合并) 的岗位 → 默认 warehouse_manager */
+    public static final String INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN = "inventory.permission.material_type_maintain";
+    /** 报损审批 (通过/驳回/看待审) 的岗位 → 默认只有厂长 (空) */
+    public static final String INVENTORY_PERMISSION_WASTAGE_APPROVE = "inventory.permission.wastage_approve";
+    /** 信用特批 (超信用额度被拦截时放行) 的岗位 → 默认只有厂长 (空) */
+    public static final String CREDIT_PERMISSION_OVERRIDE = "credit.permission.override";
+
     // ==================== 通知接收人 (2026-11-10 Steve 裁定, 工厂纪律 B12) ====================
     // 每类通知发给谁由工厂配置: 值是逗号分隔的角色码; 没配 / 配的角色全都没有人 ⇒ 默认发给厂长, 不丢。
     // 归类沿用现有分类 (PRODUCTION / INVENTORY), 不新增分类, 以免前端那份平行 TS 联合类型要跟着改。
@@ -282,7 +293,10 @@ public final class ThresholdKeys {
      */
     public static final java.util.Set<String> GATING_KEYS = java.util.Set.of(
             SALES_DELIVERY_OVER_SHIP_RATE,
-            CREDIT_CHECK_MODE
+            CREDIT_CHECK_MODE,
+            INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
+            INVENTORY_PERMISSION_WASTAGE_APPROVE,
+            CREDIT_PERMISSION_OVERRIDE
     );
 
     /**

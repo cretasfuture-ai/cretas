@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * 工厂纪律 B7 (Steve 2026-11-10): 原料类型的维护动作从写死的岗位白名单 ({@code @RequireRole}) 改成按
- * 「原料类型维护」权限判断。默认谁有这个权限 (仓储主管 + 厂长) 由 {@code ConfigurableDefaultPermissionsTest}
+ * 「原料类型维护」权限判断。默认谁有这个权限 (仓储主管 + 厂长) 由 {@code ConfigurableDefaultPermissionsContractTest}
  * 钉住; 本文件只证明「注解接对了」: 6 个维护端点都带这个权限码, 且没有任何残留的角色白名单。
  */
 class RawMaterialTypeManagerOnlyRoleGateTest {

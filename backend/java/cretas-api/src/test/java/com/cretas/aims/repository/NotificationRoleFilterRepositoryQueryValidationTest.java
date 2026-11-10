@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @DisplayName("NotificationRepository — 角色通知不再推给全厂")
-class NotificationRoleFilterRepositoryTest {
+class NotificationRoleFilterRepositoryQueryValidationTest {
 
     private static final String F = "F-NRF-1";
 

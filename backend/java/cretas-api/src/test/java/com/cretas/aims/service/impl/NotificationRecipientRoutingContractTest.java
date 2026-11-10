@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
  * <p>用一份「内存通讯录」代替 UserRepository, 断言真正落库的通知行 (谁收到了), 而不是断言调用了哪个方法。
  */
 @DisplayName("B12 通知接收人: 工厂配置 + 找不到人转发厂长")
-class NotificationRecipientRoutingTest {
+class NotificationRecipientRoutingContractTest {
 
     private static final String F = "F100";
 
@@ -177,10 +177,10 @@ class NotificationRecipientRoutingTest {
         NotificationRepository repo = mock(NotificationRepository.class);
         UserRepository users = mock(UserRepository.class);
         DbNotificationServiceImpl db = new DbNotificationServiceImpl(repo, users);
-        when(users.findByFactoryIdAndRoleCode(F, "dispatcher")).thenReturn(List.of());
+        when(users.findByFactoryIdAndRoleCodeIgnoreCase(F, "dispatcher")).thenReturn(List.of());
         User qa = new User();
         qa.setId(9L);
-        when(users.findByFactoryIdAndRoleCode(F, "quality_manager")).thenReturn(List.of(qa));
+        when(users.findByFactoryIdAndRoleCodeIgnoreCase(F, "quality_manager")).thenReturn(List.of(qa));
 
         db.notifyRole(F, "dispatcher", "T", "B");
         db.notifyRole(F, "quality_manager", "T2", "B2");
@@ -190,5 +190,27 @@ class NotificationRecipientRoutingTest {
         assertThat(captor.getAllValues().get(0).getTargetRole()).isEqualTo("factory_super_admin");
         assertThat(captor.getAllValues().get(0).getContent()).contains("已转发给厂长");
         assertThat(captor.getAllValues().get(1).getTargetRole()).isEqualTo("quality_manager");
+    }
+
+    @Test
+    @DisplayName("🔴 大写角色码 QUALITY_MANAGER (冷链告警等调用方就这么传) + 库里真有这个人 ⇒ 送给质量经理, 不兜底给厂长")
+    void dbNotifyRoleUppercaseCodeReachesTheRealRoleHolder() {
+        NotificationRepository repo = mock(NotificationRepository.class);
+        // 用「真的区分大小写」的通讯录: 库里存小写; 只有忽略大小写的查询找得到, 精确匹配查询找不到
+        UserRepository users = mock(UserRepository.class);
+        User qa = new User();
+        qa.setId(9L);
+        qa.setRoleCode("quality_manager");
+        when(users.findByFactoryIdAndRoleCodeIgnoreCase(eq(F), anyString())).thenAnswer(inv ->
+                "quality_manager".equalsIgnoreCase(inv.getArgument(1)) ? List.of(qa) : List.of());
+        when(users.findByFactoryIdAndRoleCode(F, "QUALITY_MANAGER")).thenReturn(List.of()); // 精确匹配的老路: 找不到
+        DbNotificationServiceImpl db = new DbNotificationServiceImpl(repo, users);
+
+        db.notifyRole(F, "QUALITY_MANAGER", "冷链告警", "温度超限");
+
+        ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
+        verify(repo).save(captor.capture());
+        assertThat(captor.getValue().getTargetRole()).isEqualTo("QUALITY_MANAGER"); // 没被改成厂长
+        assertThat(captor.getValue().getContent()).doesNotContain("已转发给厂长");
     }
 }

@@ -185,35 +185,54 @@ public class SalesServiceImpl implements SalesService {
     }
 
     /**
-     * 返回要写进订单备注的留痕文字 (null = 没有需要留痕的)。BLOCK 且未获特批时抛 409。
+     * 返回要写进订单备注的留痕文字 (null = 没有需要留痕的)。
+     *
+     * <p>两件事分开: (1) 客户被<b>冻结</b>是账户状态, 不归「超信用额度」开关管 —— 任何模式下都 409 (原有行为);
+     * (2) 「超额」才受开关控制: OFF 不管, WARN 提示留痕, BLOCK 拦截 (可特批)。
      */
     private String runCreditCheck(String factoryId, com.cretas.aims.entity.Customer customer,
                                   CreateSalesOrderRequest request, Long userId, BigDecimal requested) {
         String mode = resolveCreditCheckMode(factoryId);
-        if (CREDIT_MODE_OFF.equals(mode) || customerCreditCheckService == null) {
-            return null;
-        }
+        boolean off = CREDIT_MODE_OFF.equals(mode);
         boolean block = CREDIT_MODE_BLOCK.equals(mode);
-        String problem;
-        String hint;
-        try {
-            com.cretas.aims.dto.customer.CreditStatusDTO st =
-                    customerCreditCheckService.checkCreditAvailable(factoryId, request.getCustomerId(), requested);
-            if (st.getCreditStatus() == com.cretas.aims.entity.enums.CreditStatus.SUSPENDED) {
-                problem = "客户 " + customer.getName() + " 信用已被冻结";
-                hint = st.getSuggestedAction();
-            } else if (st.isExceeds()) {
-                problem = "本单金额 " + requested + " 超过客户 " + customer.getName()
-                        + " 可用信用额度 " + st.getAvailable();
-                hint = st.getSuggestedAction();
-            } else {
-                return null;
+
+        com.cretas.aims.dto.customer.CreditStatusDTO st = null;
+        String unverified = null;
+        if (customerCreditCheckService == null) {
+            unverified = "额度未核对 (信用检查服务不可用, 不能当作通过)";
+        } else {
+            try {
+                st = customerCreditCheckService.checkCreditAvailable(factoryId, request.getCustomerId(), requested);
+            } catch (Exception e) {
+                log.warn("CREDIT_CHECK_FAILED: factoryId={}, customerId={}, error={}",
+                        factoryId, request.getCustomerId(), e.getMessage());
+                unverified = "额度未核对 (信用检查出错, 不能当作通过)";
             }
-        } catch (Exception e) {
-            log.warn("CREDIT_CHECK_FAILED: factoryId={}, customerId={}, error={}",
-                    factoryId, request.getCustomerId(), e.getMessage());
-            problem = "额度未核对 (信用检查出错, 不能当作通过)";
+        }
+
+        // (1) 冻结: 无论开关
+        if (st != null && st.getCreditStatus() == com.cretas.aims.entity.enums.CreditStatus.SUSPENDED) {
+            throw new BusinessException(409,
+                    "客户 " + customer.getName() + " 信用已被冻结, 无法创建新销售单")
+                    .withHint(st.getSuggestedAction())
+                    .withHintTarget("customerId")
+                    .withSeverity("ERROR");
+        }
+        if (off) {
+            return null; // 超额检查整体不做 (检查出错也不影响原有流程)
+        }
+
+        String problem;
+        String hint = null;
+        if (unverified != null) {
+            problem = unverified;
             hint = "请稍后重试, 或联系有信用特批权限的人确认";
+        } else if (st.isExceeds()) {
+            problem = "本单金额 " + requested + " 超过客户 " + customer.getName()
+                    + " 可用信用额度 " + st.getAvailable();
+            hint = st.getSuggestedAction();
+        } else {
+            return null;
         }
         if (!block) {
             log.warn("CREDIT_WARN: factoryId={}, {}", factoryId, problem);

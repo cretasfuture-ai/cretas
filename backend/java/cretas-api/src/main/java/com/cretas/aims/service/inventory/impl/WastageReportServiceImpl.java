@@ -87,7 +87,7 @@ public class WastageReportServiceImpl implements WastageReportService {
     /**
      * 报损审批权限 (2026-11-10 Steve 裁定, 工厂纪律 B9): 按「报损审批」权限判断
      * ({@link PermissionService#WASTAGE_APPROVE_PERMISSION}), 不再按轨道写死财务经理/生产主管。
-     * 未配置时默认只给厂长 (factory_super_admin); 工厂可在权限矩阵里给别的角色配 wastage 模块读写。
+     * 未配置时默认只给厂长 (factory_super_admin); 工厂可在阈值设置 (inventory.permission.wastage_approve) 里加岗位。
      * 有权限者看到并可审批 WAREHOUSE + FACTORY 两条轨道; 没权限者审批 403、待审列表为空。
      */
     private final PermissionService permissionService;

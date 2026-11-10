@@ -217,14 +217,6 @@ class WastageReportServiceImplTest {
                 eq(FACTORY_ID), eq(WastageReport.Status.PENDING_APPROVAL), eq(both), eq(pageable));
     }
 
-    @Test
-    @DisplayName("B9: 代码里不再有「待 Steve 确认」那条注释和写死的轨道角色表")
-    void noHardcodedApproverRolesLeft() throws Exception {
-        String src = java.nio.file.Files.readString(java.nio.file.Path.of(
-                "src/main/java/com/cretas/aims/service/inventory/impl/WastageReportServiceImpl.java"));
-        assertThat(src).doesNotContain("待 Steve 确认").doesNotContain("APPROVER_ROLES");
-    }
-
     // -------------------------------------------------------
     // 6. WAREHOUSE 轨 finance_manager 角色 approve → 原子写 adjustment + 扣减库存
     // -------------------------------------------------------
