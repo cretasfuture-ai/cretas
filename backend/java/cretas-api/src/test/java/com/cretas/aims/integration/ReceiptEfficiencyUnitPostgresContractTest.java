@@ -150,8 +150,8 @@ class ReceiptEfficiencyUnitPostgresContractTest {
     /** 列的真实精度先读出来 —— 本测试守的就是「写不进 numeric(5,2)」, 列定义变了就没在测原来那件事。 */
     private void assertEfficiencyColumnIsNumericFiveTwo() {
         Map<String, Object> column = jdbc.queryForMap("select numeric_precision, numeric_scale "
-                + "from information_schema.columns where table_name = 'production_batches' "
-                + "and column_name = 'efficiency'");
+                + "from information_schema.columns where table_schema = current_schema() "
+                + "and table_name = 'production_batches' and column_name = 'efficiency'");
         assertThat(((Number) column.get("numeric_precision")).intValue()).isEqualTo(5);
         assertThat(((Number) column.get("numeric_scale")).intValue()).isEqualTo(2);
     }
