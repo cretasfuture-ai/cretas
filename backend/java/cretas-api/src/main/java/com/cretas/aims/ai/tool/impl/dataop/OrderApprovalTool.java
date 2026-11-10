@@ -33,12 +33,12 @@ public class OrderApprovalTool extends AbstractBusinessTool {
     private ToolRbacGuard rbacGuard;
 
     /**
-     * 与 App 的审批入口同一份审批角色 (SpecialApprovalService.APPROVER_ROLES): ToolRbacEnforcer 先挡一道;
-     * 真正的权威校验 (角色 + 申请人不能自批) 在 SpecialApprovalService.processDecision 里, 所有入口都过。
+     * 纪律排查 B3: 与 App 两个审批入口同一个审批权限码 (按各厂配置; 默认 = SpecialApprovalService.APPROVER_ROLES)。
+     * ToolRbacEnforcer 先挡一道; 真正的权威校验 (权限码 + 申请人不能自批) 在 SpecialApprovalService.processDecision 里, 所有入口都过。
      */
     @Override
-    public Set<String> getRequiredRoles() {
-        return SpecialApprovalService.APPROVER_ROLES;
+    public Set<String> getRequiredPermissions() {
+        return Set.of("approval_quality_disposition:approve");
     }
 
     @Override

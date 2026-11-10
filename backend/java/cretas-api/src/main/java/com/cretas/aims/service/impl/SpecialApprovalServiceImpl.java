@@ -48,6 +48,10 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
     private final ObjectMapper objectMapper;
     private final QualityDispositionDecisionGuard decisionGuard;
 
+    /** 纪律排查 B3: 审批权限码 (默认 = APPROVER_ROLES, 各厂可改)。未注入 (手工构造的单测) = 按默认名单。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.ApprovalAuthority approvalAuthority;
+
     /** 纪律排查 B3: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
@@ -385,10 +389,14 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         // 平台管理员只认已认证的平台身份, 不认角色字符串 (工厂令牌写着平台角色不算数)
         boolean platformApprover = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
                 .filter(com.cretas.aims.security.AuthenticatedActor::hasFactoryBypass).isPresent();
-        if (!platformApprover && (role == null || !APPROVER_ROLES.contains(role))) {
-            throw new BusinessException(403, "当前角色不能审批质检处置申请")
+        boolean mayApprove = approvalAuthority != null
+                ? approvalAuthority.canApprove(actingUserId,
+                        com.cretas.aims.service.impl.PermissionServiceImpl.APPROVAL_QUALITY_DISPOSITION)
+                : role != null && APPROVER_ROLES.contains(role);
+        if (!platformApprover && !mayApprove) {
+            throw new BusinessException(403, "当前账号没有质检处置审批权限")
                     .withCode(SPECIAL_APPROVAL_ROLE_FORBIDDEN)
-                    .withHint("请由质量经理或工厂超级管理员审批");
+                    .withHint("默认由质量经理或工厂超级管理员审批; 工厂管理员可在权限配置里把「质检处置审批」授给其他岗位");
         }
         // 纪律排查 B3 (Owner 2026-11-10): 工厂开了「允许本人审批」时申请人可自批, 必须写原因并留痕。
         boolean self = Objects.equals(auditLog.getExecutorId(), actingUserId)

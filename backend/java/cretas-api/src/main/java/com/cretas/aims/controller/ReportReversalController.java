@@ -2,7 +2,6 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.annotation.RequireModule;
 import com.cretas.aims.annotation.RequirePermission;
-import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.ReportReversalLog;
 import com.cretas.aims.entity.SemiFinishedInventory;
@@ -91,8 +90,8 @@ public class ReportReversalController {
     /**
      * 审批通过撤回申请。仅 PENDING 状态可批准，批准后自动执行撤回。
      */
-    @RequirePermission({"production:read_write"})
-    @RequireRole({"factory_super_admin", "production_manager"})
+    // 纪律排查 B1: 谁能审批按权限码 (默认 = 原名单 factory_super_admin / production_manager, 各厂可改)
+    @RequirePermission({"approval_report_reversal:approve"})
     @PutMapping("/reversals/{logId}/approve")
     @Operation(summary = "审批通过撤回申请", description = "批准后自动执行撤回 (SP2)")
     public ApiResponse<Void> approveReversal(
@@ -111,8 +110,8 @@ public class ReportReversalController {
     /**
      * 审批拒绝撤回申请。仅 PENDING 状态可拒绝。
      */
-    @RequirePermission({"production:read_write"})
-    @RequireRole({"factory_super_admin", "production_manager"})
+    // 纪律排查 B1: 与批准同一个审批权限码
+    @RequirePermission({"approval_report_reversal:approve"})
     @PutMapping("/reversals/{logId}/reject")
     @Operation(summary = "审批拒绝撤回申请", description = "拒绝撤回申请 (SP2)")
     public ApiResponse<Void> rejectReversal(

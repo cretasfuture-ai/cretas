@@ -670,7 +670,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     public void approve(String stocktakeId, String factoryId, Long approverId, String requestRole,
             Long expectedVersion, String selfApprovalReason) {
         // 角色检查（C1 孪生坑：不用 SecurityContext）
-        assertApprovalRole(requestRole);
+        assertApprovalAuthority(approverId, requestRole);
         FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
         assertExpectedVersion(stocktake, expectedVersion);
         assertStatus(stocktake, FactoryStocktake.Status.PENDING_APPROVAL, "审批");
@@ -700,7 +700,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Override
     @Transactional
     public void reject(String stocktakeId, String factoryId, String reason, Long userId, String requestRole) {
-        assertApprovalRole(requestRole);
+        assertApprovalAuthority(userId, requestRole);
         FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
         assertStatus(stocktake, FactoryStocktake.Status.PENDING_APPROVAL, "驳回");
         stocktake.setStatus(FactoryStocktake.Status.REJECTED);
@@ -725,6 +725,23 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
 
     private static final java.util.Set<String> STOCKTAKE_RECOUNT_ROLES = java.util.Set.of(
             "warehouse_manager", "warehouse_worker", "factory_super_admin", "platform_admin");
+
+    /** 纪律排查 B2: 盘点差异审批权限码 (默认 = STOCKTAKE_APPROVAL_ROLES, 各厂可改)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.ApprovalAuthority approvalAuthority;
+
+    private void assertApprovalAuthority(Long approverId, String requestRole) {
+        if (approvalAuthority == null) {
+            // 手工构造的单测没有注入权限服务: 按默认名单 (= 权限码的默认授权)
+            assertApprovalRole(requestRole);
+            return;
+        }
+        if (!approvalAuthority.canApprove(approverId,
+                com.cretas.aims.service.impl.PermissionServiceImpl.APPROVAL_STOCKTAKE)) {
+            throw new BusinessException(403, "当前账号没有盘点差异审批权限")
+                    .withHint("默认由财务经理或工厂管理员审批; 工厂管理员可在权限配置里把「盘点差异审批」授给其他岗位");
+        }
+    }
 
     private void assertApprovalRole(String requestRole) {
         String normalized = requestRole == null ? "" : requestRole.toLowerCase();
