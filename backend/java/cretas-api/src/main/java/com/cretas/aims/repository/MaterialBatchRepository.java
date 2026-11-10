@@ -1113,6 +1113,17 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("factoryId") String factoryId,
             @Param("status") com.cretas.aims.entity.enums.MaterialBatchStatus status);
 
+    /**
+     * 质检放行待检清单的原料收货批次 (D-S411-04): 本厂、不是在制/副产 (sourceDocType 不是 PRODUCTION_BATCH)、
+     * 处于给定状态。sourceDocType 为 null 的老数据算原料 (与 {@code QcInspectionGuard} 的在制判据互补)。
+     */
+    @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND (m.sourceDocType IS NULL OR m.sourceDocType <> 'PRODUCTION_BATCH') AND m.status = :status " +
+           "ORDER BY m.updatedAt DESC")
+    List<MaterialBatch> findRawBatchesByFactoryIdAndStatus(
+            @Param("factoryId") String factoryId,
+            @Param("status") com.cretas.aims.entity.enums.MaterialBatchStatus status);
+
     /** CCP 偏离扣留: 这些生产批次物化出来的在制半成品批次。 */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.sourceDocType = 'PRODUCTION_BATCH' AND m.sourceDocId IN :productionBatchIds")

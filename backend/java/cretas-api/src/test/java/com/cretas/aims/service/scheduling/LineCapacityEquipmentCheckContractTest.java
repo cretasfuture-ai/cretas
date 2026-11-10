@@ -90,6 +90,21 @@ class LineCapacityEquipmentCheckContractTest {
         assertThat(LineCapacityEquipmentCheck.status(capacity("50", "箱", null))).isEqualTo("MISSING");
     }
 
+    /** D-S4-03-MSG: 单位是「袋」时不能说「没有单位」, 要说产线产能不支持这个单位; 真没填时仍说没有单位。 */
+    @Test
+    void unsupportedUnitSaysSoInsteadOfClaimingTheUnitIsMissing() {
+        line("L1", "卤制线", ProductionLine.LineStatus.active);
+        config("L1", null, "100", CapacityUnit.KG);
+
+        ResourceCheckResult bag = capacity("50", "袋", null);
+        assertThat(LineCapacityEquipmentCheck.status(bag)).isEqualTo("MISSING");
+        assertThat(bag.getMessage()).contains("「袋」").doesNotContain("没有单位");
+
+        ResourceCheckResult none = capacity("50", " ", null);
+        assertThat(LineCapacityEquipmentCheck.status(none)).isEqualTo("MISSING");
+        assertThat(none.getMessage()).contains("没有单位");
+    }
+
     @Test
     void noConfigAtAllIsMissingNotTheOld500KgDefault() {
         line("L1", "卤制线", ProductionLine.LineStatus.active);

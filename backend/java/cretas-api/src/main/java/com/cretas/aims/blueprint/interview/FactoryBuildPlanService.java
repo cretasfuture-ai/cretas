@@ -191,6 +191,14 @@ public class FactoryBuildPlanService {
                             + t.getBoxConversionCoefficient().stripTrailingZeros().toPlainString()
                             + t.getUnit();
                 }
+                if (Boolean.TRUE.equals(t.getInspectionRequired())) {
+                    detail += " / 出产后需检验放行";
+                } else if (Boolean.FALSE.equals(t.getInspectionRequired())) {
+                    detail += " / 不需检验";
+                }
+                if (t.getMaxReworkRatioPercent() != null) {
+                    detail += " / 回料上限 " + t.getMaxReworkRatioPercent().stripTrailingZeros().toPlainString() + "%";
+                }
                 out.add(change("产品类型", t.getCode(), detail, exists, overwrite));
             }
         }
@@ -326,6 +334,23 @@ public class FactoryBuildPlanService {
                 c.setDetail(Boolean.TRUE.equals(e.getValue()) ? "开启" : "关闭");
                 c.setExists(factorySettingsRepository.findByFactoryId(factoryId).isPresent());
                 c.setAction("覆盖");   // 开关一定是就地改, 与落库一致
+                out.add(c);
+            }
+        }
+        if (sd.getPolicy() != null) {
+            ApplyAIInitRequest.FactoryPolicyItem pol = sd.getPolicy();
+            boolean has = factorySettingsRepository.findByFactoryId(factoryId).isPresent();
+            addPolicyChange(out, "缺料未解决时拦住开工", pol.getBlockStartOnOpenShortage(), has);
+            addPolicyChange(out, "报工前必须有领料单", pol.getRequireRequisitionBeforeReport(), has);
+            addPolicyChange(out, "报工默认可跳过工序报工", pol.getSkipProcessReportingDefault(), has);
+            if (pol.getMaterialBalanceWarnPct() != null || pol.getMaterialBalanceRedPct() != null) {
+                PlannedChange c = new PlannedChange();
+                c.setGroup("模块开关");
+                c.setKey("物料平衡告警线");
+                c.setDetail("黄色 " + (pol.getMaterialBalanceWarnPct() == null ? "保持现值" : pol.getMaterialBalanceWarnPct() + "%")
+                        + " / 红色 " + (pol.getMaterialBalanceRedPct() == null ? "保持现值" : pol.getMaterialBalanceRedPct() + "%"));
+                c.setExists(has);
+                c.setAction("覆盖");
                 out.add(c);
             }
         }
@@ -629,5 +654,18 @@ public class FactoryBuildPlanService {
 
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
+    }
+
+    private static void addPolicyChange(List<PlannedChange> out, String label, Boolean v, boolean exists) {
+        if (v == null) {
+            return;
+        }
+        PlannedChange c = new PlannedChange();
+        c.setGroup("模块开关");
+        c.setKey(label);
+        c.setDetail(v ? "开启" : "关闭");
+        c.setExists(exists);
+        c.setAction("覆盖");
+        out.add(c);
     }
 }

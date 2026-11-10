@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveSupplierMaterialRelations } from '../purchaseOrderEditPrefill';
+import {
+  isSupplierLockedInEditor,
+  matchDraftLinesToSupplierRelations,
+  resolveSupplierMaterialRelations,
+} from '../purchaseOrderEditPrefill';
 
 /**
  * 客户反馈 (Google Sheet 2026-07-20, 采购订单):
@@ -72,5 +76,68 @@ describe('resolveSupplierMaterialRelations (Google Sheet 2026-07-20 / prod 复�
     await expect(
       resolveSupplierMaterialRelations('F006', 'sup-1', fetchRelations),
     ).rejects.toThrow('Request failed with status code 500');
+  });
+});
+
+/**
+ * D-S411R-01 (2026-11-10): 编辑弹窗供应商下拉原来是 `:disabled="isEditing"`, 对没有供应商的
+ * 自动草稿也锁 ⇒ 提交 422 PURCHASE_SUPPLIER_REQUIRED 却无处补供应商。
+ * 挂载真实页面的断言见 draftSupplierBackfill.mount.spec.ts; 这里逐象限钉住判定本身。
+ */
+describe('isSupplierLockedInEditor (D-S411R-01)', () => {
+  it('草稿且原本没有供应商: 不锁 (空串 / null / 纯空格 同样处理)', () => {
+    for (const originalSupplierId of ['', null, undefined, '   ']) {
+      expect(isSupplierLockedInEditor({ isEditing: true, orderStatus: 'DRAFT', originalSupplierId })).toBe(false);
+    }
+  });
+
+  it('草稿但已有供应商: 仍锁 (保持原行为)', () => {
+    expect(isSupplierLockedInEditor({ isEditing: true, orderStatus: 'DRAFT', originalSupplierId: 'sup-1' })).toBe(true);
+  });
+
+  it('非草稿一律锁, 即使没有供应商 (纵深防御)', () => {
+    for (const orderStatus of ['SUBMITTED', 'WORKFLOW_RUNNING', 'FINANCE_APPROVED', 'APPROVED', 'COMPLETED', '', null]) {
+      expect(isSupplierLockedInEditor({ isEditing: true, orderStatus, originalSupplierId: '' })).toBe(true);
+    }
+  });
+
+  it('新建不锁', () => {
+    expect(isSupplierLockedInEditor({ isEditing: false, orderStatus: '', originalSupplierId: '' })).toBe(false);
+  });
+});
+
+describe('matchDraftLinesToSupplierRelations (D-S411R-01)', () => {
+  it('按原料精确对应; 供应商不供应的原料留给用户, 不猜', () => {
+    const lines = [
+      { materialTypeId: 'mat-salt', quantity: 56.74 },
+      { materialTypeId: 'mat-sugar', quantity: 3 },
+    ];
+    const relations = [
+      { id: 'rel-salt', materialTypeId: 'mat-salt' },
+      { id: 'rel-oil', materialTypeId: 'mat-oil' },
+    ];
+
+    const { matched, unmatched } = matchDraftLinesToSupplierRelations(lines, relations);
+
+    expect(matched.map(({ line, relation }) => [line.materialTypeId, relation.id])).toEqual([['mat-salt', 'rel-salt']]);
+    expect(unmatched.map((line) => line.materialTypeId)).toEqual(['mat-sugar']);
+    // 返回的是原行对象 (调用方就地补字段), 数量不被碰。
+    expect(matched[0].line).toBe(lines[0]);
+    expect(lines[0].quantity).toBe(56.74);
+  });
+
+  it('同一原料有多条生效供应关系时不挑第一条, 当作未对应', () => {
+    const { matched, unmatched } = matchDraftLinesToSupplierRelations(
+      [{ materialTypeId: 'mat-salt' }],
+      [{ id: 'rel-a', materialTypeId: 'mat-salt' }, { id: 'rel-b', materialTypeId: 'mat-salt' }],
+    );
+    expect(matched).toEqual([]);
+    expect(unmatched).toHaveLength(1);
+  });
+
+  it('还没选供应商 (关系表为空) 时全部未对应', () => {
+    const { matched, unmatched } = matchDraftLinesToSupplierRelations([{ materialTypeId: 'mat-salt' }], []);
+    expect(matched).toEqual([]);
+    expect(unmatched).toHaveLength(1);
   });
 });

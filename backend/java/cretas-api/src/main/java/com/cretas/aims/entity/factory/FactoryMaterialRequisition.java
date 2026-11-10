@@ -130,6 +130,17 @@ public class FactoryMaterialRequisition extends BaseEntity {
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     private String auxiliaryAutoCalc;
 
+    /**
+     * 「按计划生成」时调料行这一段的结果, <b>不落库</b>, 只由
+     * {@code FactoryMaterialRequisitionService#generateFromPlan} 填:
+     * {@code OK} 调料表读到了 (配方没有调料时本来就没有调料行) /
+     * {@code UNAVAILABLE} 调料表读取失败 —— 单据照常生成, 但<b>没有追加任何调料行</b>, 要人工补。
+     * 其它接口不填 (null, 不输出)。
+     */
+    @Transient
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private String seasoningItemsStatus;
+
     /** 状态机. */
     public enum Status {
         DRAFT,
