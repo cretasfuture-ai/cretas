@@ -513,7 +513,8 @@ class SecondaryHoldPostgresContractTest {
 
         ReportReversalServiceImpl reversal = reversalService();
         tx.executeWithoutResult(state -> ReflectionTestUtils.invokeMethod(
-                reversal, "reverseSettlementSemiStocking", F, settlement, 123L, 7L));
+                reversal, "reverseSettlementSemiStocking", F, settlement, 123L, 7L,
+                new java.util.TreeMap<String, BigDecimal>()));
 
         assertThat(jdbc.queryForObject("select used_quantity from material_batches where id = ?",
                 BigDecimal.class, materialBatchId)).as("在制批次还回").isEqualByComparingTo("0");
