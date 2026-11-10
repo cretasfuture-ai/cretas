@@ -127,6 +127,46 @@ class SalesServiceImplApprovalThresholdN9Test {
     }
 
     @Test
+    void oa_auto_approval_publishes_system_auto_source_with_submitter_and_no_fake_approver() {
+        // D-SO-AUTOPLAN-NOAPPROVER: OA 启动即自动通过 —— 没有人点「通过」
+        SalesOrder order = order(SalesOrderStatus.DRAFT);
+        mockConfirmInput(order);
+        when(workflowEngine.startWorkflowIfConfigured(
+                eq(FACTORY), eq("SALES_ORDER"), eq(ORDER_ID), anyMap(), eq(INITIATOR)))
+                .thenReturn(Optional.of(instance(InstanceStatus.APPROVED, INITIATOR)));
+
+        SalesOrder result = salesService.confirmOrder(FACTORY, ORDER_ID, INITIATOR);
+
+        SalesOrderFinanceApprovedEvent event = publishedFinanceApproved();
+        assertEquals(SalesOrderFinanceApprovedEvent.ApprovalSource.SYSTEM_AUTO, event.getApprovalSource());
+        assertEquals(INITIATOR, event.getTriggeredBy(), "下游建计划要知道是谁触发了这次自动通过");
+        assertEquals("销售审批工作流自动通过", event.getAutoApprovalReason());
+        // 不把提交人冒充成审批人: 订单与事件上的审批人都如实为空
+        org.junit.jupiter.api.Assertions.assertNull(event.getApprovedBy());
+        org.junit.jupiter.api.Assertions.assertNull(result.getFinanceReviewedBy());
+    }
+
+    @Test
+    void oa_manual_approval_event_is_manual_with_the_real_approver() {
+        SalesOrder order = order(SalesOrderStatus.PENDING_FINANCE_REVIEW);
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY))
+                .thenReturn(Optional.of(order));
+        when(workflowEngine.getInstance(FACTORY, "inst-1"))
+                .thenReturn(Optional.of(instance(InstanceStatus.RUNNING, 101L)));
+        when(workflowEngine.transitionNode(
+                "inst-1", 202L, "finance_manager", HistoryAction.APPROVE, "approved"))
+                .thenReturn(instance(InstanceStatus.APPROVED, 101L));
+
+        salesService.applyWorkflowAction(
+                FACTORY, ORDER_ID, "inst-1", 202L, "finance_manager", HistoryAction.APPROVE, "approved");
+
+        SalesOrderFinanceApprovedEvent approved = publishedFinanceApproved();
+        assertEquals(SalesOrderFinanceApprovedEvent.ApprovalSource.MANUAL, approved.getApprovalSource());
+        assertEquals(202L, approved.getApprovedBy());
+        org.junit.jupiter.api.Assertions.assertNull(approved.getTriggeredBy());
+    }
+
+    @Test
     void confirm_without_active_sales_graph_directly_approves() {
         SalesOrder order = order(SalesOrderStatus.DRAFT);
         mockConfirmInput(order);
@@ -236,6 +276,19 @@ class SalesServiceImplApprovalThresholdN9Test {
 
         assertEquals("SALES_APPROVAL_OA_ONLY", error.getErrorCode());
         verify(salesOrderRepository, never()).save(any(SalesOrder.class));
+    }
+
+    /** 发出去的事件不止一种 (如 SalesOrderConfirmedEvent), 只取财审通过那一个, 且必须恰好一个。 */
+    private SalesOrderFinanceApprovedEvent publishedFinanceApproved() {
+        org.mockito.ArgumentCaptor<org.springframework.context.ApplicationEvent> captor =
+                org.mockito.ArgumentCaptor.forClass(org.springframework.context.ApplicationEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(captor.capture());
+        List<SalesOrderFinanceApprovedEvent> approved = captor.getAllValues().stream()
+                .filter(SalesOrderFinanceApprovedEvent.class::isInstance)
+                .map(SalesOrderFinanceApprovedEvent.class::cast)
+                .toList();
+        assertEquals(1, approved.size(), "财审通过事件必须恰好发一次");
+        return approved.get(0);
     }
 
     private void mockConfirmInput(SalesOrder order) {

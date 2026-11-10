@@ -239,11 +239,12 @@ public class SupplyChainOrchestrator {
                     log.info("库存满足并预留: product={}, qty={}", match.getProductTypeId(), match.getRequiredQuantity());
                 } else if (canBecomeAProductionPlan(event.getFactoryId(), event.getSalesOrderId(), match)) {
                     // ③b 库存不足 → 创建生产计划草稿
-                    // approvedBy 一路传到 setCreatedBy —— 事件自带审批人, 不要再写死用户 id
+                    // approvedBy 一路传到 setCreatedBy —— 事件自带审批人, 不要再写死用户 id。
+                    // 系统自动审批时没有审批人, 用事件自带的触发人 (见 planCreatorOf)。
                     createProductionPlanFromSO(
                             event.getFactoryId(), sourceOrder,
                             match.getProductTypeId(), match.getProductTypeName(), match.getShortfallQuantity(),
-                            event.getApprovedBy());
+                            planCreatorOf(event), autoApprovalNoteOf(event));
                 }
             }
         } catch (Exception e) {
@@ -456,10 +457,37 @@ public class SupplyChainOrchestrator {
      * @param shortfallQuantity 库存缺口数量
      * @param createdBy         建计划归给谁 —— 用财审事件自带的 {@code approvedBy}
      */
+    /**
+     * 自动生成的生产计划记谁为建单人。
+     *
+     * <p>人工审批: 审批人 ({@code approvedBy})。系统自动审批 (D-SO-AUTOPLAN-NOAPPROVER, 2026-11-10):
+     * OA 审批流命中自动通过条件时没有人点「通过」, {@code approvedBy} 为 null —— 原来直接把 null 传下去,
+     * 建计划抛「缺少审批人」, 订单通过了计划却没生成 (prod F006 SO-20261110-0005/0014/0015, error.log 10 条)。
+     * 此时用事件自带的 {@code triggeredBy} (提交审批、触发这次自动通过的人), 它是真实发生的那次操作的主体,
+     * 不是挑出来的某个真人 id。两者都没有才是真的「不知道是谁」, 返回 null 交给下面显式失败。
+     */
+    static Long planCreatorOf(SalesOrderFinanceApprovedEvent event) {
+        if (event.getApprovedBy() != null) {
+            return event.getApprovedBy();
+        }
+        return event.isSystemAutoApproved() ? event.getTriggeredBy() : null;
+    }
+
+    /** 系统自动审批时写进计划备注的一句话 (可追溯「系统自动审批」); 人工审批返回 null。 */
+    static String autoApprovalNoteOf(SalesOrderFinanceApprovedEvent event) {
+        if (!event.isSystemAutoApproved()) {
+            return null;
+        }
+        String reason = event.getAutoApprovalReason() != null && !event.getAutoApprovalReason().isBlank()
+                ? event.getAutoApprovalReason() : "系统自动审批通过";
+        return "订单为系统自动审批通过（" + reason + "），无人工审批人；计划创建人记为提交审批的用户 "
+                + event.getTriggeredBy();
+    }
+
     private void createProductionPlanFromSO(String factoryId, SalesOrder sourceOrder,
                                             String productTypeId, String productTypeName,
                                             BigDecimal shortfallQuantity,
-                                            Long createdBy) {
+                                            Long createdBy, String autoApprovalNote) {
         String salesOrderId = sourceOrder.getId();
         // 创建PP草稿（PENDING状态，需调度员确认后排产）
         ProductionPlan plan = new ProductionPlan();
@@ -520,7 +548,8 @@ public class SupplyChainOrchestrator {
         plan.setIsFullyMatched(false);
         // ProductionPlan 无 productName 字段；productTypeName 冗余记录在 sourceCustomerName 旁
         // 如业务需要，可将 productTypeName 写入 notes 字段
-        plan.setNotes("自动创建：来自销售订单 " + salesOrderId + "，产品 " + productTypeName);
+        plan.setNotes("自动创建：来自销售订单 " + salesOrderId + "，产品 " + productTypeName
+                + (autoApprovalNote != null ? "；" + autoApprovalNote : ""));
         // 🔴 2026-08-19: 这里原来写死 `plan.setCreatedBy(1L)`, 注释是
         //    「使用 factory_admin1 的 user ID (1L)，避免外键违约」。
         //
@@ -555,7 +584,8 @@ public class SupplyChainOrchestrator {
             // 形态 A¹⁰: 兜底一个假 id 会把「不知道是谁」写成「就是那个人」, 而且下次
             // 那个人被删掉时又是一次静默失败。宁可在这里明说, 由上层 catch 记进日志。
             throw new IllegalStateException(
-                    "自动创建生产计划缺少审批人 (approvedBy 为空): SO=" + salesOrderId
+                    "自动创建生产计划缺少建单人 (审批人 approvedBy 与系统自动审批的触发人 triggeredBy 都为空): SO="
+                            + salesOrderId
                             + " —— production_plans.created_by 是 NOT NULL 且有外键指向 users, "
                             + "⛔ 不要用写死的 user id 兜底 (上一个写死的 1L 已随 F001 租户被清理而失效)");
         }
