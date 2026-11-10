@@ -97,7 +97,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).build();
+                .impactLevel("none").requiresApproval(false).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP).build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));
 
@@ -159,7 +159,7 @@ class UrgentInsertPreviewContractTest {
     void kilogramUnitsRemainKgWithoutConversion(String productUnit) {
         product(productUnit);
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("KG"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("KG"));
 
         assertThat(result.get("previewId")).isNotNull();
         assertThat(result).containsEntry("quantityUnit", "KG")
@@ -171,7 +171,7 @@ class UrgentInsertPreviewContractTest {
     void mismatchedPieceAndKgCannotIssuePreview() {
         product("件");
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("KG"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("KG"));
 
         assertThat(result).containsEntry("previewId", null)
                 .containsEntry("feasibilityStatus", "UNVERIFIED");
@@ -182,7 +182,7 @@ class UrgentInsertPreviewContractTest {
     void mismatchedKgAndPieceCannotIssuePreview() {
         product("kg");
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("PIECE"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE"));
 
         assertThat(result).containsEntry("previewId", null)
                 .containsEntry("feasibilityStatus", "UNVERIFIED");
@@ -193,7 +193,7 @@ class UrgentInsertPreviewContractTest {
     void batchUsesBatchWithoutConversion() {
         product("批");
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("BATCH"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("BATCH"));
 
         assertThat(result.get("previewId")).isNotNull();
         assertThat(result).containsEntry("quantityUnit", "BATCH")
@@ -211,7 +211,7 @@ class UrgentInsertPreviewContractTest {
         when(capacityConfigs.findEffectiveForProduct(eq(FACTORY), eq(PRODUCT), any()))
                 .thenReturn(List.of(generic));
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("PIECE"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE"));
 
         assertThat(result).containsEntry("previewId", null)
                 .containsEntry("feasibilityStatus", "UNVERIFIED");
@@ -228,7 +228,7 @@ class UrgentInsertPreviewContractTest {
         when(capacityConfigs.findEffectiveForProduct(eq(FACTORY), eq(PRODUCT), any()))
                 .thenReturn(List.of(specific));
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("PIECE"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE"));
 
         assertThat(result.get("previewId")).isNotNull();
         assertThat(result).containsEntry("quantityUnit", "PIECE")
@@ -313,7 +313,7 @@ class UrgentInsertPreviewContractTest {
         when(previews.findByFactoryIdAndCreatedAtAfterOrderByCreatedAtDesc(eq(FACTORY), any()))
                 .thenReturn(List.of(currentPreview));
 
-        Map<String, Object> result = service.createInsertPreview(FACTORY, SLOT, request("PIECE"));
+        Map<String, Object> result = service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE"));
 
         assertThat(result).containsEntry("previewId", "PV1")
                 .containsEntry("plannedUnit", "件");
@@ -326,7 +326,7 @@ class UrgentInsertPreviewContractTest {
         when(impact.calculateChainImpact(anyString(), any(), any(), any(), any()))
                 .thenReturn(ChainImpactResult.builder().impactLevel("none").build());
 
-        assertThatThrownBy(() -> service.createInsertPreview(FACTORY, SLOT, request("PIECE")))
+        assertThatThrownBy(() -> service.createInsertPreview(FACTORY, 1L, SLOT, request("PIECE")))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("影响分析未完成");
         verify(previews, never()).save(any());
@@ -363,7 +363,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("high").requiresApproval(true).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null))
+                .impactLevel("high").requiresApproval(true).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP)
                 .build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));
@@ -385,7 +385,7 @@ class UrgentInsertPreviewContractTest {
                 .productTypeId(PRODUCT).previewQuantity(new BigDecimal("5.00")).quantityUnit("PIECE")
                 .plannedUnit("件").productionLineId("LINE-1").windowStart(slot.getStartTime())
                 .windowEnd(slot.getEndTime()).slotUpdatedAt(slot.getUpdatedAt())
-                .impactLevel("low").requiresApproval(true).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null))
+                .impactLevel("low").requiresApproval(true).affectedPlanCount(0).candidateNumber(1).materialFingerprint(UrgentInsertTestSupport.MATERIAL_FP).impactFingerprint(UrgentInsertServiceImpl.impactFingerprint(null)).scheduleFingerprint(UrgentInsertTestSupport.SCHEDULE_FP)
                 .build();
         currentPreview.setCreatedAt(LocalDateTime.now());
         when(previews.findByIdAndFactoryId("PV1", FACTORY)).thenReturn(Optional.of(currentPreview));

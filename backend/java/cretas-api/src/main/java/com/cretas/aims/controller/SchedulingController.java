@@ -916,10 +916,11 @@ public class SchedulingController {
             @PathVariable String factoryId,
             @Parameter(description = "时段ID", example = "SLOT-2025-001")
             @PathVariable String slotId,
-            @Valid @RequestBody GetInsertSlotsRequest request) {
+            @Valid @RequestBody GetInsertSlotsRequest request,
+            HttpServletRequest httpRequest) {
         factoryAccessValidator.validateAccess(factoryId);
         java.util.Map<String, Object> preview = urgentInsertService.createInsertPreview(
-                factoryId, slotId, request);
+                factoryId, getUserId(httpRequest), slotId, request);
         return ApiResponse.success("预览创建成功", preview);
     }
 

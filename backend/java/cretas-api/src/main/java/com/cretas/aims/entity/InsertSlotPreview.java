@@ -107,4 +107,8 @@ public class InsertSlotPreview extends BaseEntity {
     @Column(name = "impact_fingerprint", length = 64, updatable = false)
     private String impactFingerprint;
 
+    /** 排程预览指纹 (插单每天做多少 + 每个被挤计划每天做多少): 确认时重算比对。 */
+    @Column(name = "schedule_fingerprint", length = 64, updatable = false)
+    private String scheduleFingerprint;
+
 }

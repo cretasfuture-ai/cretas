@@ -29,6 +29,7 @@ import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor;
 import com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor.Assessment;
 import com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor.Status;
+import com.cretas.aims.service.scheduling.UrgentInsertScheduleService;
 import com.cretas.aims.service.scheduling.WorkerShiftAvailabilityCheck;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -81,6 +83,8 @@ class UrgentInsertMaterialPlanContractTest {
     private ImpactAnalysisService impact;
     private UrgentInsertServiceImpl service;
     private ChainImpactResult chain;
+    private UrgentInsertScheduleService scheduler;
+    private com.cretas.aims.repository.UserRepository users;
 
     @BeforeEach
     void setUp() {
@@ -138,7 +142,15 @@ class UrgentInsertMaterialPlanContractTest {
         WorkerShiftAvailabilityCheck workers = mock(WorkerShiftAvailabilityCheck.class);
         when(workers.check(anyString(), any(), any(), anyInt()))
                 .thenReturn(new WorkerShiftAvailabilityCheck.Result(true, 0, 0, Set.of(), "ok"));
+        scheduler = UrgentInsertTestSupport.okScheduler();
+        users = mock(com.cretas.aims.repository.UserRepository.class);
+        com.cretas.aims.entity.User operator = new com.cretas.aims.entity.User();
+        operator.setFullName("测试人");
+        operator.setRoleCode("scheduler");
+        when(users.findById(anyLong())).thenReturn(Optional.of(operator));
         service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.ofEntries(
+                Map.entry(UrgentInsertScheduleService.class, scheduler),
+                Map.entry(com.cretas.aims.repository.UserRepository.class, users),
                 Map.entry(InsertSlotRepository.class, slots),
                 Map.entry(ProductionPlanRepository.class, plans),
                 Map.entry(InsertSlotPreviewRepository.class, previews),
@@ -208,7 +220,7 @@ class UrgentInsertMaterialPlanContractTest {
 
     /** 走真实预览入口发一份预览, 并让确认读到它。 */
     private InsertSlotPreview issuePreview() {
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
         assertThat(out.get("previewId")).as("预览应已签发").isNotNull();
         org.mockito.ArgumentCaptor<InsertSlotPreview> saved = org.mockito.ArgumentCaptor.forClass(InsertSlotPreview.class);
         verify(previews).save(saved.capture());
@@ -347,7 +359,7 @@ class UrgentInsertMaterialPlanContractTest {
         when(recipes.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(F, PT, BomRecipe.Status.ACTIVE))
                 .thenReturn(Optional.empty());
 
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         assertThat(out.get("previewId")).isNull();
         assertThat(out).containsEntry("feasibilityStatus", "UNVERIFIED");
@@ -360,7 +372,7 @@ class UrgentInsertMaterialPlanContractTest {
     void previewCarriesMaterialPlanAndStoresFingerprintsAndLockedRecipe() {
         stock("80");
 
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> plan = (Map<String, Object>) out.get("materialPlan");
@@ -380,7 +392,7 @@ class UrgentInsertMaterialPlanContractTest {
     void shortStockPreviewSaysInfeasibleWithTheGap() {
         stock("20");
 
-        Map<String, Object> out = service.createInsertPreview(F, "S1", analyzeRequest());
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
 
         assertThat(out).containsEntry("isFeasible", false).containsEntry("feasibilityStatus", "INFEASIBLE");
         assertThat((String) out.get("infeasibleReason")).contains("带鱼").contains("缺 40kg");
@@ -482,5 +494,179 @@ class UrgentInsertMaterialPlanContractTest {
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.getErrorCode()).isEqualTo("INSERT_MATERIAL_SHORT"));
         verify(plans, never()).save(any());
+    }
+
+    // ------------------------------------------------------------------ 第 2 项: 确认后真正排入
+
+    @Test
+    void confirmAppliesTheScheduleWithThePreviewedFingerprintAndReturnsTheOutcome() {
+        stock("80");
+        InsertSlotPreview preview = issuePreview();
+
+        com.cretas.aims.dto.production.ProductionPlanDTO dto = service.confirmInsert(F, 1L, confirmRequest(preview.getId()));
+
+        verify(scheduler).apply(eq(F), any(), any(ProductionPlan.class), eq(UrgentInsertTestSupport.SCHEDULE_FP), eq(1L));
+        assertThat(dto.getScheduleOutcome()).containsEntry("status", "OK");
+        assertThat(preview.getScheduleFingerprint()).isEqualTo(UrgentInsertTestSupport.SCHEDULE_FP);
+    }
+
+    @Test
+    void confirmFailsWhenTheScheduleChangedAfterPreviewAndTheErrorReachesTheCaller() {
+        stock("80");
+        InsertSlotPreview preview = issuePreview();
+        when(scheduler.apply(any(), any(), any(), any(), any())).thenThrow(new BusinessException(409, "排程变了")
+                .withCode("INSERT_PREVIEW_SCHEDULE_CHANGED"));
+
+        assertThatThrownBy(() -> service.confirmInsert(F, 1L, confirmRequest(preview.getId())))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_PREVIEW_SCHEDULE_CHANGED"));
+    }
+
+    @Test
+    void blockedScheduleMakesThePreviewInfeasibleWithTheReasonAndIssuesNoPreview() {
+        stock("80");
+        when(scheduler.dryRun(any(), any(), any())).thenReturn(new UrgentInsertScheduleService.Proposal(
+                UrgentInsertScheduleService.BLOCKED, "设备已报废", null, null, List.of(), List.of(), null));
+
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
+
+        assertThat(out.get("previewId")).isNull();
+        assertThat(out).containsEntry("isFeasible", false).containsEntry("feasibilityStatus", "INFEASIBLE");
+        assertThat((String) out.get("infeasibleReason")).contains("排程排不进去").contains("设备已报废");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sp = (Map<String, Object>) out.get("schedulePlan");
+        assertThat(sp).containsEntry("status", "BLOCKED");
+        verify(previews, never()).save(any());
+    }
+
+    @Test
+    void readOnlyImpactAnalysisNeverRunsTheEngineBecauseItNeedsAWriteTransaction() {
+        stock("80");
+
+        Map<String, Object> out = service.analyzeInsertImpact(F, "S1", analyzeRequest());
+
+        verify(scheduler, never()).dryRun(any(), any(), any());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sp = (Map<String, Object>) out.get("schedulePlan");
+        assertThat(sp).containsEntry("status", "NOT_EVALUATED");
+        assertThat(out.get("previewId")).isNull();
+    }
+
+    @Test
+    void theTemporaryPlanForTheDryRunCarriesAnOwnerBecauseCreatedByIsNotNull() {
+        stock("80");
+
+        service.createInsertPreview(F, 1L, "S1", analyzeRequest());
+
+        org.mockito.ArgumentCaptor<ProductionPlan> temp = org.mockito.ArgumentCaptor.forClass(ProductionPlan.class);
+        verify(scheduler).dryRun(eq(F), any(), temp.capture());
+        assertThat(temp.getValue().getCreatedBy()).isNotNull();
+        assertThat(temp.getValue().getSelectedBomRecipeId()).isEqualTo("RECIPE-1");
+    }
+
+    @Test
+    void shortMaterialDoesNotEvenAskTheEngine() {
+        stock("20");
+
+        service.createInsertPreview(F, 1L, "S1", analyzeRequest());
+
+        verify(scheduler, never()).dryRun(any(), any(), any());
+    }
+
+    @Test
+    void previewShowsEachBumpedPlansNewCompletionDateAndWhetherTheDueDateIsBroken() {
+        stock("80");
+        when(scheduler.dryRun(any(), any(), any())).thenReturn(new UrgentInsertScheduleService.Proposal(
+                UrgentInsertScheduleService.OK, null, start.toLocalDate(), start.toLocalDate(),
+                List.of(new UrgentInsertScheduleService.Moved("PLAN-B", "PB-1", start.toLocalDate().plusDays(8),
+                        start.toLocalDate().plusDays(11), 3, start.toLocalDate().plusDays(8), true, List.of("SO-B"), List.of())),
+                List.of(), "FP-X"));
+
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> sp = (Map<String, Object>) out.get("schedulePlan");
+        assertThat(sp).containsEntry("exceedsDueCount", 1L);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> moved = (List<Map<String, Object>>) sp.get("movedPlans");
+        assertThat(moved).singleElement().satisfies(m -> {
+            assertThat(m).containsEntry("planNumber", "PB-1").containsEntry("exceedsDue", true)
+                    .containsEntry("delayDays", 3L);
+            assertThat(m.get("newEnd")).isEqualTo(start.toLocalDate().plusDays(11));
+        });
+    }
+
+    @Test
+    void forceInsertWithoutApprovalAppliesTheScheduleImmediately() {
+        stock("80");
+        InsertSlotPreview preview = issuePreview();
+
+        service.forceInsert(F, 1L, confirmRequest(preview.getId()));
+
+        verify(scheduler).apply(eq(F), any(), any(ProductionPlan.class), eq(UrgentInsertTestSupport.SCHEDULE_FP), eq(1L));
+    }
+
+    @Test
+    void forceInsertThatNeedsApprovalDoesNotScheduleUntilApproved() {
+        stock("80");
+        chain = ChainImpactResult.builder().impactLevel("high").requiresApproval(true)
+                .affectedPlans(List.of()).totalAffectedPlans(0).directConflicts(0).cascadeDelays(0)
+                .maxDelayMinutes(0).totalDelayMinutes(0).affectedVipCustomers(0)
+                .criticalCrPlans(0).exceedingDeadlinePlans(0).impactScore(0).build();
+        InsertSlotPreview preview = issuePreview();
+
+        service.forceInsert(F, 1L, confirmRequest(preview.getId()));
+
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void approvalSchedulesThePlanAtApprovalTimeAndFailsTheApprovalIfItDoesNotFit() {
+        ProductionPlan pending = new ProductionPlan();
+        pending.setId("PLAN-FORCED");
+        pending.setFactoryId(F);
+        pending.setPlanNumber("URGENT-F");
+        pending.setStartTime(start);
+        pending.setSuggestedProductionLineId("L1");
+        pending.markAsForceInsert(1L, "客户急单", true);
+        when(plans.findById("PLAN-FORCED")).thenReturn(Optional.of(pending));
+        when(plans.save(any(ProductionPlan.class))).thenAnswer(i -> i.getArgument(0));
+        InsertSlot selected = InsertSlot.builder().id("S1").factoryId(F).productionLineId("L1")
+                .startTime(start).endTime(start.plusHours(2)).status("selected").build();
+        when(slots.findByFactoryIdAndStatus(F, "selected")).thenReturn(List.of(selected));
+
+        service.approveForceInsert(F, "PLAN-FORCED", 9L, true, "同意");
+
+        verify(scheduler).apply(eq(F), eq(selected), eq(pending), org.mockito.ArgumentMatchers.isNull(), eq(9L));
+
+        // 排不进去: 批准整体失败 (事务回滚), 抛给调用方
+        ProductionPlan pending2 = new ProductionPlan();
+        pending2.setId("PLAN-FORCED-2");
+        pending2.setFactoryId(F);
+        pending2.setStartTime(start);
+        pending2.setSuggestedProductionLineId("L1");
+        pending2.markAsForceInsert(1L, "x", true);
+        when(plans.findById("PLAN-FORCED-2")).thenReturn(Optional.of(pending2));
+        when(scheduler.apply(any(), any(), eq(pending2), any(), any())).thenThrow(new BusinessException(409, "排不进去")
+                .withCode("INSERT_SCHEDULE_BLOCKED"));
+        assertThatThrownBy(() -> service.approveForceInsert(F, "PLAN-FORCED-2", 9L, true, "同意"))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_BLOCKED"));
+    }
+
+    @Test
+    void rejectingTheApprovalNeverSchedules() {
+        ProductionPlan pending = new ProductionPlan();
+        pending.setId("PLAN-FORCED-3");
+        pending.setFactoryId(F);
+        pending.setStartTime(start);
+        pending.markAsForceInsert(1L, "x", true);
+        when(plans.findById("PLAN-FORCED-3")).thenReturn(Optional.of(pending));
+        when(plans.save(any(ProductionPlan.class))).thenAnswer(i -> i.getArgument(0));
+        when(slots.findByFactoryIdAndStatus(F, "selected")).thenReturn(List.of());
+
+        service.approveForceInsert(F, "PLAN-FORCED-3", 9L, false, "不同意");
+
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
     }
 }
