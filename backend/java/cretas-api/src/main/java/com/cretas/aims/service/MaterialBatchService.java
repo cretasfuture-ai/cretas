@@ -310,9 +310,13 @@ public interface MaterialBatchService {
     }
 
      /**
-     * 更新批次状态
-      */
-    MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status);
+     * 更新批次状态 (仓库页 / AI 手动改状态)。
+     *
+     * <p>纪律排查 A3: 改动构成放行 (不可投产 → 可投产) 时按本厂放行规则判 (默认只能质检放行),
+     * 放行成功必写放行台账。故意没有不带 {@code change} 的重载 —— 新入口必须说清是谁、为什么改。
+     */
+    MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status,
+                                       com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange change);
      /**
      * 预留批次材料
       */

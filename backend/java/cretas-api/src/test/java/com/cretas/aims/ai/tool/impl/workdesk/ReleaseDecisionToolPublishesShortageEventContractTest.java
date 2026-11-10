@@ -32,6 +32,13 @@ class ReleaseDecisionToolPublishesShortageEventContractTest {
         tool = new ReleaseDecisionTool();
         ReflectionTestUtils.setField(tool, "materialBatchRepository", batches);
         ReflectionTestUtils.setField(tool, "eventPublisher", publisher);
+        // 纪律排查 A3: release_decision 须有质检权限 (quality:read_write) 并写放行台账
+        com.cretas.aims.ai.tool.ToolRbacGuard qcRbac = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
+        org.mockito.Mockito.lenient().when(qcRbac.hasAnyPermission(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(String[].class))).thenReturn(true);
+        ReflectionTestUtils.setField(tool, "rbacGuard", qcRbac);
+        ReflectionTestUtils.setField(tool, "releaseGuard",
+                org.mockito.Mockito.mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
         ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository",
                 mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
         batch = new MaterialBatch();

@@ -299,7 +299,7 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // C-074/C-075/X-10: 补录时效锁 — 报工业务日期不得早于 T-maxDays (默认 T-2)
         if (backdateWindowValidator != null) {
-            backdateWindowValidator.assertWithinWindow(req.getBusinessDate(), "报工");
+            backdateWindowValidator.assertWithinWindow(factoryId, req.getBusinessDate(), "报工");
         }
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
@@ -1590,7 +1590,7 @@ public class YieldReportServiceImpl implements YieldReportService {
     public Map<String, Object> recordMaterialInput(String factoryId, Long batchId, Long workerId, MaterialInputRequest req) {
         // F4 补录时效锁 — 领料业务日期不得早于 T-maxDays (对称 submitReport 的同一校验)
         if (backdateWindowValidator != null) {
-            backdateWindowValidator.assertWithinWindow(req.getBusinessDate(), "领料");
+            backdateWindowValidator.assertWithinWindow(factoryId, req.getBusinessDate(), "领料");
         }
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")

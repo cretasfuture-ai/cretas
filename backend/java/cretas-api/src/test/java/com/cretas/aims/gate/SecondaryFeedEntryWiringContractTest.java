@@ -250,6 +250,9 @@ class SecondaryFeedEntryWiringContractTest {
                 Map.of(ProductionPlanRepository.class, planRepo,
                         com.cretas.aims.repository.ProductionBatchRepository.class, batchRepo));
         ReflectionTestUtils.setField(orchestrator, "secondaryPlanFeedService", feed);
+        // 纪律排查 A7: 「批次完工把计划结束」只发生在不要求先结单的工厂 (要求结单时由结单结束计划)
+        ReflectionTestUtils.setField(orchestrator, "disciplinePolicy", com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT, "0")));
         var batch = new com.cretas.aims.entity.ProductionBatch();
         batch.setFactoryId(F);
         batch.setProductionPlanId("P1");

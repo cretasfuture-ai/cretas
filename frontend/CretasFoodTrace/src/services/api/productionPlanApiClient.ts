@@ -290,10 +290,16 @@ class ProductionPlanApiClient {
     return await apiClient.post(`${this.getPath(factoryId)}/${planId}/start`);
   }
 
-  // 7. 完成生产
-  async completeProduction(planId: string, actualQuantity: number, factoryId?: string): Promise<ApiResponse<ProductionPlan>> {
+  // 7. 完成生产 (直接完工; 实际产量超过计划时服务端要求 overPlanReason —— 纪律排查 A7)
+  async completeProduction(
+    planId: string,
+    actualQuantity: number,
+    factoryId?: string,
+    overPlanReason?: string,
+  ): Promise<ApiResponse<ProductionPlan>> {
     return await apiClient.post(`${this.getPath(factoryId)}/${planId}/complete`, {
-      actualQuantity
+      actualQuantity,
+      ...(overPlanReason ? { overPlanReason } : {}),
     });
   }
 

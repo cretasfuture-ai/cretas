@@ -766,7 +766,7 @@ public class ProcessingServiceImpl implements ProcessingService {
         // 审计 round2: 补录时效锁 — 班组报工业务日期不得早于 T-maxDays (对齐 submitReport/recordMaterialInput)。
         // 仅当显式传 reportTime 时校验 (默认 now() 必在窗口内)。
         if (reportTimeProvided && backdateWindowValidator != null) {
-            backdateWindowValidator.assertWithinWindow(reportTime.toLocalDate(), "班组报工");
+            backdateWindowValidator.assertWithinWindow(factoryId, reportTime.toLocalDate(), "班组报工");
         }
 
         // 处理可选的个人明细

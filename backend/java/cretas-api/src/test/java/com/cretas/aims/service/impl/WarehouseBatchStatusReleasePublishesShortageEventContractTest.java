@@ -46,6 +46,12 @@ class WarehouseBatchStatusReleasePublishesShortageEventContractTest {
         when(batches.findById("MB-1")).thenReturn(Optional.of(b));
         when(batches.save(any())).thenAnswer(i -> i.getArgument(0));
         ReflectionTestUtils.setField(service, "applicationEventPublisher", publisher);
+        // 纪律排查 A3: 默认只能质检放行; 这里测的是「放行后要发事件」, 所以配成允许手动放行
+        ReflectionTestUtils.setField(service, "materialBatchReleaseGuard",
+                new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard(
+                        com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                                com.cretas.aims.service.canvas.ThresholdKeys.QUALITY_BATCH_RELEASE_MODE, "QC_OR_MANUAL")),
+                        mock(com.cretas.aims.repository.material.MaterialBatchReleaseRepository.class)));
         ReflectionTestUtils.setField(service, "qcReleaseRecordRepository",
                 mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
         return b;
@@ -55,7 +61,8 @@ class WarehouseBatchStatusReleasePublishesShortageEventContractTest {
     void inspectingToAvailableFromTheWarehousePagePublishesTheRelease() {
         batch(MaterialBatchStatus.INSPECTING);
 
-        service.updateBatchStatus("F1", "MB-1", MaterialBatchStatus.AVAILABLE);
+        service.updateBatchStatus("F1", "MB-1", MaterialBatchStatus.AVAILABLE, new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange(
+                com.cretas.aims.entity.material.MaterialBatchRelease.Channel.WAREHOUSE_STATUS_CHANGE, "已线下复检", 7L, "warehouse_manager"));
 
         ArgumentCaptor<ApplicationEvent> ev = ArgumentCaptor.forClass(ApplicationEvent.class);
         verify(publisher).publishEvent(ev.capture());
@@ -70,10 +77,12 @@ class WarehouseBatchStatusReleasePublishesShortageEventContractTest {
     @Test
     void anAlreadyAvailableBatchOrANonInspectingChangePublishesNothing() {
         batch(MaterialBatchStatus.AVAILABLE);
-        service.updateBatchStatus("F1", "MB-1", MaterialBatchStatus.AVAILABLE);
+        service.updateBatchStatus("F1", "MB-1", MaterialBatchStatus.AVAILABLE, new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange(
+                com.cretas.aims.entity.material.MaterialBatchRelease.Channel.WAREHOUSE_STATUS_CHANGE, "已线下复检", 7L, "warehouse_manager"));
 
         batch(MaterialBatchStatus.AVAILABLE);
-        service.updateBatchStatus("F1", "MB-1", MaterialBatchStatus.FROZEN);
+        service.updateBatchStatus("F1", "MB-1", MaterialBatchStatus.FROZEN, new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange(
+                com.cretas.aims.entity.material.MaterialBatchRelease.Channel.WAREHOUSE_STATUS_CHANGE, "已线下复检", 7L, "warehouse_manager"));
 
         verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
         verify(publisher, never()).publishEvent(any(Object.class));
@@ -90,7 +99,8 @@ class WarehouseBatchStatusReleasePublishesShortageEventContractTest {
                 MaterialBatchStatus.FRESH, MaterialBatchStatus.IN_STOCK)) {
             org.mockito.Mockito.reset(publisher);
             batch(MaterialBatchStatus.INSPECTING);
-            service.updateBatchStatus("F1", "MB-1", target);
+            service.updateBatchStatus("F1", "MB-1", target, new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange(
+                    com.cretas.aims.entity.material.MaterialBatchRelease.Channel.WAREHOUSE_STATUS_CHANGE, "已线下复检", 7L, "warehouse_manager"));
 
             ArgumentCaptor<ApplicationEvent> ev = ArgumentCaptor.forClass(ApplicationEvent.class);
             verify(publisher).publishEvent(ev.capture());

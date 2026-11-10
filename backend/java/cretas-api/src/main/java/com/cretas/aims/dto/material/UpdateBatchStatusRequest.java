@@ -18,4 +18,7 @@ public class UpdateBatchStatusRequest {
 
     @Schema(description = "备注")
     private String notes;
+
+    @Schema(description = "放行原因: 把质检中/过期/报废/不良批次改成可投产状态时, 按本厂规则可能必填 (纪律排查 A3)")
+    private String reason;
 }

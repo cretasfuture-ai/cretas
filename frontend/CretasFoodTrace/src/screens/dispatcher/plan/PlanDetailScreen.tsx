@@ -33,6 +33,7 @@ import { useTranslation } from 'react-i18next';
 import { isAxiosError } from 'axios';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { safePrint } from '../../../services/api/printApiClient';
+import { settlementRequiredNotice } from '../../../utils/settlementRequired';
 import type { DispatcherStackParamList } from '../../../navigation/DispatcherNavigator';
 
 type NavigationProp = NativeStackNavigationProp<DispatcherStackParamList, 'PlanDetail'>;
@@ -372,7 +373,13 @@ export default function PlanDetailScreen() {
               Alert.alert('成功', '计划已完成');
               loadPlanData();
             } catch (e) {
-              Alert.alert('错误', e instanceof Error ? e.message : '完成失败');
+              // A7: 本厂要求先结单 → 说清去网页端哪里结单, 不弹原始错误
+              const settlement = settlementRequiredNotice(e, plan?.planNumber || planId);
+              if (settlement) {
+                Alert.alert(settlement.title, settlement.message);
+              } else {
+                Alert.alert('错误', e instanceof Error ? e.message : '完成失败');
+              }
             }
           },
         },

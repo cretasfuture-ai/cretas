@@ -230,6 +230,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired(required = false)
     private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
 
+    /** 纪律排查 A3: 放行闸 + 放行台账。未装配时任何放行都拒绝 (fail-closed), 不构成放行的改状态不受影响。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.MaterialBatchReleaseGuard materialBatchReleaseGuard;
+
     /** D1 双仓流转 (2026-05-10 spec, PR #309 A1=A) — 入库默认 WH-LOG. */
     @Autowired
     private com.cretas.aims.service.factory.WarehouseResolver warehouseResolver;
@@ -500,7 +504,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
         // C-074/C-075/X-10: 补录时效锁 — 入库日期不得早于 T-maxDays (默认 T-2)
         if (backdateWindowValidator != null) {
-            backdateWindowValidator.assertWithinWindow(request.getReceiptDate(), "原料入库");
+            backdateWindowValidator.assertWithinWindow(factoryId, request.getReceiptDate(), "原料入库");
         }
         runConfiguredValidation(factoryId, "CREATE", java.util.Map.of(
             "quantity", request.getReceiptQuantity() != null ? request.getReceiptQuantity() : java.math.BigDecimal.ZERO,
@@ -2232,7 +2236,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
     @Override
     @Transactional
-    public MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status) {
+    public MaterialBatchDTO updateBatchStatus(String factoryId, String batchId, MaterialBatchStatus status,
+                                              com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange change) {
         MaterialBatch batch = materialBatchRepository.findById(batchId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
 
@@ -2248,8 +2253,19 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                 qcReleaseRecordRepository, batch, status);
 
         MaterialBatchStatus before = batch.getStatus();
+        boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(before, status);
+        if (release) {
+            if (materialBatchReleaseGuard == null) {
+                throw new IllegalStateException("批次放行闸未装配, 拒绝放行 (纪律排查 A3)");
+            }
+            materialBatchReleaseGuard.assertManualReleaseAllowed(factoryId, batch, status, change);
+        }
         batch.setStatus(status);
         batch = materialBatchRepository.save(batch);
+        if (release) {
+            materialBatchReleaseGuard.recordIfRelease(factoryId, batch, before, status, change.channel(),
+                    change.reason(), null, change.operatorId(), change.operatorRole());
+        }
         // 仓库页把「质检中」改成「可用」是一次放行, 改成不合格 / 鲜品等是离开质检中: 缺料实例都要跟着刷新,
         // 否则按旧缺口下采购单。与共用翻转同一个发布函数 (D-S411-04 复审 R1), ⛔ 不在这里手写事件。
         com.cretas.aims.service.quality.QualityDispositionInventoryService.publishMaterialStatusChange(

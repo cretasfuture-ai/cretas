@@ -124,6 +124,10 @@ public class QcReleaseService {
     @Autowired
     private ApplicationEventPublisher eventPublisher;
 
+    /** 纪律排查 A3: 原料放行写放行台账。required=false 仅为单测; 未装配时原料放行拒绝 (fail-closed)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.MaterialBatchReleaseGuard materialBatchReleaseGuard;
+
     /** 测试 / 装配用。 */
     public void setRawMaterialTypeRepo(RawMaterialTypeRepository repo) {
         this.rawMaterialTypeRepo = repo;
@@ -341,12 +345,22 @@ public class QcReleaseService {
                     throw new BusinessException(500, "原料放行缺少事件发布器, 不能放行").withCode(CODE_INVALID);
                 }
                 BigDecimal physical = r.getPhysicalQuantity();
+                MaterialBatchStatus rawBefore = r.getStatus();
+                MaterialBatchStatus rawTarget = release ? MaterialBatchStatus.AVAILABLE : MaterialBatchStatus.DEFECTIVE;
+                if (release && materialBatchReleaseGuard == null) {
+                    throw new BusinessException(500, "原料放行缺少放行台账, 不能放行 (纪律排查 A3)").withCode(CODE_INVALID);
+                }
                 FlipDecision flip = QualityDispositionInventoryService.applyMaterialFlip(materialBatchRepo,
-                        eventPublisher, this, r,
-                        release ? MaterialBatchStatus.AVAILABLE : MaterialBatchStatus.DEFECTIVE);
+                        eventPublisher, this, r, rawTarget);
                 if (flip != FlipDecision.FLIP) {
                     // INSPECTING 原料对 AVAILABLE / DEFECTIVE 恒为 FLIP; 走到这里说明守卫口径变了, 不假装放行成功
                     throw notPending("原料批次 " + r.getBatchNumber());
+                }
+                if (release) {
+                    // 纪律排查 A3: 质检放行页放行原料同样写放行台账 (与 qc_release_records 互补: 那张表只管质检放行页)
+                    materialBatchReleaseGuard.recordIfRelease(factoryId, r, rawBefore, rawTarget,
+                            com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_RELEASE,
+                            cmd.conclusion(), null, userId, null);
                 }
                 record.batchNumber(r.getBatchNumber()).quantity(physical).unit(r.getQuantityUnit());
             }

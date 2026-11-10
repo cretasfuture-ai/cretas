@@ -152,7 +152,9 @@ class ProductionCompletedActorPropagationTest {
 
         private ProductionBatch driveBatchCompletion(Long supervisorId, Long createdBy) {
             ReflectionTestUtils.setField(orchestrator, "warehouseResolver", warehouseResolver);
-            ReflectionTestUtils.setField(orchestrator, "factorySettingsRepository", factorySettingsRepository);
+            // 纪律排查 A7: 这里测的是「不要求先结单」的工厂批次完工时自动建成品 / 结束计划, 显式配成开关关
+            ReflectionTestUtils.setField(orchestrator, "disciplinePolicy", com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT, "0")));
 
             ProductionBatch batch = new ProductionBatch();
             batch.setId(1L);

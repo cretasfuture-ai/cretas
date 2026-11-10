@@ -107,6 +107,10 @@ class ProductionPlanBatchCompletionChainTest {
         // 字段注入的依赖 (@Autowired(required = false)) — 单测用反射注入 mock
         ReflectionTestUtils.setField(service, "workProcessTaskService", workProcessTaskService);
         ReflectionTestUtils.setField(service, "applicationEventPublisher", applicationEventPublisher);
+        // 纪律排查 A7: 完工必须先结单默认开; 本测试走直接完工, 显式配成允许
+        ReflectionTestUtils.setField(service, "disciplinePolicy",
+                com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                        com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT, "0")));
 
         // toDTOWithConversionInfo 依赖默认 stub
         ProductionPlanDTO emptyDto = new ProductionPlanDTO();
@@ -222,7 +226,7 @@ class ProductionPlanBatchCompletionChainTest {
         when(productionBatchRepository.save(any(ProductionBatch.class))).thenAnswer(inv -> inv.getArgument(0));
 
         BigDecimal actual = new BigDecimal("180");
-        service.completeProduction(FACTORY_ID, PLAN_ID, actual, 1309L);
+        service.completeProduction(FACTORY_ID, PLAN_ID, actual, 1309L, null);
 
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
         assertEquals(ProductionBatchStatus.COMPLETED, batch.getStatus(), "关联批次应被级联完成");
@@ -266,7 +270,7 @@ class ProductionPlanBatchCompletionChainTest {
         when(productionBatchRepository.findByFactoryIdAndProductionPlanId(FACTORY_ID, PLAN_ID))
                 .thenReturn(Collections.emptyList());
 
-        assertDoesNotThrow(() -> service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("180"), 1309L));
+        assertDoesNotThrow(() -> service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("180"), 1309L, null));
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
 
         verify(productionBatchRepository, never()).save(any(ProductionBatch.class));
@@ -290,7 +294,7 @@ class ProductionPlanBatchCompletionChainTest {
                 .thenReturn(Collections.emptyList());
 
         BigDecimal actual = new BigDecimal("180");
-        assertDoesNotThrow(() -> service.completeProduction(FACTORY_ID, PLAN_ID, actual, 1309L));
+        assertDoesNotThrow(() -> service.completeProduction(FACTORY_ID, PLAN_ID, actual, 1309L, null));
 
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
         assertEquals(actual, plan.getActualQuantity());

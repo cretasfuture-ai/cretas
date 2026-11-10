@@ -38,7 +38,8 @@ class WorkReportingUnitContractTest {
     @BeforeEach
     void setUp() {
         service = new WorkReportingServiceImpl(reportRepository, mock(BatchWorkSessionRepository.class),
-                batchRepository, mock(UserRepository.class), mock(ApplicationEventPublisher.class), units);
+                batchRepository, mock(UserRepository.class), mock(ApplicationEventPublisher.class), units,
+                new com.cretas.aims.util.BackdateWindowValidator());
         batch = ProductionBatch.builder().id(1L).factoryId("F006").productTypeId("PT1")
                 .quantity(new BigDecimal("100")).plannedQuantity(new BigDecimal("1000")).unit("kg")
                 .actualQuantity(BigDecimal.ZERO).status(ProductionBatchStatus.IN_PROGRESS).build();

@@ -15,8 +15,9 @@ import java.time.LocalDateTime;
 /**
  * 时限计时的人工登记事实 —— 食品 DAG 缺口 14。
  *
- * <p>系统里原来没有「解冻开始」「放进冷藏」这两个时刻, 只能由人登记。时刻一律取服务端当前时间,
+ * <p>系统里原来没有「解冻开始」「放进冷藏」这两个时刻, 只能由人登记。暂停一律取服务端当前时间,
  * ⛔ 不收客户端传的时间: 补一条过去的暂停就能把已超时的料救回来。
+ * 「开始解冻」允许补登实际时间 (纪律排查 A13), 必须带补登原因; 登记发生的时刻是 createdAt。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -76,4 +77,8 @@ public class ProcessTimeMark extends BaseEntity {
 
     @Column(name = "note", length = 500)
     private String note;
+
+    /** 补登原因: startedAt 早于登记时刻 (createdAt) 时必填 (纪律排查 A13)。 */
+    @Column(name = "backfill_reason", length = 500)
+    private String backfillReason;
 }

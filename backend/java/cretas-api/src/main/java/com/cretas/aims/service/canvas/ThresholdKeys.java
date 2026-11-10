@@ -246,6 +246,27 @@ public final class ThresholdKeys {
     /** 个人效率上限. Hard-coded default = 2.0. */
     public static final String EFFICIENCY_MAX = "efficiency.individual.max";
 
+    // ==================== 工厂纪律口径 (2026-11-10 Steve: 是否拦、怎么拦由工厂配置) ====================
+    // 全局默认行见 V20261111_81__factory_discipline_configs.sql; 解析与「认不出按最严」见
+    // com.cretas.aims.service.discipline.FactoryDisciplinePolicy (唯一读取处)。
+
+    /** A3 批次放行规则: QC_ONLY (默认) | QC_OR_MANUAL。认不出 = QC_ONLY。 */
+    public static final String QUALITY_BATCH_RELEASE_MODE = "quality.batch_release.mode";
+    /** A3 手动放行允许的角色代码, 逗号分隔; 空 = 不另限角色。 */
+    public static final String QUALITY_BATCH_RELEASE_MANUAL_ROLES = "quality.batch_release.manual_roles";
+    /** A3 手动放行是否必须填原因: 1 (默认) / 0。 */
+    public static final String QUALITY_BATCH_RELEASE_REQUIRE_REASON = "quality.batch_release.require_reason";
+    /** A7 完工必须先结单: 1 (默认) / 0。 */
+    public static final String PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT = "production.completion.require_settlement";
+    /** A11 仓库多收: BLOCK (默认) | WITHIN_RATE | ALWAYS_WITH_REASON。认不出 = BLOCK。 */
+    public static final String PRODUCTION_RECEIPT_OVER_RECEIVE_MODE = "production.receipt.over_receive_mode";
+    /** A11 WITHIN_RATE 模式下的多收比例 (小数). Default = 0.05。 */
+    public static final String PRODUCTION_RECEIPT_OVER_RECEIVE_RATE = "production.receipt.over_receive_rate";
+    /** A13 解冻开始最多往前补登的分钟数. Default = 480; 0 = 不允许补登。 */
+    public static final String PRODUCTION_THAW_BACKFILL_MAX_MINUTES = "production.time_limit.thaw_backfill_max_minutes";
+    /** A14 补录窗口天数. Default = 2 (T-2)。 */
+    public static final String PRODUCTION_BACKDATE_MAX_DAYS = "production.backdate.max_days";
+
     // ==================== 闸门类阈值登记 (GATING) ====================
 
     /**
@@ -293,6 +314,15 @@ public final class ThresholdKeys {
      */
     public static final java.util.Set<String> GATING_KEYS = java.util.Set.of(
             SALES_DELIVERY_OVER_SHIP_RATE,
+            // 纪律口径 (2026-11-10): 每一个都会挡住或放行一个现场动作
+            QUALITY_BATCH_RELEASE_MODE,
+            QUALITY_BATCH_RELEASE_MANUAL_ROLES,
+            QUALITY_BATCH_RELEASE_REQUIRE_REASON,
+            PRODUCTION_COMPLETION_REQUIRE_SETTLEMENT,
+            PRODUCTION_RECEIPT_OVER_RECEIVE_MODE,
+            PRODUCTION_RECEIPT_OVER_RECEIVE_RATE,
+            PRODUCTION_THAW_BACKFILL_MAX_MINUTES,
+            PRODUCTION_BACKDATE_MAX_DAYS,
             CREDIT_CHECK_MODE,
             INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
             INVENTORY_PERMISSION_WASTAGE_APPROVE,

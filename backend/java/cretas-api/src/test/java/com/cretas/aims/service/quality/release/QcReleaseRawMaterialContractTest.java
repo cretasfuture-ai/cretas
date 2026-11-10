@@ -67,11 +67,18 @@ class QcReleaseRawMaterialContractTest {
 
     private QcReleaseService service;
 
+    private final com.cretas.aims.repository.material.MaterialBatchReleaseRepository releaseLedger =
+            org.mockito.Mockito.mock(com.cretas.aims.repository.material.MaterialBatchReleaseRepository.class);
+
     @BeforeEach
     void setUp() {
         service = new QcReleaseService(semiRepo, materialBatchRepo, fgRepo, productTypeRepo, recordRepo);
         service.setRawMaterialTypeRepo(rawTypeRepo);
         service.setEventPublisher(publisher);
+        // 纪律排查 A3: 原料放行同样写放行台账 (未装配时原料放行 fail-closed)
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "materialBatchReleaseGuard",
+                new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard(
+                        com.cretas.aims.service.discipline.DisciplineFixtures.defaults(), releaseLedger));
         when(recordRepo.save(any(QcReleaseRecord.class))).thenAnswer(inv -> inv.getArgument(0));
         when(materialBatchRepo.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(fgRepo.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -159,6 +166,14 @@ class QcReleaseRawMaterialContractTest {
         assertThat(rec.getUnit()).isEqualTo("kg");
         assertThat(rec.getReleasedBy()).isEqualTo(9L);
         assertThat(rec.getFactoryId()).isEqualTo(F);
+        // 纪律排查 A3: 放行台账同样记下谁放的、走的质检放行页
+        ArgumentCaptor<com.cretas.aims.entity.material.MaterialBatchRelease> ledger =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.material.MaterialBatchRelease.class);
+        verify(releaseLedger).save(ledger.capture());
+        assertThat(ledger.getValue().getChannel()).isEqualTo("QC_RELEASE");
+        assertThat(ledger.getValue().getReleasedBy()).isEqualTo(9L);
+        assertThat(ledger.getValue().getFromStatus()).isEqualTo("INSPECTING");
+        assertThat(ledger.getValue().getToStatus()).isEqualTo("AVAILABLE");
     }
 
     @Test

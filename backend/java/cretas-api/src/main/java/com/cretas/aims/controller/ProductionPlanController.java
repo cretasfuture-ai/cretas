@@ -105,6 +105,10 @@ public class ProductionPlanController {
     private final SalesOrderRepository salesOrderRepository;
     private final PriceMaskResolver priceMaskResolver;
     private final ProductionTransitLedgerRepository transitLedgerRepository;
+
+    /** 纪律排查 A11: 入库弹窗预先显示本厂多收规则。required=false 兼容控制器单测; 缺失时按默认硬拦回答。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
     private final ProductionSummaryService productionSummaryService;
     private final CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
     private final com.cretas.aims.service.scheduling.CancelledPlanScheduleCascade cancelledPlanScheduleCascade;
@@ -476,7 +480,7 @@ public class ProductionPlanController {
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
             @PathVariable @NotNull String planId,
             @RequestHeader("Authorization") String authorization,
-            @Parameter(description = "请求体: {actualQuantity: 500}", required = true)
+            @Parameter(description = "请求体: {actualQuantity: 500, overPlanReason: \"超产原因(超计划时必填)\"}", required = true)
             @RequestBody Map<String, Object> body) {
 
         Object rawQty = body.get("actualQuantity");
@@ -489,8 +493,10 @@ public class ProductionPlanController {
         Long userId = extractUserId(authorization);
         log.info("完成生产: factoryId={}, planId={}, actualQuantity={}, userId={}",
                 factoryId, planId, actualQuantity, userId);
+        Object rawReason = body.get("overPlanReason");
+        String overPlanReason = rawReason != null ? rawReason.toString() : null;
         ProductionPlanDTO plan = productionPlanService.completeProduction(
-                factoryId, planId, actualQuantity, userId);
+                factoryId, planId, actualQuantity, userId, overPlanReason);
         return ApiResponse.success("生产已完成", plan);
     }
 
@@ -855,6 +861,26 @@ public class ProductionPlanController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         boolean maskPrice = priceMaskResolver.shouldMaskPrice(authorization);
         return ApiResponse.success(productionSummaryService.computeSummary(factoryId, planId, maskPrice));
+    }
+
+    /**
+     * 本厂仓库多收规则 (纪律排查 A11, 工厂配置; 防呆 Rule 1: 入库弹窗打开即显示边界)。
+     * 只读, 权限与入库确认相同; 判定仍以入库确认接口为准。
+     */
+    @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})
+    @RequireModule("production_plan")
+    @GetMapping("/discipline/over-receive-rule")
+    @Operation(summary = "本厂仓库入库多收规则 (BLOCK / WITHIN_RATE / ALWAYS_WITH_REASON)")
+    public ApiResponse<Map<String, Object>> getOverReceiveRule(@PathVariable @NotBlank String factoryId) {
+        com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveRule rule = disciplinePolicy != null
+                ? disciplinePolicy.overReceive(factoryId)
+                : new com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveRule(
+                        com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveMode.BLOCK, null,
+                        BigDecimal.ZERO);
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("mode", rule.mode().name());
+        body.put("rate", rule.rate());
+        return ApiResponse.success(body);
     }
 
     @RequirePermission({"warehouse:write", "warehouse:read_write", "production:read_write", "scheduling:read_write"})

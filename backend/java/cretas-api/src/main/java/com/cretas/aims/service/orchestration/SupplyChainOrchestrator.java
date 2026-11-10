@@ -104,8 +104,12 @@ public class SupplyChainOrchestrator {
     @Autowired(required = false)
     private FactoryTriggerChainRepository triggerChainRepository;
 
+    /**
+     * 纪律排查 A7: 「完工必须先结单」的唯一读取处 (工厂开关, 默认开)。批次完工这条路也必须问它,
+     * 否则批次级完工 / AI 完工会绕过结单把计划改成完工。未注入 (只在单测里) 按默认开。
+     */
     @Autowired(required = false)
-    private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
 
     /** 质检放行 (缺口 11/13): 生产完工自动入成品时叠加「待检」; 未注入 = 旧行为 AVAILABLE。 */
     @Autowired(required = false)
@@ -397,17 +401,26 @@ public class SupplyChainOrchestrator {
                 batch.getFactoryId(), batch.getId(), batch.getGoodQuantity());
 
         try {
+            // 纪律排查 A7: 本厂要求完工先结单时, 原料扣减与成品入库都归结单 (结单按实际领用明细过账、仓库确认实收建成品)。
+            // 批次完工这里再按 BOM 理论量扣一次 = 同一批料扣两次 (A7 默认开之后所有工厂都会走到), 所以整段跳过。
+            boolean settlementMode = requiresProductionSettlement(batch.getFactoryId());
+
             // ⑦-AUTO: BOM自动扣料
-            try {
-                batchConsumptionService.autoConsumeForBatch(batch);
-                log.info("自动扣料成功: batchId={}", batch.getId());
-            } catch (Exception e) {
-                log.error("自动扣料失败(不影响后续流程): batchId={}", batch.getId(), e);
+            if (settlementMode) {
+                log.info("本厂要求先结单, 批次完工不自动扣料 (由结单按实际领用扣减): factoryId={}, batchId={}",
+                        batch.getFactoryId(), batch.getId());
+            } else {
+                try {
+                    batchConsumptionService.autoConsumeForBatch(batch);
+                    log.info("自动扣料成功: batchId={}", batch.getId());
+                } catch (Exception e) {
+                    log.error("自动扣料失败(不影响后续流程): batchId={}", batch.getId(), e);
+                }
             }
 
             // ⑦a 自动创建成品批次
             if (batch.getGoodQuantity() != null && batch.getGoodQuantity().compareTo(BigDecimal.ZERO) > 0) {
-                if (requiresProductionSettlement(batch.getFactoryId())) {
+                if (settlementMode) {
                     log.info("Settlement-mode factory skips automatic FG on batch completion; use warehouse receipt path: factoryId={}, batchId={}, goodQty={}",
                             batch.getFactoryId(), batch.getId(), batch.getGoodQuantity());
                 } else {
@@ -917,7 +930,12 @@ public class SupplyChainOrchestrator {
                 .countByProductionPlanIdAndStatusNot(batch.getProductionPlanId(), ProductionBatchStatus.COMPLETED);
 
         boolean planJustCompleted = false;
-        if (incompleteBatches == 0) {
+        if (incompleteBatches == 0 && requiresProductionSettlement(batch.getFactoryId())) {
+            // 纪律排查 A7: 本厂要求完工先结单 —— 批次全部完工也不替结单把计划改成完工, 计划保持原状态等「核对结单」
+            // (结单会把计划改成完工、入成品库并发完工事件)。⛔ 不在这里自己改 COMPLETED。
+            log.info("批次全部完工, 本厂要求先结单, 计划不自动完工: PP={}, actualQty={}",
+                    plan.getPlanNumber(), plan.getActualQuantity());
+        } else if (incompleteBatches == 0) {
             // 批次完工直接把计划结束, 不走结单: 返工计划没用掉的来源半成品占用在这里还回去
             if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
                 if (secondaryPlanFeedService == null) {
@@ -934,7 +952,9 @@ public class SupplyChainOrchestrator {
         productionPlanRepository.save(plan);
 
         // 如果PP来自SO → 发布 FinishedGoodsCreatedEvent 通知出库/发货模块
-        if (plan.getSourceOrderId() != null && PlanSourceType.CUSTOMER_ORDER == plan.getSourceType()) {
+        // 纪律排查 A7: 本厂要求先结单时批次完工没有建成品 (成品在仓库确认实收时才建), ⛔ 不发「成品已生成」
+        if (plan.getSourceOrderId() != null && PlanSourceType.CUSTOMER_ORDER == plan.getSourceType()
+                && !requiresProductionSettlement(batch.getFactoryId())) {
             applicationEventPublisher.publishEvent(new FinishedGoodsCreatedEvent(
                     this,
                     batch.getFactoryId(),
@@ -989,19 +1009,9 @@ public class SupplyChainOrchestrator {
         return String.format("FG-AUTO-%s-%s", dateStr, batch.getId());
     }
 
+    /** 纪律排查 A7: 与 ProductionPlanServiceImpl 同一个工厂开关, ⛔ 不再看 skip_process_reporting_default / 写死 F006。 */
     private boolean requiresProductionSettlement(String factoryId) {
-        if (factorySettingsRepository != null) {
-            Boolean skipProcessReportingDefault =
-                    factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(factoryId);
-            if (skipProcessReportingDefault != null) {
-                return Boolean.TRUE.equals(skipProcessReportingDefault);
-            }
-        }
-        return isLiushanmenFactory(factoryId);
-    }
-
-    private boolean isLiushanmenFactory(String factoryId) {
-        return "F006".equalsIgnoreCase(factoryId);
+        return disciplinePolicy == null || disciplinePolicy.requireSettlementBeforeComplete(factoryId);
     }
 
     /**

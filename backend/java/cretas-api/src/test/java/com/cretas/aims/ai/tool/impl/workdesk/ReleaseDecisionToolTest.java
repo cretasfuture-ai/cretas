@@ -46,6 +46,13 @@ class ReleaseDecisionToolTest {
     @BeforeEach
     void setUp() throws Exception {
         injectField(tool, "objectMapper", objectMapper);
+        // 纪律排查 A3: release_decision 须有质检权限 (quality:read_write) 并写放行台账
+        com.cretas.aims.ai.tool.ToolRbacGuard qcRbac = org.mockito.Mockito.mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
+        org.mockito.Mockito.lenient().when(qcRbac.hasAnyPermission(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(String[].class))).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(tool, "rbacGuard", qcRbac);
+        org.springframework.test.util.ReflectionTestUtils.setField(tool, "releaseGuard",
+                org.mockito.Mockito.mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
     }
 
     @Test

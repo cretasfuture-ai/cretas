@@ -198,4 +198,46 @@ describe('ProcessTimeLimitPanel', () => {
     await flushPromises();
     expect(state.post).toHaveBeenLastCalledWith('/F-1/process-time-limits/marks/9/end');
   });
+  it('A13 补登实际开始时间: 没填原因不能登记; 填了发 startedAt + backfillReason (不是现在)', async () => {
+    state.get.mockResolvedValue(ok([status({
+      state: 'START_MISSING', deadlineAt: null, remainingMinutes: null, reason: '还没有登记开始解冻，不能投料',
+    })]));
+    const wrapper = mountPanel();
+    await flushPromises();
+    await wrapper.get('[data-testid="time-limit-backfill-thaw"]').trigger('click');
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      backfillAt: string; backfillReason: string; backfillDisabledReason: string; submitBackfill: () => Promise<void>;
+    };
+    vm.backfillAt = '2026-11-04T06:00:00';
+    await flushPromises();
+    expect(vm.backfillDisabledReason).toBe('请填写补登原因');
+    await vm.submitBackfill();
+    expect(state.post).not.toHaveBeenCalled();
+
+    vm.backfillReason = '早班 6 点开始解冻，忘了登记';
+    await flushPromises();
+    expect(vm.backfillDisabledReason).toBe('');
+    await vm.submitBackfill();
+    await flushPromises();
+    expect(state.post).toHaveBeenCalledWith('/F-1/process-time-limits/marks', {
+      targetType: 'RAW_MATERIAL_BATCH', targetId: 'mb-1', kind: 'START', code: 'THAW',
+      startedAt: '2026-11-04T06:00:00', backfillReason: '早班 6 点开始解冻，忘了登记',
+    });
+  });
+
+  it('A13 阴性对照: 未来时间不能补登; 不在待登记状态的行没有补登入口', async () => {
+    state.get.mockResolvedValue(ok([status({
+      state: 'START_MISSING', deadlineAt: null, remainingMinutes: null, reason: '还没有登记开始解冻，不能投料',
+    }), status({ targetId: 'mb-2', batchNumber: 'RM-2' })]));
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.findAll('[data-testid="time-limit-backfill-thaw"]')).toHaveLength(1);
+    await wrapper.get('[data-testid="time-limit-backfill-thaw"]').trigger('click');
+    const vm = wrapper.vm as unknown as { backfillAt: string; backfillReason: string; backfillDisabledReason: string };
+    vm.backfillAt = '2026-11-04T12:00:00';
+    vm.backfillReason = 'x';
+    await flushPromises();
+    expect(vm.backfillDisabledReason).toBe('开始时间不能晚于现在');
+  });
 });

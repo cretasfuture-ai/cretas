@@ -35,6 +35,7 @@ import { CustomerSelector } from '../../components/common/CustomerSelector';
 import { MaterialBatchSelector, SelectedBatch, AvailableBatch } from '../../components/common/MaterialBatchSelector';
 import { MaterialBatch } from '../../services/api/materialBatchApiClient';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
+import { settlementRequiredNotice } from '../../utils/settlementRequired';
 import { logger } from '../../utils/logger';
 import { formatDate, parseYmdOrToday } from '../../utils/formatters';
 import { settleAllIndependently } from '../../utils/settleAllIndependently';
@@ -184,6 +185,8 @@ export default function ProductionPlanManagementScreen() {
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [completingPlan, setCompletingPlan] = useState<ProductionPlan | null>(null);
   const [actualQuantity, setActualQuantity] = useState('');
+  // 纪律排查 A7: 直接完工超产必须填原因 (服务端 PRODUCTION_OVER_PLAN_REASON_REQUIRED)
+  const [overPlanReason, setOverPlanReason] = useState('');
   const [completeLoading, setCompleteLoading] = useState(false);
   const [materialAdvisories, setMaterialAdvisories] = useState<Record<string, ProductionPlanMaterialAdvisory>>({});
 
@@ -613,6 +616,7 @@ export default function ProductionPlanManagementScreen() {
   const openCompleteDialog = (plan: ProductionPlan) => {
     setCompletingPlan(plan);
     setActualQuantity(plan.plannedQuantity?.toString() || '');
+    setOverPlanReason('');
     setShowCompleteDialog(true);
   };
 
@@ -625,12 +629,20 @@ export default function ProductionPlanManagementScreen() {
       appAlert('错误', '请输入有效的实际产量');
       return;
     }
+    const planned = completingPlan.plannedQuantity ?? 0;
+    const overPlan = planned > 0 && actualQty > planned;
+    if (overPlan && !overPlanReason.trim()) {
+      appAlert('需要超产原因', `实际产量比计划多 ${(actualQty - planned).toFixed(2)}，请先填写超产原因`);
+      return;
+    }
 
     try {
       setCompleteLoading(true);
       const response = await productionPlanApiClient.completeProduction(
         completingPlan.id,
-        actualQty
+        actualQty,
+        undefined,
+        overPlan ? overPlanReason.trim() : undefined,
       );
 
       if (response.success) {
@@ -638,6 +650,7 @@ export default function ProductionPlanManagementScreen() {
         setShowCompleteDialog(false);
         setCompletingPlan(null);
         setActualQuantity('');
+        setOverPlanReason('');
         loadPlans();
       }
     } catch (error) {
@@ -645,7 +658,9 @@ export default function ProductionPlanManagementScreen() {
         planId: completingPlan.id,
         actualQuantity: actualQty,
       });
-      appAlert('错误', getErrorMsg(error) || '操作失败');
+      // A7: 本厂要求先结单 → 说清去网页端哪里结单, 不弹原始错误; 弹窗保留不清空
+      const settlement = settlementRequiredNotice(error, completingPlan.planNumber || completingPlan.id);
+      appAlert(settlement ? settlement.title : '错误', settlement ? settlement.message : (getErrorMsg(error) || '操作失败'));
     } finally {
       setCompleteLoading(false);
     }
@@ -1501,6 +1516,25 @@ export default function ProductionPlanManagementScreen() {
             </View>
           )}
 
+          {completingPlan
+            && (completingPlan.plannedQuantity ?? 0) > 0
+            && parseFloat(actualQuantity) > (completingPlan.plannedQuantity ?? 0) && (
+            <View testID="complete-over-plan-reason">
+              <Text style={styles.batchWarningHint}>
+                实际比计划多 {(parseFloat(actualQuantity) - (completingPlan.plannedQuantity ?? 0)).toFixed(2)}，必须写超产原因
+              </Text>
+              <TextInput
+                label="超产原因 *"
+                value={overPlanReason}
+                onChangeText={setOverPlanReason}
+                mode="outlined"
+                style={styles.input}
+                placeholder="例如：客户追加 / 投料多出"
+                maxLength={500}
+              />
+            </View>
+          )}
+
           <View style={styles.modalActions}>
             <Button
               mode="outlined"
@@ -1519,7 +1553,14 @@ export default function ProductionPlanManagementScreen() {
               onPress={handleCompleteProduction}
               style={styles.modalButton}
               loading={completeLoading}
-              disabled={completeLoading || !actualQuantity}
+              disabled={
+                completeLoading
+                || !actualQuantity
+                || (!!completingPlan
+                  && (completingPlan.plannedQuantity ?? 0) > 0
+                  && parseFloat(actualQuantity) > (completingPlan.plannedQuantity ?? 0)
+                  && !overPlanReason.trim())
+              }
             >
               确认完成
             </Button>

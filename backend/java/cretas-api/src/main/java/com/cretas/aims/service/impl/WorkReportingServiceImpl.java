@@ -46,6 +46,8 @@ public class WorkReportingServiceImpl {
     private final UserRepository userRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final UnitContractService unitContractService;
+    /** 补录窗口 (纪律排查 A14): 报工日期与其它报工入口同一个工厂级口径。final = 构造期必有, 不允许静默跳过。 */
+    private final com.cretas.aims.util.BackdateWindowValidator backdateWindowValidator;
 
     /**
      * 提交报工
@@ -120,6 +122,9 @@ public class WorkReportingServiceImpl {
                 batchOutput = toBatchUnit(factoryId, reportBatch, request.getOutputQuantity(), requestedUnit, batchUnit);
             }
         }
+
+        // A14: 报工日期走与报工/领料/班组报工同一个工厂级补录窗口 (原来这里直接收, 不过窗口)
+        backdateWindowValidator.assertWithinWindow(factoryId, request.getReportDate(), "报工单");
 
         // 单元B (F006 REQ-17): 防重提交改为 5 分钟窗口 — 只拦 double-click, 不再封锁同日累加。
         // 客户张权要"累加式分时段报工"(每小时报一次后台累加), 旧的全天去重把累加封死。
@@ -235,7 +240,13 @@ public class WorkReportingServiceImpl {
             throw new RuntimeException("已审批的报工不可修改，当前状态: " + report.getStatus());
         }
 
-        if (request.getReportDate() != null) report.setReportDate(request.getReportDate());
+        if (request.getReportDate() != null) {
+            // A14: 只在日期真的改了时过补录窗口 —— 原样回传旧日期 (编辑 4 天前未审批的报工改别的字段) 不算补录
+            if (!request.getReportDate().equals(report.getReportDate())) {
+                backdateWindowValidator.assertWithinWindow(factoryId, request.getReportDate(), "修改报工单");
+            }
+            report.setReportDate(request.getReportDate());
+        }
         if (request.getProcessCategory() != null) report.setProcessCategory(request.getProcessCategory());
         if (request.getProductName() != null) report.setProductName(request.getProductName());
         if (request.getOutputQuantity() != null) report.setOutputQuantity(request.getOutputQuantity());

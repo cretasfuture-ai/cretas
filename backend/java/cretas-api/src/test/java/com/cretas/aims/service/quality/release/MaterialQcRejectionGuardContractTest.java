@@ -56,6 +56,10 @@ class MaterialQcRejectionGuardContractTest {
     private final List<QcReleaseRecord> history = new ArrayList<>();
 
     private MaterialBatchServiceImpl warehouse;
+    private static final com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange MANUAL =
+            new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange(
+                    com.cretas.aims.entity.material.MaterialBatchRelease.Channel.WAREHOUSE_STATUS_CHANGE,
+                    "复检合格", 7L, "quality_manager");
     private ReleaseDecisionTool tool;
     private QualityDispositionInventoryService disposition;
     private MaterialBatch batch;
@@ -79,11 +83,22 @@ class MaterialQcRejectionGuardContractTest {
         warehouse = new MaterialBatchServiceImpl(batches, null, null, mock(MaterialBatchMapper.class),
                 null, null, null, null);
         ReflectionTestUtils.setField(warehouse, "qcReleaseRecordRepository", records);
+        // 纪律排查 A3 放行闸叠加在本闸之后: 这里测的是「质检判不合格不能改回可用」, 所以放行规则配成允许手动放行
+        ReflectionTestUtils.setField(warehouse, "materialBatchReleaseGuard",
+                new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard(
+                        com.cretas.aims.service.discipline.DisciplineFixtures.policy(Map.of(
+                                com.cretas.aims.service.canvas.ThresholdKeys.QUALITY_BATCH_RELEASE_MODE, "QC_OR_MANUAL")),
+                        mock(com.cretas.aims.repository.material.MaterialBatchReleaseRepository.class)));
 
         tool = new ReleaseDecisionTool();
         ReflectionTestUtils.setField(tool, "materialBatchRepository", batches);
         ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper());
         ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository", records);
+        com.cretas.aims.ai.tool.ToolRbacGuard qcRbac = mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
+        when(qcRbac.hasAnyPermission(any(), any(String[].class))).thenReturn(true);
+        ReflectionTestUtils.setField(tool, "rbacGuard", qcRbac);
+        ReflectionTestUtils.setField(tool, "releaseGuard",
+                mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
 
         disposition = new QualityDispositionInventoryService();
         ReflectionTestUtils.setField(disposition, "materialBatchRepository", batches);
@@ -91,6 +106,7 @@ class MaterialQcRejectionGuardContractTest {
         ReflectionTestUtils.setField(disposition, "finishedGoodsBatchRepository", mock(FinishedGoodsBatchRepository.class));
         ReflectionTestUtils.setField(disposition, "factoryRecallService", mock(FactoryRecallService.class));
         ReflectionTestUtils.setField(disposition, "qcReleaseRecordRepository", records);
+        ReflectionTestUtils.setField(disposition, "materialBatchReleaseGuard", mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
     }
 
     private void decided(String decision, int minutesAgo) {
@@ -145,7 +161,7 @@ class MaterialQcRejectionGuardContractTest {
     void warehouseCannotMakeItUsable() {
         decided(QcReleaseRecord.Decision.REJECTED, 5);
         for (MaterialBatchStatus target : List.of(MaterialBatchStatus.AVAILABLE, MaterialBatchStatus.FRESH)) {
-            assertThatThrownBy(() -> warehouse.updateBatchStatus(F, "MB-1", target))
+            assertThatThrownBy(() -> warehouse.updateBatchStatus(F, "MB-1", target, MANUAL))
                     .as("%s", target).satisfies(MaterialQcRejectionGuardContractTest::assertRejectedConflict);
         }
         assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
@@ -156,22 +172,22 @@ class MaterialQcRejectionGuardContractTest {
     @DisplayName("仓库页阴性对照: 送回质检中 / 报废照常; 复检后重新放行 (最近一条 RELEASED) 可以改成可用; 从没判过的不良品照常")
     void warehouseNegativeControls() {
         decided(QcReleaseRecord.Decision.REJECTED, 5);
-        warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.INSPECTING);
+        warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.INSPECTING, MANUAL);
         assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.INSPECTING);
         batch.setStatus(MaterialBatchStatus.DEFECTIVE);
-        warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.SCRAPPED);
+        warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.SCRAPPED, MANUAL);
         assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.SCRAPPED);
 
         batch.setStatus(MaterialBatchStatus.DEFECTIVE);
         history.add(0, QcReleaseRecord.builder().factoryId(F).targetType(QcReleaseRecord.TargetType.RAW_MATERIAL_BATCH)
                 .targetId("MB-1").decision(QcReleaseRecord.Decision.RELEASED).conclusion("复检合格").releasedBy(9L)
                 .releasedAt(LocalDateTime.now()).build());
-        warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.AVAILABLE);
+        warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.AVAILABLE, MANUAL);
         assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.AVAILABLE);
 
         history.clear();
         batch.setStatus(MaterialBatchStatus.DEFECTIVE);
-        warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.AVAILABLE);
+        warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.AVAILABLE, MANUAL);
         assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.AVAILABLE);
     }
 
@@ -216,7 +232,7 @@ class MaterialQcRejectionGuardContractTest {
     @DisplayName("放行记录仓储没注入: 直接报错, 不当「没判过」放回可用")
     void missingRepositoryFailsLoud() {
         ReflectionTestUtils.setField(warehouse, "qcReleaseRecordRepository", null);
-        assertThatThrownBy(() -> warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.AVAILABLE))
+        assertThatThrownBy(() -> warehouse.updateBatchStatus(F, "MB-1", MaterialBatchStatus.AVAILABLE, MANUAL))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
     }
