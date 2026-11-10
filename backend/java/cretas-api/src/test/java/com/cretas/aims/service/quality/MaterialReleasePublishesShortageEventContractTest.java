@@ -29,6 +29,8 @@ class MaterialReleasePublishesShortageEventContractTest {
     private final MaterialBatchRepository batches = mock(MaterialBatchRepository.class);
     private final ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
     private QualityDispositionInventoryService service;
+    private final com.cretas.aims.service.discipline.MaterialBatchReleaseGuard releaseGuard =
+            mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class);
     private MaterialBatch batch;
     private QualityInspection inspection;
 
@@ -39,6 +41,7 @@ class MaterialReleasePublishesShortageEventContractTest {
         ReflectionTestUtils.setField(service, "eventPublisher", publisher);
         ReflectionTestUtils.setField(service, "qcReleaseRecordRepository",
                 mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
+        ReflectionTestUtils.setField(service, "materialBatchReleaseGuard", releaseGuard);
         batch = new MaterialBatch();
         batch.setId("MB-1");
         batch.setFactoryId("F1");
@@ -51,9 +54,26 @@ class MaterialReleasePublishesShortageEventContractTest {
         inspection.setMaterialBatchId("MB-1");
     }
 
+    /** 纪律排查 A3 (独立审查低 #4): 放行台账缺了 → 与其它出口一样直接拒绝, 在翻转之前拦, 状态不变、不落库、不发事件。 */
+    @Test
+    void missingReleaseLedgerFailsClosedBeforeTheFlip() {
+        ReflectionTestUtils.setField(service, "materialBatchReleaseGuard", null);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.applyDisposition(inspection, DispositionAction.RELEASE, true))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.INSPECTING);
+        verify(batches, never()).save(any(MaterialBatch.class));
+        verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
+    }
+
     @Test
     void releasingAnInspectingBatchPublishesTheEvent() {
         service.applyDisposition(inspection, DispositionAction.RELEASE, true);
+        // 纪律排查 A3: 质检处置放行写放行台账
+        verify(releaseGuard).recordIfRelease(org.mockito.ArgumentMatchers.eq("F1"), org.mockito.ArgumentMatchers.same(batch),
+                org.mockito.ArgumentMatchers.eq(MaterialBatchStatus.INSPECTING), org.mockito.ArgumentMatchers.eq(MaterialBatchStatus.AVAILABLE),
+                org.mockito.ArgumentMatchers.eq(com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_DISPOSITION),
+                any(), any(), any(), any());
 
         ArgumentCaptor<ApplicationEvent> event = ArgumentCaptor.forClass(ApplicationEvent.class);
         verify(publisher).publishEvent(event.capture());

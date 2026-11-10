@@ -106,6 +106,7 @@ class MaterialQcRejectionGuardContractTest {
         ReflectionTestUtils.setField(disposition, "finishedGoodsBatchRepository", mock(FinishedGoodsBatchRepository.class));
         ReflectionTestUtils.setField(disposition, "factoryRecallService", mock(FactoryRecallService.class));
         ReflectionTestUtils.setField(disposition, "qcReleaseRecordRepository", records);
+        ReflectionTestUtils.setField(disposition, "materialBatchReleaseGuard", mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
     }
 
     private void decided(String decision, int minutesAgo) {

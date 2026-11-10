@@ -41,6 +41,10 @@ class QualityDispositionInventoryServiceTest {
     private static final String PLAN_ID = "P-1";
     private static final String MATERIAL_BATCH_ID = "mb-1";
 
+    /** 纪律排查 A3: 质检处置放行写放行台账 (缺了 fail-closed)。 */
+    @Mock
+    private com.cretas.aims.service.discipline.MaterialBatchReleaseGuard materialBatchReleaseGuard;
+
     @InjectMocks
     private QualityDispositionInventoryService service;
 

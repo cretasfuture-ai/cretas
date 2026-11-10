@@ -145,4 +145,26 @@ class BackdateWindowFactoryConfigContractTest {
         verify(repo).save(any(ProductionReport.class));
         assertThat(existing.getReportDate()).isEqualTo(LocalDate.now());
     }
+
+    @Test
+    @DisplayName("报工单修改: 4 天前未审批的报工, 原样回传旧日期只改工时 → 照常保存 (日期没变不算补录); 阴性对照: 改到另一个窗口外日期仍 409")
+    void updateKeepingAnOldDateIsNotABackfill() {
+        ProductionReportRepository repo = mock(ProductionReportRepository.class);
+        LocalDate fourDaysAgo = LocalDate.now().minusDays(4);
+        ProductionReport existing = ProductionReport.builder().id(2L).factoryId(F_DEFAULT)
+                .reportType("HOURS").reportDate(fourDaysAgo).build();
+        when(repo.findById(2L)).thenReturn(Optional.of(existing));
+        when(repo.save(any(ProductionReport.class))).thenAnswer(inv -> inv.getArgument(0));
+        WorkReportingServiceImpl svc = workReporting(repo);
+
+        svc.updateReport(F_DEFAULT, 2L, WorkReportSubmitRequest.builder()
+                .reportDate(fourDaysAgo).totalWorkMinutes(90).build());
+        verify(repo).save(any(ProductionReport.class));
+        assertThat(existing.getTotalWorkMinutes()).isEqualTo(90);
+
+        assertThatThrownBy(() -> svc.updateReport(F_DEFAULT, 2L, WorkReportSubmitRequest.builder()
+                .reportDate(fourDaysAgo.minusDays(1)).build()))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("BACKDATE_WINDOW_EXCEEDED"));
+    }
 }

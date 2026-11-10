@@ -13,6 +13,8 @@
 | A7 完工必须先结单 | `production.completion.require_settlement` | `1`（所有工厂含存量，Steve 2026-11-10） | `1` / `0` |
 | A11 仓库多收 | `production.receipt.over_receive_mode` | `BLOCK` | `BLOCK` / `WITHIN_RATE` / `ALWAYS_WITH_REASON` |
 | | `production.receipt.over_receive_rate` | `0.05` | 小数比率 |
+
+> A11 放行的多收与少收同口径：差异在称重容差内（kg 为 10 公斤）不要原因、记为称重误差；超出容差必须填差异原因并选责任方。`ALWAYS_WITH_REASON` 的「WITH_REASON」指超出容差的部分。
 | A13 解冻补登 | `production.time_limit.thaw_backfill_max_minutes` | `480` | 0 = 不许补登 |
 | A14 补录窗口 | `production.backdate.max_days` | `2` | 天数 |
 

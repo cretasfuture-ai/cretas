@@ -94,9 +94,12 @@ public class FactoryDisciplinePolicy {
     public enum OverReceiveMode {
         /** 硬拦 (默认, = 现状)。 */
         BLOCK,
-        /** 不超过比例时填原因 + 选责任方放行, 超出仍拦。 */
+        /** 不超过比例时放行, 超出仍拦。 */
         WITHIN_RATE,
-        /** 一律填原因 + 选责任方放行。 */
+        /**
+         * 不设上限一律放行。注意: 与少收同口径, 差异在称重容差内不要原因 (记为称重误差),
+         * 超出容差才必须填差异原因 + 选责任方 —— 名字里的 WITH_REASON 指的是超出容差的部分。
+         */
         ALWAYS_WITH_REASON
     }
 

@@ -104,8 +104,12 @@ public class SupplyChainOrchestrator {
     @Autowired(required = false)
     private FactoryTriggerChainRepository triggerChainRepository;
 
+    /**
+     * 纪律排查 A7: 「完工必须先结单」的唯一读取处 (工厂开关, 默认开)。批次完工这条路也必须问它,
+     * 否则批次级完工 / AI 完工会绕过结单把计划改成完工。未注入 (只在单测里) 按默认开。
+     */
     @Autowired(required = false)
-    private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
 
     /** 质检放行 (缺口 11/13): 生产完工自动入成品时叠加「待检」; 未注入 = 旧行为 AVAILABLE。 */
     @Autowired(required = false)
@@ -917,7 +921,12 @@ public class SupplyChainOrchestrator {
                 .countByProductionPlanIdAndStatusNot(batch.getProductionPlanId(), ProductionBatchStatus.COMPLETED);
 
         boolean planJustCompleted = false;
-        if (incompleteBatches == 0) {
+        if (incompleteBatches == 0 && requiresProductionSettlement(batch.getFactoryId())) {
+            // 纪律排查 A7: 本厂要求完工先结单 —— 批次全部完工也不替结单把计划改成完工, 计划保持原状态等「核对结单」
+            // (结单会把计划改成完工、入成品库并发完工事件)。⛔ 不在这里自己改 COMPLETED。
+            log.info("批次全部完工, 本厂要求先结单, 计划不自动完工: PP={}, actualQty={}",
+                    plan.getPlanNumber(), plan.getActualQuantity());
+        } else if (incompleteBatches == 0) {
             // 批次完工直接把计划结束, 不走结单: 返工计划没用掉的来源半成品占用在这里还回去
             if ("SECONDARY".equals(plan.getPlanSourceType()) && plan.getSecondarySourceWipId() != null) {
                 if (secondaryPlanFeedService == null) {
@@ -989,19 +998,9 @@ public class SupplyChainOrchestrator {
         return String.format("FG-AUTO-%s-%s", dateStr, batch.getId());
     }
 
+    /** 纪律排查 A7: 与 ProductionPlanServiceImpl 同一个工厂开关, ⛔ 不再看 skip_process_reporting_default / 写死 F006。 */
     private boolean requiresProductionSettlement(String factoryId) {
-        if (factorySettingsRepository != null) {
-            Boolean skipProcessReportingDefault =
-                    factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(factoryId);
-            if (skipProcessReportingDefault != null) {
-                return Boolean.TRUE.equals(skipProcessReportingDefault);
-            }
-        }
-        return isLiushanmenFactory(factoryId);
-    }
-
-    private boolean isLiushanmenFactory(String factoryId) {
-        return "F006".equalsIgnoreCase(factoryId);
+        return disciplinePolicy == null || disciplinePolicy.requireSettlementBeforeComplete(factoryId);
     }
 
     /**

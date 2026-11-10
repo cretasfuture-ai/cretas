@@ -241,7 +241,10 @@ public class WorkReportingServiceImpl {
         }
 
         if (request.getReportDate() != null) {
-            backdateWindowValidator.assertWithinWindow(factoryId, request.getReportDate(), "修改报工单");
+            // A14: 只在日期真的改了时过补录窗口 —— 原样回传旧日期 (编辑 4 天前未审批的报工改别的字段) 不算补录
+            if (!request.getReportDate().equals(report.getReportDate())) {
+                backdateWindowValidator.assertWithinWindow(factoryId, request.getReportDate(), "修改报工单");
+            }
             report.setReportDate(request.getReportDate());
         }
         if (request.getProcessCategory() != null) report.setProcessCategory(request.getProcessCategory());

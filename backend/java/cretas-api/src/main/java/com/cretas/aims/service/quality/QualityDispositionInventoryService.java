@@ -692,18 +692,20 @@ public class QualityDispositionInventoryService {
         com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
                 qcReleaseRecordRepository, mb, target);
         MaterialBatchStatus before = mb.getStatus();
+        boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(before, target)
+                && evaluateMaterialFlip(mb, target) == FlipDecision.FLIP;
+        if (release && materialBatchReleaseGuard == null) {
+            // 与其它 4 个放行出口一致: 放行台账未装配一律拒绝 (fail-closed), 在翻转之前拦, 不留无记录的放行
+            throw new IllegalStateException("批次放行台账未装配, 拒绝放行 (纪律排查 A3)");
+        }
         FlipDecision decision = applyMaterialFlip(materialBatchRepository, eventPublisher, this, mb, target);
-        if (decision == FlipDecision.FLIP) {
+        if (decision == FlipDecision.FLIP && release) {
             // 纪律排查 A3: 质检处置放行同样写放行台账 (放行人 = 当前登录人, 拿不到用质检员)
-            if (materialBatchReleaseGuard != null) {
-                Long operator = com.cretas.aims.utils.SecurityUtils.currentUserId();
-                materialBatchReleaseGuard.recordIfRelease(inspection.getFactoryId(), mb, before, target,
-                        com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_DISPOSITION,
-                        "质检单处置放行", inspection.getId(),
-                        operator != null ? operator : inspection.getInspectorId(), null);
-            } else if (com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(before, target)) {
-                log.warn("质检处置放行未写放行台账 (台账未装配): batch={}", mb.getBatchNumber());
-            }
+            Long operator = com.cretas.aims.utils.SecurityUtils.currentUserId();
+            materialBatchReleaseGuard.recordIfRelease(inspection.getFactoryId(), mb, before, target,
+                    com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_DISPOSITION,
+                    "质检单处置放行", inspection.getId(),
+                    operator != null ? operator : inspection.getInspectorId(), null);
         }
         if (decision == FlipDecision.QC_RELEASE_REQUIRED) {
             log.warn("质检处置库存桥接 — 在制批次 {} 待检, 不在处置桥接里放行 (须走质检放行)", mb.getBatchNumber());

@@ -37,7 +37,7 @@ VALUES
    '计划完工是否必须先核对结单: 1 = 必须结单 (不能直接点完成); 0 = 允许直接完工 (超产须填原因)。',
    NULL, '0', '1'),
   ('*', 'production.receipt.over_receive_mode', 'PRODUCTION', 'STRING', 'BLOCK', 'BLOCK',
-   '仓库实收多于生产报产时: BLOCK = 硬拦; WITHIN_RATE = 不超过 over_receive_rate 比例时填原因并选责任方放行, 超出仍拦; ALWAYS_WITH_REASON = 一律填原因并选责任方放行。',
+   '仓库实收多于生产报产时: BLOCK = 硬拦; WITHIN_RATE = 不超过 over_receive_rate 比例时放行, 超出仍拦; ALWAYS_WITH_REASON = 不设上限一律放行。放行的多收与少收同口径: 差异在称重容差内 (kg 为 10 公斤) 不要原因、记为称重误差; 超出容差必须填差异原因并选责任方, 进中转挂账。',
    NULL, NULL, NULL),
   ('*', 'production.receipt.over_receive_rate', 'PRODUCTION', 'DECIMAL', '0.05', '0.05',
    '仓库多收比例上限 (仅 WITHIN_RATE 模式使用): 实收最多为报产的 (1 + 比例) 倍。0.05 = 5%。',
