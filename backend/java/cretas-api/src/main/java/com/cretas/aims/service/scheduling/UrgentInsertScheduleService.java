@@ -16,6 +16,7 @@ import com.cretas.aims.repository.scheduling.ApsConstraintQueryRepository;
 import com.cretas.aims.security.ActorRef;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.scheduling.daily.DailyCapacityScheduleGenerator;
+import com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl;
 import com.cretas.aims.service.shortage.DeliveryRiskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -277,7 +278,11 @@ public class UrgentInsertScheduleService {
                     raw, insertPlan, movableByPlan, plansById, firstDay);
         }
         if (container != null && container.getStatus() == SchedulingPlan.PlanStatus.cancelled) {
-            warnings.add("插入首日 " + firstDayOf(mine) + " 的调度计划此前已取消，插单会重新启用它（它名下原有的未开工排程保持取消）");
+            // 预览阶段说的是「将要」: 数量按此刻名下没开工的 pending 排程算 (确认时以数据库现数为准)
+            long willVoid = lineScheduleRepository.findByPlanId(container.getId()).stream()
+                    .filter(ls -> ls.getStatus() == LineSchedule.ScheduleStatus.pending && ls.getActualStartTime() == null)
+                    .count();
+            warnings.add(SchedulingPlanCrudServiceImpl.reopenWarning((int) willVoid, 0));
         }
         Proposal proposal = new Proposal(OK, null, firstDayOf(mine), lastDay(mine), moved,
                 warnings, fingerprint(mine, raw, moved, movableByPlan, container));
@@ -492,17 +497,17 @@ public class UrgentInsertScheduleService {
      */
     private void reopenCancelledDay(String factoryId, LocalDate day, SchedulingPlanRepository.DayPlanHead fresh,
                                     ProductionPlan insertPlan, Long userId, LocalDateTime now) {
-        String reason = trim("调度计划取消后重开，旧排程作废（紧急插单 " + insertPlan.getPlanNumber() + "）", 200);
+        String reason = trim(SchedulingPlanCrudServiceImpl.REOPEN_VOIDED_ROW_REASON
+                + "（紧急插单 " + insertPlan.getPlanNumber() + "）", 200);
         int voided = schedulingPlanRepository.voidPendingRowsOnReopen(fresh.getId(), reason);
         if (schedulingPlanRepository.countStartedRows(fresh.getId()) > 0) {
             throw new BusinessException(409, "插入首日 " + day + " 的调度计划已取消，但名下还有已开工的排程，无法重新启用")
                     .withCode("INSERT_SCHEDULE_CONTAINER_CLOSED")
                     .withHint("先处理这些排程或改选其他时段");
         }
+        // 留痕措辞与方法同缺口 18 (自动排程 / 手动新建的重开) 共用, 两边说法一致
         String notes = (fresh.getNotes() == null || fresh.getNotes().isBlank() ? "" : fresh.getNotes() + "\n")
-                + "[重开 " + now.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
-                + "] 原调度计划已取消，由紧急插单 " + insertPlan.getPlanNumber() + "（操作人 " + userId
-                + "）重开为草稿；作废没开工的旧排程 " + voided + " 条";
+                + SchedulingPlanCrudServiceImpl.reopenTrail(now, "紧急插单 " + insertPlan.getPlanNumber(), userId, voided, 0);
         if (schedulingPlanRepository.reopenCancelled(fresh.getId(), notes, now) != 1) {
             throw new BusinessException(409, "插入首日 " + day + " 的调度计划刚被改动，请重新预览")
                     .withCode("INSERT_SCHEDULE_CONTAINER_RACE")
