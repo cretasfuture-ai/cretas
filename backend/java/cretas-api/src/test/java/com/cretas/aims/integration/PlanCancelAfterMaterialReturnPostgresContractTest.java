@@ -86,7 +86,9 @@ class PlanCancelAfterMaterialReturnPostgresContractTest {
             com.cretas.aims.service.scheduling.SchedulingResourceWriteLock.class,
             // 取消之后收掉名下排程的级联 (#1579), 经切面挂在取消入口上 —— 与生产同一条接线
             com.cretas.aims.service.scheduling.CancelledPlanScheduleCascade.class,
-            com.cretas.aims.service.scheduling.CancelledPlanScheduleCascadeAspect.class})
+            com.cretas.aims.service.scheduling.CancelledPlanScheduleCascadeAspect.class,
+            // 开工: 与取消级联同一加锁顺序 (日计划 → 排程行)
+            com.cretas.aims.service.scheduling.impl.LineScheduleServiceImpl.class})
     @org.springframework.context.annotation.EnableAspectJAutoProxy
     static class Runtime { }
 
@@ -446,12 +448,56 @@ class PlanCancelAfterMaterialReturnPostgresContractTest {
         assertThat(((Number) totals(dayPlan).get("total_batches")).intValue()).isZero();
     }
 
+    @Autowired com.cretas.aims.service.scheduling.core.LineScheduleService lineScheduleService;
+
     /**
-     * 持锁方在事务里跑完 holder 但先不提交; 证明等待方卡在库锁上之后再放行 (同 CancelledDayPlanReopenPostgresContractTest)。
-     * 返回 [持锁方结果, 等待方结果]; BusinessException 记成它的状态码。
+     * 开工与取消级联的加锁顺序必须一致 (日计划 → 排程行), 否则两边各拿一把互相等 = 死锁。
+     * 持锁方锁住日计划, 并在锁内重算汇总数 (模拟取消级联 / 插单); 此时开工必须卡在日计划上、还没锁排程行,
+     * 放行后不能把汇总数写回它锁之前读到的旧值。
      */
+    @Test
+    void startingARowWaitsOnItsDayPlanBeforeTakingTheRowAndKeepsTotalsWrittenMeanwhile() throws Exception {
+        java.time.LocalDate day = java.time.LocalDate.of(2026, 12, 5);
+        String planId = plan(ProductionPlanStatus.PENDING);
+        String dayPlan = dayPlan(F, day);
+        String rowId = row(dayPlan, planId, com.cretas.aims.entity.LineSchedule.ScheduleStatus.pending);
+        jdbc.update("update scheduling_plans set status = 'confirmed', total_batches = 1, total_workers = 0 where id = ?",
+                dayPlan);
+
+        java.util.concurrent.atomic.AtomicReference<String> rowWhileWaiting = new java.util.concurrent.atomic.AtomicReference<>();
+        List<String> outcome = holdThenRace(() -> {
+            jdbc.queryForObject("select id from scheduling_plans where id = ? for update", String.class, dayPlan);
+            jdbc.update("update scheduling_plans set total_batches = 7, total_workers = 3 where id = ?", dayPlan);
+            return "held";
+        }, () -> lineScheduleService.startSchedule(F, rowId).getStatus(), () -> rowWhileWaiting.set(run(() -> tx.execute(s -> {
+            jdbc.queryForObject("select id from line_schedules where id = ? for update nowait", String.class, rowId);
+            return "row-free";
+        }))));
+
+        System.out.println("START_LOCK_ORDER rowWhileWaiting=" + rowWhileWaiting.get() + " outcome=" + outcome
+                + " day=" + totals(dayPlan));
+        assertThat(rowWhileWaiting.get()).as("开工卡在日计划上时还没锁排程行 (先锁行就会和取消级联死锁)")
+                .isEqualTo("row-free");
+        assertThat(outcome).containsExactly("held", "in_progress");
+        assertThat(rowStatus(rowId)).isEqualTo("in_progress");
+        assertThat(jdbc.queryForObject("select status from scheduling_plans where id = ?", String.class, dayPlan))
+                .as("已确认的日计划开工后进行中").isEqualTo("in_progress");
+        assertThat(totals(dayPlan)).as("等锁期间写下的汇总数没被开工的整行保存改回旧值")
+                .containsEntry("total_batches", 7).containsEntry("total_workers", 3);
+    }
+
     private List<String> holdThenRace(java.util.function.Supplier<String> holder,
                                       java.util.function.Supplier<String> waiter) throws Exception {
+        return holdThenRace(holder, waiter, () -> { });
+    }
+
+    /**
+     * 持锁方在事务里跑完 holder 但先不提交; 证明等待方卡在库锁上之后 (先跑 whileWaiting 探针) 再放行
+     * (同 CancelledDayPlanReopenPostgresContractTest)。返回 [持锁方结果, 等待方结果]; BusinessException 记成它的状态码。
+     */
+    private List<String> holdThenRace(java.util.function.Supplier<String> holder,
+                                      java.util.function.Supplier<String> waiter,
+                                      Runnable whileWaiting) throws Exception {
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
         java.util.concurrent.CountDownLatch held = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
@@ -470,6 +516,7 @@ class PlanCancelAfterMaterialReturnPostgresContractTest {
                 Thread.sleep(50);
             }
             assertThat(lockWaiters()).as("等待方确实卡在库锁上 (否则测的不是并发)").isGreaterThan(waitersBefore);
+            whileWaiting.run();
             release.countDown();
             return List.of(h.get(60, java.util.concurrent.TimeUnit.SECONDS),
                     w.get(60, java.util.concurrent.TimeUnit.SECONDS));
