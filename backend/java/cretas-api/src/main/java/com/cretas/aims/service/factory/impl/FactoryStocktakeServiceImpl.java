@@ -1589,6 +1589,17 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                     .withCode("STOCKTAKE_WORKFLOW_IDENTITY_MISMATCH");
         }
         if (instance.getStatus() != ApprovalWorkflowInstance.InstanceStatus.RUNNING) return stocktake;
+        // 纪律排查 B2 / #1580 权限审查 1: 现网盘点审批只走这里 (StocktakeController 直接审批恒 410),
+        // 盘点差异审批权限码要在这里判, 否则「谁能批」改了不生效。批准与驳回同一个权限。
+        // 未注入 (手工构造的单测) 时沿用改动前行为: 由 OA 节点的审批角色决定。
+        if (approvalAuthority != null
+                && (action == HistoryAction.APPROVE || action == HistoryAction.REJECT)
+                && !approvalAuthority.canApprove(actorId,
+                        com.cretas.aims.service.impl.PermissionServiceImpl.APPROVAL_STOCKTAKE)) {
+            throw new BusinessException(403, "当前账号没有盘点差异审批权限")
+                    .withCode("STOCKTAKE_APPROVAL_PERMISSION_REQUIRED")
+                    .withHint("默认由财务经理或工厂管理员审批; 工厂管理员可在「系统设置 → 审批规则 → 谁能审批」里调整");
+        }
         if (action == HistoryAction.REJECT && (notes == null || notes.isBlank())) {
             throw new BusinessException(422, "驳回盘点必须填写原因")
                     .withCode("STOCKTAKE_REJECT_REASON_REQUIRED");

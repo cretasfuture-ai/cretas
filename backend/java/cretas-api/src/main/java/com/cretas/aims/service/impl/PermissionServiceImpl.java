@@ -133,6 +133,16 @@ public class PermissionServiceImpl implements PermissionService {
             APPROVAL_PRICE_ADJUSTMENT, List.of("finance", "sales"),
             APPROVAL_REFUND, List.of("finance"));
 
+    /**
+     * 默认授权的模块前提 (#1580 权限独立审查 2): 改动前撤回审批 = production:read_write <b>且</b> 岗位名单,
+     * 质检处置 = quality:read_write <b>且</b> 岗位名单。默认授权必须与该模块的<b>有效</b>级别取交集
+     * (含工厂 L2、平台 L1、个人覆盖) —— 否则某厂把生产经理的 production 降成只读, 以前批不了, 现在却能批。
+     * 显式配置了审批码 (L2 / L1) 的按显式配置走, 不再叠这个前提。盘点差异审批改动前没有模块前提。
+     */
+    static final Map<String, String> APPROVAL_DEFAULT_REQUIRES_MODULE = Map.of(
+            APPROVAL_REPORT_REVERSAL, "production",
+            APPROVAL_QUALITY_DISPOSITION, "quality");
+
     private static void initPermissionMatrix() {
         // factory_super_admin: 所有模块读写
         Map<String, String> superAdminPerms = new HashMap<>();
@@ -568,6 +578,12 @@ public class PermissionServiceImpl implements PermissionService {
         // A fresh authorization read must distinguish a successful empty result from an
         // unavailable repository.  Only successful empty rows may reach the hardcoded fallback.
         String permType = resolveEffectiveLevel(user.getFactoryId(), role, module, null, true);
+        // 审批码的默认授权要看前提 / 来源模块的<b>个人</b>有效级别 (#1580 权限独立审查 2): 岗位级的链不含个人覆盖
+        if (employeeModulePermissions != null && APPROVAL_MODULES.contains(module)
+                && !approvalExplicitlyConfigured(user.getFactoryId(), role, module)) {
+            permType = approvalDefaultLevel(role, module, source -> employeeModulePermissions.apply(user, source,
+                    resolveEffectiveLevel(user.getFactoryId(), role, source, null, true)));
+        }
         if (employeeModulePermissions != null) permType = employeeModulePermissions.apply(user, module, permType);
 
         boolean result = checkAction(permType, action);
@@ -823,6 +839,12 @@ public class PermissionServiceImpl implements PermissionService {
                     : resolveLayer1(role.name(), module, requireAvailable);
         }
 
+        // 审批码: L2 / L1 都没显式配置时用默认授权 (= 改动前的名单与模块门槛, 见 approvalDefaultLevel)
+        if (permType == null && APPROVAL_MODULES.contains(module)) {
+            return approvalDefaultLevel(role, module,
+                    source -> resolveEffectiveLevel(factoryId, role, source, snapshot, requireAvailable));
+        }
+
         // Fallback: hardcoded PERMISSION_MATRIX (safety net)
         if (permType == null) {
             Map<String, String> rolePerms = PERMISSION_MATRIX.get(role);
@@ -830,16 +852,44 @@ public class PermissionServiceImpl implements PermissionService {
                 permType = rolePerms.get(module);
             }
         }
-        // 改价 / 退款审批码: 三层都没配时跟着原门槛模块走 (finance / sales 里任一 read_write)
-        if (permType == null && APPROVAL_DEFAULT_FROM_MODULES.containsKey(module)) {
+        return permType;
+    }
+
+    /**
+     * 审批码的默认授权 (没有 L2 / L1 显式配置时)。{@code sourceLevel} 给出某个模块对这个人的有效级别
+     * (岗位级: L2 → L1 → 兜底矩阵; 鉴权路径另叠个人覆盖)。
+     * <ul>
+     *   <li>改价 / 退款: 跟原门槛模块走 —— finance (/ sales) 任一 read_write 即有;</li>
+     *   <li>撤回 / 质检处置: 兜底矩阵里的默认岗位 <b>且</b> 前提模块 (production / quality) 有效级别为 read_write;</li>
+     *   <li>盘点差异: 兜底矩阵里的默认岗位 (改动前没有模块前提)。</li>
+     * </ul>
+     */
+    private String approvalDefaultLevel(FactoryUserRole role, String module,
+                                        java.util.function.Function<String, String> sourceLevel) {
+        if (APPROVAL_DEFAULT_FROM_MODULES.containsKey(module)) {
             for (String source : APPROVAL_DEFAULT_FROM_MODULES.get(module)) {
-                String sourceLevel = resolveEffectiveLevel(factoryId, role, source, snapshot, requireAvailable);
-                if ("read_write".equals(denormalizeLevel(sourceLevel))) {
+                if ("read_write".equals(denormalizeLevel(sourceLevel.apply(source)))) {
                     return "read_write";
                 }
             }
+            return null;
         }
-        return permType;
+        Map<String, String> rolePerms = PERMISSION_MATRIX.get(role);
+        String granted = rolePerms == null ? null : rolePerms.get(module);
+        if (granted == null) {
+            return null;
+        }
+        String prerequisite = APPROVAL_DEFAULT_REQUIRES_MODULE.get(module);
+        if (prerequisite != null && !"read_write".equals(denormalizeLevel(sourceLevel.apply(prerequisite)))) {
+            return null;
+        }
+        return granted;
+    }
+
+    /** 审批码在本厂 (L2) 或平台 (L1) 有没有显式配置。 */
+    private boolean approvalExplicitlyConfigured(String factoryId, FactoryUserRole role, String module) {
+        return (factoryId != null && resolveLayer2(factoryId, role.name(), module, true) != null)
+                || resolveLayer1(role.name(), module, true) != null;
     }
 
     /** L1 该角色的全部有效行, 一次查询, 值 normalize 成 rw/r/w/-. 查询失败 → 空 map (与 resolveLayer1 的 null 同义). */
