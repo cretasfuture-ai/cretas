@@ -9,6 +9,7 @@ import com.cretas.aims.entity.LineSchedule;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.SchedulingPlan;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.LineScheduleRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.SchedulingPlanRepository;
@@ -16,6 +17,7 @@ import com.cretas.aims.repository.scheduling.ApsConstraintQueryRepository;
 import com.cretas.aims.security.ActorRef;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.scheduling.daily.DailyCapacityScheduleGenerator;
+import com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl;
 import com.cretas.aims.service.shortage.DeliveryRiskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -65,6 +67,8 @@ public class UrgentInsertScheduleService {
     public static final String OK = "OK";
     /** 引擎说排不进去 / 没填日产能等: 确认必须拦。 */
     public static final String BLOCKED = "BLOCKED";
+    /** A18: 排不进, 但工厂配了这个原因「照插并提示」: 插单计划照建, 不写排程行、不挪别的计划。 */
+    public static final String UNSCHEDULED = "UNSCHEDULED";
     /** 没有足够信息去排 (没绑产线等) 或没评估 (前置的原料已不满足)。 */
     public static final String NOT_EVALUATED = "NOT_EVALUATED";
 
@@ -118,6 +122,8 @@ public class UrgentInsertScheduleService {
     private final SchedulingPlanRepository schedulingPlanRepository;
     private final PlatformTransactionManager transactionManager;
     private final DeliveryRiskService deliveryRiskService;
+    /** A18: 「排不进」按原因放行的工厂配置。 */
+    private final FactorySettingsRepository settingsRepository;
 
     // ---------------------------------------------------------------- 预览: 建临时计划算完回滚
 
@@ -157,6 +163,15 @@ public class UrgentInsertScheduleService {
                           String expectedFingerprint, Long userId) {
         Computation c = compute(factoryId, slot, insertPlan);
         Proposal p = c.proposal();
+        if (UNSCHEDULED.equals(p.status())) {
+            // A18: 工厂把这个原因配成「照插并提示」: 插单计划照建, 不写排程行、不挪别的计划
+            if (expectedFingerprint != null && !expectedFingerprint.equals(p.fingerprint())) {
+                throw new BusinessException(409, "预览之后排程结果已变化（排程、设备占用或原料到货变了），请重新预览，未创建计划")
+                        .withCode("INSERT_PREVIEW_SCHEDULE_CHANGED")
+                        .withHint("重新创建确认预览，按最新排程确认");
+            }
+            return p;
+        }
         if (!p.ok()) {
             throw new BusinessException(409, "排程排不进去，未创建计划: " + p.message())
                     .withCode("INSERT_SCHEDULE_BLOCKED")
@@ -229,8 +244,8 @@ public class UrgentInsertScheduleService {
         if (!"SCHEDULED".equals(raw.outcome())) {
             String products = raw.capacityRequired() == null ? "" : raw.capacityRequired().stream()
                     .map(UrgentInsertScheduleService::describeCapacityRequired).collect(Collectors.joining("；"));
-            return new Computation(new Proposal(BLOCKED, "有产品没填日产能，排不出: " + products, null, null,
-                    List.of(), raw.warnings() == null ? List.of() : raw.warnings(), null),
+            return new Computation(unscheduledOrBlocked(factoryId, "CAPACITY_MISSING",
+                    "有产品没填日产能，排不出: " + products, raw.warnings()),
                     raw, insertPlan, movableByPlan, plansById, firstDay);
         }
 
@@ -238,8 +253,8 @@ public class UrgentInsertScheduleService {
         raw.plans().forEach(r -> byId.put(r.planId(), r));
         PlanResult mine = byId.get(insertPlan.getId());
         if (mine == null || !"SCHEDULED".equals(mine.status())) {
-            return new Computation(new Proposal(BLOCKED, "插单排不进去: " + describe(mine), null, null, List.of(),
-                    raw.warnings() == null ? List.of() : raw.warnings(), null),
+            return new Computation(unscheduledOrBlocked(factoryId, mine == null ? null : mine.status(),
+                    "插单排不进去: " + describe(mine), raw.warnings()),
                     raw, insertPlan, movableByPlan, plansById, firstDay);
         }
 
@@ -252,8 +267,8 @@ public class UrgentInsertScheduleService {
                 continue; // 已无剩余 / 已关闭: 不动它的排程行
             }
             if (!"SCHEDULED".equals(r.status())) {
-                return new Computation(new Proposal(BLOCKED, "被挤的计划 " + number + " 排不进去: " + describe(r), null,
-                        null, List.of(), raw.warnings() == null ? List.of() : raw.warnings(), null),
+                return new Computation(unscheduledOrBlocked(factoryId, r.status(),
+                        "被挤的计划 " + number + " 排不进去: " + describe(r), raw.warnings()),
                         raw, insertPlan, movableByPlan, plansById, firstDay);
             }
             LocalDate oldEnd = e.getValue().stream().map(LineSchedule::getPlannedEndTime).filter(Objects::nonNull)
@@ -277,7 +292,11 @@ public class UrgentInsertScheduleService {
                     raw, insertPlan, movableByPlan, plansById, firstDay);
         }
         if (container != null && container.getStatus() == SchedulingPlan.PlanStatus.cancelled) {
-            warnings.add("插入首日 " + firstDayOf(mine) + " 的调度计划此前已取消，插单会重新启用它（它名下原有的未开工排程保持取消）");
+            // 预览阶段说的是「将要」: 数量按此刻名下没开工的 pending 排程算 (确认时以数据库现数为准)
+            long willVoid = lineScheduleRepository.findByPlanId(container.getId()).stream()
+                    .filter(ls -> ls.getStatus() == LineSchedule.ScheduleStatus.pending && ls.getActualStartTime() == null)
+                    .count();
+            warnings.add(SchedulingPlanCrudServiceImpl.reopenWarning((int) willVoid, 0));
         }
         Proposal proposal = new Proposal(OK, null, firstDayOf(mine), lastDay(mine), moved,
                 warnings, fingerprint(mine, raw, moved, movableByPlan, container));
@@ -306,6 +325,41 @@ public class UrgentInsertScheduleService {
             }
         }
         return null;
+    }
+
+    /** 可按工厂配置放行的「排不进」原因码 (其余原因, 如一次挪太多计划、首日调度计划已完成, 一律拦)。 */
+    static final Set<String> RELAXABLE_REASONS = Set.of(
+            "CAPACITY_MISSING", "EQUIPMENT_UNAVAILABLE", "EXCEEDS_HORIZON", "PREDECESSOR_NOT_SCHEDULED");
+
+    /**
+     * A18: 这个原因工厂配成「照插并提示」就返回 UNSCHEDULED (指纹只由原因码决定: 预览和确认之间计划号、
+     * 产品名这些文字会变, 原因码不会), 否则 BLOCKED (默认, 现状)。
+     */
+    private Proposal unscheduledOrBlocked(String factoryId, String reasonCode, String message, List<String> engineWarnings) {
+        List<String> warnings = engineWarnings == null ? List.of() : engineWarnings;
+        if (reasonCode != null && RELAXABLE_REASONS.contains(reasonCode) && relaxedReasons(factoryId).contains(reasonCode)) {
+            return new Proposal(UNSCHEDULED, "插单计划会建，但没排入排程（本厂设置为这种情况照插并提示）: " + message,
+                    null, null, List.of(), warnings, unscheduledFingerprint(reasonCode));
+        }
+        return new Proposal(BLOCKED, message, null, null, List.of(), warnings, null);
+    }
+
+    private Set<String> relaxedReasons(String factoryId) {
+        String raw = settingsRepository.findUrgentInsertScheduleWarnReasonsByFactoryId(factoryId);
+        if (raw == null || raw.isBlank()) {
+            return Set.of();
+        }
+        return java.util.Arrays.stream(raw.split(",")).map(String::trim).filter(x -> !x.isEmpty())
+                .collect(Collectors.toSet());
+    }
+
+    private static String unscheduledFingerprint(String reasonCode) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(("UNSCHEDULED|" + reasonCode).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** 给人看的「缺哪个产品的日产能」: 产品名 + 单位 + 缺的原因 + 涉及计划号, 不是 DTO 的 toString。 */
@@ -410,6 +464,32 @@ public class UrgentInsertScheduleService {
         // 0) 固定的加锁顺序: 先锁当天的调度计划行, 再动被挤计划的排程行。锁只用来排队 (和别的重开 / 取消 / 建当天计划的
         //    路径串行); 取得锁之后的状态以数据库的标量读为准, 不信锁前可能已载入过的旧副本。
         //    (确认 / 批准入口本身已先拿全厂写锁, 两个插单之间天然串行; 这把行锁防的是不拿全厂锁的路径。)
+        //    再往前一步先锁生产计划 (插单自己 + 被挤的), 与「取消生产计划」同一顺序: 被挤的计划刚被取消的话,
+        //    取消已作废了它的排程, 这里再按旧副本整行保存就会把作废的行写回 pending —— 直接拒绝, 重新预览。
+        Set<String> productionPlans = new LinkedHashSet<>();
+        productionPlans.add(insertPlan.getId());
+        c.proposal().moved().forEach(m -> productionPlans.add(m.planId()));
+        String closed = ProductionPlanScheduleLock.lockAndFindClosed(planRepository, factoryId, productionPlans);
+        if (closed != null) {
+            String label = c.plansById().containsKey(closed) ? c.plansById().get(closed).getPlanNumber() : closed;
+            throw new BusinessException(409, "计划「" + label + "」刚被取消或已完成，请重新预览")
+                    .withCode("INSERT_PREVIEW_SCHEDULE_CHANGED")
+                    .withHint("重新创建确认预览，按最新排程确认");
+        }
+        //    然后按 id 顺序锁住这次会动到的全部日调度计划 (插单那天 + 被挤计划排程所在的那些天), 与取消生产计划同一顺序;
+        //    只锁插单那天、事后再逐个重算别的天, 会和取消的排序加锁交叉成死锁。
+        java.util.SortedSet<String> dayPlansToLock = new java.util.TreeSet<>();
+        schedulingPlanRepository.findDayPlanHead(factoryId, day).ifPresent(h -> dayPlansToLock.add(h.getId()));
+        for (Moved m : c.proposal().moved()) {
+            for (LineSchedule row : c.movableByPlan().get(m.planId())) {
+                String dayPlanId = row.getPlanId() != null ? row.getPlanId()
+                        : row.getPlan() == null ? null : row.getPlan().getId();
+                if (dayPlanId != null) {
+                    dayPlansToLock.add(dayPlanId);
+                }
+            }
+        }
+        dayPlansToLock.forEach(id -> schedulingPlanRepository.lockStatusForUpdate(id, factoryId));
         SchedulingPlan container = schedulingPlanRepository.lockDayPlan(factoryId, day).orElse(null);
 
         // 1) 被挤计划: 第一条排程行改成新的起止 / 数量 / 按天分配, 其余行取消 (引擎按计划整体剩余量排, 一行就够)
@@ -478,6 +558,25 @@ public class UrgentInsertScheduleService {
         created.setDailyAllocations(mine.dailyAllocations());
         created.setStatus(LineSchedule.ScheduleStatus.pending);
         lineScheduleRepository.save(created);
+        // 3) 动过的调度计划按名下排程重算批次数 / 派工人数 (缺口 18 后续): 插单挂的那天 (含刚重开的),
+        //    以及被挤计划合并时作废了多余排程的那些天。只写这两列: container 可能是重开前的旧副本, 不整行保存。
+        Set<String> touchedDayPlans = new LinkedHashSet<>();
+        if (container.getId() != null) {
+            touchedDayPlans.add(container.getId());
+        }
+        for (Moved m : c.proposal().moved()) {
+            for (LineSchedule row : c.movableByPlan().get(m.planId())) {
+                String dayPlanId = row.getPlanId() != null ? row.getPlanId()
+                        : row.getPlan() == null ? null : row.getPlan().getId();
+                if (dayPlanId != null) {
+                    touchedDayPlans.add(dayPlanId);
+                }
+            }
+        }
+        com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals totals =
+                new com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals(lineScheduleRepository,
+                        schedulingPlanRepository);
+        touchedDayPlans.forEach(id -> totals.recount(factoryId, id));
         // ⛔ 不改计划的 startTime / endTime: 影响分析按它们判重叠, 引擎自己的 generate 也不写它们;
         //    新的完成日以排程行 (LineSchedule) 为准, 交付风险闭环读的也是排程行。
         log.info("插单已排入: planId={}, 日期 {}~{}, 被挤计划 {} 个, 交期被突破 {} 个", insertPlan.getId(), day,
@@ -492,17 +591,17 @@ public class UrgentInsertScheduleService {
      */
     private void reopenCancelledDay(String factoryId, LocalDate day, SchedulingPlanRepository.DayPlanHead fresh,
                                     ProductionPlan insertPlan, Long userId, LocalDateTime now) {
-        String reason = trim("调度计划取消后重开，旧排程作废（紧急插单 " + insertPlan.getPlanNumber() + "）", 200);
+        String reason = trim(SchedulingPlanCrudServiceImpl.REOPEN_VOIDED_ROW_REASON
+                + "（紧急插单 " + insertPlan.getPlanNumber() + "）", 200);
         int voided = schedulingPlanRepository.voidPendingRowsOnReopen(fresh.getId(), reason);
         if (schedulingPlanRepository.countStartedRows(fresh.getId()) > 0) {
             throw new BusinessException(409, "插入首日 " + day + " 的调度计划已取消，但名下还有已开工的排程，无法重新启用")
                     .withCode("INSERT_SCHEDULE_CONTAINER_CLOSED")
                     .withHint("先处理这些排程或改选其他时段");
         }
+        // 留痕措辞与方法同缺口 18 (自动排程 / 手动新建的重开) 共用, 两边说法一致
         String notes = (fresh.getNotes() == null || fresh.getNotes().isBlank() ? "" : fresh.getNotes() + "\n")
-                + "[重开 " + now.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
-                + "] 原调度计划已取消，由紧急插单 " + insertPlan.getPlanNumber() + "（操作人 " + userId
-                + "）重开为草稿；作废没开工的旧排程 " + voided + " 条";
+                + SchedulingPlanCrudServiceImpl.reopenTrail(now, "紧急插单 " + insertPlan.getPlanNumber(), userId, voided, 0);
         if (schedulingPlanRepository.reopenCancelled(fresh.getId(), notes, now) != 1) {
             throw new BusinessException(409, "插入首日 " + day + " 的调度计划刚被改动，请重新预览")
                     .withCode("INSERT_SCHEDULE_CONTAINER_RACE")

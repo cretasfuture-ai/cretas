@@ -269,6 +269,77 @@ class CancelledDayPlanReopenJpaContractTest {
                 .isEqualTo(SchedulingPlan.PlanStatus.cancelled);
     }
 
+    /**
+     * 统一验收疑点 (F006 25f1cc9e, 12-20): 需求 200 袋、日产能 100 袋, 重开后只看到 1 条新排程。
+     * 查明不是截断: 引擎一个计划只落一条排程, 跨天的量写在这一条的按天分配里 (线上那条就是 12-20=100、12-21=100)。
+     * 这条钉住「重开的那天照样跨天排满」, 别被误改成只排当天。
+     */
+    @Test
+    void aReopenedDayStillSchedulesAcrossTwoDaysInOneRow() {
+        plan(F, "PP-C", "PLAN-C", "PT-A", "200");
+        SchedulingPlanDTO first = generator.generate(F, request("PP-C"), 7L);
+        crud.cancelPlan(F, first.getId(), "取消");
+        flushClear();
+
+        SchedulingPlanDTO again = generator.generate(F, request("PP-C"), 7L);
+
+        assertThat(again.getId()).isEqualTo(first.getId());
+        List<LineScheduleDTO> live = again.getLineSchedules().stream()
+                .filter(ls -> "pending".equals(ls.getStatus())).toList();
+        assertThat(live).as("一个计划一条排程").singleElement();
+        assertThat(days(live.get(0))).containsExactly(DAY + "=100", DAY.plusDays(1) + "=100");
+        assertThat(live.get(0).getPlannedStartTime()).isEqualTo(DAY.atStartOfDay());
+        assertThat(live.get(0).getPlannedEndTime()).isEqualTo(DAY.plusDays(1).atTime(23, 59));
+        assertThat(live.get(0).getPlannedQuantity()).isEqualTo(200);
+    }
+
+    /**
+     * 缺口 18 后续: 重开后批次数 / 派工人数按名下剩下的排程现算。
+     * 作废的没开工排程上原来派的人不再算; 保留的已开工排程和新排的算进批次数。
+     */
+    @Test
+    void reopenRecountsBatchesAndWorkersFromTheRowsThatAreLeft() {
+        SchedulingPlanDTO first = generator.generate(F, request("PP-A", "PP-B"), 7L);
+        List<LineSchedule> rows = lineScheduleRepository.findByPlanIdOrderBySequenceOrder(first.getId());
+        LineSchedule rowA = rows.stream().filter(ls -> "PP-A".equals(ls.getProductionPlanId())).findFirst().orElseThrow();
+        LineSchedule rowB = rows.stream().filter(ls -> "PP-B".equals(ls.getProductionPlanId())).findFirst().orElseThrow();
+        rowA.setStatus(LineSchedule.ScheduleStatus.in_progress);
+        rowA.setActualStartTime(DAY.atTime(8, 0));
+        lineScheduleRepository.saveAndFlush(rowA);
+        assign(rowA, 101L);
+        assign(rowB, 102L);
+        assign(rowB, 103L);
+        assign(rowB, 101L); // 同一个人派在两条上只算一个
+        SchedulingPlan stored = schedulingPlanRepository.findById(first.getId()).orElseThrow();
+        stored.setTotalBatches(2);
+        stored.setTotalWorkers(3); // 派工服务当时写下的人数
+        schedulingPlanRepository.saveAndFlush(stored);
+        crud.cancelPlan(F, first.getId(), "取消");
+        flushClear();
+        plan(F, "PP-C", "PLAN-C", "PT-B", "60");
+
+        generator.generate(F, request("PP-C"), 7L);
+        flushClear();
+
+        SchedulingPlan after = schedulingPlanRepository.findById(first.getId()).orElseThrow();
+        System.out.println("REOPEN_TOTALS batches=" + after.getTotalBatches() + " workers=" + after.getTotalWorkers());
+        assertThat(lineScheduleRepository.findById(rowB.getId()).orElseThrow().getStatus())
+                .as("前提: 产品乙那条没开工, 被作废").isEqualTo(LineSchedule.ScheduleStatus.cancelled);
+        assertThat(after.getTotalBatches()).as("保留的产品甲 + 新排的产品丙").isEqualTo(2);
+        assertThat(after.getTotalWorkers()).as("只剩产品甲那条上的 101; 作废那条上的 102 / 103 不算").isEqualTo(1);
+
+        // 手动新建重开同样现算: 再取消一次, 手工重建 (不带排程) → 只剩已开工的产品甲
+        crud.cancelPlan(F, first.getId(), "再取消");
+        flushClear();
+        CreateSchedulingPlanRequest req = new CreateSchedulingPlanRequest();
+        req.setPlanDate(DAY);
+        crud.createPlan(F, req, 7L);
+        flushClear();
+        SchedulingPlan manual = schedulingPlanRepository.findById(first.getId()).orElseThrow();
+        assertThat(manual.getTotalBatches()).isEqualTo(1);
+        assertThat(manual.getTotalWorkers()).isEqualTo(1);
+    }
+
     // ==================== 阴性: 活的和已完成的照旧 409 ====================
 
     @Test
@@ -338,6 +409,14 @@ class CancelledDayPlanReopenJpaContractTest {
     private void flushClear() {
         em.flush();
         em.clear();
+    }
+
+    private void assign(LineSchedule row, Long userId) {
+        com.cretas.aims.entity.WorkerAssignment a = new com.cretas.aims.entity.WorkerAssignment();
+        a.setSchedule(row);
+        a.setUserId(userId);
+        em.persist(a);
+        em.flush();
     }
 
     private static GenerateScheduleRequest request(String... planIds) {

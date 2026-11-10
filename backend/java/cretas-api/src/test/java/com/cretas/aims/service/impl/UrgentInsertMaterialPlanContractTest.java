@@ -117,7 +117,7 @@ class UrgentInsertMaterialPlanContractTest {
         previews = mock(InsertSlotPreviewRepository.class);
         impact = mock(ImpactAnalysisService.class);
         InsertSlot slot = InsertSlot.builder().id("S1").factoryId(F).productionLineId("L1")
-                .startTime(start).endTime(start.plusHours(2)).requiredWorkers(0).availableWorkers(0)
+                .startTime(start).endTime(start.plusHours(2)).requiredWorkers(2).availableWorkers(0)
                 .availableCapacity(BigDecimal.TEN).impactLevel("none").status("available").build();
         slot.setUpdatedAt(start.minusMinutes(5));
         when(slots.findByIdAndFactoryId("S1", F)).thenReturn(Optional.of(slot));
@@ -145,6 +145,9 @@ class UrgentInsertMaterialPlanContractTest {
         when(workers.check(anyString(), any(), any(), anyInt()))
                 .thenReturn(new WorkerShiftAvailabilityCheck.Result(true, 0, 0, Set.of(), "ok"));
         scheduler = UrgentInsertTestSupport.okScheduler();
+        // A2: 缺料拦插单读和开工缺料同一个工厂开关; 这里的缺料用例按「开关开、没填原因」验证拦截
+        com.cretas.aims.repository.FactorySettingsRepository settingsRepo = mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+        when(settingsRepo.findBlockStartOnOpenShortageByFactoryId(anyString())).thenReturn(true);
         users = mock(com.cretas.aims.repository.UserRepository.class);
         com.cretas.aims.entity.User operator = new com.cretas.aims.entity.User();
         operator.setFullName("测试人");
@@ -162,7 +165,8 @@ class UrgentInsertMaterialPlanContractTest {
                 Map.entry(WorkerShiftAvailabilityCheck.class, workers),
                 Map.entry(SchedulingResourceWriteLock.class, mock(SchedulingResourceWriteLock.class)),
                 Map.entry(UrgentInsertMaterialAssessor.class, assessor),
-                Map.entry(ObjectMapper.class, new ObjectMapper())));
+                Map.entry(ObjectMapper.class, new ObjectMapper()),
+                Map.entry(com.cretas.aims.repository.FactorySettingsRepository.class, settingsRepo)));
     }
 
     // ------------------------------------------------------------------ fixtures
@@ -634,7 +638,7 @@ class UrgentInsertMaterialPlanContractTest {
         when(plans.findById("PLAN-FORCED")).thenReturn(Optional.of(pending));
         when(plans.save(any(ProductionPlan.class))).thenAnswer(i -> i.getArgument(0));
         InsertSlot selected = InsertSlot.builder().id("S1").factoryId(F).productionLineId("L1")
-                .startTime(start).endTime(start.plusHours(2)).status("selected").build();
+                .startTime(start).endTime(start.plusHours(2)).requiredWorkers(2).status("selected").build();
         when(slots.findByFactoryIdAndStatus(F, "selected")).thenReturn(List.of(selected));
 
         service.approveForceInsert(F, "PLAN-FORCED", 9L, true, "同意");
@@ -760,7 +764,7 @@ class UrgentInsertMaterialPlanContractTest {
         when(plans.findById("PLAN-FORCED-W")).thenReturn(Optional.of(pending));
         when(plans.save(any(ProductionPlan.class))).thenAnswer(i -> i.getArgument(0));
         InsertSlot selected = InsertSlot.builder().id("S1").factoryId(F).productionLineId("L1")
-                .startTime(start).endTime(start.plusHours(2)).requiredWorkers(0).status("selected").build();
+                .startTime(start).endTime(start.plusHours(2)).requiredWorkers(2).status("selected").build();
         when(slots.findByFactoryIdAndStatus(F, "selected")).thenReturn(List.of(selected));
         when(workers.check(anyString(), any(), any(), anyInt()))
                 .thenReturn(WorkerShiftAvailabilityCheck.Result.noScheduleData(0));

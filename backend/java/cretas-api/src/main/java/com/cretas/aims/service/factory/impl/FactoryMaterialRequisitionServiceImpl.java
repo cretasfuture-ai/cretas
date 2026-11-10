@@ -368,11 +368,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             mr.getItems().add(item);
         }
 
-        appendSeasoningItems(factoryId, bomItems, mr, plannedRawInputKg);
+        String seasoningItemsStatus = appendSeasoningItems(factoryId, bomItems, mr, plannedRawInputKg);
 
         FactoryMaterialRequisition saved = repository.save(mr);
-        log.info("✅ 生成物料需求单: {} factory={} plan={} items={}",
-                saved.getRequisitionNo(), factoryId, productionPlanId, saved.getItems().size());
+        // @Transient: 写在 save 的返回值上 (merge 时返回的不是 mr 本身)。
+        saved.setSeasoningItemsStatus(seasoningItemsStatus);
+        log.info("✅ 生成物料需求单: {} factory={} plan={} items={} seasoningItems={}",
+                saved.getRequisitionNo(), factoryId, productionPlanId, saved.getItems().size(), seasoningItemsStatus);
         return saved;
     }
 
@@ -414,13 +416,27 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      * 留空「按实际领用」，⛔ 不猜、不编 0。{@link #plannedRawInputKg(FactoryMaterialRequisition)}
      * 只作兜底——在当前 BOM 编辑器强制 RAW.standardQuantity=null 的产品口径下几乎总是返回
      * null，保留只是为了不破坏万一存量 BOM 行确实带标准用量的旧数据。
+     *
+     * <h3>🔴 2026-11-10: 调料这一段读库失败不能把整张领料单回滚</h3>
+     * {@code generateFromPlan} 是写事务。调料表 / 物料档案的查询原来就在这个事务里跑:
+     * 仓库方法自带事务拦截器, 以「参与」方式加入调用方事务, 抛错时把<b>整个</b>事务标成 rollback-only ——
+     * 原来 {@code seasoningsOfPlanBom} 里的 catch 接住了异常也没用, 提交时 {@code UnexpectedRollbackException},
+     * 整单 500、主料行一起没了 (PostgreSQL 上更直接: 同一连接里一条语句报错, 后面的 INSERT 全部
+     * 「current transaction is aborted」)。与 #1558 详情接口的 L1 是同一个形状。
+     *
+     * <p>修法: 这一段的<b>全部读库</b> (调料表 + 每行的物料名 / 自备料 / 库存单位) 另起
+     * {@code REQUIRES_NEW} 只读事务 ({@link #resolveSeasoningRows}), 失败只回滚它自己; 外层写事务保留
+     * (单据要落库)。REQUIRES_NEW 里读到的实体出来就是 detached 的, 所以那边只带出值
+     * ({@link SeasoningRow}), 明细实体在外层事务里新建。
+     *
+     * <p>失败时<b>一行调料都不追加</b> (不留半截), 返回 {@code UNAVAILABLE} 并打 WARN ——
+     * ⛔ 不是「这个配方没有调料」, 也不编数量。调用方把它写到单据的 {@code seasoningItemsStatus} 上。
+     *
+     * @return {@link FactoryMaterialRequisitionService#SEASONING_ITEMS_OK} /
+     *         {@link FactoryMaterialRequisitionService#SEASONING_ITEMS_UNAVAILABLE}
      */
-    private void appendSeasoningItems(String factoryId, List<BomRecipeItem> bomItems,
-                                      FactoryMaterialRequisition mr, BigDecimal userPlannedRawInputKg) {
-        List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings = seasoningsOfPlanBom(bomItems);
-        if (seasonings.isEmpty()) {
-            return;
-        }
+    private String appendSeasoningItems(String factoryId, List<BomRecipeItem> bomItems,
+                                        FactoryMaterialRequisition mr, BigDecimal userPlannedRawInputKg) {
         String recipeId = bomItems.get(0).getRecipeId();
         java.util.Set<String> already = mr.getItems().stream()
                 .map(FactoryMaterialRequisitionItem::getMaterialTypeId)
@@ -431,51 +447,88 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // 弹窗里填的当场决定, 不是能反推的主数据 (owner 2026-09-01 拍板, 见上方类注释)。
         // 缺省 (null/非正数) 才退回按 RAW 明细行求和的兜底 plannedRawInputKg(mr) —— 在当前
         // BOM 编辑器强制 RAW.standardQuantity=null 的产品口径下, 兜底几乎总是返回 null。
+        // (纯计算, 不读库, 留在外层。)
         BigDecimal effectiveRawInputKg = (userPlannedRawInputKg != null && userPlannedRawInputKg.signum() > 0)
                 ? userPlannedRawInputKg
                 : plannedRawInputKg(mr);
-        int added = 0;
-        for (com.cretas.aims.entity.bom.BomSeasoningItem s : seasonings) {
+        List<SeasoningRow> rows;
+        try {
+            rows = inReadOnlyTx(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW,
+                    () -> resolveSeasoningRows(factoryId, bomItems, already, effectiveRawInputKg));
+        } catch (RuntimeException e) {
+            log.warn("[领料单] 调料读取失败, 领料单照常生成但未追加任何调料行, 需人工补调料 factory={} recipe={}: {}",
+                    factoryId, recipeId, e.toString());
+            return SEASONING_ITEMS_UNAVAILABLE;
+        }
+        for (SeasoningRow row : rows) {
+            FactoryMaterialRequisitionItem item = new FactoryMaterialRequisitionItem();
+            item.setRequisition(mr);
+            item.setMaterialTypeId(row.materialTypeId());
+            item.setMaterialName(row.materialName());
+            item.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
+            item.setSelfSupplied(row.selfSupplied());
+            item.setUnit(row.unit());
+            item.setRequiredQty(row.requiredQty());
+            // ⚠️ 明细行实体没有备注字段, 配方用量(g/kg)只进日志, ⛔ 不往 materialName 里塞
+            //    —— 那会污染所有显示这个名字的地方(打印单/列表/确认领料预填)。
+            mr.getItems().add(item);
+        }
+        if (!rows.isEmpty()) {
+            log.info("[领料单] 追加调料 {} 行 recipe={}", rows.size(), recipeId);
+        }
+        return SEASONING_ITEMS_OK;
+    }
+
+    /** 一条要追加的调料行 —— 只有值, 不带任何托管实体 (它产自 REQUIRES_NEW 事务, 出来就是 detached)。 */
+    private record SeasoningRow(String materialTypeId, String materialName, Boolean selfSupplied,
+                                String unit, BigDecimal requiredQty) { }
+
+    /**
+     * 调料行这一段的全部读库, 只在 {@link #appendSeasoningItems} 起的 REQUIRES_NEW 只读事务里调。
+     * 任一查询抛错就整段抛出 (由调用方降级为「不追加调料行」), ⛔ 不在这里吞掉。
+     *
+     * @param alreadyOnRequisition 主循环已经列上的物料 id (只读, 不改调用方的集合)
+     */
+    private List<SeasoningRow> resolveSeasoningRows(String factoryId, List<BomRecipeItem> bomItems,
+                                                    java.util.Set<String> alreadyOnRequisition,
+                                                    BigDecimal effectiveRawInputKg) {
+        java.util.Set<String> already = new java.util.HashSet<>(alreadyOnRequisition);
+        List<SeasoningRow> rows = new ArrayList<>();
+        for (com.cretas.aims.entity.bom.BomSeasoningItem s : seasoningsOfPlanBom(bomItems)) {
             String mtId = s.getMaterialTypeId();
             // ⚠️ 没绑物料档案的调料行只是配方文本, 领不出实物 —— 跳过, 不造一条领不动的行。
             if (mtId == null || mtId.isBlank() || already.contains(mtId)) {
                 continue;
             }
-            FactoryMaterialRequisitionItem item = new FactoryMaterialRequisitionItem();
-            item.setRequisition(mr);
-            item.setMaterialTypeId(mtId);
-            item.setMaterialName(resolveLiveMaterialName(mtId, s.getName()));
-            item.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
             // 自备料快照 (缺陷 47, owner 2026-09-02 裁定): 冰水/水/蒸汽/现场自制高汤等
             // 「没有库存一说」的调料 —— 这一行是本方法(appendSeasoningItems)存在的直接原因
             // (今晚冰水在⑤搅拌撞的墙)。true 时该行仍然出现(配方提醒), 但确认领料/调拨
             // 会跳过它, 不做批次查找、不因库存不足拦截 —— 见 autoAllocatePickedBatchesIfMissing
             // / relocatePickedMaterialToWorkshop / transferToFactory 的 unpickedPendingRows。
-            item.setSelfSupplied(isSelfSupplied(factoryId, mtId));
             String stockUnit = resolveMaterialStockUnit(factoryId, mtId);
-            item.setUnit(stockUnit != null ? stockUnit : "kg");
+            String unit = stockUnit != null ? stockUnit : "kg";
             // 🔴 2026-08-18 曾以为这里能自动算出来("投入 kg 是算得出来的"), 但那个前提
             //    (RAW 行有 requiredQty) 在本产品口径下不成立, 从未在生产环境真正生效过 ——
             //    一直是「按实际领用」, 见上方类注释。2026-09-01: 改吃调用方传入的人工填报值
             //    (effectiveRawInputKg)。真实代价: 80kg 投料 × 10g/kg 正确答案是 0.8kg,
             //    没有这个数字时操作员只能凭经验估, 实测填成了 1。
-            item.setRequiredQty(seasoningRequiredQty(s, effectiveRawInputKg, item.getUnit()));
-            // ⚠️ 明细行实体没有备注字段, 配方用量(g/kg)只进日志, ⛔ 不往 materialName 里塞
-            //    —— 那会污染所有显示这个名字的地方(打印单/列表/确认领料预填)。
-            mr.getItems().add(item);
+            rows.add(new SeasoningRow(mtId, resolveLiveMaterialName(mtId, s.getName()),
+                    isSelfSupplied(factoryId, mtId), unit, seasoningRequiredQty(s, effectiveRawInputKg, unit)));
             already.add(mtId);
-            added++;
         }
-        if (added > 0) {
-            log.info("[领料单] 追加调料 {} 行 recipe={}", added, recipeId);
-        }
+        return rows;
     }
 
     /**
-     * 计划 BOM 对应的调料表 —— 建单 ({@link #appendSeasoningItems}) 与确认领料的配比 ({@link #getDetailForPicking})
+     * 计划 BOM 对应的调料表 —— 建单 ({@link #resolveSeasoningRows}) 与确认领料的配比 ({@link #getDetailForPicking})
      * 共用这一份, ⛔ 不各自去找配方 (形态 D)。口径: 取 BOM 第一行所属配方的调料。
      *
-     * @return 永不为 null; 读不到 (无仓库 / 无配方 / 查询失败) 返回空 list, 调用方不拦单
+     * <p>两个调用方都在自己的 REQUIRES_NEW 只读事务里调它, 查询失败<b>直接抛出</b>, 由调用方降级并标出状态
+     * (建单 {@code seasoningItemsStatus=UNAVAILABLE} / 详情 {@code auxiliaryAutoCalc=UNAVAILABLE})。
+     * 2026-11-10 之前这里 catch 后返回空 list —— 那样「读失败」与「配方没有调料」无法区分, 且 catch 挡不住
+     * 仓库事务拦截器已经把事务标成 rollback-only。
+     *
+     * @return 永不为 null; 无仓库 / 无配方返回空 list
      */
     private List<com.cretas.aims.entity.bom.BomSeasoningItem> seasoningsOfPlanBom(List<BomRecipeItem> bomItems) {
         if (bomSeasoningItemRepository == null || bomItems == null || bomItems.isEmpty()) {
@@ -485,15 +538,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         if (recipeId == null || recipeId.isBlank()) {
             return List.of();
         }
-        try {
-            List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings =
-                    bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
-            return seasonings == null ? List.of() : seasonings;
-        } catch (RuntimeException e) {
-            // ⛔ 调料读不到不能把整张领料单拦掉 —— 原料那几行照样有用。
-            log.warn("[领料单] 调料读取失败 recipe={}: {}", recipeId, e.getMessage());
-            return List.of();
-        }
+        List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings =
+                bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
+        return seasonings == null ? List.of() : seasonings;
     }
 
     /**
@@ -1677,6 +1724,16 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         //   已给其报工消耗行打戳 → 残留 #2 (跨计划投料把结单族未结行留在他单 WKS 批次 → 本守卫误 count 永久 409)
         //   随结单族结单即闭合。此处 isInterimSettlePlan 收窄门控退化为「冗余而安全」(结单族行结单后非 null, 天然
         //   不被 countUnsettledConsumptionByBatchIds 统计), 保留以防结单前跨计划窗口 + 语义清晰, 本 PR 不移除。
+        // C2 (2026-11-10): 先按批次 id 排序锁住本单全部生产仓批次, 再数未结消耗、再按现存退料。
+        //   ① 撤销小结在同一把行锁下还回用量并清消耗戳; 不先锁, 它可能在「数完 = 0」与按现存退料之间提交
+        //      → 退走的料里含有又变回未结的消耗。
+        //   ② 锁序与撤回报工 / 撤销小结 / 小结一致 (都按批次 id 排序先锁), 同一张单有多个生产仓批次时不互相死锁。
+        //   下方 computeWorkshopRemaining / drawDown 的 ForUpdate 都是已持有的锁。
+        if (materialBatchRepository != null) {
+            for (String wksId : new TreeSet<>(collectWorkshopBatchIds(mr))) {
+                materialBatchRepository.findByIdAndFactoryIdForUpdate(wksId, factoryId);
+            }
+        }
         if (isInterimSettlePlan(factoryId, mr.getProductionPlanId())) {
             List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
             if (!workshopBatchIds.isEmpty() && materialConsumptionRepository != null) {
@@ -1770,6 +1827,110 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         mr.setStatus(Status.CANCELLED);
         mr.setRemarks((mr.getRemarks() == null ? "" : mr.getRemarks() + " | ") + "取消原因: " + reason);
         return repository.save(mr);
+    }
+
+    /**
+     * C1 生产仓幽灵库存 (排查报告 2026-11-10, Steve 裁定 B: 撤回时直接退回原料仓, 不拦撤回)。
+     *
+     * <p>场景: 领料 100 → App 报工在生产仓批次占 30 → 关单按可用 70 退回原料仓, 生产仓批次「用掉 70、占着 30、
+     * 已用完」→ 撤回报工放掉占用 30。不做本步, 生产仓批次就是「可用 30、状态已用完」: 重新报工要求可用状态,
+     * 领料单已关不能再关/取消, 这 30 没有任何出路, 原料仓却少了 30。
+     *
+     * <p>做法与关单退料<b>同一条路</b> ({@link #restoreBatchUsedQuantity} + {@link #writeMaterialReturnTrace} +
+     * {@link #writeProductionMaterialReturn}), 生产仓侧照关单那样划平。领料行回写: 实用 −qty、退回 +qty。
+     */
+    @Override
+    @Transactional
+    public BigDecimal returnToSourceIfRequisitionClosed(String factoryId, String workshopBatchId, BigDecimal qty,
+                                                        Long operatorId, String reasonRef) {
+        if (qty == null || qty.signum() <= 0 || workshopBatchId == null || workshopBatchId.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+        MaterialBatch wks = materialBatchRepository.findByIdAndFactoryIdForUpdate(workshopBatchId, factoryId)
+                .orElse(null);
+        if (wks == null || !"MATERIAL_REQUISITION".equals(wks.getSourceDocType())
+                || wks.getSourceDocId() == null || wks.getSourceDocId().isBlank()) {
+            return BigDecimal.ZERO; // 不是领料单物化的生产仓批次 (原料仓批次 / 在制批次): 不归本路径管
+        }
+        // 锁序: 生产仓批次 (上一行, 调用方也已锁) → 领料单 → 原料批次; 关单也是先锁生产仓批次再动原料批次。
+        FactoryMaterialRequisition mr = repository.findByIdAndFactoryIdForUpdate(wks.getSourceDocId(), factoryId)
+                .orElse(null);
+        if (mr == null || mr.getStatus() != Status.CLOSED) {
+            return BigDecimal.ZERO; // 未关单: 料留在生产仓, 之后关单会按生产仓现存退回 (原路径)
+        }
+
+        FactoryMaterialRequisitionItem item = null;
+        Map<String, Object> row = null;
+        for (FactoryMaterialRequisitionItem candidate : mr.getItems()) {
+            if (candidate.getBatchNumbers() == null) {
+                continue;
+            }
+            for (Map<String, Object> candidateRow : candidate.getBatchNumbers()) {
+                Object wksId = candidateRow == null ? null : candidateRow.get("workshopBatchId");
+                if (wksId != null && workshopBatchId.equals(wksId.toString())) {
+                    item = candidate;
+                    row = candidateRow;
+                    break;
+                }
+            }
+            if (item != null) {
+                break;
+            }
+        }
+        if (item == null) {
+            // 生产仓批次说它来自这张单, 单上却找不到它 ⇒ 数据矛盾。⛔ 不悄悄把料留在生产仓 (那正是要修的幽灵库存)。
+            throw new BusinessException(409, String.format(
+                    "撤回失败: 生产仓批次 %s 来自已关单的领料单 %s, 但单上找不到对应的领料行, 无法把 %s 退回原料仓",
+                    wks.getBatchNumber(), mr.getRequisitionNo(), qty.stripTrailingZeros().toPlainString()))
+                    .withCode("REVERSAL_CLOSED_REQUISITION_ROW_MISSING")
+                    .withHint("请联系管理员核对该领料单的批次明细后再撤回")
+                    .withHintTarget(mr.getId())
+                    .withSeverity("BLOCKING");
+        }
+        BigDecimal workshopAvailable = wks.getCurrentQuantity();
+        BigDecimal consumed = item.getConsumedQty() != null ? item.getConsumedQty() : BigDecimal.ZERO;
+        if (workshopAvailable.compareTo(qty) < 0 || consumed.compareTo(qty) < 0) {
+            throw new BusinessException(409, String.format(
+                    "撤回失败: 已关单领料单 %s 物料 %s 要退回原料仓 %s, 但生产仓批次可用 %s、领料单记的实用 %s, 账对不上",
+                    mr.getRequisitionNo(), materialLabel(item), qty.stripTrailingZeros().toPlainString(),
+                    workshopAvailable.stripTrailingZeros().toPlainString(),
+                    consumed.stripTrailingZeros().toPlainString()))
+                    .withCode("REVERSAL_CLOSED_REQUISITION_QTY_MISMATCH")
+                    .withHint("请联系管理员核对该领料单与生产仓批次的数量后再撤回")
+                    .withHintTarget(mr.getId())
+                    .withSeverity("BLOCKING");
+        }
+
+        // 原料仓: 源批次已用量减回 + 负数退料流水 + 已执行的生产退料单 (与关单退料同一组写入)
+        String sourceBatchId = resolveBatchId(factoryId, row);
+        MaterialBatch source = materialBatchRepository.findByIdAndFactoryIdForUpdate(sourceBatchId, factoryId)
+                .orElseThrow(() -> new BusinessException(409, String.format(
+                        "撤回失败: 已关单领料单 %s 的原料批次 %s 不存在, 无法把 %s 退回原料仓",
+                        mr.getRequisitionNo(), sourceBatchId, qty.stripTrailingZeros().toPlainString()))
+                        .withCode("PRODUCTION_MATERIAL_RETURN_BATCH_NOT_FOUND")
+                        .withHint("请联系管理员核对领料批次后再撤回")
+                        .withHintTarget(mr.getId())
+                        .withSeverity("BLOCKING"));
+        restoreBatchUsedQuantity(factoryId, source, item, qty);
+        writeMaterialReturnTrace(factoryId, mr, item, source, qty, operatorId, reasonRef);
+        writeProductionMaterialReturn(factoryId, mr, item, source.getId(), qty);
+
+        // 生产仓: 照关单那样划平 (已用 +qty), 归零即已用完
+        BigDecimal wksUsed = wks.getUsedQuantity() != null ? wks.getUsedQuantity() : BigDecimal.ZERO;
+        wks.setUsedQuantity(wksUsed.add(qty));
+        if (wks.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+            wks.setStatus(MaterialBatchStatus.DEPLETED);
+        }
+        materialBatchRepository.save(wks);
+
+        // 领料行: 这 qty 不再是「实用」, 而是「退回」
+        item.setConsumedQty(consumed.subtract(qty));
+        item.setReturnedQty((item.getReturnedQty() != null ? item.getReturnedQty() : BigDecimal.ZERO).add(qty));
+        repository.save(mr);
+        log.info("C1 撤回后退回原料仓: 领料单 {} 物料 {} 生产仓批次 {} → 原料批次 {} 退回 {} ({})",
+                mr.getRequisitionNo(), materialLabel(item), wks.getId(), source.getId(),
+                qty.toPlainString(), reasonRef);
+        return qty;
     }
 
     // ---------- helpers ----------
@@ -1880,7 +2041,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                             .withHintTarget(item.getId())
                             .withSeverity("BLOCKING"));
             restoreBatchUsedQuantity(factoryId, batch, item, returnQty);
-            writeMaterialReturnTrace(factoryId, requisition, item, batch, returnQty, operatorId);
+            writeMaterialReturnTrace(factoryId, requisition, item, batch, returnQty, operatorId, null);
             writeProductionMaterialReturn(factoryId, requisition, item, batch.getId(), returnQty);
             remaining = remaining.subtract(returnQty);
         }
@@ -2030,7 +2191,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                                           FactoryMaterialRequisitionItem item,
                                           MaterialBatch batch,
                                           BigDecimal returnQty,
-                                          Long operatorId) {
+                                          Long operatorId,
+                                          String reasonRef) {
         BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
         MaterialConsumption trace = new MaterialConsumption();
         trace.setFactoryId(factoryId);
@@ -2046,7 +2208,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // ⛔ 保持裸字面量: VoucherConsumptionSourceCoverageContractTest 按 setSourceType("...") 扫写入点做凭证裁定;
         //    值必须等于 SOURCE_MATERIAL_RETURN (取消计划判据靠它排除退料)。
         trace.setSourceType("MATERIAL_RETURN");
-        trace.setNotes("production material return: requisition=" + requisition.getId() + ", item=" + item.getId());
+        trace.setNotes("production material return: requisition=" + requisition.getId() + ", item=" + item.getId()
+                + (reasonRef == null || reasonRef.isBlank() ? "" : ", reason=" + reasonRef));
         materialConsumptionRepository.save(trace);
     }
 

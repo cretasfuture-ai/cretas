@@ -49,7 +49,22 @@ const decision = ref<QcReleaseDecision>('RELEASED');
 const conclusion = ref('');
 
 function blockedWhat(item: QcPendingItem): string {
-  return item.targetType === 'FINISHED_GOODS' ? '不能分配、不能发货' : '下道工序不能领用';
+  if (item.targetType === 'FINISHED_GOODS') return '不能分配、不能发货';
+  if (item.targetType === 'RAW_MATERIAL_BATCH') return '原料不能领用投产';
+  return '下道工序不能领用';
+}
+
+/** 放行之后这批能做什么 (对话框提示和成功提示共用) */
+function afterRelease(item: QcPendingItem): string {
+  if (item.targetType === 'FINISHED_GOODS') return '分配发货';
+  if (item.targetType === 'RAW_MATERIAL_BATCH') return '领用投产';
+  return '被下道领用';
+}
+
+function tagType(item: QcPendingItem): 'success' | 'warning' | 'info' {
+  if (item.targetType === 'FINISHED_GOODS') return 'success';
+  if (item.targetType === 'RAW_MATERIAL_BATCH') return 'warning';
+  return 'info';
 }
 
 function qty(item: { quantity: number | null; unit: string | null }): string {
@@ -125,7 +140,7 @@ async function submitDecision() {
     });
     if (res.success) {
       ElMessage.success(decision.value === 'RELEASED'
-        ? `已放行 ${current.value.batchNumber ?? ''}，现在可以${current.value.targetType === 'FINISHED_GOODS' ? '分配发货' : '被下道领用'}`
+        ? `已放行 ${current.value.batchNumber ?? ''}，现在可以${afterRelease(current.value)}`
         : `已判定不合格 ${current.value.batchNumber ?? ''}`);
       dialogVisible.value = false;
       await Promise.all([loadPending(), loadRecords()]);
@@ -156,6 +171,7 @@ onMounted(() => {
         <h2 class="title">质检放行</h2>
         <p class="subtitle">
           产品设置为「需检」、或批次有 CCP 偏离时，产出先进入待检：半成品待检时下道不能领用，成品待检时不能分配和发货。
+          收货时处于「质检中」的原料批次也在这里放行，放行后才能领用投产。
         </p>
       </div>
       <el-button :icon="Refresh" :loading="loading || recordsLoading" @click="loadPending(); loadRecords(); timeoutTabRef?.reload()">刷新</el-button>
@@ -167,12 +183,12 @@ onMounted(() => {
         <el-table v-loading="loading" :data="pending" stripe empty-text="暂无待检批次" data-testid="qc-pending-table">
           <el-table-column label="形态" width="110">
             <template #default="{ row }">
-              <el-tag :type="row.targetType === 'FINISHED_GOODS' ? 'success' : 'info'">{{ row.formLabel }}</el-tag>
+              <el-tag :type="tagType(row)">{{ row.formLabel }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="batchNumber" label="批次号" min-width="200" show-overflow-tooltip />
-          <el-table-column label="产品" min-width="160" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.productName || row.productTypeId || '—' }}</template>
+          <el-table-column label="产品 / 物料" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.productName || row.productTypeId || row.materialTypeId || '—' }}</template>
           </el-table-column>
           <el-table-column label="数量" width="130" align="right">
             <template #default="{ row }">{{ qty(row) }}</template>
@@ -190,7 +206,7 @@ onMounted(() => {
               <span v-else class="muted">无</span>
             </template>
           </el-table-column>
-          <el-table-column prop="producedAt" label="产出时间" min-width="160" />
+          <el-table-column prop="producedAt" label="产出 / 入库时间" min-width="160" />
           <el-table-column label="操作" width="120" align="center" fixed="right">
             <template #default="{ row }">
               <el-button type="primary" size="small" :data-testid="`qc-decide-${row.targetId}`" @click="openDecision(row)">
@@ -234,7 +250,7 @@ onMounted(() => {
       <template v-if="current">
         <el-descriptions :column="1" border size="small" class="mb">
           <el-descriptions-item label="批次号">{{ current.batchNumber || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="产品">{{ current.productName || current.productTypeId || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="产品 / 物料">{{ current.productName || current.productTypeId || current.materialTypeId || '—' }}</el-descriptions-item>
           <el-descriptions-item label="形态 / 数量">{{ current.formLabel }} · {{ qty(current) }}</el-descriptions-item>
         </el-descriptions>
         <el-alert
@@ -254,7 +270,9 @@ onMounted(() => {
             </el-radio-group>
             <div class="form-tip">
               {{ decision === 'RELEASED'
-                ? (current.targetType === 'FINISHED_GOODS' ? '放行后可以分配批次、发货' : '放行后下道工序可以领用')
+                ? (current.targetType === 'FINISHED_GOODS' ? '放行后可以分配批次、发货'
+                  : current.targetType === 'RAW_MATERIAL_BATCH' ? '放行后原料可以领用投产，缺料单会按新库存重算'
+                    : '放行后下道工序可以领用')
                 : '判定不合格后这批不能再领用/发货，请按不良品流程处置' }}
             </div>
           </el-form-item>

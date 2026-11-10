@@ -141,6 +141,23 @@ class ProductionPlanRepositoryQueryValidationTest {
                 .extracting(ProductionPlan::getId)
                 .isEqualTo(plan.getId());
 
+        // D-S411-03: 这张 PENDING 计划没有预计完成日 (与订单没填交期时财审自动生成的 PP-AUTO-* 同形)。
+        // 排程候选原来只走 BETWEEN, 对 NULL 恒不命中 ⇒ 它被静默丢掉; 新查询必须把它找回来。
+        assertThat(productionPlanRepository.findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
+                        factory.getId(), ProductionPlanStatus.PENDING,
+                        LocalDate.of(2000, 1, 1), LocalDate.of(2100, 1, 1)))
+                .as("BETWEEN 对没有日期的计划恒不命中 —— 这正是需要单独补查的原因")
+                .extracting(ProductionPlan::getId)
+                .doesNotContain(plan.getId());
+        assertThat(productionPlanRepository.findByFactoryIdAndStatusAndExpectedCompletionDateIsNull(
+                        factory.getId(), ProductionPlanStatus.PENDING))
+                .extracting(ProductionPlan::getId)
+                .containsExactly(plan.getId());
+        assertThat(productionPlanRepository.findByFactoryIdAndStatusAndExpectedCompletionDateIsNull(
+                        factory.getId(), ProductionPlanStatus.IN_PROGRESS))
+                .as("阴性对照: 状态条件生效, 非待处理的计划不进排程候选")
+                .isEmpty();
+
         // 🔴 2026-09-07：这里原本还有一条「同一 (factory_id, created_by, client_request_id) 再插一条必须被
         // DB 拒」的断言（database unique constraint is the final concurrent-create guard）。删掉了，因为
         // **H2 表达不了 prod 上那个键的形状**，而不是因为那条规则不成立。

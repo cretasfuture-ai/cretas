@@ -238,6 +238,60 @@ class UrgentInsertScheduleContractTest {
         assertThat(b.exceedsDue()).as("新完成日晚于计划交期").isTrue();
     }
 
+    /**
+     * 缺口 18 后续: 插单落库后, 动过的每个日调度计划都按名下排程重算批次数 / 派工人数 ——
+     * 插单挂的那天, 以及被挤计划所在的那几天 (合并时可能作废了多余排程)。只写这两列, 不整行保存调度计划。
+     */
+    @Test
+    void everyTouchedDayPlanHasItsBatchAndWorkerTotalsRecounted() {
+        happyEngine();
+        rowA.setPlanId("SP-DAY-A");
+        rowB.setPlanId("SP-DAY-B");
+        when(schedulingPlans.saveAndFlush(any(SchedulingPlan.class))).thenAnswer(i -> {
+            SchedulingPlan p = i.getArgument(0);
+            p.setId("SP-NEW");
+            return p;
+        });
+        when(lineSchedules.countByPlanIdAndStatusNot(eq("SP-NEW"), any())).thenReturn(1L);
+        when(lineSchedules.countByPlanIdAndStatusNot(eq("SP-DAY-A"), any())).thenReturn(4L);
+        when(lineSchedules.countByPlanIdAndStatusNot(eq("SP-DAY-B"), any())).thenReturn(2L);
+        when(lineSchedules.countDistinctWorkersOnLiveRows(eq(F), eq("SP-DAY-A"), any())).thenReturn(3L);
+        when(schedulingPlans.lockStatusForUpdate(anyString(), eq(F))).thenReturn(Optional.of("draft"));
+
+        service.apply(F, slot, insert, null, 7L);
+
+        // 先锁调度计划行再数再写 (落库前按 id 顺序先锁一遍, 重算时再锁一次是重入)
+        var order = org.mockito.Mockito.inOrder(schedulingPlans, lineSchedules);
+        order.verify(schedulingPlans, org.mockito.Mockito.atLeastOnce()).lockStatusForUpdate("SP-DAY-A", F);
+        order.verify(lineSchedules).countByPlanIdAndStatusNot("SP-DAY-A", LineSchedule.ScheduleStatus.cancelled);
+        order.verify(schedulingPlans).writeTotals(F, "SP-DAY-A", 4, 3);
+        verify(schedulingPlans).writeTotals(F, "SP-NEW", 1, 0);
+        verify(schedulingPlans).writeTotals(F, "SP-DAY-A", 4, 3);
+        verify(schedulingPlans).writeTotals(F, "SP-DAY-B", 2, 0);
+        verify(lineSchedules).countByPlanIdAndStatusNot("SP-DAY-A", LineSchedule.ScheduleStatus.cancelled);
+        verify(lineSchedules).countDistinctWorkersOnLiveRows(F, "SP-DAY-A", LineSchedule.ScheduleStatus.cancelled);
+        verify(schedulingPlans, never()).save(any(SchedulingPlan.class));
+    }
+
+    /**
+     * 被挤的计划在预览之后、落库之前被取消 (取消已作废了它的排程): 落库前锁住生产计划读到已取消,
+     * 整体 409, 不按旧副本把排程行写回 pending, 也不建插单排程。
+     */
+    @Test
+    void aMovedPlanCancelledBeforeTheWriteRejectsTheInsertAndWritesNoRow() {
+        happyEngine();
+        when(plans.lockStatusForUpdate(anyString(), eq(F))).thenReturn(Optional.of("PENDING"));
+        when(plans.lockStatusForUpdate("PLAN-B", F)).thenReturn(Optional.of("CANCELLED"));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getMessage()).contains("PB-1").contains("取消");
+                });
+        verify(lineSchedules, never()).save(any(LineSchedule.class));
+        verify(schedulingPlans, never()).lockDayPlan(any(), any());
+    }
+
     @Test
     void onlyOrdersOfPlansThatMovedLaterAreRegisteredWithTheDeliveryRiskLoop() {
         happyEngine();
@@ -414,7 +468,8 @@ class UrgentInsertScheduleContractTest {
 
         Proposal preview = service.dryRun(F, slot, insert);
         assertThat(preview.ok()).as("取消的日调度计划不再把插单堵死").isTrue();
-        assertThat(preview.warnings()).anyMatch(w -> w.contains("重新启用"));
+        assertThat(preview.warnings()).anyMatch(w -> w.equals(
+                com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl.reopenWarning(1, 0)));
         verify(schedulingPlans, never()).save(any());   // 预览不落库
 
         service.apply(F, slot, insert, preview.fingerprint(), 7L);
@@ -467,7 +522,13 @@ class UrgentInsertScheduleContractTest {
         ArgumentCaptor<String> notes = ArgumentCaptor.forClass(String.class);
         verify(schedulingPlans).reopenCancelled(eq("SP-CANCELLED"), notes.capture(), any());
         assertThat(notes.getValue()).startsWith("原备注\n[重开 ")
-                .contains("紧急插单 URGENT-1").contains("操作人 7").contains("作废没开工的旧排程 1 条");
+                .contains("原调度计划已取消，由紧急插单 URGENT-1重开为草稿（操作人 7）；作废没开工的旧排程 1 条");
+        // 与缺口 18 的重开留痕是同一个方法生成的 (去掉时间戳后逐字一致)
+        String line = notes.getValue().substring(notes.getValue().indexOf('\n') + 1);
+        String shared = com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl
+                .reopenTrail(java.time.LocalDateTime.now(), "紧急插单 URGENT-1", 7L, 1, 0);
+        String stamp = "^\\[重开 [0-9-]+ [0-9:]+\\]";
+        assertThat(line.replaceFirst(stamp, "")).isEqualTo(shared.replaceFirst(stamp, ""));
     }
 
     @Test

@@ -90,6 +90,21 @@ class LineCapacityEquipmentCheckContractTest {
         assertThat(LineCapacityEquipmentCheck.status(capacity("50", "箱", null))).isEqualTo("MISSING");
     }
 
+    /** D-S4-03-MSG: 单位是「袋」时不能说「没有单位」, 要说产线产能不支持这个单位; 真没填时仍说没有单位。 */
+    @Test
+    void unsupportedUnitSaysSoInsteadOfClaimingTheUnitIsMissing() {
+        line("L1", "卤制线", ProductionLine.LineStatus.active);
+        config("L1", null, "100", CapacityUnit.KG);
+
+        ResourceCheckResult bag = capacity("50", "袋", null);
+        assertThat(LineCapacityEquipmentCheck.status(bag)).isEqualTo("MISSING");
+        assertThat(bag.getMessage()).contains("「袋」").doesNotContain("没有单位");
+
+        ResourceCheckResult none = capacity("50", " ", null);
+        assertThat(LineCapacityEquipmentCheck.status(none)).isEqualTo("MISSING");
+        assertThat(none.getMessage()).contains("没有单位");
+    }
+
     @Test
     void noConfigAtAllIsMissingNotTheOld500KgDefault() {
         line("L1", "卤制线", ProductionLine.LineStatus.active);
@@ -98,6 +113,43 @@ class LineCapacityEquipmentCheckContractTest {
 
         assertThat(LineCapacityEquipmentCheck.status(r)).isEqualTo("MISSING");
         assertThat(r.getMessage()).startsWith("产能未验证").contains("kg");
+    }
+
+    private void futureConfig(String lineId, String productTypeId, CapacityUnit unit, LocalDateTime effectiveFrom) {
+        ProductionLineCapacityConfig c = new ProductionLineCapacityConfig();
+        c.setFactoryId(F);
+        c.setProductionLineId(lineId);
+        c.setProductTypeId(productTypeId);
+        c.setCapacityPerHour(new BigDecimal("100"));
+        c.setCapacityUnit(unit);
+        c.setEffectiveFrom(effectiveFrom);
+        when(configs.findByFactoryId(F)).thenReturn(List.of(c));
+    }
+
+    @Test
+    void aConfigThatOnlyStartsLaterIsStillMissingButSaysWhenItTakesEffect() {
+        // 验收 2026-11-10: 「清掉再重配」把 effective_from 设成当前时间, 早于它的时段读成「没配产能」
+        line("L1", "卤制线", ProductionLine.LineStatus.active);
+        futureConfig("L1", PT, CapacityUnit.KG, START.plusDays(1));
+
+        ResourceCheckResult r = capacity("50", "KG", "L1");
+
+        assertThat(LineCapacityEquipmentCheck.status(r)).isEqualTo("MISSING");
+        assertThat(r.getMessage()).startsWith("产能未验证").contains("才生效").contains("2026-11-04 08:00")
+                .contains("晚于本时段开始 2026-11-03 08:00");
+    }
+
+    @Test
+    void aLaterConfigOfAnotherProductUnitOrLineIsNotMentioned() {
+        line("L1", "卤制线", ProductionLine.LineStatus.active);
+        futureConfig("L1", "PT-OTHER", CapacityUnit.KG, START.plusDays(1));
+        assertThat(capacity("50", "KG", "L1").getMessage()).doesNotContain("才生效");
+
+        futureConfig("L1", PT, CapacityUnit.PIECE, START.plusDays(1));      // 单位不同
+        assertThat(capacity("50", "KG", "L1").getMessage()).doesNotContain("才生效");
+
+        futureConfig("L2", PT, CapacityUnit.KG, START.plusDays(1));         // 不是指定的产线
+        assertThat(capacity("50", "KG", "L1").getMessage()).doesNotContain("才生效");
     }
 
     @Test
