@@ -604,8 +604,11 @@ async function approveRefundRequest() {
     if (!isCurrentRefundContext(context)) return;
     refundSubmitting.value = true;
     refundError.value = '';
-    await approveReturnRefund(context.factoryId, context.returnOrderId,
-      self ? '' : value.trim(), self ? value.trim() : undefined);
+    if (self) {
+      await approveReturnRefund(context.factoryId, context.returnOrderId, '', value.trim());
+    } else {
+      await approveReturnRefund(context.factoryId, context.returnOrderId, value.trim());
+    }
     if (!isCurrentRefundContext(context)) return;
     refundPromptOpen.value = false;
     refundSubmitting.value = false;
@@ -657,8 +660,12 @@ async function submitRefundPaid() {
   refundSubmitting.value = true;
   refundError.value = '';
   try {
-    await markReturnRefundPaid(context.factoryId, context.returnOrderId, refundPaymentMethod.value, paymentReference, remark,
-      selfPaid ? refundSelfPaidReason.value.trim() : undefined);
+    if (selfPaid) {
+      await markReturnRefundPaid(context.factoryId, context.returnOrderId, refundPaymentMethod.value, paymentReference, remark,
+        refundSelfPaidReason.value.trim());
+    } else {
+      await markReturnRefundPaid(context.factoryId, context.returnOrderId, refundPaymentMethod.value, paymentReference, remark);
+    }
     if (!isCurrentRefundContext(context)) return;
     refundPayVisible.value = false;
     refundSubmitting.value = false;
