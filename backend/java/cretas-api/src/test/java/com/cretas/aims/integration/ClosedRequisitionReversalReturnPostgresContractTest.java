@@ -1,6 +1,8 @@
 package com.cretas.aims.integration;
 
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.ProductionReport;
@@ -12,8 +14,13 @@ import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisitionItem;
+import com.cretas.aims.entity.enums.PlanSourceType;
+import com.cretas.aims.entity.processentry.ProcessSheetRow;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.mapper.ProductionPlanMapper;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
@@ -38,7 +45,10 @@ import com.cretas.aims.service.reversal.impl.ReportReversalServiceImpl;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.wip.ProductFamilyResolver;
 import com.cretas.aims.service.wip.impl.WipInventoryServiceImpl;
+import com.cretas.aims.service.yield.InterimSettleReversalService;
+import com.cretas.aims.service.yield.InterimSettleService;
 import com.cretas.aims.utils.ExcelUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManagerFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,6 +76,7 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -127,7 +138,9 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
     @Import({ProductionPlanServiceImpl.class, WipInventoryServiceImpl.class, SecondaryPlanFeedService.class,
             SettlementSemiStockingService.class, FinishedGoodsFeedServiceImpl.class,
             ReportReversalServiceImpl.class, ReversalConsumptionCleanupService.class,
-            FactoryMaterialRequisitionServiceImpl.class})
+            FactoryMaterialRequisitionServiceImpl.class,
+            com.cretas.aims.service.yield.impl.InterimSettleServiceImpl.class,
+            com.cretas.aims.service.yield.impl.InterimSettleReversalServiceImpl.class})
     static class Runtime {
         /** 生产上它按 @Qualifier("primaryEntityManagerFactory") 取 EntityManager; 测试上下文只有一个 EMF。 */
         @Bean
@@ -180,6 +193,12 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
     @Autowired ProductionReportRepository reports;
     @Autowired MaterialBatchRepository materialBatches;
     @Autowired FactoryMaterialRequisitionRepository requisitions;
+    @Autowired MaterialConsumptionRepository consumptions;
+    @Autowired ProcessSheetRowRepository rows;
+    @Autowired InterimSettleService interimSettle;
+    @Autowired InterimSettleReversalService undoInterim;
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private TransactionTemplate tx;
 
@@ -195,6 +214,9 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
         when(warehouseResolver.resolveWorkshopId(any())).thenReturn(WORKSHOP_WH);
         when(warehouseResolver.resolveFinishedGoodsId(any())).thenReturn("FG-WH");
         when(ownershipGuard.ofProductionBatch(any(), any())).thenReturn(IntermediateOwnershipGuard.Owner.COMPANY);
+        when(ownershipGuard.ofClerkAnchor(any(), any())).thenReturn(IntermediateOwnershipGuard.Owner.COMPANY);
+        when(clerkProcessEntryService.resolveLaborRate(any(), any())).thenReturn(BigDecimal.ZERO);
+        when(clerkProcessEntryService.computeLaborCost(any(), any())).thenReturn(BigDecimal.ZERO);
     }
 
     /** 领料 100 已搬到生产仓、报工占了 30 的现场。 */
@@ -203,8 +225,15 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
     }
 
     private Fixture issuedAndReported(String reportedKg) {
+        Fixture f = issued(false);
+        appReport(f, reportedKg);
+        return f;
+    }
+
+    /** 领料 100 已搬到生产仓 (ISSUED); byStock = 存货生产计划 (走小结)。 */
+    private Fixture issued(boolean byStock) {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
-        Fixture f = tx.execute(state -> {
+        return tx.execute(state -> {
             ProductionPlan plan = new ProductionPlan();
             plan.setId("PLAN-C1-" + suffix);
             plan.setFactoryId(F);
@@ -214,6 +243,9 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
             plan.setPlannedUnit("kg");
             plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
             plan.setCreatedBy(OPERATOR);
+            if (byStock) {
+                plan.setSourceType(PlanSourceType.SAFETY_STOCK);
+            }
             plans.save(plan);
 
             ProductionBatch batch = new ProductionBatch();
@@ -224,6 +256,7 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
             batch.setUnit("kg");
             batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
             batch.setProductionPlanId(plan.getId());
+            batch.setBatchType("REGULAR");
             batch = batches.save(batch);
 
             // 原料仓源批次: 收货 100, 确认领料时整批搬去生产仓 (已用 100)
@@ -267,7 +300,10 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
             return new Fixture(plan.getId(), batch.getId(), mr.getId(), mr.getItems().get(0).getId(),
                     source.getId(), workshop.getId());
         });
-        // App 报工: 报工行与生产仓占用同一事务 (真实占用服务)
+    }
+
+    /** App 报工: 报工行与生产仓占用同一事务 (真实占用服务)。 */
+    private void appReport(Fixture f, String reportedKg) {
         tx.executeWithoutResult(state -> {
             ProductionReport report = new ProductionReport();
             report.setFactoryId(F);
@@ -287,7 +323,6 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
             ProductionReport saved = reports.save(report);
             reservations.reserveForReport(F, saved);
         });
-        return f;
     }
 
     private MaterialBatch materialBatch(String batchNumber, String warehouseId, String receipt, String used,
@@ -456,9 +491,11 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
 
                 Callable<Throwable> closeCall = () -> attempt(() -> close(f));
                 Callable<Throwable> reverseCall = () -> attempt(() -> reversalService.executeReversal(pending.getId(), F));
+                // 先发的那个确实排进锁队列之后再发第二个 ⇒ 放闸后谁先拿到锁是确定的, 两种先后各跑一半
                 Future<Throwable> first = pool.submit(round % 2 == 0 ? closeCall : reverseCall);
+                awaitLockWaiters(1);
                 Future<Throwable> second = pool.submit(round % 2 == 0 ? reverseCall : closeCall);
-                Thread.sleep(300); // 两个事务都已走到生产仓批次的行锁上
+                awaitLockWaiters(2);
                 release.countDown();
                 gate.get(30, TimeUnit.SECONDS);
                 Throwable e1 = first.get(60, TimeUnit.SECONDS);
@@ -475,6 +512,241 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    // =====================================================================================
+    // C2 (Steve 2026-11-10 裁定 B): 存货生产 领料 → 报工 → 小结 → 关单 → 撤销小结 → 撤回报工
+    //   以前撤销小结在关单后 409 INTERIM_REVERSE_REQUISITION_CLOSED, 撤回报工又要求先撤销小结 ⇒ 死路。
+    //   现在撤销小结照常还回生产仓, 落在已关单领料单上的那部分直接退回原料仓并留退料流水。
+    // =====================================================================================
+
+    /** 存货生产: 成品道录入行 + 报工写的未结原料消耗 (生产仓批次, 小结时才扣)。 */
+    private Fixture byStockIssuedAndReported(String reportedKg) {
+        Fixture f = issued(true);
+        tx.executeWithoutResult(state -> {
+            ProductionBatch fin = batches.findById(f.batchId()).orElseThrow();
+            rows.save(finishedRow(f.planId(), fin));
+            MaterialConsumption mc = new MaterialConsumption();
+            mc.setFactoryId(F);
+            mc.setProductionPlanId(f.planId());
+            mc.setProductionBatchId(f.batchId());
+            mc.setBatchId(f.workshopBatchId());
+            mc.setQuantity(new BigDecimal(reportedKg));
+            mc.setUnitPrice(new BigDecimal("10.00"));
+            mc.setTotalCost(new BigDecimal(reportedKg).multiply(new BigDecimal("10.00")));
+            mc.setConsumptionTime(LocalDateTime.now());
+            mc.setConsumedAt(LocalDateTime.now());
+            mc.setRecordedBy(OPERATOR);
+            mc.setMaterialTypeId("MT-1");
+            mc.setSourceType("RAW_MATERIAL");
+            consumptions.save(mc);
+        });
+        return f;
+    }
+
+    private static ProcessSheetRow finishedRow(String planId, ProductionBatch batch) {
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setClientRowId("c2-" + batch.getId());
+        req.setProcessCode("step1");
+        req.setProcessOrder(1);
+        req.setProductTypeId("FG-1");
+        req.setFinished(true);
+        req.setOutputQuantity(new BigDecimal("30"));
+        req.setUnit("kg");
+        req.setUpstreamSources(new ArrayList<>());
+        ProcessSheetRow row = new ProcessSheetRow();
+        row.setFactoryId(F);
+        row.setPlanId(planId);
+        row.setProcessCode("step1");
+        row.setProcessOrder(1);
+        row.setClientRowId(req.getClientRowId());
+        row.setBatchId(batch.getId());
+        row.setBatchNumber(batch.getBatchNumber());
+        row.setRowStatus("SAVED");
+        row.setSubmissionStatus(ProcessSheetRow.SUBMISSION_SUBMITTED);
+        try {
+            row.setRowPayload(JSON.writeValueAsString(req));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+        return row;
+    }
+
+    private int liveUnsettledConsumptions(Fixture f) {
+        return jdbc.queryForObject("select count(*) from material_consumptions where batch_id = ? "
+                + "and interim_settled_at is null and quantity > 0 and deleted_at is null",
+                Integer.class, f.workshopBatchId());
+    }
+
+    private int liveFinishedGoods(Fixture f) {
+        return jdbc.queryForObject("select count(*) from finished_goods_batches where production_plan_id = ? "
+                + "and status = 'AVAILABLE' and deleted_at is null", Integer.class, f.planId());
+    }
+
+    private int interimReturnRows(Fixture f) {
+        return jdbc.queryForObject("select count(*) from material_consumptions where batch_id = ? "
+                + "and source_type = 'MATERIAL_RETURN' and notes like '%reason=interim-reverse:%'",
+                Integer.class, f.sourceBatchId());
+    }
+
+    private String requisitionStatus(Fixture f) {
+        return jdbc.queryForObject("select status from factory_material_requisitions where id = ?",
+                String.class, f.requisitionId());
+    }
+
+    @Test
+    void byStock_settleCloseUndoReverse_returnsToRawWarehouseWithoutPhantomStock() {
+        Fixture f = byStockIssuedAndReported("30");
+        interimSettle.interimSettle(F, f.planId(), OPERATOR);
+        assertThat(available(f.workshopBatchId())).as("小结扣了生产仓 30").isEqualByComparingTo("70");
+        assertThat(liveFinishedGoods(f)).as("小结建了成品批").isEqualTo(1);
+
+        close(f);
+        assertThat(available(f.sourceBatchId())).as("关单退回 70").isEqualByComparingTo("70");
+        assertThat(available(f.workshopBatchId())).as("关单把生产仓划平").isEqualByComparingTo("0");
+
+        Map<String, Object> undo = undoInterim.reverseInterimSettle(F, f.planId(), null, OPERATOR);
+
+        assertThat((BigDecimal) undo.get("returnedToRawWarehouse")).as("撤销小结: 30 退回原料仓")
+                .isEqualByComparingTo("30");
+        assertThat(available(f.workshopBatchId())).as("生产仓批次不出现幻库存").isEqualByComparingTo("0");
+        assertThat(batchRow(f.workshopBatchId()).get("status")).isEqualTo(MaterialBatchStatus.DEPLETED.name());
+        assertThat(available(f.sourceBatchId())).as("原料仓收回全部 100").isEqualByComparingTo("100");
+        assertThat(interimReturnRows(f)).as("撤销小结补了一笔退料流水").isEqualTo(1);
+        assertThat(liveFinishedGoods(f)).as("小结建的成品撤掉").isZero();
+        assertLedgerBalanced(f, "撤销小结后");
+        Map<String, Object> item = itemRow(f);
+        assertThat((BigDecimal) item.get("consumed_qty")).as("领料行实用归 0").isEqualByComparingTo("0");
+        assertThat((BigDecimal) item.get("returned_qty")).isEqualByComparingTo("100");
+
+        ReportReversalLog log = reversalService.submitReversal(F, f.batchId(), OPERATOR, "报工错了");
+        if (log.getStatus() != ReportReversalLog.ReversalStatus.DONE) {
+            reversalService.executeReversal(log.getId(), F);
+        }
+        assertThat(liveUnsettledConsumptions(f)).as("撤回报工清掉这次报工的原料用量").isZero();
+        assertThat(jdbc.queryForObject("select count(*) from process_sheet_rows where plan_id = ? "
+                + "and deleted_at is null", Integer.class, f.planId())).as("录入行撤掉").isZero();
+        assertThat(available(f.workshopBatchId())).as("撤回后生产仓仍是 0").isEqualByComparingTo("0");
+        assertThat(available(f.sourceBatchId())).as("撤回后原料仓仍是 100, 不重复退").isEqualByComparingTo("100");
+        assertLedgerBalanced(f, "撤回报工后");
+    }
+
+    @Test
+    void byStock_undoBeforeClose_keepsMaterialInWorkshop() {
+        Fixture f = byStockIssuedAndReported("30");
+        interimSettle.interimSettle(F, f.planId(), OPERATOR);
+
+        Map<String, Object> undo = undoInterim.reverseInterimSettle(F, f.planId(), null, OPERATOR);
+
+        assertThat((BigDecimal) undo.get("returnedToRawWarehouse")).as("未关单: 不退原料仓").isEqualByComparingTo("0");
+        assertThat(available(f.workshopBatchId())).as("料回到生产仓").isEqualByComparingTo("100");
+        assertThat(available(f.sourceBatchId())).isEqualByComparingTo("0");
+        assertThat(returnLedger(f)).isEqualByComparingTo("0");
+        assertThat(liveUnsettledConsumptions(f)).as("消耗恢复成未结").isEqualTo(1);
+    }
+
+    @Test
+    void byStock_concurrentUndoAndClose_neverReturnTwiceNorCloseOverUnsettled() throws Exception {
+        int rounds = 6;
+        int closedFirst = 0;
+        int undoneFirst = 0;
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        try {
+            for (int round = 0; round < rounds; round++) {
+                Fixture f = byStockIssuedAndReported("30");
+                interimSettle.interimSettle(F, f.planId(), OPERATOR);
+
+                CountDownLatch gateHeld = new CountDownLatch(1);
+                CountDownLatch release = new CountDownLatch(1);
+                Future<?> gate = pool.submit(() -> {
+                    try (Connection c = dataSource.getConnection()) {
+                        c.setAutoCommit(false);
+                        try (PreparedStatement ps = c.prepareStatement(
+                                "select id from material_batches where id = ? for update")) {
+                            ps.setString(1, f.workshopBatchId());
+                            ps.executeQuery();
+                        }
+                        gateHeld.countDown();
+                        release.await(30, TimeUnit.SECONDS);
+                        c.rollback();
+                    }
+                    return null;
+                });
+                assertThat(gateHeld.await(30, TimeUnit.SECONDS)).isTrue();
+
+                Callable<Throwable> closeCall = () -> attempt(() -> close(f));
+                Callable<Throwable> undoCall = () -> attempt(
+                        () -> undoInterim.reverseInterimSettle(F, f.planId(), null, OPERATOR));
+                Future<Throwable> closeResult;
+                Future<Throwable> undoResult;
+                // 先发的那个确实排进锁队列之后再发第二个 ⇒ 放闸后谁先拿到锁是确定的, 两种先后各跑一半
+                if (round % 2 == 0) {
+                    closeResult = pool.submit(closeCall);
+                    awaitLockWaiters(1);
+                    undoResult = pool.submit(undoCall);
+                } else {
+                    undoResult = pool.submit(undoCall);
+                    awaitLockWaiters(1);
+                    closeResult = pool.submit(closeCall);
+                }
+                awaitLockWaiters(2);
+                release.countDown();
+                gate.get(30, TimeUnit.SECONDS);
+                Throwable closeError = closeResult.get(60, TimeUnit.SECONDS);
+                Throwable undoError = undoResult.get(60, TimeUnit.SECONDS);
+
+                String step = "第 " + round + " 轮";
+                assertThat(undoError).as(step + " 撤销小结总能成功").isNull();
+                assertThat(liveFinishedGoods(f)).as(step + " 小结已撤").isZero();
+                if (closeError == null) {
+                    closedFirst++;
+                    // 关单先拿到锁: 退 70; 之后撤销小结把 30 退回原料仓
+                    assertThat(requisitionStatus(f)).isEqualTo("CLOSED");
+                    assertThat(available(f.sourceBatchId())).as(step + " 原料仓恰好收回 100").isEqualByComparingTo("100");
+                    assertThat(available(f.workshopBatchId())).as(step + " 生产仓归零").isEqualByComparingTo("0");
+                    // 关单必须是在「已小结」的状态上做的: 退 70, 剩下 30 由撤销小结退回。
+                    // ⛔ 若撤销小结先提交、关单却没被防呆拦住, 关单会按生产仓现存把 100 全退掉 (退料流水只有关单那条),
+                    //    而那 30 的消耗又变回未结 —— 这正是关单-前-小结 防呆被绕过。
+                    assertThat(interimReturnRows(f))
+                            .as(step + " 30 必须由撤销小结退回 (不是关单在未结消耗之上一把退 100)")
+                            .isEqualTo(1);
+                    assertThat(jdbc.queryForObject("select coalesce(sum(-quantity), 0) from material_consumptions "
+                            + "where batch_id = ? and source_type = 'MATERIAL_RETURN' and notes not like '%reason=%'",
+                            BigDecimal.class, f.sourceBatchId()))
+                            .as(step + " 关单只退了 70").isEqualByComparingTo("70");
+                } else {
+                    undoneFirst++;
+                    // 撤销小结先拿到锁: 消耗变回未结, 关单被「先小结」防呆拦下, 什么都没退
+                    assertThat(closeError).isInstanceOf(BusinessException.class);
+                    assertThat(((BusinessException) closeError).getErrorCode())
+                            .isEqualTo("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLE");
+                    assertThat(requisitionStatus(f)).isEqualTo("ISSUED");
+                    assertThat(available(f.sourceBatchId())).isEqualByComparingTo("0");
+                    assertThat(available(f.workshopBatchId())).isEqualByComparingTo("100");
+                }
+                assertLedgerBalanced(f, step);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        System.out.printf("C2 并发读数: 关单先 %d 轮 / 撤销小结先 %d 轮%n", closedFirst, undoneFirst);
+        // 两种先后都必须真的发生过, 否则这条测试只量到了一半 (首版就是 6/0)
+        assertThat(closedFirst).as("关单先拿到锁的轮数").isPositive();
+        assertThat(undoneFirst).as("撤销小结先拿到锁的轮数").isPositive();
+    }
+
+    /** 等到至少 n 个会话在行锁上排队 (wait_event_type = 'Lock'), 最多 30 秒。 */
+    private void awaitLockWaiters(int n) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < deadline) {
+            Integer waiting = jdbc.queryForObject("select count(*) from pg_stat_activity "
+                    + "where datname = current_database() and wait_event_type = 'Lock'", Integer.class);
+            if (waiting != null && waiting >= n) {
+                return;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("30 秒内没有 " + n + " 个会话排到生产仓批次的行锁上");
     }
 
     private static Throwable attempt(Runnable work) {

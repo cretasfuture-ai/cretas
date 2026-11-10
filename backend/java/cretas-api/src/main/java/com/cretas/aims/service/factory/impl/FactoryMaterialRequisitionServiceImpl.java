@@ -1726,6 +1726,14 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         //   不被 countUnsettledConsumptionByBatchIds 统计), 保留以防结单前跨计划窗口 + 语义清晰, 本 PR 不移除。
         if (isInterimSettlePlan(factoryId, mr.getProductionPlanId())) {
             List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
+            // C2 (2026-11-10): 先锁住这些生产仓批次再数未结消耗。撤销小结在同一把行锁下还回用量并清消耗戳;
+            //   不先锁, 撤销小结可能在「数完 = 0」与下方按现存退料之间提交 → 退走的料里含有又变回未结的消耗。
+            //   锁序与下方 computeWorkshopRemaining 相同 (按领料行记录顺序)。
+            if (materialBatchRepository != null) {
+                for (String wksId : new LinkedHashSet<>(workshopBatchIds)) {
+                    materialBatchRepository.findByIdAndFactoryIdForUpdate(wksId, factoryId);
+                }
+            }
             if (!workshopBatchIds.isEmpty() && materialConsumptionRepository != null) {
                 long unsettled = materialConsumptionRepository
                         .countUnsettledConsumptionByBatchIds(factoryId, workshopBatchIds);
