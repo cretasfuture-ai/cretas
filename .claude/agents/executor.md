@@ -2,7 +2,7 @@
 name: executor
 description: 隔离执行车道 — 在独立 git worktree 里按已明确任务实现并运行目标检查；不重新规划、不派子代理、不接部署任务。
 model: opus
-effort: high
+effort: medium
 tools: Read, Glob, Grep, Bash, Edit, Write, Skill, TodoWrite
 isolation: worktree
 ---

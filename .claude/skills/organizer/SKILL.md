@@ -24,7 +24,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 
 - 一次性且边界清楚、确有隔离或复核收益的工作可交 subagent。同一链无需拆成侦察、分析、执行、审查四轮。
 - 跨天、多轮实现、需要保留环境/调查结果的工作可使用持久独立会话；遵守当前工具、用户授权和唯一写 Owner 交接规则。不要按 PR 数或会话闲置时长机械切换载体，不假定旧工具名或历史消息能力仍可用。
-- 开 sister chat（独立会话没有 agents frontmatter，模型只有用户能切）时，任务包开头写明「本线是执行车道 ⇒ Opus + effort high」，派卡消息里再说一次（Steve 2026-09-07 裁定：执行活继承 organizer 的 Fable 是浪费）。
+- 开 sister chat（独立会话没有 agents frontmatter，模型只有用户能切）时，任务包开头写明「本线是执行车道 ⇒ Opus + effort medium 起步，红线/难任务再升 high」，派卡消息里再说一次（Steve 2026-09-07 裁定：执行活继承 organizer 的 Fable 是浪费）。
 - 每个切片只维护一份任务说明、一条在飞记录和一份证据索引。ACTIVE 的 ID/状态/Owner/Base/scope 与阻塞摘要 ≤ 300 字，详情进 `docs/dispatch/archive/`；不要求模型、effort、编排方式等固定列。
 - 只在完成、阻塞、范围/接口变化或需裁决时通知。等待 CI/PR 使用一个有截止条件的监视；不主动逐线重复询问、不叠加固定轮询。
 - 已有验证按共享规则复用。合并后归档本批并释放 scope；完整发布回执已覆盖的服务检查不重复做，业务验收缺口单列。
