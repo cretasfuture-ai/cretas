@@ -103,6 +103,8 @@ export interface DispositionResultDTO {
   message: string;
   nextSteps: string;
   newBatchStatus?: string | null;
+  /** 处置执行后本计划仍留在隔离里的成品批次数 (Q2/Q4); 原因写在 message 里。 */
+  finishedGoodsHeld?: number | null;
   approvalInitiated: boolean;
   approvalRequestId?: string | null;
   auditLogId: string;
@@ -150,6 +152,8 @@ export interface DispositionApprovalResultDTO {
   approvedAt: string;
   executionStatus?: string | null;
   newBatchStatus?: string | null;
+  /** 批准后执行处置, 本计划仍留在隔离里的成品批次数 (Q2/Q4); 原因写在 message 里。 */
+  finishedGoodsHeld?: number | null;
   message: string;
 }
 
@@ -180,6 +184,38 @@ export async function executeDisposition(
 ): Promise<DispositionResultDTO> {
   const res = await post<DispositionResultDTO>(`${basePath(factoryId)}/execute`, payload);
   if (!res.success || !res.data) throw new Error(res.message || '执行处置失败');
+  return res.data;
+}
+
+/** 已放行、但所在计划还有成品在隔离的生产批次 (Owner 2026-11-09). */
+export interface HeldGoodsBatchDTO {
+  productionBatchId: number;
+  batchNumber: string;
+  productionPlanId: string;
+  productName?: string | null;
+  qualityStatus: string;
+  /** 这次申请就能放的成品批数 (报废 / 召回 / 判废等永远不放的不算). */
+  releasableNow: number;
+  /** 因分不清归属卡住的成品批数: 补齐血缘后再申请才放得出. */
+  unclearOwnership: number;
+  unclearReason?: string | null;
+}
+
+/** 查不到就报错, ⛔ 不把失败当成「没有」悄悄藏掉页签. */
+export async function listHeldGoodsBatches(factoryId: string): Promise<HeldGoodsBatchDTO[]> {
+  const res = await get<HeldGoodsBatchDTO[]>(`${basePath(factoryId)}/held-goods-batches`);
+  if (!res.success || !Array.isArray(res.data)) throw new Error(res.message || '查询成品隔离情况失败');
+  return res.data;
+}
+
+/**
+ * 已放行批次申请放行隔离成品: 后端按现在的数据重跑计划级放行 (归属 / 召回 / 超时判废 / 未解除批次都重查),
+ * 一个人决定, 操作人取登录身份. 仍有成品留下时 finishedGoodsHeld > 0, 原因在 message 里.
+ */
+export async function releaseHeldGoods(factoryId: string, productionBatchId: number): Promise<DispositionResultDTO> {
+  const res = await post<DispositionResultDTO>(
+    `${basePath(factoryId)}/batches/${productionBatchId}/release-held-goods`, {});
+  if (!res.success || !res.data) throw new Error(res.message || '申请放行成品失败');
   return res.data;
 }
 

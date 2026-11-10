@@ -131,6 +131,52 @@ class FactoryCatalogToolBehaviorContractTest {
                 any(), any(), any());
     }
 
+    /** #1548 review finding 4: 模型不能代人确认包装规格换算 (否则留痕会记成登录用户确认的)。 */
+    @Test
+    void explicitAllocationRejectsModelSuppliedPackagingConfirmation() {
+        SalesDeliveryBatchAllocationService allocation = mock(SalesDeliveryBatchAllocationService.class);
+        TestAllocationTool tool = explicitAllocationTool(allocation);
+        Map<String, Object> confirmed = new java.util.LinkedHashMap<>(Map.of(
+                "finishedGoodsBatchId", "FG-1", "allocatedQty", 5, "packagingConversionConfirmed", true));
+
+        assertThatThrownBy(() -> tool.invoke("F1", Map.of("deliveryItemId", "12", "allocationMode", "EXPLICIT",
+                "allocations", List.of(confirmed)), Map.of("userId", 7L)))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getMessage()).contains("AI 不能代为确认");
+                    assertThat(e.getActionHint()).contains("分配批次");
+                });
+        verifyNoInteractions(allocation);
+    }
+
+    @Test
+    void explicitAllocationWithoutConfirmationStillAllocates() {
+        for (Map<String, Object> row : List.<Map<String, Object>>of(
+                Map.of("finishedGoodsBatchId", "FG-1", "allocatedQty", 5, "packagingConversionConfirmed", false),
+                Map.of("finishedGoodsBatchId", "FG-1", "allocatedQty", 5))) {
+            SalesDeliveryBatchAllocationService allocation = mock(SalesDeliveryBatchAllocationService.class);
+            TestAllocationTool tool = explicitAllocationTool(allocation);
+
+            var result = tool.invoke("F1", Map.of("deliveryItemId", "12", "allocationMode", "EXPLICIT",
+                    "allocations", List.of(row)), Map.of("userId", 7L));
+
+            assertThat(result).containsEntry("status", "ALLOCATED");
+            verify(allocation).allocateBatchesAsUser(eq("F1"), eq("12"), anyList(), eq(7L));
+        }
+    }
+
+    private static TestAllocationTool explicitAllocationTool(SalesDeliveryBatchAllocationService allocation) {
+        SalesDeliveryItemRepository repository = mock(SalesDeliveryItemRepository.class);
+        SalesDeliveryItem item = new SalesDeliveryItem();
+        item.setProductTypeId("PRODUCT-A");
+        item.setDeliveredQuantity(new BigDecimal("5"));
+        item.setUnit("kg");
+        when(repository.findByIdAndDeliveryRecordFactoryId(12L, "F1")).thenReturn(Optional.of(item));
+        TestAllocationTool tool = new TestAllocationTool(allocation, repository);
+        ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper());
+        return tool;
+    }
+
     @Test
     void allocationKeepsDistinctInventoryCountUnitsWithTheRealUnitContract() {
         for (String[] pair : java.util.List.of(new String[]{"只", "件"}, new String[]{"个", "件"}, new String[]{"只", "个"})) {

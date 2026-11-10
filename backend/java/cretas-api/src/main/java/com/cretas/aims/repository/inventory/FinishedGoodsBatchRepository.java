@@ -523,6 +523,26 @@ public interface FinishedGoodsBatchRepository extends JpaRepository<FinishedGood
             @Param("planId") String planId);
 
     /**
+     * 同上, 加行锁 (按 id 排序, 并发方按同一顺序拿锁)。质检处置放行成品用: 先锁再读, 判断用的是锁后的状态,
+     * 与召回冻结 / 工序时限判废 (它们都先锁成品行再写) 串行 (Q4, 2026-11-09)。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId " +
+            "AND b.productionPlanId = :planId AND b.deletedAt IS NULL ORDER BY b.id")
+    List<FinishedGoodsBatch> findByFactoryIdAndProductionPlanIdForUpdate(
+            @Param("factoryId") String factoryId,
+            @Param("planId") String planId);
+
+    /**
+     * 本厂挂在生产计划上、还在隔离 (DEFECTIVE) 的成品 (Owner 2026-11-09: 已放行批次申请放行隔离成品的入口只给这些计划)。
+     * 退货子批在调用方按 isReturnChild 排除 (它不随生产批次放行)。
+     */
+    @Query("SELECT b FROM FinishedGoodsBatch b WHERE b.factoryId = :factoryId "
+            + "AND b.status = 'DEFECTIVE' AND b.productionPlanId IS NOT NULL AND b.deletedAt IS NULL "
+            + "ORDER BY b.productionPlanId, b.id")
+    List<FinishedGoodsBatch> findQuarantinedPlanGoods(@Param("factoryId") String factoryId);
+
+    /**
      * 分仓库存查询 (PR #309 B2=B, 2026-05-11 spec).
      * factory_id × warehouse_id composite index (idx_finished_batch_warehouse).
      * 默认 @Where(deleted_at IS NULL) 已在 entity 起作用。

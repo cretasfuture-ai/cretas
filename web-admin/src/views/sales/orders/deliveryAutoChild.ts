@@ -1,6 +1,7 @@
 import { post } from '@/api/request';
 import { toDateString } from '@/utils/dateFormat';
 import type { TableRow } from '@/types/api';
+import { allocationNoticesOf, type ShipmentAllocationNotice } from './shipmentAllocationNotices';
 
 /**
  * 缺陷40 (2026-09-04, 硬约束 8 补丁): Issue #740「一次性全量发运」母单创建后要自动建立唯一
@@ -37,6 +38,11 @@ export interface AutoFullChildOptions {
   logisticsCompany: string;
   trackingNumber: string;
   deliveryAddress: string;
+  /**
+   * Q3: 子发运单建成了, 但有的行没能自动分配批次 (例如只剩规格不一致的批次, 要人确认换算) 时回调,
+   * 调用方把原因告诉用户; 不传就不提示 (子单本身仍然建成)。
+   */
+  onAllocationNotices?: (notices: ShipmentAllocationNotice[]) => void;
 }
 
 /**
@@ -59,7 +65,7 @@ export async function createAutoFullChildShipment(options: AutoFullChildOptions)
     return false;
   }
 
-  await post(`/${options.factoryId}/sales/deliveries/${options.masterId}/shipments`, {
+  const res = await post(`/${options.factoryId}/sales/deliveries/${options.masterId}/shipments`, {
     idempotencyKey: `web-full-shipment-${options.masterId}`,
     plannedShipmentDate: toDateString(new Date()),
     deliveryMethod: options.deliveryMethod,
@@ -69,6 +75,10 @@ export async function createAutoFullChildShipment(options: AutoFullChildOptions)
     deliveryAddress: options.deliveryAddress,
     items: childItems,
   });
+  const notices = allocationNoticesOf(res?.data);
+  if (notices.length > 0 && options.onAllocationNotices) {
+    options.onAllocationNotices(notices);
+  }
   return true;
 }
 
