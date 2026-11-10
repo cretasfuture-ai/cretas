@@ -368,11 +368,13 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             mr.getItems().add(item);
         }
 
-        appendSeasoningItems(factoryId, bomItems, mr, plannedRawInputKg);
+        String seasoningItemsStatus = appendSeasoningItems(factoryId, bomItems, mr, plannedRawInputKg);
 
         FactoryMaterialRequisition saved = repository.save(mr);
-        log.info("✅ 生成物料需求单: {} factory={} plan={} items={}",
-                saved.getRequisitionNo(), factoryId, productionPlanId, saved.getItems().size());
+        // @Transient: 写在 save 的返回值上 (merge 时返回的不是 mr 本身)。
+        saved.setSeasoningItemsStatus(seasoningItemsStatus);
+        log.info("✅ 生成物料需求单: {} factory={} plan={} items={} seasoningItems={}",
+                saved.getRequisitionNo(), factoryId, productionPlanId, saved.getItems().size(), seasoningItemsStatus);
         return saved;
     }
 
@@ -414,13 +416,27 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      * 留空「按实际领用」，⛔ 不猜、不编 0。{@link #plannedRawInputKg(FactoryMaterialRequisition)}
      * 只作兜底——在当前 BOM 编辑器强制 RAW.standardQuantity=null 的产品口径下几乎总是返回
      * null，保留只是为了不破坏万一存量 BOM 行确实带标准用量的旧数据。
+     *
+     * <h3>🔴 2026-11-10: 调料这一段读库失败不能把整张领料单回滚</h3>
+     * {@code generateFromPlan} 是写事务。调料表 / 物料档案的查询原来就在这个事务里跑:
+     * 仓库方法自带事务拦截器, 以「参与」方式加入调用方事务, 抛错时把<b>整个</b>事务标成 rollback-only ——
+     * 原来 {@code seasoningsOfPlanBom} 里的 catch 接住了异常也没用, 提交时 {@code UnexpectedRollbackException},
+     * 整单 500、主料行一起没了 (PostgreSQL 上更直接: 同一连接里一条语句报错, 后面的 INSERT 全部
+     * 「current transaction is aborted」)。与 #1558 详情接口的 L1 是同一个形状。
+     *
+     * <p>修法: 这一段的<b>全部读库</b> (调料表 + 每行的物料名 / 自备料 / 库存单位) 另起
+     * {@code REQUIRES_NEW} 只读事务 ({@link #resolveSeasoningRows}), 失败只回滚它自己; 外层写事务保留
+     * (单据要落库)。REQUIRES_NEW 里读到的实体出来就是 detached 的, 所以那边只带出值
+     * ({@link SeasoningRow}), 明细实体在外层事务里新建。
+     *
+     * <p>失败时<b>一行调料都不追加</b> (不留半截), 返回 {@code UNAVAILABLE} 并打 WARN ——
+     * ⛔ 不是「这个配方没有调料」, 也不编数量。调用方把它写到单据的 {@code seasoningItemsStatus} 上。
+     *
+     * @return {@link FactoryMaterialRequisitionService#SEASONING_ITEMS_OK} /
+     *         {@link FactoryMaterialRequisitionService#SEASONING_ITEMS_UNAVAILABLE}
      */
-    private void appendSeasoningItems(String factoryId, List<BomRecipeItem> bomItems,
-                                      FactoryMaterialRequisition mr, BigDecimal userPlannedRawInputKg) {
-        List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings = seasoningsOfPlanBom(bomItems);
-        if (seasonings.isEmpty()) {
-            return;
-        }
+    private String appendSeasoningItems(String factoryId, List<BomRecipeItem> bomItems,
+                                        FactoryMaterialRequisition mr, BigDecimal userPlannedRawInputKg) {
         String recipeId = bomItems.get(0).getRecipeId();
         java.util.Set<String> already = mr.getItems().stream()
                 .map(FactoryMaterialRequisitionItem::getMaterialTypeId)
@@ -431,51 +447,88 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // 弹窗里填的当场决定, 不是能反推的主数据 (owner 2026-09-01 拍板, 见上方类注释)。
         // 缺省 (null/非正数) 才退回按 RAW 明细行求和的兜底 plannedRawInputKg(mr) —— 在当前
         // BOM 编辑器强制 RAW.standardQuantity=null 的产品口径下, 兜底几乎总是返回 null。
+        // (纯计算, 不读库, 留在外层。)
         BigDecimal effectiveRawInputKg = (userPlannedRawInputKg != null && userPlannedRawInputKg.signum() > 0)
                 ? userPlannedRawInputKg
                 : plannedRawInputKg(mr);
-        int added = 0;
-        for (com.cretas.aims.entity.bom.BomSeasoningItem s : seasonings) {
+        List<SeasoningRow> rows;
+        try {
+            rows = inReadOnlyTx(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW,
+                    () -> resolveSeasoningRows(factoryId, bomItems, already, effectiveRawInputKg));
+        } catch (RuntimeException e) {
+            log.warn("[领料单] 调料读取失败, 领料单照常生成但未追加任何调料行, 需人工补调料 factory={} recipe={}: {}",
+                    factoryId, recipeId, e.toString());
+            return SEASONING_ITEMS_UNAVAILABLE;
+        }
+        for (SeasoningRow row : rows) {
+            FactoryMaterialRequisitionItem item = new FactoryMaterialRequisitionItem();
+            item.setRequisition(mr);
+            item.setMaterialTypeId(row.materialTypeId());
+            item.setMaterialName(row.materialName());
+            item.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
+            item.setSelfSupplied(row.selfSupplied());
+            item.setUnit(row.unit());
+            item.setRequiredQty(row.requiredQty());
+            // ⚠️ 明细行实体没有备注字段, 配方用量(g/kg)只进日志, ⛔ 不往 materialName 里塞
+            //    —— 那会污染所有显示这个名字的地方(打印单/列表/确认领料预填)。
+            mr.getItems().add(item);
+        }
+        if (!rows.isEmpty()) {
+            log.info("[领料单] 追加调料 {} 行 recipe={}", rows.size(), recipeId);
+        }
+        return SEASONING_ITEMS_OK;
+    }
+
+    /** 一条要追加的调料行 —— 只有值, 不带任何托管实体 (它产自 REQUIRES_NEW 事务, 出来就是 detached)。 */
+    private record SeasoningRow(String materialTypeId, String materialName, Boolean selfSupplied,
+                                String unit, BigDecimal requiredQty) { }
+
+    /**
+     * 调料行这一段的全部读库, 只在 {@link #appendSeasoningItems} 起的 REQUIRES_NEW 只读事务里调。
+     * 任一查询抛错就整段抛出 (由调用方降级为「不追加调料行」), ⛔ 不在这里吞掉。
+     *
+     * @param alreadyOnRequisition 主循环已经列上的物料 id (只读, 不改调用方的集合)
+     */
+    private List<SeasoningRow> resolveSeasoningRows(String factoryId, List<BomRecipeItem> bomItems,
+                                                    java.util.Set<String> alreadyOnRequisition,
+                                                    BigDecimal effectiveRawInputKg) {
+        java.util.Set<String> already = new java.util.HashSet<>(alreadyOnRequisition);
+        List<SeasoningRow> rows = new ArrayList<>();
+        for (com.cretas.aims.entity.bom.BomSeasoningItem s : seasoningsOfPlanBom(bomItems)) {
             String mtId = s.getMaterialTypeId();
             // ⚠️ 没绑物料档案的调料行只是配方文本, 领不出实物 —— 跳过, 不造一条领不动的行。
             if (mtId == null || mtId.isBlank() || already.contains(mtId)) {
                 continue;
             }
-            FactoryMaterialRequisitionItem item = new FactoryMaterialRequisitionItem();
-            item.setRequisition(mr);
-            item.setMaterialTypeId(mtId);
-            item.setMaterialName(resolveLiveMaterialName(mtId, s.getName()));
-            item.setMaterialCategory(FactoryMaterialRequisitionItem.MaterialCategory.AUXILIARY);
             // 自备料快照 (缺陷 47, owner 2026-09-02 裁定): 冰水/水/蒸汽/现场自制高汤等
             // 「没有库存一说」的调料 —— 这一行是本方法(appendSeasoningItems)存在的直接原因
             // (今晚冰水在⑤搅拌撞的墙)。true 时该行仍然出现(配方提醒), 但确认领料/调拨
             // 会跳过它, 不做批次查找、不因库存不足拦截 —— 见 autoAllocatePickedBatchesIfMissing
             // / relocatePickedMaterialToWorkshop / transferToFactory 的 unpickedPendingRows。
-            item.setSelfSupplied(isSelfSupplied(factoryId, mtId));
             String stockUnit = resolveMaterialStockUnit(factoryId, mtId);
-            item.setUnit(stockUnit != null ? stockUnit : "kg");
+            String unit = stockUnit != null ? stockUnit : "kg";
             // 🔴 2026-08-18 曾以为这里能自动算出来("投入 kg 是算得出来的"), 但那个前提
             //    (RAW 行有 requiredQty) 在本产品口径下不成立, 从未在生产环境真正生效过 ——
             //    一直是「按实际领用」, 见上方类注释。2026-09-01: 改吃调用方传入的人工填报值
             //    (effectiveRawInputKg)。真实代价: 80kg 投料 × 10g/kg 正确答案是 0.8kg,
             //    没有这个数字时操作员只能凭经验估, 实测填成了 1。
-            item.setRequiredQty(seasoningRequiredQty(s, effectiveRawInputKg, item.getUnit()));
-            // ⚠️ 明细行实体没有备注字段, 配方用量(g/kg)只进日志, ⛔ 不往 materialName 里塞
-            //    —— 那会污染所有显示这个名字的地方(打印单/列表/确认领料预填)。
-            mr.getItems().add(item);
+            rows.add(new SeasoningRow(mtId, resolveLiveMaterialName(mtId, s.getName()),
+                    isSelfSupplied(factoryId, mtId), unit, seasoningRequiredQty(s, effectiveRawInputKg, unit)));
             already.add(mtId);
-            added++;
         }
-        if (added > 0) {
-            log.info("[领料单] 追加调料 {} 行 recipe={}", added, recipeId);
-        }
+        return rows;
     }
 
     /**
-     * 计划 BOM 对应的调料表 —— 建单 ({@link #appendSeasoningItems}) 与确认领料的配比 ({@link #getDetailForPicking})
+     * 计划 BOM 对应的调料表 —— 建单 ({@link #resolveSeasoningRows}) 与确认领料的配比 ({@link #getDetailForPicking})
      * 共用这一份, ⛔ 不各自去找配方 (形态 D)。口径: 取 BOM 第一行所属配方的调料。
      *
-     * @return 永不为 null; 读不到 (无仓库 / 无配方 / 查询失败) 返回空 list, 调用方不拦单
+     * <p>两个调用方都在自己的 REQUIRES_NEW 只读事务里调它, 查询失败<b>直接抛出</b>, 由调用方降级并标出状态
+     * (建单 {@code seasoningItemsStatus=UNAVAILABLE} / 详情 {@code auxiliaryAutoCalc=UNAVAILABLE})。
+     * 2026-11-10 之前这里 catch 后返回空 list —— 那样「读失败」与「配方没有调料」无法区分, 且 catch 挡不住
+     * 仓库事务拦截器已经把事务标成 rollback-only。
+     *
+     * @return 永不为 null; 无仓库 / 无配方返回空 list
      */
     private List<com.cretas.aims.entity.bom.BomSeasoningItem> seasoningsOfPlanBom(List<BomRecipeItem> bomItems) {
         if (bomSeasoningItemRepository == null || bomItems == null || bomItems.isEmpty()) {
@@ -485,15 +538,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         if (recipeId == null || recipeId.isBlank()) {
             return List.of();
         }
-        try {
-            List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings =
-                    bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
-            return seasonings == null ? List.of() : seasonings;
-        } catch (RuntimeException e) {
-            // ⛔ 调料读不到不能把整张领料单拦掉 —— 原料那几行照样有用。
-            log.warn("[领料单] 调料读取失败 recipe={}: {}", recipeId, e.getMessage());
-            return List.of();
-        }
+        List<com.cretas.aims.entity.bom.BomSeasoningItem> seasonings =
+                bomSeasoningItemRepository.findByRecipeIdOrderBySeqAsc(recipeId);
+        return seasonings == null ? List.of() : seasonings;
     }
 
     /**

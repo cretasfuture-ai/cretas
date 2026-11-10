@@ -414,7 +414,8 @@ class UrgentInsertScheduleContractTest {
 
         Proposal preview = service.dryRun(F, slot, insert);
         assertThat(preview.ok()).as("取消的日调度计划不再把插单堵死").isTrue();
-        assertThat(preview.warnings()).anyMatch(w -> w.contains("重新启用"));
+        assertThat(preview.warnings()).anyMatch(w -> w.equals(
+                com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl.reopenWarning(1, 0)));
         verify(schedulingPlans, never()).save(any());   // 预览不落库
 
         service.apply(F, slot, insert, preview.fingerprint(), 7L);
@@ -467,7 +468,13 @@ class UrgentInsertScheduleContractTest {
         ArgumentCaptor<String> notes = ArgumentCaptor.forClass(String.class);
         verify(schedulingPlans).reopenCancelled(eq("SP-CANCELLED"), notes.capture(), any());
         assertThat(notes.getValue()).startsWith("原备注\n[重开 ")
-                .contains("紧急插单 URGENT-1").contains("操作人 7").contains("作废没开工的旧排程 1 条");
+                .contains("原调度计划已取消，由紧急插单 URGENT-1重开为草稿（操作人 7）；作废没开工的旧排程 1 条");
+        // 与缺口 18 的重开留痕是同一个方法生成的 (去掉时间戳后逐字一致)
+        String line = notes.getValue().substring(notes.getValue().indexOf('\n') + 1);
+        String shared = com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl
+                .reopenTrail(java.time.LocalDateTime.now(), "紧急插单 URGENT-1", 7L, 1, 0);
+        String stamp = "^\\[重开 [0-9-]+ [0-9:]+\\]";
+        assertThat(line.replaceFirst(stamp, "")).isEqualTo(shared.replaceFirst(stamp, ""));
     }
 
     @Test
