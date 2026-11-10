@@ -100,6 +100,43 @@ class LineCapacityEquipmentCheckContractTest {
         assertThat(r.getMessage()).startsWith("产能未验证").contains("kg");
     }
 
+    private void futureConfig(String lineId, String productTypeId, CapacityUnit unit, LocalDateTime effectiveFrom) {
+        ProductionLineCapacityConfig c = new ProductionLineCapacityConfig();
+        c.setFactoryId(F);
+        c.setProductionLineId(lineId);
+        c.setProductTypeId(productTypeId);
+        c.setCapacityPerHour(new BigDecimal("100"));
+        c.setCapacityUnit(unit);
+        c.setEffectiveFrom(effectiveFrom);
+        when(configs.findByFactoryId(F)).thenReturn(List.of(c));
+    }
+
+    @Test
+    void aConfigThatOnlyStartsLaterIsStillMissingButSaysWhenItTakesEffect() {
+        // 验收 2026-11-10: 「清掉再重配」把 effective_from 设成当前时间, 早于它的时段读成「没配产能」
+        line("L1", "卤制线", ProductionLine.LineStatus.active);
+        futureConfig("L1", PT, CapacityUnit.KG, START.plusDays(1));
+
+        ResourceCheckResult r = capacity("50", "KG", "L1");
+
+        assertThat(LineCapacityEquipmentCheck.status(r)).isEqualTo("MISSING");
+        assertThat(r.getMessage()).startsWith("产能未验证").contains("才生效").contains("2026-11-04 08:00")
+                .contains("晚于本时段开始 2026-11-03 08:00");
+    }
+
+    @Test
+    void aLaterConfigOfAnotherProductUnitOrLineIsNotMentioned() {
+        line("L1", "卤制线", ProductionLine.LineStatus.active);
+        futureConfig("L1", "PT-OTHER", CapacityUnit.KG, START.plusDays(1));
+        assertThat(capacity("50", "KG", "L1").getMessage()).doesNotContain("才生效");
+
+        futureConfig("L1", PT, CapacityUnit.PIECE, START.plusDays(1));      // 单位不同
+        assertThat(capacity("50", "KG", "L1").getMessage()).doesNotContain("才生效");
+
+        futureConfig("L2", PT, CapacityUnit.KG, START.plusDays(1));         // 不是指定的产线
+        assertThat(capacity("50", "KG", "L1").getMessage()).doesNotContain("才生效");
+    }
+
     @Test
     void aLineConfiguredInAnotherUnitIsMissingAndSaysWhichUnitItHas() {
         line("L1", "卤制线", ProductionLine.LineStatus.active);

@@ -354,6 +354,52 @@ class UrgentInsertPreviewContractTest {
         verify(slots, never()).claimAvailableSlot(anyString(), anyString(), any());
     }
 
+    private ConfirmUrgentInsertRequest recheckFailureRequest(ResourceCheckResult equipment, ResourceCheckResult capacity) {
+        product("件");
+        LineCapacityEquipmentCheck lineChecks = mock(LineCapacityEquipmentCheck.class);
+        when(lineChecks.checkEquipment(anyString(), anyString())).thenReturn(equipment);
+        when(lineChecks.checkCapacity(anyString(), anyString(), any(), anyString(), anyString(), any(), any()))
+                .thenReturn(capacity);
+        service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
+                InsertSlotRepository.class, slots, InsertSlotPreviewRepository.class, previews,
+                ProductTypeRepository.class, products, ProductionLineCapacityConfigRepository.class, capacityConfigs,
+                LineCapacityEquipmentCheck.class, lineChecks, SchedulingResourceWriteLock.class, factoryLock,
+                ObjectMapper.class, new ObjectMapper()));
+        return confirmRequest();
+    }
+
+    @Test
+    void recheckFailureSaysWhichResourceFailedAndWhy() {
+        ResourceCheckResult available = ResourceCheckResult.available("X", BigDecimal.TEN, BigDecimal.ONE);
+
+        // 只有设备不可用: 文案里是设备的原因, 不提产能
+        ConfirmUrgentInsertRequest down = recheckFailureRequest(ResourceCheckResult.unavailable("EQUIPMENT",
+                "设备不可用: 绞肉机 (E-01) maintenance", BigDecimal.ZERO, BigDecimal.ONE), available);
+        assertThatThrownBy(() -> service.confirmInsert(FACTORY, 1L, down))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("INSERT_RESOURCE_RECHECK_FAILED");
+                    assertThat(e.getMessage()).contains("复核未通过").contains("设备不可用: 绞肉机 (E-01) maintenance")
+                            .doesNotContain("产能未验证");
+                });
+
+        // 只有产能没配 (或配置还没生效): 文案里是产能的原因, 不提设备
+        ConfirmUrgentInsertRequest noCapacity = recheckFailureRequest(available, ResourceCheckResult.unverified("CAPACITY",
+                "产能未验证: 指定产线配置该产品按千克计的每小时产能 (已配置的产能要到 2026-11-04 08:00 才生效, 晚于本时段开始 2026-11-03 08:00)",
+                BigDecimal.ONE));
+        assertThatThrownBy(() -> service.confirmInsert(FACTORY, 1L, noCapacity))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getMessage()).contains("才生效").doesNotContain("设备未验证").doesNotContain("设备不可用"));
+
+        // 两项都不过: 两个原因都在
+        ConfirmUrgentInsertRequest both = recheckFailureRequest(
+                ResourceCheckResult.unverified("EQUIPMENT", "设备未验证: 该产品没有配置所需设备", BigDecimal.ONE),
+                ResourceCheckResult.unavailable("CAPACITY", "产能不足: 需要 50 件", BigDecimal.TEN, BigDecimal.valueOf(50)));
+        assertThatThrownBy(() -> service.confirmInsert(FACTORY, 1L, both))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getMessage()).contains("设备未验证: 该产品没有配置所需设备").contains("产能不足: 需要 50 件"));
+        verify(slots, never()).claimAvailableSlot(anyString(), anyString(), any());
+    }
+
     @Test
     void confirmationUsesPreviewImpactInsteadOfGenericSlotImpact() {
         product("件");

@@ -756,10 +756,23 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         ResourceCheckResult capacityCheck = lineChecks.checkCapacity(
                 factoryId, request.getProductTypeId(), request.getPlannedQuantity(), quantityUnit,
                 slot.getProductionLineId(), slot.getStartTime(), slot.getEndTime());
-        if (!sameCapacityDimension(quantityUnit, productCapacityUnit) || !productSpecificCapacity
-                || !equipmentCheck.isVerified() || !equipmentCheck.isAvailable()
-                || !capacityCheck.isVerified() || !capacityCheck.isAvailable()) {
-            throw new BusinessException(409, "确认前产能或设备复核未通过，未创建计划")
+        // 说清是哪一项没过 (设备检修 / 没配设备 / 没配产能 / 产能配置还没生效 / 单位对不上 …), 不再只说「复核未通过」
+        List<String> recheckFailures = new ArrayList<>();
+        if (!sameCapacityDimension(quantityUnit, productCapacityUnit)) {
+            recheckFailures.add("产能未验证: 产品实际单位与请求数量单位不一致");
+        }
+        if (!productSpecificCapacity) {
+            recheckFailures.add("产能未验证: 个单位必须有该产品在实际产线上的专用 PIECE 产能配置");
+        }
+        if (!equipmentCheck.isVerified() || !equipmentCheck.isAvailable()) {
+            recheckFailures.add(equipmentCheck.getMessage());
+        }
+        if (!capacityCheck.isVerified() || !capacityCheck.isAvailable()) {
+            recheckFailures.add(capacityCheck.getMessage());
+        }
+        if (!recheckFailures.isEmpty()) {
+            throw new BusinessException(409, "确认前产能或设备复核未通过（" + String.join("；", recheckFailures)
+                    + "），未创建计划")
                     .withCode("INSERT_RESOURCE_RECHECK_FAILED")
                     .withHint("刷新并重新分析当前产线、时段和资源配置");
         }
