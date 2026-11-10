@@ -11,6 +11,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.SchedulingPlan;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
@@ -112,19 +113,23 @@ public class DailyCapacityScheduleGenerator {
         LocalDate firstDay = request.getPlanDate();
         List<ProductionPlan> plans = resolvePlans(factoryId, request.getPlanIds(), request.getBatchIds());
         ProductionLine line = resolveLine(factoryId, request.getProductionLineId());
-        // 先判同日已有调度计划: 不要等人补完日产能才告诉他这天已经排过了
-        schedulingPlanRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, firstDay)
-                .ifPresent(existing -> {
-                    throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
-                            .withHint("如需查看请打开该日期已有的调度计划")
-                            .withHintTarget(existing.getId());
-                });
+        // 先判同日已有调度计划: 不要等人补完日产能才告诉他这天已经排过了。
+        // 已取消的不拦: 落库时重开它 (唯一约束是 工厂+日期, 拦了这一天就永远排不了), 最终判定在落库那一步加锁再做。
+        SchedulingPlan sameDay = schedulingPlanRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, firstDay)
+                .orElse(null);
+        if (sameDay != null && sameDay.getStatus() != SchedulingPlan.PlanStatus.cancelled) {
+            throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
+                    .withHint("如需查看请打开该日期已有的调度计划")
+                    .withHintTarget(sameDay.getId());
+        }
+        // 要重开的那天: 它名下已开工的排程重开后保留, 排的时候就当固定占用
+        String reopening = sameDay == null ? null : sameDay.getId();
 
         List<String> warnings = new ArrayList<>();
         List<ProductionPlan> active = activePlans(plans, warnings);
         applyOverrides(factoryId, request.getDailyCapacityOverrides(), active, userId, true);
 
-        Computation c = compute(factoryId, firstDay, line, active, List.of(), Set.of(), Map.of(), warnings);
+        Computation c = compute(factoryId, firstDay, line, active, List.of(), Set.of(), Map.of(), warnings, reopening);
         if (!c.required().isEmpty()) {
             SchedulingPlanDTO pending = new SchedulingPlanDTO();
             pending.setFactoryId(factoryId);
@@ -165,6 +170,9 @@ public class DailyCapacityScheduleGenerator {
         SchedulingPlanDTO created = crudService.createAutoSchedulePlan(factoryId, firstDay,
                 firstDay + " 自动排程", notes, items, userId);
         SchedulingPlanDTO result = crudService.getPlan(factoryId, created.getId());
+        if (created.getWarnings() != null) {
+            warnings.addAll(0, created.getWarnings()); // 重开了已取消的调度计划: 这句放最前
+        }
         result.setWarnings(warnings);
         result.setOutcome(SchedulingPlanDTO.OUTCOME_SCHEDULED);
         result.setCapacityRequired(List.of());
@@ -200,7 +208,7 @@ public class DailyCapacityScheduleGenerator {
                 active, null, false);
         Set<String> movable = request.movableLineScheduleIds() == null ? Set.of() : request.movableLineScheduleIds();
 
-        Computation c = compute(factoryId, firstDay, line, active, pins, movable, overrides, warnings);
+        Computation c = compute(factoryId, firstDay, line, active, pins, movable, overrides, warnings, null);
         if (!c.required().isEmpty()) {
             return new ConstrainedSchedulePreview(SchedulingPlanDTO.OUTCOME_CAPACITY_REQUIRED, line.getId(), firstDay,
                     new ArrayList<>(c.required().values()), List.of(), warnings);
@@ -254,7 +262,7 @@ public class DailyCapacityScheduleGenerator {
      */
     private Computation compute(String factoryId, LocalDate firstDay, ProductionLine line, List<ProductionPlan> active,
                                 List<String> pins, Set<String> movable, Map<String, DailyCapacityOverride> overrides,
-                                List<String> warnings) {
+                                List<String> warnings, String reopeningPlanId) {
         LocalDate today = LocalDate.now();
         Map<String, Capacity> capacityByKey = new HashMap<>();
         Map<String, DailyCapacityRequiredDTO> required = new LinkedHashMap<>();
@@ -294,7 +302,7 @@ public class DailyCapacityScheduleGenerator {
                 .map(w -> new ScheduleConstraintReader.PlanInput(w.plan(), w.label(), w.unit(), w.remaining(), w.joint()))
                 .toList();
         ScheduleConstraintReader.Constraints constraints = constraintReader.read(factoryId, firstDay, line.getId(),
-                inputs, movable);
+                inputs, movable, reopeningPlanId);
         warnings.addAll(constraints.warnings());
 
         List<Job> jobs = new ArrayList<>();

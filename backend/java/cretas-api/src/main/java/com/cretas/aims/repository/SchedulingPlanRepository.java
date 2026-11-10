@@ -29,10 +29,14 @@ public interface SchedulingPlanRepository extends JpaRepository<SchedulingPlan, 
     Optional<SchedulingPlan> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 
     /**
-     * 同一天的调度计划行加悲观写锁 (SELECT ... FOR UPDATE)。重开已取消的日调度计划前先锁, 锁到之后重读状态,
-     * 并发的另一条路径 (紧急插单 / 自动排程) 已经重开就按「已存在」处理。
+     * 锁住这一行并返回它<b>已提交的最新</b>状态 (重开已取消的调度计划前用)。
+     * 原生 SQL: 不经持久化上下文, 同一事务早先读过的旧对象不会挡住最新状态。
      */
-    /** 当天调度计划的 id 与状态 (标量查询, 不把实体载入持久化上下文: 之后 lockDayPlan 才会读到加锁后的最新状态)。 */
+    @Query(value = "SELECT status FROM scheduling_plans WHERE id = :id AND factory_id = :factoryId "
+            + "AND deleted_at IS NULL FOR UPDATE", nativeQuery = true)
+    Optional<String> lockStatusForUpdate(@Param("id") String id, @Param("factoryId") String factoryId);
+
+    /** 当天调度计划的 id / 状态 / 备注 (标量查询: 永远读库, 不经持久化上下文里可能过期的副本)。 */
     interface DayPlanHead {
         String getId();
 
