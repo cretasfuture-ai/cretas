@@ -107,11 +107,21 @@ class UrgentInsertScheduleContractTest {
         when(constraints.findLiveEndingFrom(eq(F), any())).thenReturn(List.of(rowA, runningRow, otherLineRow, rowB));
         when(plans.findByIdAndFactoryId("PLAN-A", F)).thenReturn(Optional.of(planA));
         when(plans.findByIdAndFactoryId("PLAN-B", F)).thenReturn(Optional.of(planB));
-        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), any())).thenReturn(Optional.empty());
+        when(schedulingPlans.findDayPlanHead(eq(F), any())).thenReturn(Optional.empty());
+        when(schedulingPlans.lockDayPlan(eq(F), any())).thenReturn(Optional.empty());
         when(schedulingPlans.save(any(SchedulingPlan.class))).thenAnswer(i -> i.getArgument(0));
+        when(schedulingPlans.saveAndFlush(any(SchedulingPlan.class))).thenAnswer(i -> i.getArgument(0));
     }
 
     // ------------------------------------------------------------------ fixtures
+
+    private static SchedulingPlanRepository.DayPlanHead head(SchedulingPlan p) {
+        return new SchedulingPlanRepository.DayPlanHead() {
+            @Override public String getId() { return p.getId(); }
+            @Override public SchedulingPlan.PlanStatus getStatus() { return p.getStatus(); }
+            @Override public String getNotes() { return p.getNotes(); }
+        };
+    }
 
     private static ProductionPlan plan(String id, String number, LocalDate due, String orderId) {
         ProductionPlan p = new ProductionPlan();
@@ -297,8 +307,9 @@ class UrgentInsertScheduleContractTest {
     @Test
     void sameEngineResultMatchesThePreviewFingerprintAndIsApplied() {
         happyEngine();
-        String previewed = service.apply(F, slot, insert, null, 7L).fingerprint();
-        happyEngine();
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        // 预览 (只算不写) 之后什么都没变: 确认重算出同一个指纹, 通过并落库
+        String previewed = service.dryRun(F, slot, insert).fingerprint();
 
         Proposal again = service.apply(F, slot, insert, previewed, 7L);
 
@@ -359,8 +370,10 @@ class UrgentInsertScheduleContractTest {
     void closedDayContainerBlocksAtPreviewTimeAndWritesNothing() {
         happyEngine();
         SchedulingPlan closed = new SchedulingPlan();
+        closed.setId("SP-CLOSED");
         closed.setStatus(SchedulingPlan.PlanStatus.completed);
-        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), eq(DAY))).thenReturn(Optional.of(closed));
+        when(schedulingPlans.findDayPlanHead(eq(F), eq(DAY))).thenReturn(Optional.of(head(closed)));
+        when(schedulingPlans.lockDayPlan(eq(F), eq(DAY))).thenReturn(Optional.of(closed));
         when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
 
         Proposal preview = service.dryRun(F, slot, insert);
@@ -371,6 +384,231 @@ class UrgentInsertScheduleContractTest {
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_BLOCKED"));
         verify(lineSchedules, never()).save(any());
+    }
+
+    // ------------------------------------------------------------------ 已取消的日调度计划: 取消后没有重开入口, 同一天只能有一个
+
+    private SchedulingPlan cancelledDay(LineSchedule... rows) {
+        SchedulingPlan cancelled = new SchedulingPlan();
+        cancelled.setId("SP-CANCELLED");
+        cancelled.setStatus(SchedulingPlan.PlanStatus.cancelled);
+        when(schedulingPlans.findDayPlanHead(eq(F), eq(DAY))).thenReturn(Optional.of(head(cancelled)));
+        when(schedulingPlans.lockDayPlan(eq(F), eq(DAY))).thenReturn(Optional.of(cancelled));
+        when(lineSchedules.findByPlanId("SP-CANCELLED")).thenReturn(List.of(rows));
+        // 数据库侧的条件 UPDATE / 现数: 作废几条 = 名下 pending 且没开工的行数; 已开工的现数默认 0
+        long pending = java.util.Arrays.stream(rows).filter(r -> r.getStatus() == LineSchedule.ScheduleStatus.pending
+                && r.getActualStartTime() == null).count();
+        when(schedulingPlans.voidPendingRowsOnReopen(eq("SP-CANCELLED"), anyString())).thenReturn((int) pending);
+        when(schedulingPlans.countStartedRows("SP-CANCELLED")).thenReturn(0L);
+        when(schedulingPlans.reopenCancelled(eq("SP-CANCELLED"), anyString(), any())).thenReturn(1);
+        return cancelled;
+    }
+
+    @Test
+    void cancelledDayWithOnlyUnstartedRowsIsReopenedForTheInsertAndItsOldRowsStayCancelled() {
+        happyEngine();
+        LineSchedule oldPending = row("LS-OLD", "PLAN-OLD", LINE, LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(1));
+        LineSchedule oldDone = row("LS-DONE", "PLAN-DONE", LINE, LineSchedule.ScheduleStatus.completed, DAY, DAY);
+        SchedulingPlan cancelled = cancelledDay(oldPending, oldDone);
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        Proposal preview = service.dryRun(F, slot, insert);
+        assertThat(preview.ok()).as("取消的日调度计划不再把插单堵死").isTrue();
+        assertThat(preview.warnings()).anyMatch(w -> w.contains("重新启用"));
+        verify(schedulingPlans, never()).save(any());   // 预览不落库
+
+        service.apply(F, slot, insert, preview.fingerprint(), 7L);
+
+        // 旧未开工排程显式作废 (一条条件 UPDATE, 不经过实体), 然后才改回草稿
+        ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(schedulingPlans);
+        order.verify(schedulingPlans).lockDayPlan(F, DAY);
+        order.verify(schedulingPlans).voidPendingRowsOnReopen(eq("SP-CANCELLED"), reason.capture());
+        order.verify(schedulingPlans).countStartedRows("SP-CANCELLED");
+        order.verify(schedulingPlans).reopenCancelled(eq("SP-CANCELLED"), anyString(), any());
+        assertThat(reason.getValue()).contains("调度计划取消后重开").contains("URGENT-1");
+        assertThat(oldDone.getStatus()).as("已完成的历史排程不动").isEqualTo(LineSchedule.ScheduleStatus.completed);
+        ArgumentCaptor<LineSchedule> saved = ArgumentCaptor.forClass(LineSchedule.class);
+        verify(lineSchedules, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
+        assertThat(saved.getAllValues()).anyMatch(ls -> ls.getPlan() == cancelled
+                && "PLAN-INS".equals(ls.getProductionPlanId()));
+    }
+
+    @Test
+    void cancelledDayThatStillHasAStartedRowIsNotReopened() {
+        happyEngine();
+        LineSchedule started = row("LS-RUN", "PLAN-RUN", LINE, LineSchedule.ScheduleStatus.in_progress, DAY, DAY.plusDays(1));
+        SchedulingPlan cancelled = cancelledDay(started);
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        Proposal preview = service.dryRun(F, slot, insert);
+
+        assertThat(preview.status()).isEqualTo(UrgentInsertScheduleService.BLOCKED);
+        assertThat(preview.message()).contains("已取消").contains("已开工");
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_BLOCKED"));
+        assertThat(cancelled.getStatus()).isEqualTo(SchedulingPlan.PlanStatus.cancelled);
+        assertThat(started.getStatus()).isEqualTo(LineSchedule.ScheduleStatus.in_progress);
+        verify(schedulingPlans, never()).save(any());
+        verify(lineSchedules, never()).save(any());
+    }
+
+    @Test
+    void reopeningLeavesATrailOfWhoWhenAndWhichInsertAndTakesTheRowLockFirst() {
+        happyEngine();
+        LineSchedule oldPending = row("LS-OLD", "PLAN-OLD", LINE, LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(1));
+        SchedulingPlan cancelled = cancelledDay(oldPending);
+        cancelled.setNotes("原备注");
+
+        service.apply(F, slot, insert, null, 7L);
+
+        verify(schedulingPlans).lockDayPlan(F, DAY);
+        ArgumentCaptor<String> notes = ArgumentCaptor.forClass(String.class);
+        verify(schedulingPlans).reopenCancelled(eq("SP-CANCELLED"), notes.capture(), any());
+        assertThat(notes.getValue()).startsWith("原备注\n[重开 ")
+                .contains("紧急插单 URGENT-1").contains("操作人 7").contains("作废没开工的旧排程 1 条");
+    }
+
+    @Test
+    void anAlreadyUsableDayIsNeverReopenedOrTouched() {
+        happyEngine();
+        SchedulingPlan draft = new SchedulingPlan();
+        draft.setId("SP-DRAFT");
+        draft.setStatus(SchedulingPlan.PlanStatus.draft);
+        draft.setNotes("原备注");
+        when(schedulingPlans.findDayPlanHead(eq(F), eq(DAY))).thenReturn(Optional.of(head(draft)));
+        when(schedulingPlans.lockDayPlan(eq(F), eq(DAY))).thenReturn(Optional.of(draft));
+
+        service.apply(F, slot, insert, null, 7L);
+
+        assertThat(draft.getStatus()).isEqualTo(SchedulingPlan.PlanStatus.draft);
+        assertThat(draft.getNotes()).isEqualTo("原备注");
+        verify(schedulingPlans, never()).save(any());
+        verify(schedulingPlans, never()).reopenCancelled(any(), any(), any());
+        verify(schedulingPlans, never()).voidPendingRowsOnReopen(any(), any());
+    }
+
+    @Test
+    void aRowStartedBetweenPreviewAndWriteStopsTheReopenAndNothingIsReopened() {
+        happyEngine();
+        cancelledDay(row("LS-OLD", "PLAN-OLD", LINE, LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(1)));
+        // 预览那一刻没有已开工的行 (findByPlanId 看不到), 写入时数据库里现数出现了一条
+        when(schedulingPlans.countStartedRows("SP-CANCELLED")).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_CONTAINER_CLOSED");
+                    assertThat(e.getMessage()).contains("已开工");
+                });
+        verify(schedulingPlans, never()).reopenCancelled(any(), any(), any());
+    }
+
+    @Test
+    void ifTheDayPlanIsNoLongerCancelledWhenReopeningThe409TellsTheUserToRePreview() {
+        happyEngine();
+        cancelledDay(row("LS-OLD", "PLAN-OLD", LINE, LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(1)));
+        when(schedulingPlans.reopenCancelled(eq("SP-CANCELLED"), anyString(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_CONTAINER_RACE"));
+    }
+
+    @Test
+    void cancelledDayWithADelayedOrStartedRowIsNotReopenedEitherWay() {
+        happyEngine();
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        LineSchedule delayed = row("LS-DEL", "PLAN-D", LINE, LineSchedule.ScheduleStatus.delayed, DAY, DAY.plusDays(1));
+        SchedulingPlan cancelled = cancelledDay(delayed);
+        assertThat(service.dryRun(F, slot, insert).status()).isEqualTo(UrgentInsertScheduleService.BLOCKED);
+
+        // 状态还是 pending 但已经有实际开工时间: 同样当成开了工
+        LineSchedule startedPending = row("LS-SP", "PLAN-SP", LINE, LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(1));
+        startedPending.setActualStartTime(DAY.atTime(8, 0));
+        when(lineSchedules.findByPlanId("SP-CANCELLED")).thenReturn(List.of(startedPending));
+        Proposal second = service.dryRun(F, slot, insert);
+        assertThat(second.status()).isEqualTo(UrgentInsertScheduleService.BLOCKED);
+        assertThat(second.message()).contains("已开工");
+        assertThat(cancelled.getStatus()).isEqualTo(SchedulingPlan.PlanStatus.cancelled);
+    }
+
+    @Test
+    void cancelledRowsAndCompletedRowsUnderACancelledDayDoNotBlockTheReopen() {
+        happyEngine();
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        LineSchedule alreadyCancelled = row("LS-X", "PLAN-X", LINE, LineSchedule.ScheduleStatus.cancelled, DAY, DAY);
+        alreadyCancelled.setActualStartTime(DAY.atTime(8, 0));   // 开过工但已取消: 不算在做
+        LineSchedule done = row("LS-DONE", "PLAN-DONE", LINE, LineSchedule.ScheduleStatus.completed, DAY, DAY);
+        done.setActualStartTime(DAY.atTime(6, 0));
+        cancelledDay(alreadyCancelled, done);
+
+        assertThat(service.dryRun(F, slot, insert).ok()).isTrue();
+    }
+
+    // ------------------------------------------------------------------ 预览 == 确认: 预览之后有人手工改了被挤计划的排程
+
+    @Test
+    void manualEditOfAMovedPlansRowAfterThePreviewMakesTheConfirmRefuse() {
+        happyEngine();
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        Proposal preview = service.dryRun(F, slot, insert);
+        assertThat(preview.ok()).isTrue();
+        org.mockito.Mockito.clearInvocations(lineSchedules, plans, schedulingPlans);
+
+        // 预览之后: 有人把被挤计划 A 的结束日手工改晚了一天 (引擎不读已存日期, 单看引擎结果看不出来)
+        rowA.setPlannedEndTime(rowA.getPlannedEndTime().plusDays(1));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, preview.fingerprint(), 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_PREVIEW_SCHEDULE_CHANGED"));
+        verify(lineSchedules, never()).save(any());
+        verify(schedulingPlans, never()).save(any());
+    }
+
+    @Test
+    void creatingTheDayPlanRacingAnotherCreatorIsA409NotA500AtCommit() {
+        happyEngine();
+        when(schedulingPlans.saveAndFlush(any(SchedulingPlan.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uk_scheduling_plans_factory_date"));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_CONTAINER_RACE");
+                });
+        verify(lineSchedules, never()).save(org.mockito.ArgumentMatchers.argThat(
+                ls -> "PLAN-INS".equals(ls.getProductionPlanId())));
+    }
+
+    @Test
+    void theSameStoredStateGivesTheSameFingerprintAtPreviewAndConfirm() {
+        happyEngine();
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+        Proposal preview = service.dryRun(F, slot, insert);
+
+        Proposal applied = service.apply(F, slot, insert, preview.fingerprint(), 7L);
+
+        assertThat(applied.fingerprint()).isEqualTo(preview.fingerprint());
+    }
+
+    // ------------------------------------------------------------------ 提示文字是给人看的
+
+    @Test
+    void missingDailyCapacityIsExplainedInWordsNotAsAJavaObject() {
+        when(generator.preview(eq(F), any())).thenReturn(new ConstrainedSchedulePreview("NEEDS_CAPACITY", LINE, DAY,
+                List.of(com.cretas.aims.dto.scheduling.DailyCapacityRequiredDTO.builder()
+                        .productTypeId("PT-9").productName("牛肉丸").unit("kg").reason("MISSING")
+                        .planNumbers(List.of("PA-1", "URGENT-1")).build()),
+                List.of(), List.of()));
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        Proposal p = service.dryRun(F, slot, insert);
+
+        assertThat(p.status()).isEqualTo(UrgentInsertScheduleService.BLOCKED);
+        assertThat(p.message()).contains("牛肉丸").contains("kg").contains("没填日产能").contains("PA-1、URGENT-1")
+                .doesNotContain("DailyCapacityRequiredDTO").doesNotContain("productTypeId=").doesNotContain("PT-9")
+                .doesNotContain("reason=").doesNotContain("jointPlan");
     }
 
     // ------------------------------------------------------------------ 谁能被挤: 只有整个计划都没开工、都在这条线上

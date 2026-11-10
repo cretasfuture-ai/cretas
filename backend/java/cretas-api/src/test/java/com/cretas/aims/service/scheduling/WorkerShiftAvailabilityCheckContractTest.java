@@ -62,14 +62,19 @@ class WorkerShiftAvailabilityCheckContractTest {
 
     @Test
     void missingWindowOrScheduleIsUnverified() {
-        assertThat(check.check(FACTORY, START, END, null).verified()).isFalse();
+        WorkerShiftAvailabilityCheck.Result noRequirement = check.check(FACTORY, START, END, null);
+        assertThat(noRequirement.verified()).isFalse();
+        assertThat(noRequirement.noScheduleData()).as("没填需求人数不是「没有排班数据」").isFalse();
 
         when(shiftAssignments.findByFactoryIdAndWorkDateBetween(
                 FACTORY, START.toLocalDate().minusDays(1), END.toLocalDate())).thenReturn(List.of());
         WorkerShiftAvailabilityCheck.Result result = check.check(FACTORY, START, END, 1);
 
         assertThat(result.verified()).isFalse();
-        assertThat(result.message()).startsWith("人员未验证");
+        assertThat(result.message()).isEqualTo(WorkerShiftAvailabilityCheck.NO_SCHEDULE_DATA);
+        assertThat(result.noScheduleData()).as("窗口内一条排班都没有 = 没数据, 不是人不够").isTrue();
+        assertThat(result.availableWorkers()).isZero();
+        assertThat(result.available()).isFalse();
     }
 
     @Test
@@ -174,6 +179,7 @@ class WorkerShiftAvailabilityCheckContractTest {
         WorkerShiftAvailabilityCheck.Result result = check.check(FACTORY, START, END, 1);
         assertThat(result.verified()).isTrue();
         assertThat(result.available()).isFalse();
+        assertThat(result.noScheduleData()).as("有排班数据而数据显示人不够: 仍是「人员不足」").isFalse();
         assertThat(result.message()).startsWith("人员不足");
     }
 

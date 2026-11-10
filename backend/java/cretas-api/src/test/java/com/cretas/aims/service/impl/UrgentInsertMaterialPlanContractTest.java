@@ -4,6 +4,7 @@ import com.cretas.aims.dto.orchestration.MaterialAllocation;
 import com.cretas.aims.dto.orchestration.MaterialCheckResult;
 import com.cretas.aims.dto.orchestration.MaterialRequirement;
 import com.cretas.aims.dto.orchestration.MaterialShortfall;
+import com.cretas.aims.dto.production.ProductionPlanDTO;
 import com.cretas.aims.dto.scheduling.AffectedPlanDTO;
 import com.cretas.aims.dto.scheduling.ChainImpactResult;
 import com.cretas.aims.dto.scheduling.ConfirmUrgentInsertRequest;
@@ -85,6 +86,7 @@ class UrgentInsertMaterialPlanContractTest {
     private ChainImpactResult chain;
     private UrgentInsertScheduleService scheduler;
     private com.cretas.aims.repository.UserRepository users;
+    private WorkerShiftAvailabilityCheck workers;
 
     @BeforeEach
     void setUp() {
@@ -139,7 +141,7 @@ class UrgentInsertMaterialPlanContractTest {
         LineCapacityEquipmentCheck lines = mock(LineCapacityEquipmentCheck.class);
         when(lines.checkEquipment(anyString(), anyString())).thenReturn(ready);
         when(lines.checkCapacity(anyString(), anyString(), any(), any(), any(), any(), any())).thenReturn(ready);
-        WorkerShiftAvailabilityCheck workers = mock(WorkerShiftAvailabilityCheck.class);
+        workers = mock(WorkerShiftAvailabilityCheck.class);
         when(workers.check(anyString(), any(), any(), anyInt()))
                 .thenReturn(new WorkerShiftAvailabilityCheck.Result(true, 0, 0, Set.of(), "ok"));
         scheduler = UrgentInsertTestSupport.okScheduler();
@@ -652,6 +654,120 @@ class UrgentInsertMaterialPlanContractTest {
         assertThatThrownBy(() -> service.approveForceInsert(F, "PLAN-FORCED-2", 9L, true, "同意"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_BLOCKED"));
+    }
+
+    // ------------------------------------------------------------------ 没有排班数据: 未核对, 不阻断 (Steve 2026-11-10)
+
+    private static final String NO_DATA = WorkerShiftAvailabilityCheck.NO_SCHEDULE_DATA;
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void noScheduleDataIsUncheckedNotShortAndStillIssuesAPreview() {
+        stock("80");
+        when(workers.check(anyString(), any(), any(), anyInt()))
+                .thenReturn(WorkerShiftAvailabilityCheck.Result.noScheduleData(0));
+
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
+
+        assertThat(out.get("previewId")).as("缺排班数据不拦预览").isNotNull();
+        Map<String, Object> rs = (Map<String, Object>) out.get("resourceStatus");
+        assertThat(rs).containsEntry("workerStatus", "UNVERIFIED").containsEntry("workerNoScheduleData", true)
+                .containsEntry("workerVerified", false);
+        assertThat(rs.get("availableWorkers")).as("不知道不等于 0 人").isNull();
+        assertThat((List<String>) out.get("uncheckedWarnings")).containsExactly(NO_DATA);
+        assertThat((List<String>) out.get("unverifiedReasons")).contains(NO_DATA);
+        assertThat(out).containsEntry("isFeasible", false).containsEntry("feasibilityStatus", "UNVERIFIED");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dataShowingTooFewWorkersStillMakesTheSlotInfeasibleAndHasNoUncheckedWarning() {
+        stock("80");
+        when(workers.check(anyString(), any(), any(), anyInt()))
+                .thenReturn(new WorkerShiftAvailabilityCheck.Result(true, 2, 1, Set.of(11L), "人员不足: 需要2人，可用1人"));
+
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
+
+        Map<String, Object> rs = (Map<String, Object>) out.get("resourceStatus");
+        assertThat(rs).containsEntry("workerStatus", "SHORTAGE").containsEntry("workerNoScheduleData", false)
+                .containsEntry("availableWorkers", 1);
+        assertThat(out).containsEntry("isFeasible", false).containsEntry("feasibilityStatus", "INFEASIBLE")
+                .containsEntry("riskLevel", "critical");
+        assertThat((List<String>) out.get("uncheckedWarnings")).isEmpty();
+    }
+
+    @Test
+    void otherUnverifiedWorkerReadsKeepTheirOwnStatusAndAreNotLabelledNoData() {
+        stock("80");
+        when(workers.check(anyString(), any(), any(), anyInt()))
+                .thenReturn(WorkerShiftAvailabilityCheck.Result.unverified(2, "人员未验证：无法确认人员排班数据"));
+
+        Map<String, Object> out = service.createInsertPreview(F, 1L, "S1", analyzeRequest());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rs = (Map<String, Object>) out.get("resourceStatus");
+        assertThat(rs).containsEntry("workerStatus", "MISSING").containsEntry("workerNoScheduleData", false);
+        assertThat((List<?>) out.get("uncheckedWarnings")).isEmpty();
+    }
+
+    @Test
+    void confirmCarriesTheUncheckedWarningAndAWorkerListIsNotRefusedWhenThereIsNoRosterToCheckItAgainst() {
+        stock("80");
+        InsertSlotPreview preview = issuePreview();
+        when(workers.check(anyString(), any(), any(), anyInt()))
+                .thenReturn(WorkerShiftAvailabilityCheck.Result.noScheduleData(0));
+        ConfirmUrgentInsertRequest withList = ConfirmUrgentInsertRequest.builder().slotId("S1").productTypeId(PT)
+                .previewId(preview.getId()).quantityUnit("KG").plannedQuantity(new BigDecimal("50"))
+                .assignedWorkerIds(List.of(11L, 12L)).build();
+
+        ProductionPlanDTO dto = service.confirmInsert(F, 1L, withList);
+
+        assertThat(dto.getUncheckedWarnings()).containsExactly(NO_DATA);
+        verify(plans, org.mockito.Mockito.atLeastOnce()).save(any(ProductionPlan.class));
+    }
+
+    @Test
+    void confirmWithVerifiedRosterCarriesNoUncheckedWarning() {
+        stock("80");
+        InsertSlotPreview preview = issuePreview();
+
+        ProductionPlanDTO dto = service.confirmInsert(F, 1L, confirmRequest(preview.getId()));
+
+        assertThat(dto.getUncheckedWarnings()).isEmpty();
+    }
+
+    @Test
+    void forceInsertWithoutApprovalCarriesTheUncheckedWarning() {
+        stock("80");
+        InsertSlotPreview preview = issuePreview();
+        when(workers.check(anyString(), any(), any(), anyInt()))
+                .thenReturn(WorkerShiftAvailabilityCheck.Result.noScheduleData(0));
+
+        ProductionPlanDTO dto = service.forceInsert(F, 1L, confirmRequest(preview.getId()));
+
+        assertThat(dto.getUncheckedWarnings()).containsExactly(NO_DATA);
+    }
+
+    @Test
+    void approvalCarriesTheUncheckedWarning() {
+        ProductionPlan pending = new ProductionPlan();
+        pending.setId("PLAN-FORCED-W");
+        pending.setFactoryId(F);
+        pending.setPlanNumber("URGENT-W");
+        pending.setStartTime(start);
+        pending.setSuggestedProductionLineId("L1");
+        pending.markAsForceInsert(1L, "客户急单", true);
+        when(plans.findById("PLAN-FORCED-W")).thenReturn(Optional.of(pending));
+        when(plans.save(any(ProductionPlan.class))).thenAnswer(i -> i.getArgument(0));
+        InsertSlot selected = InsertSlot.builder().id("S1").factoryId(F).productionLineId("L1")
+                .startTime(start).endTime(start.plusHours(2)).requiredWorkers(0).status("selected").build();
+        when(slots.findByFactoryIdAndStatus(F, "selected")).thenReturn(List.of(selected));
+        when(workers.check(anyString(), any(), any(), anyInt()))
+                .thenReturn(WorkerShiftAvailabilityCheck.Result.noScheduleData(0));
+
+        ProductionPlanDTO dto = service.approveForceInsert(F, "PLAN-FORCED-W", 9L, true, "同意");
+
+        assertThat(dto.getUncheckedWarnings()).containsExactly(NO_DATA);
     }
 
     @Test
