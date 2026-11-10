@@ -46,6 +46,9 @@ import java.util.*;
 @RequiredArgsConstructor
 public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialRequisitionService {
 
+    /** 关领料单时写的退料流水来源: 料退回原料仓, 不是生产消耗 (取消计划的判据据此排除它)。 */
+    public static final String SOURCE_MATERIAL_RETURN = "MATERIAL_RETURN";
+
     private final FactoryMaterialRequisitionRepository repository;
     private final FactoryMaterialRequisitionItemRepository itemRepository;
     private final ProductionPlanRepository productionPlanRepository;
@@ -1886,7 +1889,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         trace.setConsumedAt(LocalDateTime.now());
         trace.setRecordedBy(operatorId != null ? operatorId : 0L);
         trace.setMaterialTypeId(item.getMaterialTypeId());
-        trace.setSourceType("MATERIAL_RETURN");
+        trace.setSourceType(SOURCE_MATERIAL_RETURN);
         trace.setNotes("production material return: requisition=" + requisition.getId() + ", item=" + item.getId());
         materialConsumptionRepository.save(trace);
     }

@@ -3,6 +3,7 @@ package com.cretas.aims.integration;
 import com.cretas.aims.entity.MaterialConsumption;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
@@ -140,6 +141,7 @@ class PlanCancelAfterMaterialReturnPostgresContractTest {
             plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
             plan.setCreatedBy(7L);
             plan.setPlanSourceType("NORMAL");
+            plan.setSourceType(PlanSourceType.SAFETY_STOCK);   // 存货生产: 停产也走得到同一判据
             plans.save(plan);
 
             ProductionBatch batch = new ProductionBatch();
