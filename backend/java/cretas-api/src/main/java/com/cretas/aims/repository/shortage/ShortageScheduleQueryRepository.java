@@ -2,6 +2,8 @@ package com.cretas.aims.repository.shortage;
 
 import com.cretas.aims.entity.LineSchedule;
 import com.cretas.aims.entity.SchedulingPlan;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.repository.scheduling.CancelledPlanScheduleFilter;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -45,16 +47,22 @@ public interface ShortageScheduleQueryRepository extends Repository<LineSchedule
     @Query("SELECT ls FROM LineSchedule ls WHERE ls.id IN :ids AND ls.plan.factoryId = :factoryId ORDER BY ls.id")
     List<LineSchedule> lockByIds(@Param("factoryId") String factoryId, @Param("ids") Collection<String> ids);
 
-    /** 这条线在 [start, end) 里与之重叠的其它在排 / 在做任务 (不含 exclude 里的)。 */
+    /**
+     * 这条线在 [start, end) 里与之重叠的其它在排 / 在做任务 (不含 exclude 里的)。
+     * 所属生产计划已取消、自己还没开工的不算 ({@link CancelledPlanScheduleFilter})。
+     */
     @Query("SELECT ls FROM LineSchedule ls WHERE ls.plan.factoryId = :factoryId AND ls.productionLineId = :lineId "
             + "AND ls.status IN :live "
             + "AND ls.plan.status IN :livePlans "
-            + "AND ls.plannedStartTime < :end AND ls.plannedEndTime > :start AND ls.id NOT IN :exclude")
+            + "AND ls.plannedStartTime < :end AND ls.plannedEndTime > :start AND ls.id NOT IN :exclude"
+            + CancelledPlanScheduleFilter.AND_NOT_GHOST_OF_CANCELLED_PLAN)
     List<LineSchedule> findOverlappingIn(@Param("factoryId") String factoryId, @Param("lineId") String lineId,
                                          @Param("start") LocalDateTime start, @Param("end") LocalDateTime end,
                                          @Param("exclude") Collection<String> exclude,
                                          @Param("live") Collection<LineSchedule.ScheduleStatus> live,
-                                         @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans);
+                                         @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans,
+                                         @Param("notStarted") Collection<LineSchedule.ScheduleStatus> notStarted,
+                                         @Param("cancelledPlan") ProductionPlanStatus cancelledPlan);
 
     default List<LineSchedule> findOverlapping(String factoryId, String lineId, LocalDateTime start, LocalDateTime end,
                                                Collection<String> exclude) {
@@ -62,7 +70,7 @@ public interface ShortageScheduleQueryRepository extends Repository<LineSchedule
                 LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.in_progress,
                 LineSchedule.ScheduleStatus.delayed), java.util.EnumSet.of(
                 SchedulingPlan.PlanStatus.draft, SchedulingPlan.PlanStatus.confirmed,
-                SchedulingPlan.PlanStatus.in_progress));
+                SchedulingPlan.PlanStatus.in_progress), LineSchedule.NOT_STARTED_STATUSES, ProductionPlanStatus.CANCELLED);
     }
 
     /**

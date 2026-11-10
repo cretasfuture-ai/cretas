@@ -265,6 +265,51 @@ class ShortageScheduleRepositoryQueryValidationTest {
         assertThat(schedules.findOverlapping("F2", "L1", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x"))).isEmpty();
     }
 
+    /**
+     * D-S4-CANCEL-GHOST-DAILY: 生产计划取消了, 它名下没开工的排程任务不再算占线;
+     * 没取消的计划的 pending 任务照样算 (阴性对照); 已开工的照样算。手工排程只挂批次的也按批次所属计划认。
+     */
+    @Test
+    void overlapIgnoresNotStartedTasksOfACancelledProductionPlan() {
+        SchedulingPlan f1 = sp("F1", SchedulingPlan.PlanStatus.draft);
+        ProductionPlan cancelledPlan = pp("F1", "SO-C");
+        ProductionPlan livePlan = pp("F1", "SO-L");
+        ProductionPlan cancelledViaBatch = pp("F1", "SO-B");
+        LineSchedule ghost = task(f1, cancelledPlan, "L1", 8, 16, LineSchedule.ScheduleStatus.pending);
+        LineSchedule startedOfCancelled = task(f1, cancelledPlan, "L3", 8, 16, LineSchedule.ScheduleStatus.in_progress);
+        LineSchedule pendingButActuallyStarted = task(f1, cancelledPlan, "L4", 8, 16, LineSchedule.ScheduleStatus.pending);
+        pendingButActuallyStarted.setActualStartTime(DAY.atTime(8, 5));
+        LineSchedule live = task(f1, livePlan, "L2", 8, 16, LineSchedule.ScheduleStatus.pending);
+        LineSchedule batchGhost = task(f1, null, "L5", 8, 16, LineSchedule.ScheduleStatus.pending);
+        LineSchedule delayedGhost = task(f1, cancelledPlan, "L6", 8, 16, LineSchedule.ScheduleStatus.delayed);   // 延误 ≠ 开工
+        em.flush();
+        batchGhost.setBatchId(batch(cancelledViaBatch).getId());
+        cancelledPlan.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
+        cancelledViaBatch.setStatus(com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
+        em.flush();
+
+        List<String> l1 = ids(schedules.findOverlapping("F1", "L1", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x")));
+        List<String> l2 = ids(schedules.findOverlapping("F1", "L2", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x")));
+        List<String> l3 = ids(schedules.findOverlapping("F1", "L3", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x")));
+        List<String> l4 = ids(schedules.findOverlapping("F1", "L4", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x")));
+        List<String> l5 = ids(schedules.findOverlapping("F1", "L5", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x")));
+        List<String> l6 = ids(schedules.findOverlapping("F1", "L6", DAY.atTime(9, 0), DAY.atTime(12, 0), Set.of("x")));
+        System.out.println("GHOST_OVERLAP ghost=" + ghost.getId() + " delayedGhost=" + delayedGhost.getId()
+                + " L1=" + l1 + " L2=" + l2 + " L3=" + l3 + " L4=" + l4 + " L5=" + l5 + " L6=" + l6);
+
+        assertThat(l1).as("已取消计划的 pending 任务不占线").isEmpty();
+        assertThat(l6).as("已取消计划的延误但没开始的任务也不占线").isEmpty();
+        assertThat(l5).as("手工排程只挂批次, 批次所属计划已取消, 也不占线").isEmpty();
+        assertThat(l2).as("阴性对照: 计划没取消的 pending 任务照样占线").containsExactly(live.getId());
+        assertThat(l3).as("已取消计划下已开工 (执行中) 的任务照样占线").containsExactly(startedOfCancelled.getId());
+        assertThat(l4).as("状态还是 pending 但已有实际开始时间 = 已开工, 照样占线")
+                .containsExactly(pendingButActuallyStarted.getId());
+    }
+
+    private static List<String> ids(List<LineSchedule> rows) {
+        return rows.stream().map(LineSchedule::getId).toList();
+    }
+
     @Test
     void arrivalIsTheLatestDateAmongSubmittedOrdersAndCountsUndatedOnes() {
         item(order("F1", PurchaseOrderStatus.DRAFT, DAY.plusDays(20)), "M1", "10", "0");     // 草稿不算
