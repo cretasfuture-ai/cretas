@@ -217,6 +217,18 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      */
     static final int FAST_PATH_WINDOW_MINUTES = 5;
 
+    /**
+     * C4 (2026-11-10): 入库流水不全时的下一步。⛔ 不再叫人「先用半成品盘点校正」—— 盘点会留下未归零的调整量,
+     * 撤回随即被 WIP_ADJUSTMENT_PRESENT 拦住, 两条提示互相指路。两处拦截都指向同一个出口。
+     */
+    static final String WIP_LEDGER_GAP_HINT =
+            "这批半成品缺少可冲销的入库流水, 系统无法自动撤回。请联系管理员核对该批次的入库记录后再处理";
+
+    /** C4: 有盘点调整的半成品同样无法自动撤回, 出口与 {@link #WIP_LEDGER_GAP_HINT} 相同。 */
+    static final String WIP_ADJUSTMENT_HINT =
+            "这批半成品做过盘点调整, 系统无法判断调整量归属哪次报工, 不能自动撤回。请联系管理员核对后再处理";
+
+
     // ==================== 提交撤回申请 ====================
 
     @Override
@@ -508,7 +520,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     .orElse(BigDecimal.ZERO);
             if (adjustment.signum() != 0) {
                 throw new BusinessException(409, "撤回失败: 半成品存在未归零的盘点调整，不能自动猜测其归属")
-                        .withCode("WIP_ADJUSTMENT_PRESENT");
+                        .withCode("WIP_ADJUSTMENT_PRESENT")
+                        .withHint(WIP_ADJUSTMENT_HINT)
+                        .withSeverity("BLOCKING");
             }
         }
         for (SemiFinishedInventory wip : lockedWips) {
@@ -523,7 +537,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         wip.getIntermediateBatchNo(),
                         strandedQuantity.stripTrailingZeros().toPlainString()))
                         .withCode("WIP_NOT_LEDGERED")
-                        .withHint("请先用「半成品盘点」把该批次余额校正到实际值，再重新提交撤回")
+                        .withHint(WIP_LEDGER_GAP_HINT)
                         .withSeverity("BLOCKING")
                         .withHintTarget(String.valueOf(batchId));
             }
@@ -731,8 +745,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                                 + "撤回没法把它退回去 —— 若就这样标记完成, 报工没了而货还在, 账就对不上了",
                         batchId, stranded.stripTrailingZeros().toPlainString()))
                         .withCode("WIP_NOT_LEDGERED")
-                        .withHint("这批半成品是流水账补全之前入的库。请先用「半成品盘点」把该批次余额"
-                                + "校正到实际值 (盘点会补一条 ADJUST 流水), 再重新提交撤回")
+                        .withHint(WIP_LEDGER_GAP_HINT)
                         .withSeverity("BLOCKING")
                         .withHintTarget(String.valueOf(batchId));
             }
@@ -3019,8 +3032,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     ledgerInTotal.stripTrailingZeros().toPlainString(),
                     producedOnRecord.subtract(ledgerInTotal).stripTrailingZeros().toPlainString()))
                     .withCode("WIP_LEDGER_INCOMPLETE")
-                    .withHint("这批半成品是流水账补全之前入的库。请先用「半成品盘点」把该批次余额"
-                            + "校正到实际值 (盘点会补一条 ADJUST 流水), 再重新提交撤回")
+                    .withHint(WIP_LEDGER_GAP_HINT)
                     .withSeverity("BLOCKING")
                     .withHintTarget(sfi.getIntermediateBatchNo());
         }
