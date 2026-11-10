@@ -184,6 +184,8 @@ export default function ProductionPlanManagementScreen() {
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [completingPlan, setCompletingPlan] = useState<ProductionPlan | null>(null);
   const [actualQuantity, setActualQuantity] = useState('');
+  // 纪律排查 A7: 直接完工超产必须填原因 (服务端 PRODUCTION_OVER_PLAN_REASON_REQUIRED)
+  const [overPlanReason, setOverPlanReason] = useState('');
   const [completeLoading, setCompleteLoading] = useState(false);
   const [materialAdvisories, setMaterialAdvisories] = useState<Record<string, ProductionPlanMaterialAdvisory>>({});
 
@@ -613,6 +615,7 @@ export default function ProductionPlanManagementScreen() {
   const openCompleteDialog = (plan: ProductionPlan) => {
     setCompletingPlan(plan);
     setActualQuantity(plan.plannedQuantity?.toString() || '');
+    setOverPlanReason('');
     setShowCompleteDialog(true);
   };
 
@@ -625,12 +628,20 @@ export default function ProductionPlanManagementScreen() {
       appAlert('错误', '请输入有效的实际产量');
       return;
     }
+    const planned = completingPlan.plannedQuantity ?? 0;
+    const overPlan = planned > 0 && actualQty > planned;
+    if (overPlan && !overPlanReason.trim()) {
+      appAlert('需要超产原因', `实际产量比计划多 ${(actualQty - planned).toFixed(2)}，请先填写超产原因`);
+      return;
+    }
 
     try {
       setCompleteLoading(true);
       const response = await productionPlanApiClient.completeProduction(
         completingPlan.id,
-        actualQty
+        actualQty,
+        undefined,
+        overPlan ? overPlanReason.trim() : undefined,
       );
 
       if (response.success) {
@@ -638,6 +649,7 @@ export default function ProductionPlanManagementScreen() {
         setShowCompleteDialog(false);
         setCompletingPlan(null);
         setActualQuantity('');
+        setOverPlanReason('');
         loadPlans();
       }
     } catch (error) {
@@ -1501,6 +1513,25 @@ export default function ProductionPlanManagementScreen() {
             </View>
           )}
 
+          {completingPlan
+            && (completingPlan.plannedQuantity ?? 0) > 0
+            && parseFloat(actualQuantity) > (completingPlan.plannedQuantity ?? 0) && (
+            <View testID="complete-over-plan-reason">
+              <Text style={styles.batchWarningHint}>
+                实际比计划多 {(parseFloat(actualQuantity) - (completingPlan.plannedQuantity ?? 0)).toFixed(2)}，必须写超产原因
+              </Text>
+              <TextInput
+                label="超产原因 *"
+                value={overPlanReason}
+                onChangeText={setOverPlanReason}
+                mode="outlined"
+                style={styles.input}
+                placeholder="例如：客户追加 / 投料多出"
+                maxLength={500}
+              />
+            </View>
+          )}
+
           <View style={styles.modalActions}>
             <Button
               mode="outlined"
@@ -1519,7 +1550,14 @@ export default function ProductionPlanManagementScreen() {
               onPress={handleCompleteProduction}
               style={styles.modalButton}
               loading={completeLoading}
-              disabled={completeLoading || !actualQuantity}
+              disabled={
+                completeLoading
+                || !actualQuantity
+                || (!!completingPlan
+                  && (completingPlan.plannedQuantity ?? 0) > 0
+                  && parseFloat(actualQuantity) > (completingPlan.plannedQuantity ?? 0)
+                  && !overPlanReason.trim())
+              }
             >
               确认完成
             </Button>

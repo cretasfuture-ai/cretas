@@ -259,6 +259,19 @@ export function recalculateSettledPlanCosts(factoryId: string, planId: string) {
   )
 }
 
+/** 本厂仓库多收规则 (纪律排查 A11, 工厂配置): BLOCK 硬拦 / WITHIN_RATE 比例内填原因 / ALWAYS_WITH_REASON 一律填原因。 */
+export type OverReceiveMode = 'BLOCK' | 'WITHIN_RATE' | 'ALWAYS_WITH_REASON'
+
+export interface OverReceiveRule {
+  mode: OverReceiveMode
+  /** WITHIN_RATE 下的多收比例 (小数, 0.05 = 5%) */
+  rate: number
+}
+
+export function getOverReceiveRule(factoryId: string) {
+  return get<OverReceiveRule>(`/${factoryId}/production-plans/discipline/over-receive-rule`)
+}
+
 export function confirmProductionWarehouseReceipt(
   factoryId: string,
   planId: string,

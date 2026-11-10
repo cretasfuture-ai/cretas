@@ -12,6 +12,13 @@ import type { ProductionPlanCustomerOption } from './productionPlanCustomerSelec
 import { get, post, put } from '@/api/request';
 import { ElMessage, ElMessageBox, ElSelect } from 'element-plus';
 import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
+import {
+  DEFAULT_OVER_RECEIVE_RULE,
+  overReceiveBlockedMessage,
+  overReceiveExceeds,
+  overReceiveHelp,
+  overReceiveMax,
+} from '@/utils/overReceiveRule';
 import { Plus, Search, Refresh, VideoPause, CircleCheck, Download, ChatDotRound, Printer, Warning, ArrowDown } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
@@ -28,6 +35,8 @@ import {
   getProductionSettlement,
   recalculateSettledPlanCosts,
   confirmProductionWarehouseReceipt,
+  getOverReceiveRule,
+  type OverReceiveRule,
   clearProductionTransitLedger,
   interimSettle,
   repinPlanAuthority,
@@ -3095,6 +3104,17 @@ const receiptReportedQuantity = computed(() =>
   Number(receiptSettlement.value?.actualFinishedQuantity || 0)
 );
 const receiptHasOutputLines = computed(() => receiptForm.value.outputLines.length > 0);
+// 纪律排查 A11: 多收怎么处理由本厂配置; 读不到规则时按默认硬拦 (与服务端一致), ⛔ 不按宽处理
+const receiptOverReceiveRule = ref<OverReceiveRule>({ ...DEFAULT_OVER_RECEIVE_RULE });
+const receiptMaxQuantity = computed<number | undefined>(() =>
+  overReceiveMax(receiptReportedQuantity.value, receiptOverReceiveRule.value)
+);
+const receiptOverReceiveHelp = computed(() =>
+  overReceiveHelp(receiptReportedQuantity.value, receiptDisplayUnit.value, receiptOverReceiveRule.value)
+);
+const receiptExceedsAllowed = computed(() =>
+  overReceiveExceeds(receiptReportedQuantity.value, receiptReceivedQuantity.value, receiptOverReceiveRule.value)
+);
 const receiptReceivedQuantity = computed(() =>
   Number(receiptForm.value.receivedQuantity || 0)
 );
@@ -3132,7 +3152,11 @@ const receiptSubmitDisabledReason = computed(() => {
     return '';
   }
   if (!receiptReceivedQuantity.value || receiptReceivedQuantity.value <= 0) return '请输入仓库实际收到数量';
-  if (receiptReceivedQuantity.value > receiptReportedQuantity.value) return '仓库实收不能超过生产报产，请先让生产修正结单';
+  if (receiptExceedsAllowed.value) {
+    return overReceiveBlockedMessage(
+      receiptReportedQuantity.value, receiptDisplayUnit.value, receiptOverReceiveRule.value,
+    );
+  }
   if (receiptNeedsReason.value && !receiptForm.value.varianceReason) return '超出容差的差异必须选择原因';
   if (receiptNeedsReason.value && !receiptForm.value.responsibilitySide) return '超出容差的差异必须选择生产侧、仓库侧或称重误差';
   if (receiptNeedsReason.value && receiptForm.value.responsibilitySide === 'PENDING') return '责任侧不能为待核对，请先明确归属';
@@ -3196,6 +3220,13 @@ async function handleWarehouseReceipt(row: TableRow) {
       return;
     }
     receiptSettlement.value = res.data;
+    receiptOverReceiveRule.value = { ...DEFAULT_OVER_RECEIVE_RULE };
+    try {
+      const ruleRes = await getOverReceiveRule(factoryId.value);
+      if (ruleRes.success && ruleRes.data) receiptOverReceiveRule.value = ruleRes.data;
+    } catch {
+      // 读不到规则 → 按默认硬拦显示; 服务端仍按本厂配置判, 不会因此误放行
+    }
     const outputLines = (res.data.outputLines || []).map((line) => ({
       ...line,
       originalReceivedQuantity: Number(line.receivedQuantity ?? 0),
@@ -6467,12 +6498,12 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
           <el-input-number
             data-testid="native-receipt-quantity" v-model="receiptForm.receivedQuantity"
             :min="0"
-            :max="receiptReportedQuantity"
+            :max="receiptMaxQuantity"
             :precision="2"
             style="width: 100%"
           />
-          <div class="settlement-help">
-            上限为生产报产 {{ receiptReportedQuantity }} {{ receiptDisplayUnit }}，超过上限需先退回生产修正结单。
+          <div class="settlement-help" data-testid="receipt-over-receive-help">
+            {{ receiptOverReceiveHelp }}
           </div>
         </el-form-item>
 
@@ -6492,8 +6523,8 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
         </div>
 
         <el-alert
-          v-if="receiptReceivedQuantity > receiptReportedQuantity"
-          title="仓库实收不能超过生产报产，系统已禁止提交。"
+          v-if="receiptExceedsAllowed"
+          :title="`${receiptSubmitDisabledReason}。系统已禁止提交。`"
           type="error"
           show-icon
           :closable="false"

@@ -22,4 +22,11 @@ describe('production plan mobile boundary', () => {
     expect(screenSource).toContain("canCompletePlan && plan.status?.toLowerCase() === 'in_progress'");
     expect(screenSource).toContain('visible={canCompletePlan && showCompleteDialog}');
   });
+
+  it('A7: 超产时出现超产原因输入, 未填原因时确认按钮置灰, 原因随完工请求发出', () => {
+    expect(screenSource).toContain('testID="complete-over-plan-reason"');
+    expect(screenSource).toContain('label="超产原因 *"');
+    expect(screenSource).toContain('&& !overPlanReason.trim())');
+    expect(screenSource).toContain('overPlan ? overPlanReason.trim() : undefined');
+  });
 });

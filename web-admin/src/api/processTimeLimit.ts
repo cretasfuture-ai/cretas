@@ -113,7 +113,16 @@ export const getPlanTimeLimits = (factoryId: string, planId: string, processOrde
 
 export const startProcessTimeMark = (
   factoryId: string,
-  body: { targetType: string; targetId: string; kind: 'START' | 'PAUSE'; code: 'THAW' | 'COLD_STORAGE' },
+  body: {
+    targetType: string;
+    targetId: string;
+    kind: 'START' | 'PAUSE';
+    code: 'THAW' | 'COLD_STORAGE';
+    /** 纪律排查 A13: 只对开始解冻有效 —— 补登实际开始时间 (本地时间 YYYY-MM-DDTHH:mm:ss); 不传 = 现在。 */
+    startedAt?: string;
+    /** 补登原因 (startedAt 早于现在时必填)。 */
+    backfillReason?: string;
+  },
 ) => post<ProcessTimeMark>(`${base(factoryId)}/marks`, body);
 
 export const endProcessTimeMark = (factoryId: string, markId: number) =>
