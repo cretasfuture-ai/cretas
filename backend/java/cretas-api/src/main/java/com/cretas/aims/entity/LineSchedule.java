@@ -133,6 +133,13 @@ public class LineSchedule {
         pending, in_progress, completed, delayed, cancelled
     }
 
+    /**
+     * 没开工 = 没有实际开始时间, 且还在这几个状态里 (延误不等于开工: 待开始超时、或报进度时效率低, 都会被标成延误)。
+     * 全仓唯一一份: 调度计划重开时作废旧排程、生产计划取消后的幽灵排程判定与级联, 都读它。
+     */
+    public static final java.util.Set<ScheduleStatus> NOT_STARTED_STATUSES =
+            java.util.Collections.unmodifiableSet(java.util.EnumSet.of(ScheduleStatus.pending, ScheduleStatus.delayed));
+
     @PrePersist
     public void prePersist() {
         if (this.id == null) {
