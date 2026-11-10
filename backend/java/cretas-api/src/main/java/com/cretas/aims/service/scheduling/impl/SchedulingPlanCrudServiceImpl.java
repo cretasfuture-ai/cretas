@@ -319,9 +319,8 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                 + (keptRows > 0 ? "，保留已开工的 " + keptRows + " 条" : "");
     }
 
-    /** 没开工 = 没有实际开始时间, 且还在待开始 / 延误 (延误不等于开工: 待开始超时也会被标成延误)。 */
-    static final Set<LineSchedule.ScheduleStatus> NOT_STARTED_STATUSES =
-            EnumSet.of(LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.delayed);
+    /** 没开工的状态口径只有一份, 在 {@link LineSchedule#NOT_STARTED_STATUSES}。 */
+    static final Set<LineSchedule.ScheduleStatus> NOT_STARTED_STATUSES = LineSchedule.NOT_STARTED_STATUSES;
 
     private static BusinessException duplicateDay(String existingPlanId) {
         return new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")

@@ -61,7 +61,7 @@ public interface ShortageScheduleQueryRepository extends Repository<LineSchedule
                                          @Param("exclude") Collection<String> exclude,
                                          @Param("live") Collection<LineSchedule.ScheduleStatus> live,
                                          @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans,
-                                         @Param("notStarted") LineSchedule.ScheduleStatus notStarted,
+                                         @Param("notStarted") Collection<LineSchedule.ScheduleStatus> notStarted,
                                          @Param("cancelledPlan") ProductionPlanStatus cancelledPlan);
 
     default List<LineSchedule> findOverlapping(String factoryId, String lineId, LocalDateTime start, LocalDateTime end,
@@ -70,7 +70,7 @@ public interface ShortageScheduleQueryRepository extends Repository<LineSchedule
                 LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.in_progress,
                 LineSchedule.ScheduleStatus.delayed), java.util.EnumSet.of(
                 SchedulingPlan.PlanStatus.draft, SchedulingPlan.PlanStatus.confirmed,
-                SchedulingPlan.PlanStatus.in_progress), LineSchedule.ScheduleStatus.pending, ProductionPlanStatus.CANCELLED);
+                SchedulingPlan.PlanStatus.in_progress), LineSchedule.NOT_STARTED_STATUSES, ProductionPlanStatus.CANCELLED);
     }
 
     /**

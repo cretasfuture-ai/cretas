@@ -33,8 +33,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * 用真实的 Spring 自动代理 (与生产同一个 {@code @Aspect} Bean), 被代理的取消服务是桩;
  * 级联本身 (真 UPDATE) 见 {@code CancelledProductionPlanGhostScheduleJpaContractTest}。
  */
-@SpringJUnitConfig(CancelledPlanScheduleCascadeAspectTest.Config.class)
-class CancelledPlanScheduleCascadeAspectTest {
+@SpringJUnitConfig(CancelledPlanScheduleCascadeAspectContractTest.Config.class)
+class CancelledPlanScheduleCascadeAspectContractTest {
 
     /** 被代理的那个桩本身: 打桩必须打在它上面, 经代理打桩会先触发一次切面。 */
     static final ProductionPlanService RAW_PLANS = mock(ProductionPlanService.class);

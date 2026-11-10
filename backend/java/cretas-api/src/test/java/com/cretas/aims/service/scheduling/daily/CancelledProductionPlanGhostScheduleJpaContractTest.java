@@ -10,6 +10,7 @@ import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.SchedulingPlan;
 import com.cretas.aims.entity.enums.PlanSourceType;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.LineScheduleRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
@@ -51,7 +52,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link ApsConstraintQueryRepository#findLiveEndingFrom} (插单也读它)。这里的「已取消」直接改计划状态,
  * 模拟级联之前留下的存量幽灵排程 —— 不靠第 2 层也必须不占线。
  * <p>第 2 层 (取消级联): {@link CancelledPlanScheduleCascade} 真 JPA 跑 UPDATE; 挂到取消入口上的接线见
- * {@code CancelledPlanScheduleCascadeAspectTest}。真 PostgreSQL 上的同一组语句见
+ * {@code CancelledPlanScheduleCascadeAspectContractTest}。真 PostgreSQL 上的同一组语句见
  * {@code CancelledPlanScheduleRepositoryQueryValidationTest}。
  */
 @DataJpaTest(properties = {
@@ -86,6 +87,7 @@ class CancelledProductionPlanGhostScheduleJpaContractTest {
 
     @Autowired private DailyCapacityScheduleGenerator generator;
     @Autowired private CancelledPlanScheduleCascade cascade;
+    @Autowired private LineScheduleServiceImpl lineSchedules;
     @Autowired private EntityManager em;
     @Autowired private ProductionPlanRepository planRepository;
     @Autowired private ProductionLineRepository lineRepository;
@@ -155,6 +157,50 @@ class CancelledProductionPlanGhostScheduleJpaContractTest {
                 .containsExactly(DAY.plusDays(2) + "=50", DAY.plusDays(3) + "=30");
     }
 
+    @Test
+    void aDelayedButNeverStartedRowOfACancelledPlanIsAGhostToo() {
+        SchedulingPlanDTO first = generator.generate(F, request(DAY, "PP-A"), 7L);
+        LineSchedule row = lineScheduleRepository.findById(rowOf(first, "PP-A").getId()).orElseThrow();
+        row.setStatus(LineSchedule.ScheduleStatus.delayed);   // 延误 ≠ 开工: 没有实际开始时间
+        lineScheduleRepository.saveAndFlush(row);
+        flushClear();
+        cancelPlanStatusOnly("PP-A");
+
+        SchedulingPlanDTO next = generator.generate(F, request(DAY.plusDays(1), "PP-B"), 7L);
+
+        List<String> b = days(rowOf(next, "PP-B"));
+        System.out.println("GHOST_APS delayed PP-B days=" + b);
+        assertThat(b).containsExactly(DAY.plusDays(1) + "=80");
+    }
+
+    // ==================== 开工守卫: 存量幽灵不能被「开始」复活 ====================
+
+    @Test
+    void startingARowOfACancelledProductionPlanIsA409AndChangesNothing() {
+        SchedulingPlanDTO first = generator.generate(F, request(DAY, "PP-A"), 7L);
+        String ghostId = rowOf(first, "PP-A").getId();
+        flushClear();
+        cancelPlanStatusOnly("PP-A");   // 级联上线之前取消的计划: 排程还是待开始
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> lineSchedules.startSchedule(F, ghostId));
+        System.out.println("GHOST_START thrown=" + thrown);
+        assertThat(thrown).isInstanceOf(BusinessException.class).hasMessageContaining("所属的生产计划已取消");
+        assertThat(((BusinessException) thrown).getCode()).isEqualTo(409);
+        flushClear();
+        LineSchedule after = lineScheduleRepository.findById(ghostId).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(LineSchedule.ScheduleStatus.pending);
+        assertThat(after.getActualStartTime()).isNull();
+    }
+
+    @Test
+    void negativeControlARowOfALivePlanStillStarts() {
+        SchedulingPlanDTO first = generator.generate(F, request(DAY, "PP-A"), 7L);
+        String rowId = rowOf(first, "PP-A").getId();
+        flushClear();
+
+        assertThat(lineSchedules.startSchedule(F, rowId).getStatus()).isEqualTo("in_progress");
+    }
+
     // ==================== 第 2 层: 取消级联 ====================
 
     @Test
@@ -164,6 +210,9 @@ class CancelledProductionPlanGhostScheduleJpaContractTest {
         LineSchedule startedA = row(sp, "PP-A", LineSchedule.ScheduleStatus.in_progress, true);
         LineSchedule pendingButStartedA = row(sp, "PP-A", LineSchedule.ScheduleStatus.pending, true);
         LineSchedule completedA = row(sp, "PP-A", LineSchedule.ScheduleStatus.completed, true);
+        // 延误 ≠ 开工: 报进度时效率低会把没有实际开始时间的待开始改成延误 (LineSchedule.NOT_STARTED_STATUSES)
+        LineSchedule delayedNoStartA = row(sp, "PP-A", LineSchedule.ScheduleStatus.delayed, false);
+        LineSchedule delayedStartedA = row(sp, "PP-A", LineSchedule.ScheduleStatus.delayed, true);
         LineSchedule pendingB = row(sp, "PP-B", LineSchedule.ScheduleStatus.pending, false);
         // 别的厂有一条挂着同名计划 id 的 pending 排程 —— 不许被这家厂的取消碰到
         LineSchedule foreign = row(schedulingPlan(OTHER, DAY), "PP-A", LineSchedule.ScheduleStatus.pending, false);
@@ -179,11 +228,15 @@ class CancelledProductionPlanGhostScheduleJpaContractTest {
         CancelledPlanScheduleCascade.Outcome out = cascade.cascade(F, "PP-A");
         flushClear();
         System.out.println("GHOST_CASCADE out=" + out + " pendingA=" + status(pendingA) + " startedA=" + status(startedA)
-                + " pendingButStartedA=" + status(pendingButStartedA) + " pendingB=" + status(pendingB)
+                + " pendingButStartedA=" + status(pendingButStartedA) + " delayedNoStartA=" + status(delayedNoStartA)
+                + " delayedStartedA=" + status(delayedStartedA) + " pendingB=" + status(pendingB)
                 + " foreign=" + status(foreign));
 
-        assertThat(out.cancelledSchedules()).isEqualTo(1);
-        assertThat(out.keptStartedSchedules()).as("执行中 1 条 + 状态 pending 但已有实际开始 1 条").isEqualTo(2);
+        assertThat(out.cancelledSchedules()).as("待开始 1 条 + 延误但没开始 1 条").isEqualTo(2);
+        assertThat(out.keptStartedSchedules())
+                .as("执行中 1 条 + 状态 pending 但已有实际开始 1 条 + 延误且已有实际开始 1 条").isEqualTo(3);
+        assertThat(status(delayedNoStartA)).isEqualTo(LineSchedule.ScheduleStatus.cancelled);
+        assertThat(status(delayedStartedA)).isEqualTo(LineSchedule.ScheduleStatus.delayed);
         LineSchedule voided = lineScheduleRepository.findById(pendingA.getId()).orElseThrow();
         assertThat(voided.getStatus()).isEqualTo(LineSchedule.ScheduleStatus.cancelled);
         assertThat(voided.getAdjustmentReason()).isEqualTo(CancelledPlanScheduleRepository.CASCADE_REASON);
@@ -193,14 +246,14 @@ class CancelledProductionPlanGhostScheduleJpaContractTest {
         assertThat(status(completedA)).isEqualTo(LineSchedule.ScheduleStatus.completed);
         assertThat(status(pendingB)).as("阴性对照: 别的计划不动").isEqualTo(LineSchedule.ScheduleStatus.pending);
         assertThat(status(foreign)).as("阴性对照: 别的厂不动").isEqualTo(LineSchedule.ScheduleStatus.pending);
-        assertThat(lineScheduleRepository.count()).as("⛔ 不删行").isEqualTo(6);
+        assertThat(lineScheduleRepository.count()).as("⛔ 不删行").isEqualTo(8);
 
         // 重复级联: 0 条; 给用户的结果现数, 不依赖那一刻的返回值
         assertThat(cascade.cascade(F, "PP-A").cancelledSchedules()).isZero();
         CancelledPlanScheduleCascade.Outcome summary = cascade.summarize(F, "PP-A");
-        assertThat(summary).isEqualTo(new CancelledPlanScheduleCascade.Outcome(1, 2));
+        assertThat(summary).isEqualTo(new CancelledPlanScheduleCascade.Outcome(2, 3));
         assertThat(summary.describe("生产计划已取消"))
-                .isEqualTo("生产计划已取消；1 条未开工的排程任务已一并取消；2 条排程任务已开工，保留未动，请到调度计划里收尾");
+                .isEqualTo("生产计划已取消；2 条未开工的排程任务已一并取消；3 条排程任务已开工，保留未动，请到调度计划里收尾");
         assertThat(new CancelledPlanScheduleCascade.Outcome(0, 0).describe("生产计划已取消")).isEqualTo("生产计划已取消");
     }
 

@@ -33,7 +33,7 @@ public interface ApsConstraintQueryRepository extends Repository<LineSchedule, S
     List<LineSchedule> findLiveEndingFromIn(@Param("factoryId") String factoryId, @Param("from") LocalDateTime from,
                                             @Param("live") Collection<LineSchedule.ScheduleStatus> live,
                                             @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans,
-                                            @Param("notStarted") LineSchedule.ScheduleStatus notStarted,
+                                            @Param("notStarted") Collection<LineSchedule.ScheduleStatus> notStarted,
                                             @Param("cancelledPlan") ProductionPlanStatus cancelledPlan);
 
     /**
@@ -65,7 +65,7 @@ public interface ApsConstraintQueryRepository extends Repository<LineSchedule, S
                         LineSchedule.ScheduleStatus.delayed),
                 EnumSet.of(SchedulingPlan.PlanStatus.draft, SchedulingPlan.PlanStatus.confirmed,
                         SchedulingPlan.PlanStatus.in_progress),
-                LineSchedule.ScheduleStatus.pending, ProductionPlanStatus.CANCELLED);
+                LineSchedule.NOT_STARTED_STATUSES, ProductionPlanStatus.CANCELLED);
     }
 
     /**

@@ -109,6 +109,8 @@ class CancelledPlanScheduleRepositoryQueryValidationTest {
         ProductionPlan live = pp("F1");
         ProductionPlan cancelledViaBatch = pp("F1");
         LineSchedule ghost = task(sp, cancelled, LineSchedule.ScheduleStatus.pending, false);
+        LineSchedule delayedGhost = task(sp, cancelled, LineSchedule.ScheduleStatus.delayed, false);   // 延误 ≠ 开工
+        LineSchedule delayedStarted = task(sp, cancelled, LineSchedule.ScheduleStatus.delayed, true);
         LineSchedule started = task(sp, cancelled, LineSchedule.ScheduleStatus.in_progress, true);
         LineSchedule pendingButStarted = task(sp, cancelled, LineSchedule.ScheduleStatus.pending, true);
         LineSchedule livePending = task(sp, live, LineSchedule.ScheduleStatus.pending, false);
@@ -122,11 +124,12 @@ class CancelledPlanScheduleRepositoryQueryValidationTest {
 
         List<String> live1 = constraints.findLiveEndingFrom("F1", DAY.atStartOfDay()).stream()
                 .map(LineSchedule::getId).toList();
-        System.out.println("GHOST_APS_PG ghost=" + ghost.getId() + " batchGhost=" + batchGhost.getId() + " live=" + live1);
+        System.out.println("GHOST_APS_PG ghost=" + ghost.getId() + " delayedGhost=" + delayedGhost.getId()
+                + " batchGhost=" + batchGhost.getId() + " live=" + live1);
 
-        assertThat(live1).doesNotContain(ghost.getId(), batchGhost.getId())
-                .containsExactlyInAnyOrder(started.getId(), pendingButStarted.getId(), livePending.getId(),
-                        manualNoPlan.getId());
+        assertThat(live1).doesNotContain(ghost.getId(), delayedGhost.getId(), batchGhost.getId())
+                .containsExactlyInAnyOrder(started.getId(), pendingButStarted.getId(), delayedStarted.getId(),
+                        livePending.getId(), manualNoPlan.getId());
     }
 
     @Test
@@ -139,6 +142,7 @@ class CancelledPlanScheduleRepositoryQueryValidationTest {
         LineSchedule viaBatch = task(sp, null, LineSchedule.ScheduleStatus.pending, false);
         LineSchedule started = task(sp, plan, LineSchedule.ScheduleStatus.in_progress, true);
         LineSchedule pendingButStarted = task(sp, plan, LineSchedule.ScheduleStatus.pending, true);
+        LineSchedule delayedNoStart = task(sp, plan, LineSchedule.ScheduleStatus.delayed, false);
         LineSchedule other = task(sp, untouchedPlan, LineSchedule.ScheduleStatus.pending, false);
         LineSchedule foreign = task(otherSp, plan, LineSchedule.ScheduleStatus.pending, false);   // 别厂排程挂着同一个 id
         em.flush();
@@ -155,7 +159,8 @@ class CancelledPlanScheduleRepositoryQueryValidationTest {
         em.clear();
         System.out.println("GHOST_CASCADE_PG voided=" + voided);
 
-        assertThat(voided).isEqualTo(2);
+        assertThat(voided).isEqualTo(3);
+        assertThat(reload(delayedNoStart).getStatus()).isEqualTo(LineSchedule.ScheduleStatus.cancelled);
         assertThat(reload(direct).getStatus()).isEqualTo(LineSchedule.ScheduleStatus.cancelled);
         assertThat(reload(direct).getAdjustmentReason()).isEqualTo(CancelledPlanScheduleRepository.CASCADE_REASON);
         assertThat(reload(direct).getLastAdjustmentTime()).isEqualTo(now);
@@ -164,10 +169,37 @@ class CancelledPlanScheduleRepositoryQueryValidationTest {
         assertThat(reload(pendingButStarted).getStatus()).isEqualTo(LineSchedule.ScheduleStatus.pending);
         assertThat(reload(other).getStatus()).isEqualTo(LineSchedule.ScheduleStatus.pending);
         assertThat(reload(foreign).getStatus()).isEqualTo(LineSchedule.ScheduleStatus.pending);
-        assertThat(cascadeRows.countCascadeCancelled("F1", plan.getId())).isEqualTo(2);
+        assertThat(cascadeRows.countCascadeCancelled("F1", plan.getId())).isEqualTo(3);
         assertThat(cascadeRows.countStartedNotFinished("F1", plan.getId())).isEqualTo(2);
         assertThat(cascadeRows.findFactoryIdOfPlan(plan.getId())).contains("F1");
         assertThat(cascadeRows.cancelNotStartedOfCancelledPlan("F1", plan.getId(), now)).as("重复级联").isZero();
+    }
+
+    /** 开工守卫: 所属生产计划 (直接或经批次) 已取消; 别的厂查不到; 计划没取消、没有所属计划的都不算。 */
+    @Test
+    void ownerPlanCancelledSeesDirectAndBatchOwnershipInThisFactoryOnly() {
+        SchedulingPlan sp = sp("F1");
+        ProductionPlan cancelled = pp("F1");
+        ProductionPlan live = pp("F1");
+        LineSchedule direct = task(sp, cancelled, LineSchedule.ScheduleStatus.pending, false);
+        LineSchedule viaBatch = task(sp, null, LineSchedule.ScheduleStatus.pending, false);
+        LineSchedule ofLive = task(sp, live, LineSchedule.ScheduleStatus.pending, false);
+        LineSchedule noPlan = task(sp, null, LineSchedule.ScheduleStatus.pending, false);
+        em.flush();
+        viaBatch.setBatchId(batch(cancelled).getId());
+        cancel(cancelled);
+        em.flush();
+
+        System.out.println("GHOST_GUARD_PG direct=" + cascadeRows.ownerPlanCancelled("F1", direct.getId())
+                + " viaBatch=" + cascadeRows.ownerPlanCancelled("F1", viaBatch.getId())
+                + " ofLive=" + cascadeRows.ownerPlanCancelled("F1", ofLive.getId())
+                + " noPlan=" + cascadeRows.ownerPlanCancelled("F1", noPlan.getId())
+                + " otherFactory=" + cascadeRows.ownerPlanCancelled("F2", direct.getId()));
+        assertThat(cascadeRows.ownerPlanCancelled("F1", direct.getId())).isTrue();
+        assertThat(cascadeRows.ownerPlanCancelled("F1", viaBatch.getId())).isTrue();
+        assertThat(cascadeRows.ownerPlanCancelled("F1", ofLive.getId())).isFalse();
+        assertThat(cascadeRows.ownerPlanCancelled("F1", noPlan.getId())).isFalse();
+        assertThat(cascadeRows.ownerPlanCancelled("F2", direct.getId())).isFalse();
     }
 
     // ==================== fixtures ====================
