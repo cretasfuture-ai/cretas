@@ -5,7 +5,9 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition;
 import com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.service.factory.FactoryMaterialRequisitionService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -84,10 +86,14 @@ public class FactoryMaterialRequisitionController {
         return ResponseEntity.ok(Map.of("success", true, "data", result));
     }
 
+    // 详情顺带给辅料行的配比 (确认领料自动算辅料用): 仓管读不了生产计划 / BOM, 弹窗只能从这里拿 (2026-11-10)。
+    // 工艺保密按调用者判, 无权不给配比 —— 见 FactoryMaterialRequisitionService#getDetailForPicking。
     @RequireModule(value = "production_plan", alsoAllowModules = {"warehouse"})
     @GetMapping("/{id}")
-    public ResponseEntity<?> detail(@PathVariable String factoryId, @PathVariable String id) {
-        return ResponseEntity.ok(Map.of("success", true, "data", service.getById(factoryId, id)));
+    public ResponseEntity<?> detail(@PathVariable String factoryId, @PathVariable String id,
+                                    HttpServletRequest request) {
+        AuthenticatedActor actor = AuthenticatedActor.current(request).orElse(null);
+        return ResponseEntity.ok(Map.of("success", true, "data", service.getDetailForPicking(factoryId, id, actor)));
     }
 
     @GetMapping("/by-plan/{planId}")

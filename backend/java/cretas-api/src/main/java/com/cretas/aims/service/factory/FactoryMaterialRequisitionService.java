@@ -41,6 +41,26 @@ public interface FactoryMaterialRequisitionService {
     /** 详情 (含明细). */
     FactoryMaterialRequisition getById(String factoryId, String id);
 
+    /** {@link FactoryMaterialRequisition#getAuxiliaryAutoCalc()} 的四个取值。 */
+    String AUX_AUTO_CALC_AVAILABLE = "AVAILABLE";
+    String AUX_AUTO_CALC_NO_RATIO = "NO_RATIO";
+    String AUX_AUTO_CALC_PROCESS_SECRET = "PROCESS_SECRET";
+    /** 读配比时出错 (计划 / BOM / 保密名单查询失败): 详情照常返回, 辅料改人工填。 */
+    String AUX_AUTO_CALC_UNAVAILABLE = "UNAVAILABLE";
+
+    /**
+     * 详情接口用: {@link #getById} + 给辅料行填确认领料要用的配比
+     * ({@code FactoryMaterialRequisitionItem#dosagePerKgG}) 和 {@code auxiliaryAutoCalc}。
+     *
+     * <p>仓管只读得到领料单 (读不了生产计划 / BOM), 所以配比由这里按建单同一份 BOM 调料表带出来;
+     * 产品工艺保密时按调用者的完整查看权判 ({@code ProcessSecretAccessService#permitsViewFull}),
+     * 无权就不给配比, 状态为 {@code PROCESS_SECRET}。
+     *
+     * @param actor 调用者 (从请求取); null 时受保护产品一律不给配比
+     */
+    FactoryMaterialRequisition getDetailForPicking(String factoryId, String id,
+                                                   com.cretas.aims.security.AuthenticatedActor actor);
+
     /** 分页列表, status 可为 null. */
     Page<FactoryMaterialRequisition> list(String factoryId, Status status, Pageable pageable);
 

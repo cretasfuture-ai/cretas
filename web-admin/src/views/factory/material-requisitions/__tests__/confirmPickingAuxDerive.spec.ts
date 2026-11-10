@@ -1,10 +1,53 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUX_NO_RATIO_NOTE,
+  AUX_PROCESS_SECRET_NOTE,
+  AUX_UNAVAILABLE_NOTE,
+  auxAutoCalcNoteFor,
+  auxRatioMapFromItems,
+  hasPickableAuxiliaryRows,
   deriveAuxiliaryQty,
   massUnitToKg,
   rawPickedTotalKg,
   splitZeroQtyRows,
 } from '../confirmPickingAuxDerive';
+
+describe('auxRatioMapFromItems — 配比取自领料单详情的辅料行 (2026-11-10)', () => {
+  it('只收 AUXILIARY + 有物料 id + 有限正数配比; 字符串数字(BigDecimal 序列化)也认', () => {
+    const map = auxRatioMapFromItems([
+      { materialCategory: 'AUXILIARY', materialTypeId: 'ONION', dosagePerKgG: 83.8 },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'SALT', dosagePerKgG: '12.5' },
+      { materialCategory: 'RAW', materialTypeId: 'BEEF', dosagePerKgG: 10 },
+      { materialCategory: 'PACKAGING', materialTypeId: 'BOX', dosagePerKgG: 1 },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'ZERO', dosagePerKgG: 0 },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'NEG', dosagePerKgG: -1 },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'BLANK', dosagePerKgG: '' },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'MISSING' },
+      { materialCategory: 'AUXILIARY', materialTypeId: null, dosagePerKgG: 5 },
+    ]);
+    expect(map).toEqual({ ONION: 83.8, SALT: 12.5 });
+  });
+
+  it('除 AVAILABLE 外都提示「按实际称重填写」, 措辞按原因不同; 没有辅料行时不提示 (L3)', () => {
+    expect(auxAutoCalcNoteFor('AVAILABLE', true)).toBe('');
+    expect(auxAutoCalcNoteFor('PROCESS_SECRET', true)).toBe(AUX_PROCESS_SECRET_NOTE);
+    expect(auxAutoCalcNoteFor('NO_RATIO', true)).toBe(AUX_NO_RATIO_NOTE);
+    expect(auxAutoCalcNoteFor('UNAVAILABLE', true)).toBe(AUX_UNAVAILABLE_NOTE);
+    expect(auxAutoCalcNoteFor(undefined, true), '老后端没给状态 = 拿不到配比').toBe(AUX_NO_RATIO_NOTE);
+    expect(auxAutoCalcNoteFor('NO_RATIO', false)).toBe('');
+    expect(auxAutoCalcNoteFor('UNAVAILABLE', false)).toBe('');
+    for (const note of [AUX_PROCESS_SECRET_NOTE, AUX_NO_RATIO_NOTE, AUX_UNAVAILABLE_NOTE]) {
+      expect(note).toContain('请按实际称重填写');
+    }
+    expect(new Set([AUX_PROCESS_SECRET_NOTE, AUX_NO_RATIO_NOTE, AUX_UNAVAILABLE_NOTE]).size).toBe(3);
+  });
+
+  it('hasPickableAuxiliaryRows: 自备料辅料不算要拣的辅料', () => {
+    expect(hasPickableAuxiliaryRows([{ materialCategory: 'RAW' }])).toBe(false);
+    expect(hasPickableAuxiliaryRows([{ materialCategory: 'AUXILIARY', selfSupplied: true }])).toBe(false);
+    expect(hasPickableAuxiliaryRows([{ materialCategory: 'AUXILIARY', selfSupplied: null }])).toBe(true);
+  });
+});
 
 /**
  * 验收数字来自 brief 里的真实 LIUSHANMEN BOM (熟肉饼, 洋葱泥 WL2020, dosagePerKgG=83.8):
