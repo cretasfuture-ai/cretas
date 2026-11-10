@@ -61,14 +61,14 @@ class SupplyChainOrchestratorSettlementGuardTest {
     }
 
     @Test
-    @DisplayName("A7 switch on (default): batch completion consumes materials but skips automatic FG")
-    void batchCompleted_settlementFactorySkipsAutomaticFinishedGoodsButKeepsConsumption() {
+    @DisplayName("A7 开关开 (默认): 批次完工不按 BOM 自动扣料、不自动建成品 —— 扣料和入库都归结单, 否则同一批料扣两次")
+    void batchCompleted_settlementFactorySkipsAutomaticConsumptionAndFinishedGoods() {
         ProductionBatch batch = completedBatch(101L, "F006");
         discipline(java.util.Map.of());
 
         orchestrator.onBatchCompleted(new BatchCompletedEvent(this, batch));
 
-        verify(batchConsumptionService).autoConsumeForBatch(batch);
+        verify(batchConsumptionService, never()).autoConsumeForBatch(any());
         verify(finishedGoodsBatchRepository, never()).findByFactoryIdAndBatchNumber(anyString(), anyString());
         verify(finishedGoodsBatchRepository, never()).save(any(FinishedGoodsBatch.class));
     }
@@ -154,6 +154,50 @@ class SupplyChainOrchestratorSettlementGuardTest {
         assertThat(plan.getEndTime()).isNotNull();
         verify(finishedGoodsBatchRepository).save(any(FinishedGoodsBatch.class));
         verify(applicationEventPublisher).publishEvent(any(com.cretas.aims.event.ProductionCompletedEvent.class));
+    }
+
+    private com.cretas.aims.entity.ProductionPlan customerOrderPlanWithLastBatch(ProductionBatch batch) {
+        com.cretas.aims.entity.ProductionPlan plan = planWithLastBatch(batch);
+        plan.setSourceType(com.cretas.aims.entity.enums.PlanSourceType.CUSTOMER_ORDER);
+        plan.setSourceOrderId("SO-A7");
+        return plan;
+    }
+
+    @Test
+    @DisplayName("A7 开关开: 客户订单计划的批次完工没有建成品, 不发「成品已生成」事件 (触发链 / 出库不会被假事件驱动)")
+    void a7_switchOn_customerOrderBatchDoesNotAnnounceFinishedGoods() {
+        ProductionBatch batch = completedBatch(301L, "F001");
+        customerOrderPlanWithLastBatch(batch);
+        discipline(java.util.Map.of());
+
+        orchestrator.onBatchCompleted(new BatchCompletedEvent(this, batch));
+
+        verify(applicationEventPublisher, never()).publishEvent(any(com.cretas.aims.event.FinishedGoodsCreatedEvent.class));
+        verify(finishedGoodsBatchRepository, never()).save(any(FinishedGoodsBatch.class));
+    }
+
+    @Test
+    @DisplayName("A7 阴性对照 开关关: 客户订单计划的批次完工照旧扣料、建成品并发「成品已生成」事件")
+    void a7_switchOff_customerOrderBatchStillAnnouncesFinishedGoods() {
+        ProductionBatch batch = completedBatch(302L, "F001");
+        customerOrderPlanWithLastBatch(batch);
+        discipline(SWITCH_OFF);
+        when(finishedGoodsBatchRepository.findByFactoryIdAndBatchNumber(anyString(), anyString()))
+                .thenReturn(Optional.empty());
+        when(productTypeRepository.findById(batch.getProductTypeId())).thenReturn(Optional.empty());
+        when(warehouseResolver.resolveWorkshopId("F001")).thenReturn("WH-WKS-F001");
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        orchestrator.onBatchCompleted(new BatchCompletedEvent(this, batch));
+
+        verify(batchConsumptionService).autoConsumeForBatch(batch);
+        ArgumentCaptor<org.springframework.context.ApplicationEvent> ev =
+                ArgumentCaptor.forClass(org.springframework.context.ApplicationEvent.class);
+        verify(applicationEventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(ev.capture());
+        assertThat(ev.getAllValues()).filteredOn(e -> e instanceof com.cretas.aims.event.FinishedGoodsCreatedEvent)
+                .singleElement()
+                .satisfies(e -> assertThat(((com.cretas.aims.event.FinishedGoodsCreatedEvent) e).getSourceOrderId())
+                        .isEqualTo("SO-A7"));
     }
 
     private ProductionBatch completedBatch(long batchId, String factoryId) {

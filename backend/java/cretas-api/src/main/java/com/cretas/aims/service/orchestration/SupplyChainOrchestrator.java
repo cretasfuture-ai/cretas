@@ -401,17 +401,26 @@ public class SupplyChainOrchestrator {
                 batch.getFactoryId(), batch.getId(), batch.getGoodQuantity());
 
         try {
+            // 纪律排查 A7: 本厂要求完工先结单时, 原料扣减与成品入库都归结单 (结单按实际领用明细过账、仓库确认实收建成品)。
+            // 批次完工这里再按 BOM 理论量扣一次 = 同一批料扣两次 (A7 默认开之后所有工厂都会走到), 所以整段跳过。
+            boolean settlementMode = requiresProductionSettlement(batch.getFactoryId());
+
             // ⑦-AUTO: BOM自动扣料
-            try {
-                batchConsumptionService.autoConsumeForBatch(batch);
-                log.info("自动扣料成功: batchId={}", batch.getId());
-            } catch (Exception e) {
-                log.error("自动扣料失败(不影响后续流程): batchId={}", batch.getId(), e);
+            if (settlementMode) {
+                log.info("本厂要求先结单, 批次完工不自动扣料 (由结单按实际领用扣减): factoryId={}, batchId={}",
+                        batch.getFactoryId(), batch.getId());
+            } else {
+                try {
+                    batchConsumptionService.autoConsumeForBatch(batch);
+                    log.info("自动扣料成功: batchId={}", batch.getId());
+                } catch (Exception e) {
+                    log.error("自动扣料失败(不影响后续流程): batchId={}", batch.getId(), e);
+                }
             }
 
             // ⑦a 自动创建成品批次
             if (batch.getGoodQuantity() != null && batch.getGoodQuantity().compareTo(BigDecimal.ZERO) > 0) {
-                if (requiresProductionSettlement(batch.getFactoryId())) {
+                if (settlementMode) {
                     log.info("Settlement-mode factory skips automatic FG on batch completion; use warehouse receipt path: factoryId={}, batchId={}, goodQty={}",
                             batch.getFactoryId(), batch.getId(), batch.getGoodQuantity());
                 } else {
@@ -943,7 +952,9 @@ public class SupplyChainOrchestrator {
         productionPlanRepository.save(plan);
 
         // 如果PP来自SO → 发布 FinishedGoodsCreatedEvent 通知出库/发货模块
-        if (plan.getSourceOrderId() != null && PlanSourceType.CUSTOMER_ORDER == plan.getSourceType()) {
+        // 纪律排查 A7: 本厂要求先结单时批次完工没有建成品 (成品在仓库确认实收时才建), ⛔ 不发「成品已生成」
+        if (plan.getSourceOrderId() != null && PlanSourceType.CUSTOMER_ORDER == plan.getSourceType()
+                && !requiresProductionSettlement(batch.getFactoryId())) {
             applicationEventPublisher.publishEvent(new FinishedGoodsCreatedEvent(
                     this,
                     batch.getFactoryId(),
