@@ -42,24 +42,27 @@ class JavaPrGateTieringContractTest {
         assertThat(workflow)
                 .contains("types: [opened, synchronize, reopened, labeled]")
                 .containsOnlyOnce("group: java-pr-gate-${{ github.event.pull_request.number }}")
-                .containsSubsequence("fast-contracts:",
+                .containsSubsequence("fast-contracts-shard:",
                         "if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}",
                         "ref: ${{ github.event.pull_request.head.sha }}")
-                .contains("fast-contracts:")
-                .contains("*ContractTest")
-                .contains("*RepositoryQueryValidationTest")
-                .contains("FlywayVersionUniquenessTest")
-                .contains("*StartupGuardTest")
-                .contains("*RoleGateTest")
-                .contains("*SecurityTest")
-                .containsSubsequence("postgres-reversal-concurrency:",
+                .contains("java-gate-fast-patterns.txt")
+                .contains("  fast-contracts:\n    needs: fast-contracts-shard")
+                .containsSubsequence("postgres-reversal-concurrency-shard:",
                         "ref: ${{ github.event.pull_request.head.sha }}")
-                .contains("postgres-reversal-concurrency:")
+                .contains("java-gate-pg-tests.txt")
+                .contains("  postgres-reversal-concurrency:\n    needs: postgres-reversal-concurrency-shard")
                 .contains("bash \"$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh\" \"$MVN\" -B test")
-                .contains("-Dtest=ProductionScopePostgresContractTest,FinanceScopePostgresContractTest,"
-                        + "VoucherLedgerScopePostgresContractTest,ReportReversalLogRepositoryPostgresConcurrencyIT,"
-                        + "ProductionBatchRepositoryPostgresConcurrencyIT,ProductionReportCorrectionPartialUniquePostgresIT")
                 .doesNotContain("localhost:5432/$DB");
+
+        // class lists live in files (sharded since 2026-11-10); the gate classes must stay on them
+        assertThat(read(REPO_ROOT.resolve("scripts/ci/java-gate-fast-patterns.txt")))
+                .contains("*ContractTest", "*RepositoryQueryValidationTest", "FlywayVersionUniquenessTest",
+                        "*StartupGuardTest", "*RoleGateTest", "*SecurityTest");
+        assertThat(read(REPO_ROOT.resolve("scripts/ci/java-gate-pg-tests.txt")))
+                .contains("ProductionScopePostgresContractTest", "FinanceScopePostgresContractTest",
+                        "VoucherLedgerScopePostgresContractTest", "ReportReversalLogRepositoryPostgresConcurrencyIT",
+                        "ProductionBatchRepositoryPostgresConcurrencyIT",
+                        "ProductionReportCorrectionPartialUniquePostgresIT");
 
         assertThat(read(REPO_ROOT.resolve("scripts/ci/run-with-test-postgres.sh")))
                 .contains("initdb -D \"$cluster_root/data\"")

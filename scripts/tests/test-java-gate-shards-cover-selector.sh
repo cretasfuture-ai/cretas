@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GUARDS=.github/workflows/java-gate-pr.yml,scripts/ci/shard-tests.py,scripts/ci/java-gate-fast-patterns.txt,scripts/ci/java-gate-pg-tests.txt,backend/java/cretas-api/src/test/java/**
+# GUARDS=.github/workflows/java-gate-pr.yml,scripts/ci/shard-tests.py,scripts/ci/java-gate-fast-patterns.txt,scripts/ci/java-gate-pg-tests.txt,scripts/ci/java-gate-pg-tests-floor.txt,backend/java/cretas-api/src/test/java/**
 # 分片覆盖闸 (2026-11-10): fast-contracts / postgres-reversal-concurrency 拆成 4 片并行后,
 # 所有分片的并集必须 == 原选择器匹配到的集合, 分片之间不重叠。丢类或丢片必须变红。
 #
@@ -102,6 +102,29 @@ for job, listfile in JOBS.items():
     if not verdict(full, shards[:-1]):
         problems.append("%s: 阴性对照失效: 漏掉最后一片没被判红" % job)
     print("  ok - %s 阴性对照: 漏一个类 / 漏一片都会被判红" % job)
+
+# M1: PG 清单只增不减 —— 全集是从清单自己算的, 挡不住清单被删减, 所以另钉一份下限。
+def lines(path):
+    return [l.strip() for l in open(os.path.join(root, path), encoding="utf-8")
+            if l.strip() and not l.lstrip().startswith("#")]
+floor, cur = lines("scripts/ci/java-gate-pg-tests-floor.txt"), set(lines("scripts/ci/java-gate-pg-tests.txt"))
+lost = [c for c in floor if c not in cur]
+print("READING: pg floor=%d current=%d lost=%s" % (len(floor), len(cur), lost))
+if len(floor) < 100:
+    problems.append("PG 下限清单只有 %d 行, 仪器坏了" % len(floor))
+if lost:
+    problems.append("PG 清单丢了这些类(同一 PR 里也要改 floor 并写理由): %s" % lost)
+
+# M5: 汇总 job 必须 always() + 非 success 就 exit 1; 否则分片红了汇总被跳过, 跳过的必需检查按通过算。
+def agg_ok(blk):
+    return bool(re.search(r"^    if:.*always\(\)", blk, re.M)) and "exit 1" in blk and '= "success"' in blk
+for agg, shard in (("fast-contracts", "fast-contracts-shard"), ("postgres-reversal-concurrency", "postgres-reversal-concurrency-shard")):
+    blk = job_block(agg)
+    if "needs: " + shard not in blk or not agg_ok(blk):
+        problems.append("%s 汇总 job 必须 needs %s、if 含 always()、非 success 就 exit 1" % (agg, shard))
+    if agg_ok(blk.replace("always()", "")):
+        problems.append("%s: 阴性对照失效: 去掉 always() 没被判红" % agg)
+    print("  ok - %s 汇总 job: always() + success 白名单 (阴性对照: 去掉 always() 会红)" % agg)
 
 if problems:
     for p in problems:

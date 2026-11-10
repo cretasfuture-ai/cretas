@@ -202,8 +202,8 @@ class UrgentInsertWorkerShiftContractTest {
 
     @Test
     void omittedSelectionPreservesExistingPendingPlanForLaterAssignmentPath() {
+        // 没有名单就不核验名单; 确认只读一次班次是为了在结果里提示「人员未核对」, 不预留也不分配任何人
         service.confirmInsert(F, 1L, request(null));
-        verifyNoInteractions(shifts);
         verify(plans).save(argThat(plan -> plan.getStatus()
                 == com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING));
     }

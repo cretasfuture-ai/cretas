@@ -477,21 +477,25 @@ class PartialUniqueIndexBackingSoftDeleteContractTest {
         //    ⇒ 这正是本 PR 要解决的那件事的元层面：我加这条闭环，是因为「加进 -Dtest= 不够，
         //      删文件仍可能悄悄通过」；而闭环自己有同一个形状的洞。⇒ 锚到**块 + 键 + 同一行**。
         String block = jobBlock(Files.readString(workflow, StandardCharsets.UTF_8),
-                "postgres-reversal-concurrency");
+                "postgres-reversal-concurrency-shard");
         assertThat(block)
-                .as("阳性对照：切不出 postgres-reversal-concurrency 这个 job（改名/删掉/缩进变了），"
+                .as("阳性对照：切不出 postgres-reversal-concurrency-shard 这个 job（改名/删掉/缩进变了），"
                         + "下面那条就是恒假——先点名说清楚是切块这一步的问题")
                 .isNotEmpty();
 
-        List<String> dTestLines = block.lines().filter(l -> l.contains("-Dtest=")).toList();
-        assertThat(dTestLines)
-                .as("postgres-reversal-concurrency 里必须有 -Dtest= 那一行；没有它这道车道就不再点名任何测试")
-                .isNotEmpty();
-        assertThat(dTestLines)
-                .as("它必须出现在 postgres-reversal-concurrency 的 **-Dtest= 那一行上**——"
-                        + "只要求「出现在文件某处」是不够的：注释能喂饱它，挪进 final-full-suite（要标签才跑）也能，"
-                        + "而两种情况下这个测试都停止运行")
-                .anyMatch(l -> l.contains("SoftDeletePartialUniqueIndexPostgresContractTest"));
+        // 2026-11-10 分片后: 类名不在 workflow 的 -Dtest= 行上, 而在清单文件里, 由分片 job 的
+        // shard-tests.py --list 读取。⇒ 钉两头: 分片 job 块里引用该清单 + 清单里一行就是这个类。
+        assertThat(block)
+                .as("分片 job 必须经 shard-tests.py 读 java-gate-pg-tests.txt —— 否则清单不再喂给车道")
+                .contains("shard-tests.py")
+                .contains("java-gate-pg-tests.txt")
+                .contains("-Dtest=\"$TESTS\"");
+        List<String> listed = Files.readAllLines(Path.of("../../../scripts/ci/java-gate-pg-tests.txt"),
+                StandardCharsets.UTF_8).stream().map(String::trim)
+                .filter(l -> !l.isEmpty() && !l.startsWith("#")).toList();
+        assertThat(listed)
+                .as("清单里必须有一行恰好是这个类（注释不算；挪走就红）")
+                .contains("SoftDeletePartialUniqueIndexPostgresContractTest");
     }
 
     /**

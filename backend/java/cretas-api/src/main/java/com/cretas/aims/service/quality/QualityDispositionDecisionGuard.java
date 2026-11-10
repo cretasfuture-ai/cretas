@@ -57,6 +57,32 @@ public class QualityDispositionDecisionGuard {
         return current;
     }
 
+    /** 拒绝返工已报废批次时的错误码 (Q6)。 */
+    public static final String BATCH_SCRAPPED_CANNOT_REWORK = "BATCH_SCRAPPED_CANNOT_REWORK";
+
+    /**
+     * Q6: 报废是终态, 已报废的生产批次不能再送返工 —— 否则返工把它带回生产 / 库存 (放行早已拒绝报废批次)。
+     *
+     * <p>每一个能对生产批次发起或执行返工的入口都在<b>写任何东西之前</b>调这里 (申请、直接执行、审批通过、特批);
+     * 只看动作名, 其它动作一律放过。调用方若已持有批次锁 ({@link #lockInspection}), 读到的就是锁后的状态。
+     *
+     * @param action 处置动作名 (DispositionAction 名或审计行里的 decisionMade), 不是 REWORK 直接返回
+     */
+    public void assertReworkAllowed(String factoryId, Long productionBatchId, String action) {
+        if (!"REWORK".equals(action) || productionBatchId == null) return;
+        batches.findByIdAndFactoryId(productionBatchId, factoryId)
+                .ifPresent(QualityDispositionDecisionGuard::refuseReworkOfScrapped);
+    }
+
+    /** 同一条拒绝, 给已经拿到批次的库存桥接复用 (最后一道, 是批次 REWORK_REQUIRED 唯一的写入方)。 */
+    public static void refuseReworkOfScrapped(com.cretas.aims.entity.ProductionBatch batch) {
+        if (batch != null && batch.getQualityStatus() == com.cretas.aims.entity.enums.QualityStatus.SCRAPPED) {
+            throw new BusinessException(409, "批次 " + batch.getBatchNumber() + " 已判报废，不能再返工")
+                    .withCode(BATCH_SCRAPPED_CANNOT_REWORK)
+                    .withHint("报废是终态，实物请按废弃处理流程处理，需要重新生产请另开生产批次");
+        }
+    }
+
     public void refreshApproval(DecisionAuditLog application) {
         entityManager.refresh(application, LockModeType.PESSIMISTIC_WRITE);
     }

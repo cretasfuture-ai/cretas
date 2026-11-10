@@ -24,6 +24,17 @@ import com.cretas.aims.service.quality.FactoryRecallService;
 import com.cretas.aims.service.quality.QualityDispositionInventoryService;
 import com.cretas.aims.service.QualityDispositionRuleService.DispositionAction;
 import com.cretas.aims.service.quality.release.QcInspectionPolicy;
+import com.cretas.aims.dto.quality.ApprovalDecisionRequest;
+import com.cretas.aims.dto.quality.SpecialApprovalRequest;
+import com.cretas.aims.entity.User;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.ApprovalChainService;
+import com.cretas.aims.service.SpecialApprovalService;
+import com.cretas.aims.service.impl.DecisionAuditServiceImpl;
+import com.cretas.aims.service.impl.QualityDispositionRuleServiceImpl;
+import com.cretas.aims.service.impl.SpecialApprovalServiceImpl;
+import com.cretas.aims.service.quality.QualityDispositionDecisionGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -75,7 +86,9 @@ class QualityDispositionInventoryPostgresContractTest {
     @EnableAutoConfiguration(exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
     @EntityScan("com.cretas.aims.entity")
     @EnableJpaRepositories("com.cretas.aims.repository")
-    @Import({QualityDispositionInventoryService.class, QcInspectionPolicy.class})
+    @Import({QualityDispositionInventoryService.class, QcInspectionPolicy.class,
+            QualityDispositionDecisionGuard.class, QualityDispositionRuleServiceImpl.class,
+            DecisionAuditServiceImpl.class, SpecialApprovalServiceImpl.class})
     static class Runtime {
     }
 
@@ -93,6 +106,16 @@ class QualityDispositionInventoryPostgresContractTest {
     /** 召回记录查询本身在 FactoryRecallServiceContractTest 里测; 这里桩它的答案, 验证放行按答案处理。其它仓储和策略均为真实 bean。 */
     @MockBean
     FactoryRecallService factoryRecallService;
+
+    /** 工厂动态审批规则不在本测试范围: 不匹配任何规则 (动作自身的审批契约照常生效)。 */
+    @MockBean
+    ApprovalChainService approvalChainService;
+
+    /** 审批人 / 申请人只用来取姓名角色; users 表的实体 DDL 与本测试无关。 */
+    @MockBean
+    UserRepository users;
+
+    @Autowired SpecialApprovalService specialApprovals;
 
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
@@ -385,6 +408,118 @@ class QualityDispositionInventoryPostgresContractTest {
         assertDbQualityStatus(f.productionBatchId(), QualityStatus.PASSED);
         assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
         assertInspectionRetained(f.inspectionId());
+    }
+
+    // ==================== Q11 特批审批 / Q6 报废不能返工 (真事务 + 真 PG 读回) ====================
+    //
+    // 旧实现特批通过后调的是 executeDisposition (按未复核处理): 内层 @Transactional 抛 409 被外层吞掉,
+    // 事务已标记回滚, 提交时炸 UnexpectedRollbackException —— 只有真事务代理才照得出, 内存桩看不到。
+
+    private static final Long APPROVER_ID = 7002L;
+
+    private void stubUsers() {
+        org.mockito.Mockito.when(users.findById(org.mockito.ArgumentMatchers.any())).thenAnswer(call -> {
+            User user = new User();
+            user.setId(call.getArgument(0));
+            user.setFullName("质量经理");
+            user.setRoleCode("quality_manager");
+            return java.util.Optional.of(user);
+        });
+    }
+
+    private String submitSpecial(Fixture f, String action) {
+        SpecialApprovalRequest request = new SpecialApprovalRequest();
+        request.setRequestedAction(action);
+        request.setReason("客户同意让步接收");
+        return specialApprovals.submitSpecialApproval(f.factoryId(), f.inspectionId(), request, USER_ID).getApprovalId();
+    }
+
+    private void approveSpecial(Fixture f, String approvalId) {
+        ApprovalDecisionRequest decision = new ApprovalDecisionRequest();
+        decision.setDecision(ApprovalDecisionRequest.ApprovalDecision.APPROVE);
+        decision.setComment("同意");
+        // 审批人 = 已认证的质量经理 (不是申请人 USER_ID)
+        specialApprovals.processDecision(f.factoryId(), approvalId, decision, APPROVER_ID, APPROVER_ID, "quality_manager");
+    }
+
+    private long pendingApprovals(String inspectionId) {
+        return jdbc.queryForObject("select count(*) from decision_audit_logs where entity_id = ? "
+                + "and requires_approval = true and approval_status = 'PENDING'", Long.class, inspectionId);
+    }
+
+    private long executions(String inspectionId) {
+        return jdbc.queryForObject("select count(*) from decision_audit_logs where entity_id = ? "
+                + "and decision_type = 'RULE_EXECUTION'", Long.class, inspectionId);
+    }
+
+    private String approvalStatus(String approvalId) {
+        return jdbc.queryForObject("select approval_status from decision_audit_logs where id = ?",
+                String.class, approvalId);
+    }
+
+    @Test
+    void specialApprovalExecutesOnceAndCommitsTheRelease() {
+        stubUsers();
+        Fixture f = fixture(false);
+        String approvalId = submitSpecial(f, "CONDITIONAL_RELEASE");
+        assertThat(pendingApprovals(f.inspectionId())).isEqualTo(1);
+
+        approveSpecial(f, approvalId);
+
+        assertThat(approvalStatus(approvalId)).isEqualTo("APPROVED");
+        assertThat(pendingApprovals(f.inspectionId())).isZero();
+        assertThat(executions(f.inspectionId())).isEqualTo(1);
+        assertDbQualityStatus(f.productionBatchId(), QualityStatus.PARTIAL_PASS);
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.AVAILABLE);
+        assertDbMaterial(f.materialId(), MaterialBatchStatus.AVAILABLE);
+
+        // 再批一次被拒, 处置不执行第二次
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> approveSpecial(f, approvalId));
+        assertThat(executions(f.inspectionId())).isEqualTo(1);
+    }
+
+    @Test
+    void specialApprovalFailureSurfacesAndRollsBackTheApproval() {
+        stubUsers();
+        Fixture f = fixture(false);
+        // 申请挂着时本批进了召回: 复核通过的执行 (库存桥接) 拒绝放行, 必须原样报给审批人并整体回滚
+        String approvalId = submitSpecial(f, "CONDITIONAL_RELEASE");
+        org.mockito.Mockito.doThrow(new BusinessException(409, "本批次召回中，不能放行").withCode("RECALL_IN_PROGRESS"))
+                .when(factoryRecallService).assertReleaseAllowed(f.factoryId(), f.productionBatchId());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> approveSpecial(f, approvalId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("RECALL_IN_PROGRESS"));
+
+        assertThat(approvalStatus(approvalId)).isEqualTo("PENDING");
+        assertThat(executions(f.inspectionId())).isZero();
+        assertDbQualityStatus(f.productionBatchId(), QualityStatus.FAILED);
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
+    }
+
+    @Test
+    void scrappedBatchCannotBeReworkedThroughSpecialApproval() {
+        stubUsers();
+        Fixture f = fixture(false);
+        String pendingRework = submitSpecial(f, "REWORK");
+        jdbc.update("update production_batches set quality_status = 'SCRAPPED' where id = ?", f.productionBatchId());
+        long auditsBefore = jdbc.queryForObject("select count(*) from decision_audit_logs where entity_id = ?",
+                Long.class, f.inspectionId());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> submitSpecial(f, "REWORK"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo(QualityDispositionDecisionGuard.BATCH_SCRAPPED_CANNOT_REWORK));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> approveSpecial(f, pendingRework))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo(QualityDispositionDecisionGuard.BATCH_SCRAPPED_CANNOT_REWORK));
+
+        assertThat(jdbc.queryForObject("select count(*) from decision_audit_logs where entity_id = ?",
+                Long.class, f.inspectionId())).isEqualTo(auditsBefore);
+        assertThat(approvalStatus(pendingRework)).isEqualTo("PENDING");
+        assertDbQualityStatus(f.productionBatchId(), QualityStatus.SCRAPPED);
+        assertDbFinishedGoods(f.firstFgId(), FinishedGoodsBatch.Status.DEFECTIVE);
     }
 
     private Fixture fixture(boolean inspectionRequired) {
