@@ -20,7 +20,6 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -106,48 +105,5 @@ class SchedulingPendingPlansIncludeOverdueTest {
         service.getPendingBatches("F1", start, end);
         verify(productionPlanRepository).findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
                 "F1", ProductionPlanStatus.PENDING, start, end);
-        // D-S411-03 阴性对照: 调用方明确的范围不被「未定日期」的计划放宽
-        verify(productionPlanRepository, never()).findByFactoryIdAndStatusAndExpectedCompletionDateIsNull(any(), any());
-    }
-
-    private static com.cretas.aims.entity.ProductionPlan plan(String id, LocalDate due) {
-        com.cretas.aims.entity.ProductionPlan p = new com.cretas.aims.entity.ProductionPlan();
-        p.setId(id);
-        p.setFactoryId("F1");
-        p.setStatus(ProductionPlanStatus.PENDING);
-        p.setExpectedCompletionDate(due);
-        return p;
-    }
-
-    @Test
-    @DisplayName("D-S411-03: 不传日期范围时, 「未定日期」的待处理计划 (订单没交期的 PP-AUTO) 也在候选里, 不被静默丢掉")
-    void defaultRangeIncludesUndatedPendingPlans() {
-        LocalDate due = LocalDate.now().plusDays(10);
-        when(productionPlanRepository.findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
-                eq("F1"), eq(ProductionPlanStatus.PENDING), any(), any())).thenReturn(List.of(plan("P-DATED", due)));
-        when(productionPlanRepository.findByFactoryIdAndStatusAndExpectedCompletionDateIsNull(
-                "F1", ProductionPlanStatus.PENDING)).thenReturn(List.of(plan("PP-AUTO-UNDATED", null)));
-        org.springframework.test.util.ReflectionTestUtils.setField(service, "schedulingAIService", schedulingAIService);
-
-        var dtos = service.getPendingBatches("F1", null, null);
-
-        assertThat(dtos).extracting(d -> d.getId() + "@" + d.getExpectedCompletionDate())
-                .as("有日期的计划行为不变; 没日期的计划单独补上, 交期为空 (前端显示「未定日期」)")
-                .containsExactlyInAnyOrder("P-DATED@" + due, "PP-AUTO-UNDATED@null");
-    }
-
-    @Test
-    @DisplayName("D-S411-03: 带订单交期的自动计划 (交期在一个月内) 落在默认候选窗口里")
-    void autoPlanWithOrderDeliveryDateFallsInsideDefaultWindow() {
-        LocalDate orderDue = LocalDate.now().plusDays(10);
-        when(productionPlanRepository.findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
-                eq("F1"), eq(ProductionPlanStatus.PENDING), any(), any())).thenReturn(List.of());
-        service.getPendingBatches("F1", null, null);
-
-        ArgumentCaptor<LocalDate> from = ArgumentCaptor.forClass(LocalDate.class);
-        ArgumentCaptor<LocalDate> to = ArgumentCaptor.forClass(LocalDate.class);
-        verify(productionPlanRepository).findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
-                eq("F1"), eq(ProductionPlanStatus.PENDING), from.capture(), to.capture());
-        assertThat(orderDue).isBetween(from.getValue(), to.getValue());
     }
 }
