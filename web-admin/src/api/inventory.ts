@@ -157,8 +157,12 @@ export async function submitReturnRefund(factoryId: string, returnOrderId: strin
   return unwrap(await post<ReturnRefund>(`${basePath(factoryId, returnOrderId)}/refund/submit`, {}), '提交退款申请失败');
 }
 
-export async function approveReturnRefund(factoryId: string, returnOrderId: string, note: string): Promise<ReturnRefund> {
-  return unwrap(await post<ReturnRefund>(`${basePath(factoryId, returnOrderId)}/refund/approve`, { note }), '审批退款申请失败');
+/** selfApprovalReason: 退款申请人本人审批时的原因 (本厂开了「允许本人审批」才放行); 不是本人时不传。 */
+export async function approveReturnRefund(
+  factoryId: string, returnOrderId: string, note: string, selfApprovalReason?: string,
+): Promise<ReturnRefund> {
+  const body = selfApprovalReason === undefined ? { note } : { note, selfApprovalReason };
+  return unwrap(await post<ReturnRefund>(`${basePath(factoryId, returnOrderId)}/refund/approve`, body), '审批退款申请失败');
 }
 
 export async function markReturnRefundPaid(
@@ -167,10 +171,13 @@ export async function markReturnRefundPaid(
   paymentMethod: 'CASH' | 'BANK_TRANSFER',
   paymentReference: string,
   remark: string,
+  /** 退款申请人本人登记付款时的原因 (本厂开了「允许本人审批」才放行); 不是本人时不传。 */
+  selfPaidReason?: string,
 ): Promise<ReturnRefund> {
-  return unwrap(await post<ReturnRefund>(`${basePath(factoryId, returnOrderId)}/refund/mark-paid`, {
-    paymentMethod, paymentReference, remark,
-  }), '登记退款已支付失败');
+  const body = selfPaidReason === undefined
+    ? { paymentMethod, paymentReference, remark }
+    : { paymentMethod, paymentReference, remark, selfPaidReason };
+  return unwrap(await post<ReturnRefund>(`${basePath(factoryId, returnOrderId)}/refund/mark-paid`, body), '登记退款已支付失败');
 }
 
 export async function rejectReturnRefund(factoryId: string, returnOrderId: string, reason: string): Promise<ReturnRefund> {
@@ -212,16 +219,17 @@ export async function approveReturnRefundReversal(
   returnOrderId: string,
   requestId: string,
   reversalTransactionId: string,
-  options?: { silent?: boolean },
+  options?: { silent?: boolean; selfApprovalReason?: string },
 ): Promise<ReturnRefund> {
   const normalizedRequestId = String(requestId || '').trim();
   const normalizedTransactionId = String(reversalTransactionId || '').trim();
   if (!normalizedRequestId || !normalizedTransactionId) throw new ApiError('撤销退款申请号或撤销流水号为空');
   const url = `${basePath(factoryId, returnOrderId)}/refund/reversal/approve`;
-  const payload = {
+  const payload: { requestId: string; reversalTransactionId: string; selfApprovalReason?: string } = {
     requestId: normalizedRequestId,
     reversalTransactionId: normalizedTransactionId,
   };
+  if (options?.selfApprovalReason !== undefined) payload.selfApprovalReason = options.selfApprovalReason;
   const response = options?.silent
     ? await post<ReturnRefund>(url, payload, { _silent: true })
     : await post<ReturnRefund>(url, payload);
