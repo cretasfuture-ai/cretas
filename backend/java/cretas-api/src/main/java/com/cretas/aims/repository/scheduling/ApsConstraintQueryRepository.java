@@ -2,6 +2,7 @@ package com.cretas.aims.repository.scheduling;
 
 import com.cretas.aims.entity.LineSchedule;
 import com.cretas.aims.entity.SchedulingPlan;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
@@ -21,14 +22,19 @@ public interface ApsConstraintQueryRepository extends Repository<LineSchedule, S
     /**
      * 本厂还在用 (草稿 / 已确认 / 执行中) 的调度计划里, 没完工没取消、结束时间不早于 {@code from} 的排程任务。
      * 这些是新排程要绕开的固定占用 (自动排的与人工改过的不区分)。
+     * 所属生产计划已取消、自己还没开工的不算 ({@link CancelledPlanScheduleFilter}):
+     * 否则自动排程 / 插单会报「产线这天已被「计划 …」排满」, 而那个计划已经取消了。
      */
     @Query("SELECT ls FROM LineSchedule ls WHERE ls.plan.factoryId = :factoryId AND ls.plan.deletedAt IS NULL "
             + "AND ls.status IN :live AND ls.plan.status IN :livePlans "
-            + "AND ls.plannedStartTime IS NOT NULL AND ls.plannedEndTime IS NOT NULL AND ls.plannedEndTime >= :from "
+            + "AND ls.plannedStartTime IS NOT NULL AND ls.plannedEndTime IS NOT NULL AND ls.plannedEndTime >= :from"
+            + CancelledPlanScheduleFilter.AND_NOT_GHOST_OF_CANCELLED_PLAN
             + "ORDER BY ls.plannedStartTime, ls.id")
     List<LineSchedule> findLiveEndingFromIn(@Param("factoryId") String factoryId, @Param("from") LocalDateTime from,
                                             @Param("live") Collection<LineSchedule.ScheduleStatus> live,
-                                            @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans);
+                                            @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans,
+                                            @Param("notStarted") LineSchedule.ScheduleStatus notStarted,
+                                            @Param("cancelledPlan") ProductionPlanStatus cancelledPlan);
 
     /**
      * 这次要重开的那个已取消调度计划里<b>已开工</b>的排程 (执行中, 或已有实际开始时间, 且没完工没取消):
@@ -58,7 +64,8 @@ public interface ApsConstraintQueryRepository extends Repository<LineSchedule, S
                 EnumSet.of(LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.in_progress,
                         LineSchedule.ScheduleStatus.delayed),
                 EnumSet.of(SchedulingPlan.PlanStatus.draft, SchedulingPlan.PlanStatus.confirmed,
-                        SchedulingPlan.PlanStatus.in_progress));
+                        SchedulingPlan.PlanStatus.in_progress),
+                LineSchedule.ScheduleStatus.pending, ProductionPlanStatus.CANCELLED);
     }
 
     /**
