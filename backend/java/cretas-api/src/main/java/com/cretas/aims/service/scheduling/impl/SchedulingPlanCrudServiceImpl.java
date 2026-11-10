@@ -558,6 +558,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         line.setDepartmentId(request.getDepartmentId());
         line.setMinWorkers(request.getMinWorkers() != null ? request.getMinWorkers() : 1);
         line.setMaxWorkers(request.getMaxWorkers() != null ? request.getMaxWorkers() : 10);
+        line.setStandardWorkers(request.getStandardWorkers());
         line.setRequiredSkillLevel(request.getRequiredSkillLevel() != null ? request.getRequiredSkillLevel() : 1);
         line.setHourlyCapacity(request.getHourlyCapacity());
         line.setEquipmentIds(request.getEquipmentIds());
@@ -580,6 +581,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         if (request.getDepartmentId() != null) line.setDepartmentId(request.getDepartmentId());
         if (request.getMinWorkers() != null) line.setMinWorkers(request.getMinWorkers());
         if (request.getMaxWorkers() != null) line.setMaxWorkers(request.getMaxWorkers());
+        if (request.getStandardWorkers() != null) line.setStandardWorkers(request.getStandardWorkers());
         if (request.getRequiredSkillLevel() != null) line.setRequiredSkillLevel(request.getRequiredSkillLevel());
         if (request.getHourlyCapacity() != null) line.setHourlyCapacity(request.getHourlyCapacity());
         if (request.getEquipmentIds() != null) line.setEquipmentIds(request.getEquipmentIds());

@@ -20,6 +20,7 @@ public class ProductionLineDTO {
     private String lineType;
     private Integer minWorkers;
     private Integer maxWorkers;
+    private Integer standardWorkers;
     private Integer requiredSkillLevel;
     private BigDecimal hourlyCapacity;
     private String equipmentIds;
@@ -42,6 +43,7 @@ public class ProductionLineDTO {
         dto.setLineType(entity.getLineType());
         dto.setMinWorkers(entity.getMinWorkers());
         dto.setMaxWorkers(entity.getMaxWorkers());
+        dto.setStandardWorkers(entity.getStandardWorkers());
         dto.setRequiredSkillLevel(entity.getRequiredSkillLevel());
         dto.setHourlyCapacity(entity.getHourlyCapacity());
         dto.setEquipmentIds(entity.getEquipmentIds());

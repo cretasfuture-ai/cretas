@@ -239,6 +239,14 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private Boolean blockStartOnOpenShortage = false;
 
+    /**
+     * A18 插单排程「排不进」按原因放行 (V20261111_02)。逗号分隔的原因码, 列在里面的原因 = 插单照建并提示
+     * (不写排程行), 不在里面 = 拦。空/null = 全拦 (现状)。码: CAPACITY_MISSING / EQUIPMENT_UNAVAILABLE /
+     * EXCEEDS_HORIZON / PREDECESSOR_NOT_SCHEDULED。
+     */
+    @Column(name = "urgent_insert_schedule_warn_reasons", length = 200)
+    private String urgentInsertScheduleWarnReasons;
+
     /** 物料平衡黄色阈值 (%), V20261103_140, 默认 5 */
     @Column(name = "material_balance_warn_pct", nullable = false, precision = 5, scale = 2)
     @Builder.Default

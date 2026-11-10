@@ -44,6 +44,10 @@ public class ProductionLine extends BaseEntity {
     @Column(name = "max_workers")
     private Integer maxWorkers = 10;
 
+    /** 本产线标准人数 (建厂时填, 可空)。空 = 没配: 插单不比人数、不提示。 */
+    @Column(name = "standard_workers")
+    private Integer standardWorkers;
+
     @Column(name = "required_skill_level")
     private Integer requiredSkillLevel = 1; // 1-5
 
