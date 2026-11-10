@@ -157,6 +157,12 @@ public class FactorySettingsDTO {
         this.allowSelfApprovalSpecified = true;
     }
 
+    /** 当作没提这一项 (导入别厂导出的设置时用: 「允许本人审批」是本厂自己的决定, 不随导入带过来)。 */
+    public void clearAllowSelfApproval() {
+        this.allowSelfApproval = null;
+        this.allowSelfApprovalSpecified = false;
+    }
+
     @Schema(description = "最后修改时间")
     private LocalDateTime lastModifiedAt;
 

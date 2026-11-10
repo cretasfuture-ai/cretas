@@ -1754,4 +1754,59 @@ class QualityBatchDispositionContractTest {
                 .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(422));
         assertThat(batch.getQualityStatus()).isEqualTo(QualityStatus.FAILED);
     }
+    // ---- #1580 独立审查必修 2: AI 工具代填的「通过」不能当本人审批原因 ----
+
+    private com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool orderApprovalToolWithSwitchOn(String accountRole) {
+        com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool tool = orderApprovalTool(accountRole);
+        ReflectionTestUtils.setField(tool, "specialApprovalService", specialApprovalsWithSwitch(true));
+        return tool;
+    }
+
+    @Test
+    @DisplayName("B3 AI 工具 开关开 + 模型没给原因: 不拿占位词「通过」顶替, 422 追问原因, 什么都不执行")
+    void orderApprovalToolAsksForTheReasonInsteadOfUsingThePlaceholder() {
+        String approvalId = pendingSpecialConditionalRelease();
+
+        for (Map<String, Object> params : List.of(approveParams(approvalId),
+                new HashMap<String, Object>(Map.of("transferId", approvalId, "reason", "   ")))) {
+            assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(orderApprovalToolWithSwitchOn("factory_super_admin"),
+                    "doExecute", FACTORY, params, new HashMap<String, Object>(Map.of("userId", INSPECTOR))))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> {
+                        assertThat(((BusinessException) e).getCode()).isEqualTo(422);
+                        assertThat(((BusinessException) e).getErrorCode())
+                                .isEqualTo(com.cretas.aims.service.workflow.FactorySelfApprovalGate.REASON_REQUIRED);
+                        assertThat(e.getMessage()).contains("请告诉我");
+                    });
+            assertNothingDecided(approvalId);
+        }
+    }
+
+    @Test
+    @DisplayName("B3 AI 工具 开关开 + 用户给了原因: 本人批准, 执行一次, 审批行存的是用户的原因")
+    void orderApprovalToolPassesTheUsersReasonAsTheSelfApprovalReason() {
+        String approvalId = pendingSpecialConditionalRelease();
+        Map<String, Object> params = new HashMap<>(Map.of("transferId", approvalId, "reason", " 本厂只有我管质量 "));
+
+        ReflectionTestUtils.invokeMethod(orderApprovalToolWithSwitchOn("factory_super_admin"), "doExecute",
+                FACTORY, params, new HashMap<String, Object>(Map.of("userId", INSPECTOR)));
+
+        DecisionAuditLog row = audits.get(approvalId);
+        assertThat(row.getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.APPROVED);
+        assertThat(row.isSelfApproved()).isTrue();
+        assertThat(row.getSelfApprovalReason()).isEqualTo("本厂只有我管质量");
+        assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
+    }
+
+    @Test
+    @DisplayName("B3 AI 工具 阴性对照: 他人审批不需要原因, 占位词照常写进审批意见")
+    void orderApprovalToolStillWorksForAnotherApproverWithoutReason() {
+        String approvalId = pendingSpecialConditionalRelease();
+        ReflectionTestUtils.invokeMethod(orderApprovalToolWithSwitchOn("quality_manager"), "doExecute",
+                FACTORY, approveParams(approvalId), new HashMap<String, Object>(Map.of("userId", MANAGER)));
+        DecisionAuditLog row = audits.get(approvalId);
+        assertThat(row.getApprovalStatus()).isEqualTo(DecisionAuditLog.ApprovalStatus.APPROVED);
+        assertThat(row.isSelfApproved()).isFalse();
+        assertThat(row.getApprovalComment()).isEqualTo("通过");
+    }
 }

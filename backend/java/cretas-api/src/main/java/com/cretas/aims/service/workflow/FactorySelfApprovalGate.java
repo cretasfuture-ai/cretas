@@ -44,8 +44,19 @@ public class FactorySelfApprovalGate {
     @Nullable
     private final FactorySettingsRepository factorySettingsRepository;
 
+    /** 读开关用独立只读事务 (见 {@link IsolatedSettingsRead}); 为空 (手工构造的单测) 时直接读。 */
+    @Nullable
+    private final org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     public FactorySelfApprovalGate(@Nullable FactorySettingsRepository factorySettingsRepository) {
+        this(factorySettingsRepository, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public FactorySelfApprovalGate(@Nullable FactorySettingsRepository factorySettingsRepository,
+                                   @Nullable org.springframework.transaction.PlatformTransactionManager transactionManager) {
         this.factorySettingsRepository = factorySettingsRepository;
+        this.transactionManager = transactionManager;
     }
 
     /** 本厂是否打开了「允许本人审批」。读不到 = 关。 */
@@ -54,7 +65,8 @@ public class FactorySelfApprovalGate {
             return false;
         }
         try {
-            return Boolean.TRUE.equals(factorySettingsRepository.findAllowSelfApprovalByFactoryId(factoryId));
+            return Boolean.TRUE.equals(IsolatedSettingsRead.read(transactionManager,
+                    () -> factorySettingsRepository.findAllowSelfApprovalByFactoryId(factoryId)));
         } catch (RuntimeException e) {
             log.warn("allow_self_approval 读取失败, 按关闭处理 (四眼照旧): factoryId={}, err={}",
                     factoryId, e.getMessage());

@@ -207,7 +207,8 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
         // 审批身份 (与 /approve 同口径, 批准和驳回都要过): 在任何写入之前。所有入口 (App 接口、AI 工具) 都经过这里。
         com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
                 assertMayDecide(auditLog, approverId, actingUserId, actingRole,
-                        firstNonBlank(decision.getSelfApprovalReason(), decision.getComment()));
+                        firstNonBlank(decision.getSelfApprovalReason(),
+                                decision.isCommentIsPlaceholder() ? null : decision.getComment()));
 
         // 2. 获取审批人信息
         User approver = userRepository.findById(approverId)

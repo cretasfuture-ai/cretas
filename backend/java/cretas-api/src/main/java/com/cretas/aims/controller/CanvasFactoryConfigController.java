@@ -70,6 +70,10 @@ public class CanvasFactoryConfigController {
     private final EncodingRuleRepository encodingRuleRepo;
     private final FactorySettingsRepository factorySettingsRepo;
 
+    /** 审批规则改动留痕 (#1580 审查低危 5)。可选注入只为兼容手工构造控制器的单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.ApprovalPolicyAudit approvalPolicyAudit;
+
     private static final List<String> ALLOWED_RESET_CYCLES =
             List.of("DAILY", "MONTHLY", "YEARLY", "NEVER");
     private static final List<String> ALLOWED_WAGE_MODES =
@@ -605,6 +609,8 @@ public class CanvasFactoryConfigController {
             }
         }
 
+        Map<String, Object> approvalPolicyBefore =
+                com.cretas.aims.service.workflow.ApprovalPolicyAudit.snapshot(settings);
         if (body.containsKey("factoryName")) settings.setFactoryName(stringField(body, "factoryName"));
         if (body.containsKey("factoryAddress")) settings.setFactoryAddress(stringField(body, "factoryAddress"));
         if (body.containsKey("contactPhone")) settings.setContactPhone(stringField(body, "contactPhone"));
@@ -664,6 +670,9 @@ public class CanvasFactoryConfigController {
 
         try {
             FactorySettings saved = factorySettingsRepo.saveAndFlush(settings);
+            if (approvalPolicyAudit != null) {
+                approvalPolicyAudit.recordIfChanged(factoryId, approvalPolicyBefore, saved);
+            }
             return ApiResponse.success("保存成功", serializeFactorySettings(saved));
         } catch (org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
             return ApiResponse.errorWithCode(409, "VERSION_CONFLICT",

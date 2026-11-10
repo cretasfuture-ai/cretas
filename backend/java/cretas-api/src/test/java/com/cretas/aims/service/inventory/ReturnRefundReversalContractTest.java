@@ -420,4 +420,67 @@ class ReturnRefundReversalContractTest {
         assertThat(customer.getCurrentBalance()).isEqualByComparingTo("540");
         verifyNoInteractions(accounting);
     }
+    // ---- 独立审查必修 1: 一人厂本人审批 + 本人付款的退款, 凭证要能过账 (真 VoucherServiceImpl.post + 真 ReturnVoucherPostingGuard) ----
+
+    /** 真过账服务: 用 markPaid 交给会计的那组分录建凭证, 再走 VoucherServiceImpl.post → ReturnVoucherPostingGuard。 */
+    private Voucher postRefundVoucherBuiltFromMarkPaid() {
+        org.mockito.ArgumentCaptor<List<VoucherEntry>> entries = org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.ArgumentCaptor<VoucherType> type = org.mockito.ArgumentCaptor.forClass(VoucherType.class);
+        org.mockito.ArgumentCaptor<LocalDate> date = org.mockito.ArgumentCaptor.forClass(LocalDate.class);
+        verify(accounting).createCashMovementVoucher(eq("F"), type.capture(), date.capture(), entries.capture(),
+                eq("RETURN_REFUND"), eq("PR"), anyString(), anyLong());
+        BigDecimal debit = entries.getValue().stream().map(VoucherEntry::getDebit).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal credit = entries.getValue().stream().map(VoucherEntry::getCredit).reduce(BigDecimal.ZERO, BigDecimal::add);
+        Voucher draft = Voucher.builder().id("V-SELF").factoryId("F").sourceBusinessType("RETURN_REFUND").sourceBusinessId("PR")
+                .voucherNumber("凭证-本人").voucherType(type.getValue()).voucherDate(date.getValue()).status(VoucherStatus.DRAFT)
+                .totalDebit(debit).totalCredit(credit).build();
+        draft.getEntries().addAll(entries.getValue());
+
+        when(vouchers.findByIdAndFactoryIdAndDeletedAtIsNull("V-SELF", "F")).thenReturn(Optional.of(draft));
+        when(vouchers.save(any(Voucher.class))).thenAnswer(i -> i.getArgument(0));
+        when(ledger.findById(anyString())).thenAnswer(i -> reversals.stream()
+                .filter(tx -> tx.getId().equals(i.getArgument(0))).findFirst()
+                .or(() -> "PAID".equals(i.getArgument(0)) ? Optional.of(paid) : Optional.empty()));
+        when(em.createNativeQuery(anyString())).thenAnswer(i -> {
+            String sql = i.getArgument(0);
+            Query q = mock(Query.class);
+            when(q.setParameter(anyString(), any())).thenReturn(q);
+            when(q.getResultList()).thenReturn(sql.contains("FROM vouchers") ? List.of("V-SELF")
+                    : sql.contains("payment_requests") ? List.of("PR") : List.of("RO"));
+            return q;
+        });
+
+        com.cretas.aims.service.voucher.impl.VoucherServiceImpl posting = new com.cretas.aims.service.voucher.impl.VoucherServiceImpl(
+                vouchers, null, null, null, null, null, null, null, null, null, null);
+        ReflectionTestUtils.setField(posting, "entityManager", em);
+        ReflectionTestUtils.setField(posting, "returnVoucherPostingGuard",
+                new com.cretas.aims.service.voucher.ReturnVoucherPostingGuard(returns, ledger, requests));
+        return posting.post("F", "V-SELF", 10L);
+    }
+
+    @Test void b15OnePersonRefundVoucherPostsWithRealPostingGuard() {
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(true);
+        service.approve("F", "RO", 10L, "核对", "本厂只有我一个财务");
+        service.markPaid("F", "RO", 10L, payCommand("本厂只有我一个出纳"));
+        assertThat(refund.getStatus()).isEqualTo(PaymentRequestStatus.PAID);
+
+        Voucher posted = postRefundVoucherBuiltFromMarkPaid();
+
+        assertThat(posted.getStatus()).isEqualTo(VoucherStatus.POSTED);
+        assertThat(posted.getApprovedBy()).isEqualTo(10L);
+    }
+
+    @Test void b15UntracedSelfPaidRefundVoucherStillCannotPost() {
+        // 阴性对照: 同一张一人厂退款, 把本人付款的留痕抹掉 (脏数据 / 开关上线前的单) —— 过账照旧被拦
+        refundBackToFinanceReview();
+        selfApprovalSwitchIs(true);
+        service.approve("F", "RO", 10L, "核对", "本厂只有我一个财务");
+        service.markPaid("F", "RO", 10L, payCommand("本厂只有我一个出纳"));
+        refund.setSelfPaid(false);
+        refund.setSelfPaidReason(null);
+
+        assertThatThrownBy(this::postRefundVoucherBuiltFromMarkPaid)
+                .isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+    }
 }

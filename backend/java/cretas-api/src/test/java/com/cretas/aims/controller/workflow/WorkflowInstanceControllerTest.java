@@ -526,4 +526,37 @@ class WorkflowInstanceControllerTest {
                 FACTORY_ID, "trf-1", "inst-transfer", 109L,
                 "warehouse_manager", HistoryAction.APPROVE, "同意");
     }
+    @Test
+    @DisplayName("纪律排查 B2: 盘点 OA 动作走盘点适配器, 审批意见原样作为 notes (= 本人审批原因) 传下去")
+    void inventory_adjustment_action_delegates_to_stocktake_adapter_with_notes() {
+        mockAuth(109L, "f006_admin", "factory_super_admin");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-stk", "wf-stk", "INVENTORY_ADJUSTMENT", "stk-1",
+                List.of("approval_finance"), 109L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-stk")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(true);
+
+        com.cretas.aims.entity.factory.FactoryStocktake stocktake = new com.cretas.aims.entity.factory.FactoryStocktake();
+        stocktake.setId("stk-1");
+        stocktake.setStatus(com.cretas.aims.entity.factory.FactoryStocktake.Status.APPROVED);
+        when(stocktakeService.applyWorkflowAction(
+                eq(FACTORY_ID), eq("stk-1"), eq("inst-stk"), eq(109L),
+                eq("factory_super_admin"), eq(HistoryAction.APPROVE), eq("本厂只有我盘点")))
+                .thenReturn(stocktake);
+        ApprovalWorkflowInstance approved = buildInstance(
+                "inst-stk", "wf-stk", "INVENTORY_ADJUSTMENT", "stk-1", List.of(), 109L);
+        approved.setStatus(InstanceStatus.APPROVED);
+        when(workflowEngine.getLatestInstance(FACTORY_ID, "INVENTORY_ADJUSTMENT", "stk-1"))
+                .thenReturn(Optional.of(approved));
+
+        ApiResponse<Map<String, Object>> response = controller.executeAction(
+                FACTORY_ID, "inst-stk", AUTH_HEADER,
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "本厂只有我盘点", "idem-stk-1", "approval_finance"));
+
+        assertEquals("APPROVED", response.getData().get("businessStatus"));
+        verify(stocktakeService).applyWorkflowAction(
+                FACTORY_ID, "stk-1", "inst-stk", 109L,
+                "factory_super_admin", HistoryAction.APPROVE, "本厂只有我盘点");
+    }
 }
