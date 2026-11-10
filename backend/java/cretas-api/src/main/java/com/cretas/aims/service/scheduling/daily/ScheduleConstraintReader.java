@@ -92,6 +92,15 @@ public class ScheduleConstraintReader {
 
     public Constraints read(String factoryId, LocalDate firstDay, String lineId, List<PlanInput> plans,
                             Collection<String> movableLineScheduleIds) {
+        return read(factoryId, firstDay, lineId, plans, movableLineScheduleIds, null);
+    }
+
+    /**
+     * @param reopeningPlanId 这次落库要重开的已取消调度计划 (没有就 null): 它名下已开工的排程重开后保留,
+     *                        这里先当固定占用; 没开工的会被作废, 不算。
+     */
+    public Constraints read(String factoryId, LocalDate firstDay, String lineId, List<PlanInput> plans,
+                            Collection<String> movableLineScheduleIds, String reopeningPlanId) {
         Set<String> movable = movableLineScheduleIds == null ? Set.of() : Set.copyOf(movableLineScheduleIds);
         LocalDate horizonEnd = firstDay.plusDays(DailyCapacityEngine.MAX_DAYS - 1L);
         List<String> warnings = new ArrayList<>();
@@ -126,7 +135,11 @@ public class ScheduleConstraintReader {
         List<FixedOccupancy> fixed = new ArrayList<>();
         Map<String, ProductionPlan> otherPlans = new HashMap<>();
         Set<String> alreadyScheduled = new LinkedHashSet<>();
-        for (LineSchedule ls : constraintQueries.findLiveEndingFrom(factoryId, firstDay.atStartOfDay())) {
+        List<LineSchedule> occupying = new ArrayList<>(constraintQueries.findLiveEndingFrom(factoryId, firstDay.atStartOfDay()));
+        if (reopeningPlanId != null) {
+            occupying.addAll(constraintQueries.findKeptOnReopen(factoryId, reopeningPlanId, firstDay.atStartOfDay()));
+        }
+        for (LineSchedule ls : occupying) {
             if (movable.contains(ls.getId())) {
                 continue;
             }

@@ -24,6 +24,7 @@ import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
 import com.cretas.aims.service.scheduling.core.SchedulingAIService;
 import com.cretas.aims.service.scheduling.core.WorkerAssignmentService;
 import com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl;
+import com.cretas.aims.service.scheduling.impl.LineScheduleServiceImpl;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,6 +67,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         ProductDailyCapacityService.class,
         ScheduleConstraintReader.class,
         SchedulingPlanCrudServiceImpl.class,
+        LineScheduleServiceImpl.class,
         SchedulingResourceWriteLock.class
 })
 class CancelledDayPlanReopenJpaContractTest {
@@ -81,6 +83,7 @@ class CancelledDayPlanReopenJpaContractTest {
 
     @Autowired private DailyCapacityScheduleGenerator generator;
     @Autowired private SchedulingPlanCrudServiceImpl crud;
+    @Autowired private LineScheduleServiceImpl lineSchedules;
     @Autowired private EntityManager em;
     @Autowired private ProductionPlanRepository planRepository;
     @Autowired private ProductionLineRepository lineRepository;
@@ -169,6 +172,11 @@ class CancelledDayPlanReopenJpaContractTest {
         SchedulingPlanDTO again = generator.generate(F, request("PP-B"), 7L);
 
         assertThat(again.getWarnings().get(0)).contains("0 条排程已作废").contains("已开工的 1 条保留");
+        // 保留的已开工排程重开后又占这条线 (12-20、12-21 满, 12-22 占一半), 产品乙排在它后面,
+        // ⛔ 不能叠在同几天上 (没把它当固定占用时是 12-20=80)
+        assertThat(days(again.getLineSchedules().stream()
+                .filter(ls -> "PP-B".equals(ls.getProductionPlanId())).findFirst().orElseThrow()))
+                .containsExactly(DAY.plusDays(2) + "=50", DAY.plusDays(3) + "=30");
         flushClear();
         assertThat(lineScheduleRepository.findById(started.getId()).orElseThrow().getStatus())
                 .isEqualTo(LineSchedule.ScheduleStatus.in_progress);
@@ -215,6 +223,50 @@ class CancelledDayPlanReopenJpaContractTest {
                 .extracting(LineSchedule::getProductionPlanId).containsExactly("PP-A");
         assertThat(lineScheduleRepository.findByPlanIdOrderBySequenceOrder(first.getId()))
                 .filteredOn(ls -> ls.getStatus() == LineSchedule.ScheduleStatus.cancelled).hasSize(2);
+    }
+
+    @Test
+    void aVoidedRowCannotBeStartedAfterTheDayIsReopened() {
+        SchedulingPlanDTO first = generator.generate(F, request("PP-A"), 7L);
+        String oldRowId = first.getLineSchedules().get(0).getId();
+        crud.cancelPlan(F, first.getId(), "取消");
+        flushClear();
+        generator.generate(F, request("PP-B"), 7L);
+        flushClear();
+
+        assertThatThrownBy(() -> lineSchedules.startSchedule(F, oldRowId))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409))
+                .hasMessageContaining("已作废");
+        flushClear();
+        LineSchedule row = lineScheduleRepository.findById(oldRowId).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(LineSchedule.ScheduleStatus.cancelled);
+        assertThat(row.getActualStartTime()).isNull();
+        // 阳性对照: 重开后新排的那条照常能开工
+        String newRowId = lineScheduleRepository.findByPlanIdOrderBySequenceOrder(first.getId()).stream()
+                .filter(ls -> "PP-B".equals(ls.getProductionPlanId())).findFirst().orElseThrow().getId();
+        assertThat(lineSchedules.startSchedule(F, newRowId).getStatus()).isEqualTo("in_progress");
+    }
+
+    @Test
+    void cancellingAnAlreadyCancelledPlanIsA409AndLeavesItAlone() {
+        SchedulingPlanDTO first = generator.generate(F, request("PP-A"), 7L);
+        crud.cancelPlan(F, first.getId(), "第一次");
+        flushClear();
+
+        assertThatThrownBy(() -> crud.cancelPlan(F, first.getId(), "旧页面上又点了一次"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+        flushClear();
+        assertThat(schedulingPlanRepository.findById(first.getId()).orElseThrow().getNotes())
+                .contains("第一次").doesNotContain("旧页面上又点了一次");
+        // 阳性对照: 重开后的草稿可以再取消
+        generator.generate(F, request("PP-B"), 7L);
+        flushClear();
+        crud.cancelPlan(F, first.getId(), "第二次");
+        flushClear();
+        assertThat(schedulingPlanRepository.findById(first.getId()).orElseThrow().getStatus())
+                .isEqualTo(SchedulingPlan.PlanStatus.cancelled);
     }
 
     // ==================== 阴性: 活的和已完成的照旧 409 ====================
