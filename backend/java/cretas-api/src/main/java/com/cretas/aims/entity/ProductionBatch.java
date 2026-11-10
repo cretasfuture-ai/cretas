@@ -370,6 +370,48 @@ public class ProductionBatch extends BaseEntity {
     @Column(name = "planned_unit", length = 20)
     private String plannedUnit;
 
+    // ==================== D-W-01: 效率按同单位算 ====================
+
+    /**
+     * efficiency 列是 numeric(5,2): 能存的绝对值上限 999.99。
+     *
+     * <p>🔴 2026-11-10 prod 实测: 返工计划 SEC-F006-20261109-4661D1 仓库实收, 实际 3 袋 ÷ 计划 0.3 kg
+     * × 100 = 1000.00 ⇒ 更新 production_batches 时 PostgreSQL「numeric field overflow」, 整笔实收 409。
+     * 算出来 ≥ 1000 的一律留 null 并记 warn: ⛔ 不截断 / 不封顶成 999.99 (那是假数), ⛔ 不写 0。</p>
+     */
+    static final BigDecimal EFFICIENCY_COLUMN_LIMIT = new BigDecimal("1000");
+
+    /**
+     * 单位感知的调用方 (仓库实收) 已经用单位契约核过「实际产出」与「计划量」是不是同一个单位:
+     * true 时 {@link #calculateMetrics()} 用 {@link #efficiencyActualInPlannedUnit} 算效率,
+     * 该值为 null = 换算不了, 效率留 null。false (默认) = 没人核过, 沿用原来的同单位算法。
+     *
+     * <p>瞬态: 只在本次持久化上下文里有效 (含 save 时 {@code @PreUpdate} 那次重算)。</p>
+     */
+    @Transient
+    @lombok.Getter(lombok.AccessLevel.NONE)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private transient boolean efficiencyUnitChecked;
+
+    /** 实际产出折成计划单位后的数量; 见 {@link #efficiencyUnitChecked}。 */
+    @Transient
+    @lombok.Getter(lombok.AccessLevel.NONE)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private transient BigDecimal efficiencyActualInPlannedUnit;
+
+    /**
+     * 调用方已用单位契约把实际产出折到了计划单位 (同单位就是原数)。
+     *
+     * @param actualInPlannedUnit 折到计划单位后的实际产出; {@code null} = 两个单位之间没有可用换算,
+     *                            效率如实留 null (⛔ 不裸除)
+     */
+    public void useActualInPlannedUnitForEfficiency(BigDecimal actualInPlannedUnit) {
+        this.efficiencyUnitChecked = true;
+        this.efficiencyActualInPlannedUnit = actualInPlannedUnit;
+    }
+
     // ==================== SP-D: WIP 批次判别 ====================
 
     /**
@@ -478,11 +520,15 @@ public class ProductionBatch extends BaseEntity {
         }
 
         // 计算效率 — actual(产出单位) / planned(原单位), 跨单位时无意义 → 留空
-        if (crossUnit) {
+        // D-W-01: 单位感知的调用方核过单位 ⇒ 用它折好的同单位数量; 换算不了 ⇒ null
+        if (efficiencyUnitChecked) {
+            efficiency = efficiencyActualInPlannedUnit == null
+                    ? null
+                    : efficiencyPercent(efficiencyActualInPlannedUnit, plannedQuantity);
+        } else if (crossUnit) {
             efficiency = null;
         } else if (actualQuantity != null && plannedQuantity != null && plannedQuantity.compareTo(BigDecimal.ZERO) > 0) {
-            efficiency = actualQuantity.multiply(BigDecimal.valueOf(100))
-                    .divide(plannedQuantity, 2, RoundingMode.HALF_UP);
+            efficiency = efficiencyPercent(actualQuantity, plannedQuantity);
         }
 
         // 计算工作时长
@@ -490,6 +536,30 @@ public class ProductionBatch extends BaseEntity {
             workDurationMinutes = (int) java.time.Duration.between(startTime, endTime).toMinutes();
         }
     }
+
+    /**
+     * actual / planned × 100, 保留两位。计划量缺失或 ≤ 0 ⇒ null。
+     *
+     * <p>结果的绝对值 ≥ {@link #EFFICIENCY_COLUMN_LIMIT} 存不进 numeric(5,2) ⇒ null + warn:
+     * 这种数在本仓几乎总是两个单位被直接相除 (袋 ÷ kg), 写进去要么让整笔写入失败, 要么是假数。</p>
+     */
+    private BigDecimal efficiencyPercent(BigDecimal actual, BigDecimal planned) {
+        if (actual == null || planned == null || planned.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        BigDecimal percent = actual.multiply(BigDecimal.valueOf(100))
+                .divide(planned, 2, RoundingMode.HALF_UP);
+        if (percent.abs().compareTo(EFFICIENCY_COLUMN_LIMIT) >= 0) {
+            EFFICIENCY_LOG.warn("生产批次效率 {}% 超出 efficiency numeric(5,2) 可存范围, 留空不写: "
+                            + "batchId={}, batchNumber={}, actual={}, planned={}, unit={}, plannedUnit={}",
+                    percent.toPlainString(), id, batchNumber, actual.toPlainString(), planned.toPlainString(),
+                    unit, plannedUnit);
+            return null;
+        }
+        return percent;
+    }
+
+    private static final org.slf4j.Logger EFFICIENCY_LOG = org.slf4j.LoggerFactory.getLogger(ProductionBatch.class);
 
     // ==================== 前端字段别名 ====================
 
