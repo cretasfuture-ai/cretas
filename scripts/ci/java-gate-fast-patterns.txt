@@ -22,3 +22,7 @@ PermissionServiceImpl*Test
 *TenantScopeTest
 ProcessSheetMultiOutputUnknownCostTest
 AttachmentSopSpringTest
+# 纪律排查 B1/B2/B11 本人审批开关与改价阈值的三态测试写在这三个类里, 原先不在 PR 选择范围 (#1580)
+ReportReversalServiceTest
+SalesPriceAdjustmentServiceTest
+WorkflowInstanceControllerTest

@@ -38,6 +38,10 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
     private final ObjectMapper objectMapper;
     private final FactoryRepository factoryRepository;
 
+    /** 审批规则改动留痕 (#1580 审查低危 5)。可选注入只为兼容手工构造服务的单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.ApprovalPolicyAudit approvalPolicyAudit;
+
     @Override
     @Transactional
     public FactorySettingsDTO getSettings(String factoryId) {
@@ -84,8 +88,13 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
                         .factoryId(factoryId)
                         .build());
 
+        java.util.Map<String, Object> approvalPolicyBefore =
+                com.cretas.aims.service.workflow.ApprovalPolicyAudit.snapshot(settings);
         updateEntityFromDTO(settings, dto);
         FactorySettings saved = settingsRepository.save(settings);
+        if (approvalPolicyAudit != null) {
+            approvalPolicyAudit.recordIfChanged(factoryId, approvalPolicyBefore, saved);
+        }
 
         log.info("保存工厂设置成功: factoryId={}", factoryId);
         return convertToDTO(saved);
@@ -305,6 +314,8 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
                 .orElse(FactorySettings.builder()
                         .factoryId(factoryId)
                         .build());
+        java.util.Map<String, Object> approvalPolicyBefore =
+                com.cretas.aims.service.workflow.ApprovalPolicyAudit.snapshot(settings);
 
         // 重置显示设置
         settings.setLanguage("zh-CN");
@@ -323,6 +334,8 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         settings.setRequireRequisitionBeforeReport(false);
         settings.setBlockStartOnOpenShortage(false);
         settings.setAllowSelfApproval(false);
+        settings.setPriceDecreaseApprovalPct(com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds.DEFAULT_DECREASE_PCT);
+        settings.setPriceIncreaseApprovalPct(com.cretas.aims.service.inventory.PriceAdjustmentApprovalThresholds.DEFAULT_INCREASE_PCT);
 
         // 重置用户注册设置
         settings.setAllowSelfRegistration(false);
@@ -341,6 +354,9 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         settings.setDataRetentionSettings(null);
 
         FactorySettings saved = settingsRepository.save(settings);
+        if (approvalPolicyAudit != null) {
+            approvalPolicyAudit.recordIfChanged(factoryId, approvalPolicyBefore, saved);
+        }
         log.info("重置工厂设置为默认值: factoryId={}", factoryId);
 
         return convertToDTO(saved);
@@ -371,6 +387,8 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
                 // 摄像头抓拍交给 AI 是本厂自己的同意, 不随别厂导出的设置带过来 (沿用本厂原值)
                 dto.getAiSettings().setCameraSnapshotAnalysis(null);
             }
+            // 「允许本人审批」同理: 是本厂自己的决定, 不随别厂导出的设置打开 (沿用本厂原值)
+            dto.clearAllowSelfApproval();
 
             FactorySettingsDTO result = saveSettings(factoryId, dto);
             log.info("导入工厂设置成功: factoryId={}", factoryId);

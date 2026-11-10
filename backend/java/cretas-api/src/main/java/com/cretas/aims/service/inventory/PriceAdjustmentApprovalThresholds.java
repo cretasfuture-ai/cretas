@@ -34,8 +34,19 @@ public class PriceAdjustmentApprovalThresholds {
     @Nullable
     private final FactorySettingsRepository settingsRepository;
 
+    /** 读阈值用独立只读事务 (见 IsolatedSettingsRead); 为空 (手工构造的单测) 时直接读。 */
+    @Nullable
+    private final org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     public PriceAdjustmentApprovalThresholds(@Nullable FactorySettingsRepository settingsRepository) {
+        this(settingsRepository, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PriceAdjustmentApprovalThresholds(@Nullable FactorySettingsRepository settingsRepository,
+                                             @Nullable org.springframework.transaction.PlatformTransactionManager transactionManager) {
         this.settingsRepository = settingsRepository;
+        this.transactionManager = transactionManager;
     }
 
     public Thresholds forFactory(String factoryId) {
@@ -43,7 +54,8 @@ public class PriceAdjustmentApprovalThresholds {
             return Thresholds.DEFAULT;
         }
         try {
-            List<Object[]> rows = settingsRepository.findPriceAdjustmentApprovalThresholdsByFactoryId(factoryId);
+            List<Object[]> rows = com.cretas.aims.service.workflow.IsolatedSettingsRead.read(transactionManager,
+                    () -> settingsRepository.findPriceAdjustmentApprovalThresholdsByFactoryId(factoryId));
             if (rows == null || rows.isEmpty()) {
                 return Thresholds.DEFAULT;
             }

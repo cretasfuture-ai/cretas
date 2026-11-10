@@ -75,6 +75,15 @@ class ReportReversalLogRepositoryPostgresConcurrencyIT {
                 + "ON report_reversal_logs (factory_id, batch_id)");
         jdbcTemplate.execute("CREATE INDEX idx_rrl_status "
                 + "ON report_reversal_logs (factory_id, status)");
+        // 本人审批留痕列 (V20261110_47): 原样执行真迁移里的 ALTER, 不在这里再抄一份列定义
+        SelfApprovalMigrationFixture.applyTo(jdbcTemplate, "report_reversal_logs");
+        Integer traceColumns = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+                        + "AND table_name = 'report_reversal_logs' "
+                        + "AND column_name IN ('self_approved', 'self_approval_reason')", Integer.class);
+        if (traceColumns == null || traceColumns != 2) {
+            throw new IllegalStateException("V20261110_47 应给 report_reversal_logs 加 2 列, 实际 " + traceColumns);
+        }
     }
 
     @AfterEach
