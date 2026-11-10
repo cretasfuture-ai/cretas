@@ -260,9 +260,9 @@ class UrgentInsertScheduleContractTest {
 
         service.apply(F, slot, insert, null, 7L);
 
-        // 先锁调度计划行再数再写
+        // 先锁调度计划行再数再写 (落库前按 id 顺序先锁一遍, 重算时再锁一次是重入)
         var order = org.mockito.Mockito.inOrder(schedulingPlans, lineSchedules);
-        order.verify(schedulingPlans).lockStatusForUpdate("SP-DAY-A", F);
+        order.verify(schedulingPlans, org.mockito.Mockito.atLeastOnce()).lockStatusForUpdate("SP-DAY-A", F);
         order.verify(lineSchedules).countByPlanIdAndStatusNot("SP-DAY-A", LineSchedule.ScheduleStatus.cancelled);
         order.verify(schedulingPlans).writeTotals(F, "SP-DAY-A", 4, 3);
         verify(schedulingPlans).writeTotals(F, "SP-NEW", 1, 0);
@@ -271,6 +271,25 @@ class UrgentInsertScheduleContractTest {
         verify(lineSchedules).countByPlanIdAndStatusNot("SP-DAY-A", LineSchedule.ScheduleStatus.cancelled);
         verify(lineSchedules).countDistinctWorkersOnLiveRows(F, "SP-DAY-A", LineSchedule.ScheduleStatus.cancelled);
         verify(schedulingPlans, never()).save(any(SchedulingPlan.class));
+    }
+
+    /**
+     * 被挤的计划在预览之后、落库之前被取消 (取消已作废了它的排程): 落库前锁住生产计划读到已取消,
+     * 整体 409, 不按旧副本把排程行写回 pending, 也不建插单排程。
+     */
+    @Test
+    void aMovedPlanCancelledBeforeTheWriteRejectsTheInsertAndWritesNoRow() {
+        happyEngine();
+        when(plans.lockStatusForUpdate(anyString(), eq(F))).thenReturn(Optional.of("PENDING"));
+        when(plans.lockStatusForUpdate("PLAN-B", F)).thenReturn(Optional.of("CANCELLED"));
+
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getMessage()).contains("PB-1").contains("取消");
+                });
+        verify(lineSchedules, never()).save(any(LineSchedule.class));
+        verify(schedulingPlans, never()).lockDayPlan(any(), any());
     }
 
     @Test

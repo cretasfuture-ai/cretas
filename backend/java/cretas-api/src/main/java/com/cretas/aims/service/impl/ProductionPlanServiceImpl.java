@@ -425,6 +425,19 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository workProcessTaskRepository;
 
     /**
+     * 取消生产计划时作废它没开工的排程行, 并重算所在日调度计划的汇总数 (缺口 18 后续)。
+     * required=false 兼容单测 (反射注入 mock); 生产环境恒存在。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.LineScheduleRepository lineScheduleRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SchedulingPlanRepository schedulingPlanRepository;
+
+    /** 生产计划取消后, 它没开工的排程行被作废时写的原因。 */
+    static final String PLAN_CANCELLED_ROW_REASON = "生产计划已取消，未开工的排程随之作废";
+
+    /**
      * R2 (2026-06-14): 检测 IN_PROGRESS 计划是否已有 YIELD 报工 (有数据 → 禁止直接取消, 导向撤回审批)。
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -9282,8 +9295,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         // 取消接口是命令幂等的：重复点击不追加备注，也不再次触碰关联批次/任务。
+        // 只补一件事: 名下还没作废的未开工排程 (修复前取消的计划会留下这种行, 继续占着产线) 在这里作废。
         if (plan.getStatus() == ProductionPlanStatus.CANCELLED) {
-            log.info("取消生产计划幂等命中: factoryId={}, planId={}", factoryId, planId);
+            int voided = voidNotStartedScheduleRows(factoryId, planId);
+            log.info("取消生产计划幂等命中: factoryId={}, planId={}, 补作废排程 {} 条", factoryId, planId, voided);
             return;
         }
 
@@ -9370,9 +9385,44 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // R1 (2026-06-14): 按批次定向级联关闭 WorkProcessTask (新表), 取代旧的"按产品类型全关 ProcessTask"。
         // 旧逻辑 findByFactoryIdAndProductTypeId 会把同产品另一并行活跃批次的任务一并 CLOSED (六扇门 6.1+6.2 场景误伤)。
         cancelPlanBatchesAndTasks(factoryId, planId, planBatches);
+        // 排程行不随之作废时, 它们继续占着产线: 生成排程报「被它排满」, 插单却说「已取消, 不排」(两处口径不一)
+        int voidedRows = voidNotStartedScheduleRows(factoryId, planId);
 
-        log.info("取消生产计划: planId={}, operatorId={}, reason={}, batches={}",
-                planId, operatorId, cancellationReason, planBatches != null ? planBatches.size() : 0);
+        log.info("取消生产计划: planId={}, operatorId={}, reason={}, batches={}, 作废排程 {} 条",
+                planId, operatorId, cancellationReason, planBatches != null ? planBatches.size() : 0, voidedRows);
+    }
+
+    /**
+     * 作废这个生产计划在本厂名下没开工的排程行 (待开始 / 延误, 且没有实际开始时间), 并重算这些行所在日调度计划的
+     * 批次数 / 派工人数。已开工的 (in_progress, 或有实际开始时间) 不动: 动它等于动在做的活。
+     *
+     * @return 作废的条数
+     */
+    private int voidNotStartedScheduleRows(String factoryId, String planId) {
+        if (lineScheduleRepository == null || schedulingPlanRepository == null) {
+            return 0; // 单测未注入; 生产环境恒存在
+        }
+        java.util.Set<com.cretas.aims.entity.LineSchedule.ScheduleStatus> notStarted =
+                com.cretas.aims.service.scheduling.impl.SchedulingPlanCrudServiceImpl.NOT_STARTED_STATUSES;
+        List<String> dayPlanIds = lineScheduleRepository.findDayPlanIdsWithNotStartedRowsOf(factoryId, planId, notStarted);
+        if (dayPlanIds.isEmpty()) {
+            return 0;
+        }
+        java.util.SortedSet<String> sortedDayPlans = new java.util.TreeSet<>(dayPlanIds);
+        // 先按 id 顺序锁住这些日调度计划, 再动排程行: 与「重开已取消的调度计划」(先锁日计划再作废名下排程) 同一顺序,
+        // 不然本事务锁着排程行等日计划、对方锁着日计划等排程行, 就是死锁
+        for (String dayPlanId : sortedDayPlans) {
+            schedulingPlanRepository.lockStatusForUpdate(dayPlanId, factoryId);
+        }
+        int voided = lineScheduleRepository.voidNotStartedRowsOfProductionPlan(factoryId, planId, notStarted,
+                com.cretas.aims.entity.LineSchedule.ScheduleStatus.cancelled, PLAN_CANCELLED_ROW_REASON,
+                LocalDateTime.now());
+        com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals totals =
+                new com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals(lineScheduleRepository, schedulingPlanRepository);
+        for (String dayPlanId : sortedDayPlans) { // 已持锁, recount 再锁一次是重入
+            totals.recount(factoryId, dayPlanId);
+        }
+        return voided;
     }
 
     /**
@@ -9565,6 +9615,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // R1 (2026-06-14): 审批通过后也按批次定向级联 (取代旧的"按产品类型全关 ProcessTask")。
         // 与 cancelProductionPlan 一致, 仅关本计划批次的活跃 WorkProcessTask, 不波及同产品其它计划。
         cancelPlanBatchesAndTasks(plan.getFactoryId(), planId, planBatches);
+        voidNotStartedScheduleRows(plan.getFactoryId(), planId);
 
         log.info("SP12 T3 生产撤回审批通过，计划已取消: planId={}, batches={}", planId,
                 planBatches != null ? planBatches.size() : 0);

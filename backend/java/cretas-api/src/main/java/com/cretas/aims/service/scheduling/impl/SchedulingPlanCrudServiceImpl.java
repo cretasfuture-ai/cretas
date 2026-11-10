@@ -108,6 +108,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             throw new BusinessException("自动排程没有可落库的排程");
         }
         List<LineSchedule> schedules = new ArrayList<>();
+        Map<String, String> planNumbers = new HashMap<>();
         for (AutoScheduleItem item : items) {
             if (item == null) {
                 throw new BusinessException("排程明细不能为空");
@@ -130,8 +131,10 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             if (line.getStatus() != ProductionLine.LineStatus.active) {
                 throw new BusinessException("产线当前不可排程: " + item.productionLineId());
             }
-            productionPlanRepository.findByIdAndFactoryId(item.productionPlanId(), factoryId)
+            com.cretas.aims.entity.ProductionPlan productionPlan = productionPlanRepository
+                    .findByIdAndFactoryId(item.productionPlanId(), factoryId)
                     .orElseThrow(() -> new BusinessException("生产计划不存在或不属于当前工厂: " + item.productionPlanId()));
+            planNumbers.put(productionPlan.getId(), productionPlan.getPlanNumber());
             if (item.batchId() != null) {
                 batchRepository.findByIdAndFactoryId(item.batchId(), factoryId)
                         .orElseThrow(() -> new BusinessException("批次不存在或不属于当前工厂: " + item.batchId()));
@@ -146,6 +149,15 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             schedule.setPlannedQuantity(item.plannedQuantity());
             schedule.setDailyAllocations(item.dailyAllocations());
             schedules.add(schedule);
+        }
+        // 先锁生产计划再建 / 重开当天的调度计划 (与取消生产计划同一加锁顺序): 引擎读计划之后它可能刚被取消,
+        // 取消已提交就不再给它写排程行; 取消还在进行就等它, 等到的是已取消 → 同样拒绝。
+        String closed = com.cretas.aims.service.scheduling.ProductionPlanScheduleLock
+                .lockAndFindClosed(productionPlanRepository, factoryId, planNumbers.keySet());
+        if (closed != null) {
+            throw new BusinessException(409, "生产计划「" + planNumbers.get(closed) + "」刚被取消或已完成，本次排程未保存")
+                    .withCode("SCHEDULE_PLAN_CLOSED")
+                    .withHint("重新生成排程，已取消 / 已完成的计划不会再排");
         }
         return persistPlan(factoryId, planDate, planName, notes, schedules, userId, SOURCE_AUTO);
     }
@@ -321,7 +333,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     }
 
     /** 没开工 = 没有实际开始时间, 且还在待开始 / 延误 (延误不等于开工: 待开始超时也会被标成延误)。 */
-    static final Set<LineSchedule.ScheduleStatus> NOT_STARTED_STATUSES =
+    public static final Set<LineSchedule.ScheduleStatus> NOT_STARTED_STATUSES =
             EnumSet.of(LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.delayed);
 
     private static BusinessException duplicateDay(String existingPlanId) {

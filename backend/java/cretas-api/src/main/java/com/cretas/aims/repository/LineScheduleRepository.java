@@ -57,6 +57,32 @@ public interface LineScheduleRepository extends JpaRepository<LineSchedule, Stri
                            @Param("reason") String reason,
                            @Param("now") LocalDateTime now);
 
+    /**
+     * 生产计划取消时: 它在本厂哪些日调度计划下还有没开工的排程 (待开始 / 延误, 且没有实际开始时间)。
+     * 作废之后要重算这些日调度计划的两个汇总数。
+     */
+    @Query("SELECT DISTINCT ls.planId FROM LineSchedule ls WHERE ls.productionPlanId = :productionPlanId "
+            + "AND ls.plan.factoryId = :factoryId AND ls.status IN :notStarted AND ls.actualStartTime IS NULL")
+    List<String> findDayPlanIdsWithNotStartedRowsOf(@Param("factoryId") String factoryId,
+                                                    @Param("productionPlanId") String productionPlanId,
+                                                    @Param("notStarted") java.util.Collection<LineSchedule.ScheduleStatus> notStarted);
+
+    /**
+     * 生产计划取消时, 一条语句作废它在本厂名下没开工的排程 (与 {@link #voidNotStartedRows} 同一判据)。
+     * 条件写在 UPDATE 里: 与「开工」并发时, 已提交开工的那条在 PostgreSQL 重判条件后被跳过。
+     */
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true)
+    @Query("UPDATE LineSchedule ls SET ls.status = :cancelled, ls.adjustmentReason = :reason, "
+            + "ls.lastAdjustmentTime = :now WHERE ls.productionPlanId = :productionPlanId "
+            + "AND ls.planId IN (SELECT sp.id FROM SchedulingPlan sp WHERE sp.factoryId = :factoryId) "
+            + "AND ls.status IN :notStarted AND ls.actualStartTime IS NULL")
+    int voidNotStartedRowsOfProductionPlan(@Param("factoryId") String factoryId,
+                                           @Param("productionPlanId") String productionPlanId,
+                                           @Param("notStarted") java.util.Collection<LineSchedule.ScheduleStatus> notStarted,
+                                           @Param("cancelled") LineSchedule.ScheduleStatus cancelled,
+                                           @Param("reason") String reason,
+                                           @Param("now") LocalDateTime now);
+
     @Query("SELECT COUNT(ls) FROM LineSchedule ls WHERE ls.planId = :planId AND ls.status <> :cancelled")
     long countByPlanIdAndStatusNot(@Param("planId") String planId,
                                    @Param("cancelled") LineSchedule.ScheduleStatus cancelled);
