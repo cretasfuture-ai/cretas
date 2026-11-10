@@ -308,6 +308,22 @@ public class WorkshopReportReservationService {
     @Transactional
     public BigDecimal releaseForReport(String factoryId, ProductionReport report) {
         BigDecimal total = BigDecimal.ZERO;
+        for (BigDecimal released : releaseForReportByBatch(factoryId, report).values()) {
+            total = total.add(released);
+        }
+        return total;
+    }
+
+    /**
+     * 同 {@link #releaseForReport}, 但按批次返回<b>实际</b>释放量 (只含释放量 &gt; 0 的批次)。
+     *
+     * <p>整单撤回 (C1, 2026-11-10) 要知道每个生产仓批次上放回了多少: 这批料若属于一张<b>已关单</b>的领料单,
+     * 放回生产仓就没有出路, 必须同量退回原料仓。⛔ 不要让调用方自己再按 {@link #reservationOf} 算一遍 ——
+     * 那是「应释放」, 不是「实释放」(批次上的预留被夹到 0 时两者不同)。
+     */
+    @Transactional
+    public Map<String, BigDecimal> releaseForReportByBatch(String factoryId, ProductionReport report) {
+        Map<String, BigDecimal> releasedByBatch = new LinkedHashMap<>();
         for (Map.Entry<String, BigDecimal> entry : reservationOf(report).entrySet()) {
             Optional<MaterialBatch> found =
                     materialBatchRepository.findByIdAndFactoryIdForUpdate(entry.getKey(), factoryId);
@@ -330,12 +346,12 @@ public class WorkshopReportReservationService {
             }
             batch.setReservedQuantity(held.subtract(released));
             materialBatchRepository.save(batch);
-            total = total.add(released);
+            releasedByBatch.merge(entry.getKey(), released, BigDecimal::add);
             log.info("生产仓报工释放: factoryId={}, reportId={}, batchId={}, -{} ⇒ reserved={}, 可用={}",
                     factoryId, report == null ? null : report.getId(), entry.getKey(),
                     released, batch.getReservedQuantity(), batch.getCurrentQuantity());
         }
-        return total;
+        return releasedByBatch;
     }
 
     /**

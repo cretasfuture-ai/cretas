@@ -1819,6 +1819,110 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         return repository.save(mr);
     }
 
+    /**
+     * C1 生产仓幽灵库存 (排查报告 2026-11-10, Steve 裁定 B: 撤回时直接退回原料仓, 不拦撤回)。
+     *
+     * <p>场景: 领料 100 → App 报工在生产仓批次占 30 → 关单按可用 70 退回原料仓, 生产仓批次「用掉 70、占着 30、
+     * 已用完」→ 撤回报工放掉占用 30。不做本步, 生产仓批次就是「可用 30、状态已用完」: 重新报工要求可用状态,
+     * 领料单已关不能再关/取消, 这 30 没有任何出路, 原料仓却少了 30。
+     *
+     * <p>做法与关单退料<b>同一条路</b> ({@link #restoreBatchUsedQuantity} + {@link #writeMaterialReturnTrace} +
+     * {@link #writeProductionMaterialReturn}), 生产仓侧照关单那样划平。领料行回写: 实用 −qty、退回 +qty。
+     */
+    @Override
+    @Transactional
+    public BigDecimal returnToSourceIfRequisitionClosed(String factoryId, String workshopBatchId, BigDecimal qty,
+                                                        Long operatorId, String reasonRef) {
+        if (qty == null || qty.signum() <= 0 || workshopBatchId == null || workshopBatchId.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+        MaterialBatch wks = materialBatchRepository.findByIdAndFactoryIdForUpdate(workshopBatchId, factoryId)
+                .orElse(null);
+        if (wks == null || !"MATERIAL_REQUISITION".equals(wks.getSourceDocType())
+                || wks.getSourceDocId() == null || wks.getSourceDocId().isBlank()) {
+            return BigDecimal.ZERO; // 不是领料单物化的生产仓批次 (原料仓批次 / 在制批次): 不归本路径管
+        }
+        // 锁序: 生产仓批次 (上一行, 调用方也已锁) → 领料单 → 原料批次; 关单也是先锁生产仓批次再动原料批次。
+        FactoryMaterialRequisition mr = repository.findByIdAndFactoryIdForUpdate(wks.getSourceDocId(), factoryId)
+                .orElse(null);
+        if (mr == null || mr.getStatus() != Status.CLOSED) {
+            return BigDecimal.ZERO; // 未关单: 料留在生产仓, 之后关单会按生产仓现存退回 (原路径)
+        }
+
+        FactoryMaterialRequisitionItem item = null;
+        Map<String, Object> row = null;
+        for (FactoryMaterialRequisitionItem candidate : mr.getItems()) {
+            if (candidate.getBatchNumbers() == null) {
+                continue;
+            }
+            for (Map<String, Object> candidateRow : candidate.getBatchNumbers()) {
+                Object wksId = candidateRow == null ? null : candidateRow.get("workshopBatchId");
+                if (wksId != null && workshopBatchId.equals(wksId.toString())) {
+                    item = candidate;
+                    row = candidateRow;
+                    break;
+                }
+            }
+            if (item != null) {
+                break;
+            }
+        }
+        if (item == null) {
+            // 生产仓批次说它来自这张单, 单上却找不到它 ⇒ 数据矛盾。⛔ 不悄悄把料留在生产仓 (那正是要修的幽灵库存)。
+            throw new BusinessException(409, String.format(
+                    "撤回失败: 生产仓批次 %s 来自已关单的领料单 %s, 但单上找不到对应的领料行, 无法把 %s 退回原料仓",
+                    wks.getBatchNumber(), mr.getRequisitionNo(), qty.stripTrailingZeros().toPlainString()))
+                    .withCode("REVERSAL_CLOSED_REQUISITION_ROW_MISSING")
+                    .withHint("请联系管理员核对该领料单的批次明细后再撤回")
+                    .withHintTarget(mr.getId())
+                    .withSeverity("BLOCKING");
+        }
+        BigDecimal workshopAvailable = wks.getCurrentQuantity();
+        BigDecimal consumed = item.getConsumedQty() != null ? item.getConsumedQty() : BigDecimal.ZERO;
+        if (workshopAvailable.compareTo(qty) < 0 || consumed.compareTo(qty) < 0) {
+            throw new BusinessException(409, String.format(
+                    "撤回失败: 已关单领料单 %s 物料 %s 要退回原料仓 %s, 但生产仓批次可用 %s、领料单记的实用 %s, 账对不上",
+                    mr.getRequisitionNo(), materialLabel(item), qty.stripTrailingZeros().toPlainString(),
+                    workshopAvailable.stripTrailingZeros().toPlainString(),
+                    consumed.stripTrailingZeros().toPlainString()))
+                    .withCode("REVERSAL_CLOSED_REQUISITION_QTY_MISMATCH")
+                    .withHint("请联系管理员核对该领料单与生产仓批次的数量后再撤回")
+                    .withHintTarget(mr.getId())
+                    .withSeverity("BLOCKING");
+        }
+
+        // 原料仓: 源批次已用量减回 + 负数退料流水 + 已执行的生产退料单 (与关单退料同一组写入)
+        String sourceBatchId = resolveBatchId(factoryId, row);
+        MaterialBatch source = materialBatchRepository.findByIdAndFactoryIdForUpdate(sourceBatchId, factoryId)
+                .orElseThrow(() -> new BusinessException(409, String.format(
+                        "撤回失败: 已关单领料单 %s 的原料批次 %s 不存在, 无法把 %s 退回原料仓",
+                        mr.getRequisitionNo(), sourceBatchId, qty.stripTrailingZeros().toPlainString()))
+                        .withCode("PRODUCTION_MATERIAL_RETURN_BATCH_NOT_FOUND")
+                        .withHint("请联系管理员核对领料批次后再撤回")
+                        .withHintTarget(mr.getId())
+                        .withSeverity("BLOCKING"));
+        restoreBatchUsedQuantity(factoryId, source, item, qty);
+        writeMaterialReturnTrace(factoryId, mr, item, source, qty, operatorId, reasonRef);
+        writeProductionMaterialReturn(factoryId, mr, item, source.getId(), qty);
+
+        // 生产仓: 照关单那样划平 (已用 +qty), 归零即已用完
+        BigDecimal wksUsed = wks.getUsedQuantity() != null ? wks.getUsedQuantity() : BigDecimal.ZERO;
+        wks.setUsedQuantity(wksUsed.add(qty));
+        if (wks.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
+            wks.setStatus(MaterialBatchStatus.DEPLETED);
+        }
+        materialBatchRepository.save(wks);
+
+        // 领料行: 这 qty 不再是「实用」, 而是「退回」
+        item.setConsumedQty(consumed.subtract(qty));
+        item.setReturnedQty((item.getReturnedQty() != null ? item.getReturnedQty() : BigDecimal.ZERO).add(qty));
+        repository.save(mr);
+        log.info("C1 撤回后退回原料仓: 领料单 {} 物料 {} 生产仓批次 {} → 原料批次 {} 退回 {} ({})",
+                mr.getRequisitionNo(), materialLabel(item), wks.getId(), source.getId(),
+                qty.toPlainString(), reasonRef);
+        return qty;
+    }
+
     // ---------- helpers ----------
 
     /**
@@ -1927,7 +2031,7 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                             .withHintTarget(item.getId())
                             .withSeverity("BLOCKING"));
             restoreBatchUsedQuantity(factoryId, batch, item, returnQty);
-            writeMaterialReturnTrace(factoryId, requisition, item, batch, returnQty, operatorId);
+            writeMaterialReturnTrace(factoryId, requisition, item, batch, returnQty, operatorId, null);
             writeProductionMaterialReturn(factoryId, requisition, item, batch.getId(), returnQty);
             remaining = remaining.subtract(returnQty);
         }
@@ -2077,7 +2181,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                                           FactoryMaterialRequisitionItem item,
                                           MaterialBatch batch,
                                           BigDecimal returnQty,
-                                          Long operatorId) {
+                                          Long operatorId,
+                                          String reasonRef) {
         BigDecimal unitPrice = batch.getUnitPrice() != null ? batch.getUnitPrice() : BigDecimal.ZERO;
         MaterialConsumption trace = new MaterialConsumption();
         trace.setFactoryId(factoryId);
@@ -2093,7 +2198,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // ⛔ 保持裸字面量: VoucherConsumptionSourceCoverageContractTest 按 setSourceType("...") 扫写入点做凭证裁定;
         //    值必须等于 SOURCE_MATERIAL_RETURN (取消计划判据靠它排除退料)。
         trace.setSourceType("MATERIAL_RETURN");
-        trace.setNotes("production material return: requisition=" + requisition.getId() + ", item=" + item.getId());
+        trace.setNotes("production material return: requisition=" + requisition.getId() + ", item=" + item.getId()
+                + (reasonRef == null || reasonRef.isBlank() ? "" : ", reason=" + reasonRef));
         materialConsumptionRepository.save(trace);
     }
 
