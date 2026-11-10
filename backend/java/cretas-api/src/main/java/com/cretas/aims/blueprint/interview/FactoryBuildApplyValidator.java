@@ -51,6 +51,9 @@ public class FactoryBuildApplyValidator {
     private ProductTypeRepository productTypeRepository;
 
     @Autowired
+    private com.cretas.aims.repository.FactorySettingsRepository factorySettingsRepository;
+
+    @Autowired
     private RawMaterialTypeRepository rawMaterialTypeRepository;
 
     @Autowired
@@ -133,6 +136,7 @@ public class FactoryBuildApplyValidator {
             checkConversions(problems, req.getSuggestedData(), factoryId);
             checkWorkProcesses(problems, req.getSuggestedData().getWorkProcesses());
             checkModules(problems, req.getSuggestedData().getModules());
+            checkPolicy(problems, factoryId, req.getSuggestedData().getPolicy());
             checkThresholds(problems, factoryId, req.getSuggestedData().getThresholds());
             checkWarehouses(problems, req.getSuggestedData().getWarehouses());
             checkCodeSegments(problems, req.getSuggestedData().getCodeSegments());
@@ -437,6 +441,20 @@ public class FactoryBuildApplyValidator {
             }
             if (isBlank(it.getUnit())) {
                 problems.add(label + "[" + i + "].unit 为空 (该列 NOT NULL, 不允许留空或代填)");
+            }
+            boolean isProduct = "productTypes".equals(label);
+            if (!isProduct && (it.getInspectionRequired() != null || it.getMaxReworkRatioPercent() != null)) {
+                problems.add(label + "[" + i + "] 需检/回料上限只对产品有意义, 物料不接收");
+            }
+            if (it.getMaxReworkRatioPercent() != null
+                    && it.getMaxReworkRatioPercent().stripTrailingZeros().scale() > 2) {
+                problems.add(label + "[" + i + "].maxReworkRatioPercent 最多保留两位小数");
+            }
+            if (it.getMaxReworkRatioPercent() != null
+                    && (it.getMaxReworkRatioPercent().signum() <= 0
+                    || it.getMaxReworkRatioPercent().compareTo(new BigDecimal("100")) > 0)) {
+                problems.add(label + "[" + i + "].maxReworkRatioPercent 必须大于 0 且不超过 100"
+                        + "(不想设上限就别提交这一项)");
             }
         }
     }
@@ -915,6 +933,37 @@ public class FactoryBuildApplyValidator {
                 problems.add("modules." + e.getKey() + " 的值为 null —— "
                         + "开还是关要说清楚, null 会被当成「没提」而保持原样");
             }
+        }
+    }
+
+    /** 物料平衡线的合法区间: 0 < 黄 < 红 <= 100(与 MaterialBalanceThresholdProvider#save 同口径)。 */
+    private void checkPolicy(List<String> problems, String factoryId,
+                             ApplyAIInitRequest.FactoryPolicyItem policy) {
+        if (policy == null) {
+            return;
+        }
+        java.math.BigDecimal warn = policy.getMaterialBalanceWarnPct();
+        java.math.BigDecimal red = policy.getMaterialBalanceRedPct();
+        if (warn == null && red == null) {
+            return;
+        }
+        // 列是 numeric(5,2): 超过两位小数 PG 会舍入, 舍入后可能 黄=红 或 黄=0, 校验过的值与落库值不一致 → 直接拒绝
+        if ((warn != null && warn.stripTrailingZeros().scale() > 2)
+                || (red != null && red.stripTrailingZeros().scale() > 2)) {
+            problems.add("policy 物料平衡告警线最多保留两位小数");
+            return;
+        }
+        FactorySettings cur = factorySettingsRepository.findByFactoryId(factoryId).orElse(null);
+        java.math.BigDecimal effWarn = warn != null ? warn
+                : cur != null && cur.getMaterialBalanceWarnPct() != null ? cur.getMaterialBalanceWarnPct()
+                : new java.math.BigDecimal("5.00");
+        java.math.BigDecimal effRed = red != null ? red
+                : cur != null && cur.getMaterialBalanceRedPct() != null ? cur.getMaterialBalanceRedPct()
+                : new java.math.BigDecimal("15.00");
+        if (effWarn.signum() <= 0 || effWarn.compareTo(effRed) >= 0
+                || effRed.compareTo(new java.math.BigDecimal("100")) > 0) {
+            problems.add("policy 物料平衡告警线不合法: 黄色线必须大于 0 且小于红色线, 红色线不超过 100"
+                    + "(生效值 黄=" + effWarn + " 红=" + effRed + ")");
         }
     }
 
