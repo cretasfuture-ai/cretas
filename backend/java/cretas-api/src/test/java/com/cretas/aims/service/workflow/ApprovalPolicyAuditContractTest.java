@@ -30,7 +30,7 @@ import static org.mockito.Mockito.when;
  * #1580 独立审查低危 5: 「允许本人审批」开关 / 改价阈值改动留痕 (谁、什么时候、改前 → 改后),
  * 并且导入别厂导出的设置不会把本厂的开关打开。走 FactorySettingsServiceImpl 的真实保存 / 导入 / 重置路径。
  */
-class ApprovalPolicyAuditTest {
+class ApprovalPolicyAuditContractTest {
 
     private static final String FACTORY = "F006";
 
