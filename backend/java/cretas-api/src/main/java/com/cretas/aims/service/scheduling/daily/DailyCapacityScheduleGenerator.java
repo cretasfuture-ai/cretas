@@ -11,6 +11,7 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.SchedulingPlan;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
@@ -112,8 +113,10 @@ public class DailyCapacityScheduleGenerator {
         LocalDate firstDay = request.getPlanDate();
         List<ProductionPlan> plans = resolvePlans(factoryId, request.getPlanIds(), request.getBatchIds());
         ProductionLine line = resolveLine(factoryId, request.getProductionLineId());
-        // 先判同日已有调度计划: 不要等人补完日产能才告诉他这天已经排过了
+        // 先判同日已有调度计划: 不要等人补完日产能才告诉他这天已经排过了。
+        // 已取消的不拦: 落库时重开它 (唯一约束是 工厂+日期, 拦了这一天就永远排不了), 最终判定在落库那一步加锁再做。
         schedulingPlanRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, firstDay)
+                .filter(existing -> existing.getStatus() != SchedulingPlan.PlanStatus.cancelled)
                 .ifPresent(existing -> {
                     throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
                             .withHint("如需查看请打开该日期已有的调度计划")
@@ -165,6 +168,9 @@ public class DailyCapacityScheduleGenerator {
         SchedulingPlanDTO created = crudService.createAutoSchedulePlan(factoryId, firstDay,
                 firstDay + " 自动排程", notes, items, userId);
         SchedulingPlanDTO result = crudService.getPlan(factoryId, created.getId());
+        if (created.getWarnings() != null) {
+            warnings.addAll(0, created.getWarnings()); // 重开了已取消的调度计划: 这句放最前
+        }
         result.setWarnings(warnings);
         result.setOutcome(SchedulingPlanDTO.OUTCOME_SCHEDULED);
         result.setCapacityRequired(List.of());

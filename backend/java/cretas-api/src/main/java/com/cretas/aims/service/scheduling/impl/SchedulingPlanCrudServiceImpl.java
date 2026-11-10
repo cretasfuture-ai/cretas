@@ -15,10 +15,13 @@ import com.cretas.aims.service.scheduling.core.SchedulingAIService;
 import com.cretas.aims.service.scheduling.core.SchedulingPlanCrudService;
 import com.cretas.aims.service.scheduling.core.WorkerAssignmentService;
 import com.cretas.aims.service.scheduling.SchedulingResourceWriteLock;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -53,6 +56,9 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     private final PushNotificationService pushNotificationService;
     private final SchedulingResourceWriteLock resourceWriteLock;
     private final ProductionLineSupervisorRepository supervisorRepository;
+    /** 重开已取消的调度计划时锁行并刷新 (见 claimDayPlan)。 */
+    @PersistenceContext
+    private EntityManager entityManager;
     @Lazy @Autowired
     private WorkerAssignmentService workerAssignmentService;
     @Lazy @Autowired
@@ -83,7 +89,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             }
         }
         return persistPlan(factoryId, request.getPlanDate(), request.getPlanName(), request.getNotes(),
-                schedules, userId);
+                schedules, userId, SOURCE_MANUAL);
     }
 
     /**
@@ -141,29 +147,24 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             schedule.setDailyAllocations(item.dailyAllocations());
             schedules.add(schedule);
         }
-        return persistPlan(factoryId, planDate, planName, notes, schedules, userId);
+        return persistPlan(factoryId, planDate, planName, notes, schedules, userId, SOURCE_AUTO);
+    }
+
+    static final String SOURCE_AUTO = "自动排程";
+    static final String SOURCE_MANUAL = "手动新建";
+    /** 重开已取消的调度计划时, 名下没开工的旧排程作废的原因 (与缺口 17 插单重开同一句)。 */
+    public static final String REOPEN_VOIDED_ROW_REASON = "调度计划取消后重开，旧排程作废";
+    private static final java.time.format.DateTimeFormatter REOPEN_STAMP =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
+    /** 重开结果: 这一天的调度计划 (新建或重开), 以及重开时作废 / 保留的旧排程条数。 */
+    private record ClaimedDay(SchedulingPlan plan, boolean reopened, int voidedRows, int keptRows) {
     }
 
     private SchedulingPlanDTO persistPlan(String factoryId, LocalDate planDate, String planName, String notes,
-                                          List<LineSchedule> schedules, Long userId) {
-        // 检查是否已存在同日计划
-        Optional<SchedulingPlan> existing = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(
-            factoryId, planDate);
-        if (existing.isPresent()) {
-            throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
-                    .withHint("如需查看请打开该日期已有的调度计划")
-                    .withHintTarget(existing.get().getId());
-        }
-
-        SchedulingPlan plan = new SchedulingPlan();
-        plan.setFactoryId(factoryId);
-        plan.setPlanDate(planDate);
-        plan.setPlanName(planName != null ? planName : planDate.toString() + " 生产计划");
-        plan.setNotes(notes);
-        plan.setCreatedBy(userId);
-        plan.setStatus(SchedulingPlan.PlanStatus.draft);
-
-        plan = planRepository.save(plan);
+                                          List<LineSchedule> schedules, Long userId, String source) {
+        ClaimedDay claimed = claimDayPlan(factoryId, planDate, planName, notes, userId, source);
+        SchedulingPlan plan = claimed.plan();
 
         // 创建排程
         if (!schedules.isEmpty()) {
@@ -172,7 +173,10 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                 schedule.setStatus(LineSchedule.ScheduleStatus.pending);
             }
             scheduleRepository.saveAll(schedules);
-            plan.setTotalBatches(schedules.size());
+        }
+        if (!schedules.isEmpty() || claimed.reopened()) {
+            // 重开时已开工而保留下来的旧排程也算这一天的排程
+            plan.setTotalBatches(schedules.size() + claimed.keptRows());
             plan.setTotalWorkers(0);
             planRepository.save(plan);
         }
@@ -208,7 +212,141 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             log.error("发送调度计划创建推送通知失败: planId={}", plan.getId(), e);
         }
 
-        return enrichPlanDTO(SchedulingPlanDTO.fromEntity(plan));
+        SchedulingPlanDTO dto = enrichPlanDTO(SchedulingPlanDTO.fromEntity(plan));
+        if (claimed.reopened()) {
+            dto.setWarnings(new ArrayList<>(List.of(reopenWarning(claimed))));
+        }
+        return dto;
+    }
+
+    /** 给用户看的一句: 这一天原来的调度计划已取消, 本次重开了它。 */
+    public static String reopenWarning(int voidedRows, int keptRows) {
+        return "这一天原来的调度计划已取消，本次把它重开为草稿；原来没开工的 " + voidedRows + " 条排程已作废，不会再生效"
+                + (keptRows > 0 ? "；已开工的 " + keptRows + " 条保留" : "");
+    }
+
+    private static String reopenWarning(ClaimedDay claimed) {
+        return reopenWarning(claimed.voidedRows(), claimed.keptRows());
+    }
+
+    /**
+     * 拿到这一天可以写的调度计划 (食品 DAG 缺口 18 后续)。
+     *
+     * <p>{@code scheduling_plans} 的唯一约束是 (factory_id, plan_date), 取消只改状态 ⇒ 不复用的话,
+     * 某天取消之后这一天再也建不了调度计划 (一律 409)。规则:
+     * <ul>
+     *   <li>没有 → 新建草稿。两个请求同时新建同一天: 后提交的撞唯一约束, 转成同一句 409, 不报 500。</li>
+     *   <li>已取消 → 锁住这一行并读最新状态, 仍是已取消才重开为草稿, 并作废名下没开工的旧排程
+     *       (⛔ 不让旧排程跟着复活); 已开工的旧排程保留。两个请求同时重开: 后到的在锁上等,
+     *       读到的已是草稿 ⇒ 409。</li>
+     *   <li>草稿 / 已确认 / 进行中 / 已完成 → 409, 照旧。</li>
+     * </ul>
+     */
+    private ClaimedDay claimDayPlan(String factoryId, LocalDate planDate, String planName, String notes,
+                                    Long userId, String source) {
+        Optional<SchedulingPlan> existing = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(
+                factoryId, planDate);
+        if (existing.isPresent()) {
+            SchedulingPlan plan = existing.get();
+            if (plan.getStatus() != SchedulingPlan.PlanStatus.cancelled) {
+                throw duplicateDay(plan.getId());
+            }
+            // 锁行 + 读已提交的最新状态: 另一个请求可能刚重开了它。⛔ 不用 em.refresh(plan, PESSIMISTIC_WRITE):
+            // 真 PostgreSQL 实测它没把两边串起来, 两个请求都重开成功 (CancelledDayPlanReopenPostgresContractTest)。
+            String current = planRepository.lockStatusForUpdate(plan.getId(), factoryId).orElse(null);
+            if (!SchedulingPlan.PlanStatus.cancelled.name().equals(current)) {
+                throw duplicateDay(plan.getId());
+            }
+            entityManager.refresh(plan); // 已持锁: 读到的就是最新, 备注接在最新内容后面
+            return reopenCancelled(plan, planName, notes, userId, source);
+        }
+
+        SchedulingPlan plan = new SchedulingPlan();
+        plan.setFactoryId(factoryId);
+        plan.setPlanDate(planDate);
+        plan.setPlanName(planName != null ? planName : planDate.toString() + " 生产计划");
+        plan.setNotes(notes);
+        plan.setCreatedBy(userId);
+        plan.setStatus(SchedulingPlan.PlanStatus.draft);
+        try {
+            plan = planRepository.save(plan);
+            planRepository.flush(); // 当场插入: 撞唯一约束要在这里接住, 不能拖到提交时变成 500
+        } catch (DataIntegrityViolationException e) {
+            if (!isUniqueViolation(e)) {
+                throw e;
+            }
+            // 同一天另一个请求刚建好并提交了: 与上面同一句 409
+            throw new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
+                    .withHint("刚有人同时建了这一天的调度计划，请刷新后打开它");
+        }
+        return new ClaimedDay(plan, false, 0, 0);
+    }
+
+    private ClaimedDay reopenCancelled(SchedulingPlan plan, String planName, String notes, Long userId,
+                                       String source) {
+        LocalDateTime now = LocalDateTime.now();
+        int voided = 0;
+        int kept = 0;
+        List<LineSchedule> voidedRows = new ArrayList<>();
+        for (LineSchedule row : scheduleRepository.findByPlanIdOrderBySequenceOrder(plan.getId())) {
+            if (row.getStatus() == LineSchedule.ScheduleStatus.cancelled) {
+                continue;
+            }
+            if (notStarted(row)) {
+                row.setStatus(LineSchedule.ScheduleStatus.cancelled);
+                row.setAdjustmentReason(REOPEN_VOIDED_ROW_REASON);
+                row.setLastAdjustmentTime(now);
+                voidedRows.add(row);
+                voided++;
+            } else {
+                kept++;
+            }
+        }
+        if (!voidedRows.isEmpty()) {
+            scheduleRepository.saveAll(voidedRows);
+        }
+        plan.setStatus(SchedulingPlan.PlanStatus.draft);
+        plan.setConfirmedBy(null);
+        plan.setConfirmedAt(null);
+        if (planName != null) {
+            plan.setPlanName(planName);
+        }
+        StringBuilder trail = new StringBuilder(plan.getNotes() == null ? "" : plan.getNotes() + "\n")
+                .append(reopenTrail(now, source, userId, voided, kept));
+        if (notes != null && !notes.isBlank()) {
+            trail.append("\n").append(notes);
+        }
+        plan.setNotes(trail.toString());
+        planRepository.save(plan);
+        log.info("重开已取消的调度计划: planId={}, 来源={}, 作废旧排程 {} 条, 保留已开工 {} 条",
+                plan.getId(), source, voided, kept);
+        return new ClaimedDay(plan, true, voided, kept);
+    }
+
+    /** 重开留痕 (备注里追加的一行); 来源: 自动排程 / 手动新建 / 紧急插单 <计划号>。 */
+    public static String reopenTrail(LocalDateTime at, String source, Long userId, int voidedRows, int keptRows) {
+        return "[重开 " + REOPEN_STAMP.format(at) + "] 原调度计划已取消，由" + source + "重开为草稿"
+                + (userId != null ? "（操作人 " + userId + "）" : "")
+                + "；作废没开工的旧排程 " + voidedRows + " 条"
+                + (keptRows > 0 ? "，保留已开工的 " + keptRows + " 条" : "");
+    }
+
+    /** 没开工 = 没有实际开始时间, 且还在待开始 / 延误。 */
+    static boolean notStarted(LineSchedule row) {
+        return row.getActualStartTime() == null
+                && (row.getStatus() == LineSchedule.ScheduleStatus.pending
+                    || row.getStatus() == LineSchedule.ScheduleStatus.delayed);
+    }
+
+    private static BusinessException duplicateDay(String existingPlanId) {
+        return new BusinessException(409, "该日期已存在调度计划, 请勿重复创建")
+                .withHint("如需查看请打开该日期已有的调度计划")
+                .withHintTarget(existingPlanId);
+    }
+
+    private static boolean isUniqueViolation(DataIntegrityViolationException e) {
+        String raw = String.valueOf(e.getMostSpecificCause().getMessage()).toLowerCase(Locale.ROOT);
+        return raw.contains("unique") || raw.contains("duplicate key");
     }
 
     private void validateExplicitSchedules(String factoryId, CreateSchedulingPlanRequest request) {
