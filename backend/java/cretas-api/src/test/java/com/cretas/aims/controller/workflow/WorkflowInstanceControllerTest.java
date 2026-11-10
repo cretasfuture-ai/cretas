@@ -559,4 +559,42 @@ class WorkflowInstanceControllerTest {
                 FACTORY_ID, "stk-1", "inst-stk", 109L,
                 "factory_super_admin", HistoryAction.APPROVE, "本厂只有我盘点");
     }
+    @Test
+    @DisplayName("复核 2: 盘点 OA 动作 —— 不在审批流节点角色里的人 (哪怕授了盘点审批权限) 403 OA_TASK_FORBIDDEN, 不进盘点服务")
+    void inventory_adjustment_action_still_requires_the_oa_node_role() {
+        mockAuth(110L, "f006_warehouse", "warehouse_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-stk2", "wf-stk", "INVENTORY_ADJUSTMENT", "stk-2", List.of("approval_finance"), 109L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-stk2")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(false);
+
+        com.cretas.aims.exception.BusinessException error = org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> controller.executeAction(FACTORY_ID, "inst-stk2", AUTH_HEADER,
+                        new WorkflowInstanceController.WorkflowActionRequest("APPROVE", "核对无误", "idem-stk-2", "approval_finance")));
+        assertEquals(403, error.getCode());
+        assertEquals("OA_TASK_FORBIDDEN", error.getErrorCode());
+        org.junit.jupiter.api.Assertions.assertTrue(error.getActionHint().contains("审批流模板"));
+        verify(stocktakeService, never()).applyWorkflowAction(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("复核 2: 盘点 OA 动作 —— 在节点角色里但本厂取消了盘点审批权限: 盘点服务的 403 原样透出")
+    void inventory_adjustment_action_surfaces_the_revoked_approval_permission() {
+        mockAuth(111L, "f006_finance", "finance_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-stk3", "wf-stk", "INVENTORY_ADJUSTMENT", "stk-3", List.of("approval_finance"), 109L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-stk3")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(true);
+        when(stocktakeService.applyWorkflowAction(eq(FACTORY_ID), eq("stk-3"), eq("inst-stk3"), eq(111L),
+                eq("finance_manager"), eq(HistoryAction.APPROVE), eq("核对无误")))
+                .thenThrow(new com.cretas.aims.exception.BusinessException(403, "当前账号没有盘点差异审批权限")
+                        .withCode("STOCKTAKE_APPROVAL_PERMISSION_REQUIRED"));
+
+        com.cretas.aims.exception.BusinessException error = org.junit.jupiter.api.Assertions.assertThrows(
+                com.cretas.aims.exception.BusinessException.class,
+                () -> controller.executeAction(FACTORY_ID, "inst-stk3", AUTH_HEADER,
+                        new WorkflowInstanceController.WorkflowActionRequest("APPROVE", "核对无误", "idem-stk-3", "approval_finance")));
+        assertEquals("STOCKTAKE_APPROVAL_PERMISSION_REQUIRED", error.getErrorCode());
+    }
 }
