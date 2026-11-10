@@ -139,6 +139,8 @@ export interface DispositionApproveRequest {
   comment?: string;
   alternativeAction?: string;
   conditions?: string;
+  /** 本人审批原因 (申请人就是审批人、且本厂开了「允许本人审批」时必填)。 */
+  selfApprovalReason?: string;
 }
 
 /** POST /quality-disposition/{id}/approve 响应. */

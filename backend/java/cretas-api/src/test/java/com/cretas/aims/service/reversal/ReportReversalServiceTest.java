@@ -1318,4 +1318,103 @@ class ReportReversalServiceTest {
             verify(reversalLogRepo, never()).save(any());
         }
     }
+    // ==================== 纪律排查 B1: 工厂级「允许本人审批」开关 ====================
+
+    @Nested
+    @DisplayName("B1 允许本人审批开关 — 报工撤回")
+    class SelfApprovalSwitch {
+
+        private final com.cretas.aims.repository.FactorySettingsRepository settingsRepo =
+                mock(com.cretas.aims.repository.FactorySettingsRepository.class);
+
+        private ReportReversalLog pendingBySubmitter() {
+            ReportReversalLog pending = ReportReversalLog.builder()
+                    .id(LOG_ID).factoryId(FACTORY_ID).batchId(BATCH_ID)
+                    .submittedBy(SUBMITTED_BY)
+                    .status(ReportReversalLog.ReversalStatus.PENDING)
+                    .reversalScope(ReportReversalLog.ReversalScope.WHOLE_ORDER)
+                    .build();
+            when(reversalLogRepo.findById(LOG_ID)).thenReturn(Optional.of(pending));
+            when(reportRepo.findYieldReportsByBatch(FACTORY_ID, BATCH_ID)).thenReturn(Collections.emptyList());
+            when(reversalLogRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            return pending;
+        }
+
+        private void switchIs(Boolean value) {
+            when(settingsRepo.findAllowSelfApprovalByFactoryId(FACTORY_ID)).thenReturn(value);
+            ReflectionTestUtils.setField(service, "selfApprovalGate",
+                    new com.cretas.aims.service.workflow.FactorySelfApprovalGate(settingsRepo));
+        }
+
+        @Test
+        @DisplayName("开关关 + 本人审批 (带原因也不行) → 403 SELF_APPROVAL_FORBIDDEN, 一行不写")
+        void switchOff_selfApproval_stillForbidden() {
+            pendingBySubmitter();
+            switchIs(false);
+
+            assertThatThrownBy(() -> service.approveReversal(FACTORY_ID, LOG_ID, SUBMITTED_BY, "只有我一个人"))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> {
+                        assertThat(((BusinessException) e).getCode()).isEqualTo(403);
+                        assertThat(((BusinessException) e).getErrorCode()).isEqualTo("SELF_APPROVAL_FORBIDDEN");
+                    });
+            verify(reversalLogRepo, never()).save(any());
+            verify(reportRepo, never()).findYieldReportsByBatch(anyString(), anyLong());
+        }
+
+        @Test
+        @DisplayName("没有 settings 行 (读到 null) → 按关处理, 本人审批照样被拦")
+        void switchMissing_treatedAsOff() {
+            pendingBySubmitter();
+            switchIs(null);
+
+            assertThatThrownBy(() -> service.approveReversal(FACTORY_ID, LOG_ID, SUBMITTED_BY, "只有我一个人"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("审批人不能与提交人相同");
+            verify(reversalLogRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("开关开 + 填了原因 → 放行执行, 撤回记录标本人审批并保存原因")
+        void switchOn_withReason_selfApprovedAndTraced() {
+            ReportReversalLog pending = pendingBySubmitter();
+            switchIs(true);
+
+            service.approveReversal(FACTORY_ID, LOG_ID, SUBMITTED_BY, "  本厂只有我一个主管  ");
+
+            assertThat(pending.isSelfApproved()).isTrue();
+            assertThat(pending.getSelfApprovalReason()).isEqualTo("本厂只有我一个主管");
+            assertThat(pending.getApprovedBy()).isEqualTo(SUBMITTED_BY);
+            verify(reversalLogRepo, atLeastOnce()).save(pending);
+            verify(reportRepo, times(2)).findYieldReportsByBatch(FACTORY_ID, BATCH_ID);
+        }
+
+        @Test
+        @DisplayName("开关开 + 没填原因 → 422 SELF_APPROVAL_REASON_REQUIRED, 一行不写")
+        void switchOn_withoutReason_rejected() {
+            pendingBySubmitter();
+            switchIs(true);
+
+            assertThatThrownBy(() -> service.approveReversal(FACTORY_ID, LOG_ID, SUBMITTED_BY, "   "))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> {
+                        assertThat(((BusinessException) e).getCode()).isEqualTo(422);
+                        assertThat(((BusinessException) e).getErrorCode())
+                                .isEqualTo(com.cretas.aims.service.workflow.FactorySelfApprovalGate.REASON_REQUIRED);
+                    });
+            verify(reversalLogRepo, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("阴性对照: 开关开 + 他人审批 → 不标本人审批, 不要求原因")
+        void switchOn_otherApprover_notMarked() {
+            ReportReversalLog pending = pendingBySubmitter();
+            switchIs(true);
+
+            service.approveReversal(FACTORY_ID, LOG_ID, 99L, null);
+
+            assertThat(pending.isSelfApproved()).isFalse();
+            assertThat(pending.getSelfApprovalReason()).isNull();
+        }
+    }
 }

@@ -9,6 +9,8 @@ import { get, put } from '@/api/request';
 import { handleCatchError } from '@/utils/errorToast';
 import { formatDateTime } from '@/utils/dateFormat';
 import type { TableRow } from '@/types/api';
+import SelfApprovalReasonField from '@/components/approval/SelfApprovalReasonField.vue';
+import { isSelfApproval, validateSelfApprovalReason } from '@/utils/selfApproval';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -27,6 +29,11 @@ const approvalLoading = ref(false);
 const approvalTarget = ref<TableRow | null>(null);
 const approvalOpinion = ref('');
 const approvalAction = ref<'approve' | 'reject'>('approve');
+// 本人审批 (纪律排查 B1): 当前登录人就是撤回申请人时, 批准必须写原因
+const selfApprovalReason = ref('');
+const currentUserId = computed(() => authStore.user?.id);
+const isSelfApprove = computed(() => approvalAction.value === 'approve'
+  && isSelfApproval(approvalTarget.value?.submittedBy as number | string | undefined, currentUserId.value));
 
 // -------- 拒绝原因 --------
 const REJECT_REASONS = [
@@ -88,6 +95,7 @@ function openApprovalDialog(row: TableRow, action: 'approve' | 'reject') {
   approvalTarget.value = row;
   approvalAction.value = action;
   approvalOpinion.value = '';
+  selfApprovalReason.value = '';
   rejectReasonSelected.value = '数据仍需保留';
   rejectReasonOther.value = '';
   approvalDialogVisible.value = true;
@@ -109,7 +117,15 @@ async function confirmApproval() {
   approvalLoading.value = true;
   try {
     if (approvalAction.value === 'approve') {
-      await put(`/${factoryId.value}/reversals/${logId}/approve`, {});
+      if (isSelfApprove.value) {
+        const invalid = validateSelfApprovalReason(selfApprovalReason.value);
+        if (invalid) {
+          ElMessage({ message: invalid, type: 'error', duration: 0, showClose: true });
+          return;
+        }
+      }
+      await put(`/${factoryId.value}/reversals/${logId}/approve`,
+        isSelfApprove.value ? { selfApprovalReason: selfApprovalReason.value.trim() } : {});
       ElMessage.success('已批准撤回申请，系统正在执行撤回');
     } else {
       await put(`/${factoryId.value}/reversals/${logId}/reject`, { reason: finalReason });
@@ -358,6 +374,7 @@ function goToBatch(batchId: number) {
             show-icon
             style="margin-top:12px"
           />
+          <SelfApprovalReasonField v-if="isSelfApprove" v-model="selfApprovalReason" action-label="审批" />
         </template>
       </template>
 

@@ -18,6 +18,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, WarningFilled } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
+import SelfApprovalReasonField from '@/components/approval/SelfApprovalReasonField.vue';
+import { isSelfApproval, validateSelfApprovalReason } from '@/utils/selfApproval';
 import { dispositionResultFilter } from '../reinspectionRelease';
 import {
   getAvailableActions,
@@ -455,10 +457,15 @@ const approveDialogVisible = ref(false);
 const approveRow = ref<PendingDispositionDTO | null>(null);
 const approveForm = ref<{ approved: boolean; comment: string }>({ approved: true, comment: '' });
 const approving = ref(false);
+// 本人审批 (纪律排查 B3): 当前登录人就是处置申请人时, 批准必须写原因 (驳回时拒绝原因即本人原因)
+const selfApprovalReason = ref('');
+const isSelfApprove = computed(() => approveForm.value.approved
+  && isSelfApproval(approveRow.value?.executorId, currentUserId.value));
 
 function openApproveDialog(row: PendingDispositionDTO) {
   approveRow.value = row;
   approveForm.value = { approved: true, comment: '' };
+  selfApprovalReason.value = '';
   approveDialogVisible.value = true;
 }
 
@@ -472,6 +479,13 @@ async function submitApprove() {
     ElMessage.warning('拒绝时请填写审批意见');
     return;
   }
+  if (isSelfApprove.value) {
+    const invalid = validateSelfApprovalReason(selfApprovalReason.value);
+    if (invalid) {
+      ElMessage({ message: invalid, type: 'error', duration: 0, showClose: true });
+      return;
+    }
+  }
   approving.value = true;
   try {
     const result = await approveDisposition(factoryId.value, approveRow.value.id, {
@@ -479,6 +493,7 @@ async function submitApprove() {
       approverId,
       approverName: currentUserName.value || undefined,
       comment: approveForm.value.comment.trim() || undefined,
+      selfApprovalReason: isSelfApprove.value ? selfApprovalReason.value.trim() : undefined,
     });
     if ((result.finishedGoodsHeld ?? 0) > 0) {
       ElMessage({ type: 'warning', message: result.message, duration: 0, showClose: true });
@@ -815,6 +830,7 @@ onMounted(() => {
           />
         </el-form-item>
       </el-form>
+      <SelfApprovalReasonField v-if="isSelfApprove" v-model="selfApprovalReason" action-label="审批" />
 
       <template #footer>
         <el-button @click="approveDialogVisible = false">取消</el-button>

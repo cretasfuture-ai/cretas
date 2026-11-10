@@ -239,6 +239,32 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private Boolean blockStartOnOpenShortage = false;
 
+    /**
+     * 工厂级「允许本人审批」开关 (纪律排查 B1–B3/B11/B15, V20261110_47)。默认 false = 四眼照旧;
+     * true = 提交人可审批自己的报工撤回/盘点差异/质检处置/改价/退款, 必须填原因并留痕。
+     */
+    @Column(name = "allow_self_approval", nullable = false)
+    @Builder.Default
+    private Boolean allowSelfApproval = false;
+
+    /** 改价审批阈值: 降价超过此百分比需审批 (纪律排查 B11, V20261110_47), 默认 10。 */
+    @Column(name = "price_decrease_approval_pct", nullable = false, precision = 5, scale = 2)
+    @Builder.Default
+    private java.math.BigDecimal priceDecreaseApprovalPct = new java.math.BigDecimal("10");
+
+    /** 改价审批阈值: 涨价超过此百分比需审批 (纪律排查 B11, V20261110_47), 默认 20。 */
+    @Column(name = "price_increase_approval_pct", nullable = false, precision = 5, scale = 2)
+    @Builder.Default
+    private java.math.BigDecimal priceIncreaseApprovalPct = new java.math.BigDecimal("20");
+
+    /**
+     * A18 插单排程「排不进」按原因放行 (V20261111_02)。逗号分隔的原因码, 列在里面的原因 = 插单照建并提示
+     * (不写排程行), 不在里面 = 拦。空/null = 全拦 (现状)。码: CAPACITY_MISSING / EQUIPMENT_UNAVAILABLE /
+     * EXCEEDS_HORIZON / PREDECESSOR_NOT_SCHEDULED。
+     */
+    @Column(name = "urgent_insert_schedule_warn_reasons", length = 200)
+    private String urgentInsertScheduleWarnReasons;
+
     /** 物料平衡黄色阈值 (%), V20261103_140, 默认 5 */
     @Column(name = "material_balance_warn_pct", nullable = false, precision = 5, scale = 2)
     @Builder.Default

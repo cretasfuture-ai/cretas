@@ -3,7 +3,6 @@ package com.cretas.aims.controller;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.annotation.RequireModule;
-import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.quality.*;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.DecisionAuditLog;
@@ -56,8 +55,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class QualityDispositionController {
     private final com.cretas.aims.service.quality.QualityDispositionDecisionGuard decisionGuard;
 
-    private static void validatePendingApprovalIdentity(DecisionAuditLog auditLog,
-            DispositionApproveRequest request, Long authenticatedUserId) {
+    /** 纪律排查 B3: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision validatePendingApprovalIdentity(
+            DecisionAuditLog auditLog, DispositionApproveRequest request, Long authenticatedUserId) {
         if (!Boolean.TRUE.equals(auditLog.getRequiresApproval())
                 || auditLog.getApprovalStatus() != DecisionAuditLog.ApprovalStatus.PENDING) {
             throw new BusinessException(409, "该处置申请已处理或不是待审批状态");
@@ -65,9 +68,17 @@ public class QualityDispositionController {
         if (!Objects.equals(request.getApproverId(), authenticatedUserId)) {
             throw new BusinessException(400, "审批人必须与当前登录用户一致");
         }
-        if (Objects.equals(auditLog.getExecutorId(), authenticatedUserId)) {
-            throw new BusinessException(403, "申请人与审批人不能为同一用户");
+        // 纪律排查 B3 (Owner 2026-11-10): 工厂开了「允许本人审批」时申请人可自批, 必须写原因并留痕。
+        String reason = request.getSelfApprovalReason() != null && !request.getSelfApprovalReason().isBlank()
+                ? request.getSelfApprovalReason() : request.getComment();
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate,
+                        auditLog.getFactoryId(), Objects.equals(auditLog.getExecutorId(), authenticatedUserId), reason);
+        if (selfDecision.forbidden()) {
+            throw new BusinessException(403, "申请人与审批人不能为同一用户")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
+        return selfDecision;
     }
 
     private final QualityDispositionRuleService qualityDispositionRuleService;
@@ -695,8 +706,8 @@ public class QualityDispositionController {
     /**
      * 审批处置申请
      */
-    @RequirePermission({"quality:read_write"})
-    @RequireRole({"quality_manager", "factory_super_admin", "platform_admin", "permission_admin"})
+    // 纪律排查 B3: 谁能审批按权限码 (默认 = 原名单 quality_manager / factory_super_admin / permission_admin, 各厂可改)
+    @RequirePermission({"approval_quality_disposition:approve"})
     @RequireModule("quality_inspection")
     @PostMapping("/{id}/approve")
     @Transactional
@@ -728,7 +739,8 @@ public class QualityDispositionController {
         // Lock order: production batch, inspection refresh, approval row, then inventory.
         // Reload the managed audit after waiting so a concurrent winner cannot be overwritten.
         decisionGuard.refreshApproval(auditLog);
-        validatePendingApprovalIdentity(auditLog, request, authenticatedUserId);
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                validatePendingApprovalIdentity(auditLog, request, authenticatedUserId);
         if (request.getApproved()) {
             // Q6: 返工申请提交后批次被报废 (或报废前留下的旧申请) —— 批准之前、改审批行之前拒绝
             decisionGuard.assertReworkAllowed(factoryId, currentInspection.getProductionBatchId(),
@@ -744,6 +756,8 @@ public class QualityDispositionController {
         auditLog.setApproverName(request.getApproverName());
         auditLog.setApprovalComment(request.getComment());
         auditLog.setApprovedAt(LocalDateTime.now());
+        auditLog.setSelfApproved(selfDecision.selfApproved());
+        auditLog.setSelfApprovalReason(selfDecision.selfApproved() ? selfDecision.reason() : null);
 
         if (request.getApproved()) {
             auditLog.setNewState("APPROVED");

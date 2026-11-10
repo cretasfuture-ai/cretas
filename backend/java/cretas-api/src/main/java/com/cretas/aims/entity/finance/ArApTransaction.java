@@ -183,6 +183,15 @@ public class ArApTransaction extends BaseEntity {
     @Column(name = "approved_at")
     private LocalDateTime approvedAt;
 
+    /** 本人审批留痕: 提交人=审批人, 工厂开了 allow_self_approval (V20261110_47)。 */
+    @Column(name = "self_approved", nullable = false)
+    private boolean selfApproved = false;
+
+    /** 本人审批原因 (开关开时必填)。 */
+    @Column(name = "self_approval_reason", columnDefinition = "TEXT")
+    private String selfApprovalReason;
+
+
     /** Optimistic-lock fallback in addition to the settlement row lock. */
     @Version
     @Column(name = "version", nullable = false)

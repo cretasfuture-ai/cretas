@@ -176,6 +176,10 @@ class CancelledDayPlanReopenPostgresContractTest {
         SchedulingPlanDTO first = generator.generate(factory, request("A"), 1L);
         crud.cancelPlan(factory, first.getId(), "统一验收复现");
         String oldRow = jdbc.queryForObject("select id from line_schedules where plan_id = ?", String.class, first.getId());
+        // 旧排程上派过一个人, 汇总数停在取消前 (1 条 / 1 人): 重开后要按剩下的排程现算 (缺口 18 后续)
+        jdbc.update("insert into worker_assignments (id, schedule_id, user_id, status, is_temporary) "
+                + "values (?, ?, 101, 'assigned', false)", java.util.UUID.randomUUID().toString(), oldRow);
+        jdbc.update("update scheduling_plans set total_batches = 1, total_workers = 1 where id = ?", first.getId());
 
         List<String> outcome = holdThenRace(() -> generator.generate(factory, request("A"), 2L).getId(),
                 () -> generator.generate(factory, request("B"), 3L).getId());
@@ -188,6 +192,11 @@ class CancelledDayPlanReopenPostgresContractTest {
                 .isEqualTo("cancelled");
         String notes = jdbc.queryForObject("select notes from scheduling_plans where id = ?", String.class, first.getId());
         assertThat(notes.split("\\[重开", -1)).as("只重开一次: " + notes).hasSize(2);
+        java.util.Map<String, Object> totals = jdbc.queryForMap(
+                "select total_batches, total_workers from scheduling_plans where id = ?", first.getId());
+        System.out.println("REOPEN_PG_TOTALS " + totals);
+        assertThat(((Number) totals.get("total_batches")).intValue()).as("新排的一条").isEqualTo(1);
+        assertThat(((Number) totals.get("total_workers")).intValue()).as("作废的旧排程上派的人不算").isZero();
     }
 
     @Test

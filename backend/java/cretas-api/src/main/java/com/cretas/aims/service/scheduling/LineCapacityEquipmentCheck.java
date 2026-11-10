@@ -65,6 +65,25 @@ public class LineCapacityEquipmentCheck {
      * @param preferredLineId 指定了产线就只看这条线
      */
     @Transactional(readOnly = true)
+    /**
+     * 「没配」和「配了但还没生效」是两回事: 产能行的 effective_from 晚于时段开始时按没配处理, 单看「没配产能」会让人误以为
+     * 配置丢了。找到这种行就说清它哪天才生效; 没有就返回 null。
+     */
+    private String notYetEffective(String factoryId, String productTypeId, String preferredLineId,
+                                   CapacityUnit orderUnit, LocalDateTime start) {
+        return capacityConfigs.findByFactoryId(factoryId).stream()
+                .filter(c -> c.getEffectiveFrom() != null && c.getEffectiveFrom().isAfter(start))
+                .filter(c -> c.getProductTypeId() == null || c.getProductTypeId().equals(productTypeId))
+                .filter(c -> preferredLineId == null || preferredLineId.equals(c.getProductionLineId()))
+                .filter(c -> c.getCapacityUnit() == orderUnit)
+                .map(ProductionLineCapacityConfig::getEffectiveFrom)
+                .min(java.util.Comparator.naturalOrder())
+                .map(at -> "已配置的产能要到 " + at.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                        + " 才生效, 晚于本时段开始 "
+                        + start.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
+                .orElse(null);
+    }
+
     public ResourceCheckResult checkCapacity(String factoryId, String productTypeId, BigDecimal quantity, String unit,
                                              String preferredLineId, LocalDateTime start, LocalDateTime end) {
         if (productTypeId == null || quantity == null) {
@@ -125,6 +144,10 @@ public class LineCapacityEquipmentCheck {
             }
             String scope = preferredLineId == null ? "本厂没有产线" : "指定产线";
             String detail = otherUnits.isEmpty() ? "" : " (" + String.join("; ", otherUnits) + ")";
+            String notYet = notYetEffective(factoryId, productTypeId, preferredLineId, orderUnit, start);
+            if (notYet != null) {
+                detail += " (" + notYet + ")";
+            }
             return ResourceCheckResult.unverified("CAPACITY",
                     "产能未验证: " + scope + "配置该产品按" + unitLabel(orderUnit) + "计的每小时产能" + detail
                             + ", 请在工厂配置或对话建厂里补上", quantity);

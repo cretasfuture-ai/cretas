@@ -53,6 +53,20 @@ public interface CancelledPlanScheduleRepository extends Repository<LineSchedule
                 LineSchedule.ScheduleStatus.cancelled, ProductionPlanStatus.CANCELLED, CASCADE_REASON, now);
     }
 
+    /**
+     * 名下没开工的排程挂在本厂哪些日调度计划下 —— 级联作废前先按 id 顺序锁住它们, 作废后重算它们的批次数 / 派工人数
+     * (缺口 18 后续)。与 {@link #cancelNotStartedRows} 同一组「名下」「没开工」片段。
+     */
+    @Query("SELECT DISTINCT ls.planId FROM LineSchedule ls WHERE ls.plan.factoryId = :factoryId AND "
+            + CancelledPlanScheduleFilter.NOT_STARTED + " AND " + OWNED_BY_PLAN)
+    java.util.List<String> findDayPlanIdsWithNotStartedRows(@Param("factoryId") String factoryId,
+                                                            @Param("productionPlanId") String productionPlanId,
+                                                            @Param("notStarted") Collection<LineSchedule.ScheduleStatus> notStarted);
+
+    default java.util.List<String> dayPlansWithNotStartedRows(String factoryId, String productionPlanId) {
+        return findDayPlanIdsWithNotStartedRows(factoryId, productionPlanId, LineSchedule.NOT_STARTED_STATUSES);
+    }
+
     /** 名下被取消级联作废的条数 (按 {@link #CASCADE_REASON} 认)。 */
     @Query("SELECT COUNT(ls) FROM LineSchedule ls WHERE ls.plan.factoryId = :factoryId "
             + "AND ls.status = :cancelled AND ls.adjustmentReason = :reason AND " + OWNED_BY_PLAN)

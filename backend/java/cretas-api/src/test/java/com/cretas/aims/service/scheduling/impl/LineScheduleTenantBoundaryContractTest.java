@@ -80,6 +80,8 @@ class LineScheduleTenantBoundaryContractTest {
         when(scheduleRepository.findById("S-1")).thenReturn(Optional.of(schedule));
         when(scheduleRepository.save(any(LineSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(assignmentRepository.findByScheduleId("S-1")).thenReturn(Collections.emptyList());
+        // 开工先锁日调度计划, 按锁住后读到的最新状态决定要不要推进到「进行中」
+        when(planRepository.lockStatusForUpdate("P-1", "F-LOCAL")).thenReturn(Optional.of("confirmed"));
 
         service.getSchedule("F-LOCAL", "S-1");
         service.updateSchedule("F-LOCAL", "S-1", new UpdateScheduleRequest());
@@ -89,9 +91,30 @@ class LineScheduleTenantBoundaryContractTest {
 
         assertThat(schedule.getStatus()).isEqualTo(LineSchedule.ScheduleStatus.completed);
         assertThat(schedule.getCompletedQuantity()).isEqualTo(10);
-        assertThat(schedule.getPlan().getStatus()).isEqualTo(SchedulingPlan.PlanStatus.in_progress);
         verify(scheduleRepository, times(4)).save(schedule);
-        verify(planRepository).save(schedule.getPlan());
+        // 「已确认 → 进行中」只写状态列 (按本厂限定), 不整行保存锁之前读到的旧日计划实体
+        org.mockito.InOrder order = inOrder(planRepository, scheduleRepository);
+        order.verify(planRepository).lockStatusForUpdate("P-1", "F-LOCAL");
+        order.verify(scheduleRepository).lockStatusForUpdate("S-1");
+        verify(planRepository).markInProgressIfConfirmed("F-LOCAL", "P-1");
+        verify(planRepository, never()).save(any());
+    }
+
+    @Test
+    void startOnADayPlanThatIsNoLongerConfirmedLeavesItsStatusAlone() {
+        LineSchedule schedule = schedule("F-LOCAL");
+        schedule.setStatus(LineSchedule.ScheduleStatus.pending);
+        // 实体是锁之前读的「已确认」, 锁住后读到的最新状态已经是「进行中」: 以最新的为准, 不再写
+        schedule.getPlan().setStatus(SchedulingPlan.PlanStatus.confirmed);
+        when(scheduleRepository.findById("S-1")).thenReturn(Optional.of(schedule));
+        when(scheduleRepository.save(any(LineSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(assignmentRepository.findByScheduleId("S-1")).thenReturn(Collections.emptyList());
+        when(planRepository.lockStatusForUpdate("P-1", "F-LOCAL")).thenReturn(Optional.of("in_progress"));
+
+        service.startSchedule("F-LOCAL", "S-1");
+
+        verify(planRepository, never()).markInProgressIfConfirmed(any(), any());
+        verify(planRepository, never()).save(any());
     }
 
     private static LineSchedule schedule(String factoryId) {

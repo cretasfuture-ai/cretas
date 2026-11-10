@@ -79,6 +79,12 @@ public final class PermissionModuleCatalog {
         // FactoryUserRole.operations_coordinator = "运营协调员" / "跨部门来源单、到料预告与履约协调"
         // —— 是引用而不是现编。
         m.put("operations", "运营协调");
+        // 纪律排查 B1–B3/B11/B15 审批权限码 (Steve 2026-11-10「审批人按权限」): 权限配置页的列名 / 403 文案
+        m.put("approval_report_reversal", "报工撤回审批");
+        m.put("approval_stocktake", "盘点差异审批");
+        m.put("approval_quality_disposition", "质检处置审批");
+        m.put("approval_price_adjustment", "改价审批");
+        m.put("approval_refund", "退款审批");
         LABELS = Collections.unmodifiableMap(m);
     }
 
