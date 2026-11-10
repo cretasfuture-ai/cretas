@@ -631,6 +631,44 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
         assertLedgerBalanced(f, "撤回报工后");
     }
 
+    /**
+     * 审查 #1: 关单后撤销小结, 消耗行变回未结、仍指着已划平的生产仓批次。再小结不能撞「批次可用不足」卡死,
+     * 要被认出来并指向「撤回对应报工」; 撤回之后账平, 再小结无事可做。
+     */
+    @Test
+    void byStock_resettleAfterUndoOnClosedRequisition_isRefusedUntilReportReversed() {
+        Fixture f = byStockIssuedAndReported("30");
+        interimSettle.interimSettle(F, f.planId(), OPERATOR);
+        close(f);
+        undoInterim.reverseInterimSettle(F, f.planId(), null, OPERATOR);
+        String before = jdbc.queryForObject("select concat_ws('|', used_quantity, reserved_quantity, status) "
+                + "from material_batches where id = ?", String.class, f.workshopBatchId());
+
+        Throwable refused = attempt(() -> interimSettle.interimSettle(F, f.planId(), OPERATOR));
+
+        assertThat(refused).as("再小结被拦").isInstanceOf(BusinessException.class);
+        BusinessException e = (BusinessException) refused;
+        assertThat(e.getErrorCode()).as("不是「批次可用不足」, 是认出了已关单")
+                .isEqualTo("INTERIM_SETTLE_REQUISITION_CLOSED");
+        assertThat(e.getActionHint()).as("提示写清下一步").contains("撤回对应报工")
+                .contains(String.valueOf(f.batchId()));
+        assertThat(jdbc.queryForObject("select concat_ws('|', used_quantity, reserved_quantity, status) "
+                + "from material_batches where id = ?", String.class, f.workshopBatchId()))
+                .as("被拦时生产仓批次一行没动").isEqualTo(before);
+        assertThat(liveUnsettledConsumptions(f)).as("被拦时消耗仍是未结").isEqualTo(1);
+
+        ReportReversalLog log = reversalService.submitReversal(F, f.batchId(), OPERATOR, "报工错了");
+        if (log.getStatus() != ReportReversalLog.ReversalStatus.DONE) {
+            reversalService.executeReversal(log.getId(), F);
+        }
+        assertThat(jdbc.queryForObject("select status from report_reversal_logs where id = ?", String.class,
+                log.getId())).as("撤回报工成功").isEqualTo("DONE");
+        assertThat(liveUnsettledConsumptions(f)).isZero();
+        assertThat(available(f.sourceBatchId())).as("原料仓仍是 100").isEqualByComparingTo("100");
+        assertThat(available(f.workshopBatchId())).isEqualByComparingTo("0");
+        assertLedgerBalanced(f, "撤回报工后");
+    }
+
     @Test
     void byStock_undoBeforeClose_keepsMaterialInWorkshop() {
         Fixture f = byStockIssuedAndReported("30");
@@ -643,6 +681,11 @@ class ClosedRequisitionReversalReturnPostgresContractTest {
         assertThat(available(f.sourceBatchId())).isEqualByComparingTo("0");
         assertThat(returnLedger(f)).isEqualByComparingTo("0");
         assertThat(liveUnsettledConsumptions(f)).as("消耗恢复成未结").isEqualTo(1);
+
+        // 审查 #1 阴性对照: 领料单没关, 再小结照常扣 (新闸只认已关单)
+        interimSettle.interimSettle(F, f.planId(), OPERATOR);
+        assertThat(available(f.workshopBatchId())).as("再小结照常扣 30").isEqualByComparingTo("70");
+        assertThat(liveUnsettledConsumptions(f)).isZero();
     }
 
     @Test

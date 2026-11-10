@@ -200,8 +200,12 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
         //   ⚠️ planBatchIds / consumptions 已在上方 (sister #4 守卫前) 计算, 此处复用同一读 (①-④ 不改这些 raw 消耗行)。
         int rawRestored = 0;
         // C2: 每个批次实际还回了多少 (clamp 后), ⑤.5 据此把落在已关单领料单生产仓批次上的部分退回原料仓。
-        //     TreeMap: 按批次 id 有序, 退料时加锁顺序固定。
         Map<String, BigDecimal> restoredByBatch = new java.util.TreeMap<>();
+        // 审查 #3: 先按批次 id 排序锁住要还回的批次, 与关单 / 撤回 / 小结同一锁序 (按消耗顺序锁会与关单互相死锁)。
+        for (String lockId : new java.util.TreeSet<>(consumptions.stream()
+                .map(MaterialConsumption::getBatchId).filter(java.util.Objects::nonNull).toList())) {
+            materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
+        }
         for (MaterialConsumption mc : consumptions) {
             MaterialBatch src = materialBatchRepository
                     .findByIdAndFactoryIdForUpdate(mc.getBatchId(), factoryId)

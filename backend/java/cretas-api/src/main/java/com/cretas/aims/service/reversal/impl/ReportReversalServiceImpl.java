@@ -576,8 +576,21 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 preflightSettlementStockFeeds(factoryId, log_.getPlanId(), involvedSfiIds, settlementOwnsPlanFeeds);
         LocalDateTime now = LocalDateTime.now();
         // C1: 本次撤回放回到各原料/生产仓批次上的实际量 (占用释放 + 结单回扣)。③.65 据此把属于已关单领料单的部分
-        //     退回原料仓。TreeMap: 按批次 id 有序, 退料时的加锁顺序固定。
+        //     退回原料仓。批次行锁在各步之前按批次 id 排序先拿 (见下方 / restoreSettlementConsumption); ③.65 里锁的是
+        //     领料单和原料批次, 用 TreeMap 只是让那一步的顺序可预期。
         Map<String, BigDecimal> givenBackByMaterialBatch = new java.util.TreeMap<>();
+        // 审查 #3: 释放前先按批次 id 排序锁住这些报工占过料的批次, 与关单 / 撤销小结 / 小结同一锁序;
+        //   否则按报工引用顺序加锁, 与关单按领料行顺序加锁会在同一张单的多个生产仓批次上互相死锁。
+        if (workshopReservationService != null && materialBatchRepository != null) {
+            java.util.TreeSet<String> reservedBatchIds = new java.util.TreeSet<>();
+            for (ProductionReport r : reports) {
+                reservedBatchIds.addAll(
+                        com.cretas.aims.service.production.WorkshopReportReservationService.reservationOf(r).keySet());
+            }
+            for (String lockId : reservedBatchIds) {
+                materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
+            }
+        }
         // 🔴 释放路径 2/3 (冲销): 先把这些报工在生产仓占的原料放回去, 再软删。
         //    ⚠️ 顺序不可反 —— findYieldReportsByBatch 带 deletedAt IS NULL, 软删之后
         //    就再也枚举不到它们了; 那时 reserved 会永久挂着, 而追溯源已经没了。
@@ -2090,6 +2103,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                 .findBySettlementIdAndDeletedAtIsNull(settlement.getId());
 
         LocalDateTime now = LocalDateTime.now();
+        // 审查 #3: 回扣前按批次 id 排序先锁住结单扣过的原料/生产仓批次 (与关单同一锁序)。
+        for (String lockId : new java.util.TreeSet<>(lines.stream()
+                .filter(line -> !"SEMI_FINISHED".equals(line.getSourceType()))
+                .map(ProductionSettlementConsumption::getMaterialBatchId)
+                .filter(Objects::nonNull).toList())) {
+            materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
+        }
         int restoredMaterial = 0;
         int restoredSemi = 0;
         // fail-closed (修2): repo 已注入 (走到这里说明顶部未注入跳过分支没触发) → 每一笔应恢复的消耗

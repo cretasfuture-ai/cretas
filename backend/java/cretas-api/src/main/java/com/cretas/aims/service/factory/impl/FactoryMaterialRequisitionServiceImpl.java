@@ -1724,16 +1724,18 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         //   已给其报工消耗行打戳 → 残留 #2 (跨计划投料把结单族未结行留在他单 WKS 批次 → 本守卫误 count 永久 409)
         //   随结单族结单即闭合。此处 isInterimSettlePlan 收窄门控退化为「冗余而安全」(结单族行结单后非 null, 天然
         //   不被 countUnsettledConsumptionByBatchIds 统计), 保留以防结单前跨计划窗口 + 语义清晰, 本 PR 不移除。
+        // C2 (2026-11-10): 先按批次 id 排序锁住本单全部生产仓批次, 再数未结消耗、再按现存退料。
+        //   ① 撤销小结在同一把行锁下还回用量并清消耗戳; 不先锁, 它可能在「数完 = 0」与按现存退料之间提交
+        //      → 退走的料里含有又变回未结的消耗。
+        //   ② 锁序与撤回报工 / 撤销小结 / 小结一致 (都按批次 id 排序先锁), 同一张单有多个生产仓批次时不互相死锁。
+        //   下方 computeWorkshopRemaining / drawDown 的 ForUpdate 都是已持有的锁。
+        if (materialBatchRepository != null) {
+            for (String wksId : new TreeSet<>(collectWorkshopBatchIds(mr))) {
+                materialBatchRepository.findByIdAndFactoryIdForUpdate(wksId, factoryId);
+            }
+        }
         if (isInterimSettlePlan(factoryId, mr.getProductionPlanId())) {
             List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
-            // C2 (2026-11-10): 先锁住这些生产仓批次再数未结消耗。撤销小结在同一把行锁下还回用量并清消耗戳;
-            //   不先锁, 撤销小结可能在「数完 = 0」与下方按现存退料之间提交 → 退走的料里含有又变回未结的消耗。
-            //   锁序与下方 computeWorkshopRemaining 相同 (按领料行记录顺序)。
-            if (materialBatchRepository != null) {
-                for (String wksId : new LinkedHashSet<>(workshopBatchIds)) {
-                    materialBatchRepository.findByIdAndFactoryIdForUpdate(wksId, factoryId);
-                }
-            }
             if (!workshopBatchIds.isEmpty() && materialConsumptionRepository != null) {
                 long unsettled = materialConsumptionRepository
                         .countUnsettledConsumptionByBatchIds(factoryId, workshopBatchIds);
