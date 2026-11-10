@@ -239,6 +239,15 @@ public class FactorySettings extends BaseEntity {
     @Builder.Default
     private Boolean blockStartOnOpenShortage = false;
 
+    /**
+     * 工厂级「允许本人审批」开关 (纪律排查 B1–B3/B11/B15, V20261110_47)。默认 false = 四眼照旧;
+     * true = 提交人可审批自己的报工撤回/盘点差异/质检处置/改价/退款, 必须填原因并留痕。
+     */
+    @Column(name = "allow_self_approval", nullable = false)
+    @Builder.Default
+    private Boolean allowSelfApproval = false;
+
+
     /** 物料平衡黄色阈值 (%), V20261103_140, 默认 5 */
     @Column(name = "material_balance_warn_pct", nullable = false, precision = 5, scale = 2)
     @Builder.Default

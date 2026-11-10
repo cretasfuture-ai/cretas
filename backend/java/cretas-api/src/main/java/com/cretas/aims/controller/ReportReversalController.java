@@ -98,10 +98,13 @@ public class ReportReversalController {
     public ApiResponse<Void> approveReversal(
             @PathVariable @Parameter(description = "工厂ID") String factoryId,
             @PathVariable @Parameter(description = "撤回申请 ID") Long logId,
+            @RequestBody(required = false) Map<String, String> body,
             HttpServletRequest request) {
         Long userId = (Long) request.getAttribute("userId");
+        // 本人审批原因 (纪律排查 B1): 只在审批人就是提交人、且工厂开了「允许本人审批」时用到
+        String selfApprovalReason = body == null ? null : body.get("selfApprovalReason");
         log.info("SP2 批准撤回: logId={}, approvedBy={}, factoryId={}", logId, userId, factoryId);
-        reversalService.approveReversal(factoryId, logId, userId);
+        reversalService.approveReversal(factoryId, logId, userId, selfApprovalReason);
         return ApiResponse.success(null);
     }
 

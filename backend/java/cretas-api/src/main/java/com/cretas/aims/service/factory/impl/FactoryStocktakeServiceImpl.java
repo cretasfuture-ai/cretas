@@ -109,6 +109,10 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Autowired(required = false)
     private UserRepository userRepository;
 
+    /** 纪律排查 B2: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
     /** SP12 §5.2: optional — 测试时不注入 (required=false 打破构造器注入限制) */
     @Autowired(required = false)
     private WorkflowEngineService workflowEngine;
@@ -658,6 +662,13 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @Transactional
     public void approve(String stocktakeId, String factoryId, Long approverId, String requestRole,
             Long expectedVersion) {
+        approve(stocktakeId, factoryId, approverId, requestRole, expectedVersion, null);
+    }
+
+    @Override
+    @Transactional
+    public void approve(String stocktakeId, String factoryId, Long approverId, String requestRole,
+            Long expectedVersion, String selfApprovalReason) {
         // 角色检查（C1 孪生坑：不用 SecurityContext）
         assertApprovalRole(requestRole);
         FactoryStocktake stocktake = findAndValidateForUpdate(stocktakeId, factoryId);
@@ -667,11 +678,17 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         boolean sameMaker = Objects.equals(stocktake.getInitiatedBy(), approverId)
                 || Objects.equals(stocktake.getCountedBy(), approverId)
                 || Objects.equals(stocktake.getSubmittedBy(), approverId);
-        if (hasDifference && sameMaker) {
+        // 纪律排查 B2 (Owner 2026-11-10): 工厂开了「允许本人审批」时可自批, 必须写原因并留痕。
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
+                        selfApprovalGate, factoryId, hasDifference && sameMaker, selfApprovalReason);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(409, "存在盘盈/盘亏时，发起人、盘点录入人或提交人不能审批自己的盘点")
                     .withCode("STOCKTAKE_SELF_APPROVAL_FORBIDDEN")
-                    .withHint("请由另一名财务经理或工厂管理员复核审批");
+                    .withHint("请由另一名财务经理或工厂管理员复核审批; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
+        markSelfApproval(stocktake, selfDecision);
         stocktake.setStatus(FactoryStocktake.Status.APPROVED);
         stocktake.setApprovedBy(approverId);
         stocktake.setApprovedAt(LocalDateTime.now());
@@ -1457,6 +1474,9 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
         stocktake.setSubmittedBy(userId);
         stocktake.setSubmittedAt(LocalDateTime.now());
+        // 驳回后重提: 上一轮的本人审批留痕不带到新一轮
+        stocktake.setSelfApproved(false);
+        stocktake.setSelfApprovalReason(null);
 
         // ⚠️ 2026-08-27: 这一句原本只在下面的 else 分支里(没配审批流时)调。提到这里有两个理由:
         //   ① 它把 differenceQty / differenceType 归一化好 —— 下面构造流程上下文要读它们,
@@ -1560,9 +1580,19 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         boolean sameMaker = Objects.equals(stocktake.getInitiatedBy(), actorId)
                 || Objects.equals(stocktake.getCountedBy(), actorId)
                 || Objects.equals(stocktake.getSubmittedBy(), actorId);
-        if (action == HistoryAction.APPROVE && hasDifference && sameMaker) {
+        // 纪律排查 B2: OA 审批意见 (notes) 即本人审批原因。
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate, factoryId,
+                        action == HistoryAction.APPROVE && hasDifference && sameMaker, notes);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(409, "存在盘盈/盘亏时，发起人、录入人或提交人不能审批自己的盘点")
-                    .withCode("STOCKTAKE_SELF_APPROVAL_FORBIDDEN");
+                    .withCode("STOCKTAKE_SELF_APPROVAL_FORBIDDEN")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
+        }
+        if (selfDecision.selfApproved()) {
+            // 多节点审批流里任何一个节点是本人批的都留痕 (不只最后一个节点)
+            stocktake.setSelfApproved(true);
+            stocktake.setSelfApprovalReason(selfDecision.reason());
         }
         ApprovalWorkflowInstance updated = workflowEngine.transitionNode(instanceId, actorId, actorRole, action, notes);
         if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
@@ -1577,6 +1607,13 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
             stocktake.setApprovedAt(LocalDateTime.now());
         }
         return stocktakeRepo.save(stocktake);
+    }
+
+    /** 本人审批留痕 (纪律排查 B2)。不是本人审批时清掉, 防止驳回后重提的单带着旧标记。 */
+    private static void markSelfApproval(FactoryStocktake stocktake,
+            com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision decision) {
+        stocktake.setSelfApproved(decision.selfApproved());
+        stocktake.setSelfApprovalReason(decision.selfApproved() ? decision.reason() : null);
     }
 
     private void assertAllItemsCounted(FactoryStocktake stocktake) {

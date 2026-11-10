@@ -56,6 +56,10 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
     private final UserRepository userRepository;
 
     /** N9 optional — factories without approval chain config skip approval flow */
+    /** 纪律排查 B11: 工厂级「允许本人审批」。未注入 = 开关关 (四眼照旧)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
     @Autowired(required = false)
     private ApprovalChainService approvalChainService;
 
@@ -196,8 +200,15 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
     @Override
     @Transactional
     public SalesPriceAdjustmentRecordDTO approvePriceAdjustment(String factoryId, String recordId, Long approverId) {
+        return approvePriceAdjustment(factoryId, recordId, approverId, null);
+    }
+
+    @Override
+    @Transactional
+    public SalesPriceAdjustmentRecordDTO approvePriceAdjustment(String factoryId, String recordId, Long approverId,
+                                                                String selfApprovalReason) {
         SalesPriceAdjustmentRecord record = loadPendingRecord(factoryId, recordId);
-        ensureFourEyes(record, approverId);
+        ensureFourEyes(factoryId, record, approverId, selfApprovalReason);
 
         // Load the line + order to apply the held price change.
         SalesOrderItem line = salesOrderItemRepository.findById(record.getSalesOrderLineId())
@@ -235,7 +246,8 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
                     .withHintTarget("reason");
         }
         SalesPriceAdjustmentRecord record = loadPendingRecord(factoryId, recordId);
-        ensureFourEyes(record, approverId);
+        // 驳回自己的改价: 驳回原因即本人审批原因
+        ensureFourEyes(factoryId, record, approverId, reason);
 
         // Reject: discard the price change (line price untouched), only mark record.
         record.setApprovalStatus(ApprovalStatus.REJECTED);
@@ -277,13 +289,24 @@ public class SalesPriceAdjustmentServiceImpl implements SalesPriceAdjustmentServ
 
     /**
      * 🔒 4 眼原则: 审批人不能与改价提交人 (adjustedBy) 相同.
+     *
+     * <p>纪律排查 B11 (Owner 2026-11-10): 工厂开了「允许本人审批」时改价人可自批, 必须写原因;
+     * 放行时在改价记录上留痕 (selfApproved + 原因)。
      */
-    private void ensureFourEyes(SalesPriceAdjustmentRecord record, Long approverId) {
-        if (record.getAdjustedBy() != null && record.getAdjustedBy().equals(approverId)) {
+    private void ensureFourEyes(String factoryId, SalesPriceAdjustmentRecord record, Long approverId,
+                                String selfApprovalReason) {
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(selfApprovalGate, factoryId,
+                        record.getAdjustedBy() != null && record.getAdjustedBy().equals(approverId),
+                        selfApprovalReason);
+        if (selfDecision.forbidden()) {
             throw new BusinessException(403, "审批人不能与改价提交人相同 (4 眼原则)")
-                    .withHint("请使用其他账号审批")
+                    .withHint("请使用其他账号审批; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT)
                     .withHintTarget("审批人");
         }
+        record.setSelfApproved(selfDecision.selfApproved());
+        record.setSelfApprovalReason(selfDecision.selfApproved() ? selfDecision.reason() : null);
     }
 
     /**

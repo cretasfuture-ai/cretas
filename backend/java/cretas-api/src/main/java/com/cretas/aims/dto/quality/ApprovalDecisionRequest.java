@@ -43,6 +43,12 @@ public class ApprovalDecisionRequest {
     private String followUpRequirements;
 
     /**
+     * 本人审批原因 (纪律排查 B3): 审批人就是申请人、且工厂开了「允许本人审批」时必填;
+     * 不填时取审批意见 (comment)。
+     */
+    private String selfApprovalReason;
+
+    /**
      * 审批决定枚举
      */
     public enum ApprovalDecision {

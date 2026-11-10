@@ -67,6 +67,12 @@ public interface FactorySettingsRepository extends JpaRepository<FactorySettings
      */
     @Query("SELECT f.blockStartOnOpenShortage FROM FactorySettings f WHERE f.factoryId = :factoryId")
     Boolean findBlockStartOnOpenShortageByFactoryId(@Param("factoryId") String factoryId);
+
+    /**
+     * 工厂级「允许本人审批」开关 (V20261110_47)。无 settings 行时返回 null —— 调用方按 false 处理 (四眼照旧)。
+     */
+    @Query("SELECT f.allowSelfApproval FROM FactorySettings f WHERE f.factoryId = :factoryId")
+    Boolean findAllowSelfApprovalByFactoryId(@Param("factoryId") String factoryId);
     /** 物料平衡阈值 [warn%, red%] (V20261103_140)。无 settings 行 → 空, 调用方用默认 5/15。 */
     @Query("SELECT f.materialBalanceWarnPct, f.materialBalanceRedPct FROM FactorySettings f WHERE f.factoryId = :factoryId")
     java.util.List<Object[]> findMaterialBalanceThresholdsByFactoryId(@Param("factoryId") String factoryId);
