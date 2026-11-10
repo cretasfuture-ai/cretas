@@ -13,7 +13,7 @@ import java.util.List;
 public interface QcReleaseRecordRepository extends JpaRepository<QcReleaseRecord, Long> {
 
     @Query("SELECT r FROM QcReleaseRecord r WHERE r.factoryId = :factoryId " +
-            "AND r.targetType = :targetType AND r.targetId = :targetId ORDER BY r.releasedAt DESC")
+            "AND r.targetType = :targetType AND r.targetId = :targetId ORDER BY r.releasedAt DESC, r.id DESC")
     List<QcReleaseRecord> findByTarget(@Param("factoryId") String factoryId,
                                        @Param("targetType") String targetType,
                                        @Param("targetId") String targetId);

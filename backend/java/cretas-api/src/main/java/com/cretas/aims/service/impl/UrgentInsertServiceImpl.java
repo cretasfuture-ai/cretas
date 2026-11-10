@@ -438,7 +438,13 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // preview.  Unknown package units remain UNVERIFIED and never get a
         // guessed PIECE/KG/BATCH snapshot.
         // 原料无法核对 (无指纹) 时不签发预览: 确认本来就会拒绝, 而无指纹的预览永远复用不上, 会一条条占满额度
+        // 设备 / 产能没核对过或不够时同样不签发: 确认时 (INSERT_RESOURCE_RECHECK_FAILED) 一定会拒绝, 预览放行、确认再拦是
+        // 口径不一致 (验收: 产品没配设备, 预览照给 previewId, 确认 409; 配上设备同样的流程就是 200)。理由写在
+        // unverifiedReasons / infeasibleReason 里, 用户看得到该补什么。单位对不上 / 个单位缺专用产能本来就不签发, 这是同一条规则。
+        boolean confirmCanPassResourceRecheck = equipmentCheck.isVerified() && equipmentCheck.isAvailable()
+                && capacityCheck.isVerified() && capacityCheck.isAvailable();
         if (createPreview && unitCompatible && plannedUnit != null && !plannedUnit.isBlank()
+                && confirmCanPassResourceRecheck
                 && materialPlan.fingerprint() != null && schedulePlan.fingerprint() != null) {
             LocalDateTime validAfter = LocalDateTime.now().minusMinutes(PREVIEW_VALID_MINUTES);
             List<InsertSlotPreview> recent = insertSlotPreviewRepository
@@ -799,10 +805,23 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         ResourceCheckResult capacityCheck = lineChecks.checkCapacity(
                 factoryId, request.getProductTypeId(), request.getPlannedQuantity(), quantityUnit,
                 slot.getProductionLineId(), slot.getStartTime(), slot.getEndTime());
-        if (!sameCapacityDimension(quantityUnit, productCapacityUnit) || !productSpecificCapacity
-                || !equipmentCheck.isVerified() || !equipmentCheck.isAvailable()
-                || !capacityCheck.isVerified() || !capacityCheck.isAvailable()) {
-            throw new BusinessException(409, "确认前产能或设备复核未通过，未创建计划")
+        // 说清是哪一项没过 (设备检修 / 没配设备 / 没配产能 / 产能配置还没生效 / 单位对不上 …), 不再只说「复核未通过」
+        List<String> recheckFailures = new ArrayList<>();
+        if (!sameCapacityDimension(quantityUnit, productCapacityUnit)) {
+            recheckFailures.add("产能未验证: 产品实际单位与请求数量单位不一致");
+        }
+        if (!productSpecificCapacity) {
+            recheckFailures.add("产能未验证: 个单位必须有该产品在实际产线上的专用 PIECE 产能配置");
+        }
+        if (!equipmentCheck.isVerified() || !equipmentCheck.isAvailable()) {
+            recheckFailures.add(equipmentCheck.getMessage());
+        }
+        if (!capacityCheck.isVerified() || !capacityCheck.isAvailable()) {
+            recheckFailures.add(capacityCheck.getMessage());
+        }
+        if (!recheckFailures.isEmpty()) {
+            throw new BusinessException(409, "确认前产能或设备复核未通过（" + String.join("；", recheckFailures)
+                    + "），未创建计划")
                     .withCode("INSERT_RESOURCE_RECHECK_FAILED")
                     .withHint("刷新并重新分析当前产线、时段和资源配置");
         }
