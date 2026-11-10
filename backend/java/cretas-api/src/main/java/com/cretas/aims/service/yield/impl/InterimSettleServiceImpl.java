@@ -108,6 +108,14 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /**
+     * C2 审查 #1 (2026-11-10): 关单后撤销小结, 还回的料已退回原料仓, 消耗行却变回「未小结」, 仍指着已划平的生产仓批次。
+     * 再小结要先认出这种状态并拦下 (指向「撤回对应报工」), 而不是撞上「批次可用不足」。
+     * required=false 兼容既有构造单测; 缺失时不做这道判断 (旧行为: 撞可用不足)。prod Spring 恒注入。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
+
     /** 小结 SFI 投料 (§② A) 的 WIP_CONSUME 写边点; required=false 理由同上。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
@@ -209,6 +217,13 @@ public class InterimSettleServiceImpl implements InterimSettleService {
                         .findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(factoryId, planBatchIds);
         BigDecimal deductedQuantity = BigDecimal.ZERO;
         int deductedCount = 0;
+        // 先按批次 id 排序把要扣的批次全部锁上, 与关单 / 撤回 / 撤销小结同一锁序 (审查 #3: 各按各的顺序锁同一张
+        // 领料单的几个生产仓批次会互相死锁)。之后循环里的 ForUpdate 都是已持有的锁。
+        for (String lockId : new java.util.TreeSet<>(unposted.stream()
+                .map(MaterialConsumption::getBatchId).filter(java.util.Objects::nonNull).toList())) {
+            materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
+        }
+        refuseConsumptionOnClosedRequisitionBatch(factoryId, unposted);
         for (MaterialConsumption mc : unposted) {
             MaterialBatch src = materialBatchRepository
                     .findByIdAndFactoryIdForUpdate(mc.getBatchId(), factoryId)
@@ -980,6 +995,48 @@ public class InterimSettleServiceImpl implements InterimSettleService {
 
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /**
+     * C2 审查 #1: 未结消耗指着<b>已关单</b>领料单的生产仓批次 ⇒ 这批料关单时已退回原料仓 (关单后撤销小结的退料
+     * 也在那里), 生产仓批次已划平, 再小结只会撞「批次可用不足」, 而且就算扣得下也是对着空批次重复扣。
+     * 唯一的出路是撤回对应报工 (撤回会清掉这些未结消耗), 所以这里直接拦下并说清下一步。
+     *
+     * <p>领料单在生产仓批次加锁之后锁读 (与关单 / 撤回同一锁序), 读到的是并发关单提交后的状态。
+     */
+    private void refuseConsumptionOnClosedRequisitionBatch(String factoryId, List<MaterialConsumption> unposted) {
+        if (requisitionRepository == null || unposted.isEmpty()) {
+            return;
+        }
+        Map<String, Set<Long>> productionBatchesByWorkshopBatch = new java.util.TreeMap<>();
+        for (MaterialConsumption mc : unposted) {
+            if (mc.getBatchId() != null) {
+                productionBatchesByWorkshopBatch.computeIfAbsent(mc.getBatchId(), k -> new java.util.TreeSet<>())
+                        .add(mc.getProductionBatchId());
+            }
+        }
+        for (Map.Entry<String, Set<Long>> entry : productionBatchesByWorkshopBatch.entrySet()) {
+            MaterialBatch batch = materialBatchRepository.findByIdAndFactoryIdForUpdate(entry.getKey(), factoryId)
+                    .orElse(null);
+            if (batch == null || !"MATERIAL_REQUISITION".equals(batch.getSourceDocType())
+                    || batch.getSourceDocId() == null) {
+                continue;
+            }
+            com.cretas.aims.entity.factory.FactoryMaterialRequisition mr = requisitionRepository
+                    .findByIdAndFactoryIdForUpdate(batch.getSourceDocId(), factoryId).orElse(null);
+            if (mr == null || mr.getStatus() != com.cretas.aims.entity.factory.FactoryMaterialRequisition.Status.CLOSED) {
+                continue;
+            }
+            String batchRefs = entry.getValue().stream().filter(java.util.Objects::nonNull)
+                    .map(String::valueOf).collect(java.util.stream.Collectors.joining("、"));
+            throw new BusinessException(409, String.format(
+                    "小结失败: 有报工用量记在领料单 %s 的生产仓批次 %s 上, 而这张领料单已关单, 料已退回原料仓, 无法再按这些报工扣料",
+                    mr.getRequisitionNo(), batch.getBatchNumber()))
+                    .withCode("INTERIM_SETTLE_REQUISITION_CLOSED")
+                    .withHint("请先撤回对应报工 (生产批次 " + batchRefs + "), 需要的话新开领料单后重新报工再小结")
+                    .withHintTarget(batchRefs)
+                    .withSeverity("BLOCKING");
+        }
     }
 
     /** 撤销明细条目: {keyName: id, "qty": qty.toPlainString()} —— 量存字符串防 jsonb 数值精度漂移。 */

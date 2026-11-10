@@ -65,6 +65,25 @@ public class LineCapacityEquipmentCheck {
      * @param preferredLineId 指定了产线就只看这条线
      */
     @Transactional(readOnly = true)
+    /**
+     * 「没配」和「配了但还没生效」是两回事: 产能行的 effective_from 晚于时段开始时按没配处理, 单看「没配产能」会让人误以为
+     * 配置丢了。找到这种行就说清它哪天才生效; 没有就返回 null。
+     */
+    private String notYetEffective(String factoryId, String productTypeId, String preferredLineId,
+                                   CapacityUnit orderUnit, LocalDateTime start) {
+        return capacityConfigs.findByFactoryId(factoryId).stream()
+                .filter(c -> c.getEffectiveFrom() != null && c.getEffectiveFrom().isAfter(start))
+                .filter(c -> c.getProductTypeId() == null || c.getProductTypeId().equals(productTypeId))
+                .filter(c -> preferredLineId == null || preferredLineId.equals(c.getProductionLineId()))
+                .filter(c -> c.getCapacityUnit() == orderUnit)
+                .map(ProductionLineCapacityConfig::getEffectiveFrom)
+                .min(java.util.Comparator.naturalOrder())
+                .map(at -> "已配置的产能要到 " + at.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                        + " 才生效, 晚于本时段开始 "
+                        + start.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
+                .orElse(null);
+    }
+
     public ResourceCheckResult checkCapacity(String factoryId, String productTypeId, BigDecimal quantity, String unit,
                                              String preferredLineId, LocalDateTime start, LocalDateTime end) {
         if (productTypeId == null || quantity == null) {
@@ -72,8 +91,13 @@ public class LineCapacityEquipmentCheck {
         }
         CapacityUnit orderUnit = parseUnit(unit);
         if (orderUnit == null) {
-            return ResourceCheckResult.unverified("CAPACITY",
-                    "产能未验证: 插单数量没有单位 (件 PIECE / 千克 KG / 批 BATCH)", quantity);
+            // D-S4-03-MSG: 单位是「袋」「盒」时旧文案写「没有单位」, 误导人去补单位。
+            // 区分两种: 真没填 vs 填了但产线产能不按这个单位配置 (不换算, Owner 10-28)。
+            String msg = (unit == null || unit.isBlank())
+                    ? "产能未验证: 插单数量没有单位 (件 PIECE / 千克 KG / 批 BATCH)"
+                    : "产能未验证: 产线产能只按 件 / kg / 批 配置, 插单单位「" + unit.trim()
+                            + "」无法核对换线产能 (同线顺延不受影响)";
+            return ResourceCheckResult.unverified("CAPACITY", msg, quantity);
         }
         BigDecimal hours = BigDecimal.valueOf(Duration.between(start, end).toMinutes())
                 .divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP);
@@ -120,6 +144,10 @@ public class LineCapacityEquipmentCheck {
             }
             String scope = preferredLineId == null ? "本厂没有产线" : "指定产线";
             String detail = otherUnits.isEmpty() ? "" : " (" + String.join("; ", otherUnits) + ")";
+            String notYet = notYetEffective(factoryId, productTypeId, preferredLineId, orderUnit, start);
+            if (notYet != null) {
+                detail += " (" + notYet + ")";
+            }
             return ResourceCheckResult.unverified("CAPACITY",
                     "产能未验证: " + scope + "配置该产品按" + unitLabel(orderUnit) + "计的每小时产能" + detail
                             + ", 请在工厂配置或对话建厂里补上", quantity);

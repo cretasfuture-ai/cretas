@@ -34,9 +34,22 @@ public interface FactoryMaterialRequisitionService {
      *
      * @param plannedRawInputKg 可选。{@code null} 或非正数 = 沿用旧行为
      *      (辅料/包材需求量留空「按实际领用」，不猜、不编 0)。
+     * @return 新单据; {@link FactoryMaterialRequisition#getSeasoningItemsStatus()} 说明调料行这一段的结果
+     *      ({@link #SEASONING_ITEMS_OK} / {@link #SEASONING_ITEMS_UNAVAILABLE})
      */
     FactoryMaterialRequisition generateFromPlan(String factoryId, String productionPlanId, Long requestedBy,
                                                 BigDecimal plannedRawInputKg);
+
+    /**
+     * {@link FactoryMaterialRequisition#getSeasoningItemsStatus()} 的取值 (只有 {@code generateFromPlan} 填)。
+     * 调料表读取成功: 有调料就已按配方追加, 配方没有调料则本来就没有调料行。
+     */
+    String SEASONING_ITEMS_OK = "OK";
+    /**
+     * 调料表读取失败: 领料单 (原料 / 包材等 BOM 行) 照常生成并保存, 但<b>一行调料都没有追加</b>,
+     * 需要人工补上调料 (或稍后重新按计划生成)。⛔ 不是「这个配方没有调料」。
+     */
+    String SEASONING_ITEMS_UNAVAILABLE = "UNAVAILABLE";
 
     /** 详情 (含明细). */
     FactoryMaterialRequisition getById(String factoryId, String id);
@@ -89,4 +102,17 @@ public interface FactoryMaterialRequisitionService {
 
     /** 取消. */
     FactoryMaterialRequisition cancel(String factoryId, String id, Long operatorId, String reason);
+
+    /**
+     * C1 (Steve 2026-11-10 裁定 B): 整单撤回报工把 {@code qty} 放回了生产仓批次 {@code workshopBatchId};
+     * 如果这批料属于一张<b>已关单</b>的领料单, 生产仓已没有出路, 就把这 {@code qty} 直接退回原料仓源批次,
+     * 留一笔退料流水 (负数 MATERIAL_RETURN 消耗 + 已执行的生产退料单), 并把生产仓批次重新划平。
+     *
+     * <p>必须在调用方事务内、且调用方<b>已锁住</b>该生产仓批次之后调用 (锁序: 生产仓批次 → 领料单 → 原料批次,
+     * 与关单一致), 这样「是否已关单」读到的是并发关单提交后的状态, 不会重复退料。
+     *
+     * @return 实际退回原料仓的量; 不是领料单物化的生产仓批次、或领料单未关单 ⇒ 0 (料留在生产仓, 原路径不变)
+     */
+    BigDecimal returnToSourceIfRequisitionClosed(String factoryId, String workshopBatchId, BigDecimal qty,
+                                                 Long operatorId, String reasonRef);
 }

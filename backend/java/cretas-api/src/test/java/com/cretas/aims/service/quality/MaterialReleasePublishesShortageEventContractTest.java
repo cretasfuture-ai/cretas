@@ -3,6 +3,7 @@ package com.cretas.aims.service.quality;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
+import com.cretas.aims.event.MaterialBatchInspectionClosedEvent;
 import com.cretas.aims.event.MaterialBatchReleasedEvent;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.service.QualityDispositionRuleService.DispositionAction;
@@ -36,6 +37,8 @@ class MaterialReleasePublishesShortageEventContractTest {
         service = new QualityDispositionInventoryService();
         ReflectionTestUtils.setField(service, "materialBatchRepository", batches);
         ReflectionTestUtils.setField(service, "eventPublisher", publisher);
+        ReflectionTestUtils.setField(service, "qcReleaseRecordRepository",
+                mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
         batch = new MaterialBatch();
         batch.setId("MB-1");
         batch.setFactoryId("F1");
@@ -61,13 +64,25 @@ class MaterialReleasePublishesShortageEventContractTest {
         });
     }
 
+    /**
+     * 原名 scrapAndAlreadyAvailableDoNotPublish, 断言「什么都不发」。D-S411-04 审查 M1 之后性质改为: 报废 / 本来就可用
+     * 都<b>不发放行事件</b>; 质检中直接报废 = 「质检中」那部分不会再来了, 发一条 {@link MaterialBatchInspectionClosedEvent}
+     * 让缺料实例清掉质检中数量 (否则缺口被低估)。本来就可用的再放行一次: 两种事件都不发 (阴性对照)。
+     */
     @Test
-    void scrapAndAlreadyAvailableDoNotPublish() {
+    void scrapAndAlreadyAvailableDoNotPublishARelease() {
         service.applyDisposition(inspection, DispositionAction.SCRAP, true);
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
         service.applyDisposition(inspection, DispositionAction.RELEASE, true);
 
-        verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
+        ArgumentCaptor<ApplicationEvent> events = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(publisher, atLeast(0)).publishEvent(events.capture());
         verify(publisher, never()).publishEvent(any(Object.class));
+        assertThat(events.getAllValues()).noneMatch(e -> e instanceof MaterialBatchReleasedEvent);
+        assertThat(events.getAllValues()).singleElement().isInstanceOfSatisfying(
+                MaterialBatchInspectionClosedEvent.class, e -> {
+                    assertThat(e.getMaterialBatchId()).isEqualTo("MB-1");
+                    assertThat(e.getNewStatus()).isEqualTo(MaterialBatchStatus.SCRAPPED);
+                });
     }
 }

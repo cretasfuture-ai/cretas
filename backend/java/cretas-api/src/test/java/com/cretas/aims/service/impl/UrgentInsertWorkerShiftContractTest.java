@@ -174,7 +174,8 @@ class UrgentInsertWorkerShiftContractTest {
     @Test
     void everyExplicitWorkerMustBeInVerifiedOwnFactoryAvailabilitySet() {
         when(shifts.check(F, start, start.plusHours(2), 2)).thenReturn(ready());
-        for (List<Long> ids : List.of(List.of(11L), List.of(11L, 777L), List.of(11L, 12L, 777L))) {
+        // A1: 人数少于标准只提示不拦 (见 UrgentInsertDisciplineContractTest); 这里只验「点名的人必须在可派名单里」
+        for (List<Long> ids : List.of(List.of(777L), List.of(11L, 777L), List.of(11L, 12L, 777L))) {
             assertThatThrownBy(() -> service.confirmInsert(F, 1L, request(ids)))
                     .isInstanceOf(BusinessException.class).hasMessageContaining("指定工人不足");
         }

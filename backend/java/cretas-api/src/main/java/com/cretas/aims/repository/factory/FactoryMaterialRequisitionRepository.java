@@ -17,6 +17,16 @@ public interface FactoryMaterialRequisitionRepository extends JpaRepository<Fact
 
     Optional<FactoryMaterialRequisition> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 
+    /**
+     * 行锁读领料单 (C1, 2026-11-10): 整单撤回放回生产仓的料要不要直接退回原料仓, 取决于这张单
+     * <b>此刻</b>是否已关单。必须在锁住对应生产仓批次之后再锁读这一行, 读到的才是并发关单提交后的状态。
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM FactoryMaterialRequisition r "
+            + "WHERE r.id = :id AND r.factoryId = :factoryId AND r.deletedAt IS NULL")
+    Optional<FactoryMaterialRequisition> findByIdAndFactoryIdForUpdate(@Param("id") String id,
+                                                                       @Param("factoryId") String factoryId);
+
     // 防呆 Rule 2 (fool-proof-design): 支持按人类可读的需求单号查询 (前端不该要求仓管员手填 UUID).
     Optional<FactoryMaterialRequisition> findByFactoryIdAndRequisitionNoAndDeletedAtIsNull(String factoryId, String requisitionNo);
 

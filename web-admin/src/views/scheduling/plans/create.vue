@@ -73,6 +73,8 @@ const manualUnavailableReason = computed(() => capabilities.value?.manualCreatio
 const aiAvailable = computed(() => capabilities.value?.aiGeneration?.status === 'AVAILABLE');
 const pendingPlans = ref<PendingProductionPlan[]>([]);
 const pendingPlansLoadFailed = ref(false);
+// D-S411-03: 没有交期的待处理计划 (如订单没填交货日期时自动生成的计划) 也列出来, 标「未定日期」
+const hasUndatedPlans = computed(() => pendingPlans.value.some(p => !p.expectedCompletionDate));
 const autoForm = ref({ planIds: [] as string[], productionLineId: '' });
 // 两样都没有日产能时当场补填
 const capacityDialogVisible = ref(false);
@@ -435,10 +437,19 @@ async function handleSubmit() {
               <div class="batch-number">{{ plan.planNumber }}</div>
               <div class="batch-product">{{ plan.productTypeName || '产品未标明' }} · 计划数量 {{ plan.plannedQuantity ?? '未知' }}</div>
             </div>
-            <div class="plan-due">交期 {{ plan.expectedCompletionDate || '未设' }}</div>
+            <div v-if="plan.expectedCompletionDate" class="plan-due">交期 {{ plan.expectedCompletionDate }}</div>
+            <div
+              v-else
+              class="plan-due undated"
+              :data-testid="`aps-plan-undated-${plan.id}`"
+              title="没有交期：可以照常选它排，会排在有交期的计划后面；也可以先到生产计划里补上预计完成日"
+            >未定日期</div>
           </div>
           <div v-if="pendingPlansLoadFailed" class="auto-hint error">待排产计划加载失败，请刷新页面重试。</div>
-          <div v-else-if="pendingPlans.length === 0" class="auto-hint">没有待排产的生产计划（只列出状态为「待处理」、一个月内到期的计划）。</div>
+          <div v-else-if="pendingPlans.length === 0" class="auto-hint">没有待排产的生产计划（只列出状态为「待处理」、一个月内到期或未定日期的计划）。</div>
+          <div v-else-if="hasUndatedPlans" class="auto-hint" data-testid="aps-undated-hint">
+            标「未定日期」的计划没有交期（例如订单没填交货日期时自动生成的计划），可以照常选它排，会排在有交期的计划后面。
+          </div>
         </div>
         <div class="auto-options">
           <label>产线
@@ -695,6 +706,7 @@ async function handleSubmit() {
   }
 
   .plan-due { font-size: 12px; color: #909399; }
+  .plan-due.undated { color: #e6a23c; font-weight: 600; }
 }
 
 .auto-options {

@@ -138,7 +138,7 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
 
         // 5. 检查工人是否充足
         ResourceCheckResult workerCheck = checkWorkerAvailability(
-                factoryId, startTime, endTime, config.getMinWorkers());
+                factoryId, startTime, endTime, config.getStandardShiftWorkers() > 0 ? config.getMinWorkers() : 0);
         if (!workerCheck.isAvailable()) {
             return FeasibilityResult.notFeasible("工人不足: " + workerCheck.getMessage());
         }
@@ -183,7 +183,7 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
         // 2. WorkerFactor: 工人可用性 (0-1)
         int availableWorkers = estimateAvailableWorkers(factoryId, slotStartTime, slotEndTime);
         int requiredWorkers = estimateRequiredWorkers(effectiveQuantity, config);
-        double workerFactor = requiredWorkers > 0
+        double workerFactor = requiredWorkers > 0 && config.getStandardShiftWorkers() > 0
                 ? Math.min(1.0, (double) availableWorkers / requiredWorkers)
                 : 1.0;
         result.setWorkerFactor(workerFactor);
@@ -482,6 +482,10 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
             int requiredWorkers) {
 
         try {
+            // A1: 没有标准人数 (required<=0) 就没有可比的数: 不拿估算人数去判「工人不足」
+            if (requiredWorkers <= 0) {
+                return ResourceCheckResult.available("WORKER", null, BigDecimal.ZERO);
+            }
             // 估算可用工人数
             int availableWorkers = estimateAvailableWorkers(factoryId, startTime, endTime);
 
