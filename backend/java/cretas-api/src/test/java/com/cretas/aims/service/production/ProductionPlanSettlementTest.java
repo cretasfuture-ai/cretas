@@ -726,7 +726,8 @@ class ProductionPlanSettlementTest {
         assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
         assertEquals(ProductionPlanStatus.COMPLETED, plan.getStatus());
         assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
-        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+        // 结单落库 (N1 之后投料明细会再保存一次, 守的是「落了库」不是「只 save 一次」)
+        verify(productionSettlementRepository, org.mockito.Mockito.atLeastOnce()).save(any(ProductionSettlement.class));
     }
 
     @Test
@@ -764,7 +765,8 @@ class ProductionPlanSettlementTest {
         verify(bomRecipeRepository, never())
                 .findByFactoryIdAndProductTypeIdAndIsCurrentTrue(any(), any());
         verify(materialBatchRepository).save(batch);
-        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+        // 结单落库 (N1 之后投料明细会再保存一次, 守的是「落了库」不是「只 save 一次」)
+        verify(productionSettlementRepository, org.mockito.Mockito.atLeastOnce()).save(any(ProductionSettlement.class));
     }
 
     @Test
@@ -1461,7 +1463,8 @@ class ProductionPlanSettlementTest {
         assertEquals("PENDING_WAREHOUSE_RECEIPT", response.getPostingStatus());
         verify(materialBatchRepository).save(rawBatch);
         verify(materialBatchRepository).save(auxBatch);
-        verify(productionSettlementRepository).save(any(ProductionSettlement.class));
+        // 结单落库 (N1 之后投料明细会再保存一次, 守的是「落了库」不是「只 save 一次」)
+        verify(productionSettlementRepository, org.mockito.Mockito.atLeastOnce()).save(any(ProductionSettlement.class));
     }
 
     @Test

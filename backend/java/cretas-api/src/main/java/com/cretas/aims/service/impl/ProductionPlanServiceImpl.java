@@ -3745,7 +3745,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //   此前<b>从不扣减</b> = SFI/FG 可用量不降 (幻库存: 消耗了却还在库, 可被重复领用/发货)。此处按 process-row
         //   直接严格扣减 (缺失/不足即抛, 整事务回滚, 禁止降级)。成本侧由 R4 computeByPlan (含 SFI/FG 投料桶)
         //   在仓库确认实收创建 FG 时补入, 此处仅补扣减。仅结单族 (SAFETY_STOCK 走小结扣减, 内部守卫)。
-        deductProcessSheetStockFeeds(factoryId, plan, effectiveRequest);
+        // N1 (2026-11-09): 扣了什么逐笔记在结单上, 整单撤回照着原样还回并把这些行重新标成待扣。
+        //   没有投料也写 "[]" —— 撤回要能分清「没扣过」和「这个功能上线前扣过但没记」。
+        settlement.setStockFeedDetail(com.cretas.aims.service.production.SettlementStockFeedDetail.write(
+                deductProcessSheetStockFeeds(factoryId, plan, effectiveRequest)));
+        productionSettlementRepository.save(settlement);
         productionSettlementLaborRepository.saveAll(toLaborLines(factoryId, planId, settlement.getId(), effectiveRequest.getLaborSegments()));
 
         plan.setStatus(ProductionPlanStatus.COMPLETED);
@@ -3870,6 +3874,17 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 手工半成品领用会替换同一批的逐道投料 (见 deductProcessSheetStockFeeds), 所以量必须对得上:
      * 手工只填 1 而报工投了 100, 那 99 就没人扣了。⛔ 对不上就拒绝, 不取其一。
      * 报工里没投过的批次是真正的外部领用, 不在此列。
+     *
+     * <p>R3 (2026-11-09): 「报工投了多少」要算<b>全部</b>已报 —— 逐道录入行 (结单时才扣的、提交时已扣的)
+     * 加上 App 报工过账时已从来源扣掉的量。此前只比逐道行里结单时才扣的那部分: App 已报 30、再手工填 30,
+     * 两边对不上就漏判、对得上又照扣, 来源共扣 60。现在:
+     * <ul>
+     *   <li>手工量 ≠ 全部已报 → 409 SETTLEMENT_MANUAL_SEMI_MISMATCH (说清两条腿各报了多少)。</li>
+     *   <li>手工量 = 全部已报, 但其中有报工时已经扣过的 → 409 SETTLEMENT_MANUAL_SEMI_ALREADY_POSTED:
+     *       这行手工领用只会把已扣的再扣一遍, ⛔ 不静默只扣差额 (那会让结单消耗行和出库流水对不上)。</li>
+     *   <li>全部已报都还没扣 (只有结单时才扣的逐道投料) 且相等 → 放行, 手工行替换这些逐道投料, 只扣一次。</li>
+     * </ul>
+     * 需要补录与报工不同的量时, 先走报工更正 (有审批留痕), 再结单。
      */
     private void assertManualSemiMatchesReportedFeeds(String factoryId, ProductionPlan plan,
                                                       ProductionSettlementRequest request) {
@@ -3878,19 +3893,25 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             return;
         }
         Map<String, BigDecimal> manualByBatchNo = new HashMap<>();
+        Map<String, Set<Long>> semiIdsByBatchNo = new HashMap<>();
         for (ProductionSettlementRequest.ConsumptionLine line : request.getSemiFinishedConsumptions()) {
             if (line == null || line.getSemiFinishedInventoryId() == null) {
                 continue;
             }
             semiFinishedInventoryRepository.findSourceRefById(line.getSemiFinishedInventoryId())
                     .filter(ref -> factoryId.equals(ref.getFactoryId()))
-                    .ifPresent(ref -> manualByBatchNo.merge(
-                            ref.getIntermediateBatchNo(), zeroIfNull(line.getQuantity()), BigDecimal::add));
+                    .ifPresent(ref -> {
+                        manualByBatchNo.merge(ref.getIntermediateBatchNo(), zeroIfNull(line.getQuantity()), BigDecimal::add);
+                        semiIdsByBatchNo.computeIfAbsent(ref.getIntermediateBatchNo(), ignored -> new HashSet<>())
+                                .add(line.getSemiFinishedInventoryId());
+                    });
         }
         if (manualByBatchNo.isEmpty()) {
             return;
         }
+        // 结单时才扣的逐道投料 (手工行替换的就是它) / 报工时已经扣掉的 (逐道提交时扣的 + App 报工过账)
         Map<String, BigDecimal> reportedByBatchNo = new HashMap<>();
+        Map<String, BigDecimal> postedRowsByBatchNo = new HashMap<>();
         List<ProductionSettlementPrefillResponse.Issue> ignore = new ArrayList<>();
         for (ProcessSheetRow row : Optional.ofNullable(processSheetRowRepository
                 .findByFactoryIdAndPlanId(factoryId, plan.getId())).orElseGet(List::of)) {
@@ -3902,7 +3923,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             for (ProcessSheetRowRequest.UpstreamRef ref : req.getUpstreamSources()) {
-                if (!ref.isSemiFinished() || ref.isStockConsumedAtSubmit()
+                if (!ref.isSemiFinished()
                         || !manualByBatchNo.containsKey(ref.getSourceBatchNumber())
                         || zeroIfNull(ref.getFeedQuantityKg()).signum() <= 0) {
                     continue;
@@ -3920,19 +3941,94 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHint("请先在产品配置为该半成品设置标准克重(每盒克重), 再重试")
                             .withHintTarget("半成品领用");
                 }
-                reportedByBatchNo.merge(ref.getSourceBatchNumber(), inSourceUnit, BigDecimal::add);
+                (ref.isStockConsumedAtSubmit() ? postedRowsByBatchNo : reportedByBatchNo)
+                        .merge(ref.getSourceBatchNumber(), inSourceUnit, BigDecimal::add);
             }
         }
-        for (Map.Entry<String, BigDecimal> reported : reportedByBatchNo.entrySet()) {
-            BigDecimal manual = manualByBatchNo.get(reported.getKey());
-            if (manual.compareTo(reported.getValue()) != 0) {
-                throw new BusinessException(409, "半成品 " + reported.getKey() + " 手工领用 " + stripTrailing(manual)
-                        + " 与逐道报工投料 " + stripTrailing(reported.getValue()) + " 不一致")
+        Map<String, BigDecimal> postedAppByBatchNo = appReportedSemiConsumption(factoryId, plan, semiIdsByBatchNo);
+        for (Map.Entry<String, BigDecimal> manualEntry : manualByBatchNo.entrySet()) {
+            String batchNo = manualEntry.getKey();
+            BigDecimal manual = manualEntry.getValue();
+            BigDecimal rowsAtSettlement = reportedByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);
+            BigDecimal rowsAtSubmit = postedRowsByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);
+            BigDecimal app = postedAppByBatchNo.getOrDefault(batchNo, BigDecimal.ZERO);
+            BigDecimal rows = rowsAtSettlement.add(rowsAtSubmit);
+            BigDecimal reported = rows.add(app);
+            if (reported.signum() == 0) {
+                continue;   // 报工里没投过这批: 真正的外部领用
+            }
+            String unit = semiUnitLabel(semiIdsByBatchNo.get(batchNo));
+            if (manual.compareTo(reported) != 0) {
+                throw new BusinessException(409, "半成品 " + batchNo + " 手工领用 " + stripTrailing(manual) + unit
+                        + " 与已报投料 " + stripTrailing(reported) + unit + " 不一致 (逐道录入 " + stripTrailing(rows) + unit
+                        + ", App 报工 " + stripTrailing(app) + unit + ")")
                         .withCode("SETTLEMENT_MANUAL_SEMI_MISMATCH")
-                        .withHint("报工已记录这批半成品的投料, 请删掉这行手工领用, 或先更正逐道报工再结单")
+                        .withHint("报工已记录这批半成品的投料, 请删掉这行手工领用, 或先更正报工再结单")
+                        .withHintTarget("半成品领用");
+            }
+            BigDecimal alreadyDeducted = rowsAtSubmit.add(app);
+            if (alreadyDeducted.signum() > 0) {
+                throw new BusinessException(409, "半成品 " + batchNo + " 已在报工时扣过 " + stripTrailing(alreadyDeducted) + unit
+                        + " (逐道提交 " + stripTrailing(rowsAtSubmit) + unit + ", App 报工 " + stripTrailing(app) + unit
+                        + "), 这行手工领用会把它再扣一遍")
+                        .withCode("SETTLEMENT_MANUAL_SEMI_ALREADY_POSTED")
+                        .withHint("报工已经从库存扣过这批半成品, 请删掉这行手工领用, 数量不对请先更正报工再结单")
                         .withHintTarget("半成品领用");
             }
         }
+    }
+
+    /**
+     * App 报工过账时已经从这些半成品行扣掉的量 (本计划各批次的活报工, 按出库流水净额: 出库 − 同一报工的还回)。
+     * 流水就是过账本身, ⛔ 不按报工上的数字再算一遍。
+     */
+    private Map<String, BigDecimal> appReportedSemiConsumption(String factoryId, ProductionPlan plan,
+                                                               Map<String, Set<Long>> semiIdsByBatchNo) {
+        Map<String, BigDecimal> result = new HashMap<>();
+        if (productionReportRepository == null || semiFinishedInventoryTransactionRepository == null
+                || semiIdsByBatchNo.isEmpty()) {
+            return result;
+        }
+        Map<Long, String> batchNoBySemiId = new HashMap<>();
+        semiIdsByBatchNo.forEach((batchNo, ids) -> ids.forEach(id -> batchNoBySemiId.put(id, batchNo)));
+        List<ProductionBatch> planBatches = Optional.ofNullable(
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId())).orElseGet(List::of);
+        for (ProductionBatch batch : planBatches) {
+            if (batch == null || batch.getId() == null) {
+                continue;
+            }
+            for (ProductionReport report : Optional.ofNullable(
+                    productionReportRepository.findYieldReportsByBatch(factoryId, batch.getId())).orElseGet(List::of)) {
+                if (report == null || report.getId() == null) {
+                    continue;
+                }
+                for (SemiFinishedInventoryTransaction txn : Optional.ofNullable(semiFinishedInventoryTransactionRepository
+                        .findByFactoryIdAndReportId(factoryId, report.getId())).orElseGet(List::of)) {
+                    String batchNo = txn == null ? null : batchNoBySemiId.get(txn.getSemiFinishedId());
+                    if (batchNo == null || txn.getQuantity() == null) {
+                        continue;
+                    }
+                    if (SemiFinishedInventoryTransaction.TxnType.OUT.equals(txn.getTxnType())) {
+                        result.merge(batchNo, txn.getQuantity().abs(), BigDecimal::add);
+                    } else if (SemiFinishedInventoryTransaction.TxnType.REVERSE.equals(txn.getTxnType())
+                            && txn.getQuantity().signum() > 0) {
+                        result.merge(batchNo, txn.getQuantity().negate(), BigDecimal::add);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    private String semiUnitLabel(Set<Long> semiIds) {
+        if (semiIds == null || semiIds.isEmpty() || semiFinishedInventoryRepository == null) {
+            return "";
+        }
+        // 只取身份 (⛔ 不 findById: 会把库存行装进持久化上下文, 之后同一事务的锁内扣减读到旧余额)
+        return semiFinishedInventoryRepository.findSourceRefById(semiIds.iterator().next())
+                .map(SemiFinishedInventoryRepository.SourceRef::getUnit)
+                .map(com.cretas.aims.service.unit.UnitDisplayNames::display)
+                .orElse("");
     }
 
     /**
@@ -4051,6 +4147,14 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                         .filter(i -> !isResolvedSettlementOverride(i, confirmation,
                                 allowManualSemiFinishedConsumptions))
                         .toList();
+        if (derived != null && !blockers.isEmpty() && blockers.stream()
+                .allMatch(i -> "QUANTITY_VARIANCE_OVER_PLAN".equals(i.getCode()))) {
+            // D-N-01: 只差超产原因时给超产自己的码 (与 validateSettlementRequest 同一个), 前端据此直接落到原因下拉。
+            throw new BusinessException(409, blockers.get(0).getMessage())
+                    .withCode("PRODUCTION_OVER_PLAN_REASON_REQUIRED")
+                    .withHint("请选择超产原因后再提交")
+                    .withHintTarget("quantityVarianceReason");
+        }
         if (derived == null || !blockers.isEmpty()) {
             String detail = blockers.stream()
                     .map(ProductionSettlementPrefillResponse.Issue::getMessage)
@@ -4389,6 +4493,113 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * {@code actualFinished(份)} 与 {@code plan.plannedQuantity(kg)} 不可直接比较, 跳过超产判断,
      * 镜像 batch 层 efficiency=null 的诚实留空做法。</p>
      */
+    /**
+     * D-N-01 (2026-11-09 S3-15 实测): 计划量和产出量必须放到<b>同一个单位</b>里才能比超产。
+     * 返工计划 SEC-F006-20261109-4661D1 计划 0.3 kg (来源半成品), 产出 3 袋 —— 旧代码拿 3 和 0.3 裸比,
+     * 报「超产超过 5%」。
+     *
+     * <p>{@code outputInPlanUnit} 非 null = 已折到计划单位 (同单位 / 单位契约里的换算 / 产品专属换算 /
+     * 计数单位 × 产品每单位克重); {@code unverifiedReason} 非 null = 换不过去, 产量差异<b>未核实</b>,
+     * ⛔ 不当超产、也不猜。计划或产出单位读不到的旧数据沿用批次上的跨单位判定。
+     */
+    private record PlanOutputComparison(BigDecimal outputInPlanUnit, String unverifiedReason) {
+        boolean verified() {
+            return unverifiedReason == null;
+        }
+    }
+
+    private PlanOutputComparison compareOutputWithPlan(String factoryId, ProductionPlan plan,
+                                                       List<ProductionBatch> batches, BigDecimal output,
+                                                       String outputUnit, String outputProductTypeId) {
+        if (output == null) {
+            return new PlanOutputComparison(null, null);
+        }
+        String planUnit = canonicalReceiptUnit(trimToNull(plan.getPlannedUnit()));
+        String outUnit = canonicalReceiptUnit(trimToNull(outputUnit));
+        if (planUnit == null || outUnit == null) {
+            return isCrossUnitPlan(batches)
+                    ? new PlanOutputComparison(null, "末道产出单位与计划单位不同(如 份/盒 vs kg)")
+                    : new PlanOutputComparison(output, null);
+        }
+        // 单位同一性问单位契约 (⛔ 不比字符串, BareUnitEqualityRatchet); 契约不在 = 判不了, 如实不比
+        if (unitContractService == null) {
+            return new PlanOutputComparison(null, "单位契约服务未就绪, 产出单位与计划单位是否相同无法核对");
+        }
+        if (unitContractService.areEquivalent(factoryId, planUnit, outUnit)) {
+            return new PlanOutputComparison(output, null);
+        }
+        String productTypeId = firstNonBlank(trimToNull(outputProductTypeId), trimToNull(plan.getProductTypeId()));
+        BigDecimal converted = convertOutputToPlanUnit(factoryId, productTypeId, output, outUnit, planUnit);
+        if (converted != null) {
+            return new PlanOutputComparison(converted, null);
+        }
+        return new PlanOutputComparison(null, "产出 " + stripTrailing(output) + com.cretas.aims.service.unit.UnitDisplayNames.display(outUnit)
+                + " 与计划单位 " + com.cretas.aims.service.unit.UnitDisplayNames.display(planUnit)
+                + " 之间没有可用的换算 (产品换算或每单位重量都没配)");
+    }
+
+    /** 先走单位契约 (同维度换算 + 产品专属换算), 再走计数单位 × 产品每单位克重; 都不行返回 null。 */
+    private BigDecimal convertOutputToPlanUnit(String factoryId, String productTypeId, BigDecimal output,
+                                               String outUnit, String planUnit) {
+        if (unitContractService != null) {
+            com.cretas.aims.service.unit.UnitConversionResult result = unitContractService.convert(output,
+                    new com.cretas.aims.service.unit.UnitConversionContext(factoryId, productTypeId, outUnit, planUnit,
+                            LocalDateTime.now(), null, 6, RoundingMode.HALF_UP));
+            if (result != null && result.succeeded() && result.quantity() != null) {
+                return result.quantity();
+            }
+        }
+        if (productTypeId == null || productTypeRepository == null
+                || !com.cretas.aims.service.inventory.FeedUnitConverter.isCountUnit(outUnit)) {
+            return null;
+        }
+        BigDecimal gramsPerUnit = productTypeRepository.findById(productTypeId)
+                .map(ProductType::getGramsPerUnit)
+                .filter(grams -> grams.signum() > 0)
+                .orElse(null);
+        if (gramsPerUnit == null) {
+            return null;
+        }
+        BigDecimal kg = output.multiply(gramsPerUnit).divide(new BigDecimal("1000"), 6, RoundingMode.HALF_UP);
+        if ("kg".equals(planUnit)) {
+            return kg;
+        }
+        if ("g".equals(planUnit)) {
+            return kg.movePointRight(3);
+        }
+        if (unitContractService == null) {
+            return null;
+        }
+        com.cretas.aims.service.unit.UnitConversionResult fromKg = unitContractService.convert(kg,
+                new com.cretas.aims.service.unit.UnitConversionContext(factoryId, productTypeId, "kg", planUnit,
+                        LocalDateTime.now(), null, 6, RoundingMode.HALF_UP));
+        return fromKg != null && fromKg.succeeded() ? fromKg.quantity() : null;
+    }
+
+    /** 产出量换成计划单位后与计划比的那句话 (单位走 UnitDisplayNames.display)。 */
+    private String overPlanMessage(ProductionPlan plan, BigDecimal output, String outputUnit, BigDecimal outputInPlanUnit) {
+        String planUnit = trimToNull(plan.getPlannedUnit());
+        String shownPlan = planUnit == null ? "" : com.cretas.aims.service.unit.UnitDisplayNames.display(planUnit);
+        String shownOut = trimToNull(outputUnit) == null ? "" : com.cretas.aims.service.unit.UnitDisplayNames.display(outputUnit);
+        boolean converted = outputInPlanUnit != null && output != null && outputInPlanUnit.compareTo(output) != 0;
+        return "实际产量(" + stripTrailing(output) + shownOut
+                + (converted ? ", 折 " + stripTrailing(outputInPlanUnit) + shownPlan : "")
+                + ")超过计划(" + stripTrailing(zeroIfNull(plan.getPlannedQuantity())) + shownPlan + ")";
+    }
+
+    private static String uniqueProductTypeId(List<ProductionSettlementRequest.OutputLine> outputs) {
+        if (outputs == null) {
+            return null;
+        }
+        Set<String> ids = outputs.stream()
+                .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(id -> !id.isEmpty())
+                .collect(Collectors.toSet());
+        return ids.size() == 1 ? ids.iterator().next() : null;
+    }
+
     private boolean isCrossUnitPlan(List<ProductionBatch> batches) {
         if (batches == null) {
             return false;
@@ -4471,26 +4682,37 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     "laborSegments"));
         }
 
+        // 🔴 2026-08-18: 这条(App 报工)腿原来【不建 terminalOutputs】, 而 web 那条腿建。
+        //    @Builder.Default 让它是空 list ⇒ persistWorkflowSettlementOutputs 看到
+        //    reportedOutputs.isEmpty() 就抛 409 WORKFLOW_OUTPUT_SET_MISMATCH ⇒
+        //    工人在 App 把每道工都报完、审批也过了, 文员点「核对结单」仍然结不了单。
+        //    ⚠️ 那句报错听起来像用户传错了, 实际是服务端自己推导为空(见 deriveTerminalOutputsFromReports)。
+        //    D-N-01: 提到产量差异判断之前 —— 判断要用末道产出的单位和产品。
+        List<ProductionSettlementRequest.OutputLine> terminalOutputs =
+                deriveTerminalOutputsFromReports(factoryId, plan, batches, allReports, issues);
+
         // 5) quantityVarianceReason ← 阈值内自动填, 超阈值留空 + issue
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
-        // A修: 末道产出单位(份/盒) 可能 ≠ plan.plannedQuantity 单位(kg) → 跨单位裸比误报超产.
-        boolean crossUnit = isCrossUnitPlan(batches);
+        // A修 + D-N-01: 末道产出单位(袋/份/盒) 可能 ≠ 计划单位(kg) → 先折到计划单位再比, 折不过去就不比。
+        PlanOutputComparison comparison = compareOutputWithPlan(factoryId, plan, batches, actualFinished,
+                resolveTerminalOutputUnit(terminalOutputs), uniqueProductTypeId(terminalOutputs));
         String varianceReason = null;
-        if (crossUnit) {
-            // 跨单位: 不比较产量差异, 不臆造; 留 INFO 让人核对实际产量 (非 BLOCKER, 不阻一键确认).
+        if (!comparison.verified()) {
+            // 换不过去: 不比较产量差异, 不臆造; 留 INFO 让人核对实际产量 (非 BLOCKER, 不阻一键确认).
             issues.add(infoIssue("QUANTITY_UNIT_CROSS",
-                    "末道产出单位与计划单位不同(如 份/盒 vs kg), 已跳过产量差异自动判断; 请人工核对实际产量。",
+                    comparison.unverifiedReason() + ", 产量差异未核实 (不按超产处理); 请人工核对实际产量。",
                     "quantityVarianceReason"));
-        } else if (actualFinished != null && planned.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal diff = actualFinished.subtract(planned).abs();
+        } else if (comparison.outputInPlanUnit() != null && planned.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal actualInPlanUnit = comparison.outputInPlanUnit();
+            BigDecimal diff = actualInPlanUnit.subtract(planned).abs();
             BigDecimal ratio = diff.divide(planned, 6, RoundingMode.HALF_UP);
             if (ratio.compareTo(SETTLEMENT_VARIANCE_THRESHOLD) <= 0) {
                 varianceReason = "无显著差异";
-            } else if (actualFinished.compareTo(planned) > 0) {
+            } else if (actualInPlanUnit.compareTo(planned) > 0) {
                 // settle 校验: 实际 > 计划 必须有超产原因; 留空让人选 (对齐前端差异原因下拉)
                 issues.add(issue("QUANTITY_VARIANCE_OVER_PLAN",
-                        "实际产量(" + stripTrailing(actualFinished) + ")超过计划("
-                                + stripTrailing(planned) + ")超过 5%, 请选择超产原因后再确认。",
+                        overPlanMessage(plan, actualFinished, resolveTerminalOutputUnit(terminalOutputs),
+                                actualInPlanUnit) + "超过 5%, 请选择超产原因后再确认。",
                         "quantityVarianceReason"));
             }
             // 实际 < 计划 且超阈值: settle 不强制原因, 不阻塞, 不标 issue (留空合法)
@@ -4510,13 +4732,6 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 "如本次生产领用了其他计划产出的外部半成品库存, 请在“半成品实际领用”处手工添加; 本计划内部自产自耗的中间品无需在此填写。",
                 "semiFinishedConsumptions"));
 
-        // 🔴 2026-08-18: 这条(App 报工)腿原来【不建 terminalOutputs】, 而 web 那条腿建。
-        //    @Builder.Default 让它是空 list ⇒ persistWorkflowSettlementOutputs 看到
-        //    reportedOutputs.isEmpty() 就抛 409 WORKFLOW_OUTPUT_SET_MISMATCH ⇒
-        //    工人在 App 把每道工都报完、审批也过了, 文员点「核对结单」仍然结不了单。
-        //    ⚠️ 那句报错听起来像用户传错了, 实际是服务端自己推导为空(见 deriveTerminalOutputsFromReports)。
-        List<ProductionSettlementRequest.OutputLine> terminalOutputs =
-                deriveTerminalOutputsFromReports(factoryId, plan, batches, allReports, issues);
         if (terminalOutputs.isEmpty()) {
             issues.add(issue("FINISHED_OUTPUT_MISSING",
                     "末道报工没有可用的产出(数量或产品缺失), 无法自动带入实际成品产量; 请在产出核对处手工填写。",
@@ -4610,28 +4825,33 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
-        boolean crossUnit = isCrossUnitPlan(batches)
-                || terminalUnitCount > 1
+        boolean mixedOutputs = terminalUnitCount > 1
                 || terminalOutputs.stream()
                         .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
                         .map(this::trimToNull)
                         .filter(Objects::nonNull)
                         .distinct()
                         .count() > 1;
+        // D-N-01: 单一产出时先把产出折到计划单位再比 (返工计划 0.3 kg 来源 vs 3 袋产出不能裸比)。
+        PlanOutputComparison comparison = mixedOutputs
+                ? new PlanOutputComparison(null, "末道有多个产品或多个单位")
+                : compareOutputWithPlan(factoryId, plan, batches, actualFinished,
+                        resolveTerminalOutputUnit(terminalOutputs), uniqueProductTypeId(terminalOutputs));
         String varianceReason = null;
-        if (crossUnit) {
+        if (!comparison.verified()) {
             issues.add(infoIssue("QUANTITY_UNIT_CROSS",
-                    "末道产出单位与计划单位不同, 已跳过产量差异自动判断; 请人工核对实际产量。",
+                    comparison.unverifiedReason() + ", 产量差异未核实 (不按超产处理); 请人工核对实际产量。",
                     "quantityVarianceReason"));
-        } else if (actualFinished != null && planned.compareTo(BigDecimal.ZERO) > 0) {
-            BigDecimal diff = actualFinished.subtract(planned).abs();
+        } else if (comparison.outputInPlanUnit() != null && planned.compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal actualInPlanUnit = comparison.outputInPlanUnit();
+            BigDecimal diff = actualInPlanUnit.subtract(planned).abs();
             BigDecimal ratio = diff.divide(planned, 6, RoundingMode.HALF_UP);
             if (ratio.compareTo(SETTLEMENT_VARIANCE_THRESHOLD) <= 0) {
                 varianceReason = "无显著差异";
-            } else if (actualFinished.compareTo(planned) > 0) {
+            } else if (actualInPlanUnit.compareTo(planned) > 0) {
                 issues.add(issue("QUANTITY_VARIANCE_OVER_PLAN",
-                        "实际产量(" + stripTrailing(actualFinished) + ")超过计划("
-                                + stripTrailing(planned) + ")超过 5%, 请选择超产原因后再确认。",
+                        overPlanMessage(plan, actualFinished, resolveTerminalOutputUnit(terminalOutputs),
+                                actualInPlanUnit) + "超过 5%, 请选择超产原因后再确认。",
                         "quantityVarianceReason"));
             }
         }
@@ -4662,22 +4882,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return buildPrefillResponse(prefill, issues);
     }
 
+    /** 与撤回判定旧结单扣过什么同一份判定, 见 {@link com.cretas.aims.service.production.SettlementStockFeedDetail#isSettlementRow}。 */
     private boolean isUsableProcessSheetRow(ProcessSheetRow row) {
-        if (row == null || isBlank(row.getRowPayload())) {
-            return false;
-        }
-        String status = trimToNull(row.getRowStatus());
-        String submission = trimToNull(row.getSubmissionStatus());
-        if (ProcessSheetRow.SUBMISSION_DRAFT.equals(submission)) {
-            return false;
-        }
-        if (ProcessSheetRow.SUBMISSION_SUBMITTED.equals(submission)) {
-            return true;
-        }
-        // Explicit legacy compatibility: rows written before submission_status existed
-        // retain their historical rowStatus semantics, but new DRAFT rows never enter settlement.
-        boolean legacy = submission == null || ProcessSheetRow.SUBMISSION_LEGACY.equals(submission);
-        return legacy && (status == null || "SAVED".equals(status) || "SUBMITTED".equals(status));
+        return com.cretas.aims.service.production.SettlementStockFeedDetail.isSettlementRow(row);
     }
 
     private ProcessSheetRowRequest parseProcessSheetRowPayload(ProcessSheetRow row,
@@ -6819,23 +7026,31 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
 
         BigDecimal planned = zeroIfNull(plan.getPlannedQuantity());
-        // A修: 跨单位(份/盒 vs kg)时产量裸比无意义, 跳过超产校验 (prefill 已留 INFO 让人核对).
-        boolean crossUnit = isCrossUnitPlan(
-                productionBatchRepository.findByFactoryIdAndProductionPlanId(plan.getFactoryId(), plan.getId()))
-                || (isWorkflowPlan(plan)
-                        && Optional.ofNullable(request.getTerminalOutputs()).orElseGet(ArrayList::new).stream()
-                                .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
-                                .map(this::trimToNull)
-                                .filter(Objects::nonNull)
-                                .distinct()
-                                .count() > 1);
-        if (!crossUnit
+        // A修 + D-N-01: 先把产出折到计划单位 (同单位 / 单位契约 / 产品每单位克重) 再比;
+        //   折不过去 = 产量差异未核实, 不按超产拦 (prefill 已留 INFO 让人核对), ⛔ 不裸比。
+        boolean multiProduct = isWorkflowPlan(plan)
+                && Optional.ofNullable(request.getTerminalOutputs()).orElseGet(ArrayList::new).stream()
+                        .map(ProductionSettlementRequest.OutputLine::getProductTypeId)
+                        .map(this::trimToNull)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .count() > 1;
+        String outputUnit = firstNonBlank(resolveTerminalOutputUnit(request.getTerminalOutputs()),
+                canonicalReceiptUnit(trimToNull(request.getQuantityUnit())));
+        PlanOutputComparison comparison = multiProduct
+                ? new PlanOutputComparison(null, "末道有多个产品")
+                : compareOutputWithPlan(plan.getFactoryId(), plan,
+                        productionBatchRepository.findByFactoryIdAndProductionPlanId(plan.getFactoryId(), plan.getId()),
+                        finished, outputUnit, uniqueProductTypeId(request.getTerminalOutputs()));
+        if (comparison.verified()
+                && comparison.outputInPlanUnit() != null
                 && planned.compareTo(BigDecimal.ZERO) > 0
-                && finished.compareTo(planned) > 0
+                && comparison.outputInPlanUnit().compareTo(planned) > 0
                 && isBlank(request.getQuantityVarianceReason())) {
             throw new BusinessException(409, "实际产量超过计划产量, 必须选择超产原因")
                     .withCode("PRODUCTION_OVER_PLAN_REASON_REQUIRED")
-                    .withHint("请选择超产原因后再提交; 计划产量: " + planned + ", 实际产量: " + finished)
+                    .withHint(overPlanMessage(plan, finished, outputUnit, comparison.outputInPlanUnit())
+                            + "; 请选择超产原因后再提交")
                     .withHintTarget("超产原因");
         }
 
@@ -7588,20 +7803,24 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      *   <li><b>防双扣</b>: 若结单请求带手工 {@code semiFinishedConsumptions} (文员手工管理 SFI 领用) → 尊重手工,
      *       跳过 SFI 自动扣; FG 投料无手工字段, 照常自动扣。</li>
      *   <li><b>幂等</b>: {@code settleProduction} 已阻断重复结单 (PRODUCTION_ALREADY_SETTLED + idempotencyKey),
-     *       故本扣减每个计划恰执行一次。</li>
+     *       故每张<b>活</b>结单只扣一次。⚠️ 结单可以被整单撤回再重结 (N1, 2026-11-09): 撤回按返回的明细
+     *       (存在结单 stock_feed_detail 上) 原样还回并把这些行重新标成待扣, 重结时才不会把没撤的那几道再扣一遍。</li>
      * </ul>
+     *
+     * @return 实际扣掉的每一笔 (来源原生单位), 由调用方存到结单上
      */
-    private void deductProcessSheetStockFeeds(String factoryId, ProductionPlan plan,
-                                              ProductionSettlementRequest request) {
+    private List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> deductProcessSheetStockFeeds(
+            String factoryId, ProductionPlan plan, ProductionSettlementRequest request) {
+        List<com.cretas.aims.service.production.SettlementStockFeedDetail.Entry> deducted = new ArrayList<>();
         if (plan == null || plan.getSourceType() == PlanSourceType.SAFETY_STOCK) {
-            return;   // SAFETY_STOCK 由小结扣减
+            return deducted;   // SAFETY_STOCK 由小结扣减
         }
         if (processSheetRowRepository == null || isBlank(plan.getId())) {
-            return;
+            return deducted;
         }
         List<ProcessSheetRow> rows = processSheetRowRepository.findByFactoryIdAndPlanId(factoryId, plan.getId());
         if (isEmpty(rows)) {
-            return;
+            return deducted;
         }
         Set<String> manuallyPostedSemiBatchNumbers = resolveManualSemiBatchNumbers(factoryId, request);
         BigDecimal sfiOut = BigDecimal.ZERO;
@@ -7634,6 +7853,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             srcBatchNo, feed, "kg");
                     fgOut = fgOut.add(zeroIfNull(drawn));
                     fgCount++;
+                    deducted.add(new com.cretas.aims.service.production.SettlementStockFeedDetail.Entry(
+                            com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_FINISHED,
+                            srcBatchNo, feed, drawn, row.getId()));
                 } else if (ref.isSemiFinished()) {
                     if (ref.isStockConsumedAtSubmit()) {
                         continue;   // 回料已在正式报工事务内严格扣减；结单只做一次消费
@@ -7649,6 +7871,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             com.cretas.aims.service.processentry.IntermediateOwnershipGuard.ofPlan(plan), srcBatchNo, feed);
                     sfiOut = sfiOut.add(zeroIfNull(drawn));
                     sfiCount++;
+                    deducted.add(new com.cretas.aims.service.production.SettlementStockFeedDetail.Entry(
+                            com.cretas.aims.service.production.SettlementStockFeedDetail.KIND_SEMI,
+                            srcBatchNo, feed, drawn, row.getId()));
                     // 血缘: 产出它的生产批次 → 本行生产批次 (结单只扣一次, 见上方幂等说明)。
                     if (semiFeedLineageRecorder != null) {
                         semiFeedLineageRecorder.recordSemiFeed(factoryId, srcBatchNo, row.getBatchId(), drawn,
@@ -7666,6 +7891,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             ? ""
                             : " [同批次 SFI 手工补录已定点替换]");
         }
+        return deducted;
     }
 
     private Set<String> resolveManualSemiBatchNumbers(String factoryId,
@@ -7983,6 +8209,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         settlement.setTransitLedgerId(null);
         settlement.setWarehouseReceivedBy(latestSession.getPostedBy());
         settlement.setWarehouseReceivedAt(latestSession.getPostedAt());
+        // 桥接结单本身一笔投料都没扣 (小结扣的, 也只归撤销小结还): 明确写空, 撤回时与「明细上线前的旧结单」分得开。
+        settlement.setStockFeedDetail(com.cretas.aims.service.production.SettlementStockFeedDetail.write(List.of()));
         ProductionSettlement saved = productionSettlementRepository.save(settlement);
         persistByStockSettlementOutputs(factoryId, plan, saved, finishedGoodsBatches);
         log.info("BY_STOCK 结单桥接已对齐小结入库真值: factoryId={}, planId={}, settlementId={}, sessions={}, fgBatches={}, quantity={} {}",

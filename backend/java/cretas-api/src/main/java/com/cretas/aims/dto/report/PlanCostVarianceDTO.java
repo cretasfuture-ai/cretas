@@ -67,8 +67,16 @@ public class PlanCostVarianceDTO {
 
     /** 可比部分的标准成本。 */
     private BigDecimal standardCost;
-    /** 可比部分的实际成本 (与 standardCost 同口径同范围)。 */
+    /**
+     * 可比部分的实际成本 (与 standardCost 同口径同范围)。按<b>净额</b>: 结单转入半成品库的那部分成本已按
+     * 成本核算 (OrderCostBreakdownService) 的同一比例从各项实际里扣掉, 见 {@link #semiTransferredCost}。
+     */
     private BigDecimal actualCost;
+    /**
+     * 结单转入半成品库、已从实际侧扣掉的成本 (取自成本核算, 不另算); null = 没有划转或价格被脱敏。
+     * 划转额未知时整张差异标「不完整」({@code comparable=false}), ⛔ 不当 0。
+     */
+    private BigDecimal semiTransferredCost;
     /** 实际 − 标准 (正 = 超支)。 */
     private BigDecimal totalVariance;
     /** totalVariance / standardCost × 100。 */
