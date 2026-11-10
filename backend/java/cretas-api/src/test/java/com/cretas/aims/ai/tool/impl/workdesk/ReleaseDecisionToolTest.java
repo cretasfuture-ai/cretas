@@ -36,6 +36,10 @@ class ReleaseDecisionToolTest {
     @Mock
     private MaterialBatchRepository materialBatchRepository;
 
+    /** D-S411-04 M2 的判定要查放行记录; 桩默认空 = 没有质检放行判过。 */
+    @Mock
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 

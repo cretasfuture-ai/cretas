@@ -18,13 +18,15 @@ import java.util.UUID;
  * <p><b>什么算放行</b>: 批次从「不可投产」({@link MaterialBatchStatus#blocksProduction()} —— 质检中 / 过期 /
  * 报废 / 不良) 变成可投产的任何状态。不只是改成「可用」: 质检中改成「鲜品」一样能领去生产。
  *
- * <p><b>四条放行出口</b> (2026-11-10 数清, 改动前后各 4):
+ * <p><b>五条放行出口</b> (2026-11-10 数清; #1571 合入后多了第 5 条质检放行页原料放行):
  * <ol>
  *   <li>仓库页改状态 {@code PUT /material-batches/{id}/status} —— 手动, 过 {@link #assertManualReleaseAllowed}</li>
  *   <li>AI {@code batch_update} 改状态 —— 手动, 过 {@link #assertManualReleaseAllowed}</li>
  *   <li>AI 质量主管放行 {@code release_decision} —— 质检放行 (须 {@code quality:read_write}), 只记台账</li>
  *   <li>质检单处置判放行 —— 质检放行, 只记台账</li>
+ *   <li>质检放行页放行原料收货批次 ({@code QcReleaseService}, D-S411-04) —— 质检放行, 只记台账</li>
  * </ol>
+ * 质检判过不合格的原料能否改回可用由 {@code MaterialQcRejectionGuard} 管 (D-S411-04 M2), 与本闸叠加。
  * 系统内部把批次翻回可用的 11 处 (退料 / 撤回 / 盘点把「已用完」恢复为可用, 新建批次) 都不是从不可投产状态出发,
  * 不算放行, 故意不接。
  *

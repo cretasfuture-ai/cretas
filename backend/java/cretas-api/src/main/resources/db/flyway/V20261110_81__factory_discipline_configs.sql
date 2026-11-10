@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS material_batch_releases (
     from_status        VARCHAR(32)  NOT NULL,
     to_status          VARCHAR(32)  NOT NULL,
     channel            VARCHAR(32)  NOT NULL
-        CHECK (channel IN ('WAREHOUSE_STATUS_CHANGE', 'AI_BATCH_UPDATE', 'QC_RELEASE_DECISION', 'QC_DISPOSITION')),
+        CHECK (channel IN ('WAREHOUSE_STATUS_CHANGE', 'AI_BATCH_UPDATE', 'QC_RELEASE_DECISION', 'QC_DISPOSITION', 'QC_RELEASE')),
     reason             VARCHAR(500),
     inspection_id      VARCHAR(191),
     released_by        BIGINT,

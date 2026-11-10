@@ -40,7 +40,9 @@ public class MaterialBatchRelease {
         /** AI 质量主管放行决策 (release_decision)。 */
         QC_RELEASE_DECISION,
         /** 质检单处置判放行。 */
-        QC_DISPOSITION
+        QC_DISPOSITION,
+        /** 质检放行页放行原料收货批次 (D-S411-04)。 */
+        QC_RELEASE
     }
 
     @Id

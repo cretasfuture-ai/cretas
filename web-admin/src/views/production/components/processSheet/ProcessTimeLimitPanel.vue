@@ -19,6 +19,7 @@ import {
   TIME_LIMIT_STATE_TAGS,
   crossedDeadline,
   hasPartialExpiry,
+  parseBackendTime,
   remainingMinutesAt,
   remainingText,
 } from '@/utils/processTimeLimit';
@@ -114,7 +115,10 @@ const backfillVisible = computed({
 });
 const backfillDisabledReason = computed(() => {
   if (!backfillAt.value) return '请选择实际开始解冻的时间';
-  if (new Date(backfillAt.value).getTime() > Date.now()) return '开始时间不能晚于现在';
+  // 补登时间是工厂本地时间 (东八区, 与后端 LocalDateTime 同口径), ⛔ 不用 new Date(字符串) 按浏览器时区解析
+  const at = parseBackendTime(backfillAt.value);
+  if (at === null) return '请选择实际开始解冻的时间';
+  if (at > Date.now()) return '开始时间不能晚于现在';
   if (!backfillReason.value.trim()) return '请填写补登原因';
   return '';
 });
@@ -266,7 +270,7 @@ defineExpose({ reload });
             value-format="YYYY-MM-DDTHH:mm:ss"
             format="MM-DD HH:mm"
             placeholder="选择时间"
-            :disabled-date="(d: Date) => d.getTime() > Date.now()"
+            :disabled-date="(d: Date) => d.getTime() > Date.now() + 86_400_000"
             style="width: 100%"
             data-testid="time-limit-backfill-at"
           />

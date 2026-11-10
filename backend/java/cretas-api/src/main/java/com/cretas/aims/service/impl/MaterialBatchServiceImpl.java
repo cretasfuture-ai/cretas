@@ -190,6 +190,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     private com.cretas.aims.repository.material.MaterialBatchCostCorrectionRepository
             materialBatchCostCorrectionRepository;
 
+    /**
+     * 质检放行记录 (D-S411-04 M2): 改批次状态前查这批原料是否已被质检判定不合格。
+     * 必注入 —— null 不能当「没判过」放过去。
+     */
+    @Autowired
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
     /** 更正原因落库列是 varchar(255) —— 与 material_batch_adjustments.reason 对齐。 */
     private static final int CORRECTION_REASON_MAX_LENGTH = 255;
 
@@ -2241,6 +2248,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
+        // D-S411-04 M2: 质检放行判了不合格的原料, 仓库页不能改回可用 (与处置放行 / 放行决策工具同一判定)
+        com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
+                qcReleaseRecordRepository, batch, status);
+
         MaterialBatchStatus before = batch.getStatus();
         boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(before, status);
         if (release) {
@@ -2255,8 +2266,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             materialBatchReleaseGuard.recordIfRelease(factoryId, batch, before, status, change.channel(),
                     change.reason(), null, change.operatorId(), change.operatorRole());
         }
-        // 仓库页把「质检中」改成「可用」也是一次放行: 缺料实例要跟着刷新, 否则按旧缺口下采购单
-        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(applicationEventPublisher, this, batch, before);
+        // 仓库页把「质检中」改成「可用」是一次放行, 改成不合格 / 鲜品等是离开质检中: 缺料实例都要跟着刷新,
+        // 否则按旧缺口下采购单。与共用翻转同一个发布函数 (D-S411-04 复审 R1), ⛔ 不在这里手写事件。
+        com.cretas.aims.service.quality.QualityDispositionInventoryService.publishMaterialStatusChange(
+                applicationEventPublisher, this, batch, before);
         return materialBatchMapper.toDTO(batch);
     }
 

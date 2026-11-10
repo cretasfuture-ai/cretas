@@ -1285,8 +1285,9 @@ public class SalesServiceImpl implements SalesService {
                     factoryId, "SALES_ORDER", order.getId(), context, initiatorUserId);
         }
         if (instanceLookup.isEmpty()) {
+            // 沿用原口径: 订单上的财审人记提交人; 事件另标「系统自动通过」(D-SO-AUTOPLAN-NOAPPROVER)
             return approveFinanceForOrder(
-                    factoryId, order, "当前业务无需审批，系统直接通过", null, initiatorUserId);
+                    factoryId, order, "当前业务无需审批，系统直接通过", null, initiatorUserId, initiatorUserId);
         }
         ApprovalWorkflowInstance instance = instanceLookup.get();
 
@@ -1303,7 +1304,12 @@ public class SalesServiceImpl implements SalesService {
         }
 
         if (instance.getStatus() == InstanceStatus.APPROVED) {
-            return approveFinanceForOrder(factoryId, order, "销售审批工作流自动通过", null, null);
+            // D-SO-AUTOPLAN-NOAPPROVER (2026-11-10): OA 审批流启动即命中自动通过条件, 没有人点「通过」,
+            // 财审人如实为 null (不把提交人冒充成审批人)。但下游自动生成生产计划要一个建单人
+            // (production_plans.created_by NOT NULL + 外键 → users): 事件标「系统自动通过」并带上
+            // 触发这次自动通过的提交人。原来这里只传 null, 计划生成抛「缺少审批人」, 订单通过了计划却没有
+            // (prod F006 SO-20261110-0005/0014/0015)。
+            return approveFinanceForOrder(factoryId, order, "销售审批工作流自动通过", null, null, initiatorUserId);
         }
 
         if (instance.getStatus() == InstanceStatus.REJECTED) {
@@ -1426,8 +1432,19 @@ public class SalesServiceImpl implements SalesService {
         return approveFinanceForOrder(factoryId, order, notes, estimatedCost, reviewerId);
     }
 
+    /** 人工审批 (有审批人)。 */
     private SalesOrder approveFinanceForOrder(String factoryId, SalesOrder order, String notes,
                                               java.math.BigDecimal estimatedCost, Long reviewerId) {
+        return approveFinanceForOrder(factoryId, order, notes, estimatedCost, reviewerId, null);
+    }
+
+    /**
+     * @param autoApprovalTriggeredBy 非 null = 系统自动通过, 值是提交审批、触发自动通过的用户;
+     *                                null = 人工审批 ({@code reviewerId} 是审批人)
+     */
+    private SalesOrder approveFinanceForOrder(String factoryId, SalesOrder order, String notes,
+                                              java.math.BigDecimal estimatedCost, Long reviewerId,
+                                              Long autoApprovalTriggeredBy) {
         org.hibernate.Hibernate.initialize(order.getItems());
         // N9 fix (六扇门财审阈值): 免审/阈值未触发的自动通过路径在 CONFIRMED 状态直接调用本方法,
         // 但 sales_order 状态机只有合法边 CONFIRMED → PENDING_FINANCE_REVIEW → FINANCE_APPROVED,
@@ -1459,9 +1476,13 @@ public class SalesServiceImpl implements SalesService {
 
         // 发布财务审核通过事件 → 触发供应链联动（库存检查+生产计划+采购建议）
         try {
-            applicationEventPublisher.publishEvent(
-                    new SalesOrderFinanceApprovedEvent(this, factoryId, saved.getId(), reviewerId));
-            log.info("已发布SalesOrderFinanceApprovedEvent: SO={}", saved.getId());
+            SalesOrderFinanceApprovedEvent approvedEvent = autoApprovalTriggeredBy != null
+                    ? SalesOrderFinanceApprovedEvent.systemAutoApproved(
+                            this, factoryId, saved.getId(), reviewerId, autoApprovalTriggeredBy, notes)
+                    : new SalesOrderFinanceApprovedEvent(this, factoryId, saved.getId(), reviewerId);
+            applicationEventPublisher.publishEvent(approvedEvent);
+            log.info("已发布SalesOrderFinanceApprovedEvent: SO={}, approvalSource={}, approvedBy={}, triggeredBy={}",
+                    saved.getId(), approvedEvent.getApprovalSource(), reviewerId, autoApprovalTriggeredBy);
         } catch (Exception e) {
             log.error("发布SalesOrderFinanceApprovedEvent失败(不影响审批): SO={}", saved.getId(), e);
         }

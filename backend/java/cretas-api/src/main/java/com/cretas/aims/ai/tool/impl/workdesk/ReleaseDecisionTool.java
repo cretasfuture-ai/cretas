@@ -82,6 +82,10 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
     @Autowired(required = false)
     private com.cretas.aims.service.discipline.MaterialBatchReleaseGuard releaseGuard;
 
+    /** D-S411-04 M2: 质检放行判了不合格的原料不能经本工具放回可用。必注入 (缺了直接报错, 不当「没判过」)。 */
+    @Autowired
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
     @Override
     public String getToolName() {
         return "release_decision";
@@ -227,6 +231,16 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
             return result;
         }
 
+        // D-S411-04 M2: 质检放行判了不合格的原料, 这里不能放回可用
+        if (com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.blocks(
+                qcReleaseRecordRepository, batch, newStatus)) {
+            result.put("canDo", false);
+            result.put("status", com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.CODE);
+            result.put("message", "⛔ " + com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.message(batch)
+                    + "。" + com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.HINT);
+            return result;
+        }
+
         // 状态合法性: 是否可改
         if (currentStatus != null && !RELEASABLE_FROM.contains(currentStatus)
                 && currentStatus != MaterialBatchStatus.AVAILABLE
@@ -312,20 +326,21 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
             throw new IllegalStateException(String.format(
                     "批次 %s 当前状态是「%s」, 不可修改 (终态)", batchNumber, statusLabel(prevStatus)));
         }
+        // D-S411-04 M2 (防 client 绕 preview): 质检放行判了不合格的原料不能放回可用
+        com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
+                qcReleaseRecordRepository, batch, newStatus);
 
         boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(prevStatus, newStatus);
         if (release && releaseGuard == null) {
             throw new IllegalStateException("批次放行台账未装配, 拒绝放行 (纪律排查 A3)");
         }
-        batch.setStatus(newStatus);
-        materialBatchRepository.save(batch);
+        // 走共用翻转 (改状态 + 保存 + 放行 / 离开质检中事件); 上面已排除非 FLIP 的情形 (D-S411-04 复审 R1)
+        QualityDispositionInventoryService.applyMaterialFlip(materialBatchRepository, eventPublisher, this, batch, newStatus);
         if (release) {
             releaseGuard.recordIfRelease(factoryId, batch, prevStatus, newStatus,
                     com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_RELEASE_DECISION,
                     notes, null, userId, getUserRole(context));
         }
-        // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
-        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(eventPublisher, this, batch, prevStatus);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("batchNumber", batchNumber);
