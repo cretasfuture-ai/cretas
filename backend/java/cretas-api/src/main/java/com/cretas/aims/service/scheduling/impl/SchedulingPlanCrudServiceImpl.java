@@ -691,13 +691,22 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     public List<ProductionPlanDTO> getPendingBatches(String factoryId, LocalDate startDate, LocalDate endDate) {
         // 不传起始日期时**含已逾期**的待处理计划: 原来下限是今天, 逾期没排的计划 (最需要排的那些)
         // 在排程页里一个都看不到 —— 2026-10-28 F006 三个 PENDING 计划到期 10-26/10-27, 列表为空。
-        List<ProductionPlan> plans = productionPlanRepository
+        List<ProductionPlan> plans = new ArrayList<>(productionPlanRepository
             .findByFactoryIdAndStatusAndExpectedCompletionDateBetween(
                 factoryId,
                 ProductionPlanStatus.PENDING,
                 startDate != null ? startDate : OVERDUE_FLOOR,
                 endDate != null ? endDate : LocalDate.now().plusMonths(1)
-            );
+            ));
+        // D-S411-03 (2026-11-10): 「未定日期」(预计完成日为空) 的待处理计划, BETWEEN 对 NULL 恒不命中,
+        // 原来被静默丢掉 —— 订单没填交期时财审自动生成的 PP-AUTO-* 在排程页里看不到, 生产经理只能先进
+        // 计划编辑手填日期。不传日期范围时 (web-admin 按日产能排程页) 把它们一并列出, 交期为空,
+        // 前端显示「未定日期」; 排程引擎本身就把没交期的排在有交期的后面 (priorityOrder nullsLast)。
+        // 调用方明确传了日期范围时仍原样使用 —— 一个没有日期的计划不属于任何日期范围, 不替调用方放宽。
+        if (startDate == null && endDate == null) {
+            plans.addAll(productionPlanRepository
+                .findByFactoryIdAndStatusAndExpectedCompletionDateIsNull(factoryId, ProductionPlanStatus.PENDING));
+        }
 
         double threshold = getUrgentThreshold(factoryId);
 
