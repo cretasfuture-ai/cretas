@@ -256,9 +256,15 @@ class UrgentInsertScheduleContractTest {
         when(lineSchedules.countByPlanIdAndStatusNot(eq("SP-DAY-A"), any())).thenReturn(4L);
         when(lineSchedules.countByPlanIdAndStatusNot(eq("SP-DAY-B"), any())).thenReturn(2L);
         when(lineSchedules.countDistinctWorkersOnLiveRows(eq(F), eq("SP-DAY-A"), any())).thenReturn(3L);
+        when(schedulingPlans.lockStatusForUpdate(anyString(), eq(F))).thenReturn(Optional.of("draft"));
 
         service.apply(F, slot, insert, null, 7L);
 
+        // 先锁调度计划行再数再写
+        var order = org.mockito.Mockito.inOrder(schedulingPlans, lineSchedules);
+        order.verify(schedulingPlans).lockStatusForUpdate("SP-DAY-A", F);
+        order.verify(lineSchedules).countByPlanIdAndStatusNot("SP-DAY-A", LineSchedule.ScheduleStatus.cancelled);
+        order.verify(schedulingPlans).writeTotals(F, "SP-DAY-A", 4, 3);
         verify(schedulingPlans).writeTotals(F, "SP-NEW", 1, 0);
         verify(schedulingPlans).writeTotals(F, "SP-DAY-A", 4, 3);
         verify(schedulingPlans).writeTotals(F, "SP-DAY-B", 2, 0);

@@ -38,6 +38,10 @@ public final class SchedulingPlanTotals {
      * 现算并只写这两列 (一条 UPDATE, 不整行保存)。调用方手里若还有这个调度计划的实体, 之后不要再整行保存它的旧汇总数。
      */
     public Totals recount(String factoryId, String planId) {
+        // 先锁这一行再数: 两处同时重算同一天时排队, 后一个在 READ COMMITTED 下数到前一个已提交的排程
+        if (planRepository.lockStatusForUpdate(planId, factoryId).isEmpty()) {
+            return new Totals(0, 0); // 不是这家工厂的, 或已删除: 不写
+        }
         Totals totals = count(factoryId, planId);
         planRepository.writeTotals(factoryId, planId, totals.batches(), totals.workers());
         return totals;
