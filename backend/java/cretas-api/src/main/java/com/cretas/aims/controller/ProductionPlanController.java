@@ -475,7 +475,7 @@ public class ProductionPlanController {
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
             @PathVariable @NotNull String planId,
             @RequestHeader("Authorization") String authorization,
-            @Parameter(description = "请求体: {actualQuantity: 500}", required = true)
+            @Parameter(description = "请求体: {actualQuantity: 500, overPlanReason: \"超产原因(超计划时必填)\"}", required = true)
             @RequestBody Map<String, Object> body) {
 
         Object rawQty = body.get("actualQuantity");
@@ -488,8 +488,10 @@ public class ProductionPlanController {
         Long userId = extractUserId(authorization);
         log.info("完成生产: factoryId={}, planId={}, actualQuantity={}, userId={}",
                 factoryId, planId, actualQuantity, userId);
+        Object rawReason = body.get("overPlanReason");
+        String overPlanReason = rawReason != null ? rawReason.toString() : null;
         ProductionPlanDTO plan = productionPlanService.completeProduction(
-                factoryId, planId, actualQuantity, userId);
+                factoryId, planId, actualQuantity, userId, overPlanReason);
         return ApiResponse.success("生产已完成", plan);
     }
 

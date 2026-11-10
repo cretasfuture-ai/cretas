@@ -48,7 +48,7 @@ public class ProcessTimeLimitController {
         return ApiResponse.success(service.statusForPlan(factoryId, planId, processOrder));
     }
 
-    @Operation(summary = "登记开始解冻 / 开始冷藏暂停 (时刻取服务端当前时间)")
+    @Operation(summary = "登记开始解冻 / 开始冷藏暂停 (默认取服务端当前时间; 开始解冻可带 startedAt + backfillReason 补登)")
     @RequirePermission({"production:read_write", "quality:read_write"})
     @PostMapping("/marks")
     public ApiResponse<ProcessTimeMark> startMark(

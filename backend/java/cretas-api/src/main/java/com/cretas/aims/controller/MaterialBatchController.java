@@ -804,11 +804,19 @@ public class MaterialBatchController {
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "批次ID", example = "MB-2025-001")
             @PathVariable @NotBlank String batchId,
-            @Valid @RequestBody UpdateBatchStatusRequest request) {
+            @Valid @RequestBody UpdateBatchStatusRequest request,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
 
         MaterialBatchStatus status = MaterialBatchStatus.valueOf(request.getStatus());
-        log.info("更新批次状态: factoryId={}, batchId={}, status={}", factoryId, batchId, status);
-        MaterialBatchDTO batch = materialBatchService.updateBatchStatus(factoryId, batchId, status);
+        Object rawUserId = httpRequest.getAttribute("userId");
+        Long userId = rawUserId instanceof Number n ? n.longValue() : null;
+        String callerRole = (String) httpRequest.getAttribute("role");
+        log.info("更新批次状态: factoryId={}, batchId={}, status={}, userId={}, role={}",
+                factoryId, batchId, status, userId, callerRole);
+        MaterialBatchDTO batch = materialBatchService.updateBatchStatus(factoryId, batchId, status,
+                new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange(
+                        com.cretas.aims.entity.material.MaterialBatchRelease.Channel.WAREHOUSE_STATUS_CHANGE,
+                        request.getReason(), userId, callerRole));
         return ApiResponse.success("批次状态更新成功", batch);
     }
 

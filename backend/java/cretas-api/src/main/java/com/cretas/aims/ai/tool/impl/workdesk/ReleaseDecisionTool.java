@@ -71,6 +71,17 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
     @Autowired(required = false)
     private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
+    /**
+     * 纪律排查 A3: 这是质检放行的一条路, 必须与 HTTP 质检放行同一权限 ({@code quality:read_write}),
+     * 否则仓管经 AI 说一句「放行」就绕过了「只能质检放行」。required=false 仅为单测; 未装配一律拒绝 (fail-closed)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.tool.ToolRbacGuard rbacGuard;
+
+    /** 纪律排查 A3: 放行台账。required=false 仅为单测; 未装配时放行拒绝 (fail-closed)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.MaterialBatchReleaseGuard releaseGuard;
+
     @Override
     public String getToolName() {
         return "release_decision";
@@ -250,6 +261,16 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
         log.info("release_decision — factory={} batch={} decision={} notes={} userId={}",
                 factoryId, batchNumber, decision, notes, userId);
 
+        if (rbacGuard == null || !rbacGuard.hasAnyPermission(context, "quality:read_write")) {
+            log.warn("W5 AI-RBAC: release_decision 被拒, userId={}", context != null ? context.get("userId") : null);
+            Map<String, Object> denied = new LinkedHashMap<>();
+            denied.put("denied", true);
+            denied.put("message", rbacGuard != null
+                    ? rbacGuard.denyMessage(context, "质检放行/退货决策", "quality:read_write")
+                    : "质检放行权限校验未装配, 拒绝执行");
+            return denied;
+        }
+
         // R3 重做校验 (防 client 绕 preview)
         if (!VALID_DECISIONS.contains(decision)) {
             throw new IllegalArgumentException(
@@ -292,8 +313,17 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
                     "批次 %s 当前状态是「%s」, 不可修改 (终态)", batchNumber, statusLabel(prevStatus)));
         }
 
+        boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(prevStatus, newStatus);
+        if (release && releaseGuard == null) {
+            throw new IllegalStateException("批次放行台账未装配, 拒绝放行 (纪律排查 A3)");
+        }
         batch.setStatus(newStatus);
         materialBatchRepository.save(batch);
+        if (release) {
+            releaseGuard.recordIfRelease(factoryId, batch, prevStatus, newStatus,
+                    com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_RELEASE_DECISION,
+                    notes, null, userId, getUserRole(context));
+        }
         // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
         com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(eventPublisher, this, batch, prevStatus);
 

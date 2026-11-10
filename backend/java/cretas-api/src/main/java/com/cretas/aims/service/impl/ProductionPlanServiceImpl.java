@@ -313,6 +313,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Autowired(required = false)
     private ProductProcessWorkflowRepository productProcessWorkflowRepository;
 
+    /** 工厂纪律口径 (A7 完工必须结单 / A11 仓库多收) 的唯一读取处。required=false 兼容单测, 未注入按默认 (最严)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
+
     /** S4-08 开工前的缺料闸 (工厂开关默认关). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
@@ -3479,7 +3483,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public ProductionPlanDTO completeProduction(String factoryId, String planId,
-                                                BigDecimal actualQuantity, Long completedBy) {
+                                                BigDecimal actualQuantity, Long completedBy,
+                                                String overPlanReason) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
         requireVisiblePlan(factoryId, plan);
@@ -3489,15 +3494,27 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("当前生产计划不属于该工厂, 无法操作");
         }
         if (requiresProductionSettlement(factoryId)) {
-            throw new BusinessException(409, "六扇门生产完成必须先核对结单")
+            throw new BusinessException(409, "本厂设置为生产完成必须先核对结单")
                     .withCode("PRODUCTION_SETTLEMENT_REQUIRED")
-                    .withHint("请使用“核对结单”录入实际产量、实际领用明细和人效后再完成")
+                    .withHint("请使用“核对结单”录入实际产量、实际领用明细和人效后再完成；"
+                            + "是否必须结单由本厂在「业务阈值配置 → 生产」里设置 (production.completion.require_settlement)")
                     .withHintTarget("核对结单");
         }
         if (plan.getStatus() != ProductionPlanStatus.IN_PROGRESS
                 && plan.getStatus() != ProductionPlanStatus.PENDING) {
             throw new BusinessException(409, "只能完成未完成的生产计划")
                     .withHint("请刷新生产计划列表查看最新状态");
+        }
+        // 纪律排查 A7: 直接完工超产也要原因 (结单路径一直要, 直接完工原来不要)
+        BigDecimal plannedQty = plan.getPlannedQuantity();
+        boolean overPlan = actualQuantity != null && plannedQty != null
+                && plannedQty.signum() > 0 && actualQuantity.compareTo(plannedQty) > 0;
+        if (overPlan && isBlank(overPlanReason)) {
+            throw new BusinessException(409, "实际产量超过计划产量, 必须填写超产原因")
+                    .withCode("PRODUCTION_OVER_PLAN_REASON_REQUIRED")
+                    .withHint("计划 " + plannedQty.stripTrailingZeros().toPlainString() + ", 实际 "
+                            + actualQuantity.stripTrailingZeros().toPlainString() + "; 请填写超产原因后再完成")
+                    .withHintTarget("超产原因");
         }
 
         runConfiguredValidation(factoryId, "COMPLETE", java.util.Map.of(
@@ -3511,6 +3528,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         }
         plan.setEndTime(LocalDateTime.now());
         plan.setActualQuantity(actualQuantity);
+        plan.setOverPlanReason(overPlan ? overPlanReason.trim() : null);
         plan = productionPlanRepository.save(plan);
 
         // GAP 6 (F006): 计划级完工应级联完成关联批次并发 BatchCompletedEvent,
@@ -5940,10 +5958,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHintTarget("仓库实收");
         }
         if (received.compareTo(reported) > 0) {
-            throw new BusinessException(409, "仓库实收数量不能超过生产报产数量")
-                    .withCode("RECEIPT_EXCEEDS_PRODUCTION_REPORTED")
-                    .withHint("生产报产: " + reported + ", 仓库实收: " + received + "; 请先让生产修正结单或拆分补录")
-                    .withHintTarget("仓库实收");
+            // 纪律排查 A11: 多收怎么处理由工厂选 (硬拦 / 比例内填原因放行 / 一律填原因放行), 默认硬拦 = 原口径。
+            // 放行的多收与少收走同一套: 超出称重容差就必须填差异原因 + 选责任侧, 并进中转挂账。
+            assertOverReceiptAllowed(factoryId, reported, received);
         }
 
         String authoritativeUnit = resolveSettlementQuantityUnit(settlement);
@@ -9134,6 +9151,38 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         return raw.substring(0, 55) + "-" + suffix;
     }
 
+    /**
+     * 纪律排查 A11: 仓库实收多于生产报产时, 按本厂配置判断能不能收 (能收的还要在后面填原因 + 选责任侧)。
+     * 未注入策略 (只在单测里) 按默认硬拦。
+     */
+    private void assertOverReceiptAllowed(String factoryId, BigDecimal reported, BigDecimal received) {
+        com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveRule rule = disciplinePolicy != null
+                ? disciplinePolicy.overReceive(factoryId)
+                : new com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveRule(
+                        com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveMode.BLOCK, null,
+                        BigDecimal.ZERO);
+        if (rule.allows(reported, received)) {
+            return;
+        }
+        String counts = "生产报产: " + reported.stripTrailingZeros().toPlainString()
+                + ", 仓库实收: " + received.stripTrailingZeros().toPlainString();
+        if (rule.mode() == com.cretas.aims.service.discipline.FactoryDisciplinePolicy.OverReceiveMode.WITHIN_RATE) {
+            throw new BusinessException(409, "仓库实收超过本厂允许的多收比例 "
+                    + rule.rate().movePointRight(2).stripTrailingZeros().toPlainString() + "%")
+                    .withCode("RECEIPT_EXCEEDS_PRODUCTION_REPORTED")
+                    .withHint(counts + ", 最多可收 " + rule.maxAllowed(reported).stripTrailingZeros().toPlainString()
+                            + "; 请先让生产修正结单或拆分补录")
+                    .withHintTarget("仓库实收");
+        }
+        String configNote = rule.rawMode() != null && !rule.rawMode().isBlank()
+                && !"BLOCK".equalsIgnoreCase(rule.rawMode().trim())
+                ? " (本厂多收配置值「" + rule.rawMode().trim() + "」认不出, 按硬拦处理)" : "";
+        throw new BusinessException(409, "仓库实收数量不能超过生产报产数量")
+                .withCode("RECEIPT_EXCEEDS_PRODUCTION_REPORTED")
+                .withHint(counts + "; 本厂设置为多收硬拦" + configNote + "; 请先让生产修正结单或拆分补录")
+                .withHintTarget("仓库实收");
+    }
+
     private ProductionTransitLedger createTransitLedger(ProductionSettlement settlement,
                                                         BigDecimal reported,
                                                         BigDecimal received,
@@ -9222,19 +9271,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .toList();
     }
 
+    /**
+     * 纪律排查 A7: 「完工必须先结单」是工厂开关 (默认开), 不再看 skip_process_reporting_default + 写死 F006。
+     * 存量工厂的原口径由 V20261110_81 逐厂回填。未注入策略 (只在单测里) 按默认开。
+     */
     private boolean requiresProductionSettlement(String factoryId) {
-        if (factorySettingsRepository != null) {
-            Boolean skipProcessReportingDefault =
-                    factorySettingsRepository.findSkipProcessReportingDefaultByFactoryId(factoryId);
-            if (skipProcessReportingDefault != null) {
-                return Boolean.TRUE.equals(skipProcessReportingDefault);
-            }
-        }
-        return isLiushanmenFactory(factoryId);
-    }
-
-    private boolean isLiushanmenFactory(String factoryId) {
-        return "F006".equalsIgnoreCase(factoryId);
+        return disciplinePolicy == null || disciplinePolicy.requireSettlementBeforeComplete(factoryId);
     }
 
     private static boolean isBlank(String value) {

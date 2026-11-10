@@ -167,6 +167,10 @@ public class ProductionPlan extends BaseEntity {
     @Column(name = "cancel_reason", columnDefinition = "TEXT")
     private String cancelReason;
 
+    /** 直接完工 (不经结单) 时实际产量超过计划的原因 (纪律排查 A7)。结单路径的超产原因在结单上。 */
+    @Column(name = "over_plan_reason", length = 500)
+    private String overPlanReason;
+
     @Column(name = "cancelled_by")
     private Long cancelledBy;
 

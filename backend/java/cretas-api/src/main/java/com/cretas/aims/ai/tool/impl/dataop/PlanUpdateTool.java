@@ -191,7 +191,9 @@ public class PlanUpdateTool extends AbstractBusinessTool {
                 //    这么写死了 0L 的, 而 prod 的 users 表里没有 id=0。
                 case "COMPLETED" -> productionPlanService.completeProduction(factoryId, planId,
                         plannedQuantity != null ? plannedQuantity : existing.getPlannedQuantity(),
-                        getUserId(context));
+                        getUserId(context),
+                        // A7: 超产时服务端要原因; 用户在对话里给的 reason 原样带过去, 没给就由服务端 409 追问
+                        reason);
                 case "CANCELLED" -> {
                     productionPlanService.cancelProductionPlan(factoryId, planId,
                             reason != null ? reason : "AI工具取消");

@@ -290,7 +290,7 @@ class ProductionPlanSettlementTest {
         when(productionPlanRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan()));
 
         BusinessException ex = assertThrows(BusinessException.class,
-                () -> service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("90"), 1309L));
+                () -> service.completeProduction(FACTORY_ID, PLAN_ID, new BigDecimal("90"), 1309L, null));
 
         assertEquals(409, ex.getCode());
         assertEquals("PRODUCTION_SETTLEMENT_REQUIRED", ex.getErrorCode());

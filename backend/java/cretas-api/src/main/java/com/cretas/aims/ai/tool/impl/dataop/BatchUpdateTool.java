@@ -174,7 +174,11 @@ public class BatchUpdateTool extends AbstractBusinessTool {
             if (targetStatus == null) {
                 return Map.of("success", false, "message","不支持的批次状态: " + status + "。支持的状态: " + STATUS_ALIAS_MAP.keySet());
             }
-            updated = materialBatchService.updateBatchStatus(factoryId, batchId, targetStatus);
+            // 纪律排查 A3: 改状态构成放行时按本厂放行规则判 (默认只能质检放行), 放行必留痕
+            updated = materialBatchService.updateBatchStatus(factoryId, batchId, targetStatus,
+                    new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.ManualChange(
+                            com.cretas.aims.entity.material.MaterialBatchRelease.Channel.AI_BATCH_UPDATE,
+                            reason, userId, getUserRole(context)));
             updatedFields.put("status", targetStatus.getDisplayName());
         }
 

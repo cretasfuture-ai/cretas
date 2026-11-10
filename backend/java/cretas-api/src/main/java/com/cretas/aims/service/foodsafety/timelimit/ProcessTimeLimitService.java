@@ -95,6 +95,12 @@ public class ProcessTimeLimitService {
     public static final String CODE_INVALID = "TIME_LIMIT_INVALID_REQUEST";
     public static final String CODE_EVENT_CLOSED = "TIME_LIMIT_EVENT_CLOSED";
     public static final String CODE_PAUSE_OPEN = "TIME_LIMIT_PAUSE_ALREADY_OPEN";
+    /** 纪律排查 A13: 补登解冻开始时间没填原因。 */
+    public static final String CODE_BACKFILL_REASON_REQUIRED = "TIME_LIMIT_BACKFILL_REASON_REQUIRED";
+    /** 纪律排查 A13: 补登时间超出本厂允许的最长补登时长 (含配置为 0 = 不允许补登)。 */
+    public static final String CODE_BACKFILL_TOO_EARLY = "TIME_LIMIT_BACKFILL_TOO_EARLY";
+    /** 补登时允许的客户端时钟误差: 这个范围内的时间按「现在」处理, 不算补登。 */
+    static final long BACKFILL_CLOCK_SKEW_MINUTES = 1;
 
     public static final class TargetType {
         public static final String SEMI_FINISHED = "SEMI_FINISHED";
@@ -155,6 +161,15 @@ public class ProcessTimeLimitService {
     @Lazy
     private PendingInterimFeedService pendingInterimFeedService;
 
+    /** 纪律排查 A13: 解冻开始最多可往前补登多久 (工厂配置)。未注入 (单测) 按默认值。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
+
+    /** 测试 / 装配用。 */
+    public void setDisciplinePolicy(com.cretas.aims.service.discipline.FactoryDisciplinePolicy policy) {
+        this.disciplinePolicy = policy;
+    }
+
     /** 测试 / 装配用。 */
     public void setPendingInterimFeedService(PendingInterimFeedService service) {
         this.pendingInterimFeedService = service;
@@ -190,7 +205,14 @@ public class ProcessTimeLimitService {
     }
 
     /** 登记请求。kind = START / PAUSE。 */
-    public record MarkCommand(String targetType, String targetId, String kind, String code, String note) {
+    /**
+     * @param startedAt      纪律排查 A13: 只对「开始解冻」有效 —— 实际开始时间 (补登); 为空 = 现在。
+     *                       早于现在即为补登: 必须填 backfillReason, 且不得早于本厂允许的最长补登时长。
+     *                       冷藏暂停仍只收现在 (往前补一条暂停能把已超时的料救回来)。
+     * @param backfillReason 补登原因, 落库留痕。
+     */
+    public record MarkCommand(String targetType, String targetId, String kind, String code, String note,
+                              LocalDateTime startedAt, String backfillReason) {
     }
 
     /** 谁在领: 工序任务 (可能为空) + 这道的端口。 */
@@ -566,8 +588,13 @@ public class ProcessTimeLimitService {
     // ===================== 人工登记 =====================
 
     /**
-     * 登记解冻开始 / 开始暂停。时刻取服务端当前时间。
+     * 登记解冻开始 / 开始暂停。时刻默认取服务端当前时间。
      * 解冻重复登记返回第一条: 再点一次不能把起算点往后挪。
+     *
+     * <p>纪律排查 A13 (Steve 2026-11-10): 解冻开始允许补登实际开始时间 —— 早上 6 点开始解冻、8 点才登记,
+     * 原来只能记成 8 点, 计时失真且偏宽。补登必须填原因并留痕 (backfill_reason + 登记时刻 created_at),
+     * 最多往前补多久由工厂配置 ({@code production.time_limit.thaw_backfill_max_minutes}, 0 = 不允许补登)。
+     * 补登只会把起算点往<b>前</b>挪 (更严), 不会把超时的料救回来。冷藏暂停仍只收当前时刻。
      */
     @Transactional
     public ProcessTimeMark startMark(String factoryId, MarkCommand cmd, Long userId, String userName) {
@@ -594,16 +621,52 @@ public class ProcessTimeLimitService {
                     .withCode(CODE_PAUSE_OPEN)
                     .withHint("请先结束上一次暂停");
         }
+        LocalDateTime at = now();
+        String backfillReason = null;
+        if (cmd.startedAt() != null) {
+            LocalDateTime claimed = cmd.startedAt();
+            if (claimed.isAfter(at.plusMinutes(BACKFILL_CLOCK_SKEW_MINUTES))) {
+                throw invalid("开始时间不能晚于现在");
+            }
+            if (claimed.isBefore(at.minusMinutes(BACKFILL_CLOCK_SKEW_MINUTES))) {
+                if (pause) {
+                    throw invalid("冷藏暂停只能登记当前时刻, 不能补登");
+                }
+                int maxMinutes = disciplinePolicy != null
+                        ? disciplinePolicy.thawBackfillMaxMinutes(factoryId)
+                        : com.cretas.aims.service.discipline.FactoryDisciplinePolicy.DEFAULT_THAW_BACKFILL_MAX_MINUTES_PUBLIC;
+                LocalDateTime earliest = at.minusMinutes(maxMinutes);
+                if (maxMinutes <= 0 || claimed.isBefore(earliest)) {
+                    throw new BusinessException(409, maxMinutes <= 0
+                            ? "本厂设置为解冻开始不允许补登, 只能登记当前时刻"
+                            : "补登的开始解冻时间超出本厂允许的范围 (最多往前补 " + maxMinutes + " 分钟, 最早 "
+                                    + earliest.format(TIME_TEXT) + ")")
+                            .withCode(CODE_BACKFILL_TOO_EARLY)
+                            .withHint("最长补登时长由本厂在「业务阈值配置 → 生产」里设置 (production.time_limit.thaw_backfill_max_minutes)")
+                            .withHintTarget("开始时间");
+                }
+                if (cmd.backfillReason() == null || cmd.backfillReason().isBlank()) {
+                    throw new BusinessException(409, "补登开始解冻时间必须填写补登原因")
+                            .withCode(CODE_BACKFILL_REASON_REQUIRED)
+                            .withHint("请说明为什么没有在开始解冻时当场登记")
+                            .withHintTarget("补登原因");
+                }
+                at = claimed;
+                String reason = cmd.backfillReason().trim();
+                backfillReason = reason.length() > 500 ? reason.substring(0, 500) : reason;
+            }
+        }
         return markRepository.save(ProcessTimeMark.builder()
                 .factoryId(factoryId)
                 .targetType(cmd.targetType())
                 .targetId(cmd.targetId())
                 .markKind(kind)
                 .markCode(cmd.code())
-                .startedAt(now())
+                .startedAt(at)
                 .startedBy(userId)
                 .startedByName(userName)
                 .note(cmd.note())
+                .backfillReason(backfillReason)
                 .build());
     }
 

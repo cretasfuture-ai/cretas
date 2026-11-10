@@ -148,6 +148,10 @@ public class QualityDispositionInventoryService {
     @Autowired(required = false)
     private ProductionBatchRepository productionBatchRepository;
 
+    /** 纪律排查 A3: 质检处置放行同样写放行台账 (放行人 = 当前登录人, 拿不到用质检员)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.MaterialBatchReleaseGuard materialBatchReleaseGuard;
+
     @Autowired(required = false)
     private FinishedGoodsBatchRepository finishedGoodsBatchRepository;
 
@@ -692,6 +696,15 @@ public class QualityDispositionInventoryService {
             MaterialBatchStatus before = mb.getStatus();
             mb.setStatus(target);
             materialBatchRepository.save(mb);
+            if (materialBatchReleaseGuard != null) {
+                Long operator = com.cretas.aims.utils.SecurityUtils.currentUserId();
+                materialBatchReleaseGuard.recordIfRelease(inspection.getFactoryId(), mb, before, target,
+                        com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_DISPOSITION,
+                        "质检单处置放行", inspection.getId(),
+                        operator != null ? operator : inspection.getInspectorId(), null);
+            } else if (com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(before, target)) {
+                log.warn("质检处置放行未写放行台账 (台账未装配): batch={}", mb.getBatchNumber());
+            }
             // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
             com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(eventPublisher, this, mb, before);
         }

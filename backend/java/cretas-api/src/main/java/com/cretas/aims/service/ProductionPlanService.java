@@ -214,9 +214,11 @@ public interface ProductionPlanService {
      *
      * @param completedBy 点「完成生产」的那个人；确实拿不到时传 {@code null}，
      *                    ⛔ 不要传 0L 或任何写死的 id
+     * @param overPlanReason 实际产量超过计划产量时的超产原因 (纪律排查 A7: 直接完工也要原因)；
+     *                       不超产时可为 {@code null}。同样做成必填参数而不是重载。
      */
     ProductionPlanDTO completeProduction(String factoryId, String planId,
-                                         BigDecimal actualQuantity, Long completedBy);
+                                         BigDecimal actualQuantity, Long completedBy, String overPlanReason);
 
     ProductionSettlementResponse settleProduction(String factoryId, String planId,
                                                   ProductionSettlementRequest request, Long settledBy);

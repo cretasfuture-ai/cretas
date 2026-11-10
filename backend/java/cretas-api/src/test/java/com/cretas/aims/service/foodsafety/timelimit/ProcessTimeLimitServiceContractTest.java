@@ -654,7 +654,7 @@ class ProcessTimeLimitServiceContractTest {
                 .markCode(ProcessTimeLimitConfig.MARK_THAW).startedAt(T0).build();
         when(markRepo.findByTargets(F, "RAW_MATERIAL_BATCH", List.of("A"))).thenReturn(List.of(first));
         ProcessTimeMark again = service.startMark(F, new ProcessTimeLimitService.MarkCommand(
-                "RAW_MATERIAL_BATCH", "A", "START", "THAW", null), 7L, "op");
+                "RAW_MATERIAL_BATCH", "A", "START", "THAW", null, null, null), 7L, "op");
         assertEquals(T0, again.getStartedAt());
         verify(markRepo, never()).save(any());
     }
@@ -664,20 +664,20 @@ class ProcessTimeLimitServiceContractTest {
     void markScopeAndServerTime() {
         when(materialRepo.findByIdAndFactoryId("X", F)).thenReturn(Optional.empty());
         assertEquals(404, assertThrows(BusinessException.class, () -> service.startMark(F,
-                new ProcessTimeLimitService.MarkCommand("RAW_MATERIAL_BATCH", "X", "START", "THAW", null), 7L, "op"))
+                new ProcessTimeLimitService.MarkCommand("RAW_MATERIAL_BATCH", "X", "START", "THAW", null, null, null), 7L, "op"))
                 .getCode());
 
         raw("A", null, T0);
         when(markRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         now = T0.plusMinutes(5);
         ProcessTimeMark pause = service.startMark(F, new ProcessTimeLimitService.MarkCommand(
-                "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null), 7L, "op");
+                "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null, null, null), 7L, "op");
         assertEquals(now, pause.getStartedAt());
         assertNull(pause.getEndedAt());
 
         when(markRepo.findByTargets(F, "RAW_MATERIAL_BATCH", List.of("A"))).thenReturn(List.of(pause));
         assertEquals(ProcessTimeLimitService.CODE_PAUSE_OPEN, assertThrows(BusinessException.class,
                 () -> service.startMark(F, new ProcessTimeLimitService.MarkCommand(
-                        "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null), 7L, "op")).getErrorCode());
+                        "RAW_MATERIAL_BATCH", "A", "PAUSE", "COLD_STORAGE", null, null, null), 7L, "op")).getErrorCode());
     }
 }
