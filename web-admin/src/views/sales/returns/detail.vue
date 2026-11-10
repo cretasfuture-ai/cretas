@@ -15,6 +15,9 @@ import { formatDateTime } from '@/utils/dateFormat';
 import { VOUCHER_STATUS_LABEL } from '@/api/voucher';
 import type { TableRow } from '@/types/api';
 import { ApiError } from '@/types/api';
+import SelfApprovalReasonField from '@/components/approval/SelfApprovalReasonField.vue';
+import { useSelfApprovalSwitch } from '@/composables/useSelfApprovalSwitch';
+import { isSelfApproval, validateSelfApprovalReason } from '@/utils/selfApproval';
 import { createPeriodRecoveryLocation, type PeriodRecoveryLocation } from '@/utils/accountingPeriodRecovery';
 import { getFactoryRecall } from '@/api/factoryRecall';
 import { getReturnFinancialFollowUp, resubmitReturnAdjustment, financialStatusText, type ReturnFinancialFollowUp } from '@/api/returnFinancialFollowUp';
@@ -63,6 +66,11 @@ const refundPayVisible = ref(false);
 const refundPaymentMethod = ref<'CASH' | 'BANK_TRANSFER'>('CASH');
 const refundPaymentReference = ref('');
 const refundPaymentRemark = ref('');
+// 本人审批 (纪律排查 B15): 退款申请人自己审批 / 登记付款 / 确认撤销, 只在本厂开了「允许本人审批」时可办, 每次写原因
+const { allowSelfApproval } = useSelfApprovalSwitch(factoryId);
+const isRefundCreator = computed(() => isSelfApproval(refund.value?.request?.createdBy, authStore.user?.id));
+const refundSelfBlocked = computed(() => isRefundCreator.value && !allowSelfApproval.value);
+const refundSelfPaidReason = ref('');
 const refundPromptOpen = ref(false);
 const refundLedgerElement = ref<HTMLElement | null>(null);
 const reversalDialogVisible = ref(false);
@@ -372,8 +380,18 @@ const canReviewRefundReversal = computed(() => {
   const reversal = request?.reversal;
   if (!canFinanceApprove.value || reversal?.status !== 'PENDING') return false;
   const operatorId = reversal.ledger?.operatedBy;
-  return operatorId != null && String(operatorId) !== String(authStore.user?.id ?? '');
+  if (operatorId == null) return false;
+  return !isSelfApproval(operatorId, authStore.user?.id) || allowSelfApproval.value;
 });
+
+/** 本人确认 / 驳回自己提交的撤销申请 (本厂开了「允许本人审批」才走到这里)。 */
+const isSelfReversalReview = computed(() =>
+  isSelfApproval(refund.value?.request?.reversal?.ledger?.operatedBy, authStore.user?.id));
+
+const SELF_REASON_PROMPT = {
+  inputPlaceholder: '这是你自己提交的单：请写明为什么由本人办理（例如：本厂只有我一个财务）',
+  inputValidator: (value: string) => validateSelfApprovalReason(value) ?? true,
+};
 
 function openRefundReversal() {
   if (!canRequestRefundReversal.value || !refund.value?.request) return;
@@ -426,19 +444,30 @@ async function approveRefundReversal() {
   if (!request || !reversal || !canReviewRefundReversal.value || refundSubmitting.value || refundPromptOpen.value) return;
   const context = captureRefundContext();
   refundPromptOpen.value = true;
+  let selfReason: string | undefined;
   try {
-    await ElMessageBox.confirm(
-      `确认款项已收回并撤销退款申请 ${request.requestNumber}？审批后会生成反向应收调整并更新余额。`,
-      '确认款项已收回并撤销',
-      { confirmButtonText: '确认撤销', cancelButtonText: '取消', type: 'warning' },
-    );
+    if (isSelfReversalReview.value) {
+      const { value } = await ElMessageBox.prompt(
+        `这是你自己提交的撤销申请（${request.requestNumber}）。本厂已允许本人审批，确认款项已收回后会生成反向应收调整并更新余额，审批记录标注为本人审批。`,
+        '本人确认款项已收回并撤销',
+        { confirmButtonText: '确认撤销', cancelButtonText: '取消', type: 'warning', ...SELF_REASON_PROMPT },
+      );
+      selfReason = value.trim();
+    } else {
+      await ElMessageBox.confirm(
+        `确认款项已收回并撤销退款申请 ${request.requestNumber}？审批后会生成反向应收调整并更新余额。`,
+        '确认款项已收回并撤销',
+        { confirmButtonText: '确认撤销', cancelButtonText: '取消', type: 'warning' },
+      );
+    }
   } catch { return; }
   finally { if (isCurrentRefundContext(context)) refundPromptOpen.value = false; }
   if (!isCurrentRefundContext(context) || refundSubmitting.value) return;
   refundSubmitting.value = true;
   refundError.value = '';
   try {
-    await approveReturnRefundReversal(context.factoryId, context.returnOrderId, request.id, reversal.ledger.id, { silent: true });
+    await approveReturnRefundReversal(context.factoryId, context.returnOrderId, request.id, reversal.ledger.id,
+      { silent: true, selfApprovalReason: selfReason });
     if (!isCurrentRefundContext(context)) return;
     ElMessage.success('已确认款项收回，退款已撤销');
     await loadData();
@@ -556,19 +585,30 @@ async function submitRefundRequest() {
 async function approveRefundRequest() {
   const request = refund.value?.request;
   if (!request || request.status !== 'FINANCE_REVIEW' || !canFinanceApprove.value
-    || String(request.createdBy ?? '') === String(authStore.user?.id ?? '') || refundSubmitting.value) return;
+    || refundSelfBlocked.value || refundSubmitting.value) return;
+  const self = isRefundCreator.value;
   const context = captureRefundContext();
   refundPromptOpen.value = true;
   try {
-    const { value } = await ElMessageBox.prompt(
-      '请先核对退货应收冲减和收款证据，再批准退款。',
-      '批准客户退款',
-      { inputPlaceholder: '可填写核对说明', confirmButtonText: '确认批准', cancelButtonText: '取消' },
-    );
+    const { value } = self
+      ? await ElMessageBox.prompt(
+        '这是你自己提交的退款申请。本厂已允许本人审批：请先核对退货应收冲减和收款证据，并写明本人审批原因，审批记录会标注为本人审批。',
+        '本人批准客户退款',
+        { confirmButtonText: '确认批准', cancelButtonText: '取消', ...SELF_REASON_PROMPT },
+      )
+      : await ElMessageBox.prompt(
+        '请先核对退货应收冲减和收款证据，再批准退款。',
+        '批准客户退款',
+        { inputPlaceholder: '可填写核对说明', confirmButtonText: '确认批准', cancelButtonText: '取消' },
+      );
     if (!isCurrentRefundContext(context)) return;
     refundSubmitting.value = true;
     refundError.value = '';
-    await approveReturnRefund(context.factoryId, context.returnOrderId, value.trim());
+    if (self) {
+      await approveReturnRefund(context.factoryId, context.returnOrderId, '', value.trim());
+    } else {
+      await approveReturnRefund(context.factoryId, context.returnOrderId, value.trim());
+    }
     if (!isCurrentRefundContext(context)) return;
     refundPromptOpen.value = false;
     refundSubmitting.value = false;
@@ -586,11 +626,11 @@ async function approveRefundRequest() {
 
 function openRefundPay() {
   const request = refund.value?.request;
-  if (!request || request.status !== 'APPROVED' || !canFinanceApprove.value
-    || String(request.createdBy ?? '') === String(authStore.user?.id ?? '')) return;
+  if (!request || request.status !== 'APPROVED' || !canFinanceApprove.value || refundSelfBlocked.value) return;
   refundPaymentMethod.value = 'CASH';
   refundPaymentReference.value = '';
   refundPaymentRemark.value = '';
+  refundSelfPaidReason.value = '';
   refundError.value = '';
   refundPayVisible.value = true;
 }
@@ -608,11 +648,24 @@ async function submitRefundPaid() {
     refundError.value = '请填写付款说明';
     return;
   }
+  const selfPaid = isRefundCreator.value;
+  if (selfPaid) {
+    const invalid = validateSelfApprovalReason(refundSelfPaidReason.value);
+    if (invalid) {
+      refundError.value = invalid;
+      return;
+    }
+  }
   const context = captureRefundContext();
   refundSubmitting.value = true;
   refundError.value = '';
   try {
-    await markReturnRefundPaid(context.factoryId, context.returnOrderId, refundPaymentMethod.value, paymentReference, remark);
+    if (selfPaid) {
+      await markReturnRefundPaid(context.factoryId, context.returnOrderId, refundPaymentMethod.value, paymentReference, remark,
+        refundSelfPaidReason.value.trim());
+    } else {
+      await markReturnRefundPaid(context.factoryId, context.returnOrderId, refundPaymentMethod.value, paymentReference, remark);
+    }
     if (!isCurrentRefundContext(context)) return;
     refundPayVisible.value = false;
     refundSubmitting.value = false;
@@ -908,7 +961,7 @@ function goBack() {
             <el-button
               v-if="refund.request?.status === 'FINANCE_REVIEW'"
               type="success"
-              :disabled="!canFinanceApprove || String(refund.request.createdBy ?? '') === String(authStore.user?.id ?? '') || refundSubmitting || refundPromptOpen"
+              :disabled="!canFinanceApprove || refundSelfBlocked || refundSubmitting || refundPromptOpen"
               :loading="refundSubmitting"
               @click="approveRefundRequest"
             >批准退款</el-button>
@@ -916,13 +969,13 @@ function goBack() {
               v-if="refund.request && (refund.request.status === 'PENDING' || refund.request.status === 'FINANCE_REVIEW')"
               type="danger"
               plain
-              :disabled="!canFinanceApprove || String(refund.request.createdBy ?? '') === String(authStore.user?.id ?? '') || refundSubmitting || refundPromptOpen"
+              :disabled="!canFinanceApprove || refundSelfBlocked || refundSubmitting || refundPromptOpen"
               @click="rejectRefundRequest"
             >驳回退款</el-button>
             <el-button
               v-if="refund.request?.status === 'APPROVED'"
               type="primary"
-              :disabled="!canFinanceApprove || String(refund.request.createdBy ?? '') === String(authStore.user?.id ?? '') || refundSubmitting"
+              :disabled="!canFinanceApprove || refundSelfBlocked || refundSubmitting"
               @click="openRefundPay"
             >登记已退款</el-button>
             <el-button
@@ -1068,6 +1121,7 @@ function goBack() {
             <el-input v-model="refundPaymentRemark" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="填写实际退款说明" />
           </el-form-item>
         </el-form>
+        <SelfApprovalReasonField v-if="isRefundCreator" v-model="refundSelfPaidReason" action-label="登记付款" />
         <template #footer>
           <el-button @click="refundPayVisible = false">取消</el-button>
           <el-button type="primary" :loading="refundSubmitting" @click="submitRefundPaid">确认登记</el-button>

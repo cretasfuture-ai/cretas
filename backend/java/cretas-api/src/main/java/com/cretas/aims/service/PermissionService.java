@@ -163,6 +163,15 @@ public interface PermissionService {
     Map<String, String> resolveModuleLevels(User user);
 
     /**
+     * 本厂审批权限一览 (纪律排查 B1–B3/B11/B15): 审批码 → 岗位 → {@code "<granted>|<source>"},
+     * granted = {@code Y}/{@code N}; source = {@code FACTORY} (本厂改过) / {@code PLATFORM} (平台默认) /
+     * {@code DEFAULT} (系统默认 = 原名单) / {@code ALWAYS} (超管恒有)。走与 {@link #hasPermission} 同一条解析链。
+     */
+    default Map<String, Map<String, String>> approvalGrants(String factoryId) {
+        return Map.of();
+    }
+
+    /**
      * Canonical authorization snapshot. Known empty successful queries may use the existing
      * fallback; unavailable authorization repositories must throw rather than restore grants.
      * Implementations without this strict capability are rejected by authorization callers.

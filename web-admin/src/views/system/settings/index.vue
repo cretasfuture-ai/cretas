@@ -4,11 +4,15 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, put } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Setting, Bell, Lock, Monitor, Coin, Odometer } from '@element-plus/icons-vue';
+import { Setting, Bell, Lock, Monitor, Coin, Odometer, Stamp } from '@element-plus/icons-vue';
+import ApprovalPolicySettings from '@/components/approval/ApprovalPolicySettings.vue';
+import ApprovalPermissionMatrix from '@/components/approval/ApprovalPermissionMatrix.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
+// 审批规则 (允许本人审批 / 改价阈值): 后端只许工厂超管 / 权限管理员改, 其他角色不显示这一页
+const canEditApprovalPolicy = computed(() => authStore.hasRole(['factory_super_admin', 'permission_admin']));
 const canWrite = computed(() => permissionStore.canWrite('system'));
 
 const loading = ref(false);
@@ -499,6 +503,21 @@ async function saveCostSettings() {
                 </el-button>
               </el-form-item>
             </el-form>
+          </div>
+        </el-tab-pane>
+
+        <!-- 审批规则 (纪律排查 B1–B3 / B11 / B15) -->
+        <el-tab-pane v-if="canEditApprovalPolicy && factoryId" name="approval">
+          <template #label>
+            <span class="tab-label">
+              <el-icon><Stamp /></el-icon>
+              审批规则
+            </span>
+          </template>
+          <div class="settings-section">
+            <ApprovalPolicySettings :factory-id="factoryId" />
+            <el-divider content-position="left">谁能审批</el-divider>
+            <ApprovalPermissionMatrix :factory-id="factoryId" />
           </div>
         </el-tab-pane>
       </el-tabs>

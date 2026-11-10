@@ -170,6 +170,12 @@ export interface FactorySettings {
   requireRequisitionBeforeReport?: boolean
   /** S4-08 缺料时拦开工 (默认 false = 开工照旧) */
   blockStartOnOpenShortage?: boolean
+  /** 纪律排查 B1–B3/B11/B15 允许本人审批 (默认 false = 四眼; true = 提交人可自批但须写原因并留痕) */
+  allowSelfApproval?: boolean
+  /** 纪律排查 B11 改价审批阈值: 降价超过此百分比需审批 (默认 10) */
+  priceDecreaseApprovalPct?: number
+  /** 纪律排查 B11 改价审批阈值: 涨价超过此百分比需审批 (默认 20) */
+  priceIncreaseApprovalPct?: number
   allowSelfRegistration?: boolean
   requireAdminApproval?: boolean
   defaultUserRole?: string

@@ -265,6 +265,8 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         toggles.put("costCalculation", settings.getEnableCostCalculation());
         toggles.put("equipmentManagement", settings.getEnableEquipmentManagement());
         toggles.put("attendance", settings.getEnableAttendance());
+        // 纪律排查 B1–B3/B11/B15: 审批页据此决定本人审批时给不给原因框 (只读; 后端各出口仍自己把关)
+        toggles.put("allowSelfApproval", Boolean.TRUE.equals(settings.getAllowSelfApproval()));
 
         return toggles;
     }
