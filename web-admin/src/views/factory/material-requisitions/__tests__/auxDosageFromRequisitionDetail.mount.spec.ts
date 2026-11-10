@@ -214,6 +214,9 @@ describe('确认领料 — 辅料配比来自领料单详情, 仓管不再碰生
     expect(aux.autoLocked, '没有用上详情里的 dosagePerKgG').toBe(true);
     expect(aux.pickedInput).toBe(0.2514);
     expect(vm.auxAutoCalcNote).toBe('');
+    // 有配比时总说明照旧 (阳性对照: 下一条测试的「不含无需手填」不是因为这句话根本没渲染)
+    expect(wrapper.text()).toContain('无需手填');
+    expect(wrapper.find('[data-testid="aux-auto-calc-note"]').exists()).toBe(false);
 
     wrapper.unmount();
   });
@@ -227,6 +230,8 @@ describe('确认领料 — 辅料配比来自领料单详情, 仓管不再碰生
     expect(aux.pickedInput, '没有配比却编出了一个数').toBeNull();
     expect(vm.auxAutoCalcNote).toContain('保密');
     expect(wrapper.find('[data-testid="aux-auto-calc-note"]').text()).toContain('按实际称重');
+    // 同一弹窗里不能再有「无需手填」这句与保密提示自相矛盾的话
+    expect(wrapper.text()).not.toContain('无需手填');
 
     wrapper.unmount();
   });

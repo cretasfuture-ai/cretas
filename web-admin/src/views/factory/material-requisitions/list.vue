@@ -955,8 +955,11 @@ async function submitCancel() {
     </el-dialog>
 
     <el-dialog v-model="confirmDialogVisible" :title="`确认领料 ${confirmTarget?.requisitionNo || ''}`" width="820px" destroy-on-close>
+      <!-- 工艺保密时辅料不能自动算, 这句总说明不能再说「无需手填」(与下面的保密提示自相矛盾)。 -->
       <el-alert
-        title="原料请先称重录入实际拣货数量；辅料按原料合计自动实时计算，无需手填。改了原料，辅料会重新算；要人工改辅料也可以直接改，改后不再被覆盖（可点「恢复自动计算」重置）。确认后可调拨到生产仓。"
+        :title="auxAutoCalcNote
+          ? '原料和辅料都请称重录入实际拣货数量。确认后可调拨到生产仓。'
+          : '原料请先称重录入实际拣货数量；辅料按原料合计自动实时计算，无需手填。改了原料，辅料会重新算；要人工改辅料也可以直接改，改后不再被覆盖（可点「恢复自动计算」重置）。确认后可调拨到生产仓。'"
         type="info"
         :closable="false"
         show-icon
