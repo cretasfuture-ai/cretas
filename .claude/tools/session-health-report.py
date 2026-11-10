@@ -34,6 +34,7 @@ def tier(model):
 def scan(path):
     ctx_max = 0
     ctx_last = 0
+    ctx_first = 0
     compactions = 0
     turns = 0
     cost = 0.0
@@ -75,12 +76,14 @@ def scan(path):
             if ctx <= 0:
                 continue
             turns += 1
+            if turns == 1:
+                ctx_first = ctx
             ctx_last = ctx
             ctx_max = max(ctx_max, ctx)
             p = PRICE[tier(msg.get("model"))]
             cost += ((u.get("input_tokens") or 0) * p["inp"] + (u.get("cache_creation_input_tokens") or 0) * p["cw"]
                      + (u.get("cache_read_input_tokens") or 0) * p["cr"] + (u.get("output_tokens") or 0) * p["out"]) / 1e6
-    return dict(path=path, first=first_ts, last=last_ts, turns=turns, ctx_max=ctx_max, ctx_last=ctx_last,
+    return dict(path=path, first=first_ts, last=last_ts, turns=turns, ctx_max=ctx_max, ctx_last=ctx_last, ctx_first=ctx_first,
                 compactions=compactions, cost=cost, organizer=organizer or coord_calls >= 1)
 
 
@@ -127,6 +130,9 @@ def main():
               f"  compactions total={sum(cp)} sessions_with>=1={sum(1 for c in cp if c >= 1)} >=2={sum(1 for c in cp if c >= 2)}"
               f"  est_cost median=${statistics.median(cost):.0f} p90=${cost[int(len(cost)*.9)]:.0f} total=${sum(cost):.0f}")
 
+    fs = sorted(r["ctx_first"] for r in rows if r["ctx_first"])
+    if fs:
+        print(f"startup(first-turn ctx) p10={fs[len(fs)//10]//1000}K p50={fs[len(fs)//2]//1000}K p90={fs[int(len(fs)*.9)]//1000}K  n={len(fs)}")
     summary("all", rows)
     summary("organizer(推断)", [r for r in rows if r["organizer"]])
     summary("other", [r for r in rows if not r["organizer"]])
