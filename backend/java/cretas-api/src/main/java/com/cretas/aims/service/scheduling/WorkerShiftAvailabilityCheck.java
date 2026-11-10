@@ -47,6 +47,8 @@ import java.util.Set;
 public class WorkerShiftAvailabilityCheck {
 
     private static final String UNVERIFIED = "人员未验证：无法确认人员排班数据";
+    /** 窗口内一条排班都没有: 没数据 ≠ 数据显示人不够; 不编人数、不当 0 处理, 只如实说没核对。 */
+    public static final String NO_SCHEDULE_DATA = "人员未核对：没有排班数据";
     private static final String INSUFFICIENT = "人员不足：已验证可用人员不足";
     private static final String AVAILABLE = "人员排班可用：已验证人数满足需求";
     private static final Set<String> PRODUCTION_ROLES = Set.of(
@@ -79,7 +81,7 @@ public class WorkerShiftAvailabilityCheck {
             return Result.unverified(required, UNVERIFIED);
         }
         if (assignments == null || assignments.isEmpty()) {
-            return Result.unverified(required, UNVERIFIED);
+            return Result.noScheduleData(required);
         }
 
         Map<Long, User> userById = new HashMap<>();
@@ -414,7 +416,12 @@ public class WorkerShiftAvailabilityCheck {
     }
 
     public record Result(boolean verified, int requiredWorkers, int availableWorkers,
-                         Set<Long> availableWorkerIds, String message) {
+                         Set<Long> availableWorkerIds, String message, boolean noScheduleData) {
+        public Result(boolean verified, int requiredWorkers, int availableWorkers,
+                      Set<Long> availableWorkerIds, String message) {
+            this(verified, requiredWorkers, availableWorkers, availableWorkerIds, message, false);
+        }
+
         public Result {
             Set<Long> safe = availableWorkerIds == null
                     ? Collections.emptySet()
@@ -426,6 +433,12 @@ public class WorkerShiftAvailabilityCheck {
 
         public boolean available() {
             return verified && availableWorkers >= requiredWorkers;
+        }
+
+        /** 窗口内没有任何排班记录: 未核对, 不是「人不够」。 */
+        public static Result noScheduleData(Integer required) {
+            int safeRequired = required == null ? 0 : Math.max(0, required);
+            return new Result(false, safeRequired, 0, Collections.emptySet(), NO_SCHEDULE_DATA, true);
         }
 
         public static Result unverified(Integer required, String message) {

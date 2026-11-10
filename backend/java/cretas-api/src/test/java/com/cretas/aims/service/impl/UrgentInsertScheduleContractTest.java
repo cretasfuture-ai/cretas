@@ -373,6 +373,63 @@ class UrgentInsertScheduleContractTest {
         verify(lineSchedules, never()).save(any());
     }
 
+    // ------------------------------------------------------------------ 已取消的日调度计划: 取消后没有重开入口, 同一天只能有一个
+
+    private SchedulingPlan cancelledDay(LineSchedule... rows) {
+        SchedulingPlan cancelled = new SchedulingPlan();
+        cancelled.setId("SP-CANCELLED");
+        cancelled.setStatus(SchedulingPlan.PlanStatus.cancelled);
+        when(schedulingPlans.findByFactoryIdAndPlanDateAndDeletedAtIsNull(eq(F), eq(DAY))).thenReturn(Optional.of(cancelled));
+        when(lineSchedules.findByPlanId("SP-CANCELLED")).thenReturn(List.of(rows));
+        return cancelled;
+    }
+
+    @Test
+    void cancelledDayWithOnlyUnstartedRowsIsReopenedForTheInsertAndItsOldRowsStayCancelled() {
+        happyEngine();
+        LineSchedule oldPending = row("LS-OLD", "PLAN-OLD", LINE, LineSchedule.ScheduleStatus.pending, DAY, DAY.plusDays(1));
+        LineSchedule oldDone = row("LS-DONE", "PLAN-DONE", LINE, LineSchedule.ScheduleStatus.completed, DAY, DAY);
+        SchedulingPlan cancelled = cancelledDay(oldPending, oldDone);
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        Proposal preview = service.dryRun(F, slot, insert);
+        assertThat(preview.ok()).as("取消的日调度计划不再把插单堵死").isTrue();
+        assertThat(preview.warnings()).anyMatch(w -> w.contains("重新启用"));
+        verify(schedulingPlans, never()).save(any());   // 预览不落库
+
+        service.apply(F, slot, insert, preview.fingerprint(), 7L);
+
+        assertThat(cancelled.getStatus()).isEqualTo(SchedulingPlan.PlanStatus.draft);
+        assertThat(cancelled.getNotes()).contains("重新启用");
+        assertThat(oldPending.getStatus()).as("旧未开工排程显式保持取消, 不随容器复活")
+                .isEqualTo(LineSchedule.ScheduleStatus.cancelled);
+        assertThat(oldDone.getStatus()).as("已完成的历史排程不动").isEqualTo(LineSchedule.ScheduleStatus.completed);
+        ArgumentCaptor<LineSchedule> saved = ArgumentCaptor.forClass(LineSchedule.class);
+        verify(lineSchedules, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
+        assertThat(saved.getAllValues()).anyMatch(ls -> ls.getPlan() == cancelled
+                && "PLAN-INS".equals(ls.getProductionPlanId()));
+    }
+
+    @Test
+    void cancelledDayThatStillHasAStartedRowIsNotReopened() {
+        happyEngine();
+        LineSchedule started = row("LS-RUN", "PLAN-RUN", LINE, LineSchedule.ScheduleStatus.in_progress, DAY, DAY.plusDays(1));
+        SchedulingPlan cancelled = cancelledDay(started);
+        when(plans.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
+
+        Proposal preview = service.dryRun(F, slot, insert);
+
+        assertThat(preview.status()).isEqualTo(UrgentInsertScheduleService.BLOCKED);
+        assertThat(preview.message()).contains("已取消").contains("已开工");
+        assertThatThrownBy(() -> service.apply(F, slot, insert, null, 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e ->
+                        assertThat(e.getErrorCode()).isEqualTo("INSERT_SCHEDULE_BLOCKED"));
+        assertThat(cancelled.getStatus()).isEqualTo(SchedulingPlan.PlanStatus.cancelled);
+        assertThat(started.getStatus()).isEqualTo(LineSchedule.ScheduleStatus.in_progress);
+        verify(schedulingPlans, never()).save(any());
+        verify(lineSchedules, never()).save(any());
+    }
+
     // ------------------------------------------------------------------ 谁能被挤: 只有整个计划都没开工、都在这条线上
 
     private java.util.Collection<String> movableIdsOfTheRequest() {

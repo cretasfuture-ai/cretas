@@ -375,4 +375,7 @@ public class ProductionPlanDTO {
     @Schema(description = "紧急插单确认 / 批准后的排程结果: 插单日期、每个被挤计划的新完成日与交期是否被突破 (仅插单接口返回)")
     private java.util.Map<String, Object> scheduleOutcome;
 
+    @Schema(description = "确认 / 批准时没能核对的项 (如「人员未核对：没有排班数据」): 照插但如实提示, 不编数、不当 0 (仅插单接口返回)")
+    private java.util.List<String> uncheckedWarnings;
+
 }

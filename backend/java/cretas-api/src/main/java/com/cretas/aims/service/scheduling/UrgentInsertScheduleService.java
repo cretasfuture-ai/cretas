@@ -264,20 +264,44 @@ public class UrgentInsertScheduleService {
             moved.add(new Moved(e.getKey(), number, oldEnd, newEnd, delay, due, exceeds, orderIdsOf(plan),
                     r.delays() == null ? List.of() : r.delays().stream().map(ConstrainedSchedulePreview.Delay::text).toList()));
         }
-        // 插入首日的调度计划已完成 / 取消就排不进去: 预览阶段就说, 不等确认才失败
+        // 插入首日的调度计划: 已完成排不进去; 已取消的可以重新启用 (取消后没有任何入口能重开, 而同一天只能有一个
+        // 调度计划, 不重用这一天就永远插不了); 预览阶段就说清, 不等确认才失败
+        List<String> warnings = new ArrayList<>(raw.warnings() == null ? List.of() : raw.warnings());
         SchedulingPlan container = schedulingPlanRepository
                 .findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, firstDayOf(mine)).orElse(null);
-        if (container != null && (container.getStatus() == SchedulingPlan.PlanStatus.completed
-                || container.getStatus() == SchedulingPlan.PlanStatus.cancelled)) {
-            return new Computation(new Proposal(BLOCKED, "插入首日 " + firstDayOf(mine) + " 的调度计划已"
-                    + (container.getStatus() == SchedulingPlan.PlanStatus.completed ? "完成" : "取消")
-                    + "，无法排入，请先处理该日调度计划或改选其他时段", null, null, List.of(),
-                    raw.warnings() == null ? List.of() : raw.warnings(), null),
+        String blocked = containerBlockReason(container, firstDayOf(mine));
+        if (blocked != null) {
+            return new Computation(new Proposal(BLOCKED, blocked, null, null, List.of(), warnings, null),
                     raw, insertPlan, movableByPlan, plansById, firstDay);
         }
+        if (container != null && container.getStatus() == SchedulingPlan.PlanStatus.cancelled) {
+            warnings.add("插入首日 " + firstDayOf(mine) + " 的调度计划此前已取消，插单会重新启用它（它名下原有的未开工排程保持取消）");
+        }
         Proposal proposal = new Proposal(OK, null, firstDayOf(mine), lastDay(mine), moved,
-                raw.warnings() == null ? List.of() : raw.warnings(), fingerprint(mine, raw, moved));
+                warnings, fingerprint(mine, raw, moved));
         return new Computation(proposal, raw, insertPlan, movableByPlan, plansById, firstDay);
+    }
+
+    /**
+     * 插入首日的调度计划能不能承接插单。null = 能 (没有 / 进行中 / 已取消且名下没有已开工的排程)。
+     * 已完成: 整天做完了, 不塞。已取消但名下还有已开工 (in_progress / delayed) 的排程: 动它等于动在做的活, 不碰。
+     */
+    private String containerBlockReason(SchedulingPlan container, LocalDate day) {
+        if (container == null) {
+            return null;
+        }
+        if (container.getStatus() == SchedulingPlan.PlanStatus.completed) {
+            return "插入首日 " + day + " 的调度计划已完成，无法排入，请改选其他时段";
+        }
+        if (container.getStatus() == SchedulingPlan.PlanStatus.cancelled) {
+            boolean started = lineScheduleRepository.findByPlanId(container.getId()).stream().anyMatch(ls ->
+                    ls.getStatus() == LineSchedule.ScheduleStatus.in_progress
+                            || ls.getStatus() == LineSchedule.ScheduleStatus.delayed);
+            if (started) {
+                return "插入首日 " + day + " 的调度计划已取消，但名下还有已开工的排程，无法重新启用，请先处理这些排程或改选其他时段";
+            }
+        }
+        return null;
     }
 
     private static String describe(PlanResult r) {
@@ -381,12 +405,29 @@ public class UrgentInsertScheduleService {
             container.setCreatedBy(userId);
             container.setStatus(SchedulingPlan.PlanStatus.draft);
             container = schedulingPlanRepository.save(container);
-        } else if (container.getStatus() == SchedulingPlan.PlanStatus.completed
-                || container.getStatus() == SchedulingPlan.PlanStatus.cancelled) {
-            throw new BusinessException(409, "插入首日 " + day + " 的调度计划已" + (container.getStatus()
-                    == SchedulingPlan.PlanStatus.completed ? "完成" : "取消") + "，无法排入")
-                    .withCode("INSERT_SCHEDULE_CONTAINER_CLOSED")
-                    .withHint("先到调度计划页处理该日调度计划，或改选其他时段");
+        } else {
+            String blocked = containerBlockReason(container, day);
+            if (blocked != null) {
+                throw new BusinessException(409, blocked)
+                        .withCode("INSERT_SCHEDULE_CONTAINER_CLOSED")
+                        .withHint("先到调度计划页处理该日调度计划，或改选其他时段");
+            }
+            if (container.getStatus() == SchedulingPlan.PlanStatus.cancelled) {
+                // 重新启用已取消的日调度计划: 它名下没开工的排程当初就随容器取消而不算「在排」,
+                // 重开前显式取消, 免得旧排程随容器复活
+                for (LineSchedule old : lineScheduleRepository.findByPlanId(container.getId())) {
+                    if (old.getStatus() == LineSchedule.ScheduleStatus.pending) {
+                        old.setStatus(LineSchedule.ScheduleStatus.cancelled);
+                        old.setAdjustmentReason(trim("调度计划取消后被紧急插单 " + insertPlan.getPlanNumber()
+                                + " 重新启用，原未开工排程保持取消", 200));
+                        lineScheduleRepository.save(old);
+                    }
+                }
+                container.setStatus(SchedulingPlan.PlanStatus.draft);
+                container.setNotes((container.getNotes() == null ? "" : container.getNotes() + "\n")
+                        + "紧急插单 " + insertPlan.getPlanNumber() + " 重新启用该日调度计划");
+                container = schedulingPlanRepository.save(container);
+            }
         }
         LineSchedule created = new LineSchedule();
         created.setPlan(container);
