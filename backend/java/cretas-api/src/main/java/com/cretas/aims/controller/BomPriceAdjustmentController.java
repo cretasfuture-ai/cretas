@@ -55,6 +55,7 @@ public class BomPriceAdjustmentController {
             @PathVariable String factoryId,
             @PathVariable Long proposalId,
             @RequestBody BomPriceAdjustmentApproveRequest request) {
-        return ApiResponse.success(service.approve(factoryId, proposalId, request.getApproverId(), request.getComment()));
+        return ApiResponse.success(service.approve(factoryId, proposalId, request.getApproverId(), request.getComment(),
+                request.getExpectedUnitPrice()));
     }
 }

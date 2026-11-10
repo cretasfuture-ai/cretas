@@ -71,6 +71,10 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
     @Autowired(required = false)
     private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
+    /** D-S411-04 M2: 质检放行判了不合格的原料不能经本工具放回可用。必注入 (缺了直接报错, 不当「没判过」)。 */
+    @Autowired
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
     @Override
     public String getToolName() {
         return "release_decision";
@@ -216,6 +220,16 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
             return result;
         }
 
+        // D-S411-04 M2: 质检放行判了不合格的原料, 这里不能放回可用
+        if (com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.blocks(
+                qcReleaseRecordRepository, batch, newStatus)) {
+            result.put("canDo", false);
+            result.put("status", com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.CODE);
+            result.put("message", "⛔ " + com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.message(batch)
+                    + "。" + com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.HINT);
+            return result;
+        }
+
         // 状态合法性: 是否可改
         if (currentStatus != null && !RELEASABLE_FROM.contains(currentStatus)
                 && currentStatus != MaterialBatchStatus.AVAILABLE
@@ -291,11 +305,12 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
             throw new IllegalStateException(String.format(
                     "批次 %s 当前状态是「%s」, 不可修改 (终态)", batchNumber, statusLabel(prevStatus)));
         }
+        // D-S411-04 M2 (防 client 绕 preview): 质检放行判了不合格的原料不能放回可用
+        com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
+                qcReleaseRecordRepository, batch, newStatus);
 
-        batch.setStatus(newStatus);
-        materialBatchRepository.save(batch);
-        // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
-        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(eventPublisher, this, batch, prevStatus);
+        // 走共用翻转 (改状态 + 保存 + 放行 / 离开质检中事件); 上面已排除非 FLIP 的情形 (D-S411-04 复审 R1)
+        QualityDispositionInventoryService.applyMaterialFlip(materialBatchRepository, eventPublisher, this, batch, newStatus);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("batchNumber", batchNumber);

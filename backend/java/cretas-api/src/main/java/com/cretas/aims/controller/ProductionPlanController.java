@@ -107,6 +107,7 @@ public class ProductionPlanController {
     private final ProductionTransitLedgerRepository transitLedgerRepository;
     private final ProductionSummaryService productionSummaryService;
     private final CustomerSuppliedSettlementCoverageGuard customerSuppliedSettlementCoverageGuard;
+    private final com.cretas.aims.service.scheduling.CancelledPlanScheduleCascade cancelledPlanScheduleCascade;
 
     @Autowired
     private BusinessRowScope businessRowScope;
@@ -879,7 +880,7 @@ public class ProductionPlanController {
     @RequireModule("production_plan")
     @PostMapping("/{planId}/cancel")
     @Operation(summary = "取消生产计划")
-    public ApiResponse<Void> cancelProductionPlan(
+    public ApiResponse<com.cretas.aims.service.scheduling.CancelledPlanScheduleCascade.Outcome> cancelProductionPlan(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "计划ID", required = true, example = "PP-2025-001")
@@ -892,7 +893,10 @@ public class ProductionPlanController {
         log.info("取消生产计划: factoryId={}, planId={}, userId={}, reason={}",
                 factoryId, planId, userId, reason);
         productionPlanService.cancelProductionPlan(factoryId, planId, reason, userId);
-        return ApiResponse.success("生产计划已取消", null);
+        // 名下排程的级联在取消成功后由 CancelledPlanScheduleCascadeAspect 做; 这里现数结果说给用户
+        // (没开工的一并取消了几条, 已开工保留未动的几条)
+        var schedules = cancelledPlanScheduleCascade.summarize(factoryId, planId);
+        return ApiResponse.success(schedules.describe("生产计划已取消"), schedules);
     }
 
     /**
