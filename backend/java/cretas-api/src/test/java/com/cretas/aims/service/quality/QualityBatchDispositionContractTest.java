@@ -772,14 +772,16 @@ class QualityBatchDispositionContractTest {
     }
 
     @Test
-    @DisplayName("Q11 /decision: 非审批角色 (操作员) 被接口的角色闸 403 拦下, 进不了服务层")
+    @DisplayName("Q11 /decision: 没有审批权限的账号 (操作员) 403, 什么都不执行 (接口闸是审批权限码, 服务层再判一次)")
     void decisionEndpointRefusesNonApproverRole() throws Exception {
         String approvalId = pendingSpecialConditionalRelease();
 
+        // 纪律排查 B3: 接口上不再是 @RequireRole 名单而是 @RequirePermission(approval_quality_disposition:approve)
+        // (见 approverPermissionIsTheSameEverywhere); 这里的 standalone MockMvc 没挂权限拦截器, 拦下它的是服务层同一判据。
         decisionEndpoint().perform(decide(approvalId, MANAGER, "operator", MANAGER))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden())
-                // RequireRoleInterceptor 的拒绝 (code=FORBIDDEN), 不是服务层的 SPECIAL_APPROVAL_ROLE_FORBIDDEN
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code").value("FORBIDDEN"));
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.errorCode").value(SpecialApprovalServiceImpl.SPECIAL_APPROVAL_ROLE_FORBIDDEN));
         assertNothingDecided(approvalId);
     }
 
@@ -862,27 +864,25 @@ class QualityBatchDispositionContractTest {
     }
 
     @Test
-    @DisplayName("Q11 审批角色名单一份: /approve、/decision 的 @RequireRole、order_approval 的角色要求、服务层名单完全相同")
-    void approverRoleListsAreTheSameEverywhere() throws Exception {
-        java.util.function.Function<java.lang.reflect.Method, java.util.Set<String>> rolesOf = m ->
-                java.util.Set.of(m.getAnnotation(com.cretas.aims.config.RequireRole.class).value());
+    @DisplayName("B3 审批人按权限: /approve、/decision、order_approval 都只认同一个审批权限码, 不再写死岗位名")
+    void approverPermissionIsTheSameEverywhere() throws Exception {
+        java.util.function.Function<java.lang.reflect.Method, java.util.Set<String>> permissionsOf = m ->
+                java.util.Set.of(m.getAnnotation(com.cretas.aims.annotation.RequirePermission.class).value());
         java.lang.reflect.Method approve = java.util.Arrays.stream(QualityDispositionController.class.getMethods())
                 .filter(m -> m.getName().equals("approveDisposition")).findFirst().orElseThrow();
         java.lang.reflect.Method decisionMethod = java.util.Arrays.stream(
                         com.cretas.aims.controller.ProcessingController.class.getMethods())
                 .filter(m -> m.getName().equals("processApprovalDecision")).findFirst().orElseThrow();
 
-        java.util.Set<String> service = com.cretas.aims.service.SpecialApprovalService.APPROVER_ROLES;
-        assertThat(service).isNotEmpty();
-        // 两个 HTTP 入口的注解完全相同 (含平台角色, 平台角色由 RequireRoleInterceptor 按已认证的平台身份放行)
-        assertThat(rolesOf.apply(decisionMethod)).isEqualTo(rolesOf.apply(approve));
-        // 去掉平台角色后就是服务层名单 (服务层不按角色字符串认平台管理员)
-        java.util.Set<String> factoryRolesOnApprove = rolesOf.apply(approve).stream()
-                .filter(r -> !com.cretas.aims.security.PlatformRoleBoundary.isPlatformTier(r))
-                .collect(java.util.stream.Collectors.toSet());
-        assertThat(factoryRolesOnApprove).isEqualTo(service);
-        assertThat(service).noneMatch(com.cretas.aims.security.PlatformRoleBoundary::isPlatformTier);
-        assertThat(new com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool().getRequiredRoles()).isEqualTo(service);
+        java.util.Set<String> code = java.util.Set.of("approval_quality_disposition:approve");
+        assertThat(permissionsOf.apply(approve)).isEqualTo(code);
+        assertThat(permissionsOf.apply(decisionMethod)).isEqualTo(code);
+        // ⛔ 不再叠一层岗位名单: 叠着它, 工厂在权限配置里授给别的岗位也批不了
+        assertThat(approve.getAnnotation(com.cretas.aims.config.RequireRole.class)).isNull();
+        assertThat(decisionMethod.getAnnotation(com.cretas.aims.config.RequireRole.class)).isNull();
+        com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool tool = new com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool();
+        assertThat(tool.getRequiredPermissions()).isEqualTo(code);
+        assertThat(tool.getRequiredRoles()).isEmpty();
     }
 
     @Test

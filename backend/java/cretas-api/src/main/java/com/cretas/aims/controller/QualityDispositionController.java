@@ -3,7 +3,6 @@ package com.cretas.aims.controller;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.annotation.RequireModule;
-import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.quality.*;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.DecisionAuditLog;
@@ -707,8 +706,8 @@ public class QualityDispositionController {
     /**
      * 审批处置申请
      */
-    @RequirePermission({"quality:read_write"})
-    @RequireRole({"quality_manager", "factory_super_admin", "platform_admin", "permission_admin"})
+    // 纪律排查 B3: 谁能审批按权限码 (默认 = 原名单 quality_manager / factory_super_admin / permission_admin, 各厂可改)
+    @RequirePermission({"approval_quality_disposition:approve"})
     @RequireModule("quality_inspection")
     @PostMapping("/{id}/approve")
     @Transactional

@@ -44,7 +44,8 @@ public class ReturnRefundController {
     }
 
     @PostMapping("/approve")
-    @RequirePermission("finance:read_write")
+    // 纪律排查 B15: 退款审批权限码; 默认跟原门槛 finance:read_write 走 (各厂可改)
+    @RequirePermission("approval_refund:approve")
     public ApiResponse<ReturnRefundDTO> approve(@PathVariable String factoryId,
                                                 @PathVariable String returnOrderId,
                                                 @RequestAttribute("userId") Long actorId,
@@ -65,7 +66,8 @@ public class ReturnRefundController {
     }
 
     @PostMapping("/reject")
-    @RequirePermission("finance:read_write")
+    // 纪律排查 B15: 退款审批权限码; 默认跟原门槛 finance:read_write 走 (各厂可改)
+    @RequirePermission("approval_refund:approve")
     public ApiResponse<ReturnRefundDTO> reject(@PathVariable String factoryId,
                                                @PathVariable String returnOrderId,
                                                @RequestAttribute("userId") Long actorId,
@@ -84,7 +86,8 @@ public class ReturnRefundController {
     }
 
     @PostMapping("/reversal/approve")
-    @RequirePermission("finance:read_write")
+    // 纪律排查 B15: 退款审批权限码; 默认跟原门槛 finance:read_write 走 (各厂可改)
+    @RequirePermission("approval_refund:approve")
     public ApiResponse<ReturnRefundDTO> approveReversal(@PathVariable String factoryId,
             @PathVariable String returnOrderId, @RequestAttribute("userId") Long actorId,
             @Valid @RequestBody ReturnRefundDTO.ReversalDecision request) {
@@ -93,7 +96,8 @@ public class ReturnRefundController {
     }
 
     @PostMapping("/reversal/reject")
-    @RequirePermission("finance:read_write")
+    // 纪律排查 B15: 退款审批权限码; 默认跟原门槛 finance:read_write 走 (各厂可改)
+    @RequirePermission("approval_refund:approve")
     public ApiResponse<ReturnRefundDTO> rejectReversal(@PathVariable String factoryId,
             @PathVariable String returnOrderId, @RequestAttribute("userId") Long actorId,
             @Valid @RequestBody ReturnRefundDTO.ReversalDecision request) {

@@ -50,7 +50,8 @@ class ReturnRefundReversalControllerContractTest {
         assertThat(ReturnRefundController.class.getAnnotation(RequireModule.class).value()).isEqualTo("finance_ar");
         for(String name:new String[]{"approveReversal","rejectReversal"}) {
             assertThat(ReturnRefundController.class.getMethod(name,String.class,String.class,Long.class,ReturnRefundDTO.ReversalDecision.class)
-                    .getAnnotation(RequirePermission.class).value()).containsExactly("finance:read_write");
+                    // 纪律排查 B15: 退款审批权限码; 默认跟 finance:read_write 走 (PermissionServiceImplApprovalCodesContractTest)
+                    .getAnnotation(RequirePermission.class).value()).containsExactly("approval_refund:approve");
         }
     }
 }

@@ -1162,7 +1162,8 @@ public class SalesController {
      */
     @PostMapping("/price-adjustments/{recordId}/approve")
     @Operation(summary = "审批通过改价 (PENDING → APPROVED, 应用改价 + 重算总额)")
-    @RequirePermission({"finance:read_write", "sales:read_write"})
+    // 纪律排查 B11: 审批权限码; 默认跟原门槛 finance / sales:read_write 走 (各厂可改)
+    @RequirePermission({"approval_price_adjustment:approve"})
     public ApiResponse<SalesPriceAdjustmentRecordDTO> approvePriceAdjustment(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String recordId,
@@ -1187,7 +1188,7 @@ public class SalesController {
      */
     @PostMapping("/price-adjustments/{recordId}/reject")
     @Operation(summary = "驳回改价 (PENDING → REJECTED, 丢弃改价)")
-    @RequirePermission({"finance:read_write", "sales:read_write"})
+    @RequirePermission({"approval_price_adjustment:approve"})
     public ApiResponse<SalesPriceAdjustmentRecordDTO> rejectPriceAdjustment(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String recordId,
