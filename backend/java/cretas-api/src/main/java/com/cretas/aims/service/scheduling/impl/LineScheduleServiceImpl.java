@@ -43,6 +43,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     private final SchedulingAIService schedulingAIService;
     @Lazy
     private final SchedulingPlanCrudService schedulingPlanCrudService;
+    private final com.cretas.aims.repository.scheduling.CancelledPlanScheduleRepository cancelledPlanSchedules;
 
     private LineSchedule findScopedSchedule(String factoryId, String scheduleId) {
         LineSchedule schedule = scheduleRepository.findById(scheduleId)
@@ -95,6 +96,12 @@ public class LineScheduleServiceImpl implements LineScheduleService {
         if (LineSchedule.ScheduleStatus.cancelled.name().equals(current)) {
             throw new BusinessException(409, "这条排程已作废，不能开工")
                     .withHint("请刷新调度计划，按当前的排程开工");
+        }
+        // D-S4-CANCEL-GHOST-DAILY: 所属生产计划 (直接或经批次) 已取消的排程, 开工就等于把取消了的计划复活。
+        // 级联上线之前取消的计划, 它的排程还是待开始, 页面上仍有「开始」按钮 —— 在这里拦住。
+        if (cancelledPlanSchedules.ownerPlanCancelled(factoryId, scheduleId)) {
+            throw new BusinessException(409, "这条排程所属的生产计划已取消，不能开工")
+                    .withHint("如需继续生产，请重新建生产计划再排程");
         }
 
         schedule.setStatus(LineSchedule.ScheduleStatus.in_progress);
