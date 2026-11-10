@@ -46,7 +46,8 @@ import java.util.*;
 @RequiredArgsConstructor
 public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialRequisitionService {
 
-    /** 关领料单时写的退料流水来源: 料退回原料仓, 不是生产消耗 (取消计划的判据据此排除它)。 */
+    /** 关领料单时写的退料流水来源: 料退回原料仓, 不是生产消耗 (取消计划的判据据此排除它)。
+     *  与 writeMaterialReturnTrace 里的字面量同值, 那里保留字面量是给凭证来源闸扫描的。 */
     public static final String SOURCE_MATERIAL_RETURN = "MATERIAL_RETURN";
 
     private final FactoryMaterialRequisitionRepository repository;
@@ -1889,7 +1890,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         trace.setConsumedAt(LocalDateTime.now());
         trace.setRecordedBy(operatorId != null ? operatorId : 0L);
         trace.setMaterialTypeId(item.getMaterialTypeId());
-        trace.setSourceType(SOURCE_MATERIAL_RETURN);
+        // ⛔ 保持裸字面量: VoucherConsumptionSourceCoverageContractTest 按 setSourceType("...") 扫写入点做凭证裁定;
+        //    值必须等于 SOURCE_MATERIAL_RETURN (取消计划判据靠它排除退料)。
+        trace.setSourceType("MATERIAL_RETURN");
         trace.setNotes("production material return: requisition=" + requisition.getId() + ", item=" + item.getId());
         materialConsumptionRepository.save(trace);
     }
