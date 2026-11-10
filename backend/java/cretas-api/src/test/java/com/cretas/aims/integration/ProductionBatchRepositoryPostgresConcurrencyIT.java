@@ -69,8 +69,19 @@ class ProductionBatchRepositoryPostgresConcurrencyIT {
         return value;
     }
 
+    /** 本测试自己建的 production_plans (只在库里原本没有时建), AfterEach 只删自己建的那张。 */
+    private boolean createdPlansTable;
+
     @BeforeEach
     void createExactTargetTableAndSeedOneBatch() {
+        // ProductionBatch 的只读 @Formula sourcePlanUnit 每次查批次都子查询 production_plans.planned_unit (D-W-01)。
+        // ddl-auto=none: 这张表不会自动出现 —— 只有别的测试先建过才在, 结果取决于执行顺序。
+        // ⛔ 不无条件 DROP/CREATE: 同库别的测试上下文 (create-drop, 会被缓存复用) 可能正用着它。
+        createdPlansTable = jdbcTemplate.queryForObject(
+                "SELECT to_regclass('public.production_plans') IS NULL", Boolean.class);
+        if (createdPlansTable) {
+            jdbcTemplate.execute("CREATE TABLE production_plans (id VARCHAR(191) PRIMARY KEY, planned_unit VARCHAR(32))");
+        }
         jdbcTemplate.execute("DROP TABLE IF EXISTS production_batches CASCADE");
         jdbcTemplate.execute("""
                 CREATE TABLE production_batches (
@@ -141,6 +152,9 @@ class ProductionBatchRepositoryPostgresConcurrencyIT {
     @AfterEach
     void dropExactTargetTable() {
         jdbcTemplate.execute("DROP TABLE IF EXISTS production_batches CASCADE");
+        if (createdPlansTable) {
+            jdbcTemplate.execute("DROP TABLE IF EXISTS production_plans");
+        }
     }
 
     @Test

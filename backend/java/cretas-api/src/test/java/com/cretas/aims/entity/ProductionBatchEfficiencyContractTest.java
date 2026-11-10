@@ -67,6 +67,30 @@ class ProductionBatchEfficiencyContractTest {
     }
 
     @Test
+    void theEntityNeverCallsTwoUnitsTheSameWhereTheUnitContractWouldNot() {
+        // 实体不比服务侧宽: 自由文本只认字面 (服务侧 storageUnit 不折大小写), 只 ≠ 件 (Steve: 三个单位)
+        ProductionBatch caseFolded = batch("100", "95", "lianpack");   // 不在内置单位表里的自由文本
+        caseFolded.setPlannedUnit("LianPack");
+        caseFolded.calculateMetrics();
+        assertThat(caseFolded.getEfficiency()).as("LianPack / lianpack: 服务侧 storageUnit 原样保留, 不折大小写").isNull();
+
+        ProductionBatch countLabels = batch("100", "95", "件");
+        countLabels.setPlannedUnit("只");
+        countLabels.calculateMetrics();
+        assertThat(countLabels.getEfficiency()).as("只 ≠ 件").isNull();
+
+        ProductionBatch pieces = batch("100", "95", "pcs");
+        pieces.setPlannedUnit("件");
+        pieces.calculateMetrics();
+        assertThat(pieces.getEfficiency()).as("件 就是 pcs 的中文名").isEqualByComparingTo("95.00");
+
+        ProductionBatch literal = batch("100", "95", "袋");
+        literal.setPlannedUnit(" 袋 ");
+        literal.calculateMetrics();
+        assertThat(literal.getEfficiency()).as("字面相同 (去空白) 一定是同一个单位").isEqualByComparingTo("95.00");
+    }
+
+    @Test
     void aPreReleaseRowWithoutPlannedUnitIsOnlyComparedWhenThePlanUnitIsTheBatchUnit() {
         // 存量行: plannedUnit 为 null、挂着计划; 实体靠只读的 sourcePlanUnit (所挂计划的单位) 判
         ProductionBatch bagsUnderKgPlan = batch("2", "3", "袋");

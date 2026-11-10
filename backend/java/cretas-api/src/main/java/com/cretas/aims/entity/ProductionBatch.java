@@ -572,14 +572,38 @@ public class ProductionBatch extends BaseEntity {
         return sameUnitCode(sourcePlanUnit, unit);
     }
 
-    /** 两个写法归一到单位契约的码后是否相同; 任一侧读不到 ⇒ false。 */
+    /**
+     * 两个写法是不是同一个单位 —— 实体这边<b>不比服务侧宽</b> (服务侧 = 单位契约 storageUnit 相同或
+     * areEquivalent, 会看工厂单位目录)。实体拿不到工厂目录, 所以只认两种「服务侧一定也认」的情况:
+     * <ol>
+     *   <li>去空白后字面相同 (服务侧 storageUnit 相同, 必认);</li>
+     *   <li>两个都是系统内置单位、内置码相同, 且不是 只/个 (Steve 2026-08-03: 只/个/件 是三个单位,
+     *       crossLanguageCode 保留它们各自的字面): 千克 ≡ 公斤 ≡ kg。</li>
+     * </ol>
+     * 不在内置单位表里的自由文本只认字面相同, ⛔ 不做大小写折叠 —— 服务侧 storageUnit 也原样保留。
+     * 服务侧比这里宽的地方 (只/个 折成 pcs、工厂目录别名) 只会让实体判「不可比」⇒ 效率留 null, 不会多算出数。
+     * 已知缺口: 工厂目录若把某个内置别名改成冲突 / 另一单位, 这里仍按内置码认 (实体看不到目录)。
+     */
     private static boolean sameUnitCode(String left, String right) {
         if (left == null || right == null || left.isBlank() || right.isBlank()) {
             return false;
         }
-        String leftCode = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(left);
-        String rightCode = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(right);
-        return leftCode != null && leftCode.equals(rightCode);
+        String leftTrimmed = left.trim();
+        String rightTrimmed = right.trim();
+        if (leftTrimmed.equals(rightTrimmed)) {
+            return true;
+        }
+        java.util.Optional<com.cretas.aims.service.unit.CanonicalUnit> leftBuiltIn =
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl.describeBuiltIn(leftTrimmed);
+        java.util.Optional<com.cretas.aims.service.unit.CanonicalUnit> rightBuiltIn =
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl.describeBuiltIn(rightTrimmed);
+        if (leftBuiltIn.isEmpty() || rightBuiltIn.isEmpty()) {
+            return false;
+        }
+        String leftCode = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(leftTrimmed);
+        String rightCode = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(rightTrimmed);
+        return leftCode != null && leftCode.equals(rightCode)
+                && leftBuiltIn.get().code().equals(rightBuiltIn.get().code());
     }
 
     /**
