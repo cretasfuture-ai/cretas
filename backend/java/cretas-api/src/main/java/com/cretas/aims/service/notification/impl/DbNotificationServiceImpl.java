@@ -31,18 +31,30 @@ import org.springframework.transaction.annotation.Transactional;
 public class DbNotificationServiceImpl implements NotificationService {
 
     private final NotificationRepository notificationRepository;
+    private final com.cretas.aims.repository.UserRepository userRepository;
 
     @Override
     @Transactional
     public void notifyRole(String factoryId, String roleCode, String title, String body) {
         log.info("[Notification] factory={} role={} title={}", factoryId, roleCode, title);
 
+        // 这个角色在本工厂一个人都没有 ⇒ 发给厂长, 不留一条没人看得到的通知 (一人厂只有厂长)。
+        String targetRole = roleCode;
+        String content = body;
+        String head = com.cretas.aims.entity.enums.FactoryUserRole.factory_super_admin.name();
+        if (roleCode != null && !head.equalsIgnoreCase(roleCode)
+                && userRepository.findByFactoryIdAndRoleCodeIgnoreCase(factoryId, roleCode).isEmpty()) {
+            targetRole = head;
+            content = body + "\n(原定接收岗位 " + roleCode + " 没有人, 已转发给厂长)";
+            log.warn("[Notification] 角色没有人, 改发厂长: factory={} role={} title={}", factoryId, roleCode, title);
+        }
+
         Notification notification = Notification.builder()
                 .factoryId(factoryId)
                 .userId(null)
-                .targetRole(roleCode)
+                .targetRole(targetRole)
                 .title(title)
-                .content(body)
+                .content(content)
                 .type(NotificationType.INFO)
                 .source("SYSTEM")
                 .isRead(false)

@@ -86,7 +86,6 @@ class PlatformRoleBoundaryGateContractTest {
             Map.entry("service/factory/impl/FactoryStocktakeServiceImpl", IN_FACTORY),
             Map.entry("service/factory/impl/SemiFinishedStocktakeServiceImpl", IN_FACTORY),
             Map.entry("service/impl/MaterialBatchServiceImpl", IN_FACTORY),
-            Map.entry("service/inventory/impl/WastageReportServiceImpl", IN_FACTORY),
             Map.entry("service/yield/impl/InterimSettleReversalRequestServiceImpl", IN_FACTORY));
 
     private record Scan(int classes, Map<String, Integer> writers, Set<String> roleLiteralClasses, Set<String> aiTools) {

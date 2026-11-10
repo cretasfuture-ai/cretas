@@ -39,6 +39,24 @@ public interface PermissionService {
      */
     String SELF_WAGE_VIEW_PERMISSION = "hr:self_wage:view";
 
+    /** 原料类型维护 (新建/改/删)。默认仓储主管 + 厂长, 工厂可在阈值设置里改岗位名单 (ThresholdKeys.INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN)。 */
+    String MATERIAL_TYPE_MAINTAIN_PERMISSION = "material_type:maintain";
+
+    /** 报损审批 (通过/驳回/看待审列表)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE)。 */
+    String WASTAGE_APPROVE_PERMISSION = "wastage:approve";
+
+    /** 信用特批 (超信用额度被拦截时放行下单)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.CREDIT_PERMISSION_OVERRIDE)。 */
+    String CREDIT_OVERRIDE_PERMISSION = "credit:override";
+
+    /**
+     * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的判定, 与 {@link #hasPermission} 对上面三个权限码是<b>同一套</b>
+     * 逻辑 (厂长恒有; 其余按工厂阈值里配的岗位名单, 没配用默认名单), 不会给出不同结论。
+     * 其它权限码一律 false。默认实现 false (测试替身用)。
+     */
+    default boolean roleHasConfiguredPermission(String factoryId, String roleCode, String permissionCode) {
+        return false;
+    }
+
     /**
      * 检查用户是否拥有指定权限
      *

@@ -31,14 +31,30 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  */
 class RawMaterialTypeWarehouseWriteGateTest {
 
+    /**
+     * 2026-11-10 (工厂纪律 B7, Steve 裁定) 有意的行为变化: 原来守的是「仓库写权限可以替代生产权限」(字面上两个
+     * 模块码任一即可)。它真正守的性质是「仓储侧角色(仓储主管)走得进这三个写端点, 前端放行、后端不 403」。
+     * 现在这条性质由单一的「原料类型维护」权限承担 (默认仓储主管 + 厂长, 工厂可配), 断言从字面抬到性质:
+     * 端点权限码 = 维护权限, 且真实的权限服务对仓储主管放行、对没被配置的生产主管 / 仓管不放行。
+     */
     private static final Set<String> CREATE_UPDATE_DELETE_PERMISSIONS =
-            Set.of("production:read_write", "warehouse:read_write");
+            Set.of(com.cretas.aims.service.PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION);
 
     @Test
     void createUpdateDeleteAcceptWarehouseWriteAsAlternativeToProduction() {
         assertPermissions("createMaterialType", CREATE_UPDATE_DELETE_PERMISSIONS);
         assertPermissions("updateMaterialType", CREATE_UPDATE_DELETE_PERMISSIONS);
         assertPermissions("deleteMaterialType", CREATE_UPDATE_DELETE_PERMISSIONS);
+
+        var service = new com.cretas.aims.service.impl.PermissionServiceImpl();
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "platformRepo",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.permission.PlatformRolePermissionRepository.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "factoryConfigRepo",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.config.FactoryModuleConfigRepository.class));
+        String code = com.cretas.aims.service.PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION;
+        assertEquals(true, service.roleHasConfiguredPermission("F1", "warehouse_manager", code));
+        assertEquals(false, service.roleHasConfiguredPermission("F1", "production_manager", code));
+        assertEquals(false, service.roleHasConfiguredPermission("F1", "warehouse_worker", code));
     }
 
     @Test
