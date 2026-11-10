@@ -200,6 +200,8 @@ class UrgentInsertScheduleReopenPostgresContractTest {
             c.setPlanName(day + " 原调度计划");
             c.setNotes("原备注");
             c.setCreatedBy(actor);
+            c.setConfirmedBy(actor);
+            c.setConfirmedAt(java.time.LocalDateTime.now().minusDays(1));
             c.setStatus(SchedulingPlan.PlanStatus.cancelled);
             schedulingPlans.saveAndFlush(c);
             containerId[0] = c.getId();
@@ -278,6 +280,12 @@ class UrgentInsertScheduleReopenPostgresContractTest {
         assertThat(rowStatusesOf(containerId)).as("旧的未开工排程保持取消, 插单排程新建在同一个容器下")
                 .containsExactlyInAnyOrder("cancelled", "pending");
         assertThat(rowsFor(insert.getId(), containerId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT confirmed_by FROM scheduling_plans WHERE id = ?", Long.class, containerId))
+                .as("重开为草稿: 旧确认人不留").isNull();
+        assertThat(jdbc.queryForObject("SELECT confirmed_at FROM scheduling_plans WHERE id = ?", java.sql.Timestamp.class, containerId))
+                .isNull();
+        assertThat(jdbc.queryForObject("SELECT adjustment_reason FROM line_schedules WHERE plan_id = ? AND status = 'cancelled'",
+                String.class, containerId)).contains("调度计划取消后重开").contains("URGENT-PG-1");
     }
 
     @Test

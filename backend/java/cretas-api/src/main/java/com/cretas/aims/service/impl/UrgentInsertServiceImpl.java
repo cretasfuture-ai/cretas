@@ -499,8 +499,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     }
 
     /** 确认 / 批准时没能核对的项, 随结果返回; 现在只有「没有排班数据」一种。 */
-    private List<String> uncheckedWarnings(String factoryId, InsertSlot slot) {
-        return checkWorkers(factoryId, slot).noScheduleData()
+    private static List<String> uncheckedWarnings(WorkerShiftAvailabilityCheck.Result workerCheck) {
+        return workerCheck.noScheduleData()
                 ? List.of(WorkerShiftAvailabilityCheck.NO_SCHEDULE_DATA) : List.of();
     }
 
@@ -508,7 +508,8 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
      * 只有明确提交人员名单的请求才核验名单。空名单仍走既有建待排计划、后续分配路径；
      * 这里不写 worker_assignments，也不把只读资格核验声称为并发预留或实际到岗。
      */
-    private void validateSelectedWorkers(String factoryId, InsertSlot slot, ConfirmUrgentInsertRequest request) {
+    /** 名单格式 (重复 / 空 / 非正数) 先于任何人员读取就拒绝: 无效名单不该触发排班读取。 */
+    private void validateWorkerListShape(ConfirmUrgentInsertRequest request) {
         List<Long> selected = request.getAssignedWorkerIds();
         if (selected == null || selected.isEmpty()) return;
         if (selected.stream().anyMatch(id -> id == null || id <= 0)
@@ -517,7 +518,11 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     .withCode("INSERT_WORKER_SELECTION_INVALID")
                     .withHint("重新打开人员选择，去掉重复或无效项，仅选择本厂可派工人");
         }
-        WorkerShiftAvailabilityCheck.Result checked = checkWorkers(factoryId, slot);
+    }
+
+    private void validateSelectedWorkers(WorkerShiftAvailabilityCheck.Result checked, ConfirmUrgentInsertRequest request) {
+        List<Long> selected = request.getAssignedWorkerIds();
+        if (selected == null || selected.isEmpty()) return;
         if (checked.noScheduleData()) {
             // 没有排班数据: 名单无从核对, 照插并在结果里提示未核对 (不编人数); 有数据但读不全仍按原规则拦
             return;
@@ -948,7 +953,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         PreviewValidation validation = validatePreviewAndFreshResources(factoryId, request);
         InsertSlot slot = validation.slot();
 
-        validateSelectedWorkers(factoryId, slot, request);
+        // 人员只读一次, 在任何写入之前: 既用来校验名单, 也决定结果里要不要提示「人员未核对」
+        validateWorkerListShape(request);
+        WorkerShiftAvailabilityCheck.Result workerCheck = checkWorkers(factoryId, slot);
+        validateSelectedWorkers(workerCheck, request);
         validateSelectedEquipment(factoryId, request);
 
         // Normal confirm must never turn the request's force flag into an
@@ -999,7 +1007,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         ProductionPlanDTO dto = productionPlanMapper.toDTO(savedPlan);
         dto.setScheduleOutcome(applied.toMap());
-        dto.setUncheckedWarnings(uncheckedWarnings(factoryId, slot));
+        dto.setUncheckedWarnings(uncheckedWarnings(workerCheck));
         return dto;
     }
 
@@ -1011,7 +1019,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         PreviewValidation validation = validatePreviewAndFreshResources(factoryId, request);
         InsertSlot slot = validation.slot();
 
-        validateSelectedWorkers(factoryId, slot, request);
+        validateWorkerListShape(request);
+        WorkerShiftAvailabilityCheck.Result workerCheck = checkWorkers(factoryId, slot);
+        validateSelectedWorkers(workerCheck, request);
         validateSelectedEquipment(factoryId, request);
 
         // 获取操作用户信息
@@ -1152,7 +1162,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (applied != null) {
             dto.setScheduleOutcome(applied.toMap());
         }
-        dto.setUncheckedWarnings(uncheckedWarnings(factoryId, slot));
+        dto.setUncheckedWarnings(uncheckedWarnings(workerCheck));
         return dto;
     }
 
@@ -1208,8 +1218,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     .orElseThrow(() -> new BusinessException(409, "找不到这张计划占用的时段，无法排入")
                             .withCode("INSERT_APPROVAL_SLOT_MISSING")
                             .withHint("到插单时段列表确认该时段状态后重试"));
+            // 人员读在排程写入之前, 读失败就在写任何东西之前失败
+            approvalWarnings = uncheckedWarnings(checkWorkers(factoryId, approvedSlot));
             approvalSchedule = scheduleService.apply(factoryId, approvedSlot, plan, null, approverId);
-            approvalWarnings = uncheckedWarnings(factoryId, approvedSlot);
         } else {
             // 拒绝
             plan.reject(approverId, approver.getFullName(), comment);
