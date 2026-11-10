@@ -240,7 +240,7 @@ public class FactorySettings extends BaseEntity {
     private Boolean blockStartOnOpenShortage = false;
 
     /**
-     * A18 插单排程「排不进」按原因放行 (V20261110_32)。逗号分隔的原因码, 列在里面的原因 = 插单照建并提示
+     * A18 插单排程「排不进」按原因放行 (V20261111_02)。逗号分隔的原因码, 列在里面的原因 = 插单照建并提示
      * (不写排程行), 不在里面 = 拦。空/null = 全拦 (现状)。码: CAPACITY_MISSING / EQUIPMENT_UNAVAILABLE /
      * EXCEEDS_HORIZON / PREDECESSOR_NOT_SCHEDULED。
      */
