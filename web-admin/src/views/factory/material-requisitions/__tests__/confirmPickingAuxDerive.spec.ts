@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUX_NO_RATIO_NOTE,
   AUX_PROCESS_SECRET_NOTE,
+  AUX_UNAVAILABLE_NOTE,
   auxAutoCalcNoteFor,
   auxRatioMapFromItems,
+  hasPickableAuxiliaryRows,
   deriveAuxiliaryQty,
   massUnitToKg,
   rawPickedTotalKg,
@@ -25,11 +28,24 @@ describe('auxRatioMapFromItems — 配比取自领料单详情的辅料行 (2026
     expect(map).toEqual({ ONION: 83.8, SALT: 12.5 });
   });
 
-  it('只有 PROCESS_SECRET 给说明, 其余状态 (含缺失) 为空串', () => {
-    expect(auxAutoCalcNoteFor('PROCESS_SECRET')).toBe(AUX_PROCESS_SECRET_NOTE);
-    expect(auxAutoCalcNoteFor('AVAILABLE')).toBe('');
-    expect(auxAutoCalcNoteFor('NO_RATIO')).toBe('');
-    expect(auxAutoCalcNoteFor(undefined)).toBe('');
+  it('除 AVAILABLE 外都提示「按实际称重填写」, 措辞按原因不同; 没有辅料行时不提示 (L3)', () => {
+    expect(auxAutoCalcNoteFor('AVAILABLE', true)).toBe('');
+    expect(auxAutoCalcNoteFor('PROCESS_SECRET', true)).toBe(AUX_PROCESS_SECRET_NOTE);
+    expect(auxAutoCalcNoteFor('NO_RATIO', true)).toBe(AUX_NO_RATIO_NOTE);
+    expect(auxAutoCalcNoteFor('UNAVAILABLE', true)).toBe(AUX_UNAVAILABLE_NOTE);
+    expect(auxAutoCalcNoteFor(undefined, true), '老后端没给状态 = 拿不到配比').toBe(AUX_NO_RATIO_NOTE);
+    expect(auxAutoCalcNoteFor('NO_RATIO', false)).toBe('');
+    expect(auxAutoCalcNoteFor('UNAVAILABLE', false)).toBe('');
+    for (const note of [AUX_PROCESS_SECRET_NOTE, AUX_NO_RATIO_NOTE, AUX_UNAVAILABLE_NOTE]) {
+      expect(note).toContain('请按实际称重填写');
+    }
+    expect(new Set([AUX_PROCESS_SECRET_NOTE, AUX_NO_RATIO_NOTE, AUX_UNAVAILABLE_NOTE]).size).toBe(3);
+  });
+
+  it('hasPickableAuxiliaryRows: 自备料辅料不算要拣的辅料', () => {
+    expect(hasPickableAuxiliaryRows([{ materialCategory: 'RAW' }])).toBe(false);
+    expect(hasPickableAuxiliaryRows([{ materialCategory: 'AUXILIARY', selfSupplied: true }])).toBe(false);
+    expect(hasPickableAuxiliaryRows([{ materialCategory: 'AUXILIARY', selfSupplied: null }])).toBe(true);
   });
 });
 

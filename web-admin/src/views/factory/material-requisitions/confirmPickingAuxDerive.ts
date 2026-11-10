@@ -118,7 +118,31 @@ export function auxRatioMapFromItems(items: DosageRow[]): Record<string, number>
 export const AUX_PROCESS_SECRET_NOTE =
   '该产品工艺已设为保密，辅料不能按配方自动计算，请按实际称重填写辅料数量。';
 
-/** 后端 auxiliaryAutoCalc → 弹窗说明; 只有 PROCESS_SECRET 需要说明, 其余为空串。 */
-export function auxAutoCalcNoteFor(status?: string | null): string {
-  return status === 'PROCESS_SECRET' ? AUX_PROCESS_SECRET_NOTE : '';
+/** 配方里没有这些辅料的可用配比 (NO_RATIO): 不能自动算。 */
+export const AUX_NO_RATIO_NOTE =
+  '配方里没有这些辅料的用量配比，辅料不能自动计算，请按实际称重填写辅料数量。';
+
+/** 读配比时出错 (UNAVAILABLE): 详情照常, 这次不能自动算。 */
+export const AUX_UNAVAILABLE_NOTE =
+  '辅料配比这次没有读取到，辅料不能自动计算，请按实际称重填写辅料数量。';
+
+/**
+ * 后端 auxiliaryAutoCalc → 弹窗说明 (提示, 不是错误); AVAILABLE 为空串。
+ *
+ * 独立审查 #1558 L3: NO_RATIO 时弹窗总说明还写着「辅料自动计算，无需手填」, 而实际一行都不会算。
+ * 所以除 AVAILABLE 外都要给一句「请按实际称重填写」—— 但单据上根本没有辅料行时不说 (没有可填的辅料)。
+ * 状态缺失 (老后端) 按 NO_RATIO 处理: 拿不到配比就是不能自动算。
+ */
+export function auxAutoCalcNoteFor(status: string | null | undefined, hasAuxiliaryRows: boolean): string {
+  if (status === 'AVAILABLE') return '';
+  if (status === 'PROCESS_SECRET') return AUX_PROCESS_SECRET_NOTE;
+  if (!hasAuxiliaryRows) return '';
+  return status === 'UNAVAILABLE' ? AUX_UNAVAILABLE_NOTE : AUX_NO_RATIO_NOTE;
+}
+
+/** 需要仓管拣的辅料行 (自备料不领, 不算)。 */
+export function hasPickableAuxiliaryRows(
+  items: Array<{ materialCategory?: string | null; selfSupplied?: boolean | null }>,
+): boolean {
+  return items.some((it) => it.materialCategory === 'AUXILIARY' && it.selfSupplied !== true);
 }

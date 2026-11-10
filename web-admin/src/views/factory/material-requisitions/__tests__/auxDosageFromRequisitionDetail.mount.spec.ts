@@ -158,6 +158,13 @@ const DETAIL_PROCESS_SECRET = {
   ],
 };
 
+/** 配方里没有这味辅料的配比 (NO_RATIO) —— 独立审查 #1558 L3。 */
+const DETAIL_NO_RATIO = { ...DETAIL_PROCESS_SECRET, id: 'MR-3', auxiliaryAutoCalc: 'NO_RATIO' };
+/** 后端读配比出错, 详情照常返回 (UNAVAILABLE) —— 独立审查 #1558 L1。 */
+const DETAIL_UNAVAILABLE = { ...DETAIL_PROCESS_SECRET, id: 'MR-4', auxiliaryAutoCalc: 'UNAVAILABLE' };
+/** 只有原料、没有辅料: 不需要任何辅料提示。 */
+const DETAIL_RAW_ONLY = { ...DETAIL_WITH_DOSAGE, id: 'MR-5', auxiliaryAutoCalc: 'NO_RATIO', items: baseItems() };
+
 const FORBIDDEN = /\/production-plans\/|\/bom\//;
 
 function installGetRouter(detail: typeof DETAIL_WITH_DOSAGE) {
@@ -193,8 +200,12 @@ async function openAndFillRaw(detail: typeof DETAIL_WITH_DOSAGE) {
     vm.handlePickedInputChange(row);
   }
   const aux = vm.confirmRows.find((r) => r.id === 'AUX-1');
-  if (!aux) throw new Error('fixture 错误: 找不到辅料行');
   return { wrapper, vm, aux };
+}
+
+function requireAux(aux: ConfirmRow | undefined): ConfirmRow {
+  if (!aux) throw new Error('fixture 错误: 找不到辅料行');
+  return aux;
 }
 
 describe('确认领料 — 辅料配比来自领料单详情, 仓管不再碰生产计划 / BOM (2026-11-10)', () => {
@@ -204,7 +215,9 @@ describe('确认领料 — 辅料配比来自领料单详情, 仓管不再碰生
   });
 
   it('①② 仓管打开确认领料: 零个 production-plans / bom 请求、零个错误提示, 辅料按详情里的配比自动算出 0.2514kg', async () => {
-    const { wrapper, vm, aux } = await openAndFillRaw(DETAIL_WITH_DOSAGE);
+    const opened = await openAndFillRaw(DETAIL_WITH_DOSAGE);
+    const { wrapper, vm } = opened;
+    const aux = requireAux(opened.aux);
 
     // 阳性锚点: 详情请求确实发了 (否则「零个禁止请求」可能只是什么都没跑)
     expect(harness.get.mock.calls.map((c) => c[0])).toContain('/F006/material-requisitions/MR-1');
@@ -222,7 +235,9 @@ describe('确认领料 — 辅料配比来自领料单详情, 仓管不再碰生
   });
 
   it('③ 工艺保密且无权: 不自动算(留空待称重), 弹窗里给一句说明, 不弹错误、也不去查生产计划 / BOM', async () => {
-    const { wrapper, vm, aux } = await openAndFillRaw(DETAIL_PROCESS_SECRET);
+    const opened = await openAndFillRaw(DETAIL_PROCESS_SECRET);
+    const { wrapper, vm } = opened;
+    const aux = requireAux(opened.aux);
 
     expect(forbiddenCalls()).toEqual([]);
     expect(errorToasts()).toEqual([]);
@@ -232,6 +247,40 @@ describe('确认领料 — 辅料配比来自领料单详情, 仓管不再碰生
     expect(wrapper.find('[data-testid="aux-auto-calc-note"]').text()).toContain('按实际称重');
     // 同一弹窗里不能再有「无需手填」这句与保密提示自相矛盾的话
     expect(wrapper.text()).not.toContain('无需手填');
+
+    wrapper.unmount();
+  });
+
+  it.each([
+    ['NO_RATIO', DETAIL_NO_RATIO, '配方里没有'],
+    ['UNAVAILABLE', DETAIL_UNAVAILABLE, '没有读取到'],
+  ])('④ L3: %s ⇒ 不写「无需手填」, 改为请人工称重填写的提示 (措辞与保密不同), 不弹错误', async (_status, detail, wording) => {
+    const opened = await openAndFillRaw(detail);
+    const { wrapper, vm } = opened;
+    const aux = requireAux(opened.aux);
+
+    expect(forbiddenCalls()).toEqual([]);
+    expect(errorToasts()).toEqual([]);
+    expect(aux.autoLocked).toBeFalsy();
+    expect(aux.pickedInput).toBeNull();
+    expect(wrapper.text(), '辅料一行都不会算, 总说明却还说无需手填').not.toContain('无需手填');
+    const note = wrapper.find('[data-testid="aux-auto-calc-note"]');
+    expect(note.exists(), '没有给人工填写的提示').toBe(true);
+    expect(note.text()).toContain('请按实际称重填写');
+    expect(note.text()).toContain(wording);
+    expect(vm.auxAutoCalcNote).not.toContain('保密');
+
+    wrapper.unmount();
+  });
+
+  it('⑤ 只有原料没有辅料: 不给辅料提示, 也不说「辅料无需手填」', async () => {
+    const { wrapper, vm } = await openAndFillRaw(DETAIL_RAW_ONLY);
+
+    expect(vm.confirmRows).toHaveLength(3);
+    expect(vm.auxAutoCalcNote).toBe('');
+    expect(wrapper.find('[data-testid="aux-auto-calc-note"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('无需手填');
+    expect(wrapper.text()).toContain('请称重录入每种物料的实际拣货数量');
 
     wrapper.unmount();
   });

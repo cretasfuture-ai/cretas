@@ -20,6 +20,7 @@ import {
   auxAutoCalcNoteFor,
   auxRatioMapFromItems,
   deriveAuxiliaryQty,
+  hasPickableAuxiliaryRows,
   rawPickedTotalKg,
   splitZeroQtyRows,
 } from './confirmPickingAuxDerive';
@@ -49,8 +50,8 @@ interface RequisitionItem {
   dosagePerKgG?: number | string | null;
 }
 
-/** 详情接口的「辅料能不能自动算」: 有配比 / 没有可用配比 / 工艺保密不给配比。 */
-type AuxAutoCalcStatus = 'AVAILABLE' | 'NO_RATIO' | 'PROCESS_SECRET';
+/** 详情接口的「辅料能不能自动算」: 有配比 / 没有可用配比 / 工艺保密不给配比 / 读配比出错 (详情照常)。 */
+type AuxAutoCalcStatus = 'AVAILABLE' | 'NO_RATIO' | 'PROCESS_SECRET' | 'UNAVAILABLE';
 
 interface Requisition {
   id: string;
@@ -158,8 +159,10 @@ const confirmRows = ref<ConfirmPickRow[]>([]);
 // 物料id(materialTypeId) → dosagePerKgG(g/kg投入) —— 来自领料单详情的辅料行 (后端按建单同一份
 // BOM 调料表现算), 供辅料行实时推算。见 prepareConfirmDialog / recalcAuxRows。
 const auxRatioMap = ref<Record<string, number>>({});
-// 工艺保密且无权时的说明 (提示, 不是错误); 其余情况为空串不显示。
+// 辅料不能自动算时的说明 (保密 / 没配比 / 读取出错; 提示, 不是错误); 能算或没有辅料行时为空串不显示。
 const auxAutoCalcNote = ref('');
+// 只有后端明确给了配比 (AVAILABLE) 时, 总说明才说「辅料自动计算，无需手填」(独立审查 #1558 L3)。
+const auxAutoCalcAvailable = ref(false);
 
 // 取消原因: 标准选项 (Rule 3 防呆 — 自由文本改约束选择), 选"其他"才显文本框。
 const CANCEL_REASON_OPTIONS = ['计划取消', '需求变更', '重复单据', '数量错误', '其他'] as const;
@@ -575,7 +578,8 @@ function prepareConfirmDialog(data: Requisition) {
   }
   // 比例随详情一起到 (不再另发请求), 打开即按当前 RAW 合计补算辅料行。
   auxRatioMap.value = auxRatioMapFromItems(data.items || []);
-  auxAutoCalcNote.value = auxAutoCalcNoteFor(data.auxiliaryAutoCalc);
+  auxAutoCalcAvailable.value = data.auxiliaryAutoCalc === 'AVAILABLE';
+  auxAutoCalcNote.value = auxAutoCalcNoteFor(data.auxiliaryAutoCalc, hasPickableAuxiliaryRows(data.items || []));
   recalcAuxRows();
 }
 
@@ -955,17 +959,18 @@ async function submitCancel() {
     </el-dialog>
 
     <el-dialog v-model="confirmDialogVisible" :title="`确认领料 ${confirmTarget?.requisitionNo || ''}`" width="820px" destroy-on-close>
-      <!-- 工艺保密时辅料不能自动算, 这句总说明不能再说「无需手填」(与下面的保密提示自相矛盾)。 -->
+      <!-- 只有后端给了配比 (AVAILABLE) 才说「辅料自动计算，无需手填」; 保密 / 没配比 / 读取出错时
+           辅料一行都不会算, 再这么说就是让人漏填 (独立审查 #1558 L3)。 -->
       <el-alert
-        :title="auxAutoCalcNote
-          ? '原料和辅料都请称重录入实际拣货数量。确认后可调拨到生产仓。'
-          : '原料请先称重录入实际拣货数量；辅料按原料合计自动实时计算，无需手填。改了原料，辅料会重新算；要人工改辅料也可以直接改，改后不再被覆盖（可点「恢复自动计算」重置）。确认后可调拨到生产仓。'"
+        :title="auxAutoCalcAvailable
+          ? '原料请先称重录入实际拣货数量；辅料按原料合计自动实时计算，无需手填。改了原料，辅料会重新算；要人工改辅料也可以直接改，改后不再被覆盖（可点「恢复自动计算」重置）。确认后可调拨到生产仓。'
+          : '请称重录入每种物料的实际拣货数量。确认后可调拨到生产仓。'"
         type="info"
         :closable="false"
         show-icon
         style="margin-bottom: 12px"
       />
-      <!-- 工艺保密且无权: 后端不给配比, 辅料不能自动算 —— 是提示不是错误 (2026-11-10)。 -->
+      <!-- 辅料不能自动算 (保密 / 没配比 / 读取出错) —— 是提示不是错误, 措辞按原因不同 (2026-11-10)。 -->
       <el-alert
         v-if="auxAutoCalcNote"
         data-testid="aux-auto-calc-note"
