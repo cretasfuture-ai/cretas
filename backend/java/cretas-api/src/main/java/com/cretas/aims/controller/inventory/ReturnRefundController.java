@@ -49,7 +49,8 @@ public class ReturnRefundController {
                                                 @PathVariable String returnOrderId,
                                                 @RequestAttribute("userId") Long actorId,
                                                 @Valid @RequestBody(required = false) ReturnRefundDTO.ApproveRequest request) {
-        service.approve(factoryId, returnOrderId, actorId, request == null ? null : request.getNote());
+        service.approve(factoryId, returnOrderId, actorId, request == null ? null : request.getNote(),
+                request == null ? null : request.getSelfApprovalReason());
         return ApiResponse.success("退款申请已批准", service.get(factoryId, returnOrderId));
     }
 

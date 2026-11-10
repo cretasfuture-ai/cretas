@@ -575,6 +575,7 @@ public class CanvasFactoryConfigController {
                             "skipProcessReportingDefault", false,
                             "requireRequisitionBeforeReport", false,
                             "blockStartOnOpenShortage", false,
+                            "allowSelfApproval", false,
                             "version", 0));
         }
         return ApiResponse.success("操作成功", serializeFactorySettings(opt.get()));
@@ -641,6 +642,10 @@ public class CanvasFactoryConfigController {
         // S4-08 缺料时拦开工 (默认关 = 六膳门 N1)
         if (body.containsKey("blockStartOnOpenShortage")) {
             settings.setBlockStartOnOpenShortage(booleanField(body, "blockStartOnOpenShortage", false));
+        }
+        // 纪律排查 B1–B3/B11/B15 允许本人审批 (默认关 = 四眼)
+        if (body.containsKey("allowSelfApproval")) {
+            settings.setAllowSelfApproval(booleanField(body, "allowSelfApproval", false));
         }
         if (body.containsKey("defaultUserRole")) {
             settings.setDefaultUserRole(stringField(body, "defaultUserRole"));
@@ -798,6 +803,7 @@ public class CanvasFactoryConfigController {
         m.put("skipProcessReportingDefault", s.getSkipProcessReportingDefault());
         m.put("requireRequisitionBeforeReport", s.getRequireRequisitionBeforeReport());
         m.put("blockStartOnOpenShortage", s.getBlockStartOnOpenShortage());
+        m.put("allowSelfApproval", s.getAllowSelfApproval());
         m.put("defaultUserRole", s.getDefaultUserRole());
         m.put("lastModifiedAt", s.getLastModifiedAt());
         m.put("version", s.getVersion());

@@ -320,6 +320,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         settings.setSkipProcessReportingDefault(false);
         settings.setRequireRequisitionBeforeReport(false);
         settings.setBlockStartOnOpenShortage(false);
+        settings.setAllowSelfApproval(false);
 
         // 重置用户注册设置
         settings.setAllowSelfRegistration(false);
@@ -440,6 +441,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
                 .skipProcessReportingDefault(settings.getSkipProcessReportingDefault())
                 .requireRequisitionBeforeReport(settings.getRequireRequisitionBeforeReport())
                 .blockStartOnOpenShortage(settings.getBlockStartOnOpenShortage())
+                .allowSelfApproval(settings.getAllowSelfApproval())
                 // 审计信息
                 .lastModifiedAt(settings.getLastModifiedAt())
                 .factoryName(settings.getFactoryName())
@@ -550,6 +552,9 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         }
         if (dto.isRequireRequisitionBeforeReportSpecified()) {
             settings.setRequireRequisitionBeforeReport(Boolean.TRUE.equals(dto.getRequireRequisitionBeforeReport()));
+        }
+        if (dto.isAllowSelfApprovalSpecified()) {
+            settings.setAllowSelfApproval(Boolean.TRUE.equals(dto.getAllowSelfApproval()));
         }
         if (dto.isBlockStartOnOpenShortageSpecified()) {
             settings.setBlockStartOnOpenShortage(Boolean.TRUE.equals(dto.getBlockStartOnOpenShortage()));
