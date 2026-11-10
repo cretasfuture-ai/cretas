@@ -684,16 +684,34 @@ public class QualityDispositionInventoryService {
                     materialBatchId, inspection.getFactoryId());
             return null;
         }
-        FlipDecision decision = evaluateMaterialFlip(mb, target);
+        FlipDecision decision = applyMaterialFlip(materialBatchRepository, eventPublisher, this, mb, target);
         if (decision == FlipDecision.QC_RELEASE_REQUIRED) {
             log.warn("质检处置库存桥接 — 在制批次 {} 待检, 不在处置桥接里放行 (须走质检放行)", mb.getBatchNumber());
         }
+        return decision;
+    }
+
+    /**
+     * 把一个<b>已加载、已确认属于本厂</b>的原料批次翻到 {@code target} 的唯一实现: 守卫 ({@link #evaluateMaterialFlip})
+     * → 改状态 → 保存 → 变成 AVAILABLE 时发 {@link com.cretas.aims.event.MaterialBatchReleasedEvent}
+     * (缺料实例据此把「质检中」挪成「已放行」并重算缺口)。
+     *
+     * <p>质检处置桥接 ({@link #flipMaterial}) 与质检放行的原料收货批次 ({@code QcReleaseService}, D-S411-04) 共用,
+     * ⛔ 不要在别处再写一份「setStatus + save + 发事件」—— 漏发事件的那条路径缺料实例永远不会刷新。
+     * 静态 + 显式传入仓储 / 发布器: 调用方不必注入本服务 (避免 bean 环)。
+     *
+     * @return 守卫判定; 只有 {@link FlipDecision#FLIP} 时才落库 / 发事件
+     */
+    public static FlipDecision applyMaterialFlip(MaterialBatchRepository repo,
+                                                 org.springframework.context.ApplicationEventPublisher publisher,
+                                                 Object source, MaterialBatch mb, MaterialBatchStatus target) {
+        FlipDecision decision = evaluateMaterialFlip(mb, target);
         if (decision == FlipDecision.FLIP) {
             MaterialBatchStatus before = mb.getStatus();
             mb.setStatus(target);
-            materialBatchRepository.save(mb);
+            repo.save(mb);
             // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
-            com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(eventPublisher, this, mb, before);
+            com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(publisher, source, mb, before);
         }
         return decision;
     }

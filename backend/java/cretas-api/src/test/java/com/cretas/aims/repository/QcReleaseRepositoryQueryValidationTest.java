@@ -384,6 +384,22 @@ class QcReleaseRepositoryQueryValidationTest {
                 .extracting(MaterialBatch::getId).containsExactlyInAnyOrder("WIP-INSP", "WIP-OK");
     }
 
+    @Test
+    @DisplayName("D-S411-04 原料待检: 只列本厂、非 PRODUCTION_BATCH (含 sourceDocType 为空的老数据) 的 INSPECTING")
+    void rawBatchPendingQuery() {
+        material("RAWQ-INSP", "PURCHASE_RECEIVE", "PO-9", MaterialBatchStatus.INSPECTING);
+        material("RAWQ-LEGACY", null, null, MaterialBatchStatus.INSPECTING);
+        material("RAWQ-OK", "PURCHASE_RECEIVE", "PO-10", MaterialBatchStatus.AVAILABLE);
+        material("RAWQ-WIP", "PRODUCTION_BATCH", "703", MaterialBatchStatus.INSPECTING);
+        material("RAWQ-OTHER", "PURCHASE_RECEIVE", "PO-11", MaterialBatchStatus.INSPECTING);
+        jdbc.update("UPDATE material_batches SET factory_id = ? WHERE id = 'RAWQ-OTHER'", OTHER);
+
+        assertThat(materialBatchRepo.findRawBatchesByFactoryIdAndStatus(F, MaterialBatchStatus.INSPECTING))
+                .extracting(MaterialBatch::getId).containsExactlyInAnyOrder("RAWQ-INSP", "RAWQ-LEGACY");
+        assertThat(materialBatchRepo.findRawBatchesByFactoryIdAndStatus(OTHER, MaterialBatchStatus.INSPECTING))
+                .extracting(MaterialBatch::getId).containsExactly("RAWQ-OTHER");
+    }
+
     private void fg(String id, String status) {
         FinishedGoodsBatch b = new FinishedGoodsBatch();
         b.setId(id);
