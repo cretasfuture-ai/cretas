@@ -4,7 +4,9 @@ import { ElMessage } from 'element-plus';
 import { get, post } from '@/api/request';
 import {
   buildDynamicAnswers,
+  formatDynamicItemStandard,
   isDynamicFormForBatch,
+  isNumericValueType,
   itemIsOutOfRange,
   outOfRangeDynamicItems,
   requiredDynamicItems,
@@ -157,8 +159,8 @@ async function refreshStandard(): Promise<void> {
         :required="item.effectiveIsRequired === true"
       >
         <div class="dynamic-field-meta">
-          <span>{{ item.unit || '无单位' }}</span>
-          <span v-if="item.valueType === 'RANGE'">{{ item.effectiveMinValue ?? '无下限' }} ~ {{ item.effectiveMaxValue ?? '无上限' }}</span>
+          <span v-if="formatDynamicItemStandard(item)">{{ formatDynamicItemStandard(item) }}</span>
+          <span v-else>{{ item.unit || '无单位' }}</span>
           <span v-if="item.effectiveStandardValue">标准 {{ item.effectiveStandardValue }}</span>
         </div>
         <el-radio-group
@@ -172,8 +174,8 @@ async function refreshStandard(): Promise<void> {
         <el-input
           v-else
           :model-value="values[item.bindingId] || ''"
-          :type="item.valueType === 'RANGE' ? 'number' : 'text'"
-          :placeholder="item.valueType === 'RANGE' ? '填写实测值' : '填写检查结果'"
+          :type="isNumericValueType(item.valueType) ? 'number' : 'text'"
+          :placeholder="isNumericValueType(item.valueType) ? '填写实测值' : '填写检查结果'"
           clearable
           @update:model-value="setValue(item.bindingId, $event)"
         />

@@ -49,8 +49,25 @@ export function requiredDynamicItems(
   return form.items.filter((item) => item.effectiveIsRequired === true && !values[item.bindingId]?.trim());
 }
 
+// 后端 ProcessingServiceImpl 对 NUMERIC 与 RANGE 用同一套上下限判定 (valueType trim + 转大写后比较)
+export function isNumericValueType(valueType: string | null | undefined): boolean {
+  const normalized = valueType?.trim().toUpperCase();
+  return normalized === 'NUMERIC' || normalized === 'RANGE';
+}
+
+// 标准范围展示: 双边界 "98 ~ 102 g", 只有下限 "≥ 98 g", 只有上限 "≤ 102 g", 无边界返回空串
+export function formatDynamicItemStandard(item: DynamicQualityItem): string {
+  const min = item.effectiveMinValue ?? null;
+  const max = item.effectiveMaxValue ?? null;
+  const unit = item.unit?.trim() ? ` ${item.unit.trim()}` : '';
+  if (min != null && max != null) return `${min} ~ ${max}${unit}`;
+  if (min != null) return `≥ ${min}${unit}`;
+  if (max != null) return `≤ ${max}${unit}`;
+  return '';
+}
+
 export function itemIsOutOfRange(item: DynamicQualityItem, rawValue: string | undefined): boolean {
-  if (!rawValue?.trim() || item.valueType !== 'RANGE') return false;
+  if (!rawValue?.trim() || !isNumericValueType(item.valueType)) return false;
   const value = Number(rawValue);
   if (!Number.isFinite(value)) return false;
   return (item.effectiveMinValue != null && value < item.effectiveMinValue)
