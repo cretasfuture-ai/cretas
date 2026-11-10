@@ -64,11 +64,24 @@ class ReleaseDecisionToolPublishesShortageEventContractTest {
                 e -> assertThat(e.getMaterialTypeId()).isEqualTo("M1"));
     }
 
+    /**
+     * 原名 rejectingDoesNotPublish (什么都不发)。复审 R1: 判退把质检中改成不良品, 「质检中数量」不会再来了 ——
+     * 不发放行事件, 但要发离开质检中事件, 缺料实例才会重算 (与质检放行判不合格同一个发布函数)。
+     */
     @Test
-    void rejectingDoesNotPublish() throws Exception {
+    void rejectingPublishesInspectionClosedNotARelease() throws Exception {
         run("REJECTED", "外观不合格");
 
-        verify(publisher, never()).publishEvent(any(ApplicationEvent.class));
+        assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
+        verify(batches).save(batch);
+        ArgumentCaptor<ApplicationEvent> event = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(publisher).publishEvent(event.capture());
         verify(publisher, never()).publishEvent(any(Object.class));
+        assertThat(event.getValue()).isNotInstanceOf(MaterialBatchReleasedEvent.class)
+                .isInstanceOfSatisfying(com.cretas.aims.event.MaterialBatchInspectionClosedEvent.class, e -> {
+                    assertThat(e.getMaterialTypeId()).isEqualTo("M1");
+                    assertThat(e.getMaterialBatchId()).isEqualTo("MB-1");
+                    assertThat(e.getNewStatus()).isEqualTo(MaterialBatchStatus.DEFECTIVE);
+                });
     }
 }

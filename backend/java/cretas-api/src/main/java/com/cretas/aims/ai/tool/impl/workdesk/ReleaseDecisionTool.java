@@ -309,10 +309,8 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
         com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
                 qcReleaseRecordRepository, batch, newStatus);
 
-        batch.setStatus(newStatus);
-        materialBatchRepository.save(batch);
-        // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
-        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(eventPublisher, this, batch, prevStatus);
+        // 走共用翻转 (改状态 + 保存 + 放行 / 离开质检中事件); 上面已排除非 FLIP 的情形 (D-S411-04 复审 R1)
+        QualityDispositionInventoryService.applyMaterialFlip(materialBatchRepository, eventPublisher, this, batch, newStatus);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("batchNumber", batchNumber);

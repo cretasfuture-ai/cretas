@@ -453,6 +453,23 @@ class QcReleaseRepositoryQueryValidationTest {
         assertThat(recordRepo.findTop200ByFactoryIdOrderByReleasedAtDesc(F)).hasSize(3);
     }
 
+    /**
+     * D-S411-04 复审 R3: 「最近一条」是原料能不能改回可用的判据 ({@code MaterialQcRejectionGuard})。
+     * 两条记录 releasedAt 相同 (同一秒内先判不合格、再复检放行) 时, 后写入的那条 (id 大) 必须排在前面, 不能看库的心情。
+     */
+    @Test
+    @DisplayName("qc_release_records: releasedAt 相同时按 id 倒序, 后写的那条是「最近一条」")
+    void sameReleasedAtFallsBackToIdDescending() {
+        LocalDateTime same = LocalDateTime.of(2026, 11, 10, 9, 30, 0);
+        QcReleaseRecord first = recordRepo.saveAndFlush(record("T7", "REJECTED", same));
+        QcReleaseRecord second = recordRepo.saveAndFlush(record("T7", "RELEASED", same));
+        em.clear();
+        assertThat(second.getId()).isGreaterThan(first.getId());   // 阳性对照: 后写的 id 确实更大
+
+        List<QcReleaseRecord> t7 = recordRepo.findByTarget(F, QcReleaseRecord.TargetType.SEMI_FINISHED, "T7");
+        assertThat(t7).extracting(QcReleaseRecord::getId).containsExactly(second.getId(), first.getId());
+    }
+
     @Test
     @DisplayName("放行记录 / 分笔账不可删除 (@PreRemove): 意外 delete 被拦下, 行还在 (软删注解棘轮的 b 方案)")
     void releaseRecordsAndHoldLotsCannotBeDeleted() {

@@ -713,13 +713,26 @@ public class QualityDispositionInventoryService {
             MaterialBatchStatus before = mb.getStatus();
             mb.setStatus(target);
             repo.save(mb);
-            // 缺料实例据此把「质检中」挪成「已放行」(只是通知, 不影响这里的判定)
-            com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(publisher, source, mb, before);
-            // 判不合格 / 报废: 「质检中」那部分不会再来了, 缺料实例要重算 (D-S411-04 审查 M1)
-            com.cretas.aims.event.MaterialBatchInspectionClosedEvent.publishIfLeftInspectingUnreleased(
-                    publisher, source, mb, before);
+            publishMaterialStatusChange(publisher, source, mb, before);
         }
         return decision;
+    }
+
+    /**
+     * 原料批次状态已保存之后, 给缺料实例发通知的<b>唯一</b>入口 (D-S411-04 复审 R1)。
+     * 共用翻转 {@link #applyMaterialFlip} 调它; 不经共用翻转的改状态路径 (仓库页改批次状态) 也必须调它,
+     * ⛔ 不要再在别处手写「发放行事件」—— 手写的那几份只发了放行、漏了判不合格。
+     *
+     * <p>两个事件互补, 一次状态变化最多命中一个:
+     * 变成 AVAILABLE → 放行事件 (缺料分析的可用量只数 AVAILABLE, 见 {@code findAvailableBatchesFEFOByWarehouse});
+     * 从 INSPECTING 变成其它任何状态 (不合格 / 报废 / 鲜品 / 库存中 …) → 离开质检中事件 (质检中数量减少)。
+     * 只是通知, 不影响任何判定。
+     */
+    public static void publishMaterialStatusChange(org.springframework.context.ApplicationEventPublisher publisher,
+                                                   Object source, MaterialBatch mb, MaterialBatchStatus before) {
+        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(publisher, source, mb, before);
+        com.cretas.aims.event.MaterialBatchInspectionClosedEvent.publishIfLeftInspectingUnreleased(
+                publisher, source, mb, before);
     }
 
     /** 桥接结果 (供调用方日志/审计)。 */

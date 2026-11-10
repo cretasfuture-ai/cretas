@@ -2250,8 +2250,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         MaterialBatchStatus before = batch.getStatus();
         batch.setStatus(status);
         batch = materialBatchRepository.save(batch);
-        // 仓库页把「质检中」改成「可用」也是一次放行: 缺料实例要跟着刷新, 否则按旧缺口下采购单
-        com.cretas.aims.event.MaterialBatchReleasedEvent.publishIfBecameAvailable(applicationEventPublisher, this, batch, before);
+        // 仓库页把「质检中」改成「可用」是一次放行, 改成不合格 / 鲜品等是离开质检中: 缺料实例都要跟着刷新,
+        // 否则按旧缺口下采购单。与共用翻转同一个发布函数 (D-S411-04 复审 R1), ⛔ 不在这里手写事件。
+        com.cretas.aims.service.quality.QualityDispositionInventoryService.publishMaterialStatusChange(
+                applicationEventPublisher, this, batch, before);
         return materialBatchMapper.toDTO(batch);
     }
 
