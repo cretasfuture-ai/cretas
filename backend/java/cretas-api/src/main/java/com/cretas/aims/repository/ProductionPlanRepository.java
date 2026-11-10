@@ -69,6 +69,14 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
     Optional<ProductionPlan> findByIdForUpdate(@Param("id") String id);
 
     /**
+     * 锁住这条计划并返回它已提交的最新状态 (原生 SQL, 不经持久化上下文)。
+     * 排程落库前用: 与「取消生产计划」(同一行 FOR UPDATE) 串行, 取消之后不会再长出未开工的排程行。
+     */
+    @Query(value = "SELECT status FROM production_plans WHERE id = :id AND factory_id = :factoryId FOR UPDATE",
+            nativeQuery = true)
+    Optional<String> lockStatusForUpdate(@Param("id") String id, @Param("factoryId") String factoryId);
+
+    /**
      * 查找工厂的所有生产计划
      */
     List<ProductionPlan> findByFactoryId(String factoryId);

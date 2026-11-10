@@ -464,6 +464,32 @@ public class UrgentInsertScheduleService {
         // 0) 固定的加锁顺序: 先锁当天的调度计划行, 再动被挤计划的排程行。锁只用来排队 (和别的重开 / 取消 / 建当天计划的
         //    路径串行); 取得锁之后的状态以数据库的标量读为准, 不信锁前可能已载入过的旧副本。
         //    (确认 / 批准入口本身已先拿全厂写锁, 两个插单之间天然串行; 这把行锁防的是不拿全厂锁的路径。)
+        //    再往前一步先锁生产计划 (插单自己 + 被挤的), 与「取消生产计划」同一顺序: 被挤的计划刚被取消的话,
+        //    取消已作废了它的排程, 这里再按旧副本整行保存就会把作废的行写回 pending —— 直接拒绝, 重新预览。
+        Set<String> productionPlans = new LinkedHashSet<>();
+        productionPlans.add(insertPlan.getId());
+        c.proposal().moved().forEach(m -> productionPlans.add(m.planId()));
+        String closed = ProductionPlanScheduleLock.lockAndFindClosed(planRepository, factoryId, productionPlans);
+        if (closed != null) {
+            String label = c.plansById().containsKey(closed) ? c.plansById().get(closed).getPlanNumber() : closed;
+            throw new BusinessException(409, "计划「" + label + "」刚被取消或已完成，请重新预览")
+                    .withCode("INSERT_PREVIEW_SCHEDULE_CHANGED")
+                    .withHint("重新创建确认预览，按最新排程确认");
+        }
+        //    然后按 id 顺序锁住这次会动到的全部日调度计划 (插单那天 + 被挤计划排程所在的那些天), 与取消生产计划同一顺序;
+        //    只锁插单那天、事后再逐个重算别的天, 会和取消的排序加锁交叉成死锁。
+        java.util.SortedSet<String> dayPlansToLock = new java.util.TreeSet<>();
+        schedulingPlanRepository.findDayPlanHead(factoryId, day).ifPresent(h -> dayPlansToLock.add(h.getId()));
+        for (Moved m : c.proposal().moved()) {
+            for (LineSchedule row : c.movableByPlan().get(m.planId())) {
+                String dayPlanId = row.getPlanId() != null ? row.getPlanId()
+                        : row.getPlan() == null ? null : row.getPlan().getId();
+                if (dayPlanId != null) {
+                    dayPlansToLock.add(dayPlanId);
+                }
+            }
+        }
+        dayPlansToLock.forEach(id -> schedulingPlanRepository.lockStatusForUpdate(id, factoryId));
         SchedulingPlan container = schedulingPlanRepository.lockDayPlan(factoryId, day).orElse(null);
 
         // 1) 被挤计划: 第一条排程行改成新的起止 / 数量 / 按天分配, 其余行取消 (引擎按计划整体剩余量排, 一行就够)
@@ -532,6 +558,25 @@ public class UrgentInsertScheduleService {
         created.setDailyAllocations(mine.dailyAllocations());
         created.setStatus(LineSchedule.ScheduleStatus.pending);
         lineScheduleRepository.save(created);
+        // 3) 动过的调度计划按名下排程重算批次数 / 派工人数 (缺口 18 后续): 插单挂的那天 (含刚重开的),
+        //    以及被挤计划合并时作废了多余排程的那些天。只写这两列: container 可能是重开前的旧副本, 不整行保存。
+        Set<String> touchedDayPlans = new LinkedHashSet<>();
+        if (container.getId() != null) {
+            touchedDayPlans.add(container.getId());
+        }
+        for (Moved m : c.proposal().moved()) {
+            for (LineSchedule row : c.movableByPlan().get(m.planId())) {
+                String dayPlanId = row.getPlanId() != null ? row.getPlanId()
+                        : row.getPlan() == null ? null : row.getPlan().getId();
+                if (dayPlanId != null) {
+                    touchedDayPlans.add(dayPlanId);
+                }
+            }
+        }
+        com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals totals =
+                new com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals(lineScheduleRepository,
+                        schedulingPlanRepository);
+        touchedDayPlans.forEach(id -> totals.recount(factoryId, id));
         // ⛔ 不改计划的 startTime / endTime: 影响分析按它们判重叠, 引擎自己的 generate 也不写它们;
         //    新的完成日以排程行 (LineSchedule) 为准, 交付风险闭环读的也是排程行。
         log.info("插单已排入: planId={}, 日期 {}~{}, 被挤计划 {} 个, 交期被突破 {} 个", insertPlan.getId(), day,

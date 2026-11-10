@@ -21,6 +21,9 @@ import java.time.LocalDateTime;
 public class CancelledPlanScheduleCascade {
 
     private final CancelledPlanScheduleRepository repository;
+    /** 作废后重算日调度计划的批次数 / 派工人数 (缺口 18 后续, 与重开 / 插单同一份 SchedulingPlanTotals)。 */
+    private final com.cretas.aims.repository.LineScheduleRepository lineScheduleRepository;
+    private final com.cretas.aims.repository.SchedulingPlanRepository schedulingPlanRepository;
 
     /** 这个生产计划名下: 被取消级联作废的排程条数 / 已开工保留未动的条数。 */
     public record Outcome(long cancelledSchedules, long keptStartedSchedules) {
@@ -45,7 +48,19 @@ public class CancelledPlanScheduleCascade {
      */
     @Transactional
     public Outcome cascade(String factoryId, String productionPlanId) {
+        // 先按 id 顺序锁住这些排程所在的日调度计划, 再动排程行: 与「重开已取消的调度计划」(先锁日计划再作废名下排程)
+        // 和插单落库 (按 id 顺序锁日计划) 同一顺序, 不然一边锁着排程行等日计划、另一边锁着日计划等排程行就是死锁
+        java.util.SortedSet<String> dayPlans = new java.util.TreeSet<>(
+                repository.dayPlansWithNotStartedRows(factoryId, productionPlanId));
+        dayPlans.forEach(id -> schedulingPlanRepository.lockStatusForUpdate(id, factoryId));
         int cancelled = repository.cancelNotStartedOfCancelledPlan(factoryId, productionPlanId, LocalDateTime.now());
+        if (cancelled > 0) {
+            // 作废的排程不再算进这些天的批次数, 派在它们上面的人也不再算进派工人数
+            com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals totals =
+                    new com.cretas.aims.service.scheduling.impl.SchedulingPlanTotals(lineScheduleRepository,
+                            schedulingPlanRepository);
+            dayPlans.forEach(id -> totals.recount(factoryId, id));
+        }
         long kept = repository.countStartedNotFinished(factoryId, productionPlanId);
         log.info("生产计划取消级联排程: factoryId={}, planId={}, 作废未开工={}, 已开工保留={}",
                 factoryId, productionPlanId, cancelled, kept);
