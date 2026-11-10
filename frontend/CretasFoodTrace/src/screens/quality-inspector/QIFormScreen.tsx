@@ -33,6 +33,7 @@ import {
   checkQualityInspectionSubmission,
   deriveQualityInspectionCounts,
   deriveQualityInspectionResult,
+  describeQualityBatchLoadError,
   getQualityInspectionSubmitErrorMessage,
 } from './qualityInspectionSubmission.logic';
 
@@ -153,8 +154,19 @@ export default function QIFormScreen() {
       setDynamicForm(standard);
     } catch (error) {
       console.error('加载批次失败:', error);
-      setDynamicFormError(error instanceof Error ? error.message : t('form.cannotLoadBatch'));
-      appAlert(t('form.loadBatchFailed'), t('form.cannotLoadBatch'));
+      const described = describeQualityBatchLoadError(error, {
+        genericTitle: t('form.loadBatchFailed'),
+        genericMessage: t('form.cannotLoadBatch'),
+        noStandardTitle: t('form.noStandardTitle'),
+        noStandardMessage: t('form.noStandardMessage'),
+      });
+      // 屏上那行字: 没配标准 → 专门文案; 其余保持原行为 (Error.message, 非 Error 才用通用)
+      setDynamicFormError(
+        described.kind === 'no-standard'
+          ? described.message
+          : error instanceof Error ? error.message : t('form.cannotLoadBatch'),
+      );
+      appAlert(described.title, described.message);
     } finally {
       setLoading(false);
     }

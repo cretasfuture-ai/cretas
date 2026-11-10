@@ -34,6 +34,8 @@
     "loadingBatch": "Loading...",
     "loadBatchFailed": "Failed to load batch",
     "cannotLoadBatch": "Unable to load batch information",
+    "noStandardTitle": "No quality standard for this product",
+    "noStandardMessage": "This product has no quality standard yet. Ask the quality manager to set one up in the web admin, then inspect again.",
     "notScored": "Not scored",
     "cannotSubmit": "Cannot submit",
     "unscoredItems": "{{count}} item(s) still unscored: {{items}}. Every item needs the inspector's own judgement before submitting.",
