@@ -2533,6 +2533,18 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * <p>Using {@code clear()} + {@code addAll()} keeps the same collection instance so
      * Hibernate's orphan-removal tracking remains intact.
      */
+    /**
+     * BOM 调价建议批准后重算配方头成本 (与 {@link #correctActivePackagingItemCost} 写完行之后的三步相同)。
+     * MANDATORY: 只能在调用方已持有行锁 / 头锁的事务里调用, 不自己开事务。
+     */
+    @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void recomputeCostsAfterItemPriceChange(BomRecipe recipe) {
+        refreshItemsInPlace(recipe);
+        recomputeFamilyCosts(recipe);
+        recipeRepo.save(recipe);
+    }
+
     private void refreshItemsInPlace(BomRecipe recipe) {
         List<BomRecipeItem> fresh = itemRepo.findByRecipeIdOrderBySortOrderAsc(recipe.getId());
         recipe.getItems().clear();
