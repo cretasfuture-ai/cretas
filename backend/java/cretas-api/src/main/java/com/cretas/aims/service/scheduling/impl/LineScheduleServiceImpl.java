@@ -3,6 +3,7 @@ package com.cretas.aims.service.scheduling.impl;
 import com.cretas.aims.dto.scheduling.*;
 import com.cretas.aims.entity.*;
 import com.cretas.aims.entity.rules.DroolsRule;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.exception.EntityNotFoundException;
 import com.cretas.aims.repository.*;
 import com.cretas.aims.service.NotificationService;
@@ -88,6 +89,13 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     @Transactional
     public LineScheduleDTO startSchedule(String factoryId, String scheduleId) {
         LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
+        // 锁行读最新: 已作废 / 已取消的排程不能开工 (调度计划取消后重开时作废的旧排程, 开工就等于复活)。
+        // 与作废那条 UPDATE 串行: 它先提交 → 这里读到 cancelled 拒绝; 这里先提交 → 它重判条件跳过这条。
+        String current = scheduleRepository.lockStatusForUpdate(scheduleId).orElse(null);
+        if (LineSchedule.ScheduleStatus.cancelled.name().equals(current)) {
+            throw new BusinessException(409, "这条排程已作废，不能开工")
+                    .withHint("请刷新调度计划，按当前的排程开工");
+        }
 
         schedule.setStatus(LineSchedule.ScheduleStatus.in_progress);
         schedule.setActualStartTime(LocalDateTime.now());

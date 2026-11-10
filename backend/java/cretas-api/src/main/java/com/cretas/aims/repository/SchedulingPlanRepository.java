@@ -23,6 +23,14 @@ public interface SchedulingPlanRepository extends JpaRepository<SchedulingPlan, 
 
     Optional<SchedulingPlan> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 
+    /**
+     * 锁住这一行并返回它<b>已提交的最新</b>状态 (重开已取消的调度计划前用)。
+     * 原生 SQL: 不经持久化上下文, 同一事务早先读过的旧对象不会挡住最新状态。
+     */
+    @Query(value = "SELECT status FROM scheduling_plans WHERE id = :id AND factory_id = :factoryId "
+            + "AND deleted_at IS NULL FOR UPDATE", nativeQuery = true)
+    Optional<String> lockStatusForUpdate(@Param("id") String id, @Param("factoryId") String factoryId);
+
     Page<SchedulingPlan> findByFactoryIdAndDeletedAtIsNullOrderByPlanDateDesc(
         String factoryId, Pageable pageable);
 

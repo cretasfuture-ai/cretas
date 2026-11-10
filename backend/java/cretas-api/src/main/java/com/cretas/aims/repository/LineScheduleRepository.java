@@ -43,6 +43,28 @@ public interface LineScheduleRepository extends JpaRepository<LineSchedule, Stri
         @Param("start") LocalDateTime start,
         @Param("end") LocalDateTime end);
 
+    /**
+     * 重开已取消的调度计划时, 一条语句作废名下没开工的旧排程 (待开始 / 延误, 且没有实际开始时间)。
+     * 条件写在 UPDATE 里: 与「开工」并发时, 已提交开工的那条在 PostgreSQL 重判条件后被跳过, 不会被作废。
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE LineSchedule ls SET ls.status = :cancelled, ls.adjustmentReason = :reason, "
+            + "ls.lastAdjustmentTime = :now WHERE ls.planId = :planId AND ls.status IN :notStarted "
+            + "AND ls.actualStartTime IS NULL")
+    int voidNotStartedRows(@Param("planId") String planId,
+                           @Param("notStarted") java.util.Collection<LineSchedule.ScheduleStatus> notStarted,
+                           @Param("cancelled") LineSchedule.ScheduleStatus cancelled,
+                           @Param("reason") String reason,
+                           @Param("now") LocalDateTime now);
+
+    @Query("SELECT COUNT(ls) FROM LineSchedule ls WHERE ls.planId = :planId AND ls.status <> :cancelled")
+    long countByPlanIdAndStatusNot(@Param("planId") String planId,
+                                   @Param("cancelled") LineSchedule.ScheduleStatus cancelled);
+
+    /** 锁住这条排程并返回它已提交的最新状态 (原生 SQL, 不经持久化上下文)。 */
+    @Query(value = "SELECT status FROM line_schedules WHERE id = :id FOR UPDATE", nativeQuery = true)
+    Optional<String> lockStatusForUpdate(@Param("id") String id);
+
     @Query("SELECT COUNT(ls) FROM LineSchedule ls WHERE ls.planId = :planId " +
            "AND ls.status = :status")
     long countByPlanIdAndStatus(

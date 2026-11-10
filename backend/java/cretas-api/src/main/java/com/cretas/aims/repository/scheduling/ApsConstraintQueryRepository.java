@@ -30,6 +30,29 @@ public interface ApsConstraintQueryRepository extends Repository<LineSchedule, S
                                             @Param("live") Collection<LineSchedule.ScheduleStatus> live,
                                             @Param("livePlans") Collection<SchedulingPlan.PlanStatus> livePlans);
 
+    /**
+     * 这次要重开的那个已取消调度计划里<b>已开工</b>的排程 (执行中, 或已有实际开始时间, 且没完工没取消):
+     * 重开后它们保留并重新算占用, 所以排之前就当固定占用, 不能等重开之后才发现撞了。
+     * 与 {@code SchedulingPlanCrudServiceImpl.notStarted} 互补: 没开工的那些会被作废, 不算。
+     */
+    @Query("SELECT ls FROM LineSchedule ls WHERE ls.plan.id = :planId AND ls.plan.factoryId = :factoryId "
+            + "AND ls.plan.deletedAt IS NULL AND ls.status IN :live "
+            + "AND (ls.actualStartTime IS NOT NULL OR ls.status = :inProgress) "
+            + "AND ls.plannedStartTime IS NOT NULL AND ls.plannedEndTime IS NOT NULL AND ls.plannedEndTime >= :from "
+            + "ORDER BY ls.plannedStartTime, ls.id")
+    List<LineSchedule> findStartedEndingFromInPlan(@Param("factoryId") String factoryId,
+                                                   @Param("planId") String planId,
+                                                   @Param("from") LocalDateTime from,
+                                                   @Param("live") Collection<LineSchedule.ScheduleStatus> live,
+                                                   @Param("inProgress") LineSchedule.ScheduleStatus inProgress);
+
+    default List<LineSchedule> findKeptOnReopen(String factoryId, String reopeningPlanId, LocalDateTime from) {
+        return findStartedEndingFromInPlan(factoryId, reopeningPlanId, from,
+                EnumSet.of(LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.in_progress,
+                        LineSchedule.ScheduleStatus.delayed),
+                LineSchedule.ScheduleStatus.in_progress);
+    }
+
     default List<LineSchedule> findLiveEndingFrom(String factoryId, LocalDateTime from) {
         return findLiveEndingFromIn(factoryId, from,
                 EnumSet.of(LineSchedule.ScheduleStatus.pending, LineSchedule.ScheduleStatus.in_progress,
