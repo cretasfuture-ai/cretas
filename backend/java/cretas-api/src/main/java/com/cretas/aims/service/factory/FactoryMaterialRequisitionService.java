@@ -34,9 +34,22 @@ public interface FactoryMaterialRequisitionService {
      *
      * @param plannedRawInputKg 可选。{@code null} 或非正数 = 沿用旧行为
      *      (辅料/包材需求量留空「按实际领用」，不猜、不编 0)。
+     * @return 新单据; {@link FactoryMaterialRequisition#getSeasoningItemsStatus()} 说明调料行这一段的结果
+     *      ({@link #SEASONING_ITEMS_OK} / {@link #SEASONING_ITEMS_UNAVAILABLE})
      */
     FactoryMaterialRequisition generateFromPlan(String factoryId, String productionPlanId, Long requestedBy,
                                                 BigDecimal plannedRawInputKg);
+
+    /**
+     * {@link FactoryMaterialRequisition#getSeasoningItemsStatus()} 的取值 (只有 {@code generateFromPlan} 填)。
+     * 调料表读取成功: 有调料就已按配方追加, 配方没有调料则本来就没有调料行。
+     */
+    String SEASONING_ITEMS_OK = "OK";
+    /**
+     * 调料表读取失败: 领料单 (原料 / 包材等 BOM 行) 照常生成并保存, 但<b>一行调料都没有追加</b>,
+     * 需要人工补上调料 (或稍后重新按计划生成)。⛔ 不是「这个配方没有调料」。
+     */
+    String SEASONING_ITEMS_UNAVAILABLE = "UNAVAILABLE";
 
     /** 详情 (含明细). */
     FactoryMaterialRequisition getById(String factoryId, String id);
