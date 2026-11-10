@@ -191,6 +191,14 @@ class ProductionPlanCreateBatchValidationTest {
         verify(productionBatchRepository, times(1)).save(any(ProductionBatch.class));
         assertEquals(ProductionPlanStatus.IN_PROGRESS, plan.getStatus());
         assertNotNull(plan.getStartTime());
+        // D-W-01: 计划量从计划拷来, 计划单位跟着记在批次上 —— 批次单位以后被改成产出单位时效率仍知道两边不同
+        assertEquals(0, new BigDecimal("100").compareTo(batch.getPlannedQuantity()));
+        assertEquals("kg", batch.getPlannedUnit());
+        batch.setUnit("袋");
+        batch.setActualQuantity(new BigDecimal("3"));
+        batch.calculateMetrics();
+        org.junit.jupiter.api.Assertions.assertNull(batch.getEfficiency(),
+                "3 袋 / 100 kg 不能裸除成 3.00%");
     }
 
     @Test

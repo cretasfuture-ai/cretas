@@ -775,13 +775,14 @@ function getWipStatusType(status: string) {
   return map[status?.toUpperCase()] || 'info';
 }
 
-// P0-2 review fix: 末道产出单位 (份/盒) ≠ 批次原计划单位 (kg) 时, 后端已把 efficiency/unitCost
-// 置 null (跨单位无意义)。前端据 plannedUnit≠unit 显诚实提示, 而非裸 "-" (易误读为"无数据")。
-// 镜像 cumulativeDisplay 跨单位做法。同单位批次 plannedUnit 为 null → 走原 formatPercent/formatCost。
+// P0-2 review fix / D-W-01: 计划量单位 (plannedUnit) 与批次单位不是同一个单位时, 后端把 efficiency
+// 置 null (跨单位无意义); unitCost 照算 (金额 ÷ 产出数量 = 元/产出单位, 与计划量无关)。
+// 「是不是同一个单位」以后端为准 (单位契约归一, 千克 ≡ kg): 后端给了效率就显示; 只有效率为空、且两个
+// 写法确实不同时才显「跨单位不可比」, 而非裸 "-" (易误读为"无数据")。镜像 cumulativeDisplay 跨单位做法。
 const isCrossUnit = computed(() => {
   const pu = batch.value?.plannedUnit;
   const u = batch.value?.unit;
-  return pu != null && pu !== '' && u != null && pu !== u;
+  return batch.value?.efficiency == null && pu != null && pu !== '' && u != null && pu !== u;
 });
 /**
  * 良品率 —— ⚠️ 只在【良品数量已知】时才显示。

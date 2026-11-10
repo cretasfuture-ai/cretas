@@ -6855,6 +6855,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 && hasUniqueReceiptTerminalOutput(factoryId, settlement, batches.getFirst());
         int changed = 0;
         LocalDateTime completedAt = LocalDateTime.now();
+        // D-W-01: 换算要产品 (每单位克重); 批次没记产品时用计划的。在改任何批次之前读一次
+        // (返回 Optional, 不会因为读不到而抛)
+        ProductionPlan receiptPlan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId).orElse(null);
         for (ProductionBatch batch : batches) {
             if (batch == null || batch.getId() == null) {
                 continue;
@@ -6864,42 +6867,134 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 continue;
             }
             BigDecimal actualQuantity = zeroIfNull(batch.getQuantity());
+            // D-W-01: 记下实际产出是按哪个单位计的 —— 批次上的数按批次单位, 回落到结单的数按结单单位
+            String actualUnit = batch.getUnit();
             if (actualQuantity.compareTo(BigDecimal.ZERO) <= 0) {
                 actualQuantity = zeroIfNull(batch.getActualQuantity());
             }
             if (actualQuantity.compareTo(BigDecimal.ZERO) <= 0) {
                 actualQuantity = zeroIfNull(settlement.getActualFinishedQuantity());
+                actualUnit = settlement.getQuantityUnit();
             }
+            // 先把这次要写的数全算好 (含单位换算要查的库), 再动批次:
+            // 换算里的查询会 auto-flush, 批次已经脏了就会在 @PreUpdate 里先按裸除重算一次。
+            BigDecimal confirmedGood = null;
+            if (qualityCanBeAssigned && hasMatchingQualityUnit(settlement, batch)) {
+                confirmedGood = settlement.getWarehouseReceivedQuantity() != null
+                        ? settlement.getWarehouseReceivedQuantity()
+                        : (batch.getQuantity() != null ? batch.getQuantity() : actualQuantity);
+                if (confirmedGood != null && confirmedGood.signum() >= 0) {
+                    actualQuantity = confirmedGood.add(resolvedDefect.quantity());
+                    // 质检分支的 actual = 仓库实收 + 次品, 按结单单位 (hasMatchingQualityUnit 已核过与批次单位相同)
+                    actualUnit = settlement.getQuantityUnit();
+                } else {
+                    confirmedGood = null;
+                }
+            }
+            BigDecimal actualInPlannedUnit = receiptActualInPlannedUnit(
+                    factoryId, receiptPlan, batch, actualQuantity, actualUnit);
+
             batch.setStatus(ProductionBatchStatus.COMPLETED);
             if (batch.getEndTime() == null) {
                 batch.setEndTime(completedAt);
             }
             batch.setActualQuantity(actualQuantity);
-            if (qualityCanBeAssigned && hasMatchingQualityUnit(settlement, batch)) {
-                BigDecimal confirmedGood = settlement.getWarehouseReceivedQuantity() != null
-                        ? settlement.getWarehouseReceivedQuantity()
-                        : (batch.getQuantity() != null ? batch.getQuantity() : actualQuantity);
-                if (confirmedGood != null && confirmedGood.signum() >= 0) {
-                    batch.setGoodQuantity(confirmedGood);
-                    batch.setDefectQuantity(resolvedDefect.quantity());
-                    batch.setActualQuantity(confirmedGood.add(resolvedDefect.quantity()));
-                } else {
-                    batch.setGoodQuantity(null);
-                    batch.setDefectQuantity(null);
-                }
+            if (confirmedGood != null) {
+                batch.setGoodQuantity(confirmedGood);
+                batch.setDefectQuantity(resolvedDefect.quantity());
             } else {
                 // This receipt cannot prove a quality conclusion for this batch
-                // (unknown count, ambiguous output ownership, or unit mismatch).
+                // (unknown count, ambiguous output ownership, unit mismatch, or a
+                // negative confirmed quantity).
                 // Clear stale defaults so an old good=quantity/defect=0 pair cannot
                 // present an unconfirmed 100% yield as a new receipt result.
                 batch.setGoodQuantity(null);
                 batch.setDefectQuantity(null);
             }
+            // save 触发的 @PreUpdate 重算也读这份已核过单位的数, 不会退回裸除
+            batch.useActualInPlannedUnitForEfficiency(actualInPlannedUnit);
             batch.calculateMetrics();
             productionBatchRepository.save(batch);
             changed++;
         }
         return changed;
+    }
+
+    /**
+     * D-W-01 (2026-11-10 prod 实测): 仓库实收时算批次效率, 实际产出必须先折到计划量的单位。
+     *
+     * <p>返工计划 SEC-F006-20261109-4661D1 计划 0.3 kg (半成品口径)、实际 3 袋 —— 旧代码 3 ÷ 0.3 × 100
+     * = 1000.00, 写不进 numeric(5,2), 整笔实收 409「数据处理异常」。同形问题 D-N-01 (#1550) 已在超产判断里修过,
+     * 这里复用同一条换算 ({@link #convertOutputToPlanUnit}: 单位契约 → 计数单位 × 产品每单位克重)。</p>
+     *
+     * <p>计划量的单位: 批次上记的 {@code plannedUnit} —— 所有建批路径都写 (从计划拷数的写计划单位,
+     * 手工 / AI 建批写批次单位: 100 箱计划、95 箱实际 ⇒ 95.00)。没记的是存量行, 见
+     * {@link #legacyPlannedQuantityUnit}: 计划单位与批次单位不是同一个单位就不算 (3 袋 / 2 kg 不写 150.00)。
+     * ⛔ 不拿计划的单位顶上, 也 ⛔ 不拿批次单位顶上 —— 两个都是猜。</p>
+     *
+     * <p>⛔ 不靠 catch 兜「换算不了」: 仓储调用里抛出的异常已经把事务标成 rollback-only, catch 住也救不回实收。
+     * 这里每一步都先判空, 「换不过去」只走返回 null 这一条路。</p>
+     *
+     * @return 折到计划单位后的实际产出; {@code null} = 换算不了 (或计划量 / 单位读不到), 效率留 null。
+     */
+    private BigDecimal receiptActualInPlannedUnit(String factoryId, ProductionPlan plan, ProductionBatch batch,
+                                                  BigDecimal actual, String actualUnit) {
+        if (actual == null || batch.getPlannedQuantity() == null || batch.getPlannedQuantity().signum() <= 0) {
+            return null;
+        }
+        String plannedUnit = trimToNull(batch.getPlannedUnit());
+        if (plannedUnit == null) {
+            plannedUnit = legacyPlannedQuantityUnit(factoryId, plan, batch);
+            if (plannedUnit == null) {
+                log.warn("仓库实收批次效率留空: 存量批次没记计划量单位, 计划单位与批次单位不是同一个单位, 不猜 "
+                                + "batchId={}, batchUnit={}, planUnit={}",
+                        batch.getId(), batch.getUnit(), plan == null ? null : plan.getPlannedUnit());
+                return null;
+            }
+        }
+        String planUnit = canonicalReceiptUnit(plannedUnit);
+        String outUnit = canonicalReceiptUnit(trimToNull(actualUnit));
+        if (planUnit == null || outUnit == null || unitContractService == null) {
+            log.warn("仓库实收批次效率留空: 计划或产出单位读不到 batchId={}, plannedUnit={}, actualUnit={}",
+                    batch.getId(), plannedUnit, actualUnit);
+            return null;
+        }
+        // 单位同一性问单位契约 (⛔ 不比字符串, BareUnitEqualityRatchet)
+        if (sameUnit(factoryId, planUnit, outUnit) || unitContractService.areEquivalent(factoryId, planUnit, outUnit)) {
+            return actual;
+        }
+        String productTypeId = firstNonBlank(trimToNull(batch.getProductTypeId()),
+                plan == null ? null : trimToNull(plan.getProductTypeId()));
+        BigDecimal converted = convertOutputToPlanUnit(factoryId, productTypeId, actual, outUnit, planUnit);
+        if (converted == null) {
+            log.warn("仓库实收批次效率留空: 产出 {} {} 与计划单位 {} 之间没有可用换算 batchId={}, productTypeId={}",
+                    actual.toPlainString(), outUnit, planUnit, batch.getId(), productTypeId);
+        }
+        return converted;
+    }
+
+    /**
+     * D-W-01: 存量批次 (本次之前建的, plannedUnit 为 null) 的计划量按哪个单位计 —— 不知道。
+     * 它可能是从计划拷来的 (计划单位), 也可能是按批次自己的单位填的 (手工建批)。
+     * 只有计划单位与批次单位是同一个单位时两种来源才一样 ⇒ 返回批次单位; 否则返回 null (不猜)。
+     * 没挂计划的批次只可能是后一种。
+     */
+    private String legacyPlannedQuantityUnit(String factoryId, ProductionPlan plan, ProductionBatch batch) {
+        String batchSide = trimToNull(batch.getUnit());
+        if (batchSide == null) {
+            return null;
+        }
+        if (batch.getProductionPlanId() == null) {
+            return batchSide;
+        }
+        String planSide = plan == null ? null : trimToNull(plan.getPlannedUnit());
+        if (planSide == null || unitContractService == null) {
+            return null;
+        }
+        String planCode = canonicalReceiptUnit(planSide);
+        String batchCode = canonicalReceiptUnit(batchSide);
+        return sameUnit(factoryId, planCode, batchCode) || unitContractService.areEquivalent(factoryId, planCode, batchCode)
+                ? batchSide : null;
     }
 
     /** Quality is attributable only when receipt output identity is singular and auditable. */
@@ -10360,6 +10455,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             batchNumber = batchNumber + "-" + (int)(Math.random() * 1000);
         }
 
+        String planQuantityUnit = requireProductionUnit(plan.getPlannedUnit(), "生产计划 " + plan.getPlanNumber());
         ProductionBatch batch = ProductionBatch.builder()
                 .factoryId(factoryId)
                 .batchNumber(batchNumber)
@@ -10367,8 +10463,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 .productTypeId(plan.getProductTypeId())
                 .productName(productName)
                 .plannedQuantity(batchTargetQuantity)
+                // D-W-01: 计划量从计划来, 按计划单位计 —— 记在批次上, 批次单位以后被改成产出单位
+                // (逐道录入重物化 / P0-2 完工) 时效率仍知道两边不是同一个单位。建批这一刻与 unit 同写法。
+                .plannedUnit(planQuantityUnit)
                 .quantity(batchTargetQuantity)
-                .unit(requireProductionUnit(plan.getPlannedUnit(), "生产计划 " + plan.getPlanNumber()))
+                .unit(planQuantityUnit)
                 .workflowSelectionMode(plan.getWorkflowSelectionMode())
                 .selectedWorkflowId(plan.getSelectedWorkflowId())
                 .selectedWorkflowVersion(plan.getSelectedWorkflowVersion())

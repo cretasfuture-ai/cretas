@@ -830,6 +830,71 @@ class ClerkProcessEntryServiceImplTest {
                 .isEqualByComparingTo("80.00");
     }
 
+    /** D-W-01: 计划 2 kg、末道产出 3 袋 (裸除 150.00 存得进列, 溢出兜底拦不住) —— 成品批的计划量从计划拷来, 计划单位必须一起记在批次上。 */
+    private ProductionBatch recordFinishedBagsAgainstKilogramPlan(String key, String planUnit) {
+        return recordFinishedOutputAgainstPlan(key, planUnit, "3", "袋");
+    }
+
+    private ProductionBatch recordFinishedOutputAgainstPlan(String key, String planUnit, String output, String outputUnit) {
+        stubNoIdempotency(key);
+        stubPlan();
+        stubWarehouse();
+        stubBatchSave();
+        stubMbSave();
+        stubConsumptionSave();
+        stubIdempotencySave();
+        stubNoRecipe();
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY);
+        plan.setPlannedQuantity(new BigDecimal("2"));
+        plan.setPlannedUnit(planUnit);
+        when(planRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+
+        MaterialBatch raw = rawMb("RAW-DW01-" + key, FACTORY, new BigDecimal("4"));
+        when(materialBatchRepo.findByIdAndFactoryId(raw.getId(), FACTORY)).thenReturn(Optional.of(raw));
+        StepEntry step = rawStep(1, "0.3", output, List.of(rawInput(raw.getId(), "0.3")));
+        step.setOutputUnit(outputUnit);
+        step.setUnit(outputUnit);
+        service.recordChain(FACTORY, PLAN_ID,
+                req(key, List.of(finishedBatch("FIN-" + key, "PT-BAG", List.of(step)))), OPERATOR_ID);
+
+        ArgumentCaptor<ProductionBatch> cap = ArgumentCaptor.forClass(ProductionBatch.class);
+        verify(batchRepo, atLeastOnce()).save(cap.capture());
+        return cap.getValue();
+    }
+
+    @Test
+    @DisplayName("D-W-01: 计划量从计划拷来 ⇒ 批次记计划单位; 之后的 save 不再算出 3 袋 ÷ 0.3 kg, 单袋成本照算")
+    void finishedBatchRecordsThePlanUnitOfItsCopiedPlannedQuantity() {
+        ProductionBatch batch = recordFinishedBagsAgainstKilogramPlan("DW01-KEY", "kg");
+
+        assertThat(batch.getPlannedQuantity()).isEqualByComparingTo("2");
+        assertThat(batch.getUnit()).isEqualTo("袋");
+        assertThat(batch.getPlannedUnit()).as("计划量 2 是 kg, 不是袋").isEqualTo("kg");
+
+        // 之后任意一次 save (另一个事务, 没有实收那次的单位核对): 只靠持久化的 plannedUnit
+        batch.setActualQuantity(new BigDecimal("3"));
+        batch.calculateMetrics();
+        assertThat(batch.getEfficiency()).as("3 袋 / 2 kg 不是 150.00%").isNull();
+        assertThat(batch.getUnitCost()).as("单袋成本 = 1.20 元 ÷ 3 袋").isEqualByComparingTo("0.4000");
+    }
+
+    @Test
+    @DisplayName("D-W-01: 计划单位与产出单位只是写法不同 (千克/kg) ⇒ 记成产出写法, 效率照常按同单位算")
+    void finishedBatchRecordsAnEquivalentPlanUnitInTheOutputSpelling() {
+        com.cretas.aims.service.unit.UnitContractService units =
+                org.mockito.Mockito.mock(com.cretas.aims.service.unit.UnitContractService.class);
+        when(units.areEquivalent(FACTORY, "千克", "kg")).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "unitContractService", units);
+
+        ProductionBatch sameUnit = recordFinishedOutputAgainstPlan("DW01-SAME", "千克", "1.8", "kg");
+        assertThat(sameUnit.getPlannedUnit()).as("千克 与 kg 是同一个单位, 按产出写法记").isEqualTo("kg");
+        sameUnit.setActualQuantity(new BigDecimal("1.8"));
+        sameUnit.calculateMetrics();
+        assertThat(sameUnit.getEfficiency()).isEqualByComparingTo("90.00");
+    }
+
     /**
      * T9 — CLERK_WIP batchType set for WIP batch.
      * SP-D Fix 1a: isFinished=false → batchType must be "CLERK_WIP" to be excluded from dashboard/list.

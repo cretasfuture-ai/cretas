@@ -249,6 +249,8 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
                 .productTypeId(vc.productTypeId)
                 .productName(vc.productName)
                 .plannedQuantity(vc.quantity)
+                // D-W-01: 计划量就是按这个批次的单位填的
+                .plannedUnit(vc.unit)
                 .quantity(vc.quantity)
                 .unit(vc.unit)
                 .status(ProductionBatchStatus.PLANNED)

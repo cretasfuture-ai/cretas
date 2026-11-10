@@ -355,20 +355,80 @@ public class ProductionBatch extends BaseEntity {
      *
      * <p>末道报工产出单位 (份/盒) 与批次原计划单位 (kg) 不同时, completeProduction 会把
      * {@code unit} 覆盖成产出单位 (份), 使 batch/成品入库单位一致。但此时 {@code plannedQuantity}
-     * 仍是原 kg 数 → {@code efficiency = actualQuantity(份)/plannedQuantity(kg)} 与
-     * {@code unitCost = totalCost(kg基)/goodQuantity(份)} 跨单位无意义。</p>
+     * 仍是原 kg 数 → {@code efficiency = actualQuantity(份)/plannedQuantity(kg)} 跨单位无意义。</p>
      *
      * <p>completeProduction 覆盖 unit 前把原单位写入此列; {@link #calculateMetrics()}
-     * 检测到 {@code plannedUnit != null && !plannedUnit.equals(unit)} 时, 把 efficiency / unitCost
+     * 判出此列与 {@code unit} 不是同一个单位 (按单位契约归一, 千克 ≡ kg) 时把 efficiency
      * 置 null (诚实留空, 镜像 yield 层 cumulative=null 做法), 而非算出垃圾值。</p>
+     *
+     * <p>D-W-01 (2026-11-10): <b>所有</b>写 plannedQuantity 的建批路径都同时写此列 ——
+     * 从计划拷数的 (转批次 / 文员逐道录入) 写计划单位; 按批次自己单位填数的 (手工建批 / AI 建批 /
+     * 读时兜底) 写批次单位。之后任何一次 save 都知道计划量按哪个单位计。
+     * 此列为 null 的是本次之前的存量行: 见 {@link #sourcePlanUnit}, 认不出就不算 (宁空不假)。
+     * <b>unitCost 不受此列影响</b>: 它是 totalCost (金额) ÷ good/actual (产出单位), 两个操作数里都没有
+     * plannedQuantity —— 跨单位时它就是「元/份」, 有意义。此前跨单位也把 unitCost 置 null, 那会让
+     * 文员录入批次 (产出 袋/盒、计划 kg, 正是本系统的主路径) 一 save 就丢掉单盒成本。</p>
      *
      * <p><b>持久化原因</b>: {@code @PreUpdate onUpdate()} 每次 save 都重算 calculateMetrics —
      * 若仅瞬态, 完工后质检改 qualityStatus 等无关更新会用 plannedUnit=null 重新算出垃圾值,
-     * 覆盖已诚实置 null 的结果。持久化保证跨单位事实在批次生命周期内稳定。
-     * 同单位批次此列为 null, calculateMetrics 行为零变化。</p>
+     * 覆盖已诚实置 null 的结果。持久化保证跨单位事实在批次生命周期内稳定。</p>
      */
     @Column(name = "planned_unit", length = 20)
     private String plannedUnit;
+
+    /**
+     * D-W-01: 所挂计划的计划单位 (只读, 随批次一起查出; 不落库)。
+     *
+     * <p>只给 {@link #plannedUnit} 为 null 的存量行用: 那时不知道 plannedQuantity 是从计划拷来的 (计划单位)
+     * 还是按批次自己的单位填的。只有计划单位与批次单位是同一个单位时两种情况才一样, 才能算效率;
+     * 否则 (例: 计划 kg、批次 袋) 效率留 null —— 不猜。新建的批次都写了 plannedUnit, 用不到这里。</p>
+     */
+    @org.hibernate.annotations.Formula("(SELECT pp.planned_unit FROM production_plans pp WHERE pp.id = production_plan_id)")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String sourcePlanUnit;
+
+    // ==================== D-W-01: 效率按同单位算 ====================
+
+    /**
+     * efficiency 列是 numeric(5,2): 能存的绝对值上限 999.99。
+     *
+     * <p>🔴 2026-11-10 prod 实测: 返工计划 SEC-F006-20261109-4661D1 仓库实收, 实际 3 袋 ÷ 计划 0.3 kg
+     * × 100 = 1000.00 ⇒ 更新 production_batches 时 PostgreSQL「numeric field overflow」, 整笔实收 409。
+     * 算出来 ≥ 1000 的一律留 null 并记 warn: ⛔ 不截断 / 不封顶成 999.99 (那是假数), ⛔ 不写 0。</p>
+     */
+    static final BigDecimal EFFICIENCY_COLUMN_LIMIT = new BigDecimal("1000");
+
+    /**
+     * 单位感知的调用方 (仓库实收) 已经用单位契约核过「实际产出」与「计划量」是不是同一个单位:
+     * true 时 {@link #calculateMetrics()} 用 {@link #efficiencyActualInPlannedUnit} 算效率,
+     * 该值为 null = 换算不了, 效率留 null。false (默认) = 没人核过, 走 {@link #plannedUnit} 判跨单位。
+     *
+     * <p>瞬态: 只在本次持久化上下文里有效 (含 save 时 {@code @PreUpdate} 那次重算)。之后别的事务里
+     * 再 save, 由持久化的 {@link #plannedUnit} 兜住: 跨单位 ⇒ null (实体自己不换算, 宁空不假)。</p>
+     */
+    @Transient
+    @lombok.Getter(lombok.AccessLevel.NONE)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private transient boolean efficiencyUnitChecked;
+
+    /** 实际产出折成计划单位后的数量; 见 {@link #efficiencyUnitChecked}。 */
+    @Transient
+    @lombok.Getter(lombok.AccessLevel.NONE)
+    @lombok.Setter(lombok.AccessLevel.NONE)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private transient BigDecimal efficiencyActualInPlannedUnit;
+
+    /**
+     * 调用方已用单位契约把实际产出折到了计划单位 (同单位就是原数)。
+     *
+     * @param actualInPlannedUnit 折到计划单位后的实际产出; {@code null} = 两个单位之间没有可用换算,
+     *                            效率如实留 null (⛔ 不裸除)
+     */
+    public void useActualInPlannedUnitForEfficiency(BigDecimal actualInPlannedUnit) {
+        this.efficiencyUnitChecked = true;
+        this.efficiencyActualInPlannedUnit = actualInPlannedUnit;
+    }
 
     // ==================== SP-D: WIP 批次判别 ====================
 
@@ -428,10 +488,10 @@ public class ProductionBatch extends BaseEntity {
      */
     public void calculateMetrics() {
         // 报工 P0-2: 末道产出单位 (份/盒) ≠ 原计划单位 (kg) → 跨单位.
-        // actualQuantity/goodQuantity 是产出单位计数, plannedQuantity/成本基是原单位 →
-        // efficiency / unitCost 跨单位无意义, 置 null 诚实留空 (镜像 yield 层 cumulative=null).
-        // 同单位 (plannedUnit 为 null 或与 unit 相同) 行为零变化。
-        boolean crossUnit = plannedUnit != null && unit != null && !plannedUnit.equals(unit);
+        // actualQuantity/goodQuantity 是产出单位计数, plannedQuantity 是原单位 →
+        // efficiency 跨单位无意义, 置 null 诚实留空 (镜像 yield 层 cumulative=null).
+        // D-W-01: 「不知道是不是同一个单位」也当跨单位 —— 效率宁空不假 (见 efficiencyComparable)。
+        boolean crossUnit = !efficiencyComparable();
 
         // 成本不完整: 汇总是「不知道」, 不用已知分项求和伪造 (S3-13: 原料无单价被当 0 汇总成 114.80)
         if (Boolean.TRUE.equals(costIncomplete)) {
@@ -447,15 +507,11 @@ public class ProductionBatch extends BaseEntity {
         }
 
         // 计算单位成本 - 优先使用良品数量，如果没有则使用实际产量
-        // 跨单位时: 成本按原单位 (kg) 归集, 产量是产出单位 (份) → 元/份 但基是 kg, 无意义 → 留空
-        if (crossUnit) {
-            unitCost = null;
-        } else {
-            BigDecimal quantityForUnitCost = goodQuantity != null && goodQuantity.compareTo(BigDecimal.ZERO) > 0
-                    ? goodQuantity : actualQuantity;
-            if (totalCost != null && quantityForUnitCost != null && quantityForUnitCost.compareTo(BigDecimal.ZERO) > 0) {
-                unitCost = totalCost.divide(quantityForUnitCost, 4, RoundingMode.HALF_UP);
-            }
+        // D-W-01: 跨单位也照算 —— 金额 ÷ 产出单位数量 = 元/产出单位, 不涉及 plannedQuantity (见 plannedUnit 注释)
+        BigDecimal quantityForUnitCost = goodQuantity != null && goodQuantity.compareTo(BigDecimal.ZERO) > 0
+                ? goodQuantity : actualQuantity;
+        if (totalCost != null && quantityForUnitCost != null && quantityForUnitCost.compareTo(BigDecimal.ZERO) > 0) {
+            unitCost = totalCost.divide(quantityForUnitCost, 4, RoundingMode.HALF_UP);
         }
 
         // 计算良品率 — good/actual 同为产出单位, 跨单位下仍是同单位比值, 正常计算
@@ -478,11 +534,15 @@ public class ProductionBatch extends BaseEntity {
         }
 
         // 计算效率 — actual(产出单位) / planned(原单位), 跨单位时无意义 → 留空
-        if (crossUnit) {
+        // D-W-01: 单位感知的调用方核过单位 ⇒ 用它折好的同单位数量; 换算不了 ⇒ null
+        if (efficiencyUnitChecked) {
+            efficiency = efficiencyActualInPlannedUnit == null
+                    ? null
+                    : efficiencyPercent(efficiencyActualInPlannedUnit, plannedQuantity);
+        } else if (crossUnit) {
             efficiency = null;
         } else if (actualQuantity != null && plannedQuantity != null && plannedQuantity.compareTo(BigDecimal.ZERO) > 0) {
-            efficiency = actualQuantity.multiply(BigDecimal.valueOf(100))
-                    .divide(plannedQuantity, 2, RoundingMode.HALF_UP);
+            efficiency = efficiencyPercent(actualQuantity, plannedQuantity);
         }
 
         // 计算工作时长
@@ -490,6 +550,85 @@ public class ProductionBatch extends BaseEntity {
             workDurationMinutes = (int) java.time.Duration.between(startTime, endTime).toMinutes();
         }
     }
+
+    /**
+     * D-W-01: plannedQuantity 与 actualQuantity 是不是按同一个单位计 —— 实体自己能判出来的部分。
+     *
+     * <ul>
+     *   <li>记了 {@link #plannedUnit}: 它与 {@link #unit} 是同一个单位才可比;</li>
+     *   <li>没记、也没挂计划: 计划量只能是按批次自己的单位填的, 可比 (旧行为);</li>
+     *   <li>没记、挂了计划 (存量行): 计划单位与批次单位是同一个单位才可比 —— 两种来源此时一样;
+     *       计划单位读不到或不同 ⇒ 不知道 ⇒ 不可比。</li>
+     * </ul>
+     * 「同一个单位」按单位契约的归一码判 (千克 ≡ 公斤 ≡ kg), ⛔ 不比原始字符串。
+     */
+    private boolean efficiencyComparable() {
+        if (plannedUnit != null) {
+            return sameUnitCode(plannedUnit, unit);
+        }
+        if (productionPlanId == null) {
+            return true;
+        }
+        return sameUnitCode(sourcePlanUnit, unit);
+    }
+
+    /**
+     * 两个写法是不是同一个单位 —— 实体这边<b>不比服务侧宽</b> (服务侧 = 单位契约 storageUnit 相同或
+     * areEquivalent, 会看工厂单位目录)。实体拿不到工厂目录, 所以只认两种「服务侧一定也认」的情况:
+     * <ol>
+     *   <li>去空白后字面相同 (服务侧 storageUnit 相同, 必认);</li>
+     *   <li>两个都是系统内置单位、内置码相同, 且不是 只/个 (Steve 2026-08-03: 只/个/件 是三个单位,
+     *       crossLanguageCode 保留它们各自的字面): 千克 ≡ 公斤 ≡ kg。</li>
+     * </ol>
+     * 不在内置单位表里的自由文本只认字面相同, ⛔ 不做大小写折叠 —— 服务侧 storageUnit 也原样保留。
+     * 服务侧比这里宽的地方 (只/个 折成 pcs、工厂目录别名) 只会让实体判「不可比」⇒ 效率留 null, 不会多算出数。
+     * 已知缺口: 工厂目录若把某个内置别名改成冲突 / 另一单位, 这里仍按内置码认 (实体看不到目录)。
+     */
+    private static boolean sameUnitCode(String left, String right) {
+        if (left == null || right == null || left.isBlank() || right.isBlank()) {
+            return false;
+        }
+        String leftTrimmed = left.trim();
+        String rightTrimmed = right.trim();
+        if (leftTrimmed.equals(rightTrimmed)) {
+            return true;
+        }
+        java.util.Optional<com.cretas.aims.service.unit.CanonicalUnit> leftBuiltIn =
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl.describeBuiltIn(leftTrimmed);
+        java.util.Optional<com.cretas.aims.service.unit.CanonicalUnit> rightBuiltIn =
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl.describeBuiltIn(rightTrimmed);
+        if (leftBuiltIn.isEmpty() || rightBuiltIn.isEmpty()) {
+            return false;
+        }
+        String leftCode = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(leftTrimmed);
+        String rightCode = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(rightTrimmed);
+        return leftCode != null && leftCode.equals(rightCode)
+                && leftBuiltIn.get().code().equals(rightBuiltIn.get().code());
+    }
+
+    /**
+     * actual / planned × 100, 保留两位。计划量缺失或 ≤ 0 ⇒ null。
+     *
+     * <p>结果的绝对值 ≥ {@link #EFFICIENCY_COLUMN_LIMIT} 存不进 numeric(5,2) ⇒ null + warn:
+     * 这种数在本仓几乎总是两个单位被直接相除 (袋 ÷ kg), 写进去要么让整笔写入失败, 要么是假数。</p>
+     */
+    private BigDecimal efficiencyPercent(BigDecimal actual, BigDecimal planned) {
+        if (actual == null || planned == null || planned.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        BigDecimal percent = actual.multiply(BigDecimal.valueOf(100))
+                .divide(planned, 2, RoundingMode.HALF_UP);
+        if (percent.abs().compareTo(EFFICIENCY_COLUMN_LIMIT) >= 0) {
+            EFFICIENCY_LOG.warn("生产批次效率 {}% 超出 efficiency numeric(5,2) 可存范围, 留空不写: "
+                            + "batchId={}, batchNumber={}, actual={}, planned={}, unit={}, plannedUnit={}",
+                    percent.toPlainString(), id, batchNumber, actual.toPlainString(), planned.toPlainString(),
+                    unit, plannedUnit);
+            return null;
+        }
+        return percent;
+    }
+
+    private static final org.slf4j.Logger EFFICIENCY_LOG = org.slf4j.LoggerFactory.getLogger(ProductionBatch.class);
 
     // ==================== 前端字段别名 ====================
 

@@ -244,6 +244,79 @@ class ClerkChainLineageConnectivityTest {
         assertThat(wipEdges.get(0).getMeta()).containsEntry(LineageEdgeRecorder.META_REF_KEY, "wipStock:WIP-OLD");
     }
 
+    @Test
+    @DisplayName("D-W-01 (L4): 原地重物化把批次数量换成本次末道产出时, 单位一起换")
+    void rematerializeSyncsTheBatchUnitWithTheNewOutputQuantity() {
+        ProductionBatch existing = new ProductionBatch();
+        existing.setId(778L);
+        existing.setFactoryId(FACTORY);
+        existing.setBatchNumber("CLK-B-OLD");
+        existing.setQuantity(new BigDecimal("0.3"));
+        existing.setUnit("kg");
+        when(batchRepo.findByIdAndFactoryId(778L, FACTORY)).thenReturn(Optional.of(existing));
+
+        MaterializeContext ctx = new MaterializeContext(FACTORY, PLAN_ID, "PT-BAG", "PT-BAG", "CLK-B-OLD",
+                true, new BigDecimal("26"), "WH-WKS-1", null, OPERATOR);
+        StepEntry step = step(1, "0.3", "3");
+        step.setOutputUnit("袋");
+
+        service.rematerializeInPlace(ctx, 778L, null, List.of(step), List.of(), new ArrayList<>());
+
+        assertThat(existing.getQuantity()).isEqualByComparingTo("3");
+        assertThat(existing.getUnit()).as("3 是袋数, 不能还挂着上次的 kg").isEqualTo("袋");
+    }
+
+    @Test
+    @DisplayName("D-W-01 (L1): 重物化换单位时, 计划量来自计划 ⇒ plannedUnit 记计划单位; 来自批次自己 ⇒ 跟着产出走")
+    void rematerializeRefreshesThePlannedSideByWhereThePlannedQuantityCameFrom() {
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY);
+        plan.setPlannedQuantity(new BigDecimal("2"));
+        plan.setPlannedUnit("kg");
+        when(planRepository.findById(PLAN_ID)).thenReturn(Optional.of(plan));
+
+        ProductionBatch fromPlan = new ProductionBatch();
+        fromPlan.setId(779L);
+        fromPlan.setFactoryId(FACTORY);
+        fromPlan.setBatchNumber("CLK-B-FROM-PLAN");
+        fromPlan.setProductionPlanId(PLAN_ID);
+        fromPlan.setPlannedQuantity(new BigDecimal("2"));   // 存量行: planned_unit 为 null
+        fromPlan.setQuantity(new BigDecimal("2"));
+        fromPlan.setUnit("kg");
+        when(batchRepo.findByIdAndFactoryId(779L, FACTORY)).thenReturn(Optional.of(fromPlan));
+        MaterializeContext ctx = new MaterializeContext(FACTORY, PLAN_ID, "PT-BAG", "PT-BAG", "CLK-B-FROM-PLAN",
+                true, new BigDecimal("26"), "WH-WKS-1", null, OPERATOR);
+        StepEntry bags = step(1, "2", "3");
+        bags.setOutputUnit("袋");
+        service.rematerializeInPlace(ctx, 779L, null, List.of(bags), List.of(), new ArrayList<>());
+
+        assertThat(fromPlan.getUnit()).isEqualTo("袋");
+        assertThat(fromPlan.getPlannedQuantity()).isEqualByComparingTo("2");
+        assertThat(fromPlan.getPlannedUnit()).as("计划量 2 仍是 kg").isEqualTo("kg");
+        fromPlan.setActualQuantity(new BigDecimal("3"));
+        fromPlan.calculateMetrics();
+        assertThat(fromPlan.getEfficiency()).as("3 袋 / 2 kg").isNull();
+
+        plan.setPlannedQuantity(null);   // 建批时计划没给数 ⇒ 计划量退回了产出量
+        ProductionBatch fromOutput = new ProductionBatch();
+        fromOutput.setId(780L);
+        fromOutput.setFactoryId(FACTORY);
+        fromOutput.setBatchNumber("CLK-B-FROM-OUTPUT");
+        fromOutput.setProductionPlanId(PLAN_ID);
+        fromOutput.setPlannedQuantity(new BigDecimal("0.3"));
+        fromOutput.setPlannedUnit("kg");
+        fromOutput.setQuantity(new BigDecimal("0.3"));
+        fromOutput.setUnit("kg");
+        when(batchRepo.findByIdAndFactoryId(780L, FACTORY)).thenReturn(Optional.of(fromOutput));
+        MaterializeContext ctx2 = new MaterializeContext(FACTORY, PLAN_ID, "PT-BAG", "PT-BAG", "CLK-B-FROM-OUTPUT",
+                true, new BigDecimal("26"), "WH-WKS-1", null, OPERATOR);
+        service.rematerializeInPlace(ctx2, 780L, null, List.of(bags), List.of(), new ArrayList<>());
+
+        assertThat(fromOutput.getPlannedQuantity()).as("计划量本来就是产出量, 跟着这次的产出").isEqualByComparingTo("3");
+        assertThat(fromOutput.getPlannedUnit()).isEqualTo("袋");
+    }
+
     // ─────────────────────────────────────────────────────────────
 
     /** 从目标节点沿边反向走到底，返回全部祖先 "TYPE:id"。 */

@@ -183,4 +183,27 @@ class ProcessingServiceImplCreateBatchProductNameTest {
         assertEquals("手工录入品名", saved.getProductName());
         org.mockito.Mockito.verifyNoInteractions(productTypeRepository);
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("D-W-01: 手工建批的计划量按批次自己的单位填 ⇒ plannedUnit 记成批次单位, 挂 kg 计划也按箱比")
+    void manualBatchRecordsItsOwnUnitAsThePlannedQuantityUnit() {
+        when(productionBatchRepository.existsByFactoryIdAndBatchNumber(anyString(), anyString()))
+                .thenReturn(false);
+        when(productionBatchRepository.save(any(ProductionBatch.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        when(productTypeRepository.findByIdAndFactoryId(eq("PT-箱"), eq(F_ID)))
+                .thenReturn(Optional.of(buildProductType("PT-箱", "整箱装")));
+
+        ProductionBatch batch = buildBatch("BATCH-DW01", "PT-箱", null);
+        batch.setProductionPlanId("PLAN-KG");   // 挂一个按 kg 的计划
+        batch.setPlannedQuantity(new java.math.BigDecimal("100"));
+        batch.setUnit("箱");
+        ProductionBatch saved = service.createBatch(F_ID, batch);
+
+        assertEquals("箱", saved.getPlannedUnit());
+        saved.setActualQuantity(new java.math.BigDecimal("95"));
+        saved.calculateMetrics();
+        assertEquals(0, new java.math.BigDecimal("95.00").compareTo(saved.getEfficiency()),
+                "100 箱计划 / 95 箱实际 = 95.00, 不因为挂了 kg 计划就变成不知道");
+    }
 }

@@ -194,6 +194,13 @@ public class ProcessingServiceImpl implements ProcessingService {
         if (batch.getUnit() == null || batch.getUnit().isEmpty()) {
             batch.setUnit("kg");
         }
+        // D-W-01: 手工 / AI 建批 (ProcessingController.createBatch、ProcessingBatchCreateTool、
+        // ProcessingBatchCreateToolDataOp 都走这里) 的计划量是按批次自己的单位填的 —— 记下来,
+        // 实体与实收才知道它与产出同单位 (100 箱 / 95 箱 ⇒ 95.00), 哪怕批次挂了一个按 kg 的计划。
+        if (batch.getPlannedQuantity() != null
+                && (batch.getPlannedUnit() == null || batch.getPlannedUnit().isBlank())) {
+            batch.setPlannedUnit(batch.getUnit());
+        }
 
         return productionBatchRepository.save(batch);
     }
@@ -268,11 +275,16 @@ public class ProcessingServiceImpl implements ProcessingService {
         batch.setDefectQuantity(defectQuantity);
         // P0-2: 末道产出单位非空时, 成品按"末道产出单位"(如 份/盒)入库, 而非批次原单位 (kg)
         // → createFinishedGoodsFromBatch 的 fg.setUnit(batch.getUnit()) 自动拿到正确单位.
-        // 覆盖 unit 前先把原计划单位记到瞬态 plannedUnit, 供 calculateMetrics 检测跨单位:
-        // 跨单位 (产出"份" ≠ 原计划"kg") 时 efficiency/unitCost 会被置 null 诚实留空,
+        // 覆盖 unit 前确保 plannedUnit (持久化列) 记着计划量的单位, 供 calculateMetrics 检测跨单位:
+        // 跨单位 (产出"份" ≠ 原计划"kg") 时 efficiency 置 null 诚实留空,
         // 不算出 actualQuantity(份)/plannedQuantity(kg) 这类无意义值 (镜像 yield cumulative=null).
+        // unitCost 不受影响 (金额 ÷ 产出份数 = 元/份, 见 ProductionBatch#plannedUnit)。
+        // D-W-01: 建批时已经记过的 (转批次 / 文员录入 / 手工建批都写) 不覆盖 —— 文员批次的 unit 早已是
+        // 产出单位, 拿它覆盖会把「计划量是 kg」改成「计划量是袋」; 只给没记的存量批次补上当前单位。
         if (finishedUnit != null && !finishedUnit.isBlank()) {
-            batch.setPlannedUnit(batch.getUnit());  // 记录原单位 (kg), 须在 setUnit 之前
+            if (batch.getPlannedUnit() == null || batch.getPlannedUnit().isBlank()) {
+                batch.setPlannedUnit(batch.getUnit());  // 记录原单位 (kg), 须在 setUnit 之前
+            }
             batch.setUnit(finishedUnit);
         }
         // 计算指标
@@ -445,6 +457,10 @@ public class ProcessingServiceImpl implements ProcessingService {
         }
         if (batch.getPlannedQuantity() == null) {
             batch.setPlannedQuantity(batch.getQuantity());
+            // D-W-01: 补的是批次自己的数量, 按批次单位计
+            if (batch.getPlannedUnit() == null) {
+                batch.setPlannedUnit(batch.getUnit());
+            }
         }
     }
 
