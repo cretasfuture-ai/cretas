@@ -535,8 +535,8 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     /**
      * 三价对比看板 (per-SKU): 某产品最近一条已算出 {@code unitCost} 的批次 (按创建时间倒序).
      *
-     * <p>{@code unitCost} 由 {@link ProductionBatch#calculateMetrics()} 诚实计算 (跨单位/无成本
-     * 输入时留 null, 见实体注释) — 本查询只取有值的行, 调用方用最新一条作为「实际成本」看板取数,
+     * <p>{@code unitCost} 由 {@link ProductionBatch#calculateMetrics()} 诚实计算 (元/产出单位, 跨单位也照算;
+     * 无成本输入时留 null, 见实体注释) — 本查询只取有值的行, 调用方用最新一条作为「实际成本」看板取数,
      * 空列表即诚实缺数据 (不臆造 0)。排除 CLERK_WIP 内部工件批次, 与 {@link #findByFactoryId} 口径统一
      * (batchType 允许 null, 与既有排除写法不同 — 避免历史空 batchType 记录被误排除)。
      *

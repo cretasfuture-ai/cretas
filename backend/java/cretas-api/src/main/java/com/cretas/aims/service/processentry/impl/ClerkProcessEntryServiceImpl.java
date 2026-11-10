@@ -588,10 +588,12 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                 .orElseThrow(() -> new BusinessException(404,
                         "生产批次不存在或无权访问: " + existingBatchId));
         if (lastOutputQty.signum() > 0) {
-            pb.setQuantity(lastOutputQty);
             // D-W-01 (L4): 数量换成这次末道产出, 单位必须跟着换 —— 否则「3」还挂着上次的单位,
             // 与建批路径 (createProductionBatch 用同一个 resolveBatchOutputUnit) 不一致。
-            pb.setUnit(resolveBatchOutputUnit(steps));
+            String outputUnit = resolveBatchOutputUnit(steps);
+            refreshPlannedSideOnRematerialize(ctx.getFactoryId(), pb, lastOutputQty, outputUnit);
+            pb.setQuantity(lastOutputQty);
+            pb.setUnit(outputUnit);
         }
         applyBatchCostSummary(pb, batchMaterialCost, batchLaborCost, batchTotalCost,
                 firstInputQty, lastOutputQty, lastYieldOutputQty, anyUncosted);
@@ -674,9 +676,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         batch.setPlannedQuantity(plannedQty != null ? plannedQty : qty);
         // D-W-01: 计划量从计划拷来 ⇒ 它按计划单位计 (例: 计划 0.3 kg, 批次产出按袋)。把计划单位记在批次上,
         // 之后任何一次 save 重算效率都知道这是两个单位, 留 null 而不是 3 袋 ÷ 0.3 kg 裸除。
-        // 退回 qty 时计划量就是产出量, 与产出同单位, 不记。
+        // 退回 qty 时计划量就是产出量, 记产出单位。
         batch.setPlannedUnit(plannedQty != null ? plannedUnitForBatch(ctx.getFactoryId(),
-                sourcePlan.getPlannedUnit(), outputUnit) : null);
+                sourcePlan.getPlannedUnit(), outputUnit) : outputUnit);
         // 母计划状态同步 (2026-07 修复): 逐工序录入建 FINISHED 批次时 (ctx.planId 非空) 只建了
         // ProductionBatch(IN_PROGRESS), 从未回写母 ProductionPlan.status → 计划永远卡在 PENDING,
         // 即便生产已实际进行/完成 (看板/统计按 production_plans.status 过滤 IN_PROGRESS/PENDING 因此口径错)。
@@ -1636,6 +1638,33 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             }
         }
         return "kg";
+    }
+
+    /**
+     * D-W-01 (L1): 原地重物化要换批次的产出单位时, 计划量那一侧按建批时的同一条规则重认一次。
+     *
+     * <ul>
+     *   <li>计划量 = 计划的计划量 ⇒ 来自计划: 计划单位 (与新产出单位等价就记产出写法);</li>
+     *   <li>计划没给数、计划量 = 上次的产出量 ⇒ 建批时退回了产出量: 跟着这次的产出走 (数量与单位一起);</li>
+     *   <li>都对不上 ⇒ 认不出, 不动 —— 已记的 plannedUnit 本来就描述没变的 plannedQuantity;
+     *       存量 null 留给实体按计划单位判 (不同就不算)。</li>
+     * </ul>
+     */
+    private void refreshPlannedSideOnRematerialize(String factoryId, ProductionBatch pb,
+                                                   BigDecimal newQuantity, String newUnit) {
+        BigDecimal planned = pb.getPlannedQuantity();
+        if (planned == null) {
+            return;
+        }
+        com.cretas.aims.entity.ProductionPlan plan = planRepository == null || pb.getProductionPlanId() == null
+                ? null : planRepository.findById(pb.getProductionPlanId()).orElse(null);
+        BigDecimal planQuantity = plan == null ? null : plan.getPlannedQuantity();
+        if (planQuantity != null && planned.compareTo(planQuantity) == 0) {
+            pb.setPlannedUnit(plannedUnitForBatch(factoryId, plan.getPlannedUnit(), newUnit));
+        } else if (planQuantity == null && pb.getQuantity() != null && planned.compareTo(pb.getQuantity()) == 0) {
+            pb.setPlannedQuantity(newQuantity);
+            pb.setPlannedUnit(newUnit);
+        }
     }
 
     /**

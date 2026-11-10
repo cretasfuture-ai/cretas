@@ -6927,9 +6927,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * = 1000.00, 写不进 numeric(5,2), 整笔实收 409「数据处理异常」。同形问题 D-N-01 (#1550) 已在超产判断里修过,
      * 这里复用同一条换算 ({@link #convertOutputToPlanUnit}: 单位契约 → 计数单位 × 产品每单位克重)。</p>
      *
-     * <p>计划量的单位: 批次上记了 {@code plannedUnit} 就用它 (转批次 / 文员录入建批时写, P0-2 完工时写);
-     * 没记 = 计划量本来就按批次自己的单位填 (手工建批: 100 箱计划、95 箱实际 ⇒ 95.00)。
-     * ⛔ 不拿计划的单位顶上: 手工批次挂了 kg 计划时, 那会把正确的 95.00 改成 47.50 或 null。</p>
+     * <p>计划量的单位: 批次上记的 {@code plannedUnit} —— 所有建批路径都写 (从计划拷数的写计划单位,
+     * 手工 / AI 建批写批次单位: 100 箱计划、95 箱实际 ⇒ 95.00)。没记的是存量行, 见
+     * {@link #legacyPlannedQuantityUnit}: 计划单位与批次单位不是同一个单位就不算 (3 袋 / 2 kg 不写 150.00)。
+     * ⛔ 不拿计划的单位顶上, 也 ⛔ 不拿批次单位顶上 —— 两个都是猜。</p>
      *
      * <p>⛔ 不靠 catch 兜「换算不了」: 仓储调用里抛出的异常已经把事务标成 rollback-only, catch 住也救不回实收。
      * 这里每一步都先判空, 「换不过去」只走返回 null 这一条路。</p>
@@ -6941,7 +6942,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (actual == null || batch.getPlannedQuantity() == null || batch.getPlannedQuantity().signum() <= 0) {
             return null;
         }
-        String plannedUnit = firstNonBlank(trimToNull(batch.getPlannedUnit()), trimToNull(batch.getUnit()));
+        String plannedUnit = trimToNull(batch.getPlannedUnit());
+        if (plannedUnit == null) {
+            plannedUnit = legacyPlannedQuantityUnit(factoryId, plan, batch);
+            if (plannedUnit == null) {
+                log.warn("仓库实收批次效率留空: 存量批次没记计划量单位, 计划单位与批次单位不是同一个单位, 不猜 "
+                                + "batchId={}, batchUnit={}, planUnit={}",
+                        batch.getId(), batch.getUnit(), plan == null ? null : plan.getPlannedUnit());
+                return null;
+            }
+        }
         String planUnit = canonicalReceiptUnit(plannedUnit);
         String outUnit = canonicalReceiptUnit(trimToNull(actualUnit));
         if (planUnit == null || outUnit == null || unitContractService == null) {
@@ -6961,6 +6971,30 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     actual.toPlainString(), outUnit, planUnit, batch.getId(), productTypeId);
         }
         return converted;
+    }
+
+    /**
+     * D-W-01: 存量批次 (本次之前建的, plannedUnit 为 null) 的计划量按哪个单位计 —— 不知道。
+     * 它可能是从计划拷来的 (计划单位), 也可能是按批次自己的单位填的 (手工建批)。
+     * 只有计划单位与批次单位是同一个单位时两种来源才一样 ⇒ 返回批次单位; 否则返回 null (不猜)。
+     * 没挂计划的批次只可能是后一种。
+     */
+    private String legacyPlannedQuantityUnit(String factoryId, ProductionPlan plan, ProductionBatch batch) {
+        String batchSide = trimToNull(batch.getUnit());
+        if (batchSide == null) {
+            return null;
+        }
+        if (batch.getProductionPlanId() == null) {
+            return batchSide;
+        }
+        String planSide = plan == null ? null : trimToNull(plan.getPlannedUnit());
+        if (planSide == null || unitContractService == null) {
+            return null;
+        }
+        String planCode = canonicalReceiptUnit(planSide);
+        String batchCode = canonicalReceiptUnit(batchSide);
+        return sameUnit(factoryId, planCode, batchCode) || unitContractService.areEquivalent(factoryId, planCode, batchCode)
+                ? batchSide : null;
     }
 
     /** Quality is attributable only when receipt output identity is singular and auditable. */

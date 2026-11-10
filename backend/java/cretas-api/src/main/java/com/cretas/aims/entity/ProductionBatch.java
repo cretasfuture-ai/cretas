@@ -358,22 +358,34 @@ public class ProductionBatch extends BaseEntity {
      * 仍是原 kg 数 → {@code efficiency = actualQuantity(份)/plannedQuantity(kg)} 跨单位无意义。</p>
      *
      * <p>completeProduction 覆盖 unit 前把原单位写入此列; {@link #calculateMetrics()}
-     * 检测到 {@code plannedUnit != null && !plannedUnit.equals(unit)} 时, 把 efficiency
+     * 判出此列与 {@code unit} 不是同一个单位 (按单位契约归一, 千克 ≡ kg) 时把 efficiency
      * 置 null (诚实留空, 镜像 yield 层 cumulative=null 做法), 而非算出垃圾值。</p>
      *
-     * <p>D-W-01 (2026-11-10): 凡是从计划拷 plannedQuantity 的建批路径 (转批次 / 文员逐道录入)
-     * 都在建批时写此列 = 计划单位, 让「计划量按哪个单位计」跟着批次走, 之后任何一次 save 都不再裸除。
+     * <p>D-W-01 (2026-11-10): <b>所有</b>写 plannedQuantity 的建批路径都同时写此列 ——
+     * 从计划拷数的 (转批次 / 文员逐道录入) 写计划单位; 按批次自己单位填数的 (手工建批 / AI 建批 /
+     * 读时兜底) 写批次单位。之后任何一次 save 都知道计划量按哪个单位计。
+     * 此列为 null 的是本次之前的存量行: 见 {@link #sourcePlanUnit}, 认不出就不算 (宁空不假)。
      * <b>unitCost 不受此列影响</b>: 它是 totalCost (金额) ÷ good/actual (产出单位), 两个操作数里都没有
      * plannedQuantity —— 跨单位时它就是「元/份」, 有意义。此前跨单位也把 unitCost 置 null, 那会让
      * 文员录入批次 (产出 袋/盒、计划 kg, 正是本系统的主路径) 一 save 就丢掉单盒成本。</p>
      *
      * <p><b>持久化原因</b>: {@code @PreUpdate onUpdate()} 每次 save 都重算 calculateMetrics —
      * 若仅瞬态, 完工后质检改 qualityStatus 等无关更新会用 plannedUnit=null 重新算出垃圾值,
-     * 覆盖已诚实置 null 的结果。持久化保证跨单位事实在批次生命周期内稳定。
-     * 同单位批次此列为 null, calculateMetrics 行为零变化。</p>
+     * 覆盖已诚实置 null 的结果。持久化保证跨单位事实在批次生命周期内稳定。</p>
      */
     @Column(name = "planned_unit", length = 20)
     private String plannedUnit;
+
+    /**
+     * D-W-01: 所挂计划的计划单位 (只读, 随批次一起查出; 不落库)。
+     *
+     * <p>只给 {@link #plannedUnit} 为 null 的存量行用: 那时不知道 plannedQuantity 是从计划拷来的 (计划单位)
+     * 还是按批次自己的单位填的。只有计划单位与批次单位是同一个单位时两种情况才一样, 才能算效率;
+     * 否则 (例: 计划 kg、批次 袋) 效率留 null —— 不猜。新建的批次都写了 plannedUnit, 用不到这里。</p>
+     */
+    @org.hibernate.annotations.Formula("(SELECT pp.planned_unit FROM production_plans pp WHERE pp.id = production_plan_id)")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String sourcePlanUnit;
 
     // ==================== D-W-01: 效率按同单位算 ====================
 
@@ -478,8 +490,8 @@ public class ProductionBatch extends BaseEntity {
         // 报工 P0-2: 末道产出单位 (份/盒) ≠ 原计划单位 (kg) → 跨单位.
         // actualQuantity/goodQuantity 是产出单位计数, plannedQuantity 是原单位 →
         // efficiency 跨单位无意义, 置 null 诚实留空 (镜像 yield 层 cumulative=null).
-        // 同单位 (plannedUnit 为 null 或与 unit 相同) 行为零变化。
-        boolean crossUnit = plannedUnit != null && unit != null && !plannedUnit.equals(unit);
+        // D-W-01: 「不知道是不是同一个单位」也当跨单位 —— 效率宁空不假 (见 efficiencyComparable)。
+        boolean crossUnit = !efficiencyComparable();
 
         // 成本不完整: 汇总是「不知道」, 不用已知分项求和伪造 (S3-13: 原料无单价被当 0 汇总成 114.80)
         if (Boolean.TRUE.equals(costIncomplete)) {
@@ -537,6 +549,37 @@ public class ProductionBatch extends BaseEntity {
         if (startTime != null && endTime != null) {
             workDurationMinutes = (int) java.time.Duration.between(startTime, endTime).toMinutes();
         }
+    }
+
+    /**
+     * D-W-01: plannedQuantity 与 actualQuantity 是不是按同一个单位计 —— 实体自己能判出来的部分。
+     *
+     * <ul>
+     *   <li>记了 {@link #plannedUnit}: 它与 {@link #unit} 是同一个单位才可比;</li>
+     *   <li>没记、也没挂计划: 计划量只能是按批次自己的单位填的, 可比 (旧行为);</li>
+     *   <li>没记、挂了计划 (存量行): 计划单位与批次单位是同一个单位才可比 —— 两种来源此时一样;
+     *       计划单位读不到或不同 ⇒ 不知道 ⇒ 不可比。</li>
+     * </ul>
+     * 「同一个单位」按单位契约的归一码判 (千克 ≡ 公斤 ≡ kg), ⛔ 不比原始字符串。
+     */
+    private boolean efficiencyComparable() {
+        if (plannedUnit != null) {
+            return sameUnitCode(plannedUnit, unit);
+        }
+        if (productionPlanId == null) {
+            return true;
+        }
+        return sameUnitCode(sourcePlanUnit, unit);
+    }
+
+    /** 两个写法归一到单位契约的码后是否相同; 任一侧读不到 ⇒ false。 */
+    private static boolean sameUnitCode(String left, String right) {
+        if (left == null || right == null || left.isBlank() || right.isBlank()) {
+            return false;
+        }
+        String leftCode = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(left);
+        String rightCode = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(right);
+        return leftCode != null && leftCode.equals(rightCode);
     }
 
     /**

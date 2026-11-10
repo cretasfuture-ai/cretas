@@ -32,8 +32,8 @@ import java.util.List;
  * 让财审/销售主管不必等超支才被动收到推送, 也能主动查看全量 SKU 的当前状态。
  *
  * <p><b>实际成本来源</b>: 最近一条已算出 {@code unitCost} 的完工批次
- * ({@link ProductionBatch#getUnitCost()}, 由实体 {@code calculateMetrics()} 诚实计算,
- * 跨单位/缺成本输入时为 null)。取「最近一条」而非加权平均, 与超支报警引擎按单批次触发的
+ * ({@link ProductionBatch#getUnitCost()}, 由实体 {@code calculateMetrics()} 诚实计算 = 金额 ÷ 产出数量,
+ * 即「元/产出单位」, 跨单位批次也照算 (D-W-01); 缺成本输入时为 null)。取「最近一条」而非加权平均, 与超支报警引擎按单批次触发的
  * 语义保持一致 (报警引擎也是每次单批产出触发, 不做历史加权)。
  */
 @Slf4j

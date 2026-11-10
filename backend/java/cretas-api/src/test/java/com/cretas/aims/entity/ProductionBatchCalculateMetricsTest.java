@@ -15,14 +15,14 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * P0-2 review fix: {@link ProductionBatch#calculateMetrics()} 跨单位指标守卫。
  *
  * <p>末道报工产出单位 (份) ≠ 批次原计划单位 (kg) 时, completeProduction 把 unit 覆盖成产出单位,
- * 并把原单位记到 plannedUnit。calculateMetrics 检测到 {@code plannedUnit != unit} 时:</p>
+ * 并把原单位记到 plannedUnit。calculateMetrics 判出 plannedUnit 与 unit 不是同一个单位时:</p>
  * <ul>
  *   <li>efficiency = actualQuantity(份)/plannedQuantity(kg) → 跨单位无意义 → 置 null (诚实留空)</li>
- *   <li>unitCost = totalCost(kg基)/goodQuantity(份) → 跨单位无意义 → 置 null</li>
+ *   <li>unitCost = totalCost(金额)/goodQuantity(份) → 元/份, 不涉及计划量 → 照算 (D-W-01)</li>
  *   <li>yieldRate = good/actual 同为产出单位 → 仍正常计算</li>
  * </ul>
  *
- * <p>同单位 (plannedUnit 为 null 或 == unit) 行为零回归。</p>
+ * <p>同单位 (plannedUnit 与 unit 同一个单位; 或 plannedUnit 为 null 且没挂计划) 行为零回归。</p>
  */
 class ProductionBatchCalculateMetricsTest {
 
@@ -39,7 +39,7 @@ class ProductionBatchCalculateMetricsTest {
 
     @Test
     @DisplayName("P0-2: 跨单位 (份≠kg) → efficiency 置 null; unitCost 按产出单位算 (元/份)")
-    void crossUnit_suppressesEfficiencyAndUnitCost() {
+    void crossUnit_suppressesEfficiencyButKeepsUnitCostPerOutputUnit() {
         ProductionBatch b = baseBatch();
         b.setPlannedUnit("kg");   // 原计划单位
         b.setUnit("份");          // 末道产出单位 (completeProduction 覆盖后)

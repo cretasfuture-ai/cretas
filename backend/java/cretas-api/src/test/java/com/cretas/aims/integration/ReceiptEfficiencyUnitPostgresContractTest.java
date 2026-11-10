@@ -96,7 +96,8 @@ class ReceiptEfficiencyUnitPostgresContractTest {
     @EnableJpaRepositories("com.cretas.aims.repository")
     @Import({ProductionPlanServiceImpl.class, WipInventoryServiceImpl.class, SecondaryPlanFeedService.class,
             SettlementSemiStockingService.class, FinishedGoodsFeedServiceImpl.class,
-            CustomerSuppliedSettlementCoverageGuard.class, UnitContractServiceImpl.class})
+            CustomerSuppliedSettlementCoverageGuard.class, UnitContractServiceImpl.class,
+            com.cretas.aims.service.processentry.impl.ClerkProcessEntryServiceImpl.class})
     static class Runtime { }
 
     @DynamicPropertySource
@@ -131,6 +132,7 @@ class ReceiptEfficiencyUnitPostgresContractTest {
     @Autowired ProductionBatchRepository batches;
     @Autowired ProcessSheetRowRepository rows;
     @Autowired ProductTypeRepository productTypes;
+    @Autowired com.cretas.aims.service.processentry.ClerkProcessEntryService clerkEntry;
 
     private TransactionTemplate tx;
 
@@ -320,14 +322,125 @@ class ReceiptEfficiencyUnitPostgresContractTest {
 
     @Test
     void manualBatchPlannedInItsOwnUnitUnderAKilogramPlanIsComparedInTheBatchUnit() {
-        // 手工建批 (ProcessingController.createBatch): 计划量 100 箱、批次单位箱、不记 plannedUnit; 挂的计划按 kg
-        Fixture fixture = fixture("500", "kg", "100", null, "95", "箱", "箱", null);
+        // 手工建批 (ProcessingController.createBatch → ProcessingServiceImpl.createBatch): 计划量 100 箱、
+        // 批次单位箱, createBatch 现在把 plannedUnit 记成批次单位; 挂的计划按 kg
+        Fixture fixture = fixture("500", "kg", "100", "箱", "95", "箱", "箱", null);
 
         settleThenReceive(fixture, "95", "箱", null);
 
         assertThat(finishedGoodsOf(fixture.planId())).isEqualTo(1);
         assertThat((BigDecimal) batchRow(fixture.batchId()).get("efficiency"))
                 .as("95 箱 / 100 箱, 不拿计划的 kg 去折").isEqualByComparingTo("95.00");
+    }
+
+    @Test
+    void preReleaseRowWithoutPlannedUnitUnderAKilogramPlanStaysUnknownAtReceiptAndOnLaterSaves() {
+        // 本次发布之前的文员批次形状: planned_unit 为 NULL、单位袋、计划量 2 从 kg 计划拷来、实际 3 袋
+        Fixture fixture = fixture("2", "kg", "2", null, "3", "袋", "袋", null);
+        assertThat(jdbc.queryForObject("select planned_unit from production_batches where id = ?",
+                String.class, fixture.batchId())).isNull();
+
+        ProductionWarehouseReceiptResponse response = settleThenReceive(fixture, "3", "袋", null);
+
+        assertThat(response).isNotNull();
+        assertThat(finishedGoodsOf(fixture.planId())).isEqualTo(1);
+        assertThat(batchRow(fixture.batchId()).get("efficiency"))
+                .as("不知道计划量 2 是 kg 还是袋 ⇒ 不算; 不是 150.00").isNull();
+
+        tx.executeWithoutResult(state -> {
+            ProductionBatch batch = batches.findById(fixture.batchId()).orElseThrow();
+            assertThat(batch.getPlannedUnit()).isNull();
+            assertThat(batch.getSourcePlanUnit()).as("实体从所挂计划读到 kg").isEqualTo("kg");
+            batch.setLaborCost(new BigDecimal("12.00"));
+            batch.calculateMetrics();
+            batches.save(batch);
+        });
+        Map<String, Object> after = jdbc.queryForMap(
+                "select efficiency, labor_cost from production_batches where id = ?", fixture.batchId());
+        assertThat((BigDecimal) after.get("labor_cost")).isEqualByComparingTo("12.00");
+        assertThat(after.get("efficiency")).as("另一事务里的 save 也不裸除").isNull();
+    }
+
+    @Test
+    void preReleaseRowWhoseBatchUnitIsThePlanUnitStillGetsItsEfficiency() {
+        // 阴性对照: 存量行 planned_unit 为 NULL, 但批次单位与计划单位是同一个 (千克 ≡ kg) ⇒ 两种来源一样, 照算
+        Fixture fixture = fixture("100", "千克", "100", null, "95", "kg", "kg", null);
+
+        settleThenReceive(fixture, "95", "kg", "OTHER");
+
+        assertThat((BigDecimal) batchRow(fixture.batchId()).get("efficiency")).isEqualByComparingTo("95.00");
+    }
+
+    @Test
+    void endToEndFromClerkRecordChainThroughSettlementToReceipt() {
+        // 真建批入口: 文员逐道录入 recordChain 建成品批 (计划量从 2 kg 计划拷来, 产出 3 袋), 再结单、实收
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String planId = tx.execute(state -> {
+            ProductType product = new ProductType();
+            product.setFactoryId(F);
+            product.setCode("E2E-" + suffix);
+            product.setName("返工小包 E2E " + suffix);
+            product.setUnit("袋");
+            product = productTypes.save(product);
+            ProductionPlan plan = new ProductionPlan();
+            plan.setId("PLAN-DW01-E2E-" + suffix);
+            plan.setFactoryId(F);
+            plan.setPlanNumber("SEC-DW01-E2E-" + suffix);
+            plan.setProductTypeId(product.getId());
+            plan.setPlannedQuantity(new BigDecimal("2"));
+            plan.setPlannedUnit("kg");
+            plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+            plan.setCreatedBy(OPERATOR);
+            plans.save(plan);
+            return plan.getId();
+        });
+        String productTypeId = plans.findById(planId).orElseThrow().getProductTypeId();
+
+        com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry step =
+                new com.cretas.aims.dto.processentry.ProcessChainEntryRequest.StepEntry();
+        step.setProcessOrder(1);
+        step.setProcessName("包装");
+        step.setInputQuantity(new BigDecimal("2"));
+        step.setInputUnit("kg");
+        step.setOutputQuantity(new BigDecimal("3"));
+        step.setOutputUnit("袋");
+        step.setUnit("袋");
+        step.setLaborStartTime("08:00");   // 有工时才写逐道报工 (结单预填从报工取产量)
+        step.setLaborEndTime("09:00");
+        step.setWorkerCount(1);
+        com.cretas.aims.dto.processentry.ProcessChainEntryRequest.BatchEntry entry =
+                new com.cretas.aims.dto.processentry.ProcessChainEntryRequest.BatchEntry();
+        entry.setClientBatchKey("FIN-" + suffix);
+        entry.setProductTypeId(productTypeId);
+        entry.setFinished(true);
+        entry.setSteps(java.util.List.of(step));
+        com.cretas.aims.dto.processentry.ProcessChainEntryRequest chain =
+                new com.cretas.aims.dto.processentry.ProcessChainEntryRequest();
+        chain.setIdempotencyKey("chain-" + suffix);
+        chain.setBatches(java.util.List.of(entry));
+        tx.execute(state -> clerkEntry.recordChain(F, planId, chain, OPERATOR));
+
+        Long batchId = jdbc.queryForObject("select id from production_batches where production_plan_id = ? "
+                + "and batch_type = 'REGULAR'", Long.class, planId);
+        Map<String, Object> created = jdbc.queryForMap(
+                "select planned_quantity, planned_unit, unit from production_batches where id = ?", batchId);
+        assertThat((BigDecimal) created.get("planned_quantity")).isEqualByComparingTo("2");
+        assertThat(created.get("planned_unit")).as("建批时记下计划量是 kg").isEqualTo("kg");
+        assertThat(created.get("unit")).isEqualTo("袋");
+
+        var prefill = planService.getSettlementPrefill(F, planId);
+        assertThat(prefill.getAudit().getIssues())
+                .as("结单预填阻塞项: %s", prefill.getAudit().getIssues().stream()
+                        .map(i -> i.getCode() + "/" + i.getSeverity() + "/" + i.getMessage()).toList())
+                // 没有原料领用由结单时选的物料差异原因 (「无原料领用」) 回答, 其余阻塞项都不该有
+                .noneMatch(i -> i.getSeverity() == com.cretas.aims.dto.production.ProductionSettlementPrefillResponse.Severity.BLOCKER
+                        && !"MATERIAL_CONSUMPTION_EMPTY".equals(i.getCode()));
+
+        settleThenReceive(new Fixture(planId, batchId), "3", "袋", null);
+
+        assertThat(finishedGoodsOf(planId)).isEqualTo(1);
+        assertThat(batchRow(batchId).get("status")).isEqualTo("COMPLETED");
+        assertThat(batchRow(batchId).get("efficiency")).as("3 袋 / 2 kg 没有每袋克重 ⇒ 不知道").isNull();
     }
 
     @Test

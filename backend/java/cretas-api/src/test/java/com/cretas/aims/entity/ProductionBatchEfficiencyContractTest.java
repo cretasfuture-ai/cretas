@@ -59,6 +59,39 @@ class ProductionBatchEfficiencyContractTest {
     }
 
     @Test
+    void theSameUnitWrittenDifferentlyIsNotCrossUnit() {
+        ProductionBatch batch = batch("100", "95", "kg");
+        batch.setPlannedUnit("千克");
+        batch.calculateMetrics();
+        assertThat(batch.getEfficiency()).as("千克 ≡ kg").isEqualByComparingTo("95.00");
+    }
+
+    @Test
+    void aPreReleaseRowWithoutPlannedUnitIsOnlyComparedWhenThePlanUnitIsTheBatchUnit() {
+        // 存量行: plannedUnit 为 null、挂着计划; 实体靠只读的 sourcePlanUnit (所挂计划的单位) 判
+        ProductionBatch bagsUnderKgPlan = batch("2", "3", "袋");
+        bagsUnderKgPlan.setProductionPlanId("PLAN-KG");
+        bagsUnderKgPlan.setSourcePlanUnit("kg");
+        bagsUnderKgPlan.calculateMetrics();
+        assertThat(bagsUnderKgPlan.getEfficiency()).as("不知道 2 是 kg 还是袋 ⇒ 不算, 不是 150.00").isNull();
+
+        ProductionBatch kgUnderKgPlan = batch("100", "95", "kg");
+        kgUnderKgPlan.setProductionPlanId("PLAN-KG");
+        kgUnderKgPlan.setSourcePlanUnit("千克");
+        kgUnderKgPlan.calculateMetrics();
+        assertThat(kgUnderKgPlan.getEfficiency()).as("两种来源此时一样").isEqualByComparingTo("95.00");
+
+        ProductionBatch planUnitUnknown = batch("100", "95", "kg");
+        planUnitUnknown.setProductionPlanId("PLAN-GONE");
+        planUnitUnknown.calculateMetrics();
+        assertThat(planUnitUnknown.getEfficiency()).as("计划单位读不到 ⇒ 不知道").isNull();
+
+        ProductionBatch noPlan = batch("100", "95", "箱");
+        noPlan.calculateMetrics();
+        assertThat(noPlan.getEfficiency()).as("没挂计划: 计划量只能是按批次单位填的").isEqualByComparingTo("95.00");
+    }
+
+    @Test
     void p0TwoCrossUnitMarkerStillLeavesEfficiencyUnknown() {
         ProductionBatch batch = batch("2", "3", "份");
         batch.setPlannedUnit("kg");
