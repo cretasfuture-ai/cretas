@@ -51,13 +51,14 @@ public interface SpecialApprovalService {
     SpecialApprovalDTO getApprovalById(String factoryId, String approvalId);
 
     /**
-     * 能审批质检处置的角色 —— 与 {@code QualityDispositionController} 的 {@code /approve} 上的 {@code @RequireRole}
-     * 同一份名单, 也是 {@code ProcessingController} 的 {@code /quality/approvals/{id}/decision} 上的 {@code @RequireRole}
-     * 与 AI 工具 {@code order_approval} 的 {@code getRequiredRoles()}。注解只能写字面量, 所以几处一致由
+     * 能审批质检处置的<b>工厂</b>角色 —— 即 {@code /quality-disposition/{id}/approve} 上 {@code @RequireRole} 名单去掉平台角色,
+     * 也是 {@code /quality/approvals/{id}/decision} 的 {@code @RequireRole} 与 AI 工具 {@code order_approval} 的角色要求。
+     * 平台管理员不按角色字符串认 (PlatformRoleBoundaryGateContractTest), 由已认证的平台身份
+     * ({@code AuthenticatedActor}) 放行, 与 RequireRoleInterceptor 同口径。几处一致由
      * {@code QualityBatchDispositionContractTest#approverRoleListsAreTheSameEverywhere} 钉住。
      */
     java.util.Set<String> APPROVER_ROLES =
-            java.util.Set.of("quality_manager", "factory_super_admin", "platform_admin", "permission_admin");
+            java.util.Set.of("quality_manager", "factory_super_admin", "permission_admin");
 
     /**
      * 处理审批决策

@@ -371,7 +371,10 @@ public class SpecialApprovalServiceImpl implements SpecialApprovalService {
                     .withHint("请重新登录后再审批");
         }
         String role = actingRole == null ? null : actingRole.trim().toLowerCase(Locale.ROOT);
-        if (role == null || !APPROVER_ROLES.contains(role)) {
+        // 平台管理员只认已认证的平台身份, 不认角色字符串 (工厂令牌写着平台角色不算数)
+        boolean platformApprover = com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(com.cretas.aims.security.AuthenticatedActor::hasFactoryBypass).isPresent();
+        if (!platformApprover && (role == null || !APPROVER_ROLES.contains(role))) {
             throw new BusinessException(403, "当前角色不能审批质检处置申请")
                     .withCode(SPECIAL_APPROVAL_ROLE_FORBIDDEN)
                     .withHint("请由质量经理或工厂超级管理员审批");

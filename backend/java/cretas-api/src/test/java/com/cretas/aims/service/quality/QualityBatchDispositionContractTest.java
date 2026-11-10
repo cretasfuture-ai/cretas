@@ -840,6 +840,28 @@ class QualityBatchDispositionContractTest {
     }
 
     @Test
+    @DisplayName("Q11 平台管理员按身份不按字符串: 工厂账号角色写着 platform_admin 403; 已认证的平台身份照常可批")
+    void platformApproverIsRecognisedByIdentityNotByRoleString() {
+        String approvalId = pendingSpecialConditionalRelease();
+
+        // 工厂账号的角色字符串写成平台角色 —— 服务层不认
+        assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(orderApprovalTool("platform_admin"), "doExecute",
+                FACTORY, approveParams(approvalId), new HashMap<String, Object>(Map.of("userId", MANAGER))))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo("SPECIAL_APPROVAL_ROLE_FORBIDDEN"));
+        assertNothingDecided(approvalId);
+
+        // 已认证的平台管理员身份 (服务端写入, 不来自客户端字符串)
+        try (var scope = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN, 900L, null, "platform_admin"))) {
+            specialApprovals().processDecision(FACTORY, approvalId,
+                    decision(ApprovalDecisionRequest.ApprovalDecision.APPROVE), MANAGER, 900L, "platform_admin");
+        }
+        assertThat(executedActions("qi-fail")).containsExactly("CONDITIONAL_RELEASE");
+    }
+
+    @Test
     @DisplayName("Q11 审批角色名单一份: /approve、/decision 的 @RequireRole、order_approval 的角色要求、服务层名单完全相同")
     void approverRoleListsAreTheSameEverywhere() throws Exception {
         java.util.function.Function<java.lang.reflect.Method, java.util.Set<String>> rolesOf = m ->
@@ -852,8 +874,14 @@ class QualityBatchDispositionContractTest {
 
         java.util.Set<String> service = com.cretas.aims.service.SpecialApprovalService.APPROVER_ROLES;
         assertThat(service).isNotEmpty();
-        assertThat(rolesOf.apply(approve)).isEqualTo(service);
-        assertThat(rolesOf.apply(decisionMethod)).isEqualTo(service);
+        // 两个 HTTP 入口的注解完全相同 (含平台角色, 平台角色由 RequireRoleInterceptor 按已认证的平台身份放行)
+        assertThat(rolesOf.apply(decisionMethod)).isEqualTo(rolesOf.apply(approve));
+        // 去掉平台角色后就是服务层名单 (服务层不按角色字符串认平台管理员)
+        java.util.Set<String> factoryRolesOnApprove = rolesOf.apply(approve).stream()
+                .filter(r -> !com.cretas.aims.security.PlatformRoleBoundary.isPlatformTier(r))
+                .collect(java.util.stream.Collectors.toSet());
+        assertThat(factoryRolesOnApprove).isEqualTo(service);
+        assertThat(service).noneMatch(com.cretas.aims.security.PlatformRoleBoundary::isPlatformTier);
         assertThat(new com.cretas.aims.ai.tool.impl.dataop.OrderApprovalTool().getRequiredRoles()).isEqualTo(service);
     }
 
