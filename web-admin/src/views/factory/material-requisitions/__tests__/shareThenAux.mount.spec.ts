@@ -134,27 +134,15 @@ const DETAIL = {
     { id: 'R-50CL', materialName: '50CL', materialTypeId: 'RMT_50CL', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null, inputShareRatio: null },
     { id: 'R-ZERO', materialName: '份额0料', materialTypeId: 'RMT_ZERO', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null, inputShareRatio: 0 },
     { id: 'R-SELF', materialName: '冰水(自备)', materialTypeId: 'RMT_ICE', materialCategory: 'RAW', unit: 'kg', requiredQty: null, pickedQty: null, inputShareRatio: 10, selfSupplied: true },
-    { id: 'AUX-ONION', materialName: '洋葱泥', materialTypeId: 'RMT_ONION', materialCategory: 'AUXILIARY', unit: 'kg', requiredQty: null, pickedQty: null },
+    // 配比随领料单详情一起到 (2026-11-10 起弹窗不再查生产计划 / BOM)
+    { id: 'AUX-ONION', materialName: '洋葱泥', materialTypeId: 'RMT_ONION', materialCategory: 'AUXILIARY', unit: 'kg', requiredQty: null, pickedQty: null, dosagePerKgG: 83.8 },
   ],
+  auxiliaryAutoCalc: 'AVAILABLE',
 };
 
 function installGetRouter() {
   harness.get.mockImplementation(async (url: string) => {
     if (url === `/F006/material-requisitions/${DETAIL.id}`) return { success: true, data: DETAIL };
-    if (url === '/F006/production-plans/PP-S') return { success: true, data: { productTypeId: 'PT-AMERICAN' } };
-    if (url === '/F006/bom/recipes/by-product/PT-AMERICAN/seasoning') {
-      return {
-        success: true,
-        data: {
-          bomRecipeId: 'BOM-A', productTypeId: 'PT-AMERICAN', productName: '美式谷饲牛肉饼', status: 'ACTIVE',
-          injectionConfigs: [],
-          seasoningItems: [{
-            workProcessId: 'WP-MIX', materialTypeId: 'RMT_ONION', unit: 'kg', section: 'INJECTION', seq: 1,
-            name: '洋葱泥', dosagePerKgG: 83.8, priceSource1: null, priceSource2: null, countInSeasoning: true,
-          }],
-        },
-      };
-    }
     return { success: true, data: { content: [], totalElements: 0 } };
   });
 }

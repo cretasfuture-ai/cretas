@@ -87,3 +87,38 @@ export function splitZeroQtyRows<T>(items: T[], qtyOf: (item: T) => number): { n
   }
   return { nonZero, zero };
 }
+
+/** 领料单详情里与辅料配比相关的最小字段 (后端 FactoryMaterialRequisitionItem#dosagePerKgG, 不落库、现算)。 */
+export interface DosageRow {
+  materialTypeId?: string | null;
+  materialCategory?: string | null;
+  dosagePerKgG?: number | string | null;
+}
+
+/**
+ * 物料 id → dosagePerKgG (g / kg 投入主料), 取自领料单详情的辅料行。
+ *
+ * 2026-11-10 之前这份比例由弹窗自己查「生产计划 → BOM 调料」两跳得到, 仓管两跳都 403
+ * (production 模块 = none) 还弹 sticky 错误。现在由后端详情按建单同一份 BOM 调料表带出,
+ * 工艺保密且无权时后端不给这个字段 —— 这里就拿不到比例, 该行维持人工填。
+ * 只收 AUXILIARY、有物料 id、配比为有限正数的行; 其它一律不进表 (不编比例)。
+ */
+export function auxRatioMapFromItems(items: DosageRow[]): Record<string, number> {
+  const map: Record<string, number> = {};
+  for (const item of items) {
+    if (item.materialCategory !== 'AUXILIARY' || !item.materialTypeId) continue;
+    if (item.dosagePerKgG === null || item.dosagePerKgG === undefined || item.dosagePerKgG === '') continue;
+    const dosage = Number(item.dosagePerKgG);
+    if (Number.isFinite(dosage) && dosage > 0) map[item.materialTypeId] = dosage;
+  }
+  return map;
+}
+
+/** 工艺保密且调用者无权时, 确认领料弹窗里给的说明 (提示, 不是错误)。 */
+export const AUX_PROCESS_SECRET_NOTE =
+  '该产品工艺已设为保密，辅料不能按配方自动计算，请按实际称重填写辅料数量。';
+
+/** 后端 auxiliaryAutoCalc → 弹窗说明; 只有 PROCESS_SECRET 需要说明, 其余为空串。 */
+export function auxAutoCalcNoteFor(status?: string | null): string {
+  return status === 'PROCESS_SECRET' ? AUX_PROCESS_SECRET_NOTE : '';
+}

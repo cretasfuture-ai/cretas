@@ -16,8 +16,13 @@ import {
 } from '@/constants/rawWorkflowOwnerAnchor';
 import { handleCatchError } from '@/utils/errorToast';
 import { listWarehouses } from '@/api/factoryWarehouse';
-import { bomSeasoningApi } from '@/api/bom';
-import { deriveAuxiliaryQty, rawPickedTotalKg, splitZeroQtyRows } from './confirmPickingAuxDerive';
+import {
+  auxAutoCalcNoteFor,
+  auxRatioMapFromItems,
+  deriveAuxiliaryQty,
+  rawPickedTotalKg,
+  splitZeroQtyRows,
+} from './confirmPickingAuxDerive';
 
 interface RequisitionItem {
   id: string;
@@ -37,7 +42,15 @@ interface RequisitionItem {
   // RawMaterialType.selfSupplied 的快照。true = 冰水/水/蒸汽/现场自制高汤等配方
   // 提醒行 —— 不强制填数量、不查库存、不因库存不足拦截。
   selfSupplied?: boolean | null;
+  /**
+   * 辅料配比 (g / kg 投入主料), 只有详情接口给、不落库: 后端按建单同一份 BOM 调料表现算。
+   * 工艺保密且调用者无完整查看权时不给 (字段缺失), 见 Requisition.auxiliaryAutoCalc。
+   */
+  dosagePerKgG?: number | string | null;
 }
+
+/** 详情接口的「辅料能不能自动算」: 有配比 / 没有可用配比 / 工艺保密不给配比。 */
+type AuxAutoCalcStatus = 'AVAILABLE' | 'NO_RATIO' | 'PROCESS_SECRET';
 
 interface Requisition {
   id: string;
@@ -53,6 +66,7 @@ interface Requisition {
   createdAt?: string | null;
   remarks?: string | null;
   items?: RequisitionItem[];
+  auxiliaryAutoCalc?: AuxAutoCalcStatus | null;
 }
 
 interface ClosePreviewRow extends RequisitionItem {
@@ -141,9 +155,11 @@ function autoFillPickedByShare(changed: ConfirmPickRow): void {
 const confirmDialogVisible = ref(false);
 const confirmTarget = ref<Requisition | null>(null);
 const confirmRows = ref<ConfirmPickRow[]>([]);
-// 物料id(materialTypeId) → dosagePerKgG(g/kg投入) —— 来自该计划产品当前 BOM 的调料配方
-// (bomSeasoningApi.getByProduct), 供辅料行实时推算。见 loadAuxRatios / recalcAuxRows。
+// 物料id(materialTypeId) → dosagePerKgG(g/kg投入) —— 来自领料单详情的辅料行 (后端按建单同一份
+// BOM 调料表现算), 供辅料行实时推算。见 prepareConfirmDialog / recalcAuxRows。
 const auxRatioMap = ref<Record<string, number>>({});
+// 工艺保密且无权时的说明 (提示, 不是错误); 其余情况为空串不显示。
+const auxAutoCalcNote = ref('');
 
 // 取消原因: 标准选项 (Rule 3 防呆 — 自由文本改约束选择), 选"其他"才显文本框。
 const CANCEL_REASON_OPTIONS = ['计划取消', '需求变更', '重复单据', '数量错误', '其他'] as const;
@@ -490,41 +506,14 @@ function hasPickedQuantity(items: RequisitionItem[]): boolean {
 // 辅料自动计算 (owner 2026-09-02 拍板, 逐字引用见 confirmPickingAuxDerive.ts 头部):
 // 「原料放最前面填, 辅料基本不用填, 自动计算; 改原料它就重新算。」
 //
-// productionPlanId → productTypeId 只能现查 (Requisition 实体没有 productTypeId 字段,
-// 只有 productionPlanId/productName 快照), 再用 productTypeId 查该产品当前 BOM 的调料配方
-// (bomSeasoningApi.getByProduct, 只读, 与「生成」弹窗用的 plannedRawInputKg 后端口径同源:
-// FactoryMaterialRequisitionServiceImpl#seasoningRequiredQty 的 dosagePerKgG × 投入kg ÷ 1000)。
-async function resolveProductTypeId(planId: string): Promise<string | null> {
-  try {
-    const res = await get<{ productTypeId?: string | null }>(`/${factoryId.value}/production-plans/${planId}`);
-    if (!res.success) return null;
-    return (res.data as { productTypeId?: string | null } | undefined)?.productTypeId ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function loadAuxRatios(productionPlanId?: string | null) {
-  auxRatioMap.value = {};
-  if (!factoryId.value || !productionPlanId) return;
-  const productTypeId = await resolveProductTypeId(productionPlanId);
-  if (!productTypeId) return;
-  try {
-    const res = await bomSeasoningApi.getByProduct(factoryId.value, productTypeId);
-    if (!res.success || !res.data) return;
-    const map: Record<string, number> = {};
-    (res.data.seasoningItems || []).forEach((s) => {
-      if (!s.materialTypeId) return;
-      // 镜像后端 seasoningRequiredQty 口径: COOKING 段且不计入调料成本的行(如老汤)不参与自动计算
-      if (s.section === 'COOKING' && s.countInSeasoning === false) return;
-      const dosage = Number(s.dosagePerKgG);
-      if (Number.isFinite(dosage) && dosage > 0) map[s.materialTypeId] = dosage;
-    });
-    auxRatioMap.value = map;
-  } catch {
-    // best-effort: 比例拿不到就退回人工填 (老行为), 不阻塞确认领料主流程
-  }
-}
+// 配比来自领料单详情的辅料行 (items[].dosagePerKgG), 后端按建单同一份 BOM 调料表现算
+// (FactoryMaterialRequisitionServiceImpl#getDetailForPicking, 口径同 seasoningRequiredQty:
+// dosagePerKgG × 投入kg ÷ 1000; COOKING 段不计入调料的老汤不给)。
+//
+// 🔴 2026-11-10: 这里原来先 GET /production-plans/{id} 拿 productTypeId, 再查 BOM 调料。仓管
+// (warehouse_worker / warehouse_manager) 的 production 模块是 none, 两跳都 403, 还弹 sticky 错误
+// 「缺少模块 production_plan 的访问权限」, 辅料只能手填。⛔ 不要再从这个弹窗去查生产计划 / BOM ——
+// 仓管只读得到领料单。工艺保密且无权时后端不给配比 (auxiliaryAutoCalc=PROCESS_SECRET), 弹窗给一句说明。
 
 // 用 RAW 行的「实际拣货」合计, 实时重算命中比例的辅料行 —— 写路径①(见 PR 说明「AUX 写路径普查」)。
 // ⛔ 只接管 materialCategory==='AUXILIARY' 且命中 auxRatioMap 的行: 没有比例数据的辅料 (未在
@@ -563,7 +552,7 @@ function resetAuxToAuto(row: ConfirmPickRow) {
   recalcAuxRows();
 }
 
-async function prepareConfirmDialog(data: Requisition) {
+function prepareConfirmDialog(data: Requisition) {
   confirmTarget.value = data;
   confirmRows.value = (data.items || []).map((item) => {
     const picked = toNumber(item.pickedQty);
@@ -584,8 +573,9 @@ async function prepareConfirmDialog(data: Requisition) {
       productName: data.productName,
     };
   }
-  // 比例是异步查回来的; 先把对话框和 RAW 行原样呈现, 比例到了再补算辅料行 (不阻塞打开对话框)。
-  await loadAuxRatios(data.productionPlanId);
+  // 比例随详情一起到 (不再另发请求), 打开即按当前 RAW 合计补算辅料行。
+  auxRatioMap.value = auxRatioMapFromItems(data.items || []);
+  auxAutoCalcNote.value = auxAutoCalcNoteFor(data.auxiliaryAutoCalc);
   recalcAuxRows();
 }
 
@@ -968,6 +958,16 @@ async function submitCancel() {
       <el-alert
         title="原料请先称重录入实际拣货数量；辅料按原料合计自动实时计算，无需手填。改了原料，辅料会重新算；要人工改辅料也可以直接改，改后不再被覆盖（可点「恢复自动计算」重置）。确认后可调拨到生产仓。"
         type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+      />
+      <!-- 工艺保密且无权: 后端不给配比, 辅料不能自动算 —— 是提示不是错误 (2026-11-10)。 -->
+      <el-alert
+        v-if="auxAutoCalcNote"
+        data-testid="aux-auto-calc-note"
+        :title="auxAutoCalcNote"
+        type="warning"
         :closable="false"
         show-icon
         style="margin-bottom: 12px"

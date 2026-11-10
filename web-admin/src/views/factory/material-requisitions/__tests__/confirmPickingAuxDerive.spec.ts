@@ -1,10 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUX_PROCESS_SECRET_NOTE,
+  auxAutoCalcNoteFor,
+  auxRatioMapFromItems,
   deriveAuxiliaryQty,
   massUnitToKg,
   rawPickedTotalKg,
   splitZeroQtyRows,
 } from '../confirmPickingAuxDerive';
+
+describe('auxRatioMapFromItems — 配比取自领料单详情的辅料行 (2026-11-10)', () => {
+  it('只收 AUXILIARY + 有物料 id + 有限正数配比; 字符串数字(BigDecimal 序列化)也认', () => {
+    const map = auxRatioMapFromItems([
+      { materialCategory: 'AUXILIARY', materialTypeId: 'ONION', dosagePerKgG: 83.8 },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'SALT', dosagePerKgG: '12.5' },
+      { materialCategory: 'RAW', materialTypeId: 'BEEF', dosagePerKgG: 10 },
+      { materialCategory: 'PACKAGING', materialTypeId: 'BOX', dosagePerKgG: 1 },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'ZERO', dosagePerKgG: 0 },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'NEG', dosagePerKgG: -1 },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'BLANK', dosagePerKgG: '' },
+      { materialCategory: 'AUXILIARY', materialTypeId: 'MISSING' },
+      { materialCategory: 'AUXILIARY', materialTypeId: null, dosagePerKgG: 5 },
+    ]);
+    expect(map).toEqual({ ONION: 83.8, SALT: 12.5 });
+  });
+
+  it('只有 PROCESS_SECRET 给说明, 其余状态 (含缺失) 为空串', () => {
+    expect(auxAutoCalcNoteFor('PROCESS_SECRET')).toBe(AUX_PROCESS_SECRET_NOTE);
+    expect(auxAutoCalcNoteFor('AVAILABLE')).toBe('');
+    expect(auxAutoCalcNoteFor('NO_RATIO')).toBe('');
+    expect(auxAutoCalcNoteFor(undefined)).toBe('');
+  });
+});
 
 /**
  * 验收数字来自 brief 里的真实 LIUSHANMEN BOM (熟肉饼, 洋葱泥 WL2020, dosagePerKgG=83.8):
