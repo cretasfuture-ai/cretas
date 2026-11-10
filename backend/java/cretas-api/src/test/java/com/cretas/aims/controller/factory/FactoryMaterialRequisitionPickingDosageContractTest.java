@@ -98,6 +98,7 @@ class FactoryMaterialRequisitionPickingDosageContractTest {
     private MockMvc mockMvc;
     private final ObjectMapper json = new ObjectMapper();
     private ProductionPlan plan;
+    private RecordingTxManager txManager;
 
     @BeforeEach
     void setUp() {
@@ -108,6 +109,8 @@ class FactoryMaterialRequisitionPickingDosageContractTest {
         ReflectionTestUtils.setField(service, "bomSeasoningItemRepository", seasoningRepository);
         ReflectionTestUtils.setField(service, "processSecretAccessService", accessService);
         ReflectionTestUtils.setField(service, "bomRecipeRepository", recipeRepository);
+        txManager = new RecordingTxManager();
+        ReflectionTestUtils.setField(service, "transactionManager", txManager);
 
         ModuleEnabledInterceptor interceptor = new ModuleEnabledInterceptor(
                 factoryConfigService, moduleAccess, userRepository, new ObjectMapper());
@@ -261,6 +264,47 @@ class FactoryMaterialRequisitionPickingDosageContractTest {
         assertThat(data.path("auxiliaryAutoCalc").asText()).isEqualTo("PROCESS_SECRET");
     }
 
+    /**
+     * 独立审查 #1558 L1: 查看 / 调拨 / 签收 / 确认领料都走这个详情, 配比那一段出错不能把详情拖成 500。
+     *
+     * <p>桩的形状照着真实仓库: Spring Data 仓库方法自带事务拦截器, 以「参与」方式加入调用方的事务,
+     * 抛错时把整个事务标成 rollback-only —— 调用方 catch 住也没用, 外层提交时 UnexpectedRollbackException。
+     * 所以这里不是简单地 thenThrow, 而是在参与的事务里抛 (见 {@link RecordingTxManager})。
+     */
+    @Test
+    @DisplayName("🔴 L1: BOM 查询在事务里抛错 ⇒ 详情仍 200、单据与明细原样, 辅料状态 UNAVAILABLE, 不给任何配比")
+    void bomLookupFailureDoesNotBreakDetail() throws Exception {
+        when(bomRecipeItemRepository.findCurrentByProduct("F006", "PT-1")).thenAnswer(inv ->
+                new org.springframework.transaction.support.TransactionTemplate(txManager).execute(status -> {
+                    throw new IllegalStateException("bom_recipe_items 查询失败 (模拟)");
+                }));
+
+        JsonNode data = getDetailAsWarehouseWorker();
+
+        assertThat(data.path("requisitionNo").asText()).isEqualTo("MR20261110-0001");
+        assertThat(data.path("productionPlanId").asText()).isEqualTo("PP-1");
+        assertThat(data.path("items")).hasSize(4);
+        assertThat(data.path("items").findValuesAsText("id")).containsExactly("RAW-1", "AUX-1", "AUX-2", "PKG-1");
+        assertThat(dosages(data)).isEmpty();
+        assertThat(data.path("auxiliaryAutoCalc").asText()).isEqualTo("UNAVAILABLE");
+        // 阳性锚点: 抛错的确发生在一个参与的事务里, 且那一段被回滚了 (否则这条测试在守空气)
+        assertThat(txManager.participatingFailures).as("桩没有在事务里抛错").isEqualTo(1);
+        assertThat(txManager.rollbacks).as("配比那段事务没有回滚").isGreaterThanOrEqualTo(1);
+        assertThat(txManager.commits).as("单据自己的只读事务没有正常提交").isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("L1: 保密名单查询抛错 ⇒ 详情仍 200, UNAVAILABLE (不是 500, 也不是放行给配比)")
+    void secrecyListFailureDoesNotBreakDetail() throws Exception {
+        when(accessService.protectedProductTypeIds("F006")).thenThrow(new IllegalStateException("保密名单读取失败 (模拟)"));
+
+        JsonNode data = getDetailAsWarehouseWorker();
+
+        assertThat(data.path("items")).hasSize(4);
+        assertThat(dosages(data)).isEmpty();
+        assertThat(data.path("auxiliaryAutoCalc").asText()).isEqualTo("UNAVAILABLE");
+    }
+
     @Test
     @DisplayName("计划已删: 详情照常 200, 不给配比 (NO_RATIO), 不报错")
     void deletedPlanGivesNoRatioWithoutError() throws Exception {
@@ -271,5 +315,90 @@ class FactoryMaterialRequisitionPickingDosageContractTest {
         assertThat(data.path("items")).hasSize(4);
         assertThat(dosages(data)).isEmpty();
         assertThat(data.path("auxiliaryAutoCalc").asText()).isEqualTo("NO_RATIO");
+    }
+
+    /**
+     * 最小的内存事务管理器, 但「参与」语义与 JPA 事务管理器相同: 参与者失败 ⇒ 整个事务 rollback-only ⇒
+     * 外层提交抛 UnexpectedRollbackException; 支持 REQUIRES_NEW 挂起 / 恢复。只计数, 不碰任何资源。
+     */
+    static final class RecordingTxManager
+            extends org.springframework.transaction.support.AbstractPlatformTransactionManager {
+
+        static final class Tx {
+            boolean rollbackOnly;
+        }
+
+        static final class Handle implements org.springframework.transaction.support.SmartTransactionObject {
+            Tx tx;
+
+            Handle(Tx tx) {
+                this.tx = tx;
+            }
+
+            @Override
+            public boolean isRollbackOnly() {
+                return tx != null && tx.rollbackOnly;
+            }
+
+            @Override
+            public void flush() {
+            }
+        }
+
+        private final ThreadLocal<Tx> current = new ThreadLocal<>();
+        int commits;
+        int rollbacks;
+        int participatingFailures;
+
+        @Override
+        protected Object doGetTransaction() {
+            return new Handle(current.get());
+        }
+
+        @Override
+        protected boolean isExistingTransaction(Object transaction) {
+            return ((Handle) transaction).tx != null;
+        }
+
+        @Override
+        protected void doBegin(Object transaction, org.springframework.transaction.TransactionDefinition definition) {
+            Handle handle = (Handle) transaction;
+            handle.tx = new Tx();
+            current.set(handle.tx);
+        }
+
+        @Override
+        protected Object doSuspend(Object transaction) {
+            ((Handle) transaction).tx = null;
+            Tx suspended = current.get();
+            current.remove();
+            return suspended;
+        }
+
+        @Override
+        protected void doResume(Object transaction, Object suspendedResources) {
+            current.set((Tx) suspendedResources);
+        }
+
+        @Override
+        protected void doCommit(org.springframework.transaction.support.DefaultTransactionStatus status) {
+            commits++;
+        }
+
+        @Override
+        protected void doRollback(org.springframework.transaction.support.DefaultTransactionStatus status) {
+            rollbacks++;
+        }
+
+        @Override
+        protected void doSetRollbackOnly(org.springframework.transaction.support.DefaultTransactionStatus status) {
+            participatingFailures++;
+            ((Handle) status.getTransaction()).tx.rollbackOnly = true;
+        }
+
+        @Override
+        protected void doCleanupAfterCompletion(Object transaction) {
+            current.remove();
+        }
     }
 }

@@ -41,10 +41,12 @@ public interface FactoryMaterialRequisitionService {
     /** 详情 (含明细). */
     FactoryMaterialRequisition getById(String factoryId, String id);
 
-    /** {@link FactoryMaterialRequisition#getAuxiliaryAutoCalc()} 的三个取值。 */
+    /** {@link FactoryMaterialRequisition#getAuxiliaryAutoCalc()} 的四个取值。 */
     String AUX_AUTO_CALC_AVAILABLE = "AVAILABLE";
     String AUX_AUTO_CALC_NO_RATIO = "NO_RATIO";
     String AUX_AUTO_CALC_PROCESS_SECRET = "PROCESS_SECRET";
+    /** 读配比时出错 (计划 / BOM / 保密名单查询失败): 详情照常返回, 辅料改人工填。 */
+    String AUX_AUTO_CALC_UNAVAILABLE = "UNAVAILABLE";
 
     /**
      * 详情接口用: {@link #getById} + 给辅料行填确认领料要用的配比

@@ -633,13 +633,50 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     }
 
     @Override
-    @Transactional(readOnly = true)
     public FactoryMaterialRequisition getDetailForPicking(String factoryId, String id,
                                                           com.cretas.aims.security.AuthenticatedActor actor) {
-        FactoryMaterialRequisition mr = getById(factoryId, id);
-        mr.setAuxiliaryAutoCalc(fillAuxiliaryDosage(factoryId, mr, actor));
+        // ⛔ 本方法刻意不带 @Transactional (独立审查 #1558 L1): 详情 (查看 / 调拨 / 签收 / 确认领料都走这里)
+        // 不能被辅料配比拖垮。配比要读计划、BOM、调料、保密名单, 任何一步抛错, 若与单据同一个事务,
+        // 仓库调用的事务拦截器会把它标成 rollback-only —— 方法里 catch 住也没用, 提交时 UnexpectedRollbackException,
+        // 整个详情 500。所以: 单据自己一个只读事务; 配比另起 REQUIRES_NEW 只读事务, 失败只影响配比。
+        FactoryMaterialRequisition mr = inReadOnlyTx(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRED,
+                () -> getById(factoryId, id));
+        AuxDosage aux;
+        try {
+            aux = inReadOnlyTx(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW,
+                    () -> resolveAuxiliaryDosage(factoryId, mr, actor));
+        } catch (RuntimeException e) {
+            log.warn("[领料单] 辅料配比读取失败, 详情照常返回、辅料改人工填 factory={} requisition={}: {}",
+                    factoryId, id, e.toString());
+            aux = new AuxDosage(AUX_AUTO_CALC_UNAVAILABLE, Map.of());
+        }
+        // 只在配比整段成功之后才写进明细 (失败时一个字段都没动过)
+        for (FactoryMaterialRequisitionItem it : mr.getItems()) {
+            if (it != null && it.getMaterialCategory() == MaterialCategory.AUXILIARY) {
+                it.setDosagePerKgG(aux.dosageByMaterial().get(it.getMaterialTypeId()));
+            }
+        }
+        mr.setAuxiliaryAutoCalc(aux.status());
         return mr;
     }
+
+    /** 事务管理器缺失 (构造器单测) 时直接执行; 线上由 Spring 注入。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    private <T> T inReadOnlyTx(int propagation, java.util.function.Supplier<T> work) {
+        if (transactionManager == null) {
+            return work.get();
+        }
+        org.springframework.transaction.support.TransactionTemplate tx =
+                new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        tx.setPropagationBehavior(propagation);
+        return tx.execute(status -> work.get());
+    }
+
+    /** 辅料配比的结果: 状态 + 物料 id → dosagePerKgG (只含要给的行)。 */
+    private record AuxDosage(String status, Map<String, BigDecimal> dosageByMaterial) { }
 
     /**
      * 给辅料行填确认领料用的配比 ({@code dosagePerKgG}), 返回 {@code auxiliaryAutoCalc}。
@@ -660,25 +697,25 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      * 判定用 {@code permitsViewFull} (与 BOM 调料接口的 {@code @ProcessSecretGuard(VIEW_FULL)} 同一个 decide);
      * 字段名在出口裁剪的配比词表里, 响应出口再兜一层。保密服务缺失时同样不给 (fail-closed)。
      */
-    private String fillAuxiliaryDosage(String factoryId, FactoryMaterialRequisition mr,
-                                       com.cretas.aims.security.AuthenticatedActor actor) {
-        List<FactoryMaterialRequisitionItem> auxRows = new ArrayList<>();
+    private AuxDosage resolveAuxiliaryDosage(String factoryId, FactoryMaterialRequisition mr,
+                                             com.cretas.aims.security.AuthenticatedActor actor) {
+        Set<String> auxMaterials = new HashSet<>();
         for (FactoryMaterialRequisitionItem it : mr.getItems()) {
             if (it != null && it.getMaterialCategory() == MaterialCategory.AUXILIARY
                     && it.getMaterialTypeId() != null && !it.getMaterialTypeId().isBlank()) {
-                auxRows.add(it);
+                auxMaterials.add(it.getMaterialTypeId());
             }
         }
         String planId = mr.getProductionPlanId();
-        if (auxRows.isEmpty() || planId == null || planId.isBlank()) {
-            return AUX_AUTO_CALC_NO_RATIO;
+        if (auxMaterials.isEmpty() || planId == null || planId.isBlank()) {
+            return new AuxDosage(AUX_AUTO_CALC_NO_RATIO, Map.of());
         }
         ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId).orElse(null);
         if (plan == null) {
-            return AUX_AUTO_CALC_NO_RATIO;
+            return new AuxDosage(AUX_AUTO_CALC_NO_RATIO, Map.of());
         }
         if (!mayReadPlanRecipe(factoryId, plan, actor, "GET material-requisition:" + mr.getId())) {
-            return AUX_AUTO_CALC_PROCESS_SECRET;
+            return new AuxDosage(AUX_AUTO_CALC_PROCESS_SECRET, Map.of());
         }
         Map<String, BigDecimal> dosageByMaterial = new HashMap<>();
         for (com.cretas.aims.entity.bom.BomSeasoningItem s
@@ -689,17 +726,12 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                     || !com.cretas.aims.service.bom.SeasoningRatioContract.hasUsableRatio(s)) {
                 continue;
             }
-            dosageByMaterial.putIfAbsent(mtId, s.getDosagePerKgG());
-        }
-        boolean any = false;
-        for (FactoryMaterialRequisitionItem it : auxRows) {
-            BigDecimal dosage = dosageByMaterial.get(it.getMaterialTypeId());
-            if (dosage != null) {
-                it.setDosagePerKgG(dosage);
-                any = true;
+            if (auxMaterials.contains(mtId)) {
+                dosageByMaterial.putIfAbsent(mtId, s.getDosagePerKgG());
             }
         }
-        return any ? AUX_AUTO_CALC_AVAILABLE : AUX_AUTO_CALC_NO_RATIO;
+        return new AuxDosage(dosageByMaterial.isEmpty() ? AUX_AUTO_CALC_NO_RATIO : AUX_AUTO_CALC_AVAILABLE,
+                Map.copyOf(dosageByMaterial));
     }
 
     /** 调用者能否看这张计划牵涉的全部产品的完整工艺; 本厂没有保密产品时直接放行 (默认全关)。 */

@@ -122,7 +122,8 @@ public class FactoryMaterialRequisition extends BaseEntity {
      * 确认领料弹窗「辅料能不能自动算」, <b>不落库</b>, 只由详情接口现算
      * (见 {@code FactoryMaterialRequisitionService#getDetailForPicking}):
      * {@code AVAILABLE} 至少一行辅料带了 {@code dosagePerKgG} / {@code NO_RATIO} 没有可用配比 (含计划或配方取不到) /
-     * {@code PROCESS_SECRET} 产品工艺保密且调用者无完整查看权, 配比不输出 —— 前端据此提示「辅料按实际称重填写」,
+     * {@code PROCESS_SECRET} 产品工艺保密且调用者无完整查看权, 配比不输出 /
+     * {@code UNAVAILABLE} 读配比时出错 (详情照常返回) —— 除 AVAILABLE 外前端都提示「辅料按实际称重填写」,
      * 不弹错误。其它接口不填 (null, 不输出)。
      */
     @Transient
