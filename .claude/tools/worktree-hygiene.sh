@@ -45,6 +45,18 @@ if [ "$mode" = "--auto" ]; then
   mkdir "$lock" 2>/dev/null || { echo "另一个回收在跑, 退出"; exit 0; }
   trap 'rmdir "$lock" 2>/dev/null' EXIT
   echo "=== auto $(date '+%F %T') ==="
+  sweep_shells() { # 清「空壳」: git worktree remove 删完内容却因目录被占用删不掉时留下的空目录。只删【未登记 + 完全为空】的, 非空的不碰。
+    local d reg n=0
+    reg=$(for x in "${paths[@]}"; do norm "$x"; done)
+    for d in "$main_wt"/.claude/worktrees/*/ "${shell_candidates[@]:-}"; do
+      d="${d%/}"; [ -n "$d" ] && [ -d "$d" ] || continue
+      echo "$reg" | grep -Fxq "$(norm "$d")" && continue
+      [ -z "$(ls -A "$d" 2>/dev/null)" ] || continue
+      rmdir "$d" 2>/dev/null && { echo "SWEPT 空壳 $d"; n=$((n+1)); } || echo "空壳仍被占用: $d"
+    done
+  }
+  shell_candidates=()
+  sweep_shells
   merged_map=$(gh pr list --state merged --limit 500 --json headRefName,headRefOid --jq '.[]|.headRefName+" "+.headRefOid' 2>/dev/null)     || { echo "gh 不可用, 本次不回收"; exit 0; }
   [ -n "$merged_map" ] || { echo "gh 返回空(没量到), 本次不回收"; exit 0; }
   git -C "$main_wt" fetch -q origin main 2>/dev/null || echo "fetch 失败, 用本地 origin/main"
@@ -57,7 +69,13 @@ recent() { # 120 分钟内 HEAD 动过(提交/切分支)。⛔ 不看 index: git
   if [ "$mode" = "--auto" ]; then
     # --auto 不看提交时间(已合并+干净的 worktree 提交时间必然是旧的, 用它判断「在不在用」会误杀正在收尾的会话, 2026-11-11 实测删掉了当前会话自己的目录)。
     # 看会话活动标记: worktree-touch.sh 在 SessionStart/每条消息/每轮结束时 touch <gitdir>/wh-active; 标记在 WH_ACTIVE_MIN(默认 360)分钟内 = 有会话在用。
-    [ -n "$(find "$g/wh-active" -mmin -"${WH_ACTIVE_MIN:-360}" 2>/dev/null)" ]
+    local w="${WH_ACTIVE_MIN:-360}"
+    if [ -e "$g/wh-active" ]; then
+      [ -n "$(find "$g/wh-active" -mmin -"$w" 2>/dev/null)" ]; return
+    fi
+    # 没有标记 = Codex 会话(不跑 Claude hook)或 hook 上线前的旧会话: 退而看 HEAD / index 的 mtime(任一在窗口内就当有人在用)。
+    # ⚠️ 本脚本只对「已判完成」的 worktree 才跑 git status, 所以不会把全部 worktree 的 index 刷成近期。
+    [ -n "$(find "$g/HEAD" "$g/index" -mmin -"$w" 2>/dev/null)" ]
     return
   fi
   [ -n "$(find "$g/HEAD" -mmin -"$win" 2>/dev/null)" ]
@@ -73,6 +91,7 @@ is_keep() {
 locked_set=$(git -C "$main_wt" worktree list --porcelain | awk '/^worktree /{p=$2} /^locked/{print p}')
 
 removable=()
+shell_candidates=(${shell_candidates[@]:-})
 for p in "${paths[@]}"; do
   if is_keep "$p"; then echo "KEEP(保护)   $p"; continue; fi
   if echo "$locked_set" | grep -Fxq "$p"; then echo "KEEP(locked) $p"; continue; fi
@@ -110,7 +129,8 @@ for p in "${removable[@]}"; do
       || { echo "SKIP(commit 被 hook 拦, 未动) $p"; continue; }
   fi
   command -v powershell >/dev/null 2>&1 && powershell -NoProfile -Command "Get-ChildItem -LiteralPath '$p' -Recurse -Depth 4 -Directory -Force -EA SilentlyContinue | ?{\$_.Attributes -band 'ReparsePoint'} | %{ [IO.Directory]::Delete(\$_.FullName,\$false); 'unlinked '+\$_.FullName }"
-  git -C "$main_wt" worktree remove "$p" 2>&1 && echo "REMOVED $p" || echo "FAILED(留给人工) $p"
+  git -C "$main_wt" worktree remove "$p" 2>&1 && echo "REMOVED $p" || { echo "FAILED(留给人工) $p"; shell_candidates+=("$p"); }
 done
 git -C "$main_wt" worktree prune
+[ "$mode" = "--auto" ] && sweep_shells
 echo "收缩后: $(git -C "$main_wt" worktree list | wc -l) 个"
