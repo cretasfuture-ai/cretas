@@ -28,6 +28,14 @@ else
 fi
 G rev-parse -q --verify origin/main >/dev/null || { echo "sync-main-claude: no origin/main, skip"; exit 0; }
 
+# 主目录是 detached HEAD 且没有已跟踪文件的改动 → 整体跟到 origin/main（未跟踪文件不碰）。
+# 有已跟踪改动（别人在里面干活）→ 不动，退回下面只对齐 .claude/ 的保守路径。
+if [ -z "$(G symbolic-ref -q HEAD)" ] && [ -z "$(G status --porcelain --untracked-files=no)" ]; then
+  if [ "$DRY" = 1 ]; then echo "would fast-forward main checkout to origin/main"; else
+    G checkout -q --detach origin/main 2>/dev/null && { echo "sync-main-claude: main checkout -> $(G rev-parse --short HEAD)"; exit 0; }
+  fi
+fi
+
 changed=0; skipped=0
 while IFS=$'\t' read -r status path; do
   [ -z "$path" ] && continue
