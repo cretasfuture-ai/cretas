@@ -83,6 +83,8 @@ class UrgentInsertForceInsertCanvasContractTest {
     private ApprovalChainService approvalChain;
     private WorkflowEngineService engine;
     private FactorySettingsRepository settings;
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy discipline;
+    private com.cretas.aims.service.ApprovalWorkflowService workflows;
     private UrgentInsertServiceImpl service;
     private InsertSlot slot;
 
@@ -130,6 +132,8 @@ class UrgentInsertForceInsertCanvasContractTest {
         approvalChain = mock(ApprovalChainService.class);
         engine = mock(WorkflowEngineService.class);
         settings = mock(FactorySettingsRepository.class);
+        discipline = mock(com.cretas.aims.service.discipline.FactoryDisciplinePolicy.class);
+        workflows = mock(com.cretas.aims.service.ApprovalWorkflowService.class);
         when(engine.canTransition(any(), any())).thenReturn(true);
         service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.ofEntries(
                 Map.entry(UrgentInsertScheduleService.class, scheduler),
@@ -146,7 +150,9 @@ class UrgentInsertForceInsertCanvasContractTest {
                 Map.entry(ApprovalChainService.class, approvalChain),
                 Map.entry(WorkflowEngineService.class, engine),
                 Map.entry(FactorySelfApprovalGate.class, new FactorySelfApprovalGate(settings)),
-                Map.entry(FactorySettingsRepository.class, settings)));
+                Map.entry(FactorySettingsRepository.class, settings),
+                Map.entry(com.cretas.aims.service.discipline.FactoryDisciplinePolicy.class, discipline),
+                Map.entry(com.cretas.aims.service.ApprovalWorkflowService.class, workflows)));
     }
 
     // ------------------------------------------------------------------ fixtures
@@ -315,6 +321,84 @@ class UrgentInsertForceInsertCanvasContractTest {
                         assertThat(e.getErrorCode()).isEqualTo("OA_LEGACY_CONFIG_MIGRATION_REQUIRED"));
         verify(slots, never()).claimAvailableSlot(any(), any(), any());
         verify(plans, never()).save(any(ProductionPlan.class));
+    }
+
+    // ------------------------------------------------------------------ 工厂开关「插单一律走审批」(Steve 2026-11-11)
+
+    private ConfirmUrgentInsertRequest normalRequest(String previewId) {
+        return ConfirmUrgentInsertRequest.builder().slotId("S1").productTypeId(PT).previewId(previewId)
+                .quantityUnit("KG").plannedQuantity(new BigDecimal("50")).notes("普通插单").build();
+    }
+
+    private void activeCanvas(boolean present) {
+        when(workflows.getActiveByDecisionType(F, DecisionType.FORCE_INSERT)).thenReturn(present
+                ? Optional.of(com.cretas.aims.entity.config.ApprovalWorkflow.builder().id("WF-FI").build())
+                : Optional.empty());
+    }
+
+    @Test
+    void switchOnWithACanvasSendsEvenALowImpactInsertIntoApproval() {
+        when(discipline.urgentInsertAlwaysApproval(F)).thenReturn(true);
+        activeCanvas(true);
+        canvasEnabled();
+        when(engine.startWorkflowIfConfigured(eq(F), eq("FORCE_INSERT"), anyString(), anyMap(), eq(SUBMITTER)))
+                .thenAnswer(i -> Optional.of(instance("INST-ALL", i.getArgument(2), InstanceStatus.RUNNING)));
+        InsertSlotPreview preview = issuePreview();
+        assertThat(preview.getRequiresApproval()).as("一定会发生: 这张预览本身不要求审批 (低影响)").isFalse();
+
+        service.confirmInsert(F, SUBMITTER, normalRequest(preview.getId()));
+
+        verify(engine).startWorkflowIfConfigured(eq(F), eq("FORCE_INSERT"), anyString(), anyMap(), eq(SUBMITTER));
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+        ArgumentCaptor<ProductionPlan> saved = ArgumentCaptor.forClass(ProductionPlan.class);
+        verify(plans, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
+        assertThat(saved.getValue().isPendingApproval()).isTrue();
+    }
+
+    @Test
+    void switchOffKeepsTheOldBehaviourALowImpactInsertIsScheduledDirectly() {
+        when(discipline.urgentInsertAlwaysApproval(F)).thenReturn(false);
+        activeCanvas(true);
+        canvasEnabled();
+        InsertSlotPreview preview = issuePreview();
+
+        service.confirmInsert(F, SUBMITTER, normalRequest(preview.getId()));
+
+        verify(engine, never()).startWorkflowIfConfigured(any(), any(), any(), any(), any());
+        verify(scheduler).apply(eq(F), any(), any(ProductionPlan.class), eq(UrgentInsertTestSupport.SCHEDULE_FP),
+                eq(SUBMITTER));
+    }
+
+    @Test
+    void switchOnWithoutAnActiveCanvasHasNobodyToApproveSoTheInsertIsScheduledDirectly() {
+        when(discipline.urgentInsertAlwaysApproval(F)).thenReturn(true);
+        activeCanvas(false);
+        // 本厂还挂着没迁移的旧版审批链: 强制插单路会 409 LEGACY; 普通插单不应被它挡住 (开关只认画布)
+        when(approvalChain.requiresApproval(eq(F), eq(DecisionType.FORCE_INSERT), anyMap()))
+                .thenThrow(new BusinessException(409, "旧版审批配置尚未迁移到审批画布")
+                        .withCode("OA_LEGACY_CONFIG_MIGRATION_REQUIRED"));
+        InsertSlotPreview preview = issuePreview();
+
+        service.confirmInsert(F, SUBMITTER, normalRequest(preview.getId()));
+
+        verify(engine, never()).startWorkflowIfConfigured(any(), any(), any(), any(), any());
+        ArgumentCaptor<ProductionPlan> saved = ArgumentCaptor.forClass(ProductionPlan.class);
+        verify(plans, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
+        assertThat(saved.getValue().getIsForceInserted()).as("没转入强制插单路").isNotEqualTo(Boolean.TRUE);
+        verify(scheduler).apply(eq(F), any(), any(ProductionPlan.class), eq(UrgentInsertTestSupport.SCHEDULE_FP),
+                eq(SUBMITTER));
+    }
+
+    @Test
+    void anUnreadableSwitchCountsAsOff() {
+        when(discipline.urgentInsertAlwaysApproval(F)).thenThrow(new IllegalStateException("db down"));
+        activeCanvas(true);
+        InsertSlotPreview preview = issuePreview();
+
+        service.confirmInsert(F, SUBMITTER, normalRequest(preview.getId()));
+
+        verify(engine, never()).startWorkflowIfConfigured(any(), any(), any(), any(), any());
+        verify(scheduler).apply(any(), any(), any(), any(), eq(SUBMITTER));
     }
 
     // ------------------------------------------------------------------ OA 批准 / 驳回

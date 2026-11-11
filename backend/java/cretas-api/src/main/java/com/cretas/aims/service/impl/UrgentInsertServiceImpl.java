@@ -100,6 +100,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final WorkflowEngineService workflowEngine;
     /** #1580: 工厂「允许本人审批」开关。 */
     private final FactorySelfApprovalGate selfApprovalGate;
+    /** 1551-11: 读本厂有没有启用的强制插单审批画布。 */
+    private final com.cretas.aims.service.ApprovalWorkflowService approvalWorkflowService;
+    /** 1551-11: 工厂开关「插单一律走审批」(production.urgent_insert.always_approval)。 */
+    private final com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
 
     /** 画布审批实例的 moduleCode, 与 DecisionTypeMetadataRegistry 里 FORCE_INSERT 的登记一致。 */
     static final String FORCE_INSERT_MODULE = "FORCE_INSERT";
@@ -1026,6 +1030,13 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         log.info("确认紧急插单: factoryId={}, slotId={}, quantity={}",
                 factoryId, request.getSlotId(), request.getPlannedQuantity());
 
+        // 1551-11 (Steve 2026-11-11): 工厂开了「插单一律走审批」且有启用的强制插单画布 ⇒ 普通插单也先进审批,
+        // 走与强制插单同一条路 (建画布实例, 批准后才排入并顺延)。开关默认关 = 原行为; 没有画布时开了也不生效。
+        if (alwaysRequiresCanvasApproval(factoryId)) {
+            log.info("插单一律走审批: 普通插单转入画布审批 factoryId={}, slotId={}", factoryId, request.getSlotId());
+            return forceInsert(factoryId, userId, request);
+        }
+
         PreviewValidation validation = validatePreviewAndFreshResources(factoryId, request);
         InsertSlot slot = validation.slot();
 
@@ -1461,6 +1472,21 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     .withHintTarget("OA 工作流配置");
         }
         return restarted;
+    }
+
+    /** 开关开 (显式 1) 且本厂有启用的 FORCE_INSERT 画布。读开关失败按关 (= 原行为, 不凭空拦单)。 */
+    private boolean alwaysRequiresCanvasApproval(String factoryId) {
+        if (disciplinePolicy == null || approvalWorkflowService == null) {
+            return false;
+        }
+        boolean switchOn;
+        try {
+            switchOn = disciplinePolicy.urgentInsertAlwaysApproval(factoryId);
+        } catch (RuntimeException e) {
+            log.warn("插单一律走审批 开关读取失败, 按关处理: factoryId={}, err={}", factoryId, e.getMessage());
+            return false;
+        }
+        return switchOn && approvalWorkflowService.getActiveByDecisionType(factoryId, DecisionType.FORCE_INSERT).isPresent();
     }
 
     /** 本人审批留痕: 写在计划审批意见与 OA 审批记录的前缀。 */
