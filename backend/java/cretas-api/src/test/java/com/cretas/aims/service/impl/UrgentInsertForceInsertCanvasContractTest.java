@@ -372,13 +372,14 @@ class UrgentInsertForceInsertCanvasContractTest {
     }
 
     @Test
-    void anAlreadyFinishedInstanceIsReturnedAsIsWithoutASecondInsert() {
+    void anAlreadyFinishedInstanceIsAConflictWithoutASecondInsert() {
         pendingCanvasPlan("P-5", "INST-5");
         when(engine.getInstance(F, "INST-5"))
                 .thenReturn(Optional.of(instance("INST-5", "P-5", InstanceStatus.APPROVED)));
 
-        service.applyWorkflowAction(F, "P-5", "INST-5", APPROVER, "production_manager",
-                HistoryAction.APPROVE, "同意");
+        assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-5", "INST-5", APPROVER, "production_manager",
+                HistoryAction.REJECT, "不同意"))
+                .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_ALREADY_DECIDED"));
 
         verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
         verify(scheduler, never()).apply(any(), any(), any(), any(), any());

@@ -1334,8 +1334,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                     .withCode("FORCE_INSERT_WORKFLOW_MISMATCH");
         }
         if (instance.getStatus() != ApprovalWorkflowInstance.InstanceStatus.RUNNING) {
-            // 已被并发的另一次审批走完: 原样返回, 不重复插入/释放
-            return productionPlanMapper.toDTO(plan);
+            // 已被并发的另一次审批走完: 不重复插入/释放, 也不能对后来者报「成功」(驳回的人会以为驳回了)。
+            // 同一个幂等键的重试由 OaActionIdempotencyService 返回首次结果, 到不了这里。
+            throw new BusinessException(409, "这条强制插单审批已被处理（结果：" + instance.getStatus() + "），请刷新待办")
+                    .withCode("FORCE_INSERT_ALREADY_DECIDED");
         }
 
         boolean planStillPending = plan.isPendingApproval() && plan.getStatus() != ProductionPlanStatus.CANCELLED;
