@@ -3994,7 +3994,8 @@ public class SalesServiceImpl implements SalesService {
                         assertWithinOrderLineOverShipCap(orderLineLedger, item, itemIdKey, actual, overShipLimit);
                     } catch (BusinessException capViolation) {
                         recordBlockedOverShipAttempt(factoryId, record, item, actual,
-                                overShipLimit, capViolation, userId);
+                                overShipLimit, capViolation, userId,
+                                orderLineMaxThisLine(orderLineLedger, item, overShipLimit));
                         throw capViolation;
                     }
                     if (item.getDeliveredQuantity() != null
@@ -4025,33 +4026,6 @@ public class SalesServiceImpl implements SalesService {
         return shipDelivery(factoryId, deliveryId, userId);
     }
 
-    /**
-     * 【超发上限】校验 —— 仓管把实发数量改大时，不许无上限地多发。
-     *
-     * <h2>这道闸在补哪个洞</h2>
-     * 2026-08-28 生产实测：创建发货单时有一道 0% 硬闸
-     * （{@code 发货数量超过订单行剩余可安排数量} → 409），但仓管在本方法所在的
-     * {@code warehouseConfirmDelivery} 里覆盖实发数量时<b>只挡负数、没有任何上限</b>。
-     * 于是「订 2 发 5」可以走完：<b>库存真扣 5 件，货真的出门了</b>。
-     * 采购侧早有 {@code overReceiveRate} + 异常单两样，销售侧两样都没有。
-     *
-     * <h2>判据为什么是「实发 ≤ 计划 × (1+上限)」而不是「累计实发 ≤ 订单量 × (1+上限)」</h2>
-     * 后者要重新推一遍跨发货单的累计账（主单/子单、已取消/已退回、拆单后谁算谁），
-     * 而那本账<b>创建期已经算过了</b>：创建闸保证 {@code Σ计划 ≤ 订单量}。
-     * 两道一叠即得 {@code Σ实发 ≤ Σ计划 × (1+上限) ≤ 订单量 × (1+上限)} —— 有界，且可证明。
-     *
-     * <p>⇒ 本闸<b>刻意窄</b>：只守「仓管这一步能把数量放大多少」。
-     * ⛔ 它<b>不</b>守下面这些，别把它读成守了：
-     * <ul>
-     *   <li>创建期绕过（那道闸另在 {@code createDelivery}，是 0%）</li>
-     *   <li>直接改库的越权写入</li>
-     *   <li>{@code planned == null} 的行 —— 没有计划量就没有基准，本闸跳过；
-     *       但那种行原有逻辑<b>本来也不会应用覆盖值</b>，所以不构成新的口子</li>
-     * </ul>
-     *
-     * @param limit 本次确认生效的上限（{@link #resolveOverShipLimit} 解析，非 null；
-     *              {@code isUnlimited()} 时直接放行）
-     */
     /** 确认发货时按订单行累计校验超发用的账本: 订单行 -> 订单量 / 其他有效发货单已安排量。 */
     private record OrderLineOverShipLedger(Map<Long, SalesOrderItem> orderItems,
                                            Map<Long, BigDecimal> arrangedByOthers) {
@@ -4067,20 +4041,28 @@ public class SalesServiceImpl implements SalesService {
                 || record.getSalesOrderId().isBlank()) {
             return null;
         }
-        // 子发货单 / 分批出运记录的量已经算在它的主单里 (effectiveMasterDeliveries 只认主单),
-        // 对它按订单行再累计一遍会把主单与自己重复计入 —— 只对主单做累计校验。
-        if (record.getParentDeliveryId() != null || "SHIPMENT".equals(record.getRecordRole())) {
-            return null;
-        }
         salesOrderRepository.findByIdAndFactoryIdForUpdate(record.getSalesOrderId(), factoryId);
         Map<Long, SalesOrderItem> orderItems = new HashMap<>();
         salesOrderItemRepository.findBySalesOrderId(record.getSalesOrderId())
                 .forEach(item -> orderItems.put(item.getId(), item));
-        Map<Long, BigDecimal> arrangedByOthers = effectiveMasterDeliveries(
+        boolean shipmentChild = record.getParentDeliveryId() != null;
+        // 主单: 其他有效主单。分批发运子单 (独立审查 2026-11-11): 它的量算在自己的母单里, 所以排除母单本身,
+        // 改计母单下其他未取消 / 未退回的子单 —— 否则子单各按「本单计划 × (1+上限)」放行,
+        // 母单又可按订单量 × (1+上限) 开出, 合计会叠成 (1+上限)^2。
+        List<SalesDeliveryRecord> counted = new ArrayList<>(effectiveMasterDeliveries(
                 deliveryRecordRepository.findBySalesOrderId(record.getSalesOrderId()).stream()
                         .filter(d -> factoryId.equals(d.getFactoryId()))
                         .filter(d -> !Objects.equals(d.getId(), record.getId()))
-                        .toList()).stream()
+                        .filter(d -> !shipmentChild || !Objects.equals(d.getId(), record.getParentDeliveryId()))
+                        .toList()));
+        if (shipmentChild) {
+            getDeliveryShipments(factoryId, record.getParentDeliveryId()).stream()
+                    .filter(child -> !Objects.equals(child.getId(), record.getId()))
+                    .filter(child -> child.getStatus() != SalesDeliveryStatus.CANCELLED
+                            && child.getStatus() != SalesDeliveryStatus.RETURNED)
+                    .forEach(counted::add);
+        }
+        Map<Long, BigDecimal> arrangedByOthers = counted.stream()
                 .flatMap(delivery -> delivery.getItems().stream())
                 .filter(item -> item.getSalesOrderItemId() != null)
                 .collect(Collectors.groupingBy(SalesDeliveryItem::getSalesOrderItemId,
@@ -4088,6 +4070,24 @@ public class SalesServiceImpl implements SalesService {
                                 item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
                                 BigDecimal::add)));
         return new OrderLineOverShipLedger(orderItems, arrangedByOthers);
+    }
+
+    /** 本发货行按订单行累计还能发多少 (null = 不做订单行累计校验 / 不限制)。 */
+    private BigDecimal orderLineMaxThisLine(OrderLineOverShipLedger ledger, SalesDeliveryItem item,
+                                            OverReceiveLimit limit) {
+        if (ledger == null || item == null || item.getSalesOrderItemId() == null || limit == null) {
+            return null;
+        }
+        SalesOrderItem source = ledger.orderItems().get(item.getSalesOrderItemId());
+        if (source == null || source.getQuantity() == null) {
+            return null;
+        }
+        BigDecimal maxCumulative = limit.maxAllowed(source.getQuantity());
+        if (maxCumulative == null) {
+            return null;
+        }
+        BigDecimal others = ledger.arrangedByOthers().getOrDefault(item.getSalesOrderItemId(), BigDecimal.ZERO);
+        return maxCumulative.subtract(others).max(BigDecimal.ZERO);
     }
 
     /** A16: 其他有效发货单 + 本次实发 <= 订单量 x (1+上限)。与新建发货单是同一个上限、同一个算术。 */
@@ -4122,6 +4122,34 @@ public class SalesServiceImpl implements SalesService {
         return value == null ? "0" : value.stripTrailingZeros().toPlainString();
     }
 
+    /**
+     * 【超发上限】校验 —— 仓管把实发数量改大时，不许无上限地多发。
+     *
+     * <h2>这道闸在补哪个洞</h2>
+     * 2026-08-28 生产实测：创建发货单时有一道 0% 硬闸
+     * （{@code 发货数量超过订单行剩余可安排数量} → 409），但仓管在本方法所在的
+     * {@code warehouseConfirmDelivery} 里覆盖实发数量时<b>只挡负数、没有任何上限</b>。
+     * 于是「订 2 发 5」可以走完：<b>库存真扣 5 件，货真的出门了</b>。
+     * 采购侧早有 {@code overReceiveRate} + 异常单两样，销售侧两样都没有。
+     *
+     * <h2>判据为什么是「实发 ≤ 计划 × (1+上限)」而不是「累计实发 ≤ 订单量 × (1+上限)」</h2>
+     * 后者要重新推一遍跨发货单的累计账（主单/子单、已取消/已退回、拆单后谁算谁），
+     * 而那本账<b>创建期已经算过了</b>：创建闸保证 {@code Σ计划 ≤ 订单量}。
+     * 两道一叠即得 {@code Σ实发 ≤ Σ计划 × (1+上限) ≤ 订单量 × (1+上限)} —— 有界，且可证明。
+     *
+     * <p>⇒ 本闸<b>刻意窄</b>：只守「仓管这一步能把数量放大多少」。
+     * ⛔ 它<b>不</b>守下面这些，别把它读成守了：
+     * <ul>
+     *   <li>订单行累计（A16, 2026-11-11 起新建发货单也按同一上限放行，订单行累计由
+     *       {@link #assertWithinOrderLineOverShipCap} 另行守住，不在本方法）</li>
+     *   <li>直接改库的越权写入</li>
+     *   <li>{@code planned == null} 的行 —— 没有计划量就没有基准，本闸跳过；
+     *       但那种行原有逻辑<b>本来也不会应用覆盖值</b>，所以不构成新的口子</li>
+     * </ul>
+     *
+     * @param limit 本次确认生效的上限（{@link #resolveOverShipLimit} 解析，非 null；
+     *              {@code isUnlimited()} 时直接放行）
+     */
     private void assertWithinOverShipCap(SalesDeliveryItem item, String itemIdKey,
             BigDecimal actual, OverReceiveLimit limit) {
         if (limit == null || limit.isUnlimited()) {
@@ -4176,6 +4204,16 @@ public class SalesServiceImpl implements SalesService {
     private void recordBlockedOverShipAttempt(String factoryId, SalesDeliveryRecord record,
             SalesDeliveryItem item, BigDecimal actual, OverReceiveLimit limit,
             BusinessException capViolation, Long userId) {
+        recordBlockedOverShipAttempt(factoryId, record, item, actual, limit, capViolation, userId, null);
+    }
+
+    /**
+     * @param orderLineMax 订单行累计还能发多少 (A16); 非 null 时留痕的「最大可发」取两道上限的较小值,
+     *                     否则被订单行累计拦下的那一次会记成「实发 5.5, 最大 5.5」, 读起来像是放行了。
+     */
+    private void recordBlockedOverShipAttempt(String factoryId, SalesDeliveryRecord record,
+            SalesDeliveryItem item, BigDecimal actual, OverReceiveLimit limit,
+            BusinessException capViolation, Long userId, BigDecimal orderLineMax) {
         if (salesExceptionService == null) {
             return;
         }
@@ -4189,6 +4227,9 @@ public class SalesServiceImpl implements SalesService {
             String source = limit == null ? "limit-missing" : limit.source();
             BigDecimal maxAllowed = (limit == null || item == null)
                     ? null : limit.maxAllowed(item.getDeliveredQuantity());
+            if (orderLineMax != null) {
+                maxAllowed = maxAllowed == null ? orderLineMax : maxAllowed.min(orderLineMax);
+            }
             salesExceptionService.recordBlockedOverShip(
                     factoryId, record, item, actual, rate, source, maxAllowed, userId);
         } catch (Exception e) {

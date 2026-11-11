@@ -247,4 +247,60 @@ class SalesDeliveryOverShipSameCapContractTest {
         assertThat(capError).as("6 + 4.4 = 10.4 ≤ 11, 不该被超发上限拦").isNull();
         assertThat(second.getItems().get(0).getDeliveredQuantity()).as("实发已写入").isEqualByComparingTo("4.4");
     }
+
+    // ---------------------------------------------------------------- 分批发运子单 (独立审查 2026-11-11)
+
+    /** 母单按 110% 开出 11, 下面两张子单: 已发 6, 待确认计划 5。 */
+    private SalesDeliveryRecord masterWithChildren() {
+        SalesDeliveryRecord master = delivery("DLV-QA-A16-M", "11", SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM);
+        master.setRecordRole("MASTER");
+        SalesDeliveryRecord shipped = delivery("DLV-QA-A16-C1", "6", SalesDeliveryStatus.SHIPPED);
+        shipped.setRecordRole("SHIPMENT");
+        shipped.setParentDeliveryId("DLV-QA-A16-M");
+        SalesDeliveryRecord pending = delivery("DLV-QA-A16-C2", "5", SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM);
+        pending.setRecordRole("SHIPMENT");
+        pending.setParentDeliveryId("DLV-QA-A16-M");
+        existingDeliveries.add(master);
+        existingDeliveries.add(shipped);
+        existingDeliveries.add(pending);
+        for (SalesDeliveryRecord r : List.of(master, shipped, pending)) {
+            when(deliveryRecordRepository.findByIdAndFactoryIdForUpdate(r.getId(), F)).thenReturn(Optional.of(r));
+            when(deliveryRecordRepository.findById(r.getId())).thenReturn(Optional.of(r));
+        }
+        return pending;
+    }
+
+    private BusinessException confirmCapError(SalesDeliveryRecord record, String actual) {
+        String itemKey = String.valueOf(record.getItems().get(0).getId());
+        try {
+            service.warehouseConfirmDelivery(F, record.getId(), Map.of(itemKey, new BigDecimal(actual)), 77L);
+        } catch (BusinessException ex) {
+            if ("DELIVERY_QUANTITY_EXCEEDS_OVER_SHIP_CAP".equals(ex.getErrorCode())) return ex;
+        } catch (RuntimeException afterTheGate) {
+            // 过闸之后的出运桩没搭, 与本断言无关
+        }
+        return null;
+    }
+
+    @Test
+    @DisplayName("子单: 母单已按 110% 开出, 子单再各按计划 × 110% 实发会叠成 121% —— 按订单行累计拦下")
+    void shipmentChildDoesNotCompoundOnTopOfAnOverPlannedMaster() {
+        SalesDeliveryRecord pending = masterWithChildren();
+
+        // 单看本子单: 计划 5 × 110% = 5.5 是允许的; 但兄弟子单已发 6, 合计 11.5 > 订单 10 × 110%
+        BusinessException blocked = confirmCapError(pending, "5.5");
+
+        assertThat(blocked).as("子单 6 + 5.5 = 11.5 > 11; 母单本身不重复计入").isNotNull();
+        assertThat(blocked.getMessage()).contains("其他发货单已安排 6kg").contains("本次最多可发 5kg");
+        assertThat(pending.getItems().get(0).getDeliveredQuantity()).isEqualByComparingTo("5");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 子单合计恰好到 110% (6 + 5 = 11) → 放行; 母单的 11 没有被重复算进去")
+    void shipmentChildWithinTheOrderLineCapPasses() {
+        SalesDeliveryRecord pending = masterWithChildren();
+
+        assertThat(confirmCapError(pending, "5")).isNull();
+        assertThat(pending.getItems().get(0).getDeliveredQuantity()).isEqualByComparingTo("5");
+    }
 }
