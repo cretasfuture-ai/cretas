@@ -44,10 +44,12 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
     # 2026-10-07: aistore/deepseek/zhipu 清出注册表, 在册的只剩阿里云三个逻辑账号。
     monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
     monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
+    # 2026-11-12: 阿里云停用; 在用的是 openai / anthropic。
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", "key_openai_fake")
     monkeypatch.setattr(
         llm_router,
         "_today",
-        lambda: datetime.date(2026, 8, 9),
+        lambda: datetime.date(2026, 11, 12),
     )
     # ⛔ 这里**不写死模型名**。本测试锁的是「慢链头 + 健康后备」这个形状, 与具体
     #    是哪两个模型无关; 而注册表随探针淘汰在动 —— 2026-08-09 因此换过一次,
@@ -60,9 +62,12 @@ async def test_mapper_reserves_total_budget_for_later_healthy_candidate(monkeypa
     #    aliyun_a_vl, 它的前两条(deepseek-v4.1-flash / kimi-k3)需要仓库专用开关,
     #    不挑掉的话本用例会红在 warehouse_*_not_enabled —— 与预算行为无关。
     from collections import Counter
-    _day = datetime.date(2026, 8, 9)
+    _day = datetime.date(2026, 11, 12)
+    # 🔴 2026-11-12: 只挑 /chat/completions 形状的账号 —— anthropic 走 Messages 翻译层
+    #    (先经脱敏客户端的 redact_chat_payload), 本用例的假客户端只模拟 chat 形状的 post;
+    #    预算行为与线路形状无关。
     _callable = [p for p in llm_router._SAFE_MODELS
-                 if llm_router._refuse_reason(*p, _day) is None]
+                 if llm_router._refuse_reason(*p, _day) is None and p[0] != "anthropic"]
     _by_acct = Counter(a for a, _m in _callable)
     _acct = next((a for a, n in sorted(_by_acct.items()) if n >= 2), None)
     assert _acct, f"没有任何账号有 2 个以上可调条目, 无法构造本用例: {dict(_by_acct)}"

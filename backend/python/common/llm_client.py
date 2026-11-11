@@ -103,6 +103,17 @@ class _RedactingLLMClient:
             )
             raise EgressRedactionError(type(e).__name__) from e
 
+    async def redact_chat_payload(self, json_payload: Any) -> Any:
+        """Redact an OpenAI chat-shaped payload exactly as a ``/chat/completions`` post would.
+
+        For providers whose wire format is NOT ``/chat/completions`` (Anthropic ``/v1/messages``,
+        OpenAI ``/v1/decisions``, 2026-11-12): the router redacts the chat-shaped payload here
+        FIRST and only then translates it, so the same choke point covers every egress. Posting the
+        translated body afterwards goes through ``post`` with a non-chat URL, which is a passthrough.
+        Returns ``(payload, tokens)``; sets the same egress-token context as ``post``. Fail-closed.
+        """
+        return await self._redact("/chat/completions", json_payload)
+
     async def post(self, url: Any, *, json: Any = None, **kwargs: Any):  # noqa: A002
         json, tokens = await self._redact(url, json)
         response = await self._inner.post(url, json=json, **kwargs)
@@ -243,11 +254,13 @@ def reset_prefetched_names(token: "contextvars.Token") -> None:
     _prefetched_names.reset(token)
 
 
-def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response:
-    """非流式回答: 把本次发出去的代号换回真名 (去括号 / 全角括号等改写也认)。JSON 先解析再逐个字符串换,
-    真名带引号也不会弄坏 JSON; 解析不了按纯文本换。"""
-    if not tokens or not isinstance(response, httpx.Response):
-        return response
+def restore_json(node: Any, tokens: dict) -> Any:
+    """把本次发出去的代号在一个已解析的 JSON 结构里换回真名 (与 ``_restored_response`` 同一套规则)。
+
+    2026-11-12: Anthropic 适配层把 ``/v1/messages`` 的回答翻译成 OpenAI 形状后用它还原 ——
+    那条路不经过 ``post`` 的 ``/chat/completions`` 分支, 必须显式还原。"""
+    if not tokens:
+        return node
     import json as _json
     from common.llm_egress_text import restore
 
@@ -264,8 +277,19 @@ def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response
             return [_deep(x) for x in node]
         return restore(node, tokens) if isinstance(node, str) else node
 
+    return _deep(node)
+
+
+def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response:
+    """非流式回答: 把本次发出去的代号换回真名 (去括号 / 全角括号等改写也认)。JSON 先解析再逐个字符串换,
+    真名带引号也不会弄坏 JSON; 解析不了按纯文本换。"""
+    if not tokens or not isinstance(response, httpx.Response):
+        return response
+    import json as _json
+    from common.llm_egress_text import restore
+
     try:
-        body = _json.dumps(_deep(response.json()), ensure_ascii=False).encode("utf-8")
+        body = _json.dumps(restore_json(response.json(), tokens), ensure_ascii=False).encode("utf-8")
     except ValueError:
         body = (restore(response.text, tokens) or "").encode("utf-8")
     headers = {k: v for k, v in response.headers.items()

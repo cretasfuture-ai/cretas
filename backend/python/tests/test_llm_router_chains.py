@@ -201,6 +201,8 @@ def test_stale_capability_table_falls_back_to_expiry_order():
         entries = list(llm_router._SLOT_POOLS[slot])
         if slot not in llm_router._NO_TEXT_TAIL_SLOTS:
             entries += llm_router._TEXT_TAIL
+        # 2026-11-12: 停用账号(阿里云)在排序之前就被滤掉 —— 两条分支都一样。
+        entries = [p for p in entries if p[0] not in llm_router._DISABLED_ACCOUNTS]
         expiry_only = llm_router._dedup_chain(
             sorted(entries, key=lambda p: llm_router._expiry_of(*p)))
 

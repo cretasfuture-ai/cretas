@@ -1,6 +1,9 @@
 """第②层: 读概率决策 (decision-model 模式)。
 
-两次快调用, 都走 SLOT.DECISION (qwen3.7-flash 链头):
+2026-11-12: 细选先走 OpenAI Decisions (gpt-6-luna, 原生全选项概率, `call_decision_choice`),
+失败再回落下面第 2 步的读 logprobs 链 (SLOT.DECISION, gpt-4.1-mini)。粗选仍是 SLOT.DECISION 的短 JSON 生成。
+
+两次快调用, 都走 SLOT.DECISION (原 qwen3.7-flash 链头, 阿里云已停用):
   1. 粗选: 全目录 (代码｜名称) -> 最多 8 个候选 (短 JSON 生成; 目录是静态前缀, 吃隐式缓存)
   2. 细选: 候选 (粗选 + 向量补足, 最多 20 个) 编成字母 A-T, 前缀续写「答案：」,
      max_tokens=1, 读首 token 的 top_logprobs -> 每个候选一个概率
@@ -359,6 +362,23 @@ class DecisionMatcher:
                                     total_timeout=self.timeout_s, body_validator=body_validator,
                                     content_validator=content_validator)
 
+    async def _choose_native(self, messages: List[Dict[str, Any]], letters: str,
+                             opts: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+        """Decisions API 的原生选项概率 {字母: 概率}; 任何失败 -> None (由调用方回落读 logprobs 链)。"""
+        from common.llm_metrics import llm_caller_context  # type: ignore
+        from common.llm_redactor import utterance_egress  # type: ignore
+        from common.llm_router import call_decision_choice  # type: ignore
+
+        # 选项说明与 E 线评测同形 (意图码：完整说明); 单次上限留出一半预算给回落链 (Luna 实测中位 0.37s)
+        choices = [(L, f"{r['intent_code']}：{intent_text(r)}") for L, r in zip(letters, opts)]
+        try:
+            with llm_caller_context("ai_decision"), utterance_egress():
+                return await call_decision_choice(messages, choices, name="intent",
+                                                  timeout=min(3.0, self.timeout_s / 2))
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision native choice unavailable, falling back to logprobs: %s", str(ex)[:300])
+            return None
+
     async def request_purpose(self, query: str, role: Optional[str],
                               history: Optional[List[Dict[str, Any]]] = None) -> Optional[RequestPurpose]:
         """Generated semantic disposition, never an invented probability or permission grant.
@@ -437,14 +457,20 @@ class DecisionMatcher:
         def has_probs(body: Dict[str, Any]) -> Optional[str]:
             return None if letter_probs(body, n) else "no_option_letter_in_top_logprobs"
 
-        payload = {"messages": build_choice_messages(query, role, opts, history), "max_tokens": 1,
-                   "logprobs": True, "top_logprobs": 5}
-        try:
-            body = await self._call(payload, body_validator=has_probs)
-        except Exception as ex:  # noqa: BLE001
-            logger.warning("decision choose failed: %s", str(ex)[:300])
-            return None
-        probs = letter_probs(body, n) or {}
+        messages = build_choice_messages(query, role, opts, history)
+        letters = LETTERS[:n]
+        # 2026-11-12 (LLM-PROVIDER-SWITCH): 先问 OpenAI Decisions(gpt-6-luna) —— 原生全选项概率,
+        # 一次调用; E 线同一套考题实测意图执行对 73.8%, 读 logprobs 的千问 64.7%。拿不到就回落下面的
+        # 读 logprobs 链(gpt-4.1-mini), 都拿不到 -> None。概率**不重新归一化**(与原契约一致)。
+        probs = await self._choose_native(messages, letters, opts)
+        if probs is None:
+            payload = {"messages": messages, "max_tokens": 1, "logprobs": True, "top_logprobs": 5}
+            try:
+                body = await self._call(payload, body_validator=has_probs)
+            except Exception as ex:  # noqa: BLE001
+                logger.warning("decision choose failed: %s", str(ex)[:300])
+                return None
+            probs = letter_probs(body, n) or {}
         out: Dict[str, float] = {}
         for i, (L, r) in enumerate(zip(LETTERS, opts)):
             code = str(r["intent_code"])

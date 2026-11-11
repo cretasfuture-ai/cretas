@@ -66,6 +66,7 @@ from common.llm_client import (
     reset_prefetched_names,
 )
 from common.llm_egress_text import StreamRestorer
+from common.llm_anthropic import UntranslatableRequest as _UntranslatableRequest
 # ⛔ 模块级 import: 放在函数里的话, import 失败会被那个 `except Exception:
 #    logger.debug(...)` 吞掉 —— 记账**静默停摆**而没有任何信号。
 #    llm_budget 不 import llm_router, 无循环依赖。
@@ -172,22 +173,40 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 #     kimi-k3 / qwen3.8-27b / qwen3.8-max-0902), 仍待 owner 裁定。
 # ⇒ 当前文本槽实际只剩 aliyun_a 一个账号能出内容; a 也耗尽时 call_chain 抛 LLMChainExhausted。
 # 下次到期: 2026-11-24 是最后一个不超龄日, 11-25 起上述定时闸变红。
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 11, 3)  # 11-03 复审: 0 删 0 增, 见上
+#
+# ── 2026-11-12 复审 (LLM-PROVIDER-SWITCH, Steve 裁定「暂时全部停用阿里云的模型, 改用 OpenAI 和
+#    Claude 的便宜模型」; 原因: 阿里云账号免费额度用尽, 11-07 起线上多次 403 Free quota exhausted,
+#    warehouse_vl 整链 LLMChainExhausted) ──
+# ⇒ 新增 openai / anthropic 两个**付费**账号(owner 2026-11-12 授权付费使用; 生产密钥须是不共享数据的
+#   付费项目, 评测密钥不得上生产)。准入证据 = 当天本机评测密钥对合成内容的探针(见 `_REGISTRY_AUDIT_PROBE`)。
+# ⇒ aliyun_a_vl / aliyun_b_vl **条目保留、整体停用**(`_DISABLED_ACCOUNTS`): 不进任何链, `_refuse_reason`
+#   判 provider_disabled, 恢复 = 从 `_DISABLED_ACCOUNTS` 删掉该账号 + 重新探针。
+# ⇒ 本地 local_canada/qwen3:8b 仍是文本槽最后一跳(是否也停由 organizer 问 Steve)。
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 11, 12)  # 11-12 复审: +6 (openai/anthropic), aliyun 停用
 #: 复审当天对**注册表每一条**的探针读数(值是读数本身, ⛔ 不是布尔)。
 #: 由 test_registry_audit_has_a_probe_reading_for_every_entry 钉住两件事:
 #:   ① 键集合 == `_SAFE_MODELS` 的键集合 —— 新增/保留一条却没有当天读数 ⇒ 红;
 #:   ② `_REGISTRY_AUDIT_PROBE_DATE == _REGISTRY_AUDIT_DATE` —— **只推审计日期** ⇒ 红。
 #: ⇒ 推日期必须同时换上新一轮的逐条读数, 「只推日期过闸」在结构上做不到不留痕。
-_REGISTRY_AUDIT_PROBE_DATE = datetime.date(2026, 11, 3)
+_REGISTRY_AUDIT_PROBE_DATE = datetime.date(2026, 11, 12)
 _REGISTRY_AUDIT_PROBE: Dict[Tuple[str, str], str] = {
-    ("aliyun_a_vl", "qwen3.8-flash"): "ok 200",
-    ("aliyun_a_vl", "qwen3.7-flash"): "ok 200",
-    ("aliyun_a_vl", "deepseek-v4.1-flash"): "ok 200 (仓库专用, 需 LLM_WAREHOUSE_V41_ENABLED=1)",
-    ("aliyun_b_vl", "qwen3.8-flash"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定",
-    ("aliyun_a_vl", "kimi-k3"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定",
-    ("aliyun_a_vl", "qwen3.8-27b"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定(本就不在自动池)",
-    ("aliyun_a_vl", "qwen3.8-max-0902"): "quota 403 FreeTierOnly —— 保留, 报 owner 裁定",
-    ("local_canada", "qwen3:8b"): "ok 200 (11-03 新增: 47→隧道→加拿大 mini ollama, 0.63s; 合成基准 意图10/10 分析9/10)",
+    # ── 2026-11-12 新增(付费, owner 授权), 本机评测密钥 + 合成内容, 走生产管线
+    #    (call_chain → _apply_slot_params → 适配层), 详见 PR 描述「探针」表 ──
+    ("anthropic", "claude-haiku-5-5"): "ok 200 ×3/槽: chat 1.08s / insights 1.11s / reasoning 1.09s / chart·mapper 0.95·0.89s 合法 JSON / vl 0.96s 三标签全对 / 工具调用 0.93s / 流式首字 1.02s; decision 细选无 logprobs(按设计明确失败)",
+    ("anthropic", "claude-sonnet-5-5"): "ok 200 ×3: warehouse_vl 1.31s 合法 JSON 三标签全对",
+    ("openai", "gpt-5.4-nano"): "ok 200 ×3: chat 2.08s(最慢 2.64s), 流式首字 0.86s, 工具调用 1.26s",
+    ("openai", "gpt-5.4-mini"): "ok 200 ×3: insights 1.05s / reasoning 0.99s / vl 1.04s / warehouse_vl 1.27s, 合法 JSON 三标签全对",
+    ("openai", "gpt-4.1-mini"): "ok 200 ×3: chart·mapper 0.96s 合法 JSON / decision 读 logprobs 0.81s 首 token 正确",
+    ("openai", "gpt-6-luna"): "ok 200 ×3: Decisions 单选 0.39s(最慢 0.91s), 原生概率正确选项 0.90",
+    # ── 停用(未探测: 本机无阿里云密钥, 且 Steve 已裁定停用) ──
+    ("aliyun_a_vl", "qwen3.8-flash"): "停用 2026-11-12(免费额度用尽, Steve 裁定); 11-03 读数 ok 200",
+    ("aliyun_a_vl", "qwen3.7-flash"): "停用 2026-11-12; 11-03 读数 ok 200",
+    ("aliyun_a_vl", "deepseek-v4.1-flash"): "停用 2026-11-12; 11-03 读数 ok 200(仓库专用)",
+    ("aliyun_b_vl", "qwen3.8-flash"): "停用 2026-11-12; 11-03 读数 quota 403 FreeTierOnly",
+    ("aliyun_a_vl", "kimi-k3"): "停用 2026-11-12; 11-03 读数 quota 403 FreeTierOnly",
+    ("aliyun_a_vl", "qwen3.8-27b"): "停用 2026-11-12; 11-03 读数 quota 403 FreeTierOnly",
+    ("aliyun_a_vl", "qwen3.8-max-0902"): "停用 2026-11-12; 11-03 读数 quota 403 FreeTierOnly",
+    ("local_canada", "qwen3:8b"): "未重测(本机到 47 隧道不可达); 沿用 11-03 读数 ok 200 0.63s —— 回执单列, organizer 问 Steve 是否也停",
 }
 # 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空
 # content)全量核对。判据: 控制台显示有余量 ∩ 探针通过 —— 单边证据一律不收
@@ -228,6 +247,16 @@ _d = datetime.date
 # ⇒ 换成一张带证据的登记表: 想往 VL 池里加候选, 就得在这里写下探针日期与结论。
 #   值是那条证据本身, ⛔ 不是 True/False —— 布尔值记不住「凭什么」。
 _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
+    # ── 2026-11-12 (LLM-PROVIDER-SWITCH): 合成仓库示意图(冷藏区框 / 1号货架 / 入口三角, 480x320 PNG),
+    #    要求只输出 JSON 标签列表; 三次中位延迟, 三个标签全部识别 ──
+    ("anthropic", "claude-haiku-5-5"):
+        "2026-11-12 评测密钥合成图探针 3/3 HTTP 200, 中位 0.97s; 合法 JSON, 三标签全对。VL 链头。",
+    ("anthropic", "claude-sonnet-5-5"):
+        "2026-11-12 评测密钥合成图探针 3/3 HTTP 200, 中位 1.23s; 合法 JSON, 三标签全对。warehouse_vl 链头(更强)。",
+    ("openai", "gpt-5.4-mini"):
+        "2026-11-12 评测密钥合成图探针 3/3 HTTP 200, 中位 1.28s (reasoning_effort=none); 合法 JSON, 三标签全对。",
+    ("openai", "gpt-4.1-mini"):
+        "2026-11-12 评测密钥合成图探针 3/3 HTTP 200, 中位 0.94s; 合法 JSON, 三标签全对。",
     ("aliyun_a_vl", "qwen3.8-27b"):
         "2026-09-29 A 账号生产同源仓库图探针 HTTP 200，3.53s；合法 JSON，"
         "识别冷藏区、1号货架、入口，usage.image_tokens=402。"
@@ -270,6 +299,13 @@ _VISION_VERIFIED: Dict[Tuple[str, str], str] = {
 # 探针: max_tokens=1 + logprobs/top_logprobs=5 + 前缀续写「答案：」(partial),
 # 关思考, 4 选项字母题, 每组合 5 次, prod 服务器本机经各账号自己的 key。
 _LOGPROB_VERIFIED: Dict[Tuple[str, str], str] = {
+    # 2026-11-12: OpenAI 推理型号(gpt-5.4-*)在 max_completion_tokens=1 下 400(推理 token 占预算),
+    #    gpt-6-luna 直接 400「logprobs not supported」; Claude 没有 logprobs。只有 gpt-4.1-mini 合格。
+    #    意图细选的主路径已改成 Luna Decisions(原生全选项概率, 见 `call_openai_decision`),
+    #    本表只服务它失败时的回退。
+    ("openai", "gpt-4.1-mini"):
+        "2026-11-12 评测密钥探针 3/3 HTTP 200, max_tokens=1 + top_logprobs=5, 首 token 是正确选项字母; "
+        "中位 0.67s。⚠️ 不接受 DashScope 的 assistant partial 前缀 —— 由 `_normalize_payload_for_provider` 去掉。",
     ("aliyun_a_vl", "qwen3.7-flash"):
         "2026-10-02 prod 探针 5/5 HTTP 200, logprobs 5/5, 首 token 是正确选项字母; "
         "中位 0.38s / 最慢 0.67s。离线评测 2,000+ 次同形调用: 偶发缺 logprobs 约 1/700, "
@@ -282,64 +318,109 @@ _LOGPROB_VERIFIED: Dict[Tuple[str, str], str] = {
 }
 # 链序(人写): 快且稳的在前。只有同时在 `_LOGPROB_VERIFIED` 里的才进池。
 _LOGPROB_ORDER: List[Tuple[str, str]] = [
+    ("openai", "gpt-4.1-mini"),
+    # 停用中(`_DISABLED_ACCOUNTS`), 由 `_build_chain` 滤掉; 留着是为了恢复时不用重写顺序。
     ("aliyun_a_vl", "qwen3.7-flash"),
     ("aliyun_a_vl", "qwen3.8-flash"),
 ]
 
-# VL 槽位的账号顺序与模型**可配**(Steve 2026-09-15): 换模型/调顺序 =
-# 改 `.env.prod` 一行 + 重启, ⛔ 不用改代码、不用重新发版。
+# DECISION 槽的**生成型**候选(粗选短 JSON / 交际目的 JSON)。2026-11-12: 细选读概率之外, 同一个槽还
+# 承担两次短 JSON 生成; 只放读概率候选时, OpenAI 一家故障就整槽全挂。⇒ 追加 Claude Haiku 作另一家兜底。
+# ⚠️ 它**没有** logprobs: 细选(choose)走到它时 body_validator 判 no_option_letter 并明确失败, 不会编概率。
+_DECISION_GENERATIVE_TAIL: List[Tuple[str, str]] = [
+    ("anthropic", "claude-haiku-5-5"),
+]
+
+# ── 账号停用 (2026-11-12, Steve 裁定「暂时全部停用阿里云的模型」) ──────────────────────
+# 条目、能力登记、provider 映射**全部保留**(删条目不删机制, 见 08-15 的教训), 只在两处生效:
+#   ① `_build_chain` 把这些账号从每个槽的链里滤掉;
+#   ② `_refuse_reason` 对它们返回 "provider_disabled"(调用方用 chain= 点名也发不出去)。
+# 恢复 = 从这里删掉账号 + 当天重新探针 + 更新 `_REGISTRY_AUDIT_PROBE`。
+_DISABLED_ACCOUNTS: frozenset = frozenset({"aliyun_a_vl", "aliyun_b_vl"})
+
+# 付费账号的标价(美元 / 百万 token, 输入, 输出; 2026-11-12 官方定价页)。用途: ① 日费用估算;
+# ② 计费护栏 —— test_paid_models_stay_in_the_cheap_tier 钉住「任何付费条目单价不超过上限」,
+# 往注册表里塞一个贵型号会当场红。Luna 用于 Decisions(只计输入)。
+_PRICE_PER_MTOK: Dict[Tuple[str, str], Tuple[float, float]] = {
+    ("anthropic", "claude-haiku-5-5"): (0.10, 0.50),
+    ("anthropic", "claude-sonnet-5-5"): (2.00, 10.00),
+    ("openai", "gpt-5.4-nano"): (0.20, 1.25),
+    ("openai", "gpt-5.4-mini"): (0.75, 4.50),
+    ("openai", "gpt-4.1-mini"): (0.40, 1.60),
+    ("openai", "gpt-6-luna"): (0.10, 0.50),
+}
+
+# VL 槽位的候选链**可配**(Steve 2026-09-15 定的机制, 2026-11-12 改成「账号/模型」对的列表):
+# 换模型/调顺序 = 改 `.env.prod` 一行 + 重启, ⛔ 不用改代码、不用重新发版。
 #
-#   LLM_VL_MODEL     缺省 qwen3.8-flash
-#   LLM_VL_ACCOUNTS  缺省 aliyun_a_vl,aliyun_b_vl   (逗号分隔, 即 a→b; 2026-11-03 起 aliyun_c 下线)
+#   LLM_VL_CHAIN  缺省 anthropic/claude-haiku-5-5,openai/gpt-5.4-mini   (逗号分隔, 按书写顺序)
 #
-# 🔴 但 env **只能在上面那张登记表里挑**, ⛔ 不能凭空注入一个 (账号, 模型):
-#    本文件顶部写着 `_SAFE_MODELS` 是**唯一**的计费护栏("The router REFUSES any
-#    (account, model) not in this dict")。如果 env 能把任意模型名塞进白名单,
-#    那道护栏当场变成摆设 —— 一个写错的 `LLM_VL_MODEL` 就可能指向付费 SKU。
+# 2026-11-12: 原来的 LLM_VL_ACCOUNTS + LLM_VL_MODEL 只能表达「多个账号轮转同一个模型」(阿里云三账号
+#    轮转 qwen3.8-flash 的形状); 两家供应商各用各的型号时它表达不了 ⇒ 换成一个变量。旧的两个变量
+#    **不再读取**(发布前从 .env.prod 删掉, 见 PR 的配置清单)。
+#
+# 🔴 但 env **只能在 `_VISION_VERIFIED` 登记表里挑**, ⛔ 不能凭空注入一个 (账号, 模型):
+#    `_SAFE_MODELS` 是**唯一**的计费护栏。如果 env 能把任意模型名塞进链, 那道护栏当场变成摆设 ——
+#    一个写错的型号就可能指向贵的 SKU。停用账号(`_DISABLED_ACCOUNTS`)同样选不进来。
 # ⇒ 没有任何组合选得中时, VL 池**留空**并 ERROR 日志点名,
 #   表现是「VL 无候选」这条**明确失败**路径, ⛔ 不是静默降级。
-_VL_DEFAULT_ACCOUNTS = "aliyun_a_vl,aliyun_b_vl"
-_VL_ACCOUNTS: List[str] = [
-    a.strip() for a in
-    ((os.getenv("LLM_VL_ACCOUNTS") or "").strip() or _VL_DEFAULT_ACCOUNTS).split(",")
-    if a.strip()
-]
-_VL_MODEL = (os.getenv("LLM_VL_MODEL") or "").strip() or "qwen3.8-flash"
+_VL_DEFAULT_CHAIN = "anthropic/claude-haiku-5-5,openai/gpt-5.4-mini"
+
+
+def _parse_pairs(raw: str) -> List[Tuple[str, str]]:
+    pairs: List[Tuple[str, str]] = []
+    for item in raw.split(","):
+        acct, sep, model = item.strip().partition("/")
+        if sep and acct.strip() and model.strip():
+            pairs.append((acct.strip(), model.strip()))
+    return pairs
+
+
+_VL_CHAIN: List[Tuple[str, str]] = _parse_pairs(
+    (os.getenv("LLM_VL_CHAIN") or "").strip() or _VL_DEFAULT_CHAIN)
 
 
 def _vl_pool() -> List[Tuple[str, str]]:
-    """按 env 选出 VL 候选链(**保持 env 给的账号顺序**)。
+    """按 env 选出 VL 候选链(**保持 env 给的顺序**)。
 
     ⚠️ 顺序在这里就是**最终顺序**: VL 在 `_NO_TEXT_TAIL_SLOTS` 里不追加文本地板,
-       而 `_build_chain` 的排序键对这三条完全平手(同模型、同到期日 None、
-       同能力档) ⇒ 稳定排序原样保留这里的书写顺序。
-       ⛔ 别把「快的排前面」这件事只写在注释里 —— 它是靠**这个列表的顺序**实现的,
-       由 test_vl_chain_is_fastest_account_first 钉住。
+       而 `_build_chain` 的排序键对这几条完全平手(到期日都是 None、都没有能力表读数)
+       ⇒ 稳定排序原样保留这里的书写顺序。由 test_vl_chain_is_two_vendors_fastest_first 钉住。
 
     选不出来就返回空池(明确失败), ⛔ 不猜、⛔ 不降级。
     """
-    pool = [(acct, _VL_MODEL) for acct in _VL_ACCOUNTS
-            if (acct, _VL_MODEL) in _VISION_VERIFIED]
-    if pool:
-        skipped = [a for a in _VL_ACCOUNTS if (a, _VL_MODEL) not in _VISION_VERIFIED]
+    usable = [p for p in _VL_CHAIN if p in _VISION_VERIFIED and p[0] not in _DISABLED_ACCOUNTS]
+    if usable:
+        skipped = [f"{a}/{m}" for a, m in _VL_CHAIN if (a, m) not in usable]
         if skipped:
-            # 部分命中也要出声: 「3 个账号只接上 1 个」与「配了 1 个账号」在链上同形。
+            # 部分命中也要出声: 「配了 2 个只接上 1 个」与「配了 1 个」在链上同形。
             logger.warning(
-                "[llm_router] VL: %d/%d 个账号可用于 %s; 未登记因而跳过: %s",
-                len(pool), len(_VL_ACCOUNTS), _VL_MODEL, ", ".join(skipped),
+                "[llm_router] VL: %d/%d 个候选可用; 未登记视觉能力或已停用因而跳过: %s",
+                len(usable), len(_VL_CHAIN), ", ".join(skipped),
             )
-        return pool
+        return usable
     logger.error(
-        "[llm_router] VL 槽位没有候选: LLM_VL_MODEL=%r / LLM_VL_ACCOUNTS=%r"
-        " 里没有任何组合在视觉能力登记表里。已登记: %s。"
-        " /api/llm/vision 会以「All providers exhausted for vl」明确失败,"
+        "[llm_router] VL 槽位没有候选: LLM_VL_CHAIN=%r 里没有任何组合在视觉能力登记表里(或都已停用)。"
+        " 已登记: %s。/api/llm/vision 会以「All providers exhausted for vl」明确失败,"
         " ⛔ 不会降级给文本模型。",
-        _VL_MODEL, ",".join(_VL_ACCOUNTS),
+        ",".join("%s/%s" % p for p in _VL_CHAIN),
         ", ".join("%s/%s" % p for p in sorted(_VISION_VERIFIED)),
     )
     return []
 
 _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
+    # ══ 2026-11-12 OpenAI / Anthropic (付费, Steve 授权; LLM-PROVIDER-SWITCH) ═══════════
+    # ⛔ 计费前提与阿里云不同: 这里没有「免费额度用完即停」, 每次 200 都按量计费。
+    #    护栏是: ① 只有这张表里的 (账号, 模型) 能被调用(写错的型号名被 `_refuse_reason` 拒);
+    #    ② 只收便宜档(单价见 `_PRICE_PER_MTOK`, 由测试钉住上限); ③ 账号余额/月度上限在
+    #    OpenAI / Anthropic 控制台设(生产项目建议设月上限), 超限 429/400 → 本文件按额度耗尽处理。
+    # None = 无到期概念(付费), 不是「额度未知」。
+    ("anthropic", "claude-haiku-5-5"): None,
+    ("anthropic", "claude-sonnet-5-5"): None,   # 仅 warehouse_vl 链头(仓库图要更强的识图)
+    ("openai", "gpt-5.4-nano"): None,
+    ("openai", "gpt-5.4-mini"): None,
+    ("openai", "gpt-4.1-mini"): None,           # 非推理: 严格 JSON / temperature 0 / logprobs 都原生支持
+    ("openai", "gpt-6-luna"): None,             # 只走 Decisions API(`call_openai_decision`), 不进任何 chat 链
     # 2026-11-03 本地模型兜底(Steve:「换模型 用aurora或者加拿大macmini的模型」→ 加拿大 Mac mini):
     # 自有机器上的 ollama qwen3:8b, 经 47 loopback:11437 反向隧道 + bearer 代理。
     # 没有计费面(None = 无到期概念, 不是「额度未知」): 机器离线时请求在连接层失败 → 下一跳 /
@@ -529,6 +610,14 @@ _THINKING_ONLY: frozenset = frozenset({
 # 瞎猜图片, 同 §9.1 对 VL 到期的处置一致), 不是遗漏。Fail SAFE, not open —— 但
 # "safe" 不承诺"每个槽都有兜底", 只承诺"有兜底的槽兜底的是活的模型"。
 _MINIMAL_SAFE_SET: frozenset = frozenset({
+    # 2026-11-12: 新的主力两家(付费)必须在超龄最小集里 —— 否则 registry 一超龄, 全部槽只剩停用账号
+    #    与本地兜底, 等于整站 AI 停摆; 与 11-03 把 local_canada 放进来同一个理由。
+    ("anthropic", "claude-haiku-5-5"),
+    ("anthropic", "claude-sonnet-5-5"),
+    ("openai", "gpt-5.4-nano"),
+    ("openai", "gpt-5.4-mini"),
+    ("openai", "gpt-4.1-mini"),
+    ("openai", "gpt-6-luna"),
     # 2026-11-03: 本地兜底在 registry 超龄时也必须保留 —— 它是 aliyun 全部欠费/耗尽时唯一还能答的一跳。
     ("local_canada", "qwen3:8b"),
     # registry 超龄时专用视觉槽也必须保留已核验的候选。
@@ -804,6 +893,8 @@ def _refuse_reason(account: str, model: str,
         return "registry_stale"          # fail SAFE: only minimal set until re-audit
     if (account, model) not in _SAFE_MODELS:
         return "not_allowlisted"         # not a confirmed-ON model on this account
+    if account in _DISABLED_ACCOUNTS:
+        return "provider_disabled"       # 2026-11-12 Steve: 阿里云整体停用(条目保留, 不发请求)
     if (account, model) in {
         ("aliyun_a_vl", "qwen3.8-27b"),
         ("aliyun_a_vl", "kimi-k3"),
@@ -1427,6 +1518,27 @@ _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
 # 每个槽只声明「够资格」的候选。⛔ 这里的顺序**不是**最终链顺序 ——
 # 它只在「同一到期日」时生效(_build_chain 用稳定排序), 表达的是质量优先级。
 # 跨到期日的先后由 _build_chain 按到期日升序算, 人不要在这里排。
+# ══ 2026-11-12 两家付费主力 (LLM-PROVIDER-SWITCH) ═══════════════════════════════
+# 每个槽 = 一家主模型 + 另一家备选(单家故障不全挂), 然后是 `_TEXT_TAIL`(阿里云停用被滤掉后只剩
+# 本地 qwen3:8b)。选型依据见 PR 描述的「每槽选型」表; 读数见 `_REGISTRY_AUDIT_PROBE`。
+#   快档 (CHAT / SIMPLE_TEXT)        Claude Haiku 5.5 → GPT-5.4 nano
+#   质量档 (INSIGHTS / REVIEW / REASONING) Claude Haiku 5.5 → GPT-5.4 mini
+#   严格 JSON (CHART / MAPPER)        GPT-4.1 mini → Claude Haiku 5.5
+#     · GPT-4.1 mini 非推理, 原生 json_object + temperature 0 + seed —— 这两个槽的 profile 正是这三样;
+#       Claude 5 不接受 temperature<1(400)也没有 json_object, 只能靠槽位 JSON 校验兜住, 所以排第二。
+_FAST_TEXT_POOL: List[Tuple[str, str]] = [
+    ("anthropic", "claude-haiku-5-5"),
+    ("openai", "gpt-5.4-nano"),
+]
+_QUALITY_TEXT_POOL: List[Tuple[str, str]] = [
+    ("anthropic", "claude-haiku-5-5"),
+    ("openai", "gpt-5.4-mini"),
+]
+_STRICT_JSON_POOL: List[Tuple[str, str]] = [
+    ("openai", "gpt-4.1-mini"),
+    ("anthropic", "claude-haiku-5-5"),
+]
+
 _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # 🔴 2026-10-07: 七个文本槽(CHAT / SIMPLE_TEXT / CHART / MAPPER / INSIGHTS /
     #    REVIEW / REASONING)的池**全部为空** —— 原有条目清一色是 aistore / deepseek,
@@ -1436,12 +1548,12 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     #       探针双证), 再按该槽的契约(延迟 / JSON / 思考开关)放进来。
     #
     # CHAT — 高频低延迟, 关思考。只收关思考档 ≤2s 的通用文本模型。
-    SLOT.CHAT: [],
+    SLOT.CHAT: list(_FAST_TEXT_POOL),
     # SIMPLE_TEXT — low-risk rewrite / summary / classification only.
     # ⚠️ 它「低风险」不代表可以没有兜底: 低风险指的是**任务**, 不是**可用性**。
-    SLOT.SIMPLE_TEXT: [],
+    SLOT.SIMPLE_TEXT: list(_FAST_TEXT_POOL),
     # CHART — 紧凑 JSON (关思考 + json_object)。与 CHAT 同一批快模型。
-    SLOT.CHART: [],
+    SLOT.CHART: list(_STRICT_JSON_POOL),
     # MAPPER — 短 JSON 字段映射。契约是「短 JSON, 快而有界」, 由
     # test_mapper_uses_bounded_fast_models_without_max_or_reasoners 强制:
     # 池内不得含 _THINKING_ONLY / _SLOW_MODELS / Max 档。
@@ -1457,13 +1569,14 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     #    都没跑过, "快"不是"会输出合契约的 JSON"的证据。要用先测。
     # 池内约束(非 _THINKING_ONLY / 非 _SLOW_MODELS / 非 Max 档)由
     # test_mapper_uses_bounded_fast_models_without_max_or_reasoners 守。
-    SLOT.MAPPER: [],
+    SLOT.MAPPER: list(_STRICT_JSON_POOL),
     # INSIGHTS / REVIEW — 共用质量档池, 见上方 _QUALITY_TIER_POOL 定义。
-    SLOT.INSIGHTS: list(_QUALITY_TIER_POOL),
-    SLOT.REVIEW: list(_QUALITY_TIER_POOL),
+    SLOT.INSIGHTS: list(_QUALITY_TIER_POOL) + _QUALITY_TEXT_POOL,
+    SLOT.REVIEW: list(_QUALITY_TIER_POOL) + _QUALITY_TEXT_POOL,
     # REASONING — 允许慢, profile 为 {} (不设 enable_thinking)。
     # aliyun 今天仅存的 4 类模型里有 3 类是 _THINKING_ONLY, 它们只能落在这里。
     SLOT.REASONING: [
+        *_QUALITY_TEXT_POOL,
         # ⛔ ("aliyun_c", "qwen3.7-max-preview") **不进任何池**: 同一型号在 aliyun_a
         #    上 4.6s, 在 aliyun_c 上实测 **66.9 秒** —— 超过 call_chain 的 30s 总预算,
         #    选中它等于这一跳必然超时, 还会把后面候选的预算一起吃掉(见 _TEXT_TAIL
@@ -1510,6 +1623,11 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # qwen3.8-27b 直连探针通过，但真实业务链路 0/2 识别货架，故不入自动池。
     # 仓库优先使用通过补充同图探针的候选；DeepSeek 与原 VL 链继续故障转移。
     SLOT.WAREHOUSE_VL: [
+        # 2026-11-12: Sonnet 5.5 排头(仓库图要认货架 / 区域, 历史上弱模型在真实链路漏过货架),
+        #    另一家 GPT-5.4 mini, 再退 Haiku。下面的阿里云条目停用中, 被 `_build_chain` 滤掉。
+        ("anthropic", "claude-sonnet-5-5"),
+        ("openai", "gpt-5.4-mini"),
+        ("anthropic", "claude-haiku-5-5"),
         ("aliyun_a_vl", "kimi-k3"),
         ("aliyun_a_vl", "qwen3.8-max-0902"),
         ("aliyun_a_vl", "deepseek-v4.1-flash"),
@@ -1517,7 +1635,8 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     ],
     # DECISION — 读概率决策 + 意图粗选。只收 `_LOGPROB_VERIFIED` 里登记过的组合,
     # 顺序即书写顺序(三条到期日都是 None、都没有能力表读数 ⇒ 稳定排序原样保留)。
-    SLOT.DECISION: [p for p in _LOGPROB_ORDER if p in _LOGPROB_VERIFIED],
+    # 2026-11-12: 读概率候选之后追加另一家的生成型候选(只服务粗选 / 交际目的两次短 JSON)。
+    SLOT.DECISION: [p for p in _LOGPROB_ORDER if p in _LOGPROB_VERIFIED] + _DECISION_GENERATIVE_TAIL,
 }
 
 # 绝对置底 —— `_build_chain` 排序键的第 2 位, 优先于能力档/延迟档/到期日。
@@ -1583,6 +1702,8 @@ def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
     entries = list(_SLOT_POOLS[slot])
     if slot not in _NO_TEXT_TAIL_SLOTS:
         entries += _TEXT_TAIL
+    # 2026-11-12: 停用账号(阿里云)整体不进链 —— 条目留在池/地板里只为恢复时不用重写。
+    entries = [p for p in entries if p[0] not in _DISABLED_ACCOUNTS]
     if _capability_stale():
         return _dedup_chain(sorted(entries, key=lambda p: _expiry_of(*p)))
     tail_set = frozenset(_TEXT_TAIL)
@@ -1787,6 +1908,13 @@ _DEEPSEEK_THINKING_OBJECT_MODELS: frozenset[str] = frozenset({
 })
 
 
+# 2026-11-12: DashScope 私有字段 —— 发给 OpenAI 会 400, 发给 Anthropic 无意义。
+_DASHSCOPE_ONLY_FIELDS: Tuple[str, ...] = ("enable_thinking", "enable_search", "extra_body", "thinking_budget")
+# OpenAI 推理型号: max_tokens→max_completion_tokens, 不收 temperature/logprobs, 关思考 = reasoning_effort none
+# (2026-11-12 探针: gpt-5.4-nano / mini 以 reasoning_effort=none 200)。
+_OPENAI_REASONING_MODELS: frozenset = frozenset({"gpt-5.4-nano", "gpt-5.4-mini"})
+
+
 def _apply_slot_params(slot: SLOT, account: str, model: str,
                        payload: Dict[str, Any]) -> Dict[str, Any]:
     """Apply the SLOT's param profile to a per-call payload (model already set).
@@ -1842,6 +1970,26 @@ def _apply_slot_params(slot: SLOT, account: str, model: str,
             p["enable_thinking"] = False
         elif model in _TOKENHUB_THINKING_OBJECT_MODELS:
             p["thinking"] = {"type": "disabled"}
+    # OpenAI (2026-11-12): strict about unknown fields (400 "Unrecognized request argument").
+    # DashScope-only fields never leave for OpenAI; the GPT-5.x reasoning family additionally
+    # rejects max_tokens / non-default temperature / logprobs and takes reasoning_effort instead.
+    if account == "openai":
+        for key in _DASHSCOPE_ONLY_FIELDS:
+            p.pop(key, None)
+        if model in _OPENAI_REASONING_MODELS:
+            if "max_tokens" in p:
+                p["max_completion_tokens"] = p.pop("max_tokens")
+            for key in ("temperature", "top_p", "seed", "logprobs", "top_logprobs"):
+                p.pop(key, None)
+            if prof.get("enable_thinking") is False:
+                p["reasoning_effort"] = "none"
+        elif "seed" in prof:
+            p.setdefault("seed", prof["seed"])
+    # Anthropic: the Messages translation (common.llm_anthropic) drops every OpenAI/DashScope
+    # field it cannot honour; thinking-off is decided from the slot profile in `_post_anthropic`.
+    if account == "anthropic":
+        for key in _DASHSCOPE_ONLY_FIELDS:
+            p.pop(key, None)
     # TokenHub constraints last: they are hard provider requirements, so they must
     # win over both the caller's payload and the slot profile (violating them is a
     # guaranteed 400 / empty response, not a quality trade-off).
@@ -1982,6 +2130,18 @@ def _provider_config(account: str) -> Tuple[str, str]:
         # 2026-11-03 本地兜底: 加拿大 Mac mini 上的 ollama, 经 47 本机回环 11437 的反向隧道,
         # 前面是 bearer 鉴权代理(只放行 qwen3:8b)。⛔ key 只读 LLM_LOCAL_CANADA_API_KEY,
         # 不 fallback 到任何别的 key(同 aistore/deepseek 纪律)。没配 ⇒ empty_api_key, 不发请求。
+        # 2026-11-12 (LLM-PROVIDER-SWITCH): 两家付费主力。⛔ key 只读各自的 LLM_* 变量, 不 fallback 到
+        # OPENAI_API_KEY / ANTHROPIC_API_KEY 这类通用名 —— 机器上残留的评测 key 不能被生产进程顺手捡走
+        # (评测项目可能开了数据共享)。没配 ⇒ empty_api_key, 不发请求。
+        # anthropic 的 base_url 不带 /v1: 适配层拼 `/v1/messages`(见 `_post_anthropic`)。
+        "openai": (
+            os.getenv("LLM_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            os.getenv("LLM_OPENAI_API_KEY", ""),
+        ),
+        "anthropic": (
+            os.getenv("LLM_ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+            os.getenv("LLM_ANTHROPIC_API_KEY", ""),
+        ),
         "local_canada": (
             os.getenv("LLM_LOCAL_CANADA_BASE_URL", "http://127.0.0.1:11437/v1"),
             os.getenv("LLM_LOCAL_CANADA_API_KEY", ""),
@@ -2077,10 +2237,26 @@ DEFAULT_CHAIN: List[str] = [
     #    什么, 而**删机制的账是在重新要用的时候才结的**: #580 删 deepseek
     #    时注释写「entire removal was 1 file」, 这次加回来才发现少了
     #    thinking 注入那一半, 差点 DOA。
-    "aliyun_a_vl", "aliyun_b_vl",
+    # 2026-11-12: OpenAI / Anthropic 两家付费主力; 阿里云两个逻辑账号停用(`_DISABLED_ACCOUNTS`)。
+    "anthropic", "openai",
     # 2026-11-03: 自有机器上的本地模型兜底(Steve 裁定), 见 `_TEXT_TAIL`。
     "local_canada",
 ]
+
+
+def _auth_headers(account: str, api_key: str) -> Dict[str, str]:
+    """Per-provider auth headers. Anthropic uses ``x-api-key`` + a version header; OpenAI may pin a
+    project (``LLM_OPENAI_PROJECT_ID``) so usage lands on the non-data-sharing paid project."""
+    if account == "anthropic":
+        from common.llm_anthropic import ANTHROPIC_VERSION
+        return {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION,
+                "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if account == "openai":
+        project = (os.getenv("LLM_OPENAI_PROJECT_ID") or "").strip()
+        if project:
+            headers["OpenAI-Project"] = project
+    return headers
 
 
 def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
@@ -2108,6 +2284,16 @@ def _is_quota_exhausted(status_code: int, body_text: str) -> bool:
     ):
         return True
     if status_code == 429 and "setlimitexceeded" in lowered_body:
+        return True
+    # 2026-11-12 付费两家的「钱/上限用完」: 不会自愈, 走长跳过而不是 60s 熔断空转。
+    #   OpenAI: 429 + "insufficient_quota"(账号余额 / 项目月上限)。普通 429 rate_limit 不命中。
+    #   Anthropic: 400 + "credit balance is too low"; 工作区月上限是 400/429 + "usage limit"。
+    if status_code == 429 and "insufficient_quota" in lowered_body:
+        return True
+    if status_code in (400, 429) and (
+        "credit balance is too low" in lowered_body
+        or "api usage limit" in lowered_body
+    ):
         return True
     # Zhipu: 余额耗尽用 429 + 中文报文 + code 1113, 不含 SetLimitExceeded。
     # 2026-08-09 实测 glm-4.6v。结构上等同额度耗尽($0 且不会自愈), 分到
@@ -2160,7 +2346,14 @@ def _normalize_payload_for_provider(payload: Dict[str, Any], account: str) -> Di
        ⇒ 判据：**账号清单只有 `DEFAULT_CHAIN` 一个来源**，⛔ 不在 docstring
           里另抄一份（形态 D：两份必漂，漂了就拿来当证据）。
     """
-    return {**payload}
+    p = {**payload}
+    if account in ("openai", "anthropic"):
+        # DashScope 的「前缀续写」(assistant 消息带 partial=True, DECISION 细选用「答案：」) ——
+        # OpenAI 不认 partial 字段, Claude 5 拒绝 assistant 预填(400)。⇒ 去掉; 选项字母靠提示词约束。
+        msgs = p.get("messages")
+        if isinstance(msgs, list) and any(isinstance(m, dict) and m.get("partial") for m in msgs):
+            p["messages"] = [m for m in msgs if not (isinstance(m, dict) and m.get("partial"))]
+    return p
 
 
 _BUDGET_AWARE_FAST_SLOTS = frozenset({
@@ -2271,6 +2464,30 @@ def providers_ready(slot: SLOT = SLOT.CHAT) -> Optional[bool]:
     except Exception as exc:                      # noqa: BLE001 - 判不出来就说不知道
         logger.warning(f"[llm_router] providers_ready 判定失败, 返回 None(未知): {exc}")
         return None
+
+
+async def _post_anthropic(client: Any, slot: SLOT, model: str, base_url: str,
+                          headers: Dict[str, str], req_payload: Dict[str, Any],
+                          request_timeout: float) -> httpx.Response:
+    """POST one chat-shaped request to Anthropic's Messages API and answer in chat-completion shape.
+
+    Order matters for 数据主权: redact the chat-shaped payload FIRST (same choke point as every
+    ``/chat/completions`` egress), then translate; post through the shared client (non-chat URL ⇒
+    passthrough); translate the answer back and restore the egress tokens. A non-2xx answer is
+    returned untouched so quota / error classification sees the provider's own body.
+    """
+    from common.llm_anthropic import to_chat_completion, to_messages_request
+    from common.llm_client import restore_json
+
+    redacted, tokens = await client.redact_chat_payload(req_payload)
+    thinking_off = (_SLOT_PARAMS.get(slot) or {}).get("enable_thinking") is False
+    body = to_messages_request(redacted, model, thinking_off_wanted=thinking_off)
+    resp = await client.post(f"{base_url}/v1/messages", headers=headers, json=body,
+                             timeout=httpx.Timeout(request_timeout))
+    if not (200 <= resp.status_code < 300):
+        return resp
+    translated = restore_json(to_chat_completion(resp.json()), tokens)
+    return httpx.Response(resp.status_code, json=translated, request=resp.request)
 
 
 class LLMChainExhausted(RuntimeError):
@@ -2437,10 +2654,7 @@ async def _call_chain_attempts(
             slot, account, model,
             _normalize_payload_for_provider({**payload, "model": model}, account),
         )
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = _auth_headers(account, api_key)
 
         try:
             logger.debug(f"[llm_router] slot={slot.value} try {account}/{model}")
@@ -2461,15 +2675,17 @@ async def _call_chain_attempts(
             # commit message claim about "TOTAL timeout / 7.5s per phase" was
             # wrong. Keeping the explicit form matches `call_chain_stream`
             # below for readability — no behavior change.
-            resp = await asyncio.wait_for(
-                client.post(
+            if account == "anthropic":
+                post = _post_anthropic(client, slot, model, base_url, headers, req_payload,
+                                       request_timeout)
+            else:
+                post = client.post(
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json=req_payload,
                     timeout=httpx.Timeout(request_timeout),
-                ),
-                timeout=request_timeout,
-            )
+                )
+            resp = await asyncio.wait_for(post, timeout=request_timeout)
             body_text = resp.text  # may trigger aread() internally
 
             if 200 <= resp.status_code < 300:
@@ -2553,6 +2769,11 @@ async def _call_chain_attempts(
             # endpoint may transiently be broken. Net: we try all providers.
             continue
 
+        except _UntranslatableRequest as e:
+            # 请求形状这一家表达不了(音频/文件/强制工具) —— 供应商本身是好的, 不记熔断, 换下一家
+            logger.warning(f"[llm_router] {account}/{model} cannot serve this request shape: {e}")
+            errors.append(f"{account}/{model}: untranslatable")
+            continue
         except asyncio.TimeoutError:
             _cb_record_failure(cb_key)
             fails = _CB_FAILURES.get(account, 0)
@@ -2576,6 +2797,121 @@ async def _call_chain_attempts(
             continue
 
     raise LLMChainExhausted(slot.value, errors)
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Decisions API (2026-11-12, LLM-PROVIDER-SWITCH): 意图细选的原生全选项概率
+# ---------------------------------------------------------------------------
+#: 细选用的决策模型。不进任何 chat 链(它在这里只回答「选哪一项、各项概率」)。
+DECISION_CHOICE_PAIR: Tuple[str, str] = ("openai", "gpt-6-luna")
+
+
+def _choice_distribution(body: Dict[str, Any], name: str, values: List[str]) -> Optional[Dict[str, float]]:
+    """Decisions 响应 -> {选项值: 概率}; 形状不对 / 概率非法 / 选项集合对不上 -> None (⛔ 不补、不归一化)。"""
+    import math
+    answers = [a for a in (body or {}).get("answers") or []
+               if isinstance(a, dict) and a.get("name") == name and a.get("type") == "choice"]
+    if len(answers) != 1:
+        return None
+    rows = answers[0].get("probabilities")
+    if not isinstance(rows, list):
+        return None
+    out: Dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        value, prob = row.get("value"), row.get("probability")
+        if (not isinstance(value, str) or value in out or isinstance(prob, bool)
+                or not isinstance(prob, (int, float)) or not math.isfinite(prob) or not 0 <= prob <= 1):
+            return None
+        out[value] = float(prob)
+    return out if set(out) == set(values) else None
+
+
+async def call_decision_choice(
+    messages: List[Dict[str, Any]],
+    choices: List[Tuple[str, str]],
+    *,
+    name: str = "intent",
+    timeout: float = 6.0,
+) -> Dict[str, float]:
+    """单选题交给 OpenAI Decisions API(gpt-6-luna), 返回每个选项的原生概率。
+
+    ``messages`` 是 chat 形状(system 说明 + user 正文; DashScope 的 partial 前缀会被忽略), 先经共享客户端
+    **同一个脱敏出口**再拼成 Decisions 请求 —— 与 ``/chat/completions`` 外发同一套规则。
+    ``choices`` = [(选项值, 说明)]。
+
+    失败一律抛 :class:`LLMChainExhausted`(调用方回落读概率链), ⛔ 不编概率、不默认第一项。
+    计费护栏与 chat 链同一套: `_refuse_reason` / 熔断 / 额度跳过 / 空 key。
+    """
+    account, model = DECISION_CHOICE_PAIR
+    slot_label = "decision_choice"
+    cb_key = f"{account}/{model}"
+    refuse = _refuse_reason(account, model)
+    if refuse:
+        raise LLMChainExhausted(slot_label, [f"{cb_key}: {refuse}"])
+    if _cb_should_skip(cb_key):
+        raise LLMChainExhausted(slot_label, [f"{account}: cb_open"])
+    if _quota_should_skip(cb_key):
+        raise LLMChainExhausted(slot_label, [f"{cb_key}: quota_skip"])
+    base_url, api_key = _provider_config(account)
+    if not api_key:
+        errors: List[str] = []
+        _note_empty_key("llm_router_decision", account, errors)
+        raise LLMChainExhausted(slot_label, errors)
+    values = [v for v, _d in choices]
+    if not values or len(set(values)) != len(values):
+        raise ValueError("decision choices must be non-empty and unique")
+
+    names_token = await prefetch_names_for_request()
+    try:
+        client = get_llm_http_client()
+        clean = [m for m in messages if not (isinstance(m, dict) and m.get("partial"))]
+        redacted, _tokens = await client.redact_chat_payload({"model": model, "messages": clean})
+        system = "\n".join(str(m.get("content") or "") for m in redacted["messages"] if m.get("role") == "system")
+        user = "\n".join(str(m.get("content") or "") for m in redacted["messages"] if m.get("role") == "user")
+        body = {"model": model, "input": user,
+                "questions": [{"type": "choice", "name": name, "instructions": system,
+                               "choices": [{"value": v, "description": d} for v, d in choices]}]}
+        try:
+            resp = await asyncio.wait_for(
+                client.post(f"{base_url}/decisions", headers=_auth_headers(account, api_key), json=body,
+                            timeout=httpx.Timeout(timeout)),
+                timeout=timeout)
+        except EgressRedactionError:
+            raise
+        except asyncio.TimeoutError:
+            _cb_record_failure(cb_key)
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: timeout"])
+        except Exception as e:  # noqa: BLE001
+            _cb_record_failure(cb_key)
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: {type(e).__name__}"])
+        if not (200 <= resp.status_code < 300):
+            _cb_record_failure(cb_key)
+            if _is_quota_exhausted(resp.status_code, resp.text):
+                _quota_record_exhausted(cb_key)
+                raise LLMChainExhausted(slot_label, [f"{cb_key}: quota {resp.status_code}"])
+            logger.error(f"[llm_router] decision {cb_key} http {resp.status_code}: {resp.text[:200]}")
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: http {resp.status_code}"])
+        try:
+            parsed = resp.json()
+        except ValueError:
+            parsed = {}
+        dist = _choice_distribution(parsed, name, values)
+        if dist is None:
+            _cb_record_failure(cb_key)
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: invalid_choice_distribution"])
+        _cb_record_success(cb_key)
+        _quota_record_success(cb_key)
+        usage = parsed.get("usage") or {}
+        _log_cache_and_record_budget(slot_label, account, model, {"usage": {
+            "prompt_tokens": usage.get("input_tokens") or 0,
+            "completion_tokens": usage.get("output_tokens") or 0,
+            "prompt_tokens_details": usage.get("input_tokens_details") or {}}})
+        logger.info(f"[llm_router] decision OK via {cb_key}")
+        return dist
+    finally:
+        reset_prefetched_names(names_token)
 
 
 # ---------------------------------------------------------------------------
@@ -2697,10 +3033,28 @@ async def _call_chain_stream_attempts(
             slot, account, model,
             _normalize_payload_for_provider({**payload, "model": model}, account),
         )
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = _auth_headers(account, api_key)
+        # Anthropic: redact the chat-shaped payload here (same choke point), translate, and stream
+        # /v1/messages; the shared client treats that URL as passthrough, so we hold the egress
+        # tokens ourselves for the StreamRestorer below.
+        is_anthropic = account == "anthropic"
+        stream_url = f"{base_url}/chat/completions"
+        stream_body: Dict[str, Any] = req_payload
+        held_tokens: Optional[dict] = None
+        stream_in = stream_out = 0
+        if is_anthropic:
+            from common.llm_anthropic import stream_event, to_messages_request
+            try:
+                redacted, held_tokens = await client.redact_chat_payload(req_payload)
+                stream_body = to_messages_request(
+                    redacted, model,
+                    thinking_off_wanted=(_SLOT_PARAMS.get(slot) or {}).get("enable_thinking") is False)
+            except EgressRedactionError:
+                raise
+            except _UntranslatableRequest:
+                errors.append(f"{account}/{model}: untranslatable")
+                continue
+            stream_url = f"{base_url}/v1/messages"
 
         first_delta_yielded = False
         stream_error_text = ""
@@ -2709,9 +3063,9 @@ async def _call_chain_stream_attempts(
             logger.debug(f"[llm_router_stream] slot={slot.value} try {account}/{model}")
             async with client.stream(
                 "POST",
-                f"{base_url}/chat/completions",
+                stream_url,
                 headers=headers,
-                json=req_payload,
+                json=stream_body,
                 timeout=httpx.Timeout(timeout),
             ) as resp:
                 # Pre-stream error branch — fallback before content yielded
@@ -2739,7 +3093,7 @@ async def _call_chain_stream_attempts(
                 logger.info(f"[llm_router_stream] slot={slot.value} streaming via {account}/{model}")
 
                 # 发出去的代号 (公司名 / 人名 / 号码 / 保密产品名) 边收边换回真名; 代号可能被拆在两段增量里
-                restorer = StreamRestorer(current_egress_tokens())
+                restorer = StreamRestorer(held_tokens if is_anthropic else current_egress_tokens())
 
                 async for line in resp.aiter_lines():
                     line = line.strip()
@@ -2758,6 +3112,28 @@ async def _call_chain_stream_attempts(
                     try:
                         obj = json.loads(data_str)
                     except json.JSONDecodeError:
+                        continue
+
+                    if is_anthropic:
+                        text, usage_update, err_label = stream_event(obj)
+                        if usage_update:
+                            stream_in = usage_update.get("input", stream_in)
+                            stream_out = usage_update.get("output", stream_out)
+                        if err_label:
+                            stream_error_text = json.dumps({"type": err_label}, ensure_ascii=False)
+                            if first_delta_yielded:
+                                rest = restorer.flush()
+                                if rest:
+                                    yield {"type": "delta", "text": rest}
+                                return
+                            break
+                        if text:
+                            first_delta_yielded = True
+                            ready = restorer.push(text)
+                            if ready:
+                                yield {"type": "delta", "text": ready}
+                        if obj.get("type") == "message_stop":
+                            break
                         continue
 
                     upstream_error = _extract_upstream_error(obj)
@@ -2824,6 +3200,14 @@ async def _call_chain_stream_attempts(
                 rest = restorer.flush()
                 if rest:
                     yield {"type": "delta", "text": rest}
+                if is_anthropic and (stream_in or stream_out):
+                    # Messages 流的用量分在 message_start / message_delta 两个事件里, 收齐后一次记账
+                    try:
+                        from common.llm_metrics import record_stream_usage
+                        record_stream_usage(account, model, stream_in, stream_out, stream_in + stream_out)
+                    except Exception as _e:
+                        logger.debug(f"[llm_router_stream] usage record skipped: {_e}")
+                    yield {"type": "usage", "tokens": stream_in + stream_out}
                 if not first_delta_yielded:
                     _cb_record_failure(cb_key)
                     if stream_error_text and _is_quota_exhausted(200, stream_error_text):

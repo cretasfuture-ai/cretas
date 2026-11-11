@@ -114,16 +114,18 @@ def test_aistore_thinking_switch_is_keyed_by_the_exact_model_string():
 
 
 # ── 2xx + error 体的回退: 与账号无关的机制, 用在册的两个阿里云账号来测 ──────────
+# 2026-11-12: 阿里云停用(`_DISABLED_ACCOUNTS`), 两跳换成两个在用的 /chat/completions 形状候选;
+# 这两条用例守的是「2xx 错误体 → 下一跳」的通用机制, 与具体供应商无关。
 _TWO_HOPS = [
-    ("aliyun_a_vl", "qwen3.8-flash"),
-    ("aliyun_b_vl", "qwen3.8-flash"),
+    ("openai", "gpt-4.1-mini"),
+    ("local_canada", "qwen3:8b"),
 ]
 
 
 def _patch_two_hops(monkeypatch):
-    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "fake-a")
-    monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "fake-b")
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 10, 7))
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", "fake-openai")
+    monkeypatch.setenv("LLM_LOCAL_CANADA_API_KEY", "fake-local")
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 11, 12))
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, list(_TWO_HOPS))
 
 

@@ -1,40 +1,38 @@
 == chat (len=3)
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  anthropic/claude-haiku-5-5
+   2099-01-01  openai/gpt-5.4-nano
    2099-01-01  local_canada/qwen3:8b
 == simple_text (len=3)
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  anthropic/claude-haiku-5-5
+   2099-01-01  openai/gpt-5.4-nano
    2099-01-01  local_canada/qwen3:8b
 == insights (len=3)
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  anthropic/claude-haiku-5-5
+   2099-01-01  openai/gpt-5.4-mini
    2099-01-01  local_canada/qwen3:8b
 == chart (len=3)
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  openai/gpt-4.1-mini
+   2099-01-01  anthropic/claude-haiku-5-5
    2099-01-01  local_canada/qwen3:8b
 == mapper (len=3)
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  openai/gpt-4.1-mini
+   2099-01-01  anthropic/claude-haiku-5-5
    2099-01-01  local_canada/qwen3:8b
 == reasoning (len=3)
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  anthropic/claude-haiku-5-5
+   2099-01-01  openai/gpt-5.4-mini
    2099-01-01  local_canada/qwen3:8b
 == vl (len=2)
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
-== warehouse_vl (len=5)
-   2099-01-01  aliyun_a_vl/kimi-k3
-   2099-01-01  aliyun_a_vl/qwen3.8-max-0902
-   2099-01-01  aliyun_a_vl/deepseek-v4.1-flash
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  anthropic/claude-haiku-5-5
+   2099-01-01  openai/gpt-5.4-mini
+== warehouse_vl (len=3)
+   2099-01-01  anthropic/claude-sonnet-5-5
+   2099-01-01  openai/gpt-5.4-mini
+   2099-01-01  anthropic/claude-haiku-5-5
 == review (len=3)
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
-   2099-01-01  aliyun_b_vl/qwen3.8-flash
+   2099-01-01  anthropic/claude-haiku-5-5
+   2099-01-01  openai/gpt-5.4-mini
    2099-01-01  local_canada/qwen3:8b
 == decision (len=2)
-   2099-01-01  aliyun_a_vl/qwen3.7-flash
-   2099-01-01  aliyun_a_vl/qwen3.8-flash
+   2099-01-01  openai/gpt-4.1-mini
+   2099-01-01  anthropic/claude-haiku-5-5
