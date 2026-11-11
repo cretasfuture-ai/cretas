@@ -126,6 +126,13 @@ public final class ReadParamProbe {
                 params.put(pageKey, 1);
                 sources.put(pageKey, ReadTurnParameters.Source.DEFAULT);
             }
+            // The tool fills a declared default page size when none is bound (ReadTurnParameters.markDefaults
+            // only marks it DEFAULT); report the effective value the tool would run with.
+            if (sizeKey != null && !params.containsKey(sizeKey) && props.get(sizeKey) instanceof Map<?, ?> sp
+                    && sp.get("default") != null) {
+                params.put(sizeKey, sp.get("default"));
+                sources.put(sizeKey, ReadTurnParameters.Source.DEFAULT);
+            }
             last.put(caseId, new ReadTurnParameters.Snapshot(target, tool.getToolName(), new LinkedHashMap<>(params)));
             Map<String, Object> norm = new LinkedHashMap<>();
             for (Map.Entry<String, Object> e : params.entrySet()) {
