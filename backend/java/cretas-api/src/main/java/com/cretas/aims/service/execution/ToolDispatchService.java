@@ -160,9 +160,13 @@ public class ToolDispatchService {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
-            if (request != null) request.setReadTurnSnapshot(null);
+            if (request != null) {
+                request.setReadTurnSnapshot(null);
+                request.setReadTurnNotices(null);
+            }
             IntentExecuteResponse response = executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
             attachReadQuery(request, response);
+            attachReadNotices(request, response);
             return response;
         }
     }
@@ -170,8 +174,8 @@ public class ToolDispatchService {
     // ==================== INTENT-DISTILL D1: 只读参数来源与分页 ====================
 
     /**
-     * 本轮来源: 请求 context、本轮原话的状态 / 分页、(上一步已放好的) 本轮原话时间。工具声明了不支持的口径
-     * 而原话点名了它、或原话要分页而工具不支持分页时, 直接返回明确的拒绝, 不执行。
+     * 本轮来源: 请求 context、本轮原话的状态 / 分页、(上一步已放好的) 本轮原话时间。原话要分页而工具不支持分页时,
+     * 直接返回明确的拒绝, 不执行。原话点名了工具不支持的口径时按支持的口径执行, 回复开头说明 (Steve 口径 6)。
      */
     private IntentExecuteResponse prepareReadTurn(ToolExecutor tool, AIIntentConfig intent,
                                                   IntentExecuteRequest request, String userInputToUse,
@@ -209,10 +213,21 @@ public class ToolDispatchService {
         }
 
         String capability = intent != null && intent.getIntentName() != null ? intent.getIntentName() : tool.getToolName();
-        Optional<com.cretas.aims.ai.tool.UnsupportedOptionGuard.Refusal> unsupported =
+        Optional<com.cretas.aims.ai.tool.UnsupportedOptionGuard.Substitution> unsupported =
                 com.cretas.aims.ai.tool.UnsupportedOptionGuard.check(schema, request.getUserInput());
         if (unsupported.isPresent()) {
-            return readTurnRefusal(intent, "UNSUPPORTED_CAPABILITY", unsupported.get().message(capability));
+            // Steve 2026-11-12 口径 6: 说明「暂时只能按金额排」, 同时给出按金额的结果 (不再整轮拒绝)
+            com.cretas.aims.ai.tool.UnsupportedOptionGuard.Substitution sub = unsupported.get();
+            params.put(sub.parameter(), sub.appliedValue());
+            sources.put(sub.parameter(), ReadTurnParameters.Source.CURRENT_TURN);
+            Map<String, Object> fields = new java.util.LinkedHashMap<>();
+            fields.put("parameter", sub.parameter());
+            fields.put("requested", sub.requestedValue());
+            fields.put("requestedLabel", sub.requestedLabel());
+            fields.put("applied", sub.appliedValue());
+            fields.put("appliedLabel", sub.appliedLabel());
+            addReadNotice(request, com.cretas.aims.ai.tool.ReadReplyNotices.notice(
+                    com.cretas.aims.ai.tool.ReadReplyNotices.UNSUPPORTED_OPTION, sub.notice(capability), fields));
         }
 
         Map<String, Object> statusProperty = com.cretas.aims.ai.tool.StatusFilter.statusProperty(schema);
@@ -294,9 +309,130 @@ public class ToolDispatchService {
                 log.warn("只读续句读取会话记忆失败, 不沿用旧条件: {}", memoryUnavailable.getClass().getSimpleName());
             }
         }
+        // 模型抽参不许把被替换的口径改回做不到的那个 (工具会直接报错, 用户拿不到最接近的结果)
+        if (request.getReadTurnNotices() != null) {
+            for (Map<String, Object> notice : request.getReadTurnNotices()) {
+                if (com.cretas.aims.ai.tool.ReadReplyNotices.UNSUPPORTED_OPTION.equals(notice.get("kind"))
+                        && notice.get("parameter") instanceof String key) {
+                    params.put(key, notice.get("applied"));
+                }
+            }
+        }
+        if (!replay) {
+            applyDefaultRecentDays(tool.getParametersSchema(), properties, request, params, sources);
+            applyDefaultPageSize(properties, params, sources);
+        }
         ReadTurnParameters.markDefaults(params, sources, properties);
         request.setReadTurnSnapshot(ReadTurnParameters.snapshot(
                 intent.getIntentCode(), tool.getToolName(), request.getUserInput(), params, sources, properties));
+    }
+
+    /** Steve 口径 7: 只读列表默认每页 20 条 (本轮没说、也没沿用时; 不超过工具声明的上限)。 */
+    static final int DEFAULT_READ_PAGE_SIZE = 20;
+
+    private static void applyDefaultPageSize(Map<?, ?> properties, Map<String, Object> params,
+                                             Map<String, ReadTurnParameters.Source> sources) {
+        String sizeKey = ReadTurnParameters.sizeKey(properties);
+        if (sizeKey == null || params.get(sizeKey) != null) return;
+        int size = DEFAULT_READ_PAGE_SIZE;
+        if (properties.get(sizeKey) instanceof Map<?, ?> field && field.get("maximum") instanceof Number max) {
+            size = (int) Math.min(size, max.longValue());
+        }
+        params.put(sizeKey, size);
+        sources.put(sizeKey, ReadTurnParameters.Source.DEFAULT);
+    }
+
+    /**
+     * Steve 口径 1: 没说时间 → 按工具声明的默认最近 N 天查 ({@link com.cretas.aims.ai.tool.TimeRangeFilter#DEFAULT_RECENT_DAYS}),
+     * 回复开头写明。只对声明了这个默认、且真的按 startDate/endDate 过滤的工具生效。
+     */
+    private static void applyDefaultRecentDays(Map<String, Object> schema, Map<?, ?> properties,
+                                               IntentExecuteRequest request, Map<String, Object> params,
+                                               Map<String, ReadTurnParameters.Source> sources) {
+        Integer days = com.cretas.aims.ai.tool.TimeRangeFilter.defaultRecentDays(schema);
+        if (days == null || !properties.containsKey("startDate") || !properties.containsKey("endDate")
+                || !blank(params.get("startDate")) || !blank(params.get("endDate"))) {
+            return;
+        }
+        java.time.LocalDate to = java.time.LocalDate.now();
+        java.time.LocalDate from = to.minusDays(days - 1L);
+        params.put("startDate", from.toString());
+        params.put("endDate", to.toString());
+        // 与原话时间同一个标记: 结果按这段时间标 APPLIED, 0 条时回复点名时间
+        params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID, from + "~" + to);
+        sources.put("startDate", ReadTurnParameters.Source.DEFAULT);
+        sources.put("endDate", ReadTurnParameters.Source.DEFAULT);
+        addReadNotice(request, com.cretas.aims.ai.tool.ReadReplyNotices.notice(
+                com.cretas.aims.ai.tool.ReadReplyNotices.DEFAULT_TIME_RANGE,
+                "没说时间，按最近 " + days + " 天（" + from + " 至 " + to + "）查询。",
+                Map.of("days", days, "from", from.toString(), "to", to.toString())));
+    }
+
+    private static boolean blank(Object value) {
+        return value == null || (value instanceof String s && s.isBlank());
+    }
+
+    private static void addReadNotice(IntentExecuteRequest request, Map<String, Object> notice) {
+        if (request.getReadTurnNotices() == null) request.setReadTurnNotices(new java.util.ArrayList<>());
+        request.getReadTurnNotices().add(notice);
+    }
+
+    /**
+     * 成功的只读执行: 本轮用的默认 / 替换的口径 / 多于一页时的总条数, 进 metadata.readNotices 并加在回复开头。
+     */
+    private static void attachReadNotices(IntentExecuteRequest request, IntentExecuteResponse response) {
+        if (request == null || response == null || request.getReadTurnSnapshot() == null
+                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))) {
+            return;
+        }
+        List<Map<String, Object>> notices = new java.util.ArrayList<>();
+        if (request.getReadTurnNotices() != null) notices.addAll(request.getReadTurnNotices());
+        Map<String, Object> paged = pagedNotice(request.getReadTurnSnapshot(), response.getResultData());
+        if (paged != null) notices.add(paged);
+        if (notices.isEmpty()) return;
+        Map<String, Object> metadata = response.getMetadata() == null
+                ? new HashMap<>() : new HashMap<>(response.getMetadata());
+        metadata.put(com.cretas.aims.ai.tool.ReadReplyNotices.METADATA_KEY, notices);
+        response.setMetadata(metadata);
+        List<String> texts = com.cretas.aims.ai.tool.ReadReplyNotices.texts(metadata);
+        response.setMessage(com.cretas.aims.ai.tool.ReadReplyNotices.prefix(response.getMessage(), texts));
+        response.setFormattedText(com.cretas.aims.ai.tool.ReadReplyNotices.prefix(response.getFormattedText(), texts));
+    }
+
+    /** Steve 口径 7: 结果多于一页时写明总条数与本页范围; 工具结果里拿不到总数时不写 (不猜)。 */
+    private static Map<String, Object> pagedNotice(Map<String, Object> snapshot, Object resultData) {
+        Object inner = com.cretas.aims.ai.tool.TimeRangeFilter.toolResultOf(resultData);
+        if (inner instanceof Map<?, ?> map && !hasTotal(map) && map.get("data") instanceof Map<?, ?> nested) {
+            inner = nested;
+        }
+        if (!(inner instanceof Map<?, ?> data) || !(snapshot.get("params") instanceof Map<?, ?> params)) return null;
+        Long total = null;
+        for (String key : List.of("total", "totalElements", "totalCount")) {
+            if (data.get(key) instanceof Number n) {
+                total = n.longValue();
+                break;
+            }
+        }
+        Integer size = null;
+        int page = 1;
+        for (Map.Entry<?, ?> e : params.entrySet()) {
+            if (!(e.getKey() instanceof String key) || !(e.getValue() instanceof Number n)) continue;
+            if (!ReadTurnParameters.isPagingKey(key)) continue;
+            if ("size".equals(key) || "pageSize".equals(key)) size = n.intValue();
+            else page = Math.max(1, n.intValue());
+        }
+        if (total == null || size == null || size <= 0 || total <= (long) page * size) return null;
+        long first = (long) (page - 1) * size + 1;
+        long last = Math.min(total, (long) page * size);
+        return com.cretas.aims.ai.tool.ReadReplyNotices.notice(
+                com.cretas.aims.ai.tool.ReadReplyNotices.PAGED_RESULT,
+                "共 " + total + " 条，这里是第 " + first + "–" + last + " 条（每页 " + size
+                        + " 条）；可以说「下一页」，或加上时间、状态缩小范围。",
+                Map.of("total", total, "page", page, "size", size));
+    }
+
+    private static boolean hasTotal(Map<?, ?> map) {
+        return map.containsKey("total") || map.containsKey("totalElements") || map.containsKey("totalCount");
     }
 
     private static String boundViolation(Object definition, int value, String label) {
