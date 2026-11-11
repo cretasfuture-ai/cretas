@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -20,23 +21,26 @@ import java.util.Optional;
 /**
  * 冻结库存批次 Tool (WRITE + Preview, BLOCKING) — Sprint 8 P3 Phase B (食品召回闭环 step 5a).
  *
- * <p>把指定 batch 的状态置为 FROZEN, 阻止该批次进一步用于生产/出货.
- * 召回 SOP 必须先冻结涉事批次以避免次生污染.
+ * <p>把指定 batch 扣住, 阻止该批次进一步用于生产/出货. 召回 SOP 必须先冻结涉事批次以避免次生污染.
  *
- * <p>防呆 4 位一体:
+ * <p>🔴 <b>冻结 = 改成「质检中」(INSPECTING), 不是 FROZEN</b> (交接单 2026-11-11 第二节第 2 条):
  * <ul>
- *   <li>R1: preview 显批次当前数量 + 状态, BLOCKING (modal 必须确认)</li>
- *   <li>R2: message 含 batchNumber + 物料类型 + 当前数量 (上下文)</li>
- *   <li>R3: reason 必填非空 (validateRequiredParams 强制)</li>
- *   <li>R4: 重复冻结 (已 FROZEN) → 返 status=ALREADY_FROZEN 不重写</li>
- *   <li>error sticky: BusinessException severity=BLOCKING</li>
+ *   <li>{@link MaterialBatchStatus#FROZEN} 是「冻品」—— 鲜品转冻品 ({@code POST /material-batches/{id}/convert-to-frozen})
+ *       之后的正常库存状态, 冻品要照常投产 (供应 / 统计 / 处置白名单都把它当库存)。原来写 FROZEN 根本挡不住投产,
+ *       却提示「冻结后无法用于生产」, 与实际相反。</li>
+ *   <li>INSPECTING 是现成的扣留状态: {@link MaterialBatchStatus#blocksProduction()} 拦投产, CCP 偏离扣留
+ *       ({@code QcDeviationHold}) 也是把 AVAILABLE 改成 INSPECTING; 解除走「质检放行」(放行留记录), 或判不合格。</li>
+ *   <li>已经不可投产的批次 (质检中 / 不良品 / 过期 / 报废) <b>不改状态</b>: 冻结不能把「不合格」覆盖成别的状态,
+ *       否则冻结就成了洗白不合格的途径。货架实物为 0 (已用完) 没有东西可扣, 也不改; 已耗尽 (全被预留, 货还在) 照样冻结。</li>
  * </ul>
  *
- * <p>LLM 触发场景:
+ * <p>防呆:
  * <ul>
- *   <li>"冻结 B-X 库存"</li>
- *   <li>"封存这批"</li>
- *   <li>"召回先冻结库存"</li>
+ *   <li>R1: preview 显批次当前数量 + 状态, BLOCKING (modal 必须确认)</li>
+ *   <li>R2: message 含 batchNumber + 当前数量 (上下文)</li>
+ *   <li>R3: reason 必填非空 (validateRequiredParams 强制)</li>
+ *   <li>R4: 已扣住 / 本来就不可投产 / 货架实物为 0 → 返 status=ALREADY_BLOCKED 不重写</li>
+ *   <li>error sticky: BusinessException severity=BLOCKING</li>
  * </ul>
  *
  * <p>Intent Code: {@code INVENTORY_FREEZE}
@@ -45,8 +49,35 @@ import java.util.Optional;
 @Component
 public class InventoryFreezeTool extends AbstractBusinessTool {
 
+    /** 冻结写入的状态: 质检中 (挡投产, 只能经质检放行解除)。 */
+    public static final MaterialBatchStatus HOLD_STATUS = MaterialBatchStatus.INSPECTING;
+
+    /** 怎么解除 (质检中能被放行的入口都由质检权限把着; 本厂若配了允许手动放行, 手动放行也要过角色与原因)。 */
+    static final String RELEASE_HINT = "解除须经质检放行 (「质量管理 → 质检放行」或质量主管放行)";
+
     @Autowired
     private MaterialBatchRepository materialBatchRepository;
+
+    /** 冻结时写进 notes 的审计标记 (召回损失估算据此认出「被冻结工具扣住」的批次)。 */
+    public static final String AUDIT_MARK = "[FREEZE by user=";
+
+    /**
+     * 这批是不是被召回冻结扣住的 (召回损失估算用)。
+     *
+     * @param listedInRecall 召回事件点名了这批: 质检中即算扣住; 没点名时 (兜底全厂扫) 要有本工具的审计标记,
+     *                       免得把别的原因在质检中的批次算进召回损失。
+     *                       老数据: 本次修复之前冻结写的是 FROZEN, 带审计标记的 FROZEN 仍算扣住; 不带标记的 FROZEN 是冻品。
+     */
+    public static boolean isHeldForRecall(MaterialBatch batch, boolean listedInRecall) {
+        if (batch == null || batch.getStatus() == null) {
+            return false;
+        }
+        boolean marked = batch.getNotes() != null && batch.getNotes().contains(AUDIT_MARK);
+        if (batch.getStatus() == HOLD_STATUS) {
+            return listedInRecall || marked;
+        }
+        return batch.getStatus() == MaterialBatchStatus.FROZEN && marked;
+    }
 
     @Override
     public String getToolName() {
@@ -55,7 +86,8 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "冻结库存批次 — 把指定 batch 状态置为 FROZEN, 阻止用于生产/出货. WRITE + Preview (BLOCKING). "
+        return "冻结库存批次 — 把指定 batch 扣住 (改成「质检中」), 阻止用于生产/出货, 解除须经质检放行. "
+                + "WRITE + Preview (BLOCKING). "
                 + "LLM 触发: '冻结 B-X 库存' / '封存这批' / '召回先冻结库存' / "
                 + "'这批不许再发货'. 召回 SOP 第一步.";
     }
@@ -101,6 +133,30 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
         return ToolExecutor.RiskLevel.HIGH;
     }
 
+    private static String label(MaterialBatchStatus st) {
+        return st == null ? "未知" : st.getDisplayName();
+    }
+
+    /**
+     * 不改状态的原因; null = 可以冻结。
+     *
+     * <p>按<b>货架实物</b>判有没有东西可扣, 不按状态: 已耗尽 (DEPLETED) 只是全被预留了, 货还在架上, 预留转消耗
+     * 照样能投产 —— 召回时恰恰要扣住它 (独立审查 H1)。实物为 0 (已用完) 才没东西可扣。
+     */
+    static String notFreezableReason(MaterialBatch batch) {
+        MaterialBatchStatus st = batch.getStatus();
+        if (st != null && st.blocksProduction()) {
+            return String.format("批次 %s 当前是「%s」, 本来就不能用于生产/出货, 不改状态 (冻结不覆盖「%s」)",
+                    batch.getBatchNumber(), label(st), label(st));
+        }
+        BigDecimal physical = batch.getPhysicalQuantity();
+        if (physical == null || physical.signum() <= 0) {
+            return String.format("批次 %s 当前是「%s」, 货架上没有实物, 没有可冻结的库存, 不改状态",
+                    batch.getBatchNumber(), label(st));
+        }
+        return null;
+    }
+
     /**
      * Preview: 查批次当前状态 + 数量, 返 BLOCKING 提示用户必须确认.
      */
@@ -130,21 +186,21 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
         result.put("currentQuantity", batch.getReceiptQuantity());
         result.put("quantityUnit", batch.getQuantityUnit());
 
-        if (batch.getStatus() == MaterialBatchStatus.FROZEN) {
+        String blocked = notFreezableReason(batch);
+        if (blocked != null) {
             result.put("canDo", false);
-            result.put("status", "ALREADY_FROZEN");
-            result.put("message", String.format(
-                    "ℹ️ 批次 %s (%s %s) 已是 FROZEN 状态, 无需重复冻结",
-                    batchNumber, batch.getReceiptQuantity(), batch.getQuantityUnit()));
+            result.put("status", "ALREADY_BLOCKED");
+            result.put("message", "ℹ️ " + blocked);
             return result;
         }
 
         result.put("canDo", true);
+        result.put("targetStatus", HOLD_STATUS.name());
         result.put("message", String.format(
-                "🚨 [BLOCKING] 确认冻结 → 批次 %s, %s %s, 原状态 %s. " +
-                "冻结后此批次无法用于生产/出货. 冻结理由: %s",
+                "🚨 [BLOCKING] 确认冻结 → 批次 %s, %s %s, 原状态「%s」→「%s」. "
+                        + "冻结后此批次不能领用投产/出货, " + RELEASE_HINT + ". 冻结理由: %s",
                 batchNumber, batch.getReceiptQuantity(), batch.getQuantityUnit(),
-                batch.getStatus() != null ? batch.getStatus().name() : "UNKNOWN", reason));
+                label(batch.getStatus()), label(HOLD_STATUS), reason));
         return result;
     }
 
@@ -169,20 +225,21 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
         MaterialBatch batch = opt.get();
         MaterialBatchStatus prevStatus = batch.getStatus();
 
-        if (prevStatus == MaterialBatchStatus.FROZEN) {
-            // R4 幂等: 已冻结 → 返 ALREADY_FROZEN 不重写
+        // R4 + 防洗白: 不可投产 / 没库存的批次一律不改状态 (绕过 preview 直接执行也一样)
+        String blocked = notFreezableReason(batch);
+        if (blocked != null) {
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("status", "ALREADY_FROZEN");
+            result.put("status", "ALREADY_BLOCKED");
             result.put("batchNumber", batchNumber);
-            result.put("currentStatus", "FROZEN");
-            result.put("message", String.format("ℹ️ 批次 %s 已是 FROZEN 状态 (无需重复冻结)", batchNumber));
+            result.put("currentStatus", prevStatus != null ? prevStatus.name() : null);
+            result.put("message", "ℹ️ " + blocked);
             return result;
         }
 
         // 状态更新 + audit notes (NOTE: 仅写 status + 在 notes 追加 audit 行)
-        batch.setStatus(MaterialBatchStatus.FROZEN);
+        batch.setStatus(HOLD_STATUS);
         String existingNotes = batch.getNotes() != null ? batch.getNotes() : "";
-        String auditLine = String.format("[%s] [FREEZE by user=%s] %s (prev=%s)",
+        String auditLine = String.format("[%s] " + AUDIT_MARK + "%s] %s (prev=%s)",
                 LocalDateTime.now(), userId, reason, prevStatus);
         batch.setNotes(existingNotes.isEmpty() ? auditLine : existingNotes + "\n" + auditLine);
         materialBatchRepository.save(batch);
@@ -190,7 +247,7 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("batchNumber", batchNumber);
         data.put("previousStatus", prevStatus != null ? prevStatus.name() : null);
-        data.put("currentStatus", "FROZEN");
+        data.put("currentStatus", HOLD_STATUS.name());
         data.put("quantity", batch.getReceiptQuantity());
         data.put("quantityUnit", batch.getQuantityUnit());
         data.put("frozenBy", userId);
@@ -198,9 +255,10 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
         data.put("actionHint", "/inventory/material-batch?batchNumber=" + batchNumber);
 
         String message = String.format(
-                "✅ 已冻结批次 %s (%s %s), 原状态 %s → FROZEN. 此批次无法用于生产/出货",
+                "✅ 已冻结批次 %s (%s %s), 原状态「%s」→「%s」. 此批次不能领用投产/出货, "
+                        + RELEASE_HINT,
                 batchNumber, batch.getReceiptQuantity(), batch.getQuantityUnit(),
-                prevStatus != null ? prevStatus.name() : "UNKNOWN");
+                label(prevStatus), label(HOLD_STATUS));
         return buildSimpleResult(message, data);
     }
 

@@ -64,6 +64,15 @@ public enum MaterialBatchStatus {
         return this == EXPIRED || this == SCRAPPED || this == DEFECTIVE || this == INSPECTING;
     }
 
+    /**
+     * 数量用尽 (出库 / 消耗 / 处置 / 退货扣空) 时该写的状态。当前状态本身挡投产 (不良品 / 质检中 / 过期 / 报废) 就保留原状态:
+     * 数量状态 (USED_UP / DEPLETED) 不能盖掉质量结论 —— 否则之后任何一处「数量恢复」(退料 / 盘盈 / 撤回 / 释放预留) 只看
+     * USED_UP / DEPLETED 就把它翻回可用, 判不合格或扣留就被洗掉了 (交接单 2026-11-11 第二节第 1 条, 独立审查 H2)。
+     */
+    public static MaterialBatchStatus whenExhausted(MaterialBatchStatus current, MaterialBatchStatus exhausted) {
+        return current != null && current.blocksProduction() ? current : exhausted;
+    }
+
     /** 配合 {@link #blocksProduction()}: 不可用于生产时对用户说的那句话 (写路径异常消息 / 预览原因共用)。 */
     public String productionBlockedMessage() {
         return "批次" + productionBlockedReason();

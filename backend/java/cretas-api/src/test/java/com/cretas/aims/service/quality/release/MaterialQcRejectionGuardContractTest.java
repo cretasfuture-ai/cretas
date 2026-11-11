@@ -52,6 +52,9 @@ class MaterialQcRejectionGuardContractTest {
 
     private final MaterialBatchRepository batches = mock(MaterialBatchRepository.class);
     private final QcReleaseRecordRepository records = mock(QcReleaseRecordRepository.class);
+    /** 时限判废: 本类不造 (默认空列表), 只为满足闸的「仓储必注入」。 */
+    private final com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository timeLimits =
+            mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class);
     /** 这批原料的放行记录 (按时间倒序, 与仓储查询同序)。 */
     private final List<QcReleaseRecord> history = new ArrayList<>();
 
@@ -83,6 +86,7 @@ class MaterialQcRejectionGuardContractTest {
         warehouse = new MaterialBatchServiceImpl(batches, null, null, mock(MaterialBatchMapper.class),
                 null, null, null, null);
         ReflectionTestUtils.setField(warehouse, "qcReleaseRecordRepository", records);
+        ReflectionTestUtils.setField(warehouse, "processTimeLimitEventRepository", timeLimits);
         // 纪律排查 A3 放行闸叠加在本闸之后: 这里测的是「质检判不合格不能改回可用」, 所以放行规则配成允许手动放行
         ReflectionTestUtils.setField(warehouse, "materialBatchReleaseGuard",
                 new com.cretas.aims.service.discipline.MaterialBatchReleaseGuard(
@@ -94,6 +98,7 @@ class MaterialQcRejectionGuardContractTest {
         ReflectionTestUtils.setField(tool, "materialBatchRepository", batches);
         ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper());
         ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository", records);
+        ReflectionTestUtils.setField(tool, "processTimeLimitEventRepository", timeLimits);
         com.cretas.aims.ai.tool.ToolRbacGuard qcRbac = mock(com.cretas.aims.ai.tool.ToolRbacGuard.class);
         when(qcRbac.hasAnyPermission(any(), any(String[].class))).thenReturn(true);
         ReflectionTestUtils.setField(tool, "rbacGuard", qcRbac);
@@ -106,6 +111,7 @@ class MaterialQcRejectionGuardContractTest {
         ReflectionTestUtils.setField(disposition, "finishedGoodsBatchRepository", mock(FinishedGoodsBatchRepository.class));
         ReflectionTestUtils.setField(disposition, "factoryRecallService", mock(FactoryRecallService.class));
         ReflectionTestUtils.setField(disposition, "qcReleaseRecordRepository", records);
+        ReflectionTestUtils.setField(disposition, "processTimeLimitEventRepository", timeLimits);
         ReflectionTestUtils.setField(disposition, "materialBatchReleaseGuard", mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
     }
 

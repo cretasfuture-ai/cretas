@@ -74,7 +74,11 @@ class QcWipReleaseBypassContractTest {
         ReflectionTestUtils.setField(disposition, "finishedGoodsBatchRepository", finishedGoodsBatchRepository);
         ReflectionTestUtils.setField(disposition, "factoryRecallService", factoryRecallService);
         ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository", qcReleaseRecordRepository);
+        ReflectionTestUtils.setField(tool, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         ReflectionTestUtils.setField(disposition, "qcReleaseRecordRepository", qcReleaseRecordRepository);
+        ReflectionTestUtils.setField(disposition, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         ReflectionTestUtils.setField(disposition, "materialBatchReleaseGuard", org.mockito.Mockito.mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
     }
 

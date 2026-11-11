@@ -50,6 +50,17 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
     private final ProductionInterimSettlementRepository settlementRepository;
     private final MaterialConsumptionRepository consumptionRepository;
     private final MaterialBatchRepository materialBatchRepository;
+
+    /**
+     * 交接单 11-11 二.1: 数量恢复把「已用完 / 已耗尽」翻回能用之前, 问一次这批是不是判过不合格
+     * ({@code MaterialQcRejectionGuard#statusWhenRestored})。field-inject 不改既有构造器; 走到恢复分支却没注入时
+     * 闸直接报错, ⛔ 不当「没判过」恢复成可用。prod Spring 恒注入。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
     private final ProcessSheetRowRepository rowRepository;
     private final WipInventoryService wipInventoryService;
     private final FinishedGoodsFeedService finishedGoodsFeedService;
@@ -224,7 +235,9 @@ public class InterimSettleReversalServiceImpl implements InterimSettleReversalSe
             if (MaterialBatchStatus.USED_UP.equals(src.getStatus())
                     && src.getCurrentQuantity() != null
                     && src.getCurrentQuantity().compareTo(BigDecimal.ZERO) > 0) {
-                src.setStatus(MaterialBatchStatus.AVAILABLE);
+                // 判过不合格的批次还料后仍是不良品 (交接单 11-11 二.1)
+                src.setStatus(com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.statusWhenRestored(
+                    qcReleaseRecordRepository, processTimeLimitEventRepository, src));
             }
             materialBatchRepository.save(src);
             mc.setInterimSettledAt(null);

@@ -86,6 +86,10 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
     @Autowired
     private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
 
+    /** 工序超时复检判废同样不能经本工具放回可用 (与质检放行记录一起进 MaterialQcRejectionGuard)。必注入。 */
+    @Autowired
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
+
     @Override
     public String getToolName() {
         return "release_decision";
@@ -233,7 +237,7 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
 
         // D-S411-04 M2: 质检放行判了不合格的原料, 这里不能放回可用
         if (com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.blocks(
-                qcReleaseRecordRepository, batch, newStatus)) {
+                qcReleaseRecordRepository, processTimeLimitEventRepository, batch, newStatus)) {
             result.put("canDo", false);
             result.put("status", com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.CODE);
             result.put("message", "⛔ " + com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.message(batch)
@@ -328,7 +332,7 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
         }
         // D-S411-04 M2 (防 client 绕 preview): 质检放行判了不合格的原料不能放回可用
         com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
-                qcReleaseRecordRepository, batch, newStatus);
+                qcReleaseRecordRepository, processTimeLimitEventRepository, batch, newStatus);
 
         boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(prevStatus, newStatus);
         if (release && releaseGuard == null) {

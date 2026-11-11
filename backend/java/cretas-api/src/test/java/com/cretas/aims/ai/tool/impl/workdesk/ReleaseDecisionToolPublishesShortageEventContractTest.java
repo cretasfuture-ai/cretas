@@ -41,6 +41,8 @@ class ReleaseDecisionToolPublishesShortageEventContractTest {
                 org.mockito.Mockito.mock(com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.class));
         ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository",
                 mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
+        ReflectionTestUtils.setField(tool, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         batch = new MaterialBatch();
         batch.setId("MB-1");
         batch.setFactoryId("F1");

@@ -54,6 +54,8 @@ class WarehouseBatchStatusReleasePublishesShortageEventContractTest {
                         mock(com.cretas.aims.repository.material.MaterialBatchReleaseRepository.class)));
         ReflectionTestUtils.setField(service, "qcReleaseRecordRepository",
                 mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
+        ReflectionTestUtils.setField(service, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         return b;
     }
 

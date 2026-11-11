@@ -80,6 +80,9 @@ class InterimSettleReversalServiceTest {
                 planRepository, settlementRepository, consumptionRepository,
                 materialBatchRepository, rowRepository, wipInventoryService, finishedGoodsFeedService);
         ReflectionTestUtils.setField(service, "inputAllocationRepository", inputAllocationRepository);
+        // 交接单 11-11 二.1: 数量恢复前问一次判没判过不合格 (两个仓储必注入; 空桩 = 没判过)
+        ReflectionTestUtils.setField(service, "qcReleaseRecordRepository", org.mockito.Mockito.mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));
+        ReflectionTestUtils.setField(service, "processTimeLimitEventRepository", org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
 
         ProductionPlan plan = new ProductionPlan();
         plan.setId(PLAN_ID);

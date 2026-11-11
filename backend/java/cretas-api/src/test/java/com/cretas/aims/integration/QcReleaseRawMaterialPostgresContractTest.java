@@ -121,6 +121,7 @@ class QcReleaseRawMaterialPostgresContractTest {
     @Autowired RawMaterialTypeRepository rawTypes;
     @Autowired ShortageSupplyQueryRepository supply;
     @Autowired QcReleaseRecordRepository releaseRecords;
+    @Autowired com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository timeLimitEvents;
     @Autowired JdbcTemplate jdbc;
 
     @BeforeEach
@@ -160,8 +161,8 @@ class QcReleaseRawMaterialPostgresContractTest {
         });
 
         MaterialBatch reloaded = materialBatches.findById(batchId).orElseThrow();
-        assertThat(MaterialQcRejectionGuard.blocks(releaseRecords, reloaded, MaterialBatchStatus.AVAILABLE)).isTrue();
-        assertThat(MaterialQcRejectionGuard.blocks(releaseRecords, reloaded, MaterialBatchStatus.INSPECTING)).isFalse();
+        assertThat(MaterialQcRejectionGuard.blocks(releaseRecords, timeLimitEvents, reloaded, MaterialBatchStatus.AVAILABLE)).isTrue();
+        assertThat(MaterialQcRejectionGuard.blocks(releaseRecords, timeLimitEvents, reloaded, MaterialBatchStatus.INSPECTING)).isFalse();
     }
 
     @Test

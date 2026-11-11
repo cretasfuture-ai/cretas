@@ -26,3 +26,7 @@ AttachmentSopSpringTest
 ReportReversalServiceTest
 SalesPriceAdjustmentServiceTest
 WorkflowInstanceControllerTest
+# 交接单 11-11 二.1/二.2: 冻结工具不洗白、退料恢复与领料划出不洗白不合格批次的回归写在这三个类里
+InventoryFreezeToolTest
+FactoryMaterialRequisitionRestoreBatchStatusTest
+FactoryMaterialRequisitionTransferIntegrationTest
