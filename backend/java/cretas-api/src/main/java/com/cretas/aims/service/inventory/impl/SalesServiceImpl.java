@@ -3063,14 +3063,9 @@ public class SalesServiceImpl implements SalesService {
                 }
             }
 
-            Map<Long, BigDecimal> arrangedByOrderItem = effectiveMasterDeliveries(existing).stream()
-                    .flatMap(delivery -> delivery.getItems().stream())
-                    .filter(item -> item.getSalesOrderItemId() != null)
-                    .collect(Collectors.groupingBy(
-                            SalesDeliveryItem::getSalesOrderItemId,
-                            Collectors.reducing(BigDecimal.ZERO,
-                                    item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
-                                    BigDecimal::add)));
+            // A16 第二轮审查: 主单下的分批发运子单可以按上限实发, 超过主单计划 —— 每张主单按
+            // 「本单计划」与「其下有效子单合计」取较大者计入, 否则后开的主单会把多发的那部分再开一遍。
+            Map<Long, BigDecimal> arrangedByOrderItem = arrangedByOrderLine(existing, null, null);
             Map<Long, BigDecimal> requestedByOrderItem = new HashMap<>();
             for (CreateDeliveryRequest.DeliveryItemDTO requested : request.getItems()) {
                 SalesOrderItem source = resolveDeliverySourceOrderItem(
@@ -4049,27 +4044,69 @@ public class SalesServiceImpl implements SalesService {
         // 主单: 其他有效主单。分批发运子单 (独立审查 2026-11-11): 它的量算在自己的母单里, 所以排除母单本身,
         // 改计母单下其他未取消 / 未退回的子单 —— 否则子单各按「本单计划 × (1+上限)」放行,
         // 母单又可按订单量 × (1+上限) 开出, 合计会叠成 (1+上限)^2。
-        List<SalesDeliveryRecord> counted = new ArrayList<>(effectiveMasterDeliveries(
-                deliveryRecordRepository.findBySalesOrderId(record.getSalesOrderId()).stream()
-                        .filter(d -> factoryId.equals(d.getFactoryId()))
-                        .filter(d -> !Objects.equals(d.getId(), record.getId()))
-                        .filter(d -> !shipmentChild || !Objects.equals(d.getId(), record.getParentDeliveryId()))
-                        .toList()));
+        List<SalesDeliveryRecord> deliveries = deliveryRecordRepository.findBySalesOrderId(record.getSalesOrderId())
+                .stream().filter(d -> factoryId.equals(d.getFactoryId())).toList();
+        Map<Long, BigDecimal> arrangedByOthers;
         if (shipmentChild) {
-            getDeliveryShipments(factoryId, record.getParentDeliveryId()).stream()
-                    .filter(child -> !Objects.equals(child.getId(), record.getId()))
-                    .filter(child -> child.getStatus() != SalesDeliveryStatus.CANCELLED
-                            && child.getStatus() != SalesDeliveryStatus.RETURNED)
-                    .forEach(counted::add);
+            // 其他主单 (各按「计划」与「其下子单合计」取大) + 本母单下的其他有效子单; 本母单与自己不计
+            arrangedByOthers = new HashMap<>(arrangedByOrderLine(deliveries, record.getParentDeliveryId(), record.getId()));
+            sumByOrderLine(activeChildrenOf(deliveries, record.getParentDeliveryId(), record.getId()))
+                    .forEach((line, qty) -> arrangedByOthers.merge(line, qty, BigDecimal::add));
+        } else {
+            arrangedByOthers = arrangedByOrderLine(deliveries, record.getId(), null);
         }
-        Map<Long, BigDecimal> arrangedByOthers = counted.stream()
+        return new OrderLineOverShipLedger(orderItems, arrangedByOthers);
+    }
+
+    /**
+     * 订单行已安排量 (A16 第二轮独立审查 2026-11-11): 每张有效主单 (非取消 / 退回) 按订单行取
+     * max(本单计划, 其下有效子单合计) 再相加。子单确认时可按上限实发、超过母单计划, 而发运子单不回写母单行量;
+     * 只数主单计划会漏掉这部分, 后开的主单就能把它再开一遍 (订 100 发 120)。
+     *
+     * @param excludeMasterId 不计入的主单 (确认主单时是它自己; 确认子单时是它的母单, 母单下的子单由调用方另算)
+     * @param excludeChildId  不计入的子单 (确认子单时是它自己)
+     */
+    private Map<Long, BigDecimal> arrangedByOrderLine(List<SalesDeliveryRecord> deliveries,
+                                                      String excludeMasterId, String excludeChildId) {
+        Map<Long, BigDecimal> total = new HashMap<>();
+        for (SalesDeliveryRecord master : effectiveMasterDeliveries(deliveries)) {
+            if (Objects.equals(master.getId(), excludeMasterId)) {
+                continue;
+            }
+            Map<Long, BigDecimal> planned = sumByOrderLine(List.of(master));
+            Map<Long, BigDecimal> children = sumByOrderLine(activeChildrenOf(deliveries, master.getId(), excludeChildId));
+            Set<Long> lines = new HashSet<>(planned.keySet());
+            lines.addAll(children.keySet());
+            for (Long line : lines) {
+                BigDecimal larger = planned.getOrDefault(line, BigDecimal.ZERO)
+                        .max(children.getOrDefault(line, BigDecimal.ZERO));
+                total.merge(line, larger, BigDecimal::add);
+            }
+        }
+        return total;
+    }
+
+    private static List<SalesDeliveryRecord> activeChildrenOf(List<SalesDeliveryRecord> deliveries,
+                                                              String parentId, String excludeChildId) {
+        if (parentId == null) {
+            return List.of();
+        }
+        return deliveries.stream()
+                .filter(d -> parentId.equals(d.getParentDeliveryId()))
+                .filter(d -> !Objects.equals(d.getId(), excludeChildId))
+                .filter(d -> d.getStatus() != SalesDeliveryStatus.CANCELLED
+                        && d.getStatus() != SalesDeliveryStatus.RETURNED)
+                .toList();
+    }
+
+    private static Map<Long, BigDecimal> sumByOrderLine(List<SalesDeliveryRecord> deliveries) {
+        return deliveries.stream()
                 .flatMap(delivery -> delivery.getItems().stream())
                 .filter(item -> item.getSalesOrderItemId() != null)
                 .collect(Collectors.groupingBy(SalesDeliveryItem::getSalesOrderItemId,
                         Collectors.reducing(BigDecimal.ZERO,
                                 item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
                                 BigDecimal::add)));
-        return new OrderLineOverShipLedger(orderItems, arrangedByOthers);
     }
 
     /** 本发货行按订单行累计还能发多少 (null = 不做订单行累计校验 / 不限制)。 */

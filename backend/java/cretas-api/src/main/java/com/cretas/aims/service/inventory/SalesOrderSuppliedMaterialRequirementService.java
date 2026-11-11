@@ -366,7 +366,8 @@ public class SalesOrderSuppliedMaterialRequirementService {
             try {
                 overReceiveAllowed = disciplinePolicy.customerSuppliedOverReceiveAllowed(factoryId);
             } catch (RuntimeException readFailure) {
-                // 读不到开关 = 按关 (原行为, 更严), 不把一次配置读取失败变成 500, 也不放宽
+                // 读不到开关 = 按关 (原行为, 更严), 绝不放宽。⚠️ 若是真实数据库异常, 仓储调用已把本事务标成
+                // rollback-only, 本次收货会在提交时整体失败 (返回错误、一行不写) —— 安全, 但不是 409。
                 log.warn("CUSTOMER_SUPPLIED_OVER_RECEIVE_SWITCH_UNREADABLE: factoryId={}, 本次按【不允许超收】处理: {}",
                         factoryId, readFailure.getMessage());
             }

@@ -231,7 +231,7 @@ class CustomerSuppliedReceiptOverReceiveContractTest {
     }
 
     @Test
-    @DisplayName("开关读不到 (阈值中心出错) → 按关 (更严), 不是 500, 也不放宽")
+    @DisplayName("开关读取抛异常 → 按关 (更严), 不放宽 —— 只证明判断逻辑; 真实数据库异常会让整笔收货事务回滚 (返回错误, 一行不写)")
     void unreadableSwitchFailsClosed() {
         when(disciplinePolicy.customerSuppliedOverReceiveAllowed("F006")).thenThrow(new IllegalStateException("db down"));
         limit(null);

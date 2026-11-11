@@ -295,6 +295,69 @@ class SalesDeliveryOverShipSameCapContractTest {
         assertThat(pending.getItems().get(0).getDeliveredQuantity()).isEqualByComparingTo("5");
     }
 
+    // ---------------------------------------------------------------- 第二轮审查: 别的母单下子单多发的部分
+
+    /** 母单 A 计划 10 (= 订单量), 它的子单按上限实发了 11 (子单确认时允许 10 × 110%)。发运子单不回写母单行量。 */
+    private void masterAWhoseChildShippedEleven() {
+        SalesDeliveryRecord masterA = delivery("DLV-QA-A16-A", "10", SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM);
+        masterA.setRecordRole("MASTER");
+        SalesDeliveryRecord childA1 = delivery("DLV-QA-A16-A1", "11", SalesDeliveryStatus.SHIPPED);
+        childA1.setRecordRole("SHIPMENT");
+        childA1.setParentDeliveryId("DLV-QA-A16-A");
+        existingDeliveries.add(masterA);
+        existingDeliveries.add(childA1);
+    }
+
+    @Test
+    @DisplayName("新建: 别的母单的子单已多发到 11 (= 上限) → 再开 1 也拦 —— 只数母单计划 10 会放行, 订 10 发出 12")
+    void createCountsChildrenShippedAboveTheirMastersPlan() {
+        masterAWhoseChildShippedEleven();
+
+        BusinessException blocked = createWith("1");
+
+        assertThat(blocked).as("母单 A 按 max(计划 10, 子单合计 11) = 11 计入; 11 + 1 > 11").isNotNull();
+        assertThat(blocked.getMessage()).contains("已安排 11kg").contains("最多还能安排 0kg");
+    }
+
+    @Test
+    @DisplayName("确认: 另一张母单 B 的子单确认时, 母单 A 下多发的 11 也要算 —— 11 + 1 > 11 拦下")
+    void childOfAnotherMasterCountsTheFirstMastersOverShippedChildren() {
+        masterAWhoseChildShippedEleven();
+        SalesDeliveryRecord masterB = delivery("DLV-QA-A16-B", "1", SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM);
+        masterB.setRecordRole("MASTER");
+        SalesDeliveryRecord childB1 = delivery("DLV-QA-A16-B1", "1", SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM);
+        childB1.setRecordRole("SHIPMENT");
+        childB1.setParentDeliveryId("DLV-QA-A16-B");
+        existingDeliveries.add(masterB);
+        existingDeliveries.add(childB1);
+        for (SalesDeliveryRecord r : List.of(masterB, childB1)) {
+            when(deliveryRecordRepository.findByIdAndFactoryIdForUpdate(r.getId(), F)).thenReturn(Optional.of(r));
+            when(deliveryRecordRepository.findById(r.getId())).thenReturn(Optional.of(r));
+        }
+
+        BusinessException blocked = confirmCapError(childB1, "1");
+
+        assertThat(blocked).as("其他母单 A 计 11, 本母单 B 下无其他子单; 11 + 1 > 11").isNotNull();
+        assertThat(blocked.getMessage()).contains("其他发货单已安排 11kg");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 子单少于母单计划时按母单计划计 (取较大者) —— 计划 10、子单只发 4, 仍按 10 计入")
+    void masterPlanCountsWhenChildrenShippedLess() {
+        SalesDeliveryRecord masterA = delivery("DLV-QA-A16-A", "10", SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM);
+        masterA.setRecordRole("MASTER");
+        SalesDeliveryRecord childA1 = delivery("DLV-QA-A16-A1", "4", SalesDeliveryStatus.SHIPPED);
+        childA1.setRecordRole("SHIPMENT");
+        childA1.setParentDeliveryId("DLV-QA-A16-A");
+        existingDeliveries.add(masterA);
+        existingDeliveries.add(childA1);
+
+        assertThat(createWith("1")).as("10 + 1 = 11 ≤ 11").isNull();
+        BusinessException blocked = createWith("1.01");
+        assertThat(blocked).isNotNull();
+        assertThat(blocked.getMessage()).contains("已安排 10kg");
+    }
+
     @Test
     @DisplayName("阴性对照: 子单合计恰好到 110% (6 + 5 = 11) → 放行; 母单的 11 没有被重复算进去")
     void shipmentChildWithinTheOrderLineCapPasses() {
