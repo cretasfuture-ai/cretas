@@ -25,3 +25,12 @@
 - 8 个已接通 Tool 的确切清单未核对，A 套把意图限定在库存与订单类（`MATERIAL_BATCH_QUERY`、`MATERIAL_EXPIRED_QUERY`、`MATERIAL_EXPIRING_ALERT`、`MATERIAL_LOW_STOCK_ALERT`、`ORDER_LIST`、`ORDER_STATUS`、`ORDER_TODAY`），个别轮目标落在未接通的意图上，评测时按接通清单过滤。
 - 题中物料名与订单号（`XS2026…`）是合成的，未对 F006 数据核对。
 - 目录里 `GATE_DIAGNOSE_BATCH`、`PAGINATION_PREVIOUS` 的 Tool 类没声明 AccessMode（按 fail-closed 即 WRITE），`COST_QUERY` 声明为 WRITE 但名称是查询；相关题已标 ambiguous。
+
+## 打开记录
+
+| 时间 (UTC) | 谁 | 被验收的配置 | 次数 | 为排错打开的题 | 没跑通的题 |
+|---|---|---|---|---|---|
+| 2026-11-11 17:0x | E 线（organizer 派，里程碑验收） | `nogen_luna`：检索候选（prod 快照）+ Luna Decisions 单次（意图 Choice + 对话动作 Choice + 澄清 Predicate）+ 续接程序规则 + main 参数绑定 + 写意图门（非 READ 一律转确认）；配置哈希 `4588e6325e0b91e88472f9c9a03b08edbf2152e640ed9b19e3b41e01deeeadd6`（`holdout_eval.py` 跑前冻结） | 正式 1 次 + 稳定性 2 次（Luna 输出确定，三次基本一致） | 无（运行与计分全程只出汇总，未逐题查看） | 正式：B-0705；稳定性：B-0530（均为 Luna HTTP 503「Decision inference is unavailable」，按失败计） |
+
+运行前核对 MANIFEST SHA256 一致。分项汇总在本机 `Cretas意图独立验收-20261111uns-E
+ogen-luna-v1\score-{1,2,3}.json`（只含汇总，不含题目）；逐题输出 `run-{1,2,3}.jsonl` 同目录、不出本机。

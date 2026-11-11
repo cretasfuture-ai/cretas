@@ -64,7 +64,7 @@ REPO="Stevenjxie/cretas"
 JAR_NAME="cretas-backend-system-1.0.0.jar"
 RUNTIME_JAR_NAME="aims-0.0.1-SNAPSHOT.jar"
 SERVER="root@47.100.235.168"
-GATEWAY="root@139.196.165.140"         # Nginx 网关 (Blue-Green upstream 切换)
+GATEWAY="${CRETAS_GATEWAY_HOST:-root@47.100.235.168}"  # Nginx 网关 (Blue-Green upstream 切换)  # 2026-11-12: 139 停用, 网关并入 47; upstream 指本机回环 (47 访问自己的公网 IP 不通)
 REMOTE_JAR_DIR="/www/wwwroot/cretas"
 REMOTE_TMP="/tmp"
 REMOTE_JAR_CACHE_DIR="${CRETAS_REMOTE_JAR_CACHE_DIR:-$REMOTE_JAR_DIR/release-cache/sha256}"
@@ -83,7 +83,7 @@ GREEN_SERVICE="cretas-backend-green"
 rollback_active_port() {
     local upstream ports
     upstream=$(ssh "$GATEWAY" "cat '$NGINX_UPSTREAM_FILE'") || return 1
-    ports=$(sed -nE 's/^[[:space:]]*server[[:space:]]+47\.100\.235\.168:(10010|10020);.*/\1/p' <<< "$upstream") || return 1
+    ports=$(sed -nE 's/^[[:space:]]*server[[:space:]]+127\.0\.0\.1:(10010|10020);.*/\1/p' <<< "$upstream") || return 1
     case "$ports" in 10010|10020) printf '%s\n' "$ports" ;; *) return 1 ;; esac
 }
 
@@ -186,7 +186,7 @@ ROLLBACK_RESTORE
     fi
     state=$(ssh "$SERVER" "systemctl is-active '$service'") || return 1
     [ "$state" = active ] || { echo 'ROLLBACK_FAILED: bound slot inactive' >&2; return 1; }
-    if ! ssh "$GATEWAY" "sed -i 's|server 47\\.100\\.235\\.168:[0-9]*;.*\$|server 47.100.235.168:$port; # ACTIVE=$port (rollback)|' '$NGINX_UPSTREAM_FILE' && nginx -t && nginx -s reload"; then
+    if ! ssh "$GATEWAY" "sed -i 's|server 127\\.0\\.0\\.1:[0-9]*;.*\$|server 127.0.0.1:$port; # ACTIVE=$port (rollback)|' '$NGINX_UPSTREAM_FILE' && nginx -t && nginx -s reload"; then
         echo 'ROLLBACK_FAILED: upstream restore failed' >&2
         return 1
     fi
@@ -902,7 +902,7 @@ prod_already_runs_local_artifact() {
 
     upstream_text=$(ssh -o ConnectTimeout=5 "$GATEWAY" "cat '$NGINX_UPSTREAM_FILE'" 2>/dev/null) || return 1
     active_port=$(printf '%s\n' "$upstream_text" \
-        | sed -nE 's/.*server[[:space:]]+47\.100\.235\.168:(10010|10020).*/\1/p' \
+        | sed -nE 's/.*server[[:space:]]+127\.0\.0\.1:(10010|10020).*/\1/p' \
         | head -1)
     case "$active_port" in
         10010) active_service="$BLUE_SERVICE" ;;
@@ -2172,14 +2172,14 @@ deploy_jar() {
                 exit 1
             fi
 
-            # [BG 3/4] 切换 139 nginx upstream
+            # [BG 3/4] 切换网关 (47) nginx upstream
             # Issue #209: 同时重写 inline `# ACTIVE=<port>` 注释, 防止 comment-vs-config drift
             # (历史上 comment 永远不变, 操作员看不到当前 active port). sed 一次性匹配整行
-            # `server 47.100.235.168:<active>;[<comment tail>]` 然后 emit 新 port + 新 comment.
-            echo "   [BG 3/4] 切换 139 nginx upstream: $ACTIVE_PORT → $IDLE_PORT..."
+            # `server 127.0.0.1:<active>;[<comment tail>]` 然后 emit 新 port + 新 comment.
+            echo "   [BG 3/4] 切换网关 (47) nginx upstream: $ACTIVE_PORT → $IDLE_PORT..."
             SWITCH_DATE=$(date +%Y-%m-%d)
             if ! ssh $GATEWAY "
-                sed -i 's|server 47\\.100\\.235\\.168:$ACTIVE_PORT;.*\$|server 47.100.235.168:$IDLE_PORT;  # ACTIVE=$IDLE_PORT (switched $SWITCH_DATE) — auto-synced by deploy-backend.sh|' $NGINX_UPSTREAM_FILE &&
+                sed -i 's|server 127\\.0\\.0\\.1:$ACTIVE_PORT;.*\$|server 127.0.0.1:$IDLE_PORT;  # ACTIVE=$IDLE_PORT (switched $SWITCH_DATE) — auto-synced by deploy-backend.sh|' $NGINX_UPSTREAM_FILE &&
                 nginx -t >/dev/null 2>&1 &&
                 nginx -s reload
             "; then

@@ -149,7 +149,7 @@ ssh() {
                 || fail "production no-op checked the upload artifact instead of the runtime JAR"
             printf '%s\n' "${MOCK_DISK_MD5:-$LOCAL_MD5}"
             ;;
-        *"cat '$NGINX_UPSTREAM_FILE'"*) printf 'upstream x { server 47.100.235.168:%s; }\n' "$MOCK_UPSTREAM_PORT" ;;
+        *"cat '$NGINX_UPSTREAM_FILE'"*) printf 'upstream x { server 127.0.0.1:%s; }\n' "$MOCK_UPSTREAM_PORT" ;;
         # ⚠️ MainPID 这条必须排在通用 *systemctl* 之前 —— 否则会被那条吃掉,
         #    返回 "active\n200" 当成 pid, 测试会以错误的理由通过/失败。
         *"MainPID"*) printf '%s\n' "$MOCK_MAIN_PID" ;;

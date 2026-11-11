@@ -31,8 +31,9 @@
 #   ./scripts/deploy/deploy-web-admin.sh --dry-run    # 构建但不上传
 #
 # 服务器路径:
-#   test: 139.196.165.140:/www/wwwroot/web-admin-test/  (vhost 8097)
-#   prod: 139.196.165.140:/www/wwwroot/web-admin/       (vhost 8086 + admin.cretaceousfuture.com 443)
+#   test: 47.100.235.168:/www/wwwroot/web-admin-test/   (vhost 8097, 只在 47 本机可达)
+#   prod: 47.100.235.168:/www/wwwroot/web-admin/        (vhost 8086 本机 + admin.cretaceousfuture.com 443)
+#   2026-11-12: 网关从 139 并入 47 (139 停用)。
 
 set -e
 WEB_DEPLOY_STARTED_AT=$(date +%s)
@@ -121,7 +122,7 @@ if [[ "$ENV" =~ ^(prod|all)$ ]]; then
 fi
 
 # ==================== 配置 ====================
-GATEWAY="root@139.196.165.140"
+GATEWAY="${CRETAS_GATEWAY_HOST:-root@47.100.235.168}"  # 2026-11-12: 139 停用, 网关并入 47; upstream 指本机回环 (47 访问自己的公网 IP 不通)
 REMOTE_BACKUP_DIR="/www/wwwroot/web-admin-backups"
 LOCAL_BUILD_DIR="web-admin/dist"
 TMP_TAR="/tmp/web-admin-dist.$$.tar.gz"
@@ -500,9 +501,9 @@ if [ "$ENV" != "all" ]; then
     if [ "$REMOTE_RELEASE_SHA" = "$WEB_RELEASE_ARCHIVE_SHA256" ]; then
         REMOTE_INDEX_SHA=$(ssh "$GATEWAY" "sha256sum '$REMOTE_PATH/index.html' 2>/dev/null | cut -d' ' -f1" | tr -d '\r\n')
         if [ "$ENV" = "prod" ]; then
-            NOOP_VERIFY_URL="http://139.196.165.140:8086/"
+            NOOP_VERIFY_URL="https://admin.cretaceousfuture.com/"
         else
-            NOOP_VERIFY_URL="http://139.196.165.140:8097/"
+            NOOP_VERIFY_URL="http://47.100.235.168:8097/"
         fi
         NOOP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$NOOP_VERIFY_URL" || echo "000")
         if [ "$REMOTE_INDEX_SHA" = "$WEB_RELEASE_INDEX_SHA256" ] && [ "$NOOP_HTTP_CODE" = "200" ]; then
@@ -556,9 +557,9 @@ rm -f "$TMP_TAR" "$TMP_INDEX"
 # ==================== 5. 验证 ====================
 log "🔍 验证..."
 if [ "$ENV" = "test" ] || [ "$ENV" = "all" ]; then
-    VERIFY_URL="http://139.196.165.140:8097/"
+    VERIFY_URL="http://47.100.235.168:8097/"
 else
-    VERIFY_URL="http://139.196.165.140:8086/"
+    VERIFY_URL="https://admin.cretaceousfuture.com/"
 fi
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$VERIFY_URL" || echo "000")
 WEB_HTTP_CODE=$HTTP_CODE
@@ -606,9 +607,9 @@ if [ "$ENV" = "all" ]; then
     rm -f "$TMP_TAR"
 
     log "🔍 验证 prod..."
-    PROD_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://139.196.165.140:8086/" || echo "000")
+    PROD_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://admin.cretaceousfuture.com/" || echo "000")
     WEB_HTTP_CODE=$PROD_CODE
-    log "   HTTP $PROD_CODE (http://139.196.165.140:8086/)"
+    log "   HTTP $PROD_CODE (https://admin.cretaceousfuture.com/)"
     if [ "$PROD_CODE" = "200" ]; then
         verify_prod_web_four_way
         log "✅ Prod 部署完成"

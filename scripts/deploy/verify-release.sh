@@ -59,7 +59,7 @@ validate_marker "$BACKEND_MARKER"
 validate_marker "$WEB_MARKER"
 
 BACKEND_HOST="${CRETAS_BACKEND_HOST:-root@47.100.235.168}"
-GATEWAY_HOST="${CRETAS_GATEWAY_HOST:-root@139.196.165.140}"
+GATEWAY_HOST="${CRETAS_GATEWAY_HOST:-root@47.100.235.168}"  # 2026-11-12: 139 停用, 网关并入 47; upstream 指本机回环 (47 访问自己的公网 IP 不通)
 DEPLOYED_JAR_PATH="${CRETAS_BACKEND_JAR:-/www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar}"
 UPSTREAM_FILE="${CRETAS_UPSTREAM_FILE:-/www/server/panel/vhost/nginx/_upstream_cretas.conf}"
 
@@ -67,14 +67,14 @@ if [[ "$ENVIRONMENT" == "prod" ]]; then
     WEB_URL="${CRETAS_WEB_URL:-https://admin.cretaceousfuture.com}"
     WEB_ASSET_DIR="${CRETAS_WEB_ASSET_DIR:-/www/wwwroot/web-admin/assets}"
 else
-    WEB_URL="${CRETAS_WEB_URL:-http://139.196.165.140:8097}"
+    WEB_URL="${CRETAS_WEB_URL:-http://47.100.235.168:8097}"
     WEB_ASSET_DIR="${CRETAS_WEB_ASSET_DIR:-/www/wwwroot/web-admin-test/assets}"
 fi
 
 resolve_prod_slot() {
     local active_port
     active_port="$(ssh "$GATEWAY_HOST" \
-        "grep -E '^[[:space:]]*server[[:space:]]+47\\.100\\.235\\.168:(10010|10020);' '$UPSTREAM_FILE' | grep -oE '(10010|10020)' | sort -u")"
+        "grep -E '^[[:space:]]*server[[:space:]]+127\\.0\\.0\\.1:(10010|10020);' '$UPSTREAM_FILE' | grep -oE '(10010|10020)' | sort -u")"
     case "$active_port" in
         10010) printf '%s\t%s\t%s\n' blue 10010 cretas-backend ;;
         10020) printf '%s\t%s\t%s\n' green 10020 cretas-backend-green ;;
