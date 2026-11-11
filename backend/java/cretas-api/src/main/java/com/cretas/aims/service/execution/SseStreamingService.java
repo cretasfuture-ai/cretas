@@ -1923,19 +1923,7 @@ public class SseStreamingService {
     }
 
     private String buildSafeClarificationMessage(List<IntentExecuteResponse.SuggestedAction> actions) {
-        String choices = streamChoicesLine(actions);
-        if (choices.isBlank()) {
-            return "当前没有可安全提供的业务选项，请重新描述您的需求。";
-        }
-        // 只剩一个选项时不说「可能匹配多个操作」—— 2026-10-06 真机: 一个按钮配「请选择」读起来像坏了。
-        List<IntentExecuteResponse.SuggestedAction> intentChoices = actions.stream()
-                .filter(x -> x != null && "SELECT_INTENT".equals(x.getActionCode())
-                        && x.getActionName() != null && !x.getActionName().isBlank())
-                .toList();
-        if (intentChoices.size() == 1) {
-            return "您是要「" + intentChoices.get(0).getActionName() + "」吗？点下面确认；不是的话请换个说法。";
-        }
-        return "您的请求可能匹配多个操作, 请选择您实际想做的:" + choices;
+        return ClarificationCandidateService.clarificationMessage(actions);
     }
 
     /** 一线角色 + 写操作 + 本厂未开放 ⇒ 拒绝说明; 否则 null。与执行入口 (ToolDispatchService) 同一判定。 */
@@ -1946,25 +1934,6 @@ public class SseStreamingService {
         ToolExecutor tool = intent.getToolName() == null || intent.getToolName().isBlank()
                 ? null : toolRegistry.getExecutor(intent.getToolName()).orElse(null);
         return frontlineWriteGrants.denyReason(factoryId, userRole, tool, intent).orElse(null);
-    }
-
-    private String streamChoicesLine(List<IntentExecuteResponse.SuggestedAction> actions) {
-        if (actions == null || actions.isEmpty()) {
-            return "";
-        }
-        StringBuilder line = new StringBuilder("\n");
-        int index = 1;
-        for (IntentExecuteResponse.SuggestedAction action : actions) {
-            if (action == null || !"SELECT_INTENT".equals(action.getActionCode())
-                    || action.getActionName() == null || action.getActionName().isBlank()) {
-                continue;
-            }
-            line.append(index++).append(". ").append(action.getActionName()).append("\n");
-            if (index > 3) {
-                break;
-            }
-        }
-        return index == 1 ? "" : line.toString();
     }
 
     /** Resolve server-owned metadata before admitting an analysis request. */
