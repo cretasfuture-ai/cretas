@@ -12,6 +12,7 @@ import com.cretas.aims.repository.shortage.ShortageCaseEventRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseLineRepository;
 import com.cretas.aims.repository.shortage.ShortageCaseRepository;
 import com.cretas.aims.repository.shortage.ShortageSupplyQueryRepository;
+import com.cretas.aims.service.discipline.FactoryDisciplinePolicy;
 import com.cretas.aims.service.shortage.dto.ShortageReport;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitDisplayNames;
@@ -59,6 +60,8 @@ public class ShortageCaseService {
     private final ShortageSupplyQueryRepository supplyQueries;
     private final SalesOrderRepository salesOrderRepository;
     private final UnitContractService unitContractService;
+    /** 缺口补到 0 后人工关闭还是自动关闭 (工厂开关, 2026-11-11)。 */
+    private final FactoryDisciplinePolicy disciplinePolicy;
 
     /**
      * 按销售订单的当前事实刷新 (没有实例且有原料缺口才新建)。先锁住已有实例再读事实, 旧快照赢不了新快照。
@@ -204,13 +207,14 @@ public class ShortageCaseService {
             lineRepository.save(lineFrom(new ShortageCaseLine(), c, f));
         }
         event(c, ShortageCaseEvent.EventType.CREATED, null, stage, reason, summary(facts));
-        return c;
+        return autoCloseIfConfigured(c, reason);
     }
 
     private ShortageCase refresh(ShortageCase c, Map<String, ShortageCaseLine> lines, List<Facts> facts, String reason) {
         String fp = fingerprint(facts);
         if (fp.equals(c.getInputFingerprint())) {
-            return c; // 输入没变: 不写任何东西 (同一事件重复来是常态)
+            // 输入没变: 不写任何东西 (同一事件重复来是常态); 只有工厂后来改成自动关闭时, 已解决的实例在这里补关
+            return autoCloseIfConfigured(c, reason);
         }
         BigDecimal before = lines.values().stream().map(ShortageCaseLine::getGapQty).reduce(BigDecimal.ZERO, BigDecimal::add);
         Set<String> present = new HashSet<>();
@@ -244,6 +248,24 @@ public class ShortageCaseService {
         c = caseRepository.saveAndFlush(c);
         event(c, from == to ? ShortageCaseEvent.EventType.REFRESHED : ShortageCaseEvent.EventType.STAGE_CHANGED,
                 from, to, reason, summary(facts));
+        return autoCloseIfConfigured(c, reason);
+    }
+
+    /**
+     * 工厂配置为 AUTO 且缺口已解决 ⇒ 直接关闭, 记一条「已解决 → 已关闭」留痕 (系统操作, 写明是按本厂配置)。
+     * MANUAL (默认) 什么都不做: 停在「缺口已解决」等生产主管手工关闭, 与原行为一致。
+     * 只动 GAP_RESOLVED: 转人工 (MANUAL) 的实例由负责人自己确认结束, 不在这里关。
+     */
+    private ShortageCase autoCloseIfConfigured(ShortageCase c, String reason) {
+        if (c.getStage() != Stage.GAP_RESOLVED
+                || disciplinePolicy.shortageCloseMode(c.getFactoryId()) != FactoryDisciplinePolicy.ShortageCloseMode.AUTO) {
+            return c;
+        }
+        c.setStage(Stage.CLOSED);
+        c.setClosedAt(LocalDateTime.now());
+        c = caseRepository.saveAndFlush(c);
+        event(c, ShortageCaseEvent.EventType.STAGE_CHANGED, Stage.GAP_RESOLVED, Stage.CLOSED, "AUTO_CLOSE",
+                "缺口已全部补齐, 本厂配置为自动关闭" + (reason == null ? "" : " (触发: " + reason + ")"));
         return c;
     }
 

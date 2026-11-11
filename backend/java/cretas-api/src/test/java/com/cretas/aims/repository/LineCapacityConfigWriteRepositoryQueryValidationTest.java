@@ -91,6 +91,8 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
     @MockBean ProductionLineRepository lines;
     @MockBean ProductTypeRepository products;
     @MockBean EquipmentRepository equipment;
+    /** 包装单位产能开关 (production.capacity.package_unit_mode); 不打桩 = 没开 (返回 null ≠ FACTORY_UNIT)。 */
+    @MockBean com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -208,6 +210,31 @@ class LineCapacityConfigWriteRepositoryQueryValidationTest {
         entityManager.clear();
         assertThat(allRows()).isZero();
         assertThat(requirements.findByFactoryId(F)).isEmpty();
+    }
+
+    @Test
+    void aBagUnitIsRefusedUnlessTheFactoryTurnedOnFactoryUnitCapacity() {
+        when(disciplinePolicy.packageUnitCapacityMode(F))
+                .thenReturn(com.cretas.aims.service.discipline.FactoryDisciplinePolicy.PackageUnitCapacityMode.NONE);
+        assertThatThrownBy(() -> service.setCapacity(F, "L1", "PT-1", BigDecimal.TEN, "袋", Source.FACTORY_CONFIG, USER7))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("产能单位只能是");
+        entityManager.clear();
+        assertThat(allRows()).isZero();
+
+        when(disciplinePolicy.packageUnitCapacityMode(F))
+                .thenReturn(com.cretas.aims.service.discipline.FactoryDisciplinePolicy.PackageUnitCapacityMode.FACTORY_UNIT);
+        ProductionLineCapacityConfig bag = service.setCapacity(F, "L1", "PT-1", new BigDecimal("120"), " 袋 ",
+                Source.FACTORY_CONFIG, USER7);
+        entityManager.clear();
+        ProductionLineCapacityConfig stored = capacity.findById(bag.getId()).orElseThrow();
+        assertThat(stored.getCapacityUnit()).isEqualTo(CapacityUnit.PACKAGE);
+        assertThat(stored.getPackageUnit()).isEqualTo("袋");
+        // 「PACKAGE」本身不是单位名, 开了也拒
+        assertThatThrownBy(() -> service.setCapacity(F, "L1", "PT-1", BigDecimal.TEN, "PACKAGE", Source.FACTORY_CONFIG, USER7))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("具体的包装单位");
+        // 通用单位不受开关影响, 也不带包装单位名
+        ProductionLineCapacityConfig kg = service.setCapacity(F, "L1", "PT-1", BigDecimal.TEN, "KG", Source.FACTORY_CONFIG, USER7);
+        assertThat(kg.getPackageUnit()).isNull();
     }
 
     @Test

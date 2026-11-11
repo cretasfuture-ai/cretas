@@ -24,7 +24,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -99,6 +102,37 @@ public class LineCapacityEquipmentCheck {
                             + "」无法核对换线产能 (同线顺延不受影响)";
             return ResourceCheckResult.unverified("CAPACITY", msg, quantity);
         }
+        return check(factoryId, productTypeId, quantity, preferredLineId, start, end,
+                c -> c.getCapacityUnit() == orderUnit, unitLabel(orderUnit),
+                () -> notYetEffective(factoryId, productTypeId, preferredLineId, orderUnit, start));
+    }
+
+    /**
+     * 按工厂自己的包装单位 (如 袋 / 盒) 核对产能 —— 只在工厂开关 {@code production.capacity.package_unit_mode = FACTORY_UNIT}
+     * 时由调用方使用。只认 {@link CapacityUnit#PACKAGE} 行且其 {@code packageUnit} 与计划单位等价 (由 {@code sameUnit} 判定,
+     * 调用方传单位契约, ⛔ 不比字符串、⛔ 不换算)。
+     */
+    @Transactional(readOnly = true)
+    public ResourceCheckResult checkCapacityInPackageUnit(String factoryId, String productTypeId, BigDecimal quantity,
+                                                          String packageUnit, BiPredicate<String, String> sameUnit,
+                                                          String preferredLineId, LocalDateTime start, LocalDateTime end) {
+        if (productTypeId == null || quantity == null) {
+            return ResourceCheckResult.unverified("CAPACITY", "产能未验证: 缺少产品或插单数量", quantity);
+        }
+        if (packageUnit == null || packageUnit.isBlank()) {
+            return ResourceCheckResult.unverified("CAPACITY", "产能未验证: 计划数量没有单位", quantity);
+        }
+        String unit = packageUnit.trim();
+        return check(factoryId, productTypeId, quantity, preferredLineId, start, end,
+                c -> c.getCapacityUnit() == CapacityUnit.PACKAGE && c.getPackageUnit() != null
+                        && sameUnit.test(c.getPackageUnit(), unit),
+                unit, () -> null);
+    }
+
+    private ResourceCheckResult check(String factoryId, String productTypeId, BigDecimal quantity, String preferredLineId,
+                                      LocalDateTime start, LocalDateTime end,
+                                      Predicate<ProductionLineCapacityConfig> unitMatches, String orderUnitLabel,
+                                      Supplier<String> notYetEffective) {
         BigDecimal hours = BigDecimal.valueOf(Duration.between(start, end).toMinutes())
                 .divide(BigDecimal.valueOf(60), 4, RoundingMode.HALF_UP);
 
@@ -120,8 +154,8 @@ public class LineCapacityEquipmentCheck {
         for (ProductionLineCapacityConfig c : perLine.values()) {
             ProductionLine line = lines.get(c.getProductionLineId());
             String name = line == null ? c.getProductionLineId() : line.getName();
-            if (c.getCapacityUnit() != orderUnit) {
-                otherUnits.add(name + " 配的是 " + unitLabel(c.getCapacityUnit()) + "/小时");
+            if (!unitMatches.test(c)) {
+                otherUnits.add(name + " 配的是 " + label(c) + "/小时");
                 continue;
             }
             if (line == null) {
@@ -139,17 +173,17 @@ public class LineCapacityEquipmentCheck {
         if (best == null) {
             if (!lineDown.isEmpty()) {
                 return ResourceCheckResult.unavailable("CAPACITY",
-                        "产能不足: 配了" + unitLabel(orderUnit) + "产能的产线都不在运行: " + String.join("、", lineDown),
+                        "产能不足: 配了" + orderUnitLabel + "产能的产线都不在运行: " + String.join("、", lineDown),
                         BigDecimal.ZERO, quantity);
             }
             String scope = preferredLineId == null ? "本厂没有产线" : "指定产线";
             String detail = otherUnits.isEmpty() ? "" : " (" + String.join("; ", otherUnits) + ")";
-            String notYet = notYetEffective(factoryId, productTypeId, preferredLineId, orderUnit, start);
+            String notYet = notYetEffective.get();
             if (notYet != null) {
                 detail += " (" + notYet + ")";
             }
             return ResourceCheckResult.unverified("CAPACITY",
-                    "产能未验证: " + scope + "配置该产品按" + unitLabel(orderUnit) + "计的每小时产能" + detail
+                    "产能未验证: " + scope + "配置该产品按" + orderUnitLabel + "计的每小时产能" + detail
                             + ", 请在工厂配置或对话建厂里补上", quantity);
         }
 
@@ -157,12 +191,12 @@ public class LineCapacityEquipmentCheck {
         String lineName = lines.get(best.getProductionLineId()).getName();
         if (canDo.compareTo(quantity) >= 0) {
             return ResourceCheckResult.available("CAPACITY", canDo, quantity,
-                    lineName + " 每小时 " + plain(best.getCapacityPerHour()) + " " + unitLabel(orderUnit)
-                            + ", 本时段最多 " + plain(canDo) + " " + unitLabel(orderUnit));
+                    lineName + " 每小时 " + plain(best.getCapacityPerHour()) + " " + orderUnitLabel
+                            + ", 本时段最多 " + plain(canDo) + " " + orderUnitLabel);
         }
         return ResourceCheckResult.unavailable("CAPACITY",
-                "产能不足: 需要 " + plain(quantity) + " " + unitLabel(orderUnit) + ", 本时段单线最多 "
-                        + plain(canDo) + " " + unitLabel(orderUnit) + " (" + lineName + ")",
+                "产能不足: 需要 " + plain(quantity) + " " + orderUnitLabel + ", 本时段单线最多 "
+                        + plain(canDo) + " " + orderUnitLabel + " (" + lineName + ")",
                 canDo, quantity);
     }
 
@@ -221,15 +255,26 @@ public class LineCapacityEquipmentCheck {
                 "所需设备 " + String.join("、", up) + " 均不在检修/报废 (未核对设备排程)");
     }
 
+    /**
+     * 件 / kg / 批 三个通用代码。⛔ 不返回 {@link CapacityUnit#PACKAGE}: 包装单位产能必须带具体单位名,
+     * 只能走 {@link #checkCapacityInPackageUnit} (工厂开关 FACTORY_UNIT), 不能当成一个通用单位被订单 / 插单直接认。
+     */
     public static CapacityUnit parseUnit(String unit) {
         if (unit == null || unit.isBlank()) {
             return null;
         }
         try {
-            return CapacityUnit.valueOf(unit.trim().toUpperCase(Locale.ROOT));
+            CapacityUnit u = CapacityUnit.valueOf(unit.trim().toUpperCase(Locale.ROOT));
+            return u == CapacityUnit.PACKAGE ? null : u;
         } catch (IllegalArgumentException e) {
             return null;
         }
+    }
+
+    private static String label(ProductionLineCapacityConfig c) {
+        return c.getCapacityUnit() == CapacityUnit.PACKAGE
+                ? (c.getPackageUnit() == null ? "包装单位" : c.getPackageUnit())
+                : unitLabel(c.getCapacityUnit());
     }
 
     public static String unitLabel(CapacityUnit u) {
@@ -237,6 +282,7 @@ public class LineCapacityEquipmentCheck {
             case PIECE -> "件";
             case KG -> "kg";
             case BATCH -> "批";
+            case PACKAGE -> "包装单位";
         };
     }
 
