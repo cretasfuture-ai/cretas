@@ -102,6 +102,10 @@ public class WorkflowInstanceController {
     @Autowired(required = false)
     private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
 
+    /** 1551-11: 强制插单画布审批的业务适配器。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.UrgentInsertService urgentInsertService;
+
     /** 业务类型中文名解析 — 权威表在 DecisionTypeMetadataRegistry, 前端不再维护第二份。 */
     @Autowired(required = false)
     private OaModuleLabelResolver oaModuleLabelResolver;
@@ -367,7 +371,8 @@ public class WorkflowInstanceController {
                         request.notes());
         Map<String, Object> result = oaActionIdempotencyService.execute(
                 actionContext,
-                () -> executeDomainAction(factoryId, instanceId, instance, user, action, request.notes()));
+                () -> executeDomainAction(factoryId, instanceId, instance, user, action, request.notes(),
+                        request.expectedNodeId()));
         return ApiResponse.success(result);
     }
 
@@ -502,7 +507,8 @@ public class WorkflowInstanceController {
             ApprovalWorkflowInstance instance,
             User user,
             HistoryAction action,
-            String notes) {
+            String notes,
+            String expectedNodeId) {
         String businessEntityId;
         String businessStatus;
         if ("PURCHASE_ORDER".equals(instance.getModuleCode())) {
@@ -569,6 +575,17 @@ public class WorkflowInstanceController {
                             user.getId(), user.getRoleCode(), action, notes);
             businessEntityId = correction.getId();
             businessStatus = correction.getStatus();
+        } else if ("FORCE_INSERT".equals(instance.getModuleCode())) {
+            if (urgentInsertService == null) {
+                throw new BusinessException(503, "插单服务暂不可用，请稍后重试")
+                        .withCode("OA_URGENT_INSERT_SERVICE_UNAVAILABLE");
+            }
+            com.cretas.aims.dto.production.ProductionPlanDTO plan = urgentInsertService.applyWorkflowAction(
+                    factoryId, instance.getBusinessEntityId(), instanceId,
+                    user.getId(), user.getRoleCode(), expectedNodeId, action, notes);
+            businessEntityId = instance.getBusinessEntityId();
+            businessStatus = plan.getApprovalStatus() != null ? String.valueOf(plan.getApprovalStatus())
+                    : plan.getStatus() == null ? "UNKNOWN" : String.valueOf(plan.getStatus());
         } else {
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
@@ -792,8 +809,12 @@ public class WorkflowInstanceController {
         if (user == null) {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
         }
-        ApprovalWorkflowInstance restarted = workflowEngine.restartWithCurrentDefinition(
-                factoryId, instanceId, user.getId(), request.getReason());
+        // 1551-11: 强制插单的新实例可能在创建时就结束, 要投影回计划与排程, 走插单适配器
+        boolean forceInsert = urgentInsertService != null && workflowEngine.getInstance(factoryId, instanceId)
+                .map(i -> "FORCE_INSERT".equals(i.getModuleCode())).orElse(false);
+        ApprovalWorkflowInstance restarted = forceInsert
+                ? urgentInsertService.restartWorkflowBinding(factoryId, instanceId, user.getId(), request.getReason())
+                : workflowEngine.restartWithCurrentDefinition(factoryId, instanceId, user.getId(), request.getReason());
         log.warn("按当前审批流重开: factoryId={}, previousInstanceId={}, newInstanceId={}, operator={}",
                 factoryId, instanceId, restarted.getId(), user.getUsername());
         List<WorkflowInstancePendingDTO> hydrated = hydrateInstances(factoryId, List.of(restarted), user);
@@ -1119,6 +1140,18 @@ public class WorkflowInstanceController {
                         .append(warehouseLabel(targetWarehouse, warehouseNameById))
                         .append(")");
             }
+            return sb.toString();
+        }
+        if ("FORCE_INSERT".equals(moduleCode)) {
+            // 强制插单: context 由 UrgentInsertServiceImpl#startForceInsertWorkflow 写入
+            Map<String, Object> context = inst.getContextJson();
+            Object number = context == null ? null : context.get("planNumber");
+            Object qty = context == null ? null : context.get("plannedQuantity");
+            Object unit = context == null ? null : context.get("plannedUnit");
+            Object impact = context == null ? null : context.get("impactLevel");
+            StringBuilder sb = new StringBuilder("强制插单 ").append(number == null ? bizId : number);
+            if (qty != null) sb.append(" ").append(qty).append(unit == null ? "" : String.valueOf(unit));
+            if (impact != null) sb.append("（影响等级 ").append(impact).append("）");
             return sb.toString();
         }
         if ("BUDGET".equals(moduleCode)) {

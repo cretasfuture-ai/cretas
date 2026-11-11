@@ -58,7 +58,9 @@ public class DecisionTypeMetadataRegistry {
                 .category(Category.PRODUCTION)
                 .defaultApproverRoles(List.of("factory_super_admin", "production_manager"))
                 .moduleCode("FORCE_INSERT")
-                .wired(false)  // 仅做 requiresApproval 布尔判断，尚未创建 Canvas 实例
+                // 1551-11: UrgentInsertServiceImpl#forceInsert 建画布实例, 批准/驳回由
+                // OA 统一动作入口 → UrgentInsertServiceImpl#applyWorkflowAction 投影回计划与排程
+                .wired(true)
                 .build());
 
         register(DecisionTypeMetadata.builder()

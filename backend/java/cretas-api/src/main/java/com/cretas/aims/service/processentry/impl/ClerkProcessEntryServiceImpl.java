@@ -691,6 +691,8 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             planRepository.findByIdAndFactoryId(ctx.getPlanId(), ctx.getFactoryId())
                     .filter(p -> p.getStatus() == com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING)
                     .ifPresent(p -> {
+                        // 1551-11: 待审批的强制插单还没排进去, 文员录入也不能把它翻成生产中 (整次录入回滚)
+                        com.cretas.aims.service.production.PendingApprovalStartGuard.check(p);
                         // S4-08: 这里也会把计划翻成生产中, 所以与开工入口过同一道缺料闸 (开关默认关 = N1);
                         //    拦下时整次录入回滚, 带原因放行时原因记入缺料实例处理记录。
                         if (shortageStartGate != null) {
