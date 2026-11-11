@@ -199,13 +199,25 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
         if (permissionService == null || callerRole == null || callerRole.isBlank()) {
             return Collections.emptySet();
         }
+        return typesMatching(factoryId, code -> permissionService.roleHasPermission(factoryId, callerRole, code));
+    }
+
+    /** 具体用户在本厂具备权限的待办类型: 与岗位路径同一张 TYPE_PERMISSIONS, 但叠加个人权限覆盖。 */
+    private Set<TodoType> typesForUser(String factoryId, com.cretas.aims.entity.User user) {
+        if (permissionService == null || user == null || user.getRoleCode() == null || user.getRoleCode().isBlank()) {
+            return Collections.emptySet();
+        }
+        return typesMatching(factoryId, code -> permissionService.hasPermission(user, code));
+    }
+
+    private Set<TodoType> typesMatching(String factoryId, java.util.function.Predicate<String> granted) {
         Set<TodoType> out = new LinkedHashSet<>();
         for (TodoType type : TodoType.values()) {
             List<String> codes = TYPE_PERMISSIONS.get(type);
             if (codes == null) continue;
             try {
                 for (String code : codes) {
-                    if (permissionService.roleHasPermission(factoryId, callerRole, code)) {
+                    if (granted.test(code)) {
                         out.add(type);
                         break;
                     }
@@ -222,7 +234,23 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
 
     @Override
     public List<TodoItemDTO> listTodos(String factoryId, String callerRole) {
-        Set<TodoType> types = typesFor(factoryId, callerRole);
+        return collect(factoryId, callerRole, typesFor(factoryId, callerRole));
+    }
+
+    @Override
+    public List<TodoItemDTO> listTodosForUser(String factoryId, com.cretas.aims.entity.User user) {
+        if (user == null) {
+            return Collections.emptyList();
+        }
+        return collect(factoryId, user.getRoleCode(), typesForUser(factoryId, user));
+    }
+
+    @Override
+    public int countTodosForUser(String factoryId, com.cretas.aims.entity.User user) {
+        return listTodosForUser(factoryId, user).size();
+    }
+
+    private List<TodoItemDTO> collect(String factoryId, String callerRole, Set<TodoType> types) {
         if (types.isEmpty()) {
             return Collections.emptyList();
         }
