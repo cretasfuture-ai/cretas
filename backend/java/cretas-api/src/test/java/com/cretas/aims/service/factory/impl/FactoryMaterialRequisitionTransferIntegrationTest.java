@@ -1131,7 +1131,7 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
     @Test
     @DisplayName("排查 C6 阴性对照: 计划已结单 (结单不能再做) 却还挂着未打戳的消耗行 → 不拦关单, 否则永久死路 (prod MR20261104-0002 同形)")
     void close_nonStockPlan_alreadySettled_isNotDeadlocked() {
-        batchStore.put("raw-1", batch("raw-1", "MAT-001", WH_LOGISTICS, "100.00", "10.00", "3.00"));
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "10.00", "3.00"));
         batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "10.00", "8.00", "3.00"));
         FactoryMaterialRequisition mr = buildMrInIssued(
                 new BigDecimal("10.00"), new BigDecimal("8.00"),
