@@ -116,8 +116,16 @@ async function openDetail(row: BomPriceProposal) {
 }
 
 // ---------------------------------------------------------------- 批准
+/**
+ * 看不到建议价 (采购价对本账号脱敏) 就不能批准: 既不知道批的是多少, 也传不出 expectedUnitPrice,
+ * 后端就比不出「看完之后建议被新收货改过」—— 那是盲批 (独立审查 2026-11-11)。驳回不受影响。
+ */
+function priceVisible(row: BomPriceProposal): boolean {
+  return row.proposedUnitPrice !== null && row.proposedUnitPrice !== undefined;
+}
+
 async function handleApprove(row: BomPriceProposal) {
-  if (!canApprove.value || row.status !== 'PENDING' || !currentUserId.value) return;
+  if (!canApprove.value || row.status !== 'PENDING' || !currentUserId.value || !priceVisible(row)) return;
   try {
     await ElMessageBox.confirm(
       `把配方行单价从 ${money(row.currentUnitPrice)} 改为 ${money(row.proposedUnitPrice)}（${percent(row.deltaPercent)}），`
@@ -128,7 +136,7 @@ async function handleApprove(row: BomPriceProposal) {
     await approveBomPriceProposal(factoryId.value, row.id, {
       approverId: currentUserId.value,
       // 传审批人看到的建议价: 看完之后建议被新收货更新过时后端 409, 不会悄悄批成新价
-      expectedUnitPrice: row.proposedUnitPrice ?? undefined,
+      expectedUnitPrice: row.proposedUnitPrice,
     });
     ElMessage.success('已批准，配方行单价已更新');
     detailOpen.value = false;
@@ -257,7 +265,11 @@ async function submitReject() {
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
             <template v-if="canApprove && row.status === 'PENDING'">
-              <el-button link type="success" size="small" data-testid="bpa-approve" @click="handleApprove(row)">批准</el-button>
+              <el-tooltip :disabled="priceVisible(row)" content="你看不到采购价，无法核对建议价，不能批准；可驳回或请能看到采购价的人审批" placement="top">
+                <span>
+                  <el-button link type="success" size="small" data-testid="bpa-approve" :disabled="!priceVisible(row)" @click="handleApprove(row)">批准</el-button>
+                </span>
+              </el-tooltip>
               <el-button link type="danger" size="small" data-testid="bpa-reject" @click="openReject(row)">驳回</el-button>
             </template>
           </template>
@@ -298,7 +310,7 @@ async function submitReject() {
         </el-descriptions-item>
       </el-descriptions>
       <div v-if="detail && canApprove && detail.status === 'PENDING'" class="drawer-actions">
-        <el-button type="success" @click="handleApprove(detail)">批准</el-button>
+        <el-button type="success" :disabled="!priceVisible(detail)" @click="handleApprove(detail)">批准</el-button>
         <el-button type="danger" @click="openReject(detail)">驳回</el-button>
       </div>
     </el-drawer>

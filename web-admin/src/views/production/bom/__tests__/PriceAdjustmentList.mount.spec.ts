@@ -135,6 +135,18 @@ describe('BOM 调价建议页 (D-S5-09)', () => {
     });
   });
 
+  it('阴性对照: 有审批权但建议价被脱敏 (看不到采购价) → 不能批准, 可以驳回', async () => {
+    harness.levels.approval_bom_price_adjustment = 'rw';
+    const masked = { ...ROW, currentUnitPrice: null, proposedUnitPrice: null, deltaAmount: null, deltaPercent: null };
+    const vm = await mountPage();
+    await vm.handleApprove(masked as unknown as typeof ROW);
+    expect(harness.confirm).not.toHaveBeenCalled();
+    expect(harness.post).not.toHaveBeenCalled();
+
+    vm.openReject(masked as unknown as typeof ROW);
+    expect(vm.rejectOpen).toBe(true);
+  });
+
   it('阴性对照: 没有审批权时批准 / 驳回入口一个写请求都不发', async () => {
     harness.levels.approval_bom_price_adjustment = 'r';
     harness.levels.production = 'rw';                // 只有生产读写不等于能批

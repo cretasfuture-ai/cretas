@@ -645,7 +645,7 @@ class BomRecipeServiceImplAddItemTest {
         // deleted at all. This test is about collection identity, so it deletes a
         // PACKAGING line — assertNotRequiredWorkflowInputByMaterial exempts those.
         existingItem.setMaterialCategory("PACKAGING");
-        when(itemRepo.findById(1L)).thenReturn(Optional.of(existingItem));
+        when(itemRepo.findByIdForUpdate(1L)).thenReturn(Optional.of(existingItem));
         when(itemRepo.save(any(BomRecipeItem.class))).thenReturn(existingItem);
         when(itemRepo.findByRecipeIdOrderBySortOrderAsc("RECIPE-ORPHAN-TEST"))
                 .thenReturn(List.of());  // after soft-delete, returns empty
