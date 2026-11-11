@@ -46,7 +46,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class SalesOrderListStatementCountQueryValidationTest {
+class SalesOrderListStatementCountRepositoryQueryValidationTest {
 
     private static final String F = "F-SO-N1";
     private static final int ORDERS = 20;
