@@ -92,7 +92,25 @@ def config(path):
     if not v.get('source_factory_id') or not v.get('baselineRunId'):raise ValueError('LIVE_SOURCE_BINDING_REQUIRED')
     for key in ('db','observation','bom','supplement'):
         if not Path(v[key]).is_absolute():raise ValueError('LIVE_ABSOLUTE_PATH_REQUIRED')
+    account=v.get('account') or ''
+    if account and (not isinstance(account,str) or not account.replace('-','').isalnum() or not account.islower() or len(account)>32):
+        raise ValueError('LIVE_ACCOUNT_NAME_INVALID')
     return v
+
+
+def account_label(v):
+    """Name of the local credential file the collector logs in with (never the phone number)."""
+    return v.get('account') or 'default'
+
+
+def use_account(v):
+    # account.dpapi is the original credential; a named account lives in account-<name>.dpapi,
+    # saved by configure-account.ps1 -Name <name>. Selected per config, not per request.
+    name=v.get('account') or ''
+    directory=Path(os.environ['LOCALAPPDATA'])/'Cretas/Blacklake'
+    path=directory/('account-'+name+'.dpapi' if name else 'account.dpapi')
+    if not path.exists():raise ValueError('LIVE_ACCOUNT_FILE_MISSING:'+account_label(v))
+    os.environ['BLACKLAKE_SECRET_FILE']=str(path)
 
 
 def binding(v):return digest([v['tenant_id'],str(v['source_factory_id']),v['baselineRunId']])
@@ -215,6 +233,7 @@ def unreturned_projects(prior,projects):
 
 def collect(v, previous=None, max_requests=1000):
     from .full_probe import context
+    use_account(v)
     directory,client,store,cache=context();requests=0
     if (store.scope[0],str(store.scope[1]))!=(v['tenant_id'],str(v['source_factory_id'])):
         client.close();store.connection.close();cache.close();raise ValueError('LIVE_SOURCE_SCOPE_MISMATCH')
@@ -347,6 +366,7 @@ def cycle(v, collector=collect):
         renewal=threading.Thread(target=renew,daemon=True);renewal.start()
         previous=latest(v);payload,requests=collector(v,previous)
         clocks=payload.pop('observedAt',{})
+        payload['sourceAccount']=account_label(v)
         fingerprint=digest(payload);finished=now()
         changed=previous is None or digest(payload['data'])!=digest(previous['data'])
         with c:
