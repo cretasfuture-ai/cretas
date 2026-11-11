@@ -50,9 +50,9 @@ export interface SupplierLockInput {
  *
  * 口径:
  * - 新建: 不锁。
- * - 草稿 且 原本没有供应商: 不锁 —— 这正是编辑入口要服务的「事后补录供应商」场景。
- * - 草稿 且 已有供应商: 仍锁 (保持原行为; 换供应商会让已选的供应关系/规格/价格全部作废,
- *   不在本缺陷范围内)。
+ * - 草稿: 不锁, 不论原本有没有供应商 (2026-11-11 交接单第二节: 已有供应商的草稿也要能改)。
+ *   换供应商时明细不清空, 按原料改绑到新供应商的供应关系、重取供应商价 (rebindDraftLinesToSupplier);
+ *   新供应商不供应的原料列出来由用户处理, ⛔ 不猜。后端 updateDraftOrder 只放行 DRAFT。
  * - 非草稿 (已提交 / 审批中 / 已审批 …): 锁。正常情况下非草稿根本进不了编辑弹窗
  *   (openEditDialog 会拒绝, 后端 updateDraftOrder 也只放行 DRAFT), 这里再锁一层是纵深防御。
  *
@@ -61,8 +61,9 @@ export interface SupplierLockInput {
  */
 export function isSupplierLockedInEditor(input: SupplierLockInput): boolean {
   if (!input.isEditing) return false;
-  if (String(input.orderStatus ?? '') !== 'DRAFT') return true;
-  return String(input.originalSupplierId ?? '').trim() !== '';
+  // 提交之后 (非草稿) 不许改供应商; 草稿一律可改。originalSupplierId 保留在入参里供调用方区分
+  // 「补录」还是「更换」(提示文案不同), 不再参与锁定判断。
+  return String(input.orderStatus ?? '') !== 'DRAFT';
 }
 
 export interface DraftLineLike {

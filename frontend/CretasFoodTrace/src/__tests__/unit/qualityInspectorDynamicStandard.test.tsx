@@ -45,6 +45,19 @@ describe('dynamic quality inspection screen', () => {
     expect(mockReplace).toHaveBeenCalledWith('QIResult', { recordId: 'qi-1', passed: false });
   });
 
+  it('条件合格 (次要项交质量经理决定) 照常进结果页并带上标出的项目', async () => {
+    api.submitDynamicInspection.mockResolvedValue({
+      inspection: { id: 'qi-2', result: 'CONDITIONAL' }, standardRevision: 'rev-1',
+      reviewRequired: true, reviewItems: ['温度'],
+    });
+    render(<QIFormScreen />);
+    await waitFor(() => expect(screen.getByText(/温度/)).toBeTruthy());
+    fireEvent.changeText(screen.getByPlaceholderText('填写实测值'), '8.5');
+    fireEvent.press(screen.getByText('提交质检结果'));
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('QIResult',
+      { recordId: 'qi-2', passed: false, reviewItems: ['温度'] }));
+  });
+
   describe('不合格必须写原因 (D-S302-02)', () => {
     beforeEach(() => {
       api.getDynamicQualityForm.mockResolvedValue({

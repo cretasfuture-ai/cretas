@@ -690,7 +690,7 @@ public class QualityDispositionInventoryService {
         }
         // D-S411-04 M2: 质检放行判了不合格的原料, 处置放行不能把它改回可用 (409, 不静默跳过)
         com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
-                qcReleaseRecordRepository, mb, target);
+                qcReleaseRecordRepository, processTimeLimitEventRepository, mb, target);
         MaterialBatchStatus before = mb.getStatus();
         boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(before, target)
                 && evaluateMaterialFlip(mb, target) == FlipDecision.FLIP;

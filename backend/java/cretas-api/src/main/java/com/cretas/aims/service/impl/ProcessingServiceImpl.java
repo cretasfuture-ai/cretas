@@ -102,6 +102,18 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final ProcessSheetRowRepository processSheetRowRepository;
     @Autowired
     private QualityCheckItemBindingRepository qualityCheckItemBindingRepository;
+    /**
+     * 动态质检表哪些项不合格才判整张 FAIL (工厂开关 quality.inspection.fail_scope, 2026-11-11)。字段注入, 不打断按构造器装配的既有测试;
+     * 没注入 (单测直接 new) 时按 Steve 裁定的默认 MINOR_FOR_REVIEW。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
+    /** 交质量经理决定的条件合格: 提交后通知接收人 (quality.notify.inspection_review, 默认质量经理)。可选, 理由同上。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.NotificationService reviewNotificationService;
+    /** afterCommit 里原事务已提交, 写通知必须开新事务 (同 UrgentInsertScheduleService 的提醒)。 */
+    @Autowired(required = false)
+    private org.springframework.transaction.PlatformTransactionManager reviewNotificationTx;
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
     // 来源工序真名解析 (2026-08-02): 暂用 optional 字段注入 —— 该类的大量既有测试仍按
@@ -1049,6 +1061,7 @@ public class ProcessingServiceImpl implements ProcessingService {
             row.put("effectiveMaxValue", binding.getOverrideMaxValue() != null ? binding.getOverrideMaxValue() : item.getMaxValue());
             row.put("effectiveIsRequired", binding.getOverrideIsRequired() != null ? binding.getOverrideIsRequired() : item.getIsRequired());
             row.put("requireNoteOnFail", Boolean.TRUE.equals(item.getRequireNoteOnFail()));
+            row.put("severity", item.getSeverity() == null ? null : item.getSeverity().name());
             items.add(row);
         }
         form.put("items", items);
@@ -1082,6 +1095,12 @@ public class ProcessingServiceImpl implements ProcessingService {
         List<Map<String, Object>> snapshotItems = new ArrayList<>();
         List<String> failedWithoutReason = new ArrayList<>();
         boolean sampleFailed = false;
+        // 工厂开关: 哪些严重程度的项不合格才整张 FAIL; 其余不合格项标出来交质量经理决定 (2026-11-11)
+        com.cretas.aims.service.discipline.FactoryDisciplinePolicy.InspectionFailScope failScope = disciplinePolicy == null
+                ? com.cretas.aims.service.discipline.FactoryDisciplinePolicy.DEFAULT_INSPECTION_FAIL_SCOPE
+                : disciplinePolicy.inspectionFailScope(factoryId);
+        boolean sheetFailed = false;
+        List<String> reviewItems = new ArrayList<>();
         for (var answer : answers) {
             if (answer == null || answer.getBindingId() == null || answer.getItemId() == null) {
                 throw new BusinessException(400, "质检项目答案不能为空且必须包含项目标识");
@@ -1136,6 +1155,11 @@ public class ProcessingServiceImpl implements ProcessingService {
                 itemFailed = !answer.getValue().toString().trim().equals(standardValue.trim());
             }
             sampleFailed |= itemFailed;
+            boolean failsSheet = itemFailed && failScope.failsWholeSheet(item.getSeverity());
+            sheetFailed |= failsSheet;
+            if (itemFailed && !failsSheet) {
+                reviewItems.add(item.getItemName());
+            }
             // D-S302-02: 不合格项要原因时, 本项备注或本次备注有一个写了就算 (手机只有一个备注框)
             if (itemFailed && Boolean.TRUE.equals(item.getRequireNoteOnFail())
                     && !hasReason(answer.getNote()) && !hasReason(request.getNotes())) {
@@ -1147,6 +1171,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             saved.put("effectiveStandardValue", standardValue); saved.put("value", answered ? answer.getValue() : null);
             saved.put("minValue", min); saved.put("maxValue", max); saved.put("isRequired", b.getOverrideIsRequired() != null ? b.getOverrideIsRequired() : item.getIsRequired());
             saved.put("status", answered ? (itemFailed ? "FAIL" : "PASS") : "NOT_ANSWERED");
+            saved.put("severity", item.getSeverity() == null ? null : item.getSeverity().name());
+            if (itemFailed && !failsSheet) saved.put("reviewRequired", true);
             if (hasReason(answer.getNote())) saved.put("note", answer.getNote().trim());
             snapshotItems.add(saved);
         }
@@ -1170,22 +1196,85 @@ public class ProcessingServiceImpl implements ProcessingService {
                     .withCode("QUALITY_FAIL_NOTE_REQUIRED")
                     .withHint("请在备注里写明不合格的原因后重新提交").withHintTarget("notes");
         }
-        BigDecimal failures = sampleFailed ? BigDecimal.ONE : BigDecimal.ZERO;
+        // 计数跟整张结论走: 只有交质量经理决定的项不合格时样本不算不合格 (合格率 100), 否则处置建议会按 0% 合格率给「报废」;
+        // 哪几项不合格照样在快照 items[].status=FAIL 和 reviewItems 里
+        BigDecimal failures = sheetFailed ? BigDecimal.ONE : BigDecimal.ZERO;
         BigDecimal passes = sampleSize.subtract(failures);
         QualityInspection inspection = new QualityInspection();
         inspection.setFactoryId(factoryId); inspection.setProductionBatchId(batch.getId()); inspection.setInspectorId(inspectorId);
         inspection.setInspectionDate(LocalDate.now()); inspection.setSampleSize(sampleSize); inspection.setFailCount(failures);
         inspection.setPassCount(passes); inspection.setPassRate(passes.multiply(BigDecimal.valueOf(100)).divide(passes.add(failures).max(BigDecimal.ONE), 2, RoundingMode.HALF_UP));
-        inspection.setResult(sampleFailed ? "FAIL" : "PASS"); inspection.setNotes(request.getNotes());
+        // 整张结论: 有判整张 FAIL 的项 ⇒ FAIL (走隔离 + 处置复核, 不变); 只有交质量经理决定的项不合格 ⇒ 条件合格,
+        // 不隔离成品, 记录里标出这些项。⛔ 已判不合格 (处置锁定中) 的批次不会被这条条件合格改回去 ——
+        // QualityInspectionServiceImpl.propagateToProductionBatch 只认处置复核 (Owner 2026-11-04)。
+        String verdict = sheetFailed ? "FAIL" : (reviewItems.isEmpty() ? "PASS" : "CONDITIONAL");
+        inspection.setResult(verdict); inspection.setNotes(request.getNotes());
         Map<String, Object> customFields = new LinkedHashMap<>();
         customFields.put("standardBasis", "DYNAMIC_PRODUCT_BINDING"); customFields.put("standardRevision", revision); customFields.put("items", snapshotItems);
+        customFields.put("failScope", failScope.name());
+        if (!sheetFailed && !reviewItems.isEmpty()) {
+            customFields.put("reviewRequired", true);
+            customFields.put("reviewItems", reviewItems);
+        }
         inspection.setCustomFields(customFields);
         QualityInspection savedInspection = qualityInspectionService.createInspection(factoryId, inspection);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("inspection", savedInspection);
         result.put("standardRevision", revision);
+        if (!sheetFailed && !reviewItems.isEmpty()) {
+            // 告诉质检员: 这张没有判不合格, 但这些项不合格, 要质量经理决定
+            result.put("reviewRequired", true);
+            result.put("reviewItems", reviewItems);
+            result.put("reviewMessage", "以下项目不合格但不判整批不合格，已交质量经理决定：" + String.join("、", reviewItems));
+            notifyReviewAfterCommit(factoryId, batch, savedInspection, reviewItems);
+        }
         putBatchQualityOutcome(result, factoryId, savedInspection);
         return result;
+    }
+
+    /**
+     * 通知质量经理 (接收岗位按 quality.notify.inspection_review 配置, 找不到人改发厂长)。放到提交之后发:
+     * 通知失败不能把质检记录本身回滚掉, 也不能在事务里吞异常把它标成只回滚。
+     */
+    private void notifyReviewAfterCommit(String factoryId, ProductionBatch batch, QualityInspection saved,
+                                         List<String> reviewItems) {
+        if (reviewNotificationService == null) {
+            return;
+        }
+        String title = "质检待决定：" + (batch.getProductName() != null ? batch.getProductName() : "")
+                + " (" + batch.getBatchNumber() + ")";
+        String content = "以下项目不合格，按本厂设置不判整批不合格，请决定放行还是处置：" + String.join("、", reviewItems);
+        String sourceId = saved == null || saved.getId() == null ? null : String.valueOf(saved.getId());
+        Runnable sendNow = () -> reviewNotificationService.sendByPolicy(factoryId,
+                com.cretas.aims.service.canvas.ThresholdKeys.QUALITY_NOTIFY_INSPECTION_REVIEW,
+                List.of(com.cretas.aims.entity.enums.FactoryUserRole.quality_manager), title, content,
+                com.cretas.aims.entity.enums.NotificationType.WARNING, "QUALITY_INSPECTION_REVIEW", sourceId);
+        Runnable send = () -> {
+            try {
+                if (reviewNotificationTx != null) {
+                    // afterCommit 里原事务已提交、资源还绑着: REQUIRED 会加入一个不再提交的事务, 通知行静默丢失 ⇒ 开新事务
+                    org.springframework.transaction.support.TransactionTemplate fresh =
+                            new org.springframework.transaction.support.TransactionTemplate(reviewNotificationTx);
+                    fresh.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                    fresh.executeWithoutResult(status -> sendNow.run());
+                } else {
+                    sendNow.run();
+                }
+            } catch (RuntimeException e) {
+                log.error("质检待决定通知发送失败 (质检记录已保存): factoryId={}, inspection={}", factoryId, sourceId, e);
+            }
+        };
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            send.run();
+                        }
+                    });
+        } else {
+            send.run();
+        }
     }
 
     /** 全空白 (含全角空格、不换行空格) 不算写了原因。 */

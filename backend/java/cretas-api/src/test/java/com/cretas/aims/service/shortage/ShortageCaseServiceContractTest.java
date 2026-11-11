@@ -42,6 +42,8 @@ class ShortageCaseServiceContractTest {
     private final SalesOrderRepository orders = mock(SalesOrderRepository.class);
     private final UnitContractService units = mock(UnitContractService.class);
     private ShortageCaseService service;
+    /** 工厂开关: 缺口补到 0 后人工 / 自动关闭; 默认 = 迁移全局默认 (MANUAL)。 */
+    private final Map<String, String> discipline = new HashMap<>();
 
     private final Map<String, ShortageCase> caseStore = new HashMap<>();
     private final List<ShortageCaseLine> lineStore = new ArrayList<>();
@@ -55,7 +57,8 @@ class ShortageCaseServiceContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new ShortageCaseService(analysis, cases, lines, events, supply, orders, units);
+        service = new ShortageCaseService(analysis, cases, lines, events, supply, orders, units,
+                com.cretas.aims.service.discipline.DisciplineFixtures.policy(discipline));
         // 单位契约桩: kg ≡ 千克 ≡ 公斤, 其余按字面 (够区分 kg / g / 箱)
         when(units.areEquivalent(eq("F1"), anyString(), anyString())).thenAnswer(i -> canon(i.getArgument(1)).equals(canon(i.getArgument(2))));
         SalesOrder so = new SalesOrder();
@@ -333,5 +336,77 @@ class ShortageCaseServiceContractTest {
         assertThat(onlyLine().getGapQty()).isEqualByComparingTo("6");
         assertThat(c.getOwnerRole()).isEqualTo(ShortageCaseService.ROLE_PROCUREMENT);
         assertThat(c.getLastRefreshReason()).isEqualTo(ShortageCaseListener.REASON_BATCH_QC_REJECTED);
+    }
+
+    // ------------------------------------------------ 工厂开关: 缺口补到 0 后人工 / 自动关闭 (2026-11-11)
+
+    private ShortageCase resolveTheGap() {
+        ShortageCase c = service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED").orElseThrow();
+        assertThat(c.getStage()).isEqualTo(Stage.DETECTED);
+        available = new BigDecimal("10");
+        return service.refreshForMaterial("F1", "M1", "MATERIAL_BATCH_RELEASED") == 1
+                ? caseStore.get(c.getId()) : null;
+    }
+
+    @Test
+    void closeModeManualDefaultStopsAtGapResolvedAndWaitsForAPerson() {
+        ShortageCase c = resolveTheGap();
+
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
+        assertThat(c.getClosedAt()).isNull();
+        assertThat(eventStore).noneMatch(e -> "AUTO_CLOSE".equals(e.getTriggerReason()));
+    }
+
+    @Test
+    void closeModeManualWrittenExplicitlyBehavesLikeTheDefault() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "MANUAL");
+        ShortageCase c = resolveTheGap();
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
+        assertThat(c.getClosedAt()).isNull();
+    }
+
+    @Test
+    void closeModeAutoClosesTheCaseWhenTheGapReachesZeroAndLeavesATrail() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "auto");
+        ShortageCase c = resolveTheGap();
+
+        assertThat(c.getStage()).isEqualTo(Stage.CLOSED);
+        assertThat(c.getClosedAt()).isNotNull();
+        assertThat(c.getGapResolvedAt()).isNotNull();
+        ShortageCaseEvent last = eventStore.get(eventStore.size() - 1);
+        assertThat(last.getFromStage()).isEqualTo(Stage.GAP_RESOLVED);
+        assertThat(last.getToStage()).isEqualTo(Stage.CLOSED);
+        assertThat(last.getTriggerReason()).isEqualTo("AUTO_CLOSE");
+        assertThat(last.getActorType()).isEqualTo("SYSTEM");
+        // 关了就不再是「未关闭实例」: 再来同一事件不会把它改回去, 也不再记留痕
+        int before = eventStore.size();
+        service.refreshForSalesOrder("F1", "SO-1", "MANUAL_REFRESH");
+        assertThat(eventStore).hasSize(before);
+    }
+
+    @Test
+    void closeModeAutoDoesNotCloseACaseThatStillHasAGap() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "AUTO");
+        ShortageCase c = service.refreshForSalesOrder("F1", "SO-1", "SO_FINANCE_APPROVED").orElseThrow();
+        assertThat(c.getStage()).isEqualTo(Stage.DETECTED);
+        assertThat(c.getClosedAt()).isNull();
+    }
+
+    @Test
+    void switchingToAutoLaterClosesAnAlreadyResolvedCaseOnTheNextRefresh() {
+        ShortageCase c = resolveTheGap();
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
+
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "AUTO");
+        service.refreshForSalesOrder("F1", "SO-1", "MANUAL_REFRESH"); // 事实没变 (指纹相同)
+
+        assertThat(c.getStage()).isEqualTo(Stage.CLOSED);
+    }
+
+    @Test
+    void anUnrecognisedCloseModeStaysManual() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "SOMETIMES");
+        ShortageCase c = resolveTheGap();
+        assertThat(c.getStage()).isEqualTo(Stage.GAP_RESOLVED);
     }
 }

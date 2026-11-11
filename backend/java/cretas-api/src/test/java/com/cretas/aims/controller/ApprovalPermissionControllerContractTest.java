@@ -75,7 +75,12 @@ class ApprovalPermissionControllerContractTest {
         @SuppressWarnings("unchecked")
         List<Map<String, String>> approvals = (List<Map<String, String>>) controller.list(F).getData().get("approvals");
         assertThat(approvals).extracting(a -> a.get("label"))
-                .containsExactly("报工撤回审批", "盘点差异审批", "质检处置审批", "改价审批", "退款审批");
+                .containsExactly("报工撤回审批", "盘点差异审批", "质检处置审批", "改价审批", "退款审批", "BOM调价审批");
+        // D-S5-09: BOM 调价审批的默认 = 旧门槛去掉一线, 「谁能审批」页上能看到并改
+        assertThat(cell(PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT, "production_manager"))
+                .containsEntry("granted", true).containsEntry("source", "DEFAULT");
+        assertThat(cell(PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT, "operator"))
+                .containsEntry("granted", false).containsEntry("source", "DEFAULT");
     }
 
     @Test

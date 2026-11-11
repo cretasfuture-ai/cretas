@@ -99,6 +99,8 @@ public final class ThresholdKeys {
     public static final String PRODUCTION_NOTIFY_AI_SCHEDULING = "production.notify.ai_scheduling";
     /** 低库存双向报警 → 默认 warehouse_manager,procurement_manager */
     public static final String INVENTORY_NOTIFY_LOW_STOCK = "inventory.notify.low_stock";
+    /** 动态质检表有项目不合格但不判整张不合格 (交质量经理决定) → 默认 quality_manager (2026-11-11) */
+    public static final String QUALITY_NOTIFY_INSPECTION_REVIEW = "quality.notify.inspection_review";
 
     // ==================== BOM (BOM) ====================
 
@@ -109,6 +111,13 @@ public final class ThresholdKeys {
 
     /** 生产建议默认 lead time (天). Hard-coded default = 7. */
     public static final String SHORTAGE_DEFAULT_PRODUCTION_LEAD_DAYS = "shortage.production_lead_days";
+
+    /**
+     * 缺料实例缺口补到 0 之后怎么收尾 (2026-11-11 Steve 裁定: 做成工厂开关)。字符串, MANUAL (默认) / AUTO。
+     * MANUAL = 停在「缺口已解决」, 由生产主管手工关闭 (= 原行为); AUTO = 系统直接关闭并留痕。认不出 = MANUAL。
+     * 读到旧值不挡任何用户动作 (只是晚一点自动关) ⇒ 故意不登记为闸门类 key。
+     */
+    public static final String SHORTAGE_CASE_CLOSE_MODE = "shortage.case.close_mode";
 
     // ==================== AI 复杂度路由 (AI) ====================
 
@@ -267,6 +276,23 @@ public final class ThresholdKeys {
     /** A14 补录窗口天数. Default = 2 (T-2)。 */
     public static final String PRODUCTION_BACKDATE_MAX_DAYS = "production.backdate.max_days";
 
+    /**
+     * 「袋」「盒」等包装单位的计划换线时怎么核对目标线产能 (2026-11-11 Steve 裁定: 做成工厂开关)。
+     * NONE (默认) = 产线产能只认 件 / kg / 批, 包装单位计划判「产能未验证」只能同线顺延 (= 原行为);
+     * NET_CONTENT = 按产品净含量把包装单位折成 kg 再核对 kg 产能 (净含量没填 / 不是质量单位 ⇒ 仍未验证, 不猜);
+     * FACTORY_UNIT = 产线产能可以按工厂自己的包装单位配置 (如 袋/小时), 计划单位与之等价才核对。认不出 = NONE。
+     */
+    public static final String PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE = "production.capacity.package_unit_mode";
+
+    /**
+     * 动态质检表里哪些项不合格才判整张 FAIL (2026-11-11 Steve 裁定: 做成工厂开关, 默认 B)。字符串:
+     * ANY_ITEM = 任一项不合格整张 FAIL (原行为); MINOR_FOR_REVIEW (默认) = 关键 / 主要项不合格整张 FAIL,
+     * 只有次要项不合格时判「条件合格」并标出这些项, 交质量经理决定; CRITICAL_ONLY = 只有关键项不合格才整张 FAIL,
+     * 主要 / 次要项交质量经理决定。认不出 = ANY_ITEM (最严)。没标严重程度的项按关键项算。
+     * 读到旧值 = 该 FAIL 的判成条件合格 (或反过来) ⇒ 登记为闸门类 key。
+     */
+    public static final String QUALITY_INSPECTION_FAIL_SCOPE = "quality.inspection.fail_scope";
+
     // ==================== 闸门类阈值登记 (GATING) ====================
 
     /**
@@ -323,6 +349,8 @@ public final class ThresholdKeys {
             PRODUCTION_RECEIPT_OVER_RECEIVE_RATE,
             PRODUCTION_THAW_BACKFILL_MAX_MINUTES,
             PRODUCTION_BACKDATE_MAX_DAYS,
+            PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE,
+            QUALITY_INSPECTION_FAIL_SCOPE,
             CREDIT_CHECK_MODE,
             INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
             INVENTORY_PERMISSION_WASTAGE_APPROVE,
@@ -340,7 +368,8 @@ public final class ThresholdKeys {
             PRODUCTION_NOTIFY_URGENT_INSERT,
             PRODUCTION_NOTIFY_EFFICIENCY_WARNING,
             PRODUCTION_NOTIFY_AI_SCHEDULING,
-            INVENTORY_NOTIFY_LOW_STOCK);
+            INVENTORY_NOTIFY_LOW_STOCK,
+            QUALITY_NOTIFY_INSPECTION_REVIEW);
 
     /**
      * 保存阈值前的按 key 校验: 岗位名单里每一项必须是真实存在的岗位码 (空串 = 只有厂长, 合法);
@@ -355,6 +384,10 @@ public final class ThresholdKeys {
             String v = value.trim().toUpperCase();
             return (v.equals("OFF") || v.equals("WARN") || v.equals("BLOCK"))
                     ? null : "超信用额度检查模式只能是 OFF / WARN / BLOCK";
+        }
+        String enumError = validateEnumValue(thresholdKey, value);
+        if (enumError != null) {
+            return enumError;
         }
         if (ROLE_LIST_KEYS.contains(thresholdKey)) {
             for (String code : value.split(",")) {
@@ -375,6 +408,21 @@ public final class ThresholdKeys {
             }
         }
         return null;
+    }
+
+    /** 取值是固定几个代码的开关类 key → 允许的值 (保存时校验, 打错字不再静默按默认)。 */
+    private static final java.util.Map<String, java.util.List<String>> ENUM_VALUES = java.util.Map.of(
+            SHORTAGE_CASE_CLOSE_MODE, java.util.List.of("MANUAL", "AUTO"),
+            PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, java.util.List.of("NONE", "NET_CONTENT", "FACTORY_UNIT"),
+            QUALITY_INSPECTION_FAIL_SCOPE, java.util.List.of("ANY_ITEM", "MINOR_FOR_REVIEW", "CRITICAL_ONLY"));
+
+    private static String validateEnumValue(String thresholdKey, String value) {
+        java.util.List<String> allowed = ENUM_VALUES.get(thresholdKey);
+        if (allowed == null) {
+            return null;
+        }
+        String v = value.trim().toUpperCase(java.util.Locale.ROOT);
+        return allowed.contains(v) ? null : thresholdKey + " 只能是 " + String.join(" / ", allowed);
     }
 
     /**

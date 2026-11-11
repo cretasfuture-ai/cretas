@@ -368,6 +368,30 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
     }
 
     @Test
+    @DisplayName("交接单 11-11 二.1: 来源批次是不良品 / 质检中 → 409, 不新建可用的生产仓批次, 来源库存不动")
+    void transferToFactory_blockedSourceBatch_blocks() {
+        for (com.cretas.aims.entity.enums.MaterialBatchStatus st : new com.cretas.aims.entity.enums.MaterialBatchStatus[]{
+                com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE,
+                com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING}) {
+            MaterialBatch bad = batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "0.00", "3.50");
+            bad.setStatus(st);
+            batchStore.put("batch-1", bad);
+            batchStore.put("batch-2", batch("batch-2", "MAT-002", WH_LOGISTICS, "5.00", "0.00", "2.00"));
+            FactoryMaterialRequisition mr = buildMrInPicking();
+            when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.transferToFactory(FACTORY_ID, MR_ID, OPERATOR), st.name());
+            assertEquals("PRODUCTION_REQUISITION_BATCH_NOT_USABLE", ex.getErrorCode(), st.name());
+            assertTrue(ex.getMessage().contains(st.getDisplayName()), ex.getMessage());
+            assertEquals(st, bad.getStatus());
+            assertEquals(0, bad.getUsedQuantity().compareTo(java.math.BigDecimal.ZERO), "来源库存不动");
+            assertNull(findWorkshopBatch("MAT-001"), "不能新建生产仓批次");
+        }
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("transferToFactory blocks (no false success) when picking was never confirmed")
     void transferToFactory_withoutConfirmedPicking_blocks() {
         FactoryMaterialRequisition mr = buildMrInPicking();

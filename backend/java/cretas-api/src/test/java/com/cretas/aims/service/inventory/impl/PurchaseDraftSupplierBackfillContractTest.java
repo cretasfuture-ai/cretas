@@ -158,6 +158,7 @@ class PurchaseDraftSupplierBackfillContractTest {
         otherRelation.setDefaultPurchasePrice(new BigDecimal("5.5"));
         when(relationRepository.findByFactoryIdAndSupplierIdAndMaterialTypeId(FACTORY, OTHER_VALID_SUPPLIER, MATERIAL))
                 .thenReturn(Optional.of(otherRelation));
+        when(relationRepository.findByIdAndFactoryId(OTHER_VALID_RELATION, FACTORY)).thenReturn(Optional.of(otherRelation));
         when(relationRepository.existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue(
                 FACTORY, OTHER_VALID_SUPPLIER, MATERIAL)).thenReturn(true);
         when(specRepository.findByFactoryIdAndSupplierMaterialIdAndActiveTrue(FACTORY, OTHER_VALID_RELATION))
@@ -304,6 +305,45 @@ class PurchaseDraftSupplierBackfillContractTest {
 
         assertThat(submitted.getStatus()).isEqualTo(PurchaseOrderStatus.FINANCE_APPROVED);
         assertThat(submitted.getSupplierId()).isEqualTo(SUPPLIER);
+    }
+
+    @Test
+    @DisplayName("e1) 草稿已有供应商 A, 编辑弹窗换成 B (带明细) → 保存成功, 行改绑 B 的供应关系与价, 提交成功")
+    void draftWithSupplierCanSwitchToAnotherSupplierWithEditorPayload() {
+        order.setSupplierId(SUPPLIER);
+        storedItems.get(0).setSupplierMaterialId(RELATION);
+        storedItems.get(0).setUnitPrice(new BigDecimal("6"));
+
+        PurchaseOrder updated = service.updateDraftOrder(FACTORY, ORDER,
+                editorPayload(OTHER_VALID_SUPPLIER, OTHER_VALID_RELATION));
+
+        assertThat(updated.getSupplierId()).isEqualTo(OTHER_VALID_SUPPLIER);
+        assertThat(storedItems).hasSize(1);
+        PurchaseOrderItem line = storedItems.get(0);
+        assertThat(line.getSupplierMaterialId()).as("行仍挂着旧供应商的供应关系").isEqualTo(OTHER_VALID_RELATION);
+        assertThat(line.getQuantity()).isEqualByComparingTo("56.74");
+
+        PurchaseOrder submitted = service.submitOrder(FACTORY, ORDER, 1552L);
+        assertThat(submitted.getStatus()).isEqualTo(PurchaseOrderStatus.FINANCE_APPROVED);
+        assertThat(submitted.getSupplierId()).isEqualTo(OTHER_VALID_SUPPLIER);
+        assertThat(storedItems.get(0).getSupplierMaterialId()).isEqualTo(OTHER_VALID_RELATION);
+    }
+
+    @Test
+    @DisplayName("e2) 草稿已有供应商 A, 只发新供应商 B (不带明细) → 行不能还挂着 A 的供应关系与价")
+    void draftSupplierSwitchWithoutItemsDoesNotKeepTheOldSuppliersRelation() {
+        order.setSupplierId(SUPPLIER);
+        storedItems.get(0).setSupplierMaterialId(RELATION);
+        storedItems.get(0).setUnitPrice(new BigDecimal("6"));
+
+        service.updateDraftOrder(FACTORY, ORDER, supplierOnly(OTHER_VALID_SUPPLIER));
+        PurchaseOrder submitted = service.submitOrder(FACTORY, ORDER, 1552L);
+
+        assertThat(submitted.getSupplierId()).isEqualTo(OTHER_VALID_SUPPLIER);
+        PurchaseOrderItem line = storedItems.get(0);
+        assertThat(line.getSupplierMaterialId())
+                .as("换了供应商, 行却还挂着旧供应商 A 的供应关系").isNotEqualTo(RELATION);
+        assertThat(line.getUnitPrice()).as("行价仍是 A 的 6 元").isEqualByComparingTo("5.5");
     }
 
     @Test

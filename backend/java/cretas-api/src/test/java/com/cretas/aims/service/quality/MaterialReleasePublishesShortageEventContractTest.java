@@ -41,6 +41,8 @@ class MaterialReleasePublishesShortageEventContractTest {
         ReflectionTestUtils.setField(service, "eventPublisher", publisher);
         ReflectionTestUtils.setField(service, "qcReleaseRecordRepository",
                 mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));   // 没有质检放行记录
+        ReflectionTestUtils.setField(service, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         ReflectionTestUtils.setField(service, "materialBatchReleaseGuard", releaseGuard);
         batch = new MaterialBatch();
         batch.setId("MB-1");

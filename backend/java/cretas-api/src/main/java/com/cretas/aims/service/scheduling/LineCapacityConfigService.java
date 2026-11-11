@@ -13,6 +13,7 @@ import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.service.discipline.FactoryDisciplinePolicy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,6 +46,11 @@ public class LineCapacityConfigService {
     private final ProductTypeRepository productTypes;
     private final EquipmentRepository equipment;
     private final SchedulingResourceWriteLock resourceWriteLock;
+    /** 包装单位产能是否允许 (工厂开关 production.capacity.package_unit_mode = FACTORY_UNIT)。 */
+    private final FactoryDisciplinePolicy disciplinePolicy;
+
+    /** 包装单位名最长 (= 列宽)。 */
+    static final int PACKAGE_UNIT_MAX = 20;
 
     @Transactional(readOnly = true)
     public List<ProductionLineCapacityConfig> listCapacity(String factoryId) {
@@ -68,8 +74,24 @@ public class LineCapacityConfigService {
             throw new BusinessException(400, "每小时产能必须大于 0");
         }
         CapacityUnit capacityUnit = LineCapacityEquipmentCheck.parseUnit(unit);
+        String packageUnit = null;
         if (capacityUnit == null) {
-            throw new BusinessException(400, "产能单位只能是 PIECE (件) / KG (千克) / BATCH (批)");
+            // 工厂开关 FACTORY_UNIT: 允许按本厂自己的包装单位 (袋 / 盒 …) 配产能; 默认 NONE 维持原来的三选一
+            boolean allowPackage = disciplinePolicy.packageUnitCapacityMode(factoryId)
+                    == FactoryDisciplinePolicy.PackageUnitCapacityMode.FACTORY_UNIT;
+            String raw = unit == null ? "" : unit.trim();
+            if (!allowPackage || raw.isEmpty() || "PACKAGE".equalsIgnoreCase(raw)) {
+                throw new BusinessException(400, allowPackage
+                        ? "请填写具体的包装单位 (如 袋、盒), 或 PIECE (件) / KG (千克) / BATCH (批)"
+                        : "产能单位只能是 PIECE (件) / KG (千克) / BATCH (批)")
+                        .withHint(allowPackage ? "包装单位要和计划下单用的单位一致"
+                                : "要按 袋 / 盒 等本厂单位配产能, 先在「业务阈值」把 production.capacity.package_unit_mode 改为 FACTORY_UNIT");
+            }
+            if (raw.length() > PACKAGE_UNIT_MAX) {
+                throw new BusinessException(400, "包装单位名太长 (最多 " + PACKAGE_UNIT_MAX + " 个字)");
+            }
+            capacityUnit = CapacityUnit.PACKAGE;
+            packageUnit = raw;
         }
         ProductionLine line = productionLines.findByIdAndFactoryIdAndDeletedAtIsNull(productionLineId, factoryId)
                 .orElseThrow(() -> new BusinessException(404, "产线不存在或不属于本厂: " + productionLineId));
@@ -92,6 +114,7 @@ public class LineCapacityConfigService {
         row.setProductTypeId(product);
         row.setCapacityPerHour(capacityPerHour);
         row.setCapacityUnit(capacityUnit);
+        row.setPackageUnit(packageUnit);
         row.setSource(source);
         row.setActor(actor);
         row.setEffectiveFrom(now);

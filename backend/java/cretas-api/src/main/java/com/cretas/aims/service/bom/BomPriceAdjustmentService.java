@@ -31,6 +31,16 @@ public interface BomPriceAdjustmentService {
     /** 不比对审批人看到的价 (向后兼容)。⛔ 不写成 default 方法: 代理上调 default 方法不带事务, 内部再调是自调用。 */
     BomPriceAdjustmentProposal approve(String factoryId, Long proposalId, Long approverId, String comment);
 
+    /**
+     * 驳回一条待审批的调价建议 (D-S5-09): 配方行价一分不动, 建议置 REJECTED 并记下驳回人、时间与原因。
+     * 原因必填 (空白 400 {@code BOM_PRICE_PROPOSAL_REJECT_REASON_REQUIRED}); 非 PENDING 409。
+     * 驳回人由调用方从登录身份取, ⛔ 不接受请求体里的人。
+     */
+    BomPriceAdjustmentProposal reject(String factoryId, Long proposalId, Long rejectorId, String reason);
+
+    /** 详情: 只看本厂的建议, 别厂 / 不存在 404。 */
+    BomPriceAdjustmentProposal get(String factoryId, Long proposalId);
+
     Page<BomPriceAdjustmentProposal> list(
             String factoryId, BomPriceAdjustmentProposal.Status status, Pageable pageable);
 }

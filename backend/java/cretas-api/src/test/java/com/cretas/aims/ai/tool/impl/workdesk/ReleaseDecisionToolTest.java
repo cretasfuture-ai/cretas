@@ -40,6 +40,9 @@ class ReleaseDecisionToolTest {
     @Mock
     private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
 
+    @Mock
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
