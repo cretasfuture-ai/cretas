@@ -4206,7 +4206,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: []
+    requiredPermissions: ["approval_quality_disposition:approve"]
     version: "1.0.0"
     domainTags: ["order"]
     overrideFlags:
@@ -4215,7 +4215,7 @@ descriptors:
       supportsPreview: false
       requiresPermission: false
       hasPermission: false
-      requiredPermissions: false
+      requiredPermissions: true
       version: false
       domainTags: false
     governanceStatus: REVIEW_REQUIRED
