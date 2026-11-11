@@ -254,3 +254,21 @@ GPT6.1 Terra→GPT6 Luna的源码规则教师影子试验：12条独立探针前
 - 已标注 2991 条：银标 2489（train 1760 / validation 364 / calibration 365，按语义族切，37 族），审核队列 502；总一致率 83.2%，只读 84.0% / 写 81.4% / 无目标意图 86.6%。防泄漏共剔除 126 条（封存验收集指纹 65）。
 - 第三位老师 `distill_claude_teacher.py`（claude-fable-5-2，输入与 Terra 相同、互不看结论）：审核队列 502 条中 462 条二比一 → `silver-adjudicated.jsonl`（与一致银标分开存、用 `adjudicated` 阶段单独校验），40 条仍待人工；对一致银标抽 127 条对照，Claude 相同 97.6%（NEED_CLARIFY 27/30）。
 - 花费上界：OpenAI 25.02 美元（本线上限 40），Claude 26.86 美元（本线上限 80）。
+
+## 带上下文的本地决策学生 student-v1（INTENT-DISTILL-20261111 任务 F）
+
+只训练与离线评测，不接线、不换线上模型。权重与回执在仓外 `Documents/Cretas意图蒸馏-20261111/models/student-v1/{known,unseen}/`，报告 `student-v1-report.md`。
+
+- `ctx_student.py`（不依赖 torch）：冻结输入 SHA256 校验；两种切分（`known` 每个目标内按说法聚类切开、每个评测意图训练里都有；`unseen` 沿用 F-前置按族切分）；固定格式的状态与候选序列化；直出规则 `decide`（动作是新任务/改参数/翻页且过门槛、目标是候选里的只读意图且过门槛、写候选概率和不超上限，否则升级）；门槛选择 `select_policy`（校准集上，准确率 ≥ 98% 且写任务直出 0 次时覆盖率最大；`hard='nonread_gold_direct'` 为严格口径）；温度、Wilson 区间、几何平均集成。
+- `ctx_student_train.py`：`fit / compare / calibrate / evaluate / old / latency`，`--mode known|unseen`，`--extra <补数据 silver>`。验证集只由 `evaluate` 读一次，权重、门槛或判定代码变了就拒绝重跑。
+- `ctx_student_report.py`：从 `evaluation.json` 生成表格。
+- `distill_pipeline.py generate --targets <意图清单> --per-target N`：定向补数据（每个意图 3 句全新会话 + 切换 + 改参数 + 翻页/取消）。
+- 离线测试：`python -m pytest scripts/finetune/test_ctx_student.py scripts/finetune/test_distill_pipeline.py`（不需要 GPU、权重和网络）。
+
+## 学生 v2 数据与分类门槛（INTENT-DISTILL-20261111）
+
+- `distill_v4.py`：定向生成（Claude Sonnet；覆盖翻页、换说法续句、写转只读、澄清/新任务对照）。硬标签由两位老师标（`claude-opus-5-5`@low 为主，`gpt-6-sol`@medium 为辅），`gpt-6-luna` 出软标签；`--teachers main|second` 可以分批补标，按 id 合并。`dataset` 把 v1、v3 两套标签放进同一个数据池，两位老师意见不一的样本只用软标签（`hard_weight=0`），并写上 `split_known` 和 `split_family` 两种切分。
+- `build_clarify_rubric.py --version 3` 生成 `clarify_rubric_v3.json`，依据是 Steve 8 问的口径规则；v1 的 `clarify_rubric.json` 不变。
+- `sensitive_intents.py`：直出风险分三类（普通只读错误率 ≤ 2%；敏感只读的 95% 上界 ≤ 0.5%，否则不直出；写入一律不直出）；`check_complete` 防止新增的只读意图漏分类。
+- `ctx_student_train.py --mode pool --pool pool-v4.jsonl --label-version 1|3`；评测时额外报分类门槛（`direct_classed`）和 `Recall@k`。
+- 离线测试：`python -m pytest scripts/finetune/test_ctx_student.py scripts/finetune/test_distill_v4.py`。

@@ -33,8 +33,22 @@ public final class TimeRangeFilter {
     public static final String MODE = "x-time-range";
     /** schema 顶层: 不能按时间查时的说明 (替换通用措辞), 如「库存报表是当前时点的库存, 不能按过去的时间查」。 */
     public static final String NOTICE = "x-time-range-notice";
+    /**
+     * schema 顶层: 对话里没说时间时默认查最近 N 天 (Steve 2026-11-12 口径 1: 「看看待发货的订单」= 最近 7 天,
+     * 回复写明)。只给列表型、真按 startDate/endDate 过滤的工具声明; 由 ToolDispatchService 的只读参数合并补上。
+     */
+    public static final String DEFAULT_RECENT_DAYS = "x-default-recent-days";
 
     private TimeRangeFilter() {
+    }
+
+    /** 工具声明的默认最近天数; 没声明、或工具不按时间过滤时为 null。 */
+    public static Integer defaultRecentDays(Map<String, Object> parametersSchema) {
+        if (!supported(parametersSchema) || !(parametersSchema.get(DEFAULT_RECENT_DAYS) instanceof Number n)
+                || n.intValue() < 1) {
+            return null;
+        }
+        return n.intValue();
     }
 
     /** schema 里的 startDate / endDate 属性 (yyyy-MM-dd, 含当天)。声明它们 = 工具真的按它们过滤。 */

@@ -132,7 +132,8 @@ class PurchaseOrderListChatRepositoryQueryValidationTest {
         Map<String, Object> data = ask("查询采购单", BUYER);
 
         assertThat(((Number) data.get("totalElements")).longValue()).isEqualTo(22);
-        assertThat(rows(data)).hasSize(10);
+        // 对话里列表默认每页 20 条 (Steve 2026-11-12 口径 7; 工具自己的默认 10 只用于非对话调用)
+        assertThat(rows(data)).hasSize(20);
     }
 
     @Test

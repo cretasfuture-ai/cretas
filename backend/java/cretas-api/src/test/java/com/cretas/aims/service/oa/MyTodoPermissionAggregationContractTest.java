@@ -159,4 +159,90 @@ class MyTodoPermissionAggregationContractTest {
         assertThat(service.listTodos(F, "quality_inspector")).isEmpty();
         verify(workflowEngine, never()).findPendingForRole(anyString(), anyString(), eq("FORCE_INSERT"), any(Pageable.class));
     }
+
+    // ─── B4: 能办的待办类型 (App 待办入口) ─────────────────────────────────
+
+    private com.cretas.aims.service.ApprovalWorkflowService canvasNaming(String... approverRoles) {
+        com.cretas.aims.service.ApprovalWorkflowService canvas = mock(com.cretas.aims.service.ApprovalWorkflowService.class);
+        com.cretas.aims.entity.config.ApprovalWorkflow wf = new com.cretas.aims.entity.config.ApprovalWorkflow();
+        wf.setNodesJson("[]");
+        when(canvas.getActiveByDecisionType(F, com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType.FORCE_INSERT))
+                .thenReturn(java.util.Optional.of(wf));
+        com.cretas.aims.entity.config.ApprovalWorkflowNode start = new com.cretas.aims.entity.config.ApprovalWorkflowNode();
+        start.setId("start");
+        start.setType("start");
+        start.setConfig(java.util.Map.of("approverRoles", List.of("operator")));   // 非审批节点点名不作数
+        com.cretas.aims.entity.config.ApprovalWorkflowNode approval = new com.cretas.aims.entity.config.ApprovalWorkflowNode();
+        approval.setId("approval_1");
+        approval.setType("approval");
+        approval.setConfig(java.util.Map.of("approverRoles", List.of(approverRoles)));
+        when(canvas.deserializeNodes("[]")).thenReturn(List.of(start, approval));
+        ReflectionTestUtils.setField(service, "approvalWorkflowService", canvas);
+        return canvas;
+    }
+
+    @Test
+    @DisplayName("B4 🔴 操作员默认有 production:read_write, 但插单画布没点名他 ⇒ 能办类型为空 (App 不出待办入口)")
+    void operatorWithProductionWriteButNotNamedGetsNoEntry() {
+        canvasNaming("dispatcher", "production_manager");
+        when(workflowEngine.findPendingForRole(eq(F), eq("operator"), eq("FORCE_INSERT"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+        // 阳性对照: 权限层确实给了操作员插单这一类, 是画布这一层把它收掉的
+        assertThat(typesFor("operator")).contains(TodoType.FORCE_INSERT_APPROVAL);
+        assertThat(service.availableTypes(F, "operator")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("B4 调度员 / 生产经理被插单画布点名 ⇒ 能办类型含强制插单 (此刻 0 条也算, 入口不随条数隐现)")
+    void namedSchedulersGetForceInsertEntry() {
+        canvasNaming("dispatcher", "production_manager");
+        assertThat(service.availableTypes(F, "dispatcher")).contains(TodoType.FORCE_INSERT_APPROVAL);
+        assertThat(service.availableTypes(F, "production_manager")).contains(TodoType.FORCE_INSERT_APPROVAL);
+        verify(workflowEngine, never()).findPendingForRole(anyString(), anyString(), eq("FORCE_INSERT"), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("B4 本厂没启用插单画布: 只有此刻确有实例在等他批才算 (旧版本画布上的实例)")
+    void withoutActiveCanvasOnlyRunningInstancesCount() {
+        com.cretas.aims.service.ApprovalWorkflowService canvas = mock(com.cretas.aims.service.ApprovalWorkflowService.class);
+        when(canvas.getActiveByDecisionType(anyString(), any())).thenReturn(java.util.Optional.empty());
+        ReflectionTestUtils.setField(service, "approvalWorkflowService", canvas);
+        when(workflowEngine.findPendingForRole(eq(F), eq("dispatcher"), eq("FORCE_INSERT"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+        assertThat(service.availableTypes(F, "dispatcher")).doesNotContain(TodoType.FORCE_INSERT_APPROVAL);
+
+        ApprovalWorkflowInstance inst = ApprovalWorkflowInstance.builder()
+                .id("inst-2").factoryId(F).moduleCode("FORCE_INSERT").businessEntityId("PLAN-2")
+                .status(ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                .currentNodeIds(new ArrayList<>(List.of("n1"))).build();
+        when(workflowEngine.findPendingForRole(eq(F), eq("dispatcher"), eq("FORCE_INSERT"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(inst)));
+        assertThat(service.availableTypes(F, "dispatcher")).contains(TodoType.FORCE_INSERT_APPROVAL);
+    }
+
+    @Test
+    @DisplayName("B4 画布读取异常 ⇒ 插单这一类不给入口, 其它类照常 (厂长不受影响, 引擎同口径兜底)")
+    void canvasFailureDropsOnlyForceInsert() {
+        com.cretas.aims.service.ApprovalWorkflowService broken = mock(com.cretas.aims.service.ApprovalWorkflowService.class);
+        when(broken.getActiveByDecisionType(anyString(), any())).thenThrow(new IllegalStateException("db down"));
+        ReflectionTestUtils.setField(service, "approvalWorkflowService", broken);
+        assertThat(service.availableTypes(F, "dispatcher")).doesNotContain(TodoType.FORCE_INSERT_APPROVAL);
+        assertThat(service.availableTypes(F, "finance_manager")).contains(TodoType.PURCHASE_FINANCE_REVIEW);
+        assertThat(service.availableTypes(F, "factory_super_admin")).containsExactlyInAnyOrder(TodoType.values());
+    }
+
+    @Test
+    @DisplayName("B4 默认岗位矩阵: 财务经理 / 出纳 / 厂长有入口; 质检员 / 仓库员 / 操作员 (未点名) 没有")
+    void defaultRoleMatrixForTheEntry() {
+        canvasNaming("dispatcher");
+        when(workflowEngine.findPendingForRole(anyString(), anyString(), eq("FORCE_INSERT"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+        assertThat(service.availableTypes(F, "finance_manager")).isNotEmpty();
+        assertThat(service.availableTypes(F, "cashier")).isNotEmpty();
+        assertThat(service.availableTypes(F, "factory_super_admin")).isNotEmpty();
+        assertThat(service.availableTypes(F, "dispatcher")).isNotEmpty();
+        assertThat(service.availableTypes(F, "quality_inspector")).isEmpty();
+        assertThat(service.availableTypes(F, "warehouse_worker")).isEmpty();
+        assertThat(service.availableTypes(F, "operator")).isEmpty();
+    }
 }

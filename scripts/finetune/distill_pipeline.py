@@ -27,7 +27,7 @@ from distill_common import (ACTS, GENERATOR, INTENT_ACTS, LUNA, NO_INTENT_ACTS, 
 
 SOURCE = 'INTENT-DISTILL-20261111'
 SLOTS = ('change_param', 'page_or_cancel', 'switch_task', 'need_clarify', 'contrast_read', 'contrast_write',
-         'fresh_task_a', 'fresh_task_b')
+         'fresh_task_a', 'fresh_task_b', 'fresh_task_c')
 
 ACT_HELP = ('对话动作定义：NEW_TASK=开始一个新任务或换了目标（哪怕和上一轮同领域）；'
             'CHANGE_PARAM=沿用上一轮任务，只改参数/口径/对象（如“换成上个月的”“只看二车间”）；'
@@ -101,6 +101,32 @@ def plan_call(k, fams, table, seed):
     return dict(call=k, family=fam, family_intents=cs, slots=slots, distractors=rng.sample(others, 3))
 
 
+def plan_targeted(k, target, table, seed):
+    """Plan focused on one intent (task F top-up for intents with < 5 train rows).
+
+    Same slot vocabulary and validation as ``plan_call``; every slot is about ``target``:
+    three fresh-session requests, one switch from a sibling task, one parameter change, and
+    PAGE (read target) or CANCEL (write target) on it. Family pool = every resolvable intent
+    with the same domain prefix, whatever its size.
+    """
+    rng = random.Random('%s:t:%d:%s' % (seed, k, target))
+    fam = table[target]['family']
+    cs = sorted(c for c, v in table.items() if v['family'] == fam and v['read_only'] is not None)
+    others = [c for c in cs if c != target]
+    sib = rng.choice(others) if others else None
+    slots = [dict(slot='fresh_task_a', act='NEW_TASK', prev=None, intent=target),
+             dict(slot='fresh_task_b', act='NEW_TASK', prev=None, intent=target),
+             dict(slot='fresh_task_c', act='NEW_TASK', prev=None, intent=target),
+             dict(slot='switch_task', act='NEW_TASK', prev=sib, intent=target),
+             dict(slot='change_param', act='CHANGE_PARAM', prev=target, intent=target),
+             dict(slot='page_or_cancel', act='PAGE', prev=target, intent=target) if table[target]['read_only']
+             else dict(slot='page_or_cancel', act='CANCEL', prev=target, intent=None)]
+    pool = [c for c in table if table[c]['family'] != fam and table[c]['read_only'] is not None]
+    # at least 7 candidates overall, like the sampled F-pre rows (6-11), so tiny families are not trivially easy
+    n_distract = max(3, 7 - min(len(cs), 8))
+    return dict(call=k, family=fam, family_intents=cs, slots=slots, distractors=rng.sample(sorted(pool), n_distract), target=target)
+
+
 def gen_prompt(plan, table):
     intents = '\n'.join('- %s | %s | %s' % (c, table[c]['name'], table[c]['description'][:80]) for c in plan['family_intents'])
     slot_lines = []
@@ -121,6 +147,8 @@ def gen_prompt(plan, table):
         'switch_task：换成 planned_intent 对应的新任务，说清楚新对象；need_clarify：口径含糊，在本领域多个意图都说得通，不能判断要做什么。\n'
         '4. contrast_read 与 contrast_write 是一对：两句话字面只差一两个字，但前者是只读查询，后者是新建/修改/删除/确认类动作（按各自 planned_intent 的真实含义写）；两句都是全新会话。\n'
         'fresh_task_a / fresh_task_b：全新会话里按 planned_intent 的真实含义直接提出需求（它是查询就说查询、是办理就说办理），不要硬造查/改对照。\n'
+        + ('fresh_task_c：同上，再换一种更短、更口语的说法；a/b/c 三句用词互不相同。switch_task 若 state.prev_intent 为 null 就按全新会话写。\n'
+           if plan.get('target') else '') +
         '5. 不要写标准答案以外的任何解释。样本之间不要互相复述。')
 
 
@@ -190,7 +218,15 @@ def gen_one(client, plan, table, seed):
 def cmd_generate(a, table):
     fams = eligible_families(table)
     client = DollarClient(a.work, a.cap, extra_spent_roots=a.extra_spent)
-    plans = [plan_call(k, fams, table, a.seed) for k in range(a.start, a.start + a.calls)]
+    if a.targets:
+        targets = [x.strip() for x in Path(a.targets).read_text(encoding='utf-8').splitlines() if x.strip()]
+        bad = [t for t in targets if t not in table or table[t]['read_only'] is None]
+        if bad:
+            raise SystemExit('targets not in the resolvable intent table: %s' % bad)
+        jobs = [t for t in targets for _ in range(a.per_target)]
+        plans = [plan_targeted(a.start + i, t, table, a.seed) for i, t in enumerate(jobs)]
+    else:
+        plans = [plan_call(k, fams, table, a.seed) for k in range(a.start, a.start + a.calls)]
     rows, rejected = [], defaultdict(int)
     try:
         with ThreadPoolExecutor(a.concurrency) as ex:
@@ -281,8 +317,17 @@ def label_context(row, table):
     return json.dumps(dict(state=row['state'], utterance=row['utterance'], candidates=cands), ensure_ascii=False)
 
 
+ACT_HELP_V3_CLARIFY = ('NEED_CLARIFY=可能是写操作、或者目标本身两可时先问用户；'
+                       '只读、而且合理默认不会误导的，判执行（NEW_TASK/CHANGE_PARAM），不要先问。')
+
+
 def act_help():
-    return ACT_HELP + (rubric_rules_text(RUBRIC) if RUBRIC is not None else '')
+    """v3 rubric (Steve's standard) replaces the generic 'unclear -> ask' definition; v1 keeps it verbatim."""
+    base = ACT_HELP
+    if RUBRIC is not None and RUBRIC.get('version') == 3:
+        base = ACT_HELP.replace('NEED_CLARIFY=信息不足以判断要做什么、指代不明或口径含糊，必须先问用户。', ACT_HELP_V3_CLARIFY)
+        assert base != ACT_HELP, 'ACT_HELP NEED_CLARIFY wording changed; update the v3 replacement'
+    return base + (rubric_rules_text(RUBRIC) if RUBRIC is not None else '')
 
 
 def luna_payload(row, table):
@@ -530,6 +575,8 @@ def main():
     ap.add_argument('--rubric', help='label: clarify_rubric.json given identically to both teachers')
     ap.add_argument('--rubric-mode', choices=['full', 'brief'], default='full',
                     help='label: rubric wording in the prompt (brief = same rules, fewer tokens)')
+    ap.add_argument('--targets', help='generate: file of intent codes (one per line) -> plan_targeted per code')
+    ap.add_argument('--per-target', type=int, default=1, help='generate --targets: calls per intent')
     ap.add_argument('--input', help='label: rows to label (default <work>/clean.jsonl)')
     ap.add_argument('--output', help='label: output jsonl (default <work>/labeled-raw.jsonl)')
     a = ap.parse_args()

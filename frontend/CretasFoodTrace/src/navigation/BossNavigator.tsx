@@ -28,6 +28,8 @@ import FAReportsStackNavigator from './factory-admin/FAReportsStackNavigator';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
 import { useFactoryFeatureStore } from '../store/factoryFeatureStore';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator();
 const OverviewStack = createNativeStackNavigator();
@@ -85,6 +87,7 @@ function BossOverviewStack() {
 }
 
 export default function BossNavigator() {
+  const todoEntry = useMyTodoEntry();
   const insets = useSafeAreaInsets();
   const user = useAuthStore((state) => state.user);
   const smartBiEnabled = useFactoryFeatureStore((state) => state.isScreenEnabled('SmartBI'));
@@ -177,6 +180,7 @@ export default function BossNavigator() {
           options={{ title: '经营', tabBarButtonTestID: 'boss-tab-operating-reports',
             tabBarIcon: ({ color, size }) => <Icon source="file-chart-outline" color={color} size={size} /> }} />
       )}
+      {todoTabScreen(Tab, todoEntry, 'boss-tab-oa-todo')}
       <Tab.Screen
         name="BossProfileTab"
         component={MobileAccountScreen}

@@ -40,6 +40,8 @@ import WHOutboundStackNavigator from "./warehouse/WHOutboundStackNavigator";
 import WHInventoryStackNavigator from "./warehouse/WHInventoryStackNavigator";
 import WHProfileStackNavigator from "./warehouse/WHProfileStackNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator<WarehouseManagerTabParamList & { WHOperatingReportsTab: undefined }>();
 
@@ -77,6 +79,7 @@ function WarehouseFeatureUnavailable({ title }: { title: string }) {
 }
 
 export function WarehouseManagerTabNavigator() {
+  const todoEntry = useMyTodoEntry();
   const { isScreenEnabled } = useFactoryFeatureStore();
   const inboundEnabled = isScreenEnabled('InboundManagement');
   const outboundEnabled = isScreenEnabled('OutboundManagement');
@@ -163,6 +166,7 @@ export function WarehouseManagerTabNavigator() {
           options={{ title: '经营', tabBarButtonTestID: 'wh-tab-operating-reports',
             tabBarIcon: ({ color, size }) => <Icon source="file-chart-outline" color={color} size={size} /> }} />
       )}
+      {todoTabScreen(Tab, todoEntry, 'wh-tab-oa-todo')}
       {/* 我的Tab */}
       <Tab.Screen
         name="WHProfileTab"
